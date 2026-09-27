@@ -13,6 +13,25 @@ import { resolveWebSocketOrigin } from '../lib/apiBaseUrl.js';
  */
 const REALTIME_TOKEN_TTL_SECONDS = 60;
 
+/** The web application's and the API's ports, as the development stack binds them. */
+const DEVELOPMENT_PORTS = [3001, 3000] as const;
+
+/** Every spelling a loopback origin arrives under; they compare as strings. */
+const LOOPBACK_HOSTS = ['localhost', '127.0.0.1', '[::1]'] as const;
+
+/**
+ * An origin is a scheme and a host, so a value that is not one — `true`, the
+ * setting that turns CORS on for every caller — names nothing and is left out.
+ */
+function isOrigin(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (url.protocol === 'http:' || url.protocol === 'https:') && url.origin === value;
+  } catch {
+    return false;
+  }
+}
+
 export function resolveAllowedOrigins(): string[] {
   const origins = new Set<string>();
   const raw = process.env['REALTIME_ALLOWED_ORIGINS'] ?? process.env['CORS_ORIGIN'];
@@ -20,22 +39,18 @@ export function resolveAllowedOrigins(): string[] {
     for (const o of raw
       .split(',')
       .map((s) => s.trim())
-      .filter(Boolean)) {
+      .filter(isOrigin)) {
       origins.add(o);
     }
   }
-  // Dev fallback — ALWAYS include the standard localhost frontends in
-  // non-production environments. Previously the dev fallback only
-  // applied when CORS_ORIGIN was unset; dev setups that pin
-  // CORS_ORIGIN to a specific cloud preview (or anything other than
-  // localhost) would then reject every browser connect with
-  // "Origin not in token's allowlist." Adding the localhost
-  // origins unconditionally in dev makes the realtime gateway match
-  // the dev posture of every other route (`CORS_ORIGIN || true` in
-  // app.ts) without weakening production posture.
+  // Outside production the development stack's own frontends are always
+  // admitted, under every spelling of loopback: a tab opened at 127.0.0.1 is
+  // the same machine as one at localhost, and a connect refused by spelling
+  // reads as a broken stack.
   if (process.env['NODE_ENV'] !== 'production') {
-    origins.add('http://localhost:3001');
-    origins.add('http://localhost:3000');
+    for (const host of LOOPBACK_HOSTS) {
+      for (const port of DEVELOPMENT_PORTS) origins.add(`http://${host}:${String(port)}`);
+    }
   }
   // Production with no explicit allowlist: empty list ⇒ every connect
   // is denied. Loud failure is better than a permissive default —
