@@ -1,6 +1,6 @@
 # Plan 316 — Workflows decide without a language model: a typed decision step
 
-**Status:** 🔨 P0–P3 built; P0's live call and P4–P5 open · **First backend:** TypeSafe AI's Jev (a "System One" decision model)
+**Status:** 🔨 P0–P4 built; the live calls and P5 open · **First backend:** TypeSafe AI's Jev (a "System One" decision model)
 
 ## 1. Problem
 
@@ -91,6 +91,8 @@ The `decision` draft task kind, its lowering and route validation; `when` checke
 ### P4 — Judge backend (D8)
 
 A judge criterion may name a decision model; abstention is `unclear`. Exit: an eval batch judged by a decider produces a scorecard beside the language-model judge on the same labels.
+
+**Delivered**: `callJudgeModel`, the one judge call every path shares, sends a decision model a `yes_no` per rubric entry over the evidence (the rubric is never part of the state) and folds the answers into the same `JudgeVerdict`. A rubric entry's `minConfidence` sets its abstention band; it is part of the rubric, so it moves the judge's version. The language-model prompt is byte-identical. **Open**: the scorecard comparison, which needs a key and labelled data.
 
 ### P5 — Guardrail classifier rails (D9)
 

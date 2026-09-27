@@ -93,6 +93,13 @@ export const JudgeRubricEntrySchema = z.object({
   criterion: z.string().max(JUDGE_CRITERION_MAX_CHARS),
   scale: z.literal('binary'),
   description: z.string().max(500),
+  /**
+   * Read only by a decision-model judge, which answers each entry with a
+   * calibrated probability: below this confidence the entry is `unclear`
+   * rather than a pass or a fail. Absent, every answer commits. Part of the
+   * rubric, so changing it changes the judge's version.
+   */
+  minConfidence: z.number().min(0).max(1).optional(),
 });
 export type JudgeRubricEntry = z.infer<typeof JudgeRubricEntrySchema>;
 

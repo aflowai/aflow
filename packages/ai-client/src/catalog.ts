@@ -189,6 +189,11 @@ export function createDefaultModelCatalog(): ModelCatalog {
  * endpoint reports on it; two copies drifted apart once already, and the
  * divergence is invisible until a run fails against the surface that said ready.
  */
+/** Whether a model ref names a decision model, which answers `decide` and writes no text. */
+export function isDecisionModelRef(modelRef: string): boolean {
+  return createDefaultModelCatalog().getModel(modelRef)?.capabilities.decision === true;
+}
+
 export function inferProviderForModelRef(modelRef: string): AIProvider | null {
   const catalogEntry = createDefaultModelCatalog().getModel(modelRef);
   if (catalogEntry) return catalogEntry.provider;

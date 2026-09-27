@@ -85,6 +85,7 @@ export {
   createDefaultModelCatalog,
   effectiveModelPricing,
   inferProviderForModelRef,
+  isDecisionModelRef,
   retiredRefsFor,
 } from './catalog.js';
 
