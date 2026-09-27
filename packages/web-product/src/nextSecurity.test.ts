@@ -84,4 +84,29 @@ describe('contentSecurityPolicy', () => {
     expect(policy).toContain("connect-src 'self' https://*.sentry.io");
     expect(policy).not.toContain('undefined');
   });
+
+  // The case an unset api origin leaves behind: a distribution proxying its API
+  // through its own origin tells the browser nothing about the API, so every
+  // call it makes passes under `'self'` — except the socket, whose absolute URL
+  // the server mints from `API_BASE_URL`.
+  it('authorizes the realtime origin the server will mint, with no api origin stated', () => {
+    const policy = contentSecurityPolicy({
+      realtimeOrigin: 'http://127.0.0.1:3000',
+      enforce: true,
+    });
+    expect(policy).toContain("connect-src 'self' https://*.sentry.io ws://127.0.0.1:3000");
+  });
+
+  it('exchanges the scheme, because a tls origin is a wss socket', () => {
+    expect(
+      contentSecurityPolicy({ realtimeOrigin: 'https://api.example.com', enforce: true }),
+    ).toContain('wss://api.example.com');
+  });
+
+  it('names a source once where both origins are the same host', () => {
+    const policy = contentSecurityPolicy({ ...BASE, realtimeOrigin: 'https://api.example.com' });
+    expect(policy).toContain(
+      "connect-src 'self' https://*.sentry.io https://api.example.com wss://api.example.com;",
+    );
+  });
 });

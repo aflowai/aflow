@@ -13,7 +13,7 @@
 import { errorContextFromUnknown, installBackgroundTaskControlPlane } from '@aflow/schemas';
 import { configureLogging, createLogger, recordBackgroundTaskDisabled } from '@aflow/observability';
 import { flushCrashReporting } from '@aflow/observability/crashReporting';
-import type { FastifyInstance } from 'fastify';
+import { LogController, type FastifyInstance } from 'fastify';
 
 import { buildApp } from './app.js';
 import type { ServerComposition } from './compose/surfaceTier.js';
@@ -72,11 +72,13 @@ export async function serve(
     },
   });
 
-  const app = await buildApp(composition, { logger: loggerConfig, disableRequestLogging });
+  const app = await buildApp(composition, {
+    logger: loggerConfig,
+    logController: new LogController({ disableRequestLogging }),
+  });
 
   try {
     await app.listen({ port, host });
-    app.log.info(`Server running at http://${host}:${String(port)}`);
     app.log.info(`API docs at http://${host}:${String(port)}/docs`);
   } catch (err) {
     app.log.error(

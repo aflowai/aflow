@@ -148,7 +148,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   const payloadStore = resolvedPayloadStore.store;
-  logger.info(resolvedPayloadStore.reason);
+  logger.debug(resolvedPayloadStore.reason);
 
   // Ensure consumer groups exist (legacy global + shard-scoped)
   logger.debug('Ensuring Redis consumer groups...');

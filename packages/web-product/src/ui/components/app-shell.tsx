@@ -35,7 +35,7 @@ interface NavItem {
 
 /** Primary destinations shown in every space. In the sidebar: Chat renders
  *  first, Skills is interleaved next (for cybernetic spaces), then Integrations,
- *  Shop, Memory, Settings, and finally People (admin-only). */
+ *  Store, Memory, Settings, and finally People (admin-only). */
 /**
  * A tuple, not a list, because the code below destructures the four by name. Typed
  * as an open array each one is possibly-undefined, which the application's looser
@@ -44,9 +44,12 @@ interface NavItem {
 const navItems: readonly [NavItem, NavItem, NavItem, NavItem] = [
   { label: 'Chat', path: '/chat', icon: 'chat-dots' },
   { label: 'Integrations', path: '/integrations', icon: 'plugs' },
-  { label: 'Shop', path: '/store', icon: 'store' },
+  { label: 'Store', path: '/store', icon: 'store' },
   { label: 'Memory', path: '/memory', icon: 'books' },
 ];
+
+/** Named once: the wordmark's tooltip and its accessible name are one word. */
+const HOME_LABEL = 'Home';
 
 function isPrimaryNavActive(pathname: string, legacyPath: string, href: string): boolean {
   return pathname.startsWith(href) || pathname.startsWith(legacyPath);
@@ -56,7 +59,7 @@ function Sidebar() {
   const pathname = usePathname();
   const params = useParams<{ space?: string }>();
   const router = useRouter();
-  const { collapsed, toggle, isMobile, closeDrawer } = useSidebar();
+  const { collapsed, railExpanded, toggle, isMobile, closeDrawer } = useSidebar();
   const { resolvedTheme, setTheme } = useTheme();
   const { activeSpace, accessibleSpaces, isLoading: spacesLoading } = useSpace();
   const hasSpaceMembers = useHasSurface('space-members');
@@ -97,15 +100,21 @@ function Sidebar() {
   };
 
   const userLabel = user?.displayName || user?.email || 'User';
-  const showLabel = isMobile || !collapsed;
+  // The rail's own state, not the pinned one: a collapsed rail under the pointer
+  // slides open and its names come with it.
+  const showLabel = railExpanded;
 
   return (
     <>
       <SidebarHeader>
         <Row justify="between" align="center">
-          <Tooltip content="Home" side="right">
+          <Tooltip content={HOME_LABEL} side="right">
             <Link
               href="/"
+              // The wordmark is clipped away on the rail and the tooltip is
+              // associated with nothing, so without this the first link in the
+              // rail has no accessible name.
+              aria-label={showLabel ? undefined : HOME_LABEL}
               style={{
                 display: 'grid',
                 gridTemplateColumns: showLabel ? 'auto 1fr' : 'auto 0fr',
@@ -224,7 +233,7 @@ function Sidebar() {
             // unscoped page in either edition. Showing nothing until a space
             // resolves is the honest answer; the entries appear when it does.
             if (slug === undefined) return null;
-            const [chatItem, integrationsItem, shopItem, memoryItem] = navItems;
+            const [chatItem, integrationsItem, storeItem, memoryItem] = navItems;
             interface NavEntry {
               key: string;
               label: string;
@@ -266,14 +275,14 @@ function Sidebar() {
               icon: integrationsItem.icon,
             });
 
-            // Shop
-            const shopHref = spaceRoute(slug, shopItem.path);
+            // Store
+            const storeHref = spaceRoute(slug, storeItem.path);
             entries.push({
-              key: shopItem.path,
-              label: shopItem.label,
-              href: shopHref,
-              active: isPrimaryNavActive(pathname, shopItem.path, shopHref),
-              icon: shopItem.icon,
+              key: storeItem.path,
+              label: storeItem.label,
+              href: storeHref,
+              active: isPrimaryNavActive(pathname, storeItem.path, storeHref),
+              icon: storeItem.icon,
             });
 
             // Memory

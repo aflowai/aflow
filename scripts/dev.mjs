@@ -18,9 +18,6 @@ import { findRunningStack, profileConflicts, stackConflictMessage } from './devS
 /** When true, child exit must not remove entries until shutdown finishes (see shutdown + port sweep). */
 let devRunnerShuttingDown = false;
 
-/** Same ports as scripts/kill-dev.sh — anything still listening here after teardown is an orphan. */
-const DEV_LISTEN_PORTS = [3000, 3001, 3010];
-
 // Service registry: maps service names to yarn commands + optional env overrides.
 // All app services use `tsx watch` for automatic restart on file changes.
 /**
@@ -35,7 +32,7 @@ function serverDevScript() {
 }
 
 const SERVICE_REGISTRY = {
-  server: { cmd: `yarn ${serverDevScript()}` },
+  server: { cmd: `yarn ${serverDevScript()}`, ports: [3000] },
   orchestrator: { cmd: 'yarn orchestrator:dev' },
   'executor-mock': { cmd: 'yarn executor:mock' },
   'executor-mock-partial': {
@@ -59,11 +56,11 @@ const SERVICE_REGISTRY = {
   // the profile with a hint rather than duplicated or crash-looped.
   'executor-host': { cmd: 'yarn executor:host', dotenv: false },
   voice: { cmd: 'yarn voice:dev' },
-  web: { cmd: 'yarn web:dev' },
+  web: { cmd: 'yarn web:dev', ports: [3001] },
   // The local edition's own application, on the port the hosted one uses in its
   // own profiles — one stack at a time, and the browser should not have to know
   // which edition it is talking to.
-  'web-local': { cmd: 'WEB_DEV_PORT=3001 yarn workspace @aflow/web-local dev' },
+  'web-local': { cmd: 'WEB_DEV_PORT=3001 yarn workspace @aflow/web-local dev', ports: [3001] },
   // The product package, rebuilt as it changes.
   //
   // Every other workspace reaches `@aflow/*` through the `ts-source` condition
@@ -72,7 +69,7 @@ const SERVICE_REGISTRY = {
   // edit to the package is invisible until something rebuilds it. Without this
   // the failure is a missing export naming a symbol the source plainly has.
   'web-product': { cmd: 'yarn workspace @aflow/web-product dev' },
-  mcp: { cmd: 'yarn mcp:dev' },
+  mcp: { cmd: 'yarn mcp:dev', ports: [3100] },
   'packages-watch': { cmd: 'yarn packages:watch' },
 };
 
@@ -464,15 +461,21 @@ function killProcessGroup(child, signal) {
 }
 
 /**
- * Last-resort cleanup: kill whatever is still bound to dev ports (orphan node/tsx after shell exit).
- * Matches scripts/kill-dev.sh port list.
+ * Last-resort cleanup: kill whatever is still bound to the ports of the services
+ * this runner started (orphan node/tsx after shell exit). Only those: another
+ * stack's server and web share these port numbers, and a runner that owned only
+ * the MCP server would otherwise kill them on its way out.
  *
  * `-sTCP:LISTEN` is load-bearing, not a narrowing: without it `lsof` reports
  * every socket on the port including the far end, so the sweep SIGKILLed the
  * browser that had a tab open on the dev server.
  */
-function killListenersOnDevPorts() {
-  for (const port of DEV_LISTEN_PORTS) {
+function ownedPorts() {
+  return [...new Set([...processes.keys()].flatMap((name) => SERVICE_REGISTRY[name]?.ports ?? []))];
+}
+
+function killListenersOnOwnedPorts(ports) {
+  for (const port of ports) {
     try {
       execSync(`lsof -t -sTCP:LISTEN -iTCP:${port} 2>/dev/null | xargs kill -9 2>/dev/null`, {
         shell: true,
@@ -543,10 +546,11 @@ function setupSignalHandlers() {
         }
       }
       // Shell can exit before tsx/node release ports; pgid kill may miss grandchildren.
-      console.log(
-        '[dev-runner] Clearing dev ports (3000, 3001, 3010) if anything still listens...',
-      );
-      killListenersOnDevPorts();
+      const ports = ownedPorts();
+      if (ports.length > 0) {
+        console.log(`[dev-runner] Clearing ports ${ports.join(', ')} if anything still listens...`);
+        killListenersOnOwnedPorts(ports);
+      }
       process.exit(0);
     });
   };
@@ -586,12 +590,12 @@ async function main() {
 
   // One stack per machine, refused rather than raced. Two of them attach to the
   // same Redis and join the same consumer group, so the second looks healthy
-  // while splitting the first one's work — and `dev.mjs` sweeps the shared ports
-  // on teardown, so stopping either kills the other's server and web.
+  // while splitting the first one's work — and both would bind the same ports.
   //
   // Refused here, before `setupSignalHandlers`, and that order is load-bearing:
-  // the teardown those handlers install sweeps ports 3000/3001/3010, so a
-  // refusal raised after them would kill the very stack it declined to join.
+  // the teardown those handlers install sweeps the ports of whatever this runner
+  // started, so a refusal raised after them could kill the very stack it
+  // declined to join.
   if (options.profile === undefined || profileConflicts(options.profile, PROFILES)) {
     const conflict = stackConflictMessage(findRunningStack(), {
       command: process.env['PHOENIX_DEV_RESTART_HINT'] ?? 'yarn dev',

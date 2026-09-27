@@ -68,7 +68,7 @@ export class ExecutorRuntime implements JobLoopHost {
       throw new Error(`Handler already registered for step type: ${handler.stepType}`);
     }
     this.handlers.set(handler.stepType, handler);
-    this.log.info(`Registered handler for step type: ${handler.stepType}`);
+    this.log.debug(`Registered handler for step type: ${handler.stepType}`);
   }
 
   getHandler(stepType: string): StepHandler | undefined {
@@ -80,7 +80,7 @@ export class ExecutorRuntime implements JobLoopHost {
       return;
     }
 
-    this.log.info('Starting executor runtime', {
+    this.log.debug('Starting executor runtime', {
       streamKey: this.config.streamKey,
       consumerGroup: this.config.consumerGroup,
       concurrency: this.config.concurrency,
@@ -99,7 +99,7 @@ export class ExecutorRuntime implements JobLoopHost {
       this.config.stepType,
       this.config.consumerName,
     );
-    this.log.info(`Registered heartbeat for step type: ${this.config.stepType}`);
+    this.log.debug(`Registered heartbeat for step type: ${this.config.stepType}`);
 
     const heartbeatRuntime = this.controlPlane.resolve('executor.heartbeat');
     if (heartbeatRuntime.mode === 'enabled') {
@@ -136,7 +136,7 @@ export class ExecutorRuntime implements JobLoopHost {
             controller.abort(externalAbortReason(message));
           }
         });
-        this.log.info('Subscribed to step abort signals');
+        this.log.debug('Subscribed to step abort signals');
       } catch (err) {
         this.log.warn('Failed to subscribe to step abort signals — external abort disabled', {
           error: err instanceof Error ? err.message : String(err),

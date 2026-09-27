@@ -128,7 +128,7 @@ skipped when they are already there.
 toolchain, closest to what another person will run. The development stack is the
 same edition from source with watch mode, so an edit is live immediately. They
 keep **separate data** — the appliance has its own Postgres inside its Compose
-project, the development stack uses `phoenix-postgres` on 5433 — so work in one is
+project, the development stack uses `aflow-postgres` on 5433 — so work in one is
 not visible in the other.
 
 Before opening a pull request:

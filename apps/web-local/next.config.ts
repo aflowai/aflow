@@ -36,6 +36,13 @@ const nextConfig: NextConfig = {
    * Report-only until an instance has reported: a policy assembled without
    * evidence breaks a page in ways only a browser shows. No additional sources —
    * an instance with nobody to turn away needs no challenge provider.
+   *
+   * `API_BASE_URL` is the key the API's own token route derives `realtimeUrl`
+   * from, so naming it here is what keeps the socket's origin and the policy's
+   * one value. It matters most where the API's origin is not otherwise stated:
+   * every call then travels through this origin and passes under `'self'`, and
+   * the socket — which the server hands over absolute — is the only thing left
+   * outside the policy.
    */
   async headers() {
     return [
@@ -43,6 +50,7 @@ const nextConfig: NextConfig = {
         source: '/(.*)',
         headers: securityHeaders({
           apiOrigin: process.env.NEXT_PUBLIC_API_ORIGIN,
+          realtimeOrigin: process.env.API_BASE_URL,
           reportUri: process.env.CSP_REPORT_URI,
           enforce: process.env.CSP_ENFORCE === '1',
         }),

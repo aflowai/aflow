@@ -94,9 +94,6 @@ export async function createAppContext(): Promise<AppContext> {
   const { resolvePayloadStore } = await import('@aflow/payload-store');
   const resolvedPayloadStore = resolvePayloadStore({ redis });
   const payloadStore: PayloadStore | null = resolvedPayloadStore?.store ?? null;
-  if (resolvedPayloadStore) {
-    console.info(`[server] ${resolvedPayloadStore.reason}`);
-  }
 
   // Flow execution service (requires both db and redis)
   let pubsubPublisher: PubSubPublisher | null = null;

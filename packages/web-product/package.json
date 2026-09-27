@@ -46,7 +46,7 @@
   ],
   "scripts": {
     "build": "rm -rf dist && npx tsup && rm -f tsconfig.tsbuildinfo src/ui/tsconfig.tsbuildinfo && npx tsc -p tsconfig.json --emitDeclarationOnly && npx tsc -p src/ui/tsconfig.json --emitDeclarationOnly",
-    "dev": "npx tsup --watch",
+    "dev": "npx tsup --watch --silent",
     "test": "vitest run --passWithNoTests"
   },
   "devDependencies": {

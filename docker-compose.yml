@@ -4,7 +4,13 @@
 # Start with: docker compose up -d
 # Stop with:  docker compose down
 # Reset data: docker compose down -v
+#
+# Data lives in volumes named after the project. A checkout whose data was
+# created under another project name keeps it by setting COMPOSE_PROJECT_NAME
+# to that name in .env, which takes precedence over the name below.
 # =============================================================================
+
+name: aflow-dev
 
 services:
   # ---------------------------------------------------------------------------
@@ -12,7 +18,7 @@ services:
   # ---------------------------------------------------------------------------
   postgres:
     image: pgvector/pgvector:pg16
-    container_name: phoenix-postgres
+    container_name: aflow-postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: phoenix
@@ -34,7 +40,7 @@ services:
   # ---------------------------------------------------------------------------
   redis:
     image: redis:7-alpine
-    container_name: phoenix-redis
+    container_name: aflow-redis
     restart: unless-stopped
     ports:
       - '6379:6379'
@@ -52,7 +58,7 @@ services:
   # ---------------------------------------------------------------------------
   redis-commander:
     image: rediscommander/redis-commander:latest
-    container_name: phoenix-redis-ui
+    container_name: aflow-redis-ui
     restart: unless-stopped
     environment:
       REDIS_HOSTS: local:redis:6379
@@ -69,7 +75,7 @@ services:
   # ---------------------------------------------------------------------------
   pgadmin:
     image: dpage/pgadmin4:latest
-    container_name: phoenix-pgadmin
+    container_name: aflow-pgadmin
     restart: unless-stopped
     environment:
       PGADMIN_DEFAULT_EMAIL: admin@phoenix.dev

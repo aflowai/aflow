@@ -69,29 +69,35 @@ async function main(): Promise<void> {
       ownerId: localOwner().userId,
     });
 
+    // What changed is named; what was already in place is counted, since on
+    // every start after the first that is all of it.
     for (const step of report.steps) {
+      if (step.outcome !== 'created') continue;
       const detail = step.detail === undefined ? '' : ` (${step.detail})`;
-      const verb = step.outcome === 'created' ? 'created' : 'ok';
-      console.log(`[bootstrap] ${verb} — ${step.name}${detail}`);
+      console.log(`[bootstrap] created — ${step.name}${detail}`);
     }
+    const unchanged = report.steps.filter((step) => step.outcome !== 'created').length;
     console.log(
-      `[bootstrap] ${String(report.spaceIds.length)} workspace(s) in tenant ${report.tenantId}: ${report.spaceIds.join(', ')}`,
+      `[bootstrap] ✓ ${String(unchanged)} of ${String(report.steps.length)} already in place, ` +
+        `${String(report.spaceIds.length)} workspace(s)`,
     );
     // The ACL file was rewritten before Redis started and Redis reads it once.
     // A deploy that leaves the container running would otherwise keep enforcing
     // the previous release's grants, which presents as NOPERM on keys that are
     // right in the file, in the source and in the test.
     const aclOutcome = await loadRedisAclIntoRunningServer(getRedisConnection());
-    console.log(
-      aclOutcome === 'loaded'
-        ? '[bootstrap] reloaded the Redis ACL into the running server'
-        : '[bootstrap] the running Redis did not accept an ACL reload; it reads the file at start',
-    );
+    if (aclOutcome.outcome === 'loaded') {
+      console.log('[bootstrap] reloaded the Redis ACL into the running server');
+    } else if (aclOutcome.reason !== null) {
+      console.warn(
+        `[bootstrap] the running Redis refused the ACL reload and keeps its previous grants: ${aclOutcome.reason}`,
+      );
+    }
     // A server that takes no ACL file holds the host identity in memory alone,
     // so whatever removed it since the last boot stays removed until the next
     // pairing. The instance owns that identity; boot asserts it.
     const hostPassword = process.env['PHOENIX_HOST_REDIS_PASSWORD']?.trim();
-    if (aclOutcome === 'skipped' && hostPassword !== undefined && hostPassword !== '') {
+    if (aclOutcome.outcome === 'skipped' && hostPassword !== undefined && hostPassword !== '') {
       try {
         await applyHostIdentityToRunningServer(getRedisConnection(), {
           defaultPassword: process.env['REDIS_PASSWORD'] ?? '',

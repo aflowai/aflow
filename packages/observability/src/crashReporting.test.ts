@@ -28,10 +28,10 @@ afterEach(() => {
 });
 
 describe('starting the reporter', () => {
-  it('loads nothing at all when no DSN is configured', () => {
+  it('loads nothing and says nothing when no DSN is configured', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     initCrashReporting({ serviceName: 'probe' });
-    expect(log.mock.calls.flat().join(' ')).toContain('SENTRY_DSN unset');
+    expect(log).not.toHaveBeenCalled();
   });
 
   it('is synchronous, so the caller cannot accidentally await it', () => {

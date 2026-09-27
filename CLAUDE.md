@@ -106,8 +106,8 @@ When changing types or adding operations:
 **The scope is `@aflow/*`, and the word "phoenix" survives on purpose in six places
 that are not packages** (Plan 157 W2): the `PHOENIX_*` environment keys, the
 `__PHOENIX_DONE__` sandbox sentinel, the `phoenix:*` applet postMessage channels,
-the prebuilt `phoenix-python-ml` image, the GCP and container resource names
-(`phoenix-core`, `phoenix-worker`, `phoenix-redis`, `phoenix-postgres`), and the
+the prebuilt `phoenix-python-ml` image, the hosted deployment's GCP resource
+names (`phoenix-core`, `phoenix-worker`), and the
 `@phoenix.local` synthetic identities. None of them is a stale rename — three cross
 an artifact boundary and one is baked into applet HTML already stored, which is why
 W3 owns them rather than W2. A stale package import needs no guard: the old scope
@@ -195,8 +195,8 @@ nothing.
 
 **One stack at a time.** Two stacks on one Redis join the _same_ consumer groups and
 load-balance each other's work, so a run started against one executes on whichever claimed
-the message. `dev.mjs` also sweeps ports 3000/3001/3010 on teardown, so stopping a second
-stack kills the first one's server and web. The dev stack and the appliance use separate
+the message. Both also bind ports 3000/3001, so the second one's server and web cannot
+start. The dev stack and the appliance use separate
 datastores and do not share data.
 
 **The host lane ships outside the image, and `yarn start` starts it anyway.** In the

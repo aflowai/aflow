@@ -178,10 +178,10 @@ Then run a coding skill: ask to open a PR for a change → review it → fix →
 
 const LOCAL_CODE_REVIEW_BUNDLE: SkillBundleInput = {
   bundleId: 'local-code-review' as SkillBundleId,
-  version: 3,
+  version: 4,
   name: 'Local Code Review',
-  tagline: 'Review committed changes in a connected repository with the installed harness.',
-  description: `Installs **Review Local Changes** — a read-only review of a revision range in a repository connected as a folder, carried out by the coding harness already installed on that machine.
+  tagline: 'Review committed changes in a connected repository with the installed coding agent.',
+  description: `Installs **Review Local Changes** — a read-only review of a revision range in a repository connected as a folder, carried out by the coding agent already installed on that machine.
 
 **What it installs**:
 - The **Review Local Changes** skill — one task that reads the range in an isolated checkout, with the whole repository around it, and returns a verdict with findings that name their file, line and evidence. At depth \`deep\` it also runs the project's own checks over the touched files.

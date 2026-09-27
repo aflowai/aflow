@@ -51,4 +51,38 @@ describe('an answered /users/me', () => {
     expect(edition.isLoading).toBe(false);
     expect(edition.surfaces.size).toBe(0);
   });
+
+  it('carries the lanes in the shape the catalog derivation reads', () => {
+    const edition = toEdition({
+      edition: {
+        id: 'community-local',
+        surfaces: [],
+        lanes: { codeLane: 'absent', hostLane: 'present' },
+      },
+    });
+    expect(edition.lanes).toEqual({
+      edition: 'community-local',
+      codeLane: 'absent',
+      hostLane: 'present',
+    });
+  });
+
+  // A lane is composed only where the server used that word. Anything else —
+  // an older process, a typo, an omitted block — is a lane nothing can run on.
+  it('reads a lane it was not told about as absent', () => {
+    const edition = toEdition({
+      edition: { id: 'enterprise', lanes: { codeLane: 'maybe' } },
+    });
+    expect(edition.lanes).toEqual({
+      edition: 'enterprise',
+      codeLane: 'absent',
+      hostLane: 'absent',
+    });
+  });
+});
+
+describe('an unanswered /users/me, on lanes', () => {
+  it('names none, so a lane gate withholds rather than guessing', () => {
+    expect(toEdition(undefined).lanes).toBeNull();
+  });
 });

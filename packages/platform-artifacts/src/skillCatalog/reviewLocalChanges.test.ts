@@ -72,7 +72,7 @@ describe('Review Local Changes — the first harness inside a skill', () => {
     expect(template?.task).toContain('inputs of this task');
   });
 
-  it('makes brief a rung of its own, budgeted in harness turns rather than asked for in prose', () => {
+  it('makes brief a rung of its own, budgeted in coding-agent turns rather than asked for in prose', () => {
     const inputs = wf.runInputs ?? [];
     const depth = inputs.find((i) => i.id === 'depth')?.schema as { enum?: string[] } | undefined;
     expect(depth?.enum).toEqual(['brief', 'standard', 'deep']);
@@ -92,7 +92,7 @@ describe('Review Local Changes — the first harness inside a skill', () => {
     // What tells the Helmsman that a request for something quick is this rung
     // and not a sentence in `focus`.
     expect(REVIEW_LOCAL_CHANGES.description).toContain('smoke test');
-    expect(REVIEW_LOCAL_CHANGES.description).toContain('not something to ask the harness for');
+    expect(REVIEW_LOCAL_CHANGES.description).toContain('not something to ask the coding agent for');
   });
 
   it('promotes the verdict and the summary only — a promoted array reads as a preview', () => {

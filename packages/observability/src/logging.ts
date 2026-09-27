@@ -301,7 +301,10 @@ export class Logger {
   /** Compact dev-terminal lines (pino-pretty–like: time, level color, service, message). */
   private formatPretty(entry: LogEntry): string {
     const useColor = shouldColorizePretty();
-    const time = entry.timestamp.slice(11, 23); // HH:MM:SS.mmm
+    // Local time, as the server's pretty printer shows it: the two interleave in
+    // one terminal, and a UTC clock beside a local one read as a two-hour gap.
+    const at = new Date(entry.timestamp);
+    const time = `${at.toTimeString().slice(0, 8)}.${String(at.getMilliseconds()).padStart(3, '0')}`;
     const lvl = entry.level.toUpperCase().padEnd(5);
     const timePart = paint('gray', `[${time}]`, useColor);
     const lvlPart = levelPaint(entry.level, lvl, useColor);

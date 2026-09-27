@@ -22,14 +22,21 @@ import {
 } from 'react';
 import { useMediaQuery } from '../hooks/useMediaQuery.js';
 import { Icon } from '../icons/Icon.js';
+import { RAIL_HOVER_EXPAND_DELAY_MS, railLayout } from './appShellRail.js';
 
 // ---------------------------------------------------------------------------
 // Context for sidebar state
 // ---------------------------------------------------------------------------
 interface SidebarContextValue {
+  /** The pinned state — what the collapse control toggles and reports. */
   collapsed: boolean;
   setCollapsed: (v: boolean) => void;
   toggle: () => void;
+  /**
+   * Whether names are shown right now, which `collapsed` no longer answers: a
+   * collapsed rail under the pointer is expanded without being pinned.
+   */
+  railExpanded: boolean;
   /** True when viewport is below the lg breakpoint */
   isMobile: boolean;
   /** Open the mobile drawer */
@@ -44,6 +51,7 @@ const SidebarContext = createContext<SidebarContextValue>({
   collapsed: false,
   setCollapsed: () => {},
   toggle: () => {},
+  railExpanded: true,
   isMobile: false,
   openDrawer: () => {},
   closeDrawer: () => {},
@@ -116,16 +124,77 @@ export function AppShell({
   );
   /** Desktop sidebar rail: hover affordance + cursor for click-to-toggle empty areas */
   const [sidebarRailHover, setSidebarRailHover] = useState(false);
+  /** The pointer has rested on the rail long enough to mean it. */
+  const [railHovering, setRailHovering] = useState(false);
+  /** An explicit collapse is holding hover off until the pointer leaves. */
+  const [hoverSuppressedUntilLeave, setHoverSuppressedUntilLeave] = useState(false);
   const isDesktop = useMediaQuery('(min-width: 1024px)');
   const isMobile = !isDesktop;
+  const canHover = useMediaQuery('(hover: hover) and (pointer: fine)');
+
+  const rail = railLayout({
+    pinnedOpen: !collapsed,
+    hovering: railHovering,
+    hoverSuppressedUntilLeave,
+    hoverCapable: canHover,
+    isMobile,
+    railWidth: collapsedWidth,
+    expandedWidth: sidebarWidth,
+  });
+  // The drawer always shows its names; only the desktop rail hides them.
+  const railExpanded = isMobile || rail.expanded;
+
+  /**
+   * Opening waits out a pointer that is only passing through; leaving closes at
+   * once, and cancels a pending open along with it.
+   */
+  const railHoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelRailHoverOpen = useCallback(() => {
+    if (railHoverTimer.current !== null) {
+      clearTimeout(railHoverTimer.current);
+      railHoverTimer.current = null;
+    }
+  }, []);
+  const onRailPointerEnter = useCallback(() => {
+    setSidebarRailHover(true);
+    if (!canHover) return;
+    cancelRailHoverOpen();
+    railHoverTimer.current = setTimeout(() => {
+      railHoverTimer.current = null;
+      setRailHovering(true);
+    }, RAIL_HOVER_EXPAND_DELAY_MS);
+  }, [canHover, cancelRailHoverOpen]);
+  const onRailPointerLeave = useCallback(() => {
+    setSidebarRailHover(false);
+    cancelRailHoverOpen();
+    setRailHovering(false);
+    setHoverSuppressedUntilLeave(false);
+  }, [cancelRailHoverOpen]);
+  useEffect(() => cancelRailHoverOpen, [cancelRailHoverOpen]);
+
+  /**
+   * The one way the rail's pinned state changes, so an explicit collapse always
+   * outranks the pointer resting on it — whichever control asked, and including a
+   * caller reaching `setCollapsed` through the context. `railHovering` is left
+   * alone: the pointer really is still there, and saying otherwise would make the
+   * rail re-open the moment anything re-read it.
+   */
+  const setRailCollapsed = useCallback(
+    (next: boolean) => {
+      setCollapsed(next);
+      setHoverSuppressedUntilLeave(next);
+      if (next) cancelRailHoverOpen();
+    },
+    [cancelRailHoverOpen],
+  );
 
   const toggle = useCallback(() => {
     if (isMobile) {
       setDrawerOpen((d) => !d);
-    } else {
-      setCollapsed((c) => !c);
+      return;
     }
-  }, [isMobile]);
+    setRailCollapsed(!collapsed);
+  }, [isMobile, collapsed, setRailCollapsed]);
 
   const openDrawer = useCallback(() => {
     setDrawerOpen(true);
@@ -178,9 +247,25 @@ export function AppShell({
     color: 'var(--color-content-primary)',
   };
 
-  const desktopSidebarStyle: CSSProperties = {
+  /**
+   * The space the rail takes from the content. The rail itself is absolute
+   * inside it, so a hover-expanded rail paints wider than its own footprint and
+   * the page does not reflow under the pointer.
+   */
+  const desktopRailTrackStyle: CSSProperties = {
     flexShrink: 0,
-    width: collapsed ? collapsedWidth : sidebarWidth,
+    width: rail.occupiedWidth,
+    position: 'relative',
+    transition: 'width var(--transition-duration-normal) var(--transition-timing-ease-out)',
+  };
+
+  const desktopSidebarStyle: CSSProperties = {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    left: 0,
+    width: rail.renderedWidth,
+    zIndex: rail.overlay ? 'var(--z-sticky)' : undefined,
     display: 'flex',
     flexDirection: 'column',
     backgroundColor: 'var(--surface-overlay-alpha, var(--color-surface-overlay))',
@@ -190,9 +275,11 @@ export function AppShell({
       ? '0px solid var(--color-border-default)'
       : '0.5px solid var(--color-border-muted)',
     borderRadius: '0 var(--space-xl) var(--space-xl) 0',
-    boxShadow: sidebarRailHover
-      ? `inset 0 0 0 1px color-mix(in srgb, var(--color-border-default) ${collapsed ? '55%' : '40%'}, transparent)`
-      : undefined,
+    boxShadow: rail.overlay
+      ? 'var(--shadow-lg)'
+      : sidebarRailHover
+        ? `inset 0 0 0 1px color-mix(in srgb, var(--color-border-default) ${collapsed ? '55%' : '40%'}, transparent)`
+        : undefined,
     // e-resize / w-resize hint: expand rail vs collapse (interactive children keep pointer from their own styles)
     cursor: isDesktop && sidebarRailHover ? (collapsed ? 'e-resize' : 'w-resize') : undefined,
     transition:
@@ -212,9 +299,9 @@ export function AppShell({
       if (t.closest('.ds-tooltip')) {
         return;
       }
-      setCollapsed((c) => !c);
+      setRailCollapsed(!collapsed);
     },
-    [isDesktop],
+    [isDesktop, collapsed, setRailCollapsed],
   );
 
   const mainStyle: CSSProperties = {
@@ -227,24 +314,31 @@ export function AppShell({
 
   return (
     <SidebarContext.Provider
-      value={{ collapsed, setCollapsed, toggle, isMobile, openDrawer, closeDrawer, drawerOpen }}
+      value={{
+        collapsed,
+        setCollapsed: setRailCollapsed,
+        toggle,
+        railExpanded,
+        isMobile,
+        openDrawer,
+        closeDrawer,
+        drawerOpen,
+      }}
     >
       <MobileHeaderSlotContext.Provider value={slotContextValue}>
         <div style={shellStyle}>
           {/* Desktop sidebar */}
           {isDesktop && (
-            <aside
-              style={desktopSidebarStyle}
-              onMouseEnter={() => {
-                setSidebarRailHover(true);
-              }}
-              onMouseLeave={() => {
-                setSidebarRailHover(false);
-              }}
-              onClick={handleSidebarRailClick}
-            >
-              {sidebar}
-            </aside>
+            <div style={desktopRailTrackStyle}>
+              <aside
+                style={desktopSidebarStyle}
+                onMouseEnter={onRailPointerEnter}
+                onMouseLeave={onRailPointerLeave}
+                onClick={handleSidebarRailClick}
+              >
+                {sidebar}
+              </aside>
+            </div>
           )}
 
           {/* Mobile overlay + drawer */}
@@ -344,9 +438,9 @@ export interface SidebarNavProps {
 }
 
 export function SidebarNav({ children }: SidebarNavProps) {
-  const { collapsed, isMobile } = useSidebar();
+  const { railExpanded } = useSidebar();
   /** Center nav stack in the rail when collapsed; full width when expanded or mobile drawer */
-  const railCentered = collapsed && !isMobile;
+  const railCentered = !railExpanded;
   const style: CSSProperties = {
     flex: 1,
     padding: 'var(--space-1) var(--space-2)',
@@ -392,9 +486,10 @@ export function SidebarNavItem({
   as: Component = 'a',
   trailing,
 }: SidebarNavItemProps) {
-  const { collapsed, isMobile } = useSidebar();
-  // On mobile drawer, always show expanded
-  const showLabel = isMobile || !collapsed;
+  const { railExpanded } = useSidebar();
+  // Names appear with the rail, whether it was pinned or slid open under the
+  // pointer; the mobile drawer always shows them.
+  const showLabel = railExpanded;
 
   // Grid-based layout keeps the icon in place while the label column
   // smoothly collapses to 0fr, staying in sync with the sidebar width.
@@ -449,6 +544,10 @@ export function SidebarNavItem({
       href={href}
       onClick={onClick}
       style={style}
+      // The clipped label is hidden from the tree, so the name has to arrive
+      // some other way: without this a collapsed rail is a column of links with
+      // no accessible name at all, and nothing on screen says which is which.
+      aria-label={showLabel ? undefined : label}
       onMouseEnter={(e: React.MouseEvent<HTMLElement>) => {
         if (!active && hoverBg) {
           (e.currentTarget as HTMLElement).style.backgroundColor = hoverBg;
@@ -491,8 +590,8 @@ export interface SidebarFooterProps {
 }
 
 export function SidebarFooter({ children }: SidebarFooterProps) {
-  const { collapsed, isMobile } = useSidebar();
-  const railCentered = collapsed && !isMobile;
+  const { railExpanded } = useSidebar();
+  const railCentered = !railExpanded;
   const style: CSSProperties = {
     flexShrink: 0,
     padding: 'var(--space-2)',
@@ -513,8 +612,8 @@ export interface SidebarActionProps {
 }
 
 export function SidebarAction({ icon, label, onClick }: SidebarActionProps) {
-  const { collapsed, isMobile } = useSidebar();
-  const showLabel = isMobile || !collapsed;
+  const { railExpanded } = useSidebar();
+  const showLabel = railExpanded;
 
   const style: CSSProperties = {
     display: 'grid',
@@ -554,6 +653,7 @@ export function SidebarAction({ icon, label, onClick }: SidebarActionProps) {
     <button
       style={style}
       onClick={onClick}
+      aria-label={showLabel || label === undefined ? undefined : label}
       onMouseEnter={(e) => {
         e.currentTarget.style.backgroundColor = 'var(--color-surface-overlay)';
         e.currentTarget.style.color = 'var(--color-content-secondary)';
