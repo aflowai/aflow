@@ -26,6 +26,7 @@ const AI_TO_CREDENTIAL_PROVIDER: Record<string, string> = {
   fireworks: 'fireworks',
   xai: 'xai',
   runware: 'runware',
+  typesafe: 'typesafe',
 };
 
 // ---------------------------------------------------------------------------

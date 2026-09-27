@@ -8,6 +8,7 @@ export const ProviderCategorySchema = z.enum([
   'llm',
   'coding',
   'media',
+  'decision',
   'search',
   'voice',
   'email',
@@ -19,12 +20,15 @@ export type ProviderCategory = z.infer<typeof ProviderCategorySchema>;
  * lane's backend (Plan 219 `backendProvider`) — a provider in one lane is
  * never offered by the other's surfaces. `media` is the render lane: it buys
  * images and video and drives no agent, so a key here can never satisfy the
- * requirement that a tenant have a chat model.
+ * requirement that a tenant have a chat model. `decision` is the same: a
+ * decision model answers typed questions for a workflow step and writes no
+ * text, so it can never stand in for a chat model either.
  */
 export const PROVIDER_CATEGORY_ORDER: readonly ProviderCategory[] = [
   'llm',
   'coding',
   'media',
+  'decision',
   'search',
   'voice',
   'email',
@@ -34,6 +38,7 @@ export const PROVIDER_CATEGORY_LABELS: Record<ProviderCategory, string> = {
   llm: 'Agent Models',
   coding: 'Coding',
   media: 'Image & Video',
+  decision: 'Decisions',
   search: 'Search',
   voice: 'Voice',
   email: 'Email',
@@ -44,6 +49,8 @@ export const PROVIDER_CATEGORY_DESCRIPTIONS: Record<ProviderCategory, string> = 
   coding:
     'Optional. Backend for the coding lane (z.ai subscription or Anthropic key). Only needed by coding skills.',
   media: 'Optional. Dedicated image and video generation routes.',
+  decision:
+    'Optional. Decision models that route, gate and score inside workflows with calibrated confidence.',
   search: 'Optional. Web search and page fetch for skills that use them.',
   voice: 'Optional. Speech-to-text and text-to-speech for voice sessions.',
   email: 'Optional. Outbound email notifications.',
@@ -58,6 +65,7 @@ export const ProviderIdSchema = z.enum([
   'xai',
   'zai',
   'runware',
+  'typesafe',
   'brave',
   'jina',
   'deepgram',

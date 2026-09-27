@@ -176,6 +176,27 @@ export const PROVIDER_REGISTRY: readonly ProviderDefinition[] = [
     ],
   },
 
+  // ── Decision Providers ─────────────────────────────────────────────────
+  {
+    providerId: 'typesafe',
+    category: 'decision',
+    displayName: 'TypeSafe',
+    description:
+      'Jev — typed decisions (a choice, a rubric score, a yes/no) with calibrated confidence, for decision steps in workflows.',
+    iconName: 'git-branch',
+    docsUrl: 'https://docs.typesafe.ai',
+    fields: [
+      {
+        fieldId: 'api_key',
+        label: 'API Key',
+        type: 'secret',
+        required: true,
+        placeholder: 'sk-...',
+        helpText: 'Your TypeSafe API key from console.typesafe.ai.',
+      },
+    ],
+  },
+
   // ── Search Providers ───────────────────────────────────────────────────
   {
     providerId: 'brave',

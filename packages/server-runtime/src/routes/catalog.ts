@@ -5,6 +5,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import {
+  AIProviderSchema,
   createDefaultModelCatalog,
   effectiveModelPricing,
   retiredRefsFor,
@@ -56,16 +57,7 @@ const OperationSchema = z.object({
 
 const ModelSchema = z.object({
   modelId: z.string(),
-  provider: z.enum([
-    'openai',
-    'anthropic',
-    'google',
-    'openrouter',
-    'fireworks',
-    'xai',
-    'runware',
-    'local',
-  ]),
+  provider: AIProviderSchema,
   displayName: z.string(),
   description: z.string().optional(),
   contextWindow: z.number().int().nonnegative(), // 0 for image/video-only models
@@ -87,6 +79,7 @@ const ModelSchema = z.object({
     webSearch: z.boolean().optional(),
     imageGeneration: z.boolean().optional(),
     videoGeneration: z.boolean().optional(),
+    decision: z.boolean().optional(),
   }),
   pricing: z.object({
     promptPer1M: z.number().nonnegative(),
@@ -100,7 +93,7 @@ const ModelSchema = z.object({
       speed: z.number().int().min(1).max(5).optional(),
       cost: z.number().int().min(1).max(5).optional(),
       intelligence: z.number().int().min(1).max(5).optional(),
-      outputType: z.enum(['text', 'image', 'video', 'audio', 'embedding']).optional(),
+      outputType: z.enum(['text', 'image', 'video', 'audio', 'embedding', 'decision']).optional(),
     })
     .optional(),
   deprecated: z.boolean().optional(),
@@ -447,18 +440,7 @@ export const catalogRoutes: FastifyPluginAsync = async (fastify) => {
         summary: 'List AI models',
         description: 'List available AI models with capabilities and pricing',
         querystring: z.object({
-          provider: z
-            .enum([
-              'openai',
-              'anthropic',
-              'google',
-              'openrouter',
-              'fireworks',
-              'xai',
-              'runware',
-              'local',
-            ])
-            .optional(),
+          provider: AIProviderSchema.optional(),
           capability: z.string().optional(),
           set: z.enum(['agent']).optional(),
         }),

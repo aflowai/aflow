@@ -5,6 +5,7 @@ export { handleGenerate } from './generate.js';
 export { handleGenerateStream } from './generateStream.js';
 export { handleGenerateJson } from './generateJson.js';
 export { handleEmbed } from './embed.js';
+export { handleDecide } from './decide.js';
 export { handleAgentTurn } from './agentTurn.js';
 export { handleImageGenerate } from './imageGenerate.js';
 export { handleImageEdit } from './imageEdit.js';

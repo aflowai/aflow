@@ -24,6 +24,9 @@ export type {
   GenerateTextRequest,
   GenerateJsonRequest,
   GenerateEmbeddingRequest,
+  DecideRequest,
+  DecideResponse,
+  ProviderDecisionAnswer,
   GenerateImageRequest,
   ImageReferenceInput,
   EditImageRequest,
@@ -158,3 +161,6 @@ export { createFireworksAdapter } from './providers/fireworks.js';
 export { createXaiAdapter } from './providers/xai.js';
 export type { FireworksConfig } from './providers/fireworks.js';
 export { createRunwareAdapter, runwareTaskUuid } from './providers/runware.js';
+
+// Decisions
+export { resolveDecisionAnswers } from './decision.js';

@@ -8,6 +8,8 @@ import type {
   GenerateJsonResponse,
   GenerateEmbeddingRequest,
   GenerateEmbeddingResponse,
+  DecideRequest,
+  DecideResponse,
   StreamingResponse,
   AIProvider,
   ProviderConfig,
@@ -95,6 +97,11 @@ export interface AIClient {
    * Generate embeddings.
    */
   generateEmbedding(request: GenerateEmbeddingRequest): Promise<GenerateEmbeddingResponse>;
+
+  /**
+   * Answer typed questions about a state with a decision model.
+   */
+  decide(request: DecideRequest): Promise<DecideResponse>;
 
   /**
    * The catalog this client prices against. Exposed so a caller that computes
@@ -198,6 +205,11 @@ export function createAIClient(config: AIClientConfig): AIClient {
       case 'runware': {
         const { createRunwareAdapter } = await import('./providers/runware.js');
         adapter = createRunwareAdapter(providerConfig);
+        break;
+      }
+      case 'typesafe': {
+        const { createTypeSafeAdapter } = await import('./providers/typesafe.js');
+        adapter = createTypeSafeAdapter(providerConfig);
         break;
       }
       case 'local':
@@ -619,6 +631,53 @@ export function createAIClient(config: AIClientConfig): AIClient {
         },
         durationMs: Date.now() - startTime,
         timestamp: new Date().toISOString(),
+      });
+
+      return {
+        ...response,
+        cost,
+        provider: resolved.provider,
+      };
+    },
+
+    async decide(request) {
+      const resolved = resolveModel(request.model, request.provider);
+      validateCapabilities(request.model, resolved.provider, ['decision']);
+
+      const adapter = await getAdapter(resolved.provider);
+      if (!adapter.decide) {
+        throw new AIClientError(
+          `Provider ${resolved.provider} serves no decision model`,
+          'model_not_found',
+          resolved.provider,
+          false,
+        );
+      }
+      const startTime = Date.now();
+      const response = await adapter.decide({ ...request, model: resolved.providerModelId });
+
+      const model = catalog.getModel(request.model);
+      const cost = model ? catalog.calculateCost(request.model, response.usage) : undefined;
+
+      usageRecorder.record({
+        id: `usage_${String(Date.now())}_${Math.random().toString(36).slice(2, 11)}`,
+        tenantId: request.tenantId as string,
+        runId: request.runId as string,
+        stepExecutionId: request.stepExecutionId as string,
+        attempt: request.attempt ?? 1,
+        provider: resolved.provider,
+        model: request.model,
+        operation: 'decide',
+        usage: response.usage,
+        cost: cost ?? {
+          promptCost: 0,
+          completionCost: 0,
+          totalCost: 0,
+          currency: 'USD',
+        },
+        durationMs: Date.now() - startTime,
+        timestamp: new Date().toISOString(),
+        providerRequestId: response.providerRequestId,
       });
 
       return {

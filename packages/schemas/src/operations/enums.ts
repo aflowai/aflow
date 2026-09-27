@@ -26,6 +26,7 @@ import {
 
 export const TEXT_MODELS = MODEL_SELECTIONS.text;
 export const EMBEDDING_MODELS = MODEL_SELECTIONS.embedding;
+export const DECISION_MODELS = MODEL_SELECTIONS.decision;
 // Media models come from the wired route table, not a curated list: the route
 // is what makes one dispatchable, so the two cannot drift apart.
 export const IMAGE_MODELS = IMAGE_ROUTE_KEYS;

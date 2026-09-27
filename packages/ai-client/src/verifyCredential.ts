@@ -10,6 +10,7 @@ export const VERIFIABLE_PROVIDERS = [
   'fireworks',
   'openrouter',
   'xai',
+  'typesafe',
 ] as const;
 export type VerifiableProvider = (typeof VERIFIABLE_PROVIDERS)[number];
 
@@ -62,6 +63,10 @@ const PROBES: Record<VerifiableProvider, Probe> = {
   },
   xai: {
     url: () => 'https://api.x.ai/v1/models',
+    headers: (secrets) => ({ Authorization: `Bearer ${secrets['api_key'] ?? ''}` }),
+  },
+  typesafe: {
+    url: () => 'https://api.typesafe.ai/v1/models',
     headers: (secrets) => ({ Authorization: `Bearer ${secrets['api_key'] ?? ''}` }),
   },
 };

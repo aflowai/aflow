@@ -24,6 +24,7 @@ export const DEFAULT_AI_MODELS = {
   image: 'flash-image',
   video: 'veo',
   embedding: 'text-embedding-3-small',
+  decision: 'jev',
 } as const;
 
 // ============================================================================
@@ -52,6 +53,7 @@ export const MODEL_SELECTIONS = {
     'grok',
   ] as const,
   embedding: ['text-embedding-3-small', 'text-embedding-3-large'] as const,
+  decision: ['jev'] as const,
 } as const;
 
 export interface ShutdownLogger {

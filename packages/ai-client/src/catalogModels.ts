@@ -189,6 +189,35 @@ export const builtInModels: ModelDefinition[] = [
   },
 
   // ============================================================================
+  // Decision Models
+  // ============================================================================
+  // Input is metered and output is not: the answer is a distribution over the
+  // labels the caller supplied, not generated tokens.
+  {
+    id: 'jev-1.13.0',
+    provider: 'typesafe',
+    displayName: 'Jev 1.13',
+    description:
+      'Typed decisions about a state — a choice, a rubric score or a yes/no — with calibrated confidence. Writes no text.',
+    contextWindow: 64_000,
+    maxOutputTokens: 0,
+    capabilities: {
+      chat: false,
+      completion: false,
+      embedding: false,
+      vision: false,
+      audio: false,
+      functionCalling: false,
+      jsonMode: false,
+      streaming: false,
+      decision: true,
+    },
+    pricing: { promptPer1M: 0.042, completionPer1M: 0, currency: 'USD' },
+    traits: { speed: 5, cost: 1, outputType: 'decision' },
+    aliases: ['jev'],
+  },
+
+  // ============================================================================
   // Anthropic Models
   // ============================================================================
   {

@@ -1,0 +1,96 @@
+# Plan 316 — Workflows decide without a language model: a typed decision step
+
+**Status:** 🌱 design · **First backend:** TypeSafe AI's Jev (a "System One" decision model)
+
+## 1. Problem
+
+A skill that has to route, triage, gate or score on a judgement has two ways to do it today, and both are wrong for the job.
+
+- **A `when` predicate** compares a typed value that already exists. It cannot read a support ticket and say which team owns it.
+- **An agent or `ai.text.generate_json` step** can, but it pays a reasoning model's latency and price for every item and returns an answer with no calibrated confidence. A workflow has no honest way to say "sure enough to act, otherwise escalate".
+
+Nothing in the engine produces a calibrated confidence. The eval judge returns `pass | fail | unclear` from a `generate_json` call; write risk is a static tier. The slots for typed decisions exist and are empty: the guardrail `classifier` rails are validated but never executed, and a workflow's fork is an unvalidated `when` string whose path is never checked against what the producing step emits.
+
+Decision models now exist that fit the gap. Jev reads a `state` (text, JSON object or array) and a set of named questions and answers every question in one parallel pass, each with a typed value and a calibrated probability distribution. There are three question types: `choice` (one of up to 255 labelled options), `score` (an expected position on a 2–10 level rubric) and `noul` (the probability that a statement is true). It cannot write text, by construction. Latency is in the tens to hundreds of milliseconds and input is priced far below a chat model.
+
+## 2. Decisions
+
+**D1 — One provider-neutral operation, `ai.decision.decide`.** A state and named questions in; typed answers with probabilities and confidence out. Jev is the first model behind it, recorded in the model catalog under a new `decision` capability; the operation never names a vendor. _Rejected:_ calling the vendor through the API mesh (loses typed outputs, usage accounting and catalog governance, and every author hand-writes the wire format); a Jev-named operation (a model leaving the lineup would rename a step inside every skill that uses it).
+
+**D2 — The operation is a runtime primitive, not an agent tool (`agentTool: false`).** A decision model earns its keep when the questions are written once and asked many times with no language model in the loop. An agent that writes the options, calls the decider and reads the answer has already paid for a reasoning turn, so the saving is gone. Helmsman, Runner and the host harness do not call it; they author it into skills. No capability group, no tool tier, no harness exposure.
+
+**D3 — Abstention is data.** Each question may carry `minConfidence`. An answer below it is returned with `decided: false` and the step still succeeds: the decider did its job, and the workflow's escalation branch is the consumer. A malformed request, a missing credential or a provider error is a failure.
+
+**D4 — The fork is carried by the schema, not by prompt prose.** The compose draft gains a `decision` task kind: the state bindings, the questions, `routes` (a question's choice label, or a score or probability threshold, mapped to the tasks it enables) and `onUndecided` (the task that runs when a routed question abstains). The assembler lowers it into an `ai.decision.decide` operation task plus generated `when` predicates on the routed tasks, so the scheduler gains nothing. Route validation — every label real, every threshold in range, `onUndecided` present when a routed question has a `minConfidence` — returns structured diagnostics the drafter corrects from. _Rejected:_ teaching compose-skill to hand-write an operation task and `when` strings; that is prompt prose, and the path is unchecked.
+
+**D5 — `when` is checked against the producer's output shape.** A predicate reading `tasks.<id>.output.<path>` of an operation task is validated against that operation's output schema. This is general, and it is what keeps a hand-written fork honest on the path that does not go through compose-skill: Helmsman patching a workflow directly.
+
+**D6 — Step-only primitives are findable by authors.** Catalog search hides `agentTool: false` operations, so Helmsman patching a workflow cannot find the decider. The catalog marks operations that are valid workflow steps, and search in an authoring context returns them while never offering them as callable tools.
+
+**D7 — Credentials are the space's or tenant's own, like every other model provider.** A `typesafe` credential provider with one API key, resolved through the existing credential resolver. No key fails closed with the existing missing-credential error. _Rejected for now:_ emulating decisions with `generate_json` when no key exists — it would return uncalibrated confidences that look calibrated.
+
+**D8 — The judge may use a decider, and it is measured before it counts.** A binary rubric entry maps onto a `noul` question; an answer inside the abstention band is `unclear`. A judge criterion may name a decision model, and the judge scorecard measures it against labelled data exactly as it measures a language-model judge. Judges stay advisory until measured.
+
+**D9 — Guardrail classifier rails execute through the same operation, opt-in per rail.** A decider reads the state it is given and can be steered by it, so it is never the only gate on a security decision.
+
+## 3. The operation
+
+Input:
+
+- `state` — a string, JSON object or array.
+- `questions` — `Record<name, question>`, one of:
+  - `{ type: 'choice', instructions?, options: Record<label, description | null>, minConfidence? }`, 2–255 options
+  - `{ type: 'score', instructions?, levels: (description | null)[], minConfidence? }`, 2–10 levels, index 0 lowest
+  - `{ type: 'noul', instructions?, criteria?: { true?, false? }, minConfidence? }`
+- `model` — optional catalog reference; the catalog's default decision model when absent.
+
+Output:
+
+- `answers` — `Record<name, answer>`:
+  - choice: `{ type, value: label, confidence, probabilities: Record<label, number>, decided }`
+  - score: `{ type, value: expected score, confidence, probabilities: Record<level, number>, decided }`
+  - noul: `{ type, value: probability of true, confidence: max(p, 1 − p), decided }`
+- `model`, `usage { inputTokens, outputTokens }`, `latencyMs`.
+
+For a `noul`, `confidence` is derived as the probability of the more likely outcome, so one threshold reads the same way on every question type.
+
+Wire: `POST {base}/v1/systemone` with `Authorization: Bearer <key>`, body `{ state, questions, model }`, where the neutral names map onto the provider's (`options` → `criteria` for a choice, `levels` → `criteria` for a score). The response carries `model`, `answers` and `usage { input_tokens, output_tokens }`; the request id is in `x-typesafe-request-id`. `GET /v1/models` lists the account's models and serves as the credential probe.
+
+## 4. Affected packages and contracts
+
+`packages/ai-client` (the `typesafe` provider, `decide` on the adapter and client, catalog entry, `decision` capability, credential probe), `packages/schemas` (credential provider, operation schemas and registration, compose draft `decision` task kind, catalog step marking), `packages/credential-resolver` (BYOK provider set), `apps/aflow-executor-ai` (handler, credential mapping), `packages/cybernetic-runtime` (route validation, `when` shape check, judge backend), `apps/aflow-orchestrator` (assembler lowering, catalog search in authoring context, guardrail rails), `packages/platform-artifacts` (compose-skill's one line naming the decision task; an example skill), `packages/server-runtime` (catalog provider list).
+
+No stored data changes shape. A new credential provider id and a new operation id appear.
+
+## 5. Phases
+
+### P0 — Wire format
+
+The request and response shapes in §3, taken from the provider's published SDK. Exit: a recorded response fixture that the adapter tests replay, and one live call through the adapter with a real key that matches it.
+
+### P1 — Client and credential (D1, D7)
+
+`typesafe` in the AI provider and credential provider enums, the credential registry entry, the BYOK set and the executor's credential mapping; the adapter implements `decide` and refuses every text method; `AIClient.decide` resolves the model through the catalog and refuses a model without the `decision` capability; the credential probe lists models. Exit: adapter tests over the fixture, including the name mapping, `noul` confidence derivation and error classification (401 not retryable, 429 retryable).
+
+### P2 — The operation (D2, D3)
+
+Schemas, registration with `usage` written for skill authors, the handler, usage and cost reporting. Exit: the handler's tests cover `decided` on both sides of `minConfidence` per type and a failing credential; `run_operation ai.decision.decide` on a local stack returns typed answers.
+
+### P3 — Authoring (D4, D5, D6)
+
+The `decision` draft task kind, its lowering and route validation; `when` checked against operation output schemas; step-visible catalog search in authoring context; one line in compose-skill naming the decision task; an example skill (triage → route → escalate on abstention). Exit: asking Helmsman for "a skill that triages incoming support tickets and escalates the unclear ones" produces a `decision` task with routes, and its run takes the escalation branch on an abstaining answer; a patched fork on a non-existent output path is refused.
+
+### P4 — Judge backend (D8)
+
+A judge criterion may name a decision model; abstention is `unclear`. Exit: an eval batch judged by a decider produces a scorecard beside the language-model judge on the same labels.
+
+### P5 — Guardrail classifier rails (D9)
+
+The `classifier` rails execute through the operation when a rail opts in. Exit: a `topic_boundary` rail refuses an off-topic input in a test and fails closed when the decider errors.
+
+## 6. How it is proven
+
+- A skill whose decision abstains runs its escalation branch, and one whose decision is confident does not. If `decided` were computed wrongly, or the lowering produced the wrong `when`, one of these runs takes the wrong branch.
+- A draft whose route names a label the question does not offer is refused with a diagnostic naming the label.
+- A fork reading `tasks.triage.output.answers.team.valeu` is refused at validation, not skipped at run time.
+- The operation never appears in an agent's tool list, and does appear in authoring search.
