@@ -68,17 +68,43 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(taskOrThrow('open-pr').operation).toBe('api.http.call');
   });
 
-  it('commits the patch onto a new branch and leaves the working tree alone', () => {
+  it('commits the patch onto its branch, carrying the base it was made against', () => {
     const commit = taskOrThrow('commit');
     expect(commit.inputTemplate).toEqual({
       bindingId: { $bind: 'bindingId' },
       patch: { $bind: 'patch' },
       mode: 'clean',
-      commit: { branch: { $bind: 'branch' }, message: { $bind: 'commitMessage' } },
+      commit: {
+        branch: { $bind: 'branch' },
+        message: { $bind: 'commitMessage' },
+        base: { $bind: 'baseSha' },
+      },
     });
-    // A commit is not replayable — the branch it names exists after the first
-    // attempt and the operation refuses an existing one.
+    // A commit is not replayable — after the first attempt the branch exists
+    // or has moved, and the operation refuses what no longer matches.
     expect(commit.retryability).toBe('unsafe');
+  });
+
+  it('binds the base only when the caller passed one, and names how a branch is reused', () => {
+    const commit = taskOrThrow('commit');
+    const template = commit.inputTemplate;
+    if (template === undefined) throw new Error('the commit task must carry a template');
+    const declared = new Set(Object.keys(commit.inputBindings ?? {}));
+    const inputs = { bindingId: 'folder-1', patch: 'diff', branch: 'feat/x', commitMessage: 'm' };
+    const fresh = substituteTemplateBinds(template, inputs, declared);
+    expect(fresh['commit']).toEqual({ branch: 'feat/x', message: 'm' });
+    const appended = substituteTemplateBinds(
+      template,
+      { ...inputs, baseSha: 'a'.repeat(40) },
+      declared,
+    );
+    expect(appended['commit']).toEqual({ branch: 'feat/x', message: 'm', base: 'a'.repeat(40) });
+
+    const baseSha = (wf.runInputs ?? []).find((i) => i.id === 'baseSha');
+    expect(baseSha?.required).toBe(false);
+    expect(PUBLISH_LOCAL_CHANGES.description).toContain(
+      'a branch is reused only that way, and a fresh change takes a fresh branch',
+    );
   });
 
   it('pins the push argv, binding only the branch', () => {

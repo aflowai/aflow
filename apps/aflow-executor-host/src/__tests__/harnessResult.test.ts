@@ -356,3 +356,126 @@ describe.runIf(sandboxReadiness().ready)('a check that rejects an answer keeps t
     expect(error.details['harness']).toEqual({ id: 'fake', label: 'Fake harness' });
   }, 120_000);
 });
+
+describe.runIf(sandboxReadiness().ready)('a commission starts from a named ref', () => {
+  let policyPath: string;
+  let repo: string;
+  let feature: string;
+  let other: string;
+  const vcs = async (...args: string[]): Promise<string> =>
+    (await promisify(execFile)('git', args, { cwd: repo })).stdout.trim();
+
+  beforeAll(async () => {
+    const base = await mkdtemp(join(tmpdir(), 'host-harness-base-'));
+    repo = join(base, 'project');
+    await mkdir(repo, { recursive: true });
+    await vcs('init', '-b', 'main');
+    await vcs('config', 'user.email', 'test@example.com');
+    await vcs('config', 'user.name', 'Test');
+    await writeFile(join(repo, 'README.md'), '# project\n', 'utf8');
+    await vcs('add', '-A');
+    await vcs('commit', '-m', 'initial');
+    await vcs('branch', 'feat/reviewed');
+    await vcs('branch', 'other');
+    feature = await vcs('rev-parse', 'feat/reviewed');
+    other = feature;
+    await writeFile(join(repo, 'README.md'), '# project, moved on\n', 'utf8');
+    await vcs('commit', '-am', 'main moves on');
+
+    const harness = (id: string, script: string): Record<string, unknown> => ({
+      id,
+      executable: '/bin/sh',
+      args: ['-c', script],
+      // The shared refs live under the repository's `.git`, which a harness
+      // cannot write unless its profile opens it. Opened here so the harness
+      // can do what the guard exists to catch.
+      writePaths: [join(repo, '.git')],
+    });
+    policyPath = join(base, 'host-policy.json');
+    await writeFile(
+      policyPath,
+      JSON.stringify({
+        version: 1,
+        bindings: [
+          {
+            id: 'hb',
+            root: repo,
+            mode: 'readwrite',
+            allowsExecution: true,
+            singleFile: false,
+            spaceId: 'space-test',
+          },
+        ],
+        harnesses: [
+          harness('edits', 'printf changed > touched.txt'),
+          harness('deletes', 'printf changed > touched.txt; git branch -D other'),
+          harness('moves', 'printf changed > touched.txt; git update-ref refs/heads/other HEAD'),
+        ],
+      }),
+    );
+  });
+
+  async function runWith(input: Record<string, unknown>) {
+    const written: Record<string, unknown> = {};
+    const ctx = {
+      operationId: 'host.harness.run',
+      spaceId: 'space-test',
+      runId: 'run-base',
+      job: { inputRef: 'inline:x' },
+      signal: new AbortController().signal,
+      log: { error: () => undefined, warn: () => undefined, info: () => undefined },
+      readPayload: () =>
+        Promise.resolve({ bindingId: 'hb', task: 'Fix it.', timeoutMs: 60_000, ...input }),
+      emitLiveDelta: () => Promise.resolve(),
+      writePayload: (kind: string, data: unknown) => {
+        written[kind] = data;
+        return Promise.resolve(`inline:${kind}`);
+      },
+    } as never;
+    const outcome = await createHostHarnessHandler(policyPath).execute(ctx);
+    return { outcome, written };
+  }
+
+  it('checks out the named ref and reports it as the base, judged against itself', async () => {
+    const { outcome, written } = await runWith({ harness: 'edits', base: 'feat/reviewed' });
+    expect(outcome.status).toBe('SUCCEEDED');
+    const output = written['output'] as Record<string, unknown>;
+    expect(output['baseSha']).toBe(feature);
+    expect(output['headMoved']).toBe(false);
+    expect(String(output['patch'])).toContain('touched.txt');
+  }, 120_000);
+
+  it('refuses a ref the folder does not have, naming it', async () => {
+    const { outcome, written } = await runWith({ harness: 'edits', base: 'no-such-branch' });
+    expect(outcome.status).toBe('FAILED');
+    const error = written['error'] as { message: string; classification: string };
+    expect(error.message).toContain('`no-such-branch`');
+    expect(error.classification).toBe('validation');
+  }, 120_000);
+
+  it('refuses a run that deleted a branch, and keeps its work on the failure', async () => {
+    await vcs('branch', '-f', 'other', other);
+    const { outcome, written } = await runWith({ harness: 'deletes' });
+    expect(outcome.status).toBe('FAILED');
+    const error = written['error'] as {
+      message: string;
+      classification: string;
+      details: Record<string, unknown>;
+    };
+    expect(error.classification).toBe('permission');
+    expect(error.message).toContain('`refs/heads/other` was deleted');
+    expect(error.message).toContain('restore them from the reflog');
+    expect(String(error.details['patch'])).toContain('touched.txt');
+    expect(error.details['filesChanged']).toBe(1);
+  }, 120_000);
+
+  it('refuses a run that moved a branch from inside its checkout, and keeps its work', async () => {
+    await vcs('branch', '-f', 'other', other);
+    const head = await vcs('rev-parse', 'HEAD');
+    const { outcome, written } = await runWith({ harness: 'moves' });
+    expect(outcome.status).toBe('FAILED');
+    const error = written['error'] as { message: string; details: Record<string, unknown> };
+    expect(error.message).toContain(`\`refs/heads/other\` moved from ${other} to ${head}`);
+    expect(String(error.details['patch'])).toContain('touched.txt');
+  }, 120_000);
+});

@@ -13,11 +13,11 @@ const PATCH_MAX_BYTES = 4_194_304;
 
 const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'publish-local-changes',
-  version: 1,
+  version: 2,
   name: 'Publish Local Changes',
   tagline:
-    'Commit a patch onto a new branch of a connected repository, then push it and open the pull request once the operator approves.',
-  description: `Fits a request to publish work that already exists as a patch — the result of a commission, or a diff the operator hands over — onto a branch of a connected repository and into a pull request. The commit lands on a new branch without touching the working tree, the run then waits for approval, and only after it does anything leave the machine.
+    'Commit a patch onto a branch of a connected repository, then push it and open the pull request once the operator approves.',
+  description: `Fits a request to publish work that already exists as a patch — the result of a commission, or a diff the operator hands over — onto a branch of a connected repository and into a pull request. The commit lands on a branch without touching the working tree, the run then waits for approval, and only after it does anything leave the machine.
 
 **Not for a folder whose machine block shows no publish prefix.** Pushing is a posture the operator sets when the folder is connected; without it the push is refused. Say so, ask for the folder to be reconnected allowing pushes under a branch prefix, and stop there rather than committing work that cannot be published.
 
@@ -25,7 +25,9 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
 
 **Before approving**: the run waits at the approval, so the range can be read first — run Local Code Review over \`<base>..<branch>\` while this run waits, and approve or decline on what it finds.
 
-**With the result**: report the pull request link. Where approval was declined, report that the branch stayed on the machine and nothing was pushed — the commit is still there to publish later. Run this again only with a new branch name: each run commits onto a fresh branch, and a branch is never reused.`,
+**On an existing branch**: a fix that was commissioned from a branch (\`base: <branch>\` on the commission) is published onto that branch by naming it as \`branch\` and passing the commission's \`baseSha\` as \`baseSha\`; a branch is reused only that way, and a fresh change takes a fresh branch.
+
+**With the result**: report the pull request link. Where approval was declined, report that the branch stayed on the machine and nothing was pushed — the commit is still there to publish later.`,
   tags: ['coding', 'publish', 'git', 'local', 'developer-tools'],
   capabilityHints: [
     {
@@ -42,8 +44,8 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
       slug: 'publish-local-changes',
       name: 'Publish Local Changes',
       description:
-        "Take a patch to a pull request on a repository connected as a host folder: the patch is committed onto a new branch in a detached worktree at the folder's last commit, the operator approves, and the branch is then pushed and opened as a pull request. The operator's working tree is never touched.",
-      goal: 'Turn a patch into a commit on a new branch of a connected repository and, once the operator approves, a pushed branch and an open pull request — with nothing leaving the machine before the approval.',
+        "Take a patch to a pull request on a repository connected as a host folder: the patch is committed in a detached worktree — onto a new branch at the folder's last commit, or appended to the branch it was made on — the operator approves, and the branch is then pushed and opened as a pull request. The operator's working tree is never touched.",
+      goal: 'Turn a patch into a commit on a branch of a connected repository and, once the operator approves, a pushed branch and an open pull request — with nothing leaving the machine before the approval.',
       mode: 'process' as const,
       outcomes: [
         {
@@ -52,7 +54,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           evaluator: {
             type: 'manual' as const,
             instruction:
-              'The patch was committed onto a new branch of the connected repository without changing the working tree, and either the operator approved and the branch was pushed and opened as a pull request, or the operator declined and the branch stayed local.',
+              'The patch was committed onto its branch of the connected repository without changing the working tree, and either the operator approved and the branch was pushed and opened as a pull request, or the operator declined and the branch stayed local.',
           },
         },
       ],
@@ -74,7 +76,14 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           id: 'branch',
           required: true,
           description:
-            "The new branch the commit lands on — a branch under the folder's publish prefix, which the machine block shows. It must not already exist.",
+            "The branch the commit lands on — a branch under the folder's publish prefix, which the machine block shows. A new one is created at the folder's last commit; an existing one is appended to only with `baseSha`.",
+          schema: { type: 'string', minLength: 1, maxLength: 200 },
+        },
+        {
+          id: 'baseSha',
+          required: false,
+          description:
+            "The commit the patch was made against, as the commission reported it in `baseSha`. Required to append to an existing branch, and it must be that branch's head; a patch made at the folder's last commit may omit it.",
           schema: { type: 'string', minLength: 1, maxLength: 200 },
         },
         {
@@ -123,8 +132,8 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
       tasks: [
         {
           taskId: 'commit',
-          name: 'Commit the patch on a new branch',
-          goal: "Apply the patch in a detached worktree at the connected folder's last commit and commit it on a new branch. The operator's working tree is not touched, and nothing leaves the machine.",
+          name: 'Commit the patch on its branch',
+          goal: "Apply the patch in a detached worktree and commit it — on a new branch at the connected folder's last commit, or on top of the existing branch it was made on. The operator's working tree is not touched, and nothing leaves the machine.",
           type: 'operation' as const,
           operation: 'host.file.patch',
           retryability: 'unsafe' as const,
@@ -132,6 +141,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             bindingId: { kind: 'run_input' as const, path: 'bindingId' },
             patch: { kind: 'run_input' as const, path: 'patch' },
             branch: { kind: 'run_input' as const, path: 'branch' },
+            baseSha: { kind: 'run_input' as const, path: 'baseSha' },
             commitMessage: { kind: 'run_input' as const, path: 'commitMessage' },
           },
           // Every run input is declared here, including the ones only the
@@ -156,6 +166,12 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
                 kind: 'run_input' as const,
                 bindAs: 'branch',
                 path: 'branch',
+                schema: { type: 'string', minLength: 1, maxLength: 200 },
+              },
+              baseSha: {
+                kind: 'run_input' as const,
+                bindAs: 'baseSha',
+                path: 'baseSha',
                 schema: { type: 'string', minLength: 1, maxLength: 200 },
               },
               commitMessage: {
@@ -212,6 +228,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             commit: {
               branch: { $bind: 'branch' },
               message: { $bind: 'commitMessage' },
+              base: { $bind: 'baseSha' },
             },
           },
         },
@@ -230,7 +247,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             onMissingRef: 'skip' as const,
           },
           pauseInstruction:
-            'The change is committed on a new branch in the connected folder and nothing has left the machine. Approving pushes that branch to `origin` and then opens a pull request against the base branch. The range can be read first — Local Code Review over `<base>..<branch>` — while this run waits. Declining leaves the branch local: nothing is pushed and no pull request is opened.',
+            'The change is committed on its branch in the connected folder and nothing has left the machine. Approving pushes that branch to `origin` and then opens a pull request against the base branch. The range can be read first — Local Code Review over `<base>..<branch>` — while this run waits. Declining leaves the branch local: nothing is pushed and no pull request is opened.',
           actionPreview: {
             op: 'host.process.exec',
             inputBindings: {
@@ -364,7 +381,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
       output: {
         primary: 'prUrl',
         guidance:
-          'The run carries prUrl and prNumber once the pull request is open — reporting the link is reporting the result. Where they are absent the branch was committed and not published: say that the branch stayed on the machine, and that the commit is still there to publish later. A second publication takes a new branch name, since the commit lands on a fresh branch each time.',
+          'The run carries prUrl and prNumber once the pull request is open — reporting the link is reporting the result. Where they are absent the branch was committed and not published: say that the branch stayed on the machine, and that the commit is still there to publish later.',
       },
       iteration: { auto: false, maxConsecutiveRuns: 1, stopOnOutcomesMet: true, cooldownMs: 0 },
     },
@@ -377,7 +394,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           {
             id: 'change-published',
             description:
-              'A patch is committed onto a new branch of a repository connected as a host folder without changing the working tree, and after the operator approves, the branch is pushed and a pull request is open.',
+              'A patch is committed onto a branch of a repository connected as a host folder without changing the working tree, and after the operator approves, the branch is pushed and a pull request is open.',
           },
         ],
       },
@@ -392,12 +409,12 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
         'turn this patch into a pull request',
       ],
       activationHint:
-        'Run to publish a patch that already exists — from a commission or from the operator — onto a new branch of a connected repository and into a pull request. The commit is local and reversible; the push waits for an approval. The folder must allow pushes under a branch prefix.',
+        'Run to publish a patch that already exists — from a commission or from the operator — onto a branch of a connected repository and into a pull request. The commit is local and reversible; the push waits for an approval. The folder must allow pushes under a branch prefix.',
       prerequisites: [],
       priority: 50,
     },
     rationale:
-      "Four tasks with the approval between the local half and the published half: the commit lands in a detached worktree at the folder's last commit, so a declined approval costs nothing and leaves the operator's working tree as it was. The push argv is pinned by the skill with only the branch bound, so no caller can add a force flag; the branch prefix that decides what may be pushed is a posture on the connected folder, enforced where the command runs rather than named here. The pull request is the GitHub connector's own createPullRequest, which the operator binds once for the space. The folder arrives as a run input until folder roles land.",
+      "Four tasks with the approval between the local half and the published half: the commit lands in a detached worktree — at the folder's last commit for a new branch, at the branch's head for an append whose base is that head — so a declined approval costs nothing and leaves the operator's working tree as it was. The push argv is pinned by the skill with only the branch bound, so no caller can add a force flag; the branch prefix that decides what may be pushed is a posture on the connected folder, enforced where the command runs rather than named here. The pull request is the GitHub connector's own createPullRequest, which the operator binds once for the space. The folder arrives as a run input until folder roles land.",
   },
 };
 

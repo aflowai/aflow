@@ -110,7 +110,9 @@ describe('a harness widening stays a widening', () => {
     // such flag refuses the budget rather than reaching anything new for it.
     // `model` names a model in the harness's own vocabulary, substituted into the
     // profile's own argument; it reaches no host this profile did not already
-    // permit, and a profile with no such argument refuses it.
+    // permit, and a profile with no such argument refuses it. `base` names a
+    // commit the connected folder already holds, resolved by the machine; it
+    // chooses where the checkout starts, never what the harness may reach.
     const fields = [...harnessInput.matchAll(/^ {2}(\w+):/gm)].map((m) => m[1]);
     expect(fields).toEqual([
       'bindingId',
@@ -119,6 +121,7 @@ describe('a harness widening stays a widening', () => {
       'inputs',
       'outputSchema',
       'resultRetries',
+      'base',
       'continueFrom',
       'maxTurns',
       'model',

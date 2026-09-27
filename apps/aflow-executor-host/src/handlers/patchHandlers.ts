@@ -11,8 +11,9 @@
  * There is no push here, and there is no plan for one on this path. Producing a
  * change and publishing it are separate decisions, and a step that could do
  * both would collapse them. A commit is as far as this reaches: it is made in a
- * checkout of the executor's own and leaves a branch behind, which is a thing
- * the operator can read, push or delete rather than a change already published.
+ * checkout of the executor's own and leaves a branch behind — a new one, or one
+ * commit further along the branch the patch was made on — which is a thing the
+ * operator can read, push or reset rather than a change already published.
  */
 import type { ExecutorContext, StepResult } from '@aflow/executor-runtime';
 import {
@@ -100,11 +101,12 @@ async function applyHostPatch(ctx: ExecutorContext, policyPath: string): Promise
         input.mode,
         input.commit.branch,
         input.commit.message,
+        input.commit.base,
       );
       return await successWithData(ctx, {
         state: apply.state,
-        // A conflict in this mode leaves nothing at all — no commit, no branch,
-        // and an operator folder that was never a party to the apply.
+        // A conflict in this mode leaves nothing at all — no commit, no branch
+        // moved, and an operator folder that was never a party to the apply.
         filesChanged: commit === undefined ? 0 : files.length,
         files,
         conflicts: apply.conflicts,

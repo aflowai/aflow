@@ -60,6 +60,13 @@ export const HostBranchPrefixSchema = branchToken(
 
 export const HostBranchNameSchema = branchToken(HOST_BRANCH_NAME_MAX_LENGTH, 'branch name');
 
+/**
+ * A commit named the way a person names one — a branch, a tag or a sha. The
+ * branch-name rule admits all three; the machine resolves it and refuses a ref
+ * the folder does not have.
+ */
+export const HostBaseRefSchema = branchToken(HOST_BRANCH_NAME_MAX_LENGTH, 'base');
+
 /** Which operator-created binding this job runs against. */
 const HostBindingRef = z
   .string()
@@ -309,21 +316,28 @@ export const HostFilePatchInputSchema = z.object({
   commit: z
     .object({
       branch: HostBranchNameSchema.describe(
-        'Branch to create at the commit. It must not exist yet; an existing one is refused ' +
-          'rather than moved.',
+        "Branch the commit lands on. A new one is created at the folder's HEAD. An existing " +
+          'one takes the commit on top of its head, and only with `base` naming that head.',
       ),
       message: z
         .string()
         .min(1)
         .max(20_000)
         .describe('Commit message, verbatim. The first line is the subject, as git reads it.'),
+      base: HostBaseRefSchema.optional().describe(
+        'The commit the patch was made against, as the commission reported it in `baseSha`. ' +
+          "Required when `branch` exists, and it must be that branch's head. For a new branch " +
+          "it may be omitted; given, it must be the folder's HEAD. A base that does not match " +
+          'is refused, never merged.',
+      ),
     })
     .optional()
     .describe(
-      'Land the diff as a commit on a new branch instead of changing the working tree. ' +
+      'Land the diff as a commit on a branch instead of changing the working tree. ' +
         "The operator's checkout, index and current branch are untouched: the patch is " +
-        'applied in a checkout of HEAD the executor makes for itself, committed there, and ' +
-        'the branch ref is what remains. That commit is what a publication pushes.',
+        'applied in a checkout the executor makes for itself — at HEAD for a new branch, at ' +
+        "the branch's head for an existing one — committed there, and the branch ref is " +
+        'created or advanced by that one commit. That commit is what a publication pushes.',
     ),
 });
 
@@ -355,12 +369,20 @@ export const HostFilePatchOutputSchema = z.object({
     .object({
       branch: z.string().describe('The branch that now exists in the repository.'),
       sha: z.string().describe('The commit the branch points at.'),
-      baseSha: z.string().describe('The commit it was made on, which is HEAD as it was found.'),
+      baseSha: z
+        .string()
+        .describe(
+          "The parent of the new commit: HEAD as it was found for a new branch, the branch's " +
+            'previous head for an append.',
+        ),
+      appended: z
+        .boolean()
+        .describe('True when the branch existed and the commit was appended to it.'),
     })
     .optional()
     .describe(
       'Present only when `commit` was asked for and the diff applied. A conflict leaves no ' +
-        'commit and no branch.',
+        'commit and no branch created or moved.',
     ),
 });
 
@@ -409,6 +431,11 @@ export const HostHarnessRunInputSchema = z.object({
       'Further turns the harness gets to correct a missing or invalid result, each carrying ' +
         'the validation error. Only meaningful alongside `outputSchema`.',
     ),
+  base: HostBaseRefSchema.optional().describe(
+    'The branch, tag or commit the isolated checkout starts from. Absent, the run starts from ' +
+      "the folder's last commit. The patch comes back relative to it, so a fix to a reviewed " +
+      'branch names that branch here and its patch lands on it. An unknown ref is refused.',
+  ),
   continueFrom: z
     .string()
     .optional()
@@ -469,7 +496,12 @@ export const HostHarnessRunOutputSchema = z.object({
   continued: z
     .boolean()
     .describe('True when this added a turn to an existing conversation rather than starting one.'),
-  baseSha: z.string().describe('Commit the isolated worktree started from.'),
+  baseSha: z
+    .string()
+    .describe(
+      "Commit the isolated worktree started from — `base` resolved, or the folder's HEAD. " +
+        'A publication that appends to a branch passes this as its `base`.',
+    ),
   result: z
     .unknown()
     .optional()
@@ -523,7 +555,10 @@ export const HostHarnessRunOutputSchema = z.object({
     .describe('What git could not place, when `applies` is `conflict`.'),
   headMoved: z
     .boolean()
-    .describe('True when the repository has moved off `baseSha` since the run started.'),
+    .describe(
+      "True when the folder's HEAD has moved off `baseSha` since the run started. A run " +
+        'given a `base` is judged against that base, not the HEAD, and reports false.',
+    ),
   blockedDomains: z
     .array(z.string())
     .describe(
@@ -717,8 +752,9 @@ export const HostOperationRegistrations: OperationRegistration[] = [
       'Take a diff into a connected folder — the change a coding harness produced, once ' +
       'someone has decided to keep it. Applies whole or not at all: a diff that no longer ' +
       'fits leaves the folder exactly as it was and says what it could not place. With ' +
-      '`commit` it lands as a commit on a new branch instead, leaving the working tree as ' +
-      'it was. Nothing here pushes; what becomes of the change stays with the operator.',
+      '`commit` it lands as a commit instead — on a new branch, or appended to the branch ' +
+      'it was made on — leaving the working tree as it was. Nothing here pushes; what ' +
+      'becomes of the change stays with the operator.',
     tags: ['host', 'file', 'patch', 'local'],
     idempotency: 'non_idempotent',
     mutates: true,
@@ -730,6 +766,7 @@ export const HostOperationRegistrations: OperationRegistration[] = [
         'Keeping the change a `host.harness.run` produced, after it has been reviewed — the check that follows a delegation',
         'Reapplying a diff that was held while something else moved',
         'Preparing a publication: with `commit`, the diff lands as a commit on a new branch and the working tree is left alone',
+        "A patch made from a commission that started at a branch lands on that branch when `commit.branch` names it and `commit.base` is the `baseSha` the commission reported; a fresh branch takes a patch made at the folder's HEAD",
       ],
       whenNotToUse: [
         'Authoring a change here; a diff is something a harness produced and someone read, never something written for this call',
@@ -742,6 +779,7 @@ export const HostOperationRegistrations: OperationRegistration[] = [
         'A diff whose base has moved fails in `clean` mode rather than applying approximately. That is the point.',
         '`merge` can leave conflict markers in the working tree. The files carrying them come back in `conflicts`.',
         'Paths inside a repository `.git` are refused, whatever the diff says.',
+        'An existing branch is appended to only when `commit.base` is its head. A branch that moved since the commission started refuses the append rather than merging it — commission the fix again from the branch.',
       ],
     },
   },
@@ -855,7 +893,8 @@ export const HostOperationRegistrations: OperationRegistration[] = [
       "the operator's machine — the same tool they use themselves, already authenticated, " +
       'with their toolchain around it. It executes any work over those files: analysis, ' +
       'documents, data and code alike. The run happens in an isolated checkout at the ' +
-      'current commit, so their uncommitted work is untouched. Given an `outputSchema` it ' +
+      'current commit, or at the branch or commit it names, so their uncommitted work is ' +
+      'untouched, and a run that moves any ref of the repository is refused. Given an `outputSchema` it ' +
       'returns a validated `result`; where it changed files it returns a diff to review, ' +
       'committed, pushed and merged nowhere.',
     tags: ['host', 'harness', 'files', 'local'],
@@ -873,6 +912,7 @@ export const HostOperationRegistrations: OperationRegistration[] = [
         'Any task over the files in a connected folder — assessing a codebase, revising a document set, reconciling a ledger, making a code change',
         'Answering a question about a folder that needs the files read and reasoned over, with `outputSchema` naming the shape of the answer',
         'Producing a reviewable diff rather than editing the working copy in place',
+        "A fix to a reviewed range starts from the branch the review covered, `base: <branch>`, so its patch is relative to that branch and lands on it; absent, the run starts from the folder's last commit",
         'A smoke test or a brief look, with `maxTurns` naming how many turns brief means',
         'Pinning the model for a run that has a reason to — a comparison, a cost ceiling, a capability the default lacks; otherwise leave it to the harness',
       ],
@@ -885,7 +925,8 @@ export const HostOperationRegistrations: OperationRegistration[] = [
         "Send the intent and the acceptance criteria, and an `outputSchema` when the answer matters — never a draft. A draft written without the folder's facts is what the harness is here to avoid.",
         'Without `outputSchema` the run returns only a diff, and an assessment comes back as loose text. Name the shape of the answer to get one.',
         'The diff is returned, never applied. The operator decides what becomes of it.',
-        'A continued run returns the diff of the whole conversation against its original starting commit, not only the latest turn.',
+        'A continued run returns the diff of the whole conversation against its original starting commit, not only the latest turn — unless it names a `base`, which continues the conversation in a fresh checkout at that base.',
+        "A patch made from a `base` is relative to that base, not the folder's HEAD: publish it onto the branch it started from, with the run's `baseSha`.",
         'A harness only runs if the operator configured it on that machine; the id here cannot introduce one. Omitted, it resolves to the one offered machine-side — the space context lists them.',
         'A harness needs egress to its provider. `blockedDomains` names every host it could not reach, and `boundaryNote` says whether that stopped the run or only narrowed it.',
         'The folder must be a git repository with at least one commit — the run needs a base to diff against.',

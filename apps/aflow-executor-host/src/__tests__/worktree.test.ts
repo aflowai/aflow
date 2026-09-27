@@ -7,10 +7,14 @@ import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  changedRefs,
   collectChanges,
+  describeRefChanges,
   isGitRepository,
   prepareWorktree,
   removeWorktree,
+  resolveCommit,
+  snapshotRefs,
   WorktreeError,
 } from '../worktree.js';
 
@@ -122,5 +126,89 @@ describe('worktree per run', () => {
     expect(await git(repo, 'worktree', 'list')).toContain(wt.path);
     await removeWorktree(repo, wt.path);
     expect(await git(repo, 'worktree', 'list')).not.toContain(wt.path);
+  });
+});
+
+describe('a run started from a named ref', () => {
+  it('checks out the commit the ref names, not the folder HEAD', async () => {
+    await git(repo, 'branch', 'feat/fix');
+    const branchHead = (await git(repo, 'rev-parse', 'feat/fix')).trim();
+    await writeFile(join(repo, 'app.txt'), 'main moved on\n');
+    await git(repo, 'commit', '-am', 'main moved');
+
+    const at = await resolveCommit(repo, 'feat/fix');
+    expect(at).toBe(branchHead);
+    const wt = await prepareWorktree(repo, scratch, 'work', { at });
+    expect(wt.baseSha).toBe(branchHead);
+    expect(await readFile(join(wt.path, 'app.txt'), 'utf8')).toBe('committed\n');
+    await removeWorktree(repo, wt.path);
+  });
+
+  it('refuses a ref the folder does not have, naming it', async () => {
+    await expect(resolveCommit(repo, 'no-such-branch')).rejects.toThrow(/`no-such-branch`/);
+    await expect(resolveCommit(repo, '--output=/tmp/x')).rejects.toThrow(WorktreeError);
+  });
+});
+
+describe('the refs a run could reach', () => {
+  it('sees nothing when the run only committed in its own checkout', async () => {
+    const wt = await prepareWorktree(repo, scratch, 'work');
+    const before = await snapshotRefs(repo);
+    await writeFile(join(wt.path, 'app.txt'), 'committed in the checkout\n');
+    await git(wt.path, 'commit', '-am', 'detached commit');
+    expect(changedRefs(before, await snapshotRefs(repo))).toEqual([]);
+    await removeWorktree(repo, wt.path);
+  });
+
+  it('sees a branch deleted through the shared refs', async () => {
+    await git(repo, 'branch', 'other');
+    const other = (await git(repo, 'rev-parse', 'other')).trim();
+    const wt = await prepareWorktree(repo, scratch, 'work');
+    const before = await snapshotRefs(repo);
+    await git(wt.path, 'branch', '-D', 'other');
+
+    const changes = changedRefs(before, await snapshotRefs(repo));
+    expect(changes).toEqual([{ ref: 'refs/heads/other', change: 'deleted', before: other }]);
+    const message = describeRefChanges(changes);
+    expect(message).toContain('`refs/heads/other` was deleted');
+    expect(message).toContain('restore them from the reflog');
+    await removeWorktree(repo, wt.path);
+  });
+
+  it('sees a ref moved and a ref created from inside the checkout', async () => {
+    const wt = await prepareWorktree(repo, scratch, 'work');
+    const before = await snapshotRefs(repo);
+    const main = before.get('refs/heads/main');
+    await writeFile(join(wt.path, 'app.txt'), 'rewritten\n');
+    await git(wt.path, 'commit', '-am', 'rewrite');
+    const rewritten = (await git(wt.path, 'rev-parse', 'HEAD')).trim();
+    await git(wt.path, 'update-ref', 'refs/heads/main', rewritten);
+    await git(wt.path, 'update-ref', 'refs/tags/planted', rewritten);
+
+    expect(changedRefs(before, await snapshotRefs(repo))).toEqual([
+      { ref: 'refs/heads/main', change: 'moved', before: main, after: rewritten },
+      { ref: 'refs/tags/planted', change: 'created', after: rewritten },
+    ]);
+    await removeWorktree(repo, wt.path);
+  });
+
+  it('watches local branches and tags, and not what a fetch or a stash moves', async () => {
+    await git(repo, 'branch', 'other');
+    const wt = await prepareWorktree(repo, scratch, 'work');
+    const head = (await git(repo, 'rev-parse', 'HEAD')).trim();
+    const before = await snapshotRefs(repo);
+
+    await git(repo, 'update-ref', 'refs/remotes/origin/x', head);
+    await writeFile(join(repo, 'app.txt'), 'work in progress\n');
+    await git(repo, 'stash');
+    expect(changedRefs(before, await snapshotRefs(repo))).toEqual([]);
+
+    await git(wt.path, 'branch', '-D', 'other');
+    await git(wt.path, 'tag', 'planted');
+    expect(changedRefs(before, await snapshotRefs(repo)).map((c) => [c.ref, c.change])).toEqual([
+      ['refs/heads/other', 'deleted'],
+      ['refs/tags/planted', 'created'],
+    ]);
+    await removeWorktree(repo, wt.path);
   });
 });
