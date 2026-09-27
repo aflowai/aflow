@@ -71,6 +71,33 @@ describe('detectUnresolvedRefs', () => {
     expect(result).toHaveLength(2);
   });
 
+  it('leaves a template literal alone: only a known root makes a reference', () => {
+    expect(
+      detectUnresolvedRefs({
+        message: 'count is ${count} and ${String(total)} of ${name}',
+        text: 'a `${x}` in prose',
+      }),
+    ).toEqual([]);
+    expect(detectUnresolvedRefs({ text: '${steps.prev.output.data}' })).toHaveLength(1);
+    expect(detectUnresolvedRefs({ text: '${state.name}' })).toHaveLength(1);
+  });
+
+  it('reads a patch as the diff it is, however many references its lines carry', () => {
+    const patch =
+      'diff --git a/x.ts b/x.ts\n+const s = `${state.name}`;\n+const t = `${steps.a.output}`;\n';
+    expect(detectUnresolvedRefs({ bindingId: 'hb', patch })).toEqual([]);
+    expect(detectUnresolvedRefs({ inputs: { patch, branch: 'aflow/x' } })).toEqual([]);
+  });
+
+  it("reads a workflow's run inputs as the caller's data", () => {
+    expect(
+      detectUnresolvedRefs({
+        inputs: { note: 'see ${state.summary}', title: '${steps.x.output}' },
+      }),
+    ).toEqual([]);
+    expect(detectUnresolvedRefs({ note: 'see ${state.summary}' })).toHaveLength(1);
+  });
+
   it('ignores non-string, non-object values', () => {
     expect(detectUnresolvedRefs({ num: 42, bool: true, nil: null })).toEqual([]);
   });

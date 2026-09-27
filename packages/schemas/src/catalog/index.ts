@@ -45,6 +45,9 @@ export {
 export {
   validateStepInput,
   detectUnresolvedRefs,
+  REFERENCE_ROOTS,
+  REFERENCE_PATTERN_SOURCE,
+  type ReferenceRoot,
   mapZodErrors,
   zodIssueMessage,
   mapZodIssuesToFormErrors,

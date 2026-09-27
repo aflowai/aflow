@@ -37,8 +37,19 @@ export interface StepInputValidationResult {
 // Unresolved reference detection
 // ============================================================================
 
-/** Matches ${...} patterns in resolved input (post-resolution, no code sections to worry about). */
-const UNRESOLVED_REF_PATTERN = /\$\{[^}]+\}/;
+/**
+ * The roots a `${…}` reference can start with. A resolver reads only these, so
+ * a string that survives resolution with `${state.x}` inside is a reference
+ * that failed, while `${count}` in a diff or a template literal never was one.
+ */
+export const REFERENCE_ROOTS = ['state', 'steps'] as const;
+export type ReferenceRoot = (typeof REFERENCE_ROOTS)[number];
+
+/** Source of the pattern every reference reader shares: `${<root>.…}`. */
+export const REFERENCE_PATTERN_SOURCE = String.raw`\$\{((?:${REFERENCE_ROOTS.join('|')})\.[^}]+)\}`;
+
+/** Matches a reference left in resolved input. */
+const UNRESOLVED_REF_PATTERN = new RegExp(REFERENCE_PATTERN_SOURCE);
 
 /**
  * Max depth for unresolved ref scanning.
@@ -54,11 +65,18 @@ const UNRESOLVED_REF_PATTERN = /\$\{[^}]+\}/;
 const MAX_UNRESOLVED_REF_DEPTH = 3;
 
 /**
- * Fields that contain opaque data (source code, file content, large text)
- * where ${...} patterns are legitimate and should NOT be flagged as
- * unresolved references. Keyed by field name at any depth.
+ * Fields that contain opaque data (source code, file content, a diff, large
+ * text) where a reference-shaped substring is the data itself. Keyed by field
+ * name at any depth.
  */
-const OPAQUE_FIELD_NAMES = new Set(['code', 'inlineText', 'inlineJson']);
+const OPAQUE_FIELD_NAMES = new Set(['code', 'inlineText', 'inlineJson', 'patch']);
+
+/**
+ * Parents whose children are the caller's data by definition: file contents,
+ * an environment, and the run inputs handed to a workflow, which were resolved
+ * before they were handed over.
+ */
+const OPAQUE_PARENT_NAMES = new Set(['files', 'env', 'inputs']);
 
 /**
  * Recursively scan resolved input for leftover `${...}` patterns.
@@ -86,7 +104,7 @@ export function detectUnresolvedRefs(
     return [];
   }
   const parentSegment = path[path.length - 2];
-  if (parentSegment === 'files' || parentSegment === 'env') {
+  if (typeof parentSegment === 'string' && OPAQUE_PARENT_NAMES.has(parentSegment)) {
     return [];
   }
 
