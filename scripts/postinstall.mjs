@@ -4,7 +4,7 @@
  * postinstall script — builds the shared packages after `yarn install`.
  *
  * Skips in production because:
- *  1. Packages are already built by `heroku-postbuild` / CI build step.
+ *  1. Packages are already built by the image or CI build step.
  *  2. devDependencies (tsc, tsup) may have been pruned.
  *
  * Vercel installs with SKIP_POSTINSTALL (apps/web/vercel.json) and builds

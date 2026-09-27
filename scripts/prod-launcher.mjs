@@ -256,8 +256,8 @@ function spawnService(serviceName, command, extraEnv = {}) {
 
 // ---------------------------------------------------------------------------
 // Graceful shutdown: forward signal to all children, wait, force kill.
-// Heroku sends SIGTERM and gives 30s before SIGKILL.
-// Cloud Run sends SIGTERM with 10s grace period by default.
+// Cloud Run sends SIGTERM with a 10s grace period by default; Docker's
+// default stop timeout is 10s too, and most other hosts allow 30s.
 // ---------------------------------------------------------------------------
 
 // Detect Cloud Run via K_SERVICE env var (set automatically by Cloud Run)
@@ -269,7 +269,7 @@ function setupSignalHandlers() {
     if (shuttingDown) return;
     shuttingDown = true;
 
-    const platform = isCloudRun ? 'Cloud Run' : 'Heroku';
+    const platform = isCloudRun ? 'Cloud Run' : 'this host';
     console.log(
       `\n[launcher] Received ${signal} on ${platform}, shutting down (grace: ${SHUTDOWN_GRACE_MS}ms)...`,
     );

@@ -54,7 +54,7 @@ export function loadConfig(): McpServerConfig {
     apiUrl: process.env['AFLOW_API_URL'] ?? 'http://localhost:3000',
     cfOriginSecret: process.env['CF_ORIGIN_SECRET'],
     // MCP_PORT first (avoids conflict with API server on 3000 when both run in yarn dev).
-    // PORT fallback required for Heroku/Cloud Run — platform injects PORT for the listening process.
+    // PORT fallback for hosts that inject PORT for the listening process.
     port: Number(process.env['MCP_PORT'] ?? process.env['PORT'] ?? '3100'),
     logLevel,
     // The local edition composes no development bypass, so the fallback has

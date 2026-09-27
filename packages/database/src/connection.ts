@@ -78,8 +78,8 @@ export function getDatabaseConfig(): DatabaseConfig {
   };
 
   // Enable SSL: explicit setting, connection string hint, or production
-  // default. Heroku and Cloud SQL reject unencrypted connections, so
-  // production infers it.
+  // default. Managed providers such as Cloud SQL reject unencrypted
+  // connections, so production infers it.
   //
   // An explicit `DB_SSL` decides either way, because the inferred default is
   // wrong for a deployment whose database is not reachable from outside its

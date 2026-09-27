@@ -179,9 +179,7 @@ export const OWNERSHIP_MANIFEST: readonly OwnershipRule[] = [
   { path: '.prettierignore', owner: 'core' },
   { path: '.gitignore', owner: 'core' },
   { path: '.dockerignore', owner: 'core' },
-  { path: '.lint-baseline', owner: 'development' },
   { path: '.vscode/', owner: 'development' },
-  { path: 'proto/', owner: 'core' },
 
   // ── Images and deployment ───────────────────────────────────────────────
   {
@@ -335,7 +333,6 @@ export const OWNERSHIP_MANIFEST: readonly OwnershipRule[] = [
   { path: '.cursor/', owner: 'development' },
 
   // ── Assets and generated data ───────────────────────────────────────────
-  { path: 'strawberry-robot.svg', owner: 'core' },
   {
     path: 'skills-lock.json',
     owner: 'cloud',
@@ -416,11 +413,6 @@ export const OWNERSHIP_MANIFEST: readonly OwnershipRule[] = [
   // One-off migrations and codemods live here while they are still needed, and
   // are deleted once they are not. The `delete` owner is for a file on its way
   // out, not a permanent category — an empty run of it means the tree is clean.
-  {
-    path: 'scripts/106-cleanup-seeded-artifacts.ts',
-    owner: 'development',
-    why: 'Not spent like its neighbours: CONTRIBUTING.md and the scripts README document it as a dry-run-first tool for stripping pre-registry rows from a database an operator manages, and it imports the live platform registry to know what to strip.',
-  },
   {
     path: 'scripts/backfill-memory-derived-indexes.ts',
     owner: 'development',

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 /**
- * Heroku release phase script.
- * Runs BEFORE dynos restart on every deploy.
+ * Brings a database up to date before the services that use it start: the
+ * appliance's migrate service and the hosted deploy both run it.
  *
  * 1. Apply public-schema migrations (tenants table, catalogs, etc.)
  * 2. Apply tenant-schema migrations to all existing tenants
