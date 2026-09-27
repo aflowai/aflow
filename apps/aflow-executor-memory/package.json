@@ -25,10 +25,10 @@
     "@aflow/payload-store": "workspace:*",
     "@aflow/redis": "workspace:*",
     "@aflow/schemas": "workspace:*",
-    "ioredis": "^5.3.2"
+    "ioredis": "^5.11.1"
   },
   "devDependencies": {
-    "tsx": "^4.7.0",
+    "tsx": "^4.23.15",
     "typescript": "^5.5.3",
     "vitest": "^4.1.11"
   }

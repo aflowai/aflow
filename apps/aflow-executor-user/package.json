@@ -22,16 +22,16 @@
     "@aflow/redis": "workspace:*",
     "@aflow/schemas": "workspace:*",
     "html-to-text": "^9.0.5",
-    "marked": "^17.0.4",
+    "marked": "^17.0.6",
     "nodemailer": "^9.1.1",
     "sanitize-html": "^2.17.7"
   },
   "devDependencies": {
     "@types/html-to-text": "^9.0.4",
-    "@types/node": "^22.15.3",
+    "@types/node": "^22.20.4",
     "@types/nodemailer": "^7.0.11",
     "@types/sanitize-html": "^2.16.1",
-    "tsx": "^4.20.3",
+    "tsx": "^4.23.15",
     "typescript": "^5.8.3",
     "vitest": "^4.1.11"
   }

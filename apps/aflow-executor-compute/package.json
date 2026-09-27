@@ -25,9 +25,9 @@
   },
   "devDependencies": {
     "@types/ioredis-mock": "^8",
-    "@types/node": "^22.15.3",
+    "@types/node": "^22.20.4",
     "ioredis-mock": "^8.13.1",
-    "tsx": "^4.20.3",
+    "tsx": "^4.23.15",
     "typescript": "^5.8.3",
     "vitest": "^4.1.11"
   }

@@ -26,7 +26,7 @@
     "@aflow/database": "workspace:*",
     "@aflow/network-safety": "workspace:*",
     "@aflow/schemas": "workspace:*",
-    "drizzle-orm": "^0.45.2"
+    "drizzle-orm": "^0.45.3"
   },
   "devDependencies": {
     "vitest": "^4.1.11"
