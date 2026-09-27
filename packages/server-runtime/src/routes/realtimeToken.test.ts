@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { mintRealtimeToken, consumeRealtimeToken } from './realtimeToken.js';
+import { afterEach, describe, expect, it } from 'vitest';
+import { resolveAllowedOrigins, mintRealtimeToken, consumeRealtimeToken } from './realtimeToken.js';
 
 const baseClaims = {
   userId: 'user-123',
@@ -66,5 +66,30 @@ describe('mintRealtimeToken / consumeRealtimeToken', () => {
     const consumed = await consumeRealtimeToken(null, token);
     expect(consumed?.allowedSpaceIds).toEqual(['00000000-0000-4000-8000-000000000aaa']);
     expect(consumed?.allowedSessionIds).toEqual(['sess-1', 'sess-2']);
+  });
+});
+
+describe('resolveAllowedOrigins', () => {
+  const env = { ...process.env };
+  afterEach(() => {
+    process.env = { ...env };
+  });
+
+  it('admits every loopback spelling of the development frontends outside production', () => {
+    process.env['NODE_ENV'] = 'test';
+    delete process.env['REALTIME_ALLOWED_ORIGINS'];
+    process.env['CORS_ORIGIN'] = 'true';
+    const origins = resolveAllowedOrigins();
+    for (const o of ['http://localhost:3001', 'http://127.0.0.1:3001', 'http://[::1]:3001']) {
+      expect(origins).toContain(o);
+    }
+    expect(origins).not.toContain('true');
+  });
+
+  it('keeps only real origins from the configured list', () => {
+    process.env['NODE_ENV'] = 'production';
+    process.env['REALTIME_ALLOWED_ORIGINS'] =
+      'https://app.example.com, true, not a url, http://x.test/path';
+    expect(resolveAllowedOrigins()).toEqual(['https://app.example.com']);
   });
 });
