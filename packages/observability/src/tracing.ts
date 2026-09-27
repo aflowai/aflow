@@ -28,9 +28,10 @@ import {
   BatchSpanProcessor,
   SimpleSpanProcessor,
   ConsoleSpanExporter,
+  type SpanProcessor,
 } from '@opentelemetry/sdk-trace-node';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
-import { Resource } from '@opentelemetry/resources';
+import { resourceFromAttributes } from '@opentelemetry/resources';
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions';
 import { B3Propagator, B3InjectEncoding } from '@opentelemetry/propagator-b3';
 import { isSentryActive } from './sentryActive.js';
@@ -108,13 +109,13 @@ export function initTracing(config: TracingConfig): void {
     return;
   }
 
-  const resource = new Resource({
+  const resource = resourceFromAttributes({
     [ATTR_SERVICE_NAME]: config.serviceName,
     [ATTR_SERVICE_VERSION]: config.serviceVersion ?? '0.0.0',
     'deployment.environment': config.environment ?? 'development',
   });
 
-  provider = new NodeTracerProvider({ resource });
+  const spanProcessors: SpanProcessor[] = [];
 
   // Configure propagator for distributed tracing
   propagation.setGlobalPropagator(
@@ -136,14 +137,15 @@ export function initTracing(config: TracingConfig): void {
       exportTimeoutMillis: config.batchConfig?.exportTimeoutMillis ?? 30000,
     });
 
-    provider.addSpanProcessor(batchProcessor);
+    spanProcessors.push(batchProcessor);
   }
 
   // Console exporter for local debugging
   if (config.enableConsoleExporter) {
-    provider.addSpanProcessor(new SimpleSpanProcessor(new ConsoleSpanExporter()));
+    spanProcessors.push(new SimpleSpanProcessor(new ConsoleSpanExporter()));
   }
 
+  provider = new NodeTracerProvider({ resource, spanProcessors });
   provider.register();
   isInitialized = true;
 

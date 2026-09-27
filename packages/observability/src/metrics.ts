@@ -22,7 +22,7 @@ import {
 import { MeterProvider, PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics';
 import type { BackgroundTaskCycleEvent, BackgroundTaskObserver } from '@aflow/lib';
 import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-http';
-import { Resource } from '@opentelemetry/resources';
+import { resourceFromAttributes } from '@opentelemetry/resources';
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions';
 
 // =============================================================================
@@ -113,7 +113,7 @@ export function initMetrics(config: MetricsConfig): void {
     return;
   }
 
-  const resource = new Resource({
+  const resource = resourceFromAttributes({
     [ATTR_SERVICE_NAME]: config.serviceName,
     [ATTR_SERVICE_VERSION]: config.serviceVersion ?? '0.0.0',
     'deployment.environment': config.environment ?? 'development',

@@ -140,7 +140,6 @@
     "sharp": "0.35.4",
     "@fastify/static": "10.1.2",
     "@hono/node-server@npm:^1.19.9": "2.0.12",
-    "@opentelemetry/propagator-jaeger": "2.10.0",
     "ajv@npm:^6.12.4": "6.15.0",
     "ajv@npm:^8.0.0": "8.20.0",
     "ajv@npm:^8.12.0": "8.20.0",
