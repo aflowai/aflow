@@ -198,8 +198,21 @@ export const HostProcessExecOutputSchema = z.object({
     .number()
     .int()
     .nullable()
-    .describe('Null when the process was signalled or timed out.'),
-  signal: z.string().nullable(),
+    .describe(
+      'The status the command itself ended with, as a shell reports it: its own code, ' +
+        'or 128 plus the signal number when a signal killed it (137 for SIGKILL). ' +
+        'A pipe closed by a reader that had read enough is the exception — SIGPIPE is 0, ' +
+        'because that is success for `… | head` and the output asked for was produced. ' +
+        'Null only where nothing could be observed: the process never started, or it was ' +
+        'killed before it could report, which a timeout does.',
+    ),
+  signal: z
+    .string()
+    .nullable()
+    .describe(
+      'The signal that killed the command, when one did — named even where `exitCode` is 0, ' +
+        'which for SIGPIPE it is. Null when it ended on its own.',
+    ),
   timedOut: z.boolean(),
   durationMs: z.number().int().nonnegative(),
   stdout: z.string().optional().describe('Omitted when the output went to a payload instead.'),
@@ -541,7 +554,12 @@ export const HostProcessInspectOutputSchema = z.object({
         'belongs to another run, or predates a restart.',
     ),
   startedAt: z.string().optional(),
-  exitCode: z.number().int().nullable().optional(),
+  exitCode: z
+    .number()
+    .int()
+    .nullable()
+    .optional()
+    .describe('Read the same way as `host.process.exec`: the command’s own status.'),
   descendantCount: z.number().int().nonnegative().optional(),
   output: z
     .string()

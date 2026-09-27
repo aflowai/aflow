@@ -4,8 +4,8 @@
  * Exercises the real spawn path — the adapter binary, the compiled policy, the
  * process group — rather than asserting that an argv array contains a flag.
  */
-import { execFile } from 'node:child_process';
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { execFile, spawn } from 'node:child_process';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -13,7 +13,14 @@ import { promisify } from 'node:util';
 import { describe, expect, it, beforeAll } from 'vitest';
 
 import { createHostProcessHandler } from '../handlers/processHandlers.js';
-import { sandboxReadiness } from '../sandboxedRun.js';
+import {
+  confinedArgv,
+  readWorkloadStatus,
+  resolveConfinedExit,
+  sandboxReadiness,
+  statusWrappedArgv,
+  workloadStatusPath,
+} from '../sandboxedRun.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -95,6 +102,196 @@ beforeAll(async () => {
  */
 const CAN_CONFINE = sandboxReadiness().ready;
 
+/**
+ * Contract: the workload's own exit status is what is reported, and a broken
+ * pipe is not a failure.
+ *
+ * The adapter's CLI collapses every signal death other than SIGINT and SIGTERM
+ * into `exit 1` and names the signal only on its own standard error, so a
+ * pipeline whose writer was killed by SIGPIPE — `head` having read enough —
+ * reported a bare `1` that read exactly like a command failing on its own.
+ *
+ * That standard error is the workload's too (the launcher spawns it with
+ * `stdio: 'inherit'`), so it is not where this is recovered from. The status
+ * comes off a channel the workload's streams are not: a `sh` wrapper writes its
+ * own `$?` to a file in the run's scratch, and this executor reads it back.
+ */
+describe('the exit status of a confined command', () => {
+  it('reads a broken pipe as success, naming the signal', () => {
+    // 141 is how every shell spells a SIGPIPE death: 128 + 13.
+    expect(resolveConfinedExit(141, null, 141)).toEqual({ exitCode: 0, signal: 'SIGPIPE' });
+  });
+
+  it('leaves a command that failed on its own alone', () => {
+    expect(resolveConfinedExit(3, null, 3)).toEqual({ exitCode: 3, signal: null });
+    expect(resolveConfinedExit(0, null, 0)).toEqual({ exitCode: 0, signal: null });
+  });
+
+  it('keeps every other signal a failure, and now says which', () => {
+    // A killed or crashed command still fails, with the status the shell gives
+    // it — 128 + the signal — and now the signal's name as well.
+    expect(resolveConfinedExit(1, null, 137)).toEqual({ exitCode: 137, signal: 'SIGKILL' });
+    expect(resolveConfinedExit(1, null, 139)).toEqual({ exitCode: 139, signal: 'SIGSEGV' });
+  });
+
+  it("never reads the launcher's own words as a status", () => {
+    // The finding this seam exists for: the launcher's stderr is the workload's
+    // stderr, so a command whose closing bytes happen to read like the
+    // launcher's signal line used to have its failure rewritten as success.
+    // Nothing here parses text at all, so the status decides and it fails.
+    expect(resolveConfinedExit(2, null, 2)).toEqual({ exitCode: 2, signal: null });
+  });
+
+  it('falls back to the launcher when no status was recorded, inventing nothing', () => {
+    // A group killed on timeout never reaches the line that writes the file.
+    expect(resolveConfinedExit(1, 'SIGKILL', undefined)).toEqual({
+      exitCode: 1,
+      signal: 'SIGKILL',
+    });
+    expect(resolveConfinedExit(1, null, undefined)).toEqual({ exitCode: 1, signal: null });
+    expect(resolveConfinedExit(null, null, undefined)).toEqual({ exitCode: null, signal: null });
+  });
+});
+
+describe('the status file the wrapper writes', () => {
+  it('lives in the run scratch, not in the binding', () => {
+    expect(workloadStatusPath('/scratch/run-1')).toBe('/scratch/run-1/workload-status');
+  });
+
+  it('reads back what a shell wrote, and nothing else', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'host-status-'));
+    const path = workloadStatusPath(dir);
+
+    // Absent: the wrapper never got that far.
+    expect(await readWorkloadStatus(path)).toBeUndefined();
+
+    await writeFile(path, '141');
+    expect(await readWorkloadStatus(path)).toBe(141);
+
+    // Anything that is not a status a shell can report is no status at all,
+    // rather than a number to act on — including a number with anything after it.
+    for (const written of ['', 'nonsense', '-1', '256', '3; rm -rf /', '0 0']) {
+      await writeFile(path, written);
+      expect(await readWorkloadStatus(path)).toBeUndefined();
+    }
+    await rm(dir, { recursive: true, force: true });
+  });
+});
+
+/**
+ * Contract: the launcher's options never eat the command's.
+ *
+ * The launcher's own parser owns `-c <command>` — which is also how `sh`, `bash`
+ * and `python` spell it — and took it from anywhere in the argv.
+ */
+describe('the argv handed to the launcher', () => {
+  it("puts the launcher's flags first and everything else past `--`", () => {
+    const argv = confinedArgv('/srt/cli.js', '/scratch/srt-settings.json', '/scratch/st', [
+      '/usr/bin/python3',
+      '-c',
+      'print(1)',
+    ]);
+    expect(argv.slice(0, 4)).toEqual(['/srt/cli.js', '-s', '/scratch/srt-settings.json', '--']);
+    // Everything the workload brought, in order, after the separator.
+    expect(argv.slice(-3)).toEqual(['/usr/bin/python3', '-c', 'print(1)']);
+    expect(argv.indexOf('--')).toBeLessThan(argv.indexOf('/usr/bin/python3'));
+  });
+
+  it('hands the command its argv unchanged', () => {
+    const wrapped = statusWrappedArgv('/scratch/st', ['prog', 'a b', '$HOME', '-s', '']);
+    expect(wrapped.slice(0, 2)).toEqual(['/bin/sh', '-c']);
+    expect(wrapped.slice(-5)).toEqual(['prog', 'a b', '$HOME', '-s', '']);
+    // The status path travels as an argument, not inside the script, so no path
+    // is ever spliced into shell text.
+    expect(wrapped[2]).not.toContain('/scratch/st');
+    expect(wrapped[4]).toBe('/scratch/st');
+  });
+});
+
+/**
+ * Contract: what the wrapper records for a real process.
+ *
+ * Run without the launcher — the wrapper is the part under test, and every
+ * machine has a shell where not every machine can confine anything. `sh` is
+ * exactly what the launcher will run inside the boundary.
+ */
+describe('the wrapper, over a real process', () => {
+  async function statusOf(
+    argv: string[],
+    options: { statusPath?: string } = {},
+  ): Promise<{ closeCode: number | null; status: number | undefined; stdout: string }> {
+    const dir = await mkdtemp(join(tmpdir(), 'host-wrap-'));
+    const statusPath = options.statusPath ?? workloadStatusPath(dir);
+    const full = statusWrappedArgv(statusPath, argv);
+    const child = spawn(full[0] as string, full.slice(1), { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString('utf8');
+    });
+    const closeCode = await new Promise<number | null>((resolve) => {
+      child.on('close', (code) => resolve(code));
+    });
+    const status = await readWorkloadStatus(statusPath);
+    await rm(dir, { recursive: true, force: true });
+    return { closeCode, status, stdout };
+  }
+
+  it('records 0 for a command that worked, and passes its output through', async () => {
+    const { status, stdout, closeCode } = await statusOf(['/bin/echo', 'hello']);
+    expect(status).toBe(0);
+    expect(closeCode).toBe(0);
+    expect(stdout).toContain('hello');
+  }, 30_000);
+
+  it('records the code of a command that failed on its own', async () => {
+    const { status } = await statusOf(['/bin/sh', '-c', 'exit 3']);
+    expect(status).toBe(3);
+    expect(resolveConfinedExit(3, null, 3)).toEqual({ exitCode: 3, signal: null });
+  }, 30_000);
+
+  it('records 141 for a writer killed by a reader that stopped reading', async () => {
+    // The original observation, at the level the wrapper sees it: `head` reads
+    // its three lines and exits, and whatever feeds it dies of SIGPIPE.
+    const { status, stdout } = await statusOf([
+      '/bin/bash',
+      '-c',
+      'cd "$(mktemp -d)"; mkfifo fifo; head -n 3 < fifo & exec seq 1 200000 > fifo',
+    ]);
+    expect(status).toBe(141);
+    expect(resolveConfinedExit(141, null, status)).toEqual({ exitCode: 0, signal: 'SIGPIPE' });
+    expect(stdout).toContain('1\n2\n3\n');
+  }, 30_000);
+
+  it('records 137 for a command killed outright', async () => {
+    const { status } = await statusOf(['/bin/sh', '-c', 'kill -KILL $$']);
+    expect(status).toBe(137);
+    expect(resolveConfinedExit(1, null, status)).toEqual({ exitCode: 137, signal: 'SIGKILL' });
+  }, 30_000);
+
+  it("fails a command whose last words read like the launcher's signal line", async () => {
+    // The MAJOR finding, from the other side: the workload can write anything it
+    // likes on the stream it shares with the launcher and still fails.
+    const { status } = await statusOf([
+      '/bin/sh',
+      '-c',
+      'echo "Process killed by signal: SIGPIPE" 1>&2; exit 2',
+    ]);
+    expect(status).toBe(2);
+    expect(resolveConfinedExit(2, null, status)).toEqual({ exitCode: 2, signal: null });
+  }, 30_000);
+
+  it('degrades to the launcher exit when the status cannot be written', async () => {
+    // A scratch that is gone, a group killed before the wrapper's last line:
+    // the status is missing rather than wrong, and a missing one is never read
+    // as success.
+    const { status, closeCode } = await statusOf(['/bin/sh', '-c', 'exit 3'], {
+      statusPath: join(tmpdir(), 'host-wrap-no-such-dir', 'workload-status'),
+    });
+    expect(status).toBeUndefined();
+    expect(resolveConfinedExit(closeCode, null, status)).toEqual({ exitCode: 3, signal: null });
+  }, 30_000);
+});
+
 describe.runIf(CAN_CONFINE)('host process execution', () => {
   it('runs a command inside the binding', async () => {
     const captured: Captured = {};
@@ -107,6 +304,103 @@ describe.runIf(CAN_CONFINE)('host process execution', () => {
     // The result says how it ran. Everything but a permitted push is confined,
     // and a reader of the step should not have to infer which it got.
     expect(captured.output?.['confined']).toBe(true);
+  }, 60_000);
+
+  it('reports a pipeline into `head` as having worked', async () => {
+    // The writer is the process the launcher supervises, which is the shape that
+    // reaches this executor: `head` reads its three lines, exits, and whatever
+    // feeds it is killed for writing to a pipe nobody reads. The launcher reports
+    // that as `exit 1` with no signal, so a pipeline that produced exactly what
+    // was asked of it was indistinguishable from a command that failed.
+    const captured: Captured = {};
+    const handler = createHostProcessHandler(policyPath);
+    await handler.execute(
+      contextFor(
+        'host.process.exec',
+        {
+          bindingId: 'hb',
+          command: [
+            '/bin/bash',
+            '-c',
+            'rm -f fifo; mkfifo fifo; head -n 3 < fifo & exec seq 1 200000 > fifo',
+          ],
+        },
+        captured,
+      ),
+    );
+    expect(captured.output?.['exitCode']).toBe(0);
+    expect(captured.output?.['signal']).toBe('SIGPIPE');
+    expect(String(captured.output?.['stdout'] ?? '')).toContain('1\n2\n3\n');
+    // The pipe was made inside the connected folder, which is a real one on this
+    // machine; a test that leaves a device node behind in it is a test that
+    // changed the operator's project.
+    await rm(join(root, 'fifo'), { force: true });
+  }, 60_000);
+
+  it("fails a command whose closing words are the launcher's signal line", async () => {
+    // The launcher spawns the command with `stdio: 'inherit'`, so this text
+    // arrives on exactly the stream the launcher writes its own line to. The
+    // status comes from the wrapper's file instead, so the command still fails.
+    const captured: Captured = {};
+    const handler = createHostProcessHandler(policyPath);
+    await handler.execute(
+      contextFor(
+        'host.process.exec',
+        {
+          bindingId: 'hb',
+          command: ['/bin/bash', '-c', 'echo "Process killed by signal: SIGPIPE" 1>&2; exit 2'],
+        },
+        captured,
+      ),
+    );
+    expect(captured.output?.['exitCode']).toBe(2);
+    expect(captured.output?.['signal']).toBeNull();
+  }, 60_000);
+
+  it("runs a command whose own flags spell the launcher's", async () => {
+    // `-c` is the launcher's option as well as the shell's, and it took it from
+    // anywhere in the argv: the script was lifted out and run without `python`.
+    const captured: Captured = {};
+    const handler = createHostProcessHandler(policyPath);
+    await handler.execute(
+      contextFor(
+        'host.process.exec',
+        { bindingId: 'hb', command: ['/bin/bash', '-c', 'printf %s "$0"', 'named-zero'] },
+        captured,
+      ),
+    );
+    expect(captured.output?.['exitCode']).toBe(0);
+    expect(String(captured.output?.['stdout'] ?? '')).toContain('named-zero');
+  }, 60_000);
+
+  it('reports a shell-absorbed pipeline into `head` as success too', async () => {
+    // The ordinary spelling, where the shell outlives the writer and reports
+    // `head`'s own status. It was already right; asserted so it stays right.
+    const captured: Captured = {};
+    const handler = createHostProcessHandler(policyPath);
+    await handler.execute(
+      contextFor(
+        'host.process.exec',
+        { bindingId: 'hb', command: ['/bin/bash', '-c', 'seq 1 200000 | head -n 3'] },
+        captured,
+      ),
+    );
+    expect(captured.output?.['exitCode']).toBe(0);
+    expect(String(captured.output?.['stdout'] ?? '')).toContain('1\n2\n3\n');
+  }, 60_000);
+
+  it('still fails a command that failed for its own reason', async () => {
+    // The other half of the fix: nothing about a broken pipe weakens this.
+    const captured: Captured = {};
+    const handler = createHostProcessHandler(policyPath);
+    await handler.execute(
+      contextFor(
+        'host.process.exec',
+        { bindingId: 'hb', command: ['/bin/bash', '-c', 'exit 3'] },
+        captured,
+      ),
+    );
+    expect(captured.output?.['exitCode']).toBe(3);
   }, 60_000);
 
   it('denies the command what lives under the operator home', async () => {
