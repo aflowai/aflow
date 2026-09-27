@@ -96,6 +96,12 @@ RUN rm -rf apps/*/.next/cache
 # ---------------------------------------------------------------------------
 FROM node:22.22.0-alpine3.23 AS production
 
+# The source label is what links a published image to its repository: the
+# registry shows that repository's README and grants its workflows access.
+LABEL org.opencontainers.image.source="https://github.com/aflowai/aflow" \
+      org.opencontainers.image.description="Aflow Local — an agentic execution platform you run yourself" \
+      org.opencontainers.image.licenses="AGPL-3.0-or-later"
+
 # Docker CLI for compute executor (talks to host daemon via mounted socket)
 RUN apk add --no-cache docker-cli
 
