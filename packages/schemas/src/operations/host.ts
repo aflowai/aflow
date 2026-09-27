@@ -559,6 +559,20 @@ export const HostHarnessRunOutputSchema = z.object({
       "True when the folder's HEAD has moved off `baseSha` since the run started. A run " +
         'given a `base` is judged against that base, not the HEAD, and reports false.',
     ),
+  refChanges: z
+    .array(
+      z.object({
+        ref: z.string(),
+        change: z.enum(['created', 'deleted', 'moved']),
+        from: z.string().optional().describe('What it pointed at before; absent when created.'),
+        to: z.string().optional().describe('What it points at now; absent when deleted.'),
+      }),
+    )
+    .describe(
+      'Local branches and tags that changed while the run was in flight, whoever moved them: ' +
+        "the operator's own work in the folder shows here too. A commission's own git cannot " +
+        'move them.',
+    ),
   blockedDomains: z
     .array(z.string())
     .describe(
@@ -894,7 +908,7 @@ export const HostOperationRegistrations: OperationRegistration[] = [
       'with their toolchain around it. It executes any work over those files: analysis, ' +
       'documents, data and code alike. The run happens in an isolated checkout at the ' +
       'current commit, or at the branch or commit it names, so their uncommitted work is ' +
-      'untouched, and a run that moves any ref of the repository is refused. Given an `outputSchema` it ' +
+      "untouched, and its git cannot move the repository's branches or tags. Given an `outputSchema` it " +
       'returns a validated `result`; where it changed files it returns a diff to review, ' +
       'committed, pushed and merged nowhere.',
     tags: ['host', 'harness', 'files', 'local'],

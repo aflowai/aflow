@@ -11,8 +11,8 @@
  * The run happens in a detached worktree, never the operator's checkout. That
  * is what lets a run start while they have uncommitted work, and what makes the
  * result a diff to review rather than an edit already made. Nothing is
- * committed, no branch moves — a run that moves one is refused — and the
- * worktree is removed once its changes have been collected.
+ * committed, the agent's git cannot move a branch or tag, and the worktree is
+ * removed once its changes have been collected.
  */
 import { mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -77,13 +77,13 @@ import {
   checkApplies,
   collectChanges,
   currentHead,
-  describeRefChanges,
   prepareWorktree,
   removeWorktree,
   resolveCommit,
   snapshotRefs,
   WorktreeError,
 } from '../worktree.js';
+import { installRefGuard, noRefGuardMessage, refGuardReadiness } from '../refGuard.js';
 
 /**
  * Where a task that declared an output schema leaves its answer. It is inside
@@ -385,6 +385,10 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
     if (!readiness.ready) {
       return await failureWithError(ctx, permissionError(noSandboxMessage(readiness.missing)));
     }
+    const refGuard = await refGuardReadiness();
+    if (!refGuard.ready) {
+      return await failureWithError(ctx, permissionError(noRefGuardMessage(refGuard.missing)));
+    }
 
     // An abandoned session holds a checkout on disk, so expiry is collected
     // here rather than on a timer — the work is bounded by what is expired, and
@@ -504,6 +508,7 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
     }
 
     const scratchDir = scratch;
+    const refGuardEnv = await installRefGuard(scratchDir);
     // What the harness said, as opposed to what it printed. Set per turn, so
     // the last turn's answer is the one that comes back — the same rule the
     // run result itself follows.
@@ -552,6 +557,7 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
           env: {},
           trustedEnv: {
             SRT_DEBUG: '1',
+            ...refGuardEnv,
             ...(configDir !== undefined && profile.configDirEnv !== undefined
               ? { [profile.configDirEnv]: configDir }
               : {}),
@@ -732,6 +738,7 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
       applies: applies.state,
       ...(applies.state === 'conflict' ? { applyConflict: applies.detail } : {}),
       headMoved,
+      refChanges,
       exitCode: result.exitCode,
       timedOut: result.timedOut,
       durationMs: result.durationMs,
@@ -758,16 +765,6 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
       }
       return details;
     };
-
-    if (refChanges.length > 0) {
-      return await failureWithError(
-        ctx,
-        permissionError(
-          scrubSecret(describeRefChanges(refChanges), credential),
-          await failureDetails(),
-        ),
-      );
-    }
 
     if (check !== undefined && !check.ok) {
       // The step fails, and the work still comes back: a check that rejects an

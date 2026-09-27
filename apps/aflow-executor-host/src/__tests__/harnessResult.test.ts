@@ -4,7 +4,7 @@
  * only in its console output answered nowhere.
  */
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -204,6 +204,7 @@ describe('the wire contract', () => {
       truncated: false,
       applies: 'empty',
       headMoved: false,
+      refChanges: [],
       blockedDomains: [],
     });
     expect(output.result).toEqual({ verdict: 'sound' });
@@ -226,9 +227,43 @@ describe('the wire contract', () => {
         truncated: false,
         applies: 'empty',
         headMoved: false,
+        refChanges: [],
         blockedDomains: [],
       }),
     ).toThrow();
+  });
+
+  it('reports what changed among the local branches and tags, and requires the field', () => {
+    const output = {
+      runId: 'hr_1',
+      harness: { id: 'claude' },
+      continued: false,
+      baseSha: 'abc',
+      filesChanged: 0,
+      patchTruncated: false,
+      exitCode: 0,
+      timedOut: false,
+      durationMs: 10,
+      truncated: false,
+      applies: 'empty',
+      headMoved: false,
+      blockedDomains: [],
+    };
+    const refChanges = [
+      { ref: 'refs/heads/mine', change: 'created', to: 'def' },
+      { ref: 'refs/heads/old', change: 'deleted', from: 'abc' },
+      { ref: 'refs/tags/v1', change: 'moved', from: 'abc', to: 'def' },
+    ];
+    expect(HostHarnessRunOutputSchema.parse({ ...output, refChanges }).refChanges).toEqual(
+      refChanges,
+    );
+    expect(HostHarnessRunOutputSchema.safeParse(output).success).toBe(false);
+    expect(
+      HostHarnessRunOutputSchema.safeParse({
+        ...output,
+        refChanges: [{ ref: 'refs/heads/x', change: 'renamed' }],
+      }).success,
+    ).toBe(false);
   });
 });
 
@@ -362,6 +397,7 @@ describe.runIf(sandboxReadiness().ready)('a commission starts from a named ref',
   let repo: string;
   let feature: string;
   let other: string;
+  let operatorDone: string;
   const vcs = async (...args: string[]): Promise<string> =>
     (await promisify(execFile)('git', args, { cwd: repo })).stdout.trim();
 
@@ -382,13 +418,16 @@ describe.runIf(sandboxReadiness().ready)('a commission starts from a named ref',
     await writeFile(join(repo, 'README.md'), '# project, moved on\n', 'utf8');
     await vcs('commit', '-am', 'main moves on');
 
+    // Inside the connected folder, which a harness may read: the harness waits
+    // on it, so the operator's branch is made while the run is in flight.
+    operatorDone = join(repo, '.operator-done');
     const harness = (id: string, script: string): Record<string, unknown> => ({
       id,
       executable: '/bin/sh',
       args: ['-c', script],
       // The shared refs live under the repository's `.git`, which a harness
-      // cannot write unless its profile opens it. Opened here so the harness
-      // can do what the guard exists to catch.
+      // cannot write unless its profile opens it. Opened here so only the hook
+      // stands between the harness and the operator's branches.
       writePaths: [join(repo, '.git')],
     });
     policyPath = join(base, 'host-policy.json');
@@ -409,7 +448,11 @@ describe.runIf(sandboxReadiness().ready)('a commission starts from a named ref',
         harnesses: [
           harness('edits', 'printf changed > touched.txt'),
           harness('deletes', 'printf changed > touched.txt; git branch -D other'),
-          harness('moves', 'printf changed > touched.txt; git update-ref refs/heads/other HEAD'),
+          harness(
+            'waits',
+            'printf changed > touched.txt; i=0; ' +
+              `while [ ! -e '${operatorDone}' ] && [ $i -lt 600 ]; do sleep 0.1; i=$((i+1)); done`,
+          ),
         ],
       }),
     );
@@ -453,29 +496,53 @@ describe.runIf(sandboxReadiness().ready)('a commission starts from a named ref',
     expect(error.classification).toBe('validation');
   }, 120_000);
 
-  it('refuses a run that deleted a branch, and keeps its work on the failure', async () => {
+  it("stops the agent's own git from deleting a branch, and the run still succeeds", async () => {
     await vcs('branch', '-f', 'other', other);
     const { outcome, written } = await runWith({ harness: 'deletes' });
-    expect(outcome.status).toBe('FAILED');
-    const error = written['error'] as {
-      message: string;
-      classification: string;
-      details: Record<string, unknown>;
-    };
-    expect(error.classification).toBe('permission');
-    expect(error.message).toContain('`refs/heads/other` was deleted');
-    expect(error.message).toContain('restore them from the reflog');
-    expect(String(error.details['patch'])).toContain('touched.txt');
-    expect(error.details['filesChanged']).toBe(1);
+    expect(outcome.status).toBe('SUCCEEDED');
+    const output = written['output'] as Record<string, unknown>;
+    expect(await vcs('rev-parse', 'other')).toBe(other);
+    expect(output['refChanges']).toEqual([]);
+    expect(String(output['stderr'])).toContain(
+      'Refused `refs/heads/other`: a commission may not move branches or tags',
+    );
+    expect(String(output['patch'])).toContain('touched.txt');
   }, 120_000);
 
-  it('refuses a run that moved a branch from inside its checkout, and keeps its work', async () => {
-    await vcs('branch', '-f', 'other', other);
-    const head = await vcs('rev-parse', 'HEAD');
-    const { outcome, written } = await runWith({ harness: 'moves' });
-    expect(outcome.status).toBe('FAILED');
-    const error = written['error'] as { message: string; details: Record<string, unknown> };
-    expect(error.message).toContain(`\`refs/heads/other\` moved from ${other} to ${head}`);
-    expect(String(error.details['patch'])).toContain('touched.txt');
+  it('reports a branch the operator made while the run was in flight, and refuses nothing', async () => {
+    await rm(operatorDone, { force: true });
+    const running = runWith({ harness: 'waits' });
+    // The harness has started once its edit is in its checkout, which is after
+    // the refs were first read.
+    let started = false;
+    for (let i = 0; i < 600 && !started; i += 1) {
+      const listing = await vcs('worktree', 'list', '--porcelain');
+      const checkouts = listing
+        .split('\n')
+        .filter((line) => line.startsWith('worktree '))
+        .map((line) => line.slice('worktree '.length));
+      for (const path of checkouts) {
+        if (
+          await stat(join(path, 'touched.txt')).then(
+            () => true,
+            () => false,
+          )
+        )
+          started = true;
+      }
+      if (!started) await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    expect(started).toBe(true);
+    await vcs('branch', 'operator-work');
+    const made = await vcs('rev-parse', 'operator-work');
+    await writeFile(operatorDone, '', 'utf8');
+
+    const { outcome, written } = await running;
+    expect(outcome.status).toBe('SUCCEEDED');
+    const output = written['output'] as Record<string, unknown>;
+    expect(output['refChanges']).toEqual([
+      { ref: 'refs/heads/operator-work', change: 'created', to: made },
+    ]);
+    expect(String(output['patch'])).toContain('touched.txt');
   }, 120_000);
 });
