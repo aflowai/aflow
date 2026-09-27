@@ -21,6 +21,13 @@ updates:
       time: '06:00'
     open-pull-requests-limit: 5
     groups:
+      # OpenTelemetry versions its experimental packages 0.x, where a "minor"
+      # bump may break, and its stable and experimental halves only work as a
+      # matched set. Grouped apart, the family moves together and a breaking
+      # release fails its own pull request rather than every other update.
+      opentelemetry:
+        patterns: ['@opentelemetry/*']
+        update-types: ['minor', 'patch']
       npm:
         patterns: ['*']
         update-types: ['minor', 'patch']
