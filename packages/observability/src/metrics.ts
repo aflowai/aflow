@@ -151,7 +151,6 @@ export function initMetrics(config: MetricsConfig): void {
   initializeAflowInstruments();
 
   isInitialized = true;
-  console.log(`[metrics] Initialized for service: ${config.serviceName}`);
 }
 
 function initializeAflowInstruments(): void {

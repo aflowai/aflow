@@ -79,15 +79,15 @@ export function initCrashReporting(options: CrashReportingOptions): void {
   const dsn = process.env['SENTRY_DSN'];
   const configured = dsn != null && dsn.trim() !== '';
 
-  const reporter = configured ? loadReporter(options.serviceName) : null;
+  // Unset is the default and says nothing; only a configured DSN with no
+  // reporter behind it is announced, because an empty reporting project and a
+  // reporter that never loaded look identical from the outside, and the
+  // difference decides whether anyone goes looking.
+  if (!configured) return;
+  const reporter = loadReporter(options.serviceName);
   if (reporter === null) {
-    // Said out loud in every case, because an empty reporting project and a
-    // reporter that never loaded look identical from the outside, and the
-    // difference decides whether anyone goes looking.
     console.log(
-      configured
-        ? `[crash-reporting] no reporter in this build for ${options.serviceName}; nothing was sent`
-        : `[crash-reporting] disabled for ${options.serviceName} (SENTRY_DSN unset)`,
+      `[crash-reporting] no reporter in this build for ${options.serviceName}; nothing was sent`,
     );
     return;
   }

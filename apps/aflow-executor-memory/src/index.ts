@@ -81,7 +81,7 @@ async function main() {
     process.exit(1);
   }
   const payloadStore = resolved.store;
-  log.info(resolved.reason);
+  log.debug(resolved.reason);
 
   // Initialize Database (getDatabaseConfig picks up SSL settings)
   const database = createDatabase(getDatabaseConfig());

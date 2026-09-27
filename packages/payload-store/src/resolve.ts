@@ -114,8 +114,15 @@ export function resolvePayloadStore({
       backend: 'gcs',
       reason: 'GCS payload store',
     };
-  } catch {
-    // No bucket configured — fall through.
+  } catch (err) {
+    // No bucket configured is the ordinary case and falls through quietly. A
+    // bucket that is configured but unusable is not: the next store is Redis,
+    // whose payloads expire, and the startup line naming the choice is debug.
+    if (env['GCS_PAYLOAD_BUCKET']?.trim()) {
+      console.warn(
+        `[payload-store] GCS_PAYLOAD_BUCKET is set but the store could not be created; falling back: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   if (redis && env['USE_REDIS_PAYLOAD_STORE'] !== 'false') {

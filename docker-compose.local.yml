@@ -55,6 +55,9 @@ x-runtime: &runtime
     # The database is reachable only from this network and terminates no TLS;
     # the production default would otherwise infer it and fail to connect.
     DB_SSL: 'false'
+    # The capacity every pool is sized from. The default is the hosted tier's;
+    # this Postgres runs with its own default of 100.
+    DB_SERVER_MAX_CONNECTIONS: '100'
     # Password supplied per service from its mounted config cut, not inlined
     # here: a value in the compose file is in `docker inspect` and the shell
     # history of whoever ran it.
