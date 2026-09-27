@@ -188,6 +188,51 @@ describe('harness profiles', () => {
     ]);
   });
 
+  it('runs the profile model when the run names none', () => {
+    const argv = buildHarnessArgv(
+      profile({ modelArgs: ['--model', '{model}'], model: 'fable' }),
+      'the task',
+    );
+    expect(argv).toEqual(['/usr/local/bin/claude', '--model', 'fable', 'the task']);
+  });
+
+  it('prefers the run model, then the profile model, then the harness default', () => {
+    const withDefault = profile({ modelArgs: ['--model', '{model}'], model: 'fable' });
+    const withoutDefault = profile({ modelArgs: ['--model', '{model}'] });
+    const modelOf = (argv: string[]): string | undefined =>
+      argv.includes('--model') ? argv[argv.indexOf('--model') + 1] : undefined;
+
+    const runWins = buildHarnessArgv(withDefault, 't', [], undefined, 'parable');
+    expect(modelOf(runWins)).toBe('parable');
+    expect(runWins).not.toContain('fable');
+    expect(runWins.filter((a) => a === '--model')).toHaveLength(1);
+
+    expect(modelOf(buildHarnessArgv(withDefault, 't'))).toBe('fable');
+
+    expect(buildHarnessArgv(withoutDefault, 't')).toEqual(['/usr/local/bin/claude', 't']);
+  });
+
+  it('refuses a profile model the harness has no argument for, as it refuses a run model', () => {
+    const p = profile({ id: 'opencode', modelArgs: [], model: 'fable' });
+    try {
+      buildHarnessArgv(p, 'the task');
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(HarnessProfileError);
+      expect((error as HarnessProfileError).kind).toBe('unsupported_request');
+      expect((error as Error).message).toContain('opencode');
+      expect((error as Error).message).toContain('fable');
+    }
+    expect(() => buildHarnessArgv(p, 'the task', [], undefined, 'parable')).toThrow(
+      HarnessProfileError,
+    );
+  });
+
+  it('carries no model unless one is configured, and refuses an empty one', () => {
+    expect(profile().model).toBeUndefined();
+    expect(() => profile({ model: '' })).toThrow();
+  });
+
   it('never lets a request name the executable — only an id the machine defined', () => {
     // The op takes `harness: string`; everything about what runs comes from the
     // machine's own file. This asserts the profile is the only source.

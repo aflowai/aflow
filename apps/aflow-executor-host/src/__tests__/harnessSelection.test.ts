@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { selectHarness } from '../handlers/harnessHandlers.js';
-import { HarnessProfileError, HarnessProfileSchema } from '../harnessProfiles.js';
+import { buildHarnessArgv, HarnessProfileError, HarnessProfileSchema } from '../harnessProfiles.js';
 import type { HarnessProfile } from '../harnessProfiles.js';
 
 function profile(id: string, label?: string): HarnessProfile {
@@ -61,6 +61,21 @@ describe('choosing a harness', () => {
       expect((error as Error).message).toContain('No coding harness is configured');
       expect((error as HarnessProfileError).kind).toBe('unknown_profile');
     }
+  });
+
+  it('brings the chosen profile model with it, which a run model still overrides', () => {
+    const configured = HarnessProfileSchema.parse({
+      id: 'claude',
+      executable: '/usr/local/bin/claude',
+      modelArgs: ['--model', '{model}'],
+      model: 'fable',
+    });
+    const selection = selectHarness(new Map([['claude', configured]]), undefined);
+    if (selection.kind !== 'profile') throw new Error('expected a profile');
+    expect(buildHarnessArgv(selection.profile, 't')).toContain('fable');
+    const overridden = buildHarnessArgv(selection.profile, 't', [], undefined, 'parable');
+    expect(overridden).toContain('parable');
+    expect(overridden).not.toContain('fable');
   });
 
   it('still resolves a named id against the machine, and refuses an unknown one', () => {

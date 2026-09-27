@@ -32,6 +32,8 @@ function usage(): never {
       '  harness list                       What is installed here, and what is configured.\n' +
       '  harness add <id> [options]         Allow a discovered harness to run.\n' +
       '  harness allow <id> <host>...       Let a harness reach these hosts.\n' +
+      '  harness model <id> <model>         Run this model when a task names none.\n' +
+      "  harness model <id> --clear         Run the harness's own default instead.\n" +
       '  harness remove <id>                Stop allowing it.\n' +
       '  harness mcp <id> <command...>      Allow an MCP server to run here.\n' +
       '  harness mcp-remove <id>            Stop allowing it.\n' +
@@ -41,7 +43,8 @@ function usage(): never {
       '  --executable <path>   Override what discovery found.\n' +
       '  --credential <cmd>    Shell-free command printing the credential, comma-separated.\n' +
       '  --credential-json <path>  Field to take when that command prints JSON.\n' +
-      '  --credential-env <NAME>   Environment variable the harness reads it from.\n\n' +
+      '  --credential-env <NAME>   Environment variable the harness reads it from.\n' +
+      '  --model <id>          Model to run when a task names none, as the harness spells it.\n\n' +
       'Options for `mcp`:\n' +
       '  --binding <id>        The connected folder it runs in. Required.\n' +
       '  --read <path,path>    Paths outside that folder it needs to read — where it is installed.\n\n' +
@@ -75,7 +78,19 @@ function describe(profile: HarnessProfile): string {
       : `reaches ${profile.allowedDomains.join(', ')}`;
   const credential = profile.credential ? `, credential via ${profile.credential.env}` : '';
   const named = profile.label === undefined ? '' : ` (${profile.label})`;
-  return `  ${profile.id}${named} — ${profile.executable}, ${egress}${credential}`;
+  const model = profile.model === undefined ? 'its default model' : `model ${profile.model}`;
+  return `  ${profile.id}${named} — ${profile.executable}, ${model}, ${egress}${credential}`;
+}
+
+// Refused here rather than at the first run: a profile model the harness has no
+// argument for fails every task that names no model of its own.
+function refuseUnplaceableModel(profile: HarnessProfile, model: string): void {
+  if (profile.modelArgs.length > 0) return;
+  console.error(
+    `'${profile.id}' takes no model argument on this machine, so '${model}' could never be\n` +
+      'passed to it. Leave the model unset and it runs its own default.',
+  );
+  process.exit(1);
 }
 
 async function setToolPaths(paths: string[]): Promise<void> {
@@ -193,6 +208,7 @@ async function add(id: string): Promise<void> {
   }
 
   const jsonPath = arg('credential-json');
+  const model = arg('model');
   const profile = HarnessProfileSchema.parse({
     id,
     executable,
@@ -222,19 +238,30 @@ async function add(id: string): Promise<void> {
           },
         }
       : {}),
+    ...(model !== undefined ? { model } : {}),
   });
 
   const policy = await loadPolicy();
   const existing = policy.harnesses.find((h) => h.id === id);
-  // Egress and a credential source survive a re-add. Both were configured
-  // deliberately — egress host by host, a credential once and carefully — and
-  // silently dropping either leaves a working harness broken with no message.
+  // Egress, a credential source and a model survive a re-add. Each was
+  // configured deliberately — egress host by host, a credential once and
+  // carefully — and silently dropping one changes a working harness with no
+  // message.
   if (existing) {
     profile.allowedDomains = existing.allowedDomains;
     if (profile.credential === undefined && existing.credential !== undefined) {
       profile.credential = existing.credential;
     }
+    if (model === undefined && existing.model !== undefined) {
+      if (profile.modelArgs.length > 0) profile.model = existing.model;
+      else {
+        console.log(
+          `'${id}' now takes no model argument, so its model '${existing.model}' was dropped.`,
+        );
+      }
+    }
   }
+  if (model !== undefined) refuseUnplaceableModel(profile, model);
   policy.harnesses = [...policy.harnesses.filter((h) => h.id !== id), profile];
   await savePolicy(policy);
 
@@ -258,6 +285,25 @@ async function allow(id: string, hosts: string[]): Promise<void> {
   profile.allowedDomains = [...new Set([...profile.allowedDomains, ...hosts])];
   await savePolicy(policy);
   console.log(`\`${id}\` now reaches ${profile.allowedDomains.join(', ')}.`);
+}
+
+async function setModel(id: string, model: string): Promise<void> {
+  const policy = await loadPolicy();
+  const profile = policy.harnesses.find((h) => h.id === id);
+  if (!profile) {
+    console.error(`'${id}' is not configured here. Add it first: aflow harness add ${id}`);
+    process.exit(1);
+  }
+  if (model === '--clear') {
+    delete profile.model;
+    await savePolicy(policy);
+    console.log(`\`${id}\` now runs its own default model when a task names none.`);
+    return;
+  }
+  refuseUnplaceableModel(profile, model);
+  profile.model = model;
+  await savePolicy(policy);
+  console.log(`\`${id}\` now runs ${model} when a task names none.`);
 }
 
 async function remove(id: string): Promise<void> {
@@ -314,6 +360,12 @@ async function main(): Promise<void> {
   }
   if (command === 'mcp-remove') {
     await removeMcpServer(id);
+    return;
+  }
+  if (command === 'model') {
+    const [model] = rest;
+    if (model === undefined || model === '') usage();
+    await setModel(id, model);
     return;
   }
   if (command === 'allow') {

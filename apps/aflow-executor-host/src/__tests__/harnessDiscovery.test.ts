@@ -125,6 +125,38 @@ describe('harness discovery', () => {
     }
   });
 
+  it('suggests no model, so a confirmed suggestion runs the harness default', async () => {
+    // Which model runs is the operator's choice; discovery measures only how
+    // a model is passed.
+    for (const found of await discoverHarnesses()) {
+      expect(found.suggested).not.toHaveProperty('model');
+      const confirmed = HarnessProfileSchema.parse({
+        id: found.id,
+        executable: found.executable,
+        promptArgs: found.suggested.promptArgs,
+        modelArgs: found.suggested.modelArgs,
+      });
+      expect(confirmed.model).toBeUndefined();
+      expect(buildHarnessArgv(confirmed, 'the task')).not.toContain('{model}');
+    }
+  });
+
+  it('applies a model the operator adds to a confirmed suggestion', async () => {
+    for (const found of await discoverHarnesses()) {
+      if (found.suggested.modelArgs.length === 0) continue;
+      const confirmed = HarnessProfileSchema.parse({
+        id: found.id,
+        executable: found.executable,
+        promptArgs: found.suggested.promptArgs,
+        modelArgs: found.suggested.modelArgs,
+        model: 'fable',
+      });
+      const argv = buildHarnessArgv(confirmed, 'the task');
+      expect(argv).toContain('fable');
+      expect(argv.indexOf('fable')).toBeLessThan(argv.indexOf('the task'));
+    }
+  });
+
   it('carries a name an operator would recognise, distinct from the id', async () => {
     // The id is the wire spelling; a surface with only the id shows `claude`
     // where a person expects `Claude Code`, which is why the probe carries both
