@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import AjvModule from 'ajv';
+import type { z } from 'zod';
 
 import type { ExecutorContext, StepResult } from '@aflow/executor-runtime';
 import {
@@ -303,6 +304,23 @@ async function failure(
   return await failureWithError(ctx, internalError(message));
 }
 
+/** The argv one turn of a harness run starts with. */
+export function harnessTurnArgv(
+  profile: HarnessProfile,
+  input: Pick<z.output<typeof HostHarnessRunInputSchema>, 'maxTurns' | 'model'>,
+  task: string,
+  conversation: string,
+  continued: boolean,
+): string[] {
+  return buildHarnessArgv(
+    profile,
+    task,
+    buildSessionArgs(profile, conversation, continued),
+    input.maxTurns,
+    input.model,
+  );
+}
+
 async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<StepResult> {
   const raw = await ctx.readPayload(ctx.job.inputRef);
   const parsed = HostHarnessRunInputSchema.safeParse(raw);
@@ -502,13 +520,7 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
       try {
         return await runSandboxed({
           binding,
-          argv: buildHarnessArgv(
-            profile,
-            task,
-            buildSessionArgs(profile, conversation, continued),
-            input.maxTurns,
-            input.model,
-          ),
+          argv: harnessTurnArgv(profile, input, task, conversation, continued),
           cwd: worktree.path,
           // The sandbox's proxy names the host it refused only when asked to, and
           // that name is the whole diagnosis for a harness that reached nothing.

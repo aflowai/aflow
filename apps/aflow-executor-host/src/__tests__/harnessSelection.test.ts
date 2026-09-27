@@ -6,7 +6,9 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { selectHarness } from '../handlers/harnessHandlers.js';
+import { HostHarnessRunInputSchema } from '@aflow/schemas';
+
+import { harnessTurnArgv, selectHarness } from '../handlers/harnessHandlers.js';
 import { buildHarnessArgv, HarnessProfileError, HarnessProfileSchema } from '../harnessProfiles.js';
 import type { HarnessProfile } from '../harnessProfiles.js';
 
@@ -76,6 +78,35 @@ describe('choosing a harness', () => {
     const overridden = buildHarnessArgv(selection.profile, 't', [], undefined, 'parable');
     expect(overridden).toContain('parable');
     expect(overridden).not.toContain('fable');
+  });
+
+  it('gives a run the handler starts with no model the profile model, and a run model wins', () => {
+    const configured = HarnessProfileSchema.parse({
+      id: 'claude',
+      executable: '/usr/local/bin/claude',
+      modelArgs: ['--model', '{model}'],
+      model: 'fable',
+    });
+    const selection = selectHarness(new Map([['claude', configured]]), undefined);
+    if (selection.kind !== 'profile') throw new Error('expected a profile');
+
+    const unnamed = HostHarnessRunInputSchema.parse({ bindingId: 'hb_project', task: 't' });
+    const fromProfile = harnessTurnArgv(selection.profile, unnamed, 't', 'conversation-1', false);
+    expect(
+      fromProfile.slice(fromProfile.indexOf('--model'), fromProfile.indexOf('--model') + 2),
+    ).toEqual(['--model', 'fable']);
+
+    const named = HostHarnessRunInputSchema.parse({
+      bindingId: 'hb_project',
+      task: 't',
+      model: 'parable',
+    });
+    const fromRun = harnessTurnArgv(selection.profile, named, 't', 'conversation-1', false);
+    expect(fromRun.slice(fromRun.indexOf('--model'), fromRun.indexOf('--model') + 2)).toEqual([
+      '--model',
+      'parable',
+    ]);
+    expect(fromRun).not.toContain('fable');
   });
 
   it('still resolves a named id against the machine, and refuses an unknown one', () => {

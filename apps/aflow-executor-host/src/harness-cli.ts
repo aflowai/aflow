@@ -300,8 +300,16 @@ async function setModel(id: string, model: string): Promise<void> {
     console.log(`\`${id}\` now runs its own default model when a task names none.`);
     return;
   }
-  refuseUnplaceableModel(profile, model);
-  profile.model = model;
+  const parsed = HarnessProfileSchema.safeParse({ ...profile, model });
+  if (!parsed.success) {
+    const problems = parsed.error.issues
+      .map((issue) => `${issue.path.join('.')}: ${issue.message}`)
+      .join('; ');
+    console.error(`'${model}' cannot be saved as the model for '${id}': ${problems}`);
+    process.exit(1);
+  }
+  refuseUnplaceableModel(parsed.data, model);
+  policy.harnesses = policy.harnesses.map((h) => (h.id === id ? parsed.data : h));
   await savePolicy(policy);
   console.log(`\`${id}\` now runs ${model} when a task names none.`);
 }
@@ -364,7 +372,10 @@ async function main(): Promise<void> {
   }
   if (command === 'model') {
     const [model] = rest;
+    // A flag in the model's place is a mistyped command, not a model name:
+    // `harness model claude --model opus` would otherwise store `--model`.
     if (model === undefined || model === '') usage();
+    if (model.startsWith('--') && model !== '--clear') usage();
     await setModel(id, model);
     return;
   }
