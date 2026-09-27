@@ -126,6 +126,8 @@ export function AppShell({
   const [sidebarRailHover, setSidebarRailHover] = useState(false);
   /** The pointer has rested on the rail long enough to mean it. */
   const [railHovering, setRailHovering] = useState(false);
+  /** An explicit collapse is holding hover off until the pointer leaves. */
+  const [hoverSuppressedUntilLeave, setHoverSuppressedUntilLeave] = useState(false);
   const isDesktop = useMediaQuery('(min-width: 1024px)');
   const isMobile = !isDesktop;
   const canHover = useMediaQuery('(hover: hover) and (pointer: fine)');
@@ -133,6 +135,7 @@ export function AppShell({
   const rail = railLayout({
     pinnedOpen: !collapsed,
     hovering: railHovering,
+    hoverSuppressedUntilLeave,
     hoverCapable: canHover,
     isMobile,
     railWidth: collapsedWidth,
@@ -165,16 +168,33 @@ export function AppShell({
     setSidebarRailHover(false);
     cancelRailHoverOpen();
     setRailHovering(false);
+    setHoverSuppressedUntilLeave(false);
   }, [cancelRailHoverOpen]);
   useEffect(() => cancelRailHoverOpen, [cancelRailHoverOpen]);
+
+  /**
+   * The one way the rail's pinned state changes, so an explicit collapse always
+   * outranks the pointer resting on it — whichever control asked, and including a
+   * caller reaching `setCollapsed` through the context. `railHovering` is left
+   * alone: the pointer really is still there, and saying otherwise would make the
+   * rail re-open the moment anything re-read it.
+   */
+  const setRailCollapsed = useCallback(
+    (next: boolean) => {
+      setCollapsed(next);
+      setHoverSuppressedUntilLeave(next);
+      if (next) cancelRailHoverOpen();
+    },
+    [cancelRailHoverOpen],
+  );
 
   const toggle = useCallback(() => {
     if (isMobile) {
       setDrawerOpen((d) => !d);
-    } else {
-      setCollapsed((c) => !c);
+      return;
     }
-  }, [isMobile]);
+    setRailCollapsed(!collapsed);
+  }, [isMobile, collapsed, setRailCollapsed]);
 
   const openDrawer = useCallback(() => {
     setDrawerOpen(true);
@@ -279,9 +299,9 @@ export function AppShell({
       if (t.closest('.ds-tooltip')) {
         return;
       }
-      setCollapsed((c) => !c);
+      setRailCollapsed(!collapsed);
     },
-    [isDesktop],
+    [isDesktop, collapsed, setRailCollapsed],
   );
 
   const mainStyle: CSSProperties = {
@@ -296,7 +316,7 @@ export function AppShell({
     <SidebarContext.Provider
       value={{
         collapsed,
-        setCollapsed,
+        setCollapsed: setRailCollapsed,
         toggle,
         railExpanded,
         isMobile,

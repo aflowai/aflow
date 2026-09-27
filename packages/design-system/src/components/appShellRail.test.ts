@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 import { RAIL_HOVER_EXPAND_DELAY_MS, railLayout } from './appShellRail.js';
 
 const DESKTOP = {
+  hoverSuppressedUntilLeave: false,
   hoverCapable: true,
   isMobile: false,
   railWidth: 56,
@@ -47,6 +48,48 @@ describe('hovering the collapsed rail', () => {
     const rail = railLayout({ ...DESKTOP, isMobile: true, pinnedOpen: false, hovering: true });
     expect(rail.expanded).toBe(false);
     expect(rail.overlay).toBe(false);
+  });
+});
+
+describe('collapsing while the pointer is still on the rail', () => {
+  // Without this the rail stayed painted wide under the pointer that had just
+  // clicked Collapse, and a control that appears to do nothing is worse than one
+  // that is not there.
+  it('collapses at once, although the pointer has not moved', () => {
+    const rail = railLayout({
+      ...DESKTOP,
+      pinnedOpen: false,
+      hovering: true,
+      hoverSuppressedUntilLeave: true,
+    });
+    expect(rail.expanded).toBe(false);
+    expect(rail.overlay).toBe(false);
+    expect(rail.renderedWidth).toBe(56);
+    expect(rail.occupiedWidth).toBe(56);
+  });
+
+  it('reads exactly as a rail no pointer is on, so nothing else has to know', () => {
+    expect(
+      railLayout({
+        ...DESKTOP,
+        pinnedOpen: false,
+        hovering: true,
+        hoverSuppressedUntilLeave: true,
+      }),
+    ).toEqual(railLayout({ ...DESKTOP, pinnedOpen: false, hovering: false }));
+  });
+
+  // The flag is cleared when the pointer leaves, so this is the state the next
+  // arrival is in: the rule is resumed, not switched off.
+  it('lets the next arrival open it again', () => {
+    const rail = railLayout({
+      ...DESKTOP,
+      pinnedOpen: false,
+      hovering: true,
+      hoverSuppressedUntilLeave: false,
+    });
+    expect(rail.expanded).toBe(true);
+    expect(rail.overlay).toBe(true);
   });
 });
 

@@ -8,6 +8,12 @@
  * an operator who asked for the names does not want the page to jump every
  * time the pointer crosses the edge.
  *
+ * An explicit collapse outranks the pointer. Without that the rail stayed
+ * painted wide under the pointer that had just clicked Collapse, which reads as
+ * a control that did nothing; the suppression holds until the pointer leaves, so
+ * the rail is out of the way immediately and the hover rule resumes on the next
+ * arrival rather than being switched off.
+ *
  * Pure so the machine is testable: the shell itself pulls the whole app tree
  * in behind it and the web test environment carries no renderer.
  */
@@ -25,6 +31,12 @@ export interface RailLayoutInput {
   pinnedOpen: boolean;
   /** The pointer has rested on the rail for the delay above. */
   hovering: boolean;
+  /**
+   * The operator collapsed the rail while the pointer was on it, so hover is
+   * held off until the pointer leaves. Cleared there, never here: a flag cleared
+   * on the next enter would let the same pointer re-open what was just closed.
+   */
+  hoverSuppressedUntilLeave: boolean;
   /**
    * Whether a pointer on this device hovers at all. A tap fires the same enter
    * event, and a rail that opened on tap would swallow the tap that was aimed
@@ -52,7 +64,11 @@ export interface RailLayout {
 
 export function railLayout(input: RailLayoutInput): RailLayout {
   const hoverExpanded =
-    input.hovering && input.hoverCapable && !input.isMobile && !input.pinnedOpen;
+    input.hovering &&
+    !input.hoverSuppressedUntilLeave &&
+    input.hoverCapable &&
+    !input.isMobile &&
+    !input.pinnedOpen;
   const expanded = input.pinnedOpen || hoverExpanded;
   return {
     expanded,
