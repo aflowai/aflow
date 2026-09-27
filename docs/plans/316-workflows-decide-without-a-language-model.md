@@ -98,6 +98,8 @@ A judge criterion may name a decision model; abstention is `unclear`. Exit: an e
 
 The `classifier` rails execute through the operation when a rail opts in. Exit: a `topic_boundary` rail refuses an off-topic input in a test and fails closed when the decider errors.
 
+**Open, and three things must be settled first.** (1) Most triggers hand the gate a payload _reference_ (`on_run_input`, `on_tool_output`, `on_run_output`), which the rule rails read as a string; a classifier needs the content, so the gate needs the payload store and a bound on what it resolves. (2) The gate runs in the orchestrator with no credential owner in `GuardrailContext`; the decision call resolves a key through the space, as eval grading does, so `spaceId` becomes required for a classifier rail and a rail without one fails by its `failBehavior`. (3) A blocking rail sits on the hot path of every step it covers; its `timeoutMs` bounds the decision call, and an abstention is treated as a violation under `fail_closed` and a pass under `fail_open`.
+
 ## 6. How it is proven
 
 - A skill whose decision abstains runs its escalation branch, and one whose decision is confident does not. If `decided` were computed wrongly, or the lowering produced the wrong `when`, one of these runs takes the wrong branch.
