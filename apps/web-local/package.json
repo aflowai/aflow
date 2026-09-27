@@ -6,7 +6,7 @@
   "scripts": {
     "build": "NODE_ENV=production next build",
     "start": "next start",
-    "dev": "rm -rf .next-dev && NEXT_DIST_DIR=.next-dev next dev --port ${WEB_DEV_PORT:-3002}",
+    "dev": "rm -rf .next-dev && NEXT_DIST_DIR=.next-dev next dev --hostname 127.0.0.1 --port ${WEB_DEV_PORT:-3002}",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests"
   },

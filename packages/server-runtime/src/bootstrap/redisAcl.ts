@@ -216,13 +216,18 @@ export async function applyHostIdentityToRunningServer(
 
 export async function loadRedisAclIntoRunningServer(redis: {
   call: (command: string, ...args: string[]) => Promise<unknown>;
-}): Promise<'loaded' | 'skipped'> {
+}): Promise<{ outcome: 'loaded' } | { outcome: 'skipped'; reason: string | null }> {
   try {
     await redis.call('ACL', 'LOAD');
-    return 'loaded';
-  } catch {
-    // A server without an `--aclfile` refuses this, and so does one that has
-    // not started. Neither is a reason to fail a deploy.
-    return 'skipped';
+    return { outcome: 'loaded' };
+  } catch (err) {
+    // Neither refusal is a reason to fail a deploy, but only one is expected: a
+    // server started without `--aclfile` (the development Redis) says so, and
+    // any other refusal leaves a server that has one enforcing stale grants.
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      outcome: 'skipped',
+      reason: /not configured to use an ACL file/i.test(message) ? null : message,
+    };
   }
 }

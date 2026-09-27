@@ -69,6 +69,43 @@ if (explicitDatabaseUrl !== undefined && explicitDatabaseUrl !== '') {
   editionEnv['DATABASE_URL'] = explicitDatabaseUrl;
 }
 
+/**
+ * Whether the Redis at `url` refuses an unauthenticated command.
+ *
+ * The instance file carries the appliance's Redis password, and the development
+ * Redis has none; sending one anyway draws a warning from every connection of
+ * every service. Asked of the server rather than assumed, so a development Redis
+ * that does require a password still gets it.
+ */
+function redisRequiresPassword(url: string | undefined): Promise<boolean> {
+  const parsed = url === undefined ? undefined : URL.parse(url);
+  const host = parsed?.hostname ?? '127.0.0.1';
+  const port = Number(parsed?.port !== undefined && parsed.port !== '' ? parsed.port : 6379);
+  return new Promise((resolve) => {
+    let reply = '';
+    const socket = connect({ host, port }, () => socket.write('PING\r\n'))
+      .on('data', (chunk) => {
+        reply += chunk.toString();
+        if (reply.includes('\r\n')) {
+          socket.destroy();
+          resolve(reply.startsWith('-NOAUTH'));
+        }
+      })
+      .on('error', () => {
+        resolve(true);
+      })
+      // A peer that closes without replying settles nothing else: the idle
+      // timer stops with the socket, and the start would wait forever.
+      .on('close', () => {
+        resolve(true);
+      });
+    socket.setTimeout(1500, () => {
+      socket.destroy();
+      resolve(true);
+    });
+  });
+}
+
 /** A datastore already listening is the only thing `infra:up` is asked for. */
 function reachable(url: string | undefined, fallbackPort: number): Promise<boolean> {
   const parsed = url === undefined ? undefined : URL.parse(url);
@@ -237,9 +274,16 @@ async function main(): Promise<void> {
 
   // The dev runner merges `.env` over its own environment, so what must win is
   // handed to it separately and applied last.
+  const redisPassword = (await redisRequiresPassword(base['REDIS_URL']))
+    ? {}
+    : { REDIS_PASSWORD: '' };
   const overrides = {
     ...editionEnv,
     ...instance,
+    ...redisPassword,
+    // The capacity every pool is sized from; the default is the hosted tier's,
+    // and the development Postgres runs with its own default of 100.
+    DB_SERVER_MAX_CONNECTIONS: base['DB_SERVER_MAX_CONNECTIONS'] ?? '100',
     NEXT_PUBLIC_TENANT_ID: localTenantId,
     // What pairing tells a machine to connect to. The route's own default is the
     // appliance's published port; a machine paired against this stack must be
@@ -253,6 +297,7 @@ async function main(): Promise<void> {
   await run('node scripts/dev.mjs --profile local', {
     ...base,
     ...instance,
+    ...redisPassword,
     // Named so the single-stack refusal tells the reader the command they ran,
     // rather than the one the runner underneath it happens to be.
     PHOENIX_DEV_RESTART_HINT: 'yarn dev:local',

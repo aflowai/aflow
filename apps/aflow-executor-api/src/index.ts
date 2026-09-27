@@ -97,7 +97,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   const payloadStore = resolved.store;
-  log.info(resolved.reason);
+  log.debug(resolved.reason);
 
   // Build dependencies
   const deps: ExecutorDependencies = {

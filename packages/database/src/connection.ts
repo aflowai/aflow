@@ -126,6 +126,21 @@ let _db: PostgresJsDatabase | null = null;
 /**
  * Get or create the database connection pool.
  */
+/**
+ * Server notices, minus the ones idempotent DDL raises for what it skipped.
+ *
+ * The client prints every notice by default, and `IF NOT EXISTS` / `IF EXISTS`
+ * raise one per object they pass over ("relation … already exists, skipping"),
+ * which buried a migration run's real output under hundreds of them. Anything
+ * else is kept, on one line: a migration's own RAISE NOTICE is how it records
+ * what an operator has to act on.
+ */
+function logServerNotice(notice: postgres.Notice): void {
+  const message = notice['message'] ?? '';
+  if (message.endsWith(', skipping')) return;
+  console.warn(`[db] ${notice['severity'] ?? 'NOTICE'}: ${message}`);
+}
+
 export function getConnection(config?: DatabaseConfig): postgres.Sql {
   if (_sql) {
     return _sql;
@@ -143,6 +158,7 @@ export function getConnection(config?: DatabaseConfig): postgres.Sql {
       prepare: true,
       ssl: cfg.ssl,
       connection: { application_name: applicationName() },
+      onnotice: logServerNotice,
     });
   } else {
     _sql = postgres(cfg.connectionString, {
@@ -151,6 +167,7 @@ export function getConnection(config?: DatabaseConfig): postgres.Sql {
       connect_timeout: cfg.connectTimeout ?? 10,
       prepare: true,
       connection: { application_name: applicationName() },
+      onnotice: logServerNotice,
     });
   }
 
@@ -281,6 +298,7 @@ export function createDatabase(config: DatabaseConfig): {
       prepare: true,
       ssl: config.ssl,
       connection: { application_name: applicationName() },
+      onnotice: logServerNotice,
     });
   } else {
     sqlClient = postgres(config.connectionString, {
@@ -289,6 +307,7 @@ export function createDatabase(config: DatabaseConfig): {
       connect_timeout: config.connectTimeout ?? 10,
       prepare: true,
       connection: { application_name: applicationName() },
+      onnotice: logServerNotice,
     });
   }
 

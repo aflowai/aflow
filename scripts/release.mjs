@@ -50,84 +50,63 @@ function errToStr(e) {
   return '[unknown error]';
 }
 
+let stepsApplied = 0;
+
+/**
+ * Runs one migration step, naming it only if it fails.
+ *
+ * Every step is idempotent and nearly every run finds nothing to do, so a line
+ * per step reported the same thirty successes on every start and hid the one
+ * that mattered. The failure carries the step's name; success is a count.
+ *
+ * @param {string} name
+ * @param {() => Promise<unknown>} run
+ */
+async function step(name, run) {
+  try {
+    await run();
+    stepsApplied += 1;
+  } catch (err) {
+    console.error(`[release] ✗ ${name}`);
+    throw err;
+  }
+}
+
 async function main() {
-  console.log('[release] Starting database migrations...\n');
+  console.log('[release] Applying database migrations...');
 
   // One connection: applying tenant migrations issues its own transactions,
   // which a pooled client refuses with UNSAFE_TRANSACTION.
   const sql = getConnection({ ...getDatabaseConfig(), maxConnections: 1 });
 
-  // 1. Public schema
-  console.log('[release] Applying public schema migrations...');
-  await applyPublicMigrations(sql);
-  console.log('[release] ✓ Public schema ready');
-
-  // 2. Identity & auth tables
-  console.log('[release] Applying identity migrations...');
-  await applyIdentityMigrations(sql);
-  console.log('[release] ✓ Identity schema ready');
-
-  console.log('[release] Applying recovery migrations...');
-  await applyRecoveryMigrations(sql);
-  console.log('[release] ✓ Recovery schema ready');
-
-  console.log('[release] Applying onboarding migrations...');
-  await applyOnboardingMigrations(sql);
-  console.log('[release] ✓ Onboarding schema ready');
-
-  console.log('[release] Applying invite hardening migrations...');
-  await applyInviteHardeningMigrations(sql);
-  console.log('[release] ✓ Invite hardening ready');
-
-  console.log('[release] Applying OAuth ownership policy migrations...');
-  await applyOAuthOwnershipMigrations(sql);
-  console.log('[release] ✓ OAuth ownership policy ready');
-
-  console.log('[release] Applying error reports migration...');
-  await applyErrorReportsMigration(sql);
-  console.log('[release] ✓ Error reports schema ready');
-
-  console.log('[release] Applying store governance migrations...');
-  await applyStoreGovernanceMigrations(sql);
-  await applyCapabilityGovernanceMigrations(sql);
-  console.log('[release] ✓ Store governance policy ready');
-
-  console.log('[release] Applying invite request migrations...');
-  await applyInviteRequestMigrations(sql);
-  await applySpaceGrantMigrations(sql);
-  console.log('[release] ✓ Invite requests ready');
-
-  console.log('[release] Applying due pointer migrations...');
-  await applyWorkflowRunDueMigrations(sql);
-  await applyTenantDuePointerMigrations(sql);
-  await applyScheduleDispatchOutboxMigration(sql);
-  await applyProjectionFailuresMigration(sql);
-  await applyTimerDeadLettersMigration(sql);
-  console.log('[release] ✓ Due pointers ready');
-
-  console.log('[release] Applying identity provider key migration...');
-  await applyIdentityProviderKeyMigration(sql);
-  console.log('[release] ✓ Identity provider key normalised');
-
-  console.log('[release] Removing the withdrawn concierge lane config column...');
-  await applyConciergeConfigRemovalMigration(sql);
-  console.log('[release] ✓ Concierge config column removed');
-
-  console.log('[release] Applying tenant agent-model allowlist migration...');
-  await applyAgentModelAllowlistMigration(sql);
-  console.log('[release] ✓ Tenant agent-model allowlist ready');
+  await step('public schema', () => applyPublicMigrations(sql));
+  await step('identity', () => applyIdentityMigrations(sql));
+  await step('recovery', () => applyRecoveryMigrations(sql));
+  await step('onboarding', () => applyOnboardingMigrations(sql));
+  await step('invite hardening', () => applyInviteHardeningMigrations(sql));
+  await step('OAuth ownership policy', () => applyOAuthOwnershipMigrations(sql));
+  await step('error reports', () => applyErrorReportsMigration(sql));
+  await step('store governance', () => applyStoreGovernanceMigrations(sql));
+  await step('capability governance', () => applyCapabilityGovernanceMigrations(sql));
+  await step('invite requests', () => applyInviteRequestMigrations(sql));
+  await step('space grants', () => applySpaceGrantMigrations(sql));
+  await step('workflow run due pointers', () => applyWorkflowRunDueMigrations(sql));
+  await step('tenant due pointers', () => applyTenantDuePointerMigrations(sql));
+  await step('schedule dispatch outbox', () => applyScheduleDispatchOutboxMigration(sql));
+  await step('projection failures', () => applyProjectionFailuresMigration(sql));
+  await step('timer dead letters', () => applyTimerDeadLettersMigration(sql));
+  await step('identity provider key', () => applyIdentityProviderKeyMigration(sql));
+  await step('concierge config removal', () => applyConciergeConfigRemovalMigration(sql));
+  await step('agent-model allowlist', () => applyAgentModelAllowlistMigration(sql));
 
   // 6b. Freemium spend bounds on the public tenant (generous but bounded).
   const publicTenantId = process.env['DEFAULT_TENANT_ID'];
   if (publicTenantId) {
     await seedPublicTenantFreemiumDefaults(sql, publicTenantId);
-    console.log(`[release] ✓ Freemium defaults ensured on public tenant ${publicTenantId}`);
   }
 
-  // 7. Seed model catalog
-  console.log('[release] Seeding model catalog...');
-  await seedModelCatalog(sql);
-  console.log('[release] ✓ Model catalog seeded');
+  await step('model catalog', () => seedModelCatalog(sql));
+  console.log(`[release] ✓ public schema: ${String(stepsApplied)} steps`);
 
   // 8. Create missing tenant schemas (e.g., after infra:reset or fresh setup)
   const tenantRows = await sql`SELECT tenant_id FROM public.tenants WHERE status = 'active'`;
@@ -142,24 +121,16 @@ async function main() {
   }
 
   // 9. Tenant schema migrations (for all existing tenants)
-  console.log('[release] Applying tenant schema migrations...');
   const results = await applyMigrationsToAllTenants(sql);
 
-  for (const schema of results.success) {
-    console.log(`[release]   ✓ ${schema}`);
-  }
   for (const { schema, error } of results.failed) {
     console.error(
       `[release]   ✗ ${schema}: ${error instanceof Error ? error.message : errToStr(error)}`,
     );
   }
 
-  if (results.success.length > 0 || results.failed.length > 0) {
-    console.log(
-      `[release] Tenants: ${String(results.success.length)} succeeded, ${String(results.failed.length)} failed`,
-    );
-  } else {
-    console.log('[release] No existing tenants to migrate');
+  if (results.failed.length === 0) {
+    console.log(`[release] ✓ tenant schemas: ${String(results.success.length)}`);
   }
 
   if (results.failed.length > 0) {
@@ -180,9 +151,11 @@ async function main() {
     if (process.env['REDIS_URL'] || process.env['REDIS_HOST']) {
       const redis = createRedisConnection(getRedisConfig());
       const relabel = await relabelEntityEventStreams104a(redis);
-      console.log(
-        `[release] 104a entity event relabel: streams=${String(relabel.streamsRewritten)} entries=${String(relabel.entriesReplayed)}`,
-      );
+      if (relabel.streamsRewritten > 0) {
+        console.log(
+          `[release] 104a entity event relabel: streams=${String(relabel.streamsRewritten)} entries=${String(relabel.entriesReplayed)}`,
+        );
+      }
       await quitRedisWithTimeout(redis, 5000);
     } else {
       console.log('[release] ⊘ Redis not configured — skipping 104a entity event relabel');
@@ -193,7 +166,7 @@ async function main() {
 
   await closeConnection();
 
-  console.log('\n[release] Done.');
+  console.log('[release] Done.');
 }
 
 // eslint-disable-next-line @typescript-eslint/use-unknown-in-catch-callback-variable -- .mjs has no type annotations

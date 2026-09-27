@@ -167,8 +167,6 @@ export async function initObservability(config: ObservabilityConfig): Promise<vo
     ...(config.logLevel != null && { level: config.logLevel }),
     ...(config.prettyLogs != null && { prettyPrint: config.prettyLogs }),
   });
-
-  console.log(`[observability] Initialized for service: ${config.serviceName}`);
 }
 
 /**

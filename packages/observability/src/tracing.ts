@@ -104,8 +104,11 @@ export function initTracing(config: TracingConfig): void {
   // Independently, with no exporter configured a provider with no span processors
   // just creates and drops spans. In either case, don't register.
   if (isSentryActive() || !wantsExport) {
-    const reason = isSentryActive() ? 'Sentry owns OpenTelemetry' : 'no exporter configured';
-    console.log(`[tracing] Skipping OpenTelemetry provider for ${config.serviceName} (${reason})`);
+    if (isSentryActive()) {
+      console.log(
+        `[tracing] Skipping OpenTelemetry provider for ${config.serviceName} (Sentry owns OpenTelemetry)`,
+      );
+    }
     return;
   }
 

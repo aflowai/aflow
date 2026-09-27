@@ -115,7 +115,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   const payloadStore = resolved.store;
-  log.info(resolved.reason);
+  log.debug(resolved.reason);
 
   // Every role of this executor needs the database: the embedder reads its
   // queue from it, and a media render is filed as a Memory document by the

@@ -39,11 +39,19 @@ export async function seedMcpElicitationLeaseCandidatesOnce(
   if (lock === null) return { ran: false, scanned: 0, armed: 0 };
 
   const prefix = StreamKeys.mcpElicitationLeaseKey('');
+  // The index and this seed's own markers sit under the lease prefix too, and
+  // are not hashes: reading one as a lease is WRONGTYPE, which aborted the seed
+  // before its marker was written and so failed it again on every start.
+  const indexKeys = StreamKeys.mcpElicitationLeaseCandidatesKey.slice(prefix.length);
+  const isLease = (key: string): boolean => {
+    const id = key.slice(prefix.length);
+    return key.startsWith(prefix) && id !== indexKeys && !id.startsWith(`${indexKeys}:`);
+  };
   const keys: string[] = [];
   const stream = redis.scanStream({ match: `${prefix}*`, count: 200 });
   await new Promise<void>((resolve, reject) => {
     stream.on('data', (batch: string[]) => {
-      for (const key of batch) if (key.startsWith(prefix)) keys.push(key);
+      for (const key of batch) if (isLease(key)) keys.push(key);
     });
     stream.on('end', () => {
       resolve();
