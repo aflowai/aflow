@@ -46,9 +46,9 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
 }
 
 /** A diff produced the way a harness produces one: edit a checkout, read it back. */
-async function diffFor(mutate: (dir: string) => Promise<void>): Promise<string> {
+async function diffFor(mutate: (dir: string) => Promise<void>, at = 'HEAD'): Promise<string> {
   const work = await mkdtemp(join(tmpdir(), 'aflow-diffsrc-'));
-  await git(root, 'worktree', 'add', '--detach', work, 'HEAD');
+  await git(root, 'worktree', 'add', '--detach', work, at);
   await mutate(work);
   await git(work, 'add', '-A');
   const patch = await git(work, 'diff', '--cached');
@@ -400,7 +400,7 @@ describe('landing a patch as a commit on a new branch', () => {
     );
   }, 30_000);
 
-  it('refuses a branch that already exists rather than moving it', async () => {
+  it('refuses to move a branch that already exists when no base is named', async () => {
     const patch = await diffFor(async (d) => {
       await writeFile(join(d, 'a.txt'), 'one\nEDITED\nthree\n');
     });
@@ -418,7 +418,8 @@ describe('landing a patch as a commit on a new branch', () => {
     // Refused before a checkout is made, naming the branch and the two ways
     // out: an apply that reached git and failed there says something else.
     expect(result.error?.message ?? '').toContain('aflow/taken');
-    expect(result.error?.message ?? '').toContain('Choose another name');
+    expect(result.error?.message ?? '').toContain('`base`');
+    expect(result.error?.message ?? '').toContain('new branch name');
     expect((await git(root, 'rev-parse', 'aflow/taken')).trim()).toBe(taken);
   }, 30_000);
 
@@ -497,5 +498,119 @@ describe('landing a patch as a commit on a new branch', () => {
     expect(result.error?.message ?? '').toContain('user.email');
     expect(result.error?.message ?? '').toContain('globally');
     await expect(git(root, 'rev-parse', 'aflow/x')).rejects.toThrow();
+  }, 30_000);
+});
+
+describe('appending a patch to the branch it was made on', () => {
+  /** A branch one commit ahead of main, made the way an operator makes one. */
+  async function reviewedBranch(): Promise<string> {
+    await git(root, 'checkout', '-q', '-b', 'feat/fix');
+    await writeFile(join(root, 'b.txt'), 'reviewed\n');
+    await git(root, 'add', '-A');
+    await git(root, 'commit', '-m', 'the reviewed change');
+    await git(root, 'checkout', '-q', 'main');
+    return (await git(root, 'rev-parse', 'feat/fix')).trim();
+  }
+
+  async function publish(commit: Record<string, string>, patch: string) {
+    const captured: Captured = {};
+    const result = await createHostPatchHandler(policyPath).execute(
+      contextFor({ bindingId: 'hb', patch, commit: { message: 'the fix', ...commit } }, captured),
+    );
+    return { result, captured };
+  }
+
+  it('advances the branch by one commit on its old head, leaving the checkout alone', async () => {
+    const reviewed = await reviewedBranch();
+    const patch = await diffFor(async (d) => {
+      await writeFile(join(d, 'b.txt'), 'reviewed and fixed\n');
+    }, 'feat/fix');
+    const mainBefore = (await git(root, 'rev-parse', 'main')).trim();
+
+    const { result, captured } = await publish({ branch: 'feat/fix', base: reviewed }, patch);
+    expect(result.status).toBe('SUCCEEDED');
+    const commit = captured.output?.['commit'] as Record<string, unknown> | undefined;
+    expect(commit?.['appended']).toBe(true);
+    expect(commit?.['baseSha']).toBe(reviewed);
+    expect((await git(root, 'rev-parse', 'feat/fix')).trim()).toBe(commit?.['sha']);
+    expect((await git(root, 'rev-parse', 'feat/fix^')).trim()).toBe(reviewed);
+    expect(await git(root, 'show', 'feat/fix:b.txt')).toBe('reviewed and fixed\n');
+
+    expect((await git(root, 'rev-parse', 'HEAD')).trim()).toBe(mainBefore);
+    expect((await git(root, 'rev-parse', '--abbrev-ref', 'HEAD')).trim()).toBe('main');
+    expect((await git(root, 'status', '--porcelain')).trim()).toBe('');
+    expect((await git(root, 'worktree', 'list')).split('\n').filter((l) => l !== '')).toHaveLength(
+      1,
+    );
+  }, 30_000);
+
+  it('takes the base by the name of the branch as well as by its sha', async () => {
+    await reviewedBranch();
+    const patch = await diffFor(async (d) => {
+      await writeFile(join(d, 'b.txt'), 'fixed\n');
+    }, 'feat/fix');
+    const { result, captured } = await publish({ branch: 'feat/fix', base: 'feat/fix' }, patch);
+    expect(result.status).toBe('SUCCEEDED');
+    expect((captured.output?.['commit'] as Record<string, unknown>)['appended']).toBe(true);
+  }, 30_000);
+
+  it('refuses an append onto a branch that moved since the patch was made', async () => {
+    const reviewed = await reviewedBranch();
+    const patch = await diffFor(async (d) => {
+      await writeFile(join(d, 'b.txt'), 'fixed\n');
+    }, 'feat/fix');
+    await git(root, 'checkout', '-q', 'feat/fix');
+    await writeFile(join(root, 'c.txt'), 'someone else\n');
+    await git(root, 'add', '-A');
+    await git(root, 'commit', '-m', 'moved on');
+    await git(root, 'checkout', '-q', 'main');
+    const moved = (await git(root, 'rev-parse', 'feat/fix')).trim();
+
+    const { result } = await publish({ branch: 'feat/fix', base: reviewed }, patch);
+    expect(result.status).toBe('FAILED');
+    expect(result.error?.message ?? '').toContain(`\`${reviewed}\``);
+    expect(result.error?.message ?? '').toContain(`\`feat/fix\` is at \`${moved}\``);
+    expect((await git(root, 'rev-parse', 'feat/fix')).trim()).toBe(moved);
+  }, 30_000);
+
+  it('refuses a new branch for a patch made anywhere but the folder HEAD', async () => {
+    const reviewed = await reviewedBranch();
+    const patch = await diffFor(async (d) => {
+      await writeFile(join(d, 'b.txt'), 'fixed\n');
+    }, 'feat/fix');
+    const head = (await git(root, 'rev-parse', 'HEAD')).trim();
+
+    const { result } = await publish({ branch: 'aflow/fresh', base: reviewed }, patch);
+    expect(result.status).toBe('FAILED');
+    expect(result.error?.message ?? '').toContain(`the folder's last commit is \`${head}\``);
+    await expect(git(root, 'rev-parse', '--verify', 'aflow/fresh')).rejects.toThrow();
+  }, 30_000);
+
+  it('refuses an unknown base before any checkout is made', async () => {
+    const patch = await diffFor(async (d) => {
+      await writeFile(join(d, 'a.txt'), 'one\nEDITED\nthree\n');
+    });
+    const { result } = await publish({ branch: 'aflow/x', base: 'no-such-ref' }, patch);
+    expect(result.status).toBe('FAILED');
+    expect(result.error?.message ?? '').toContain('`no-such-ref` names no commit');
+    await expect(git(root, 'rev-parse', '--verify', 'aflow/x')).rejects.toThrow();
+    expect(await git(root, 'worktree', 'list', '--porcelain')).not.toContain('prunable');
+    expect((await git(root, 'worktree', 'list')).split('\n').filter((l) => l !== '')).toHaveLength(
+      1,
+    );
+  }, 30_000);
+
+  it('refuses to advance a branch some checkout has open', async () => {
+    await reviewedBranch();
+    await git(root, 'checkout', '-q', 'feat/fix');
+    const reviewed = (await git(root, 'rev-parse', 'HEAD')).trim();
+    const patch = await diffFor(async (d) => {
+      await writeFile(join(d, 'b.txt'), 'fixed\n');
+    });
+
+    const { result } = await publish({ branch: 'feat/fix', base: reviewed }, patch);
+    expect(result.status).toBe('FAILED');
+    expect(result.error?.message ?? '').toContain('is checked out in');
+    expect((await git(root, 'rev-parse', 'feat/fix')).trim()).toBe(reviewed);
   }, 30_000);
 });

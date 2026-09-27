@@ -8,9 +8,10 @@
  * result a shape worth reviewing — a diff against the commit the run started
  * from, rather than a mutation already applied to the working copy.
  *
- * The worktree is detached at the binding's current HEAD. Nothing is pushed and
- * no existing branch is moved; deciding what becomes of the diff is a separate
- * act, and the most a decision reaches from here is a new branch of its own.
+ * The worktree is detached at the binding's current HEAD, or at the commit a
+ * caller named. Nothing is pushed and a run moves no ref; deciding what becomes
+ * of the diff is a separate act, and the most a decision reaches from here is a
+ * branch of its own or one commit appended to the branch the diff was made on.
  *
  * It carries only what the repository tracks, so the operator's installed
  * dependencies are linked into it: without them a harness asked to run the
@@ -54,7 +55,14 @@ export class WorktreeError extends Error {
   constructor(
     message: string,
     readonly kind:
-      'not_a_repository' | 'unborn_head' | 'git_failed' | 'branch_exists' | 'no_identity',
+      | 'not_a_repository'
+      | 'unborn_head'
+      | 'git_failed'
+      | 'branch_exists'
+      | 'branch_checked_out'
+      | 'no_identity'
+      | 'unknown_ref'
+      | 'stale_base',
   ) {
     super(message);
     this.name = 'WorktreeError';
@@ -372,6 +380,27 @@ export interface PrepareWorktreeOptions {
    * commit does.
    */
   readonly dependencies?: 'linked' | 'none';
+  /** The commit to detach at, already resolved. Absent means the folder's HEAD. */
+  readonly at?: string;
+}
+
+/**
+ * The commit a caller-named ref points at, or a refusal naming the ref.
+ *
+ * `^{commit}` peels an annotated tag to what it tags, and a ref that names a
+ * tree or a blob is refused rather than checked out as something it is not.
+ */
+export async function resolveCommit(root: string, ref: string): Promise<string> {
+  try {
+    return (
+      await git(root, ['rev-parse', '--verify', '--end-of-options', `${ref}^{commit}`])
+    ).trim();
+  } catch {
+    throw new WorktreeError(
+      `\`${ref}\` names no commit in ${root}. Name a branch, a tag or a commit the folder has.`,
+      'unknown_ref',
+    );
+  }
 }
 
 export async function prepareWorktree(
@@ -388,13 +417,17 @@ export async function prepareWorktree(
   }
 
   let baseSha: string;
-  try {
-    baseSha = (await git(root, ['rev-parse', 'HEAD'])).trim();
-  } catch {
-    throw new WorktreeError(
-      `${root} has no commits yet. Make an initial commit before running a coding harness.`,
-      'unborn_head',
-    );
+  if (options.at !== undefined) {
+    baseSha = options.at;
+  } else {
+    try {
+      baseSha = (await git(root, ['rev-parse', 'HEAD'])).trim();
+    } catch {
+      throw new WorktreeError(
+        `${root} has no commits yet. Make an initial commit before running a coding harness.`,
+        'unborn_head',
+      );
+    }
   }
 
   const path = join(scratchDir, runKey);
@@ -536,6 +569,69 @@ export async function currentHead(root: string): Promise<string | undefined> {
   } catch {
     return undefined;
   }
+}
+
+/** Every ref the repository holds, by name, with the object it points at. */
+export type RefSnapshot = ReadonlyMap<string, string>;
+
+/**
+ * The refs a run could reach, read before and after it.
+ *
+ * A worktree shares refs with the repository it was added to, so a harness
+ * that runs `git branch -D` or `git update-ref` in its checkout rewrites the
+ * operator's branches. Read from the connected folder, the listing holds the
+ * shared refs and not the run's own detached HEAD, which is the one ref a run
+ * moves by committing in its checkout.
+ */
+export async function snapshotRefs(root: string): Promise<RefSnapshot> {
+  const listing = await git(
+    root,
+    ['for-each-ref', '--format=%(refname) %(objectname)'],
+    APPLY_OUTPUT_CAP_BYTES,
+  );
+  const refs = new Map<string, string>();
+  for (const line of listing.split('\n')) {
+    const space = line.lastIndexOf(' ');
+    if (space <= 0) continue;
+    refs.set(line.slice(0, space), line.slice(space + 1));
+  }
+  return refs;
+}
+
+export type RefChange =
+  | { readonly ref: string; readonly change: 'created'; readonly after: string }
+  | { readonly ref: string; readonly change: 'deleted'; readonly before: string }
+  | {
+      readonly ref: string;
+      readonly change: 'moved';
+      readonly before: string;
+      readonly after: string;
+    };
+
+export function changedRefs(before: RefSnapshot, after: RefSnapshot): RefChange[] {
+  const changes: RefChange[] = [];
+  for (const [ref, was] of before) {
+    const now = after.get(ref);
+    if (now === undefined) changes.push({ ref, change: 'deleted', before: was });
+    else if (now !== was) changes.push({ ref, change: 'moved', before: was, after: now });
+  }
+  for (const [ref, now] of after) {
+    if (!before.has(ref)) changes.push({ ref, change: 'created', after: now });
+  }
+  return changes.sort((a, b) => a.ref.localeCompare(b.ref));
+}
+
+export function describeRefChanges(changes: readonly RefChange[]): string {
+  const lines = changes.map((c) => {
+    if (c.change === 'created') return `\`${c.ref}\` was created at ${c.after}`;
+    if (c.change === 'deleted') return `\`${c.ref}\` was deleted (it was at ${c.before})`;
+    return `\`${c.ref}\` moved from ${c.before} to ${c.after}`;
+  });
+  return (
+    'The run changed refs in the repository it does not own, which a commission may not do: ' +
+    `${lines.join('; ')}. Nothing was restored — restore them from the reflog. What the run ` +
+    'changed in its checkout is on this error.'
+  );
 }
 
 /**
@@ -723,34 +819,120 @@ async function resolveCommitIdentity(cwd: string): Promise<CommitIdentity | unde
 /** Whether the repository already has this branch, asked before anything is built. */
 export async function branchExists(root: string, branch: string): Promise<boolean> {
   try {
-    await git(root, ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`]);
+    await git(root, [
+      'show-ref',
+      '--verify',
+      '--quiet',
+      '--end-of-options',
+      `refs/heads/${branch}`,
+    ]);
     return true;
   } catch {
     return false;
   }
 }
 
+/**
+ * The checkout that has this branch open, if any.
+ *
+ * Advancing a branch some checkout is on leaves that checkout's files and index
+ * at the old commit while its branch names the new one, so its next commit
+ * would quietly revert the change. Git refuses to move such a branch for the
+ * same reason.
+ */
+async function checkoutHolding(root: string, branch: string): Promise<string | undefined> {
+  const listing = await git(root, ['worktree', 'list', '--porcelain'], APPLY_OUTPUT_CAP_BYTES);
+  let path: string | undefined;
+  for (const line of listing.split('\n')) {
+    if (line.startsWith('worktree ')) path = line.slice('worktree '.length);
+    else if (line === `branch refs/heads/${branch}`) return path;
+  }
+  return undefined;
+}
+
 export interface PatchCommit {
   readonly branch: string;
   readonly sha: string;
+  /** The parent of the new commit. */
   readonly baseSha: string;
+  /** True when the branch existed and the commit was appended to it. */
+  readonly appended: boolean;
 }
 
 export interface PatchCommitOutcome {
   readonly apply: ApplyOutcome;
-  /** Absent when the patch conflicted, which leaves no commit and no branch. */
+  /** Absent when the patch conflicted, which leaves no commit and no branch moved. */
   readonly commit?: PatchCommit;
 }
 
 /**
- * Land a diff as a commit on a new branch, without touching what the operator
- * has open.
+ * Where a commit lands, decided before any checkout is made: the folder's HEAD
+ * for a new branch, the branch's head for an existing one. A stated base must
+ * be that commit — a patch lands only where it was made, never merged onto
+ * something that moved since.
+ */
+async function commitTarget(
+  root: string,
+  branch: string,
+  base: string | undefined,
+): Promise<{ at: string | undefined; appended: boolean }> {
+  const appended = await branchExists(root, branch);
+  const stated = base === undefined ? undefined : await resolveCommit(root, base);
+
+  if (appended) {
+    if (stated === undefined) {
+      throw new WorktreeError(
+        `The repository already has a branch \`${branch}\`. A commit is appended to it only ` +
+          'with `base`: the commit the patch was made against, as the commission reported it in ' +
+          '`baseSha`. A fresh change takes a new branch name.',
+        'branch_exists',
+      );
+    }
+    const head = await resolveCommit(root, `refs/heads/${branch}`);
+    if (stated !== head) {
+      throw new WorktreeError(
+        `The patch was made against \`${base ?? stated}\` but \`${branch}\` is at \`${head}\`. ` +
+          'A patch is appended only to the commit it was made against, never merged onto a ' +
+          `branch that has moved; commission the fix again from \`${branch}\`.`,
+        'stale_base',
+      );
+    }
+    const holder = await checkoutHolding(root, branch);
+    if (holder !== undefined) {
+      throw new WorktreeError(
+        `\`${branch}\` is checked out in ${holder}, and advancing it would leave that checkout's ` +
+          'files behind its own branch. Switch that checkout off the branch, then publish again.',
+        'branch_checked_out',
+      );
+    }
+    return { at: head, appended };
+  }
+
+  if (stated !== undefined) {
+    const head = await currentHead(root);
+    if (head !== undefined && stated !== head) {
+      throw new WorktreeError(
+        `The patch was made against \`${base ?? stated}\` but the folder's last commit is ` +
+          `\`${head}\`. Publish from a commission that started at the folder's HEAD, or name the ` +
+          'branch it started from.',
+        'stale_base',
+      );
+    }
+  }
+  return { at: undefined, appended };
+}
+
+/**
+ * Land a diff as a commit on a branch, without touching what the operator has
+ * open.
  *
- * The apply happens in a checkout of HEAD made for this call alone, so the
- * operator's working tree, index and current branch are never a party to it —
- * they are a second writer this lane does not get to interrupt. What remains
- * afterwards is one ref, which is the thing a publication can push and the
- * thing an operator can delete if they disagree.
+ * A new branch starts at the folder's HEAD; an existing one takes the commit on
+ * top of its head, provided the patch was made there. The apply happens in a
+ * checkout made for this call alone, so the operator's working tree, index and
+ * current branch are never a party to it — they are a second writer this lane
+ * does not get to interrupt. What remains afterwards is one ref, created or
+ * advanced by one commit, which is the thing a publication can push and the
+ * thing an operator can reset if they disagree.
  *
  * The identity is the operator's own, resolved from the repository's config and
  * then from their global one. Inventing an author for a commit that will carry
@@ -763,19 +945,17 @@ export async function commitPatchOnBranch(
   mode: 'clean' | 'merge',
   branch: string,
   message: string,
+  base?: string,
 ): Promise<PatchCommitOutcome> {
-  if (await branchExists(root, branch)) {
-    throw new WorktreeError(
-      `The repository already has a branch \`${branch}\`. Choose another name, or publish the ` +
-        'branch that is already there.',
-      'branch_exists',
-    );
-  }
+  const target = await commitTarget(root, branch, base);
 
   const scratch = await mkdtemp(join(tmpdir(), 'aflow-commit-'));
   let worktree: PreparedWorktree | undefined;
   try {
-    worktree = await prepareWorktree(root, scratch, 'commit', { dependencies: 'none' });
+    worktree = await prepareWorktree(root, scratch, 'commit', {
+      dependencies: 'none',
+      ...(target.at !== undefined ? { at: target.at } : {}),
+    });
     const apply = await applyPatch(worktree.path, patch, mode);
     if (apply.state === 'conflict') return { apply };
 
@@ -830,16 +1010,26 @@ export async function commitPatchOnBranch(
 
     const sha = (await git(worktree.path, ['rev-parse', 'HEAD'])).trim();
     try {
-      await git(worktree.path, ['branch', branch, sha]);
+      // Compare-and-swap on the old head: a branch that moved between the check
+      // above and this line is refused here rather than overwritten.
+      await git(
+        worktree.path,
+        target.appended
+          ? ['update-ref', '--end-of-options', `refs/heads/${branch}`, sha, worktree.baseSha]
+          : ['branch', '--end-of-options', branch, sha],
+      );
     } catch (error) {
       throw new WorktreeError(
-        `The commit was made but \`${branch}\` could not be created: ${
-          error instanceof Error ? (error.message.split('\n')[0] ?? 'git failed') : 'git failed'
-        }`,
+        `The commit was made but \`${branch}\` could not be ${
+          target.appended ? 'advanced' : 'created'
+        }: ${error instanceof Error ? (error.message.split('\n')[0] ?? 'git failed') : 'git failed'}`,
         'git_failed',
       );
     }
-    return { apply, commit: { branch, sha, baseSha: worktree.baseSha } };
+    return {
+      apply,
+      commit: { branch, sha, baseSha: worktree.baseSha, appended: target.appended },
+    };
   } finally {
     if (worktree !== undefined) await removeWorktree(root, worktree.path);
     await rm(scratch, { recursive: true, force: true });

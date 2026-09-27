@@ -11,8 +11,8 @@
  * The run happens in a detached worktree, never the operator's checkout. That
  * is what lets a run start while they have uncommitted work, and what makes the
  * result a diff to review rather than an edit already made. Nothing is
- * committed, no branch moves, and the worktree is removed once its changes have
- * been collected.
+ * committed, no branch moves — a run that moves one is refused — and the
+ * worktree is removed once its changes have been collected.
  */
 import { mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -73,11 +73,15 @@ import { runSandboxed, type SandboxedRunResult } from '../sandboxedRun.js';
 import { createChatterStripper } from '../egressRefusals.js';
 import { createHarnessEventReader } from '../harnessEvents.js';
 import {
+  changedRefs,
   checkApplies,
   collectChanges,
   currentHead,
+  describeRefChanges,
   prepareWorktree,
   removeWorktree,
+  resolveCommit,
+  snapshotRefs,
   WorktreeError,
 } from '../worktree.js';
 
@@ -443,16 +447,49 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
     const conversationId = session?.conversationId ?? newConversationId();
     const canContinue = supportsContinuation(profile);
 
+    // Resolved before any checkout is touched, so an unknown ref is refused
+    // with the session's checkout still intact.
+    const namedBase =
+      input.base === undefined ? undefined : await resolveCommit(binding.root, input.base);
+
     let worktree: { path: string; baseSha: string };
-    if (session !== undefined) {
+    if (session !== undefined && namedBase === undefined) {
       scratch = session.scratchDir;
       worktree = { path: session.worktreePath, baseSha: session.baseSha };
       keepScratch = true;
+    } else if (session !== undefined && namedBase !== undefined) {
+      // The conversation continues in a fresh checkout at the named base: the
+      // earlier checkout's work is the conversation's memory, not this turn's
+      // starting point.
+      scratch = session.scratchDir;
+      keepScratch = true;
+      await removeWorktree(session.bindingRoot, session.worktreePath);
+      try {
+        worktree = await prepareWorktree(binding.root, scratch, 'work', { at: namedBase });
+      } catch (error) {
+        forgetSession(session.id);
+        keepScratch = false;
+        throw error;
+      }
+      const moved: HarnessSession = {
+        ...session,
+        worktreePath: worktree.path,
+        baseSha: worktree.baseSha,
+      };
+      recordSession(moved);
+      session = moved;
+      claimed = moved;
     } else {
       scratch = await mkdtemp(join(tmpdir(), 'aflow-harness-'));
-      worktree = await prepareWorktree(binding.root, scratch, 'work');
+      worktree = await prepareWorktree(
+        binding.root,
+        scratch,
+        'work',
+        namedBase === undefined ? {} : { at: namedBase },
+      );
     }
     worktreePath = worktree.path;
+    const refsBefore = await snapshotRefs(binding.root);
 
     // Fetched before the run and held only for its duration.
     credential = await fetchCredential(profile);
@@ -640,10 +677,14 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
         : [collectFailure, refusalNote].filter(Boolean).join(' '),
       credential,
     );
+    const refChanges = changedRefs(refsBefore, await snapshotRefs(binding.root));
     // Asked of the binding, not the worktree: the question is whether what the
     // harness produced can still be taken into the repository the operator has.
     const applies = await checkApplies(binding.root, changes.patch);
-    const headMoved = (await currentHead(binding.root)) !== worktree.baseSha;
+    // A named base is judged against itself; the folder's HEAD was never the
+    // starting point, so its distance from it says nothing about the run.
+    const headMoved =
+      namedBase === undefined && (await currentHead(binding.root)) !== worktree.baseSha;
 
     let sessionRef = session?.id;
     if (canContinue) {
@@ -705,18 +746,34 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
       ...(note !== '' ? { boundaryNote: note } : {}),
     };
 
-    if (check !== undefined && !check.ok) {
-      // The step fails, and the work still comes back: a check that rejects an
-      // answer has said nothing about the files the harness edited, and an
-      // operator who cannot see them has to pay for the run again to get them.
+    // A failure carries the work too: the error travels inline on the result
+    // stream, so a diff too large to be a payload goes to the payload store and
+    // the error names it.
+    const failureDetails = async (): Promise<Record<string, unknown>> => {
       const details = { ...work };
       const body = details['patch'];
-      // The failure's error travels inline on the result stream, so a diff too
-      // large to be a payload goes to the payload store and the error names it.
       if (typeof body === 'string' && Buffer.byteLength(body, 'utf8') > MAX_INLINE_PAYLOAD_BYTES) {
         delete details['patch'];
         details['patchRef'] = await ctx.writePayload('output', body);
       }
+      return details;
+    };
+
+    if (refChanges.length > 0) {
+      return await failureWithError(
+        ctx,
+        permissionError(
+          scrubSecret(describeRefChanges(refChanges), credential),
+          await failureDetails(),
+        ),
+      );
+    }
+
+    if (check !== undefined && !check.ok) {
+      // The step fails, and the work still comes back: a check that rejects an
+      // answer has said nothing about the files the harness edited, and an
+      // operator who cannot see them has to pay for the run again to get them.
+      const details = await failureDetails();
       return await failureWithError(
         ctx,
         validationError(
