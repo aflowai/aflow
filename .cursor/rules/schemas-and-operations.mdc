@@ -1,0 +1,72 @@
+---
+description: How to define and register operations in @aflow/schemas. Follow this when adding new operations or modifying existing ones.
+globs: "packages/schemas/**"
+alwaysApply: false
+---
+
+# Schemas & Operations
+
+## Adding a New Operation
+
+1. **Define schemas** in `packages/schemas/src/operations/<stepType>.ts`:
+
+```typescript
+export const MyOpInputSchema = z.object({
+  prompt: z.string().max(100_000),
+  model: z.string().optional(),
+});
+export type MyOpInput = z.infer<typeof MyOpInputSchema>;
+
+export const MyOpOutputSchema = z.object({
+  content: z.string(),
+  usage: TokenUsageSchema,
+});
+export type MyOpOutput = z.infer<typeof MyOpOutputSchema>;
+```
+
+2. **Add metadata** to `<StepType>OperationMeta`:
+
+```typescript
+"myStepType.myOp": {
+  name: "Human-Readable Name",
+  semanticDescription: "What this operation does (for agents and UI)",
+  tags: ["category"],
+  // Mark orchestrator-managed fields that should NOT appear in the flow editor UI:
+  internalFields: {
+    input: ["historyRef", "contextRef"],  // orchestrator assembles these
+    output: [],
+  },
+},
+```
+
+3. **Register** in the operations map:
+
+```typescript
+export const MyOperations = {
+  "myStepType.myOp": { input: MyOpInputSchema, output: MyOpOutputSchema },
+};
+```
+
+4. **Register in catalog** at `packages/schemas/src/catalog/registry.ts`:
+   Add to `registerAllOperations()`.
+
+5. **Build**: `yarn workspace @aflow/schemas build` — other packages import compiled output.
+
+## Field Visibility
+
+`internalFields` on `OperationMeta` controls what the flow editor UI shows:
+- **input**: Fields assembled by the orchestrator (e.g., `availableTools`, `historyRef`, `lastToolResults`)
+- **output**: Fields not relevant to the user (e.g., `toolCalls` when tools aren't used)
+
+Fields NOT in `internalFields` are shown as user-configurable bindings in the flow editor.
+
+## Runtime vs Config
+
+- **Step `config`**: Static values set at design time (model, temperature, policies). Merged as base in `resolveStepInput`.
+- **`inputMapping`**: Dynamic bindings from variables/input. Resolved at runtime by the orchestrator.
+- **Internal fields**: Assembled by the orchestrator (history refs, tool specs, turn counters). Never from user config.
+
+## Export & Build
+
+After modifying schemas: `yarn workspace @aflow/schemas build`
+Other packages consume the compiled `.js`/`.d.ts` output, not the source `.ts` files.

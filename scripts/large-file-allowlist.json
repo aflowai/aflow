@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "path": "packages/schemas/src/background/registry.ts",
+      "owner": "platform",
+      "reason": "A catalog, not a module: one entry per stateful background task and per named discovery exception, each required to carry its owner, invariant, budgets, recovery story and the bound that keeps it an exception. Its length is its content \u2014 splitting it would put the same declarations behind an index and cost the single place an auditor reads. Generated into docs/architecture/background-work.md and compared byte-for-byte, so an entry cannot drift from the tree."
+    }
+  ]
+}

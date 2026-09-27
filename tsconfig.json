@@ -1,0 +1,119 @@
+{
+  "files": [],
+  "references": [
+    {
+      "path": "./apps/aflow-executor-ai"
+    },
+    {
+      "path": "./apps/aflow-executor-api"
+    },
+    {
+      "path": "./apps/aflow-executor-compute"
+    },
+    {
+      "path": "./apps/aflow-executor-host"
+    },
+    {
+      "path": "./apps/aflow-executor-mcp"
+    },
+    {
+      "path": "./apps/aflow-executor-memory"
+    },
+    {
+      "path": "./apps/aflow-executor-mock"
+    },
+    {
+      "path": "./apps/aflow-executor-ui"
+    },
+    {
+      "path": "./apps/aflow-executor-user"
+    },
+    {
+      "path": "./apps/aflow-mcp"
+    },
+    {
+      "path": "./apps/aflow-orchestrator"
+    },
+    {
+      "path": "./apps/server"
+    },
+    {
+      "path": "./packages/ai-client"
+    },
+    {
+      "path": "./packages/applet-runtime"
+    },
+    {
+      "path": "./packages/authz"
+    },
+    {
+      "path": "./packages/credential-resolver"
+    },
+    {
+      "path": "./packages/cybernetic-runtime"
+    },
+    {
+      "path": "./packages/database"
+    },
+    {
+      "path": "./packages/design-system"
+    },
+    {
+      "path": "./packages/executor-runtime"
+    },
+    {
+      "path": "./packages/input-resolution"
+    },
+    {
+      "path": "./packages/integration-simulator"
+    },
+    {
+      "path": "./packages/lib"
+    },
+    {
+      "path": "./packages/memory-paths"
+    },
+    {
+      "path": "./packages/memory-store"
+    },
+    {
+      "path": "./packages/network-safety"
+    },
+    {
+      "path": "./packages/oauth"
+    },
+    {
+      "path": "./packages/observability"
+    },
+    {
+      "path": "./packages/payload-store"
+    },
+    {
+      "path": "./packages/platform-artifacts"
+    },
+    {
+      "path": "./packages/redis"
+    },
+    {
+      "path": "./packages/run-view"
+    },
+    {
+      "path": "./packages/schemas"
+    },
+    {
+      "path": "./packages/server-runtime"
+    },
+    {
+      "path": "./packages/surface-engine"
+    },
+    {
+      "path": "./packages/ui-artifact-compiler"
+    },
+    {
+      "path": "./packages/web-product"
+    },
+    {
+      "path": "./packages/web-product/src/ui"
+    }
+  ]
+}

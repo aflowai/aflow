@@ -1,0 +1,41 @@
+{
+  "name": "@aflow/aflow-executor-host",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "phoenix": {
+    "shipsInImage": false,
+    "shipsInImageReason": "Runs as the operator's own user on their machine, not in the appliance image. Reaching their real projects and installed toolchains is the point of it, and a container cannot."
+  },
+  "scripts": {
+    "build": "npx tsc",
+    "dev": "NODE_OPTIONS='--conditions=ts-source' npx tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "lint": "eslint src",
+    "typecheck": "tsc --noEmit",
+    "pair": "NODE_OPTIONS='--conditions=ts-source' npx tsx src/pair.ts",
+    "connect": "NODE_OPTIONS='--conditions=ts-source' npx tsx src/connect.ts",
+    "harness": "NODE_OPTIONS='--conditions=ts-source' npx tsx src/harness-cli.ts",
+    "service": "NODE_OPTIONS='--conditions=ts-source' npx tsx src/service.ts"
+  },
+  "dependencies": {
+    "@aflow/executor-runtime": "workspace:*",
+    "@aflow/lib": "workspace:*",
+    "@aflow/observability": "workspace:*",
+    "@aflow/payload-store": "workspace:*",
+    "@aflow/redis": "workspace:*",
+    "@aflow/schemas": "workspace:*",
+    "@anthropic-ai/sandbox-runtime": "0.0.75",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "ajv": "^8.20.0",
+    "ioredis": "^5.6.1",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3",
+    "vitest": "^4.1.11"
+  }
+}

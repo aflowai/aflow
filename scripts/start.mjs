@@ -1,0 +1,62 @@
+#!/usr/bin/env node
+/**
+ * One command from a fresh clone to a running development stack.
+ *
+ * `scripts/dev-local.ts` already brings up the datastores, applies migrations,
+ * provisions the instance and starts the edition's services — this adds only the
+ * preconditions it assumes and cannot recover from, each of which otherwise
+ * surfaces minutes later as an error naming something other than the cause.
+ */
+import { spawnSync } from 'node:child_process';
+import { copyFileSync, existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import process from 'node:process';
+
+const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
+const say = (message) => {
+  console.log(`\x1b[36m[start]\x1b[0m ${message}`);
+};
+const fail = (message, remedy) => {
+  console.error(`\x1b[31m[start]\x1b[0m ${message}`);
+  if (remedy !== undefined) console.error(`        ${remedy}`);
+  process.exit(1);
+};
+
+// ── Node ─────────────────────────────────────────────────────────────────────
+const wanted = readFileSync(join(REPO, '.nvmrc'), 'utf-8').trim().replace(/^v/, '');
+if (process.versions.node.split('.')[0] !== wanted.split('.')[0]) {
+  fail(
+    `Node ${wanted} is required; this is ${process.versions.node}.`,
+    `With nvm: nvm use ${wanted}`,
+  );
+}
+
+// ── Docker, which the datastores and the code sandbox run in ──────────────────
+if (spawnSync('docker', ['info'], { stdio: 'ignore' }).status !== 0) {
+  fail('Docker is not running.', 'Start Docker Desktop, then run this again.');
+}
+
+// ── The environment file ──────────────────────────────────────────────────────
+if (!existsSync(join(REPO, '.env'))) {
+  copyFileSync(join(REPO, '.env.example'), join(REPO, '.env'));
+  say('created .env from .env.example');
+  say('  nothing to edit — a model provider key is entered in the app');
+}
+
+// ── Build output the web application reads ────────────────────────────────────
+// Its bundler resolves the `import` condition, so it reads compiled packages even
+// in development. Absent, it fails as a module that cannot be found rather than a
+// build that has not run, which is the least helpful shape that failure has.
+const SENTINELS = ['packages/web-product/dist/nextSecurity.cjs', 'packages/schemas/dist/index.js'];
+if (SENTINELS.some((file) => !existsSync(join(REPO, file)))) {
+  say('building packages once — about two minutes, and only on a fresh clone');
+  if (spawnSync('yarn', ['build'], { cwd: REPO, stdio: 'inherit' }).status !== 0) {
+    fail('yarn build failed.');
+  }
+}
+
+// ── Everything else is already this script's job ──────────────────────────────
+say('handing over to dev:local — datastores, migrations, instance, services');
+const dev = spawnSync('yarn', ['dev:local'], { cwd: REPO, stdio: 'inherit' });
+process.exit(dev.status ?? 1);

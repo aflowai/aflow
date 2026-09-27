@@ -1,0 +1,23 @@
+{
+  "flowConfig": {
+    "name": "test-chat-with-history",
+    "steps": [
+      {
+        "stepId": "chat",
+        "type": "ai",
+        "operation": "ai.generate",
+        "config": {
+          "model": "gpt-4o-mini",
+          "systemPrompt": "You are a helpful assistant. Remember the conversation context.",
+          "historyPolicy": {
+            "enabled": true,
+            "maxMessages": 50,
+            "truncationPolicy": "sliding_window"
+          },
+          "prompt": "${input.message}"
+        }
+      }
+    ]
+  },
+  "input": { "message": "Hi! My name is Alice. What's yours?" }
+}

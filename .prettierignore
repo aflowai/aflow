@@ -1,0 +1,36 @@
+# Build output
+**/dist/**
+**/.next/**
+**/build/**
+**/.turbo/**
+
+# Generated files — do not format, content is machine-controlled
+packages/design-system/src/tokens.css
+packages/design-system/src/tokens.ts
+# Next.js rewrites this on every `next build` / dev; formatting is not stable
+**/next-env.d.ts
+
+# Package manager
+**/node_modules/**
+**/.yarn/**
+.pnp.*
+
+# Lock files
+yarn.lock
+package-lock.json
+pnpm-lock.yaml
+
+# Test snapshots
+**/__snapshots__/**
+
+# Generated from packages/schemas/src/background/registry.ts; a contract test
+# compares it byte-for-byte with the renderer, which cannot reproduce prettier's
+# markdown table alignment.
+docs/architecture/background-work.md
+
+# Misc
+.env*
+*.log
+
+# Verbatim upstream text — reformatting a licence changes a legal document.
+LICENSE

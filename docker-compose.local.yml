@@ -1,0 +1,428 @@
+# =============================================================================
+# Aflow Local — the single-user appliance
+# =============================================================================
+#   docker compose -f docker-compose.local.yml up -d --build
+#   open http://127.0.0.1:3001
+#
+# Nothing is published beyond loopback, and the stack is split across two
+# networks: the datastores and the processes holding their credentials sit on
+# `backend`, the outward-facing ones on `frontend`, and only the API joins
+# both. A compromise of the web or MCP process therefore reaches the API, which
+# authorizes it, and has no route at all to Redis, which authenticates nobody,
+# or to Postgres with the fixed credentials written below. The API is published
+# because the realtime WebSocket gateway lives on it and the browser connects
+# to that directly with a short-lived token the BFF mints — every other call
+# goes through the BFF.
+#
+# First boot generates the instance secret and the credential-encryption key
+# into the `instance_config` volume. Back that volume up with the database:
+# without the key, stored credentials do not decrypt.
+#
+# Every service here runs as the same user, so ownership separates none of them
+# and what a container mounts is the whole of what it can read. `bootstrap`
+# therefore cuts the values into one volume per audience and each service is
+# given only its own: the worker mounts the wrapping key, the web process the
+# instance secret, and neither can reopen the file holding both.
+# =============================================================================
+
+name: aflow-local
+
+# Every service runs the same image, and exactly one of them declares how to
+# build it. Giving several services a build section makes Compose run that many
+# concurrent builds: from a cold cache each repeats the whole dependency
+# install, which exhausts the Docker VM disk, and they then race to export the
+# same tag. `migrate` owns it because it is the root of the dependency chain —
+# nothing using this image starts before it.
+x-image: &image aflow-local:dev
+x-build: &build
+  context: .
+  dockerfile: Dockerfile
+  args:
+    # Baked, not passed at runtime: Next inlines it into the client bundle
+    # and into the CSP at build time.
+    NEXT_PUBLIC_API_ORIGIN: http://127.0.0.1:${AFLOW_API_PORT:-3000}
+
+x-runtime: &runtime
+  image: *image
+  restart: unless-stopped
+  environment: &runtime-env
+    NODE_ENV: production
+    PHOENIX_EDITION: community-local
+    # The namespace and the loopback-published port are the boundary; a process
+    # bound to loopback in here would be unreachable from that port.
+    PHOENIX_BIND: container
+    DATABASE_URL: postgres://phoenix:phoenix@postgres:5432/phoenix
+    # The database is reachable only from this network and terminates no TLS;
+    # the production default would otherwise infer it and fail to connect.
+    DB_SSL: 'false'
+    # Password supplied per service from its mounted config cut, not inlined
+    # here: a value in the compose file is in `docker inspect` and the shell
+    # history of whoever ran it.
+    REDIS_URL: redis://redis:6379
+    # The published port, which is the address a paired host reaches Redis on.
+    # `redis:6379` resolves inside this network and nowhere else, so pairing has
+    # to report the mapping rather than the internal name.
+    AFLOW_REDIS_PORT: ${AFLOW_REDIS_PORT:-6380}
+    # Durable by construction: the Redis payload store expires a
+    # non-persistent payload after 24 hours, and Postgres rows outlive that.
+    PHOENIX_PAYLOAD_DIR: /var/lib/aflow/payloads
+    API_BASE_URL: http://127.0.0.1:${AFLOW_API_PORT:-3000}
+    # Every process that names a user-clickable URL resolves this at startup and
+    # refuses to run without it, rather than degrading to a link that cannot be
+    # right. The published port is the only place the appliance's origin is known.
+    WEB_BASE_URL: http://localhost:${AFLOW_WEB_PORT:-3001}
+    # Set by naming a sandbox directory, which is the same act that makes the
+    # sandbox runnable — so the policy an operator can switch on and the runtime
+    # that would serve it are turned on by one decision rather than two.
+    PHOENIX_COMPUTE_RUNTIME: present
+    # Both names the web guard answers to. Listing only one would accept the
+    # browser's BFF calls and refuse every WebSocket upgrade from the other.
+    REALTIME_ALLOWED_ORIGINS: http://127.0.0.1:${AFLOW_WEB_PORT:-3001},http://localhost:${AFLOW_WEB_PORT:-3001}
+    CORS_ORIGIN: http://127.0.0.1:${AFLOW_WEB_PORT:-3001},http://localhost:${AFLOW_WEB_PORT:-3001}
+    LOG_LEVEL: info
+  env_file:
+    - path: .env.local
+      required: false
+  # Deliberately no instance volume: which of them a service mounts is the whole
+  # of the split, so each one names its own below.
+  volumes:
+    - payload_data:/var/lib/aflow/payloads
+  # Every process built from this anchor holds a datastore credential already.
+  # The API overrides this to join the frontend network as well.
+  networks: [backend]
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: phoenix
+      POSTGRES_PASSWORD: phoenix
+      POSTGRES_DB: phoenix
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Extensions only. The development script beside it seeds a
+      # well-known tenant, which this edition must not carry.
+      - ./scripts/appliance-init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks: [backend]
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U phoenix -d phoenix']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Writes the instance's own secrets and the Redis ACL derived from them.
+  # First of everything: Redis needs the ACL file before it accepts a
+  # connection, so this cannot be the job of anything that waits for a
+  # datastore to come up.
+  instance-init:
+    image: *image
+    build: *build
+    restart: 'no'
+    command: ['node', 'apps/server/dist/instanceInit.js']
+    environment:
+      NODE_ENV: production
+      PHOENIX_EDITION: community-local
+      PHOENIX_INSTANCE_DIR: /var/lib/aflow/instance
+      PHOENIX_REDIS_ACL_DIR: /var/lib/aflow/redis
+      PHOENIX_REDIS_CONFIG_DIR: /var/lib/aflow/redis
+      PHOENIX_WORKER_CONFIG_DIR: /var/lib/aflow/worker
+      PHOENIX_WEB_CONFIG_DIR: /var/lib/aflow/web
+      PHOENIX_HOST_CONFIG_DIR: /var/lib/aflow/host
+      PHOENIX_COMPUTE_CONFIG_DIR: /var/lib/aflow/compute
+    env_file: []
+    volumes:
+      - instance_config:/var/lib/aflow/instance
+      - redis_acl:/var/lib/aflow/redis
+      - worker_config:/var/lib/aflow/worker
+      - web_config:/var/lib/aflow/web
+      - host_config:/var/lib/aflow/host
+      - compute_config:/var/lib/aflow/compute
+    network_mode: none
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # Its own uid, and the group the instance files are written to. Stated here
+    # because the alternative is depending on two unrelated images agreeing on
+    # a gid — true today, and a first-boot failure the day it stops being.
+    user: '999:1000'
+    # Loopback only. The paired host executor runs on the operator's machine
+    # rather than in this network, so it needs a port — and that port is the
+    # reason the ACL exists rather than a reason to widen it.
+    ports:
+      - '127.0.0.1:${AFLOW_REDIS_PORT:-6380}:6379'
+    command: ['redis-server', '--appendonly', 'yes', '--aclfile', '/etc/aflow/redis-acl.conf']
+    depends_on:
+      instance-init:
+        condition: service_completed_successfully
+    volumes:
+      - redis_data:/data
+      - redis_acl:/etc/aflow:ro
+    networks: [backend]
+    healthcheck:
+      # Authenticated, because the server no longer answers an anonymous PING.
+      test:
+        [
+          'CMD-SHELL',
+          '. /etc/aflow/redis.env && redis-cli -a "$$REDIS_PASSWORD" --no-auth-warning ping | grep -q PONG',
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Forward-only schema migrations. Separate from bootstrap because this is
+  # what must have finished before any process opens a connection, and it is
+  # the step an upgrade re-runs.
+  migrate:
+    <<: *runtime
+    restart: 'no'
+    # Sources the instance file for `REDIS_PASSWORD`. It relabels entity-event
+    # streams and treats a Redis failure as a warning, so without the credential
+    # it does not fail — it retries `NOAUTH` until something else times out, and
+    # the streams are silently never relabelled.
+    entrypoint: ['/bin/sh', '-c']
+    command:
+      [
+        'set -a && . /var/lib/aflow/instance/instance.env && set +a && exec node scripts/release.mjs',
+      ]
+    volumes:
+      - instance_config:/var/lib/aflow/instance:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      # Redis too: this step also relabels persisted entity-event streams, and
+      # it reports a failure there as a warning rather than a non-zero exit. A
+      # cold start that raced Redis would therefore let bootstrap and the worker
+      # proceed against streams that were never relabelled.
+      redis:
+        condition: service_healthy
+
+  # Generates the instance secrets on a first boot, then provisions the tenant,
+  # owner, workspace, and capability assignment. Every step reads before it
+  # writes, so this runs on every start.
+  #
+  # The only service holding all four values, and the only one that writes any
+  # of them. It runs to completion before the services reading its output start.
+  bootstrap:
+    <<: *runtime
+    restart: 'no'
+    environment:
+      <<: *runtime-env
+      PHOENIX_INSTANCE_DIR: /var/lib/aflow/instance
+      PHOENIX_WORKER_CONFIG_DIR: /var/lib/aflow/worker
+      PHOENIX_WEB_CONFIG_DIR: /var/lib/aflow/web
+    volumes:
+      - instance_config:/var/lib/aflow/instance
+      - worker_config:/var/lib/aflow/worker
+      - web_config:/var/lib/aflow/web
+    command: ['node', 'apps/server/dist/bootstrapLocal.js']
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  api:
+    <<: *runtime
+    environment:
+      <<: *runtime-env
+      PHOENIX_PROFILE: web-core
+      PORT: '3000'
+    # Loopback only. The browser reaches this directly for the realtime
+    # WebSocket; everything else it asks the BFF for.
+    ports:
+      - '127.0.0.1:${AFLOW_API_PORT:-3000}:3000'
+    # The bridge, and the only process on both networks: it answers the web and
+    # MCP processes on one and holds the datastore credentials on the other.
+    networks: [backend, frontend]
+    # The one reader of the full file: it compares the instance secret, unwraps
+    # credentials, and resolves the edition descriptor from the identity pins.
+    # Read-only, because bootstrap is what establishes those values.
+    volumes:
+      - payload_data:/var/lib/aflow/payloads
+      - instance_config:/var/lib/aflow/instance:ro
+    entrypoint: ['/bin/sh', '-c']
+    command: [
+        # Exported wholesale, unlike everywhere else: this process uses all four.
+        'set -a && . /var/lib/aflow/instance/instance.env && set +a && exec node scripts/prod-launcher.mjs',
+      ]
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  # Runs the sandbox that executes code. Started with everything else: running
+  # code is one of the capabilities this product exists to offer, not an extra.
+  #
+  # It reaches the host Docker daemon through the mounted socket, which is host
+  # root however the container is dropped, and is why the general worker does not
+  # have it. Nothing here defends the host against a compromised worker; what it
+  # defends is the sandboxed code against the host. An operator who does not want
+  # that reach on their machine stops this one service.
+  #
+  # `AFLOW_SANDBOX_DIR` overrides where sandbox scratch lives on the host.
+  #
+  # The directory is mounted at the identical path it has on the host, because
+  # the daemon resolves the sandbox's `-v` source in ITS namespace, not this
+  # container's. A path that exists only here is silently created empty by the
+  # daemon, and the sandbox sees nothing while the manifest says it was written.
+  # `PHOENIX_SANDBOX_SELFTEST_STRICT` makes that a refusal to start rather than
+  # a discovery made later, by a run.
+  compute:
+    <<: *runtime
+    # Root, and it changes nothing that matters. Reaching the daemon through
+    # that socket is host root whichever user holds it, so a non-root container
+    # here buys no containment — it only fails to open the socket.
+    #
+    # Withholding the secrets below reduces *accidental* exposure; it bounds no
+    # compromise. Anything that reaches this socket can ask the daemon to mount
+    # the host filesystem or these config volumes and read them anyway, on top
+    # of the datastore network and payload volume it already holds. Read the
+    # omissions as hygiene, and the service as one with host reach.
+    user: root
+    environment:
+      <<: *runtime-env
+      PHOENIX_PROFILE: compute-worker
+      PHOENIX_SANDBOX_HOST_DIR: ${AFLOW_SANDBOX_DIR:-/var/lib/aflow/sandbox}
+      PHOENIX_SANDBOX_SELFTEST_STRICT: 'true'
+    # Not inherited from the anchor. `.env.local` is where an operator keeps
+    # model-provider keys, and may hold the instance secret and the wrapping key
+    # besides — the other services unset those precisely because sourcing that
+    # file exports them. This one reads it not at all: it runs code in a sandbox
+    # and needs no credential to do it, and it is the last process that should
+    # hold one.
+    env_file: []
+    volumes:
+      - payload_data:/var/lib/aflow/payloads
+      - compute_config:/var/lib/aflow/compute:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${AFLOW_SANDBOX_DIR:-/var/lib/aflow/sandbox}:${AFLOW_SANDBOX_DIR:-/var/lib/aflow/sandbox}
+    # The path has to be absolute for the mount above to mean the same thing in
+    # both namespaces, and compose resolves a relative one against this file —
+    # producing a bind whose two halves differ. Refused here, where the message
+    # can name the variable, rather than by the self-test naming a mount the
+    # operator never wrote.
+    entrypoint: ['/bin/sh', '-c']
+    command:
+      [
+        'case "$$PHOENIX_SANDBOX_HOST_DIR" in /*) ;; *) echo "AFLOW_SANDBOX_DIR must be an absolute host path; got \"$$PHOENIX_SANDBOX_HOST_DIR\"" >&2; exit 1;; esac; . /var/lib/aflow/compute/redis-password.env && export REDIS_PASSWORD && exec node scripts/prod-launcher.mjs',
+      ]
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  worker:
+    <<: *runtime
+    environment:
+      <<: *runtime-env
+      PHOENIX_PROFILE: worker
+    # The wrapping key alone. The orchestrator and executors unwrap credentials;
+    # none of them authenticates to the API or resolves an edition descriptor,
+    # so a compromised one should reach neither the owner's secret nor the file
+    # holding it.
+    volumes:
+      - payload_data:/var/lib/aflow/payloads
+      - worker_config:/var/lib/aflow/worker:ro
+    entrypoint: ['/bin/sh', '-c']
+    command: [
+        # The unset covers the other way in: an operator who supplied the secret
+        # through `.env.local` has it exported here already, and sourcing a file
+        # that does not mention it leaves that export standing.
+        '. /var/lib/aflow/worker/wrapping-key.env && export CREDENTIAL_ENCRYPTION_KEY REDIS_PASSWORD && unset PHOENIX_INSTANCE_SECRET && exec node scripts/prod-launcher.mjs',
+      ]
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  # Built without the runtime anchor on purpose: that mounts the payload volume
+  # read-write and carries `.env.local` — which holds the operator's
+  # model-provider keys. This is the process the browser talks to. It reads one
+  # value, the secret it authenticates to the API with, so it mounts a volume
+  # holding exactly that and nothing else.
+  web:
+    image: *image
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PHOENIX_EDITION: community-local
+      PORT: '3001'
+      # Server-to-server over the internal network; the browser never uses it.
+      API_URL: http://api:3000
+      # The names this instance answers to. A request arriving under any other
+      # host or origin is refused before the secret is attached.
+      PHOENIX_ALLOWED_HOSTS: 127.0.0.1,localhost,[::1]
+    volumes:
+      - web_config:/var/lib/aflow/web:ro
+    ports:
+      - '127.0.0.1:${AFLOW_WEB_PORT:-3001}:3001'
+    # Reaches the API and nothing else. The datastores are not on this network.
+    networks: [frontend]
+    entrypoint: ['/bin/sh', '-c']
+    command:
+      # Sourced, not scraped: the value is shell-quoted so a secret carrying a
+      # space or a `$` survives. The wrapping key is unset rather than merely
+      # absent from the file, so it stays out of this environment even when
+      # something upstream of the source already put it there.
+      - '. /var/lib/aflow/web/instance-secret.env && export PHOENIX_INSTANCE_SECRET && unset CREDENTIAL_ENCRYPTION_KEY && exec yarn workspace @aflow/web-local start'
+    depends_on:
+      api:
+        condition: service_started
+
+  # Opt in with `--profile mcp`.
+  #
+  # Deliberately not built from the shared runtime anchor: that carries
+  # `.env.local` and the payload volume. This process is the one an external
+  # client connects to, and it mounts none of the instance's own values. It
+  # authenticates each session with the API key its client supplies and forwards
+  # that upstream, which is what keeps the two credentials separately revocable.
+  mcp:
+    image: *image
+    profiles: ['mcp']
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PHOENIX_EDITION: community-local
+      MCP_PORT: '3100'
+      # The name the MCP server actually reads; `API_URL` is the web BFF's.
+      AFLOW_API_URL: http://api:3000
+    ports:
+      - '127.0.0.1:${AFLOW_MCP_PORT:-3100}:3100'
+    # The API is the whole of what an external client's session can reach from
+    # in here; the datastores are not on this network.
+    networks: [frontend]
+    command: ['node', 'apps/aflow-mcp/dist/index.js']
+    depends_on:
+      api:
+        condition: service_started
+
+networks:
+  # Redis authenticates nobody and Postgres holds the fixed credentials written
+  # into this file, so reachability is the whole of their protection.
+  backend:
+  # The published processes. Nothing on here can address a datastore, which
+  # keeps a compromise of one of them inside the API's authorization boundary.
+  frontend:
+
+volumes:
+  postgres_data:
+  redis_data:
+  payload_data:
+  # The instance's own secrets, whole. Back this up with the database — without
+  # the credential-encryption key, stored credentials do not decrypt.
+  instance_config:
+  # Cuts of the above, rewritten by `bootstrap` on every start. Nothing here is
+  # worth backing up: each holds a subset of `instance_config`, and a boot whose
+  # cut disagrees with the file replaces it.
+  worker_config:
+  web_config:
+  # Redis reads its ACL and its own password from here; it holds neither the
+  # wrapping key nor the instance secret.
+  redis_acl:
+  # The paired host executor's Redis credential, handed over at pairing.
+  host_config:
+  # The sandbox host's Redis credential, and nothing else it could leak.
+  compute_config:

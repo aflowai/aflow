@@ -1,0 +1,191 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">
+  <defs>
+    <!-- Background Sky Gradient -->
+    <radialGradient id="skyGrad" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#E1F5FE" />
+      <stop offset="100%" stop-color="#81D4FA" />
+    </radialGradient>
+
+    <!-- Base Cloud Path -->
+    <path id="cloud" d="M -15 0 A 10 10 0 0 1 -5 -10 A 15 15 0 0 1 20 -5 A 10 10 0 0 1 25 5 L -15 5 Z" fill="#FFFFFF" />
+    
+    <!-- Sparkle Path -->
+    <path id="sparkle" d="M 0 -8 Q 0 0 8 0 Q 0 0 0 8 Q 0 0 -8 0 Q 0 0 0 -8 Z" fill="#FFFFFF" />
+
+    <!-- Clip path to keep the clouds inside the solid sky circle -->
+    <clipPath id="skyClip">
+      <circle cx="100" cy="100" r="44" />
+    </clipPath>
+  </defs>
+
+  <!-- BACKGROUND: Filled Sky Portal (Kept completely as is) -->
+  <g id="sky-backdrop">
+    <!-- Solid baby blue background circle -->
+    <circle cx="100" cy="100" r="44" fill="url(#skyGrad)" />
+    
+    <!-- Clipped inner continuous clouds and sparkles -->
+    <g clip-path="url(#skyClip)">
+      
+      <!-- Seamless scrolling clouds -->
+      <g opacity="0.85">
+        <animateTransform attributeName="transform" type="translate" values="0 0; 120 0" dur="12s" repeatCount="indefinite" />
+        
+        <!-- Original Block (x: 0 to 120) -->
+        <g transform="translate(20, 85) scale(0.6)"><use href="#cloud"/></g>
+        <g transform="translate(60, 110) scale(0.8)"><use href="#cloud"/></g>
+        <g transform="translate(100, 90) scale(0.5)"><use href="#cloud"/></g>
+        
+        <!-- Duplicate Block (x: -120 to 0) for seamless loop -->
+        <g transform="translate(-100, 85) scale(0.6)"><use href="#cloud"/></g>
+        <g transform="translate(-60, 110) scale(0.8)"><use href="#cloud"/></g>
+        <g transform="translate(-20, 90) scale(0.5)"><use href="#cloud"/></g>
+      </g>
+
+      <!-- Twinkling floating sparkles inside the sky -->
+      <g transform="translate(80, 75) scale(0.4)">
+        <use href="#sparkle">
+          <animate attributeName="opacity" values="0.2; 1; 0.2" dur="3s" repeatCount="indefinite" />
+        </use>
+      </g>
+      <g transform="translate(115, 115) scale(0.5)">
+        <use href="#sparkle">
+          <animate attributeName="opacity" values="1; 0.1; 1" dur="4.5s" repeatCount="indefinite" />
+        </use>
+      </g>
+    </g>
+  </g>
+
+  <!-- FOREGROUND: Floating & Tilted Ice Cream -->
+  <g>
+    <!-- Smooth wider floating animation in an elliptical radius -->
+    <!-- The ice cream sweeps along a beautifully wide elliptical orbit (horizontal radius 30, vertical radius 18).
+         This motion allows it to comfortably exceed the borders of the portal background 
+         while staying perfectly within the 200x200 canvas to prevent any clipping at the top or bottom. -->
+    <animateMotion dur="8s" repeatCount="indefinite" path="M 0,3 A 30,18 0 0,0 0,-33 A 30,18 0 0,0 0,3 Z" />
+
+    <!-- Ice Cream Body (Tilted between 10 and 11 o'clock: -35 degrees) -->
+    <g transform="rotate(-35, 100, 100)">
+      
+      <!-- Cone Base Shadow (Left/Bottom half) - Lifted much higher to embed deep into the scoops -->
+      <polygon points="66,75 100,75 100,170" fill="#DC965A"/>
+      <!-- Cone Base Light (Right/Top half) -->
+      <polygon points="100,75 134,75 100,170" fill="#F4B886"/>
+      
+      <!-- Waffle Texture (Lines strictly on the light side) -->
+      <g stroke="#C27A42" stroke-width="2" stroke-linecap="round" opacity="0.5">
+        <line x1="105" y1="85" x2="120" y2="100"/>
+        <line x1="100" y1="105" x2="115" y2="120"/>
+        <line x1="100" y1="130" x2="108" y2="138"/>
+        
+        <line x1="125" y1="85" x2="100" y2="110"/>
+        <line x1="118" y1="105" x2="100" y2="123"/>
+        <line x1="110" y1="125" x2="100" y2="135"/>
+      </g>
+
+      <!-- Ice Cream Scoop 1 (Vanilla - Layer under Pink) -->
+      <!-- Vanilla Scoop Shadow (Wide arc and downward drooping ruffles completely hugging the cone) -->
+      <path d="M 58 88 
+               A 42 42 0 0 1 142 88 
+               a 11 11 0 0 1 -21 4 
+               a 11 11 0 0 1 -21 0 
+               a 11 11 0 0 1 -21 0 
+               a 11 11 0 0 1 -21 -4 Z" fill="#EAD599"/>
+      <!-- Vanilla Scoop Base layer -->
+      <path d="M 61 85 
+               A 39 39 0 0 1 139 85 
+               a 10 10 0 0 1 -19.5 3.5 
+               a 10 10 0 0 1 -19.5 0 
+               a 10 10 0 0 1 -19.5 0 
+               a 10 10 0 0 1 -19.5 -3.5 Z" fill="#FFF4C2"/>
+
+      <!-- Ice Cream Scoop 2 (Strawberry/Pink - Top layer) -->
+      <!-- Pink Scoop Shadow -->
+      <path d="M 64 71 
+               A 36 36 0 0 1 136 71 
+               a 9 9 0 0 1 -18 3.5 
+               a 9 9 0 0 1 -18 0 
+               a 9 9 0 0 1 -18 0 
+               a 9 9 0 0 1 -18 -3.5 Z" fill="#E67E9A"/>
+      <!-- Pink Scoop Base -->
+      <path d="M 67 68 
+               A 33 33 0 0 1 133 68 
+               a 8.25 8.25 0 0 1 -16.5 3.5 
+               a 8.25 8.25 0 0 1 -16.5 0 
+               a 8.25 8.25 0 0 1 -16.5 0 
+               a 8.25 8.25 0 0 1 -16.5 -3.5 Z" fill="#FFB3C6"/>
+      <!-- Pink Scoop Crescent Highlight -->
+      <path d="M 95 38 A 22 22 0 0 1 120 55 A 26 26 0 0 0 92 35 Z" fill="#FFE6EC"/>
+
+      <!-- Sprinkles -->
+      <g stroke-width="3.5" stroke-linecap="round">
+        <line x1="85" y1="42" x2="90" y2="47" stroke="#FFFFFF" />
+        <line x1="108" y1="40" x2="113" y2="35" stroke="#FFDE59" />
+        <line x1="118" y1="48" x2="123" y2="53" stroke="#38B6FF" />
+        <line x1="75" y1="52" x2="80" y2="47" stroke="#FFDE59" />
+        <line x1="95" y1="58" x2="105" y2="58" stroke="#38B6FF" />
+        <line x1="112" y1="60" x2="115" y2="65" stroke="#FFFFFF" />
+      </g>
+    </g>
+
+    <!-- MELTING DRIPS (Positioned absolutely so they align perfectly with gravity) -->
+    
+    <!-- Drip 1 (Pink - Falling from Pink Scoop on the left, embedded securely into the ruffle) -->
+    <g transform="translate(78, 81)">
+      <!-- Animated gooey nub -->
+      <path d="M -4 0 C -4 3, -2 5, 0 6 C 2 5, 4 3, 4 0 Z" fill="#E67E9A">
+        <animate attributeName="d" 
+            values="M -4 0 C -4 3, -2 5, 0 6 C 2 5, 4 3, 4 0 Z;
+                    M -4 0 C -4 8, -3 15, 0 20 C 3 15, 4 8, 4 0 Z;
+                    M -2 0 C -2 10, -2 28, 0 30 C 2 28, 2 10, 2 0 Z;
+                    M -4 0 C -4 2, -1 3, 0 4 C 1 3, 4 2, 4 0 Z;
+                    M -4 0 C -4 3, -2 5, 0 6 C 2 5, 4 3, 4 0 Z" 
+            keyTimes="0; 0.35; 0.5; 0.55; 1" 
+            dur="2.4s" repeatCount="indefinite" />
+      </path>
+      <!-- Falling droplet -->
+      <g fill="#E67E9A" opacity="0">
+        <path d="M 0 0 C -2.5 4, -3 8, 0 10 C 3 8, 2.5 4, 0 0 Z" />
+        <animate attributeName="opacity" values="0; 0; 1; 1; 0" keyTimes="0; 0.49; 0.5; 0.9; 1" dur="2.4s" repeatCount="indefinite"/>
+        <animateTransform attributeName="transform" type="translate" values="0 0; 0 0; 0 20; 0 65; 0 70" keyTimes="0; 0.49; 0.5; 0.9; 1" dur="2.4s" repeatCount="indefinite"/>
+      </g>
+    </g>
+
+    <!-- Drip 2 (Vanilla - Falling from Vanilla Scoop further down the left side) -->
+    <g transform="translate(68, 106)">
+      <path d="M -3 0 C -3 2, -1 4, 0 5 C 1 4, 3 2, 3 0 Z" fill="#EAD599">
+        <animate attributeName="d" 
+            values="M -3 0 C -3 2, -1 4, 0 5 C 1 4, 3 2, 3 0 Z;
+                    M -3 0 C -3 6, -2 12, 0 16 C 2 12, 3 6, 3 0 Z;
+                    M -1.5 0 C -1.5 8, -1.5 22, 0 25 C 1.5 22, 1.5 8, 1.5 0 Z;
+                    M -3 0 C -3 1, -1 2, 0 3 C 1 2, 3 1, 3 0 Z;
+                    M -3 0 C -3 2, -1 4, 0 5 C 1 4, 3 2, 3 0 Z" 
+            keyTimes="0; 0.35; 0.5; 0.55; 1" 
+            dur="3.1s" repeatCount="indefinite" />
+      </path>
+      <g fill="#EAD599" opacity="0">
+        <path d="M 0 0 C -2 3, -2.5 6, 0 8 C 2.5 6, 2 3, 0 0 Z" />
+        <animate attributeName="opacity" values="0; 0; 1; 1; 0" keyTimes="0; 0.49; 0.5; 0.9; 1" dur="3.1s" repeatCount="indefinite"/>
+        <animateTransform attributeName="transform" type="translate" values="0 0; 0 0; 0 17; 0 55; 0 60" keyTimes="0; 0.49; 0.5; 0.9; 1" dur="3.1s" repeatCount="indefinite"/>
+      </g>
+    </g>
+
+    <!-- Drip 3 (Pink - Hanging safely off the cone tip at the bottom right) -->
+    <g transform="translate(140, 153)">
+      <path d="M -2 0 C -2 1.5, -1 3, 0 4 C 1 3, 2 1.5, 2 0 Z" fill="#E67E9A">
+        <animate attributeName="d" 
+            values="M -2 0 C -2 1.5, -1 3, 0 4 C 1 3, 2 1.5, 2 0 Z;
+                    M -2 0 C -2 5, -1.5 10, 0 13 C 1.5 10, 2 5, 2 0 Z;
+                    M -1 0 C -1 6, -1 16, 0 18 C 1 16, 1 6, 1 0 Z;
+                    M -2 0 C -2 1, -1 2, 0 2 C 1 2, 2 1, 2 0 Z;
+                    M -2 0 C -2 1.5, -1 3, 0 4 C 1 3, 2 1.5, 2 0 Z" 
+            keyTimes="0; 0.35; 0.5; 0.55; 1" 
+            dur="2.7s" repeatCount="indefinite" />
+      </path>
+      <g fill="#E67E9A" opacity="0">
+        <path d="M 0 0 C -1.5 2, -2 4, 0 6 C 2 4, 1.5 2, 0 0 Z" />
+        <animate attributeName="opacity" values="0; 0; 1; 1; 0" keyTimes="0; 0.49; 0.5; 0.9; 1" dur="2.7s" repeatCount="indefinite"/>
+        <animateTransform attributeName="transform" type="translate" values="0 0; 0 0; 0 12; 0 35; 0 40" keyTimes="0; 0.49; 0.5; 0.9; 1" dur="2.7s" repeatCount="indefinite"/>
+      </g>
+    </g>
+  </g>
+</svg>

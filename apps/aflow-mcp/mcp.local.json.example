@@ -1,0 +1,11 @@
+{
+  "_comment": "Copy to mcp.local.json (gitignored), set AFLOW_MCP_LOCAL_AUTH_JSON=mcp.local.json — dev only; never commit secrets.",
+  "apiKey": "phx_your_dev_api_key",
+  "tenantId": "a0000000-0000-0000-0000-000000000001",
+  "defaultSpaceId": "optional-space-uuid",
+  "user": {
+    "email": "you@example.com",
+    "name": "Local Dev",
+    "userId": "optional-auth0-sub"
+  }
+}

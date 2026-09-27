@@ -1,0 +1,104 @@
+{
+  "flowId": "mcp-api-assistant",
+  "metadata": {
+    "name": "MCP API Assistant",
+    "description": "API connection management assistant for MCP-connected coding agents. Manages API definitions, auth bindings, OpenAPI imports.",
+    "tags": ["mcp", "system"]
+  },
+  "stateVariables": [
+    {
+      "variableId": "result",
+      "name": "Result",
+      "typeSchema": {
+        "type": "string"
+      },
+      "semanticType": "json",
+      "lifecycle": {
+        "isInput": false,
+        "isOutput": true,
+        "persistOnPause": true
+      }
+    },
+    {
+      "variableId": "prompt",
+      "name": "Prompt",
+      "typeSchema": {
+        "type": "string"
+      },
+      "semanticType": "text",
+      "lifecycle": {
+        "isInput": true,
+        "isOutput": false,
+        "persistOnPause": true
+      }
+    }
+  ],
+  "steps": [
+    {
+      "stepId": "ai-1",
+      "stepType": "ai",
+      "operation": "ai.agent.turn",
+      "name": "Assistant",
+      "config": {
+        "goal": "${state.prompt}",
+        "model": "openai/gpt-oss-120b",
+        "prompt": "${state.prompt}",
+        "catalog": {
+          "stepTypes": ["api", "platform"]
+        },
+        "temperature": 0,
+        "systemPrompt": "You are the Aflow API Specialist. You configure external API integrations: definitions, auth bindings, OpenAPI imports. When calling flow.control.run_step, pass operationId and wrap the operation-specific parameters in the `inputs` object. Be concise."
+      },
+      "onSuccess": {
+        "next": [
+          {
+            "stepId": "flow-1",
+            "priority": 50
+          }
+        ]
+      },
+      "onFailure": {
+        "next": [
+          {
+            "stepId": "ai-1",
+            "priority": 50
+          }
+        ]
+      }
+    },
+    {
+      "stepId": "flow-1",
+      "stepType": "flow",
+      "operation": "flow.control.run_step",
+      "name": "Run Step",
+      "config": {
+        "operationId": "${input.operationId}"
+      },
+      "outputMapping": {
+        "result": "state.result"
+      },
+      "outputOptions": {
+        "displayToUser": true
+      },
+      "tags": [],
+      "onSuccess": {
+        "next": [
+          {
+            "stepId": "ai-1",
+            "priority": 50
+          }
+        ]
+      },
+      "onFailure": {
+        "next": [
+          {
+            "stepId": "ai-1",
+            "priority": 50
+          }
+        ]
+      }
+    }
+  ],
+  "startStepId": "ai-1",
+  "supportedModes": ["chat", "mcp"]
+}

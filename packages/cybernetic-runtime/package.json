@@ -1,0 +1,62 @@
+{
+  "name": "@aflow/cybernetic-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "ts-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./learning/render": {
+      "ts-source": "./src/learningRender.ts",
+      "types": "./dist/learningRender.d.ts",
+      "import": "./dist/learningRender.js",
+      "require": "./dist/learningRender.cjs"
+    },
+    "./scheduling/output-path": {
+      "ts-source": "./src/scheduling/outputPath.ts",
+      "types": "./dist/scheduling/outputPath.d.ts",
+      "import": "./dist/scheduling/outputPath.js",
+      "require": "./dist/scheduling/outputPath.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "npx tsup && rm -f tsconfig.tsbuildinfo && npx tsc --emitDeclarationOnly",
+    "dev": "npx tsup --watch",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@aflow/ai-client": "workspace:*",
+    "@aflow/applet-runtime": "workspace:*",
+    "@aflow/database": "workspace:*",
+    "@aflow/integration-simulator": "workspace:*",
+    "@aflow/lib": "workspace:*",
+    "@aflow/memory-store": "workspace:*",
+    "@aflow/network-safety": "workspace:*",
+    "@aflow/oauth": "workspace:*",
+    "@aflow/observability": "workspace:*",
+    "@aflow/payload-store": "workspace:*",
+    "@aflow/platform-artifacts": "workspace:*",
+    "@aflow/redis": "workspace:*",
+    "@aflow/schemas": "workspace:*",
+    "ioredis": "^5.6.1"
+  },
+  "devDependencies": {
+    "@types/ioredis-mock": "^8",
+    "ajv": "^8.20.0",
+    "ioredis-mock": "^8.13.1",
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.2",
+    "vitest": "^4.1.11"
+  }
+}

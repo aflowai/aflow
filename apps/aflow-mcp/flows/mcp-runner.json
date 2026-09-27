@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "flowId": "mcp-runner",
+  "metadata": {
+    "name": "MCP Operation Runner",
+    "description": "System flow that executes a single operation by operationId. Used by MCP tools (catalog, run_operation).",
+    "tags": ["mcp", "system"],
+    "system": true
+  },
+  "stateVariables": [
+    {
+      "variableId": "operationId",
+      "name": "Operation ID",
+      "typeSchema": { "type": "string" },
+      "lifecycle": { "isInput": true, "isOutput": false, "persistOnPause": false }
+    },
+    {
+      "variableId": "inputs",
+      "name": "Operation Inputs",
+      "typeSchema": { "type": "object" },
+      "lifecycle": { "isInput": true, "isOutput": false, "persistOnPause": false }
+    },
+    {
+      "variableId": "result",
+      "name": "Result",
+      "typeSchema": {},
+      "semanticType": "json",
+      "lifecycle": { "isInput": false, "isOutput": true, "persistOnPause": false }
+    }
+  ],
+  "steps": [
+    {
+      "stepId": "run",
+      "stepType": "flow",
+      "operation": "flow.control.run_step",
+      "name": "Execute Operation",
+      "config": {
+        "operationId": "${input.operationId}",
+        "inputs": "${input.inputs}"
+      },
+      "outputMapping": { "result": "state.result" },
+      "onSuccess": { "next": [] },
+      "onFailure": { "next": [] }
+    }
+  ],
+  "startStepId": "run",
+  "supportedModes": ["mcp"]
+}

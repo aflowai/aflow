@@ -1,0 +1,48 @@
+{
+  "flowConfig": {
+    "name": "test-research-agent",
+    "startStepId": "agent",
+    "steps": [
+      {
+        "stepId": "agent",
+        "name": "Research Agent",
+        "description": "Decides whether to fetch data or give a final answer",
+        "type": "ai",
+        "operation": "ai.agent_turn",
+        "config": {
+          "model": "gemini-3.5-flash",
+          "systemPrompt": "You are a research assistant. Use the 'api-fetch' tool to look up information when needed. When you have enough information, use 'complete' to give the final answer. Be concise.",
+          "temperature": 0.1,
+          "turnPolicy": {
+            "maxToolCallsPerTurn": 3,
+            "allowParallel": false,
+            "allowComplete": true
+          },
+          "prompt": "${input.message}"
+        },
+        "onSuccess": {
+          "next": [{ "stepId": "api-fetch", "priority": 1 }]
+        }
+      },
+      {
+        "stepId": "api-fetch",
+        "name": "API Fetch",
+        "description": "Fetch data from an API endpoint. Input: { url: string, method?: string }",
+        "type": "api",
+        "operation": "api.call",
+        "config": {
+          "method": "GET"
+        },
+        "onSuccess": {
+          "next": [{ "stepId": "agent", "priority": 1 }]
+        },
+        "onFailure": {
+          "next": [{ "stepId": "agent", "priority": 1 }]
+        }
+      }
+    ]
+  },
+  "input": {
+    "message": "Fetch a random joke from https://official-joke-api.appspot.com/random_joke and rate it 1-10"
+  }
+}

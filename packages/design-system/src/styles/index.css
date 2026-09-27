@@ -1,0 +1,16 @@
+/* ==========================================================================
+   Phoenix Design System - Main Stylesheet
+   Import this file to get all design system styles
+   ========================================================================== */
+
+/* Design tokens (CSS custom properties) */
+@import '../tokens.css';
+
+/* CSS Reset */
+@import './reset.css';
+
+/* Base styles */
+@import './base.css';
+
+/* Component styles */
+@import './components.css';

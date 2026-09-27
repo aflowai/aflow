@@ -1,0 +1,132 @@
+# =============================================================================
+# Aflow Platform - Local Development Infrastructure
+# =============================================================================
+# Start with: docker compose up -d
+# Stop with:  docker compose down
+# Reset data: docker compose down -v
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL Database
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: phoenix-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: phoenix
+      POSTGRES_PASSWORD: phoenix
+      POSTGRES_DB: phoenix
+    ports:
+      - '${POSTGRES_PORT:-5433}:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U phoenix -d phoenix']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # Redis (Streams + Pub/Sub + Hot State)
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: phoenix-redis
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # Redis Commander (Optional - Web UI for Redis)
+  # ---------------------------------------------------------------------------
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: phoenix-redis-ui
+    restart: unless-stopped
+    environment:
+      REDIS_HOSTS: local:redis:6379
+    ports:
+      - '8081:8081'
+    depends_on:
+      redis:
+        condition: service_healthy
+    profiles:
+      - tools
+
+  # ---------------------------------------------------------------------------
+  # pgAdmin (Optional - Web UI for PostgreSQL)
+  # ---------------------------------------------------------------------------
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: phoenix-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@phoenix.dev
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - '8080:80'
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles:
+      - tools
+
+  # ---------------------------------------------------------------------------
+  # LiveKit Server (Voice / WebRTC transport)
+  # ---------------------------------------------------------------------------
+  # NOTE: On macOS, run LiveKit natively instead of Docker:
+  #   brew install livekit && livekit-server --dev
+  # Docker Desktop on macOS uses a VM that breaks WebRTC UDP connectivity.
+  # This Docker service works on Linux hosts and CI.
+  livekit:
+    image: livekit/livekit-server
+    container_name: phoenix-livekit
+    restart: unless-stopped
+    command: --dev --bind 0.0.0.0 --node-ip host.docker.internal
+    ports:
+      - '7880:7880' # Signal (WebSocket)
+      - '7881:7881' # RTC TCP
+      - '7882:7882/udp' # RTC UDP
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    profiles:
+      - voice
+
+volumes:
+  postgres_data:
+  redis_data:
+  pgadmin_data:
+
+# =============================================================================
+# Usage:
+#
+# Start core services:
+#   docker compose up -d
+#
+# Start with admin tools (pgAdmin + Redis Commander):
+#   docker compose --profile tools up -d
+#
+# View logs:
+#   docker compose logs -f postgres redis
+#
+# Connect to PostgreSQL:
+#   psql postgres://phoenix:phoenix@localhost:5432/phoenix
+#
+# Connect to Redis:
+#   redis-cli -h localhost -p 6379
+#
+# =============================================================================

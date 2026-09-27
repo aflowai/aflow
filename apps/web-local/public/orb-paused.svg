@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">
+  <title>Orb: paused, action expected</title>
+  <defs>
+    <radialGradient id="od-base" cx="50%" cy="44%" r="60%">
+      <stop offset="0%" stop-color="#2B2752"/>
+      <stop offset="100%" stop-color="#141129"/>
+    </radialGradient>
+    <radialGradient id="od-halo" cx="50%" cy="50%" r="50%">
+      <stop offset="62%" stop-color="#FFD23F" stop-opacity="0"/>
+      <stop offset="84%" stop-color="#FFD23F" stop-opacity=".2"/>
+      <stop offset="100%" stop-color="#FFD23F" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="od-core" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#FFE9A8" stop-opacity=".85"/>
+      <stop offset="60%" stop-color="#FFD23F" stop-opacity=".35"/>
+      <stop offset="100%" stop-color="#FFD23F" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="od-blur" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="13"/>
+    </filter>
+    <clipPath id="od-clip"><circle cx="100" cy="100" r="58"/></clipPath>
+  </defs>
+
+  <circle cx="100" cy="100" r="74" fill="url(#od-halo)">
+    <animate attributeName="opacity" values=".6;1;.6" dur="5s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="100" cy="100" r="58" fill="url(#od-base)"/>
+
+  <!-- Aurora at rest: barely drifting, settled symmetric -->
+  <g clip-path="url(#od-clip)">
+    <g transform="translate(100 100)">
+      <g>
+        <animateTransform attributeName="transform" type="rotate" values="0;360" dur="41s" repeatCount="indefinite"/>
+        <ellipse cx="12" cy="4" rx="34" ry="26" fill="#B99A3E" opacity=".4" filter="url(#od-blur)"/>
+      </g>
+      <g>
+        <animateTransform attributeName="transform" type="rotate" values="360;0" dur="37s" repeatCount="indefinite"/>
+        <ellipse cx="-12" cy="-6" rx="30" ry="22" fill="#4FB3A9" opacity=".35" filter="url(#od-blur)"/>
+      </g>
+
+      <!-- Warm core with one soft bloom per cycle -->
+      <circle r="30" fill="url(#od-core)">
+        <animate attributeName="r" values="28;34;28;28" keyTimes="0;.14;.3;1" dur="5s" repeatCount="indefinite"/>
+        <animate attributeName="opacity" values=".8;1;.8;.8" keyTimes="0;.14;.3;1" dur="5s" repeatCount="indefinite"/>
+      </circle>
+    </g>
+  </g>
+
+  <!-- Single bloom ring echoing the pulse -->
+  <circle cx="100" cy="100" r="58" fill="none" stroke="#FFD23F" stroke-width="1.5">
+    <animate attributeName="r" values="58;58;70;70" keyTimes="0;.1;.4;1" dur="5s" repeatCount="indefinite"/>
+    <animate attributeName="stroke-opacity" values="0;.5;0;0" keyTimes="0;.12;.4;1" dur="5s" repeatCount="indefinite"/>
+  </circle>
+
+  <circle cx="100" cy="100" r="58" fill="none" stroke="#FFFFFF" stroke-opacity=".16" stroke-width="1.5"/>
+  <ellipse cx="100" cy="66" rx="34" ry="14" fill="#FFFFFF" opacity=".08"/>
+</svg>

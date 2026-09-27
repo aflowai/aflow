@@ -1,0 +1,62 @@
+Aflow
+Copyright (C) 2026 Karim Elmansi
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License along
+with this program. If not, see <https://www.gnu.org/licenses/>.
+
+The full licence text is in the LICENSE file at the root of this repository.
+
+
+WHAT THE AGPL ASKS OF YOU
+
+Section 13 is the part that distinguishes the AGPL from the GPL, and the part
+most likely to matter here: if you modify this software and let other people
+interact with it over a network, those users must be offered the source of your
+modified version. Running an unmodified copy, privately or for your own
+organisation, asks nothing of you at all.
+
+
+COMMERCIAL LICENSING
+
+The copyright holder offers this software under a separate commercial licence for
+organisations that cannot accept the AGPL's terms — typically because they wish to
+offer a modified version as a network service without publishing their changes.
+
+Enquiries: support@aflow.ai
+
+The commercial licence covers the same core software. Private extensions
+distributed by the copyright holder — enterprise identity, multi-user
+administration, governance and compliance, managed deployment — are separately
+licensed and are not part of this repository.
+
+
+CONTRIBUTIONS
+
+Contributions are made under the Apache License 2.0, and the project distributes
+them under the licences above. Apache-2.0 grants a sublicensable copyright licence
+and an express patent grant, which is what makes the dual licence possible;
+contributors keep the copyright in their own work. There is nothing to sign. See
+CONTRIBUTING.md.
+
+
+TRADEMARKS
+
+"Aflow" and the Aflow logo are trademarks of the copyright holder. The licence
+granted for the software is not a licence to use the marks. See TRADEMARK.md.
+
+
+THIRD-PARTY SOFTWARE
+
+This software depends on third-party open-source packages, each under its own
+licence. A dependency inventory is published with every release as a CycloneDX
+SBOM, and `yarn third-party-notices` regenerates the attribution list from the
+installed dependency tree.

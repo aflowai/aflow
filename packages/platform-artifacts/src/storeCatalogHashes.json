@@ -1,0 +1,186 @@
+{
+  "airtable": {
+    "version": 2,
+    "contentHash": "a1fca71a28b6f596707f2db8eef9485ebfd7497ed9df0e9b267a63262b7a7cbc"
+  },
+  "alpaca-thesis-trading": {
+    "version": 3,
+    "contentHash": "46bcdc2b3ae61230224ef478bbc323776cd4763beb259431eec156176f6b8e57"
+  },
+  "arxiv": {
+    "version": 2,
+    "contentHash": "670066ac9f320d5dacc69331e5fabc453fca21a8b5715fb7a5d9d1ab3d346a5c"
+  },
+  "bnpl-core": {
+    "version": 1,
+    "contentHash": "a8b610cc8765a892d8f806a0b63664d58d44fe66c4a7e259e9472bf7b53043f1"
+  },
+  "brave-search": {
+    "version": 1,
+    "contentHash": "70f684b9d3e302c3d3c2c87ef6e1e12a0743ffafee17689f6a86aeb0f9ccb593"
+  },
+  "chess": {
+    "version": 7,
+    "contentHash": "320221e837ae20c341bfdd22e965e6065f77150c3309516bb365865077f900f0"
+  },
+  "cloudflare": {
+    "version": 1,
+    "contentHash": "814ea9d7d423194beaa22fd9e22a10053bd5426d3d352de9df4cfbbc044296df"
+  },
+  "coding-pr-loop": {
+    "version": 2,
+    "contentHash": "f3cd4630492963bc7f9bda29157003a10481e21fd383b2bcea844f99afcc18d4"
+  },
+  "etoro-account": {
+    "version": 1,
+    "contentHash": "8daed7b525429e56abebd54c77190861df33446d9cdf6fbf9073cda9284cea87"
+  },
+  "etoro-market-data": {
+    "version": 1,
+    "contentHash": "b9e97ca68211cfe447f3535355a2e6408cf61dd8d4b4d04926d77d0fc2621c2d"
+  },
+  "etoro-trading": {
+    "version": 1,
+    "contentHash": "29f5e8b94cbaa6f8b63768b81eadb6a27e944629fc535a11c4d14c5e5dc8525c"
+  },
+  "eval-authoring": {
+    "version": 16,
+    "contentHash": "acb390b62b0cdc9f0f3e069e2a8bb0f4879c76db4d071616f7195febe750bde2"
+  },
+  "film": {
+    "version": 14,
+    "contentHash": "b5a8cea5bce0579b47863386974e7aadf3cd5115cd56469932f701af8ef8e3d3"
+  },
+  "film-production": {
+    "version": 6,
+    "contentHash": "cb0d47d1b6155ac360c9fbe9f070ca369595501cb6495733eccf852f92bf2188"
+  },
+  "firecrawl": {
+    "version": 2,
+    "contentHash": "db036ed40f89e1e8e6c677c758e172396bd6f6cd7ce7c47b86760f2e6062126a"
+  },
+  "fred": {
+    "version": 1,
+    "contentHash": "b610570fe219f32c317bdd686215aaeb2ee5aa4eb30acf9f0cecca40ac62bc06"
+  },
+  "github": {
+    "version": 2,
+    "contentHash": "4014213e5d9676a9963d12341d19f79c57ea21e476d262adcbe458029800407c"
+  },
+  "gmail": {
+    "version": 1,
+    "contentHash": "9754fc7f1776e41472c5c634b7d3c02e0e6363a3ba307164e9876c5cc1133ef4"
+  },
+  "google-calendar": {
+    "version": 1,
+    "contentHash": "d2d86a13d28c02b9b09d9defc515ad0655afbc791547ea0dea73320b55fa328c"
+  },
+  "google-sheets": {
+    "version": 1,
+    "contentHash": "51458677bb0a298187581816944253878aa132e2aebc7ee9342824ca8f29fb1a"
+  },
+  "jira-cloud": {
+    "version": 2,
+    "contentHash": "221c8f87c802c1a979bdbae7d2f20288409827abf018c886995e15394c17e05f"
+  },
+  "kaggle-competition": {
+    "version": 6,
+    "contentHash": "6318576532d41e9375593a1b1f091fef1f9bc3de8a17aad1a6ad7dc10de4c1ea"
+  },
+  "linear": {
+    "version": 3,
+    "contentHash": "c3a79a3db55d3ef7d221e9d1a1db037aac5507e9b58ae2497378e18cfa75b79b"
+  },
+  "literature-scan": {
+    "version": 6,
+    "contentHash": "5f9151872e93be3bb7ad3b154b9a539677892df0361ad01c2579f227a27b6856"
+  },
+  "local-code-review": {
+    "version": 3,
+    "contentHash": "186a44f8b98d86d9680d36feecc47f3976677baa67fdf514edca389c036a22b0"
+  },
+  "local-publish": {
+    "version": 1,
+    "contentHash": "8ad60866e6308dbd234703c9ee809a5ae1c2036def9cce19fc9c1cc48b5b49ce"
+  },
+  "newsapi": {
+    "version": 1,
+    "contentHash": "5c9759abfed3e6c9a05c87d0eec1da95b863dee64c5c309b1ecca6171f113531"
+  },
+  "notion": {
+    "version": 2,
+    "contentHash": "1f4622cc55a0256ae97b262298150252244736da572bf5e6bc583cdf120a1cbc"
+  },
+  "openweather": {
+    "version": 1,
+    "contentHash": "3bcc85f3a544b181879ff3cbe9e88f2b63da65f346bbffa259092b26e35c28a4"
+  },
+  "polygon": {
+    "version": 2,
+    "contentHash": "238ea76429c1605f37939e4bc19c0afb88d5dab4a711db4a5989e422affd6d32"
+  },
+  "pubmed": {
+    "version": 1,
+    "contentHash": "38d554dcbedf51bc3c939e24467f9ef9db7b9e0692d68ada84f4ba0bd1b7b48e"
+  },
+  "resend": {
+    "version": 2,
+    "contentHash": "c51593f0af693733367a3e23a4e4dda37c2c98a2e205a755cdd06e067b24dc6b"
+  },
+  "semantic-scholar": {
+    "version": 2,
+    "contentHash": "b7cc41086f31e26bb330fd19210e5e9c1a8d6e2fbc45e66dda12c96a2193fcf4"
+  },
+  "sentry": {
+    "version": 1,
+    "contentHash": "197666b538316c09226ba8ad4e08e90277223410dd9edd3d143660cc227a4c45"
+  },
+  "simulated-example": {
+    "version": 1,
+    "contentHash": "8d29b5ec66f4d1d17d0c69153b8ef929fcaa37bc3eb64a2b0052e9ccddf1552a"
+  },
+  "slack": {
+    "version": 2,
+    "contentHash": "565180599e54f0a5fd3466f1bc1afa15015e9f927c6fc5e03ef85ba1034ac81e"
+  },
+  "stripe": {
+    "version": 2,
+    "contentHash": "d319ed8f64df9f61c9e8af4af41a5ec9477c97a3197a7744a5b41f84af8bd1ad"
+  },
+  "test-setup-bundle": {
+    "version": 1,
+    "contentHash": "6a93c9854ed106b357703480d10ddbbe96990795a6d5e79bc72565c235dd2731"
+  },
+  "test-two-skill-bundle": {
+    "version": 1,
+    "contentHash": "69f2564464cbc7dd381b593441120d98cd595a1440b015189dacdcb71d04c6c7"
+  },
+  "ticker-digest": {
+    "version": 4,
+    "contentHash": "ad20f76b8696bbfd544afb522eb6fc0e95769d2228986f3ae6733d3c2f1fbd77"
+  },
+  "twilio": {
+    "version": 2,
+    "contentHash": "25f96af442c54df8881a5dcdd7b275da45f8ce59fafba6a3e158517afd380002"
+  },
+  "vercel": {
+    "version": 1,
+    "contentHash": "bc447732117b201f20a29c46e8b9a2c55bb2744cf61dabfc603a1fbb88796aa6"
+  },
+  "web-research": {
+    "version": 2,
+    "contentHash": "510e57360c1d5184ca7738cf1be04b01642e34c95bb6cbbbedb1a106f5f87e64"
+  },
+  "wikipedia": {
+    "version": 1,
+    "contentHash": "8ecee29d921f5d94c58ce9de9cf24e088534e88918e40d10cda2a6f649c23802"
+  },
+  "work-board": {
+    "version": 2,
+    "contentHash": "52a715bed88a2e281c8c3a82e889480d83ac7611c3c4eda02b83ebfed0cd4a26"
+  },
+  "world-bank": {
+    "version": 1,
+    "contentHash": "b21ad73fffe8cec921e61cfc5a1200640c558a2896d1f0133f365c358b773f92"
+  }
+}

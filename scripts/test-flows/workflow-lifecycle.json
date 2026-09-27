@@ -1,0 +1,188 @@
+{
+  "flowConfig": {
+    "name": "test-workflow-lifecycle",
+    "description": "Integration test: create → start → record tasks → evaluate → learn → complete → get",
+    "startStepId": "create",
+    "stateVariables": {
+      "workflowRunId": {
+        "description": "The run ID from workflow.run.start"
+      }
+    },
+    "steps": [
+      {
+        "stepId": "create",
+        "type": "workflow",
+        "operation": "workflow.manage.put",
+        "name": "Create test workflow",
+        "config": {
+          "slug": "test-lifecycle",
+          "writeMode": "upsert",
+          "name": "Test Lifecycle Workflow",
+          "description": "Integration test for workflow lifecycle",
+          "mode": "optimization",
+          "outcomes": [
+            {
+              "id": "score-target",
+              "name": "Score above threshold",
+              "evaluator": {
+                "type": "threshold",
+                "metric": "score",
+                "operator": "gte",
+                "target": 0.9
+              }
+            }
+          ],
+          "tasks": [
+            {
+              "taskId": "prepare",
+              "name": "Prepare data",
+              "goal": "Prepare and validate the dataset",
+              "type": "agent"
+            },
+            {
+              "taskId": "train",
+              "name": "Train model",
+              "goal": "Train the model on prepared data",
+              "type": "agent",
+              "dependsOn": ["prepare"],
+              "metrics": ["score"]
+            },
+            {
+              "taskId": "review",
+              "name": "Human review",
+              "goal": "Review model results before submission",
+              "type": "human",
+              "dependsOn": ["train"],
+              "optional": true
+            }
+          ],
+          "status": "approved"
+        },
+        "onSuccess": {
+          "next": [{ "stepId": "start-run", "priority": 1 }]
+        }
+      },
+      {
+        "stepId": "start-run",
+        "type": "workflow",
+        "operation": "workflow.run.start",
+        "name": "Start workflow run",
+        "config": {
+          "slug": "test-lifecycle"
+        },
+        "outputMapping": {
+          "runId": "state.workflowRunId"
+        },
+        "onSuccess": {
+          "next": [{ "stepId": "record-prepare", "priority": 1 }]
+        }
+      },
+      {
+        "stepId": "record-prepare",
+        "type": "workflow",
+        "operation": "workflow.run.record_task",
+        "name": "Record prepare task completion",
+        "config": {
+          "slug": "test-lifecycle",
+          "taskId": "prepare",
+          "status": "completed",
+          "summary": "Dataset prepared with 261 features"
+        },
+        "onSuccess": {
+          "next": [{ "stepId": "record-train", "priority": 1 }]
+        }
+      },
+      {
+        "stepId": "record-train",
+        "type": "workflow",
+        "operation": "workflow.run.record_task",
+        "name": "Record train task completion",
+        "config": {
+          "slug": "test-lifecycle",
+          "taskId": "train",
+          "status": "completed",
+          "summary": "Model trained, RMSLE=0.123",
+          "metrics": { "score": 0.95 }
+        },
+        "onSuccess": {
+          "next": [{ "stepId": "evaluate", "priority": 1 }]
+        }
+      },
+      {
+        "stepId": "evaluate",
+        "type": "workflow",
+        "operation": "workflow.evaluate",
+        "name": "Evaluate outcomes",
+        "config": {
+          "slug": "test-lifecycle",
+          "metrics": { "score": 0.95 }
+        },
+        "onSuccess": {
+          "next": [{ "stepId": "learn", "priority": 1 }]
+        }
+      },
+      {
+        "stepId": "learn",
+        "type": "workflow",
+        "operation": "workflow.learn",
+        "name": "Record learnings",
+        "config": {
+          "slug": "test-lifecycle",
+          "runId": "${state.workflowRunId}",
+          "learnings": [
+            {
+              "id": "l1",
+              "category": "worked",
+              "observation": "Full feature set (261) outperforms pruned set",
+              "confidence": "high",
+              "source": "agent",
+              "evidence": {
+                "runId": "${state.workflowRunId}",
+                "metrics": { "score": 0.95 }
+              }
+            },
+            {
+              "id": "l2",
+              "category": "hypothesis",
+              "observation": "CatBoost may improve ensemble",
+              "recommendation": "Add CatBoost as 6th model in next iteration",
+              "confidence": "medium",
+              "source": "agent",
+              "evidence": {
+                "runId": "${state.workflowRunId}"
+              }
+            }
+          ]
+        },
+        "onSuccess": {
+          "next": [{ "stepId": "complete-run", "priority": 1 }]
+        }
+      },
+      {
+        "stepId": "complete-run",
+        "type": "workflow",
+        "operation": "workflow.run.complete",
+        "name": "Complete the run",
+        "config": {
+          "slug": "test-lifecycle",
+          "status": "completed"
+        },
+        "onSuccess": {
+          "next": [{ "stepId": "get-workflow", "priority": 1 }]
+        }
+      },
+      {
+        "stepId": "get-workflow",
+        "type": "workflow",
+        "operation": "workflow.manage.get",
+        "name": "Verify workflow state",
+        "config": {
+          "slug": "test-lifecycle",
+          "includeLedgerSummary": true,
+          "ledgerMaxEntries": 5
+        }
+      }
+    ]
+  },
+  "input": {}
+}

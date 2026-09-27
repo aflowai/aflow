@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">
+  <title>Orb: searching (light)</title>
+  <defs>
+    <radialGradient id="osl-base" cx="50%" cy="44%" r="60%">
+      <stop offset="0%" stop-color="#F0F6FA"/>
+      <stop offset="100%" stop-color="#C4D8E8"/>
+    </radialGradient>
+    <radialGradient id="osl-halo" cx="50%" cy="50%" r="50%">
+      <stop offset="62%" stop-color="#2C9A8E" stop-opacity="0"/>
+      <stop offset="84%" stop-color="#2C9A8E" stop-opacity=".14"/>
+      <stop offset="100%" stop-color="#2C9A8E" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="osl-beam" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#2C9A8E" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#1E7A70" stop-opacity=".45"/>
+    </linearGradient>
+    <filter id="osl-blur" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="13"/>
+    </filter>
+    <clipPath id="osl-clip"><circle cx="100" cy="100" r="58"/></clipPath>
+  </defs>
+
+  <circle cx="100" cy="100" r="74" fill="url(#osl-halo)"/>
+  <circle cx="100" cy="100" r="58" fill="url(#osl-base)"/>
+
+  <g clip-path="url(#osl-clip)">
+    <g transform="translate(100 100)">
+      <g>
+        <animateTransform attributeName="transform" type="rotate" values="0;360" dur="17s" repeatCount="indefinite"/>
+        <ellipse cx="16" cy="6" rx="34" ry="24" fill="#4A72C4" opacity=".42" filter="url(#osl-blur)"/>
+      </g>
+      <g>
+        <animateTransform attributeName="transform" type="rotate" values="360;0" dur="13s" repeatCount="indefinite"/>
+        <ellipse cx="-16" cy="-10" rx="28" ry="20" fill="#2C9A8E" opacity=".42" filter="url(#osl-blur)"/>
+      </g>
+      <g>
+        <animateTransform attributeName="transform" type="rotate" values="0;360" dur="3.6s" repeatCount="indefinite"/>
+        <path d="M0 0 L0 -58 A58 58 0 0 1 29 -50 Z" fill="url(#osl-beam)"/>
+        <path d="M0 0 L0 -58" stroke="#1E7A70" stroke-width="2" stroke-opacity=".75"/>
+      </g>
+      <g fill="none" stroke="#1E7A70" stroke-opacity=".2">
+        <circle r="20"/>
+        <circle r="36"/>
+        <circle r="50"/>
+      </g>
+      <g fill="#1E7A70">
+        <circle cx="26" cy="-20" r="2.5" opacity="0">
+          <animate attributeName="opacity" values="0;1;0;0" keyTimes="0;.06;.5;1" begin=".35s" dur="3.6s" repeatCount="indefinite"/>
+        </circle>
+        <circle cx="-30" cy="14" r="2" opacity="0">
+          <animate attributeName="opacity" values="0;1;0;0" keyTimes="0;.06;.5;1" begin="2.15s" dur="3.6s" repeatCount="indefinite"/>
+        </circle>
+        <circle cx="-8" cy="-38" r="2" opacity="0">
+          <animate attributeName="opacity" values="0;1;0;0" keyTimes="0;.06;.5;1" begin="3.35s" dur="3.6s" repeatCount="indefinite"/>
+        </circle>
+      </g>
+    </g>
+  </g>
+
+  <circle cx="100" cy="100" r="58" fill="none" stroke="#3A5A70" stroke-opacity=".22" stroke-width="1.5"/>
+  <ellipse cx="100" cy="64" rx="28" ry="10" fill="#F5FBFF" opacity=".28"/>
+</svg>

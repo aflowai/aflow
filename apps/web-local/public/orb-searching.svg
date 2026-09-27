@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">
+  <title>Orb: searching</title>
+  <defs>
+    <radialGradient id="os-base" cx="50%" cy="44%" r="60%">
+      <stop offset="0%" stop-color="#22304F"/>
+      <stop offset="100%" stop-color="#101728"/>
+    </radialGradient>
+    <radialGradient id="os-halo" cx="50%" cy="50%" r="50%">
+      <stop offset="62%" stop-color="#4FB3A9" stop-opacity="0"/>
+      <stop offset="84%" stop-color="#4FB3A9" stop-opacity=".18"/>
+      <stop offset="100%" stop-color="#4FB3A9" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="os-beam" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#7FD4CB" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#7FD4CB" stop-opacity=".55"/>
+    </linearGradient>
+    <filter id="os-blur" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="13"/>
+    </filter>
+    <clipPath id="os-clip"><circle cx="100" cy="100" r="58"/></clipPath>
+  </defs>
+
+  <circle cx="100" cy="100" r="74" fill="url(#os-halo)"/>
+  <circle cx="100" cy="100" r="58" fill="url(#os-base)"/>
+
+  <g clip-path="url(#os-clip)">
+    <!-- Quiet cool aurora underneath -->
+    <g transform="translate(100 100)">
+      <g>
+        <animateTransform attributeName="transform" type="rotate" values="0;360" dur="17s" repeatCount="indefinite"/>
+        <ellipse cx="16" cy="6" rx="34" ry="24" fill="#3D6BD9" opacity=".45" filter="url(#os-blur)"/>
+      </g>
+      <g>
+        <animateTransform attributeName="transform" type="rotate" values="360;0" dur="13s" repeatCount="indefinite"/>
+        <ellipse cx="-16" cy="-10" rx="28" ry="20" fill="#4FB3A9" opacity=".4" filter="url(#os-blur)"/>
+      </g>
+
+      <!-- Radar beam sweeping the face -->
+      <g>
+        <animateTransform attributeName="transform" type="rotate" values="0;360" dur="3.6s" repeatCount="indefinite"/>
+        <path d="M0 0 L0 -58 A58 58 0 0 1 29 -50 Z" fill="url(#os-beam)"/>
+        <path d="M0 0 L0 -58" stroke="#A8EFE7" stroke-width="2" stroke-opacity=".8"/>
+      </g>
+
+      <!-- Faint concentric scan rings -->
+      <g fill="none" stroke="#7FD4CB" stroke-opacity=".14">
+        <circle r="20"/>
+        <circle r="36"/>
+        <circle r="50"/>
+      </g>
+
+      <!-- Blips: light up as the beam passes, then fade -->
+      <g fill="#A8EFE7">
+        <circle cx="26" cy="-20" r="2.5" opacity="0">
+          <animate attributeName="opacity" values="0;1;0;0" keyTimes="0;.06;.5;1" begin=".35s" dur="3.6s" repeatCount="indefinite"/>
+        </circle>
+        <circle cx="-30" cy="14" r="2" opacity="0">
+          <animate attributeName="opacity" values="0;1;0;0" keyTimes="0;.06;.5;1" begin="2.15s" dur="3.6s" repeatCount="indefinite"/>
+        </circle>
+        <circle cx="-8" cy="-38" r="2" opacity="0">
+          <animate attributeName="opacity" values="0;1;0;0" keyTimes="0;.06;.5;1" begin="3.35s" dur="3.6s" repeatCount="indefinite"/>
+        </circle>
+      </g>
+    </g>
+  </g>
+
+  <circle cx="100" cy="100" r="58" fill="none" stroke="#FFFFFF" stroke-opacity=".14" stroke-width="1.5"/>
+  <ellipse cx="100" cy="66" rx="34" ry="14" fill="#FFFFFF" opacity=".07"/>
+</svg>

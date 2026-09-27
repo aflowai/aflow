@@ -1,0 +1,215 @@
+{
+  "version": 1,
+  "capturedAt": "2026-06-06T12:48:22.171Z",
+  "thresholds": {
+    "warnLines": 800,
+    "hardLines": 1500,
+    "growthToleranceLines": 50
+  },
+  "files": {
+    "apps/aflow-executor-ai/src/handlers/conversationStateStore.ts": {
+      "lines": 1157,
+      "category": "production"
+    },
+    "apps/aflow-executor-compute/src/handlers/computeExecHandler.ts": {
+      "lines": 1202,
+      "category": "production"
+    },
+    "apps/aflow-executor-compute/src/handlers/sessionManager.ts": {
+      "lines": 1324,
+      "category": "production"
+    },
+    "apps/aflow-executor-compute/src/handlers/workspaceManager.ts": {
+      "lines": 1373,
+      "category": "production"
+    },
+    "apps/aflow-executor-mcp/src/handlers/mcpHandler.ts": {
+      "lines": 1633,
+      "category": "production"
+    },
+    "apps/aflow-executor-ui/src/handlers/uiArtifactHandler.ts": {
+      "lines": 2395,
+      "category": "production"
+    },
+    "apps/aflow-orchestrator/src/services/SessionOrchestrator/handlers/applyAgentDecision.ts": {
+      "lines": 2061,
+      "category": "production"
+    },
+    "apps/aflow-orchestrator/src/services/SessionOrchestrator/handlers/applyStepSucceeded.ts": {
+      "lines": 995,
+      "category": "production"
+    },
+    "apps/aflow-orchestrator/src/services/SessionOrchestrator/handlers/delegationPendingDrain.ts": {
+      "lines": 922,
+      "category": "production"
+    },
+    "apps/aflow-orchestrator/src/services/SessionOrchestrator/handlers/inlineOps/apiAdmin.ts": {
+      "lines": 983,
+      "category": "production"
+    },
+    "apps/aflow-orchestrator/src/services/SessionOrchestrator/handlers/inlineOps/coachCrud.ts": {
+      "lines": 1969,
+      "category": "production"
+    },
+    "apps/aflow-orchestrator/src/services/SessionOrchestrator/handlers/inlineOps/scheduleCrud.ts": {
+      "lines": 936,
+      "category": "production"
+    },
+    "apps/aflow-orchestrator/src/services/SessionOrchestrator/helpers/agentTurn.ts": {
+      "lines": 2683,
+      "category": "production"
+    },
+    "apps/aflow-orchestrator/src/services/SessionOrchestrator/scheduling/applyResult.ts": {
+      "lines": 1316,
+      "category": "production"
+    },
+    "apps/server/src/routes/workflows.ts": {
+      "lines": 1298,
+      "category": "production"
+    },
+    "apps/web/src/app/(dashboard)/agents/_components/InspectorPanel/StepInspector.tsx": {
+      "lines": 918,
+      "category": "production"
+    },
+    "apps/web/src/app/(dashboard)/agents/_components/VariablesPanel.tsx": {
+      "lines": 1023,
+      "category": "production"
+    },
+    "apps/web/src/app/(dashboard)/chat/_components/ChatInputArea.tsx": {
+      "lines": 1234,
+      "category": "production"
+    },
+    "apps/web/src/app/(dashboard)/s/[space]/settings/compute/page.tsx": {
+      "lines": 961,
+      "category": "production"
+    },
+    "apps/web/src/app/(dashboard)/s/[space]/settings/cybernetic/page.tsx": {
+      "lines": 1474,
+      "category": "production"
+    },
+    "apps/web/src/app/(dashboard)/settings/access-control/page.tsx": {
+      "lines": 924,
+      "category": "production"
+    },
+    "apps/web/src/components/data-table.tsx": {
+      "lines": 926,
+      "category": "production"
+    },
+    "apps/web/src/components/entity-console-panel.tsx": {
+      "lines": 1142,
+      "category": "production"
+    },
+    "apps/web/src/components/surface-renderer/component-registry.tsx": {
+      "lines": 1149,
+      "category": "production"
+    },
+    "apps/web/src/components/workflow-health-tab.tsx": {
+      "lines": 1067,
+      "category": "production"
+    },
+    "packages/ai-client/src/providers/google.ts": {
+      "lines": 1232,
+      "category": "production"
+    },
+    "packages/ai-client/src/providers/openai.ts": {
+      "lines": 1092,
+      "category": "production"
+    },
+    "packages/cybernetic-runtime/src/activeSurface.ts": {
+      "lines": 1188,
+      "category": "production"
+    },
+    "packages/cybernetic-runtime/src/attentionBuilder.ts": {
+      "lines": 1052,
+      "category": "production"
+    },
+    "packages/cybernetic-runtime/src/coachTrigger.ts": {
+      "lines": 1130,
+      "category": "production"
+    },
+    "packages/cybernetic-runtime/src/evalRunner.ts": {
+      "lines": 1352,
+      "category": "production"
+    },
+    "packages/cybernetic-runtime/src/skillLifecycle.ts": {
+      "lines": 1134,
+      "category": "production"
+    },
+    "packages/cybernetic-runtime/src/spaceLifecycle.ts": {
+      "lines": 1170,
+      "category": "production"
+    },
+    "packages/database/src/repositories/memory.ts": {
+      "lines": 936,
+      "category": "production"
+    },
+    "packages/database/src/repositories/memoryDocs.ts": {
+      "lines": 1466,
+      "category": "production"
+    },
+    "packages/design-system/src/registry.ts": {
+      "lines": 1524,
+      "category": "production"
+    },
+    "packages/platform-artifacts/src/capabilityAgents.ts": {
+      "lines": 1435,
+      "category": "production"
+    },
+    "packages/platform-artifacts/src/cyberneticAgents.ts": {
+      "lines": 1324,
+      "category": "production"
+    },
+    "packages/platform-artifacts/src/skillBundleCatalog.ts": {
+      "lines": 966,
+      "category": "production"
+    },
+    "packages/platform-artifacts/src/skillBundles.ts": {
+      "lines": 927,
+      "category": "production"
+    },
+    "packages/schemas/src/cybernetic/stagedChange.ts": {
+      "lines": 1538,
+      "category": "production"
+    },
+    "packages/schemas/src/operations/learner.ts": {
+      "lines": 1017,
+      "category": "production"
+    },
+    "packages/schemas/src/operations/mcp.ts": {
+      "lines": 962,
+      "category": "production"
+    },
+    "packages/schemas/src/operations/platform.ts": {
+      "lines": 1416,
+      "category": "production"
+    },
+    "packages/schemas/src/operations/ui.ts": {
+      "lines": 1000,
+      "category": "production"
+    },
+    "packages/schemas/src/runtime/agentTurn.ts": {
+      "lines": 1075,
+      "category": "production"
+    },
+    "packages/server-runtime/src/routes/admin.ts": {
+      "lines": 1100,
+      "category": "production"
+    },
+    "packages/server-runtime/src/routes/flows.ts": {
+      "lines": 1032,
+      "category": "production"
+    },
+    "packages/server-runtime/src/routes/runs.ts": {
+      "lines": 1299,
+      "category": "production"
+    },
+    "packages/server-runtime/src/services/sessions.ts": {
+      "lines": 2012,
+      "category": "production"
+    },
+    "packages/ui-artifact-compiler/src/compiler.ts": {
+      "lines": 1018,
+      "category": "production"
+    }
+  }
+}

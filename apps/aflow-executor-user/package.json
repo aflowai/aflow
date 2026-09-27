@@ -1,0 +1,38 @@
+{
+  "name": "@aflow/aflow-executor-user",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "npx tsc",
+    "dev": "NODE_OPTIONS='--conditions=ts-source' npx tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "lint": "eslint src",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@aflow/credential-resolver": "workspace:*",
+    "@aflow/database": "workspace:*",
+    "@aflow/executor-runtime": "workspace:*",
+    "@aflow/lib": "workspace:*",
+    "@aflow/observability": "workspace:*",
+    "@aflow/payload-store": "workspace:*",
+    "@aflow/redis": "workspace:*",
+    "@aflow/schemas": "workspace:*",
+    "html-to-text": "^9.0.5",
+    "marked": "^17.0.4",
+    "nodemailer": "^9.1.1",
+    "sanitize-html": "^2.17.7"
+  },
+  "devDependencies": {
+    "@types/html-to-text": "^9.0.4",
+    "@types/node": "^22.15.3",
+    "@types/nodemailer": "^7.0.11",
+    "@types/sanitize-html": "^2.16.1",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3",
+    "vitest": "^4.1.11"
+  }
+}

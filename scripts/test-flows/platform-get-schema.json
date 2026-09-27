@@ -1,0 +1,19 @@
+{
+  "flowConfig": {
+    "name": "platform-get-schema-only",
+    "startStepId": "start",
+    "steps": [
+      {
+        "stepId": "start",
+        "type": "platform",
+        "operation": "platform.get_schema",
+        "name": "Get schema",
+        "config": {
+          "stepTypes": ["ai", "memory"],
+          "operationIds": []
+        }
+      }
+    ]
+  },
+  "input": {}
+}

@@ -1,0 +1,104 @@
+{
+  "flowId": "mcp-assistant",
+  "metadata": {
+    "name": "MCP General Assistant",
+    "description": "General-purpose assistant for MCP-connected coding agents. Manages spaces, browses flows and APIs, queries the catalog, and answers platform questions.",
+    "tags": ["mcp", "system"]
+  },
+  "stateVariables": [
+    {
+      "variableId": "result",
+      "name": "Result",
+      "typeSchema": {
+        "type": "string"
+      },
+      "semanticType": "json",
+      "lifecycle": {
+        "isInput": false,
+        "isOutput": true,
+        "persistOnPause": true
+      }
+    },
+    {
+      "variableId": "prompt",
+      "name": "Prompt",
+      "typeSchema": {
+        "type": "string"
+      },
+      "semanticType": "text",
+      "lifecycle": {
+        "isInput": true,
+        "isOutput": false,
+        "persistOnPause": true
+      }
+    }
+  ],
+  "steps": [
+    {
+      "stepId": "ai-1",
+      "stepType": "ai",
+      "operation": "ai.agent.turn",
+      "name": "Assistant",
+      "config": {
+        "goal": "${state.prompt}",
+        "model": "openai/gpt-oss-120b",
+        "prompt": "${state.prompt}",
+        "catalog": {
+          "stepTypes": ["platform", "api", "memory"]
+        },
+        "temperature": 0,
+        "systemPrompt": "You are a platform assistant that helps users by answering questions and using the available tools. Keep the conversation going until the user asks you to end it. Use the tools as needed and provide answers and acknowledgment, and once done ask the user if they need anything else. When calling flow.control.run_step, pass operationId and wrap the operation-specific parameters in the `inputs` object."
+      },
+      "onSuccess": {
+        "next": [
+          {
+            "stepId": "flow-1",
+            "priority": 50
+          }
+        ]
+      },
+      "onFailure": {
+        "next": [
+          {
+            "stepId": "ai-1",
+            "priority": 50
+          }
+        ]
+      }
+    },
+    {
+      "stepId": "flow-1",
+      "stepType": "flow",
+      "operation": "flow.control.run_step",
+      "name": "Run Step",
+      "config": {
+        "operationId": "${input.operationId}"
+      },
+      "outputMapping": {
+        "result": "state.result"
+      },
+      "outputOptions": {
+        "displayToUser": true
+      },
+      "tags": [],
+      "onSuccess": {
+        "next": [
+          {
+            "stepId": "ai-1",
+            "priority": 50
+          }
+        ]
+      },
+      "onFailure": {
+        "next": [
+          {
+            "stepId": "ai-1",
+            "priority": 50
+          }
+        ]
+      }
+    }
+  ],
+  "startStepId": "ai-1",
+  "supportedModes": ["chat", "mcp"]
+}

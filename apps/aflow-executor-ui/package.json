@@ -1,0 +1,38 @@
+{
+  "name": "@aflow/aflow-executor-ui",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "npx tsc",
+    "dev": "NODE_OPTIONS='--conditions=ts-source' npx tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "lint": "eslint src",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@aflow/ai-client": "workspace:*",
+    "@aflow/applet-runtime": "workspace:*",
+    "@aflow/cybernetic-runtime": "workspace:*",
+    "@aflow/database": "workspace:*",
+    "@aflow/design-system": "workspace:*",
+    "@aflow/executor-runtime": "workspace:*",
+    "@aflow/lib": "workspace:*",
+    "@aflow/observability": "workspace:*",
+    "@aflow/payload-store": "workspace:*",
+    "@aflow/redis": "workspace:*",
+    "@aflow/schemas": "workspace:*",
+    "@aflow/surface-engine": "workspace:*",
+    "@aflow/ui-artifact-compiler": "workspace:*",
+    "ajv": "^8.20.0",
+    "esbuild": "^0.28.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3",
+    "vitest": "^4.1.11"
+  }
+}

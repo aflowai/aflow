@@ -1,0 +1,44 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "composite": true,
+    "declaration": true,
+    "declarationMap": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts"],
+  "references": [
+    {
+      "path": "../../packages/ai-client"
+    },
+    {
+      "path": "../../packages/credential-resolver"
+    },
+    {
+      "path": "../../packages/database"
+    },
+    {
+      "path": "../../packages/executor-runtime"
+    },
+    {
+      "path": "../../packages/lib"
+    },
+    {
+      "path": "../../packages/memory-paths"
+    },
+    {
+      "path": "../../packages/observability"
+    },
+    {
+      "path": "../../packages/payload-store"
+    },
+    {
+      "path": "../../packages/redis"
+    },
+    {
+      "path": "../../packages/schemas"
+    }
+  ]
+}

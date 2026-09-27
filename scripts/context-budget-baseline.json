@@ -1,0 +1,97 @@
+{
+  "version": 1,
+  "thresholds": {
+    "growthTolerancePct": 10,
+    "totalGrowthTolerancePct": 4,
+    "minComponentTokens": 50
+  },
+  "components": {
+    "tools.helmsman.resolvedOps": {
+      "tokens": 24,
+      "group": "tools"
+    },
+    "tools.helmsman.native_fc": {
+      "tokens": 7780,
+      "group": "tools"
+    },
+    "tools.helmsman.generate_json": {
+      "tokens": 7642,
+      "group": "tools"
+    },
+    "tools.coach.resolvedOps": {
+      "tokens": 13,
+      "group": "tools"
+    },
+    "tools.coach.native_fc": {
+      "tokens": 23381,
+      "group": "tools"
+    },
+    "tools.coach.generate_json": {
+      "tokens": 22929,
+      "group": "tools"
+    },
+    "helmsmanPrompt.cognitiveFrame": {
+      "tokens": 621,
+      "group": "helmsmanPrompt"
+    },
+    "helmsmanPrompt.registerMapping": {
+      "tokens": 4250,
+      "group": "helmsmanPrompt"
+    },
+    "helmsmanPrompt.linking": {
+      "tokens": 363,
+      "group": "helmsmanPrompt"
+    },
+    "helmsmanPrompt.rendering": {
+      "tokens": 742,
+      "group": "helmsmanPrompt"
+    },
+    "helmsmanPrompt.evidenceDirective": {
+      "tokens": 225,
+      "group": "helmsmanPrompt"
+    },
+    "helmsmanPrompt.governance": {
+      "tokens": 100,
+      "group": "helmsmanPrompt"
+    },
+    "helmsmanPrompt.selfModel": {
+      "tokens": 88,
+      "group": "helmsmanPrompt"
+    },
+    "runnerPrompt.total": {
+      "tokens": 2196,
+      "group": "runnerPrompt"
+    },
+    "spaceContextGuidance.memory": {
+      "tokens": 164,
+      "group": "spaceContextGuidance"
+    },
+    "spaceContextGuidance.integrations": {
+      "tokens": 198,
+      "group": "spaceContextGuidance"
+    },
+    "spaceContextGuidance.repositories": {
+      "tokens": 106,
+      "group": "spaceContextGuidance"
+    },
+    "spaceContextGuidance.skills": {
+      "tokens": 418,
+      "group": "spaceContextGuidance"
+    },
+    "spaceContextGuidance.compute": {
+      "tokens": 317,
+      "group": "spaceContextGuidance"
+    },
+    "worstCase.pinnedSurface": {
+      "tokens": 29445,
+      "group": "worstCase"
+    }
+  },
+  "totals": {
+    "tools": 61769,
+    "helmsmanPrompt": 6389,
+    "runnerPrompt": 2196,
+    "spaceContextGuidance": 1203,
+    "worstCase": 29445
+  }
+}

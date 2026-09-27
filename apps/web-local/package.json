@@ -1,0 +1,27 @@
+{
+  "name": "@aflow/web-local",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "NODE_ENV=production next build",
+    "start": "next start",
+    "dev": "rm -rf .next-dev && NEXT_DIST_DIR=.next-dev next dev --port ${WEB_DEV_PORT:-3002}",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@aflow/design-system": "workspace:*",
+    "@aflow/web-product": "workspace:*",
+    "@tanstack/react-query": "^5.62.0",
+    "next": "^16.3.4",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.32",
+    "@types/react": "^19.2.9",
+    "typescript": "^5.8.3",
+    "vitest": "^4.1.11"
+  }
+}

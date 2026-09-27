@@ -1,0 +1,298 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`buildAgentTurnInput — baseline shape > assembles a minimal turn 1`] = `
+{
+  "agentName": "Characterization Agent",
+  "agentRole": "assistant",
+  "completionPolicy": "open_ended",
+  "contextBlocks": [
+    {
+      "cacheHint": "run_stable",
+      "content": {
+        "flow": {
+          "id": "characterization-agent",
+          "name": "Characterization Agent",
+        },
+        "stepId": "agent",
+      },
+      "key": "FlowRunContext",
+    },
+  ],
+  "contextProfile": "default",
+  "extraKeys": [
+    "agentDescription",
+  ],
+  "newToolResults": undefined,
+  "policy": {
+    "allowComplete": false,
+    "allowParallel": false,
+    "maxToolCallsPerTurn": 5,
+  },
+  "prompt": "",
+  "requestInputPolicy": "allowed",
+  "systemPrompt": "You are a capable agent. Analyze the request and decide the best action to take.",
+  "toolSurfaceContext": {
+    "scope": {
+      "pinnedMax": 50,
+      "pinnedUsed": 1,
+      "virtualMax": 20,
+      "virtualUsed": 0,
+    },
+  },
+  "tools": [
+    {
+      "kind": "virtual",
+      "lowering": "run_step",
+      "schema": "dd2577a901",
+      "source": "core",
+      "toolId": "memory.run_output.get",
+    },
+  ],
+  "totalToolCallsSoFar": 0,
+  "turnNumber": 0,
+}
+`;
+
+exports[`buildAgentTurnInput — baseline shape > emits no unprojected top-level keys 1`] = `
+[
+  "agentDescription",
+]
+`;
+
+exports[`buildAgentTurnInput — context blocks from config > emits one block per resolved context entry 1`] = `
+[
+  {
+    "cacheHint": undefined,
+    "content": "the brief",
+    "key": "Briefing",
+  },
+  {
+    "cacheHint": undefined,
+    "content": {
+      "count": 3,
+    },
+    "key": "Numbers",
+  },
+]
+`;
+
+exports[`buildAgentTurnInput — every tool source reaches the surface > keeps every source distinguishable on the surface it hands the model 1`] = `
+[
+  {
+    "lowering": "run_step",
+    "toolId": "memory.store.put",
+  },
+  {
+    "lowering": "run_step",
+    "toolId": "memory.run_output.get",
+  },
+  {
+    "lowering": "delegate",
+    "toolId": "helmsman",
+  },
+  {
+    "lowering": "api_call",
+    "toolId": "api:billing-api/listInvoices",
+  },
+  {
+    "lowering": "mcp_call",
+    "toolId": "mcp:kaggle/search_competitions",
+  },
+  {
+    "lowering": "run_step",
+    "toolId": "applet:film-editor/add_shot",
+  },
+  {
+    "lowering": "mcp_call",
+    "toolId": "mcp:always-on-srv/ping",
+  },
+]
+`;
+
+exports[`buildAgentTurnInput — every tool source reaches the surface > orders the surface by source, API before MCP 1`] = `
+[
+  "memory.run_output.get",
+  "api:billing-api/listInvoices",
+  "mcp:kaggle/search_competitions",
+]
+`;
+
+exports[`buildAgentTurnInput — prompt and policy knobs > carries systemPrompt, prompt and goal from step config 1`] = `
+{
+  "blocks": [
+    "FlowRunContext",
+  ],
+  "prompt": "Do the thing.",
+  "systemPrompt": "You are a fixture.",
+}
+`;
+
+exports[`buildAgentTurnInput — prompt and policy knobs > defaults policy by agent role 1`] = `
+{
+  "assistant": {
+    "completionPolicy": "open_ended",
+    "requestInputPolicy": "allowed",
+  },
+  "subagent": {
+    "completionPolicy": "must_complete_or_block",
+    "requestInputPolicy": "blocked_only",
+  },
+}
+`;
+
+exports[`buildAgentTurnInput — prompt and policy knobs > honours contextProfile=debug 1`] = `
+{
+  "blocks": [
+    "FlowRunContext",
+    "TurnContext",
+  ],
+  "contextProfile": "debug",
+}
+`;
+
+exports[`buildAgentTurnInput — prompt and policy knobs > honours contextProfile=default 1`] = `
+{
+  "blocks": [
+    "FlowRunContext",
+  ],
+  "contextProfile": "default",
+}
+`;
+
+exports[`buildAgentTurnInput — prompt and policy knobs > honours contextProfile=detailed 1`] = `
+{
+  "blocks": [
+    "FlowRunContext",
+  ],
+  "contextProfile": "detailed",
+}
+`;
+
+exports[`buildAgentTurnInput — prompt and policy knobs > honours contextProfile=minimal 1`] = `
+{
+  "blocks": [
+    "FlowRunContext",
+  ],
+  "contextProfile": "minimal",
+}
+`;
+
+exports[`buildAgentTurnInput — prompt and policy knobs > reflects the two authored turnPolicy overrides 1`] = `
+{
+  "allowComplete": false,
+  "allowParallel": true,
+  "maxToolCallsPerTurn": 12,
+}
+`;
+
+exports[`buildAgentTurnInput — run context > marks the turn as voice-driven from either the flag or the trigger 1`] = `
+{
+  "neither": [
+    "FlowRunContext",
+  ],
+  "viaFlag": [
+    "FlowRunContext",
+    "VoiceMode",
+  ],
+  "viaTrigger": [
+    "FlowRunContext",
+    "VoiceMode",
+  ],
+}
+`;
+
+exports[`buildAgentTurnInput — run context > projects flow context details into the run context block 1`] = `
+{
+  "cacheHint": "run_stable",
+  "content": {
+    "flow": {
+      "id": "characterization-agent",
+      "name": "Characterization Agent",
+    },
+    "space": {
+      "id": "space-1",
+      "name": "Fixture Space",
+    },
+    "stepId": "agent",
+    "tenantId": "a0000000-0000-0000-0000-000000000001",
+    "user": {
+      "id": "user-1",
+      "name": "Fixture User",
+    },
+  },
+  "key": "FlowRunContext",
+}
+`;
+
+exports[`buildAgentTurnInput — tool surface assembly > admits cached MCP tool specs without a database read 1`] = `
+[
+  "memory.run_output.get",
+  "mcp:kaggle-default/search_competitions",
+  "mcp:kaggle-default/download_dataset",
+]
+`;
+
+exports[`buildAgentTurnInput — tool surface assembly > admits fresh cached API tool specs without a database read 1`] = `
+[
+  "memory.run_output.get",
+  "api:billing-api/listInvoices",
+  "api:billing-api/getInvoice",
+]
+`;
+
+exports[`buildAgentTurnInput — tool surface assembly > caps discovered virtual tools without evicting pinned core operations 1`] = `
+{
+  "scope": {
+    "pinnedMax": 50,
+    "pinnedUsed": 2,
+    "virtualMax": 20,
+    "virtualUsed": 20,
+  },
+}
+`;
+
+exports[`buildAgentTurnInput — tool surface assembly > pins catalog.coreOperations onto the surface 1`] = `
+[
+  "memory.store.put",
+  "memory.store.get",
+]
+`;
+
+exports[`buildAgentTurnInput — turn continuity > folds prior tool results into the turn as envelopes 1`] = `
+[
+  {
+    "durationMs": 12,
+    "kind": "tool_result",
+    "operationId": "memory.store.get",
+    "status": "SUCCEEDED",
+    "summary": "read one document",
+    "toolCallId": "call-1",
+    "toolName": "memory_store_get",
+  },
+  {
+    "error": {
+      "code": "permission",
+      "message": "denied",
+      "retryable": false,
+    },
+    "kind": "tool_result",
+    "nextExpectedFromAgent": [
+      {
+        "action": "retry",
+        "note": "Correct the arguments per the error message and retry, or try a different approach.",
+      },
+    ],
+    "operationId": "memory.store.put",
+    "status": "FAILED",
+    "toolCallId": "call-2",
+    "toolName": "memory_store_put",
+  },
+]
+`;
+
+exports[`buildAgentTurnInput — turn continuity > reads turn number and cumulative tool calls from runtime state 1`] = `
+{
+  "totalToolCallsSoFar": 19,
+  "turnNumber": 7,
+}
+`;

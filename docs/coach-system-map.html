@@ -1,0 +1,662 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Coach System Map — what exists today</title>
+    <style>
+      :root {
+        --bg: #0f1115;
+        --panel: #171a21;
+        --panel2: #1e222b;
+        --ink: #e6e9ef;
+        --muted: #9aa3b2;
+        --line: #2a2f3a;
+        --accent: #5aa7ff;
+        --green: #54c08a;
+        --amber: #e0b252;
+        --red: #e0726a;
+        --purple: #b08cff;
+        --mono: 'SF Mono', ui-monospace, Menlo, Consolas, monospace;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font:
+          14px/1.5 -apple-system,
+          Segoe UI,
+          Roboto,
+          sans-serif;
+        padding: 28px 32px 80px;
+      }
+      h1 {
+        font-size: 22px;
+        margin: 0 0 4px;
+      }
+      h2 {
+        font-size: 16px;
+        margin: 30px 0 10px;
+        padding-bottom: 6px;
+        border-bottom: 1px solid var(--line);
+        color: var(--accent);
+      }
+      h3 {
+        font-size: 13px;
+        margin: 16px 0 6px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      .sub {
+        color: var(--muted);
+        margin: 0 0 18px;
+      }
+      code,
+      .mono {
+        font-family: var(--mono);
+        font-size: 12.5px;
+      }
+      .pill {
+        display: inline-block;
+        padding: 1px 7px;
+        border-radius: 10px;
+        font-size: 11px;
+        font-family: var(--mono);
+        border: 1px solid var(--line);
+      }
+      .src {
+        color: var(--accent);
+      }
+      .file {
+        color: var(--muted);
+        font-family: var(--mono);
+        font-size: 11px;
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        margin: 8px 0;
+        background: var(--panel);
+      }
+      th,
+      td {
+        border: 1px solid var(--line);
+        padding: 7px 9px;
+        text-align: left;
+        vertical-align: top;
+      }
+      th {
+        background: var(--panel2);
+        color: var(--muted);
+        font-weight: 600;
+        font-size: 12px;
+      }
+      td .mono {
+        color: #cdd6e6;
+      }
+      .grid {
+        display: grid;
+        gap: 14px;
+      }
+      .cols-4 {
+        grid-template-columns: repeat(4, 1fr);
+      }
+      .cols-2 {
+        grid-template-columns: 1fr 1fr;
+      }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 12px 14px;
+      }
+      .card h4 {
+        margin: 0 0 6px;
+        font-size: 13px;
+      }
+      .card ul {
+        margin: 6px 0 0;
+        padding-left: 16px;
+      }
+      .card li {
+        margin: 2px 0;
+      }
+      .flow {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 14px;
+      }
+      .node {
+        background: var(--panel2);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 6px 10px;
+        font-size: 12.5px;
+      }
+      .arrow {
+        color: var(--muted);
+      }
+      .tag-green {
+        color: var(--green);
+        border-color: #2f5a45;
+      }
+      .tag-amber {
+        color: var(--amber);
+        border-color: #5a4a2a;
+      }
+      .tag-red {
+        color: var(--red);
+        border-color: #5a3330;
+      }
+      .tag-purple {
+        color: var(--purple);
+        border-color: #473a5e;
+      }
+      .tag-blue {
+        color: var(--accent);
+        border-color: #274a6e;
+      }
+      small {
+        color: var(--muted);
+      }
+      .legend {
+        font-size: 12px;
+        color: var(--muted);
+        margin: 4px 0 0;
+      }
+      ul.tight {
+        margin: 6px 0;
+        padding-left: 18px;
+      }
+      ul.tight li {
+        margin: 3px 0;
+      }
+      .kbd {
+        font-family: var(--mono);
+        background: #0b0d11;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 0 5px;
+        font-size: 11.5px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Coach System — Map of What Exists</h1>
+    <p class="sub">
+      The Coach is the async <b>learning supervisor</b> of the cybernetic entity. It reviews a
+      completed (or blocked) skill run and emits governance artifacts: proposals, observations,
+      learnings. It does <b>not</b> touch the skill directly — every output routes to the operator
+      for ratification. Two-step agent graph, <code>sonnet</code>, <code>temperature 0</code>, max
+      <b>10</b> tool calls/turn.
+      <span class="file">def: packages/platform-artifacts/src/cyberneticAgents.ts:1171</span>
+    </p>
+
+    <div class="flow">
+      <span class="node">Run reaches terminal / skill blocked</span>
+      <span class="arrow">→</span>
+      <span class="node tag-amber">Gate <code>shouldActivateCoach</code></span>
+      <span class="arrow">→</span>
+      <span class="node tag-amber">Rate cap</span>
+      <span class="arrow">→</span>
+      <span class="node tag-blue">Build brief + CoachReviewContext</span>
+      <span class="arrow">→</span>
+      <span class="node tag-purple">step 1 · review (LLM)</span>
+      <span class="arrow">→</span>
+      <span class="node tag-purple">step 2 · validate-outcome</span>
+      <span class="arrow">↺</span>
+      <span class="node">on fail → loop back to review</span>
+      <span class="arrow">→</span>
+      <span class="node tag-green">Proposals staged → operator ratifies</span>
+    </div>
+
+    <!-- ============================================================ -->
+    <h2>1 · WHEN it triggers</h2>
+    <p class="sub">
+      Two things gate every activation: an <b>entry point</b> calls <code>triggerCoachReview</code>,
+      then the <b>gate</b> + <b>rate cap</b> decide go/no-go.
+      <span class="file">packages/cybernetic-runtime/src/coachTrigger.ts:378</span>
+    </p>
+
+    <h3>Entry points (who calls triggerCoachReview)</h3>
+    <table>
+      <tr>
+        <th>Entry point</th>
+        <th>Path</th>
+        <th>Gate?</th>
+        <th>Trigger kind</th>
+      </tr>
+      <tr>
+        <td><b>Auto — run completion</b></td>
+        <td>
+          eval → coach → projection pipeline after any terminal run.
+          <span class="file">cybernetic/postRunHooks.ts:289</span><br /><small
+            >Skipped if run was operator-cancelled.</small
+          >
+        </td>
+        <td>full gate + rate cap</td>
+        <td class="mono">= gate source</td>
+      </tr>
+      <tr>
+        <td>
+          <b>Manual — <code>run-coach</code> tool</b>
+        </td>
+        <td>
+          Helmsman/operator asks for a review. <code>force:true</code>.
+          <span class="file">inlineOps/coachCrud.ts:1299</span>
+        </td>
+        <td class="tag-red">bypasses gate + rate cap</td>
+        <td class="mono">operator_requested_review</td>
+      </tr>
+      <tr>
+        <td><b>Validity repair</b></td>
+        <td>
+          A <code>workflow.run.start</code> hits a contract-<i>invalid</i> skill → routes
+          diagnostics to Coach instead of running.
+          <span class="file">workflowCrud/run/start.ts</span>
+        </td>
+        <td>validity producer only</td>
+        <td class="mono">validity_signal</td>
+      </tr>
+      <tr>
+        <td><b>Eval-suite audit</b> / structured request</td>
+        <td><code>learner.review.request</code> + scheduled/boundary cadence.</td>
+        <td>positive-signal override</td>
+        <td class="mono">eval_suite_audit · helmsman_requested_review</td>
+      </tr>
+    </table>
+
+    <h3>
+      The gate — 6 producers, evaluated in order <span class="file">coachTrigger.ts:197</span>
+    </h3>
+    <table>
+      <tr>
+        <th>#</th>
+        <th>Producer</th>
+        <th>Fires when</th>
+        <th>Default knob</th>
+      </tr>
+      <tr>
+        <td>0</td>
+        <td><span class="pill tag-purple">validity_signal</span></td>
+        <td>
+          Structural: contract-<i>invalid</i> verdict (Plan 190 membrane). <b>No run behind it</b> —
+          skill is blocked. Evaluated in isolation; short-circuits the rest.
+        </td>
+        <td>—</td>
+      </tr>
+      <tr>
+        <td>1</td>
+        <td><span class="pill tag-blue">eval_signal · bootstrap</span></td>
+        <td><code>totalRuns ≤ coachBootstrapRuns</code> — fires on every early run.</td>
+        <td class="mono">5</td>
+      </tr>
+      <tr>
+        <td>1</td>
+        <td><span class="pill tag-red">eval_signal · regression</span></td>
+        <td><code>evalResult.regressionDetected</code></td>
+        <td>—</td>
+      </tr>
+      <tr>
+        <td>1</td>
+        <td><span class="pill tag-amber">eval_signal · low score</span></td>
+        <td><code>scores.overall &lt; coachScoreFloor</code></td>
+        <td class="mono">0.7</td>
+      </tr>
+      <tr>
+        <td>1b</td>
+        <td><span class="pill tag-amber">trajectory_signal</span></td>
+        <td>
+          Regression-from-peak σ-band over the campaign score series (catches drift even when this
+          run beats baseline).
+        </td>
+        <td>scale-free σ</td>
+      </tr>
+      <tr>
+        <td>1c</td>
+        <td><span class="pill tag-purple">agent_signal</span></td>
+        <td>
+          Runner self-reported condition: perplexed/struggling disposition, or green-but-straining.
+          A <i>prior</i>, not a verdict.
+        </td>
+        <td>reflections</td>
+      </tr>
+      <tr>
+        <td>2</td>
+        <td><span class="pill tag-blue">maturity_signal</span></td>
+        <td>SkillProjection maturity transition (from→to).</td>
+        <td>—</td>
+      </tr>
+      <tr>
+        <td>3</td>
+        <td><span class="pill">directive_sampled</span></td>
+        <td>
+          <code>coachSamplingPolicy</code>: <code>always</code> / <code>sampled</code> (Redis
+          adaptive rate, base 0.2) / <code>flagged</code> (signal-only) /
+          <code>codified_only</code>.
+        </td>
+        <td class="mono">codified_only</td>
+      </tr>
+    </table>
+    <p class="legend">
+      No positive signal ⇒ <code>null</code> ⇒ Coach does not fire. <b>Rate cap</b>:
+      <code>maxCoachActivationsPerSkillPerWindow</code> (default <b>10</b> / 24h / skill); over-cap
+      emits <code>entity.coach.suppressed{reason:rate_cap}</code>. <code>force:true</code> bypasses
+      both gate &amp; cap. <span class="file">coachTrigger.ts:344</span>
+    </p>
+
+    <!-- ============================================================ -->
+    <h2>2 · WHAT input it gets</h2>
+    <p class="sub">
+      Input is two layers: a typed <b>CoachReviewContext</b> (the activation's posture/authority
+      metadata) and the <b>prompt brief</b> (the evidence blocks concatenated into
+      <code>state.prompt</code>). Both are assembled in <code>triggerCoachReview</code>
+      <i>after</i> the gate passes (so cost is only paid on real activations).
+    </p>
+
+    <div class="grid cols-2">
+      <div class="card">
+        <h4>CoachReviewContext (typed envelope)</h4>
+        <span class="file"
+          >coachReviewContext.ts:101 · schema cybernetic/coachReviewContext.ts</span
+        >
+        <ul class="tight">
+          <li><b>trigger</b> — kind, requestedBy, rationale, bypassesGate</li>
+          <li><b>target</b> — skillSlug, runId, taskId, focusAreas</li>
+          <li><b>skillMode</b> — optimization | process | project</li>
+          <li>
+            <b>trainingPosture</b> — training | operational
+            <small>(per-skill maturity-adjusted)</small>
+          </li>
+          <li>
+            <b>evidenceTier</b> · <b>interventionLevel</b> <small>(from intent matrix §3)</small>
+          </li>
+          <li><b>validityDiagnostics[]</b> — for repair reviews</li>
+          <li>
+            <b>appliedChangeOutcomes[]</b> — expected vs measured lift of past ratified proposals
+          </li>
+          <li>
+            <b>authorityEscalation</b> — agent_signal | regression → +1 authority notch on proposals
+          </li>
+          <li><b>breadthEvidence</b> — campaign trajectory / case distribution</li>
+          <li>
+            <b>priorFailures</b> — recent ratification errors, apply-preview failures,
+            observations-by-reason
+          </li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4>Prompt brief blocks (in order) <small>coachTrigger.ts:924–966</small></h4>
+        <ul class="tight">
+          <li>Review head — "Review workflow X run Y", eval summary, trigger reason</li>
+          <li>
+            <b>Facts</b> <span class="pill tag-green">facts win on disagreement</span> —
+            deterministic compiled signals (+ optional LLM enrichment, deadline-raced)
+          </li>
+          <li>
+            <b>Eval-suite snapshot</b> — the criteria that actually graded the run (+ always-passes
+            quality report)
+          </li>
+          <li><b>Durable learnings</b> — auto_recorded + ratified only</li>
+          <li><b>Applied-change outcomes</b> — did the Coach's own past fixes work?</li>
+          <li>
+            <b>Breadth</b> — campaign trajectory / case distribution (read run against the arc)
+          </li>
+          <li><b>Candidate ledger</b> — pending fast-learnings to promote/reject (campaigns)</li>
+          <li><b>Digest</b> + digest-citation values (verbatim refs for proposals)</li>
+          <li><b>Reflections</b> — Runner self-reports</li>
+          <li><b>Coach-feedback history</b> + <b>user feedback</b> for the skill</li>
+        </ul>
+      </div>
+    </div>
+    <p class="legend">
+      <b>Validity-repair variant:</b> head replaced by <code>buildValidityRepairPromptParts</code> —
+      diagnostics + live config via <code>workflow.manage.get</code> only;
+      <b>no</b> digest/facts/enrichment (there is no graded run).
+      <span class="file">coachTriggerValidity.ts</span>
+    </p>
+    <p class="legend">
+      <b>Evidence tier controls depth:</b> <code>default</code> = digest+facts (reflections-first,
+      trace skipped) · <code>escalated</code> = + full trace slice + ledger excerpts ·
+      <code>deliberate</code> = + <code>artifact.inspect.*</code> tools unlocked. Non-deliberate
+      inspect calls return <code>EVIDENCE_TIER_INSUFFICIENT</code>.
+    </p>
+
+    <!-- ============================================================ -->
+    <h2>3 · Intent matrix — tier × level chosen per activation</h2>
+    <p class="sub">
+      <code>chooseCoachIntent(triggerKind, skillMode, trainingPosture, directives)</code> →
+      <code>{evidenceTier, interventionLevel}</code>. Hard overrides first; otherwise the
+      mode×posture policy cell. <span class="file">coachReviewContext.ts:291</span>
+    </p>
+    <table>
+      <tr>
+        <th>Trigger kind / condition</th>
+        <th>evidenceTier</th>
+        <th>interventionLevel</th>
+        <th>meaning of level</th>
+      </tr>
+      <tr>
+        <td class="mono">eval_suite_audit</td>
+        <td>escalated</td>
+        <td>audit</td>
+        <td rowspan="7">
+          <b>silent</b> = observation-only, propose only on high confidence · <b>sampled</b> =
+          standard · <b>per_run</b> = propose freely (training) · <b>audit</b> = deliberate audit
+          pass
+        </td>
+      </tr>
+      <tr>
+        <td class="mono">validity_signal</td>
+        <td>default</td>
+        <td>per_run <small>(produce a patch)</small></td>
+      </tr>
+      <tr>
+        <td class="mono">training_review</td>
+        <td>default</td>
+        <td>per_run</td>
+      </tr>
+      <tr>
+        <td class="mono">operator_requested_review</td>
+        <td>requested ?? escalated</td>
+        <td>per_run</td>
+      </tr>
+      <tr>
+        <td class="mono">helmsman_requested_review</td>
+        <td>default <small>(deliberate capped)</small></td>
+        <td>sampled</td>
+      </tr>
+      <tr>
+        <td class="mono">scheduled_supervisory_review</td>
+        <td>default</td>
+        <td>silent</td>
+      </tr>
+      <tr>
+        <td class="mono">skillMode = project</td>
+        <td>default</td>
+        <td>silent <small>(not built)</small></td>
+      </tr>
+      <tr>
+        <td>else → mode×posture cell <small>(coachModePolicy)</small></td>
+        <td>default</td>
+        <td>training→per_run · operational→sampled</td>
+        <td>
+          <small>directive-configurable per (optimization|process)×(training|operational)</small>
+        </td>
+      </tr>
+    </table>
+
+    <!-- ============================================================ -->
+    <h2>4 · WHAT it produces</h2>
+    <p class="sub">
+      Step 1 (<code>review</code>) calls action tools, then <code>complete</code> with a
+      <b>structured outcome</b>. Step 2 (<code>validate-outcome</code> =
+      <code>learner.review.finalize</code>) validates shape + cross-checks every cited ID; on
+      failure it writes <code>outcome_feedback</code> and <b>loops back to review</b>.
+      <span class="file">cyberneticAgents.ts:1224 (graph) · :1293 (validator)</span>
+    </p>
+
+    <div class="grid cols-4">
+      <div class="card">
+        <h4 class="tag-green">silent</h4>
+        <small>clean run / eval pass / no regression.</small><br />all id arrays empty + rationale.
+      </div>
+      <div class="card">
+        <h4 class="tag-amber">observation_only</h4>
+        <small>anomaly or unattributable failure, no category.</small><br /><code
+          >learner.observation.record</code
+        >
+        ×1 → observationId.
+      </div>
+      <div class="card">
+        <h4 class="tag-blue">learning_only</h4>
+        <small>durable cross-run claim, no skill change yet.</small><br /><code
+          >learner.learning.record</code
+        >
+        ×N → learningIds.
+      </div>
+      <div class="card">
+        <h4 class="tag-purple">with_proposals</h4>
+        <small>≥1 nameable issue category.</small><br /><code>learner.propose.workflow_change</code>
+        ×N → proposalIds.
+      </div>
+    </div>
+    <p class="legend">
+      Outcome also carries typed <b>facets</b> — always a <code>correctness</code> facet (per-run
+      read, even when silent); a <code>trajectory</code> facet only when the brief had a
+      campaign-trajectory block. Learnings ride additively on any outcome.
+    </p>
+
+    <h3>Action tools (the actual outputs)</h3>
+    <table>
+      <tr>
+        <th>Tool</th>
+        <th>Produces</th>
+        <th>Routing</th>
+      </tr>
+      <tr>
+        <td class="mono">learner.propose.workflow_change</td>
+        <td>
+          Staged skill mutation (one issue category each). Apply-preview runs ops against snapshot
+          synchronously — <code>PREVIEW_FAILED</code> lets Coach revise in-session.
+        </td>
+        <td class="tag-green">→ operator ratify/reject</td>
+      </tr>
+      <tr>
+        <td class="mono">learner.propose.artifact_update</td>
+        <td>
+          Refresh of a bundle-shipped UI card (carries a <code>draftId</code> from
+          <code>ui.artifact.generate</code>).
+        </td>
+        <td class="tag-green">→ operator ratify (always)</td>
+      </tr>
+      <tr>
+        <td class="mono">flag_pattern → platform_issue</td>
+        <td>Read-only diagnostic report on a platform-owned workflow.</td>
+        <td class="tag-red">not ratifiable — info only</td>
+      </tr>
+      <tr>
+        <td class="mono">learner.observation.record</td>
+        <td>One-off anomaly that didn't lead to a proposal (closed-set reason).</td>
+        <td>logged</td>
+      </tr>
+      <tr>
+        <td class="mono">learner.learning.record</td>
+        <td>
+          Durable claim. <code>campaign</code>→auto_recorded ·
+          <code>skill</code>/<code>space</code>→staged for ratification.
+        </td>
+        <td>ledger</td>
+      </tr>
+    </table>
+    <p class="legend">
+      <b>Read tools (escalation only, rare, monitored):</b> <code>memory.store.query/get</code>,
+      <code>workflow.manage.get</code>, <code>workflow.ledger.get</code>, and tier-gated
+      <code>artifact.inspect.list/read</code>.
+    </p>
+
+    <!-- ============================================================ -->
+    <h2>5 · The framework it reasons with (the prompt)</h2>
+    <p class="sub">
+      <code>PROMPT_COACH</code> <span class="file">cyberneticAgents.ts:361–586</span> — "be a
+      quality controller, not a talker." The core scaffolding it must map a run onto:
+    </p>
+
+    <div class="grid cols-2">
+      <div class="card">
+        <h4>Issue-category framework (closed set — one per proposal)</h4>
+        <table>
+          <tr>
+            <th>Category</th>
+            <th>Means</th>
+          </tr>
+          <tr>
+            <td class="mono">procedure</td>
+            <td>wrong decomposition / ordering / missing step</td>
+          </tr>
+          <tr>
+            <td class="mono">context_spec</td>
+            <td>wrong inputs / memory scope / Runner guidance</td>
+          </tr>
+          <tr>
+            <td class="mono">tool_capability</td>
+            <td>wrong tool grants or needs a binding</td>
+          </tr>
+          <tr>
+            <td class="mono">reasoning</td>
+            <td>right context+tools, Runner reasoned poorly</td>
+          </tr>
+          <tr>
+            <td class="mono">eval_suite</td>
+            <td>eval missed/mis-scored — graded noise as signal</td>
+          </tr>
+          <tr>
+            <td class="mono">platform</td>
+            <td>skill can't fix it → platform_issue</td>
+          </tr>
+          <tr>
+            <td class="mono">environment</td>
+            <td>external dependency failure</td>
+          </tr>
+        </table>
+      </div>
+      <div class="card">
+        <h4>Proposal warrant contract (required on every propose)</h4>
+        <ul class="tight">
+          <li><b>diagnosis.issueCategory</b> — exactly one</li>
+          <li><b>evidence.digestRef / digestSha256</b> — pass-through verbatim</li>
+          <li><b>evidence.digestCitations[]</b> — ≥1 (runId/taskId/sessionId/stepExecutionId)</li>
+          <li>
+            <b>warrant</b>: <code>claim</code> (the change, not the symptom) ·
+            <code>evidenceSummary</code> · <code>warrant</code> (why evidence⇒claim) ·
+            <code>expectedEffect</code> · risk? · rollback?
+          </li>
+          <li><b>artifactRefs</b> — required if <code>inspect.read</code> shaped the proposal</li>
+        </ul>
+        <p class="legend" style="margin-top: 8px">
+          <b>Guardrails:</b> facts &gt; eval &gt; ledger &gt; parent summaries · don't re-propose
+          recently-rejected ideas without new evidence · contamination rule (platform-path failures
+          → metrics context only) · small specific proposals over rewrites · never amend governance
+          directives · narrative ≠ a legal exit.
+        </p>
+      </div>
+    </div>
+
+    <p class="legend" style="margin-top: 24px">
+      Generated <span class="kbd">2026-06-16</span> as a read of the current code — not a design
+      doc. Primary sources: <code>coachTrigger.ts</code>, <code>coachReviewContext.ts</code>,
+      <code>postRunHooks.ts</code>, <code>cyberneticAgents.ts</code> (PROMPT_COACH + graph). Related
+      plans: 111 (evidence/issue framework), 138 (Coach surface), 163 (review context/intent),
+      183a–g (learning-loop producers), 190 (validity membrane).
+    </p>
+  </body>
+</html>

@@ -1,0 +1,28 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "composite": true,
+    "declaration": true,
+    "declarationMap": true,
+    "emitDeclarationOnly": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts"],
+  "references": [
+    { "path": "../ai-client" },
+    { "path": "../applet-runtime" },
+    { "path": "../database" },
+    { "path": "../integration-simulator" },
+    { "path": "../lib" },
+    { "path": "../memory-store" },
+    { "path": "../network-safety" },
+    { "path": "../oauth" },
+    { "path": "../observability" },
+    { "path": "../payload-store" },
+    { "path": "../platform-artifacts" },
+    { "path": "../redis" },
+    { "path": "../schemas" }
+  ]
+}

@@ -1,0 +1,132 @@
+{
+  "name": "@aflow/design-system",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "ts-source": "./src/index.tsx",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./layout": {
+      "ts-source": "./src/layout/index.ts",
+      "types": "./dist/layout.d.ts",
+      "import": "./dist/layout.js",
+      "require": "./dist/layout.cjs"
+    },
+    "./content": {
+      "ts-source": "./src/content/index.ts",
+      "types": "./dist/content.d.ts",
+      "import": "./dist/content.js",
+      "require": "./dist/content.cjs"
+    },
+    "./actions": {
+      "ts-source": "./src/actions/index.ts",
+      "types": "./dist/actions.d.ts",
+      "import": "./dist/actions.js",
+      "require": "./dist/actions.cjs"
+    },
+    "./forms": {
+      "ts-source": "./src/forms/index.ts",
+      "types": "./dist/forms.d.ts",
+      "import": "./dist/forms.js",
+      "require": "./dist/forms.cjs"
+    },
+    "./feedback": {
+      "ts-source": "./src/feedback/index.ts",
+      "types": "./dist/feedback.d.ts",
+      "import": "./dist/feedback.js",
+      "require": "./dist/feedback.cjs"
+    },
+    "./overlays": {
+      "ts-source": "./src/overlays/index.ts",
+      "types": "./dist/overlays.d.ts",
+      "import": "./dist/overlays.js",
+      "require": "./dist/overlays.cjs"
+    },
+    "./data-display": {
+      "ts-source": "./src/data-display/index.ts",
+      "types": "./dist/data-display.d.ts",
+      "import": "./dist/data-display.js",
+      "require": "./dist/data-display.cjs"
+    },
+    "./navigation": {
+      "ts-source": "./src/navigation/index.ts",
+      "types": "./dist/navigation.d.ts",
+      "import": "./dist/navigation.js",
+      "require": "./dist/navigation.cjs"
+    },
+    "./icons": {
+      "ts-source": "./src/icons/index.ts",
+      "types": "./dist/icons.d.ts",
+      "import": "./dist/icons.js",
+      "require": "./dist/icons.cjs"
+    },
+    "./media": {
+      "ts-source": "./src/media/index.ts",
+      "types": "./dist/media.d.ts",
+      "import": "./dist/media.js",
+      "require": "./dist/media.cjs"
+    },
+    "./aflow": {
+      "ts-source": "./src/aflow/index.ts",
+      "types": "./dist/aflow.d.ts",
+      "import": "./dist/aflow.js",
+      "require": "./dist/aflow.cjs"
+    },
+    "./cybernetic": {
+      "ts-source": "./src/cybernetic/index.ts",
+      "types": "./dist/cybernetic.d.ts",
+      "import": "./dist/cybernetic.js",
+      "require": "./dist/cybernetic.cjs"
+    },
+    "./styles": "./dist/styles.css",
+    "./styles.css": "./dist/styles.css",
+    "./tokens": {
+      "ts-source": "./src/tokens.ts",
+      "types": "./dist/tokens.d.ts",
+      "import": "./dist/tokens.js",
+      "require": "./dist/tokens.cjs"
+    },
+    "./contract.json": "./dist/design-system-contract.json",
+    "./contract-surface.json": "./dist/design-system-contract-surface.json",
+    "./contract-compact.json": "./dist/design-system-contract-compact.json",
+    "./contract-compact-surface.json": "./dist/design-system-contract-compact-surface.json"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build:tokens": "tsx scripts/build-tokens.ts",
+    "build:contract": "tsx scripts/build-contract.ts",
+    "build": "npm run build:tokens && npx tsup && rm -f tsconfig.tsbuildinfo && npx tsc && npm run build:styles && npm run build:contract",
+    "build:styles": "mkdir -p dist/styles && cp src/styles/*.css dist/styles/ && cp src/tokens.css dist/ && cat src/tokens.css src/styles/reset.css src/styles/base.css src/styles/components.css > dist/styles.css",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "dev": "npm run build:tokens && npm run build:styles && tsup --watch"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.9",
+    "@types/react-dom": "^19.2.3",
+    "tsup": "^8.5.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11"
+  },
+  "dependencies": {
+    "@aflow/schemas": "workspace:*",
+    "@phosphor-icons/react": "^2.1.10",
+    "framer-motion": "^12.34.0"
+  }
+}

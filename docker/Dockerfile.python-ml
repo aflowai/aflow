@@ -1,0 +1,59 @@
+# Python ML runtime image for compute.sandbox.exec (runtime: python3-ml)
+#
+# Pre-installs common ML/data science packages so agents don't need pip install
+# at runtime (which won't work in the read-only sandbox container).
+#
+# Build: docker build -t phoenix-python-ml:latest -f docker/Dockerfile.python-ml .
+# Size: ~2.6GB (compared to ~150MB for python:3.12-slim)
+
+FROM python:3.12-slim AS builder
+
+RUN pip install --no-cache-dir \
+    pandas==2.2.3 \
+    numpy==2.2.3 \
+    scikit-learn==1.6.1 \
+    xgboost==2.1.4 \
+    lightgbm==4.6.0 \
+    catboost>=1.2,!=1.2.7 \
+    imbalanced-learn==0.13.0 \
+    scipy==1.15.2 \
+    matplotlib==3.10.1 \
+    optuna==4.3.0
+
+# Separate index: PyPI's default linux torch wheel bundles CUDA; the cpu index
+# serves the CPU-only wheel (x86_64 + aarch64).
+RUN pip install --no-cache-dir \
+    torch==2.13.0 \
+    --index-url https://download.pytorch.org/whl/cpu
+
+# kaggle-environments is installed WITHOUT its dependency tree: the full tree
+# drags in LLM/RL harness stacks (jax, transformers, litellm, open_spiel,
+# pygame) only a few exotic envs import. Core make/run needs only jsonschema +
+# requests; an env whose imports are missing is skipped at registration with a
+# warning, the rest stay usable.
+RUN pip install --no-cache-dir \
+    jsonschema==4.26.0 \
+    requests==2.34.2
+
+RUN pip install --no-cache-dir --no-deps kaggle-environments==1.32.4
+
+FROM python:3.12-slim
+
+# Runtime dependencies (libgomp for LightGBM/XGBoost OpenMP support)
+RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 && rm -rf /var/lib/apt/lists/*
+
+# Copy installed packages from builder
+COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+
+# Non-root user (matches --user 1000:1000 in Docker run)
+RUN groupadd -g 1000 phoenix && useradd -u 1000 -g phoenix -s /bin/sh phoenix
+
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV MPLCONFIGDIR=/tmp/matplotlib
+
+# Persistent session runner (Plan 84: warm per-run sessions)
+COPY docker/phoenix-runner.py /opt/phoenix/runner.py
+
+USER phoenix

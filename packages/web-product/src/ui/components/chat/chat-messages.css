@@ -1,0 +1,428 @@
+/* Copy button appears on message hover */
+.chat-message-wrapper {
+  position: relative;
+}
+
+.chat-message-wrapper--subflow {
+  margin-left: var(--space-4);
+  border-left: 2px solid var(--color-border-subtle);
+  border-radius: 0;
+}
+
+.chat-subflow-label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-4) var(--space-1);
+  color: var(--color-text-muted);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  min-width: 0;
+}
+
+/* `workflow › task` path. Workflow shrinks first; task is the high-information
+   half so it gets the remaining space and only truncates if it must. */
+.chat-subflow-label__path {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.chat-subflow-label__workflow {
+  flex: 0 1 auto;
+  min-width: 3ch;
+  max-width: 24ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.65;
+}
+
+/* "Delegated agent" prefix — stays intact; the agent name (__task) truncates. */
+.chat-subflow-label__kind {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  opacity: 0.65;
+}
+
+.chat-subflow-label__sep {
+  flex: 0 0 auto;
+  opacity: 0.5;
+}
+
+.chat-subflow-label__task {
+  flex: 1 1 auto;
+  min-width: 4ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-secondary);
+  font-weight: var(--font-weight-medium);
+}
+
+.chat-message-copy-btn {
+  position: absolute;
+  top: var(--space-2);
+  inset-inline-end: var(--space-2);
+  opacity: 0;
+  transition: opacity 0.15s var(--transition-timing-default);
+}
+
+.chat-delivery-indicator {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding: 0 calc(var(--space-1) + var(--space-5) + 28px + var(--space-3)) var(--space-1)
+    var(--space-5);
+  color: var(--color-text-muted);
+}
+
+.chat-delivery-cancel {
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--color-content-link);
+  font-size: var(--font-size-xs);
+  text-decoration: underline;
+}
+
+.chat-message-wrapper:hover .chat-message-copy-btn {
+  opacity: 1;
+}
+
+/* Touch has no hover — keep the copy affordance visible, dimmed */
+@media (hover: none) {
+  .chat-message-copy-btn {
+    opacity: 0.55;
+  }
+}
+
+/* Activity trail — rolling last-actions line under the activity label.
+   Mirrors the workflow-run surface's ActivitySubline: the <SwapStack>
+   inside rolls each distinct action in at the bottom while recent history
+   dims above it; the lines carry the single-line ellipsis. */
+.chat-activity-trail {
+  min-width: 0;
+  max-width: 100%;
+  white-space: nowrap;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  opacity: 0.78;
+}
+
+/* Delegate context line — tinted with the per-child accent so the activity
+   row visually pairs with the same-colored bubbles below when multiple
+   sub-agents run in parallel. Falls back to muted text when no accent. */
+.chat-activity-delegate {
+  opacity: 0.85;
+  color: var(--chat-activity-delegate-accent, var(--color-text-muted));
+}
+
+/* Bridge wrapper — keeps the subflow chain's decorative left border continuous
+   across an interim group. The interim box stays indented past the avatar
+   column (its existing layout); this wrapper paints a 2px line at the chain's
+   x position, extending var(--space-1) above and below to overlap the borders
+   of adjacent subflow messages without leaving a gap. */
+.chat-interim-group-bridge {
+  position: relative;
+}
+
+.chat-interim-group-bridge::before {
+  content: '';
+  position: absolute;
+  left: var(--space-4);
+  top: calc(-1 * var(--space-1));
+  bottom: calc(-1 * var(--space-1));
+  width: 2px;
+  background: var(--color-border-subtle);
+  pointer-events: none;
+}
+
+/* Collapsible interim message group — aligned with chat content column (past avatar) */
+.chat-interim-group {
+  /* 28px avatar + var(--space-3) gap + var(--space-5) padding = content column */
+  margin: var(--space-1) calc(var(--space-5) + 28px + var(--space-3)) var(--space-1)
+    calc(var(--space-5) + 28px + var(--space-3));
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+/* Chain continuations — visually connect same-subflow groups across agent messages */
+.chat-interim-group--continued-by {
+  margin-bottom: 2px;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.chat-interim-group--continues-from {
+  margin-top: 2px;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+.chat-interim-group__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  text-align: left;
+  transition: background-color 0.15s var(--transition-timing-default);
+  border-radius: var(--radius-md);
+}
+
+.chat-interim-group__header:hover {
+  background: color-mix(in srgb, var(--color-text-primary) 14%, transparent);
+}
+
+.chat-interim-group__summary {
+  color: var(--color-text-muted);
+  opacity: 0.7;
+  overflow: hidden;
+  white-space: pre-line;
+  min-width: 0;
+  line-height: var(--font-line-height-tight);
+  flex: 1;
+  padding-left: var(--space-2-5);
+}
+
+/* Animated expand/collapse via grid trick */
+.chat-interim-group__body {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.2s ease-out;
+  border-left: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-none) var(--radius-none) var(--radius-md) var(--radius-md);
+}
+
+.chat-interim-group--expanded .chat-interim-group__body {
+  grid-template-rows: 1fr;
+}
+
+.chat-interim-group__content {
+  overflow: hidden;
+  border-top: 1px solid transparent;
+  transition: border-color 0.2s ease-out;
+}
+
+.chat-interim-group--expanded .chat-interim-group__content {
+  border-top-color: var(--color-border-subtle);
+}
+
+/* Truncatable individual messages inside an interim group */
+.chat-interim-msg {
+  position: relative;
+}
+
+.chat-interim-msg__content {
+  overflow: hidden;
+}
+
+.chat-interim-msg__content--truncated {
+  max-height: 120px;
+  mask-image: linear-gradient(to bottom, black 40%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, black 40%, transparent 100%);
+}
+
+.chat-interim-msg__toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  width: 100%;
+  padding: var(--space-1) 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  opacity: 0.5;
+  font-size: var(--font-size-xs);
+  transition:
+    opacity 0.15s var(--transition-timing-default),
+    color 0.15s var(--transition-timing-default);
+}
+
+.chat-interim-msg__toggle:hover {
+  opacity: 0.85;
+  color: var(--color-text-default);
+}
+
+/* Thinking indicator — muted italic outer; inner scroll region is bottom-anchored
+   and pulses while streaming. */
+.chat-message-thinking {
+  font-style: italic;
+}
+
+.chat-thinking-box {
+  position: relative;
+  margin-top: var(--space-1);
+}
+
+.chat-thinking-scroll {
+  max-height: 7rem;
+  overflow-y: auto;
+  padding-right: var(--space-4);
+  opacity: 0.7;
+  /* Fade out the TOP so the latest text (bottom) reads as the live edge. */
+  mask-image: linear-gradient(to bottom, transparent 0, black 1.5rem);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 1.5rem);
+  scrollbar-width: thin;
+  animation: chat-thinking-pulse 2.4s ease-in-out infinite;
+}
+
+/* Children (MarkdownRenderer.md-content, PlainText <Text>) each set their own
+   font-size / line-height. Force the smaller / tighter look across them all
+   without leaking into code blocks or other monospaced runs. */
+.chat-thinking-scroll {
+  font-size: var(--font-size-xs);
+  line-height: 1.45;
+}
+
+.chat-thinking-scroll :is(p, li, span, em, strong, blockquote, h1, h2, h3, h4, h5, h6),
+.chat-thinking-scroll .md-content,
+.chat-thinking-scroll .md-content :is(p, li, span, em, strong, blockquote) {
+  font-size: var(--font-size-xs);
+  line-height: 1.45;
+}
+
+.chat-thinking-scroll .md-content :is(p, ul, ol) {
+  margin: var(--space-1) 0;
+}
+
+.chat-thinking-scroll .md-content :is(h1, h2, h3, h4, h5, h6) {
+  font-size: var(--font-size-sm);
+  margin: var(--space-2) 0 var(--space-1);
+}
+
+.chat-thinking-box--expanded .chat-thinking-scroll {
+  max-height: 22rem;
+  opacity: 0.85;
+  mask-image: none;
+  -webkit-mask-image: none;
+  animation: none;
+}
+
+.chat-thinking-toggle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  opacity: 0.5;
+  z-index: 1;
+  transition:
+    opacity 0.15s var(--transition-timing-default),
+    background-color 0.15s var(--transition-timing-default);
+}
+
+.chat-thinking-toggle:hover {
+  opacity: 1;
+  background: var(--color-surface-1);
+}
+
+@keyframes chat-thinking-pulse {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+
+  50% {
+    opacity: 0.85;
+  }
+}
+
+/* Scroll-to-bottom pill — fixed at bottom of message list */
+.chat-scroll-to-bottom {
+  position: sticky;
+  bottom: var(--space-3);
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-full);
+  border: 1px solid var(--color-border-default);
+  background: var(--color-surface-0);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  font-family: inherit;
+  cursor: pointer;
+  box-shadow: var(--shadow-md);
+  z-index: 5;
+  animation: chat-scroll-btn-in 200ms ease-out both;
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease;
+}
+
+.chat-scroll-to-bottom:hover {
+  background: var(--color-surface-1);
+  border-color: var(--color-border-strong);
+}
+
+@keyframes chat-scroll-btn-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-interim-group__body {
+    transition: none;
+  }
+
+  .chat-scroll-to-bottom {
+    animation: none;
+  }
+}
+
+@media (max-width: 768px) {
+  .chat-interim-group {
+    margin: var(--space-1) calc(var(--space-5) + 28px + var(--space-3)) var(--space-1)
+      var(--space-2-5);
+  }
+}
+
+/* Below 640px the chat message avatar stacks above the bubble instead of
+   beside it (see ds-chat-message in the design system), so there is no
+   avatar column to offset around anymore — align flush with the message
+   padding on both sides. */
+@media (max-width: 639px) {
+  .chat-interim-group {
+    margin: var(--space-1) var(--space-2-5);
+  }
+
+  .chat-delivery-indicator {
+    padding: 0 calc(var(--space-1) + var(--space-5)) var(--space-1) var(--space-5);
+  }
+
+  /* User (and peer-human) bubbles now carry their avatar top-right, right
+     where the copy button sits — direct overlap. The sender already knows
+     what they just typed, so drop the affordance there instead of fighting
+     for the same corner; assistant/tool/system messages keep it (avatar
+     stacks top-left on those, so no collision). */
+  .chat-message-wrapper:has(.ds-chat-message--user) .chat-message-copy-btn {
+    display: none;
+  }
+}

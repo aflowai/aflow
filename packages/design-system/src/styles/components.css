@@ -1,0 +1,2412 @@
+/* ==========================================================================
+   Phoenix Design System - Component Styles
+   Bold minimal aesthetic — black type, translucent surfaces, vivid accents
+   ========================================================================== */
+
+/* ==========================================================================
+   Layout Utilities
+   ========================================================================== */
+
+.ds-stack {
+  display: flex;
+  flex-direction: column;
+}
+
+.ds-stack-xs {
+  gap: var(--space-1);
+}
+.ds-stack-sm {
+  gap: var(--space-2);
+}
+.ds-stack-md {
+  gap: var(--space-4);
+}
+.ds-stack-lg {
+  gap: var(--space-6);
+}
+.ds-stack-xl {
+  gap: var(--space-8);
+}
+
+.ds-inline {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+}
+
+.ds-inline-xs {
+  gap: var(--space-1);
+}
+.ds-inline-sm {
+  gap: var(--space-2);
+}
+.ds-inline-md {
+  gap: var(--space-4);
+}
+.ds-inline-lg {
+  gap: var(--space-6);
+}
+
+.ds-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ==========================================================================
+   Button Styles
+   ========================================================================== */
+
+.ds-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: 7px var(--space-4);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--font-letter-spacing-normal);
+  line-height: 1;
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  transition:
+    background-color var(--transition-duration-fast) var(--transition-timing-default),
+    border-color var(--transition-duration-fast) var(--transition-timing-default),
+    color var(--transition-duration-fast) var(--transition-timing-default),
+    box-shadow var(--transition-duration-fast) var(--transition-timing-default),
+    transform var(--transition-duration-fast) var(--transition-timing-default);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.ds-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.ds-button:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.ds-button--primary {
+  background-color: var(--color-interactive-default);
+  color: var(--color-text-inverse);
+  border: 1px solid var(--color-interactive-default);
+}
+
+.ds-button--primary:hover:not(:disabled) {
+  background-color: var(--color-interactive-hover);
+  border-color: var(--color-interactive-hover);
+  box-shadow: var(--shadow-md);
+}
+
+.ds-button--secondary {
+  background-color: var(--color-surface-1);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border-emphasis);
+}
+
+.ds-button--secondary:hover:not(:disabled) {
+  background-color: var(--color-surface-3);
+  border-color: var(--color-interactive-default);
+}
+
+.ds-button--ghost {
+  background-color: var(--color-surface-2);
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border-subtle);
+}
+
+.ds-button--ghost:hover:not(:disabled) {
+  background-color: var(--color-surface-3);
+  color: var(--color-text-primary);
+}
+
+.ds-button--danger {
+  background-color: var(--color-status-failed-bg);
+  color: var(--color-status-failed);
+}
+
+.ds-button--danger:hover:not(:disabled) {
+  background-color: var(--color-danger-hover);
+  border-color: var(--color-danger-hover);
+}
+
+.ds-button--sm {
+  padding: var(--space-2) var(--space-2-5);
+  font-size: var(--font-size-xs);
+  border-radius: var(--radius-md);
+}
+
+.ds-button--lg {
+  padding: var(--space-3) var(--space-6);
+  font-size: var(--font-size-base);
+  border-radius: var(--radius-lg);
+}
+
+.ds-button--icon {
+  padding: 6px;
+  border-radius: var(--radius-md);
+}
+
+/* ==========================================================================
+   Toggle Chip
+   ========================================================================== */
+
+.ds-toggle-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border-subtle);
+  background-color: transparent;
+  cursor: pointer;
+  font-size: var(--font-size-xs);
+  font-family: inherit;
+  color: var(--color-content-secondary);
+  transition: all 150ms ease;
+  line-height: 1.4;
+}
+
+.ds-toggle-chip:hover:not(:disabled) {
+  border-color: var(--color-border-strong);
+  color: var(--color-content-primary);
+}
+
+.ds-toggle-chip--active {
+  background-color: var(--color-interactive-muted);
+  color: var(--color-interactive-default);
+}
+
+.ds-toggle-chip--active:hover:not(:disabled) {
+  border-color: var(--color-interactive-hover);
+  color: var(--color-interactive-hover);
+}
+
+.ds-toggle-chip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* On a phone these ride inside the composer pill beside a 36px send button, so
+   the toolbar-scale chip is both too small to hit and too small to see. */
+@media (max-width: 639px) {
+  .ds-toggle-chip {
+    min-height: 32px;
+    padding: var(--space-1) var(--space-2-5);
+  }
+}
+
+/* ==========================================================================
+   Menu Item
+   ========================================================================== */
+
+.ds-menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: 40px;
+  padding: var(--space-2) var(--space-2-5);
+  border: none;
+  border-radius: var(--radius-md);
+  background-color: transparent;
+  color: var(--color-content-primary);
+  font-family: inherit;
+  font-size: var(--font-size-sm);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color 150ms ease,
+    color 150ms ease;
+}
+
+.ds-menu-item:hover:not(:disabled) {
+  background-color: var(--color-surface-2);
+}
+
+.ds-menu-item--active {
+  color: var(--color-interactive-default);
+}
+
+.ds-menu-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ds-menu-item__icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--color-content-secondary);
+}
+
+.ds-menu-item--active .ds-menu-item__icon {
+  color: inherit;
+}
+
+.ds-menu-item__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ds-menu-item__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ds-menu-item__description {
+  font-size: var(--font-size-xs);
+  color: var(--color-content-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ds-menu-item__trailing {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-shrink: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-content-muted);
+}
+
+/* ==========================================================================
+   Segmented Switch
+   ========================================================================== */
+
+/*
+ * One control with a position, not N buttons that sit together — so the thumb
+ * travels rather than the segments repainting. That reading only holds while
+ * every segment is the same width, which is why the badge is drawn out of
+ * flow: letting it widen its own segment shifts the track under the thumb.
+ */
+.ds-segmented-switch {
+  --ds-segment-w: 34px;
+  --ds-segment-h: 24px;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--color-border-subtle);
+  background-color: var(--color-surface-1);
+  flex-shrink: 0;
+}
+
+.ds-segmented-switch--sm {
+  --ds-segment-w: 28px;
+  --ds-segment-h: 20px;
+}
+
+.ds-segmented-switch__thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: var(--ds-segment-w);
+  height: var(--ds-segment-h);
+  border-radius: var(--radius-full);
+  background-color: var(--color-surface-selected);
+  box-shadow: var(--shadow-sm);
+  transform: translateX(calc(var(--ds-segment-w) * var(--ds-segment-index, 0)));
+  transition: transform var(--transition-duration-normal) var(--transition-timing-ease-out);
+}
+
+.ds-segmented-switch__segment {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--ds-segment-w);
+  height: var(--ds-segment-h);
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  line-height: 0;
+  color: var(--color-content-muted);
+  transition: color var(--transition-duration-fast) var(--transition-timing-ease-out);
+}
+
+.ds-segmented-switch__segment:hover:not([aria-pressed='true']) {
+  color: var(--color-content-primary);
+}
+
+.ds-segmented-switch__segment[aria-pressed='true'] {
+  color: var(--color-content-primary);
+}
+
+.ds-segmented-switch__badge {
+  position: absolute;
+  top: -3px;
+  right: -1px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 4px;
+  border-radius: var(--radius-full);
+  background-color: var(--color-warning-default);
+  color: var(--color-text-inverse, #fff);
+  font-size: 10px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-segmented-switch__thumb {
+    transition: none;
+  }
+}
+
+/* ==========================================================================
+   Input Styles
+   ========================================================================== */
+
+.ds-input {
+  display: block;
+  width: 100%;
+  padding: 7px var(--space-3);
+  font-size: var(--font-size-sm);
+  line-height: var(--font-line-height-normal);
+  color: var(--color-text-primary);
+  background-color: var(--color-surface-0);
+  border: 1px solid var(--color-border-emphasis);
+  border-radius: var(--radius-md);
+  transition:
+    border-color var(--transition-duration-fast) var(--transition-timing-default),
+    box-shadow var(--transition-duration-fast) var(--transition-timing-default);
+}
+
+.ds-input::placeholder {
+  color: var(--color-text-muted);
+}
+
+.ds-input:hover:not(:disabled):not(:focus) {
+  border-color: var(--color-border-strong);
+}
+
+.ds-input:focus {
+  border-color: var(--color-interactive-default);
+  box-shadow: 0 0 0 3px var(--color-interactive-muted);
+  outline: none;
+}
+
+.ds-input:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  background-color: var(--color-surface-1);
+}
+
+.ds-input--error {
+  border-color: var(--color-danger-default);
+}
+
+.ds-input--error:focus {
+  box-shadow: 0 0 0 3px var(--color-danger-bg);
+}
+
+/* Password / API secret inputs — distinct from “reference name” fields */
+.ds-input--secret {
+  border-color: var(--color-success-default);
+  background-color: var(--color-surface-0);
+}
+
+.ds-input--secret:hover:not(:disabled):not(:focus) {
+  border-color: var(--color-success-hover);
+}
+
+.ds-input--secret:focus {
+  border-color: var(--color-success-default);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-success-default) 28%, transparent);
+}
+
+/* Group wrapper for secret value fields (API bindings, credentials) */
+.ds-secret-field-group {
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-success-default);
+  border-left-width: 4px;
+  background-color: var(--color-success-bg);
+}
+
+/* ==========================================================================
+   Select trigger (custom picker — not native <select>)
+   ========================================================================== */
+
+.ds-select-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  padding: 6px var(--space-3);
+  font-family: inherit;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  line-height: var(--font-line-height-normal);
+  color: var(--color-text-primary);
+  background-color: var(--color-surface-0);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    border-color var(--transition-duration-fast) var(--transition-timing-default),
+    box-shadow var(--transition-duration-fast) var(--transition-timing-default);
+}
+
+.ds-select-trigger:hover:not(:disabled) {
+  border-color: var(--color-border-strong);
+}
+
+.ds-select-trigger:focus-visible {
+  border-color: var(--color-interactive-default);
+  box-shadow: 0 0 0 3px var(--color-interactive-muted);
+  outline: none;
+}
+
+.ds-select-trigger:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  background-color: var(--color-surface-1);
+}
+
+.ds-select-trigger__leading {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+}
+
+.ds-select-trigger__label {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ds-select-trigger__trailing {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+}
+
+.ds-select-trigger--placeholder .ds-select-trigger__label {
+  color: var(--color-text-muted);
+}
+
+/**
+ * Compact chip style — matches SpaceSelector `variant="inline"` (workspace breadcrumb).
+ */
+.ds-select-trigger--workspace-inline {
+  gap: 6px;
+  width: auto;
+  max-width: 100%;
+  padding: 4px 8px;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+  color: var(--color-text-primary);
+  background-color: var(--color-surface-1);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  transition:
+    color 120ms ease,
+    background-color 120ms ease,
+    border-color 120ms ease;
+}
+
+.ds-select-trigger--workspace-inline:hover:not(:disabled) {
+  background-color: var(--color-surface-2);
+  border-color: var(--color-border-default);
+}
+
+.ds-select-trigger--workspace-inline.ds-select-trigger--placeholder .ds-select-trigger__label {
+  color: var(--color-text-primary);
+  opacity: 0.5;
+}
+
+.ds-select-trigger--workspace-inline.ds-select-trigger--placeholder .ds-select-trigger__leading {
+  opacity: 0.5;
+}
+
+.ds-select-trigger--error {
+  border-color: var(--color-danger-default);
+}
+
+.ds-select-trigger--error:focus-visible {
+  box-shadow: 0 0 0 3px var(--color-danger-bg);
+}
+
+/* ==========================================================================
+   Checkbox Styles
+   ========================================================================== */
+
+.ds-checkbox {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  flex-shrink: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background-color: var(--color-surface-0);
+  cursor: pointer;
+  transition:
+    border-color var(--transition-duration-fast) var(--transition-timing-default),
+    background-color var(--transition-duration-fast) var(--transition-timing-default),
+    box-shadow var(--transition-duration-fast) var(--transition-timing-default);
+  display: grid;
+  place-content: center;
+}
+
+.ds-checkbox::before {
+  content: '';
+  width: 4px;
+  height: 8px;
+  border: 2px solid var(--color-text-inverse);
+  border-top: 0;
+  border-left: 0;
+  transform: rotate(45deg) scale(0);
+  transition: transform var(--transition-duration-fast) var(--transition-timing-spring);
+  margin-bottom: 2px;
+}
+
+.ds-checkbox:checked {
+  background-color: var(--color-interactive-default);
+  border-color: var(--color-interactive-default);
+}
+
+.ds-checkbox:checked::before {
+  transform: rotate(45deg) scale(1);
+}
+
+.ds-checkbox:hover:not(:disabled):not(:checked) {
+  border-color: var(--color-border-strong);
+}
+
+.ds-checkbox:hover:not(:disabled):checked {
+  background-color: var(--color-interactive-hover);
+  border-color: var(--color-interactive-hover);
+}
+
+.ds-checkbox:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--color-focus-ring);
+}
+
+.ds-checkbox:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.ds-checkbox--error {
+  border-color: var(--color-danger-default);
+}
+
+.ds-checkbox--error:focus {
+  box-shadow: 0 0 0 3px var(--color-danger-bg);
+}
+
+.ds-checkbox-wrapper {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+}
+
+.ds-checkbox-wrapper--sm {
+  font-size: var(--font-size-xs);
+}
+
+.ds-checkbox-wrapper--sm .ds-checkbox {
+  width: 14px;
+  height: 14px;
+}
+
+.ds-checkbox-wrapper--sm .ds-checkbox::before {
+  width: 3px;
+  height: 6px;
+  border-width: 1px;
+}
+
+/* ==========================================================================
+   Avatar Styles
+   ========================================================================== */
+
+.ds-avatar {
+  flex-shrink: 0;
+  border-radius: var(--radius-round);
+  object-fit: cover;
+  background-color: var(--color-surface-2);
+}
+
+.ds-avatar--sm {
+  width: 20px;
+  height: 20px;
+}
+
+.ds-avatar--md {
+  width: 28px;
+  height: 28px;
+}
+
+.ds-avatar--lg {
+  width: 40px;
+  height: 40px;
+}
+
+.ds-avatar__fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-muted);
+  background-color: var(--color-surface-2);
+  border-radius: inherit;
+}
+
+/* ==========================================================================
+   Badge Styles
+   ========================================================================== */
+
+.ds-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--font-letter-spacing-tight);
+  line-height: 1.5;
+  border-radius: var(--radius-md);
+  white-space: nowrap;
+}
+
+.ds-badge--queued {
+  background-color: var(--color-status-queued-bg);
+  color: var(--color-status-queued);
+}
+
+.ds-badge--running {
+  background-color: var(--color-status-running-bg);
+  color: var(--color-status-running);
+}
+
+.ds-badge--paused {
+  background-color: var(--color-status-paused-bg);
+  color: var(--color-status-paused);
+}
+
+.ds-badge--succeeded {
+  background-color: var(--color-status-succeeded-bg);
+  color: var(--color-status-succeeded);
+}
+
+.ds-badge--failed {
+  background-color: var(--color-status-failed-bg);
+  color: var(--color-status-failed);
+}
+
+.ds-badge--cancelled {
+  background-color: var(--color-status-cancelled-bg);
+  color: var(--color-status-cancelled);
+}
+
+.ds-badge--stalled {
+  background-color: var(--color-status-stalled-bg);
+  color: var(--color-status-stalled);
+}
+
+.ds-badge--neutral {
+  background-color: var(--color-surface-1);
+  color: var(--color-text-secondary);
+}
+
+.ds-badge--info {
+  background-color: var(--color-surface-1);
+  color: var(--color-text-secondary);
+}
+
+.ds-badge--warning {
+  background-color: color-mix(in oklch, var(--color-status-paused) 6%, transparent);
+  color: var(--color-status-paused);
+}
+
+.ds-badge--success {
+  background-color: color-mix(in oklch, var(--color-status-succeeded) 6%, transparent);
+  color: var(--color-status-succeeded);
+}
+
+.ds-badge--danger {
+  background-color: color-mix(in oklch, var(--color-status-failed) 6%, transparent);
+  color: var(--color-status-failed);
+}
+
+.ds-badge--accent {
+  background-color: var(--color-accent-bg);
+  color: var(--color-accent-default);
+}
+
+/* ==========================================================================
+   Card Styles
+   ========================================================================== */
+
+.ds-card {
+  display: flex;
+  flex-direction: column;
+  background-color: var(--surface-raised-alpha, var(--color-surface-0));
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  padding: 2px 4px;
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  transition:
+    border-color var(--transition-duration-fast) var(--transition-timing-default),
+    box-shadow var(--transition-duration-fast) var(--transition-timing-default);
+}
+
+.ds-card--elevated {
+  box-shadow: var(--shadow-md);
+  border-color: transparent;
+}
+
+.ds-card--interactive:hover {
+  border-color: var(--color-border-strong);
+  box-shadow: var(--shadow-md);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, white 5%, transparent) 0%, transparent 38%),
+    var(--surface-raised-alpha);
+}
+
+/* Glossy modifier — static highlight: a faint top-down sheen layered
+   over the existing alpha surface. Borrowed from the glass treatment in
+   `.ds-timeline-item--running` (minus the motion). Use on cards that
+   should read as "highlighted / featured" without implying activity. */
+.ds-card--glossy {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, white 5%, transparent) 0%, transparent 38%),
+    var(--surface-raised-alpha);
+}
+
+/* Running modifier — animated conic-gradient ring traveling the
+   perimeter. Borrowed from `.ds-timeline-item--running`. Reuses the
+   `--ds-running-angle` @property and `ds-border-shine` keyframe
+   registered for the timeline. Stacks with `.ds-card--glossy` (sheen +
+   moving ring) and with `.ds-card--elevated` (shadow + ring). */
+.ds-card--running {
+  position: relative;
+  border-color: transparent;
+}
+
+.ds-card--running::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: conic-gradient(
+    from var(--ds-running-angle),
+    var(--ds-timeline-ring-floor) 0deg,
+    var(--ds-timeline-ring-floor) 55deg,
+    var(--ds-timeline-ring-shine) 90deg,
+    var(--ds-timeline-ring-floor) 125deg,
+    var(--ds-timeline-ring-floor) 360deg
+  );
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+  animation: ds-border-shine 5s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-card--running::before {
+    animation: none;
+    background: var(--ds-timeline-ring-floor);
+  }
+}
+
+.ds-card__header {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.ds-card__body {
+  padding: var(--space-3);
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.ds-card__body > * {
+  justify-content: space-between !important;
+}
+
+.ds-card__footer {
+  padding: var(--space-3) var(--space-5);
+  border-top: 1px solid var(--color-border-subtle);
+  background-color: var(--color-surface-1);
+  border-radius: 0 0 var(--space-2xl) var(--space-2xl);
+  margin-bottom: var(--space-2);
+  background-color: var(--surface-overlay-alpha, var(--color-surface-1));
+}
+
+/* ==========================================================================
+   List / ListItem
+   ========================================================================== */
+
+.ds-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.ds-list--dividers > .ds-list-item + .ds-list-item {
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+/* ── ListItem base ── */
+.ds-list-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  min-height: 40px;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  cursor: default;
+  transition:
+    background-color var(--transition-duration-fast) var(--transition-timing-default),
+    border-color var(--transition-duration-fast) var(--transition-timing-default);
+}
+
+/* ── Clickable ── */
+.ds-list-item--clickable {
+  cursor: pointer;
+  border-color: var(--color-border-subtle);
+  background-color: var(--color-surface-1);
+}
+
+.ds-list-item--clickable:hover:not(:disabled) {
+  background-color: var(--color-surface-2);
+  border-color: var(--color-border-default);
+}
+
+.ds-list-item--clickable:active:not(:disabled) {
+  background-color: var(--color-surface-2);
+}
+
+.ds-list-item--clickable:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--color-focus-ring);
+}
+
+/* ── Selected ── */
+.ds-list-item--selected {
+  background-color: var(--color-interactive-muted);
+  border-color: var(--color-interactive-default);
+}
+
+.ds-list-item--selected.ds-list-item--clickable:hover:not(:disabled) {
+  background-color: var(--color-interactive-muted);
+  border-color: var(--color-interactive-hover);
+}
+
+/* ── Disabled ── */
+.ds-list-item--disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* ── Slots ── */
+.ds-list-item__leading {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  color: var(--color-content-muted);
+}
+
+.ds-list-item__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0);
+}
+
+.ds-list-item__title {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-content-primary);
+  line-height: var(--line-height-tight);
+}
+
+.ds-list-item__subtitle {
+  font-size: var(--font-size-xs);
+  color: var(--color-content-muted);
+  line-height: var(--line-height-tight);
+}
+
+.ds-list-item__trailing {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+.ds-list-item__value {
+  font-size: var(--font-size-xs);
+  color: var(--color-content-muted);
+}
+
+/* ==========================================================================
+   Spinner Styles
+   ========================================================================== */
+
+.ds-spinner {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  border: 2px solid var(--color-border-default);
+  border-top-color: var(--color-interactive-default);
+  border-radius: 50%;
+  animation: ds-spin 0.8s var(--transition-timing-ease-in-out) infinite;
+}
+
+.ds-spinner--sm {
+  width: 14px;
+  height: 14px;
+  border-width: 1px;
+}
+
+.ds-spinner--md {
+  width: 20px;
+  height: 20px;
+}
+
+.ds-spinner--lg {
+  width: 28px;
+  height: 28px;
+  border-width: 2.5px;
+}
+
+@keyframes ds-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Send button pulse — gentle breathing glow while message is in flight */
+.ds-send-pulse {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: ds-send-breathe 1.4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes ds-send-breathe {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.5;
+    transform: scale(0.85);
+  }
+}
+
+/* ==========================================================================
+   Divider Styles
+   ========================================================================== */
+
+.ds-divider {
+  border: none;
+  border-top: 1px solid var(--color-border-default);
+  margin: 10px 0px;
+}
+
+.ds-divider--subtle {
+  border-top-color: var(--color-border-subtle);
+}
+
+.ds-divider--vertical {
+  border: none;
+  width: 1px;
+  align-self: stretch;
+  background-color: var(--color-border-default);
+  margin: 0;
+}
+
+.ds-divider--vertical.ds-divider--subtle {
+  background-color: var(--color-border-subtle);
+}
+
+/* ==========================================================================
+   Text Utilities
+   ========================================================================== */
+
+.ds-text-primary {
+  color: var(--color-text-primary);
+}
+.ds-text-secondary {
+  color: var(--color-text-secondary);
+}
+.ds-text-muted {
+  color: var(--color-text-muted);
+}
+.ds-text-inverse {
+  color: var(--color-text-inverse);
+}
+
+.ds-text-xs {
+  font-size: var(--font-size-xs);
+}
+.ds-text-sm {
+  font-size: var(--font-size-sm);
+}
+.ds-text-base {
+  font-size: var(--font-size-base);
+}
+.ds-text-lg {
+  font-size: var(--font-size-lg);
+  font-family: var(--font-family-title);
+}
+.ds-text-xl {
+  font-size: var(--font-size-xl);
+}
+
+.ds-font-normal {
+  font-weight: var(--font-weight-normal);
+}
+.ds-font-medium {
+  font-weight: var(--font-weight-medium);
+}
+.ds-font-semibold {
+  font-weight: var(--font-weight-semibold);
+}
+.ds-font-bold {
+  font-weight: var(--font-weight-bold);
+}
+
+.ds-font-mono {
+  font-family: var(--font-family-mono);
+}
+
+.ds-truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ==========================================================================
+   Chat Composer
+   ========================================================================== */
+
+.ds-chat-composer-input::placeholder {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+/* Focus wakes the whole input area, not just the pill. The shell (hint rows,
+   action bar, the pill) and the pill inside it play the same motion at
+   different amplitudes and offset in time: the pill leads on the way in, the
+   shell leads on the way out, so the two read as one object settling rather
+   than two boxes resizing. Scales stay at or below 1 at rest — the wrappers
+   above clip, so a resting scale over 1 would shave the edges.
+
+   The two scales multiply, so the pill's effective rest is shell × pill. Tune
+   them together. */
+.ds-composer-shell,
+.ds-chat-composer {
+  transform-origin: 50% 50%;
+}
+
+.ds-composer-shell {
+  transition: transform var(--transition-duration-slow) var(--transition-timing-ease-out);
+}
+
+.ds-composer-shell:not(:focus-within) {
+  transform: scale(0.99);
+}
+
+.ds-composer-shell:focus-within {
+  transform: scale(1);
+  /* Spring on the way in only — waking up overshoots, going quiet doesn't. */
+  transition: transform 220ms var(--transition-timing-spring) 60ms;
+}
+
+.ds-chat-composer {
+  transition: transform var(--transition-duration-slow) var(--transition-timing-ease-out) 60ms;
+}
+
+.ds-chat-composer:not([data-focused='true']) {
+  transform: scale(0.99);
+}
+
+.ds-chat-composer[data-focused='true'] {
+  transform: scale(1);
+  transition: transform 180ms var(--transition-timing-spring);
+}
+
+/* Squash and stretch on send — the pill takes the press, rebounds past its
+   resting size, and rings down. Overshoot stays within a couple of percent
+   so the clipping wrapper never shaves the rebound. */
+.ds-chat-composer--sent {
+  animation: ds-composer-elastic 560ms var(--transition-timing-ease-out);
+}
+
+@keyframes ds-composer-elastic {
+  0% {
+    transform: scale(1, 1);
+  }
+  16% {
+    transform: scale(1.014, 0.9);
+  }
+  34% {
+    transform: scale(0.99, 1.032);
+  }
+  52% {
+    transform: scale(1.006, 0.982);
+  }
+  70% {
+    transform: scale(0.997, 1.009);
+  }
+  86% {
+    transform: scale(1.001, 0.997);
+  }
+  100% {
+    transform: scale(1, 1);
+  }
+}
+
+.ds-chat-composer--sent .ds-chat-composer__send {
+  animation: ds-composer-send-pop 420ms var(--transition-timing-spring);
+}
+
+@keyframes ds-composer-send-pop {
+  0% {
+    transform: scale(1);
+  }
+  28% {
+    transform: scale(0.82);
+  }
+  60% {
+    transform: scale(1.1);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* The shell answers the pill's send bounce: same curve, a fraction of the
+   amplitude, a beat later. Driven off the pill's own class so the two can
+   never drift out of step. */
+.ds-composer-shell:has(.ds-chat-composer--sent) {
+  animation: ds-composer-elastic-shell 560ms var(--transition-timing-ease-out) 40ms;
+}
+
+@keyframes ds-composer-elastic-shell {
+  0% {
+    transform: scale(1, 1);
+  }
+  16% {
+    transform: scale(1.005, 0.965);
+  }
+  34% {
+    transform: scale(0.997, 1.012);
+  }
+  52% {
+    transform: scale(1.002, 0.994);
+  }
+  70% {
+    transform: scale(0.999, 1.003);
+  }
+  100% {
+    transform: scale(1, 1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-composer-shell:not(:focus-within),
+  .ds-composer-shell:focus-within,
+  .ds-chat-composer:not([data-focused='true']),
+  .ds-chat-composer[data-focused='true'] {
+    transform: none;
+  }
+}
+
+/* ==========================================================================
+   Chat Message Styles
+   ========================================================================== */
+
+@keyframes ds-chat-message-in {
+  from {
+    opacity: 0;
+    transform: translateY(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.ds-chat-message {
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+}
+
+.ds-chat-message--user {
+  animation: ds-chat-message-in 580ms var(--transition-timing-ease-out) both;
+}
+
+/* Non-user bubbles get a softer entrance, but ONLY when they mount as final
+   content (`animateIn` latched at mount by the caller). Streaming placeholders
+   mount without the class and are promoted in place — same node, no class
+   change — so streamed text never re-animates after completion. */
+@keyframes ds-chat-message-in-soft {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.ds-chat-message--animate-in:not(.ds-chat-message--user) {
+  animation: ds-chat-message-in-soft 360ms var(--transition-timing-ease-out) both;
+}
+
+.ds-chat-message--user {
+  margin-left: auto;
+  margin-right: var(--space-1);
+  max-width: 85%;
+  width: fit-content;
+  flex-direction: row-reverse;
+}
+
+.ds-chat-message--user .ds-chat-message__content {
+  background-color: var(--color-surface-3);
+  border-radius: var(--radius-lg);
+  border-top-right-radius: 0px;
+  padding: var(--space-3) var(--space-4);
+}
+
+/* Another human in a shared room keeps the human side — humans right, agent
+   left, so bubbles never interleave across the step boxes in the stream.
+   Their attention-amber name and their own avatar carry the distinction. */
+.ds-chat-message--user.ds-chat-message--peer .ds-chat-message__role {
+  color: var(--color-warning-default);
+  font-weight: var(--font-weight-semibold);
+}
+
+.ds-chat-message--assistant {
+  /* background-color: var(--color-surface-1); */
+  border-radius: var(--radius-lg);
+  margin: var(--space-4) var(--space-0) var(--space-1) var(--space-0);
+}
+
+.ds-chat-message--system {
+  background-color: var(--color-info-bg);
+  border-radius: var(--radius-lg);
+  font-size: var(--font-size-sm);
+  margin: var(--space-1) var(--space-4);
+  color: var(--color-text-muted) !important;
+  max-width: 300px;
+  width: fit-content;
+}
+.ds-chat-message--system p {
+  color: var(--color-text-muted) !important;
+}
+
+.ds-chat-message--tool {
+  background-color: var(--color-surface-2);
+  border-radius: var(--radius-lg);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  margin: var(--space-1) 0;
+}
+
+.ds-chat-message__avatar {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  aspect-ratio: 1 / 1;
+  border-radius: var(--radius-lg);
+  background-color: var(--color-surface-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+}
+
+/* The avatar's own children (an <img> photo, an icon, a letter) are flex
+   items of the avatar box above and default to flex-shrink: 1 — a
+   replaced element like <img> can then shrink only its width inside a
+   flex row, distorting a circular photo into an oval. Pin it square. */
+.ds-chat-message__avatar > * {
+  flex-shrink: 0;
+}
+
+.ds-chat-message--user .ds-chat-message__avatar {
+  background-color: var(--color-interactive-muted);
+  color: var(--color-interactive-default);
+}
+
+.ds-chat-message--assistant .ds-chat-message__avatar {
+  background-color: var(--color-interactive-muted);
+  color: var(--color-text-secondary);
+}
+
+.ds-chat-message__content {
+  flex: 1;
+  min-width: 0;
+}
+
+.ds-chat-message__role {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-muted);
+  margin-bottom: 2px;
+  letter-spacing: var(--font-letter-spacing-wide);
+  text-transform: uppercase;
+}
+
+.ds-chat-message__body {
+  font-size: var(--font-size-base);
+  line-height: var(--font-line-height-relaxed);
+  color: var(--color-text-primary);
+}
+
+/* ==========================================================================
+   Timeline Styles
+   ========================================================================== */
+
+.ds-timeline {
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  gap: var(--space-2-5);
+  /* Color of the progress fill / connector spine. Success-green by
+     default; a failed/cancelled run flips it to the failure color via
+     the `--tone-failed` modifier so the spine no longer reads as green
+     (success) on a run that didn't succeed. */
+  --ds-timeline-fill: var(--color-status-succeeded);
+}
+
+.ds-timeline--tone-failed {
+  --ds-timeline-fill: var(--color-status-failed);
+}
+
+/* Neutral connector track running through the marker column. */
+.ds-timeline::before {
+  content: '';
+  position: absolute;
+  left: 21px;
+  top: -1px;
+  bottom: -10px;
+  width: 2px;
+  border-radius: var(--radius-full);
+}
+
+/* Progress fill — paints the track from the top down to the
+   `--ds-timeline-progress` fraction (0–1) in the run's progress color,
+   with a glowing leading edge. Rendered as a real element (not a
+   pseudo) so the leading-edge tip + active sweep can layer on top. */
+.ds-timeline__fill {
+  position: absolute;
+  left: 21px;
+  top: 0px;
+  width: 2px;
+  border-radius: var(--radius-full);
+  height: calc((100% - 17px) * var(--ds-timeline-progress, 0));
+  background: linear-gradient(
+    to bottom,
+    var(--ds-timeline-fill) 0%,
+    color-mix(in srgb, var(--ds-timeline-fill) 65%, transparent) 100%
+  );
+  transition: height var(--transition-duration-slow) var(--transition-timing-ease-out);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* While the run is live, energy travels down the filled portion. */
+.ds-timeline--active .ds-timeline__fill {
+  background-image:
+    linear-gradient(
+      to bottom,
+      transparent 0%,
+      color-mix(in srgb, var(--color-status-running) 85%, white) 50%,
+      transparent 100%
+    ),
+    linear-gradient(
+      to bottom,
+      var(--ds-timeline-fill) 0%,
+      color-mix(in srgb, var(--ds-timeline-fill) 65%, transparent) 100%
+    );
+  background-size:
+    100% 60%,
+    100% 100%;
+  background-repeat: no-repeat, no-repeat;
+  animation: ds-timeline-energy 1.8s var(--transition-timing-ease-in-out) infinite;
+}
+
+@keyframes ds-timeline-energy {
+  0% {
+    background-position:
+      0 -60%,
+      0 0;
+  }
+  100% {
+    background-position:
+      0 160%,
+      0 0;
+  }
+}
+
+.ds-timeline-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-2-5);
+  position: relative;
+  background: var(--surface-raised-alpha);
+  border-radius: var(--radius-lg);
+  /* Rows fade+slide in once when they first appear (new task claimed /
+     forward node materialises). Keyed by taskId upstream so this fires
+     once per row, not on status changes. */
+  animation: ds-timeline-enter var(--transition-duration-normal) var(--transition-timing-spring)
+    both;
+  /* Status changes (→ paused amber, → failed tint) ease in rather than
+     snap. Gradient backgrounds (the running glass) can't tween, but the
+     flat status fills cross-fade nicely. */
+  transition: background-color var(--transition-duration-normal) var(--transition-timing-default);
+}
+
+@keyframes ds-timeline-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.ds-timeline-item__marker {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-full);
+  background-color: var(--color-surface-0);
+  border: 1px solid var(--color-border-subtle);
+  color: var(--color-text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1;
+  transition:
+    background-color var(--transition-duration-fast) var(--transition-timing-default),
+    color var(--transition-duration-fast) var(--transition-timing-default),
+    box-shadow var(--transition-duration-normal) var(--transition-timing-default);
+}
+
+.ds-timeline-item__marker--running {
+  background-color: var(--color-status-running-bg);
+  color: var(--color-status-running);
+  animation: ds-marker-pulse 2.4s ease-in-out infinite;
+}
+
+/* Steady breathing halo around an active marker. Uses `currentColor` so
+   the same keyframe tints to the marker's own status color (running grey,
+   paused amber, …). An always-on soft glow that breathes wider/brighter
+   so it's clearly visible. */
+@keyframes ds-marker-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 4px 1px color-mix(in srgb, currentColor 35%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 10px 5px color-mix(in srgb, currentColor 50%, transparent);
+  }
+}
+
+/* Rotating indeterminate arc inside the running marker. */
+.ds-marker-arc {
+  animation: ds-marker-spin 0.9s linear infinite;
+  transform-origin: center;
+}
+
+@keyframes ds-marker-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Self-drawing check / cross on terminal transition. Dash length (20)
+   must exceed the longest glyph path — the failure ✕ is two diagonals
+   (~17 units total); the earlier value of 14 clipped its tail and left a
+   lopsided cross. fill-mode forwards keeps the final (fully-drawn) state,
+   which is also the resting state under prefers-reduced-motion. */
+.ds-marker-draw {
+  stroke-dasharray: 20;
+  stroke-dashoffset: 20;
+  animation: ds-marker-draw-in var(--transition-duration-slow) var(--transition-timing-ease-out)
+    forwards;
+}
+
+@keyframes ds-marker-draw-in {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.ds-timeline-item__marker--succeeded {
+  background-color: var(--color-success-bg);
+  color: var(--color-status-succeeded);
+}
+
+.ds-timeline-item__marker--failed {
+  background-color: var(--color-status-failed-bg);
+  color: var(--color-status-failed);
+}
+
+.ds-timeline-item__marker--paused {
+  background-color: var(--color-warning-bg);
+  color: var(--color-status-paused);
+  /* Gentle amber breathing halo — this row is waiting on the user, so it
+     should quietly draw the eye (calmer than the running cadence). */
+  animation: ds-marker-pulse 2.8s ease-in-out infinite;
+}
+
+/* Paused row (waiting on user) — flat amber attention background. */
+.ds-timeline-item--paused {
+  background: var(--color-accent-bg);
+  padding: var(--space-4) var(--space-4) var(--space-4) var(--space-2-5);
+  border: 1px solid var(--color-accent-fg);
+}
+
+/* Failed / cancelled / blocked row — flat error-tinted background. */
+.ds-timeline-item--failed {
+  background: var(--color-status-failed-bg);
+  border: 1px solid var(--color-status-failed-fg);
+}
+
+/* Row-level highlight for an actively-running item — a "glassy" card:
+   an animated gradient border ring with a highlight that travels the
+   perimeter, plus a faint top sheen for glass. The ring colors are
+   theme-aware (bright shine in dark, polished dark glint in light).
+   Degrades to a soft static running-tinted border when @property is
+   unsupported or under prefers-reduced-motion. */
+
+/* Registered so the conic-gradient angle can be animated smoothly. */
+@property --ds-running-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+
+.ds-timeline-item--running {
+  position: relative;
+  /* Transparent border reserves the ring space; the ::before paints it. */
+  border: 1px solid transparent;
+  /* Faint top-down glass sheen over the existing raised surface. */
+  background:
+    linear-gradient(180deg, color-mix(in srgb, white 7%, transparent) 0%, transparent 42%),
+    var(--surface-raised-alpha);
+}
+
+/* Animated gradient border ring. The soft running tint floors the whole
+   perimeter; a bright near-white highlight rotates around it for the
+   "shine". Masked so only the 1px ring is painted. */
+.ds-timeline-item--running::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: conic-gradient(
+    from var(--ds-running-angle),
+    var(--ds-timeline-ring-floor) 0deg,
+    var(--ds-timeline-ring-floor) 55deg,
+    var(--ds-timeline-ring-shine) 90deg,
+    var(--ds-timeline-ring-floor) 125deg,
+    var(--ds-timeline-ring-floor) 360deg
+  );
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+  animation: ds-border-shine 3.2s linear infinite;
+}
+
+@keyframes ds-border-shine {
+  to {
+    --ds-running-angle: 360deg;
+  }
+}
+
+.ds-timeline-item__content {
+  flex: 1;
+  min-width: 0;
+  padding-top: 2px;
+  display: flex;
+  flex-direction: column;
+  /* No `gap` here: the title↔body spacing lives on the body's padding-top
+     so it sits INSIDE the <AnimatedHeight> wrapper and animates away with
+     the body. A gap would leave 4px of dead space under the title whenever
+     the (always-mounted) wrapper is at height 0. */
+}
+
+.ds-timeline-item__title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2-5);
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+}
+
+.ds-timeline-item__title-icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  color: var(--color-text-secondary);
+  width: 16px;
+  height: 16px;
+}
+
+.ds-timeline-item__title-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* Holds the time + any sublines below the title. The top padding is the
+   title↔body spacing (see __content note) — kept on the body so it tweens
+   in/out with the surrounding <AnimatedHeight>. */
+.ds-timeline-item__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+/* When the title carries an inline kind-icon, indent the body so the time
+   and sublines align under the title TEXT instead of starting under the
+   icon (width 16px + the title's icon→text gap). */
+.ds-timeline-item__body--indented {
+  padding-left: calc(16px + var(--space-2-5));
+}
+
+.ds-timeline-item__time {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+/* Right-aligned time on the title row (timeAlign="end"). Pushed to the row
+   end; tabular figures keep durations vertically aligned across rows. The
+   right padding reserves room for an absolute top-right affordance (the
+   workflow surface's "open runner" icon) so the two never overlap. */
+.ds-timeline-item__time--end {
+  margin-left: auto;
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  padding-right: calc(16px + var(--space-2));
+}
+
+/* =============================================================================
+   ShimmerText — animated gradient "thinking" text. The canonical
+   "AI is working" affordance: a highlight band travels across the
+   text. Falls back to a solid muted color under reduced motion.
+   ============================================================================= */
+.ds-shimmer-text {
+  background: linear-gradient(
+    90deg,
+    var(--color-text-muted) 0%,
+    var(--color-text-muted) 35%,
+    var(--color-text-primary) 50%,
+    var(--color-text-muted) 65%,
+    var(--color-text-muted) 100%
+  );
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: ds-text-shimmer 2.2s linear infinite;
+}
+
+@keyframes ds-text-shimmer {
+  0% {
+    background-position: 150% 0;
+  }
+  100% {
+    background-position: -50% 0;
+  }
+}
+
+/* =============================================================================
+   Swap — vertical content swap. When the consumer changes `swapKey`, the
+   outgoing content slides up + fades out and the incoming content rises in
+   from below. The container clips the vertical travel; layers truncate to a
+   single line when the inherited `white-space` is `nowrap`. Under
+   prefers-reduced-motion the global reset collapses the slide to a cut.
+   ============================================================================= */
+.ds-swap {
+  display: block;
+  position: relative;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.ds-swap__layer {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* Inherit the container's wrapping mode so a `white-space: nowrap` parent
+     yields single-line ellipsis, while a wrapping parent renders normally. */
+  white-space: inherit;
+}
+
+.ds-swap__layer--in {
+  animation: ds-swap-in var(--transition-duration-normal) var(--transition-timing-ease-out) both;
+}
+
+.ds-swap__layer--out {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  animation: ds-swap-out var(--transition-duration-normal) var(--transition-timing-ease-out) both;
+}
+
+@keyframes ds-swap-in {
+  from {
+    opacity: 0;
+    transform: translateY(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes ds-swap-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-100%);
+  }
+}
+
+/* =============================================================================
+   SwapStack — vertical rolling trail of the last N content states. The current
+   line sits at the bottom in full color; recent history rises above it,
+   progressively dimmer with age. On each roll the bottom-pinned track shifts up
+   one line (driven inline via a FLIP), the incoming line rises into the bottom,
+   and the evicted line slides up + fades out the top. The container clips the
+   vertical travel and animates its own height as the trail fills. Under
+   prefers-reduced-motion the global reset collapses the roll to a cut.
+   ============================================================================= */
+.ds-swap-stack {
+  --ds-swap-stack-line-h: 1.3em;
+  --ds-swap-stack-dur: var(--transition-duration-normal);
+  --ds-swap-stack-ease: var(--transition-timing-ease-out);
+  display: block;
+  position: relative;
+  overflow: hidden;
+  min-width: 0;
+  /* height is set inline = visibleCount * line-h; transition smooths the
+     one-line growth as the trail fills to `depth`. */
+  transition: height var(--ds-swap-stack-dur) var(--ds-swap-stack-ease);
+}
+
+.ds-swap-stack__track {
+  display: block;
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  min-width: 0;
+  will-change: transform;
+  border-left: 3px dotted var(--color-border-strong);
+  padding-left: var(--space-2-5);
+}
+
+.ds-swap-stack__line {
+  display: block;
+  line-height: var(--ds-swap-stack-line-h);
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* Inherit the parent's wrapping so a `white-space: nowrap` host yields
+     single-line ellipsis — one line box per entry keeps the roll math exact. */
+  white-space: inherit;
+  /* Ease the dimming as a line ages into a higher rank. */
+  transition: opacity var(--ds-swap-stack-dur) var(--ds-swap-stack-ease);
+}
+
+.ds-swap-stack__line--exit {
+  animation: ds-swap-stack-exit var(--ds-swap-stack-dur) var(--ds-swap-stack-ease) both;
+}
+
+@keyframes ds-swap-stack-exit {
+  from {
+    opacity: 0.32;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/* Only the live bottom line reads as "working": flatten shimmer text to a plain
+   dimmed color on every history line so the trail isn't a column of shimmers. */
+.ds-swap-stack__line:not(.ds-swap-stack__line--current) .ds-shimmer-text {
+  background: none;
+  -webkit-text-fill-color: currentColor;
+  color: currentColor;
+  animation: none;
+}
+
+/* =============================================================================
+   AnimatedHeight — smooth height for content-driven size changes. CSS can't
+   transition to/from `height: auto`, so when content mounts/unmounts inside
+   a box its height snaps. <AnimatedHeight> keeps an explicit pixel height on
+   this wrapper (synced from the inner content via ResizeObserver) so growth
+   and shrink tween instead, and everything below slides along. Under
+   prefers-reduced-motion the global reset collapses the tween to a cut.
+   ============================================================================= */
+.ds-animated-height {
+  /* `clip` not `hidden`: clips identically but doesn't create a scroll
+     container, so programmatic scrolling (scrollIntoView) can't silently
+     offset the clipped content. */
+  overflow: clip;
+  transition: height var(--transition-duration-normal) var(--transition-timing-default);
+}
+
+/* flow-root so children's margins are contained in the measured height
+   instead of collapsing through the wrapper and escaping the measure. */
+.ds-animated-height__inner {
+  display: flow-root;
+}
+
+/* Horizontal twin of .ds-animated-height — collapse/dock side panels. */
+.ds-animated-width {
+  overflow: clip;
+  height: 100%;
+  flex-shrink: 0;
+  transition: width var(--transition-duration-normal) var(--transition-timing-default);
+}
+
+/* Natural (max-content) width in observer mode; overridden inline to a fixed
+   px width in docked-panel mode so content stays laid out while clipped. */
+.ds-animated-width__inner {
+  width: max-content;
+  height: 100%;
+}
+
+/* =============================================================================
+   Surface entrance — fade + gentle rise. Applied to cards/surfaces that
+   mount (or settle in) from async data, e.g. the workflow run card when its
+   first state lands. `backwards` fill keeps the resting state owned by the
+   element's own styles (so e.g. a completed card can still dim via its base
+   opacity) while the keyframes only drive the entrance.
+   ============================================================================= */
+.ds-enter-rise {
+  animation: ds-enter-rise var(--transition-duration-slow) var(--transition-timing-spring) backwards;
+}
+
+@keyframes ds-enter-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* ==========================================================================
+   Code Block Styles
+   ========================================================================== */
+
+.ds-code-block {
+  position: relative;
+  background-color: var(--color-surface-1);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.ds-code-block__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-1) var(--space-2);
+  background-color: var(--color-surface-2);
+  border-bottom: 1px solid var(--color-border-default);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  min-height: 0;
+  line-height: 1;
+}
+
+.ds-code-block__label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ds-code-block__content {
+  padding: var(--space-2) var(--space-3);
+  overflow-x: auto;
+}
+
+.ds-code-block__content pre {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+}
+
+.ds-code-block__copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 2px;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--color-text-muted);
+  opacity: 0.6;
+  transition: opacity var(--transition-duration-fast) var(--transition-timing-default);
+}
+
+.ds-code-block__copy:hover {
+  opacity: 1;
+}
+
+/* Floating copy — no header, icon overlays top-right on hover */
+.ds-code-block > .ds-code-block__copy {
+  position: absolute;
+  top: var(--space-1);
+  right: var(--space-1);
+  padding: var(--space-1);
+  opacity: 0;
+  background-color: var(--color-surface-2);
+  border-radius: var(--radius-sm);
+  z-index: 1;
+}
+
+.ds-code-block:hover > .ds-code-block__copy {
+  opacity: 0.7;
+}
+
+.ds-code-block > .ds-code-block__copy:hover {
+  opacity: 1;
+}
+
+/* Touch has no hover — keep the floating copy affordance visible */
+@media (hover: none) {
+  .ds-code-block > .ds-code-block__copy {
+    opacity: 0.7;
+  }
+}
+
+/* ==========================================================================
+   Key-Value Table Styles
+   ========================================================================== */
+
+.ds-kv-table {
+  width: 100%;
+  font-size: var(--font-size-sm);
+}
+
+.ds-kv-table__row {
+  display: flex;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.ds-kv-table__row:last-child {
+  border-bottom: none;
+}
+
+.ds-kv-table__key {
+  flex: 0 0 130px;
+  padding: var(--space-2);
+  color: var(--color-text-muted);
+  font-weight: var(--font-weight-medium);
+  font-size: var(--font-size-xs);
+  letter-spacing: var(--font-letter-spacing-wide);
+  text-transform: uppercase;
+}
+
+.ds-kv-table__value {
+  flex: 1;
+  padding: var(--space-2);
+  color: var(--color-text-primary);
+  min-width: 0;
+}
+
+/* ==========================================================================
+   Tooltip styles
+   ========================================================================== */
+
+.ds-tooltip {
+  position: relative;
+}
+
+.ds-tooltip__content {
+  position: absolute;
+  z-index: var(--z-tooltip);
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--font-size-xs);
+  background-color: var(--color-interactive-default);
+  color: var(--color-content-inverse);
+  border-radius: var(--radius-md);
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: var(--shadow-lg);
+}
+
+/* Multiline tooltips (opt-in via Tooltip wrap prop) */
+.ds-tooltip__content.ds-tooltip__content--wrap {
+  white-space: normal;
+  max-width: min(22rem, calc(100vw - 1.5rem));
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+/* ==========================================================================
+   Skeleton / Loading placeholder
+   ========================================================================== */
+
+.ds-skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--color-surface-2) 25%,
+    var(--color-surface-1) 50%,
+    var(--color-surface-2) 75%
+  );
+  background-size: 200% 100%;
+  animation: ds-shimmer 1.5s var(--transition-timing-ease-in-out) infinite;
+  border-radius: var(--radius-md);
+}
+
+@keyframes ds-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+/* ==========================================================================
+   Empty state
+   ========================================================================== */
+
+.ds-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-12) var(--space-6);
+  text-align: center;
+  color: var(--color-text-muted);
+  gap: var(--space-3);
+}
+
+.ds-empty-state__icon {
+  color: var(--color-border-strong);
+  margin-bottom: var(--space-2);
+}
+
+/* ==========================================================================
+   Responsive Utilities
+   Breakpoints: sm 640px, md 768px, lg 1024px, xl 1280px
+   ========================================================================== */
+
+.ds-hide-mobile {
+  display: none !important;
+}
+.ds-hide-desktop {
+  display: flex !important;
+}
+
+@media (min-width: 640px) {
+  .ds-hide-mobile {
+    display: flex !important;
+  }
+}
+
+@media (min-width: 1024px) {
+  .ds-hide-desktop {
+    display: none !important;
+  }
+}
+
+/* Live-presence dot — "someone else is here", breathing while they type. */
+.ds-presence-dot {
+  width: 6px;
+  height: 6px;
+  margin-left: 5px;
+  border-radius: var(--radius-full);
+  background: var(--color-accent-default);
+  flex-shrink: 0;
+}
+
+.ds-presence-dot--typing {
+  animation: ds-presence-breathe 1.4s ease-in-out infinite;
+}
+
+@keyframes ds-presence-breathe {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.75);
+  }
+}
+
+/* Mobile sidebar overlay */
+.ds-sidebar-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--color-scrim);
+  z-index: var(--z-overlay);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--transition-duration-normal) var(--transition-timing-ease-out);
+}
+
+.ds-sidebar-overlay--visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Mobile sidebar drawer */
+.ds-sidebar-drawer {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: min(280px, 85vw);
+  z-index: var(--z-modal);
+  /* The scrim is painted full-bleed beneath the drawer, so a translucent panel
+     (or a backdrop-filter, which samples it) tints the whole drawer with it.
+     Opaque floor first, raised tint layered on top. */
+  background-color: var(--ds-canvas-floor);
+  background-image: linear-gradient(var(--surface-raised-alpha), var(--surface-raised-alpha));
+  border-right: 1px solid var(--color-border-subtle);
+  border-radius: 0 var(--space-xl) var(--space-xl) 0;
+  transform: translateX(-100%);
+  transition: transform var(--transition-duration-normal) var(--transition-timing-ease-out);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+}
+
+.ds-sidebar-drawer--open {
+  transform: translateX(0);
+}
+
+/*
+ * App shell sidebar: nav/footer use flex align-items (center when rail minimized, stretch when expanded).
+ * Tooltip wraps each control in an inline <span>; without full width, stretched flex lines still look
+ * content-sized/centered. Expand trigger spans only when the rail is expanded.
+ */
+.ds-app-shell__sidebar-nav[data-sidebar-rail='expanded'] .ds-tooltip,
+.ds-app-shell__sidebar-footer[data-sidebar-rail='expanded'] .ds-tooltip {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+/* Mobile header bar (shown only on mobile) */
+.ds-mobile-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: calc(var(--space-1) + env(safe-area-inset-top)) var(--space-md) var(--space-1);
+  min-height: calc(44px + env(safe-area-inset-top));
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+  background-color: var(--color-surface-0);
+}
+
+@media (min-width: 1024px) {
+  .ds-mobile-header {
+    display: none;
+  }
+}
+
+/* Responsive chat message layout */
+@media (max-width: 639px) {
+  /* Stack the avatar above the bubble instead of beside it, so the
+     message content gets the full width instead of losing a column
+     to the avatar on narrow screens. */
+  .ds-chat-message {
+    flex-direction: column;
+    padding: var(--space-2) var(--space-3);
+    gap: var(--space-1-5);
+  }
+
+  /* Width/height intentionally NOT overridden here: avatar content (e.g.
+     UserAvatar's <img>, ParticipantBadge) is sized in JS at a fixed 28px
+     independent of this breakpoint. Shrinking only the box while the photo
+     stays 28px is exactly what caused the oval/egg distortion — box and
+     content size must always match. */
+  .ds-chat-message__avatar {
+    font-size: 10px;
+  }
+
+  .ds-chat-message--user {
+    flex-direction: column;
+    align-items: flex-end;
+    max-width: 92%;
+  }
+
+  .ds-chat-message--user .ds-chat-message__content {
+    padding: var(--space-2) var(--space-3);
+  }
+
+  .ds-chat-message--system {
+    margin: var(--space-1) var(--space-2);
+  }
+
+  .ds-chat-message__role {
+    font-size: 10px;
+    margin-bottom: 1px;
+  }
+
+  .ds-chat-message__body {
+    font-size: var(--font-size-sm);
+    line-height: var(--font-line-height-normal);
+  }
+}
+
+/* ==========================================================================
+   Key hint
+   ========================================================================== */
+
+.ds-key-hint {
+  display: inline-block;
+  padding: 1px var(--space-1);
+  font-family: var(--font-family-mono);
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--color-content-secondary);
+  background-color: var(--color-surface-quoted);
+  border: 1px solid var(--color-border-emphasis);
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+}
+
+/* ==========================================================================
+   Mobile & touch adaptations
+   ========================================================================== */
+
+/* 16px input text on phones keeps iOS from auto-zooming on focus, which is
+   what lets the viewport stay user-scalable (WCAG 1.4.4). */
+@media (max-width: 639px) {
+  .ds-input,
+  .ds-select-trigger {
+    font-size: 16px;
+  }
+
+  .ds-grid--fixed-columns {
+    grid-template-columns: 1fr !important;
+  }
+
+  .ds-kv-table__key {
+    flex: 0 0 100px;
+  }
+}
+
+/* Minimum hit areas on touch-primary devices. Sizes stay visually compact on
+   desktop; only coarse pointers pay the vertical cost. */
+@media (pointer: coarse) {
+  .ds-button {
+    min-height: 40px;
+  }
+
+  .ds-button--sm {
+    min-height: 36px;
+  }
+
+  .ds-button--icon {
+    min-height: 40px;
+    min-width: 40px;
+  }
+
+  .ds-tab {
+    min-height: 44px;
+  }
+
+  .ds-toggle-chip {
+    min-height: 32px;
+  }
+
+  .ds-checkbox-wrapper {
+    min-height: 40px;
+  }
+}

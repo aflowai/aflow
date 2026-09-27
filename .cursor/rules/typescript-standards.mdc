@@ -1,0 +1,77 @@
+---
+description: TypeScript coding standards for Phoenix. Enforced by tsconfig strict mode and ESLint.
+globs: "**/*.ts,**/*.tsx"
+alwaysApply: false
+---
+
+# TypeScript Standards
+
+## Strict Mode Rules (enforced by tsconfig)
+
+1. **`exactOptionalPropertyTypes`**: `foo?: string` means `string | undefined` at the declaration site, but you cannot assign `undefined` explicitly to a property typed as `foo?: string`. Use `foo: string | undefined` if you need to pass `undefined`.
+
+```typescript
+// ❌ BAD
+interface Opts { name?: string }
+const o: Opts = { name: undefined }; // Error
+
+// ✅ GOOD
+interface Opts { name?: string }
+const o: Opts = {}; // Omit the property
+// OR
+interface Opts { name: string | undefined }
+const o: Opts = { name: undefined }; // Explicit union
+```
+
+2. **`noPropertyAccessFromIndexSignature`**: Index-signature properties must use bracket notation.
+
+```typescript
+// ❌ BAD
+const config: Record<string, unknown> = {};
+config.historyPolicy; // Error
+
+// ✅ GOOD
+config['historyPolicy'];
+```
+
+3. **`noUncheckedIndexedAccess`**: Indexed access returns `T | undefined`.
+
+## ESLint Rules
+
+- **No `any`**: Use `unknown` and narrow with type guards. The `@typescript-eslint/no-explicit-any` rule is enabled.
+- **Consistent type imports**: Use `import type { Foo }` for type-only imports.
+- **No floating promises**: All promises must be awaited or explicitly voided with `void`.
+- **Prefer `const`** assertions and `as const` where applicable.
+- **No unused vars**: Remove unused imports and variables. Prefix intentionally unused vars with `_` (e.g. `_setShowPanel`).
+
+## Lint / Build Hygiene
+
+Keep `yarn build` clean:
+
+- **Fix, don’t ignore**: Address `no-unused-vars`, `no-base-to-string`, `restrict-template-expressions`, and `no-unnecessary-condition` by fixing the code.
+- **Template expressions**: Use `String(n)` for numbers in template literals to satisfy `restrict-template-expressions`.
+- **Avoid `[object Object]`**: Use explicit formatting (e.g. `obj?.field`, `JSON.stringify`) instead of `String(obj)` when `obj` can be an object.
+- **Record/index access**: Use bracket notation `obj['key']` for `Record<string, unknown>` (required by `noPropertyAccessFromIndexSignature`).
+
+## Project Conventions
+
+- **Zod schemas** define the canonical types. Derive TypeScript types with `z.infer<typeof Schema>`.
+- **Branded types** (`TenantId`, `RunId`, etc.) require explicit `as` casts. Never widen them.
+- **Error handling**: Always catch with typed errors. Use `instanceof Error` checks. Never swallow errors silently — at minimum log them.
+- **Imports**: Use `.js` extensions in import paths (NodeNext module resolution).
+- **Naming**: `camelCase` for variables/functions, `PascalCase` for types/interfaces/classes, `UPPER_SNAKE` for constants.
+
+## DRY — No Duplicated Logic Across Apps
+
+- **Pure functions** (comparators, converters, validators) belong in `packages/`, not duplicated per app
+- **Row-to-domain converters** (DB row → domain type) should be a single shared function
+- **If both server and orchestrator need the same logic**, extract it to a shared package — never maintain two implementations
+- **Test**: If fixing a bug requires changing two files with the same logic, that's a DRY violation — extract to a shared location first
+
+## Common Pitfalls
+
+- Forgetting `.js` in cross-package imports: `from "../runtime/aiHistory.js"` (not `.ts`)
+- Passing `undefined` to optional properties — omit the property instead
+- Using `config.prop` on `Record<string, unknown>` — use `config['prop']`
+- Not handling `| undefined` from indexed access
+- Duplicating logic between `apps/server` and `apps/aflow-orchestrator` instead of extracting to `packages/`

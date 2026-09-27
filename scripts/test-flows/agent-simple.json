@@ -1,0 +1,48 @@
+{
+  "flowConfig": {
+    "name": "test-agent-simple",
+    "startStepId": "agent",
+    "steps": [
+      {
+        "stepId": "agent",
+        "name": "Simple Agent",
+        "description": "An agent that can fetch data from an API and complete",
+        "type": "ai",
+        "operation": "ai.agent_turn",
+        "config": {
+          "model": "gpt-4o-mini",
+          "systemPrompt": "You are a helpful agent. When asked to fetch data, use the api-fetch tool. When you have the answer, use complete. Be concise.",
+          "temperature": 0.1,
+          "turnPolicy": {
+            "maxToolCallsPerTurn": 3,
+            "allowParallel": false,
+            "allowComplete": true
+          },
+          "prompt": "${input.message}"
+        },
+        "onSuccess": {
+          "next": [{ "stepId": "api-fetch", "priority": 1 }]
+        }
+      },
+      {
+        "stepId": "api-fetch",
+        "name": "API Fetch",
+        "description": "Fetch data from an API endpoint. Input: { url: string, method?: string }",
+        "type": "api",
+        "operation": "api.call",
+        "config": {
+          "method": "GET"
+        },
+        "onSuccess": {
+          "next": [{ "stepId": "agent", "priority": 1 }]
+        },
+        "onFailure": {
+          "next": [{ "stepId": "agent", "priority": 1 }]
+        }
+      }
+    ]
+  },
+  "input": {
+    "message": "Fetch a random joke from https://official-joke-api.appspot.com/random_joke and tell me if it's funny"
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "name": "@aflow/ui-artifact-compiler",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "ts-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "npx tsup && rm -f tsconfig.tsbuildinfo && npx tsc --emitDeclarationOnly",
+    "dev": "npx tsup --watch",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@aflow/schemas": "workspace:*",
+    "esbuild": "^0.28.1"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.11"
+  }
+}

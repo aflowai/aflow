@@ -1,0 +1,28 @@
+node_modules
+.git
+.env
+.env.*
+!.env.example
+**/dist
+# Excluded with the dist it describes, never without: an incremental build
+# stamp that survives into the image tells tsc the output is current, and
+# tsc emits nothing. The image builds green and the container then dies at
+# startup on a module that was never written.
+**/*.tsbuildinfo
+# Every Next output directory, not only the default name. `**/.next` matches a
+# segment spelled exactly that, so a custom `distDir` — `.next-dev` here, which
+# the dev server needs because Next 16 ignores the argv form — was copied in and
+# type-checked. Its generated route validator still named a page that had moved,
+# so the image failed to build on a file no human wrote and none of the source
+# referenced.
+**/.next
+**/.next-*
+**/.turbo
+**/coverage
+**/*.log
+.claude
+.cursor
+docs
+scripts/test-flows.sh
+scripts/seed-flows.ts
+scripts/export-operation-catalog.ts

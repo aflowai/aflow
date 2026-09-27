@@ -1,0 +1,61 @@
+{
+  "name": "@aflow/observability",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "ts-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./tracing": {
+      "ts-source": "./src/tracing.ts",
+      "types": "./dist/tracing.d.ts",
+      "import": "./dist/tracing.js"
+    },
+    "./metrics": {
+      "ts-source": "./src/metrics.ts",
+      "types": "./dist/metrics.d.ts",
+      "import": "./dist/metrics.js"
+    },
+    "./logging": {
+      "ts-source": "./src/logging.ts",
+      "types": "./dist/logging.d.ts",
+      "import": "./dist/logging.js"
+    },
+    "./crashReporting": {
+      "ts-source": "./src/crashReporting.ts",
+      "types": "./dist/crashReporting.d.ts",
+      "import": "./dist/crashReporting.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "npx tsup && rm -f tsconfig.tsbuildinfo && npx tsc --emitDeclarationOnly",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@aflow/lib": "workspace:*",
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/exporter-metrics-otlp-http": "^0.57.2",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.57.2",
+    "@opentelemetry/instrumentation-http": "^0.57.2",
+    "@opentelemetry/propagator-b3": "^1.30.1",
+    "@opentelemetry/resources": "^1.30.1",
+    "@opentelemetry/sdk-metrics": "^1.30.1",
+    "@opentelemetry/sdk-node": "^0.218.0",
+    "@opentelemetry/sdk-trace-node": "^1.30.1",
+    "@opentelemetry/semantic-conventions": "^1.28.0"
+  },
+  "devDependencies": {
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11"
+  }
+}

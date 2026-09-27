@@ -1,0 +1,17 @@
+{
+  "flowConfig": {
+    "name": "test-ai-chat",
+    "steps": [
+      {
+        "stepId": "chat",
+        "type": "ai",
+        "operation": "ai.generate",
+        "config": {
+          "model": "gpt-4o-mini",
+          "systemPrompt": "Reply with exactly: Hello from Phoenix!"
+        }
+      }
+    ]
+  },
+  "input": { "prompt": "Hi there!" }
+}

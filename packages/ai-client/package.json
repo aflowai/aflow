@@ -1,0 +1,41 @@
+{
+  "name": "@aflow/ai-client",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "ts-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "npx tsup && rm -f tsconfig.tsbuildinfo && npx tsc --emitDeclarationOnly",
+    "dev": "npx tsup --watch",
+    "lint": "eslint src",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@aflow/lib": "workspace:*",
+    "@aflow/network-safety": "workspace:*",
+    "@aflow/payload-store": "workspace:*",
+    "@aflow/schemas": "workspace:*",
+    "@anthropic-ai/sdk": "^0.100.1",
+    "@google/genai": "2.8.0",
+    "openai": "^6.42.0",
+    "zod": "^3.24.4",
+    "zod-to-json-schema": "^3.24.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "tsup": "^8.5.0",
+    "typescript": "^5.8.3",
+    "vitest": "^4.1.11"
+  }
+}

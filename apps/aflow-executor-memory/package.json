@@ -1,0 +1,35 @@
+{
+  "name": "@aflow/aflow-executor-memory",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "dev": "NODE_OPTIONS='--conditions=ts-source' tsx watch src/index.ts",
+    "build": "npx tsc",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@aflow/ai-client": "workspace:*",
+    "@aflow/database": "workspace:*",
+    "@aflow/executor-runtime": "workspace:*",
+    "@aflow/lib": "workspace:*",
+    "@aflow/memory-paths": "workspace:*",
+    "@aflow/memory-store": "workspace:*",
+    "@aflow/observability": "workspace:*",
+    "@aflow/payload-store": "workspace:*",
+    "@aflow/redis": "workspace:*",
+    "@aflow/schemas": "workspace:*",
+    "ioredis": "^5.3.2"
+  },
+  "devDependencies": {
+    "tsx": "^4.7.0",
+    "typescript": "^5.5.3",
+    "vitest": "^4.1.11"
+  }
+}

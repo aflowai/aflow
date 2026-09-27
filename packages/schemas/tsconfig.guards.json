@@ -1,0 +1,13 @@
+{
+  "//": "The edition guards are what the artifact boundary rests on, and the package build excludes every *.test.ts — so a guard could name an undefined variable, or import one binding twice, and stay green as long as the branch never ran. Both had. Scoped to src/edition because the rest of this package's tests carry a backlog that is not this project's to clear.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "emitDeclarationOnly": false
+  },
+  "include": ["src/edition/**/*.ts"],
+  "exclude": []
+}

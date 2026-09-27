@@ -1,0 +1,83 @@
+---
+description: Phoenix platform architecture, package structure, and key patterns. Essential context for any task in this repo.
+alwaysApply: true
+---
+
+# Phoenix — Agentic Flow Execution Platform
+
+## Architecture (Redis-first, Schema-first)
+
+Monorepo (Yarn 4 workspaces). All inter-package types via `@aflow/schemas`.
+Runtime hot path is Redis Streams — Postgres is eventual-consistency via the ProjectionWorker.
+
+```
+User → API (Fastify, Cloud Run) → Redis Stream (control) → Orchestrator (GCE VM)
+                                                                   ↓
+                                                            Redis Stream (jobs)
+                                                                   ↓
+                                                       Executor (AI/API/User/..., GCE VM)
+                                                                   ↓
+                                                       Redis Stream (results) → Orchestrator → ...
+```
+
+**Production split**: Cloud Run `phoenix-core` runs the API server only (`web-core` profile).
+GCE VM `phoenix-worker` (e2-small, europe-west3-c, COS) runs orchestrator + all executors (`worker` profile).
+Same Docker image, different `PHOENIX_PROFILE`.
+
+## Package Map
+
+| Package | Purpose |
+|---------|---------|
+| `packages/schemas` | **Single source of truth** for all Zod schemas, operation definitions, catalog |
+| `packages/database` | Drizzle ORM, migrations, tenant schema management |
+| `packages/platform-artifacts` | Code-backed platform agent/skill/workflow registry (Plan 106) |
+| `packages/redis` | Redis Streams helpers, connection management |
+| `packages/payload-store` | Payload storage abstraction (inline refs, Redis, GCS) |
+| `packages/ai-client` | Multi-provider AI client (OpenAI, Anthropic, Google) |
+| `packages/executor-runtime` | Base executor runtime (heartbeats, job consumption, result reporting) |
+| `packages/observability` | OpenTelemetry tracing, structured logging, metrics |
+| `packages/design-system` | Design tokens, primitives, semantic components |
+| `apps/server` | Fastify API server (REST + SSE + WebSocket) |
+| `apps/aflow-orchestrator` | Flow orchestrator (startRun, scheduleStep, applyResult) |
+| `apps/aflow-executor-ai` | AI step executor (generate, agent_turn, embeddings, images) |
+| `apps/aflow-executor-api` | API call executor |
+| `apps/aflow-executor-user` | User input executor |
+| `apps/web` | Next.js 15 web app (chat, flows, runs) |
+
+## Key Patterns
+
+- **Branded types**: `TenantId`, `RunId`, `StepExecutionId`, `PayloadRef` — always cast via `as`.
+- **Payload discipline**: Large data stored via `PayloadStore`, referenced by `PayloadRef`. Never inline large payloads in Redis hot state or events.
+- **Operation registry**: Every operation has `input`/`output` Zod schemas in `packages/schemas/src/operations/`. The catalog API auto-generates JSON Schema from these. All operation IDs follow the canonical 3-segment format `{stepType}.{group}.{verb}` (e.g., `memory.store.get`). Use `buildOperationId()` from `packages/schemas/src/catalog/operationId.ts` to construct IDs.
+- **Inline refs**: `inline:<base64-json>` for small payloads. PayloadStore handles both inline and stored refs transparently.
+- **Runtime variables**: `state.<variableId>` in `RunHotState.runtimeState.variables`. Updated via `RuntimeStatePatch` events.
+- **Agent pattern (Plan 19)**: Agent step selects next steps (tools) from the flow graph. Orchestrator schedules them. Tools are regular steps with `parentStepExecutionId` linkage.
+- **Platform-owned definitions (Plan 106)**: Built-in system agents, workflows, and skill bundles that are identical in every tenant are defined in `packages/platform-artifacts` and resolved through registry-aware code paths. The Heroku `release.mjs` phase does not re-seed them tenant-by-tenant. Do not reintroduce deploy sweeps for those artifacts; update the registry and shared resolvers instead.
+- **Compiled packages**: All `packages/*` export from `dist/` — apps resolve imports to compiled JS, not TS source. **Run `yarn build` after editing any package** or changes silently won't take effect at runtime.
+- **DRY across apps**: Never duplicate business logic between `apps/server` and `apps/aflow-orchestrator`. Pure functions belong in `packages/` (schemas, redis, or a dedicated package). If both apps need the same pipeline, one imports from the other or both import from a shared package.
+- **Derive from schemas, don't mirror them**: Never maintain a hand-written list of field names that must stay in sync with a Zod schema. Derive it from the schema at runtime (e.g., `deriveStringFields()` in `hotState.ts`). Manual lists silently drift when schemas change.
+- **MCP `registerTool` inputSchema**: In `apps/aflow-mcp/src/tools/*.ts`, use `inputSchema: SomeSchema.shape as any` — never the full Zod schema. MCP SDK Zod v3/v4 compat causes deep type recursion (TS2589, OOM). Do not remove the cast.
+- **Lint gate**: Pre-commit hook (`lint-staged`) lints staged `.ts`/`.tsx` files with `--max-warnings 0`. Every file you commit must be clean. Pre-existing debt in untouched files is not your problem — but never make a file worse. CI `lint-regression` job prevents regressions vs `.lint-baseline`.
+
+## Dev Commands
+
+```bash
+yarn start            # Everything: Postgres, Redis, migrations, services, web
+yarn dev:mcp          # MCP only — run separately so it survives restarts
+yarn dev:core         # Server + orchestrator + mock executor only
+yarn infra:up         # Start Postgres + Redis via Docker
+yarn typecheck        # Type-check all packages
+yarn lint             # ESLint all packages
+yarn test             # Run all unit tests
+```
+
+## Documentation — Keep It in Sync
+
+Larger changes start with a plan in `docs/plans/` (see `docs/plans/README.md`).
+
+**After every task that changes behavior, schemas, or architecture:**
+1. Update the plan in `docs/plans/` that covers it, if one does
+2. Update `.cursor/rules/` if you introduced a new pattern or discovered a gotcha
+3. Update `scripts/README.md` if you added test flows or seed data
+
+See `docs/dev/CONTRIBUTING.md` for the full documentation checklist.

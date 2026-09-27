@@ -1,0 +1,37 @@
+{
+  "name": "@aflow/cybernetic-hooks",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "ts-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "npx tsup && rm -f tsconfig.tsbuildinfo && npx tsc --emitDeclarationOnly",
+    "dev": "npx tsup --watch",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@aflow/cybernetic-runtime": "workspace:*",
+    "@aflow/database": "workspace:*",
+    "@aflow/redis": "workspace:*",
+    "@aflow/schemas": "workspace:*",
+    "ioredis": "^5.6.1"
+  },
+  "devDependencies": {
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.2",
+    "vitest": "^4.1.11"
+  }
+}

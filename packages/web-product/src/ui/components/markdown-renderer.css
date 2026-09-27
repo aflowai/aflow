@@ -1,0 +1,393 @@
+/* ==========================================================================
+   Markdown Renderer Styles
+   Scoped to .md-content to avoid leaking into the rest of the app.
+   Uses design tokens for consistency with the Phoenix design system.
+   ========================================================================== */
+
+.md-content {
+  line-height: var(--font-line-height-relaxed);
+  color: var(--color-text-primary);
+  word-break: break-word;
+  overflow-wrap: break-word;
+  border-radius: var(--radius-md);
+}
+
+/* Remove margin from the first and last elements to avoid extra spacing
+   inside chat bubbles */
+.md-content > :first-child {
+  margin-top: 0;
+}
+
+.md-content > :last-child {
+  margin-bottom: 0;
+}
+
+/* Headings */
+.md-content h1,
+.md-content h2,
+.md-content h3,
+.md-content h4,
+.md-content h5,
+.md-content h6 {
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--font-line-height-tight);
+  color: var(--color-text-primary);
+  letter-spacing: var(--font-letter-spacing-tight);
+  margin-top: var(--space-5);
+  margin-bottom: var(--space-2);
+}
+
+.md-content h1 {
+  font-size: var(--font-size-2xl);
+}
+.md-content h2 {
+  font-size: var(--font-size-xl);
+}
+.md-content h3 {
+  font-size: var(--font-size-lg);
+  font-family: var(--font-family-title);
+}
+.md-content h4 {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+}
+.md-content h5,
+.md-content h6 {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+/* Paragraphs */
+.md-content p {
+  margin: var(--space-2) 0;
+  line-height: var(--font-line-height-relaxed);
+}
+
+/* Lists */
+.md-content ul,
+.md-content ol {
+  margin: var(--space-2) 0;
+  padding-left: var(--space-6);
+}
+
+.md-content li {
+  margin: var(--space-1) 0;
+  line-height: var(--font-line-height-relaxed);
+}
+
+.md-content li > p {
+  margin: 0;
+}
+
+/* Nested lists */
+.md-content ul ul,
+.md-content ol ol,
+.md-content ul ol,
+.md-content ol ul {
+  margin: var(--space-1) 0;
+}
+
+/* Task lists (GFM) */
+.md-content ul.contains-task-list {
+  list-style: none;
+  padding-left: var(--space-1);
+}
+
+.md-content li.task-list-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.md-content li.task-list-item > input[type='checkbox'] {
+  margin-top: 5px;
+  flex-shrink: 0;
+}
+
+/* Inline code */
+.md-content code:not(pre code) {
+  font-family: var(--font-family-mono);
+  font-size: 0.88em;
+  padding: 1px var(--space-1);
+  background-color: var(--color-surface-2);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-primary);
+}
+
+/* Code blocks — handled by the CodeBlock component override,
+   this is just a safety net for any <pre> that slips through */
+.md-content pre {
+  margin: var(--space-3) 0;
+}
+
+/* Fenced code blocks (ds-code-block): already compact in the design system,
+   no overrides needed. */
+
+/* Blockquotes */
+.md-content blockquote {
+  margin: var(--space-3) 0;
+  padding: var(--space-2) var(--space-4);
+  border-left: 3px solid var(--color-border-strong);
+  color: var(--color-text-secondary);
+  background-color: var(--color-surface-1);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+}
+
+.md-content blockquote p {
+  margin: var(--space-1) 0;
+}
+
+/* Links */
+.md-content a {
+  color: var(--color-text-link) !important;
+  text-decoration: none;
+  transition: color var(--transition-duration-fast) var(--transition-timing-default);
+}
+
+.md-content a:hover {
+  text-decoration: underline;
+  color: var(--color-interactive-hover);
+}
+
+/* Horizontal rules */
+.md-content hr {
+  border: none;
+  border-top: 1px solid var(--color-border-default);
+  margin: var(--space-4) 0;
+}
+
+/* Images */
+.md-content img {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-md);
+  margin: var(--space-2) 0;
+}
+
+/* Tables (GFM) */
+.md-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: var(--space-3) 0;
+  font-size: var(--font-size-sm);
+}
+
+.md-content thead th {
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  font-weight: var(--font-weight-semibold);
+  font-size: var(--font-size-xs);
+  letter-spacing: var(--font-letter-spacing-wide);
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  background-color: var(--surface-raised-alpha);
+  border-bottom: 1px solid var(--color-border-default);
+}
+
+.md-content tbody td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+  vertical-align: top;
+}
+
+.md-content tbody tr:last-child td {
+  border-bottom: none;
+}
+
+/* Data table scroll container — wraps the table for both axes */
+.data-table-scroll-container {
+  position: relative;
+}
+
+.data-table-scroll {
+  overflow-x: auto;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Bottom fade gradient — signals more rows below.
+   Applied to a wrapper div that sits tightly around the scroll area. */
+.data-table-fade {
+  position: relative;
+}
+
+.data-table-fade::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 160px;
+  background: linear-gradient(to bottom, transparent, var(--color-surface-1, #171717));
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* Override the 100% width from .md-content table — data tables use natural
+   column widths and scroll horizontally instead of squeezing. */
+.data-table-scroll table {
+  width: 100%;
+  min-width: 300px;
+  table-layout: fixed;
+}
+
+/* Column width constraints for data tables */
+.data-table-scroll thead th {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.data-table-scroll tbody td {
+  overflow: hidden;
+  vertical-align: top;
+}
+
+/* Key column in vertical (key-value) tables — narrower, doesn't need to stretch */
+.data-table-scroll .kv-key {
+  white-space: nowrap;
+}
+
+/* Compact variant — used inside chat history inspector where surrounding
+   text is xs-sized. Scales everything down proportionally. */
+.md-content.chat-history-md {
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+}
+
+.md-content.chat-history-md h1 {
+  font-size: var(--font-size-base);
+}
+.md-content.chat-history-md h2 {
+  font-size: var(--font-size-sm);
+}
+.md-content.chat-history-md h3 {
+  font-size: var(--font-size-sm);
+}
+.md-content.chat-history-md h4,
+.md-content.chat-history-md h5,
+.md-content.chat-history-md h6 {
+  font-size: var(--font-size-xs);
+}
+
+.md-content.chat-history-md h1,
+.md-content.chat-history-md h2,
+.md-content.chat-history-md h3,
+.md-content.chat-history-md h4,
+.md-content.chat-history-md h5,
+.md-content.chat-history-md h6 {
+  margin-top: var(--space-3);
+  margin-bottom: var(--space-1);
+}
+
+.md-content.chat-history-md p {
+  margin: var(--space-1) 0;
+}
+
+.md-content.chat-history-md ul,
+.md-content.chat-history-md ol {
+  margin: var(--space-1) 0;
+  padding-left: var(--space-4);
+}
+
+.md-content.chat-history-md blockquote {
+  margin: var(--space-2) 0;
+  padding: var(--space-1) var(--space-3);
+}
+
+.md-content.chat-history-md table {
+  font-size: var(--font-size-xs);
+}
+
+/* Code blocks — tighter padding and smaller radius for inspector context */
+.md-content.chat-history-md .ds-code-block {
+  border-radius: var(--radius-sm);
+  margin: var(--space-1) 0;
+}
+
+.md-content.chat-history-md .ds-code-block__header {
+  font-size: 10px;
+}
+
+.md-content.chat-history-md .ds-code-block__content {
+  padding: var(--space-2);
+}
+
+.md-content.chat-history-md .ds-code-block__content pre code {
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.md-content.chat-history-md pre {
+  margin: var(--space-1) 0;
+}
+
+/* Strikethrough (GFM) */
+.md-content del {
+  text-decoration: line-through;
+  color: var(--color-text-muted);
+}
+
+/* Strong and emphasis */
+.md-content strong {
+  font-weight: var(--font-weight-semibold);
+}
+
+.md-content em {
+  font-style: italic;
+}
+
+/* Chat empty state — flow description markdown uses EmptyState description tokens
+   (sm / muted) instead of default .md-content body styling. */
+.chat-empty-flow-md .md-content {
+  font-size: var(--font-size-sm);
+  line-height: var(--font-line-height-relaxed);
+  color: var(--color-text-muted);
+}
+
+.chat-empty-flow-md .md-content h1,
+.chat-empty-flow-md .md-content h2,
+.chat-empty-flow-md .md-content h3,
+.chat-empty-flow-md .md-content h4,
+.chat-empty-flow-md .md-content h5,
+.chat-empty-flow-md .md-content h6 {
+  color: var(--color-text-muted);
+}
+
+.chat-empty-flow-md .md-content h1 {
+  font-size: var(--font-size-lg);
+}
+.chat-empty-flow-md .md-content h2 {
+  font-size: var(--font-size-base);
+}
+.chat-empty-flow-md .md-content h3,
+.chat-empty-flow-md .md-content h4,
+.chat-empty-flow-md .md-content h5,
+.chat-empty-flow-md .md-content h6 {
+  font-size: var(--font-size-sm);
+}
+
+.chat-empty-flow-md .md-content h1,
+.chat-empty-flow-md .md-content h2,
+.chat-empty-flow-md .md-content h3,
+.chat-empty-flow-md .md-content h4,
+.chat-empty-flow-md .md-content h5,
+.chat-empty-flow-md .md-content h6 {
+  margin-top: var(--space-3);
+  margin-bottom: var(--space-1);
+}
+
+.chat-empty-flow-md .md-content code:not(pre code) {
+  color: var(--color-text-secondary);
+}
+
+.chat-empty-flow-md .md-content blockquote {
+  color: var(--color-text-muted);
+}
+
+.chat-empty-flow-md .md-content strong {
+  color: var(--color-text-secondary);
+}

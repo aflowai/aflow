@@ -1,0 +1,137 @@
+# The `@aflow/*` contract packages, published to npm.
+#
+# A separate release action from the appliance image, and separately tagged: the
+# appliance is the product and these are a library, so coupling their versions
+# would bump the library on every product release that did not change it.
+#
+# The two publish as one surface at one version. An external author consumes them
+# together — `@aflow/schemas` is unusable without `@aflow/lib` — so independent
+# version lines would buy precision nobody asked for and a resolution matrix
+# nobody wants to support.
+name: Publish contracts
+
+on:
+  push:
+    tags: ['contracts-v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (e.g. 0.1.0) — must match both manifests'
+        required: true
+
+concurrency:
+  group: publish-contracts-${{ inputs.version || github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  # Provenance is signed with this run's OIDC identity, the same mechanism the
+  # appliance image uses. Without it `--provenance` fails rather than degrading.
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+
+      - name: Enable Corepack (Yarn)
+        run: corepack enable
+
+      - name: Get yarn cache directory path
+        id: yarn-cache-dir-path
+        run: echo "dir=$(yarn config get cacheFolder)" >> $GITHUB_OUTPUT
+
+      - name: Cache yarn dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.yarn-cache-dir-path.outputs.dir }}
+          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-
+
+      - name: Install dependencies
+        run: SKIP_POSTINSTALL=true yarn install --immutable
+
+      # The declared set and the manifests are two statements of the same fact,
+      # and a workspace that loses `private: true` becomes publishable in silence.
+      - name: The declared contracts match the manifests
+        run: node scripts/publishable-contracts.mjs --check
+
+      # A tag that does not match the manifests would publish a version nobody
+      # named. Checked before the build, so the failure costs seconds.
+      - name: The tag names the version the manifests carry
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_VERSION}" ]; then
+            want="${INPUT_VERSION}"
+          else
+            want="${REF_NAME#contracts-v}"
+          fi
+          echo "[contracts] releasing ${want}"
+          for name in $(node scripts/publishable-contracts.mjs); do
+            dir="$(yarn workspaces list --json | jq -r --arg n "${name}" 'select(.name==$n) | .location')"
+            have="$(jq -r .version "${dir}/package.json")"
+            if [ "${have}" != "${want}" ]; then
+              echo "[contracts] ${name} is ${have}, but this release is ${want}" >&2
+              exit 1
+            fi
+            echo "[contracts]   ${name} ${have}"
+          done
+
+      - name: Build what publishes
+        run: |
+          set -euo pipefail
+          for name in $(node scripts/publishable-contracts.mjs); do
+            yarn workspaces foreach --topological --recursive --from "${name}" run build
+          done
+
+      # In dependency order: `@aflow/schemas` declares `@aflow/lib` at an exact
+      # version, and npm cannot resolve it before it exists.
+      #
+      # `--tolerate-republish` so a run that failed halfway can be re-run: the
+      # package already published is warned over rather than fatal. The tag check
+      # above is what stops it being a way to publish the wrong version twice.
+      - name: Publish, in dependency order
+        env:
+          YARN_NPM_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          for name in $(node scripts/publishable-contracts.mjs); do
+            echo "[contracts] publishing ${name}"
+            yarn workspace "${name}" npm publish \
+              --access public \
+              --provenance \
+              --tolerate-republish
+          done
+
+      # Asked of the registry rather than assumed from a green publish step, for
+      # the same reason the appliance reads its digest back: a publish that
+      # reported success and a package a consumer can install are different facts.
+      - name: Install what was published, from the registry
+        env:
+          VERSION_REF: ${{ inputs.version || github.ref_name }}
+        run: |
+          set -euo pipefail
+          want="${VERSION_REF#contracts-v}"
+          probe="$(mktemp -d)"
+          cd "${probe}"
+          npm init -y > /dev/null
+          for name in $(node "${GITHUB_WORKSPACE}/scripts/publishable-contracts.mjs"); do
+            npm install --no-audit --no-fund "${name}@${want}"
+          done
+          node -e "
+            const { CanonicalOperationIds, buildOperationId } = require('@aflow/schemas');
+            const ids = Object.keys(CanonicalOperationIds ?? {});
+            if (ids.length === 0) throw new Error('the published package carries no operation ids');
+            if (typeof buildOperationId !== 'function') throw new Error('buildOperationId did not survive the build');
+            console.log('[contracts] @aflow/schemas resolves: ' + ids.length + ' canonical operation ids');
+          "

@@ -1,0 +1,85 @@
+---
+description: Next.js web app patterns, design system usage, and flow editor conventions.
+globs: "{apps/web-local/**,packages/web-product/**}"
+alwaysApply: false
+---
+
+# Web App Patterns
+
+## Stack
+
+- Next.js 15 (App Router, `"use client"` for interactive components)
+- `@aflow/design-system` for all UI primitives (Stack, Inline, Text, Input, Select, Badge, etc.)
+- `@phosphor-icons/react` for icons
+- Hooks in `src/hooks/` for data fetching (useApi, useOperationCatalog, useFlowDefinition)
+
+## Key Components
+
+- `FlowEditor.tsx` — Main flow editor with graph + inspector
+- `InspectorPanel.tsx` — Step configuration (Setup, Data, Next Steps, Details tabs)
+- `BindingsEditor.tsx` — Input/output variable bindings for steps
+- `FlowGraph.tsx` — Visual flow graph (ReactFlow)
+- `ChatInterface.tsx` — Chat UI for flow runs
+
+## Operation Catalog
+
+- Fetched via `useOperationCatalog()` hook from `/v1/catalog/operations`
+- `CatalogOperation` type includes `internalFields` for hiding orchestrator-managed fields
+- `BindingsEditor` filters out fields listed in `internalFields.input` / `internalFields.output`
+
+## API Communication
+
+- `useApi()` provides `apiUrl`, `tenantId`, `token`
+- All API calls include `X-Tenant-ID` header
+- SSE for real-time run events: `/v1/runs/:runId/events`
+
+## URL conventions (Plan 160)
+
+- **The URL is the canonical state.** Every space-scoped surface lives under `/s/[space]/...` (`apps/web-local/src/app/(dashboard)/s/[space]/`). Tenant-scoped routes (`/account`, `/settings`, `/spaces`) stay top-level.
+- `useSpaceFromRoute()` (in `components/providers.tsx`) is the route-derived hook for "which space is this page in?". Prefer it over the legacy `useSpace()` on `/s/[space]/...` pages — `useSpace()` reads from `ActiveSpaceStateContext`, which the `RouteSpaceBridge` mirrors from the URL in an effect (one render lag possible).
+- Build space-scoped URLs with `spaceRoute(slug, '/agents/foo')` from `lib/space-routes.ts`. Switching spaces uses `equivalentRouteInSpace(currentPath, newSlug)` so deep resource URLs land on the parent list instead of 404ing.
+- TanStack query keys for space-scoped reads MUST nest under `['space', spaceId, ...]` — the §4.4 invalidation handle. Pass `spaceId` to `useApiQuery` so `X-Space-ID` matches the URL. Gate with `enabled: !!spaceId` so queries don't fire before the route slug resolves.
+- The Helmsman emits markdown links to `/s/<slug>/...` URLs; the markdown renderer (`components/markdown-renderer.tsx`) recognises same-origin URLs and routes them through `next/link`.
+
+## Lint Guidelines for Web App
+
+- **Unused imports**: Remove them. Don’t leave `Text`, `Badge`, `Heading`, icons, or hooks unused.
+- **Empty callbacks**: Use a named noop instead of `() => {}` where `no-empty-function` applies (e.g. read-only flow canvas handlers).
+- **Optional chains**: Drop `?.` when the type guarantees the value is defined (e.g. after a truthy check).
+
+## Design System Usage
+
+Import from `@aflow/design-system`:
+```tsx
+import { Stack, Inline, Text, Input, Select, Badge, Button, Divider } from "@aflow/design-system";
+```
+
+Use semantic tokens (CSS variables) for colors: `var(--color-surface-0)`, `var(--color-border-subtle)`, etc.
+
+Most surface tokens are translucent, so they resolve against whatever is behind them:
+
+- **A panel over a scrim must be opaque.** The scrim paints full-bleed beneath it, and a
+  translucent panel — or a `backdrop-filter`, which samples it — tints the whole panel with
+  it. Paint on `var(--ds-canvas-floor)` and layer the tint on top.
+- **Two translucent surfaces stacked are not reliably distinguishable.** On the dark canvas
+  they composite within a few points of each other; a drop shadow separates them in light
+  and does nothing in dark. Where a selected/raised state must read in both themes, use a
+  token stated per theme (`--color-surface-selected`) rather than one that happens to land
+  nearby.
+
+## A page for a feature the edition does not have
+
+The surface registry decides whether a **route** exists in a build. It decides nothing about
+what the shell shows, so a nav entry, page or card appears in every edition until something
+gates it.
+
+- **Gate on the edition, not the surface.** A route registered `tier: 'core'` exists in both
+  editions and declines at runtime when the credential it needs is absent, so
+  `useHasSurface('host-bindings')` is permanently true and answers a different question.
+  `useEdition().id === 'enterprise'` is the signal for "this is the hosted product".
+- **The failure passes review.** The page renders, the empty state looks deliberate, and every
+  action is refused by an API that was right to refuse. `This Computer` shipped that way and
+  showed up on the hosted app, where no machine can be paired.
+- **Ungated is the default and usually correct.** The test is whether the feature can *work*
+  in the other edition, not where it happened to be written. Schedules, triggers and
+  agent-turn policy are platform behaviour and stay ungated.

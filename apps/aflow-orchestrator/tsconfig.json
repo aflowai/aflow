@@ -1,0 +1,26 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "composite": true,
+    "declaration": true,
+    "declarationMap": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts"],
+  "references": [
+    { "path": "../../packages/credential-resolver" },
+    { "path": "../../packages/cybernetic-hooks" },
+    { "path": "../../packages/cybernetic-runtime" },
+    { "path": "../../packages/database" },
+    { "path": "../../packages/integration-simulator" },
+    { "path": "../../packages/oauth" },
+    { "path": "../../packages/memory-paths" },
+    { "path": "../../packages/observability" },
+    { "path": "../../packages/payload-store" },
+    { "path": "../../packages/platform-artifacts" },
+    { "path": "../../packages/redis" },
+    { "path": "../../packages/schemas" }
+  ]
+}

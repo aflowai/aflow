@@ -1,0 +1,21 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "composite": true,
+    "declaration": true,
+    "declarationMap": true,
+    "emitDeclarationOnly": true,
+    // Plan 146 — the reducer was authored under apps/web's tsconfig, which
+    // doesn't enable these strict-mode lints. Matching the original effective
+    // config keeps the move behavior-preserving. Refactoring the ~130 dot
+    // accesses on index-signature properties and the optional-undefined
+    // assignments is a separate cleanup pass; not in scope here.
+    "noPropertyAccessFromIndexSignature": false,
+    "exactOptionalPropertyTypes": false,
+    "noUncheckedIndexedAccess": false
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts"]
+}

@@ -1,0 +1,37 @@
+{
+  "flowConfig": {
+    "name": "memory-put-then-get",
+    "description": "Direct test: put a document into memory, then get it back",
+    "startStepId": "put-doc",
+    "steps": [
+      {
+        "stepId": "put-doc",
+        "type": "memory",
+        "operation": "memory.put",
+        "name": "Put test document",
+        "config": {
+          "path": "/test/hello.txt",
+          "docType": "text",
+          "content": {
+            "inlineText": "Hello from the memory v2 test flow!"
+          },
+          "tags": ["test", "v2"]
+        },
+        "onSuccess": {
+          "next": [{ "stepId": "get-doc", "priority": 1 }]
+        }
+      },
+      {
+        "stepId": "get-doc",
+        "type": "memory",
+        "operation": "memory.get",
+        "name": "Get test document",
+        "config": {
+          "target": { "path": "/test/hello.txt" },
+          "view": "content"
+        }
+      }
+    ]
+  },
+  "input": {}
+}

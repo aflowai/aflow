@@ -1,0 +1,34 @@
+{
+  "name": "@aflow/aflow-orchestrator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "NODE_OPTIONS='--conditions=ts-source' tsx watch src/index.ts",
+    "build": "npx tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@aflow/applet-runtime": "workspace:*",
+    "@aflow/credential-resolver": "workspace:*",
+    "@aflow/cybernetic-hooks": "workspace:*",
+    "@aflow/cybernetic-runtime": "workspace:*",
+    "@aflow/database": "workspace:*",
+    "@aflow/input-resolution": "workspace:*",
+    "@aflow/integration-simulator": "workspace:*",
+    "@aflow/lib": "workspace:*",
+    "@aflow/memory-paths": "workspace:*",
+    "@aflow/network-safety": "workspace:*",
+    "@aflow/oauth": "workspace:*",
+    "@aflow/observability": "workspace:*",
+    "@aflow/payload-store": "workspace:*",
+    "@aflow/platform-artifacts": "workspace:*",
+    "@aflow/redis": "workspace:*",
+    "@aflow/schemas": "workspace:*",
+    "ajv": "^8.20.0"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.11"
+  }
+}

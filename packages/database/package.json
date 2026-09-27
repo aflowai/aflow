@@ -1,0 +1,50 @@
+{
+  "name": "@aflow/database",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "ts-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./connection-budget": {
+      "ts-source": "./src/connectionBudget.ts",
+      "types": "./dist/connectionBudget.d.ts",
+      "import": "./dist/connectionBudget.js",
+      "require": "./dist/connectionBudget.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "npx tsup && rm -f tsconfig.tsbuildinfo && npx tsc --emitDeclarationOnly",
+    "dev": "npx tsup --watch",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:push": "drizzle-kit push",
+    "db:studio": "drizzle-kit studio",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@aflow/applet-runtime": "workspace:*",
+    "@aflow/lib": "workspace:*",
+    "@aflow/payload-store": "workspace:*",
+    "@aflow/platform-artifacts": "workspace:*",
+    "@aflow/schemas": "workspace:*",
+    "@google-cloud/kms": "^5.7.0",
+    "drizzle-orm": "^0.45.2",
+    "postgres": "^3.4.5"
+  },
+  "devDependencies": {
+    "drizzle-kit": "^0.30.0",
+    "vitest": "^4.1.11"
+  }
+}

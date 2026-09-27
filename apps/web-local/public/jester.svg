@@ -1,0 +1,94 @@
+  .duck { animation: bob 3s ease-in-out infinite; }
+  .b1 { animation: float1 4s infinite ease-in; animation-fill-mode: both; }
+  .b2 { animation: float2 5s infinite ease-in 1.2s; animation-fill-mode: both; }
+  .b3 { animation: float3 4.5s infinite ease-in 2.5s; animation-fill-mode: both; }
+  .b4 { animation: float4 6s infinite ease-in 0.5s; animation-fill-mode: both; }
+  .rip1 { animation: rip1 3s ease-in-out infinite; transform-origin: 95px 145px; }
+  .rip2 { animation: rip2 3s ease-in-out infinite 0.5s; transform-origin: 95px 152px; }
+</style>
+<g id="bubble">
+  <circle cx="0" cy="0" r="6" fill="rgba(0, 255, 255, 0.15)" stroke="#4DD0E1" stroke-width="1.2" />
+  <path d="M -2.5 -2.5 A 3 3 0 0 1 -0.5 -3.5" fill="none" stroke="#FFFFFF" stroke-width="1.2" stroke-linecap="round" />
+  <circle cx="2" cy="2.5" r="0.8" fill="#FFFFFF" opacity="0.7" />
+</g>
+
+<g fill="#FB923C">
+  <rect x="142" y="67" width="5" height="5" rx="1.5" />
+  <rect x="152" y="67" width="5" height="5" rx="1.5" />
+</g>
+
+<g fill="#F2CD37">
+  <rect x="110" y="50" width="9" height="9" rx="1.5" />
+  <rect x="120" y="50" width="9" height="9" rx="1.5" />
+  <rect x="100" y="60" width="9" height="9" rx="1.5" />
+  <rect x="110" y="60" width="9" height="9" rx="1.5" />
+  <rect x="130" y="60" width="9" height="9" rx="1.5" />
+  <rect x="100" y="70" width="9" height="9" rx="1.5" />
+  <rect x="110" y="70" width="9" height="9" rx="1.5" />
+  <rect x="120" y="70" width="9" height="9" rx="1.5" />
+  <rect x="130" y="70" width="9" height="9" rx="1.5" />
+  <rect x="100" y="80" width="9" height="9" rx="1.5" />
+  <rect x="110" y="80" width="9" height="9" rx="1.5" />
+  <rect x="120" y="80" width="9" height="9" rx="1.5" />
+  
+  <rect x="40" y="90" width="9" height="9" rx="1.5" />
+  <rect x="50" y="90" width="9" height="9" rx="1.5" />
+  <rect x="110" y="90" width="9" height="9" rx="1.5" />
+  <rect x="120" y="90" width="9" height="9" rx="1.5" />
+  
+  <rect x="30" y="100" width="9" height="9" rx="1.5" />
+  <rect x="40" y="100" width="9" height="9" rx="1.5" />
+  <rect x="50" y="100" width="9" height="9" rx="1.5" />
+  <rect x="60" y="100" width="9" height="9" rx="1.5" />
+  <rect x="100" y="100" width="9" height="9" rx="1.5" />
+  <rect x="110" y="100" width="9" height="9" rx="1.5" />
+  <rect x="120" y="100" width="9" height="9" rx="1.5" />
+  
+  <rect x="30" y="110" width="9" height="9" rx="1.5" />
+  <rect x="40" y="110" width="9" height="9" rx="1.5" />
+  <rect x="50" y="110" width="9" height="9" rx="1.5" />
+  <rect x="60" y="110" width="9" height="9" rx="1.5" />
+  <rect x="100" y="110" width="9" height="9" rx="1.5" />
+  <rect x="110" y="110" width="9" height="9" rx="1.5" />
+  <rect x="120" y="110" width="9" height="9" rx="1.5" />
+  <rect x="130" y="110" width="9" height="9" rx="1.5" />
+  
+  <rect x="40" y="120" width="9" height="9" rx="1.5" />
+  <rect x="50" y="120" width="9" height="9" rx="1.5" />
+  <rect x="90" y="120" width="9" height="9" rx="1.5" />
+  <rect x="100" y="120" width="9" height="9" rx="1.5" />
+  <rect x="110" y="120" width="9" height="9" rx="1.5" />
+  <rect x="120" y="120" width="9" height="9" rx="1.5" />
+  
+  <rect x="50" y="130" width="9" height="9" rx="1.5" />
+  <rect x="60" y="130" width="9" height="9" rx="1.5" />
+  <rect x="70" y="130" width="9" height="9" rx="1.5" />
+  <rect x="80" y="130" width="9" height="9" rx="1.5" />
+  <rect x="90" y="130" width="9" height="9" rx="1.5" />
+  <rect x="100" y="130" width="9" height="9" rx="1.5" />
+  <rect x="110" y="130" width="9" height="9" rx="1.5" />
+</g>
+
+<g fill="#EAB308">
+  <rect x="70" y="110" width="9" height="9" rx="1.5" />
+  <rect x="80" y="110" width="9" height="9" rx="1.5" />
+  <rect x="90" y="110" width="9" height="9" rx="1.5" />
+  <rect x="60" y="120" width="9" height="9" rx="1.5" />
+  <rect x="70" y="120" width="9" height="9" rx="1.5" />
+  <rect x="80" y="120" width="9" height="9" rx="1.5" />
+</g>
+
+<g fill="#F97316">
+  <rect x="140" y="70" width="9" height="9" rx="1.5" />
+  <rect x="150" y="70" width="9" height="9" rx="1.5" />
+</g>
+
+<g fill="#1F2937">
+  <rect x="120" y="60" width="9" height="9" rx="1.5" />
+</g>
+<rect x="124.5" y="62" width="3.5" height="3.5" rx="0.5" fill="#FFFFFF" />
+
+</g>
+<use href="#bubble" class="b3" />
+<use href="#bubble" class="b4" />
+</svg>

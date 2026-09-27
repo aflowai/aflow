@@ -1,0 +1,121 @@
+/* Chat entrance transitions — a gentle, lightly-staggered glide as the chat
+   shell mounts (fresh page load or a new chat), so the orb, greeting,
+   composer, and workbench dock settle in rather than snap into place. The
+   scrolling message list is intentionally excluded: it animates via
+   scroll-into-view. Honors prefers-reduced-motion with an off-switch. */
+
+@keyframes chat-enter-up {
+  from {
+    transform: translateY(18px);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+@keyframes chat-enter-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes chat-enter-panel {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* Movement and opacity run as separate animations: the transform decelerates
+   into place (ease-out) while opacity ramps gently over a longer window
+   (`ease`, soft in/out). A single ease-out on both makes the element near-
+   visible almost immediately and then drift the last few pixels — which reads
+   as a pop. Splitting them, and slowing both, lets the content glide in. */
+.chat-enter-center {
+  animation:
+    chat-enter-up 640ms var(--transition-timing-ease-out) 40ms both,
+    chat-enter-in 780ms ease 40ms both;
+}
+
+/* Greeting text fades in over the settled orb. It is always rendered (so it
+   reserves its vertical space and the orb never re-centers/jumps when the text
+   arrives); only its opacity transitions from hidden to shown once resolved. */
+.chat-orb-greeting {
+  opacity: 0;
+  transition: opacity 560ms ease;
+}
+
+.chat-orb-greeting.is-ready {
+  opacity: 1;
+}
+
+.chat-orb-greeting-link {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+}
+
+.chat-orb-greeting-link:hover {
+  color: var(--color-text-primary);
+}
+
+.chat-orb-greeting-link:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+/* `backwards`, not `both`: a forwards fill would leave a computed
+   `transform: translateY(0)` on this element forever, and any non-`none`
+   transform makes an ancestor a backdrop root — permanently killing the
+   composer's `backdrop-filter: blur()`. Backwards fill still holds the start
+   offset through the delay, and the final keyframe matches the underlying
+   `transform: none`, so nothing shifts when the animation releases. */
+.chat-enter-composer {
+  animation:
+    chat-enter-up 640ms var(--transition-timing-ease-out) 150ms backwards,
+    chat-enter-in 780ms ease 150ms backwards;
+}
+
+/* Workbench dock: fades/slides in from the right. The overflow-hidden dock
+   root clips the start offset, so no transient horizontal scrollbar. Carries
+   the flex sizing so the wrapper is layout-transparent to CollapsibleSide. */
+.wb-dock-enter {
+  display: flex;
+  min-height: 0;
+  flex-shrink: 0;
+  animation: chat-enter-panel 480ms var(--transition-timing-ease-out) 140ms both;
+}
+
+/* The stage arrives quietly: a short fade, no travel — the object is meant
+   to read as having been on the table all along. */
+.chat-stage-enter {
+  animation: chat-enter-in 360ms ease both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-enter-center,
+  .chat-enter-composer,
+  .wb-dock-enter,
+  .chat-stage-enter {
+    animation: none;
+  }
+
+  .chat-orb-greeting {
+    transition: none;
+  }
+}

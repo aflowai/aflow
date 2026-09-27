@@ -1,0 +1,69 @@
+---
+description: How to test flows, seed data, and manage the database. Reference for script usage and test patterns.
+alwaysApply: false
+globs: "scripts/**"
+---
+
+# Testing & Scripts
+
+## Running Tests
+
+```bash
+yarn test                        # Complete proof (globally locked across worktrees)
+yarn test:changed                # Affected tests since main + local changes
+yarn test:workspace @aflow/schemas # One workspace through the root config
+yarn test:file path/to/test.ts   # One or more explicit files
+./scripts/test-flows.sh all      # All API integration tests
+./scripts/test-flows.sh agent    # Agent flow only
+./scripts/test-flows.sh chat-history  # Chat history only
+./scripts/test-flows.sh basic    # Basic flows
+```
+
+Use the focused root commands for iteration. If a complete `yarn test` waits behind another
+worktree, leave it queued or keep working with a focused command; never start a second broad Vitest
+or workspace-level parallel run to bypass the lock.
+
+## Seeding Flows
+
+```bash
+yarn db:seed                     # Seed sample flows to DB (via API)
+npx tsx scripts/seed-flows.ts    # Same, direct execution
+```
+
+To add a new seed flow: edit `scripts/seed-flows.ts`, add to the `flows` array.
+Format: `{ name, slug, version, steps[], startStepId?, stateVariables? }`.
+
+## Test Flow Files (inline configs)
+
+Test flows live in `scripts/test-flows/` as JSON files. These use the inline `flowConfig` API
+(POST /v1/runs with `flowConfig` instead of `flowId`) — no database required.
+
+To add a new test flow:
+1. Create `scripts/test-flows/my-test.json`
+2. Add a test function in `scripts/test-flows.sh`
+3. Register in the `case "$TEST_FILTER"` switch
+
+## Database Management
+
+```bash
+yarn infra:up                    # Start Postgres + Redis
+yarn infra:reset                 # Wipe and reinitialize (runs init-db.sql)
+yarn infra:tools                 # Start with pgAdmin (8080) + Redis Commander (8081)
+```
+
+Database is initialized by `scripts/init-db.sql` which runs on container creation.
+Schema changes: edit `packages/database/src/schema/` and run `yarn db:push`.
+
+## macOS Compatibility
+
+- Use `sed '$d'` instead of `head -n -1` (macOS head doesn't support negative counts)
+- Use `python3` not `python` for JSON parsing in shell scripts
+
+## Adding New Operations to Tests
+
+1. Implement the executor handler
+2. Register in the operation registry (`packages/schemas`)
+3. Build schemas: `yarn workspace @aflow/schemas build`
+4. Add a test flow JSON in `scripts/test-flows/`
+5. Add a test function in `scripts/test-flows.sh`
+6. Add a seed flow in `scripts/seed-flows.ts` for UI testing

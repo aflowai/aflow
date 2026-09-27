@@ -1,0 +1,33 @@
+{
+  // The product's user interface, checked the way the applications that run it
+  // resolve modules.
+  //
+  // Next resolves like a bundler, and its own subpaths (`next/link`,
+  // `next/navigation`) do not resolve under `NodeNext` at all — which is why this
+  // layer could not previously hold a component that navigates. The layer beside
+  // it is genuinely different: the transport, the compiler and the boot helpers
+  // are executed by Node, so they keep Node resolution in the package's own
+  // `tsconfig.json`, which excludes this directory.
+  //
+  // Strictness is unchanged. Only resolution differs, because only resolution
+  // differs at runtime.
+  //
+  // It sits here rather than beside the package manifest so that every tool
+  // resolving a file's nearest project — an editor, and ESLint's project service —
+  // finds the one this code is actually compiled under.
+  "extends": "../../../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "../../dist/ui",
+    "composite": true,
+    "declaration": true,
+    "declarationMap": true,
+    "emitDeclarationOnly": true,
+    "jsx": "react-jsx",
+    "module": "ESNext",
+    "moduleResolution": "Bundler"
+  },
+  "include": ["**/*.ts", "**/*.tsx"],
+  "exclude": ["**/*.test.ts", "**/*.test.tsx"],
+  "references": [{ "path": "../../../design-system" }, { "path": "../.." }]
+}

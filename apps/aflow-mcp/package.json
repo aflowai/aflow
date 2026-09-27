@@ -1,0 +1,30 @@
+{
+  "name": "@aflow/aflow-mcp",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "MCP server for Aflow — thin HTTP connector that delegates to agent flows on the platform",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "npx tsup && rm -f tsconfig.tsbuildinfo && npx tsc --emitDeclarationOnly",
+    "dev": "NODE_OPTIONS='--conditions=ts-source' npx tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@aflow/observability": "workspace:*",
+    "@aflow/schemas": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "tsup": "^8.5.1",
+    "tsx": "^4.20.0",
+    "typescript": "^5.8.3",
+    "vitest": "^4.1.11"
+  }
+}

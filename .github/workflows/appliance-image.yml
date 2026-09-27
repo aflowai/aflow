@@ -1,0 +1,456 @@
+# The appliance image a collaborator installs, and the bundle they install it
+# with.
+#
+# Private: pushed to a GHCR package on this repository, which publishes
+# nothing. Turning the install from a clone and a build into a pull is the whole
+# point — a machine with Docker and nothing else has to be enough.
+#
+# Built with the Docker and GitHub CLIs the runners already carry rather than
+# through third-party actions, so this workflow pins no digests it cannot also
+# verify. The exceptions are GitHub's own attestation actions, which mint a
+# signature from this run's OIDC identity — something no CLI on the runner can
+# do — and are the same trust class as the checkout action already here.
+name: Appliance image
+
+on:
+  push:
+    tags: ['appliance-v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version label for the image and bundle (e.g. appliance-v0.1.0)'
+        required: true
+
+# One release of a version at a time. The two architectures are staged under
+# tags named for the version, and a tag is mutable: two runs of the same
+# version interleaving would let one overwrite an architecture between the
+# other's build and its join, publishing a manifest list whose amd64 and arm64
+# halves came from different commits. Nothing would report that — it surfaces
+# as a bug one architecture has and the other does not.
+#
+# Serialised rather than staged under run-unique tags, which is the other
+# answer: it needs no cleanup, and a release that waits for the one ahead of it
+# costs nothing here.
+concurrency:
+  group: appliance-image-${{ inputs.version || github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/aflow-appliance
+  # Compiled into the browser bundle, so it is a property of the image rather
+  # than of the install. The consumer Compose file fixes the API port to match,
+  # which is why that port is not configurable there.
+  API_ORIGIN: http://127.0.0.1:3000
+
+jobs:
+  # One job per architecture, each on a runner native to it. Emulating the
+  # other is slow enough at this image size to change whether a release is
+  # practical, so the two build in parallel and are joined below.
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+            arch: amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+
+      - name: Enable Corepack (Yarn)
+        run: corepack enable
+
+      - name: Install dependencies
+        run: SKIP_POSTINSTALL=true yarn install --immutable
+
+      - name: Build the schema package
+        run: yarn workspaces foreach --topological --recursive --from '@aflow/schemas' run build
+
+      # The image is built from a tree the cut has already taken the cloud half
+      # out of, rather than from the repository with a COPY list trusted to
+      # leave it behind. Exclusion becomes a property of the input: what is not
+      # there cannot be copied, and the manifest is the only thing that decides
+      # what is not there. A repository that is already the cut builds itself.
+      - name: Prepare the public-core tree
+        id: context
+        run: |
+          set -euo pipefail
+          if git ls-files | node --input-type=module -e "
+            const { cutWasPerformed } = await import('./packages/schemas/dist/index.js');
+            let files = '';
+            process.stdin.on('data', (d) => (files += d)).on('end', () =>
+              process.exit(cutWasPerformed(files.split('\\n').filter(Boolean)) ? 0 : 1));
+          "; then
+            echo "dir=${GITHUB_WORKSPACE}" >> "$GITHUB_OUTPUT"
+          else
+            node scripts/core-cut.mjs --prepare --out "${RUNNER_TEMP}/core-cut"
+            echo "dir=${RUNNER_TEMP}/core-cut" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Log in to GHCR
+        run: echo '${{ secrets.GITHUB_TOKEN }}' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
+
+      # Tagged per architecture rather than pushed anonymously by digest, so
+      # the join below needs nothing carried between jobs. The release tag is
+      # never written here: a single-architecture image under it would be
+      # pullable for the moments before the manifest list replaced it, and
+      # whoever pulled it would get an image that runs on one architecture.
+      #
+      # `--provenance=false` stays: buildx's attestation is an UNSIGNED statement
+      # attached to the image, so whoever can rewrite the image can rewrite it
+      # too. The signed one is attached to the manifest list in `publish`, which
+      # is what a pull resolves — and leaving this off keeps that job's platform
+      # assertion reading two manifests rather than four.
+      - name: Build and push this architecture
+        # Through the environment, never interpolated into the script. A
+        # dispatch input is whatever the caller typed and a tag name may
+        # legally contain a quote, so text substitution here would let either
+        # close the assignment and run commands with this job's package-write
+        # token.
+        env:
+          VERSION: ${{ inputs.version || github.ref_name }}
+          CONTEXT: ${{ steps.context.outputs.dir }}
+        run: |
+          set -euo pipefail
+          version="${VERSION}"
+          docker buildx create --use --driver docker-container
+          docker buildx build \
+            --platform '${{ matrix.platform }}' \
+            --build-arg "NEXT_PUBLIC_API_ORIGIN=${API_ORIGIN}" \
+            --tag "${IMAGE}:${version}-${{ matrix.arch }}" \
+            --provenance=false \
+            --push \
+            "${CONTEXT}"
+
+  # The manifest list is what a collaborator's `docker pull` resolves.
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    # A job block replaces the workflow's permissions rather than adding to them,
+    # so the package write this job already had is named again beside the two the
+    # attestation needs: the OIDC token it is signed with, and the write that
+    # records it against this repository.
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    outputs:
+      digest: ${{ steps.manifest.outputs.digest }}
+      version: ${{ steps.manifest.outputs.version }}
+    steps:
+      - name: Log in to GHCR
+        run: echo '${{ secrets.GITHUB_TOKEN }}' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
+
+      - name: Join the architectures into one manifest list
+        id: manifest
+        env:
+          VERSION: ${{ inputs.version || github.ref_name }}
+          CONTEXT: ${{ steps.context.outputs.dir }}
+        run: |
+          set -euo pipefail
+          version="${VERSION}"
+          docker buildx imagetools create --tag "${IMAGE}:${version}" \
+            "${IMAGE}:${version}-amd64" \
+            "${IMAGE}:${version}-arm64"
+
+          # Read back from the registry rather than assumed, and computed from
+          # the manifest bytes rather than a formatted field: `--format` is
+          # honoured by some buildx versions and silently ignored by others,
+          # which prints the default block where a digest was expected. The
+          # digest is the hash of those bytes by definition.
+          digest="sha256:$(docker buildx imagetools inspect "${IMAGE}:${version}" --raw | sha256sum | cut -d' ' -f1)"
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+          # Both architectures, or the manifest list is not what it claims.
+          platforms="$(docker buildx imagetools inspect "${IMAGE}:${version}" --raw | jq -r '.manifests[].platform | "\(.os)/\(.architecture)"' | sort | tr '\n' ' ')"
+          echo "[appliance] ${IMAGE}@${digest} carries: ${platforms}"
+          case "${platforms}" in
+            *linux/amd64*) ;;
+            *) echo '[appliance] the manifest list is missing linux/amd64' >&2; exit 1 ;;
+          esac
+          case "${platforms}" in
+            *linux/arm64*) ;;
+            *) echo '[appliance] the manifest list is missing linux/arm64' >&2; exit 1 ;;
+          esac
+
+      # Signed with this workflow's OIDC identity and recorded in a transparency
+      # log, which is what separates evidence from metadata: it says which
+      # repository, workflow and commit produced these exact bytes, and a
+      # registry cannot forge it. Attached to the manifest list rather than to
+      # either architecture, because the list is what a `docker pull` resolves.
+      - name: Attest how this image was built
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.manifest.outputs.digest }}
+          push-to-registry: true
+
+      # Read back the way a collaborator reads it, for the same reason the digest
+      # above is read back from the registry: an attestation step that succeeded
+      # is not the same as an attestation that verifies.
+      - name: Verify it the way a collaborator would
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DIGEST: ${{ steps.manifest.outputs.digest }}
+        run: gh attestation verify "oci://${IMAGE}@${DIGEST}" --repo "${GITHUB_REPOSITORY}"
+
+  # The install a collaborator receives, generated from the topology this
+  # repository already runs rather than maintained beside it.
+  bundle:
+    needs: publish
+    runs-on: ubuntu-24.04
+    # A job block replaces the workflow's permissions rather than adding to
+    # them, so `packages` has to be named again here or this job's token cannot
+    # read the package it just published — and the install proof below fails at
+    # `docker compose pull`, after the image is already public to whoever can
+    # see the repository.
+    #
+    # `packages` stays read: the inventory attestation below is recorded against
+    # this repository rather than pushed to the registry, so nothing here needs
+    # to write a package.
+    permissions:
+      contents: write
+      packages: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+
+      - name: Enable Corepack (Yarn)
+        run: corepack enable
+
+      - name: Install dependencies
+        run: SKIP_POSTINSTALL=true yarn install --immutable
+
+      - name: Build the workspaces the generator resolves
+        run: yarn workspaces foreach --topological --recursive --from '@aflow/lib' run build
+
+      - name: Generate the bundle
+        env:
+          DIGEST: ${{ needs.publish.outputs.digest }}
+        run: |
+          set -euo pipefail
+          node scripts/appliance-bundle.mjs \
+            --image "${IMAGE}@${DIGEST}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --out dist/appliance-bundle
+
+      # The bundle is released only after it has been installed and checked,
+      # because P6 asks for the pulled artifact to be the one that gets
+      # smoked — and because a bundle nobody started is a bundle that can be
+      # released unbootable. On a Linux runner with empty volumes this is also
+      # §5a's fresh-volume boot, which was otherwise a manual step on whatever
+      # machine happened to run it.
+      - name: Log in to GHCR
+        run: echo '${{ secrets.GITHUB_TOKEN }}' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
+
+      - name: Install from the bundle, as a collaborator would
+        working-directory: dist/appliance-bundle
+        run: |
+          set -euo pipefail
+          docker compose pull --quiet
+          docker compose up -d --wait
+
+      # Asked of the published image's own filesystem, which is the only thing
+      # that settles it. An import graph says what a build should contain; this
+      # says what the artifact a collaborator pulled does contain.
+      - name: The published image carries no cloud-only workspace
+        env:
+          DIGEST: ${{ needs.publish.outputs.digest }}
+        run: |
+          set -euo pipefail
+          shipped="$(docker run --rm --entrypoint sh "${IMAGE}@${DIGEST}" -c 'ls apps' | tr '\n' ' ')"
+          echo "[appliance] the image carries: ${shipped}"
+          case "${shipped}" in
+            *aflow-executor-code*)
+              echo '[appliance] the coding lane is in the published image' >&2; exit 1 ;;
+          esac
+          case "${shipped}" in
+            *aflow-voice*)
+              echo '[appliance] the voice app is in the published image' >&2; exit 1 ;;
+          esac
+          # The check discriminates only if it also finds what must be there.
+          case "${shipped}" in
+            *server*) ;;
+            *) echo '[appliance] the image does not look like the product' >&2; exit 1 ;;
+          esac
+
+      # What the image contains, taken from the image. The check above answers
+      # whether a cloud-only workspace is in there; this answers what IS, as a
+      # list a reader can diff between releases and a scanner can take.
+      #
+      # `--pruned` and `--compare` are the script's other two modes and are not
+      # used here: both need a second input this job does not have, and what they
+      # assert is a property of the cut rather than of the version being cut.
+      - name: Take the image's inventory
+        env:
+          DIGEST: ${{ needs.publish.outputs.digest }}
+          VERSION: ${{ needs.publish.outputs.version }}
+        run: |
+          set -euo pipefail
+          node scripts/appliance-sbom.mjs \
+            --image "${IMAGE}@${DIGEST}" \
+            --out "aflow-appliance-${VERSION}-sbom.json" \
+            --no-telemetry
+
+      # The inventory is a release asset either way; signing it is what lets a
+      # reader tell the one this build produced from one somebody edited.
+      - name: Attest the inventory
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ needs.publish.outputs.digest }}
+          sbom-path: aflow-appliance-${{ needs.publish.outputs.version }}-sbom.json
+
+      - name: Check the artifact that was installed
+        run: |
+          set -euo pipefail
+          # Its own copy of the smoke, from inside the bundle: the thing being
+          # checked has to be what a collaborator receives, tooling included.
+          # Retried because the API has no healthcheck for `--wait` to hold on,
+          # so the smoke is the readiness signal.
+          for attempt in $(seq 1 30); do
+            if bash dist/appliance-bundle/scripts/appliance-smoke.sh; then
+              echo "[appliance] the pulled artifact passed its smoke on attempt ${attempt}"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo '[appliance] the pulled artifact did not pass its smoke' >&2
+          docker compose -f dist/appliance-bundle/docker-compose.yml logs --tail 120 || true
+          exit 1
+
+      # What the image is known to be vulnerable to. `yarn npm audit` on the
+      # pull-request pipeline reads the lockfile, which answers a different
+      # question twice over: it cannot see the base image's OS packages at all,
+      # and it reads the whole workspace rather than the pruned production
+      # install that actually shipped. This reads the artifact.
+      #
+      # Run as the published container rather than through an action, so this
+      # workflow keeps pinning only what it can verify. The daemon already holds
+      # the image from the pull above, so the scan needs no registry credential.
+      # It reads the runner's own architecture — the arm64 variant comes from the
+      # same base tag, so its package set matches, but its versions are not
+      # asserted here.
+      - name: What the image is vulnerable to
+        env:
+          DIGEST: ${{ needs.publish.outputs.digest }}
+          VERSION: ${{ needs.publish.outputs.version }}
+        run: |
+          set -euo pipefail
+          report="aflow-appliance-${VERSION}-vulnerabilities.json"
+
+          # Retried for the same reason the dependency audit is: the database
+          # download fails often enough to red-light a release that has nothing
+          # wrong with it, and a real finding survives every attempt.
+          for attempt in 1 2 3; do
+            if docker run --rm \
+              -v /var/run/docker.sock:/var/run/docker.sock \
+              -v "${RUNNER_TEMP}/trivy-cache:/root/.cache/trivy" \
+              -v "${PWD}:/work" -w /work \
+              ghcr.io/aquasecurity/trivy:0.74.0 image \
+              --image-src docker \
+              --scanners vuln \
+              --format json \
+              --output "${report}" \
+              "${IMAGE}@${DIGEST}"; then
+              break
+            fi
+            echo "[appliance] scan attempt ${attempt} failed"
+            if [ "${attempt}" -eq 3 ]; then
+              echo '[appliance] the image could not be scanned' >&2
+              exit 1
+            fi
+            sleep $((attempt * 15))
+          done
+
+          # The report carries every severity including what has no fix, because
+          # a release asset that omits them answers questions nobody asked.
+          # The GATE is narrower, and deliberately: a high or critical finding
+          # with a fixed version available is a release that should be cut from a
+          # newer base instead. One with no fix blocks nothing — there is no
+          # action it could ask for — and is reported rather than hidden.
+          fixable="$(jq '[.Results[]?.Vulnerabilities[]?
+            | select(.Severity == "HIGH" or .Severity == "CRITICAL")
+            | select((.FixedVersion // "") != "")]' "${report}")"
+          count="$(echo "${fixable}" | jq 'length')"
+
+          {
+            echo '### Image vulnerabilities'
+            echo ''
+            echo "\`${IMAGE}@${DIGEST}\`"
+            echo ''
+            jq -r '[.Results[]?.Vulnerabilities[]?] as $all
+              | "| Severity | Total | With a fix |",
+                "| --- | --- | --- |",
+                ( ["CRITICAL","HIGH","MEDIUM","LOW"][]
+                  | . as $s
+                  | "| \($s) | \([$all[] | select(.Severity == $s)] | length)"
+                    + " | \([$all[] | select(.Severity == $s) | select((.FixedVersion // "") != "")] | length) |" )' "${report}"
+            echo ''
+            if [ "${count}" -gt 0 ]; then
+              echo "#### Blocking — ${count} fixable at high or critical"
+              echo ''
+              echo "${fixable}" | jq -r '.[] | "- `\(.PkgName)` \(.InstalledVersion) → \(.FixedVersion) — \(.VulnerabilityID) (\(.Severity))"'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "${count}" -gt 0 ]; then
+            echo "[appliance] ${count} fixable high/critical finding(s) — rebuild from a newer base" >&2
+            echo "${fixable}" | jq -r '.[] | "  \(.PkgName) \(.InstalledVersion) -> \(.FixedVersion)  \(.VulnerabilityID) \(.Severity)"' >&2
+            exit 1
+          fi
+          echo '[appliance] nothing fixable at high or critical'
+
+      - name: Stop it
+        if: always()
+        working-directory: dist/appliance-bundle
+        run: docker compose down --volumes --remove-orphans || true
+
+      - name: Attach it to the release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.publish.outputs.version }}
+          DIGEST: ${{ needs.publish.outputs.digest }}
+        run: |
+          set -euo pipefail
+          tar czf "aflow-appliance-${VERSION}.tgz" -C dist/appliance-bundle .
+
+          # Pushing a tag creates a tag and not a release, so there is nothing
+          # to upload to until one exists. Created here rather than assumed,
+          # because the bundle is the release as far as a collaborator is
+          # concerned.
+          if ! gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release create "${TAG}" \
+              --title "Appliance ${VERSION}" \
+              --notes "Private appliance image and installation bundle.
+
+          Image: \`${IMAGE}@${DIGEST}\`
+
+          Unpack the bundle, \`docker login ghcr.io\`, then \`docker compose up -d\`. Its README carries the pull, upgrade, rollback and backup procedures."
+          fi
+          gh release upload "${TAG}" "aflow-appliance-${VERSION}.tgz" --clobber
+          gh release upload "${TAG}" "aflow-appliance-${VERSION}-sbom.json" --clobber
+          gh release upload "${TAG}" "aflow-appliance-${VERSION}-vulnerabilities.json" --clobber

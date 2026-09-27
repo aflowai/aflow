@@ -1,0 +1,83 @@
+---
+description: CI pipeline, branch policy, PR workflow, and what blocks merges. Read before committing or pushing.
+alwaysApply: true
+---
+
+# CI and Development Workflow
+
+## Commit and push policy
+
+- **Never commit, push, or create PRs without explicit user approval.** Always present a summary of changes and wait for the user to confirm before running `git commit`, `git push`, or `gh pr create`. The user needs to review and test first.
+- **Never push directly to `main`** — all changes must go through a PR
+- Always work on a feature branch: `feat/`, `fix/`, `docs/`, `refactor/`, `chore/`, `test/`
+- Squash merge PRs to keep `main` history clean
+- Delete the source branch after merging
+
+## Required quality checks (use `/check` skill)
+
+Run in this order before every commit:
+
+```bash
+yarn format           # auto-fix formatting
+yarn lint --fix       # auto-fix what ESLint can
+yarn build            # topological build
+yarn typecheck        # zero errors required
+yarn test             # all unit tests must pass
+```
+
+Across concurrent worktrees, use `test:file`, `test:workspace`, or `test:changed` for iteration.
+`yarn test` is the one complete proof and intentionally serializes with other full runs; never
+bypass a waiting lock with raw Vitest or workspace-level parallelism.
+
+## What blocks a PR merge
+
+| Check | Blocks? | Notes |
+|-------|---------|-------|
+| Typecheck | **Yes** | Zero errors. No exceptions. |
+| Format | **Yes** | Run `yarn format` to auto-fix. |
+| Build | **Yes** | Broken build = broken product. |
+| Tests | **Yes** | All unit tests must pass. |
+| Schema determinism | **Yes** | Schema output must be identical across two builds. |
+| **Lint** | **Yes** | ESLint errors block. Warnings are visible in CI logs but do not block. |
+
+## Lint gate (Plan 56)
+
+Plan 56 complete: 0 errors. Warnings remain (fix as you go).
+
+1. **Pre-commit hook** (`lint-staged`): Every staged `.ts`/`.tsx` file must pass `eslint --max-warnings 0`. You only fix files you touch.
+2. **CI Lint job**: Runs `yarn lint` — ESLint errors fail the job; warnings stay non-blocking.
+
+## Before opening a PR
+
+```
+/check      → format + lint --fix + build + typecheck + test
+```
+
+Then update the docs the change affects, commit on a branch, push, and open a pull
+request against `main`.
+
+## PR template
+
+`.github/pull_request_template.md` is auto-populated when you open a PR on GitHub. Fill in:
+
+- Summary (what + why)
+- Changes table
+- Test plan checklist
+- Documentation checklist
+
+## Format before staging — mandatory
+
+**Always run `yarn format` before `git add` and committing.** This is a hard rule:
+
+- In CI: `yarn format:check` (fails if files would change)
+- Locally: `yarn format` (writes in-place, run before staging)
+
+Running format after staging but before committing also works, but running it before `git add` is preferred to keep diffs clean. If CI format check fails, run `yarn format`, stage, and push again.
+
+## Common "works locally, fails CI" causes
+
+1. **Stale `dist/`**: CI starts clean; your local has cached build artifacts. Rebuild from scratch.
+2. **Format drift**: CI uses `--check`. Run `yarn format` and stage changes.
+3. **Test infra missing**: CI provides Postgres + Redis for the test job. Unit tests (`yarn test`) don't need infra.
+
+See `docs/dev/CI.md` for full troubleshooting.

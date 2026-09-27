@@ -1,0 +1,31 @@
+version: 2
+
+updates:
+  # Actions are pinned to commit SHAs, so nothing else moves them. Without this
+  # entry a pin silently becomes an unmaintained snapshot.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+    groups:
+      github-actions:
+        patterns: ['*']
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+    open-pull-requests-limit: 5
+    groups:
+      npm:
+        patterns: ['*']
+        update-types: ['minor', 'patch']
+    ignore:
+      # Every workspace shares one lockfile, so a major lands as a deliberate
+      # migration rather than a bot PR nobody can review in isolation.
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major']

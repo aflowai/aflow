@@ -1,0 +1,89 @@
+{
+  "name": "@aflow/schemas",
+  "version": "0.1.0",
+  "license": "AGPL-3.0-or-later",
+  "homepage": "https://github.com/aflowai/aflow#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aflowai/aflow.git"
+  },
+  "bugs": {
+    "url": "https://github.com/aflowai/aflow/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "ts-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./artifact": {
+      "ts-source": "./src/artifact/index.ts",
+      "types": "./dist/artifact/index.d.ts",
+      "import": "./dist/artifact/index.js",
+      "require": "./dist/artifact/index.cjs"
+    },
+    "./runtime": {
+      "ts-source": "./src/runtime/index.ts",
+      "types": "./dist/runtime/index.d.ts",
+      "import": "./dist/runtime/index.js",
+      "require": "./dist/runtime/index.cjs"
+    },
+    "./utils": {
+      "ts-source": "./src/utils/index.ts",
+      "types": "./dist/utils/index.d.ts",
+      "import": "./dist/utils/index.js",
+      "require": "./dist/utils/index.cjs"
+    },
+    "./utils/memoryEmbed": {
+      "ts-source": "./src/utils/memoryEmbed.ts",
+      "types": "./dist/utils/memoryEmbed.d.ts",
+      "import": "./dist/utils/memoryEmbed.js",
+      "require": "./dist/utils/memoryEmbed.cjs"
+    },
+    "./catalog": {
+      "ts-source": "./src/catalog/index.ts",
+      "types": "./dist/catalog/index.d.ts",
+      "import": "./dist/catalog/index.js",
+      "require": "./dist/catalog/index.cjs"
+    },
+    "./eval": {
+      "ts-source": "./src/eval/index.ts",
+      "types": "./dist/eval/index.d.ts",
+      "import": "./dist/eval/index.js",
+      "require": "./dist/eval/index.cjs"
+    },
+    "./guardrails": {
+      "ts-source": "./src/guardrails/index.ts",
+      "types": "./dist/guardrails/index.d.ts",
+      "import": "./dist/guardrails/index.js",
+      "require": "./dist/guardrails/index.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "npx tsup && rm -f tsconfig.tsbuildinfo && npx tsc --emitDeclarationOnly",
+    "dev": "npx tsup --watch",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@aflow/lib": "workspace:*",
+    "zod": "^3.24.0",
+    "zod-to-json-schema": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.10",
+    "typescript": "^5.8.3",
+    "vitest": "^4.1.11"
+  }
+}

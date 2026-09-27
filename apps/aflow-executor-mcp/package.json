@@ -1,0 +1,33 @@
+{
+  "name": "@aflow/aflow-executor-mcp",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "npx tsc",
+    "dev": "NODE_OPTIONS='--conditions=ts-source' npx tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "lint": "eslint src",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@aflow/database": "workspace:*",
+    "@aflow/executor-runtime": "workspace:*",
+    "@aflow/lib": "workspace:*",
+    "@aflow/network-safety": "workspace:*",
+    "@aflow/oauth": "workspace:*",
+    "@aflow/observability": "workspace:*",
+    "@aflow/payload-store": "workspace:*",
+    "@aflow/redis": "workspace:*",
+    "@aflow/schemas": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3",
+    "vitest": "^4.1.11"
+  }
+}

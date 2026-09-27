@@ -1,0 +1,276 @@
+/* workflow-run-surface.css — responsive layout for in-chat skill run cards */
+
+.workflow-run-surface {
+  display: flex;
+  flex-direction: column;
+  margin: var(--space-1) var(--space-6);
+  max-width: 700px;
+  padding: 12px 8px;
+  background: var(--color-surface-2);
+  border-radius: var(--radius-lg);
+  transition:
+    opacity 150ms,
+    border-color 150ms;
+}
+
+.workflow-run-surface--completed {
+  opacity: 0.9;
+}
+
+.workflow-run-surface--loading {
+  padding: var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  background: var(--surface-raised-alpha);
+}
+
+.workflow-run-surface__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 12px;
+  color: var(--color-text-primary);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+}
+
+.workflow-run-surface__title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.workflow-run-surface__label {
+  font-size: var(--font-size-base);
+  letter-spacing: 0.08em;
+  color: var(--color-text-muted);
+  margin-right: var(--space-1);
+}
+
+.workflow-run-surface__sep {
+  color: var(--color-text-muted);
+  margin-right: var(--space-1);
+  font-size: var(--font-size-base);
+}
+
+.workflow-run-surface__title {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.workflow-run-surface__meta-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  flex-shrink: 0;
+}
+
+/* First-class run output — score / output values / outcome checks block. */
+.workflow-run-surface__output {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1-5);
+  margin: var(--space-1) 12px 0 12px;
+  padding: var(--space-2) 12px;
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.workflow-run-surface__output-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.workflow-run-surface__output-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-size: 12px;
+  min-width: 0;
+}
+
+.workflow-run-surface__output-key {
+  flex: 0 0 auto;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.workflow-run-surface__output-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--color-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.workflow-run-surface__output-score {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1-5);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-primary);
+}
+
+.workflow-run-surface__output-summary {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  line-height: 1.4;
+}
+
+.workflow-run-surface__output-markdown {
+  width: 100%;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.workflow-run-surface__controls {
+  display: flex;
+  align-items: center;
+  padding: var(--space-2) 12px var(--space-1) 12px;
+  border-top: 1px solid var(--color-border-subtle);
+  margin-top: var(--space-1);
+}
+
+.workflow-run-surface__open-full {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: auto;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  text-decoration: none;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  transition: color 120ms ease;
+}
+
+.workflow-run-surface__open-full:hover {
+  color: var(--color-text-primary);
+}
+
+@media (min-width: 769px) {
+  .workflow-run-surface__label,
+  .workflow-run-surface__sep,
+  .workflow-run-surface__title {
+    font-size: var(--font-size-lg);
+  }
+}
+
+@media (max-width: 768px) {
+  .workflow-run-surface {
+    margin-left: var(--space-5);
+    max-width: none;
+  }
+
+  .workflow-run-surface__header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-2);
+  }
+
+  .workflow-run-surface__title-row {
+    width: 100%;
+  }
+
+  .workflow-run-surface__meta-row {
+    width: 100%;
+  }
+}
+
+/* Skipped = branch not taken. Queued/scheduled share the inert orb —
+   fade the whole row so executed/queued work keeps visual weight. */
+.workflow-run-surface__row--skipped {
+  opacity: 0.22;
+  filter: grayscale(1);
+}
+
+.workflow-run-surface__row--skipped .ds-timeline-item__title-text,
+.workflow-run-surface__row--skipped .ds-timeline-item__title-icon,
+.workflow-run-surface__row--skipped .ds-timeline-item__time,
+.workflow-run-surface__row--skipped .ds-timeline-item__time--end,
+.workflow-run-surface__row--skipped .ds-timeline-item__body {
+  color: var(--color-text-muted);
+}
+
+/* Abstract status orbs — motion lives in the SVG; keep chrome quiet so
+   the orb (not the marker ring) carries the signal. */
+.workflow-run-surface__orb {
+  display: block;
+  flex-shrink: 0;
+  user-select: none;
+  pointer-events: none;
+}
+
+.workflow-run-surface__orb--header {
+  margin-right: 4px;
+}
+
+.workflow-run-surface .ds-timeline-item__marker {
+  width: 56px;
+  height: 56px;
+  background-color: transparent;
+  border-color: transparent;
+  animation: none;
+  /* Paused orb's invitation ring extends slightly past the disc. */
+  overflow: visible;
+}
+
+/* Spine was tuned for 24px markers (`left: 21px`); recenter on 56px orbs. */
+.workflow-run-surface .ds-timeline::before,
+.workflow-run-surface .ds-timeline__fill {
+  left: 37px;
+}
+
+/* Orbs already carry status color — keep the connector spine neutral.
+   Dark: border-strong reads well. Light: strong is near-black and too
+   heavy on a thin 2px line, so soften with content-muted instead of
+   inventing a new border token. */
+.workflow-run-surface .ds-timeline {
+  --ds-timeline-fill: var(--color-border-default);
+}
+
+.workflow-run-surface .ds-timeline--active .ds-timeline__fill {
+  background-image:
+    linear-gradient(
+      to bottom,
+      transparent 0%,
+      color-mix(in srgb, var(--ds-timeline-fill) 85%, var(--color-content-primary)) 50%,
+      transparent 100%
+    ),
+    linear-gradient(
+      to bottom,
+      var(--ds-timeline-fill) 0%,
+      color-mix(in srgb, var(--ds-timeline-fill) 65%, transparent) 100%
+    );
+}
+
+.workflow-run-surface .ds-timeline-item__marker--running,
+.workflow-run-surface .ds-timeline-item__marker--paused,
+.workflow-run-surface .ds-timeline-item__marker--succeeded,
+.workflow-run-surface .ds-timeline-item__marker--failed {
+  background-color: transparent;
+  border-color: transparent;
+  animation: none;
+  box-shadow: none;
+}

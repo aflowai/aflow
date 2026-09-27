@@ -1,0 +1,98 @@
+{
+  "flowConfig": {
+    "name": "memory-full-cycle",
+    "description": "Exercises put → list → get → query(search) → put(update) → get(verify). Tests transaction consolidation and hybrid search.",
+    "startStepId": "put-poem",
+    "steps": [
+      {
+        "stepId": "put-poem",
+        "type": "memory",
+        "operation": "memory.put",
+        "name": "Store a poem",
+        "config": {
+          "path": "/test/poems/ozymandias.txt",
+          "docType": "text",
+          "content": {
+            "inlineText": "I met a traveller from an antique land,\nWho said — Two vast and trunkless legs of stone\nStand in the desert. Near them, on the sand,\nHalf sunk a shattered visage lies, whose frown,\nAnd wrinkled lip, and sneer of cold command,\nTell that its sculptor well those passions read\nWhich yet survive, stamped on these lifeless things,\nThe hand that mocked them, and the heart that fed;\nAnd on the pedestal, these words appear:\nMy name is Ozymandias, King of Kings;\nLook on my Works, ye Mighty, and despair!\nNothing beside remains. Round the decay\nOf that colossal Wreck, boundless and bare\nThe lone and level sands stretch far away."
+          },
+          "tags": ["poetry", "shelley", "romantic"],
+          "summary": "Ozymandias by Percy Bysshe Shelley"
+        },
+        "onSuccess": {
+          "next": [{ "stepId": "put-note", "priority": 1 }]
+        }
+      },
+      {
+        "stepId": "put-note",
+        "type": "memory",
+        "operation": "memory.put",
+        "name": "Store a technical note",
+        "config": {
+          "path": "/test/notes/redis-streams.md",
+          "docType": "markdown",
+          "mimeType": "text/markdown",
+          "content": {
+            "inlineText": "# Redis Streams\n\nRedis Streams are an append-only log data structure.\n\n## Key commands\n- XADD: append entry\n- XREAD: read entries\n- XREADGROUP: consumer group read\n- XACK: acknowledge processing\n\n## Consumer groups\nAllow multiple consumers to cooperatively process a stream.\nEach consumer gets a unique subset of entries.\nPending entries can be claimed by other consumers if the original consumer dies."
+          },
+          "tags": ["redis", "technical", "infrastructure"]
+        },
+        "onSuccess": {
+          "next": [{ "stepId": "list-all", "priority": 1 }]
+        }
+      },
+      {
+        "stepId": "list-all",
+        "type": "memory",
+        "operation": "memory.query",
+        "name": "List all test docs",
+        "config": {
+          "mode": "list",
+          "pathPrefix": "/test/",
+          "limit": 10
+        },
+        "onSuccess": {
+          "next": [{ "stepId": "grep-poetry", "priority": 1 }]
+        }
+      },
+      {
+        "stepId": "grep-poetry",
+        "type": "memory",
+        "operation": "memory.query",
+        "name": "Grep for 'desert' across docs",
+        "config": {
+          "mode": "grep",
+          "pathPrefix": "/test/",
+          "query": "desert",
+          "limit": 5
+        },
+        "onSuccess": {
+          "next": [{ "stepId": "get-poem-stat", "priority": 1 }]
+        }
+      },
+      {
+        "stepId": "get-poem-stat",
+        "type": "memory",
+        "operation": "memory.get",
+        "name": "Get poem metadata",
+        "config": {
+          "target": { "path": "/test/poems/ozymandias.txt" },
+          "view": "stat"
+        },
+        "onSuccess": {
+          "next": [{ "stepId": "get-poem-content", "priority": 1 }]
+        }
+      },
+      {
+        "stepId": "get-poem-content",
+        "type": "memory",
+        "operation": "memory.get",
+        "name": "Get poem full content",
+        "config": {
+          "target": { "path": "/test/poems/ozymandias.txt" },
+          "view": "content"
+        }
+      }
+    ]
+  },
+  "input": {}
+}

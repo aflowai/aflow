@@ -1,0 +1,139 @@
+/* The harness feed: a terminal in a conversation, bounded so it cannot take
+   over the column it sits in. The box scrolls; the page never does. */
+
+.harness-activity {
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-0);
+  overflow: hidden;
+}
+
+.harness-activity__header {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+}
+
+.harness-activity__header:hover {
+  background-color: var(--color-surface-2);
+}
+
+/* Once the run is done the result takes the top and the fold sits under it, so
+   the header is no longer the card's first row and needs the line back. */
+.harness-activity__header:not(:first-child) {
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.harness-activity__body {
+  padding: 0 var(--space-3) var(--space-3);
+}
+
+/* A body under no header of its own opens the card and pays for its own top. */
+.harness-activity__body--lead {
+  padding-top: var(--space-3);
+}
+
+.harness-feed__wrap {
+  position: relative;
+}
+
+.harness-feed {
+  max-height: 18rem;
+  overflow-y: auto;
+  overflow-x: auto;
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-1);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  line-height: 1.6;
+}
+
+.harness-feed__line {
+  display: flex;
+  gap: var(--space-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.harness-feed__line--status {
+  color: var(--color-text-muted);
+}
+
+.harness-feed__line--thought {
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-sans);
+  padding: var(--space-1) 0;
+}
+
+/* A call and its answer are one row each. The tool is the half a reader scans
+   for, so it stays whole and the rest is cut at the row's end; opening the row
+   is what the whole of it is for. */
+.harness-feed__row {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1);
+  width: 100%;
+  text-align: left;
+}
+
+button.harness-feed__row {
+  cursor: pointer;
+}
+
+.harness-feed__row--result {
+  padding-left: var(--space-3);
+  color: var(--color-text-muted);
+}
+
+.harness-feed__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.harness-feed__text--open {
+  white-space: pre-wrap;
+  overflow: visible;
+  overflow-wrap: anywhere;
+}
+
+.harness-feed__tool {
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.harness-feed__at {
+  flex: 0 0 auto;
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.harness-feed__jump {
+  position: absolute;
+  right: var(--space-2);
+  bottom: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-full);
+  background: var(--color-surface-2);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+}
+
+@media (max-width: 480px) {
+  .harness-feed {
+    max-height: 12rem;
+  }
+}

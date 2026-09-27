@@ -1,0 +1,356 @@
+/* ==========================================================================
+   Phoenix Design System - Base Styles
+   Bold minimal foundation with gradient canvas
+   ========================================================================== */
+
+/* ---------- Ambient canvas + translucent surfaces ----------
+   These are NOT generated from tokens.json — they extend the token system.
+   One background system for both themes: a flat floor and a static veil on
+   <html>, plus two slow-drifting glow layers (body::before/::after). Themes
+   swap only the color tokens; the paint path, drift, and timing are shared.
+   Glows are pre-softened radial gradients animated with transform only —
+   blur filters or gradient changes at viewport scale repaint every frame,
+   transforms stay on the compositor.
+   --------------------------------------------------------------------------- */
+:root,
+[data-theme='light'] {
+  --ds-canvas-floor: #fff;
+  --ds-canvas-veil: linear-gradient(162deg, #fff 0%, #ffffff00 42%, #eee7de66 100%);
+  --ds-canvas-glow-a: radial-gradient(44% 38% at 62% 40%, #e9c6e27a 0%, #e9c6e200 70%);
+  --ds-canvas-glow-b: radial-gradient(50% 44% at 28% 82%, #f2d2a45c 0%, #f2d2a400 72%);
+  --surface-raised-alpha: color-mix(in srgb, #000000 3%, transparent);
+  --surface-overlay-alpha: #0000000a;
+  --color-scrim: rgb(28 24 32 / 0.32);
+  /* A selected segment riding on a translucent track. Opaque and stated per
+     theme: every surface token composites to within a few points of the track
+     it sits on, which reads as no selection at all on the dark canvas. */
+  --color-surface-selected: #ffffff;
+  /* Slightly warmer shadows to match the canvas warmth */
+  --shadow-xs: 0 1px 2px 0 rgb(0 0 0 / 0.04);
+  --shadow-sm: 0 1px 3px 0 rgb(0 0 0 / 0.05), 0 1px 2px -1px rgb(0 0 0 / 0.04);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.07), 0 2px 4px -2px rgb(0 0 0 / 0.05);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.07), 0 4px 6px -4px rgb(0 0 0 / 0.04);
+  --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.08), 0 8px 10px -6px rgb(0 0 0 / 0.04);
+}
+
+[data-theme='dark'] {
+  --ds-canvas-floor: #000;
+  --ds-canvas-veil: none;
+  --ds-canvas-glow-a: radial-gradient(56% 38% at 56% 50%, #ffd9ad24 0%, #ffd9ad00 100%);
+  --ds-canvas-glow-b: radial-gradient(52% 46% at 30% 84%, #161d2299 0%, #161d2200 72%);
+  --surface-raised-alpha: color-mix(in srgb, #d7d4c3 4%, transparent);
+  --surface-overlay-alpha: #3e3c3c21;
+  --color-scrim: rgb(0 0 0 / 0.55);
+  --color-surface-selected: #454b53;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --ds-canvas-floor: #000;
+    --ds-canvas-veil: none;
+    --ds-canvas-glow-a: radial-gradient(56% 38% at 56% 50%, #ffd9ad24 0%, #ffd9ad00 100%);
+    --ds-canvas-glow-b: radial-gradient(52% 46% at 30% 84%, #161d2299 0%, #161d2200 72%);
+    --surface-raised-alpha: color-mix(in srgb, #d7d4c3 4%, transparent);
+    --surface-overlay-alpha: #3e3c3c21;
+    --color-scrim: rgb(0 0 0 / 0.55);
+    --color-surface-selected: #454b53;
+  }
+}
+
+/* Drift periods are co-prime so the two-glow composition never visibly repeats. */
+:root {
+  --ds-canvas-drift-period-a: 37s;
+  --ds-canvas-drift-period-b: 59s;
+}
+
+/* Typography registers consumed by RegisterText (cybernetic surfaces). The
+   app provides --font-ibm-plex-serif via next/font; the fallbacks keep the
+   registers meaningful without it. */
+:root {
+  --font-family-cognitive: var(--font-ibm-plex-serif, 'Iowan Old Style', Georgia, serif);
+  --font-family-system: var(--font-family-mono);
+}
+
+/* Root element — canvas floor + veil for both themes */
+html {
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-base);
+  line-height: var(--font-line-height-normal);
+  color: var(--color-text-primary);
+  background-color: var(--ds-canvas-floor);
+  background-image: var(--ds-canvas-veil);
+  background-attachment: fixed;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* Body — prevent iOS overscroll bounce that breaks fixed layouts */
+body {
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  color: inherit;
+  background-color: transparent;
+  overflow: hidden;
+  position: fixed;
+  width: 100%;
+  height: 100%;
+  height: 100dvh;
+}
+
+/* Drifting canvas glows. Overscanned so travel never exposes an edge;
+   z-index -1 paints behind app content (body is a stacking context via
+   position: fixed) but above the html veil. Reduced motion is covered by
+   the global reset, which collapses the drift to its resting frame. */
+body::before,
+body::after {
+  content: '';
+  position: fixed;
+  inset: -14vh -14vw;
+  z-index: -1;
+  pointer-events: none;
+  will-change: transform;
+}
+
+body::before {
+  background-image: var(--ds-canvas-glow-a);
+  animation: ds-canvas-drift-a var(--ds-canvas-drift-period-a) var(--transition-timing-ease-in-out)
+    infinite;
+}
+
+body::after {
+  background-image: var(--ds-canvas-glow-b);
+  animation: ds-canvas-drift-b var(--ds-canvas-drift-period-b) var(--transition-timing-ease-in-out)
+    infinite;
+}
+
+@keyframes ds-canvas-drift-a {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  33% {
+    transform: translate3d(7vw, -5vh, 0) scale(1.1);
+  }
+  66% {
+    transform: translate3d(-5vw, 4vh, 0) scale(0.94);
+  }
+}
+
+@keyframes ds-canvas-drift-b {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  40% {
+    transform: translate3d(5vw, -6vh, 0) scale(1.08);
+  }
+  75% {
+    transform: translate3d(-6vw, 3vh, 0) scale(1.03);
+  }
+}
+
+/* Ensure html fills the viewport as well */
+html {
+  overflow: hidden;
+  height: 100%;
+}
+
+/* Headings — bolder in light mode */
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-weight: var(--font-weight-light);
+  font-family: var(--font-family-title);
+  line-height: var(--font-line-height-tight);
+  color: var(--color-text-primary);
+  letter-spacing: var(--font-letter-spacing-tight);
+}
+
+h1 {
+  font-size: var(--font-size-4xl);
+}
+h2 {
+  font-size: var(--font-size-3xl);
+}
+h3 {
+  font-size: var(--font-size-2xl);
+}
+h4 {
+  font-size: var(--font-size-xl);
+}
+h5 {
+  font-size: var(--font-size-lg);
+  font-family: var(--font-family-title);
+}
+h6 {
+  font-size: var(--font-size-base);
+}
+
+/* Paragraphs */
+p {
+  /* margin-bottom: var(--space-3); */
+  line-height: var(--font-line-height-relaxed);
+}
+
+p:last-child {
+  margin-bottom: 0;
+}
+
+/* Links — bold underline on hover */
+a {
+  color: var(--color-text-link);
+  text-decoration: none;
+  transition: color var(--transition-duration-fast) var(--transition-timing-default);
+}
+
+a:hover {
+  color: var(--color-interactive-hover);
+}
+
+/* Code */
+code,
+pre,
+kbd,
+samp {
+  font-family: var(--font-family-mono);
+  font-size: 0.9em;
+}
+
+code {
+  padding: 1px var(--space-1);
+  background-color: var(--color-surface-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+}
+
+pre {
+  padding: var(--space-4);
+  background-color: var(--color-surface-1);
+  border-radius: var(--radius-lg);
+  overflow-x: auto;
+}
+
+pre code {
+  padding: 0;
+  background-color: transparent;
+  border-radius: 0;
+}
+
+/* Horizontal rule */
+hr {
+  border: none;
+  border-top: 1px solid var(--color-border-default);
+  margin: var(--space-6) 0;
+}
+
+/* Selection — accent-tinted highlight */
+::selection {
+  background-color: #ece3d2;
+  color: var(--color-text-primary);
+}
+
+[data-theme='dark'] ::selection {
+  background-color: #4a4a3a;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) ::selection {
+    background-color: #4a4a3a;
+  }
+}
+
+/* Focus visible (keyboard navigation) */
+:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+/* Hide focus ring for mouse users */
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* Scrollbar styling (WebKit) — ultra-minimal */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border-strong);
+  border-radius: var(--radius-full);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-muted);
+}
+
+/* Only show scrollbar on hover for containers */
+.ds-scroll-subtle {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  transition: scrollbar-color var(--transition-duration-normal) var(--transition-timing-default);
+}
+
+.ds-scroll-subtle:hover {
+  scrollbar-color: var(--color-border-strong) transparent;
+}
+
+/* Cybernetic Entity Console — semantic palette + map role accents */
+:root,
+[data-theme='light'] {
+  --color-cybernetic-void: #e8e5d4;
+  --color-cybernetic-ink: #0c0c10;
+  --color-cybernetic-ink-muted: #8f8d82;
+  --color-cybernetic-raised: #14141a;
+  --color-cybernetic-overlay: #1e1e28;
+  --color-cybernetic-attention: #d4a030;
+  --color-cybernetic-attention-soft: #d4a03033;
+  --color-cybernetic-acquired: #d8c8dbc9;
+  --color-cybernetic-regression: #cf1158;
+  --color-cybernetic-constitution: #a48ad4;
+  --color-cybernetic-active: #60a5fa;
+  --color-cybernetic-memory: #8494a7;
+  --color-cybernetic-pulse: #d4a030;
+  --color-cybernetic-helmsman: var(--color-accent-default);
+  --color-cybernetic-runner: var(--color-success-default);
+  --color-cybernetic-coach: var(--color-data-5);
+  /* Timeline running-row "glassy" border ring (Timeline.tsx). Light
+     theme: a clear running-tinted floor with a darker, saturated glint
+     that travels the perimeter — a white shine is invisible on a light
+     surface, so the highlight reads as a polished dark edge instead. */
+  --ds-timeline-ring-floor: color-mix(in srgb, var(--color-status-running) 42%, transparent);
+  --ds-timeline-ring-shine: color-mix(in srgb, black 32%, var(--color-status-running));
+}
+
+[data-theme='dark'] {
+  --color-cybernetic-void: #0c0c10;
+  --color-cybernetic-ink: #e8e5d4;
+  --color-cybernetic-ink-muted: #8f8d82;
+  --color-cybernetic-raised: #14141a;
+  --color-cybernetic-overlay: #1e1e28;
+  --color-cybernetic-attention: #d4a94e;
+  --color-cybernetic-attention-soft: #d4a94e33;
+  --color-cybernetic-acquired: #431040ba;
+  --color-cybernetic-regression: #cf1158;
+  --color-cybernetic-constitution: #a48ad4;
+  --color-cybernetic-active: #60a5fa;
+  --color-cybernetic-memory: #8494a7;
+  --color-cybernetic-pulse: #d4a94e;
+  --color-cybernetic-helmsman: var(--color-accent-default);
+  --color-cybernetic-runner: var(--color-success-default);
+  --color-cybernetic-coach: var(--color-data-5);
+  /* Dark theme: a soft running-tinted floor with a bright near-white
+     highlight for the travelling "shine". */
+  --ds-timeline-ring-floor: color-mix(in srgb, var(--color-status-running) 22%, transparent);
+  --ds-timeline-ring-shine: color-mix(in srgb, white 78%, var(--color-status-running));
+}

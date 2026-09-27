@@ -1,0 +1,358 @@
+/**
+ * Contract: a harness task that declares an output schema comes back as a
+ * typed result, or it fails. Free text is diagnostics, and a run that answered
+ * only in its console output answered nowhere.
+ */
+import { execFile } from 'node:child_process';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
+
+import { HostHarnessRunInputSchema, HostHarnessRunOutputSchema } from '@aflow/schemas';
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+
+import {
+  compileResultValidator,
+  composeHarnessTask,
+  createHostHarnessHandler,
+  hasRepositoryRules,
+  readHarnessResult,
+  resultInstruction,
+  retryInstruction,
+  taskWithInputs,
+  validateResultText,
+} from '../handlers/harnessHandlers.js';
+import { runSandboxed, sandboxAvailable, sandboxReadiness } from '../sandboxedRun.js';
+import { HostBindingSchema } from '../bindings.js';
+
+const schema = {
+  type: 'object',
+  properties: { verdict: { type: 'string' }, confidence: { type: 'number' } },
+  required: ['verdict'],
+  additionalProperties: false,
+} as const;
+
+const validator = (): ReturnType<typeof compileResultValidator> =>
+  compileResultValidator(schema as unknown as Record<string, unknown>);
+
+describe('the task carries where the answer goes', () => {
+  it('names the file and the schema', () => {
+    const instruction = resultInstruction(schema as unknown as Record<string, unknown>);
+    expect(instruction).toContain('.aflow/result.json');
+    expect(instruction).toContain('"verdict"');
+  });
+
+  it('tells a resumable harness only what was wrong', () => {
+    const again = retryInstruction(
+      'Assess the repository.',
+      schema as unknown as Record<string, unknown>,
+      'no result file was written at `.aflow/result.json`',
+      true,
+    );
+    expect(again).toContain('no result file was written');
+    expect(again).not.toContain('Assess the repository.');
+  });
+
+  it('gives a harness that cannot be resumed the whole task back', () => {
+    // A fresh conversation remembers nothing, so a correction alone would be a
+    // task with no subject.
+    const again = retryInstruction(
+      'Assess the repository.',
+      schema as unknown as Record<string, unknown>,
+      'the JSON does not match the schema',
+      false,
+    );
+    expect(again).toContain('Assess the repository.');
+    expect(again).toContain('.aflow/result.json');
+  });
+});
+
+describe('what counts as a result', () => {
+  it('accepts JSON that matches', () => {
+    const check = validateResultText('{"verdict":"sound","confidence":0.8}', validator());
+    expect(check.ok).toBe(true);
+    expect(check.ok === true ? check.value : undefined).toEqual({
+      verdict: 'sound',
+      confidence: 0.8,
+    });
+  });
+
+  it('refuses text that is not JSON, and says so by path', () => {
+    const check = validateResultText('The repository looks fine.', validator());
+    expect(check.ok).toBe(false);
+    expect(check.ok === false ? check.problem : '').toContain('.aflow/result.json');
+  });
+
+  it('refuses JSON that misses the schema, naming what was wrong', () => {
+    const check = validateResultText('{"confidence":0.8}', validator());
+    expect(check.ok).toBe(false);
+    // The harness gets this back verbatim on its next turn, so it has to say
+    // what to change rather than that something is wrong.
+    expect(check.ok === false ? check.problem : '').toContain('verdict');
+  });
+});
+
+describe('the task carries its inputs', () => {
+  it('appends them as JSON after the prose, and nothing when there are none', () => {
+    const text = taskWithInputs('Review the range.', { range: 'main..HEAD', depth: 'deep' });
+    expect(text.startsWith('Review the range.')).toBe(true);
+    expect(text).toContain('"range":"main..HEAD"');
+    expect(taskWithInputs('Review the range.', undefined)).toBe('Review the range.');
+    expect(taskWithInputs('Review the range.', {})).toBe('Review the range.');
+  });
+});
+
+describe("the task carries the repository's own rules", () => {
+  let checkout: string;
+  beforeEach(async () => {
+    checkout = await mkdtemp(join(tmpdir(), 'aflow-rules-'));
+  });
+  afterEach(async () => {
+    await rm(checkout, { recursive: true, force: true });
+  });
+
+  it('names CLAUDE.md before the task when the checkout holds one', async () => {
+    await writeFile(join(checkout, 'CLAUDE.md'), '# Rules\n', 'utf8');
+    expect(await hasRepositoryRules(checkout)).toBe(true);
+    const text = composeHarnessTask('Review the range.', { range: 'main..HEAD' }, true);
+    expect(text.startsWith("The repository's own instructions are in `CLAUDE.md`")).toBe(true);
+    expect(text).toContain('treat them as binding');
+    expect(text).toContain('Review the range.');
+    expect(text).toContain('"range":"main..HEAD"');
+  });
+
+  it('says nothing about it when the checkout has none', async () => {
+    expect(await hasRepositoryRules(checkout)).toBe(false);
+    expect(composeHarnessTask('Review the range.', undefined, false)).toBe('Review the range.');
+  });
+
+  it('asks the checkout rather than a directory of the same name', async () => {
+    // A directory called CLAUDE.md is not a file the harness can read, and a
+    // task telling it to read one would send it after nothing.
+    await mkdir(join(checkout, 'CLAUDE.md'), { recursive: true });
+    expect(await hasRepositoryRules(checkout)).toBe(false);
+  });
+});
+
+describe('a schema is compiled for one run', () => {
+  it('accepts the same `$id` from the next run', () => {
+    const schema = { $id: 'https://example.test/result', type: 'object' };
+    expect(() => compileResultValidator(schema)).not.toThrow();
+    expect(() => compileResultValidator(schema)).not.toThrow();
+  });
+});
+
+describe('reading the result out of the checkout', () => {
+  let worktree: string;
+  beforeEach(async () => {
+    worktree = await mkdtemp(join(tmpdir(), 'aflow-result-'));
+  });
+  afterEach(async () => {
+    await rm(worktree, { recursive: true, force: true });
+  });
+
+  it('reports a run that wrote nothing as a missing file, by path', async () => {
+    const check = await readHarnessResult(join(worktree, '.aflow/result.json'), validator());
+    expect(check.ok).toBe(false);
+    expect(check.ok === false ? check.problem : '').toBe(
+      'no result file was written at `.aflow/result.json`',
+    );
+  });
+
+  it('reads and validates what the harness left', async () => {
+    await mkdir(join(worktree, '.aflow'), { recursive: true });
+    await writeFile(join(worktree, '.aflow/result.json'), '{"verdict":"sound"}', 'utf8');
+    const check = await readHarnessResult(join(worktree, '.aflow/result.json'), validator());
+    expect(check.ok === true ? check.value : undefined).toEqual({ verdict: 'sound' });
+  });
+});
+
+describe('the wire contract', () => {
+  it('defaults to one further turn when a schema is given', () => {
+    const input = HostHarnessRunInputSchema.parse({
+      bindingId: 'hb_project',
+      harness: 'claude',
+      task: 'Assess the repository.',
+      outputSchema: schema,
+    });
+    expect(input.resultRetries).toBe(1);
+    expect(input.outputSchema).toEqual(schema);
+  });
+
+  it('leaves a task with no schema unchanged', () => {
+    const input = HostHarnessRunInputSchema.parse({
+      bindingId: 'hb_project',
+      harness: 'claude',
+      task: 'Add a test.',
+    });
+    expect(input.outputSchema).toBeUndefined();
+  });
+
+  it('carries the validated result beside the diff, and says which harness ran', () => {
+    const output = HostHarnessRunOutputSchema.parse({
+      runId: 'hr_1',
+      harness: { id: 'claude', label: 'Claude Code' },
+      continued: false,
+      baseSha: 'abc',
+      result: { verdict: 'sound' },
+      filesChanged: 0,
+      patchTruncated: false,
+      exitCode: 0,
+      timedOut: false,
+      durationMs: 10,
+      truncated: false,
+      applies: 'empty',
+      headMoved: false,
+      blockedDomains: [],
+    });
+    expect(output.result).toEqual({ verdict: 'sound' });
+    // The name a card shows comes from the result, not from reading the step's
+    // input back — a call that named no harness has no id there at all.
+    expect(output.harness).toEqual({ id: 'claude', label: 'Claude Code' });
+  });
+
+  it('refuses a result that does not say which harness ran', () => {
+    expect(() =>
+      HostHarnessRunOutputSchema.parse({
+        runId: 'hr_1',
+        continued: false,
+        baseSha: 'abc',
+        filesChanged: 0,
+        patchTruncated: false,
+        exitCode: 0,
+        timedOut: false,
+        durationMs: 10,
+        truncated: false,
+        applies: 'empty',
+        headMoved: false,
+        blockedDomains: [],
+      }),
+    ).toThrow();
+  });
+});
+
+describe('a harness is never waiting on input nobody is sending', () => {
+  it.runIf(sandboxAvailable())(
+    'ends the standard input of a run that asked for it closed',
+    async () => {
+      // `cat` with no argument reads stdin until it ends. Left open it would
+      // sit there until the timeout below, which is what a harness CLI does
+      // for the first seconds of every run.
+      const root = await mkdtemp(join(tmpdir(), 'aflow-stdin-'));
+      const scratch = await mkdtemp(join(tmpdir(), 'aflow-stdin-scr-'));
+      try {
+        const result = await runSandboxed({
+          binding: HostBindingSchema.parse({
+            id: 'hb',
+            root,
+            mode: 'readwrite',
+            allowsExecution: true,
+          }),
+          argv: ['/bin/cat'],
+          cwd: root,
+          env: {},
+          timeoutMs: 20_000,
+          scratchDir: scratch,
+          idPrefix: 't',
+          ownerRunId: 'probe',
+          closeStdin: true,
+          signal: new AbortController().signal,
+          onDelta: () => undefined,
+        });
+        expect(result.timedOut).toBe(false);
+        expect(result.exitCode).toBe(0);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+        await rm(scratch, { recursive: true, force: true });
+      }
+    },
+    60_000,
+  );
+});
+
+describe.runIf(sandboxReadiness().ready)('a check that rejects an answer keeps the work', () => {
+  let policyPath: string;
+  let repo: string;
+
+  beforeAll(async () => {
+    const base = await mkdtemp(join(tmpdir(), 'host-harness-'));
+    repo = join(base, 'project');
+    await mkdir(repo, { recursive: true });
+    const vcs = async (...args: string[]): Promise<void> => {
+      await promisify(execFile)('git', args, { cwd: repo });
+    };
+    await vcs('init', '-b', 'main');
+    await vcs('config', 'user.email', 'test@example.com');
+    await vcs('config', 'user.name', 'Test');
+    await writeFile(join(repo, 'README.md'), '# project\n', 'utf8');
+    await vcs('add', '-A');
+    await vcs('commit', '-m', 'initial');
+    policyPath = join(base, 'host-policy.json');
+    await writeFile(
+      policyPath,
+      JSON.stringify({
+        version: 1,
+        bindings: [
+          {
+            id: 'hb',
+            root: repo,
+            mode: 'readwrite',
+            allowsExecution: true,
+            singleFile: false,
+            spaceId: 'space-test',
+          },
+        ],
+        // Edits a file and writes no result — the run this contract is about.
+        harnesses: [
+          {
+            id: 'fake',
+            label: 'Fake harness',
+            executable: '/bin/sh',
+            args: ['-c', 'printf changed > touched.txt'],
+          },
+        ],
+      }),
+    );
+  });
+
+  it('returns the diff on the failure when no valid result was written', async () => {
+    const written: Record<string, unknown> = {};
+    const ctx = {
+      operationId: 'host.harness.run',
+      spaceId: 'space-test',
+      runId: 'run-test',
+      job: { inputRef: 'inline:x' },
+      signal: new AbortController().signal,
+      log: { error: () => undefined, warn: () => undefined, info: () => undefined },
+      readPayload: () =>
+        Promise.resolve({
+          bindingId: 'hb',
+          harness: 'fake',
+          task: 'Assess the repository.',
+          outputSchema: schema,
+          resultRetries: 0,
+          timeoutMs: 60_000,
+        }),
+      emitLiveDelta: () => Promise.resolve(),
+      writePayload: (kind: string, data: unknown) => {
+        written[kind] = data;
+        return Promise.resolve(`inline:${kind}`);
+      },
+    } as never;
+
+    const outcome = await createHostHarnessHandler(policyPath).execute(ctx);
+    expect(outcome.status).toBe('FAILED');
+    const error = written['error'] as { message: string; details: Record<string, unknown> };
+    expect(error.message).toContain('.aflow/result.json');
+    // The run edited a file and answered nothing. Both facts come back.
+    expect(error.details['filesChanged']).toBe(1);
+    expect(String(error.details['patch'])).toContain('touched.txt');
+    expect(String(error.details['patch'])).toContain('changed');
+    expect(error.details['baseSha']).toEqual(expect.any(String));
+    expect(error.details).not.toHaveProperty('result');
+    // Which harness ran travels on a failure too: the card that reports it has
+    // the same name to show whether the run answered or not.
+    expect(error.details['harness']).toEqual({ id: 'fake', label: 'Fake harness' });
+  }, 120_000);
+});

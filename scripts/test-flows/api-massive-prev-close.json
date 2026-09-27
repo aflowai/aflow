@@ -1,0 +1,22 @@
+{
+  "flowConfig": {
+    "name": "test-massive-open-close",
+    "steps": [
+      {
+        "stepId": "open-close",
+        "type": "api",
+        "operation": "api.call",
+        "config": {
+          "apiId": "massive",
+          "endpointId": "open_close",
+          "params": {
+            "ticker": "AAPL",
+            "date": "2023-01-09",
+            "adjusted": true
+          }
+        }
+      }
+    ]
+  },
+  "input": {}
+}

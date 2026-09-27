@@ -1,0 +1,71 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "composite": true,
+    "declaration": true,
+    "declarationMap": true,
+    "emitDeclarationOnly": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts"],
+  "references": [
+    {
+      "path": "../../packages/ai-client"
+    },
+    {
+      "path": "../../packages/applet-runtime"
+    },
+    {
+      "path": "../../packages/authz"
+    },
+    {
+      "path": "../../packages/credential-resolver"
+    },
+    {
+      "path": "../../packages/cybernetic-runtime"
+    },
+    {
+      "path": "../../packages/database"
+    },
+    {
+      "path": "../../packages/integration-simulator"
+    },
+    {
+      "path": "../../packages/lib"
+    },
+    {
+      "path": "../../packages/memory-store"
+    },
+    {
+      "path": "../../packages/network-safety"
+    },
+    {
+      "path": "../../packages/oauth"
+    },
+    {
+      "path": "../../packages/observability"
+    },
+    {
+      "path": "../../packages/payload-store"
+    },
+    {
+      "path": "../../packages/platform-artifacts"
+    },
+    {
+      "path": "../../packages/redis"
+    },
+    {
+      "path": "../../packages/run-view"
+    },
+    {
+      "path": "../../packages/schemas"
+    },
+    {
+      "path": "../../packages/ui-artifact-compiler"
+    }
+  ]
+}

@@ -1,0 +1,164 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 500" width="100%" height="100%">
+    <!-- Transparent background is default. -->
+
+    <!-- Lily Pad Environment -->
+    <g id="lilypad">
+        <ellipse cx="150" cy="460" rx="160" ry="40" fill="#4CAF50" stroke="#2E7D32" stroke-width="4"/>
+        <path d="M 150 460 L 30 460 M 150 460 L 80 430 M 150 460 L 80 490 M 150 460 L 270 460" stroke="#2E7D32" stroke-width="2" opacity="0.5"/>
+    </g>
+
+    <!-- Subtle Drop Shadow under Frog -->
+    <ellipse cx="150" cy="450" rx="80" ry="20" fill="#1B5E20" opacity="0.4"/>
+
+    <!-- FROG CHARACTER -->
+    <g id="frog">
+        <!-- Back Legs (Thighs) -->
+        <ellipse cx="70" cy="410" rx="35" ry="25" transform="rotate(-30 70 410)" fill="#388E3C"/>
+        <ellipse cx="230" cy="410" rx="35" ry="25" transform="rotate(30 230 410)" fill="#388E3C"/>
+        
+        <!-- Back Feet -->
+        <g stroke="#4CAF50" stroke-width="8" stroke-linecap="round">
+            <line x1="60" y1="440" x2="30" y2="455"/>
+            <line x1="60" y1="440" x2="50" y2="460"/>
+            <line x1="60" y1="440" x2="70" y2="460"/>
+
+            <line x1="240" y1="440" x2="270" y2="455"/>
+            <line x1="240" y1="440" x2="250" y2="460"/>
+            <line x1="240" y1="440" x2="230" y2="460"/>
+        </g>
+
+        <!-- Main Body -->
+        <ellipse cx="150" cy="380" rx="80" ry="70" fill="#4CAF50"/>
+        <!-- Lighter Belly -->
+        <ellipse cx="150" cy="390" rx="55" ry="50" fill="#C8E6C9"/>
+
+        <!-- Warts / Texture -->
+        <circle cx="110" cy="350" r="4" fill="#388E3C" opacity="0.5"/>
+        <circle cx="190" cy="370" r="3" fill="#388E3C" opacity="0.5"/>
+        <circle cx="130" cy="420" r="5" fill="#388E3C" opacity="0.5"/>
+        <circle cx="170" cy="430" r="3" fill="#388E3C" opacity="0.5"/>
+        <circle cx="200" cy="340" r="4" fill="#388E3C" opacity="0.5"/>
+
+        <!-- Front Legs & Hands -->
+        <path d="M 110 400 Q 90 440 100 450" fill="none" stroke="#4CAF50" stroke-width="12" stroke-linecap="round"/>
+        <path d="M 190 400 Q 210 440 200 450" fill="none" stroke="#4CAF50" stroke-width="12" stroke-linecap="round"/>
+        <g stroke="#4CAF50" stroke-width="6" stroke-linecap="round">
+            <line x1="100" y1="450" x2="85" y2="460"/>
+            <line x1="100" y1="450" x2="100" y2="465"/>
+            <line x1="100" y1="450" x2="115" y2="460"/>
+
+            <line x1="200" y1="450" x2="185" y2="460"/>
+            <line x1="200" y1="450" x2="200" y2="465"/>
+            <line x1="200" y1="450" x2="215" y2="460"/>
+        </g>
+
+        <!-- Head Base -->
+        <ellipse cx="150" cy="310" rx="75" ry="50" fill="#4CAF50"/>
+
+        <!-- Cute Cheeks -->
+        <ellipse cx="90" cy="330" rx="12" ry="8" fill="#E91E63" opacity="0.4"/>
+        <ellipse cx="210" cy="330" rx="12" ry="8" fill="#E91E63" opacity="0.4"/>
+
+        <!-- Nostrils -->
+        <circle cx="140" cy="305" r="2" fill="#2E7D32"/>
+        <circle cx="160" cy="305" r="2" fill="#2E7D32"/>
+
+        <!-- Animated Mouth (Opens, catches fly, chews) -->
+        <path fill="#b71c1c" stroke="#2E7D32" stroke-width="3">
+            <animate attributeName="d"
+                values="
+                    M 90 330 Q 150 340 210 330 Q 150 345 90 330;
+                    M 90 330 Q 150 340 210 330 Q 150 345 90 330;
+                    M 90 330 Q 150 310 210 330 Q 150 400 90 330;
+                    M 90 330 Q 150 310 210 330 Q 150 400 90 330;
+                    M 90 330 Q 150 340 210 330 Q 150 345 90 330;
+                    M 90 330 Q 150 325 210 330 Q 150 335 90 330;
+                    M 90 330 Q 150 340 210 330 Q 150 360 90 330;
+                    M 90 330 Q 150 325 210 330 Q 150 335 90 330;
+                    M 90 330 Q 150 340 210 330 Q 150 345 90 330;
+                    M 90 330 Q 150 340 210 330 Q 150 345 90 330
+                "
+                keyTimes="0; 0.5; 0.516; 0.566; 0.58; 0.62; 0.66; 0.7; 0.75; 1"
+                dur="6s" repeatCount="indefinite" />
+        </path>
+
+        <!-- Eyes -->
+        <g id="eyes">
+            <!-- Green Eye Bulbs -->
+            <ellipse cx="100" cy="275" rx="25" ry="30" fill="#4CAF50"/>
+            <ellipse cx="200" cy="275" rx="25" ry="30" fill="#4CAF50"/>
+
+            <!-- Eyeball Whites -->
+            <ellipse cx="100" cy="280" rx="18" ry="22" fill="#FFFFFF"/>
+            <ellipse cx="200" cy="280" rx="18" ry="22" fill="#FFFFFF"/>
+
+            <!-- Animated Left Pupil Tracking Fly -->
+            <g>
+                <animateTransform attributeName="transform" type="translate"
+                    values="8,-4; 0,-6; 0,0; 8,-4; 8,-4; 4,8; 0,0; 0,0; 8,-4"
+                    keyTimes="0; 0.15; 0.3; 0.45; 0.533; 0.566; 0.616; 0.9; 1"
+                    dur="6s" repeatCount="indefinite" />
+                <ellipse cx="100" cy="280" rx="6" ry="8" fill="#111"/>
+                <circle cx="98" cy="278" r="2" fill="#FFF"/>
+            </g>
+            <!-- Animated Right Pupil Tracking Fly -->
+            <g>
+                <animateTransform attributeName="transform" type="translate"
+                    values="8,-4; 0,-6; 0,0; 8,-4; 8,-4; -4,8; 0,0; 0,0; 8,-4"
+                    keyTimes="0; 0.15; 0.3; 0.45; 0.533; 0.566; 0.616; 0.9; 1"
+                    dur="6s" repeatCount="indefinite" />
+                <ellipse cx="200" cy="280" rx="6" ry="8" fill="#111"/>
+                <circle cx="198" cy="278" r="2" fill="#FFF"/>
+            </g>
+
+            <!-- Animated Eyelids (Blinking while swallowing) -->
+            <ellipse cx="100" cy="280" rx="19" ry="0" fill="#388E3C">
+                <animate attributeName="ry" values="0; 0; 23; 0; 0; 23; 0; 0" keyTimes="0; 0.56; 0.58; 0.61; 0.7; 0.72; 0.75; 1" dur="6s" repeatCount="indefinite" />
+            </ellipse>
+            <ellipse cx="200" cy="280" rx="19" ry="0" fill="#388E3C">
+                <animate attributeName="ry" values="0; 0; 23; 0; 0; 23; 0; 0" keyTimes="0; 0.56; 0.58; 0.61; 0.7; 0.72; 0.75; 1" dur="6s" repeatCount="indefinite" />
+            </ellipse>
+        </g>
+    </g>
+
+    <!-- TONGUE EXTENSION -->
+    <path d="M 150 360 Q 280 320 380 180" fill="none" stroke="#E91E63" stroke-width="14" stroke-linecap="round" stroke-dasharray="320" stroke-dashoffset="320">
+        <animate attributeName="stroke-dashoffset"
+            values="320; 320; 0; 320; 320"
+            keyTimes="0; 0.5; 0.533; 0.566; 1"
+            dur="6s" repeatCount="indefinite" />
+    </path>
+
+    <!-- FLY -->
+    <g>
+        <!-- Fly fades in at start, vanishes when eaten -->
+        <animate attributeName="opacity" values="0; 1; 1; 0; 0; 0" keyTimes="0; 0.05; 0.566; 0.567; 0.983; 1" dur="6s" repeatCount="indefinite" />
+        
+        <!-- Fly Graphic and Wing Buzzing -->
+        <g id="flyGraphic">
+            <!-- Left/Top Wing -->
+            <path d="M 0 0 C 15 -10, 5 -20, 0 0" fill="#E0E0E0" opacity="0.8">
+                <animateTransform attributeName="transform" type="rotate" values="0; -60; 0" dur="0.03s" repeatCount="indefinite" />
+            </path>
+            <!-- Right/Bottom Wing -->
+            <path d="M 0 0 C 15 10, 5 20, 0 0" fill="#E0E0E0" opacity="0.8">
+                <animateTransform attributeName="transform" type="rotate" values="0; 60; 0" dur="0.03s" repeatCount="indefinite" />
+            </path>
+            <!-- Body -->
+            <ellipse cx="0" cy="0" rx="6" ry="4" fill="#212121"/>
+            <!-- Tiny Red Eyes -->
+            <circle cx="3" cy="-1.5" r="1.5" fill="#F44336"/>
+            <circle cx="3" cy="1.5" r="1.5" fill="#F44336"/>
+        </g>
+
+        <!-- Whirling Fly Path -->
+        <animateMotion
+            path="M 550,150 C 350,-50 250,350 150,150 C 50,-50 0,300 150,250 C 300,200 450,50 380,180 L 380,180 L 150,360 L 150,360"
+            keyPoints="0; 0.33; 0.66; 0.85; 0.85; 1; 1"
+            keyTimes="0; 0.15; 0.30; 0.45; 0.533; 0.566; 1"
+            calcMode="linear"
+            rotate="auto"
+            dur="6s" repeatCount="indefinite" />
+    </g>
+
+</svg>

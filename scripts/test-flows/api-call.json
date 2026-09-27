@@ -1,0 +1,17 @@
+{
+  "flowConfig": {
+    "name": "test-api-call",
+    "steps": [
+      {
+        "stepId": "fetch",
+        "type": "api",
+        "operation": "api.call",
+        "config": {
+          "url": "https://httpbin.org/get",
+          "method": "GET"
+        }
+      }
+    ]
+  },
+  "input": {}
+}

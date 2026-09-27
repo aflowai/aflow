@@ -1,0 +1,87 @@
+---
+description: Orchestrator (FlowExecutionService) patterns and payload discipline rules.
+globs: "apps/aflow-orchestrator/**"
+alwaysApply: false
+---
+
+# Orchestrator Patterns
+
+## Core Service: FlowExecutionService
+
+Three entry points:
+- **`startRun`**: Creates run + first step in Redis atomically, dispatches job.
+- **`scheduleStep`**: Creates step state, resolves input, dispatches job.
+- **`applyResult`**: Processes step completion — updates state, handles agent decisions, schedules next steps.
+
+## Input Resolution (`resolveStepInput`)
+
+1. Read raw input from `PayloadRef` (previous step output or run input)
+2. Start with `stepDef.config` as base
+3. If `inputMapping` exists: resolve each expression (`input.<field>`, `state.<var>`)
+4. Else: merge raw input on top of config
+5. For `ai.agent_turn`: special path via `buildAgentTurnInput` (assembles tools, history, context)
+6. Returns an `inline:` payload ref
+
+## Payload Discipline
+
+- **NEVER** store large data in `RunHotState` or `StepHotState` — use `PayloadStore`.
+- **NEVER** overwrite a step's output payload with a different kind of data at the same path.
+  Use distinct `PayloadKind` values: `"input"`, `"output"`, `"error"`, `"history"`, `"state"`, etc.
+- **Inline refs** (`inline:<base64>`) for small payloads (<64KB). PayloadStore handles both.
+- **Size-gate inline-op outputs** (Plan 186 §5.B). Encode every inline-op SUCCEEDED `outputRef`
+  through the shared `encodeInlineOpOutputRef` (`inlineOps/helpers.ts`) — used by
+  `emitStepSuccess` and by the handlers that build their own `addStepResult` with a custom
+  `stepType`/`operationId` (catalog/schema/discovery/crud). It offloads via
+  `payloadStore.shouldStore`/`store` over the inline budget, else `inline:base64`. Never encode a
+  SUCCEEDED output as unconditional `inline:base64`: a `$ref`-resolved or computed large value
+  (e.g. `submit_output`'s `fileContent`, a catalog export) must be persisted **by reference**.
+  (Bounded pause/wait control envelopes — `requestedInputRef`, delegation status — stay inline.)
+
+## One Payload-Aware Reference Semantics (Plan 186)
+
+Every reference to a large value — by any syntax (`{"$ref":"output.<id>/<field>"}`,
+`content:{fromPath:"/run/outputs/<id>/<field>"}`, `inputPaths`), at any boundary (tool input,
+task output, human approval) — must resolve to the **full** value through the **same**
+payload-aware traversal, and a materialized large value must be persisted by reference.
+
+- The canonical traversal is `applyJsonPointer` in `@aflow/input-resolution`
+  (`stateRefResolver.ts`): sibling `<field>Ref` → generic `dataRef` → direct `gs://`/`inline:`
+  value. `@aflow/memory-paths` (`resolver.ts`, virtual-path resolution) **shares** it — do
+  not fork a second non-payload-aware pointer function.
+- This spans `memory-paths` + `input-resolution` + `outputSummary` + inline-ops. A split-value
+  op (small inline field + sibling ref, e.g. `api.http.call`'s `data` + `dataRef`) is the case
+  that breaks naive traversal. Do not "fix" such an op by stripping its inline field (breaks
+  `fromPath` → `NOT_FOUND` and the `data + statusCode` shape detector) — fix the resolver.
+
+## Agent Loop (Plan 19)
+
+When `ai.agent_turn` step succeeds:
+1. Read `AgentTurnOutput` from `result.outputRef`
+2. Parse `decision.action`:
+   - `complete` → mark run SUCCEEDED
+   - `request_input` → mark run PAUSED
+   - `invoke_step`/`invoke_steps` → store tool args as inline ref, schedule tool step(s) with `parentStepExecutionId`
+3. When tool step completes → build `ToolResultSummary`, schedule next agent turn with `lastToolResults`
+
+## History (Plan 18)
+
+- Stored with `kind: "history"` (NOT `"output"` — avoids overwriting step output)
+- Runtime variable: `state.ai.history.<stepId>` points to the conversation record payload ref
+- `isHistoryEnabled()` checks step config for `historyPolicy.enabled` or `ai.agent_turn` operation
+
+## DRY — Shared Logic Goes in Packages
+
+The server (`apps/server`) and orchestrator (`apps/aflow-orchestrator`) often need the same logic — comparators, converters, transcript builders, grading pipelines. **Never duplicate this logic across apps.**
+
+- **Pure functions** with no runtime deps beyond `@aflow/schemas` → put in `packages/schemas/src/`
+- **Functions that need Redis/PayloadStore** → put in `packages/redis/src/`; cybernetic run/eval logic that needs the DB → `packages/cybernetic-runtime/src/`
+- **Inline op helpers** (emitStepSuccess, emitStepError) → share via `inlineOps/helpers.ts`
+- **Row-to-domain converters** → single shared function, not inlined per handler
+
+Evaluation runs through one substrate: the post-run hook calls `runEvaluation` (`@aflow/cybernetic-runtime`), and every envelope write goes through `writeRunEvaluationEnvelope` — never implement a parallel eval pipeline or a second envelope writer.
+
+## Testing Changes
+
+The orchestrator uses `tsx watch` and auto-restarts on file changes.
+However, changes to compiled packages (`packages/*`) require `yarn build` first.
+Check for duplicate orchestrator processes (`ps aux | grep orchestrator`).

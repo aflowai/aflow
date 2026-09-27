@@ -1,0 +1,27 @@
+{
+  "flowConfig": {
+    "name": "test-multi-step",
+    "steps": [
+      {
+        "stepId": "fetch-data",
+        "type": "api",
+        "operation": "api.call",
+        "config": {
+          "url": "https://official-joke-api.appspot.com/random_joke",
+          "method": "GET"
+        }
+      },
+      {
+        "stepId": "analyze",
+        "type": "ai",
+        "operation": "ai.generate",
+        "config": {
+          "model": "gpt-4o-mini",
+          "systemPrompt": "You receive a joke as JSON. Rate it 1-10, explain why in one sentence.",
+          "prompt": "${input.body}"
+        }
+      }
+    ]
+  },
+  "input": {}
+}

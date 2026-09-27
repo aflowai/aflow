@@ -1,0 +1,230 @@
+name: CI
+
+# A pull request's checks run against a merge commit derived when the branch was
+# last updated, never against `main` as it stands when the button is pressed — so
+# two pull requests that pass independently can break `main` together, and nothing
+# says so. That is the only reason `push` is here.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    # Advisories are published against an unchanged lockfile, so the audit has
+    # to re-run on a clock and not only on a diff.
+    - cron: '17 6 * * 1'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Checks (BLOCKING) ──────────────────────────────────────────────────────
+  # Single job for all non-test checks: build, typecheck, format, schema
+  # determinism, lint. Avoids redundant checkout/install/build across jobs —
+  # the build alone is ~6 minutes, so every extra job that needs it is costly.
+  checks:
+    name: Checks
+    runs-on: ubuntu-latest
+    # Pull requests and merges to main, not the clock: the scheduled trigger
+    # exists for the audit alone, and a nightly red build buys no security signal
+    # while costing the alert budget that makes a red main worth reading.
+    if: github.event_name != 'schedule'
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+
+      - name: Enable Corepack (Yarn)
+        run: corepack enable
+
+      - name: Get yarn cache directory path
+        id: yarn-cache-dir-path
+        run: echo "dir=$(yarn config get cacheFolder)" >> $GITHUB_OUTPUT
+
+      - name: Cache yarn dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.yarn-cache-dir-path.outputs.dir }}
+          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-
+
+      - name: Install dependencies
+        run: SKIP_POSTINSTALL=true yarn install --immutable
+
+      - name: Check formatting
+        run: yarn format:check
+
+      - name: Build all packages
+        run: yarn build
+
+      - name: Typecheck
+        run: yarn typecheck
+
+      - name: Verify schema generation is deterministic
+        run: |
+          # Lint runs later in this same job, so the comparison copy must not
+          # outlive the check — it is build output, and nothing should lint it.
+          trap 'rm -rf packages/schemas/dist-first' EXIT
+          cp -r packages/schemas/dist packages/schemas/dist-first
+          yarn workspace @aflow/schemas build
+          if ! diff -r packages/schemas/dist packages/schemas/dist-first > /dev/null; then
+            echo "Schema generation is not deterministic!"
+            diff -r packages/schemas/dist packages/schemas/dist-first
+            exit 1
+          fi
+          echo "Schema generation is deterministic ✓"
+
+      # ESLint warnings remain visible in the log but do not fail the job;
+      # only actual lint errors do.
+      - name: Lint
+        run: yarn lint
+
+  # ── Test (BLOCKING) ────────────────────────────────────────────────────────
+  # Runs in parallel with checks/lint — does its own install + build.
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: aflow_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      redis:
+        image: redis:7
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+
+      - name: Enable Corepack (Yarn)
+        run: corepack enable
+
+      - name: Get yarn cache directory path
+        id: yarn-cache-dir-path
+        run: echo "dir=$(yarn config get cacheFolder)" >> $GITHUB_OUTPUT
+
+      - name: Cache yarn dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.yarn-cache-dir-path.outputs.dir }}
+          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-
+
+      - name: Install dependencies
+        run: SKIP_POSTINSTALL=true yarn install --immutable
+
+      - name: Build all packages
+        run: yarn build
+
+      # Several suites gate themselves on the schema being present and skip
+      # silently without it, so a bare database means they report green while
+      # asserting nothing — the fire-once invariant among them.
+      - name: Apply migrations
+        run: yarn db:migrate
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/aflow_test
+
+      - name: Run tests
+        run: yarn test
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/aflow_test
+          REDIS_URL: redis://localhost:6379
+
+  # ── Dependency audit (BLOCKING) ────────────────────────────────────────────
+  # Its own job rather than a step in `checks`, because the scheduled trigger
+  # needs to reach the audit without dragging the build and the test suite
+  # along.
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    # A merge introduces no lockfile state the pull request did not already audit,
+    # and the registry endpoint fails often enough that re-running it on main would
+    # report a timeout as a red default branch.
+    if: github.event_name != 'push'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+
+      - name: Enable Corepack (Yarn)
+        run: corepack enable
+
+      - name: Get yarn cache directory path
+        id: yarn-cache-dir-path
+        run: echo "dir=$(yarn config get cacheFolder)" >> $GITHUB_OUTPUT
+
+      - name: Cache yarn dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.yarn-cache-dir-path.outputs.dir }}
+          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-
+
+      - name: Install dependencies
+        run: SKIP_POSTINSTALL=true yarn install --immutable
+
+      # The registry audit endpoint times out often enough to red-light unrelated
+      # PRs. A real advisory still fails every attempt and blocks.
+      - name: Audit dependencies
+        run: |
+          for attempt in 1 2 3; do
+            if yarn npm audit --all --recursive --severity high; then
+              exit 0
+            fi
+            echo "audit attempt $attempt failed"
+            if [ "$attempt" -lt 3 ]; then
+              sleep $((attempt * 15))
+            fi
+          done
+          exit 1
+
+      # Everything under the blocking floor, surfaced where a weekly reader
+      # will actually see it instead of buried in a green job's log.
+      #
+      # `always()` because a bare `if:` is ANDed with success(), which would
+      # skip this in precisely the runs where the audit above failed — the runs
+      # whose full tree is worth reading.
+      - name: Report the full advisory tree
+        if: always() && github.event_name == 'schedule'
+        run: |
+          {
+            echo '### Full dependency audit'
+            echo ''
+            echo '```'
+            yarn npm audit --all --recursive || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

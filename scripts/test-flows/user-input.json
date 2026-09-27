@@ -1,0 +1,17 @@
+{
+  "flowConfig": {
+    "name": "test-user-input",
+    "steps": [
+      {
+        "stepId": "ask",
+        "type": "user",
+        "operation": "user.request_input",
+        "config": {
+          "prompt": "What is your name?",
+          "fields": [{ "name": "name", "type": "string", "required": true }]
+        }
+      }
+    ]
+  },
+  "input": {}
+}

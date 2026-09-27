@@ -1,0 +1,32 @@
+{
+  "name": "@aflow/platform-artifacts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "ts-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "npx tsup src/index.ts --format esm,cjs && rm -f tsconfig.tsbuildinfo && npx tsc --emitDeclarationOnly",
+    "dev": "npx tsup src/index.ts --format esm,cjs --watch",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@aflow/schemas": "workspace:*"
+  },
+  "devDependencies": {
+    "@aflow/applet-runtime": "workspace:*",
+    "vitest": "^4.1.11"
+  }
+}

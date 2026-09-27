@@ -1,0 +1,113 @@
+/* run-timeline.css — responsive layout for step group cards */
+
+.rt-step-card {
+  background-color: var(--surface-raised-alpha) !important;
+
+  /* A card's internals cannot affect anything outside it, so a forced reflow
+     elsewhere on the page — the composer measuring itself on a keystroke —
+     does not have to descend into every card to answer.
+
+     Deliberately NOT `content-visibility: auto`, which skips off-screen layout
+     entirely and is the larger win: it needs an accurate `contain-intrinsic-size`
+     to stand in for cards it has not laid out, and these cards vary in height by
+     an order of magnitude. Estimating it moved CLS from 0.03 to 1.86 — the page
+     rewrote itself as it scrolled. It needs measured heights, not a guess. */
+  contain: layout style;
+}
+
+/* Step header row: two-column grid with flexible left and fixed-position right.
+   The right column always stacks its time/duration/status vertically so the
+   timestamp anchors in the same spot across every card regardless of width. */
+.rt-step-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: var(--space-3);
+  align-items: start;
+}
+
+.rt-step-left {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  flex-wrap: wrap;
+  overflow: hidden;
+}
+
+.rt-step-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0;
+  min-width: 5.5em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.3;
+}
+
+.rt-step-right-item {
+  white-space: nowrap;
+  text-align: right;
+}
+
+.rt-step-time {
+  /* Primary anchor — slightly more prominent so it's the scan target */
+  color: var(--color-text-default);
+  font-weight: 500;
+}
+
+.rt-step-duration {
+  color: var(--color-text-default);
+}
+
+.rt-step-status {
+  /* Tertiary; already color-coded by status */
+}
+
+/* Agent turn — the scan anchor. Everything between two turns is the tool work
+   the first one dispatched, so the turn carries the weight and the tools recede. */
+.rt-step-card--turn {
+  border-left: 3px solid var(--color-accent-default);
+}
+
+.rt-step-turn-glyph {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--color-accent-default);
+  opacity: 0.75;
+}
+
+/* Tool call dispatched by the turn above it — indented under a connector rail. */
+.rt-tool-indent {
+  margin-left: var(--space-4);
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--color-border-subtle);
+}
+
+.rt-step-card--tool {
+  background-color: transparent !important;
+}
+
+/* Delegate step — per-child accent stripe so parallel sub-agent bubbles
+   visually cluster even when their messages interleave in the chat.
+   The hue is set inline via --rt-delegate-accent (hashed from sourceRunId). */
+.rt-step-card--delegate {
+  border-left: 3px solid var(--rt-delegate-accent, var(--color-border-subtle));
+}
+
+/* Running step — radiating shadow pulse */
+.rt-step-card--running {
+  animation: rt-running-pulse 2s ease-in-out infinite;
+}
+
+@keyframes rt-running-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(124, 92, 199, 0.3);
+  }
+  70% {
+    box-shadow: 0 0 0 5px rgba(124, 92, 199, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(124, 92, 199, 0);
+  }
+}
