@@ -28,6 +28,13 @@ updates:
       opentelemetry:
         patterns: ['@opentelemetry/*']
         update-types: ['minor', 'patch']
+      # The linter's type-aware presets grow with every minor release: a bump
+      # can turn hundreds of accepted lines into errors, which is a deliberate
+      # cleanup rather than a line in a weekly batch. Grouped apart, it fails
+      # alone and the rest of the batch still lands.
+      typescript-eslint:
+        patterns: ['typescript-eslint', '@typescript-eslint/*']
+        update-types: ['minor', 'patch']
       npm:
         patterns: ['*']
         update-types: ['minor', 'patch']

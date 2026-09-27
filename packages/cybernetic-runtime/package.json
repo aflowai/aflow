@@ -49,7 +49,7 @@
     "@aflow/platform-artifacts": "workspace:*",
     "@aflow/redis": "workspace:*",
     "@aflow/schemas": "workspace:*",
-    "ioredis": "^5.6.1"
+    "ioredis": "^5.11.1"
   },
   "devDependencies": {
     "@types/ioredis-mock": "^8",

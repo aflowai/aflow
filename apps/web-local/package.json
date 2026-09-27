@@ -13,14 +13,14 @@
   "dependencies": {
     "@aflow/design-system": "workspace:*",
     "@aflow/web-product": "workspace:*",
-    "@tanstack/react-query": "^5.62.0",
-    "next": "^16.3.4",
-    "react": "^19.2.3",
-    "react-dom": "^19.2.3"
+    "@tanstack/react-query": "^5.103.2",
+    "next": "^16.3.6",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
   },
   "devDependencies": {
-    "@types/node": "^22.15.32",
-    "@types/react": "^19.2.9",
+    "@types/node": "^22.20.4",
+    "@types/react": "^19.3.0",
     "typescript": "^5.8.3",
     "vitest": "^4.1.11"
   }
