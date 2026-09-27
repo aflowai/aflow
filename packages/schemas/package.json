@@ -79,10 +79,10 @@
   "dependencies": {
     "@aflow/lib": "workspace:*",
     "zod": "^3.24.0",
-    "zod-to-json-schema": "^3.24.0"
+    "zod-to-json-schema": "^3.25.2"
   },
   "devDependencies": {
-    "@types/node": "^25.0.10",
+    "@types/node": "^22.20.4",
     "typescript": "^5.8.3",
     "vitest": "^4.1.11"
   }

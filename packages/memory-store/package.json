@@ -26,10 +26,10 @@
     "@aflow/payload-store": "workspace:*",
     "@aflow/redis": "workspace:*",
     "@aflow/schemas": "workspace:*",
-    "ioredis": "^5.6.1"
+    "ioredis": "^5.11.1"
   },
   "devDependencies": {
-    "@types/node": "^22.15.3",
+    "@types/node": "^22.20.4",
     "tsup": "^8.5.0",
     "typescript": "^5.8.3",
     "vitest": "^4.1.11"
