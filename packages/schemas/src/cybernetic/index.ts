@@ -43,6 +43,7 @@ export * from './schemaDerivedOpHints.js';
 export * from './artifactInspectPaths.js';
 export * from './activeSurface.js';
 export * from './composeSkill.js';
+export * from './composeDecisionTask.js';
 export * from './artifactTags.js';
 export * from './strategy.js';
 export * from './execution.js';

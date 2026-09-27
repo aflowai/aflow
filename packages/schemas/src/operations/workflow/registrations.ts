@@ -245,6 +245,7 @@ export function createWorkflowOperationRegistrations(
           'Use expectedRevision to guard against concurrent writers',
           'A single patch may not mix metadata (budget/status) with definition (tasks/goal/campaign)',
           'Identity campaign fields are immutable — their schema cannot be reshaped, only relabeled',
+          'Operations that run only as workflow steps, such as ai.decision.decide, are found with catalog.tool.search workflowSteps: true; a when that reads tasks.<id>.output.<path> is refused when the producer does not emit that path',
         ],
         minimalExampleInput: {
           slug: 'lead-scoring-optimizer',

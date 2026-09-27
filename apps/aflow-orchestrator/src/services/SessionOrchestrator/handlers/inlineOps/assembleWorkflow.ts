@@ -20,6 +20,8 @@ import {
   type WorkflowTask,
   type WorkflowTaskInputBinding,
   type WorkflowTaskOutputPort,
+  type DraftWhen,
+  type WorkflowWhen,
 } from '@aflow/schemas';
 import { contractErrorJsonSchema, deriveOpBoundDraftPortShapes } from '@aflow/cybernetic-runtime';
 import type { InlineHandlerArgs } from './types.js';
@@ -379,6 +381,13 @@ function lowerAgentContext(
   };
 }
 
+/** A reference a guard makes to a task that did not run skips the guarded task. */
+function lowerWhen(when: DraftWhen): WorkflowWhen {
+  if (typeof when === 'string') return { expression: when, onMissingRef: 'skip' };
+  if ('anyOf' in when) return { anyOf: when.anyOf, onMissingRef: 'skip' };
+  return { allOf: when.allOf, onMissingRef: 'skip' };
+}
+
 function lowerTask(task: TaskGraphDraftTask, opts: LowerOpts): WorkflowTask {
   const name = deriveTaskName(task.taskId);
   const dependsOn = lowerDependsOn(task);
@@ -398,7 +407,7 @@ function lowerTask(task: TaskGraphDraftTask, opts: LowerOpts): WorkflowTask {
       ...(inputBindings ? { inputBindings } : {}),
       ...(inputContract ? { inputContract } : {}),
       ...(produces ? { produces } : {}),
-      ...(task.when ? { when: { expression: task.when, onMissingRef: 'skip' as const } } : {}),
+      ...(task.when ? { when: lowerWhen(task.when) } : {}),
       ...(context ? { context } : {}),
       ...(outputContract ? { outputContract } : {}),
     };
@@ -423,7 +432,7 @@ function lowerTask(task: TaskGraphDraftTask, opts: LowerOpts): WorkflowTask {
       ...(task.outputProjection !== undefined ? { outputProjection: task.outputProjection } : {}),
       ...(task.retryability !== undefined ? { retryability: task.retryability } : {}),
       ...(task.maxAttempts !== undefined ? { maxAttempts: task.maxAttempts } : {}),
-      ...(task.when ? { when: { expression: task.when, onMissingRef: 'skip' as const } } : {}),
+      ...(task.when ? { when: lowerWhen(task.when) } : {}),
       ...(outputContract ? { outputContract } : {}),
     };
   }
@@ -444,7 +453,7 @@ function lowerTask(task: TaskGraphDraftTask, opts: LowerOpts): WorkflowTask {
     ...(task.approves.length > 0 ? { approves: task.approves } : {}),
     ...(dependsOn.length > 0 ? { dependsOn } : {}),
     ...(produces ? { produces } : {}),
-    ...(task.when ? { when: { expression: task.when, onMissingRef: 'skip' as const } } : {}),
+    ...(task.when ? { when: lowerWhen(task.when) } : {}),
     ...(outputContract ? { outputContract } : {}),
   };
 }

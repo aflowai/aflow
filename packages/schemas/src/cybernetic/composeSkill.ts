@@ -6,6 +6,12 @@ import {
   WorkflowTaskOutputProjectionSchema,
 } from '../operations/workflow.js';
 import { analyzeInputTemplate, TEMPLATE_BIND_KEY } from '../operations/workflow/taskTemplate.js';
+import {
+  DecisionTaskFieldsSchema,
+  DraftWhenSchema,
+  expandDecisionTasks,
+  validateDecisionTasks,
+} from './composeDecisionTask.js';
 import { ProcedureActivationSchema, CapabilityGrantKindSchema } from './context.js';
 import { ApiCallModeSchema } from '../models/apiDefinition.js';
 import { ComposedWorkflowSchema } from './stagedChange.js';
@@ -424,7 +430,7 @@ const AgentTaskSchema = z.object({
   kind: AgentTaskKindSchema,
   goal: z.string().min(1).max(4000),
   dependsOn: z.array(z.string().max(64)).default([]),
-  when: z.string().max(500).optional(),
+  when: DraftWhenSchema.optional(),
   produces: z.array(TaskOutputProductionSchema).default([]),
   consumes: z.array(TaskInputConsumptionSchema).default([]),
   context: z
@@ -453,7 +459,7 @@ const OperationTaskSchema = z.object({
       'Optional nested op-input template. Literal JSON where any node may be { "$bind": "<name>" } referencing a consumes[].bindAs or a literal inputBindings key. When present, the substituted template is exactly the op input. Use only when the operation requires a nested input shape.',
     ),
   dependsOn: z.array(z.string().max(64)).default([]),
-  when: z.string().max(500).optional(),
+  when: DraftWhenSchema.optional(),
   produces: z.array(TaskOutputProductionSchema).default([]),
   consumes: z.array(TaskInputConsumptionSchema).default([]),
   /**
@@ -506,16 +512,29 @@ const HumanTaskSchema = z.object({
     .optional(),
   failureMode: z.enum(['isolate', 'cancel_siblings']).default('isolate'),
   dependsOn: z.array(z.string().max(64)).default([]),
-  when: z.string().max(500).optional(),
+  when: DraftWhenSchema.optional(),
   produces: z.array(TaskOutputProductionSchema).default([]),
+});
+
+const DecisionTaskSchema = DecisionTaskFieldsSchema.extend({
+  consumes: z
+    .array(TaskInputConsumptionSchema)
+    .default([])
+    .describe(
+      'The upstream outputs the questions are asked about. Each bindAs becomes a key of the state the decision model reads, so name them for what they hold.',
+    ),
 });
 
 export const TaskGraphDraftTaskSchema = z.discriminatedUnion('type', [
   AgentTaskSchema,
   OperationTaskSchema,
   HumanTaskSchema,
+  DecisionTaskSchema,
 ]);
-export type TaskGraphDraftTask = z.infer<typeof TaskGraphDraftTaskSchema>;
+/** A draft task as authored, before decision tasks are expanded. */
+export type AuthoredTaskGraphDraftTask = z.infer<typeof TaskGraphDraftTaskSchema>;
+/** A draft task after parsing: decision tasks are expanded into operation tasks. */
+export type TaskGraphDraftTask = Exclude<AuthoredTaskGraphDraftTask, { type: 'decision' }>;
 
 // ============================================================================
 // Optimization archetype spec (Plan 203 §3.2)
@@ -618,6 +637,7 @@ export const TaskGraphDraftSchema = z
     optimization: OptimizationArchetypeSpecSchema.optional(),
   })
   .superRefine((draft, ctx) => {
+    validateDecisionTasks(draft.tasks, ctx);
     const opConsumedPorts = new Set<string>();
     for (const t of draft.tasks) {
       if (t.type !== 'operation' || t.inputTemplate !== undefined) continue;
@@ -847,7 +867,8 @@ export const TaskGraphDraftSchema = z
         }
       }
     }
-  });
+  })
+  .transform((draft) => expandDecisionTasks(draft));
 export type TaskGraphDraft = z.infer<typeof TaskGraphDraftSchema>;
 
 // ============================================================================

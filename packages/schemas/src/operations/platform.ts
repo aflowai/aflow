@@ -1222,6 +1222,12 @@ export const PlatformOperationRegistrations: OperationRegistration[] = [
       maxResults: z.number().int().min(1).max(10).optional(),
       /** Which tool sources to search. Omit for all. Use ['api'] to discover only API endpoints. */
       sources: z.array(ToolSourceSchema).optional(),
+      workflowSteps: z
+        .boolean()
+        .optional()
+        .describe(
+          'Set when authoring or patching a workflow: also returns platform operations that run only as workflow operation tasks. Those come back with opTaskOnly: true — author them as an operation task in the workflow; they cannot be promoted or called as tools.',
+        ),
     }),
     outputZod: z.discriminatedUnion('mode', [
       z.object({

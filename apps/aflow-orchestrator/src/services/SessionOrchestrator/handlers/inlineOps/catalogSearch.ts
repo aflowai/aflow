@@ -264,6 +264,7 @@ export async function handleCatalogSearchInline(
       if (input['groupIds']) searchInput['groupIds'] = input['groupIds'];
       if (input['operationIds']) searchInput['operationIds'] = input['operationIds'];
       if (input['maxResults']) searchInput['maxResults'] = input['maxResults'];
+      if (input['workflowSteps'] === true) searchInput['workflowSteps'] = true;
 
       // Platform operations search (gated by sources filter)
       const rawResults = includePlatform
@@ -315,6 +316,10 @@ export async function handleCatalogSearchInline(
 
         const beforeCount = results.length;
         results = results.filter((r) => {
+          // A step-only operation is authoring information, not a grant: it
+          // cannot be promoted, so the promote gate this clamp mirrors never
+          // sees it.
+          if (r.stepOnly === true) return true;
           const op = getOperation(r.operationId);
           if (!op) return false;
           // Op-level scope is the sole authority when present (see
@@ -561,6 +566,7 @@ export async function handleCatalogSearchInline(
             description: r.description,
             matchReason: r.matchReason,
             ...(r.caution ? { caution: r.caution } : {}),
+            ...(r.stepOnly === true ? { opTaskOnly: true } : {}),
           },
           score: r.score,
         });
@@ -630,7 +636,9 @@ export async function handleCatalogSearchInline(
       for (const d of pruned) {
         const item = d.item;
         const t = item['type'] as string | undefined;
-        if (t === 'platform' && typeof item['operationId'] === 'string') {
+        if (t === 'platform' && item['opTaskOnly'] === true) {
+          continue;
+        } else if (t === 'platform' && typeof item['operationId'] === 'string') {
           promotionToolIds.push(item['operationId']);
         } else if (t === 'agent' && typeof item['agentId'] === 'string') {
           promotionToolIds.push(`agent:${item['agentId']}`);
@@ -647,6 +655,11 @@ export async function handleCatalogSearchInline(
         const parts = [
           `${String(prunedCount)} tool(s) found. Discovery is read-only — call catalog.tool.promote with the toolIds in suggestedPromoteCall to add them to your toolbox.`,
         ];
+        if (pruned.some((d) => d.item['type'] === 'platform' && d.item['opTaskOnly'] === true)) {
+          parts.push(
+            'Results marked opTaskOnly run only as operation tasks in a workflow: author them there. They are not in suggestedPromoteCall and cannot be called as tools.',
+          );
+        }
         if (apiTools.length > 0) {
           const example = apiTools[0]!.item as Record<string, string>;
           parts.push(

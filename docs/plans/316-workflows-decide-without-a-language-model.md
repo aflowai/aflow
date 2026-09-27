@@ -1,6 +1,6 @@
 # Plan 316 — Workflows decide without a language model: a typed decision step
 
-**Status:** 🌱 design · **First backend:** TypeSafe AI's Jev (a "System One" decision model)
+**Status:** 🔨 P0–P3 built; P0's live call and P4–P5 open · **First backend:** TypeSafe AI's Jev (a "System One" decision model)
 
 ## 1. Problem
 
@@ -11,7 +11,7 @@ A skill that has to route, triage, gate or score on a judgement has two ways to 
 
 Nothing in the engine produces a calibrated confidence. The eval judge returns `pass | fail | unclear` from a `generate_json` call; write risk is a static tier. The slots for typed decisions exist and are empty: the guardrail `classifier` rails are validated but never executed, and a workflow's fork is an unvalidated `when` string whose path is never checked against what the producing step emits.
 
-Decision models now exist that fit the gap. Jev reads a `state` (text, JSON object or array) and a set of named questions and answers every question in one parallel pass, each with a typed value and a calibrated probability distribution. There are three question types: `choice` (one of up to 255 labelled options), `score` (an expected position on a 2–10 level rubric) and `noul` (the probability that a statement is true). It cannot write text, by construction. Latency is in the tens to hundreds of milliseconds and input is priced far below a chat model.
+Decision models now exist that fit the gap. Jev reads a `state` (text, JSON object or array) and a set of named questions and answers every question in one parallel pass, each with a typed value and a calibrated probability distribution. There are three question types: `choice` (one of up to 255 labelled options), `score` (an expected position on a 2–10 level rubric) and `noul` (the probability that a statement is true), which the operation calls `yes_no`. It cannot write text, by construction. Latency is in the tens to hundreds of milliseconds and input is priced far below a chat model.
 
 ## 2. Decisions
 
@@ -25,11 +25,11 @@ Decision models now exist that fit the gap. Jev reads a `state` (text, JSON obje
 
 **D5 — `when` is checked against the producer's output shape.** A predicate reading `tasks.<id>.output.<path>` of an operation task is validated against that operation's output schema. This is general, and it is what keeps a hand-written fork honest on the path that does not go through compose-skill: Helmsman patching a workflow directly.
 
-**D6 — Step-only primitives are findable by authors.** Catalog search hides `agentTool: false` operations, so Helmsman patching a workflow cannot find the decider. The catalog marks operations that are valid workflow steps, and search in an authoring context returns them while never offering them as callable tools.
+**D6 — Step-only primitives are findable by authors.** Catalog search hides `agentTool: false` operations, so Helmsman patching a workflow cannot find the decider. `catalog.tool.search` takes `workflowSteps: true` to also return step-only operations, marked `opTaskOnly` as step-only MCP tools already are, ranked against their own index and never placed in `suggestedPromoteCall`.
 
 **D7 — Credentials are the space's or tenant's own, like every other model provider.** A `typesafe` credential provider with one API key, resolved through the existing credential resolver. No key fails closed with the existing missing-credential error. _Rejected for now:_ emulating decisions with `generate_json` when no key exists — it would return uncalibrated confidences that look calibrated.
 
-**D8 — The judge may use a decider, and it is measured before it counts.** A binary rubric entry maps onto a `noul` question; an answer inside the abstention band is `unclear`. A judge criterion may name a decision model, and the judge scorecard measures it against labelled data exactly as it measures a language-model judge. Judges stay advisory until measured.
+**D8 — The judge may use a decider, and it is measured before it counts.** A binary rubric entry maps onto a `yes_no` question; an answer inside the abstention band is `unclear`. A judge criterion may name a decision model, and the judge scorecard measures it against labelled data exactly as it measures a language-model judge. Judges stay advisory until measured.
 
 **D9 — Guardrail classifier rails execute through the same operation, opt-in per rail.** A decider reads the state it is given and can be steered by it, so it is never the only gate on a security decision.
 
@@ -41,7 +41,7 @@ Input:
 - `questions` — `Record<name, question>`, one of:
   - `{ type: 'choice', instructions?, options: Record<label, description | null>, minConfidence? }`, 2–255 options
   - `{ type: 'score', instructions?, levels: (description | null)[], minConfidence? }`, 2–10 levels, index 0 lowest
-  - `{ type: 'noul', instructions?, criteria?: { true?, false? }, minConfidence? }`
+  - `{ type: 'yes_no', instructions?, criteria?: { true?, false? }, minConfidence? }`
 - `model` — optional catalog reference; the catalog's default decision model when absent.
 
 Output:
@@ -49,12 +49,12 @@ Output:
 - `answers` — `Record<name, answer>`:
   - choice: `{ type, value: label, confidence, probabilities: Record<label, number>, decided }`
   - score: `{ type, value: expected score, confidence, probabilities: Record<level, number>, decided }`
-  - noul: `{ type, value: probability of true, confidence: max(p, 1 − p), decided }`
+  - yes_no: `{ type, value: p ≥ 0.5, probability: p, confidence: max(p, 1 − p), decided }`
 - `model`, `usage { inputTokens, outputTokens }`, `latencyMs`.
 
-For a `noul`, `confidence` is derived as the probability of the more likely outcome, so one threshold reads the same way on every question type.
+For a `yes_no`, `confidence` is derived as the probability of the more likely outcome, so one threshold reads the same way on every question type.
 
-Wire: `POST {base}/v1/systemone` with `Authorization: Bearer <key>`, body `{ state, questions, model }`, where the neutral names map onto the provider's (`options` → `criteria` for a choice, `levels` → `criteria` for a score). The response carries `model`, `answers` and `usage { input_tokens, output_tokens }`; the request id is in `x-typesafe-request-id`. `GET /v1/models` lists the account's models and serves as the credential probe.
+Wire: `POST {base}/v1/systemone` with `Authorization: Bearer <key>`, body `{ state, questions, model }`, where the neutral names map onto the provider's (`options` → `criteria` for a choice, `levels` → `criteria` for a score, `yes_no` → `noul`). The response carries `model`, `answers` and `usage { input_tokens, output_tokens }`; the request id is in `x-typesafe-request-id`. `GET /v1/models` lists the account's models and serves as the credential probe.
 
 ## 4. Affected packages and contracts
 
@@ -68,17 +68,25 @@ No stored data changes shape. A new credential provider id and a new operation i
 
 The request and response shapes in §3, taken from the provider's published SDK. Exit: a recorded response fixture that the adapter tests replay, and one live call through the adapter with a real key that matches it.
 
+**Delivered**: the wire shapes are read from the published TypeScript SDK's declarations and replayed as a fixture in the adapter tests. **Open**: the live call — no key has been used yet.
+
 ### P1 — Client and credential (D1, D7)
 
-`typesafe` in the AI provider and credential provider enums, the credential registry entry, the BYOK set and the executor's credential mapping; the adapter implements `decide` and refuses every text method; `AIClient.decide` resolves the model through the catalog and refuses a model without the `decision` capability; the credential probe lists models. Exit: adapter tests over the fixture, including the name mapping, `noul` confidence derivation and error classification (401 not retryable, 429 retryable).
+`typesafe` in the AI provider and credential provider enums, the credential registry entry, the BYOK set and the executor's credential mapping; the adapter implements `decide` and refuses every text method; `AIClient.decide` resolves the model through the catalog and refuses a model without the `decision` capability; the credential probe lists models. Exit: adapter tests over the fixture, including the name mapping, `yes_no` confidence derivation and error classification (401 not retryable, 429 retryable).
+
+**Delivered** as described. The models route derives its provider enum from `AIProviderSchema` instead of restating it, and the credential sits in its own `decision` category so a TypeSafe key can never satisfy the chat-model requirement.
 
 ### P2 — The operation (D2, D3)
 
 Schemas, registration with `usage` written for skill authors, the handler, usage and cost reporting. Exit: the handler's tests cover `decided` on both sides of `minConfidence` per type and a failing credential; `run_operation ai.decision.decide` on a local stack returns typed answers.
 
+**Delivered**: `decided` per type lives in `resolveDecisionAnswers` (ai-client) and is tested there, including the inclusive threshold, a choice outside the options and an answer of the wrong type. Migration 210 grants `ai.decision:read` to every system profile. **Open**: the local-stack call, which needs a key.
+
 ### P3 — Authoring (D4, D5, D6)
 
 The `decision` draft task kind, its lowering and route validation; `when` checked against operation output schemas; step-visible catalog search in authoring context; one line in compose-skill naming the decision task; an example skill (triage → route → escalate on abstention). Exit: asking Helmsman for "a skill that triages incoming support tickets and escalates the unclear ones" produces a `decision` task with routes, and its run takes the escalation branch on an abstaining answer; a patched fork on a non-existent output path is refused.
+
+**Delivered**: the draft's `when` also takes `{ anyOf }` / `{ allOf }`; `TaskGraphDraftSchema` validates decision routes in its `superRefine` and expands decision tasks in a `transform`, so every consumer of a parsed draft sees operation tasks only; the assembler test proves the assembled triage workflow is valid as a skill; `when_output_path_unknown` names the fields that do exist; `workflow.manage.patch` names `workflowSteps` in its pitfalls. **Open**: the example skill and the Helmsman exit, which need a key and a running stack.
 
 ### P4 — Judge backend (D8)
 
