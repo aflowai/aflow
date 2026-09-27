@@ -5,7 +5,7 @@
 
 set -euo pipefail
 
-PORTS=(3000 3001 3010)
+PORTS=(3000 3001)
 KILLED=0
 
 # Supervisors first. They respawn what they supervise, so killing the workers
