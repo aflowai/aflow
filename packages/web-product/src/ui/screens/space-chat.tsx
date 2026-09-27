@@ -728,7 +728,7 @@ function ChatPageInner() {
               instanceId={stagedApplet.instanceId}
             />
           ) : null}
-          <ConnectionNotice isConnected={sseConnected} />
+          <ConnectionNotice isConnected={sseConnected} hasSession={activeSessionId !== null} />
           {isViewer ? (
             <ViewOnlyNotice />
           ) : isTerminalStatus && !isFailed ? (

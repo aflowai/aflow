@@ -21,6 +21,17 @@ export interface SecurityPolicyInput {
    */
   apiOrigin?: string | undefined;
 
+  /**
+   * Where the realtime gateway answers, as the server will mint it — the same
+   * `API_BASE_URL` its token route derives `realtimeUrl` from. Stated because a
+   * distribution that proxies its API through its own origin tells the browser
+   * nothing about the API and still hands it an absolute socket URL, so
+   * `connect-src 'self'` covers every call it makes except the one that matters.
+   * Given as an `http(s)` origin its scheme is exchanged; a `ws(s)` one is used
+   * as it stands.
+   */
+  realtimeOrigin?: string | undefined;
+
   /** Where violation reports go, if anywhere. */
   reportUri?: string | undefined;
 
@@ -42,25 +53,37 @@ export interface HttpHeader {
   value: string;
 }
 
+/**
+ * An origin addressed as a WebSocket.
+ *
+ * The realtime gateway is a socket, and the browser is handed its URL by the
+ * server (`/v1/realtime/token` returns `realtimeUrl`), so no client-side setting
+ * can steer it to an already-allowed origin. CSP matches schemes exactly — an
+ * `https:` source does not authorize a `wss:` connection — so the socket needs
+ * its own source built from the same origin.
+ */
+function webSocketOrigin(origin: string): string {
+  return origin.replace(/^http/, 'ws');
+}
+
+/** One source per origin: two configurations naming the same host are one. */
+function dedupe(sources: readonly string[]): string[] {
+  return [...new Set(sources.filter(Boolean))];
+}
+
 export function contentSecurityPolicy(input: SecurityPolicyInput): string {
   const apiOrigin = input.apiOrigin ?? '';
   const extra = (directive: 'script-src' | 'frame-src' | 'connect-src'): string =>
     (input.additionalSources?.[directive] ?? []).map((source) => ` ${source}`).join('');
 
-  // The realtime gateway is a WebSocket on the API host, and the browser is handed
-  // its URL by the server (`/v1/realtime/token` returns `realtimeUrl`), so no
-  // client-side setting can steer it to an already-allowed origin. CSP matches
-  // schemes exactly — an `https:` source does not authorize a `wss:` connection —
-  // so the socket needs its own source built from the same origin.
-  const apiSocketOrigin = apiOrigin.replace(/^http/, 'ws');
-
-  const connectSrc = [
+  const connectSrc = dedupe([
     "'self'",
     'https://*.sentry.io',
     apiOrigin,
-    apiSocketOrigin,
+    webSocketOrigin(apiOrigin),
+    webSocketOrigin(input.realtimeOrigin ?? ''),
     ...(input.additionalSources?.['connect-src'] ?? []),
-  ].filter(Boolean);
+  ]);
 
   return [
     "default-src 'self'",

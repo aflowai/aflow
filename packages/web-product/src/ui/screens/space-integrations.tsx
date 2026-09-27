@@ -28,6 +28,8 @@ import {
   McpConfirmDeleteDialog,
   useDeleteAction,
 } from '../components/integrations-mcp/McpConfirmDeleteDialog.js';
+import { useEdition } from '../hooks/useEdition.js';
+import { isRepoDesignationOffered } from '../lib/edition-offers.js';
 import { useRepoBindings } from '../hooks/use-repo-bindings.js';
 import type { RepoBindingSummary } from '../hooks/use-repo-bindings.js';
 import { RepoBindingCard } from '../components/integrations-repo/RepoBindingCard.js';
@@ -57,6 +59,11 @@ function IntegrationsPageInner() {
   // Server truth: definition/binding/repo writes need api_config:write
   // (admin/editor); viewers get 403s, so don't render the affordances.
   const canManage = routeSpace?.myRole === 'admin' || routeSpace?.myRole === 'editor';
+  // A repository designation exists to point the managed coding lane at a
+  // remote. Where that lane is absent, anything created here is configuration
+  // the first run refuses, so the kind is not offered at all.
+  const edition = useEdition();
+  const offersRepos = isRepoDesignationOffered(edition);
   const api = useIntegrations(spaceId);
   const mcp = useMcpIntegrations();
   const repo = useRepoBindings(spaceId);
@@ -113,7 +120,7 @@ function IntegrationsPageInner() {
   const handlePickAdd = (kind: IntegrationKind) => {
     if (kind === 'api') setShowAddApi(true);
     else if (kind === 'mcp') setMcpFormTarget({});
-    else setRepoFormTarget({});
+    else if (offersRepos) setRepoFormTarget({});
   };
 
   const credentialsByKey = useMemo(
@@ -159,10 +166,10 @@ function IntegrationsPageInner() {
   // to a bare `/integrations` and bounce a cold-loaded link out of its space.
   useEffect(() => {
     if (searchParams.get('add') === 'repo') {
-      setRepoFormTarget({});
+      if (offersRepos) setRepoFormTarget({});
       router.replace(pathname);
     }
-  }, [searchParams, router, pathname]);
+  }, [searchParams, router, pathname, offersRepos]);
 
   // `?configure=<bindingId>` / `?test=<bindingId>` deep-links (the Store's
   // setup checklist) open the matching connect/edit dialog once bindings have
@@ -316,11 +323,12 @@ function IntegrationsPageInner() {
             style={{ marginBottom: 'var(--space-2xl)' }}
           >
             <Text size="sm" variant="muted" style={{ flex: '1 1 260px', minWidth: 0 }}>
-              Connect external APIs, MCP servers, and code repositories your agents can discover,
-              promote, and call.
+              {offersRepos
+                ? 'Connect external APIs, MCP servers, and code repositories the agents here can discover, promote, and call.'
+                : 'Connect external APIs and MCP servers the agents here can discover, promote, and call.'}
             </Text>
             <Row gap="2" align="center" wrap>
-              <FilterChips value={filter} onChange={setFilter} />
+              <FilterChips value={filter} onChange={setFilter} offersRepos={offersRepos} />
               {canManage && (
                 <>
                   <Button
@@ -331,7 +339,7 @@ function IntegrationsPageInner() {
                   >
                     Browse integrations
                   </Button>
-                  <AddIntegrationButton onPick={handlePickAdd} />
+                  <AddIntegrationButton onPick={handlePickAdd} offersRepos={offersRepos} />
                 </>
               )}
             </Row>
@@ -344,8 +352,12 @@ function IntegrationsPageInner() {
               description={
                 totalCount === 0
                   ? canManage
-                    ? 'Click Add integration to connect an API, MCP server, or code repository.'
-                    : 'A space editor or admin can connect APIs, MCP servers, and code repositories.'
+                    ? offersRepos
+                      ? 'Click Add integration to connect an API, MCP server, or code repository.'
+                      : 'Click Add integration to connect an API or MCP server.'
+                    : offersRepos
+                      ? 'A space editor or admin can connect APIs, MCP servers, and code repositories.'
+                      : 'A space editor or admin can connect APIs and MCP servers.'
                   : 'Try a different filter, or add a new integration.'
               }
             />

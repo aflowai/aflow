@@ -165,10 +165,16 @@ export type EditionDescriptor = z.infer<typeof EditionDescriptorSchema>;
  * `surfaces` is the composed surface list, derived from the same registry the
  * server registers from — so a client hiding a control because its surface is
  * absent cannot drift from what the server actually serves.
+ *
+ * `lanes` carries the descriptor's own lane composition, because a surface name
+ * cannot answer for a lane: a route registered in both editions exists in both
+ * and declines at runtime, so a client asking after the surface is told yes and
+ * offers work nothing here can execute.
  */
 export const EditionSummarySchema = z.object({
   id: EditionIdSchema,
   surfaces: z.array(z.string()),
+  lanes: z.object({ codeLane: CodeLaneSchema, hostLane: HostLaneSchema }),
 });
 export type EditionSummary = z.infer<typeof EditionSummarySchema>;
 

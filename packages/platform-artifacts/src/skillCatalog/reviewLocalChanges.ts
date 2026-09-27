@@ -143,14 +143,15 @@ const BRIEF_MAX_TURNS = 8;
 
 const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'review-local-changes',
-  version: 3,
+  version: 4,
   name: 'Review Local Changes',
-  tagline: "Review committed changes in a connected repository with the machine's own harness.",
+  tagline:
+    "Review committed changes in a connected repository with the machine's own coding agent.",
   description: `Fits a request to review changes that already exist in a repository on the operator's machine — "review what I just did on this branch", "look over these commits before they go anywhere". It reads a range of commits and returns a verdict with findings, and it changes nothing. Reviewing an open pull request is a different skill (review-pull-request); making a change is not this skill at all.
 
 **What it needs**: the connected folder holding the repository, and the range to review. Ask for whichever is missing — a range reads as \`main..HEAD\`, \`HEAD~3..HEAD\`, or a single commit. A focus is optional and worth asking for when the request names a worry: security, an API surface, the blast radius of a refactor.
 
-**Depth is a first-class choice, not something to ask the harness for in \`focus\`.** \`brief\` is the smoke test — a first look, a check that the mechanics work: a handful of tool calls, one paragraph, and a verdict of \`comment\` unless something is plainly a blocker. An operator asking for something quick, a glance or a sanity check means \`brief\`, and it is budgeted in harness turns (\`maxTurns\`: ${String(BRIEF_MAX_TURNS)}) so that it stays brief. \`standard\` reads the range with the repository around it. \`deep\` also runs the project's own checks over the touched files, and costs the most.
+**Depth is a first-class choice, not something to ask the coding agent for in \`focus\`.** \`brief\` is the smoke test — a first look, a check that the mechanics work: a handful of tool calls, one paragraph, and a verdict of \`comment\` unless something is plainly a blocker. An operator asking for something quick, a glance or a sanity check means \`brief\`, and it is budgeted in coding-agent turns (\`maxTurns\`: ${String(BRIEF_MAX_TURNS)}) so that it stays brief. \`standard\` reads the range with the repository around it. \`deep\` also runs the project's own checks over the touched files, and costs the most.
 
 **Only committed work is reviewed.** The review runs over an isolated copy of the repository at its last commit, so anything still uncommitted in the working tree is invisible to it. When the request is about work in progress, say so and ask for it to be committed first — a branch is fine — then review the range those commits make.
 
@@ -161,7 +162,7 @@ const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
       slug: 'review-local-changes',
       name: 'Review Local Changes',
       description:
-        "Review a revision range of a repository connected as a host folder: the operator's installed harness reads the range in an isolated checkout at the folder's last commit and returns a verdict with grounded findings. Read-only — one task, no write, no publication.",
+        "Review a revision range of a repository connected as a host folder: the operator's installed coding agent reads the range in an isolated checkout at the folder's last commit and returns a verdict with grounded findings. Read-only — one task, no write, no publication.",
       goal: 'Return a structured verdict on a revision range — approve, request changes, or comment — with findings that name their file, line and evidence, and the outcome of the project’s own checks when the review ran them.',
       mode: 'process' as const,
       outcomes: [
