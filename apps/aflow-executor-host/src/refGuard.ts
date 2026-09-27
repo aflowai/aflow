@@ -12,12 +12,10 @@
  * `HEAD`, remote-tracking refs and the stash are outside both prefixes and stay
  * free.
  */
-import { execFile } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
 
-const run = promisify(execFile);
+import { gitVersionText } from './worktree.js';
 
 const GIT_VERSION_TIMEOUT_MS = 10_000;
 
@@ -114,13 +112,7 @@ export function refGuardMissing(versionText: string | undefined): string[] {
 
 /** The git a harness finds on its `PATH`, which is the executor's own. */
 export async function refGuardReadiness(): Promise<{ ready: boolean; missing: string[] }> {
-  let versionText: string | undefined;
-  try {
-    versionText = (await run('git', ['--version'], { timeout: GIT_VERSION_TIMEOUT_MS })).stdout;
-  } catch {
-    versionText = undefined;
-  }
-  const missing = refGuardMissing(versionText);
+  const missing = refGuardMissing(await gitVersionText(GIT_VERSION_TIMEOUT_MS));
   return { ready: missing.length === 0, missing };
 }
 

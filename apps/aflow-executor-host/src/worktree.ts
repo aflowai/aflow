@@ -132,6 +132,16 @@ function gitEnv(globalConfig: 'withheld' | 'read' = 'withheld'): Record<string, 
   return env;
 }
 
+/** What `git --version` on the executor's own PATH says, or nothing when git is absent. */
+export async function gitVersionText(timeoutMs: number): Promise<string | undefined> {
+  try {
+    const { stdout } = await run('git', ['--version'], { timeout: timeoutMs, env: gitEnv() });
+    return stdout;
+  } catch {
+    return undefined;
+  }
+}
+
 async function git(cwd: string, args: string[], maxBuffer = 1024 * 1024): Promise<string> {
   const { stdout } = await run('git', ['-C', cwd, ...GIT_SAFETY_ARGS, ...args], {
     timeout: GIT_TIMEOUT_MS,
