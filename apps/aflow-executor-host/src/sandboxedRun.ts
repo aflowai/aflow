@@ -15,7 +15,8 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { constants } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { SandboxManager } from '@anthropic-ai/sandbox-runtime';
@@ -385,6 +386,152 @@ interface SupervisedSpawn extends SupervisedRun {
    * that nothing hands the orphan sweep a path it must not delete.
    */
   readonly scratchDir?: string;
+  /**
+   * Where the wrapper around a confined command records the workload's own
+   * status. Absent for the one command that runs unconfined: it has no launcher
+   * standing between it and this executor, so its exit is already its own.
+   */
+  readonly statusPath?: string;
+}
+
+/**
+ * The launcher does not pass a signal death through, so the workload reports
+ * for itself.
+ *
+ * The adapter's CLI supervises the confined command and reports in its place,
+ * collapsing every signal other than SIGINT and SIGTERM into `exit 1` and
+ * naming the signal on its own standard error. So a command killed by SIGPIPE —
+ * what `head` does to whatever feeds it, the moment it has read enough — arrives
+ * here as a bare `1` with no signal, indistinguishable from a command that
+ * failed on its own.
+ *
+ * That standard error cannot be the channel this is recovered from. The launcher
+ * spawns the command with `stdio: 'inherit'`, so the workload's standard error
+ * and the launcher's own line are the same pipe: any command whose closing
+ * bytes happened to read like that line would have had its genuine failure
+ * rewritten as success.
+ *
+ * So the workload's status arrives on a channel the workload's streams are not:
+ * a minimal `sh` wrapper runs the command and writes its own `$?` — which
+ * encodes a signal death the way every shell does, as 128+signal, SIGPIPE as
+ * 141 — into a file in the run's scratch directory, which this executor reads
+ * back. The wrapper redirects none of the command's streams, keeps its two
+ * variables to itself rather than exporting them, and passes the argv through as
+ * `"$@"`, so what runs is what was asked for. It adds no shell to the chain that
+ * was not there: the launcher hands the command to `bash -c` either way, which
+ * is why it re-quotes every argument.
+ *
+ * The scratch is writable by the workload, which could therefore write this file
+ * itself. That buys it nothing it does not already have: a workload chooses its
+ * own exit status anyway.
+ */
+const STATUS_WRAPPER = 'st=$1; shift; "$@"; r=$?; printf %s "$r" >"$st"; exit $r';
+
+/** Where the wrapper writes it: the run's own scratch, never the binding. */
+export function workloadStatusPath(scratchDir: string): string {
+  return join(scratchDir, 'workload-status');
+}
+
+/**
+ * The command, wrapped so it reports its own status.
+ *
+ * `sh` is $0 — conventional, and read by nothing here; the status path is $1,
+ * shifted off before the command runs so `"$@"` is exactly the argv as given,
+ * with no splitting, quoting or re-parsing of any of it.
+ */
+export function statusWrappedArgv(statusPath: string, argv: readonly string[]): string[] {
+  return ['/bin/sh', '-c', STATUS_WRAPPER, 'sh', statusPath, ...argv];
+}
+
+/**
+ * The argv handed to the launcher: its own flags, then `--`, then the wrapper.
+ *
+ * `--` is load-bearing rather than tidy. The launcher's option parser owns
+ * `-c <command>` — the same spelling `sh`, `bash` and `python` use — and takes
+ * it from anywhere in the argv, so `['python', '-c', 'print(1)']` had its script
+ * lifted out and run as a shell command string with `python` dropped. After `--`
+ * every word is the command's, which is also what keeps this wrapper intact.
+ */
+export function confinedArgv(
+  srtBin: string,
+  settingsPath: string,
+  statusPath: string,
+  argv: readonly string[],
+): string[] {
+  return [srtBin, '-s', settingsPath, '--', ...statusWrappedArgv(statusPath, argv)];
+}
+
+/** Signal numbers back to names, first spelling winning over each alias. */
+const SIGNAL_BY_NUMBER = ((): Map<number, string> => {
+  const byNumber = new Map<number, string>();
+  for (const [name, number] of Object.entries(constants.signals)) {
+    if (!byNumber.has(number)) byNumber.set(number, name);
+  }
+  return byNumber;
+})();
+
+/**
+ * The status the wrapper recorded, or nothing.
+ *
+ * Nothing means the wrapper never got to write it — the whole group was killed,
+ * the scratch was already gone — and the caller falls back to what the launcher
+ * reported. Never invented: an unreadable status file must not become a success.
+ */
+export async function readWorkloadStatus(statusPath: string): Promise<number | undefined> {
+  let text: string;
+  try {
+    text = await readFile(statusPath, 'utf8');
+  } catch {
+    return undefined;
+  }
+  // Digits and nothing else. The wrapper writes `$?` and only that, so anything
+  // else in the file is not a status and is not treated as one.
+  if (!/^\d{1,3}$/.test(text.trim())) return undefined;
+  const status = Number.parseInt(text.trim(), 10);
+  return status <= 255 ? status : undefined;
+}
+
+/**
+ * What the run meant, given the workload's own status and the launcher's exit.
+ *
+ * SIGPIPE is not a failure: the reader stopped reading, which is precisely what
+ * `head` is for, and every shell reports such a pipeline as succeeding — the
+ * only thing lost is output nobody asked for. The output already captured is the
+ * whole of what the pipeline was asked to produce, so the run succeeded. A
+ * command that deliberately exits 141 is read the same way, because a shell
+ * cannot tell those apart either.
+ *
+ * Every other status keeps its meaning, as the shell spells it: a command that
+ * failed on its own carries its own code, and one killed or crashed carries
+ * 128+signal and gains the signal's name. With no status recorded, the
+ * launcher's own exit and signal stand.
+ */
+export function resolveConfinedExit(
+  launcherExit: number | null,
+  launcherSignal: string | null,
+  workloadStatus: number | undefined,
+): { exitCode: number | null; signal: string | null } {
+  if (workloadStatus === undefined) return { exitCode: launcherExit, signal: launcherSignal };
+  const signal = workloadStatus > 128 ? SIGNAL_BY_NUMBER.get(workloadStatus - 128) : undefined;
+  if (signal === 'SIGPIPE') return { exitCode: 0, signal };
+  return { exitCode: workloadStatus, signal: signal ?? null };
+}
+
+/**
+ * Record a finished process's status on its registry entry.
+ *
+ * Both spawn paths settle through this. Recording the launcher's raw code on one
+ * of them and the workload's status on the other made `host.process.inspect`
+ * report the same death differently depending on which path had started it.
+ */
+async function recordWorkloadExit(
+  entry: RunningProcess,
+  launcherExit: number | null,
+  launcherSignal: NodeJS.Signals | null,
+  statusPath: string,
+): Promise<void> {
+  const status = await readWorkloadStatus(statusPath);
+  entry.exitCode = resolveConfinedExit(launcherExit, launcherSignal, status).exitCode;
 }
 
 export interface SandboxedRunResult {
@@ -428,7 +575,8 @@ export async function spawnConfined(input: SpawnConfinedInput): Promise<Confined
     'dist',
     'cli.js',
   );
-  const argv = [srtBin, '-s', settingsPath, ...input.argv];
+  const statusPath = workloadStatusPath(input.scratchDir);
+  const argv = confinedArgv(srtBin, settingsPath, statusPath, input.argv);
 
   pruneExited(Date.now());
   const processId = nextProcessId(input.idPrefix);
@@ -466,11 +614,14 @@ export async function spawnConfined(input: SpawnConfinedInput): Promise<Confined
   const forget = (): void => {
     if (child.pid !== undefined) forgetSpawn(child.pid);
   };
-  child.once('close', (code) => {
+  child.once('close', (code, signal) => {
     entry.exited = true;
-    entry.exitCode = code;
     entry.exitedAt = Date.now();
     forget();
+    // The launcher's own code stands until the status file has been read, which
+    // is one read of a file a process that has already exited left behind.
+    entry.exitCode = code;
+    void recordWorkloadExit(entry, code, signal, statusPath);
   });
   child.once('error', () => {
     entry.exited = true;
@@ -630,11 +781,16 @@ async function superviseSpawn(input: SupervisedSpawn): Promise<SandboxedRunResul
         void rm(input.scratchDir, { recursive: true, force: true }).catch(() => {});
       }
     };
-    child.on('close', (c) => {
+    child.on('close', (c, s) => {
       entry.exited = true;
       entry.exitCode = c;
       entry.exitedAt = Date.now();
-      cleanUp();
+      if (input.statusPath === undefined) {
+        cleanUp();
+        return;
+      }
+      // Read before the scratch is removed — the status file lives in it.
+      void recordWorkloadExit(entry, c, s, input.statusPath).finally(cleanUp);
     });
     child.on('error', () => {
       entry.exited = true;
@@ -692,15 +848,20 @@ async function superviseSpawn(input: SupervisedSpawn): Promise<SandboxedRunResul
     input.onDelta(held);
   }
 
+  const reported = resolveConfinedExit(
+    code,
+    signal,
+    input.statusPath === undefined ? undefined : await readWorkloadStatus(input.statusPath),
+  );
   entry.exited = true;
-  entry.exitCode = code;
+  entry.exitCode = reported.exitCode;
   entry.exitedAt = Date.now();
   if (spawnError) throw spawnError;
 
   return {
     processId,
-    exitCode: code,
-    signal,
+    exitCode: reported.exitCode,
+    signal: reported.signal,
     timedOut,
     durationMs: Date.now() - startedAt.getTime(),
     stdout,
@@ -734,12 +895,14 @@ export async function runSandboxed(input: SandboxedRunInput): Promise<SandboxedR
   );
   await mkdir(workloadHome(input.scratchDir), { recursive: true });
 
+  const statusPath = workloadStatusPath(input.scratchDir);
   return await superviseSpawn({
     ...input,
     program: process.execPath,
     // Argv all the way through: the adapter's CLI takes the command as varargs,
     // so nothing between here and exec has to split or quote a string.
-    args: [srtBin, '-s', settingsPath, ...input.argv],
+    args: confinedArgv(srtBin, settingsPath, statusPath, input.argv),
+    statusPath,
     // Named inheritance, never the executor's whole environment: that
     // environment holds the credentials this executor was paired with.
     env: {
