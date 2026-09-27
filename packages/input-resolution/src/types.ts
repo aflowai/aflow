@@ -2,7 +2,7 @@
  * Types for input resolution and validation.
  */
 import { z } from 'zod';
-import type { StepId } from '@aflow/schemas';
+import type { ReferenceRoot, StepId } from '@aflow/schemas';
 
 // ============================================================================
 // Resolution Context
@@ -93,7 +93,7 @@ export const ResolutionContextSchema = z.object({
 /**
  * Source of a reference.
  */
-export type RefSource = 'state' | 'steps';
+export type RefSource = ReferenceRoot;
 
 /**
  * Parsed reference from ${...} syntax.
