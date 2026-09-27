@@ -85,27 +85,6 @@ services:
     profiles:
       - tools
 
-  # ---------------------------------------------------------------------------
-  # LiveKit Server (Voice / WebRTC transport)
-  # ---------------------------------------------------------------------------
-  # NOTE: On macOS, run LiveKit natively instead of Docker:
-  #   brew install livekit && livekit-server --dev
-  # Docker Desktop on macOS uses a VM that breaks WebRTC UDP connectivity.
-  # This Docker service works on Linux hosts and CI.
-  livekit:
-    image: livekit/livekit-server
-    container_name: phoenix-livekit
-    restart: unless-stopped
-    command: --dev --bind 0.0.0.0 --node-ip host.docker.internal
-    ports:
-      - '7880:7880' # Signal (WebSocket)
-      - '7881:7881' # RTC TCP
-      - '7882:7882/udp' # RTC UDP
-    extra_hosts:
-      - 'host.docker.internal:host-gateway'
-    profiles:
-      - voice
-
 volumes:
   postgres_data:
   redis_data:

@@ -47,7 +47,6 @@
     "infra:reset": "docker compose down -v && docker compose up -d",
     "infra:tools": "docker compose --profile tools up -d",
     "infra:up": "docker compose up -d",
-    "infra:voice": "docker compose --profile voice up -d",
     "kill": "bash scripts/kill-dev.sh",
     "large-files:baseline": "NODE_OPTIONS='--conditions=ts-source' npx tsx scripts/large-files/cli.ts update-baseline",
     "large-files:check": "NODE_OPTIONS='--conditions=ts-source' npx tsx scripts/large-files/cli.ts check",

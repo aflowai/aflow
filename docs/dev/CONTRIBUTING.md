@@ -178,7 +178,6 @@ Platform **definitions** (system capability agents, cybernetic ensemble agents, 
 
 - **Do not** add new `release.mjs` or deploy-phase steps that upsert the same platform flows into every tenant schema. Release stays for migrations and tenant-owned or catalog data — not for reconciling global platform definitions.
 - **Do** extend or fix platform behavior by changing `platform-artifacts` and the shared resolver helpers, then run the normal quality gates (`/check`).
-- **Legacy cleanup** of old DB copies (if you need to strip pre-registry rows in a database you manage): see `scripts/106-cleanup-seeded-artifacts.ts` and the Plan 106 doc — prefer dry-run first.
 
 Local dev may still use `yarn db:seed` / `yarn db:seed:cybernetic` to insert **rows** and bootstrap spaces; runtime resolution of platform agents still prefers the code registry. If something works only when rows exist in `agent_definitions`, that is a bug relative to Plan 106 — fix the resolver path, do not re-add production sweeps.
 

@@ -86,7 +86,7 @@ yarn db:seed:cybernetic --help                              # usage
 ```
 
 End-to-end dev seed for Plan 102h. Runs the **bootstrap** code path the HTTP
-`PATCH /v1/spaces/:id` handler uses, but **not** the old Heroku release sweep
+`PATCH /v1/spaces/:id` handler uses, but **not** a deploy-time sweep
 for platform agents (Plan 106: `release.mjs` no longer calls
 `seedCyberneticAgents` / `seedCapabilityFlows`; runtime reads platform
 definitions from `packages/platform-artifacts`).
@@ -136,20 +136,6 @@ they held; they had accumulated no sessions at all, while still occupying the
 agents list as things you could apparently pick.
 
 System prompts are stored as versioned `.md` files in `seeds/prompts/` and injected at seed time.
-
-### Plan 106 — cleanup of legacy seeded rows (operator maintenance)
-
-To soft-delete pre-registry copies of platform agents, workflow docs, manifests,
-or eval suite docs that were created with `created_by` / `created_by_actor` of
-`system` (does **not** delete operator-authored overrides):
-
-```bash
-npx tsx scripts/106-cleanup-seeded-artifacts.ts            # dry-run
-npx tsx scripts/106-cleanup-seeded-artifacts.ts --execute
-```
-
-Read the script header and get approval before using against shared
-environments.
 
 ### Database Management
 

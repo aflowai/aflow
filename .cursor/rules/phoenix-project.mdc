@@ -52,12 +52,12 @@ Same Docker image, different `PHOENIX_PROFILE`.
 - **Inline refs**: `inline:<base64-json>` for small payloads. PayloadStore handles both inline and stored refs transparently.
 - **Runtime variables**: `state.<variableId>` in `RunHotState.runtimeState.variables`. Updated via `RuntimeStatePatch` events.
 - **Agent pattern (Plan 19)**: Agent step selects next steps (tools) from the flow graph. Orchestrator schedules them. Tools are regular steps with `parentStepExecutionId` linkage.
-- **Platform-owned definitions (Plan 106)**: Built-in system agents, workflows, and skill bundles that are identical in every tenant are defined in `packages/platform-artifacts` and resolved through registry-aware code paths. The Heroku `release.mjs` phase does not re-seed them tenant-by-tenant. Do not reintroduce deploy sweeps for those artifacts; update the registry and shared resolvers instead.
+- **Platform-owned definitions (Plan 106)**: Built-in system agents, workflows, and skill bundles that are identical in every tenant are defined in `packages/platform-artifacts` and resolved through registry-aware code paths. No deploy-time phase re-seeds them tenant-by-tenant. Do not reintroduce deploy sweeps for those artifacts; update the registry and shared resolvers instead.
 - **Compiled packages**: All `packages/*` export from `dist/` — apps resolve imports to compiled JS, not TS source. **Run `yarn build` after editing any package** or changes silently won't take effect at runtime.
 - **DRY across apps**: Never duplicate business logic between `apps/server` and `apps/aflow-orchestrator`. Pure functions belong in `packages/` (schemas, redis, or a dedicated package). If both apps need the same pipeline, one imports from the other or both import from a shared package.
 - **Derive from schemas, don't mirror them**: Never maintain a hand-written list of field names that must stay in sync with a Zod schema. Derive it from the schema at runtime (e.g., `deriveStringFields()` in `hotState.ts`). Manual lists silently drift when schemas change.
 - **MCP `registerTool` inputSchema**: In `apps/aflow-mcp/src/tools/*.ts`, use `inputSchema: SomeSchema.shape as any` — never the full Zod schema. MCP SDK Zod v3/v4 compat causes deep type recursion (TS2589, OOM). Do not remove the cast.
-- **Lint gate**: Pre-commit hook (`lint-staged`) lints staged `.ts`/`.tsx` files with `--max-warnings 0`. Every file you commit must be clean. Pre-existing debt in untouched files is not your problem — but never make a file worse. CI `lint-regression` job prevents regressions vs `.lint-baseline`.
+- **Lint gate**: Pre-commit hook (`lint-staged`) lints staged `.ts`/`.tsx` files with `--max-warnings 0`. Every file you commit must be clean. Pre-existing debt in untouched files is not your problem — but never make a file worse. CI's `yarn lint` fails on errors.
 
 ## Dev Commands
 

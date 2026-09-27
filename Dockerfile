@@ -1,6 +1,6 @@
 # =============================================================================
-# Phoenix Platform — Multi-stage Dockerfile
-# Works with: Heroku Container Registry, GCP Cloud Run, any Docker host
+# Aflow — multi-stage Dockerfile
+# Works with any Docker host, including Cloud Run
 #
 # Usage:
 #   docker build -t phoenix .
@@ -210,7 +210,7 @@ COPY --from=builder /app/scripts/release.mjs scripts/
 # is private-IP, so this cannot be driven from a workstation.
 COPY --from=builder /app/scripts/rewrap-credentials.mjs scripts/
 
-# Heroku sets $PORT dynamically; Cloud Run uses 8080 by default
+# Hosts that assign a port set $PORT; 8080 is Cloud Run's default
 ENV PORT=8080
 
 # Default profile — override via env var or command arg

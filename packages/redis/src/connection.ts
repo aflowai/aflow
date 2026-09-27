@@ -124,8 +124,8 @@ function configToRedisOptions(config: RedisConfig): RedisOptions {
     }
 
     if (config.url.startsWith('rediss://')) {
-      // Some managed providers (Heroku Key-Value Store) present a certificate
-      // with no publicly trusted chain, so verification has to be opt-out —
+      // Some managed providers present a certificate with no publicly
+      // trusted chain, so verification has to be opt-out —
       // but skipping it makes the TLS connection interceptable, which is the
       // whole point of using `rediss://`. It must therefore be a deliberate,
       // named decision per deployment rather than the default.

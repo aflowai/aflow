@@ -170,7 +170,7 @@ const httpServer = createServer((req: IncomingMessage, res: ServerResponse) => {
       return;
     }
 
-    // Host header gate: reject requests to direct provider URLs (e.g. xxx.herokuapp.com)
+    // Host header gate: reject requests to direct provider URLs (e.g. a platform-assigned hostname)
     // Only enforced when ALLOWED_HOSTS is set (production). Skipped in dev.
     if (config.allowedHosts.length > 0) {
       const host = (req.headers.host ?? '').toLowerCase().replace(/:\d+$/, '');
