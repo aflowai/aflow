@@ -575,7 +575,7 @@ export async function currentHead(root: string): Promise<string | undefined> {
 export type RefSnapshot = ReadonlyMap<string, string>;
 
 /**
- * The refs a run could reach, read before and after it.
+ * The operator's refs a run could move, read before and after it.
  *
  * A worktree shares refs with the repository it was added to, so a harness
  * that runs `git branch -D` or `git update-ref` in its checkout rewrites the
@@ -584,9 +584,12 @@ export type RefSnapshot = ReadonlyMap<string, string>;
  * moves by committing in its checkout.
  */
 export async function snapshotRefs(root: string): Promise<RefSnapshot> {
+  // Local branches and tags only. A remote-tracking ref changes when a fetch
+  // runs — an editor's or a background one — which is not the run's doing and
+  // moves nothing the operator wrote; `refs/stash` is the operator's scratch.
   const listing = await git(
     root,
-    ['for-each-ref', '--format=%(refname) %(objectname)'],
+    ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads/', 'refs/tags/'],
     APPLY_OUTPUT_CAP_BYTES,
   );
   const refs = new Map<string, string>();

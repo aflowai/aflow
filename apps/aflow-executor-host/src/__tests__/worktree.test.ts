@@ -191,4 +191,24 @@ describe('the refs a run could reach', () => {
     ]);
     await removeWorktree(repo, wt.path);
   });
+
+  it('watches local branches and tags, and not what a fetch or a stash moves', async () => {
+    await git(repo, 'branch', 'other');
+    const wt = await prepareWorktree(repo, scratch, 'work');
+    const head = (await git(repo, 'rev-parse', 'HEAD')).trim();
+    const before = await snapshotRefs(repo);
+
+    await git(repo, 'update-ref', 'refs/remotes/origin/x', head);
+    await writeFile(join(repo, 'app.txt'), 'work in progress\n');
+    await git(repo, 'stash');
+    expect(changedRefs(before, await snapshotRefs(repo))).toEqual([]);
+
+    await git(wt.path, 'branch', '-D', 'other');
+    await git(wt.path, 'tag', 'planted');
+    expect(changedRefs(before, await snapshotRefs(repo)).map((c) => [c.ref, c.change])).toEqual([
+      ['refs/heads/other', 'deleted'],
+      ['refs/tags/planted', 'created'],
+    ]);
+    await removeWorktree(repo, wt.path);
+  });
 });

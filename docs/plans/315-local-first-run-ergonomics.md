@@ -74,6 +74,8 @@ The checklist derived from the space: credentials, paired, folder, local skills,
 
 Ref snapshot before a commission, refusal of a result that moved any other ref. Local Publish appends to an existing branch when `branch` names one, with the commit's base required to be that branch's head; the skill's description says a fix lands on the branch it reviews.
 
+**Delivered**: a commission takes `base` — a branch, tag or commit — and starts its checkout there, reporting it as `baseSha`; `host.file.patch` takes `commit.base` and appends one commit to an existing branch only when that base is the branch's head, refusing a stale base, a branch that moved and a branch some checkout has open, never merging; every run's local branches and tags are read before and after it, and a run that created, deleted or moved one is refused with its diff kept on the refusal — the operator's own commit during a run trips the check too, and the diff survives it; Local Publish takes the commission's `baseSha` and binds it to `commit.base`.
+
 ### P5 — Measure, then trim (F17)
 
 Production-build heap and mount time for a long conversation with the Workbench open; if the reducer's retained feeds are the cost, completed feeds fold to counts and a stored reference, the card reading the store on open (the path the run page already uses).
