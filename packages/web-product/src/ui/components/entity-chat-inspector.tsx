@@ -77,8 +77,10 @@ export function EntityChatInspector(props: {
 
   // Live is the resting state and says nothing; only a stream that has stayed
   // down long enough to make the pane stale earns a word. The composer says the
-  // same thing from the same phase, so the delay lives in one place.
-  const showReconnecting = useConnectionNotice(isConnected) === 'reconnecting';
+  // same thing from the same phase, so the delay lives in one place. With no
+  // space there is no stream: the broker subscribes to nothing and reports the
+  // fallback, which is a drop that never happened.
+  const showReconnecting = useConnectionNotice(isConnected, spaceId !== '') === 'reconnecting';
 
   const [cascadeDetail, setCascadeDetail] = useState<CascadeDetail | null>(null);
   const {

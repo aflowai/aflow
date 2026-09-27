@@ -253,7 +253,7 @@ export function SkillsPage() {
         <EmptyState
           icon={<Icon name="skill" size={48} color="var(--color-accent-default)" />}
           title="No skills yet"
-          description="Describe one to the cybernetic agent, start from a template, or install from the store."
+          description="Describe one to Helmsman, start from a template, or install one from the Store."
         />
         <Row gap="sm">
           <Button

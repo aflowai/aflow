@@ -13,19 +13,26 @@ export function KindBadge({ kind }: { kind: IntegrationKind }) {
   return <Badge variant="info">{KIND_LABEL[kind]}</Badge>;
 }
 
-/** Three buttons mimicking the prior `<Tabs>` affordance. */
+/**
+ * Buttons mimicking the prior `<Tabs>` affordance.
+ *
+ * `offersRepos` is the caller's answer about the coding lane; a filter for a
+ * kind this deployment cannot hold would only ever select an empty list.
+ */
 export function FilterChips({
   value,
   onChange,
+  offersRepos,
 }: {
   value: Filter;
   onChange: (next: Filter) => void;
+  offersRepos: boolean;
 }) {
   const options: Array<{ id: Filter; label: string }> = [
     { id: 'all', label: 'All' },
     { id: 'api', label: 'API' },
     { id: 'mcp', label: 'MCP' },
-    { id: 'repo', label: 'Repos' },
+    ...(offersRepos ? [{ id: 'repo' as const, label: 'Repos' }] : []),
   ];
   return (
     <Row gap="1" align="center" wrap>
@@ -49,8 +56,17 @@ export function FilterChips({
  * Add button + kind-picker popover. No design-system Menu primitive exists,
  * so this is a small absolutely-positioned popover with two buttons. Closes
  * on outside click or Escape.
+ *
+ * `offersRepos` is the caller's answer about the coding lane: a designation
+ * created for a lane that is absent is configuration the next run refuses.
  */
-export function AddIntegrationButton({ onPick }: { onPick: (kind: IntegrationKind) => void }) {
+export function AddIntegrationButton({
+  onPick,
+  offersRepos,
+}: {
+  onPick: (kind: IntegrationKind) => void;
+  offersRepos: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
@@ -127,17 +143,19 @@ export function AddIntegrationButton({ onPick }: { onPick: (kind: IntegrationKin
           >
             MCP server
           </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            leftIcon={<Icon name="git-branch" size="sm" />}
-            onClick={() => {
-              setOpen(false);
-              onPick('repo');
-            }}
-          >
-            Code repository
-          </Button>
+          {offersRepos && (
+            <Button
+              variant="ghost"
+              size="sm"
+              leftIcon={<Icon name="git-branch" size="sm" />}
+              onClick={() => {
+                setOpen(false);
+                onPick('repo');
+              }}
+            >
+              Code repository
+            </Button>
+          )}
         </div>
       )}
     </div>

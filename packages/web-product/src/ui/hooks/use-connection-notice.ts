@@ -35,18 +35,47 @@ export function connectionNoticeLabel(phase: ConnectionNoticePhase): string | un
   return undefined;
 }
 
+/** What the notice does about the channel as the broker reports it. */
+export type ConnectionNoticeAction = 'report-live' | 'report-on-connected' | 'time-the-drop';
+
+/**
+ * Whether there is a drop here to report, and whether it is worth timing.
+ *
+ * `subscribed` is the case the connected flag cannot express: a broker reports
+ * disconnected for a subscription it was never asked to make, so a composer
+ * rendered before its conversation has a session reads as a channel that has
+ * been down since mount — which is how every fresh chat said "Reconnecting…" on
+ * a live socket.
+ */
+export function connectionNoticeAction(
+  subscribed: boolean,
+  isConnected: boolean,
+): ConnectionNoticeAction {
+  if (!subscribed) return 'report-live';
+  return isConnected ? 'report-on-connected' : 'time-the-drop';
+}
+
 /**
  * The phase of the live channel, as a surface beside the composer should say it.
  *
  * Takes the connected flag the brokers already expose rather than subscribing
  * again: one subscription per session is the broker's whole point, and a second
- * one here would report the same thing a beat later.
+ * one here would report the same thing a beat later. `subscribed` says whether
+ * that flag is about anything yet.
  */
-export function useConnectionNotice(isConnected: boolean): ConnectionNoticePhase {
+export function useConnectionNotice(
+  isConnected: boolean,
+  subscribed: boolean,
+): ConnectionNoticePhase {
   const [phase, setPhase] = useState<ConnectionNoticePhase>('live');
 
   useEffect(() => {
-    if (isConnected) {
+    const action = connectionNoticeAction(subscribed, isConnected);
+    if (action === 'report-live') {
+      setPhase('live');
+      return undefined;
+    }
+    if (action === 'report-on-connected') {
       setPhase(phaseOnConnected);
       return undefined;
     }
@@ -56,7 +85,7 @@ export function useConnectionNotice(isConnected: boolean): ConnectionNoticePhase
     return () => {
       clearTimeout(timer);
     };
-  }, [isConnected]);
+  }, [isConnected, subscribed]);
 
   useEffect(() => {
     if (phase !== 'caught-up') return undefined;

@@ -8,10 +8,33 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  connectionNoticeAction,
   connectionNoticeLabel,
   phaseOnConnected,
   type ConnectionNoticePhase,
 } from './use-connection-notice.js';
+
+describe('a channel with nothing subscribed to it', () => {
+  // The brokers report disconnected for a subscription they were never asked to
+  // make, so a composer rendered before its conversation has a session was fed a
+  // drop that never happened — and after the delay every fresh chat said
+  // "Reconnecting…" on a live socket, for as long as it stayed empty.
+  it('reports live, and times nothing', () => {
+    expect(connectionNoticeAction(false, false)).toBe('report-live');
+    expect(connectionNoticeAction(false, true)).toBe('report-live');
+  });
+
+  it('says nothing, so the composer is unchanged', () => {
+    expect(connectionNoticeLabel('live')).toBeUndefined();
+  });
+});
+
+describe('a channel that has a session', () => {
+  it('times a drop, and reads a connect for the gap it may have left', () => {
+    expect(connectionNoticeAction(true, false)).toBe('time-the-drop');
+    expect(connectionNoticeAction(true, true)).toBe('report-on-connected');
+  });
+});
 
 describe('the phase a connect lands on', () => {
   it('reports catching up only where a drop had been reported', () => {

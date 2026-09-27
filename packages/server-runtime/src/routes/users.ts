@@ -124,7 +124,14 @@ export const usersRoutes: FastifyPluginAsync = async (fastify) => {
         termsAcceptance,
         // Carried here rather than on an endpoint of its own: this is the call
         // every client already makes before it renders anything.
-        edition: { id: fastify.edition.edition, surfaces: fastify.enabledSurfaces },
+        edition: {
+          id: fastify.edition.edition,
+          surfaces: fastify.enabledSurfaces,
+          lanes: {
+            codeLane: fastify.edition.codeLane,
+            hostLane: fastify.edition.hostLane,
+          },
+        },
       });
     },
   );
