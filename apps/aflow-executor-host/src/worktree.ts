@@ -131,11 +131,16 @@ function gitEnv(globalConfig: 'withheld' | 'read' = 'withheld'): Record<string, 
   return env;
 }
 
-async function git(cwd: string, args: string[], maxBuffer = 1024 * 1024): Promise<string> {
+async function git(
+  cwd: string,
+  args: string[],
+  maxBuffer = 1024 * 1024,
+  env: Record<string, string> = {},
+): Promise<string> {
   const { stdout } = await run('git', ['-C', cwd, ...GIT_SAFETY_ARGS, ...args], {
     timeout: GIT_TIMEOUT_MS,
     maxBuffer,
-    env: gitEnv(),
+    env: { ...gitEnv(), ...env },
   });
   return stdout;
 }
@@ -525,6 +530,21 @@ export async function removeWorktree(root: string, worktreePath: string): Promis
 }
 
 /**
+ * Every checkout added to the repository, by path, without its main one.
+ *
+ * Read from git rather than from disk: a checkout whose directory is gone is
+ * still registered, and the registration is what the operator sees.
+ */
+export async function linkedWorktrees(root: string): Promise<string[]> {
+  const listing = await git(root, ['worktree', 'list', '--porcelain'], APPLY_OUTPUT_CAP_BYTES);
+  return listing
+    .split('\n')
+    .filter((line) => line.startsWith('worktree '))
+    .map((line) => line.slice('worktree '.length))
+    .slice(1);
+}
+
+/**
  * Whether the diff still fits the repository it came from.
  *
  * A run's result is a patch against the commit it started from, and by the time
@@ -532,20 +552,34 @@ export async function removeWorktree(root: string, worktreePath: string): Promis
  * lines. Saying so is the difference between a diff that can be taken and one
  * that needs a decision, and the answer has to come from git rather than from
  * comparing shas — a moved HEAD that touched other files still applies.
+ *
+ * With `against`, the diff is judged against that commit's tree rather than the
+ * folder's working tree, through an index of its own, so the folder's index and
+ * files are never a party to it.
  */
 export type ApplyCheck =
   | { readonly state: 'clean' }
   | { readonly state: 'conflict'; readonly detail: string }
   | { readonly state: 'empty' };
 
-export async function checkApplies(root: string, patch: string): Promise<ApplyCheck> {
+export async function checkApplies(
+  root: string,
+  patch: string,
+  against?: string,
+): Promise<ApplyCheck> {
   if (patch === '') return { state: 'empty' };
 
   const scratch = await mkdtemp(join(tmpdir(), 'aflow-apply-'));
   const patchPath = join(scratch, 'run.patch');
   try {
     await writeFile(patchPath, patch, 'utf8');
-    await git(root, ['apply', '--check', patchPath]);
+    if (against === undefined) {
+      await git(root, ['apply', '--check', patchPath]);
+    } else {
+      const index = { GIT_INDEX_FILE: join(scratch, 'index') };
+      await git(root, ['read-tree', against], undefined, index);
+      await git(root, ['apply', '--cached', '--check', patchPath], undefined, index);
+    }
     return { state: 'clean' };
   } catch (error) {
     // git names the file and hunk it could not place, which is the whole of
@@ -555,7 +589,10 @@ export async function checkApplies(root: string, patch: string): Promise<ApplyCh
       message
         .split('\n')
         .filter((line) => line.startsWith('error:'))
-        .join('; ') || 'The patch does not apply to the repository as it stands.';
+        .join('; ') ||
+      (against === undefined
+        ? 'The patch does not apply to the repository as it stands.'
+        : `The patch does not apply to ${against}.`);
     return { state: 'conflict', detail };
   } finally {
     await rm(scratch, { recursive: true, force: true });

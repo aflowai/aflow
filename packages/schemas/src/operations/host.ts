@@ -546,8 +546,10 @@ export const HostHarnessRunOutputSchema = z.object({
   applies: z
     .enum(['clean', 'conflict', 'empty'])
     .describe(
-      'Whether the diff still fits the repository as it stands now. A run that ' +
-        'took a while can be overtaken by the operator committing or editing the same lines.',
+      'Whether the diff still fits the repository as it stands now. A run given a `base` is ' +
+        "judged against that ref's current head, where a publication would append it; any " +
+        "other run is judged against the folder's working tree. A run that took a while can " +
+        'be overtaken by the operator committing or editing the same lines.',
     ),
   applyConflict: z
     .string()

@@ -14,9 +14,9 @@
  * committed, no branch moves — a run that moves one is refused — and the
  * worktree is removed once its changes have been collected.
  */
-import { mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join, sep } from 'node:path';
 
 import AjvModule from 'ajv';
 
@@ -56,10 +56,12 @@ import {
   type HarnessProfile,
 } from '../harnessProfiles.js';
 import {
+  allSessions,
   claimSession,
   discardScratch,
   expiredSessions,
   forgetSession,
+  HARNESS_SCRATCH_PREFIX,
   releaseSession,
   sessionsForBinding,
   withdrawnSessions,
@@ -78,6 +80,7 @@ import {
   collectChanges,
   currentHead,
   describeRefChanges,
+  linkedWorktrees,
   prepareWorktree,
   removeWorktree,
   resolveCommit,
@@ -92,6 +95,11 @@ import {
  * change to the operator's folder.
  */
 const RESULT_RELATIVE_PATH = '.aflow/result.json';
+/**
+ * What every directory this executor makes under the temp root is named after —
+ * a harness run's scratch and a publication's checkout alike.
+ */
+const EXECUTOR_TEMP_PREFIX = 'aflow-';
 /** A result is an answer, not a dataset; past this it is a mistake, not a big one. */
 const RESULT_CAP_BYTES = 1_000_000;
 
@@ -480,7 +488,7 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
       session = moved;
       claimed = moved;
     } else {
-      scratch = await mkdtemp(join(tmpdir(), 'aflow-harness-'));
+      scratch = await mkdtemp(join(tmpdir(), HARNESS_SCRATCH_PREFIX));
       worktree = await prepareWorktree(
         binding.root,
         scratch,
@@ -680,7 +688,15 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
     const refChanges = changedRefs(refsBefore, await snapshotRefs(binding.root));
     // Asked of the binding, not the worktree: the question is whether what the
     // harness produced can still be taken into the repository the operator has.
-    const applies = await checkApplies(binding.root, changes.patch);
+    // A named base is where a publication would append the diff, so the tree
+    // that answers is that ref's head as it stands now, not the folder's working
+    // tree. A base ref gone since the run started is refused below as a ref
+    // change, and the commit it named stands in until then.
+    const judgedAt =
+      input.base === undefined
+        ? undefined
+        : await resolveCommit(binding.root, input.base).catch(() => namedBase);
+    const applies = await checkApplies(binding.root, changes.patch, judgedAt);
     // A named base is judged against itself; the folder's HEAD was never the
     // starting point, so its distance from it says nothing about the run.
     const headMoved =
@@ -814,6 +830,71 @@ export function createHostHarnessHandler(policyPath: string): {
     handles: new Set(['host.harness.run']),
     execute: async (ctx: ExecutorContext): Promise<StepResult> => await runHarness(ctx, policyPath),
   };
+}
+
+export interface OrphanedCheckouts {
+  /** Checkouts taken off each connected folder, by the folder's root. */
+  readonly removed: ReadonlyMap<string, number>;
+  /** Scratch directories removed from the temp root. */
+  readonly scratchDirs: number;
+}
+
+/**
+ * Take away the checkouts no session owns.
+ *
+ * Sessions live in this executor's memory, so a restart forgets every one of
+ * them while their checkouts stay registered in the operator's repository and
+ * their scratch stays in the temp root, with nothing left that would ever
+ * expire them. Run at boot, before any job, when every checkout this lane made
+ * is one of those.
+ *
+ * Only what lies under the temp root, in a directory named the way this
+ * executor names its own, is taken: any other checkout of the folder is the
+ * operator's.
+ */
+export async function removeOrphanedCheckouts(
+  roots: readonly string[],
+  tempRoot: string = tmpdir(),
+): Promise<OrphanedCheckouts> {
+  const owned = new Set(allSessions().map((session) => basename(session.scratchDir)));
+  // git records a checkout by its resolved path, and the temp root is commonly
+  // reached through a link (`/var` on macOS), so both spellings are asked.
+  const tempRoots = new Set([tempRoot, await realpath(tempRoot).catch(() => tempRoot)]);
+  const orphaned = (path: string): boolean => {
+    for (const under of tempRoots) {
+      if (!path.startsWith(under + sep)) continue;
+      const top = path.slice(under.length + 1).split(sep)[0] ?? '';
+      return top.startsWith(EXECUTOR_TEMP_PREFIX) && !owned.has(top);
+    }
+    return false;
+  };
+
+  const removed = new Map<string, number>();
+  for (const root of new Set(roots)) {
+    let paths: string[];
+    let rootReal: string;
+    try {
+      paths = await linkedWorktrees(root);
+      rootReal = await realpath(root);
+    } catch {
+      // Not a repository, or not there: nothing of this lane's is registered.
+      continue;
+    }
+    for (const path of paths) {
+      // A folder connected from inside a checkout lists itself among them.
+      if (path === rootReal || !orphaned(path)) continue;
+      await removeWorktree(root, path);
+      removed.set(root, (removed.get(root) ?? 0) + 1);
+    }
+  }
+
+  let scratchDirs = 0;
+  for (const name of await readdir(tempRoot).catch(() => [] as string[])) {
+    if (!name.startsWith(HARNESS_SCRATCH_PREFIX) || owned.has(name)) continue;
+    await discardScratch({ scratchDir: join(tempRoot, name) });
+    scratchDirs += 1;
+  }
+  return { removed, scratchDirs };
 }
 
 /**

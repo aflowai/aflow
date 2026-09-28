@@ -408,6 +408,7 @@ describe.runIf(sandboxReadiness().ready)('a commission starts from a named ref',
         ],
         harnesses: [
           harness('edits', 'printf changed > touched.txt'),
+          harness('rewrites', "printf '# project, reviewed\\n' > README.md"),
           harness('deletes', 'printf changed > touched.txt; git branch -D other'),
           harness('moves', 'printf changed > touched.txt; git update-ref refs/heads/other HEAD'),
         ],
@@ -443,6 +444,17 @@ describe.runIf(sandboxReadiness().ready)('a commission starts from a named ref',
     expect(output['baseSha']).toBe(feature);
     expect(output['headMoved']).toBe(false);
     expect(String(output['patch'])).toContain('touched.txt');
+  }, 120_000);
+
+  it('judges whether the diff applies against the base, not the folder it moved away from', async () => {
+    // The folder's README has moved on from the base's, so the same edit reads
+    // as a conflict against it and applies cleanly where it would be published.
+    const { outcome, written } = await runWith({ harness: 'rewrites', base: 'feat/reviewed' });
+    expect(outcome.status).toBe('SUCCEEDED');
+    const output = written['output'] as Record<string, unknown>;
+    expect(String(output['patch'])).toContain('README.md');
+    expect(output['applies']).toBe('clean');
+    expect(output['applyConflict']).toBeUndefined();
   }, 120_000);
 
   it('refuses a ref the folder does not have, naming it', async () => {

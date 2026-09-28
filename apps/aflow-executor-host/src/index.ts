@@ -46,6 +46,7 @@ import { ConsumerGroups, StreamKeys } from '@aflow/schemas';
 
 import { executionPermitted, loadHostPolicy } from './bindings.js';
 import { removeWorktree } from './worktree.js';
+import { removeOrphanedCheckouts } from './handlers/harnessHandlers.js';
 import { createHostHandler } from './handlers/hostHandler.js';
 import {
   allSessions,
@@ -186,6 +187,22 @@ async function main(): Promise<void> {
   if (reaped > 0) {
     log.warn('Ended processes left behind by a previous run of this executor', {
       count: reaped,
+    });
+  }
+
+  // Checkouts too: every session died with the previous executor, so what they
+  // held on disk and in the operator's repositories has nothing left that would
+  // ever expire it.
+  const bound = await loadHostPolicy(policyPath)
+    .then((policy) => [...policy.bindings.values()].map((binding) => binding.root))
+    .catch(() => [] as string[]);
+  const orphaned = await removeOrphanedCheckouts(bound);
+  const checkouts = [...orphaned.removed.values()].reduce((sum, count) => sum + count, 0);
+  if (checkouts > 0 || orphaned.scratchDirs > 0) {
+    log.info('Removed checkouts left behind by a previous run of this executor', {
+      checkouts,
+      folders: [...orphaned.removed.keys()],
+      scratchDirs: orphaned.scratchDirs,
     });
   }
 

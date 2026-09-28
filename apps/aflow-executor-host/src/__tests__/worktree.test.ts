@@ -1,13 +1,21 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { removeOrphanedCheckouts } from '../handlers/harnessHandlers.js';
+import {
+  allSessions,
+  forgetSession,
+  HARNESS_SCRATCH_PREFIX,
+  recordSession,
+} from '../harnessSessions.js';
 import {
   changedRefs,
+  checkApplies,
   collectChanges,
   describeRefChanges,
   isGitRepository,
@@ -22,6 +30,13 @@ const run = promisify(execFile);
 
 let repo: string;
 let scratch: string;
+
+async function exists(path: string): Promise<boolean> {
+  return await stat(path).then(
+    () => true,
+    () => false,
+  );
+}
 
 async function git(cwd: string, ...args: string[]): Promise<string> {
   const { stdout } = await run('git', ['-C', cwd, ...args]);
@@ -210,5 +225,100 @@ describe('the refs a run could reach', () => {
       ['refs/tags/planted', 'created'],
     ]);
     await removeWorktree(repo, wt.path);
+  });
+});
+
+describe('whether a diff made from a named base applies', () => {
+  it('is judged against the base head, touching nothing in the folder', async () => {
+    await git(repo, 'branch', 'feat/fix');
+    await writeFile(join(repo, 'app.txt'), 'main moved on\n');
+    await git(repo, 'commit', '-am', 'main moved');
+    await writeFile(join(repo, 'app.txt'), 'my unsaved edit\n');
+    await writeFile(join(repo, 'staged.txt'), 'staged\n');
+    await git(repo, 'add', 'staged.txt');
+    const statusBefore = await git(repo, 'status', '--porcelain');
+
+    const at = await resolveCommit(repo, 'feat/fix');
+    const wt = await prepareWorktree(repo, scratch, 'work', { at });
+    await writeFile(join(wt.path, 'app.txt'), 'fixed on the branch\n');
+    const { patch } = await collectChanges(wt.path);
+    await removeWorktree(repo, wt.path);
+
+    expect((await checkApplies(repo, patch)).state).toBe('conflict');
+    expect((await checkApplies(repo, patch, at)).state).toBe('clean');
+    const moved = await checkApplies(repo, patch, (await git(repo, 'rev-parse', 'main')).trim());
+    expect(moved.state).toBe('conflict');
+
+    expect(await git(repo, 'status', '--porcelain')).toBe(statusBefore);
+    expect(await readFile(join(repo, 'app.txt'), 'utf8')).toBe('my unsaved edit\n');
+  });
+});
+
+describe('checkouts a restart left behind', () => {
+  let tempRoot: string;
+  let outside: string;
+
+  beforeEach(async () => {
+    tempRoot = await mkdtemp(join(tmpdir(), 'aflow-wt-temp-'));
+    outside = await mkdtemp(join(tmpdir(), 'aflow-wt-operator-'));
+  });
+
+  afterEach(async () => {
+    for (const session of allSessions()) forgetSession(session.id);
+    await rm(tempRoot, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  });
+
+  it('removes what no session owns under the temp root, and nothing of the operator', async () => {
+    const orphanScratch = await mkdtemp(join(tempRoot, HARNESS_SCRATCH_PREFIX));
+    await prepareWorktree(repo, orphanScratch, 'work');
+    // A checkout whose directory is already gone is still registered.
+    const vanishedScratch = await mkdtemp(join(tempRoot, HARNESS_SCRATCH_PREFIX));
+    await prepareWorktree(repo, vanishedScratch, 'work');
+    await rm(vanishedScratch, { recursive: true, force: true });
+    const stray = await mkdtemp(join(tempRoot, HARNESS_SCRATCH_PREFIX));
+    const liveScratch = await mkdtemp(join(tempRoot, HARNESS_SCRATCH_PREFIX));
+    const live = await prepareWorktree(repo, liveScratch, 'work');
+    recordSession({
+      id: 'hs_live',
+      ownerRunId: 'run-live',
+      bindingId: 'hb',
+      bindingRoot: repo,
+      harnessId: 'edits',
+      worktreePath: live.path,
+      scratchDir: liveScratch,
+      configDir: join(liveScratch, 'harness-config'),
+      conversationId: 'c',
+      baseSha: live.baseSha,
+      createdAt: Date.now(),
+      lastUsedAt: Date.now(),
+      busy: false,
+    });
+    const operators = await prepareWorktree(repo, outside, 'mine');
+    const unrelated = await mkdtemp(join(tempRoot, 'not-ours-'));
+
+    const outcome = await removeOrphanedCheckouts([repo, repo, scratch], tempRoot);
+
+    expect(outcome.removed).toEqual(new Map([[repo, 2]]));
+    expect(outcome.scratchDirs).toBe(2);
+    const listed = await git(repo, 'worktree', 'list', '--porcelain');
+    // By directory name: git records a checkout under its resolved path.
+    expect(listed).not.toContain(basename(orphanScratch));
+    expect(listed).not.toContain(basename(vanishedScratch));
+    expect(listed).toContain(basename(liveScratch));
+    expect(listed).toContain(basename(outside));
+    expect(await exists(orphanScratch)).toBe(false);
+    expect(await exists(stray)).toBe(false);
+    expect(await exists(live.path)).toBe(true);
+    expect(await exists(unrelated)).toBe(true);
+
+    await removeWorktree(repo, live.path);
+    await removeWorktree(repo, operators.path);
+  });
+
+  it('reports nothing when nothing was left behind', async () => {
+    const outcome = await removeOrphanedCheckouts([repo], tempRoot);
+    expect(outcome.removed.size).toBe(0);
+    expect(outcome.scratchDirs).toBe(0);
   });
 });

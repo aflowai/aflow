@@ -166,7 +166,10 @@ export function allSessions(): HarnessSession[] {
   return [...sessions.values()];
 }
 
+/** How every harness run's scratch directory under the temp root is named. */
+export const HARNESS_SCRATCH_PREFIX = 'aflow-harness-';
+
 /** Remove a session's scratch. Failure is never allowed to fail a run. */
-export async function discardScratch(session: HarnessSession): Promise<void> {
+export async function discardScratch(session: Pick<HarnessSession, 'scratchDir'>): Promise<void> {
   await rm(session.scratchDir, { recursive: true, force: true }).catch(() => {});
 }
