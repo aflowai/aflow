@@ -5,7 +5,7 @@
  * Infra runs in Docker; apps run on host for fast iteration and debugging.
  */
 
-import { execSync, spawn } from 'node:child_process';
+import { execSync, spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, writeSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { homedir } from 'node:os';
@@ -363,22 +363,20 @@ function pairedHostEnvPath() {
 /** Set when the profile wanted `executor-host` and yielded to a foreground one already running. */
 let hostExecutorYielded = false;
 
-/** Where `service install` puts the launch agent (`apps/aflow-executor-host/src/service.ts`). */
-const HOST_SERVICE_PLIST = join(
-  homedir(),
-  'Library',
-  'LaunchAgents',
-  'ai.aflow.host-executor.plist',
-);
+/** The launch agent's label (`apps/aflow-executor-host/src/service.ts`). */
+const HOST_SERVICE_LABEL = 'ai.aflow.host-executor';
 
 /**
- * Whether the launch-agent service owns the host lane. Installed, it holds the
- * lane even while no executor process is up: launchd relaunches it with
- * KeepAlive, so a crash-looping one is absent for seconds at a time, and a
- * runner that saw it gone and started its own would end up running beside it.
+ * Whether launchd has the launch-agent service loaded, which then owns the host
+ * lane even while no executor process is up: KeepAlive relaunches it, so a
+ * crash-looping one is absent for seconds at a time, and a runner that saw it
+ * gone and started its own would end up running beside it. The plist alone
+ * proves nothing — `service install` leaves it behind when launchd refuses it.
  */
-function hostServiceInstalled() {
-  return process.platform === 'darwin' && existsSync(HOST_SERVICE_PLIST);
+function hostServiceLoaded() {
+  if (process.platform !== 'darwin') return false;
+  const target = `gui/${process.getuid()}/${HOST_SERVICE_LABEL}`;
+  return spawnSync('launchctl', ['print', target], { stdio: 'ignore' }).status === 0;
 }
 
 /** Whether a host executor already runs here, as the launch-agent service or in a foreground shell. */
@@ -499,10 +497,10 @@ function takeOverHostExecutorWhenFree(env) {
   hostExecutorRecheck = setTimeout(() => {
     hostExecutorRecheck = null;
     if (devRunnerShuttingDown) return;
-    if (hostServiceInstalled()) {
+    if (hostServiceLoaded()) {
       console.log(
-        '[dev-runner] The launch-agent service is installed now and owns the host lane; ' +
-          'not starting executor-host.',
+        '[dev-runner] launchd has the launch-agent service loaded now, and it owns the host ' +
+          'lane; not starting executor-host.',
       );
       return;
     }
@@ -546,12 +544,11 @@ function resolveServices(options) {
             'AFLOW_PAIR_SECRET=<instance secret> yarn workspace @aflow/aflow-executor-host pair --api <url>, ' +
             'then restart this profile.',
         );
-      } else if (hostServiceInstalled()) {
+      } else if (hostServiceLoaded()) {
         services.splice(services.indexOf('executor-host'), 1);
         console.error(
-          '[dev] executor-host not started: the launch-agent service is installed and owns the ' +
-            'host lane — launchd keeps it running, and it serves this stack. ' +
-            '`yarn workspace @aflow/aflow-executor-host service status` says whether it is loaded.',
+          '[dev] executor-host not started: the launch-agent service is loaded by launchd and ' +
+            'owns the host lane — launchd keeps it running, and it serves this stack.',
         );
       } else if (hostExecutorAlreadyRunning()) {
         services.splice(services.indexOf('executor-host'), 1);

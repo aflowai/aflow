@@ -73,17 +73,31 @@ const dev = spawn('yarn', ['dev:local'], { cwd: REPO, stdio: 'inherit', detached
 // the runner's last lines land after that prompt with nothing following them —
 // which reads as a hang. Forwarded once: the runner ignores a repeated signal.
 let stopping = false;
+function signalGroup(signal) {
+  try {
+    process.kill(-dev.pid, signal);
+  } catch {
+    // Already gone; its exit below still ends this process.
+  }
+}
 for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
   process.on(signal, () => {
     if (stopping) return;
     stopping = true;
-    try {
-      process.kill(-dev.pid, signal);
-    } catch {
-      // Already gone; its exit below still ends this process.
-    }
+    signalGroup(signal);
   });
 }
+
+// Ctrl-Z and `fg` reach only this process's group, so without these the stack
+// would keep running and writing to the terminal behind a suspended job. A
+// handler replaces SIGTSTP's default stop, which SIGSTOP then performs.
+process.on('SIGTSTP', () => {
+  signalGroup('SIGTSTP');
+  process.kill(process.pid, 'SIGSTOP');
+});
+process.on('SIGCONT', () => {
+  signalGroup('SIGCONT');
+});
 
 function groupAlive(pgid) {
   try {
