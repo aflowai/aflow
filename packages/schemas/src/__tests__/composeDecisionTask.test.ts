@@ -192,7 +192,7 @@ describe('a decision task in a compose draft', () => {
 
   it('refuses a decision with nothing to read', () => {
     expect(messages([triage({ consumes: [] }), ...downstream]).join()).toContain(
-      'consume at least one upstream output',
+      'consume at least one run input',
     );
   });
 

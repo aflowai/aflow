@@ -1,5 +1,5 @@
 import type { ComposeIntent, DesignSurface, TaskGraphDraft } from '@aflow/schemas';
-import { getAllOperations, isCampaignFieldConsume } from '@aflow/schemas';
+import { getAllOperations, isTaskOutputConsume } from '@aflow/schemas';
 import { collectOperationTaskApiRefs } from '../operationTaskApiRefs.js';
 
 // ============================================================================
@@ -149,9 +149,10 @@ export function validateTaskGraphSelfConsistent(draft: TaskGraphDraft): ComposeV
     // human tasks don't declare `consumes` — skip them.
     const consumes = 'consumes' in task ? (task.consumes ?? []) : [];
     for (const [consIdx, cons] of consumes.entries()) {
-      // Campaign-field consumes carry no taskId/outputKey — their validity
-      // (declared-field reference) is checked at the draft superRefine.
-      if (isCampaignFieldConsume(cons)) continue;
+      // Campaign-field and run-input consumes carry no taskId/outputKey —
+      // campaign references are checked at the draft superRefine, and a run
+      // input is declared by the consume itself.
+      if (!isTaskOutputConsume(cons)) continue;
       if (!indexByTaskId.has(cons.taskId)) {
         violations.push({
           bindAs: 'draft',

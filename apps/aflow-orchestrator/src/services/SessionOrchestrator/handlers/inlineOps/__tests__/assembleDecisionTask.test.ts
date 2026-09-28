@@ -104,4 +104,75 @@ describe('assembling a draft with a decision task', () => {
     });
     expect(byId.get('escalate')?.dependsOn).toEqual(['triage']);
   });
+
+  it('reads a run input directly, declaring it on the workflow', () => {
+    const out = assembleWorkflow(
+      WorkflowAssemblyInputSchema.parse({
+        intent: {
+          intent: 'Route support tickets.',
+          iterationModel: 'process',
+          requiredCapabilities: [],
+          requiredDataSources: [],
+          taskShapeHints: [],
+          pauseForUser: { needed: false },
+        },
+        surface: {
+          integrations: [],
+          operations: ['ai.decision.decide'],
+          policies: { compute: false },
+          bindableButUnbound: [],
+        },
+        draft: {
+          slug: 'ticket-triage',
+          name: 'Ticket Triage',
+          description: 'Route support tickets.',
+          goal: 'Route each ticket to the team that owns it.',
+          outcomes: [
+            { id: 'routed', name: 'Routed', evaluator: { type: 'manual', instruction: 'Routed.' } },
+          ],
+          tasks: [
+            {
+              type: 'decision',
+              taskId: 'triage',
+              consumes: [{ runInput: 'ticket', bindAs: 'ticket', description: 'The ticket text' }],
+              questions: {
+                team: {
+                  type: 'choice',
+                  options: { billing: 'Payments', technical: 'Bugs' },
+                  minConfidence: 0.8,
+                },
+              },
+              routes: [
+                { question: 'team', equals: 'billing', to: ['billing'] },
+                { question: 'team', equals: 'technical', to: ['technical'] },
+              ],
+              onUndecided: ['escalate'],
+            },
+            agent('billing', { consumes: [{ runInput: 'ticket', bindAs: 'ticket' }] }),
+            agent('technical', { consumes: [{ runInput: 'ticket', bindAs: 'ticket' }] }),
+            agent('escalate', { consumes: [{ runInput: 'ticket', bindAs: 'ticket' }] }),
+          ],
+        },
+      }),
+    );
+
+    expect(out.workflow.runInputs).toEqual([
+      { id: 'ticket', required: true, description: 'The ticket text' },
+    ]);
+    const byId = new Map(out.workflow.tasks.map((t) => [t.taskId, t]));
+    expect(byId.get('triage')).toMatchObject({
+      inputBindings: { ticket: { kind: 'run_input', path: 'ticket' } },
+      inputTemplate: { state: { ticket: { $bind: 'ticket' } } },
+    });
+    expect(byId.get('triage')?.dependsOn).toBeUndefined();
+    expect(byId.get('escalate')?.dependsOn).toEqual(['triage']);
+    const { validity } = materializeAndValidateSkillConfig({
+      tasks: out.workflow.tasks,
+      stateVariables: out.workflow.stateVariables,
+      output: out.workflow.output,
+      mode: out.workflow.mode,
+      ...(out.workflow.runInputs ? { runInputs: out.workflow.runInputs } : {}),
+    });
+    expect(validity.status).toBe('valid');
+  });
 });

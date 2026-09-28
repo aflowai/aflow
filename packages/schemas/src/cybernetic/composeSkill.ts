@@ -335,9 +335,31 @@ const CampaignFieldConsumptionSchema = z.object({
   bindAs: z.string().min(1).max(64),
 });
 
+/**
+ * Run-input consume — reads a value the run is started with. The assembler
+ * declares it in the workflow's `runInputs` and lowers the consume to a
+ * `run_input` binding, so the value reaches the task as data rather than as
+ * prose in its instructions.
+ */
+const RunInputConsumptionSchema = z.object({
+  runInput: z
+    .string()
+    .regex(/^[a-zA-Z][a-zA-Z0-9_]{0,63}$/, 'Must be an identifier (no hyphens)')
+    .describe(
+      'The name of a value the run is started with, e.g. "ticket". Every task that consumes the same name reads the same value.',
+    ),
+  bindAs: z.string().min(1).max(64),
+  description: z
+    .string()
+    .max(500)
+    .optional()
+    .describe('What the caller passes under this name. Shown to whoever starts the run.'),
+});
+
 const TaskInputConsumptionSchema = z.union([
   TaskOutputConsumptionSchema,
   CampaignFieldConsumptionSchema,
+  RunInputConsumptionSchema,
 ]);
 type TaskInputConsumption = z.infer<typeof TaskInputConsumptionSchema>;
 
@@ -346,6 +368,20 @@ export function isCampaignFieldConsume(
   c: TaskInputConsumption,
 ): c is z.infer<typeof CampaignFieldConsumptionSchema> {
   return 'campaignField' in c;
+}
+
+/** Narrow a consume to the run-input variant. */
+export function isRunInputConsume(
+  c: TaskInputConsumption,
+): c is z.infer<typeof RunInputConsumptionSchema> {
+  return 'runInput' in c;
+}
+
+/** Narrow a consume to the variant that reads an upstream task's port. */
+export function isTaskOutputConsume(
+  c: TaskInputConsumption,
+): c is z.infer<typeof TaskOutputConsumptionSchema> {
+  return 'taskId' in c;
 }
 
 const TaskCapabilityRefSchema = z.object({
@@ -521,7 +557,7 @@ const DecisionTaskSchema = DecisionTaskFieldsSchema.extend({
     .array(TaskInputConsumptionSchema)
     .default([])
     .describe(
-      'The upstream outputs the questions are asked about. Each bindAs becomes a key of the state the decision model reads, so name them for what they hold.',
+      'What the questions are asked about: run inputs (the value the run is started with, e.g. the incoming ticket) and upstream outputs. Read the raw input directly — a decision placed after an agent that already classified it pays for the agent and gains nothing. Each bindAs becomes a key of the state the decision model reads, so name them for what they hold.',
     ),
 });
 
@@ -642,7 +678,7 @@ export const TaskGraphDraftSchema = z
     for (const t of draft.tasks) {
       if (t.type !== 'operation' || t.inputTemplate !== undefined) continue;
       for (const c of t.consumes) {
-        if (isCampaignFieldConsume(c)) continue;
+        if (!isTaskOutputConsume(c)) continue;
         opConsumedPorts.add(`${c.taskId}::${c.outputKey}`);
       }
     }

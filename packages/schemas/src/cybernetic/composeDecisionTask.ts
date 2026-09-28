@@ -66,7 +66,9 @@ export type DecisionRoute = z.infer<typeof DecisionRouteSchema>;
 export const DecisionTaskFieldsSchema = z.object({
   type: z.literal('decision'),
   taskId: z.string().min(1).max(64),
-  questions: DecisionQuestionsSchema,
+  questions: DecisionQuestionsSchema.describe(
+    'Named questions about the consumed data. Offer only real outcomes as options: uncertainty is not an option — set minConfidence on the question and handle the uncertain case with onUndecided, which uses the model’s calibrated confidence instead of a guessed "unclear" label.',
+  ),
   model: enumWithCustom(DECISION_MODELS)
     .optional()
     .describe('Decision model. The platform default when absent.'),
@@ -224,7 +226,7 @@ export function validateDecisionTasks(tasks: readonly DraftTaskLike[], ctx: z.Re
     if (task.consumes.length === 0) {
       issue(
         ['consumes'],
-        'A decision reads upstream data: consume at least one upstream output. It becomes the state the questions are asked about.',
+        'A decision reads data: consume at least one run input (e.g. { runInput: "ticket", bindAs: "ticket" }) or upstream output. It becomes the state the questions are asked about.',
       );
     }
   });
