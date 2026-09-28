@@ -6,7 +6,8 @@
  */
 
 import { execSync, spawn } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, writeSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -52,8 +53,9 @@ const SERVICE_REGISTRY = {
   // that file's decision; the profile only starts it. `dotenv: false` keeps the
   // shared `.env` and the runner's overrides out of its environment, because an
   // ambient REDIS_URL wins over the paired one and points it at another
-  // instance. Unpaired, or with a daemon already running, it is dropped from
-  // the profile with a hint rather than duplicated or crash-looped.
+  // instance. Unpaired, owned by the launch-agent service, or with a daemon
+  // already running, it is dropped from the profile with a hint rather than
+  // duplicated or crash-looped.
   'executor-host': { cmd: 'yarn executor:host', dotenv: false },
   voice: { cmd: 'yarn voice:dev' },
   web: { cmd: 'yarn web:dev', ports: [3001] },
@@ -358,8 +360,26 @@ function pairedHostEnvPath() {
   return existsSync(envPath) ? envPath : null;
 }
 
-/** Set when the profile wanted `executor-host` and yielded to one already running. */
+/** Set when the profile wanted `executor-host` and yielded to a foreground one already running. */
 let hostExecutorYielded = false;
+
+/** Where `service install` puts the launch agent (`apps/aflow-executor-host/src/service.ts`). */
+const HOST_SERVICE_PLIST = join(
+  homedir(),
+  'Library',
+  'LaunchAgents',
+  'ai.aflow.host-executor.plist',
+);
+
+/**
+ * Whether the launch-agent service owns the host lane. Installed, it holds the
+ * lane even while no executor process is up: launchd relaunches it with
+ * KeepAlive, so a crash-looping one is absent for seconds at a time, and a
+ * runner that saw it gone and started its own would end up running beside it.
+ */
+function hostServiceInstalled() {
+  return process.platform === 'darwin' && existsSync(HOST_SERVICE_PLIST);
+}
 
 /** Whether a host executor already runs here, as the launch-agent service or in a foreground shell. */
 function hostExecutorAlreadyRunning() {
@@ -374,7 +394,33 @@ function hostExecutorAlreadyRunning() {
   }
 }
 
-/** The pids listening on a TCP port here, empty when nothing does. */
+/**
+ * Whether something already listens on a TCP port here, decided by binding it.
+ * Each address is tried on its own because macOS lets a wildcard bind succeed
+ * beside a loopback-only listener and a loopback bind beside a wildcard one.
+ */
+async function portTaken(port) {
+  for (const host of ['0.0.0.0', '::', '127.0.0.1', '::1']) {
+    const inUse = await new Promise((resolve) => {
+      const probe = createServer();
+      probe.once('error', (error) => {
+        resolve(error.code === 'EADDRINUSE');
+      });
+      probe.listen({ port, host, ipv6Only: host === '::' }, () => {
+        probe.close(() => {
+          resolve(false);
+        });
+      });
+    });
+    if (inUse) return true;
+  }
+  return false;
+}
+
+/**
+ * The pids listening on a TCP port here, best effort: empty without lsof, and
+ * missing whatever another user owns when this is not root.
+ */
 function listenersOn(port) {
   try {
     const out = execSync(`lsof -t -sTCP:LISTEN -iTCP:${port} 2>/dev/null || true`, {
@@ -400,17 +446,20 @@ function listenersOn(port) {
  * would kill this stack's server and web, and `tsx watch` would then keep the
  * dead server's parent alive — a stack that looks up while nothing listens.
  */
-function refuseTakenPorts(services) {
-  const taken = services.flatMap((name) =>
-    (SERVICE_REGISTRY[name]?.ports ?? []).flatMap((port) =>
-      listenersOn(port).map((pid) => ({ name, port, pid })),
-    ),
-  );
+async function refuseTakenPorts(services) {
+  const taken = [];
+  for (const name of services) {
+    for (const port of SERVICE_REGISTRY[name]?.ports ?? []) {
+      if (await portTaken(port)) taken.push({ name, port });
+    }
+  }
   if (taken.length === 0) return;
   console.error('');
-  for (const { name, port, pid } of taken) {
+  for (const { name, port } of taken) {
+    const pids = listenersOn(port);
+    const holder = pids.length === 0 ? 'unknown pid' : `pid ${pids.join(', ')}`;
     console.error(
-      `[dev-runner] Not starting: port ${port}, which ${name} needs, is held by pid ${pid}.`,
+      `[dev-runner] Not starting: port ${port}, which ${name} needs, is already in use (${holder}).`,
     );
   }
   console.error(
@@ -450,6 +499,13 @@ function takeOverHostExecutorWhenFree(env) {
   hostExecutorRecheck = setTimeout(() => {
     hostExecutorRecheck = null;
     if (devRunnerShuttingDown) return;
+    if (hostServiceInstalled()) {
+      console.log(
+        '[dev-runner] The launch-agent service is installed now and owns the host lane; ' +
+          'not starting executor-host.',
+      );
+      return;
+    }
     if (hostExecutorAlreadyRunning()) {
       takeOverHostExecutorWhenFree(env);
       return;
@@ -490,13 +546,20 @@ function resolveServices(options) {
             'AFLOW_PAIR_SECRET=<instance secret> yarn workspace @aflow/aflow-executor-host pair --api <url>, ' +
             'then restart this profile.',
         );
+      } else if (hostServiceInstalled()) {
+        services.splice(services.indexOf('executor-host'), 1);
+        console.error(
+          '[dev] executor-host not started: the launch-agent service is installed and owns the ' +
+            'host lane — launchd keeps it running, and it serves this stack. ' +
+            '`yarn workspace @aflow/aflow-executor-host service status` says whether it is loaded.',
+        );
       } else if (hostExecutorAlreadyRunning()) {
         services.splice(services.indexOf('executor-host'), 1);
         hostExecutorYielded = true;
         console.error(
-          '[dev] executor-host not started: a host executor is already running on this machine ' +
-            '(the launch-agent service or a foreground `yarn executor:host`). Only one may run; ' +
-            'it keeps serving this stack, and this runner starts its own once that one exits.',
+          '[dev] executor-host not started: a foreground host executor (`yarn executor:host`) is ' +
+            'already running on this machine. Only one may run; it keeps serving this stack, and ' +
+            'this runner starts its own once that one exits.',
         );
       }
     }
@@ -641,9 +704,28 @@ function setupSignalHandlers() {
         console.log(`[dev-runner] Clearing ports ${ports.join(', ')} if anything still listens...`);
         killListenersOnOwnedPorts(ports);
       }
-      console.log('[dev-runner] Stopped.');
-      process.exit(0);
+      sayStoppedAndExit();
     });
+  };
+
+  // On macOS a piped stdout is asynchronous, and `process.exit` drops whatever
+  // is still queued — the last line most of all. Waiting for the queue first
+  // keeps the earlier lines ahead of this one.
+  const sayStoppedAndExit = () => {
+    const finish = () => {
+      try {
+        writeSync(1, '[dev-runner] Stopped.\n');
+      } catch {
+        // Nowhere left to write it; the exit still matters.
+      }
+      process.exit(0);
+    };
+    if (process.stdout.writableLength === 0) {
+      finish();
+      return;
+    }
+    process.stdout.once('drain', finish);
+    setTimeout(finish, 2_000);
   };
 
   process.on('SIGINT', () => shutdown('SIGINT'));
@@ -696,7 +778,7 @@ async function main() {
       process.exit(1);
     }
   }
-  refuseTakenPorts(services);
+  await refuseTakenPorts(services);
 
   // Check for stale packages (advisory)
   try {

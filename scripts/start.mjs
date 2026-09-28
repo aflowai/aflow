@@ -59,26 +59,55 @@ if (SENTINELS.some((file) => !existsSync(join(REPO, file)))) {
 
 // ── Everything else is already this script's job ──────────────────────────────
 say('handing over to dev:local — datastores, migrations, instance, services');
-const dev = spawn('yarn', ['dev:local'], { cwd: REPO, stdio: 'inherit' });
+// In a process group of its own, which a stop sent here is forwarded to whole.
+// Yarn sits between this process and the runner and passes neither SIGINT nor
+// SIGHUP on — it swallows the first and dies at once on the second — so a signal
+// to this process alone (an IDE's stop button, `kill -INT`) would otherwise stop
+// nothing, and a closed terminal would leave the runner and every service up.
+// Its own group rather than this one: signalling ours would also reach whatever
+// started this process — the IDE, or `tee` on the far side of a pipe.
+const dev = spawn('yarn', ['dev:local'], { cwd: REPO, stdio: 'inherit', detached: true });
 
 // This process stays until the runner has finished its shutdown. Left to the
-// default disposition, Ctrl-C ends it at once, the shell prints its prompt, and
+// default disposition, a stop ends it at once, the shell prints its prompt, and
 // the runner's last lines land after that prompt with nothing following them —
-// which reads as a hang. The runner ignores a repeated signal, so forwarding one
-// it already received from the terminal is harmless.
+// which reads as a hang. Forwarded once: the runner ignores a repeated signal.
+let stopping = false;
 for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
   process.on(signal, () => {
+    if (stopping) return;
+    stopping = true;
     try {
-      dev.kill(signal);
+      process.kill(-dev.pid, signal);
     } catch {
       // Already gone; its exit below still ends this process.
     }
   });
 }
 
+function groupAlive(pgid) {
+  try {
+    process.kill(-pgid, 0);
+    return true;
+  } catch (error) {
+    return error.code === 'EPERM';
+  }
+}
+
+// Well past the runner's own grace period and port sweep.
+const STOP_DEADLINE_MS = 30_000;
+
 dev.on('error', (error) => {
   fail(`could not run yarn dev:local: ${error.message}`);
 });
 dev.on('exit', (code, signal) => {
-  process.exit(code ?? (signal === null ? 1 : 128 + (constants.signals[signal] ?? 0)));
+  const status = code ?? (signal === null ? 1 : 128 + (constants.signals[signal] ?? 0));
+  if (!stopping) process.exit(status);
+  // Yarn's exit is not the runner's: on SIGHUP yarn dies at once while the
+  // runner under it is still stopping, and only the emptied group says it is done.
+  const deadline = Date.now() + STOP_DEADLINE_MS;
+  setInterval(() => {
+    if (groupAlive(dev.pid) && Date.now() < deadline) return;
+    process.exit(status);
+  }, 100);
 });
