@@ -26,7 +26,7 @@ import {
   validationError,
   internalError,
 } from '@aflow/executor-runtime';
-import { HostFilePatchInputSchema, type AflowError } from '@aflow/schemas';
+import { HostFilePatchInputSchema, parsePayloadRef, type AflowError } from '@aflow/schemas';
 
 import {
   HostBindingError,
@@ -59,6 +59,9 @@ async function failure(ctx: ExecutorContext, error: unknown): Promise<StepResult
   );
 }
 
+/** How a unified diff opens: git's own header, or a plain one. */
+const UNIFIED_DIFF_START = /^(?:diff --git |--- )/;
+
 /**
  * The diff the call names, as text: the bytes it carried, or the stored diff its
  * `patchRef` points at. A ref is read through the job's own tenant, so one
@@ -69,6 +72,15 @@ async function diffOf(
   input: z.infer<typeof HostFilePatchInputSchema>,
 ): Promise<string | AflowError> {
   if (input.patchRef === undefined) return input.patch ?? '';
+  const notADiff = validationError(
+    '`patchRef` names a payload that is not a diff. Pass the `patchRef` a ' +
+      '`host.harness.run` result reports.',
+    { patchRef: input.patchRef },
+  );
+  // The kind is in the ref itself, so another step's payload is refused
+  // without reading it — and never reaches git to fail there in git's words.
+  const ref = parsePayloadRef(input.patchRef);
+  if (ref?.form !== 'object' || ref.payloadKind !== 'patch') return notADiff;
   let stored: unknown;
   try {
     stored = await ctx.readPayload(input.patchRef);
@@ -80,13 +92,7 @@ async function diffOf(
       { patchRef: input.patchRef },
     );
   }
-  if (typeof stored !== 'string' || stored === '') {
-    return validationError(
-      '`patchRef` names a payload that is not a diff. Pass the `patchRef` a ' +
-        '`host.harness.run` result reports.',
-      { patchRef: input.patchRef },
-    );
-  }
+  if (typeof stored !== 'string' || !UNIFIED_DIFF_START.test(stored)) return notADiff;
   if (Buffer.byteLength(stored, 'utf8') > DIFF_CEILING_BYTES) {
     return validationError(
       `The diff \`patchRef\` names is over the ${String(DIFF_CEILING_BYTES / (1024 * 1024))} MB ` +

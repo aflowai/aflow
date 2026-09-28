@@ -1,4 +1,8 @@
-import type { SkillCatalogEntry } from '@aflow/schemas';
+import {
+  MAX_PARENT_INPUTS_SERIALIZED_BYTES,
+  STORED_PAYLOAD_REF_PATTERN,
+  type SkillCatalogEntry,
+} from '@aflow/schemas';
 
 /**
  * The push argv, pinned by the skill rather than bound as a whole. Only the
@@ -8,8 +12,8 @@ import type { SkillCatalogEntry } from '@aflow/schemas';
  */
 const PUSH_COMMAND = ['git', 'push', '--set-upstream', 'origin', { $bind: 'branch' }];
 
-/** The operation's own ceiling for a unified diff. */
-const PATCH_MAX_BYTES = 4_194_304;
+/** The run's inputs together, and so the most a diff passed as text can be. */
+const RUN_INPUTS_KB = MAX_PARENT_INPUTS_SERIALIZED_BYTES / 1024;
 
 /**
  * A stored reference, never an inline one: an `inline:` ref carries the diff's
@@ -19,12 +23,17 @@ const PATCH_REF_SCHEMA = {
   type: 'string',
   minLength: 1,
   maxLength: 1024,
-  pattern: '^gs://[a-z0-9_.-]+/.+$',
+  pattern: STORED_PAYLOAD_REF_PATTERN,
   description:
     'The `patchRef` a commission reported, verbatim — a reference to the whole stored diff.',
 };
 
-const PATCH_SCHEMA = { type: 'string', minLength: 1, maxLength: PATCH_MAX_BYTES };
+const PATCH_SCHEMA = {
+  type: 'string',
+  minLength: 1,
+  maxLength: MAX_PARENT_INPUTS_SERIALIZED_BYTES,
+  description: `A diff the operator hands over, within the ${String(RUN_INPUTS_KB)} KB a run's inputs carry together. A commission's change goes as its \`patchRef\`, which names the whole diff at any size.`,
+};
 
 /** GitHub's rule for an owner: letters, digits and single hyphens between them, at most 39. */
 const GITHUB_OWNER_PATTERN = '^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$';
@@ -65,7 +74,7 @@ const BASE_SHA_SCHEMA = {
 
 const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'publish-local-changes',
-  version: 5,
+  version: 6,
   name: 'Publish Local Changes',
   tagline:
     'Commit a patch onto a branch of a connected repository, then push it and open the pull request once the operator approves.',
@@ -75,7 +84,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
 
 **What it needs**: the connected folder; the change — for a commission's work, the \`patchRef\` its result reports, passed as \`patchRef\`, or for a diff the operator hands over, that text as \`patch\`, one or the other; a branch name under the folder's publish prefix; the commit message; a title for the pull request; the repository owner and name, which the folder's \`origin\` remote gives — read it with the folder's shell when it is not already known; and the base branch the pull request targets. A summary is optional and becomes the body of both the commit and the pull request. Ask for whatever is missing instead of inventing it.
 
-**Never pass a commission's \`patch\` text.** It is a copy for reading, cut short on a large change, and the run's inputs are capped at 32 KB together. \`patchRef\` names the whole diff at any size.
+**Never pass a commission's \`patch\` text.** It is a copy for reading, cut short on a large change, and the run's inputs are capped at ${String(RUN_INPUTS_KB)} KB together. \`patchRef\` names the whole diff at any size.
 
 **Before approving**: the run waits at the approval, so the range can be read first — run Local Code Review over \`<base>..<branch>\` while this run waits, and approve or decline on what it finds.
 
@@ -130,8 +139,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
         {
           id: 'patch',
           required: false,
-          description:
-            "A unified diff the operator hands over, as text. It travels in the run's inputs, which are capped at 32 KB together, so it must stay small — and it is never a commission's `patch`, which is a copy for reading and cut short on a large change. Give this or `patchRef`, never both.",
+          description: `A unified diff the operator hands over, as text. It travels in the run's inputs, which are capped at ${String(RUN_INPUTS_KB)} KB together, so it must stay small — and it is never a commission's \`patch\`, which is a copy for reading and cut short on a large change. Give this or \`patchRef\`, never both.`,
           schema: PATCH_SCHEMA,
         },
         {

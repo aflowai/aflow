@@ -690,7 +690,9 @@ describe.runIf(sandboxReadiness().ready)(
             return Promise.resolve(store.get(ref));
           },
           writePayload: (kind: string, data: unknown) => {
-            const ref = `gs://test/${operationId}/${kind}.json`;
+            // The store's own layout: the patch operation reads the kind off it.
+            const step = operationId.replaceAll('.', '_');
+            const ref = `gs://test/tenants/t_1/runs/run-large/steps/${step}/attempt/1/${kind}.json`;
             store.set(ref, data);
             outputs[kind] = data;
             return Promise.resolve(ref);

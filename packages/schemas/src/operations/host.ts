@@ -15,7 +15,7 @@ import { z } from 'zod';
 import { coerceJsonObjectArg } from './jsonObjectArg.js';
 
 import type { OperationRegistration } from '../catalog/operationCatalog.js';
-import { PayloadRefSchema } from '../runtime/payloadRef.js';
+import { PayloadRefSchema, STORED_PAYLOAD_REF_PATTERN } from '../runtime/payloadRef.js';
 
 /**
  * What a branch name and a branch prefix may be, in one place.
@@ -312,11 +312,20 @@ export const HostMcpCallOutputSchema = z.object({
 export const HostFilePatchInputSchema = z
   .object({
     bindingId: HostBindingRef,
-    patchRef: PayloadRefSchema.optional().describe(
-      'The whole diff by reference — the `patchRef` a `host.harness.run` result reports. ' +
-        "This is how a commission's change is passed on, whatever its size. Give this or " +
-        '`patch`, never both.',
-    ),
+    patchRef: z
+      .string()
+      .regex(
+        new RegExp(STORED_PAYLOAD_REF_PATTERN),
+        'A stored reference only — the `patchRef` a `host.harness.run` result reports, ' +
+          'verbatim. An `inline:` reference carries the bytes themselves; a diff handed over ' +
+          'as text goes in `patch`.',
+      )
+      .optional()
+      .describe(
+        'The whole diff by reference — the `patchRef` a `host.harness.run` result reports. ' +
+          "This is how a commission's change is passed on, whatever its size. Give this or " +
+          '`patch`, never both.',
+      ),
     patch: z
       .string()
       .min(1)

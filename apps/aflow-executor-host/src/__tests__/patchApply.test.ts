@@ -775,6 +775,46 @@ describe("a commission's diff taken by reference", () => {
     expect((await git(root, 'status', '--porcelain')).trim()).toBe('');
   });
 
+  it('refuses a ref to text of another kind before git sees it', async () => {
+    const output = REF.replace(/patch\.json$/, 'output.json');
+    const diff = await diffFor(async (d) => {
+      await writeFile(join(d, 'a.txt'), 'one\nNOT A PATCH KIND\nthree\n');
+    });
+    const captured: Captured = {};
+    const result = await createHostPatchHandler(policyPath).execute(
+      contextWithStore({ bindingId: 'hb', patchRef: output }, new Map([[output, diff]]), captured),
+    );
+    expect(result.status).toBe('FAILED');
+    expect(result.error?.classification).toBe('validation');
+    expect(result.error?.message ?? '').toContain('not a diff');
+    expect((await git(root, 'status', '--porcelain')).trim()).toBe('');
+  });
+
+  it('refuses a stored patch whose text does not open like a diff', async () => {
+    const captured: Captured = {};
+    const result = await createHostPatchHandler(policyPath).execute(
+      contextWithStore(
+        { bindingId: 'hb', patchRef: REF },
+        new Map([[REF, 'the harness said it fixed the parser\n']]),
+        captured,
+      ),
+    );
+    expect(result.status).toBe('FAILED');
+    expect(result.error?.message ?? '').toContain('`patchRef` names a payload that is not a diff');
+    expect(result.error?.message ?? '').not.toContain('git');
+    expect((await git(root, 'status', '--porcelain')).trim()).toBe('');
+  });
+
+  it('refuses an inline ref, which carries the bytes rather than naming them', async () => {
+    const captured: Captured = {};
+    const inline = `inline:${Buffer.from(JSON.stringify('diff --git a/x b/x\n')).toString('base64')}`;
+    const result = await createHostPatchHandler(policyPath).execute(
+      contextFor({ bindingId: 'hb', patchRef: inline }, captured),
+    );
+    expect(result.status).toBe('FAILED');
+    expect(result.error?.message ?? '').toContain('A stored reference only');
+  });
+
   it("refuses a ref to another tenant's payload as a permission, not a missing diff", async () => {
     const captured: Captured = {};
     const context = {

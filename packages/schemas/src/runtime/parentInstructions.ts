@@ -54,7 +54,8 @@ export const StoredParentInstructionsSchema = z.union([
 export type StoredParentInstructions = z.infer<typeof StoredParentInstructionsSchema>;
 
 const MAX_PARENT_INPUTS_KEYS = 20;
-const MAX_PARENT_INPUTS_SERIALIZED_BYTES = 32 * 1024;
+/** What a run's inputs may come to together, serialised — the most any one input can carry. */
+export const MAX_PARENT_INPUTS_SERIALIZED_BYTES = 32 * 1024;
 
 export const ParentInputsRecordSchema = z
   .record(z.unknown())

@@ -8,8 +8,14 @@ import { z } from 'zod';
 // Payload Reference
 // ============================================================================
 
-/** GCS URI format: gs://bucket/path/to/object */
-const gcsUriRegex = /^gs:\/\/[a-z0-9_.-]+\/.+$/;
+/**
+ * A reference to a stored object — gs://bucket/path/to/object — as opposed to
+ * an inline one, which carries its bytes in the reference itself. A string so a
+ * JSON Schema can carry the same rule.
+ */
+export const STORED_PAYLOAD_REF_PATTERN = '^gs://[a-z0-9_.-]+/.+$';
+
+const gcsUriRegex = new RegExp(STORED_PAYLOAD_REF_PATTERN);
 
 /** Inline payload format: inline:<base64-encoded-json> */
 const inlinePayloadRegex = /^inline:[A-Za-z0-9+/=]+$/;

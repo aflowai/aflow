@@ -4,6 +4,7 @@ import {
   HostFilePatchInputSchema,
   HostFilePatchOutputSchema,
   isEvalPlaneOperation,
+  MAX_PARENT_INPUTS_SERIALIZED_BYTES,
   substituteTemplateBinds,
 } from '@aflow/schemas';
 import { PUBLISH_LOCAL_CHANGES } from './publishLocalChanges.js';
@@ -239,8 +240,18 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     const refPattern = new RegExp((runInput('patchRef')?.schema as { pattern: string }).pattern);
     expect(refPattern.test(ref)).toBe(true);
     expect(refPattern.test('inline:ZGlmZg==')).toBe(false);
+    // The operation holds the same line, so the skill and a direct call agree.
+    const inline = HostFilePatchInputSchema.safeParse({ ...byRef, patchRef: 'inline:ZGlmZg==' });
+    expect(inline.success).toBe(false);
+    expect(inline.error?.issues[0]?.message).toContain('A stored reference only');
     expect(runInput('patchRef')?.description).toContain('the `patchRef` its result reports');
     expect(runInput('patch')?.description).toContain('must stay small');
+    // Text can be no longer than the run's inputs carry together, and the
+    // schema says so where a refused value is reported.
+    const patchSchema = runInput('patch')?.schema as { maxLength: number; description: string };
+    expect(patchSchema.maxLength).toBe(MAX_PARENT_INPUTS_SERIALIZED_BYTES);
+    expect(patchSchema.description).toContain("32 KB a run's inputs carry together");
+    expect(patchSchema.description).toContain('`patchRef`');
     expect(PUBLISH_LOCAL_CHANGES.description).toContain("Never pass a commission's `patch` text.");
   });
 

@@ -48,6 +48,20 @@ const GIT_TIMEOUT_MS = 30_000;
 export const DIFF_CEILING_BYTES = 8 * 1024 * 1024;
 /** How much of a diff a run's result carries inline, for reading. */
 export const INLINE_DIFF_CAP_BYTES = 2 * 1024 * 1024;
+
+/**
+ * The longest start of `text` that fits in `maxBytes` of UTF-8. The cut lands
+ * on a character boundary: a cut inside a multi-byte character decodes to
+ * U+FFFD, which is neither a prefix of the text nor within the cap.
+ */
+export function utf8Prefix(text: string, maxBytes: number): string {
+  const bytes = Buffer.from(text, 'utf8');
+  if (bytes.length <= maxBytes) return text;
+  let end = maxBytes;
+  // A continuation byte (10xxxxxx) at the cut means the character straddles it.
+  while (end > 0 && ((bytes[end] ?? 0) & 0xc0) === 0x80) end -= 1;
+  return bytes.subarray(0, end).toString('utf8');
+}
 /**
  * Room for what an apply says about itself, which is a line per file and so
  * grows with the diff rather than being bounded by it. Node kills a child that

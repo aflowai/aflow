@@ -89,6 +89,7 @@ import {
   removeWorktree,
   resolveCommit,
   snapshotRefs,
+  utf8Prefix,
   WorktreeError,
   type LinkedWorktree,
 } from '../worktree.js';
@@ -774,9 +775,7 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
     const patch = changes.patch === '' ? '' : scrubSecret(changes.patch, credential);
     const patchRef = patch === '' ? undefined : await ctx.writePayload('patch', patch);
     const patchTruncated = Buffer.byteLength(patch, 'utf8') > INLINE_DIFF_CAP_BYTES;
-    const inlinePatch = patchTruncated
-      ? Buffer.from(patch, 'utf8').subarray(0, INLINE_DIFF_CAP_BYTES).toString('utf8')
-      : patch;
+    const inlinePatch = patchTruncated ? utf8Prefix(patch, INLINE_DIFF_CAP_BYTES) : patch;
 
     const work: Record<string, unknown> = {
       runId: result.processId,
