@@ -1,13 +1,11 @@
 name: CI
 
-# A pull request's checks run against a merge commit derived when the branch was
-# last updated, never against `main` as it stands when the button is pressed — so
-# two pull requests that pass independently can break `main` together, and nothing
-# says so. That is the only reason `push` is here.
+# Pull requests only. Two that pass independently can still break `main`
+# together; the next pull request's checks run against that `main` and say so,
+# which a second run on every merge would only have said sooner, at the cost of
+# repeating what each pull request already proved.
 on:
   pull_request:
-    branches: [main]
-  push:
     branches: [main]
   schedule:
     # Advisories are published against an unchanged lockfile, so the audit has
@@ -167,10 +165,6 @@ jobs:
   audit:
     name: Dependency audit
     runs-on: ubuntu-latest
-    # A merge introduces no lockfile state the pull request did not already audit,
-    # and the registry endpoint fails often enough that re-running it on main would
-    # report a timeout as a red default branch.
-    if: github.event_name != 'push'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
