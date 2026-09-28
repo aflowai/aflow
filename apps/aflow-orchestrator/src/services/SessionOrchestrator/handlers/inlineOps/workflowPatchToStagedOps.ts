@@ -246,14 +246,14 @@ function convertOne(
   // can express the same intent via `replace`/`add`/`remove`.
   if (op.op === 'move' || op.op === 'copy' || op.op === 'test') {
     return {
-      unsupported: `Op shape "${op.op} ${op.path}" is not supported by workflow_refinement. Use replace/add/remove, or workflow.manage.put for a full rewrite.`,
+      unsupported: `Op shape "${op.op} ${op.path}" is not supported by workflow_refinement. Express the same change with replace, add or remove.`,
     };
   }
 
   // /iteration — replace the whole iteration policy. Maps to the typed op
   // by extracting the fields that the typed op actually carries (auto is
-  // not part of update_iteration_policy; if the patch tries to change it,
-  // surface as unsupported so the operator-HTTP route can handle it).
+  // not part of update_iteration_policy; turning automatic runs on or off is
+  // the operator's, through their HTTP route).
   if (op.op === 'replace' && segments.length === 1 && segments[0] === 'iteration') {
     const value = (op.value ?? {}) as {
       auto?: boolean;
@@ -263,7 +263,7 @@ function convertOne(
     };
     if (value.auto !== undefined && existing.iteration.auto !== value.auto) {
       return {
-        unsupported: `replace ${op.path} changes "auto", which update_iteration_policy does not cover. Use workflow.manage.put for iteration.auto flips.`,
+        unsupported: `replace ${op.path} changes "auto". Whether a workflow re-runs on its own is the operator's decision; leave auto as it is and change the other iteration fields, or ask the operator.`,
       };
     }
     return {
@@ -387,7 +387,7 @@ function convertOne(
   }
 
   return {
-    unsupported: `Op shape "${op.op} ${op.path}" is not yet supported for agent-initiated workflow patches. Supported shapes: task add/remove/replacements under /tasks, replace /outcomes/{i}/evaluator/target, add/replace/remove under /stateVariables or /output, and replace /iteration. For wholesale rewrites use workflow.manage.put.`,
+    unsupported: `Op shape "${op.op} ${op.path}" is not yet supported for agent-initiated workflow patches. Supported shapes: task add/remove/replacements under /tasks, replace /outcomes/{i}/evaluator/target, add/replace/remove under /stateVariables or /output, and replace /iteration. Tasks may be addressed as /tasks/{taskId} or /tasks/{index}. Break a larger change into these shapes; each becomes part of one proposal.`,
   };
 }
 

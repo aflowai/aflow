@@ -131,3 +131,9 @@ describe('composeHelmsmanSurface', () => {
     expect(twice).toEqual(once);
   });
 });
+
+describe('Helmsman does not hold workflow.manage.put', () => {
+  it('is absent from the promotable set — skills reach the playbook through compose-skill', () => {
+    expect(HELMSMAN_DISCOVERY_PRESET).not.toContain('workflow.manage.put');
+  });
+});

@@ -55,7 +55,6 @@ export const HELMSMAN_DISCOVERY_PRESET: readonly string[] = [
   // the list ops (context carries the active list), archive/purge preview.
   'workflow.manage.list',
   'workflow.manage.patch',
-  'workflow.manage.put',
   'workflow.run.list_attention',
   'workflow.ledger.get',
   'workflow.learn',

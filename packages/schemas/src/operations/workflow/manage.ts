@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ProcedureActivationSchema, ProcedureOriginSchema } from '../../cybernetic/context.js';
+import { ProcedureActivationSchema } from '../../cybernetic/context.js';
 import { WorkflowModeSchema, WorkflowRunStatusSchema, WorkflowStatusSchema } from './enums.js';
 import { OutcomeSchema } from './outcome.js';
 import { WorkflowRunInputSchema } from './runInput.js';
@@ -16,45 +16,65 @@ import { WorkflowLedgerEntrySchema, WorkflowTrajectoryRowSchema } from './ledger
 // ============================================================================
 
 // --- workflow.manage.put ---
-// Upsert / full-replace a workflow. Replaces the legacy `create` + full-form
-// `update` in one consolidated verb. For partial edits use `workflow.manage.patch`.
+// Creates a workflow as a draft. Changing an existing workflow is
+// workflow.manage.patch, whose definition changes become a proposal the
+// operator ratifies; approving a workflow is the operator's.
+
+/**
+ * Fields a writer might send that are not the writer's to set. Refused by
+ * name, so the caller learns which path does what it wanted.
+ */
+const PUT_FIELDS_NOT_THE_WRITERS: Readonly<Record<string, string>> = {
+  writeMode:
+    'workflow.manage.put only creates. Change an existing workflow with workflow.manage.patch; a definition change becomes a proposal the operator ratifies.',
+  expectedRevision:
+    'workflow.manage.put only creates, so there is no revision to expect. Change an existing workflow with workflow.manage.patch.',
+  status:
+    'A workflow written by an agent starts as a draft; the operator approves it. Omit status.',
+  origin: 'Origin is recorded by the platform, not claimed by the writer. Omit origin.',
+};
 
 export const WorkflowPutInputSchema = z
-  .object({
-    slug: z
-      .string()
-      .regex(/^[a-z0-9][a-z0-9-]*[a-z0-9]$/)
-      .min(3)
-      .max(64),
-    /**
-     * Write semantics:
-     *   - `upsert` (default): create if absent, replace if present.
-     *   - `create`: error if the workflow already exists (legacy `create` behavior).
-     *   - `overwrite`: error if the workflow does NOT exist (strict replace).
-     */
-    writeMode: z.enum(['upsert', 'create', 'overwrite']).default('upsert'),
-    name: z.string().min(1).max(120),
-    description: z.string().max(2000).optional(),
-    outcomes: z.array(OutcomeSchema).min(1).max(10),
-    mode: WorkflowModeSchema,
-    tasks: z.array(WorkflowTaskSchema).min(1).max(20),
-    /** 104j §6.1: Workflow-level state variable declarations. */
-    stateVariables: z.array(WorkflowStateVariableSchema).max(20).default([]),
-    /** Declared run-input contract — declaration only; enforcement lands later. */
-    runInputs: z.array(WorkflowRunInputSchema).max(20).default([]),
-    output: WorkflowOutputDeclarationSchema.optional().describe(
-      'Primary + guidance only; values derive from stateVariables × promoteOutputs',
-    ),
-    iteration: IterationPolicySchema.optional(),
-    budget: WorkflowBudgetSchema.optional(),
-    assignedAgent: z.string().optional(),
-    taskAssignments: z.record(z.string()).optional(),
-    status: WorkflowStatusSchema.default('draft'),
-    activation: ProcedureActivationSchema.optional(),
-    origin: ProcedureOriginSchema.optional(),
-    /** Optimistic concurrency — if provided, put fails when the current revision differs. */
-    expectedRevision: z.number().int().nonnegative().optional(),
-  })
+  .object(
+    {
+      slug: z
+        .string()
+        .regex(/^[a-z0-9][a-z0-9-]*[a-z0-9]$/)
+        .min(3)
+        .max(64),
+      name: z.string().min(1).max(120),
+      description: z.string().max(2000).optional(),
+      outcomes: z.array(OutcomeSchema).min(1).max(10),
+      mode: WorkflowModeSchema,
+      tasks: z.array(WorkflowTaskSchema).min(1).max(20),
+      /** 104j §6.1: Workflow-level state variable declarations. */
+      stateVariables: z.array(WorkflowStateVariableSchema).max(20).default([]),
+      /** Declared run-input contract — declaration only; enforcement lands later. */
+      runInputs: z.array(WorkflowRunInputSchema).max(20).default([]),
+      output: WorkflowOutputDeclarationSchema.optional().describe(
+        'Primary + guidance only; values derive from stateVariables × promoteOutputs',
+      ),
+      iteration: IterationPolicySchema.optional(),
+      budget: WorkflowBudgetSchema.optional(),
+      assignedAgent: z.string().optional(),
+      taskAssignments: z.record(z.string()).optional(),
+      activation: ProcedureActivationSchema.optional(),
+    },
+    {
+      errorMap: (issue, ctx) =>
+        issue.code === z.ZodIssueCode.unrecognized_keys
+          ? {
+              message: issue.keys
+                .map(
+                  (key) =>
+                    `${key}: ${PUT_FIELDS_NOT_THE_WRITERS[key] ?? 'not a field of workflow.manage.put.'}`,
+                )
+                .join(' '),
+            }
+          : { message: ctx.defaultError },
+    },
+  )
+  .strict()
   .superRefine((data, ctx) => {
     for (let i = 0; i < data.tasks.length; i++) {
       const task = data.tasks[i];
@@ -67,12 +87,8 @@ export const WorkflowPutOutputSchema = z.object({
   id: z.string().uuid(),
   slug: z.string(),
   revision: z.number().int(),
-  status: WorkflowStatusSchema,
+  status: z.literal('draft').describe('It runs once the operator approves it from the skill page.'),
   path: z.string(),
-  /** True if this call created the workflow, false if it replaced an existing one. */
-  created: z.boolean(),
-  /** Non-fatal advisory — e.g. "a run is currently active; edits apply to the next run". */
-  warning: z.string().optional(),
 });
 export type WorkflowPutOutput = z.infer<typeof WorkflowPutOutputSchema>;
 

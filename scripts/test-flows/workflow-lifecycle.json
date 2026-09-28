@@ -16,7 +16,6 @@
         "name": "Create test workflow",
         "config": {
           "slug": "test-lifecycle",
-          "writeMode": "upsert",
           "name": "Test Lifecycle Workflow",
           "description": "Integration test for workflow lifecycle",
           "mode": "optimization",
@@ -55,8 +54,7 @@
               "dependsOn": ["train"],
               "optional": true
             }
-          ],
-          "status": "approved"
+          ]
         },
         "onSuccess": {
           "next": [{ "stepId": "start-run", "priority": 1 }]

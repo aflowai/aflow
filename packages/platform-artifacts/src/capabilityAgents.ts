@@ -164,8 +164,8 @@ A **workflow** is a single entity combining:
 2. **Choose mode** — optimization (iterate to improve), process (recurring), project (one-shot)
 3. **Set outcomes** — threshold metrics, pattern matches, LLM judge rubrics, or manual
 4. **Define tasks** — each task has a goal, optional agent/operation assignment, dependencies
-5. **Write it** — Call \`workflow.manage.put\` with writeMode="upsert" (default) to create or replace the definition. Returns \`created: true\` on first write, \`false\` on replace.
-6. **Approve** — Flip status draft → approved via \`workflow.manage.patch\` with a single \`replace\` op at \`/status\`. Freezes the definition for execution.
+5. **Write it** — Call \`workflow.manage.put\` to create the workflow. It is created as a draft; \`put\` never replaces an existing workflow.
+6. **Approval** — The operator approves the draft from the skill page; it cannot run until then. Tell the user it is waiting for their approval. Agents do not approve workflows.
 
 ### Editing an existing workflow
 
@@ -173,25 +173,25 @@ A **workflow** is a single entity combining:
 
 **Metadata-only patches direct-mutate** (no operator ratification — lifecycle/admin changes):
 - Bump run budget: \`[{ "op": "replace", "path": "/budget/maxRuns", "value": 30 }]\`
-- Approve: \`[{ "op": "replace", "path": "/status", "value": "approved" }]\`
 - Mark completed: \`[{ "op": "replace", "path": "/status", "value": "completed" }]\`
+- Setting \`/status\` to \`approved\` is refused — approving is the operator's.
 - Rename: \`[{ "op": "replace", "path": "/name", "value": "..." }]\`
 - Eligible paths: \`/name\`, \`/description\`, \`/assignedAgent\`, \`/taskAssignments\`, \`/budget\`, \`/status\` (and any sub-path under these).
 
 **Definition-touching patches stage a \`workflow_refinement\` proposal** (operator reviews + ratifies):
-- Edit a task goal: \`[{ "op": "replace", "path": "/tasks/0/goal", "value": "Updated goal text." }]\`
+- Edit a task goal: \`[{ "op": "replace", "path": "/tasks/0/goal", "value": "Updated goal text." }]\` (a task may also be addressed by id: \`/tasks/prepare-data/goal\`)
 - Edit task dependencies: \`[{ "op": "replace", "path": "/tasks/2/dependsOn", "value": ["task-a", "task-b"] }]\`
 - Edit a task's context spec: \`[{ "op": "replace", "path": "/tasks/0/context", "value": { "strategy": "scoped", ... } }]\`
 - Add or remove a task: \`[{ "op": "add", "path": "/tasks/-", "value": { ... full task body ... } }]\` / \`[{ "op": "remove", "path": "/tasks/0" }]\`
 - Bump outcome target: \`[{ "op": "replace", "path": "/outcomes/0/evaluator/target", "value": 0.95 }]\`
-- Tune iteration policy: \`[{ "op": "replace", "path": "/iteration", "value": { "auto": false, "maxConsecutiveRuns": 5, ... } }]\` (the \`auto\` field cannot change through this path — use put).
+- Tune iteration policy: \`[{ "op": "replace", "path": "/iteration", "value": { "auto": false, "maxConsecutiveRuns": 5, ... } }]\` (the \`auto\` field is the operator's and cannot change through a patch).
 - The response payload includes the \`proposalId\` and a per-check pass/fail summary. The workflow is NOT updated until the operator ratifies the proposal — and the operator sees the validation checklist (schema, graph, port compatibility, skill-grant integrity, semantic consistency, capability availability) before clicking Ratify.
 
 **Mixing metadata and definition ops in a single patch is rejected** (\`WORKFLOW_PATCH_MIXED\`) — split into two calls.
 
-**Anything outside the supported typed ops** (e.g. \`/tasks/{i}/name\`, \`/tasks/{i}/inputBindings\`, raw move/copy) returns \`WORKFLOW_PATCH_UNSUPPORTED\`. For wholesale restructures use \`workflow.manage.put\` again (upsert replaces).
+**Anything outside the supported typed ops** (e.g. \`/tasks/{i}/name\`, \`/tasks/{i}/inputBindings\`, raw move/copy) returns \`WORKFLOW_PATCH_UNSUPPORTED\`, naming the shapes that are supported. Break a larger restructure into those shapes; they are staged together as one proposal.
 
-Use \`expectedRevision\` on either op for optimistic concurrency when other writers may be active.
+Use \`expectedRevision\` on a patch for optimistic concurrency when other writers may be active.
 
 ### Executing (run-time)
 1. **Load context** — \`workflow.manage.get\` returns workflow + ledger summary (including a \`budget\` block with maxRuns/runsUsed/runsRemaining/exceeded) and active learnings. This is the one-stop status call; do not fall back to \`memory.store.query\` for workflow state.
