@@ -321,7 +321,9 @@ export function TenantCredentialsPage() {
                   const status = statuses.get(provider.providerId);
                   const scopedCred = getScopedCredential(provider.providerId, scope);
                   const isResolved = status?.resolvedScope === scope;
-                  const testable = provider.category === 'llm' && Boolean(scopedCred);
+                  const testable =
+                    (provider.category === 'llm' || provider.category === 'decision') &&
+                    Boolean(scopedCred);
 
                   return (
                     <ProviderRow

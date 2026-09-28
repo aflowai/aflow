@@ -97,16 +97,23 @@ export interface JudgeMessageContext {
  * Contains the rubric, run artifacts, and any calibration context.
  */
 export function buildJudgeUserMessage(ctx: JudgeMessageContext): string {
+  return [
+    `## Criterion: ${ctx.criterion.name}`,
+    '',
+    '## Rubric',
+    formatRubric(ctx.criterion.rubric),
+    '',
+    buildJudgeEvidenceMessage(ctx),
+  ].join('\n');
+}
+
+/**
+ * Everything a judge is shown except the rubric: the reference, the reply, the
+ * tool results and the run's artifacts. A decision-model judge reads this as
+ * its state and asks each rubric entry as its own question.
+ */
+export function buildJudgeEvidenceMessage(ctx: JudgeMessageContext): string {
   const parts: string[] = [];
-
-  // Criterion name
-  parts.push(`## Criterion: ${ctx.criterion.name}`);
-  parts.push('');
-
-  // Rubric
-  parts.push('## Rubric');
-  parts.push(formatRubric(ctx.criterion.rubric));
-  parts.push('');
 
   // Reference answer (if present)
   if (ctx.criterion.referenceAnswer) {

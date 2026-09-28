@@ -15,6 +15,7 @@ import {
   AiImageEditInputSchema,
   AiVideoGenerateInputSchema,
   AiVideoFromImageInputSchema,
+  AiDecideInputSchema,
   type AflowError,
   type TenantId,
   type ValidationErrorDetail,
@@ -22,6 +23,7 @@ import {
   type AiImageEditInput,
   type AiVideoGenerateInput,
   type AiVideoFromImageInput,
+  type AiDecideInput,
 } from '@aflow/schemas';
 import { AIClientError } from '@aflow/ai-client';
 import { positiveMsEnv } from '@aflow/lib';
@@ -52,6 +54,7 @@ import {
   handleGenerateStream,
   handleGenerateJson,
   handleEmbed,
+  handleDecide,
   handleAgentTurn,
   handleImageGenerate,
   handleImageEdit,
@@ -154,6 +157,10 @@ export class AiHandler implements StepHandler {
       'ai.embedding.generate': {
         schema: AiEmbedInputSchema,
         handler: (ctx, input) => handleEmbed(ctx, input as AiEmbedInput, depsForHandlers),
+      },
+      'ai.decision.decide': {
+        schema: AiDecideInputSchema,
+        handler: (ctx, input) => handleDecide(ctx, input as AiDecideInput, depsForHandlers),
       },
       'ai.agent.turn': {
         schema: AgentTurnInputSchema,

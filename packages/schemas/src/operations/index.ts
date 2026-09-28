@@ -16,6 +16,7 @@
  */
 
 export * from './ai.js';
+export * from './aiDecision.js';
 export * from './api.js';
 export * from './memory.js';
 export * from './user.js';

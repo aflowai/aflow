@@ -2,7 +2,7 @@ import {
   deepEqual,
   getOperation,
   inferTaskType,
-  isCampaignFieldConsume,
+  isTaskOutputConsume,
   isUsableJsonSchema,
   toJsonSchemaSync,
   type TaskGraphDraftTask,
@@ -84,7 +84,7 @@ export function deriveOpBoundDraftPortShapes(draftTasks: TaskGraphDraftTask[]): 
     const opProps = opInputProps(task.operationId);
     if (!opProps) continue;
     for (const c of task.consumes) {
-      if (isCampaignFieldConsume(c)) continue;
+      if (!isTaskOutputConsume(c)) continue;
       const opFieldSchema = opProps[c.bindAs];
       // Record any USABLE op field (review Finding 2 — a primitive op field
       // like `{type:'string',format:'uuid'}` must still fill an omitted port,

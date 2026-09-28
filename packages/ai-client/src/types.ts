@@ -8,6 +8,8 @@ import type {
   StepExecutionId,
   ImageReferenceRole,
   AsyncJobCost,
+  DecisionEntry,
+  DecisionQuestions,
 } from '@aflow/schemas';
 
 // ============================================================================
@@ -469,6 +471,44 @@ export interface GenerateEmbeddingResponse {
 }
 
 // ============================================================================
+// Decision Types
+// ============================================================================
+
+export interface DecideRequest extends AIRequestOptions {
+  state: DecisionEntry;
+  questions: DecisionQuestions;
+}
+
+/**
+ * A decision model's answer as the provider reports it. Whether the answer
+ * clears a question's `minConfidence` is the operation's call, not the
+ * provider's, so nothing here says so.
+ */
+export type ProviderDecisionAnswer =
+  | {
+      type: 'choice';
+      choice: string;
+      confidence: number;
+      probabilities: Record<string, number>;
+    }
+  | {
+      type: 'score';
+      score: number;
+      confidence: number;
+      probabilities: Record<string, number>;
+    }
+  | { type: 'yes_no'; probability: number };
+
+export interface DecideResponse {
+  answers: Record<string, ProviderDecisionAnswer>;
+  usage: TokenUsage;
+  cost?: CostBreakdown | undefined;
+  model: string;
+  provider: AIProvider;
+  providerRequestId?: string | undefined;
+}
+
+// ============================================================================
 // Image Generation Types
 // ============================================================================
 
@@ -688,6 +728,7 @@ export const AIProviderSchema = z.enum([
   'fireworks',
   'xai',
   'runware',
+  'typesafe',
   'local',
 ]);
 export type AIProvider = z.infer<typeof AIProviderSchema>;
@@ -753,6 +794,12 @@ export interface ModelCapabilities {
   /** Supports video generation (output) */
   videoGeneration?: boolean | undefined;
   /**
+   * Answers typed questions about a state (a choice, a rubric score, a yes/no)
+   * with calibrated probabilities, and writes no text. A decision model serves
+   * `decide` and nothing else.
+   */
+  decision?: boolean | undefined;
+  /**
    * How many reference images the model honours per role. Absent when the
    * model conditions on the prompt alone — passing references to such a model
    * returns a plausible image with none of the requested consistency, so the
@@ -812,7 +859,7 @@ export interface ModelTraits {
   /** 1 = basic, 5 = frontier intelligence */
   intelligence?: number;
   /** Primary output modality */
-  outputType?: 'text' | 'image' | 'video' | 'audio' | 'embedding';
+  outputType?: 'text' | 'image' | 'video' | 'audio' | 'embedding' | 'decision';
 }
 
 /**
@@ -883,6 +930,7 @@ export interface UsageRecord {
     | 'generate_embedding'
     | 'generate_image'
     | 'generate_video'
+    | 'decide'
     | 'call_tool'
     | undefined;
   usage: TokenUsage;

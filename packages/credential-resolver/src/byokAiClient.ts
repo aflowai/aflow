@@ -17,7 +17,15 @@ import { credentialMissingMessage } from './errors.js';
 
 const CLIENT_CACHE_TTL_MS = 300_000;
 
-const BYOK_PROVIDERS = new Set(['openai', 'anthropic', 'google', 'openrouter', 'fireworks', 'xai']);
+const BYOK_PROVIDERS = new Set([
+  'openai',
+  'anthropic',
+  'google',
+  'openrouter',
+  'fireworks',
+  'xai',
+  'typesafe',
+]);
 
 /**
  * Provider for a model ref, narrowed to those a caller can bring a key for.

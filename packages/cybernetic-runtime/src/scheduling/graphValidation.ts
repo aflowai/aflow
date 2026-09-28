@@ -19,6 +19,7 @@ import {
 } from '@aflow/schemas';
 import { parseOutputComparison, parseTaskComparison } from './graph.js';
 import { parseOutputPath } from './outputPath.js';
+import { resolveSchemaPath } from './outputPathSchema.js';
 import { bindingStaticSchema } from './bindingStaticSchema.js';
 import { getResumeAjv } from '../resumeAjv.js';
 
@@ -32,6 +33,8 @@ export interface GraphValidationError {
     | 'missing_dep'
     | 'dangling_when_ref'
     | 'unsupported_when_expression'
+    /** A `when` reads an output path the referenced task's output schema does not have. */
+    | 'when_output_path_unknown'
     | 'duplicate_task_id'
     | 'reserved_task_id'
     | 'binding_dangling_task_ref'
@@ -274,6 +277,8 @@ export function validateWorkflowGraph(
     }
   }
 
+  validateWhenOutputPaths(tasks, errors);
+
   validatePollPolicies(tasks, errors);
 
   validateCapabilityDeclarations(tasks, errors);
@@ -471,6 +476,59 @@ export function validateWorkflowGraph(
 }
 
 // ============================================================================
+
+/**
+ * The schema a task's output is known to have, when one is known.
+ *
+ * A projected operation task outputs its projection, which its output contract
+ * describes; an unprojected one outputs what its operation returns. Any other
+ * task is described by its output contract when it declares one.
+ */
+function taskOutputSchema(task: WorkflowTask): Record<string, unknown> | undefined {
+  if (isOperationTask(task) && task.outputProjection === undefined) {
+    const outputZod = task.operation ? getOperation(task.operation)?.outputZod : undefined;
+    return outputZod ? (toJsonSchemaSync(outputZod) as Record<string, unknown>) : undefined;
+  }
+  return task.outputContract?.schema;
+}
+
+/**
+ * A `when` that reads a path its producer never emits skips its task on every
+ * run, and nothing reports it: a missing reference under `onMissingRef: 'skip'`
+ * looks exactly like a branch not taken. Refusing it here turns a typo into a
+ * diagnostic that names the fields that do exist.
+ */
+function validateWhenOutputPaths(tasks: WorkflowTask[], errors: GraphValidationError[]): void {
+  const byId = new Map(tasks.map((t) => [t.taskId, t]));
+  for (const task of tasks) {
+    if (!task.when) continue;
+    for (const expression of predicateExpressions(task.when)) {
+      const parsed = parseTaskComparison(expression.trim());
+      if (parsed?.subject.kind !== 'output') continue;
+      const producer = byId.get(parsed.taskId);
+      if (!producer) continue;
+      const segments = parseOutputPath(parsed.subject.field);
+      if (!segments) continue;
+      const head = segments[0];
+      if (head?.kind === 'key' && head.key === POLL_RESERVED_OUTPUT_KEY) continue;
+      const schema = taskOutputSchema(producer);
+      if (!schema) continue;
+      const result = resolveSchemaPath(schema, segments);
+      if (result.kind !== 'missing') continue;
+      errors.push({
+        kind: 'when_output_path_unknown',
+        taskIds: [task.taskId, producer.taskId],
+        field: parsed.subject.field,
+        detail:
+          `Task "${task.taskId}" reads tasks.${producer.taskId}.output.${parsed.subject.field}, ` +
+          `but "${producer.taskId}"'s output has no ${result.at}` +
+          (result.available.length > 0
+            ? ` — the fields there are: ${result.available.join(', ')}.`
+            : '.'),
+      });
+    }
+  }
+}
 
 function isOperationTask(task: WorkflowTask): boolean {
   try {
@@ -1086,6 +1144,13 @@ function validateTemplateOpInput(
         const childSchema = props[key];
         if (isRecord(childSchema)) checkNode(child, childSchema, joinField(path, key));
       }
+      // A record-shaped position (every entry validated by additionalProperties
+      // or keyed by propertyNames) declares no properties to descend into, so
+      // a literal there is validated whole or not at all.
+      const recordShaped =
+        Object.keys(props).length === 0 &&
+        (isRecord(schemaNode['additionalProperties']) || isRecord(schemaNode['propertyNames']));
+      if (recordShaped && !templateContainsBind(node)) checkLiteral(node, schemaNode, path);
       return;
     }
 

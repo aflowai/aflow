@@ -18,6 +18,8 @@ import type {
   VideoJobHandle,
   VideoJobPoll,
   AIProvider,
+  DecideRequest,
+  DecideResponse,
 } from './types.js';
 
 /**
@@ -59,6 +61,12 @@ export interface AIProviderAdapter {
    * Optional — providers that don't support image editing should throw.
    */
   editImage?(request: EditImageRequest): Promise<GenerateImageResponse>;
+
+  /**
+   * Answer typed questions about a state. Optional — only a decision model's
+   * provider implements it.
+   */
+  decide?(request: DecideRequest): Promise<Omit<DecideResponse, 'cost' | 'provider'>>;
 
   /**
    * Hand the provider the work and return as soon as it is accepted.

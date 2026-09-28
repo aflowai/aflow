@@ -12,6 +12,8 @@ import {
 import { HistoryPolicySchema } from '../runtime/aiHistory.js';
 import { AiMediaOutputSchema, PinnedMemoryRefSchema } from '../media/asset.js';
 import type { OperationRegistration } from '../catalog/operationCatalog.js';
+import { TokenUsageSchema } from './aiUsage.js';
+import { AiDecideInputSchema, AiDecideOutputSchema } from './aiDecision.js';
 
 // Import enum constants and helper (defined in a separate file to avoid circular deps)
 import {
@@ -34,6 +36,7 @@ import {
 export {
   TEXT_MODELS,
   EMBEDDING_MODELS,
+  DECISION_MODELS,
   IMAGE_MODELS,
   VIDEO_MODELS,
   ASPECT_RATIOS,
@@ -83,12 +86,7 @@ export type ChatMessage = z.infer<typeof ChatMessageSchema>;
 /**
  * Token usage.
  */
-export const TokenUsageSchema = z.object({
-  promptTokens: z.number().int().nonnegative(),
-  completionTokens: z.number().int().nonnegative(),
-  totalTokens: z.number().int().nonnegative(),
-});
-export type TokenUsage = z.infer<typeof TokenUsageSchema>;
+export { TokenUsageSchema, type TokenUsage } from './aiUsage.js';
 
 /**
  * Tool definition for function calling.
@@ -625,6 +623,59 @@ export const AiOperationRegistrations: OperationRegistration[] = [
     accessMode: 'read',
     inputZod: AiEmbedInputSchema,
     outputZod: AiEmbedOutputSchema,
+  },
+  {
+    stepType: 'ai',
+    group: 'decision',
+    verb: 'decide',
+    name: 'Decide',
+    agentTool: false,
+    actionLabel: 'Deciding…',
+    semanticDescription:
+      'Answer named questions about a state — a choice among labelled options, a score on a rubric, or a yes/no — with calibrated confidence, from a decision model that writes no text',
+    tags: ['decision', 'classification', 'routing'],
+    idempotency: 'idempotent',
+    mutates: false,
+    groupDisplayName: 'Decisions',
+    groupDescription:
+      'Typed judgements about a state with calibrated confidence, for routing and gating in workflows.',
+    usage: {
+      oneLine: 'Route, triage, gate or score a state with typed answers and calibrated confidence.',
+      whenToUse: [
+        'A workflow step that routes, triages, gates or scores on a judgement, with the questions fixed when the skill is authored',
+        'Deciding whether an item needs a reasoning step at all: set minConfidence and send decided=false to an agent task',
+        'The same questions asked of many items, where a reasoning model per item costs too much or takes too long',
+      ],
+      whenNotToUse: [
+        'Anything that must produce text, code or an explanation — use an agent task or ai.text.generate_json',
+        'Counting or arithmetic over a set of items',
+        'A comparison of values that already exist — a when predicate on the producing task decides that for nothing',
+      ],
+      pitfalls: [
+        'Instructions are read literally: negations and scope apply exactly as written',
+        'Content in the state can steer the answer, so a decision about untrusted input is never the only gate on a consequential action',
+        'Each question is answered in isolation; one question cannot see another question’s answer',
+      ],
+      minimalExampleInput: {
+        state: 'My card was charged twice for the same order.',
+        questions: {
+          team: {
+            type: 'choice',
+            instructions: 'Which team should handle this message',
+            options: {
+              billing: 'Payments, invoices, refunds',
+              technical: 'Bugs, outages, integrations',
+              sales: 'Pricing, upgrades, new accounts',
+            },
+            minConfidence: 0.7,
+          },
+          urgent: { type: 'yes_no', instructions: 'The message conveys urgency' },
+        },
+      },
+    },
+    accessMode: 'read',
+    inputZod: AiDecideInputSchema,
+    outputZod: AiDecideOutputSchema,
   },
   {
     stepType: 'ai',

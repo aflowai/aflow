@@ -222,6 +222,7 @@ The output schema (input_schema in your tool surface) defines the TaskGraphDraft
 Graph structure rules:
 - **Exactly one root task** — exactly one task may have no predecessors (no \`dependsOn\` or \`consumes\`). Multiple root tasks is a graph error (all start simultaneously at run launch). Fan out from a single setup/initialize task via \`dependsOn\`.
 - Human tasks have no \`consumes\`, so predecessors come only from explicit \`dependsOn\` or \`approves\`.
+- A step that routes, triages or gates on a judgement is a \`type: 'decision'\` task that reads the input itself, not an agent task that classifies. Its questions, routes and \`onUndecided\` fallback are described in your output contract.
 
 Per-kind structural rules (enforced at submit_output by the schema invariants):
 - **fetcher** — fetches real data from a named external source. MUST grant ≥1 callable api/mcp endpoint. MUST NOT grant \`compute.sandbox.exec\`. Typically labels one \`produces[*].providesPurposeId\`.

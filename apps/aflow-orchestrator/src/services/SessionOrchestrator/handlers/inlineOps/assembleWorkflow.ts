@@ -2,6 +2,8 @@ import {
   WorkflowAssemblyInputSchema,
   isUsableJsonSchema,
   isCampaignFieldConsume,
+  isRunInputConsume,
+  isTaskOutputConsume,
   isCampaignRef,
   type AssembleWorkflowOutput,
   type ComposeIntent,
@@ -20,6 +22,8 @@ import {
   type WorkflowTask,
   type WorkflowTaskInputBinding,
   type WorkflowTaskOutputPort,
+  type DraftWhen,
+  type WorkflowWhen,
 } from '@aflow/schemas';
 import { contractErrorJsonSchema, deriveOpBoundDraftPortShapes } from '@aflow/cybernetic-runtime';
 import type { InlineHandlerArgs } from './types.js';
@@ -321,6 +325,10 @@ function lowerInputBindings(
       out[c.bindAs] = { kind: 'campaign_input', path: c.campaignField };
       continue;
     }
+    if (isRunInputConsume(c)) {
+      out[c.bindAs] = { kind: 'run_input', path: c.runInput };
+      continue;
+    }
     const key = `${c.taskId}::${c.outputKey}`;
     if (!opts.producedKeys.has(key)) {
       // Production not declared on the producer — should already have been
@@ -344,7 +352,7 @@ function lowerDependsOn(task: TaskGraphDraftTask): string[] {
   const consumes = task.type === 'human' ? [] : task.consumes;
   // Campaign-field consumes are not task dependencies (they read run-level
   // campaign config, not an upstream task output).
-  const fromConsumes = consumes.flatMap((c) => (isCampaignFieldConsume(c) ? [] : [c.taskId]));
+  const fromConsumes = consumes.flatMap((c) => (isTaskOutputConsume(c) ? [c.taskId] : []));
   // `approves` on human tasks establishes ordering without data binding —
   // the human reviews the named tasks' output before deciding.
   const fromApproves = task.type === 'human' ? task.approves : [];
@@ -379,6 +387,40 @@ function lowerAgentContext(
   };
 }
 
+/**
+ * The values a run is started with, declared once per name from the tasks that
+ * consume them, so whoever starts the run is asked for each by name.
+ */
+function declareRunInputs(
+  tasks: readonly TaskGraphDraftTask[],
+): NonNullable<ComposedWorkflow['runInputs']> {
+  const declared = new Map<string, { id: string; required: boolean; description?: string }>();
+  for (const task of tasks) {
+    if (task.type === 'human') continue;
+    for (const c of task.consumes) {
+      if (!isRunInputConsume(c)) continue;
+      const existing = declared.get(c.runInput);
+      if (existing === undefined) {
+        declared.set(c.runInput, {
+          id: c.runInput,
+          required: true,
+          ...(c.description !== undefined ? { description: c.description } : {}),
+        });
+      } else if (existing.description === undefined && c.description !== undefined) {
+        existing.description = c.description;
+      }
+    }
+  }
+  return [...declared.values()];
+}
+
+/** A reference a guard makes to a task that did not run skips the guarded task. */
+function lowerWhen(when: DraftWhen): WorkflowWhen {
+  if (typeof when === 'string') return { expression: when, onMissingRef: 'skip' };
+  if ('anyOf' in when) return { anyOf: when.anyOf, onMissingRef: 'skip' };
+  return { allOf: when.allOf, onMissingRef: 'skip' };
+}
+
 function lowerTask(task: TaskGraphDraftTask, opts: LowerOpts): WorkflowTask {
   const name = deriveTaskName(task.taskId);
   const dependsOn = lowerDependsOn(task);
@@ -398,7 +440,7 @@ function lowerTask(task: TaskGraphDraftTask, opts: LowerOpts): WorkflowTask {
       ...(inputBindings ? { inputBindings } : {}),
       ...(inputContract ? { inputContract } : {}),
       ...(produces ? { produces } : {}),
-      ...(task.when ? { when: { expression: task.when, onMissingRef: 'skip' as const } } : {}),
+      ...(task.when ? { when: lowerWhen(task.when) } : {}),
       ...(context ? { context } : {}),
       ...(outputContract ? { outputContract } : {}),
     };
@@ -423,7 +465,7 @@ function lowerTask(task: TaskGraphDraftTask, opts: LowerOpts): WorkflowTask {
       ...(task.outputProjection !== undefined ? { outputProjection: task.outputProjection } : {}),
       ...(task.retryability !== undefined ? { retryability: task.retryability } : {}),
       ...(task.maxAttempts !== undefined ? { maxAttempts: task.maxAttempts } : {}),
-      ...(task.when ? { when: { expression: task.when, onMissingRef: 'skip' as const } } : {}),
+      ...(task.when ? { when: lowerWhen(task.when) } : {}),
       ...(outputContract ? { outputContract } : {}),
     };
   }
@@ -444,7 +486,7 @@ function lowerTask(task: TaskGraphDraftTask, opts: LowerOpts): WorkflowTask {
     ...(task.approves.length > 0 ? { approves: task.approves } : {}),
     ...(dependsOn.length > 0 ? { dependsOn } : {}),
     ...(produces ? { produces } : {}),
-    ...(task.when ? { when: { expression: task.when, onMissingRef: 'skip' as const } } : {}),
+    ...(task.when ? { when: lowerWhen(task.when) } : {}),
     ...(outputContract ? { outputContract } : {}),
   };
 }
@@ -664,6 +706,7 @@ export function assembleWorkflow(input: WorkflowAssemblyInput): AssembleWorkflow
     manifestGoal = derived.goal;
   }
 
+  const runInputs = declareRunInputs(draft.tasks);
   const workflow: ComposedWorkflow = {
     slug: draft.slug,
     name: draft.name,
@@ -673,6 +716,7 @@ export function assembleWorkflow(input: WorkflowAssemblyInput): AssembleWorkflow
     mode,
     tasks: finalTasks,
     stateVariables,
+    ...(runInputs.length > 0 ? { runInputs } : {}),
     ...(output ? { output } : {}),
     iteration: deriveIteration(mode),
   };

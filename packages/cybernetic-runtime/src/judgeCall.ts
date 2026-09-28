@@ -5,10 +5,12 @@
  * two judges can never drift apart in prompt, schema, or sampling.
  */
 import { randomUUID } from 'node:crypto';
-import type { AIClient } from '@aflow/ai-client';
+import { isDecisionModelRef, resolveDecisionAnswers, type AIClient } from '@aflow/ai-client';
 import type {
+  DecisionQuestions,
   JudgeCriterion,
   JudgeVerdict,
+  JudgeVerdictEntry,
   SessionId,
   StepExecutionId,
   TenantId,
@@ -20,6 +22,7 @@ import {
   JudgeVerdictSchema,
 } from '@aflow/schemas';
 import {
+  buildJudgeEvidenceMessage,
   buildJudgeUserMessage,
   getJudgeSystemPrompt,
   type JudgeMessageContext,
@@ -74,6 +77,9 @@ export interface JudgeCallResult {
 
 /** Throws on any dispatch/parse failure — callers own the typed-error contract. */
 export async function callJudgeModel(params: JudgeCallParams): Promise<JudgeCallResult> {
+  if (isDecisionModelRef(params.model)) {
+    return await callDecisionJudge(params);
+  }
   const { client, model, criterion, evidence, tenantId, attributionId } = params;
   const userMessage = buildJudgeUserMessage({ criterion, ...evidence });
 
@@ -103,4 +109,51 @@ export async function callJudgeModel(params: JudgeCallParams): Promise<JudgeCall
   });
 
   return { verdict: result.data, costCents: (result.cost?.totalCost ?? 0) * 100 };
+}
+
+const rubricQuestionName = (index: number) => `entry_${String(index + 1)}`;
+
+/**
+ * A decision model judges each rubric entry as a yes/no about the evidence,
+ * with a calibrated probability in place of a critique. An entry answered with
+ * less confidence than its `minConfidence` is `unclear` — the abstention the
+ * verdict already has — rather than a coin-flip recorded as a judgement.
+ */
+async function callDecisionJudge(params: JudgeCallParams): Promise<JudgeCallResult> {
+  const { client, model, criterion, evidence, tenantId, attributionId } = params;
+  const questions: DecisionQuestions = Object.fromEntries(
+    criterion.rubric.map((entry, i) => [
+      rubricQuestionName(i),
+      {
+        type: 'yes_no' as const,
+        instructions: `${entry.criterion}: ${entry.description}`,
+        criteria: { true: 'The evidence meets this criterion', false: 'It does not' },
+        ...(entry.minConfidence !== undefined ? { minConfidence: entry.minConfidence } : {}),
+      },
+    ]),
+  );
+
+  const result = await client.decide({
+    model,
+    state: buildJudgeEvidenceMessage({ criterion, ...evidence }),
+    questions,
+    tenantId: tenantId as TenantId,
+    runId: attributionId as SessionId,
+    stepExecutionId: randomUUID() as StepExecutionId,
+  });
+  const answers = resolveDecisionAnswers(questions, result.answers);
+
+  const entries: JudgeVerdictEntry[] = criterion.rubric.map((entry, i) => {
+    const answer = answers[rubricQuestionName(i)];
+    if (answer?.type !== 'yes_no') {
+      throw new Error(`The decision judge returned no yes/no answer for "${entry.criterion}"`);
+    }
+    return {
+      criterion: entry.criterion,
+      rationale: `Decision model ${result.model}: probability the criterion is met ${answer.probability.toFixed(3)}, confidence ${answer.confidence.toFixed(3)}.`,
+      verdict: !answer.decided ? 'unclear' : answer.value ? 'pass' : 'fail',
+    };
+  });
+
+  return { verdict: { entries }, costCents: (result.cost?.totalCost ?? 0) * 100 };
 }

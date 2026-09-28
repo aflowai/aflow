@@ -6,6 +6,12 @@ import {
   WorkflowTaskOutputProjectionSchema,
 } from '../operations/workflow.js';
 import { analyzeInputTemplate, TEMPLATE_BIND_KEY } from '../operations/workflow/taskTemplate.js';
+import {
+  DecisionTaskFieldsSchema,
+  DraftWhenSchema,
+  expandDecisionTasks,
+  validateDecisionTasks,
+} from './composeDecisionTask.js';
 import { ProcedureActivationSchema, CapabilityGrantKindSchema } from './context.js';
 import { ApiCallModeSchema } from '../models/apiDefinition.js';
 import { ComposedWorkflowSchema } from './stagedChange.js';
@@ -329,9 +335,31 @@ const CampaignFieldConsumptionSchema = z.object({
   bindAs: z.string().min(1).max(64),
 });
 
+/**
+ * Run-input consume — reads a value the run is started with. The assembler
+ * declares it in the workflow's `runInputs` and lowers the consume to a
+ * `run_input` binding, so the value reaches the task as data rather than as
+ * prose in its instructions.
+ */
+const RunInputConsumptionSchema = z.object({
+  runInput: z
+    .string()
+    .regex(/^[a-zA-Z][a-zA-Z0-9_]{0,63}$/, 'Must be an identifier (no hyphens)')
+    .describe(
+      'The name of a value the run is started with, e.g. "ticket". Every task that consumes the same name reads the same value.',
+    ),
+  bindAs: z.string().min(1).max(64),
+  description: z
+    .string()
+    .max(500)
+    .optional()
+    .describe('What the caller passes under this name. Shown to whoever starts the run.'),
+});
+
 const TaskInputConsumptionSchema = z.union([
   TaskOutputConsumptionSchema,
   CampaignFieldConsumptionSchema,
+  RunInputConsumptionSchema,
 ]);
 type TaskInputConsumption = z.infer<typeof TaskInputConsumptionSchema>;
 
@@ -340,6 +368,20 @@ export function isCampaignFieldConsume(
   c: TaskInputConsumption,
 ): c is z.infer<typeof CampaignFieldConsumptionSchema> {
   return 'campaignField' in c;
+}
+
+/** Narrow a consume to the run-input variant. */
+export function isRunInputConsume(
+  c: TaskInputConsumption,
+): c is z.infer<typeof RunInputConsumptionSchema> {
+  return 'runInput' in c;
+}
+
+/** Narrow a consume to the variant that reads an upstream task's port. */
+export function isTaskOutputConsume(
+  c: TaskInputConsumption,
+): c is z.infer<typeof TaskOutputConsumptionSchema> {
+  return 'taskId' in c;
 }
 
 const TaskCapabilityRefSchema = z.object({
@@ -424,7 +466,7 @@ const AgentTaskSchema = z.object({
   kind: AgentTaskKindSchema,
   goal: z.string().min(1).max(4000),
   dependsOn: z.array(z.string().max(64)).default([]),
-  when: z.string().max(500).optional(),
+  when: DraftWhenSchema.optional(),
   produces: z.array(TaskOutputProductionSchema).default([]),
   consumes: z.array(TaskInputConsumptionSchema).default([]),
   context: z
@@ -453,7 +495,7 @@ const OperationTaskSchema = z.object({
       'Optional nested op-input template. Literal JSON where any node may be { "$bind": "<name>" } referencing a consumes[].bindAs or a literal inputBindings key. When present, the substituted template is exactly the op input. Use only when the operation requires a nested input shape.',
     ),
   dependsOn: z.array(z.string().max(64)).default([]),
-  when: z.string().max(500).optional(),
+  when: DraftWhenSchema.optional(),
   produces: z.array(TaskOutputProductionSchema).default([]),
   consumes: z.array(TaskInputConsumptionSchema).default([]),
   /**
@@ -506,16 +548,29 @@ const HumanTaskSchema = z.object({
     .optional(),
   failureMode: z.enum(['isolate', 'cancel_siblings']).default('isolate'),
   dependsOn: z.array(z.string().max(64)).default([]),
-  when: z.string().max(500).optional(),
+  when: DraftWhenSchema.optional(),
   produces: z.array(TaskOutputProductionSchema).default([]),
+});
+
+const DecisionTaskSchema = DecisionTaskFieldsSchema.extend({
+  consumes: z
+    .array(TaskInputConsumptionSchema)
+    .default([])
+    .describe(
+      'What the questions are asked about: run inputs (the value the run is started with, e.g. the incoming ticket) and upstream outputs. Read the raw input directly — a decision placed after an agent that already classified it pays for the agent and gains nothing. Each bindAs becomes a key of the state the decision model reads, so name them for what they hold.',
+    ),
 });
 
 export const TaskGraphDraftTaskSchema = z.discriminatedUnion('type', [
   AgentTaskSchema,
   OperationTaskSchema,
   HumanTaskSchema,
+  DecisionTaskSchema,
 ]);
-export type TaskGraphDraftTask = z.infer<typeof TaskGraphDraftTaskSchema>;
+/** A draft task as authored, before decision tasks are expanded. */
+export type AuthoredTaskGraphDraftTask = z.infer<typeof TaskGraphDraftTaskSchema>;
+/** A draft task after parsing: decision tasks are expanded into operation tasks. */
+export type TaskGraphDraftTask = Exclude<AuthoredTaskGraphDraftTask, { type: 'decision' }>;
 
 // ============================================================================
 // Optimization archetype spec (Plan 203 §3.2)
@@ -618,11 +673,12 @@ export const TaskGraphDraftSchema = z
     optimization: OptimizationArchetypeSpecSchema.optional(),
   })
   .superRefine((draft, ctx) => {
+    validateDecisionTasks(draft.tasks, ctx);
     const opConsumedPorts = new Set<string>();
     for (const t of draft.tasks) {
       if (t.type !== 'operation' || t.inputTemplate !== undefined) continue;
       for (const c of t.consumes) {
-        if (isCampaignFieldConsume(c)) continue;
+        if (!isTaskOutputConsume(c)) continue;
         opConsumedPorts.add(`${c.taskId}::${c.outputKey}`);
       }
     }
@@ -847,7 +903,8 @@ export const TaskGraphDraftSchema = z
         }
       }
     }
-  });
+  })
+  .transform((draft) => expandDecisionTasks(draft));
 export type TaskGraphDraft = z.infer<typeof TaskGraphDraftSchema>;
 
 // ============================================================================

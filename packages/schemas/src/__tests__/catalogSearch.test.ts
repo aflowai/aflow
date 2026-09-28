@@ -97,3 +97,20 @@ describe('segment coverage reranking', () => {
     expect(hasDefinitionOp).toBe(true);
   });
 });
+
+describe('searchCatalog — workflow steps', () => {
+  it('keeps step-only operations out of a tool search', () => {
+    const results = searchCatalog({ query: 'route triage decide classify', maxResults: 10 });
+    expect(results.map((r) => r.operationId)).not.toContain('ai.decision.decide');
+  });
+
+  it('returns step-only operations to an author, marked stepOnly', () => {
+    const results = searchCatalog({
+      query: 'route triage decide classify',
+      maxResults: 10,
+      workflowSteps: true,
+    });
+    const decide = results.find((r) => r.operationId === 'ai.decision.decide');
+    expect(decide?.stepOnly).toBe(true);
+  });
+});

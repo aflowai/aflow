@@ -50,19 +50,27 @@ interface BM25Index {
   docCount: number;
 }
 
-let _cachedIndex: BM25Index | null = null;
+/**
+ * One index per audience. Step-only operations change every term's document
+ * frequency, so a tool search must not rank against an index that holds them.
+ */
+const _cachedIndexes = new Map<boolean, BM25Index>();
 
-function buildIndex(): BM25Index {
-  if (_cachedIndex) return _cachedIndex;
+function isSearchable(op: OperationDescriptor, workflowSteps: boolean): boolean {
+  if (op.internal) return false;
+  return op.agentTool || workflowSteps;
+}
+
+function buildIndex(workflowSteps: boolean): BM25Index {
+  const cached = _cachedIndexes.get(workflowSteps);
+  if (cached) return cached;
 
   const allOps = getAllOperations();
   const documents: IndexedDocument[] = [];
   const invertedIndex = new Map<string, Set<number>>();
 
   for (const op of allOps.values()) {
-    // Skip internal ops and non-agent-tool ops
-    if (op.internal) continue;
-    if (!op.agentTool) continue;
+    if (!isSearchable(op, workflowSteps)) continue;
 
     const fields: Record<string, string[]> = {};
 
@@ -132,13 +140,14 @@ function buildIndex(): BM25Index {
   const totalLength = documents.reduce((sum, d) => sum + d.totalTokens, 0);
   const avgDocLength = documents.length > 0 ? totalLength / documents.length : 1;
 
-  _cachedIndex = {
+  const index: BM25Index = {
     documents,
     invertedIndex,
     avgDocLength,
     docCount: documents.length,
   };
-  return _cachedIndex;
+  _cachedIndexes.set(workflowSteps, index);
+  return index;
 }
 
 // ============================================================================
@@ -220,6 +229,12 @@ export interface CatalogSearchInput {
   /** Intent-based search */
   query?: string;
   maxResults?: number;
+
+  /**
+   * Also return operations that run only as workflow operation tasks. They are
+   * marked `stepOnly` and are never callable as tools.
+   */
+  workflowSteps?: boolean;
 }
 
 export interface CatalogSearchResult {
@@ -227,6 +242,8 @@ export interface CatalogSearchResult {
   description: string;
   matchReason: string;
   caution?: string;
+  /** Runs only as a workflow operation task; never promotable or callable as a tool. */
+  stepOnly?: boolean;
   /** Internal BM25 score (not exposed to agents, used for cross-source interleaving) */
   score: number;
 }
@@ -239,6 +256,7 @@ export interface CatalogSearchResult {
 export function searchCatalog(input: CatalogSearchInput): CatalogSearchResult[] {
   const maxResults = Math.min(input.maxResults ?? 5, 10);
   const allOps = getAllOperations();
+  const workflowSteps = input.workflowSteps === true;
 
   // Build structural filter sets
   const stepTypeFilter = input.stepTypes ? new Set(input.stepTypes) : undefined;
@@ -249,7 +267,7 @@ export function searchCatalog(input: CatalogSearchInput): CatalogSearchResult[] 
   if (!input.query) {
     const results: CatalogSearchResult[] = [];
     for (const op of allOps.values()) {
-      if (op.internal || !op.agentTool) continue;
+      if (!isSearchable(op, workflowSteps)) continue;
       if (stepTypeFilter && !stepTypeFilter.has(op.stepType)) continue;
       if (groupIdFilter) {
         const gid = `${op.stepType}.${op.group ?? ''}`;
@@ -264,7 +282,7 @@ export function searchCatalog(input: CatalogSearchInput): CatalogSearchResult[] 
   }
 
   // BM25 intent search
-  const index = buildIndex();
+  const index = buildIndex(workflowSteps);
   const queryTokens = tokenizeQuery(input.query);
   // Also tokenize as potential operationId segments — but only if the query
   // actually contains identifier separators (. _ -). For natural language
@@ -367,6 +385,7 @@ function buildResultEntry(op: OperationDescriptor): CatalogSearchResult {
     matchReason: 'structural filter',
     score: 0,
     ...(caution ? { caution } : {}),
+    ...(op.agentTool ? {} : { stepOnly: true }),
   };
 }
 
@@ -374,5 +393,5 @@ function buildResultEntry(op: OperationDescriptor): CatalogSearchResult {
  * Reset the cached index (for testing or after registry changes).
  */
 export function resetSearchIndex(): void {
-  _cachedIndex = null;
+  _cachedIndexes.clear();
 }
