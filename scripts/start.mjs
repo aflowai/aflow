@@ -89,8 +89,12 @@ for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
 }
 
 // Ctrl-Z and `fg` reach only this process's group, so without these the stack
-// would keep running and writing to the terminal behind a suspended job. A
-// handler replaces SIGTSTP's default stop, which SIGSTOP then performs.
+// would keep running and writing to the terminal behind a suspended job. The
+// runner's group is orphaned, where the kernel discards a SIGTSTP that meets its
+// default action, and every service sits in a group of its own besides — so it
+// is the runner's handler that suspends the stack: it stops each service's group
+// and then itself, and resumes them on SIGCONT. A handler here replaces
+// SIGTSTP's default stop, which SIGSTOP then performs.
 process.on('SIGTSTP', () => {
   signalGroup('SIGTSTP');
   process.kill(process.pid, 'SIGSTOP');

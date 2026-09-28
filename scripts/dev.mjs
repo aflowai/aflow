@@ -730,6 +730,18 @@ function setupSignalHandlers() {
   // Closing the terminal tab sends SIGHUP; without this, Node exits immediately and
   // never runs shutdown(), so detached children (server on :3000, etc.) survive.
   process.on('SIGHUP', () => shutdown('SIGHUP'));
+
+  // Each service runs detached, in a group no terminal signal reaches, so a
+  // suspend has to be passed on from here. SIGSTOP rather than SIGTSTP: those
+  // groups are orphaned, and the kernel discards a SIGTSTP sent to one. A
+  // handler replaces SIGTSTP's default stop, which SIGSTOP then performs.
+  process.on('SIGTSTP', () => {
+    for (const child of processes.values()) killProcessGroup(child, 'SIGSTOP');
+    process.kill(process.pid, 'SIGSTOP');
+  });
+  process.on('SIGCONT', () => {
+    for (const child of processes.values()) killProcessGroup(child, 'SIGCONT');
+  });
 }
 
 /**
