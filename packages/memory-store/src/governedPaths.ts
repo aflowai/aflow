@@ -78,18 +78,28 @@ function generatedMediaMutationMessage(path: string): string {
 const WORKFLOW_DEFINITION_PATH_RE =
   /^\/workflows\/[^/]+\/(?:workflow\.json|activation\.json|revisions\/.+)$/u;
 
+/**
+ * A skill's manifest carries its goal and campaign contract, which change only
+ * by a ratified proposal — the same authority as the workflow it points at.
+ */
+const SKILL_MANIFEST_PATH_RE = /^\/skills\/[^/]+\/manifest\.json$/u;
+
 /** Directories whose removal takes a workflow definition with them. */
-const WORKFLOW_DEFINITION_SUBTREE_RE = /^\/workflows\/(?:[^/]+\/(?:revisions\/)?)?$/u;
+const WORKFLOW_DEFINITION_SUBTREE_RE =
+  /^\/(?:workflows\/(?:[^/]+\/(?:revisions\/)?)?|skills\/(?:[^/]+\/)?)$/u;
 
 export function isWorkflowDefinitionPath(path: string | null | undefined): path is string {
   const canonical = canonicalOrNull(path);
-  return canonical !== null && WORKFLOW_DEFINITION_PATH_RE.test(canonical);
+  return (
+    canonical !== null &&
+    (WORKFLOW_DEFINITION_PATH_RE.test(canonical) || SKILL_MANIFEST_PATH_RE.test(canonical))
+  );
 }
 
 function workflowDefinitionMutationMessage(path: string): string {
   return (
     `Direct changes to ${path} are blocked. ` +
-    'A workflow definition is changed with workflow.manage.patch, where a definition change becomes a ' +
+    'A workflow definition and a skill manifest are changed with workflow.manage.patch, where a definition change becomes a ' +
     'proposal the operator ratifies, and only the operator approves a workflow. ' +
     'Create a new workflow with workflow.manage.put.'
   );

@@ -173,6 +173,20 @@ describe('an agent creates a workflow; it does not replace or approve one', () =
     expect(mockDocPut).not.toHaveBeenCalled();
   });
 
+  it('refuses to put over an archived skill’s workflow and writes nothing', async () => {
+    mockGetByPath.mockImplementation(
+      async (_path: string, _space: string, opts?: { includeDeleted?: boolean }) =>
+        opts?.includeDeleted ? stored(existingWorkflow('approved')) : null,
+    );
+
+    await handleWorkflowPut(makeArgs('workflow.manage.put'), putInput(), Date.now());
+
+    const result = lastStepResult();
+    expect(result['status']).toBe('FAILED');
+    expect(errorCode(result)).toBe('WORKFLOW_ARCHIVED');
+    expect(mockDocPut).not.toHaveBeenCalled();
+  });
+
   it('refuses a patch that approves a workflow, and writes nothing', async () => {
     mockGetByPath.mockResolvedValue(stored(existingWorkflow('draft')));
     const input: WorkflowPatchInput = {

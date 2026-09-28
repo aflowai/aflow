@@ -241,7 +241,7 @@ export function createWorkflowOperationRegistrations(
           'Approving a skill — the operator approves it from the skill page',
         ],
         pitfalls: [
-          'Patch paths must start with "/" (e.g., "/budget/maxRuns"); a task may be addressed as /tasks/{taskId} or /tasks/{index}',
+          'Patch paths must start with "/" (e.g., "/budget/maxRuns"); a task may be addressed as /tasks/{taskId} or /tasks/{index} — a segment of digits is always an index',
           'Use expectedRevision to guard against concurrent writers',
           'A single patch may not mix metadata (budget/status) with definition (tasks/goal/campaign)',
           'Identity campaign fields are immutable — their schema cannot be reshaped, only relabeled',

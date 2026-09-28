@@ -32,6 +32,19 @@ export async function handleWorkflowPut(
     );
     return;
   }
+  const archived = await docRepo.getByPath(workflowDocPath(slug), spaceId, {
+    includeDeleted: true,
+  });
+  if (archived) {
+    await emitStepError(
+      args,
+      'WORKFLOW_ARCHIVED',
+      `Workflow "${slug}" belongs to an archived skill, and creating it again would overwrite that skill's definition. Choose another slug, or ask the operator to restore the archived skill.`,
+      startTime,
+      'validation',
+    );
+    return;
+  }
 
   const campaign = await resolveCampaignManifestParams(
     { db: getDatabase(), tenantId: args.context.tenantId as string, spaceId },

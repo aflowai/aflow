@@ -121,3 +121,19 @@ describe('workflow definitions are changed through workflow.manage.patch and the
     ).toBeNull();
   });
 });
+
+describe('a skill manifest changes only through a ratified proposal', () => {
+  it('refuses a direct write to the manifest', () => {
+    expect(governedPathRefusal('/skills/lead-scoring/manifest.json')).toContain(
+      'workflow.manage.patch',
+    );
+  });
+
+  it('leaves other documents under a skill folder alone', () => {
+    expect(governedPathRefusal('/skills/lead-scoring/notes.md')).toBeNull();
+  });
+
+  it('refuses deleting a skill folder, which takes the manifest with it', () => {
+    expect(governedSubtreeRefusal('/skills/lead-scoring')).toContain('workflow definition');
+  });
+});
