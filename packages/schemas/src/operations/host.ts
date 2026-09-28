@@ -461,9 +461,11 @@ export const HostHarnessRunInputSchema = z.object({
     .optional()
     .describe(
       'The model the harness should run, spelled as that harness names it. Absent means the ' +
-        'harness uses its own default, which is the right answer unless the run has a reason ' +
-        'to pin one. A harness the machine configured without a model argument refuses the ' +
-        'run rather than ignoring it, and the refusal names it.',
+        "model the operator configured for that harness on the machine, or the harness's own " +
+        'default when none is configured — the right answer unless the run has a reason to ' +
+        'pin one. A harness the machine configured without a model argument refuses the ' +
+        'run rather than ignoring it, and the refusal names it — including a run that names ' +
+        'no model when the model configured on the machine cannot be passed.',
     ),
   timeoutMs: z
     .number()
@@ -928,7 +930,7 @@ export const HostOperationRegistrations: OperationRegistration[] = [
         'Producing a reviewable diff rather than editing the working copy in place',
         "A fix to a reviewed range starts from the branch the review covered, `base: <branch>`, so its patch is relative to that branch and lands on it; absent, the run starts from the folder's last commit",
         'A smoke test or a brief look, with `maxTurns` naming how many turns brief means',
-        'Pinning the model for a run that has a reason to — a comparison, a cost ceiling, a capability the default lacks; otherwise leave it to the harness',
+        "Pinning the model for a run that has a reason to — a comparison, a cost ceiling, a capability the default lacks; otherwise leave it out, and the run gets the model the operator configured for that harness on the machine, or the harness's own default when none is",
       ],
       whenNotToUse: [
         'Running a build or a test suite — that is host.process.exec, which needs no worktree',
@@ -946,6 +948,7 @@ export const HostOperationRegistrations: OperationRegistration[] = [
         'The folder must be a git repository with at least one commit — the run needs a base to diff against.',
         'A `maxTurns` budget the task cannot meet ends the run with whatever the harness had reached, and that result is still validated against `outputSchema` — a budget too small for the task fails the step rather than returning a partial answer.',
         '`model` is spelled the way the harness spells it, not as this platform names a model in its own catalog — the harness resolves the name, and an id from the catalog is one it has never heard of.',
+        "Leaving `model` out does not guarantee the harness's own default: the run gets the model the operator configured for that harness on the machine, and the harness default only when none is configured. A run naming no model can still be refused when that configured model cannot be passed to the harness — the refusal names it.",
       ],
     },
   },
