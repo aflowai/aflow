@@ -48,6 +48,12 @@ export interface HarnessSession {
   /** What the harness calls this conversation. Minted here, so it need not be parsed back out. */
   readonly conversationId: string;
   readonly baseSha: string;
+  /**
+   * The ref the checkout was started from, when a turn named one. A later turn
+   * that names none still works on that checkout, so it is judged against the
+   * same ref.
+   */
+  readonly base?: string;
   readonly createdAt: number;
   lastUsedAt: number;
   /**
@@ -166,7 +172,10 @@ export function allSessions(): HarnessSession[] {
   return [...sessions.values()];
 }
 
+/** How every harness run's scratch directory under the temp root is named. */
+export const HARNESS_SCRATCH_PREFIX = 'aflow-harness-';
+
 /** Remove a session's scratch. Failure is never allowed to fail a run. */
-export async function discardScratch(session: HarnessSession): Promise<void> {
+export async function discardScratch(session: Pick<HarnessSession, 'scratchDir'>): Promise<void> {
   await rm(session.scratchDir, { recursive: true, force: true }).catch(() => {});
 }

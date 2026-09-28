@@ -142,11 +142,16 @@ export async function gitVersionText(timeoutMs: number): Promise<string | undefi
   }
 }
 
-async function git(cwd: string, args: string[], maxBuffer = 1024 * 1024): Promise<string> {
+async function git(
+  cwd: string,
+  args: string[],
+  maxBuffer = 1024 * 1024,
+  env: Record<string, string> = {},
+): Promise<string> {
   const { stdout } = await run('git', ['-C', cwd, ...GIT_SAFETY_ARGS, ...args], {
     timeout: GIT_TIMEOUT_MS,
     maxBuffer,
-    env: gitEnv(),
+    env: { ...gitEnv(), ...env },
   });
   return stdout;
 }
@@ -535,6 +540,31 @@ export async function removeWorktree(root: string, worktreePath: string): Promis
   }
 }
 
+export interface LinkedWorktree {
+  readonly path: string;
+  /** No branch is checked out in it, which is how every checkout this lane makes is added. */
+  readonly detached: boolean;
+}
+
+/**
+ * Every checkout added to the repository, without its main one.
+ *
+ * Read from git rather than from disk: a checkout whose directory is gone is
+ * still registered, and the registration is what the operator sees.
+ */
+export async function linkedWorktrees(root: string): Promise<LinkedWorktree[]> {
+  const listing = await git(root, ['worktree', 'list', '--porcelain'], APPLY_OUTPUT_CAP_BYTES);
+  return listing
+    .split(/\n\n+/)
+    .map((block) => block.split('\n'))
+    .filter((lines) => lines[0]?.startsWith('worktree ') === true)
+    .map((lines) => ({
+      path: (lines[0] ?? '').slice('worktree '.length),
+      detached: lines.includes('detached'),
+    }))
+    .slice(1);
+}
+
 /**
  * Whether the diff still fits the repository it came from.
  *
@@ -543,20 +573,34 @@ export async function removeWorktree(root: string, worktreePath: string): Promis
  * lines. Saying so is the difference between a diff that can be taken and one
  * that needs a decision, and the answer has to come from git rather than from
  * comparing shas — a moved HEAD that touched other files still applies.
+ *
+ * With `against`, the diff is judged against that commit's tree rather than the
+ * folder's working tree, through an index of its own, so the folder's index and
+ * files are never a party to it.
  */
 export type ApplyCheck =
   | { readonly state: 'clean' }
   | { readonly state: 'conflict'; readonly detail: string }
   | { readonly state: 'empty' };
 
-export async function checkApplies(root: string, patch: string): Promise<ApplyCheck> {
+export async function checkApplies(
+  root: string,
+  patch: string,
+  against?: string,
+): Promise<ApplyCheck> {
   if (patch === '') return { state: 'empty' };
 
   const scratch = await mkdtemp(join(tmpdir(), 'aflow-apply-'));
   const patchPath = join(scratch, 'run.patch');
   try {
     await writeFile(patchPath, patch, 'utf8');
-    await git(root, ['apply', '--check', patchPath]);
+    if (against === undefined) {
+      await git(root, ['apply', '--check', patchPath]);
+    } else {
+      const index = { GIT_INDEX_FILE: join(scratch, 'index') };
+      await git(root, ['read-tree', against], undefined, index);
+      await git(root, ['apply', '--cached', '--check', patchPath], undefined, index);
+    }
     return { state: 'clean' };
   } catch (error) {
     // git names the file and hunk it could not place, which is the whole of
@@ -566,7 +610,10 @@ export async function checkApplies(root: string, patch: string): Promise<ApplyCh
       message
         .split('\n')
         .filter((line) => line.startsWith('error:'))
-        .join('; ') || 'The patch does not apply to the repository as it stands.';
+        .join('; ') ||
+      (against === undefined
+        ? 'The patch does not apply to the repository as it stands.'
+        : `The patch does not apply to ${against}.`);
     return { state: 'conflict', detail };
   } finally {
     await rm(scratch, { recursive: true, force: true });
@@ -923,6 +970,9 @@ async function commitTarget(
   return { at: undefined, appended };
 }
 
+/** How a publication's scratch, and the checkout it commits in, is named under the temp root. */
+export const PUBLICATION_SCRATCH_PREFIX = 'aflow-commit-';
+
 /**
  * Land a diff as a commit on a branch, without touching what the operator has
  * open.
@@ -950,7 +1000,7 @@ export async function commitPatchOnBranch(
 ): Promise<PatchCommitOutcome> {
   const target = await commitTarget(root, branch, base);
 
-  const scratch = await mkdtemp(join(tmpdir(), 'aflow-commit-'));
+  const scratch = await mkdtemp(join(tmpdir(), PUBLICATION_SCRATCH_PREFIX));
   let worktree: PreparedWorktree | undefined;
   try {
     worktree = await prepareWorktree(root, scratch, 'commit', {
