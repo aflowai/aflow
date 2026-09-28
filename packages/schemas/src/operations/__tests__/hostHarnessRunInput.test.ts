@@ -54,23 +54,43 @@ describe('a commission and a publication name the commit they start from', () =>
     }
   });
 
-  it('carries a base on a commit, under the same rule', () => {
+  it('carries the base on a commit as `baseSha`, under the same rule', () => {
     const patch = { bindingId: 'hb_x', patch: 'diff --git a/x b/x\n' };
     const parsed = HostFilePatchInputSchema.parse({
       ...patch,
-      commit: { branch: 'aflow/fix', message: 'Fix', base: 'a'.repeat(40) },
+      commit: { branch: 'aflow/fix', message: 'Fix', baseSha: 'a'.repeat(40) },
     });
-    expect(parsed.commit?.base).toBe('a'.repeat(40));
+    expect(parsed.commit?.baseSha).toBe('a'.repeat(40));
     expect(
       HostFilePatchInputSchema.safeParse({
         ...patch,
-        commit: { branch: 'aflow/fix', message: 'Fix', base: '-x' },
+        commit: { branch: 'aflow/fix', message: 'Fix', baseSha: '-x' },
       }).success,
     ).toBe(false);
   });
 
+  it('says a remote-qualified base is fetched before it is read', () => {
+    const description = HostHarnessRunInputSchema.shape.base.description ?? '';
+    expect(description).toContain('`<remote>/<ref>`');
+    expect(description).toContain("`origin/main` is the remote's `main` as of now");
+  });
+
+  it('refuses a base under any other name rather than dropping it', () => {
+    const result = HostFilePatchInputSchema.safeParse({
+      bindingId: 'hb_x',
+      patch: 'diff --git a/x b/x\n',
+      commit: { branch: 'aflow/fix', message: 'Fix', base: 'a'.repeat(40) },
+    });
+    expect(result.success).toBe(false);
+  });
+
   it('says whether a commit was appended', () => {
-    const commit = { branch: 'aflow/fix', sha: 'b'.repeat(40), baseSha: 'a'.repeat(40) };
+    const commit = {
+      branch: 'aflow/fix',
+      sha: 'b'.repeat(40),
+      message: 'Fix',
+      baseSha: 'a'.repeat(40),
+    };
     const result = { state: 'applied', filesChanged: 1, files: ['x'], conflicts: [] };
     expect(
       HostFilePatchOutputSchema.safeParse({ ...result, commit: { ...commit, appended: true } })

@@ -17,6 +17,7 @@ import {
   changedRefs,
   checkApplies,
   collectChanges,
+  fetchRemoteBase,
   isGitRepository,
   prepareWorktree,
   PUBLICATION_SCRATCH_PREFIX,
@@ -162,6 +163,67 @@ describe('a run started from a named ref', () => {
   it('refuses a ref the folder does not have, naming it', async () => {
     await expect(resolveCommit(repo, 'no-such-branch')).rejects.toThrow(/`no-such-branch`/);
     await expect(resolveCommit(repo, '--output=/tmp/x')).rejects.toThrow(WorktreeError);
+  });
+});
+
+describe('a run started from a ref on a remote', () => {
+  let upstream: string;
+  let elsewhere: string;
+
+  beforeEach(async () => {
+    upstream = await mkdtemp(join(tmpdir(), 'aflow-wt-upstream-'));
+    elsewhere = await mkdtemp(join(tmpdir(), 'aflow-wt-elsewhere-'));
+    await git(upstream, 'init', '--bare', '--initial-branch=main');
+    await git(repo, 'remote', 'add', 'origin', upstream);
+    await git(repo, 'push', '-q', 'origin', 'main');
+    await git(repo, 'fetch', '-q', 'origin');
+  });
+
+  afterEach(async () => {
+    await rm(upstream, { recursive: true, force: true });
+    await rm(elsewhere, { recursive: true, force: true });
+  });
+
+  /** Someone else moves the remote's main on, which this folder has not fetched. */
+  async function remoteMovesOn(): Promise<string> {
+    await git(elsewhere, 'clone', '-q', upstream, '.');
+    await git(elsewhere, 'config', 'user.email', 'other@example.com');
+    await git(elsewhere, 'config', 'user.name', 'Other');
+    await writeFile(join(elsewhere, 'app.txt'), 'the remote moved on\n');
+    await git(elsewhere, 'commit', '-qam', 'upstream change');
+    await git(elsewhere, 'push', '-q', 'origin', 'main');
+    return (await git(elsewhere, 'rev-parse', 'HEAD')).trim();
+  }
+
+  it('reads the remote as it is now, not as the folder last fetched it', async () => {
+    const stale = (await git(repo, 'rev-parse', 'origin/main')).trim();
+    const moved = await remoteMovesOn();
+    expect(moved).not.toBe(stale);
+
+    await fetchRemoteBase(repo, 'origin/main');
+    expect(await resolveCommit(repo, 'origin/main')).toBe(moved);
+  });
+
+  it('refuses a remote it cannot reach, naming the remote', async () => {
+    await git(repo, 'remote', 'set-url', 'origin', join(upstream, 'gone'));
+    const refusal = fetchRemoteBase(repo, 'origin/main');
+    await expect(refusal).rejects.toThrow(WorktreeError);
+    await expect(refusal).rejects.toThrow(/the remote `origin`/);
+  });
+
+  it('leaves a local branch with a slash in its name alone', async () => {
+    await git(repo, 'branch', 'feat/fix');
+    await expect(fetchRemoteBase(repo, 'feat/fix')).resolves.toBeUndefined();
+  });
+
+  it('never fetches a refspec into one of the folder’s branches', async () => {
+    await remoteMovesOn();
+    await git(repo, 'branch', 'victim');
+    const victim = (await git(repo, 'rev-parse', 'victim')).trim();
+    for (const base of ['origin/+main:refs/heads/victim', 'origin/main:refs/heads/victim']) {
+      await fetchRemoteBase(repo, base);
+      expect((await git(repo, 'rev-parse', 'victim')).trim()).toBe(victim);
+    }
   });
 });
 

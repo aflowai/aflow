@@ -11,9 +11,30 @@ const PUSH_COMMAND = ['git', 'push', '--set-upstream', 'origin', { $bind: 'branc
 /** The operation's own ceiling for a unified diff. */
 const PATCH_MAX_BYTES = 4_194_304;
 
+/** The characters GitHub admits in an owner or a repository name, and nothing else. */
+const GITHUB_NAME_PATTERN = '^[A-Za-z0-9._-]+$';
+
+const OWNER_SCHEMA = {
+  type: 'string',
+  minLength: 1,
+  maxLength: 200,
+  pattern: GITHUB_NAME_PATTERN,
+  description:
+    'The owner name alone — `aflowai` for github.com/aflowai/aflow — not a URL or `owner/repo`.',
+};
+
+const REPO_SCHEMA = {
+  type: 'string',
+  minLength: 1,
+  maxLength: 200,
+  pattern: GITHUB_NAME_PATTERN,
+  description:
+    'The repository name alone — `aflow` for github.com/aflowai/aflow — not a URL or `owner/repo`.',
+};
+
 const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'publish-local-changes',
-  version: 2,
+  version: 3,
   name: 'Publish Local Changes',
   tagline:
     'Commit a patch onto a branch of a connected repository, then push it and open the pull request once the operator approves.',
@@ -32,8 +53,9 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
   capabilityHints: [
     {
       apiId: 'github',
-      description: 'GitHub REST API — open the pull request for the pushed branch.',
-      requiredEndpoints: ['createPullRequest'],
+      description:
+        'GitHub REST API — read the repository before the push, and open the pull request for the pushed branch.',
+      requiredEndpoints: ['getRepository', 'createPullRequest'],
       authKind: 'bearer',
       setupNote:
         'Bind the GitHub connector for the space (a fine-grained personal access token or a GitHub App installation token with repository and pull-request access) before the first run. Sent as Authorization: Bearer.',
@@ -113,14 +135,15 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           id: 'owner',
           required: true,
           description:
-            "The repository owner — the account or organisation in the folder's `origin` remote.",
-          schema: { type: 'string', minLength: 1, maxLength: 200 },
+            "The repository owner — the account or organisation in the folder's `origin` remote — by name alone, not a URL or `owner/repo`.",
+          schema: OWNER_SCHEMA,
         },
         {
           id: 'repo',
           required: true,
-          description: "The repository name, from the folder's `origin` remote.",
-          schema: { type: 'string', minLength: 1, maxLength: 200 },
+          description:
+            "The repository name alone, from the folder's `origin` remote — not a URL or `owner/repo`.",
+          schema: REPO_SCHEMA,
         },
         {
           id: 'base',
@@ -196,13 +219,13 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
                 kind: 'run_input' as const,
                 bindAs: 'owner',
                 path: 'owner',
-                schema: { type: 'string', minLength: 1, maxLength: 200 },
+                schema: OWNER_SCHEMA,
               },
               repo: {
                 kind: 'run_input' as const,
                 bindAs: 'repo',
                 path: 'repo',
-                schema: { type: 'string', minLength: 1, maxLength: 200 },
+                schema: REPO_SCHEMA,
               },
               base: {
                 kind: 'run_input' as const,
@@ -228,8 +251,51 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             commit: {
               branch: { $bind: 'branch' },
               message: { $bind: 'commitMessage' },
-              base: { $bind: 'baseSha' },
+              baseSha: { $bind: 'baseSha' },
             },
+          },
+        },
+
+        {
+          taskId: 'read-repository',
+          name: "Check the space's GitHub credential can see the repository",
+          goal: "Read `owner`/`repo` through the space's GitHub connection before anything is pushed. When this fails, the GitHub credential bound to this space cannot see `owner`/`repo` — GitHub answers 404 for a private repository the token has no access to — and that credential's repository access is the thing to check. Nothing has been pushed, and the commit is still on its branch.",
+          type: 'operation' as const,
+          operation: 'api.http.call',
+          dependsOn: ['commit'],
+          when: {
+            expression: "tasks.commit.output.state == 'applied'",
+            onMissingRef: 'skip' as const,
+          },
+          // One attempt and no output contract: a repository the credential
+          // cannot see fails the run here, rather than parking it on a
+          // resolution nobody can supply.
+          retryability: 'safe' as const,
+          maxAttempts: 1,
+          inputBindings: {
+            owner: { kind: 'run_input' as const, path: 'owner' },
+            repo: { kind: 'run_input' as const, path: 'repo' },
+          },
+          context: {
+            strategy: 'scoped' as const,
+            contextPolicy: 'auto-optimize' as const,
+            learnings: 'none' as const,
+            capabilities: {
+              operations: ['api.http.call'],
+              integrations: [],
+            },
+          },
+          inputTemplate: {
+            apiId: 'github',
+            endpointId: 'getRepository',
+            params: {
+              owner: { $bind: 'owner' },
+              repo: { $bind: 'repo' },
+            },
+            response: { format: 'json' },
+          },
+          outputProjection: {
+            repository: { path: 'data.full_name', onMissing: 'error' as const },
           },
         },
 
@@ -240,7 +306,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           type: 'human' as const,
           intent: 'approve' as const,
           failureMode: 'isolate' as const,
-          dependsOn: ['commit'],
+          dependsOn: ['read-repository'],
           approves: ['commit'],
           when: {
             expression: "tasks.commit.output.state == 'applied'",
@@ -253,6 +319,22 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             inputBindings: {
               bindingId: { kind: 'run_input' as const, path: 'bindingId' },
               branch: { kind: 'run_input' as const, path: 'branch' },
+              commitSha: { kind: 'task_output' as const, taskId: 'commit', path: 'commit.sha' },
+              commitBranch: {
+                kind: 'task_output' as const,
+                taskId: 'commit',
+                path: 'commit.branch',
+              },
+              commitMessage: {
+                kind: 'task_output' as const,
+                taskId: 'commit',
+                path: 'commit.message',
+              },
+              filesChanged: {
+                kind: 'task_output' as const,
+                taskId: 'commit',
+                path: 'filesChanged',
+              },
             },
           },
         },
@@ -399,6 +481,14 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
         ],
       },
       mode: 'process' as const,
+      // A run holds its slot for as long as its approval waits, and one
+      // publication has no bearing on another, so none queues behind a pause.
+      concurrency: {
+        maxParallelTasksPerRun: 4,
+        maxConcurrentRuns: 'unlimited' as const,
+        failureMode: 'isolate' as const,
+        perUserSerial: false,
+      },
     },
     activation: {
       triggerPatterns: [
@@ -414,7 +504,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
       priority: 50,
     },
     rationale:
-      "Four tasks with the approval between the local half and the published half: the commit lands in a detached worktree — at the folder's last commit for a new branch, at the branch's head for an append whose base is that head — so a declined approval costs nothing and leaves the operator's working tree as it was. The push argv is pinned by the skill with only the branch bound, so no caller can add a force flag; the branch prefix that decides what may be pushed is a posture on the connected folder, enforced where the command runs rather than named here. The pull request is the GitHub connector's own createPullRequest, which the operator binds once for the space. The folder arrives as a run input until folder roles land.",
+      "Five tasks with the approval between the local half and the published half, and a read of the repository through the space's GitHub binding just before it: the commit lands in a detached worktree — at the folder's last commit for a new branch, at the branch's head for an append whose base is that head — so a declined approval costs nothing and leaves the operator's working tree as it was. The push argv is pinned by the skill with only the branch bound, so no caller can add a force flag; the branch prefix that decides what may be pushed is a posture on the connected folder, enforced where the command runs rather than named here. The pull request is the GitHub connector's own createPullRequest, which the operator binds once for the space. The folder arrives as a run input until folder roles land.",
   },
 };
 

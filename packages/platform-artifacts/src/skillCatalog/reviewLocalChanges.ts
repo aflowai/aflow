@@ -143,7 +143,7 @@ const BRIEF_MAX_TURNS = 8;
 
 const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'review-local-changes',
-  version: 4,
+  version: 5,
   name: 'Review Local Changes',
   tagline:
     "Review committed changes in a connected repository with the machine's own coding agent.",
@@ -300,6 +300,15 @@ const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
         ],
       },
       mode: 'process' as const,
+      // Each review reads its own checkout and writes nothing, and a
+      // publication waiting at its approval asks for one; a cap would queue
+      // that review behind the others.
+      concurrency: {
+        maxParallelTasksPerRun: 4,
+        maxConcurrentRuns: 'unlimited' as const,
+        failureMode: 'isolate' as const,
+        perUserSerial: false,
+      },
     },
     activation: {
       triggerPatterns: [

@@ -140,7 +140,7 @@ const KAGGLE_COMPETITION_BUNDLE: SkillBundleInput = {
 
 const CODING_PR_LOOP_BUNDLE: SkillBundleInput = {
   bundleId: 'coding-pr-loop' as SkillBundleId,
-  version: 2,
+  version: 3,
   name: 'Coding PR Loop',
   tagline: 'Open, review, and iterate pull requests on your repo with a coding agent.',
   description: `Wires up the **GitHub REST API** and the three coding skills that drive the **implement ↔ review loop**: open a PR from a request, adversarially review it, and revise it on the same branch toward passing.
@@ -178,7 +178,7 @@ Then run a coding skill: ask to open a PR for a change → review it → fix →
 
 const LOCAL_CODE_REVIEW_BUNDLE: SkillBundleInput = {
   bundleId: 'local-code-review' as SkillBundleId,
-  version: 4,
+  version: 5,
   name: 'Local Code Review',
   tagline: 'Review committed changes in a connected repository with the installed coding agent.',
   description: `Installs **Review Local Changes** — a read-only review of a revision range in a repository connected as a folder, carried out by the coding agent already installed on that machine.
@@ -204,7 +204,7 @@ const LOCAL_CODE_REVIEW_BUNDLE: SkillBundleInput = {
 
 const LOCAL_PUBLISH_BUNDLE: SkillBundleInput = {
   bundleId: 'local-publish' as SkillBundleId,
-  version: 2,
+  version: 3,
   name: 'Local Publish',
   tagline:
     'Commit a patch onto a branch of a connected repository, approve, and open the pull request.',

@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { materializeAndValidateSkillConfig } from '@aflow/cybernetic-runtime';
-import { isEvalPlaneOperation, substituteTemplateBinds } from '@aflow/schemas';
+import {
+  HostFilePatchInputSchema,
+  HostFilePatchOutputSchema,
+  isEvalPlaneOperation,
+  substituteTemplateBinds,
+} from '@aflow/schemas';
 import { PUBLISH_LOCAL_CHANGES } from './publishLocalChanges.js';
 
 const wf = PUBLISH_LOCAL_CHANGES.bundle.workflow;
@@ -54,18 +59,82 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(validity.status).toBe('valid');
   });
 
-  it('is four tasks in one chain — commit, approve, push, pull request', () => {
-    expect(wf.tasks.map((t) => t.taskId)).toEqual(['commit', 'approve-push', 'push', 'open-pr']);
-    expect(wf.tasks.map((t) => t.type)).toEqual(['operation', 'human', 'operation', 'operation']);
+  it('is five tasks in one chain — commit, read the repository, approve, push, pull request', () => {
+    expect(wf.tasks.map((t) => t.taskId)).toEqual([
+      'commit',
+      'read-repository',
+      'approve-push',
+      'push',
+      'open-pr',
+    ]);
+    expect(wf.tasks.map((t) => t.type)).toEqual([
+      'operation',
+      'operation',
+      'human',
+      'operation',
+      'operation',
+    ]);
     expect(wf.tasks.map((t) => t.dependsOn ?? [])).toEqual([
       [],
       ['commit'],
+      ['read-repository'],
       ['approve-push'],
       ['push'],
     ]);
     expect(taskOrThrow('commit').operation).toBe('host.file.patch');
+    expect(taskOrThrow('read-repository').operation).toBe('api.http.call');
     expect(taskOrThrow('push').operation).toBe('host.process.exec');
     expect(taskOrThrow('open-pr').operation).toBe('api.http.call');
+  });
+
+  it('reads the repository on the same GitHub binding the pull request uses, before the approval', () => {
+    const read = taskOrThrow('read-repository');
+    const openPr = taskOrThrow('open-pr');
+    expect(read.inputTemplate).toEqual({
+      apiId: 'github',
+      endpointId: 'getRepository',
+      params: { owner: { $bind: 'owner' }, repo: { $bind: 'repo' } },
+      response: { format: 'json' },
+    });
+    const openPrParams = (openPr.inputTemplate as { params: Record<string, unknown> }).params;
+    expect(openPrParams['owner']).toEqual({ $bind: 'owner' });
+    expect(openPrParams['repo']).toEqual({ $bind: 'repo' });
+    expect(read.inputBindings).toEqual({
+      owner: { kind: 'run_input', path: 'owner' },
+      repo: { kind: 'run_input', path: 'repo' },
+    });
+    const kinds = Object.values(read.inputBindings ?? {}).map((b) => b.kind);
+    expect(kinds).not.toContain('connection_binding');
+    expect(read.when).toEqual({
+      expression: "tasks.commit.output.state == 'applied'",
+      onMissingRef: 'skip',
+    });
+  });
+
+  it('fails the run at the read when the repository cannot be seen, saying what to check', () => {
+    const read = taskOrThrow('read-repository');
+    // A 404 comes back as a call that answered: the projection is what fails,
+    // and with one attempt and no output contract there is nothing to resume.
+    expect(read.outputProjection).toEqual({
+      repository: { path: 'data.full_name', onMissing: 'error' },
+    });
+    expect(read.outputContract).toBeUndefined();
+    expect(read.maxAttempts).toBe(1);
+    expect(read.goal).toContain(
+      'the GitHub credential bound to this space cannot see `owner`/`repo`',
+    );
+    expect(read.goal).toContain(
+      'GitHub answers 404 for a private repository the token has no access to',
+    );
+    expect(read.goal).toContain("that credential's repository access is the thing to check");
+    expect(read.goal).toContain('Nothing has been pushed');
+    for (const prose of [
+      PUBLISH_LOCAL_CHANGES.description,
+      taskOrThrow('approve-push').pauseInstruction ?? '',
+      wf.output?.guidance ?? '',
+    ]) {
+      expect(prose).not.toContain('404');
+    }
   });
 
   it('commits the patch onto its branch, carrying the base it was made against', () => {
@@ -77,7 +146,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       commit: {
         branch: { $bind: 'branch' },
         message: { $bind: 'commitMessage' },
-        base: { $bind: 'baseSha' },
+        baseSha: { $bind: 'baseSha' },
       },
     });
     // A commit is not replayable — after the first attempt the branch exists
@@ -98,13 +167,45 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       { ...inputs, baseSha: 'a'.repeat(40) },
       declared,
     );
-    expect(appended['commit']).toEqual({ branch: 'feat/x', message: 'm', base: 'a'.repeat(40) });
+    expect(appended['commit']).toEqual({
+      branch: 'feat/x',
+      message: 'm',
+      baseSha: 'a'.repeat(40),
+    });
+    expect(HostFilePatchInputSchema.safeParse({ ...appended, mode: 'clean' }).success).toBe(true);
 
     const baseSha = (wf.runInputs ?? []).find((i) => i.id === 'baseSha');
     expect(baseSha?.required).toBe(false);
     expect(PUBLISH_LOCAL_CHANGES.description).toContain(
       'a branch is reused only that way, and a fresh change takes a fresh branch',
     );
+  });
+
+  it('takes the owner and the repository as names, never a URL or `owner/repo`', () => {
+    const entry = taskOrThrow('commit').inputContract?.bindings ?? {};
+    for (const id of ['owner', 'repo']) {
+      const declared = (wf.runInputs ?? []).find((i) => i.id === id);
+      const schema = declared?.schema as { pattern?: string; description?: string } | undefined;
+      expect(schema?.pattern, id).toBeDefined();
+      // The entry task's contract is what a start is checked against.
+      expect(entry[id]?.schema, id).toEqual(declared?.schema);
+      expect(schema?.description, id).toContain('not a URL or `owner/repo`');
+      expect(declared?.description, id).toContain('not a URL or `owner/repo`');
+
+      const accepts = new RegExp(schema?.pattern ?? '');
+      for (const name of ['aflowai', 'aflow', 'my.repo', 'my_repo', 'my-repo-2']) {
+        expect(accepts.test(name), `${id} ${name}`).toBe(true);
+      }
+      for (const name of [
+        'https://github.com/aflowai/aflow',
+        'github.com/aflowai/aflow',
+        'aflowai/aflow',
+        'git@github.com:aflowai/aflow.git',
+        'two words',
+      ]) {
+        expect(accepts.test(name), `${id} ${name}`).toBe(false);
+      }
+    }
   });
 
   it('pins the push argv, binding only the branch', () => {
@@ -139,6 +240,38 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(taskOrThrow('push').maxAttempts).toBe(1);
     expect(approve.pauseInstruction).toContain('nothing has left the machine');
     expect(approve.actionPreview?.op).toBe('host.process.exec');
+  });
+
+  it('shows the commit being approved, read from the commit task', () => {
+    expect(taskOrThrow('approve-push').actionPreview?.inputBindings).toEqual({
+      bindingId: { kind: 'run_input', path: 'bindingId' },
+      branch: { kind: 'run_input', path: 'branch' },
+      commitSha: { kind: 'task_output', taskId: 'commit', path: 'commit.sha' },
+      commitBranch: { kind: 'task_output', taskId: 'commit', path: 'commit.branch' },
+      commitMessage: { kind: 'task_output', taskId: 'commit', path: 'commit.message' },
+      filesChanged: { kind: 'task_output', taskId: 'commit', path: 'filesChanged' },
+    });
+    // Every path is one the patch operation returns for an applied commit, so
+    // the preview resolves — an unresolved one refuses the approval itself.
+    const applied = HostFilePatchOutputSchema.parse({
+      state: 'applied',
+      filesChanged: 2,
+      files: ['a.ts', 'b.ts'],
+      conflicts: [],
+      commit: {
+        branch: 'aflow/x',
+        sha: 'b'.repeat(40),
+        message: 'The change',
+        baseSha: 'a'.repeat(40),
+        appended: false,
+      },
+    });
+    expect(applied.commit?.message).toBe('The change');
+    expect(applied.filesChanged).toBe(2);
+  });
+
+  it('lets any number of publications wait at their approvals at once', () => {
+    expect(PUBLISH_LOCAL_CHANGES.bundle.manifest.concurrency?.maxConcurrentRuns).toBe('unlimited');
   });
 
   it('opens the pull request on the space’s own GitHub connection, only after the push succeeded', () => {
