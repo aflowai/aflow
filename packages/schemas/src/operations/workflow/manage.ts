@@ -35,37 +35,47 @@ const PUT_FIELDS_NOT_THE_WRITERS: Readonly<Record<string, string>> = {
 };
 
 export const WorkflowPutInputSchema = z
-  .object({
-    slug: z
-      .string()
-      .regex(/^[a-z0-9][a-z0-9-]*[a-z0-9]$/)
-      .min(3)
-      .max(64),
-    name: z.string().min(1).max(120),
-    description: z.string().max(2000).optional(),
-    outcomes: z.array(OutcomeSchema).min(1).max(10),
-    mode: WorkflowModeSchema,
-    tasks: z.array(WorkflowTaskSchema).min(1).max(20),
-    /** 104j §6.1: Workflow-level state variable declarations. */
-    stateVariables: z.array(WorkflowStateVariableSchema).max(20).default([]),
-    /** Declared run-input contract — declaration only; enforcement lands later. */
-    runInputs: z.array(WorkflowRunInputSchema).max(20).default([]),
-    output: WorkflowOutputDeclarationSchema.optional().describe(
-      'Primary + guidance only; values derive from stateVariables × promoteOutputs',
-    ),
-    iteration: IterationPolicySchema.optional(),
-    budget: WorkflowBudgetSchema.optional(),
-    assignedAgent: z.string().optional(),
-    taskAssignments: z.record(z.string()).optional(),
-    activation: ProcedureActivationSchema.optional(),
-  })
-  .passthrough()
+  .object(
+    {
+      slug: z
+        .string()
+        .regex(/^[a-z0-9][a-z0-9-]*[a-z0-9]$/)
+        .min(3)
+        .max(64),
+      name: z.string().min(1).max(120),
+      description: z.string().max(2000).optional(),
+      outcomes: z.array(OutcomeSchema).min(1).max(10),
+      mode: WorkflowModeSchema,
+      tasks: z.array(WorkflowTaskSchema).min(1).max(20),
+      /** 104j §6.1: Workflow-level state variable declarations. */
+      stateVariables: z.array(WorkflowStateVariableSchema).max(20).default([]),
+      /** Declared run-input contract — declaration only; enforcement lands later. */
+      runInputs: z.array(WorkflowRunInputSchema).max(20).default([]),
+      output: WorkflowOutputDeclarationSchema.optional().describe(
+        'Primary + guidance only; values derive from stateVariables × promoteOutputs',
+      ),
+      iteration: IterationPolicySchema.optional(),
+      budget: WorkflowBudgetSchema.optional(),
+      assignedAgent: z.string().optional(),
+      taskAssignments: z.record(z.string()).optional(),
+      activation: ProcedureActivationSchema.optional(),
+    },
+    {
+      errorMap: (issue, ctx) =>
+        issue.code === z.ZodIssueCode.unrecognized_keys
+          ? {
+              message: issue.keys
+                .map(
+                  (key) =>
+                    `${key}: ${PUT_FIELDS_NOT_THE_WRITERS[key] ?? 'not a field of workflow.manage.put.'}`,
+                )
+                .join(' '),
+            }
+          : { message: ctx.defaultError },
+    },
+  )
+  .strict()
   .superRefine((data, ctx) => {
-    for (const [field, reason] of Object.entries(PUT_FIELDS_NOT_THE_WRITERS)) {
-      if (Object.hasOwn(data, field)) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: [field], message: reason });
-      }
-    }
     for (let i = 0; i < data.tasks.length; i++) {
       const task = data.tasks[i];
       if (task) assertAuthoredTask(task, ctx, ['tasks', i]);
@@ -77,12 +87,8 @@ export const WorkflowPutOutputSchema = z.object({
   id: z.string().uuid(),
   slug: z.string(),
   revision: z.number().int(),
-  status: WorkflowStatusSchema,
+  status: z.literal('draft').describe('It runs once the operator approves it from the skill page.'),
   path: z.string(),
-  /** True if this call created the workflow, false if it replaced an existing one. */
-  created: z.boolean(),
-  /** Non-fatal advisory — e.g. "a run is currently active; edits apply to the next run". */
-  warning: z.string().optional(),
 });
 export type WorkflowPutOutput = z.infer<typeof WorkflowPutOutputSchema>;
 

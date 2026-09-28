@@ -228,3 +228,58 @@ describe('resolveTaskIdPaths', () => {
     ]);
   });
 });
+
+describe('resolveTaskIdPaths resolves each id where the earlier operations left it', () => {
+  const abc = [{ taskId: 'a' }, { taskId: 'b' }, { taskId: 'c' }];
+  const paths = (ops: Parameters<typeof resolveTaskIdPaths>[0]) =>
+    resolveTaskIdPaths(ops, abc).map((o) => o.path);
+
+  it('follows a remove', () => {
+    expect(
+      paths([
+        { op: 'remove', path: '/tasks/a' },
+        { op: 'replace', path: '/tasks/b/goal', value: 'new' },
+      ]),
+    ).toEqual(['/tasks/0', '/tasks/0/goal']);
+  });
+
+  it('follows an insert', () => {
+    expect(
+      paths([
+        { op: 'add', path: '/tasks/0', value: { taskId: 'z' } },
+        { op: 'replace', path: '/tasks/c/goal', value: 'new' },
+        { op: 'replace', path: '/tasks/z/goal', value: 'new' },
+      ]),
+    ).toEqual(['/tasks/0', '/tasks/3/goal', '/tasks/0/goal']);
+  });
+
+  it('follows a move and a renamed id', () => {
+    expect(
+      paths([
+        { op: 'move', from: '/tasks/a', path: '/tasks/2' },
+        { op: 'replace', path: '/tasks/a/goal', value: 'new' },
+        { op: 'replace', path: '/tasks/b/taskId', value: 'bee' },
+        { op: 'replace', path: '/tasks/bee/goal', value: 'new' },
+      ]),
+    ).toEqual(['/tasks/2', '/tasks/2/goal', '/tasks/0/taskId', '/tasks/0/goal']);
+  });
+
+  it('lands an edit on the task it names once the patch is applied', async () => {
+    const { applyJsonPatch } = await import('@aflow/lib');
+    const doc = { tasks: abc.map((t) => ({ ...t, goal: t.taskId })) };
+    const patched = applyJsonPatch(
+      doc,
+      resolveTaskIdPaths(
+        [
+          { op: 'remove', path: '/tasks/a' },
+          { op: 'replace', path: '/tasks/b/goal', value: 'new' },
+        ],
+        abc,
+      ),
+    );
+    expect(patched.tasks).toEqual([
+      { taskId: 'b', goal: 'new' },
+      { taskId: 'c', goal: 'c' },
+    ]);
+  });
+});

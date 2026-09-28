@@ -108,7 +108,6 @@ export async function handleWorkflowPut(
       revision: workflow.revision,
       status: workflow.status,
       path: workflowDocPath(slug),
-      created: true,
     },
     startTime,
   );

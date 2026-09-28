@@ -57,12 +57,20 @@ describe('WorkflowPutInputSchema', () => {
     expect(parsed.mode).toBe('optimization');
   });
 
+  it('refuses a field the operation does not have', () => {
+    const result = WorkflowPutInputSchema.safeParse({ ...baseline, tasksList: [] });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.message).toContain('tasksList: not a field');
+  });
+
   it.each(['writeMode', 'expectedRevision', 'status', 'origin'])(
     'refuses %s, which is not the writer’s to set',
     (field) => {
       const result = WorkflowPutInputSchema.safeParse({ ...baseline, [field]: 'x' });
       expect(result.success).toBe(false);
-      expect(result.error?.issues.some((i) => i.path[0] === field)).toBe(true);
+      const message = result.error?.issues[0]?.message ?? '';
+      expect(message).toContain(`${field}: `);
+      expect(message).not.toContain('not a field');
     },
   );
 
@@ -79,30 +87,17 @@ describe('WorkflowPutInputSchema', () => {
 });
 
 describe('WorkflowPutOutputSchema', () => {
-  it('includes created and optional warning fields', () => {
-    const parsed = WorkflowPutOutputSchema.parse({
-      id: '11111111-1111-1111-1111-111111111111',
-      slug: 'my-workflow',
-      revision: 2,
-      status: 'draft',
-      path: '/workflows/my-workflow/workflow.json',
-      created: false,
-      warning: 'active run exists; edits apply next run',
-    });
-    expect(parsed.created).toBe(false);
-    expect(parsed.warning).toContain('active run');
-  });
-
-  it('allows warning to be absent', () => {
-    const parsed = WorkflowPutOutputSchema.parse({
+  it('reports the created workflow as a draft', () => {
+    const receipt = {
       id: '11111111-1111-1111-1111-111111111111',
       slug: 'my-workflow',
       revision: 1,
-      status: 'draft',
       path: '/workflows/my-workflow/workflow.json',
-      created: true,
-    });
-    expect(parsed.warning).toBeUndefined();
+    };
+    expect(WorkflowPutOutputSchema.parse({ ...receipt, status: 'draft' }).status).toBe('draft');
+    expect(WorkflowPutOutputSchema.safeParse({ ...receipt, status: 'approved' }).success).toBe(
+      false,
+    );
   });
 });
 

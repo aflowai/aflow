@@ -69,6 +69,32 @@ function generatedMediaMutationMessage(path: string): string {
   );
 }
 
+/**
+ * A workflow's definition, its activation and its revision history — what
+ * `workflow.run.start` reads and what ratification writes. Other documents a
+ * skill keeps under its `/workflows/{slug}/` folder (a data cache, notes) stay
+ * ordinary memory.
+ */
+const WORKFLOW_DEFINITION_PATH_RE =
+  /^\/workflows\/[^/]+\/(?:workflow\.json|activation\.json|revisions\/.+)$/u;
+
+/** Directories whose removal takes a workflow definition with them. */
+const WORKFLOW_DEFINITION_SUBTREE_RE = /^\/workflows\/(?:[^/]+\/(?:revisions\/)?)?$/u;
+
+export function isWorkflowDefinitionPath(path: string | null | undefined): path is string {
+  const canonical = canonicalOrNull(path);
+  return canonical !== null && WORKFLOW_DEFINITION_PATH_RE.test(canonical);
+}
+
+function workflowDefinitionMutationMessage(path: string): string {
+  return (
+    `Direct changes to ${path} are blocked. ` +
+    'A workflow definition is changed with workflow.manage.patch, where a definition change becomes a ' +
+    'proposal the operator ratifies, and only the operator approves a workflow. ' +
+    'Create a new workflow with workflow.manage.put.'
+  );
+}
+
 const PLATFORM_EVIDENCE_PREFIX = '/coach/evidence/';
 
 export function isPlatformEvidencePath(path: string | null | undefined): path is string {
@@ -115,6 +141,12 @@ export function governedSubtreeRefusal(path: string | null | undefined): string 
   const canonical = canonicalOrNull(path);
   if (canonical === null) return null;
   const subtree = canonical.endsWith('/') ? canonical : `${canonical}/`;
+  if (WORKFLOW_DEFINITION_SUBTREE_RE.test(subtree)) {
+    return (
+      `Deleting ${canonical} is blocked because it removes a workflow definition, which changes ` +
+      'only through workflow.manage.patch and the operator. Delete the documents you own by naming them.'
+    );
+  }
   const governed = GOVERNED_PREFIXES.find(
     (prefix) => prefix.startsWith(subtree) || subtree.startsWith(prefix),
   );
@@ -161,6 +193,7 @@ export function governedPathRefusal(
   if (canonical === null) return null;
   if (isGovernedEvalSuitePath(canonical)) return governedEvalSuiteMutationMessage(canonical);
   if (isPlatformEvidencePath(canonical)) return platformEvidenceMutationMessage(canonical);
+  if (isWorkflowDefinitionPath(canonical)) return workflowDefinitionMutationMessage(canonical);
   // Checked on the RESOLVED path, so a draft reached by document id is refused
   // too — the id route bypasses every path-shaped guard upstream.
   if (isTaskDraftPath(canonical)) return taskDraftMutationMessage(canonical);

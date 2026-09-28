@@ -89,3 +89,35 @@ describe('governedSubtreeRefusal', () => {
     expect(governedSubtreeRefusal(null)).toBeNull();
   });
 });
+
+describe('workflow definitions are changed through workflow.manage.patch and the operator', () => {
+  it.each([
+    '/workflows/lead-scoring/workflow.json',
+    '/workflows/lead-scoring/activation.json',
+    '/workflows/lead-scoring/revisions/3.json',
+    '//workflows/./lead-scoring/workflow.json',
+  ])('refuses a direct write to %s, naming the path that does it', (path) => {
+    expect(governedPathRefusal(path)).toContain('workflow.manage.patch');
+  });
+
+  it('leaves a skill’s other documents under its folder writable', () => {
+    expect(
+      governedPathRefusal(
+        '/workflows/kaggle-competition-optimizer/competitions/titanic/data/train.csv',
+      ),
+    ).toBeNull();
+  });
+
+  it.each(['/workflows', '/workflows/lead-scoring', '/workflows/lead-scoring/revisions'])(
+    'refuses deleting %s, which removes a definition',
+    (path) => {
+      expect(governedSubtreeRefusal(path)).toContain('workflow definition');
+    },
+  );
+
+  it('allows deleting a skill’s own cache folder', () => {
+    expect(
+      governedSubtreeRefusal('/workflows/kaggle-competition-optimizer/competitions/titanic'),
+    ).toBeNull();
+  });
+});
