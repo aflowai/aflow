@@ -144,6 +144,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     const commit = taskOrThrow('commit');
     expect(commit.inputTemplate).toEqual({
       bindingId: { $bind: 'bindingId' },
+      patchRef: { $bind: 'patchRef' },
       patch: { $bind: 'patch' },
       mode: 'clean',
       commit: {
@@ -196,6 +197,51 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(PUBLISH_LOCAL_CHANGES.description).toContain(
       'a branch is reused only that way, and a fresh change takes a fresh branch',
     );
+  });
+
+  it("takes a commission's change by reference, and the commit takes exactly one of the pair", () => {
+    const commit = taskOrThrow('commit');
+    const template = commit.inputTemplate;
+    if (template === undefined) throw new Error('the commit task must carry a template');
+    const declared = new Set(Object.keys(commit.inputBindings ?? {}));
+    const ref = 'gs://file-store/tenants/t_1/runs/r_1/steps/s_1/attempt/1/patch.json';
+    const inputs = { bindingId: 'folder-1', branch: 'feat/x', commitMessage: 'm' };
+
+    const byRef = substituteTemplateBinds(template, { ...inputs, patchRef: ref }, declared);
+    expect(byRef['patchRef']).toBe(ref);
+    expect(byRef).not.toHaveProperty('patch');
+    expect(HostFilePatchInputSchema.safeParse(byRef).success).toBe(true);
+
+    const byText = substituteTemplateBinds(template, { ...inputs, patch: 'diff' }, declared);
+    expect(byText).not.toHaveProperty('patchRef');
+    expect(HostFilePatchInputSchema.safeParse(byText).success).toBe(true);
+
+    // Neither and both reach the commit and are refused there, with a message
+    // that says which to pass.
+    const neither = HostFilePatchInputSchema.safeParse(
+      substituteTemplateBinds(template, inputs, declared),
+    );
+    expect(neither.success).toBe(false);
+    expect(neither.error?.issues[0]?.message).toContain('`patchRef` for the change a commission');
+    const both = HostFilePatchInputSchema.safeParse(
+      substituteTemplateBinds(template, { ...inputs, patch: 'diff', patchRef: ref }, declared),
+    );
+    expect(both.success).toBe(false);
+    expect(both.error?.issues[0]?.message).toContain('not both');
+
+    const runInput = (id: string) => (wf.runInputs ?? []).find((i) => i.id === id);
+    expect(runInput('patchRef')?.required).toBe(false);
+    expect(runInput('patch')?.required).toBe(false);
+    for (const id of ['patchRef', 'patch']) {
+      expect(commit.inputContract?.bindings[id]?.schema, id).toEqual(runInput(id)?.schema);
+    }
+    // A stored ref only: an inline one is the diff's bytes in the run input again.
+    const refPattern = new RegExp((runInput('patchRef')?.schema as { pattern: string }).pattern);
+    expect(refPattern.test(ref)).toBe(true);
+    expect(refPattern.test('inline:ZGlmZg==')).toBe(false);
+    expect(runInput('patchRef')?.description).toContain('the `patchRef` its result reports');
+    expect(runInput('patch')?.description).toContain('must stay small');
+    expect(PUBLISH_LOCAL_CHANGES.description).toContain("Never pass a commission's `patch` text.");
   });
 
   it('takes the owner and the repository as names, never a URL or `owner/repo`', () => {
@@ -374,7 +420,6 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     const required = (wf.runInputs ?? []).filter((i) => i.required).map((i) => i.id);
     expect(required).toEqual([
       'bindingId',
-      'patch',
       'branch',
       'commitMessage',
       'title',

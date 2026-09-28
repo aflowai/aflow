@@ -3,6 +3,7 @@ import {
   HostFilePatchInputSchema,
   HostFilePatchOutputSchema,
   HostHarnessRunInputSchema,
+  HostHarnessRunOutputSchema,
 } from '../host.js';
 import { toJsonSchemaSync } from '../../utils/jsonSchema.js';
 
@@ -106,5 +107,69 @@ describe('a commission and a publication name the commit they start from', () =>
         .success,
     ).toBe(true);
     expect(HostFilePatchOutputSchema.safeParse({ ...result, commit }).success).toBe(false);
+  });
+});
+
+describe("a commission's diff travels by reference", () => {
+  const ref = 'gs://file-store/tenants/t_1/runs/r_1/steps/s_1/attempt/1/patch.json';
+
+  it('takes exactly one of `patchRef` and `patch`, in either mode', () => {
+    for (const commit of [undefined, { branch: 'aflow/fix', message: 'Fix' }]) {
+      const at = { bindingId: 'hb_x', ...(commit !== undefined ? { commit } : {}) };
+      expect(HostFilePatchInputSchema.parse({ ...at, patchRef: ref }).patchRef).toBe(ref);
+      expect(HostFilePatchInputSchema.safeParse({ ...at, patch: 'diff\n' }).success).toBe(true);
+
+      const neither = HostFilePatchInputSchema.safeParse(at);
+      expect(neither.success).toBe(false);
+      expect(neither.error?.issues[0]?.message).toContain(
+        '`patchRef` for the change a commission reported',
+      );
+      const both = HostFilePatchInputSchema.safeParse({ ...at, patch: 'diff\n', patchRef: ref });
+      expect(both.success).toBe(false);
+      expect(both.error?.issues[0]?.message).toContain('not both');
+    }
+  });
+
+  it('refuses a `patchRef` that is not a payload reference', () => {
+    expect(
+      HostFilePatchInputSchema.safeParse({ bindingId: 'hb_x', patchRef: 'the diff' }).success,
+    ).toBe(false);
+  });
+
+  it('reports the whole diff by reference beside the inline copy, and says which to pass on', () => {
+    const run = {
+      runId: 'hr_1',
+      harness: { id: 'claude' },
+      continued: false,
+      baseSha: 'abc',
+      patchRef: ref,
+      patch: 'diff --git a/x b/x\n',
+      filesChanged: 1,
+      patchTruncated: true,
+      exitCode: 0,
+      timedOut: false,
+      durationMs: 10,
+      truncated: false,
+      applies: 'clean',
+      headMoved: false,
+      refChanges: [],
+      blockedDomains: [],
+    };
+    expect(HostHarnessRunOutputSchema.parse(run).patchRef).toBe(ref);
+    expect(HostHarnessRunOutputSchema.safeParse({ ...run, patchRef: 'a diff' }).success).toBe(
+      false,
+    );
+    const shape = HostHarnessRunOutputSchema.shape;
+    expect(shape.patchRef.description).toContain('This is what a publication takes');
+    expect(shape.patch.description).toContain('Never what a publication takes');
+    expect(shape.patchTruncated.description).toContain('`patchRef` holds all of it');
+
+    const input = toJsonSchemaSync(HostFilePatchInputSchema) as {
+      properties: Record<string, { description?: string }>;
+    };
+    expect(input.properties['patchRef']?.description).toContain(
+      'the `patchRef` a `host.harness.run` result reports',
+    );
+    expect(input.properties['patch']?.description).toContain('pass its `patchRef` instead');
   });
 });

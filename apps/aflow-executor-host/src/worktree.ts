@@ -40,8 +40,14 @@ import { promisify } from 'node:util';
 const run = promisify(execFile);
 
 const GIT_TIMEOUT_MS = 30_000;
-/** A diff large enough to be a build directory is a mistake, not a change set. */
-const DIFF_CAP_BYTES = 2 * 1024 * 1024;
+/**
+ * The largest diff a run keeps and a patch applies. Past it the diff is a build
+ * directory, which is a mistake rather than a change set. It stays well under
+ * `APPLY_OUTPUT_CAP_BYTES`, which is sized against it.
+ */
+export const DIFF_CEILING_BYTES = 8 * 1024 * 1024;
+/** How much of a diff a run's result carries inline, for reading. */
+export const INLINE_DIFF_CAP_BYTES = 2 * 1024 * 1024;
 /**
  * Room for what an apply says about itself, which is a line per file and so
  * grows with the diff rather than being bounded by it. Node kills a child that
@@ -566,11 +572,14 @@ export async function prepareWorktree(
 }
 
 export interface WorktreeChanges {
-  /** Unified diff against `baseSha`, empty when the harness changed nothing. */
+  /**
+   * The whole unified diff against `baseSha`, never a prefix. Empty when the
+   * harness changed nothing, or when the diff is over `DIFF_CEILING_BYTES`.
+   */
   readonly patch: string;
   readonly filesChanged: number;
-  /** True when the diff was capped, so a caller never reports it as complete. */
-  readonly truncated: boolean;
+  /** True when files changed but the diff is over the ceiling and was not read. */
+  readonly overCeiling: boolean;
 }
 
 /**
@@ -603,32 +612,31 @@ export async function collectChanges(worktreePath: string): Promise<WorktreeChan
   const nameOnly = await git(worktreePath, ['diff', '--cached', '--name-only']);
   const filesChanged = nameOnly.split('\n').filter((line) => line.length > 0).length;
   if (filesChanged === 0) {
-    return { patch: '', filesChanged: 0, truncated: false };
+    return { patch: '', filesChanged: 0, overCeiling: false };
   }
 
-  let patch: string;
-  let truncated = false;
   try {
     // `--no-textconv` and `--no-ext-diff`: a harness can write `.gitattributes`,
     // and both a textconv driver and an external diff command are programs the
     // operator's own git config names and git runs here — outside the sandbox
     // the harness was confined to. The diff is wanted verbatim in any case.
-    patch = await git(
+    const patch = await git(
       worktreePath,
       ['diff', '--cached', '--no-textconv', '--no-ext-diff'],
-      DIFF_CAP_BYTES,
+      DIFF_CEILING_BYTES,
     );
-  } catch {
-    // maxBuffer overrun is the expected failure for an oversized diff; the file
-    // list still stands, so the run reports what changed without the body.
-    patch = '';
-    truncated = true;
+    return { patch, filesChanged, overCeiling: false };
+  } catch (error) {
+    // The file list still stands, so an oversized diff is reported as what
+    // changed without the body rather than as a failure to read.
+    if ((error as { code?: unknown }).code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
+      return { patch: '', filesChanged, overCeiling: true };
+    }
+    throw new WorktreeError(
+      `Could not read what the harness changed: ${error instanceof Error ? error.message.split('\n')[0] : 'git failed'}`,
+      'git_failed',
+    );
   }
-  if (patch.length > DIFF_CAP_BYTES) {
-    patch = patch.slice(0, DIFF_CAP_BYTES);
-    truncated = true;
-  }
-  return { patch, filesChanged, truncated };
 }
 
 /**
@@ -806,7 +814,7 @@ export async function patchPaths(root: string, patch: string): Promise<string[]>
     await writeFile(patchPath, patch, 'utf8');
     const paths = new Set<string>();
 
-    const numstat = await git(root, ['apply', '--numstat', '-z', patchPath], DIFF_CAP_BYTES);
+    const numstat = await git(root, ['apply', '--numstat', '-z', patchPath], DIFF_CEILING_BYTES);
     for (const record of numstat.split('\0')) {
       if (record === '') continue;
       // `added\tdeleted\tpath` — split on the first two tabs only, because the
@@ -825,7 +833,7 @@ export async function patchPaths(root: string, patch: string): Promise<string[]>
     }
 
     // Rename and copy sources, which numstat leaves out.
-    const summary = await git(root, ['apply', '--summary', patchPath], DIFF_CAP_BYTES);
+    const summary = await git(root, ['apply', '--summary', patchPath], DIFF_CEILING_BYTES);
     for (const line of summary.split('\n')) {
       const match = /^\s*(?:rename|copy)\s+(.*?)\s+=>\s+(.*?)(?:\s+\(\d+%\))?\s*$/.exec(line);
       if (match?.[1] !== undefined && match[1] !== '') paths.add(match[1]);

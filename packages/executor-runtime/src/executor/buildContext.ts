@@ -147,7 +147,7 @@ export async function buildExecutionContext(
     },
 
     writePayload: async (
-      kind: 'output' | 'error' | 'input_request' | 'body' | 'raw_body' | 'activity',
+      kind: 'output' | 'error' | 'input_request' | 'body' | 'raw_body' | 'activity' | 'patch',
       data: unknown,
     ): Promise<PayloadRef> => {
       const payloadKind = kind === 'input_request' ? ('requested_input' as const) : kind;

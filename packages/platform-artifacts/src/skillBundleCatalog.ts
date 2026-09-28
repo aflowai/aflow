@@ -204,7 +204,7 @@ const LOCAL_CODE_REVIEW_BUNDLE: SkillBundleInput = {
 
 const LOCAL_PUBLISH_BUNDLE: SkillBundleInput = {
   bundleId: 'local-publish' as SkillBundleId,
-  version: 3,
+  version: 4,
   name: 'Local Publish',
   tagline:
     'Commit a patch onto a branch of a connected repository, approve, and open the pull request.',
@@ -213,7 +213,7 @@ const LOCAL_PUBLISH_BUNDLE: SkillBundleInput = {
 **What it installs**:
 - The **Publish Local Changes** skill — the patch is committed in a detached worktree at the folder's last commit, so the working tree is untouched; the run then waits for approval, and only after it does the branch reach \`origin\` and the pull request open.
 
-**After install**: connect the repository as a folder allowing pushes under a branch prefix, and bind the GitHub connector for the space. Then hand the skill a patch, a branch name under that prefix and a title.`,
+**After install**: connect the repository as a folder allowing pushes under a branch prefix, and bind the GitHub connector for the space. Then hand the skill a commission's \`patchRef\`, a branch name under that prefix and a title.`,
   tags: ['coding', 'publish', 'git', 'local', 'developer-tools'],
   skillCatalogIds: ['publish-local-changes'],
   prerequisiteBundleIds: [],
@@ -226,6 +226,7 @@ const LOCAL_PUBLISH_BUNDLE: SkillBundleInput = {
   helmsmanHints: [
     'A folder connected without a publish prefix can be committed to but not pushed from — the push is refused where it runs. Ask for the folder to be reconnected allowing pushes under a prefix before starting a publication.',
     'The run waits at the approval, so the range can be reviewed first — Local Code Review over `<base>..<branch>` — and approved or declined on what it finds.',
+    "A commission's change is published by its `patchRef`, never its `patch` text: that copy is cut short on a large change, and a run's inputs are capped at 32 KB together. `patch` is for a small diff the operator hands over.",
   ],
 };
 

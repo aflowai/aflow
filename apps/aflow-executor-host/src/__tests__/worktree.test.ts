@@ -109,7 +109,7 @@ describe('worktree per run', () => {
   it('reports no change as no change, not as an empty diff of something', async () => {
     const wt = await prepareWorktree(repo, scratch, 'work');
     const changes = await collectChanges(wt.path);
-    expect(changes).toEqual({ patch: '', filesChanged: 0, truncated: false });
+    expect(changes).toEqual({ patch: '', filesChanged: 0, overCeiling: false });
     await removeWorktree(repo, wt.path);
   });
 

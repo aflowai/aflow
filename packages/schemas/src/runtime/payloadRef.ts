@@ -81,6 +81,10 @@ export const PayloadKindSchema = z.enum([
   // one kind for both would make the feed and the result a single object with
   // only the last write surviving.
   'activity',
+  // The whole diff a harness step produced. Distinct from 'output' because the
+  // step's result carries only a capped inline copy of it at that path, and a
+  // publication reads this one by reference.
+  'patch',
   // One simulated call's world mutations. Distinct from the step's own output
   // because the payload path is deterministic per (step, attempt, kind): the
   // delta and the response the agent sees would otherwise be one object, and
