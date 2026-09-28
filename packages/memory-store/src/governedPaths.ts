@@ -101,7 +101,7 @@ function workflowDefinitionMutationMessage(path: string): string {
     `Direct changes to ${path} are blocked. ` +
     'A workflow definition and a skill manifest are changed with workflow.manage.patch, where a definition change becomes a ' +
     'proposal the operator ratifies, and only the operator approves a workflow. ' +
-    'Create a new workflow with workflow.manage.put.'
+    'Create a new workflow with workflow.manage.put. An operator edits a workflow from its skill page.'
   );
 }
 

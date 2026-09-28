@@ -35,11 +35,11 @@ export async function handleWorkflowPut(
   const archived = await docRepo.getByPath(workflowDocPath(slug), spaceId, {
     includeDeleted: true,
   });
-  if (archived) {
+  if (archived?.deletedAt) {
     await emitStepError(
       args,
       'WORKFLOW_ARCHIVED',
-      `Workflow "${slug}" belongs to an archived skill, and creating it again would overwrite that skill's definition. Choose another slug, or ask the operator to restore the archived skill.`,
+      `Workflow "${slug}" was archived or deleted, and creating it again would overwrite its stored definition. Choose another slug, or ask the operator to restore it.`,
       startTime,
       'validation',
     );

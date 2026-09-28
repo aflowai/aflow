@@ -176,7 +176,9 @@ describe('an agent creates a workflow; it does not replace or approve one', () =
   it('refuses to put over an archived skill’s workflow and writes nothing', async () => {
     mockGetByPath.mockImplementation(
       async (_path: string, _space: string, opts?: { includeDeleted?: boolean }) =>
-        opts?.includeDeleted ? stored(existingWorkflow('approved')) : null,
+        opts?.includeDeleted
+          ? { ...stored(existingWorkflow('approved')), deletedAt: new Date() }
+          : null,
     );
 
     await handleWorkflowPut(makeArgs('workflow.manage.put'), putInput(), Date.now());

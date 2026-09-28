@@ -26,7 +26,7 @@ None was a validation gap — the workflow operations run the full skill-validit
 
 **D6 — A workflow's definition is not memory an agent writes.** `workflow.json`, `activation.json` and `revisions/**` under `/workflows/{slug}/`, and a skill's `/skills/{id}/manifest.json` — which carries the goal and campaign contract `patch` sends through a proposal — are governed paths: the generic memory tools refuse to write, patch or delete them, and a directory whose removal takes one with it. The workflow handlers and ratification write them through the document repository, as before. Other documents a skill keeps under its folder — a data cache, notes — stay ordinary memory. _Rejected:_ governing all of `/workflows/`, which breaks skills that cache data there.
 
-The operator's HTTP routes are unchanged: the operator is the approver, and their direct edits remain the escape hatch.
+The operator's workflow routes are unchanged: the operator is the approver, and their direct edits there remain the escape hatch. The raw memory editor refuses these documents for everyone, as it already did the eval suite — a definition edited as a JSON document skips the validation the workflow routes run.
 
 ## 3. Affected packages and contracts
 
