@@ -7,8 +7,9 @@
  * preconditions it assumes and cannot recover from, each of which otherwise
  * surfaces minutes later as an error naming something other than the cause.
  */
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, readFileSync } from 'node:fs';
+import { constants } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
@@ -58,5 +59,26 @@ if (SENTINELS.some((file) => !existsSync(join(REPO, file)))) {
 
 // ── Everything else is already this script's job ──────────────────────────────
 say('handing over to dev:local — datastores, migrations, instance, services');
-const dev = spawnSync('yarn', ['dev:local'], { cwd: REPO, stdio: 'inherit' });
-process.exit(dev.status ?? 1);
+const dev = spawn('yarn', ['dev:local'], { cwd: REPO, stdio: 'inherit' });
+
+// This process stays until the runner has finished its shutdown. Left to the
+// default disposition, Ctrl-C ends it at once, the shell prints its prompt, and
+// the runner's last lines land after that prompt with nothing following them —
+// which reads as a hang. The runner ignores a repeated signal, so forwarding one
+// it already received from the terminal is harmless.
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  process.on(signal, () => {
+    try {
+      dev.kill(signal);
+    } catch {
+      // Already gone; its exit below still ends this process.
+    }
+  });
+}
+
+dev.on('error', (error) => {
+  fail(`could not run yarn dev:local: ${error.message}`);
+});
+dev.on('exit', (code, signal) => {
+  process.exit(code ?? (signal === null ? 1 : 128 + (constants.signals[signal] ?? 0)));
+});

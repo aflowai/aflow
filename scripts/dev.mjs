@@ -358,6 +358,9 @@ function pairedHostEnvPath() {
   return existsSync(envPath) ? envPath : null;
 }
 
+/** Set when the profile wanted `executor-host` and yielded to one already running. */
+let hostExecutorYielded = false;
+
 /** Whether a host executor already runs here, as the launch-agent service or in a foreground shell. */
 function hostExecutorAlreadyRunning() {
   try {
@@ -369,6 +372,91 @@ function hostExecutorAlreadyRunning() {
   } catch {
     return false;
   }
+}
+
+/** The pids listening on a TCP port here, empty when nothing does. */
+function listenersOn(port) {
+  try {
+    const out = execSync(`lsof -t -sTCP:LISTEN -iTCP:${port} 2>/dev/null || true`, {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    return [
+      ...new Set(
+        out
+          .split('\n')
+          .map((line) => line.trim())
+          .filter(Boolean),
+      ),
+    ];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Refuses a profile whose ports something already listens on. The usual holder
+ * is the previous runner, still stopping: its teardown sweeps these ports, so it
+ * would kill this stack's server and web, and `tsx watch` would then keep the
+ * dead server's parent alive — a stack that looks up while nothing listens.
+ */
+function refuseTakenPorts(services) {
+  const taken = services.flatMap((name) =>
+    (SERVICE_REGISTRY[name]?.ports ?? []).flatMap((port) =>
+      listenersOn(port).map((pid) => ({ name, port, pid })),
+    ),
+  );
+  if (taken.length === 0) return;
+  console.error('');
+  for (const { name, port, pid } of taken) {
+    console.error(
+      `[dev-runner] Not starting: port ${port}, which ${name} needs, is held by pid ${pid}.`,
+    );
+  }
+  console.error(
+    '[dev-runner] If a previous stack is still stopping, wait for it to finish; otherwise stop ' +
+      'that process. Then run this again.\n',
+  );
+  process.exit(1);
+}
+
+/** Starts one registry service with its environment: the `.env` values, its own, or none. */
+function startService(serviceName, env) {
+  const entry = SERVICE_REGISTRY[serviceName];
+  if (!entry) {
+    console.error(`[dev-runner] Unknown service: ${serviceName}`);
+    process.exit(1);
+  }
+  const command = typeof entry === 'string' ? entry : entry.cmd;
+  const serviceEnv =
+    typeof entry === 'object' && entry.dotenv === false
+      ? null
+      : typeof entry === 'object' && entry.env
+        ? { ...env, ...entry.env }
+        : env;
+  return spawnService(serviceName, command, serviceEnv);
+}
+
+const HOST_EXECUTOR_RECHECK_MS = 5_000;
+let hostExecutorRecheck = null;
+
+/**
+ * Starts `executor-host` once the one this runner yielded to has gone. That one
+ * is often the previous stack's, still exiting, and a yield decided once would
+ * leave this stack without a host lane until someone noticed. Checking stops
+ * once this runner starts its own, which the same pgrep would otherwise find.
+ */
+function takeOverHostExecutorWhenFree(env) {
+  hostExecutorRecheck = setTimeout(() => {
+    hostExecutorRecheck = null;
+    if (devRunnerShuttingDown) return;
+    if (hostExecutorAlreadyRunning()) {
+      takeOverHostExecutorWhenFree(env);
+      return;
+    }
+    console.log('[dev-runner] No host executor is running anymore; starting executor-host.');
+    startService('executor-host', env);
+  }, HOST_EXECUTOR_RECHECK_MS);
 }
 
 /**
@@ -404,10 +492,11 @@ function resolveServices(options) {
         );
       } else if (hostExecutorAlreadyRunning()) {
         services.splice(services.indexOf('executor-host'), 1);
+        hostExecutorYielded = true;
         console.error(
           '[dev] executor-host not started: a host executor is already running on this machine ' +
             '(the launch-agent service or a foreground `yarn executor:host`). Only one may run; ' +
-            'it keeps serving this stack.',
+            'it keeps serving this stack, and this runner starts its own once that one exits.',
         );
       }
     }
@@ -511,6 +600,7 @@ function setupSignalHandlers() {
     if (shuttingDown) return;
     shuttingDown = true;
     devRunnerShuttingDown = true;
+    if (hostExecutorRecheck !== null) clearTimeout(hostExecutorRecheck);
 
     console.log(
       `\n[dev-runner] Received ${signal}, shutting down (${GRACE_PERIOD_MS / 1000}s grace)...`,
@@ -551,6 +641,7 @@ function setupSignalHandlers() {
         console.log(`[dev-runner] Clearing ports ${ports.join(', ')} if anything still listens...`);
         killListenersOnOwnedPorts(ports);
       }
+      console.log('[dev-runner] Stopped.');
       process.exit(0);
     });
   };
@@ -605,6 +696,7 @@ async function main() {
       process.exit(1);
     }
   }
+  refuseTakenPorts(services);
 
   // Check for stale packages (advisory)
   try {
@@ -625,19 +717,10 @@ async function main() {
   console.log(`[dev-runner] Using env file: ${options.env}\n`);
 
   for (const serviceName of services) {
-    const entry = SERVICE_REGISTRY[serviceName];
-    if (!entry) {
-      console.error(`[dev-runner] Unknown service: ${serviceName}`);
-      process.exit(1);
-    }
-    const command = typeof entry === 'string' ? entry : entry.cmd;
-    const serviceEnv =
-      typeof entry === 'object' && entry.dotenv === false
-        ? null
-        : typeof entry === 'object' && entry.env
-          ? { ...env, ...entry.env }
-          : env;
-    spawnService(serviceName, command, serviceEnv);
+    startService(serviceName, env);
+  }
+  if (hostExecutorYielded) {
+    takeOverHostExecutorWhenFree(env);
   }
 
   // Keep process alive
