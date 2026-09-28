@@ -255,7 +255,8 @@ export function SpaceCredentialsPage() {
                         <Row gap="xs">
                           {hasSpaceKey ? (
                             <>
-                              {provider.category === 'llm' && (
+                              {(provider.category === 'llm' ||
+                                provider.category === 'decision') && (
                                 <Button
                                   variant="ghost"
                                   size="sm"

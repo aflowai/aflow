@@ -38,11 +38,20 @@ describe('AiDecideInputSchema', () => {
     expect(JSON.stringify(result.error?.issues)).toContain('answers.<name>');
   });
 
+  it('refuses a yes_no that states no claim', () => {
+    expect(parse({ u: { type: 'yes_no' } }).success).toBe(false);
+    expect(parse({ u: { type: 'yes_no', criteria: { true: 'Asks for a refund' } } }).success).toBe(
+      true,
+    );
+  });
+
   it('refuses an empty question set', () => {
     expect(parse({}).success).toBe(false);
   });
 
   it('refuses a minConfidence outside 0..1', () => {
-    expect(parse({ u: { type: 'yes_no', minConfidence: 1.5 } }).success).toBe(false);
+    expect(parse({ u: { type: 'yes_no', instructions: 'x', minConfidence: 1.5 } }).success).toBe(
+      false,
+    );
   });
 });

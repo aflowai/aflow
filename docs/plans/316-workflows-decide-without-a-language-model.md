@@ -68,7 +68,7 @@ No stored data changes shape. A new credential provider id and a new operation i
 
 The request and response shapes in §3, taken from the provider's published SDK. Exit: a recorded response fixture that the adapter tests replay, and one live call through the adapter with a real key that matches it.
 
-**Delivered**: the wire shapes are read from the published TypeScript SDK's declarations and replayed as a fixture in the adapter tests. **Open**: the live call — no key has been used yet.
+**Delivered**: the wire shapes are read from the published TypeScript SDK's declarations and replayed as a fixture in the adapter tests, and a live call through the adapter matches them. The live API pins `jev-1.13.0` (`jev-latest` resolves to it), refuses an unknown model and a `noul` with neither instructions nor criteria, and nests a refusal's message under `detail`; the schema now refuses the claimless yes/no before it is sent, and the adapter reads the nested message. `GET /v1/models` distinguishes a good key from a rejected one.
 
 ### P1 — Client and credential (D1, D7)
 
@@ -80,7 +80,7 @@ The request and response shapes in §3, taken from the provider's published SDK.
 
 Schemas, registration with `usage` written for skill authors, the handler, usage and cost reporting. Exit: the handler's tests cover `decided` on both sides of `minConfidence` per type and a failing credential; `run_operation ai.decision.decide` on a local stack returns typed answers.
 
-**Delivered**: `decided` per type lives in `resolveDecisionAnswers` (ai-client) and is tested there, including the inclusive threshold, a choice outside the options and an answer of the wrong type. Migration 210 grants `ai.decision:read` to every system profile. **Open**: the local-stack call, which needs a key.
+**Delivered**: `decided` per type lives in `resolveDecisionAnswers` (ai-client) and is tested there, including the inclusive threshold, a choice outside the options and an answer of the wrong type. Migration 210 grants `ai.decision:read` to every system profile. A live decision-judge call through `AIClient` prices from the catalog and folds into a `JudgeVerdict`. **Open**: the local-stack call through the executor.
 
 ### P3 — Authoring (D4, D5, D6)
 

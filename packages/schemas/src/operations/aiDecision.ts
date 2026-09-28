@@ -103,6 +103,18 @@ export const DecisionQuestionsSchema = z
   .refine((questions) => Object.keys(questions).length > 0, {
     message: 'Ask at least one question.',
   })
+  .superRefine((questions, ctx) => {
+    for (const [name, q] of Object.entries(questions)) {
+      if (q.type !== 'yes_no' || q.instructions !== undefined) continue;
+      if (q.criteria?.true != null || q.criteria?.false != null) continue;
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [name],
+        message:
+          'A yes_no question states the claim it asks about: give instructions, or criteria for true or false.',
+      });
+    }
+  })
   .describe(
     'Named questions, all answered in one pass and each in isolation — one question cannot see another’s answer.',
   );

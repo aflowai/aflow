@@ -119,6 +119,11 @@ function refusalMessage(body: string, status: number): string {
     const parsed = JSON.parse(body) as Record<string, unknown>;
     const detail = parsed['detail'] ?? parsed['message'] ?? parsed['error'];
     if (typeof detail === 'string' && detail !== '') return detail;
+    const nested =
+      detail !== null && typeof detail === 'object'
+        ? (detail as Record<string, unknown>)['message']
+        : undefined;
+    if (typeof nested === 'string' && nested !== '') return nested;
     if (detail !== undefined) return JSON.stringify(detail);
   } catch {
     // Not JSON — fall through to the raw body.

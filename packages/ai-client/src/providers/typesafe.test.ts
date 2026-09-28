@@ -117,7 +117,9 @@ describe('TypeSafe adapter', () => {
   });
 
   it('classifies a rejected key as a non-retryable auth failure', async () => {
-    respond(401, { detail: 'Invalid API key' });
+    respond(401, {
+      detail: { error_type: 'authentication_error', message: 'Invalid API key' },
+    });
     const error = await rejection(adapter.decide(request));
     expect(error.code).toBe('auth');
     expect(error.retryable).toBe(false);
