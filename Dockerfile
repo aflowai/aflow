@@ -11,7 +11,7 @@
 # ---------------------------------------------------------------------------
 # Stage 1: Install dependencies and build
 # ---------------------------------------------------------------------------
-FROM node:22.22.0-alpine3.23 AS builder
+FROM node:22.23.3-alpine3.24 AS builder
 
 # Enable Corepack for Yarn 4 (Berry)
 RUN corepack enable
@@ -94,7 +94,7 @@ RUN rm -rf apps/*/.next/cache
 # ---------------------------------------------------------------------------
 # Stage 2: Production image (slim)
 # ---------------------------------------------------------------------------
-FROM node:22.22.0-alpine3.23 AS production
+FROM node:22.23.3-alpine3.24 AS production
 
 # The source label is what links a published image to its repository: the
 # registry shows that repository's README and grants its workflows access.
@@ -106,6 +106,11 @@ LABEL org.opencontainers.image.source="https://github.com/aflowai/aflow" \
 RUN apk add --no-cache docker-cli
 
 RUN corepack enable
+
+# npm ships with the base image and nothing here runs it — the image installs
+# and runs through corepack's Yarn — so it is removed rather than carried along
+# with its own dependency tree for the vulnerability scan to find.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 
 WORKDIR /app
 
