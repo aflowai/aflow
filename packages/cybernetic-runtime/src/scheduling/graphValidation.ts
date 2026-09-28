@@ -1144,6 +1144,13 @@ function validateTemplateOpInput(
         const childSchema = props[key];
         if (isRecord(childSchema)) checkNode(child, childSchema, joinField(path, key));
       }
+      // A record-shaped position (every entry validated by additionalProperties
+      // or keyed by propertyNames) declares no properties to descend into, so
+      // a literal there is validated whole or not at all.
+      const recordShaped =
+        Object.keys(props).length === 0 &&
+        (isRecord(schemaNode['additionalProperties']) || isRecord(schemaNode['propertyNames']));
+      if (recordShaped && !templateContainsBind(node)) checkLiteral(node, schemaNode, path);
       return;
     }
 
