@@ -195,7 +195,7 @@ async function main(): Promise<void> {
   // ever expire it.
   const bound = await loadHostPolicy(policyPath)
     .then((policy) => [...policy.bindings.values()].map((binding) => binding.root))
-    .catch(() => [] as string[]);
+    .catch(() => undefined);
   const orphaned = await removeOrphanedCheckouts(bound);
   const checkouts = [...orphaned.removed.values()].reduce((sum, count) => sum + count, 0);
   if (checkouts > 0 || orphaned.scratchDirs > 0) {

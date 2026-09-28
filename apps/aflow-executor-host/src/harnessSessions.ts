@@ -48,6 +48,12 @@ export interface HarnessSession {
   /** What the harness calls this conversation. Minted here, so it need not be parsed back out. */
   readonly conversationId: string;
   readonly baseSha: string;
+  /**
+   * The ref the checkout was started from, when a turn named one. A later turn
+   * that names none still works on that checkout, so it is judged against the
+   * same ref.
+   */
+  readonly base?: string;
   readonly createdAt: number;
   lastUsedAt: number;
   /**

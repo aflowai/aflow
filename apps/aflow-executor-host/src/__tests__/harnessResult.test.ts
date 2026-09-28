@@ -409,6 +409,11 @@ describe.runIf(sandboxReadiness().ready)('a commission starts from a named ref',
         harnesses: [
           harness('edits', 'printf changed > touched.txt'),
           harness('rewrites', "printf '# project, reviewed\\n' > README.md"),
+          {
+            ...harness('converses', "printf '# project, reviewed\\n' > README.md"),
+            sessionArgs: ['{session}'],
+            resumeArgs: ['{session}'],
+          },
           harness('deletes', 'printf changed > touched.txt; git branch -D other'),
           harness('moves', 'printf changed > touched.txt; git update-ref refs/heads/other HEAD'),
         ],
@@ -455,6 +460,22 @@ describe.runIf(sandboxReadiness().ready)('a commission starts from a named ref',
     expect(String(output['patch'])).toContain('README.md');
     expect(output['applies']).toBe('clean');
     expect(output['applyConflict']).toBeUndefined();
+  }, 120_000);
+
+  it('judges a continued turn that names no base against the base its session started from', async () => {
+    const first = await runWith({ harness: 'converses', base: 'feat/reviewed' });
+    expect(first.outcome.status).toBe('SUCCEEDED');
+    const sessionRef = (first.written['output'] as Record<string, unknown>)['sessionRef'];
+    expect(sessionRef).toEqual(expect.any(String));
+
+    const { outcome, written } = await runWith({ harness: 'converses', continueFrom: sessionRef });
+    expect(outcome.status).toBe('SUCCEEDED');
+    const output = written['output'] as Record<string, unknown>;
+    expect(output['continued']).toBe(true);
+    expect(output['baseSha']).toBe(feature);
+    expect(String(output['patch'])).toContain('README.md');
+    expect(output['applies']).toBe('clean');
+    expect(output['headMoved']).toBe(false);
   }, 120_000);
 
   it('refuses a ref the folder does not have, naming it', async () => {

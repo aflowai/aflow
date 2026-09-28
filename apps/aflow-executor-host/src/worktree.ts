@@ -529,18 +529,28 @@ export async function removeWorktree(root: string, worktreePath: string): Promis
   }
 }
 
+export interface LinkedWorktree {
+  readonly path: string;
+  /** No branch is checked out in it, which is how every checkout this lane makes is added. */
+  readonly detached: boolean;
+}
+
 /**
- * Every checkout added to the repository, by path, without its main one.
+ * Every checkout added to the repository, without its main one.
  *
  * Read from git rather than from disk: a checkout whose directory is gone is
  * still registered, and the registration is what the operator sees.
  */
-export async function linkedWorktrees(root: string): Promise<string[]> {
+export async function linkedWorktrees(root: string): Promise<LinkedWorktree[]> {
   const listing = await git(root, ['worktree', 'list', '--porcelain'], APPLY_OUTPUT_CAP_BYTES);
   return listing
-    .split('\n')
-    .filter((line) => line.startsWith('worktree '))
-    .map((line) => line.slice('worktree '.length))
+    .split(/\n\n+/)
+    .map((block) => block.split('\n'))
+    .filter((lines) => lines[0]?.startsWith('worktree ') === true)
+    .map((lines) => ({
+      path: (lines[0] ?? '').slice('worktree '.length),
+      detached: lines.includes('detached'),
+    }))
     .slice(1);
 }
 
@@ -962,6 +972,9 @@ async function commitTarget(
   return { at: undefined, appended };
 }
 
+/** How a publication's scratch, and the checkout it commits in, is named under the temp root. */
+export const PUBLICATION_SCRATCH_PREFIX = 'aflow-commit-';
+
 /**
  * Land a diff as a commit on a branch, without touching what the operator has
  * open.
@@ -989,7 +1002,7 @@ export async function commitPatchOnBranch(
 ): Promise<PatchCommitOutcome> {
   const target = await commitTarget(root, branch, base);
 
-  const scratch = await mkdtemp(join(tmpdir(), 'aflow-commit-'));
+  const scratch = await mkdtemp(join(tmpdir(), PUBLICATION_SCRATCH_PREFIX));
   let worktree: PreparedWorktree | undefined;
   try {
     worktree = await prepareWorktree(root, scratch, 'commit', {

@@ -82,10 +82,12 @@ import {
   describeRefChanges,
   linkedWorktrees,
   prepareWorktree,
+  PUBLICATION_SCRATCH_PREFIX,
   removeWorktree,
   resolveCommit,
   snapshotRefs,
   WorktreeError,
+  type LinkedWorktree,
 } from '../worktree.js';
 
 /**
@@ -96,10 +98,11 @@ import {
  */
 const RESULT_RELATIVE_PATH = '.aflow/result.json';
 /**
- * What every directory this executor makes under the temp root is named after —
- * a harness run's scratch and a publication's checkout alike.
+ * The directories under the temp root this executor adds checkouts in — a
+ * harness run's scratch and a publication's. Nothing else named `aflow-` there
+ * is known to be its own.
  */
-const EXECUTOR_TEMP_PREFIX = 'aflow-';
+const CHECKOUT_SCRATCH_PREFIXES = [HARNESS_SCRATCH_PREFIX, PUBLICATION_SCRATCH_PREFIX] as const;
 /** A result is an answer, not a dataset; past this it is a mistake, not a big one. */
 const RESULT_CAP_BYTES = 1_000_000;
 
@@ -459,6 +462,9 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
     // with the session's checkout still intact.
     const namedBase =
       input.base === undefined ? undefined : await resolveCommit(binding.root, input.base);
+    // A turn that names none keeps the checkout its session's base made, and so
+    // is judged against that base as well.
+    const base = input.base ?? session?.base;
 
     let worktree: { path: string; baseSha: string };
     if (session !== undefined && namedBase === undefined) {
@@ -483,6 +489,7 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
         ...session,
         worktreePath: worktree.path,
         baseSha: worktree.baseSha,
+        ...(base !== undefined ? { base } : {}),
       };
       recordSession(moved);
       session = moved;
@@ -691,16 +698,15 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
     // A named base is where a publication would append the diff, so the tree
     // that answers is that ref's head as it stands now, not the folder's working
     // tree. A base ref gone since the run started is refused below as a ref
-    // change, and the commit it named stands in until then.
+    // change, and the commit the checkout started at stands in until then.
     const judgedAt =
-      input.base === undefined
+      base === undefined
         ? undefined
-        : await resolveCommit(binding.root, input.base).catch(() => namedBase);
+        : await resolveCommit(binding.root, base).catch(() => worktree.baseSha);
     const applies = await checkApplies(binding.root, changes.patch, judgedAt);
     // A named base is judged against itself; the folder's HEAD was never the
     // starting point, so its distance from it says nothing about the run.
-    const headMoved =
-      namedBase === undefined && (await currentHead(binding.root)) !== worktree.baseSha;
+    const headMoved = base === undefined && (await currentHead(binding.root)) !== worktree.baseSha;
 
     let sessionRef = session?.id;
     if (canContinue) {
@@ -718,6 +724,7 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
           configDir: configDir ?? join(scratch, 'harness-config'),
           conversationId,
           baseSha: worktree.baseSha,
+          ...(base !== undefined ? { base } : {}),
           createdAt: Date.now(),
           lastUsedAt: Date.now(),
         });
@@ -848,53 +855,80 @@ export interface OrphanedCheckouts {
  * expire them. Run at boot, before any job, when every checkout this lane made
  * is one of those.
  *
- * Only what lies under the temp root, in a directory named the way this
- * executor names its own, is taken: any other checkout of the folder is the
- * operator's.
+ * Only a detached checkout under the temp root, in a directory named the way
+ * this executor names its own, is taken: a checkout with a branch in it, or
+ * anywhere else, is the operator's.
+ *
+ * `roots` undefined means the connected folders could not be read, and then
+ * nothing is taken. A scratch directory holds a checkout registered in one of
+ * those folders, and removing it first leaves that registration behind in the
+ * operator's repository as a stale entry.
  */
 export async function removeOrphanedCheckouts(
-  roots: readonly string[],
+  roots: readonly string[] | undefined,
   tempRoot: string = tmpdir(),
 ): Promise<OrphanedCheckouts> {
+  if (roots === undefined) return { removed: new Map(), scratchDirs: 0 };
+
   const owned = new Set(allSessions().map((session) => basename(session.scratchDir)));
+  const unowned = (name: string): boolean =>
+    CHECKOUT_SCRATCH_PREFIXES.some((prefix) => name.startsWith(prefix)) && !owned.has(name);
   // git records a checkout by its resolved path, and the temp root is commonly
   // reached through a link (`/var` on macOS), so both spellings are asked.
   const tempRoots = new Set([tempRoot, await realpath(tempRoot).catch(() => tempRoot)]);
-  const orphaned = (path: string): boolean => {
+  const underUnownedScratch = (path: string): boolean => {
     for (const under of tempRoots) {
       if (!path.startsWith(under + sep)) continue;
-      const top = path.slice(under.length + 1).split(sep)[0] ?? '';
-      return top.startsWith(EXECUTOR_TEMP_PREFIX) && !owned.has(top);
+      return unowned(path.slice(under.length + 1).split(sep)[0] ?? '');
     }
     return false;
   };
 
   const removed = new Map<string, number>();
   for (const root of new Set(roots)) {
-    let paths: string[];
+    let checkouts: LinkedWorktree[];
     let rootReal: string;
     try {
-      paths = await linkedWorktrees(root);
+      checkouts = await linkedWorktrees(root);
       rootReal = await realpath(root);
     } catch {
       // Not a repository, or not there: nothing of this lane's is registered.
       continue;
     }
-    for (const path of paths) {
+    for (const checkout of checkouts) {
       // A folder connected from inside a checkout lists itself among them.
-      if (path === rootReal || !orphaned(path)) continue;
-      await removeWorktree(root, path);
+      if (checkout.path === rootReal || !checkout.detached) continue;
+      if (!underUnownedScratch(checkout.path)) continue;
+      await removeWorktree(root, checkout.path);
       removed.set(root, (removed.get(root) ?? 0) + 1);
     }
   }
 
   let scratchDirs = 0;
   for (const name of await readdir(tempRoot).catch(() => [] as string[])) {
-    if (!name.startsWith(HARNESS_SCRATCH_PREFIX) || owned.has(name)) continue;
-    await discardScratch({ scratchDir: join(tempRoot, name) });
+    if (!unowned(name)) continue;
+    const scratchDir = join(tempRoot, name);
+    // A checkout still in it is registered in a repository the loop above did
+    // not take it from, and is left for that repository to account for.
+    if (await holdsCheckout(scratchDir)) continue;
+    await discardScratch({ scratchDir });
     scratchDirs += 1;
   }
   return { removed, scratchDirs };
+}
+
+async function holdsCheckout(scratchDir: string): Promise<boolean> {
+  for (const entry of await readdir(scratchDir).catch(() => [] as string[])) {
+    if (
+      await stat(join(scratchDir, entry, '.git')).then(
+        () => true,
+        () => false,
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**

@@ -20,6 +20,7 @@ import {
   describeRefChanges,
   isGitRepository,
   prepareWorktree,
+  PUBLICATION_SCRATCH_PREFIX,
   removeWorktree,
   resolveCommit,
   snapshotRefs,
@@ -256,22 +257,21 @@ describe('whether a diff made from a named base applies', () => {
 
 describe('checkouts a restart left behind', () => {
   let tempRoot: string;
-  let outside: string;
 
   beforeEach(async () => {
-    tempRoot = await mkdtemp(join(tmpdir(), 'aflow-wt-temp-'));
-    outside = await mkdtemp(join(tmpdir(), 'aflow-wt-operator-'));
+    tempRoot = await mkdtemp(join(tmpdir(), 'wt-temp-'));
   });
 
   afterEach(async () => {
     for (const session of allSessions()) forgetSession(session.id);
     await rm(tempRoot, { recursive: true, force: true });
-    await rm(outside, { recursive: true, force: true });
   });
 
   it('removes what no session owns under the temp root, and nothing of the operator', async () => {
     const orphanScratch = await mkdtemp(join(tempRoot, HARNESS_SCRATCH_PREFIX));
     await prepareWorktree(repo, orphanScratch, 'work');
+    const orphanPublication = await mkdtemp(join(tempRoot, PUBLICATION_SCRATCH_PREFIX));
+    await prepareWorktree(repo, orphanPublication, 'commit', { dependencies: 'none' });
     // A checkout whose directory is already gone is still registered.
     const vanishedScratch = await mkdtemp(join(tempRoot, HARNESS_SCRATCH_PREFIX));
     await prepareWorktree(repo, vanishedScratch, 'work');
@@ -294,26 +294,75 @@ describe('checkouts a restart left behind', () => {
       lastUsedAt: Date.now(),
       busy: false,
     });
-    const operators = await prepareWorktree(repo, outside, 'mine');
+    // The operator's own checkouts in the same temp root: one on a branch with
+    // work in progress, in a directory named the way this executor names its
+    // scratch, and one detached, in a directory it never makes.
+    const operatorsScratch = await mkdtemp(join(tempRoot, HARNESS_SCRATCH_PREFIX));
+    const onBranch = join(operatorsScratch, 'mine');
+    await git(repo, 'worktree', 'add', '-b', 'operator/review', onBranch);
+    await writeFile(join(onBranch, 'app.txt'), 'uncommitted review notes\n');
+    const operatorsDetached = await mkdtemp(join(tempRoot, 'aflow-review-'));
+    const detached = await prepareWorktree(repo, operatorsDetached, 'mine');
     const unrelated = await mkdtemp(join(tempRoot, 'not-ours-'));
 
     const outcome = await removeOrphanedCheckouts([repo, repo, scratch], tempRoot);
 
-    expect(outcome.removed).toEqual(new Map([[repo, 2]]));
-    expect(outcome.scratchDirs).toBe(2);
+    expect(outcome.removed).toEqual(new Map([[repo, 3]]));
+    expect(outcome.scratchDirs).toBe(3);
     const listed = await git(repo, 'worktree', 'list', '--porcelain');
     // By directory name: git records a checkout under its resolved path.
     expect(listed).not.toContain(basename(orphanScratch));
+    expect(listed).not.toContain(basename(orphanPublication));
     expect(listed).not.toContain(basename(vanishedScratch));
     expect(listed).toContain(basename(liveScratch));
-    expect(listed).toContain(basename(outside));
+    expect(listed).toContain(basename(operatorsScratch));
+    expect(listed).toContain('branch refs/heads/operator/review');
+    expect(listed).toContain(basename(operatorsDetached));
     expect(await exists(orphanScratch)).toBe(false);
+    expect(await exists(orphanPublication)).toBe(false);
     expect(await exists(stray)).toBe(false);
     expect(await exists(live.path)).toBe(true);
+    expect(await readFile(join(onBranch, 'app.txt'), 'utf8')).toBe('uncommitted review notes\n');
+    expect(await exists(detached.path)).toBe(true);
     expect(await exists(unrelated)).toBe(true);
 
     await removeWorktree(repo, live.path);
-    await removeWorktree(repo, operators.path);
+    await removeWorktree(repo, onBranch);
+    await removeWorktree(repo, detached.path);
+  });
+
+  it('takes nothing when the connected folders could not be read', async () => {
+    const orphanScratch = await mkdtemp(join(tempRoot, HARNESS_SCRATCH_PREFIX));
+    const orphan = await prepareWorktree(repo, orphanScratch, 'work');
+
+    const outcome = await removeOrphanedCheckouts(undefined, tempRoot);
+
+    expect(outcome.removed.size).toBe(0);
+    expect(outcome.scratchDirs).toBe(0);
+    expect(await exists(orphan.path)).toBe(true);
+    expect(await git(repo, 'worktree', 'list', '--porcelain')).toContain(basename(orphanScratch));
+
+    await removeWorktree(repo, orphan.path);
+  });
+
+  it('leaves scratch whose checkout a folder it could not read still registers', async () => {
+    const elsewhere = await mkdtemp(join(tmpdir(), 'wt-unbound-'));
+    await git(elsewhere, 'init', '--initial-branch=main');
+    await git(elsewhere, 'config', 'user.email', 'test@example.com');
+    await git(elsewhere, 'config', 'user.name', 'Test');
+    await git(elsewhere, 'commit', '--allow-empty', '-m', 'initial');
+    const orphanScratch = await mkdtemp(join(tempRoot, HARNESS_SCRATCH_PREFIX));
+    const orphan = await prepareWorktree(elsewhere, orphanScratch, 'work', {
+      dependencies: 'none',
+    });
+
+    const outcome = await removeOrphanedCheckouts([repo], tempRoot);
+
+    expect(outcome.scratchDirs).toBe(0);
+    expect(await exists(orphan.path)).toBe(true);
+
+    await removeWorktree(elsewhere, orphan.path);
+    await rm(elsewhere, { recursive: true, force: true });
   });
 
   it('reports nothing when nothing was left behind', async () => {
