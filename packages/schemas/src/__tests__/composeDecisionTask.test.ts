@@ -143,7 +143,41 @@ describe('a decision task in a compose draft', () => {
       }),
       ...downstream,
     ]);
-    expect(found.join()).toContain('"billing" is already enabled by');
+    expect(found.join()).toContain('"billing" is enabled by several routes');
+  });
+
+  it('lets the fallback also take an explicit answer, as one flat guard', () => {
+    const result = draft([
+      read,
+      triage({
+        questions: {
+          team: {
+            type: 'choice',
+            options: { billing: null, technical: null, ambiguous: null },
+            minConfidence: 0.8,
+          },
+        },
+        routes: [
+          { question: 'team', equals: 'billing', to: ['billing'] },
+          { question: 'team', equals: 'technical', to: ['technical'] },
+          { question: 'team', equals: 'ambiguous', to: ['escalate'] },
+        ],
+        onUndecided: ['escalate'],
+      }),
+      agent('billing'),
+      agent('technical'),
+      agent('escalate'),
+    ]);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.tasks.find((t) => t.taskId === 'escalate')).toMatchObject({
+      when: {
+        anyOf: [
+          "tasks.triage.output.answers.team.value == 'ambiguous'",
+          'tasks.triage.output.answers.team.decided == false',
+        ],
+      },
+    });
   });
 
   it('refuses a routed task that carries its own when', () => {

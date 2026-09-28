@@ -52,7 +52,7 @@ export const DecisionRouteSchema = z
       .array(z.string().min(1).max(64))
       .min(1)
       .describe(
-        'The taskIds this route enables. They run only when the answer matches and was decided; do not give them a when of their own.',
+        'The taskIds this route enables. They run only when the answer matches and was decided; do not give them a when of their own. A task may be named by several routes, and by onUndecided too.',
       ),
   })
   .refine(
@@ -150,7 +150,7 @@ function routeIssue(question: DecisionQuestion, route: DecisionRoute): string | 
  */
 export function validateDecisionTasks(tasks: readonly DraftTaskLike[], ctx: z.RefinementCtx): void {
   const byId = new Map(tasks.map((t) => [t.taskId, t]));
-  const claimed = new Map<string, string>();
+  const owner = new Map<string, string>();
 
   tasks.forEach((task, ti) => {
     if (!isDecisionTask(task)) return;
@@ -158,38 +158,41 @@ export function validateDecisionTasks(tasks: readonly DraftTaskLike[], ctx: z.Re
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['tasks', ti, ...path], message });
     };
 
-    const claim = (target: string, path: Array<string | number>, how: string) => {
+    const checkTarget = (target: string, path: Array<string | number>): boolean => {
       const targetTask = byId.get(target);
       if (!targetTask) {
         issue(path, `"${target}" is not a task in this draft.`);
-        return;
+        return false;
       }
       if (target === task.taskId) {
         issue(path, `A decision cannot route to itself.`);
-        return;
+        return false;
       }
-      const previous = claimed.get(target);
-      if (previous !== undefined) {
+      const previous = owner.get(target);
+      if (previous !== undefined && previous !== task.taskId) {
         issue(
           path,
-          `"${target}" is already enabled by ${previous}. A task is enabled by one route; add a second task for the second case.`,
+          `"${target}" is already enabled by the decision "${previous}". A task is enabled by one decision; add a second task for the second decision.`,
         );
-        return;
+        return false;
       }
       if (targetTask.when !== undefined) {
         issue(
           path,
           `"${target}" has a when of its own. A routed task is guarded by its route; remove its when.`,
         );
-        return;
+        return false;
       }
-      claimed.set(target, how);
+      owner.set(target, task.taskId);
+      return true;
     };
 
     const guarded = new Set<string>();
+    let routesValid = true;
     task.routes.forEach((route, ri) => {
       const question = task.questions[route.question];
       if (!question) {
+        routesValid = false;
         issue(
           ['routes', ri, 'question'],
           `"${route.question}" is not one of this decision's questions: ${Object.keys(task.questions).join(', ')}.`,
@@ -198,17 +201,17 @@ export function validateDecisionTasks(tasks: readonly DraftTaskLike[], ctx: z.Re
       }
       const problem = routeIssue(question, route);
       if (problem) {
+        routesValid = false;
         issue(['routes', ri], problem);
         return;
       }
       if (question.minConfidence !== undefined) guarded.add(route.question);
       route.to.forEach((target, i) => {
-        claim(target, ['routes', ri, 'to', i], `"${task.taskId}".routes[${String(ri)}]`);
+        if (!checkTarget(target, ['routes', ri, 'to', i])) routesValid = false;
       });
     });
-
     task.onUndecided.forEach((target, i) => {
-      claim(target, ['onUndecided', i], `"${task.taskId}".onUndecided`);
+      if (!checkTarget(target, ['onUndecided', i])) routesValid = false;
     });
 
     if (guarded.size > 0 && task.onUndecided.length === 0) {
@@ -227,6 +230,15 @@ export function validateDecisionTasks(tasks: readonly DraftTaskLike[], ctx: z.Re
       issue(
         ['consumes'],
         'A decision reads data: consume at least one run input (e.g. { runInput: "ticket", bindAs: "ticket" }) or upstream output. It becomes the state the questions are asked about.',
+      );
+    }
+
+    if (!routesValid) return;
+    for (const [target, claim] of claimsOf(task)) {
+      if (claim.routes.length < 2 || guardFor(task, claim) !== null) continue;
+      issue(
+        ['routes'],
+        `"${target}" is enabled by several routes, and a question they read sets a minConfidence. A task enabled by more than one answer can require confidence only when it is also this decision's onUndecided fallback — add "${target}" to onUndecided, or give each route its own task.`,
       );
     }
   });
@@ -260,6 +272,55 @@ function combine(kind: 'anyOf' | 'allOf', expressions: string[]): DraftWhen {
       : { allOf: expressions };
 }
 
+interface TargetClaim {
+  routes: DecisionRoute[];
+  undecided: boolean;
+}
+
+/** Every task a decision enables, with the routes and fallback that enable it. */
+function claimsOf(task: DecisionTaskLike): Map<string, TargetClaim> {
+  const claims = new Map<string, TargetClaim>();
+  const claimFor = (target: string): TargetClaim => {
+    let claim = claims.get(target);
+    if (!claim) {
+      claim = { routes: [], undecided: false };
+      claims.set(target, claim);
+    }
+    return claim;
+  };
+  for (const route of task.routes) {
+    for (const target of route.to) claimFor(target).routes.push(route);
+  }
+  for (const target of task.onUndecided) claimFor(target).undecided = true;
+  return claims;
+}
+
+/**
+ * The guard a claimed task runs under, or `null` when it has no single-level
+ * form. A route on a question with a minConfidence also requires the answer to
+ * be decided — unless the task is the fallback too, where "matches, or was not
+ * decided" makes the confidence clause redundant and the guard a flat anyOf.
+ */
+function guardFor(task: DecisionTaskLike, claim: TargetClaim): DraftWhen | null {
+  const isGuarded = (question: string) => task.questions[question]?.minConfidence !== undefined;
+  const undecided = claim.undecided
+    ? [...new Set(task.routes.map((r) => r.question).filter(isGuarded))].map((q) =>
+        decided(task.taskId, q, false),
+      )
+    : [];
+  const needsConfidence = claim.routes.filter((r) => isGuarded(r.question) && !claim.undecided);
+  if (needsConfidence.length > 0) {
+    if (claim.routes.length > 1) return null;
+    const route = claim.routes[0]!;
+    return combine('allOf', [
+      routeComparison(task.taskId, route),
+      decided(task.taskId, route.question, true),
+    ]);
+  }
+  const expressions = [...claim.routes.map((r) => routeComparison(task.taskId, r)), ...undecided];
+  return expressions.length > 0 ? combine('anyOf', expressions) : null;
+}
+
 /**
  * Replace every decision task with the operation task it runs, and give each
  * task it routes to the guard that route implies. Idempotent: a draft with no
@@ -272,27 +333,9 @@ export function expandDecisionTasks<Draft extends { tasks: DraftTaskLike[] }>(
   const guards = new Map<string, { when: DraftWhen; decisionId: string }>();
   for (const task of draft.tasks) {
     if (!isDecisionTask(task)) continue;
-    for (const route of task.routes) {
-      const question = task.questions[route.question];
-      const expressions = [routeComparison(task.taskId, route)];
-      if (question?.minConfidence !== undefined) {
-        expressions.push(decided(task.taskId, route.question, true));
-      }
-      for (const target of route.to) {
-        guards.set(target, { when: combine('allOf', expressions), decisionId: task.taskId });
-      }
-    }
-    const undecided = [
-      ...new Set(
-        task.routes
-          .filter((r) => task.questions[r.question]?.minConfidence !== undefined)
-          .map((r) => r.question),
-      ),
-    ].map((q) => decided(task.taskId, q, false));
-    if (undecided.length > 0) {
-      for (const target of task.onUndecided) {
-        guards.set(target, { when: combine('anyOf', undecided), decisionId: task.taskId });
-      }
+    for (const [target, claim] of claimsOf(task)) {
+      const when = guardFor(task, claim);
+      if (when !== null) guards.set(target, { when, decisionId: task.taskId });
     }
   }
 
