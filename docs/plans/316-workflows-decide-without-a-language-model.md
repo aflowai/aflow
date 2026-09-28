@@ -1,6 +1,6 @@
 # Plan 316 — Workflows decide without a language model: a typed decision step
 
-**Status:** 🔨 P0–P4 built; the live calls and P5 open · **First backend:** TypeSafe AI's Jev (a "System One" decision model)
+**Status:** 🔨 P0–P4 built and proven live; P5 and draft-level editing open · **First backend:** TypeSafe AI's Jev (a "System One" decision model)
 
 ## 1. Problem
 
@@ -86,7 +86,11 @@ Schemas, registration with `usage` written for skill authors, the handler, usage
 
 The `decision` draft task kind, its lowering and route validation; `when` checked against operation output schemas; step-visible catalog search in authoring context; one line in compose-skill naming the decision task; an example skill (triage → route → escalate on abstention). Exit: asking Helmsman for "a skill that triages incoming support tickets and escalates the unclear ones" produces a `decision` task with routes, and its run takes the escalation branch on an abstaining answer; a patched fork on a non-existent output path is refused.
 
-**Delivered**: the draft's `when` also takes `{ anyOf }` / `{ allOf }`; `TaskGraphDraftSchema` validates decision routes in its `superRefine` and expands decision tasks in a `transform`, so every consumer of a parsed draft sees operation tasks only; the assembler test proves the assembled triage workflow is valid as a skill; `when_output_path_unknown` names the fields that do exist; `workflow.manage.patch` names `workflowSteps` in its pitfalls. **Open**: the example skill and the Helmsman exit, which need a key and a running stack.
+**Delivered**: the draft's `when` also takes `{ anyOf }` / `{ allOf }`; `TaskGraphDraftSchema` validates decision routes in its `superRefine` and expands decision tasks in a `transform`, so every consumer of a parsed draft sees operation tasks only; the assembler test proves the assembled triage workflow is valid as a skill; `when_output_path_unknown` names the fields that do exist; `workflow.manage.patch` names `workflowSteps` in its pitfalls. A draft task can consume a run input (`{ runInput, bindAs }`), declared once in the workflow's `runInputs`; without it compose-skill put an LLM classifier in front of the decision to have something to consume. A task may be enabled by several routes and by `onUndecided` when the guard stays a single level — "matches, or was not decided" is a flat `anyOf`. A bind-free literal at a record-shaped op position (a decision's `questions`) is validated whole.
+
+**Proven live**: asked for a ticket-triage skill, compose-skill authored a root `decision` task reading the `ticket` run input with `minConfidence` 0.7, routing billing and technical to responders and "unclear" or undecided to an escalation agent. Five runs took the right branch each: a clear billing ticket, a clear technical one, a vague one (answered "unclear" at 0.99), a mixed one (answered "unclear" at confidence 0.47 — undecided), and, after Helmsman patched in a refund question, a refund request (billing and refund handler) beside a plain billing question (billing only).
+
+**Open — decisions are not editable as decisions once assembled.** A patch edits the lowered operation task and its generated guards: Helmsman needed about eight attempts and succeeded only because the validators named each error. Editing at the draft level is the fix, and it waits on compose-skill learning to modify an existing skill. No example platform skill ships; the live compose runs stand in for it.
 
 ### P4 — Judge backend (D8)
 
