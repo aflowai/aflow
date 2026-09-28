@@ -420,6 +420,24 @@ export async function resolveCommit(root: string, ref: string): Promise<string> 
   }
 }
 
+// How the operator's git reaches a remote when it is not in their config: the
+// ssh agent and ssh command, the proxy (curl reads `http_proxy` only in lower
+// case, so both spellings travel), the CA bundle a corporate proxy needs, and
+// `XDG_CONFIG_HOME`, where git finds a global config kept outside `~`.
+const TRANSPORT_ENV = [
+  'SSH_AUTH_SOCK',
+  'GIT_SSH_COMMAND',
+  'HTTPS_PROXY',
+  'https_proxy',
+  'HTTP_PROXY',
+  'http_proxy',
+  'NO_PROXY',
+  'no_proxy',
+  'SSL_CERT_FILE',
+  'GIT_SSL_CAINFO',
+  'XDG_CONFIG_HOME',
+] as const;
+
 /**
  * The environment a fetch reaches a remote with: the operator's own transport.
  *
@@ -432,8 +450,10 @@ export async function resolveCommit(root: string, ref: string): Promise<string> 
 function transportEnv(): Record<string, string> {
   const env = gitEnv('read');
   delete env['GIT_CONFIG_NOSYSTEM'];
-  const agent = process.env['SSH_AUTH_SOCK'];
-  if (agent !== undefined) env['SSH_AUTH_SOCK'] = agent;
+  for (const name of TRANSPORT_ENV) {
+    const value = process.env[name];
+    if (value !== undefined) env[name] = value;
+  }
   return env;
 }
 
@@ -1006,13 +1026,29 @@ export interface PatchCommitOutcome {
  * be that commit — a patch lands only where it was made, never merged onto
  * something that moved since.
  */
+/** The commit a sha names, or a refusal naming the sha. */
+async function resolveSha(root: string, sha: string): Promise<string> {
+  const commit = await resolveCommit(root, sha).catch(() => undefined);
+  // git reads a short hex string as a ref name before it reads it as a sha,
+  // and peels a tag's sha to the commit it tags: only a commit whose own sha
+  // begins with this one is the commit it names.
+  if (!commit?.startsWith(sha.toLowerCase())) {
+    throw new WorktreeError(
+      `\`${sha}\` names no commit in ${root}. \`baseSha\` is the sha the commission reported ` +
+        'in its `baseSha`, for a commit the folder has.',
+      'unknown_ref',
+    );
+  }
+  return commit;
+}
+
 async function commitTarget(
   root: string,
   branch: string,
   baseSha: string | undefined,
 ): Promise<{ at: string | undefined; appended: boolean }> {
   const appended = await branchExists(root, branch);
-  const stated = baseSha === undefined ? undefined : await resolveCommit(root, baseSha);
+  const stated = baseSha === undefined ? undefined : await resolveSha(root, baseSha);
 
   if (appended) {
     if (stated === undefined) {

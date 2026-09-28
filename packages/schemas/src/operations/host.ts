@@ -67,6 +67,17 @@ export const HostBranchNameSchema = branchToken(HOST_BRANCH_NAME_MAX_LENGTH, 'br
  */
 export const HostBaseRefSchema = branchToken(HOST_BRANCH_NAME_MAX_LENGTH, 'base');
 
+/**
+ * A commit named by its sha alone. A branch name here would resolve to that
+ * branch's head, and a base checked against the head it resolved to always
+ * matches.
+ */
+export const HostCommitShaSchema = z.string().regex(/^[0-9a-fA-F]{7,40}$/, {
+  message:
+    'A base sha is 7 to 40 hexadecimal characters — the `baseSha` a commission reported, ' +
+    'not a branch or tag name.',
+});
+
 /** Which operator-created binding this job runs against. */
 const HostBindingRef = z
   .string()
@@ -324,11 +335,11 @@ export const HostFilePatchInputSchema = z.object({
         .min(1)
         .max(20_000)
         .describe('Commit message, verbatim. The first line is the subject, as git reads it.'),
-      baseSha: HostBaseRefSchema.optional().describe(
-        'The commit the patch was made against, as the commission reported it in `baseSha`. ' +
-          "Required when `branch` exists, and it must be that branch's head. For a new branch " +
-          "it may be omitted; given, it must be the folder's HEAD. A base that does not match " +
-          'is refused, never merged.',
+      baseSha: HostCommitShaSchema.optional().describe(
+        'The commit the patch was made against, as the commission reported it in `baseSha` — ' +
+          'a sha, never a branch or tag name. Required when `branch` exists, and it must be ' +
+          "that branch's head. For a new branch it may be omitted; given, it must be the " +
+          "folder's HEAD. A base that does not match is refused, never merged.",
       ),
     })
     // Strict so a misspelt base is refused rather than stripped: dropped, it

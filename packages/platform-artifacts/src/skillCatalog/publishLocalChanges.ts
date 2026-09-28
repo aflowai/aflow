@@ -11,30 +11,46 @@ const PUSH_COMMAND = ['git', 'push', '--set-upstream', 'origin', { $bind: 'branc
 /** The operation's own ceiling for a unified diff. */
 const PATCH_MAX_BYTES = 4_194_304;
 
-/** The characters GitHub admits in an owner or a repository name, and nothing else. */
-const GITHUB_NAME_PATTERN = '^[A-Za-z0-9._-]+$';
+/** GitHub's rule for an owner: letters, digits and single hyphens between them, at most 39. */
+const GITHUB_OWNER_PATTERN = '^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$';
+
+/**
+ * GitHub's rule for a repository: letters, digits, `.`, `_` and `-`, at most
+ * 100. `.` and `..` are refused because they collapse `/repos/{owner}/{repo}`
+ * onto another endpoint.
+ */
+const GITHUB_REPO_PATTERN = '^(?!\\.{1,2}$)[A-Za-z0-9._-]{1,100}$';
 
 const OWNER_SCHEMA = {
   type: 'string',
   minLength: 1,
-  maxLength: 200,
-  pattern: GITHUB_NAME_PATTERN,
+  maxLength: 39,
+  pattern: GITHUB_OWNER_PATTERN,
   description:
-    'The owner name alone — `aflowai` for github.com/aflowai/aflow — not a URL or `owner/repo`.',
+    'The owner name alone — `aflowai` for github.com/aflowai/aflow — not a URL or `owner/repo`. Letters, digits and single hyphens between them, 1 to 39 characters: no dot, and no hyphen at the start, at the end or twice in a row.',
 };
 
 const REPO_SCHEMA = {
   type: 'string',
   minLength: 1,
-  maxLength: 200,
-  pattern: GITHUB_NAME_PATTERN,
+  maxLength: 100,
+  pattern: GITHUB_REPO_PATTERN,
   description:
-    'The repository name alone — `aflow` for github.com/aflowai/aflow — not a URL or `owner/repo`.',
+    'The repository name alone — `aflow` for github.com/aflowai/aflow — not a URL or `owner/repo`. Letters, digits, `.`, `_` and `-`, 1 to 100 characters, and neither `.` nor `..`.',
+};
+
+const BASE_SHA_SCHEMA = {
+  type: 'string',
+  minLength: 7,
+  maxLength: 40,
+  pattern: '^[0-9a-fA-F]{7,40}$',
+  description:
+    'The sha the commission reported in `baseSha`, 7 to 40 hexadecimal characters — not a branch or tag name.',
 };
 
 const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'publish-local-changes',
-  version: 3,
+  version: 4,
   name: 'Publish Local Changes',
   tagline:
     'Commit a patch onto a branch of a connected repository, then push it and open the pull request once the operator approves.',
@@ -106,7 +122,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           required: false,
           description:
             "The commit the patch was made against, as the commission reported it in `baseSha`. Required to append to an existing branch, and it must be that branch's head; a patch made at the folder's last commit may omit it.",
-          schema: { type: 'string', minLength: 1, maxLength: 200 },
+          schema: BASE_SHA_SCHEMA,
         },
         {
           id: 'commitMessage',
@@ -195,7 +211,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
                 kind: 'run_input' as const,
                 bindAs: 'baseSha',
                 path: 'baseSha',
-                schema: { type: 'string', minLength: 1, maxLength: 200 },
+                schema: BASE_SHA_SCHEMA,
               },
               commitMessage: {
                 kind: 'run_input' as const,
@@ -259,7 +275,9 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
         {
           taskId: 'read-repository',
           name: "Check the space's GitHub credential can see the repository",
-          goal: "Read `owner`/`repo` through the space's GitHub connection before anything is pushed. When this fails, the GitHub credential bound to this space cannot see `owner`/`repo` — GitHub answers 404 for a private repository the token has no access to — and that credential's repository access is the thing to check. Nothing has been pushed, and the commit is still on its branch.",
+          goal: "Read `owner`/`repo` through the space's GitHub connection before anything is pushed.",
+          failureInstruction:
+            "The GitHub credential bound to this space cannot see `owner`/`repo` — GitHub answers 404 for a private repository the token has no access to — and that credential's repository access is the thing to check. Nothing has been pushed, and the commit is still on its branch.",
           type: 'operation' as const,
           operation: 'api.http.call',
           dependsOn: ['commit'],

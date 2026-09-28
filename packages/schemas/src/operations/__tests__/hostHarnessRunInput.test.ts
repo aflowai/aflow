@@ -54,19 +54,28 @@ describe('a commission and a publication name the commit they start from', () =>
     }
   });
 
-  it('carries the base on a commit as `baseSha`, under the same rule', () => {
+  it('carries the base on a commit as `baseSha`, a sha and nothing else', () => {
     const patch = { bindingId: 'hb_x', patch: 'diff --git a/x b/x\n' };
-    const parsed = HostFilePatchInputSchema.parse({
+    const withBase = (baseSha: string) => ({
       ...patch,
-      commit: { branch: 'aflow/fix', message: 'Fix', baseSha: 'a'.repeat(40) },
+      commit: { branch: 'aflow/fix', message: 'Fix', baseSha },
     });
-    expect(parsed.commit?.baseSha).toBe('a'.repeat(40));
-    expect(
-      HostFilePatchInputSchema.safeParse({
-        ...patch,
-        commit: { branch: 'aflow/fix', message: 'Fix', baseSha: '-x' },
-      }).success,
-    ).toBe(false);
+    for (const sha of ['a'.repeat(40), '5af899c', '5AF899C7CA75']) {
+      expect(HostFilePatchInputSchema.parse(withBase(sha)).commit?.baseSha).toBe(sha);
+    }
+    for (const base of [
+      'aflow/fix',
+      'main',
+      'v1.0',
+      '5af899',
+      'a'.repeat(41),
+      'g'.repeat(7),
+      '-x',
+    ]) {
+      const result = HostFilePatchInputSchema.safeParse(withBase(base));
+      expect(result.success, base).toBe(false);
+      expect(result.error?.issues[0]?.message, base).toContain('not a branch or tag name');
+    }
   });
 
   it('says a remote-qualified base is fetched before it is read', () => {

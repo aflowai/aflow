@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { TenantId, WorkflowTask, Workflow } from '@aflow/schemas';
 import type { WorkflowTaskRow } from '@aflow/cybernetic-runtime';
+import { getSkillCatalogEntry } from '@aflow/platform-artifacts';
 import { applyOpTaskOutputContract } from '../opTaskOutputContract.js';
 import type { HarnessDeps } from '../types.js';
 
@@ -345,6 +346,42 @@ describe('applyOpTaskOutputContract — projection', () => {
     const contract = safe.stored.find((s) => s.kind === 'output')!.data as { resumePrompt: string };
     expect(contract.resumePrompt).toContain('HTTP 403');
     expect(contract.resumePrompt).toContain('You must accept the rules for this competition');
+  });
+
+  it("carries the task's own failure instruction between the op's failure and the projection detail", async () => {
+    const instruction = 'The credential bound to this space cannot see the resource.';
+    const { deps } = makeDeps({ [RAW_REF]: { statusCode: 404, data: { message: 'Not Found' } } });
+    const failed = await run(
+      deps,
+      opTaskDef({ outputProjection: PROJECTION, failureInstruction: instruction }),
+    );
+    expect(failed.kind).toBe('failed');
+    if (failed.kind !== 'failed') return;
+    expect(
+      failed.failureReason?.startsWith(
+        `The call failed with HTTP 404: Not Found. ${instruction} PROJECTION_FAILED: `,
+      ),
+      failed.failureReason,
+    ).toBe(true);
+  });
+
+  it("fails Local Publish's repository read naming the credential when GitHub answers 404", async () => {
+    const read = getSkillCatalogEntry('publish-local-changes')?.bundle.workflow.tasks.find(
+      (t) => t.taskId === 'read-repository',
+    );
+    expect(read).toBeDefined();
+    const { deps } = makeDeps({ [RAW_REF]: { statusCode: 404, data: { message: 'Not Found' } } });
+    const failed = await run(deps, read as WorkflowTask);
+    expect(failed.kind).toBe('failed');
+    if (failed.kind !== 'failed') return;
+    expect(failed.failureReason).toContain('HTTP 404');
+    expect(failed.failureReason).toContain(
+      'The GitHub credential bound to this space cannot see `owner`/`repo`',
+    );
+    expect(failed.failureReason).toContain(
+      "that credential's repository access is the thing to check",
+    );
+    expect(failed.failureReason).toContain('Nothing has been pushed');
   });
 
   it('pauses (task_contract_violation) when the PROJECTED output violates the schema', async () => {

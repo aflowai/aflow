@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -209,6 +209,29 @@ describe('a run started from a ref on a remote', () => {
     const refusal = fetchRemoteBase(repo, 'origin/main');
     await expect(refusal).rejects.toThrow(WorktreeError);
     await expect(refusal).rejects.toThrow(/the remote `origin`/);
+  });
+
+  it('reaches the remote through the transport the operator’s own environment names', async () => {
+    const moved = await remoteMovesOn();
+    // A global config kept under XDG_CONFIG_HOME is the only thing that knows
+    // where `elsewhere:` points; without it the fetch has no remote to reach.
+    const xdg = await mkdtemp(join(tmpdir(), 'aflow-wt-xdg-'));
+    const prior = process.env['XDG_CONFIG_HOME'];
+    try {
+      await mkdir(join(xdg, 'git'));
+      await writeFile(
+        join(xdg, 'git', 'config'),
+        `[url "${upstream}"]\n\tinsteadOf = elsewhere:\n`,
+      );
+      await git(repo, 'remote', 'set-url', 'origin', 'elsewhere:');
+      process.env['XDG_CONFIG_HOME'] = xdg;
+      await fetchRemoteBase(repo, 'origin/main');
+      expect(await resolveCommit(repo, 'origin/main')).toBe(moved);
+    } finally {
+      if (prior === undefined) delete process.env['XDG_CONFIG_HOME'];
+      else process.env['XDG_CONFIG_HOME'] = prior;
+      await rm(xdg, { recursive: true, force: true });
+    }
   });
 
   it('leaves a local branch with a slash in its name alone', async () => {

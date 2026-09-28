@@ -120,14 +120,17 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     });
     expect(read.outputContract).toBeUndefined();
     expect(read.maxAttempts).toBe(1);
-    expect(read.goal).toContain(
-      'the GitHub credential bound to this space cannot see `owner`/`repo`',
+    // The failure path reads the task's failure instruction, never its goal.
+    const failure = read.failureInstruction ?? '';
+    expect(failure).toContain(
+      'The GitHub credential bound to this space cannot see `owner`/`repo`',
     );
-    expect(read.goal).toContain(
+    expect(failure).toContain(
       'GitHub answers 404 for a private repository the token has no access to',
     );
-    expect(read.goal).toContain("that credential's repository access is the thing to check");
-    expect(read.goal).toContain('Nothing has been pushed');
+    expect(failure).toContain("that credential's repository access is the thing to check");
+    expect(failure).toContain('Nothing has been pushed');
+    expect(read.goal).not.toContain('credential');
     for (const prose of [
       PUBLISH_LOCAL_CHANGES.description,
       taskOrThrow('approve-push').pauseInstruction ?? '',
@@ -176,6 +179,20 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
 
     const baseSha = (wf.runInputs ?? []).find((i) => i.id === 'baseSha');
     expect(baseSha?.required).toBe(false);
+    // Refused at the start as it would be at the commit: a branch name is not a sha.
+    const shaPattern = new RegExp((baseSha?.schema as { pattern: string }).pattern);
+    expect(shaPattern.test('a'.repeat(40))).toBe(true);
+    expect(shaPattern.test('feat/x')).toBe(false);
+    expect(
+      HostFilePatchInputSchema.safeParse({
+        ...appended,
+        mode: 'clean',
+        commit: { ...(appended['commit'] as object), baseSha: 'feat/x' },
+      }).success,
+    ).toBe(false);
+    expect(taskOrThrow('commit').inputContract?.bindings['baseSha']?.schema).toEqual(
+      baseSha?.schema,
+    );
     expect(PUBLISH_LOCAL_CHANGES.description).toContain(
       'a branch is reused only that way, and a fresh change takes a fresh branch',
     );
@@ -193,7 +210,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       expect(declared?.description, id).toContain('not a URL or `owner/repo`');
 
       const accepts = new RegExp(schema?.pattern ?? '');
-      for (const name of ['aflowai', 'aflow', 'my.repo', 'my_repo', 'my-repo-2']) {
+      for (const name of ['aflowai', 'aflow', 'my-repo-2']) {
         expect(accepts.test(name), `${id} ${name}`).toBe(true);
       }
       for (const name of [
@@ -206,6 +223,39 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
         expect(accepts.test(name), `${id} ${name}`).toBe(false);
       }
     }
+  });
+
+  it("holds the owner and the repository to GitHub's own naming rules", () => {
+    const schemaOf = (id: string) =>
+      (wf.runInputs ?? []).find((i) => i.id === id)?.schema as {
+        pattern: string;
+        maxLength: number;
+        description: string;
+      };
+    const owner = schemaOf('owner');
+    const repo = schemaOf('repo');
+    const ownerOk = (name: string) =>
+      new RegExp(owner.pattern).test(name) && name.length <= owner.maxLength;
+    const repoOk = (name: string) =>
+      new RegExp(repo.pattern).test(name) && name.length <= repo.maxLength;
+
+    for (const name of ['a', 'aflowai', 'aflow-ai', 'a1-b2-c3', 'x'.repeat(39)]) {
+      expect(ownerOk(name), `owner ${name}`).toBe(true);
+    }
+    for (const name of ['-aflow', 'aflow-', 'af--low', 'af.low', 'af_low', '.', 'x'.repeat(40)]) {
+      expect(ownerOk(name), `owner ${name}`).toBe(false);
+    }
+    expect(owner.maxLength).toBe(39);
+    expect(owner.description).toContain('single hyphens between them, 1 to 39 characters');
+
+    for (const name of ['a', '.github', 'my.repo', '..x', '-repo', 'my_repo', 'x'.repeat(100)]) {
+      expect(repoOk(name), `repo ${name}`).toBe(true);
+    }
+    for (const name of ['.', '..', 'x'.repeat(101), 'a b']) {
+      expect(repoOk(name), `repo ${name}`).toBe(false);
+    }
+    expect(repo.maxLength).toBe(100);
+    expect(repo.description).toContain('1 to 100 characters, and neither `.` nor `..`');
   });
 
   it('pins the push argv, binding only the branch', () => {

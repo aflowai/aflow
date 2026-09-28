@@ -374,12 +374,15 @@ async function pauseForViolation(
     log.info(
       `[opTaskOutputContract] task=${workflowExecution.taskId} ${args.errorCode} has no resolution (no replaceOutputSchema, re_execute not advertisable); failing instead of pausing`,
     );
+    const instruction = args.taskDef.failureInstruction;
     return {
       kind: 'failed',
       ...(errorRef !== undefined ? { errorRef } : {}),
-      failureReason: args.opFailure
-        ? `${args.opFailure}. ${args.failureMessage}`
-        : args.failureMessage,
+      failureReason: [
+        ...(args.opFailure ? [`${args.opFailure}.`] : []),
+        ...(instruction ? [instruction] : []),
+        args.failureMessage,
+      ].join(' '),
       errorCode: args.errorCode,
       errorClassification: 'validation',
       errorRetryable: false,

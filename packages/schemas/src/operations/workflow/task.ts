@@ -585,6 +585,14 @@ export const WorkflowTaskSchema = z
 
     outputProjection: WorkflowTaskOutputProjectionSchema.optional(),
 
+    /**
+     * What it means when this operation task's call answered and its output
+     * could not be projected or validated, and what to check. Carried on the
+     * task's failure reason, which is what the run result and the operator
+     * read; `goal` is not.
+     */
+    failureInstruction: z.string().min(1).max(4000).optional(),
+
     inputTemplate: WorkflowTaskInputTemplateSchema.optional(),
 
     /**
