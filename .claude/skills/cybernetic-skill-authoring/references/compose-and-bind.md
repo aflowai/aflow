@@ -120,7 +120,7 @@ A single `StagedChange` carries one or more typed `ops`. Examples (discriminated
 | `workflow.manage.get`    | Fetch a skill's workflow + ledger summary (recent runs, best score, learnings, budget).                  |
 | `workflow.manage.patch`  | RFC 6902 patch on workflow-level metadata (raise `budget.maxRuns`, mark abandoned, etc.).                |
 
-`workflow.manage.put` (full replace) is not available in cybernetic spaces — refinements go through StagedChanges so the Coach's rationale and the operator's approval are recorded.
+`workflow.manage.put` only creates a workflow, as a draft; it never replaces one, and no agent operation approves one. Refinements go through `workflow.manage.patch` → StagedChanges so the rationale and the operator's approval are recorded.
 
 ## Common patterns
 

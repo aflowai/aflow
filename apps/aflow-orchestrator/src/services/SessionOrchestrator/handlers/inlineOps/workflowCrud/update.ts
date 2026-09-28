@@ -33,7 +33,7 @@ import type { InlineHandlerArgs } from '../types.js';
 import { emitStepSuccess, emitStepError } from '../helpers.js';
 import { requireSpaceId } from '../spaceScope.js';
 import { getRepos, readJsonDoc, writeJsonDoc } from './shared.js';
-import { patchTouchesDefinition, patchTouchesMetadata } from './validators.js';
+import { patchTouchesDefinition, patchTouchesMetadata, resolveTaskIdPaths } from './validators.js';
 
 export async function handleWorkflowPatch(
   args: InlineHandlerArgs,
@@ -68,11 +68,13 @@ export async function handleWorkflowPatch(
     return;
   }
 
+  const operations = resolveTaskIdPaths(input.operations, existing.tasks);
+
   // `/goal` + `/campaign/...` paths target the manifest, not the workflow doc.
   // Partition so the workflow patch never sees them (it would fail to resolve
   // a path that isn't on the workflow), and lower them to manifest ops below.
-  const manifestRfcOps = input.operations.filter(isManifestPatchOp);
-  const workflowRfcOps = input.operations.filter((op) => !isManifestPatchOp(op));
+  const manifestRfcOps = operations.filter(isManifestPatchOp);
+  const workflowRfcOps = operations.filter((op) => !isManifestPatchOp(op));
 
   // Apply the workflow-targeting patch. Shared util deep-clones + validates.
   let patched: Workflow;
@@ -110,8 +112,8 @@ export async function handleWorkflowPatch(
   // the patch below AND scopes the campaign-rule inputs (only a definition
   // patch can move outcomes, and only that branch gates on `validity`, so the
   // manifest read is skipped for metadata-only patches).
-  const touchesDef = patchTouchesDefinition(input.operations);
-  const touchesMeta = patchTouchesMetadata(input.operations);
+  const touchesDef = patchTouchesDefinition(operations);
+  const touchesMeta = patchTouchesMetadata(operations);
 
   const campaign = touchesDef
     ? await resolveCampaignManifestParams(
@@ -140,7 +142,7 @@ export async function handleWorkflowPatch(
     await emitStepError(
       args,
       'WORKFLOW_PATCH_INVALID',
-      'Patch may not change the workflow slug or id. Use workflow.manage.put for a rename.',
+      'Patch may not change the workflow slug or id: they are fixed once the workflow exists.',
       startTime,
       'validation',
     );
@@ -156,6 +158,18 @@ export async function handleWorkflowPatch(
       'A single patch may not mix metadata (status, budget, name, description, assignedAgent, taskAssignments) with definition fields (tasks, outcomes, iteration, stateVariables, activation, origin). Split into two separate workflow.manage.patch calls.',
       startTime,
       'validation',
+    );
+    return;
+  }
+
+  if (validatedPatched.status === 'approved' && existing.status !== 'approved') {
+    await emitStepError(
+      args,
+      'WORKFLOW_APPROVAL_IS_OPERATOR',
+      `Approving "${slug}" is the operator's decision, not a patch: it makes the workflow runnable. Ask the operator to approve it from the skill's page. Moving a workflow out of approved (to draft, completed or abandoned) is a patch.`,
+      startTime,
+      'permission',
+      false,
     );
     return;
   }
@@ -203,7 +217,7 @@ export async function handleWorkflowPatch(
       slug,
       revision: updated.revision,
       status: updated.status,
-      applied: input.operations.map((op) => ({ op: op.op, path: op.path })),
+      applied: operations.map((op) => ({ op: op.op, path: op.path })),
     };
     if (activeRunWarning) {
       result['warning'] = activeRunWarning;

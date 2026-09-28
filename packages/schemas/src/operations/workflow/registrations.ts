@@ -143,14 +143,13 @@ export function createWorkflowOperationRegistrations(
       stepType: 'workflow',
       group: 'manage',
       verb: 'put',
-      name: 'Put Workflow',
-      actionLabel: 'Saving workflow\u2026',
+      name: 'Create Workflow',
+      actionLabel: 'Creating workflow\u2026',
       semanticDescription:
-        'Upsert a workflow: create it if absent, or replace the whole definition if present. ' +
+        'Create a workflow as a draft. It runs once the operator approves it; changes to an existing workflow go through workflow.manage.patch. ' +
         'A workflow is a complete unit combining outcomes, tasks, iteration policy, and learnings. ' +
         'Workflows support three modes: optimization (same tasks, improve via learnings), ' +
-        'process (different input each run), and project (one-shot). ' +
-        'For small edits to an existing workflow (budget, status, single task), prefer workflow.manage.patch.',
+        'process (different input each run), and project (one-shot).',
       tags: ['workflow', 'manage'],
       groupDisplayName: 'Workflow Management',
       groupDescription:
@@ -158,21 +157,21 @@ export function createWorkflowOperationRegistrations(
       idempotency: 'non_idempotent',
       mutates: true,
       usage: {
-        oneLine: 'Upsert a workflow — creates on first write, replaces on subsequent writes.',
+        oneLine: 'Create a workflow as a draft for the operator to approve.',
         whenToUse: [
           'Setting up an optimization loop (ML tuning, prompt engineering)',
           'Defining a recurring process with quality outcomes',
           'Planning a complex multi-step project',
-          'Restructuring an existing workflow wholesale (new tasks, new outcomes)',
         ],
         whenNotToUse: [
           'Simple one-off task — just run a flow directly',
-          'Small edits like bumping the run budget or flipping status — use workflow.manage.patch',
+          'Changing a workflow that already exists — use workflow.manage.patch; a definition change becomes a proposal',
         ],
         pitfalls: [
           'Slug must be URL-safe lowercase (a-z, 0-9, hyphens)',
           'Each task needs either an agent or an operation to execute',
-          'writeMode="create" fails if the workflow already exists; "overwrite" fails if it does not',
+          'Fails if the slug already exists — there is no replace',
+          'The workflow is created as a draft; the operator approves it, and it cannot run until then',
         ],
         minimalExampleInput: {
           slug: 'lead-scoring-optimizer',
@@ -220,13 +219,13 @@ export function createWorkflowOperationRegistrations(
       name: 'Patch Workflow',
       actionLabel: 'Patching skill\u2026',
       semanticDescription:
-        'Apply a small, targeted change to an existing skill via RFC 6902 JSON Patch. ' +
-        'Use for bumping the run budget, flipping status (draft → approved), renaming, ' +
+        'Apply a targeted change to an existing skill via RFC 6902 JSON Patch. ' +
+        'Use for bumping the run budget, retiring a skill (status completed or abandoned), renaming, ' +
         'tweaking a single task, or changing the skill goal / campaign contract via ' +
         '`/goal` and `/campaign/fields/{key}` paths. Definition-touching patches (tasks, ' +
         'outcomes, goal, campaign) are staged as a workflow_refinement proposal for operator ' +
-        'review; metadata patches (budget, status) apply directly. For wholesale replacement, ' +
-        'use workflow.manage.put.',
+        'review; metadata patches (budget, name, a status other than approved) apply directly. ' +
+        'Approving a skill is the operator\u2019s, never a patch.',
       tags: ['workflow', 'manage', 'patch'],
       idempotency: 'non_idempotent',
       mutates: true,
@@ -234,16 +233,15 @@ export function createWorkflowOperationRegistrations(
         oneLine: 'Patch a skill with RFC 6902 ops (budget, status, task, goal, campaign field).',
         whenToUse: [
           'Bumping budget.maxRuns when the agent hits the cap mid-optimization',
-          'Approving a workflow (status: draft → approved)',
           'Renaming or retuning a single task without touching the rest',
           'Changing the skill goal (replace /goal) or a campaign field (/campaign/fields/{key})',
         ],
         whenNotToUse: [
-          'Replacing the whole task list or outcome set — use workflow.manage.put',
           'Initial creation — use workflow.manage.put',
+          'Approving a skill — the operator approves it from the skill page',
         ],
         pitfalls: [
-          'Patch paths must start with "/" (e.g., "/budget/maxRuns")',
+          'Patch paths must start with "/" (e.g., "/budget/maxRuns"); a task may be addressed as /tasks/{taskId} or /tasks/{index}',
           'Use expectedRevision to guard against concurrent writers',
           'A single patch may not mix metadata (budget/status) with definition (tasks/goal/campaign)',
           'Identity campaign fields are immutable — their schema cannot be reshaped, only relabeled',

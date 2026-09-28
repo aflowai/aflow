@@ -606,3 +606,22 @@ describe('convertManifestPatchToStagedOps', () => {
     expect(out.unsupported[0]).toMatch(/not supported for goal\/campaign/);
   });
 });
+
+describe('a refused patch shape points at a patch, never at replacing the workflow', () => {
+  it('names the supported shapes and leaves out workflow.manage.put', () => {
+    const existing = makeWorkflow();
+    const out = convertWorkflowPatchToStagedOps(
+      [
+        { op: 'move', from: '/tasks/0', path: '/tasks/1' },
+        { op: 'replace', path: '/iteration', value: { ...existing.iteration, auto: true } },
+        { op: 'replace', path: '/mode', value: 'project' },
+      ],
+      existing,
+    );
+    expect(out.unsupported).toHaveLength(3);
+    for (const message of out.unsupported) {
+      expect(message).not.toContain('workflow.manage.put');
+    }
+    expect(out.unsupported[1]).toContain("operator's decision");
+  });
+});

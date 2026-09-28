@@ -61,9 +61,8 @@ To check skill status: use workflow.manage.get. This is the ONE call that gives 
 
 To browse available skills: use workflow.manage.list.
 
-To change a skill's config (raise the run budget, approve a draft, mark abandoned): use workflow.manage.patch with a targeted RFC 6902 op. Examples:
+To change a skill's config (raise the run budget, mark abandoned): use workflow.manage.patch with a targeted RFC 6902 op. Example:
 - Raise the run budget to 30: \`{ operations: [{ op: "replace", path: "/budget/maxRuns", value: 30 }] }\`
-- Approve a draft: \`{ operations: [{ op: "replace", path: "/status", value: "approved" }] }\`
 
 To create a new skill: use \`workflow.run.start\` with slug "compose-skill". Describe what the skill should accomplish and what success looks like. The compose-skill workflow will design the workflow, draft evaluation criteria, and produce a proposal for the operator to review and ratify. Every new skill enters your playbook through this path.
 

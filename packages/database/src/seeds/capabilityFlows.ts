@@ -167,16 +167,15 @@ A **workflow** is a single entity combining:
 2. **Choose mode** — optimization (iterate to improve), process (recurring), project (one-shot)
 3. **Set outcomes** — threshold metrics, pattern matches, LLM judge rubrics, or manual
 4. **Define tasks** — each task has a goal, optional agent/operation assignment, dependencies
-5. **Write it** — Call \`workflow.manage.put\` with writeMode="upsert" (default) to create or replace the definition. Returns \`created: true\` on first write, \`false\` on replace.
-6. **Approve** — Flip status draft → approved via \`workflow.manage.patch\` with a single \`replace\` op at \`/status\`. Freezes the definition for execution.
+5. **Write it** — Call \`workflow.manage.put\` to create the workflow. It is created as a draft; \`put\` never replaces an existing workflow.
+6. **Approval** — The operator approves the draft from the skill page; it cannot run until then. Tell the user it is waiting for their approval. Agents do not approve workflows.
 
 ### Editing an existing workflow
 - **Small change** (bump budget, rename, retune one task) → \`workflow.manage.patch\` with RFC 6902 ops:
   - Bump run budget: \`[{ "op": "replace", "path": "/budget/maxRuns", "value": 30 }]\`
-  - Approve: \`[{ "op": "replace", "path": "/status", "value": "approved" }]\`
   - Mark completed: \`[{ "op": "replace", "path": "/status", "value": "completed" }]\`
-- **Wholesale restructure** (new task list, new outcomes) → \`workflow.manage.put\` again (upsert replaces).
-- Use \`expectedRevision\` on either op for optimistic concurrency when other writers may be active.
+- **Definition change** (tasks, outcomes, iteration) → \`workflow.manage.patch\` as well; it is staged as a proposal the operator ratifies. Setting \`/status\` to \`approved\` is refused — approving is the operator's.
+- Use \`expectedRevision\` on a patch for optimistic concurrency when other writers may be active.
 
 ### Executing (run-time)
 1. **Load context** — \`workflow.manage.get\` returns workflow + ledger summary (including a \`budget\` block with maxRuns/runsUsed/runsRemaining/exceeded) and active learnings. This is the one-stop status call; do not fall back to \`memory.store.query\` for workflow state.

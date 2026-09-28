@@ -50,25 +50,21 @@ describe('WorkflowPutInputSchema', () => {
         type: 'agent' as const,
       },
     ],
-    status: 'draft' as const,
   };
 
-  it('accepts a minimal valid definition and defaults writeMode to upsert', () => {
+  it('accepts a minimal valid definition', () => {
     const parsed = WorkflowPutInputSchema.parse(baseline);
-    expect(parsed.writeMode).toBe('upsert');
     expect(parsed.mode).toBe('optimization');
   });
 
-  it('accepts each writeMode literal', () => {
-    for (const writeMode of ['upsert', 'create', 'overwrite'] as const) {
-      const parsed = WorkflowPutInputSchema.parse({ ...baseline, writeMode });
-      expect(parsed.writeMode).toBe(writeMode);
-    }
-  });
-
-  it('rejects invalid writeMode', () => {
-    expect(() => WorkflowPutInputSchema.parse({ ...baseline, writeMode: 'merge' })).toThrow();
-  });
+  it.each(['writeMode', 'expectedRevision', 'status', 'origin'])(
+    'refuses %s, which is not the writer’s to set',
+    (field) => {
+      const result = WorkflowPutInputSchema.safeParse({ ...baseline, [field]: 'x' });
+      expect(result.success).toBe(false);
+      expect(result.error?.issues.some((i) => i.path[0] === field)).toBe(true);
+    },
+  );
 
   it('rejects invalid slugs', () => {
     expect(() => WorkflowPutInputSchema.parse({ ...baseline, slug: 'ab' })).toThrow();
@@ -79,11 +75,6 @@ describe('WorkflowPutInputSchema', () => {
   it('requires the `mode` field (regression: earlier draft omitted it)', () => {
     const { mode: _mode, ...noMode } = baseline;
     expect(() => WorkflowPutInputSchema.parse(noMode)).toThrow();
-  });
-
-  it('accepts optional expectedRevision for optimistic concurrency', () => {
-    const parsed = WorkflowPutInputSchema.parse({ ...baseline, expectedRevision: 3 });
-    expect(parsed.expectedRevision).toBe(3);
   });
 });
 
