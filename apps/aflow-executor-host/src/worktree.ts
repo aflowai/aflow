@@ -63,7 +63,8 @@ export class WorktreeError extends Error {
       | 'branch_checked_out'
       | 'no_identity'
       | 'unknown_ref'
-      | 'stale_base',
+      | 'stale_base'
+      | 'fetch_failed',
   ) {
     super(message);
     this.name = 'WorktreeError';
@@ -415,6 +416,111 @@ export async function resolveCommit(root: string, ref: string): Promise<string> 
     throw new WorktreeError(
       `\`${ref}\` names no commit in ${root}. Name a branch, a tag or a commit the folder has.`,
       'unknown_ref',
+    );
+  }
+}
+
+// How the operator's git reaches a remote when it is not in their config: the
+// ssh agent and ssh command, the proxy (curl reads `http_proxy` only in lower
+// case, so both spellings travel), the CA bundle a corporate proxy needs, and
+// `XDG_CONFIG_HOME`, where git finds a global config kept outside `~`.
+const TRANSPORT_ENV = [
+  'SSH_AUTH_SOCK',
+  'GIT_SSH_COMMAND',
+  'HTTPS_PROXY',
+  'https_proxy',
+  'HTTP_PROXY',
+  'http_proxy',
+  'NO_PROXY',
+  'no_proxy',
+  'SSL_CERT_FILE',
+  'GIT_SSL_CAINFO',
+  'XDG_CONFIG_HOME',
+] as const;
+
+/**
+ * The environment a fetch reaches a remote with: the operator's own transport.
+ *
+ * Their credential helper, `sshCommand` and `insteadOf` rewrites live in the
+ * system and global config, and their keys in the ssh agent, so a fetch without
+ * them fails on every private remote. Reading that config here does not reopen
+ * what `gitEnv` closes: a fetch checks nothing out and stages nothing, so no
+ * filter runs, and the hooks stay off through `GIT_SAFETY_ARGS`.
+ */
+function transportEnv(): Record<string, string> {
+  const env = gitEnv('read');
+  delete env['GIT_CONFIG_NOSYSTEM'];
+  for (const name of TRANSPORT_ENV) {
+    const value = process.env[name];
+    if (value !== undefined) env[name] = value;
+  }
+  return env;
+}
+
+/** Whether `ref` is a ref name git would store, rather than a refspec. */
+async function isPlainRefName(root: string, ref: string): Promise<boolean> {
+  // A leading `+` forces and a `:` names a destination: either would turn the
+  // fetch into a write to one of the operator's branches.
+  if (ref.startsWith('+')) return false;
+  try {
+    await git(root, ['check-ref-format', '--allow-onelevel', ref]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Bring a base of the form `<remote>/<ref>` up to date before it is read.
+ *
+ * A remote-tracking ref says where the remote was at the folder's last fetch,
+ * which may be long ago; a commission asked to start from `origin/main` means
+ * the remote's `main` as it is now. A prefix that names none of the folder's
+ * remotes is left alone, so a local branch with a slash in its name is read as
+ * it is.
+ */
+export async function fetchRemoteBase(root: string, base: string): Promise<void> {
+  let remotes: string[];
+  try {
+    remotes = (await git(root, ['remote']))
+      .split('\n')
+      .map((name) => name.trim())
+      .filter((name) => name !== '');
+  } catch {
+    return;
+  }
+  // Longest first: remote names may themselves contain a slash.
+  const remote = remotes
+    .filter((name) => base.startsWith(`${name}/`) && base.length > name.length + 1)
+    .sort((a, b) => b.length - a.length)[0];
+  if (remote === undefined) return;
+  const ref = base.slice(remote.length + 1);
+  if (!(await isPlainRefName(root, ref))) return;
+
+  try {
+    await run('git', ['-C', root, ...GIT_SAFETY_ARGS, 'fetch', '--end-of-options', remote, ref], {
+      timeout: GIT_TIMEOUT_MS,
+      maxBuffer: 1024 * 1024,
+      env: transportEnv(),
+    });
+  } catch (error) {
+    const stderr =
+      typeof error === 'object' && error !== null && 'stderr' in error
+        ? String((error as { stderr: unknown }).stderr)
+        : '';
+    const reason =
+      stderr
+        .split('\n')
+        .map((line) => line.trim())
+        .find((line) => line !== '') ??
+      (error instanceof Error && 'killed' in error && error.killed === true
+        ? `no answer within ${String(GIT_TIMEOUT_MS / 1000)} seconds`
+        : 'git fetch failed');
+    throw new WorktreeError(
+      `\`${base}\` names the remote \`${remote}\`, and \`${ref}\` could not be fetched from it: ` +
+        `${reason}. The folder must reach \`${remote}\` the way the operator's own git does; ` +
+        'otherwise name a local branch, tag or commit.',
+      'fetch_failed',
     );
   }
 }
@@ -901,6 +1007,7 @@ async function checkoutHolding(root: string, branch: string): Promise<string | u
 export interface PatchCommit {
   readonly branch: string;
   readonly sha: string;
+  readonly message: string;
   /** The parent of the new commit. */
   readonly baseSha: string;
   /** True when the branch existed and the commit was appended to it. */
@@ -919,19 +1026,35 @@ export interface PatchCommitOutcome {
  * be that commit — a patch lands only where it was made, never merged onto
  * something that moved since.
  */
+/** The commit a sha names, or a refusal naming the sha. */
+async function resolveSha(root: string, sha: string): Promise<string> {
+  const commit = await resolveCommit(root, sha).catch(() => undefined);
+  // git reads a short hex string as a ref name before it reads it as a sha,
+  // and peels a tag's sha to the commit it tags: only a commit whose own sha
+  // begins with this one is the commit it names.
+  if (!commit?.startsWith(sha.toLowerCase())) {
+    throw new WorktreeError(
+      `\`${sha}\` names no commit in ${root}. \`baseSha\` is the sha the commission reported ` +
+        'in its `baseSha`, for a commit the folder has.',
+      'unknown_ref',
+    );
+  }
+  return commit;
+}
+
 async function commitTarget(
   root: string,
   branch: string,
-  base: string | undefined,
+  baseSha: string | undefined,
 ): Promise<{ at: string | undefined; appended: boolean }> {
   const appended = await branchExists(root, branch);
-  const stated = base === undefined ? undefined : await resolveCommit(root, base);
+  const stated = baseSha === undefined ? undefined : await resolveSha(root, baseSha);
 
   if (appended) {
     if (stated === undefined) {
       throw new WorktreeError(
         `The repository already has a branch \`${branch}\`. A commit is appended to it only ` +
-          'with `base`: the commit the patch was made against, as the commission reported it in ' +
+          'with `baseSha`: the commit the patch was made against, as the commission reported it in ' +
           '`baseSha`. A fresh change takes a new branch name.',
         'branch_exists',
       );
@@ -939,7 +1062,7 @@ async function commitTarget(
     const head = await resolveCommit(root, `refs/heads/${branch}`);
     if (stated !== head) {
       throw new WorktreeError(
-        `The patch was made against \`${base ?? stated}\` but \`${branch}\` is at \`${head}\`. ` +
+        `The patch was made against \`${baseSha ?? stated}\` but \`${branch}\` is at \`${head}\`. ` +
           'A patch is appended only to the commit it was made against, never merged onto a ' +
           `branch that has moved; commission the fix again from \`${branch}\`.`,
         'stale_base',
@@ -960,7 +1083,7 @@ async function commitTarget(
     const head = await currentHead(root);
     if (head !== undefined && stated !== head) {
       throw new WorktreeError(
-        `The patch was made against \`${base ?? stated}\` but the folder's last commit is ` +
+        `The patch was made against \`${baseSha ?? stated}\` but the folder's last commit is ` +
           `\`${head}\`. Publish from a commission that started at the folder's HEAD, or name the ` +
           'branch it started from.',
         'stale_base',
@@ -996,9 +1119,9 @@ export async function commitPatchOnBranch(
   mode: 'clean' | 'merge',
   branch: string,
   message: string,
-  base?: string,
+  baseSha?: string,
 ): Promise<PatchCommitOutcome> {
-  const target = await commitTarget(root, branch, base);
+  const target = await commitTarget(root, branch, baseSha);
 
   const scratch = await mkdtemp(join(tmpdir(), PUBLICATION_SCRATCH_PREFIX));
   let worktree: PreparedWorktree | undefined;
@@ -1060,6 +1183,11 @@ export async function commitPatchOnBranch(
     }
 
     const sha = (await git(worktree.path, ['rev-parse', 'HEAD'])).trim();
+    // Read back rather than echoed: git's cleanup trims what it was handed, and
+    // the approval shows the commit as it will be pushed.
+    const recorded = (
+      await git(worktree.path, ['show', '-s', '--format=%B', sha], APPLY_OUTPUT_CAP_BYTES)
+    ).replace(/\n+$/, '');
     try {
       // Compare-and-swap on the old head: a branch that moved between the check
       // above and this line is refused here rather than overwritten.
@@ -1079,7 +1207,13 @@ export async function commitPatchOnBranch(
     }
     return {
       apply,
-      commit: { branch, sha, baseSha: worktree.baseSha, appended: target.appended },
+      commit: {
+        branch,
+        sha,
+        message: recorded,
+        baseSha: worktree.baseSha,
+        appended: target.appended,
+      },
     };
   } finally {
     if (worktree !== undefined) await removeWorktree(root, worktree.path);

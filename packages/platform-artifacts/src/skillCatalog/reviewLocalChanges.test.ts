@@ -178,6 +178,10 @@ describe('Review Local Changes — the first harness inside a skill', () => {
     expect(validate({ verdict: 'approve', summary: 'Nothing found.', findings: [] })).toBe(true);
   });
 
+  it('runs beside any number of other reviews, so a waiting publication is never queued', () => {
+    expect(REVIEW_LOCAL_CHANGES.bundle.manifest.concurrency?.maxConcurrentRuns).toBe('unlimited');
+  });
+
   it('references no eval-plane operation', () => {
     const operations = wf.tasks.flatMap((t) => [
       ...(t.operation ? [t.operation] : []),

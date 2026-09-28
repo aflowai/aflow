@@ -101,7 +101,7 @@ async function applyHostPatch(ctx: ExecutorContext, policyPath: string): Promise
         input.mode,
         input.commit.branch,
         input.commit.message,
-        input.commit.base,
+        input.commit.baseSha,
       );
       return await successWithData(ctx, {
         state: apply.state,

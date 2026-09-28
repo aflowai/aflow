@@ -26,7 +26,7 @@ const pullNumberParam = {
 
 export const GITHUB_CONNECTOR: ConnectorCatalogEntry = {
   catalogId: 'github',
-  version: 2,
+  version: 3,
   name: 'GitHub',
   tagline: 'Open pull requests, poll CI checks, read reviews, merge, and close PRs.',
   description:
@@ -107,6 +107,17 @@ export const GITHUB_CONNECTOR: ConnectorCatalogEntry = {
           },
         ],
         tags: ['pull-requests'],
+      },
+      {
+        endpointId: 'getRepository',
+        name: 'Get repository',
+        description:
+          'Fetch a repository the token can see. GitHub answers 404, not 403, for a private ' +
+          'repository the token has no access to, so a 404 here means invisible as often as absent.',
+        method: 'GET',
+        pathTemplate: '/repos/{owner}/{repo}',
+        params: [ownerParam, repoParam],
+        tags: ['repositories'],
       },
       {
         endpointId: 'getPullRequest',

@@ -312,10 +312,13 @@ export function validateParentTaskInputs(
         .slice(0, 3)
         .map((e) => `${e.instancePath || '<root>'}: ${e.message ?? 'invalid'}`)
         .join('; ');
+      // Ajv names the pattern that failed, not the rule it encodes; the
+      // schema's description is where a binding says what it takes.
+      const rule = typeof schema['description'] === 'string' ? ` ${schema['description']}` : '';
       issues.push({
         bindAs,
         code: 'SCHEMA_VIOLATION',
-        detail: `value failed the binding's JSON Schema: ${summary || 'unknown error'}.`,
+        detail: `value failed the binding's JSON Schema: ${summary || 'unknown error'}.${rule}`,
       });
     }
   }

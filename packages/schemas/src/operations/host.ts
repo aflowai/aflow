@@ -67,6 +67,17 @@ export const HostBranchNameSchema = branchToken(HOST_BRANCH_NAME_MAX_LENGTH, 'br
  */
 export const HostBaseRefSchema = branchToken(HOST_BRANCH_NAME_MAX_LENGTH, 'base');
 
+/**
+ * A commit named by its sha alone. A branch name here would resolve to that
+ * branch's head, and a base checked against the head it resolved to always
+ * matches.
+ */
+export const HostCommitShaSchema = z.string().regex(/^[0-9a-fA-F]{7,40}$/, {
+  message:
+    'A base sha is 7 to 40 hexadecimal characters — the `baseSha` a commission reported, ' +
+    'not a branch or tag name.',
+});
+
 /** Which operator-created binding this job runs against. */
 const HostBindingRef = z
   .string()
@@ -317,20 +328,23 @@ export const HostFilePatchInputSchema = z.object({
     .object({
       branch: HostBranchNameSchema.describe(
         "Branch the commit lands on. A new one is created at the folder's HEAD. An existing " +
-          'one takes the commit on top of its head, and only with `base` naming that head.',
+          'one takes the commit on top of its head, and only with `baseSha` naming that head.',
       ),
       message: z
         .string()
         .min(1)
         .max(20_000)
         .describe('Commit message, verbatim. The first line is the subject, as git reads it.'),
-      base: HostBaseRefSchema.optional().describe(
-        'The commit the patch was made against, as the commission reported it in `baseSha`. ' +
-          "Required when `branch` exists, and it must be that branch's head. For a new branch " +
-          "it may be omitted; given, it must be the folder's HEAD. A base that does not match " +
-          'is refused, never merged.',
+      baseSha: HostCommitShaSchema.optional().describe(
+        'The commit the patch was made against, as the commission reported it in `baseSha` — ' +
+          'a sha, never a branch or tag name. Required when `branch` exists, and it must be ' +
+          "that branch's head. For a new branch it may be omitted; given, it must be the " +
+          "folder's HEAD. A base that does not match is refused, never merged.",
       ),
     })
+    // Strict so a misspelt base is refused rather than stripped: dropped, it
+    // would let a patch land on a new branch with no check of where it was made.
+    .strict()
     .optional()
     .describe(
       'Land the diff as a commit on a branch instead of changing the working tree. ' +
@@ -369,6 +383,7 @@ export const HostFilePatchOutputSchema = z.object({
     .object({
       branch: z.string().describe('The branch that now exists in the repository.'),
       sha: z.string().describe('The commit the branch points at.'),
+      message: z.string().describe('The message the commit carries, as git recorded it.'),
       baseSha: z
         .string()
         .describe(
@@ -434,7 +449,11 @@ export const HostHarnessRunInputSchema = z.object({
   base: HostBaseRefSchema.optional().describe(
     'The branch, tag or commit the isolated checkout starts from. Absent, the run starts from ' +
       "the folder's last commit. The patch comes back relative to it, so a fix to a reviewed " +
-      'branch names that branch here and its patch lands on it. An unknown ref is refused.',
+      'branch names that branch here and its patch lands on it. A ref of the form ' +
+      '`<remote>/<ref>`, where `<remote>` is a remote of the folder, is fetched from that ' +
+      "remote first, so `origin/main` is the remote's `main` as of now rather than as of the " +
+      "folder's last fetch; a remote that cannot be reached is refused, naming it. An unknown " +
+      'ref is refused.',
   ),
   continueFrom: z
     .string()
@@ -502,7 +521,7 @@ export const HostHarnessRunOutputSchema = z.object({
     .string()
     .describe(
       "Commit the isolated worktree started from — `base` resolved, or the folder's HEAD. " +
-        'A publication that appends to a branch passes this as its `base`.',
+        'A publication that appends to a branch passes this as its `commit.baseSha`.',
     ),
   result: z
     .unknown()
@@ -786,7 +805,7 @@ export const HostOperationRegistrations: OperationRegistration[] = [
         'Keeping the change a `host.harness.run` produced, after it has been reviewed — the check that follows a delegation',
         'Reapplying a diff that was held while something else moved',
         'Preparing a publication: with `commit`, the diff lands as a commit on a new branch and the working tree is left alone',
-        "A patch made from a commission that started at a branch lands on that branch when `commit.branch` names it and `commit.base` is the `baseSha` the commission reported; a fresh branch takes a patch made at the folder's HEAD",
+        "A patch made from a commission that started at a branch lands on that branch when `commit.branch` names it and `commit.baseSha` is the `baseSha` the commission reported; a fresh branch takes a patch made at the folder's HEAD",
       ],
       whenNotToUse: [
         'Authoring a change here; a diff is something a harness produced and someone read, never something written for this call',
@@ -799,7 +818,7 @@ export const HostOperationRegistrations: OperationRegistration[] = [
         'A diff whose base has moved fails in `clean` mode rather than applying approximately. That is the point.',
         '`merge` can leave conflict markers in the working tree. The files carrying them come back in `conflicts`.',
         'Paths inside a repository `.git` are refused, whatever the diff says.',
-        'An existing branch is appended to only when `commit.base` is its head. A branch that moved since the commission started refuses the append rather than merging it — commission the fix again from the branch.',
+        'An existing branch is appended to only when `commit.baseSha` is its head. A branch that moved since the commission started refuses the append rather than merging it — commission the fix again from the branch.',
       ],
     },
   },

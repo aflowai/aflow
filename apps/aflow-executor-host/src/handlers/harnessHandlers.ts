@@ -80,6 +80,7 @@ import {
   checkApplies,
   collectChanges,
   currentHead,
+  fetchRemoteBase,
   linkedWorktrees,
   prepareWorktree,
   PUBLICATION_SCRATCH_PREFIX,
@@ -482,6 +483,7 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
 
     // Resolved before any checkout is touched, so an unknown ref is refused
     // with the session's checkout still intact.
+    if (input.base !== undefined) await fetchRemoteBase(binding.root, input.base);
     const namedBase =
       input.base === undefined ? undefined : await resolveCommit(binding.root, input.base);
     // A turn that names none keeps the checkout its session's base made, and so

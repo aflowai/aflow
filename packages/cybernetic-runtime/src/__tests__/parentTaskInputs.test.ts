@@ -182,6 +182,25 @@ describe('validateParentTaskInputs — strict (inputContract declared)', () => {
     }
   });
 
+  it("says what the binding takes, from its schema's description, when a value fails it", () => {
+    const t = taskWithContract({
+      repo: {
+        kind: 'run_input',
+        schema: {
+          type: 'string',
+          pattern: '^(?!\\.{1,2}$)[A-Za-z0-9._-]{1,100}$',
+          description: 'The repository name alone, and neither `.` nor `..`.',
+        },
+      },
+    });
+    const r = validateParentTaskInputs(t, { repo: '..' });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.issues[0]!.detail).toContain('must match pattern');
+      expect(r.issues[0]!.detail).toContain('The repository name alone, and neither `.` nor `..`.');
+    }
+  });
+
   it('aggregates multiple issues across mixed failure modes', () => {
     const t = taskWithContract({
       vendor: { kind: 'run_input', schema: { type: 'string', minLength: 3 } },

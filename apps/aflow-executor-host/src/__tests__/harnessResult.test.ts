@@ -578,4 +578,39 @@ describe.runIf(sandboxReadiness().ready)('a commission starts from a named ref',
     ]);
     expect(String(output['patch'])).toContain('touched.txt');
   }, 120_000);
+
+  it("starts from the remote's branch as it is now when the base names a remote", async () => {
+    const upstream = await mkdtemp(join(tmpdir(), 'host-harness-upstream-'));
+    const elsewhere = await mkdtemp(join(tmpdir(), 'host-harness-elsewhere-'));
+    const at = async (cwd: string, ...args: string[]): Promise<string> =>
+      (await promisify(execFile)('git', args, { cwd })).stdout.trim();
+    try {
+      await at(upstream, 'init', '--bare', '-b', 'main');
+      await vcs('remote', 'add', 'origin', upstream);
+      await vcs('push', '-q', 'origin', 'main');
+      await vcs('fetch', '-q', 'origin');
+      await at(elsewhere, 'clone', '-q', upstream, '.');
+      await at(elsewhere, 'config', 'user.email', 'other@example.com');
+      await at(elsewhere, 'config', 'user.name', 'Other');
+      await writeFile(join(elsewhere, 'README.md'), '# project, upstream\n', 'utf8');
+      await at(elsewhere, 'commit', '-qam', 'upstream moves on');
+      await at(elsewhere, 'push', '-q', 'origin', 'main');
+      const moved = await at(elsewhere, 'rev-parse', 'HEAD');
+
+      const { outcome, written } = await runWith({ harness: 'edits', base: 'origin/main' });
+      expect(outcome.status).toBe('SUCCEEDED');
+      expect((written['output'] as Record<string, unknown>)['baseSha']).toBe(moved);
+
+      await vcs('remote', 'set-url', 'origin', join(upstream, 'gone'));
+      const refused = await runWith({ harness: 'edits', base: 'origin/main' });
+      expect(refused.outcome.status).toBe('FAILED');
+      const error = refused.written['error'] as { message: string; classification: string };
+      expect(error.message).toContain('the remote `origin`');
+      expect(error.classification).toBe('validation');
+    } finally {
+      await vcs('remote', 'remove', 'origin').catch(() => undefined);
+      await rm(upstream, { recursive: true, force: true });
+      await rm(elsewhere, { recursive: true, force: true });
+    }
+  }, 120_000);
 });

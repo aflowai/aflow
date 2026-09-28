@@ -11,11 +11,11 @@
       "group": "tools"
     },
     "tools.helmsman.native_fc": {
-      "tokens": 7780,
+      "tokens": 7855,
       "group": "tools"
     },
     "tools.helmsman.generate_json": {
-      "tokens": 7642,
+      "tokens": 7717,
       "group": "tools"
     },
     "tools.coach.resolvedOps": {
@@ -23,11 +23,11 @@
       "group": "tools"
     },
     "tools.coach.native_fc": {
-      "tokens": 23381,
+      "tokens": 23746,
       "group": "tools"
     },
     "tools.coach.generate_json": {
-      "tokens": 22929,
+      "tokens": 23294,
       "group": "tools"
     },
     "helmsmanPrompt.cognitiveFrame": {
@@ -36,6 +36,10 @@
     },
     "helmsmanPrompt.registerMapping": {
       "tokens": 4250,
+      "group": "helmsmanPrompt"
+    },
+    "helmsmanPrompt.operatingModel": {
+      "tokens": 236,
       "group": "helmsmanPrompt"
     },
     "helmsmanPrompt.linking": {
@@ -59,7 +63,7 @@
       "group": "helmsmanPrompt"
     },
     "runnerPrompt.total": {
-      "tokens": 2196,
+      "tokens": 2235,
       "group": "runnerPrompt"
     },
     "spaceContextGuidance.memory": {
@@ -75,7 +79,7 @@
       "group": "spaceContextGuidance"
     },
     "spaceContextGuidance.skills": {
-      "tokens": 418,
+      "tokens": 319,
       "group": "spaceContextGuidance"
     },
     "spaceContextGuidance.compute": {
@@ -83,15 +87,15 @@
       "group": "spaceContextGuidance"
     },
     "worstCase.pinnedSurface": {
-      "tokens": 29445,
+      "tokens": 30626,
       "group": "worstCase"
     }
   },
   "totals": {
-    "tools": 61769,
-    "helmsmanPrompt": 6389,
-    "runnerPrompt": 2196,
-    "spaceContextGuidance": 1203,
-    "worstCase": 29445
+    "tools": 62649,
+    "helmsmanPrompt": 6625,
+    "runnerPrompt": 2235,
+    "spaceContextGuidance": 1104,
+    "worstCase": 30626
   }
 }
