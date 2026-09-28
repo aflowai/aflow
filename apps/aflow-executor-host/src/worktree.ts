@@ -9,9 +9,10 @@
  * from, rather than a mutation already applied to the working copy.
  *
  * The worktree is detached at the binding's current HEAD, or at the commit a
- * caller named. Nothing is pushed and a run moves no ref; deciding what becomes
- * of the diff is a separate act, and the most a decision reaches from here is a
- * branch of its own or one commit appended to the branch the diff was made on.
+ * caller named. Nothing is pushed and the agent's git moves no branch or tag
+ * (`refGuard.ts`); deciding what becomes of the diff is a separate act, and the
+ * most a decision reaches from here is a branch of its own or one commit
+ * appended to the branch the diff was made on.
  *
  * It carries only what the repository tracks, so the operator's installed
  * dependencies are linked into it: without them a harness asked to run the
@@ -129,6 +130,16 @@ function gitEnv(globalConfig: 'withheld' | 'read' = 'withheld'): Record<string, 
     if (configured !== undefined) env['GIT_CONFIG_GLOBAL'] = configured;
   }
   return env;
+}
+
+/** What `git --version` on the executor's own PATH says, or nothing when git is absent. */
+export async function gitVersionText(timeoutMs: number): Promise<string | undefined> {
+  try {
+    const { stdout } = await run('git', ['--version'], { timeout: timeoutMs, env: gitEnv() });
+    return stdout;
+  } catch {
+    return undefined;
+  }
 }
 
 async function git(
@@ -622,18 +633,18 @@ export async function currentHead(root: string): Promise<string | undefined> {
 export type RefSnapshot = ReadonlyMap<string, string>;
 
 /**
- * The operator's refs a run could move, read before and after it.
+ * The repository's local branches and tags, read before and after a run.
  *
- * A worktree shares refs with the repository it was added to, so a harness
- * that runs `git branch -D` or `git update-ref` in its checkout rewrites the
- * operator's branches. Read from the connected folder, the listing holds the
- * shared refs and not the run's own detached HEAD, which is the one ref a run
- * moves by committing in its checkout.
+ * Read from the connected folder, the listing holds the refs a worktree shares
+ * with it and not the run's own detached HEAD. A difference between two
+ * readings says a ref changed while the run was in flight, not who changed it:
+ * the operator's own work in the folder moves them too. What stops the agent's
+ * git is the hook in `refGuard.ts`; this is what the result reports.
  */
 export async function snapshotRefs(root: string): Promise<RefSnapshot> {
-  // Local branches and tags only. A remote-tracking ref changes when a fetch
-  // runs — an editor's or a background one — which is not the run's doing and
-  // moves nothing the operator wrote; `refs/stash` is the operator's scratch.
+  // A remote-tracking ref changes when a fetch runs — an editor's or a
+  // background one — and moves nothing the operator wrote; `refs/stash` is the
+  // operator's scratch.
   const listing = await git(
     root,
     ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads/', 'refs/tags/'],
@@ -649,39 +660,26 @@ export async function snapshotRefs(root: string): Promise<RefSnapshot> {
 }
 
 export type RefChange =
-  | { readonly ref: string; readonly change: 'created'; readonly after: string }
-  | { readonly ref: string; readonly change: 'deleted'; readonly before: string }
+  | { readonly ref: string; readonly change: 'created'; readonly to: string }
+  | { readonly ref: string; readonly change: 'deleted'; readonly from: string }
   | {
       readonly ref: string;
       readonly change: 'moved';
-      readonly before: string;
-      readonly after: string;
+      readonly from: string;
+      readonly to: string;
     };
 
 export function changedRefs(before: RefSnapshot, after: RefSnapshot): RefChange[] {
   const changes: RefChange[] = [];
   for (const [ref, was] of before) {
     const now = after.get(ref);
-    if (now === undefined) changes.push({ ref, change: 'deleted', before: was });
-    else if (now !== was) changes.push({ ref, change: 'moved', before: was, after: now });
+    if (now === undefined) changes.push({ ref, change: 'deleted', from: was });
+    else if (now !== was) changes.push({ ref, change: 'moved', from: was, to: now });
   }
   for (const [ref, now] of after) {
-    if (!before.has(ref)) changes.push({ ref, change: 'created', after: now });
+    if (!before.has(ref)) changes.push({ ref, change: 'created', to: now });
   }
   return changes.sort((a, b) => a.ref.localeCompare(b.ref));
-}
-
-export function describeRefChanges(changes: readonly RefChange[]): string {
-  const lines = changes.map((c) => {
-    if (c.change === 'created') return `\`${c.ref}\` was created at ${c.after}`;
-    if (c.change === 'deleted') return `\`${c.ref}\` was deleted (it was at ${c.before})`;
-    return `\`${c.ref}\` moved from ${c.before} to ${c.after}`;
-  });
-  return (
-    'The run changed refs in the repository it does not own, which a commission may not do: ' +
-    `${lines.join('; ')}. Nothing was restored — restore them from the reflog. What the run ` +
-    'changed in its checkout is on this error.'
-  );
 }
 
 /**

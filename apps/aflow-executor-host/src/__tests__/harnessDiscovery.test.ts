@@ -1,7 +1,31 @@
 import { describe, expect, it } from 'vitest';
 
-import { discoverHarnesses } from '../harnessDiscovery.js';
+import { discoverHarnesses, type DiscoveredHarness } from '../harnessDiscovery.js';
 import { buildHarnessArgv, buildSessionArgs, HarnessProfileSchema } from '../harnessProfiles.js';
+
+// Discovery finds only what is installed, so a machine with no harness would
+// run these loops zero times and pass. This one is always there.
+const FIXED_HARNESS: DiscoveredHarness = {
+  id: 'claude',
+  label: 'Claude Code',
+  executable: '/usr/local/bin/claude',
+  version: 'fixed',
+  suggested: {
+    promptArgs: ['-p', '{prompt}'],
+    args: [],
+    output: 'text',
+    sessionArgs: [],
+    resumeArgs: [],
+    turnsArgs: [],
+    modelArgs: ['--model', '{model}'],
+    authPaths: [],
+    writePaths: [],
+  },
+};
+
+async function withFixedHarness(): Promise<DiscoveredHarness[]> {
+  return [FIXED_HARNESS, ...(await discoverHarnesses())];
+}
 
 describe('harness discovery', () => {
   it('reports an absolute path for anything it found, not the name it looked for', async () => {
@@ -120,6 +144,38 @@ describe('harness discovery', () => {
         modelArgs: suggested,
       });
       const argv = buildHarnessArgv(profile, 'the task', [], undefined, 'fable');
+      expect(argv).toContain('fable');
+      expect(argv.indexOf('fable')).toBeLessThan(argv.indexOf('the task'));
+    }
+  });
+
+  it('suggests no model, so a confirmed suggestion runs the harness default', async () => {
+    // Which model runs is the operator's choice; discovery measures only how
+    // a model is passed.
+    for (const found of await withFixedHarness()) {
+      expect(found.suggested).not.toHaveProperty('model');
+      const confirmed = HarnessProfileSchema.parse({
+        id: found.id,
+        executable: found.executable,
+        promptArgs: found.suggested.promptArgs,
+        modelArgs: found.suggested.modelArgs,
+      });
+      expect(confirmed.model).toBeUndefined();
+      expect(buildHarnessArgv(confirmed, 'the task')).not.toContain('{model}');
+    }
+  });
+
+  it('applies a model the operator adds to a confirmed suggestion', async () => {
+    for (const found of await withFixedHarness()) {
+      if (found.suggested.modelArgs.length === 0) continue;
+      const confirmed = HarnessProfileSchema.parse({
+        id: found.id,
+        executable: found.executable,
+        promptArgs: found.suggested.promptArgs,
+        modelArgs: found.suggested.modelArgs,
+        model: 'fable',
+      });
+      const argv = buildHarnessArgv(confirmed, 'the task');
       expect(argv).toContain('fable');
       expect(argv.indexOf('fable')).toBeLessThan(argv.indexOf('the task'));
     }

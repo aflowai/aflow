@@ -88,6 +88,13 @@ export const HarnessProfileSchema = z.object({
    */
   modelArgs: z.array(z.string()).default([]),
   /**
+   * The model a run gets when it names none, spelled as the harness names it.
+   * Passed through `modelArgs` exactly as a run's own model would be, so a
+   * profile without them refuses every run rather than quietly running the
+   * harness's default in its place. Absent means the harness's own default.
+   */
+  model: z.string().min(1).optional(),
+  /**
    * An environment variable that should receive a fresh, writable configuration
    * directory for the run. A harness given one keeps its state there instead of
    * under the operator's home, which means the standing denial of home survives
@@ -196,17 +203,22 @@ function buildTurnsArgs(profile: HarnessProfile, maxTurns: number | undefined): 
 }
 
 /**
- * The model arguments for a run, or none when the run named no model. Refused
- * the same way a turn budget is: a harness that cannot be told which model to
- * run would answer on its default, and a run that pinned a model did so because
- * the default was not the question.
+ * The model arguments for a run: the run's own model, else the profile's, else
+ * none. Refused the same way a turn budget is: a harness that cannot be told
+ * which model to run would answer on its default, and a run or profile that
+ * pinned a model did so because the default was not the question.
  */
-function buildModelArgs(profile: HarnessProfile, model: string | undefined): string[] {
+function buildModelArgs(profile: HarnessProfile, runModel: string | undefined): string[] {
+  const model = runModel ?? profile.model;
   if (model === undefined) return [];
   if (profile.modelArgs.length === 0) {
     throw new HarnessProfileError(
-      `Harness '${profile.id}' takes no model argument on this machine, so \`model\` cannot be ` +
-        'applied. Send the task without it and the harness runs its own default.',
+      runModel !== undefined
+        ? `Harness '${profile.id}' takes no model argument on this machine, so \`model\` cannot be ` +
+            'applied. Send the task without it and the harness runs its own default.'
+        : `Harness '${profile.id}' takes no model argument on this machine, so its configured ` +
+            `model '${model}' cannot be applied. Clear it on this machine: ` +
+            `aflow harness model ${profile.id} --clear`,
       'unsupported_request',
     );
   }

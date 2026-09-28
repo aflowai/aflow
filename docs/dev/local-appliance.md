@@ -468,6 +468,19 @@ depends on the harness, and a wrong one fails with a message naming the path it
 looked for rather than handing the harness an empty string. Omit it entirely when
 the command prints the token alone.
 
+**Its default model.** A task that names no `model` runs whatever the profile
+names, and a profile naming none runs the harness's own default. A task's own
+`model` still wins. Name it as the harness spells it, with `--model` on `add` or
+afterwards:
+
+```bash
+yarn workspace @aflow/aflow-executor-host harness model claude <model>
+yarn workspace @aflow/aflow-executor-host harness model claude --clear
+```
+
+A harness that takes no model argument refuses a profile model the same way it
+refuses a task's.
+
 A harness run needs `allowsExecution` on the binding, like any command, and the
 **Coding agents on this computer** capability, which no profile carries by
 default.

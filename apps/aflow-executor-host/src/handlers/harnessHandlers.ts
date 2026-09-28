@@ -11,14 +11,15 @@
  * The run happens in a detached worktree, never the operator's checkout. That
  * is what lets a run start while they have uncommitted work, and what makes the
  * result a diff to review rather than an edit already made. Nothing is
- * committed, no branch moves — a run that moves one is refused — and the
- * worktree is removed once its changes have been collected.
+ * committed, the agent's git cannot move a branch or tag, and the worktree is
+ * removed once its changes have been collected.
  */
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join, sep } from 'node:path';
 
 import AjvModule from 'ajv';
+import type { z } from 'zod';
 
 import type { ExecutorContext, StepResult } from '@aflow/executor-runtime';
 import {
@@ -79,7 +80,6 @@ import {
   checkApplies,
   collectChanges,
   currentHead,
-  describeRefChanges,
   linkedWorktrees,
   prepareWorktree,
   PUBLICATION_SCRATCH_PREFIX,
@@ -89,6 +89,7 @@ import {
   WorktreeError,
   type LinkedWorktree,
 } from '../worktree.js';
+import { installRefGuard, noRefGuardMessage, refGuardReadiness } from '../refGuard.js';
 
 /**
  * Where a task that declared an output schema leaves its answer. It is inside
@@ -318,6 +319,23 @@ async function failure(
   return await failureWithError(ctx, internalError(message));
 }
 
+/** The argv one turn of a harness run starts with. */
+export function harnessTurnArgv(
+  profile: HarnessProfile,
+  input: Pick<z.output<typeof HostHarnessRunInputSchema>, 'maxTurns' | 'model'>,
+  task: string,
+  conversation: string,
+  continued: boolean,
+): string[] {
+  return buildHarnessArgv(
+    profile,
+    task,
+    buildSessionArgs(profile, conversation, continued),
+    input.maxTurns,
+    input.model,
+  );
+}
+
 async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<StepResult> {
   const raw = await ctx.readPayload(ctx.job.inputRef);
   const parsed = HostHarnessRunInputSchema.safeParse(raw);
@@ -395,6 +413,10 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
     const readiness = sandboxReadiness();
     if (!readiness.ready) {
       return await failureWithError(ctx, permissionError(noSandboxMessage(readiness.missing)));
+    }
+    const refGuard = await refGuardReadiness();
+    if (!refGuard.ready) {
+      return await failureWithError(ctx, permissionError(noRefGuardMessage(refGuard.missing)));
     }
 
     // An abandoned session holds a checkout on disk, so expiry is collected
@@ -519,6 +541,7 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
     }
 
     const scratchDir = scratch;
+    const refGuardEnv = await installRefGuard(scratchDir);
     // What the harness said, as opposed to what it printed. Set per turn, so
     // the last turn's answer is the one that comes back — the same rule the
     // run result itself follows.
@@ -554,19 +577,14 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
       try {
         return await runSandboxed({
           binding,
-          argv: buildHarnessArgv(
-            profile,
-            task,
-            buildSessionArgs(profile, conversation, continued),
-            input.maxTurns,
-            input.model,
-          ),
+          argv: harnessTurnArgv(profile, input, task, conversation, continued),
           cwd: worktree.path,
           // The sandbox's proxy names the host it refused only when asked to, and
           // that name is the whole diagnosis for a harness that reached nothing.
           env: {},
           trustedEnv: {
             SRT_DEBUG: '1',
+            ...refGuardEnv,
             ...(configDir !== undefined && profile.configDirEnv !== undefined
               ? { [profile.configDirEnv]: configDir }
               : {}),
@@ -755,6 +773,7 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
       applies: applies.state,
       ...(applies.state === 'conflict' ? { applyConflict: applies.detail } : {}),
       headMoved,
+      refChanges,
       exitCode: result.exitCode,
       timedOut: result.timedOut,
       durationMs: result.durationMs,
@@ -781,16 +800,6 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
       }
       return details;
     };
-
-    if (refChanges.length > 0) {
-      return await failureWithError(
-        ctx,
-        permissionError(
-          scrubSecret(describeRefChanges(refChanges), credential),
-          await failureDetails(),
-        ),
-      );
-    }
 
     if (check !== undefined && !check.ok) {
       // The step fails, and the work still comes back: a check that rejects an

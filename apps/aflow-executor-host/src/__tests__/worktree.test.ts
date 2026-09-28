@@ -17,7 +17,6 @@ import {
   changedRefs,
   checkApplies,
   collectChanges,
-  describeRefChanges,
   isGitRepository,
   prepareWorktree,
   PUBLICATION_SCRATCH_PREFIX,
@@ -166,7 +165,7 @@ describe('a run started from a named ref', () => {
   });
 });
 
-describe('the refs a run could reach', () => {
+describe('the refs reported for a run', () => {
   it('sees nothing when the run only committed in its own checkout', async () => {
     const wt = await prepareWorktree(repo, scratch, 'work');
     const before = await snapshotRefs(repo);
@@ -183,11 +182,9 @@ describe('the refs a run could reach', () => {
     const before = await snapshotRefs(repo);
     await git(wt.path, 'branch', '-D', 'other');
 
-    const changes = changedRefs(before, await snapshotRefs(repo));
-    expect(changes).toEqual([{ ref: 'refs/heads/other', change: 'deleted', before: other }]);
-    const message = describeRefChanges(changes);
-    expect(message).toContain('`refs/heads/other` was deleted');
-    expect(message).toContain('restore them from the reflog');
+    expect(changedRefs(before, await snapshotRefs(repo))).toEqual([
+      { ref: 'refs/heads/other', change: 'deleted', from: other },
+    ]);
     await removeWorktree(repo, wt.path);
   });
 
@@ -202,8 +199,8 @@ describe('the refs a run could reach', () => {
     await git(wt.path, 'update-ref', 'refs/tags/planted', rewritten);
 
     expect(changedRefs(before, await snapshotRefs(repo))).toEqual([
-      { ref: 'refs/heads/main', change: 'moved', before: main, after: rewritten },
-      { ref: 'refs/tags/planted', change: 'created', after: rewritten },
+      { ref: 'refs/heads/main', change: 'moved', from: main, to: rewritten },
+      { ref: 'refs/tags/planted', change: 'created', to: rewritten },
     ]);
     await removeWorktree(repo, wt.path);
   });
