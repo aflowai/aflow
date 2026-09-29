@@ -13,7 +13,9 @@ import { isComputeResult } from '../compute/ComputeResultCard.js';
 import { MarkdownRenderer } from '../markdown-renderer.js';
 import {
   changedFilePaths,
+  diffNotKept,
   HostHarnessBody,
+  HostHarnessHeader,
   isHostHarnessResult,
   isHostInspectResult,
   isHostProcessResult,
@@ -175,6 +177,57 @@ describe('what a diff changed', () => {
     expect(changedFilePaths('+ a line with no header')).toEqual([]);
   });
 });
+
+/**
+ * A capped inline copy is harmless — `patchRef` holds the whole diff. The case
+ * worth a warning is the one that cannot be published: files changed and
+ * nothing stored.
+ */
+describe('a diff the run could not keep', () => {
+  const changed: HostHarnessResult = {
+    ...harnessRun,
+    patchRef: 'gs://file-store/tenants/t_1/runs/r_1/steps/s_1/attempt/1/patch.json',
+  };
+
+  it('is not flagged when the copy is capped and the whole diff is stored', () => {
+    const capped = { ...changed, patchTruncated: true };
+    expect(diffNotKept(capped)).toBe(false);
+    expect(warnings(HostHarnessHeader({ result: capped }))).toEqual([]);
+  });
+
+  it('is flagged when files changed and nothing was stored', () => {
+    const { patch: _patch, patchRef: _patchRef, ...unkept } = changed;
+    const over = { ...unkept, filesChanged: 4_000, patchTruncated: false };
+    expect(diffNotKept(over)).toBe(true);
+    expect(warnings(HostHarnessHeader({ result: over }))).toEqual([
+      'diff over the ceiling, not kept',
+    ]);
+  });
+
+  it('is not flagged when nothing changed', () => {
+    const { patch: _patch, patchRef: _patchRef, ...unchanged } = changed;
+    expect(diffNotKept({ ...unchanged, filesChanged: 0 })).toBe(false);
+  });
+});
+
+/** The text of every warning badge in the rendered header. */
+function warnings(node: unknown): string[] {
+  const found: string[] = [];
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      for (const child of value) visit(child);
+      return;
+    }
+    if (!isValidElement(value)) return;
+    const props = value.props as Record<string, unknown>;
+    if (props['variant'] === 'warning' && typeof props['children'] === 'string') {
+      found.push(props['children']);
+    }
+    visit(props['children']);
+  };
+  visit(node);
+  return found;
+}
 
 /**
  * The closing answer is the whole point of a finished run, and the agent wrote

@@ -15,15 +15,18 @@
  * commit further along the branch the patch was made on — which is a thing the
  * operator can read, push or reset rather than a change already published.
  */
+import type { z } from 'zod';
+
 import type { ExecutorContext, StepResult } from '@aflow/executor-runtime';
 import {
   successWithData,
   failureWithError,
+  PayloadAccessError,
   permissionError,
   validationError,
   internalError,
 } from '@aflow/executor-runtime';
-import { HostFilePatchInputSchema } from '@aflow/schemas';
+import { HostFilePatchInputSchema, parsePayloadRef, type AflowError } from '@aflow/schemas';
 
 import {
   HostBindingError,
@@ -37,6 +40,7 @@ import {
 import {
   applyPatch,
   commitPatchOnBranch,
+  DIFF_CEILING_BYTES,
   isGitRepository,
   patchPaths,
   WorktreeError,
@@ -53,6 +57,50 @@ async function failure(ctx: ExecutorContext, error: unknown): Promise<StepResult
     ctx,
     internalError(error instanceof Error ? error.message : String(error)),
   );
+}
+
+/** How a unified diff opens: git's own header, or a plain one. */
+const UNIFIED_DIFF_START = /^(?:diff --git |--- )/;
+
+/**
+ * The diff the call names, as text: the bytes it carried, or the stored diff its
+ * `patchRef` points at. A ref is read through the job's own tenant, so one
+ * naming another tenant's payload is refused before anything is fetched.
+ */
+async function diffOf(
+  ctx: ExecutorContext,
+  input: z.infer<typeof HostFilePatchInputSchema>,
+): Promise<string | AflowError> {
+  if (input.patchRef === undefined) return input.patch ?? '';
+  const notADiff = validationError(
+    '`patchRef` names a payload that is not a diff. Pass the `patchRef` a ' +
+      '`host.harness.run` result reports.',
+    { patchRef: input.patchRef },
+  );
+  // The kind is in the ref itself, so another step's payload is refused
+  // without reading it — and never reaches git to fail there in git's words.
+  const ref = parsePayloadRef(input.patchRef);
+  if (ref?.form !== 'object' || ref.payloadKind !== 'patch') return notADiff;
+  let stored: unknown;
+  try {
+    stored = await ctx.readPayload(input.patchRef);
+  } catch (error) {
+    if (error instanceof PayloadAccessError) return error.toAflowError();
+    return validationError(
+      'The diff `patchRef` names could not be read — stored diffs expire, and this one is ' +
+        'gone or was never stored. Commission the change again for a fresh `patchRef`.',
+      { patchRef: input.patchRef },
+    );
+  }
+  if (typeof stored !== 'string' || !UNIFIED_DIFF_START.test(stored)) return notADiff;
+  if (Buffer.byteLength(stored, 'utf8') > DIFF_CEILING_BYTES) {
+    return validationError(
+      `The diff \`patchRef\` names is over the ${String(DIFF_CEILING_BYTES / (1024 * 1024))} MB ` +
+        'a patch applies.',
+      { patchRef: input.patchRef },
+    );
+  }
+  return stored;
 }
 
 async function applyHostPatch(ctx: ExecutorContext, policyPath: string): Promise<StepResult> {
@@ -78,7 +126,10 @@ async function applyHostPatch(ctx: ExecutorContext, policyPath: string): Promise
       );
     }
 
-    const files = input.patch.trim() === '' ? [] : await patchPaths(binding.root, input.patch);
+    const diff = await diffOf(ctx, input);
+    if (typeof diff !== 'string') return await failureWithError(ctx, diff);
+
+    const files = diff.trim() === '' ? [] : await patchPaths(binding.root, diff);
     if (files.length === 0) {
       return await successWithData(ctx, {
         state: 'empty',
@@ -97,7 +148,7 @@ async function applyHostPatch(ctx: ExecutorContext, policyPath: string): Promise
     if (input.commit !== undefined) {
       const { apply, commit } = await commitPatchOnBranch(
         binding.root,
-        input.patch,
+        diff,
         input.mode,
         input.commit.branch,
         input.commit.message,
@@ -115,7 +166,7 @@ async function applyHostPatch(ctx: ExecutorContext, policyPath: string): Promise
       });
     }
 
-    const outcome = await applyPatch(binding.root, input.patch, input.mode);
+    const outcome = await applyPatch(binding.root, diff, input.mode);
     // A three-way apply that conflicted still wrote the tree. Reporting zero
     // changed files over a modified working copy would send the operator to
     // look at a folder that is not in the state they were told it is in.

@@ -60,6 +60,9 @@ export interface HostHarnessResult {
   result?: unknown;
   /** The run's activity feed, stored once at completion. */
   activityRef?: string;
+  /** The whole diff, stored; absent when nothing changed or the diff was too large to keep. */
+  patchRef?: string;
+  /** A copy for reading, cut short when `patchTruncated` says so. */
   patch?: string;
   filesChanged: number;
   patchTruncated?: boolean;
@@ -408,6 +411,15 @@ export function HostHarnessBody({ result }: { result: HostHarnessResult }): Reac
   );
 }
 
+/**
+ * Files changed and no stored diff: the run was over the ceiling and kept
+ * nothing, so there is nothing to publish. A capped inline copy is not this —
+ * `patchRef` still holds all of it.
+ */
+export function diffNotKept(result: HostHarnessResult): boolean {
+  return result.patchRef === undefined && result.filesChanged > 0;
+}
+
 /** The header line of a harness run — what ran, how it ended, how much moved. */
 export function HostHarnessHeader({
   result,
@@ -440,7 +452,7 @@ export function HostHarnessHeader({
           needs, since it decides whether the patch can be taken. */}
       {result.applies === 'conflict' && <Badge variant="danger">does not apply</Badge>}
       {result.headMoved === true && <Badge variant="warning">head moved</Badge>}
-      {result.patchTruncated === true && <Badge variant="warning">patch capped</Badge>}
+      {diffNotKept(result) && <Badge variant="warning">diff over the ceiling, not kept</Badge>}
     </Inline>
   );
 }

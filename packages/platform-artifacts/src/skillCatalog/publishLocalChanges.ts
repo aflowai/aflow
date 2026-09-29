@@ -1,4 +1,8 @@
-import type { SkillCatalogEntry } from '@aflow/schemas';
+import {
+  MAX_PARENT_INPUTS_SERIALIZED_BYTES,
+  STORED_PAYLOAD_REF_PATTERN,
+  type SkillCatalogEntry,
+} from '@aflow/schemas';
 
 /**
  * The push argv, pinned by the skill rather than bound as a whole. Only the
@@ -8,8 +12,28 @@ import type { SkillCatalogEntry } from '@aflow/schemas';
  */
 const PUSH_COMMAND = ['git', 'push', '--set-upstream', 'origin', { $bind: 'branch' }];
 
-/** The operation's own ceiling for a unified diff. */
-const PATCH_MAX_BYTES = 4_194_304;
+/** The run's inputs together, and so the most a diff passed as text can be. */
+const RUN_INPUTS_KB = MAX_PARENT_INPUTS_SERIALIZED_BYTES / 1024;
+
+/**
+ * A stored reference, never an inline one: an `inline:` ref carries the diff's
+ * bytes in the run input, which is the thing this input exists to avoid.
+ */
+const PATCH_REF_SCHEMA = {
+  type: 'string',
+  minLength: 1,
+  maxLength: 1024,
+  pattern: STORED_PAYLOAD_REF_PATTERN,
+  description:
+    'The `patchRef` a commission reported, verbatim — a reference to the whole stored diff.',
+};
+
+const PATCH_SCHEMA = {
+  type: 'string',
+  minLength: 1,
+  maxLength: MAX_PARENT_INPUTS_SERIALIZED_BYTES,
+  description: `A diff the operator hands over, within the ${String(RUN_INPUTS_KB)} KB a run's inputs carry together. A commission's change goes as its \`patchRef\`, which names the whole diff at any size.`,
+};
 
 /** GitHub's rule for an owner: letters, digits and single hyphens between them, at most 39. */
 const GITHUB_OWNER_PATTERN = '^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$';
@@ -50,7 +74,7 @@ const BASE_SHA_SCHEMA = {
 
 const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'publish-local-changes',
-  version: 4,
+  version: 6,
   name: 'Publish Local Changes',
   tagline:
     'Commit a patch onto a branch of a connected repository, then push it and open the pull request once the operator approves.',
@@ -58,7 +82,9 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
 
 **Not for a folder whose machine block shows no publish prefix.** Pushing is a posture the operator sets when the folder is connected; without it the push is refused. Say so, ask for the folder to be reconnected allowing pushes under a branch prefix, and stop there rather than committing work that cannot be published.
 
-**What it needs**: the connected folder; the patch, which a commission's result carries; a branch name under the folder's publish prefix; the commit message; a title for the pull request; the repository owner and name, which the folder's \`origin\` remote gives — read it with the folder's shell when it is not already known; and the base branch the pull request targets. A summary is optional and becomes the body of both the commit and the pull request. Ask for whatever is missing instead of inventing it.
+**What it needs**: the connected folder; the change — for a commission's work, the \`patchRef\` its result reports, passed as \`patchRef\`, or for a diff the operator hands over, that text as \`patch\`, one or the other; a branch name under the folder's publish prefix; the commit message; a title for the pull request; the repository owner and name, which the folder's \`origin\` remote gives — read it with the folder's shell when it is not already known; and the base branch the pull request targets. A summary is optional and becomes the body of both the commit and the pull request. Ask for whatever is missing instead of inventing it.
+
+**Never pass a commission's \`patch\` text.** It is a copy for reading, cut short on a large change, and the run's inputs are capped at ${String(RUN_INPUTS_KB)} KB together. \`patchRef\` names the whole diff at any size.
 
 **Before approving**: the run waits at the approval, so the range can be read first — run Local Code Review over \`<base>..<branch>\` while this run waits, and approve or decline on what it finds.
 
@@ -104,11 +130,17 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           schema: { type: 'string', minLength: 1, maxLength: 128 },
         },
         {
-          id: 'patch',
-          required: true,
+          id: 'patchRef',
+          required: false,
           description:
-            'The unified diff to publish, as a commission returns it or as the operator supplies it.',
-          schema: { type: 'string', minLength: 1, maxLength: PATCH_MAX_BYTES },
+            "The change a commission made: the `patchRef` its result reports, passed on as it is. It names the whole diff whatever its size. Give this or `patch`, never both — a commission's change always goes this way.",
+          schema: PATCH_REF_SCHEMA,
+        },
+        {
+          id: 'patch',
+          required: false,
+          description: `A unified diff the operator hands over, as text. It travels in the run's inputs, which are capped at ${String(RUN_INPUTS_KB)} KB together, so it must stay small — and it is never a commission's \`patch\`, which is a copy for reading and cut short on a large change. Give this or \`patchRef\`, never both.`,
+          schema: PATCH_SCHEMA,
         },
         {
           id: 'branch',
@@ -178,6 +210,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           retryability: 'unsafe' as const,
           inputBindings: {
             bindingId: { kind: 'run_input' as const, path: 'bindingId' },
+            patchRef: { kind: 'run_input' as const, path: 'patchRef' },
             patch: { kind: 'run_input' as const, path: 'patch' },
             branch: { kind: 'run_input' as const, path: 'branch' },
             baseSha: { kind: 'run_input' as const, path: 'baseSha' },
@@ -195,11 +228,17 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
                 path: 'bindingId',
                 schema: { type: 'string', minLength: 1, maxLength: 128 },
               },
+              patchRef: {
+                kind: 'run_input' as const,
+                bindAs: 'patchRef',
+                path: 'patchRef',
+                schema: PATCH_REF_SCHEMA,
+              },
               patch: {
                 kind: 'run_input' as const,
                 bindAs: 'patch',
                 path: 'patch',
-                schema: { type: 'string', minLength: 1, maxLength: PATCH_MAX_BYTES },
+                schema: PATCH_SCHEMA,
               },
               branch: {
                 kind: 'run_input' as const,
@@ -262,6 +301,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           },
           inputTemplate: {
             bindingId: { $bind: 'bindingId' },
+            patchRef: { $bind: 'patchRef' },
             patch: { $bind: 'patch' },
             mode: 'clean',
             commit: {
@@ -517,7 +557,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
         'turn this patch into a pull request',
       ],
       activationHint:
-        'Run to publish a patch that already exists — from a commission or from the operator — onto a branch of a connected repository and into a pull request. The commit is local and reversible; the push waits for an approval. The folder must allow pushes under a branch prefix.',
+        "Run to publish a patch that already exists — a commission's, passed as its `patchRef`, or a small diff from the operator — onto a branch of a connected repository and into a pull request. The commit is local and reversible; the push waits for an approval. The folder must allow pushes under a branch prefix.",
       prerequisites: [],
       priority: 50,
     },

@@ -80,13 +80,16 @@ import {
   checkApplies,
   collectChanges,
   currentHead,
+  DIFF_CEILING_BYTES,
   fetchRemoteBase,
+  INLINE_DIFF_CAP_BYTES,
   linkedWorktrees,
   prepareWorktree,
   PUBLICATION_SCRATCH_PREFIX,
   removeWorktree,
   resolveCommit,
   snapshotRefs,
+  utf8Prefix,
   WorktreeError,
   type LinkedWorktree,
 } from '../worktree.js';
@@ -681,13 +684,20 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
     let changes: Awaited<ReturnType<typeof collectChanges>> = {
       patch: '',
       filesChanged: 0,
-      truncated: false,
+      overCeiling: false,
     };
     let collectFailure: string | undefined;
     try {
       changes = await collectChanges(worktree.path);
     } catch (error) {
       collectFailure = error instanceof Error ? error.message : String(error);
+    }
+    if (changes.overCeiling) {
+      collectFailure =
+        `The diff is over the ${String(DIFF_CEILING_BYTES / (1024 * 1024))} MB a run keeps, so ` +
+        'it was not kept and cannot be published; `filesChanged` counts what the harness ' +
+        'changed. A change that size is usually generated output the task should not have ' +
+        'written.';
     }
     const scrubbed = extractEgressRefusals(result.stderr);
     // A refused host stopped the run only if the run reached nothing. Asked of
@@ -760,6 +770,13 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
     const activityRef =
       activity.length > 0 ? await ctx.writePayload('activity', activity) : undefined;
 
+    // Stored whole whatever its size, because the inline copy is capped and a
+    // publication has to take all of it.
+    const patch = changes.patch === '' ? '' : scrubSecret(changes.patch, credential);
+    const patchRef = patch === '' ? undefined : await ctx.writePayload('patch', patch);
+    const patchTruncated = Buffer.byteLength(patch, 'utf8') > INLINE_DIFF_CAP_BYTES;
+    const inlinePatch = patchTruncated ? utf8Prefix(patch, INLINE_DIFF_CAP_BYTES) : patch;
+
     const work: Record<string, unknown> = {
       runId: result.processId,
       harness: {
@@ -769,9 +786,9 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
       ...(sessionRef !== undefined ? { sessionRef } : {}),
       continued: resuming,
       baseSha: worktree.baseSha,
-      ...(changes.patch ? { patch: scrubSecret(changes.patch, credential) } : {}),
+      ...(patchRef !== undefined ? { patchRef, patch: inlinePatch } : {}),
       filesChanged: changes.filesChanged,
-      patchTruncated: changes.truncated,
+      patchTruncated,
       applies: applies.state,
       ...(applies.state === 'conflict' ? { applyConflict: applies.detail } : {}),
       headMoved,
@@ -790,15 +807,14 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
       ...(note !== '' ? { boundaryNote: note } : {}),
     };
 
-    // A failure carries the work too: the error travels inline on the result
-    // stream, so a diff too large to be a payload goes to the payload store and
-    // the error names it.
-    const failureDetails = async (): Promise<Record<string, unknown>> => {
+    // A failure carries the work too, but the error travels inline on the
+    // result stream: an inline copy too large for it is dropped, and
+    // `patchRef` still names the whole diff.
+    const failureDetails = (): Record<string, unknown> => {
       const details = { ...work };
       const body = details['patch'];
       if (typeof body === 'string' && Buffer.byteLength(body, 'utf8') > MAX_INLINE_PAYLOAD_BYTES) {
         delete details['patch'];
-        details['patchRef'] = await ctx.writePayload('output', body);
       }
       return details;
     };
@@ -807,7 +823,7 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
       // The step fails, and the work still comes back: a check that rejects an
       // answer has said nothing about the files the harness edited, and an
       // operator who cannot see them has to pay for the run again to get them.
-      const details = await failureDetails();
+      const details = failureDetails();
       return await failureWithError(
         ctx,
         validationError(

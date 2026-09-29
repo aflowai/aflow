@@ -143,7 +143,7 @@ describe('dependencies in the isolated checkout', () => {
       expect(await collectChanges(wt.path)).toEqual({
         patch: '',
         filesChanged: 0,
-        truncated: false,
+        overCeiling: false,
       });
       await removeWorktree(repo, wt.path);
       expect(await readdir(elsewhere)).toEqual(expect.arrayContaining(['@acme', 'left-pad']));
@@ -156,7 +156,7 @@ describe('dependencies in the isolated checkout', () => {
   it('reports nothing changed, because a link is this lane doing rather than the harness', async () => {
     const wt = await prepareWorktree(repo, scratch, 'work');
     const changes = await collectChanges(wt.path);
-    expect(changes).toEqual({ patch: '', filesChanged: 0, truncated: false });
+    expect(changes).toEqual({ patch: '', filesChanged: 0, overCeiling: false });
     // Not merely absent from the diff: absent from what git was asked to stage.
     expect(await git(wt.path, 'diff', '--cached', '--name-only')).toBe('');
     await removeWorktree(repo, wt.path);
@@ -195,7 +195,7 @@ describe('dependencies in the isolated checkout', () => {
     expect(await collectChanges(wt.path)).toEqual({
       patch: '',
       filesChanged: 0,
-      truncated: false,
+      overCeiling: false,
     });
     await removeWorktree(repo, wt.path);
   });

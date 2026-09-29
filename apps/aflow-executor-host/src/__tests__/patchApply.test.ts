@@ -10,9 +10,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
+import { PayloadAccessError } from '@aflow/executor-runtime';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createHostPatchHandler } from '../handlers/patchHandlers.js';
+import { INLINE_DIFF_CAP_BYTES } from '../worktree.js';
 
 const run = promisify(execFile);
 
@@ -665,4 +667,167 @@ describe('appending a patch to the branch it was made on', () => {
     expect(result.error?.message ?? '').toContain('is checked out in');
     expect((await git(root, 'rev-parse', 'feat/fix')).trim()).toBe(reviewed);
   }, 30_000);
+});
+
+describe("a commission's diff taken by reference", () => {
+  const REF = 'gs://file-store/tenants/t_1/runs/r_1/steps/s_1/attempt/1/patch.json';
+
+  /** The job's input at its own ref, and every other ref read from `stored`. */
+  function contextWithStore(
+    input: unknown,
+    stored: ReadonlyMap<string, unknown>,
+    captured: Captured,
+  ): never {
+    return {
+      ...(contextFor(input, captured) as object),
+      readPayload: (ref: string) => {
+        if (ref === 'inline:x') return Promise.resolve(input);
+        if (!stored.has(ref)) return Promise.reject(new Error(`Payload not found: ${ref}`));
+        return Promise.resolve(stored.get(ref));
+      },
+    } as never;
+  }
+
+  it('applies the diff the ref names to the working tree', async () => {
+    const patch = await diffFor(async (d) => {
+      await writeFile(join(d, 'a.txt'), 'one\nBY REFERENCE\nthree\n');
+    });
+    const captured: Captured = {};
+    const result = await createHostPatchHandler(policyPath).execute(
+      contextWithStore({ bindingId: 'hb', patchRef: REF }, new Map([[REF, patch]]), captured),
+    );
+    expect(result.status).toBe('SUCCEEDED');
+    expect(captured.output?.['state']).toBe('applied');
+    expect(await readFile(join(root, 'a.txt'), 'utf8')).toContain('BY REFERENCE');
+  });
+
+  it('commits a diff past the inline cap whole', async () => {
+    const lines = Array.from(
+      { length: 60_000 },
+      (_, i) => `line ${String(i)} of a change larger than any inline copy of it`,
+    );
+    const body = `${lines.join('\n')}\n`;
+    const work = await mkdtemp(join(tmpdir(), 'aflow-diffsrc-'));
+    await git(root, 'worktree', 'add', '--detach', work, 'HEAD');
+    await writeFile(join(work, 'large.txt'), body);
+    await git(work, 'add', '-A');
+    const { stdout: patch } = await run('git', ['-C', work, 'diff', '--cached'], {
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    await git(root, 'worktree', 'remove', '--force', work);
+    expect(Buffer.byteLength(patch, 'utf8')).toBeGreaterThan(INLINE_DIFF_CAP_BYTES);
+
+    const captured: Captured = {};
+    const result = await createHostPatchHandler(policyPath).execute(
+      contextWithStore(
+        { bindingId: 'hb', patchRef: REF, commit: { branch: 'aflow/large', message: 'large' } },
+        new Map([[REF, patch]]),
+        captured,
+      ),
+    );
+    expect(result.status).toBe('SUCCEEDED');
+    expect(captured.output?.['state']).toBe('applied');
+    const { stdout: committed } = await run('git', ['-C', root, 'show', 'aflow/large:large.txt'], {
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    expect(committed).toBe(body);
+  }, 60_000);
+
+  it('refuses a call naming neither, saying which to pass', async () => {
+    const captured: Captured = {};
+    const result = await createHostPatchHandler(policyPath).execute(
+      contextFor({ bindingId: 'hb' }, captured),
+    );
+    expect(result.status).toBe('FAILED');
+    expect(result.error?.message ?? '').toContain('`patchRef` for the change a commission');
+  });
+
+  it('refuses a call naming both, since they would be two diffs', async () => {
+    const captured: Captured = {};
+    const result = await createHostPatchHandler(policyPath).execute(
+      contextFor({ bindingId: 'hb', patch: 'diff --git a/x b/x\n', patchRef: REF }, captured),
+    );
+    expect(result.status).toBe('FAILED');
+    expect(result.error?.message ?? '').toContain('not both');
+  });
+
+  it('refuses a ref that names nothing, and says how to get a fresh one', async () => {
+    const captured: Captured = {};
+    const result = await createHostPatchHandler(policyPath).execute(
+      contextWithStore({ bindingId: 'hb', patchRef: REF }, new Map(), captured),
+    );
+    expect(result.status).toBe('FAILED');
+    expect(result.error?.classification).toBe('validation');
+    expect(result.error?.message ?? '').toContain('Commission the change again');
+  });
+
+  it('refuses a ref to something that is not a diff', async () => {
+    const captured: Captured = {};
+    const result = await createHostPatchHandler(policyPath).execute(
+      contextWithStore(
+        { bindingId: 'hb', patchRef: REF },
+        new Map([[REF, { state: 'applied' }]]),
+        captured,
+      ),
+    );
+    expect(result.status).toBe('FAILED');
+    expect(result.error?.message ?? '').toContain('not a diff');
+    expect((await git(root, 'status', '--porcelain')).trim()).toBe('');
+  });
+
+  it('refuses a ref to text of another kind before git sees it', async () => {
+    const output = REF.replace(/patch\.json$/, 'output.json');
+    const diff = await diffFor(async (d) => {
+      await writeFile(join(d, 'a.txt'), 'one\nNOT A PATCH KIND\nthree\n');
+    });
+    const captured: Captured = {};
+    const result = await createHostPatchHandler(policyPath).execute(
+      contextWithStore({ bindingId: 'hb', patchRef: output }, new Map([[output, diff]]), captured),
+    );
+    expect(result.status).toBe('FAILED');
+    expect(result.error?.classification).toBe('validation');
+    expect(result.error?.message ?? '').toContain('not a diff');
+    expect((await git(root, 'status', '--porcelain')).trim()).toBe('');
+  });
+
+  it('refuses a stored patch whose text does not open like a diff', async () => {
+    const captured: Captured = {};
+    const result = await createHostPatchHandler(policyPath).execute(
+      contextWithStore(
+        { bindingId: 'hb', patchRef: REF },
+        new Map([[REF, 'the harness said it fixed the parser\n']]),
+        captured,
+      ),
+    );
+    expect(result.status).toBe('FAILED');
+    expect(result.error?.message ?? '').toContain('`patchRef` names a payload that is not a diff');
+    expect(result.error?.message ?? '').not.toContain('git');
+    expect((await git(root, 'status', '--porcelain')).trim()).toBe('');
+  });
+
+  it('refuses an inline ref, which carries the bytes rather than naming them', async () => {
+    const captured: Captured = {};
+    const inline = `inline:${Buffer.from(JSON.stringify('diff --git a/x b/x\n')).toString('base64')}`;
+    const result = await createHostPatchHandler(policyPath).execute(
+      contextFor({ bindingId: 'hb', patchRef: inline }, captured),
+    );
+    expect(result.status).toBe('FAILED');
+    expect(result.error?.message ?? '').toContain('A stored reference only');
+  });
+
+  it("refuses a ref to another tenant's payload as a permission, not a missing diff", async () => {
+    const captured: Captured = {};
+    const context = {
+      ...(contextFor({ bindingId: 'hb', patchRef: REF }, captured) as object),
+      readPayload: (ref: string) =>
+        ref === 'inline:x'
+          ? Promise.resolve({ bindingId: 'hb', patchRef: REF })
+          : Promise.reject(
+              new PayloadAccessError('Payload reference belongs to another tenant.', {}),
+            ),
+    } as never;
+    const result = await createHostPatchHandler(policyPath).execute(context);
+    expect(result.status).toBe('FAILED');
+    expect(result.error?.classification).toBe('permission');
+  });
 });

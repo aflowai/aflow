@@ -23,7 +23,9 @@ import {
   taskWithInputs,
   validateResultText,
 } from '../handlers/harnessHandlers.js';
+import { createHostPatchHandler } from '../handlers/patchHandlers.js';
 import { runSandboxed, sandboxAvailable, sandboxReadiness } from '../sandboxedRun.js';
+import { INLINE_DIFF_CAP_BYTES } from '../worktree.js';
 import { HostBindingSchema } from '../bindings.js';
 
 const schema = {
@@ -384,6 +386,7 @@ describe.runIf(sandboxReadiness().ready)('a check that rejects an answer keeps t
     expect(error.details['filesChanged']).toBe(1);
     expect(String(error.details['patch'])).toContain('touched.txt');
     expect(String(error.details['patch'])).toContain('changed');
+    expect(error.details['patchRef']).toBe('inline:patch');
     expect(error.details['baseSha']).toEqual(expect.any(String));
     expect(error.details).not.toHaveProperty('result');
     // Which harness ran travels on a failure too: the card that reports it has
@@ -492,6 +495,11 @@ describe.runIf(sandboxReadiness().ready)('a commission starts from a named ref',
     expect(output['baseSha']).toBe(feature);
     expect(output['headMoved']).toBe(false);
     expect(String(output['patch'])).toContain('touched.txt');
+    // Stored whole under its own kind, whatever its size; a small one is also
+    // inline in full.
+    expect(output['patchRef']).toBe('inline:patch');
+    expect(written['patch']).toBe(output['patch']);
+    expect(output['patchTruncated']).toBe(false);
   }, 120_000);
 
   it('judges whether the diff applies against the base, not the folder it moved away from', async () => {
@@ -614,3 +622,121 @@ describe.runIf(sandboxReadiness().ready)('a commission starts from a named ref',
     }
   }, 120_000);
 });
+
+describe.runIf(sandboxReadiness().ready)(
+  'a diff past the inline cap reaches a publication whole',
+  () => {
+    let policyPath: string;
+    let repo: string;
+    const LINES = 60_000;
+    const vcs = async (...args: string[]): Promise<string> =>
+      (await promisify(execFile)('git', args, { cwd: repo, maxBuffer: 64 * 1024 * 1024 })).stdout;
+
+    beforeAll(async () => {
+      const base = await mkdtemp(join(tmpdir(), 'host-harness-large-'));
+      repo = join(base, 'project');
+      await mkdir(repo, { recursive: true });
+      await vcs('init', '-b', 'main');
+      await vcs('config', 'user.email', 'test@example.com');
+      await vcs('config', 'user.name', 'Test');
+      await writeFile(join(repo, 'README.md'), '# project\n', 'utf8');
+      await vcs('add', '-A');
+      await vcs('commit', '-m', 'initial');
+      policyPath = join(base, 'host-policy.json');
+      await writeFile(
+        policyPath,
+        JSON.stringify({
+          version: 1,
+          bindings: [
+            {
+              id: 'hb',
+              root: repo,
+              mode: 'readwrite',
+              allowsExecution: true,
+              singleFile: false,
+              spaceId: 'space-test',
+            },
+          ],
+          harnesses: [
+            {
+              id: 'large',
+              executable: '/bin/sh',
+              args: [
+                '-c',
+                `i=0; while [ $i -lt ${String(LINES)} ]; do ` +
+                  'echo "line $i of a change larger than any inline copy of it"; i=$((i+1)); ' +
+                  'done > large.txt',
+              ],
+            },
+          ],
+        }),
+      );
+    });
+
+    it('is stored by the run, read back by the patch, and committed byte for byte', async () => {
+      const store = new Map<string, unknown>();
+      const contextFor = (operationId: string, input: unknown, outputs: Record<string, unknown>) =>
+        ({
+          operationId,
+          spaceId: 'space-test',
+          runId: 'run-large',
+          job: { inputRef: `gs://test/${operationId}/input.json` },
+          signal: new AbortController().signal,
+          log: { error: () => undefined, warn: () => undefined, info: () => undefined },
+          emitLiveDelta: () => Promise.resolve(),
+          readPayload: (ref: string) => {
+            if (ref === `gs://test/${operationId}/input.json`) return Promise.resolve(input);
+            if (!store.has(ref)) return Promise.reject(new Error(`Payload not found: ${ref}`));
+            return Promise.resolve(store.get(ref));
+          },
+          writePayload: (kind: string, data: unknown) => {
+            // The store's own layout: the patch operation reads the kind off it.
+            const step = operationId.replaceAll('.', '_');
+            const ref = `gs://test/tenants/t_1/runs/run-large/steps/${step}/attempt/1/${kind}.json`;
+            store.set(ref, data);
+            outputs[kind] = data;
+            return Promise.resolve(ref);
+          },
+        }) as never;
+
+      const ran: Record<string, unknown> = {};
+      const run = await createHostHarnessHandler(policyPath).execute(
+        contextFor(
+          'host.harness.run',
+          { bindingId: 'hb', harness: 'large', task: 'Write it.', timeoutMs: 120_000 },
+          ran,
+        ),
+      );
+      expect(run.status).toBe('SUCCEEDED');
+      const output = HostHarnessRunOutputSchema.parse(ran['output']);
+      const stored = store.get(output.patchRef ?? '');
+      expect(typeof stored).toBe('string');
+      expect(Buffer.byteLength(String(stored), 'utf8')).toBeGreaterThan(INLINE_DIFF_CAP_BYTES);
+      // The inline copy is the cap's worth of the start, and says so.
+      expect(output.patchTruncated).toBe(true);
+      expect(Buffer.byteLength(output.patch ?? '', 'utf8')).toBe(INLINE_DIFF_CAP_BYTES);
+      expect(String(stored).startsWith(output.patch ?? '')).toBe(true);
+      expect(output.applies).toBe('clean');
+
+      const published: Record<string, unknown> = {};
+      const commit = await createHostPatchHandler(policyPath).execute(
+        contextFor(
+          'host.file.patch',
+          {
+            bindingId: 'hb',
+            patchRef: output.patchRef,
+            commit: { branch: 'aflow/large', message: 'The large change', baseSha: output.baseSha },
+          },
+          published,
+        ),
+      );
+      expect(commit.status).toBe('SUCCEEDED');
+      expect((published['output'] as Record<string, unknown>)['state']).toBe('applied');
+      const expected = Array.from(
+        { length: LINES },
+        (_, i) => `line ${String(i)} of a change larger than any inline copy of it\n`,
+      ).join('');
+      expect(await vcs('show', 'aflow/large:large.txt')).toBe(expected);
+    }, 180_000);
+  },
+);

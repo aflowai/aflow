@@ -15,7 +15,7 @@ import { z } from 'zod';
 import { coerceJsonObjectArg } from './jsonObjectArg.js';
 
 import type { OperationRegistration } from '../catalog/operationCatalog.js';
-import { PayloadRefSchema } from '../runtime/payloadRef.js';
+import { PayloadRefSchema, STORED_PAYLOAD_REF_PATTERN } from '../runtime/payloadRef.js';
 
 /**
  * What a branch name and a branch prefix may be, in one place.
@@ -309,51 +309,91 @@ export const HostMcpCallOutputSchema = z.object({
     ),
 });
 
-export const HostFilePatchInputSchema = z.object({
-  bindingId: HostBindingRef,
-  patch: z
-    .string()
-    .min(1)
-    .max(4 * 1024 * 1024)
-    .describe('A unified diff, as `host.harness.run` returns it.'),
-  mode: z
-    .enum(['clean', 'merge'])
-    .default('clean')
-    .describe(
-      '`clean` applies only if the diff still fits exactly, and changes nothing otherwise. ' +
-        '`merge` reconciles a diff whose base has moved and may leave conflict markers in ' +
-        'the files it could not settle — those files are named in the result.',
-    ),
-  commit: z
-    .object({
-      branch: HostBranchNameSchema.describe(
-        "Branch the commit lands on. A new one is created at the folder's HEAD. An existing " +
-          'one takes the commit on top of its head, and only with `baseSha` naming that head.',
+export const HostFilePatchInputSchema = z
+  .object({
+    bindingId: HostBindingRef,
+    patchRef: z
+      .string()
+      .regex(
+        new RegExp(STORED_PAYLOAD_REF_PATTERN),
+        'A stored reference only — the `patchRef` a `host.harness.run` result reports, ' +
+          'verbatim. An `inline:` reference carries the bytes themselves; a diff handed over ' +
+          'as text goes in `patch`.',
+      )
+      .optional()
+      .describe(
+        'The whole diff by reference — the `patchRef` a `host.harness.run` result reports. ' +
+          "This is how a commission's change is passed on, whatever its size. Give this or " +
+          '`patch`, never both.',
       ),
-      message: z
-        .string()
-        .min(1)
-        .max(20_000)
-        .describe('Commit message, verbatim. The first line is the subject, as git reads it.'),
-      baseSha: HostCommitShaSchema.optional().describe(
-        'The commit the patch was made against, as the commission reported it in `baseSha` — ' +
-          'a sha, never a branch or tag name. Required when `branch` exists, and it must be ' +
-          "that branch's head. For a new branch it may be omitted; given, it must be the " +
-          "folder's HEAD. A base that does not match is refused, never merged.",
+    patch: z
+      .string()
+      .min(1)
+      .max(4 * 1024 * 1024)
+      .optional()
+      .describe(
+        'A unified diff as text, for a diff the operator hands over. Never the `patch` a ' +
+          'commission returns, which is cut at a cap — pass its `patchRef` instead. Give ' +
+          'this or `patchRef`, never both.',
       ),
-    })
-    // Strict so a misspelt base is refused rather than stripped: dropped, it
-    // would let a patch land on a new branch with no check of where it was made.
-    .strict()
-    .optional()
-    .describe(
-      'Land the diff as a commit on a branch instead of changing the working tree. ' +
-        "The operator's checkout, index and current branch are untouched: the patch is " +
-        'applied in a checkout the executor makes for itself — at HEAD for a new branch, at ' +
-        "the branch's head for an existing one — committed there, and the branch ref is " +
-        'created or advanced by that one commit. That commit is what a publication pushes.',
-    ),
-});
+    mode: z
+      .enum(['clean', 'merge'])
+      .default('clean')
+      .describe(
+        '`clean` applies only if the diff still fits exactly, and changes nothing otherwise. ' +
+          '`merge` reconciles a diff whose base has moved and may leave conflict markers in ' +
+          'the files it could not settle — those files are named in the result.',
+      ),
+    commit: z
+      .object({
+        branch: HostBranchNameSchema.describe(
+          "Branch the commit lands on. A new one is created at the folder's HEAD. An existing " +
+            'one takes the commit on top of its head, and only with `baseSha` naming that head.',
+        ),
+        message: z
+          .string()
+          .min(1)
+          .max(20_000)
+          .describe('Commit message, verbatim. The first line is the subject, as git reads it.'),
+        baseSha: HostCommitShaSchema.optional().describe(
+          'The commit the patch was made against, as the commission reported it in `baseSha` — ' +
+            'a sha, never a branch or tag name. Required when `branch` exists, and it must be ' +
+            "that branch's head. For a new branch it may be omitted; given, it must be the " +
+            "folder's HEAD. A base that does not match is refused, never merged.",
+        ),
+      })
+      // Strict so a misspelt base is refused rather than stripped: dropped, it
+      // would let a patch land on a new branch with no check of where it was made.
+      .strict()
+      .optional()
+      .describe(
+        'Land the diff as a commit on a branch instead of changing the working tree. ' +
+          "The operator's checkout, index and current branch are untouched: the patch is " +
+          'applied in a checkout the executor makes for itself — at HEAD for a new branch, at ' +
+          "the branch's head for an existing one — committed there, and the branch ref is " +
+          'created or advanced by that one commit. That commit is what a publication pushes.',
+      ),
+  })
+  .superRefine((input, ctx) => {
+    if (input.patch === undefined && input.patchRef === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['patchRef'],
+        message:
+          'Name the diff to apply: `patchRef` for the change a commission reported, or ' +
+          '`patch` for a diff handed over as text.',
+      });
+    }
+    if (input.patch !== undefined && input.patchRef !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['patch'],
+        message:
+          'Give `patchRef` or `patch`, not both — they would be two diffs. For a ' +
+          "commission's change keep `patchRef` and drop `patch`.",
+      });
+    }
+  });
 
 export const HostFilePatchOutputSchema = z.object({
   state: z
@@ -531,16 +571,26 @@ export const HostHarnessRunOutputSchema = z.object({
         'task carried. Absent only when the task carried none — a run asked for a result ' +
         'and unable to produce a valid one fails instead of returning without it.',
     ),
+  patchRef: PayloadRefSchema.optional().describe(
+    'The whole diff of what the harness changed, against `baseSha`, stored by reference. ' +
+      'This is what a publication takes — pass it on as `patchRef`, never the `patch` text. ' +
+      'Absent when nothing changed, or when the diff was too large to keep, which ' +
+      '`boundaryNote` then says.',
+  ),
   patch: z
     .string()
     .optional()
     .describe(
-      'Unified diff of what the harness changed, against `baseSha`. Absent when nothing changed.',
+      'The same diff inline, for reading — cut at a cap when `patchTruncated` says so. Never ' +
+        'what a publication takes; that is `patchRef`. Absent when nothing changed.',
     ),
   filesChanged: z.number().int().nonnegative(),
   patchTruncated: z
     .boolean()
-    .describe('True when the diff was too large to return whole; `filesChanged` still holds.'),
+    .describe(
+      'True when `patch` is only the start of the diff; `patchRef` holds all of it, and ' +
+        '`filesChanged` counts every file.',
+    ),
   exitCode: z.number().int().nullable(),
   timedOut: z.boolean(),
   durationMs: z.number().int().nonnegative(),
@@ -550,7 +600,7 @@ export const HostHarnessRunOutputSchema = z.object({
     .describe(
       'What the harness said when it finished. A harness that narrates its work as an event ' +
         'stream has that narration on the live feed and only its closing answer here. Never ' +
-        'the typed result, which is `result`, and never what changed, which is `patch`.',
+        'the typed result, which is `result`, and never what changed, which is `patchRef`.',
     ),
   activityRef: PayloadRefSchema.optional().describe(
     'The activity feed of this run — every tool call and result as one line — stored once ' +
@@ -800,9 +850,12 @@ export const HostOperationRegistrations: OperationRegistration[] = [
     accessMode: 'write',
     usage: {
       oneLine: 'Apply a diff to a connected folder, whole or not at all.',
-      minimalExampleInput: { bindingId: 'hb_project', patch: 'diff --git a/x.ts b/x.ts\n…' },
+      minimalExampleInput: {
+        bindingId: 'hb_project',
+        patchRef: 'gs://aflow-payloads/tenants/t_1/runs/r_1/steps/s_1/attempt/1/patch.json',
+      },
       whenToUse: [
-        'Keeping the change a `host.harness.run` produced, after it has been reviewed — the check that follows a delegation',
+        'Keeping the change a `host.harness.run` produced, after it has been reviewed — the check that follows a delegation. Pass its `patchRef`',
         'Reapplying a diff that was held while something else moved',
         'Preparing a publication: with `commit`, the diff lands as a commit on a new branch and the working tree is left alone',
         "A patch made from a commission that started at a branch lands on that branch when `commit.branch` names it and `commit.baseSha` is the `baseSha` the commission reported; a fresh branch takes a patch made at the folder's HEAD",
@@ -814,6 +867,7 @@ export const HostOperationRegistrations: OperationRegistration[] = [
       ],
       pitfalls: [
         "The review is the caller's, and the diff is applied whole or not at all — there is no keeping only the part that was read.",
+        "A commission's change goes in as its `patchRef`, never as its `patch` text: that copy is for reading and is cut short on a large diff. `patch` is for a diff the operator hands over.",
         'Without `commit` the patch changes the working tree in place, where the operator is a second writer.',
         'A diff whose base has moved fails in `clean` mode rather than applying approximately. That is the point.',
         '`merge` can leave conflict markers in the working tree. The files carrying them come back in `conflicts`.',
@@ -964,6 +1018,7 @@ export const HostOperationRegistrations: OperationRegistration[] = [
         "Send the intent and the acceptance criteria, and an `outputSchema` when the answer matters — never a draft. A draft written without the folder's facts is what the harness is here to avoid.",
         'Without `outputSchema` the run returns only a diff, and an assessment comes back as loose text. Name the shape of the answer to get one.',
         'The diff is returned, never applied. The operator decides what becomes of it.',
+        'A publication takes the diff as `patchRef`, which holds all of it. `patch` is a copy for reading, cut short on a large change — never pass it on.',
         'A continued run returns the diff of the whole conversation against its original starting commit, not only the latest turn — unless it names a `base`, which continues the conversation in a fresh checkout at that base.',
         "A patch made from a `base` is relative to that base, not the folder's HEAD: publish it onto the branch it started from, with the run's `baseSha`.",
         'A harness only runs if the operator configured it on that machine; the id here cannot introduce one. Omitted, it resolves to the one offered machine-side — the space context lists them.',
