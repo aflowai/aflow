@@ -1,9 +1,9 @@
 # The appliance image a collaborator installs, and the bundle they install it
 # with.
 #
-# Private: pushed to a GHCR package on this repository, which publishes
-# nothing. Turning the install from a clone and a build into a pull is the whole
-# point — a machine with Docker and nothing else has to be enough.
+# Pushed to this repository's public GHCR package. Turning the install from a
+# clone and a build into a pull is the whole point — a machine with Docker and
+# nothing else has to be enough.
 #
 # Built with the Docker and GitHub CLIs the runners already carry rather than
 # through third-party actions, so this workflow pins no digests it cannot also
@@ -125,7 +125,9 @@ jobs:
           CONTEXT: ${{ steps.context.outputs.dir }}
         run: |
           set -euo pipefail
-          version="${VERSION}"
+          # A tag names the release `appliance-vX.Y.Z`; the version is `X.Y.Z`,
+          # the same thing a manual run is given.
+          version="${VERSION#appliance-v}"
           docker buildx create --use --driver docker-container
           docker buildx build \
             --platform '${{ matrix.platform }}' \
@@ -162,7 +164,9 @@ jobs:
           CONTEXT: ${{ steps.context.outputs.dir }}
         run: |
           set -euo pipefail
-          version="${VERSION}"
+          # A tag names the release `appliance-vX.Y.Z`; the version is `X.Y.Z`,
+          # the same thing a manual run is given.
+          version="${VERSION#appliance-v}"
           docker buildx imagetools create --tag "${IMAGE}:${version}" \
             "${IMAGE}:${version}-amd64" \
             "${IMAGE}:${version}-arm64"
@@ -451,11 +455,11 @@ jobs:
           if ! gh release view "${TAG}" >/dev/null 2>&1; then
             gh release create "${TAG}" \
               --title "Appliance ${VERSION}" \
-              --notes "Private appliance image and installation bundle.
+              --notes "Appliance image and installation bundle.
 
           Image: \`${IMAGE}@${DIGEST}\`
 
-          Unpack the bundle, \`docker login ghcr.io\`, then \`docker compose up -d\`. Its README carries the pull, upgrade, rollback and backup procedures."
+          Unpack the bundle and run \`docker compose up -d\` in its folder. Its README carries the pull, upgrade, rollback and backup procedures."
           fi
           gh release upload "${TAG}" "aflow-appliance-${VERSION}.tgz" --clobber
           gh release upload "${TAG}" "aflow-appliance-${VERSION}-sbom.json" --clobber
