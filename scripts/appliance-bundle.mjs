@@ -140,11 +140,9 @@ cannot move under an instance you have already installed.
 
 ## Install
 
-The package is private, so Docker has to be told who you are once. Mint a
-GitHub personal access token with the \`read:packages\` scope and log in:
+In this folder:
 
 \`\`\`sh
-echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_USER" --password-stdin
 docker compose pull
 docker compose up -d
 \`\`\`
