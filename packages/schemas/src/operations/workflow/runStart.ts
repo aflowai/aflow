@@ -22,7 +22,13 @@ const workflowRunStartFields = {
   campaignConfig: CampaignConfigRecordSchema.optional(),
   instructions: TaskTargetedInstructionsSchema.optional(),
   inputs: ParentInputsRecordSchema.optional(),
-  wait: z.enum(['until_pause', 'until_complete']).default('until_pause'),
+  wait: z
+    .enum(['until_pause', 'until_complete', 'none'])
+    .default('until_pause')
+    .describe(
+      '`until_pause` and `until_complete` hold this call until the run pauses or ends and return its outcome. ' +
+        '`none` returns the run id at once; the outcome arrives later as an event on this conversation.',
+    ),
   /**
    * How to handle existing active (running/paused) runs of the same
    * workflow at start time:
@@ -68,12 +74,29 @@ export const WorkflowRunStartInputSchema = z
   .strict(`Allowed keys: ${Object.keys(workflowRunStartFields).join(', ')}.`);
 export type WorkflowRunStartInput = z.infer<typeof WorkflowRunStartInputSchema>;
 
-export const WorkflowRunStartOutputSchema = z.object({
+const WorkflowRunStartWaitingOutputSchema = z.object({
   kind: z.literal('waiting_on_workflow_run'),
   runId: z.string().uuid(),
   slug: z.string(),
   status: WorkflowRunStatusSchema,
 });
+
+export const WorkflowRunStartedOutputSchema = z
+  .object({
+    status: z.literal('started'),
+    runId: z.string().uuid(),
+    slug: z.string(),
+  })
+  .describe(
+    'The run is under way. Its outcome arrives as an event on this conversation when the run ' +
+      'pauses or ends — nothing more needs to be called to receive it.',
+  );
+export type WorkflowRunStartedOutput = z.infer<typeof WorkflowRunStartedOutputSchema>;
+
+export const WorkflowRunStartOutputSchema = z.union([
+  WorkflowRunStartWaitingOutputSchema,
+  WorkflowRunStartedOutputSchema,
+]);
 export type WorkflowRunStartOutput = z.infer<typeof WorkflowRunStartOutputSchema>;
 
 export const WorkflowRunWakeupHumanDecisionSchema = WorkflowHumanDecisionSchema.extend({
@@ -154,3 +177,29 @@ export const WorkflowRunWakeupEnvelopeSchema = z.object({
   pause: WorkflowRunWakeupPauseContextSchema.optional(),
 });
 export type WorkflowRunWakeupEnvelope = z.infer<typeof WorkflowRunWakeupEnvelopeSchema>;
+
+/**
+ * `WorkflowRunWakeup` session-event metadata. The envelope itself rides the
+ * event's `outputRef`, as a tool result's output does, so the event log never
+ * carries a run's promoted outputs inline.
+ */
+export const WorkflowRunWakeupEventMetadataSchema = z.object({
+  runId: z.string(),
+  outcome: WaiterNotifiedOutcomeSchema,
+  waiterId: z.string(),
+});
+export type WorkflowRunWakeupEventMetadata = z.infer<typeof WorkflowRunWakeupEventMetadataSchema>;
+
+/**
+ * A run the session started without waiting, reporting that it paused or
+ * ended. Keyed by the event that carried it, so a turn handed the recent
+ * window takes each one exactly once.
+ */
+export const WorkflowRunWakeupEntrySchema = z.object({
+  eventId: z.string(),
+  envelope: WorkflowRunWakeupEnvelopeSchema,
+});
+export type WorkflowRunWakeupEntry = z.infer<typeof WorkflowRunWakeupEntrySchema>;
+
+/** How many of a session's most recent run wakeups one turn reads. */
+export const WORKFLOW_RUN_WAKEUP_MAX_ENTRIES = 20;

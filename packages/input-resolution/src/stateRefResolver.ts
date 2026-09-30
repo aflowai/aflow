@@ -472,6 +472,13 @@ const MAX_WALK_DEPTH = 20;
 
 const MAX_STRING_REF_DEPTH = 3;
 
+function containsRef(value: unknown, depth: number): boolean {
+  if (depth > MAX_WALK_DEPTH || value === null || typeof value !== 'object') return false;
+  if (normalizeMangledRef(value)) return true;
+  const children = Array.isArray(value) ? value : Object.values(value as Record<string, unknown>);
+  return children.some((child) => containsRef(child, depth + 1));
+}
+
 async function walkAndResolve(
   value: unknown,
   runtimeState: RuntimeStateVariables | undefined,
@@ -543,6 +550,13 @@ async function walkAndResolve(
               throw new StateRefError(resolved);
             }
             return resolved;
+          }
+          // A stringified argument holding a reference below its top level
+          // (`'{"patch": {"$ref": "output.x/patch"}}'`) is the object the
+          // model meant: left a string, the reference never resolves and the
+          // whole argument reaches validation as text.
+          if (containsRef(parsed, 0)) {
+            return await walkAndResolve(parsed, runtimeState, payloadStore, depth);
           }
         } catch (e) {
           if (e instanceof StateRefError) throw e;

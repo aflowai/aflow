@@ -332,8 +332,9 @@ export function createWorkflowOperationRegistrations(
       semanticDescription:
         'Start a new run of a workflow. The harness owns task dispatch — agent and ' +
         'operation tasks are scheduled, executed, and finalized by the workflow run ' +
-        'harness, not by the calling agent. The caller parks until the run terminates ' +
-        '(or pauses for input). The terminal tool result carries a structured `result` ' +
+        'harness, not by the calling agent. By default the caller parks until the run terminates ' +
+        '(or pauses for input); with `wait: "none"` it returns the run id at once and the outcome ' +
+        'arrives later as an event on the conversation. The outcome carries a structured `result` ' +
         'block — promoted output values (`result.output`, headline key in ' +
         '`result.primaryOutput`), the goal-metric score with target check ' +
         '(`result.score`), deterministic outcome checks, the closing task summary, a ' +
@@ -352,11 +353,16 @@ export function createWorkflowOperationRegistrations(
           'Beginning the next optimization iteration',
           'Starting a process run with new input',
           'Launching a project workflow',
+          'With `wait: "none"`, a run that will pause for an operator (an approval) or take long — ' +
+            'the conversation stays free while it runs, and its outcome arrives as an event here',
         ],
         whenNotToUse: ['Workflow is still in draft — approve it first via workflow.manage.patch'],
         pitfalls: [
           'Workflow must be in "approved" status',
-          'Returns when the run terminates or pauses; the calling agent does not invoke per-task tools.',
+          'By default returns when the run terminates or pauses; the calling agent does not invoke per-task tools.',
+          'With `wait: "none"` the call returns `{ status: "started", runId }` at once. Do not poll ' +
+            'workflow.run.detail for the outcome: it arrives as an event on this conversation when the ' +
+            'run pauses or ends.',
           'Read the terminal `result` block first (output values, score vs target, summary, guidance) — ' +
             'only call workflow.run.detail when you need per-task forensics beyond it.',
           'When the skill declares run inputs (its SpaceContext entry carries `firstTaskInputContract`, ' +

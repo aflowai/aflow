@@ -16,6 +16,8 @@ export const ControlConflictCodeSchema = z.enum([
   'run_not_interruptible',
   /** The run's state is gone (expired, cancelled, or never existed). */
   'run_not_found',
+  /** Resume arrived for a session parked on a workflow run it started, not on a person. */
+  'run_waiting_on_workflow_run',
 ]);
 export type ControlConflictCode = z.infer<typeof ControlConflictCodeSchema>;
 

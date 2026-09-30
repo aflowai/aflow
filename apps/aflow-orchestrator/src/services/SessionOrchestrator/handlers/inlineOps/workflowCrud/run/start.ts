@@ -40,7 +40,7 @@ import {
 } from '@aflow/cybernetic-runtime';
 import { getOrchestratorLogger } from '../../../../../../lib/orchestratorLogger.js';
 import type { InlineHandlerArgs } from '../../types.js';
-import { emitStepError, parkInlineStepForWorkflowWait } from '../../helpers.js';
+import { emitStepError, emitStepSuccess, parkInlineStepForWorkflowWait } from '../../helpers.js';
 import { requireSpaceId } from '../../spaceScope.js';
 import { createContractedCampaign } from '../campaign/shared.js';
 import { gateWorkflowOperationGrants } from '../../../../helpers/workflowGrantGate.js';
@@ -798,6 +798,80 @@ export async function handleWorkflowRunStart(
     return;
   }
 
+  const launch = async (): Promise<void> => {
+    try {
+      const { startRun } = await import('../../../../../cybernetic/WorkflowRunHarness.js');
+      await startRun(
+        { db, redis: args.redis, payloadStore: args.payloadStore },
+        {
+          tenantId: args.context.tenantId,
+          spaceId,
+          callingHelmsmanSessionId: args.context.runId,
+          callingHelmsmanStepExecutionId: args.stepExecutionId,
+          runId,
+          workflow: derivedWorkflow,
+        },
+      );
+    } catch (err) {
+      // recordRunStart already landed; the run row is in 'running' and
+      // the waiter row exists. startRun's internal failure-collection
+      // path (Phase 2.2.2c) catches dispatchTask failures and drives
+      // applyFailureMode → notifyWaiters wakes the waiter.
+      // Anything that escapes here is an unexpected harness error.
+      // Drive completeRun(failed) so the waiter we just inserted gets
+      // notified.
+      const errMsg = err instanceof Error ? err.message : String(err);
+      getOrchestratorLogger().error(
+        `[handleWorkflowRunStart] startRun escaped its failure-collection path for run=${runId} — failing run`,
+        err instanceof Error ? err : undefined,
+        { tenantId: tenantIdStr, runId, slug, error: errMsg },
+      );
+      try {
+        const { completeRun } = await import('../../../../../cybernetic/WorkflowRunHarness.js');
+        await completeRun(
+          { db, redis: args.redis, payloadStore: args.payloadStore },
+          args.context.tenantId,
+          runId,
+          'failed',
+        );
+      } catch (completeErr) {
+        // Last-resort log; the sweeper recovers in Phase 5+.
+        getOrchestratorLogger().error(
+          `[handleWorkflowRunStart] completeRun(failed) recovery also failed for run=${runId}`,
+          completeErr instanceof Error ? completeErr : undefined,
+          { tenantId: tenantIdStr, runId, slug },
+        );
+      }
+    }
+  };
+
+  if (input.wait === 'none') {
+    // The session is the waiter and no step parks: the run's pauses and its
+    // end reach the conversation as events.
+    try {
+      const { addWaiter } = await import('@aflow/cybernetic-runtime');
+      await addWaiter(db, tenantIdStr, { runId, waiterSessionId: args.context.runId });
+    } catch (waiterErr) {
+      const errMsg = waiterErr instanceof Error ? waiterErr.message : String(waiterErr);
+      getOrchestratorLogger().error(
+        `[handleWorkflowRunStart] addWaiter failed for run=${runId}: ${errMsg}`,
+        waiterErr instanceof Error ? waiterErr : undefined,
+        { tenantId: tenantIdStr, runId, slug },
+      );
+      await terminalizeRefusedRun();
+      await emitStepError(
+        args,
+        'WORKFLOW_RUN_START_WAITER_INSERT_FAILED',
+        `Run ${runId} was not started: this conversation could not be registered to hear its outcome (${errMsg}).`,
+        startTime,
+      );
+      return;
+    }
+    await launch();
+    await emitStepSuccess(args, { status: 'started', runId, slug }, startTime);
+    return;
+  }
+
   await parkInlineStepForWorkflowWait(args, {
     kind: 'waiting_on_workflow_run' as const,
     runId,
@@ -837,48 +911,5 @@ export async function handleWorkflowRunStart(
     return;
   }
 
-  try {
-    const { startRun } = await import('../../../../../cybernetic/WorkflowRunHarness.js');
-    await startRun(
-      { db, redis: args.redis, payloadStore: args.payloadStore },
-      {
-        tenantId: args.context.tenantId,
-        spaceId,
-        callingHelmsmanSessionId: args.context.runId,
-        callingHelmsmanStepExecutionId: args.stepExecutionId,
-        runId,
-        workflow: derivedWorkflow,
-      },
-    );
-  } catch (err) {
-    // recordRunStart already landed; the run row is in 'running' and
-    // the waiter row exists. startRun's internal failure-collection
-    // path (Phase 2.2.2c) catches dispatchTask failures and drives
-    // applyFailureMode → notifyWaiters wakes the PAUSED step.
-    // Anything that escapes here is an unexpected harness error.
-    // Drive completeRun(failed) so the waiter we just inserted gets
-    // notified.
-    const errMsg = err instanceof Error ? err.message : String(err);
-    getOrchestratorLogger().error(
-      `[handleWorkflowRunStart] startRun escaped its failure-collection path for run=${runId} — failing run`,
-      err instanceof Error ? err : undefined,
-      { tenantId: tenantIdStr, runId, slug, error: errMsg },
-    );
-    try {
-      const { completeRun } = await import('../../../../../cybernetic/WorkflowRunHarness.js');
-      await completeRun(
-        { db, redis: args.redis, payloadStore: args.payloadStore },
-        args.context.tenantId,
-        runId,
-        'failed',
-      );
-    } catch (completeErr) {
-      // Last-resort log; the sweeper recovers in Phase 5+.
-      getOrchestratorLogger().error(
-        `[handleWorkflowRunStart] completeRun(failed) recovery also failed for run=${runId}`,
-        completeErr instanceof Error ? completeErr : undefined,
-        { tenantId: tenantIdStr, runId, slug },
-      );
-    }
-  }
+  await launch();
 }

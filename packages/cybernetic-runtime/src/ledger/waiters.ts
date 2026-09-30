@@ -1,5 +1,5 @@
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { eq, and, lte, sql } from 'drizzle-orm';
+import { eq, and, isNull, lte, sql } from 'drizzle-orm';
 import type { TenantId } from '@aflow/schemas';
 import {
   createTenantContext,
@@ -66,7 +66,8 @@ export async function loadWorkflowTaskByWorkerSession(
 }
 
 /**
- * Insert a waiter row for a Helmsman session parking on a run.
+ * Insert a waiter row for a Helmsman session parking on a run — or, without a
+ * step, for a session that started the run without waiting on it.
  *
  * Respects the partial unique index `waiters_one_active_per_session`: if
  * an active waiter (notified_at IS NULL) already exists for (run, session),
@@ -75,21 +76,39 @@ export async function loadWorkflowTaskByWorkerSession(
  * being notified first — caller's responsibility to handle (e.g.,
  * markWaiterNotified before re-add, or treat as no-op).
  *
+ * The one exception it resolves itself: a session that started the run
+ * without waiting and now parks a step on it. Its session-scoped row is
+ * released in the same transaction as the step's row is inserted, so the
+ * session is never left waiting on the run twice, or not at all.
+ *
  * @returns the inserted row's id.
  */
 export async function addWaiter(
   db: PostgresJsDatabase,
   tenantId: string,
-  args: { runId: string; waiterSessionId: string; waiterStepExecutionId: string },
+  args: { runId: string; waiterSessionId: string; waiterStepExecutionId?: string },
 ): Promise<string> {
   const tenantCtx = createTenantContext(tenantId as TenantId);
   return withTenantSchema(db, tenantCtx, async (tx) => {
+    if (args.waiterStepExecutionId !== undefined) {
+      await tx
+        .update(workflowRunWaiters)
+        .set({ notifiedAt: new Date(), notifiedOutcome: 'handed_off' })
+        .where(
+          and(
+            eq(workflowRunWaiters.runId, args.runId),
+            eq(workflowRunWaiters.waiterSessionId, args.waiterSessionId),
+            isNull(workflowRunWaiters.waiterStepExecutionId),
+            isNull(workflowRunWaiters.notifiedAt),
+          ),
+        );
+    }
     const rows = await tx
       .insert(workflowRunWaiters)
       .values({
         runId: args.runId,
         waiterSessionId: args.waiterSessionId,
-        waiterStepExecutionId: args.waiterStepExecutionId,
+        waiterStepExecutionId: args.waiterStepExecutionId ?? null,
       })
       .returning({ id: workflowRunWaiters.id });
     const id = rows[0]?.id;

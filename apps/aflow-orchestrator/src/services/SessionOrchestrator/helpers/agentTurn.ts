@@ -12,6 +12,7 @@ import type {
   RoomSpeaker,
   TenantId,
   RunAccessGrant,
+  WorkflowRunWakeupEntry,
 } from '@aflow/schemas';
 import {
   buildSessionParticipantsBlock,
@@ -1326,6 +1327,26 @@ export async function buildAgentTurnInput(
     );
   }
 
+  // What runs this session started without waiting have reported since.
+  // Best-effort like the room: an unread wakeup is read at the next turn.
+  let newRunWakeups: WorkflowRunWakeupEntry[] = [];
+  if (payloadStore) {
+    try {
+      const { getDatabase } = await import('@aflow/database');
+      const { readRunWakeups } = await import('./runWakeups.js');
+      newRunWakeups = await readRunWakeups(
+        getDatabase(),
+        payloadStore,
+        tenantId as TenantId,
+        runId,
+      );
+    } catch (err) {
+      getOrchestratorLogger().warn(
+        `agentTurn: could not read run wakeups for ${runId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
   let newUserInput:
     { userInputId: string; text: string; createdAtMs: number; author?: RoomSpeaker } | undefined;
 
@@ -1477,6 +1498,7 @@ export async function buildAgentTurnInput(
     conversationStateRef,
     ...(newUserInput ? { newUserInput } : {}),
     ...(newRoomMessages.length > 0 ? { newRoomMessages } : {}),
+    ...(newRunWakeups.length > 0 ? { newRunWakeups } : {}),
     ...(newToolResults && newToolResults.length > 0 ? { newToolResults } : {}),
     ...(cyberneticOverrides?.activeMemory
       ? { activeMemoryInjection: cyberneticOverrides.activeMemory }

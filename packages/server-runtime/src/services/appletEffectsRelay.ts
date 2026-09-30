@@ -20,6 +20,7 @@ import { APPLET_EFFECT_MAX_ATTEMPTS } from '@aflow/schemas';
 import {
   getSessionStateSafe,
   getStepState,
+  mayWake,
   publishAppletInstanceDelta,
   setAppletFocus,
 } from '@aflow/redis';
@@ -34,7 +35,6 @@ import type {
   StepExecutionId,
   TenantId,
 } from '@aflow/schemas';
-import { mayWake } from '../routes/sessionRoomMessages.js';
 import { hasResumeClaimForStep } from './resumeIdempotency.js';
 import type { DirectRoomMessageInput, ResumeSessionRequest } from './sessions.js';
 

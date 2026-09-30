@@ -114,6 +114,10 @@ export async function prepareAgentRequest(
     store.appendRoomMessages(params.newRoomMessages);
   }
 
+  if (params.newRunWakeups && params.newRunWakeups.length > 0) {
+    store.appendRunWakeups(params.newRunWakeups);
+  }
+
   if (params.newUserInput) {
     store.appendUserInput(params.newUserInput);
   }

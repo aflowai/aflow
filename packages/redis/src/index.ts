@@ -234,6 +234,8 @@ export {
   carryOverWaitingParents,
   DELEGATION_SUPERVISION_CHECK_INTERVAL_MS,
   type DelegationSupervisionCandidate,
+  mayWake,
+  claimEventDrivenTurn,
 } from './hotState.js';
 
 export {

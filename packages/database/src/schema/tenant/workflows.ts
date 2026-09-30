@@ -170,7 +170,8 @@ export const workflowRunWaiters = pgTable('workflow_run_waiters', {
   id: uuid('id').primaryKey().defaultRandom(),
   runId: text('run_id').notNull(),
   waiterSessionId: uuid('waiter_session_id').notNull(),
-  waiterStepExecutionId: uuid('waiter_step_execution_id').notNull(),
+  /** Null when the session started the run without waiting: the session is the waiter. */
+  waiterStepExecutionId: uuid('waiter_step_execution_id'),
   registeredAt: timestamp('registered_at', { withTimezone: true }).notNull().defaultNow(),
   /** Set when the waiter is notified; row stays for audit. */
   notifiedAt: timestamp('notified_at', { withTimezone: true }),

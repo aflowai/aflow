@@ -401,7 +401,7 @@ export async function buildWorkflowRunDetail(
     ...(workflowGraph ? { workflowGraph } : {}),
     activeWaiters: waiters.map((w) => ({
       sessionId: w.waiterSessionId,
-      stepExecutionId: w.waiterStepExecutionId,
+      ...(w.waiterStepExecutionId ? { stepExecutionId: w.waiterStepExecutionId } : {}),
       registeredAt: w.registeredAt.toISOString(),
     })),
     ...(runResult ? { result: runResult } : {}),
