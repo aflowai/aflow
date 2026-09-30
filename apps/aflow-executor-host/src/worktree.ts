@@ -34,7 +34,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, sep } from 'node:path';
+import { dirname, isAbsolute, join, sep } from 'node:path';
 import { promisify } from 'node:util';
 
 const run = promisify(execFile);
@@ -409,6 +409,16 @@ export async function isGitRepository(root: string): Promise<boolean> {
   }
 }
 
+/**
+ * The folder's repository directory, shared by every worktree added to it, with
+ * symbolic links resolved — the one path that names this repository whichever
+ * of its checkouts a git runs in.
+ */
+export async function commonGitDir(root: string): Promise<string> {
+  const reported = (await git(root, ['rev-parse', '--git-common-dir'])).trim();
+  return await realpath(isAbsolute(reported) ? reported : join(root, reported));
+}
+
 export interface PrepareWorktreeOptions {
   /**
    * Whether the checkout carries the folder's installed dependencies. A harness
@@ -597,6 +607,13 @@ export interface WorktreeChanges {
 }
 
 /**
+ * The directory in a run's checkout that holds the run's own files — the result
+ * a task asks for, and whatever else the agent keeps beside its work. It is
+ * never part of the change.
+ */
+export const RUN_SCRATCH_DIR = '.aflow';
+
+/**
  * Collect what the harness did. Untracked files are staged first — a harness
  * that adds a file has changed the tree, and a diff that silently omitted new
  * files would be the most misleading possible answer.
@@ -612,7 +629,11 @@ export async function collectChanges(worktreePath: string): Promise<WorktreeChan
   // simply redundant.
   const mirrors = await dependencyDirs(worktreePath);
   const excludes = join(tmpdir(), `aflow-collect-${String(process.pid)}-${randomUUID()}`);
-  await writeFile(excludes, mirrors.map((relative) => `/${relative}\n`).join(''), 'utf8');
+  await writeFile(
+    excludes,
+    [...mirrors, `${RUN_SCRATCH_DIR}/`].map((relative) => `/${relative}\n`).join(''),
+    'utf8',
+  );
   try {
     await git(worktreePath, ['-c', `core.excludesFile=${excludes}`, 'add', '-A', '--', '.']);
   } catch (error) {
@@ -623,7 +644,11 @@ export async function collectChanges(worktreePath: string): Promise<WorktreeChan
   } finally {
     await rm(excludes, { force: true });
   }
-  const nameOnly = await git(worktreePath, ['diff', '--cached', '--name-only']);
+  // The ignore rule keeps an untracked scratch file out of the index, but a
+  // repository that tracks something under the directory still has its edits
+  // staged, so the diff leaves the directory out by pathspec as well.
+  const pathspec = ['--', '.', `:(exclude,top)${RUN_SCRATCH_DIR}`];
+  const nameOnly = await git(worktreePath, ['diff', '--cached', '--name-only', ...pathspec]);
   const filesChanged = nameOnly.split('\n').filter((line) => line.length > 0).length;
   if (filesChanged === 0) {
     return { patch: '', filesChanged: 0, overCeiling: false };
@@ -636,7 +661,7 @@ export async function collectChanges(worktreePath: string): Promise<WorktreeChan
     // the harness was confined to. The diff is wanted verbatim in any case.
     const patch = await git(
       worktreePath,
-      ['diff', '--cached', '--no-textconv', '--no-ext-diff'],
+      ['diff', '--cached', '--no-textconv', '--no-ext-diff', ...pathspec],
       DIFF_CEILING_BYTES,
     );
     return { patch, filesChanged, overCeiling: false };
@@ -1042,12 +1067,6 @@ export interface PatchCommitOutcome {
   readonly commit?: PatchCommit;
 }
 
-/**
- * Where a commit lands, decided before any checkout is made: the folder's HEAD
- * for a new branch, the branch's head for an existing one. A stated base must
- * be that commit — a patch lands only where it was made, never merged onto
- * something that moved since.
- */
 /** The commit a sha names, or a refusal naming the sha. */
 async function resolveSha(root: string, sha: string): Promise<string> {
   const commit = await resolveCommit(root, sha).catch(() => undefined);
@@ -1057,13 +1076,22 @@ async function resolveSha(root: string, sha: string): Promise<string> {
   if (!commit?.startsWith(sha.toLowerCase())) {
     throw new WorktreeError(
       `\`${sha}\` names no commit in ${root}. \`baseSha\` is the sha the commission reported ` +
-        'in its `baseSha`, for a commit the folder has.',
+        'in its `baseSha`, for a commit the folder has — a commission that started from a ' +
+        'remote fetched its base into the folder.',
       'unknown_ref',
     );
   }
   return commit;
 }
 
+/**
+ * Where a commit lands, decided before any checkout is made. An existing branch
+ * takes it on its head, and a stated base must be that head — a patch lands
+ * only where it was made, never merged onto something that moved since. A new
+ * branch starts at the stated base, which may be behind or ahead of the
+ * folder's HEAD (a commission started from a remote), and at the folder's HEAD
+ * when none is stated.
+ */
 async function commitTarget(
   root: string,
   branch: string,
@@ -1101,18 +1129,7 @@ async function commitTarget(
     return { at: head, appended };
   }
 
-  if (stated !== undefined) {
-    const head = await currentHead(root);
-    if (head !== undefined && stated !== head) {
-      throw new WorktreeError(
-        `The patch was made against \`${baseSha ?? stated}\` but the folder's last commit is ` +
-          `\`${head}\`. Publish from a commission that started at the folder's HEAD, or name the ` +
-          'branch it started from.',
-        'stale_base',
-      );
-    }
-  }
-  return { at: undefined, appended };
+  return { at: stated, appended };
 }
 
 /** How a publication's scratch, and the checkout it commits in, is named under the temp root. */
@@ -1122,8 +1139,9 @@ export const PUBLICATION_SCRATCH_PREFIX = 'aflow-commit-';
  * Land a diff as a commit on a branch, without touching what the operator has
  * open.
  *
- * A new branch starts at the folder's HEAD; an existing one takes the commit on
- * top of its head, provided the patch was made there. The apply happens in a
+ * A new branch starts at the stated base, or the folder's HEAD without one; an
+ * existing one takes the commit on top of its head, provided the patch was made
+ * there. The apply happens in a
  * checkout made for this call alone, so the operator's working tree, index and
  * current branch are never a party to it — they are a second writer this lane
  * does not get to interrupt. What remains afterwards is one ref, created or

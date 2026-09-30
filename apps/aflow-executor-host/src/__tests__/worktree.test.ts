@@ -106,6 +106,33 @@ describe('worktree per run', () => {
     await removeWorktree(repo, wt.path);
   });
 
+  it("leaves the run's own scratch out of the change", async () => {
+    const wt = await prepareWorktree(repo, scratch, 'work');
+    await mkdir(join(wt.path, '.aflow'), { recursive: true });
+    await writeFile(join(wt.path, '.aflow', 'change.patch'), 'a copy of the work\n');
+    await writeFile(join(wt.path, 'app.txt'), 'edited\n');
+
+    const changes = await collectChanges(wt.path);
+    expect(changes.filesChanged).toBe(1);
+    expect(changes.patch).toContain('app.txt');
+    expect(changes.patch).not.toContain('.aflow');
+    expect(changes.patch).not.toContain('a copy of the work');
+    await removeWorktree(repo, wt.path);
+  });
+
+  it('leaves out a tracked file under the scratch directory too', async () => {
+    await mkdir(join(repo, '.aflow'), { recursive: true });
+    await writeFile(join(repo, '.aflow', 'notes.md'), 'tracked\n');
+    await git(repo, 'add', '-A');
+    await git(repo, 'commit', '-m', 'tracked scratch');
+    const wt = await prepareWorktree(repo, scratch, 'work');
+    await writeFile(join(wt.path, '.aflow', 'notes.md'), 'rewritten by the agent\n');
+
+    const changes = await collectChanges(wt.path);
+    expect(changes).toEqual({ patch: '', filesChanged: 0, overCeiling: false });
+    await removeWorktree(repo, wt.path);
+  });
+
   it('reports no change as no change, not as an empty diff of something', async () => {
     const wt = await prepareWorktree(repo, scratch, 'work');
     const changes = await collectChanges(wt.path);

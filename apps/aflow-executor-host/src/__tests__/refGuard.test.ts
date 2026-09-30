@@ -61,7 +61,7 @@ beforeEach(async () => {
     ...buildBaseEnv(scratch),
     GIT_CONFIG_GLOBAL: '/dev/null',
     GIT_CONFIG_NOSYSTEM: '1',
-    ...(await installRefGuard(scratch)),
+    ...(await installRefGuard(scratch, repo)),
   };
 });
 
@@ -94,6 +94,12 @@ describe("the agent's git cannot move a branch or a tag", () => {
     expect(outcome.stderr).toContain(REFUSAL);
   });
 
+  it("refuses in the folder's own checkout as well as the run's", async () => {
+    const outcome = await agentGit('-C', repo, 'branch', 'planted');
+    expect(outcome.ok).toBe(false);
+    expect(outcome.stderr).toContain(`Refused \`refs/heads/planted\`: ${REFUSAL}`);
+  });
+
   it('leaves the same command to the operator, whose git carries no guard', async () => {
     await operatorGit('branch', 'planted');
     expect((await snapshotRefs(repo)).has('refs/heads/planted')).toBe(true);
@@ -113,6 +119,25 @@ describe('what a coding run does with git still works', () => {
 
   it('moves a remote-tracking ref', async () => {
     expect((await agentGit('update-ref', 'refs/remotes/origin/x', 'HEAD')).ok).toBe(true);
+  });
+
+  it('creates and commits in a repository of its own, as a test suite does', async () => {
+    const own = await mkdtemp(join(tmpdir(), 'aflow-guard-own-'));
+    try {
+      await writeFile(join(own, 'fixture.txt'), 'fixture\n');
+      for (const args of [
+        ['init', '--initial-branch=main'],
+        ['add', '-A'],
+        ['-c', 'user.email=test@example.com', '-c', 'user.name=Test', 'commit', '-m', 'fixture'],
+        ['branch', 'feature'],
+        ['tag', 'v1'],
+      ]) {
+        const outcome = await agentGit('-C', own, ...args);
+        expect(outcome, `git ${args.join(' ')}`).toMatchObject({ ok: true });
+      }
+    } finally {
+      await rm(own, { recursive: true, force: true });
+    }
   });
 });
 

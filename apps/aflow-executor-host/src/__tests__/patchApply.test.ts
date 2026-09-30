@@ -627,16 +627,63 @@ describe('appending a patch to the branch it was made on', () => {
     expect((await git(root, 'rev-parse', 'feat/fix')).trim()).toBe(moved);
   }, 30_000);
 
-  it('refuses a new branch for a patch made anywhere but the folder HEAD', async () => {
-    const reviewed = await reviewedBranch();
+  /** A repository the folder has as `origin`, one commit ahead of the folder's main. */
+  async function upstreamAhead(): Promise<string> {
+    const upstream = join(base, 'upstream');
+    await run('git', ['clone', '-q', root, upstream]);
+    await writeFile(join(upstream, 'c.txt'), 'merged upstream\n');
+    await git(upstream, 'add', '-A');
+    await git(upstream, '-c', 'user.email=u@e.com', '-c', 'user.name=U', 'commit', '-m', 'ahead');
+    await git(root, 'remote', 'add', 'origin', upstream);
+    return (await git(upstream, 'rev-parse', 'HEAD')).trim();
+  }
+
+  it("starts a new branch at a base behind the folder's HEAD", async () => {
+    const behind = (await git(root, 'rev-parse', 'HEAD')).trim();
     const patch = await diffFor(async (d) => {
-      await writeFile(join(d, 'b.txt'), 'fixed\n');
-    }, 'feat/fix');
+      await writeFile(join(d, 'a.txt'), 'one\nFIXED\nthree\n');
+    });
+    await writeFile(join(root, 'd.txt'), 'the operator moved on\n');
+    await git(root, 'add', '-A');
+    await git(root, 'commit', '-m', 'moved on');
     const head = (await git(root, 'rev-parse', 'HEAD')).trim();
 
-    const { result } = await publish({ branch: 'aflow/fresh', baseSha: reviewed }, patch);
+    const { result, captured } = await publish({ branch: 'aflow/fresh', baseSha: behind }, patch);
+    expect(result.status).toBe('SUCCEEDED');
+    const commit = captured.output?.['commit'] as Record<string, unknown>;
+    expect(commit['appended']).toBe(false);
+    expect(commit['baseSha']).toBe(behind);
+    expect((await git(root, 'rev-parse', 'aflow/fresh^')).trim()).toBe(behind);
+    expect((await git(root, 'rev-parse', 'HEAD')).trim()).toBe(head);
+  }, 30_000);
+
+  it("starts a new branch at a fetched remote commit ahead of the folder's HEAD", async () => {
+    const ahead = await upstreamAhead();
+    await git(root, 'fetch', '-q', 'origin');
+    const head = (await git(root, 'rev-parse', 'HEAD')).trim();
+    const patch = await diffFor(async (d) => {
+      await writeFile(join(d, 'c.txt'), 'merged upstream, then fixed\n');
+    }, 'origin/main');
+
+    const { result, captured } = await publish({ branch: 'aflow/fresh', baseSha: ahead }, patch);
+    expect(result.status).toBe('SUCCEEDED');
+    const commit = captured.output?.['commit'] as Record<string, unknown>;
+    expect(commit['baseSha']).toBe(ahead);
+    expect((await git(root, 'rev-parse', 'aflow/fresh^')).trim()).toBe(ahead);
+    expect(await git(root, 'show', 'aflow/fresh:c.txt')).toBe('merged upstream, then fixed\n');
+    expect((await git(root, 'rev-parse', 'HEAD')).trim()).toBe(head);
+    expect((await git(root, 'rev-parse', '--abbrev-ref', 'HEAD')).trim()).toBe('main');
+  }, 30_000);
+
+  it('refuses a new branch at a base the folder does not have, naming it', async () => {
+    const ahead = await upstreamAhead();
+    const patch = await diffFor(async (d) => {
+      await writeFile(join(d, 'a.txt'), 'one\nFIXED\nthree\n');
+    });
+
+    const { result } = await publish({ branch: 'aflow/fresh', baseSha: ahead }, patch);
     expect(result.status).toBe('FAILED');
-    expect(result.error?.message ?? '').toContain(`the folder's last commit is \`${head}\``);
+    expect(result.error?.message ?? '').toContain(`\`${ahead}\` names no commit`);
     await expect(git(root, 'rev-parse', '--verify', 'aflow/fresh')).rejects.toThrow();
   }, 30_000);
 

@@ -347,8 +347,9 @@ export const HostFilePatchInputSchema = z
     commit: z
       .object({
         branch: HostBranchNameSchema.describe(
-          "Branch the commit lands on. A new one is created at the folder's HEAD. An existing " +
-            'one takes the commit on top of its head, and only with `baseSha` naming that head.',
+          "Branch the commit lands on. A new one is created at `baseSha`, or at the folder's " +
+            'HEAD without one. An existing one takes the commit on top of its head, and only ' +
+            'with `baseSha` naming that head.',
         ),
         message: z
           .string()
@@ -357,9 +358,11 @@ export const HostFilePatchInputSchema = z
           .describe('Commit message, verbatim. The first line is the subject, as git reads it.'),
         baseSha: HostCommitShaSchema.optional().describe(
           'The commit the patch was made against, as the commission reported it in `baseSha` — ' +
-            'a sha, never a branch or tag name. Required when `branch` exists, and it must be ' +
-            "that branch's head. For a new branch it may be omitted; given, it must be the " +
-            "folder's HEAD. A base that does not match is refused, never merged.",
+            'a sha, never a branch or tag name, for a commit the folder has (a commission ' +
+            'started from a remote fetched its base into the folder). Required when `branch` ' +
+            "exists, and it must be that branch's head; a base that does not match is refused, " +
+            'never merged. A new branch is created at this commit, wherever it stands against ' +
+            "the folder's HEAD; omitted, the new branch starts at the folder's HEAD.",
         ),
       })
       // Strict so a misspelt base is refused rather than stripped: dropped, it
@@ -858,7 +861,7 @@ export const HostOperationRegistrations: OperationRegistration[] = [
         'Keeping the change a `host.harness.run` produced, after it has been reviewed — the check that follows a delegation. Pass its `patchRef`',
         'Reapplying a diff that was held while something else moved',
         'Preparing a publication: with `commit`, the diff lands as a commit on a new branch and the working tree is left alone',
-        "A patch made from a commission that started at a branch lands on that branch when `commit.branch` names it and `commit.baseSha` is the `baseSha` the commission reported; a fresh branch takes a patch made at the folder's HEAD",
+        'A patch made from a commission that started at a branch lands on that branch when `commit.branch` names it and `commit.baseSha` is the `baseSha` the commission reported; a fresh branch is created at that `baseSha`, so a commission started from a remote publishes without the folder pulling first',
       ],
       whenNotToUse: [
         'Authoring a change here; a diff is something a harness produced and someone read, never something written for this call',
@@ -1020,7 +1023,7 @@ export const HostOperationRegistrations: OperationRegistration[] = [
         'The diff is returned, never applied. The operator decides what becomes of it.',
         'A publication takes the diff as `patchRef`, which holds all of it. `patch` is a copy for reading, cut short on a large change — never pass it on.',
         'A continued run returns the diff of the whole conversation against its original starting commit, not only the latest turn — unless it names a `base`, which continues the conversation in a fresh checkout at that base.',
-        "A patch made from a `base` is relative to that base, not the folder's HEAD: publish it onto the branch it started from, with the run's `baseSha`.",
+        "A patch made from a `base` is relative to that base, not the folder's HEAD: publish it with the run's `baseSha`, onto the branch it started from or onto a new branch, which is created at that base.",
         'A harness only runs if the operator configured it on that machine; the id here cannot introduce one. Omitted, it resolves to the one offered machine-side — the space context lists them.',
         'A harness needs egress to its provider. `blockedDomains` names every host it could not reach, and `boundaryNote` says whether that stopped the run or only narrowed it.',
         'The folder must be a git repository with at least one commit — the run needs a base to diff against.',

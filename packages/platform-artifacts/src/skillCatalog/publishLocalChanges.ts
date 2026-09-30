@@ -74,7 +74,7 @@ const BASE_SHA_SCHEMA = {
 
 const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'publish-local-changes',
-  version: 6,
+  version: 7,
   name: 'Publish Local Changes',
   tagline:
     'Commit a patch onto a branch of a connected repository, then push it and open the pull request once the operator approves.',
@@ -108,7 +108,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
       slug: 'publish-local-changes',
       name: 'Publish Local Changes',
       description:
-        "Take a patch to a pull request on a repository connected as a host folder: the patch is committed in a detached worktree — onto a new branch at the folder's last commit, or appended to the branch it was made on — the operator approves, and the branch is then pushed and opened as a pull request. The operator's working tree is never touched.",
+        "Take a patch to a pull request on a repository connected as a host folder: the patch is committed in a detached worktree — onto a new branch at the commit the patch was made against, or appended to the branch it was made on — the operator approves, and the branch is then pushed and opened as a pull request. The operator's working tree is never touched.",
       goal: 'Turn a patch into a commit on a branch of a connected repository and, once the operator approves, a pushed branch and an open pull request — with nothing leaving the machine before the approval.',
       mode: 'process' as const,
       outcomes: [
@@ -146,14 +146,14 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           id: 'branch',
           required: true,
           description:
-            "The branch the commit lands on — a branch under the folder's publish prefix, which the machine block shows. A new one is created at the folder's last commit; an existing one is appended to only with `baseSha`.",
+            "The branch the commit lands on — a branch under the folder's publish prefix, which the machine block shows. A new one is created at `baseSha`, or at the folder's last commit without one; an existing one is appended to only with `baseSha`.",
           schema: { type: 'string', minLength: 1, maxLength: 200 },
         },
         {
           id: 'baseSha',
           required: false,
           description:
-            "The commit the patch was made against, as the commission reported it in `baseSha`. Required to append to an existing branch, and it must be that branch's head; a patch made at the folder's last commit may omit it.",
+            "The commit the patch was made against, as the commission reported it in `baseSha`. Required to append to an existing branch, and it must be that branch's head. A new branch is created at it, even where the folder's last commit is behind or ahead of it — a commission started from a remote fetched it into the folder; without it, a new branch starts at the folder's last commit.",
           schema: BASE_SHA_SCHEMA,
         },
         {
@@ -204,7 +204,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
         {
           taskId: 'commit',
           name: 'Commit the patch on its branch',
-          goal: "Apply the patch in a detached worktree and commit it — on a new branch at the connected folder's last commit, or on top of the existing branch it was made on. The operator's working tree is not touched, and nothing leaves the machine.",
+          goal: "Apply the patch in a detached worktree and commit it — on a new branch at the commit the patch was made against (the connected folder's last commit when none is given), or on top of the existing branch it was made on. The operator's working tree is not touched, and nothing leaves the machine.",
           type: 'operation' as const,
           operation: 'host.file.patch',
           retryability: 'unsafe' as const,
@@ -562,7 +562,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
       priority: 50,
     },
     rationale:
-      "Five tasks with the approval between the local half and the published half, and a read of the repository through the space's GitHub binding just before it: the commit lands in a detached worktree — at the folder's last commit for a new branch, at the branch's head for an append whose base is that head — so a declined approval costs nothing and leaves the operator's working tree as it was. The push argv is pinned by the skill with only the branch bound, so no caller can add a force flag; the branch prefix that decides what may be pushed is a posture on the connected folder, enforced where the command runs rather than named here. The pull request is the GitHub connector's own createPullRequest, which the operator binds once for the space. The folder arrives as a run input until folder roles land.",
+      "Five tasks with the approval between the local half and the published half, and a read of the repository through the space's GitHub binding just before it: the commit lands in a detached worktree — at the patch's base (or the folder's last commit) for a new branch, at the branch's head for an append whose base is that head — so a declined approval costs nothing and leaves the operator's working tree as it was. The push argv is pinned by the skill with only the branch bound, so no caller can add a force flag; the branch prefix that decides what may be pushed is a posture on the connected folder, enforced where the command runs rather than named here. The pull request is the GitHub connector's own createPullRequest, which the operator binds once for the space. The folder arrives as a run input until folder roles land.",
   },
 };
 
