@@ -322,15 +322,36 @@ jobs:
             --out "aflow-appliance-${VERSION}-sbom.json" \
             --no-telemetry
 
-      # The inventory is a release asset either way; signing it is what lets a
-      # reader tell the one this build produced from one somebody edited.
+      # The attestation accepts SPDX or CycloneDX only, and the inventory above
+      # is this project's own shape, kept for its telemetry check. So the image is
+      # also described in CycloneDX, by the scanner already pinned below, and that
+      # is what is signed and published beside it.
+      - name: Describe the image in CycloneDX
+        env:
+          DIGEST: ${{ needs.publish.outputs.digest }}
+          VERSION: ${{ needs.publish.outputs.version }}
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "${PWD}:/work" -w /work \
+            ghcr.io/aquasecurity/trivy:0.74.0 image \
+            --image-src docker \
+            --format cyclonedx \
+            --output "aflow-appliance-${VERSION}-sbom.cdx.json" \
+            "${IMAGE}@${DIGEST}"
+          jq -e '.bomFormat == "CycloneDX" and (.components | length) > 0' \
+            "aflow-appliance-${VERSION}-sbom.cdx.json" >/dev/null
+
+      # Signing it is what lets a reader tell the inventory this build produced
+      # from one somebody edited.
       - name: Attest the inventory
         if: ${{ !github.event.repository.private }}
         uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
         with:
           subject-name: ${{ env.IMAGE }}
           subject-digest: ${{ needs.publish.outputs.digest }}
-          sbom-path: aflow-appliance-${{ needs.publish.outputs.version }}-sbom.json
+          sbom-path: aflow-appliance-${{ needs.publish.outputs.version }}-sbom.cdx.json
 
       - name: Check the artifact that was installed
         run: |
@@ -463,4 +484,5 @@ jobs:
           fi
           gh release upload "${TAG}" "aflow-appliance-${VERSION}.tgz" --clobber
           gh release upload "${TAG}" "aflow-appliance-${VERSION}-sbom.json" --clobber
+          gh release upload "${TAG}" "aflow-appliance-${VERSION}-sbom.cdx.json" --clobber
           gh release upload "${TAG}" "aflow-appliance-${VERSION}-vulnerabilities.json" --clobber

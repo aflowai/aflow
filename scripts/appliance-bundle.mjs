@@ -175,9 +175,9 @@ It prints the workflow and the commit that produced these bytes. A digest with
 no attestation, or one naming a different repository or workflow, did not come
 from this project's release pipeline — whatever else it may be.
 
-The dependency inventory published with the release is attested against the same
-digest, so a \`sbom.json\` that verifies is the one this build produced rather
-than one edited afterwards.
+The release also publishes a CycloneDX inventory, \`sbom.cdx.json\`, attested against
+the same digest: one that verifies is the one this build produced rather than one
+edited afterwards.
 
 `
 }## What runs, and what does not
