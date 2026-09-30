@@ -5,9 +5,9 @@
  * still works.
  */
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -182,14 +182,45 @@ describe("the agent's git cannot move a branch or a tag", () => {
       ],
     ];
 
-    it.each(spellings)('refuses through %s', async (_spelling, arrange) => {
+    // A macOS volume keeps the letter case a path was typed with and answers
+    // to any other, and the data volume is reachable under its firmlink too.
+    const macSpellings: [string, () => Promise<Invocation>][] = [
+      [
+        'a GIT_DIR in a different letter case than the folder',
+        async () => {
+          const folder = await realpath(repo);
+          const recased = join(dirname(folder), basename(folder).toUpperCase(), '.git');
+          return { cwd: elsewhere, env: { GIT_DIR: recased } };
+        },
+      ],
+      [
+        'a GIT_DIR under the data volume firmlink',
+        async () => ({
+          cwd: elsewhere,
+          env: { GIT_DIR: join('/System/Volumes/Data', await realpath(repo), '.git') },
+        }),
+      ],
+    ];
+
+    async function refusesThrough(arrange: () => Promise<Invocation>): Promise<void> {
       const { cwd, env = {}, args = [] } = await arrange();
       const before = await snapshotRefs(repo);
       const outcome = await agentGitIn(cwd, env, ...args, 'branch', 'planted');
       expect(outcome.ok).toBe(false);
       expect(outcome.stderr).toContain(`Refused \`refs/heads/planted\`: ${REFUSAL}`);
       expect(await snapshotRefs(repo)).toEqual(before);
+    }
+
+    it.each(spellings)('refuses through %s', async (_spelling, arrange) => {
+      await refusesThrough(arrange);
     });
+
+    it.runIf(process.platform === 'darwin').each(macSpellings)(
+      'refuses through %s',
+      async (_spelling, arrange) => {
+        await refusesThrough(arrange);
+      },
+    );
   });
 
   it('leaves the same command to the operator, whose git carries no guard', async () => {

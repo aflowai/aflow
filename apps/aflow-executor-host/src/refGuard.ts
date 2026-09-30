@@ -41,12 +41,16 @@ function shellQuoted(text: string): string {
  * run's checkout shares. A repository the hook cannot identify is treated as
  * the folder's.
  *
- * The repository's path is whatever the run's git was told, so it reaches `cd`
- * only as `./`-prefixed or absolute: a name like `-P` is then no option and no
- * `cd -`, and `CDPATH` — cleared as well, since a `cd` through it also prints —
- * is never searched. `IFS` is set to the single space git separates each
- * update's fields with, because `read` splits on it and an inherited one could
- * keep a ref name from matching.
+ * "The folder's own" is decided by identity, not by spelling. The repository's
+ * path is whatever the run's git was told, and one directory has many names: a
+ * symlink, a relative path, a firmlink prefix such as `/System/Volumes/Data`,
+ * and on a case-insensitive volume every mix of letter case. Resolving the path
+ * and comparing text misses the last two, so the hook asks `test -ef` whether
+ * both names are the same directory. The path reaches `test` only as
+ * `./`-prefixed or absolute, so a name like `-P` or `!` is never read as an
+ * operator. `IFS` is set to the single space git separates each update's fields
+ * with, because `read` splits on it and an inherited one could keep a ref name
+ * from matching.
  *
  * Read from stdin whole before deciding: git writes every update of the
  * transaction to the hook, and a hook that stops reading part-way can leave it
@@ -55,15 +59,16 @@ function shellQuoted(text: string): string {
 export function referenceTransactionHook(guardedCommonDir: string): string {
   return `#!/bin/sh
 [ "$1" = prepared ] || { cat >/dev/null; exit 0; }
-unset CDPATH
 IFS=' '
 common=$(git rev-parse --git-common-dir 2>/dev/null) || common=
 case $common in
   '' | /*) ;;
   *) common=./$common ;;
 esac
-[ -n "$common" ] && common=$(cd -P -- "$common" 2>/dev/null && pwd -P) || common=
-[ -z "$common" ] || [ "$common" = ${shellQuoted(guardedCommonDir)} ] || { cat >/dev/null; exit 0; }
+if [ -n "$common" ] && [ -d "$common" ] && ! [ "$common" -ef ${shellQuoted(guardedCommonDir)} ]; then
+  cat >/dev/null
+  exit 0
+fi
 refused=
 while read -r old new ref; do
   case "$ref" in
@@ -87,6 +92,12 @@ export function refGuardHooksDir(scratchDir: string): string {
  * Environment config sits above every config file git reads — system, global,
  * the repository's and the worktree's — so a `core.hooksPath` in any of them,
  * including a home directory the harness can write, does not displace it.
+ *
+ * A git call that names its own on the command line does:
+ * `git -c core.hooksPath=/elsewhere …` runs without the hook. The guard stops a
+ * commission's git from moving a branch or tag by accident, not a call written
+ * to opt out. What still records such a move is the run's before-and-after
+ * snapshot of the folder's refs, reported as `refChanges` on the result.
  */
 export async function installRefGuard(
   scratchDir: string,

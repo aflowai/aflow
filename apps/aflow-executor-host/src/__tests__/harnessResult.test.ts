@@ -458,6 +458,10 @@ describe.runIf(sandboxReadiness().ready)('a commission starts from a named ref',
           },
           harness('deletes', 'printf changed > touched.txt; git branch -D other'),
           harness(
+            'opts-out',
+            'printf changed > touched.txt; git -c core.hooksPath=/dev/null branch -D other',
+          ),
+          harness(
             'waits',
             'printf changed > touched.txt; i=0; ' +
               `while [ ! -e '${operatorDone}' ] && [ $i -lt 600 ]; do sleep 0.1; i=$((i+1)); done`,
@@ -548,6 +552,20 @@ describe.runIf(sandboxReadiness().ready)('a commission starts from a named ref',
       'Refused `refs/heads/other`: a commission may not move branches or tags',
     );
     expect(String(output['patch'])).toContain('touched.txt');
+  }, 120_000);
+
+  it('reports a branch moved by a git call that names its own hooks path, which the guard does not stop', async () => {
+    await vcs('branch', '-f', 'other', other);
+    try {
+      const { outcome, written } = await runWith({ harness: 'opts-out' });
+      expect(outcome.status).toBe('SUCCEEDED');
+      const output = written['output'] as Record<string, unknown>;
+      expect(output['refChanges']).toEqual([
+        { ref: 'refs/heads/other', change: 'deleted', from: other },
+      ]);
+    } finally {
+      await vcs('branch', '-f', 'other', other);
+    }
   }, 120_000);
 
   it('reports a branch the operator made while the run was in flight, and refuses nothing', async () => {
