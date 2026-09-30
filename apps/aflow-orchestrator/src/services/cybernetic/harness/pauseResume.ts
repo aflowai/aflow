@@ -136,8 +136,8 @@ export async function pauseRunOnly(
 
   const run = await loadRunByRunIdAcrossSpaces(deps.db, tenantIdStr, runId);
   const pauseTenantCtx = createTenantContext(tenantId);
-  await withTenantSchema(deps.db, pauseTenantCtx, async (tx) => {
-    await ledgerPauseRun(
+  const pauseVersion = await withTenantSchema(deps.db, pauseTenantCtx, async (tx) => {
+    const tookVersion = await ledgerPauseRun(
       deps.db,
       tenantIdStr,
       runId,
@@ -162,6 +162,7 @@ export async function pauseRunOnly(
         tx,
       );
     }
+    return tookVersion;
   });
 
   if (run) {
@@ -177,11 +178,18 @@ export async function pauseRunOnly(
   if (!shouldNotify) {
     return;
   }
+  if (pauseVersion === null) {
+    getOrchestratorLogger().info(
+      `[pauseRunOnly] run=${runId} was neither running nor paused; no pause to report to its waiters`,
+    );
+    return;
+  }
 
   await notifyWaiters(deps, {
     tenantId,
     runId,
     outcome: 'paused',
+    pauseVersion,
     ...(contractRef !== undefined ? { payloadRef: contractRef } : {}),
   });
 }
@@ -328,7 +336,7 @@ export async function completeRun(
   });
 
   // 3. Notify waiters
-  const waiterOutcome: WaiterNotifiedOutcome =
+  const waiterOutcome: Exclude<WaiterNotifiedOutcome, 'paused'> =
     terminalStatus === 'completed'
       ? 'completed'
       : terminalStatus === 'failed'

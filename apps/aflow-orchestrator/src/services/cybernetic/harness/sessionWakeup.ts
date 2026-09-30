@@ -54,9 +54,17 @@ const EMPTY_RESUME_INPUT_REF = `inline:${Buffer.from('{}').toString('base64')}`;
 export type SessionWakeupDelivery = 'woke' | 'deferred' | 'rate_limited' | 'coalesced' | 'read';
 
 /**
- * A wakeup's identity: the waiter it is owed to, the outcome, and the pause of
- * the run it reports. RFC 4122-shaped so the event log's uuid column takes it;
- * the same outcome of the same pause always reproduces the same event.
+ * What a wakeup reports: a pause, by the `pause_version` that pause took, or
+ * the outcome that ended the waiter's wait.
+ */
+export type SessionWakeupReport =
+  | { outcome: 'paused'; pauseVersion: number }
+  | { outcome: Exclude<WaiterNotifiedOutcome, 'paused'> };
+
+/**
+ * A wakeup's identity: the waiter it is owed to and what it reports.
+ * RFC 4122-shaped so the event log's uuid column takes it; the same report
+ * always reproduces the same event.
  */
 export function runWakeupEventId(waiterId: string, deliveryKey: string): string {
   const digest = createHash('sha256').update(`run-wakeup:${waiterId}:${deliveryKey}`).digest();
@@ -67,13 +75,16 @@ export function runWakeupEventId(waiterId: string, deliveryKey: string): string 
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-export function sessionWakeupDeliveryKey(
-  outcome: WaiterNotifiedOutcome,
-  pauseVersion: number,
-): string {
-  return `${outcome}:${String(pauseVersion)}`;
+/** A terminal outcome retires the waiter, so it is heard once and needs no pause to tell it apart. */
+export function sessionWakeupDeliveryKey(report: SessionWakeupReport): string {
+  return report.outcome === 'paused' ? `paused:${String(report.pauseVersion)}` : report.outcome;
 }
 
+/**
+ * `recorded` is whether this call wrote the wakeup to the event log. False when
+ * the delivery was already claimed, or when the event was already in the log —
+ * either way someone else appended it, and appending it again would show it twice.
+ */
 export async function deliverSessionWakeup(
   deps: HarnessDeps,
   args: {
@@ -81,19 +92,19 @@ export async function deliverSessionWakeup(
     sessionId: string;
     runId: string;
     waiterId: string;
-    outcome: WaiterNotifiedOutcome;
-    pauseVersion: number;
+    report: SessionWakeupReport;
     /** Stores the envelope under the wakeup's own id, so a repeat overwrites rather than adds. */
     storeEnvelope: (eventId: string) => Promise<PayloadRef>;
   },
 ): Promise<{ eventId: string; recorded: boolean; delivery: SessionWakeupDelivery }> {
-  const deliveryKey = sessionWakeupDeliveryKey(args.outcome, args.pauseVersion);
+  const { outcome } = args.report;
+  const deliveryKey = sessionWakeupDeliveryKey(args.report);
   const eventId = runWakeupEventId(args.waiterId, deliveryKey);
   const envelopeRef = await args.storeEnvelope(eventId);
 
   const metadata: WorkflowRunWakeupEventMetadata = {
     runId: args.runId,
-    outcome: args.outcome,
+    outcome,
     waiterId: args.waiterId,
   };
   const event: SessionEvent = {
@@ -117,10 +128,10 @@ export async function deliverSessionWakeup(
       const claimed = await claimSessionWaiterDelivery(tx, {
         waiterId: args.waiterId,
         deliveryKey,
-        ...(args.outcome !== 'paused' ? { retireAs: args.outcome } : {}),
+        ...(outcome !== 'paused' ? { retireAs: outcome } : {}),
       });
       if (!claimed) return false;
-      await tx
+      const inserted = await tx
         .insert(eventLog)
         .values({
           eventId,
@@ -131,8 +142,9 @@ export async function deliverSessionWakeup(
           idempotencyKey: `${eventId}:posted`,
           envelope: event,
         })
-        .onConflictDoNothing();
-      return true;
+        .onConflictDoNothing()
+        .returning({ eventId: eventLog.eventId });
+      return inserted.length > 0;
     },
   );
 

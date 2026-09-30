@@ -78,9 +78,24 @@ describe('hasUnreadRunWakeups', () => {
     expect(payloadStore.retrieve).not.toHaveBeenCalled();
   });
 
+  const envelope = { runId: 'run-a', outcome: 'paused', waiterId: 'w1' };
+
+  /** Serves the turn's input and each wakeup's envelope; anything else is gone. */
+  function storeHolding(stored: Record<string, unknown>) {
+    return {
+      retrieve: vi.fn(async (ref: string) =>
+        ref in stored ? stored[ref] : Promise.reject(new Error(`${ref} expired`)),
+      ),
+    };
+  }
+
   it('is false when the turn was handed every wakeup in the window', async () => {
     rows.push({ eventId: 'e2', payloadRef: 'gs://b/2' }, { eventId: 'e1', payloadRef: 'gs://b/1' });
-    const payloadStore = { retrieve: vi.fn(async () => turnInput(['e1', 'e2'])) };
+    const payloadStore = storeHolding({
+      'gs://b/turn': turnInput(['e1', 'e2']),
+      'gs://b/1': envelope,
+      'gs://b/2': envelope,
+    });
     await expect(
       hasUnreadRunWakeups({} as never, payloadStore, 'tenant-1' as never, 's1', 'gs://b/turn'),
     ).resolves.toBe(false);
@@ -88,7 +103,11 @@ describe('hasUnreadRunWakeups', () => {
 
   it('is true for a wakeup that landed after the turn’s input was built', async () => {
     rows.push({ eventId: 'e2', payloadRef: 'gs://b/2' }, { eventId: 'e1', payloadRef: 'gs://b/1' });
-    const payloadStore = { retrieve: vi.fn(async () => turnInput(['e1'])) };
+    const payloadStore = storeHolding({
+      'gs://b/turn': turnInput(['e1']),
+      'gs://b/1': envelope,
+      'gs://b/2': envelope,
+    });
     await expect(
       hasUnreadRunWakeups({} as never, payloadStore, 'tenant-1' as never, 's1', 'gs://b/turn'),
     ).resolves.toBe(true);
@@ -96,7 +115,39 @@ describe('hasUnreadRunWakeups', () => {
 
   it('counts a wakeup as unread when the turn’s input cannot be read', async () => {
     rows.push({ eventId: 'e1', payloadRef: 'gs://b/1' });
-    const payloadStore = { retrieve: vi.fn(async () => Promise.reject(new Error('gone'))) };
+    const payloadStore = storeHolding({ 'gs://b/1': envelope });
+    await expect(
+      hasUnreadRunWakeups({} as never, payloadStore, 'tenant-1' as never, 's1', 'gs://b/turn'),
+    ).resolves.toBe(true);
+  });
+
+  it('does not count a wakeup no turn can be handed', async () => {
+    // Newest first: an envelope past the payload store's TTL, one that does not
+    // parse, and a row with no envelope at all — none of which the reader returns.
+    rows.push(
+      { eventId: 'e3', payloadRef: 'gs://b/expired' },
+      { eventId: 'e2', payloadRef: 'gs://b/unparsable' },
+      { eventId: 'e1', payloadRef: null },
+    );
+    const payloadStore = storeHolding({
+      'gs://b/turn': turnInput([]),
+      'gs://b/unparsable': { nothing: 'here' },
+    });
+
+    await expect(
+      readRunWakeups({} as never, payloadStore, 'tenant-1' as never, 's1'),
+    ).resolves.toEqual([]);
+    await expect(
+      hasUnreadRunWakeups({} as never, payloadStore, 'tenant-1' as never, 's1', 'gs://b/turn'),
+    ).resolves.toBe(false);
+  });
+
+  it('still counts a deliverable wakeup beside one that is not', async () => {
+    rows.push(
+      { eventId: 'e2', payloadRef: 'gs://b/expired' },
+      { eventId: 'e1', payloadRef: 'gs://b/1' },
+    );
+    const payloadStore = storeHolding({ 'gs://b/turn': turnInput([]), 'gs://b/1': envelope });
     await expect(
       hasUnreadRunWakeups({} as never, payloadStore, 'tenant-1' as never, 's1', 'gs://b/turn'),
     ).resolves.toBe(true);

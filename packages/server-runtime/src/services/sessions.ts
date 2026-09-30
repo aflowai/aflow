@@ -72,7 +72,7 @@ import {
   type SessionHotState,
 } from '@aflow/redis';
 import { recordAdmissionReject } from '@aflow/observability';
-import { dispatchResume, loadPendingWaitersForSession } from '@aflow/cybernetic-runtime';
+import { dispatchResume, loadParkedStepWaitersForSession } from '@aflow/cybernetic-runtime';
 import { createSessionTailService } from './sessionTail.js';
 
 // ============================================================================
@@ -1250,7 +1250,7 @@ function createRealSessionService(ctx: AppContext): SessionService {
 
       const workflowWaiters =
         state.status === 'PAUSED'
-          ? await loadPendingWaitersForSession(
+          ? await loadParkedStepWaitersForSession(
               dbTyped,
               request.tenantId as string,
               request.sessionId as string,

@@ -207,7 +207,7 @@ beforeEach(() => {
   mockWaitForInput.mockResolvedValue(undefined);
   mockStartRun.mockResolvedValue({ activeTasks: [] });
   mockStoreResumeContract.mockResolvedValue('gs://bucket/startup-contract');
-  mockPauseRun.mockResolvedValue(undefined);
+  mockPauseRun.mockResolvedValue(1);
   mockNotifyWaiters.mockResolvedValue(undefined);
 });
 
@@ -287,6 +287,7 @@ describe('workflow.run.start — wait: none', () => {
       tenantId: TENANT,
       runId: output['runId'],
       outcome: 'paused',
+      pauseVersion: 1,
       payloadRef: 'gs://bucket/startup-contract',
     });
     // Registered before the run paused, so the notification had someone to reach.

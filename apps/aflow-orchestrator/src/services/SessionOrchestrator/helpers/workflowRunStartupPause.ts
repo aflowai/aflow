@@ -29,7 +29,7 @@ export interface PauseWorkflowRunAtStartupArgs {
  */
 export async function pauseWorkflowRunAtStartup(
   args: PauseWorkflowRunAtStartupArgs,
-): Promise<string> {
+): Promise<{ contractRef: string; pauseVersion: number }> {
   const tenantIdStr = args.tenantId as string;
   const contractRef = await storeWorkflowResumeContract({
     payloadStore: args.payloadStore,
@@ -41,8 +41,8 @@ export async function pauseWorkflowRunAtStartup(
   });
 
   const tenantCtx = createTenantContext(args.tenantId);
-  await withTenantSchema(args.db, tenantCtx, async (tx) => {
-    await pauseRun(
+  const pauseVersion = await withTenantSchema(args.db, tenantCtx, async (tx) => {
+    const tookVersion = await pauseRun(
       args.db,
       tenantIdStr,
       args.runId,
@@ -65,9 +65,13 @@ export async function pauseWorkflowRunAtStartup(
       },
       tx,
     );
+    return tookVersion;
   });
+  if (pauseVersion === null) {
+    throw new Error(`run ${args.runId} is no longer running; it cannot be paused for preflight`);
+  }
 
-  return contractRef;
+  return { contractRef, pauseVersion };
 }
 
 export interface HandoffStartupPreflightPauseArgs {
@@ -93,7 +97,7 @@ export async function handoffStartupPreflightPause(
 ): Promise<void> {
   let parked = false;
   try {
-    const contractRef = await pauseWorkflowRunAtStartup({
+    const { contractRef, pauseVersion } = await pauseWorkflowRunAtStartup({
       db: handoff.db,
       payloadStore: handoff.payloadStore,
       tenantId: handoff.tenantId,
@@ -123,6 +127,7 @@ export async function handoffStartupPreflightPause(
         tenantId: handoff.tenantId,
         runId: handoff.runId,
         outcome: 'paused',
+        pauseVersion,
         payloadRef: contractRef,
       },
     );
@@ -156,7 +161,7 @@ export async function pauseStartupPreflightForSessionWaiter(
   handoff: Omit<HandoffStartupPreflightPauseArgs, 'args' | 'startTime'>,
 ): Promise<void> {
   try {
-    const contractRef = await pauseWorkflowRunAtStartup({
+    const { contractRef, pauseVersion } = await pauseWorkflowRunAtStartup({
       db: handoff.db,
       payloadStore: handoff.payloadStore,
       tenantId: handoff.tenantId,
@@ -171,6 +176,7 @@ export async function pauseStartupPreflightForSessionWaiter(
         tenantId: handoff.tenantId,
         runId: handoff.runId,
         outcome: 'paused',
+        pauseVersion,
         payloadRef: contractRef,
       },
     );

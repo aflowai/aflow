@@ -95,23 +95,12 @@ export async function notifyWaiters(deps: HarnessDeps, args: NotifyWaitersArgs):
 
   const humanDecisions = terminalDetail ? extractHumanDecisions(terminalDetail) : undefined;
 
-  let pauseVersion: Promise<number> | undefined;
-  const loadPauseVersion = (): Promise<number> =>
-    (pauseVersion ??= resolvePauseVersion(deps, args));
-
   for (const waiter of waiters) {
     try {
       if (waiter.waiterStepExecutionId === null) {
         // Its delivery records itself: a session waiter hears every pause and
         // is retired only by the outcome that ends the run.
-        await wakeSessionWaiter(
-          deps,
-          args,
-          waiter,
-          await loadPauseVersion(),
-          humanDecisions,
-          runResult,
-        );
+        await wakeSessionWaiter(deps, args, waiter, humanDecisions, runResult);
         continue;
       }
       await wakeWaiter(
@@ -146,20 +135,10 @@ export async function notifyWaiters(deps: HarnessDeps, args: NotifyWaitersArgs):
   }
 }
 
-/** The pause a notification reports is the run's pause version when it is sent. */
-async function resolvePauseVersion(deps: HarnessDeps, args: NotifyWaitersArgs): Promise<number> {
-  const run =
-    args.runDetail ??
-    (await loadRunByRunIdAcrossSpaces(deps.db, args.tenantId as string, args.runId));
-  if (!run) throw new Error(`run ${args.runId} not found; its session waiters cannot be keyed`);
-  return run.pauseVersion;
-}
-
 async function wakeSessionWaiter(
   deps: HarnessDeps,
   args: NotifyWaitersArgs,
   waiter: { id: string; waiterSessionId: string },
-  pauseVersion: number,
   humanDecisions: readonly WorkflowRunWakeupHumanDecision[] | undefined,
   runResult: WorkflowRunResult | undefined,
 ): Promise<void> {
@@ -168,8 +147,10 @@ async function wakeSessionWaiter(
     sessionId: waiter.waiterSessionId,
     runId: args.runId,
     waiterId: waiter.id,
-    outcome: args.outcome,
-    pauseVersion,
+    report:
+      args.outcome === 'paused'
+        ? { outcome: 'paused', pauseVersion: args.pauseVersion }
+        : { outcome: args.outcome },
     storeEnvelope: (eventId) =>
       buildWaiterOutputRef(deps, args, waiter, humanDecisions, runResult, {
         payloadSlot: eventId,

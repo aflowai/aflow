@@ -185,7 +185,8 @@ export const workflowRunWaiters = pgTable('workflow_run_waiters', {
    */
   notifiedOutcome: text('notified_outcome'),
   /**
-   * The last outcome delivered to a session waiter, as `<outcome>:<pauseVersion>`.
+   * The last outcome delivered to a session waiter: `paused:<pauseVersion>` for
+   * a pause, the bare outcome for the one that retired it.
    * A session waiter hears every pause while it stays pending, so this — not
    * `notified_at` — is what makes a repeated notification of one pause a no-op.
    */

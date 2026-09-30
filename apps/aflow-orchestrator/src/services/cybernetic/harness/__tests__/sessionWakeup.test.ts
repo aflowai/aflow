@@ -32,17 +32,50 @@ vi.mock('@aflow/cybernetic-runtime', () => ({
   surfaceWorkflowResumeContract: vi.fn().mockResolvedValue(null),
 }));
 
-const mockInsertedEvents: Array<{ eventId: string; eventType: string; sessionId: string }> = [];
+/** The event log, unique on the event id as the table is; read back newest first. */
+const mockInsertedEvents: Array<{
+  eventId: string;
+  eventType: string;
+  sessionId: string;
+  payloadRef: string | null;
+}> = [];
 vi.mock('@aflow/database', () => ({
   createTenantContext: vi.fn(() => ({})),
-  eventLog: {},
+  eventLog: {
+    eventId: 'event_id',
+    payloadRef: 'payload_ref',
+    sessionId: 'session_id',
+    eventType: 'event_type',
+    timestamp: 'timestamp',
+  },
   withTenantSchema: vi.fn(async (_db: unknown, _ctx: unknown, cb: (tx: unknown) => unknown) =>
     cb({
       insert: () => ({
-        values: (row: { eventId: string; eventType: string; sessionId: string }) => {
-          mockInsertedEvents.push(row);
-          return { onConflictDoNothing: () => Promise.resolve() };
-        },
+        values: (row: (typeof mockInsertedEvents)[number]) => ({
+          onConflictDoNothing: () => ({
+            returning: () => {
+              if (mockInsertedEvents.some((logged) => logged.eventId === row.eventId)) {
+                return Promise.resolve([]);
+              }
+              mockInsertedEvents.push(row);
+              return Promise.resolve([{ eventId: row.eventId }]);
+            },
+          }),
+        }),
+      }),
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            orderBy: () => ({
+              limit: () =>
+                Promise.resolve(
+                  [...mockInsertedEvents]
+                    .reverse()
+                    .map(({ eventId, payloadRef }) => ({ eventId, payloadRef })),
+                ),
+            }),
+          }),
+        }),
       }),
     }),
   ),
@@ -76,6 +109,9 @@ const mockHasUnreadRunWakeups = vi.fn();
 vi.mock('../../../SessionOrchestrator/helpers/runWakeups.js', () => ({
   hasUnreadRunWakeups: (...args: unknown[]) => mockHasUnreadRunWakeups(...args),
 }));
+const { hasUnreadRunWakeups: realHasUnreadRunWakeups } = await vi.importActual<
+  typeof import('../../../SessionOrchestrator/helpers/runWakeups.js')
+>('../../../SessionOrchestrator/helpers/runWakeups.js');
 
 const mockLoadRun = vi.fn();
 vi.mock('../helpers.js', () => ({
@@ -97,6 +133,7 @@ vi.mock('../../../../lib/orchestratorLogger.js', () => ({
 import { notifyWaiters } from '../waiters.js';
 import {
   EVENT_DRIVEN_TURNS_PER_MINUTE,
+  deliverSessionWakeup,
   runWakeupEventId,
   wakeSessionForRunWakeups,
 } from '../sessionWakeup.js';
@@ -151,8 +188,9 @@ beforeEach(() => {
   ledger.clear();
   mockInsertedEvents.length = 0;
   payloadStore.store.mockResolvedValue('gs://bucket/wakeup-envelope');
+  payloadStore.retrieve.mockReset();
   registerSessionWaiter();
-  mockLoadRun.mockResolvedValue({ runId: RUN, spaceId: 'space-1', pauseVersion: 1 });
+  mockLoadRun.mockResolvedValue({ runId: RUN, spaceId: 'space-1' });
   mockHasUnreadRunWakeups.mockResolvedValue(true);
   mockResumeClaimsForStep.mockResolvedValue([]);
   mockClaimEventDrivenTurn.mockResolvedValue({ taken: true });
@@ -172,7 +210,7 @@ describe('a waiter with no parked step', () => {
     const [, , sessionId, event] = mockAppendSessionEvent.mock.calls[0]!;
     expect(sessionId).toBe(SESSION);
     expect(event).toMatchObject({
-      eventId: runWakeupEventId('waiter-1', 'completed:1'),
+      eventId: runWakeupEventId('waiter-1', 'completed'),
       eventType: 'WorkflowRunWakeup',
       outputRef: 'gs://bucket/wakeup-envelope',
       metadata: { runId: RUN, outcome: 'completed', waiterId: 'waiter-1' },
@@ -182,14 +220,14 @@ describe('a waiter with no parked step', () => {
       data: Record<string, unknown>;
     };
     expect(stored.data).toMatchObject({ runId: RUN, outcome: 'completed', waiterId: 'waiter-1' });
-    expect(stored.stepExecutionId).toBe(runWakeupEventId('waiter-1', 'completed:1'));
+    expect(stored.stepExecutionId).toBe(runWakeupEventId('waiter-1', 'completed'));
 
     // Durable at once: the turn builder reads the log, not the hot stream.
     expect(wakeupEvents()).toEqual([
       expect.objectContaining({ eventType: 'WorkflowRunWakeup', sessionId: SESSION }),
     ]);
     expect(ledger.get('waiter-1')).toEqual({
-      lastDeliveredKey: 'completed:1',
+      lastDeliveredKey: 'completed',
       retiredAs: 'completed',
     });
     // A turn in flight reads it at its next boundary; nothing resumes it.
@@ -199,13 +237,12 @@ describe('a waiter with no parked step', () => {
   it('stays registered through a pause, so the run’s end still reaches the session', async () => {
     mockGetSessionStateSafe.mockResolvedValue({ ok: true, state: { status: 'RUNNING' } });
 
-    await notifyWaiters(deps, { tenantId: TENANT, runId: RUN, outcome: 'paused' });
-    mockLoadRun.mockResolvedValue({ runId: RUN, spaceId: 'space-1', pauseVersion: 2 });
+    await notifyWaiters(deps, { tenantId: TENANT, runId: RUN, outcome: 'paused', pauseVersion: 1 });
     await notifyWaiters(deps, { tenantId: TENANT, runId: RUN, outcome: 'completed' });
 
     expect(wakeupEvents().map((row) => row.eventId)).toEqual([
       runWakeupEventId('waiter-1', 'paused:1'),
-      runWakeupEventId('waiter-1', 'completed:2'),
+      runWakeupEventId('waiter-1', 'completed'),
     ]);
     expect(ledger.get('waiter-1')?.retiredAs).toBe('completed');
     expect(mockMarkWaiterNotified).not.toHaveBeenCalled();
@@ -214,12 +251,39 @@ describe('a waiter with no parked step', () => {
   it('hears a later pause of the same run as a new wakeup', async () => {
     mockGetSessionStateSafe.mockResolvedValue({ ok: true, state: { status: 'RUNNING' } });
 
-    await notifyWaiters(deps, { tenantId: TENANT, runId: RUN, outcome: 'paused' });
-    mockLoadRun.mockResolvedValue({ runId: RUN, spaceId: 'space-1', pauseVersion: 3 });
-    await notifyWaiters(deps, { tenantId: TENANT, runId: RUN, outcome: 'paused' });
+    await notifyWaiters(deps, { tenantId: TENANT, runId: RUN, outcome: 'paused', pauseVersion: 1 });
+    await notifyWaiters(deps, { tenantId: TENANT, runId: RUN, outcome: 'paused', pauseVersion: 3 });
 
     expect(wakeupEvents()).toHaveLength(2);
     expect(mockAppendSessionEvent).toHaveBeenCalledTimes(2);
+  });
+
+  it('keys a notification that arrives after the run paused again on the pause it reports', async () => {
+    mockGetSessionStateSafe.mockResolvedValue({ ok: true, state: { status: 'RUNNING' } });
+    // The run row already stands at the newer pause when the older notify lands.
+    mockLoadRun.mockResolvedValue({ runId: RUN, spaceId: 'space-1', pauseVersion: 5 });
+
+    await notifyWaiters(deps, {
+      tenantId: TENANT,
+      runId: RUN,
+      outcome: 'paused',
+      pauseVersion: 4,
+      payloadRef: 'gs://bucket/contract-4',
+    });
+    await notifyWaiters(deps, {
+      tenantId: TENANT,
+      runId: RUN,
+      outcome: 'paused',
+      pauseVersion: 5,
+      payloadRef: 'gs://bucket/contract-5',
+    });
+
+    expect(wakeupEvents().map((row) => row.eventId)).toEqual([
+      runWakeupEventId('waiter-1', 'paused:4'),
+      runWakeupEventId('waiter-1', 'paused:5'),
+    ]);
+    expect(mockAppendSessionEvent).toHaveBeenCalledTimes(2);
+    expect(ledger.get('waiter-1')?.lastDeliveredKey).toBe('paused:5');
   });
 });
 
@@ -228,8 +292,8 @@ describe('exactly once', () => {
     mockGetSessionStateSafe.mockResolvedValue({ ok: true, state: { status: 'RUNNING' } });
 
     await Promise.all([
-      notifyWaiters(deps, { tenantId: TENANT, runId: RUN, outcome: 'paused' }),
-      notifyWaiters(deps, { tenantId: TENANT, runId: RUN, outcome: 'paused' }),
+      notifyWaiters(deps, { tenantId: TENANT, runId: RUN, outcome: 'paused', pauseVersion: 1 }),
+      notifyWaiters(deps, { tenantId: TENANT, runId: RUN, outcome: 'paused', pauseVersion: 1 }),
     ]);
 
     expect(wakeupEvents()).toHaveLength(1);
@@ -239,22 +303,46 @@ describe('exactly once', () => {
 
   it('appends nothing for the restart re-drive of a pause already delivered', async () => {
     mockGetSessionStateSafe.mockResolvedValue({ ok: true, state: { status: 'RUNNING' } });
-    await notifyWaiters(deps, { tenantId: TENANT, runId: RUN, outcome: 'paused' });
+    await notifyWaiters(deps, { tenantId: TENANT, runId: RUN, outcome: 'paused', pauseVersion: 1 });
 
     // A fresh process holds nothing of the first delivery but the ledger.
     vi.resetModules();
     const restarted = await import('../waiters.js');
-    // The re-drive in taskComplete reloads the run and passes it along.
     await restarted.notifyWaiters(deps, {
       tenantId: TENANT,
       runId: RUN,
       outcome: 'paused',
+      pauseVersion: 1,
       payloadRef: 'gs://bucket/contract',
       runDetail: { runId: RUN, spaceId: 'space-1', pauseVersion: 1 } as never,
     });
 
     expect(wakeupEvents()).toHaveLength(1);
     expect(mockAppendSessionEvent).toHaveBeenCalledOnce();
+  });
+
+  it('reports a wakeup already in the log as not recorded, and appends it nowhere again', async () => {
+    mockGetSessionStateSafe.mockResolvedValue({ ok: true, state: { status: 'RUNNING' } });
+    await notifyWaiters(deps, { tenantId: TENANT, runId: RUN, outcome: 'paused', pauseVersion: 4 });
+    await notifyWaiters(deps, { tenantId: TENANT, runId: RUN, outcome: 'paused', pauseVersion: 5 });
+
+    // The waiter last heard pause 5, so a re-drive of pause 4 takes the claim;
+    // its event is already in the log.
+    const redrive = await deliverSessionWakeup(deps, {
+      tenantId: TENANT,
+      sessionId: SESSION,
+      runId: RUN,
+      waiterId: 'waiter-1',
+      report: { outcome: 'paused', pauseVersion: 4 },
+      storeEnvelope: () => Promise.resolve('gs://bucket/wakeup-envelope' as never),
+    });
+
+    expect(redrive).toMatchObject({
+      eventId: runWakeupEventId('waiter-1', 'paused:4'),
+      recorded: false,
+    });
+    expect(wakeupEvents()).toHaveLength(2);
+    expect(mockAppendSessionEvent).toHaveBeenCalledTimes(2);
   });
 
   it('gives the same outcome of the same pause the same identity', () => {
@@ -412,5 +500,43 @@ describe('several wakeups on one pause', () => {
 
     expect(mockAppendSessionEvent).toHaveBeenCalledTimes(2);
     expect(mockClaimEventDrivenTurn).toHaveBeenCalledOnce();
+  });
+});
+
+describe('a wakeup whose envelope cannot be read', () => {
+  /** The turn at the prompt read nothing; the payload store holds only `envelopes`. */
+  function storeHolding(envelopes: Record<string, unknown>) {
+    payloadStore.retrieve.mockImplementation(async (ref: string) => {
+      if (ref === TURN_INPUT) return { prompt: 'p' };
+      if (ref in envelopes) return envelopes[ref];
+      throw new Error(`${ref} expired`);
+    });
+  }
+
+  beforeEach(() => {
+    restingAtPrompt();
+    mockHasUnreadRunWakeups.mockImplementation(realHasUnreadRunWakeups);
+  });
+
+  it('wakes the session neither when it lands nor when an event-wake slot comes round', async () => {
+    storeHolding({});
+
+    await notifyWaiters(deps, { tenantId: TENANT, runId: RUN, outcome: 'completed' });
+    await expect(wakeSessionForRunWakeups(deps, TENANT, SESSION)).resolves.toBe('read');
+
+    expect(wakeupEvents()).toHaveLength(1);
+    expect(mockDispatchResume).not.toHaveBeenCalled();
+    expect(mockClaimEventDrivenTurn).not.toHaveBeenCalled();
+    expect(mockScheduleShardTimer).not.toHaveBeenCalled();
+  });
+
+  it('is told apart from one that can, which still wakes it', async () => {
+    storeHolding({
+      'gs://bucket/wakeup-envelope': { runId: RUN, outcome: 'completed', waiterId: 'waiter-1' },
+    });
+
+    await notifyWaiters(deps, { tenantId: TENANT, runId: RUN, outcome: 'completed' });
+
+    expect(mockDispatchResume).toHaveBeenCalledOnce();
   });
 });

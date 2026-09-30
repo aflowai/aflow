@@ -1,5 +1,5 @@
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { eq, and, isNull, lte, sql } from 'drizzle-orm';
+import { eq, and, isNotNull, isNull, lte, sql } from 'drizzle-orm';
 import type { TenantId } from '@aflow/schemas';
 import {
   createTenantContext,
@@ -41,6 +41,32 @@ export async function loadPendingWaitersForSession(
       .from(workflowRunWaiters)
       .where(
         and(eq(workflowRunWaiters.waiterSessionId, waiterSessionId), sql`notified_at IS NULL`),
+      );
+  });
+}
+
+/**
+ * The runs a session has a step parked on — its delegation waits. A session
+ * waiter is left out: it is pending for as long as a run started without
+ * waiting lives, while the session itself goes on working or rests at its
+ * prompt, so it says nothing about what the session is blocked on.
+ */
+export async function loadParkedStepWaitersForSession(
+  db: PostgresJsDatabase,
+  tenantId: string,
+  waiterSessionId: string,
+): Promise<WorkflowRunWaiterRow[]> {
+  const tenantCtx = createTenantContext(tenantId as TenantId);
+  return withTenantSchema(db, tenantCtx, async (tx) => {
+    return await tx
+      .select()
+      .from(workflowRunWaiters)
+      .where(
+        and(
+          eq(workflowRunWaiters.waiterSessionId, waiterSessionId),
+          isNotNull(workflowRunWaiters.waiterStepExecutionId),
+          isNull(workflowRunWaiters.notifiedAt),
+        ),
       );
   });
 }

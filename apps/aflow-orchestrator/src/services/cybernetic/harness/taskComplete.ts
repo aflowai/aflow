@@ -539,13 +539,21 @@ export async function onWorkflowTaskComplete(
         );
         break;
       }
-      const pausedRef = refreshedRun?.pausedPayloadRef ?? null;
+      if (refreshedRun?.status !== 'paused') {
+        log.info(
+          `[onWorkflowTaskComplete] late paused result on run=${runId} task=${taskId}, which is no longer paused; not waking waiters`,
+        );
+        break;
+      }
+      // The pause version and the contract come from the same row read, so
+      // the pause this re-drive reports and the contract it carries agree.
       await notifyWaiters(deps, {
         tenantId,
         runId,
         outcome: 'paused',
-        ...(pausedRef ? { payloadRef: pausedRef } : {}),
-        ...(refreshedRun ? { runDetail: refreshedRun } : {}),
+        pauseVersion: refreshedRun.pauseVersion,
+        ...(refreshedRun.pausedPayloadRef ? { payloadRef: refreshedRun.pausedPayloadRef } : {}),
+        runDetail: refreshedRun,
       });
       break;
     }

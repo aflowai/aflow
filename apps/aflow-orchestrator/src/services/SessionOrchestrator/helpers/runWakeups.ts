@@ -26,13 +26,7 @@ export async function readRunWakeups(
   const rows = await recentRunWakeupRows(db, tenantId, sessionId);
 
   const entries = await Promise.all(
-    rows.reverse().map(async (row): Promise<WorkflowRunWakeupEntry | null> => {
-      if (!row.payloadRef) return null;
-      const parsed = WorkflowRunWakeupEnvelopeSchema.safeParse(
-        await payloadStore.retrieve(row.payloadRef).catch(() => undefined),
-      );
-      return parsed.success ? { eventId: row.eventId, envelope: parsed.data } : null;
-    }),
+    rows.reverse().map((row) => deliverableRunWakeup(payloadStore, row)),
   );
   return entries.filter((entry): entry is WorkflowRunWakeupEntry => entry !== null);
 }
@@ -44,6 +38,11 @@ export async function readRunWakeups(
  * Every turn is handed the recent window, so what a turn read is exactly what
  * its input carried: anything in the window now and not in that input landed
  * after the input was built — while the agent was mid-turn, say.
+ *
+ * A wakeup counts only if {@link readRunWakeups} would hand it over. One whose
+ * envelope has aged out of the payload store or does not parse is never in a
+ * turn's input, so counting it would wake the session at every settle and every
+ * event-wake slot for as long as it stays in the window.
  */
 export async function hasUnreadRunWakeups(
   db: PostgresJsDatabase,
@@ -71,14 +70,35 @@ export async function hasUnreadRunWakeups(
       }
     }
   }
-  return rows.some((row) => !read.has(row.eventId));
+  const unread = rows.filter((row) => !read.has(row.eventId));
+  if (unread.length === 0) return false;
+  const deliverable = await Promise.all(
+    unread.map((row) => deliverableRunWakeup(payloadStore, row)),
+  );
+  return deliverable.some((entry) => entry !== null);
+}
+
+interface RunWakeupRow {
+  eventId: string;
+  payloadRef: string | null;
+}
+
+async function deliverableRunWakeup(
+  payloadStore: Pick<PayloadStore, 'retrieve'>,
+  row: RunWakeupRow,
+): Promise<WorkflowRunWakeupEntry | null> {
+  if (!row.payloadRef) return null;
+  const parsed = WorkflowRunWakeupEnvelopeSchema.safeParse(
+    await payloadStore.retrieve(row.payloadRef).catch(() => undefined),
+  );
+  return parsed.success ? { eventId: row.eventId, envelope: parsed.data } : null;
 }
 
 async function recentRunWakeupRows(
   db: PostgresJsDatabase,
   tenantId: TenantId,
   sessionId: string,
-): Promise<Array<{ eventId: string; payloadRef: string | null }>> {
+): Promise<RunWakeupRow[]> {
   return withTenantSchema(db, createTenantContext(tenantId), (tx) =>
     tx
       .select({ eventId: eventLog.eventId, payloadRef: eventLog.payloadRef })
