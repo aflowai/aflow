@@ -8,36 +8,36 @@ the dependencies rather than this file.
 
 ## MIT — 34
 
-- `@anthropic-ai/sdk@0.100.1`
+- `@anthropic-ai/sdk@0.128.0`
 - `@fastify/cors@10.1.0` — https://github.com/fastify/fastify-cors#readme
-- `@fastify/helmet@13.0.2` — https://github.com/fastify/fastify-helmet#readme
-- `@fastify/jwt@10.0.0` — https://github.com/fastify/fastify-jwt#readme
+- `@fastify/helmet@13.1.1` — https://github.com/fastify/fastify-helmet#readme
+- `@fastify/jwt@10.2.2` — https://github.com/fastify/fastify-jwt#readme
 - `@fastify/rate-limit@10.3.0` — https://github.com/fastify/fastify-rate-limit#readme
-- `@fastify/sensible@6.0.4` — https://github.com/fastify/fastify-sensible#readme
-- `@fastify/swagger@9.6.1` — https://github.com/fastify/fastify-swagger#readme
-- `@fastify/swagger-ui@5.2.4` — https://github.com/fastify/fastify-swagger-ui#readme
-- `@fastify/websocket@11.2.0` — https://github.com/fastify/fastify-websocket#readme
-- `@modelcontextprotocol/sdk@1.29.0` — https://modelcontextprotocol.io
+- `@fastify/sensible@6.0.5` — https://github.com/fastify/fastify-sensible#readme
+- `@fastify/swagger@9.9.0` — https://github.com/fastify/fastify-swagger#readme
+- `@fastify/swagger-ui@5.2.6` — https://github.com/fastify/fastify-swagger-ui#readme
+- `@fastify/websocket@11.3.1` — https://github.com/fastify/fastify-websocket#readme
+- `@modelcontextprotocol/sdk@1.30.1` — https://modelcontextprotocol.io
 - `@phosphor-icons/react@2.1.10` — https://phosphoricons.com
-- `@tanstack/react-query@5.100.13` — https://tanstack.com/query
-- `@xyflow/react@12.10.0` — https://reactflow.dev
+- `@tanstack/react-query@5.103.2` — https://tanstack.com/query
+- `@xyflow/react@12.12.0` — https://reactflow.dev
 - `ajv@8.20.0` — https://ajv.js.org
 - `croner@10.0.1` — https://croner.56k.guru
-- `esbuild@0.28.1`
+- `esbuild@0.28.2`
 - `fast-json-patch@3.1.1` — https://github.com/Starcounter-Jack/JSON-Patch
 - `fast-xml-parser@5.7.2`
-- `fastify@5.12.1` — https://fastify.dev/
+- `fastify@5.12.5` — https://fastify.dev/
 - `fastify-plugin@5.1.0` — https://github.com/fastify/fastify-plugin#readme
 - `fastify-type-provider-zod@4.0.2` — https://github.com/turkerdev/fastify-type-provider-zod
-- `framer-motion@12.34.0`
+- `framer-motion@12.43.0`
 - `html-to-text@9.0.5` — https://github.com/html-to-text/node-html-to-text
-- `ioredis@5.9.2`
-- `jsonata@2.2.1` — http://jsonata.org/
-- `marked@17.0.4` — https://marked.js.org
-- `next@16.3.4` — https://nextjs.org
+- `ioredis@5.11.1`
+- `jsonata@2.2.2` — http://jsonata.org/
+- `marked@17.0.6` — https://marked.js.org
+- `next@16.3.6` — https://nextjs.org
 - `quickjs-emscripten@0.32.0`
-- `react@19.2.3` — https://react.dev/
-- `react-dom@19.2.3` — https://react.dev/
+- `react@19.3.0` — https://react.dev/
+- `react-dom@19.3.0` — https://react.dev/
 - `react-markdown@10.1.0`
 - `remark-gfm@4.0.1`
 - `sanitize-html@2.17.7` — https://github.com/apostrophecms/apostrophe/tree/main/packages/sanitize-html#readme
@@ -45,10 +45,10 @@ the dependencies rather than this file.
 
 ## Apache-2.0 — 16
 
-- `@anthropic-ai/sandbox-runtime@0.0.75` — https://github.com/anthropic-experimental/sandbox-runtime#readme
+- `@anthropic-ai/sandbox-runtime@0.0.77` — https://github.com/anthropics/sandbox-runtime#readme
 - `@google-cloud/kms@5.7.0` — https://github.com/googleapis/google-cloud-node/tree/main/packages/google-cloud-kms
-- `@google-cloud/storage@7.18.0`
-- `@google/genai@2.8.0` — https://github.com/googleapis/js-genai#readme
+- `@google-cloud/storage@7.22.0` — https://github.com/googleapis/google-cloud-node/tree/main/handwritten/storage
+- `@google/genai@2.24.0` — https://github.com/googleapis/js-genai#readme
 - `@opentelemetry/api@1.9.1` — https://github.com/open-telemetry/opentelemetry-js/tree/main/api
 - `@opentelemetry/exporter-metrics-otlp-http@0.222.0` — https://github.com/open-telemetry/opentelemetry-js/tree/main/experimental/packages/opentelemetry-exporter-metrics-otlp-http
 - `@opentelemetry/exporter-trace-otlp-http@0.222.0` — https://github.com/open-telemetry/opentelemetry-js/tree/main/experimental/packages/exporter-trace-otlp-http
@@ -58,30 +58,30 @@ the dependencies rather than this file.
 - `@opentelemetry/sdk-metrics@2.11.0` — https://github.com/open-telemetry/opentelemetry-js/tree/main/packages/sdk-metrics
 - `@opentelemetry/sdk-trace-node@2.11.0` — https://github.com/open-telemetry/opentelemetry-js/tree/main/packages/opentelemetry-sdk-trace-node
 - `@opentelemetry/semantic-conventions@1.43.0` — https://github.com/open-telemetry/opentelemetry-js/tree/main/semantic-conventions
-- `drizzle-orm@0.45.2` — https://orm.drizzle.team
-- `livekit-client@2.17.3`
-- `openai@6.42.0`
+- `drizzle-orm@0.45.3` — https://orm.drizzle.team
+- `livekit-client@2.22.3`
+- `openai@6.49.0`
 
 ## (MPL-2.0 OR Apache-2.0) — 1
 
-- `dompurify@3.4.13` — https://github.com/cure53/DOMPurify
+- `dompurify@3.4.16` — https://github.com/cure53/DOMPurify
 
 ## BSD-2-Clause — 1
 
 - `dotenv@16.6.1` — https://github.com/motdotla/dotenv#readme
 
-## EPL-2.0 — 1
+## EPL-2.0 OR GPL-3.0-or-later — 1
 
-- `elkjs@0.11.0`
+- `elkjs@0.12.0`
 
 ## MIT-0 — 1
 
-- `nodemailer@9.1.1` — https://nodemailer.com/
+- `nodemailer@10.0.13` — https://nodemailer.com/
 
 ## Unlicense — 1
 
-- `postgres@3.4.8` — https://github.com/porsager/postgres
+- `postgres@3.4.9` — https://github.com/porsager/postgres
 
 ## ISC — 1
 
-- `zod-to-json-schema@3.25.1`
+- `zod-to-json-schema@3.25.2`
