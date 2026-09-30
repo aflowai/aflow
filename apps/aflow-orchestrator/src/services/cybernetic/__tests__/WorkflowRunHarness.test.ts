@@ -338,6 +338,8 @@ beforeEach(() => {
   // Default: nothing durable to restore from, so a cold waiter stays cold
   // unless a test stages a snapshot.
   mockRehydrateParkedStep.mockResolvedValue(false);
+  // Default: the pause lands, taking the run's first pause version.
+  mockLedgerPauseRun.mockResolvedValue(1);
   // Default: every ready task gets a slot. The arithmetic and its serialization
   // are covered in the runtime package; tests that care about the throttle
   // override this to return a partial reservation.
@@ -587,6 +589,21 @@ describe('onWorkflowTaskComplete', () => {
       };
       expect(storeArg.data.outcome).toBe('paused');
       expect(storeArg.data.payloadRef).toBe('inline:contract-ref=');
+    });
+
+    it('paused duplicate on a run that has since resumed wakes no waiter', async () => {
+      mockListTaskRows.mockResolvedValueOnce([buildTaskRow({ status: 'paused' })]);
+      mockLoadRunById
+        .mockResolvedValueOnce(buildRunDetail([buildTaskRow({ status: 'paused' })], 'paused'))
+        .mockResolvedValueOnce(buildRunDetail([buildTaskRow({ status: 'paused' })], 'running'));
+
+      await onWorkflowTaskComplete(deps, {
+        tenantId: TENANT,
+        workflowExecution: { runId: RUN_ID, taskId: TASK_ID, attempt: 1 },
+        outcome: { kind: 'paused', contractRef: 'inline:incoming=' },
+      });
+
+      expect(mockLoadPendingWaiters).not.toHaveBeenCalled();
     });
   });
 

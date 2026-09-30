@@ -558,6 +558,67 @@ describe('resolveRefsRecursive', () => {
     expect(resolved).toEqual({ data: 42 });
   });
 
+  describe('a reference nested in a run input', () => {
+    const commissionOutput = { patch: 'diff --git a/x b/x\n', summary: 'one file' };
+    const state = makeState({
+      [TOOL_OUTPUT_INDEX_KEY]: inlineVar({ call_commission: 'gs://bucket/commission' }),
+    });
+    const ps = payloadStoreWith({ 'gs://bucket/commission': commissionOutput });
+
+    it('resolves in place, leaving the containing argument an object', async () => {
+      const input = {
+        slug: 'publish',
+        inputs: { patch: { $ref: 'output.call_commission/patch' }, repository: 'aflowai/aflow' },
+      };
+      const resolved = await resolveRefsRecursive(input, state, ps);
+      expect(resolved).toEqual({
+        slug: 'publish',
+        inputs: { patch: commissionOutput.patch, repository: 'aflowai/aflow' },
+      });
+    });
+
+    it('resolves in place when the model stringified the containing argument', async () => {
+      const input = {
+        slug: 'publish',
+        inputs: JSON.stringify({ patch: { $ref: 'output.call_commission/patch' } }),
+      };
+      const resolved = await resolveRefsRecursive(input, state, ps);
+      expect(resolved).toEqual({ slug: 'publish', inputs: { patch: commissionOutput.patch } });
+    });
+
+    it('replaces the whole argument when the whole argument is the reference', async () => {
+      const input = { slug: 'publish', inputs: { $ref: 'output.call_commission/patch' } };
+      const resolved = await resolveRefsRecursive(input, state, ps);
+      expect(resolved).toEqual({ slug: 'publish', inputs: commissionOutput.patch });
+    });
+
+    it('leaves text alone when a reference-shaped object in it names nothing that exists', async () => {
+      const fileContents = JSON.stringify({
+        example: { $ref: 'output.call_that_never_ran/patch' },
+        note: 'how a tool argument references an earlier output',
+      });
+      const input = { path: 'docs/refs.json', content: fileContents };
+      const resolved = await resolveRefsRecursive(input, state, ps);
+      expect(resolved).toEqual(input);
+    });
+
+    it('leaves the text whole when only some of its references resolve', async () => {
+      const memoryBody = JSON.stringify({
+        resolves: { $ref: 'output.call_commission/patch' },
+        missing: { $ref: 'state.not_a_variable' },
+      });
+      const input = { body: memoryBody };
+      const resolved = await resolveRefsRecursive(input, state, ps);
+      expect(resolved).toEqual(input);
+    });
+
+    it('leaves a JSON string that holds no reference as a string', async () => {
+      const input = { note: '{"$ref": "state.x", "other": 1}' };
+      const resolved = await resolveRefsRecursive(input, makeState({}), noopPayloadStore);
+      expect(resolved).toEqual(input);
+    });
+  });
+
   // Deep ${state.xxx} strings inside data payloads should NOT be resolved
   it('does NOT resolve ${state.xxx} strings deep inside nested data payloads', async () => {
     const state = makeState({ prompt: inlineVar('hello') });

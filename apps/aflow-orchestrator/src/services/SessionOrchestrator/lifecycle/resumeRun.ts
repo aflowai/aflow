@@ -167,6 +167,22 @@ export function createResumeRun(bindings: SessionOrchestratorBindings) {
       );
     }
 
+    // A step parked on a workflow run is woken by that run's waiter with the
+    // run's outcome; a resume would complete it with an operator's empty
+    // answer instead, and the run's own result would arrive for a step that
+    // has moved on.
+    if (runState.pauseType === 'external_dependency' && runState.waitingOnWorkflowRunId) {
+      const waitedRunId = runState.waitingOnWorkflowRunId;
+      throw new ControlConflictError(
+        'run_waiting_on_workflow_run',
+        `This conversation is waiting on workflow run ${waitedRunId}, not on an answer, and ` +
+          `resumes by itself when that run pauses or ends. To stop waiting, cancel the run ` +
+          `(workflow.run.cancel with runId ${waitedRunId}) or interrupt this conversation ` +
+          `(interruptRun).`,
+        { observedStatus: runState.status, currentStepExecutionId: params.stepExecutionId },
+      );
+    }
+
     const stepState = await getStepState(redis, params.tenantId, params.stepExecutionId);
     if (!stepState) throw new Error(`Step execution ${params.stepExecutionId} not found in Redis`);
 

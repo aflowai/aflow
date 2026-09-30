@@ -10,6 +10,7 @@ import {
   ToolSurfaceContextSchema,
   RoomExchangeEntrySchema,
   RoomSpeakerSchema,
+  WorkflowRunWakeupEntrySchema,
 } from '@aflow/schemas';
 
 function nonEmptyPromptSchema() {
@@ -150,6 +151,8 @@ export const AgentTurnInputSchema = z.object({
    * each message still lands exactly once.
    */
   newRoomMessages: z.array(RoomExchangeEntrySchema).optional(),
+  /** Outcomes of runs the session started without waiting, reported since. */
+  newRunWakeups: z.array(WorkflowRunWakeupEntrySchema).optional(),
   newToolResults: z.array(AiToolResultEnvelopeV1Schema).optional(),
   activeMemoryInjection: ActiveMemoryInjectionSchema.optional(),
   contextBlocks: z

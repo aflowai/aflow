@@ -36,13 +36,16 @@ import type { SessionEvent } from '@aflow/redis';
 import { buildWakeupCancellation } from '@aflow/schemas';
 import { getOrchestratorLogger, logOrchestratorError } from '../../../lib/orchestratorLogger.js';
 import { emitTerminalRunUpdate, loadRunByRunIdAcrossSpaces } from './helpers.js';
+import { deliverSessionWakeup } from './sessionWakeup.js';
 import type { HarnessDeps, NotifyWaitersArgs } from './types.js';
 
 export type { NotifyWaitersArgs } from './types.js';
 
 /**
  * For each pending waiter row, write a synthetic StepResultMessage that
- * wakes the waiter's session. Idempotency keys are keyed on the waiter
+ * wakes the waiter's parked step — or, for a session that started the run
+ * without waiting, append a `WorkflowRunWakeup` event to its conversation.
+ * Idempotency keys are keyed on the waiter
  * row id (not the session id) so multiple pause cycles in the same
  * session each get unique keys.
  */
@@ -94,7 +97,23 @@ export async function notifyWaiters(deps: HarnessDeps, args: NotifyWaitersArgs):
 
   for (const waiter of waiters) {
     try {
-      await wakeWaiter(deps, args, waiter, humanDecisions, runResult);
+      if (waiter.waiterStepExecutionId === null) {
+        // Its delivery records itself: a session waiter hears every pause and
+        // is retired only by the outcome that ends the run.
+        await wakeSessionWaiter(deps, args, waiter, humanDecisions, runResult);
+        continue;
+      }
+      await wakeWaiter(
+        deps,
+        args,
+        {
+          id: waiter.id,
+          waiterSessionId: waiter.waiterSessionId,
+          waiterStepExecutionId: waiter.waiterStepExecutionId,
+        },
+        humanDecisions,
+        runResult,
+      );
       await markWaiterNotified(deps.db, tenantIdStr, {
         waiterId: waiter.id,
         outcome: args.outcome,
@@ -116,6 +135,29 @@ export async function notifyWaiters(deps: HarnessDeps, args: NotifyWaitersArgs):
   }
 }
 
+async function wakeSessionWaiter(
+  deps: HarnessDeps,
+  args: NotifyWaitersArgs,
+  waiter: { id: string; waiterSessionId: string },
+  humanDecisions: readonly WorkflowRunWakeupHumanDecision[] | undefined,
+  runResult: WorkflowRunResult | undefined,
+): Promise<void> {
+  await deliverSessionWakeup(deps, {
+    tenantId: args.tenantId,
+    sessionId: waiter.waiterSessionId,
+    runId: args.runId,
+    waiterId: waiter.id,
+    report:
+      args.outcome === 'paused'
+        ? { outcome: 'paused', pauseVersion: args.pauseVersion }
+        : { outcome: args.outcome },
+    storeEnvelope: (eventId) =>
+      buildWaiterOutputRef(deps, args, waiter, humanDecisions, runResult, {
+        payloadSlot: eventId,
+      }),
+  });
+}
+
 async function wakeWaiter(
   deps: HarnessDeps,
   args: NotifyWaitersArgs,
@@ -123,7 +165,9 @@ async function wakeWaiter(
   humanDecisions: readonly WorkflowRunWakeupHumanDecision[] | undefined,
   runResult: WorkflowRunResult | undefined,
 ): Promise<void> {
-  let stepState = await getStepState(deps.redis, args.tenantId, waiter.waiterStepExecutionId);
+  const waiterStepExecutionId = waiter.waiterStepExecutionId;
+
+  let stepState = await getStepState(deps.redis, args.tenantId, waiterStepExecutionId);
   if (!stepState) {
     // The waiter parked longer than the hot-state TTL — the normal shape for a
     // run that pauses on a human task, since the parked session takes no
@@ -136,10 +180,10 @@ async function wakeWaiter(
       deps.db,
       args.tenantId as string,
       waiter.waiterSessionId,
-      waiter.waiterStepExecutionId,
+      waiterStepExecutionId,
     );
     if (rehydrated) {
-      stepState = await getStepState(deps.redis, args.tenantId, waiter.waiterStepExecutionId);
+      stepState = await getStepState(deps.redis, args.tenantId, waiterStepExecutionId);
     }
   }
   if (!stepState) {
@@ -154,7 +198,7 @@ async function wakeWaiter(
         runId: args.runId,
         waiterId: waiter.id,
         sessionId: waiter.waiterSessionId,
-        stepExecutionId: waiter.waiterStepExecutionId,
+        stepExecutionId: waiterStepExecutionId,
         outcome: args.outcome,
       },
     );
@@ -171,7 +215,7 @@ async function wakeWaiter(
   // Reset step from PAUSED → STARTED so the synthetic result transitions
   // it to SUCCEEDED cleanly.
   if (stepState.status === 'PAUSED') {
-    await updateStepState(deps.redis, args.tenantId, waiter.waiterStepExecutionId, {
+    await updateStepState(deps.redis, args.tenantId, waiterStepExecutionId, {
       sessionId: waiter.waiterSessionId,
       status: 'STARTED',
     });
@@ -231,7 +275,7 @@ async function wakeWaiter(
     messageVersion: 1,
     tenantId: args.tenantId,
     sessionId: waiter.waiterSessionId as SessionId,
-    stepExecutionId: waiter.waiterStepExecutionId as StepExecutionId,
+    stepExecutionId: waiterStepExecutionId as StepExecutionId,
     parentStepExecutionId: null,
     stepId: stepState.stepId as StepId,
     stepType: stepState.stepType as StepType,
@@ -270,6 +314,7 @@ async function buildWaiterOutputRef(
   waiter: { id: string },
   humanDecisions: readonly WorkflowRunWakeupHumanDecision[] | undefined,
   runResult: WorkflowRunResult | undefined,
+  options: { payloadSlot?: string } = {},
 ): Promise<PayloadRef> {
   // Typed against the published contract (`WorkflowRunWakeupEnvelopeSchema`,
   // runStart.ts) so the envelope Helmsman reads can't drift from the schema.
@@ -308,7 +353,7 @@ async function buildWaiterOutputRef(
   return deps.payloadStore.store({
     tenantId: args.tenantId,
     runId: args.runId as unknown as SessionId,
-    stepExecutionId: waiter.id as StepExecutionId,
+    stepExecutionId: (options.payloadSlot ?? waiter.id) as StepExecutionId,
     attempt: 1,
     kind: 'output',
     data: envelope,

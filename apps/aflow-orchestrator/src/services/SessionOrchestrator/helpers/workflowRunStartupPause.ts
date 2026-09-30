@@ -29,7 +29,7 @@ export interface PauseWorkflowRunAtStartupArgs {
  */
 export async function pauseWorkflowRunAtStartup(
   args: PauseWorkflowRunAtStartupArgs,
-): Promise<string> {
+): Promise<{ contractRef: string; pauseVersion: number }> {
   const tenantIdStr = args.tenantId as string;
   const contractRef = await storeWorkflowResumeContract({
     payloadStore: args.payloadStore,
@@ -41,8 +41,8 @@ export async function pauseWorkflowRunAtStartup(
   });
 
   const tenantCtx = createTenantContext(args.tenantId);
-  await withTenantSchema(args.db, tenantCtx, async (tx) => {
-    await pauseRun(
+  const pauseVersion = await withTenantSchema(args.db, tenantCtx, async (tx) => {
+    const tookVersion = await pauseRun(
       args.db,
       tenantIdStr,
       args.runId,
@@ -65,9 +65,13 @@ export async function pauseWorkflowRunAtStartup(
       },
       tx,
     );
+    return tookVersion;
   });
+  if (pauseVersion === null) {
+    throw new Error(`run ${args.runId} is no longer running; it cannot be paused for preflight`);
+  }
 
-  return contractRef;
+  return { contractRef, pauseVersion };
 }
 
 export interface HandoffStartupPreflightPauseArgs {
@@ -93,7 +97,7 @@ export async function handoffStartupPreflightPause(
 ): Promise<void> {
   let parked = false;
   try {
-    const contractRef = await pauseWorkflowRunAtStartup({
+    const { contractRef, pauseVersion } = await pauseWorkflowRunAtStartup({
       db: handoff.db,
       payloadStore: handoff.payloadStore,
       tenantId: handoff.tenantId,
@@ -123,31 +127,12 @@ export async function handoffStartupPreflightPause(
         tenantId: handoff.tenantId,
         runId: handoff.runId,
         outcome: 'paused',
+        pauseVersion,
         payloadRef: contractRef,
       },
     );
   } catch (err) {
-    const errMsg = err instanceof Error ? err.message : String(err);
-    getOrchestratorLogger().error(
-      `[handoffStartupPreflightPause] failed for run=${handoff.runId}: ${errMsg}`,
-      err instanceof Error ? err : undefined,
-      { tenantId: handoff.tenantIdStr, runId: handoff.runId, slug: handoff.slug },
-    );
-    try {
-      const { completeRun } = await import('../../cybernetic/WorkflowRunHarness.js');
-      await completeRun(
-        { db: handoff.db, redis: handoff.redis, payloadStore: handoff.payloadStore },
-        handoff.tenantId,
-        handoff.runId,
-        'failed',
-      );
-    } catch (completeErr) {
-      getOrchestratorLogger().error(
-        `[handoffStartupPreflightPause] completeRun(failed) recovery failed for run=${handoff.runId}`,
-        completeErr instanceof Error ? completeErr : undefined,
-        { tenantId: handoff.tenantIdStr, runId: handoff.runId },
-      );
-    }
+    const errMsg = await failRunAfterStartupPauseError(handoff, err);
     if (parked) {
       await wakeParkedStepWithFailure(
         handoff.args,
@@ -165,6 +150,67 @@ export async function handoffStartupPreflightPause(
       );
     }
   }
+}
+
+/**
+ * Pause the run with the contract for a caller that does not wait on it:
+ * nothing parks, and the pause reaches the session that started the run as a
+ * wakeup, like any later pause. A failure fails the run, which reaches it too.
+ */
+export async function pauseStartupPreflightForSessionWaiter(
+  handoff: Omit<HandoffStartupPreflightPauseArgs, 'args' | 'startTime'>,
+): Promise<void> {
+  try {
+    const { contractRef, pauseVersion } = await pauseWorkflowRunAtStartup({
+      db: handoff.db,
+      payloadStore: handoff.payloadStore,
+      tenantId: handoff.tenantId,
+      spaceId: handoff.spaceId,
+      runId: handoff.runId,
+      contract: handoff.contract,
+    });
+    const { notifyWaiters } = await import('../../cybernetic/harness/waiters.js');
+    await notifyWaiters(
+      { db: handoff.db, redis: handoff.redis, payloadStore: handoff.payloadStore },
+      {
+        tenantId: handoff.tenantId,
+        runId: handoff.runId,
+        outcome: 'paused',
+        pauseVersion,
+        payloadRef: contractRef,
+      },
+    );
+  } catch (err) {
+    await failRunAfterStartupPauseError(handoff, err);
+  }
+}
+
+async function failRunAfterStartupPauseError(
+  handoff: Omit<HandoffStartupPreflightPauseArgs, 'args' | 'startTime'>,
+  err: unknown,
+): Promise<string> {
+  const errMsg = err instanceof Error ? err.message : String(err);
+  getOrchestratorLogger().error(
+    `[startupPreflightPause] failed for run=${handoff.runId}: ${errMsg}`,
+    err instanceof Error ? err : undefined,
+    { tenantId: handoff.tenantIdStr, runId: handoff.runId, slug: handoff.slug },
+  );
+  try {
+    const { completeRun } = await import('../../cybernetic/WorkflowRunHarness.js');
+    await completeRun(
+      { db: handoff.db, redis: handoff.redis, payloadStore: handoff.payloadStore },
+      handoff.tenantId,
+      handoff.runId,
+      'failed',
+    );
+  } catch (completeErr) {
+    getOrchestratorLogger().error(
+      `[startupPreflightPause] completeRun(failed) recovery failed for run=${handoff.runId}`,
+      completeErr instanceof Error ? completeErr : undefined,
+      { tenantId: handoff.tenantIdStr, runId: handoff.runId },
+    );
+  }
+  return errMsg;
 }
 
 export function buildNeedsCredentialsStartupContract(

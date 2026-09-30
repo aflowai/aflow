@@ -42,6 +42,17 @@ vi.mock('@aflow/database', async (orig) => {
 });
 
 /**
+ * The run clock is read from the session hash. Left on the real connection,
+ * every turn waits out ioredis's reconnect backoff wherever no Redis is
+ * listening, and the waits compound across the file until turns time out.
+ * The clock itself is covered by its own describe below.
+ */
+vi.mock('@aflow/redis', async (orig) => ({
+  ...((await orig()) as Record<string, unknown>),
+  getRedisConnection: () => ({ hget: () => Promise.resolve(null) }),
+}));
+
+/**
  * Applet and pinned-connection tools reach the surface through their own
  * resolvers, which are separately tested. Standing in for them keeps the
  * fixtures deterministic while still proving the assembler wires each source

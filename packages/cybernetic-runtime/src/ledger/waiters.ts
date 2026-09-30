@@ -1,5 +1,5 @@
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { eq, and, lte, sql } from 'drizzle-orm';
+import { eq, and, isNotNull, isNull, lte, sql } from 'drizzle-orm';
 import type { TenantId } from '@aflow/schemas';
 import {
   createTenantContext,
@@ -45,6 +45,32 @@ export async function loadPendingWaitersForSession(
   });
 }
 
+/**
+ * The runs a session has a step parked on — its delegation waits. A session
+ * waiter is left out: it is pending for as long as a run started without
+ * waiting lives, while the session itself goes on working or rests at its
+ * prompt, so it says nothing about what the session is blocked on.
+ */
+export async function loadParkedStepWaitersForSession(
+  db: PostgresJsDatabase,
+  tenantId: string,
+  waiterSessionId: string,
+): Promise<WorkflowRunWaiterRow[]> {
+  const tenantCtx = createTenantContext(tenantId as TenantId);
+  return withTenantSchema(db, tenantCtx, async (tx) => {
+    return await tx
+      .select()
+      .from(workflowRunWaiters)
+      .where(
+        and(
+          eq(workflowRunWaiters.waiterSessionId, waiterSessionId),
+          isNotNull(workflowRunWaiters.waiterStepExecutionId),
+          isNull(workflowRunWaiters.notifiedAt),
+        ),
+      );
+  });
+}
+
 export async function loadWorkflowTaskByWorkerSession(
   db: PostgresJsDatabase,
   tenantId: string,
@@ -66,7 +92,8 @@ export async function loadWorkflowTaskByWorkerSession(
 }
 
 /**
- * Insert a waiter row for a Helmsman session parking on a run.
+ * Insert a waiter row for a Helmsman session parking on a run — or, without a
+ * step, for a session that started the run without waiting on it.
  *
  * Respects the partial unique index `waiters_one_active_per_session`: if
  * an active waiter (notified_at IS NULL) already exists for (run, session),
@@ -75,21 +102,39 @@ export async function loadWorkflowTaskByWorkerSession(
  * being notified first — caller's responsibility to handle (e.g.,
  * markWaiterNotified before re-add, or treat as no-op).
  *
+ * The one exception it resolves itself: a session that started the run
+ * without waiting and now parks a step on it. Its session-scoped row is
+ * released in the same transaction as the step's row is inserted, so the
+ * session is never left waiting on the run twice, or not at all.
+ *
  * @returns the inserted row's id.
  */
 export async function addWaiter(
   db: PostgresJsDatabase,
   tenantId: string,
-  args: { runId: string; waiterSessionId: string; waiterStepExecutionId: string },
+  args: { runId: string; waiterSessionId: string; waiterStepExecutionId?: string },
 ): Promise<string> {
   const tenantCtx = createTenantContext(tenantId as TenantId);
   return withTenantSchema(db, tenantCtx, async (tx) => {
+    if (args.waiterStepExecutionId !== undefined) {
+      await tx
+        .update(workflowRunWaiters)
+        .set({ notifiedAt: new Date(), notifiedOutcome: 'handed_off' })
+        .where(
+          and(
+            eq(workflowRunWaiters.runId, args.runId),
+            eq(workflowRunWaiters.waiterSessionId, args.waiterSessionId),
+            isNull(workflowRunWaiters.waiterStepExecutionId),
+            isNull(workflowRunWaiters.notifiedAt),
+          ),
+        );
+    }
     const rows = await tx
       .insert(workflowRunWaiters)
       .values({
         runId: args.runId,
         waiterSessionId: args.waiterSessionId,
-        waiterStepExecutionId: args.waiterStepExecutionId,
+        waiterStepExecutionId: args.waiterStepExecutionId ?? null,
       })
       .returning({ id: workflowRunWaiters.id });
     const id = rows[0]?.id;
@@ -118,6 +163,64 @@ export async function markWaiterNotified(
       .set({ notifiedAt: new Date(), notifiedOutcome: args.outcome })
       .where(and(eq(workflowRunWaiters.id, args.waiterId), sql`notified_at IS NULL`));
   });
+}
+
+/**
+ * What a session waiter is told: a pause, by the `pause_version` that pause
+ * took, or the outcome that ended its wait.
+ */
+export type SessionWaiterReport =
+  | { outcome: 'paused'; pauseVersion: number }
+  | { outcome: Exclude<WaiterNotifiedOutcome, 'paused'> };
+
+/** A terminal outcome retires the waiter, so it is heard once and needs no pause to tell it apart. */
+export function sessionWaiterDeliveryKey(report: SessionWaiterReport): string {
+  return report.outcome === 'paused' ? `paused:${String(report.pauseVersion)}` : report.outcome;
+}
+
+/**
+ * Take the delivery of one report to a session waiter, inside the caller's
+ * transaction so the wakeup it guards commits with it or not at all.
+ *
+ * A session waiter stays pending across pauses — it must still hear how the
+ * run ends — so it is the recorded key, not `notified_at`, that makes a
+ * re-driven or concurrent notification of a pause find nothing to deliver.
+ * The key only moves forward: a notify of a pause no later than the one
+ * recorded is refused as delivered, however late it arrives. A terminal
+ * outcome retires the waiter in the same statement.
+ *
+ * @returns whether this call owns the delivery.
+ */
+export async function claimSessionWaiterDelivery(
+  tx: PostgresJsDatabase,
+  args: { waiterId: string; report: SessionWaiterReport },
+): Promise<boolean> {
+  const { report } = args;
+  const lastDeliveredKey = sessionWaiterDeliveryKey(report);
+  const pending = and(
+    eq(workflowRunWaiters.id, args.waiterId),
+    isNull(workflowRunWaiters.waiterStepExecutionId),
+    isNull(workflowRunWaiters.notifiedAt),
+  );
+  // A terminal key retires the waiter, so a pending one holds a pause's or none.
+  const deliveredPause = sql`substring(${workflowRunWaiters.lastDeliveredKey} from '^paused:([0-9]+)$')::int`;
+  const rows = await tx
+    .update(workflowRunWaiters)
+    .set(
+      report.outcome === 'paused'
+        ? { lastDeliveredKey }
+        : { lastDeliveredKey, notifiedAt: new Date(), notifiedOutcome: report.outcome },
+    )
+    .where(
+      report.outcome === 'paused'
+        ? and(
+            pending,
+            sql`(${workflowRunWaiters.lastDeliveredKey} IS NULL OR ${deliveredPause} < ${report.pauseVersion})`,
+          )
+        : pending,
+    )
+    .returning({ id: workflowRunWaiters.id });
+  return rows.length > 0;
 }
 
 /**

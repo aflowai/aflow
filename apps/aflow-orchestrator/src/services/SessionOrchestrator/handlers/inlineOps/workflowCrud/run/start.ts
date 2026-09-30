@@ -6,7 +6,7 @@ import {
   resolveWorkflowForStart,
   WorkflowRevisionDriftError,
 } from '@aflow/database';
-import type { Campaign, WorkflowRunStartInput } from '@aflow/schemas';
+import type { Campaign, WorkflowResumeContract, WorkflowRunStartInput } from '@aflow/schemas';
 import {
   normalizeInstructionsForStorage,
   deriveGoalRef,
@@ -40,7 +40,7 @@ import {
 } from '@aflow/cybernetic-runtime';
 import { getOrchestratorLogger } from '../../../../../../lib/orchestratorLogger.js';
 import type { InlineHandlerArgs } from '../../types.js';
-import { emitStepError, parkInlineStepForWorkflowWait } from '../../helpers.js';
+import { emitStepError, emitStepSuccess, parkInlineStepForWorkflowWait } from '../../helpers.js';
 import { requireSpaceId } from '../../spaceScope.js';
 import { createContractedCampaign } from '../campaign/shared.js';
 import { gateWorkflowOperationGrants } from '../../../../helpers/workflowGrantGate.js';
@@ -53,6 +53,7 @@ import {
   buildNeedsCapabilityStartupContract,
   buildNeedsCredentialsStartupContract,
   handoffStartupPreflightPause,
+  pauseStartupPreflightForSessionWaiter,
 } from '../../../../helpers/workflowRunStartupPause.js';
 import { getRepos, workflowPath } from '../shared.js';
 import { wakeParkedStepWithFailure } from './wakeParked.js';
@@ -654,7 +655,10 @@ export async function handleWorkflowRunStart(
   // `rehydrate`) carries no fixed binding; the credentials preflight resolves it to
   // the run's pinned `connectionBindingId` so the real connection's credential is
   // checked — exactly what dispatch will use. The capability preflight keys on
-  // `capabilityId` (binding-agnostic), so it reads the raw workflow.
+  // `capabilityId` (binding-agnostic), so it reads the raw workflow. A failing
+  // preflight pauses the run, never the caller: how the caller hears the pause
+  // depends on its wait mode, decided below.
+  let startupPause: WorkflowResumeContract | undefined;
   const credentialsPreflight = await checkWorkflowCredentialsPreflight(
     db,
     args.context.tenantId,
@@ -663,46 +667,25 @@ export async function handleWorkflowRunStart(
     connectionBindingId,
   );
   if (!credentialsPreflight.ok) {
-    await handoffStartupPreflightPause({
-      args,
-      db,
-      redis: args.redis,
-      payloadStore: args.payloadStore,
-      tenantId: args.context.tenantId,
-      tenantIdStr,
-      spaceId,
+    startupPause = buildNeedsCredentialsStartupContract(
       runId,
-      slug,
-      startTime,
-      contract: buildNeedsCredentialsStartupContract(
-        runId,
-        toBlockedBindingsForResumeContract(credentialsPreflight.missingBindings),
-      ),
-    });
-    return;
+      toBlockedBindingsForResumeContract(credentialsPreflight.missingBindings),
+    );
   }
 
-  const capabilityPreflight = await checkWorkflowCapabilityPreflight(
-    db,
-    args.context.tenantId,
-    workflow,
-    spaceId,
-  );
-  if (!capabilityPreflight.ok) {
-    await handoffStartupPreflightPause({
-      args,
+  if (startupPause === undefined) {
+    const capabilityPreflight = await checkWorkflowCapabilityPreflight(
       db,
-      redis: args.redis,
-      payloadStore: args.payloadStore,
-      tenantId: args.context.tenantId,
-      tenantIdStr,
+      args.context.tenantId,
+      workflow,
       spaceId,
-      runId,
-      slug,
-      startTime,
-      contract: buildNeedsCapabilityStartupContract(runId, capabilityPreflight.missingCapabilities),
-    });
-    return;
+    );
+    if (!capabilityPreflight.ok) {
+      startupPause = buildNeedsCapabilityStartupContract(
+        runId,
+        capabilityPreflight.missingCapabilities,
+      );
+    }
   }
 
   /**
@@ -728,57 +711,155 @@ export async function handleWorkflowRunStart(
     }
   };
 
-  // Plan 302: the Runner's grant compiles from the same actor context as this
-  // session's, so this session's grant is the authority the run will execute
-  // under — full fidelity including per-user grants and the tenant ceiling.
-  // Checked over the MATERIALIZED tasks (the executed artifact, Plan 190):
-  // an operation the grant refuses would otherwise vanish from the Runner's
-  // toolbox silently, mid-run, on every attempt. The stored copy can be up
-  // to its TTL stale in both directions — an operator who just performed the
-  // remediation this pause names must not be paused again by the old compile
-  // — so run start renews it against current policy first.
-  const grantGate = await gateWorkflowOperationGrants({
-    db,
-    redis: args.redis,
-    tenantId: args.context.tenantId,
-    sessionId: args.context.runId,
-    workflow: derivedWorkflow,
-  });
-  if (grantGate.kind === 'authority_revoked' || grantGate.kind === 'authority_unavailable') {
-    // `recordRunStart` already landed, so refusing by erroring alone would
-    // leave a `running` row with no tasks and no waiter — precisely the shape
-    // `reconcileOrphanedRuns` treats as recoverable, and it recovers by
-    // calling `dispatchNextOrTerminate`. Operation tasks bypass step gating,
-    // so that reconciliation would dispatch the very work this refused: a
-    // fail-closed decision reopening on a delay. Terminalize BEFORE reporting
-    // — the terminalize cannot throw out, so an `emitStepError` failure can
-    // never strand the run in `running`.
-    await terminalizeRefusedRun();
-    await (grantGate.kind === 'authority_revoked'
-      ? emitStepError(
-          args,
-          'RUN_ACCESS_REVOKED',
-          `Cannot start "${slug}": the access this run would execute under is no longer held — ${grantGate.detail}. ` +
-            `Ask a tenant admin to restore the principal's access to this space, then start the run again.`,
-          startTime,
-          'permission',
-          false,
-        )
-      : emitStepError(
-          args,
-          'RUN_ACCESS_UNAVAILABLE',
-          `Cannot start "${slug}": this run carries an execution principal but its current access grant ` +
-            `could not be established — ${grantGate.detail}. This does not mean the access was withdrawn, ` +
-            `only that it could not be read. Starting meanwhile would dispatch its operation tasks on an ` +
-            `unverified snapshot, since they never pass step gating. Retry once the tenant's capability ` +
-            `configuration resolves.`,
-          startTime,
-          'permission',
-          false,
-        ));
+  if (startupPause === undefined) {
+    // Plan 302: the Runner's grant compiles from the same actor context as this
+    // session's, so this session's grant is the authority the run will execute
+    // under — full fidelity including per-user grants and the tenant ceiling.
+    // Checked over the MATERIALIZED tasks (the executed artifact, Plan 190):
+    // an operation the grant refuses would otherwise vanish from the Runner's
+    // toolbox silently, mid-run, on every attempt. The stored copy can be up
+    // to its TTL stale in both directions — an operator who just performed the
+    // remediation this pause names must not be paused again by the old compile
+    // — so run start renews it against current policy first.
+    const grantGate = await gateWorkflowOperationGrants({
+      db,
+      redis: args.redis,
+      tenantId: args.context.tenantId,
+      sessionId: args.context.runId,
+      workflow: derivedWorkflow,
+    });
+    if (grantGate.kind === 'authority_revoked' || grantGate.kind === 'authority_unavailable') {
+      // `recordRunStart` already landed, so refusing by erroring alone would
+      // leave a `running` row with no tasks and no waiter — precisely the shape
+      // `reconcileOrphanedRuns` treats as recoverable, and it recovers by
+      // calling `dispatchNextOrTerminate`. Operation tasks bypass step gating,
+      // so that reconciliation would dispatch the very work this refused: a
+      // fail-closed decision reopening on a delay. Terminalize BEFORE reporting
+      // — the terminalize cannot throw out, so an `emitStepError` failure can
+      // never strand the run in `running`.
+      await terminalizeRefusedRun();
+      await (grantGate.kind === 'authority_revoked'
+        ? emitStepError(
+            args,
+            'RUN_ACCESS_REVOKED',
+            `Cannot start "${slug}": the access this run would execute under is no longer held — ${grantGate.detail}. ` +
+              `Ask a tenant admin to restore the principal's access to this space, then start the run again.`,
+            startTime,
+            'permission',
+            false,
+          )
+        : emitStepError(
+            args,
+            'RUN_ACCESS_UNAVAILABLE',
+            `Cannot start "${slug}": this run carries an execution principal but its current access grant ` +
+              `could not be established — ${grantGate.detail}. This does not mean the access was withdrawn, ` +
+              `only that it could not be read. Starting meanwhile would dispatch its operation tasks on an ` +
+              `unverified snapshot, since they never pass step gating. Retry once the tenant's capability ` +
+              `configuration resolves.`,
+            startTime,
+            'permission',
+            false,
+          ));
+      return;
+    }
+    if (grantGate.kind === 'ungranted') {
+      startupPause = buildNeedsCapabilityStartupContract(
+        runId,
+        grantGate.ungrantedOperations.map((op) => `${op.operationId} — ${op.reason}`),
+      );
+    }
+  }
+
+  const launch = async (): Promise<void> => {
+    try {
+      const { startRun } = await import('../../../../../cybernetic/WorkflowRunHarness.js');
+      await startRun(
+        { db, redis: args.redis, payloadStore: args.payloadStore },
+        {
+          tenantId: args.context.tenantId,
+          spaceId,
+          callingHelmsmanSessionId: args.context.runId,
+          callingHelmsmanStepExecutionId: args.stepExecutionId,
+          runId,
+          workflow: derivedWorkflow,
+        },
+      );
+    } catch (err) {
+      // recordRunStart already landed; the run row is in 'running' and
+      // the waiter row exists. startRun's internal failure-collection
+      // path (Phase 2.2.2c) catches dispatchTask failures and drives
+      // applyFailureMode → notifyWaiters wakes the waiter.
+      // Anything that escapes here is an unexpected harness error.
+      // Drive completeRun(failed) so the waiter we just inserted gets
+      // notified.
+      const errMsg = err instanceof Error ? err.message : String(err);
+      getOrchestratorLogger().error(
+        `[handleWorkflowRunStart] startRun escaped its failure-collection path for run=${runId} — failing run`,
+        err instanceof Error ? err : undefined,
+        { tenantId: tenantIdStr, runId, slug, error: errMsg },
+      );
+      try {
+        const { completeRun } = await import('../../../../../cybernetic/WorkflowRunHarness.js');
+        await completeRun(
+          { db, redis: args.redis, payloadStore: args.payloadStore },
+          args.context.tenantId,
+          runId,
+          'failed',
+        );
+      } catch (completeErr) {
+        // Last-resort log; the sweeper recovers in Phase 5+.
+        getOrchestratorLogger().error(
+          `[handleWorkflowRunStart] completeRun(failed) recovery also failed for run=${runId}`,
+          completeErr instanceof Error ? completeErr : undefined,
+          { tenantId: tenantIdStr, runId, slug },
+        );
+      }
+    }
+  };
+
+  if (input.wait === 'none') {
+    // The session is the waiter and no step parks: the run's pauses — a
+    // startup preflight's included — and its end reach the conversation as
+    // events.
+    try {
+      const { addWaiter } = await import('@aflow/cybernetic-runtime');
+      await addWaiter(db, tenantIdStr, { runId, waiterSessionId: args.context.runId });
+    } catch (waiterErr) {
+      const errMsg = waiterErr instanceof Error ? waiterErr.message : String(waiterErr);
+      getOrchestratorLogger().error(
+        `[handleWorkflowRunStart] addWaiter failed for run=${runId}: ${errMsg}`,
+        waiterErr instanceof Error ? waiterErr : undefined,
+        { tenantId: tenantIdStr, runId, slug },
+      );
+      await terminalizeRefusedRun();
+      await emitStepError(
+        args,
+        'WORKFLOW_RUN_START_WAITER_INSERT_FAILED',
+        `Run ${runId} was not started: this conversation could not be registered to hear its outcome (${errMsg}).`,
+        startTime,
+      );
+      return;
+    }
+    await emitStepSuccess(args, { status: 'started', runId, slug }, startTime);
+    if (startupPause === undefined) {
+      await launch();
+    } else {
+      await pauseStartupPreflightForSessionWaiter({
+        db,
+        redis: args.redis,
+        payloadStore: args.payloadStore,
+        tenantId: args.context.tenantId,
+        tenantIdStr,
+        spaceId,
+        runId,
+        slug,
+        contract: startupPause,
+      });
+    }
     return;
   }
-  if (grantGate.kind === 'ungranted') {
+
+  if (startupPause !== undefined) {
     await handoffStartupPreflightPause({
       args,
       db,
@@ -790,10 +871,7 @@ export async function handleWorkflowRunStart(
       runId,
       slug,
       startTime,
-      contract: buildNeedsCapabilityStartupContract(
-        runId,
-        grantGate.ungrantedOperations.map((op) => `${op.operationId} — ${op.reason}`),
-      ),
+      contract: startupPause,
     });
     return;
   }
@@ -837,48 +915,5 @@ export async function handleWorkflowRunStart(
     return;
   }
 
-  try {
-    const { startRun } = await import('../../../../../cybernetic/WorkflowRunHarness.js');
-    await startRun(
-      { db, redis: args.redis, payloadStore: args.payloadStore },
-      {
-        tenantId: args.context.tenantId,
-        spaceId,
-        callingHelmsmanSessionId: args.context.runId,
-        callingHelmsmanStepExecutionId: args.stepExecutionId,
-        runId,
-        workflow: derivedWorkflow,
-      },
-    );
-  } catch (err) {
-    // recordRunStart already landed; the run row is in 'running' and
-    // the waiter row exists. startRun's internal failure-collection
-    // path (Phase 2.2.2c) catches dispatchTask failures and drives
-    // applyFailureMode → notifyWaiters wakes the PAUSED step.
-    // Anything that escapes here is an unexpected harness error.
-    // Drive completeRun(failed) so the waiter we just inserted gets
-    // notified.
-    const errMsg = err instanceof Error ? err.message : String(err);
-    getOrchestratorLogger().error(
-      `[handleWorkflowRunStart] startRun escaped its failure-collection path for run=${runId} — failing run`,
-      err instanceof Error ? err : undefined,
-      { tenantId: tenantIdStr, runId, slug, error: errMsg },
-    );
-    try {
-      const { completeRun } = await import('../../../../../cybernetic/WorkflowRunHarness.js');
-      await completeRun(
-        { db, redis: args.redis, payloadStore: args.payloadStore },
-        args.context.tenantId,
-        runId,
-        'failed',
-      );
-    } catch (completeErr) {
-      // Last-resort log; the sweeper recovers in Phase 5+.
-      getOrchestratorLogger().error(
-        `[handleWorkflowRunStart] completeRun(failed) recovery also failed for run=${runId}`,
-        completeErr instanceof Error ? completeErr : undefined,
-        { tenantId: tenantIdStr, runId, slug },
-      );
-    }
-  }
+  await launch();
 }

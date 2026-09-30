@@ -20,17 +20,14 @@ import {
   getSessionStateSafe,
   getStepState,
   markSeen,
+  mayWake,
   readPresenceForSessions,
-  type SessionHotState,
 } from '@aflow/redis';
 import type { SessionService } from '../services/sessions.js';
 import { buildActorContext } from '../utils/actorContext.js';
 import { classifyRunServiceError, ForbiddenError } from '../lib/errors.js';
 import { assertSessionSpaceAccess } from '../lib/sessionSpaceAccess.js';
 import { recordSpeechJoin } from '../lib/sessionMembership.js';
-
-/** The only pause a wake may advance: the agent waiting for what to do next. */
-const AGENT_TURN_OPERATION_ID = 'ai.agent.turn';
 
 const PostRoomMessageRequestSchema = z.object({
   body: z.string().min(1).max(ROOM_MESSAGE_MAX_LENGTH),
@@ -299,30 +296,6 @@ export function registerSessionRoomMessageRoutes(
       }
     },
   );
-}
-
-/**
- * Whether a wake may advance this run.
- *
- * A wake carries no answer — the message is in the room, and the agent reads
- * the room. That is only true when the thing the run is waiting for IS the
- * agent's next turn. Every other pause is waiting for a specific answer from a
- * specific person: an approval, a sub-agent's question, a credential. Resuming
- * one of those with an empty payload does not decline to answer it, it answers
- * it emptily — a decision-less resume of an approval step reads as approved,
- * so "hmm, not sure about this" would ship the thing it doubted. Those pauses
- * keep their own rails; a wake leaves them exactly as it found them.
- */
-export function mayWake(
-  runState: Pick<SessionHotState, 'status' | 'delegationPauseSource' | 'currentStepExecutionId'>,
-  pausedStep: { operationId: string } | null,
-): boolean {
-  if (runState.status !== 'PAUSED') return false;
-  // Waiting on a child's question: the resume is forwarded to the child, whose
-  // room is not this one, so the answer would never reach whoever asked.
-  if (runState.delegationPauseSource) return false;
-  if (!runState.currentStepExecutionId) return false;
-  return pausedStep?.operationId === AGENT_TURN_OPERATION_ID;
 }
 
 /**

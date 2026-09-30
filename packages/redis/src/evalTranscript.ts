@@ -207,6 +207,7 @@ export async function buildTranscript(
       case 'SessionRetried':
       case 'SessionStalled':
       case 'RoomMessage':
+      case 'WorkflowRunWakeup':
       case 'ControlRejected':
       case 'AuthorityLost':
       case 'GuardrailViolation':
