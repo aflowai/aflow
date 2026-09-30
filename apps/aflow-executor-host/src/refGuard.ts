@@ -41,6 +41,13 @@ function shellQuoted(text: string): string {
  * run's checkout shares. A repository the hook cannot identify is treated as
  * the folder's.
  *
+ * The repository's path is whatever the run's git was told, so it reaches `cd`
+ * only as `./`-prefixed or absolute: a name like `-P` is then no option and no
+ * `cd -`, and `CDPATH` — cleared as well, since a `cd` through it also prints —
+ * is never searched. `IFS` is set to the single space git separates each
+ * update's fields with, because `read` splits on it and an inherited one could
+ * keep a ref name from matching.
+ *
  * Read from stdin whole before deciding: git writes every update of the
  * transaction to the hook, and a hook that stops reading part-way can leave it
  * writing into a closed pipe.
@@ -48,7 +55,14 @@ function shellQuoted(text: string): string {
 export function referenceTransactionHook(guardedCommonDir: string): string {
   return `#!/bin/sh
 [ "$1" = prepared ] || { cat >/dev/null; exit 0; }
-common=$(git rev-parse --git-common-dir 2>/dev/null) && common=$(cd "$common" 2>/dev/null && pwd -P) || common=
+unset CDPATH
+IFS=' '
+common=$(git rev-parse --git-common-dir 2>/dev/null) || common=
+case $common in
+  '' | /*) ;;
+  *) common=./$common ;;
+esac
+[ -n "$common" ] && common=$(cd -P -- "$common" 2>/dev/null && pwd -P) || common=
 [ -z "$common" ] || [ "$common" = ${shellQuoted(guardedCommonDir)} ] || { cat >/dev/null; exit 0; }
 refused=
 while read -r old new ref; do

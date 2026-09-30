@@ -5,7 +5,7 @@
  * still works.
  */
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -33,13 +33,26 @@ async function operatorGit(...args: string[]): Promise<string> {
   return (await run('git', ['-C', repo, ...args])).stdout.trim();
 }
 
-async function agentGit(...args: string[]): Promise<{ ok: boolean; stderr: string }> {
+interface AgentOutcome {
+  ok: boolean;
+  stderr: string;
+}
+
+async function agentGitIn(
+  cwd: string,
+  env: Record<string, string>,
+  ...args: string[]
+): Promise<AgentOutcome> {
   try {
-    const { stderr } = await run('git', args, { cwd: checkout, env: harnessEnv });
+    const { stderr } = await run('git', args, { cwd, env: { ...harnessEnv, ...env } });
     return { ok: true, stderr };
   } catch (error) {
     return { ok: false, stderr: String((error as { stderr?: unknown }).stderr ?? '') };
   }
+}
+
+async function agentGit(...args: string[]): Promise<AgentOutcome> {
+  return await agentGitIn(checkout, {}, ...args);
 }
 
 beforeEach(async () => {
@@ -98,6 +111,85 @@ describe("the agent's git cannot move a branch or a tag", () => {
     const outcome = await agentGit('-C', repo, 'branch', 'planted');
     expect(outcome.ok).toBe(false);
     expect(outcome.stderr).toContain(`Refused \`refs/heads/planted\`: ${REFUSAL}`);
+  });
+
+  describe('however the path to the repository is spelled', () => {
+    let elsewhere: string;
+
+    beforeEach(async () => {
+      elsewhere = await mkdtemp(join(tmpdir(), 'aflow-guard-elsewhere-'));
+    });
+
+    afterEach(async () => {
+      await rm(elsewhere, { recursive: true, force: true });
+    });
+
+    interface Invocation {
+      cwd: string;
+      env?: Record<string, string>;
+      args?: string[];
+    }
+
+    const spellings: [string, () => Promise<Invocation>][] = [
+      ["the run's checkout", () => Promise.resolve({ cwd: checkout })],
+      [
+        "a subdirectory of the run's checkout",
+        async () => {
+          await mkdir(join(checkout, 'nested', 'deeper'), { recursive: true });
+          return { cwd: join(checkout, 'nested', 'deeper') };
+        },
+      ],
+      ["the folder's own checkout", () => Promise.resolve({ cwd: repo })],
+      [
+        'a relative GIT_DIR of ../.git',
+        async () => {
+          await mkdir(join(repo, 'nested'), { recursive: true });
+          return { cwd: join(repo, 'nested'), env: { GIT_DIR: '../.git' } };
+        },
+      ],
+      [
+        '--git-dir',
+        () => Promise.resolve({ cwd: elsewhere, args: [`--git-dir=${join(repo, '.git')}`] }),
+      ],
+      [
+        'a symlink to the repository',
+        async () => {
+          await symlink(repo, join(elsewhere, 'linked'));
+          return { cwd: join(elsewhere, 'linked') };
+        },
+      ],
+      [
+        "a GIT_DIR naming the checkout's entry under .git/worktrees",
+        async () => {
+          const gitDir = (await run('git', ['-C', checkout, 'rev-parse', '--absolute-git-dir']))
+            .stdout;
+          return { cwd: elsewhere, env: { GIT_DIR: gitDir.trim() } };
+        },
+      ],
+      [
+        'a relative GIT_DIR that begins with a dash',
+        async () => {
+          await symlink(join(repo, '.git'), join(elsewhere, '-P'));
+          return { cwd: elsewhere, env: { GIT_DIR: '-P' } };
+        },
+      ],
+      [
+        'a CDPATH that holds another .git',
+        async () => {
+          await mkdir(join(elsewhere, '.git'));
+          return { cwd: repo, env: { CDPATH: elsewhere } };
+        },
+      ],
+    ];
+
+    it.each(spellings)('refuses through %s', async (_spelling, arrange) => {
+      const { cwd, env = {}, args = [] } = await arrange();
+      const before = await snapshotRefs(repo);
+      const outcome = await agentGitIn(cwd, env, ...args, 'branch', 'planted');
+      expect(outcome.ok).toBe(false);
+      expect(outcome.stderr).toContain(`Refused \`refs/heads/planted\`: ${REFUSAL}`);
+      expect(await snapshotRefs(repo)).toEqual(before);
+    });
   });
 
   it('leaves the same command to the operator, whose git carries no guard', async () => {

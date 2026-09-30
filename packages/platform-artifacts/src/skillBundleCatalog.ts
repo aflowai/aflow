@@ -204,14 +204,14 @@ const LOCAL_CODE_REVIEW_BUNDLE: SkillBundleInput = {
 
 const LOCAL_PUBLISH_BUNDLE: SkillBundleInput = {
   bundleId: 'local-publish' as SkillBundleId,
-  version: 4,
+  version: 5,
   name: 'Local Publish',
   tagline:
     'Commit a patch onto a branch of a connected repository, approve, and open the pull request.',
   description: `Installs **Publish Local Changes** — the step after a commission: a patch becomes a commit on a branch of a repository connected as a folder — a new one, or the branch a fix was commissioned from, and then, once approved, a pushed branch and an open pull request.
 
 **What it installs**:
-- The **Publish Local Changes** skill — the patch is committed in a detached worktree at the folder's last commit, so the working tree is untouched; the run then waits for approval, and only after it does the branch reach \`origin\` and the pull request open.
+- The **Publish Local Changes** skill — the patch is committed in a detached worktree, so the working tree is untouched: a fresh branch starts at the commission's base, and the branch a fix was commissioned from is appended to at its head; the run then waits for approval, and only after it does the branch reach \`origin\` and the pull request open.
 
 **After install**: connect the repository as a folder allowing pushes under a branch prefix, and bind the GitHub connector for the space. Then hand the skill a commission's \`patchRef\`, a branch name under that prefix and a title.`,
   tags: ['coding', 'publish', 'git', 'local', 'developer-tools'],
