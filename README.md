@@ -1,13 +1,15 @@
 # Aflow
 
-**An agentic execution platform you run yourself.** Aflow runs agents that do real
-work — they call your APIs, execute code in sandboxes, drive a coding harness on
-your own machine, keep durable memory, and pause for your approval. Every model
-decision and every tool call is a first-class execution step you can inspect, so a
-run is never a black box.
+**Your AI agents — and your coding agents — as workflows you can see, schedule and
+approve, on your own machine.**
 
-This repository is the **local edition**: one owner, one tenant, on infrastructure
-you control. No account, no licence server, and nothing phones home.
+Aflow runs agents that call your APIs, run code in sandboxes, keep memory, and
+pause for your approval. It can also hand work to the coding agent you already
+use — Claude Code or OpenCode, with Codex next — as one step among the rest. Every
+model decision and every tool call is a step you can inspect.
+
+This repository is the **local edition**: one owner, on infrastructure you control.
+No account, no licence server, and nothing phones home.
 
 > **Status:** active development. Interfaces and schemas change without deprecation
 > shims.
@@ -23,6 +25,10 @@ git clone https://github.com/aflowai/aflow.git && cd aflow
 docker compose -f docker-compose.local.yml up -d --build
 open http://127.0.0.1:3001
 ```
+
+Or skip the build: the [latest release](https://github.com/aflowai/aflow/releases/latest)
+has a Compose bundle that pulls the published image — unpack it and run
+`docker compose up -d` in its folder.
 
 There is no login — reaching the web app on loopback identifies you as the owner.
 First run walks you through connecting a model provider; the key is stored
@@ -40,44 +46,54 @@ secrets, backup and restore, upgrades, and sandboxed code execution.
 
 ---
 
+## Coding agents, as steps
+
+Connect a folder, and Aflow can give work in it to the coding harness installed on
+your machine — signed in as you, with your toolchain around it.
+
+- **Ask in chat.** An Aflow agent hands the task to the harness and reads back the
+  result.
+- **Or make it a step in a skill.** The harness becomes one node in a workflow,
+  alongside your APIs, sandboxed code, memory and approvals — run on demand, on a
+  schedule, or when something happens.
+
+What Aflow adds to the harness on its own:
+
+- **A result you can use.** The task declares the shape of what it needs; the
+  answer is validated, and a run that ends without one fails and can be retried.
+- **Nothing lands without you.** The harness works in a checkout of its own, so
+  your uncommitted work is untouched. Changes arrive on a branch, you approve
+  before anything is pushed, and a connector opens the pull request.
+- **A record of the run.** Every step, with its cost, is there to inspect.
+
+> Every morning: read new GitHub issues → Claude Code drafts a fix on a branch →
+> tests run in the sandbox → you approve → the pull request opens.
+
+Setting up a harness is in the operator guide under
+[Putting a coding agent to work](docs/dev/local-appliance.md#putting-a-coding-agent-to-work).
+
+---
+
 ## What it does
 
-- **Agents that delegate.** An agent turn is a decision step — the model picks a
-  tool, the orchestrator schedules it as a real step, and the result loops back.
-  Agents hand off to sub-agents and resume child sessions. One client covers
-  OpenAI, Anthropic, Google and OpenRouter with native tool calling, prompt
-  caching, reasoning continuity across tool calls, and per-step cost accounting.
-- **Work on your own machine.** Connect a folder and the agent can commission a
-  coding harness — Claude Code or OpenCode — to work in it, either on demand or as
-  a step inside a skill. The task declares the shape of the result it needs, so
-  what comes back is validated rather than scraped from a transcript, and a run
-  that ends without one is a failure the agent can retry. Patches land on a branch
-  for you to approve; your git pushes, and a connector opens the pull request.
-- **Skills that stay valid.** A skill is a procedure an agent has learned — a task
-  graph with declared inputs, typed channels between tasks, and evals. Validity is
-  recomputed whenever a skill is read or run, so tightening a rule retroactively
-  surfaces every skill that breaks it instead of letting it execute.
-- **Integrations behind one surface.** Discover, promote, bind, call. Around two
-  dozen connectors ship curated; anything else arrives by OpenAPI import.
-  Credentials live in space-scoped bindings — never inline in a workflow — with
-  OAuth 2.1 + PKCE and per-binding egress allowlists.
-- **Memory that is also a filesystem.** A document store with directories, hybrid
-  keyword-and-vector retrieval, `[[wikilinks]]` that derive a backlink index, and
-  queryable frontmatter. The same store mounts as the sandbox filesystem, so what
-  an agent writes from code it reads back as memory.
-- **Sandboxed compute.** Python, Node, Deno or Bash in ephemeral,
-  network-isolated containers, with warm sessions and an ML image.
-- **You stay in the loop.** Steps pause for input, approval, or a direct question
-  and surface as typed cards with schema-driven forms. Every pause carries a resume
-  contract, so it always reaches whoever is waiting. Write risk is curated per API
-  endpoint, and a gated call parks _after_ its body is resolved — you approve the
-  exact bytes that will be sent.
-- **Generative UI and applets.** Agents produce design-system-bound React
-  components, validated and CSP-compiled before render. Stateful applets are
-  durable work objects with declared actions, where every write passes through one
-  gateway that bounds the patch.
-- **Scheduled and triggered.** Cron and interval schedules, inbound webhooks,
-  completion triggers, cancellation, and per-run cost summaries.
+- **Agents that delegate.** Agents choose their tools, hand work to sub-agents,
+  and pick up where they left off — on OpenAI, Anthropic, Google or OpenRouter,
+  with the cost of every step.
+- **Skills that stay valid.** A skill is a procedure an agent has learned, with
+  declared inputs and evals. It is checked again every time it runs, so a rule
+  tightened today flags every skill it breaks.
+- **Your tools, behind one surface.** Around two dozen connectors ship ready;
+  anything else comes in by OpenAPI import. Credentials stay in per-workspace
+  bindings, never inside a workflow.
+- **Memory that is also a filesystem.** Documents with folders, search and
+  backlinks — the same store an agent's code reads and writes.
+- **Sandboxed code.** Python, Node, Deno or Bash in network-isolated containers.
+- **You stay in the loop.** Steps ask for input or approval as cards in the app. A
+  risky API write waits until you approve the exact request that will be sent.
+- **Interfaces agents build.** Generated views and stateful applets, validated
+  before they render.
+- **Scheduled and triggered.** Cron schedules, webhooks, and runs that start when
+  another finishes.
 
 Roughly 180 operations across 20+ step types. Browse them under **Catalog** in the
 app, or run `yarn catalog:export`.
