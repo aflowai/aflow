@@ -19,7 +19,7 @@ import type { PayloadStore } from '@aflow/payload-store';
  */
 export async function readRunWakeups(
   db: PostgresJsDatabase,
-  payloadStore: Pick<PayloadStore, 'retrieve'>,
+  payloadStore: Pick<PayloadStore, 'retrieve' | 'exists'>,
   tenantId: TenantId,
   sessionId: string,
 ): Promise<WorkflowRunWakeupEntry[]> {
@@ -46,7 +46,7 @@ export async function readRunWakeups(
  */
 export async function hasUnreadRunWakeups(
   db: PostgresJsDatabase,
-  payloadStore: Pick<PayloadStore, 'retrieve'>,
+  payloadStore: Pick<PayloadStore, 'retrieve' | 'exists'>,
   tenantId: TenantId,
   sessionId: string,
   turnInputRef: string | undefined,
@@ -83,14 +83,25 @@ interface RunWakeupRow {
   payloadRef: string | null;
 }
 
+/**
+ * The wakeup a row carries, or null when it never can be handed over: its
+ * envelope is missing, has expired, or does not parse. A store that cannot
+ * answer right now throws instead — that says nothing about the envelope, and
+ * taking it for gone would mark the wakeup read and drop it for good.
+ */
 async function deliverableRunWakeup(
-  payloadStore: Pick<PayloadStore, 'retrieve'>,
+  payloadStore: Pick<PayloadStore, 'retrieve' | 'exists'>,
   row: RunWakeupRow,
 ): Promise<WorkflowRunWakeupEntry | null> {
   if (!row.payloadRef) return null;
-  const parsed = WorkflowRunWakeupEnvelopeSchema.safeParse(
-    await payloadStore.retrieve(row.payloadRef).catch(() => undefined),
-  );
+  let stored: unknown;
+  try {
+    stored = await payloadStore.retrieve(row.payloadRef);
+  } catch (err) {
+    if (err instanceof SyntaxError || !(await payloadStore.exists(row.payloadRef))) return null;
+    throw err;
+  }
+  const parsed = WorkflowRunWakeupEnvelopeSchema.safeParse(stored);
   return parsed.success ? { eventId: row.eventId, envelope: parsed.data } : null;
 }
 

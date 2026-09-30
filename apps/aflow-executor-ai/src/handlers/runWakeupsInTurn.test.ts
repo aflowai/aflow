@@ -6,6 +6,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { WorkflowRunWakeupEntry } from '@aflow/schemas';
 import { ConversationStateStore, type AiConversationStateV1 } from './conversationStateStore.js';
+import { appendRunWakeups } from './runWakeupsInTurn.js';
 
 function store(): ConversationStateStore {
   const state: AiConversationStateV1 = {
@@ -52,7 +53,7 @@ function userTexts(s: ConversationStateStore, from: number): string[] {
 describe('what the agent reads of its runs', () => {
   it('receives the envelope as data', () => {
     const s = store();
-    s.appendRunWakeups([wakeup('e1', 'run-a', 'completed')]);
+    appendRunWakeups(s, [wakeup('e1', 'run-a', 'completed')]);
 
     expect(userTexts(s, 0).map((text) => JSON.parse(text) as unknown)).toEqual([
       { workflowRunWakeup: { runId: 'run-a', outcome: 'completed', waiterId: 'waiter-run-a' } },
@@ -62,11 +63,11 @@ describe('what the agent reads of its runs', () => {
   it('delivers each wakeup once, however often the window is offered', () => {
     const s = store();
     const first = wakeup('e1', 'run-a', 'paused');
-    s.appendRunWakeups([first]);
+    appendRunWakeups(s, [first]);
     const seen = s.getHydratedAtoms().length;
     expect(seen).toBe(1);
 
-    s.appendRunWakeups([first, wakeup('e2', 'run-a', 'completed')]);
+    appendRunWakeups(s, [first, wakeup('e2', 'run-a', 'completed')]);
     const next = userTexts(s, seen).map(
       (text) => JSON.parse(text) as { workflowRunWakeup: unknown },
     );
@@ -77,7 +78,7 @@ describe('what the agent reads of its runs', () => {
 
   it('keeps two reports from one run as two, keyed by the event that carried each', () => {
     const s = store();
-    s.appendRunWakeups([wakeup('e1', 'run-a', 'paused'), wakeup('e2', 'run-a', 'paused')]);
+    appendRunWakeups(s, [wakeup('e1', 'run-a', 'paused'), wakeup('e2', 'run-a', 'paused')]);
 
     expect(userTexts(s, 0)).toHaveLength(2);
   });

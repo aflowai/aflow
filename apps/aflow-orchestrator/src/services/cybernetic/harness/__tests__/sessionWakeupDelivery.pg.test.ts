@@ -26,13 +26,10 @@ import {
   addWaiter,
   claimSessionWaiterDelivery,
   loadParkedStepWaitersForSession,
+  type SessionWaiterReport,
 } from '@aflow/cybernetic-runtime';
 import type { PayloadRef, TenantId } from '@aflow/schemas';
-import {
-  deliverSessionWakeup,
-  runWakeupEventId,
-  type SessionWakeupReport,
-} from '../sessionWakeup.js';
+import { deliverSessionWakeup, runWakeupEventId } from '../sessionWakeup.js';
 
 const DATABASE_URL = process.env['DATABASE_URL'];
 const TENANT_ID = 'a0000000-0000-0000-0000-000000000001' as TenantId;
@@ -94,7 +91,7 @@ describeDb('session waiter delivery (real DB)', () => {
 
   function deliver(
     waiter: { runId: string; sessionId: string; waiterId: string },
-    report: SessionWakeupReport,
+    report: SessionWaiterReport,
   ) {
     return deliverSessionWakeup(deps, {
       tenantId: TENANT_ID,
@@ -203,7 +200,10 @@ describeDb('session waiter delivery (real DB)', () => {
 
     await withTenantSchema(db, tenantCtx, async (tx) => {
       await expect(
-        claimSessionWaiterDelivery(tx, { waiterId: waiter.waiterId, deliveryKey: 'paused:1' }),
+        claimSessionWaiterDelivery(tx, {
+          waiterId: waiter.waiterId,
+          report: { outcome: 'paused', pauseVersion: 1 },
+        }),
       ).resolves.toBe(true);
       // Its UPDATE waits on this transaction's row lock, then re-reads the row
       // this transaction commits.
@@ -226,6 +226,10 @@ describeDb('session waiter delivery (real DB)', () => {
     expect(late.recorded).toBe(false);
     expect(await loggedWakeups(waiter.sessionId)).toHaveLength(2);
     expect(mockAppendSessionEvent).toHaveBeenCalledTimes(2);
+    expect(await waiterRow(waiter.waiterId)).toMatchObject({
+      last_delivered_key: 'paused:5',
+      notified_at: null,
+    });
   });
 
   it('the run’s end retires the waiter in the commit that logs it', async () => {

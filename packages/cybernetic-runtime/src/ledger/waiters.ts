@@ -166,36 +166,58 @@ export async function markWaiterNotified(
 }
 
 /**
- * Take the delivery of one outcome to a session waiter, inside the caller's
+ * What a session waiter is told: a pause, by the `pause_version` that pause
+ * took, or the outcome that ended its wait.
+ */
+export type SessionWaiterReport =
+  | { outcome: 'paused'; pauseVersion: number }
+  | { outcome: Exclude<WaiterNotifiedOutcome, 'paused'> };
+
+/** A terminal outcome retires the waiter, so it is heard once and needs no pause to tell it apart. */
+export function sessionWaiterDeliveryKey(report: SessionWaiterReport): string {
+  return report.outcome === 'paused' ? `paused:${String(report.pauseVersion)}` : report.outcome;
+}
+
+/**
+ * Take the delivery of one report to a session waiter, inside the caller's
  * transaction so the wakeup it guards commits with it or not at all.
  *
- * `deliveryKey` names the outcome and the run's pause version. A session waiter
- * stays pending across pauses — it must still hear how the run ends — so it is
- * the recorded key, not `notified_at`, that makes a re-driven or concurrent
- * notification of the same pause find nothing to deliver. A terminal outcome
- * retires the waiter in the same statement.
+ * A session waiter stays pending across pauses — it must still hear how the
+ * run ends — so it is the recorded key, not `notified_at`, that makes a
+ * re-driven or concurrent notification of a pause find nothing to deliver.
+ * The key only moves forward: a notify of a pause no later than the one
+ * recorded is refused as delivered, however late it arrives. A terminal
+ * outcome retires the waiter in the same statement.
  *
  * @returns whether this call owns the delivery.
  */
 export async function claimSessionWaiterDelivery(
   tx: PostgresJsDatabase,
-  args: { waiterId: string; deliveryKey: string; retireAs?: WaiterNotifiedOutcome },
+  args: { waiterId: string; report: SessionWaiterReport },
 ): Promise<boolean> {
+  const { report } = args;
+  const lastDeliveredKey = sessionWaiterDeliveryKey(report);
+  const pending = and(
+    eq(workflowRunWaiters.id, args.waiterId),
+    isNull(workflowRunWaiters.waiterStepExecutionId),
+    isNull(workflowRunWaiters.notifiedAt),
+  );
+  // A terminal key retires the waiter, so a pending one holds a pause's or none.
+  const deliveredPause = sql`substring(${workflowRunWaiters.lastDeliveredKey} from '^paused:([0-9]+)$')::int`;
   const rows = await tx
     .update(workflowRunWaiters)
-    .set({
-      lastDeliveredKey: args.deliveryKey,
-      ...(args.retireAs !== undefined
-        ? { notifiedAt: new Date(), notifiedOutcome: args.retireAs }
-        : {}),
-    })
+    .set(
+      report.outcome === 'paused'
+        ? { lastDeliveredKey }
+        : { lastDeliveredKey, notifiedAt: new Date(), notifiedOutcome: report.outcome },
+    )
     .where(
-      and(
-        eq(workflowRunWaiters.id, args.waiterId),
-        isNull(workflowRunWaiters.waiterStepExecutionId),
-        isNull(workflowRunWaiters.notifiedAt),
-        sql`${workflowRunWaiters.lastDeliveredKey} IS DISTINCT FROM ${args.deliveryKey}`,
-      ),
+      report.outcome === 'paused'
+        ? and(
+            pending,
+            sql`(${workflowRunWaiters.lastDeliveredKey} IS NULL OR ${deliveredPause} < ${report.pauseVersion})`,
+          )
+        : pending,
     )
     .returning({ id: workflowRunWaiters.id });
   return rows.length > 0;

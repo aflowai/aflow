@@ -17,7 +17,6 @@ import type {
   StepExecutionId,
   RoomExchangeEntry,
   RoomSpeaker,
-  WorkflowRunWakeupEntry,
 } from '@aflow/schemas';
 import {
   type AiClearingStateV1,
@@ -413,23 +412,6 @@ export class ConversationStateStore {
       if (this.state.seenSourceIds[sourceId]) continue;
 
       const message = textMessage('user', attributeToSpeaker(entry.body, entry));
-      const atom = this.createAtom('user_input', sourceId, message);
-      this.pendingAtoms.push(atom);
-      this.state.seenSourceIds[sourceId] = true;
-    }
-  }
-
-  /**
-   * Append what runs the session started without waiting have reported — as
-   * data, keyed by the event that carried each, so the recent window can be
-   * handed over every turn and each outcome still lands exactly once.
-   */
-  appendRunWakeups(entries: readonly WorkflowRunWakeupEntry[]): void {
-    for (const entry of entries) {
-      const sourceId = `run-wakeup:${entry.eventId}`;
-      if (this.state.seenSourceIds[sourceId]) continue;
-
-      const message = textMessage('user', JSON.stringify({ workflowRunWakeup: entry.envelope }));
       const atom = this.createAtom('user_input', sourceId, message);
       this.pendingAtoms.push(atom);
       this.state.seenSourceIds[sourceId] = true;

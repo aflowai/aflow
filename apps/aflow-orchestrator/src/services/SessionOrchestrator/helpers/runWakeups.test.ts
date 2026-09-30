@@ -41,7 +41,10 @@ describe('readRunWakeups', () => {
       'gs://b/completed': { runId: 'run-a', outcome: 'completed', waiterId: 'w1' },
       'gs://b/unreadable': { nothing: 'here' },
     };
-    const payloadStore = { retrieve: vi.fn(async (ref: string) => envelopes[ref]) };
+    const payloadStore = {
+      retrieve: vi.fn(async (ref: string) => envelopes[ref]),
+      exists: vi.fn(async (ref: string) => ref in envelopes),
+    };
 
     const entries = await readRunWakeups(
       {} as never,
@@ -71,7 +74,7 @@ describe('hasUnreadRunWakeups', () => {
   });
 
   it('is false for a session no run has reported to, without reading the turn', async () => {
-    const payloadStore = { retrieve: vi.fn() };
+    const payloadStore = { retrieve: vi.fn(), exists: vi.fn() };
     await expect(
       hasUnreadRunWakeups({} as never, payloadStore, 'tenant-1' as never, 's1', 'gs://b/turn'),
     ).resolves.toBe(false);
@@ -84,8 +87,9 @@ describe('hasUnreadRunWakeups', () => {
   function storeHolding(stored: Record<string, unknown>) {
     return {
       retrieve: vi.fn(async (ref: string) =>
-        ref in stored ? stored[ref] : Promise.reject(new Error(`${ref} expired`)),
+        ref in stored ? stored[ref] : Promise.reject(new Error(`Payload not found: ${ref}`)),
       ),
+      exists: vi.fn(async (ref: string) => ref in stored),
     };
   }
 
@@ -140,6 +144,37 @@ describe('hasUnreadRunWakeups', () => {
     await expect(
       hasUnreadRunWakeups({} as never, payloadStore, 'tenant-1' as never, 's1', 'gs://b/turn'),
     ).resolves.toBe(false);
+  });
+
+  it('does not count a wakeup whose stored bytes are not JSON', async () => {
+    rows.push({ eventId: 'e1', payloadRef: 'gs://b/garbled' });
+    const payloadStore = {
+      retrieve: vi.fn(async (ref: string) =>
+        ref === 'gs://b/turn' ? turnInput([]) : JSON.parse('{garbled'),
+      ),
+      exists: vi.fn(async () => true),
+    };
+    await expect(
+      hasUnreadRunWakeups({} as never, payloadStore, 'tenant-1' as never, 's1', 'gs://b/turn'),
+    ).resolves.toBe(false);
+  });
+
+  it('leaves a wakeup unread when the store cannot answer for its envelope', async () => {
+    rows.push({ eventId: 'e1', payloadRef: 'gs://b/1' });
+    const unavailable = new Error('ECONNRESET');
+    const payloadStore = {
+      retrieve: vi.fn(async (ref: string) =>
+        ref === 'gs://b/turn' ? turnInput([]) : Promise.reject(unavailable),
+      ),
+      exists: vi.fn(async () => true),
+    };
+
+    await expect(
+      hasUnreadRunWakeups({} as never, payloadStore, 'tenant-1' as never, 's1', 'gs://b/turn'),
+    ).rejects.toBe(unavailable);
+    await expect(readRunWakeups({} as never, payloadStore, 'tenant-1' as never, 's1')).rejects.toBe(
+      unavailable,
+    );
   });
 
   it('still counts a deliverable wakeup beside one that is not', async () => {

@@ -21,6 +21,8 @@ import {
   dispatchResume,
   rehydratePausedRun,
   resumeClaimsForStep,
+  sessionWaiterDeliveryKey,
+  type SessionWaiterReport,
 } from '@aflow/cybernetic-runtime';
 import type {
   OperationId,
@@ -31,7 +33,6 @@ import type {
   StepType,
   TenantId,
   TraceId,
-  WaiterNotifiedOutcome,
   WorkflowRunWakeupEventMetadata,
 } from '@aflow/schemas';
 import { hasUnreadRunWakeups } from '../../SessionOrchestrator/helpers/runWakeups.js';
@@ -54,14 +55,6 @@ const EMPTY_RESUME_INPUT_REF = `inline:${Buffer.from('{}').toString('base64')}`;
 export type SessionWakeupDelivery = 'woke' | 'deferred' | 'rate_limited' | 'coalesced' | 'read';
 
 /**
- * What a wakeup reports: a pause, by the `pause_version` that pause took, or
- * the outcome that ended the waiter's wait.
- */
-export type SessionWakeupReport =
-  | { outcome: 'paused'; pauseVersion: number }
-  | { outcome: Exclude<WaiterNotifiedOutcome, 'paused'> };
-
-/**
  * A wakeup's identity: the waiter it is owed to and what it reports.
  * RFC 4122-shaped so the event log's uuid column takes it; the same report
  * always reproduces the same event.
@@ -73,11 +66,6 @@ export function runWakeupEventId(waiterId: string, deliveryKey: string): string 
   bytes.writeUInt8((bytes.readUInt8(8) & 0x3f) | 0x80, 8);
   const hex = bytes.toString('hex');
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-}
-
-/** A terminal outcome retires the waiter, so it is heard once and needs no pause to tell it apart. */
-export function sessionWakeupDeliveryKey(report: SessionWakeupReport): string {
-  return report.outcome === 'paused' ? `paused:${String(report.pauseVersion)}` : report.outcome;
 }
 
 /**
@@ -92,13 +80,13 @@ export async function deliverSessionWakeup(
     sessionId: string;
     runId: string;
     waiterId: string;
-    report: SessionWakeupReport;
+    report: SessionWaiterReport;
     /** Stores the envelope under the wakeup's own id, so a repeat overwrites rather than adds. */
     storeEnvelope: (eventId: string) => Promise<PayloadRef>;
   },
 ): Promise<{ eventId: string; recorded: boolean; delivery: SessionWakeupDelivery }> {
   const { outcome } = args.report;
-  const deliveryKey = sessionWakeupDeliveryKey(args.report);
+  const deliveryKey = sessionWaiterDeliveryKey(args.report);
   const eventId = runWakeupEventId(args.waiterId, deliveryKey);
   const envelopeRef = await args.storeEnvelope(eventId);
 
@@ -127,8 +115,7 @@ export async function deliverSessionWakeup(
     async (tx) => {
       const claimed = await claimSessionWaiterDelivery(tx, {
         waiterId: args.waiterId,
-        deliveryKey,
-        ...(outcome !== 'paused' ? { retireAs: outcome } : {}),
+        report: args.report,
       });
       if (!claimed) return false;
       const inserted = await tx

@@ -10,6 +10,7 @@ import {
   type TokenBreakdown,
   ConversationHistoryHydrationError,
 } from '../../conversationStateStore.js';
+import { appendRunWakeups } from '../../runWakeupsInTurn.js';
 import type { ReasoningContinuityResetReason } from '../../reasoningContinuity.js';
 import { ESTIMATED_CHARS_PER_TOKEN } from '../../tokenEstimate.js';
 import type { AgentTurnInput } from '../schema.js';
@@ -115,7 +116,7 @@ export async function prepareAgentRequest(
   }
 
   if (params.newRunWakeups && params.newRunWakeups.length > 0) {
-    store.appendRunWakeups(params.newRunWakeups);
+    appendRunWakeups(store, params.newRunWakeups);
   }
 
   if (params.newUserInput) {

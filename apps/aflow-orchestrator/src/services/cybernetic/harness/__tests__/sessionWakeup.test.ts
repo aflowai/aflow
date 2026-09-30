@@ -6,11 +6,24 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  */
 const ledger = new Map<string, { lastDeliveredKey: string | null; retiredAs: string | null }>();
 
-function claimInLedger(args: { waiterId: string; deliveryKey: string; retireAs?: string }) {
+type LedgerReport = { outcome: 'paused'; pauseVersion: number } | { outcome: string };
+
+function ledgerKey(report: LedgerReport): string {
+  return 'pauseVersion' in report ? `paused:${String(report.pauseVersion)}` : report.outcome;
+}
+
+/** Forward only, as the row's key is: a pause no later than the one heard is refused. */
+function claimInLedger(args: { waiterId: string; report: LedgerReport }) {
   const row = ledger.get(args.waiterId);
-  if (!row || row.retiredAs !== null || row.lastDeliveredKey === args.deliveryKey) return false;
-  row.lastDeliveredKey = args.deliveryKey;
-  if (args.retireAs !== undefined) row.retiredAs = args.retireAs;
+  if (!row || row.retiredAs !== null) return false;
+  const { report } = args;
+  if ('pauseVersion' in report) {
+    const heard = row.lastDeliveredKey === null ? -1 : Number(row.lastDeliveredKey.split(':')[1]);
+    if (report.pauseVersion <= heard) return false;
+  } else {
+    row.retiredAs = report.outcome;
+  }
+  row.lastDeliveredKey = ledgerKey(report);
   return true;
 }
 
@@ -25,6 +38,7 @@ vi.mock('@aflow/cybernetic-runtime', () => ({
   rehydratePausedRun: (...args: unknown[]) => mockRehydratePausedRun(...args),
   claimSessionWaiterDelivery: (_tx: unknown, args: Parameters<typeof claimInLedger>[0]) =>
     Promise.resolve(claimInLedger(args)),
+  sessionWaiterDeliveryKey: ledgerKey,
   dispatchResume: (...args: unknown[]) => mockDispatchResume(...args),
   resumeClaimsForStep: (...args: unknown[]) => mockResumeClaimsForStep(...args),
   rehydrateParkedStep: vi.fn(),
@@ -144,7 +158,7 @@ const RUN = '11111111-2222-3333-4444-555555555555';
 const PROMPT_STEP = '00000000-0000-4000-8000-0000000000a1';
 const TURN_INPUT = 'gs://bucket/turn-input';
 
-const payloadStore = { store: vi.fn(), retrieve: vi.fn() };
+const payloadStore = { store: vi.fn(), retrieve: vi.fn(), exists: vi.fn() };
 const deps = { db: {} as never, redis: {} as never, payloadStore: payloadStore as never };
 
 function sessionWaiter(id = 'waiter-1', runId = RUN) {
@@ -189,6 +203,7 @@ beforeEach(() => {
   mockInsertedEvents.length = 0;
   payloadStore.store.mockResolvedValue('gs://bucket/wakeup-envelope');
   payloadStore.retrieve.mockReset();
+  payloadStore.exists.mockReset();
   registerSessionWaiter();
   mockLoadRun.mockResolvedValue({ runId: RUN, spaceId: 'space-1' });
   mockHasUnreadRunWakeups.mockResolvedValue(true);
@@ -256,6 +271,17 @@ describe('a waiter with no parked step', () => {
 
     expect(wakeupEvents()).toHaveLength(2);
     expect(mockAppendSessionEvent).toHaveBeenCalledTimes(2);
+  });
+
+  it('refuses a late notify of an earlier pause as delivered, and keeps the later key', async () => {
+    mockGetSessionStateSafe.mockResolvedValue({ ok: true, state: { status: 'RUNNING' } });
+
+    await notifyWaiters(deps, { tenantId: TENANT, runId: RUN, outcome: 'paused', pauseVersion: 3 });
+    await notifyWaiters(deps, { tenantId: TENANT, runId: RUN, outcome: 'paused', pauseVersion: 2 });
+
+    expect(wakeupEvents()).toHaveLength(1);
+    expect(mockAppendSessionEvent).toHaveBeenCalledOnce();
+    expect(ledger.get('waiter-1')?.lastDeliveredKey).toBe('paused:3');
   });
 
   it('keys a notification that arrives after the run paused again on the pause it reports', async () => {
@@ -509,8 +535,9 @@ describe('a wakeup whose envelope cannot be read', () => {
     payloadStore.retrieve.mockImplementation(async (ref: string) => {
       if (ref === TURN_INPUT) return { prompt: 'p' };
       if (ref in envelopes) return envelopes[ref];
-      throw new Error(`${ref} expired`);
+      throw new Error(`Payload not found: ${ref}`);
     });
+    payloadStore.exists.mockImplementation(async (ref: string) => ref in envelopes);
   }
 
   beforeEach(() => {
@@ -537,6 +564,24 @@ describe('a wakeup whose envelope cannot be read', () => {
 
     await notifyWaiters(deps, { tenantId: TENANT, runId: RUN, outcome: 'completed' });
 
+    expect(mockDispatchResume).toHaveBeenCalledOnce();
+  });
+
+  it('is left unread while the store cannot answer, and wakes the session once it can', async () => {
+    const envelope = { runId: RUN, outcome: 'completed', waiterId: 'waiter-1' };
+    const unavailable = new Error('ECONNRESET');
+    payloadStore.retrieve.mockImplementation(async (ref: string) => {
+      if (ref === TURN_INPUT) return { prompt: 'p' };
+      throw unavailable;
+    });
+    payloadStore.exists.mockResolvedValue(true);
+
+    await notifyWaiters(deps, { tenantId: TENANT, runId: RUN, outcome: 'completed' });
+    await expect(wakeSessionForRunWakeups(deps, TENANT, SESSION)).rejects.toBe(unavailable);
+    expect(mockDispatchResume).not.toHaveBeenCalled();
+
+    storeHolding({ 'gs://bucket/wakeup-envelope': envelope });
+    await expect(wakeSessionForRunWakeups(deps, TENANT, SESSION)).resolves.toBe('woke');
     expect(mockDispatchResume).toHaveBeenCalledOnce();
   });
 });
