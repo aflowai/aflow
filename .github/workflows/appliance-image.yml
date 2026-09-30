@@ -100,6 +100,15 @@ jobs:
             echo "dir=${RUNNER_TEMP}/core-cut" >> "$GITHUB_OUTPUT"
           fi
 
+      # The notices ship inside the image, generated here from the install this
+      # job just made, so a release carries the attribution of what it actually
+      # contains rather than the repository's copy as of whenever it was last
+      # regenerated — nothing on a pull request keeps that one current.
+      - name: Generate the third-party notices
+        env:
+          CONTEXT: ${{ steps.context.outputs.dir }}
+        run: node scripts/third-party-notices.mjs --out "${CONTEXT}/THIRD-PARTY-NOTICES.md"
+
       - name: Log in to GHCR
         run: echo '${{ secrets.GITHUB_TOKEN }}' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
 
@@ -270,6 +279,9 @@ jobs:
       # released unbootable. On a Linux runner with empty volumes this is also
       # §5a's fresh-volume boot, which was otherwise a manual step on whatever
       # machine happened to run it.
+
+      - name: Put the third-party notices in the bundle
+        run: node scripts/third-party-notices.mjs --out dist/appliance-bundle/THIRD-PARTY-NOTICES.md
       - name: Log in to GHCR
         run: echo '${{ secrets.GITHUB_TOKEN }}' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
 
@@ -485,4 +497,6 @@ jobs:
           gh release upload "${TAG}" "aflow-appliance-${VERSION}.tgz" --clobber
           gh release upload "${TAG}" "aflow-appliance-${VERSION}-sbom.json" --clobber
           gh release upload "${TAG}" "aflow-appliance-${VERSION}-sbom.cdx.json" --clobber
+          cp dist/appliance-bundle/THIRD-PARTY-NOTICES.md "aflow-appliance-${VERSION}-THIRD-PARTY-NOTICES.md"
+          gh release upload "${TAG}" "aflow-appliance-${VERSION}-THIRD-PARTY-NOTICES.md" --clobber
           gh release upload "${TAG}" "aflow-appliance-${VERSION}-vulnerabilities.json" --clobber

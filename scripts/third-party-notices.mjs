@@ -32,7 +32,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import process from 'node:process';
 
 const argv = process.argv.slice(2);
@@ -44,6 +44,8 @@ const outPath = valueOf('--out') ?? 'THIRD-PARTY-NOTICES.md';
 const checkOnly = argv.includes('--check');
 
 const REPO = process.cwd();
+// Relative to the repository, or absolute: a release writes into its build context.
+const outFile = resolve(REPO, outPath);
 
 /**
  * Which packages ship. `yarn workspaces focus --production` is what the image
@@ -225,7 +227,7 @@ for (const [license, entries] of [...byLicense].sort((a, b) => b[1].length - a[1
 const rendered = lines.join('\n').replace(/\n{3,}/g, '\n\n');
 
 if (checkOnly) {
-  const current = existsSync(join(REPO, outPath)) ? readFileSync(join(REPO, outPath), 'utf-8') : '';
+  const current = existsSync(outFile) ? readFileSync(outFile, 'utf-8') : '';
   if (current !== rendered) {
     console.error(
       `[notices] ${outPath} is out of date — run \`yarn third-party-notices\` and commit the result.`,
@@ -238,7 +240,7 @@ if (checkOnly) {
   process.exit(0);
 }
 
-writeFileSync(join(REPO, outPath), rendered);
+writeFileSync(outFile, rendered);
 console.log(
   `[notices] wrote ${outPath}: ${String(shipped.length)} packages, ${String(byLicense.size)} licences` +
     (review.length > 0 ? `, ${String(review.length)} needing a decision` : ''),

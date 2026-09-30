@@ -114,6 +114,10 @@ RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 
 WORKDIR /app
 
+# The licence, the notice, and attribution for every package the image carries.
+# A release regenerates THIRD-PARTY-NOTICES.md from its own install first.
+COPY LICENSE NOTICE THIRD-PARTY-NOTICES.md ./
+
 # Copy package manifests + lock for production install
 COPY package.json yarn.lock .yarnrc.yml ./
 
