@@ -647,9 +647,10 @@ export const HostHarnessRunOutputSchema = z.object({
       }),
     )
     .describe(
-      'Local branches and tags that changed while the run was in flight, whoever moved them: ' +
-        "the operator's own work in the folder shows here too. A commission's own git cannot " +
-        'move them.',
+      'Every local branch and tag that moved while the run was in flight, whoever moved it: ' +
+        "the operator's own work in the folder shows here too. A hook refuses the commission's " +
+        'ordinary git in its checkout; a git call that names its own `core.hooksPath`, or ' +
+        'pushes locally into the folder, is not refused, and what it moved is recorded here.',
     ),
   blockedDomains: z
     .array(z.string())
@@ -990,7 +991,10 @@ export const HostOperationRegistrations: OperationRegistration[] = [
       'with their toolchain around it. It executes any work over those files: analysis, ' +
       'documents, data and code alike. The run happens in an isolated checkout at the ' +
       'current commit, or at the branch or commit it names, so their uncommitted work is ' +
-      "untouched, and its git cannot move the repository's branches or tags. Given an `outputSchema` it " +
+      'untouched. A hook refuses ordinary git in that checkout when it would move the ' +
+      "repository's branches or tags; a git call that names its own `core.hooksPath`, or " +
+      'pushes locally into the folder, is not refused, and `refChanges` records every branch ' +
+      'or tag that moved during the run, whoever moved it. Given an `outputSchema` it ' +
       'returns a validated `result`; where it changed files it returns a diff to review, ' +
       'committed, pushed and merged nowhere.',
     tags: ['host', 'harness', 'files', 'local'],

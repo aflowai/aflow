@@ -11,8 +11,8 @@
  * The run happens in a detached worktree, never the operator's checkout. That
  * is what lets a run start while they have uncommitted work, and what makes the
  * result a diff to review rather than an edit already made. Nothing is
- * committed, the agent's git cannot move a branch or tag, and the worktree is
- * removed once its changes have been collected.
+ * committed, the agent's ordinary git is refused a branch or tag move
+ * (`refGuard.ts` names the calls that are not), and the worktree is removed once its changes have been collected.
  */
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

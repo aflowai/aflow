@@ -1,5 +1,5 @@
 /**
- * The coding agent's git cannot move the operator's branches or tags.
+ * The coding agent's ordinary git cannot move the operator's branches or tags.
  *
  * A worktree shares its refs with the repository it was added to, so a harness
  * running `git branch -D` or `git update-ref` in its checkout rewrites the
@@ -39,7 +39,10 @@ function shellQuoted(text: string): string {
  * directory under the temp root is the common case. Those refs are nobody's but
  * the run's, so the hook refuses only in the folder's own repository, which the
  * run's checkout shares. A repository the hook cannot identify is treated as
- * the folder's.
+ * the folder's, and so is one whose `refs` directory is the folder's: a
+ * git-new-workdir layout has a `.git` of its own with `refs` symlinked into the
+ * folder's, so its branches are the operator's. A plain copy of `.git` has refs
+ * of its own and stays another repository.
  *
  * "The folder's own" is decided by identity, not by spelling. The repository's
  * path is whatever the run's git was told, and one directory has many names: a
@@ -65,7 +68,8 @@ case $common in
   '' | /*) ;;
   *) common=./$common ;;
 esac
-if [ -n "$common" ] && [ -d "$common" ] && ! [ "$common" -ef ${shellQuoted(guardedCommonDir)} ]; then
+if [ -n "$common" ] && [ -d "$common" ] && ! [ "$common" -ef ${shellQuoted(guardedCommonDir)} ] &&
+  ! [ "$common/refs" -ef ${shellQuoted(join(guardedCommonDir, 'refs'))} ]; then
   cat >/dev/null
   exit 0
 fi
@@ -93,10 +97,12 @@ export function refGuardHooksDir(scratchDir: string): string {
  * the repository's and the worktree's — so a `core.hooksPath` in any of them,
  * including a home directory the harness can write, does not displace it.
  *
- * A git call that names its own on the command line does:
- * `git -c core.hooksPath=/elsewhere …` runs without the hook. The guard stops a
- * commission's git from moving a branch or tag by accident, not a call written
- * to opt out. What still records such a move is the run's before-and-after
+ * Two calls run without it. One names its own hooks path on the command line
+ * (`git -c core.hooksPath=/elsewhere …`). The other pushes into the folder
+ * locally (`git push . HEAD:refs/heads/x`, or to the folder's path): the
+ * receiving git is started with the environment config cleared. The guard stops
+ * a commission's git from moving a branch or tag by accident, not a call that
+ * goes around it. Every move is still recorded by the run's before-and-after
  * snapshot of the folder's refs, reported as `refChanges` on the result.
  */
 export async function installRefGuard(

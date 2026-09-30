@@ -9,8 +9,8 @@
  * from, rather than a mutation already applied to the working copy.
  *
  * The worktree is detached at the binding's current HEAD, or at the commit a
- * caller named. Nothing is pushed and the agent's git moves no branch or tag
- * (`refGuard.ts`); deciding what becomes of the diff is a separate act, and the
+ * caller named. Nothing is pushed, and the agent's ordinary git is refused a
+ * branch or tag move (`refGuard.ts`); deciding what becomes of the diff is a separate act, and the
  * most a decision reaches from here is a branch of its own or one commit
  * appended to the branch the diff was made on.
  *

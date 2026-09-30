@@ -461,6 +461,7 @@ describe.runIf(sandboxReadiness().ready)('a commission starts from a named ref',
             'opts-out',
             'printf changed > touched.txt; git -c core.hooksPath=/dev/null branch -D other',
           ),
+          harness('pushes', 'printf changed > touched.txt; git push -q . HEAD:refs/heads/pushed'),
           harness(
             'waits',
             'printf changed > touched.txt; i=0; ' +
@@ -565,6 +566,19 @@ describe.runIf(sandboxReadiness().ready)('a commission starts from a named ref',
       ]);
     } finally {
       await vcs('branch', '-f', 'other', other);
+    }
+  }, 120_000);
+
+  it('reports a branch made by a local push from the checkout, which the guard does not stop', async () => {
+    try {
+      const { outcome, written } = await runWith({ harness: 'pushes' });
+      expect(outcome.status).toBe('SUCCEEDED');
+      const output = written['output'] as Record<string, unknown>;
+      expect(output['refChanges']).toEqual([
+        { ref: 'refs/heads/pushed', change: 'created', to: output['baseSha'] },
+      ]);
+    } finally {
+      await vcs('branch', '-D', 'pushed').catch(() => undefined);
     }
   }, 120_000);
 

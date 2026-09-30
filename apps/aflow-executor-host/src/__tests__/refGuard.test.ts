@@ -1,11 +1,11 @@
 /**
- * Contract: a coding agent's git, run with the environment the executor gives
- * it, cannot create, delete or move a local branch or tag of the repository its
+ * Contract: a coding agent's ordinary git, run with the environment the
+ * executor gives it, cannot create, delete or move a local branch or tag of the repository its
  * checkout shares refs with — and everything else a coding run does with git
  * still works.
  */
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -180,6 +180,18 @@ describe("the agent's git cannot move a branch or a tag", () => {
           return { cwd: repo, env: { CDPATH: elsewhere } };
         },
       ],
+      [
+        "a git-new-workdir layout whose refs are the folder's",
+        async () => {
+          const gitDir = join(elsewhere, '.git');
+          await mkdir(gitDir);
+          for (const shared of ['refs', 'objects', 'config']) {
+            await symlink(join(repo, '.git', shared), join(gitDir, shared));
+          }
+          await writeFile(join(gitDir, 'HEAD'), 'ref: refs/heads/main\n');
+          return { cwd: elsewhere };
+        },
+      ],
     ];
 
     // A macOS volume keeps the letter case a path was typed with and answers
@@ -260,6 +272,18 @@ describe('what a coding run does with git still works', () => {
       }
     } finally {
       await rm(own, { recursive: true, force: true });
+    }
+  });
+
+  it("moves branches in a copy of the folder's .git, which has refs of its own", async () => {
+    const copy = await mkdtemp(join(tmpdir(), 'aflow-guard-copy-'));
+    try {
+      await cp(join(repo, '.git'), join(copy, '.git'), { recursive: true });
+      const before = await snapshotRefs(repo);
+      expect(await agentGitIn(copy, {}, 'branch', 'planted')).toMatchObject({ ok: true });
+      expect(await snapshotRefs(repo)).toEqual(before);
+    } finally {
+      await rm(copy, { recursive: true, force: true });
     }
   });
 });
