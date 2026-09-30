@@ -48,6 +48,7 @@ import { updateSessionState, atomicCompleteStep, registerBarrierWatchdog } from 
 import type { PayloadStore } from '@aflow/payload-store';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { routeRunnerTerminalToHarness } from '../../cybernetic/WorkflowRunHarness.js';
+import { wakeSessionForRunWakeups } from '../../cybernetic/harness/sessionWakeup.js';
 import { pauseForGuardrailEscalation } from './guardrailEscalationPause.js';
 import { clearStaleCredentialBlock } from './credentialBlockScope.js';
 import { buildStepCompletedRecoveryEvents } from '../helpers/recoveryEmitter.js';
@@ -1045,6 +1046,23 @@ export async function applyAgentDecision(params: ApplyAgentDecisionParams): Prom
           : {}),
       },
     );
+
+    // What a run reported while this turn was running was not in its input,
+    // and resting here is the first boundary that can read it.
+    if (db) {
+      try {
+        await wakeSessionForRunWakeups(
+          { db, redis, payloadStore },
+          result.tenantId as TenantId,
+          result.sessionId,
+        );
+      } catch (err) {
+        logOrchestratorError('[applyAgentDecision] could not wake for unread run wakeups', err, {
+          tenantId: result.tenantId,
+          sessionId: result.sessionId,
+        });
+      }
+    }
 
     if (decision.message) {
       try {

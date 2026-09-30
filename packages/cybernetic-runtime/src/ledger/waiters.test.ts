@@ -29,7 +29,9 @@ vi.mock('@aflow/database', async (orig) => ({
   ),
 }));
 
-import { addWaiter } from './waiters.js';
+import { PgDialect } from 'drizzle-orm/pg-core';
+import type { SQL } from 'drizzle-orm';
+import { addWaiter, claimSessionWaiterDelivery } from './waiters.js';
 
 const TENANT = 'a0000000-0000-0000-0000-000000000001';
 
@@ -63,5 +65,59 @@ describe('addWaiter', () => {
     expect(inserted).toEqual([
       { runId: 'run-1', waiterSessionId: 'sess-1', waiterStepExecutionId: 'step-1' },
     ]);
+  });
+});
+
+describe('claimSessionWaiterDelivery', () => {
+  function fakeTx(matches: boolean) {
+    const seen: { set?: Record<string, unknown>; where?: SQL } = {};
+    const tx = {
+      update: () => ({
+        set: (values: Record<string, unknown>) => {
+          seen.set = values;
+          return {
+            where: (condition: SQL) => {
+              seen.where = condition;
+              return { returning: () => Promise.resolve(matches ? [{ id: 'waiter-1' }] : []) };
+            },
+          };
+        },
+      }),
+    };
+    return { tx: tx as never, seen };
+  }
+
+  it('records the key of a pause and leaves the waiter pending', async () => {
+    const { tx, seen } = fakeTx(true);
+    await expect(
+      claimSessionWaiterDelivery(tx, { waiterId: 'waiter-1', deliveryKey: 'paused:2' }),
+    ).resolves.toBe(true);
+    expect(seen.set).toEqual({ lastDeliveredKey: 'paused:2' });
+  });
+
+  it('retires the waiter with the outcome that ends the run', async () => {
+    const { tx, seen } = fakeTx(true);
+    await claimSessionWaiterDelivery(tx, {
+      waiterId: 'waiter-1',
+      deliveryKey: 'completed:2',
+      retireAs: 'completed',
+    });
+    expect(seen.set).toEqual({
+      lastDeliveredKey: 'completed:2',
+      notifiedAt: expect.any(Date),
+      notifiedOutcome: 'completed',
+    });
+  });
+
+  it('claims only a pending session waiter that has not heard this key', async () => {
+    const { tx, seen } = fakeTx(false);
+    await expect(
+      claimSessionWaiterDelivery(tx, { waiterId: 'waiter-1', deliveryKey: 'paused:2' }),
+    ).resolves.toBe(false);
+    const where = new PgDialect().sqlToQuery(seen.where!);
+    expect(where.sql).toContain('"waiter_step_execution_id" is null');
+    expect(where.sql).toContain('"notified_at" is null');
+    expect(where.sql).toContain('"last_delivered_key" IS DISTINCT FROM');
+    expect(where.params).toEqual(['waiter-1', 'paused:2']);
   });
 });

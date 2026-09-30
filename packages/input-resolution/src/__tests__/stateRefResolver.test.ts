@@ -592,6 +592,26 @@ describe('resolveRefsRecursive', () => {
       expect(resolved).toEqual({ slug: 'publish', inputs: commissionOutput.patch });
     });
 
+    it('leaves text alone when a reference-shaped object in it names nothing that exists', async () => {
+      const fileContents = JSON.stringify({
+        example: { $ref: 'output.call_that_never_ran/patch' },
+        note: 'how a tool argument references an earlier output',
+      });
+      const input = { path: 'docs/refs.json', content: fileContents };
+      const resolved = await resolveRefsRecursive(input, state, ps);
+      expect(resolved).toEqual(input);
+    });
+
+    it('leaves the text whole when only some of its references resolve', async () => {
+      const memoryBody = JSON.stringify({
+        resolves: { $ref: 'output.call_commission/patch' },
+        missing: { $ref: 'state.not_a_variable' },
+      });
+      const input = { body: memoryBody };
+      const resolved = await resolveRefsRecursive(input, state, ps);
+      expect(resolved).toEqual(input);
+    });
+
     it('leaves a JSON string that holds no reference as a string', async () => {
       const input = { note: '{"$ref": "state.x", "other": 1}' };
       const resolved = await resolveRefsRecursive(input, makeState({}), noopPayloadStore);

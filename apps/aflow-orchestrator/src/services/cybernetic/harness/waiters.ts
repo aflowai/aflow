@@ -95,13 +95,36 @@ export async function notifyWaiters(deps: HarnessDeps, args: NotifyWaitersArgs):
 
   const humanDecisions = terminalDetail ? extractHumanDecisions(terminalDetail) : undefined;
 
+  let pauseVersion: Promise<number> | undefined;
+  const loadPauseVersion = (): Promise<number> =>
+    (pauseVersion ??= resolvePauseVersion(deps, args));
+
   for (const waiter of waiters) {
     try {
-      await wakeWaiter(deps, args, waiter, humanDecisions, runResult);
-      // A session waiter hears every pause and stays registered until the run
-      // ends: the operator resolving a pause does not re-register anyone, and
-      // the session is not parked on the run the way a blocking step is.
-      if (waiter.waiterStepExecutionId === null && args.outcome === 'paused') continue;
+      if (waiter.waiterStepExecutionId === null) {
+        // Its delivery records itself: a session waiter hears every pause and
+        // is retired only by the outcome that ends the run.
+        await wakeSessionWaiter(
+          deps,
+          args,
+          waiter,
+          await loadPauseVersion(),
+          humanDecisions,
+          runResult,
+        );
+        continue;
+      }
+      await wakeWaiter(
+        deps,
+        args,
+        {
+          id: waiter.id,
+          waiterSessionId: waiter.waiterSessionId,
+          waiterStepExecutionId: waiter.waiterStepExecutionId,
+        },
+        humanDecisions,
+        runResult,
+      );
       await markWaiterNotified(deps.db, tenantIdStr, {
         waiterId: waiter.id,
         outcome: args.outcome,
@@ -123,27 +146,44 @@ export async function notifyWaiters(deps: HarnessDeps, args: NotifyWaitersArgs):
   }
 }
 
-async function wakeWaiter(
+/** The pause a notification reports is the run's pause version when it is sent. */
+async function resolvePauseVersion(deps: HarnessDeps, args: NotifyWaitersArgs): Promise<number> {
+  const run =
+    args.runDetail ??
+    (await loadRunByRunIdAcrossSpaces(deps.db, args.tenantId as string, args.runId));
+  if (!run) throw new Error(`run ${args.runId} not found; its session waiters cannot be keyed`);
+  return run.pauseVersion;
+}
+
+async function wakeSessionWaiter(
   deps: HarnessDeps,
   args: NotifyWaitersArgs,
-  waiter: { id: string; waiterSessionId: string; waiterStepExecutionId: string | null },
+  waiter: { id: string; waiterSessionId: string },
+  pauseVersion: number,
   humanDecisions: readonly WorkflowRunWakeupHumanDecision[] | undefined,
   runResult: WorkflowRunResult | undefined,
 ): Promise<void> {
-  if (waiter.waiterStepExecutionId === null) {
-    const envelopeRef = await buildWaiterOutputRef(deps, args, waiter, humanDecisions, runResult, {
-      payloadSlot: randomUUID(),
-    });
-    await deliverSessionWakeup(deps, {
-      tenantId: args.tenantId,
-      sessionId: waiter.waiterSessionId,
-      runId: args.runId,
-      waiterId: waiter.id,
-      outcome: args.outcome,
-      envelopeRef,
-    });
-    return;
-  }
+  await deliverSessionWakeup(deps, {
+    tenantId: args.tenantId,
+    sessionId: waiter.waiterSessionId,
+    runId: args.runId,
+    waiterId: waiter.id,
+    outcome: args.outcome,
+    pauseVersion,
+    storeEnvelope: (eventId) =>
+      buildWaiterOutputRef(deps, args, waiter, humanDecisions, runResult, {
+        payloadSlot: eventId,
+      }),
+  });
+}
+
+async function wakeWaiter(
+  deps: HarnessDeps,
+  args: NotifyWaitersArgs,
+  waiter: { id: string; waiterSessionId: string; waiterStepExecutionId: string },
+  humanDecisions: readonly WorkflowRunWakeupHumanDecision[] | undefined,
+  runResult: WorkflowRunResult | undefined,
+): Promise<void> {
   const waiterStepExecutionId = waiter.waiterStepExecutionId;
 
   let stepState = await getStepState(deps.redis, args.tenantId, waiterStepExecutionId);

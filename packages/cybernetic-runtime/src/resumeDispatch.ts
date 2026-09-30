@@ -1,8 +1,17 @@
 import { createHash } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Redis } from 'ioredis';
 import { createTenantContext, idempotencyKeys, withTenantSchema } from '@aflow/database';
-import type { TenantId } from '@aflow/schemas';
+import { addControlMessage } from '@aflow/redis';
+import type {
+  ActorContext,
+  IdempotencyKey,
+  SessionId,
+  StepExecutionId,
+  TenantId,
+  TraceId,
+} from '@aflow/schemas';
 
 /**
  * What a resume is actually saying — the pause it targets and the answer it
@@ -81,17 +90,19 @@ export async function claimResumeIdempotency(
   return { firstSeen };
 }
 
+const RESUME_CLAIMS_READ_LIMIT = 16;
+
 /**
- * Whether some resume of this exact paused step is already claimed — by a
- * human, an approval, or an earlier wake. A boundary can only be advanced
+ * The keys under which a resume of this exact paused step is already claimed —
+ * by a human, an approval, or an earlier wake. A boundary can only be advanced
  * once, so a wake finding a claim coalesces instead of piling a second resume
  * onto the control stream; the next pause is a new stepExecutionId, so a spent
  * claim never suppresses a future wake.
  */
-export async function hasResumeClaimForStep(
+export async function resumeClaimsForStep(
   db: PostgresJsDatabase,
   params: { tenantId: string; sessionId: string; stepExecutionId: string },
-): Promise<boolean> {
+): Promise<string[]> {
   const tenantContext = createTenantContext(params.tenantId as TenantId);
   const rows = await withTenantSchema(db, tenantContext, async (tx: PostgresJsDatabase) =>
     tx
@@ -103,7 +114,58 @@ export async function hasResumeClaimForStep(
           eq(idempotencyKeys.stepExecutionId, params.stepExecutionId),
         ),
       )
-      .limit(1),
+      .limit(RESUME_CLAIMS_READ_LIMIT),
   );
-  return rows.length > 0;
+  return rows.map((row) => row.idempotencyKey);
+}
+
+export interface DispatchResumeRequest {
+  tenantId: TenantId;
+  sessionId: SessionId;
+  stepExecutionId: StepExecutionId;
+  inputRef: string;
+  idempotencyKey: string;
+  traceId: TraceId;
+  actorContext?: ActorContext;
+  voiceMode?: boolean;
+  clientMessageId?: string;
+}
+
+/**
+ * Claim a resume durably, then send it to the session's orchestrator.
+ *
+ * The claim and the control message are two stores: a crash between them
+ * leaves a claim that proves nothing was dispatched. An exact retry
+ * (`firstSeen: false`, same payload) therefore RE-SENDS — the orchestrator's
+ * not-paused guard drops a duplicate harmlessly, while skipping the send would
+ * mark the wake delivered and park the session forever. Claim ⇒ eventual
+ * dispatch is what makes outbox coalescing sound.
+ */
+export async function dispatchResume(
+  db: PostgresJsDatabase,
+  redis: Redis,
+  request: DispatchResumeRequest,
+): Promise<{ firstSeen: boolean }> {
+  const claim = await claimResumeIdempotency(db, {
+    tenantId: request.tenantId,
+    sessionId: request.sessionId,
+    stepExecutionId: request.stepExecutionId,
+    inputRef: request.inputRef,
+    idempotencyKey: request.idempotencyKey,
+  });
+  await addControlMessage(redis, {
+    messageVersion: 1,
+    type: 'resume_run',
+    tenantId: request.tenantId,
+    runId: request.sessionId,
+    stepExecutionId: request.stepExecutionId,
+    inputRef: request.inputRef,
+    traceId: request.traceId,
+    idempotencyKey: request.idempotencyKey as IdempotencyKey,
+    requestedAtMs: Date.now(),
+    ...(request.actorContext ? { actorContext: request.actorContext } : {}),
+    ...(request.voiceMode !== undefined ? { voiceMode: request.voiceMode } : {}),
+    ...(request.clientMessageId ? { clientMessageId: request.clientMessageId } : {}),
+  });
+  return claim;
 }

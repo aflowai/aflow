@@ -184,6 +184,12 @@ export const workflowRunWaiters = pgTable('workflow_run_waiters', {
    * existing waiters pending.
    */
   notifiedOutcome: text('notified_outcome'),
+  /**
+   * The last outcome delivered to a session waiter, as `<outcome>:<pauseVersion>`.
+   * A session waiter hears every pause while it stays pending, so this — not
+   * `notified_at` — is what makes a repeated notification of one pause a no-op.
+   */
+  lastDeliveredKey: text('last_delivered_key'),
 });
 
 export type WorkflowRunWaiterRow = typeof workflowRunWaiters.$inferSelect;

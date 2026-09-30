@@ -23,14 +23,7 @@ export async function readRunWakeups(
   tenantId: TenantId,
   sessionId: string,
 ): Promise<WorkflowRunWakeupEntry[]> {
-  const rows = await withTenantSchema(db, createTenantContext(tenantId), (tx) =>
-    tx
-      .select({ eventId: eventLog.eventId, payloadRef: eventLog.payloadRef })
-      .from(eventLog)
-      .where(and(eq(eventLog.sessionId, sessionId), eq(eventLog.eventType, 'WorkflowRunWakeup')))
-      .orderBy(desc(eventLog.timestamp))
-      .limit(WORKFLOW_RUN_WAKEUP_MAX_ENTRIES),
-  );
+  const rows = await recentRunWakeupRows(db, tenantId, sessionId);
 
   const entries = await Promise.all(
     rows.reverse().map(async (row): Promise<WorkflowRunWakeupEntry | null> => {
@@ -42,4 +35,56 @@ export async function readRunWakeups(
     }),
   );
   return entries.filter((entry): entry is WorkflowRunWakeupEntry => entry !== null);
+}
+
+/**
+ * Whether the session holds a wakeup the turn that ran on `turnInputRef` did
+ * not read.
+ *
+ * Every turn is handed the recent window, so what a turn read is exactly what
+ * its input carried: anything in the window now and not in that input landed
+ * after the input was built — while the agent was mid-turn, say.
+ */
+export async function hasUnreadRunWakeups(
+  db: PostgresJsDatabase,
+  payloadStore: Pick<PayloadStore, 'retrieve'>,
+  tenantId: TenantId,
+  sessionId: string,
+  turnInputRef: string | undefined,
+): Promise<boolean> {
+  const rows = await recentRunWakeupRows(db, tenantId, sessionId);
+  if (rows.length === 0) return false;
+  const read = new Set<string>();
+  if (turnInputRef !== undefined) {
+    const input: unknown = await payloadStore.retrieve(turnInputRef).catch(() => undefined);
+    const handed =
+      input !== null && typeof input === 'object'
+        ? (input as Record<string, unknown>)['newRunWakeups']
+        : undefined;
+    if (Array.isArray(handed)) {
+      for (const entry of handed as unknown[]) {
+        const eventId =
+          entry !== null && typeof entry === 'object'
+            ? (entry as Record<string, unknown>)['eventId']
+            : undefined;
+        if (typeof eventId === 'string') read.add(eventId);
+      }
+    }
+  }
+  return rows.some((row) => !read.has(row.eventId));
+}
+
+async function recentRunWakeupRows(
+  db: PostgresJsDatabase,
+  tenantId: TenantId,
+  sessionId: string,
+): Promise<Array<{ eventId: string; payloadRef: string | null }>> {
+  return withTenantSchema(db, createTenantContext(tenantId), (tx) =>
+    tx
+      .select({ eventId: eventLog.eventId, payloadRef: eventLog.payloadRef })
+      .from(eventLog)
+      .where(and(eq(eventLog.sessionId, sessionId), eq(eventLog.eventType, 'WorkflowRunWakeup')))
+      .orderBy(desc(eventLog.timestamp))
+      .limit(WORKFLOW_RUN_WAKEUP_MAX_ENTRIES),
+  );
 }

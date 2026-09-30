@@ -140,6 +140,42 @@ export async function markWaiterNotified(
 }
 
 /**
+ * Take the delivery of one outcome to a session waiter, inside the caller's
+ * transaction so the wakeup it guards commits with it or not at all.
+ *
+ * `deliveryKey` names the outcome and the run's pause version. A session waiter
+ * stays pending across pauses — it must still hear how the run ends — so it is
+ * the recorded key, not `notified_at`, that makes a re-driven or concurrent
+ * notification of the same pause find nothing to deliver. A terminal outcome
+ * retires the waiter in the same statement.
+ *
+ * @returns whether this call owns the delivery.
+ */
+export async function claimSessionWaiterDelivery(
+  tx: PostgresJsDatabase,
+  args: { waiterId: string; deliveryKey: string; retireAs?: WaiterNotifiedOutcome },
+): Promise<boolean> {
+  const rows = await tx
+    .update(workflowRunWaiters)
+    .set({
+      lastDeliveredKey: args.deliveryKey,
+      ...(args.retireAs !== undefined
+        ? { notifiedAt: new Date(), notifiedOutcome: args.retireAs }
+        : {}),
+    })
+    .where(
+      and(
+        eq(workflowRunWaiters.id, args.waiterId),
+        isNull(workflowRunWaiters.waiterStepExecutionId),
+        isNull(workflowRunWaiters.notifiedAt),
+        sql`${workflowRunWaiters.lastDeliveredKey} IS DISTINCT FROM ${args.deliveryKey}`,
+      ),
+    )
+    .returning({ id: workflowRunWaiters.id });
+  return rows.length > 0;
+}
+
+/**
  * Insert (or no-op on duplicate) a completion-pending row.
  *
  * Called in two cases by the harness:

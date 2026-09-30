@@ -12,6 +12,8 @@ const mockStartRun = vi.fn();
 const mockCompleteRun = vi.fn();
 const mockAddWaiter = vi.fn();
 const mockWaitForInput = vi.fn();
+const mockStoreResumeContract = vi.fn();
+const mockPauseRun = vi.fn();
 
 vi.mock('@aflow/cybernetic-runtime', () => ({
   listActiveRunsForWorkflow: (...args: unknown[]) => mockListActiveRunsForWorkflow(...args),
@@ -42,6 +44,9 @@ vi.mock('@aflow/cybernetic-runtime', () => ({
   renderSkillDiagnostics: () => '',
   hashWorkflowConfig: () => 'mock-artifact-hash',
   emitRunUpdated: vi.fn().mockResolvedValue(undefined),
+  storeWorkflowResumeContract: (...args: unknown[]) => mockStoreResumeContract(...args),
+  pauseRun: (...args: unknown[]) => mockPauseRun(...args),
+  addAttentionItem: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('@aflow/database', async () => {
@@ -49,6 +54,9 @@ vi.mock('@aflow/database', async () => {
   return {
     ...actual,
     getDatabase: vi.fn(() => ({})),
+    withTenantSchema: vi.fn(async (_db: unknown, _ctx: unknown, cb: (tx: unknown) => unknown) =>
+      cb({}),
+    ),
     createMemoryDocRepository: vi.fn(() => ({
       getByPath: vi.fn().mockResolvedValue(null),
       put: vi.fn(),
@@ -76,10 +84,16 @@ vi.mock('../../../helpers/workflowCredentialsPreflight.js', () => ({
   toBlockedBindingsForResumeContract: vi.fn((x: unknown) => x),
 }));
 
-vi.mock('../../../helpers/workflowRunStartupPause.js', () => ({
+vi.mock('../../../helpers/workflowRunStartupPause.js', async () => ({
+  ...(await vi.importActual<object>('../../../helpers/workflowRunStartupPause.js')),
   handoffStartupPreflightPause: (...args: unknown[]) => mockHandoffStartupPreflightPause(...args),
   buildNeedsCredentialsStartupContract: vi.fn(() => ({ pauseCause: 'needs_credentials' })),
   buildNeedsCapabilityStartupContract: vi.fn(() => ({ pauseCause: 'needs_capability' })),
+}));
+
+const mockNotifyWaiters = vi.fn();
+vi.mock('../../../../cybernetic/harness/waiters.js', () => ({
+  notifyWaiters: (...args: unknown[]) => mockNotifyWaiters(...args),
 }));
 
 vi.mock('../../../../cybernetic/WorkflowRunHarness.js', () => ({
@@ -192,6 +206,9 @@ beforeEach(() => {
   mockAddWaiter.mockResolvedValue('waiter-1');
   mockWaitForInput.mockResolvedValue(undefined);
   mockStartRun.mockResolvedValue({ activeTasks: [] });
+  mockStoreResumeContract.mockResolvedValue('gs://bucket/startup-contract');
+  mockPauseRun.mockResolvedValue(undefined);
+  mockNotifyWaiters.mockResolvedValue(undefined);
 });
 
 function decodeInline(ref: string): Record<string, unknown> {
@@ -240,6 +257,59 @@ describe('workflow.run.start — wait: none', () => {
     >;
     expect(result.status).toBe('FAILED');
     expect(result.error?.code).toBe('WORKFLOW_RUN_START_WAITER_INSERT_FAILED');
+  });
+
+  it('returns started when a preflight pauses the run, and the pause reaches the session as a wakeup', async () => {
+    mockCheckWorkflowCredentialsPreflight.mockResolvedValue({
+      ok: false,
+      missingBindings: [{ bindingId: 'b1', bindingName: 'CRM', missingFields: ['apiKey'] }],
+    });
+
+    await handleWorkflowCrudInline(makeStartArgs('none'));
+
+    // Nothing parks: the caller is not a blocking waiter, and no step joins it.
+    expect(mockWaitForInput).not.toHaveBeenCalled();
+    expect(mockHandoffStartupPreflightPause).not.toHaveBeenCalled();
+    expect(mockAddWaiter).toHaveBeenCalledOnce();
+    expect(mockAddWaiter.mock.calls[0]![2]).not.toHaveProperty('waiterStepExecutionId');
+
+    const [[, result]] = mockAddStepResult.mock.calls as unknown as Array<
+      [unknown, { status: string; outputRef: string }]
+    >;
+    expect(result.status).toBe('SUCCEEDED');
+    const output = decodeInline(result.outputRef);
+    expect(output).toMatchObject({ status: 'started', slug: 'lead-scoring' });
+
+    // The run pauses on its own, and its waiters — this session — hear it.
+    expect(mockStartRun).not.toHaveBeenCalled();
+    expect(mockPauseRun).toHaveBeenCalledOnce();
+    expect(mockNotifyWaiters).toHaveBeenCalledWith(expect.anything(), {
+      tenantId: TENANT,
+      runId: output['runId'],
+      outcome: 'paused',
+      payloadRef: 'gs://bucket/startup-contract',
+    });
+    // Registered before the run paused, so the notification had someone to reach.
+    expect(mockAddWaiter.mock.invocationCallOrder[0]!).toBeLessThan(
+      mockNotifyWaiters.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it('a blocking start still parks on a preflight pause', async () => {
+    mockCheckWorkflowCapabilityPreflight.mockResolvedValue({
+      ok: false,
+      missingCapabilities: ['crm:write'],
+    });
+
+    await handleWorkflowCrudInline(makeStartArgs());
+
+    expect(mockHandoffStartupPreflightPause).toHaveBeenCalledOnce();
+    expect(mockHandoffStartupPreflightPause.mock.calls[0]![0]).toMatchObject({
+      contract: { pauseCause: 'needs_capability' },
+    });
+    expect(mockAddWaiter).not.toHaveBeenCalled();
+    expect(mockStartRun).not.toHaveBeenCalled();
+    expect(mockAddStepResult).not.toHaveBeenCalled();
   });
 
   it('keeps parking the calling step by default', async () => {

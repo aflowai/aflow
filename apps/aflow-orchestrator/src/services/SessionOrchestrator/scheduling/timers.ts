@@ -44,6 +44,7 @@ import { insertTimerDeadLetter } from '@aflow/database';
 import { createLeasedWorkConsumer } from '@aflow/lib';
 import { dispatchInlineOp } from '../handlers/dispatchInlineOp.js';
 import { processWorkflowCorrelatedTimer } from './workflowTimerDispatch.js';
+import { wakeSessionForRunWakeups } from '../../cybernetic/harness/sessionWakeup.js';
 
 /**
  * Re-arm offset for a timer this instance may not dispatch. Long enough that a
@@ -306,6 +307,17 @@ export function createProcessDueTimers(bindings: SessionOrchestratorBindings) {
         return false;
       }
 
+      if (timer.reason === 'event_wake') {
+        // No step is waiting on this wake: the wakeups it was for stay in the
+        // log and are read at the session's next turn.
+        logOrchestratorError(
+          '[SessionOrchestrator] Dropping poisoned event wake',
+          new Error('TIMER_POISONED'),
+          context,
+        );
+        return true;
+      }
+
       // Schema invariant guarantees a timer without workflowExecution names a
       // session; the non-null assertion is safe.
       const sessionId = timer.sessionId!;
@@ -478,6 +490,16 @@ export function createProcessDueTimers(bindings: SessionOrchestratorBindings) {
           await rescheduleClaimedTimer(redis, timer, Date.now() + FENCING_REARM_DELAY_MS);
           return;
         }
+      }
+
+      if (timer.reason === 'event_wake') {
+        await wakeSessionForRunWakeups(
+          { db, redis, payloadStore: deps.payloadStore },
+          timer.tenantId,
+          timer.sessionId,
+        );
+        await settle(timer);
+        return;
       }
 
       if (timer.reason === 'delayed_start' && timer.operationId === SNOOZE_OPERATION_ID) {

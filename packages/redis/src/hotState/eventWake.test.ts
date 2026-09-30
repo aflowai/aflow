@@ -12,7 +12,7 @@
 import { describe, it, expect } from 'vitest';
 import type { SessionHotState } from './schemas.js';
 import type { Redis } from 'ioredis';
-import { claimEventDrivenTurn, mayWake } from './eventWake.js';
+import { claimEventDrivenTurn, mayWake, returnEventDrivenTurn } from './eventWake.js';
 
 const STEP = '00000000-0000-4000-8000-0000000000a1';
 
@@ -64,9 +64,10 @@ describe('what a wake may advance', () => {
   });
 });
 
-/** Enough of a Redis for a MULTI of SET NX + INCR, with the window's expiry under the test's hand. */
+/** Enough of a Redis for the window: SET NX + INCR + PTTL, and the guarded DECR. */
 function fakeRedis(): { redis: Redis; expire: () => void } {
   const store = new Map<string, number>();
+  const WINDOW_LEFT_MS = 42_000;
   const redis = {
     multi() {
       const ops: Array<() => [null, unknown]> = [];
@@ -87,11 +88,21 @@ function fakeRedis(): { redis: Redis; expire: () => void } {
           });
           return chain;
         },
+        pttl(key: string) {
+          ops.push(() => [null, store.has(key) ? WINDOW_LEFT_MS : -2]);
+          return chain;
+        },
         exec() {
           return Promise.resolve(ops.map((op) => op()));
         },
       };
       return chain;
+    },
+    eval(_script: string, _numKeys: number, key: string) {
+      if (!store.has(key)) return Promise.resolve(0);
+      const next = store.get(key)! - 1;
+      store.set(key, next);
+      return Promise.resolve(next);
     },
   } as unknown as Redis;
   return { redis, expire: () => store.clear() };
@@ -102,13 +113,33 @@ describe('event-driven turns per session', () => {
     const { redis, expire } = fakeRedis();
     const claims = [];
     for (let i = 0; i < 4; i++) {
-      claims.push(await claimEventDrivenTurn(redis, 't1', 's1', 3));
+      claims.push(await claimEventDrivenTurn(redis, 't1', 's1', 3, 1_000));
     }
-    expect(claims).toEqual([true, true, true, false]);
+    expect(claims).toEqual([
+      { taken: true },
+      { taken: true },
+      { taken: true },
+      { taken: false, nextSlotAtMs: 43_000 },
+    ]);
 
-    expect(await claimEventDrivenTurn(redis, 't1', 's2', 3)).toBe(true);
+    expect(await claimEventDrivenTurn(redis, 't1', 's2', 3)).toEqual({ taken: true });
 
     expire();
-    expect(await claimEventDrivenTurn(redis, 't1', 's1', 3)).toBe(true);
+    expect(await claimEventDrivenTurn(redis, 't1', 's1', 3)).toEqual({ taken: true });
+  });
+
+  it('a returned turn can be taken again in the same window', async () => {
+    const { redis } = fakeRedis();
+    expect(await claimEventDrivenTurn(redis, 't1', 's1', 1)).toEqual({ taken: true });
+    await returnEventDrivenTurn(redis, 't1', 's1');
+    expect(await claimEventDrivenTurn(redis, 't1', 's1', 1)).toEqual({ taken: true });
+  });
+
+  it('returning a turn after the window closed leaves nothing behind', async () => {
+    const { redis, expire } = fakeRedis();
+    await claimEventDrivenTurn(redis, 't1', 's1', 1);
+    expire();
+    await returnEventDrivenTurn(redis, 't1', 's1');
+    expect(await claimEventDrivenTurn(redis, 't1', 's1', 1)).toEqual({ taken: true });
   });
 });

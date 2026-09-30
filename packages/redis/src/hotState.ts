@@ -128,7 +128,12 @@ export {
   type AppendRoomMessageResult,
 } from './hotState/roomMessages.js';
 
-export { mayWake, claimEventDrivenTurn } from './hotState/eventWake.js';
+export {
+  mayWake,
+  claimEventDrivenTurn,
+  returnEventDrivenTurn,
+  type EventDrivenTurnClaim,
+} from './hotState/eventWake.js';
 
 export { atomicCreateSession, atomicCompleteStep, atomicScheduleStep } from './hotState/atomic.js';
 

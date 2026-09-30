@@ -236,6 +236,8 @@ export {
   type DelegationSupervisionCandidate,
   mayWake,
   claimEventDrivenTurn,
+  returnEventDrivenTurn,
+  type EventDrivenTurnClaim,
 } from './hotState.js';
 
 export {

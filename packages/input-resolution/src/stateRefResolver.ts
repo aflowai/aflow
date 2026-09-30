@@ -554,9 +554,18 @@ async function walkAndResolve(
           // A stringified argument holding a reference below its top level
           // (`'{"patch": {"$ref": "output.x/patch"}}'`) is the object the
           // model meant: left a string, the reference never resolves and the
-          // whole argument reaches validation as text.
+          // whole argument reaches validation as text. Only when every
+          // reference in it resolves, though — file contents or a memory body
+          // can hold text shaped like a reference, and that text is data.
           if (containsRef(parsed, 0)) {
-            return await walkAndResolve(parsed, runtimeState, payloadStore, depth);
+            const rewritten = await walkAndResolve(parsed, runtimeState, payloadStore, depth).then(
+              (resolved) => ({ resolved }),
+              (nestedErr: unknown) => {
+                if (nestedErr instanceof StateRefError) return null;
+                throw nestedErr;
+              },
+            );
+            if (rewritten) return rewritten.resolved;
           }
         } catch (e) {
           if (e instanceof StateRefError) throw e;

@@ -31,24 +31,60 @@ export function mayWake(
 
 const EVENT_DRIVEN_TURN_WINDOW_SECONDS = 60;
 
+export type EventDrivenTurnClaim = { taken: true } | { taken: false; nextSlotAtMs: number };
+
+function eventDrivenTurnsKey(tenantId: string, sessionId: string): string {
+  return `${StreamKeys.sessionStateKey(tenantId, sessionId)}:eventTurns`;
+}
+
 /**
  * Take one of a session's event-driven turns for the current minute.
  *
  * A fixed window that opens with the first wake and expires on its own, so an
- * idle session holds nothing and nothing has to sweep it.
+ * idle session holds nothing and nothing has to sweep it. A refusal says when
+ * the window closes, which is the earliest a deferred wake can be granted.
  */
 export async function claimEventDrivenTurn(
   redis: Redis,
   tenantId: string,
   sessionId: string,
   turnsPerMinute: number,
-): Promise<boolean> {
-  const key = `${StreamKeys.sessionStateKey(tenantId, sessionId)}:eventTurns`;
+  nowMs: number = Date.now(),
+): Promise<EventDrivenTurnClaim> {
+  const key = eventDrivenTurnsKey(tenantId, sessionId);
   const results = await redis
     .multi()
     .set(key, '0', 'EX', EVENT_DRIVEN_TURN_WINDOW_SECONDS, 'NX')
     .incr(key)
+    .pttl(key)
     .exec();
   const taken = results?.[1]?.[1];
-  return typeof taken === 'number' && taken <= turnsPerMinute;
+  if (typeof taken === 'number' && taken <= turnsPerMinute) return { taken: true };
+  const remainingMs = results?.[2]?.[1];
+  return {
+    taken: false,
+    nextSlotAtMs:
+      nowMs +
+      (typeof remainingMs === 'number' && remainingMs > 0
+        ? remainingMs
+        : EVENT_DRIVEN_TURN_WINDOW_SECONDS * 1000),
+  };
+}
+
+// Only while the window is open: a DECR on an expired key would create one
+// with no expiry, holding a count for a session nothing will ever sweep.
+const RETURN_EVENT_DRIVEN_TURN_LUA = `
+if redis.call('EXISTS', KEYS[1]) == 1 then
+  return redis.call('DECR', KEYS[1])
+end
+return 0
+`;
+
+/** Give back a turn taken for a wake that another wake had already started. */
+export async function returnEventDrivenTurn(
+  redis: Redis,
+  tenantId: string,
+  sessionId: string,
+): Promise<void> {
+  await redis.eval(RETURN_EVENT_DRIVEN_TURN_LUA, 1, eventDrivenTurnsKey(tenantId, sessionId));
 }
