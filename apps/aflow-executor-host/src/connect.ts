@@ -28,6 +28,7 @@ import {
   toolDirectoriesOnPath,
 } from './interview.js';
 import { serializePolicy, writePolicyAtomically } from './policyFile.js';
+import { describePushApproval, resolvePushApproval } from './pushApproval.js';
 import {
   assertRootOutsideRepositoryMetadata,
   type HostBinding,
@@ -67,6 +68,9 @@ function usage(): never {
       '  --run            Allow commands, without being asked\n' +
       '  --branch-prefix <p>  Publish to branches under this prefix instead of aflow/ (a git\n' +
       '                   repository with --run)\n' +
+      '  --push-approval <always|never|unless-unreviewed>\n' +
+      '                   When a publication asks before pushing (default unless-unreviewed:\n' +
+      '                   it asks unless a Local Code Review approved the commit)\n' +
       '  --mcp a,b        Offer these MCP servers, without being asked\n' +
       '  --yes            Take every default and ask nothing',
   );
@@ -252,6 +256,13 @@ async function main(): Promise<void> {
     await mkdir(HOST_DIR, { recursive: true, mode: 0o700 });
     const raw = await readFile(policyPath, 'utf8').catch(() => '{"version":1,"bindings":[]}');
     const policy = HostPolicySchema.parse(JSON.parse(raw));
+    // A reconnect keeps the posture the operator set since, unless it names one.
+    const pushApproval = resolvePushApproval({
+      requested: arg('push-approval'),
+      branchPrefix,
+      current: policy.bindings.find((b) => b.id === id && b.root === root)?.branchPolicy
+        ?.pushApproval,
+    });
 
     // Home is denied as a region, so a CLI installed under it is unreachable
     // until the operator says otherwise. That used to mean editing a key they
@@ -402,7 +413,9 @@ async function main(): Promise<void> {
       root,
       mode: writable ? 'readwrite' : 'read',
       allowsExecution,
-      ...(branchPrefix !== undefined ? { branchPolicy: { branchPrefix } } : {}),
+      ...(branchPrefix !== undefined && pushApproval !== undefined
+        ? { branchPolicy: { branchPrefix, pushApproval } }
+        : {}),
       singleFile: info.isFile(),
       spaceId: material.spaceId,
     };
@@ -431,6 +444,9 @@ async function main(): Promise<void> {
       `  ${writable ? 'Readable and writable' : 'Read only'}${allowsExecution ? ', commands allowed' : ', no commands'}` +
         `${branchPrefix !== undefined ? `, pushes to branches under \`${branchPrefix}\`` : ', no pushes'}.`,
     );
+    if (pushApproval !== undefined) {
+      prompter.say(`  A publication from it ${describePushApproval(pushApproval)}.`);
+    }
     prompter.say('');
     // Asked rather than assumed. Telling an operator to start something already
     // running is worse than saying nothing: it reads as "not finished yet", and

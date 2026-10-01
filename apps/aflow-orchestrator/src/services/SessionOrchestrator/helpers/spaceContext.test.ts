@@ -71,6 +71,21 @@ describe('hostFolderEntry', () => {
     // would read as a prefix that matches everything.
     expect(hostFolderEntry(row)).not.toHaveProperty('branchPrefix');
   });
+
+  it('says when a publication from it asks before pushing, as its machine declares', () => {
+    const entry = hostFolderEntry({ ...row, branchPrefix: 'aflow/' }, 'unless-unreviewed');
+    expect(SpaceContextHostFoldersSectionSchema.shape.items.element.parse(entry)).toMatchObject({
+      branchPrefix: 'aflow/',
+      pushApproval: 'unless-unreviewed',
+    });
+  });
+
+  it('names no posture for a folder that pushes nothing, or whose machine is not running', () => {
+    expect(hostFolderEntry(row, 'never')).not.toHaveProperty('pushApproval');
+    expect(hostFolderEntry({ ...row, branchPrefix: 'aflow/' })).not.toHaveProperty(
+      'pushApproval',
+    );
+  });
 });
 
 describe('mergeHostHarnesses', () => {

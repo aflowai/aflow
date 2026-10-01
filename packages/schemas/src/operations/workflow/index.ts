@@ -18,6 +18,7 @@ export * from './runCancelOp.js';
 export * from './suggestedAction.js';
 export * from './runDetail.js';
 export * from './runAttention.js';
+export * from './runLatest.js';
 export * from './evaluate.js';
 export * from './learnOp.js';
 export * from './ledgerGet.js';
@@ -62,6 +63,7 @@ import {
   WorkflowRunListAttentionInputSchema,
   WorkflowRunListAttentionOutputSchema,
 } from './runAttention.js';
+import { WorkflowRunLatestInputSchema, WorkflowRunLatestOutputSchema } from './runLatest.js';
 import { WorkflowEvaluateInputSchema, WorkflowEvaluateOutputSchema } from './evaluate.js';
 import { WorkflowLearnInputSchema, WorkflowLearnOutputSchema } from './learnOp.js';
 import { WorkflowLedgerGetInputSchema, WorkflowLedgerGetOutputSchema } from './ledgerGet.js';
@@ -99,6 +101,8 @@ export const WorkflowOperationRegistrations = createWorkflowOperationRegistratio
   WorkflowRunDetailOutputSchema,
   WorkflowRunListAttentionInputSchema,
   WorkflowRunListAttentionOutputSchema,
+  WorkflowRunLatestInputSchema,
+  WorkflowRunLatestOutputSchema,
   WorkflowEvaluateInputSchema,
   WorkflowEvaluateOutputSchema,
   WorkflowLearnInputSchema,

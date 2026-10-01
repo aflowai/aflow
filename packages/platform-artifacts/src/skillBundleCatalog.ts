@@ -178,7 +178,7 @@ Then run a coding skill: ask to open a PR for a change → review it → fix →
 
 const LOCAL_CODE_REVIEW_BUNDLE: SkillBundleInput = {
   bundleId: 'local-code-review' as SkillBundleId,
-  version: 5,
+  version: 6,
   name: 'Local Code Review',
   tagline: 'Review committed changes in a connected repository with the installed coding agent.',
   description: `Installs **Review Local Changes** — a read-only review of a revision range in a repository connected as a folder, carried out by the coding agent already installed on that machine.
@@ -204,16 +204,18 @@ const LOCAL_CODE_REVIEW_BUNDLE: SkillBundleInput = {
 
 const LOCAL_PUBLISH_BUNDLE: SkillBundleInput = {
   bundleId: 'local-publish' as SkillBundleId,
-  version: 5,
+  version: 6,
   name: 'Local Publish',
   tagline:
-    'Commit a patch onto a branch of a connected repository, approve, and open the pull request.',
-  description: `Installs **Publish Local Changes** — the step after a commission: a patch becomes a commit on a branch of a repository connected as a folder — a new one, or the branch a fix was commissioned from, and then, once approved, a pushed branch and an open pull request.
+    'Commit a patch onto a branch of a connected repository, clear the push, and open the pull request.',
+  description: `Installs **Publish Local Changes** — the step after a commission: a patch becomes a commit on a branch of a repository connected as a folder — a new one, or the branch a fix was commissioned from, and then, once the push is cleared, a pushed branch and an open pull request.
 
 **What it installs**:
-- The **Publish Local Changes** skill — the patch is committed in a detached worktree, so the working tree is untouched: a fresh branch starts at the commission's base, and the branch a fix was commissioned from is appended to at its head; the run then waits for approval, and only after it does the branch reach \`origin\` and the pull request open.
+- The **Publish Local Changes** skill — the patch is committed in a detached worktree, so the working tree is untouched: a fresh branch starts at the commission's base, and the branch a fix was commissioned from is appended to at its head; the run then waits for the operator's approval — unless the folder's push approval says it need not ask — and only after that does the branch reach \`origin\` and the pull request open.
 
-**After install**: connect the repository as a folder allowing pushes under a branch prefix, and bind the GitHub connector for the space. Then hand the skill a commission's \`patchRef\`, a branch name under that prefix and a title.`,
+**After install**: connect the repository as a folder allowing pushes under a branch prefix, and bind the GitHub connector for the space. Then hand the skill a commission's \`patchRef\`, a branch name under that prefix and a title.
+
+**When it asks before pushing**: the folder's push approval, set on the machine that holds it — \`always\` asks before every push, \`never\` pushes without asking, and \`unless-unreviewed\`, the default, pushes without asking only when a Local Code Review of the exact commit being pushed returned \`approve\`. Change it with \`aflow harness push-approval <folder> <always|never|unless-unreviewed>\`.`,
   tags: ['coding', 'publish', 'git', 'local', 'developer-tools'],
   skillCatalogIds: ['publish-local-changes'],
   prerequisiteBundleIds: [],
@@ -225,7 +227,7 @@ const LOCAL_PUBLISH_BUNDLE: SkillBundleInput = {
   memorySeed: [],
   helmsmanHints: [
     'A folder connected without a publish prefix can be committed to but not pushed from — the push is refused where it runs. Ask for the folder to be reconnected allowing pushes under a prefix before starting a publication.',
-    'The run waits at the approval, so the range can be reviewed first — Local Code Review over `<base>..<branch>` — and approved or declined on what it finds.',
+    "Whether the run waits at the approval is the folder's push approval, shown in the machine block. Where it waits, the range can be reviewed first — Local Code Review over `<base>..<branch>` — and approved or declined on what it finds.",
     "A commission's change is published by its `patchRef`, never its `patch` text: that copy is cut short on a large change, and a run's inputs are capped at 32 KB together. `patch` is for a small diff the operator hands over.",
   ],
 };

@@ -157,6 +157,7 @@ export * from './ledger.js';
 export * from './promotion.js';
 // Structured run result (output as a first-class citizen).
 export * from './runResult.js';
+export * from './latestRun.js';
 export * from './campaigns.js';
 export * from './campaignConfig.js';
 export * from './repoConnection.js';

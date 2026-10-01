@@ -58,6 +58,33 @@ export const HostBranchPrefixSchema = branchToken(
     'and nothing else. Absent, the folder pushes nothing.',
 );
 
+export const HOST_PUSH_APPROVAL_DEFAULT = 'unless-unreviewed';
+
+export const HostPushApprovalSchema = z
+  .enum(['always', 'never', 'unless-unreviewed'])
+  .describe(
+    'When a publication from this folder asks the operator before it pushes. ' +
+      '`always`: it asks before every push. ' +
+      '`never`: it pushes without asking. ' +
+      '`unless-unreviewed`: it pushes without asking only when a Local Code Review of the ' +
+      'exact commit being pushed returned `approve`, and asks otherwise.',
+  );
+export type HostPushApproval = z.infer<typeof HostPushApprovalSchema>;
+
+/**
+ * What a push from a connected folder may do, as the machine holding the folder
+ * declares it.
+ *
+ * The approval posture lives beside the prefix rather than in the skill that
+ * publishes, because it is the operator's statement about this folder and
+ * holds for every publication from it.
+ */
+export const HostBindingBranchPolicySchema = z.object({
+  branchPrefix: HostBranchPrefixSchema,
+  pushApproval: HostPushApprovalSchema.default(HOST_PUSH_APPROVAL_DEFAULT),
+});
+export type HostBindingBranchPolicy = z.infer<typeof HostBindingBranchPolicySchema>;
+
 export const HostBranchNameSchema = branchToken(HOST_BRANCH_NAME_MAX_LENGTH, 'branch name');
 
 /**
@@ -425,7 +452,7 @@ export const HostFilePatchOutputSchema = z.object({
   commit: z
     .object({
       branch: z.string().describe('The branch that now exists in the repository.'),
-      sha: z.string().describe('The commit the branch points at.'),
+      sha: z.string().min(1).describe('The commit the branch points at, as its full sha.'),
       message: z.string().describe('The message the commit carries, as git recorded it.'),
       baseSha: z
         .string()
@@ -721,6 +748,33 @@ export const HostProcessStopInputSchema = z.object({
 export const HostProcessStopOutputSchema = z.object({
   stopped: z.array(z.string()).describe('Process ids that were running and are not now.'),
   alreadyExited: z.array(z.string()),
+});
+
+export const HostBindingInspectInputSchema = z.object({
+  bindingId: HostBindingRef,
+});
+
+export const HostBindingInspectOutputSchema = z.object({
+  id: z.string(),
+  root: z.string().describe('Absolute path of the folder on the operator machine.'),
+  mode: z.enum(['read', 'readwrite']),
+  allowsExecution: z.boolean(),
+  branchPolicy: HostBindingBranchPolicySchema.optional().describe(
+    'Which branches a push from this folder may move, and when a publication asks the ' +
+      'operator before pushing. Absent, the folder pushes nothing.',
+  ),
+  harnesses: z
+    .array(
+      z.object({
+        id: z.string(),
+        label: z.string().optional(),
+        model: z
+          .string()
+          .optional()
+          .describe('The model it runs when a task names none, where the operator set one.'),
+      }),
+    )
+    .describe('Coding harnesses this machine runs, by the id `host.harness.run` addresses.'),
 });
 
 export const HostOperationRegistrations: OperationRegistration[] = [
@@ -1131,5 +1185,37 @@ export const HostOperationRegistrations: OperationRegistration[] = [
     },
     inputZod: HostProcessStopInputSchema,
     outputZod: HostProcessStopOutputSchema,
+  },
+  {
+    stepType: 'host',
+    group: 'binding',
+    verb: 'inspect',
+    name: 'Inspect Connected Folder',
+    actionLabel: 'Reading the folder’s settings…',
+    groupDisplayName: 'Connected folders',
+    groupDescription: 'What the operator declared about a folder on their own machine.',
+    semanticDescription:
+      'Read what the operator declared about a connected folder, from the policy file on the ' +
+      'machine that holds it: its root, whether it may be written and run in, which branches ' +
+      'it may push and when a publication asks before pushing, and the coding harnesses that ' +
+      'machine runs. Touches nothing in the folder itself.',
+    tags: ['host', 'binding', 'local'],
+    idempotency: 'idempotent',
+    accessMode: 'read',
+    usage: {
+      oneLine: "Read a connected folder's declared settings from its machine.",
+      minimalExampleInput: { bindingId: 'hb_project' },
+      whenToUse: [
+        "A skill deciding a step on the folder's push posture, read where it is enforced",
+        'Checking which harness ids a machine offers before a run names one',
+      ],
+      whenNotToUse: [
+        'Listing or reading files in the folder — that is host.file.list and host.file.get',
+      ],
+      pitfalls: [
+        'The machine holding the folder answers it, so it completes only while that machine runs its executor.',      ],
+    },
+    inputZod: HostBindingInspectInputSchema,
+    outputZod: HostBindingInspectOutputSchema,
   },
 ];

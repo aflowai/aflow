@@ -1,6 +1,15 @@
 import { describe, it, expect } from 'vitest';
-import { materializeAndValidateSkillConfig } from '@aflow/cybernetic-runtime';
 import {
+  computeReadyTasksWithWhen,
+  computeRejectedApprovalSkipSet,
+  materializeAndValidateSkillConfig,
+  projectTaskOutput,
+} from '@aflow/cybernetic-runtime';
+import {
+  HostBindingInspectOutputSchema,
+  type HostPushApproval,
+  type WorkflowTask,
+  WorkflowRunLatestOutputSchema,
   HostFilePatchInputSchema,
   HostFilePatchOutputSchema,
   isEvalPlaneOperation,
@@ -8,6 +17,7 @@ import {
   substituteTemplateBinds,
 } from '@aflow/schemas';
 import { PUBLISH_LOCAL_CHANGES } from './publishLocalChanges.js';
+import { REVIEW_LOCAL_CHANGES } from './reviewLocalChanges.js';
 
 const wf = PUBLISH_LOCAL_CHANGES.bundle.workflow;
 const taskById = new Map(wf.tasks.map((task) => [task.taskId, task]));
@@ -60,15 +70,19 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(validity.status).toBe('valid');
   });
 
-  it('is five tasks in one chain — commit, read the repository, approve, push, pull request', () => {
+  it('is seven tasks — commit, the reads that decide the approval, approve, push, pull request', () => {
     expect(wf.tasks.map((t) => t.taskId)).toEqual([
       'commit',
       'read-repository',
+      'read-push-approval',
+      'read-review',
       'approve-push',
       'push',
       'open-pr',
     ]);
     expect(wf.tasks.map((t) => t.type)).toEqual([
+      'operation',
+      'operation',
       'operation',
       'operation',
       'human',
@@ -78,12 +92,16 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(wf.tasks.map((t) => t.dependsOn ?? [])).toEqual([
       [],
       ['commit'],
-      ['read-repository'],
+      ['commit'],
+      ['read-push-approval'],
+      ['read-repository', 'read-review'],
       ['approve-push'],
       ['push'],
     ]);
     expect(taskOrThrow('commit').operation).toBe('host.file.patch');
     expect(taskOrThrow('read-repository').operation).toBe('api.http.call');
+    expect(taskOrThrow('read-push-approval').operation).toBe('host.binding.inspect');
+    expect(taskOrThrow('read-review').operation).toBe('workflow.run.latest');
     expect(taskOrThrow('push').operation).toBe('host.process.exec');
     expect(taskOrThrow('open-pr').operation).toBe('api.http.call');
   });
@@ -335,15 +353,6 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(approve.type).toBe('human');
     expect(approve.intent).toBe('approve');
     expect(approve.approves).toEqual(['commit']);
-    expect(approve.when).toEqual({
-      expression: "tasks.commit.output.state == 'applied'",
-      onMissingRef: 'skip',
-    });
-    // Gating does not propagate: the push reads the decision itself.
-    expect(taskOrThrow('push').when).toEqual({
-      expression: "tasks.approve-push.output.decision == 'approved'",
-      onMissingRef: 'skip',
-    });
     expect(taskOrThrow('push').maxAttempts).toBe(1);
     expect(approve.pauseInstruction).toContain('nothing has left the machine');
     expect(approve.actionPreview?.op).toBe('host.process.exec');
@@ -353,6 +362,11 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(taskOrThrow('approve-push').actionPreview?.inputBindings).toEqual({
       bindingId: { kind: 'run_input', path: 'bindingId' },
       branch: { kind: 'run_input', path: 'branch' },
+      pushApproval: {
+        kind: 'task_output',
+        taskId: 'read-push-approval',
+        path: 'branchPolicy.pushApproval',
+      },
       commitSha: { kind: 'task_output', taskId: 'commit', path: 'commit.sha' },
       commitBranch: { kind: 'task_output', taskId: 'commit', path: 'commit.branch' },
       commitMessage: { kind: 'task_output', taskId: 'commit', path: 'commit.message' },
@@ -446,5 +460,245 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       ...(t.context?.capabilities?.operations ?? []),
     ]);
     expect(operations.filter((op) => isEvalPlaneOperation(op))).toEqual([]);
+  });
+});
+
+// ── The push approval, run through the scheduler's own predicates ──────────
+
+const HEAD = 'c'.repeat(40);
+
+type Review = 'none' | 'approve' | 'request_changes' | 'comment';
+type Decision = 'approved' | 'declined';
+
+interface Scenario {
+  pushApproval: HostPushApproval | 'no-prefix';
+  review: Review;
+  decision: Decision;
+  committed?: boolean;
+}
+
+interface Outcome {
+  asked: boolean;
+  pushed: boolean;
+  ran: string[];
+}
+
+/** What each operation returns in a scenario, before the task's own projection. */
+function rawOutput(taskId: string, scenario: Scenario): Record<string, unknown> {
+  switch (taskId) {
+    case 'commit':
+      return scenario.committed === false
+        ? { state: 'conflict', filesChanged: 0, files: [], conflicts: ['a.ts'] }
+        : {
+            state: 'applied',
+            filesChanged: 1,
+            files: ['a.ts'],
+            conflicts: [],
+            commit: {
+              branch: 'aflow/x',
+              sha: HEAD,
+              message: 'The change',
+              baseSha: 'a'.repeat(40),
+              appended: false,
+            },
+          };
+    case 'read-repository':
+      return { statusCode: 200, data: { full_name: 'aflowai/aflow' } };
+    case 'read-push-approval':
+      return HostBindingInspectOutputSchema.parse({
+        id: 'hb_app',
+        root: '/tmp/app',
+        mode: 'readwrite',
+        allowsExecution: true,
+        ...(scenario.pushApproval === 'no-prefix'
+          ? {}
+          : { branchPolicy: { branchPrefix: 'aflow/', pushApproval: scenario.pushApproval } }),
+        harnesses: [],
+      });
+    case 'read-review':
+      return WorkflowRunLatestOutputSchema.parse({
+        run:
+          scenario.review === 'none'
+            ? null
+            : {
+                runId: 'review-run',
+                completedAt: new Date().toISOString(),
+                state: { verdict: scenario.review, reviewedHead: HEAD },
+              },
+        scanned: 3,
+      });
+    case 'push':
+      return { exitCode: 0 };
+    case 'open-pr':
+      return { statusCode: 201, data: { number: 7, html_url: 'https://github.com/aflowai/aflow/pull/7' } };
+    default:
+      return {};
+  }
+}
+
+/**
+ * Drive the graph the way the harness does: ready tasks run, false predicates
+ * skip, a declined approval skips its gated branch. Only the outputs are
+ * scripted; every decision is the skill's own `when`.
+ */
+function publish(scenario: Scenario): Outcome {
+  const tasks = wf.tasks as unknown as WorkflowTask[];
+  const completed = new Set<string>();
+  const skipped = new Set<string>();
+  const statuses = new Map<string, string>();
+  const outputs = new Map<string, Record<string, unknown>>();
+  const ran: string[] = [];
+  let asked = false;
+
+  for (let round = 0; round < tasks.length + 1; round += 1) {
+    const { ready, skipped: skip, errors } = computeReadyTasksWithWhen(
+      tasks,
+      completed,
+      skipped,
+      { statuses, outputs },
+    );
+    expect(errors).toEqual([]);
+    for (const { task } of skip) {
+      skipped.add(task.taskId);
+      statuses.set(task.taskId, 'skipped');
+    }
+    for (const task of ready) {
+      ran.push(task.taskId);
+      if (task.taskId === 'approve-push') {
+        asked = true;
+        if (scenario.decision === 'declined') {
+          for (const id of computeRejectedApprovalSkipSet(tasks, task.taskId)) {
+            skipped.add(id);
+            statuses.set(id, 'skipped');
+          }
+          continue;
+        }
+        outputs.set(task.taskId, { decision: 'approved' });
+      } else {
+        const raw = rawOutput(task.taskId, scenario);
+        if (task.outputProjection !== undefined) {
+          const projected = projectTaskOutput(task.outputProjection, raw, null);
+          if (!projected.ok) throw new Error(`${task.taskId} did not project`);
+          outputs.set(task.taskId, projected.value);
+        } else {
+          outputs.set(task.taskId, raw);
+        }
+      }
+      completed.add(task.taskId);
+      statuses.set(task.taskId, 'succeeded');
+    }
+    if (ready.length === 0 && skip.length === 0) break;
+  }
+
+  return { asked, pushed: ran.includes('push'), ran };
+}
+
+describe('Publish Local Changes — the folder decides whether the push asks', () => {
+  const postures: HostPushApproval[] = ['always', 'never', 'unless-unreviewed'];
+  const reviews: Review[] = ['none', 'approve', 'request_changes', 'comment'];
+  const decisions: Decision[] = ['approved', 'declined'];
+
+  for (const pushApproval of postures) {
+    for (const review of reviews) {
+      for (const decision of decisions) {
+        const asks =
+          pushApproval === 'always' || (pushApproval === 'unless-unreviewed' && review !== 'approve');
+        const pushes = asks ? decision === 'approved' : true;
+        it(`${pushApproval}, review ${review}, operator ${decision}: ${asks ? 'asks' : 'does not ask'}, ${pushes ? 'pushes' : 'does not push'}`, () => {
+          const outcome = publish({ pushApproval, review, decision });
+          expect(outcome.asked).toBe(asks);
+          expect(outcome.pushed).toBe(pushes);
+          expect(outcome.ran.includes('open-pr')).toBe(pushes);
+        });
+      }
+    }
+  }
+
+  it('reads a review only where the posture depends on one', () => {
+    expect(publish({ pushApproval: 'always', review: 'approve', decision: 'approved' }).ran).not.toContain(
+      'read-review',
+    );
+    expect(publish({ pushApproval: 'never', review: 'approve', decision: 'approved' }).ran).not.toContain(
+      'read-review',
+    );
+    expect(
+      publish({ pushApproval: 'unless-unreviewed', review: 'none', decision: 'approved' }).ran,
+    ).toContain('read-review');
+  });
+
+  it('asks nothing and pushes nothing when the patch did not commit', () => {
+    const outcome = publish({
+      pushApproval: 'never',
+      review: 'approve',
+      decision: 'approved',
+      committed: false,
+    });
+    expect(outcome).toEqual({ asked: false, pushed: false, ran: ['commit'] });
+  });
+
+  it('pushes nothing from a folder that declares no push at all', () => {
+    const outcome = publish({ pushApproval: 'no-prefix', review: 'none', decision: 'approved' });
+    expect(outcome.asked).toBe(false);
+    expect(outcome.pushed).toBe(false);
+  });
+
+  it('never pushes after a decline, even read from the decision alone', () => {
+    // The harness skips the gated branch on a decline; the push's own
+    // predicate must refuse it too, in case a decline is ever recorded as an
+    // answer rather than a skip.
+    const push = taskOrThrow('push') as unknown as WorkflowTask;
+    for (const pushApproval of ['always', 'unless-unreviewed'] as const) {
+      const verdict = pushApproval === 'always' ? undefined : 'request_changes';
+      const ready = computeReadyTasksWithWhen(
+        [push],
+        new Set(['approve-push']),
+        new Set(),
+        {
+          statuses: new Map([['approve-push', 'succeeded']]),
+          outputs: new Map<string, Record<string, unknown>>([
+            ['approve-push', { decision: 'rejected' }],
+            ['read-push-approval', { branchPolicy: { branchPrefix: 'aflow/', pushApproval } }],
+            ...(verdict === undefined
+              ? []
+              : [['read-review', { verdict, reviewRunId: 'r' }] as [string, Record<string, unknown>]]),
+          ]),
+        },
+      );
+      expect(ready.ready).toEqual([]);
+    }
+  });
+
+  it('looks for the review of exactly the commit it is about to push', () => {
+    const read = taskOrThrow('read-review');
+    const template = read.inputTemplate;
+    if (template === undefined) throw new Error('the review read must carry a template');
+    expect(read.inputBindings).toEqual({
+      head: { kind: 'task_output', taskId: 'commit', path: 'commit.sha' },
+    });
+    const declared = new Set(Object.keys(read.inputBindings ?? {}));
+    expect(substituteTemplateBinds(template, { head: HEAD }, declared)).toEqual({
+      slug: REVIEW_LOCAL_CHANGES.bundle.workflow.slug,
+      match: { stateVariable: 'reviewedHead', equals: HEAD },
+    });
+    // The variable it matches on is one the review promotes.
+    const reviewWf = REVIEW_LOCAL_CHANGES.bundle.workflow;
+    expect(reviewWf.stateVariables?.map((v) => v.variableId)).toContain('reviewedHead');
+    expect(
+      reviewWf.tasks.flatMap((t) => t.promoteOutputs ?? []).map((p) => ('toState' in p ? p.toState : '')),
+    ).toContain('reviewedHead');
+  });
+
+  it('says why it is asking, and shows the posture beside the commit', () => {
+    const approve = taskOrThrow('approve-push');
+    expect(approve.pauseInstruction).toContain('`always` asks before every push');
+    expect(approve.pauseInstruction).toContain(
+      '`unless-unreviewed` asks because no Local Code Review of this exact commit returned `approve`',
+    );
+  });
+
+  it('names the three postures and the default in its description', () => {
+    for (const phrase of ['`always`', '`never`', '`unless-unreviewed`', 'is `unless-unreviewed`']) {
+      expect(PUBLISH_LOCAL_CHANGES.description).toContain(phrase);
+    }
   });
 });

@@ -9,16 +9,22 @@ import {
   HOST_INVENTORY_TTL_MS,
   HOST_MACHINES_KEY,
   hostInventoryKey,
+  pushApprovalsForSpace,
   readLiveHostInventories,
   type HostInventory,
 } from '../hostInventory.js';
 
-function inventory(hostname: string, harnesses: HostInventory['harnesses']): HostInventory {
+function inventory(
+  hostname: string,
+  harnesses: HostInventory['harnesses'],
+  folders: HostInventory['folders'] = [],
+): HostInventory {
   return {
     hostname,
     observedAt: new Date().toISOString(),
     runtimes: [{ name: 'node', version: 'v22.0.0' }],
     harnesses,
+    folders,
   };
 }
 
@@ -125,5 +131,65 @@ describe('host inventories', () => {
     );
 
     expect(await readLiveHostInventories(redis, now)).toEqual([]);
+  });
+
+  it('carries each pushing folder’s posture through, keyed by its workspace', async () => {
+    const now = Date.now();
+    const redis = fakeRedis(
+      { [now - 1_000]: 'laptop' },
+      {
+        [hostInventoryKey('laptop')]: JSON.stringify(
+          inventory(
+            'laptop',
+            [],
+            [{ id: 'hb_app', spaceId: 'space-a', pushApproval: 'never' }],
+          ),
+        ),
+      },
+    );
+
+    const live = await readLiveHostInventories(redis, now);
+
+    expect(live[0]?.folders).toEqual([{ id: 'hb_app', spaceId: 'space-a', pushApproval: 'never' }]);
+  });
+
+  it('refuses a posture outside the three a folder can hold', async () => {
+    const now = Date.now();
+    const redis = fakeRedis(
+      { [now - 1_000]: 'laptop' },
+      {
+        [hostInventoryKey('laptop')]: JSON.stringify({
+          ...inventory('laptop', []),
+          folders: [{ id: 'hb_app', spaceId: 'space-a', pushApproval: 'sometimes' }],
+        }),
+      },
+    );
+
+    expect(await readLiveHostInventories(redis, now)).toEqual([]);
+  });
+});
+
+describe('push postures for one workspace', () => {
+  it('answers only for that workspace, whichever machine publishes the folder', () => {
+    const postures = pushApprovalsForSpace(
+      [
+        inventory(
+          'laptop',
+          [],
+          [
+            { id: 'hb_app', spaceId: 'space-a', pushApproval: 'always' },
+            { id: 'hb_lib', spaceId: 'space-b', pushApproval: 'never' },
+          ],
+        ),
+        inventory('desktop', [], [{ id: 'hb_lib', spaceId: 'space-a', pushApproval: 'never' }]),
+      ],
+      'space-a',
+    );
+
+    expect(Object.fromEntries(postures)).toEqual({ hb_app: 'always', hb_lib: 'never' });
+  });
+
+  it('says nothing about a folder no running machine publishes', () => {
+    expect(pushApprovalsForSpace([inventory('laptop', [])], 'space-a').size).toBe(0);
   });
 });

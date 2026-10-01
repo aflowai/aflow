@@ -246,6 +246,33 @@ export async function listRecentRuns(
   });
 }
 
+/** A skill's newest completed production runs, by when they completed. */
+export async function listRecentCompletedRuns(
+  db: PostgresJsDatabase,
+  tenantId: string,
+  spaceId: string,
+  slug: string,
+  limit: number,
+): Promise<WorkflowRunSummary[]> {
+  const tenantCtx = createTenantContext(tenantId as TenantId);
+  return withTenantSchema(db, tenantCtx, async (tx) => {
+    const rows = await tx
+      .select()
+      .from(workflowRuns)
+      .where(
+        and(
+          eq(workflowRuns.spaceId, spaceId),
+          eq(workflowRuns.workflowSlug, slug),
+          eq(workflowRuns.status, 'completed'),
+          excludeEvalBatchRuns(),
+        ),
+      )
+      .orderBy(desc(workflowRuns.completedAt), desc(workflowRuns.runId))
+      .limit(limit);
+    return rows.map(toSummary);
+  });
+}
+
 /**
  * The newest learning-bearing terminal runs of a campaign — the read-through
  * source for learnings recorded durably during a run whose candidate rows the

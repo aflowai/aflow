@@ -59,6 +59,7 @@ import { loadPairedEnv } from './pairedEnv.js';
 import { watchPolicy } from './policyWatch.js';
 import { killAllProcesses, killProcessesForBinding, reapWithdrawn } from './sandboxedRun.js';
 import { observeRuntimes } from './runtimes.js';
+import { pushPostures } from './pushApproval.js';
 import { createBackgroundTaskRunner } from '@aflow/lib';
 
 const log = createServiceLogger('host-executor');
@@ -280,6 +281,7 @@ async function main(): Promise<void> {
   // empty list — "this machine offers no harness" and "the file was being
   // written" are different facts, and only the first should reach a workspace.
   let lastHarnesses: HostInventory['harnesses'] = [];
+  let lastFolders: HostInventory['folders'] = [];
 
   // Published with a lifetime rather than stored: an inventory that outlives the
   // executor describes a machine nobody is listening on, and inviting a run
@@ -291,22 +293,25 @@ async function main(): Promise<void> {
     // From the policy rather than from discovery: an installed harness the
     // operator never added to the file cannot be addressed by a run, so naming
     // it here would offer work that is refused.
-    const harnesses = await loadHostPolicy(policyPath)
-      .then((policy) =>
-        [...policy.harnesses.values()]
+    const { harnesses, folders } = await loadHostPolicy(policyPath)
+      .then((policy) => ({
+        harnesses: [...policy.harnesses.values()]
           .map((profile) => ({
             id: profile.id,
             ...(profile.label !== undefined ? { label: profile.label } : {}),
           }))
           .sort((a, b) => a.id.localeCompare(b.id)),
-      )
-      .catch(() => lastHarnesses);
+        folders: pushPostures(policy.bindings),
+      }))
+      .catch(() => ({ harnesses: lastHarnesses, folders: lastFolders }));
     lastHarnesses = harnesses;
+    lastFolders = folders;
     const inventory: HostInventory = {
       hostname,
       observedAt: new Date().toISOString(),
       runtimes,
       harnesses,
+      folders,
     };
     await redis.setex(
       hostInventoryKey(hostname),

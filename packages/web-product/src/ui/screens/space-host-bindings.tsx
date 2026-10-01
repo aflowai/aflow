@@ -13,6 +13,7 @@ import {
   HelperText,
   Badge,
 } from '@aflow/design-system';
+import type { HostPushApproval } from '@aflow/schemas';
 import { useSpace, useSpaceFromRoute } from '../components/providers.js';
 import { useEdition } from '../hooks/useEdition.js';
 import { useApiQuery, useApiMutation } from '../hooks/useApiQuery.js';
@@ -25,7 +26,16 @@ interface HostBinding {
   allowsExecution: boolean;
   /** Null means the folder pushes nothing. */
   branchPrefix: string | null;
+  /** Null where the folder pushes nothing, or its machine is not running. */
+  pushApproval: HostPushApproval | null;
 }
+
+const PUSH_APPROVAL_LINE: Record<HostPushApproval, string> = {
+  always: 'A publication from here asks you before every push.',
+  never: 'A publication from here pushes without asking.',
+  'unless-unreviewed':
+    'A publication from here asks you before pushing, unless a Local Code Review approved the commit.',
+};
 
 interface BindingsResponse {
   bindings: HostBinding[];
@@ -144,8 +154,10 @@ export function SpaceHostBindingsPage() {
                     <Text variant="mono" size="sm">
                       aflow/
                     </Text>
-                    , never forced, unless the command is given another prefix. The folder is named
-                    after itself here, made unique when another workspace already reaches it.
+                    , never forced, unless the command is given another prefix, and a publication
+                    asks you before it pushes unless a Local Code Review approved the commit. The
+                    folder is named after itself here, made unique when another workspace already
+                    reaches it.
                   </Text>
                   <Text
                     variant="mono"
@@ -211,6 +223,11 @@ export function SpaceHostBindingsPage() {
                       <Text variant="muted" size="sm">
                         {binding.root}
                       </Text>
+                      {binding.pushApproval !== null && (
+                        <Text variant="muted" size="sm">
+                          {PUSH_APPROVAL_LINE[binding.pushApproval]}
+                        </Text>
+                      )}
                     </Column>
                     <Button
                       variant="secondary"

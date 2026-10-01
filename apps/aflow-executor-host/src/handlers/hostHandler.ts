@@ -7,6 +7,7 @@
 import type { StepHandler, ExecutorContext, StepResult } from '@aflow/executor-runtime';
 import { failureWithError, validationError } from '@aflow/executor-runtime';
 
+import { createHostBindingHandler } from './bindingHandlers.js';
 import { createHostFileHandler } from './fileHandlers.js';
 import { createHostHarnessHandler } from './harnessHandlers.js';
 import { createHostMcpHandler } from './mcpHandlers.js';
@@ -20,6 +21,7 @@ export function createHostHandler(policyPath: string): StepHandler {
   const harnesses = createHostHarnessHandler(policyPath);
   const patches = createHostPatchHandler(policyPath);
   const mcpServers = createHostMcpHandler(policyPath);
+  const bindings = createHostBindingHandler(policyPath);
 
   return {
     stepType: 'host',
@@ -37,6 +39,9 @@ export function createHostHandler(policyPath: string): StepHandler {
       }
       if (mcpServers.handles.has(ctx.operationId)) {
         return await mcpServers.execute(ctx);
+      }
+      if (bindings.handles.has(ctx.operationId)) {
+        return await bindings.execute(ctx);
       }
       if (ctx.operationId.startsWith('host.file.')) {
         return await files.execute(ctx);

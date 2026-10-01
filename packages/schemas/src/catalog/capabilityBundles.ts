@@ -180,7 +180,9 @@ export const CAPABILITY_BUNDLES: readonly CapabilityBundle[] = [
     label: 'Files on this computer',
     hint: 'Read and write inside a folder the operator connected, in place on their machine.',
     tier: 'on_demand',
-    capabilityGroupIds: ['host.file'],
+    // What the operator declared about the folder travels with its files: both
+    // are read from the machine that holds it.
+    capabilityGroupIds: ['host.file', 'host.binding'],
   },
   {
     id: 'host_commands',

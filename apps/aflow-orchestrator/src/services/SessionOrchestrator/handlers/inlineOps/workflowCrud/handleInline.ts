@@ -8,6 +8,7 @@ import type {
   WorkflowRunCancelInput,
   WorkflowRunDetailInput,
   WorkflowRunListAttentionInput,
+  WorkflowRunLatestInput,
   WorkflowEvaluateInput,
   WorkflowLearnInput,
   WorkflowLedgerGetInput,
@@ -30,6 +31,7 @@ import { handleWorkflowRunResume } from './run/resume.js';
 import { handleWorkflowRunCancel } from './run/cancel.js';
 import { handleWorkflowRunDetail } from './run/detail.js';
 import { handleWorkflowRunListAttention } from './run/listAttention.js';
+import { handleWorkflowRunLatest } from './run/latest.js';
 import { handleWorkflowEvaluate } from './evaluate.js';
 import { handleWorkflowLearn } from './learn.js';
 import { handleWorkflowLedgerGet } from './ledgerGet.js';
@@ -85,6 +87,9 @@ export async function handleWorkflowCrudInline(args: InlineHandlerArgs): Promise
           input as unknown as WorkflowRunListAttentionInput,
           startTime,
         );
+        break;
+      case 'workflow.run.latest':
+        await handleWorkflowRunLatest(args, input as unknown as WorkflowRunLatestInput, startTime);
         break;
       case 'workflow.evaluate':
         await handleWorkflowEvaluate(args, input as unknown as WorkflowEvaluateInput, startTime);

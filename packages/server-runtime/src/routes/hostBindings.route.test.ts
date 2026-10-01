@@ -20,6 +20,10 @@ const written = vi.hoisted(() => ({
   existing: [] as Array<Record<string, unknown>>,
 }));
 
+const published = vi.hoisted(() => ({
+  folders: [] as Array<{ id: string; spaceId: string; pushApproval: string }>,
+}));
+
 function storedRow(values: Record<string, unknown>): Record<string, unknown> {
   return {
     hostBindingId: 'hb_thing',
@@ -61,10 +65,24 @@ vi.mock('@aflow/database', () => ({
   hostBindings: { spaceId: {}, hostBindingId: {} },
 }));
 vi.mock('drizzle-orm', () => ({ eq: () => ({}), and: () => ({}) }));
-vi.mock('@aflow/redis', () => ({
-  getRedisConnection: () => ({ publish: () => Promise.resolve(1) }),
-  HOST_WITHDRAWAL_CHANNEL: 'aflow:host-withdrawal',
-}));
+vi.mock('@aflow/redis', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@aflow/redis')>();
+  return {
+    getRedisConnection: () => ({ publish: () => Promise.resolve(1) }),
+    HOST_WITHDRAWAL_CHANNEL: 'aflow:host-withdrawal',
+    readLiveHostInventories: () =>
+      Promise.resolve([
+        {
+          hostname: 'laptop',
+          observedAt: new Date().toISOString(),
+          runtimes: [],
+          harnesses: [],
+          folders: published.folders,
+        },
+      ]),
+    pushApprovalsForSpace: actual.pushApprovalsForSpace,
+  };
+});
 
 async function buildApp(): Promise<FastifyInstance> {
   const { hostBindingRoutes } = await import('./hostBindings.js');
@@ -107,6 +125,34 @@ beforeEach(() => {
   written.inserted = [];
   written.updated = [];
   written.existing = [];
+  published.folders = [];
+});
+
+describe('the folders a workspace lists', () => {
+  it('says when a publication asks before pushing, as the machine publishes it', async () => {
+    written.existing = [
+      storedRow({ branchPrefix: 'aflow/' }),
+      storedRow({ hostBindingId: 'hb_quiet', branchPrefix: 'aflow/' }),
+      storedRow({ hostBindingId: 'hb_files', branchPrefix: null, allowsExecution: false }),
+    ];
+    published.folders = [
+      { id: 'hb_thing', spaceId: SPACE, pushApproval: 'never' },
+      { id: 'hb_quiet', spaceId: 'another-space', pushApproval: 'always' },
+      { id: 'hb_files', spaceId: SPACE, pushApproval: 'always' },
+    ];
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: `/spaces/${SPACE}/host-bindings` });
+    expect(res.statusCode).toBe(200);
+    const listed = (res.json() as { bindings: Array<Record<string, unknown>> }).bindings;
+    expect(listed.map((b) => [b['hostBindingId'], b['pushApproval']])).toEqual([
+      ['hb_thing', 'never'],
+      // Published for another workspace, so this one does not hear of it.
+      ['hb_quiet', null],
+      // A folder that pushes nothing has no push to approve.
+      ['hb_files', null],
+    ]);
+    await app.close();
+  });
 });
 
 describe('which branches a connected folder may be pushed to', () => {

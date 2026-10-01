@@ -16,10 +16,17 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { HostBranchPrefixSchema, type EditionDescriptor } from '@aflow/schemas';
+import {
+  HostBranchPrefixSchema,
+  HostPushApprovalSchema,
+  type EditionDescriptor,
+  type HostPushApproval,
+} from '@aflow/schemas';
 import {
   getRedisConnection,
   HOST_WITHDRAWAL_CHANNEL,
+  pushApprovalsForSpace,
+  readLiveHostInventories,
   type HostWithdrawalNotice,
 } from '@aflow/redis';
 
@@ -67,6 +74,13 @@ const HostBindingSchema = z.object({
   /** Null means the folder pushes nothing, which is every folder by default. */
   branchPrefix: z.string().nullable().default(null),
   mcpServers: z.array(LocalMcpServerRefSchema).default([]),
+});
+
+const ListedHostBindingSchema = HostBindingSchema.extend({
+  pushApproval: HostPushApprovalSchema.nullable().describe(
+    'When a publication from this folder asks before pushing, as the machine holding it ' +
+      'declares. Null where the folder pushes nothing, or no machine holding it is running.',
+  ),
 });
 
 const CreateBody = z.object({
@@ -152,7 +166,7 @@ export const hostBindingRoutes: FastifyPluginAsync = async (fastify) => {
         tags: ['Host'],
         summary: 'List the folders this space may reach on the operator machine',
         params: spaceParams,
-        response: { 200: z.object({ bindings: z.array(HostBindingSchema) }) },
+        response: { 200: z.object({ bindings: z.array(ListedHostBindingSchema) }) },
       },
     },
     async (request, reply) => {
@@ -161,7 +175,22 @@ export const hostBindingRoutes: FastifyPluginAsync = async (fastify) => {
       const rows = await inTenant(tenant.tenantId, (tx) =>
         tx.select().from(hostBindings).where(eq(hostBindings.spaceId, request.params.spaceId)),
       );
-      return reply.send({ bindings: rows.map((r) => HostBindingSchema.parse(r)) });
+      // The posture is the machine's, changed there, so it is read from what the
+      // running machines publish. A Redis that cannot answer costs the line, not
+      // the list.
+      const postures = await readLiveHostInventories(getRedisConnection())
+        .then((inventories) => pushApprovalsForSpace(inventories, request.params.spaceId))
+        .catch(() => new Map<string, HostPushApproval>());
+      return reply.send({
+        bindings: rows.map((r) => {
+          const binding = HostBindingSchema.parse(r);
+          return {
+            ...binding,
+            pushApproval:
+              binding.branchPrefix === null ? null : (postures.get(binding.hostBindingId) ?? null),
+          };
+        }),
+      });
     },
   );
 

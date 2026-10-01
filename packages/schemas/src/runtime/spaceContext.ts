@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { SkillDiagnosticSchema } from '../cybernetic/skillValidity.js';
 import { InstalledAppletSummarySchema } from '../applet/installed.js';
+import { HostPushApprovalSchema } from '../operations/host.js';
 
 // ============================================================================
 
@@ -315,6 +316,12 @@ export const SpaceContextHostFoldersSectionSchema = z.object({
        * else it allows.
        */
       branchPrefix: z.string().optional(),
+      /**
+       * When a publication from this folder asks the operator before pushing,
+       * as the machine holding it declares. Absent where the folder pushes
+       * nothing, or no machine holding it is running right now.
+       */
+      pushApproval: HostPushApprovalSchema.optional(),
       /**
        * MCP servers the operator configured to run in this folder. Named here
        * because a capability nobody can discover is one nobody uses; what each
