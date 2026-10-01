@@ -36,6 +36,7 @@ import type {
   WorkflowRunWakeupEventMetadata,
 } from '@aflow/schemas';
 import { hasUnreadRunWakeups } from '../../SessionOrchestrator/helpers/runWakeups.js';
+import { logOrchestratorError } from '../../../lib/orchestratorLogger.js';
 import type { HarnessDeps } from './types.js';
 
 /**
@@ -46,13 +47,19 @@ import type { HarnessDeps } from './types.js';
  */
 export const EVENT_DRIVEN_TURNS_PER_MINUTE = 4;
 
+/** When a store that could not answer for a wakeup is asked again. */
+export const EVENT_WAKE_RETRY_DELAY_MS = 30_000;
+
 const EMPTY_RESUME_INPUT_REF = `inline:${Buffer.from('{}').toString('base64')}`;
 
 /**
  * `read`: nothing is unread, so there is nothing to wake for. `deferred`: the
  * session is not resting at its prompt, and its next turn reads what landed.
+ * `retrying`: the store could not say what is unread; an event-wake timer
+ * asks again.
  */
-export type SessionWakeupDelivery = 'woke' | 'deferred' | 'rate_limited' | 'coalesced' | 'read';
+export type SessionWakeupDelivery =
+  'woke' | 'deferred' | 'rate_limited' | 'coalesced' | 'read' | 'retrying';
 
 /**
  * A wakeup's identity: the waiter it is owed to and what it reports.
@@ -144,7 +151,10 @@ export async function deliverSessionWakeup(
     await appendSessionEvent(deps.redis, args.tenantId, args.sessionId as SessionId, event);
   }
   if (!hot) return { eventId, recorded, delivery: 'deferred' };
-  const delivery = await wakeSessionForRunWakeups(deps, args.tenantId, args.sessionId, hot);
+  const delivery = await wakeSessionForRunWakeups(deps, args.tenantId, args.sessionId, {
+    knownState: hot,
+    armWakeOnStoreError: true,
+  });
   return { eventId, recorded, delivery };
 }
 
@@ -158,9 +168,19 @@ export async function wakeSessionForRunWakeups(
   deps: HarnessDeps,
   tenantId: TenantId,
   sessionId: string,
-  knownState?: SessionHotState,
+  options: {
+    knownState?: SessionHotState;
+    /**
+     * Arm an event-wake timer when the store cannot say what is unread,
+     * instead of throwing. Never from the event-wake timer's own handler:
+     * arming resets the timer's redelivery count, so a store that keeps
+     * failing would re-fire it for as long as the session rests. Thrown there,
+     * the timer's redelivery and poison budget bound the retries.
+     */
+    armWakeOnStoreError?: boolean;
+  } = {},
 ): Promise<SessionWakeupDelivery> {
-  let state = knownState;
+  let state = options.knownState;
   if (state === undefined) {
     const stateResult = await getSessionStateSafe(deps.redis, tenantId, sessionId);
     if (!stateResult.ok) return 'deferred';
@@ -170,11 +190,35 @@ export async function wakeSessionForRunWakeups(
   const step = stepExecutionId ? await getStepState(deps.redis, tenantId, stepExecutionId) : null;
   if (!stepExecutionId || !step || !mayWake(state, step)) return 'deferred';
 
-  if (
-    !(await hasUnreadRunWakeups(deps.db, deps.payloadStore, tenantId, sessionId, step.inputRef))
-  ) {
-    return 'read';
+  let unread: boolean;
+  try {
+    unread = await hasUnreadRunWakeups(
+      deps.db,
+      deps.payloadStore,
+      tenantId,
+      sessionId,
+      step.inputRef,
+    );
+  } catch (err) {
+    if (options.armWakeOnStoreError !== true) throw err;
+    // A session resting at its prompt has no turn boundary coming to read the
+    // wakeup instead, so without a timer it would stay unread until the
+    // operator spoke.
+    logOrchestratorError('[sessionWakeup] could not tell whether run wakeups are unread', err, {
+      tenantId,
+      sessionId,
+    });
+    await armEventWakeTimer(
+      deps,
+      tenantId,
+      sessionId,
+      state,
+      step,
+      Date.now() + EVENT_WAKE_RETRY_DELAY_MS,
+    );
+    return 'retrying';
   }
+  if (!unread) return 'read';
 
   // One wake per pause: wakeups landing together start one turn, which reads
   // them all.

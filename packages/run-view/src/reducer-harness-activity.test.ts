@@ -7,7 +7,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import type { HarnessActivityLine } from '@aflow/schemas';
-import { runViewReducer, initialRunViewState } from './reducer.js';
+import { runViewReducer, initialRunViewState, unsettledHarnessSteps } from './reducer.js';
 import type { LiveDeltaAction, RunViewState } from './reducer.js';
 import type { SessionEvent } from './types.js';
 
@@ -321,5 +321,137 @@ describe('a step inside a run', () => {
     });
 
     expect(done.workflowRuns[RUN]?.tasks['review']?.workerSessionId).toBe(WORKER_STEP);
+  });
+});
+
+/**
+ * The chat pins a running step's card below the transcript until the step
+ * ends. The end is the step's terminal event, not a result message: a step
+ * whose output is not displayed writes none, and the card would stay pinned.
+ */
+describe('a step that settles leaves the unsettled set', () => {
+  const OTHER_STEP = '44444444-4444-4444-4444-444444444444';
+
+  function stepEvent(
+    eventType: 'StepSucceeded' | 'StepFailed',
+    stepExecutionId = STEP,
+    metadata: Record<string, unknown> = { operationId: 'host.harness.run' },
+  ): SessionEvent {
+    return {
+      eventId: `${eventType}-${stepExecutionId}`,
+      eventType,
+      sessionId: '11111111-1111-1111-1111-111111111111',
+      stepExecutionId,
+      timestamp: TIMESTAMP,
+      sequenceNumber: 1,
+      eventVersion: 1,
+      data: {},
+      metadata,
+    } as SessionEvent;
+  }
+
+  function settle(state: RunViewState, event: SessionEvent): RunViewState {
+    return runViewReducer(state, { type: 'SSE_EVENT', event });
+  }
+
+  function unsettled(state: RunViewState): string[] {
+    return unsettledHarnessSteps(state.harnessActivity, state.messages);
+  }
+
+  it('is in the set while its feed runs, and out once it succeeds', () => {
+    const running = fold(frames([wire([STATUS, TOOL])]));
+    expect(unsettled(running)).toEqual([STEP]);
+
+    const done = settle(running, stepEvent('StepSucceeded'));
+    expect(unsettled(done)).toEqual([]);
+    expect(feed(done)).toEqual([STATUS, TOOL]);
+  });
+
+  it('leaves on a failure that ends it, not on one that retries it', () => {
+    const running = fold(frames([wire([STATUS])]));
+
+    const retrying = settle(
+      running,
+      stepEvent('StepFailed', STEP, { operationId: 'host.harness.run', willRetry: true }),
+    );
+    expect(unsettled(retrying)).toEqual([STEP]);
+
+    const failed = settle(retrying, stepEvent('StepFailed'));
+    expect(unsettled(failed)).toEqual([]);
+  });
+
+  it('two runs leave the set one at a time', () => {
+    const both = fold(frames([wire([STATUS])], OTHER_STEP), fold(frames([wire([STATUS])])));
+    expect(unsettled(both).sort()).toEqual([STEP, OTHER_STEP].sort());
+
+    const first = settle(both, stepEvent('StepSucceeded'));
+    expect(unsettled(first)).toEqual([OTHER_STEP]);
+
+    const second = settle(first, stepEvent('StepSucceeded', OTHER_STEP));
+    expect(unsettled(second)).toEqual([]);
+  });
+
+  it('a late frame of the same step does not put it back', () => {
+    const done = settle(fold(frames([wire([STATUS])])), stepEvent('StepSucceeded'));
+    const resent = fold([replay(wire([STATUS, TOOL]))], done);
+    expect(unsettled(resent)).toEqual([]);
+  });
+
+  it('a frame that arrives after its step ended, with no feed held, starts settled', () => {
+    const ended = settle(initialRunViewState, stepEvent('StepSucceeded'));
+    expect(ended.harnessActivity[STEP]).toBeUndefined();
+
+    const late = fold(frames([wire([STATUS, TOOL])]), ended);
+    expect(feed(late)).toEqual([STATUS, TOOL]);
+    expect(late.harnessActivity[STEP]?.settled).toBe(true);
+    expect(unsettled(late)).toEqual([]);
+  });
+
+  it('names its step on the displayed result, where the card folds the feed', () => {
+    const running = fold(frames([wire([STATUS, TOOL])]));
+    const done = settle(
+      running,
+      stepEvent('StepSucceeded', STEP, {
+        operationId: 'host.harness.run',
+        displayOutput: true,
+        resolvedOutput: { kind: 'inline', value: { summary: 'The parser is fixed.' } },
+      }),
+    );
+
+    expect(done.messages.map((m) => m.stepExecutionId)).toEqual([STEP]);
+  });
+
+  /** The server folds the snapshot from durable events alone, so it holds no feed. */
+  function hydrateFrom(live: RunViewState, events: SessionEvent[]): RunViewState {
+    const snapshot = events.reduce(settle, initialRunViewState);
+    return runViewReducer(live, { type: 'HYDRATE_SNAPSHOT', snapshot });
+  }
+
+  it('leaves on hydration when its end reached the client only inside the snapshot', () => {
+    const running = fold(frames([wire([STATUS, TOOL])]));
+
+    const hydrated = hydrateFrom(running, [stepEvent('StepSucceeded')]);
+
+    expect(unsettled(hydrated)).toEqual([]);
+    expect(feed(hydrated)).toEqual([STATUS, TOOL]);
+  });
+
+  it('stays on hydration when the snapshot saw it fail and retry', () => {
+    const running = fold(frames([wire([STATUS])]));
+
+    const hydrated = hydrateFrom(running, [
+      stepEvent('StepFailed', STEP, { operationId: 'host.harness.run', willRetry: true }),
+    ]);
+
+    expect(unsettled(hydrated)).toEqual([STEP]);
+  });
+
+  it('on hydration, only the steps the snapshot saw end leave the set', () => {
+    const both = fold(frames([wire([STATUS])], OTHER_STEP), fold(frames([wire([STATUS])])));
+
+    const hydrated = hydrateFrom(both, [stepEvent('StepSucceeded', OTHER_STEP)]);
+
+    expect(unsettled(hydrated)).toEqual([STEP]);
+    expect(feed(hydrated, OTHER_STEP)).toEqual([STATUS]);
   });
 });

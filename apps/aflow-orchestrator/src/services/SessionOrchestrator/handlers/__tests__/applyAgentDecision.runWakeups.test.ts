@@ -130,7 +130,10 @@ describe('a turn settling into user_input', () => {
     await expect(applyAgentDecision(params as never)).resolves.toBe(true);
 
     expect(mockWakeSessionForRunWakeups).toHaveBeenCalledOnce();
-    expect(mockWakeSessionForRunWakeups).toHaveBeenCalledWith(deps, TENANT, SESSION_ID);
+    // Settling is not the event-wake timer, so a store error here arms one.
+    expect(mockWakeSessionForRunWakeups).toHaveBeenCalledWith(deps, TENANT, SESSION_ID, {
+      armWakeOnStoreError: true,
+    });
     expect(mockWaitForInput.mock.invocationCallOrder[0]!).toBeLessThan(
       mockWakeSessionForRunWakeups.mock.invocationCallOrder[0]!,
     );

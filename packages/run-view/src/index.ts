@@ -5,6 +5,7 @@ export {
   type RunViewAction,
   type LiveDeltaAction,
   type HarnessActivityState,
+  unsettledHarnessSteps,
 } from './reducer.js';
 
 export {
@@ -39,6 +40,7 @@ export type {
   UserFacingError,
   MissingVariableInfo,
   InlineHitlPayload,
+  RunWakeupPayload,
   InlineProposalFocusPayload,
 } from './types.js';
 export * from './stage.js';

@@ -1,6 +1,7 @@
 import type { Message, WorkflowRunSurfaceState, WorkflowSurfaceTaskState } from '../types.js';
 import { INITIAL_STATE, type RunViewState, type RunViewAction } from './state.js';
 import { shouldAcceptTaskUpdate, bumpSurfaceRevision } from './helpers.js';
+import { hydrateHarnessActivity } from './events/harnessActivity.js';
 
 export function applyLocalAction(state: RunViewState, action: RunViewAction): RunViewState | null {
   switch (action.type) {
@@ -8,12 +9,9 @@ export function applyLocalAction(state: RunViewState, action: RunViewAction): Ru
       return INITIAL_STATE;
 
     case 'HYDRATE_SNAPSHOT':
-      // Deltas are not durable, so a snapshot folded from events carries no
-      // harness feed and hydrating over one would blank a step still running.
-      // Whatever the snapshot does carry wins; the rest is kept.
       return {
         ...action.snapshot,
-        harnessActivity: { ...state.harnessActivity, ...action.snapshot.harnessActivity },
+        harnessActivity: hydrateHarnessActivity(state.harnessActivity, action.snapshot),
       };
 
     case 'INLINE_PROPOSAL_FOCUS': {

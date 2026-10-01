@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">
+  <title>Orb: handed off</title>
+  <defs>
+    <radialGradient id="oh-base" cx="50%" cy="44%" r="60%">
+      <stop offset="0%" stop-color="#232A3C"/>
+      <stop offset="100%" stop-color="#11141C"/>
+    </radialGradient>
+    <radialGradient id="oh-halo" cx="72%" cy="50%" r="50%">
+      <stop offset="62%" stop-color="#6F8FC9" stop-opacity="0"/>
+      <stop offset="84%" stop-color="#6F8FC9" stop-opacity=".16"/>
+      <stop offset="100%" stop-color="#6F8FC9" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="oh-blur" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="13"/>
+    </filter>
+    <clipPath id="oh-clip"><circle cx="100" cy="100" r="58"/></clipPath>
+  </defs>
+
+  <circle cx="100" cy="100" r="74" fill="url(#oh-halo)"/>
+  <circle cx="100" cy="100" r="58" fill="url(#oh-base)"/>
+
+  <!-- A dim, still core while the light drifts out past the rim -->
+  <g clip-path="url(#oh-clip)">
+    <g transform="translate(100 100)">
+      <ellipse cx="-14" cy="4" rx="30" ry="22" fill="#4E5A70" opacity=".3" filter="url(#oh-blur)"/>
+      <ellipse cx="0" cy="-4" rx="26" ry="18" fill="#6F8FC9" filter="url(#oh-blur)">
+        <animate attributeName="cx" values="-6;46" dur="9s" repeatCount="indefinite"/>
+        <animate attributeName="opacity" values="0;.5;.5;0" keyTimes="0;.2;.7;1" dur="9s" repeatCount="indefinite"/>
+      </ellipse>
+      <ellipse cx="0" cy="10" rx="20" ry="14" fill="#5FA8B8" filter="url(#oh-blur)">
+        <animate attributeName="cx" values="-10;42" dur="13s" repeatCount="indefinite"/>
+        <animate attributeName="opacity" values="0;.35;.35;0" keyTimes="0;.25;.7;1" dur="13s" repeatCount="indefinite"/>
+      </ellipse>
+    </g>
+  </g>
+
+  <circle cx="100" cy="100" r="58" fill="none" stroke="#FFFFFF" stroke-opacity=".1" stroke-width="1.5"/>
+  <ellipse cx="100" cy="66" rx="34" ry="14" fill="#FFFFFF" opacity=".05"/>
+</svg>

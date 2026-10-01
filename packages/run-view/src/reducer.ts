@@ -32,3 +32,5 @@ export function runViewReducer(state: RunViewState, action: RunViewAction): RunV
 }
 
 export const initialRunViewState = INITIAL_STATE;
+
+export { unsettledHarnessSteps } from './reducer/events/harnessActivity.js';

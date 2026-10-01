@@ -31,6 +31,8 @@ const SHARED_CHAT_ASSETS = [
   '/orb-idle-light.svg',
   '/orb-searching.svg',
   '/orb-searching-light.svg',
+  '/orb-handed-off.svg',
+  '/orb-handed-off-light.svg',
 ] as const;
 
 /** Every absolute asset path the layout's metadata points at. */

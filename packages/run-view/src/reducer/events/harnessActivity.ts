@@ -1,4 +1,5 @@
 import { HarnessActivityLineSchema, type HarnessActivityLine } from '@aflow/schemas';
+import type { Message, SessionEvent } from '../../types.js';
 import type { HarnessActivityState, LiveDeltaAction, RunViewState } from '../state.js';
 
 /**
@@ -54,6 +55,7 @@ const EMPTY: HarnessActivityState = {
   partial: '',
   consumedBytes: 0,
   lastActivityAtMs: 0,
+  settled: false,
 };
 
 export function applyActivityDelta(state: RunViewState, action: LiveDeltaAction): RunViewState {
@@ -87,7 +89,71 @@ export function applyActivityDelta(state: RunViewState, action: LiveDeltaAction)
     partial,
     consumedBytes: Math.max(base.consumedBytes, offset + deltaBytes),
     lastActivityAtMs: marked ?? prior?.lastActivityAtMs ?? base.lastActivityAtMs,
+    settled: prior?.settled === true || state.endedSteps[stepExecutionId] === true,
   };
 
   return { ...state, harnessActivity: { ...state.harnessActivity, [stepExecutionId]: entry } };
+}
+
+/**
+ * Mark a feed's step as ended when its terminal event folds.
+ *
+ * The step's result message is not a signal to wait for: a step whose output
+ * is not displayed writes none, and a failure writes none either. A retryable
+ * failure keeps the step id for its next attempt, so it is not an end.
+ */
+export function settleHarnessActivity(state: RunViewState, event: SessionEvent): RunViewState {
+  const stepExecutionId = event.stepExecutionId;
+  if (stepExecutionId === undefined) return state;
+  const ends =
+    event.eventType === 'StepSucceeded' ||
+    (event.eventType === 'StepFailed' && event.metadata?.willRetry !== true);
+  if (!ends) return state;
+  const held = state.harnessActivity[stepExecutionId];
+  if (held === undefined) {
+    if (state.endedSteps[stepExecutionId] === true) return state;
+    return { ...state, endedSteps: { ...state.endedSteps, [stepExecutionId]: true } };
+  }
+  if (held.settled) return state;
+  return {
+    ...state,
+    harnessActivity: { ...state.harnessActivity, [stepExecutionId]: { ...held, settled: true } },
+  };
+}
+
+/**
+ * The feeds after hydrating over `snapshot`. Deltas are not durable, so a
+ * snapshot carries no feed and hydrating over one would blank a step still
+ * running: whatever the snapshot does carry wins, the rest is kept, and a kept
+ * feed whose step the snapshot saw end is settled.
+ */
+export function hydrateHarnessActivity(
+  live: Record<string, HarnessActivityState>,
+  snapshot: Pick<RunViewState, 'harnessActivity' | 'endedSteps'>,
+): Record<string, HarnessActivityState> {
+  const feeds = { ...live, ...snapshot.harnessActivity };
+  for (const [stepExecutionId, feed] of Object.entries(live)) {
+    if (stepExecutionId in snapshot.harnessActivity || feed.settled) continue;
+    if (snapshot.endedSteps[stepExecutionId] === true) {
+      feeds[stepExecutionId] = { ...feed, settled: true };
+    }
+  }
+  return feeds;
+}
+
+/**
+ * The steps whose feed is still running and that nothing in the conversation
+ * shows yet — what the chat pins below the transcript until each one settles.
+ */
+export function unsettledHarnessSteps(
+  feeds: Record<string, HarnessActivityState>,
+  messages: Iterable<Pick<Message, 'stepExecutionId'>>,
+): string[] {
+  const shown = new Set<string>();
+  for (const message of messages) {
+    if (message.stepExecutionId !== undefined) shown.add(message.stepExecutionId);
+  }
+  return Object.entries(feeds)
+    .filter(([stepExecutionId, feed]) => !feed.settled && !shown.has(stepExecutionId))
+    .map(([stepExecutionId]) => stepExecutionId);
 }

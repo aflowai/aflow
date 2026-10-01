@@ -493,6 +493,9 @@ export function createProcessDueTimers(bindings: SessionOrchestratorBindings) {
       }
 
       if (timer.reason === 'event_wake') {
+        // A store error throws and leaves the lease, so this timer's own
+        // redelivery and poison budget bound the retries; re-arming here
+        // would reset that budget on every fire.
         await wakeSessionForRunWakeups(
           { db, redis, payloadStore: deps.payloadStore },
           timer.tenantId,
