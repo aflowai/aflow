@@ -204,7 +204,7 @@ const LOCAL_CODE_REVIEW_BUNDLE: SkillBundleInput = {
 
 const LOCAL_PUBLISH_BUNDLE: SkillBundleInput = {
   bundleId: 'local-publish' as SkillBundleId,
-  version: 10,
+  version: 11,
   name: 'Local Publish',
   tagline:
     'Commit a patch onto a branch of a connected repository, clear the push, and open the pull request.',

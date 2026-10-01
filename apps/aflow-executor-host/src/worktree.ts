@@ -631,7 +631,7 @@ const TRANSPORT_ENV = [
 ] as const;
 
 /**
- * The environment a fetch reaches a remote with: the operator's own transport.
+ * The environment a fetch or a push reaches a remote with: the operator's transport.
  *
  * Their credential helper, `sshCommand` and `insteadOf` rewrites live in the
  * system and global config, and their keys in the ssh agent, so a fetch without
@@ -639,7 +639,7 @@ const TRANSPORT_ENV = [
  * what `gitEnv` closes: a fetch checks nothing out and stages nothing, so no
  * filter runs, and the hooks stay off through `GIT_SAFETY_ARGS`.
  */
-function transportEnv(): Record<string, string> {
+export function transportEnv(): Record<string, string> {
   const env = gitEnv('read');
   delete env['GIT_CONFIG_NOSYSTEM'];
   for (const name of TRANSPORT_ENV) {

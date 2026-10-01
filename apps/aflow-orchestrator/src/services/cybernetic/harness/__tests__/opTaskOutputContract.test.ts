@@ -424,6 +424,7 @@ describe('applyOpTaskOutputContract — projection', () => {
         summary: 'No secret found.',
         unflaggedRange: range,
         clearedRange: range,
+        receipt: 'receipt-clean',
       },
     });
     const cleared = await run(clean.deps, scan as WorkflowTask);
@@ -439,6 +440,7 @@ describe('applyOpTaskOutputContract — projection', () => {
         allowed: [],
         summary: 'No secret found in the lines read, but not every file was read.',
         unflaggedRange: range,
+        receipt: 'receipt-unscanned',
       },
     });
     const partial = await run(unread.deps, scan as WorkflowTask);
@@ -454,6 +456,7 @@ describe('applyOpTaskOutputContract — projection', () => {
         allowed: [{ file: 'fixture.ts', line: 4, pattern: 'secret-assignment' }],
         summary: 'No secret found, apart from lines marked allowed.',
         unflaggedRange: range,
+        receipt: 'receipt-allowed',
       },
     });
     const allowed = await run(marked.deps, scan as WorkflowTask);

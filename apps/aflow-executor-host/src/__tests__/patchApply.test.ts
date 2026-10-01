@@ -17,6 +17,7 @@ import { PUSH_REQUIRED_OPTIONS } from '../bindings.js';
 import { createHostPatchHandler } from '../handlers/patchHandlers.js';
 import { createHostProcessHandler } from '../handlers/processHandlers.js';
 import { fetchedBranch, fetchHeadSource } from '../pushBase.js';
+import { issueScanReceipt } from '../scanReceipt.js';
 import { INLINE_DIFF_CAP_BYTES } from '../worktree.js';
 
 const run = promisify(execFile);
@@ -930,6 +931,7 @@ describe('measuring what a push of the commit would add', () => {
             bindingId: 'hb_push',
             command: ['git', 'push', ...PUSH_REQUIRED_OPTIONS, remote, `${sha}:refs/heads/aflow/x`],
             pushBase: pushBase ?? { base: 'main', range },
+            scan: { receipt: issueScanReceipt({ bindingId: 'hb_push', sha, outcome: 'clean' }) },
           },
           captured,
         ) as object),
@@ -977,6 +979,26 @@ describe('measuring what a push of the commit would add', () => {
       expect(message).toContain(`\`origin/main\` was at \`${unpushed}\``);
       expect(message).toContain(`is at \`${before}\` now, which no longer holds it`);
       expect(message).toContain('The publication has to run again');
+      expect(await pushedBranch()).toBeUndefined();
+    }, 30_000);
+
+    it('reads the base as origin stores it, whatever a replace ref stands in for it', async () => {
+      const unpushed = await commitLocally('leaked.txt');
+      await git(root, 'push', '-q', 'origin', 'HEAD:main');
+      const { range, from } = await measured();
+      expect(from).toBe(unpushed);
+      const before = (await git(root, 'rev-parse', `${unpushed}^`)).trim();
+      await git(root, 'push', '-q', '--force', 'origin', `${before}:refs/heads/main`);
+      // A stand-in for the rewound base that descends from the measured one.
+      const tree = (await git(root, 'rev-parse', `${before}^{tree}`)).trim();
+      const standIn = (await git(root, 'commit-tree', tree, '-p', unpushed, '-m', 'x')).trim();
+      await git(root, 'replace', before, standIn);
+      // The planted ref bites git as the operator runs it.
+      await git(root, 'merge-base', '--is-ancestor', unpushed, before);
+
+      const { result, message } = await push(range);
+      expect(result.status).toBe('FAILED');
+      expect(message).toContain(`is at \`${before}\` now, which no longer holds it`);
       expect(await pushedBranch()).toBeUndefined();
     }, 30_000);
 

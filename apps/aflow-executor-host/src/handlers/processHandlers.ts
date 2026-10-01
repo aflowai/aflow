@@ -10,7 +10,7 @@
  * command nobody has read; a push has been read argument by argument by
  * `requirePushAllowed` before it is spawned, and its whole purpose is to move a
  * branch on a remote the boundary cannot reach — so it runs as the operator's
- * own git, in their environment, and everything else stays confined.
+ * own git, with their transport, and everything else stays confined.
  *
  * Processes are spawned into their own group so a stop reaches descendants. A
  * command that backgrounds a child cannot outlive the step that started it.
@@ -40,6 +40,7 @@ import { createChatterStripper } from '../egressRefusals.js';
 import { EnvPolicyError } from '../envPolicy.js';
 import { explainFailedStart } from '../executableHint.js';
 import { confirmPushTarget } from '../pushBase.js';
+import { requireScanReceipt } from '../scanReceipt.js';
 import { WorktreeError } from '../worktree.js';
 import {
   type HostBinding,
@@ -144,24 +145,32 @@ async function execProcess(ctx: ExecutorContext, policyPath: string): Promise<St
     // the one command whose effect lands outside the boundary the sandbox can
     // enforce, and the one that then runs outside it, so what it would move is
     // read while it is still an argv.
-    const pushRemote = requirePushAllowed(binding, input.command, {
+    const push = requirePushAllowed(binding, input.command, {
       env: input.env,
       detach: input.detach,
     });
-    if (input.pushBase !== undefined) {
-      if (pushRemote === undefined) {
+    for (const [field, value] of [
+      ['pushBase', input.pushBase],
+      ['scan', input.scan],
+    ] as const) {
+      if (value !== undefined && push === undefined) {
         return await failureWithError(
           ctx,
           validationError(
-            '`pushBase` is checked before a push and belongs to no other command. Drop it, ' +
+            `\`${field}\` is checked before a push and belongs to no other command. Drop it, ` +
               'or send it with the `git push` it guards.',
           ),
         );
       }
+    }
+    if (push !== undefined) {
+      requireScanReceipt(binding.id, push.sources, input.scan);
+    }
+    if (push !== undefined && input.pushBase !== undefined) {
       // In the push's own step rather than one before it, so nothing between
       // the check and git's own push can move the base unnoticed but the
       // remote itself in the moment they are apart.
-      await confirmPushTarget(binding.root, pushRemote, input.pushBase.base, input.pushBase.range);
+      await confirmPushTarget(binding.root, push.remote, input.pushBase.base, input.pushBase.range);
     }
 
     // Live standard error carries the adapter's own narration alongside the

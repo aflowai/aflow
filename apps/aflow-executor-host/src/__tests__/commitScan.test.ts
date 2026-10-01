@@ -481,6 +481,8 @@ describe('host.commit.scan', () => {
     expect(output.clean).toBe(false);
     expect(output.unflaggedRange).toBeUndefined();
     expect(output.clearedRange).toBeUndefined();
+    // Nothing that was found can be pushed.
+    expect(output.receipt).toBeUndefined();
     expect(output.findings).toEqual(
       Object.keys(PLANTED).map((pattern, index) => ({
         file: PLANTED_FILE,
@@ -521,6 +523,7 @@ describe('host.commit.scan', () => {
       summary: `No secret found in the lines the 1 commit of \`${start}..${head}\` add and their headers and messages.`,
       unflaggedRange: `${start}..${head}`,
       clearedRange: `${start}..${head}`,
+      receipt: expect.any(String),
     });
   });
 
@@ -894,6 +897,53 @@ describe('host.commit.scan', () => {
     expect(output.findings).toEqual([
       { file: PLANTED_FILE, line: 1, pattern: 'github-token' },
       { file: `${leaking} (message)`, line: 1, pattern: 'slack-token' },
+    ]);
+    expect(output.unflaggedRange).toBeUndefined();
+  });
+
+  it("reads the root commit and the stored text whatever the repository's config says", async () => {
+    const start = await headSha();
+    // An orphan history whose root adds a secret and whose next commit takes
+    // it out: merged, only the root's own diff shows the line.
+    await git(root, 'checkout', '-q', '--orphan', 'orphan');
+    await git(root, 'rm', '-q', '-r', '--cached', '.');
+    await writeFile(join(root, 'vault.txt'), `${PLANTED['github-token']?.line ?? ''}\n`);
+    await git(root, 'add', 'vault.txt');
+    await git(root, 'commit', '-q', '-m', 'orphan root');
+    const orphanRoot = await headSha();
+    await writeFile(join(root, 'vault.txt'), 'empty\n');
+    await git(root, 'commit', '-q', '-am', 'take it out');
+    await git(root, 'checkout', '-q', '-f', 'main');
+    await git(root, 'merge', '-q', '--allow-unrelated-histories', '-m', 'merge', 'orphan');
+    // A textconv would show every `.ts` line as `converted`; a few lines
+    // apart, the two hunks would be joined by context lines.
+    await writeFile(
+      join(root, 'app.ts'),
+      `${PLANTED['slack-token']?.line ?? ''}\nb\nc\n${PLANTED['stripe-live-key']?.line ?? ''}\n`,
+    );
+    await git(root, 'add', 'app.ts');
+    await git(root, 'commit', '-q', '-m', 'app');
+    const head = await headSha();
+
+    await git(root, 'config', 'log.showRoot', 'false');
+    await git(root, 'config', 'diff.hide.textconv', 'sed s/.*/converted/');
+    await git(root, 'config', 'diff.external', 'true');
+    await git(root, 'config', 'diff.noprefix', 'true');
+    await git(root, 'config', 'diff.context', '3');
+    await git(root, 'config', 'diff.interHunkContext', '5');
+    await writeFile(join(root, '.git', 'info', 'attributes'), '*.ts diff=hide\n');
+    // The planted config bites git as the operator runs it.
+    const shown = await git(root, 'log', '-p', '--format=', `${start}..${head}`);
+    expect(shown).toContain('+converted');
+    expect(shown).not.toContain(PLANTED['slack-token']?.line ?? '');
+    const rootShown = await git(root, 'log', '-p', '--format=', '-1', orphanRoot);
+    expect(rootShown).toBe('');
+
+    const output = await scanOutput(`${start}..${head}`);
+    expect(output.findings).toEqual([
+      { file: 'app.ts', line: 1, pattern: 'slack-token' },
+      { file: 'app.ts', line: 4, pattern: 'stripe-live-key' },
+      { file: 'vault.txt', line: 1, pattern: 'github-token' },
     ]);
     expect(output.unflaggedRange).toBeUndefined();
   });

@@ -378,6 +378,12 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       refspec: { kind: 'task_output', taskId: 'commit', path: 'commit.pushRefspec' },
       base: { kind: 'run_input', path: 'base' },
       range: { kind: 'task_output', taskId: 'commit', path: 'commit.pushRange' },
+      receipt: { kind: 'task_output', taskId: 'scan-commit', path: 'receipt' },
+      approvedReceipt: {
+        kind: 'task_output',
+        taskId: 'approve-push',
+        path: 'approvedCall.input.receipt',
+      },
     });
     const [pushCommand, ...rest] = materializedCommands();
     expect(rest).toEqual([]);
@@ -425,6 +431,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       allowed: { kind: 'task_output', taskId: 'scan-commit', path: 'allowed' },
       scanSummary: { kind: 'task_output', taskId: 'scan-commit', path: 'summary' },
       commitSha: { kind: 'task_output', taskId: 'commit', path: 'commit.sha' },
+      receipt: { kind: 'task_output', taskId: 'scan-commit', path: 'receipt' },
       pushRefspec: { kind: 'task_output', taskId: 'commit', path: 'commit.pushRefspec' },
       pushRange: { kind: 'task_output', taskId: 'commit', path: 'commit.pushRange' },
       commitBranch: { kind: 'task_output', taskId: 'commit', path: 'commit.branch' },
@@ -548,6 +555,13 @@ function reviewEnding(review: Exclude<Review, 'not-started'>): Record<string, un
 type Scan = 'clean' | 'finding' | 'unscanned' | 'allowed';
 
 /** What `host.commit.scan` returns for each scan, before the task's own projection. */
+/** What the executor that scanned returns for each range it found no secret in. */
+const RECEIPT = {
+  clean: 'receipt-clean',
+  unscanned: 'receipt-unscanned',
+  allowed: 'receipt-allowed',
+} as const;
+
 function scanResult(scan: Scan): Record<string, unknown> {
   switch (scan) {
     case 'finding':
@@ -566,6 +580,7 @@ function scanResult(scan: Scan): Record<string, unknown> {
         allowed: [],
         summary: 'No secret found in the lines read, but not every file was read.',
         unflaggedRange: COMMIT.pushRange,
+        receipt: RECEIPT.unscanned,
       });
     case 'allowed':
       return HostCommitScanOutputSchema.parse({
@@ -575,6 +590,7 @@ function scanResult(scan: Scan): Record<string, unknown> {
         allowed: [{ file: 'fixture.ts', line: 4, pattern: 'secret-assignment' }],
         summary: 'No secret found, apart from lines marked allowed.',
         unflaggedRange: COMMIT.pushRange,
+        receipt: RECEIPT.allowed,
       });
     case 'clean':
       return HostCommitScanOutputSchema.parse({
@@ -585,6 +601,7 @@ function scanResult(scan: Scan): Record<string, unknown> {
         summary: 'No secret found.',
         unflaggedRange: COMMIT.pushRange,
         clearedRange: COMMIT.pushRange,
+        receipt: RECEIPT.clean,
       });
   }
 }
@@ -604,6 +621,8 @@ interface Scenario {
   declineAs?: 'skip' | 'answer';
   /** Whether `origin`'s base no longer holds where the range was measured from, which fails the push. */
   baseMoved?: boolean;
+  /** The receipt the approval records, where not the one its preview resolves to. */
+  approvalOf?: string;
 }
 
 interface Outcome {
@@ -652,6 +671,51 @@ function rawOutput(taskId: string, scenario: Scenario): Record<string, unknown> 
   }
 }
 
+/** A dot path into a task's output, as a binding reads it. */
+function readOutput(
+  outputs: ReadonlyMap<string, Record<string, unknown>>,
+  taskId: string,
+  path: string | undefined,
+): unknown {
+  let value: unknown = outputs.get(taskId);
+  for (const key of path?.split('.') ?? []) {
+    value =
+      value !== null && typeof value === 'object'
+        ? (value as Record<string, unknown>)[key]
+        : undefined;
+  }
+  return value;
+}
+
+/** What a task's `task_output` bindings resolve to, absent ones left out. */
+function boundOutputs(
+  bindings: WorkflowTask['inputBindings'],
+  outputs: ReadonlyMap<string, Record<string, unknown>>,
+): Record<string, unknown> {
+  const bound: Record<string, unknown> = {};
+  for (const [name, binding] of Object.entries(bindings ?? {})) {
+    if (binding.kind !== 'task_output') continue;
+    const value = readOutput(outputs, binding.taskId, binding.path);
+    if (value !== undefined) bound[name] = value;
+  }
+  return bound;
+}
+
+/**
+ * The executor's gate on the push, over what the push's bindings carry: the
+ * scan's receipt always, and for a range the scan did not clear the same
+ * receipt as the approval recorded it.
+ */
+function receiptAccepted(
+  push: WorkflowTask,
+  outputs: ReadonlyMap<string, Record<string, unknown>>,
+): boolean {
+  const { receipt, approvedReceipt } = boundOutputs(push.inputBindings, outputs);
+  if (typeof receipt !== 'string') return false;
+  if (approvedReceipt !== undefined && approvedReceipt !== receipt) return false;
+  return outputs.get('scan-commit')?.['clean'] === true || approvedReceipt === receipt;
+}
+
 /**
  * Drive the graph the way the harness does: ready tasks run, false predicates
  * skip, a declined approval skips its gated branch, a projection that does not
@@ -683,7 +747,10 @@ function publish(scenario: Scenario): Outcome {
     for (const task of ready) {
       if (ran.includes(task.taskId)) continue;
       ran.push(task.taskId);
-      if (task.taskId === 'push' && scenario.baseMoved === true) {
+      if (
+        task.taskId === 'push' &&
+        (scenario.baseMoved === true || !receiptAccepted(task, outputs))
+      ) {
         statuses.set(task.taskId, 'failed');
         continue;
       }
@@ -701,9 +768,17 @@ function publish(scenario: Scenario): Outcome {
           }
           continue;
         }
-        outputs.set(task.taskId, {
-          decision: scenario.decision === 'declined' ? 'rejected' : 'approved',
-        });
+        if (scenario.decision === 'declined') {
+          outputs.set(task.taskId, { decision: 'rejected' });
+        } else {
+          // As the orchestrator records an approval: with the call its preview resolved to.
+          const input = boundOutputs(task.actionPreview?.inputBindings, outputs);
+          if (scenario.approvalOf !== undefined) input['receipt'] = scenario.approvalOf;
+          outputs.set(task.taskId, {
+            decision: 'approved',
+            approvedCall: { op: task.actionPreview?.op, input },
+          });
+        }
       } else {
         const raw = rawOutput(task.taskId, scenario);
         if (task.outputProjection !== undefined) {
@@ -974,6 +1049,7 @@ describe('Publish Local Changes — the commit is scanned for secrets before any
       unscanned: { path: 'unscanned', onMissing: 'error' },
       allowed: { path: 'allowed', onMissing: 'error' },
       summary: { path: 'summary', onMissing: 'error' },
+      receipt: { path: 'receipt', onMissing: 'error' },
     });
     if (scan.outputProjection === undefined) throw new Error('the scan must project');
     expect(projectTaskOutput(scan.outputProjection, scanResult('finding'), null).ok).toBe(false);
@@ -985,6 +1061,7 @@ describe('Publish Local Changes — the commit is scanned for secrets before any
         unscanned: [{ file: 'bundle.js', reason: 'too-large' }],
         allowed: [],
         summary: 'No secret found in the lines read, but not every file was read.',
+        receipt: RECEIPT.unscanned,
       },
     });
     expect(projectTaskOutput(scan.outputProjection, scanResult('allowed'), null)).toEqual({
@@ -995,6 +1072,7 @@ describe('Publish Local Changes — the commit is scanned for secrets before any
         unscanned: [],
         allowed: [{ file: 'fixture.ts', line: 4, pattern: 'secret-assignment' }],
         summary: 'No secret found, apart from lines marked allowed.',
+        receipt: RECEIPT.allowed,
       },
     });
     expect(scan.outputContract).toBeUndefined();
@@ -1151,6 +1229,7 @@ describe("Publish Local Changes — the push checks origin's base and URL in its
         refspec: COMMIT.pushRefspec,
         base: 'main',
         range: COMMIT.pushRange,
+        receipt: RECEIPT.clean,
       },
       new Set(Object.keys(push.inputBindings ?? {})),
     );
@@ -1161,6 +1240,50 @@ describe("Publish Local Changes — the push checks origin's base and URL in its
     expect(push.maxAttempts).toBe(1);
     expect(push.optional).toBeUndefined();
   });
+
+  it('hands the push the scan\u2019s receipt, and the approval\u2019s copy of it where one was asked', () => {
+    const push = taskOrThrow('push');
+    const template = push.inputTemplate;
+    if (template === undefined) throw new Error('the push must carry a template');
+    const declared = new Set(Object.keys(push.inputBindings ?? {}));
+    const resolved = {
+      bindingId: 'folder-1',
+      refspec: COMMIT.pushRefspec,
+      base: 'main',
+      range: COMMIT.pushRange,
+      receipt: RECEIPT.unscanned,
+    };
+    const asked = substituteTemplateBinds(
+      template,
+      { ...resolved, approvedReceipt: RECEIPT.unscanned },
+      declared,
+    );
+    expect(HostProcessExecInputSchema.parse(asked).scan).toEqual({
+      receipt: RECEIPT.unscanned,
+      approvedReceipt: RECEIPT.unscanned,
+    });
+    // Where the approval did not ask, its copy is absent and drops its key.
+    expect(
+      HostProcessExecInputSchema.parse(substituteTemplateBinds(template, resolved, declared)).scan,
+    ).toEqual({
+      receipt: RECEIPT.unscanned,
+    });
+  });
+
+  for (const scan of ['unscanned', 'allowed'] as const) {
+    it(`${scan}: an approval recorded for another scan pushes nothing`, () => {
+      const outcome = publish({
+        pushApproval: 'never',
+        review: 'approve',
+        decision: 'approved',
+        scan,
+        approvalOf: RECEIPT.clean,
+      });
+      expect(outcome.asked).toBe(true);
+      expect(outcome.ran).toContain('push');
+      expect(outcome.pushed).toBe(false);
+    });
+  }
 
   it('runs no separate base check a moving base could slip past', () => {
     expect(wf.tasks.some((task) => task.operation === 'host.commit.check_base')).toBe(false);

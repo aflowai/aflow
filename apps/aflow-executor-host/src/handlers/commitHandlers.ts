@@ -23,6 +23,7 @@ import {
   requireSpace,
 } from '../bindings.js';
 import { scanCommitRange } from '../commitScan.js';
+import { receiptForScan } from '../scanReceipt.js';
 import { isGitRepository, WorktreeError } from '../worktree.js';
 
 /** The repository a commit operation reads, or a refusal saying why it cannot. */
@@ -49,10 +50,9 @@ async function scan(ctx: ExecutorContext, policyPath: string): Promise<StepResul
     return await failureWithError(ctx, validationError(parsed.error.message));
   }
   const root = await repositoryRoot(ctx, policyPath, parsed.data.bindingId);
-  return await successWithData(
-    ctx,
-    await scanCommitRange(root, parsed.data.range, parsed.data.texts),
-  );
+  const output = await scanCommitRange(root, parsed.data.range, parsed.data.texts);
+  const receipt = receiptForScan(parsed.data.bindingId, output);
+  return await successWithData(ctx, receipt === undefined ? output : { ...output, receipt });
 }
 
 const OPERATIONS: Record<

@@ -27,6 +27,7 @@ import { createStreamScrubber } from './credentialFetch.js';
 import { assertSafeEnv } from './envPolicy.js';
 import { forgetSpawn, recordSpawn } from './orphans.js';
 import { compileSandboxPolicy, type SandboxWidening } from './sandboxPolicy.js';
+import { transportEnv } from './worktree.js';
 
 /** Captured output is capped so one chatty build cannot become the step's payload. */
 export const OUTPUT_CAP_BYTES = 256 * 1024;
@@ -916,7 +917,7 @@ export async function runSandboxed(input: SandboxedRunInput): Promise<SandboxedR
 
 /**
  * Run the command as this executor's own process: the operator's git, their
- * remotes, their keys, their environment, no boundary.
+ * remotes, their keys, their transport, no boundary.
  *
  * Only a permitted push arrives here. The sandbox is there to contain a command
  * nobody has read, and a push that passed `requirePushAllowed` has had every
@@ -932,10 +933,13 @@ export async function runUnconfined(input: UnconfinedRunInput): Promise<Sandboxe
     ...input,
     program,
     args,
-    // The operator's own, unchanged: this is their git, running where they run
-    // it. A job adding to it would be choosing what git executes, which is why
-    // the push rule refuses a job environment outright.
-    env: process.env,
+    // The operator's transport, under which the push's target was checked,
+    // and nothing more: `GIT_CONFIG_COUNT`, `GIT_CONFIG_PARAMETERS` or
+    // `GIT_CONFIG_SYSTEM` in the executor's own environment would send the
+    // push somewhere that check never resolved. A job adding to it would be
+    // choosing what git executes, which is why the push rule refuses a job
+    // environment outright.
+    env: transportEnv(),
     bindingId: input.binding.id,
   });
 }

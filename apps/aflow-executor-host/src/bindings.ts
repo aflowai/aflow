@@ -341,6 +341,12 @@ export function isGitPush(argv: readonly string[]): boolean {
   return !invocation.unreadable && invocation.subcommand === 'push';
 }
 
+/** A push the rule permits: where it goes, and what each of its refspecs sends. */
+export interface PermittedPush {
+  readonly remote: string;
+  readonly sources: readonly string[];
+}
+
 /** What the job asked for around the command, which a push also constrains. */
 export interface PushJobShape {
   readonly env?: Record<string, string>;
@@ -381,13 +387,14 @@ function refuseUnconfinedOption(argv: readonly string[], option: string, prefix:
  * program or another repository, and the job supplies no environment: each of
  * those would be the job choosing what runs unconfined.
  *
- * Returns the remote a permitted push names, and nothing for any other command.
+ * Returns the remote a permitted push names and the source of each refspec,
+ * and nothing for any other command.
  */
 export function requirePushAllowed(
   binding: HostBinding,
   argv: readonly string[],
   job: PushJobShape = {},
-): string | undefined {
+): PermittedPush | undefined {
   const program = argv[0];
   if (program === undefined || !isGitProgram(program)) return undefined;
 
@@ -496,14 +503,15 @@ export function requirePushAllowed(
     );
   }
 
-  const refspecs = positional.slice(1);
-  if (refspecs.length === 0) {
+  const [remote, ...refspecs] = positional;
+  if (remote === undefined || refspecs.length === 0) {
     refusePush(
       argv,
       'a push with no refspec moves whatever the repository is configured to move, which this rule cannot see',
       `Name the branch: ${plainPush(prefix)}.`,
     );
   }
+  const sources: string[] = [];
   for (const refspec of refspecs) {
     if (refspec.startsWith('+')) {
       refusePush(
@@ -515,6 +523,7 @@ export function requirePushAllowed(
     const separator = refspec.indexOf(':');
     const source = separator === -1 ? refspec : refspec.slice(0, separator);
     const destination = separator === -1 ? refspec : refspec.slice(separator + 1);
+    sources.push(source);
     if (separator !== -1 && source === '') {
       refusePush(
         argv,
@@ -535,7 +544,7 @@ export function requirePushAllowed(
       );
     }
   }
-  return positional[0];
+  return { remote, sources };
 }
 
 export function requireWritable(binding: HostBinding): void {

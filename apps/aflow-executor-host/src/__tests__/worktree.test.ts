@@ -106,6 +106,29 @@ describe('worktree per run', () => {
     await removeWorktree(repo, wt.path);
   });
 
+  it('checks out the commit as it is stored, never what a replace ref stands in for it', async () => {
+    // What a review reads is what a push sends, and a push sends the stored objects.
+    await writeFile(join(repo, 'app.txt'), 'stored\n');
+    await git(repo, 'commit', '-qam', 'stored');
+    const stored = (await git(repo, 'rev-parse', 'HEAD')).trim();
+    await writeFile(join(repo, 'app.txt'), 'stand-in\n');
+    await git(repo, 'commit', '-qam', 'stand-in');
+    const standIn = (await git(repo, 'rev-parse', 'HEAD')).trim();
+    await git(repo, 'reset', '-q', '--hard', stored);
+    await git(repo, 'replace', stored, standIn);
+    expect(await git(repo, 'show', `${stored}:app.txt`)).toBe('stand-in\n');
+
+    for (const wt of [
+      await prepareWorktree(repo, scratch, 'at-head'),
+      await prepareWorktree(repo, scratch, 'at-sha', { at: stored }),
+    ]) {
+      expect(wt.baseSha).toBe(stored);
+      expect(await readFile(join(wt.path, 'app.txt'), 'utf8')).toBe('stored\n');
+      expect((await collectChanges(wt.path)).filesChanged).toBe(0);
+      await removeWorktree(repo, wt.path);
+    }
+  });
+
   it("leaves the run's own scratch out of the change", async () => {
     const wt = await prepareWorktree(repo, scratch, 'work');
     await mkdir(join(wt.path, '.aflow'), { recursive: true });

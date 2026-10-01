@@ -12,8 +12,12 @@ import { promisify } from 'node:util';
 
 import { describe, expect, it, beforeAll } from 'vitest';
 
+import type { HostProcessExecInputSchema } from '@aflow/schemas';
+import type { z } from 'zod';
+
 import { PUSH_REQUIRED_OPTIONS } from '../bindings.js';
 import { createHostProcessHandler } from '../handlers/processHandlers.js';
+import { issueScanReceipt, SCAN_RECEIPT_TTL_MS, type ScanOutcome } from '../scanReceipt.js';
 import {
   confinedArgv,
   readWorkloadStatus,
@@ -694,17 +698,32 @@ describe('a push runs only where the folder allows one', () => {
     expect(refs.stdout.trim()).toBe('');
   }, 30_000);
 
+  /** What a scan by this executor of `sha` in `hb_push` returns. */
+  function receiptFor(sha: string, outcome: ScanOutcome = 'clean', now?: number): string {
+    return issueScanReceipt({ bindingId: 'hb_push', sha, outcome }, now);
+  }
+
   it('lets a branch under the prefix through to the remote, as the operator’s own git', async () => {
     // Unconfined, which is why this needs no sandbox to run: the push that
     // failed in production passed the rule and then met the sandbox's proxy,
     // which git over SSH cannot authenticate to.
+    const sha = (
+      await execFileAsync('git', ['-C', repo, 'rev-parse', 'aflow/ready'])
+    ).stdout.trim();
     const captured: Captured = {};
     const result = await createHostProcessHandler(pushPolicyPath).execute(
       contextFor(
         'host.process.exec',
         {
           bindingId: 'hb_push',
-          command: ['git', 'push', ...PUSH_REQUIRED_OPTIONS, './remote.git', 'aflow/ready'],
+          command: [
+            'git',
+            'push',
+            ...PUSH_REQUIRED_OPTIONS,
+            './remote.git',
+            `${sha}:refs/heads/aflow/ready`,
+          ],
+          scan: { receipt: receiptFor(sha) },
         },
         captured,
       ),
@@ -746,6 +765,7 @@ describe('a push runs only where the folder allows one', () => {
             './remote.git',
             `${sha}:refs/heads/${branch}`,
           ],
+          scan: { receipt: receiptFor(sha) },
         },
         captured,
       ),
@@ -816,4 +836,206 @@ describe('a push runs only where the folder allows one', () => {
       await execFileAsync('git', ['-C', repo, 'config', '--unset', 'push.followTags']);
     }
   }, 60_000);
+});
+
+type PushScan = NonNullable<z.input<typeof HostProcessExecInputSchema>['scan']>;
+
+/**
+ * The receipt a push carries, through the handler: every refusal is named,
+ * comes before anything is spawned, and leaves the remote as it was.
+ */
+describe('a push sends only a commit this executor scanned', () => {
+  let pushBase: string;
+  let repo: string;
+  let pushPolicyPath: string;
+  let sha: string;
+
+  beforeAll(async () => {
+    pushBase = await mkdtemp(join(tmpdir(), 'host-receipt-'));
+    repo = join(pushBase, 'repo');
+    await mkdir(repo, { recursive: true });
+    await execFileAsync('git', ['init', '-q', '--initial-branch=main', repo]);
+    await execFileAsync('git', ['-C', repo, 'config', 'user.email', 't@e.com']);
+    await execFileAsync('git', ['-C', repo, 'config', 'user.name', 'T']);
+    await writeFile(join(repo, 'a.txt'), 'one\n');
+    await execFileAsync('git', ['-C', repo, 'add', '-A']);
+    await execFileAsync('git', ['-C', repo, 'commit', '-q', '-m', 'initial']);
+    sha = (await execFileAsync('git', ['-C', repo, 'rev-parse', 'HEAD'])).stdout.trim();
+    await execFileAsync('git', ['init', '-q', '--bare', join(repo, 'remote.git')]);
+    pushPolicyPath = join(pushBase, 'host-policy.json');
+    const binding = (id: string) => ({
+      id,
+      root: repo,
+      mode: 'readwrite',
+      allowsExecution: true,
+      branchPolicy: { branchPrefix: 'aflow/' },
+      singleFile: false,
+      spaceId: 'space-test',
+    });
+    await writeFile(
+      pushPolicyPath,
+      JSON.stringify({ version: 1, bindings: [binding('hb_push'), binding('hb_other')] }),
+    );
+  });
+
+  function receipt(
+    outcome: ScanOutcome = 'clean',
+    fields: { sha?: string; bindingId?: string; now?: number } = {},
+  ): string {
+    return issueScanReceipt(
+      { bindingId: fields.bindingId ?? 'hb_push', sha: fields.sha ?? sha, outcome },
+      fields.now,
+    );
+  }
+
+  async function push(
+    scan: PushScan | undefined,
+    refspecs: readonly string[] = [`${sha}:refs/heads/aflow/x`],
+    program = 'git',
+  ): Promise<{ status: string; captured: Captured }> {
+    const captured: Captured = {};
+    const result = await createHostProcessHandler(pushPolicyPath).execute(
+      contextFor(
+        'host.process.exec',
+        {
+          bindingId: 'hb_push',
+          command: [program, 'push', ...PUSH_REQUIRED_OPTIONS, './remote.git', ...refspecs],
+          ...(scan !== undefined ? { scan } : {}),
+        },
+        captured,
+      ),
+    );
+    return { status: result.status, captured };
+  }
+
+  async function remoteBranches(): Promise<string> {
+    const listed = await execFileAsync('git', ['-C', join(repo, 'remote.git'), 'branch', '--list']);
+    return listed.stdout.trim();
+  }
+
+  it('refuses every push it cannot tie to a scan, naming why, with nothing pushed', async () => {
+    const valid = receipt();
+    const forged = `${valid.slice(0, valid.indexOf('.'))}.${'A'.repeat(43)}`;
+    const other = 'f'.repeat(40);
+    for (const [name, scan, refspecs, said] of [
+      ['no receipt', undefined, undefined, 'carries no scan receipt'],
+      ['forged', { receipt: forged }, undefined, 'did not issue since it last started'],
+      [
+        'another folder',
+        { receipt: receipt('clean', { bindingId: 'hb_other' }) },
+        undefined,
+        'a scan of `hb_other`, and pushes from `hb_push`',
+      ],
+      [
+        'stale',
+        { receipt: receipt('clean', { now: Date.now() - SCAN_RECEIPT_TTL_MS - 1 }) },
+        undefined,
+        'more than a day ago',
+      ],
+      [
+        'another commit',
+        { receipt: receipt('clean', { sha: other }) },
+        undefined,
+        `its receipt is for \`${other}\``,
+      ],
+      [
+        'a branch name for the source',
+        { receipt: valid },
+        ['main:refs/heads/aflow/x'],
+        `This push sends \`main\`, and its receipt is for \`${sha}\``,
+      ],
+      [
+        'a second refspec',
+        { receipt: valid },
+        [`${sha}:refs/heads/aflow/x`, `${sha}:refs/heads/aflow/y`],
+        'the one commit its scan read',
+      ],
+      [
+        'unscanned, unapproved',
+        { receipt: receipt('unscanned') },
+        undefined,
+        'could not read all of it',
+      ],
+      [
+        'allowed lines, unapproved',
+        { receipt: receipt('allowed') },
+        undefined,
+        'found lines in it marked `aflow-scan: allow`',
+      ],
+      [
+        'approval of another scan',
+        { receipt: receipt('allowed'), approvedReceipt: receipt('allowed', { now: 1 }) },
+        undefined,
+        'an approval of another scan',
+      ],
+    ] as const) {
+      const { status, captured } = await push(scan, refspecs);
+      expect(status, name).toBe('FAILED');
+      expect(captured.output?.['code'], name).toBe('PERMISSION_DENIED');
+      expect(String(captured.output?.['message']), name).toContain(said);
+      expect(captured.output?.['exitCode'], name).toBeUndefined();
+    }
+    expect(await remoteBranches()).toBe('');
+  }, 60_000);
+
+  it('pushes a range the scan did not clear once the operator approved that scan', async () => {
+    const asked = receipt('unscanned');
+    const { status } = await push({ receipt: asked, approvedReceipt: asked });
+    expect(status).toBe('SUCCEEDED');
+    expect(await remoteBranches()).toContain('aflow/x');
+  }, 60_000);
+
+  it('refuses a receipt on anything but a push', async () => {
+    const captured: Captured = {};
+    const result = await createHostProcessHandler(pushPolicyPath).execute(
+      contextFor(
+        'host.process.exec',
+        { bindingId: 'hb_push', command: ['git', 'status'], scan: { receipt: receipt() } },
+        captured,
+      ),
+    );
+    expect(result.status).toBe('FAILED');
+    expect(String(captured.output?.['message'])).toContain('`scan` is checked before a push');
+  });
+
+  it('runs the push under the transport its target was checked with, never GIT_CONFIG_*', async () => {
+    // A git that prints the environment it was handed, at a path the push rule
+    // reads as git's.
+    const bin = join(pushBase, 'bin');
+    await mkdir(bin, { recursive: true });
+    await writeFile(join(bin, 'git'), '#!/bin/sh\nenv\n', { mode: 0o755 });
+    const planted: Record<string, string> = {
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: 'remote.origin.pushurl',
+      GIT_CONFIG_VALUE_0: '/elsewhere.git',
+      GIT_CONFIG_PARAMETERS: "'remote.origin.pushurl'='/elsewhere.git'",
+      GIT_CONFIG_SYSTEM: join(pushBase, 'system-config'),
+      SSH_AUTH_SOCK: join(pushBase, 'agent.sock'),
+      AFLOW_UNRELATED: 'kept out',
+    };
+    const saved = new Map(
+      [...Object.keys(planted), 'GIT_CONFIG_GLOBAL'].map((name) => [name, process.env[name]]),
+    );
+    // The operator's global config location is the one GIT_CONFIG_ variable
+    // the transport keeps, read by the check as well; unset here so the
+    // assertion is about what the executor's own environment adds.
+    delete process.env['GIT_CONFIG_GLOBAL'];
+    Object.assign(process.env, planted);
+    try {
+      const { status, captured } = await push({ receipt: receipt() }, undefined, join(bin, 'git'));
+      expect(status).toBe('SUCCEEDED');
+      const names = String(captured.output?.['stdout'])
+        .split('\n')
+        .map((line) => line.split('=')[0] ?? '');
+      expect(names.filter((name) => name.startsWith('GIT_CONFIG_'))).toEqual([]);
+      expect(names).not.toContain('AFLOW_UNRELATED');
+      expect(names).toContain('SSH_AUTH_SOCK');
+      expect(names).toContain('GIT_NO_REPLACE_OBJECTS');
+    } finally {
+      for (const [name, value] of saved) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
 });

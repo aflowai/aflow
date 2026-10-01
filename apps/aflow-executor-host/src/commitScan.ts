@@ -267,6 +267,52 @@ async function readRange(
 }
 
 /**
+ * What `git log` shows of the range, every flag that shapes it pinned: the
+ * scan still reads the repository's own config, and each of these is a key
+ * there that would otherwise hide added lines, show something other than the
+ * stored text, or move the line numbers the parser counts.
+ */
+const ADDED_LINES_ARGS = [
+  '--format=',
+  '--patch',
+  // `log.showRoot=false` shows a root commit with no diff, and an orphan
+  // history merged into the range brings one.
+  '--root',
+  // A merge shows no diff by default, so lines it adds resolving a conflict
+  // would never be read; against its first parent it shows everything it
+  // brings into the branch.
+  '--diff-merges=first-parent',
+  // `diff.context` would add context lines and `diff.interHunkContext` join
+  // nearby hunks with them; the parser numbers added lines alone.
+  '--unified=0',
+  '--inter-hunk-context=0',
+  '--no-color',
+  // `diff.external` and `diff.<driver>.command` would print a program's
+  // output in place of the diff; `diff.<driver>.textconv` the stored text
+  // converted. No `-c` reaches every driver's keys; these flags do.
+  '--no-ext-diff',
+  '--no-textconv',
+  '--no-renames',
+  '--no-relative',
+  '--submodule=short',
+  '--no-show-signature',
+  // `diff.noprefix` and `diff.mnemonicPrefix` would set the prefixes away;
+  // the parser reads `b/`, and explicit prefixes override both.
+  '--src-prefix=a/',
+  '--dst-prefix=b/',
+] as const;
+
+/** Config pinned for that `git log`, alongside its flags. */
+const ADDED_LINES_CONFIG = [
+  '-c',
+  'core.quotePath=false',
+  '-c',
+  'diff.noprefix=false',
+  '-c',
+  'diff.external=',
+] as const;
+
+/**
  * Read `git log -p -U0` line by line. With no context lines a hunk holds only
  * `+`, `-` and `\` lines, so a `+` inside one is always an added line, never a
  * header that happens to start the same way.
@@ -325,26 +371,7 @@ async function readAddedLines(
     root,
     base,
     head,
-    [
-      '-c',
-      'core.quotePath=false',
-      'log',
-      '--format=',
-      '--patch',
-      // A merge shows no diff by default, so lines it adds resolving a
-      // conflict would never be read; against its first parent it shows
-      // everything it brings into the branch.
-      '--diff-merges=first-parent',
-      '--unified=0',
-      '--no-color',
-      '--no-ext-diff',
-      '--no-textconv',
-      '--no-renames',
-      // The repository's own config may set either prefix away; the parser reads `b/`.
-      '--src-prefix=a/',
-      '--dst-prefix=b/',
-      `${base}..${head}`,
-    ],
+    [...ADDED_LINES_CONFIG, 'log', ...ADDED_LINES_ARGS, `${base}..${head}`],
     read,
   );
   closeSection(section, tally);

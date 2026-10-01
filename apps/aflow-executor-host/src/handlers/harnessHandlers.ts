@@ -592,6 +592,12 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
           trustedEnv: {
             SRT_DEBUG: '1',
             ...refGuardEnv,
+            // Commissions see the stored objects too, as the checkout they run
+            // in does: a review reads the range with its own git, and the
+            // verdict that can stand in for the operator's approval has to be
+            // about the commits a push sends — never what a `refs/replace/` ref
+            // the folder holds shows in their place. A coding agent likewise
+            // reads the history its commit will be pushed on top of.
             ...NO_REPLACE_OBJECTS_ENV,
             ...(configDir !== undefined && profile.configDirEnv !== undefined
               ? { [profile.configDirEnv]: configDir }
