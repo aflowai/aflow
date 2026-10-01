@@ -776,6 +776,55 @@ describe('host.commit.scan', () => {
     expect(JSON.stringify(captured.output)).not.toContain(PLANTED['github-token']?.value ?? '');
   });
 
+  it('reads a message from the commit object, and names one holding a NUL byte as unscanned', async () => {
+    const start = await headSha();
+    const tree = (await git(root, 'rev-parse', `${start}^{tree}`)).trim();
+    const identity = 'Test <test@example.com> 1700000000 +0000';
+    // A formatted message ends at the NUL, so the line before it is all
+    // `git log` would show; the object holds the rest.
+    const message = [
+      'Tidy the config',
+      '',
+      `The old one was ${PLANTED['github-token']?.value ?? ''}`,
+      'nothing here\0and then',
+      PLANTED['slack-token']?.line ?? '',
+      '',
+    ].join('\n');
+    const object = join(base, 'crafted-commit');
+    await writeFile(
+      object,
+      `tree ${tree}\nparent ${start}\nauthor ${identity}\ncommitter ${identity}\n\n${message}`,
+    );
+    const crafted = (
+      await git(root, 'hash-object', '--literally', '-t', 'commit', '-w', object)
+    ).trim();
+
+    const output = await scanOutput(`${start}..${crafted}`);
+    expect(output.findings).toEqual([
+      { file: `${crafted} (message)`, line: 3, pattern: 'github-token' },
+    ]);
+    expect(output.unscanned).toEqual([{ file: `${crafted} (message)`, reason: 'nul-byte' }]);
+    expect(output.clean).toBe(false);
+
+    // Past the NUL alone: nothing found, and still not cleared.
+    const hidden = message.replace(`The old one was ${PLANTED['github-token']?.value ?? ''}`, '');
+    await writeFile(
+      object,
+      `tree ${tree}\nparent ${start}\nauthor ${identity}\ncommitter ${identity}\n\n${hidden}`,
+    );
+    const quiet = (
+      await git(root, 'hash-object', '--literally', '-t', 'commit', '-w', object)
+    ).trim();
+    const unread = await scanOutput(`${start}..${quiet}`);
+    expect(unread).toMatchObject({
+      clean: false,
+      findings: [],
+      unscanned: [{ file: `${quiet} (message)`, reason: 'nul-byte' }],
+      unflaggedRange: `${start}..${quiet}`,
+    });
+    expect(unread.clearedRange).toBeUndefined();
+  });
+
   it('reads the texts passed beside the range under the same rules, by name', async () => {
     const start = await headSha();
     const head = await commitFiles({ 'app.ts': 'export const answer = 42;\n' });

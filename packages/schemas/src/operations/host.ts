@@ -817,6 +817,27 @@ export const HostBindingInspectOutputSchema = z.object({
   ),
 });
 
+export const HostCommitCheckBaseInputSchema = z.object({
+  bindingId: HostBindingRef,
+  base: HostBranchNameSchema.describe(
+    'The branch on `origin` the range was measured against — the `pushBase` the commit was ' +
+      'made with, by its name alone.',
+  ),
+  range: HostCommitRangeSchema.describe(
+    'The `pushRange` the commit reported, `<origin base sha>..<sha>`: its first sha is where ' +
+      '`origin/<base>` was when the range was measured.',
+  ),
+});
+
+export const HostCommitCheckBaseOutputSchema = z.object({
+  baseSha: z
+    .string()
+    .describe(
+      'Where `origin/<base>` is, freshly fetched — the same commit the range was measured ' +
+        'from, or the check would have failed.',
+    ),
+});
+
 export const HostCommitScanInputSchema = z.object({
   bindingId: HostBindingRef,
   range: HostCommitRangeSchema.describe(
@@ -1408,11 +1429,47 @@ export const HostOperationRegistrations: OperationRegistration[] = [
         'Every commit in the range is read, so a secret added in one commit and removed in a later one is still found: the push would carry both.',
         'Each commit message is read as its own text and reported as `<sha> (message)`; each entry of `texts` is reported under its name. A finding in either fails the scan as one in a file does.',
         'A file that is binary, holds a NUL byte, adds more than the scanned size in one commit, adds a line longer than the scanned line, or adds a Git LFS pointer — whose content git uploads on push without it being in the commit — is listed in `unscanned` with why, and the range is not `clean`; findings from the part that was read are kept.',
-        'A line ending in a comment that carries `aflow-scan: allow` is reported in `allowed` instead of `findings`, and the range is not `clean`: the marker turns a stop into a question for the operator, never into a clearance. It counts only as the last thing on the line, after a comment leader set off by a space and outside any string the line leaves open — inside a string or a URL, or with anything after it, it does not.',
+        'A line ending in a comment that carries `aflow-scan: allow` is reported in `allowed` instead of `findings`, and the range is not `clean`: the marker turns a stop into a question for the operator, never into a clearance. It counts only as the last thing on the line, after a comment leader set off by a space and outside any string opened earlier on the same line — inside such a string or a URL, or with anything after it, it does not. Only strings opened on the same line are seen: lines are read one at a time, so in a string opened on an earlier line, a comment leader and the marker ending a line count.',
         'A clean scan says no rule matched, not that the range holds no secret.',
       ],
     },
     inputZod: HostCommitScanInputSchema,
     outputZod: HostCommitScanOutputSchema,
+  },
+  {
+    stepType: 'host',
+    group: 'commit',
+    verb: 'check_base',
+    name: 'Check the Push Base',
+    actionLabel: 'Checking the base on origin has not moved…',
+    groupDisplayName: 'Commits on this computer',
+    groupDescription: 'Read the commits of a repository the operator connected, on their machine.',
+    semanticDescription:
+      'Fetch a branch from a connected repository’s `origin` and confirm it is still where a ' +
+      'push range was measured from. A push sends every commit `origin` lacks, so a base that ' +
+      'moved since the range was scanned and reviewed would have it send what neither read. ' +
+      'Moves no branch of the folder’s own.',
+    tags: ['host', 'git', 'local'],
+    idempotency: 'idempotent',
+    accessMode: 'read',
+    // A publication checks its own range just before its push; an agent has
+    // no range of its own to check.
+    agentTool: false,
+    usage: {
+      oneLine: "Confirm origin's base has not moved since a push range was measured.",
+      minimalExampleInput: {
+        bindingId: 'hb_project',
+        base: 'main',
+        range: `${'a'.repeat(40)}..${'c'.repeat(40)}`,
+      },
+      whenToUse: ['A skill about to push a range it scanned or reviewed earlier'],
+      whenNotToUse: ['Measuring a push range in the first place — host.file.patch reports it'],
+      pitfalls: [
+        'Any move fails the check, forward or back: the range was cleared as it was measured, and a publication runs again to clear the range as it is now.',
+        'It fetches from `origin` as the operator’s own git does, so it completes only where the folder reaches `origin`.',
+      ],
+    },
+    inputZod: HostCommitCheckBaseInputSchema,
+    outputZod: HostCommitCheckBaseOutputSchema,
   },
 ];

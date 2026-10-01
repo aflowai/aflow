@@ -12,6 +12,7 @@ import { promisify } from 'node:util';
 
 import { describe, expect, it, beforeAll } from 'vitest';
 
+import { PUSH_REQUIRED_OPTIONS } from '../bindings.js';
 import { createHostProcessHandler } from '../handlers/processHandlers.js';
 import {
   confinedArgv,
@@ -681,7 +682,7 @@ describe('a push runs only where the folder allows one', () => {
         'host.process.exec',
         {
           bindingId: 'hb_push',
-          command: ['git', 'push', './remote.git', 'aflow/ready'],
+          command: ['git', 'push', ...PUSH_REQUIRED_OPTIONS, './remote.git', 'aflow/ready'],
           env: { GIT_SSH_COMMAND: '/tmp/anything' },
         },
         captured,
@@ -701,7 +702,10 @@ describe('a push runs only where the folder allows one', () => {
     const result = await createHostProcessHandler(pushPolicyPath).execute(
       contextFor(
         'host.process.exec',
-        { bindingId: 'hb_push', command: ['git', 'push', './remote.git', 'aflow/ready'] },
+        {
+          bindingId: 'hb_push',
+          command: ['git', 'push', ...PUSH_REQUIRED_OPTIONS, './remote.git', 'aflow/ready'],
+        },
         captured,
       ),
     );
@@ -735,7 +739,13 @@ describe('a push runs only where the folder allows one', () => {
         'host.process.exec',
         {
           bindingId: 'hb_push',
-          command: ['git', 'push', './remote.git', `${sha}:refs/heads/${branch}`],
+          command: [
+            'git',
+            'push',
+            ...PUSH_REQUIRED_OPTIONS,
+            './remote.git',
+            `${sha}:refs/heads/${branch}`,
+          ],
         },
         captured,
       ),
@@ -777,5 +787,33 @@ describe('a push runs only where the folder allows one', () => {
     expect(message).toContain('The push did not land');
     expect(message).toContain('[rejected]');
     expect(await remoteHead('aflow/moved')).toBe(landed);
+  }, 60_000);
+
+  it('sends no tag the operator’s `push.followTags` would add', async () => {
+    const initial = (await execFileAsync('git', ['-C', repo, 'rev-parse', 'main'])).stdout.trim();
+    const tagged = await commitOn(initial, 'a commit with a tag on it');
+    await execFileAsync('git', ['-C', repo, 'tag', '-a', '-m', 'unscanned', 'v-follow', tagged]);
+    await execFileAsync('git', ['-C', repo, 'config', 'push.followTags', 'true']);
+    try {
+      const unpinned = await createHostProcessHandler(pushPolicyPath).execute(
+        contextFor(
+          'host.process.exec',
+          {
+            bindingId: 'hb_push',
+            command: ['git', 'push', './remote.git', `${tagged}:refs/heads/aflow/tagged`],
+          },
+          {},
+        ),
+      );
+      expect(unpinned.status).toBe('FAILED');
+
+      const pushed = await pushCommit(tagged, 'aflow/tagged');
+      expect(pushed.status).toBe('SUCCEEDED');
+      expect(await remoteHead('aflow/tagged')).toBe(tagged);
+      const tags = await execFileAsync('git', ['-C', join(repo, 'remote.git'), 'tag', '--list']);
+      expect(tags.stdout.trim()).toBe('');
+    } finally {
+      await execFileAsync('git', ['-C', repo, 'config', '--unset', 'push.followTags']);
+    }
   }, 60_000);
 });

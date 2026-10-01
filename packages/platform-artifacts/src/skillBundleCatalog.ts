@@ -204,7 +204,7 @@ const LOCAL_CODE_REVIEW_BUNDLE: SkillBundleInput = {
 
 const LOCAL_PUBLISH_BUNDLE: SkillBundleInput = {
   bundleId: 'local-publish' as SkillBundleId,
-  version: 8,
+  version: 9,
   name: 'Local Publish',
   tagline:
     'Commit a patch onto a branch of a connected repository, clear the push, and open the pull request.',
@@ -215,7 +215,7 @@ const LOCAL_PUBLISH_BUNDLE: SkillBundleInput = {
 
 **After install**: connect the repository as a folder allowing pushes under a branch prefix, and bind the GitHub connector for the space. Then hand the skill a commission's \`patchRef\`, a branch name under that prefix and a title.
 
-**When it asks before pushing**: the folder's push approval, set on the machine that holds it — \`always\` asks before every push, \`never\` pushes without asking, and \`unless-unreviewed\` has the publication run a Local Code Review of everything the push would add and push without asking only when that review returns \`approve\`. \`unless-unreviewed\` is the default. Every publication scans what the push would carry before it, whatever the posture, which is what lets a review stand in for the approval. Where the scan could not read a file whole — binary, too large, a line too long, a Git LFS pointer — or a line that looks like a secret carries an \`aflow-scan: allow\` comment, no review runs and the run asks the operator under every posture, \`never\` included, naming each. Change it with \`aflow harness push-approval <folder> <always|never|unless-unreviewed>\`.`,
+**When it asks before pushing**: the folder's push approval, set on the machine that holds it — \`always\` asks before every push, \`never\` pushes without asking, and \`unless-unreviewed\` has the publication run a Local Code Review of everything the push would add and push without asking only when that review returns \`approve\`. \`unless-unreviewed\` is the default. Every publication scans what the push would carry before it, whatever the posture, which is what lets a review stand in for the approval. Where the scan could not read a file whole — binary, a NUL byte, too large, a line too long, a Git LFS pointer — or a line that looks like a secret carries an \`aflow-scan: allow\` comment, no review runs and the run asks the operator under every posture, \`never\` included, naming each. Change it with \`aflow harness push-approval <folder> <always|never|unless-unreviewed>\`.`,
   tags: ['coding', 'publish', 'git', 'local', 'developer-tools'],
   skillCatalogIds: ['publish-local-changes'],
   // A publication from an `unless-unreviewed` folder starts Review Local

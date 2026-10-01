@@ -15,9 +15,38 @@ import { REVIEW_LOCAL_CHANGES } from './reviewLocalChanges.js';
  * `origin` lacks, which is why the scan and the review read `pushRange` rather
  * than the commit alone. The verbs, the remote and the
  * absence of a force flag are the skill's, so no caller can turn a publish into
- * an overwrite.
+ * an overwrite. `--no-follow-tags` and `--no-recurse-submodules` override the
+ * operator's `push.followTags` and `push.recurseSubmodules`, which would
+ * otherwise send tags and submodule commits the scan never read; the executor
+ * refuses a push without them.
  */
-const PUSH_COMMAND = ['git', 'push', 'origin', { $bind: 'refspec' }];
+const PUSH_COMMAND = [
+  'git',
+  'push',
+  '--no-follow-tags',
+  '--no-recurse-submodules',
+  'origin',
+  { $bind: 'refspec' },
+];
+
+/**
+ * When the push goes ahead, read by the push and by the base check before it.
+ * Gating does not propagate from the approval, so the side-effecting tasks
+ * carry it. Each line is one way the push is cleared — the operator approved,
+ * the folder never asks, or this run's review approved — and only the first
+ * can hold once the approval ran: the posture is read only over a range the
+ * scan cleared, where `never` does not ask, and a review runs only where
+ * `approve` does not ask. So a decline is followed whatever the posture, and
+ * nothing holds when nothing was committed.
+ */
+const PUSH_CLEARED = {
+  anyOf: [
+    "tasks.approve-push.output.decision == 'approved'",
+    "tasks.read-push-approval.output.branchPolicy.pushApproval == 'never'",
+    "tasks.review-commit.output.verdict == 'approve'",
+  ],
+  onMissingRef: 'skip' as const,
+};
 
 /**
  * The skill whose verdict on the commit can stand in for the operator's
@@ -94,7 +123,7 @@ const BASE_SHA_SCHEMA = {
 
 const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'publish-local-changes',
-  version: 11,
+  version: 12,
   name: 'Publish Local Changes',
   tagline:
     'Commit a patch onto a branch of a connected repository, then push it and open the pull request — asking the operator first unless the folder says otherwise.',
@@ -110,7 +139,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
 
 **On an existing branch**: a fix that was commissioned from a branch (\`base: <branch>\` on the commission) is published onto that branch by naming it as \`branch\` and passing the commission's \`baseSha\` as \`baseSha\`; a branch is reused only that way, and a fresh change takes a fresh branch.
 
-**With the result**: report the pull request link, and whether the push was approved by the operator or cleared by the folder's push approval — and, where the run reviewed its commit, the verdict. Where approval was declined, report that the branch stayed on the machine and nothing was pushed — the commit is still there to publish later. Where the scan found what looks like a secret, the run failed with nothing pushed: report the files, commit messages, title or summary, lines and rules it names — never ask for or repeat the value — and say the change needs the secret taken out and commissioning again onto a fresh branch, since this branch still holds that commit — or, where the file and line are in one of the folder's own commits that \`origin\` does not have yet, that the commit needs rewriting before anything built on it is pushed. Where the push failed, git's own message says why: a branch on \`origin\` that moved on is not overwritten.`,
+**With the result**: report the pull request link, and whether the push was approved by the operator or cleared by the folder's push approval — and, where the run reviewed its commit, the verdict. Where approval was declined, report that the branch stayed on the machine and nothing was pushed — the commit is still there to publish later. Where the scan found what looks like a secret, the run failed with nothing pushed: report the files, commit messages, title or summary, lines and rules it names — never ask for or repeat the value — and say the change needs the secret taken out and commissioning again onto a fresh branch, since this branch still holds that commit — or, where the file and line are in one of the folder's own commits that \`origin\` does not have yet, that the commit needs rewriting before anything built on it is pushed. Where the base branch on \`origin\` moved after the run measured what its push would add, nothing was pushed: report where it moved from and to, and that the publication has to run again, on a fresh branch. Where the push failed, git's own message says why: a branch on \`origin\` that moved on is not overwritten.`,
   tags: ['coding', 'publish', 'git', 'local', 'developer-tools'],
   capabilityHints: [
     {
@@ -623,31 +652,53 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
         },
 
         {
+          taskId: 'check-base',
+          name: "Check origin's base has not moved",
+          goal: 'Just before the push, fetch the base branch from `origin` again and confirm it is where it was when `pushRange` was measured, scanned and reviewed — so the push carries no commit that was left out because `origin` held it then.',
+          failureInstruction:
+            "Nothing was pushed: `origin`'s base branch moved — the message above says from where to where — after this run measured what its push would add, and a push now would not carry what was scanned and reviewed. The commit is still on its branch in the folder. Run the publication again, on a fresh branch, so what the push would add is measured, scanned and reviewed against the base as it is now.",
+          type: 'operation' as const,
+          operation: 'host.commit.check_base',
+          dependsOn: ['approve-push', 'scan-commit'],
+          when: PUSH_CLEARED,
+          // A base that moved fails here, with nothing to resume: the range
+          // has to be measured again, which only a new run does.
+          retryability: 'safe' as const,
+          maxAttempts: 1,
+          inputBindings: {
+            bindingId: { kind: 'run_input' as const, path: 'bindingId' },
+            base: { kind: 'run_input' as const, path: 'base' },
+            range: { kind: 'task_output' as const, taskId: 'commit', path: 'commit.pushRange' },
+          },
+          context: {
+            strategy: 'scoped' as const,
+            contextPolicy: 'auto-optimize' as const,
+            learnings: 'none' as const,
+            capabilities: {
+              operations: ['host.commit.check_base'],
+              integrations: [],
+            },
+          },
+          inputTemplate: {
+            bindingId: { $bind: 'bindingId' },
+            base: { $bind: 'base' },
+            range: { $bind: 'range' },
+          },
+        },
+
+        {
           taskId: 'push',
           name: 'Push the commit',
-          goal: 'Push the commit this run made to its branch on origin through the connected folder’s shell, with the argv pinned by the skill — carrying the commits of `pushRange` under it that origin does not have. A remote that refuses the update fails the push with git’s own message.',
+          goal: 'Push the commit this run made to its branch on origin through the connected folder’s shell, with the argv pinned by the skill — carrying the commits of `pushRange` under it that origin does not have, and no tag or submodule commit. A remote that refuses the update fails the push with git’s own message.',
           type: 'operation' as const,
           operation: 'host.process.exec',
           // The scan as well as the approval: under `never` over a cleared
           // range the approval is skipped, and a skip clears a dependency
-          // where a failure does not.
-          dependsOn: ['approve-push', 'scan-commit'],
-          // Gating does not propagate from the approval, so the side-effecting
-          // task carries it. Each line is one way the push is cleared — the
-          // operator approved, the folder never asks, or this run's review
-          // approved — and only the first can hold once the approval ran: the
-          // posture is read only over a range the scan cleared, where `never`
-          // does not ask, and a review runs only where `approve` does not ask.
-          // So a decline is followed whatever the posture, and nothing holds
-          // when nothing was committed.
-          when: {
-            anyOf: [
-              "tasks.approve-push.output.decision == 'approved'",
-              "tasks.read-push-approval.output.branchPolicy.pushApproval == 'never'",
-              "tasks.review-commit.output.verdict == 'approve'",
-            ],
-            onMissingRef: 'skip' as const,
-          },
+          // where a failure does not. The base check carries the same
+          // predicate, so it is skipped exactly where the push is, and its
+          // failure — a base that moved — holds the push back.
+          dependsOn: ['approve-push', 'scan-commit', 'check-base'],
+          when: PUSH_CLEARED,
           retryability: 'unsafe' as const,
           maxAttempts: 1,
           inputBindings: {
@@ -800,7 +851,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
       priority: 50,
     },
     rationale:
-      "Eight tasks, the approval between the local half and the published half: the commit lands in a detached worktree, so a decline costs nothing, and host.commit.scan reads everything the push would add (origin/<base>, fetched, to the commit), the messages of those commits, and the pull request's title and summary: a finding fails the run, and an unread file or a line marked allowed asks with no review, whatever the posture. The push argv is pinned with only the commit's refspec bound, so no force flag can be added; the prefix is enforced where the command runs. The posture, read with host.binding.inspect only over a range the scan cleared, and under unless-unreviewed a Local Code Review of that range decide whether to ask; once asked, the push follows the decision. The repository is read through the space's GitHub binding before the approval; the folder arrives as a run input until folder roles land.",
+      "Nine tasks, the approval between the local half and the published half: the commit lands in a detached worktree, so a decline costs nothing, and host.commit.scan reads everything the push would add (origin/<base>, fetched, to the commit), its messages, and the pull request's title and summary: a finding fails the run; an unread file or a line marked allowed asks, unreviewed, whatever the posture. The posture, read only over a cleared range, and under unless-unreviewed a Local Code Review of it decide whether to ask; once asked, the push follows the decision. host.commit.check_base fails the run if origin/<base> moved since the range was measured. The push argv is pinned, only the refspec bound: no force, and --no-follow-tags and --no-recurse-submodules, which the executor requires with the prefix. The repository is read through the space's GitHub binding before the approval; the folder arrives as a run input until folder roles land.",
   },
 };
 

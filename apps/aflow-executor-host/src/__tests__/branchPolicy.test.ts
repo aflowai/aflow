@@ -16,6 +16,7 @@ import {
   HostBindingError,
   HostBindingSchema,
   isGitPush,
+  PUSH_REQUIRED_OPTIONS,
   type PushJobShape,
   requirePushAllowed,
 } from '../bindings.js';
@@ -33,6 +34,17 @@ function bindingWith(branchPrefix?: string): HostBinding {
 }
 
 const allowed = bindingWith('aflow/');
+
+/**
+ * The argv with the options every push must carry right after `push`, so each
+ * case below is refused, or allowed, for what it is about rather than for
+ * leaving them off.
+ */
+function carryingRequired(argv: readonly string[]): readonly string[] {
+  const at = argv.indexOf('push');
+  if (at === -1) return argv;
+  return [...argv.slice(0, at + 1), ...PUSH_REQUIRED_OPTIONS, ...argv.slice(at + 1)];
+}
 
 function refusalFor(
   binding: HostBinding,
@@ -142,7 +154,8 @@ describe('what a push may be', () => {
     ['a push that names only a remote', ['git', 'push', 'origin'], allowed],
   ];
 
-  it.each(refused)('refuses %s', (_name, argv, binding) => {
+  it.each(refused)('refuses %s', (_name, spelled, binding) => {
+    const argv = carryingRequired(spelled);
     const error = refusalFor(binding, argv);
     expect(error.kind).toBe('push_refused');
     // The refusal names the command that was refused and what to do instead;
@@ -173,8 +186,83 @@ describe('what a push may be', () => {
 
   it.each(accepted)('allows %s', (_name, argv) => {
     expect(() => {
-      requirePushAllowed(allowed, argv);
+      requirePushAllowed(allowed, carryingRequired(argv));
     }).not.toThrow();
+  });
+
+  describe('tags and submodules the config would add', () => {
+    const plain = ['git', 'push', 'origin', 'aflow/x'];
+
+    it('refuses a push that leaves either required option off, naming what it lacks', () => {
+      const bare = refusalFor(allowed, plain);
+      expect(bare.kind).toBe('push_refused');
+      expect(bare.message).toContain('`--no-follow-tags` and `--no-recurse-submodules`');
+      expect(bare.message).toContain(
+        'git push --no-follow-tags --no-recurse-submodules <remote> aflow/<name>',
+      );
+      for (const [carried, lacking] of [
+        ['--no-follow-tags', '--no-recurse-submodules'],
+        ['--no-recurse-submodules', '--no-follow-tags'],
+      ] as const) {
+        const error = refusalFor(allowed, ['git', 'push', carried, 'origin', 'aflow/x']);
+        expect(error.message).toContain(`does not carry \`${lacking}\`,`);
+      }
+    });
+
+    it('takes the required options anywhere among the options, before or after the refspec', () => {
+      for (const argv of [
+        ['git', 'push', '--no-follow-tags', '--no-recurse-submodules', 'origin', 'aflow/x'],
+        ['git', 'push', 'origin', 'aflow/x', '--no-recurse-submodules', '--no-follow-tags'],
+        ['git', 'push', '--no-recurse-submodules', 'origin', '--no-follow-tags', 'aflow/x'],
+      ]) {
+        expect(() => {
+          requirePushAllowed(allowed, argv);
+        }, argv.join(' ')).not.toThrow();
+      }
+    });
+
+    const undoing: ReadonlyArray<readonly [string, readonly string[]]> = [
+      ['--follow-tags after its negation', ['--follow-tags']],
+      ['--follow-tags cut short', ['--follow']],
+      ['--recurse-submodules after its negation', ['--recurse-submodules=on-demand']],
+      ['--recurse-submodules cut short', ['--recurse-sub=check']],
+    ];
+    it.each(undoing)('refuses %s, since git reads the last one', (_name, extra) => {
+      const argv = [...carryingRequired(plain), ...extra];
+      const error = refusalFor(allowed, argv);
+      expect(error.kind).toBe('push_refused');
+      expect(error.message).toContain('no refspec on the command names');
+    });
+
+    it('does not count a required option that something else consumes', () => {
+      // `-o` takes the next token whole, so git reads `--no-follow-tags` as a
+      // push option's value and the config's `followTags` stands.
+      for (const consumer of ['-o', '--push-option', '--push-opt', '-qo']) {
+        const argv = [
+          'git',
+          'push',
+          consumer,
+          '--no-follow-tags',
+          '--no-recurse-submodules',
+          'origin',
+          'aflow/x',
+        ];
+        expect(refusalFor(allowed, argv).message, consumer).toContain(
+          'does not carry `--no-follow-tags`,',
+        );
+      }
+      // After `--` every token is a refspec, never an option.
+      const pastTheEnd = ['git', 'push', 'origin', 'aflow/x', '--', ...PUSH_REQUIRED_OPTIONS];
+      expect(refusalFor(allowed, pastTheEnd).message).toContain('does not carry');
+    });
+
+    it('reads a refused option cut short the way git does', () => {
+      for (const option of ['--mir', '--del', '--force-with', '--receive', '--ta']) {
+        const error = refusalFor(allowed, [...carryingRequired(plain), option]);
+        expect(error.kind, option).toBe('push_refused');
+        expect(error.message, option).not.toContain('does not carry');
+      }
+    });
   });
 
   it('leaves everything that is not a push alone', () => {

@@ -137,9 +137,6 @@ function binaryPath(line: string): string | undefined {
 const LFS_POINTER_VERSION = 'version https://git-lfs.github.com/spec/';
 const LFS_POINTER_OID = /^oid sha256:[0-9a-f]{64}$/;
 
-/** A line `git log --format=%x00%H%n%B` starts each message with. */
-const MESSAGE_START = /^\0([0-9a-f]{40,64})$/;
-
 /** One file's part of one commit's diff, one commit's message, or one text. */
 interface FileSection {
   file: string | undefined;
@@ -223,7 +220,7 @@ function readLine(section: FileSection, line: string, bytes: number, lineNumber:
   else section.findings.push(place);
 }
 
-/** Run a `git log` over the range a line at a time, refusing the range if it cannot be read whole. */
+/** Run git over the range a line at a time, refusing the range if any of it cannot be read whole. */
 async function readRange(
   root: string,
   base: string,
@@ -234,7 +231,7 @@ async function readRange(
   try {
     await forEachGitLine(
       root,
-      [...args, `${base}..${head}`],
+      args,
       {
         maxBytes: SCAN_MAX_DIFF_BYTES,
         // The `+` that marks an added line, then the line.
@@ -330,6 +327,7 @@ async function readAddedLines(
       // The repository's own config may set either prefix away; the parser reads `b/`.
       '--src-prefix=a/',
       '--dst-prefix=b/',
+      `${base}..${head}`,
     ],
     read,
   );
@@ -338,7 +336,9 @@ async function readAddedLines(
 
 /**
  * Read every commit's message in the range, each as its own text: a push
- * carries the messages with the commits.
+ * carries the messages with the commits. Each is read from the commit object
+ * itself — everything after the blank line that ends its headers — because a
+ * formatted message ends at a NUL byte and the object does not.
  */
 async function readMessages(
   root: string,
@@ -346,29 +346,24 @@ async function readMessages(
   head: string,
   tally: ScanTally,
 ): Promise<void> {
-  let section: FileSection | undefined;
-  let lineNumber = 0;
-  await readRange(
-    root,
-    base,
-    head,
-    // The repository's config may show signatures, which would be read as
-    // part of the message; they are not what the push carries.
-    ['log', '--no-show-signature', '--format=%x00%H%n%B'],
-    (line, bytes) => {
-      const sha = MESSAGE_START.exec(line)?.[1];
-      if (sha !== undefined) {
-        closeSection(section, tally);
-        section = openSection(`${sha} (message)`);
-        lineNumber = 0;
+  const shas: string[] = [];
+  await readRange(root, base, head, ['rev-list', `${base}..${head}`], (line) => {
+    if (line !== '') shas.push(line);
+  });
+  for (const sha of shas) {
+    const section = openSection(`${sha} (message)`);
+    let inMessage = false;
+    let lineNumber = 0;
+    await readRange(root, base, head, ['cat-file', 'commit', sha], (line, bytes) => {
+      if (!inMessage) {
+        inMessage = line === '';
         return;
       }
-      if (section === undefined) return;
       lineNumber += 1;
       readLine(section, line, bytes + 1, lineNumber);
-    },
-  );
-  closeSection(section, tally);
+    });
+    closeSection(section, tally);
+  }
 }
 
 /** Read each text passed beside the range, under its name. */

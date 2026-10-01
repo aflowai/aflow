@@ -37,6 +37,7 @@ import {
   requireWritable,
   resolveWithin,
 } from '../bindings.js';
+import { resolvePushBase } from '../pushBase.js';
 import {
   applyPatch,
   commitPatchOnBranch,
@@ -146,6 +147,12 @@ async function applyHostPatch(ctx: ExecutorContext, policyPath: string): Promise
     }
 
     if (input.commit !== undefined) {
+      // Measured before anything is made, so a base that cannot be read
+      // leaves no commit and no branch behind.
+      const pushBaseSha =
+        input.commit.pushBase === undefined
+          ? undefined
+          : await resolvePushBase(binding.root, input.commit.pushBase);
       const { apply, commit } = await commitPatchOnBranch(
         binding.root,
         diff,
@@ -154,7 +161,7 @@ async function applyHostPatch(ctx: ExecutorContext, policyPath: string): Promise
         input.commit.message,
         {
           ...(input.commit.baseSha !== undefined ? { baseSha: input.commit.baseSha } : {}),
-          ...(input.commit.pushBase !== undefined ? { pushBase: input.commit.pushBase } : {}),
+          ...(pushBaseSha !== undefined ? { pushBaseSha } : {}),
         },
       );
       return await successWithData(ctx, {

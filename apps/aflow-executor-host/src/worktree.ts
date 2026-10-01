@@ -26,7 +26,6 @@ import {
   mkdir,
   mkdtemp,
   readdir,
-  readFile,
   realpath,
   rm,
   rmdir,
@@ -620,7 +619,7 @@ function transportEnv(): Record<string, string> {
 }
 
 /** Whether `ref` is a ref name git would store, rather than a refspec. */
-async function isPlainRefName(root: string, ref: string): Promise<boolean> {
+export async function isPlainRefName(root: string, ref: string): Promise<boolean> {
   // A leading `+` forces and a `:` names a destination: either would turn the
   // fetch into a write to one of the operator's branches.
   if (ref.startsWith('+')) return false;
@@ -653,7 +652,7 @@ export async function fetchRemoteBase(root: string, base: string): Promise<void>
 }
 
 /** The folder's remotes by name, or none where git cannot list them. */
-async function remoteNames(root: string): Promise<string[]> {
+export async function remoteNames(root: string): Promise<string[]> {
   try {
     return (await git(root, ['remote']))
       .split('\n')
@@ -665,7 +664,7 @@ async function remoteNames(root: string): Promise<string[]> {
 }
 
 /** `git fetch <remote> <ref>`, refused with git's own reason when it fails. */
-async function fetchFromRemote(root: string, remote: string, ref: string): Promise<void> {
+export async function fetchFromRemote(root: string, remote: string, ref: string): Promise<void> {
   const base = `${remote}/${ref}`;
   try {
     await run('git', ['-C', root, ...GIT_SAFETY_ARGS, 'fetch', '--end-of-options', remote, ref], {
@@ -693,6 +692,24 @@ async function fetchFromRemote(root: string, remote: string, ref: string): Promi
       'fetch_failed',
     );
   }
+}
+
+/**
+ * The URL a fetch from `remote` reaches, as the operator's own git resolves it:
+ * their `insteadOf` rewrites live in the config `transportEnv` reads.
+ */
+export async function remoteFetchUrl(root: string, remote: string): Promise<string> {
+  const { stdout } = await run(
+    'git',
+    ['-C', root, ...GIT_SAFETY_ARGS, 'remote', 'get-url', remote],
+    { timeout: GIT_TIMEOUT_MS, maxBuffer: 64 * 1024, env: transportEnv() },
+  );
+  return stdout.trim();
+}
+
+/** Where git keeps `name` for the repository at `root`, such as FETCH_HEAD. */
+export async function gitPath(root: string, name: string): Promise<string> {
+  return resolvePath(root, (await git(root, ['rev-parse', '--git-path', name])).trim());
 }
 
 export async function prepareWorktree(
@@ -1207,45 +1224,6 @@ export interface PatchCommit {
   readonly pushRefspec: string;
 }
 
-/** The remote a publication pushes to, and so the one its push base is read from. */
-const PUSH_REMOTE = 'origin';
-
-/**
- * Where `origin/<pushBase>` is now, read from the fetch's own `FETCH_HEAD`.
- * The remote-tracking ref moves only where the remote's fetch refspec maps
- * the branch to it, so under a narrowed refspec it stays where it was and
- * would leave out of the push range commits the remote has since lost.
- */
-async function resolvePushBase(root: string, pushBase: string): Promise<string> {
-  const named = `${PUSH_REMOTE}/${pushBase}`;
-  if (!(await remoteNames(root)).includes(PUSH_REMOTE) || !(await isPlainRefName(root, pushBase))) {
-    throw new WorktreeError(
-      `\`${named}\` is not a branch this folder can read, so what a push would ` +
-        `add cannot be measured. A publication pushes to \`${PUSH_REMOTE}\` and measures against ` +
-        `its \`${pushBase}\`; the folder needs that remote, and \`${pushBase}\` on it.`,
-      'unknown_ref',
-    );
-  }
-  await fetchFromRemote(root, PUSH_REMOTE, pushBase);
-  const fetchHead = resolvePath(
-    root,
-    (await git(root, ['rev-parse', '--git-path', 'FETCH_HEAD'])).trim(),
-  );
-  const first = (await readFile(fetchHead, 'utf8')).split('\n')[0] ?? '';
-  const [sha, , description] = first.split('\t');
-  const branch = pushBase.replace(/^refs\/heads\//, '');
-  // Another fetch in the same folder rewrites FETCH_HEAD; a line naming some
-  // other branch is not where this one is.
-  if (sha === undefined || !description?.startsWith(`branch '${branch}' of `)) {
-    throw new WorktreeError(
-      `\`${named}\` was fetched, but FETCH_HEAD no longer names it — another fetch in the ` +
-        'folder replaced it before it was read. Publish again.',
-      'fetch_failed',
-    );
-  }
-  return await resolveCommit(root, sha);
-}
-
 export interface PatchCommitOutcome {
   readonly apply: ApplyOutcome;
   /** Absent when the patch conflicted, which leaves no commit and no branch moved. */
@@ -1344,10 +1322,9 @@ export async function commitPatchOnBranch(
   mode: 'clean' | 'merge',
   branch: string,
   message: string,
-  options: { readonly baseSha?: string; readonly pushBase?: string } = {},
+  options: { readonly baseSha?: string; readonly pushBaseSha?: string } = {},
 ): Promise<PatchCommitOutcome> {
-  const pushBaseSha =
-    options.pushBase === undefined ? undefined : await resolvePushBase(root, options.pushBase);
+  const { pushBaseSha } = options;
   const target = await commitTarget(root, branch, options.baseSha);
 
   const scratch = await mkdtemp(join(tmpdir(), PUBLICATION_SCRATCH_PREFIX));

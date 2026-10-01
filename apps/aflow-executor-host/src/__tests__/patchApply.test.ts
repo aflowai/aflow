@@ -13,7 +13,9 @@ import { promisify } from 'node:util';
 import { PayloadAccessError } from '@aflow/executor-runtime';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { createHostCommitHandler } from '../handlers/commitHandlers.js';
 import { createHostPatchHandler } from '../handlers/patchHandlers.js';
+import { fetchedBranch, fetchHeadSource } from '../pushBase.js';
 import { INLINE_DIFF_CAP_BYTES } from '../worktree.js';
 
 const run = promisify(execFile);
@@ -832,6 +834,119 @@ describe('measuring what a push of the commit would add', () => {
     expect(result.status).toBe('SUCCEEDED');
     expect(commit?.['pushRange']).toBeUndefined();
   }, 30_000);
+
+  describe('a branch of the same name on another remote', () => {
+    let other: string;
+    let othersMain: string;
+
+    beforeEach(async () => {
+      other = join(base, 'other.git');
+      await run('git', ['clone', '-q', '--bare', origin, other]);
+      const scratch = join(base, 'other-work');
+      await run('git', ['clone', '-q', other, scratch]);
+      await writeFile(join(scratch, 'd.txt'), 'only on the other remote\n');
+      await git(scratch, 'add', '-A');
+      await git(
+        scratch,
+        '-c',
+        'user.email=u@e.com',
+        '-c',
+        'user.name=U',
+        'commit',
+        '-q',
+        '-m',
+        'd',
+      );
+      await git(scratch, 'push', '-q', 'origin', 'HEAD:main');
+      othersMain = (await git(scratch, 'rev-parse', 'HEAD')).trim();
+      await git(root, 'remote', 'add', 'other', other);
+    });
+
+    it("is not read as origin's base when its fetch is the last FETCH_HEAD holds", async () => {
+      await git(root, 'fetch', '-q', 'origin', 'main');
+      const origins = (await git(root, 'rev-parse', 'FETCH_HEAD')).trim();
+      expect(await fetchedBranch(root, 'origin', 'main')).toBe(origins);
+
+      await git(root, 'fetch', '-q', 'other', 'main');
+      expect((await git(root, 'rev-parse', 'FETCH_HEAD')).trim()).toBe(othersMain);
+      await expect(fetchedBranch(root, 'origin', 'main')).rejects.toThrow(
+        'FETCH_HEAD no longer names it',
+      );
+      expect(await fetchedBranch(root, 'other', 'main')).toBe(othersMain);
+    }, 30_000);
+
+    it("measures against origin's base, never the other remote's", async () => {
+      const origins = (await git(root, 'ls-remote', 'origin', 'refs/heads/main')).split('\t')[0];
+      const { result, commit } = await publish({ pushBase: 'main' });
+      expect(result.status).toBe('SUCCEEDED');
+      expect(commit?.['pushRange']).toBe(`${origins ?? ''}..${String(commit?.['sha'])}`);
+      expect(origins).not.toBe(othersMain);
+    }, 30_000);
+  });
+
+  it('names a remote the way FETCH_HEAD records it', () => {
+    for (const [url, recorded] of [
+      ['https://github.com/aflowai/aflow.git', 'https://github.com/aflowai/aflow'],
+      [
+        'https://x-access-token:t0k3n@github.com/aflowai/aflow.git',
+        'https://github.com/aflowai/aflow',
+      ],
+      ['git@github.com:aflowai/aflow.git', 'github.com:aflowai/aflow'],
+      ['ssh://git@github.com/aflowai/aflow.git/', 'ssh://github.com/aflowai/aflow'],
+      ['/srv/repos/app.git/', '/srv/repos/app'],
+      ['/srv/repos/app/.git/', '/srv/repos/app/'],
+      ['/srv/me@host/app', '/srv/me@host/app'],
+      ['https://github.com/a@b/app', 'https://github.com/a@b/app'],
+    ] as const) {
+      expect(fetchHeadSource(url), url).toBe(recorded);
+    }
+  });
+
+  describe('checking the base again before the push', () => {
+    async function checkBase(range: string) {
+      const captured: Captured = {};
+      const result = await createHostCommitHandler(policyPath).execute({
+        ...(contextFor({ bindingId: 'hb', base: 'main', range }, captured) as object),
+        operationId: 'host.commit.check_base',
+      } as never);
+      return { result, captured };
+    }
+
+    it('passes while origin holds the base the range was measured from', async () => {
+      const { commit } = await publish({ pushBase: 'main' });
+      const range = String(commit?.['pushRange']);
+      const { result, captured } = await checkBase(range);
+      expect(result.status).toBe('SUCCEEDED');
+      expect(captured.output).toEqual({ baseSha: range.split('..')[0] });
+    }, 30_000);
+
+    it('fails when origin moved the base on since, saying from where to where', async () => {
+      const { commit } = await publish({ pushBase: 'main' });
+      const range = String(commit?.['pushRange']);
+      const measured = range.split('..')[0] ?? '';
+      const now = await pushedElsewhere();
+      const { result } = await checkBase(range);
+      expect(result.status).toBe('FAILED');
+      const message = result.error?.message ?? '';
+      expect(message).toContain(`\`origin/main\` was at \`${measured}\``);
+      expect(message).toContain(`is at \`${now}\` now`);
+      expect(message).toContain('The publication has to run again');
+    }, 30_000);
+
+    it('fails when origin rewound the base, which would send what the scan left out', async () => {
+      const unpushed = await commitLocally('leaked.txt');
+      await git(root, 'push', '-q', 'origin', 'HEAD:main');
+      const { commit } = await publish({ pushBase: 'main' });
+      const range = String(commit?.['pushRange']);
+      expect(range.split('..')[0]).toBe(unpushed);
+
+      const before = (await git(root, 'rev-parse', `${unpushed}^`)).trim();
+      await git(root, 'push', '-q', '--force', 'origin', `${before}:refs/heads/main`);
+      const { result } = await checkBase(range);
+      expect(result.status).toBe('FAILED');
+      expect(result.error?.message ?? '').toContain(`is at \`${before}\` now`);
+    }, 30_000);
+  });
 });
 
 describe("a commission's diff taken by reference", () => {
