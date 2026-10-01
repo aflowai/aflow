@@ -79,6 +79,7 @@ export * from './store/bindingMerge.js';
 export * from './store/artifactContent.js';
 export * from './store/storeDerivations.js';
 export * from './store/storeDivergence.js';
+export * from './store/catalogSkillProjection.js';
 export * from './store/storeInstallExecution.js';
 export * from './store/storeUpdateExecution.js';
 export * from './store/connectorUninstall.js';

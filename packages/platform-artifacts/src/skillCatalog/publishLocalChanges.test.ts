@@ -1,6 +1,17 @@
 import { describe, it, expect } from 'vitest';
-import { materializeAndValidateSkillConfig } from '@aflow/cybernetic-runtime';
 import {
+  computeReadyTasksWithWhen,
+  computeRejectedApprovalSkipSet,
+  materializeAndValidateSkillConfig,
+  projectTaskOutput,
+} from '@aflow/cybernetic-runtime';
+import {
+  HOST_PUSH_APPROVAL_DEFAULT,
+  HostBindingInspectOutputSchema,
+  type HostPushApproval,
+  type WorkflowTask,
+  WorkflowRunStartInputSchema,
+  WorkflowRunWakeupEnvelopeSchema,
   HostFilePatchInputSchema,
   HostFilePatchOutputSchema,
   isEvalPlaneOperation,
@@ -8,9 +19,24 @@ import {
   substituteTemplateBinds,
 } from '@aflow/schemas';
 import { PUBLISH_LOCAL_CHANGES } from './publishLocalChanges.js';
+import { REVIEW_LOCAL_CHANGES } from './reviewLocalChanges.js';
 
 const wf = PUBLISH_LOCAL_CHANGES.bundle.workflow;
 const taskById = new Map(wf.tasks.map((task) => [task.taskId, task]));
+
+const BASE = 'a'.repeat(40);
+const HEAD = 'c'.repeat(40);
+
+/** The commit an applied patch reports, as `host.file.patch` returns it. */
+const COMMIT = {
+  branch: 'aflow/x',
+  sha: HEAD,
+  message: 'The change',
+  baseSha: BASE,
+  appended: false,
+  range: `${BASE}..${HEAD}`,
+  pushRefspec: `${HEAD}:refs/heads/aflow/x`,
+};
 
 function taskOrThrow(taskId: string) {
   const task = taskById.get(taskId);
@@ -27,7 +53,7 @@ function materializedCommands(): string[][] {
     const declared = new Set(Object.keys(task.inputBindings ?? {}));
     const resolved: Record<string, unknown> = {
       bindingId: 'folder-1',
-      branch: 'publish/the-change',
+      refspec: COMMIT.pushRefspec,
     };
     const substituted = substituteTemplateBinds(template, resolved, declared);
     commands.push(substituted['command'] as string[]);
@@ -60,15 +86,19 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(validity.status).toBe('valid');
   });
 
-  it('is five tasks in one chain — commit, read the repository, approve, push, pull request', () => {
+  it('is seven tasks — commit, what decides the approval, approve, push, pull request', () => {
     expect(wf.tasks.map((t) => t.taskId)).toEqual([
       'commit',
       'read-repository',
+      'read-push-approval',
+      'review-commit',
       'approve-push',
       'push',
       'open-pr',
     ]);
     expect(wf.tasks.map((t) => t.type)).toEqual([
+      'operation',
+      'operation',
       'operation',
       'operation',
       'human',
@@ -78,12 +108,16 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(wf.tasks.map((t) => t.dependsOn ?? [])).toEqual([
       [],
       ['commit'],
-      ['read-repository'],
+      ['commit'],
+      ['read-push-approval'],
+      ['read-repository', 'review-commit'],
       ['approve-push'],
       ['push'],
     ]);
     expect(taskOrThrow('commit').operation).toBe('host.file.patch');
     expect(taskOrThrow('read-repository').operation).toBe('api.http.call');
+    expect(taskOrThrow('read-push-approval').operation).toBe('host.binding.inspect');
+    expect(taskOrThrow('review-commit').operation).toBe('workflow.run.start');
     expect(taskOrThrow('push').operation).toBe('host.process.exec');
     expect(taskOrThrow('open-pr').operation).toBe('api.http.call');
   });
@@ -315,10 +349,20 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(repo.description).toContain('1 to 100 characters, and neither `.` nor `..`');
   });
 
-  it('pins the push argv, binding only the branch', () => {
+  it('pushes the commit by its sha onto its branch, never the branch by name', () => {
+    const push = taskOrThrow('push');
+    expect(push.inputBindings).toEqual({
+      bindingId: { kind: 'run_input', path: 'bindingId' },
+      refspec: { kind: 'task_output', taskId: 'commit', path: 'commit.pushRefspec' },
+    });
     const [pushCommand, ...rest] = materializedCommands();
     expect(rest).toEqual([]);
-    expect(pushCommand).toEqual(['git', 'push', '--set-upstream', 'origin', 'publish/the-change']);
+    // No `--set-upstream`: it tracks a local branch named as the source, and
+    // the source here is a sha.
+    expect(pushCommand).toEqual(['git', 'push', 'origin', `${HEAD}:refs/heads/aflow/x`]);
+    // The source side is the sha the commit task reported, so a branch that
+    // moved after the commit sends nothing it gained since.
+    expect(pushCommand?.[3]?.split(':')[0]).toBe(HEAD);
   });
 
   it('carries no force anywhere in any command it runs', () => {
@@ -335,15 +379,6 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(approve.type).toBe('human');
     expect(approve.intent).toBe('approve');
     expect(approve.approves).toEqual(['commit']);
-    expect(approve.when).toEqual({
-      expression: "tasks.commit.output.state == 'applied'",
-      onMissingRef: 'skip',
-    });
-    // Gating does not propagate: the push reads the decision itself.
-    expect(taskOrThrow('push').when).toEqual({
-      expression: "tasks.approve-push.output.decision == 'approved'",
-      onMissingRef: 'skip',
-    });
     expect(taskOrThrow('push').maxAttempts).toBe(1);
     expect(approve.pauseInstruction).toContain('nothing has left the machine');
     expect(approve.actionPreview?.op).toBe('host.process.exec');
@@ -353,27 +388,29 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(taskOrThrow('approve-push').actionPreview?.inputBindings).toEqual({
       bindingId: { kind: 'run_input', path: 'bindingId' },
       branch: { kind: 'run_input', path: 'branch' },
+      pushApproval: {
+        kind: 'task_output',
+        taskId: 'read-push-approval',
+        path: 'branchPolicy.pushApproval',
+      },
       commitSha: { kind: 'task_output', taskId: 'commit', path: 'commit.sha' },
+      pushRefspec: { kind: 'task_output', taskId: 'commit', path: 'commit.pushRefspec' },
       commitBranch: { kind: 'task_output', taskId: 'commit', path: 'commit.branch' },
       commitMessage: { kind: 'task_output', taskId: 'commit', path: 'commit.message' },
       filesChanged: { kind: 'task_output', taskId: 'commit', path: 'filesChanged' },
     });
     // Every path is one the patch operation returns for an applied commit, so
     // the preview resolves — an unresolved one refuses the approval itself.
+    // Nothing binds the review, which a folder that always asks never runs.
     const applied = HostFilePatchOutputSchema.parse({
       state: 'applied',
       filesChanged: 2,
       files: ['a.ts', 'b.ts'],
       conflicts: [],
-      commit: {
-        branch: 'aflow/x',
-        sha: 'b'.repeat(40),
-        message: 'The change',
-        baseSha: 'a'.repeat(40),
-        appended: false,
-      },
+      commit: COMMIT,
     });
     expect(applied.commit?.message).toBe('The change');
+    expect(applied.commit?.pushRefspec).toBe(`${HEAD}:refs/heads/aflow/x`);
     expect(applied.filesChanged).toBe(2);
   });
 
@@ -446,5 +483,330 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       ...(t.context?.capabilities?.operations ?? []),
     ]);
     expect(operations.filter((op) => isEvalPlaneOperation(op))).toEqual([]);
+  });
+});
+
+// ── The push approval, run through the scheduler's own predicates ──────────
+
+/**
+ * What the review this run starts comes back with: a verdict, a run that did
+ * not complete, or — `not-started` — no run at all, the task itself failing
+ * (the review missing, edited or refused, or its waiter not registered).
+ */
+type Review =
+  'approve' | 'request_changes' | 'comment' | 'failed' | 'cancelled' | 'paused' | 'not-started';
+type Decision = 'approved' | 'declined';
+
+/**
+ * The review run's ending as the waiter delivers it to the task: the run's
+ * promoted output only when it completed.
+ */
+function reviewEnding(review: Exclude<Review, 'not-started'>): Record<string, unknown> {
+  const completed = review !== 'failed' && review !== 'cancelled' && review !== 'paused';
+  return WorkflowRunWakeupEnvelopeSchema.parse({
+    runId: 'review-run',
+    outcome: completed ? 'completed' : review,
+    waiterId: 'waiter-1',
+    ...(completed ? { result: { output: { verdict: review, reviewSummary: 'Read.' } } } : {}),
+  });
+}
+
+interface Scenario {
+  pushApproval: HostPushApproval | 'no-prefix';
+  review: Review;
+  decision: Decision;
+  committed?: boolean;
+}
+
+interface Outcome {
+  asked: boolean;
+  pushed: boolean;
+  ran: string[];
+}
+
+/** What each operation returns in a scenario, before the task's own projection. */
+function rawOutput(taskId: string, scenario: Scenario): Record<string, unknown> {
+  switch (taskId) {
+    case 'commit':
+      return scenario.committed === false
+        ? { state: 'conflict', filesChanged: 0, files: [], conflicts: ['a.ts'] }
+        : {
+            state: 'applied',
+            filesChanged: 1,
+            files: ['a.ts'],
+            conflicts: [],
+            commit: COMMIT,
+          };
+    case 'read-repository':
+      return { statusCode: 200, data: { full_name: 'aflowai/aflow' } };
+    case 'read-push-approval':
+      return HostBindingInspectOutputSchema.parse({
+        id: 'hb_app',
+        ...(scenario.pushApproval === 'no-prefix'
+          ? {}
+          : { branchPolicy: { branchPrefix: 'aflow/', pushApproval: scenario.pushApproval } }),
+      });
+    case 'review-commit':
+      if (scenario.review === 'not-started')
+        throw new Error('a review that did not start has no output');
+      return reviewEnding(scenario.review);
+    case 'push':
+      return { exitCode: 0 };
+    case 'open-pr':
+      return {
+        statusCode: 201,
+        data: { number: 7, html_url: 'https://github.com/aflowai/aflow/pull/7' },
+      };
+    default:
+      return {};
+  }
+}
+
+/**
+ * Drive the graph the way the harness does: ready tasks run, false predicates
+ * skip, a declined approval skips its gated branch, and a failed task satisfies
+ * its dependents only where it is optional. Only the outputs are scripted;
+ * every decision is the skill's own.
+ */
+function publish(scenario: Scenario): Outcome {
+  const tasks = wf.tasks as unknown as WorkflowTask[];
+  const completed = new Set<string>();
+  const skipped = new Set<string>();
+  const failedOptional = new Set<string>();
+  const statuses = new Map<string, string>();
+  const outputs = new Map<string, Record<string, unknown>>();
+  const ran: string[] = [];
+  let asked = false;
+
+  for (let round = 0; round < tasks.length + 1; round += 1) {
+    const {
+      ready,
+      skipped: skip,
+      errors,
+    } = computeReadyTasksWithWhen(tasks, completed, skipped, { statuses, outputs }, failedOptional);
+    expect(errors).toEqual([]);
+    for (const { task } of skip) {
+      skipped.add(task.taskId);
+      statuses.set(task.taskId, 'skipped');
+    }
+    for (const task of ready) {
+      if (ran.includes(task.taskId)) continue;
+      ran.push(task.taskId);
+      if (task.taskId === 'review-commit' && scenario.review === 'not-started') {
+        statuses.set(task.taskId, 'failed');
+        if (task.optional === true) failedOptional.add(task.taskId);
+        continue;
+      }
+      if (task.taskId === 'approve-push') {
+        asked = true;
+        if (scenario.decision === 'declined') {
+          for (const id of computeRejectedApprovalSkipSet(tasks, task.taskId)) {
+            skipped.add(id);
+            statuses.set(id, 'skipped');
+          }
+          continue;
+        }
+        outputs.set(task.taskId, { decision: 'approved' });
+      } else {
+        const raw = rawOutput(task.taskId, scenario);
+        if (task.outputProjection !== undefined) {
+          const projected = projectTaskOutput(task.outputProjection, raw, null);
+          if (!projected.ok) throw new Error(`${task.taskId} did not project`);
+          outputs.set(task.taskId, projected.value);
+        } else {
+          outputs.set(task.taskId, raw);
+        }
+      }
+      completed.add(task.taskId);
+      statuses.set(task.taskId, 'succeeded');
+    }
+    if (ready.length === 0 && skip.length === 0) break;
+  }
+
+  return { asked, pushed: ran.includes('push'), ran };
+}
+
+describe('Publish Local Changes — the folder decides whether the push asks', () => {
+  const postures: HostPushApproval[] = ['always', 'never', 'unless-unreviewed'];
+  const reviews: Review[] = [
+    'approve',
+    'request_changes',
+    'comment',
+    'failed',
+    'cancelled',
+    'paused',
+    'not-started',
+  ];
+  const decisions: Decision[] = ['approved', 'declined'];
+
+  for (const pushApproval of postures) {
+    for (const review of reviews) {
+      for (const decision of decisions) {
+        const reviewed = pushApproval === 'unless-unreviewed';
+        const asks = pushApproval === 'always' || (reviewed && review !== 'approve');
+        const pushes = asks ? decision === 'approved' : true;
+        it(`${pushApproval}, review ${review}, operator ${decision}: ${asks ? 'asks' : 'does not ask'}, ${pushes ? 'pushes' : 'does not push'}`, () => {
+          const outcome = publish({ pushApproval, review, decision });
+          expect(outcome.asked).toBe(asks);
+          expect(outcome.pushed).toBe(pushes);
+          expect(outcome.ran.includes('open-pr')).toBe(pushes);
+          expect(outcome.ran.includes('review-commit')).toBe(reviewed);
+        });
+      }
+    }
+  }
+
+  it('starts a review only where the posture depends on one, after the commit', () => {
+    for (const pushApproval of ['always', 'never'] as const) {
+      expect(publish({ pushApproval, review: 'approve', decision: 'approved' }).ran).not.toContain(
+        'review-commit',
+      );
+    }
+    const { ran } = publish({
+      pushApproval: 'unless-unreviewed',
+      review: 'request_changes',
+      decision: 'approved',
+    });
+    expect(ran.indexOf('commit')).toBeLessThan(ran.indexOf('review-commit'));
+    expect(ran.indexOf('review-commit')).toBeLessThan(ran.indexOf('approve-push'));
+  });
+
+  it('reads no verdict from a review that did not complete, whatever it promoted', () => {
+    // The waiter hands a task the run's output only when the run completed; a
+    // failed, cancelled or paused child's verdict therefore reads null, and
+    // null is not `approve`.
+    const review = taskOrThrow('review-commit');
+    if (review.outputProjection === undefined) throw new Error('the review must project');
+    for (const outcome of ['failed', 'cancelled', 'paused'] as const) {
+      const projected = projectTaskOutput(review.outputProjection, reviewEnding(outcome), null);
+      expect(projected).toEqual({
+        ok: true,
+        value: { verdict: null, outcome, reviewRunId: 'review-run' },
+      });
+    }
+    const approved = projectTaskOutput(review.outputProjection, reviewEnding('approve'), null);
+    expect(approved).toEqual({
+      ok: true,
+      value: { verdict: 'approve', outcome: 'completed', reviewRunId: 'review-run' },
+    });
+  });
+
+  it('asks when the review task itself fails, and not otherwise from that failure', () => {
+    // Optional, so its failure satisfies the approval's dependency instead of
+    // blocking it; the approval's own predicate then reads the failure.
+    expect(taskOrThrow('review-commit').optional).toBe(true);
+    const asked = publish({
+      pushApproval: 'unless-unreviewed',
+      review: 'not-started',
+      decision: 'approved',
+    });
+    expect(asked).toMatchObject({ asked: true, pushed: true });
+    const declined = publish({
+      pushApproval: 'unless-unreviewed',
+      review: 'not-started',
+      decision: 'declined',
+    });
+    expect(declined).toMatchObject({ asked: true, pushed: false });
+  });
+
+  it('asks nothing and pushes nothing when the patch did not commit', () => {
+    const outcome = publish({
+      pushApproval: 'never',
+      review: 'approve',
+      decision: 'approved',
+      committed: false,
+    });
+    expect(outcome).toEqual({ asked: false, pushed: false, ran: ['commit'] });
+  });
+
+  it('pushes nothing from a folder that declares no push at all', () => {
+    const outcome = publish({ pushApproval: 'no-prefix', review: 'approve', decision: 'approved' });
+    expect(outcome.asked).toBe(false);
+    expect(outcome.pushed).toBe(false);
+    expect(outcome.ran).not.toContain('review-commit');
+  });
+
+  it('never pushes after a decline, even read from the decision alone', () => {
+    // The harness skips the gated branch on a decline; the push's own
+    // predicate must refuse it too, in case a decline is ever recorded as an
+    // answer rather than a skip.
+    const push = taskOrThrow('push') as unknown as WorkflowTask;
+    for (const pushApproval of ['always', 'unless-unreviewed'] as const) {
+      const verdict = pushApproval === 'always' ? undefined : 'request_changes';
+      const ready = computeReadyTasksWithWhen([push], new Set(['approve-push']), new Set(), {
+        statuses: new Map([['approve-push', 'succeeded']]),
+        outputs: new Map<string, Record<string, unknown>>([
+          ['approve-push', { decision: 'rejected' }],
+          ['read-push-approval', { branchPolicy: { branchPrefix: 'aflow/', pushApproval } }],
+          ...(verdict === undefined
+            ? []
+            : [
+                ['review-commit', { verdict, outcome: 'completed', reviewRunId: 'r' }] as [
+                  string,
+                  Record<string, unknown>,
+                ],
+              ]),
+        ]),
+      });
+      expect(ready.ready).toEqual([]);
+    }
+  });
+
+  it('reviews exactly the commit it made, by its two shas, and waits for the review to end', () => {
+    const review = taskOrThrow('review-commit');
+    const template = review.inputTemplate;
+    if (template === undefined) throw new Error('the review must carry a template');
+    expect(review.inputBindings).toEqual({
+      bindingId: { kind: 'run_input', path: 'bindingId' },
+      range: { kind: 'task_output', taskId: 'commit', path: 'commit.range' },
+    });
+    const declared = new Set(Object.keys(review.inputBindings ?? {}));
+    const start = substituteTemplateBinds(
+      template,
+      { bindingId: 'folder-1', range: COMMIT.range },
+      declared,
+    );
+    // Named by its catalog entry, so a space workflow merely holding the slug
+    // is refused rather than trusted to decide the approval.
+    expect(WorkflowRunStartInputSchema.parse(start)).toMatchObject({
+      slug: REVIEW_LOCAL_CHANGES.bundle.workflow.slug,
+      catalogId: REVIEW_LOCAL_CHANGES.catalogId,
+      inputs: { bindingId: 'folder-1', range: `${BASE}..${HEAD}`, depth: 'standard' },
+      wait: 'until_complete',
+    });
+    // Two shas and no branch name: the range still names this commit after
+    // the branch moves.
+    expect(JSON.stringify(start)).not.toContain('aflow/x');
+    // Every input it passes is one the review declares.
+    const accepted = new Set(
+      (REVIEW_LOCAL_CHANGES.bundle.workflow.runInputs ?? []).map((i) => i.id),
+    );
+    for (const key of Object.keys((start as { inputs: Record<string, unknown> }).inputs)) {
+      expect(accepted).toContain(key);
+    }
+    // A second attempt would start a second review.
+    expect(review.retryability).toBe('unsafe');
+    expect(review.maxAttempts).toBe(1);
+  });
+
+  it('says which case it is asking in, a line each, and where the verdict is', () => {
+    const lines = (taskOrThrow('approve-push').pauseInstruction ?? '').split('\n');
+    expect(lines).toContain('- `always`: it asks before every push, and no review ran.');
+    const reviewed = lines.find((line) => line.startsWith('- `unless-unreviewed`:'));
+    expect(reviewed).toContain(
+      "this run's Local Code Review of the commit did not return `approve`",
+    );
+    expect(reviewed).toContain('its verdict is on the "Review the commit" task');
+    expect(taskOrThrow('review-commit').name).toBe('Review the commit');
+  });
+
+  it('names the three postures and the default in its description, and why it is the default', () => {
+    expect(HOST_PUSH_APPROVAL_DEFAULT).toBe('always');
+    for (const phrase of ['`always`', '`never`', '`unless-unreviewed`', 'is `always`']) {
+      expect(PUBLISH_LOCAL_CHANGES.description).toContain(phrase);
+    }
+    expect(PUBLISH_LOCAL_CHANGES.description).toContain(
+      'stays the default until a publication scans its commit for secrets before the push, and `unless-unreviewed` becomes the default with that scan.',
+    );
   });
 });

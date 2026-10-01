@@ -153,11 +153,12 @@ export async function handoffStartupPreflightPause(
 }
 
 /**
- * Pause the run with the contract for a caller that does not wait on it:
- * nothing parks, and the pause reaches the session that started the run as a
- * wakeup, like any later pause. A failure fails the run, which reaches it too.
+ * Pause the run with the contract for a caller with no parked step: a session
+ * that started the run without waiting hears the pause as a wakeup, like any
+ * later pause, and a workflow task waits through it for the run to end. A
+ * failure fails the run, which reaches either.
  */
-export async function pauseStartupPreflightForSessionWaiter(
+export async function pauseStartupPreflightUnparked(
   handoff: Omit<HandoffStartupPreflightPauseArgs, 'args' | 'startTime'>,
 ): Promise<void> {
   try {

@@ -6,11 +6,18 @@ import {
   resolveWorkflowForStart,
   WorkflowRevisionDriftError,
 } from '@aflow/database';
-import type { Campaign, WorkflowResumeContract, WorkflowRunStartInput } from '@aflow/schemas';
+import type {
+  Campaign,
+  SessionId,
+  WorkflowResumeContract,
+  WorkflowRunStartInput,
+} from '@aflow/schemas';
 import {
   normalizeInstructionsForStorage,
   deriveGoalRef,
   resolveCampaignGoal,
+  MAX_WORKFLOW_RUN_DEPTH,
+  workflowRunDepth,
 } from '@aflow/schemas';
 import {
   recordRunStart,
@@ -28,6 +35,8 @@ import {
   hashWorkflowConfig,
   resolveSkillForWorkflow,
   listCampaigns,
+  loadRunById,
+  checkCatalogSkillProjection,
   ensureActiveCampaign,
   selectCampaignForRunStart,
   buildCampaignRequiredErrorDetails,
@@ -53,7 +62,7 @@ import {
   buildNeedsCapabilityStartupContract,
   buildNeedsCredentialsStartupContract,
   handoffStartupPreflightPause,
-  pauseStartupPreflightForSessionWaiter,
+  pauseStartupPreflightUnparked,
 } from '../../../../helpers/workflowRunStartupPause.js';
 import { getRepos, workflowPath } from '../shared.js';
 import { wakeParkedStepWithFailure } from './wakeParked.js';
@@ -67,7 +76,51 @@ export async function handleWorkflowRunStart(
   const { docRepo, dirRepo } = getRepos(args.context.tenantId);
   const slug = input.slug;
 
+  // A workflow task has no conversation to hear a pause or a later event, so
+  // the one wait it can take is the one that ends with the run.
+  if (args.workflowExecution !== undefined && input.wait !== 'until_complete') {
+    await emitStepError(
+      args,
+      'WORKFLOW_TASK_WAIT_UNSUPPORTED',
+      `A workflow task that starts "${slug}" waits for it to end: pass \`wait: 'until_complete'\`.`,
+      startTime,
+      'validation',
+      false,
+    );
+    return;
+  }
+
   const db = getDatabase();
+
+  const parentRun =
+    args.workflowExecution !== undefined
+      ? await loadRunById(
+          db,
+          args.context.tenantId as string,
+          spaceId,
+          args.workflowExecution.runId,
+        )
+      : null;
+  // The session whose authority and identity the run inherits. A workflow
+  // task's own session id is synthetic and holds neither, so a child started
+  // by a task runs as the session that started the task's run.
+  const drivingSessionId = parentRun?.sessionId ?? args.context.runId;
+
+  const runDepth =
+    args.workflowExecution !== undefined ? workflowRunDepth(parentRun?.metadata) + 1 : 1;
+  if (args.workflowExecution !== undefined && runDepth > MAX_WORKFLOW_RUN_DEPTH) {
+    await emitStepError(
+      args,
+      'WORKFLOW_RUN_DEPTH_EXCEEDED',
+      `Run ${args.workflowExecution.runId} is at depth ${String(runDepth - 1)} of a chain of runs started by workflow tasks, and such a chain goes at most ${String(MAX_WORKFLOW_RUN_DEPTH)} deep: task "${args.workflowExecution.taskId}" cannot start "${slug}" at depth ${String(runDepth)}.`,
+      startTime,
+      'validation',
+      false,
+      { depth: runDepth, maxDepth: MAX_WORKFLOW_RUN_DEPTH },
+    );
+    return;
+  }
+
   const workflow = await resolveWorkflowForStart(db, args.context.tenantId, spaceId, slug);
   if (!workflow) {
     const archivedDoc = await docRepo.getByPath(workflowDocPath(slug), spaceId, {
@@ -101,6 +154,27 @@ export async function handleWorkflowRunStart(
       'validation',
     );
     return;
+  }
+
+  if (input.catalogId !== undefined) {
+    const projection = await checkCatalogSkillProjection(db, {
+      tenantId: args.context.tenantId,
+      spaceId,
+      catalogId: input.catalogId,
+      slug,
+    });
+    if (!projection.ok) {
+      await emitStepError(
+        args,
+        'WORKFLOW_NOT_CATALOG_SKILL',
+        projection.message,
+        startTime,
+        'validation',
+        false,
+        { catalogId: input.catalogId, reason: projection.reason },
+      );
+      return;
+    }
   }
 
   // Resolve the skill once (reused for campaign resolution below) — its
@@ -543,7 +617,7 @@ export async function handleWorkflowRunStart(
   let initiatedByUserId: string | undefined;
   try {
     const { getSessionState: getState } = await import('@aflow/redis');
-    const sessionState = await getState(args.redis, args.context.tenantId, args.context.runId);
+    const sessionState = await getState(args.redis, args.context.tenantId, drivingSessionId);
     if (sessionState?.createdBy) {
       initiatedByUserId = sessionState.createdBy;
     }
@@ -557,6 +631,9 @@ export async function handleWorkflowRunStart(
     artifactHash: contractArtifactHash,
     validatedAt: validity.validatedAt,
   };
+  if (runDepth > 1) {
+    initialMetadata['runDepth'] = runDepth;
+  }
   if (input.instructions !== undefined) {
     initialMetadata['parentInstructions'] = normalizeInstructionsForStorage(input.instructions);
   }
@@ -628,7 +705,7 @@ export async function handleWorkflowRunStart(
     spaceId,
     workflowSlug: slug,
     runId,
-    sessionId: args.context.runId,
+    sessionId: drivingSessionId,
     workflowRevision: workflow.revision,
     startedAt: now,
     initiatedByUserId,
@@ -725,7 +802,7 @@ export async function handleWorkflowRunStart(
       db,
       redis: args.redis,
       tenantId: args.context.tenantId,
-      sessionId: args.context.runId,
+      sessionId: drivingSessionId,
       workflow: derivedWorkflow,
     });
     if (grantGate.kind === 'authority_revoked' || grantGate.kind === 'authority_unavailable') {
@@ -778,7 +855,7 @@ export async function handleWorkflowRunStart(
         {
           tenantId: args.context.tenantId,
           spaceId,
-          callingHelmsmanSessionId: args.context.runId,
+          callingHelmsmanSessionId: drivingSessionId as SessionId,
           callingHelmsmanStepExecutionId: args.stepExecutionId,
           runId,
           workflow: derivedWorkflow,
@@ -817,6 +894,50 @@ export async function handleWorkflowRunStart(
     }
   };
 
+  if (args.workflowExecution !== undefined) {
+    // Nothing is emitted now: the task stays claimed, and its waiter — keyed by
+    // the task's own step — answers it with the run's outcome when it ends.
+    try {
+      const { addWaiter } = await import('@aflow/cybernetic-runtime');
+      await addWaiter(db, tenantIdStr, {
+        runId,
+        waiterSessionId: args.context.runId,
+        waiterStepExecutionId: args.stepExecutionId,
+      });
+    } catch (waiterErr) {
+      const errMsg = waiterErr instanceof Error ? waiterErr.message : String(waiterErr);
+      getOrchestratorLogger().error(
+        `[handleWorkflowRunStart] addWaiter failed for task-started run=${runId}: ${errMsg}`,
+        waiterErr instanceof Error ? waiterErr : undefined,
+        { tenantId: tenantIdStr, runId, slug, parentRunId: args.workflowExecution.runId },
+      );
+      await terminalizeRefusedRun();
+      await emitStepError(
+        args,
+        'WORKFLOW_RUN_START_WAITER_INSERT_FAILED',
+        `Run ${runId} was not started: this task could not be registered to hear its outcome (${errMsg}).`,
+        startTime,
+      );
+      return;
+    }
+    if (startupPause === undefined) {
+      await launch();
+    } else {
+      await pauseStartupPreflightUnparked({
+        db,
+        redis: args.redis,
+        payloadStore: args.payloadStore,
+        tenantId: args.context.tenantId,
+        tenantIdStr,
+        spaceId,
+        runId,
+        slug,
+        contract: startupPause,
+      });
+    }
+    return;
+  }
+
   if (input.wait === 'none') {
     // The session is the waiter and no step parks: the run's pauses — a
     // startup preflight's included — and its end reach the conversation as
@@ -844,7 +965,7 @@ export async function handleWorkflowRunStart(
     if (startupPause === undefined) {
       await launch();
     } else {
-      await pauseStartupPreflightForSessionWaiter({
+      await pauseStartupPreflightUnparked({
         db,
         redis: args.redis,
         payloadStore: args.payloadStore,

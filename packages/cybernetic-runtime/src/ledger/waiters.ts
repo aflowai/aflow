@@ -75,7 +75,12 @@ export async function loadWorkflowTaskByWorkerSession(
   db: PostgresJsDatabase,
   tenantId: string,
   workerSessionId: string,
-): Promise<{ runId: string; taskId: string; attempt: number } | null> {
+): Promise<{
+  runId: string;
+  taskId: string;
+  attempt: number;
+  dispatchAttemptToken: string | null;
+} | null> {
   const tenantCtx = createTenantContext(tenantId as TenantId);
   return withTenantSchema(db, tenantCtx, async (tx) => {
     const rows = await tx
@@ -83,6 +88,7 @@ export async function loadWorkflowTaskByWorkerSession(
         runId: workflowRunTasks.runId,
         taskId: workflowRunTasks.taskId,
         attempt: workflowRunTasks.attempt,
+        dispatchAttemptToken: workflowRunTasks.dispatchAttemptToken,
       })
       .from(workflowRunTasks)
       .where(eq(workflowRunTasks.workerSessionId, workerSessionId))

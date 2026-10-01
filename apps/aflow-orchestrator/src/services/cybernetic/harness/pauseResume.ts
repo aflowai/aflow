@@ -229,6 +229,16 @@ export async function applyFailureMode(
   const failedTaskDef = workflow.tasks.find((t) => t.taskId === failedTaskId);
   const failureMode = failedTaskDef?.failureMode ?? 'isolate';
 
+  const { dispatchNextOrTerminate } = await import('./dispatch.js');
+
+  // Readiness counts a failed optional task as a satisfied dependency, and its
+  // dependents' `when` can read its status; blocking them here would decide
+  // for them before either is consulted.
+  if (failedTaskDef?.optional === true) {
+    await dispatchNextOrTerminate(deps, tenantId, runId);
+    return;
+  }
+
   if (failureMode === 'cancel_siblings') {
     const nonTerminal = run.tasks.filter((t) => !isTerminalTaskStatus(t.status));
     if (nonTerminal.length > 0) {
@@ -249,7 +259,6 @@ export async function applyFailureMode(
     await blockDescendantTasks(deps.db, tenantIdStr, runId, [...descendants]);
   }
 
-  const { dispatchNextOrTerminate } = await import('./dispatch.js');
   await dispatchNextOrTerminate(deps, tenantId, runId);
 }
 

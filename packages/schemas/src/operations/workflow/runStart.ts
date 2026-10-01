@@ -18,6 +18,14 @@ import { CampaignConfigRecordSchema } from './campaignOps.js';
 
 const workflowRunStartFields = {
   slug: z.string().min(1).max(64),
+  catalogId: z
+    .string()
+    .min(1)
+    .max(128)
+    .optional()
+    .describe(
+      'The platform catalog skill the workflow at `slug` must be. The run starts only when it is that skill exactly as the Store installed it in this space; an edited copy, or another workflow holding the slug, is refused.',
+    ),
   campaignId: z.string().uuid().optional(),
   campaignConfig: CampaignConfigRecordSchema.optional(),
   instructions: TaskTargetedInstructionsSchema.optional(),

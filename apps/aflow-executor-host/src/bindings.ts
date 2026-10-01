@@ -19,7 +19,7 @@ import { basename, isAbsolute, resolve, sep } from 'node:path';
 
 import { z } from 'zod';
 
-import { HostBranchPrefixSchema } from '@aflow/schemas';
+import { HostBindingBranchPolicySchema } from '@aflow/schemas';
 
 import { type HarnessProfile, HarnessProfileSchema } from './harnessProfiles.js';
 import { type LocalMcpServer, LocalMcpServerSchema } from './localMcpServers.js';
@@ -44,14 +44,15 @@ export const HostBindingSchema = z.object({
    */
   allowsExecution: z.boolean().default(false),
   /**
-   * Which branches a push from this folder may move, if any.
+   * Which branches a push from this folder may move, if any, and when a
+   * publication asks the operator before pushing.
    *
    * A fact about the folder like `allowsExecution`, and absent by default: a
    * folder that allows commands is not thereby a folder whose history anything
    * may publish. Never forcing is a rule rather than a field — there is no
    * setting that turns it off.
    */
-  branchPolicy: z.object({ branchPrefix: HostBranchPrefixSchema }).optional(),
+  branchPolicy: HostBindingBranchPolicySchema.optional(),
   /** Present for a binding the operator connected as a single file rather than a folder. */
   singleFile: z.boolean().default(false),
   /**
@@ -455,7 +456,12 @@ export function requirePushAllowed(
         `Push a named branch under \`${prefix}\` forward instead.`,
       );
     }
-    if (!destination.startsWith(prefix)) {
+    // A sha source needs its destination spelled in full, since git cannot infer
+    // a ref namespace from a commit; any other namespace stays refused.
+    const branch = destination.startsWith('refs/heads/')
+      ? destination.slice('refs/heads/'.length)
+      : destination;
+    if (!branch.startsWith(prefix)) {
       refusePush(
         argv,
         `\`${destination}\` is not a branch binding \`${binding.id}\` may push`,

@@ -27,6 +27,7 @@ import {
   validationError,
   notFoundError,
   internalError,
+  providerError,
 } from '@aflow/executor-runtime';
 import {
   HostProcessExecInputSchema,
@@ -116,6 +117,12 @@ async function failure(ctx: ExecutorContext, error: unknown): Promise<StepResult
   return await failureWithError(ctx, internalError(`The host could not run this (${code}).`));
 }
 
+function pushFailureText(result: SandboxedRunResult): string {
+  if (result.timedOut) return `git did not finish within the step's time limit.`;
+  const said = result.stderr.trim() || result.stdout.trim();
+  return said !== '' ? said : `git exited with ${String(result.exitCode)} and said nothing.`;
+}
+
 async function execProcess(ctx: ExecutorContext, policyPath: string): Promise<StepResult> {
   const raw = await ctx.readPayload(ctx.job.inputRef);
   const parsed = HostProcessExecInputSchema.safeParse(raw);
@@ -182,6 +189,23 @@ async function execProcess(ctx: ExecutorContext, policyPath: string): Promise<St
     }
     // Whatever the last chunk left unterminated.
     stream(visible.flush());
+
+    // A push is the remote's answer. Reported as a success with a non-zero
+    // exit, a refused one reads as published to everything that only checks
+    // the step's status.
+    if (!confined && result.exitCode !== 0) {
+      return await failureWithError(
+        ctx,
+        providerError(`The push did not land: ${pushFailureText(result)}`, {
+          retryable: false,
+          details: {
+            exitCode: result.exitCode,
+            signal: result.signal,
+            timedOut: result.timedOut,
+          },
+        }),
+      );
+    }
 
     detached = result.detached;
     // A refusal nobody can attribute is a refusal nobody can act on. Only a

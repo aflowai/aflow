@@ -13,6 +13,7 @@ import {
 import {
   buildWorkflowRunDetail,
   loadPendingWaiters,
+  loadWorkflowTaskByWorkerSession,
   markWaiterNotified,
   rehydrateParkedStep,
   surfaceWorkflowResumeContract,
@@ -103,6 +104,33 @@ export async function notifyWaiters(deps: HarnessDeps, args: NotifyWaitersArgs):
         await wakeSessionWaiter(deps, args, waiter, humanDecisions, runResult);
         continue;
       }
+      const parentTask = await loadWorkflowTaskByWorkerSession(
+        deps.db,
+        tenantIdStr,
+        waiter.waiterStepExecutionId,
+      );
+      if (parentTask !== null) {
+        // A takeover leaves the task waiting for the run to end. A pause ends
+        // its wait instead: nobody hears a pause inside a task, so the run
+        // would sit paused and the task claimed for good.
+        if (args.outcome !== 'paused' && !isRunEnding(args.outcome)) continue;
+        await answerWorkflowTask(
+          deps,
+          args,
+          { id: waiter.id, waiterStepExecutionId: waiter.waiterStepExecutionId },
+          parentTask,
+          humanDecisions,
+          runResult,
+        );
+        await markWaiterNotified(deps.db, tenantIdStr, {
+          waiterId: waiter.id,
+          outcome: args.outcome,
+        });
+        if (args.outcome === 'paused') {
+          await cancelPausedChild(deps, args, parentTask);
+        }
+        continue;
+      }
       await wakeWaiter(
         deps,
         args,
@@ -133,6 +161,88 @@ export async function notifyWaiters(deps: HarnessDeps, args: NotifyWaitersArgs):
       );
     }
   }
+}
+
+function isRunEnding(outcome: NotifyWaitersArgs['outcome']): boolean {
+  return outcome === 'completed' || outcome === 'failed' || outcome === 'cancelled';
+}
+
+/**
+ * The task was answered with the pause, so the run it started has nobody left
+ * to resume it. Its waiter is already notified, so the cancellation answers no
+ * one a second time.
+ */
+async function cancelPausedChild(
+  deps: HarnessDeps,
+  args: NotifyWaitersArgs,
+  task: { runId: string; taskId: string },
+): Promise<void> {
+  try {
+    const { cancelRun } = await import('./cancel.js');
+    await cancelRun(deps, args.tenantId, args.runId, {
+      cancelledBy: 'system',
+      reason: `Paused inside task "${task.taskId}" of run ${task.runId}, which cannot wait on a pause; the task went on without its result.`,
+    });
+  } catch (err) {
+    logOrchestratorError(
+      `[notifyWaiters] could not cancel run=${args.runId} after it paused under task=${task.taskId} of run=${task.runId}: ${err instanceof Error ? err.message : String(err)}`,
+      err,
+      { tenantId: args.tenantId as string, runId: args.runId, parentRunId: task.runId },
+    );
+  }
+}
+
+/**
+ * Complete the workflow task that started this run, with the wakeup envelope
+ * as its output, through the same result path an executor's answer takes.
+ *
+ * The run's promoted output travels only when it completed: a task gates on
+ * what the child produced, and a child that failed, was cancelled or paused
+ * produced nothing a gate may treat as its answer, whatever it promoted on the
+ * way.
+ */
+async function answerWorkflowTask(
+  deps: HarnessDeps,
+  args: NotifyWaitersArgs,
+  waiter: { id: string; waiterStepExecutionId: string },
+  task: { runId: string; taskId: string; attempt: number; dispatchAttemptToken: string | null },
+  humanDecisions: readonly WorkflowRunWakeupHumanDecision[] | undefined,
+  runResult: WorkflowRunResult | undefined,
+): Promise<void> {
+  if (task.dispatchAttemptToken === null) {
+    throw new Error(
+      `task ${task.taskId} of run ${task.runId} carries no dispatch token, so no claim of it can be answered`,
+    );
+  }
+  const outputRef = await buildWaiterOutputRef(
+    deps,
+    args,
+    waiter,
+    humanDecisions,
+    args.outcome === 'completed' ? runResult : undefined,
+  );
+  await addStepResult(deps.redis, {
+    messageVersion: 1,
+    tenantId: args.tenantId,
+    workflowExecution: {
+      runId: task.runId,
+      taskId: task.taskId,
+      attempt: task.attempt,
+      dispatchAttemptToken: task.dispatchAttemptToken,
+    },
+    stepExecutionId: waiter.waiterStepExecutionId as StepExecutionId,
+    parentStepExecutionId: null,
+    stepId: task.taskId as StepId,
+    stepType: 'workflow' as StepType,
+    operationId: 'workflow.run.start' as OperationId,
+    attempt: task.attempt,
+    idempotencyKey: `notify-waiter:${waiter.id}:${args.outcome}` as IdempotencyKey,
+    status: 'SUCCEEDED',
+    outputRef,
+    durationMs: 0,
+    traceId: `notify-waiter:${waiter.id}` as TraceId,
+    finishedAtMs: Date.now(),
+  });
 }
 
 async function wakeSessionWaiter(

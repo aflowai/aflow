@@ -30,6 +30,7 @@ const mockClaimAndSchedule = vi.fn();
 const mockReserveTaskSlots = vi.fn();
 const mockRecordTaskSkipped = vi.fn();
 const mockLoadPendingWaiters = vi.fn();
+const mockLoadParkedStepWaitersForSession = vi.fn(async (): Promise<unknown[]> => []);
 const mockMarkWaiterNotified = vi.fn();
 const mockRehydrateParkedStep = vi.fn();
 const mockAddWaiter = vi.fn();
@@ -119,6 +120,11 @@ vi.mock('@aflow/cybernetic-runtime', async () => ({
   recordTaskResult: (...args: unknown[]) => mockLedgerRecordTaskResult(...args),
   recordTaskSkipped: (...args: unknown[]) => mockRecordTaskSkipped(...args),
   loadPendingWaiters: (...args: unknown[]) => mockLoadPendingWaiters(...args),
+  // Every waiter here is a Helmsman's step or session; none is a workflow
+  // task's (workflowTaskWaiter.test.ts covers those).
+  loadWorkflowTaskByWorkerSession: vi.fn(async () => null),
+  loadParkedStepWaitersForSession: (...args: unknown[]) =>
+    mockLoadParkedStepWaitersForSession(...args),
   markWaiterNotified: (...args: unknown[]) => mockMarkWaiterNotified(...args),
   rehydrateParkedStep: (...args: unknown[]) => mockRehydrateParkedStep(...args),
   addWaiter: (...args: unknown[]) => mockAddWaiter(...args),
@@ -476,6 +482,37 @@ describe('onWorkflowTaskComplete', () => {
       expect(mockLedgerCompleteRun.mock.calls[0]?.[2]).toMatchObject({ status: 'failed' });
 
       expect(mockClearCompletionPending).toHaveBeenCalledOnce();
+    });
+
+    it('a failed optional task blocks none of its dependents and leaves them to readiness', async () => {
+      const failedReview = buildTaskRow({ taskId: 'review-commit', status: 'failed' });
+      mockListTaskRows.mockResolvedValueOnce([failedReview]);
+      mockLoadRunById.mockResolvedValue(buildRunDetail([failedReview], 'running'));
+      mockResolveWorkflowForRunRevision.mockResolvedValue({
+        workflow: {
+          tasks: [
+            { taskId: 'review-commit', name: 'Review', goal: 'review', optional: true },
+            { taskId: 'approve-push', name: 'Approve', goal: 'ask', dependsOn: ['review-commit'] },
+          ],
+          slug: 'test-skill',
+        },
+        source: 'revision',
+      });
+      mockComputeDescendants.mockReturnValue(new Set(['approve-push']));
+      mockComputeReadyTasksWithWhen.mockReturnValue({ ready: [], skipped: [], errors: [] });
+      mockLoadPendingWaiters.mockResolvedValue([]);
+
+      await onWorkflowTaskComplete(deps, {
+        tenantId: TENANT,
+        workflowExecution: { runId: RUN_ID, taskId: 'review-commit', attempt: 1 },
+        outcome: { kind: 'failed', failureReason: 'the review could not start' },
+      });
+
+      expect(mockBlockDescendantTasks).not.toHaveBeenCalled();
+      const failedOptional = mockComputeReadyTasksWithWhen.mock.calls[0]?.[4] as Set<string>;
+      expect([...failedOptional]).toEqual(['review-commit']);
+      // The approval has not run, so the run is waiting on it, not over.
+      expect(mockLedgerCompleteRun).not.toHaveBeenCalled();
     });
 
     it('paused duplicate notifies waiters only — does NOT re-pause the run', async () => {
@@ -3612,6 +3649,47 @@ describe('cancelRun — Plan 132v2 §Phase 4 (4.5c replay-safe)', () => {
       .filter((ev) => ev?.eventType === 'WorkflowRunUpdate');
     expect(runUpdates).toHaveLength(0);
   });
+
+  it('cancels a run one of its tasks started, once the run itself is cancelled', async () => {
+    const worker = '33333333-3333-3333-3333-333333333333';
+    const childRun = '00000000-0000-0000-0000-0000000000c1';
+    mockLoadRunById.mockResolvedValue(buildRunDetail([], 'running'));
+    mockListCompletionPendingForRun
+      .mockResolvedValueOnce([
+        {
+          id: 'pending-review',
+          runId: RUN_ID,
+          taskId: 'review-commit',
+          attempt: 1,
+          workerSessionId: worker,
+          detectedAt: new Date(),
+          dueAt: new Date(),
+          attemptCount: 0,
+          lastError: null,
+        },
+      ])
+      .mockResolvedValueOnce([]);
+    mockLoadParkedStepWaitersForSession.mockResolvedValueOnce([
+      { id: 'waiter-review', runId: childRun, waiterSessionId: worker },
+    ]);
+    mockCancelNonTerminalTasksForRun.mockResolvedValue({ cancelledTaskIds: [] });
+    mockClearAllCompletionPendingForRun.mockResolvedValue(undefined);
+    mockLedgerCompleteRun.mockResolvedValue(true);
+    mockLoadPendingWaiters.mockResolvedValue([]);
+
+    await cancelRun(deps, TENANT, RUN_ID, { cancelledBy: 'operator' });
+
+    expect(mockLoadParkedStepWaitersForSession).toHaveBeenCalledWith(deps.db, TENANT, worker);
+    const completions = mockLedgerCompleteRun.mock.calls.map(
+      (c) => c[2] as { runId: string; status: string; cancellation?: { reason?: string } },
+    );
+    expect(completions.map((c) => [c.runId, c.status])).toEqual([
+      [RUN_ID, 'cancelled'],
+      [childRun, 'cancelled'],
+    ]);
+    expect(completions[1]?.cancellation).toMatchObject({ cancelledBy: 'system' });
+    expect(completions[1]?.cancellation?.reason).toContain(RUN_ID);
+  });
 });
 
 // ─── Phase 5.3 — reconcileStaleRunForTenant sweeper ─────────────────────────
@@ -4063,6 +4141,35 @@ describe('reconcileStaleRunForTenant — Plan 132v2 §Phase 5.3', () => {
     expect(mockClearCompletionPending).toHaveBeenCalledOnce();
     expect(result.escalations).toBe(1);
     expect(result.operationBumps).toBe(0);
+  });
+
+  it('keeps bumping an operation task past the threshold while the run it started is live', async () => {
+    // A task that started a run is answered when that run ends; a review can
+    // outlast the whole bump budget, and its pending waiter says it is waiting.
+    mockListDueCompletionPending.mockResolvedValueOnce([buildPendingRow({ attemptCount: 30 })]);
+    mockListTaskRows.mockResolvedValue([
+      buildTaskRow({
+        taskId: 'task-a',
+        attempt: 1,
+        status: 'running',
+        sessionId: null,
+        workerSessionId: WORKER_SESSION_ID,
+      }),
+    ]);
+    mockLoadParkedStepWaitersForSession.mockResolvedValueOnce([
+      { id: 'waiter-1', runId: 'child-run', waiterSessionId: WORKER_SESSION_ID },
+    ]);
+
+    const result = await reconcileStaleRunForTenant(deps, TENANT);
+
+    expect(mockLoadParkedStepWaitersForSession).toHaveBeenCalledWith(
+      deps.db,
+      TENANT,
+      WORKER_SESSION_ID,
+    );
+    expect(mockCasCompleteTask).not.toHaveBeenCalled();
+    expect(result.escalations).toBe(0);
+    expect(result.operationBumps).toBe(1);
   });
 
   it('Plan 5.5c: operation task below threshold still bumps (no premature escalation)', async () => {

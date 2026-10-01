@@ -10,6 +10,7 @@ import {
   clearCompletionPending,
   addCompletionPending,
   recoverOrphanedTaskAttempt,
+  loadParkedStepWaitersForSession,
 } from '@aflow/cybernetic-runtime';
 import type { TenantId } from '@aflow/schemas';
 import type { SessionId } from '@aflow/schemas';
@@ -31,6 +32,16 @@ const SWEEPER_RUNNING_BUMP_MS = 60_000;
 const SWEEPER_ERROR_BUMP_MS = 30_000;
 const SWEEPER_OPERATION_ESCALATION_BUMPS = 30;
 const RUNNER_TERMINAL_STATUSES = new Set(['SUCCEEDED', 'FAILED', 'PAUSED', 'CANCELLED']);
+
+async function waitsOnARun(
+  deps: HarnessDeps,
+  tenantId: string,
+  workerSessionId: string | null,
+): Promise<boolean> {
+  if (workerSessionId === null) return false;
+  const waiting = await loadParkedStepWaitersForSession(deps.db, tenantId, workerSessionId);
+  return waiting.length > 0;
+}
 
 export async function reconcileStaleRunForTenant(
   deps: HarnessDeps,
@@ -116,7 +127,14 @@ export async function reconcileStaleRunForTenant(
             : { alive: false, deadlineAtMs: null };
         const executorStillOnIt =
           inFlight.alive && (inFlight.deadlineAtMs === null || inFlight.deadlineAtMs > Date.now());
-        if (row.attemptCount >= SWEEPER_OPERATION_ESCALATION_BUMPS && !executorStillOnIt) {
+        // A task that started a run is answered when that run ends, which a
+        // review can take longer than any bump budget to do. Its pending waiter
+        // is what says it is still waiting rather than lost.
+        if (
+          row.attemptCount >= SWEEPER_OPERATION_ESCALATION_BUMPS &&
+          !executorStillOnIt &&
+          !(await waitsOnARun(deps, tenantIdStr, row.workerSessionId))
+        ) {
           log.warn(
             `[reconcileStaleRun] escalating stalled operation task to failed: ` +
               `run=${row.runId} task=${row.taskId} attempt=${String(row.attempt)} ` +

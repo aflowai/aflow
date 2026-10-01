@@ -8,6 +8,8 @@
  */
 import { z } from 'zod';
 
+import { type HostPushApproval, HostPushApprovalSchema } from '@aflow/schemas';
+
 /** Per-machine inventory, written with a lifetime so silence expires. */
 export function hostInventoryKey(hostname: string): string {
   return `aflow:host-inventory:${hostname}`;
@@ -69,8 +71,40 @@ export const HostInventorySchema = z.object({
   observedAt: z.string(),
   runtimes: z.array(z.object({ name: z.string(), version: z.string() })),
   harnesses: z.array(z.object({ id: z.string(), label: z.string().optional() })),
+  /**
+   * The push posture of each folder this machine lets push, from the same
+   * policy file. Published rather than recorded by the workspace because the
+   * operator changes it on the machine, where the workspace never hears of it.
+   *
+   * Keyed by workspace as well as id: an id is unique on one machine, and two
+   * machines can each offer the same one to different workspaces.
+   */
+  folders: z.array(
+    z.object({ id: z.string(), spaceId: z.string(), pushApproval: HostPushApprovalSchema }),
+  ),
 });
 export type HostInventory = z.infer<typeof HostInventorySchema>;
+export type HostInventoryFolders = HostInventory['folders'];
+
+/**
+ * Each folder's push posture, as the machines publishing now declare it, for
+ * one workspace. A folder missing here pushes nothing, or its machine is not
+ * running — the two read the same to a caller, which then says nothing.
+ */
+export function pushApprovalsForSpace(
+  inventories: ReadonlyArray<Pick<HostInventory, 'folders'>>,
+  spaceId: string,
+): Map<string, HostPushApproval> {
+  const postures = new Map<string, HostPushApproval>();
+  for (const machine of inventories) {
+    for (const folder of machine.folders) {
+      if (folder.spaceId === spaceId && !postures.has(folder.id)) {
+        postures.set(folder.id, folder.pushApproval);
+      }
+    }
+  }
+  return postures;
+}
 
 /** The reads this needs, so a caller can hand it any client or a fake. */
 interface HostInventoryReader {

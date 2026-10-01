@@ -89,9 +89,8 @@ export interface BranchPrefixQuestion {
 
 /**
  * Pushes land under a namespace of their own, so nothing published from a folder
- * reaches `main` or anyone else's branch, and every publication pauses for
- * approval regardless — a default that can only make branches nobody else uses
- * needs no question.
+ * reaches `main` or anyone else's branch without a pull request — a default
+ * that can only make branches nobody else uses needs no question.
  */
 export const DEFAULT_BRANCH_PREFIX = 'aflow/';
 

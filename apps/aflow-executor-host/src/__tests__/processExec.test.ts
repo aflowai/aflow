@@ -711,4 +711,71 @@ describe('a push runs only where the folder allows one', () => {
     const refs = await execFileAsync('git', ['-C', join(repo, 'remote.git'), 'branch', '--list']);
     expect(refs.stdout).toContain('aflow/ready');
   }, 60_000);
+
+  /** A commit on top of `parent` with the parent's tree, made without a checkout. */
+  async function commitOn(parent: string, message: string): Promise<string> {
+    const tree = (await execFileAsync('git', ['-C', repo, 'rev-parse', `${parent}^{tree}`])).stdout;
+    const made = await execFileAsync('git', [
+      '-C',
+      repo,
+      'commit-tree',
+      tree.trim(),
+      '-p',
+      parent,
+      '-m',
+      message,
+    ]);
+    return made.stdout.trim();
+  }
+
+  async function pushCommit(sha: string, branch: string): Promise<Captured & { status: string }> {
+    const captured: Captured = {};
+    const result = await createHostProcessHandler(pushPolicyPath).execute(
+      contextFor(
+        'host.process.exec',
+        {
+          bindingId: 'hb_push',
+          command: ['git', 'push', './remote.git', `${sha}:refs/heads/${branch}`],
+        },
+        captured,
+      ),
+    );
+    return { ...captured, status: result.status };
+  }
+
+  async function remoteHead(branch: string): Promise<string> {
+    const head = await execFileAsync('git', [
+      '-C',
+      join(repo, 'remote.git'),
+      'rev-parse',
+      `refs/heads/${branch}`,
+    ]);
+    return head.stdout.trim();
+  }
+
+  it('pushes exactly the commit it names, whatever the local branch holds since', async () => {
+    const initial = (await execFileAsync('git', ['-C', repo, 'rev-parse', 'main'])).stdout.trim();
+    const reviewed = await commitOn(initial, 'the reviewed change');
+    const pushed = await pushCommit(reviewed, 'aflow/by-sha');
+    expect(pushed.status).toBe('SUCCEEDED');
+    expect(pushed.output?.['exitCode']).toBe(0);
+    expect(await remoteHead('aflow/by-sha')).toBe(reviewed);
+  }, 60_000);
+
+  it("fails a push the remote refuses, with git's own message, and moves nothing", async () => {
+    const initial = (await execFileAsync('git', ['-C', repo, 'rev-parse', 'main'])).stdout.trim();
+    const landed = await commitOn(initial, 'what the remote holds');
+    expect((await pushCommit(landed, 'aflow/moved')).status).toBe('SUCCEEDED');
+
+    const sibling = await commitOn(initial, 'made from the old head');
+    const refused = await pushCommit(sibling, 'aflow/moved');
+
+    expect(refused.status).toBe('FAILED');
+    expect(refused.output?.['code']).toBe('PROVIDER_ERROR');
+    expect(refused.output?.['retryable']).toBe(false);
+    const message = String(refused.output?.['message']);
+    expect(message).toContain('The push did not land');
+    expect(message).toContain('[rejected]');
+    expect(await remoteHead('aflow/moved')).toBe(landed);
+  }, 60_000);
 });

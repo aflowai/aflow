@@ -20,6 +20,7 @@ import { LocalMcpServerSchema } from './localMcpServers.js';
 import { discoverHarnesses } from './harnessDiscovery.js';
 import { HarnessProfileSchema, type HarnessProfile } from './harnessProfiles.js';
 import { serializePolicy, writePolicyAtomically } from './policyFile.js';
+import { describePushApproval, withPushApproval } from './pushApproval.js';
 
 // The same resolution `connect` uses. Disagreeing about where the policy lives
 // meant one command wrote a file the other never read.
@@ -34,6 +35,8 @@ function usage(): never {
       '  harness allow <id> <host>...       Let a harness reach these hosts.\n' +
       '  harness model <id> <model>         Run this model when a task names none.\n' +
       "  harness model <id> --clear         Run the harness's own default instead.\n" +
+      '  harness push-approval <folder> <always|never|unless-unreviewed>\n' +
+      '                                     When a publication from a folder asks before pushing.\n' +
       '  harness remove <id>                Stop allowing it.\n' +
       '  harness mcp <id> <command...>      Allow an MCP server to run here.\n' +
       '  harness mcp-remove <id>            Stop allowing it.\n' +
@@ -178,6 +181,18 @@ async function list(): Promise<void> {
     }
   }
 
+  const pushing = policy.bindings.flatMap((b) =>
+    b.branchPolicy === undefined ? [] : [{ id: b.id, branchPolicy: b.branchPolicy }],
+  );
+  if (pushing.length > 0) {
+    console.log('\nFolders that push:');
+    for (const { id, branchPolicy } of pushing) {
+      console.log(
+        `  ${id} — under ${branchPolicy.branchPrefix}, ${describePushApproval(branchPolicy.pushApproval)}`,
+      );
+    }
+  }
+
   const unconfigured = discovered.filter((d) => !policy.harnesses.some((h) => h.id === d.id));
   if (unconfigured.length > 0) {
     console.log('\nInstalled but not configured:');
@@ -314,6 +329,15 @@ async function setModel(id: string, model: string): Promise<void> {
   console.log(`\`${id}\` now runs ${model} when a task names none.`);
 }
 
+async function setPushApproval(bindingId: string, requested: string): Promise<void> {
+  const updated = withPushApproval(await loadPolicy(), bindingId, requested);
+  await savePolicy(updated);
+  const posture = updated.bindings.find((b) => b.id === bindingId)?.branchPolicy?.pushApproval;
+  if (posture !== undefined) {
+    console.log(`A publication from \`${bindingId}\` now ${describePushApproval(posture)}.`);
+  }
+}
+
 async function remove(id: string): Promise<void> {
   const policy = await loadPolicy();
   if (!policy.harnesses.some((h) => h.id === id)) {
@@ -377,6 +401,12 @@ async function main(): Promise<void> {
     if (model === undefined || model === '') usage();
     if (model.startsWith('--') && model !== '--clear') usage();
     await setModel(id, model);
+    return;
+  }
+  if (command === 'push-approval') {
+    const [posture] = rest;
+    if (posture === undefined || posture === '') usage();
+    await setPushApproval(id, posture);
     return;
   }
   if (command === 'allow') {

@@ -1,0 +1,123 @@
+/**
+ * When a publication from a connected folder asks before it pushes.
+ *
+ * A posture on the folder, held in the machine's policy file beside the branch
+ * prefix it qualifies, set at connect and changed later only from this machine.
+ * Whether a given publication asks is decided by the orchestrator over the
+ * posture this executor relays, so an appliance that is not honest can skip
+ * the question. What it cannot do is change the posture recorded here, or move
+ * a branch the prefix does not cover, or force one: those are judged on this
+ * machine when the push runs.
+ */
+import type { z } from 'zod';
+
+import {
+  HOST_PUSH_APPROVAL_DEFAULT,
+  type HostPushApproval,
+  HostPushApprovalSchema,
+} from '@aflow/schemas';
+
+import type { HostInventoryFolders } from '@aflow/redis';
+
+import type { HostBinding, HostPolicySchema } from './bindings.js';
+
+type HostPolicy = z.infer<typeof HostPolicySchema>;
+
+export const PUSH_APPROVAL_VALUES: readonly HostPushApproval[] = HostPushApprovalSchema.options;
+
+/** One line per posture, in the words the CLI prints. */
+export function describePushApproval(pushApproval: HostPushApproval): string {
+  switch (pushApproval) {
+    case 'always':
+      return 'asks before every push';
+    case 'never':
+      return 'pushes without asking';
+    case 'unless-unreviewed':
+      return 'reviews the commit and asks before the push unless the review approves it';
+  }
+}
+
+function parsePushApproval(value: string): HostPushApproval {
+  const parsed = HostPushApprovalSchema.safeParse(value);
+  if (!parsed.success) {
+    throw new Error(
+      `\`${value}\` is not a push approval. It is one of: ${PUSH_APPROVAL_VALUES.join(', ')}.`,
+    );
+  }
+  return parsed.data;
+}
+
+/**
+ * The posture a folder is connected with: the one asked for, else the one it
+ * already holds, else the default. Only a folder that pushes has one, so asking
+ * for a posture on a folder with no branch prefix is refused rather than
+ * recorded against nothing.
+ */
+export function resolvePushApproval(question: {
+  readonly requested?: string | undefined;
+  readonly branchPrefix: string | undefined;
+  readonly current?: HostPushApproval | undefined;
+}): HostPushApproval | undefined {
+  if (question.branchPrefix === undefined) {
+    if (question.requested !== undefined) {
+      throw new Error(
+        'A push approval is a rule about pushes, and this folder pushes nothing: it needs a ' +
+          'branch prefix, which a git repository connected with `--run` takes.',
+      );
+    }
+    return undefined;
+  }
+  if (question.requested !== undefined) return parsePushApproval(question.requested);
+  return question.current ?? HOST_PUSH_APPROVAL_DEFAULT;
+}
+
+/**
+ * What the machine's inventory says about pushing folders: each one's posture,
+ * against the workspace it was connected for. A folder recording no workspace
+ * reaches none, so it is left out rather than published against nothing.
+ */
+export function pushPostures(bindings: ReadonlyMap<string, HostBinding>): HostInventoryFolders {
+  return [...bindings.values()]
+    .flatMap((binding) =>
+      binding.branchPolicy === undefined || binding.spaceId === undefined
+        ? []
+        : [
+            {
+              id: binding.id,
+              spaceId: binding.spaceId,
+              pushApproval: binding.branchPolicy.pushApproval,
+            },
+          ],
+    )
+    .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+/**
+ * The policy with one folder's posture changed. Refused for a folder this
+ * machine does not offer, and for one that pushes nothing.
+ */
+export function withPushApproval(
+  policy: HostPolicy,
+  bindingId: string,
+  requested: string,
+): HostPolicy {
+  const pushApproval = parsePushApproval(requested);
+  const binding = policy.bindings.find((b) => b.id === bindingId);
+  if (binding === undefined) {
+    throw new Error(`This machine offers no folder \`${bindingId}\`.`);
+  }
+  if (binding.branchPolicy === undefined) {
+    throw new Error(
+      `\`${bindingId}\` pushes nothing, so there is no push to approve. Reconnect it with ` +
+        '`--branch-prefix <prefix>` to let it push.',
+    );
+  }
+  return {
+    ...policy,
+    bindings: policy.bindings.map((b) =>
+      b.id === bindingId && b.branchPolicy !== undefined
+        ? { ...b, branchPolicy: { ...b.branchPolicy, pushApproval } }
+        : b,
+    ),
+  };
+}
