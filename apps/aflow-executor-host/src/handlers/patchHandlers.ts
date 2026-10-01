@@ -152,7 +152,10 @@ async function applyHostPatch(ctx: ExecutorContext, policyPath: string): Promise
         input.mode,
         input.commit.branch,
         input.commit.message,
-        input.commit.baseSha,
+        {
+          ...(input.commit.baseSha !== undefined ? { baseSha: input.commit.baseSha } : {}),
+          ...(input.commit.pushBase !== undefined ? { pushBase: input.commit.pushBase } : {}),
+        },
       );
       return await successWithData(ctx, {
         state: apply.state,

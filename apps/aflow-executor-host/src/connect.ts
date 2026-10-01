@@ -72,8 +72,10 @@ function usage(): never {
       '  --push-approval <always|never|unless-unreviewed>\n' +
       `                   When a publication asks before pushing (default ${HOST_PUSH_APPROVAL_DEFAULT}:\n` +
       '                   it reviews its commit and asks unless the review approves it).\n' +
-      '                   Every publication scans its commit for secrets before the push\n' +
-      '                   and stops when it finds one, which is what makes that default safe.\n' +
+      '                   Every publication scans everything it would push for secrets\n' +
+      '                   first and stops when it finds one, which is what makes that\n' +
+      '                   default safe; under any posture it asks when the scan could not\n' +
+      '                   read a file or found a line marked aflow-scan: allow.\n' +
       '  --mcp a,b        Offer these MCP servers, without being asked\n' +
       '  --yes            Take every default and ask nothing',
   );

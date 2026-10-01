@@ -94,12 +94,38 @@ function newSidePath(header: string): string | undefined {
   return raw.startsWith('b/') ? raw.slice(2) : raw;
 }
 
-/** The new side's path from `Binary files a/x and b/y differ`, or nothing for a deleted file. */
+const BINARY_PREFIX = 'Binary files ';
+const BINARY_SUFFIX = ' differ';
+const BINARY_JOIN = ' and ';
+const DEV_NULL = '/dev/null';
+
+/**
+ * The new side's path from `Binary files a/x and b/y differ`, or nothing for a
+ * deleted file. A path may itself hold ` and `, so the line is not split at
+ * the first or the last one: with renames off both sides name one path, which
+ * puts the join at the middle; a file added or deleted has `/dev/null` on one
+ * side.
+ */
 function binaryPath(line: string): string | undefined {
-  const match = /^Binary files .* and (.*) differ$/.exec(line);
-  const raw = match?.[1] === undefined ? undefined : unquotePath(match[1]);
-  if (raw === undefined || raw === '/dev/null') return undefined;
-  return raw.startsWith('b/') ? raw.slice(2) : raw;
+  if (!line.startsWith(BINARY_PREFIX) || !line.endsWith(BINARY_SUFFIX)) return undefined;
+  const body = line.slice(BINARY_PREFIX.length, -BINARY_SUFFIX.length);
+  const half = (body.length - BINARY_JOIN.length) / 2;
+  if (Number.isInteger(half) && body.slice(half, half + BINARY_JOIN.length) === BINARY_JOIN) {
+    const oldSide = unquotePath(body.slice(0, half));
+    const newSide = unquotePath(body.slice(half + BINARY_JOIN.length));
+    if (
+      oldSide.startsWith('a/') &&
+      newSide.startsWith('b/') &&
+      oldSide.slice(2) === newSide.slice(2)
+    ) {
+      return newSide.slice(2);
+    }
+  }
+  if (body.startsWith(`${DEV_NULL}${BINARY_JOIN}`)) {
+    const newSide = unquotePath(body.slice(DEV_NULL.length + BINARY_JOIN.length));
+    return newSide.startsWith('b/') ? newSide.slice(2) : newSide;
+  }
+  return undefined;
 }
 
 /** One file's part of one commit's diff. */
@@ -299,6 +325,8 @@ function summarize(tally: ScanTally, commits: number, range: string): string {
     );
   } else if (unscanned.total > 0) {
     sentences.push(`No secret found in the lines read of ${scope}, but not every file was read.`);
+  } else if (allowed.total > 0) {
+    sentences.push(`No secret found in the lines ${scope} add, apart from lines marked allowed.`);
   } else {
     sentences.push(`No secret found in the lines ${scope} add.`);
   }
@@ -309,8 +337,8 @@ function summarize(tally: ScanTally, commits: number, range: string): string {
   if (allowed.total > 0) {
     const lines = allowed.items.map((a) => `${a.file} line ${String(a.line)} (${a.pattern})`);
     sentences.push(
-      `Let through by an \`aflow-scan: allow\` comment on the line: ${lines.join(', ')}` +
-        `${beyondNote(allowed)}.`,
+      `Marked allowed by an \`aflow-scan: allow\` comment, and so for the operator to read ` +
+        `before anything is pushed: ${lines.join(', ')}${beyondNote(allowed)}.`,
     );
   }
   return sentences.join(' ');
@@ -332,7 +360,7 @@ export async function scanCommitRange(root: string, range: string): Promise<Host
   const tally = await readAddedLines(root, base, head);
   const commits = await countCommits(root, base, head);
   const unflagged = tally.findings.total === 0;
-  const clean = unflagged && tally.unscanned.total === 0;
+  const clean = unflagged && tally.allowed.total === 0 && tally.unscanned.total === 0;
   return {
     clean,
     findings: tally.findings.items,

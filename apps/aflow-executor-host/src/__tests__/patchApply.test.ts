@@ -720,6 +720,103 @@ describe('appending a patch to the branch it was made on', () => {
   }, 30_000);
 });
 
+describe('measuring what a push of the commit would add', () => {
+  let origin: string;
+
+  /** A remote the folder has fetched from once, holding its `main` as it was then. */
+  beforeEach(async () => {
+    origin = join(base, 'origin.git');
+    await run('git', ['clone', '-q', '--bare', root, origin]);
+    await git(root, 'remote', 'add', 'origin', origin);
+    await git(root, 'fetch', '-q', 'origin');
+  });
+
+  async function commitLocally(file: string): Promise<string> {
+    await writeFile(join(root, file), `${file}\n`);
+    await git(root, 'add', '-A');
+    await git(root, 'commit', '-q', '-m', `add ${file}`);
+    return (await git(root, 'rev-parse', 'HEAD')).trim();
+  }
+
+  async function publish(commit: Record<string, string>) {
+    const patch = await diffFor(async (d) => {
+      await writeFile(join(d, 'a.txt'), 'one\nFIXED\nthree\n');
+    });
+    const captured: Captured = {};
+    const result = await createHostPatchHandler(policyPath).execute(
+      contextFor(
+        { bindingId: 'hb', patch, commit: { branch: 'aflow/x', message: 'the fix', ...commit } },
+        captured,
+      ),
+    );
+    return { result, commit: captured.output?.['commit'] as Record<string, unknown> | undefined };
+  }
+
+  it("reports every commit the push would add, the folder's own unpushed ones included", async () => {
+    const pushed = (await git(root, 'rev-parse', 'origin/main')).trim();
+    const unpushed = await commitLocally('local.txt');
+
+    const { result, commit } = await publish({ pushBase: 'main' });
+    expect(result.status).toBe('SUCCEEDED');
+    const sha = String(commit?.['sha']);
+    expect(commit?.['range']).toBe(`${unpushed}..${sha}`);
+    expect(commit?.['pushRange']).toBe(`${pushed}..${sha}`);
+    const carried = (await git(root, 'rev-list', String(commit?.['pushRange'])))
+      .split('\n')
+      .filter((line) => line !== '');
+    expect(carried).toEqual([sha, unpushed]);
+  }, 30_000);
+
+  it('measures against the base as the remote holds it now, not as the folder last fetched it', async () => {
+    const elsewhere = join(base, 'elsewhere');
+    await run('git', ['clone', '-q', origin, elsewhere]);
+    await writeFile(join(elsewhere, 'c.txt'), 'pushed by someone else\n');
+    await git(elsewhere, 'add', '-A');
+    await git(
+      elsewhere,
+      '-c',
+      'user.email=u@e.com',
+      '-c',
+      'user.name=U',
+      'commit',
+      '-q',
+      '-m',
+      'c',
+    );
+    await git(elsewhere, 'push', '-q', 'origin', 'HEAD:main');
+    const now = (await git(elsewhere, 'rev-parse', 'HEAD')).trim();
+    expect((await git(root, 'rev-parse', 'origin/main')).trim()).not.toBe(now);
+
+    const { result, commit } = await publish({ pushBase: 'main' });
+    expect(result.status).toBe('SUCCEEDED');
+    expect(commit?.['pushRange']).toBe(`${now}..${String(commit?.['sha'])}`);
+  }, 30_000);
+
+  it('refuses a base the remote does not have, with nothing made', async () => {
+    const { result, commit } = await publish({ pushBase: 'no-such-branch' });
+    expect(result.status).toBe('FAILED');
+    expect(result.error?.message ?? '').toContain('could not be fetched');
+    expect(commit).toBeUndefined();
+    await expect(git(root, 'rev-parse', '--verify', 'aflow/x')).rejects.toThrow();
+  }, 30_000);
+
+  it('refuses a folder with no `origin`, naming what it measured against', async () => {
+    await git(root, 'remote', 'remove', 'origin');
+    const { result } = await publish({ pushBase: 'main' });
+    expect(result.status).toBe('FAILED');
+    expect(result.error?.message ?? '').toContain(
+      '`origin/main` is not a branch this folder can read',
+    );
+    await expect(git(root, 'rev-parse', '--verify', 'aflow/x')).rejects.toThrow();
+  }, 30_000);
+
+  it('reports no push range for a commit that names no push base', async () => {
+    const { result, commit } = await publish({});
+    expect(result.status).toBe('SUCCEEDED');
+    expect(commit?.['pushRange']).toBeUndefined();
+  }, 30_000);
+});
+
 describe("a commission's diff taken by reference", () => {
   const REF = 'gs://file-store/tenants/t_1/runs/r_1/steps/s_1/attempt/1/patch.json';
 

@@ -40,11 +40,25 @@ export const SECRET_VALUE_MAX_LENGTH = 512;
 export const SECRET_VALUE_MIN_ENTROPY_BITS = 3.5;
 
 /**
- * What an operator writes in a comment on a line they have read, to let it
- * through: the line is reported as allowed instead of found.
+ * What a trailing comment on a line says to report the line as allowed rather
+ * than found. Allowed is not cleared: whoever wrote the line could have written
+ * the comment, so a publication carrying one asks the operator.
  */
 export const SCAN_ALLOW_MARKER = 'aflow-scan: allow';
-const ALLOW_COMMENT = /(?:\/\/|\/\*|#|<!--|--)\s{0,8}aflow-scan:\s{0,8}allow\b/;
+/**
+ * The marker as the last thing on the line, after a comment leader set off by
+ * a space or starting the line — so the same words inside a string literal or
+ * a URL, with anything after them or no space before the leader, do not count.
+ */
+const ALLOW_COMMENT = new RegExp(
+  '(?:^|\\s)(?:' +
+    [
+      '(?://|#|--)\\s{0,8}aflow-scan:\\s{0,8}allow',
+      '/\\*\\s{0,8}aflow-scan:\\s{0,8}allow\\s{0,8}\\*/',
+      '<!--\\s{0,8}aflow-scan:\\s{0,8}allow\\s{0,8}-->',
+    ].join('|') +
+    ')$',
+);
 
 /** The names a secret is kept under: secret, token, password, api key. */
 const SECRET_NAME = `(?:${['secret', 'token', 'passw(?:or)?d', 'api[_-]?key'].join('|')})`;
@@ -292,10 +306,15 @@ export const SECRET_RULES: readonly SecretRule[] = [
   },
 ];
 
-/** What one added line holds: the first rule it matches, and whether a comment on it allows it. */
+/** What one added line holds: the first rule it matches, and whether its trailing comment allows it. */
 export interface LineVerdict {
   readonly rule: string;
   readonly allowed: boolean;
+}
+
+/** Whether a line ends in a comment that carries the allow marker and nothing after it. */
+export function endsInAllowComment(line: string): boolean {
+  return ALLOW_COMMENT.test(line.trimEnd());
 }
 
 /** The first rule a line added to `file` matches, or nothing. */
@@ -305,5 +324,5 @@ export function scanLine(file: string, line: string): LineVerdict | undefined {
       (candidate.appliesTo === undefined || candidate.appliesTo(file)) && candidate.matches(line),
   );
   if (rule === undefined) return undefined;
-  return { rule: rule.name, allowed: ALLOW_COMMENT.test(line) };
+  return { rule: rule.name, allowed: endsInAllowComment(line) };
 }

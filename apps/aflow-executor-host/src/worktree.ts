@@ -1190,10 +1190,32 @@ export interface PatchCommit {
   readonly baseSha: string;
   /** True when the branch existed and the commit was appended to it. */
   readonly appended: boolean;
-  /** `<baseSha>..<sha>`: what a review of this commit reads. */
+  /** `<baseSha>..<sha>`: this commit alone. */
   readonly range: string;
+  /** `<origin base sha>..<sha>`: every commit a push of this one would add, when a push base was named. */
+  readonly pushRange?: string;
   /** `<sha>:refs/heads/<branch>`: what a push of this commit sends. */
   readonly pushRefspec: string;
+}
+
+/** The remote a publication pushes to, and so the one its push base is read from. */
+const PUSH_REMOTE = 'origin';
+
+/**
+ * Where `origin/<pushBase>` is now, fetched first: a remote-tracking ref says
+ * only where the remote was at the folder's last fetch, and a stale one would
+ * leave out of the push range commits the remote has since lost.
+ */
+async function resolvePushBase(root: string, pushBase: string): Promise<string> {
+  await fetchRemoteBase(root, `${PUSH_REMOTE}/${pushBase}`);
+  return await resolveCommit(root, `refs/remotes/${PUSH_REMOTE}/${pushBase}`).catch(() => {
+    throw new WorktreeError(
+      `\`${PUSH_REMOTE}/${pushBase}\` is not a branch this folder can read, so what a push would ` +
+        `add cannot be measured. A publication pushes to \`${PUSH_REMOTE}\` and measures against ` +
+        `its \`${pushBase}\`; the folder needs that remote, and \`${pushBase}\` on it.`,
+      'unknown_ref',
+    );
+  });
 }
 
 export interface PatchCommitOutcome {
@@ -1294,9 +1316,11 @@ export async function commitPatchOnBranch(
   mode: 'clean' | 'merge',
   branch: string,
   message: string,
-  baseSha?: string,
+  options: { readonly baseSha?: string; readonly pushBase?: string } = {},
 ): Promise<PatchCommitOutcome> {
-  const target = await commitTarget(root, branch, baseSha);
+  const pushBaseSha =
+    options.pushBase === undefined ? undefined : await resolvePushBase(root, options.pushBase);
+  const target = await commitTarget(root, branch, options.baseSha);
 
   const scratch = await mkdtemp(join(tmpdir(), PUBLICATION_SCRATCH_PREFIX));
   let worktree: PreparedWorktree | undefined;
@@ -1389,6 +1413,7 @@ export async function commitPatchOnBranch(
         baseSha: worktree.baseSha,
         appended: target.appended,
         range: `${worktree.baseSha}..${sha}`,
+        ...(pushBaseSha !== undefined ? { pushRange: `${pushBaseSha}..${sha}` } : {}),
         pushRefspec: `${sha}:refs/heads/${branch}`,
       },
     };

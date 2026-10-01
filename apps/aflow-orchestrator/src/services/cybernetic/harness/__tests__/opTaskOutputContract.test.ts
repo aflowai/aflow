@@ -408,7 +408,7 @@ describe('applyOpTaskOutputContract — projection', () => {
     expect(failed.kind).toBe('failed');
     if (failed.kind !== 'failed') return;
     // The scan's own summary leads, closed once rather than twice.
-    expect(failed.failureReason?.startsWith(`${summary} The commit carries`)).toBe(true);
+    expect(failed.failureReason?.startsWith(`${summary} What the push would carry`)).toBe(true);
     expect(failed.failureReason).toContain(
       'The branch stayed on the machine and nothing was pushed.',
     );
@@ -443,6 +443,21 @@ describe('applyOpTaskOutputContract — projection', () => {
     });
     const partial = await run(unread.deps, scan as WorkflowTask);
     expect(partial.kind).toBe('succeeded');
+
+    // A line marked allowed is not a finding: the scan succeeds, and
+    // `clean: false` sends the run to the operator, never past them.
+    const marked = makeDeps({
+      [RAW_REF]: {
+        clean: false,
+        findings: [],
+        unscanned: [],
+        allowed: [{ file: 'fixture.ts', line: 4, pattern: 'secret-assignment' }],
+        summary: 'No secret found, apart from lines marked allowed.',
+        unflaggedRange: range,
+      },
+    });
+    const allowed = await run(marked.deps, scan as WorkflowTask);
+    expect(allowed.kind).toBe('succeeded');
   });
 
   it('pauses (task_contract_violation) when the PROJECTED output violates the schema', async () => {

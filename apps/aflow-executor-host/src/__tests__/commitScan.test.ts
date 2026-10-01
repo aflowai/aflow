@@ -21,6 +21,7 @@ import { HostCommitScanInputSchema, HostCommitScanOutputSchema } from '@aflow/sc
 import { SCAN_MAX_FILE_BYTES, SCAN_MAX_LINE_BYTES, SCAN_MAX_LISTED } from '../commitScan.js';
 import { createHostHandler } from '../handlers/hostHandler.js';
 import {
+  endsInAllowComment,
   isEnvFile,
   SCAN_ALLOW_MARKER,
   scanLine,
@@ -209,18 +210,58 @@ describe('the rules', () => {
     }
   });
 
-  it('lets through a line an operator marked in a comment, and says it did', () => {
+  it('marks a line allowed only when the marker ends it, in a trailing comment', () => {
     const line = PLANTED['secret-assignment']?.line ?? '';
     expect(scanLine('a.ts', line)).toEqual({ rule: 'secret-assignment', allowed: false });
-    for (const comment of ['// ', '/* ', '# ', '-- ', '<!-- ']) {
-      expect(scanLine('a.ts', `${line} ${comment}${SCAN_ALLOW_MARKER}`), comment).toEqual({
+    for (const comment of [
+      `// ${SCAN_ALLOW_MARKER}`,
+      `//${SCAN_ALLOW_MARKER}`,
+      `# ${SCAN_ALLOW_MARKER}`,
+      `-- ${SCAN_ALLOW_MARKER}`,
+      `/* ${SCAN_ALLOW_MARKER} */`,
+      `<!-- ${SCAN_ALLOW_MARKER} -->`,
+      `// ${SCAN_ALLOW_MARKER}   \r`,
+    ]) {
+      expect(scanLine('a.ts', `${line} ${comment}`), comment).toEqual({
         rule: 'secret-assignment',
         allowed: true,
       });
     }
-    // Inside a string rather than a comment, the marker is part of the value.
-    expect(scanLine('a.ts', `${line} const note = "${SCAN_ALLOW_MARKER}";`)?.allowed).toBe(false);
+    // A line that matches nothing has nothing to allow.
     expect(scanLine('a.ts', `const note = "x"; // ${SCAN_ALLOW_MARKER}`)).toBeUndefined();
+  });
+
+  it('does not count the marker anywhere but the end of a trailing comment', () => {
+    const line = PLANTED['secret-assignment']?.line ?? '';
+    const notAComment = [
+      // Inside a string literal, the marker is part of the value.
+      `${line} const note = "${SCAN_ALLOW_MARKER}";`,
+      `${line} const note = '// ${SCAN_ALLOW_MARKER}'`,
+      `${line} const note = \`# ${SCAN_ALLOW_MARKER}\``,
+      // Inside a URL: a query, a fragment, a path.
+      `${line} fetch("https://example.com/?note=${SCAN_ALLOW_MARKER}")`,
+      `${line} const u = 'https://example.com/a#${SCAN_ALLOW_MARKER}'`,
+      `${line} // see https://example.com/?q=1#${SCAN_ALLOW_MARKER}`,
+      `${line} https://example.com//${SCAN_ALLOW_MARKER}`,
+      // A leader not set off by a space is part of something else.
+      `${line} x--${SCAN_ALLOW_MARKER}`,
+      // Something after the marker: it is no longer the last thing on the line.
+      `${line} // ${SCAN_ALLOW_MARKER} because the fixture needs it`,
+      `${line} // ${SCAN_ALLOW_MARKER}ed`,
+      `${line} /* ${SCAN_ALLOW_MARKER} */ const more = 1;`,
+      `${line} /* ${SCAN_ALLOW_MARKER}`,
+      `${line} <!-- ${SCAN_ALLOW_MARKER}`,
+    ];
+    for (const candidate of notAComment) {
+      expect(scanLine('a.ts', candidate), candidate).toEqual({
+        rule: 'secret-assignment',
+        allowed: false,
+      });
+    }
+    expect(endsInAllowComment(`fetch("https://example.com/?note=${SCAN_ALLOW_MARKER}")`)).toBe(
+      false,
+    );
+    expect(endsInAllowComment(`value // ${SCAN_ALLOW_MARKER}`)).toBe(true);
   });
 
   it('reads a line of a megabyte in linear time, whatever it is made of', () => {
@@ -496,6 +537,29 @@ describe('host.commit.scan', () => {
     );
   });
 
+  it('names a binary file whose path holds " and " by its whole path', async () => {
+    const start = await headSha();
+    const binary = Buffer.from([0, 1, 2, 0]);
+    const head = await commitFiles({
+      'cats and dogs.bin': binary,
+      'a and b and c.png': binary,
+    });
+    const added = await scanOutput(`${start}..${head}`);
+    expect(added.unscanned).toEqual([
+      { file: 'a and b and c.png', reason: 'binary' },
+      { file: 'cats and dogs.bin', reason: 'binary' },
+    ]);
+    const changed = await commitFiles({ 'cats and dogs.bin': Buffer.from([0, 9, 9, 0]) });
+    expect((await scanOutput(`${head}..${changed}`)).unscanned).toEqual([
+      { file: 'cats and dogs.bin', reason: 'binary' },
+    ]);
+    // A deleted file adds nothing, so there is nothing left unread.
+    await git(root, 'rm', '-q', 'a and b and c.png');
+    await git(root, 'commit', '-q', '-m', 'remove');
+    const removed = await scanOutput(`${changed}..${await headSha()}`);
+    expect(removed).toMatchObject({ clean: true, unscanned: [] });
+  });
+
   it('does not clear a range it could not read whole, though nothing was found', async () => {
     const start = await headSha();
     const head = await commitFiles({ 'vendor.js': `${'y'.repeat(SCAN_MAX_FILE_BYTES + 1)}\n` });
@@ -541,21 +605,44 @@ describe('host.commit.scan', () => {
     expect(output.summary).toContain('app.min.js (a line longer than 64 KB)');
   });
 
-  it('lets through a line marked in a comment, lists it, and still clears the range', async () => {
+  it('lists a line marked allowed and does not clear the range, so the push asks', async () => {
     const start = await headSha();
     const head = await commitFiles({
       'fixture.ts': `${PLANTED['secret-assignment']?.line ?? ''} // ${SCAN_ALLOW_MARKER}\n`,
     });
     const output = await scanOutput(`${start}..${head}`);
     expect(output).toMatchObject({
-      clean: true,
+      clean: false,
       findings: [],
+      unscanned: [],
       allowed: [{ file: 'fixture.ts', line: 1, pattern: 'secret-assignment' }],
-      clearedRange: `${start}..${head}`,
+      unflaggedRange: `${start}..${head}`,
     });
+    expect(output.clearedRange).toBeUndefined();
+    expect(output.summary).toContain('apart from lines marked allowed');
     expect(output.summary).toContain(
-      'Let through by an `aflow-scan: allow` comment on the line: fixture.ts line 1 (secret-assignment).',
+      'Marked allowed by an `aflow-scan: allow` comment, and so for the operator to read before ' +
+        'anything is pushed: fixture.ts line 1 (secret-assignment).',
     );
+  });
+
+  it('finds a line whose marker sits inside a string or a URL rather than ending a comment', async () => {
+    const start = await headSha();
+    const secret = PLANTED['secret-assignment']?.line ?? '';
+    const head = await commitFiles({
+      'app.ts': [
+        `${secret} const note = "${SCAN_ALLOW_MARKER}";`,
+        `${secret} fetch("https://example.com/?note=${SCAN_ALLOW_MARKER}")`,
+        '',
+      ].join('\n'),
+    });
+    const output = await scanOutput(`${start}..${head}`);
+    expect(output.findings).toEqual([
+      { file: 'app.ts', line: 1, pattern: 'secret-assignment' },
+      { file: 'app.ts', line: 2, pattern: 'secret-assignment' },
+    ]);
+    expect(output.allowed).toEqual([]);
+    expect(output.unflaggedRange).toBeUndefined();
   });
 
   it('caps the findings it returns and counts the rest', async () => {

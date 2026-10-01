@@ -66,12 +66,15 @@ export const HostPushApprovalSchema = z
     'When a publication from this folder asks the operator before it pushes. ' +
       '`always`: it asks before every push. ' +
       '`never`: it pushes without asking. ' +
-      '`unless-unreviewed`, the default: the publication runs a Local Code Review of the ' +
-      'commit it made and pushes without asking only when that review returns `approve`. ' +
-      'Whatever the posture, every publication scans its commit for secrets before the push ' +
-      'and stops with nothing pushed when the scan finds one, which is what lets a review ' +
-      'stand in for the operator: the one thing the approval guarded that a review does not ' +
-      'read for is a secret leaving the machine.',
+      '`unless-unreviewed`, the default: the publication runs a Local Code Review of ' +
+      'everything the push would add and pushes without asking only when that review ' +
+      'returns `approve`. ' +
+      'Whatever the posture, every publication scans everything the push would add for ' +
+      'secrets first and stops with nothing pushed when the scan finds one, which is what ' +
+      'lets a review stand in for the operator: the one thing the approval guarded that a ' +
+      'review does not read for is a secret leaving the machine. A scan that could not read ' +
+      'a file, or found a line marked `aflow-scan: allow`, asks the operator under every ' +
+      'posture, `never` included, and a declined push pushes nothing.',
   );
 export type HostPushApproval = z.infer<typeof HostPushApprovalSchema>;
 
@@ -128,7 +131,7 @@ export const HOST_COMMIT_RANGE_PATTERN = /^([0-9a-fA-F]{7,40})\.\.([0-9a-fA-F]{7
 
 export const HostCommitRangeSchema = z.string().regex(HOST_COMMIT_RANGE_PATTERN, {
   message:
-    'A range is two shas, `<baseSha>..<sha>` — the `range` a commit made by ' +
+    'A range is two shas, `<baseSha>..<sha>` — the `range` or `pushRange` a commit made by ' +
     '`host.file.patch` reports — not a branch, a tag or a single commit.',
 });
 
@@ -418,6 +421,13 @@ export const HostFilePatchInputSchema = z
             'never merged. A new branch is created at this commit, wherever it stands against ' +
             "the folder's HEAD; omitted, the new branch starts at the folder's HEAD.",
         ),
+        pushBase: HostBranchNameSchema.optional().describe(
+          'The branch on `origin` a push of this commit is measured against — `main`, by ' +
+            'name alone — for a commit that is going to be pushed. `origin/<pushBase>` is ' +
+            'fetched before anything is made, and the result reports `pushRange`: every commit ' +
+            'the push would add, including any of the folder’s own that `origin` does not ' +
+            'have yet. A base `origin` cannot give is refused with nothing made.',
+        ),
       })
       // Strict so a misspelt base is refused rather than stripped: dropped, it
       // would let a patch land on a new branch with no check of where it was made.
@@ -494,12 +504,19 @@ export const HostFilePatchOutputSchema = z.object({
         'The commit alone as a revision range, `<baseSha>..<sha>` — two shas and no branch ' +
           'name, so it still names this commit after the branch moves.',
       ),
+      pushRange: HostCommitRangeSchema.optional().describe(
+        'Everything a push of this commit would add, `<origin base sha>..<sha>`: the commits ' +
+          'reachable from it that `origin/<pushBase>`, freshly fetched, does not hold — this ' +
+          'commit and every unpushed one under it. Present only when `commit.pushBase` was ' +
+          'given. What a publication scans and reviews before the push.',
+      ),
       pushRefspec: z
         .string()
         .min(1)
         .describe(
-          'The refspec that pushes exactly this commit to its branch, `<sha>:refs/heads/<branch>`. ' +
-            'A branch that moved after the commit sends nothing it gained since.',
+          'The refspec that pushes this commit to its branch, `<sha>:refs/heads/<branch>`, ' +
+            'carrying with it every commit under it that `origin` does not have — `pushRange` ' +
+            'names them. A branch that moved after the commit sends nothing it gained since.',
         ),
     })
     .optional()
@@ -841,8 +858,9 @@ export const HostCommitScanOutputSchema = z.object({
   clean: z
     .boolean()
     .describe(
-      'True when every file the range adds lines to was read whole and no rule matched any ' +
-        'line in it. A range with a file in `unscanned` is never clean, whatever was found.',
+      'True only when every file the range adds lines to was read whole and no rule matched ' +
+        'any line in it, marked allowed or not. A range with a file in `unscanned` or a line ' +
+        'in `allowed` is never clean, whatever else was found.',
     ),
   findings: z
     .array(HostCommitScanFindingSchema)
@@ -860,30 +878,32 @@ export const HostCommitScanOutputSchema = z.object({
   allowed: z
     .array(HostCommitScanFindingSchema)
     .describe(
-      'Lines a rule matched that carry `aflow-scan: allow` in a comment on the same line: let ' +
-        'through rather than found, and reported so whoever approves the push sees what was.',
+      'Lines a rule matched that end in a comment carrying `aflow-scan: allow` — `//`, `#`, ' +
+        '`--`, `/* … */` or `<!-- … -->`, the marker the last thing on the line. Reported ' +
+        'here rather than in `findings`, and never cleared: whoever wrote the line could have ' +
+        'written the comment, so a range with one is not `clean` and the operator reads it.',
     ),
   summary: z
     .string()
     .describe(
       'One paragraph for a person: every finding by file, line and rule, how many were left ' +
-        'out past the cap, which files were not read whole and why, and which lines were let ' +
-        'through by an allow comment.',
+        'out past the cap, which files were not read whole and why, and which lines were ' +
+        'marked allowed.',
     ),
   unflaggedRange: z
     .string()
     .optional()
     .describe(
-      'The range as two full shas, present when no rule matched any line that was read — ' +
-        'whether or not every file was read whole. A step that must stop on a finding reads ' +
-        'this, so a range with a finding fails it.',
+      'The range as two full shas, present when no line that was read is in `findings` — ' +
+        'whether or not every file was read whole or a line was marked allowed. A step that ' +
+        'must stop on a finding reads this, so a range with a finding fails it.',
     ),
   clearedRange: z
     .string()
     .optional()
     .describe(
       'The range this scan cleared, as two full shas — present only when it is clean: every ' +
-        'file read whole and nothing found.',
+        'file read whole, nothing found and nothing marked allowed.',
     ),
 });
 
@@ -1363,7 +1383,7 @@ export const HostOperationRegistrations: OperationRegistration[] = [
       pitfalls: [
         'Every commit in the range is read, so a secret added in one commit and removed in a later one is still found: the push would carry both.',
         'A file that is binary, holds a NUL byte, adds more than the scanned size in one commit or adds a line longer than the scanned line is listed in `unscanned` with why, and the range is not `clean`; findings from the part that was read are kept.',
-        'A line carrying `aflow-scan: allow` in a comment is reported in `allowed` instead of `findings`.',
+        'A line ending in a comment that carries `aflow-scan: allow` is reported in `allowed` instead of `findings`, and the range is not `clean`: the marker turns a stop into a question for the operator, never into a clearance. It counts only as the last thing on the line, after a comment leader set off by a space — inside a string or a URL, or with anything after it, it does not.',
         'A clean scan says no rule matched, not that the range holds no secret.',
       ],
     },

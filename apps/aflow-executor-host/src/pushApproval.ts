@@ -25,8 +25,10 @@ export const PUSH_APPROVAL_VALUES: readonly HostPushApproval[] = HostPushApprova
 
 /** Why a review may stand in for the operator, in the words the CLI prints beside the posture. */
 export const PUSH_SCAN_NOTE =
-  'Every publication scans its commit for secrets before the push and stops, with nothing ' +
-  'pushed, when it finds one — which is what lets a review stand in for your approval.';
+  'Every publication scans everything it would push for secrets first and stops, with ' +
+  'nothing pushed, when it finds one — which is what lets a review stand in for your ' +
+  'approval. Whatever the posture, it asks you when the scan could not read a file or ' +
+  'found a line marked `aflow-scan: allow`.';
 
 /** One line per posture, in the words the CLI prints. */
 export function describePushApproval(pushApproval: HostPushApproval): string {

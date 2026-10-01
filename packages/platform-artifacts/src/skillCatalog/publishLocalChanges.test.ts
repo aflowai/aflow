@@ -29,6 +29,8 @@ const taskById = new Map(wf.tasks.map((task) => [task.taskId, task]));
 
 const BASE = 'a'.repeat(40);
 const HEAD = 'c'.repeat(40);
+/** Where `origin/<base>` is, behind `BASE` by the folder's own unpushed commits. */
+const ORIGIN_BASE = 'e'.repeat(40);
 
 /** The commit an applied patch reports, as `host.file.patch` returns it. */
 const COMMIT = {
@@ -38,6 +40,7 @@ const COMMIT = {
   baseSha: BASE,
   appended: false,
   range: `${BASE}..${HEAD}`,
+  pushRange: `${ORIGIN_BASE}..${HEAD}`,
   pushRefspec: `${HEAD}:refs/heads/aflow/x`,
 };
 
@@ -114,7 +117,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       [],
       ['commit'],
       ['commit'],
-      ['commit'],
+      ['commit', 'scan-commit'],
       ['read-push-approval', 'scan-commit'],
       ['read-repository', 'scan-commit', 'review-commit'],
       ['approve-push', 'scan-commit'],
@@ -193,8 +196,10 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
         branch: { $bind: 'branch' },
         message: { $bind: 'commitMessage' },
         baseSha: { $bind: 'baseSha' },
+        pushBase: { $bind: 'base' },
       },
     });
+    expect(commit.inputBindings?.['base']).toEqual({ kind: 'run_input', path: 'base' });
     // A commit is not replayable — after the first attempt the branch exists
     // or has moved, and the operation refuses what no longer matches.
     expect(commit.retryability).toBe('unsafe');
@@ -205,9 +210,15 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     const template = commit.inputTemplate;
     if (template === undefined) throw new Error('the commit task must carry a template');
     const declared = new Set(Object.keys(commit.inputBindings ?? {}));
-    const inputs = { bindingId: 'folder-1', patch: 'diff', branch: 'feat/x', commitMessage: 'm' };
+    const inputs = {
+      bindingId: 'folder-1',
+      patch: 'diff',
+      branch: 'feat/x',
+      commitMessage: 'm',
+      base: 'main',
+    };
     const fresh = substituteTemplateBinds(template, inputs, declared);
-    expect(fresh['commit']).toEqual({ branch: 'feat/x', message: 'm' });
+    expect(fresh['commit']).toEqual({ branch: 'feat/x', message: 'm', pushBase: 'main' });
     const appended = substituteTemplateBinds(
       template,
       { ...inputs, baseSha: 'a'.repeat(40) },
@@ -217,6 +228,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       branch: 'feat/x',
       message: 'm',
       baseSha: 'a'.repeat(40),
+      pushBase: 'main',
     });
     expect(HostFilePatchInputSchema.safeParse({ ...appended, mode: 'clean' }).success).toBe(true);
 
@@ -395,22 +407,20 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(taskOrThrow('approve-push').actionPreview?.inputBindings).toEqual({
       bindingId: { kind: 'run_input', path: 'bindingId' },
       branch: { kind: 'run_input', path: 'branch' },
-      pushApproval: {
-        kind: 'task_output',
-        taskId: 'read-push-approval',
-        path: 'branchPolicy.pushApproval',
-      },
       unscanned: { kind: 'task_output', taskId: 'scan-commit', path: 'unscanned' },
+      allowed: { kind: 'task_output', taskId: 'scan-commit', path: 'allowed' },
       scanSummary: { kind: 'task_output', taskId: 'scan-commit', path: 'summary' },
       commitSha: { kind: 'task_output', taskId: 'commit', path: 'commit.sha' },
       pushRefspec: { kind: 'task_output', taskId: 'commit', path: 'commit.pushRefspec' },
+      pushRange: { kind: 'task_output', taskId: 'commit', path: 'commit.pushRange' },
       commitBranch: { kind: 'task_output', taskId: 'commit', path: 'commit.branch' },
       commitMessage: { kind: 'task_output', taskId: 'commit', path: 'commit.message' },
       filesChanged: { kind: 'task_output', taskId: 'commit', path: 'filesChanged' },
     });
     // Every path is one the patch operation returns for an applied commit, so
     // the preview resolves — an unresolved one refuses the approval itself.
-    // Nothing binds the review, which a folder that always asks never runs.
+    // Nothing binds the review, which a folder that always asks never runs,
+    // nor the posture, which is not read over a range the scan did not clear.
     const applied = HostFilePatchOutputSchema.parse({
       state: 'applied',
       filesChanged: 2,
@@ -420,6 +430,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     });
     expect(applied.commit?.message).toBe('The change');
     expect(applied.commit?.pushRefspec).toBe(`${HEAD}:refs/heads/aflow/x`);
+    expect(applied.commit?.pushRange).toBe(`${ORIGIN_BASE}..${HEAD}`);
     expect(applied.filesChanged).toBe(2);
   });
 
@@ -520,7 +531,7 @@ function reviewEnding(review: Exclude<Review, 'not-started'>): Record<string, un
   });
 }
 
-type Scan = 'clean' | 'finding' | 'unscanned';
+type Scan = 'clean' | 'finding' | 'unscanned' | 'allowed';
 
 /** What `host.commit.scan` returns for each scan, before the task's own projection. */
 function scanResult(scan: Scan): Record<string, unknown> {
@@ -540,7 +551,16 @@ function scanResult(scan: Scan): Record<string, unknown> {
         unscanned: [{ file: 'bundle.js', reason: 'too-large' }],
         allowed: [],
         summary: 'No secret found in the lines read, but not every file was read.',
-        unflaggedRange: COMMIT.range,
+        unflaggedRange: COMMIT.pushRange,
+      });
+    case 'allowed':
+      return HostCommitScanOutputSchema.parse({
+        clean: false,
+        findings: [],
+        unscanned: [],
+        allowed: [{ file: 'fixture.ts', line: 4, pattern: 'secret-assignment' }],
+        summary: 'No secret found, apart from lines marked allowed.',
+        unflaggedRange: COMMIT.pushRange,
       });
     case 'clean':
       return HostCommitScanOutputSchema.parse({
@@ -549,8 +569,8 @@ function scanResult(scan: Scan): Record<string, unknown> {
         unscanned: [],
         allowed: [],
         summary: 'No secret found.',
-        unflaggedRange: COMMIT.range,
-        clearedRange: COMMIT.range,
+        unflaggedRange: COMMIT.pushRange,
+        clearedRange: COMMIT.pushRange,
       });
   }
 }
@@ -562,6 +582,12 @@ interface Scenario {
   committed?: boolean;
   /** What the scan of the commit found; absent is clean. */
   scan?: Scan;
+  /**
+   * How a decline is recorded: `skip`, as the harness does, skipping the gated
+   * branch; or `answer`, the decision alone, so the push's own predicate is
+   * what refuses it.
+   */
+  declineAs?: 'skip' | 'answer';
 }
 
 interface Outcome {
@@ -648,14 +674,16 @@ function publish(scenario: Scenario): Outcome {
       }
       if (task.taskId === 'approve-push') {
         asked = true;
-        if (scenario.decision === 'declined') {
+        if (scenario.decision === 'declined' && scenario.declineAs !== 'answer') {
           for (const id of computeRejectedApprovalSkipSet(tasks, task.taskId)) {
             skipped.add(id);
             statuses.set(id, 'skipped');
           }
           continue;
         }
-        outputs.set(task.taskId, { decision: 'approved' });
+        outputs.set(task.taskId, {
+          decision: scenario.decision === 'declined' ? 'rejected' : 'approved',
+        });
       } else {
         const raw = rawOutput(task.taskId, scenario);
         if (task.outputProjection !== undefined) {
@@ -780,44 +808,45 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
     expect(outcome.ran).not.toContain('review-commit');
   });
 
-  it('never pushes after a decline, even read from the decision alone', () => {
-    // The harness skips the gated branch on a decline; the push's own
-    // predicate must refuse it too, in case a decline is ever recorded as an
-    // answer rather than a skip.
-    const push = taskOrThrow('push') as unknown as WorkflowTask;
-    for (const pushApproval of ['always', 'unless-unreviewed'] as const) {
-      const verdict = pushApproval === 'always' ? undefined : 'request_changes';
-      const ready = computeReadyTasksWithWhen([push], new Set(['approve-push']), new Set(), {
-        statuses: new Map([['approve-push', 'succeeded']]),
-        outputs: new Map<string, Record<string, unknown>>([
-          ['approve-push', { decision: 'rejected' }],
-          ['read-push-approval', { branchPolicy: { branchPrefix: 'aflow/', pushApproval } }],
-          ...(verdict === undefined
-            ? []
-            : [
-                ['review-commit', { verdict, outcome: 'completed', reviewRunId: 'r' }] as [
-                  string,
-                  Record<string, unknown>,
-                ],
-              ]),
-        ]),
-      });
-      expect(ready.ready).toEqual([]);
+  // The harness skips the gated branch on a decline; the push's own predicate
+  // must refuse it too, in case a decline is ever recorded as an answer rather
+  // than a skip — under every posture, `never` included, wherever it asks.
+  for (const pushApproval of ['always', 'never', 'unless-unreviewed'] as const) {
+    for (const scan of ['clean', 'unscanned', 'allowed'] as const) {
+      for (const review of reviews) {
+        const asked = publish({ pushApproval, review, decision: 'approved', scan }).asked;
+        if (!asked) continue;
+        it(`${pushApproval}, scan ${scan}, review ${review}: a decline read from the decision alone pushes nothing`, () => {
+          const outcome = publish({
+            pushApproval,
+            review,
+            decision: 'declined',
+            scan,
+            declineAs: 'answer',
+          });
+          expect(outcome.asked).toBe(true);
+          expect(outcome.pushed).toBe(false);
+          expect(outcome.ran).not.toContain('open-pr');
+        });
+      }
     }
-  });
+  }
 
-  it('reviews exactly the commit it made, by its two shas, and waits for the review to end', () => {
+  it('reviews the range the scan read — everything the push would add — and waits for the review to end', () => {
     const review = taskOrThrow('review-commit');
     const template = review.inputTemplate;
     if (template === undefined) throw new Error('the review must carry a template');
     expect(review.inputBindings).toEqual({
       bindingId: { kind: 'run_input', path: 'bindingId' },
-      range: { kind: 'task_output', taskId: 'commit', path: 'commit.range' },
+      range: { kind: 'task_output', taskId: 'commit', path: 'commit.pushRange' },
     });
+    expect(review.inputBindings?.['range']).toEqual(
+      taskOrThrow('scan-commit').inputBindings?.['range'],
+    );
     const declared = new Set(Object.keys(review.inputBindings ?? {}));
     const start = substituteTemplateBinds(
       template,
-      { bindingId: 'folder-1', range: COMMIT.range },
+      { bindingId: 'folder-1', range: COMMIT.pushRange },
       declared,
     );
     // Named by its catalog entry, so a space workflow merely holding the slug
@@ -825,7 +854,7 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
     expect(WorkflowRunStartInputSchema.parse(start)).toMatchObject({
       slug: REVIEW_LOCAL_CHANGES.bundle.workflow.slug,
       catalogId: REVIEW_LOCAL_CHANGES.catalogId,
-      inputs: { bindingId: 'folder-1', range: `${BASE}..${HEAD}`, depth: 'standard' },
+      inputs: { bindingId: 'folder-1', range: `${ORIGIN_BASE}..${HEAD}`, depth: 'standard' },
       wait: 'until_complete',
     });
     // Two shas and no branch name: the range still names this commit after
@@ -850,7 +879,7 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
     );
     const reviewed = lines.find((line) => line.startsWith('- `unless-unreviewed`:'));
     expect(reviewed).toContain(
-      "this run's Local Code Review of the commit did not return `approve`",
+      "this run's Local Code Review of `pushRange` did not return `approve`",
     );
     expect(reviewed).toContain('its verdict is on the "Review the commit" task');
     expect(taskOrThrow('review-commit').name).toBe('Review the commit');
@@ -867,29 +896,32 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
       expect(PUBLISH_LOCAL_CHANGES.description).toContain(phrase);
     }
     expect(PUBLISH_LOCAL_CHANGES.description).toContain(
-      'Whatever the posture, the run scans every line its commit adds for secrets before any of this, and a finding stops it with nothing pushed — which is what lets a review stand in for the operator.',
+      'Whatever the posture, the run scans every line the push would add for secrets before any of this, and a finding stops it with nothing pushed — which is what lets a review stand in for the operator.',
+    );
+    expect(PUBLISH_LOCAL_CHANGES.description).toContain(
+      "Once the run asks, the operator's answer decides: a declined push pushes nothing, whatever the posture.",
     );
   });
 });
 
 describe('Publish Local Changes — the commit is scanned for secrets before anything leaves', () => {
-  it('scans exactly the commit it made, by its two shas', () => {
+  it('scans everything the push would add, from the base on origin to the commit, by two shas', () => {
     const scan = taskOrThrow('scan-commit');
     expect(scan.inputBindings).toEqual({
       bindingId: { kind: 'run_input', path: 'bindingId' },
-      range: { kind: 'task_output', taskId: 'commit', path: 'commit.range' },
+      range: { kind: 'task_output', taskId: 'commit', path: 'commit.pushRange' },
     });
     const template = scan.inputTemplate;
     if (template === undefined) throw new Error('the scan must carry a template');
     const declared = new Set(Object.keys(scan.inputBindings ?? {}));
     const input = substituteTemplateBinds(
       template,
-      { bindingId: 'folder-1', range: COMMIT.range },
+      { bindingId: 'folder-1', range: COMMIT.pushRange },
       declared,
     );
     expect(HostCommitScanInputSchema.parse(input)).toEqual({
       bindingId: 'folder-1',
-      range: `${BASE}..${HEAD}`,
+      range: `${ORIGIN_BASE}..${HEAD}`,
     });
     expect(scan.when).toEqual({
       expression: "tasks.commit.output.state == 'applied'",
@@ -906,6 +938,7 @@ describe('Publish Local Changes — the commit is scanned for secrets before any
       unflaggedRange: { path: 'unflaggedRange', onMissing: 'error' },
       clean: { path: 'clean', onMissing: 'error' },
       unscanned: { path: 'unscanned', onMissing: 'error' },
+      allowed: { path: 'allowed', onMissing: 'error' },
       summary: { path: 'summary', onMissing: 'error' },
     });
     if (scan.outputProjection === undefined) throw new Error('the scan must project');
@@ -913,10 +946,21 @@ describe('Publish Local Changes — the commit is scanned for secrets before any
     expect(projectTaskOutput(scan.outputProjection, scanResult('unscanned'), null)).toEqual({
       ok: true,
       value: {
-        unflaggedRange: COMMIT.range,
+        unflaggedRange: COMMIT.pushRange,
         clean: false,
         unscanned: [{ file: 'bundle.js', reason: 'too-large' }],
+        allowed: [],
         summary: 'No secret found in the lines read, but not every file was read.',
+      },
+    });
+    expect(projectTaskOutput(scan.outputProjection, scanResult('allowed'), null)).toEqual({
+      ok: true,
+      value: {
+        unflaggedRange: COMMIT.pushRange,
+        clean: false,
+        unscanned: [],
+        allowed: [{ file: 'fixture.ts', line: 4, pattern: 'secret-assignment' }],
+        summary: 'No secret found, apart from lines marked allowed.',
       },
     });
     expect(scan.outputContract).toBeUndefined();
@@ -956,35 +1000,59 @@ describe('Publish Local Changes — the commit is scanned for secrets before any
     }
   });
 
+  const uncleared = {
+    unscanned: 'a file the scan could not read',
+    allowed: 'a line marked allowed',
+  };
   for (const pushApproval of ['always', 'never', 'unless-unreviewed'] as const) {
-    for (const decision of ['approved', 'declined'] as const) {
-      it(`${pushApproval}: a file the scan could not read asks, reviews nothing, and the operator ${decision}`, () => {
-        const outcome = publish({ pushApproval, review: 'approve', decision, scan: 'unscanned' });
-        expect(outcome.asked).toBe(true);
-        expect(outcome.pushed).toBe(decision === 'approved');
-        expect(outcome.ran).not.toContain('review-commit');
-      });
+    for (const scan of ['unscanned', 'allowed'] as const) {
+      for (const decision of ['approved', 'declined'] as const) {
+        it(`${pushApproval}: ${uncleared[scan]} asks, reviews nothing, and the operator ${decision}`, () => {
+          const outcome = publish({ pushApproval, review: 'approve', decision, scan });
+          expect(outcome.asked).toBe(true);
+          expect(outcome.pushed).toBe(decision === 'approved');
+          expect(outcome.ran.includes('open-pr')).toBe(decision === 'approved');
+          expect(outcome.ran).not.toContain('review-commit');
+          // The posture decides only whether to ask, and this range asks
+          // whatever it is.
+          expect(outcome.ran).not.toContain('read-push-approval');
+        });
+      }
     }
   }
 
-  it('lets only a commit read whole and found clean skip the approval', () => {
-    const skipped = publish({
-      pushApproval: 'unless-unreviewed',
-      review: 'approve',
-      decision: 'declined',
-    });
-    expect(skipped).toMatchObject({ asked: false, pushed: true });
-    expect(
-      publish({
-        pushApproval: 'unless-unreviewed',
-        review: 'approve',
-        decision: 'declined',
-        scan: 'unscanned',
-      }),
-    ).toMatchObject({ asked: true, pushed: false });
+  it('lets only a range the scan cleared skip the approval', () => {
+    for (const pushApproval of ['never', 'unless-unreviewed'] as const) {
+      expect(
+        publish({ pushApproval, review: 'approve', decision: 'declined' }),
+        pushApproval,
+      ).toMatchObject({ asked: false, pushed: true });
+      for (const scan of ['unscanned', 'allowed'] as const) {
+        expect(
+          publish({ pushApproval, review: 'approve', decision: 'declined', scan }),
+          `${pushApproval}, ${scan}`,
+        ).toMatchObject({ asked: true, pushed: false });
+      }
+    }
   });
 
-  it('reviews only a commit the scan read whole', () => {
+  it('reads the posture only over a range the scan cleared, and the push follows a decision it asked for', () => {
+    expect(taskOrThrow('read-push-approval').when).toEqual({
+      expression: 'tasks.scan-commit.output.clean == true',
+      onMissingRef: 'skip',
+    });
+    // Each line but the first can hold only where the approval did not ask.
+    expect(taskOrThrow('push').when).toEqual({
+      anyOf: [
+        "tasks.approve-push.output.decision == 'approved'",
+        "tasks.read-push-approval.output.branchPolicy.pushApproval == 'never'",
+        "tasks.review-commit.output.verdict == 'approve'",
+      ],
+      onMissingRef: 'skip',
+    });
+  });
+
+  it('reviews only a range the scan cleared', () => {
     expect(taskOrThrow('review-commit').when).toEqual({
       allOf: [
         "tasks.read-push-approval.output.branchPolicy.pushApproval == 'unless-unreviewed'",
@@ -994,34 +1062,30 @@ describe('Publish Local Changes — the commit is scanned for secrets before any
     });
   });
 
-  it('says on the approval what the scan read, and names the files it could not', () => {
+  it('says on the approval what the scan read, and names the lines marked allowed and the files it could not read', () => {
     const instruction = taskOrThrow('approve-push').pauseInstruction ?? '';
+    expect(instruction).toContain('nothing has left the machine');
     expect(instruction).toContain(
-      'the commit was scanned for secrets and none was found in what the scan read, and nothing has left the machine',
+      'The scan read them for secrets and found none outside the lines and files listed below',
     );
-    const line = instruction.split('\n').find((l) => l.startsWith('- Files the scan could not'));
-    expect(line).toContain('`unscanned` names each file and why');
-    expect(line).toContain('no review ran');
+    const lines = instruction.split('\n');
+    const allowed = lines.find((l) => l.startsWith('- Lines marked allowed, whatever the posture'));
+    expect(allowed).toContain('`allowed` names each by file, line and rule');
+    expect(allowed).toContain('whoever wrote the change could have written');
+    expect(allowed).toContain('no review ran');
+    const unread = lines.find((l) => l.startsWith('- Files the scan could not'));
+    expect(unread).toContain('`unscanned` names each file and why');
+    expect(unread).toContain('no review ran');
+    expect(instruction).toContain(
+      "Declining leaves the branch local whatever the folder's push approval says",
+    );
     expect(instruction.length).toBeLessThanOrEqual(PAUSE_INSTRUCTION_MAX_CHARS);
-  });
-
-  it('never pushes after a decline over a commit with an unscanned file, read from the decision alone', () => {
-    const push = taskOrThrow('push') as unknown as WorkflowTask;
-    const ready = computeReadyTasksWithWhen([push], new Set(['approve-push']), new Set(), {
-      statuses: new Map([
-        ['approve-push', 'succeeded'],
-        ['review-commit', 'skipped'],
-      ]),
-      outputs: new Map<string, Record<string, unknown>>([
-        ['approve-push', { decision: 'rejected' }],
-        [
-          'read-push-approval',
-          { branchPolicy: { branchPrefix: 'aflow/', pushApproval: 'unless-unreviewed' } },
-        ],
-        ['scan-commit', { clean: false }],
-      ]),
+    // The lines themselves are shown with the approval, as the scan reported them.
+    expect(taskOrThrow('approve-push').actionPreview?.inputBindings?.['allowed']).toEqual({
+      kind: 'task_output',
+      taskId: 'scan-commit',
+      path: 'allowed',
     });
-    expect(ready.ready).toEqual([]);
   });
 
   it('reports a finding by file, line and rule, and never asks for the value', () => {
