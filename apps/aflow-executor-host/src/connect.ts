@@ -69,8 +69,7 @@ function usage(): never {
       '  --branch-prefix <p>  Publish to branches under this prefix instead of aflow/ (a git\n' +
       '                   repository with --run)\n' +
       '  --push-approval <always|never|unless-unreviewed>\n' +
-      '                   When a publication asks before pushing (default unless-unreviewed:\n' +
-      '                   it asks unless a Local Code Review approved the commit)\n' +
+      '                   When a publication asks before pushing (default always)\n' +
       '  --mcp a,b        Offer these MCP servers, without being asked\n' +
       '  --yes            Take every default and ask nothing',
   );

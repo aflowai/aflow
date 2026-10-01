@@ -6,7 +6,6 @@ The review request arrives as the inputs of this task: \`range\` is the revision
 
 How to review:
 
-- First resolve the commit the range ends at, in this checkout: \`git rev-parse --verify '<end>^{commit}'\`, where \`<end>\` is the ref after \`..\` or \`...\`, or the range itself when it names one commit. The full sha it prints is \`reviewedHead\`: the verdict is about that commit and nothing after it.
 - Read the range with git — \`git log\`, \`git diff\`, \`git show\` — and establish what each commit set out to do before judging how it did it.
 - Read every changed file whole, then read what calls into it. A change is correct or incorrect in the context that uses it, and that context is in this checkout.
 - Look for correctness errors, regressions in behaviour the range did not set out to change, security and data-exposure problems, missing or misleading tests, and drift between a contract and its implementation — a schema, an interface, a documented promise.
@@ -22,15 +21,9 @@ Edit no file, stage nothing and commit nothing. The result is the whole delivera
 
 const RESULT_SCHEMA = {
   type: 'object',
-  required: ['verdict', 'reviewedHead', 'summary', 'findings'],
+  required: ['verdict', 'summary', 'findings'],
   additionalProperties: false,
   properties: {
-    reviewedHead: {
-      type: 'string',
-      pattern: '^[0-9a-f]{40}([0-9a-f]{24})?$',
-      description:
-        'The full sha the range ended at when the review ran, as `git rev-parse` resolved it in this checkout — the commit the verdict is about.',
-    },
     verdict: {
       type: 'string',
       enum: ['approve', 'request_changes', 'comment'],
@@ -150,7 +143,7 @@ const BRIEF_MAX_TURNS = 8;
 
 const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'review-local-changes',
-  version: 6,
+  version: 5,
   name: 'Review Local Changes',
   tagline:
     "Review committed changes in a connected repository with the machine's own coding agent.",
@@ -162,9 +155,7 @@ const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
 
 **Only committed work is reviewed.** The review runs over an isolated copy of the repository at its last commit, so anything still uncommitted in the working tree is invisible to it. When the request is about work in progress, say so and ask for it to be committed first — a branch is fine — then review the range those commits make.
 
-**With the result**: report the verdict and the summary. The summary is the review — it names every finding with its severity and its file and line, blockers first, and the checks that ran — so it needs nothing added to it. The evidence behind each finding and the fix it suggests stay on the run, to be opened when someone wants them. Nothing was changed, so a finding is a proposal until someone acts on it: offer to commission the fix as its own piece of work, and never edit the files while reporting. Run the review again once a fix lands as a new commit, over the range that includes it — a verdict covers the commits it read and nothing later.
-
-**Before a publication**: the run records \`reviewedHead\`, the commit the range ended at. A Local Publish of exactly that commit, from a folder whose push approval is \`unless-unreviewed\`, pushes without asking when this verdict is \`approve\`; a review of any other commit does not count.`,
+**With the result**: report the verdict and the summary. The summary is the review — it names every finding with its severity and its file and line, blockers first, and the checks that ran — so it needs nothing added to it. The evidence behind each finding and the fix it suggests stay on the run, to be opened when someone wants them. Nothing was changed, so a finding is a proposal until someone acts on it: offer to commission the fix as its own piece of work, and never edit the files while reporting. Run the review again once a fix lands as a new commit, over the range that includes it — a verdict covers the commits it read and nothing later.`,
   tags: ['coding', 'review', 'local', 'developer-tools'],
   bundle: {
     workflow: {
@@ -265,11 +256,6 @@ const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
           },
           promoteOutputs: [
             { kind: 'output_path' as const, path: 'result.verdict', toState: 'verdict' },
-            {
-              kind: 'output_path' as const,
-              path: 'result.reviewedHead',
-              toState: 'reviewedHead',
-            },
             { kind: 'output_path' as const, path: 'result.summary', toState: 'reviewSummary' },
           ],
         },
@@ -279,15 +265,6 @@ const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
           variableId: 'verdict',
           name: 'Review verdict',
           description: 'The call on the range: approve | request_changes | comment.',
-          required: false,
-          sensitive: false,
-          immutable: false,
-        },
-        {
-          variableId: 'reviewedHead',
-          name: 'Reviewed commit',
-          description:
-            'The full sha the range ended at when the review ran — the commit the verdict is about. A publication of that commit reads it to know the commit was reviewed.',
           required: false,
           sensitive: false,
           immutable: false,

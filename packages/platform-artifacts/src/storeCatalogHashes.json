@@ -96,12 +96,12 @@
     "contentHash": "5f9151872e93be3bb7ad3b154b9a539677892df0361ad01c2579f227a27b6856"
   },
   "local-code-review": {
-    "version": 6,
+    "version": 5,
     "contentHash": "cd6f27ade9b8f319bd43cafed7e48afffb8412148560638f5181fabb505f8815"
   },
   "local-publish": {
     "version": 6,
-    "contentHash": "201ce3d72b72c1f1b68b855767707bb1d4de226f1e544b7714ac0e8ce923428f"
+    "contentHash": "044205ac2f07629ecadfe70bb6c463da2d7e5bc53439ae313982439cdf3342e7"
   },
   "newsapi": {
     "version": 1,

@@ -100,6 +100,8 @@ describe('a commission and a publication name the commit they start from', () =>
       sha: 'b'.repeat(40),
       message: 'Fix',
       baseSha: 'a'.repeat(40),
+      range: `${'a'.repeat(40)}..${'b'.repeat(40)}`,
+      pushRefspec: `${'b'.repeat(40)}:refs/heads/aflow/fix`,
     };
     const result = { state: 'applied', filesChanged: 1, files: ['x'], conflicts: [] };
     expect(

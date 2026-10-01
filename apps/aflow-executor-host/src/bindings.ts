@@ -456,7 +456,12 @@ export function requirePushAllowed(
         `Push a named branch under \`${prefix}\` forward instead.`,
       );
     }
-    if (!destination.startsWith(prefix)) {
+    // A sha source needs its destination spelled in full, since git cannot infer
+    // a ref namespace from a commit; any other namespace stays refused.
+    const branch = destination.startsWith('refs/heads/')
+      ? destination.slice('refs/heads/'.length)
+      : destination;
+    if (!branch.startsWith(prefix)) {
       refusePush(
         argv,
         `\`${destination}\` is not a branch binding \`${binding.id}\` may push`,

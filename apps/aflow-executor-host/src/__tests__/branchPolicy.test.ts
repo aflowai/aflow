@@ -124,6 +124,16 @@ describe('what a push may be', () => {
     ['a branch outside the prefix', ['git', 'push', 'origin', 'main'], allowed],
     ['a destination outside the prefix', ['git', 'push', 'origin', 'HEAD:main'], allowed],
     [
+      'a full branch ref outside the prefix',
+      ['git', 'push', 'origin', `${'c'.repeat(40)}:refs/heads/main`],
+      allowed,
+    ],
+    [
+      'a tag spelled under the prefix',
+      ['git', 'push', 'origin', `${'c'.repeat(40)}:refs/tags/aflow/x`],
+      allowed,
+    ],
+    [
       'one refspec inside the prefix and one outside',
       ['git', 'push', 'origin', 'aflow/x', 'main'],
       allowed,
@@ -144,6 +154,10 @@ describe('what a push may be', () => {
   const accepted: ReadonlyArray<readonly [string, readonly string[]]> = [
     ['a named branch under the prefix', ['git', 'push', '-u', 'origin', 'aflow/x']],
     ['HEAD onto a branch under the prefix', ['git', 'push', 'origin', 'HEAD:aflow/x']],
+    [
+      'a commit onto a full branch ref under the prefix',
+      ['git', 'push', '--set-upstream', 'origin', `${'c'.repeat(40)}:refs/heads/aflow/x`],
+    ],
     ['git reached by an absolute path', ['/usr/bin/git', 'push', 'origin', 'aflow/x']],
     ['--set-upstream spelled out', ['git', 'push', '--set-upstream', 'origin', 'aflow/x']],
     ['a push option', ['git', 'push', '-o', 'ci.skip', 'origin', 'aflow/x']],

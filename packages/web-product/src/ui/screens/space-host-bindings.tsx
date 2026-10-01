@@ -34,7 +34,7 @@ const PUSH_APPROVAL_LINE: Record<HostPushApproval, string> = {
   always: 'A publication from here asks you before every push.',
   never: 'A publication from here pushes without asking.',
   'unless-unreviewed':
-    'A publication from here asks you before pushing, unless a Local Code Review approved the commit.',
+    'A publication from here reviews its commit and asks you before pushing unless the review approves it.',
 };
 
 interface BindingsResponse {
@@ -155,9 +155,8 @@ export function SpaceHostBindingsPage() {
                       aflow/
                     </Text>
                     , never forced, unless the command is given another prefix, and a publication
-                    asks you before it pushes unless a Local Code Review approved the commit. The
-                    folder is named after itself here, made unique when another workspace already
-                    reaches it.
+                    asks you before every push unless the command says otherwise. The folder is
+                    named after itself here, made unique when another workspace already reaches it.
                   </Text>
                   <Text
                     variant="mono"

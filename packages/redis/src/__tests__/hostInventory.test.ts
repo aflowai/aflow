@@ -153,6 +153,22 @@ describe('host inventories', () => {
     expect(live[0]?.folders).toEqual([{ id: 'hb_app', spaceId: 'space-a', pushApproval: 'never' }]);
   });
 
+  it('keeps the inventory of a machine that publishes no postures at all', async () => {
+    // An executor that predates the field still offers its harnesses; dropping
+    // its whole inventory for a missing posture list would take them away.
+    const now = Date.now();
+    const { folders: _folders, ...older } = inventory('laptop', [{ id: 'claude' }]);
+    const redis = fakeRedis(
+      { [now - 1_000]: 'laptop' },
+      { [hostInventoryKey('laptop')]: JSON.stringify(older) },
+    );
+
+    const live = await readLiveHostInventories(redis, now);
+
+    expect(live.map((machine) => machine.harnesses)).toEqual([[{ id: 'claude' }]]);
+    expect(pushApprovalsForSpace(live, 'space-a').size).toBe(0);
+  });
+
   it('refuses a posture outside the three a folder can hold', async () => {
     const now = Date.now();
     const redis = fakeRedis(

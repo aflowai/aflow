@@ -2,7 +2,7 @@
  * Contract: when a publication asks before it pushes is the operator's
  * statement about the folder, held on the machine, and read back from there.
  *
- * It defaults to asking unless a review approved the commit, it is set when the
+ * It defaults to asking before every push, it is set when the
  * folder is connected and changed later from this machine, and a skill reads it
  * through the folder's own inspect operation rather than from the workspace.
  */
@@ -45,9 +45,9 @@ const FILES_ONLY = {
 };
 
 describe('the posture a folder holds', () => {
-  it('defaults to asking unless the commit was reviewed', () => {
+  it('defaults to asking before every push', () => {
     const binding = HostBindingSchema.parse(PUSHING);
-    expect(binding.branchPolicy?.pushApproval).toBe('unless-unreviewed');
+    expect(binding.branchPolicy?.pushApproval).toBe('always');
   });
 
   it('keeps a posture the policy file names', () => {
@@ -70,17 +70,21 @@ describe('the posture a folder holds', () => {
   it('says what each posture does in the words the commands print', () => {
     expect(describePushApproval('always')).toBe('asks before every push');
     expect(describePushApproval('never')).toBe('pushes without asking');
-    expect(describePushApproval('unless-unreviewed')).toContain('Local Code Review');
+    expect(describePushApproval('unless-unreviewed')).toBe(
+      'reviews the commit and asks before the push unless the review approves it',
+    );
   });
 });
 
 describe('connecting a folder', () => {
   it('takes the default without asking when nothing is said', () => {
-    expect(resolvePushApproval({ branchPrefix: 'aflow/' })).toBe('unless-unreviewed');
+    expect(resolvePushApproval({ branchPrefix: 'aflow/' })).toBe('always');
   });
 
   it('takes the posture the command names', () => {
-    expect(resolvePushApproval({ requested: 'always', branchPrefix: 'aflow/' })).toBe('always');
+    expect(resolvePushApproval({ requested: 'unless-unreviewed', branchPrefix: 'aflow/' })).toBe(
+      'unless-unreviewed',
+    );
   });
 
   it('keeps the posture a reconnected folder already holds unless one is named', () => {
@@ -110,10 +114,10 @@ describe('connecting a folder', () => {
 describe('changing it later', () => {
   it('changes only the folder named', () => {
     const before = policyWith([PUSHING, { ...PUSHING, id: 'hb_other' }]);
-    const after = withPushApproval(before, 'hb_app', 'always');
+    const after = withPushApproval(before, 'hb_app', 'unless-unreviewed');
     expect(after.bindings.map((b) => [b.id, b.branchPolicy?.pushApproval])).toEqual([
-      ['hb_app', 'always'],
-      ['hb_other', 'unless-unreviewed'],
+      ['hb_app', 'unless-unreviewed'],
+      ['hb_other', 'always'],
     ]);
     expect(after.bindings[0]?.branchPolicy?.branchPrefix).toBe('aflow/');
   });
@@ -146,7 +150,10 @@ describe('what the machine publishes', () => {
       JSON.stringify({
         version: 1,
         bindings: [
-          { ...PUSHING, branchPolicy: { branchPrefix: 'aflow/', pushApproval: 'always' } },
+          {
+            ...PUSHING,
+            branchPolicy: { branchPrefix: 'aflow/', pushApproval: 'unless-unreviewed' },
+          },
           FILES_ONLY,
           { ...PUSHING, id: 'hb_unowned', spaceId: undefined },
         ],
@@ -154,7 +161,7 @@ describe('what the machine publishes', () => {
     );
     const policy = await loadHostPolicy(policyPath);
     expect(pushPostures(policy.bindings)).toEqual([
-      { id: 'hb_app', spaceId: 'space-a', pushApproval: 'always' },
+      { id: 'hb_app', spaceId: 'space-a', pushApproval: 'unless-unreviewed' },
     ]);
   });
 });
@@ -207,23 +214,16 @@ describe('host.binding.inspect', () => {
     } as never;
   }
 
-  it('returns the folder, its branch policy with the posture, and the harnesses', async () => {
+  it('returns the folder and its branch policy with the posture, and nothing else', async () => {
     const captured: Captured = {};
     const result = await createHostHandler(policyPath).execute(
       contextFor({ bindingId: 'hb_app' }, captured),
     );
     expect(result.status).toBe('SUCCEEDED');
-    const output = HostBindingInspectOutputSchema.parse(captured.output);
-    expect(output).toEqual({
+    expect(captured.output).toEqual({
       id: 'hb_app',
-      root: '/tmp/app',
-      mode: 'readwrite',
-      allowsExecution: true,
       branchPolicy: { branchPrefix: 'aflow/', pushApproval: 'never' },
-      harnesses: [{ id: 'claude', label: 'Claude Code', model: 'opus' }],
     });
-    // What an id runs is the machine's business.
-    expect(JSON.stringify(captured.output)).not.toContain('/usr/local/bin/claude');
   });
 
   it('answers for a folder that runs nothing, and says it pushes nothing', async () => {

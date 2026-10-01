@@ -30,10 +30,6 @@ import type {
   WorkflowRunListAttentionOutputSchema as WorkflowRunListAttentionOutputSchemaT,
 } from './runAttention.js';
 import type {
-  WorkflowRunLatestInputSchema as WorkflowRunLatestInputSchemaT,
-  WorkflowRunLatestOutputSchema as WorkflowRunLatestOutputSchemaT,
-} from './runLatest.js';
-import type {
   WorkflowEvaluateInputSchema as WorkflowEvaluateInputSchemaT,
   WorkflowEvaluateOutputSchema as WorkflowEvaluateOutputSchemaT,
 } from './evaluate.js';
@@ -79,8 +75,6 @@ interface WorkflowRegistrationSchemas {
   WorkflowRunDetailOutputSchema: typeof WorkflowRunDetailOutputSchemaT;
   WorkflowRunListAttentionInputSchema: typeof WorkflowRunListAttentionInputSchemaT;
   WorkflowRunListAttentionOutputSchema: typeof WorkflowRunListAttentionOutputSchemaT;
-  WorkflowRunLatestInputSchema: typeof WorkflowRunLatestInputSchemaT;
-  WorkflowRunLatestOutputSchema: typeof WorkflowRunLatestOutputSchemaT;
   WorkflowEvaluateInputSchema: typeof WorkflowEvaluateInputSchemaT;
   WorkflowEvaluateOutputSchema: typeof WorkflowEvaluateOutputSchemaT;
   WorkflowLearnInputSchema: typeof WorkflowLearnInputSchemaT;
@@ -123,8 +117,6 @@ export function createWorkflowOperationRegistrations(
     WorkflowRunDetailOutputSchema,
     WorkflowRunListAttentionInputSchema,
     WorkflowRunListAttentionOutputSchema,
-    WorkflowRunLatestInputSchema,
-    WorkflowRunLatestOutputSchema,
     WorkflowEvaluateInputSchema,
     WorkflowEvaluateOutputSchema,
     WorkflowLearnInputSchema,
@@ -578,40 +570,6 @@ export function createWorkflowOperationRegistrations(
       accessMode: 'read',
       inputZod: WorkflowRunListAttentionInputSchema,
       outputZod: WorkflowRunListAttentionOutputSchema,
-    },
-    {
-      stepType: 'workflow',
-      group: 'run',
-      verb: 'latest',
-      name: 'Latest Workflow Run',
-      actionLabel: 'Finding the latest run…',
-      semanticDescription:
-        "Return the newest completed run of a skill in this space, with the values it promoted — optionally the newest whose promoted value equals one given, such as the review whose `reviewedHead` is the commit about to be pushed. Searches the skill's newest completed runs on the server, so a caller never pages through runs to find one.",
-      tags: ['workflow', 'run', 'observe'],
-      idempotency: 'idempotent',
-      mutates: false,
-      usage: {
-        oneLine: 'Find the newest completed run of a skill, optionally matching a promoted value.',
-        whenToUse: [
-          'A skill task deciding on the result an earlier run of another skill reached — the verdict of the review of one commit',
-          'Answering what a skill last concluded, without listing its runs',
-        ],
-        whenNotToUse: [
-          'Reading one run already known by id — use workflow.run.detail',
-          'Following a run still in flight — its outcome reaches the session that started it',
-        ],
-        pitfalls: [
-          'Only completed runs are searched; a failed or cancelled run never matches.',
-          'The match compares the promoted value exactly, so a sha must be given in full.',
-        ],
-        minimalExampleInput: {
-          slug: 'review-local-changes',
-          match: { stateVariable: 'reviewedHead', equals: '0123456789abcdef0123456789abcdef01234567' },
-        },
-      },
-      accessMode: 'read',
-      inputZod: WorkflowRunLatestInputSchema,
-      outputZod: WorkflowRunLatestOutputSchema,
     },
 
     {

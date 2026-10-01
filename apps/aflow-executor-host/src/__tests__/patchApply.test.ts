@@ -559,6 +559,10 @@ describe('appending a patch to the branch it was made on', () => {
     expect(commit?.['appended']).toBe(true);
     expect(commit?.['baseSha']).toBe(reviewed);
     expect((await git(root, 'rev-parse', 'feat/fix')).trim()).toBe(commit?.['sha']);
+    // Shas, never the branch's name: both still name this commit once the branch moves.
+    const sha = String(commit?.['sha']);
+    expect(commit?.['range']).toBe(`${reviewed}..${sha}`);
+    expect(commit?.['pushRefspec']).toBe(`${sha}:refs/heads/feat/fix`);
     expect((await git(root, 'rev-parse', 'feat/fix^')).trim()).toBe(reviewed);
     expect(await git(root, 'show', 'feat/fix:b.txt')).toBe('reviewed and fixed\n');
 

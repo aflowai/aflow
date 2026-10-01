@@ -61,8 +61,8 @@ export const WORKFLOW_TASK_SAFE_INLINE_OPERATIONS: ReadonlySet<string> = new Set
   'capability.binding.propose',
   'store.listing.install',
   'workflow.learn',
-  // Local Publish reads the verdict of the review of the commit it pushes
-  'workflow.run.latest',
+  // Waits on the run it starts until it completes; the waiter answers the task
+  'workflow.run.start',
   'agent.schedule.snooze',
 ]);
 

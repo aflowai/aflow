@@ -1059,6 +1059,10 @@ export interface PatchCommit {
   readonly baseSha: string;
   /** True when the branch existed and the commit was appended to it. */
   readonly appended: boolean;
+  /** `<baseSha>..<sha>`: what a review of this commit reads. */
+  readonly range: string;
+  /** `<sha>:refs/heads/<branch>`: what a push of this commit sends. */
+  readonly pushRefspec: string;
 }
 
 export interface PatchCommitOutcome {
@@ -1253,6 +1257,8 @@ export async function commitPatchOnBranch(
         message: recorded,
         baseSha: worktree.baseSha,
         appended: target.appended,
+        range: `${worktree.baseSha}..${sha}`,
+        pushRefspec: `${sha}:refs/heads/${branch}`,
       },
     };
   } finally {

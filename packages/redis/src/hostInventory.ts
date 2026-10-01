@@ -78,12 +78,17 @@ export const HostInventorySchema = z.object({
    *
    * Keyed by workspace as well as id: an id is unique on one machine, and two
    * machines can each offer the same one to different workspaces.
+   *
+   * Optional because an inventory that fails to parse is dropped whole: an
+   * executor that predates the field would otherwise take its harnesses and
+   * runtimes out of the space context with it. Absent reads as no postures.
    */
-  folders: z.array(
-    z.object({ id: z.string(), spaceId: z.string(), pushApproval: HostPushApprovalSchema }),
-  ),
+  folders: z
+    .array(z.object({ id: z.string(), spaceId: z.string(), pushApproval: HostPushApprovalSchema }))
+    .optional(),
 });
 export type HostInventory = z.infer<typeof HostInventorySchema>;
+export type HostInventoryFolders = NonNullable<HostInventory['folders']>;
 
 /**
  * Each folder's push posture, as the machines publishing now declare it, for
@@ -96,7 +101,7 @@ export function pushApprovalsForSpace(
 ): Map<string, HostPushApproval> {
   const postures = new Map<string, HostPushApproval>();
   for (const machine of inventories) {
-    for (const folder of machine.folders) {
+    for (const folder of machine.folders ?? []) {
       if (folder.spaceId === spaceId && !postures.has(folder.id)) {
         postures.set(folder.id, folder.pushApproval);
       }

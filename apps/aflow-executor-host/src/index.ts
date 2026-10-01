@@ -39,6 +39,7 @@ import {
   HOST_WITHDRAWAL_CHANNEL,
   hostInventoryKey,
   type HostInventory,
+  type HostInventoryFolders,
   type HostWithdrawalNotice,
   quitRedisWithTimeout,
 } from '@aflow/redis';
@@ -281,7 +282,7 @@ async function main(): Promise<void> {
   // empty list — "this machine offers no harness" and "the file was being
   // written" are different facts, and only the first should reach a workspace.
   let lastHarnesses: HostInventory['harnesses'] = [];
-  let lastFolders: HostInventory['folders'] = [];
+  let lastFolders: HostInventoryFolders = [];
 
   // Published with a lifetime rather than stored: an inventory that outlives the
   // executor describes a machine nobody is listening on, and inviting a run

@@ -30,6 +30,7 @@ const mockClaimAndSchedule = vi.fn();
 const mockReserveTaskSlots = vi.fn();
 const mockRecordTaskSkipped = vi.fn();
 const mockLoadPendingWaiters = vi.fn();
+const mockLoadParkedStepWaitersForSession = vi.fn(async (): Promise<unknown[]> => []);
 const mockMarkWaiterNotified = vi.fn();
 const mockRehydrateParkedStep = vi.fn();
 const mockAddWaiter = vi.fn();
@@ -119,6 +120,11 @@ vi.mock('@aflow/cybernetic-runtime', async () => ({
   recordTaskResult: (...args: unknown[]) => mockLedgerRecordTaskResult(...args),
   recordTaskSkipped: (...args: unknown[]) => mockRecordTaskSkipped(...args),
   loadPendingWaiters: (...args: unknown[]) => mockLoadPendingWaiters(...args),
+  // Every waiter here is a Helmsman's step or session; none is a workflow
+  // task's (workflowTaskWaiter.test.ts covers those).
+  loadWorkflowTaskByWorkerSession: vi.fn(async () => null),
+  loadParkedStepWaitersForSession: (...args: unknown[]) =>
+    mockLoadParkedStepWaitersForSession(...args),
   markWaiterNotified: (...args: unknown[]) => mockMarkWaiterNotified(...args),
   rehydrateParkedStep: (...args: unknown[]) => mockRehydrateParkedStep(...args),
   addWaiter: (...args: unknown[]) => mockAddWaiter(...args),
@@ -4063,6 +4069,35 @@ describe('reconcileStaleRunForTenant — Plan 132v2 §Phase 5.3', () => {
     expect(mockClearCompletionPending).toHaveBeenCalledOnce();
     expect(result.escalations).toBe(1);
     expect(result.operationBumps).toBe(0);
+  });
+
+  it('keeps bumping an operation task past the threshold while the run it started is live', async () => {
+    // A task that started a run is answered when that run ends; a review can
+    // outlast the whole bump budget, and its pending waiter says it is waiting.
+    mockListDueCompletionPending.mockResolvedValueOnce([buildPendingRow({ attemptCount: 30 })]);
+    mockListTaskRows.mockResolvedValue([
+      buildTaskRow({
+        taskId: 'task-a',
+        attempt: 1,
+        status: 'running',
+        sessionId: null,
+        workerSessionId: WORKER_SESSION_ID,
+      }),
+    ]);
+    mockLoadParkedStepWaitersForSession.mockResolvedValueOnce([
+      { id: 'waiter-1', runId: 'child-run', waiterSessionId: WORKER_SESSION_ID },
+    ]);
+
+    const result = await reconcileStaleRunForTenant(deps, TENANT);
+
+    expect(mockLoadParkedStepWaitersForSession).toHaveBeenCalledWith(
+      deps.db,
+      TENANT,
+      WORKER_SESSION_ID,
+    );
+    expect(mockCasCompleteTask).not.toHaveBeenCalled();
+    expect(result.escalations).toBe(0);
+    expect(result.operationBumps).toBe(1);
   });
 
   it('Plan 5.5c: operation task below threshold still bumps (no premature escalation)', async () => {

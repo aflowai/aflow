@@ -58,7 +58,7 @@ export const HostBranchPrefixSchema = branchToken(
     'and nothing else. Absent, the folder pushes nothing.',
 );
 
-export const HOST_PUSH_APPROVAL_DEFAULT = 'unless-unreviewed';
+export const HOST_PUSH_APPROVAL_DEFAULT = 'always';
 
 export const HostPushApprovalSchema = z
   .enum(['always', 'never', 'unless-unreviewed'])
@@ -66,8 +66,10 @@ export const HostPushApprovalSchema = z
     'When a publication from this folder asks the operator before it pushes. ' +
       '`always`: it asks before every push. ' +
       '`never`: it pushes without asking. ' +
-      '`unless-unreviewed`: it pushes without asking only when a Local Code Review of the ' +
-      'exact commit being pushed returned `approve`, and asks otherwise.',
+      '`unless-unreviewed`: the publication runs a Local Code Review of the commit it made and ' +
+      'pushes without asking only when that review returns `approve`. ' +
+      '`always` is the default until a publication scans its commit for secrets before the ' +
+      'push, and `unless-unreviewed` becomes the default with that scan.',
   );
 export type HostPushApproval = z.infer<typeof HostPushApprovalSchema>;
 
@@ -463,6 +465,20 @@ export const HostFilePatchOutputSchema = z.object({
       appended: z
         .boolean()
         .describe('True when the branch existed and the commit was appended to it.'),
+      range: z
+        .string()
+        .min(1)
+        .describe(
+          'The commit alone as a revision range, `<baseSha>..<sha>` — two shas and no branch ' +
+            'name, so it still names this commit after the branch moves.',
+        ),
+      pushRefspec: z
+        .string()
+        .min(1)
+        .describe(
+          'The refspec that pushes exactly this commit to its branch, `<sha>:refs/heads/<branch>`. ' +
+            'A branch that moved after the commit sends nothing it gained since.',
+        ),
     })
     .optional()
     .describe(
@@ -756,25 +772,10 @@ export const HostBindingInspectInputSchema = z.object({
 
 export const HostBindingInspectOutputSchema = z.object({
   id: z.string(),
-  root: z.string().describe('Absolute path of the folder on the operator machine.'),
-  mode: z.enum(['read', 'readwrite']),
-  allowsExecution: z.boolean(),
   branchPolicy: HostBindingBranchPolicySchema.optional().describe(
     'Which branches a push from this folder may move, and when a publication asks the ' +
       'operator before pushing. Absent, the folder pushes nothing.',
   ),
-  harnesses: z
-    .array(
-      z.object({
-        id: z.string(),
-        label: z.string().optional(),
-        model: z
-          .string()
-          .optional()
-          .describe('The model it runs when a task names none, where the operator set one.'),
-      }),
-    )
-    .describe('Coding harnesses this machine runs, by the id `host.harness.run` addresses.'),
 });
 
 export const HostOperationRegistrations: OperationRegistration[] = [
@@ -1127,7 +1128,8 @@ export const HostOperationRegistrations: OperationRegistration[] = [
         'Pass argv, not a command line: ["npm", "test"] rather than "npm test". Nothing splits a string for you, deliberately.',
         'Descendants are killed with the process on timeout or stop, so a backgrounded child does not outlive the step.',
         'Egress follows the binding. A command that reaches the network may find it closed even though it runs.',
-        "A push runs as the operator's own git, outside the sandbox, only to a branch under the folder's `branchPrefix`, never with force, with the branch named on the command and no environment or git global option; a folder without a prefix pushes nothing.",
+        "A push runs as the operator's own git, outside the sandbox, only to a branch under the folder's `branchPrefix` — named bare or as `refs/heads/<branch>` — never with force, with the branch named on the command and no environment or git global option; a folder without a prefix pushes nothing.",
+        "A push the remote refuses — a branch that moved on, a non-fast-forward — fails the step with git's own message, rather than succeeding with a non-zero `exitCode`.",
       ],
     },
     inputZod: HostProcessExecInputSchema,
@@ -1190,30 +1192,30 @@ export const HostOperationRegistrations: OperationRegistration[] = [
     stepType: 'host',
     group: 'binding',
     verb: 'inspect',
-    name: 'Inspect Connected Folder',
-    actionLabel: 'Reading the folder’s settings…',
+    name: 'Read Push Posture',
+    actionLabel: 'Reading the folder’s push posture…',
     groupDisplayName: 'Connected folders',
     groupDescription: 'What the operator declared about a folder on their own machine.',
     semanticDescription:
-      'Read what the operator declared about a connected folder, from the policy file on the ' +
-      'machine that holds it: its root, whether it may be written and run in, which branches ' +
-      'it may push and when a publication asks before pushing, and the coding harnesses that ' +
-      'machine runs. Touches nothing in the folder itself.',
+      'Read, from the policy file on the machine that holds a connected folder, which branches ' +
+      'it may push and when a publication from it asks before pushing. Touches nothing in the ' +
+      'folder itself.',
     tags: ['host', 'binding', 'local'],
     idempotency: 'idempotent',
     accessMode: 'read',
+    // A publication reads the posture as data for its own `when`; the machine
+    // block already shows it to an agent.
+    agentTool: false,
     usage: {
-      oneLine: "Read a connected folder's declared settings from its machine.",
+      oneLine: "Read a connected folder's push posture from its machine.",
       minimalExampleInput: { bindingId: 'hb_project' },
-      whenToUse: [
-        "A skill deciding a step on the folder's push posture, read where it is enforced",
-        'Checking which harness ids a machine offers before a run names one',
-      ],
+      whenToUse: ["A skill deciding whether its push asks, on the folder's posture"],
       whenNotToUse: [
         'Listing or reading files in the folder — that is host.file.list and host.file.get',
       ],
       pitfalls: [
-        'The machine holding the folder answers it, so it completes only while that machine runs its executor.',      ],
+        'The machine holding the folder answers it, so it completes only while that machine runs its executor.',
+      ],
     },
     inputZod: HostBindingInspectInputSchema,
     outputZod: HostBindingInspectOutputSchema,

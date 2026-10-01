@@ -3,11 +3,13 @@ import type postgres from 'postgres';
 /**
  * Every system profile carries `host.binding:read`.
  *
- * `host.binding.inspect` reads what the operator declared about a connected
- * folder — its root, its grants, and when a publication asks before pushing —
- * and touches nothing in the folder. Local Publish reads the push posture
- * through it on every run, so a profile without the group refuses the
- * publication at its first decision. Read Only takes it too: it is a read.
+ * `host.binding.inspect` reads a connected folder's push posture from the
+ * machine that holds it and touches nothing in the folder. Local Publish reads
+ * the posture through it on every run, so a profile without the group refuses
+ * the publication at its first decision. Read Only takes it too: it is a read.
+ *
+ * No profile gets `:write` because the group has no write: the posture is
+ * changed only on the machine, by the operator's own CLI.
  */
 export async function applyMigration213(
   sqlClient: postgres.Sql,

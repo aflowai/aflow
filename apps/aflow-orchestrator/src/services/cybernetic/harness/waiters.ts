@@ -13,6 +13,7 @@ import {
 import {
   buildWorkflowRunDetail,
   loadPendingWaiters,
+  loadWorkflowTaskByWorkerSession,
   markWaiterNotified,
   rehydrateParkedStep,
   surfaceWorkflowResumeContract,
@@ -103,6 +104,29 @@ export async function notifyWaiters(deps: HarnessDeps, args: NotifyWaitersArgs):
         await wakeSessionWaiter(deps, args, waiter, humanDecisions, runResult);
         continue;
       }
+      const parentTask = await loadWorkflowTaskByWorkerSession(
+        deps.db,
+        tenantIdStr,
+        waiter.waiterStepExecutionId,
+      );
+      if (parentTask !== null) {
+        // A task waits for the run to end, so a pause or a takeover leaves it
+        // pending; only the ending answers it.
+        if (!isRunEnding(args.outcome)) continue;
+        await answerWorkflowTask(
+          deps,
+          args,
+          { id: waiter.id, waiterStepExecutionId: waiter.waiterStepExecutionId },
+          parentTask,
+          humanDecisions,
+          runResult,
+        );
+        await markWaiterNotified(deps.db, tenantIdStr, {
+          waiterId: waiter.id,
+          outcome: args.outcome,
+        });
+        continue;
+      }
       await wakeWaiter(
         deps,
         args,
@@ -133,6 +157,57 @@ export async function notifyWaiters(deps: HarnessDeps, args: NotifyWaitersArgs):
       );
     }
   }
+}
+
+function isRunEnding(outcome: NotifyWaitersArgs['outcome']): boolean {
+  return outcome === 'completed' || outcome === 'failed' || outcome === 'cancelled';
+}
+
+/**
+ * Complete the workflow task that started this run, with the wakeup envelope
+ * as its output, through the same result path an executor's answer takes.
+ *
+ * The run's promoted output travels only when it completed: a task gates on
+ * what the child produced, and a failed or cancelled child produced nothing a
+ * gate may treat as its answer, whatever it promoted on the way.
+ */
+async function answerWorkflowTask(
+  deps: HarnessDeps,
+  args: NotifyWaitersArgs,
+  waiter: { id: string; waiterStepExecutionId: string },
+  task: { runId: string; taskId: string; attempt: number },
+  humanDecisions: readonly WorkflowRunWakeupHumanDecision[] | undefined,
+  runResult: WorkflowRunResult | undefined,
+): Promise<void> {
+  const outputRef = await buildWaiterOutputRef(
+    deps,
+    args,
+    waiter,
+    humanDecisions,
+    args.outcome === 'completed' ? runResult : undefined,
+  );
+  await addStepResult(deps.redis, {
+    messageVersion: 1,
+    tenantId: args.tenantId,
+    workflowExecution: {
+      runId: task.runId,
+      taskId: task.taskId,
+      attempt: task.attempt,
+      dispatchAttemptToken: `dispatch:${task.runId}:${task.taskId}:${String(task.attempt)}`,
+    },
+    stepExecutionId: waiter.waiterStepExecutionId as StepExecutionId,
+    parentStepExecutionId: null,
+    stepId: task.taskId as StepId,
+    stepType: 'workflow' as StepType,
+    operationId: 'workflow.run.start' as OperationId,
+    attempt: task.attempt,
+    idempotencyKey: `notify-waiter:${waiter.id}:${args.outcome}` as IdempotencyKey,
+    status: 'SUCCEEDED',
+    outputRef,
+    durationMs: 0,
+    traceId: `notify-waiter:${waiter.id}` as TraceId,
+    finishedAtMs: Date.now(),
+  });
 }
 
 async function wakeSessionWaiter(

@@ -8,16 +8,18 @@ import {
 
 /**
  * The push argv, pinned by the skill rather than bound as a whole. Only the
- * branch travels from the run; the verbs, the remote and the absence of a
- * force flag are the skill's, so no caller can turn a publish into an
- * overwrite.
+ * refspec travels from the run, and it is the commit's own,
+ * `<sha>:refs/heads/<branch>`: the push sends the commit that was approved or
+ * reviewed, never what the branch holds by then. The verbs, the remote and the
+ * absence of a force flag are the skill's, so no caller can turn a publish into
+ * an overwrite.
  */
-const PUSH_COMMAND = ['git', 'push', '--set-upstream', 'origin', { $bind: 'branch' }];
+const PUSH_COMMAND = ['git', 'push', '--set-upstream', 'origin', { $bind: 'refspec' }];
 
 /** The skill whose verdict on the commit can stand in for the operator's approval. */
 const REVIEW_SKILL_SLUG = 'review-local-changes';
 
-/** The one posture under which a review of the commit decides whether to ask. */
+/** The one posture under which the publication reviews its commit to decide whether to ask. */
 const REVIEW_GATED_POSTURE: HostPushApproval = 'unless-unreviewed';
 
 /** The run's inputs together, and so the most a diff passed as text can be. */
@@ -94,11 +96,11 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
 
 **Never pass a commission's \`patch\` text.** It is a copy for reading, cut short on a large change, and the run's inputs are capped at ${String(RUN_INPUTS_KB)} KB together. \`patchRef\` names the whole diff at any size.
 
-**When it asks before pushing**: the folder's push approval decides, and the machine block shows it as \`pushApproval\`. \`always\`: the run waits for the operator's approval before every push. \`never\`: it pushes without asking. \`unless-unreviewed\`: it pushes without asking when a Local Code Review of exactly the commit being pushed returned \`approve\`, and waits for the operator otherwise. A folder connected without naming one is \`${HOST_PUSH_APPROVAL_DEFAULT}\`. While it waits, the range can be read — Local Code Review over \`<base>..<branch>\` — and the push approved or declined on what it finds.
+**When it asks before pushing**: the folder's push approval decides, and the machine block shows it as \`pushApproval\`. \`always\`: the run waits for the operator's approval before every push. \`never\`: it pushes without asking. \`unless-unreviewed\`: the run starts a Local Code Review of the commit it made, waits for it, and pushes without asking only when it returns \`approve\` — on any other verdict, or a review that did not finish, it waits for the operator. A folder connected without naming one is \`${HOST_PUSH_APPROVAL_DEFAULT}\`, which stays the default until a publication scans its commit for secrets before the push, and \`unless-unreviewed\` becomes the default with that scan. Either way the run needs no review started beside it.
 
 **On an existing branch**: a fix that was commissioned from a branch (\`base: <branch>\` on the commission) is published onto that branch by naming it as \`branch\` and passing the commission's \`baseSha\` as \`baseSha\`; a branch is reused only that way, and a fresh change takes a fresh branch.
 
-**With the result**: report the pull request link, and whether the push was approved by the operator or cleared by the folder's push approval. Where approval was declined, report that the branch stayed on the machine and nothing was pushed — the commit is still there to publish later.`,
+**With the result**: report the pull request link, and whether the push was approved by the operator or cleared by the folder's push approval — and, where the run reviewed its commit, the verdict. Where approval was declined, report that the branch stayed on the machine and nothing was pushed — the commit is still there to publish later. Where the push failed, git's own message says why: a branch on \`origin\` that moved on is not overwritten.`,
   tags: ['coding', 'publish', 'git', 'local', 'developer-tools'],
   capabilityHints: [
     {
@@ -395,53 +397,66 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
         },
 
         {
-          taskId: 'read-review',
-          name: 'Read the review of the commit',
-          goal: 'Find the newest completed Local Code Review in this space of exactly the commit about to be pushed, and its verdict.',
+          taskId: 'review-commit',
+          name: 'Review the commit',
+          goal: 'Run a Local Code Review of exactly the commit this run made, as a run of its own, and wait for it to finish with its verdict.',
           type: 'operation' as const,
-          operation: 'workflow.run.latest',
+          operation: 'workflow.run.start',
           dependsOn: ['read-push-approval'],
-          // Only the posture that depends on a review reads one, so a verdict
-          // in this task's output always means the approval was skipped for it.
+          // Only the posture that depends on a review starts one, so a verdict
+          // here always belongs to a run whose approval it decides.
           when: {
             expression: `tasks.read-push-approval.output.branchPolicy.pushApproval == '${REVIEW_GATED_POSTURE}'`,
             onMissingRef: 'skip' as const,
           },
-          retryability: 'safe' as const,
+          // A second attempt starts a second review.
+          retryability: 'unsafe' as const,
+          maxAttempts: 1,
           inputBindings: {
-            head: { kind: 'task_output' as const, taskId: 'commit', path: 'commit.sha' },
+            bindingId: { kind: 'run_input' as const, path: 'bindingId' },
+            range: { kind: 'task_output' as const, taskId: 'commit', path: 'commit.range' },
           },
           context: {
             strategy: 'scoped' as const,
             contextPolicy: 'auto-optimize' as const,
             learnings: 'none' as const,
             capabilities: {
-              operations: ['workflow.run.latest'],
+              operations: ['workflow.run.start'],
               integrations: [],
             },
           },
           inputTemplate: {
             slug: REVIEW_SKILL_SLUG,
-            match: { stateVariable: 'reviewedHead', equals: { $bind: 'head' } },
+            inputs: {
+              bindingId: { $bind: 'bindingId' },
+              range: { $bind: 'range' },
+              depth: 'standard',
+            },
+            wait: 'until_complete',
           },
-          // No review of this commit is an answer, not a failure: the verdict
-          // reads null and the approval is asked for.
+          // A review that failed or was cancelled carries no promoted output,
+          // so its verdict reads null and the approval is asked for.
           outputProjection: {
-            verdict: { path: 'run.state.verdict', onMissing: 'null' as const },
-            reviewRunId: { path: 'run.runId', onMissing: 'null' as const },
+            verdict: { path: 'result.output.verdict', onMissing: 'null' as const },
+            outcome: { path: 'outcome', onMissing: 'error' as const },
+            reviewRunId: { path: 'runId', onMissing: 'error' as const },
           },
           outputContract: {
             schema: {
               type: 'object',
-              required: ['verdict', 'reviewRunId'],
+              required: ['verdict', 'outcome', 'reviewRunId'],
               additionalProperties: false,
               properties: {
                 verdict: {
                   type: ['string', 'null'],
                   description:
-                    'The verdict of the newest Local Code Review of the commit being pushed; null when none reviewed it.',
+                    'What the review of this commit returned: approve, request_changes or comment; null when it did not complete.',
                 },
-                reviewRunId: { type: ['string', 'null'] },
+                outcome: {
+                  type: 'string',
+                  description: 'How the review run ended: completed, failed or cancelled.',
+                },
+                reviewRunId: { type: 'string', minLength: 1 },
               },
             },
           },
@@ -450,21 +465,24 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
         {
           taskId: 'approve-push',
           name: 'Approve the push',
-          goal: 'Operator approval before anything leaves the machine, asked when the folder asks before every push, or when it asks unless reviewed and no Local Code Review of this commit approved it. Approving pushes the committed branch to origin and opens the pull request; declining leaves the branch on the machine.',
+          goal: "Operator approval before anything leaves the machine, asked when the folder asks before every push, or when it asks unless reviewed and this run's review of its commit did not approve it. Approving pushes that commit to its branch on origin and opens the pull request; declining leaves the branch on the machine.",
           type: 'human' as const,
           intent: 'approve' as const,
           failureMode: 'isolate' as const,
-          dependsOn: ['read-repository', 'read-review'],
+          dependsOn: ['read-repository', 'review-commit'],
           approves: ['commit'],
           when: {
             anyOf: [
               "tasks.read-push-approval.output.branchPolicy.pushApproval == 'always'",
-              "tasks.read-review.output.verdict != 'approve'",
+              "tasks.review-commit.output.verdict != 'approve'",
             ],
             onMissingRef: 'skip' as const,
           },
+          // The prompt is fixed text and the verdict is not a value it can
+          // carry, so each case is one line and the verdict is named where the
+          // run shows it.
           pauseInstruction:
-            "The change is committed on its branch in the connected folder and nothing has left the machine. This is asked because of the folder's push approval, shown with the commit: `always` asks before every push; `unless-unreviewed` asks because no Local Code Review of this exact commit returned `approve`. Approving pushes that branch to `origin` and then opens a pull request against the base branch. Declining leaves the branch local: nothing is pushed and no pull request is opened.",
+            "The change is committed on its branch in the connected folder and nothing has left the machine. Asked because of the folder's push approval, shown with the commit:\n- `always`: it asks before every push, and no review ran.\n- `unless-unreviewed`: this run's Local Code Review of the commit did not return `approve` — its verdict is on the \"Review the commit\" task, null where the review did not finish.\nApproving pushes exactly that commit to its branch on `origin` and then opens a pull request against the base branch. Declining leaves the branch local: nothing is pushed and no pull request is opened.",
           actionPreview: {
             op: 'host.process.exec',
             inputBindings: {
@@ -476,6 +494,11 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
                 path: 'branchPolicy.pushApproval',
               },
               commitSha: { kind: 'task_output' as const, taskId: 'commit', path: 'commit.sha' },
+              pushRefspec: {
+                kind: 'task_output' as const,
+                taskId: 'commit',
+                path: 'commit.pushRefspec',
+              },
               commitBranch: {
                 kind: 'task_output' as const,
                 taskId: 'commit',
@@ -497,21 +520,21 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
 
         {
           taskId: 'push',
-          name: 'Push the branch',
-          goal: 'Push the committed branch to origin through the connected folder’s shell, with the argv pinned by the skill.',
+          name: 'Push the commit',
+          goal: 'Push the commit this run made to its branch on origin through the connected folder’s shell, with the argv pinned by the skill. A remote that refuses the update fails the push with git’s own message.',
           type: 'operation' as const,
           operation: 'host.process.exec',
           dependsOn: ['approve-push'],
           // Gating does not propagate from the approval, so the side-effecting
           // task carries it. Each line is one way the push is cleared — the
-          // operator approved, the folder never asks, or an approving review of
-          // this commit made asking unnecessary — and none of them holds after
-          // a decline, or when nothing was committed.
+          // operator approved, the folder never asks, or this run's review of
+          // its commit approved it — and none of them holds after a decline,
+          // or when nothing was committed.
           when: {
             anyOf: [
               "tasks.approve-push.output.decision == 'approved'",
               "tasks.read-push-approval.output.branchPolicy.pushApproval == 'never'",
-              "tasks.read-review.output.verdict == 'approve'",
+              "tasks.review-commit.output.verdict == 'approve'",
             ],
             onMissingRef: 'skip' as const,
           },
@@ -519,7 +542,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           maxAttempts: 1,
           inputBindings: {
             bindingId: { kind: 'run_input' as const, path: 'bindingId' },
-            branch: { kind: 'run_input' as const, path: 'branch' },
+            refspec: { kind: 'task_output' as const, taskId: 'commit', path: 'commit.pushRefspec' },
           },
           context: {
             strategy: 'scoped' as const,
@@ -667,7 +690,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
       priority: 50,
     },
     rationale:
-      "Seven tasks, with the approval between the local half and the published half: the commit lands in a detached worktree, so a declined approval costs nothing and leaves the working tree as it was. The push argv is pinned with only the branch bound, so no caller can add a force flag; the branch prefix is a posture on the folder, enforced where the command runs. Whether the approval is asked is the folder's push approval, read from the machine with host.binding.inspect, and under unless-unreviewed the verdict of the newest Local Code Review of the exact commit, read with workflow.run.latest — data the when predicates read, so the push follows the approval or its skip and never a decline. The repository is read through the space's GitHub binding before the approval, and the pull request is that connector's createPullRequest. The folder arrives as a run input until folder roles land.",
+      "Seven tasks, the approval between the local half and the published half: the commit lands in a detached worktree, so a decline costs nothing. The push argv is pinned with only the commit's refspec bound — its sha onto its branch — so no force flag can be added and nothing the branch gained later is sent; the prefix is enforced where the command runs. Whether the approval is asked is the folder's posture, read with host.binding.inspect, and under unless-unreviewed the verdict of a Local Code Review this run starts over its own commit and waits on, since no review of a commit can exist before the run makes it — data the when predicates read, so the push follows the approval or its skip and never a decline. The repository is read through the space's GitHub binding before the approval; the folder arrives as a run input until folder roles land.",
   },
 };
 

@@ -12,7 +12,6 @@ interface SchemaField {
 }
 
 const wf = REVIEW_LOCAL_CHANGES.bundle.workflow;
-const HEAD = 'b'.repeat(40);
 const task = wf.tasks[0];
 const template = task?.inputTemplate as
   | {
@@ -96,11 +95,11 @@ describe('Review Local Changes — the first harness inside a skill', () => {
     expect(REVIEW_LOCAL_CHANGES.description).toContain('not something to ask the coding agent for');
   });
 
-  it('promotes the verdict, the commit it judged and the summary only — a promoted array reads as a preview', () => {
+  it('promotes the verdict and the summary only — a promoted array reads as a preview', () => {
     const promoted = (task?.promoteOutputs ?? []).map((p) => ('toState' in p ? p.toState : ''));
-    expect(promoted).toEqual(['verdict', 'reviewedHead', 'reviewSummary']);
+    expect(promoted).toEqual(['verdict', 'reviewSummary']);
     const declared = (wf.stateVariables ?? []).map((v) => v.variableId);
-    expect(declared).toEqual(['verdict', 'reviewedHead', 'reviewSummary']);
+    expect(declared).toEqual(['verdict', 'reviewSummary']);
     for (const id of promoted) expect(declared).toContain(id);
   });
 
@@ -118,7 +117,6 @@ describe('Review Local Changes — the first harness inside a skill', () => {
     );
     const review = {
       verdict: 'request_changes',
-      reviewedHead: HEAD,
       summary: 'The range adds a cache with no invalidation on write.',
       findings: [
         {
@@ -140,22 +138,6 @@ describe('Review Local Changes — the first harness inside a skill', () => {
     expect(validate(noVerdict)).toBe(false);
   });
 
-  it('ties the verdict to the full sha the range ended at, resolved in the checkout', () => {
-    const validate = new AjvCtor({ allErrors: true, strict: false }).compile(
-      template?.outputSchema ?? {},
-    );
-    const review = { verdict: 'approve', reviewedHead: HEAD, summary: 'Nothing found.', findings: [] };
-    expect(validate(review)).toBe(true);
-    expect(validate({ ...review, reviewedHead: 'e'.repeat(64) })).toBe(true);
-    const { reviewedHead: _head, ...noHead } = review;
-    expect(validate(noHead)).toBe(false);
-    // A short sha or a ref name is not the exact commit a publication compares.
-    expect(validate({ ...review, reviewedHead: HEAD.slice(0, 12) })).toBe(false);
-    expect(validate({ ...review, reviewedHead: 'main' })).toBe(false);
-    expect(template?.task).toContain('git rev-parse --verify');
-    expect(template?.task).toContain('`reviewedHead`');
-  });
-
   it('refuses an approval that contradicts its own findings, and admits one that does not', () => {
     // The executor compiles this schema with exactly these Ajv options
     // (`compileResultValidator`), so a conditional keyword either holds there
@@ -164,7 +146,6 @@ describe('Review Local Changes — the first harness inside a skill', () => {
       template?.outputSchema ?? {},
     );
     const base = {
-      reviewedHead: HEAD,
       summary: 'The range renames a field and updates its two callers.',
       findings: [
         {
@@ -182,7 +163,6 @@ describe('Review Local Changes — the first harness inside a skill', () => {
 
     const nitsOnly = {
       verdict: 'approve',
-      reviewedHead: HEAD,
       summary: 'The range is correct; one name reads oddly.',
       findings: [
         {
@@ -195,9 +175,7 @@ describe('Review Local Changes — the first harness inside a skill', () => {
       ],
     };
     expect(validate(nitsOnly)).toBe(true);
-    expect(
-      validate({ verdict: 'approve', reviewedHead: HEAD, summary: 'Nothing found.', findings: [] }),
-    ).toBe(true);
+    expect(validate({ verdict: 'approve', summary: 'Nothing found.', findings: [] })).toBe(true);
   });
 
   it('runs beside any number of other reviews, so a waiting publication is never queued', () => {

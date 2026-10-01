@@ -2,9 +2,12 @@
  * When a publication from a connected folder asks before it pushes.
  *
  * A posture on the folder, held in the machine's policy file beside the branch
- * prefix it qualifies. Set at connect and changed later from this machine, so
- * the appliance — the half that can be compromised — cannot quietly stop a
- * publication from asking.
+ * prefix it qualifies, set at connect and changed later only from this machine.
+ * Whether a given publication asks is decided by the orchestrator over the
+ * posture this executor relays, so an appliance that is not honest can skip
+ * the question. What it cannot do is change the posture recorded here, or move
+ * a branch the prefix does not cover, or force one: those are judged on this
+ * machine when the push runs.
  */
 import type { z } from 'zod';
 
@@ -14,7 +17,7 @@ import {
   HostPushApprovalSchema,
 } from '@aflow/schemas';
 
-import type { HostInventory } from '@aflow/redis';
+import type { HostInventoryFolders } from '@aflow/redis';
 
 import type { HostBinding, HostPolicySchema } from './bindings.js';
 
@@ -30,7 +33,7 @@ export function describePushApproval(pushApproval: HostPushApproval): string {
     case 'never':
       return 'pushes without asking';
     case 'unless-unreviewed':
-      return 'asks before a push unless a Local Code Review approved the commit being pushed';
+      return 'reviews the commit and asks before the push unless the review approves it';
   }
 }
 
@@ -73,7 +76,7 @@ export function resolvePushApproval(question: {
  * against the workspace it was connected for. A folder recording no workspace
  * reaches none, so it is left out rather than published against nothing.
  */
-export function pushPostures(bindings: ReadonlyMap<string, HostBinding>): HostInventory['folders'] {
+export function pushPostures(bindings: ReadonlyMap<string, HostBinding>): HostInventoryFolders {
   return [...bindings.values()]
     .flatMap((binding) =>
       binding.branchPolicy === undefined || binding.spaceId === undefined
