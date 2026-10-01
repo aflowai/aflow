@@ -11,8 +11,8 @@
  * The run happens in a detached worktree, never the operator's checkout. That
  * is what lets a run start while they have uncommitted work, and what makes the
  * result a diff to review rather than an edit already made. Nothing is
- * committed, the agent's git cannot move a branch or tag, and the worktree is
- * removed once its changes have been collected.
+ * committed, the agent's ordinary git is refused a branch or tag move
+ * (`refGuard.ts` names the calls that are not), and the worktree is removed once its changes have been collected.
  */
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -88,6 +88,7 @@ import {
   PUBLICATION_SCRATCH_PREFIX,
   removeWorktree,
   resolveCommit,
+  RUN_SCRATCH_DIR,
   snapshotRefs,
   utf8Prefix,
   WorktreeError,
@@ -101,7 +102,7 @@ import { installRefGuard, noRefGuardMessage, refGuardReadiness } from '../refGua
  * and it is removed before the diff is collected so the answer never reads as a
  * change to the operator's folder.
  */
-const RESULT_RELATIVE_PATH = '.aflow/result.json';
+const RESULT_RELATIVE_PATH = `${RUN_SCRATCH_DIR}/result.json`;
 /**
  * The directories under the temp root this executor adds checkouts in — a
  * harness run's scratch and a publication's. Nothing else named `aflow-` there
@@ -546,7 +547,7 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
     }
 
     const scratchDir = scratch;
-    const refGuardEnv = await installRefGuard(scratchDir);
+    const refGuardEnv = await installRefGuard(scratchDir, binding.root);
     // What the harness said, as opposed to what it printed. Set per turn, so
     // the last turn's answer is the one that comes back — the same rule the
     // run result itself follows.

@@ -100,8 +100,8 @@
     "contentHash": "cd6f27ade9b8f319bd43cafed7e48afffb8412148560638f5181fabb505f8815"
   },
   "local-publish": {
-    "version": 4,
-    "contentHash": "1fb6a52a5001d3659d1683e27aad0e555cb384117bbd305488c4738d7b964cd5"
+    "version": 5,
+    "contentHash": "efbddefab955b1b380c6efd663f14e57270a143688d3a0c19340e82234fe66e0"
   },
   "newsapi": {
     "version": 1,
