@@ -13,8 +13,8 @@
  * holding it, which is what the OS boundary is for and this is not.
  *
  * What it does bound is checkable, and Phase 0 checked it: the control stream,
- * the session state hash, another lane's job stream, write-approval grants,
- * `KEYS` and `FLUSHALL` are all refused. Redis 7 applies these key rules inside
+ * the session state hash, another lane's job stream, writing a write-approval
+ * grant, `KEYS` and `FLUSHALL` are all refused. Redis 7 applies these key rules inside
  * Lua as well, including for keys a script never declares, which is why the
  * appliance pins that major version rather than tracking latest.
  *
@@ -136,6 +136,10 @@ const HOST_KEY_PATTERNS = [
   // small output never reaches the store — while a step dispatched by the
   // orchestrator always does.
   '~aflow:payload:*',
+  // Read, never written: a push its scan did not clear goes ahead only on the
+  // grant the operator's approval minted at the authenticated boundary, and a
+  // credential that could write one could approve its own push.
+  '%R~aflow:write-approval:*',
 ] as const;
 
 /** Channels it subscribes to for aborts and session wakeups. */

@@ -148,6 +148,60 @@ describe('applyHumanReplaceOutputResolution — approve echo', () => {
   });
 });
 
+describe('applyHumanReplaceOutputResolution — the boundary records the approval', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockBump.mockResolvedValue(1);
+    mockCommitReplace.mockResolvedValue('committed');
+    mockStore.mockResolvedValue('payload:output-1');
+  });
+
+  function resolve(output: unknown, recordApproval?: (call: unknown) => Promise<void>) {
+    return applyHumanReplaceOutputResolution({
+      db: {} as never,
+      tenantIdStr: 'tenant',
+      run: run as never,
+      workflow,
+      surfaced,
+      output,
+      claimToken: 'claim-1',
+      actorUserId: 'user-1',
+      payloadStore: { store: mockStore } as never,
+      ...(recordApproval ? { recordApproval } : {}),
+      storeContext: {
+        tenantId: '00000000-0000-0000-0000-000000000001' as never,
+        runId: RUN_ID,
+        stepExecutionId: '00000000-0000-0000-0000-000000000002',
+        attempt: 1,
+      },
+    });
+  }
+
+  it('hands it the approved call before the approval is stored or committed', async () => {
+    const recordApproval = vi.fn(() => Promise.resolve());
+    const result = await resolve({ decision: 'approved' }, recordApproval);
+    expect(result.ok).toBe(true);
+    expect(recordApproval).toHaveBeenCalledWith({
+      op: 'kaggle.submit',
+      input: { path: '/tmp/sub.csv' },
+    });
+    const recorded = recordApproval.mock.invocationCallOrder[0] ?? Infinity;
+    expect(recorded).toBeLessThan(mockStore.mock.invocationCallOrder[0] ?? -1);
+    expect(recorded).toBeLessThan(mockCommitReplace.mock.invocationCallOrder[0] ?? -1);
+  });
+
+  it('commits nothing when recording fails, and records nothing for an invalid approval', async () => {
+    const failing = vi.fn(() => Promise.reject(new Error('redis down')));
+    await expect(resolve({ decision: 'approved' }, failing)).rejects.toThrow('redis down');
+    expect(mockCommitReplace).not.toHaveBeenCalled();
+
+    const recordApproval = vi.fn(() => Promise.resolve());
+    const invalid = await resolve({ decision: 'rejected' }, recordApproval);
+    expect(invalid.ok).toBe(false);
+    expect(recordApproval).not.toHaveBeenCalled();
+  });
+});
+
 describe('applyFailTaskResolution', () => {
   beforeEach(() => {
     vi.clearAllMocks();

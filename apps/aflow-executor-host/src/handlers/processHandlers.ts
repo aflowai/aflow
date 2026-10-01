@@ -10,7 +10,7 @@
  * command nobody has read; a push has been read argument by argument by
  * `requirePushAllowed` before it is spawned, and its whole purpose is to move a
  * branch on a remote the boundary cannot reach — so it runs as the operator's
- * own git, in their environment, and everything else stays confined.
+ * own git, with their transport, and everything else stays confined.
  *
  * Processes are spawned into their own group so a stop reaches descendants. A
  * command that backgrounds a child cannot outlive the step that started it.
@@ -39,6 +39,9 @@ import {
 import { createChatterStripper } from '../egressRefusals.js';
 import { EnvPolicyError } from '../envPolicy.js';
 import { explainFailedStart } from '../executableHint.js';
+import { measurePushBase } from '../pushBase.js';
+import { type PushApprovalReader, requireScannedPush } from '../scanReceipt.js';
+import { WorktreeError } from '../worktree.js';
 import {
   type HostBinding,
   HostBindingError,
@@ -109,6 +112,9 @@ async function failure(ctx: ExecutorContext, error: unknown): Promise<StepResult
         : permissionError(error.message),
     );
   }
+  if (error instanceof WorktreeError) {
+    return await failureWithError(ctx, validationError(error.message));
+  }
   const code =
     typeof error === 'object' && error !== null && 'code' in error
       ? String((error as { code: unknown }).code)
@@ -123,7 +129,11 @@ function pushFailureText(result: SandboxedRunResult): string {
   return said !== '' ? said : `git exited with ${String(result.exitCode)} and said nothing.`;
 }
 
-async function execProcess(ctx: ExecutorContext, policyPath: string): Promise<StepResult> {
+async function execProcess(
+  ctx: ExecutorContext,
+  policyPath: string,
+  approvals: PushApprovalReader,
+): Promise<StepResult> {
   const raw = await ctx.readPayload(ctx.job.inputRef);
   const parsed = HostProcessExecInputSchema.safeParse(raw);
   if (!parsed.success) {
@@ -139,7 +149,38 @@ async function execProcess(ctx: ExecutorContext, policyPath: string): Promise<St
     // the one command whose effect lands outside the boundary the sandbox can
     // enforce, and the one that then runs outside it, so what it would move is
     // read while it is still an argv.
-    requirePushAllowed(binding, input.command, { env: input.env, detach: input.detach });
+    const push = requirePushAllowed(binding, input.command, {
+      env: input.env,
+      detach: input.detach,
+    });
+    for (const [field, value] of [
+      ['pushBase', input.pushBase],
+      ['scan', input.scan],
+    ] as const) {
+      if (value !== undefined && push === undefined) {
+        return await failureWithError(
+          ctx,
+          validationError(
+            `\`${field}\` is checked before a push and belongs to no other command. Drop it, ` +
+              'or send it with the `git push` it guards.',
+          ),
+        );
+      }
+    }
+    if (push !== undefined) {
+      // In the push's own step rather than one before it, so nothing between
+      // the measure and git's own push can move the base unnoticed but the
+      // remote itself in the moment they are apart.
+      await requireScannedPush({
+        bindingId: binding.id,
+        refspecs: push.refspecs,
+        sources: push.sources,
+        pushBase: input.pushBase,
+        receipt: input.scan?.receipt,
+        measureBase: (pushBase) => measurePushBase(binding.root, push.remote, pushBase),
+        approvalFor: (requestHash) => approvals(ctx.tenantId, ctx.runId, requestHash),
+      });
+    }
 
     // Live standard error carries the adapter's own narration alongside the
     // command's, and a viewer reading the sandbox describe its sockets cannot
@@ -338,7 +379,10 @@ async function sendInput(ctx: ExecutorContext, policyPath: string): Promise<Step
   }
 }
 
-export function createHostProcessHandler(policyPath: string): {
+export function createHostProcessHandler(
+  policyPath: string,
+  approvals: PushApprovalReader,
+): {
   handles: ReadonlySet<string>;
   execute: (ctx: ExecutorContext) => Promise<StepResult>;
 } {
@@ -352,7 +396,7 @@ export function createHostProcessHandler(policyPath: string): {
     execute: async (ctx: ExecutorContext): Promise<StepResult> => {
       switch (ctx.operationId) {
         case 'host.process.exec':
-          return await execProcess(ctx, policyPath);
+          return await execProcess(ctx, policyPath, approvals);
         case 'host.process.inspect':
           return await inspectProcess(ctx, policyPath);
         case 'host.process.input':

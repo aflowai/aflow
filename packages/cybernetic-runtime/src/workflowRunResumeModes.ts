@@ -1,6 +1,11 @@
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { PayloadStore } from '@aflow/payload-store';
-import type { TenantId, Workflow, WorkflowHumanActionPreview } from '@aflow/schemas';
+import type {
+  HumanApprovalCall,
+  TenantId,
+  Workflow,
+  WorkflowHumanActionPreview,
+} from '@aflow/schemas';
 import {
   HumanApprovalOutputSchema,
   HumanApprovalResolutionInputSchema,
@@ -45,6 +50,13 @@ export interface HumanReplaceOutputContext {
   claimToken: string;
   actorUserId: string;
   payloadStore: PayloadStore;
+  /**
+   * Given only by the authenticated operator boundary, and called with the
+   * call the operator approved before the approval is committed, so whatever
+   * that call later needs to prove the decision exists before anything can
+   * dispatch it. The agent-driven resume passes none, and so mints nothing.
+   */
+  recordApproval?: (approvedCall: HumanApprovalCall) => Promise<void>;
   storeContext: {
     tenantId: TenantId;
     runId: string;
@@ -181,6 +193,9 @@ export async function applyHumanReplaceOutputResolution(
           message: 'approvedCall is required when the task declares actionPreview.',
         },
       };
+    }
+    if (validateApprove.data.approvedCall && ctx.recordApproval) {
+      await ctx.recordApproval(validateApprove.data.approvedCall);
     }
   } else {
     const schema =

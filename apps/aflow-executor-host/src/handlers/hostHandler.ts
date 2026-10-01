@@ -8,20 +8,26 @@ import type { StepHandler, ExecutorContext, StepResult } from '@aflow/executor-r
 import { failureWithError, validationError } from '@aflow/executor-runtime';
 
 import { createHostBindingHandler } from './bindingHandlers.js';
+import { createHostCommitHandler } from './commitHandlers.js';
 import { createHostFileHandler } from './fileHandlers.js';
 import { createHostHarnessHandler } from './harnessHandlers.js';
 import { createHostMcpHandler } from './mcpHandlers.js';
 import { createHostPatchHandler } from './patchHandlers.js';
 import { createHostProcessHandler } from './processHandlers.js';
 import { resolveHostTimeout } from './hostTimeout.js';
+import type { PushApprovalReader } from '../scanReceipt.js';
 
-export function createHostHandler(policyPath: string): StepHandler {
+export function createHostHandler(
+  policyPath: string,
+  pushApprovals: PushApprovalReader,
+): StepHandler {
   const files = createHostFileHandler(policyPath);
-  const processes = createHostProcessHandler(policyPath);
+  const processes = createHostProcessHandler(policyPath, pushApprovals);
   const harnesses = createHostHarnessHandler(policyPath);
   const patches = createHostPatchHandler(policyPath);
   const mcpServers = createHostMcpHandler(policyPath);
   const bindings = createHostBindingHandler(policyPath);
+  const commits = createHostCommitHandler(policyPath);
 
   return {
     stepType: 'host',
@@ -42,6 +48,9 @@ export function createHostHandler(policyPath: string): StepHandler {
       }
       if (bindings.handles.has(ctx.operationId)) {
         return await bindings.execute(ctx);
+      }
+      if (commits.handles.has(ctx.operationId)) {
+        return await commits.execute(ctx);
       }
       if (ctx.operationId.startsWith('host.file.')) {
         return await files.execute(ctx);

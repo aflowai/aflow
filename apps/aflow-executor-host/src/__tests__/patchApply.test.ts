@@ -13,7 +13,13 @@ import { promisify } from 'node:util';
 import { PayloadAccessError } from '@aflow/executor-runtime';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { PUSH_REQUIRED_OPTIONS } from '../bindings.js';
+import { createHostCommitHandler } from '../handlers/commitHandlers.js';
 import { createHostPatchHandler } from '../handlers/patchHandlers.js';
+import { createHostProcessHandler } from '../handlers/processHandlers.js';
+import { noPushApprovals } from './fixtures/pushApprovals.js';
+import { fetchedBranch, fetchHeadSource } from '../pushBase.js';
+import { issueScanReceipt } from '../scanReceipt.js';
 import { INLINE_DIFF_CAP_BYTES } from '../worktree.js';
 
 const run = promisify(execFile);
@@ -718,6 +724,392 @@ describe('appending a patch to the branch it was made on', () => {
     expect(result.error?.message ?? '').toContain('is checked out in');
     expect((await git(root, 'rev-parse', 'feat/fix')).trim()).toBe(reviewed);
   }, 30_000);
+});
+
+describe('measuring what a push of the commit would add', () => {
+  let origin: string;
+
+  /** A remote the folder has fetched from once, holding its `main` as it was then. */
+  beforeEach(async () => {
+    origin = join(base, 'origin.git');
+    await run('git', ['clone', '-q', '--bare', root, origin]);
+    await git(root, 'remote', 'add', 'origin', origin);
+    await git(root, 'fetch', '-q', 'origin');
+  });
+
+  async function commitLocally(file: string): Promise<string> {
+    await writeFile(join(root, file), `${file}\n`);
+    await git(root, 'add', '-A');
+    await git(root, 'commit', '-q', '-m', `add ${file}`);
+    return (await git(root, 'rev-parse', 'HEAD')).trim();
+  }
+
+  async function publish(commit: Record<string, string>) {
+    const patch = await diffFor(async (d) => {
+      await writeFile(join(d, 'a.txt'), 'one\nFIXED\nthree\n');
+    });
+    const captured: Captured = {};
+    const result = await createHostPatchHandler(policyPath).execute(
+      contextFor(
+        { bindingId: 'hb', patch, commit: { branch: 'aflow/x', message: 'the fix', ...commit } },
+        captured,
+      ),
+    );
+    return { result, commit: captured.output?.['commit'] as Record<string, unknown> | undefined };
+  }
+
+  it("reports every commit the push would add, the folder's own unpushed ones included", async () => {
+    const pushed = (await git(root, 'rev-parse', 'origin/main')).trim();
+    const unpushed = await commitLocally('local.txt');
+
+    const { result, commit } = await publish({ pushBase: 'main' });
+    expect(result.status).toBe('SUCCEEDED');
+    const sha = String(commit?.['sha']);
+    expect(commit?.['range']).toBe(`${unpushed}..${sha}`);
+    expect(commit?.['pushRange']).toBe(`${pushed}..${sha}`);
+    const carried = (await git(root, 'rev-list', String(commit?.['pushRange'])))
+      .split('\n')
+      .filter((line) => line !== '');
+    expect(carried).toEqual([sha, unpushed]);
+  }, 30_000);
+
+  /** Move `origin`'s `main` on from another clone, as a colleague's push does; its new sha. */
+  async function pushedElsewhere(): Promise<string> {
+    const elsewhere = join(base, 'elsewhere');
+    await run('git', ['clone', '-q', origin, elsewhere]);
+    await writeFile(join(elsewhere, 'c.txt'), 'pushed by someone else\n');
+    await git(elsewhere, 'add', '-A');
+    await git(
+      elsewhere,
+      '-c',
+      'user.email=u@e.com',
+      '-c',
+      'user.name=U',
+      'commit',
+      '-q',
+      '-m',
+      'c',
+    );
+    await git(elsewhere, 'push', '-q', 'origin', 'HEAD:main');
+    return (await git(elsewhere, 'rev-parse', 'HEAD')).trim();
+  }
+
+  it('measures against the base as the remote holds it now, not as the folder last fetched it', async () => {
+    const now = await pushedElsewhere();
+    expect((await git(root, 'rev-parse', 'origin/main')).trim()).not.toBe(now);
+
+    const { result, commit } = await publish({ pushBase: 'main' });
+    expect(result.status).toBe('SUCCEEDED');
+    expect(commit?.['pushRange']).toBe(`${now}..${String(commit?.['sha'])}`);
+  }, 30_000);
+
+  it("reads the fetch's own result where the remote's refspec does not map the base", async () => {
+    await git(root, 'config', 'remote.origin.fetch', '+refs/heads/other:refs/remotes/origin/other');
+    const stale = (await git(root, 'rev-parse', 'origin/main')).trim();
+    const now = await pushedElsewhere();
+
+    const { result, commit } = await publish({ pushBase: 'main' });
+    expect(result.status).toBe('SUCCEEDED');
+    expect(commit?.['pushRange']).toBe(`${now}..${String(commit?.['sha'])}`);
+    // The tracking ref never moved: the range came from FETCH_HEAD, not from it.
+    expect((await git(root, 'rev-parse', 'origin/main')).trim()).toBe(stale);
+  }, 30_000);
+
+  it('refuses a base the remote does not have, with nothing made', async () => {
+    const { result, commit } = await publish({ pushBase: 'no-such-branch' });
+    expect(result.status).toBe('FAILED');
+    expect(result.error?.message ?? '').toContain('could not be fetched');
+    expect(commit).toBeUndefined();
+    await expect(git(root, 'rev-parse', '--verify', 'aflow/x')).rejects.toThrow();
+  }, 30_000);
+
+  it('refuses a folder with no `origin`, naming what it measured against', async () => {
+    await git(root, 'remote', 'remove', 'origin');
+    const { result } = await publish({ pushBase: 'main' });
+    expect(result.status).toBe('FAILED');
+    expect(result.error?.message ?? '').toContain(
+      '`origin/main` is not a branch this folder can read',
+    );
+    await expect(git(root, 'rev-parse', '--verify', 'aflow/x')).rejects.toThrow();
+  }, 30_000);
+
+  it('reports no push range for a commit that names no push base', async () => {
+    const { result, commit } = await publish({});
+    expect(result.status).toBe('SUCCEEDED');
+    expect(commit?.['pushRange']).toBeUndefined();
+  }, 30_000);
+
+  describe('a branch of the same name on another remote', () => {
+    let other: string;
+    let othersMain: string;
+
+    beforeEach(async () => {
+      other = join(base, 'other.git');
+      await run('git', ['clone', '-q', '--bare', origin, other]);
+      const scratch = join(base, 'other-work');
+      await run('git', ['clone', '-q', other, scratch]);
+      await writeFile(join(scratch, 'd.txt'), 'only on the other remote\n');
+      await git(scratch, 'add', '-A');
+      await git(
+        scratch,
+        '-c',
+        'user.email=u@e.com',
+        '-c',
+        'user.name=U',
+        'commit',
+        '-q',
+        '-m',
+        'd',
+      );
+      await git(scratch, 'push', '-q', 'origin', 'HEAD:main');
+      othersMain = (await git(scratch, 'rev-parse', 'HEAD')).trim();
+      await git(root, 'remote', 'add', 'other', other);
+    });
+
+    it("is not read as origin's base when its fetch is the last FETCH_HEAD holds", async () => {
+      await git(root, 'fetch', '-q', 'origin', 'main');
+      const origins = (await git(root, 'rev-parse', 'FETCH_HEAD')).trim();
+      expect(await fetchedBranch(root, 'origin', 'main')).toBe(origins);
+
+      await git(root, 'fetch', '-q', 'other', 'main');
+      expect((await git(root, 'rev-parse', 'FETCH_HEAD')).trim()).toBe(othersMain);
+      await expect(fetchedBranch(root, 'origin', 'main')).rejects.toThrow(
+        'FETCH_HEAD no longer names it',
+      );
+      expect(await fetchedBranch(root, 'other', 'main')).toBe(othersMain);
+    }, 30_000);
+
+    it("measures against origin's base, never the other remote's", async () => {
+      const origins = (await git(root, 'ls-remote', 'origin', 'refs/heads/main')).split('\t')[0];
+      const { result, commit } = await publish({ pushBase: 'main' });
+      expect(result.status).toBe('SUCCEEDED');
+      expect(commit?.['pushRange']).toBe(`${origins ?? ''}..${String(commit?.['sha'])}`);
+      expect(origins).not.toBe(othersMain);
+    }, 30_000);
+  });
+
+  it('names a remote the way FETCH_HEAD records it', () => {
+    for (const [url, recorded] of [
+      ['https://github.com/aflowai/aflow.git', 'https://github.com/aflowai/aflow'],
+      [
+        'https://x-access-token:t0k3n@github.com/aflowai/aflow.git',
+        'https://github.com/aflowai/aflow',
+      ],
+      ['git@github.com:aflowai/aflow.git', 'github.com:aflowai/aflow'],
+      ['ssh://git@github.com/aflowai/aflow.git/', 'ssh://github.com/aflowai/aflow'],
+      ['/srv/repos/app.git/', '/srv/repos/app'],
+      ['/srv/repos/app/.git/', '/srv/repos/app/'],
+      ['/srv/me@host/app', '/srv/me@host/app'],
+      ['https://github.com/a@b/app', 'https://github.com/a@b/app'],
+    ] as const) {
+      expect(fetchHeadSource(url), url).toBe(recorded);
+    }
+  });
+
+  describe("the push checks origin's base and URL in its own step", () => {
+    /** The same folder, granted commands and pushes under `aflow/`. */
+    beforeEach(async () => {
+      const policy = JSON.parse(await readFile(policyPath, 'utf8')) as {
+        bindings: Record<string, unknown>[];
+      };
+      policy.bindings.push({
+        id: 'hb_push',
+        root,
+        mode: 'readwrite',
+        allowsExecution: true,
+        branchPolicy: { branchPrefix: 'aflow/' },
+        singleFile: false,
+        spaceId: 'space-test',
+      });
+      await writeFile(policyPath, JSON.stringify(policy));
+    });
+
+    /** A push of the range's last commit, carrying `receipt` or a clean one for the range. */
+    async function push(range: string, remote = 'origin', receipt?: string) {
+      const [from = '', sha = ''] = range.split('..');
+      const captured: Captured = {};
+      const result = await createHostProcessHandler(policyPath, noPushApprovals).execute({
+        ...(contextFor(
+          {
+            bindingId: 'hb_push',
+            command: ['git', 'push', ...PUSH_REQUIRED_OPTIONS, remote, `${sha}:refs/heads/aflow/x`],
+            pushBase: 'main',
+            scan: {
+              receipt:
+                receipt ??
+                issueScanReceipt({ bindingId: 'hb_push', base: from, sha, outcome: 'clean' }),
+            },
+          },
+          captured,
+        ) as object),
+        operationId: 'host.process.exec',
+      } as never);
+      return { result, message: result.error?.message ?? '' };
+    }
+
+    /** What `host.commit.scan` returns of `range` in the pushing folder. */
+    async function scanned(range: string): Promise<string> {
+      const captured: Captured = {};
+      const result = await createHostCommitHandler(policyPath).execute({
+        ...(contextFor({ bindingId: 'hb_push', range }, captured) as object),
+        operationId: 'host.commit.scan',
+      } as never);
+      expect(result.status, range).toBe('SUCCEEDED');
+      return String(captured.output?.['receipt']);
+    }
+
+    async function pushedBranch(remote = origin): Promise<string | undefined> {
+      const listed = await git(remote, 'ls-remote', remote, 'refs/heads/aflow/x');
+      return listed.split('\t')[0] || undefined;
+    }
+
+    async function measured(): Promise<{ range: string; from: string; sha: string }> {
+      const { commit } = await publish({ pushBase: 'main' });
+      const range = String(commit?.['pushRange']);
+      return { range, from: range.split('..')[0] ?? '', sha: range.split('..')[1] ?? '' };
+    }
+
+    it('pushes while origin holds the base the range was measured from', async () => {
+      const { range, sha } = await measured();
+      const { result } = await push(range);
+      expect(result.status).toBe('SUCCEEDED');
+      expect(await pushedBranch()).toBe(sha);
+    }, 30_000);
+
+    it('refuses a receipt that starts above where origin is, which leaves unread what the push carries', async () => {
+      const unpushed = await commitLocally('unpushed.txt');
+      const { range, from, sha } = await measured();
+      expect((await git(root, 'rev-parse', `${sha}^`)).trim()).toBe(unpushed);
+
+      // The scans a caller could choose: the commit alone, and the commit over
+      // its parent — each reads less than the push would send.
+      for (const narrow of [`${sha}..${sha}`, `${unpushed}..${sha}`]) {
+        const { result, message } = await push(range, 'origin', await scanned(narrow));
+        expect(result.status, narrow).toBe('FAILED');
+        expect(message, narrow).toContain(
+          `\`origin/main\` is at \`${from}\`, so this push sends \`${from}..${sha}\`, and its ` +
+            `receipt is for a scan of \`${narrow}\``,
+        );
+        expect(await pushedBranch()).toBeUndefined();
+      }
+
+      const { result } = await push(range, 'origin', await scanned(range));
+      expect(result.status).toBe('SUCCEEDED');
+      expect(await pushedBranch()).toBe(sha);
+    }, 30_000);
+
+    it('fails when origin moved the base forward, since the receipt is for another range', async () => {
+      const { range, from, sha } = await measured();
+      const now = await pushedElsewhere();
+      const { result, message } = await push(range);
+      expect(result.status).toBe('FAILED');
+      expect(message).toContain(
+        `\`origin/main\` is at \`${now}\`, so this push sends \`${now}..${sha}\`, and its ` +
+          `receipt is for a scan of \`${from}..${sha}\``,
+      );
+      expect(await pushedBranch()).toBeUndefined();
+    }, 30_000);
+
+    it('fails when origin rewound the base, which would send what the scan left out', async () => {
+      const unpushed = await commitLocally('leaked.txt');
+      await git(root, 'push', '-q', 'origin', 'HEAD:main');
+      const { range, from } = await measured();
+      expect(from).toBe(unpushed);
+
+      const before = (await git(root, 'rev-parse', `${unpushed}^`)).trim();
+      await git(root, 'push', '-q', '--force', 'origin', `${before}:refs/heads/main`);
+      const { result, message } = await push(range);
+      expect(result.status).toBe('FAILED');
+      expect(message).toContain(`\`origin/main\` is at \`${before}\``);
+      expect(message).toContain(`its receipt is for a scan of \`${range}\``);
+      expect(message).toContain('Nothing was pushed');
+      expect(await pushedBranch()).toBeUndefined();
+    }, 30_000);
+
+    it('reads the base as origin stores it, whatever a replace ref stands in for it', async () => {
+      const unpushed = await commitLocally('leaked.txt');
+      await git(root, 'push', '-q', 'origin', 'HEAD:main');
+      const { range, from } = await measured();
+      expect(from).toBe(unpushed);
+      const before = (await git(root, 'rev-parse', `${unpushed}^`)).trim();
+      await git(root, 'push', '-q', '--force', 'origin', `${before}:refs/heads/main`);
+      // A stand-in for the rewound base that descends from the measured one.
+      const tree = (await git(root, 'rev-parse', `${before}^{tree}`)).trim();
+      const standIn = (await git(root, 'commit-tree', tree, '-p', unpushed, '-m', 'x')).trim();
+      await git(root, 'replace', before, standIn);
+      // The planted ref bites git as the operator runs it.
+      await git(root, 'merge-base', '--is-ancestor', unpushed, before);
+
+      const { result, message } = await push(range);
+      expect(result.status).toBe('FAILED');
+      expect(message).toContain(`\`origin/main\` is at \`${before}\``);
+      expect(await pushedBranch()).toBeUndefined();
+    }, 30_000);
+
+    it('fails when origin rewrote the base onto another line, saying from where to where', async () => {
+      const { range, from } = await measured();
+      const tree = (await git(root, 'rev-parse', `${from}^{tree}`)).trim();
+      const parent = (await git(root, 'rev-parse', `${from}^`).catch(() => '')).trim();
+      const sibling = (
+        await git(root, 'commit-tree', tree, ...(parent ? ['-p', parent] : []), '-m', 'rewritten')
+      ).trim();
+      await git(root, 'push', '-q', '--force', 'origin', `${sibling}:refs/heads/main`);
+      const { result, message } = await push(range);
+      expect(result.status).toBe('FAILED');
+      expect(message).toContain(`\`origin/main\` is at \`${sibling}\``);
+      expect(message).toContain(`its receipt is for a scan of \`${from}..`);
+      expect(await pushedBranch()).toBeUndefined();
+    }, 30_000);
+
+    it('fails a push origin sends elsewhere than it fetches, naming both, with nothing pushed', async () => {
+      const { range } = await measured();
+      const elsewhere = join(base, 'push-only.git');
+      await run('git', ['init', '-q', '--bare', elsewhere]);
+      await git(root, 'config', 'remote.origin.pushurl', elsewhere);
+      const { result, message } = await push(range);
+      expect(result.status).toBe('FAILED');
+      expect(message).toContain(`A push to \`origin\` goes to \`${elsewhere}\``);
+      expect(message).toContain(`its base was fetched from \`${origin}\``);
+      expect(message).toContain('Nothing was pushed');
+      expect(await pushedBranch()).toBeUndefined();
+      expect(await pushedBranch(elsewhere)).toBeUndefined();
+    }, 30_000);
+
+    it('fails a push a `pushInsteadOf` rewrite sends elsewhere', async () => {
+      const { range } = await measured();
+      const elsewhere = join(base, 'rewritten.git');
+      await run('git', ['init', '-q', '--bare', elsewhere]);
+      await git(root, 'config', `url.${elsewhere}.pushInsteadOf`, origin);
+      const { result, message } = await push(range);
+      expect(result.status).toBe('FAILED');
+      expect(message).toContain(`goes to \`${elsewhere}\``);
+      expect(await pushedBranch(elsewhere)).toBeUndefined();
+    }, 30_000);
+
+    it('refuses the check on a push to another remote, and on anything but a push', async () => {
+      const { range } = await measured();
+      await git(root, 'remote', 'add', 'mirror', origin);
+      const other = await push(range, 'mirror');
+      expect(other.result.status).toBe('FAILED');
+      expect(other.message).toContain('This push names `mirror`');
+      expect(await pushedBranch()).toBeUndefined();
+
+      const captured: Captured = {};
+      const notPush = await createHostProcessHandler(policyPath, noPushApprovals).execute({
+        ...(contextFor(
+          {
+            bindingId: 'hb_push',
+            command: ['git', 'status'],
+            pushBase: 'main',
+          },
+          captured,
+        ) as object),
+        operationId: 'host.process.exec',
+      } as never);
+      expect(notPush.status).toBe('FAILED');
+      expect(notPush.error?.message ?? '').toContain('`pushBase` is checked before a push');
+    }, 30_000);
+  });
 });
 
 describe("a commission's diff taken by reference", () => {

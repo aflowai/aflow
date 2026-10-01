@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { configureLogging } from '@aflow/observability';
+import { getWriteApprovalGrant, hostPushRequestHash, writeApprovalGrantKey } from '@aflow/redis';
 import type { TenantId, WorkflowRunResumeInput } from '@aflow/schemas';
 
 const mockLoadRunById = vi.fn();
@@ -13,10 +14,15 @@ const mockApplyFailTaskResolution = vi.fn();
 const mockApplyRejectResolution = vi.fn();
 const mockCommitReExecute = vi.fn();
 
+const mockBumpResumeAttemptCount = vi.fn();
+const mockCommitReplaceOutput = vi.fn();
+
 vi.mock('../ledger.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../ledger.js')>();
   return {
     ...actual,
+    bumpResumeAttemptCount: (...args: unknown[]) => mockBumpResumeAttemptCount(...args),
+    commitReplaceOutputAndResume: (...args: unknown[]) => mockCommitReplaceOutput(...args),
     loadRunById: (...args: unknown[]) => mockLoadRunById(...args),
     claimResumeLease: (...args: unknown[]) => mockClaimResumeLease(...args),
     releaseResumeClaim: (...args: unknown[]) => mockReleaseResumeClaim(...args),
@@ -549,5 +555,127 @@ describe('executeOperatorWorkflowRunResume — reject skips the gated branch (re
     expect(skippedDescendantUpdates).toEqual(
       expect.arrayContaining([TASK_ID, 'submit-finalize', 'poll-lb']),
     );
+  });
+});
+
+describe('executeOperatorWorkflowRunResume — the operator approving a host push mints its grant', () => {
+  const TASK_ID = 'approve-push';
+  const PUSH = {
+    bindingId: 'folder-1',
+    refspec: `${'c'.repeat(40)}:refs/heads/aflow/x`,
+    receipt: 'receipt-unscanned',
+  };
+
+  /** Just the two commands the grant store issues, over a map. */
+  function grantRedis() {
+    const keys = new Map<string, string>();
+    return {
+      keys,
+      redis: {
+        set: vi.fn((key: string, value: string) => {
+          keys.set(key, value);
+          return Promise.resolve('OK');
+        }),
+        get: (key: string) => Promise.resolve(keys.get(key) ?? null),
+      },
+    };
+  }
+
+  function approveInput(approvedCall: { op: string; input: unknown }): WorkflowRunResumeInput {
+    return {
+      runId: RUN_ID,
+      pauseVersion: 1,
+      resolution: { mode: 'replace_output', output: { decision: 'approved', approvedCall } },
+    } as WorkflowRunResumeInput;
+  }
+
+  beforeEach(() => {
+    mockSurfaceContract.mockResolvedValue({
+      pauseVersion: 1,
+      contract: {
+        pauseCause: 'needs_decision',
+        failedTaskId: TASK_ID,
+        allowedResumeModes: ['replace_output', 'reject', 'fail'],
+        suggestedResumeCall: { op: 'workflow.run.resume', args: {} },
+      },
+    });
+    mockResolveWorkflowForRunRevision.mockResolvedValue({
+      workflow: {
+        slug: 'local-publish',
+        tasks: [
+          {
+            taskId: TASK_ID,
+            name: 'Approve the push',
+            type: 'human',
+            intent: 'approve',
+            actionPreview: { op: 'host.process.exec', input: PUSH },
+          },
+          { taskId: 'push', name: 'Push the commit' },
+        ],
+      },
+    });
+    mockLoadRunById.mockResolvedValue({
+      runId: RUN_ID,
+      spaceId: SPACE_ID,
+      status: 'paused',
+      workflowSlug: 'local-publish',
+      workflowRevision: 1,
+      resumeAttemptCount: 0,
+      pauseVersion: 1,
+      startedAt: new Date('2026-06-06T00:00:00Z'),
+      tasks: [{ taskId: TASK_ID, status: 'paused', attempt: 1 }],
+    });
+    mockBumpResumeAttemptCount.mockResolvedValue(1);
+    mockCommitReplaceOutput.mockResolvedValue('committed');
+    mockApplyRejectResolution.mockResolvedValue({
+      ok: true,
+      skippedTaskId: TASK_ID,
+      skippedDescendantTaskIds: ['push'],
+    });
+  });
+
+  async function resume(input: WorkflowRunResumeInput) {
+    const { keys, redis } = grantRedis();
+    const result = await executeOperatorWorkflowRunResume(
+      {
+        db: {} as never,
+        redis: redis as never,
+        payloadStore: { store: () => Promise.resolve('payload:approval') } as never,
+      },
+      { tenantId: TENANT, spaceId: SPACE_ID, userId: 'user-1', input },
+      hooks,
+    );
+    return { result, keys, redis };
+  }
+
+  it('grants exactly the approved push, keyed by tenant, run and its hash, before anything dispatches it', async () => {
+    const { result, keys, redis } = await resume(
+      approveInput({ op: 'host.process.exec', input: { ...PUSH, branch: 'aflow/x' } }),
+    );
+    expect(result).toEqual({ ok: true, runId: RUN_ID });
+
+    const requestHash = hostPushRequestHash(PUSH);
+    const grant = await getWriteApprovalGrant(redis as never, TENANT, RUN_ID, requestHash);
+    expect(grant).toMatchObject({ requestHash, decision: 'approved', approvedBy: 'user-1' });
+    expect([...keys.keys()]).toEqual([writeApprovalGrantKey(TENANT, RUN_ID, requestHash)]);
+    // Written before the approval commits, so the push the commit releases finds it.
+    const minted = redis.set.mock.invocationCallOrder[0] ?? Infinity;
+    expect(minted).toBeLessThan(mockCommitReplaceOutput.mock.invocationCallOrder[0] ?? -1);
+    expect(hooks.dispatchNextOrTerminate).toHaveBeenCalledOnce();
+  });
+
+  it('mints nothing for an approved call that is not a push', async () => {
+    const { result, keys } = await resume(
+      approveInput({ op: 'kaggle.submit', input: { path: '/tmp/submission.csv' } }),
+    );
+    expect(result).toEqual({ ok: true, runId: RUN_ID });
+    expect(keys.size).toBe(0);
+  });
+
+  it('mints nothing when the operator declines the push', async () => {
+    const { result, keys } = await resume(rejectInput('not this one'));
+    expect(result).toEqual({ ok: true, runId: RUN_ID });
+    expect(mockApplyRejectResolution).toHaveBeenCalledOnce();
+    expect(keys.size).toBe(0);
   });
 });

@@ -384,6 +384,85 @@ describe('applyOpTaskOutputContract — projection', () => {
     expect(failed.failureReason).toContain('Nothing has been pushed');
   });
 
+  it('fails Local Publish at the scan on a finding, naming where and saying nothing left the machine', async () => {
+    const scan = getSkillCatalogEntry('publish-local-changes')?.bundle.workflow.tasks.find(
+      (t) => t.taskId === 'scan-commit',
+    );
+    expect(scan).toBeDefined();
+    const summary =
+      'What looks like a secret is in 2 places in the 1 commit of `a..c`: ' +
+      'src/a.ts line 3 (github-token), .env line 1 (env-secret).';
+    const dirty = makeDeps({
+      [RAW_REF]: {
+        clean: false,
+        findings: [
+          { file: 'src/a.ts', line: 3, pattern: 'github-token' },
+          { file: '.env', line: 1, pattern: 'env-secret' },
+        ],
+        unscanned: [],
+        allowed: [],
+        summary,
+      },
+    });
+    const failed = await run(dirty.deps, scan as WorkflowTask);
+    expect(failed.kind).toBe('failed');
+    if (failed.kind !== 'failed') return;
+    // The scan's own summary leads, closed once rather than twice.
+    expect(failed.failureReason?.startsWith(`${summary} What the push would carry`)).toBe(true);
+    expect(failed.failureReason).toContain(
+      'The branch stayed on the machine and nothing was pushed.',
+    );
+    expect(failed.errorRetryable).toBe(false);
+
+    const range = `${'a'.repeat(40)}..${'c'.repeat(40)}`;
+    const clean = makeDeps({
+      [RAW_REF]: {
+        clean: true,
+        findings: [],
+        unscanned: [],
+        allowed: [],
+        summary: 'No secret found.',
+        unflaggedRange: range,
+        clearedRange: range,
+        receipt: 'receipt-clean',
+      },
+    });
+    const cleared = await run(clean.deps, scan as WorkflowTask);
+    expect(cleared.kind).toBe('succeeded');
+
+    // Nothing found in what was read: the scan succeeds, and `clean: false`
+    // sends the run to the approval rather than failing it here.
+    const unread = makeDeps({
+      [RAW_REF]: {
+        clean: false,
+        findings: [],
+        unscanned: [{ file: 'bundle.js', reason: 'too-large' }],
+        allowed: [],
+        summary: 'No secret found in the lines read, but not every file was read.',
+        unflaggedRange: range,
+        receipt: 'receipt-unscanned',
+      },
+    });
+    const partial = await run(unread.deps, scan as WorkflowTask);
+    expect(partial.kind).toBe('succeeded');
+
+    // A line marked allowed is not a finding: the scan succeeds, and
+    // `clean: false` sends the run to the operator, never past them.
+    const marked = makeDeps({
+      [RAW_REF]: {
+        clean: false,
+        findings: [],
+        unscanned: [],
+        allowed: [{ file: 'fixture.ts', line: 4, pattern: 'secret-assignment' }],
+        summary: 'No secret found, apart from lines marked allowed.',
+        unflaggedRange: range,
+        receipt: 'receipt-allowed',
+      },
+    });
+    const allowed = await run(marked.deps, scan as WorkflowTask);
+    expect(allowed.kind).toBe('succeeded');
+  });
+
   it('pauses (task_contract_violation) when the PROJECTED output violates the schema', async () => {
     const { deps, stored } = makeDeps({
       // status projects to a number → violates { status: string }.

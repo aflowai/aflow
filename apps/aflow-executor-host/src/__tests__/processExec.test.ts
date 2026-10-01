@@ -12,7 +12,18 @@ import { promisify } from 'node:util';
 
 import { describe, expect, it, beforeAll } from 'vitest';
 
+import { hostPushRequestHash } from '@aflow/redis';
+import type { WriteApprovalGrant } from '@aflow/schemas';
+
+import { PUSH_REQUIRED_OPTIONS } from '../bindings.js';
 import { createHostProcessHandler } from '../handlers/processHandlers.js';
+import {
+  issueScanReceipt,
+  type PushApprovalReader,
+  SCAN_RECEIPT_TTL_MS,
+  type ScanOutcome,
+} from '../scanReceipt.js';
+import { noPushApprovals, pushApprovalsHolding } from './fixtures/pushApprovals.js';
 import {
   confinedArgv,
   readWorkloadStatus,
@@ -35,11 +46,16 @@ interface Captured {
   deltas?: string[];
 }
 
+const TENANT = 'tenant-test';
+const RUN = 'run-test';
+
 /** Enough ExecutorContext for the process half, which uses very little of it. */
 function contextFor(operationId: string, input: unknown, captured: Captured): never {
   return {
     operationId,
+    tenantId: TENANT,
     spaceId: 'space-test',
+    runId: RUN,
     job: { inputRef: 'inline:x' },
     signal: new AbortController().signal,
     log: { error: () => undefined, warn: () => undefined, info: () => undefined },
@@ -295,7 +311,7 @@ describe('the wrapper, over a real process', () => {
 describe.runIf(CAN_CONFINE)('host process execution', () => {
   it('runs a command inside the binding', async () => {
     const captured: Captured = {};
-    const handler = createHostProcessHandler(policyPath);
+    const handler = createHostProcessHandler(policyPath, noPushApprovals);
     await handler.execute(
       contextFor('host.process.exec', { bindingId: 'hb', command: ['echo', 'hello'] }, captured),
     );
@@ -313,7 +329,7 @@ describe.runIf(CAN_CONFINE)('host process execution', () => {
     // that as `exit 1` with no signal, so a pipeline that produced exactly what
     // was asked of it was indistinguishable from a command that failed.
     const captured: Captured = {};
-    const handler = createHostProcessHandler(policyPath);
+    const handler = createHostProcessHandler(policyPath, noPushApprovals);
     await handler.execute(
       contextFor(
         'host.process.exec',
@@ -342,7 +358,7 @@ describe.runIf(CAN_CONFINE)('host process execution', () => {
     // arrives on exactly the stream the launcher writes its own line to. The
     // status comes from the wrapper's file instead, so the command still fails.
     const captured: Captured = {};
-    const handler = createHostProcessHandler(policyPath);
+    const handler = createHostProcessHandler(policyPath, noPushApprovals);
     await handler.execute(
       contextFor(
         'host.process.exec',
@@ -361,7 +377,7 @@ describe.runIf(CAN_CONFINE)('host process execution', () => {
     // `-c` is the launcher's option as well as the shell's, and it took it from
     // anywhere in the argv: the script was lifted out and run without `python`.
     const captured: Captured = {};
-    const handler = createHostProcessHandler(policyPath);
+    const handler = createHostProcessHandler(policyPath, noPushApprovals);
     await handler.execute(
       contextFor(
         'host.process.exec',
@@ -377,7 +393,7 @@ describe.runIf(CAN_CONFINE)('host process execution', () => {
     // The ordinary spelling, where the shell outlives the writer and reports
     // `head`'s own status. It was already right; asserted so it stays right.
     const captured: Captured = {};
-    const handler = createHostProcessHandler(policyPath);
+    const handler = createHostProcessHandler(policyPath, noPushApprovals);
     await handler.execute(
       contextFor(
         'host.process.exec',
@@ -392,7 +408,7 @@ describe.runIf(CAN_CONFINE)('host process execution', () => {
   it('still fails a command that failed for its own reason', async () => {
     // The other half of the fix: nothing about a broken pipe weakens this.
     const captured: Captured = {};
-    const handler = createHostProcessHandler(policyPath);
+    const handler = createHostProcessHandler(policyPath, noPushApprovals);
     await handler.execute(
       contextFor(
         'host.process.exec',
@@ -408,7 +424,7 @@ describe.runIf(CAN_CONFINE)('host process execution', () => {
     // this executor's own pairing state all live under home, and the policy
     // denies that region wholesale.
     const captured: Captured = {};
-    const handler = createHostProcessHandler(policyPath);
+    const handler = createHostProcessHandler(policyPath, noPushApprovals);
     await handler.execute(
       contextFor(
         'host.process.exec',
@@ -426,7 +442,7 @@ describe.runIf(CAN_CONFINE)('host process execution', () => {
     // the machine is the egress policy rather than the read policy. This test
     // exists so the property is asserted rather than discovered.
     const captured: Captured = {};
-    const handler = createHostProcessHandler(policyPath);
+    const handler = createHostProcessHandler(policyPath, noPushApprovals);
     await handler.execute(
       contextFor(
         'host.process.exec',
@@ -442,7 +458,7 @@ describe.runIf(CAN_CONFINE)('host process execution', () => {
     // process is spawned. An appliance asking for a shell in a folder the
     // operator connected for reading is refused by a file it cannot write.
     const captured: Captured = {};
-    const handler = createHostProcessHandler(policyPath);
+    const handler = createHostProcessHandler(policyPath, noPushApprovals);
     const result = await handler.execute(
       contextFor(
         'host.process.exec',
@@ -461,7 +477,7 @@ describe.runIf(CAN_CONFINE)('host process execution', () => {
     // Answering would say which process ids exist, which is information a
     // binding without execution has no business carrying.
     const captured: Captured = {};
-    const handler = createHostProcessHandler(policyPath);
+    const handler = createHostProcessHandler(policyPath, noPushApprovals);
     const result = await handler.execute(
       contextFor('host.process.inspect', { bindingId: 'hb_files', processId: 'hp_x' }, captured),
     );
@@ -470,7 +486,7 @@ describe.runIf(CAN_CONFINE)('host process execution', () => {
 
   it('refuses an unknown binding rather than running anything', async () => {
     const captured: Captured = {};
-    const handler = createHostProcessHandler(policyPath);
+    const handler = createHostProcessHandler(policyPath, noPushApprovals);
     const result = await handler.execute(
       contextFor('host.process.exec', { bindingId: 'nope', command: ['echo', 'x'] }, captured),
     );
@@ -481,7 +497,7 @@ describe.runIf(CAN_CONFINE)('host process execution', () => {
     // The spawned process is a plain Node process until the adapter's CLI
     // installs the boundary, and Node reads NODE_OPTIONS at boot.
     const captured: Captured = {};
-    const handler = createHostProcessHandler(policyPath);
+    const handler = createHostProcessHandler(policyPath, noPushApprovals);
     const result = await handler.execute(
       contextFor(
         'host.process.exec',
@@ -502,7 +518,7 @@ describe.runIf(CAN_CONFINE)('host process execution', () => {
 
   it('refuses a working directory outside the binding', async () => {
     const captured: Captured = {};
-    const handler = createHostProcessHandler(policyPath);
+    const handler = createHostProcessHandler(policyPath, noPushApprovals);
     const result = await handler.execute(
       contextFor(
         'host.process.exec',
@@ -515,7 +531,7 @@ describe.runIf(CAN_CONFINE)('host process execution', () => {
 
   it('runs in the binding root when no working directory is given', async () => {
     const captured: Captured = {};
-    const handler = createHostProcessHandler(policyPath);
+    const handler = createHostProcessHandler(policyPath, noPushApprovals);
     const result = await handler.execute(
       contextFor('host.process.exec', { bindingId: 'hb', command: ['pwd'] }, captured),
     );
@@ -527,7 +543,7 @@ describe.runIf(CAN_CONFINE)('host process execution', () => {
     // Where a command's progress usually speaks. Withheld, a build that logs
     // steadily and prints nothing at the end looks like a step doing nothing.
     const captured: Captured = { deltas: [] };
-    const handler = createHostProcessHandler(policyPath);
+    const handler = createHostProcessHandler(policyPath, noPushApprovals);
     await handler.execute(
       contextFor(
         'host.process.exec',
@@ -543,7 +559,7 @@ describe.runIf(CAN_CONFINE)('host process execution', () => {
     // the handle on exit made every completed run indistinguishable from one
     // lost to a restart.
     const captured: Captured = {};
-    const handler = createHostProcessHandler(policyPath);
+    const handler = createHostProcessHandler(policyPath, noPushApprovals);
     await handler.execute(
       contextFor('host.process.exec', { bindingId: 'hb', command: ['echo', 'done'] }, captured),
     );
@@ -571,6 +587,7 @@ describe('a push runs only where the folder allows one', () => {
   let pushBase: string;
   let repo: string;
   let pushPolicyPath: string;
+  let originMain: string;
 
   beforeAll(async () => {
     pushBase = await mkdtemp(join(tmpdir(), 'host-push-'));
@@ -583,9 +600,12 @@ describe('a push runs only where the folder allows one', () => {
     await execFileAsync('git', ['-C', repo, 'add', '-A']);
     await execFileAsync('git', ['-C', repo, 'commit', '-q', '-m', 'initial']);
     await execFileAsync('git', ['-C', repo, 'branch', 'aflow/ready']);
-    // A remote inside the folder, so the push is a real one and still lands
-    // where the boundary allows a write.
+    // `origin` is a real remote holding `main`, which every push measures what
+    // it would add against.
     await execFileAsync('git', ['init', '-q', '--bare', join(repo, 'remote.git')]);
+    await execFileAsync('git', ['-C', repo, 'remote', 'add', 'origin', join(repo, 'remote.git')]);
+    await execFileAsync('git', ['-C', repo, 'push', '-q', 'origin', 'main']);
+    originMain = (await execFileAsync('git', ['-C', repo, 'rev-parse', 'main'])).stdout.trim();
 
     pushPolicyPath = join(pushBase, 'host-policy.json');
     await writeFile(
@@ -617,7 +637,7 @@ describe('a push runs only where the folder allows one', () => {
 
   it('refuses a force before anything is spawned', async () => {
     const captured: Captured = {};
-    const result = await createHostProcessHandler(pushPolicyPath).execute(
+    const result = await createHostProcessHandler(pushPolicyPath, noPushApprovals).execute(
       contextFor(
         'host.process.exec',
         {
@@ -632,14 +652,14 @@ describe('a push runs only where the folder allows one', () => {
     // is no exit code to report.
     expect(captured.output?.['code']).toBe('PERMISSION_DENIED');
     expect(captured.output?.['exitCode']).toBeUndefined();
-    // The remote is still empty, which is the property behind the assertion.
+    // The remote holds nothing under the prefix, which is the property behind the assertion.
     const refs = await execFileAsync('git', ['-C', join(repo, 'remote.git'), 'branch', '--list']);
-    expect(refs.stdout.trim()).toBe('');
+    expect(refs.stdout).not.toContain('aflow/');
   }, 30_000);
 
   it('refuses any push from a folder that declared no prefix', async () => {
     const captured: Captured = {};
-    const result = await createHostProcessHandler(pushPolicyPath).execute(
+    const result = await createHostProcessHandler(pushPolicyPath, noPushApprovals).execute(
       contextFor(
         'host.process.exec',
         { bindingId: 'hb_nopush', command: ['git', 'push', './remote.git', 'aflow/ready'] },
@@ -655,7 +675,7 @@ describe('a push runs only where the folder allows one', () => {
     // names a config source, a program or another repository is the job choosing
     // what runs as the operator.
     const captured: Captured = {};
-    const result = await createHostProcessHandler(pushPolicyPath).execute(
+    const result = await createHostProcessHandler(pushPolicyPath, noPushApprovals).execute(
       contextFor(
         'host.process.exec',
         {
@@ -669,19 +689,19 @@ describe('a push runs only where the folder allows one', () => {
     expect(captured.output?.['code']).toBe('PERMISSION_DENIED');
     expect(captured.output?.['exitCode']).toBeUndefined();
     const refs = await execFileAsync('git', ['-C', join(repo, 'remote.git'), 'branch', '--list']);
-    expect(refs.stdout.trim()).toBe('');
+    expect(refs.stdout).not.toContain('aflow/');
   }, 30_000);
 
   it('refuses a push carrying an environment of its own', async () => {
     // The environment a push runs in is the operator's, so a job cannot add to
     // it — `GIT_SSH_COMMAND` there would be a program of the job's choosing.
     const captured: Captured = {};
-    const result = await createHostProcessHandler(pushPolicyPath).execute(
+    const result = await createHostProcessHandler(pushPolicyPath, noPushApprovals).execute(
       contextFor(
         'host.process.exec',
         {
           bindingId: 'hb_push',
-          command: ['git', 'push', './remote.git', 'aflow/ready'],
+          command: ['git', 'push', ...PUSH_REQUIRED_OPTIONS, './remote.git', 'aflow/ready'],
           env: { GIT_SSH_COMMAND: '/tmp/anything' },
         },
         captured,
@@ -690,18 +710,37 @@ describe('a push runs only where the folder allows one', () => {
     expect(result.status).toBe('FAILED');
     expect(captured.output?.['code']).toBe('PERMISSION_DENIED');
     const refs = await execFileAsync('git', ['-C', join(repo, 'remote.git'), 'branch', '--list']);
-    expect(refs.stdout.trim()).toBe('');
+    expect(refs.stdout).not.toContain('aflow/');
   }, 30_000);
+
+  /** What a scan by this executor of `origin/main..<sha>` in `hb_push` returns. */
+  function receiptFor(sha: string, outcome: ScanOutcome = 'clean', now?: number): string {
+    return issueScanReceipt({ bindingId: 'hb_push', base: originMain, sha, outcome }, now);
+  }
 
   it('lets a branch under the prefix through to the remote, as the operator’s own git', async () => {
     // Unconfined, which is why this needs no sandbox to run: the push that
     // failed in production passed the rule and then met the sandbox's proxy,
     // which git over SSH cannot authenticate to.
+    const sha = (
+      await execFileAsync('git', ['-C', repo, 'rev-parse', 'aflow/ready'])
+    ).stdout.trim();
     const captured: Captured = {};
-    const result = await createHostProcessHandler(pushPolicyPath).execute(
+    const result = await createHostProcessHandler(pushPolicyPath, noPushApprovals).execute(
       contextFor(
         'host.process.exec',
-        { bindingId: 'hb_push', command: ['git', 'push', './remote.git', 'aflow/ready'] },
+        {
+          bindingId: 'hb_push',
+          command: [
+            'git',
+            'push',
+            ...PUSH_REQUIRED_OPTIONS,
+            'origin',
+            `${sha}:refs/heads/aflow/ready`,
+          ],
+          pushBase: 'main',
+          scan: { receipt: receiptFor(sha) },
+        },
         captured,
       ),
     );
@@ -730,12 +769,20 @@ describe('a push runs only where the folder allows one', () => {
 
   async function pushCommit(sha: string, branch: string): Promise<Captured & { status: string }> {
     const captured: Captured = {};
-    const result = await createHostProcessHandler(pushPolicyPath).execute(
+    const result = await createHostProcessHandler(pushPolicyPath, noPushApprovals).execute(
       contextFor(
         'host.process.exec',
         {
           bindingId: 'hb_push',
-          command: ['git', 'push', './remote.git', `${sha}:refs/heads/${branch}`],
+          command: [
+            'git',
+            'push',
+            ...PUSH_REQUIRED_OPTIONS,
+            'origin',
+            `${sha}:refs/heads/${branch}`,
+          ],
+          pushBase: 'main',
+          scan: { receipt: receiptFor(sha) },
         },
         captured,
       ),
@@ -777,5 +824,364 @@ describe('a push runs only where the folder allows one', () => {
     expect(message).toContain('The push did not land');
     expect(message).toContain('[rejected]');
     expect(await remoteHead('aflow/moved')).toBe(landed);
+  }, 60_000);
+
+  it('sends no tag the operator’s `push.followTags` would add', async () => {
+    const initial = (await execFileAsync('git', ['-C', repo, 'rev-parse', 'main'])).stdout.trim();
+    const tagged = await commitOn(initial, 'a commit with a tag on it');
+    await execFileAsync('git', ['-C', repo, 'tag', '-a', '-m', 'unscanned', 'v-follow', tagged]);
+    await execFileAsync('git', ['-C', repo, 'config', 'push.followTags', 'true']);
+    try {
+      const unpinned = await createHostProcessHandler(pushPolicyPath, noPushApprovals).execute(
+        contextFor(
+          'host.process.exec',
+          {
+            bindingId: 'hb_push',
+            command: ['git', 'push', './remote.git', `${tagged}:refs/heads/aflow/tagged`],
+          },
+          {},
+        ),
+      );
+      expect(unpinned.status).toBe('FAILED');
+
+      const pushed = await pushCommit(tagged, 'aflow/tagged');
+      expect(pushed.status).toBe('SUCCEEDED');
+      expect(await remoteHead('aflow/tagged')).toBe(tagged);
+      const tags = await execFileAsync('git', ['-C', join(repo, 'remote.git'), 'tag', '--list']);
+      expect(tags.stdout.trim()).toBe('');
+    } finally {
+      await execFileAsync('git', ['-C', repo, 'config', '--unset', 'push.followTags']);
+    }
+  }, 60_000);
+});
+
+/**
+ * The receipt and the approval a push carries, through the handler: every
+ * refusal is named, comes before anything is spawned, and leaves the remote as
+ * it was.
+ */
+describe('a push sends only a range this executor scanned', () => {
+  let pushBase: string;
+  let repo: string;
+  let pushPolicyPath: string;
+  /** Where `origin/main` is, which every push measures from. */
+  let base: string;
+  /** Two commits on top of `base` that `origin` does not have; `tip` is the one pushed. */
+  let middle: string;
+  let tip: string;
+
+  async function commitOn(parent: string, message: string): Promise<string> {
+    const tree = (await execFileAsync('git', ['-C', repo, 'rev-parse', `${parent}^{tree}`])).stdout;
+    const made = await execFileAsync('git', [
+      '-C',
+      repo,
+      'commit-tree',
+      tree.trim(),
+      '-p',
+      parent,
+      '-m',
+      message,
+    ]);
+    return made.stdout.trim();
+  }
+
+  beforeAll(async () => {
+    pushBase = await mkdtemp(join(tmpdir(), 'host-receipt-'));
+    repo = join(pushBase, 'repo');
+    await mkdir(repo, { recursive: true });
+    await execFileAsync('git', ['init', '-q', '--initial-branch=main', repo]);
+    await execFileAsync('git', ['-C', repo, 'config', 'user.email', 't@e.com']);
+    await execFileAsync('git', ['-C', repo, 'config', 'user.name', 'T']);
+    await writeFile(join(repo, 'a.txt'), 'one\n');
+    await execFileAsync('git', ['-C', repo, 'add', '-A']);
+    await execFileAsync('git', ['-C', repo, 'commit', '-q', '-m', 'initial']);
+    base = (await execFileAsync('git', ['-C', repo, 'rev-parse', 'HEAD'])).stdout.trim();
+    await execFileAsync('git', ['init', '-q', '--bare', join(pushBase, 'remote.git')]);
+    await execFileAsync('git', [
+      '-C',
+      repo,
+      'remote',
+      'add',
+      'origin',
+      join(pushBase, 'remote.git'),
+    ]);
+    await execFileAsync('git', ['-C', repo, 'push', '-q', 'origin', 'main']);
+    middle = await commitOn(base, 'unpushed, under the commit');
+    tip = await commitOn(middle, 'the commit');
+    pushPolicyPath = join(pushBase, 'host-policy.json');
+    const binding = (id: string) => ({
+      id,
+      root: repo,
+      mode: 'readwrite',
+      allowsExecution: true,
+      branchPolicy: { branchPrefix: 'aflow/' },
+      singleFile: false,
+      spaceId: 'space-test',
+    });
+    await writeFile(
+      pushPolicyPath,
+      JSON.stringify({ version: 1, bindings: [binding('hb_push'), binding('hb_other')] }),
+    );
+  });
+
+  /** A receipt for `<from>..<sha>`, by default the whole of what a push of `tip` adds. */
+  function receipt(
+    outcome: ScanOutcome = 'clean',
+    fields: { from?: string; sha?: string; bindingId?: string; now?: number } = {},
+  ): string {
+    return issueScanReceipt(
+      {
+        bindingId: fields.bindingId ?? 'hb_push',
+        base: fields.from ?? base,
+        sha: fields.sha ?? tip,
+        outcome,
+      },
+      fields.now,
+    );
+  }
+
+  async function push(
+    input: {
+      receipt?: string;
+      refspecs?: readonly string[];
+      program?: string;
+      /** `null` sends none. */
+      pushBase?: string | null;
+      approvals?: PushApprovalReader;
+    } = {},
+  ): Promise<{ status: string; captured: Captured }> {
+    const captured: Captured = {};
+    const handler = createHostProcessHandler(pushPolicyPath, input.approvals ?? noPushApprovals);
+    const result = await handler.execute(
+      contextFor(
+        'host.process.exec',
+        {
+          bindingId: 'hb_push',
+          command: [
+            input.program ?? 'git',
+            'push',
+            ...PUSH_REQUIRED_OPTIONS,
+            'origin',
+            ...(input.refspecs ?? [`${tip}:refs/heads/aflow/x`]),
+          ],
+          ...(input.pushBase === null ? {} : { pushBase: input.pushBase ?? 'main' }),
+          ...(input.receipt !== undefined ? { scan: { receipt: input.receipt } } : {}),
+        },
+        captured,
+      ),
+    );
+    return { status: result.status, captured };
+  }
+
+  async function remoteBranches(): Promise<string> {
+    const listed = await execFileAsync('git', [
+      '-C',
+      join(pushBase, 'remote.git'),
+      'branch',
+      '--list',
+      'aflow/*',
+    ]);
+    return listed.stdout.trim();
+  }
+
+  function expectRefused(
+    outcome: { status: string; captured: Captured },
+    name: string,
+    said: string,
+  ): void {
+    expect(outcome.status, name).toBe('FAILED');
+    expect(outcome.captured.output?.['code'], name).toBe('PERMISSION_DENIED');
+    expect(String(outcome.captured.output?.['message']), name).toContain(said);
+    expect(outcome.captured.output?.['exitCode'], name).toBeUndefined();
+  }
+
+  it('refuses every push it cannot tie to a scan, naming why, with nothing pushed', async () => {
+    const valid = receipt();
+    const forged = `${valid.slice(0, valid.indexOf('.'))}.${'A'.repeat(43)}`;
+    const other = 'f'.repeat(40);
+    const cases: ReadonlyArray<readonly [string, Parameters<typeof push>[0], string]> = [
+      ['no push base', { receipt: valid, pushBase: null }, 'This push names no `pushBase`'],
+      ['no receipt', {}, 'carries no scan receipt'],
+      ['forged', { receipt: forged }, 'did not issue since it last started'],
+      [
+        'another folder',
+        { receipt: receipt('clean', { bindingId: 'hb_other' }) },
+        'a scan of `hb_other`, and pushes from `hb_push`',
+      ],
+      [
+        'stale',
+        { receipt: receipt('clean', { now: Date.now() - SCAN_RECEIPT_TTL_MS - 1 }) },
+        'more than a day ago',
+      ],
+      [
+        'another commit',
+        { receipt: receipt('clean', { sha: other }) },
+        `its receipt is for a scan of \`${base}..${other}\``,
+      ],
+      [
+        'a branch name for the source',
+        { receipt: valid, refspecs: ['main:refs/heads/aflow/x'] },
+        `This push sends \`main\`, and its receipt is for a scan of \`${base}..${tip}\``,
+      ],
+      [
+        'a second refspec',
+        { receipt: valid, refspecs: [`${tip}:refs/heads/aflow/x`, `${tip}:refs/heads/aflow/y`] },
+        'the one commit its scan ended at',
+      ],
+    ];
+    for (const [name, input, said] of cases) {
+      expectRefused(await push(input), name, said);
+    }
+    expect(await remoteBranches()).toBe('');
+  }, 60_000);
+
+  it('refuses a receipt for any range but the one from where origin is, naming both', async () => {
+    for (const [name, from] of [
+      ['<tip>..<tip>', tip],
+      ['<tip^>..<tip>', middle],
+    ] as const) {
+      expectRefused(
+        await push({ receipt: receipt('clean', { from }) }),
+        name,
+        `\`origin/main\` is at \`${base}\`, so this push sends \`${base}..${tip}\`, and its ` +
+          `receipt is for a scan of \`${from}..${tip}\``,
+      );
+    }
+    expect(await remoteBranches()).toBe('');
+
+    const whole = await push({ receipt: receipt('clean') });
+    expect(whole.status).toBe('SUCCEEDED');
+    expect(await remoteBranches()).toContain('aflow/x');
+  }, 60_000);
+
+  describe('a range its scan asked about', () => {
+    function grant(requestHash: string): WriteApprovalGrant {
+      return { requestHash, decision: 'approved', approvedBy: 'operator-1' };
+    }
+
+    for (const outcome of ['unscanned', 'allowed'] as const) {
+      it(`${outcome}: pushes only on the operator's grant for exactly this push in this run`, async () => {
+        const asked = receipt(outcome);
+        const refspec = `${tip}:refs/heads/aflow/${outcome}`;
+        const hash = hostPushRequestHash({ bindingId: 'hb_push', refspec, receipt: asked });
+        const otherHash = hostPushRequestHash({
+          bindingId: 'hb_push',
+          refspec: `${tip}:refs/heads/aflow/elsewhere`,
+          receipt: asked,
+        });
+        const why =
+          outcome === 'unscanned'
+            ? 'could not read all of it'
+            : 'found lines in it marked `aflow-scan: allow`';
+        const refusals: ReadonlyArray<readonly [string, Map<string, WriteApprovalGrant>]> = [
+          ['no grant', new Map()],
+          [
+            'a grant for another push',
+            new Map([[`${TENANT}:${RUN}:${otherHash}`, grant(otherHash)]]),
+          ],
+          ['a grant in another run', new Map([[`${TENANT}:run-other:${hash}`, grant(hash)]])],
+          [
+            'a declined push',
+            new Map([
+              [`${TENANT}:${RUN}:${hash}`, { ...grant(hash), decision: 'denied' as const }],
+            ]),
+          ],
+        ];
+        for (const [name, grants] of refusals) {
+          expectRefused(
+            await push({
+              receipt: asked,
+              refspecs: [refspec],
+              approvals: pushApprovalsHolding(grants),
+            }),
+            name,
+            `${why}, so it is pushed only once the operator has approved this push`,
+          );
+        }
+        expect(await remoteBranches()).not.toContain(`aflow/${outcome}`);
+
+        const approved = await push({
+          receipt: asked,
+          refspecs: [refspec],
+          approvals: pushApprovalsHolding(new Map([[`${TENANT}:${RUN}:${hash}`, grant(hash)]])),
+        });
+        expect(approved.status).toBe('SUCCEEDED');
+        expect(await remoteBranches()).toContain(`aflow/${outcome}`);
+      }, 60_000);
+    }
+  });
+
+  it('refuses a receipt or a push base on anything but a push', async () => {
+    for (const [field, extra] of [
+      ['scan', { scan: { receipt: receipt() } }],
+      ['pushBase', { pushBase: 'main' }],
+    ] as const) {
+      const captured: Captured = {};
+      const result = await createHostProcessHandler(pushPolicyPath, noPushApprovals).execute(
+        contextFor(
+          'host.process.exec',
+          { bindingId: 'hb_push', command: ['git', 'status'], ...extra },
+          captured,
+        ),
+      );
+      expect(result.status, field).toBe('FAILED');
+      expect(String(captured.output?.['message']), field).toContain(
+        `\`${field}\` is checked before a push`,
+      );
+    }
+  });
+
+  it("runs the push under the operator's transport and credentials, and no other git config", async () => {
+    // A git that prints the environment it was handed, at a path the push rule
+    // reads as git's; the base is measured with the real one before it runs.
+    const bin = join(pushBase, 'bin');
+    await mkdir(bin, { recursive: true });
+    await writeFile(join(bin, 'git'), '#!/bin/sh\nenv\n', { mode: 0o755 });
+    const operatorConfig = join(pushBase, 'operator.gitconfig');
+    await writeFile(operatorConfig, '');
+    const refused: Record<string, string> = {
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: 'remote.origin.pushurl',
+      GIT_CONFIG_VALUE_0: '/elsewhere.git',
+      GIT_CONFIG_PARAMETERS: "'remote.origin.pushurl'='/elsewhere.git'",
+      GIT_CONFIG_SYSTEM: join(pushBase, 'system-config'),
+      AFLOW_UNRELATED: 'kept out',
+    };
+    const carried: Record<string, string> = {
+      // The operator's own global config, read by their git as by the measure.
+      GIT_CONFIG_GLOBAL: operatorConfig,
+      SSH_AUTH_SOCK: join(pushBase, 'agent.sock'),
+      GH_TOKEN: 'operator-gh-credential',
+      GITHUB_TOKEN: 'operator-github-credential',
+      GIT_ASKPASS: join(pushBase, 'askpass'),
+      SSH_ASKPASS: join(pushBase, 'ssh-askpass'),
+      DISPLAY: ':0',
+    };
+    const planted = { ...refused, ...carried };
+    const saved = new Map(Object.keys(planted).map((name) => [name, process.env[name]]));
+    Object.assign(process.env, planted);
+    try {
+      const { status, captured } = await push({ receipt: receipt(), program: join(bin, 'git') });
+      expect(status).toBe('SUCCEEDED');
+      const handed = new Map(
+        String(captured.output?.['stdout'])
+          .split('\n')
+          .filter((line) => line.includes('='))
+          .map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]),
+      );
+      for (const name of Object.keys(refused)) expect(handed.has(name), name).toBe(false);
+      for (const [name, value] of Object.entries(carried)) {
+        expect(handed.get(name), name).toBe(value);
+      }
+      expect([...handed.keys()].filter((name) => name.startsWith('GIT_CONFIG_'))).toEqual([
+        'GIT_CONFIG_GLOBAL',
+      ]);
+      expect(handed.get('GIT_NO_REPLACE_OBJECTS')).toBe('1');
+    } finally {
+      for (const [name, value] of saved) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
   }, 60_000);
 });

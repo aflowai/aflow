@@ -33,6 +33,7 @@ import {
   getExecutorRedisConfig,
   type RedisConfig,
   getRedisConnection,
+  getWriteApprovalGrant,
   HOST_INVENTORY_REFRESH_MS,
   HOST_INVENTORY_TTL_SECONDS,
   HOST_MACHINES_KEY,
@@ -208,7 +209,11 @@ async function main(): Promise<void> {
     });
   }
 
-  runtime.registerHandler(createHostHandler(policyPath));
+  runtime.registerHandler(
+    createHostHandler(policyPath, (tenantId, runId, requestHash) =>
+      getWriteApprovalGrant(redis, tenantId, runId, requestHash),
+    ),
+  );
 
   // Withdrawal reaches running work without waiting for the next request. A
   // detached command exists so the step can end, so ordinarily no request

@@ -18,7 +18,7 @@
  * dependencies are linked into it: without them a harness asked to run the
  * tests reaches for a package registry the boundary denies.
  */
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import type { Dirent } from 'node:fs';
 import {
@@ -34,7 +34,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, isAbsolute, join, sep } from 'node:path';
+import { dirname, isAbsolute, join, resolve as resolvePath, sep } from 'node:path';
 import { promisify } from 'node:util';
 
 const run = promisify(execFile);
@@ -84,6 +84,7 @@ export class WorktreeError extends Error {
       | 'no_identity'
       | 'unknown_ref'
       | 'stale_base'
+      | 'push_target_differs'
       | 'fetch_failed',
   ) {
     super(message);
@@ -129,6 +130,15 @@ const GIT_SAFETY_ARGS = [
 ];
 
 /**
+ * Objects read as they are stored, never as `refs/replace/*` substitutes them.
+ * A push sends the stored objects, so a replacement would have the scan, the
+ * measure of the push range and the review read one commit while `origin`
+ * receives another. In the environment rather than as `--no-replace-objects`
+ * so it reaches the git a coding agent runs in its checkout too.
+ */
+export const NO_REPLACE_OBJECTS_ENV = { GIT_NO_REPLACE_OBJECTS: '1' } as const;
+
+/**
  * Minimal, and deliberately without `REDIS_URL` or `PHOENIX_INSTANCE_SECRET`.
  * `PATH` and `HOME` are what git needs to find itself and its config; the rest
  * of this executor's environment is none of its business.
@@ -138,6 +148,7 @@ function gitEnv(globalConfig: 'withheld' | 'read' = 'withheld'): Record<string, 
     GIT_TERMINAL_PROMPT: '0',
     GIT_CONFIG_NOSYSTEM: '1',
     GIT_OPTIONAL_LOCKS: '0',
+    ...NO_REPLACE_OBJECTS_ENV,
   };
   // Withheld for everything that checks out, stages or commits — which is
   // everything but the two identity strings read below.
@@ -175,6 +186,157 @@ async function git(
     env: { ...gitEnv(), ...env },
   });
   return stdout;
+}
+
+/**
+ * Bytes cut into lines, each held to at most `maxLineBytes` while it is read:
+ * the rest of a longer line is counted and dropped, never buffered. Each line
+ * is handed over with its whole length in bytes, so a line longer than what
+ * was handed over says so.
+ */
+export class LineCutter {
+  private parts: Buffer[] = [];
+  private held = 0;
+  private bytes = 0;
+  private pending = false;
+
+  constructor(
+    private readonly maxLineBytes: number,
+    private readonly onLine: (line: string, bytes: number) => void,
+  ) {}
+
+  push(chunk: Buffer): void {
+    let start = 0;
+    while (start <= chunk.length) {
+      const newline = chunk.indexOf(0x0a, start);
+      const end = newline === -1 ? chunk.length : newline;
+      this.hold(chunk.subarray(start, end));
+      if (newline === -1) return;
+      this.emit();
+      start = newline + 1;
+    }
+  }
+
+  /** Hand over a last line that no newline ended. */
+  end(): void {
+    if (this.pending) this.emit();
+  }
+
+  private hold(segment: Buffer): void {
+    if (segment.length === 0) return;
+    this.pending = true;
+    this.bytes += segment.length;
+    const room = this.maxLineBytes - this.held;
+    if (segment.length > room) {
+      if (room > 0) this.parts.push(segment.subarray(0, room));
+      this.held = this.maxLineBytes;
+      return;
+    }
+    this.parts.push(segment);
+    this.held += segment.length;
+  }
+
+  private emit(): void {
+    let line = Buffer.concat(this.parts).toString('utf8');
+    let bytes = this.bytes;
+    if (bytes <= this.maxLineBytes && line.endsWith('\r')) {
+      line = line.slice(0, -1);
+      bytes -= 1;
+    }
+    this.parts = [];
+    this.held = 0;
+    this.bytes = 0;
+    this.pending = false;
+    this.onLine(line, bytes);
+  }
+}
+
+/**
+ * What git prints for `args`, handed over a line at a time and never held
+ * whole: for output whose size belongs to the repository rather than to this
+ * lane, such as every commit of a range. A line past `maxLineBytes` is handed
+ * over cut to that length, with its whole length beside it. Past `maxBytes` or `timeoutMs` git is
+ * killed and the read refused, so a caller never mistakes part of the output
+ * for all of it.
+ */
+export async function forEachGitLine(
+  cwd: string,
+  args: readonly string[],
+  limits: {
+    readonly maxBytes: number;
+    readonly maxLineBytes: number;
+    readonly timeoutMs: number;
+  },
+  onLine: (line: string, bytes: number) => void,
+): Promise<void> {
+  const lines = new LineCutter(limits.maxLineBytes, onLine);
+  await forEachGitChunk(cwd, args, limits, (chunk) => {
+    lines.push(chunk);
+  });
+  lines.end();
+}
+
+/**
+ * What git prints for `args`, handed over in the chunks it arrives in, with
+ * `stdin` written to it first: for output that is not lines, such as
+ * `cat-file --batch`. The same limits and refusals as `forEachGitLine`.
+ */
+export async function forEachGitChunk(
+  cwd: string,
+  args: readonly string[],
+  limits: { readonly maxBytes: number; readonly timeoutMs: number },
+  onChunk: (chunk: Buffer) => void,
+  stdin?: string,
+): Promise<void> {
+  const child = spawn('git', ['-C', cwd, ...GIT_SAFETY_ARGS, ...args], {
+    env: gitEnv(),
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  // git may exit before reading all of it; its exit status says why.
+  child.stdin.on('error', () => undefined);
+  child.stdin.end(stdin ?? '');
+  let stderr = '';
+  child.stderr.setEncoding('utf8');
+  child.stderr.on('data', (chunk: string) => {
+    if (stderr.length < 4096) stderr += chunk;
+  });
+  const exited = new Promise<number | null>((resolveExit, rejectExit) => {
+    child.once('error', rejectExit);
+    child.once('close', resolveExit);
+  });
+  // Awaited after the read; this only keeps a spawn failure from reading as unhandled meanwhile.
+  exited.catch(() => undefined);
+
+  let refusal: string | undefined;
+  const timer = setTimeout(() => {
+    refusal = `git did not finish within ${String(limits.timeoutMs / 1000)} seconds.`;
+    child.kill('SIGKILL');
+  }, limits.timeoutMs);
+  let readBytes = 0;
+  try {
+    for await (const chunk of child.stdout as AsyncIterable<Buffer>) {
+      readBytes += chunk.length;
+      if (readBytes > limits.maxBytes) {
+        refusal = `git printed more than ${String(limits.maxBytes / (1024 * 1024))} MB.`;
+        child.kill('SIGKILL');
+        break;
+      }
+      onChunk(chunk);
+    }
+    const code = await exited;
+    if (refusal !== undefined) throw new WorktreeError(refusal, 'git_failed');
+    if (code !== 0) {
+      throw new WorktreeError(stderr.split('\n')[0] || `git exited ${String(code)}`, 'git_failed');
+    }
+  } finally {
+    clearTimeout(timer);
+    if (child.exitCode === null) child.kill('SIGKILL');
+  }
+}
+
+/** How many commits `<base>..<head>` holds. */
+export async function countCommits(root: string, base: string, head: string): Promise<number> {
+  return Number((await git(root, ['rev-list', '--count', `${base}..${head}`])).trim());
 }
 
 /**
@@ -450,10 +612,9 @@ export async function resolveCommit(root: string, ref: string): Promise<string> 
   }
 }
 
-// How the operator's git reaches a remote when it is not in their config: the
-// ssh agent and ssh command, the proxy (curl reads `http_proxy` only in lower
-// case, so both spellings travel), the CA bundle a corporate proxy needs, and
-// `XDG_CONFIG_HOME`, where git finds a global config kept outside `~`.
+// How the operator's git reaches a remote, and proves who it is there, outside their
+// config: ssh agent and command, proxy (curl reads `http_proxy` only in lower case, so
+// both spellings travel), CA bundle, a global config outside `~`, and credentials.
 const TRANSPORT_ENV = [
   'SSH_AUTH_SOCK',
   'GIT_SSH_COMMAND',
@@ -466,10 +627,15 @@ const TRANSPORT_ENV = [
   'SSL_CERT_FILE',
   'GIT_SSL_CAINFO',
   'XDG_CONFIG_HOME',
+  'GH_TOKEN', // what the `gh` credential helper their config names answers with
+  'GITHUB_TOKEN',
+  'GIT_ASKPASS', // how git and ssh ask for a password or passphrase with no terminal
+  'SSH_ASKPASS',
+  'DISPLAY', // where a graphical askpass opens
 ] as const;
 
 /**
- * The environment a fetch reaches a remote with: the operator's own transport.
+ * The environment a fetch or a push reaches a remote with: the operator's transport.
  *
  * Their credential helper, `sshCommand` and `insteadOf` rewrites live in the
  * system and global config, and their keys in the ssh agent, so a fetch without
@@ -477,7 +643,7 @@ const TRANSPORT_ENV = [
  * what `gitEnv` closes: a fetch checks nothing out and stages nothing, so no
  * filter runs, and the hooks stay off through `GIT_SAFETY_ARGS`.
  */
-function transportEnv(): Record<string, string> {
+export function transportEnv(): Record<string, string> {
   const env = gitEnv('read');
   delete env['GIT_CONFIG_NOSYSTEM'];
   for (const name of TRANSPORT_ENV) {
@@ -488,7 +654,7 @@ function transportEnv(): Record<string, string> {
 }
 
 /** Whether `ref` is a ref name git would store, rather than a refspec. */
-async function isPlainRefName(root: string, ref: string): Promise<boolean> {
+export async function isPlainRefName(root: string, ref: string): Promise<boolean> {
   // A leading `+` forces and a `:` names a destination: either would turn the
   // fetch into a write to one of the operator's branches.
   if (ref.startsWith('+')) return false;
@@ -510,23 +676,31 @@ async function isPlainRefName(root: string, ref: string): Promise<boolean> {
  * it is.
  */
 export async function fetchRemoteBase(root: string, base: string): Promise<void> {
-  let remotes: string[];
-  try {
-    remotes = (await git(root, ['remote']))
-      .split('\n')
-      .map((name) => name.trim())
-      .filter((name) => name !== '');
-  } catch {
-    return;
-  }
   // Longest first: remote names may themselves contain a slash.
-  const remote = remotes
+  const remote = (await remoteNames(root))
     .filter((name) => base.startsWith(`${name}/`) && base.length > name.length + 1)
     .sort((a, b) => b.length - a.length)[0];
   if (remote === undefined) return;
   const ref = base.slice(remote.length + 1);
   if (!(await isPlainRefName(root, ref))) return;
+  await fetchFromRemote(root, remote, ref);
+}
 
+/** The folder's remotes by name, or none where git cannot list them. */
+export async function remoteNames(root: string): Promise<string[]> {
+  try {
+    return (await git(root, ['remote']))
+      .split('\n')
+      .map((name) => name.trim())
+      .filter((name) => name !== '');
+  } catch {
+    return [];
+  }
+}
+
+/** `git fetch <remote> <ref>`, refused with git's own reason when it fails. */
+export async function fetchFromRemote(root: string, remote: string, ref: string): Promise<void> {
+  const base = `${remote}/${ref}`;
   try {
     await run('git', ['-C', root, ...GIT_SAFETY_ARGS, 'fetch', '--end-of-options', remote, ref], {
       timeout: GIT_TIMEOUT_MS,
@@ -553,6 +727,59 @@ export async function fetchRemoteBase(root: string, base: string): Promise<void>
       'fetch_failed',
     );
   }
+}
+
+/**
+ * The URL a fetch from `remote` reaches, as the operator's own git resolves it:
+ * their `insteadOf` rewrites live in the config `transportEnv` reads.
+ */
+export async function remoteFetchUrl(root: string, remote: string): Promise<string> {
+  const { stdout } = await run(
+    'git',
+    ['-C', root, ...GIT_SAFETY_ARGS, 'remote', 'get-url', remote],
+    { timeout: GIT_TIMEOUT_MS, maxBuffer: 64 * 1024, env: transportEnv() },
+  );
+  return stdout.trim();
+}
+
+/**
+ * Every URL a push to `remote` reaches, as the operator's own git resolves it:
+ * `pushurl` where one is set, each `url` otherwise, after their
+ * `pushInsteadOf` rewrites. A push goes to all of them.
+ */
+export async function remotePushUrls(root: string, remote: string): Promise<string[]> {
+  const { stdout } = await run(
+    'git',
+    ['-C', root, ...GIT_SAFETY_ARGS, 'remote', 'get-url', '--push', '--all', remote],
+    { timeout: GIT_TIMEOUT_MS, maxBuffer: 64 * 1024, env: transportEnv() },
+  );
+  return stdout
+    .split('\n')
+    .map((url) => url.trim())
+    .filter((url) => url !== '');
+}
+
+/** Whether `ancestor` is `descendant` or a commit under it. */
+export async function isAncestor(
+  root: string,
+  ancestor: string,
+  descendant: string,
+): Promise<boolean> {
+  try {
+    await git(root, ['merge-base', '--is-ancestor', ancestor, descendant]);
+    return true;
+  } catch (error) {
+    // 1 is git's "no"; any other status is git failing to answer.
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 1) {
+      return false;
+    }
+    throw error;
+  }
+}
+
+/** Where git keeps `name` for the repository at `root`, such as FETCH_HEAD. */
+export async function gitPath(root: string, name: string): Promise<string> {
+  return resolvePath(root, (await git(root, ['rev-parse', '--git-path', name])).trim());
 }
 
 export async function prepareWorktree(
@@ -1059,8 +1286,10 @@ export interface PatchCommit {
   readonly baseSha: string;
   /** True when the branch existed and the commit was appended to it. */
   readonly appended: boolean;
-  /** `<baseSha>..<sha>`: what a review of this commit reads. */
+  /** `<baseSha>..<sha>`: this commit alone. */
   readonly range: string;
+  /** `<origin base sha>..<sha>`: every commit a push of this one would add, when a push base was named. */
+  readonly pushRange?: string;
   /** `<sha>:refs/heads/<branch>`: what a push of this commit sends. */
   readonly pushRefspec: string;
 }
@@ -1163,9 +1392,10 @@ export async function commitPatchOnBranch(
   mode: 'clean' | 'merge',
   branch: string,
   message: string,
-  baseSha?: string,
+  options: { readonly baseSha?: string; readonly pushBaseSha?: string } = {},
 ): Promise<PatchCommitOutcome> {
-  const target = await commitTarget(root, branch, baseSha);
+  const { pushBaseSha } = options;
+  const target = await commitTarget(root, branch, options.baseSha);
 
   const scratch = await mkdtemp(join(tmpdir(), PUBLICATION_SCRATCH_PREFIX));
   let worktree: PreparedWorktree | undefined;
@@ -1258,6 +1488,7 @@ export async function commitPatchOnBranch(
         baseSha: worktree.baseSha,
         appended: target.appended,
         range: `${worktree.baseSha}..${sha}`,
+        ...(pushBaseSha !== undefined ? { pushRange: `${pushBaseSha}..${sha}` } : {}),
         pushRefspec: `${sha}:refs/heads/${branch}`,
       },
     };
