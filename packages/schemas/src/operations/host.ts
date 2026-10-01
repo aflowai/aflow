@@ -58,7 +58,7 @@ export const HostBranchPrefixSchema = branchToken(
     'and nothing else. Absent, the folder pushes nothing.',
 );
 
-export const HOST_PUSH_APPROVAL_DEFAULT = 'always';
+export const HOST_PUSH_APPROVAL_DEFAULT = 'unless-unreviewed';
 
 export const HostPushApprovalSchema = z
   .enum(['always', 'never', 'unless-unreviewed'])
@@ -66,10 +66,12 @@ export const HostPushApprovalSchema = z
     'When a publication from this folder asks the operator before it pushes. ' +
       '`always`: it asks before every push. ' +
       '`never`: it pushes without asking. ' +
-      '`unless-unreviewed`: the publication runs a Local Code Review of the commit it made and ' +
-      'pushes without asking only when that review returns `approve`. ' +
-      '`always` is the default until a publication scans its commit for secrets before the ' +
-      'push, and `unless-unreviewed` becomes the default with that scan.',
+      '`unless-unreviewed`, the default: the publication runs a Local Code Review of the ' +
+      'commit it made and pushes without asking only when that review returns `approve`. ' +
+      'Whatever the posture, every publication scans its commit for secrets before the push ' +
+      'and stops with nothing pushed when the scan finds one, which is what lets a review ' +
+      'stand in for the operator: the one thing the approval guarded that a review does not ' +
+      'read for is a secret leaving the machine.',
   );
 export type HostPushApproval = z.infer<typeof HostPushApprovalSchema>;
 
@@ -105,6 +107,15 @@ export const HostCommitShaSchema = z.string().regex(/^[0-9a-fA-F]{7,40}$/, {
   message:
     'A base sha is 7 to 40 hexadecimal characters — the `baseSha` a commission reported, ' +
     'not a branch or tag name.',
+});
+
+/** `<baseSha>..<sha>`: a run of commits named by two shas, so no branch that moves can change it. */
+export const HOST_COMMIT_RANGE_PATTERN = /^([0-9a-fA-F]{7,40})\.\.([0-9a-fA-F]{7,40})$/;
+
+export const HostCommitRangeSchema = z.string().regex(HOST_COMMIT_RANGE_PATTERN, {
+  message:
+    'A range is two shas, `<baseSha>..<sha>` — the `range` a commit made by ' +
+    '`host.file.patch` reports — not a branch, a tag or a single commit.',
 });
 
 /** Which operator-created binding this job runs against. */
@@ -465,13 +476,10 @@ export const HostFilePatchOutputSchema = z.object({
       appended: z
         .boolean()
         .describe('True when the branch existed and the commit was appended to it.'),
-      range: z
-        .string()
-        .min(1)
-        .describe(
-          'The commit alone as a revision range, `<baseSha>..<sha>` — two shas and no branch ' +
-            'name, so it still names this commit after the branch moves.',
-        ),
+      range: HostCommitRangeSchema.describe(
+        'The commit alone as a revision range, `<baseSha>..<sha>` — two shas and no branch ' +
+          'name, so it still names this commit after the branch moves.',
+      ),
       pushRefspec: z
         .string()
         .min(1)
@@ -776,6 +784,51 @@ export const HostBindingInspectOutputSchema = z.object({
     'Which branches a push from this folder may move, and when a publication asks the ' +
       'operator before pushing. Absent, the folder pushes nothing.',
   ),
+});
+
+export const HostCommitScanInputSchema = z.object({
+  bindingId: HostBindingRef,
+  range: HostCommitRangeSchema.describe(
+    'The commits to scan, `<baseSha>..<sha>`: every commit reachable from `sha` and not ' +
+      'from `baseSha`.',
+  ),
+});
+
+export const HostCommitScanFindingSchema = z.object({
+  file: z.string().describe('The path the line was added to, from the repository root.'),
+  line: z
+    .number()
+    .int()
+    .positive()
+    .describe('The line number in that file, in the commit that added it.'),
+  pattern: z
+    .string()
+    .describe(
+      'The name of the rule that matched. The matched value is never returned, logged or stored.',
+    ),
+});
+
+export const HostCommitScanOutputSchema = z.object({
+  clean: z.boolean().describe('True when no rule matched any line the range adds.'),
+  findings: z
+    .array(HostCommitScanFindingSchema)
+    .describe(
+      'Where a rule matched, at most one finding per line and capped in number; `summary` ' +
+        'says how many there were in all.',
+    ),
+  summary: z
+    .string()
+    .describe(
+      'One paragraph for a person: every finding by file, line and rule, how many were left ' +
+        'out past the cap, and which files were not read because they are binary or too large.',
+    ),
+  clearedRange: z
+    .string()
+    .optional()
+    .describe(
+      'The range this scan cleared, as two full shas — present only when it is clean. A step ' +
+        'that may only follow a clean scan reads this, so a range with a finding fails it.',
+    ),
 });
 
 export const HostOperationRegistrations: OperationRegistration[] = [
@@ -1219,5 +1272,45 @@ export const HostOperationRegistrations: OperationRegistration[] = [
     },
     inputZod: HostBindingInspectInputSchema,
     outputZod: HostBindingInspectOutputSchema,
+  },
+  {
+    stepType: 'host',
+    group: 'commit',
+    verb: 'scan',
+    name: 'Scan Commits for Secrets',
+    actionLabel: 'Scanning the commits for secrets…',
+    groupDisplayName: 'Commits on this computer',
+    groupDescription: 'Read the commits of a repository the operator connected, on their machine.',
+    semanticDescription:
+      'Read the lines a range of commits adds in a connected repository and report where one ' +
+      'looks like a secret — a private key, a cloud or service token, a high-entropy value ' +
+      'assigned to a secret-looking name — by file, line and the name of the rule that matched. ' +
+      'Reads the repository’s objects only: the working tree, the index and every ref are ' +
+      'left as they are.',
+    tags: ['host', 'git', 'secrets', 'local'],
+    idempotency: 'idempotent',
+    accessMode: 'read',
+    // A publication scans its own commit before the push and reads the result
+    // as data; an agent has no decision this would inform that the
+    // publication does not already make.
+    agentTool: false,
+    usage: {
+      oneLine: 'Scan the lines a range of commits adds for secrets, before they are pushed.',
+      minimalExampleInput: {
+        bindingId: 'hb_project',
+        range: `${'a'.repeat(40)}..${'c'.repeat(40)}`,
+      },
+      whenToUse: ['A skill about to push commits, checking them for secrets first'],
+      whenNotToUse: [
+        'Reviewing a change for anything but secrets — that is the Local Code Review skill',
+      ],
+      pitfalls: [
+        'Every commit in the range is read, so a secret added in one commit and removed in a later one is still found: the push would carry both.',
+        'Binary files and files that add more than the scanned size in one commit are not read; `summary` names them.',
+        'A clean scan says no rule matched, not that the range holds no secret.',
+      ],
+    },
+    inputZod: HostCommitScanInputSchema,
+    outputZod: HostCommitScanOutputSchema,
   },
 ];

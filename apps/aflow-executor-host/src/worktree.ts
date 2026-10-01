@@ -18,7 +18,7 @@
  * dependencies are linked into it: without them a harness asked to run the
  * tests reaches for a package registry the boundary denies.
  */
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import type { Dirent } from 'node:fs';
 import {
@@ -35,6 +35,7 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, sep } from 'node:path';
+import { createInterface } from 'node:readline';
 import { promisify } from 'node:util';
 
 const run = promisify(execFile);
@@ -175,6 +176,67 @@ async function git(
     env: { ...gitEnv(), ...env },
   });
   return stdout;
+}
+
+/**
+ * What git prints for `args`, handed over a line at a time and never held
+ * whole: for output whose size belongs to the repository rather than to this
+ * lane, such as every commit of a range. Past `maxBytes` or `timeoutMs` git is
+ * killed and the read refused, so a caller never mistakes part of the output
+ * for all of it.
+ */
+export async function forEachGitLine(
+  cwd: string,
+  args: readonly string[],
+  limits: { readonly maxBytes: number; readonly timeoutMs: number },
+  onLine: (line: string) => void,
+): Promise<void> {
+  const child = spawn('git', ['-C', cwd, ...GIT_SAFETY_ARGS, ...args], {
+    env: gitEnv(),
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stderr = '';
+  child.stderr.setEncoding('utf8');
+  child.stderr.on('data', (chunk: string) => {
+    if (stderr.length < 4096) stderr += chunk;
+  });
+  const exited = new Promise<number | null>((resolveExit, rejectExit) => {
+    child.once('error', rejectExit);
+    child.once('close', resolveExit);
+  });
+  // Awaited after the read; this only keeps a spawn failure from reading as unhandled meanwhile.
+  exited.catch(() => undefined);
+
+  let refusal: string | undefined;
+  const timer = setTimeout(() => {
+    refusal = `git did not finish within ${String(limits.timeoutMs / 1000)} seconds.`;
+    child.kill('SIGKILL');
+  }, limits.timeoutMs);
+  let readBytes = 0;
+  try {
+    for await (const line of createInterface({ input: child.stdout, crlfDelay: Infinity })) {
+      readBytes += Buffer.byteLength(line, 'utf8') + 1;
+      if (readBytes > limits.maxBytes) {
+        refusal = `git printed more than ${String(limits.maxBytes / (1024 * 1024))} MB.`;
+        child.kill('SIGKILL');
+        break;
+      }
+      onLine(line);
+    }
+    const code = await exited;
+    if (refusal !== undefined) throw new WorktreeError(refusal, 'git_failed');
+    if (code !== 0) {
+      throw new WorktreeError(stderr.split('\n')[0] || `git exited ${String(code)}`, 'git_failed');
+    }
+  } finally {
+    clearTimeout(timer);
+    if (child.exitCode === null) child.kill('SIGKILL');
+  }
+}
+
+/** How many commits `<base>..<head>` holds. */
+export async function countCommits(root: string, base: string, head: string): Promise<number> {
+  return Number((await git(root, ['rev-list', '--count', `${base}..${head}`])).trim());
 }
 
 /**

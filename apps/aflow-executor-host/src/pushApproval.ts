@@ -25,6 +25,11 @@ type HostPolicy = z.infer<typeof HostPolicySchema>;
 
 export const PUSH_APPROVAL_VALUES: readonly HostPushApproval[] = HostPushApprovalSchema.options;
 
+/** Why a review may stand in for the operator, in the words the CLI prints beside the posture. */
+export const PUSH_SCAN_NOTE =
+  'Every publication scans its commit for secrets before the push and stops, with nothing ' +
+  'pushed, when it finds one — which is what lets a review stand in for your approval.';
+
 /** One line per posture, in the words the CLI prints. */
 export function describePushApproval(pushApproval: HostPushApproval): string {
   switch (pushApproval) {

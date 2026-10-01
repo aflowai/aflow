@@ -35,6 +35,7 @@ const BINDING_INPUT_OPERATIONS = new Set([
   'host.mcp.list_tools',
   'host.mcp.call',
   'host.binding.inspect',
+  'host.commit.scan',
 ]);
 
 export interface HostBindingGateResult {

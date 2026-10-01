@@ -2,9 +2,10 @@
  * Contract: when a publication asks before it pushes is the operator's
  * statement about the folder, held on the machine, and read back from there.
  *
- * It defaults to asking before every push, it is set when the
- * folder is connected and changed later from this machine, and a skill reads it
- * through the folder's own inspect operation rather than from the workspace.
+ * It defaults to asking unless the publication's own review approves, it is
+ * set when the folder is connected and changed later from this machine, and a
+ * skill reads it through the folder's own inspect operation rather than from
+ * the workspace.
  */
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -12,7 +13,7 @@ import { join } from 'node:path';
 
 import { beforeAll, describe, expect, it } from 'vitest';
 
-import { HostBindingInspectOutputSchema } from '@aflow/schemas';
+import { HOST_PUSH_APPROVAL_DEFAULT, HostBindingInspectOutputSchema } from '@aflow/schemas';
 
 import { HostBindingSchema, HostPolicySchema, loadHostPolicy } from '../bindings.js';
 import { createHostHandler } from '../handlers/hostHandler.js';
@@ -45,9 +46,27 @@ const FILES_ONLY = {
 };
 
 describe('the posture a folder holds', () => {
-  it('defaults to asking before every push', () => {
+  it("defaults to asking unless the publication's review approves", () => {
     const binding = HostBindingSchema.parse(PUSHING);
-    expect(binding.branchPolicy?.pushApproval).toBe('always');
+    expect(binding.branchPolicy?.pushApproval).toBe('unless-unreviewed');
+    expect(HOST_PUSH_APPROVAL_DEFAULT).toBe('unless-unreviewed');
+  });
+
+  it('gives a folder whose policy names no posture the default when it is read, not when it was written', async () => {
+    // A folder connected before postures existed has none in its file. The
+    // default is applied by the schema on every read, so that folder takes
+    // whatever the default is now, with nothing rewritten.
+    const base = await mkdtemp(join(tmpdir(), 'push-default-'));
+    const policyPath = join(base, 'host-policy.json');
+    await writeFile(policyPath, JSON.stringify({ version: 1, bindings: [PUSHING] }));
+    const policy = await loadHostPolicy(policyPath);
+    expect(policy.bindings.get('hb_app')?.branchPolicy).toEqual({
+      branchPrefix: 'aflow/',
+      pushApproval: 'unless-unreviewed',
+    });
+    expect(pushPostures(policy.bindings)).toEqual([
+      { id: 'hb_app', spaceId: 'space-a', pushApproval: 'unless-unreviewed' },
+    ]);
   });
 
   it('keeps a posture the policy file names', () => {
@@ -78,7 +97,7 @@ describe('the posture a folder holds', () => {
 
 describe('connecting a folder', () => {
   it('takes the default without asking when nothing is said', () => {
-    expect(resolvePushApproval({ branchPrefix: 'aflow/' })).toBe('always');
+    expect(resolvePushApproval({ branchPrefix: 'aflow/' })).toBe('unless-unreviewed');
   });
 
   it('takes the posture the command names', () => {
@@ -114,10 +133,10 @@ describe('connecting a folder', () => {
 describe('changing it later', () => {
   it('changes only the folder named', () => {
     const before = policyWith([PUSHING, { ...PUSHING, id: 'hb_other' }]);
-    const after = withPushApproval(before, 'hb_app', 'unless-unreviewed');
+    const after = withPushApproval(before, 'hb_app', 'never');
     expect(after.bindings.map((b) => [b.id, b.branchPolicy?.pushApproval])).toEqual([
-      ['hb_app', 'unless-unreviewed'],
-      ['hb_other', 'always'],
+      ['hb_app', 'never'],
+      ['hb_other', 'unless-unreviewed'],
     ]);
     expect(after.bindings[0]?.branchPolicy?.branchPrefix).toBe('aflow/');
   });

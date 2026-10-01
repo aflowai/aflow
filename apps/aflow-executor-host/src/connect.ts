@@ -16,6 +16,7 @@ import { homedir } from 'node:os';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 
 import { createRedisConnection, HOST_INVENTORY_TTL_MS, HOST_MACHINES_KEY } from '@aflow/redis';
+import { HOST_PUSH_APPROVAL_DEFAULT } from '@aflow/schemas';
 
 import { chooseFolder } from './folderPicker.js';
 import { namesInUseFor } from './connectNaming.js';
@@ -28,7 +29,7 @@ import {
   toolDirectoriesOnPath,
 } from './interview.js';
 import { serializePolicy, writePolicyAtomically } from './policyFile.js';
-import { describePushApproval, resolvePushApproval } from './pushApproval.js';
+import { describePushApproval, PUSH_SCAN_NOTE, resolvePushApproval } from './pushApproval.js';
 import {
   assertRootOutsideRepositoryMetadata,
   type HostBinding,
@@ -69,7 +70,10 @@ function usage(): never {
       '  --branch-prefix <p>  Publish to branches under this prefix instead of aflow/ (a git\n' +
       '                   repository with --run)\n' +
       '  --push-approval <always|never|unless-unreviewed>\n' +
-      '                   When a publication asks before pushing (default always)\n' +
+      `                   When a publication asks before pushing (default ${HOST_PUSH_APPROVAL_DEFAULT}:\n` +
+      '                   it reviews its commit and asks unless the review approves it).\n' +
+      '                   Every publication scans its commit for secrets before the push\n' +
+      '                   and stops when it finds one, which is what makes that default safe.\n' +
       '  --mcp a,b        Offer these MCP servers, without being asked\n' +
       '  --yes            Take every default and ask nothing',
   );
@@ -445,6 +449,7 @@ async function main(): Promise<void> {
     );
     if (pushApproval !== undefined) {
       prompter.say(`  A publication from it ${describePushApproval(pushApproval)}.`);
+      prompter.say(`  ${PUSH_SCAN_NOTE}`);
     }
     prompter.say('');
     // Asked rather than assumed. Telling an operator to start something already

@@ -384,6 +384,42 @@ describe('applyOpTaskOutputContract — projection', () => {
     expect(failed.failureReason).toContain('Nothing has been pushed');
   });
 
+  it('fails Local Publish at the scan on a finding, naming where and saying nothing left the machine', async () => {
+    const scan = getSkillCatalogEntry('publish-local-changes')?.bundle.workflow.tasks.find(
+      (t) => t.taskId === 'scan-commit',
+    );
+    expect(scan).toBeDefined();
+    const summary =
+      'What looks like a secret is in 2 places in the 1 commit of `a..c`: ' +
+      'src/a.ts line 3 (github-token), .env line 1 (env-secret).';
+    const dirty = makeDeps({
+      [RAW_REF]: {
+        clean: false,
+        findings: [
+          { file: 'src/a.ts', line: 3, pattern: 'github-token' },
+          { file: '.env', line: 1, pattern: 'env-secret' },
+        ],
+        summary,
+      },
+    });
+    const failed = await run(dirty.deps, scan as WorkflowTask);
+    expect(failed.kind).toBe('failed');
+    if (failed.kind !== 'failed') return;
+    // The scan's own summary leads, closed once rather than twice.
+    expect(failed.failureReason?.startsWith(`${summary} The commit carries`)).toBe(true);
+    expect(failed.failureReason).toContain(
+      'The branch stayed on the machine and nothing was pushed.',
+    );
+    expect(failed.errorRetryable).toBe(false);
+
+    const range = `${'a'.repeat(40)}..${'c'.repeat(40)}`;
+    const clean = makeDeps({
+      [RAW_REF]: { clean: true, findings: [], summary: 'No secret found.', clearedRange: range },
+    });
+    const cleared = await run(clean.deps, scan as WorkflowTask);
+    expect(cleared.kind).toBe('succeeded');
+  });
+
   it('pauses (task_contract_violation) when the PROJECTED output violates the schema', async () => {
     const { deps, stored } = makeDeps({
       // status projects to a number → violates { status: string }.
