@@ -151,7 +151,10 @@ export async function deliverSessionWakeup(
     await appendSessionEvent(deps.redis, args.tenantId, args.sessionId as SessionId, event);
   }
   if (!hot) return { eventId, recorded, delivery: 'deferred' };
-  const delivery = await wakeSessionForRunWakeups(deps, args.tenantId, args.sessionId, hot);
+  const delivery = await wakeSessionForRunWakeups(deps, args.tenantId, args.sessionId, {
+    knownState: hot,
+    armWakeOnStoreError: true,
+  });
   return { eventId, recorded, delivery };
 }
 
@@ -165,9 +168,19 @@ export async function wakeSessionForRunWakeups(
   deps: HarnessDeps,
   tenantId: TenantId,
   sessionId: string,
-  knownState?: SessionHotState,
+  options: {
+    knownState?: SessionHotState;
+    /**
+     * Arm an event-wake timer when the store cannot say what is unread,
+     * instead of throwing. Never from the event-wake timer's own handler:
+     * arming resets the timer's redelivery count, so a store that keeps
+     * failing would re-fire it for as long as the session rests. Thrown there,
+     * the timer's redelivery and poison budget bound the retries.
+     */
+    armWakeOnStoreError?: boolean;
+  } = {},
 ): Promise<SessionWakeupDelivery> {
-  let state = knownState;
+  let state = options.knownState;
   if (state === undefined) {
     const stateResult = await getSessionStateSafe(deps.redis, tenantId, sessionId);
     if (!stateResult.ok) return 'deferred';
@@ -187,6 +200,7 @@ export async function wakeSessionForRunWakeups(
       step.inputRef,
     );
   } catch (err) {
+    if (options.armWakeOnStoreError !== true) throw err;
     // A session resting at its prompt has no turn boundary coming to read the
     // wakeup instead, so without a timer it would stay unread until the
     // operator spoke.

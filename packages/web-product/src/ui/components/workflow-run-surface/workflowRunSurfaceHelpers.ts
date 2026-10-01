@@ -153,7 +153,16 @@ export function taskTimelineStatus(status: WorkflowSurfaceTaskStatus): TimelineI
  * Motion/color carry state — no anthropomorphic face.
  */
 export type OrbKind =
-  'running' | 'paused' | 'completed' | 'failed' | 'inert' | 'idle' | 'searching';
+  'running' | 'paused' | 'completed' | 'failed' | 'inert' | 'idle' | 'searching' | 'handed_off';
+
+/**
+ * A run that now reports to another session. It may still be executing, but
+ * not for this conversation, so it reads as neither running nor ended here.
+ */
+export const HANDED_OFF_RUN: { orb: OrbKind; pill: { label: string; tone: PillTone } } = {
+  orb: 'handed_off',
+  pill: { label: 'handed off', tone: 'info' },
+};
 
 /** Run-level status → orb. Soft-quiesce still reports `running` upstream. */
 export function orbForRunStatus(status: WorkflowSurfaceRunStatus): OrbKind {

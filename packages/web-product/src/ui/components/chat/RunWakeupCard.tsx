@@ -3,13 +3,17 @@
 import { Icon } from '@aflow/design-system';
 import type { RunWakeupPayload } from '@aflow/run-view';
 import { useApiQuery } from '../../hooks/useApiQuery.js';
-import { decodeInlinePayload, isInlinePayloadRef } from '../../lib/fetch-payload.js';
+import { isInlinePayloadRef } from '../../lib/fetch-payload.js';
 import { spaceRoute } from '../../lib/space-routes.js';
 import { useSpace } from '../providers.js';
 import { StatusOrb } from '../workflow-run-surface/StatusOrb.js';
 import { Pill } from '../workflow-run-surface/WorkflowRunSurfaceParts.js';
 import type { WorkflowRunDetailResponse } from '../workflow-run-surface/workflowRunDetailToState.js';
-import { describeRunWakeup, readRunWakeupEnvelope } from './runWakeup.js';
+import {
+  describeRunWakeup,
+  readInlineRunWakeupEnvelope,
+  readRunWakeupEnvelope,
+} from './runWakeup.js';
 import '../workflow-run-surface/workflow-run-surface.css';
 
 function useRunWakeupEnvelope(ref: string | undefined) {
@@ -22,7 +26,7 @@ function useRunWakeupEnvelope(ref: string | undefined) {
     retryOnMount: false,
   });
   if (ref === undefined) return undefined;
-  return readRunWakeupEnvelope(inline ? decodeInlinePayload(ref) : data);
+  return inline ? readInlineRunWakeupEnvelope(ref) : readRunWakeupEnvelope(data);
 }
 
 /**

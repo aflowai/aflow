@@ -60,6 +60,12 @@ export interface RunViewState {
    * conversation is what the run is saying.
    */
   harnessActivity: Record<string, HarnessActivityState>;
+  /**
+   * Steps whose terminal event folded while no feed was held for them. A
+   * snapshot is folded without feeds, so this is how it tells hydration that a
+   * feed the client is still holding belongs to a step that has ended.
+   */
+  endedSteps: Record<string, true>;
   workflowRuns: Record<string, WorkflowRunSurfaceState>;
   workflowSurfaceItems: WorkflowSurfaceItemEntry[];
   _stepDetailCache: Record<string, string>;
@@ -152,6 +158,7 @@ export const INITIAL_STATE: RunViewState = {
   userError: null,
   streamingStepExecutionId: null,
   harnessActivity: {},
+  endedSteps: {},
   workflowRuns: {},
   workflowSurfaceItems: [],
   _stepDetailCache: {},

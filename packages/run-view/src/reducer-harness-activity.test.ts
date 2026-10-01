@@ -410,4 +410,38 @@ describe('a step that settles leaves the unsettled set', () => {
 
     expect(done.messages.map((m) => m.stepExecutionId)).toEqual([STEP]);
   });
+
+  /** The server folds the snapshot from durable events alone, so it holds no feed. */
+  function hydrateFrom(live: RunViewState, events: SessionEvent[]): RunViewState {
+    const snapshot = events.reduce(settle, initialRunViewState);
+    return runViewReducer(live, { type: 'HYDRATE_SNAPSHOT', snapshot });
+  }
+
+  it('leaves on hydration when its end reached the client only inside the snapshot', () => {
+    const running = fold(frames([wire([STATUS, TOOL])]));
+
+    const hydrated = hydrateFrom(running, [stepEvent('StepSucceeded')]);
+
+    expect(unsettled(hydrated)).toEqual([]);
+    expect(feed(hydrated)).toEqual([STATUS, TOOL]);
+  });
+
+  it('stays on hydration when the snapshot saw it fail and retry', () => {
+    const running = fold(frames([wire([STATUS])]));
+
+    const hydrated = hydrateFrom(running, [
+      stepEvent('StepFailed', STEP, { operationId: 'host.harness.run', willRetry: true }),
+    ]);
+
+    expect(unsettled(hydrated)).toEqual([STEP]);
+  });
+
+  it('on hydration, only the steps the snapshot saw end leave the set', () => {
+    const both = fold(frames([wire([STATUS])], OTHER_STEP), fold(frames([wire([STATUS])])));
+
+    const hydrated = hydrateFrom(both, [stepEvent('StepSucceeded', OTHER_STEP)]);
+
+    expect(unsettled(hydrated)).toEqual([STEP]);
+    expect(feed(hydrated, OTHER_STEP)).toEqual([STATUS]);
+  });
 });

@@ -19,6 +19,7 @@ export async function wakeForRunWakeupsAtSettle(
       { db: deps.db, redis: deps.redis, payloadStore: deps.payloadStore },
       result.tenantId as TenantId,
       result.sessionId,
+      { armWakeOnStoreError: true },
     );
   } catch (err) {
     logOrchestratorError('[applyAgentDecision] could not wake for unread run wakeups', err, {

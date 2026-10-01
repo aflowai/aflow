@@ -105,17 +105,40 @@ export function applyActivityDelta(state: RunViewState, action: LiveDeltaAction)
 export function settleHarnessActivity(state: RunViewState, event: SessionEvent): RunViewState {
   const stepExecutionId = event.stepExecutionId;
   if (stepExecutionId === undefined) return state;
-  if (!(stepExecutionId in state.harnessActivity)) return state;
-  const held = state.harnessActivity[stepExecutionId];
-  if (held.settled) return state;
   const ends =
     event.eventType === 'StepSucceeded' ||
     (event.eventType === 'StepFailed' && event.metadata?.willRetry !== true);
   if (!ends) return state;
+  const held = state.harnessActivity[stepExecutionId];
+  if (held === undefined) {
+    if (state.endedSteps[stepExecutionId] === true) return state;
+    return { ...state, endedSteps: { ...state.endedSteps, [stepExecutionId]: true } };
+  }
+  if (held.settled) return state;
   return {
     ...state,
     harnessActivity: { ...state.harnessActivity, [stepExecutionId]: { ...held, settled: true } },
   };
+}
+
+/**
+ * The feeds after hydrating over `snapshot`. Deltas are not durable, so a
+ * snapshot carries no feed and hydrating over one would blank a step still
+ * running: whatever the snapshot does carry wins, the rest is kept, and a kept
+ * feed whose step the snapshot saw end is settled.
+ */
+export function hydrateHarnessActivity(
+  live: Record<string, HarnessActivityState>,
+  snapshot: Pick<RunViewState, 'harnessActivity' | 'endedSteps'>,
+): Record<string, HarnessActivityState> {
+  const feeds = { ...live, ...snapshot.harnessActivity };
+  for (const [stepExecutionId, feed] of Object.entries(live)) {
+    if (stepExecutionId in snapshot.harnessActivity || feed.settled) continue;
+    if (snapshot.endedSteps[stepExecutionId] === true) {
+      feeds[stepExecutionId] = { ...feed, settled: true };
+    }
+  }
+  return feeds;
 }
 
 /**

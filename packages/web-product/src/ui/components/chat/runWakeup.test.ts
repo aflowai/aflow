@@ -3,7 +3,11 @@
  * that says why once the envelope has loaded.
  */
 import { describe, expect, it } from 'vitest';
-import { describeRunWakeup, readRunWakeupEnvelope } from './runWakeup.js';
+import {
+  describeRunWakeup,
+  readInlineRunWakeupEnvelope,
+  readRunWakeupEnvelope,
+} from './runWakeup.js';
 
 const RUN = '11111111-2222-3333-4444-555555555555';
 
@@ -66,9 +70,41 @@ describe('describeRunWakeup', () => {
 
   it('reads an envelope that does not parse as none', () => {
     expect(readRunWakeupEnvelope({ nothing: 'here' })).toBeUndefined();
-    expect(describeRunWakeup('handed_off', undefined)).toMatchObject({
+    expect(describeRunWakeup('completed', undefined).line).toBeUndefined();
+  });
+
+  it('shows a handed-off run as neither running nor ended here', () => {
+    const view = describeRunWakeup('handed_off', undefined);
+    expect(view).toEqual({
+      orb: 'handed_off',
+      pill: { label: 'handed off', tone: 'info' },
       headline: 'Handed to another session',
-      pill: { label: 'handed off', tone: 'muted' },
+      line: undefined,
+    });
+    expect(view.orb).not.toBe('running');
+    expect(view.pill.label).not.toBe(describeRunWakeup('completed', undefined).pill.label);
+  });
+});
+
+describe('readInlineRunWakeupEnvelope', () => {
+  const envelope = {
+    runId: RUN,
+    outcome: 'completed',
+    waiterId: 'w1',
+    result: { summary: 'The review approved the change.' },
+  };
+
+  it('decodes the envelope an inline reference carries', () => {
+    const ref = `inline:${Buffer.from(JSON.stringify(envelope)).toString('base64')}`;
+    expect(readInlineRunWakeupEnvelope(ref)).toMatchObject(envelope);
+  });
+
+  it('reads a reference that is not base64 as no envelope, rather than throwing', () => {
+    const ref = 'inline:not base64 at all!';
+    expect(() => readInlineRunWakeupEnvelope(ref)).not.toThrow();
+    expect(readInlineRunWakeupEnvelope(ref)).toBeUndefined();
+    expect(describeRunWakeup('completed', readInlineRunWakeupEnvelope(ref))).toMatchObject({
+      headline: 'Completed',
       line: undefined,
     });
   });

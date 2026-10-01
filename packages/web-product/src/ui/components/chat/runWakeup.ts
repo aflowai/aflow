@@ -3,8 +3,10 @@ import {
   type WaiterNotifiedOutcome,
   type WorkflowRunWakeupEnvelope,
 } from '@aflow/schemas';
+import { decodeInlinePayload } from '../../lib/fetch-payload.js';
 import type { WorkflowSurfaceRunStatus } from '../../lib/types.js';
 import {
+  HANDED_OFF_RUN,
   orbForRunStatus,
   runPill,
   type OrbKind,
@@ -41,6 +43,21 @@ const HEADLINE: Record<WaiterNotifiedOutcome, string> = {
 export function readRunWakeupEnvelope(data: unknown): WorkflowRunWakeupEnvelope | undefined {
   const parsed = WorkflowRunWakeupEnvelopeSchema.safeParse(data);
   return parsed.success ? parsed.data : undefined;
+}
+
+/**
+ * The envelope an `inline:` reference carries. Read during render, where a
+ * decode error would take the card down rather than reject a fetch, so a
+ * reference that does not decode carries none.
+ */
+export function readInlineRunWakeupEnvelope(ref: string): WorkflowRunWakeupEnvelope | undefined {
+  let decoded: unknown;
+  try {
+    decoded = decodeInlinePayload(ref);
+  } catch {
+    return undefined;
+  }
+  return readRunWakeupEnvelope(decoded);
 }
 
 function firstLine(text: string | undefined): string | undefined {
@@ -84,9 +101,7 @@ export function describeRunWakeup(
 ): RunWakeupView {
   const headline = HEADLINE[outcome];
   const line = envelopeLine(outcome, envelope);
-  if (outcome === 'handed_off') {
-    return { orb: 'running', pill: { label: 'handed off', tone: 'muted' }, headline, line };
-  }
+  if (outcome === 'handed_off') return { ...HANDED_OFF_RUN, headline, line };
   const status = RUN_STATUS_BY_OUTCOME[outcome];
   return { orb: orbForRunStatus(status), pill: runPill(status), headline, line };
 }

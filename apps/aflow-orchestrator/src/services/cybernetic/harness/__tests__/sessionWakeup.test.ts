@@ -568,26 +568,31 @@ describe('a wakeup whose envelope cannot be read', () => {
     expect(mockDispatchResume).toHaveBeenCalledOnce();
   });
 
-  it('is left unread while the store cannot answer, arms a wake, and wakes the session once it can', async () => {
+  it('is left unread while the store cannot answer, arms one wake on delivery, and wakes the session once it can', async () => {
     const envelope = { runId: RUN, outcome: 'completed', waiterId: 'waiter-1' };
+    const unavailable = new Error('ECONNRESET');
     payloadStore.retrieve.mockImplementation(async (ref: string) => {
       if (ref === TURN_INPUT) return { prompt: 'p' };
-      throw new Error('ECONNRESET');
+      throw unavailable;
     });
     payloadStore.exists.mockResolvedValue(true);
     const before = Date.now();
 
     await notifyWaiters(deps, { tenantId: TENANT, runId: RUN, outcome: 'completed' });
-    await expect(wakeSessionForRunWakeups(deps, TENANT, SESSION)).resolves.toBe('retrying');
     expect(mockDispatchResume).not.toHaveBeenCalled();
-    expect(mockScheduleShardTimer).toHaveBeenCalled();
-    const armed = mockScheduleShardTimer.mock.calls.at(-1)![1] as {
+    expect(mockScheduleShardTimer).toHaveBeenCalledOnce();
+    const armed = mockScheduleShardTimer.mock.calls[0]![1] as {
       reason: string;
       stepExecutionId: string;
       dueAtMs: number;
     };
     expect(armed).toMatchObject({ reason: 'event_wake', stepExecutionId: PROMPT_STEP });
     expect(armed.dueAtMs).toBeGreaterThanOrEqual(before + EVENT_WAKE_RETRY_DELAY_MS);
+
+    // The timer's own wake throws rather than arming again, so its redelivery
+    // budget is what bounds the retries.
+    await expect(wakeSessionForRunWakeups(deps, TENANT, SESSION)).rejects.toBe(unavailable);
+    expect(mockScheduleShardTimer).toHaveBeenCalledOnce();
 
     storeHolding({ 'gs://bucket/wakeup-envelope': envelope });
     await expect(wakeSessionForRunWakeups(deps, TENANT, SESSION)).resolves.toBe('woke');
