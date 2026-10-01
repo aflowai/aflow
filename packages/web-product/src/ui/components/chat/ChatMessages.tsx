@@ -28,6 +28,7 @@ import { WorkflowRunSurface, WorkflowRunSurfaceContainer } from '../workflow-run
 import { InlineAppletCard, InlineArtifactCard, InlineSurfaceCard } from './InlineUiCards.js';
 import { AwaitingApprovalNotice } from './AwaitingApprovalNotice.js';
 import type { SessionBlockedOn } from '@aflow/schemas';
+import { unsettledHarnessSteps } from '@aflow/run-view';
 import type { WorkflowRunSurfaceState } from '../../lib/types.js';
 import { UserAvatar, useCurrentUser } from '../user-avatar.js';
 import { ParticipantBadge } from '../room/ParticipantBadge.js';
@@ -359,17 +360,11 @@ export function ChatMessages({
   }, [lastUserMessageId, scrollToBottom]);
 
   // A harness step commissioned from this conversation streams its feed
-  // before it has a result, and until then nothing in the transcript names it:
-  // a step becomes a message when it settles. Its card is shown from the feed
-  // alone, and yields to the message once that arrives. A feed a workflow run
-  // in this transcript already shows is that run's to render.
+  // before it has a result, and until then nothing in the transcript names it.
+  // Its card is shown from the feed alone until the step settles. A feed a
+  // workflow run in this transcript already shows is that run's to render.
   const harnessFeeds = useHarnessActivityFeeds();
   const runningHarnessSteps = useMemo(() => {
-    const settled = new Set<string>();
-    for (const it of items) {
-      if (it.kind === 'message' && it.message.stepExecutionId)
-        settled.add(it.message.stepExecutionId);
-    }
     const shownByRuns = new Set<string>();
     for (const run of Object.values(workflowRuns ?? {})) {
       for (const task of Object.values(run.tasks)) {
@@ -377,7 +372,8 @@ export function ChatMessages({
         if (id !== undefined) shownByRuns.add(id);
       }
     }
-    return Object.keys(harnessFeeds).filter((id) => !settled.has(id) && !shownByRuns.has(id));
+    const messages = items.flatMap((it) => (it.kind === 'message' ? [it.message] : []));
+    return unsettledHarnessSteps(harnessFeeds, messages).filter((id) => !shownByRuns.has(id));
   }, [harnessFeeds, items, workflowRuns]);
 
   const isStreaming = items.some(

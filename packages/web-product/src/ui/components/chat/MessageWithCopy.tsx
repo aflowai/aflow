@@ -9,8 +9,13 @@ import { useTranscriptSettled } from './TranscriptEntranceContext.js';
 import { ParticipantBadge } from '../room/ParticipantBadge.js';
 import { fetchPayload } from '../../lib/fetch-payload.js';
 import type { Message } from '../../lib/types.js';
-import type { InlineHitlPayload, InlineProposalFocusPayload } from '@aflow/run-view';
+import type {
+  InlineHitlPayload,
+  InlineProposalFocusPayload,
+  RunWakeupPayload,
+} from '@aflow/run-view';
 import { HitlInline } from './HitlInline.js';
+import { RunWakeupCard } from './RunWakeupCard.js';
 import { InlineFocusedProposal } from './InlineFocusedProposal.js';
 import { SubflowClusterHeader } from './SubflowClusterHeader.js';
 import { useMessageAuthor } from './MessageAuthorContext.js';
@@ -138,6 +143,14 @@ export function MessageWithCopy({
   }, [msg, apiUrl, headers]);
 
   const isSubflow = Boolean(msg.subflowSource);
+
+  if (msg.semanticType === 'run_wakeup' && msg.richContent) {
+    return (
+      <div className="chat-message-wrapper" data-chat-message>
+        <RunWakeupCard payload={msg.richContent as RunWakeupPayload} />
+      </div>
+    );
+  }
 
   if (msg.semanticType === 'inline_hitl' && msg.richContent) {
     return (

@@ -4,6 +4,7 @@ import type {
   UserFacingError,
   WorkflowHumanDecision,
   WorkflowResumeContract,
+  WaiterNotifiedOutcome,
   WorkflowRunResult,
 } from '@aflow/schemas';
 import type { MediaItem } from './content-extraction.js';
@@ -258,6 +259,17 @@ export interface InlineHitlPayload {
         decidedAt: string;
         decidedBy?: string;
       };
+}
+
+/**
+ * `richContent` of a `run_wakeup` message: a run the session started without
+ * waiting reported in. The envelope stays behind its reference; the event
+ * itself carries only which run and what happened.
+ */
+export interface RunWakeupPayload {
+  runId: string;
+  outcome: WaiterNotifiedOutcome;
+  envelopeRef?: string;
 }
 
 // ---------------------------------------------------------------------------

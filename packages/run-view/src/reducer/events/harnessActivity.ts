@@ -1,4 +1,5 @@
 import { HarnessActivityLineSchema, type HarnessActivityLine } from '@aflow/schemas';
+import type { Message, SessionEvent } from '../../types.js';
 import type { HarnessActivityState, LiveDeltaAction, RunViewState } from '../state.js';
 
 /**
@@ -54,6 +55,7 @@ const EMPTY: HarnessActivityState = {
   partial: '',
   consumedBytes: 0,
   lastActivityAtMs: 0,
+  settled: false,
 };
 
 export function applyActivityDelta(state: RunViewState, action: LiveDeltaAction): RunViewState {
@@ -87,7 +89,48 @@ export function applyActivityDelta(state: RunViewState, action: LiveDeltaAction)
     partial,
     consumedBytes: Math.max(base.consumedBytes, offset + deltaBytes),
     lastActivityAtMs: marked ?? prior?.lastActivityAtMs ?? base.lastActivityAtMs,
+    settled: prior?.settled ?? false,
   };
 
   return { ...state, harnessActivity: { ...state.harnessActivity, [stepExecutionId]: entry } };
+}
+
+/**
+ * Mark a feed's step as ended when its terminal event folds.
+ *
+ * The step's result message is not a signal to wait for: a step whose output
+ * is not displayed writes none, and a failure writes none either. A retryable
+ * failure keeps the step id for its next attempt, so it is not an end.
+ */
+export function settleHarnessActivity(state: RunViewState, event: SessionEvent): RunViewState {
+  const stepExecutionId = event.stepExecutionId;
+  if (stepExecutionId === undefined) return state;
+  if (!(stepExecutionId in state.harnessActivity)) return state;
+  const held = state.harnessActivity[stepExecutionId];
+  if (held.settled) return state;
+  const ends =
+    event.eventType === 'StepSucceeded' ||
+    (event.eventType === 'StepFailed' && event.metadata?.willRetry !== true);
+  if (!ends) return state;
+  return {
+    ...state,
+    harnessActivity: { ...state.harnessActivity, [stepExecutionId]: { ...held, settled: true } },
+  };
+}
+
+/**
+ * The steps whose feed is still running and that nothing in the conversation
+ * shows yet — what the chat pins below the transcript until each one settles.
+ */
+export function unsettledHarnessSteps(
+  feeds: Record<string, HarnessActivityState>,
+  messages: Iterable<Pick<Message, 'stepExecutionId'>>,
+): string[] {
+  const shown = new Set<string>();
+  for (const message of messages) {
+    if (message.stepExecutionId !== undefined) shown.add(message.stepExecutionId);
+  }
+  return Object.entries(feeds)
+    .filter(([stepExecutionId, feed]) => !feed.settled && !shown.has(stepExecutionId))
+    .map(([stepExecutionId]) => stepExecutionId);
 }

@@ -5,6 +5,8 @@ import { applySessionLifecycleEvents } from './events/sessionLifecycle.js';
 import { applyStepEvents } from './events/stepEvents.js';
 import { applySurfaceEvents } from './events/surfaceEvents.js';
 import { applyWorkflowEvents } from './events/workflowEvents.js';
+import { settleHarnessActivity } from './events/harnessActivity.js';
+import { applyRunWakeupEvent } from './events/runWakeup.js';
 
 export function applySseEvent(
   state: RunViewState,
@@ -50,5 +52,7 @@ export function applySseEvent(
   next = applySurfaceEvents(next, event, ctx);
   next = applyWorkflowEvents(next, event, ctx);
   next = applyMcpElicitationEvent(next, event);
+  next = settleHarnessActivity(next, event);
+  next = applyRunWakeupEvent(next, event);
   return next;
 }

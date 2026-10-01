@@ -172,9 +172,35 @@ describe('hasUnreadRunWakeups', () => {
     await expect(
       hasUnreadRunWakeups({} as never, payloadStore, 'tenant-1' as never, 's1', 'gs://b/turn'),
     ).rejects.toBe(unavailable);
-    await expect(readRunWakeups({} as never, payloadStore, 'tenant-1' as never, 's1')).rejects.toBe(
-      unavailable,
+    await expect(
+      readRunWakeups({} as never, payloadStore, 'tenant-1' as never, 's1'),
+    ).resolves.toEqual([]);
+  });
+
+  it('hides no other wakeup behind one the store cannot answer for', async () => {
+    rows.push(
+      { eventId: 'e3', payloadRef: 'gs://b/3' },
+      { eventId: 'e2', payloadRef: 'gs://b/flaky' },
+      { eventId: 'e1', payloadRef: 'gs://b/1' },
     );
+    const payloadStore = {
+      retrieve: vi.fn(async (ref: string) => {
+        if (ref === 'gs://b/turn') return turnInput([]);
+        if (ref === 'gs://b/flaky') throw new Error('ECONNRESET');
+        return envelope;
+      }),
+      exists: vi.fn(async () => true),
+    };
+
+    await expect(
+      readRunWakeups({} as never, payloadStore, 'tenant-1' as never, 's1'),
+    ).resolves.toEqual([
+      { eventId: 'e1', envelope },
+      { eventId: 'e3', envelope },
+    ]);
+    await expect(
+      hasUnreadRunWakeups({} as never, payloadStore, 'tenant-1' as never, 's1', 'gs://b/turn'),
+    ).resolves.toBe(true);
   });
 
   it('still counts a deliverable wakeup beside one that is not', async () => {

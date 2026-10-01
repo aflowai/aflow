@@ -349,6 +349,9 @@ export function applyStepEvents(
             ...(stepDetail ? { stepDetail } : {}),
             isInterim: true,
             ...simulatedMark,
+            // A tool's displayed result names its step, so a card reading the
+            // step's live feed folds that feed above the result.
+            ...(event.stepExecutionId ? { stepExecutionId: event.stepExecutionId } : {}),
             ...(extracted.semanticType ? { semanticType: extracted.semanticType } : {}),
           };
           if (!next.messages.some((m) => m.id === newMsg.id)) {

@@ -16,6 +16,7 @@ const SPECIAL_SEMANTIC_TYPES = new Set([
   'workflow_ledger',
   'inline_hitl',
   'inline_proposal_focus',
+  'run_wakeup',
 ]);
 
 /** `workflow.run.detail` DTO — not a start/resume/cancel status card. */

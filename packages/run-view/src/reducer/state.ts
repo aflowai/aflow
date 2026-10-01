@@ -35,6 +35,11 @@ export interface HarnessActivityState {
    * `Stalled` label) count a feed that is plainly streaming.
    */
   lastActivityAtMs: number;
+  /**
+   * The step's terminal event has been folded. The feed is kept — the result
+   * card folds it above the result — but nothing is running under it any more.
+   */
+  settled: boolean;
 }
 
 export interface RunViewState {

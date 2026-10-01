@@ -8,6 +8,7 @@ import {
   type WorkflowRunWakeupEntry,
 } from '@aflow/schemas';
 import type { PayloadStore } from '@aflow/payload-store';
+import { getOrchestratorLogger } from '../../../lib/orchestratorLogger.js';
 
 /**
  * What runs this session started without waiting have reported, oldest first.
@@ -16,6 +17,10 @@ import type { PayloadStore } from '@aflow/payload-store';
  * and the conversation store keeps each one exactly once by its event id — so
  * a turn that fails reads them again rather than losing them to a cursor that
  * already moved.
+ *
+ * A row the store cannot answer for right now is left out of this turn and
+ * nothing else is: the turn's input then lacks it, so it still counts as
+ * unread and the next settle or event-wake slot delivers it.
  */
 export async function readRunWakeups(
   db: PostgresJsDatabase,
@@ -25,10 +30,22 @@ export async function readRunWakeups(
 ): Promise<WorkflowRunWakeupEntry[]> {
   const rows = await recentRunWakeupRows(db, tenantId, sessionId);
 
-  const entries = await Promise.all(
-    rows.reverse().map((row) => deliverableRunWakeup(payloadStore, row)),
+  const oldestFirst = rows.reverse();
+  const settled = await Promise.allSettled(
+    oldestFirst.map((row) => deliverableRunWakeup(payloadStore, row)),
   );
-  return entries.filter((entry): entry is WorkflowRunWakeupEntry => entry !== null);
+  const entries: WorkflowRunWakeupEntry[] = [];
+  settled.forEach((outcome, index) => {
+    if (outcome.status === 'fulfilled') {
+      if (outcome.value !== null) entries.push(outcome.value);
+      return;
+    }
+    const reason: unknown = outcome.reason;
+    getOrchestratorLogger().warn(
+      `readRunWakeups: left wakeup ${oldestFirst[index]?.eventId ?? '?'} of ${sessionId} for a later turn: ${reason instanceof Error ? reason.message : String(reason)}`,
+    );
+  });
+  return entries;
 }
 
 /**
@@ -42,7 +59,9 @@ export async function readRunWakeups(
  * A wakeup counts only if {@link readRunWakeups} would hand it over. One whose
  * envelope has aged out of the payload store or does not parse is never in a
  * turn's input, so counting it would wake the session at every settle and every
- * event-wake slot for as long as it stays in the window.
+ * event-wake slot for as long as it stays in the window. One the store cannot
+ * answer for yet does not hide another that is deliverable; only when none is
+ * does the store's error reach the caller, since not knowing is not "read".
  */
 export async function hasUnreadRunWakeups(
   db: PostgresJsDatabase,
@@ -72,10 +91,15 @@ export async function hasUnreadRunWakeups(
   }
   const unread = rows.filter((row) => !read.has(row.eventId));
   if (unread.length === 0) return false;
-  const deliverable = await Promise.all(
+  const settled = await Promise.allSettled(
     unread.map((row) => deliverableRunWakeup(payloadStore, row)),
   );
-  return deliverable.some((entry) => entry !== null);
+  if (settled.some((outcome) => outcome.status === 'fulfilled' && outcome.value !== null)) {
+    return true;
+  }
+  const failed = settled.find((outcome) => outcome.status === 'rejected');
+  if (failed !== undefined) throw failed.reason;
+  return false;
 }
 
 interface RunWakeupRow {
