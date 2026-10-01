@@ -37,7 +37,9 @@ export type WorkflowHumanDecision = z.infer<typeof WorkflowHumanDecisionSchema>;
 export const HumanApprovalResolutionInputSchema = z.object({
   decision: z.literal('approved'),
   comment: z.string().max(2000).optional(),
-  approvedCall: HumanApprovalCallSchema.optional(),
+  approvedCall: HumanApprovalCallSchema.optional().describe(
+    'Where the task declares `actionPreview`, the call approved is that preview as the server resolves it at approve time: omit this, or send exactly that call — one that differs anywhere is refused with `APPROVED_CALL_MISMATCH` and the approval is not persisted.',
+  ),
 });
 export type HumanApprovalResolutionInput = z.infer<typeof HumanApprovalResolutionInputSchema>;
 

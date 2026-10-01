@@ -78,6 +78,17 @@ export function chosenPushApproval(question: {
 }
 
 /**
+ * The posture a push from this folder is held to when it runs. A folder with no
+ * branch policy is refused any push before this is read; should one reach it,
+ * it asks.
+ */
+export function pushApprovalOf(binding: HostBinding): HostPushApproval {
+  return binding.branchPolicy === undefined
+    ? 'always'
+    : resolveBranchPolicy(binding.branchPolicy).pushApproval;
+}
+
+/**
  * What the machine's inventory says about pushing folders: each one's posture,
  * against the workspace it was connected for. A folder recording no workspace
  * reaches none, so it is left out rather than published against nothing.

@@ -120,16 +120,18 @@ describe('applyHumanReplaceOutputResolution — approve echo', () => {
     );
   });
 
-  it('prefers client-supplied approvedCall over echo', async () => {
+  it('accepts the previewed call sent back unchanged', async () => {
     const payloadStore = { store: mockStore };
-    const clientCall = { op: 'kaggle.submit', input: { path: '/edited.csv' } };
-    await applyHumanReplaceOutputResolution({
+    const result = await applyHumanReplaceOutputResolution({
       db: {} as never,
       tenantIdStr: 'tenant',
       run: run as never,
       workflow,
       surfaced,
-      output: { decision: 'approved', approvedCall: clientCall },
+      output: {
+        decision: 'approved',
+        approvedCall: { op: 'kaggle.submit', input: { path: '/tmp/sub.csv' } },
+      },
       claimToken: 'claim-1',
       actorUserId: 'user-1',
       payloadStore: payloadStore as never,
@@ -140,15 +142,63 @@ describe('applyHumanReplaceOutputResolution — approve echo', () => {
         attempt: 1,
       },
     });
-    expect(mockStore).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({ approvedCall: clientCall }),
-      }),
-    );
+    expect(result.ok).toBe(true);
+    expect(mockCommitReplace).toHaveBeenCalledOnce();
+  });
+
+  it('refuses a client approvedCall that differs from the preview, naming where, and persists nothing', async () => {
+    const payloadStore = { store: mockStore };
+    const result = await applyHumanReplaceOutputResolution({
+      db: {} as never,
+      tenantIdStr: 'tenant',
+      run: run as never,
+      workflow,
+      surfaced,
+      output: {
+        decision: 'approved',
+        approvedCall: { op: 'kaggle.submit', input: { path: '/edited.csv', force: true } },
+      },
+      claimToken: 'claim-1',
+      actorUserId: 'user-1',
+      payloadStore: payloadStore as never,
+      storeContext: {
+        tenantId: '00000000-0000-0000-0000-000000000001' as never,
+        runId: RUN_ID,
+        stepExecutionId: '00000000-0000-0000-0000-000000000002',
+        attempt: 1,
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('APPROVED_CALL_MISMATCH');
+      expect(result.error.message).toContain('at `input.force`, `input.path`.');
+      expect(result.error.message).toContain('The approval was not persisted.');
+    }
+    expect(mockStore).not.toHaveBeenCalled();
+    expect(mockCommitReplace).not.toHaveBeenCalled();
   });
 });
 
 describe('applyHumanReplaceOutputResolution — the boundary records the approval', () => {
+  const PUSH = {
+    bindingId: 'folder-1',
+    refspec: `${'c'.repeat(40)}:refs/heads/aflow/x`,
+    receipt: 'receipt-unscanned',
+  };
+  const pushWorkflow = {
+    ...workflow,
+    tasks: [
+      {
+        taskId: TASK_ID,
+        name: 'Approve the push',
+        type: 'human',
+        intent: 'approve',
+        actionPreview: { op: 'host.process.exec', input: PUSH },
+        failureMode: 'isolate',
+      },
+    ],
+  } as Workflow;
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockBump.mockResolvedValue(1);
@@ -156,12 +206,16 @@ describe('applyHumanReplaceOutputResolution — the boundary records the approva
     mockStore.mockResolvedValue('payload:output-1');
   });
 
-  function resolve(output: unknown, recordApproval?: (call: unknown) => Promise<void>) {
+  function resolve(
+    output: unknown,
+    recordApproval?: (call: unknown) => Promise<void>,
+    on: Workflow = workflow,
+  ) {
     return applyHumanReplaceOutputResolution({
       db: {} as never,
       tenantIdStr: 'tenant',
       run: run as never,
-      workflow,
+      workflow: on,
       surfaced,
       output,
       claimToken: 'claim-1',
@@ -177,7 +231,7 @@ describe('applyHumanReplaceOutputResolution — the boundary records the approva
     });
   }
 
-  it('hands it the approved call before the approval is stored or committed', async () => {
+  it('hands it the resolved preview only once the approval has committed', async () => {
     const recordApproval = vi.fn(() => Promise.resolve());
     const result = await resolve({ decision: 'approved' }, recordApproval);
     expect(result.ok).toBe(true);
@@ -185,20 +239,55 @@ describe('applyHumanReplaceOutputResolution — the boundary records the approva
       op: 'kaggle.submit',
       input: { path: '/tmp/sub.csv' },
     });
-    const recorded = recordApproval.mock.invocationCallOrder[0] ?? Infinity;
-    expect(recorded).toBeLessThan(mockStore.mock.invocationCallOrder[0] ?? -1);
-    expect(recorded).toBeLessThan(mockCommitReplace.mock.invocationCallOrder[0] ?? -1);
+    const recorded = recordApproval.mock.invocationCallOrder[0] ?? -1;
+    expect(recorded).toBeGreaterThan(mockCommitReplace.mock.invocationCallOrder[0] ?? Infinity);
   });
 
-  it('commits nothing when recording fails, and records nothing for an invalid approval', async () => {
-    const failing = vi.fn(() => Promise.reject(new Error('redis down')));
-    await expect(resolve({ decision: 'approved' }, failing)).rejects.toThrow('redis down');
-    expect(mockCommitReplace).not.toHaveBeenCalled();
+  it('records nothing for an approval that did not land', async () => {
+    for (const outcome of ['claim_lost', 'task_row_not_paused'] as const) {
+      mockCommitReplace.mockResolvedValueOnce(outcome);
+      const recordApproval = vi.fn(() => Promise.resolve());
+      const result = await resolve({ decision: 'approved' }, recordApproval);
+      expect(result.ok, outcome).toBe(false);
+      expect(recordApproval, outcome).not.toHaveBeenCalled();
+    }
 
     const recordApproval = vi.fn(() => Promise.resolve());
     const invalid = await resolve({ decision: 'rejected' }, recordApproval);
     expect(invalid.ok).toBe(false);
     expect(recordApproval).not.toHaveBeenCalled();
+  });
+
+  it('records nothing for a task without actionPreview, whatever approvedCall says', async () => {
+    const recordApproval = vi.fn(() => Promise.resolve());
+    const unpreviewed = {
+      ...pushWorkflow,
+      tasks: [{ taskId: TASK_ID, name: 'Approve', type: 'human', intent: 'approve' }],
+    } as Workflow;
+    const result = await resolve(
+      { decision: 'approved', approvedCall: { op: 'host.process.exec', input: PUSH } },
+      recordApproval,
+      unpreviewed,
+    );
+    expect(result.ok).toBe(true);
+    expect(recordApproval).not.toHaveBeenCalled();
+  });
+
+  it('refuses a push approval from a resolver that is not the operator, and persists nothing', async () => {
+    const result = await resolve({ decision: 'approved' }, undefined, pushWorkflow);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('PUSH_APPROVAL_OPERATOR_ONLY');
+      expect(result.error.message).toContain("a push's approval is the operator's to give");
+      expect(result.error.message).toContain('the task is still paused');
+    }
+    expect(mockStore).not.toHaveBeenCalled();
+    expect(mockCommitReplace).not.toHaveBeenCalled();
+
+    const recordApproval = vi.fn(() => Promise.resolve());
+    const operators = await resolve({ decision: 'approved' }, recordApproval, pushWorkflow);
+    expect(operators.ok).toBe(true);
+    expect(recordApproval).toHaveBeenCalledWith({ op: 'host.process.exec', input: PUSH });
   });
 });
 

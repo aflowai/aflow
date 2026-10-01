@@ -2,11 +2,7 @@ import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { PayloadStore } from '@aflow/payload-store';
 import type { Redis } from 'ioredis';
 import type { HumanApprovalCall, TenantId, WorkflowRunResumeInput } from '@aflow/schemas';
-import {
-  HostApprovedPushSchema,
-  RESUME_REPLACE_OUTPUT_ATTEMPT_CAP,
-  normalizeInstructionsForStorage,
-} from '@aflow/schemas';
+import { RESUME_REPLACE_OUTPUT_ATTEMPT_CAP, normalizeInstructionsForStorage } from '@aflow/schemas';
 import { resolveWorkflowForRunRevision } from '@aflow/database';
 import { hostPushRequestHash, setWriteApprovalGrant } from '@aflow/redis';
 import {
@@ -23,6 +19,7 @@ import {
   applyHumanReplaceOutputResolution,
   applyFailTaskResolution,
   applyRejectResolution,
+  hostPushOf,
 } from './workflowRunResumeModes.js';
 import { emitWorkflowProgress, emitRejectedBranchSkips } from './workflowRunProgress.js';
 import { emitRunUpdated } from './runEvents.js';
@@ -60,26 +57,37 @@ export type OperatorWorkflowRunResumeResult =
 
 /**
  * Plan 253's write-approval grant, for a host push: an operator approving a
- * human task whose `approvedCall` is a push is the decision the host executor
- * needs before it sends a range its scan did not clear. Minted here and only
- * here — the operator's resolve, which holds the real actor — keyed by tenant,
- * run and the hash of exactly that push, so neither an agent-driven resume nor
- * anything the push's own input says can stand in for it. A decline goes
- * through `reject` and mints nothing.
+ * human task whose previewed call is a push is the decision the host executor
+ * needs before it sends what its gate does not clear alone. Minted here and
+ * only here — the operator's resolve, which holds the real actor — from the
+ * call the server resolved from the task's `actionPreview`, once the approval
+ * has committed, keyed by tenant, run and the hash of exactly that push. A
+ * decline goes through `reject` and mints nothing.
+ *
+ * The approval has already committed and released the run when this runs, so
+ * a failed write is logged rather than thrown: thrown, it would leave a
+ * running run that nothing dispatches, where unthrown the push is refused
+ * `unapproved` in the run, in the operator's view.
  */
 async function recordHostPushApproval(
   redis: Redis,
   args: { tenantId: string; runId: string; approvedBy: string; approvedCall: HumanApprovalCall },
 ): Promise<void> {
-  if (args.approvedCall.op !== 'host.process.exec') return;
-  const push = HostApprovedPushSchema.safeParse(args.approvedCall.input);
-  if (!push.success) return;
-  await setWriteApprovalGrant(redis, args.tenantId, args.runId, {
-    requestHash: hostPushRequestHash(push.data),
-    decision: 'approved',
-    approvedBy: args.approvedBy,
-    decidedAt: new Date().toISOString(),
-  });
+  const push = hostPushOf(args.approvedCall);
+  if (push === undefined) return;
+  try {
+    await setWriteApprovalGrant(redis, args.tenantId, args.runId, {
+      requestHash: hostPushRequestHash(push),
+      decision: 'approved',
+      approvedBy: args.approvedBy,
+      decidedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    getCyberneticLogger().error(
+      `[executeOperatorWorkflowRunResume] the push approval for run=${args.runId} committed and its grant could not be written; the push will be refused`,
+      err instanceof Error ? err : undefined,
+    );
+  }
 }
 
 export async function executeOperatorWorkflowRunResume(

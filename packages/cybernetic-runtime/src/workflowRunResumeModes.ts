@@ -1,12 +1,9 @@
+import { isDeepStrictEqual } from 'node:util';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { PayloadStore } from '@aflow/payload-store';
-import type {
-  HumanApprovalCall,
-  TenantId,
-  Workflow,
-  WorkflowHumanActionPreview,
-} from '@aflow/schemas';
+import type { HostApprovedPush, HumanApprovalCall, TenantId, Workflow } from '@aflow/schemas';
 import {
+  HostApprovedPushSchema,
   HumanApprovalOutputSchema,
   HumanApprovalResolutionInputSchema,
   inferTaskType,
@@ -51,10 +48,11 @@ export interface HumanReplaceOutputContext {
   actorUserId: string;
   payloadStore: PayloadStore;
   /**
-   * Given only by the authenticated operator boundary, and called with the
-   * call the operator approved before the approval is committed, so whatever
-   * that call later needs to prove the decision exists before anything can
-   * dispatch it. The agent-driven resume passes none, and so mints nothing.
+   * Given only by the authenticated operator boundary, so its absence is what
+   * marks a resolver that is not the operator. Called once the approval has
+   * committed, and only for a task that declares `actionPreview`, with the
+   * call the server resolved from it — an approval that never landed, or one
+   * whose call came from the client alone, leaves nothing behind.
    */
   recordApproval?: (approvedCall: HumanApprovalCall) => Promise<void>;
   storeContext: {
@@ -117,6 +115,7 @@ export async function applyHumanReplaceOutputResolution(
 
   const intent = taskDef.intent ?? 'collect';
   let merged: Record<string, unknown>;
+  let grantableCall: HumanApprovalCall | undefined;
 
   if (intent === 'approve') {
     const parsedClient = HumanApprovalResolutionInputSchema.safeParse(output);
@@ -133,10 +132,10 @@ export async function applyHumanReplaceOutputResolution(
       };
     }
     const client = parsedClient.data;
-    let resolvedPreview: WorkflowHumanActionPreview | undefined;
-    if (taskDef.actionPreview && client.approvedCall === undefined) {
-      const ctx = await runContextFromDetail(run, payloadStore, db, tenantIdStr);
-      const r = resolveActionPreview(taskDef.actionPreview, ctx);
+    let approvedCall: HumanApprovalCall | undefined = client.approvedCall;
+    if (taskDef.actionPreview) {
+      const runContext = await runContextFromDetail(run, payloadStore, db, tenantIdStr);
+      const r = resolveActionPreview(taskDef.actionPreview, runContext);
       if (!r.ok) {
         return {
           ok: false,
@@ -146,11 +145,25 @@ export async function applyHumanReplaceOutputResolution(
           },
         };
       }
-      resolvedPreview = r.preview;
+      const resolvedCall: HumanApprovalCall = { op: r.preview.op, input: r.preview.input };
+      if (client.approvedCall !== undefined) {
+        const differing = approvedCallDifferences(client.approvedCall, resolvedCall);
+        if (differing.length > 0) {
+          return {
+            ok: false,
+            error: {
+              code: 'APPROVED_CALL_MISMATCH',
+              message:
+                'The approvedCall sent differs from the call this task previews, at ' +
+                `${describeDifferences(differing)}. The call approved is the task's preview as ` +
+                'the server resolves it now: approve without approvedCall, or send that call ' +
+                'unchanged. The approval was not persisted.',
+            },
+          };
+        }
+      }
+      approvedCall = resolvedCall;
     }
-    const approvedCall =
-      client.approvedCall ??
-      (resolvedPreview ? { op: resolvedPreview.op, input: resolvedPreview.input } : undefined);
 
     // Belt-and-suspenders: when the task declared actionPreview, approvedCall must materialize
     // AND `.input` must be defined. The schema allows `input` optional (legacy literal-input
@@ -194,9 +207,21 @@ export async function applyHumanReplaceOutputResolution(
         },
       };
     }
-    if (validateApprove.data.approvedCall && ctx.recordApproval) {
-      await ctx.recordApproval(validateApprove.data.approvedCall);
+    const push = approvedCall ? hostPushOf(approvedCall) : undefined;
+    if (push && !ctx.recordApproval) {
+      return {
+        ok: false,
+        error: {
+          code: 'PUSH_APPROVAL_OPERATOR_ONLY',
+          message:
+            `This approval would let \`${push.refspec}\` be pushed from \`${push.bindingId}\`, ` +
+            "and a push's approval is the operator's to give: one given here would be recorded " +
+            'and the push still refused. Nothing was approved; the task is still paused and its ' +
+            'card in the Action Center is still live for the operator.',
+        },
+      };
     }
+    if (taskDef.actionPreview) grantableCall = validateApprove.data.approvedCall;
   } else {
     const schema =
       taskDef.outputContract?.schema ??
@@ -284,7 +309,46 @@ export async function applyHumanReplaceOutputResolution(
     };
   }
 
+  if (grantableCall && ctx.recordApproval) await ctx.recordApproval(grantableCall);
   return { ok: true, succeededTaskId: taskId };
+}
+
+/** The push a call approves, when it is a `host.process.exec` push. */
+export function hostPushOf(call: HumanApprovalCall): HostApprovedPush | undefined {
+  if (call.op !== 'host.process.exec') return undefined;
+  const push = HostApprovedPushSchema.safeParse(call.input);
+  return push.success ? push.data : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Where `sent` departs from `resolved`, as paths; empty when they are deep-equal. */
+function approvedCallDifferences(sent: unknown, resolved: unknown, at = ''): string[] {
+  if (isRecord(sent) && isRecord(resolved)) {
+    const keys = [...new Set([...Object.keys(sent), ...Object.keys(resolved)])].sort();
+    return keys.flatMap((key) =>
+      approvedCallDifferences(sent[key], resolved[key], at === '' ? key : `${at}.${key}`),
+    );
+  }
+  if (Array.isArray(sent) && Array.isArray(resolved) && sent.length === resolved.length) {
+    return sent.flatMap((item, index) =>
+      approvedCallDifferences(item, resolved[index], `${at}[${String(index)}]`),
+    );
+  }
+  return isDeepStrictEqual(sent, resolved) ? [] : [at === '' ? '<root>' : at];
+}
+
+const DIFFERENCES_NAMED = 8;
+
+function describeDifferences(paths: readonly string[]): string {
+  const named = paths
+    .slice(0, DIFFERENCES_NAMED)
+    .map((path) => `\`${path}\``)
+    .join(', ');
+  const more = paths.length - DIFFERENCES_NAMED;
+  return more > 0 ? `${named} and ${String(more)} more` : named;
 }
 
 export async function applyFailTaskResolution(ctx: {

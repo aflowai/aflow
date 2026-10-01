@@ -28,6 +28,7 @@ vi.mock('../ledger.js', async (importOriginal) => {
     releaseResumeClaim: (...args: unknown[]) => mockReleaseResumeClaim(...args),
     resumeRunWithClaim: (...args: unknown[]) => mockResumeRunWithClaim(...args),
     commitReExecutePausedTaskAndResume: (...args: unknown[]) => mockCommitReExecute(...args),
+    getRunCampaignId: () => Promise.resolve(null),
   };
 });
 
@@ -648,26 +649,102 @@ describe('executeOperatorWorkflowRunResume — the operator approving a host pus
     return { result, keys, redis };
   }
 
-  it('grants exactly the approved push, keyed by tenant, run and its hash, before anything dispatches it', async () => {
-    const { result, keys, redis } = await resume(
-      approveInput({ op: 'host.process.exec', input: { ...PUSH, branch: 'aflow/x' } }),
+  function approveWithoutCall(): WorkflowRunResumeInput {
+    return {
+      runId: RUN_ID,
+      pauseVersion: 1,
+      resolution: { mode: 'replace_output', output: { decision: 'approved' } },
+    } as WorkflowRunResumeInput;
+  }
+
+  function previewing(actionPreview: { op: string; input: unknown } | undefined) {
+    mockResolveWorkflowForRunRevision.mockResolvedValue({
+      workflow: {
+        slug: 'local-publish',
+        tasks: [
+          {
+            taskId: TASK_ID,
+            name: 'Approve the push',
+            type: 'human',
+            intent: 'approve',
+            ...(actionPreview ? { actionPreview } : {}),
+          },
+          { taskId: 'push', name: 'Push the commit' },
+        ],
+      },
+    });
+  }
+
+  it('grants exactly the previewed push, keyed by tenant, run and its hash, once the approval commits', async () => {
+    for (const input of [
+      approveWithoutCall(),
+      approveInput({ op: 'host.process.exec', input: PUSH }),
+    ]) {
+      vi.clearAllMocks();
+      const { result, keys, redis } = await resume(input);
+      expect(result).toEqual({ ok: true, runId: RUN_ID });
+
+      const requestHash = hostPushRequestHash(PUSH);
+      const grant = await getWriteApprovalGrant(redis as never, TENANT, RUN_ID, requestHash);
+      expect(grant).toMatchObject({ requestHash, decision: 'approved', approvedBy: 'user-1' });
+      expect([...keys.keys()]).toEqual([writeApprovalGrantKey(TENANT, RUN_ID, requestHash)]);
+      const minted = redis.set.mock.invocationCallOrder[0] ?? -1;
+      expect(minted).toBeGreaterThan(
+        mockCommitReplaceOutput.mock.invocationCallOrder[0] ?? Infinity,
+      );
+      expect(minted).toBeLessThan(hooks.dispatchNextOrTerminate.mock.invocationCallOrder[0] ?? -1);
+    }
+  });
+
+  it('refuses an approvedCall that is not the previewed push, naming where, and mints nothing', async () => {
+    const { result, keys } = await resume(
+      approveInput({
+        op: 'host.process.exec',
+        input: { ...PUSH, refspec: `${'d'.repeat(40)}:refs/heads/aflow/x`, branch: 'aflow/x' },
+      }),
+    );
+    expect(result).toMatchObject({ ok: false, code: 'APPROVED_CALL_MISMATCH' });
+    if (!result.ok) expect(result.message).toContain('at `input.branch`, `input.refspec`.');
+    expect(mockCommitReplaceOutput).not.toHaveBeenCalled();
+    expect(mockReleaseResumeClaim).toHaveBeenCalledOnce();
+    expect(hooks.dispatchNextOrTerminate).not.toHaveBeenCalled();
+    expect(keys.size).toBe(0);
+  });
+
+  it('mints nothing for an approval whose commit did not land', async () => {
+    for (const outcome of ['claim_lost', 'task_row_not_paused'] as const) {
+      mockCommitReplaceOutput.mockResolvedValueOnce(outcome);
+      const { result, keys } = await resume(approveWithoutCall());
+      expect(result.ok, outcome).toBe(false);
+      expect(keys.size, outcome).toBe(0);
+    }
+    expect(hooks.dispatchNextOrTerminate).not.toHaveBeenCalled();
+  });
+
+  it('still drives a committed approval forward when its grant cannot be written', async () => {
+    const result = await executeOperatorWorkflowRunResume(
+      {
+        db: {} as never,
+        redis: { set: () => Promise.reject(new Error('redis down')) } as never,
+        payloadStore: { store: () => Promise.resolve('payload:approval') } as never,
+      },
+      { tenantId: TENANT, spaceId: SPACE_ID, userId: 'user-1', input: approveWithoutCall() },
+      hooks,
     );
     expect(result).toEqual({ ok: true, runId: RUN_ID });
-
-    const requestHash = hostPushRequestHash(PUSH);
-    const grant = await getWriteApprovalGrant(redis as never, TENANT, RUN_ID, requestHash);
-    expect(grant).toMatchObject({ requestHash, decision: 'approved', approvedBy: 'user-1' });
-    expect([...keys.keys()]).toEqual([writeApprovalGrantKey(TENANT, RUN_ID, requestHash)]);
-    // Written before the approval commits, so the push the commit releases finds it.
-    const minted = redis.set.mock.invocationCallOrder[0] ?? Infinity;
-    expect(minted).toBeLessThan(mockCommitReplaceOutput.mock.invocationCallOrder[0] ?? -1);
     expect(hooks.dispatchNextOrTerminate).toHaveBeenCalledOnce();
   });
 
-  it('mints nothing for an approved call that is not a push', async () => {
-    const { result, keys } = await resume(
-      approveInput({ op: 'kaggle.submit', input: { path: '/tmp/submission.csv' } }),
-    );
+  it('mints nothing for a task without actionPreview, whatever approvedCall says', async () => {
+    previewing(undefined);
+    const { result, keys } = await resume(approveInput({ op: 'host.process.exec', input: PUSH }));
+    expect(result).toEqual({ ok: true, runId: RUN_ID });
+    expect(keys.size).toBe(0);
+  });
+
+  it('mints nothing for a previewed call that is not a push', async () => {
+    previewing({ op: 'kaggle.submit', input: { path: '/tmp/submission.csv' } });
+    const { result, keys } = await resume(approveWithoutCall());
     expect(result).toEqual({ ok: true, runId: RUN_ID });
     expect(keys.size).toBe(0);
   });

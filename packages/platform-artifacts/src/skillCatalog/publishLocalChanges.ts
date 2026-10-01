@@ -122,7 +122,7 @@ const BASE_SHA_SCHEMA = {
 
 const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'publish-local-changes',
-  version: 14,
+  version: 15,
   name: 'Publish Local Changes',
   tagline:
     'Commit a patch onto a branch of a connected repository, then push it and open the pull request — asking the operator first unless the folder says otherwise.',
@@ -624,7 +624,8 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
               commitSha: { kind: 'task_output' as const, taskId: 'commit', path: 'commit.sha' },
               // `bindingId`, `refspec` and `receipt` are the push call: the
               // operator's approval mints a grant for exactly that push, and
-              // the executor sends a range the scan did not clear only on it.
+              // the executor sends a range the scan did not clear, or any range
+              // from an `always` folder, only on it.
               receipt: { kind: 'task_output' as const, taskId: 'scan-commit', path: 'receipt' },
               refspec: {
                 kind: 'task_output' as const,
@@ -824,7 +825,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
       priority: 50,
     },
     rationale:
-      "Eight tasks, the approval between the local and the published half: the commit lands in a detached worktree, so a decline costs nothing. host.commit.scan reads all the push would add (from origin/<base>, fetched), its commits' headers and messages, and the pull request's title and summary: a finding fails the run; an unread file or a line marked allowed asks, unreviewed, whatever the posture. Over a cleared range the posture, and under unless-unreviewed a Local Code Review, decide whether to ask; asked, the push follows the decision. The push argv is pinned but for the refspec: no force, --no-follow-tags, --no-recurse-submodules. The executor refuses the push without the scan's receipt for the commit — for a range not cleared, also the approval's copy of it — and, just before git runs, where origin pushes elsewhere than it fetches or origin/<base> lost the measured sha. The repository is read through the space's GitHub binding first; the folder is a run input until folder roles land.",
+      "Eight tasks, the approval between the local and published halves: the commit lands in a detached worktree, so a decline costs nothing. host.commit.scan reads all a push would add (from a fetched origin/<base>), its commits' headers and messages, and the PR's title and summary: a finding fails the run; an unread file or an allowed line asks, unreviewed, whatever the posture. Over a cleared range the posture, and under unless-unreviewed a Local Code Review, decide whether to ask; asked, it follows the decision. The push argv is pinned bar the refspec: no force, tags or submodules. The executor refuses a push without the scan's receipt for the range from where origin/<base> is measured to be to the commit, re-measures that base just before git runs, and lets a range the scan did not clear (under always, any) through only on the grant the operator's approval minted in this run. The repository is read via the space's GitHub binding first; the folder is a run input until folder roles land.",
   },
 };
 

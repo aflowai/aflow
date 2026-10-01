@@ -95,6 +95,18 @@ vi.mock('@aflow/cybernetic-runtime', async () => {
   };
 });
 
+// The human-task resolution runs inside the package, past the mock above, so
+// the ledger it commits through is stubbed where it lives.
+vi.mock(
+  '../../../../../../../../packages/cybernetic-runtime/src/ledger.js',
+  async (importOriginal) => ({
+    ...(await importOriginal<Record<string, unknown>>()),
+    bumpResumeAttemptCount: (...args: unknown[]) => mockBumpResumeAttemptCount(...args),
+    commitReplaceOutputAndResume: (...args: unknown[]) => mockCommitReplaceOutputAndResume(...args),
+    getRunCampaignId: () => Promise.resolve(null),
+  }),
+);
+
 vi.mock('@aflow/database', () => ({
   getDatabase: vi.fn(() => ({})),
   createTenantContext: vi.fn(() => ({})),
@@ -1900,5 +1912,85 @@ describe('workflow.run.resume — Plan 141 §4.2 provide_input mode', () => {
       unknown
     >;
     expect(error['code']).toBe('RE_EXECUTE_UNSAFE_TASK_REQUIRES_CONFIRMATION');
+  });
+});
+
+describe("workflow.run.resume — a push's approval is the operator's", () => {
+  const PUSH = {
+    bindingId: 'folder-1',
+    refspec: `${'c'.repeat(40)}:refs/heads/aflow/x`,
+    receipt: 'receipt-unscanned',
+  };
+
+  function stepError(): Record<string, unknown> {
+    const result = mockAddStepResult.mock.calls[0]![1] as Record<string, unknown>;
+    if (typeof result['errorRef'] === 'string') {
+      const inline = result['errorRef'].slice('inline:'.length);
+      return JSON.parse(Buffer.from(inline, 'base64').toString('utf8')) as Record<string, unknown>;
+    }
+    return result['error'] as Record<string, unknown>;
+  }
+
+  it('refuses an agent approving a push, and leaves the task paused for the operator', async () => {
+    const [pausedRow] = makePausedRun().tasks;
+    mockLoadRunById.mockResolvedValueOnce(
+      makePausedRun({
+        workflowSlug: 'publish-local-changes',
+        pausedReason: 'task_paused',
+        tasks: [{ ...pausedRow, taskId: 'approve-push', failureReason: null, outputRef: null }],
+      }),
+    );
+    mockResolveWorkflowForRunRevision.mockResolvedValue({
+      workflow: {
+        slug: 'publish-local-changes',
+        revision: 1,
+        mode: 'process' as const,
+        description: 'Publish',
+        tasks: [
+          {
+            taskId: 'approve-push',
+            name: 'Approve the push',
+            type: 'human' as const,
+            intent: 'approve' as const,
+            actionPreview: { op: 'host.process.exec', input: PUSH },
+          },
+          { taskId: 'push', name: 'Push', goal: 'g', type: 'agent' as const },
+        ],
+        outcomes: [],
+      },
+      source: 'revision' as const,
+    });
+    mockSurfaceWorkflowResumeContract.mockResolvedValue({
+      contract: makeContract({
+        pauseCause: 'needs_decision',
+        allowedResumeModes: ['replace_output', 'reject', 'fail'],
+        failedTaskId: 'approve-push',
+      }),
+      pauseVersion: 1,
+      pausedReason: 'task_paused',
+      resumeAttemptCount: 0,
+    });
+    mockCommitReplaceOutputAndResume.mockResolvedValue('committed');
+
+    const args = makeArgs({
+      runId: RUN_ID,
+      pauseVersion: 1,
+      resolution: { mode: 'replace_output', output: { decision: 'approved' } },
+    });
+    await handleWorkflowCrudInline(args);
+
+    const error = stepError();
+    expect(error['code']).toBe('PUSH_APPROVAL_OPERATOR_ONLY');
+    expect(String(error['message'])).toContain("a push's approval is the operator's to give");
+    expect(mockCommitReplaceOutputAndResume).not.toHaveBeenCalled();
+    const { store } = args.payloadStore as unknown as { store: ReturnType<typeof vi.fn> };
+    expect(store).not.toHaveBeenCalled();
+    expect(mockReleaseResumeClaim).toHaveBeenCalledWith(
+      expect.anything(),
+      TENANT,
+      RUN_ID,
+      'claim-token-1',
+    );
+    expect(mockDispatchNextOrTerminate).not.toHaveBeenCalled();
   });
 });
