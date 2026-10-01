@@ -3,10 +3,12 @@
  *
  * Every commit in the range is read, not the range's net diff: a push carries
  * each commit, so a secret added in one and removed in the next still leaves
- * the machine. Only added lines and the commits' messages are read, and only
- * from the repository's objects — the working tree, the index and every ref
- * are left alone. Text that leaves with the push but is not in a commit, such
- * as a pull request's title and body, is handed in and read the same way.
+ * the machine. Only added lines and the commits' headers and messages are
+ * read, and only from the repository's objects as they are stored — a push
+ * sends those, never what a `refs/replace/` ref substitutes for them. The
+ * working tree, the index and every ref are left alone. Text that leaves with
+ * the push but is not in a commit, such as a pull request's title and body, is
+ * handed in and read the same way.
  *
  * A line that matches says so by where it is, line and rule name. What matched
  * is never held past the test that found it.
@@ -19,7 +21,14 @@ import {
 import type { z } from 'zod';
 
 import { scanLine } from './secretRules.js';
-import { countCommits, forEachGitLine, resolveCommit, WorktreeError } from './worktree.js';
+import {
+  countCommits,
+  forEachGitChunk,
+  forEachGitLine,
+  LineCutter,
+  resolveCommit,
+  WorktreeError,
+} from './worktree.js';
 
 type HostCommitScanOutput = z.infer<typeof HostCommitScanOutputSchema>;
 type Finding = HostCommitScanOutput['findings'][number];
@@ -137,7 +146,7 @@ function binaryPath(line: string): string | undefined {
 const LFS_POINTER_VERSION = 'version https://git-lfs.github.com/spec/';
 const LFS_POINTER_OID = /^oid sha256:[0-9a-f]{64}$/;
 
-/** One file's part of one commit's diff, one commit's message, or one text. */
+/** One file's part of one commit's diff, one commit's headers or message, or one text. */
 interface FileSection {
   file: string | undefined;
   addedBytes: number;
@@ -220,6 +229,20 @@ function readLine(section: FileSection, line: string, bytes: number, lineNumber:
   else section.findings.push(place);
 }
 
+/** Read part of the range, refusing the range if that part cannot be read whole. */
+async function whole(base: string, head: string, read: () => Promise<void>): Promise<void> {
+  try {
+    await read();
+  } catch (error) {
+    if (!(error instanceof WorktreeError)) throw error;
+    throw new WorktreeError(
+      `The commits of \`${base}..${head}\` could not be read whole, and a range read in part ` +
+        `is not cleared: ${error.message}`,
+      'git_failed',
+    );
+  }
+}
+
 /** Run git over the range a line at a time, refusing the range if any of it cannot be read whole. */
 async function readRange(
   root: string,
@@ -228,7 +251,7 @@ async function readRange(
   args: readonly string[],
   read: (line: string, bytes: number) => void,
 ): Promise<void> {
-  try {
+  await whole(base, head, async () => {
     await forEachGitLine(
       root,
       args,
@@ -240,14 +263,7 @@ async function readRange(
       },
       read,
     );
-  } catch (error) {
-    if (!(error instanceof WorktreeError)) throw error;
-    throw new WorktreeError(
-      `The commits of \`${base}..${head}\` could not be read whole, and a range read in part ` +
-        `is not cleared: ${error.message}`,
-      'git_failed',
-    );
-  }
+  });
 }
 
 /**
@@ -334,13 +350,112 @@ async function readAddedLines(
   closeSection(section, tally);
 }
 
+/** The line `cat-file --batch` puts before each object it prints. */
+const BATCH_HEADER = /^([0-9a-f]{40,64}) commit (\d+)$/;
+const BATCH_HEADER_MAX_BYTES = 256;
+
 /**
- * Read every commit's message in the range, each as its own text: a push
- * carries the messages with the commits. Each is read from the commit object
- * itself — everything after the blank line that ends its headers — because a
- * formatted message ends at a NUL byte and the object does not.
+ * One commit object at a time out of `git cat-file --batch`, its headers and
+ * its message each read as a text of its own. The objects are cut by the size
+ * git states for each rather than by lines, since a message need not end in a
+ * newline and may hold anything.
  */
-async function readMessages(
+class CommitObjectReader {
+  private state: 'header' | 'object' | 'separator' = 'header';
+  private header: Buffer[] = [];
+  private headerBytes = 0;
+  private remaining = 0;
+  private lines: LineCutter | undefined;
+  private headers: FileSection | undefined;
+  private message: FileSection | undefined;
+
+  constructor(private readonly tally: ScanTally) {}
+
+  push(chunk: Buffer): void {
+    let offset = 0;
+    while (offset < chunk.length) {
+      if (this.state === 'header') {
+        const newline = chunk.indexOf(0x0a, offset);
+        const end = newline === -1 ? chunk.length : newline;
+        this.headerBytes += end - offset;
+        if (this.headerBytes > BATCH_HEADER_MAX_BYTES) this.refuse();
+        this.header.push(chunk.subarray(offset, end));
+        offset = end;
+        if (newline === -1) return;
+        offset += 1;
+        this.open(Buffer.concat(this.header).toString('utf8'));
+      } else if (this.state === 'object') {
+        const taken = Math.min(this.remaining, chunk.length - offset);
+        this.lines?.push(chunk.subarray(offset, offset + taken));
+        this.remaining -= taken;
+        offset += taken;
+        if (this.remaining === 0) this.close();
+      } else {
+        if (chunk[offset] !== 0x0a) this.refuse();
+        offset += 1;
+        this.state = 'header';
+      }
+    }
+  }
+
+  /** Refuse output that stopped part-way through an object. */
+  end(): void {
+    if (this.state !== 'header' || this.headerBytes > 0) this.refuse();
+  }
+
+  private open(line: string): void {
+    const parsed = BATCH_HEADER.exec(line);
+    if (parsed?.[1] === undefined || parsed[2] === undefined) this.refuse();
+    const sha = parsed[1];
+    this.header = [];
+    this.headerBytes = 0;
+    this.remaining = Number(parsed[2]);
+    const headers = openSection(`${sha} (headers)`);
+    const message = openSection(`${sha} (message)`);
+    this.headers = headers;
+    this.message = message;
+    let inMessage = false;
+    let headerLine = 0;
+    let messageLine = 0;
+    this.lines = new LineCutter(SCAN_MAX_LINE_BYTES + 1, (text, bytes) => {
+      if (inMessage) {
+        messageLine += 1;
+        readLine(message, text, bytes + 1, messageLine);
+      } else if (text === '') {
+        inMessage = true;
+      } else {
+        headerLine += 1;
+        readLine(headers, text, bytes + 1, headerLine);
+      }
+    });
+    this.state = 'object';
+    if (this.remaining === 0) this.close();
+  }
+
+  private close(): void {
+    this.lines?.end();
+    closeSection(this.headers, this.tally);
+    closeSection(this.message, this.tally);
+    this.lines = undefined;
+    this.state = 'separator';
+  }
+
+  private refuse(): never {
+    throw new WorktreeError(
+      'git cat-file printed something other than commit objects.',
+      'git_failed',
+    );
+  }
+}
+
+/**
+ * Read the headers and the message of every commit in the range, each as a
+ * text of its own: a push carries both with the commits — author, committer,
+ * a `mergetag`'s whole tag, and any header git does not name. Both are read
+ * from the commit objects themselves, with one `git cat-file --batch`, because
+ * a formatted message ends at a NUL byte and the object does not.
+ */
+async function readCommitObjects(
   root: string,
   base: string,
   head: string,
@@ -350,20 +465,20 @@ async function readMessages(
   await readRange(root, base, head, ['rev-list', `${base}..${head}`], (line) => {
     if (line !== '') shas.push(line);
   });
-  for (const sha of shas) {
-    const section = openSection(`${sha} (message)`);
-    let inMessage = false;
-    let lineNumber = 0;
-    await readRange(root, base, head, ['cat-file', 'commit', sha], (line, bytes) => {
-      if (!inMessage) {
-        inMessage = line === '';
-        return;
-      }
-      lineNumber += 1;
-      readLine(section, line, bytes + 1, lineNumber);
-    });
-    closeSection(section, tally);
-  }
+  if (shas.length === 0) return;
+  const reader = new CommitObjectReader(tally);
+  await whole(base, head, async () => {
+    await forEachGitChunk(
+      root,
+      ['cat-file', '--batch'],
+      { maxBytes: SCAN_MAX_DIFF_BYTES, timeoutMs: SCAN_TIMEOUT_MS },
+      (chunk) => {
+        reader.push(chunk);
+      },
+      `${shas.join('\n')}\n`,
+    );
+    reader.end();
+  });
 }
 
 /** Read each text passed beside the range, under its name. */
@@ -407,8 +522,8 @@ function summarize(
   const scope = `the ${plural(commits, 'commit', 'commits')} of \`${range}\``;
   const read =
     textNames.length === 0
-      ? `the lines ${scope} add and their messages`
-      : `the lines ${scope} add, their messages and ${textNames.map((name) => `\`${name}\``).join(', ')}`;
+      ? `the lines ${scope} add and their headers and messages`
+      : `the lines ${scope} add, their headers and messages, and ${textNames.map((name) => `\`${name}\``).join(', ')}`;
   const { findings, allowed, unscanned } = tally;
   const sentences: string[] = [];
   if (findings.total > 0) {
@@ -439,9 +554,9 @@ function summarize(
 }
 
 /**
- * Scan the lines `<baseSha>..<sha>` adds, the messages of its commits, and
- * each text that leaves with them. Refused, not cleared, when either end names
- * no commit or the range is too large to read whole.
+ * Scan the lines `<baseSha>..<sha>` adds, the headers and messages of its
+ * commits, and each text that leaves with them. Refused, not cleared, when
+ * either end names no commit or the range is too large to read whole.
  */
 export async function scanCommitRange(
   root: string,
@@ -462,7 +577,7 @@ export async function scanCommitRange(
     unscanned: new Listing(),
   };
   await readAddedLines(root, base, head, tally);
-  await readMessages(root, base, head, tally);
+  await readCommitObjects(root, base, head, tally);
   readTexts(texts, tally);
   const commits = await countCommits(root, base, head);
   const unflagged = tally.findings.total === 0;

@@ -84,6 +84,7 @@ export class WorktreeError extends Error {
       | 'no_identity'
       | 'unknown_ref'
       | 'stale_base'
+      | 'push_target_differs'
       | 'fetch_failed',
   ) {
     super(message);
@@ -129,6 +130,15 @@ const GIT_SAFETY_ARGS = [
 ];
 
 /**
+ * Objects read as they are stored, never as `refs/replace/*` substitutes them.
+ * A push sends the stored objects, so a replacement would have the scan, the
+ * measure of the push range and the review read one commit while `origin`
+ * receives another. In the environment rather than as `--no-replace-objects`
+ * so it reaches the git a coding agent runs in its checkout too.
+ */
+export const NO_REPLACE_OBJECTS_ENV = { GIT_NO_REPLACE_OBJECTS: '1' } as const;
+
+/**
  * Minimal, and deliberately without `REDIS_URL` or `PHOENIX_INSTANCE_SECRET`.
  * `PATH` and `HOME` are what git needs to find itself and its config; the rest
  * of this executor's environment is none of its business.
@@ -138,6 +148,7 @@ function gitEnv(globalConfig: 'withheld' | 'read' = 'withheld'): Record<string, 
     GIT_TERMINAL_PROMPT: '0',
     GIT_CONFIG_NOSYSTEM: '1',
     GIT_OPTIONAL_LOCKS: '0',
+    ...NO_REPLACE_OBJECTS_ENV,
   };
   // Withheld for everything that checks out, stages or commits — which is
   // everything but the two identity strings read below.
@@ -258,10 +269,32 @@ export async function forEachGitLine(
   },
   onLine: (line: string, bytes: number) => void,
 ): Promise<void> {
+  const lines = new LineCutter(limits.maxLineBytes, onLine);
+  await forEachGitChunk(cwd, args, limits, (chunk) => {
+    lines.push(chunk);
+  });
+  lines.end();
+}
+
+/**
+ * What git prints for `args`, handed over in the chunks it arrives in, with
+ * `stdin` written to it first: for output that is not lines, such as
+ * `cat-file --batch`. The same limits and refusals as `forEachGitLine`.
+ */
+export async function forEachGitChunk(
+  cwd: string,
+  args: readonly string[],
+  limits: { readonly maxBytes: number; readonly timeoutMs: number },
+  onChunk: (chunk: Buffer) => void,
+  stdin?: string,
+): Promise<void> {
   const child = spawn('git', ['-C', cwd, ...GIT_SAFETY_ARGS, ...args], {
     env: gitEnv(),
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['pipe', 'pipe', 'pipe'],
   });
+  // git may exit before reading all of it; its exit status says why.
+  child.stdin.on('error', () => undefined);
+  child.stdin.end(stdin ?? '');
   let stderr = '';
   child.stderr.setEncoding('utf8');
   child.stderr.on('data', (chunk: string) => {
@@ -279,7 +312,6 @@ export async function forEachGitLine(
     refusal = `git did not finish within ${String(limits.timeoutMs / 1000)} seconds.`;
     child.kill('SIGKILL');
   }, limits.timeoutMs);
-  const lines = new LineCutter(limits.maxLineBytes, onLine);
   let readBytes = 0;
   try {
     for await (const chunk of child.stdout as AsyncIterable<Buffer>) {
@@ -289,14 +321,13 @@ export async function forEachGitLine(
         child.kill('SIGKILL');
         break;
       }
-      lines.push(chunk);
+      onChunk(chunk);
     }
     const code = await exited;
     if (refusal !== undefined) throw new WorktreeError(refusal, 'git_failed');
     if (code !== 0) {
       throw new WorktreeError(stderr.split('\n')[0] || `git exited ${String(code)}`, 'git_failed');
     }
-    lines.end();
   } finally {
     clearTimeout(timer);
     if (child.exitCode === null) child.kill('SIGKILL');
@@ -705,6 +736,41 @@ export async function remoteFetchUrl(root: string, remote: string): Promise<stri
     { timeout: GIT_TIMEOUT_MS, maxBuffer: 64 * 1024, env: transportEnv() },
   );
   return stdout.trim();
+}
+
+/**
+ * Every URL a push to `remote` reaches, as the operator's own git resolves it:
+ * `pushurl` where one is set, each `url` otherwise, after their
+ * `pushInsteadOf` rewrites. A push goes to all of them.
+ */
+export async function remotePushUrls(root: string, remote: string): Promise<string[]> {
+  const { stdout } = await run(
+    'git',
+    ['-C', root, ...GIT_SAFETY_ARGS, 'remote', 'get-url', '--push', '--all', remote],
+    { timeout: GIT_TIMEOUT_MS, maxBuffer: 64 * 1024, env: transportEnv() },
+  );
+  return stdout
+    .split('\n')
+    .map((url) => url.trim())
+    .filter((url) => url !== '');
+}
+
+/** Whether `ancestor` is `descendant` or a commit under it. */
+export async function isAncestor(
+  root: string,
+  ancestor: string,
+  descendant: string,
+): Promise<boolean> {
+  try {
+    await git(root, ['merge-base', '--is-ancestor', ancestor, descendant]);
+    return true;
+  } catch (error) {
+    // 1 is git's "no"; any other status is git failing to answer.
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 1) {
+      return false;
+    }
+    throw error;
+  }
 }
 
 /** Where git keeps `name` for the repository at `root`, such as FETCH_HEAD. */

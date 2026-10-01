@@ -13,8 +13,9 @@ import { promisify } from 'node:util';
 import { PayloadAccessError } from '@aflow/executor-runtime';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { createHostCommitHandler } from '../handlers/commitHandlers.js';
+import { PUSH_REQUIRED_OPTIONS } from '../bindings.js';
 import { createHostPatchHandler } from '../handlers/patchHandlers.js';
+import { createHostProcessHandler } from '../handlers/processHandlers.js';
 import { fetchedBranch, fetchHeadSource } from '../pushBase.js';
 import { INLINE_DIFF_CAP_BYTES } from '../worktree.js';
 
@@ -902,49 +903,145 @@ describe('measuring what a push of the commit would add', () => {
     }
   });
 
-  describe('checking the base again before the push', () => {
-    async function checkBase(range: string) {
+  describe("the push checks origin's base and URL in its own step", () => {
+    /** The same folder, granted commands and pushes under `aflow/`. */
+    beforeEach(async () => {
+      const policy = JSON.parse(await readFile(policyPath, 'utf8')) as {
+        bindings: Record<string, unknown>[];
+      };
+      policy.bindings.push({
+        id: 'hb_push',
+        root,
+        mode: 'readwrite',
+        allowsExecution: true,
+        branchPolicy: { branchPrefix: 'aflow/' },
+        singleFile: false,
+        spaceId: 'space-test',
+      });
+      await writeFile(policyPath, JSON.stringify(policy));
+    });
+
+    async function push(range: string, remote = 'origin', pushBase: unknown = undefined) {
+      const sha = range.split('..')[1] ?? '';
       const captured: Captured = {};
-      const result = await createHostCommitHandler(policyPath).execute({
-        ...(contextFor({ bindingId: 'hb', base: 'main', range }, captured) as object),
-        operationId: 'host.commit.check_base',
+      const result = await createHostProcessHandler(policyPath).execute({
+        ...(contextFor(
+          {
+            bindingId: 'hb_push',
+            command: ['git', 'push', ...PUSH_REQUIRED_OPTIONS, remote, `${sha}:refs/heads/aflow/x`],
+            pushBase: pushBase ?? { base: 'main', range },
+          },
+          captured,
+        ) as object),
+        operationId: 'host.process.exec',
       } as never);
-      return { result, captured };
+      return { result, message: result.error?.message ?? '' };
     }
 
-    it('passes while origin holds the base the range was measured from', async () => {
+    async function pushedBranch(remote = origin): Promise<string | undefined> {
+      const listed = await git(remote, 'ls-remote', remote, 'refs/heads/aflow/x');
+      return listed.split('\t')[0] || undefined;
+    }
+
+    async function measured(): Promise<{ range: string; from: string; sha: string }> {
       const { commit } = await publish({ pushBase: 'main' });
       const range = String(commit?.['pushRange']);
-      const { result, captured } = await checkBase(range);
+      return { range, from: range.split('..')[0] ?? '', sha: range.split('..')[1] ?? '' };
+    }
+
+    it('pushes while origin holds the base the range was measured from', async () => {
+      const { range, sha } = await measured();
+      const { result } = await push(range);
       expect(result.status).toBe('SUCCEEDED');
-      expect(captured.output).toEqual({ baseSha: range.split('..')[0] });
+      expect(await pushedBranch()).toBe(sha);
     }, 30_000);
 
-    it('fails when origin moved the base on since, saying from where to where', async () => {
-      const { commit } = await publish({ pushBase: 'main' });
-      const range = String(commit?.['pushRange']);
-      const measured = range.split('..')[0] ?? '';
-      const now = await pushedElsewhere();
-      const { result } = await checkBase(range);
-      expect(result.status).toBe('FAILED');
-      const message = result.error?.message ?? '';
-      expect(message).toContain(`\`origin/main\` was at \`${measured}\``);
-      expect(message).toContain(`is at \`${now}\` now`);
-      expect(message).toContain('The publication has to run again');
+    it('pushes when origin moved the base forward, which holds what was measured', async () => {
+      const { range, sha } = await measured();
+      await pushedElsewhere();
+      const { result } = await push(range);
+      expect(result.status).toBe('SUCCEEDED');
+      expect(await pushedBranch()).toBe(sha);
     }, 30_000);
 
     it('fails when origin rewound the base, which would send what the scan left out', async () => {
       const unpushed = await commitLocally('leaked.txt');
       await git(root, 'push', '-q', 'origin', 'HEAD:main');
-      const { commit } = await publish({ pushBase: 'main' });
-      const range = String(commit?.['pushRange']);
-      expect(range.split('..')[0]).toBe(unpushed);
+      const { range, from } = await measured();
+      expect(from).toBe(unpushed);
 
       const before = (await git(root, 'rev-parse', `${unpushed}^`)).trim();
       await git(root, 'push', '-q', '--force', 'origin', `${before}:refs/heads/main`);
-      const { result } = await checkBase(range);
+      const { result, message } = await push(range);
       expect(result.status).toBe('FAILED');
-      expect(result.error?.message ?? '').toContain(`is at \`${before}\` now`);
+      expect(message).toContain(`\`origin/main\` was at \`${unpushed}\``);
+      expect(message).toContain(`is at \`${before}\` now, which no longer holds it`);
+      expect(message).toContain('The publication has to run again');
+      expect(await pushedBranch()).toBeUndefined();
+    }, 30_000);
+
+    it('fails when origin rewrote the base onto another line, saying from where to where', async () => {
+      const { range, from } = await measured();
+      const tree = (await git(root, 'rev-parse', `${from}^{tree}`)).trim();
+      const parent = (await git(root, 'rev-parse', `${from}^`).catch(() => '')).trim();
+      const sibling = (
+        await git(root, 'commit-tree', tree, ...(parent ? ['-p', parent] : []), '-m', 'rewritten')
+      ).trim();
+      await git(root, 'push', '-q', '--force', 'origin', `${sibling}:refs/heads/main`);
+      const { result, message } = await push(range);
+      expect(result.status).toBe('FAILED');
+      expect(message).toContain(`was at \`${from}\``);
+      expect(message).toContain(`is at \`${sibling}\` now`);
+      expect(await pushedBranch()).toBeUndefined();
+    }, 30_000);
+
+    it('fails a push origin sends elsewhere than it fetches, naming both, with nothing pushed', async () => {
+      const { range } = await measured();
+      const elsewhere = join(base, 'push-only.git');
+      await run('git', ['init', '-q', '--bare', elsewhere]);
+      await git(root, 'config', 'remote.origin.pushurl', elsewhere);
+      const { result, message } = await push(range);
+      expect(result.status).toBe('FAILED');
+      expect(message).toContain(`A push to \`origin\` goes to \`${elsewhere}\``);
+      expect(message).toContain(`its base was fetched from \`${origin}\``);
+      expect(message).toContain('Nothing was pushed');
+      expect(await pushedBranch()).toBeUndefined();
+      expect(await pushedBranch(elsewhere)).toBeUndefined();
+    }, 30_000);
+
+    it('fails a push a `pushInsteadOf` rewrite sends elsewhere', async () => {
+      const { range } = await measured();
+      const elsewhere = join(base, 'rewritten.git');
+      await run('git', ['init', '-q', '--bare', elsewhere]);
+      await git(root, 'config', `url.${elsewhere}.pushInsteadOf`, origin);
+      const { result, message } = await push(range);
+      expect(result.status).toBe('FAILED');
+      expect(message).toContain(`goes to \`${elsewhere}\``);
+      expect(await pushedBranch(elsewhere)).toBeUndefined();
+    }, 30_000);
+
+    it('refuses the check on a push to another remote, and on anything but a push', async () => {
+      const { range } = await measured();
+      await git(root, 'remote', 'add', 'mirror', origin);
+      const other = await push(range, 'mirror');
+      expect(other.result.status).toBe('FAILED');
+      expect(other.message).toContain('This push names `mirror`');
+      expect(await pushedBranch()).toBeUndefined();
+
+      const captured: Captured = {};
+      const notPush = await createHostProcessHandler(policyPath).execute({
+        ...(contextFor(
+          {
+            bindingId: 'hb_push',
+            command: ['git', 'status'],
+            pushBase: { base: 'main', range },
+          },
+          captured,
+        ) as object),
+        operationId: 'host.process.exec',
+      } as never);
+      expect(notPush.status).toBe('FAILED');
+      expect(notPush.error?.message ?? '').toContain('`pushBase` is checked before a push');
     }, 30_000);
   });
 });

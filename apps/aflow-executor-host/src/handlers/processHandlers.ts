@@ -39,6 +39,8 @@ import {
 import { createChatterStripper } from '../egressRefusals.js';
 import { EnvPolicyError } from '../envPolicy.js';
 import { explainFailedStart } from '../executableHint.js';
+import { confirmPushTarget } from '../pushBase.js';
+import { WorktreeError } from '../worktree.js';
 import {
   type HostBinding,
   HostBindingError,
@@ -109,6 +111,9 @@ async function failure(ctx: ExecutorContext, error: unknown): Promise<StepResult
         : permissionError(error.message),
     );
   }
+  if (error instanceof WorktreeError) {
+    return await failureWithError(ctx, validationError(error.message));
+  }
   const code =
     typeof error === 'object' && error !== null && 'code' in error
       ? String((error as { code: unknown }).code)
@@ -139,7 +144,25 @@ async function execProcess(ctx: ExecutorContext, policyPath: string): Promise<St
     // the one command whose effect lands outside the boundary the sandbox can
     // enforce, and the one that then runs outside it, so what it would move is
     // read while it is still an argv.
-    requirePushAllowed(binding, input.command, { env: input.env, detach: input.detach });
+    const pushRemote = requirePushAllowed(binding, input.command, {
+      env: input.env,
+      detach: input.detach,
+    });
+    if (input.pushBase !== undefined) {
+      if (pushRemote === undefined) {
+        return await failureWithError(
+          ctx,
+          validationError(
+            '`pushBase` is checked before a push and belongs to no other command. Drop it, ' +
+              'or send it with the `git push` it guards.',
+          ),
+        );
+      }
+      // In the push's own step rather than one before it, so nothing between
+      // the check and git's own push can move the base unnoticed but the
+      // remote itself in the moment they are apart.
+      await confirmPushTarget(binding.root, pushRemote, input.pushBase.base, input.pushBase.range);
+    }
 
     // Live standard error carries the adapter's own narration alongside the
     // command's, and a viewer reading the sandbox describe its sockets cannot

@@ -518,7 +518,7 @@ describe('host.commit.scan', () => {
       findings: [],
       unscanned: [],
       allowed: [],
-      summary: `No secret found in the lines the 1 commit of \`${start}..${head}\` add and their messages.`,
+      summary: `No secret found in the lines the 1 commit of \`${start}..${head}\` add and their headers and messages.`,
       unflaggedRange: `${start}..${head}`,
       clearedRange: `${start}..${head}`,
     });
@@ -825,6 +825,79 @@ describe('host.commit.scan', () => {
     expect(unread.clearedRange).toBeUndefined();
   });
 
+  it('reads the headers of every commit, `mergetag` and unnamed ones included, as their own text', async () => {
+    const start = await headSha();
+    const tree = (await git(root, 'rev-parse', `${start}^{tree}`)).trim();
+    const author = `Test ${PLANTED['github-token']?.value ?? ''} <test@example.com> 1700000000 +0000`;
+    const committer = 'Test <test@example.com> 1700000000 +0000';
+    const object = join(base, 'crafted-headers');
+    await writeFile(
+      object,
+      [
+        `tree ${tree}`,
+        `parent ${start}`,
+        `author ${author}`,
+        `committer ${committer}`,
+        `mergetag object ${start}`,
+        ' type commit',
+        ' tag v1',
+        ' ',
+        ` ${PLANTED['slack-token']?.line ?? ''}`,
+        `x-note ${PLANTED['stripe-live-key']?.line ?? ''}`,
+        '',
+        'An ordinary message',
+        '',
+      ].join('\n'),
+    );
+    const crafted = (
+      await git(root, 'hash-object', '--literally', '-t', 'commit', '-w', object)
+    ).trim();
+    // The last commit's message ends without a newline: the object is cut by
+    // its size, not by lines, so the one after it is still read on its own.
+    await writeFile(
+      object,
+      `tree ${tree}\nparent ${crafted}\nauthor ${committer}\ncommitter ${committer}\n\n` +
+        `Tail ${PLANTED['google-api-key']?.line ?? ''}`,
+    );
+    const unterminated = (
+      await git(root, 'hash-object', '--literally', '-t', 'commit', '-w', object)
+    ).trim();
+
+    const output = await scanOutput(`${start}..${unterminated}`);
+    expect(output.findings).toEqual([
+      { file: `${unterminated} (message)`, line: 1, pattern: 'google-api-key' },
+      { file: `${crafted} (headers)`, line: 3, pattern: 'github-token' },
+      { file: `${crafted} (headers)`, line: 9, pattern: 'slack-token' },
+      { file: `${crafted} (headers)`, line: 10, pattern: 'stripe-live-key' },
+    ]);
+    expect(output.summary).toContain(`${crafted} (headers) line 3 (github-token)`);
+    expect(output.unflaggedRange).toBeUndefined();
+    expect(JSON.stringify(output)).not.toContain(PLANTED['github-token']?.value ?? '');
+  });
+
+  it('reads the commits a push sends, never what a replace ref stands in for them', async () => {
+    const start = await headSha();
+    await writeFile(join(root, PLANTED_FILE), `${PLANTED['github-token']?.line ?? ''}\n`);
+    await git(root, 'add', '-A');
+    await git(root, 'commit', '-q', '-m', `Deploy ${PLANTED['slack-token']?.line ?? ''}`);
+    const leaking = await headSha();
+    const harmless = await commitFiles({ [PLANTED_FILE]: 'ok\n' });
+    const tree = (await git(root, 'rev-parse', `${harmless}^{tree}`)).trim();
+    const standIn = (await git(root, 'commit-tree', tree, '-p', start, '-m', 'Deploy')).trim();
+    await git(root, 'replace', leaking, standIn);
+    // The planted ref bites: git as the operator runs it shows the stand-in.
+    const shown = await git(root, 'log', '-p', '--format=%B', `${start}..${leaking}`);
+    expect(shown).toContain('+ok');
+    expect(shown).not.toContain(PLANTED['github-token']?.value ?? '');
+
+    const output = await scanOutput(`${start}..${leaking}`);
+    expect(output.findings).toEqual([
+      { file: PLANTED_FILE, line: 1, pattern: 'github-token' },
+      { file: `${leaking} (message)`, line: 1, pattern: 'slack-token' },
+    ]);
+    expect(output.unflaggedRange).toBeUndefined();
+  });
+
   it('reads the texts passed beside the range under the same rules, by name', async () => {
     const start = await headSha();
     const head = await commitFiles({ 'app.ts': 'export const answer = 42;\n' });
@@ -834,7 +907,7 @@ describe('host.commit.scan', () => {
     });
     expect(clean.clean).toBe(true);
     expect(clean.summary).toContain(
-      'their messages and `pull request title`, `pull request summary`',
+      'their headers and messages, and `pull request title`, `pull request summary`',
     );
 
     const flagged = await scanOutput(`${start}..${head}`, {

@@ -2,8 +2,8 @@
  * Reading a connected repository's commits, before any of them leave the
  * machine.
  *
- * Neither moves a branch of the folder's own, so a binding that only reads
- * answers them as readily as one that runs commands.
+ * It moves no branch of the folder's own, so a binding that only reads
+ * answers it as readily as one that runs commands.
  */
 import type { ExecutorContext, StepResult } from '@aflow/executor-runtime';
 import {
@@ -13,11 +13,7 @@ import {
   successWithData,
   validationError,
 } from '@aflow/executor-runtime';
-import {
-  HOST_COMMIT_RANGE_PATTERN,
-  HostCommitCheckBaseInputSchema,
-  HostCommitScanInputSchema,
-} from '@aflow/schemas';
+import { HostCommitScanInputSchema } from '@aflow/schemas';
 
 import {
   HostBindingError,
@@ -27,7 +23,6 @@ import {
   requireSpace,
 } from '../bindings.js';
 import { scanCommitRange } from '../commitScan.js';
-import { confirmPushBase } from '../pushBase.js';
 import { isGitRepository, WorktreeError } from '../worktree.js';
 
 /** The repository a commit operation reads, or a refusal saying why it cannot. */
@@ -60,24 +55,11 @@ async function scan(ctx: ExecutorContext, policyPath: string): Promise<StepResul
   );
 }
 
-async function checkBase(ctx: ExecutorContext, policyPath: string): Promise<StepResult> {
-  const parsed = HostCommitCheckBaseInputSchema.safeParse(await ctx.readPayload(ctx.job.inputRef));
-  if (!parsed.success) {
-    return await failureWithError(ctx, validationError(parsed.error.message));
-  }
-  const root = await repositoryRoot(ctx, policyPath, parsed.data.bindingId);
-  const measured = HOST_COMMIT_RANGE_PATTERN.exec(parsed.data.range)?.[1] ?? '';
-  return await successWithData(ctx, {
-    baseSha: await confirmPushBase(root, parsed.data.base, measured),
-  });
-}
-
 const OPERATIONS: Record<
   string,
   (ctx: ExecutorContext, policyPath: string) => Promise<StepResult>
 > = {
   'host.commit.scan': scan,
-  'host.commit.check_base': checkBase,
 };
 
 async function execute(ctx: ExecutorContext, policyPath: string): Promise<StepResult> {

@@ -204,14 +204,14 @@ const LOCAL_CODE_REVIEW_BUNDLE: SkillBundleInput = {
 
 const LOCAL_PUBLISH_BUNDLE: SkillBundleInput = {
   bundleId: 'local-publish' as SkillBundleId,
-  version: 9,
+  version: 10,
   name: 'Local Publish',
   tagline:
     'Commit a patch onto a branch of a connected repository, clear the push, and open the pull request.',
   description: `Installs **Publish Local Changes** — the step after a commission: a patch becomes a commit on a branch of a repository connected as a folder — a new one, or the branch a fix was commissioned from, and then, once the push is cleared, a pushed branch and an open pull request.
 
 **What it installs**:
-- The **Publish Local Changes** skill — the patch is committed in a detached worktree, so the working tree is untouched: a fresh branch starts at the commission's base, and the branch a fix was commissioned from is appended to at its head; everything the push would add — the commit and any of the folder's own commits under it that \`origin\` does not have yet — is scanned for secrets, with the commits' messages and the pull request's title and summary, and a finding stops the run with nothing pushed; the run then waits for the operator's approval — unless the folder's push approval says it need not ask — and only after that is that commit pushed to its branch on \`origin\` and the pull request opened.
+- The **Publish Local Changes** skill — the patch is committed in a detached worktree, so the working tree is untouched: a fresh branch starts at the commission's base, and the branch a fix was commissioned from is appended to at its head; everything the push would add — the commit and any of the folder's own commits under it that \`origin\` does not have yet — is scanned for secrets, with the commits' headers and messages and the pull request's title and summary, and a finding stops the run with nothing pushed; the run then waits for the operator's approval — unless the folder's push approval says it need not ask — and only after that is that commit pushed to its branch on \`origin\` — refused, with nothing pushed, where \`origin\`'s base no longer holds what the run measured or \`origin\` pushes elsewhere than it fetches — and the pull request opened.
 
 **After install**: connect the repository as a folder allowing pushes under a branch prefix, and bind the GitHub connector for the space. Then hand the skill a commission's \`patchRef\`, a branch name under that prefix and a title.
 

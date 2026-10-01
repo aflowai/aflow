@@ -84,6 +84,7 @@ import {
   fetchRemoteBase,
   INLINE_DIFF_CAP_BYTES,
   linkedWorktrees,
+  NO_REPLACE_OBJECTS_ENV,
   prepareWorktree,
   PUBLICATION_SCRATCH_PREFIX,
   removeWorktree,
@@ -591,6 +592,7 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
           trustedEnv: {
             SRT_DEBUG: '1',
             ...refGuardEnv,
+            ...NO_REPLACE_OBJECTS_ENV,
             ...(configDir !== undefined && profile.configDirEnv !== undefined
               ? { [profile.configDirEnv]: configDir }
               : {}),

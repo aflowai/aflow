@@ -255,6 +255,24 @@ export const HostProcessExecInputSchema = z.object({
         'Read what it says with `host.process.inspect`, answer it with `host.process.input`, ' +
         'and end it with `host.process.stop`. It does not outlive the executor.',
     ),
+  pushBase: z
+    .object({
+      base: HostBranchNameSchema.describe(
+        'The branch on `origin` the range was measured against — the `pushBase` the commit ' +
+          'was made with, by its name alone.',
+      ),
+      range: HostCommitRangeSchema.describe(
+        'The `pushRange` the commit reported, `<origin base sha>..<sha>`: its first sha is ' +
+          'where `origin/<base>` was when the range was measured.',
+      ),
+    })
+    .optional()
+    .describe(
+      'Only with a push to `origin` of a range that was scanned or reviewed: in the same ' +
+        'step, just before git is spawned, the push is refused unless it goes to the URL ' +
+        '`origin` fetches from and `origin/<base>`, fetched again, still holds the first ' +
+        'sha of `range` — so it carries nothing that was left out as already on `origin`.',
+    ),
 });
 
 export const HostProcessExecOutputSchema = z.object({
@@ -817,27 +835,6 @@ export const HostBindingInspectOutputSchema = z.object({
   ),
 });
 
-export const HostCommitCheckBaseInputSchema = z.object({
-  bindingId: HostBindingRef,
-  base: HostBranchNameSchema.describe(
-    'The branch on `origin` the range was measured against — the `pushBase` the commit was ' +
-      'made with, by its name alone.',
-  ),
-  range: HostCommitRangeSchema.describe(
-    'The `pushRange` the commit reported, `<origin base sha>..<sha>`: its first sha is where ' +
-      '`origin/<base>` was when the range was measured.',
-  ),
-});
-
-export const HostCommitCheckBaseOutputSchema = z.object({
-  baseSha: z
-    .string()
-    .describe(
-      'Where `origin/<base>` is, freshly fetched — the same commit the range was measured ' +
-        'from, or the check would have failed.',
-    ),
-});
-
 export const HostCommitScanInputSchema = z.object({
   bindingId: HostBindingRef,
   range: HostCommitRangeSchema.describe(
@@ -855,13 +852,14 @@ export const HostCommitScanInputSchema = z.object({
 });
 
 /**
- * Where a finding or an unscanned item is: a path, a commit's message, or a
- * text passed beside the range.
+ * Where a finding or an unscanned item is: a path, a commit's headers or
+ * message, or a text passed beside the range.
  */
 const HOST_COMMIT_SCAN_PLACE_DESCRIPTION =
   'Where the line is: for a line a commit adds, its path from the repository root; for a ' +
-  "line of a commit's message, `<sha> (message)`; for a line of a text passed in `texts`, " +
-  "that text's name.";
+  "line of a commit's headers — author, committer, `mergetag` and any other — " +
+  "`<sha> (headers)`; for a line of a commit's message, `<sha> (message)`; for a line of a " +
+  "text passed in `texts`, that text's name.";
 
 export const HostCommitScanFindingSchema = z.object({
   file: z.string().describe(HOST_COMMIT_SCAN_PLACE_DESCRIPTION),
@@ -900,7 +898,8 @@ export const HostCommitScanOutputSchema = z.object({
   clean: z
     .boolean()
     .describe(
-      'True only when every file the range adds lines to, every message of its commits and ' +
+      'True only when every file the range adds lines to, the headers and message of every ' +
+        'one of its commits and ' +
         'every text in `texts` was read whole and no rule matched any line in them, marked ' +
         'allowed or not. A range with an entry in `unscanned` or a line in `allowed` is never ' +
         'clean, whatever else was found.',
@@ -1303,6 +1302,7 @@ export const HostOperationRegistrations: OperationRegistration[] = [
         'Egress follows the binding. A command that reaches the network may find it closed even though it runs.',
         "A push runs as the operator's own git, outside the sandbox, only to a branch under the folder's `branchPrefix` — named bare or as `refs/heads/<branch>` — never with force, with the branch named on the command and no environment or git global option; a folder without a prefix pushes nothing.",
         "A push the remote refuses — a branch that moved on, a non-fast-forward — fails the step with git's own message, rather than succeeding with a non-zero `exitCode`.",
+        "`pushBase` is checked in the push's own step, just before git is spawned: a push to anything but `origin`, an `origin` whose push URL is not its fetch URL, or an `origin/<base>` that no longer holds the first sha of `range` fails with nothing pushed. A base moved forward still holds it and the push goes ahead. `origin` can still move in the moment between that fetch and git's push, which no check from this machine closes.",
       ],
     },
     inputZod: HostProcessExecInputSchema,
@@ -1402,12 +1402,13 @@ export const HostOperationRegistrations: OperationRegistration[] = [
     groupDisplayName: 'Commits on this computer',
     groupDescription: 'Read the commits of a repository the operator connected, on their machine.',
     semanticDescription:
-      'Read the lines a range of commits adds in a connected repository, the messages of ' +
-      'those commits, and any text that leaves with them — a pull request’s title and body — ' +
-      'and report where one looks like a secret — a private key, a cloud or service token, a ' +
-      'high-entropy value assigned to a secret-looking name — by where it is, line and the ' +
-      'name of the rule that matched. Reads the repository’s objects only: the working tree, ' +
-      'the index and every ref are left as they are.',
+      'Read the lines a range of commits adds in a connected repository, the headers and ' +
+      'messages of those commits, and any text that leaves with them — a pull request’s ' +
+      'title and body — and report where one looks like a secret — a private key, a cloud or ' +
+      'service token, a high-entropy value assigned to a secret-looking name — by where it ' +
+      'is, line and the name of the rule that matched. Reads the repository’s objects only, ' +
+      'as they are stored and as a push sends them, never as a `refs/replace/` ref ' +
+      'substitutes them: the working tree, the index and every ref are left as they are.',
     tags: ['host', 'git', 'secrets', 'local'],
     idempotency: 'idempotent',
     accessMode: 'read',
@@ -1427,7 +1428,7 @@ export const HostOperationRegistrations: OperationRegistration[] = [
       ],
       pitfalls: [
         'Every commit in the range is read, so a secret added in one commit and removed in a later one is still found: the push would carry both.',
-        'Each commit message is read as its own text and reported as `<sha> (message)`; each entry of `texts` is reported under its name. A finding in either fails the scan as one in a file does.',
+        "Each commit's headers — author, committer, `mergetag` and any other, which a push carries too — and its message are read as texts of their own and reported as `<sha> (headers)` and `<sha> (message)`; each entry of `texts` is reported under its name. A finding in any of them fails the scan as one in a file does.",
         'A file that is binary, holds a NUL byte, adds more than the scanned size in one commit, adds a line longer than the scanned line, or adds a Git LFS pointer — whose content git uploads on push without it being in the commit — is listed in `unscanned` with why, and the range is not `clean`; findings from the part that was read are kept.',
         'A line ending in a comment that carries `aflow-scan: allow` is reported in `allowed` instead of `findings`, and the range is not `clean`: the marker turns a stop into a question for the operator, never into a clearance. It counts only as the last thing on the line, after a comment leader set off by a space and outside any string opened earlier on the same line — inside such a string or a URL, or with anything after it, it does not. Only strings opened on the same line are seen: lines are read one at a time, so in a string opened on an earlier line, a comment leader and the marker ending a line count.',
         'A clean scan says no rule matched, not that the range holds no secret.',
@@ -1435,41 +1436,5 @@ export const HostOperationRegistrations: OperationRegistration[] = [
     },
     inputZod: HostCommitScanInputSchema,
     outputZod: HostCommitScanOutputSchema,
-  },
-  {
-    stepType: 'host',
-    group: 'commit',
-    verb: 'check_base',
-    name: 'Check the Push Base',
-    actionLabel: 'Checking the base on origin has not moved…',
-    groupDisplayName: 'Commits on this computer',
-    groupDescription: 'Read the commits of a repository the operator connected, on their machine.',
-    semanticDescription:
-      'Fetch a branch from a connected repository’s `origin` and confirm it is still where a ' +
-      'push range was measured from. A push sends every commit `origin` lacks, so a base that ' +
-      'moved since the range was scanned and reviewed would have it send what neither read. ' +
-      'Moves no branch of the folder’s own.',
-    tags: ['host', 'git', 'local'],
-    idempotency: 'idempotent',
-    accessMode: 'read',
-    // A publication checks its own range just before its push; an agent has
-    // no range of its own to check.
-    agentTool: false,
-    usage: {
-      oneLine: "Confirm origin's base has not moved since a push range was measured.",
-      minimalExampleInput: {
-        bindingId: 'hb_project',
-        base: 'main',
-        range: `${'a'.repeat(40)}..${'c'.repeat(40)}`,
-      },
-      whenToUse: ['A skill about to push a range it scanned or reviewed earlier'],
-      whenNotToUse: ['Measuring a push range in the first place — host.file.patch reports it'],
-      pitfalls: [
-        'Any move fails the check, forward or back: the range was cleared as it was measured, and a publication runs again to clear the range as it is now.',
-        'It fetches from `origin` as the operator’s own git does, so it completes only where the folder reaches `origin`.',
-      ],
-    },
-    inputZod: HostCommitCheckBaseInputSchema,
-    outputZod: HostCommitCheckBaseOutputSchema,
   },
 ];

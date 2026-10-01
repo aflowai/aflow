@@ -8,7 +8,7 @@ import {
 import {
   HOST_PUSH_APPROVAL_DEFAULT,
   HostBindingInspectOutputSchema,
-  HostCommitCheckBaseInputSchema,
+  HostProcessExecInputSchema,
   HostCommitScanInputSchema,
   HostCommitScanOutputSchema,
   type HostPushApproval,
@@ -61,6 +61,8 @@ function materializedCommands(): string[][] {
     const resolved: Record<string, unknown> = {
       bindingId: 'folder-1',
       refspec: COMMIT.pushRefspec,
+      base: 'main',
+      range: COMMIT.pushRange,
     };
     const substituted = substituteTemplateBinds(template, resolved, declared);
     commands.push(substituted['command'] as string[]);
@@ -93,7 +95,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(validity.status).toBe('valid');
   });
 
-  it('is nine tasks — commit, scan, what decides the approval, approve, base check, push, pull request', () => {
+  it('is eight tasks — commit, scan, what decides the approval, approve, push, pull request', () => {
     expect(wf.tasks.map((t) => t.taskId)).toEqual([
       'commit',
       'scan-commit',
@@ -101,7 +103,6 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       'read-push-approval',
       'review-commit',
       'approve-push',
-      'check-base',
       'push',
       'open-pr',
     ]);
@@ -114,7 +115,6 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       'human',
       'operation',
       'operation',
-      'operation',
     ]);
     expect(wf.tasks.map((t) => t.dependsOn ?? [])).toEqual([
       [],
@@ -124,7 +124,6 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       ['read-push-approval', 'scan-commit'],
       ['read-repository', 'scan-commit', 'review-commit'],
       ['approve-push', 'scan-commit'],
-      ['approve-push', 'scan-commit', 'check-base'],
       ['push'],
     ]);
     expect(taskOrThrow('commit').operation).toBe('host.file.patch');
@@ -132,7 +131,6 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(taskOrThrow('read-repository').operation).toBe('api.http.call');
     expect(taskOrThrow('read-push-approval').operation).toBe('host.binding.inspect');
     expect(taskOrThrow('review-commit').operation).toBe('workflow.run.start');
-    expect(taskOrThrow('check-base').operation).toBe('host.commit.check_base');
     expect(taskOrThrow('push').operation).toBe('host.process.exec');
     expect(taskOrThrow('open-pr').operation).toBe('api.http.call');
   });
@@ -378,6 +376,8 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(push.inputBindings).toEqual({
       bindingId: { kind: 'run_input', path: 'bindingId' },
       refspec: { kind: 'task_output', taskId: 'commit', path: 'commit.pushRefspec' },
+      base: { kind: 'run_input', path: 'base' },
+      range: { kind: 'task_output', taskId: 'commit', path: 'commit.pushRange' },
     });
     const [pushCommand, ...rest] = materializedCommands();
     expect(rest).toEqual([]);
@@ -602,7 +602,7 @@ interface Scenario {
    * what refuses it.
    */
   declineAs?: 'skip' | 'answer';
-  /** Whether `origin`'s base moved after the range was measured, which fails the base check. */
+  /** Whether `origin`'s base no longer holds where the range was measured from, which fails the push. */
   baseMoved?: boolean;
 }
 
@@ -683,7 +683,7 @@ function publish(scenario: Scenario): Outcome {
     for (const task of ready) {
       if (ran.includes(task.taskId)) continue;
       ran.push(task.taskId);
-      if (task.taskId === 'check-base' && scenario.baseMoved === true) {
+      if (task.taskId === 'push' && scenario.baseMoved === true) {
         statuses.set(task.taskId, 'failed');
         continue;
       }
@@ -725,7 +725,7 @@ function publish(scenario: Scenario): Outcome {
     if (ready.length === 0 && skip.length === 0) break;
   }
 
-  return { asked, pushed: ran.includes('push'), ran };
+  return { asked, pushed: statuses.get('push') === 'succeeded', ran };
 }
 
 describe('Publish Local Changes — the folder decides whether the push asks', () => {
@@ -916,7 +916,7 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
       expect(PUBLISH_LOCAL_CHANGES.description).toContain(phrase);
     }
     expect(PUBLISH_LOCAL_CHANGES.description).toContain(
-      "Whatever the posture, the run scans every line the push would add, every message of the commits it carries, and the pull request's title and summary for secrets before any of this, and a finding stops it with nothing pushed — which is what lets a review stand in for the operator.",
+      "Whatever the posture, the run scans every line the push would add, the headers and message of every commit it carries, and the pull request's title and summary for secrets before any of this, and a finding stops it with nothing pushed — which is what lets a review stand in for the operator.",
     );
     expect(PUBLISH_LOCAL_CHANGES.description).toContain(
       "Once the run asks, the operator's answer decides: a declined push pushes nothing, whatever the posture.",
@@ -1002,7 +1002,9 @@ describe('Publish Local Changes — the commit is scanned for secrets before any
     expect(scan.optional).toBeUndefined();
     const failure = scan.failureInstruction ?? '';
     expect(failure).toContain('named above by file, line and rule');
-    expect(failure).toContain('`<sha> (message)` for a commit message');
+    expect(failure).toContain(
+      "`<sha> (headers)` or `<sha> (message)` for a commit's headers or message",
+    );
     expect(failure).toContain('`pull request title` or `pull request summary`');
     expect(failure).toContain('never by its value');
     expect(failure).toContain('The branch stayed on the machine and nothing was pushed.');
@@ -1019,7 +1021,7 @@ describe('Publish Local Changes — the commit is scanned for secrets before any
       });
       expect(outcome).toMatchObject({ asked: false, pushed: false });
       expect(outcome.ran).toContain('scan-commit');
-      for (const task of ['review-commit', 'approve-push', 'check-base', 'push', 'open-pr']) {
+      for (const task of ['review-commit', 'approve-push', 'push', 'open-pr']) {
         expect(outcome.ran, task).not.toContain(task);
       }
     });
@@ -1087,8 +1089,6 @@ describe('Publish Local Changes — the commit is scanned for secrets before any
       ],
       onMissingRef: 'skip',
     });
-    // The base check runs exactly where the push would.
-    expect(taskOrThrow('check-base').when).toEqual(taskOrThrow('push').when);
   });
 
   it('reviews only a range the scan cleared', () => {
@@ -1130,82 +1130,68 @@ describe('Publish Local Changes — the commit is scanned for secrets before any
 
   it('reports a finding by file, line and rule, and never asks for the value', () => {
     expect(PUBLISH_LOCAL_CHANGES.description).toContain(
-      'report the files, commit messages, title or summary, lines and rules it names — never ask for or repeat the value',
+      'report the files, commit headers and messages, title or summary, lines and rules it names — never ask for or repeat the value',
     );
   });
 });
 
-describe("Publish Local Changes — origin's base is checked again just before the push", () => {
-  it('checks the base the commit measured against, over the range the scan and the review read', () => {
-    const check = taskOrThrow('check-base');
-    expect(check.inputBindings).toEqual({
-      bindingId: { kind: 'run_input', path: 'bindingId' },
-      base: { kind: 'run_input', path: 'base' },
-      range: { kind: 'task_output', taskId: 'commit', path: 'commit.pushRange' },
-    });
-    expect(check.inputBindings?.['range']).toEqual(
+describe("Publish Local Changes — the push checks origin's base and URL in its own step", () => {
+  it('hands the push the base the commit measured against and the range the scan and the review read', () => {
+    const push = taskOrThrow('push');
+    expect(push.inputBindings?.['range']).toEqual(
       taskOrThrow('scan-commit').inputBindings?.['range'],
     );
-    expect(check.inputBindings?.['base']).toEqual(taskOrThrow('commit').inputBindings?.['base']);
-    const template = check.inputTemplate;
-    if (template === undefined) throw new Error('the base check must carry a template');
+    expect(push.inputBindings?.['base']).toEqual(taskOrThrow('commit').inputBindings?.['base']);
+    const template = push.inputTemplate;
+    if (template === undefined) throw new Error('the push must carry a template');
     const input = substituteTemplateBinds(
       template,
-      { bindingId: 'folder-1', base: 'main', range: COMMIT.pushRange },
-      new Set(Object.keys(check.inputBindings ?? {})),
+      {
+        bindingId: 'folder-1',
+        refspec: COMMIT.pushRefspec,
+        base: 'main',
+        range: COMMIT.pushRange,
+      },
+      new Set(Object.keys(push.inputBindings ?? {})),
     );
-    expect(HostCommitCheckBaseInputSchema.parse(input)).toEqual({
-      bindingId: 'folder-1',
+    expect(HostProcessExecInputSchema.parse(input).pushBase).toEqual({
       base: 'main',
       range: `${ORIGIN_BASE}..${HEAD}`,
     });
-    expect(check.maxAttempts).toBe(1);
-    expect(check.optional).toBeUndefined();
+    expect(push.maxAttempts).toBe(1);
+    expect(push.optional).toBeUndefined();
+  });
+
+  it('runs no separate base check a moving base could slip past', () => {
+    expect(wf.tasks.some((task) => task.operation === 'host.commit.check_base')).toBe(false);
+    for (const pushApproval of ['always', 'never', 'unless-unreviewed'] as const) {
+      const { ran } = publish({ pushApproval, review: 'approve', decision: 'approved' });
+      expect(ran.at(-2)).toBe('push');
+    }
   });
 
   for (const pushApproval of ['always', 'never', 'unless-unreviewed'] as const) {
-    it(`${pushApproval}: checks the base after the approval and right before the push`, () => {
-      const { ran, pushed } = publish({ pushApproval, review: 'approve', decision: 'approved' });
-      expect(pushed).toBe(true);
-      expect(ran.indexOf('check-base')).toBeGreaterThan(ran.indexOf('scan-commit'));
-      if (ran.includes('approve-push')) {
-        expect(ran.indexOf('check-base')).toBeGreaterThan(ran.indexOf('approve-push'));
-      }
-      expect(ran.indexOf('push')).toBe(ran.indexOf('check-base') + 1);
-    });
-
-    it(`${pushApproval}: a base that moved pushes nothing and opens no pull request`, () => {
+    it(`${pushApproval}: a base that no longer holds the measured sha pushes nothing and opens no pull request`, () => {
       const outcome = publish({
         pushApproval,
         review: 'approve',
         decision: 'approved',
         baseMoved: true,
       });
-      expect(outcome.ran).toContain('check-base');
+      expect(outcome.ran).toContain('push');
       expect(outcome.pushed).toBe(false);
       expect(outcome.ran).not.toContain('open-pr');
     });
   }
 
-  it('checks nothing where the push would not run', () => {
-    const declined = publish({ pushApproval: 'always', review: 'approve', decision: 'declined' });
-    expect(declined.ran).not.toContain('check-base');
-    const uncommitted = publish({
-      pushApproval: 'never',
-      review: 'approve',
-      decision: 'approved',
-      committed: false,
-    });
-    expect(uncommitted.ran).not.toContain('check-base');
-  });
-
-  it('says on failure that nothing was pushed, what moved, and that the publication runs again', () => {
-    const failure = taskOrThrow('check-base').failureInstruction ?? '';
-    expect(failure).toContain('Nothing was pushed');
-    expect(failure).toContain("`origin`'s base branch moved");
-    expect(failure).toContain('Run the publication again');
+  it('says on failure that nothing was pushed, why, and that the publication runs again', () => {
+    const failure = taskOrThrow('push').failureInstruction ?? '';
+    expect(failure).toContain("`origin`'s base branch no longer holds where it was");
+    expect(failure).toContain('pushes somewhere other than where it fetches from');
+    expect(failure).toContain('nothing was pushed');
+    expect(failure).toContain('run the publication again on a fresh branch');
     expect(PUBLISH_LOCAL_CHANGES.description).toContain(
-      'report where it moved from and to, and that the publication has to run again',
+      'one moved only forward still does — or `origin` pushes elsewhere than it fetches, the push refused just before git ran and nothing was pushed',
     );
   });
 });

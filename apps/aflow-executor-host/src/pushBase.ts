@@ -3,17 +3,21 @@
  *
  * A publication pushes a commit by its sha, and the push carries every ancestor
  * `origin` lacks; what that is depends on where `origin`'s base branch is,
- * which is measured when the commit is made and checked again just before the
- * push.
+ * which is measured when the commit is made and checked again in the push's
+ * own step, just before git is spawned.
  */
 import { readFile } from 'node:fs/promises';
+
+import { HOST_COMMIT_RANGE_PATTERN } from '@aflow/schemas';
 
 import {
   fetchFromRemote,
   gitPath,
+  isAncestor,
   isPlainRefName,
   remoteFetchUrl,
   remoteNames,
+  remotePushUrls,
   resolveCommit,
   WorktreeError,
 } from './worktree.js';
@@ -92,12 +96,14 @@ export async function fetchedBranch(root: string, remote: string, branch: string
 }
 
 /**
- * Refuse a push whose base moved on `origin` since the push range was
- * measured. The scan and the review left out every commit `origin/<pushBase>`
- * held then; a base rewound since — the usual way a leaked secret is taken
- * back — would have the push send those commits again, unread.
+ * Refuse a push whose base on `origin` no longer holds the commit the push
+ * range was measured from. The scan and the review left out every commit
+ * `origin/<pushBase>` held then; a base rewound or rewritten since — the usual
+ * way a leaked secret is taken back — would have the push send those commits
+ * again, unread. A base moved forward still holds them, so the push carries a
+ * part of what was cleared and goes ahead.
  */
-export async function confirmPushBase(
+async function confirmPushBase(
   root: string,
   pushBase: string,
   measuredSha: string,
@@ -111,14 +117,68 @@ export async function confirmPushBase(
     );
   }
   const now = await resolvePushBase(root, pushBase);
-  if (now !== measured) {
+  if (!(await isAncestor(root, measured, now))) {
     throw new WorktreeError(
       `\`${PUSH_REMOTE}/${pushBase}\` was at \`${measured}\` when what the push would add was ` +
-        `measured, scanned and reviewed, and is at \`${now}\` now, so the push would no longer ` +
-        'carry what was cleared. Nothing was pushed. The publication has to run again, to ' +
-        'measure, scan and review what a push would add against where the base is now.',
+        `measured, scanned and reviewed, and is at \`${now}\` now, which no longer holds it, so ` +
+        'the push would carry commits that were left out as already on `origin`. Nothing was ' +
+        'pushed. The publication has to run again, to measure, scan and review what a push ' +
+        'would add against where the base is now.',
       'stale_base',
     );
   }
   return now;
+}
+
+/**
+ * Refuse a push to anywhere but where its base was measured. The base is
+ * fetched from `origin`'s fetch URL, and the push goes to its push URLs —
+ * a `pushurl`, a `pushInsteadOf` rewrite or a second `url` sends it to a
+ * repository whose base nobody read.
+ */
+async function confirmPushUrl(root: string): Promise<void> {
+  const urls = await Promise.all([
+    remoteFetchUrl(root, PUSH_REMOTE),
+    remotePushUrls(root, PUSH_REMOTE),
+  ]).catch(() => undefined);
+  if (urls === undefined) {
+    throw new WorktreeError(
+      `\`${PUSH_REMOTE}\` is not a remote this folder can read, so where a push to it goes ` +
+        'cannot be checked. Nothing was pushed.',
+      'unknown_ref',
+    );
+  }
+  const [fetchUrl, pushUrls] = urls;
+  if (pushUrls.length === 1 && pushUrls[0] === fetchUrl) return;
+  const listed = pushUrls.map((url) => `\`${withoutCredentials(url)}\``).join(', ');
+  throw new WorktreeError(
+    `A push to \`${PUSH_REMOTE}\` goes to ${listed}, and its base was fetched from ` +
+      `\`${withoutCredentials(fetchUrl)}\`, so what the push would add was measured against a ` +
+      'repository it does not go to. Nothing was pushed. Make the folder push where it ' +
+      `fetches — remove \`remote.${PUSH_REMOTE}.pushurl\`, a \`pushInsteadOf\` rewrite or a ` +
+      `second \`remote.${PUSH_REMOTE}.url\` — and publish again.`,
+    'push_target_differs',
+  );
+}
+
+/**
+ * Everything a publication's push re-reads just before it is spawned: that it
+ * goes to `origin`, where `origin` fetches from, and that `origin`'s base
+ * still holds the first sha of the range that was scanned and reviewed.
+ */
+export async function confirmPushTarget(
+  root: string,
+  remote: string,
+  pushBase: string,
+  range: string,
+): Promise<void> {
+  if (remote !== PUSH_REMOTE) {
+    throw new WorktreeError(
+      `This push names \`${remote}\`, and its range was measured against ` +
+        `\`${PUSH_REMOTE}/${pushBase}\`. Nothing was pushed. Push to \`${PUSH_REMOTE}\`.`,
+      'push_target_differs',
+    );
+  }
+  await confirmPushUrl(root);
+  await confirmPushBase(root, pushBase, HOST_COMMIT_RANGE_PATTERN.exec(range)?.[1] ?? '');
 }

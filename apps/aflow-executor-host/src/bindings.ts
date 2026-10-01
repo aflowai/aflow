@@ -380,28 +380,30 @@ function refuseUnconfinedOption(argv: readonly string[], option: string, prefix:
  * sandbox, which is why nothing stands before `push`, no push option names a
  * program or another repository, and the job supplies no environment: each of
  * those would be the job choosing what runs unconfined.
+ *
+ * Returns the remote a permitted push names, and nothing for any other command.
  */
 export function requirePushAllowed(
   binding: HostBinding,
   argv: readonly string[],
   job: PushJobShape = {},
-): void {
+): string | undefined {
   const program = argv[0];
-  if (program === undefined || !isGitProgram(program)) return;
+  if (program === undefined || !isGitProgram(program)) return undefined;
 
   const invocation = readGitInvocation(argv);
   if (invocation.unreadable) {
     // A command this cannot parse is only refused where it might be a push:
     // `git commit -m push` is not one, and refusing it would be the rule
     // reaching past what it is for.
-    if (!invocation.rest.includes('push')) return;
+    if (!invocation.rest.includes('push')) return undefined;
     refusePush(
       argv,
       'an option before the subcommand leaves it unclear whether this is a push',
       `Spell the push plainly: \`git push ${PUSH_REQUIRED_OPTIONS.join(' ')} <remote> <branch>\`.`,
     );
   }
-  if (invocation.subcommand !== 'push') return;
+  if (invocation.subcommand !== 'push') return undefined;
 
   const prefix = binding.branchPolicy?.branchPrefix;
   if (prefix === undefined) {
@@ -533,6 +535,7 @@ export function requirePushAllowed(
       );
     }
   }
+  return positional[0];
 }
 
 export function requireWritable(binding: HostBinding): void {
