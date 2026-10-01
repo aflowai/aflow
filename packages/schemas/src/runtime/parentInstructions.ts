@@ -79,7 +79,8 @@ export const ParentInputsRecordSchema = z
     {
       message:
         `inputs serialised payload exceeds ${String(MAX_PARENT_INPUTS_SERIALIZED_BYTES)} bytes (or is non-serialisable). ` +
-        'Stage large values through memory.store and pass references / shorter values here.',
+        'A large value travels as a payload reference — pass the reference its producer returned ' +
+        "(a commission's `patchRef`, for example), never the value itself.",
     },
   );
 export type ParentInputsRecord = z.infer<typeof ParentInputsRecordSchema>;

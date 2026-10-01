@@ -313,3 +313,48 @@ describe('resolveStepInput payload-ref contract', () => {
     await expect(resolveWith(oversized, {})).rejects.toThrow(/no tenant\/run identity to carry it/);
   });
 });
+
+describe('resolveStepInput: a reference to a prior output in workflow.run.start inputs', () => {
+  const commissionOutput = { patch: 'diff --git a/x b/x\n', summary: 'one file' };
+  const runtimeState = {
+    variables: {
+      _tool_outputs: {
+        ref: { kind: 'inline', value: { call_commission: 'gs://bucket/commission' } },
+      },
+    },
+  } as unknown as NonNullable<Parameters<typeof resolveStepInput>[3]>;
+
+  function storeFor(rawInput: Record<string, unknown>): PayloadStore {
+    return {
+      retrieve: vi.fn(async (ref: string) => (ref === 'inline:raw' ? rawInput : commissionOutput)),
+      store: vi.fn(async () => 'inline:unused'),
+    } as unknown as PayloadStore;
+  }
+
+  const runStart = makeStepDef({}, 'workflow.run.start' as StepDefinition['operation']);
+
+  it('resolves a reference nested below `inputs` in place', async () => {
+    const rawInput = {
+      slug: 'publish',
+      inputs: { patch: { $ref: 'output.call_commission/patch' } },
+    };
+    const ref = await resolveStepInput(storeFor(rawInput), runStart, 'inline:raw', runtimeState);
+    expect(decodeInlineRef(ref)['inputs']).toEqual({ patch: commissionOutput.patch });
+  });
+
+  it('resolves it in place when the model sent `inputs` as a JSON string', async () => {
+    const rawInput = {
+      slug: 'publish',
+      inputs: JSON.stringify({ patch: { $ref: 'output.call_commission/patch' } }),
+    };
+    const ref = await resolveStepInput(storeFor(rawInput), runStart, 'inline:raw', runtimeState);
+    expect(decodeInlineRef(ref)['inputs']).toEqual({ patch: commissionOutput.patch });
+  });
+
+  it('refuses `inputs` that is itself the reference, since it resolves to the string', async () => {
+    const rawInput = { slug: 'publish', inputs: { $ref: 'output.call_commission/patch' } };
+    await expect(
+      resolveStepInput(storeFor(rawInput), runStart, 'inline:raw', runtimeState),
+    ).rejects.toThrow(/inputs: Expected object, received string/);
+  });
+});

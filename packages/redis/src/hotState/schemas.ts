@@ -287,6 +287,7 @@ export const SessionEventSchema = z.object({
     'SessionRetried',
     'ControlRejected',
     'RoomMessage',
+    'WorkflowRunWakeup',
     'AuthorityLost',
     'SessionStalled',
     'GuardrailViolation',

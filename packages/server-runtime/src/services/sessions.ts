@@ -32,7 +32,6 @@ import type {
   SessionMetadata,
 } from '@aflow/schemas';
 import type { PayloadStore } from '@aflow/payload-store';
-import { claimResumeIdempotency } from './resumeIdempotency.js';
 import {
   postRoomMessageDirect,
   rehydratePausedRun,
@@ -73,7 +72,7 @@ import {
   type SessionHotState,
 } from '@aflow/redis';
 import { recordAdmissionReject } from '@aflow/observability';
-import { loadPendingWaitersForSession } from '@aflow/cybernetic-runtime';
+import { dispatchResume, loadParkedStepWaitersForSession } from '@aflow/cybernetic-runtime';
 import { createSessionTailService } from './sessionTail.js';
 
 // ============================================================================
@@ -1095,31 +1094,13 @@ function createRealSessionService(ctx: AppContext): SessionService {
         }
       }
 
-      await claimResumeIdempotency(dbTyped, {
+      await dispatchResume(dbTyped, redis, {
         tenantId: request.tenantId,
         sessionId: request.sessionId,
         stepExecutionId: request.stepExecutionId,
         inputRef,
         idempotencyKey,
-      });
-
-      // The claim and the control message are two stores: a crash between
-      // them leaves a claim that proves nothing was dispatched. An exact
-      // retry (firstSeen=false, same payload) must therefore RE-SEND — the
-      // orchestrator's not-paused guard drops a duplicate harmlessly, while
-      // skipping the send would mark the wake delivered and park the session
-      // forever. Claim ⇒ eventual dispatch is what makes outbox coalescing
-      // sound.
-      await addControlMessage(redis, {
-        messageVersion: 1,
-        type: 'resume_run',
-        tenantId: request.tenantId,
-        runId: request.sessionId,
-        stepExecutionId: request.stepExecutionId,
-        inputRef: inputRef,
         traceId: traceId as TraceId,
-        idempotencyKey: idempotencyKey as IdempotencyKey,
-        requestedAtMs: Date.now(),
         ...(request.actorContext ? { actorContext: request.actorContext } : {}),
         ...(request.voiceMode !== undefined ? { voiceMode: request.voiceMode } : {}),
         ...(request.clientMessageId ? { clientMessageId: request.clientMessageId } : {}),
@@ -1269,7 +1250,7 @@ function createRealSessionService(ctx: AppContext): SessionService {
 
       const workflowWaiters =
         state.status === 'PAUSED'
-          ? await loadPendingWaitersForSession(
+          ? await loadParkedStepWaitersForSession(
               dbTyped,
               request.tenantId as string,
               request.sessionId as string,

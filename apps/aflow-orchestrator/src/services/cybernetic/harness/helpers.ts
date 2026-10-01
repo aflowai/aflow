@@ -23,7 +23,6 @@ import type {
   Workflow,
   WorkflowHumanTaskHydration,
   WorkflowRunResult,
-  WaiterNotifiedOutcome,
 } from '@aflow/schemas';
 import { StepOutputPresentationSchema, type StepOutputPresentation } from '@aflow/schemas';
 import {
@@ -154,7 +153,9 @@ export function outcomeToRunStatus(
  * completion means the DB winner is `completed`/`failed`, and the UI must
  * be told that, not `cancelled`.
  */
-export function runTerminalStatusToOutcome(status: string): WaiterNotifiedOutcome | null {
+export function runTerminalStatusToOutcome(
+  status: string,
+): 'completed' | 'failed' | 'cancelled' | null {
   switch (status) {
     case 'completed':
       return 'completed';

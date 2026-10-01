@@ -48,6 +48,7 @@ import { updateSessionState, atomicCompleteStep, registerBarrierWatchdog } from 
 import type { PayloadStore } from '@aflow/payload-store';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { routeRunnerTerminalToHarness } from '../../cybernetic/WorkflowRunHarness.js';
+import { wakeForRunWakeupsAtSettle } from './settleRunWakeups.js';
 import { pauseForGuardrailEscalation } from './guardrailEscalationPause.js';
 import { clearStaleCredentialBlock } from './credentialBlockScope.js';
 import { buildStepCompletedRecoveryEvents } from '../helpers/recoveryEmitter.js';
@@ -1045,6 +1046,8 @@ export async function applyAgentDecision(params: ApplyAgentDecisionParams): Prom
           : {}),
       },
     );
+
+    await wakeForRunWakeupsAtSettle({ db, redis, payloadStore }, result);
 
     if (decision.message) {
       try {

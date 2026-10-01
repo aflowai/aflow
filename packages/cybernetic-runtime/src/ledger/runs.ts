@@ -297,15 +297,19 @@ export interface PauseRunOptions {
   executionState?: TrialExecutionState | undefined;
 }
 
+/**
+ * @returns the `pause_version` this pause took, or null when the run was
+ * neither running nor paused and nothing was written.
+ */
 export async function pauseRun(
   db: PostgresJsDatabase,
   tenantId: string,
   runId: string,
   opts: PauseRunOptions = {},
   tx?: PostgresJsDatabase,
-): Promise<void> {
-  const exec = async (handle: PostgresJsDatabase): Promise<void> => {
-    await handle
+): Promise<number | null> {
+  const exec = async (handle: PostgresJsDatabase): Promise<number | null> => {
+    const updated = await handle
       .update(workflowRuns)
       .set({
         status: 'paused',
@@ -322,14 +326,15 @@ export async function pauseRun(
       })
       .where(
         and(eq(workflowRuns.runId, runId), inArray(workflowRuns.status, ['running', 'paused'])),
-      );
+      )
+      .returning({ pauseVersion: workflowRuns.pauseVersion });
+    return updated[0]?.pauseVersion ?? null;
   };
   if (tx) {
-    await exec(tx);
-    return;
+    return exec(tx);
   }
   const tenantCtx = createTenantContext(tenantId as TenantId);
-  await withTenantSchema(db, tenantCtx, exec);
+  return withTenantSchema(db, tenantCtx, exec);
 }
 
 export interface PauseRunningRunByOperatorOptions {

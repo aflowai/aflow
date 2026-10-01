@@ -6,7 +6,7 @@ import {
   updateSessionState,
   hasAvailableExecutor,
 } from '@aflow/redis';
-import { loadPendingWaitersForSession } from '@aflow/cybernetic-runtime';
+import { loadParkedStepWaitersForSession } from '@aflow/cybernetic-runtime';
 import { cancelRun as cancelWorkflowRun } from '../../cybernetic/WorkflowRunHarness.js';
 import { cascadeInterruptToChildren } from '../handlers/interruptCascade.js';
 import { getOrchestratorLogger, logOrchestratorError } from '../../../lib/orchestratorLogger.js';
@@ -34,7 +34,7 @@ export function createInterruptRun(bindings: SessionOrchestratorBindings) {
 
     const isDelegationWait = isDelegationWaitState(runState);
 
-    const workflowWaiters = await loadPendingWaitersForSession(
+    const workflowWaiters = await loadParkedStepWaitersForSession(
       db,
       params.tenantId as string,
       params.runId,
@@ -51,7 +51,7 @@ export function createInterruptRun(bindings: SessionOrchestratorBindings) {
         'run_not_interruptible',
         `Run ${params.runId} cannot be interrupted: status is ${runState.status} ` +
           `(must be RUNNING, QUEUED, WAITING_ON_CHILD, PAUSED with child_input delegation, ` +
-          `or PAUSED with a pending workflow_run_waiter)`,
+          `or PAUSED with a step parked on a workflow run)`,
         { observedStatus: runState.status },
       );
     }

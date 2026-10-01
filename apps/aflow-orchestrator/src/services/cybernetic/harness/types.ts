@@ -84,10 +84,23 @@ export class CancelCascadeDeliveryError extends Error {
   }
 }
 
-export interface NotifyWaitersArgs {
+export type NotifyWaitersArgs = NotifyWaitersCommonArgs &
+  (
+    | {
+        outcome: 'paused';
+        /**
+         * The `pause_version` the reported pause took, from the write that made
+         * it. Re-reading the run instead would hand a notification that arrives
+         * after the run resumed and paused again the newer pause's version.
+         */
+        pauseVersion: number;
+      }
+    | { outcome: Exclude<WaiterNotifiedOutcome, 'paused'> }
+  );
+
+interface NotifyWaitersCommonArgs {
   tenantId: TenantId;
   runId: string;
-  outcome: WaiterNotifiedOutcome;
   /** Optional payload ref for the synthetic step result (e.g., resume contract for `paused`). */
   payloadRef?: string;
   /** For `handed_off` outcome — describes who took over the run and what the released waiter should do. */

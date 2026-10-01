@@ -679,8 +679,11 @@ export const TimerItemSchema = z
     /** Step type for routing to correct job stream */
     stepType: StepTypeSchema,
 
-    /** Reason for the timer */
-    reason: z.enum(['retry', 'timeout', 'resume', 'delayed_start']),
+    /**
+     * Reason for the timer. `event_wake` is a session's next event-driven turn
+     * slot: it wakes the session only if run wakeups are still unread by then.
+     */
+    reason: z.enum(['retry', 'timeout', 'resume', 'delayed_start', 'event_wake']),
 
     /** Retry attempt number */
     attempt: z.number().int().min(1),

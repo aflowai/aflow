@@ -208,7 +208,8 @@ export const WorkflowRunDetailOutputSchema = z.object({
   activeWaiters: z.array(
     z.object({
       sessionId: z.string().uuid(),
-      stepExecutionId: z.string().uuid(),
+      /** Absent when the session started the run without waiting on it. */
+      stepExecutionId: z.string().uuid().optional(),
       registeredAt: z.string().datetime(),
     }),
   ),

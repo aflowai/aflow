@@ -170,7 +170,8 @@ export const workflowRunWaiters = pgTable('workflow_run_waiters', {
   id: uuid('id').primaryKey().defaultRandom(),
   runId: text('run_id').notNull(),
   waiterSessionId: uuid('waiter_session_id').notNull(),
-  waiterStepExecutionId: uuid('waiter_step_execution_id').notNull(),
+  /** Null when the session started the run without waiting: the session is the waiter. */
+  waiterStepExecutionId: uuid('waiter_step_execution_id'),
   registeredAt: timestamp('registered_at', { withTimezone: true }).notNull().defaultNow(),
   /** Set when the waiter is notified; row stays for audit. */
   notifiedAt: timestamp('notified_at', { withTimezone: true }),
@@ -183,6 +184,13 @@ export const workflowRunWaiters = pgTable('workflow_run_waiters', {
    * existing waiters pending.
    */
   notifiedOutcome: text('notified_outcome'),
+  /**
+   * The last outcome delivered to a session waiter: `paused:<pauseVersion>` for
+   * a pause, the bare outcome for the one that retired it.
+   * A session waiter hears every pause while it stays pending, so this — not
+   * `notified_at` — is what makes a repeated notification of one pause a no-op.
+   */
+  lastDeliveredKey: text('last_delivered_key'),
 });
 
 export type WorkflowRunWaiterRow = typeof workflowRunWaiters.$inferSelect;

@@ -80,7 +80,9 @@ export async function buildSessionCatchupEvents(
           ...(detail.run.pausedReason ? { pausedReason: detail.run.pausedReason } : {}),
           startedAt: detail.run.startedAt,
           ...(detail.run.completedAt ? { completedAt: detail.run.completedAt } : {}),
-          waiterStepExecutionId: waiter.waiterStepExecutionId,
+          ...(waiter.waiterStepExecutionId
+            ? { waiterStepExecutionId: waiter.waiterStepExecutionId }
+            : {}),
         },
       },
       metadata: runMetadata,

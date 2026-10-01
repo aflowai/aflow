@@ -105,7 +105,12 @@ export const WorkflowRunWaiterSchema = z.object({
   id: z.string().uuid(),
   runId: z.string(),
   waiterSessionId: z.string().uuid(),
-  waiterStepExecutionId: z.string().uuid(),
+  /**
+   * The step parked on the run, for a blocking start or resume. Null for a
+   * start that did not wait: the waiter is the session, and its wakeup
+   * arrives as a session event rather than as that step's result.
+   */
+  waiterStepExecutionId: z.string().uuid().nullable(),
   registeredAt: z.date(),
   notifiedAt: z.date().nullable(),
   notifiedOutcome: WaiterNotifiedOutcomeSchema.nullable(),
@@ -114,12 +119,12 @@ export type WorkflowRunWaiter = z.infer<typeof WorkflowRunWaiterSchema>;
 
 /**
  * Inputs to `addWaiter`. The handler inserts (run_id, session, step) and
- * returns the generated row id.
+ * returns the generated row id; without a step the session itself waits.
  */
 export const AddWaiterInputSchema = z.object({
   runId: z.string(),
   waiterSessionId: z.string().uuid(),
-  waiterStepExecutionId: z.string().uuid(),
+  waiterStepExecutionId: z.string().uuid().optional(),
 });
 export type AddWaiterInput = z.infer<typeof AddWaiterInputSchema>;
 

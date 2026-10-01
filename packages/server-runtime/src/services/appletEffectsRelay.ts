@@ -20,10 +20,11 @@ import { APPLET_EFFECT_MAX_ATTEMPTS } from '@aflow/schemas';
 import {
   getSessionStateSafe,
   getStepState,
+  mayWake,
   publishAppletInstanceDelta,
   setAppletFocus,
 } from '@aflow/redis';
-import { bumpAttentionGeneration } from '@aflow/cybernetic-runtime';
+import { bumpAttentionGeneration, resumeClaimsForStep } from '@aflow/cybernetic-runtime';
 import type {
   ActorContext,
   AppletActionReceipt,
@@ -34,8 +35,6 @@ import type {
   StepExecutionId,
   TenantId,
 } from '@aflow/schemas';
-import { mayWake } from '../routes/sessionRoomMessages.js';
-import { hasResumeClaimForStep } from './resumeIdempotency.js';
 import type { DirectRoomMessageInput, ResumeSessionRequest } from './sessions.js';
 
 export interface AppletEffectsRelayDeps {
@@ -226,7 +225,7 @@ async function deliverWaking(
   // the receipt and the next turn boundary reads it.
   if (!stepExecutionId || !mayWake(state.state, step)) return 'coalesced';
 
-  if (await hasResumeClaimForStep(deps.db, { tenantId, sessionId, stepExecutionId })) {
+  if ((await resumeClaimsForStep(deps.db, { tenantId, sessionId, stepExecutionId })).length > 0) {
     wokenSessions.add(sessionId);
     return 'coalesced';
   }

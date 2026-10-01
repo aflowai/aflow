@@ -238,4 +238,5 @@ export * from './activeSurface.js';
 export * from './lifecycle.js';
 export * from './userLabels.js';
 export * from './sessionRehydration.js';
+export * from './resumeDispatch.js';
 export * from './taskDraftStore.js';
