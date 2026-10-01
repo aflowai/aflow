@@ -89,7 +89,7 @@ export function applyActivityDelta(state: RunViewState, action: LiveDeltaAction)
     partial,
     consumedBytes: Math.max(base.consumedBytes, offset + deltaBytes),
     lastActivityAtMs: marked ?? prior?.lastActivityAtMs ?? base.lastActivityAtMs,
-    settled: prior?.settled ?? false,
+    settled: prior?.settled === true || state.endedSteps[stepExecutionId] === true,
   };
 
   return { ...state, harnessActivity: { ...state.harnessActivity, [stepExecutionId]: entry } };

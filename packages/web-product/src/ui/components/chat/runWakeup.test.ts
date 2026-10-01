@@ -99,6 +99,14 @@ describe('readInlineRunWakeupEnvelope', () => {
     expect(readInlineRunWakeupEnvelope(ref)).toMatchObject(envelope);
   });
 
+  it('decodes non-ASCII text in the envelope as UTF-8', () => {
+    const summary = 'The review approved the change — “ship it”, naïve façade, 完了.';
+    const withUnicode = { ...envelope, result: { summary } };
+    const ref = `inline:output:${Buffer.from(JSON.stringify(withUnicode)).toString('base64')}`;
+    expect(readInlineRunWakeupEnvelope(ref)?.result?.summary).toBe(summary);
+    expect(describeRunWakeup('completed', readInlineRunWakeupEnvelope(ref)).line).toBe(summary);
+  });
+
   it('reads a reference that is not base64 as no envelope, rather than throwing', () => {
     const ref = 'inline:not base64 at all!';
     expect(() => readInlineRunWakeupEnvelope(ref)).not.toThrow();

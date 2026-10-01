@@ -15,11 +15,18 @@ export function decodeInlinePayload(ref: string): unknown {
   if (colonIdx > 0 && colonIdx < 20) {
     b64 = encoded.slice(colonIdx + 1);
   }
+  const text = decodeBase64Utf8(b64);
   try {
-    return JSON.parse(atob(b64));
+    return JSON.parse(text);
   } catch {
-    return atob(b64);
+    return text;
   }
+}
+
+// The server encodes inline refs from UTF-8 bytes; `atob` alone yields one
+// Latin-1 char per byte and garbles anything outside ASCII.
+function decodeBase64Utf8(b64: string): string {
+  return new TextDecoder().decode(Uint8Array.from(atob(b64), (char) => char.charCodeAt(0)));
 }
 
 export async function fetchPayload(

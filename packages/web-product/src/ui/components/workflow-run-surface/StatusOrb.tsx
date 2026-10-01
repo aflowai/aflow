@@ -12,8 +12,7 @@ const ORB_SRC: Record<OrbKind, { dark: string; light: string }> = {
   inert: { dark: '/orb-inert.svg', light: '/orb-inert-light.svg' },
   idle: { dark: '/orb-idle.svg', light: '/orb-idle-light.svg' },
   searching: { dark: '/orb-searching.svg', light: '/orb-searching-light.svg' },
-  // The near-still art: nothing is moving in this conversation any more.
-  handed_off: { dark: '/orb-inert.svg', light: '/orb-inert-light.svg' },
+  handed_off: { dark: '/orb-handed-off.svg', light: '/orb-handed-off-light.svg' },
 };
 
 const ORB_LABEL: Record<OrbKind, string> = {

@@ -66,7 +66,6 @@ export function RunWakeupCard({ payload }: { payload: RunWakeupPayload }) {
             size={76}
             className="workflow-run-surface__orb--header"
             decorative={false}
-            label={`Run ${view.pill.label}`}
           />
           <span className="workflow-run-surface__label">Skill</span>
           <span className="workflow-run-surface__sep">|</span>

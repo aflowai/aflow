@@ -397,6 +397,16 @@ describe('a step that settles leaves the unsettled set', () => {
     expect(unsettled(resent)).toEqual([]);
   });
 
+  it('a frame that arrives after its step ended, with no feed held, starts settled', () => {
+    const ended = settle(initialRunViewState, stepEvent('StepSucceeded'));
+    expect(ended.harnessActivity[STEP]).toBeUndefined();
+
+    const late = fold(frames([wire([STATUS, TOOL])]), ended);
+    expect(feed(late)).toEqual([STATUS, TOOL]);
+    expect(late.harnessActivity[STEP]?.settled).toBe(true);
+    expect(unsettled(late)).toEqual([]);
+  });
+
   it('names its step on the displayed result, where the card folds the feed', () => {
     const running = fold(frames([wire([STATUS, TOOL])]));
     const done = settle(
