@@ -18,6 +18,7 @@ import {
   HostFilePatchOutputSchema,
   isEvalPlaneOperation,
   MAX_PARENT_INPUTS_SERIALIZED_BYTES,
+  PAUSE_INSTRUCTION_MAX_CHARS,
   substituteTemplateBinds,
 } from '@aflow/schemas';
 import { PUBLISH_LOCAL_CHANGES } from './publishLocalChanges.js';
@@ -399,6 +400,8 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
         taskId: 'read-push-approval',
         path: 'branchPolicy.pushApproval',
       },
+      unscanned: { kind: 'task_output', taskId: 'scan-commit', path: 'unscanned' },
+      scanSummary: { kind: 'task_output', taskId: 'scan-commit', path: 'summary' },
       commitSha: { kind: 'task_output', taskId: 'commit', path: 'commit.sha' },
       pushRefspec: { kind: 'task_output', taskId: 'commit', path: 'commit.pushRefspec' },
       commitBranch: { kind: 'task_output', taskId: 'commit', path: 'commit.branch' },
@@ -517,13 +520,48 @@ function reviewEnding(review: Exclude<Review, 'not-started'>): Record<string, un
   });
 }
 
+type Scan = 'clean' | 'finding' | 'unscanned';
+
+/** What `host.commit.scan` returns for each scan, before the task's own projection. */
+function scanResult(scan: Scan): Record<string, unknown> {
+  switch (scan) {
+    case 'finding':
+      return HostCommitScanOutputSchema.parse({
+        clean: false,
+        findings: [{ file: 'a.ts', line: 3, pattern: 'github-token' }],
+        unscanned: [],
+        allowed: [],
+        summary: 'What looks like a secret is in 1 place: a.ts line 3 (github-token).',
+      });
+    case 'unscanned':
+      return HostCommitScanOutputSchema.parse({
+        clean: false,
+        findings: [],
+        unscanned: [{ file: 'bundle.js', reason: 'too-large' }],
+        allowed: [],
+        summary: 'No secret found in the lines read, but not every file was read.',
+        unflaggedRange: COMMIT.range,
+      });
+    case 'clean':
+      return HostCommitScanOutputSchema.parse({
+        clean: true,
+        findings: [],
+        unscanned: [],
+        allowed: [],
+        summary: 'No secret found.',
+        unflaggedRange: COMMIT.range,
+        clearedRange: COMMIT.range,
+      });
+  }
+}
+
 interface Scenario {
   pushApproval: HostPushApproval | 'no-prefix';
   review: Review;
   decision: Decision;
   committed?: boolean;
   /** What the scan of the commit found; absent is clean. */
-  scan?: 'clean' | 'finding';
+  scan?: Scan;
 }
 
 interface Outcome {
@@ -546,20 +584,7 @@ function rawOutput(taskId: string, scenario: Scenario): Record<string, unknown> 
             commit: COMMIT,
           };
     case 'scan-commit':
-      return HostCommitScanOutputSchema.parse(
-        scenario.scan === 'finding'
-          ? {
-              clean: false,
-              findings: [{ file: 'a.ts', line: 3, pattern: 'github-token' }],
-              summary: 'What looks like a secret is in 1 place: a.ts line 3 (github-token).',
-            }
-          : {
-              clean: true,
-              findings: [],
-              summary: 'No secret found.',
-              clearedRange: COMMIT.range,
-            },
-      );
+      return scanResult(scenario.scan ?? 'clean');
     case 'read-repository':
       return { statusCode: 200, data: { full_name: 'aflowai/aflow' } };
     case 'read-push-approval':
@@ -820,7 +845,9 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
 
   it('says which case it is asking in, a line each, and where the verdict is', () => {
     const lines = (taskOrThrow('approve-push').pauseInstruction ?? '').split('\n');
-    expect(lines).toContain('- `always`: it asks before every push, and no review ran.');
+    expect(lines).toContain(
+      "- `always`: the folder's push approval asks before every push, and no review ran.",
+    );
     const reviewed = lines.find((line) => line.startsWith('- `unless-unreviewed`:'));
     expect(reviewed).toContain(
       "this run's Local Code Review of the commit did not return `approve`",
@@ -872,12 +899,25 @@ describe('Publish Local Changes — the commit is scanned for secrets before any
 
   it('fails at the scan on a finding, rather than pausing on a resolution that could clear it', () => {
     const scan = taskOrThrow('scan-commit');
-    // The range the scan cleared exists only on a clean scan, so a finding is
+    // The unflagged range exists only when nothing was found, so a finding is
     // a projection that does not resolve; one attempt and no output contract
     // leave nothing to resume with, and the run fails there.
     expect(scan.outputProjection).toEqual({
-      clearedRange: { path: 'clearedRange', onMissing: 'error' },
+      unflaggedRange: { path: 'unflaggedRange', onMissing: 'error' },
+      clean: { path: 'clean', onMissing: 'error' },
+      unscanned: { path: 'unscanned', onMissing: 'error' },
       summary: { path: 'summary', onMissing: 'error' },
+    });
+    if (scan.outputProjection === undefined) throw new Error('the scan must project');
+    expect(projectTaskOutput(scan.outputProjection, scanResult('finding'), null).ok).toBe(false);
+    expect(projectTaskOutput(scan.outputProjection, scanResult('unscanned'), null)).toEqual({
+      ok: true,
+      value: {
+        unflaggedRange: COMMIT.range,
+        clean: false,
+        unscanned: [{ file: 'bundle.js', reason: 'too-large' }],
+        summary: 'No secret found in the lines read, but not every file was read.',
+      },
     });
     expect(scan.outputContract).toBeUndefined();
     expect(scan.maxAttempts).toBe(1);
@@ -916,10 +956,72 @@ describe('Publish Local Changes — the commit is scanned for secrets before any
     }
   });
 
-  it('says on the approval that the commit was scanned and clean', () => {
-    expect(taskOrThrow('approve-push').pauseInstruction).toContain(
-      'the commit was scanned for secrets and none was found, and nothing has left the machine',
+  for (const pushApproval of ['always', 'never', 'unless-unreviewed'] as const) {
+    for (const decision of ['approved', 'declined'] as const) {
+      it(`${pushApproval}: a file the scan could not read asks, reviews nothing, and the operator ${decision}`, () => {
+        const outcome = publish({ pushApproval, review: 'approve', decision, scan: 'unscanned' });
+        expect(outcome.asked).toBe(true);
+        expect(outcome.pushed).toBe(decision === 'approved');
+        expect(outcome.ran).not.toContain('review-commit');
+      });
+    }
+  }
+
+  it('lets only a commit read whole and found clean skip the approval', () => {
+    const skipped = publish({
+      pushApproval: 'unless-unreviewed',
+      review: 'approve',
+      decision: 'declined',
+    });
+    expect(skipped).toMatchObject({ asked: false, pushed: true });
+    expect(
+      publish({
+        pushApproval: 'unless-unreviewed',
+        review: 'approve',
+        decision: 'declined',
+        scan: 'unscanned',
+      }),
+    ).toMatchObject({ asked: true, pushed: false });
+  });
+
+  it('reviews only a commit the scan read whole', () => {
+    expect(taskOrThrow('review-commit').when).toEqual({
+      allOf: [
+        "tasks.read-push-approval.output.branchPolicy.pushApproval == 'unless-unreviewed'",
+        'tasks.scan-commit.output.clean == true',
+      ],
+      onMissingRef: 'skip',
+    });
+  });
+
+  it('says on the approval what the scan read, and names the files it could not', () => {
+    const instruction = taskOrThrow('approve-push').pauseInstruction ?? '';
+    expect(instruction).toContain(
+      'the commit was scanned for secrets and none was found in what the scan read, and nothing has left the machine',
     );
+    const line = instruction.split('\n').find((l) => l.startsWith('- Files the scan could not'));
+    expect(line).toContain('`unscanned` names each file and why');
+    expect(line).toContain('no review ran');
+    expect(instruction.length).toBeLessThanOrEqual(PAUSE_INSTRUCTION_MAX_CHARS);
+  });
+
+  it('never pushes after a decline over a commit with an unscanned file, read from the decision alone', () => {
+    const push = taskOrThrow('push') as unknown as WorkflowTask;
+    const ready = computeReadyTasksWithWhen([push], new Set(['approve-push']), new Set(), {
+      statuses: new Map([
+        ['approve-push', 'succeeded'],
+        ['review-commit', 'skipped'],
+      ]),
+      outputs: new Map<string, Record<string, unknown>>([
+        ['approve-push', { decision: 'rejected' }],
+        [
+          'read-push-approval',
+          { branchPolicy: { branchPrefix: 'aflow/', pushApproval: 'unless-unreviewed' } },
+        ],
+        ['scan-commit', { clean: false }],
+      ]),
+    });
+    expect(ready.ready).toEqual([]);
   });
 
   it('reports a finding by file, line and rule, and never asks for the value', () => {

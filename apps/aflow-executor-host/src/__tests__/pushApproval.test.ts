@@ -5,22 +5,29 @@
  * It defaults to asking unless the publication's own review approves, it is
  * set when the folder is connected and changed later from this machine, and a
  * skill reads it through the folder's own inspect operation rather than from
- * the workspace.
+ * the workspace. The policy file holds only a posture the operator chose: a
+ * folder that chose none reads as the default of the day, and nothing that
+ * rewrites the file writes the default in.
  */
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { beforeAll, describe, expect, it } from 'vitest';
 
-import { HOST_PUSH_APPROVAL_DEFAULT, HostBindingInspectOutputSchema } from '@aflow/schemas';
+import {
+  HOST_PUSH_APPROVAL_DEFAULT,
+  HostBindingInspectOutputSchema,
+  resolveBranchPolicy,
+} from '@aflow/schemas';
 
 import { HostBindingSchema, HostPolicySchema, loadHostPolicy } from '../bindings.js';
 import { createHostHandler } from '../handlers/hostHandler.js';
+import { serializePolicy, writePolicyAtomically } from '../policyFile.js';
 import {
+  chosenPushApproval,
   describePushApproval,
   pushPostures,
-  resolvePushApproval,
   withPushApproval,
 } from '../pushApproval.js';
 
@@ -48,25 +55,52 @@ const FILES_ONLY = {
 describe('the posture a folder holds', () => {
   it("defaults to asking unless the publication's review approves", () => {
     const binding = HostBindingSchema.parse(PUSHING);
-    expect(binding.branchPolicy?.pushApproval).toBe('unless-unreviewed');
+    expect(binding.branchPolicy?.pushApproval).toBeUndefined();
+    expect(binding.branchPolicy && resolveBranchPolicy(binding.branchPolicy).pushApproval).toBe(
+      'unless-unreviewed',
+    );
     expect(HOST_PUSH_APPROVAL_DEFAULT).toBe('unless-unreviewed');
   });
 
   it('gives a folder whose policy names no posture the default when it is read, not when it was written', async () => {
-    // A folder connected before postures existed has none in its file. The
-    // default is applied by the schema on every read, so that folder takes
-    // whatever the default is now, with nothing rewritten.
+    // A folder that never chose has none in its file, and reading the file
+    // leaves it none: the default is applied where the posture is used, so
+    // that folder takes whatever the default is now.
     const base = await mkdtemp(join(tmpdir(), 'push-default-'));
     const policyPath = join(base, 'host-policy.json');
     await writeFile(policyPath, JSON.stringify({ version: 1, bindings: [PUSHING] }));
     const policy = await loadHostPolicy(policyPath);
-    expect(policy.bindings.get('hb_app')?.branchPolicy).toEqual({
-      branchPrefix: 'aflow/',
-      pushApproval: 'unless-unreviewed',
-    });
+    expect(policy.bindings.get('hb_app')?.branchPolicy).toEqual({ branchPrefix: 'aflow/' });
     expect(pushPostures(policy.bindings)).toEqual([
-      { id: 'hb_app', spaceId: 'space-a', pushApproval: 'unless-unreviewed' },
+      { id: 'hb_app', spaceId: 'space-a', pushApproval: HOST_PUSH_APPROVAL_DEFAULT },
     ]);
+  });
+
+  it('leaves an absent posture absent when the policy is rewritten', async () => {
+    // What every CLI verb does to the file: parse it, change something, write
+    // it back. A folder that never chose must still never have chosen.
+    const base = await mkdtemp(join(tmpdir(), 'push-rewrite-'));
+    const policyPath = join(base, 'host-policy.json');
+    await writeFile(
+      policyPath,
+      JSON.stringify({ version: 1, bindings: [PUSHING, { ...PUSHING, id: 'hb_other' }] }),
+    );
+    const parsed = HostPolicySchema.parse(JSON.parse(await readFile(policyPath, 'utf8')));
+    await writePolicyAtomically(
+      policyPath,
+      serializePolicy(withPushApproval(parsed, 'hb_other', 'never')),
+    );
+    const written = JSON.parse(await readFile(policyPath, 'utf8')) as {
+      bindings: Array<{ id: string; branchPolicy: Record<string, unknown> }>;
+    };
+    expect(written.bindings.map((b) => [b.id, b.branchPolicy])).toEqual([
+      ['hb_app', { branchPrefix: 'aflow/' }],
+      ['hb_other', { branchPrefix: 'aflow/', pushApproval: 'never' }],
+    ]);
+    expect(serializePolicy(HostPolicySchema.parse(JSON.parse(serializePolicy(parsed))))).toBe(
+      serializePolicy(parsed),
+    );
+    expect(serializePolicy(parsed)).not.toContain('pushApproval');
   });
 
   it('keeps a posture the policy file names', () => {
@@ -96,35 +130,36 @@ describe('the posture a folder holds', () => {
 });
 
 describe('connecting a folder', () => {
-  it('takes the default without asking when nothing is said', () => {
-    expect(resolvePushApproval({ branchPrefix: 'aflow/' })).toBe('unless-unreviewed');
+  it('records no posture when nothing is said, so the folder follows the default', () => {
+    expect(chosenPushApproval({ branchPrefix: 'aflow/' })).toBeUndefined();
   });
 
-  it('takes the posture the command names', () => {
-    expect(resolvePushApproval({ requested: 'unless-unreviewed', branchPrefix: 'aflow/' })).toBe(
+  it('records the posture the command names', () => {
+    expect(chosenPushApproval({ requested: 'unless-unreviewed', branchPrefix: 'aflow/' })).toBe(
       'unless-unreviewed',
     );
   });
 
-  it('keeps the posture a reconnected folder already holds unless one is named', () => {
-    expect(resolvePushApproval({ branchPrefix: 'aflow/', current: 'never' })).toBe('never');
+  it('keeps the posture a reconnected folder already chose unless one is named', () => {
+    expect(chosenPushApproval({ branchPrefix: 'aflow/', current: 'never' })).toBe('never');
     expect(
-      resolvePushApproval({ requested: 'always', branchPrefix: 'aflow/', current: 'never' }),
+      chosenPushApproval({ requested: 'always', branchPrefix: 'aflow/', current: 'never' }),
     ).toBe('always');
+    expect(chosenPushApproval({ branchPrefix: 'aflow/', current: undefined })).toBeUndefined();
   });
 
   it('records none for a folder that pushes nothing', () => {
-    expect(resolvePushApproval({ branchPrefix: undefined })).toBeUndefined();
+    expect(chosenPushApproval({ branchPrefix: undefined })).toBeUndefined();
   });
 
   it('refuses a posture for a folder that pushes nothing', () => {
-    expect(() => resolvePushApproval({ requested: 'never', branchPrefix: undefined })).toThrow(
+    expect(() => chosenPushApproval({ requested: 'never', branchPrefix: undefined })).toThrow(
       /pushes nothing/,
     );
   });
 
   it('refuses a posture that is not one of the three, naming them', () => {
-    expect(() => resolvePushApproval({ requested: 'maybe', branchPrefix: 'aflow/' })).toThrow(
+    expect(() => chosenPushApproval({ requested: 'maybe', branchPrefix: 'aflow/' })).toThrow(
       'always, never, unless-unreviewed',
     );
   });
@@ -136,7 +171,7 @@ describe('changing it later', () => {
     const after = withPushApproval(before, 'hb_app', 'never');
     expect(after.bindings.map((b) => [b.id, b.branchPolicy?.pushApproval])).toEqual([
       ['hb_app', 'never'],
-      ['hb_other', 'unless-unreviewed'],
+      ['hb_other', undefined],
     ]);
     expect(after.bindings[0]?.branchPolicy?.branchPrefix).toBe('aflow/');
   });
@@ -197,6 +232,7 @@ describe('host.binding.inspect', () => {
         version: 1,
         bindings: [
           { ...PUSHING, branchPolicy: { branchPrefix: 'aflow/', pushApproval: 'never' } },
+          { ...PUSHING, id: 'hb_unchosen' },
           FILES_ONLY,
         ],
         harnesses: [
@@ -242,6 +278,18 @@ describe('host.binding.inspect', () => {
     expect(captured.output).toEqual({
       id: 'hb_app',
       branchPolicy: { branchPrefix: 'aflow/', pushApproval: 'never' },
+    });
+  });
+
+  it('reads a folder that never chose a posture as the default now', async () => {
+    const captured: Captured = {};
+    const result = await createHostHandler(policyPath).execute(
+      contextFor({ bindingId: 'hb_unchosen' }, captured),
+    );
+    expect(result.status).toBe('SUCCEEDED');
+    expect(captured.output).toEqual({
+      id: 'hb_unchosen',
+      branchPolicy: { branchPrefix: 'aflow/', pushApproval: HOST_PUSH_APPROVAL_DEFAULT },
     });
   });
 

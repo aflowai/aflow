@@ -16,7 +16,7 @@ import { homedir } from 'node:os';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 
 import { createRedisConnection, HOST_INVENTORY_TTL_MS, HOST_MACHINES_KEY } from '@aflow/redis';
-import { HOST_PUSH_APPROVAL_DEFAULT } from '@aflow/schemas';
+import { HOST_PUSH_APPROVAL_DEFAULT, resolveBranchPolicy } from '@aflow/schemas';
 
 import { chooseFolder } from './folderPicker.js';
 import { namesInUseFor } from './connectNaming.js';
@@ -29,7 +29,7 @@ import {
   toolDirectoriesOnPath,
 } from './interview.js';
 import { serializePolicy, writePolicyAtomically } from './policyFile.js';
-import { describePushApproval, PUSH_SCAN_NOTE, resolvePushApproval } from './pushApproval.js';
+import { chosenPushApproval, describePushApproval, PUSH_SCAN_NOTE } from './pushApproval.js';
 import {
   assertRootOutsideRepositoryMetadata,
   type HostBinding,
@@ -260,7 +260,7 @@ async function main(): Promise<void> {
     const raw = await readFile(policyPath, 'utf8').catch(() => '{"version":1,"bindings":[]}');
     const policy = HostPolicySchema.parse(JSON.parse(raw));
     // A reconnect keeps the posture the operator set since, unless it names one.
-    const pushApproval = resolvePushApproval({
+    const pushApproval = chosenPushApproval({
       requested: arg('push-approval'),
       branchPrefix,
       current: policy.bindings.find((b) => b.id === id && b.root === root)?.branchPolicy
@@ -416,8 +416,13 @@ async function main(): Promise<void> {
       root,
       mode: writable ? 'readwrite' : 'read',
       allowsExecution,
-      ...(branchPrefix !== undefined && pushApproval !== undefined
-        ? { branchPolicy: { branchPrefix, pushApproval } }
+      ...(branchPrefix !== undefined
+        ? {
+            branchPolicy: {
+              branchPrefix,
+              ...(pushApproval !== undefined ? { pushApproval } : {}),
+            },
+          }
         : {}),
       singleFile: info.isFile(),
       spaceId: material.spaceId,
@@ -447,8 +452,12 @@ async function main(): Promise<void> {
       `  ${writable ? 'Readable and writable' : 'Read only'}${allowsExecution ? ', commands allowed' : ', no commands'}` +
         `${branchPrefix !== undefined ? `, pushes to branches under \`${branchPrefix}\`` : ', no pushes'}.`,
     );
-    if (pushApproval !== undefined) {
-      prompter.say(`  A publication from it ${describePushApproval(pushApproval)}.`);
+    if (binding.branchPolicy !== undefined) {
+      const posture = resolveBranchPolicy(binding.branchPolicy).pushApproval;
+      prompter.say(
+        `  A publication from it ${describePushApproval(posture)}` +
+          `${pushApproval === undefined ? ', the default' : ''}.`,
+      );
       prompter.say(`  ${PUSH_SCAN_NOTE}`);
     }
     prompter.say('');

@@ -9,23 +9,35 @@
  * A line that matches says so by file, line and rule name. What matched is
  * never held past the test that found it.
  */
-import { HOST_COMMIT_RANGE_PATTERN, type HostCommitScanOutputSchema } from '@aflow/schemas';
+import {
+  HOST_COMMIT_RANGE_PATTERN,
+  type HostCommitScanOutputSchema,
+  type HostCommitScanUnscannedReasonSchema,
+} from '@aflow/schemas';
 import type { z } from 'zod';
 
-import { matchingRule } from './secretRules.js';
+import { scanLine } from './secretRules.js';
 import { countCommits, forEachGitLine, resolveCommit, WorktreeError } from './worktree.js';
 
 type HostCommitScanOutput = z.infer<typeof HostCommitScanOutputSchema>;
 type Finding = HostCommitScanOutput['findings'][number];
+type Unscanned = HostCommitScanOutput['unscanned'][number];
+type UnscannedReason = z.infer<typeof HostCommitScanUnscannedReasonSchema>;
 
 /**
- * The most a file may add in one commit and still be read. Past it the file is
- * generated or vendored, and reading it costs more than a match in it is
- * likely to be worth; the summary names it as not read.
+ * The most a file may add in one commit and still be read whole. Past it the
+ * file is generated or vendored; the rest of it is not read, and the file is
+ * reported as unscanned so the range is not cleared.
  */
 export const SCAN_MAX_FILE_BYTES = 1024 * 1024;
-/** How many findings are returned; the summary counts the rest. */
-export const SCAN_MAX_FINDINGS = 50;
+/**
+ * The longest added line the rules read. A longer one is minified or data; it
+ * is not matched, and its file is reported as unscanned. The reader holds no
+ * more than this of any line, however long the line is.
+ */
+export const SCAN_MAX_LINE_BYTES = 64 * 1024;
+/** How many findings, allowed lines and unscanned files are each listed; the summary counts the rest. */
+export const SCAN_MAX_LISTED = 50;
 /**
  * The most diff a scan reads in all. A range past it is refused rather than
  * scanned in part, because a partial scan cannot clear what it did not read.
@@ -72,9 +84,12 @@ function unquotePath(raw: string): string {
   return Buffer.from(bytes).toString('utf8');
 }
 
-/** The new side's path from a `+++` line, or nothing for a deleted file. */
+/**
+ * The new side's path from a `+++` line, or nothing for a deleted file. git
+ * ends the line with a TAB when an unquoted path holds a space.
+ */
 function newSidePath(header: string): string | undefined {
-  const raw = unquotePath(header.slice('+++ '.length));
+  const raw = unquotePath(header.slice('+++ '.length).replace(/\t$/, ''));
   if (raw === '/dev/null') return undefined;
   return raw.startsWith('b/') ? raw.slice(2) : raw;
 }
@@ -87,32 +102,53 @@ function binaryPath(line: string): string | undefined {
   return raw.startsWith('b/') ? raw.slice(2) : raw;
 }
 
+/** One file's part of one commit's diff. */
 interface FileSection {
   file: string | undefined;
   addedBytes: number;
-  unread: boolean;
+  /** Set once nothing more of the file is read. */
+  stopped: boolean;
+  reasons: Set<UnscannedReason>;
   findings: Finding[];
+  allowed: Finding[];
+}
+
+/** A list capped at `SCAN_MAX_LISTED`, deduplicated by key, counting what it holds in all. */
+class Listing<T> {
+  readonly items: T[] = [];
+  private readonly seen = new Set<string>();
+
+  add(key: string, item: T): void {
+    if (this.seen.has(key)) return;
+    this.seen.add(key);
+    if (this.items.length < SCAN_MAX_LISTED) this.items.push(item);
+  }
+
+  get total(): number {
+    return this.seen.size;
+  }
+
+  get beyond(): number {
+    return this.seen.size - this.items.length;
+  }
 }
 
 interface ScanTally {
-  readonly findings: Finding[];
-  readonly seen: Set<string>;
-  readonly unread: Set<string>;
-  total: number;
+  readonly findings: Listing<Finding>;
+  readonly allowed: Listing<Finding>;
+  readonly unscanned: Listing<Unscanned>;
+}
+
+function lineKey(finding: Finding): string {
+  return `${finding.file}\0${String(finding.line)}\0${finding.pattern}`;
 }
 
 function closeSection(section: FileSection | undefined, tally: ScanTally): void {
   if (section?.file === undefined) return;
-  if (section.unread) {
-    tally.unread.add(section.file);
-    return;
-  }
-  for (const finding of section.findings) {
-    const key = `${finding.file}\0${String(finding.line)}\0${finding.pattern}`;
-    if (tally.seen.has(key)) continue;
-    tally.seen.add(key);
-    tally.total += 1;
-    if (tally.findings.length < SCAN_MAX_FINDINGS) tally.findings.push(finding);
+  for (const finding of section.findings) tally.findings.add(lineKey(finding), finding);
+  for (const allowed of section.allowed) tally.allowed.add(lineKey(allowed), allowed);
+  for (const reason of section.reasons) {
+    tally.unscanned.add(`${section.file}\0${reason}`, { file: section.file, reason });
   }
 }
 
@@ -122,15 +158,26 @@ function closeSection(section: FileSection | undefined, tally: ScanTally): void 
  * header that happens to start the same way.
  */
 async function readAddedLines(root: string, base: string, head: string): Promise<ScanTally> {
-  const tally: ScanTally = { findings: [], seen: new Set(), unread: new Set(), total: 0 };
+  const tally: ScanTally = {
+    findings: new Listing(),
+    allowed: new Listing(),
+    unscanned: new Listing(),
+  };
   let section: FileSection | undefined;
   let inHunk = false;
   let nextLine = 0;
 
-  const read = (line: string): void => {
+  const read = (line: string, bytes: number): void => {
     if (line.startsWith('diff --git ')) {
       closeSection(section, tally);
-      section = { file: undefined, addedBytes: 0, unread: false, findings: [] };
+      section = {
+        file: undefined,
+        addedBytes: 0,
+        stopped: false,
+        reasons: new Set(),
+        findings: [],
+        allowed: [],
+      };
       inHunk = false;
       return;
     }
@@ -145,24 +192,37 @@ async function readAddedLines(root: string, base: string, head: string): Promise
       if (line.startsWith('+++ ')) section.file = newSidePath(line);
       else if (line.startsWith('Binary files ')) {
         section.file = binaryPath(line);
-        section.unread = true;
+        section.stopped = true;
+        section.reasons.add('binary');
       }
       return;
     }
     if (!line.startsWith('+')) return;
     const lineNumber = nextLine;
     nextLine += 1;
-    if (section.unread || section.file === undefined) return;
+    if (section.stopped || section.file === undefined) return;
     const added = line.slice(1);
-    section.addedBytes += Buffer.byteLength(added, 'utf8') + 1;
-    if (section.addedBytes > SCAN_MAX_FILE_BYTES || added.includes('\0')) {
-      section.unread = true;
+    // The line's own bytes less its `+`, and the newline that ends it.
+    section.addedBytes += bytes;
+    if (section.addedBytes > SCAN_MAX_FILE_BYTES) {
+      section.stopped = true;
+      section.reasons.add('too-large');
       return;
     }
-    const rule = matchingRule(added);
-    if (rule !== undefined) {
-      section.findings.push({ file: section.file, line: lineNumber, pattern: rule });
+    if (added.includes('\0')) {
+      section.stopped = true;
+      section.reasons.add('nul-byte');
+      return;
     }
+    if (bytes - 1 > SCAN_MAX_LINE_BYTES) {
+      section.reasons.add('line-too-long');
+      return;
+    }
+    const verdict = scanLine(section.file, added);
+    if (verdict === undefined) return;
+    const place = { file: section.file, line: lineNumber, pattern: verdict.rule };
+    if (verdict.allowed) section.allowed.push(place);
+    else section.findings.push(place);
   };
 
   try {
@@ -174,6 +234,10 @@ async function readAddedLines(root: string, base: string, head: string): Promise
         'log',
         '--format=',
         '--patch',
+        // A merge shows no diff by default, so lines it adds resolving a
+        // conflict would never be read; against its first parent it shows
+        // everything it brings into the branch.
+        '--diff-merges=first-parent',
         '--unified=0',
         '--no-color',
         '--no-ext-diff',
@@ -184,7 +248,12 @@ async function readAddedLines(root: string, base: string, head: string): Promise
         '--dst-prefix=b/',
         `${base}..${head}`,
       ],
-      { maxBytes: SCAN_MAX_DIFF_BYTES, timeoutMs: SCAN_TIMEOUT_MS },
+      {
+        maxBytes: SCAN_MAX_DIFF_BYTES,
+        // The `+` that marks an added line, then the line.
+        maxLineBytes: SCAN_MAX_LINE_BYTES + 1,
+        timeoutMs: SCAN_TIMEOUT_MS,
+      },
       read,
     );
   } catch (error) {
@@ -203,21 +272,48 @@ function plural(count: number, one: string, many: string): string {
   return `${String(count)} ${count === 1 ? one : many}`;
 }
 
+function kilobytes(bytes: number): string {
+  return `${String(bytes / 1024)} KB`;
+}
+
+const UNSCANNED_WHY: Record<UnscannedReason, string> = {
+  binary: 'binary',
+  'nul-byte': 'a NUL byte in a line it adds',
+  'too-large': `more than ${kilobytes(SCAN_MAX_FILE_BYTES)} added in one commit`,
+  'line-too-long': `a line longer than ${kilobytes(SCAN_MAX_LINE_BYTES)}`,
+};
+
+function beyondNote(listing: Listing<unknown>): string {
+  return listing.beyond > 0 ? `, and ${String(listing.beyond)} more` : '';
+}
+
 function summarize(tally: ScanTally, commits: number, range: string): string {
   const scope = `the ${plural(commits, 'commit', 'commits')} of \`${range}\``;
-  const unread = [...tally.unread].sort();
-  const unreadNote =
-    unread.length === 0
-      ? ''
-      : ` Not read, as binary or adding more than ${String(SCAN_MAX_FILE_BYTES / 1024)} KB in one ` +
-        `commit: ${unread.join(', ')}.`;
-  if (tally.total === 0) return `No secret found in the lines ${scope} add.${unreadNote}`;
-  const places = tally.findings.map((f) => `${f.file} line ${String(f.line)} (${f.pattern})`);
-  const beyond = tally.total - tally.findings.length;
-  return (
-    `What looks like a secret is in ${plural(tally.total, 'place', 'places')} in ${scope}: ` +
-    `${places.join(', ')}${beyond > 0 ? `, and ${String(beyond)} more` : ''}.${unreadNote}`
-  );
+  const { findings, allowed, unscanned } = tally;
+  const sentences: string[] = [];
+  if (findings.total > 0) {
+    const places = findings.items.map((f) => `${f.file} line ${String(f.line)} (${f.pattern})`);
+    sentences.push(
+      `What looks like a secret is in ${plural(findings.total, 'place', 'places')} in ${scope}: ` +
+        `${places.join(', ')}${beyondNote(findings)}.`,
+    );
+  } else if (unscanned.total > 0) {
+    sentences.push(`No secret found in the lines read of ${scope}, but not every file was read.`);
+  } else {
+    sentences.push(`No secret found in the lines ${scope} add.`);
+  }
+  if (unscanned.total > 0) {
+    const files = unscanned.items.map((u) => `${u.file} (${UNSCANNED_WHY[u.reason]})`);
+    sentences.push(`Not read whole: ${files.join(', ')}${beyondNote(unscanned)}.`);
+  }
+  if (allowed.total > 0) {
+    const lines = allowed.items.map((a) => `${a.file} line ${String(a.line)} (${a.pattern})`);
+    sentences.push(
+      `Let through by an \`aflow-scan: allow\` comment on the line: ${lines.join(', ')}` +
+        `${beyondNote(allowed)}.`,
+    );
+  }
+  return sentences.join(' ');
 }
 
 /**
@@ -235,11 +331,15 @@ export async function scanCommitRange(root: string, range: string): Promise<Host
 
   const tally = await readAddedLines(root, base, head);
   const commits = await countCommits(root, base, head);
-  const clean = tally.total === 0;
+  const unflagged = tally.findings.total === 0;
+  const clean = unflagged && tally.unscanned.total === 0;
   return {
     clean,
-    findings: tally.findings,
+    findings: tally.findings.items,
+    unscanned: tally.unscanned.items,
+    allowed: tally.allowed.items,
     summary: summarize(tally, commits, resolved),
+    ...(unflagged ? { unflaggedRange: resolved } : {}),
     ...(clean ? { clearedRange: resolved } : {}),
   };
 }

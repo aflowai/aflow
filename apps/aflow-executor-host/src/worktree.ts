@@ -35,7 +35,6 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, sep } from 'node:path';
-import { createInterface } from 'node:readline';
 import { promisify } from 'node:util';
 
 const run = promisify(execFile);
@@ -179,17 +178,85 @@ async function git(
 }
 
 /**
+ * Bytes cut into lines, each held to at most `maxLineBytes` while it is read:
+ * the rest of a longer line is counted and dropped, never buffered. Each line
+ * is handed over with its whole length in bytes, so a line longer than what
+ * was handed over says so.
+ */
+export class LineCutter {
+  private parts: Buffer[] = [];
+  private held = 0;
+  private bytes = 0;
+  private pending = false;
+
+  constructor(
+    private readonly maxLineBytes: number,
+    private readonly onLine: (line: string, bytes: number) => void,
+  ) {}
+
+  push(chunk: Buffer): void {
+    let start = 0;
+    while (start <= chunk.length) {
+      const newline = chunk.indexOf(0x0a, start);
+      const end = newline === -1 ? chunk.length : newline;
+      this.hold(chunk.subarray(start, end));
+      if (newline === -1) return;
+      this.emit();
+      start = newline + 1;
+    }
+  }
+
+  /** Hand over a last line that no newline ended. */
+  end(): void {
+    if (this.pending) this.emit();
+  }
+
+  private hold(segment: Buffer): void {
+    if (segment.length === 0) return;
+    this.pending = true;
+    this.bytes += segment.length;
+    const room = this.maxLineBytes - this.held;
+    if (segment.length > room) {
+      if (room > 0) this.parts.push(segment.subarray(0, room));
+      this.held = this.maxLineBytes;
+      return;
+    }
+    this.parts.push(segment);
+    this.held += segment.length;
+  }
+
+  private emit(): void {
+    let line = Buffer.concat(this.parts).toString('utf8');
+    let bytes = this.bytes;
+    if (bytes <= this.maxLineBytes && line.endsWith('\r')) {
+      line = line.slice(0, -1);
+      bytes -= 1;
+    }
+    this.parts = [];
+    this.held = 0;
+    this.bytes = 0;
+    this.pending = false;
+    this.onLine(line, bytes);
+  }
+}
+
+/**
  * What git prints for `args`, handed over a line at a time and never held
  * whole: for output whose size belongs to the repository rather than to this
- * lane, such as every commit of a range. Past `maxBytes` or `timeoutMs` git is
+ * lane, such as every commit of a range. A line past `maxLineBytes` is handed
+ * over cut to that length, with its whole length beside it. Past `maxBytes` or `timeoutMs` git is
  * killed and the read refused, so a caller never mistakes part of the output
  * for all of it.
  */
 export async function forEachGitLine(
   cwd: string,
   args: readonly string[],
-  limits: { readonly maxBytes: number; readonly timeoutMs: number },
-  onLine: (line: string) => void,
+  limits: {
+    readonly maxBytes: number;
+    readonly maxLineBytes: number;
+    readonly timeoutMs: number;
+  },
+  onLine: (line: string, bytes: number) => void,
 ): Promise<void> {
   const child = spawn('git', ['-C', cwd, ...GIT_SAFETY_ARGS, ...args], {
     env: gitEnv(),
@@ -212,22 +279,24 @@ export async function forEachGitLine(
     refusal = `git did not finish within ${String(limits.timeoutMs / 1000)} seconds.`;
     child.kill('SIGKILL');
   }, limits.timeoutMs);
+  const lines = new LineCutter(limits.maxLineBytes, onLine);
   let readBytes = 0;
   try {
-    for await (const line of createInterface({ input: child.stdout, crlfDelay: Infinity })) {
-      readBytes += Buffer.byteLength(line, 'utf8') + 1;
+    for await (const chunk of child.stdout as AsyncIterable<Buffer>) {
+      readBytes += chunk.length;
       if (readBytes > limits.maxBytes) {
         refusal = `git printed more than ${String(limits.maxBytes / (1024 * 1024))} MB.`;
         child.kill('SIGKILL');
         break;
       }
-      onLine(line);
+      lines.push(chunk);
     }
     const code = await exited;
     if (refusal !== undefined) throw new WorktreeError(refusal, 'git_failed');
     if (code !== 0) {
       throw new WorktreeError(stderr.split('\n')[0] || `git exited ${String(code)}`, 'git_failed');
     }
+    lines.end();
   } finally {
     clearTimeout(timer);
     if (child.exitCode === null) child.kill('SIGKILL');

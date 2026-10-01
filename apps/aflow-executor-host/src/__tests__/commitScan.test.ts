@@ -1,36 +1,40 @@
 /**
  * Contract: the commits a publication is about to push are read for secrets
  * line by line, every commit of the range, and a finding names its file, line
- * and rule — never what matched.
+ * and rule — never what matched. A file the scan could not read whole is
+ * named with why, and a range holding one is never clean.
  *
  * Every planted value is assembled at run time, so this file holds none of
  * them and cannot trip the scan it tests.
  */
 import { execFile } from 'node:child_process';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { HostCommitScanInputSchema, HostCommitScanOutputSchema } from '@aflow/schemas';
 
-import { SCAN_MAX_FILE_BYTES, SCAN_MAX_FINDINGS } from '../commitScan.js';
+import { SCAN_MAX_FILE_BYTES, SCAN_MAX_LINE_BYTES, SCAN_MAX_LISTED } from '../commitScan.js';
 import { createHostHandler } from '../handlers/hostHandler.js';
 import {
-  ENV_SECRET_MIN_LENGTH,
-  GENERIC_SECRET_MIN_ENTROPY_BITS,
-  GENERIC_SECRET_MIN_LENGTH,
-  matchingRule,
+  isEnvFile,
+  SCAN_ALLOW_MARKER,
+  scanLine,
   SECRET_RULES,
+  SECRET_VALUE_MIN_ENTROPY_BITS,
+  SECRET_VALUE_MIN_LENGTH,
   shannonEntropy,
 } from '../secretRules.js';
+import { LineCutter } from '../worktree.js';
 
 const run = promisify(execFile);
 
 async function git(cwd: string, ...args: string[]): Promise<string> {
-  const { stdout } = await run('git', ['-C', cwd, ...args]);
+  const { stdout } = await run('git', ['-C', cwd, ...args], { maxBuffer: 256 * 1024 * 1024 });
   return stdout;
 }
 
@@ -47,6 +51,9 @@ function randomish(length: number, alphabet = ALNUM, seed = 7): string {
   return out;
 }
 
+/** The file every planted line is committed to: `*.env`, so the `.env` rule reads it too. */
+const PLANTED_FILE = 'deploy.env';
+
 /** One planted line per rule, and the value in it a finding must never carry. */
 const PLANTED: Record<string, { line: string; value: string }> = (() => {
   const awsId = 'AKIA' + 'QWERTYUIOPASDFGH';
@@ -61,7 +68,7 @@ const PLANTED: Record<string, { line: string; value: string }> = (() => {
     randomish(43),
   ].join('.');
   const generic = randomish(24, ALNUM, 37);
-  const env = 'hunter' + '2' + randomish(6, ALNUM, 41);
+  const env = randomish(24, ALNUM, 41);
   const keyBody = randomish(64, `${ALNUM}/+`, 43);
   return {
     'private-key': {
@@ -80,11 +87,15 @@ const PLANTED: Record<string, { line: string; value: string }> = (() => {
   };
 })();
 
+function ruleOf(file: string, line: string): string | undefined {
+  return scanLine(file, line)?.rule;
+}
+
 describe('the rules', () => {
   it('has a planted example for every rule, and each is named by its own rule', () => {
     expect(Object.keys(PLANTED).sort()).toEqual(SECRET_RULES.map((rule) => rule.name).sort());
     for (const [name, { line }] of Object.entries(PLANTED)) {
-      expect(matchingRule(line), name).toBe(name);
+      expect(ruleOf(PLANTED_FILE, line), name).toBe(name);
     }
   });
 
@@ -97,40 +108,196 @@ describe('the rules', () => {
 
   it('reads every GitHub and Slack token kind', () => {
     for (const prefix of ['ghp_', 'gho_', 'ghu_', 'ghs_', 'ghr_']) {
-      expect(matchingRule('x ' + prefix + randomish(36)), prefix).toBe('github-token');
+      expect(ruleOf('a.ts', 'x ' + prefix + randomish(36)), prefix).toBe('github-token');
     }
-    expect(matchingRule('x ' + 'github_pat_' + randomish(40))).toBe('github-token');
+    expect(ruleOf('a.ts', 'x ' + 'github_pat_' + randomish(40))).toBe('github-token');
     for (const kind of ['a', 'b', 'p', 'r', 's']) {
-      expect(matchingRule('x ' + 'xox' + kind + '-' + randomish(20)), kind).toBe('slack-token');
+      expect(ruleOf('a.ts', 'x ' + 'xox' + kind + '-' + randomish(20)), kind).toBe('slack-token');
     }
-    expect(matchingRule('x ' + 'rk_' + 'live_' + randomish(24))).toBe('stripe-live-key');
+    expect(ruleOf('a.ts', 'x ' + 'rk_' + 'live_' + randomish(24))).toBe('stripe-live-key');
   });
 
   it('reads an AWS secret beside its key id with no name on it', () => {
     const line = 'AKIA' + 'QWERTYUIOPASDFGH' + ',' + randomish(40, `${ALNUM}/+`, 3);
-    expect(matchingRule(line)).toBe('aws-secret-access-key');
+    expect(ruleOf('a.ts', line)).toBe('aws-secret-access-key');
   });
 
-  it('weighs a value under a secret-looking name by its length and its entropy', () => {
+  it('weighs a quoted value under a secret-looking name by its length and its entropy', () => {
     expect(shannonEntropy('aaaa')).toBe(0);
     expect(shannonEntropy('abcd')).toBe(2);
+    const key = randomish(24, ALNUM, 5);
+    expect(ruleOf('a.ts', 'const apiToken = "' + key + '";')).toBe('secret-assignment');
+    expect(ruleOf('a.ts', "apiToken: '" + key + "',")).toBe('secret-assignment');
+    expect(ruleOf('a.ts', 'apiToken := `' + key + '`')).toBe('secret-assignment');
     const low = 'correcthorsebattery';
-    expect(shannonEntropy(low)).toBeLessThanOrEqual(GENERIC_SECRET_MIN_ENTROPY_BITS);
-    expect(matchingRule('const apiToken = "' + low + '";')).toBeUndefined();
-    const short = randomish(GENERIC_SECRET_MIN_LENGTH - 1);
-    expect(matchingRule('const apiToken = "' + short + '";')).toBeUndefined();
+    expect(shannonEntropy(low)).toBeLessThanOrEqual(SECRET_VALUE_MIN_ENTROPY_BITS);
+    expect(ruleOf('a.ts', 'const apiToken = "' + low + '";')).toBeUndefined();
+    const short = randomish(SECRET_VALUE_MIN_LENGTH - 1);
+    expect(ruleOf('a.ts', 'const apiToken = "' + short + '";')).toBeUndefined();
     // The name decides: the same value under another name is not a secret.
-    expect(matchingRule('const greeting = "' + randomish(24) + '";')).toBeUndefined();
-    expect(matchingRule('const token = process.env.TOKEN;')).toBeUndefined();
+    expect(ruleOf('a.ts', 'const greeting = "' + key + '";')).toBeUndefined();
+    // Only a string literal is a value; an expression is not.
+    expect(ruleOf('a.ts', 'const apiToken = ' + key + ';')).toBeUndefined();
+    expect(ruleOf('a.ts', 'const token = process.env.TOKEN;')).toBeUndefined();
   });
 
-  it('passes a `.env` line that names where the value comes from rather than holding it', () => {
-    for (const value of ['${API_TOKEN}', '<your-token>', 'your_api_key_here', 'changeme']) {
-      expect(matchingRule('API_TOKEN=' + value), value).toBeUndefined();
+  it('passes a value that is plainly something other than a secret, whatever its name', () => {
+    const sha = randomish(40, '0123456789abcdef', 3);
+    const digest = randomish(64, '0123456789abcdef', 5);
+    const values = [
+      sha,
+      digest,
+      '86400000123456789',
+      'https://auth.' + 'provider.test/oauth/token',
+      '/etc/aflow/' + randomish(16),
+      './fixtures/' + randomish(16),
+      '${RUN}:' + randomish(16),
+      'test-password-123',
+      'key-for-example-' + randomish(12),
+      'changeme-' + randomish(12),
+      'xxxx' + randomish(16),
+      'dummy-' + randomish(16),
+      'workflow_run_tasks_pending',
+      'dispatch:run-1:task-a:1',
+      'stripeDefaultClientSecret',
+      'sk-live-not-a-real-credential',
+      '0123456789abcdefghij',
+      Buffer.from('{"alg":"HS256","typ":"JWT"}').toString('base64'),
+    ];
+    for (const value of values) {
+      expect(value.length, value).toBeGreaterThanOrEqual(SECRET_VALUE_MIN_LENGTH);
+      for (const name of ['headSha256Token', 'tokenEndpoint', 'apiSecret', 'password']) {
+        expect(ruleOf('a.ts', `const ${name} = '${value}';`), `${name} ${value}`).toBeUndefined();
+      }
     }
-    expect(matchingRule('API_TOKEN=' + 'ab1'.repeat(2))).toBeUndefined();
-    expect('ab1'.repeat(2).length).toBeLessThan(ENV_SECRET_MIN_LENGTH);
-    expect(matchingRule('PORT=' + '8080' + randomish(8))).toBeUndefined();
+  });
+
+  it('reads `.env` lines only in a `.env` file', () => {
+    for (const file of ['.env', 'apps/web/.env', '.env.local', '.env.production', 'deploy.env']) {
+      expect(isEnvFile(file), file).toBe(true);
+      expect(ruleOf(file, PLANTED['env-secret']?.line ?? ''), file).toBe('env-secret');
+    }
+    for (const file of ['app.ts', 'environment.ts', 'docs/env.md', 'Dockerfile', 'env']) {
+      expect(isEnvFile(file), file).toBe(false);
+      expect(ruleOf(file, PLANTED['env-secret']?.line ?? ''), file).toBeUndefined();
+    }
+  });
+
+  it('passes a `.env` value that is not a secret under the same rules as any other value', () => {
+    for (const line of [
+      'TOKEN_TTL_SECONDS=86400000',
+      'TOKEN_FILE=/etc/aflow/' + randomish(16),
+      'SECRET_MANAGER_URL=http://' + 'vault.internal:8200/v1',
+      'API_TOKEN=${API_TOKEN}',
+      'API_TOKEN=$OTHER_' + randomish(16),
+      'API_TOKEN=<your-token-' + randomish(12) + '>',
+      'API_TOKEN=your_api_key_here',
+      'DATABASE_PASSWORD=hunter2',
+      'API_TOKEN=changeme',
+      'PORT=8080' + randomish(16),
+    ]) {
+      expect(ruleOf('.env', line), line).toBeUndefined();
+    }
+    const key = randomish(24, ALNUM, 9);
+    for (const line of [
+      'export API_TOKEN=' + key,
+      'API_TOKEN="' + key + '"',
+      "API_TOKEN='" + key + "' # rotated",
+      'API_TOKEN=' + key + ' # rotated',
+    ]) {
+      expect(ruleOf('.env', line), line).toBe('env-secret');
+    }
+  });
+
+  it('lets through a line an operator marked in a comment, and says it did', () => {
+    const line = PLANTED['secret-assignment']?.line ?? '';
+    expect(scanLine('a.ts', line)).toEqual({ rule: 'secret-assignment', allowed: false });
+    for (const comment of ['// ', '/* ', '# ', '-- ', '<!-- ']) {
+      expect(scanLine('a.ts', `${line} ${comment}${SCAN_ALLOW_MARKER}`), comment).toEqual({
+        rule: 'secret-assignment',
+        allowed: true,
+      });
+    }
+    // Inside a string rather than a comment, the marker is part of the value.
+    expect(scanLine('a.ts', `${line} const note = "${SCAN_ALLOW_MARKER}";`)?.allowed).toBe(false);
+    expect(scanLine('a.ts', `const note = "x"; // ${SCAN_ALLOW_MARKER}`)).toBeUndefined();
+  });
+
+  it('reads a line of a megabyte in linear time, whatever it is made of', () => {
+    const size = 1024 * 1024;
+    const fill = (unit: string): string =>
+      unit.repeat(Math.ceil(size / unit.length)).slice(0, size);
+    const lines = [
+      fill('a'),
+      fill('token'),
+      fill("token='"),
+      'apiToken = "' + fill('a'),
+      fill('aws_secret_'),
+      fill('awssecret'),
+      fill('eyJ'),
+      fill('-eyJ'),
+      fill('eyJaaaaaaaaa.'),
+      fill('github_pat_'),
+      fill('-xoxb-'),
+      '-----BEGIN ' + fill('A '),
+      fill('AKIA' + 'QWERTYUIOPASDFGH/'),
+      fill('A_TOKEN_'),
+      fill(`token = "${'Ab_'.repeat(170)}" `),
+      fill('# '),
+    ];
+    for (const line of lines) {
+      const started = performance.now();
+      for (const file of ['bundle.js', '.env']) scanLine(file, line);
+      // A quadratic rule takes minutes here; a linear one, milliseconds.
+      expect(performance.now() - started, line.slice(0, 24)).toBeLessThan(2000);
+    }
+  });
+
+  it('finds nothing in this repository', async () => {
+    const repository = fileURLToPath(new URL('../../../../', import.meta.url));
+    const files = (await git(repository, 'ls-files', '-z')).split('\0').filter(Boolean);
+    const hits: string[] = [];
+    for (const file of files) {
+      const path = join(repository, file);
+      const size = await stat(path).then(
+        (s) => (s.isFile() ? s.size : undefined),
+        () => undefined,
+      );
+      if (size === undefined || size > SCAN_MAX_FILE_BYTES) continue;
+      const bytes = await readFile(path);
+      if (bytes.subarray(0, 8000).includes(0)) continue;
+      bytes
+        .toString('utf8')
+        .split('\n')
+        .forEach((line, index) => {
+          if (Buffer.byteLength(line, 'utf8') > SCAN_MAX_LINE_BYTES) return;
+          const verdict = scanLine(file, line);
+          if (verdict !== undefined && !verdict.allowed) {
+            hits.push(`${file} line ${String(index + 1)} (${verdict.rule})`);
+          }
+        });
+    }
+    expect(files.length).toBeGreaterThan(100);
+    expect(hits).toEqual([]);
+  }, 120_000);
+});
+
+describe('the line reader', () => {
+  it('holds no more of a line than its cap, and says how long the line was', () => {
+    const cap = 1024;
+    const lines: Array<[string, number]> = [];
+    const cutter = new LineCutter(cap, (line, bytes) => lines.push([line, bytes]));
+    cutter.push(Buffer.from('first\r\n+'));
+    for (let i = 0; i < 1024; i += 1) cutter.push(Buffer.alloc(10 * 1024, 'x'));
+    cutter.push(Buffer.from('\nlast'));
+    cutter.end();
+    expect(lines.map(([line, bytes]) => [line.length, bytes])).toEqual([
+      [5, 5],
+      [cap, 1 + 1024 * 10 * 1024],
+      [4, 4],
+    ]);
+    expect(lines[0]?.[0]).toBe('first');
+    expect(lines[1]?.[0].startsWith('+x')).toBe(true);
   });
 });
 
@@ -173,13 +340,23 @@ async function scan(range: string, spaceId?: string) {
   return { result, captured };
 }
 
+async function scanOutput(range: string) {
+  const { result, captured } = await scan(range);
+  expect(result.status).toBe('SUCCEEDED');
+  return HostCommitScanOutputSchema.parse(captured.output);
+}
+
+async function headSha(): Promise<string> {
+  return (await git(root, 'rev-parse', 'HEAD')).trim();
+}
+
 async function commitFiles(files: Record<string, string | Buffer>): Promise<string> {
   for (const [path, content] of Object.entries(files)) {
     await writeFile(join(root, path), content);
   }
   await git(root, 'add', '-A');
   await git(root, 'commit', '-q', '-m', 'change');
-  return (await git(root, 'rev-parse', 'HEAD')).trim();
+  return headSha();
 }
 
 beforeEach(async () => {
@@ -204,30 +381,29 @@ beforeEach(async () => {
 
 describe('host.commit.scan', () => {
   it('finds every planted example, by file, line and rule', async () => {
-    const start = (await git(root, 'rev-parse', 'HEAD')).trim();
+    const start = await headSha();
     const lines = Object.values(PLANTED).map((p) => p.line);
-    const head = await commitFiles({ 'config.txt': `first line\n${lines.join('\n')}\n` });
+    const head = await commitFiles({ [PLANTED_FILE]: `first line\n${lines.join('\n')}\n` });
 
-    const { result, captured } = await scan(`${start}..${head}`);
-    expect(result.status).toBe('SUCCEEDED');
-    const output = HostCommitScanOutputSchema.parse(captured.output);
+    const output = await scanOutput(`${start}..${head}`);
     expect(output.clean).toBe(false);
+    expect(output.unflaggedRange).toBeUndefined();
     expect(output.clearedRange).toBeUndefined();
     expect(output.findings).toEqual(
       Object.keys(PLANTED).map((pattern, index) => ({
-        file: 'config.txt',
+        file: PLANTED_FILE,
         line: index + 2,
         pattern,
       })),
     );
-    expect(output.summary).toContain('config.txt line 2 (private-key)');
+    expect(output.summary).toContain(`${PLANTED_FILE} line 2 (private-key)`);
     expect(output.summary).toContain('in 10 places');
   });
 
   it('never returns, logs or stores what matched', async () => {
-    const start = (await git(root, 'rev-parse', 'HEAD')).trim();
+    const start = await headSha();
     const head = await commitFiles({
-      'config.txt': Object.values(PLANTED)
+      [PLANTED_FILE]: Object.values(PLANTED)
         .map((p) => p.line)
         .join('\n'),
     });
@@ -241,91 +417,187 @@ describe('host.commit.scan', () => {
   });
 
   it('clears a clean range, naming it by its two full shas', async () => {
-    const start = (await git(root, 'rev-parse', 'HEAD')).trim();
+    const start = await headSha();
     const head = await commitFiles({ 'app.ts': 'export const answer = 42;\n' });
     const { result, captured } = await scan(`${start.slice(0, 12)}..${head.slice(0, 12)}`);
     expect(result.status).toBe('SUCCEEDED');
     expect(captured.output).toEqual({
       clean: true,
       findings: [],
+      unscanned: [],
+      allowed: [],
       summary: `No secret found in the lines the 1 commit of \`${start}..${head}\` add.`,
+      unflaggedRange: `${start}..${head}`,
       clearedRange: `${start}..${head}`,
     });
   });
 
   it('reads every commit, so a secret removed later in the range is still found', async () => {
-    const start = (await git(root, 'rev-parse', 'HEAD')).trim();
+    const start = await headSha();
     await commitFiles({ 'app.ts': `x\n${PLANTED['github-token']?.line ?? ''}\n` });
     const head = await commitFiles({ 'app.ts': 'x\n' });
-    const { captured } = await scan(`${start}..${head}`);
-    const output = HostCommitScanOutputSchema.parse(captured.output);
+    const output = await scanOutput(`${start}..${head}`);
     expect(output.findings).toEqual([{ file: 'app.ts', line: 2, pattern: 'github-token' }]);
     expect(output.summary).toContain('the 2 commits of');
   });
 
   it('reads only what the range adds, not what it removes or what came before it', async () => {
     await commitFiles({ 'old.txt': `${PLANTED['slack-token']?.line ?? ''}\n` });
-    const start = (await git(root, 'rev-parse', 'HEAD')).trim();
+    const start = await headSha();
     const head = await commitFiles({ 'old.txt': 'gone\n' });
-    const { captured } = await scan(`${start}..${head}`);
-    expect(HostCommitScanOutputSchema.parse(captured.output).clean).toBe(true);
+    expect((await scanOutput(`${start}..${head}`)).clean).toBe(true);
   });
 
-  it('skips binary files and files over the size, and names them', async () => {
-    const start = (await git(root, 'rev-parse', 'HEAD')).trim();
+  it('reads a path holding a space as git names it, without the TAB git ends it with', async () => {
+    const start = await headSha();
+    const head = await commitFiles({ 'my config.ts': `${PLANTED.jwt?.line ?? ''}\n` });
+    const output = await scanOutput(`${start}..${head}`);
+    expect(output.findings).toEqual([{ file: 'my config.ts', line: 1, pattern: 'jwt' }]);
+  });
+
+  it('reads the lines a merge adds resolving a conflict', async () => {
+    await commitFiles({ 'app.ts': 'shared\n' });
+    const start = await headSha();
+    await git(root, 'checkout', '-q', '-b', 'side');
+    await commitFiles({ 'app.ts': 'side\n' });
+    await git(root, 'checkout', '-q', 'main');
+    await commitFiles({ 'app.ts': 'main\n' });
+    await run('git', ['-C', root, 'merge', '-q', 'side']).catch(() => undefined);
+    await writeFile(join(root, 'app.ts'), `main\nside\n${PLANTED['github-token']?.line ?? ''}\n`);
+    await git(root, 'add', 'app.ts');
+    await git(root, 'commit', '-q', '--no-edit');
+    const merge = await headSha();
+    expect(
+      (await git(root, 'rev-list', '--parents', '-n', '1', merge)).trim().split(' '),
+    ).toHaveLength(3);
+    // Neither parent holds the line: only the merge adds it.
+    const output = await scanOutput(`${start}..${merge}`);
+    expect(output.findings).toEqual([{ file: 'app.ts', line: 3, pattern: 'github-token' }]);
+  });
+
+  it('names binary and oversized files as unscanned, keeps what it found in them, and is not clean', async () => {
+    const start = await headSha();
     const secret = PLANTED['stripe-live-key']?.line ?? '';
     const head = await commitFiles({
       'image.bin': Buffer.concat([Buffer.from([0, 1, 2, 0]), Buffer.from(`\n${secret}\n`)]),
       'bundle.js': `${secret}\n${'x'.repeat(SCAN_MAX_FILE_BYTES)}\n`,
     });
-    const { captured } = await scan(`${start}..${head}`);
-    const output = HostCommitScanOutputSchema.parse(captured.output);
-    expect(output.clean).toBe(true);
-    expect(output.summary).toContain('Not read, as binary or adding more than 1024 KB');
-    expect(output.summary).toContain('bundle.js, image.bin');
+    const output = await scanOutput(`${start}..${head}`);
+    expect(output.clean).toBe(false);
+    expect(output.clearedRange).toBeUndefined();
+    expect(output.unflaggedRange).toBeUndefined();
+    expect(output.findings).toEqual([{ file: 'bundle.js', line: 1, pattern: 'stripe-live-key' }]);
+    expect(output.unscanned).toEqual([
+      { file: 'bundle.js', reason: 'too-large' },
+      { file: 'image.bin', reason: 'binary' },
+    ]);
+    expect(output.summary).toContain(
+      'Not read whole: bundle.js (more than 1024 KB added in one commit), image.bin (binary).',
+    );
+  });
+
+  it('does not clear a range it could not read whole, though nothing was found', async () => {
+    const start = await headSha();
+    const head = await commitFiles({ 'vendor.js': `${'y'.repeat(SCAN_MAX_FILE_BYTES + 1)}\n` });
+    const output = await scanOutput(`${start}..${head}`);
+    expect(output).toMatchObject({
+      clean: false,
+      findings: [],
+      unscanned: [{ file: 'vendor.js', reason: 'too-large' }],
+      unflaggedRange: `${start}..${head}`,
+    });
+    expect(output.clearedRange).toBeUndefined();
+    expect(output.summary).toContain('but not every file was read');
+  });
+
+  it('stops reading a file at a line holding a NUL byte, keeping what came before', async () => {
+    const start = await headSha();
+    // git judges a file binary by its first 8000 bytes, so the NUL sits past them.
+    const padding = Array.from({ length: 500 }, (_, i) => `line ${String(i)} of padding text`);
+    const head = await commitFiles({
+      'data.txt': [
+        PLANTED['github-token']?.line ?? '',
+        ...padding,
+        'a\0b',
+        PLANTED['slack-token']?.line ?? '',
+        '',
+      ].join('\n'),
+    });
+    const output = await scanOutput(`${start}..${head}`);
+    expect(output.findings).toEqual([{ file: 'data.txt', line: 1, pattern: 'github-token' }]);
+    expect(output.unscanned).toEqual([{ file: 'data.txt', reason: 'nul-byte' }]);
+    expect(output.clean).toBe(false);
+  });
+
+  it('reports a line too long to read rather than matching it, and reads the rest of the file', async () => {
+    const start = await headSha();
+    const long = `const blob = "${'z'.repeat(SCAN_MAX_LINE_BYTES)}"; ${PLANTED['github-token']?.line ?? ''}`;
+    const head = await commitFiles({
+      'app.min.js': `${long}\n${PLANTED['slack-token']?.line ?? ''}\n`,
+    });
+    const output = await scanOutput(`${start}..${head}`);
+    expect(output.findings).toEqual([{ file: 'app.min.js', line: 2, pattern: 'slack-token' }]);
+    expect(output.unscanned).toEqual([{ file: 'app.min.js', reason: 'line-too-long' }]);
+    expect(output.summary).toContain('app.min.js (a line longer than 64 KB)');
+  });
+
+  it('lets through a line marked in a comment, lists it, and still clears the range', async () => {
+    const start = await headSha();
+    const head = await commitFiles({
+      'fixture.ts': `${PLANTED['secret-assignment']?.line ?? ''} // ${SCAN_ALLOW_MARKER}\n`,
+    });
+    const output = await scanOutput(`${start}..${head}`);
+    expect(output).toMatchObject({
+      clean: true,
+      findings: [],
+      allowed: [{ file: 'fixture.ts', line: 1, pattern: 'secret-assignment' }],
+      clearedRange: `${start}..${head}`,
+    });
+    expect(output.summary).toContain(
+      'Let through by an `aflow-scan: allow` comment on the line: fixture.ts line 1 (secret-assignment).',
+    );
   });
 
   it('caps the findings it returns and counts the rest', async () => {
-    const start = (await git(root, 'rev-parse', 'HEAD')).trim();
+    const start = await headSha();
     const line = PLANTED['aws-access-key-id']?.line ?? '';
     const head = await commitFiles({
-      'keys.txt': Array.from({ length: SCAN_MAX_FINDINGS + 5 }, () => line).join('\n'),
+      'keys.txt': Array.from({ length: SCAN_MAX_LISTED + 5 }, () => line).join('\n'),
     });
-    const { captured } = await scan(`${start}..${head}`);
-    const output = HostCommitScanOutputSchema.parse(captured.output);
-    expect(output.findings).toHaveLength(SCAN_MAX_FINDINGS);
-    expect(output.summary).toContain(`in ${String(SCAN_MAX_FINDINGS + 5)} places`);
+    const output = await scanOutput(`${start}..${head}`);
+    expect(output.findings).toHaveLength(SCAN_MAX_LISTED);
+    expect(output.summary).toContain(`in ${String(SCAN_MAX_LISTED + 5)} places`);
     expect(output.summary).toContain(', and 5 more.');
   });
 
   it('leaves the working tree, the index and every ref as they were', async () => {
-    const start = (await git(root, 'rev-parse', 'HEAD')).trim();
+    const start = await headSha();
     const head = await commitFiles({ 'app.ts': `${PLANTED.jwt?.line ?? ''}\n` });
     await writeFile(join(root, 'wip.txt'), 'uncommitted\n');
     await writeFile(join(root, 'app.ts'), 'edited\n');
     const before = [
       await git(root, 'status', '--porcelain'),
       await git(root, 'for-each-ref'),
-      await git(root, 'rev-parse', 'HEAD'),
+      await headSha(),
     ];
     const { result } = await scan(`${start}..${head}`);
     expect(result.status).toBe('SUCCEEDED');
     expect([
       await git(root, 'status', '--porcelain'),
       await git(root, 'for-each-ref'),
-      await git(root, 'rev-parse', 'HEAD'),
+      await headSha(),
     ]).toEqual(before);
   });
 
   it('refuses a range end the repository does not have', async () => {
-    const start = (await git(root, 'rev-parse', 'HEAD')).trim();
+    const start = await headSha();
     const { result, captured } = await scan(`${start}..${'d'.repeat(40)}`);
     expect(result.status).toBe('FAILED');
     expect(JSON.stringify(captured.output)).toContain('names no commit');
   });
 
   it('refuses another workspace naming the folder', async () => {
-    const start = (await git(root, 'rev-parse', 'HEAD')).trim();
+    const start = await headSha();
     const { result } = await scan(`${start}..${start}`, 'space-b');
     expect(result.status).toBe('FAILED');
   });

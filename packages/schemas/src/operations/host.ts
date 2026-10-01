@@ -85,9 +85,23 @@ export type HostPushApproval = z.infer<typeof HostPushApprovalSchema>;
  */
 export const HostBindingBranchPolicySchema = z.object({
   branchPrefix: HostBranchPrefixSchema,
-  pushApproval: HostPushApprovalSchema.default(HOST_PUSH_APPROVAL_DEFAULT),
+  pushApproval: HostPushApprovalSchema.optional().describe(
+    'The posture the operator chose for this folder. Absent, the folder takes ' +
+      '`HOST_PUSH_APPROVAL_DEFAULT` each time it is read, so a change of default reaches every ' +
+      'folder that never chose; nothing writes the default in.',
+  ),
 });
 export type HostBindingBranchPolicy = z.infer<typeof HostBindingBranchPolicySchema>;
+
+/** The branch policy as a publication reads it: the posture chosen, else the default now. */
+export const HostResolvedBranchPolicySchema = HostBindingBranchPolicySchema.extend({
+  pushApproval: HostPushApprovalSchema,
+});
+export type HostResolvedBranchPolicy = z.infer<typeof HostResolvedBranchPolicySchema>;
+
+export function resolveBranchPolicy(policy: HostBindingBranchPolicy): HostResolvedBranchPolicy {
+  return { ...policy, pushApproval: policy.pushApproval ?? HOST_PUSH_APPROVAL_DEFAULT };
+}
 
 export const HostBranchNameSchema = branchToken(HOST_BRANCH_NAME_MAX_LENGTH, 'branch name');
 
@@ -780,7 +794,7 @@ export const HostBindingInspectInputSchema = z.object({
 
 export const HostBindingInspectOutputSchema = z.object({
   id: z.string(),
-  branchPolicy: HostBindingBranchPolicySchema.optional().describe(
+  branchPolicy: HostResolvedBranchPolicySchema.optional().describe(
     'Which branches a push from this folder may move, and when a publication asks the ' +
       'operator before pushing. Absent, the folder pushes nothing.',
   ),
@@ -808,26 +822,68 @@ export const HostCommitScanFindingSchema = z.object({
     ),
 });
 
+export const HostCommitScanUnscannedReasonSchema = z
+  .enum(['binary', 'nul-byte', 'too-large', 'line-too-long'])
+  .describe(
+    'Why a file was not read whole. `binary`: git prints no lines for it. `nul-byte`: a line it ' +
+      'adds holds a NUL byte, and nothing after that line was read. `too-large`: it adds more ' +
+      'than the scan reads of one file in one commit, and nothing past that point was read. ' +
+      '`line-too-long`: a line it adds is longer than the scan reads of one line; that line was ' +
+      'not read, the rest of the file was.',
+  );
+
+export const HostCommitScanUnscannedSchema = z.object({
+  file: z.string().describe('The path, from the repository root.'),
+  reason: HostCommitScanUnscannedReasonSchema,
+});
+
 export const HostCommitScanOutputSchema = z.object({
-  clean: z.boolean().describe('True when no rule matched any line the range adds.'),
+  clean: z
+    .boolean()
+    .describe(
+      'True when every file the range adds lines to was read whole and no rule matched any ' +
+        'line in it. A range with a file in `unscanned` is never clean, whatever was found.',
+    ),
   findings: z
     .array(HostCommitScanFindingSchema)
     .describe(
       'Where a rule matched, at most one finding per line and capped in number; `summary` ' +
-        'says how many there were in all.',
+        'says how many there were in all. A file in `unscanned` keeps the findings from the ' +
+        'part of it that was read.',
+    ),
+  unscanned: z
+    .array(HostCommitScanUnscannedSchema)
+    .describe(
+      'Every file the scan could not read whole, with why, capped in number as findings are. ' +
+        'Nothing the scan did not read was cleared.',
+    ),
+  allowed: z
+    .array(HostCommitScanFindingSchema)
+    .describe(
+      'Lines a rule matched that carry `aflow-scan: allow` in a comment on the same line: let ' +
+        'through rather than found, and reported so whoever approves the push sees what was.',
     ),
   summary: z
     .string()
     .describe(
       'One paragraph for a person: every finding by file, line and rule, how many were left ' +
-        'out past the cap, and which files were not read because they are binary or too large.',
+        'out past the cap, which files were not read whole and why, and which lines were let ' +
+        'through by an allow comment.',
+    ),
+  unflaggedRange: z
+    .string()
+    .optional()
+    .describe(
+      'The range as two full shas, present when no rule matched any line that was read — ' +
+        'whether or not every file was read whole. A step that must stop on a finding reads ' +
+        'this, so a range with a finding fails it.',
     ),
   clearedRange: z
     .string()
     .optional()
     .describe(
-      'The range this scan cleared, as two full shas — present only when it is clean. A step ' +
-        'that may only follow a clean scan reads this, so a range with a finding fails it.',
+      'The range this scan cleared, as two full shas — present only when it is clean: every ' +
+        'file read whole and nothing found.',
     ),
 });
 
@@ -1306,7 +1362,8 @@ export const HostOperationRegistrations: OperationRegistration[] = [
       ],
       pitfalls: [
         'Every commit in the range is read, so a secret added in one commit and removed in a later one is still found: the push would carry both.',
-        'Binary files and files that add more than the scanned size in one commit are not read; `summary` names them.',
+        'A file that is binary, holds a NUL byte, adds more than the scanned size in one commit or adds a line longer than the scanned line is listed in `unscanned` with why, and the range is not `clean`; findings from the part that was read are kept.',
+        'A line carrying `aflow-scan: allow` in a comment is reported in `allowed` instead of `findings`.',
         'A clean scan says no rule matched, not that the range holds no secret.',
       ],
     },

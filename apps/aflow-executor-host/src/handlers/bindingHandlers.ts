@@ -13,7 +13,11 @@ import {
   successWithData,
   validationError,
 } from '@aflow/executor-runtime';
-import { HostBindingInspectInputSchema, type HostBindingInspectOutputSchema } from '@aflow/schemas';
+import {
+  HostBindingInspectInputSchema,
+  type HostBindingInspectOutputSchema,
+  resolveBranchPolicy,
+} from '@aflow/schemas';
 import type { z } from 'zod';
 
 import { HostBindingError, loadHostPolicy, requireBinding, requireSpace } from '../bindings.js';
@@ -32,7 +36,9 @@ async function inspect(ctx: ExecutorContext, policyPath: string): Promise<StepRe
 
     const output: HostBindingInspectOutput = {
       id: binding.id,
-      ...(binding.branchPolicy !== undefined ? { branchPolicy: binding.branchPolicy } : {}),
+      ...(binding.branchPolicy !== undefined
+        ? { branchPolicy: resolveBranchPolicy(binding.branchPolicy) }
+        : {}),
     };
     return await successWithData(ctx, output);
   } catch (error) {

@@ -399,6 +399,8 @@ describe('applyOpTaskOutputContract — projection', () => {
           { file: 'src/a.ts', line: 3, pattern: 'github-token' },
           { file: '.env', line: 1, pattern: 'env-secret' },
         ],
+        unscanned: [],
+        allowed: [],
         summary,
       },
     });
@@ -414,10 +416,33 @@ describe('applyOpTaskOutputContract — projection', () => {
 
     const range = `${'a'.repeat(40)}..${'c'.repeat(40)}`;
     const clean = makeDeps({
-      [RAW_REF]: { clean: true, findings: [], summary: 'No secret found.', clearedRange: range },
+      [RAW_REF]: {
+        clean: true,
+        findings: [],
+        unscanned: [],
+        allowed: [],
+        summary: 'No secret found.',
+        unflaggedRange: range,
+        clearedRange: range,
+      },
     });
     const cleared = await run(clean.deps, scan as WorkflowTask);
     expect(cleared.kind).toBe('succeeded');
+
+    // Nothing found in what was read: the scan succeeds, and `clean: false`
+    // sends the run to the approval rather than failing it here.
+    const unread = makeDeps({
+      [RAW_REF]: {
+        clean: false,
+        findings: [],
+        unscanned: [{ file: 'bundle.js', reason: 'too-large' }],
+        allowed: [],
+        summary: 'No secret found in the lines read, but not every file was read.',
+        unflaggedRange: range,
+      },
+    });
+    const partial = await run(unread.deps, scan as WorkflowTask);
+    expect(partial.kind).toBe('succeeded');
   });
 
   it('pauses (task_contract_violation) when the PROJECTED output violates the schema', async () => {

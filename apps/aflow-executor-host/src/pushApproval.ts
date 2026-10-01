@@ -3,6 +3,8 @@
  *
  * A posture on the folder, held in the machine's policy file beside the branch
  * prefix it qualifies, set at connect and changed later only from this machine.
+ * The file holds only a posture the operator chose; a folder that chose none
+ * takes the default when the file is read.
  * Whether a given publication asks is decided by the orchestrator over the
  * posture this executor relays, so an appliance that is not honest can skip
  * the question. What it cannot do is change the posture recorded here, or move
@@ -11,11 +13,7 @@
  */
 import type { z } from 'zod';
 
-import {
-  HOST_PUSH_APPROVAL_DEFAULT,
-  type HostPushApproval,
-  HostPushApprovalSchema,
-} from '@aflow/schemas';
+import { type HostPushApproval, HostPushApprovalSchema, resolveBranchPolicy } from '@aflow/schemas';
 
 import type { HostInventoryFolders } from '@aflow/redis';
 
@@ -53,12 +51,13 @@ function parsePushApproval(value: string): HostPushApproval {
 }
 
 /**
- * The posture a folder is connected with: the one asked for, else the one it
- * already holds, else the default. Only a folder that pushes has one, so asking
- * for a posture on a folder with no branch prefix is refused rather than
- * recorded against nothing.
+ * The posture a folder's policy records when it is connected: the one asked
+ * for, else the one it already chose. Nothing otherwise — a folder that never
+ * chose reads as the default each time it is read, so a change of default
+ * reaches it. Only a folder that pushes has one, so asking for a posture on a
+ * folder with no branch prefix is refused rather than recorded against nothing.
  */
-export function resolvePushApproval(question: {
+export function chosenPushApproval(question: {
   readonly requested?: string | undefined;
   readonly branchPrefix: string | undefined;
   readonly current?: HostPushApproval | undefined;
@@ -73,7 +72,7 @@ export function resolvePushApproval(question: {
     return undefined;
   }
   if (question.requested !== undefined) return parsePushApproval(question.requested);
-  return question.current ?? HOST_PUSH_APPROVAL_DEFAULT;
+  return question.current;
 }
 
 /**
@@ -90,7 +89,7 @@ export function pushPostures(bindings: ReadonlyMap<string, HostBinding>): HostIn
             {
               id: binding.id,
               spaceId: binding.spaceId,
-              pushApproval: binding.branchPolicy.pushApproval,
+              pushApproval: resolveBranchPolicy(binding.branchPolicy).pushApproval,
             },
           ],
     )
