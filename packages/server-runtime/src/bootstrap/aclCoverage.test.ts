@@ -146,4 +146,26 @@ describe.skipIf(!AVAILABLE)('host redis grant covers the executor', () => {
 
     expect(admin === null ? [] : await hostGrantDenials(admin, TEST_USER)).toEqual([]);
   });
+
+  it('reads a write-approval grant and is refused writing one', async () => {
+    const key = 'aflow:write-approval:t:r:probe';
+    await admin?.set(key, '{"requestHash":"probe","decision":"approved"}');
+    const host = new Redis({
+      host: '127.0.0.1',
+      port: 6379,
+      db: TEST_DB,
+      username: TEST_USER,
+      password: HOST_TEST_PASSWORD,
+    });
+    try {
+      expect(await host.get(key)).toContain('"decision":"approved"');
+      await expect(host.set(key, '{"requestHash":"forged","decision":"approved"}')).rejects.toThrow(
+        /NOPERM/,
+      );
+      expect(await admin?.get(key)).toContain('"requestHash":"probe"');
+    } finally {
+      await host.quit();
+      await admin?.del(key);
+    }
+  });
 });

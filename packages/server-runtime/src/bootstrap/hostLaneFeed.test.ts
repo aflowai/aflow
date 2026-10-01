@@ -45,7 +45,12 @@ import {
   type TenantId,
   type TraceId,
 } from '@aflow/schemas';
-import { addStepJob, shardFor, type BlockingRedisConnection } from '@aflow/redis';
+import {
+  addStepJob,
+  getWriteApprovalGrant,
+  shardFor,
+  type BlockingRedisConnection,
+} from '@aflow/redis';
 import { createRedisPayloadStore } from '@aflow/payload-store';
 import {
   DEFAULT_EXECUTOR_CONFIG,
@@ -291,7 +296,11 @@ describe.skipIf(!AVAILABLE)('a workflow-dispatched host step feeding a watching 
       },
       deps,
     );
-    runtime.registerHandler(createHostHandler(policyPath));
+    runtime.registerHandler(
+      createHostHandler(policyPath, (tenantId, runId, requestHash) =>
+        getWriteApprovalGrant(deps.redis, tenantId, runId, requestHash),
+      ),
+    );
     await runtime.start();
 
     // Written by the appliance, read by the machine — so it goes through the

@@ -64,6 +64,11 @@ function describeOpFailure(value: unknown): string | undefined {
   return undefined;
 }
 
+/** An op's own account, closed as a sentence once: a summary may already end in one. */
+function asSentence(text: string): string {
+  return /[.!?]$/.test(text) ? text : `${text}.`;
+}
+
 function safeIsOperationTask(task: WorkflowTask): boolean {
   try {
     return inferTaskType(task) === 'operation';
@@ -179,7 +184,7 @@ export async function applyOpTaskOutputContract(
         failureMessage,
         ...(opFailure ? { opFailure } : {}),
         resumePrompt:
-          `${opFailure ? `${opFailure}. ` : ''}Task "${taskId}" outputProjection could not resolve: ${lines.join('; ')}. ` +
+          `${opFailure ? `${asSentence(opFailure)} ` : ''}Task "${taskId}" outputProjection could not resolve: ${lines.join('; ')}. ` +
           'Supply the projected output via replace_output, or retry via re_execute if the op result was transiently incomplete.',
         ...(schema ? { expectedTaskOutputSchema: schema, replaceOutputSchema: schema } : {}),
         errorPayloadData: {
@@ -279,7 +284,7 @@ export async function applyOpTaskOutputContract(
         failureMessage,
         ...(selfSummary ? { opFailure: selfSummary } : {}),
         resumePrompt:
-          `${selfSummary ? `${selfSummary}. ` : ''}Task "${taskId}" ${projection ? 'projected ' : ''}output failed its declared outputContract.schema. ` +
+          `${selfSummary ? `${asSentence(selfSummary)} ` : ''}Task "${taskId}" ${projection ? 'projected ' : ''}output failed its declared outputContract.schema. ` +
           `${lines.join('; ')}. ${validation.actualDesc}. ` +
           'Fix the output via replace_output or retry via re_execute.',
         expectedTaskOutputSchema: schema,
@@ -379,7 +384,7 @@ async function pauseForViolation(
       kind: 'failed',
       ...(errorRef !== undefined ? { errorRef } : {}),
       failureReason: [
-        ...(args.opFailure ? [`${args.opFailure}.`] : []),
+        ...(args.opFailure ? [asSentence(args.opFailure)] : []),
         ...(instruction ? [instruction] : []),
         args.failureMessage,
       ].join(' '),

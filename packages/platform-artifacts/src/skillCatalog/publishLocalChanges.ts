@@ -11,11 +11,41 @@ import { REVIEW_LOCAL_CHANGES } from './reviewLocalChanges.js';
  * The push argv, pinned by the skill rather than bound as a whole. Only the
  * refspec travels from the run, and it is the commit's own,
  * `<sha>:refs/heads/<branch>`: the push sends the commit that was approved or
- * reviewed, never what the branch holds by then. The verbs, the remote and the
+ * reviewed, never what the branch holds by then — with whatever under it
+ * `origin` lacks, which is why the scan and the review read `pushRange` rather
+ * than the commit alone. The verbs, the remote and the
  * absence of a force flag are the skill's, so no caller can turn a publish into
- * an overwrite.
+ * an overwrite. `--no-follow-tags` and `--no-recurse-submodules` override the
+ * operator's `push.followTags` and `push.recurseSubmodules`, which would
+ * otherwise send tags and submodule commits the scan never read; the executor
+ * refuses a push without them.
  */
-const PUSH_COMMAND = ['git', 'push', 'origin', { $bind: 'refspec' }];
+const PUSH_COMMAND = [
+  'git',
+  'push',
+  '--no-follow-tags',
+  '--no-recurse-submodules',
+  'origin',
+  { $bind: 'refspec' },
+];
+
+/**
+ * When the push goes ahead. Gating does not propagate from the approval, so the side-effecting tasks
+ * carry it. Each line is one way the push is cleared — the operator approved,
+ * the folder never asks, or this run's review approved — and only the first
+ * can hold once the approval ran: the posture is read only over a range the
+ * scan cleared, where `never` does not ask, and a review runs only where
+ * `approve` does not ask. So a decline is followed whatever the posture, and
+ * nothing holds when nothing was committed.
+ */
+const PUSH_CLEARED = {
+  anyOf: [
+    "tasks.approve-push.output.decision == 'approved'",
+    "tasks.read-push-approval.output.branchPolicy.pushApproval == 'never'",
+    "tasks.review-commit.output.verdict == 'approve'",
+  ],
+  onMissingRef: 'skip' as const,
+};
 
 /**
  * The skill whose verdict on the commit can stand in for the operator's
@@ -92,11 +122,11 @@ const BASE_SHA_SCHEMA = {
 
 const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'publish-local-changes',
-  version: 9,
+  version: 14,
   name: 'Publish Local Changes',
   tagline:
     'Commit a patch onto a branch of a connected repository, then push it and open the pull request — asking the operator first unless the folder says otherwise.',
-  description: `Fits a request to publish work that already exists as a patch — the result of a commission, or a diff the operator hands over — onto a branch of a connected repository and into a pull request. The commit lands on a branch without touching the working tree, and nothing leaves the machine until the push is cleared.
+  description: `Fits a request to publish work that already exists as a patch — the result of a commission, or a diff the operator hands over — onto a branch of a connected repository and into a pull request. The commit lands on a branch without touching the working tree, it is scanned for secrets, and nothing leaves the machine until the push is cleared.
 
 **Not for a folder whose machine block shows no publish prefix.** Pushing is a posture the operator sets when the folder is connected; without it the push is refused. Say so, ask for the folder to be reconnected allowing pushes under a branch prefix, and stop there rather than committing work that cannot be published.
 
@@ -104,11 +134,11 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
 
 **Never pass a commission's \`patch\` text.** It is a copy for reading, cut short on a large change, and the run's inputs are capped at ${String(RUN_INPUTS_KB)} KB together. \`patchRef\` names the whole diff at any size.
 
-**When it asks before pushing**: the folder's push approval decides, and the machine block shows it as \`pushApproval\`. \`always\`: the run waits for the operator's approval before every push. \`never\`: it pushes without asking. \`unless-unreviewed\`: the run starts a Local Code Review of the commit it made, waits for it, and pushes without asking only when it returns \`approve\` — on any other verdict, or a review that did not finish or could not start, it waits for the operator. The review is the catalog's Local Code Review as the Store installed it in the space; an edited copy is refused, and the run asks. A folder connected without naming one is \`${HOST_PUSH_APPROVAL_DEFAULT}\`, which stays the default until a publication scans its commit for secrets before the push, and \`unless-unreviewed\` becomes the default with that scan. Either way the run needs no review started beside it.
+**When it asks before pushing**: the folder's push approval decides, and the machine block shows it as \`pushApproval\`. \`always\`: the run waits for the operator's approval before every push. \`never\`: it pushes without asking. \`unless-unreviewed\`: the run starts a Local Code Review of everything the push would add — the commit it made, and any of the folder's own commits under it that \`origin\` does not have yet — waits for it, and pushes without asking only when it returns \`approve\` — on any other verdict, or a review that did not finish or could not start, it waits for the operator. The review is the catalog's Local Code Review as the Store installed it in the space; an edited copy is refused, and the run asks. Either way the run needs no review started beside it. A folder connected without naming a posture is \`${HOST_PUSH_APPROVAL_DEFAULT}\`, the default. Whatever the posture, the run scans every line the push would add, the headers and message of every commit it carries, and the pull request's title and summary for secrets before any of this, and a finding stops it with nothing pushed — which is what lets a review stand in for the operator. Only a range the scan cleared can go without asking: where a file was not read — binary, a NUL byte, more than the scan reads in one commit, a line too long to read, or a Git LFS pointer whose content the push would upload unread — or a line that looks like a secret ends in an \`aflow-scan: allow\` comment, no review runs and the run waits for the operator whatever the posture, \`never\` included, naming each such file and line. The comment never clears a line — whoever wrote the change could have written it — it only turns a stop into a question. Once the run asks, the operator's answer decides: a declined push pushes nothing, whatever the posture.
 
 **On an existing branch**: a fix that was commissioned from a branch (\`base: <branch>\` on the commission) is published onto that branch by naming it as \`branch\` and passing the commission's \`baseSha\` as \`baseSha\`; a branch is reused only that way, and a fresh change takes a fresh branch.
 
-**With the result**: report the pull request link, and whether the push was approved by the operator or cleared by the folder's push approval — and, where the run reviewed its commit, the verdict. Where approval was declined, report that the branch stayed on the machine and nothing was pushed — the commit is still there to publish later. Where the push failed, git's own message says why: a branch on \`origin\` that moved on is not overwritten.`,
+**With the result**: report the pull request link, and whether the push was approved by the operator or cleared by the folder's push approval — and, where the run reviewed its commit, the verdict. Where approval was declined, report that the branch stayed on the machine and nothing was pushed — the commit is still there to publish later. Where the scan found what looks like a secret, the run failed with nothing pushed: report the files, commit headers and messages, title or summary, lines and rules it names — never ask for or repeat the value — and say the change needs the secret taken out and commissioning again onto a fresh branch, since this branch still holds that commit — or, where the file and line are in one of the folder's own commits that \`origin\` does not have yet, that the commit needs rewriting before anything built on it is pushed. Where the base branch on \`origin\` is no longer where the run measured from, forward or back, or \`origin\` pushes elsewhere than it fetches, the push refused just before git ran and nothing was pushed: report what its message names, and that the publication has to run again on a fresh branch. Where the push failed, git's own message says why: a branch on \`origin\` that moved on is not overwritten.`,
   tags: ['coding', 'publish', 'git', 'local', 'developer-tools'],
   capabilityHints: [
     {
@@ -126,7 +156,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
       slug: 'publish-local-changes',
       name: 'Publish Local Changes',
       description:
-        "Take a patch to a pull request on a repository connected as a host folder: the patch is committed in a detached worktree — onto a new branch at the commit the patch was made against, or appended to the branch it was made on — the push is cleared, by the operator's approval or by the folder's push approval, and the branch is then pushed and opened as a pull request. The operator's working tree is never touched.",
+        "Take a patch to a pull request on a repository connected as a host folder: the patch is committed in a detached worktree — onto a new branch at the commit the patch was made against, or appended to the branch it was made on — everything the push would add is scanned for secrets, the push is cleared, by the operator's approval or by the folder's push approval, and the branch is then pushed and opened as a pull request. The operator's working tree is never touched.",
       goal: "Turn a patch into a commit on a branch of a connected repository and, once the push is cleared, a pushed branch and an open pull request — with nothing leaving the machine before the operator approves, unless the folder's push approval says it need not ask.",
       mode: 'process' as const,
       outcomes: [
@@ -136,7 +166,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           evaluator: {
             type: 'manual' as const,
             instruction:
-              "The patch was committed onto its branch of the connected repository without changing the working tree, and either the push was cleared — by the operator's approval, or by the folder's push approval without asking — and the branch was pushed and opened as a pull request, or the operator declined and the branch stayed local.",
+              "The patch was committed onto its branch of the connected repository without changing the working tree and everything the push would add scanned with no secret found, and either the push was cleared — by the operator's approval, or by the folder's push approval without asking — and the branch was pushed and opened as a pull request, or the operator declined and the branch stayed local.",
           },
         },
       ],
@@ -222,7 +252,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
         {
           taskId: 'commit',
           name: 'Commit the patch on its branch',
-          goal: "Apply the patch in a detached worktree and commit it — on a new branch at the commit the patch was made against (the connected folder's last commit when none is given), or on top of the existing branch it was made on. The operator's working tree is not touched, and nothing leaves the machine.",
+          goal: "Apply the patch in a detached worktree and commit it — on a new branch at the commit the patch was made against (the connected folder's last commit when none is given), or on top of the existing branch it was made on — after fetching the base branch from `origin`, so the commit reports everything a push of it would add. The operator's working tree is not touched, and nothing leaves the machine.",
           type: 'operation' as const,
           operation: 'host.file.patch',
           retryability: 'unsafe' as const,
@@ -233,6 +263,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             branch: { kind: 'run_input' as const, path: 'branch' },
             baseSha: { kind: 'run_input' as const, path: 'baseSha' },
             commitMessage: { kind: 'run_input' as const, path: 'commitMessage' },
+            base: { kind: 'run_input' as const, path: 'base' },
           },
           // Every run input is declared here, including the ones only the
           // later tasks read: start-time validation checks the caller's inputs
@@ -326,7 +357,66 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
               branch: { $bind: 'branch' },
               message: { $bind: 'commitMessage' },
               baseSha: { $bind: 'baseSha' },
+              // The push sends every ancestor `origin` lacks, not this commit
+              // alone, so the scan and the review read the range measured
+              // against the base as `origin` holds it now.
+              pushBase: { $bind: 'base' },
             },
+          },
+        },
+
+        {
+          taskId: 'scan-commit',
+          name: 'Scan the commit for secrets',
+          goal: "Read every line the push would add — this run's commit and every commit under it that `origin`'s base branch does not hold — the headers and message of each of those commits, and the pull request's title and summary for what looks like a secret: a private key, a cloud or service token, a random-looking value under a secret-looking name. Before anything leaves the machine.",
+          failureInstruction:
+            "What the push would carry holds what looks like a secret, named above by file, line and rule — or by `<sha> (headers)` or `<sha> (message)` for a commit's headers or message, `pull request title` or `pull request summary` for those — never by its value. The branch stayed on the machine and nothing was pushed. Take the secret out and rotate it if it was real. Where it is in this run's change or its commit's headers or message, commission the change again and publish it on a fresh branch: this branch still holds the commit with the secret, and anything appended to it would push that commit too. Where it is only in the title or the summary, publish again on a fresh branch without it. Where it is in a commit of the folder's own that `origin` does not have yet, or in that commit's headers or message, that commit has to be rewritten before anything built on it is pushed.",
+          type: 'operation' as const,
+          operation: 'host.commit.scan',
+          dependsOn: ['commit'],
+          when: {
+            expression: "tasks.commit.output.state == 'applied'",
+            onMissingRef: 'skip' as const,
+          },
+          // `unflaggedRange` exists only when no rule matched, so a finding
+          // fails the projection; with one attempt and no output contract that
+          // fails the run here instead of parking it on a resolution that
+          // could clear it. A range with unscanned files or allowed lines
+          // projects, and its `clean` sends the run to the approval.
+          retryability: 'safe' as const,
+          maxAttempts: 1,
+          inputBindings: {
+            bindingId: { kind: 'run_input' as const, path: 'bindingId' },
+            range: { kind: 'task_output' as const, taskId: 'commit', path: 'commit.pushRange' },
+            title: { kind: 'run_input' as const, path: 'title' },
+            summary: { kind: 'run_input' as const, path: 'summary' },
+          },
+          context: {
+            strategy: 'scoped' as const,
+            contextPolicy: 'auto-optimize' as const,
+            learnings: 'none' as const,
+            capabilities: {
+              operations: ['host.commit.scan'],
+              integrations: [],
+            },
+          },
+          inputTemplate: {
+            bindingId: { $bind: 'bindingId' },
+            range: { $bind: 'range' },
+            // The pull request carries these out with the push; an absent
+            // summary drops its key rather than scanning an empty text.
+            texts: {
+              'pull request title': { $bind: 'title' },
+              'pull request summary': { $bind: 'summary' },
+            },
+          },
+          outputProjection: {
+            unflaggedRange: { path: 'unflaggedRange', onMissing: 'error' as const },
+            clean: { path: 'clean', onMissing: 'error' as const },
+            unscanned: { path: 'unscanned', onMissing: 'error' as const },
+            allowed: { path: 'allowed', onMissing: 'error' as const },
+            summary: { path: 'summary', onMissing: 'error' as const },
+            receipt: { path: 'receipt', onMissing: 'error' as const },
           },
         },
 
@@ -378,12 +468,17 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
         {
           taskId: 'read-push-approval',
           name: "Read the folder's push approval",
-          goal: 'Read, from the machine holding the connected folder, when a publication from it asks the operator before pushing.',
+          goal: 'Read, from the machine holding the connected folder, when a publication from it asks the operator before pushing — for a commit the scan cleared, the only kind the posture decides for.',
           type: 'operation' as const,
           operation: 'host.binding.inspect',
-          dependsOn: ['commit'],
+          dependsOn: ['commit', 'scan-commit'],
+          // A range the scan did not clear asks whatever the posture, so the
+          // posture is read only where it decides — and is absent wherever the
+          // approval asks for any other reason. That is what lets the push read
+          // `never` as a clearance in a single comparison without it ever
+          // clearing a push the operator declined.
           when: {
-            expression: "tasks.commit.output.state == 'applied'",
+            expression: 'tasks.scan-commit.output.clean == true',
             onMissingRef: 'skip' as const,
           },
           retryability: 'safe' as const,
@@ -407,14 +502,23 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
         {
           taskId: 'review-commit',
           name: 'Review the commit',
-          goal: 'Run a Local Code Review of exactly the commit this run made, as a run of its own, and wait for it to finish with its verdict.',
+          goal: "Run a Local Code Review of everything the push would add — this run's commit and every commit under it that `origin`'s base branch does not hold — as a run of its own, and wait for it to finish with its verdict.",
           type: 'operation' as const,
           operation: 'workflow.run.start',
-          dependsOn: ['read-push-approval'],
+          // After the scan as well: a commit carrying a secret is never handed
+          // to a coding agent, whose provider would read it.
+          dependsOn: ['read-push-approval', 'scan-commit'],
           // Only the posture that depends on a review starts one, so a verdict
-          // here always belongs to a run whose approval it decides.
+          // here always belongs to a run whose approval it decides — and only
+          // over a range the scan cleared, since an unread file or a line
+          // marked allowed may hold what the coding agent's provider must not
+          // see, and the approval is asked for such a range whatever a review
+          // says.
           when: {
-            expression: `tasks.read-push-approval.output.branchPolicy.pushApproval == '${REVIEW_GATED_POSTURE}'`,
+            allOf: [
+              `tasks.read-push-approval.output.branchPolicy.pushApproval == '${REVIEW_GATED_POSTURE}'`,
+              'tasks.scan-commit.output.clean == true',
+            ],
             onMissingRef: 'skip' as const,
           },
           // A review that could not run is no verdict, not a failed
@@ -425,7 +529,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           maxAttempts: 1,
           inputBindings: {
             bindingId: { kind: 'run_input' as const, path: 'bindingId' },
-            range: { kind: 'task_output' as const, taskId: 'commit', path: 'commit.range' },
+            range: { kind: 'task_output' as const, taskId: 'commit', path: 'commit.pushRange' },
           },
           context: {
             strategy: 'scoped' as const,
@@ -478,19 +582,22 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
         {
           taskId: 'approve-push',
           name: 'Approve the push',
-          goal: "Operator approval before anything leaves the machine, asked when the folder asks before every push, or when it asks unless reviewed and this run's review of its commit did not approve it. Approving pushes that commit to its branch on origin and opens the pull request; declining leaves the branch on the machine.",
+          goal: "Operator approval before anything leaves the machine, asked when the folder asks before every push, when it asks unless reviewed and this run's review did not approve what the push would add, and — whatever the posture — when the scan marked a line allowed or could not read a file. Approving pushes the commit to its branch on origin and opens the pull request; declining leaves the branch on the machine, whatever the posture.",
           type: 'human' as const,
           intent: 'approve' as const,
           failureMode: 'isolate' as const,
-          dependsOn: ['read-repository', 'review-commit'],
+          dependsOn: ['read-repository', 'scan-commit', 'review-commit'],
           approves: ['commit'],
           // A review task that failed has no output to compare, so its status
-          // carries the same answer as a null verdict.
+          // carries the same answer as a null verdict. A scan that marked a
+          // line allowed or could not read every file asks whatever the
+          // posture.
           when: {
             anyOf: [
               "tasks.read-push-approval.output.branchPolicy.pushApproval == 'always'",
               "tasks.review-commit.output.verdict != 'approve'",
               "tasks.review-commit.status == 'failed'",
+              'tasks.scan-commit.output.clean == false',
             ],
             onMissingRef: 'skip' as const,
           },
@@ -498,22 +605,36 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           // carry, so each case is one line and the verdict is named where the
           // run shows it.
           pauseInstruction:
-            'The change is committed on its branch in the connected folder and nothing has left the machine. Asked because of the folder\'s push approval, shown with the commit:\n- `always`: it asks before every push, and no review ran.\n- `unless-unreviewed`: this run\'s Local Code Review of the commit did not return `approve` — its verdict is on the "Review the commit" task, null where the review did not finish, and that task failed where the review could not start.\nApproving pushes exactly that commit to its branch on `origin` and then opens a pull request against the base branch. Declining leaves the branch local: nothing is pushed and no pull request is opened.',
+            "The change is committed on its branch in the connected folder, and nothing has left the machine. The push would add every commit of `pushRange` — this commit, and any of the folder's own under it that `origin` does not have yet. The scan read them for secrets and found none outside the lines and files listed below, where there are any. Asked for one of these, shown with the commit:\n- `always`: the folder's push approval asks before every push, and no review ran.\n- `unless-unreviewed`: this run's Local Code Review of `pushRange` did not return `approve` — its verdict is on the \"Review the commit\" task, null where the review did not finish, and that task failed where the review could not start.\n- Lines marked allowed, whatever the posture: `allowed` names each by file, line and rule — a line that looks like a secret and ends in an `aflow-scan: allow` comment, which whoever wrote the change could have written as easily as the line — and no review ran. Read each of those lines before approving: approving pushes them.\n- Files, messages or texts the scan could not read whole, whatever the posture: `unscanned` names each and why — binary, a NUL byte in a line it adds, more than the scan reads of one file in one commit, a line too long to read, or a Git LFS pointer, whose content the push uploads without the scan having read it — and no review ran. Nothing unread there was checked for secrets; read it before approving.\nApproving pushes that commit to its branch on `origin`, with every commit of `pushRange` under it, and then opens a pull request against the base branch. Declining leaves the branch local whatever the folder's push approval says: nothing is pushed and no pull request is opened.",
+          // Every binding reads a task that succeeded whenever this asks: an
+          // unresolved one refuses the approval itself, so nothing binds the
+          // posture, which is not read over a range the scan did not clear.
           actionPreview: {
             op: 'host.process.exec',
             inputBindings: {
               bindingId: { kind: 'run_input' as const, path: 'bindingId' },
               branch: { kind: 'run_input' as const, path: 'branch' },
-              pushApproval: {
+              unscanned: { kind: 'task_output' as const, taskId: 'scan-commit', path: 'unscanned' },
+              allowed: { kind: 'task_output' as const, taskId: 'scan-commit', path: 'allowed' },
+              scanSummary: {
                 kind: 'task_output' as const,
-                taskId: 'read-push-approval',
-                path: 'branchPolicy.pushApproval',
+                taskId: 'scan-commit',
+                path: 'summary',
               },
               commitSha: { kind: 'task_output' as const, taskId: 'commit', path: 'commit.sha' },
-              pushRefspec: {
+              // `bindingId`, `refspec` and `receipt` are the push call: the
+              // operator's approval mints a grant for exactly that push, and
+              // the executor sends a range the scan did not clear only on it.
+              receipt: { kind: 'task_output' as const, taskId: 'scan-commit', path: 'receipt' },
+              refspec: {
                 kind: 'task_output' as const,
                 taskId: 'commit',
                 path: 'commit.pushRefspec',
+              },
+              pushRange: {
+                kind: 'task_output' as const,
+                taskId: 'commit',
+                path: 'commit.pushRange',
               },
               commitBranch: {
                 kind: 'task_output' as const,
@@ -537,28 +658,23 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
         {
           taskId: 'push',
           name: 'Push the commit',
-          goal: 'Push the commit this run made to its branch on origin through the connected folder’s shell, with the argv pinned by the skill. A remote that refuses the update fails the push with git’s own message.',
+          goal: 'Push the commit this run made to its branch on origin through the connected folder’s shell, with the argv pinned by the skill — carrying the commits of `pushRange` under it that origin does not have, and no tag or submodule commit. It carries the base branch and the receipt the scan issued for `pushRange`; the executor refuses a push without them. In the same step, just before git runs, the executor confirms the push goes where `origin` fetches from, reads where `origin`’s base branch is now, and pushes only if the receipt is for the range from exactly there to the commit. Where the scan did not clear the range, the executor pushes only on the operator’s approval of this push in this run. A remote that refuses the update fails the push with git’s own message.',
+          failureInstruction:
+            "Where the message above says `origin`'s base branch is somewhere other than where the receipt's range starts, or that `origin` pushes somewhere other than where it fetches from, nothing was pushed: the push would have carried what was not scanned or reviewed, or gone where nothing was measured. The commit is still on its branch in the folder. For a base that moved, run the publication again on a fresh branch, so what the push would add is measured, scanned and reviewed against the base as it is now; for a push URL, the folder has to push where it fetches before publishing again. Where it says the push carries no scan receipt the executor issued, or one more than a day old — the executor restarted, or the approval waited that long — nothing was pushed either; run the publication again on a fresh branch, so the executor that pushes is the one that scanned. Where it says no approval of this push is on record, nothing was pushed: the operator's approval in this run is what lets a range the scan did not clear leave the machine. Otherwise git's own message says why the remote refused the update.",
           type: 'operation' as const,
           operation: 'host.process.exec',
-          dependsOn: ['approve-push'],
-          // Gating does not propagate from the approval, so the side-effecting
-          // task carries it. Each line is one way the push is cleared — the
-          // operator approved, the folder never asks, or this run's review of
-          // its commit approved it — and none of them holds after a decline,
-          // or when nothing was committed.
-          when: {
-            anyOf: [
-              "tasks.approve-push.output.decision == 'approved'",
-              "tasks.read-push-approval.output.branchPolicy.pushApproval == 'never'",
-              "tasks.review-commit.output.verdict == 'approve'",
-            ],
-            onMissingRef: 'skip' as const,
-          },
+          // The scan as well as the approval: under `never` over a cleared
+          // range the approval is skipped, and a skip clears a dependency
+          // where a failure does not.
+          dependsOn: ['approve-push', 'scan-commit'],
+          when: PUSH_CLEARED,
           retryability: 'unsafe' as const,
           maxAttempts: 1,
           inputBindings: {
             bindingId: { kind: 'run_input' as const, path: 'bindingId' },
             refspec: { kind: 'task_output' as const, taskId: 'commit', path: 'commit.pushRefspec' },
+            base: { kind: 'run_input' as const, path: 'base' },
+            receipt: { kind: 'task_output' as const, taskId: 'scan-commit', path: 'receipt' },
           },
           context: {
             strategy: 'scoped' as const,
@@ -572,6 +688,8 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           inputTemplate: {
             bindingId: { $bind: 'bindingId' },
             command: PUSH_COMMAND,
+            pushBase: { $bind: 'base' },
+            scan: { receipt: { $bind: 'receipt' } },
             cwd: '.',
             timeoutMs: 600_000,
           },
@@ -665,7 +783,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
       output: {
         primary: 'prUrl',
         guidance:
-          'The run carries prUrl and prNumber once the pull request is open — reporting the link is reporting the result. Where they are absent the branch was committed and not published: say that the branch stayed on the machine, and that the commit is still there to publish later.',
+          'The run carries prUrl and prNumber once the pull request is open — reporting the link is reporting the result. Where they are absent the branch was committed and not published: say that the branch stayed on the machine, and that the commit is still there to publish later — unless the run failed at the scan, where that commit holds what looks like a secret and must not be published.',
       },
       iteration: { auto: false, maxConsecutiveRuns: 1, stopOnOutcomesMet: true, cooldownMs: 0 },
     },
@@ -701,12 +819,12 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
         'turn this patch into a pull request',
       ],
       activationHint:
-        "Run to publish a patch that already exists — a commission's, passed as its `patchRef`, or a small diff from the operator — onto a branch of a connected repository and into a pull request. The commit is local and reversible; the push waits for an approval unless the folder's push approval says it need not ask. The folder must allow pushes under a branch prefix.",
+        "Run to publish a patch that already exists — a commission's, passed as its `patchRef`, or a small diff from the operator — onto a branch of a connected repository and into a pull request. The commit is local and reversible, and everything the push would add is scanned for secrets before it; the push waits for an approval unless the folder's push approval says it need not ask. The folder must allow pushes under a branch prefix.",
       prerequisites: [],
       priority: 50,
     },
     rationale:
-      "Seven tasks, the approval between the local half and the published half: the commit lands in a detached worktree, so a decline costs nothing. The push argv is pinned with only the commit's refspec bound — its sha onto its branch — so no force flag can be added and nothing the branch gained later is sent; the prefix is enforced where the command runs. Whether the approval is asked is the folder's posture, read with host.binding.inspect, and under unless-unreviewed the verdict of a Local Code Review this run starts over its own commit and waits on, since no review of a commit can exist before the run makes it — data the when predicates read, so the push follows the approval or its skip and never a decline. The repository is read through the space's GitHub binding before the approval; the folder arrives as a run input until folder roles land.",
+      "Eight tasks, the approval between the local and the published half: the commit lands in a detached worktree, so a decline costs nothing. host.commit.scan reads all the push would add (from origin/<base>, fetched), its commits' headers and messages, and the pull request's title and summary: a finding fails the run; an unread file or a line marked allowed asks, unreviewed, whatever the posture. Over a cleared range the posture, and under unless-unreviewed a Local Code Review, decide whether to ask; asked, the push follows the decision. The push argv is pinned but for the refspec: no force, --no-follow-tags, --no-recurse-submodules. The executor refuses the push without the scan's receipt for the commit — for a range not cleared, also the approval's copy of it — and, just before git runs, where origin pushes elsewhere than it fetches or origin/<base> lost the measured sha. The repository is read through the space's GitHub binding first; the folder is a run input until folder roles land.",
   },
 };
 

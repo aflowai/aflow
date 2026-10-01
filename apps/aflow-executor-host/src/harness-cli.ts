@@ -15,6 +15,8 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 
+import { resolveBranchPolicy } from '@aflow/schemas';
+
 import { HostPolicySchema } from './bindings.js';
 import { LocalMcpServerSchema } from './localMcpServers.js';
 import { discoverHarnesses } from './harnessDiscovery.js';
@@ -188,7 +190,9 @@ async function list(): Promise<void> {
     console.log('\nFolders that push:');
     for (const { id, branchPolicy } of pushing) {
       console.log(
-        `  ${id} — under ${branchPolicy.branchPrefix}, ${describePushApproval(branchPolicy.pushApproval)}`,
+        `  ${id} — under ${branchPolicy.branchPrefix}, ` +
+          describePushApproval(resolveBranchPolicy(branchPolicy).pushApproval) +
+          (branchPolicy.pushApproval === undefined ? ', the default' : ''),
       );
     }
   }

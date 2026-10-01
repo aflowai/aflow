@@ -32,6 +32,13 @@ describe('redis acl', () => {
     expect(hostLine).toContain('~aflow:executor-heartbeat:*');
   });
 
+  it('reads write-approval grants and cannot write one', () => {
+    // A push its scan did not clear waits on the grant the operator's approval
+    // minted; a credential that could write one could approve its own push.
+    const patterns = hostLine.split(' ').filter((rule) => rule.includes('aflow:write-approval'));
+    expect(patterns).toEqual(['%R~aflow:write-approval:*']);
+  });
+
   it('reaches no other lane, the control stream, or session state', () => {
     // Absence is the assertion: a pattern that would admit these is the bug.
     expect(hostLine).not.toContain('~*');

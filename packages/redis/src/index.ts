@@ -285,6 +285,7 @@ export {
   writeApprovalGrantKey,
   setWriteApprovalGrant,
   getWriteApprovalGrant,
+  hostPushRequestHash,
 } from './writeApproval.js';
 
 // Memory embedding operations

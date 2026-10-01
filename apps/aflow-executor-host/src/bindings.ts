@@ -220,6 +220,7 @@ const GIT_GLOBAL_FLAGS = new Set([
 const PUSH_OPTIONS_REFUSED = new Set([
   '-f',
   '--force',
+  '--force-with-lease',
   '--force-if-includes',
   '-d',
   '--delete',
@@ -233,6 +234,34 @@ const PUSH_OPTIONS_TAKING_A_VALUE = new Set(['-o', '--push-option']);
 
 /** Push options naming a program to run or a repository other than this one. */
 const PUSH_OPTIONS_NAMING_A_PROGRAM = new Set(['--receive-pack', '--exec', '--repo']);
+
+/**
+ * What every push carries, so the operator's `push.followTags` and
+ * `push.recurseSubmodules` cannot add tags or submodule commits that no refspec
+ * names. git reads the last of an option and its negation, which is why the
+ * positive forms are refused outright rather than allowed before these.
+ */
+export const PUSH_REQUIRED_OPTIONS = ['--no-follow-tags', '--no-recurse-submodules'] as const;
+
+const PUSH_OPTIONS_UNDOING_A_REQUIRED_ONE = new Set(['--follow-tags', '--recurse-submodules']);
+
+/** The plain spelling every refusal points at. */
+function plainPush(prefix: string): string {
+  return `\`git push ${PUSH_REQUIRED_OPTIONS.join(' ')} <remote> ${prefix}<name>\``;
+}
+
+/**
+ * Whether a long option is `option` as git would read it: whole, with a value,
+ * or cut short — git takes any unambiguous prefix of a long option for it.
+ */
+function spellsOption(name: string, option: string): boolean {
+  return name === option || (name.length > 2 && option.startsWith(name));
+}
+
+function spellsAnyOf(name: string, options: ReadonlySet<string>): string | undefined {
+  for (const option of options) if (spellsOption(name, option)) return option;
+  return undefined;
+}
 
 /** Enough of the command to recognise it in the refusal, and no more. */
 const REFUSED_COMMAND_ECHO_LIMIT = 500;
@@ -312,6 +341,13 @@ export function isGitPush(argv: readonly string[]): boolean {
   return !invocation.unreadable && invocation.subcommand === 'push';
 }
 
+/** A push the rule permits: where it goes, its refspecs, and what each of them sends. */
+export interface PermittedPush {
+  readonly remote: string;
+  readonly refspecs: readonly string[];
+  readonly sources: readonly string[];
+}
+
 /** What the job asked for around the command, which a push also constrains. */
 export interface PushJobShape {
   readonly env?: Record<string, string>;
@@ -323,7 +359,7 @@ function refuseUnconfinedOption(argv: readonly string[], option: string, prefix:
     argv,
     `\`${option}\` is not an option a push may carry: a push runs as the operator's own git, ` +
       'so it takes no option that names a program or another repository',
-    `Spell the push plainly: \`git push <remote> ${prefix}<name>\`.`,
+    `Spell the push plainly: ${plainPush(prefix)}.`,
   );
 }
 
@@ -338,37 +374,44 @@ function refuseUnconfinedOption(argv: readonly string[], option: string, prefix:
  * returns untouched.
  *
  * The rule is stated as what it permits: a named branch under the prefix the
- * operator declared, moved forward, spelled `git push <push options> <remote>
- * <refspec…>`. Force, deletion, mirroring and `--all` are refused outright
- * rather than checked against the prefix, because each of them moves something
- * no refspec on the command names.
+ * operator declared, moved forward, spelled `git push --no-follow-tags
+ * --no-recurse-submodules <push options> <remote> <refspec…>`. Force,
+ * deletion, mirroring, `--all`, `--tags`, `--follow-tags` and
+ * `--recurse-submodules` are refused outright rather than checked against the
+ * prefix, because each of them moves something no refspec on the command
+ * names; the two `--no-` options are required because the operator's config
+ * can turn the last two on for a push that spells neither. A long option is
+ * read the way git reads it, cut short to any prefix that names it.
  *
  * What passes here then runs as the operator's own git rather than inside the
  * sandbox, which is why nothing stands before `push`, no push option names a
  * program or another repository, and the job supplies no environment: each of
  * those would be the job choosing what runs unconfined.
+ *
+ * Returns the remote a permitted push names, its refspecs and the source of
+ * each, and nothing for any other command.
  */
 export function requirePushAllowed(
   binding: HostBinding,
   argv: readonly string[],
   job: PushJobShape = {},
-): void {
+): PermittedPush | undefined {
   const program = argv[0];
-  if (program === undefined || !isGitProgram(program)) return;
+  if (program === undefined || !isGitProgram(program)) return undefined;
 
   const invocation = readGitInvocation(argv);
   if (invocation.unreadable) {
     // A command this cannot parse is only refused where it might be a push:
     // `git commit -m push` is not one, and refusing it would be the rule
     // reaching past what it is for.
-    if (!invocation.rest.includes('push')) return;
+    if (!invocation.rest.includes('push')) return undefined;
     refusePush(
       argv,
       'an option before the subcommand leaves it unclear whether this is a push',
-      'Spell the push plainly: `git push <remote> <branch>`.',
+      `Spell the push plainly: \`git push ${PUSH_REQUIRED_OPTIONS.join(' ')} <remote> <branch>\`.`,
     );
   }
-  if (invocation.subcommand !== 'push') return;
+  if (invocation.subcommand !== 'push') return undefined;
 
   const prefix = binding.branchPolicy?.branchPrefix;
   if (prefix === undefined) {
@@ -400,44 +443,76 @@ export function requirePushAllowed(
   }
 
   const positional: string[] = [];
+  const carried = new Set<string>();
   for (let index = 0; index < invocation.rest.length; index += 1) {
     const token = invocation.rest[index];
     if (token === undefined) continue;
+    if (token === '--') {
+      positional.push(...invocation.rest.slice(index + 1));
+      break;
+    }
     if (!token.startsWith('-') || token === '-') {
       positional.push(token);
       continue;
     }
     const name = longOptionName(token);
-    if (PUSH_OPTIONS_NAMING_A_PROGRAM.has(name)) {
-      refuseUnconfinedOption(argv, name, prefix);
-    }
-    if (PUSH_OPTIONS_REFUSED.has(name) || name === '--force-with-lease') {
+    const naming = spellsAnyOf(name, PUSH_OPTIONS_NAMING_A_PROGRAM);
+    if (naming !== undefined) refuseUnconfinedOption(argv, naming, prefix);
+    const moving = spellsAnyOf(name, PUSH_OPTIONS_REFUSED);
+    if (moving !== undefined) {
       refusePush(
         argv,
-        `\`${name}\` moves a branch the command does not name, or moves one backwards`,
-        `Push a named branch under \`${prefix}\` forward: \`git push <remote> ${prefix}<name>\`.`,
+        `\`${moving}\` moves a branch the command does not name, or moves one backwards`,
+        `Push a named branch under \`${prefix}\` forward: ${plainPush(prefix)}.`,
+      );
+    }
+    const undoing = spellsAnyOf(name, PUSH_OPTIONS_UNDOING_A_REQUIRED_ONE);
+    if (undoing !== undefined) {
+      refusePush(
+        argv,
+        `\`${undoing}\` sends what no refspec on the command names — tags pointing into the ` +
+          'commits, or commits of submodules',
+        `Push the named branch alone: ${plainPush(prefix)}.`,
       );
     }
     // A short cluster is one token carrying several options, so `-fu` is a
     // force too.
-    if (/^-[A-Za-z]+$/.test(token) && (token.includes('f') || token.includes('d'))) {
+    const cluster = /^-[A-Za-z]+$/.test(token);
+    if (cluster && (token.includes('f') || token.includes('d'))) {
       refusePush(
         argv,
         `\`${token}\` carries a force or a delete`,
-        `Push a named branch under \`${prefix}\` forward: \`git push <remote> ${prefix}<name>\`.`,
+        `Push a named branch under \`${prefix}\` forward: ${plainPush(prefix)}.`,
       );
     }
-    if (PUSH_OPTIONS_TAKING_A_VALUE.has(name) && !token.includes('=')) index += 1;
+    if (PUSH_REQUIRED_OPTIONS.some((option) => option === token)) carried.add(token);
+    // An option that takes a value and has none attached takes the next token
+    // whole, whatever it looks like — a required option included.
+    const takesNext = cluster
+      ? token.indexOf('o') === token.length - 1
+      : spellsAnyOf(name, PUSH_OPTIONS_TAKING_A_VALUE) !== undefined && !token.includes('=');
+    if (takesNext) index += 1;
   }
 
-  const refspecs = positional.slice(1);
-  if (refspecs.length === 0) {
+  const missing = PUSH_REQUIRED_OPTIONS.filter((option) => !carried.has(option));
+  if (missing.length > 0) {
+    refusePush(
+      argv,
+      `it does not carry ${missing.map((option) => `\`${option}\``).join(' and ')}, so the ` +
+        "operator's git config could add tags or submodule commits that no refspec names",
+      `Spell both: ${plainPush(prefix)}.`,
+    );
+  }
+
+  const [remote, ...refspecs] = positional;
+  if (remote === undefined || refspecs.length === 0) {
     refusePush(
       argv,
       'a push with no refspec moves whatever the repository is configured to move, which this rule cannot see',
-      `Name the branch: \`git push <remote> ${prefix}<name>\`.`,
+      `Name the branch: ${plainPush(prefix)}.`,
     );
   }
+  const sources: string[] = [];
   for (const refspec of refspecs) {
     if (refspec.startsWith('+')) {
       refusePush(
@@ -449,6 +524,7 @@ export function requirePushAllowed(
     const separator = refspec.indexOf(':');
     const source = separator === -1 ? refspec : refspec.slice(0, separator);
     const destination = separator === -1 ? refspec : refspec.slice(separator + 1);
+    sources.push(source);
     if (separator !== -1 && source === '') {
       refusePush(
         argv,
@@ -469,6 +545,7 @@ export function requirePushAllowed(
       );
     }
   }
+  return { remote, refspecs, sources };
 }
 
 export function requireWritable(binding: HostBinding): void {
