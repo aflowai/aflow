@@ -26,6 +26,7 @@ import {
   mkdir,
   mkdtemp,
   readdir,
+  readFile,
   realpath,
   rm,
   rmdir,
@@ -34,7 +35,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, isAbsolute, join, sep } from 'node:path';
+import { dirname, isAbsolute, join, resolve as resolvePath, sep } from 'node:path';
 import { promisify } from 'node:util';
 
 const run = promisify(execFile);
@@ -641,23 +642,31 @@ async function isPlainRefName(root: string, ref: string): Promise<boolean> {
  * it is.
  */
 export async function fetchRemoteBase(root: string, base: string): Promise<void> {
-  let remotes: string[];
-  try {
-    remotes = (await git(root, ['remote']))
-      .split('\n')
-      .map((name) => name.trim())
-      .filter((name) => name !== '');
-  } catch {
-    return;
-  }
   // Longest first: remote names may themselves contain a slash.
-  const remote = remotes
+  const remote = (await remoteNames(root))
     .filter((name) => base.startsWith(`${name}/`) && base.length > name.length + 1)
     .sort((a, b) => b.length - a.length)[0];
   if (remote === undefined) return;
   const ref = base.slice(remote.length + 1);
   if (!(await isPlainRefName(root, ref))) return;
+  await fetchFromRemote(root, remote, ref);
+}
 
+/** The folder's remotes by name, or none where git cannot list them. */
+async function remoteNames(root: string): Promise<string[]> {
+  try {
+    return (await git(root, ['remote']))
+      .split('\n')
+      .map((name) => name.trim())
+      .filter((name) => name !== '');
+  } catch {
+    return [];
+  }
+}
+
+/** `git fetch <remote> <ref>`, refused with git's own reason when it fails. */
+async function fetchFromRemote(root: string, remote: string, ref: string): Promise<void> {
+  const base = `${remote}/${ref}`;
   try {
     await run('git', ['-C', root, ...GIT_SAFETY_ARGS, 'fetch', '--end-of-options', remote, ref], {
       timeout: GIT_TIMEOUT_MS,
@@ -1202,20 +1211,39 @@ export interface PatchCommit {
 const PUSH_REMOTE = 'origin';
 
 /**
- * Where `origin/<pushBase>` is now, fetched first: a remote-tracking ref says
- * only where the remote was at the folder's last fetch, and a stale one would
- * leave out of the push range commits the remote has since lost.
+ * Where `origin/<pushBase>` is now, read from the fetch's own `FETCH_HEAD`.
+ * The remote-tracking ref moves only where the remote's fetch refspec maps
+ * the branch to it, so under a narrowed refspec it stays where it was and
+ * would leave out of the push range commits the remote has since lost.
  */
 async function resolvePushBase(root: string, pushBase: string): Promise<string> {
-  await fetchRemoteBase(root, `${PUSH_REMOTE}/${pushBase}`);
-  return await resolveCommit(root, `refs/remotes/${PUSH_REMOTE}/${pushBase}`).catch(() => {
+  const named = `${PUSH_REMOTE}/${pushBase}`;
+  if (!(await remoteNames(root)).includes(PUSH_REMOTE) || !(await isPlainRefName(root, pushBase))) {
     throw new WorktreeError(
-      `\`${PUSH_REMOTE}/${pushBase}\` is not a branch this folder can read, so what a push would ` +
+      `\`${named}\` is not a branch this folder can read, so what a push would ` +
         `add cannot be measured. A publication pushes to \`${PUSH_REMOTE}\` and measures against ` +
         `its \`${pushBase}\`; the folder needs that remote, and \`${pushBase}\` on it.`,
       'unknown_ref',
     );
-  });
+  }
+  await fetchFromRemote(root, PUSH_REMOTE, pushBase);
+  const fetchHead = resolvePath(
+    root,
+    (await git(root, ['rev-parse', '--git-path', 'FETCH_HEAD'])).trim(),
+  );
+  const first = (await readFile(fetchHead, 'utf8')).split('\n')[0] ?? '';
+  const [sha, , description] = first.split('\t');
+  const branch = pushBase.replace(/^refs\/heads\//, '');
+  // Another fetch in the same folder rewrites FETCH_HEAD; a line naming some
+  // other branch is not where this one is.
+  if (sha === undefined || !description?.startsWith(`branch '${branch}' of `)) {
+    throw new WorktreeError(
+      `\`${named}\` was fetched, but FETCH_HEAD no longer names it — another fetch in the ` +
+        'folder replaced it before it was read. Publish again.',
+      'fetch_failed',
+    );
+  }
+  return await resolveCommit(root, sha);
 }
 
 export interface PatchCommitOutcome {

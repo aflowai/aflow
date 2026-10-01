@@ -3,11 +3,13 @@
  *
  * Every commit in the range is read, not the range's net diff: a push carries
  * each commit, so a secret added in one and removed in the next still leaves
- * the machine. Only added lines are read, and only from the repository's
- * objects — the working tree, the index and every ref are left alone.
+ * the machine. Only added lines and the commits' messages are read, and only
+ * from the repository's objects — the working tree, the index and every ref
+ * are left alone. Text that leaves with the push but is not in a commit, such
+ * as a pull request's title and body, is handed in and read the same way.
  *
- * A line that matches says so by file, line and rule name. What matched is
- * never held past the test that found it.
+ * A line that matches says so by where it is, line and rule name. What matched
+ * is never held past the test that found it.
  */
 import {
   HOST_COMMIT_RANGE_PATTERN,
@@ -128,7 +130,17 @@ function binaryPath(line: string): string | undefined {
   return undefined;
 }
 
-/** One file's part of one commit's diff. */
+/**
+ * What a Git LFS pointer adds: its first line, or — where a commit changes the
+ * tracked content and the version line stays — the line naming the new object.
+ */
+const LFS_POINTER_VERSION = 'version https://git-lfs.github.com/spec/';
+const LFS_POINTER_OID = /^oid sha256:[0-9a-f]{64}$/;
+
+/** A line `git log --format=%x00%H%n%B` starts each message with. */
+const MESSAGE_START = /^\0([0-9a-f]{40,64})$/;
+
+/** One file's part of one commit's diff, one commit's message, or one text. */
 interface FileSection {
   file: string | undefined;
   addedBytes: number;
@@ -178,17 +190,80 @@ function closeSection(section: FileSection | undefined, tally: ScanTally): void 
   }
 }
 
+function openSection(file: string | undefined): FileSection {
+  return { file, addedBytes: 0, stopped: false, reasons: new Set(), findings: [], allowed: [] };
+}
+
+/**
+ * Weigh one line of a section against the rules. `bytes` is the line's own
+ * length in bytes and the newline that ends it, which may be more than the
+ * line as handed over: the reader holds no more than the cap of any line.
+ */
+function readLine(section: FileSection, line: string, bytes: number, lineNumber: number): void {
+  if (section.stopped || section.file === undefined) return;
+  section.addedBytes += bytes;
+  if (section.addedBytes > SCAN_MAX_FILE_BYTES) {
+    section.stopped = true;
+    section.reasons.add('too-large');
+    return;
+  }
+  if (line.includes('\0')) {
+    section.stopped = true;
+    section.reasons.add('nul-byte');
+    return;
+  }
+  if (bytes - 1 > SCAN_MAX_LINE_BYTES) {
+    section.reasons.add('line-too-long');
+    return;
+  }
+  const verdict = scanLine(section.file, line);
+  if (verdict === undefined) return;
+  const place = { file: section.file, line: lineNumber, pattern: verdict.rule };
+  if (verdict.allowed) section.allowed.push(place);
+  else section.findings.push(place);
+}
+
+/** Run a `git log` over the range a line at a time, refusing the range if it cannot be read whole. */
+async function readRange(
+  root: string,
+  base: string,
+  head: string,
+  args: readonly string[],
+  read: (line: string, bytes: number) => void,
+): Promise<void> {
+  try {
+    await forEachGitLine(
+      root,
+      [...args, `${base}..${head}`],
+      {
+        maxBytes: SCAN_MAX_DIFF_BYTES,
+        // The `+` that marks an added line, then the line.
+        maxLineBytes: SCAN_MAX_LINE_BYTES + 1,
+        timeoutMs: SCAN_TIMEOUT_MS,
+      },
+      read,
+    );
+  } catch (error) {
+    if (!(error instanceof WorktreeError)) throw error;
+    throw new WorktreeError(
+      `The commits of \`${base}..${head}\` could not be read whole, and a range read in part ` +
+        `is not cleared: ${error.message}`,
+      'git_failed',
+    );
+  }
+}
+
 /**
  * Read `git log -p -U0` line by line. With no context lines a hunk holds only
  * `+`, `-` and `\` lines, so a `+` inside one is always an added line, never a
  * header that happens to start the same way.
  */
-async function readAddedLines(root: string, base: string, head: string): Promise<ScanTally> {
-  const tally: ScanTally = {
-    findings: new Listing(),
-    allowed: new Listing(),
-    unscanned: new Listing(),
-  };
+async function readAddedLines(
+  root: string,
+  base: string,
+  head: string,
+  tally: ScanTally,
+): Promise<void> {
   let section: FileSection | undefined;
   let inHunk = false;
   let nextLine = 0;
@@ -196,14 +271,7 @@ async function readAddedLines(root: string, base: string, head: string): Promise
   const read = (line: string, bytes: number): void => {
     if (line.startsWith('diff --git ')) {
       closeSection(section, tally);
-      section = {
-        file: undefined,
-        addedBytes: 0,
-        stopped: false,
-        reasons: new Set(),
-        findings: [],
-        allowed: [],
-      };
+      section = openSection(undefined);
       inHunk = false;
       return;
     }
@@ -226,72 +294,93 @@ async function readAddedLines(root: string, base: string, head: string): Promise
     if (!line.startsWith('+')) return;
     const lineNumber = nextLine;
     nextLine += 1;
-    if (section.stopped || section.file === undefined) return;
+    if (section.file === undefined) return;
     const added = line.slice(1);
-    // The line's own bytes less its `+`, and the newline that ends it.
-    section.addedBytes += bytes;
-    if (section.addedBytes > SCAN_MAX_FILE_BYTES) {
-      section.stopped = true;
-      section.reasons.add('too-large');
-      return;
+    // The pointer is what the commit holds; the bytes it names are what
+    // the operator's git uploads on push, and they are not here to read.
+    if (
+      (lineNumber === 1 && added.startsWith(LFS_POINTER_VERSION)) ||
+      LFS_POINTER_OID.test(added)
+    ) {
+      section.reasons.add('lfs');
     }
-    if (added.includes('\0')) {
-      section.stopped = true;
-      section.reasons.add('nul-byte');
-      return;
-    }
-    if (bytes - 1 > SCAN_MAX_LINE_BYTES) {
-      section.reasons.add('line-too-long');
-      return;
-    }
-    const verdict = scanLine(section.file, added);
-    if (verdict === undefined) return;
-    const place = { file: section.file, line: lineNumber, pattern: verdict.rule };
-    if (verdict.allowed) section.allowed.push(place);
-    else section.findings.push(place);
+    // `bytes` counts the `+`, which stands in for the newline that ends the line.
+    readLine(section, added, bytes, lineNumber);
   };
 
-  try {
-    await forEachGitLine(
-      root,
-      [
-        '-c',
-        'core.quotePath=false',
-        'log',
-        '--format=',
-        '--patch',
-        // A merge shows no diff by default, so lines it adds resolving a
-        // conflict would never be read; against its first parent it shows
-        // everything it brings into the branch.
-        '--diff-merges=first-parent',
-        '--unified=0',
-        '--no-color',
-        '--no-ext-diff',
-        '--no-textconv',
-        '--no-renames',
-        // The repository's own config may set either prefix away; the parser reads `b/`.
-        '--src-prefix=a/',
-        '--dst-prefix=b/',
-        `${base}..${head}`,
-      ],
-      {
-        maxBytes: SCAN_MAX_DIFF_BYTES,
-        // The `+` that marks an added line, then the line.
-        maxLineBytes: SCAN_MAX_LINE_BYTES + 1,
-        timeoutMs: SCAN_TIMEOUT_MS,
-      },
-      read,
-    );
-  } catch (error) {
-    if (!(error instanceof WorktreeError)) throw error;
-    throw new WorktreeError(
-      `The commits of \`${base}..${head}\` could not be read whole, and a range read in part ` +
-        `is not cleared: ${error.message}`,
-      'git_failed',
-    );
-  }
+  await readRange(
+    root,
+    base,
+    head,
+    [
+      '-c',
+      'core.quotePath=false',
+      'log',
+      '--format=',
+      '--patch',
+      // A merge shows no diff by default, so lines it adds resolving a
+      // conflict would never be read; against its first parent it shows
+      // everything it brings into the branch.
+      '--diff-merges=first-parent',
+      '--unified=0',
+      '--no-color',
+      '--no-ext-diff',
+      '--no-textconv',
+      '--no-renames',
+      // The repository's own config may set either prefix away; the parser reads `b/`.
+      '--src-prefix=a/',
+      '--dst-prefix=b/',
+    ],
+    read,
+  );
   closeSection(section, tally);
-  return tally;
+}
+
+/**
+ * Read every commit's message in the range, each as its own text: a push
+ * carries the messages with the commits.
+ */
+async function readMessages(
+  root: string,
+  base: string,
+  head: string,
+  tally: ScanTally,
+): Promise<void> {
+  let section: FileSection | undefined;
+  let lineNumber = 0;
+  await readRange(
+    root,
+    base,
+    head,
+    // The repository's config may show signatures, which would be read as
+    // part of the message; they are not what the push carries.
+    ['log', '--no-show-signature', '--format=%x00%H%n%B'],
+    (line, bytes) => {
+      const sha = MESSAGE_START.exec(line)?.[1];
+      if (sha !== undefined) {
+        closeSection(section, tally);
+        section = openSection(`${sha} (message)`);
+        lineNumber = 0;
+        return;
+      }
+      if (section === undefined) return;
+      lineNumber += 1;
+      readLine(section, line, bytes + 1, lineNumber);
+    },
+  );
+  closeSection(section, tally);
+}
+
+/** Read each text passed beside the range, under its name. */
+function readTexts(texts: Readonly<Record<string, string>>, tally: ScanTally): void {
+  for (const [name, text] of Object.entries(texts)) {
+    const section = openSection(name);
+    text.split('\n').forEach((raw, index) => {
+      const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
+      readLine(section, line, Buffer.byteLength(line, 'utf8') + 1, index + 1);
+    });
+    closeSection(section, tally);
+  }
 }
 
 function plural(count: number, one: string, many: string): string {
@@ -307,28 +396,38 @@ const UNSCANNED_WHY: Record<UnscannedReason, string> = {
   'nul-byte': 'a NUL byte in a line it adds',
   'too-large': `more than ${kilobytes(SCAN_MAX_FILE_BYTES)} added in one commit`,
   'line-too-long': `a line longer than ${kilobytes(SCAN_MAX_LINE_BYTES)}`,
+  lfs: 'a Git LFS pointer, whose content the push uploads unread',
 };
 
 function beyondNote(listing: Listing<unknown>): string {
   return listing.beyond > 0 ? `, and ${String(listing.beyond)} more` : '';
 }
 
-function summarize(tally: ScanTally, commits: number, range: string): string {
+function summarize(
+  tally: ScanTally,
+  commits: number,
+  range: string,
+  textNames: readonly string[],
+): string {
   const scope = `the ${plural(commits, 'commit', 'commits')} of \`${range}\``;
+  const read =
+    textNames.length === 0
+      ? `the lines ${scope} add and their messages`
+      : `the lines ${scope} add, their messages and ${textNames.map((name) => `\`${name}\``).join(', ')}`;
   const { findings, allowed, unscanned } = tally;
   const sentences: string[] = [];
   if (findings.total > 0) {
     const places = findings.items.map((f) => `${f.file} line ${String(f.line)} (${f.pattern})`);
     sentences.push(
-      `What looks like a secret is in ${plural(findings.total, 'place', 'places')} in ${scope}: ` +
+      `What looks like a secret is in ${plural(findings.total, 'place', 'places')} in ${read}: ` +
         `${places.join(', ')}${beyondNote(findings)}.`,
     );
   } else if (unscanned.total > 0) {
-    sentences.push(`No secret found in the lines read of ${scope}, but not every file was read.`);
+    sentences.push(`No secret found in what was read of ${read}, but not all of it was read.`);
   } else if (allowed.total > 0) {
-    sentences.push(`No secret found in the lines ${scope} add, apart from lines marked allowed.`);
+    sentences.push(`No secret found in ${read}, apart from lines marked allowed.`);
   } else {
-    sentences.push(`No secret found in the lines ${scope} add.`);
+    sentences.push(`No secret found in ${read}.`);
   }
   if (unscanned.total > 0) {
     const files = unscanned.items.map((u) => `${u.file} (${UNSCANNED_WHY[u.reason]})`);
@@ -345,10 +444,15 @@ function summarize(tally: ScanTally, commits: number, range: string): string {
 }
 
 /**
- * Scan the lines `<baseSha>..<sha>` adds. Refused, not cleared, when either end
- * names no commit or the range is too large to read whole.
+ * Scan the lines `<baseSha>..<sha>` adds, the messages of its commits, and
+ * each text that leaves with them. Refused, not cleared, when either end names
+ * no commit or the range is too large to read whole.
  */
-export async function scanCommitRange(root: string, range: string): Promise<HostCommitScanOutput> {
+export async function scanCommitRange(
+  root: string,
+  range: string,
+  texts: Readonly<Record<string, string>> = {},
+): Promise<HostCommitScanOutput> {
   const ends = HOST_COMMIT_RANGE_PATTERN.exec(range);
   if (ends?.[1] === undefined || ends[2] === undefined) {
     throw new WorktreeError(`\`${range}\` is not a range of two shas.`, 'unknown_ref');
@@ -357,7 +461,14 @@ export async function scanCommitRange(root: string, range: string): Promise<Host
   const head = await resolveRangeEnd(root, ends[2]);
   const resolved = `${base}..${head}`;
 
-  const tally = await readAddedLines(root, base, head);
+  const tally: ScanTally = {
+    findings: new Listing(),
+    allowed: new Listing(),
+    unscanned: new Listing(),
+  };
+  await readAddedLines(root, base, head, tally);
+  await readMessages(root, base, head, tally);
+  readTexts(texts, tally);
   const commits = await countCommits(root, base, head);
   const unflagged = tally.findings.total === 0;
   const clean = unflagged && tally.allowed.total === 0 && tally.unscanned.total === 0;
@@ -366,7 +477,7 @@ export async function scanCommitRange(root: string, range: string): Promise<Host
     findings: tally.findings.items,
     unscanned: tally.unscanned.items,
     allowed: tally.allowed.items,
-    summary: summarize(tally, commits, resolved),
+    summary: summarize(tally, commits, resolved, Object.keys(texts)),
     ...(unflagged ? { unflaggedRange: resolved } : {}),
     ...(clean ? { clearedRange: resolved } : {}),
   };

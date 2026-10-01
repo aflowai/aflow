@@ -8,7 +8,7 @@
  * them and cannot trip the scan it tests.
  */
 import { execFile } from 'node:child_process';
-import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,6 +26,7 @@ import {
   SCAN_ALLOW_MARKER,
   scanLine,
   SECRET_RULES,
+  SECRET_VALUE_MAX_LENGTH,
   SECRET_VALUE_MIN_ENTROPY_BITS,
   SECRET_VALUE_MIN_LENGTH,
   shannonEntropy,
@@ -123,7 +124,7 @@ describe('the rules', () => {
     expect(ruleOf('a.ts', line)).toBe('aws-secret-access-key');
   });
 
-  it('weighs a quoted value under a secret-looking name by its length and its entropy', () => {
+  it('weighs a value under a secret-looking name by its length and its entropy', () => {
     expect(shannonEntropy('aaaa')).toBe(0);
     expect(shannonEntropy('abcd')).toBe(2);
     const key = randomish(24, ALNUM, 5);
@@ -137,9 +138,43 @@ describe('the rules', () => {
     expect(ruleOf('a.ts', 'const apiToken = "' + short + '";')).toBeUndefined();
     // The name decides: the same value under another name is not a secret.
     expect(ruleOf('a.ts', 'const greeting = "' + key + '";')).toBeUndefined();
-    // Only a string literal is a value; an expression is not.
-    expect(ruleOf('a.ts', 'const apiToken = ' + key + ';')).toBeUndefined();
+    // A bare value is a value; an expression that reads one from elsewhere is not.
+    expect(ruleOf('a.ts', 'const apiToken = ' + key + ';')).toBe('secret-assignment');
     expect(ruleOf('a.ts', 'const token = process.env.TOKEN;')).toBeUndefined();
+    expect(
+      ruleOf('a.ts', 'const basePricePerToken = pricing.promptPer1M / 1_000_000;'),
+    ).toBeUndefined();
+    expect(ruleOf('a.ts', 'apiToken: tokenFromHeader(request),')).toBeUndefined();
+    // A dotted token is not a member access, however it is spelled.
+    const dotted = 'sk.' + 'eyJ' + randomish(40, ALNUM, 53) + '.' + randomish(22, ALNUM, 59);
+    expect(ruleOf('a.yaml', 'mapbox_token: ' + dotted)).toBe('secret-assignment');
+  });
+
+  it('reads a bare value as YAML, `.properties`, shell, compose and `.npmrc` write it', () => {
+    const key = randomish(32, ALNUM, 61);
+    const shapes: Array<[string, string]> = [
+      ['config/app.yaml', `  api_key: ${key}`],
+      ['src/main/resources/application.properties', `db.password=${key}`],
+      ['scripts/deploy.sh', `export API_TOKEN=${key}`],
+      ['docker-compose.yml', `      - POSTGRES_PASSWORD=${key}`],
+      ['.npmrc', `//registry.npmjs.org/:_authToken=${key}`],
+    ];
+    for (const [file, line] of shapes) {
+      expect(ruleOf(file, line), file).toBe('secret-assignment');
+      expect(ruleOf(file, `${line} # rotated`), `${file} with a comment`).toBe('secret-assignment');
+    }
+    for (const [file, line] of [
+      ['config/app.yaml', '  api_key: ${API_KEY}'],
+      ['config/app.yaml', '  api_key: changeme-' + randomish(12)],
+      ['application.properties', 'db.password=/run/secrets/' + randomish(16)],
+      ['scripts/deploy.sh', 'export API_TOKEN=$(cat /run/secrets/token)'],
+      ['docker-compose.yml', '      - POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password'],
+      ['.npmrc', '//registry.npmjs.org/:_authToken=${NPM_TOKEN}'],
+      // Past the longest value weighed, a bare run is data, not a key, and is not cut to fit.
+      ['data.yaml', `token: ${randomish(SECRET_VALUE_MAX_LENGTH + 1)}`],
+    ] as const) {
+      expect(ruleOf(file, line), line).toBeUndefined();
+    }
   });
 
   it('passes a value that is plainly something other than a secret, whatever its name', () => {
@@ -173,14 +208,14 @@ describe('the rules', () => {
     }
   });
 
-  it('reads `.env` lines only in a `.env` file', () => {
+  it('names a `.env` line by the `.env` rule only in a `.env` file, and by the assignment anywhere else', () => {
     for (const file of ['.env', 'apps/web/.env', '.env.local', '.env.production', 'deploy.env']) {
       expect(isEnvFile(file), file).toBe(true);
       expect(ruleOf(file, PLANTED['env-secret']?.line ?? ''), file).toBe('env-secret');
     }
     for (const file of ['app.ts', 'environment.ts', 'docs/env.md', 'Dockerfile', 'env']) {
       expect(isEnvFile(file), file).toBe(false);
-      expect(ruleOf(file, PLANTED['env-secret']?.line ?? ''), file).toBeUndefined();
+      expect(ruleOf(file, PLANTED['env-secret']?.line ?? ''), file).toBe('secret-assignment');
     }
   });
 
@@ -227,6 +262,13 @@ describe('the rules', () => {
         allowed: true,
       });
     }
+    // Strings the line closes, and an apostrophe inside a word, leave the comment a comment.
+    for (const before of [`const label = "it's"; const u = 'a\\'b';`, "# isn't real"]) {
+      expect(scanLine('a.ts', `${line} ${before} // ${SCAN_ALLOW_MARKER}`), before).toEqual({
+        rule: 'secret-assignment',
+        allowed: true,
+      });
+    }
     // A line that matches nothing has nothing to allow.
     expect(scanLine('a.ts', `const note = "x"; // ${SCAN_ALLOW_MARKER}`)).toBeUndefined();
   });
@@ -251,6 +293,10 @@ describe('the rules', () => {
       `${line} /* ${SCAN_ALLOW_MARKER} */ const more = 1;`,
       `${line} /* ${SCAN_ALLOW_MARKER}`,
       `${line} <!-- ${SCAN_ALLOW_MARKER}`,
+      // Inside a string the line leaves open, running on to the next line.
+      `${line} const more = "x" + \` // ${SCAN_ALLOW_MARKER}`,
+      `${line} const more = 'unterminated // ${SCAN_ALLOW_MARKER}`,
+      `${line} const more = "escaped \\" // ${SCAN_ALLOW_MARKER}`,
     ];
     for (const candidate of notAComment) {
       expect(scanLine('a.ts', candidate), candidate).toEqual({
@@ -284,7 +330,12 @@ describe('the rules', () => {
       fill('AKIA' + 'QWERTYUIOPASDFGH/'),
       fill('A_TOKEN_'),
       fill(`token = "${'Ab_'.repeat(170)}" `),
+      fill('token='),
+      fill('token:'),
+      fill(`token: ${'Ab'.repeat(300)} `),
       fill('# '),
+      fill("'"),
+      fill('" // '),
     ];
     for (const line of lines) {
       const started = performance.now();
@@ -373,16 +424,16 @@ function contextFor(input: unknown, captured: Captured, spaceId = 'space-a'): ne
   } as never;
 }
 
-async function scan(range: string, spaceId?: string) {
+async function scan(range: string, spaceId?: string, texts?: Record<string, string>) {
   const captured: Captured = { logged: [] };
   const result = await createHostHandler(policyPath).execute(
-    contextFor({ bindingId: 'hb_app', range }, captured, spaceId),
+    contextFor({ bindingId: 'hb_app', range, ...(texts ? { texts } : {}) }, captured, spaceId),
   );
   return { result, captured };
 }
 
-async function scanOutput(range: string) {
-  const { result, captured } = await scan(range);
+async function scanOutput(range: string, texts?: Record<string, string>) {
+  const { result, captured } = await scan(range, undefined, texts);
   expect(result.status).toBe('SUCCEEDED');
   return HostCommitScanOutputSchema.parse(captured.output);
 }
@@ -467,7 +518,7 @@ describe('host.commit.scan', () => {
       findings: [],
       unscanned: [],
       allowed: [],
-      summary: `No secret found in the lines the 1 commit of \`${start}..${head}\` add.`,
+      summary: `No secret found in the lines the 1 commit of \`${start}..${head}\` add and their messages.`,
       unflaggedRange: `${start}..${head}`,
       clearedRange: `${start}..${head}`,
     });
@@ -571,7 +622,7 @@ describe('host.commit.scan', () => {
       unflaggedRange: `${start}..${head}`,
     });
     expect(output.clearedRange).toBeUndefined();
-    expect(output.summary).toContain('but not every file was read');
+    expect(output.summary).toContain('but not all of it was read');
   });
 
   it('stops reading a file at a line holding a NUL byte, keeping what came before', async () => {
@@ -643,6 +694,115 @@ describe('host.commit.scan', () => {
     ]);
     expect(output.allowed).toEqual([]);
     expect(output.unflaggedRange).toBeUndefined();
+  });
+
+  it('finds a bare value in a YAML, `.properties`, shell, compose or `.npmrc` file', async () => {
+    const start = await headSha();
+    const key = (seed: number): string => randomish(32, ALNUM, seed);
+    await mkdir(join(root, 'config'));
+    const head = await commitFiles({
+      'config/app.yaml': `service:\n  api_key: ${key(71)}\n`,
+      'application.properties': `db.url=jdbc:postgresql://db/app\ndb.password=${key(73)}\n`,
+      'deploy.sh': `#!/bin/sh\nexport API_TOKEN=${key(79)}\n`,
+      'docker-compose.yml': `services:\n  db:\n    environment:\n      - POSTGRES_PASSWORD=${key(83)}\n`,
+      '.npmrc': `//registry.npmjs.org/:_authToken=${key(89)}\n`,
+    });
+    const output = await scanOutput(`${start}..${head}`);
+    expect(output.findings).toEqual([
+      { file: '.npmrc', line: 1, pattern: 'secret-assignment' },
+      { file: 'application.properties', line: 2, pattern: 'secret-assignment' },
+      { file: 'config/app.yaml', line: 2, pattern: 'secret-assignment' },
+      { file: 'deploy.sh', line: 2, pattern: 'secret-assignment' },
+      { file: 'docker-compose.yml', line: 4, pattern: 'secret-assignment' },
+    ]);
+    expect(output.unflaggedRange).toBeUndefined();
+  });
+
+  it('names a Git LFS pointer as unscanned, so the push asks rather than clearing it', async () => {
+    const start = await headSha();
+    const pointer = (seed: number, size: number): string =>
+      [
+        'version https://git-lfs.github.com/spec/v1',
+        `oid sha256:${randomish(64, '0123456789abcdef', seed)}`,
+        `size ${String(size)}`,
+        '',
+      ].join('\n');
+    const added = await commitFiles({
+      'secrets.env': pointer(97, 2048),
+      'notes.md': `# notes\n\nversion https://git-lfs.github.com/spec/v1 is the pointer format.\n`,
+    });
+    const first = await scanOutput(`${start}..${added}`);
+    expect(first).toMatchObject({
+      clean: false,
+      findings: [],
+      allowed: [],
+      unscanned: [{ file: 'secrets.env', reason: 'lfs' }],
+      unflaggedRange: `${start}..${added}`,
+    });
+    expect(first.clearedRange).toBeUndefined();
+    expect(first.summary).toContain('secrets.env (a Git LFS pointer');
+
+    // A new version of the tracked content changes the pointer's object, not its version line.
+    const changed = await commitFiles({ 'secrets.env': pointer(101, 4096) });
+    expect((await scanOutput(`${added}..${changed}`)).unscanned).toEqual([
+      { file: 'secrets.env', reason: 'lfs' },
+    ]);
+  });
+
+  it('reads every commit message in the range as its own text', async () => {
+    const start = await headSha();
+    await commitFiles({ 'app.ts': 'export const a = 1;\n' });
+    await writeFile(join(root, 'app.ts'), 'export const a = 2;\n');
+    await git(root, 'add', '-A');
+    await git(
+      root,
+      'commit',
+      '-q',
+      '-m',
+      'Rotate the deploy key',
+      '-m',
+      `The old one was ${PLANTED['github-token']?.value ?? ''}`,
+    );
+    const flagged = await headSha();
+    const head = await commitFiles({ 'app.ts': 'export const a = 3;\n' });
+
+    const { captured } = await scan(`${start}..${head}`);
+    const output = HostCommitScanOutputSchema.parse(captured.output);
+    expect(output.findings).toEqual([
+      { file: `${flagged} (message)`, line: 3, pattern: 'github-token' },
+    ]);
+    expect(output.unflaggedRange).toBeUndefined();
+    expect(output.summary).toContain(`${flagged} (message) line 3 (github-token)`);
+    expect(JSON.stringify(captured.output)).not.toContain(PLANTED['github-token']?.value ?? '');
+  });
+
+  it('reads the texts passed beside the range under the same rules, by name', async () => {
+    const start = await headSha();
+    const head = await commitFiles({ 'app.ts': 'export const answer = 42;\n' });
+    const clean = await scanOutput(`${start}..${head}`, {
+      'pull request title': 'Answer the question',
+      'pull request summary': 'Sets the answer.\r\nNothing else.',
+    });
+    expect(clean.clean).toBe(true);
+    expect(clean.summary).toContain(
+      'their messages and `pull request title`, `pull request summary`',
+    );
+
+    const flagged = await scanOutput(`${start}..${head}`, {
+      'pull request title': 'Answer the question',
+      'pull request summary': `Sets the answer.\n${PLANTED['slack-token']?.line ?? ''}`,
+    });
+    expect(flagged.findings).toEqual([
+      { file: 'pull request summary', line: 2, pattern: 'slack-token' },
+    ]);
+    expect(flagged.unflaggedRange).toBeUndefined();
+    expect(flagged.clearedRange).toBeUndefined();
+
+    const long = await scanOutput(`${start}..${head}`, {
+      'pull request summary': 'x'.repeat(SCAN_MAX_LINE_BYTES + 1),
+    });
+    expect(long.unscanned).toEqual([{ file: 'pull request summary', reason: 'line-too-long' }]);
+    expect(long.clean).toBe(false);
   });
 
   it('caps the findings it returns and counts the rest', async () => {

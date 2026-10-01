@@ -43,7 +43,10 @@ async function scan(ctx: ExecutorContext, policyPath: string): Promise<StepResul
         validationError(`${binding.root} is not a git repository, so it has no commits to scan.`),
       );
     }
-    return await successWithData(ctx, await scanCommitRange(binding.root, parsed.data.range));
+    return await successWithData(
+      ctx,
+      await scanCommitRange(binding.root, parsed.data.range, parsed.data.texts),
+    );
   } catch (error) {
     if (error instanceof HostBindingError) {
       return await failureWithError(ctx, permissionError(error.message));

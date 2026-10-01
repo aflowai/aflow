@@ -823,15 +823,34 @@ export const HostCommitScanInputSchema = z.object({
     'The commits to scan, `<baseSha>..<sha>`: every commit reachable from `sha` and not ' +
       'from `baseSha`.',
   ),
+  texts: z
+    .record(z.string().min(1).max(100), z.string())
+    .optional()
+    .describe(
+      "Text that leaves the machine beside the commits — a pull request's title and body — " +
+        'by a name for each. Each is read line by line under the same rules as a line a ' +
+        'commit adds, and a finding in one is reported under its name.',
+    ),
 });
 
+/**
+ * Where a finding or an unscanned item is: a path, a commit's message, or a
+ * text passed beside the range.
+ */
+const HOST_COMMIT_SCAN_PLACE_DESCRIPTION =
+  'Where the line is: for a line a commit adds, its path from the repository root; for a ' +
+  "line of a commit's message, `<sha> (message)`; for a line of a text passed in `texts`, " +
+  "that text's name.";
+
 export const HostCommitScanFindingSchema = z.object({
-  file: z.string().describe('The path the line was added to, from the repository root.'),
+  file: z.string().describe(HOST_COMMIT_SCAN_PLACE_DESCRIPTION),
   line: z
     .number()
     .int()
     .positive()
-    .describe('The line number in that file, in the commit that added it.'),
+    .describe(
+      'The line number there: in the file as the commit left it, in the message, or in the text.',
+    ),
   pattern: z
     .string()
     .describe(
@@ -840,17 +859,19 @@ export const HostCommitScanFindingSchema = z.object({
 });
 
 export const HostCommitScanUnscannedReasonSchema = z
-  .enum(['binary', 'nul-byte', 'too-large', 'line-too-long'])
+  .enum(['binary', 'nul-byte', 'too-large', 'line-too-long', 'lfs'])
   .describe(
     'Why a file was not read whole. `binary`: git prints no lines for it. `nul-byte`: a line it ' +
       'adds holds a NUL byte, and nothing after that line was read. `too-large`: it adds more ' +
       'than the scan reads of one file in one commit, and nothing past that point was read. ' +
       '`line-too-long`: a line it adds is longer than the scan reads of one line; that line was ' +
-      'not read, the rest of the file was.',
+      'not read, the rest of the file was. `lfs`: what it adds is a Git LFS pointer, and the ' +
+      "content the operator's git uploads on push is not in the commit to be read. A message " +
+      'or a text is not read whole for the same reasons as a file, `binary` and `lfs` apart.',
   );
 
 export const HostCommitScanUnscannedSchema = z.object({
-  file: z.string().describe('The path, from the repository root.'),
+  file: z.string().describe(HOST_COMMIT_SCAN_PLACE_DESCRIPTION),
   reason: HostCommitScanUnscannedReasonSchema,
 });
 
@@ -858,9 +879,10 @@ export const HostCommitScanOutputSchema = z.object({
   clean: z
     .boolean()
     .describe(
-      'True only when every file the range adds lines to was read whole and no rule matched ' +
-        'any line in it, marked allowed or not. A range with a file in `unscanned` or a line ' +
-        'in `allowed` is never clean, whatever else was found.',
+      'True only when every file the range adds lines to, every message of its commits and ' +
+        'every text in `texts` was read whole and no rule matched any line in them, marked ' +
+        'allowed or not. A range with an entry in `unscanned` or a line in `allowed` is never ' +
+        'clean, whatever else was found.',
     ),
   findings: z
     .array(HostCommitScanFindingSchema)
@@ -872,8 +894,8 @@ export const HostCommitScanOutputSchema = z.object({
   unscanned: z
     .array(HostCommitScanUnscannedSchema)
     .describe(
-      'Every file the scan could not read whole, with why, capped in number as findings are. ' +
-        'Nothing the scan did not read was cleared.',
+      'Every file, message or text the scan could not read whole, with why, capped in number ' +
+        'as findings are. Nothing the scan did not read was cleared.',
     ),
   allowed: z
     .array(HostCommitScanFindingSchema)
@@ -886,24 +908,25 @@ export const HostCommitScanOutputSchema = z.object({
   summary: z
     .string()
     .describe(
-      'One paragraph for a person: every finding by file, line and rule, how many were left ' +
-        'out past the cap, which files were not read whole and why, and which lines were ' +
+      'One paragraph for a person: every finding by where it is, line and rule, how many ' +
+        'were left out past the cap, what was not read whole and why, and which lines were ' +
         'marked allowed.',
     ),
   unflaggedRange: z
     .string()
     .optional()
     .describe(
-      'The range as two full shas, present when no line that was read is in `findings` — ' +
-        'whether or not every file was read whole or a line was marked allowed. A step that ' +
-        'must stop on a finding reads this, so a range with a finding fails it.',
+      'The range as two full shas, present when no line that was read — of a file, a ' +
+        'message or a text — is in `findings`, whether or not everything was read whole or a ' +
+        'line was marked allowed. A step that must stop on a finding reads this, so a range ' +
+        'with a finding fails it.',
     ),
   clearedRange: z
     .string()
     .optional()
     .describe(
       'The range this scan cleared, as two full shas — present only when it is clean: every ' +
-        'file read whole, nothing found and nothing marked allowed.',
+        'file, message and text read whole, nothing found and nothing marked allowed.',
     ),
 });
 
@@ -1358,15 +1381,16 @@ export const HostOperationRegistrations: OperationRegistration[] = [
     groupDisplayName: 'Commits on this computer',
     groupDescription: 'Read the commits of a repository the operator connected, on their machine.',
     semanticDescription:
-      'Read the lines a range of commits adds in a connected repository and report where one ' +
-      'looks like a secret — a private key, a cloud or service token, a high-entropy value ' +
-      'assigned to a secret-looking name — by file, line and the name of the rule that matched. ' +
-      'Reads the repository’s objects only: the working tree, the index and every ref are ' +
-      'left as they are.',
+      'Read the lines a range of commits adds in a connected repository, the messages of ' +
+      'those commits, and any text that leaves with them — a pull request’s title and body — ' +
+      'and report where one looks like a secret — a private key, a cloud or service token, a ' +
+      'high-entropy value assigned to a secret-looking name — by where it is, line and the ' +
+      'name of the rule that matched. Reads the repository’s objects only: the working tree, ' +
+      'the index and every ref are left as they are.',
     tags: ['host', 'git', 'secrets', 'local'],
     idempotency: 'idempotent',
     accessMode: 'read',
-    // A publication scans its own commit before the push and reads the result
+    // A publication scans what its push would carry and reads the result
     // as data; an agent has no decision this would inform that the
     // publication does not already make.
     agentTool: false,
@@ -1382,8 +1406,9 @@ export const HostOperationRegistrations: OperationRegistration[] = [
       ],
       pitfalls: [
         'Every commit in the range is read, so a secret added in one commit and removed in a later one is still found: the push would carry both.',
-        'A file that is binary, holds a NUL byte, adds more than the scanned size in one commit or adds a line longer than the scanned line is listed in `unscanned` with why, and the range is not `clean`; findings from the part that was read are kept.',
-        'A line ending in a comment that carries `aflow-scan: allow` is reported in `allowed` instead of `findings`, and the range is not `clean`: the marker turns a stop into a question for the operator, never into a clearance. It counts only as the last thing on the line, after a comment leader set off by a space — inside a string or a URL, or with anything after it, it does not.',
+        'Each commit message is read as its own text and reported as `<sha> (message)`; each entry of `texts` is reported under its name. A finding in either fails the scan as one in a file does.',
+        'A file that is binary, holds a NUL byte, adds more than the scanned size in one commit, adds a line longer than the scanned line, or adds a Git LFS pointer — whose content git uploads on push without it being in the commit — is listed in `unscanned` with why, and the range is not `clean`; findings from the part that was read are kept.',
+        'A line ending in a comment that carries `aflow-scan: allow` is reported in `allowed` instead of `findings`, and the range is not `clean`: the marker turns a stop into a question for the operator, never into a clearance. It counts only as the last thing on the line, after a comment leader set off by a space and outside any string the line leaves open — inside a string or a URL, or with anything after it, it does not.',
         'A clean scan says no rule matched, not that the range holds no secret.',
       ],
     },

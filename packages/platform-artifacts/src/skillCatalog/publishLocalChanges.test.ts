@@ -896,7 +896,7 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
       expect(PUBLISH_LOCAL_CHANGES.description).toContain(phrase);
     }
     expect(PUBLISH_LOCAL_CHANGES.description).toContain(
-      'Whatever the posture, the run scans every line the push would add for secrets before any of this, and a finding stops it with nothing pushed — which is what lets a review stand in for the operator.',
+      "Whatever the posture, the run scans every line the push would add, every message of the commits it carries, and the pull request's title and summary for secrets before any of this, and a finding stops it with nothing pushed — which is what lets a review stand in for the operator.",
     );
     expect(PUBLISH_LOCAL_CHANGES.description).toContain(
       "Once the run asks, the operator's answer decides: a declined push pushes nothing, whatever the posture.",
@@ -910,18 +910,32 @@ describe('Publish Local Changes — the commit is scanned for secrets before any
     expect(scan.inputBindings).toEqual({
       bindingId: { kind: 'run_input', path: 'bindingId' },
       range: { kind: 'task_output', taskId: 'commit', path: 'commit.pushRange' },
+      title: { kind: 'run_input', path: 'title' },
+      summary: { kind: 'run_input', path: 'summary' },
     });
     const template = scan.inputTemplate;
     if (template === undefined) throw new Error('the scan must carry a template');
     const declared = new Set(Object.keys(scan.inputBindings ?? {}));
     const input = substituteTemplateBinds(
       template,
-      { bindingId: 'folder-1', range: COMMIT.pushRange },
+      { bindingId: 'folder-1', range: COMMIT.pushRange, title: 'Fix it', summary: 'Why.' },
       declared,
     );
     expect(HostCommitScanInputSchema.parse(input)).toEqual({
       bindingId: 'folder-1',
       range: `${ORIGIN_BASE}..${HEAD}`,
+      texts: { 'pull request title': 'Fix it', 'pull request summary': 'Why.' },
+    });
+    // The summary is optional: absent, it is not scanned as an empty text.
+    const untitled = substituteTemplateBinds(
+      template,
+      { bindingId: 'folder-1', range: COMMIT.pushRange, title: 'Fix it' },
+      declared,
+    );
+    expect(HostCommitScanInputSchema.parse(untitled)).toEqual({
+      bindingId: 'folder-1',
+      range: `${ORIGIN_BASE}..${HEAD}`,
+      texts: { 'pull request title': 'Fix it' },
     });
     expect(scan.when).toEqual({
       expression: "tasks.commit.output.state == 'applied'",
@@ -967,7 +981,10 @@ describe('Publish Local Changes — the commit is scanned for secrets before any
     expect(scan.maxAttempts).toBe(1);
     expect(scan.optional).toBeUndefined();
     const failure = scan.failureInstruction ?? '';
-    expect(failure).toContain('named above by file, line and rule — never by its value');
+    expect(failure).toContain('named above by file, line and rule');
+    expect(failure).toContain('`<sha> (message)` for a commit message');
+    expect(failure).toContain('`pull request title` or `pull request summary`');
+    expect(failure).toContain('never by its value');
     expect(failure).toContain('The branch stayed on the machine and nothing was pushed.');
     expect(failure).toContain('publish it on a fresh branch');
   });
@@ -1073,8 +1090,9 @@ describe('Publish Local Changes — the commit is scanned for secrets before any
     expect(allowed).toContain('`allowed` names each by file, line and rule');
     expect(allowed).toContain('whoever wrote the change could have written');
     expect(allowed).toContain('no review ran');
-    const unread = lines.find((l) => l.startsWith('- Files the scan could not'));
-    expect(unread).toContain('`unscanned` names each file and why');
+    const unread = lines.find((l) => l.startsWith('- Files, messages or texts the scan could not'));
+    expect(unread).toContain('`unscanned` names each and why');
+    expect(unread).toContain('a Git LFS pointer, whose content the push uploads');
     expect(unread).toContain('no review ran');
     expect(instruction).toContain(
       "Declining leaves the branch local whatever the folder's push approval says",
@@ -1090,7 +1108,7 @@ describe('Publish Local Changes — the commit is scanned for secrets before any
 
   it('reports a finding by file, line and rule, and never asks for the value', () => {
     expect(PUBLISH_LOCAL_CHANGES.description).toContain(
-      'report the files, lines and rules it names — never ask for or repeat the value',
+      'report the files, commit messages, title or summary, lines and rules it names — never ask for or repeat the value',
     );
   });
 });

@@ -767,7 +767,8 @@ describe('measuring what a push of the commit would add', () => {
     expect(carried).toEqual([sha, unpushed]);
   }, 30_000);
 
-  it('measures against the base as the remote holds it now, not as the folder last fetched it', async () => {
+  /** Move `origin`'s `main` on from another clone, as a colleague's push does; its new sha. */
+  async function pushedElsewhere(): Promise<string> {
     const elsewhere = join(base, 'elsewhere');
     await run('git', ['clone', '-q', origin, elsewhere]);
     await writeFile(join(elsewhere, 'c.txt'), 'pushed by someone else\n');
@@ -784,12 +785,28 @@ describe('measuring what a push of the commit would add', () => {
       'c',
     );
     await git(elsewhere, 'push', '-q', 'origin', 'HEAD:main');
-    const now = (await git(elsewhere, 'rev-parse', 'HEAD')).trim();
+    return (await git(elsewhere, 'rev-parse', 'HEAD')).trim();
+  }
+
+  it('measures against the base as the remote holds it now, not as the folder last fetched it', async () => {
+    const now = await pushedElsewhere();
     expect((await git(root, 'rev-parse', 'origin/main')).trim()).not.toBe(now);
 
     const { result, commit } = await publish({ pushBase: 'main' });
     expect(result.status).toBe('SUCCEEDED');
     expect(commit?.['pushRange']).toBe(`${now}..${String(commit?.['sha'])}`);
+  }, 30_000);
+
+  it("reads the fetch's own result where the remote's refspec does not map the base", async () => {
+    await git(root, 'config', 'remote.origin.fetch', '+refs/heads/other:refs/remotes/origin/other');
+    const stale = (await git(root, 'rev-parse', 'origin/main')).trim();
+    const now = await pushedElsewhere();
+
+    const { result, commit } = await publish({ pushBase: 'main' });
+    expect(result.status).toBe('SUCCEEDED');
+    expect(commit?.['pushRange']).toBe(`${now}..${String(commit?.['sha'])}`);
+    // The tracking ref never moved: the range came from FETCH_HEAD, not from it.
+    expect((await git(root, 'rev-parse', 'origin/main')).trim()).toBe(stale);
   }, 30_000);
 
   it('refuses a base the remote does not have, with nothing made', async () => {

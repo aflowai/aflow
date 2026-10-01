@@ -156,10 +156,19 @@ function readsAsEncodedText(value: string): boolean {
 }
 
 /**
+ * Code reading a value from elsewhere, as `pricing.promptPer1M` does: names of
+ * at most 32 characters joined by dots, the first in lower case. A bare value
+ * in source is as often an expression as a literal; the bound keeps out a
+ * token such as `sk.eyJ…`, whose dotted parts run longer than a name does.
+ */
+const MEMBER_ACCESS = /^[a-z_$][A-Za-z0-9_$]{0,31}(?:\.[A-Za-z_$][A-Za-z0-9_$]{0,31})+$/;
+
+/**
  * A value that is something other than a secret, whatever it is called: a
  * digest or a commit sha (all hex, which takes in all digits), a URL, a path,
- * a template or a variable that builds its value from others, a placeholder,
- * words joined into a name, a typed sequence, or encoded text.
+ * a template or a variable that builds its value from others, a member
+ * access, a placeholder, words joined into a name, a typed sequence, or
+ * encoded text.
  */
 export function isNonSecretValue(value: string): boolean {
   const lower = value.toLowerCase();
@@ -170,6 +179,7 @@ export function isNonSecretValue(value: string): boolean {
     value.includes('${') ||
     value.startsWith('$') ||
     value.startsWith('<') ||
+    MEMBER_ACCESS.test(value) ||
     PLACEHOLDER_WORDS.some((word) => lower.includes(word)) ||
     readsAsWords(value) ||
     readsAsSequence(value) ||
@@ -205,14 +215,21 @@ const AWS_SECRET_NAMED = new RegExp(
 );
 const BASE64_40 = /(?<![A-Za-z0-9/+])[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+=])/;
 
+/** What ends a value written without quotes: space, a quote, or punctuation a key does not hold. */
+const BARE_VALUE_END = '\\s"\'`,;(){}\\[\\]';
+
 /**
  * A secret-looking name, the rest of its identifier, an assignment, and a
- * quoted literal. Anchored on the name rather than the identifier's start, so
- * no run of identifier characters is matched twice.
+ * value: a quoted literal, or a bare run as YAML, `.properties`, shell,
+ * compose and `.npmrc` write it. Anchored on the name rather than the
+ * identifier's start, so no run of identifier characters is matched twice. A
+ * bare value longer than the bound is refused by the lookahead rather than cut
+ * to it, as a quoted one is by its closing quote.
  */
 const SECRET_ASSIGNMENT = new RegExp(
   `${SECRET_NAME}[A-Za-z0-9_.-]{0,64}["']?\\s{0,8}(?::=|=>|[:=])\\s{0,8}` +
-    `(["'\`])([^"'\`\\s]{1,${String(SECRET_VALUE_MAX_LENGTH)}})\\1`,
+    `(?:(["'\`])([^"'\`\\s]{1,${String(SECRET_VALUE_MAX_LENGTH)}})\\1` +
+    `|([^${BARE_VALUE_END}]{1,${String(SECRET_VALUE_MAX_LENGTH)}})(?![^${BARE_VALUE_END}]))`,
   'gi',
 );
 
@@ -296,10 +313,10 @@ export const SECRET_RULES: readonly SecretRule[] = [
   {
     name: 'secret-assignment',
     reason:
-      'A random-looking string literal assigned to a name that says secret, token, password or api key.',
+      'A random-looking value, quoted or bare, assigned to a name that says secret, token, password or api key.',
     matches: (line) => {
       for (const match of line.matchAll(SECRET_ASSIGNMENT)) {
-        if (looksLikeSecretValue(match[2] ?? '')) return true;
+        if (looksLikeSecretValue(match[2] ?? match[3] ?? '')) return true;
       }
       return false;
     },
@@ -312,9 +329,41 @@ export interface LineVerdict {
   readonly allowed: boolean;
 }
 
-/** Whether a line ends in a comment that carries the allow marker and nothing after it. */
+/**
+ * Whether a string literal is still open where `prefix` ends: a `"`, `'` or
+ * `` ` `` opened and not closed, a backslash escaping the character after it.
+ * An apostrophe between two letters or digits is a word's, as in `don't`, and
+ * opens nothing.
+ */
+function endsInsideString(prefix: string): boolean {
+  let open: string | undefined;
+  for (let i = 0; i < prefix.length; i += 1) {
+    const character = prefix[i];
+    if (open !== undefined) {
+      if (character === '\\') i += 1;
+      else if (character === open) open = undefined;
+    } else if (character === '"' || character === '`') {
+      open = character;
+    } else if (
+      character === "'" &&
+      !(/[A-Za-z0-9]/.test(prefix[i - 1] ?? '') && /[A-Za-z0-9]/.test(prefix[i + 1] ?? ''))
+    ) {
+      open = character;
+    }
+  }
+  return open !== undefined;
+}
+
+/**
+ * Whether a line ends in a comment that carries the allow marker and nothing
+ * after it, the comment's leader outside any string the line leaves open — so
+ * a marker in a string that runs on to the next line does not count. Lines are
+ * read one at a time, so a string opened on an earlier line is not seen.
+ */
 export function endsInAllowComment(line: string): boolean {
-  return ALLOW_COMMENT.test(line.trimEnd());
+  const trimmed = line.trimEnd();
+  const comment = ALLOW_COMMENT.exec(trimmed);
+  return comment !== null && !endsInsideString(trimmed.slice(0, comment.index));
 }
 
 /** The first rule a line added to `file` matches, or nothing. */
