@@ -137,8 +137,8 @@ export const HostCommitRangeSchema = z.string().regex(HOST_COMMIT_RANGE_PATTERN,
 
 /**
  * What `host.commit.scan` returns for a range it found no secret in, and what
- * a push of that range's last commit must carry. Opaque: the executor that
- * scanned signed it, with a key that lives only as long as that executor runs.
+ * a push of that range must carry. Opaque: the executor that scanned signed
+ * it, with a key that lives only as long as that executor runs.
  */
 export const HostScanReceiptSchema = z
   .string()
@@ -146,9 +146,23 @@ export const HostScanReceiptSchema = z
   .max(512)
   .describe(
     'The `receipt` `host.commit.scan` returned, verbatim. Issued by the executor on the ' +
-      'machine that scanned, for one folder and one commit, and read only by that executor ' +
-      'until it restarts.',
+      'machine that scanned, for one folder and one range — its base and its last commit — ' +
+      'and read only by that executor until it restarts.',
   );
+
+/**
+ * The push an operator approves where its scan asked: what an `approve-push`
+ * human task carries as its `approvedCall.input`, and what the approval grant
+ * minted when the operator decides it is keyed by. The executor recomputes it
+ * from the push it is about to run, so an approval of any other push, folder or
+ * scan matches nothing.
+ */
+export const HostApprovedPushSchema = z.object({
+  bindingId: z.string().min(1),
+  refspec: z.string().min(1).describe('The one refspec of the push, `<sha>:refs/heads/<branch>`.'),
+  receipt: HostScanReceiptSchema,
+});
+export type HostApprovedPush = z.infer<typeof HostApprovedPushSchema>;
 
 /** Which operator-created binding this job runs against. */
 const HostBindingRef = z
@@ -270,41 +284,26 @@ export const HostProcessExecInputSchema = z.object({
         'Read what it says with `host.process.inspect`, answer it with `host.process.input`, ' +
         'and end it with `host.process.stop`. It does not outlive the executor.',
     ),
-  pushBase: z
-    .object({
-      base: HostBranchNameSchema.describe(
-        'The branch on `origin` the range was measured against — the `pushBase` the commit ' +
-          'was made with, by its name alone.',
-      ),
-      range: HostCommitRangeSchema.describe(
-        'The `pushRange` the commit reported, `<origin base sha>..<sha>`: its first sha is ' +
-          'where `origin/<base>` was when the range was measured.',
-      ),
-    })
-    .optional()
-    .describe(
-      'Only with a push to `origin` of a range that was scanned or reviewed: in the same ' +
-        'step, just before git is spawned, the push is refused unless it goes to the URL ' +
-        '`origin` fetches from and `origin/<base>`, fetched again, still holds the first ' +
-        'sha of `range` — so it carries nothing that was left out as already on `origin`.',
-    ),
+  pushBase: HostBranchNameSchema.optional().describe(
+    'Required with every push and belongs to no other command: the branch on `origin` the ' +
+      'push is measured against — the `pushBase` the commit was made with, by its name ' +
+      'alone. In the same step, just before git is spawned, `origin/<pushBase>` is fetched ' +
+      'and read, and the push is refused unless it goes to the URL `origin` fetches from and ' +
+      'its receipt is for the range from exactly that commit to the one it sends.',
+  ),
   scan: z
     .object({
       receipt: HostScanReceiptSchema.describe(
-        'The `receipt` `host.commit.scan` returned for the range this push sends, whose last ' +
-          'commit is the source of its one refspec.',
-      ),
-      approvedReceipt: HostScanReceiptSchema.optional().describe(
-        "The same receipt as the operator's approval of the push recorded it. Needed when the " +
-          'scan could not read everything or found lines marked allowed: such a range is pushed ' +
-          'only once the operator has approved that scan.',
+        'The `receipt` `host.commit.scan` returned for the range this push sends: from where ' +
+          '`origin/<pushBase>` is to the source of its one refspec.',
       ),
     })
     .optional()
     .describe(
       'Required with every push and belongs to no other command: a push is refused unless ' +
-        'it sends, from this folder, the commit a scan by this executor found no secret in, ' +
-        'and — where that scan did not clear it — unless the operator approved it.',
+        'it sends, from this folder, the range a scan by this executor found no secret in, ' +
+        'and — where that scan did not clear it — unless the operator approved this push in ' +
+        'this run.',
     ),
 });
 
@@ -983,8 +982,9 @@ export const HostCommitScanOutputSchema = z.object({
     ),
   receipt: HostScanReceiptSchema.optional().describe(
     'What a push of the range must carry, present exactly when `unflaggedRange` is: it names ' +
-      'the folder, the last commit of the range, and whether the scan cleared it or the ' +
-      'operator has to approve it first. Valid on this executor only, and only for a day.',
+      'the folder, the base and the last commit of the range, and whether the scan cleared ' +
+      'it or the operator has to approve the push first. Valid on this executor only, and ' +
+      'only for a day.',
   ),
 });
 
@@ -1340,8 +1340,9 @@ export const HostOperationRegistrations: OperationRegistration[] = [
         'Egress follows the binding. A command that reaches the network may find it closed even though it runs.',
         "A push runs as the operator's own git, outside the sandbox, only to a branch under the folder's `branchPrefix` — named bare or as `refs/heads/<branch>` — never with force, with the branch named on the command and no environment or git global option; a folder without a prefix pushes nothing.",
         "A push the remote refuses — a branch that moved on, a non-fast-forward — fails the step with git's own message, rather than succeeding with a non-zero `exitCode`.",
-        "A push carries `scan.receipt`, the receipt `host.commit.scan` returned for the range it sends, and names that range's last commit as the source of its one refspec. A push with none, with one this executor did not issue since it started, for another folder or another commit, or more than a day old is refused with nothing pushed; so is one whose scan could not read everything or found lines marked allowed, unless `scan.approvedReceipt` carries the same receipt from the operator's approval.",
-        "`pushBase` is checked in the push's own step, just before git is spawned: a push to anything but `origin`, an `origin` whose push URL is not its fetch URL, or an `origin/<base>` that no longer holds the first sha of `range` fails with nothing pushed. A base moved forward still holds it and the push goes ahead. `origin` can still move in the moment between that fetch and git's push, which no check from this machine closes.",
+        "A push carries `pushBase` and `scan.receipt`, the receipt `host.commit.scan` returned for the range it sends, and names that range's last commit as the source of its one refspec. A push with no receipt, one this executor did not issue since it started, one for another folder, or one more than a day old is refused with nothing pushed.",
+        "In the push's own step, just before git is spawned, `origin/<pushBase>` is fetched and read: a push to anything but `origin`, an `origin` whose push URL is not its fetch URL, or a receipt for any range but `<that commit>..<the refspec's source>` fails with nothing pushed. A base that moved since the scan, forward or back, needs a scan of the range as it is now. `origin` can still move in the moment between that fetch and git's push, which no check from this machine closes.",
+        "A push whose scan could not read everything or found lines marked allowed goes ahead only once the operator has approved exactly this push — this folder, this refspec, this receipt — at an approval in the same run; nothing the push's own input says stands in for that approval.",
       ],
     },
     inputZod: HostProcessExecInputSchema,
@@ -1471,7 +1472,7 @@ export const HostOperationRegistrations: OperationRegistration[] = [
         'A file that is binary, holds a NUL byte, adds more than the scanned size in one commit, adds a line longer than the scanned line, or adds a Git LFS pointer — whose content git uploads on push without it being in the commit — is listed in `unscanned` with why, and the range is not `clean`; findings from the part that was read are kept.',
         'A line ending in a comment that carries `aflow-scan: allow` is reported in `allowed` instead of `findings`, and the range is not `clean`: the marker turns a stop into a question for the operator, never into a clearance. It counts only as the last thing on the line, after a comment leader set off by a space and outside any string opened earlier on the same line — inside such a string or a URL, or with anything after it, it does not. Only strings opened on the same line are seen: lines are read one at a time, so in a string opened on an earlier line, a comment leader and the marker ending a line count.',
         'A clean scan says no rule matched, not that the range holds no secret.',
-        "`receipt` is what a push of the range's last commit must carry, and there is none where a rule matched: nothing that was found can be pushed. It is valid on the executor that scanned until that executor restarts, and for a day at most.",
+        '`receipt` is what a push of the range must carry, and there is none where a rule matched: nothing that was found can be pushed. It is valid on the executor that scanned until that executor restarts, and for a day at most.',
       ],
     },
     inputZod: HostCommitScanInputSchema,

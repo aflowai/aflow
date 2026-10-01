@@ -7,6 +7,7 @@ import {
 } from '@aflow/cybernetic-runtime';
 import {
   HOST_PUSH_APPROVAL_DEFAULT,
+  HostApprovedPushSchema,
   HostBindingInspectOutputSchema,
   HostProcessExecInputSchema,
   HostCommitScanInputSchema,
@@ -62,7 +63,6 @@ function materializedCommands(): string[][] {
       bindingId: 'folder-1',
       refspec: COMMIT.pushRefspec,
       base: 'main',
-      range: COMMIT.pushRange,
     };
     const substituted = substituteTemplateBinds(template, resolved, declared);
     commands.push(substituted['command'] as string[]);
@@ -377,13 +377,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       bindingId: { kind: 'run_input', path: 'bindingId' },
       refspec: { kind: 'task_output', taskId: 'commit', path: 'commit.pushRefspec' },
       base: { kind: 'run_input', path: 'base' },
-      range: { kind: 'task_output', taskId: 'commit', path: 'commit.pushRange' },
       receipt: { kind: 'task_output', taskId: 'scan-commit', path: 'receipt' },
-      approvedReceipt: {
-        kind: 'task_output',
-        taskId: 'approve-push',
-        path: 'approvedCall.input.receipt',
-      },
     });
     const [pushCommand, ...rest] = materializedCommands();
     expect(rest).toEqual([]);
@@ -432,7 +426,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       scanSummary: { kind: 'task_output', taskId: 'scan-commit', path: 'summary' },
       commitSha: { kind: 'task_output', taskId: 'commit', path: 'commit.sha' },
       receipt: { kind: 'task_output', taskId: 'scan-commit', path: 'receipt' },
-      pushRefspec: { kind: 'task_output', taskId: 'commit', path: 'commit.pushRefspec' },
+      refspec: { kind: 'task_output', taskId: 'commit', path: 'commit.pushRefspec' },
       pushRange: { kind: 'task_output', taskId: 'commit', path: 'commit.pushRange' },
       commitBranch: { kind: 'task_output', taskId: 'commit', path: 'commit.branch' },
       commitMessage: { kind: 'task_output', taskId: 'commit', path: 'commit.message' },
@@ -619,7 +613,7 @@ interface Scenario {
    * what refuses it.
    */
   declineAs?: 'skip' | 'answer';
-  /** Whether `origin`'s base no longer holds where the range was measured from, which fails the push. */
+  /** Whether `origin`'s base is no longer where the scanned range starts, which fails the push. */
   baseMoved?: boolean;
   /** The receipt the approval records, where not the one its preview resolves to. */
   approvalOf?: string;
@@ -687,33 +681,55 @@ function readOutput(
   return value;
 }
 
-/** What a task's `task_output` bindings resolve to, absent ones left out. */
+/** The run's own inputs, as a publication is started with them. */
+const RUN_INPUTS: Readonly<Record<string, unknown>> = {
+  bindingId: 'folder-1',
+  branch: 'aflow/x',
+  base: 'main',
+};
+
+/** What a task's run-input and `task_output` bindings resolve to, absent ones left out. */
 function boundOutputs(
   bindings: WorkflowTask['inputBindings'],
   outputs: ReadonlyMap<string, Record<string, unknown>>,
 ): Record<string, unknown> {
   const bound: Record<string, unknown> = {};
   for (const [name, binding] of Object.entries(bindings ?? {})) {
-    if (binding.kind !== 'task_output') continue;
-    const value = readOutput(outputs, binding.taskId, binding.path);
+    const value =
+      binding.kind === 'task_output'
+        ? readOutput(outputs, binding.taskId, binding.path)
+        : binding.kind === 'run_input'
+          ? RUN_INPUTS[binding.path]
+          : undefined;
     if (value !== undefined) bound[name] = value;
   }
   return bound;
 }
 
+/** The push a grant is minted for: the hash's three fields, standing in for the hash. */
+function grantKey(push: unknown): string | undefined {
+  const parsed = HostApprovedPushSchema.safeParse(push);
+  return parsed.success
+    ? JSON.stringify([parsed.data.bindingId, parsed.data.refspec, parsed.data.receipt])
+    : undefined;
+}
+
 /**
  * The executor's gate on the push, over what the push's bindings carry: the
- * scan's receipt always, and for a range the scan did not clear the same
- * receipt as the approval recorded it.
+ * base it measures from and the scan's receipt always, and for a range the
+ * scan did not clear a grant the operator's approval minted for exactly this
+ * push. Nothing the push's own input says stands in for the grant.
  */
 function receiptAccepted(
   push: WorkflowTask,
   outputs: ReadonlyMap<string, Record<string, unknown>>,
+  grants: ReadonlySet<string>,
 ): boolean {
-  const { receipt, approvedReceipt } = boundOutputs(push.inputBindings, outputs);
-  if (typeof receipt !== 'string') return false;
-  if (approvedReceipt !== undefined && approvedReceipt !== receipt) return false;
-  return outputs.get('scan-commit')?.['clean'] === true || approvedReceipt === receipt;
+  const { bindingId, refspec, base, receipt } = boundOutputs(push.inputBindings, outputs);
+  if (typeof receipt !== 'string' || typeof base !== 'string') return false;
+  if (outputs.get('scan-commit')?.['clean'] === true) return true;
+  const key = grantKey({ bindingId, refspec, receipt });
+  return key !== undefined && grants.has(key);
 }
 
 /**
@@ -730,6 +746,7 @@ function publish(scenario: Scenario): Outcome {
   const failedOptional = new Set<string>();
   const statuses = new Map<string, string>();
   const outputs = new Map<string, Record<string, unknown>>();
+  const grants = new Set<string>();
   const ran: string[] = [];
   let asked = false;
 
@@ -749,7 +766,7 @@ function publish(scenario: Scenario): Outcome {
       ran.push(task.taskId);
       if (
         task.taskId === 'push' &&
-        (scenario.baseMoved === true || !receiptAccepted(task, outputs))
+        (scenario.baseMoved === true || !receiptAccepted(task, outputs, grants))
       ) {
         statuses.set(task.taskId, 'failed');
         continue;
@@ -771,13 +788,16 @@ function publish(scenario: Scenario): Outcome {
         if (scenario.decision === 'declined') {
           outputs.set(task.taskId, { decision: 'rejected' });
         } else {
-          // As the orchestrator records an approval: with the call its preview resolved to.
+          // As the operator's resolve records an approval: with the call its
+          // preview resolved to, and the grant for the push that call names.
           const input = boundOutputs(task.actionPreview?.inputBindings, outputs);
           if (scenario.approvalOf !== undefined) input['receipt'] = scenario.approvalOf;
           outputs.set(task.taskId, {
             decision: 'approved',
             approvedCall: { op: task.actionPreview?.op, input },
           });
+          const key = grantKey(input);
+          if (task.actionPreview?.op === 'host.process.exec' && key !== undefined) grants.add(key);
         }
       } else {
         const raw = rawOutput(task.taskId, scenario);
@@ -1214,63 +1234,69 @@ describe('Publish Local Changes — the commit is scanned for secrets before any
 });
 
 describe("Publish Local Changes — the push checks origin's base and URL in its own step", () => {
-  it('hands the push the base the commit measured against and the range the scan and the review read', () => {
+  it('hands the push the base the commit measured against and the scan of the range it read', () => {
     const push = taskOrThrow('push');
-    expect(push.inputBindings?.['range']).toEqual(
-      taskOrThrow('scan-commit').inputBindings?.['range'],
-    );
     expect(push.inputBindings?.['base']).toEqual(taskOrThrow('commit').inputBindings?.['base']);
+    // The scan read the range the commit reported, and its receipt is what the
+    // push carries; the executor measures the base the range starts from itself.
+    expect(taskOrThrow('scan-commit').inputBindings?.['range']).toEqual({
+      kind: 'task_output',
+      taskId: 'commit',
+      path: 'commit.pushRange',
+    });
     const template = push.inputTemplate;
     if (template === undefined) throw new Error('the push must carry a template');
-    const input = substituteTemplateBinds(
-      template,
-      {
-        bindingId: 'folder-1',
-        refspec: COMMIT.pushRefspec,
-        base: 'main',
-        range: COMMIT.pushRange,
-        receipt: RECEIPT.clean,
-      },
-      new Set(Object.keys(push.inputBindings ?? {})),
+    const input = HostProcessExecInputSchema.parse(
+      substituteTemplateBinds(
+        template,
+        {
+          bindingId: 'folder-1',
+          refspec: COMMIT.pushRefspec,
+          base: 'main',
+          receipt: RECEIPT.unscanned,
+        },
+        new Set(Object.keys(push.inputBindings ?? {})),
+      ),
     );
-    expect(HostProcessExecInputSchema.parse(input).pushBase).toEqual({
-      base: 'main',
-      range: `${ORIGIN_BASE}..${HEAD}`,
-    });
+    expect(input.pushBase).toBe('main');
+    expect(input.scan).toEqual({ receipt: RECEIPT.unscanned });
     expect(push.maxAttempts).toBe(1);
     expect(push.optional).toBeUndefined();
   });
 
-  it('hands the push the scan\u2019s receipt, and the approval\u2019s copy of it where one was asked', () => {
+  it('carries the push call as the approval\u2019s approvedCall, so the decision mints its grant', () => {
+    const preview = taskOrThrow('approve-push').actionPreview;
     const push = taskOrThrow('push');
-    const template = push.inputTemplate;
-    if (template === undefined) throw new Error('the push must carry a template');
-    const declared = new Set(Object.keys(push.inputBindings ?? {}));
-    const resolved = {
-      bindingId: 'folder-1',
-      refspec: COMMIT.pushRefspec,
-      base: 'main',
-      range: COMMIT.pushRange,
-      receipt: RECEIPT.unscanned,
-    };
-    const asked = substituteTemplateBinds(
-      template,
-      { ...resolved, approvedReceipt: RECEIPT.unscanned },
-      declared,
-    );
-    expect(HostProcessExecInputSchema.parse(asked).scan).toEqual({
-      receipt: RECEIPT.unscanned,
-      approvedReceipt: RECEIPT.unscanned,
-    });
-    // Where the approval did not ask, its copy is absent and drops its key.
-    expect(
-      HostProcessExecInputSchema.parse(substituteTemplateBinds(template, resolved, declared)).scan,
-    ).toEqual({
-      receipt: RECEIPT.unscanned,
-    });
+    expect(preview?.op).toBe(push.operation);
+    // The three fields the grant's hash covers are bound exactly as the push binds them.
+    for (const field of ['bindingId', 'refspec', 'receipt'] as const) {
+      expect(preview?.inputBindings?.[field], field).toEqual(push.inputBindings?.[field]);
+    }
+    const asked = publish({ pushApproval: 'never', review: 'approve', decision: 'approved' });
+    expect(asked.pushed).toBe(true);
   });
 
   for (const scan of ['unscanned', 'allowed'] as const) {
+    it(`${scan}: the operator's approval is what lets the push through, and a decline mints nothing`, () => {
+      const approved = publish({
+        pushApproval: 'never',
+        review: 'approve',
+        decision: 'approved',
+        scan,
+      });
+      expect(approved).toMatchObject({ asked: true, pushed: true });
+      for (const declineAs of ['skip', 'answer'] as const) {
+        const declined = publish({
+          pushApproval: 'never',
+          review: 'approve',
+          decision: 'declined',
+          declineAs,
+          scan,
+        });
+        expect(declined.pushed, declineAs).toBe(false);
+      }
+    });
+
     it(`${scan}: an approval recorded for another scan pushes nothing`, () => {
       const outcome = publish({
         pushApproval: 'never',
@@ -1294,7 +1320,7 @@ describe("Publish Local Changes — the push checks origin's base and URL in its
   });
 
   for (const pushApproval of ['always', 'never', 'unless-unreviewed'] as const) {
-    it(`${pushApproval}: a base that no longer holds the measured sha pushes nothing and opens no pull request`, () => {
+    it(`${pushApproval}: a base that moved since the scan pushes nothing and opens no pull request`, () => {
       const outcome = publish({
         pushApproval,
         review: 'approve',
@@ -1309,12 +1335,15 @@ describe("Publish Local Changes — the push checks origin's base and URL in its
 
   it('says on failure that nothing was pushed, why, and that the publication runs again', () => {
     const failure = taskOrThrow('push').failureInstruction ?? '';
-    expect(failure).toContain("`origin`'s base branch no longer holds where it was");
+    expect(failure).toContain(
+      "`origin`'s base branch is somewhere other than where the receipt's range starts",
+    );
+    expect(failure).toContain('no approval of this push is on record');
     expect(failure).toContain('pushes somewhere other than where it fetches from');
     expect(failure).toContain('nothing was pushed');
     expect(failure).toContain('run the publication again on a fresh branch');
     expect(PUBLISH_LOCAL_CHANGES.description).toContain(
-      'one moved only forward still does — or `origin` pushes elsewhere than it fetches, the push refused just before git ran and nothing was pushed',
+      'is no longer where the run measured from, forward or back, or `origin` pushes elsewhere than it fetches, the push refused just before git ran and nothing was pushed',
     );
   });
 });

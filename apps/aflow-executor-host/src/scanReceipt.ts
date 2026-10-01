@@ -5,14 +5,23 @@
  * command a binding allows, so what keeps an unscanned commit off `origin`
  * cannot be the order of a skill's tasks: a skill written in the space could
  * push without scanning. Instead the scan issues a receipt — the folder, the
- * last commit of the range, whether the scan cleared it or the operator has to
- * approve it, and when — signed with a key this executor draws when it starts
- * and never writes down. A push carries the receipt for the commit it sends,
- * and this process alone can have issued it.
+ * base and the last commit of the range, whether the scan cleared it or the
+ * operator has to approve the push, and when — signed with a key this executor
+ * draws when it starts and never writes down. A push carries the receipt for
+ * the range it sends, and this process alone can have issued it.
+ *
+ * The range is the caller's to name, so the receipt binds its base as well as
+ * its end, and the push measures its own base rather than taking one: a scan
+ * of `<tip>..<tip>` read nothing of what a push of `<tip>` would carry.
  */
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
-import type { HostCommitScanOutputSchema } from '@aflow/schemas';
+import { hostPushRequestHash } from '@aflow/redis';
+import {
+  HOST_COMMIT_RANGE_PATTERN,
+  type HostCommitScanOutputSchema,
+  type WriteApprovalGrant,
+} from '@aflow/schemas';
 import type { z } from 'zod';
 
 import { HostBindingError } from './bindings.js';
@@ -38,6 +47,9 @@ const RECEIPT_KEY = randomBytes(32);
 
 interface ScanReceipt {
   readonly bindingId: string;
+  /** The range's base, as the scan resolved it to a full sha. */
+  readonly base: string;
+  /** The range's last commit, as a full sha. */
   readonly sha: string;
   readonly outcome: ScanOutcome;
   readonly issuedAt: number;
@@ -52,7 +64,7 @@ export function issueScanReceipt(
   now: number = Date.now(),
 ): string {
   const body = Buffer.from(
-    JSON.stringify([receipt.bindingId, receipt.sha, receipt.outcome, now]),
+    JSON.stringify([receipt.bindingId, receipt.base, receipt.sha, receipt.outcome, now]),
   ).toString('base64url');
   return `${body}.${sign(body).toString('base64url')}`;
 }
@@ -66,16 +78,17 @@ function readScanReceipt(token: string): ScanReceipt | undefined {
   if (given.length !== expected.length || !timingSafeEqual(given, expected)) return undefined;
   const fields: unknown = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
   if (!Array.isArray(fields)) return undefined;
-  const [bindingId, sha, outcome, issuedAt] = fields as unknown[];
+  const [bindingId, base, sha, outcome, issuedAt] = fields as unknown[];
   if (
     typeof bindingId !== 'string' ||
+    typeof base !== 'string' ||
     typeof sha !== 'string' ||
     !OUTCOMES.includes(outcome as ScanOutcome) ||
     typeof issuedAt !== 'number'
   ) {
     return undefined;
   }
-  return { bindingId, sha, outcome: outcome as ScanOutcome, issuedAt };
+  return { bindingId, base, sha, outcome: outcome as ScanOutcome, issuedAt };
 }
 
 /** The receipt for a scan of `bindingId`, or nothing where a rule matched. */
@@ -84,19 +97,29 @@ export function receiptForScan(
   output: HostCommitScanOutput,
   now: number = Date.now(),
 ): string | undefined {
-  const sha = output.unflaggedRange?.split('..')[1];
-  if (sha === undefined) return undefined;
+  const range = HOST_COMMIT_RANGE_PATTERN.exec(output.unflaggedRange ?? '');
+  const [, base, sha] = range ?? [];
+  if (base === undefined || sha === undefined) return undefined;
   const outcome: ScanOutcome = output.clean
     ? 'clean'
     : output.unscanned.length > 0
       ? 'unscanned'
       : 'allowed';
-  return issueScanReceipt({ bindingId, sha, outcome }, now);
+  return issueScanReceipt(
+    { bindingId, base: base.toLowerCase(), sha: sha.toLowerCase(), outcome },
+    now,
+  );
 }
 
 /** Why a push was refused for the receipt it carried, or did not. */
 export type ScanReceiptRefusal =
-  'no_receipt' | 'not_issued_here' | 'other_folder' | 'stale' | 'other_commit' | 'unapproved';
+  | 'no_base'
+  | 'no_receipt'
+  | 'not_issued_here'
+  | 'other_folder'
+  | 'stale'
+  | 'other_range'
+  | 'unapproved';
 
 export class ScanReceiptError extends HostBindingError {
   constructor(
@@ -107,81 +130,119 @@ export class ScanReceiptError extends HostBindingError {
   }
 }
 
-const SCAN_AGAIN =
-  'Nothing was pushed. Scan the range the push sends with `host.commit.scan` and push ' +
-  'with the receipt it returns.';
+/**
+ * Where the gate reads the approval grants an operator's decisions minted —
+ * keyed as Plan 253's write approvals are, by tenant, run and request hash.
+ */
+export type PushApprovalReader = (
+  tenantId: string,
+  runId: string,
+  requestHash: string,
+) => Promise<WriteApprovalGrant | null>;
 
-/** What a push says about its scan: the receipt, and the approval of it where one was given. */
-export interface PushScan {
-  readonly receipt: string;
-  readonly approvedReceipt?: string | undefined;
+/** What the gate reads of the push it is about to spawn. */
+export interface PushUnderScan {
+  readonly bindingId: string;
+  readonly refspecs: readonly string[];
+  /** The source of each refspec, in the same order. */
+  readonly sources: readonly string[];
+  readonly pushBase: string | undefined;
+  readonly receipt: string | undefined;
+  /** Where `origin/<pushBase>` is now, fetched for the purpose, as a full sha. */
+  readonly measureBase: (pushBase: string) => Promise<string>;
+  /** The grant an operator's approval minted for `requestHash` in this run, if any. */
+  readonly approvalFor: (requestHash: string) => Promise<WriteApprovalGrant | null>;
+}
+
+function scanAgain(pushBase: string): string {
+  return (
+    `Nothing was pushed. Scan the range the push sends — from where \`origin/${pushBase}\` ` +
+    'is now to the commit it pushes — with `host.commit.scan`, and push with the receipt it ' +
+    'returns.'
+  );
 }
 
 /**
- * Refuse a push that does not send, from this folder, the commit a scan by
- * this executor found no secret in — or, where that scan did not clear it,
- * one the operator has not approved.
+ * Refuse a push that does not send, from this folder, the range a scan by this
+ * executor found no secret in — from where `origin/<pushBase>` is now to the
+ * commit the push names — or, where that scan did not clear it, a push the
+ * operator has not approved in this run.
  */
-export function requireScanReceipt(
-  bindingId: string,
-  sources: readonly string[],
-  scan: PushScan | undefined,
+export async function requireScannedPush(
+  push: PushUnderScan,
   now: number = Date.now(),
-): void {
-  if (scan === undefined) {
+): Promise<void> {
+  const { bindingId, pushBase } = push;
+  if (pushBase === undefined) {
+    throw new ScanReceiptError(
+      'This push names no `pushBase`, so what it would add to `origin` cannot be measured ' +
+        'against what its scan read. Nothing was pushed. Name the branch on `origin` the ' +
+        'commit was made against.',
+      'no_base',
+    );
+  }
+  if (push.receipt === undefined) {
     throw new ScanReceiptError(
       'This push carries no scan receipt, so nothing says what it sends was read for secrets. ' +
-        SCAN_AGAIN,
+        scanAgain(pushBase),
       'no_receipt',
     );
   }
-  const receipt = readScanReceipt(scan.receipt);
+  const receipt = readScanReceipt(push.receipt);
   if (receipt === undefined) {
     throw new ScanReceiptError(
       'This push carries a scan receipt this executor did not issue since it last started. ' +
-        SCAN_AGAIN,
+        scanAgain(pushBase),
       'not_issued_here',
     );
   }
+  const scanned = `\`${receipt.base}..${receipt.sha}\``;
   if (receipt.bindingId !== bindingId) {
     throw new ScanReceiptError(
       `This push carries the receipt for a scan of \`${receipt.bindingId}\`, and pushes from ` +
-        `\`${bindingId}\`. ${SCAN_AGAIN}`,
+        `\`${bindingId}\`. ${scanAgain(pushBase)}`,
       'other_folder',
     );
   }
   if (now - receipt.issuedAt > SCAN_RECEIPT_TTL_MS || receipt.issuedAt > now) {
     throw new ScanReceiptError(
-      `This push carries the receipt for a scan of \`${receipt.sha}\` issued at ` +
-        `${new Date(receipt.issuedAt).toISOString()}, more than a day ago. ${SCAN_AGAIN}`,
+      `This push carries the receipt for a scan of ${scanned} issued at ` +
+        `${new Date(receipt.issuedAt).toISOString()}, more than a day ago. ${scanAgain(pushBase)}`,
       'stale',
     );
   }
-  const [source, ...more] = sources;
-  if (source?.toLowerCase() !== receipt.sha || more.length > 0) {
+  const [source, ...more] = push.sources;
+  const [refspec] = push.refspecs;
+  if (source?.toLowerCase() !== receipt.sha || refspec === undefined || more.length > 0) {
     throw new ScanReceiptError(
-      `This push sends ${sources.map((s) => `\`${s}\``).join(', ')}, and its receipt is for ` +
-        `\`${receipt.sha}\`: a push sends the one commit its scan read, named by that ` +
-        `commit's sha as the source of its one refspec. ${SCAN_AGAIN}`,
-      'other_commit',
+      `This push sends ${push.sources.map((s) => `\`${s}\``).join(', ')}, and its receipt is ` +
+        `for a scan of ${scanned}: a push sends the one commit its scan ended at, named by ` +
+        `that commit's sha as the source of its one refspec. ${scanAgain(pushBase)}`,
+      'other_range',
     );
   }
-  if (scan.approvedReceipt !== undefined && scan.approvedReceipt !== scan.receipt) {
+  const measured = (await push.measureBase(pushBase)).toLowerCase();
+  if (measured !== receipt.base) {
     throw new ScanReceiptError(
-      `This push carries an approval of another scan than the one of \`${receipt.sha}\` it ` +
-        'sends. Nothing was pushed.',
-      'unapproved',
+      `\`origin/${pushBase}\` is at \`${measured}\`, so this push sends ` +
+        `\`${measured}..${receipt.sha}\`, and its receipt is for a scan of ${scanned}. ` +
+        scanAgain(pushBase),
+      'other_range',
     );
   }
-  if (receipt.outcome !== 'clean' && scan.approvedReceipt === undefined) {
-    const why =
-      receipt.outcome === 'unscanned'
-        ? 'could not read all of it'
-        : 'found lines in it marked `aflow-scan: allow`';
-    throw new ScanReceiptError(
-      `The scan of \`${receipt.sha}\` ${why}, so it is pushed only once the operator has ` +
-        'approved that scan, and this push carries no approval of it. Nothing was pushed.',
-      'unapproved',
-    );
-  }
+  if (receipt.outcome === 'clean') return;
+
+  const requestHash = hostPushRequestHash({ bindingId, refspec, receipt: push.receipt });
+  const grant = await push.approvalFor(requestHash);
+  if (grant?.decision === 'approved' && grant.requestHash === requestHash) return;
+  const why =
+    receipt.outcome === 'unscanned'
+      ? 'could not read all of it'
+      : 'found lines in it marked `aflow-scan: allow`';
+  throw new ScanReceiptError(
+    `The scan of ${scanned} ${why}, so it is pushed only once the operator has approved ` +
+      `this push — \`${refspec}\` from \`${bindingId}\` with this receipt — in this run, and ` +
+      'no such approval is on record. Nothing was pushed.',
+    'unapproved',
+  );
 }

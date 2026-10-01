@@ -39,8 +39,8 @@ import {
 import { createChatterStripper } from '../egressRefusals.js';
 import { EnvPolicyError } from '../envPolicy.js';
 import { explainFailedStart } from '../executableHint.js';
-import { confirmPushTarget } from '../pushBase.js';
-import { requireScanReceipt } from '../scanReceipt.js';
+import { measurePushBase } from '../pushBase.js';
+import { type PushApprovalReader, requireScannedPush } from '../scanReceipt.js';
 import { WorktreeError } from '../worktree.js';
 import {
   type HostBinding,
@@ -129,7 +129,11 @@ function pushFailureText(result: SandboxedRunResult): string {
   return said !== '' ? said : `git exited with ${String(result.exitCode)} and said nothing.`;
 }
 
-async function execProcess(ctx: ExecutorContext, policyPath: string): Promise<StepResult> {
+async function execProcess(
+  ctx: ExecutorContext,
+  policyPath: string,
+  approvals: PushApprovalReader,
+): Promise<StepResult> {
   const raw = await ctx.readPayload(ctx.job.inputRef);
   const parsed = HostProcessExecInputSchema.safeParse(raw);
   if (!parsed.success) {
@@ -164,13 +168,18 @@ async function execProcess(ctx: ExecutorContext, policyPath: string): Promise<St
       }
     }
     if (push !== undefined) {
-      requireScanReceipt(binding.id, push.sources, input.scan);
-    }
-    if (push !== undefined && input.pushBase !== undefined) {
       // In the push's own step rather than one before it, so nothing between
-      // the check and git's own push can move the base unnoticed but the
+      // the measure and git's own push can move the base unnoticed but the
       // remote itself in the moment they are apart.
-      await confirmPushTarget(binding.root, push.remote, input.pushBase.base, input.pushBase.range);
+      await requireScannedPush({
+        bindingId: binding.id,
+        refspecs: push.refspecs,
+        sources: push.sources,
+        pushBase: input.pushBase,
+        receipt: input.scan?.receipt,
+        measureBase: (pushBase) => measurePushBase(binding.root, push.remote, pushBase),
+        approvalFor: (requestHash) => approvals(ctx.tenantId, ctx.runId, requestHash),
+      });
     }
 
     // Live standard error carries the adapter's own narration alongside the
@@ -370,7 +379,10 @@ async function sendInput(ctx: ExecutorContext, policyPath: string): Promise<Step
   }
 }
 
-export function createHostProcessHandler(policyPath: string): {
+export function createHostProcessHandler(
+  policyPath: string,
+  approvals: PushApprovalReader,
+): {
   handles: ReadonlySet<string>;
   execute: (ctx: ExecutorContext) => Promise<StepResult>;
 } {
@@ -384,7 +396,7 @@ export function createHostProcessHandler(policyPath: string): {
     execute: async (ctx: ExecutorContext): Promise<StepResult> => {
       switch (ctx.operationId) {
         case 'host.process.exec':
-          return await execProcess(ctx, policyPath);
+          return await execProcess(ctx, policyPath, approvals);
         case 'host.process.inspect':
           return await inspectProcess(ctx, policyPath);
         case 'host.process.input':

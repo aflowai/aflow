@@ -341,9 +341,10 @@ export function isGitPush(argv: readonly string[]): boolean {
   return !invocation.unreadable && invocation.subcommand === 'push';
 }
 
-/** A push the rule permits: where it goes, and what each of its refspecs sends. */
+/** A push the rule permits: where it goes, its refspecs, and what each of them sends. */
 export interface PermittedPush {
   readonly remote: string;
+  readonly refspecs: readonly string[];
   readonly sources: readonly string[];
 }
 
@@ -387,8 +388,8 @@ function refuseUnconfinedOption(argv: readonly string[], option: string, prefix:
  * program or another repository, and the job supplies no environment: each of
  * those would be the job choosing what runs unconfined.
  *
- * Returns the remote a permitted push names and the source of each refspec,
- * and nothing for any other command.
+ * Returns the remote a permitted push names, its refspecs and the source of
+ * each, and nothing for any other command.
  */
 export function requirePushAllowed(
   binding: HostBinding,
@@ -544,7 +545,7 @@ export function requirePushAllowed(
       );
     }
   }
-  return { remote, sources };
+  return { remote, refspecs, sources };
 }
 
 export function requireWritable(binding: HostBinding): void {

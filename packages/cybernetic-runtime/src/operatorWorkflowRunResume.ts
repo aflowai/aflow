@@ -1,9 +1,14 @@
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { PayloadStore } from '@aflow/payload-store';
 import type { Redis } from 'ioredis';
-import type { TenantId, WorkflowRunResumeInput } from '@aflow/schemas';
-import { RESUME_REPLACE_OUTPUT_ATTEMPT_CAP, normalizeInstructionsForStorage } from '@aflow/schemas';
+import type { HumanApprovalCall, TenantId, WorkflowRunResumeInput } from '@aflow/schemas';
+import {
+  HostApprovedPushSchema,
+  RESUME_REPLACE_OUTPUT_ATTEMPT_CAP,
+  normalizeInstructionsForStorage,
+} from '@aflow/schemas';
 import { resolveWorkflowForRunRevision } from '@aflow/database';
+import { hostPushRequestHash, setWriteApprovalGrant } from '@aflow/redis';
 import {
   claimResumeLease,
   releaseResumeClaim,
@@ -52,6 +57,30 @@ export interface OperatorWorkflowRunResumeHarnessHooks {
 
 export type OperatorWorkflowRunResumeResult =
   { ok: true; runId: string } | { ok: false; code: string; message: string };
+
+/**
+ * Plan 253's write-approval grant, for a host push: an operator approving a
+ * human task whose `approvedCall` is a push is the decision the host executor
+ * needs before it sends a range its scan did not clear. Minted here and only
+ * here — the operator's resolve, which holds the real actor — keyed by tenant,
+ * run and the hash of exactly that push, so neither an agent-driven resume nor
+ * anything the push's own input says can stand in for it. A decline goes
+ * through `reject` and mints nothing.
+ */
+async function recordHostPushApproval(
+  redis: Redis,
+  args: { tenantId: string; runId: string; approvedBy: string; approvedCall: HumanApprovalCall },
+): Promise<void> {
+  if (args.approvedCall.op !== 'host.process.exec') return;
+  const push = HostApprovedPushSchema.safeParse(args.approvedCall.input);
+  if (!push.success) return;
+  await setWriteApprovalGrant(redis, args.tenantId, args.runId, {
+    requestHash: hostPushRequestHash(push.data),
+    decision: 'approved',
+    approvedBy: args.approvedBy,
+    decidedAt: new Date().toISOString(),
+  });
+}
 
 export async function executeOperatorWorkflowRunResume(
   deps: OperatorWorkflowRunResumeDeps,
@@ -168,6 +197,13 @@ export async function executeOperatorWorkflowRunResume(
         claimToken,
         actorUserId: args.userId,
         payloadStore: deps.payloadStore,
+        recordApproval: (approvedCall) =>
+          recordHostPushApproval(deps.redis, {
+            tenantId: tenantIdStr,
+            runId,
+            approvedBy: args.userId,
+            approvedCall,
+          }),
         storeContext: {
           tenantId: args.tenantId,
           runId,

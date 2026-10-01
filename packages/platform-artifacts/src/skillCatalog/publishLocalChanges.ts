@@ -138,7 +138,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
 
 **On an existing branch**: a fix that was commissioned from a branch (\`base: <branch>\` on the commission) is published onto that branch by naming it as \`branch\` and passing the commission's \`baseSha\` as \`baseSha\`; a branch is reused only that way, and a fresh change takes a fresh branch.
 
-**With the result**: report the pull request link, and whether the push was approved by the operator or cleared by the folder's push approval — and, where the run reviewed its commit, the verdict. Where approval was declined, report that the branch stayed on the machine and nothing was pushed — the commit is still there to publish later. Where the scan found what looks like a secret, the run failed with nothing pushed: report the files, commit headers and messages, title or summary, lines and rules it names — never ask for or repeat the value — and say the change needs the secret taken out and commissioning again onto a fresh branch, since this branch still holds that commit — or, where the file and line are in one of the folder's own commits that \`origin\` does not have yet, that the commit needs rewriting before anything built on it is pushed. Where the base branch on \`origin\` no longer holds where the run measured from — one moved only forward still does — or \`origin\` pushes elsewhere than it fetches, the push refused just before git ran and nothing was pushed: report what its message names, and that the publication has to run again on a fresh branch. Where the push failed, git's own message says why: a branch on \`origin\` that moved on is not overwritten.`,
+**With the result**: report the pull request link, and whether the push was approved by the operator or cleared by the folder's push approval — and, where the run reviewed its commit, the verdict. Where approval was declined, report that the branch stayed on the machine and nothing was pushed — the commit is still there to publish later. Where the scan found what looks like a secret, the run failed with nothing pushed: report the files, commit headers and messages, title or summary, lines and rules it names — never ask for or repeat the value — and say the change needs the secret taken out and commissioning again onto a fresh branch, since this branch still holds that commit — or, where the file and line are in one of the folder's own commits that \`origin\` does not have yet, that the commit needs rewriting before anything built on it is pushed. Where the base branch on \`origin\` is no longer where the run measured from, forward or back, or \`origin\` pushes elsewhere than it fetches, the push refused just before git ran and nothing was pushed: report what its message names, and that the publication has to run again on a fresh branch. Where the push failed, git's own message says why: a branch on \`origin\` that moved on is not overwritten.`,
   tags: ['coding', 'publish', 'git', 'local', 'developer-tools'],
   capabilityHints: [
     {
@@ -622,10 +622,11 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
                 path: 'summary',
               },
               commitSha: { kind: 'task_output' as const, taskId: 'commit', path: 'commit.sha' },
-              // Recorded with the approval, so the push carries the operator's
-              // decision on this scan and no other.
+              // `bindingId`, `refspec` and `receipt` are the push call: the
+              // operator's approval mints a grant for exactly that push, and
+              // the executor sends a range the scan did not clear only on it.
               receipt: { kind: 'task_output' as const, taskId: 'scan-commit', path: 'receipt' },
-              pushRefspec: {
+              refspec: {
                 kind: 'task_output' as const,
                 taskId: 'commit',
                 path: 'commit.pushRefspec',
@@ -657,9 +658,9 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
         {
           taskId: 'push',
           name: 'Push the commit',
-          goal: 'Push the commit this run made to its branch on origin through the connected folder’s shell, with the argv pinned by the skill — carrying the commits of `pushRange` under it that origin does not have, and no tag or submodule commit. It carries the receipt the scan issued for the commit, and for a range the scan did not clear the same receipt as the approval recorded it; the executor refuses a push without them. In the same step, just before git runs, the executor confirms the push goes where `origin` fetches from and that `origin`’s base branch still holds the first sha of `pushRange`. A remote that refuses the update fails the push with git’s own message.',
+          goal: 'Push the commit this run made to its branch on origin through the connected folder’s shell, with the argv pinned by the skill — carrying the commits of `pushRange` under it that origin does not have, and no tag or submodule commit. It carries the base branch and the receipt the scan issued for `pushRange`; the executor refuses a push without them. In the same step, just before git runs, the executor confirms the push goes where `origin` fetches from, reads where `origin`’s base branch is now, and pushes only if the receipt is for the range from exactly there to the commit. Where the scan did not clear the range, the executor pushes only on the operator’s approval of this push in this run. A remote that refuses the update fails the push with git’s own message.',
           failureInstruction:
-            "Where the message above says `origin`'s base branch no longer holds where it was when this run measured what its push would add, or that `origin` pushes somewhere other than where it fetches from, nothing was pushed: the push would have carried what was not scanned or reviewed, or gone where nothing was measured. The commit is still on its branch in the folder. For a base that moved, run the publication again on a fresh branch, so what the push would add is measured, scanned and reviewed against the base as it is now; for a push URL, the folder has to push where it fetches before publishing again. Where it says the push carries no scan receipt the executor issued, or one more than a day old — the executor restarted, or the approval waited that long — nothing was pushed either; run the publication again on a fresh branch, so the executor that pushes is the one that scanned. Otherwise git's own message says why the remote refused the update.",
+            "Where the message above says `origin`'s base branch is somewhere other than where the receipt's range starts, or that `origin` pushes somewhere other than where it fetches from, nothing was pushed: the push would have carried what was not scanned or reviewed, or gone where nothing was measured. The commit is still on its branch in the folder. For a base that moved, run the publication again on a fresh branch, so what the push would add is measured, scanned and reviewed against the base as it is now; for a push URL, the folder has to push where it fetches before publishing again. Where it says the push carries no scan receipt the executor issued, or one more than a day old — the executor restarted, or the approval waited that long — nothing was pushed either; run the publication again on a fresh branch, so the executor that pushes is the one that scanned. Where it says no approval of this push is on record, nothing was pushed: the operator's approval in this run is what lets a range the scan did not clear leave the machine. Otherwise git's own message says why the remote refused the update.",
           type: 'operation' as const,
           operation: 'host.process.exec',
           // The scan as well as the approval: under `never` over a cleared
@@ -673,16 +674,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             bindingId: { kind: 'run_input' as const, path: 'bindingId' },
             refspec: { kind: 'task_output' as const, taskId: 'commit', path: 'commit.pushRefspec' },
             base: { kind: 'run_input' as const, path: 'base' },
-            range: { kind: 'task_output' as const, taskId: 'commit', path: 'commit.pushRange' },
             receipt: { kind: 'task_output' as const, taskId: 'scan-commit', path: 'receipt' },
-            // Absent where the approval did not ask; where it did, what it
-            // recorded — the executor pushes a range the scan did not clear
-            // only with it.
-            approvedReceipt: {
-              kind: 'task_output' as const,
-              taskId: 'approve-push',
-              path: 'approvedCall.input.receipt',
-            },
           },
           context: {
             strategy: 'scoped' as const,
@@ -696,8 +688,8 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           inputTemplate: {
             bindingId: { $bind: 'bindingId' },
             command: PUSH_COMMAND,
-            pushBase: { base: { $bind: 'base' }, range: { $bind: 'range' } },
-            scan: { receipt: { $bind: 'receipt' }, approvedReceipt: { $bind: 'approvedReceipt' } },
+            pushBase: { $bind: 'base' },
+            scan: { receipt: { $bind: 'receipt' } },
             cwd: '.',
             timeoutMs: 600_000,
           },

@@ -612,10 +612,9 @@ export async function resolveCommit(root: string, ref: string): Promise<string> 
   }
 }
 
-// How the operator's git reaches a remote when it is not in their config: the
-// ssh agent and ssh command, the proxy (curl reads `http_proxy` only in lower
-// case, so both spellings travel), the CA bundle a corporate proxy needs, and
-// `XDG_CONFIG_HOME`, where git finds a global config kept outside `~`.
+// How the operator's git reaches a remote, and proves who it is there, outside their
+// config: ssh agent and command, proxy (curl reads `http_proxy` only in lower case, so
+// both spellings travel), CA bundle, a global config outside `~`, and credentials.
 const TRANSPORT_ENV = [
   'SSH_AUTH_SOCK',
   'GIT_SSH_COMMAND',
@@ -628,6 +627,11 @@ const TRANSPORT_ENV = [
   'SSL_CERT_FILE',
   'GIT_SSL_CAINFO',
   'XDG_CONFIG_HOME',
+  'GH_TOKEN', // what the `gh` credential helper their config names answers with
+  'GITHUB_TOKEN',
+  'GIT_ASKPASS', // how git and ssh ask for a password or passphrase with no terminal
+  'SSH_ASKPASS',
+  'DISPLAY', // where a graphical askpass opens
 ] as const;
 
 /**

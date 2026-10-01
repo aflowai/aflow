@@ -14,8 +14,10 @@ import { PayloadAccessError } from '@aflow/executor-runtime';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { PUSH_REQUIRED_OPTIONS } from '../bindings.js';
+import { createHostCommitHandler } from '../handlers/commitHandlers.js';
 import { createHostPatchHandler } from '../handlers/patchHandlers.js';
 import { createHostProcessHandler } from '../handlers/processHandlers.js';
+import { noPushApprovals } from './fixtures/pushApprovals.js';
 import { fetchedBranch, fetchHeadSource } from '../pushBase.js';
 import { issueScanReceipt } from '../scanReceipt.js';
 import { INLINE_DIFF_CAP_BYTES } from '../worktree.js';
@@ -922,22 +924,38 @@ describe('measuring what a push of the commit would add', () => {
       await writeFile(policyPath, JSON.stringify(policy));
     });
 
-    async function push(range: string, remote = 'origin', pushBase: unknown = undefined) {
-      const sha = range.split('..')[1] ?? '';
+    /** A push of the range's last commit, carrying `receipt` or a clean one for the range. */
+    async function push(range: string, remote = 'origin', receipt?: string) {
+      const [from = '', sha = ''] = range.split('..');
       const captured: Captured = {};
-      const result = await createHostProcessHandler(policyPath).execute({
+      const result = await createHostProcessHandler(policyPath, noPushApprovals).execute({
         ...(contextFor(
           {
             bindingId: 'hb_push',
             command: ['git', 'push', ...PUSH_REQUIRED_OPTIONS, remote, `${sha}:refs/heads/aflow/x`],
-            pushBase: pushBase ?? { base: 'main', range },
-            scan: { receipt: issueScanReceipt({ bindingId: 'hb_push', sha, outcome: 'clean' }) },
+            pushBase: 'main',
+            scan: {
+              receipt:
+                receipt ??
+                issueScanReceipt({ bindingId: 'hb_push', base: from, sha, outcome: 'clean' }),
+            },
           },
           captured,
         ) as object),
         operationId: 'host.process.exec',
       } as never);
       return { result, message: result.error?.message ?? '' };
+    }
+
+    /** What `host.commit.scan` returns of `range` in the pushing folder. */
+    async function scanned(range: string): Promise<string> {
+      const captured: Captured = {};
+      const result = await createHostCommitHandler(policyPath).execute({
+        ...(contextFor({ bindingId: 'hb_push', range }, captured) as object),
+        operationId: 'host.commit.scan',
+      } as never);
+      expect(result.status, range).toBe('SUCCEEDED');
+      return String(captured.output?.['receipt']);
     }
 
     async function pushedBranch(remote = origin): Promise<string | undefined> {
@@ -958,12 +976,38 @@ describe('measuring what a push of the commit would add', () => {
       expect(await pushedBranch()).toBe(sha);
     }, 30_000);
 
-    it('pushes when origin moved the base forward, which holds what was measured', async () => {
-      const { range, sha } = await measured();
-      await pushedElsewhere();
-      const { result } = await push(range);
+    it('refuses a receipt that starts above where origin is, which leaves unread what the push carries', async () => {
+      const unpushed = await commitLocally('unpushed.txt');
+      const { range, from, sha } = await measured();
+      expect((await git(root, 'rev-parse', `${sha}^`)).trim()).toBe(unpushed);
+
+      // The scans a caller could choose: the commit alone, and the commit over
+      // its parent — each reads less than the push would send.
+      for (const narrow of [`${sha}..${sha}`, `${unpushed}..${sha}`]) {
+        const { result, message } = await push(range, 'origin', await scanned(narrow));
+        expect(result.status, narrow).toBe('FAILED');
+        expect(message, narrow).toContain(
+          `\`origin/main\` is at \`${from}\`, so this push sends \`${from}..${sha}\`, and its ` +
+            `receipt is for a scan of \`${narrow}\``,
+        );
+        expect(await pushedBranch()).toBeUndefined();
+      }
+
+      const { result } = await push(range, 'origin', await scanned(range));
       expect(result.status).toBe('SUCCEEDED');
       expect(await pushedBranch()).toBe(sha);
+    }, 30_000);
+
+    it('fails when origin moved the base forward, since the receipt is for another range', async () => {
+      const { range, from, sha } = await measured();
+      const now = await pushedElsewhere();
+      const { result, message } = await push(range);
+      expect(result.status).toBe('FAILED');
+      expect(message).toContain(
+        `\`origin/main\` is at \`${now}\`, so this push sends \`${now}..${sha}\`, and its ` +
+          `receipt is for a scan of \`${from}..${sha}\``,
+      );
+      expect(await pushedBranch()).toBeUndefined();
     }, 30_000);
 
     it('fails when origin rewound the base, which would send what the scan left out', async () => {
@@ -976,9 +1020,9 @@ describe('measuring what a push of the commit would add', () => {
       await git(root, 'push', '-q', '--force', 'origin', `${before}:refs/heads/main`);
       const { result, message } = await push(range);
       expect(result.status).toBe('FAILED');
-      expect(message).toContain(`\`origin/main\` was at \`${unpushed}\``);
-      expect(message).toContain(`is at \`${before}\` now, which no longer holds it`);
-      expect(message).toContain('The publication has to run again');
+      expect(message).toContain(`\`origin/main\` is at \`${before}\``);
+      expect(message).toContain(`its receipt is for a scan of \`${range}\``);
+      expect(message).toContain('Nothing was pushed');
       expect(await pushedBranch()).toBeUndefined();
     }, 30_000);
 
@@ -998,7 +1042,7 @@ describe('measuring what a push of the commit would add', () => {
 
       const { result, message } = await push(range);
       expect(result.status).toBe('FAILED');
-      expect(message).toContain(`is at \`${before}\` now, which no longer holds it`);
+      expect(message).toContain(`\`origin/main\` is at \`${before}\``);
       expect(await pushedBranch()).toBeUndefined();
     }, 30_000);
 
@@ -1012,8 +1056,8 @@ describe('measuring what a push of the commit would add', () => {
       await git(root, 'push', '-q', '--force', 'origin', `${sibling}:refs/heads/main`);
       const { result, message } = await push(range);
       expect(result.status).toBe('FAILED');
-      expect(message).toContain(`was at \`${from}\``);
-      expect(message).toContain(`is at \`${sibling}\` now`);
+      expect(message).toContain(`\`origin/main\` is at \`${sibling}\``);
+      expect(message).toContain(`its receipt is for a scan of \`${from}..`);
       expect(await pushedBranch()).toBeUndefined();
     }, 30_000);
 
@@ -1051,12 +1095,12 @@ describe('measuring what a push of the commit would add', () => {
       expect(await pushedBranch()).toBeUndefined();
 
       const captured: Captured = {};
-      const notPush = await createHostProcessHandler(policyPath).execute({
+      const notPush = await createHostProcessHandler(policyPath, noPushApprovals).execute({
         ...(contextFor(
           {
             bindingId: 'hb_push',
             command: ['git', 'status'],
-            pushBase: { base: 'main', range },
+            pushBase: 'main',
           },
           captured,
         ) as object),

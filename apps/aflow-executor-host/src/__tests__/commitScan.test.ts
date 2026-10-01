@@ -20,6 +20,7 @@ import { HostCommitScanInputSchema, HostCommitScanOutputSchema } from '@aflow/sc
 
 import { SCAN_MAX_FILE_BYTES, SCAN_MAX_LINE_BYTES, SCAN_MAX_LISTED } from '../commitScan.js';
 import { createHostHandler } from '../handlers/hostHandler.js';
+import { noPushApprovals } from './fixtures/pushApprovals.js';
 import {
   endsInAllowComment,
   isEnvFile,
@@ -426,7 +427,7 @@ function contextFor(input: unknown, captured: Captured, spaceId = 'space-a'): ne
 
 async function scan(range: string, spaceId?: string, texts?: Record<string, string>) {
   const captured: Captured = { logged: [] };
-  const result = await createHostHandler(policyPath).execute(
+  const result = await createHostHandler(policyPath, noPushApprovals).execute(
     contextFor({ bindingId: 'hb_app', range, ...(texts ? { texts } : {}) }, captured, spaceId),
   );
   return { result, captured };

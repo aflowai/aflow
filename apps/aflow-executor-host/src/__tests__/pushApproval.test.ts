@@ -23,6 +23,7 @@ import {
 
 import { HostBindingSchema, HostPolicySchema, loadHostPolicy } from '../bindings.js';
 import { createHostHandler } from '../handlers/hostHandler.js';
+import { noPushApprovals } from './fixtures/pushApprovals.js';
 import { serializePolicy, writePolicyAtomically } from '../policyFile.js';
 import {
   chosenPushApproval,
@@ -271,7 +272,7 @@ describe('host.binding.inspect', () => {
 
   it('returns the folder and its branch policy with the posture, and nothing else', async () => {
     const captured: Captured = {};
-    const result = await createHostHandler(policyPath).execute(
+    const result = await createHostHandler(policyPath, noPushApprovals).execute(
       contextFor({ bindingId: 'hb_app' }, captured),
     );
     expect(result.status).toBe('SUCCEEDED');
@@ -283,7 +284,7 @@ describe('host.binding.inspect', () => {
 
   it('reads a folder that never chose a posture as the default now', async () => {
     const captured: Captured = {};
-    const result = await createHostHandler(policyPath).execute(
+    const result = await createHostHandler(policyPath, noPushApprovals).execute(
       contextFor({ bindingId: 'hb_unchosen' }, captured),
     );
     expect(result.status).toBe('SUCCEEDED');
@@ -295,7 +296,7 @@ describe('host.binding.inspect', () => {
 
   it('answers for a folder that runs nothing, and says it pushes nothing', async () => {
     const captured: Captured = {};
-    const result = await createHostHandler(policyPath).execute(
+    const result = await createHostHandler(policyPath, noPushApprovals).execute(
       contextFor({ bindingId: 'hb_notes' }, captured),
     );
     expect(result.status).toBe('SUCCEEDED');
@@ -304,7 +305,7 @@ describe('host.binding.inspect', () => {
 
   it('refuses another workspace naming the folder', async () => {
     const captured: Captured = {};
-    const result = await createHostHandler(policyPath).execute(
+    const result = await createHostHandler(policyPath, noPushApprovals).execute(
       contextFor({ bindingId: 'hb_app' }, captured, 'space-b'),
     );
     expect(result.status).toBe('FAILED');
@@ -313,7 +314,7 @@ describe('host.binding.inspect', () => {
 
   it('refuses a folder the machine does not offer', async () => {
     const captured: Captured = {};
-    const result = await createHostHandler(policyPath).execute(
+    const result = await createHostHandler(policyPath, noPushApprovals).execute(
       contextFor({ bindingId: 'hb_missing' }, captured),
     );
     expect(result.status).toBe('FAILED');
