@@ -13,10 +13,7 @@ import {
   successWithData,
   validationError,
 } from '@aflow/executor-runtime';
-import {
-  HostBindingInspectInputSchema,
-  type HostBindingInspectOutputSchema,
-} from '@aflow/schemas';
+import { HostBindingInspectInputSchema, type HostBindingInspectOutputSchema } from '@aflow/schemas';
 import type { z } from 'zod';
 
 import { HostBindingError, loadHostPolicy, requireBinding, requireSpace } from '../bindings.js';

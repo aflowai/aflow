@@ -82,9 +82,7 @@ describe('hostFolderEntry', () => {
 
   it('names no posture for a folder that pushes nothing, or whose machine is not running', () => {
     expect(hostFolderEntry(row, 'never')).not.toHaveProperty('pushApproval');
-    expect(hostFolderEntry({ ...row, branchPrefix: 'aflow/' })).not.toHaveProperty(
-      'pushApproval',
-    );
+    expect(hostFolderEntry({ ...row, branchPrefix: 'aflow/' })).not.toHaveProperty('pushApproval');
   });
 });
 

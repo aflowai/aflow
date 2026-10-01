@@ -735,7 +735,7 @@ describe('a push runs only where the folder allows one', () => {
         'host.process.exec',
         {
           bindingId: 'hb_push',
-          command: ['git', 'push', '--set-upstream', './remote.git', `${sha}:refs/heads/${branch}`],
+          command: ['git', 'push', './remote.git', `${sha}:refs/heads/${branch}`],
         },
         captured,
       ),

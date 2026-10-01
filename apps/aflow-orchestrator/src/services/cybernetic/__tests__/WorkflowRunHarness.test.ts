@@ -484,6 +484,37 @@ describe('onWorkflowTaskComplete', () => {
       expect(mockClearCompletionPending).toHaveBeenCalledOnce();
     });
 
+    it('a failed optional task blocks none of its dependents and leaves them to readiness', async () => {
+      const failedReview = buildTaskRow({ taskId: 'review-commit', status: 'failed' });
+      mockListTaskRows.mockResolvedValueOnce([failedReview]);
+      mockLoadRunById.mockResolvedValue(buildRunDetail([failedReview], 'running'));
+      mockResolveWorkflowForRunRevision.mockResolvedValue({
+        workflow: {
+          tasks: [
+            { taskId: 'review-commit', name: 'Review', goal: 'review', optional: true },
+            { taskId: 'approve-push', name: 'Approve', goal: 'ask', dependsOn: ['review-commit'] },
+          ],
+          slug: 'test-skill',
+        },
+        source: 'revision',
+      });
+      mockComputeDescendants.mockReturnValue(new Set(['approve-push']));
+      mockComputeReadyTasksWithWhen.mockReturnValue({ ready: [], skipped: [], errors: [] });
+      mockLoadPendingWaiters.mockResolvedValue([]);
+
+      await onWorkflowTaskComplete(deps, {
+        tenantId: TENANT,
+        workflowExecution: { runId: RUN_ID, taskId: 'review-commit', attempt: 1 },
+        outcome: { kind: 'failed', failureReason: 'the review could not start' },
+      });
+
+      expect(mockBlockDescendantTasks).not.toHaveBeenCalled();
+      const failedOptional = mockComputeReadyTasksWithWhen.mock.calls[0]?.[4] as Set<string>;
+      expect([...failedOptional]).toEqual(['review-commit']);
+      // The approval has not run, so the run is waiting on it, not over.
+      expect(mockLedgerCompleteRun).not.toHaveBeenCalled();
+    });
+
     it('paused duplicate notifies waiters only — does NOT re-pause the run', async () => {
       mockListTaskRows.mockResolvedValueOnce([buildTaskRow({ status: 'paused' })]);
       mockLoadRunById.mockResolvedValue(
@@ -3617,6 +3648,47 @@ describe('cancelRun — Plan 132v2 §Phase 4 (4.5c replay-safe)', () => {
       .map((c) => c[3] as { eventType?: string })
       .filter((ev) => ev?.eventType === 'WorkflowRunUpdate');
     expect(runUpdates).toHaveLength(0);
+  });
+
+  it('cancels a run one of its tasks started, once the run itself is cancelled', async () => {
+    const worker = '33333333-3333-3333-3333-333333333333';
+    const childRun = '00000000-0000-0000-0000-0000000000c1';
+    mockLoadRunById.mockResolvedValue(buildRunDetail([], 'running'));
+    mockListCompletionPendingForRun
+      .mockResolvedValueOnce([
+        {
+          id: 'pending-review',
+          runId: RUN_ID,
+          taskId: 'review-commit',
+          attempt: 1,
+          workerSessionId: worker,
+          detectedAt: new Date(),
+          dueAt: new Date(),
+          attemptCount: 0,
+          lastError: null,
+        },
+      ])
+      .mockResolvedValueOnce([]);
+    mockLoadParkedStepWaitersForSession.mockResolvedValueOnce([
+      { id: 'waiter-review', runId: childRun, waiterSessionId: worker },
+    ]);
+    mockCancelNonTerminalTasksForRun.mockResolvedValue({ cancelledTaskIds: [] });
+    mockClearAllCompletionPendingForRun.mockResolvedValue(undefined);
+    mockLedgerCompleteRun.mockResolvedValue(true);
+    mockLoadPendingWaiters.mockResolvedValue([]);
+
+    await cancelRun(deps, TENANT, RUN_ID, { cancelledBy: 'operator' });
+
+    expect(mockLoadParkedStepWaitersForSession).toHaveBeenCalledWith(deps.db, TENANT, worker);
+    const completions = mockLedgerCompleteRun.mock.calls.map(
+      (c) => c[2] as { runId: string; status: string; cancellation?: { reason?: string } },
+    );
+    expect(completions.map((c) => [c.runId, c.status])).toEqual([
+      [RUN_ID, 'cancelled'],
+      [childRun, 'cancelled'],
+    ]);
+    expect(completions[1]?.cancellation).toMatchObject({ cancelledBy: 'system' });
+    expect(completions[1]?.cancellation?.reason).toContain(RUN_ID);
   });
 });
 

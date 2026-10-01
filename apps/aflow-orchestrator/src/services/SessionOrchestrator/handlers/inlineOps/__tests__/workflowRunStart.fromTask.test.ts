@@ -22,6 +22,7 @@ const mockAddWaiter = vi.fn();
 const mockWaitForInput = vi.fn();
 const mockStoreResumeContract = vi.fn();
 const mockPauseRun = vi.fn();
+const mockCheckCatalogSkillProjection = vi.fn();
 
 vi.mock('@aflow/cybernetic-runtime', () => ({
   listActiveRunsForWorkflow: (...args: unknown[]) => mockListActiveRunsForWorkflow(...args),
@@ -38,6 +39,7 @@ vi.mock('@aflow/cybernetic-runtime', () => ({
   resolveSkillForWorkflow: vi.fn().mockResolvedValue(null),
   listCampaigns: vi.fn().mockResolvedValue([]),
   loadRunById: (...args: unknown[]) => mockLoadRunById(...args),
+  checkCatalogSkillProjection: (...args: unknown[]) => mockCheckCatalogSkillProjection(...args),
   ensureActiveCampaign: vi.fn(),
   selectCampaignForRunStart: vi.fn(),
   buildCampaignRequiredErrorDetails: vi.fn(),
@@ -173,8 +175,8 @@ const WORKER = '77777777-2222-3333-4444-555555555555';
 const DRIVER = '99999999-2222-3333-4444-555555555555';
 const PARENT_RUN = 'parent-run-1';
 
-function makeTaskArgs(wait?: string): InlineHandlerArgs {
-  const input = { slug: 'lead-scoring', ...(wait ? { wait } : {}) };
+function makeTaskArgs(wait?: string, extra: Record<string, unknown> = {}): InlineHandlerArgs {
+  const input = { slug: 'lead-scoring', ...(wait ? { wait } : {}), ...extra };
   const inputRef = `inline:${Buffer.from(JSON.stringify(input)).toString('base64')}`;
   return {
     redis: {} as never,
@@ -275,11 +277,14 @@ describe('workflow.run.start from a workflow task', () => {
       expect(result.status).toBe('FAILED');
       expect(result.error?.code).toBe('WORKFLOW_TASK_WAIT_UNSUPPORTED');
       // Answered to the task, not to a session.
-      expect(result.workflowExecution).toMatchObject({ runId: PARENT_RUN, taskId: 'review-commit' });
+      expect(result.workflowExecution).toMatchObject({
+        runId: PARENT_RUN,
+        taskId: 'review-commit',
+      });
     }
   });
 
-  it('waits through a preflight pause: the run pauses, and the task stays unanswered', async () => {
+  it('pauses the run at a preflight and leaves the answer to its waiter, the task', async () => {
     mockCheckWorkflowCredentialsPreflight.mockResolvedValue({
       ok: false,
       missingBindings: [{ bindingId: 'b1', bindingName: 'CRM', missingFields: ['apiKey'] }],
@@ -318,5 +323,64 @@ describe('workflow.run.start from a workflow task', () => {
     expect(result.status).toBe('FAILED');
     expect(result.error?.code).toBe('WORKFLOW_RUN_START_WAITER_INSERT_FAILED');
   });
-});
 
+  it('records the run one level deeper than the run whose task started it', async () => {
+    await handleWorkflowCrudInline(makeTaskArgs('until_complete'));
+
+    expect(mockRecordRunStart.mock.calls[0]![2]).toMatchObject({ metadata: { runDepth: 2 } });
+  });
+
+  it('refuses to start a run past the deepest a chain of task-started runs may go, naming the depth', async () => {
+    mockLoadRunById.mockResolvedValue({
+      runId: PARENT_RUN,
+      sessionId: DRIVER,
+      metadata: { runDepth: 2 },
+    });
+
+    await handleWorkflowCrudInline(makeTaskArgs('until_complete'));
+
+    expect(mockRecordRunStart).not.toHaveBeenCalled();
+    expect(mockAddWaiter).not.toHaveBeenCalled();
+    const [[, result]] = mockAddStepResult.mock.calls as unknown as Array<
+      [unknown, { status: string; error?: { code?: string; message?: string } }]
+    >;
+    expect(result.status).toBe('FAILED');
+    expect(result.error?.code).toBe('WORKFLOW_RUN_DEPTH_EXCEEDED');
+    expect(result.error?.message).toContain('at depth 2');
+    expect(result.error?.message).toContain('at most 2 deep');
+    expect(result.error?.message).toContain('"lead-scoring" at depth 3');
+  });
+
+  it('refuses a workflow that is not the catalog skill it was named as, with the reason', async () => {
+    const message =
+      '"lead-scoring" in this space has been edited since the Store installed it from "lead-scoring", so it is no longer that skill. Update it from the Store, replacing the edits.';
+    mockCheckCatalogSkillProjection.mockResolvedValue({ ok: false, reason: 'modified', message });
+
+    await handleWorkflowCrudInline(makeTaskArgs('until_complete', { catalogId: 'lead-scoring' }));
+
+    expect(mockCheckCatalogSkillProjection).toHaveBeenCalledWith(expect.anything(), {
+      tenantId: TENANT,
+      spaceId: SPACE,
+      catalogId: 'lead-scoring',
+      slug: 'lead-scoring',
+    });
+    expect(mockRecordRunStart).not.toHaveBeenCalled();
+    const [[, result]] = mockAddStepResult.mock.calls as unknown as Array<
+      [unknown, { status: string; error?: { code?: string; message?: string } }]
+    >;
+    expect(result.status).toBe('FAILED');
+    expect(result.error?.code).toBe('WORKFLOW_NOT_CATALOG_SKILL');
+    expect(result.error?.message).toBe(message);
+  });
+
+  it('starts the catalog skill it was named as, and checks nothing when none is named', async () => {
+    mockCheckCatalogSkillProjection.mockResolvedValue({ ok: true });
+    await handleWorkflowCrudInline(makeTaskArgs('until_complete', { catalogId: 'lead-scoring' }));
+    expect(mockStartRun).toHaveBeenCalledOnce();
+
+    vi.clearAllMocks();
+    await handleWorkflowCrudInline(makeTaskArgs('until_complete'));
+    expect(mockCheckCatalogSkillProjection).not.toHaveBeenCalled();
+    expect(mockStartRun).toHaveBeenCalledOnce();
+  });
+});

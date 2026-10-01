@@ -105,9 +105,28 @@ export const WorkflowRunMetadataSchema = z
   .object({
     parentInstructions: StoredParentInstructionsSchema.optional(),
     parentTaskInputs: StoredParentTaskInputsSchema.optional(),
+    /**
+     * Where the run sits in a chain of runs started by workflow tasks: one more
+     * than the run whose task started it. Absent on a run nothing but a
+     * conversation or an operator started, which is depth 1.
+     */
+    runDepth: z.number().int().min(2).optional(),
   })
   .passthrough();
 export type WorkflowRunMetadata = z.infer<typeof WorkflowRunMetadataSchema>;
+
+/**
+ * The deepest a chain of task-started runs may reach, counting the run at its
+ * head as 1. A publication and the review it starts of its own commit are two;
+ * nothing a task starts needs a third, and without a bound a workflow that
+ * starts itself would never stop.
+ */
+export const MAX_WORKFLOW_RUN_DEPTH = 2;
+
+export function workflowRunDepth(metadata: unknown): number {
+  const parsed = WorkflowRunMetadataSchema.safeParse(metadata ?? {});
+  return parsed.success ? (parsed.data.runDepth ?? 1) : 1;
+}
 
 /**
  * Normalise the discriminated-union input into the canonical stored shape.

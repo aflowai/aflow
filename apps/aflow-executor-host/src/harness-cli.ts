@@ -189,7 +189,8 @@ async function list(): Promise<void> {
     for (const { id, branchPolicy } of pushing) {
       console.log(
         `  ${id} — under ${branchPolicy.branchPrefix}, ${describePushApproval(branchPolicy.pushApproval)}`,
-      );    }
+      );
+    }
   }
 
   const unconfigured = discovered.filter((d) => !policy.harnesses.some((h) => h.id === d.id));

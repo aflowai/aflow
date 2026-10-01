@@ -61,7 +61,7 @@ export const WORKFLOW_TASK_SAFE_INLINE_OPERATIONS: ReadonlySet<string> = new Set
   'capability.binding.propose',
   'store.listing.install',
   'workflow.learn',
-  // Waits on the run it starts until it completes; the waiter answers the task
+  // Waits on the run it starts, no deeper than MAX_WORKFLOW_RUN_DEPTH; the waiter answers the task
   'workflow.run.start',
   'agent.schedule.snooze',
 ]);

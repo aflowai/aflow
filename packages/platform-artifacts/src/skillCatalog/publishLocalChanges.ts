@@ -5,6 +5,7 @@ import {
   STORED_PAYLOAD_REF_PATTERN,
   type SkillCatalogEntry,
 } from '@aflow/schemas';
+import { REVIEW_LOCAL_CHANGES } from './reviewLocalChanges.js';
 
 /**
  * The push argv, pinned by the skill rather than bound as a whole. Only the
@@ -14,10 +15,17 @@ import {
  * absence of a force flag are the skill's, so no caller can turn a publish into
  * an overwrite.
  */
-const PUSH_COMMAND = ['git', 'push', '--set-upstream', 'origin', { $bind: 'refspec' }];
+const PUSH_COMMAND = ['git', 'push', 'origin', { $bind: 'refspec' }];
 
-/** The skill whose verdict on the commit can stand in for the operator's approval. */
-const REVIEW_SKILL_SLUG = 'review-local-changes';
+/**
+ * The skill whose verdict on the commit can stand in for the operator's
+ * approval — named by its catalog entry, so only that skill as the Store
+ * installed it may skip the approval, never whatever holds its slug.
+ */
+const REVIEW_SKILL = {
+  catalogId: REVIEW_LOCAL_CHANGES.catalogId,
+  slug: REVIEW_LOCAL_CHANGES.bundle.workflow.slug,
+};
 
 /** The one posture under which the publication reviews its commit to decide whether to ask. */
 const REVIEW_GATED_POSTURE: HostPushApproval = 'unless-unreviewed';
@@ -84,7 +92,7 @@ const BASE_SHA_SCHEMA = {
 
 const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'publish-local-changes',
-  version: 8,
+  version: 9,
   name: 'Publish Local Changes',
   tagline:
     'Commit a patch onto a branch of a connected repository, then push it and open the pull request — asking the operator first unless the folder says otherwise.',
@@ -96,7 +104,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
 
 **Never pass a commission's \`patch\` text.** It is a copy for reading, cut short on a large change, and the run's inputs are capped at ${String(RUN_INPUTS_KB)} KB together. \`patchRef\` names the whole diff at any size.
 
-**When it asks before pushing**: the folder's push approval decides, and the machine block shows it as \`pushApproval\`. \`always\`: the run waits for the operator's approval before every push. \`never\`: it pushes without asking. \`unless-unreviewed\`: the run starts a Local Code Review of the commit it made, waits for it, and pushes without asking only when it returns \`approve\` — on any other verdict, or a review that did not finish, it waits for the operator. A folder connected without naming one is \`${HOST_PUSH_APPROVAL_DEFAULT}\`, which stays the default until a publication scans its commit for secrets before the push, and \`unless-unreviewed\` becomes the default with that scan. Either way the run needs no review started beside it.
+**When it asks before pushing**: the folder's push approval decides, and the machine block shows it as \`pushApproval\`. \`always\`: the run waits for the operator's approval before every push. \`never\`: it pushes without asking. \`unless-unreviewed\`: the run starts a Local Code Review of the commit it made, waits for it, and pushes without asking only when it returns \`approve\` — on any other verdict, or a review that did not finish or could not start, it waits for the operator. The review is the catalog's Local Code Review as the Store installed it in the space; an edited copy is refused, and the run asks. A folder connected without naming one is \`${HOST_PUSH_APPROVAL_DEFAULT}\`, which stays the default until a publication scans its commit for secrets before the push, and \`unless-unreviewed\` becomes the default with that scan. Either way the run needs no review started beside it.
 
 **On an existing branch**: a fix that was commissioned from a branch (\`base: <branch>\` on the commission) is published onto that branch by naming it as \`branch\` and passing the commission's \`baseSha\` as \`baseSha\`; a branch is reused only that way, and a fresh change takes a fresh branch.
 
@@ -409,6 +417,9 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             expression: `tasks.read-push-approval.output.branchPolicy.pushApproval == '${REVIEW_GATED_POSTURE}'`,
             onMissingRef: 'skip' as const,
           },
+          // A review that could not run is no verdict, not a failed
+          // publication: the approval reads its status and asks.
+          optional: true,
           // A second attempt starts a second review.
           retryability: 'unsafe' as const,
           maxAttempts: 1,
@@ -426,7 +437,8 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             },
           },
           inputTemplate: {
-            slug: REVIEW_SKILL_SLUG,
+            slug: REVIEW_SKILL.slug,
+            catalogId: REVIEW_SKILL.catalogId,
             inputs: {
               bindingId: { $bind: 'bindingId' },
               range: { $bind: 'range' },
@@ -434,8 +446,8 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             },
             wait: 'until_complete',
           },
-          // A review that failed or was cancelled carries no promoted output,
-          // so its verdict reads null and the approval is asked for.
+          // A review that failed, was cancelled or paused carries no promoted
+          // output, so its verdict reads null and the approval is asked for.
           outputProjection: {
             verdict: { path: 'result.output.verdict', onMissing: 'null' as const },
             outcome: { path: 'outcome', onMissing: 'error' as const },
@@ -454,7 +466,8 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
                 },
                 outcome: {
                   type: 'string',
-                  description: 'How the review run ended: completed, failed or cancelled.',
+                  description:
+                    'How the review run ended: completed, failed or cancelled — or paused, when it stopped for something only an operator can supply and was cancelled.',
                 },
                 reviewRunId: { type: 'string', minLength: 1 },
               },
@@ -471,10 +484,13 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           failureMode: 'isolate' as const,
           dependsOn: ['read-repository', 'review-commit'],
           approves: ['commit'],
+          // A review task that failed has no output to compare, so its status
+          // carries the same answer as a null verdict.
           when: {
             anyOf: [
               "tasks.read-push-approval.output.branchPolicy.pushApproval == 'always'",
               "tasks.review-commit.output.verdict != 'approve'",
+              "tasks.review-commit.status == 'failed'",
             ],
             onMissingRef: 'skip' as const,
           },
@@ -482,7 +498,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           // carry, so each case is one line and the verdict is named where the
           // run shows it.
           pauseInstruction:
-            "The change is committed on its branch in the connected folder and nothing has left the machine. Asked because of the folder's push approval, shown with the commit:\n- `always`: it asks before every push, and no review ran.\n- `unless-unreviewed`: this run's Local Code Review of the commit did not return `approve` — its verdict is on the \"Review the commit\" task, null where the review did not finish.\nApproving pushes exactly that commit to its branch on `origin` and then opens a pull request against the base branch. Declining leaves the branch local: nothing is pushed and no pull request is opened.",
+            'The change is committed on its branch in the connected folder and nothing has left the machine. Asked because of the folder\'s push approval, shown with the commit:\n- `always`: it asks before every push, and no review ran.\n- `unless-unreviewed`: this run\'s Local Code Review of the commit did not return `approve` — its verdict is on the "Review the commit" task, null where the review did not finish, and that task failed where the review could not start.\nApproving pushes exactly that commit to its branch on `origin` and then opens a pull request against the base branch. Declining leaves the branch local: nothing is pushed and no pull request is opened.',
           actionPreview: {
             op: 'host.process.exec',
             inputBindings: {

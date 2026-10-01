@@ -156,7 +156,7 @@ describe('what a push may be', () => {
     ['HEAD onto a branch under the prefix', ['git', 'push', 'origin', 'HEAD:aflow/x']],
     [
       'a commit onto a full branch ref under the prefix',
-      ['git', 'push', '--set-upstream', 'origin', `${'c'.repeat(40)}:refs/heads/aflow/x`],
+      ['git', 'push', 'origin', `${'c'.repeat(40)}:refs/heads/aflow/x`],
     ],
     ['git reached by an absolute path', ['/usr/bin/git', 'push', 'origin', 'aflow/x']],
     ['--set-upstream spelled out', ['git', 'push', '--set-upstream', 'origin', 'aflow/x']],

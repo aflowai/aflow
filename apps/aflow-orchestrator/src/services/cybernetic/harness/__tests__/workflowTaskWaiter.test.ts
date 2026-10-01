@@ -1,7 +1,7 @@
 /**
  * Contract: a workflow task that started a run is answered when that run
- * ends, through the same result path an executor's answer takes, and by
- * nothing before.
+ * ends or pauses, through the same result path an executor's answer takes;
+ * a run that paused is cancelled, since nothing inside a task resumes it.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -38,6 +38,11 @@ vi.mock('../helpers.js', () => ({
 }));
 
 vi.mock('../sessionWakeup.js', () => ({ deliverSessionWakeup: vi.fn() }));
+
+const mockCancelRun = vi.fn();
+vi.mock('../cancel.js', () => ({
+  cancelRun: (...args: unknown[]) => mockCancelRun(...args),
+}));
 
 vi.mock('../../../../lib/orchestratorLogger.js', () => ({
   getOrchestratorLogger: () => ({
@@ -80,6 +85,7 @@ beforeEach(() => {
     runId: PARENT_RUN,
     taskId: 'review-commit',
     attempt: 1,
+    dispatchAttemptToken: `dispatch:${PARENT_RUN}:review-commit:1`,
   });
   // A run that promoted an approving verdict — which a run that did not
   // complete can also have done on the way.
@@ -93,11 +99,7 @@ describe('a workflow task waiting on the run it started', () => {
   it('is answered on completion, as its own task, with the run’s output', async () => {
     await notifyWaiters(deps, { tenantId: TENANT, runId: CHILD_RUN, outcome: 'completed' });
 
-    expect(mockLoadWorkflowTaskByWorkerSession).toHaveBeenCalledWith(
-      deps.db,
-      TENANT,
-      WORKER,
-    );
+    expect(mockLoadWorkflowTaskByWorkerSession).toHaveBeenCalledWith(deps.db, TENANT, WORKER);
     expect(mockAddStepResult).toHaveBeenCalledOnce();
     const [, result] = mockAddStepResult.mock.calls[0] as [unknown, Record<string, unknown>];
     expect(result).toMatchObject({
@@ -144,18 +146,66 @@ describe('a workflow task waiting on the run it started', () => {
     }
   });
 
-  it('stays waiting through a pause and a takeover', async () => {
+  it('answers a retried claim with that claim’s own token', async () => {
+    mockLoadWorkflowTaskByWorkerSession.mockResolvedValue({
+      runId: PARENT_RUN,
+      taskId: 'review-commit',
+      attempt: 2,
+      dispatchAttemptToken: `dispatch-retry:${PARENT_RUN}:review-commit:2`,
+    });
+
+    await notifyWaiters(deps, { tenantId: TENANT, runId: CHILD_RUN, outcome: 'completed' });
+
+    const [, result] = mockAddStepResult.mock.calls[0] as [unknown, Record<string, unknown>];
+    expect(result['workflowExecution']).toEqual({
+      runId: PARENT_RUN,
+      taskId: 'review-commit',
+      attempt: 2,
+      dispatchAttemptToken: `dispatch-retry:${PARENT_RUN}:review-commit:2`,
+    });
+  });
+
+  it('is answered with no output when the run pauses, and the paused run is cancelled', async () => {
     await notifyWaiters(deps, {
       tenantId: TENANT,
       runId: CHILD_RUN,
       outcome: 'paused',
       pauseVersion: 1,
     });
+
+    expect(mockAddStepResult).toHaveBeenCalledOnce();
+    const [, result] = mockAddStepResult.mock.calls[0] as [unknown, Record<string, unknown>];
+    expect(result).toMatchObject({ stepId: 'review-commit', status: 'SUCCEEDED' });
+    // The run promoted an approving verdict before it paused; none of it is
+    // the task's answer, so the gate reads the verdict as null.
+    expect(stored[0]).toMatchObject({ runId: CHILD_RUN, outcome: 'paused' });
+    expect(stored[0]).not.toHaveProperty('result');
+    expect(mockMarkWaiterNotified).toHaveBeenCalledWith(deps.db, TENANT, {
+      waiterId: 'waiter-1',
+      outcome: 'paused',
+    });
+    expect(mockCancelRun).toHaveBeenCalledOnce();
+    const [, tenant, runId, cancellation] = mockCancelRun.mock.calls[0] as [
+      unknown,
+      string,
+      string,
+      { cancelledBy: string; reason: string },
+    ];
+    expect([tenant, runId, cancellation.cancelledBy]).toEqual([TENANT, CHILD_RUN, 'system']);
+    expect(cancellation.reason).toContain(PARENT_RUN);
+    // Cancelled only once its waiter is retired, so its ending answers no one twice.
+    expect(mockMarkWaiterNotified.mock.invocationCallOrder[0]).toBeLessThan(
+      mockCancelRun.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it('stays waiting through a takeover', async () => {
     await notifyWaiters(deps, { tenantId: TENANT, runId: CHILD_RUN, outcome: 'handed_off' });
 
     expect(mockAddStepResult).not.toHaveBeenCalled();
     expect(mockMarkWaiterNotified).not.toHaveBeenCalled();
     expect(mockGetStepState).not.toHaveBeenCalled();
+    expect(mockCancelRun).not.toHaveBeenCalled();
   });
 
   it('leaves a Helmsman’s parked step to the session path', async () => {

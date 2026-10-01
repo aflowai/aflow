@@ -7,6 +7,7 @@ import {
   listCompletionPendingForRun,
   cancelNonTerminalTasksForRun,
   clearAllCompletionPendingForRun,
+  loadParkedStepWaitersForSession,
 } from '@aflow/cybernetic-runtime';
 import type {
   TenantId,
@@ -227,5 +228,49 @@ export async function cancelRun(
     }
   }
 
+  await cancelRunsStartedBy(deps, tenantId, runId, interruptedSessions);
+
   return { cancelledAt: new Date(), cancelledTaskIds, interruptedSessions };
+}
+
+/**
+ * A run started by one of this run's tasks has no other caller: left running,
+ * it works on for a parent that can no longer use its answer. It is cancelled
+ * after the parent is terminal, so its own ending reaches a task that is
+ * already cancelled and is dropped there.
+ */
+async function cancelRunsStartedBy(
+  deps: HarnessDeps,
+  tenantId: TenantId,
+  parentRunId: string,
+  workerSessionIds: readonly string[],
+): Promise<void> {
+  const tenantIdStr = tenantId as string;
+  for (const workerSessionId of workerSessionIds) {
+    let childRunIds: string[] = [];
+    try {
+      const waiting = await loadParkedStepWaitersForSession(deps.db, tenantIdStr, workerSessionId);
+      childRunIds = waiting.map((waiter) => waiter.runId);
+    } catch (err) {
+      logOrchestratorError(
+        `[cancelRun] could not read the runs session=${workerSessionId} of run=${parentRunId} started: ${err instanceof Error ? err.message : String(err)}`,
+        err,
+        { tenantId: tenantIdStr, runId: parentRunId, sessionId: workerSessionId },
+      );
+    }
+    for (const childRunId of childRunIds) {
+      try {
+        await cancelRun(deps, tenantId, childRunId, {
+          cancelledBy: 'system',
+          reason: `Run ${parentRunId}, whose task started it, was cancelled.`,
+        });
+      } catch (err) {
+        logOrchestratorError(
+          `[cancelRun] could not cancel run=${childRunId} started by run=${parentRunId}: ${err instanceof Error ? err.message : String(err)}`,
+          err,
+          { tenantId: tenantIdStr, runId: childRunId, parentRunId },
+        );
+      }
+    }
+  }
 }

@@ -16,6 +16,8 @@ import {
   normalizeInstructionsForStorage,
   deriveGoalRef,
   resolveCampaignGoal,
+  MAX_WORKFLOW_RUN_DEPTH,
+  workflowRunDepth,
 } from '@aflow/schemas';
 import {
   recordRunStart,
@@ -34,6 +36,7 @@ import {
   resolveSkillForWorkflow,
   listCampaigns,
   loadRunById,
+  checkCatalogSkillProjection,
   ensureActiveCampaign,
   selectCampaignForRunStart,
   buildCampaignRequiredErrorDetails,
@@ -89,20 +92,35 @@ export async function handleWorkflowRunStart(
 
   const db = getDatabase();
 
+  const parentRun =
+    args.workflowExecution !== undefined
+      ? await loadRunById(
+          db,
+          args.context.tenantId as string,
+          spaceId,
+          args.workflowExecution.runId,
+        )
+      : null;
   // The session whose authority and identity the run inherits. A workflow
   // task's own session id is synthetic and holds neither, so a child started
   // by a task runs as the session that started the task's run.
-  const drivingSessionId =
-    args.workflowExecution !== undefined
-      ? ((
-          await loadRunById(
-            db,
-            args.context.tenantId as string,
-            spaceId,
-            args.workflowExecution.runId,
-          )
-        )?.sessionId ?? args.context.runId)
-      : args.context.runId;
+  const drivingSessionId = parentRun?.sessionId ?? args.context.runId;
+
+  const runDepth =
+    args.workflowExecution !== undefined ? workflowRunDepth(parentRun?.metadata) + 1 : 1;
+  if (args.workflowExecution !== undefined && runDepth > MAX_WORKFLOW_RUN_DEPTH) {
+    await emitStepError(
+      args,
+      'WORKFLOW_RUN_DEPTH_EXCEEDED',
+      `Run ${args.workflowExecution.runId} is at depth ${String(runDepth - 1)} of a chain of runs started by workflow tasks, and such a chain goes at most ${String(MAX_WORKFLOW_RUN_DEPTH)} deep: task "${args.workflowExecution.taskId}" cannot start "${slug}" at depth ${String(runDepth)}.`,
+      startTime,
+      'validation',
+      false,
+      { depth: runDepth, maxDepth: MAX_WORKFLOW_RUN_DEPTH },
+    );
+    return;
+  }
+
   const workflow = await resolveWorkflowForStart(db, args.context.tenantId, spaceId, slug);
   if (!workflow) {
     const archivedDoc = await docRepo.getByPath(workflowDocPath(slug), spaceId, {
@@ -136,6 +154,27 @@ export async function handleWorkflowRunStart(
       'validation',
     );
     return;
+  }
+
+  if (input.catalogId !== undefined) {
+    const projection = await checkCatalogSkillProjection(db, {
+      tenantId: args.context.tenantId,
+      spaceId,
+      catalogId: input.catalogId,
+      slug,
+    });
+    if (!projection.ok) {
+      await emitStepError(
+        args,
+        'WORKFLOW_NOT_CATALOG_SKILL',
+        projection.message,
+        startTime,
+        'validation',
+        false,
+        { catalogId: input.catalogId, reason: projection.reason },
+      );
+      return;
+    }
   }
 
   // Resolve the skill once (reused for campaign resolution below) — its
@@ -592,6 +631,9 @@ export async function handleWorkflowRunStart(
     artifactHash: contractArtifactHash,
     validatedAt: validity.validatedAt,
   };
+  if (runDepth > 1) {
+    initialMetadata['runDepth'] = runDepth;
+  }
   if (input.instructions !== undefined) {
     initialMetadata['parentInstructions'] = normalizeInstructionsForStorage(input.instructions);
   }

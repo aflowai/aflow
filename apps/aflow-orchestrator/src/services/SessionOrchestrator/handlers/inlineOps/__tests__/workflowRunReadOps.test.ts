@@ -113,6 +113,8 @@ vi.mock('@aflow/cybernetic-runtime', () => ({
   listCompletionPendingForRun: (...args: unknown[]) => mockListCompletionPendingForRun(...args),
   clearAllCompletionPendingForRun: (...args: unknown[]) =>
     mockClearAllCompletionPendingForRun(...args),
+  // No task of the cancelled run started one of its own.
+  loadParkedStepWaitersForSession: vi.fn().mockResolvedValue([]),
   completeRun: (...args: unknown[]) => mockCompleteRun(...args),
   addAttentionItem: (...args: unknown[]) => mockAddAttentionItem(...args),
   // Other exports used at module load — return safe defaults.
