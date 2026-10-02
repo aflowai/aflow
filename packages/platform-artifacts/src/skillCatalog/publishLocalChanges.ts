@@ -120,9 +120,18 @@ const BASE_SHA_SCHEMA = {
     'The sha the commission reported in `baseSha`, 7 to 40 hexadecimal characters — not a branch or tag name.',
 };
 
+const MERGE_FROM_SCHEMA = {
+  type: 'string',
+  minLength: 7,
+  maxLength: 40,
+  pattern: '^[0-9a-fA-F]{7,40}$',
+  description:
+    'The sha the commission reported in `merge.from`, as it reported it — not a branch or tag name.',
+};
+
 const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'publish-local-changes',
-  version: 16,
+  version: 17,
   name: 'Publish Local Changes',
   tagline:
     'Commit a patch onto a branch of a connected repository, then push it and open the pull request — asking the operator first unless the folder says otherwise.',
@@ -134,9 +143,9 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
 
 **Never pass a commission's \`patch\` text.** It is a copy for reading, cut short on a large change, and the run's inputs are capped at ${String(RUN_INPUTS_KB)} KB together. \`patchRef\` names the whole diff at any size.
 
-**When it asks before pushing**: the folder's push approval decides, and the machine block shows it as \`pushApproval\`. \`always\`: the run waits for the operator's approval before every push. \`never\`: it pushes without asking. \`unless-unreviewed\`: the run starts a Local Code Review of everything the push would add — the commit it made, and any of the folder's own commits under it that \`origin\` does not have yet — waits for it, and pushes without asking only when it returns \`approve\` — on any other verdict, or a review that did not finish or could not start, it waits for the operator. The review is the catalog's Local Code Review as the Store installed it in the space; an edited copy is refused, and the run asks. Either way the run needs no review started beside it. A folder connected without naming a posture is \`${HOST_PUSH_APPROVAL_DEFAULT}\`, the default. Whatever the posture, the run scans every line the push would add, the headers and message of every commit it carries, and the pull request's title and summary for secrets before any of this, and a finding stops it with nothing pushed — which is what lets a review stand in for the operator. Only a range the scan cleared can go without asking: where a file was not read — binary, a NUL byte, more than the scan reads in one commit, a line too long to read, or a Git LFS pointer whose content the push would upload unread — or a line that looks like a secret ends in an \`aflow-scan: allow\` comment, no review runs and the run waits for the operator whatever the posture, \`never\` included, naming each such file and line. The comment never clears a line — whoever wrote the change could have written it — it only turns a stop into a question. Once the run asks, the operator's answer decides: a declined push pushes nothing, whatever the posture.
+**When it asks before pushing**: the folder's push approval decides, and the machine block shows it as \`pushApproval\`. \`always\`: the run asks the operator before every push. \`never\`: it pushes without asking. \`unless-unreviewed\`: the run starts a Local Code Review of everything the push would add — the commit it made, and any of the folder's own commits under it that \`origin\` does not have yet — waits for it, and pushes without asking only when it returns \`approve\` — on any other verdict, or a review that did not finish or could not start, it waits for the operator. The review is the catalog's Local Code Review as the Store installed it; an edited copy is refused, and the run asks. Either way the run needs no review started beside it. A folder that names no posture is \`${HOST_PUSH_APPROVAL_DEFAULT}\`, the default. Whatever the posture, the run scans every line the push would add, the headers and message of every commit it carries, and the pull request's title and summary for secrets before any of this, and a finding stops it with nothing pushed — which is what lets a review stand in for the operator. Only a range the scan cleared can go without asking: where a file was not read — binary, a NUL byte, more than the scan reads in one commit, a line too long to read, or a Git LFS pointer whose content the push would upload unread — or a line that looks like a secret ends in an \`aflow-scan: allow\` comment, no review runs and the run waits for the operator whatever the posture, \`never\` included, naming each such file and line. The comment never clears a line — whoever wrote the change could have written it — it only turns a stop into a question. Once the run asks, the operator's answer decides: a declined push pushes nothing, whatever the posture.
 
-**On an existing branch**: a fix that was commissioned from a branch (\`base: <branch>\` on the commission) is published onto that branch by naming it as \`branch\` and passing the commission's \`baseSha\` as \`baseSha\`; a branch is reused only that way, and a fresh change takes a fresh branch.
+**On an existing branch**: a fix commissioned from a branch (\`base: <branch>\`) is published onto it by naming it as \`branch\` and passing the commission's \`baseSha\` as \`baseSha\`; a branch is reused only that way, and a fresh change takes a fresh branch. A fix to a branch \`main\` has moved past is commissioned with \`mergeFrom: origin/<base>\` as well and published with the sha the commission reported in \`merge.from\` as \`mergeFrom\`: the branch then carries one merge commit holding the fix.
 
 **With the result**: report the pull request link, and whether the push was approved by the operator or cleared by the folder's push approval — and, where the run reviewed its commit, the verdict. Where approval was declined, report that the branch stayed on the machine and nothing was pushed — the commit is still there to publish later. Where the scan found what looks like a secret, the run failed with nothing pushed: report the files, commit headers and messages, title or summary, lines and rules it names — never ask for or repeat the value — and say the change needs the secret taken out and commissioning again onto a fresh branch, since this branch still holds that commit — or, where the file and line are in one of the folder's own commits that \`origin\` does not have yet, that the commit needs rewriting before anything built on it is pushed. Where the base branch on \`origin\` is no longer where the run measured from, forward or back, or \`origin\` pushes elsewhere than it fetches, the push refused just before git ran and nothing was pushed: report what its message names, and that the publication has to run again on a fresh branch. Where the push failed, git's own message says why: a branch on \`origin\` that moved on is not overwritten.`,
   tags: ['coding', 'publish', 'git', 'local', 'developer-tools'],
@@ -205,6 +214,13 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           schema: BASE_SHA_SCHEMA,
         },
         {
+          id: 'mergeFrom',
+          required: false,
+          description:
+            "The commit the commission merged into its checkout, as it reported it in `merge.from` — only for a fix commissioned with `mergeFrom`, appended to the branch it was made on. The branch's head merges it as the commission did, and the commit is that merge with the patch folded in. Omit it when the commission reported no `merge`.",
+          schema: MERGE_FROM_SCHEMA,
+        },
+        {
           id: 'commitMessage',
           required: true,
           // The template substitutes whole nodes and cannot concatenate, so
@@ -262,6 +278,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             patch: { kind: 'run_input' as const, path: 'patch' },
             branch: { kind: 'run_input' as const, path: 'branch' },
             baseSha: { kind: 'run_input' as const, path: 'baseSha' },
+            mergeFrom: { kind: 'run_input' as const, path: 'mergeFrom' },
             commitMessage: { kind: 'run_input' as const, path: 'commitMessage' },
             base: { kind: 'run_input' as const, path: 'base' },
           },
@@ -300,6 +317,12 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
                 bindAs: 'baseSha',
                 path: 'baseSha',
                 schema: BASE_SHA_SCHEMA,
+              },
+              mergeFrom: {
+                kind: 'run_input' as const,
+                bindAs: 'mergeFrom',
+                path: 'mergeFrom',
+                schema: MERGE_FROM_SCHEMA,
               },
               commitMessage: {
                 kind: 'run_input' as const,
@@ -357,6 +380,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
               branch: { $bind: 'branch' },
               message: { $bind: 'commitMessage' },
               baseSha: { $bind: 'baseSha' },
+              mergeFrom: { $bind: 'mergeFrom' },
               // The push sends every ancestor `origin` lacks, not this commit
               // alone, so the scan and the review read the range measured
               // against the base as `origin` holds it now.

@@ -23,6 +23,7 @@ export * from './user.js';
 export * from './search.js';
 export * from './compute.js';
 export * from './host.js';
+export * from './hostRegistrations.js';
 export * from './agentControl.js';
 export * from './platform.js';
 export * from './guardrailOps.js';

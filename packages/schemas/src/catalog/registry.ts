@@ -16,7 +16,7 @@ import { MemoryOperationRegistrations } from '../operations/memory.js';
 import { UserOperationRegistrations } from '../operations/user.js';
 import { SearchOperationRegistrations } from '../operations/search.js';
 import { ComputeOperationRegistrations } from '../operations/compute.js';
-import { HostOperationRegistrations } from '../operations/host.js';
+import { HostOperationRegistrations } from '../operations/hostRegistrations.js';
 import { AgentOperationRegistrations } from '../operations/agentControl.js';
 import { PlatformOperationRegistrations } from '../operations/platform.js';
 import { GuardrailOperationRegistrations } from '../operations/guardrailOps.js';
