@@ -102,6 +102,7 @@ import {
   type LinkedWorktree,
 } from '../worktree.js';
 import { PUBLICATION_SCRATCH_PREFIX } from '../branchCommit.js';
+import { CHECK_SCRATCH_PREFIX } from '../commitCheck.js';
 import { installRefGuard, noRefGuardMessage, refGuardReadiness } from '../refGuard.js';
 
 /**
@@ -113,10 +114,14 @@ import { installRefGuard, noRefGuardMessage, refGuardReadiness } from '../refGua
 const RESULT_RELATIVE_PATH = `${RUN_SCRATCH_DIR}/result.json`;
 /**
  * The directories under the temp root this executor adds checkouts in — a
- * harness run's scratch and a publication's. Nothing else named `aflow-` there
- * is known to be its own.
+ * harness run's scratch, a publication's and a check's. Nothing else named
+ * `aflow-` there is known to be its own.
  */
-const CHECKOUT_SCRATCH_PREFIXES = [HARNESS_SCRATCH_PREFIX, PUBLICATION_SCRATCH_PREFIX] as const;
+const CHECKOUT_SCRATCH_PREFIXES = [
+  HARNESS_SCRATCH_PREFIX,
+  PUBLICATION_SCRATCH_PREFIX,
+  CHECK_SCRATCH_PREFIX,
+] as const;
 /** A result is an answer, not a dataset; past this it is a mistake, not a big one. */
 const RESULT_CAP_BYTES = 1_000_000;
 

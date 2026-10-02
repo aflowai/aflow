@@ -8,7 +8,12 @@
  */
 import { z } from 'zod';
 
-import { type HostPushApproval, HostPushApprovalSchema } from '@aflow/schemas';
+import {
+  type HostPublishedChecks,
+  HostPublishedChecksSchema,
+  type HostPushApproval,
+  HostPushApprovalSchema,
+} from '@aflow/schemas';
 
 /** Per-machine inventory, written with a lifetime so silence expires. */
 export function hostInventoryKey(hostname: string): string {
@@ -72,38 +77,55 @@ export const HostInventorySchema = z.object({
   runtimes: z.array(z.object({ name: z.string(), version: z.string() })),
   harnesses: z.array(z.object({ id: z.string(), label: z.string().optional() })),
   /**
-   * The push posture of each folder this machine lets push, from the same
-   * policy file. Published rather than recorded by the workspace because the
-   * operator changes it on the machine, where the workspace never hears of it.
+   * The push posture of each folder this machine lets push, and whether a
+   * publication from it runs checks and which program, from the same policy
+   * file. Published rather than
+   * recorded by the workspace because the operator changes both on the
+   * machine, where the workspace never hears of it.
    *
    * Keyed by workspace as well as id: an id is unique on one machine, and two
    * machines can each offer the same one to different workspaces.
    */
   folders: z.array(
-    z.object({ id: z.string(), spaceId: z.string(), pushApproval: HostPushApprovalSchema }),
+    z.object({
+      id: z.string(),
+      spaceId: z.string(),
+      pushApproval: HostPushApprovalSchema,
+      checks: HostPublishedChecksSchema.optional(),
+    }),
   ),
 });
 export type HostInventory = z.infer<typeof HostInventorySchema>;
 export type HostInventoryFolders = HostInventory['folders'];
 
+/** What the machine holding a pushing folder declares about publishing from it. */
+export interface PublishingFolder {
+  readonly pushApproval: HostPushApproval;
+  readonly checks?: HostPublishedChecks;
+}
+
 /**
- * Each folder's push posture, as the machines publishing now declare it, for
- * one workspace. A folder missing here pushes nothing, or its machine is not
- * running — the two read the same to a caller, which then says nothing.
+ * Each pushing folder's posture and checks, as the machines publishing now
+ * declare them, for one workspace. A folder missing here pushes nothing, or its
+ * machine is not running — the two read the same to a caller, which then says
+ * nothing.
  */
-export function pushApprovalsForSpace(
+export function publishingFoldersForSpace(
   inventories: ReadonlyArray<Pick<HostInventory, 'folders'>>,
   spaceId: string,
-): Map<string, HostPushApproval> {
-  const postures = new Map<string, HostPushApproval>();
+): Map<string, PublishingFolder> {
+  const folders = new Map<string, PublishingFolder>();
   for (const machine of inventories) {
     for (const folder of machine.folders) {
-      if (folder.spaceId === spaceId && !postures.has(folder.id)) {
-        postures.set(folder.id, folder.pushApproval);
+      if (folder.spaceId === spaceId && !folders.has(folder.id)) {
+        folders.set(folder.id, {
+          pushApproval: folder.pushApproval,
+          ...(folder.checks !== undefined ? { checks: folder.checks } : {}),
+        });
       }
     }
   }
-  return postures;
+  return folders;
 }
 
 /** The reads this needs, so a caller can hand it any client or a fake. */

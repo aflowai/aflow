@@ -10,7 +10,11 @@ import type { FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import type { SessionId, StepExecutionId } from '@aflow/schemas';
-import { PayloadKindSchema as SharedPayloadKindSchema, parsePayloadRef } from '@aflow/schemas';
+import {
+  DURABLE_PAYLOAD_KINDS,
+  PayloadKindSchema as SharedPayloadKindSchema,
+  parsePayloadRef,
+} from '@aflow/schemas';
 import { assertSessionSpaceAccess } from '../lib/sessionSpaceAccess.js';
 import { NEUTRALIZED_CONTENT_TYPE } from '../lib/servableContentType.js';
 
@@ -19,6 +23,22 @@ import { NEUTRALIZED_CONTENT_TYPE } from '../lib/servableContentType.js';
 // ============================================================================
 
 const PayloadKindSchema = SharedPayloadKindSchema;
+
+const DURABLE_KINDS: readonly string[] = DURABLE_PAYLOAD_KINDS;
+
+/**
+ * A durable kind is stored without a TTL, so letting a client name one would let
+ * any caller with session write access create keys that never expire. Those
+ * kinds are written only by the platform's own conversation and task stores.
+ */
+const UploadPayloadKindSchema = PayloadKindSchema.exclude(DURABLE_PAYLOAD_KINDS, {
+  errorMap: (issue, ctx) =>
+    issue.code === 'invalid_enum_value' && DURABLE_KINDS.includes(String(issue.received))
+      ? {
+          message: `'${String(issue.received)}' is a durable kind the platform writes itself; an upload cannot name ${DURABLE_PAYLOAD_KINDS.join(' or ')}`,
+        }
+      : { message: ctx.defaultError },
+});
 
 /**
  * A stored object's Content-Type is what a signed read URL serves it with, so
@@ -55,7 +75,7 @@ const CreatePayloadRequestSchema = z.object({
   /** Attempt number */
   attempt: z.number().int().min(0).default(0),
   /** Kind of payload */
-  kind: PayloadKindSchema,
+  kind: UploadPayloadKindSchema,
   /** Inline data (for small payloads) */
   data: z.unknown().optional(),
   /** Content type the stored object is served with */
@@ -218,43 +238,21 @@ ${NEUTRALIZED_CONTENT_TYPE}.
 
       // If data is provided, check if it should be stored
       if (data !== undefined) {
-        const shouldStore = payloadStore.shouldStore(data);
+        // Small data is stored as well; only the response marks it inline.
+        await payloadStore.store({
+          tenantId: tenantId,
+          runId: runId as SessionId,
+          stepExecutionId: (stepExecutionId ?? runId) as StepExecutionId,
+          attempt,
+          kind,
+          data,
+          ...(contentType ? { contentType } : {}),
+        });
 
-        if (shouldStore) {
-          // Store the data
-          const storeParams: Parameters<typeof payloadStore.store>[0] = {
-            tenantId: tenantId,
-            runId: runId as SessionId,
-            stepExecutionId: (stepExecutionId ?? runId) as StepExecutionId,
-            attempt,
-            kind: kind,
-            data,
-          };
-          if (contentType) storeParams.contentType = contentType;
-          await payloadStore.store(storeParams);
-
-          reply.status(201).send({
-            payloadRef,
-            storedInline: false,
-          });
-        } else {
-          // Data is small, store it anyway but mark as inline
-          const storeParams: Parameters<typeof payloadStore.store>[0] = {
-            tenantId: tenantId,
-            runId: runId as SessionId,
-            stepExecutionId: (stepExecutionId ?? runId) as StepExecutionId,
-            attempt,
-            kind: kind,
-            data,
-          };
-          if (contentType) storeParams.contentType = contentType;
-          await payloadStore.store(storeParams);
-
-          reply.status(201).send({
-            payloadRef,
-            storedInline: true,
-          });
-        }
+        reply.status(201).send({
+          payloadRef,
+          storedInline: !payloadStore.shouldStore(data),
+        });
         return;
       }
 

@@ -8,8 +8,8 @@ import {
   type ContextBlock,
   type ReasoningContinuityContext,
   type TokenBreakdown,
-  ConversationHistoryHydrationError,
 } from '../../conversationStateStore.js';
+import { ConversationHistoryHydrationError } from '../../historyHydrationError.js';
 import { appendRunWakeups } from '../../runWakeupsInTurn.js';
 import type { ReasoningContinuityResetReason } from '../../reasoningContinuity.js';
 import { ESTIMATED_CHARS_PER_TOKEN } from '../../tokenEstimate.js';
@@ -220,7 +220,7 @@ export async function prepareAgentRequest(
         runId: ctx.runId,
         stepExecutionId: ctx.job.stepExecutionId,
         turnNumber: params.turnNumber,
-        failedBatchRefs: err.failedBatchRefs,
+        failedBatches: err.failedBatches,
         integrityIssues: err.integrityIssues,
       });
     }

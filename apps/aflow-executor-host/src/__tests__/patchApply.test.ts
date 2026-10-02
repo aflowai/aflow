@@ -767,6 +767,7 @@ describe('measuring what a push of the commit would add', () => {
     const sha = String(commit?.['sha']);
     expect(commit?.['range']).toBe(`${unpushed}..${sha}`);
     expect(commit?.['pushRange']).toBe(`${pushed}..${sha}`);
+    expect(commit?.['pushBaseSha']).toBe(pushed);
     const carried = (await git(root, 'rev-list', String(commit?.['pushRange'])))
       .split('\n')
       .filter((line) => line !== '');
@@ -837,6 +838,7 @@ describe('measuring what a push of the commit would add', () => {
     const { result, commit } = await publish({});
     expect(result.status).toBe('SUCCEEDED');
     expect(commit?.['pushRange']).toBeUndefined();
+    expect(commit?.['pushBaseSha']).toBeUndefined();
   }, 30_000);
 
   describe('a branch of the same name on another remote', () => {

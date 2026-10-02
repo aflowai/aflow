@@ -12,6 +12,7 @@ import type { BrowserProfile } from '@aflow/schemas';
 import { type LocalAddressClassifier, machineAddresses } from './addresses.js';
 import { chromeMissingMessage, type ChromeDiscovery } from './chromeDiscovery.js';
 import type { ChromeLauncher, LaunchedChrome } from './chromeProcess.js';
+import { CREDENTIAL_FIELD_KEYS, entersValue, MODIFIERS } from './credentialFields.js';
 import { type EgressProxy, type StartEgressProxy, startEgressProxy } from './egressProxy.js';
 import { BrowserDriverError, errorText } from './errors.js';
 import { boundEntries, boundText, PageObservations } from './observations.js';
@@ -40,13 +41,21 @@ import type {
   SnapshotResult,
 } from './driverTypes.js';
 import { boundSnapshot, buildOutline, describeRef } from './outline.js';
-import { closeWithinDeadline, PageTable, type HeldPage, type PageOwner } from './pageTable.js';
+import {
+  closeWithinDeadline,
+  pageAddress,
+  pageGoneError,
+  PageTable,
+  type HeldPage,
+  type PageOwner,
+} from './pageTable.js';
 import { profileOpenToSpace } from './profiles.js';
 import { assertActionAllowed, assertNavigationAllowed, ruleRefusingHost } from './rules.js';
 import {
   type BrowserEngine,
   type EngineBrowser,
   EngineCredentialField,
+  EngineFieldUnchecked,
   type EnginePage,
   EngineRefNotFound,
   type PageEvents,
@@ -57,6 +66,8 @@ const MINUTE_MS = 60_000;
 
 export interface BrowserPolicy {
   readonly browsers: ReadonlyMap<string, BrowserProfile>;
+  /** Profiles the policy declares that did not parse, by id, with the schema's reason. */
+  readonly invalidBrowsers: ReadonlyMap<string, string>;
   readonly chrome: ChromeDiscovery;
 }
 
@@ -205,6 +216,7 @@ export class BrowserDriver {
     return {
       outcome: 'uncertain_outcome',
       ...(await this.observe(earlier, this.runningFor(earlier))),
+      redirected: earlier.page.url() !== asked.href,
     };
   }
 
@@ -214,7 +226,7 @@ export class BrowserDriver {
     generation: number,
     request: OpenRequest,
     asked: URL,
-  ): Promise<PageView> {
+  ): Promise<Omit<OpenedPage, 'outcome'>> {
     const observations = new PageObservations(this.now);
     let page: EnginePage;
     try {
@@ -250,18 +262,11 @@ export class BrowserDriver {
       await closeWithinDeadline(page);
       throw error;
     }
-    const held = this.pages.add(
-      request,
-      profile.id,
-      asked.href,
-      page,
-      observations,
-      page.url(),
-      this.now(),
-    );
+    const held = this.pages.add(request, profile.id, asked.href, page, observations, this.now());
     try {
       this.assertLanded(running, profile, page.url(), startedAt);
-      return await this.observe(held, running);
+      const view = await this.observe(held, running);
+      return { ...view, redirected: page.url() !== asked.href };
     } catch (error) {
       // Registered and then refused or unreadable: a run must not be left
       // holding a page it was told it does not have.
@@ -285,6 +290,7 @@ export class BrowserDriver {
     if (asked !== undefined) {
       this.refuseObviouslyLocal(profile, asked);
       assertNavigationAllowed(profile, asked);
+      held.askedUrl = asked.href;
     }
     if (request.redelivered) {
       return { outcome: 'uncertain_outcome', view: await this.observe(held, running) };
@@ -309,13 +315,13 @@ export class BrowserDriver {
       throw new BrowserDriverError(
         'navigation_failed',
         `Page \`${held.pageId}\` has no page to go ${HISTORY_WORDS[request.to.kind]} in its ` +
-          `history. It is still at ${held.page.url()}.`,
+          `history. It is still at ${pageAddress(held)}.`,
         { pageId: held.pageId },
       );
     }
     this.assertLanded(running, profile, held.page.url(), startedAt);
     const view = await this.observe(held, running);
-    return { outcome: 'performed', view, changed: this.changes(before, view) };
+    return { outcome: 'performed', view, changed: this.changes(before, held, view) };
   }
 
   async act(request: ActRequest): Promise<ActionResult> {
@@ -340,7 +346,7 @@ export class BrowserDriver {
     if (snapshot === undefined || element === undefined) {
       throw await this.staleRef(held, running, request.ref);
     }
-    if (request.action.kind === 'type' && snapshot.maskedRefs.has(request.ref)) {
+    if (entersValue(request.action) && snapshot.maskedRefs.has(request.ref)) {
       throw this.credentialRefusal(request.ref, element.name);
     }
     // A reference can belong to an element inside a frame from another site,
@@ -368,6 +374,15 @@ export class BrowserDriver {
       if (error instanceof EngineCredentialField) {
         throw this.credentialRefusal(request.ref, element.name);
       }
+      if (error instanceof EngineFieldUnchecked) {
+        throw new BrowserDriverError(
+          'field_unchecked',
+          `Whether \`${request.ref}\` is a password field could not be checked ` +
+            `(${error.reason}), so the ${request.action.kind} was not performed. The page may ` +
+            'have changed under that reference; take a fresh outline for a current one.',
+          { ref: request.ref },
+        );
+      }
       throw new BrowserDriverError(
         'action_failed',
         `The ${request.action.kind} on \`${request.ref}\` did not complete: ${errorText(error)}`,
@@ -380,7 +395,7 @@ export class BrowserDriver {
     return {
       outcome: 'performed',
       view,
-      changed: this.changes(before, view),
+      changed: this.changes(before, held, view),
       element,
       ...(action.kind === 'type'
         ? {
@@ -404,13 +419,13 @@ export class BrowserDriver {
       const title = await this.read(held, async () => await held.page.title());
       held.lastSnapshot = snap;
       held.lastTitle = title;
-      held.lastUrl = held.page.url();
+      const url = pageAddress(held);
       this.touch(held, running);
       const bounded = boundSnapshot(snap, ref);
       if (bounded === undefined) {
         throw this.staleRefError(held, ref ?? '', buildOutline(snap).text);
       }
-      return { pageId, url: held.lastUrl, title, snapshot: bounded };
+      return { pageId, url, title, snapshot: bounded };
     });
   }
 
@@ -430,7 +445,7 @@ export class BrowserDriver {
     what: ReadResult['what'],
     contains: string | undefined,
   ): Promise<ReadResult> {
-    const url = held.page.url();
+    const url = pageAddress(held);
     if (what === 'text') {
       const text = await this.read(held, async () => await held.page.text());
       return { what, url, ...boundText(text, contains) };
@@ -477,7 +492,7 @@ export class BrowserDriver {
     return await Promise.all(
       pages.map(async (held) => ({
         pageId: held.pageId,
-        url: held.page.url(),
+        url: pageAddress(held),
         title: await held.page.title().catch(() => held.lastTitle),
         profileId: held.profileId,
         lastUsedAt: held.lastUsedAt,
@@ -631,12 +646,7 @@ export class BrowserDriver {
     const running = this.running.get(held.profileId);
     if (running !== undefined) return running;
     this.pages.forget(held);
-    throw new BrowserDriverError(
-      'page_gone',
-      `page_gone: page \`${held.pageId}\` is no longer open — its browser stopped. It was last ` +
-        `at ${held.lastUrl}; open that address again to carry on.`,
-      { pageId: held.pageId, lastUrl: held.lastUrl },
-    );
+    throw pageGoneError(held.pageId, 'its browser stopped', held);
   }
 
   private touch(held: HeldPage, running: RunningProfile): void {
@@ -662,9 +672,9 @@ export class BrowserDriver {
     const title = await this.read(held, async () => await held.page.title());
     held.lastSnapshot = snapshot;
     held.lastTitle = title;
-    held.lastUrl = held.page.url();
+    const url = pageAddress(held);
     this.touch(held, running);
-    return { pageId: held.pageId, url: held.lastUrl, title, outline: buildOutline(snapshot) };
+    return { pageId: held.pageId, url, title, outline: buildOutline(snapshot) };
   }
 
   private lastSeen(held: HeldPage): { url: string; title: string; outline?: string } {
@@ -675,12 +685,14 @@ export class BrowserDriver {
     };
   }
 
+  /** Addresses compared whole: one differing only in a query value is a move the shown form hides. */
   private changes(
     before: { url: string; title: string; outline?: string },
+    held: HeldPage,
     after: PageView,
   ): ChangeReceipt {
     return {
-      urlChanged: before.url !== after.url,
+      urlChanged: before.url !== held.page.url(),
       titleChanged: before.title !== after.title,
       outlineChanged: before.outline !== after.outline.text,
     };
@@ -716,8 +728,9 @@ export class BrowserDriver {
     return new BrowserDriverError(
       'credential_field',
       `\`${ref}\`${name !== undefined ? ` (${JSON.stringify(name)})` : ''} is a password field. ` +
-        'Credentials are entered by the operator, in the browser window, never typed by an ' +
-        'agent; nothing was typed.',
+        'Credentials are entered by the operator, in the browser window, never by an agent; ' +
+        'nothing was entered. The keys an agent may press there are ' +
+        `${[...CREDENTIAL_FIELD_KEYS].join(', ')}, alone or with ${[...MODIFIERS].join(', ')} held.`,
       { ref },
     );
   }
@@ -787,6 +800,15 @@ export class BrowserDriver {
   ): BrowserProfile {
     const profile = policy.browsers.get(profileId);
     if (profile === undefined) {
+      const invalid = policy.invalidBrowsers.get(profileId);
+      if (invalid !== undefined) {
+        throw new BrowserDriverError(
+          'profile_invalid',
+          `Browser profile \`${profileId}\` is declared on this machine but is not valid, so it ` +
+            'is disabled; the other profiles are unaffected, and the operator corrects it in the ' +
+            `host policy. What is wrong with it: ${invalid}`,
+        );
+      }
       if (policy.browsers.size === 0 && policy.chrome.found === undefined) {
         throw new BrowserDriverError('no_browser', chromeMissingMessage(policy.chrome));
       }

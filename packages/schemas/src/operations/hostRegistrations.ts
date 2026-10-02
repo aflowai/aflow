@@ -6,6 +6,8 @@ import type { OperationRegistration } from '../catalog/operationCatalog.js';
 import {
   HostBindingInspectInputSchema,
   HostBindingInspectOutputSchema,
+  HostCommitCheckInputSchema,
+  HostCommitCheckOutputSchema,
   HostCommitScanInputSchema,
   HostCommitScanOutputSchema,
   HostFileGetInputSchema,
@@ -388,6 +390,7 @@ export const HostOperationRegistrations: OperationRegistration[] = [
         "A push the remote refuses — a branch that moved on, a non-fast-forward — fails the step with git's own message, rather than succeeding with a non-zero `exitCode`.",
         "A push carries `pushBase` and `scan.receipt`, the receipt `host.commit.scan` returned for the range it sends, and names that range's last commit as the source of its one refspec. A push with no receipt, one this executor did not issue since it started, one for another folder, or one more than a day old is refused with nothing pushed.",
         "In the push's own step, just before git is spawned, `origin/<pushBase>` is fetched and read: a push to anything but `origin`, an `origin` whose push URL is not its fetch URL, or a receipt for any range but `<that commit>..<the refspec's source>` fails with nothing pushed. A base that moved since the scan, forward or back, needs a scan of the range as it is now. `origin` can still move in the moment between that fetch and git's push, which no check from this machine closes.",
+        "A push from a folder that declares checks carries `check.receipt`, the receipt `host.commit.check` returned for the refspec's source against that same base, and is refused with nothing pushed where it carries none, one this executor did not issue since it started, one more than a day old, one for another commit, base or folder, one for checks the folder no longer declares, or one whose checks failed. A folder that declares no checks needs none, and a push from it carrying one is refused.",
         "A push whose scan could not read everything or found lines marked allowed goes ahead only once the operator has approved exactly this push — this folder, this refspec, this receipt — at an approval in the same run; nothing the push's own input says stands in for that approval.",
       ],
     },
@@ -457,8 +460,8 @@ export const HostOperationRegistrations: OperationRegistration[] = [
     groupDescription: 'What the operator declared about a folder on their own machine.',
     semanticDescription:
       'Read, from the policy file on the machine that holds a connected folder, which branches ' +
-      'it may push and when a publication from it asks before pushing. Touches nothing in the ' +
-      'folder itself.',
+      'it may push, when a publication from it asks before pushing, and the checks a ' +
+      'publication runs first and for how long. Touches nothing in the folder itself.',
     tags: ['host', 'binding', 'local'],
     idempotency: 'idempotent',
     accessMode: 'read',
@@ -523,5 +526,53 @@ export const HostOperationRegistrations: OperationRegistration[] = [
     },
     inputZod: HostCommitScanInputSchema,
     outputZod: HostCommitScanOutputSchema,
+  },
+  {
+    stepType: 'host',
+    group: 'commit',
+    verb: 'check',
+    name: "Run the Folder's Checks on a Commit",
+    actionLabel: "Running the folder's checks on the commit…",
+    groupDisplayName: 'Commits on this computer',
+    groupDescription: 'Read the commits of a repository the operator connected, on their machine.',
+    semanticDescription:
+      'Run the checks the operator declared for a connected repository — one command, set on ' +
+      'their machine — in a detached checkout of one commit, with the folder’s installed ' +
+      'dependencies linked so nothing is installed, under the sandbox a coding agent runs in, ' +
+      'and report whether they passed, with the end of what they printed. The commit and the ' +
+      'base it is measured against reach the command as `AFLOW_CHECK_SHA` and ' +
+      '`AFLOW_CHECK_BASE`. The checkout is removed afterwards; the folder, its working tree ' +
+      'and its refs are left as they were.',
+    tags: ['host', 'git', 'checks', 'local'],
+    idempotency: 'idempotent',
+    // It runs the repository's own code, which is execution whatever the
+    // command is.
+    accessMode: 'write',
+    // A publication runs it on the commit it made and reads the result as
+    // data; the command is the operator's, so an agent has nothing to choose.
+    agentTool: false,
+    usage: {
+      oneLine: "Run a connected folder's declared checks on one commit, before it is pushed.",
+      minimalExampleInput: {
+        bindingId: 'hb_project',
+        sha: 'c'.repeat(40),
+        base: 'a'.repeat(40),
+      },
+      whenToUse: ['A skill about to push a commit, running the checks the folder declares first'],
+      whenNotToUse: [
+        'Running a command of your choosing — that is host.process.exec; this runs only what the folder declares',
+        'Reading a change for what a check cannot see — that is the Local Code Review skill',
+      ],
+      pitfalls: [
+        'The command is declared on the machine with `aflow harness checks <folder> -- <argv>`, and nothing in this call can name one. A folder that declares none answers `passed` with `skipped`, and nothing ran.',
+        'The checks get the folder’s `checksTimeoutMs`, `HOST_CHECKS_TIMEOUT_DEFAULT_MS` where the operator chose none; a check still running then is stopped and fails, naming that time.',
+        'The checkout has the folder’s installed dependencies but none of its build output: a check that needs a package built builds it.',
+        'Egress is closed, as it is for a command: a check that reaches the network fails there.',
+        '`receipt` is what a push of the commit from a folder that declares checks must carry as `check.receipt`; it is issued whether the checks passed or failed, and a push takes only one that says they passed, for the commit and base it sends and the checks the folder declares then. It is valid on the executor that ran them until that executor restarts, and for a day at most.',
+        'Passing is evidence from this machine about one commit. The pull request’s own checks remain the proof.',
+      ],
+    },
+    inputZod: HostCommitCheckInputSchema,
+    outputZod: HostCommitCheckOutputSchema,
   },
 ];

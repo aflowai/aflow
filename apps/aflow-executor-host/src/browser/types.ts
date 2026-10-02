@@ -46,6 +46,17 @@ export class EngineCredentialField extends Error {
   }
 }
 
+/** Whether the element is a credential field could not be read, so nothing was entered. */
+export class EngineFieldUnchecked extends Error {
+  constructor(
+    readonly ref: string,
+    readonly reason: string,
+  ) {
+    super(`Whether element ${ref} is a password field could not be checked: ${reason}`);
+    this.name = 'EngineFieldUnchecked';
+  }
+}
+
 /**
  * A navigation that did not complete. `redirectChain` is the addresses the
  * page's main frame requested for it, the first request and then each
@@ -83,7 +94,10 @@ export interface EnginePage {
    * `EngineNavigationFailed`.
    */
   navigate(to: EngineNavigation): Promise<boolean>;
-  /** Throws `EngineRefNotFound` or `EngineCredentialField` before doing anything. */
+  /**
+   * Throws `EngineRefNotFound`, `EngineCredentialField` or
+   * `EngineFieldUnchecked` before doing anything.
+   */
   act(ref: string, action: EngineAction): Promise<void>;
   /**
    * The address of the frame the referenced element belongs to — the page's

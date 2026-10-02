@@ -10,10 +10,8 @@ import {
   AiConversationStateV1Schema,
   MEMORY_READ_OPERATION_ID,
 } from '@aflow/schemas';
-import {
-  ConversationStateStore,
-  ConversationHistoryHydrationError,
-} from './conversationStateStore.js';
+import { ConversationStateStore } from './conversationStateStore.js';
+import { ConversationHistoryHydrationError } from './historyHydrationError.js';
 
 describe('ConversationStateStore.assembleRequest', () => {
   const baseConfig = {
@@ -145,11 +143,27 @@ describe('ConversationStateStore.assembleRequest', () => {
     expect(rendered).toContain('### HelmsmanAttention\nNo active workflow runs.');
   });
 
-  it('throws ConversationHistoryHydrationError when a committed batch ref fails to load', async () => {
-    const retrieve = vi.fn().mockRejectedValue(new Error('timeout'));
+  it('names each unreadable batch, the turn it was committed at, and why it could not be read', async () => {
+    const retrieve = vi.fn((ref: string) =>
+      ref === 'payload:history:bad'
+        ? Promise.reject(new Error('Payload not found: payload:history:bad'))
+        : Promise.resolve([
+            {
+              schemaVersion: 1,
+              atomId: 'atom-3',
+              role: 'user',
+              sourceId: 's3',
+              sourceKind: 'user_input',
+              message: textMessage('user', 'still here'),
+              createdAtMs: 3,
+              turnNumber: 40,
+            },
+          ]),
+    );
     const store = new ConversationStateStore(
       { ...baseConfig, payloadStore: { ...baseConfig.payloadStore, retrieve } },
       makeState({
+        turnNumber: 82,
         history: {
           maxAtomsStructural: 200,
           atoms: [
@@ -159,16 +173,44 @@ describe('ConversationStateStore.assembleRequest', () => {
               role: 'user',
               hash: 'x',
               createdAtMs: 1,
+              turnNumber: 13,
+            },
+            {
+              atomId: 'atom-2',
+              ref: 'payload:history:bad',
+              role: 'assistant',
+              hash: 'y',
+              createdAtMs: 2,
+              turnNumber: 12,
+            },
+            {
+              atomId: 'atom-3',
+              ref: 'payload:history:good',
+              role: 'user',
+              hash: 'z',
+              createdAtMs: 3,
+              turnNumber: 40,
             },
           ],
         },
       }),
     );
 
-    await expect(store.assembleRequest('system text', [])).rejects.toMatchObject({
-      failedBatchRefs: ['payload:history:bad'],
+    const failure = store.assembleRequest('system text', []);
+    await expect(failure).rejects.toMatchObject({
       name: 'ConversationHistoryHydrationError',
+      failedBatches: [
+        {
+          ref: 'payload:history:bad',
+          committedAtTurn: 12,
+          readError: 'Payload not found: payload:history:bad',
+        },
+      ],
     });
+    await expect(failure).rejects.toThrow(
+      'payload:history:bad (committed at turn 12: Payload not found: payload:history:bad)',
+    );
+    await expect(failure).rejects.toThrow('could not be hydrated at turn 82');
   });
 
   it('throws when batch loads but the committed atomId is missing from the batch', async () => {

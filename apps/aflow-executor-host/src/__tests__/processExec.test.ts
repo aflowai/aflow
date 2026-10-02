@@ -17,12 +17,8 @@ import type { HostPushApproval, WriteApprovalGrant } from '@aflow/schemas';
 
 import { PUSH_REQUIRED_OPTIONS } from '../bindings.js';
 import { createHostProcessHandler } from '../handlers/processHandlers.js';
-import {
-  issueScanReceipt,
-  type PushApprovalReader,
-  SCAN_RECEIPT_TTL_MS,
-  type ScanOutcome,
-} from '../scanReceipt.js';
+import { RECEIPT_TTL_MS } from '../receiptSigning.js';
+import { issueScanReceipt, type PushApprovalReader, type ScanOutcome } from '../scanReceipt.js';
 import { noPushApprovals, pushApprovalsHolding } from './fixtures/pushApprovals.js';
 import {
   confinedArgv,
@@ -1019,7 +1015,7 @@ describe('a push sends only a range this executor scanned', () => {
       ],
       [
         'stale',
-        { receipt: receipt('clean', { now: Date.now() - SCAN_RECEIPT_TTL_MS - 1 }) },
+        { receipt: receipt('clean', { now: Date.now() - RECEIPT_TTL_MS - 1 }) },
         'more than a day ago',
       ],
       [

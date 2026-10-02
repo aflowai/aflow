@@ -22,6 +22,7 @@ import { LocalMcpServerSchema } from './localMcpServers.js';
 import { discoverHarnesses } from './harnessDiscovery.js';
 import { HarnessProfileSchema, type HarnessProfile } from './harnessProfiles.js';
 import { serializePolicy, writePolicyAtomically } from './policyFile.js';
+import { checksChangeFromArgs, describeChecks, withChecks } from './folderChecks.js';
 import { describePushApproval, withPushApproval } from './pushApproval.js';
 
 // The same resolution `connect` uses. Disagreeing about where the policy lives
@@ -39,6 +40,12 @@ function usage(): never {
       "  harness model <id> --clear         Run the harness's own default instead.\n" +
       '  harness push-approval <folder> <always|never|unless-unreviewed>\n' +
       '                                     When a publication from a folder asks before pushing.\n' +
+      '  harness checks <folder> [--timeout-minutes <n>] -- <program> [args...]\n' +
+      '                                     What a publication from a folder runs before it\n' +
+      '                                     scans and pushes, from the repository root.\n' +
+      '  harness checks <folder> --timeout-minutes <n>\n' +
+      '                                     How long those checks may run.\n' +
+      '  harness checks <folder> --clear    Run none.\n' +
       '  harness remove <id>                Stop allowing it.\n' +
       '  harness mcp <id> <command...>      Allow an MCP server to run here.\n' +
       '  harness mcp-remove <id>            Stop allowing it.\n' +
@@ -192,7 +199,8 @@ async function list(): Promise<void> {
       console.log(
         `  ${id} — under ${branchPolicy.branchPrefix}, ` +
           describePushApproval(resolveBranchPolicy(branchPolicy).pushApproval) +
-          (branchPolicy.pushApproval === undefined ? ', the default' : ''),
+          (branchPolicy.pushApproval === undefined ? ', the default' : '') +
+          `; ${describeChecks(branchPolicy)}`,
       );
     }
   }
@@ -342,6 +350,15 @@ async function setPushApproval(bindingId: string, requested: string): Promise<vo
   }
 }
 
+async function setChecks(bindingId: string, args: readonly string[]): Promise<void> {
+  const updated = withChecks(await loadPolicy(), bindingId, checksChangeFromArgs(args));
+  await savePolicy(updated);
+  const branchPolicy = updated.bindings.find((b) => b.id === bindingId)?.branchPolicy;
+  if (branchPolicy !== undefined) {
+    console.log(`A publication from \`${bindingId}\` now ${describeChecks(branchPolicy)}.`);
+  }
+}
+
 async function remove(id: string): Promise<void> {
   const policy = await loadPolicy();
   if (!policy.harnesses.some((h) => h.id === id)) {
@@ -411,6 +428,11 @@ async function main(): Promise<void> {
     const [posture] = rest;
     if (posture === undefined || posture === '') usage();
     await setPushApproval(id, posture);
+    return;
+  }
+  if (command === 'checks') {
+    if (rest.length === 0) usage();
+    await setChecks(id, rest);
     return;
   }
   if (command === 'allow') {

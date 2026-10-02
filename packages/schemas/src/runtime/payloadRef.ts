@@ -110,6 +110,22 @@ export const PayloadKindSchema = z.enum([
 export type PayloadKind = z.infer<typeof PayloadKindSchema>;
 
 /**
+ * Kinds every store passes `persist: true` for. What they hold is read back for
+ * as long as whatever names it lives — committed conversation state by every
+ * later turn, a human task's hydration until someone answers it — and either
+ * can outlive the store's default TTL by days, so an expiring one fails that
+ * conversation or task at whichever read first follows the TTL.
+ * `durablePayloadPersist.test.ts` fails on any store of these that omits it.
+ */
+export const DURABLE_PAYLOAD_KINDS = ['state', 'history'] as const satisfies readonly PayloadKind[];
+
+export type DurablePayloadKind = (typeof DURABLE_PAYLOAD_KINDS)[number];
+
+export function isDurablePayloadKind(kind: PayloadKind): kind is DurablePayloadKind {
+  return (DURABLE_PAYLOAD_KINDS as readonly PayloadKind[]).includes(kind);
+}
+
+/**
  * Reference to a payload stored in GCS or inline.
  * Format:
  *   - Run-scoped GCS: gs://<bucket>/tenants/<tenant_id>/runs/<run_id>/steps/<step_execution_id>/attempt/<attempt>/<kind>.json

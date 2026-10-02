@@ -29,6 +29,7 @@ import {
   toolDirectoriesOnPath,
 } from './interview.js';
 import { serializePolicy, writePolicyAtomically } from './policyFile.js';
+import { describeChecks, keptChecks } from './folderChecks.js';
 import { chosenPushApproval, describePushApproval, PUSH_SCAN_NOTE } from './pushApproval.js';
 import {
   assertRootOutsideRepositoryMetadata,
@@ -261,13 +262,17 @@ async function main(): Promise<void> {
     await mkdir(HOST_DIR, { recursive: true, mode: 0o700 });
     const raw = await readFile(policyPath, 'utf8').catch(() => '{"version":1,"bindings":[]}');
     const policy = HostPolicySchema.parse(JSON.parse(raw));
-    // A reconnect keeps the posture the operator set since, unless it names one.
+    // A reconnect keeps the posture and the checks the operator set since,
+    // unless it names a posture.
+    const currentBranchPolicy = policy.bindings.find(
+      (b) => b.id === id && b.root === root,
+    )?.branchPolicy;
     const pushApproval = chosenPushApproval({
       requested: arg('push-approval'),
       branchPrefix,
-      current: policy.bindings.find((b) => b.id === id && b.root === root)?.branchPolicy
-        ?.pushApproval,
+      current: currentBranchPolicy?.pushApproval,
     });
+    const checks = keptChecks(currentBranchPolicy, branchPrefix);
 
     // Home is denied as a region, so a CLI installed under it is unreachable
     // until the operator says otherwise. That used to mean editing a key they
@@ -423,6 +428,7 @@ async function main(): Promise<void> {
             branchPolicy: {
               branchPrefix,
               ...(pushApproval !== undefined ? { pushApproval } : {}),
+              ...checks,
             },
           }
         : {}),
@@ -461,6 +467,7 @@ async function main(): Promise<void> {
           `${pushApproval === undefined ? ', the default' : ''}.`,
       );
       prompter.say(`  ${PUSH_SCAN_NOTE}`);
+      prompter.say(`  A publication from it ${describeChecks(binding.branchPolicy)}.`);
     }
     prompter.say('');
     // Asked rather than assumed. Telling an operator to start something already

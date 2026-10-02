@@ -11,6 +11,8 @@
  * a branch the prefix does not cover, or force one: those are judged on this
  * machine when the push runs.
  */
+import { basename } from 'node:path';
+
 import type { z } from 'zod';
 
 import { type HostPushApproval, HostPushApprovalSchema, resolveBranchPolicy } from '@aflow/schemas';
@@ -89,23 +91,28 @@ export function pushApprovalOf(binding: HostBinding): HostPushApproval {
 }
 
 /**
- * What the machine's inventory says about pushing folders: each one's posture,
- * against the workspace it was connected for. A folder recording no workspace
- * reaches none, so it is left out rather than published against nothing.
+ * What the machine's inventory says about pushing folders: each one's posture
+ * and the program its checks run, against the workspace it was connected for.
+ * A folder recording no workspace reaches none, so it is left out rather than
+ * published against nothing. The checks' arguments and the program's directory
+ * stay on this machine; `host.binding.inspect` shows them to the operator.
  */
-export function pushPostures(bindings: ReadonlyMap<string, HostBinding>): HostInventoryFolders {
+export function publishingFolders(
+  bindings: ReadonlyMap<string, HostBinding>,
+): HostInventoryFolders {
   return [...bindings.values()]
-    .flatMap((binding) =>
-      binding.branchPolicy === undefined || binding.spaceId === undefined
-        ? []
-        : [
-            {
-              id: binding.id,
-              spaceId: binding.spaceId,
-              pushApproval: resolveBranchPolicy(binding.branchPolicy).pushApproval,
-            },
-          ],
-    )
+    .flatMap((binding) => {
+      if (binding.branchPolicy === undefined || binding.spaceId === undefined) return [];
+      const argv0 = binding.branchPolicy.checks?.[0];
+      return [
+        {
+          id: binding.id,
+          spaceId: binding.spaceId,
+          pushApproval: resolveBranchPolicy(binding.branchPolicy).pushApproval,
+          ...(argv0 !== undefined ? { checks: { program: basename(argv0) || argv0 } } : {}),
+        },
+      ];
+    })
     .sort((a, b) => a.id.localeCompare(b.id));
 }
 

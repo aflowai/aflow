@@ -80,6 +80,13 @@ import {
   detectResurrections,
 } from './exchangeClearing.js';
 import { estimateStringTokens, estimateMessageTokens } from './tokenEstimate.js';
+import {
+  ConversationHistoryHydrationError,
+  type HistoryIntegrityIssue,
+  noteCommittedTurn,
+  type UnreadableHistoryBatch,
+  unreadableHistoryBatch,
+} from './historyHydrationError.js';
 
 // ============================================================================
 // Types
@@ -181,20 +188,6 @@ export interface ClearUnderPressureResult extends ClearExchangesResult {
   /** §4.6 resurrection counters — new detections this pass only. */
   reexecutions: number;
   refetches: number;
-}
-
-/** Thrown when committed history atoms cannot be hydrated — fail closed (retryable). */
-export class ConversationHistoryHydrationError extends Error {
-  readonly code = 'CONVERSATION_HISTORY_HYDRATION_FAILED';
-
-  constructor(
-    message: string,
-    public readonly failedBatchRefs: string[],
-    public readonly integrityIssues: Array<{ atomId: string; ref: string; reason: string }>,
-  ) {
-    super(message);
-    this.name = 'ConversationHistoryHydrationError';
-  }
 }
 
 /**
@@ -493,23 +486,24 @@ export class ConversationStateStore {
       }),
     );
 
-    const failedBatchRefs: string[] = [];
+    const failedBatches = new Map<string, UnreadableHistoryBatch>();
     for (let i = 0; i < batchResults.length; i++) {
       const ref = distinctRefs[i]!;
       const result = batchResults[i]!;
       if (result.status === 'fulfilled') {
         loadedBatches.set(ref, result.value.batch);
       } else {
-        failedBatchRefs.push(ref);
+        failedBatches.set(ref, unreadableHistoryBatch(ref, result.reason));
       }
     }
-    const uniqueFailedRefs = [...new Set(failedBatchRefs)];
 
-    const integrityIssues: Array<{ atomId: string; ref: string; reason: string }> = [];
+    const integrityIssues: HistoryIntegrityIssue[] = [];
     const hydratedFullAtoms: AiMessageAtomV1[] = [];
 
     for (const atomRef of committedAtoms) {
-      if (uniqueFailedRefs.includes(atomRef.ref)) {
+      const failedBatch = failedBatches.get(atomRef.ref);
+      if (failedBatch) {
+        noteCommittedTurn(failedBatch, atomRef.turnNumber);
         integrityIssues.push({
           atomId: atomRef.atomId,
           ref: atomRef.ref,
@@ -540,8 +534,8 @@ export class ConversationStateStore {
 
     if (integrityIssues.length > 0) {
       throw new ConversationHistoryHydrationError(
-        `Committed conversation history could not be hydrated (${String(uniqueFailedRefs.length)} failed batch(es), ${String(integrityIssues.length)} atom issue(s)).`,
-        uniqueFailedRefs,
+        this.state.turnNumber,
+        [...failedBatches.values()],
         integrityIssues,
       );
     }
@@ -748,6 +742,7 @@ export class ConversationStateStore {
         attempt,
         kind: 'history',
         data: this.pendingAtoms,
+        persist: true,
       });
       for (const atom of this.pendingAtoms) {
         const serialized = JSON.stringify(atom.message);
@@ -775,6 +770,7 @@ export class ConversationStateStore {
       attempt,
       kind: 'state',
       data: this.state,
+      persist: true,
     });
 
     this.pendingAtoms = [];
@@ -1077,6 +1073,7 @@ export class ConversationStateStore {
       attempt,
       kind: 'history',
       data: atomsToArchive,
+      persist: true,
     });
 
     // Summary atoms: stored as a batch that hydration can load normally
@@ -1087,6 +1084,7 @@ export class ConversationStateStore {
       attempt,
       kind: 'history',
       data: summaryFullAtoms,
+      persist: true,
     });
 
     // Build atom refs for the summaries
@@ -1191,6 +1189,7 @@ export class ConversationStateStore {
       attempt,
       kind,
       data,
+      persist: true,
     });
   }
 }

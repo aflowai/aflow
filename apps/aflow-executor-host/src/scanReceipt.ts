@@ -8,14 +8,14 @@
  * base and the last commit of the range, whether the scan cleared it or the
  * operator has to approve the push, and when — signed with a key this executor
  * draws when it starts and never writes down. A push carries the receipt for
- * the range it sends, and this process alone can have issued it.
+ * the range it sends, and this process alone can have issued it. The folder's
+ * checks are held to the same standard by the check receipt the push carries
+ * beside it (`checkReceipt.ts`), read in the same step.
  *
  * The range is the caller's to name, so the receipt binds its base as well as
  * its end, and the push measures its own base rather than taking one: a scan
  * of `<tip>..<tip>` read nothing of what a push of `<tip>` would carry.
  */
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-
 import { hostPushRequestHash } from '@aflow/redis';
 import {
   HOST_COMMIT_RANGE_PATTERN,
@@ -26,6 +26,8 @@ import {
 import type { z } from 'zod';
 
 import { HostBindingError } from './bindings.js';
+import { type PushUnderCheck, requireCheckedPush } from './checkReceipt.js';
+import { readSignedReceipt, receiptExpired, signReceipt } from './receiptSigning.js';
 
 type HostCommitScanOutput = z.infer<typeof HostCommitScanOutputSchema>;
 
@@ -38,14 +40,6 @@ export type ScanOutcome = 'clean' | 'allowed' | 'unscanned';
 
 const OUTCOMES: readonly ScanOutcome[] = ['clean', 'allowed', 'unscanned'];
 
-/**
- * How long a receipt is good for. Long enough for an approval asked in the
- * evening to be given the next morning; past it, the commit is scanned again.
- */
-export const SCAN_RECEIPT_TTL_MS = 24 * 60 * 60 * 1000;
-
-const RECEIPT_KEY = randomBytes(32);
-
 interface ScanReceipt {
   readonly bindingId: string;
   /** The range's base, as the scan resolved it to a full sha. */
@@ -56,30 +50,18 @@ interface ScanReceipt {
   readonly issuedAt: number;
 }
 
-function sign(body: string): Buffer {
-  return createHmac('sha256', RECEIPT_KEY).update(body).digest();
-}
-
 export function issueScanReceipt(
   receipt: Omit<ScanReceipt, 'issuedAt'>,
   now: number = Date.now(),
 ): string {
-  const body = Buffer.from(
-    JSON.stringify([receipt.bindingId, receipt.base, receipt.sha, receipt.outcome, now]),
-  ).toString('base64url');
-  return `${body}.${sign(body).toString('base64url')}`;
+  return signReceipt('scan', [receipt.bindingId, receipt.base, receipt.sha, receipt.outcome, now]);
 }
 
 /** The receipt a token carries, or nothing unless this process signed it. */
 function readScanReceipt(token: string): ScanReceipt | undefined {
-  const [body, mac, extra] = token.split('.');
-  if (body === undefined || mac === undefined || extra !== undefined) return undefined;
-  const expected = sign(body);
-  const given = Buffer.from(mac, 'base64url');
-  if (given.length !== expected.length || !timingSafeEqual(given, expected)) return undefined;
-  const fields: unknown = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
-  if (!Array.isArray(fields)) return undefined;
-  const [bindingId, base, sha, outcome, issuedAt] = fields as unknown[];
+  const fields = readSignedReceipt('scan', token);
+  if (fields === undefined) return undefined;
+  const [bindingId, base, sha, outcome, issuedAt] = fields;
   if (
     typeof bindingId !== 'string' ||
     typeof base !== 'string' ||
@@ -151,6 +133,8 @@ export interface PushUnderScan {
   readonly sources: readonly string[];
   readonly pushBase: string | undefined;
   readonly receipt: string | undefined;
+  /** The folder's checks as its policy declares them now, and the check receipt the push carries. */
+  readonly checks: PushUnderCheck;
   /** Where `origin/<pushBase>` is now, fetched for the purpose, as a full sha. */
   readonly measureBase: (pushBase: string) => Promise<string>;
   /** The grant an operator's approval minted for `requestHash` in this run, if any. */
@@ -168,8 +152,10 @@ function scanAgain(pushBase: string): string {
 /**
  * Refuse a push that does not send, from this folder, the range a scan by this
  * executor found no secret in — from where `origin/<pushBase>` is now to the
- * commit the push names — or, where that scan did not clear it or the folder's
- * push approval is `always`, a push the operator has not approved in this run.
+ * commit the push names; a push of a commit whose folder declares checks that
+ * did not pass on it here, against that base; or, where that scan did not clear
+ * it or the folder's push approval is `always`, a push the operator has not
+ * approved in this run.
  *
  * Under `unless-unreviewed` a cleared range goes out with no grant: whether a
  * review cleared it is the publication skill's to establish, and nothing this
@@ -211,7 +197,7 @@ export async function requireScannedPush(
       'other_folder',
     );
   }
-  if (now - receipt.issuedAt > SCAN_RECEIPT_TTL_MS || receipt.issuedAt > now) {
+  if (receiptExpired(receipt.issuedAt, now)) {
     throw new ScanReceiptError(
       `This push carries the receipt for a scan of ${scanned} issued at ` +
         `${new Date(receipt.issuedAt).toISOString()}, more than a day ago. ${scanAgain(pushBase)}`,
@@ -237,6 +223,8 @@ export async function requireScannedPush(
       'other_range',
     );
   }
+  requireCheckedPush({ bindingId, sha: receipt.sha, base: measured, ...push.checks }, now);
+
   const asksAlways = push.pushApproval === 'always';
   if (receipt.outcome === 'clean' && !asksAlways) return;
 

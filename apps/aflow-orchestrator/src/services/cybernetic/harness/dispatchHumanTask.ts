@@ -229,6 +229,7 @@ export async function dispatchHumanWorkflowTask(
         attempt,
         kind: 'state',
         data: durableHydration,
+        persist: true,
       })
     : encodeInlineHydrationRef(durableHydration);
 

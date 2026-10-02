@@ -1,6 +1,7 @@
 export type BrowserFailureKind =
   | 'page_gone'
   | 'unknown_profile'
+  | 'profile_invalid'
   | 'profile_not_for_space'
   | 'appliance_origin'
   | 'origin_denied'
@@ -8,6 +9,7 @@ export type BrowserFailureKind =
   | 'ask_unavailable'
   | 'stale_ref'
   | 'credential_field'
+  | 'field_unchecked'
   | 'action_failed'
   | 'no_browser'
   | 'launch_failed'

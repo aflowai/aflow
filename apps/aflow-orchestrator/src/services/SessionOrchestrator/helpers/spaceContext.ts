@@ -32,13 +32,14 @@ import {
   type MemoryDerivation,
 } from '@aflow/database';
 import type { Redis } from 'ioredis';
-import { StreamKeys, type HostPushApproval } from '@aflow/schemas';
+import { StreamKeys } from '@aflow/schemas';
 import {
   readSpaceContextGen,
   bumpSpaceContextGen,
   readLiveHostInventories,
-  pushApprovalsForSpace,
+  publishingFoldersForSpace,
   type HostInventory,
+  type PublishingFolder,
   getRedisConnection,
 } from '@aflow/redis';
 import {
@@ -133,13 +134,13 @@ export interface HostFolderRow {
  * `branchPrefix` is here so a publication can be offered or declined before it
  * is attempted. A folder that pushes nothing is the default, and reading the
  * prefix is how the agent knows which folders can publish and under what name.
- * `pushApproval` comes from the machine rather than the row, because the
- * operator changes it there; it is absent while no machine holding the folder
- * is running.
+ * `pushApproval` and `checks` come from the machine rather than the row,
+ * because the operator changes them there; they are absent while no machine
+ * holding the folder is running.
  */
 export function hostFolderEntry(
   row: HostFolderRow,
-  pushApproval?: HostPushApproval,
+  publishing?: PublishingFolder,
 ): NonNullable<SpaceContext['hostFolders']>['items'][number] {
   return {
     id: row.hostBindingId,
@@ -148,7 +149,12 @@ export function hostFolderEntry(
     access: row.writable ? ('read_write' as const) : ('read' as const),
     canRunCommands: row.allowsExecution,
     ...(row.branchPrefix !== null ? { branchPrefix: row.branchPrefix } : {}),
-    ...(row.branchPrefix !== null && pushApproval !== undefined ? { pushApproval } : {}),
+    ...(row.branchPrefix !== null && publishing !== undefined
+      ? {
+          pushApproval: publishing.pushApproval,
+          ...(publishing.checks !== undefined ? { checks: { ...publishing.checks } } : {}),
+        }
+      : {}),
 
     // Name and label only. The stored entry carries each server's full tool
     // schemas, and passing it through would put every local tool's arguments
@@ -806,11 +812,11 @@ export async function buildSpaceContext(
         // an id nothing it reads names.
         const inventories = await readLiveHostInventories(getRedisConnection());
         const harnesses = mergeHostHarnesses(inventories);
-        const pushApprovals = pushApprovalsForSpace(inventories, spaceId);
+        const publishing = publishingFoldersForSpace(inventories, spaceId);
         context.hostFolders = {
           items: folderRows
             .slice(0, limit)
-            .map((row) => hostFolderEntry(row, pushApprovals.get(row.hostBindingId))),
+            .map((row) => hostFolderEntry(row, publishing.get(row.hostBindingId))),
           harnesses,
           total: folderRows.length,
           ...(truncated ? { truncated: true } : {}),

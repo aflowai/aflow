@@ -29,6 +29,8 @@ export interface PageView {
 
 export interface OpenedPage extends PageView {
   readonly outcome: 'performed' | 'uncertain_outcome';
+  /** The page is not at the address asked for, compared whole rather than as `url` shows it. */
+  readonly redirected: boolean;
 }
 
 export interface ChangeReceipt {

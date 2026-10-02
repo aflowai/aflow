@@ -73,7 +73,10 @@ describe('hostFolderEntry', () => {
   });
 
   it('says when a publication from it asks before pushing, as its machine declares', () => {
-    const entry = hostFolderEntry({ ...row, branchPrefix: 'aflow/' }, 'unless-unreviewed');
+    const entry = hostFolderEntry(
+      { ...row, branchPrefix: 'aflow/' },
+      { pushApproval: 'unless-unreviewed' },
+    );
     expect(SpaceContextHostFoldersSectionSchema.shape.items.element.parse(entry)).toMatchObject({
       branchPrefix: 'aflow/',
       pushApproval: 'unless-unreviewed',
@@ -81,8 +84,28 @@ describe('hostFolderEntry', () => {
   });
 
   it('names no posture for a folder that pushes nothing, or whose machine is not running', () => {
-    expect(hostFolderEntry(row, 'never')).not.toHaveProperty('pushApproval');
+    expect(hostFolderEntry(row, { pushApproval: 'never' })).not.toHaveProperty('pushApproval');
     expect(hostFolderEntry({ ...row, branchPrefix: 'aflow/' })).not.toHaveProperty('pushApproval');
+  });
+
+  it('shows that a publication from it runs checks, and their program, as its machine declares', () => {
+    const entry = hostFolderEntry(
+      { ...row, branchPrefix: 'aflow/' },
+      { pushApproval: 'unless-unreviewed', checks: { program: 'node' } },
+    );
+    expect(SpaceContextHostFoldersSectionSchema.shape.items.element.parse(entry)).toMatchObject({
+      checks: { program: 'node' },
+    });
+  });
+
+  it('names no checks for a folder that declares none, pushes nothing, or whose machine is not running', () => {
+    expect(
+      hostFolderEntry({ ...row, branchPrefix: 'aflow/' }, { pushApproval: 'never' }),
+    ).not.toHaveProperty('checks');
+    expect(
+      hostFolderEntry(row, { pushApproval: 'never', checks: { program: 'node' } }),
+    ).not.toHaveProperty('checks');
+    expect(hostFolderEntry({ ...row, branchPrefix: 'aflow/' })).not.toHaveProperty('checks');
   });
 });
 

@@ -7,11 +7,14 @@
  */
 import { chromium } from 'playwright-core';
 
+import { entersValue } from './credentialFields.js';
+import { errorText } from './errors.js';
 import {
   type BrowserEngine,
   type EngineAction,
   type EngineBrowser,
   EngineCredentialField,
+  EngineFieldUnchecked,
   type EngineNavigation,
   EngineNavigationFailed,
   type EnginePage,
@@ -206,6 +209,17 @@ async function act(page: PwPage, ref: string, action: EngineAction): Promise<voi
   const element = page.locator(`aria-ref=${ref}`);
   if ((await element.count()) === 0) throw new EngineRefNotFound(ref);
   const timeout = ACTION_TIMEOUT_MS;
+  // Checked on the element itself, at the moment of the action: the outline
+  // the agent read may be older than the field now under that reference.
+  if (entersValue(action)) {
+    let password: boolean;
+    try {
+      password = await element.evaluate(isPasswordInput);
+    } catch (error) {
+      throw new EngineFieldUnchecked(ref, errorText(error));
+    }
+    if (password) throw new EngineCredentialField(ref);
+  }
   switch (action.kind) {
     case 'click':
       await element.click({ timeout });
@@ -214,11 +228,6 @@ async function act(page: PwPage, ref: string, action: EngineAction): Promise<voi
       await element.hover({ timeout });
       break;
     case 'type':
-      // Checked on the element itself, at the moment of typing: the outline
-      // the agent read may be older than the field now under that reference.
-      if (await element.evaluate(isPasswordInput).catch(() => true)) {
-        throw new EngineCredentialField(ref);
-      }
       await element.fill(action.text, { timeout });
       if (action.submit) await element.press('Enter', { timeout });
       break;
