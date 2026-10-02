@@ -564,17 +564,28 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(wf.output?.primary).toBe('prUrl');
   });
 
-  it("asks GitHub for the branch's open pull request by `owner:branch`", () => {
+  it("asks GitHub for the branch's open pull request by `owner:branch` and the base", () => {
     const findPr = taskOrThrow('find-pr');
     const template = findPr.inputTemplate;
     if (template === undefined) throw new Error('find-pr must carry a template');
     const declared = new Set(Object.keys(findPr.inputBindings ?? {}));
+    expect(findPr.inputBindings?.['base']).toEqual({ kind: 'run_input', path: 'base' });
     expect(
-      substituteTemplateBinds(template, { owner: 'aflowai', repo: 'aflow', branch: 'aflow/x' }, declared),
+      substituteTemplateBinds(
+        template,
+        { owner: 'aflowai', repo: 'aflow', branch: 'aflow/x', base: 'main' },
+        declared,
+      ),
     ).toEqual({
       apiId: 'github',
       endpointId: 'listPullRequests',
-      params: { owner: 'aflowai', repo: 'aflow', head: 'aflowai:aflow/x', state: 'open' },
+      params: {
+        owner: 'aflowai',
+        repo: 'aflow',
+        head: 'aflowai:aflow/x',
+        base: 'main',
+        state: 'open',
+      },
       response: { format: 'json' },
     });
     // A read: a second attempt asks again and changes nothing.
@@ -594,9 +605,11 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     const declared = new Set(Object.keys(openPr.inputBindings ?? {}));
     const inputs = { owner: 'aflowai', repo: 'aflow', branch: 'aflow/x', base: 'main', title: 'T' };
     const bodyOf = (resolved: Record<string, unknown>) =>
-      (substituteTemplateBinds(template, { ...inputs, ...resolved }, declared)['params'] as {
-        body: Record<string, unknown>;
-      }).body;
+      (
+        substituteTemplateBinds(template, { ...inputs, ...resolved }, declared)['params'] as {
+          body: Record<string, unknown>;
+        }
+      ).body;
 
     // The commission's own account, as the commit task reports it.
     const commit = HostFilePatchOutputSchema.parse({
@@ -747,8 +760,8 @@ interface Scenario {
   baseMoved?: boolean;
   /** The receipt the approval records, where not the one its preview resolves to. */
   approvalOf?: string;
-  /** Whether the branch already has an open pull request when the push lands. */
-  existingPr?: boolean;
+  /** The base of the pull request the branch already has open when the push lands, where it has one. */
+  existingPrInto?: string;
 }
 
 interface Outcome {
@@ -759,8 +772,15 @@ interface Outcome {
   state: Record<string, unknown>;
 }
 
-/** What each operation returns in a scenario, before the task's own projection. */
-function rawOutput(taskId: string, scenario: Scenario): Record<string, unknown> {
+/**
+ * What each operation returns in a scenario, before the task's own projection,
+ * given the input the task's template resolved to.
+ */
+function rawOutput(
+  taskId: string,
+  scenario: Scenario,
+  input: Record<string, unknown>,
+): Record<string, unknown> {
   switch (taskId) {
     case 'commit':
       return scenario.committed === false
@@ -789,13 +809,17 @@ function rawOutput(taskId: string, scenario: Scenario): Record<string, unknown> 
       return reviewEnding(scenario.review);
     case 'push':
       return { exitCode: 0 };
-    case 'find-pr':
+    case 'find-pr': {
+      // As GitHub filters: a `base` the request names excludes a pull request into any other.
+      const { base } = input['params'] as { base?: unknown };
+      const open =
+        scenario.existingPrInto !== undefined &&
+        (base === undefined || base === scenario.existingPrInto);
       return {
         statusCode: 200,
-        data: scenario.existingPr === true
-          ? [{ number: 5, html_url: 'https://github.com/aflowai/aflow/pull/5' }]
-          : [],
+        data: open ? [{ number: 5, html_url: 'https://github.com/aflowai/aflow/pull/5' }] : [],
       };
+    }
     case 'open-pr':
       return {
         statusCode: 201,
@@ -941,7 +965,15 @@ function publish(scenario: Scenario): Outcome {
           if (task.actionPreview?.op === 'host.process.exec' && key !== undefined) grants.add(key);
         }
       } else {
-        const raw = rawOutput(task.taskId, scenario);
+        const input =
+          task.inputTemplate === undefined
+            ? {}
+            : substituteTemplateBinds(
+                task.inputTemplate,
+                boundOutputs(task.inputBindings, outputs),
+                new Set(Object.keys(task.inputBindings ?? {})),
+              );
+        const raw = rawOutput(task.taskId, scenario, input);
         if (task.outputProjection !== undefined) {
           const projected = projectTaskOutput(task.outputProjection, raw, null);
           // A projection that fails with no resolution fails the task.
@@ -989,8 +1021,7 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
     for (const review of reviews) {
       for (const decision of decisions) {
         const reviewed = pushApproval === 'unless-unreviewed';
-        const clears = review === 'approve' || review === 'comment';
-        const asks = pushApproval === 'always' || (reviewed && !clears);
+        const asks = pushApproval === 'always' || (reviewed && review !== 'approve');
         const pushes = asks ? decision === 'approved' : true;
         it(`${pushApproval}, review ${review}, operator ${decision}: ${asks ? 'asks' : 'does not ask'}, ${pushes ? 'pushes' : 'does not push'}`, () => {
           const outcome = publish({ pushApproval, review, decision });
@@ -1003,27 +1034,23 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
     }
   }
 
-  it('pushes without asking on a `comment` verdict, and asks on `request_changes`', () => {
-    const comment = publish({
+  it('pushes without asking on `approve` alone, and asks on `comment` as on `request_changes`', () => {
+    for (const review of ['comment', 'request_changes'] as const) {
+      const outcome = publish({ pushApproval: 'unless-unreviewed', review, decision: 'declined' });
+      expect(outcome).toMatchObject({ asked: true, pushed: false });
+    }
+    const approved = publish({
       pushApproval: 'unless-unreviewed',
-      review: 'comment',
+      review: 'approve',
       decision: 'declined',
     });
-    expect(comment).toMatchObject({ asked: false, pushed: true });
-    expect(comment.ran).not.toContain('approve-push');
-
-    const changes = publish({
-      pushApproval: 'unless-unreviewed',
-      review: 'request_changes',
-      decision: 'declined',
-    });
-    expect(changes).toMatchObject({ asked: true, pushed: false });
+    expect(approved).toMatchObject({ asked: false, pushed: true });
+    expect(approved.ran).not.toContain('approve-push');
 
     expect(taskOrThrow('approve-push').when).toEqual({
       anyOf: [
         "tasks.read-push-approval.output.branchPolicy.pushApproval == 'always'",
-        "tasks.review-commit.output.verdict == 'request_changes'",
-        'tasks.review-commit.output.verdict == null',
+        "tasks.review-commit.output.verdict != 'approve'",
         "tasks.review-commit.status == 'failed'",
         'tasks.scan-commit.output.clean == false',
       ],
@@ -1040,9 +1067,14 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
     ]);
   });
 
-  it("reports the pull request a branch already has, and opens none beside it", () => {
+  it('reports the pull request a branch already has into the base, and opens none beside it', () => {
     for (const pushApproval of ['never', 'unless-unreviewed'] as const) {
-      const existing = publish({ pushApproval, review: 'approve', decision: 'approved', existingPr: true });
+      const existing = publish({
+        pushApproval,
+        review: 'approve',
+        decision: 'approved',
+        existingPrInto: 'main',
+      });
       expect(existing.pushed).toBe(true);
       expect(existing.ran).toContain('find-pr');
       expect(existing.ran).not.toContain('open-pr');
@@ -1057,9 +1089,22 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
         prUrl: 'https://github.com/aflowai/aflow/pull/7',
         prNumber: 7,
       });
+
+      // One open from the branch into another base is not this publication's.
+      const elsewhere = publish({
+        pushApproval,
+        review: 'approve',
+        decision: 'approved',
+        existingPrInto: 'release',
+      });
+      expect(elsewhere.ran).toContain('open-pr');
+      expect(elsewhere.state).toEqual({
+        prUrl: 'https://github.com/aflowai/aflow/pull/7',
+        prNumber: 7,
+      });
     }
     expect(PUBLISH_LOCAL_CHANGES.description).toContain(
-      'A branch that already has an open pull request gets no second one: the run reports that one.',
+      'A branch that already has an open pull request into the base gets no second one: the run reports that one.',
     );
   });
 
@@ -1204,7 +1249,7 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
     );
     const reviewed = lines.find((line) => line.startsWith('- `unless-unreviewed`:'));
     expect(reviewed).toContain(
-      "this run's Local Code Review of `pushRange` returned `request_changes`, or no verdict",
+      "this run's Local Code Review of `pushRange` did not return `approve`",
     );
     expect(reviewed).toContain('its verdict is on the "Review the commit" task');
     expect(taskOrThrow('review-commit').name).toBe('Review the commit');
@@ -1394,7 +1439,6 @@ describe('Publish Local Changes — the commit is scanned for secrets before any
         "tasks.approve-push.output.decision == 'approved'",
         "tasks.read-push-approval.output.branchPolicy.pushApproval == 'never'",
         "tasks.review-commit.output.verdict == 'approve'",
-        "tasks.review-commit.output.verdict == 'comment'",
       ],
       onMissingRef: 'skip',
     });

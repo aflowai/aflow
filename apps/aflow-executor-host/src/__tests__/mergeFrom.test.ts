@@ -580,20 +580,24 @@ describe('a publication whose whole change is the merge', () => {
       expect((await git(project, 'rev-list', '--parents', '-n', '1', sha)).trim()).toBe(
         `${sha} ${branchHead} ${mainHead}`,
       );
-      expect((await git(project, 'rev-list', '--first-parent', `${branchHead}..${sha}`)).trim()).toBe(
-        sha,
-      );
+      expect(
+        (await git(project, 'rev-list', '--first-parent', `${branchHead}..${sha}`)).trim(),
+      ).toBe(sha);
       expect(await head(project, `${sha}^{tree}`)).toBe(await mergedTree(branchHead, mainHead));
-      expect((await git(project, 'ls-tree', '--name-only', sha)).split('\n').filter(Boolean)).toEqual(
-        files,
-      );
+      expect(
+        (await git(project, 'ls-tree', '--name-only', sha)).split('\n').filter(Boolean),
+      ).toEqual(files);
     },
     60_000,
   );
 
   it('still refuses the markers a merge alone would publish', async () => {
     const { branchHead, mainHead } = await world(true);
-    const { output } = await commission({ harness: 'idle', base: 'aflow/fix', mergeFrom: 'origin/main' });
+    const { output } = await commission({
+      harness: 'idle',
+      base: 'aflow/fix',
+      mergeFrom: 'origin/main',
+    });
     expect(output['patchRef']).toBeUndefined();
 
     const { status, message } = await publish({

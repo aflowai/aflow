@@ -115,9 +115,9 @@ describe('a commission and a publication name the commit they start from', () =>
 
 describe('a fix to a branch its base moved past names the merge at both layers', () => {
   it('takes a remote branch to merge into the commission, and refuses what would read as an option', () => {
-    const onto = { ...base, base: "aflow/fix" };
-    expect(HostHarnessRunInputSchema.parse({ ...onto, mergeFrom: "origin/main" }).mergeFrom).toBe(
-      "origin/main",
+    const onto = { ...base, base: 'aflow/fix' };
+    expect(HostHarnessRunInputSchema.parse({ ...onto, mergeFrom: 'origin/main' }).mergeFrom).toBe(
+      'origin/main',
     );
     expect(HostHarnessRunInputSchema.parse(base).mergeFrom).toBeUndefined();
     for (const ref of ['', '--upload-pack=x', 'two words', 'origin/a..b']) {
@@ -165,9 +165,9 @@ describe('a fix to a branch its base moved past names the merge at both layers',
     expect(HostFilePatchOutputSchema.parse({ ...result, commit }).commit?.body).toBe(
       'Why it changed.',
     );
-    expect(HostFilePatchOutputSchema.safeParse({ ...result, commit: { ...commit, body: '' } }).success).toBe(
-      false,
-    );
+    expect(
+      HostFilePatchOutputSchema.safeParse({ ...result, commit: { ...commit, body: '' } }).success,
+    ).toBe(false);
   });
 
   it('carries the merged commit on the publication as a sha, never a branch name', () => {

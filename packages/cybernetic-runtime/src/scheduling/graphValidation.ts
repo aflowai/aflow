@@ -8,9 +8,13 @@ import {
   POLL_RESERVED_OUTPUT_KEY,
   predicateExpressions,
   predicateKey,
+  readTemplateOperatorNode,
   StepTypeSchema,
   TEMPLATE_BIND_KEY,
-  templateContainsBind,
+  TEMPLATE_CONCAT_KEY,
+  TEMPLATE_FIRST_OF_KEY,
+  templateContainsSubstitution,
+  type TemplateOperatorKey,
   toJsonSchemaSync,
   type WorkflowTask,
   type WorkflowTaskInputBinding,
@@ -1107,6 +1111,13 @@ function validateTemplateOpInput(
       return;
     }
 
+    const operatorNode = readTemplateOperatorNode(node);
+    if (operatorNode !== undefined) {
+      // A malformed operator node is owned by `validateInputTemplates`.
+      if ('operands' in operatorNode) checkOperator(operatorNode, schemaNode, path);
+      return;
+    }
+
     // Object node — descend structurally where the op-side schema is a
     // plain object shape (regardless of binds, so per-field diagnostics
     // match the flat path's even for bind-free templates). z.record-style
@@ -1118,7 +1129,7 @@ function validateTemplateOpInput(
       if (!isObjectShape) {
         // Exotic op-side construct (union/combinator/leaf). A pure-literal
         // value can still be Ajv-validated whole; binds make it unknowable.
-        if (!templateContainsBind(node)) checkLiteral(node, schemaNode, path);
+        if (!templateContainsSubstitution(node)) checkLiteral(node, schemaNode, path);
         return;
       }
       for (const requiredKey of stringArrayOf(schemaNode['required'])) {
@@ -1156,12 +1167,12 @@ function validateTemplateOpInput(
       const recordShaped =
         Object.keys(props).length === 0 &&
         (isRecord(schemaNode['additionalProperties']) || isRecord(schemaNode['propertyNames']));
-      if (recordShaped && !templateContainsBind(node)) checkLiteral(node, schemaNode, path);
+      if (recordShaped && !templateContainsSubstitution(node)) checkLiteral(node, schemaNode, path);
       return;
     }
 
     if (Array.isArray(node)) {
-      if (!templateContainsBind(node)) {
+      if (!templateContainsSubstitution(node)) {
         // Pure-literal array — Ajv-validate whole so array-level
         // constraints (minItems, uniqueItems) are covered.
         checkLiteral(node, schemaNode, path);
@@ -1178,6 +1189,60 @@ function validateTemplateOpInput(
 
     // Primitive leaf — concrete value, validate directly.
     checkLiteral(node, schemaNode, path);
+  };
+
+  // `$firstOf` yields one of its operands, so each must suit the position;
+  // `$concat` yields a string from string operands.
+  const checkOperator = (
+    node: { operator: TemplateOperatorKey; operands: unknown[] },
+    schemaNode: Record<string, unknown>,
+    path: string,
+  ): void => {
+    const operandsPath = joinField(path, node.operator);
+    if (node.operator === TEMPLATE_FIRST_OF_KEY) {
+      node.operands.forEach((operand, i) => {
+        checkNode(operand, schemaNode, `${operandsPath}[${String(i)}]`);
+      });
+      return;
+    }
+
+    node.operands.forEach((operand, i) => {
+      const operandPath = `${operandsPath}[${String(i)}]`;
+      if (typeof operand === 'string') return;
+      if (
+        isRecord(operand) &&
+        (Object.prototype.hasOwnProperty.call(operand, TEMPLATE_BIND_KEY) ||
+          readTemplateOperatorNode(operand) !== undefined)
+      ) {
+        checkNode(operand, STRING_SCHEMA, operandPath);
+        return;
+      }
+      errors.push({
+        kind: 'op_input_incompatible',
+        taskIds: [task.taskId],
+        field: operandPath,
+        detail:
+          `Operation task "${task.taskId}" inputTemplate "${TEMPLATE_CONCAT_KEY}" at "${path || '(root)'}" joins strings, ` +
+          `and operand ${String(i)} is ${describeLiteral(operand)}. Write it as a string, or bind a string output.`,
+      });
+    });
+
+    if (node.operands.every((operand): operand is string => typeof operand === 'string')) {
+      checkLiteral(node.operands.join(''), schemaNode, path);
+      return;
+    }
+    // Only the type: a joined string cannot be shown statically to meet the
+    // position's length, pattern or enum, which the op's own input check holds.
+    if (!schemaAdmitsString(schemaNode)) {
+      errors.push({
+        kind: 'op_input_incompatible',
+        taskIds: [task.taskId],
+        ...(path ? { field: path } : {}),
+        detail:
+          `Operation task "${task.taskId}" inputTemplate position "${path || '(root)'}" holds a "${TEMPLATE_CONCAT_KEY}" node, ` +
+          `which yields a string, and "${task.operation ?? ''}" takes no string there.`,
+      });
+    }
   };
 
   const checkLiteral = (node: unknown, schemaNode: Record<string, unknown>, path: string): void => {
@@ -1243,6 +1308,30 @@ function validateLiteralAgainstSchema(
     // false-reject; the coverage check covers the structural case.
     return null;
   }
+}
+
+const STRING_SCHEMA: Record<string, unknown> = { type: 'string' };
+
+/** Whether a position's schema can admit some string; a construct this cannot read admits one. */
+function schemaAdmitsString(schema: Record<string, unknown>): boolean {
+  for (const combinator of ['anyOf', 'oneOf'] as const) {
+    const branches = schema[combinator];
+    if (Array.isArray(branches)) {
+      return branches.some((branch) => !isRecord(branch) || schemaAdmitsString(branch));
+    }
+  }
+  const ty = schema['type'];
+  if (typeof ty === 'string') return ty === 'string';
+  if (Array.isArray(ty)) return ty.includes('string');
+  if (Object.keys(recordOf(schema['properties'])).length > 0) return false;
+  return true;
+}
+
+function describeLiteral(value: unknown): string {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return 'an array';
+  if (typeof value === 'object') return 'an object';
+  return `a ${typeof value} literal`;
 }
 
 function describeBinding(binding: WorkflowTaskInputBinding): string {

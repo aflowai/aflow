@@ -216,6 +216,97 @@ describe('inputTemplate — op input-contract checks', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Operator nodes — `$concat` and `$firstOf` are checked as the value they
+// yield, not as an object with an operator key.
+// ---------------------------------------------------------------------------
+
+describe('inputTemplate — operator nodes', () => {
+  const learning = {
+    id: 'baseline-1',
+    category: 'worked',
+    kind: 'search_heuristic',
+    observation: 'CV=0.835 on Titanic',
+    confidence: 'high',
+    source: 'agent',
+  };
+
+  it('checks a literal-only node as the value it yields', () => {
+    const slugged = (slug: unknown): WorkflowTask =>
+      opTask('record', 'workflow.learn', { inputTemplate: { slug, learnings: [] } });
+    const found = (slug: unknown): unknown[] =>
+      validateWorkflowGraph([slugged(slug)]).map((e) => [e.kind, e.field]);
+
+    expect(found({ $concat: ['run-', 'one'] })).toEqual([]);
+    expect(found({ $firstOf: ['run-one', 'run-two'] })).toEqual([]);
+    // Each half fits `slug`'s 64 characters; joined, they do not.
+    expect(found({ $concat: ['x'.repeat(40), 'y'.repeat(40)] })).toEqual([
+      ['op_input_incompatible', 'slug'],
+    ]);
+    // `$firstOf` may yield any operand, so each must fit.
+    expect(found({ $firstOf: ['run-one', 'z'.repeat(80)] })).toEqual([
+      ['op_input_incompatible', 'slug.$firstOf[1]'],
+    ]);
+  });
+
+  it('checks a node at an object-shaped position by what it yields, never as an object', () => {
+    const fallback = opTask('record', 'workflow.learn', {
+      inputs: { fallback: learning },
+      inputTemplate: { learnings: [{ $firstOf: [{ $bind: 'fallback' }, learning] }] },
+    });
+    expect(validateWorkflowGraph([fallback])).toEqual([]);
+
+    const joined = opTask('record', 'workflow.learn', {
+      inputs: { name: 'n' },
+      inputTemplate: { learnings: [{ $concat: ['a', { $bind: 'name' }] }] },
+    });
+    const errors = validateWorkflowGraph([joined]);
+    expect(errors.map((e) => [e.kind, e.field])).toEqual([
+      ['op_input_incompatible', 'learnings[0]'],
+    ]);
+    expect(errors[0]?.detail).toContain('yields a string');
+  });
+
+  it('refuses a `$concat` operand that is not a string, literal or bound', () => {
+    const literal = opTask('record', 'workflow.learn', {
+      inputTemplate: { slug: { $concat: ['run-', 7] }, learnings: [] },
+    });
+    const literalErrors = validateWorkflowGraph([literal]);
+    expect(literalErrors.map((e) => [e.kind, e.field])).toEqual([
+      ['op_input_incompatible', 'slug.$concat[1]'],
+    ]);
+    expect(literalErrors[0]?.detail).toContain('joins strings, and operand 1 is a number literal');
+
+    const producer = agent('prep', {
+      outputContract: {
+        schema: {
+          type: 'object',
+          required: ['count', 'label'],
+          properties: { count: { type: 'number' }, label: { type: 'string' } },
+        },
+      },
+    });
+    const bound = (path: string): WorkflowTask =>
+      opTask('record', 'workflow.learn', {
+        dependsOn: ['prep'],
+        inputBindings: { part: { kind: 'task_output', taskId: 'prep', path } },
+        inputTemplate: { slug: { $concat: ['run-', { $bind: 'part' }] }, learnings: [] },
+      });
+    const numberErrors = validateWorkflowGraph([producer, bound('count')]);
+    expect(numberErrors.map((e) => [e.kind, e.field, e.taskIds])).toEqual([
+      ['op_input_incompatible', 'slug.$concat[1]', ['record', 'prep']],
+    ]);
+    expect(validateWorkflowGraph([producer, bound('label')])).toEqual([]);
+  });
+
+  it('leaves a malformed operator node to the structural rule', () => {
+    const t = opTask('record', 'workflow.learn', {
+      inputTemplate: { slug: { $concat: ['only'] }, learnings: [] },
+    });
+    expect(kinds(validateWorkflowGraph([t]))).toEqual(['template_malformed_bind']);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // fromInput echo interplay
 // ---------------------------------------------------------------------------
 

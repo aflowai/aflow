@@ -14,7 +14,24 @@ export const TEMPLATE_CONCAT_KEY = '$concat';
 export const TEMPLATE_FIRST_OF_KEY = '$firstOf';
 
 const TEMPLATE_OPERATOR_KEYS = [TEMPLATE_CONCAT_KEY, TEMPLATE_FIRST_OF_KEY] as const;
-type TemplateOperatorKey = (typeof TEMPLATE_OPERATOR_KEYS)[number];
+export type TemplateOperatorKey = (typeof TEMPLATE_OPERATOR_KEYS)[number];
+
+/** A template node that carries an operator key: its operands where well formed, why not where not. */
+export type TemplateOperatorNode =
+  | { operator: TemplateOperatorKey; operands: unknown[] }
+  | { operator: TemplateOperatorKey; malformed: string };
+
+/** The operator node `value` is, or undefined when it carries no operator key. */
+export function readTemplateOperatorNode(value: unknown): TemplateOperatorNode | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const rec = value as Record<string, unknown>;
+  const operator = templateOperatorOf(rec);
+  if (operator === undefined) return undefined;
+  const malformed = malformedOperator(rec, operator);
+  return malformed === undefined
+    ? { operator, operands: rec[operator] as unknown[] }
+    : { operator, malformed };
+}
 
 /** The operator a node carries, if it carries one — well-formed or not. */
 function templateOperatorOf(rec: Record<string, unknown>): TemplateOperatorKey | undefined {
@@ -22,7 +39,10 @@ function templateOperatorOf(rec: Record<string, unknown>): TemplateOperatorKey |
 }
 
 /** Why an operator node is malformed, or undefined when it is well formed. */
-function malformedOperator(rec: Record<string, unknown>, key: TemplateOperatorKey): string | undefined {
+function malformedOperator(
+  rec: Record<string, unknown>,
+  key: TemplateOperatorKey,
+): string | undefined {
   const keys = Object.keys(rec);
   if (keys.length !== 1) {
     return `an operator node must have exactly the single key "${key}" (found keys: ${keys.sort().join(', ')})`;
@@ -127,13 +147,18 @@ function walk(node: unknown, path: string, out: InputTemplateAnalysis): void {
   }
 }
 
-/** Whether a template subtree contains any bind-node attempt (deep). */
-export function templateContainsBind(value: unknown): boolean {
+/**
+ * Whether a template subtree contains anything substitution replaces — a
+ * bind-node attempt or an operator node, well formed or not (deep). Without
+ * one, the subtree is the literal it is written as.
+ */
+export function templateContainsSubstitution(value: unknown): boolean {
   if (value === null || typeof value !== 'object') return false;
-  if (Array.isArray(value)) return value.some(templateContainsBind);
+  if (Array.isArray(value)) return value.some(templateContainsSubstitution);
   const rec = value as Record<string, unknown>;
   if (Object.prototype.hasOwnProperty.call(rec, TEMPLATE_BIND_KEY)) return true;
-  return Object.values(rec).some(templateContainsBind);
+  if (templateOperatorOf(rec) !== undefined) return true;
+  return Object.values(rec).some(templateContainsSubstitution);
 }
 
 /**

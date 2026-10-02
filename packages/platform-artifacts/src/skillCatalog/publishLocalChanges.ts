@@ -32,11 +32,10 @@ const PUSH_COMMAND = [
 /**
  * When the push goes ahead. Gating does not propagate from the approval, so the side-effecting tasks
  * carry it. Each line is one way the push is cleared — the operator approved,
- * the folder never asks, or this run's review looked and found nothing that
- * must block it — and only the first can hold once the approval ran: the
- * posture is read only over a range the scan cleared, where `never` does not
- * ask, and a review runs only where `approve` does not ask, which a clearing
- * verdict never reaches. So a decline is followed whatever the posture, and
+ * the folder never asks, or this run's review approved — and only the first
+ * can hold once the approval ran: the posture is read only over a range the
+ * scan cleared, where `never` does not ask, and a review runs only where
+ * `approve` does not ask. So a decline is followed whatever the posture, and
  * nothing holds when nothing was committed.
  */
 const PUSH_CLEARED = {
@@ -44,7 +43,6 @@ const PUSH_CLEARED = {
     "tasks.approve-push.output.decision == 'approved'",
     "tasks.read-push-approval.output.branchPolicy.pushApproval == 'never'",
     "tasks.review-commit.output.verdict == 'approve'",
-    "tasks.review-commit.output.verdict == 'comment'",
   ],
   onMissingRef: 'skip' as const,
 };
@@ -133,7 +131,7 @@ const MERGE_FROM_SCHEMA = {
 
 const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'publish-local-changes',
-  version: 18,
+  version: 19,
   name: 'Publish Local Changes',
   tagline:
     'Commit a patch onto a branch of a connected repository, then push it and open the pull request — asking the operator first unless the folder says otherwise.',
@@ -145,11 +143,11 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
 
 **Never pass a commission's \`patch\` text.** It is a copy for reading, cut short on a large change, and the run's inputs are capped at ${String(RUN_INPUTS_KB)} KB together. \`patchRef\` names the whole diff at any size.
 
-**When it asks before pushing**: the folder's push approval decides, and the machine block shows it as \`pushApproval\`. \`always\` asks before every push; \`never\` pushes without asking. \`unless-unreviewed\`: the run has Local Code Review read everything the push would add — its commit and any of the folder's own under it that \`origin\` lacks — and pushes without asking on \`approve\` or \`comment\`: it looked and found nothing that must block it; on \`request_changes\`, or a review that did not finish or could not start, it waits for the operator. The review is the catalog's, as the Store installed it — an edited copy is refused, and the run asks — and needs none started beside it. A folder that names no posture is \`${HOST_PUSH_APPROVAL_DEFAULT}\`, the default. Whatever the posture, the run scans every line the push would add, the headers and message of every commit it carries, and the pull request's title and summary for secrets before any of this, and a finding stops it with nothing pushed — which is what lets a review stand in for the operator. Only a range the scan cleared can go without asking: where a file was not read — binary, a NUL byte, too much in one commit, a line too long to read, or a Git LFS pointer, whose content the push uploads unread — or a line that looks like a secret ends in an \`aflow-scan: allow\` comment, no review runs and the run waits for the operator whatever the posture, \`never\` included, naming each. The comment never clears a line — whoever wrote the change could have written it — it only turns a stop into a question. Once the run asks, the operator's answer decides: a declined push pushes nothing, whatever the posture.
+**When it asks before pushing**: the folder's push approval decides, and the machine block shows it as \`pushApproval\`. \`always\` asks before every push; \`never\` pushes without asking. \`unless-unreviewed\`: the run has Local Code Review read everything the push would add — its commit and any of the folder's own under it that \`origin\` lacks — and pushes without asking only when it returns \`approve\` — on any other verdict, or a review that did not finish or could not start, it waits for the operator. The review is the catalog's, as the Store installed it — an edited copy is refused, and the run asks — and needs none started beside it. A folder that names no posture is \`${HOST_PUSH_APPROVAL_DEFAULT}\`, the default. Whatever the posture, the run scans every line the push would add, the headers and message of every commit it carries, and the pull request's title and summary for secrets before any of this, and a finding stops it with nothing pushed — which is what lets a review stand in for the operator. Only a range the scan cleared can go without asking: where a file was not read — binary, a NUL byte, too much in one commit, a line too long to read, or a Git LFS pointer, whose content the push uploads unread — or a line that looks like a secret ends in an \`aflow-scan: allow\` comment, no review runs and the run waits for the operator whatever the posture, \`never\` included, naming each. The comment never clears a line — whoever wrote the change could have written it — it only turns a stop into a question. Once the run asks, the operator's answer decides: a declined push pushes nothing, whatever the posture.
 
 **On an existing branch**: a fix commissioned from a branch (\`base: <branch>\`) is published onto it by naming it as \`branch\` and passing the commission's \`baseSha\` as \`baseSha\`; a branch is reused only that way, and a fresh change takes a fresh branch. A fix to a branch \`main\` has moved past is commissioned with \`mergeFrom: origin/<base>\` as well and published with the sha the commission reported in \`merge.from\` as \`mergeFrom\`: the branch then carries one merge commit holding the fix. A commission that reported a \`merge\` and no \`patchRef\` changed nothing beyond the merge: it is published with \`mergeFrom\` and neither \`patchRef\` nor \`patch\`.
 
-**With the result**: report the pull request link, and whether the push was approved by the operator or cleared by the folder's push approval — and, where the run reviewed its commit, the verdict. A branch that already has an open pull request gets no second one: the run reports that one. Where approval was declined, report that nothing was pushed and the commit stays on the machine to publish later. Where the scan found what looks like a secret, the run failed with nothing pushed: report the files, commit headers and messages, title or summary, lines and rules it names — never ask for or repeat the value — and say the secret has to come out and the change be commissioned again onto a fresh branch, this one holding that commit — or, for one of the folder's own commits \`origin\` lacks, that the commit needs rewriting first. Where the base branch on \`origin\` is no longer where the run measured from, forward or back, or \`origin\` pushes elsewhere than it fetches, the push refused just before git ran and nothing was pushed: report what its message names, and that the publication has to run again on a fresh branch. Where the push failed, git's own message says why: a branch on \`origin\` that moved on is not overwritten.`,
+**With the result**: report the pull request link, and whether the push was approved by the operator or cleared by the folder's push approval — and, where the run reviewed its commit, the verdict. A branch that already has an open pull request into the base gets no second one: the run reports that one. Where approval was declined, report that nothing was pushed and the commit stays on the machine to publish later. Where the scan found what looks like a secret, the run failed with nothing pushed: report the files, commit headers and messages, title or summary, lines and rules it names — never ask for or repeat the value — and say the secret has to come out and the change be commissioned again onto a fresh branch, this one holding that commit — or, for one of the folder's own commits \`origin\` lacks, that the commit needs rewriting first. Where the base branch on \`origin\` is no longer where the run measured from, forward or back, or \`origin\` pushes elsewhere than it fetches, the push refused just before git ran and nothing was pushed: report what its message names, and that the publication has to run again on a fresh branch. Where the push failed, git's own message says why: a branch on \`origin\` that moved on is not overwritten.`,
   tags: ['coding', 'publish', 'git', 'local', 'developer-tools'],
   capabilityHints: [
     {
@@ -607,23 +605,20 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
         {
           taskId: 'approve-push',
           name: 'Approve the push',
-          goal: "Operator approval before anything leaves the machine, asked when the folder asks before every push, when it asks unless reviewed and this run's review asked for changes to what the push would add or returned no verdict, and — whatever the posture — when the scan marked a line allowed or could not read a file. Approving pushes the commit to its branch on origin and opens the pull request; declining leaves the branch on the machine, whatever the posture.",
+          goal: "Operator approval before anything leaves the machine, asked when the folder asks before every push, when it asks unless reviewed and this run's review did not approve what the push would add, and — whatever the posture — when the scan marked a line allowed or could not read a file. Approving pushes the commit to its branch on origin and opens the pull request; declining leaves the branch on the machine, whatever the posture.",
           type: 'human' as const,
           intent: 'approve' as const,
           failureMode: 'isolate' as const,
           dependsOn: ['read-repository', 'scan-commit', 'review-commit'],
           approves: ['commit'],
-          // The review's result schema holds its verdict to `approve`,
-          // `comment` or `request_changes`, so the two verdict lines are every
-          // verdict that does not clear the push. A review task that failed has
-          // no output to compare, so its status carries the same answer as a
-          // null verdict. A scan that marked a line allowed or could not read
-          // every file asks whatever the posture.
+          // A review task that failed has no output to compare, so its status
+          // carries the same answer as a null verdict. A scan that marked a
+          // line allowed or could not read every file asks whatever the
+          // posture.
           when: {
             anyOf: [
               "tasks.read-push-approval.output.branchPolicy.pushApproval == 'always'",
-              "tasks.review-commit.output.verdict == 'request_changes'",
-              'tasks.review-commit.output.verdict == null',
+              "tasks.review-commit.output.verdict != 'approve'",
               "tasks.review-commit.status == 'failed'",
               'tasks.scan-commit.output.clean == false',
             ],
@@ -633,7 +628,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           // carry, so each case is one line and the verdict is named where the
           // run shows it.
           pauseInstruction:
-            "The change is committed on its branch in the connected folder, and nothing has left the machine. The push would add every commit of `pushRange` — this commit, and any of the folder's own under it that `origin` does not have yet. The scan read them for secrets and found none outside the lines and files listed below, where there are any. Asked for one of these, shown with the commit:\n- `always`: the folder's push approval asks before every push, and no review ran.\n- `unless-unreviewed`: this run's Local Code Review of `pushRange` returned `request_changes`, or no verdict — its verdict is on the \"Review the commit\" task, null where the review did not finish, and that task failed where the review could not start.\n- Lines marked allowed, whatever the posture: `allowed` names each by file, line and rule — a line that looks like a secret and ends in an `aflow-scan: allow` comment, which whoever wrote the change could have written as easily as the line — and no review ran. Read each of those lines before approving: approving pushes them.\n- Files, messages or texts the scan could not read whole, whatever the posture: `unscanned` names each and why — binary, a NUL byte in a line it adds, more than the scan reads of one file in one commit, a line too long to read, or a Git LFS pointer, whose content the push uploads without the scan having read it — and no review ran. Nothing unread there was checked for secrets; read it before approving.\nApproving pushes that commit to its branch on `origin`, with every commit of `pushRange` under it, and then opens a pull request against the base branch. Declining leaves the branch local whatever the folder's push approval says: nothing is pushed and no pull request is opened.",
+            "The change is committed on its branch in the connected folder, and nothing has left the machine. The push would add every commit of `pushRange` — this commit, and any of the folder's own under it that `origin` does not have yet. The scan read them for secrets and found none outside the lines and files listed below, where there are any. Asked for one of these, shown with the commit:\n- `always`: the folder's push approval asks before every push, and no review ran.\n- `unless-unreviewed`: this run's Local Code Review of `pushRange` did not return `approve` — its verdict is on the \"Review the commit\" task, null where the review did not finish, and that task failed where the review could not start.\n- Lines marked allowed, whatever the posture: `allowed` names each by file, line and rule — a line that looks like a secret and ends in an `aflow-scan: allow` comment, which whoever wrote the change could have written as easily as the line — and no review ran. Read each of those lines before approving: approving pushes them.\n- Files, messages or texts the scan could not read whole, whatever the posture: `unscanned` names each and why — binary, a NUL byte in a line it adds, more than the scan reads of one file in one commit, a line too long to read, or a Git LFS pointer, whose content the push uploads without the scan having read it — and no review ran. Nothing unread there was checked for secrets; read it before approving.\nApproving pushes that commit to its branch on `origin`, with every commit of `pushRange` under it, and then opens a pull request against the base branch. Declining leaves the branch local whatever the folder's push approval says: nothing is pushed and no pull request is opened.",
           // Every binding reads a task that succeeded whenever this asks: an
           // unresolved one refuses the approval itself, so nothing binds the
           // posture, which is not read over a range the scan did not clear.
@@ -730,7 +725,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
         {
           taskId: 'find-pr',
           name: 'Find the open pull request for the branch',
-          goal: "Ask GitHub, through the REST API, for the open pull request whose head is the pushed branch — a branch appended to may already have one, and GitHub refuses a second. That pull request now carries the push, and it is the run's result.",
+          goal: "Ask GitHub, through the REST API, for the open pull request from the pushed branch into the base branch — a branch appended to may already have one, and GitHub refuses a second. That pull request now carries the push, and it is the run's result.",
           failureInstruction:
             "The push went through — the commit is on its branch on `origin` — but GitHub could not be asked whether the branch already has an open pull request, so none was opened. Find the branch's pull request on GitHub, or open one for it there.",
           type: 'operation' as const,
@@ -746,6 +741,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             owner: { kind: 'run_input' as const, path: 'owner' },
             repo: { kind: 'run_input' as const, path: 'repo' },
             branch: { kind: 'run_input' as const, path: 'branch' },
+            base: { kind: 'run_input' as const, path: 'base' },
           },
           context: {
             strategy: 'scoped' as const,
@@ -764,6 +760,9 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
               repo: { $bind: 'repo' },
               // GitHub filters on the head only in its `owner:branch` form.
               head: { $concat: [{ $bind: 'owner' }, ':', { $bind: 'branch' }] },
+              // A pull request from the branch into another base is not this
+              // publication's, and reporting it would open none into `base`.
+              base: { $bind: 'base' },
               state: 'open',
             },
             response: { format: 'json' },
@@ -780,7 +779,8 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
               properties: {
                 prNumber: {
                   type: ['number', 'null'],
-                  description: "The branch's open pull request; null when it has none.",
+                  description:
+                    "The branch's open pull request into the base; null when it has none.",
                 },
                 prUrl: { type: ['string', 'null'] },
               },
@@ -866,7 +866,8 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
         {
           variableId: 'prUrl',
           name: 'Pull request link',
-          description: "The branch's pull request — the one this run opened, or the one already open for the branch — as a person opens it.",
+          description:
+            "The branch's pull request — the one this run opened, or the one already open for the branch — as a person opens it.",
           required: false,
           sensitive: false,
           immutable: false,
