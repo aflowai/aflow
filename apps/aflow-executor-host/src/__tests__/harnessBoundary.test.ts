@@ -113,6 +113,9 @@ describe('a harness widening stays a widening', () => {
     // permit, and a profile with no such argument refuses it. `base` names a
     // commit the connected folder already holds, resolved by the machine; it
     // chooses where the checkout starts, never what the harness may reach.
+    // `mergeFrom` names a branch on one of the folder's own remotes, fetched and
+    // merged by the machine before the harness runs; it chooses what the
+    // checkout holds, never what the harness may reach.
     const fields = [...harnessInput.matchAll(/^ {2}(\w+):/gm)].map((m) => m[1]);
     expect(fields).toEqual([
       'bindingId',
@@ -122,6 +125,7 @@ describe('a harness widening stays a widening', () => {
       'outputSchema',
       'resultRetries',
       'base',
+      'mergeFrom',
       'continueFrom',
       'maxTurns',
       'model',

@@ -5,6 +5,7 @@ import {
   HostHarnessRunInputSchema,
   HostHarnessRunOutputSchema,
 } from '../host.js';
+import { HostOperationRegistrations } from '../hostRegistrations.js';
 import { toJsonSchemaSync } from '../../utils/jsonSchema.js';
 
 const base = { bindingId: 'hb_x', task: 'Review the range.' };
@@ -109,6 +110,99 @@ describe('a commission and a publication name the commit they start from', () =>
         .success,
     ).toBe(true);
     expect(HostFilePatchOutputSchema.safeParse({ ...result, commit }).success).toBe(false);
+  });
+});
+
+describe('a fix to a branch its base moved past names the merge at both layers', () => {
+  it('takes a remote branch to merge into the commission, and refuses what would read as an option', () => {
+    expect(HostHarnessRunInputSchema.parse({ ...base, mergeFrom: 'origin/main' }).mergeFrom).toBe(
+      'origin/main',
+    );
+    expect(HostHarnessRunInputSchema.parse(base).mergeFrom).toBeUndefined();
+    for (const ref of ['', '--upload-pack=x', 'two words', 'origin/a..b']) {
+      expect(HostHarnessRunInputSchema.safeParse({ ...base, mergeFrom: ref }).success, ref).toBe(
+        false,
+      );
+    }
+  });
+
+  it('carries the merged commit on the publication as a sha, never a branch name', () => {
+    const withMerge = (mergeFrom: string) => ({
+      bindingId: 'hb_x',
+      patch: 'diff --git a/x b/x\n',
+      commit: { branch: 'aflow/fix', message: 'Fix', baseSha: 'a'.repeat(40), mergeFrom },
+    });
+    expect(HostFilePatchInputSchema.parse(withMerge('c'.repeat(40))).commit?.mergeFrom).toBe(
+      'c'.repeat(40),
+    );
+    for (const ref of ['origin/main', 'main', 'g'.repeat(40)]) {
+      const result = HostFilePatchInputSchema.safeParse(withMerge(ref));
+      expect(result.success, ref).toBe(false);
+      expect(result.error?.issues[0]?.message, ref).toContain('not a branch or tag name');
+    }
+  });
+
+  it('reports the merge a commission made, and the one a publication folded the patch into', () => {
+    const run = {
+      runId: 'hr_1',
+      harness: { id: 'claude' },
+      continued: false,
+      baseSha: 'a'.repeat(40),
+      filesChanged: 1,
+      patchTruncated: false,
+      exitCode: 0,
+      timedOut: false,
+      durationMs: 1,
+      truncated: false,
+      applies: 'clean',
+      headMoved: false,
+      refChanges: [],
+      blockedDomains: [],
+    };
+    const merge = {
+      from: 'c'.repeat(40),
+      conflicts: [
+        { path: 'a.txt', kind: 'content' },
+        { path: 'gone.txt', kind: 'modify-delete' },
+      ],
+    };
+    expect(HostHarnessRunOutputSchema.parse({ ...run, merge }).merge).toEqual(merge);
+    expect(HostHarnessRunOutputSchema.parse(run).merge).toBeUndefined();
+    for (const conflicts of [undefined, ['a.txt'], [{ path: 'a.txt', kind: 'rename' }]]) {
+      expect(
+        HostHarnessRunOutputSchema.safeParse({ ...run, merge: { from: 'c'.repeat(40), conflicts } })
+          .success,
+        JSON.stringify(conflicts),
+      ).toBe(false);
+    }
+
+    const commit = {
+      branch: 'aflow/fix',
+      sha: 'b'.repeat(40),
+      message: 'Fix',
+      baseSha: 'a'.repeat(40),
+      appended: true,
+      merged: 'c'.repeat(40),
+      range: `${'a'.repeat(40)}..${'b'.repeat(40)}`,
+      pushRefspec: `${'b'.repeat(40)}:refs/heads/aflow/fix`,
+    };
+    const parsed = HostFilePatchOutputSchema.parse({
+      state: 'applied',
+      filesChanged: 1,
+      files: ['x'],
+      conflicts: [],
+      commit,
+    });
+    expect(parsed.commit?.merged).toBe('c'.repeat(40));
+  });
+
+  it('tells both operations how a fix to a moved-past branch is commissioned and published', () => {
+    const hint =
+      'A fix to a branch its base has moved past is commissioned with `mergeFrom: origin/<base>` and published with the sha the commission reported in `merge.from` as `commit.mergeFrom`; the branch then carries one merge commit holding the fix';
+    for (const verb of ['run', 'patch']) {
+      const registration = HostOperationRegistrations.find((r) => r.verb === verb);
+      expect(registration?.usage?.whenToUse, verb).toContain(hint);
+    }
   });
 });
 

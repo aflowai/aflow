@@ -16,6 +16,8 @@
 import { rm } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 
+import type { BaseMerge } from './baseMerge.js';
+
 export interface HarnessSession {
   readonly id: string;
   /**
@@ -54,6 +56,12 @@ export interface HarnessSession {
    * same ref.
    */
   readonly base?: string;
+  /**
+   * The merge the checkout's last commit is, when a turn named `mergeFrom`. A
+   * later turn on the same checkout reports it again, since its diff is still
+   * taken against that merge and a publication has to make it again.
+   */
+  readonly merge?: BaseMerge;
   readonly createdAt: number;
   lastUsedAt: number;
   /**

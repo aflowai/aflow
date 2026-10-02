@@ -6,7 +6,7 @@ The review request arrives as the inputs of this task: \`range\` is the revision
 
 How to review:
 
-- Read the range with git — \`git log\`, \`git diff\`, \`git show\` — and establish what each commit set out to do before judging how it did it.
+- Read the range with git and establish what each commit set out to do before judging how it did it. For a range \`<base>..<sha>\`, the commits are \`git log <base>..<sha>\`, and what they change is the three-dot diff, \`git diff <base>...<sha>\`, taken from where the range's two ends meet: a branch its base has moved past reads as what it adds, and the base's own later changes do not read as the branch undoing them. \`git show\` reads one commit.
 - Read every changed file whole, then read what calls into it. A change is correct or incorrect in the context that uses it, and that context is in this checkout.
 - Look for correctness errors, regressions in behaviour the range did not set out to change, security and data-exposure problems, missing or misleading tests, and drift between a contract and its implementation — a schema, an interface, a documented promise.
 - Weight the lens in \`focus\` when one is given, and never let it narrow the search for blockers outside it.
@@ -143,13 +143,13 @@ const BRIEF_MAX_TURNS = 8;
 
 const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'review-local-changes',
-  version: 5,
+  version: 6,
   name: 'Review Local Changes',
   tagline:
     "Review committed changes in a connected repository with the machine's own coding agent.",
   description: `Fits a request to review changes that already exist in a repository on the operator's machine — "review what I just did on this branch", "look over these commits before they go anywhere". It reads a range of commits and returns a verdict with findings, and it changes nothing. Reviewing an open pull request is a different skill (review-pull-request); making a change is not this skill at all.
 
-**What it needs**: the connected folder holding the repository, and the range to review. Ask for whichever is missing — a range reads as \`main..HEAD\`, \`HEAD~3..HEAD\`, or a single commit. A focus is optional and worth asking for when the request names a worry: security, an API surface, the blast radius of a refactor.
+**What it needs**: the connected folder holding the repository, and the range to review. Ask for whichever is missing — a range reads as \`main..HEAD\`, \`HEAD~3..HEAD\`, or a single commit. The review lists a range's commits as given and reads its diff from where the two ends meet, \`main...HEAD\`, so a branch \`main\` has moved past reads as what it adds and not as undoing what \`main\` took since. A focus is optional and worth asking for when the request names a worry: security, an API surface, the blast radius of a refactor.
 
 **Depth is a first-class choice, not something to ask the coding agent for in \`focus\`.** \`brief\` is the smoke test — a first look, a check that the mechanics work: a handful of tool calls, one paragraph, and a verdict of \`comment\` unless something is plainly a blocker. An operator asking for something quick, a glance or a sanity check means \`brief\`, and it is budgeted in coding-agent turns (\`maxTurns\`: ${String(BRIEF_MAX_TURNS)}) so that it stays brief. \`standard\` reads the range with the repository around it. \`deep\` also runs the project's own checks over the touched files, and costs the most.
 
@@ -187,7 +187,7 @@ const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
           id: 'range',
           required: true,
           description:
-            'The revision range or ref to review — "main..HEAD", "HEAD~3..HEAD", a commit sha. It must be committed: the review reads the folder at its last commit.',
+            'The revision range or ref to review — "main..HEAD", "HEAD~3..HEAD", a commit sha. It must be committed: the review reads the folder at its last commit. A range `<base>..<sha>` is read as its commits, `<base>..<sha>`, and its diff from where the two ends meet, `<base>...<sha>`, so a branch its base has moved past reads as what it adds.',
           schema: { type: 'string', minLength: 1, maxLength: 200 },
         },
         {

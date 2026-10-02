@@ -199,6 +199,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
         branch: { $bind: 'branch' },
         message: { $bind: 'commitMessage' },
         baseSha: { $bind: 'baseSha' },
+        mergeFrom: { $bind: 'mergeFrom' },
         pushBase: { $bind: 'base' },
       },
     });
@@ -253,6 +254,51 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     );
     expect(PUBLISH_LOCAL_CHANGES.description).toContain(
       'a branch is reused only that way, and a fresh change takes a fresh branch',
+    );
+  });
+
+  it('carries the commit a commission merged in, only when the caller passed one', () => {
+    const commit = taskOrThrow('commit');
+    const template = commit.inputTemplate;
+    if (template === undefined) throw new Error('the commit task must carry a template');
+    const declared = new Set(Object.keys(commit.inputBindings ?? {}));
+    expect(commit.inputBindings?.['mergeFrom']).toEqual({ kind: 'run_input', path: 'mergeFrom' });
+    const inputs = {
+      bindingId: 'folder-1',
+      patch: 'diff',
+      branch: 'feat/x',
+      commitMessage: 'm',
+      base: 'main',
+      baseSha: 'a'.repeat(40),
+    };
+    expect(substituteTemplateBinds(template, inputs, declared)['commit']).not.toHaveProperty(
+      'mergeFrom',
+    );
+    const merged = substituteTemplateBinds(
+      template,
+      { ...inputs, mergeFrom: 'b'.repeat(40) },
+      declared,
+    );
+    expect(merged['commit']).toEqual({
+      branch: 'feat/x',
+      message: 'm',
+      baseSha: 'a'.repeat(40),
+      mergeFrom: 'b'.repeat(40),
+      pushBase: 'main',
+    });
+    expect(HostFilePatchInputSchema.safeParse({ ...merged, mode: 'clean' }).success).toBe(true);
+
+    const mergeFrom = (wf.runInputs ?? []).find((i) => i.id === 'mergeFrom');
+    expect(mergeFrom?.required).toBe(false);
+    const shaPattern = new RegExp((mergeFrom?.schema as { pattern: string }).pattern);
+    expect(shaPattern.test('b'.repeat(40))).toBe(true);
+    expect(shaPattern.test('origin/main')).toBe(false);
+    expect(commit.inputContract?.bindings['mergeFrom']?.schema).toEqual(mergeFrom?.schema);
+    expect(PUBLISH_LOCAL_CHANGES.description).toContain(
+      'is commissioned with `mergeFrom: origin/<base>` as well',
+    );
+    expect(PUBLISH_LOCAL_CHANGES.description).toContain(
+      'published with the sha the commission reported in `merge.from` as `mergeFrom`: the branch then carries one merge commit holding the fix',
     );
   });
 
