@@ -15,6 +15,7 @@ function wire() {
   const work = {
     stopClaiming: vi.fn(),
     inFlight: () => [],
+    whenInFlight: () => new Promise<void>(() => undefined),
     idle: () => Promise.resolve(),
   };
   const endInFlight = vi.fn();

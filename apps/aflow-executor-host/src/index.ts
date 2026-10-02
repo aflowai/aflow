@@ -442,6 +442,7 @@ async function main(): Promise<void> {
           void stopBrowserRuntime();
         },
         inFlight: () => runtime.inFlight(),
+        whenInFlight: () => runtime.whenInFlight(),
         idle: () => runtime.idle(),
       },
       endInFlight: endEverything,

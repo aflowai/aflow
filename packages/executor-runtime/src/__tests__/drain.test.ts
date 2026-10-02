@@ -156,6 +156,33 @@ describe('ExecutorRuntime drain', () => {
     expect(reportingMock.acknowledgeJob).toHaveBeenCalledWith(expect.anything(), 'host', 'msg-2');
   });
 
+  it('tells a drain when a read under way hands it a step after the last one ended', async () => {
+    const lateRead = deferred();
+    redisMock.readStepJobs.mockImplementationOnce(async () => {
+      await lateRead.promise;
+      return [{ id: 'msg-2', job: { ...HARNESS_JOB, stepExecutionId: 'step-2' } }];
+    });
+    await new Promise((r) => setTimeout(r, READ_BLOCK_MS * 2));
+
+    runtime.stopClaiming();
+    harnessEnds.resolve();
+    await new Promise((r) => setTimeout(r, READ_BLOCK_MS * 2));
+    expect(runtime.inFlight()).toEqual([]);
+
+    let stepped = false;
+    const inFlight = runtime.whenInFlight().then(() => {
+      stepped = true;
+    });
+    await new Promise((r) => setTimeout(r, READ_BLOCK_MS * 2));
+    expect(stepped).toBe(false);
+
+    lateRead.resolve();
+    await inFlight;
+    await runtime.idle();
+
+    expect(reportingMock.acknowledgeJob).toHaveBeenCalledWith(expect.anything(), 'host', 'msg-2');
+  });
+
   it('is idle once the step in flight ends', async () => {
     runtime.stopClaiming();
     let idle = false;

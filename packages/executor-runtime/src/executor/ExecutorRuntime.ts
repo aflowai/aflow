@@ -41,6 +41,7 @@ export class ExecutorRuntime implements JobLoopHost {
   private running = false;
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
   private idleWaiters: Array<() => void> = [];
+  private inFlightWaiters: Array<() => void> = [];
   private starting: Promise<void> | null = null;
   private consuming: Promise<void> = Promise.resolve();
 
@@ -187,6 +188,20 @@ export class ExecutorRuntime implements JobLoopHost {
     await new Promise<void>((resolve) => {
       this.idleWaiters.push(resolve);
     });
+  }
+
+  /** Resolves once a claimed step is in flight, at once if one already is. */
+  whenInFlight(): Promise<void> {
+    if (this.inFlightSteps.size > 0) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      this.inFlightWaiters.push(resolve);
+    });
+  }
+
+  stepScheduled(): void {
+    const waiters = this.inFlightWaiters;
+    this.inFlightWaiters = [];
+    for (const resolve of waiters) resolve();
   }
 
   stepSettled(messageId: string): void {

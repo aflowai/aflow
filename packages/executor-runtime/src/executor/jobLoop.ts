@@ -18,6 +18,7 @@ export interface JobLoopHost extends ProcessJobHost {
   /** Keyed by stream message id. */
   inFlightSteps: Map<string, InFlightStep>;
   stopRequested: boolean;
+  stepScheduled(): void;
   stepSettled(messageId: string): void;
 }
 
@@ -96,6 +97,7 @@ export function scheduleJob(host: JobLoopHost, messageId: string, job: StepJobMe
     operationId: job.operationId,
   };
   host.inFlightSteps.set(messageId, inFlight);
+  host.stepScheduled();
   void (async (): Promise<void> => {
     await host.limiter.acquire();
     let held = true;

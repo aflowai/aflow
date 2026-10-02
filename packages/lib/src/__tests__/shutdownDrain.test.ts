@@ -10,25 +10,44 @@ import {
 const HARNESS_TIMEOUT_MS = 30 * 60_000;
 const CHECK_TIMEOUT_MS = 10 * 60_000;
 
-/** Steps that end when the test says so, the way a harness run ends when its agent does. */
-function fakeWork(steps: InFlightWork[]) {
+/**
+ * Steps that end when the test says so, the way a harness run ends when its
+ * agent does. With a read under way the work is not idle, even with nothing in
+ * flight, until `deliver` returns that read.
+ */
+function fakeWork(steps: InFlightWork[], { readUnderWay = false } = {}) {
   const running = [...steps];
+  let reading = readUnderWay;
   let wake: (() => void) | undefined;
+  let stepStarted: (() => void) | undefined;
+  const isIdle = (): boolean => !reading && running.length === 0;
   return {
     stopClaiming: vi.fn(),
     inFlight: () => [...running],
+    whenInFlight: () =>
+      running.length > 0
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => {
+            stepStarted = resolve;
+          }),
     idle: () =>
-      running.length === 0
+      isIdle()
         ? Promise.resolve()
         : new Promise<void>((resolve) => {
             wake = resolve;
           }),
+    deliver(...late: InFlightWork[]) {
+      reading = false;
+      running.push(...late);
+      if (late.length > 0) stepStarted?.();
+      if (isIdle()) wake?.();
+    },
     finish(name: string) {
       running.splice(
         running.findIndex((step) => step.name === name),
         1,
       );
-      if (running.length === 0) wake?.();
+      if (isIdle()) wake?.();
     },
     slide(name: string, deadlineAt: number) {
       const step = running.find((s) => s.name === name);
@@ -211,6 +230,42 @@ describe('stopping the host executor', () => {
 
     await vi.advanceTimersByTimeAsync(HARNESS_TIMEOUT_MS - CHECK_TIMEOUT_MS);
     expect(endInFlight).toHaveBeenCalledOnce();
+  });
+
+  it('sets the deadline from the first step a read under way hands it after the drain began', async () => {
+    const work = fakeWork([], { readUnderWay: true });
+    const { endInFlight, lines } = wire(work);
+
+    process.emit(DRAIN_SIGNAL);
+    await vi.advanceTimersByTimeAsync(HARNESS_TIMEOUT_MS);
+    expect(exit).not.toHaveBeenCalled();
+    expect(lines[0]?.data).toEqual({ inFlight: [], deadline: 'none' });
+
+    work.deliver({ name: 'host.harness.run step-2', deadlineAt: Date.now() + CHECK_TIMEOUT_MS });
+    await vi.advanceTimersByTimeAsync(CHECK_TIMEOUT_MS - 1);
+    expect(endInFlight).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(endInFlight).toHaveBeenCalledOnce();
+    expect(exit).toHaveBeenCalledWith(0);
+    expect(lines.find((l) => l.message === 'Host Executor: drain ended')?.data).toEqual({
+      outcome: 'deadline',
+      ended: ['host.harness.run step-2'],
+    });
+  });
+
+  it('exits when a read under way returns nothing', async () => {
+    const work = fakeWork([], { readUnderWay: true });
+    const { endInFlight } = wire(work);
+
+    process.emit(DRAIN_SIGNAL);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(exit).not.toHaveBeenCalled();
+
+    work.deliver();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(endInFlight).not.toHaveBeenCalled();
+    expect(exit).toHaveBeenCalledWith(0);
   });
 
   it('logs one line as the drain begins, naming the steps and the deadline, and one as it ends', async () => {

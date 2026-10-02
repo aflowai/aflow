@@ -12,13 +12,7 @@ describe('the signal the watcher sends', () => {
     expect(['SIGTERM', 'SIGINT', 'SIGKILL', 'SIGHUP']).not.toContain(DRAIN_SIGNAL);
   });
 
-  it('passes on its own SIGTERM, which stops the service now', () => {
-    expect(signalToSend({ kind: 'stop', signal: 'SIGTERM', fromTerminal: false })).toBe('SIGTERM');
-    expect(signalToSend({ kind: 'stop', signal: 'SIGTERM', fromTerminal: true })).toBe('SIGTERM');
-  });
-
-  it('passes on a SIGINT no terminal has already delivered', () => {
-    expect(signalToSend({ kind: 'stop', signal: 'SIGINT', fromTerminal: false })).toBe('SIGINT');
-    expect(signalToSend({ kind: 'stop', signal: 'SIGINT', fromTerminal: true })).toBeNull();
+  it.each(['SIGTERM', 'SIGINT'])('passes on its own %s, which stops the service now', (signal) => {
+    expect(signalToSend({ kind: 'stop', signal })).toBe(signal);
   });
 });

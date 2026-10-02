@@ -16,13 +16,14 @@ import drainSignal from '../packages/lib/src/drainSignal.json' with { type: 'jso
 export const DRAIN_SIGNAL = drainSignal.signal;
 
 /**
- * @param {{ kind: 'restart' } | { kind: 'stop', signal: 'SIGTERM' | 'SIGINT', fromTerminal: boolean }} event
- * @returns {NodeJS.Signals | null} The signal to send the service, or null to send none.
+ * @param {{ kind: 'restart' } | { kind: 'stop', signal: 'SIGTERM' | 'SIGINT' }} event
+ * @returns {NodeJS.Signals} The signal to send the service.
  */
 export function signalToSend(event) {
   if (event.kind === 'restart') return DRAIN_SIGNAL;
-  // A Ctrl-C at a terminal reaches the service directly as well; passing it on
-  // would deliver it twice.
-  if (event.signal === 'SIGINT' && event.fromTerminal) return null;
+  // Passed on even when a terminal has delivered the same Ctrl-C to the
+  // service: whether it did cannot be told from here — a `kill -INT` to a
+  // foreground wrapper reaches it alone — and a second SIGINT only repeats a
+  // stop the service has already begun.
   return event.signal;
 }

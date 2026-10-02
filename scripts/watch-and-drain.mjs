@@ -96,12 +96,7 @@ for (const signal of ['SIGTERM', 'SIGINT']) {
   process.on(signal, () => {
     stopping = true;
     if (child === null) process.exit(0);
-    const relayed = signalToSend({
-      kind: 'stop',
-      signal,
-      fromTerminal: process.stdin.isTTY === true,
-    });
-    if (relayed !== null) child.kill(relayed);
+    child.kill(signalToSend({ kind: 'stop', signal }));
   });
 }
 

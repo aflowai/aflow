@@ -16,6 +16,8 @@ export interface InFlightWork {
 export interface DrainableWork {
   stopClaiming(): void;
   inFlight(): readonly InFlightWork[];
+  /** Resolves once something is in flight, at once if something already is. */
+  whenInFlight(): Promise<void>;
   /** Resolves once nothing is in flight. */
   idle(): Promise<void>;
 }
@@ -99,8 +101,14 @@ export function createShutdownController(
       // Read again each time it fires rather than fixed at the start: a step
       // still queued had no timeout yet, and a progress-aware one slides its own.
       const arm = (): void => {
+        if (settled) return;
         const latest = latestDeadline(work.inFlight());
-        if (latest === undefined) return;
+        // Nothing in flight, yet not idle: a read under way can still hand
+        // this consumer steps, and the first one's timeout sets the deadline.
+        if (latest === undefined) {
+          void work.whenInFlight().then(arm);
+          return;
+        }
         const wait = latest - Date.now();
         if (wait <= 0) {
           settle('deadline');
