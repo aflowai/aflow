@@ -89,11 +89,14 @@ export function pushApprovalOf(binding: HostBinding): HostPushApproval {
 }
 
 /**
- * What the machine's inventory says about pushing folders: each one's posture,
- * against the workspace it was connected for. A folder recording no workspace
- * reaches none, so it is left out rather than published against nothing.
+ * What the machine's inventory says about pushing folders: each one's posture
+ * and the checks it declares, against the workspace it was connected for. A
+ * folder recording no workspace reaches none, so it is left out rather than
+ * published against nothing.
  */
-export function pushPostures(bindings: ReadonlyMap<string, HostBinding>): HostInventoryFolders {
+export function publishingFolders(
+  bindings: ReadonlyMap<string, HostBinding>,
+): HostInventoryFolders {
   return [...bindings.values()]
     .flatMap((binding) =>
       binding.branchPolicy === undefined || binding.spaceId === undefined
@@ -103,6 +106,9 @@ export function pushPostures(bindings: ReadonlyMap<string, HostBinding>): HostIn
               id: binding.id,
               spaceId: binding.spaceId,
               pushApproval: resolveBranchPolicy(binding.branchPolicy).pushApproval,
+              ...(binding.branchPolicy.checks !== undefined
+                ? { checks: binding.branchPolicy.checks }
+                : {}),
             },
           ],
     )

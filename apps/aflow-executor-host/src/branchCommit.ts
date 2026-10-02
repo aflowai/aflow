@@ -80,6 +80,8 @@ export interface PatchCommit {
   readonly range: string;
   /** `<origin base sha>..<sha>`: every commit a push of this one would add, when a push base was named. */
   readonly pushRange?: string;
+  /** Where `origin/<pushBase>` stood: the first sha of `pushRange`, present exactly when it is. */
+  readonly pushBaseSha?: string;
   /** `<sha>:refs/heads/<branch>`: what a push of this commit sends. */
   readonly pushRefspec: string;
 }
@@ -349,7 +351,7 @@ export async function commitPatchOnBranch(
         appended: target.appended,
         ...(merge !== undefined ? { merged: merge.from } : {}),
         range: `${worktree.baseSha}..${sha}`,
-        ...(pushBaseSha !== undefined ? { pushRange: `${pushBaseSha}..${sha}` } : {}),
+        ...(pushBaseSha !== undefined ? { pushRange: `${pushBaseSha}..${sha}`, pushBaseSha } : {}),
         pushRefspec: `${sha}:refs/heads/${branch}`,
       },
     };
