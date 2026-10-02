@@ -21,17 +21,27 @@ function registryDefaults(): {
   };
 }
 
-const HOSTED: ComposedLanes = { edition: 'enterprise', codeLane: 'present', hostLane: 'absent' };
+const HOSTED: ComposedLanes = {
+  edition: 'enterprise',
+  codeLane: 'present',
+  hostLane: 'absent',
+  browserLane: 'absent',
+};
 const APPLIANCE: ComposedLanes = {
   edition: 'community-local',
   codeLane: 'absent',
   hostLane: 'present',
+  browserLane: 'present',
 };
 
 describe('composeHelmsmanSurface', () => {
   it('returns the registry default unchanged for a hosted edition composing every lane', () => {
     const authored = registryDefaults();
-    const composed = composeHelmsmanSurface(authored, { ...HOSTED, hostLane: 'present' });
+    const composed = composeHelmsmanSurface(authored, {
+      ...HOSTED,
+      hostLane: 'present',
+      browserLane: 'present',
+    });
 
     expect(composed.coreOperations).toEqual([...authored.coreOperations]);
     expect(composed.promotableOperations).toEqual([...HELMSMAN_DISCOVERY_PRESET]);

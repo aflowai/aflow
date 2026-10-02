@@ -492,7 +492,10 @@ describe('taking the execution grant away is a withdrawal too', () => {
           { id: 'files_only', root: '/b', mode: 'readwrite', allowsExecution: false, spaceId: 's' },
         ],
       });
-      const permitted = executionPermitted(new Map(policy.bindings.map((b) => [b.id, b])));
+      const permitted = executionPermitted({
+        bindings: new Map(policy.bindings.map((b) => [b.id, b])),
+        browsers: new Map(),
+      });
       expect([...permitted]).toEqual(['runs']);
     },
     WAITS_ON_THE_OS_MS,

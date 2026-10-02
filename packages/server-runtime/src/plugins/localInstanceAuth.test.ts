@@ -19,6 +19,7 @@ const LOCAL: EditionDescriptor = {
   computeRuntime: 'absent',
   codeLane: 'absent',
   hostLane: 'absent',
+  browserLane: 'absent',
 };
 
 const HOSTED: EditionDescriptor = {
@@ -29,6 +30,7 @@ const HOSTED: EditionDescriptor = {
   computeRuntime: 'present',
   codeLane: 'present',
   hostLane: 'absent',
+  browserLane: 'absent',
 };
 
 const request = (authorization?: string) =>

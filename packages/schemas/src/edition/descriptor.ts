@@ -142,6 +142,22 @@ export function hostLaneComposed(env: NodeJS.ProcessEnv = process.env): HostLane
   return credential !== undefined && credential !== '' ? 'present' : 'absent';
 }
 
+/**
+ * Whether a deployment carries a browser lane — `browser.*` served by a paired
+ * machine's own browser.
+ *
+ * The local backend lives in the host executor, so the lane exists exactly
+ * where the host lane does. Whether that machine found a Chrome is the
+ * executor's to answer when a page is opened; this says only that a machine
+ * able to answer can pair.
+ */
+export const BrowserLaneSchema = z.enum(['present', 'absent']);
+export type BrowserLane = z.infer<typeof BrowserLaneSchema>;
+
+export function browserLaneComposed(env: NodeJS.ProcessEnv = process.env): BrowserLane {
+  return hostLaneComposed(env);
+}
+
 export const ComputeAvailabilitySchema = z.object({
   composed: ComputeRuntimeSchema,
   executor: z.enum(['up', 'down', 'unknown']),
@@ -156,6 +172,7 @@ export const EditionDescriptorSchema = z.object({
   computeRuntime: ComputeRuntimeSchema,
   codeLane: CodeLaneSchema,
   hostLane: HostLaneSchema,
+  browserLane: BrowserLaneSchema,
 });
 export type EditionDescriptor = z.infer<typeof EditionDescriptorSchema>;
 
@@ -174,7 +191,11 @@ export type EditionDescriptor = z.infer<typeof EditionDescriptorSchema>;
 export const EditionSummarySchema = z.object({
   id: EditionIdSchema,
   surfaces: z.array(z.string()),
-  lanes: z.object({ codeLane: CodeLaneSchema, hostLane: HostLaneSchema }),
+  lanes: z.object({
+    codeLane: CodeLaneSchema,
+    hostLane: HostLaneSchema,
+    browserLane: BrowserLaneSchema,
+  }),
 });
 export type EditionSummary = z.infer<typeof EditionSummarySchema>;
 
@@ -299,6 +320,7 @@ export function resolveEditionDescriptor(env: NodeJS.ProcessEnv = process.env): 
       computeRuntime: env['PHOENIX_COMPUTE_RUNTIME']?.trim() === 'absent' ? 'absent' : 'present',
       codeLane: codeLaneComposed(env),
       hostLane: hostLaneComposed(env),
+      browserLane: browserLaneComposed(env),
     });
   }
 
@@ -366,6 +388,7 @@ export function resolveEditionDescriptor(env: NodeJS.ProcessEnv = process.env): 
     // edition's coding and command lane.
     codeLane: codeLaneComposed(env),
     hostLane: hostLaneComposed(env),
+    browserLane: browserLaneComposed(env),
   });
 }
 

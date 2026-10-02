@@ -212,6 +212,13 @@ export const CAPABILITY_BUNDLES: readonly CapabilityBundle[] = [
     capabilityGroupIds: ['host.harness'],
   },
   {
+    id: 'browser',
+    label: 'Browser',
+    hint: 'Open web pages in a real browser on the operator’s machine, with the sign-ins its profile holds.',
+    tier: 'on_demand',
+    capabilityGroupIds: ['browser.page'],
+  },
+  {
     id: 'http',
     label: 'Direct HTTP',
     hint: 'Call a bound endpoint raw. The connection is the normal path.',

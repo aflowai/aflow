@@ -9,6 +9,8 @@
  */
 import { describe, expect, it } from 'vitest';
 
+import { ConsumerGroups, StreamKeys } from '@aflow/schemas';
+
 import { renderRedisAcl } from './redisAcl.js';
 
 const acl = renderRedisAcl({
@@ -62,6 +64,42 @@ describe('redis acl', () => {
       '-replicaof',
     ]) {
       expect(hostLine).toContain(command);
+    }
+  });
+
+  it('admits every key a browser runtime touches, and no other lane', () => {
+    // The host executor runs `browser.*` from a second runtime under this same
+    // identity. Its consumer group is not a key — it lives in the stream — so
+    // naming the stream is what admits the group.
+    const patterns = hostLine
+      .split(' ')
+      .filter((rule) => rule.startsWith('~'))
+      .map(
+        (rule) =>
+          new RegExp(
+            `^${rule
+              .slice(1)
+              .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
+              .replace(/\*/g, '.*')}$`,
+          ),
+      );
+    const admitted = (key: string): boolean => patterns.some((pattern) => pattern.test(key));
+
+    const browserKeys = [
+      StreamKeys.jobStream('browser'),
+      'aflow:executor-heartbeat:browser:host-executor-4242',
+      StreamKeys.shardResultsStream(0),
+      StreamKeys.stepStateKey('t', 'step-1'),
+      'aflow:step-inflight:step-1',
+      'aflow:idempotency:step-1',
+      'aflow:cancelled:t:step-1',
+      'aflow:payload:tenants/t/runs/r/steps/step-1/attempt/1/output.json',
+    ];
+    expect(browserKeys.filter((key) => !admitted(key))).toEqual([]);
+    expect(ConsumerGroups.executor('browser')).toBe('exec_browser');
+
+    for (const lane of ['ai', 'api', 'search', 'compute', 'code']) {
+      expect(admitted(StreamKeys.jobStream(lane))).toBe(false);
     }
   });
 

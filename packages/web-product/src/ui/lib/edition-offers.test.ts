@@ -16,7 +16,7 @@ describe('repository designations', () => {
       edition: {
         id: 'enterprise',
         surfaces: [],
-        lanes: { codeLane: 'present', hostLane: 'absent' },
+        lanes: { codeLane: 'present', hostLane: 'absent', browserLane: 'absent' },
       },
     });
     expect(isRepoDesignationOffered(edition)).toBe(true);
@@ -25,7 +25,11 @@ describe('repository designations', () => {
   it('are withheld where it is not, whichever edition says so', () => {
     for (const id of ['community-local', 'enterprise']) {
       const edition = toEdition({
-        edition: { id, surfaces: [], lanes: { codeLane: 'absent', hostLane: 'present' } },
+        edition: {
+          id,
+          surfaces: [],
+          lanes: { codeLane: 'absent', hostLane: 'present', browserLane: 'present' },
+        },
       });
       expect(isRepoDesignationOffered(edition)).toBe(false);
     }

@@ -708,11 +708,17 @@ describe('executeStoreInstall — tenant shelf policy', () => {
 });
 
 describe('executeStoreInstall — the edition’s composed lanes', () => {
-  const HOSTED: ComposedLanes = { edition: 'enterprise', codeLane: 'present', hostLane: 'absent' };
+  const HOSTED: ComposedLanes = {
+    edition: 'enterprise',
+    codeLane: 'present',
+    hostLane: 'absent',
+    browserLane: 'absent',
+  };
   const LOCAL_WITH_MACHINE: ComposedLanes = {
     edition: 'community-local',
     codeLane: 'absent',
     hostLane: 'present',
+    browserLane: 'present',
   };
 
   it('refuses a listing whose lane is absent before anything is read or written', async () => {

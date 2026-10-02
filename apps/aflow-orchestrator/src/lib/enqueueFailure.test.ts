@@ -37,6 +37,23 @@ describe('no executor for the host lane', () => {
   });
 });
 
+describe('no executor for the browser lane', () => {
+  const failure = describeEnqueueFailure(new NoExecutorAvailableError('browser' as StepType));
+
+  it('names the machine the browser runs on and how to start it', () => {
+    const shown = toAgentToolError(failure);
+    expect(shown.message).toContain('host executor');
+    expect(shown.message).toMatch(/browser/i);
+    expect(shown.message).not.toContain('system error');
+    expect(failure.message).toMatch(/nothing was attempted/i);
+  });
+
+  it('does not invite a retry that cannot succeed', () => {
+    expect(failure.classification).toBe('configuration');
+    expect(toAgentToolError(failure).retry).toBe(false);
+  });
+});
+
 describe('every other lane', () => {
   it('still reads a missing executor as an outage worth retrying', () => {
     // Those executors are the appliance's own, so their absence is

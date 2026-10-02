@@ -14,12 +14,16 @@
 import type { EditionDescriptor } from './descriptor.js';
 
 /** The descriptor fields lane composition rests on. */
-export type ComposedLanes = Pick<EditionDescriptor, 'edition' | 'codeLane' | 'hostLane'>;
+export type ComposedLanes = Pick<
+  EditionDescriptor,
+  'edition' | 'codeLane' | 'hostLane' | 'browserLane'
+>;
 
 /** Whether the deployment composes an executor for `stepType` at all. */
 export function isStepTypeComposed(stepType: string, lanes: ComposedLanes): boolean {
   if (stepType === 'code') return lanes.codeLane === 'present';
   if (stepType === 'host') return lanes.hostLane === 'present';
+  if (stepType === 'browser') return lanes.browserLane === 'present';
   return true;
 }
 
@@ -36,6 +40,14 @@ export function isOperationComposed(operationId: string, lanes: ComposedLanes): 
 }
 
 /**
+ * A lane whose name alone would not tell the agent what is missing. A browser
+ * here is not a service the deployment runs but one on a paired machine.
+ */
+const LANE_PHRASES: Readonly<Record<string, string>> = {
+  browser: 'the browser lane, a browser on a paired machine',
+};
+
+/**
  * Why a deployment cannot serve this operation, in the agent's own terms.
  *
  * Names the edition, because the remedy differs by it: a hosted instance has no
@@ -48,7 +60,7 @@ export function uncomposedOperationReason(
   if (isOperationComposed(operationId, lanes)) return null;
   const stepType = operationId.split('.')[0] ?? operationId;
   return (
-    `lane_not_composed: "${operationId}" needs the ${stepType} lane, which the ` +
+    `lane_not_composed: "${operationId}" needs ${LANE_PHRASES[stepType] ?? `the ${stepType} lane`}, which the ` +
     `${lanes.edition} edition running here does not compose. No promotion or call can reach it.`
   );
 }

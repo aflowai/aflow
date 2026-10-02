@@ -70,7 +70,7 @@ async function resolve(
   spaceId: string | undefined,
 ): Promise<{ binding: HostBinding; server: LocalMcpServer }> {
   const policy = await loadHostPolicy(policyPath);
-  reapWithdrawn(executionPermitted(policy.bindings));
+  reapWithdrawn(executionPermitted(policy));
 
   const binding = requireBinding(policy.bindings, bindingId);
   requireSpace(binding, spaceId);

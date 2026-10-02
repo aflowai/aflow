@@ -19,8 +19,14 @@ import { basename, isAbsolute, resolve, sep } from 'node:path';
 
 import { z } from 'zod';
 
-import { HostBindingBranchPolicySchema } from '@aflow/schemas';
+import {
+  type BrowserProfile,
+  BrowserProfileSchema,
+  HostBindingBranchPolicySchema,
+} from '@aflow/schemas';
 
+import { type ChromeDiscovery, discoverChrome } from './browser/chromeDiscovery.js';
+import { browserProfileScope, effectiveBrowserProfiles } from './browser/profiles.js';
 import { type HarnessProfile, HarnessProfileSchema } from './harnessProfiles.js';
 import { type LocalMcpServer, LocalMcpServerSchema } from './localMcpServers.js';
 
@@ -98,6 +104,17 @@ export const HostPolicySchema = z.object({
     .array(z.string().min(1))
     .default([])
     .describe('Absolute paths a command may read, in addition to its binding.'),
+  /**
+   * Browser profiles this machine runs. Absent is not "none": a machine with a
+   * supported Chrome then offers the implied `default` profile, which is
+   * computed on load and never written here.
+   */
+  browsers: z
+    .array(BrowserProfileSchema)
+    .refine((profiles) => new Set(profiles.map((p) => p.id)).size === profiles.length, {
+      message: 'Each browser profile id appears once.',
+    })
+    .optional(),
 });
 
 export class HostBindingError extends Error {
@@ -124,9 +141,16 @@ export interface LoadedHostPolicy {
   mcpServers: Map<string, LocalMcpServer>;
   /** Extra read paths every command in this machine's bindings may use. */
   toolPaths: readonly string[];
+  /** The profiles in effect: those declared, or the implied `default`. */
+  browsers: Map<string, BrowserProfile>;
+  /** Where a browser was looked for, and the one found. */
+  chrome: ChromeDiscovery;
 }
 
-export async function loadHostPolicy(policyPath: string): Promise<LoadedHostPolicy> {
+export async function loadHostPolicy(
+  policyPath: string,
+  findChrome: () => ChromeDiscovery = discoverChrome,
+): Promise<LoadedHostPolicy> {
   let raw: string;
   try {
     raw = await readFile(policyPath, 'utf8');
@@ -140,11 +164,14 @@ export async function loadHostPolicy(policyPath: string): Promise<LoadedHostPoli
   if (!parsed.success) {
     throw new HostBindingError(`Host policy at ${policyPath} is not valid.`, 'policy');
   }
+  const chrome = findChrome();
   return {
     bindings: new Map(parsed.data.bindings.map((b) => [b.id, b])),
     harnesses: new Map(parsed.data.harnesses.map((h) => [h.id, h])),
     mcpServers: new Map(parsed.data.mcpServers.map((m) => [m.id, m])),
     toolPaths: parsed.data.toolPaths,
+    browsers: effectiveBrowserProfiles(parsed.data.browsers, chrome),
+    chrome,
   };
 }
 
@@ -761,10 +788,15 @@ export function requireSpace(binding: HostBinding, spaceId: string | undefined):
  * and its filesystem access until timeout. The fourth place had it right, which
  * is exactly how a rule drifts — so there is one of them now.
  */
-export function executionPermitted(bindings: ReadonlyMap<string, HostBinding>): Set<string> {
-  return new Set(
-    [...bindings.values()]
+export function executionPermitted(
+  policy: Pick<LoadedHostPolicy, 'bindings' | 'browsers'>,
+): Set<string> {
+  return new Set([
+    ...[...policy.bindings.values()]
       .filter((binding) => binding.allowsExecution)
       .map((binding) => binding.id),
-  );
+    // A profile's browser runs under the profile rather than a binding, and is
+    // permitted for as long as the profile is offered.
+    ...[...policy.browsers.keys()].map(browserProfileScope),
+  ]);
 }
