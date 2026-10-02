@@ -13,7 +13,11 @@ import { CHROME, harness, profile, refusal, RUN_A, RUN_B } from './fixtures/fake
 const RUN_ELSEWHERE = { tenantId: 't1', runId: 'run-c', spaceId: 'space-2' };
 
 function policyOf(profiles: BrowserProfile[]) {
-  return { browsers: new Map(profiles.map((p) => [p.id, p])), chrome: CHROME };
+  return {
+    browsers: new Map(profiles.map((p) => [p.id, p])),
+    invalidBrowsers: new Map(),
+    chrome: CHROME,
+  };
 }
 
 async function settle(): Promise<void> {

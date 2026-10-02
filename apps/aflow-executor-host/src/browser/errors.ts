@@ -1,6 +1,7 @@
 export type BrowserFailureKind =
   | 'page_gone'
   | 'unknown_profile'
+  | 'profile_invalid'
   | 'profile_not_for_space'
   | 'appliance_origin'
   | 'origin_denied'

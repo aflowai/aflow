@@ -19,16 +19,13 @@ import { basename, isAbsolute, resolve, sep } from 'node:path';
 
 import { z } from 'zod';
 
-import {
-  type BrowserProfile,
-  BrowserProfileSchema,
-  HostBindingBranchPolicySchema,
-} from '@aflow/schemas';
+import { type BrowserProfile, HostBindingBranchPolicySchema } from '@aflow/schemas';
 
 import { type ChromeDiscovery, discoverChrome } from './browser/chromeDiscovery.js';
-import { effectiveBrowserProfiles } from './browser/profiles.js';
+import { effectiveBrowserProfiles, parseBrowserProfiles } from './browser/profiles.js';
 import { type HarnessProfile, HarnessProfileSchema } from './harnessProfiles.js';
 import { type LocalMcpServer, LocalMcpServerSchema } from './localMcpServers.js';
+import { describePolicyIssues } from './policyIssues.js';
 
 export const HostBindingModeSchema = z.enum(['read', 'readwrite']);
 export type HostBindingMode = z.infer<typeof HostBindingModeSchema>;
@@ -108,13 +105,12 @@ export const HostPolicySchema = z.object({
    * Browser profiles this machine runs. Absent is not "none": a machine with a
    * supported Chrome then offers the implied `default` profile, which is
    * computed on load and never written here.
+   *
+   * Each entry is parsed on its own when the policy is loaded, so a profile
+   * the schema refuses disables that profile, not the folders, harnesses and
+   * servers beside it.
    */
-  browsers: z
-    .array(BrowserProfileSchema)
-    .refine((profiles) => new Set(profiles.map((p) => p.id)).size === profiles.length, {
-      message: 'Each browser profile id appears once.',
-    })
-    .optional(),
+  browsers: z.array(z.unknown()).optional(),
 });
 
 export class HostBindingError extends Error {
@@ -143,6 +139,8 @@ export interface LoadedHostPolicy {
   toolPaths: readonly string[];
   /** The profiles in effect: those declared, or the implied `default`. */
   browsers: Map<string, BrowserProfile>;
+  /** Declared profiles that did not parse and are disabled, by id, with the schema's reason. */
+  invalidBrowsers: ReadonlyMap<string, string>;
   /** Where a browser was looked for, and the one found. */
   chrome: ChromeDiscovery;
 }
@@ -160,17 +158,32 @@ export async function loadHostPolicy(
       'policy',
     );
   }
-  const parsed = HostPolicySchema.safeParse(JSON.parse(raw));
-  if (!parsed.success) {
-    throw new HostBindingError(`Host policy at ${policyPath} is not valid.`, 'policy');
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch (error) {
+    throw new HostBindingError(
+      `Host policy at ${policyPath} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+      'policy',
+    );
   }
+  const parsed = HostPolicySchema.safeParse(json);
+  if (!parsed.success) {
+    throw new HostBindingError(
+      `Host policy at ${policyPath} is not valid: ${describePolicyIssues(parsed.error)}`,
+      'policy',
+    );
+  }
+  const declared =
+    parsed.data.browsers !== undefined ? parseBrowserProfiles(parsed.data.browsers) : undefined;
   const chrome = findChrome();
   return {
     bindings: new Map(parsed.data.bindings.map((b) => [b.id, b])),
     harnesses: new Map(parsed.data.harnesses.map((h) => [h.id, h])),
     mcpServers: new Map(parsed.data.mcpServers.map((m) => [m.id, m])),
     toolPaths: parsed.data.toolPaths,
-    browsers: effectiveBrowserProfiles(parsed.data.browsers, chrome),
+    browsers: effectiveBrowserProfiles(declared?.profiles, chrome),
+    invalidBrowsers: declared?.invalid ?? new Map(),
     chrome,
   };
 }

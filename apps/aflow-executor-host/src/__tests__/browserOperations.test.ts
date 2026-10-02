@@ -222,6 +222,39 @@ describe('browser.page.act', () => {
     );
     expect(refused.kind).toBe('credential_field');
   });
+
+  it('refuses a character key on a password field, so nothing is entered one key at a time', async () => {
+    const h = harness();
+    const { pageId } = await h.driver.open({
+      ...RUN_A,
+      redelivered: false,
+      profileId: 'default',
+      url: 'https://example.com/',
+    });
+    for (const key of ['h', 'Shift+H', 'Control+V']) {
+      const refused = await refusal(h.driver.act(act(pageId, 'e5', { kind: 'press', key })));
+      expect(refused.kind, key).toBe('credential_field');
+      expect(refused.message).toContain('Credentials are entered by the operator');
+    }
+    const select = await refusal(
+      h.driver.act(act(pageId, 'e5', { kind: 'select', values: ['x'] })),
+    );
+    expect(select.kind).toBe('credential_field');
+    expect(h.pages[0]?.actions).toEqual([]);
+  });
+
+  it('presses Enter on a password field: it submits and enters nothing', async () => {
+    const h = harness();
+    const { pageId } = await h.driver.open({
+      ...RUN_A,
+      redelivered: false,
+      profileId: 'default',
+      url: 'https://example.com/',
+    });
+    const pressed = await h.driver.act(act(pageId, 'e5', { kind: 'press', key: 'Enter' }));
+    expect(pressed.outcome).toBe('performed');
+    expect(h.pages[0]?.actions).toEqual([{ ref: 'e5', action: { kind: 'press', key: 'Enter' } }]);
+  });
 });
 
 describe('posture and origin rules', () => {
@@ -420,6 +453,7 @@ describe('posture and origin rules', () => {
     const denying = profile({ rules: [{ origin: 'https://bank.example.org', effect: 'deny' }] });
     await h.driver.policyChanged({
       browsers: new Map([['default', denying]]),
+      invalidBrowsers: new Map(),
       chrome: { searched: [] },
     });
     expect(h.proxies[0]?.check('bank.example.org', '')?.kind).toBe('rule');

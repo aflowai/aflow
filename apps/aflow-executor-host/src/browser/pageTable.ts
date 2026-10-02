@@ -9,7 +9,7 @@
 import { randomBytes } from 'node:crypto';
 
 import { BrowserDriverError } from './errors.js';
-import type { PageObservations } from './observations.js';
+import { type PageObservations, redactUrl } from './observations.js';
 import type { EnginePage, PageSnapshot } from './types.js';
 
 export interface PageOwner {
@@ -27,11 +27,22 @@ export interface HeldPage {
   readonly observations: PageObservations;
   /** The address the open asked for, as a URL spells it. */
   readonly requestedUrl: string;
+  /** Where the page was when last looked at, as `pageAddress` shows it. */
   lastUrl: string;
   lastTitle: string;
   lastUsedAt: number;
   /** The newest snapshot taken of the page: its references are the ones that resolve. */
   lastSnapshot?: PageSnapshot;
+}
+
+/**
+ * Where the page is now, as it may leave this machine, recorded as its last
+ * address. A landing page's own address carries the codes and tokens a
+ * sign-in hands back, so it takes the rule every request the page makes takes.
+ */
+export function pageAddress(held: Pick<HeldPage, 'page' | 'lastUrl'>): string {
+  held.lastUrl = redactUrl(held.page.url());
+  return held.lastUrl;
 }
 
 /** Pages a run lost, remembered long enough to say where each one was. */
@@ -77,7 +88,6 @@ export class PageTable {
     requestedUrl: string,
     page: EnginePage,
     observations: PageObservations,
-    url: string,
     now: number,
   ): HeldPage {
     const key = ownerKey(owner);
@@ -91,10 +101,11 @@ export class PageTable {
       requestedUrl,
       page,
       observations,
-      lastUrl: url,
+      lastUrl: '',
       lastTitle: '',
       lastUsedAt: now,
     };
+    pageAddress(entry);
     pages.set(entry.pageId, entry);
     return entry;
   }

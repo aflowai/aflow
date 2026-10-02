@@ -13,6 +13,7 @@ import { BrowserProfileSchema, type BrowserProfile } from '@aflow/schemas';
 import { createLocalAddressClassifier } from '../../browser/addresses.js';
 import type { ChromeDiscovery } from '../../browser/chromeDiscovery.js';
 import type { ChromeLauncher, ChromeLaunchInput } from '../../browser/chromeProcess.js';
+import { entersValue } from '../../browser/credentialFields.js';
 import { BrowserDriver, type BrowserPolicy } from '../../browser/driver.js';
 import type { EgressProxy, EgressProxyOptions, ProxyRefusal } from '../../browser/egressProxy.js';
 import { BrowserDriverError } from '../../browser/errors.js';
@@ -150,7 +151,7 @@ export class FakePage implements EnginePage {
     if (!this.snapshotText().includes(`[ref=${ref}]`)) {
       return Promise.reject(new EngineRefNotFound(ref));
     }
-    if (action.kind === 'type' && /textbox "Password"/.test(this.lineOf(ref))) {
+    if (entersValue(action) && /textbox "Password"/.test(this.lineOf(ref))) {
       return Promise.reject(new EngineCredentialField(ref));
     }
     this.actions.push({ ref, action });
@@ -280,6 +281,7 @@ export interface Harness {
 export function harness(
   options: {
     browsers?: BrowserProfile[];
+    invalidBrowsers?: ReadonlyMap<string, string>;
     chrome?: ChromeDiscovery;
     world?: Partial<FakeWorld>;
     /** A browser told to stop goes on running until the test ends it, as a slow exit does. */
@@ -366,6 +368,7 @@ export function harness(
   const browsers = options.browsers ?? [BrowserProfileSchema.parse({ id: 'default' })];
   let policy: BrowserPolicy = {
     browsers: new Map(browsers.map((profile) => [profile.id, profile])),
+    invalidBrowsers: options.invalidBrowsers ?? new Map(),
     chrome: options.chrome ?? CHROME,
   };
   const driver = new BrowserDriver({
