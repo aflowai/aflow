@@ -32,7 +32,7 @@ export function profileDirectory(hostDir: string, profileId: string): string {
 export function chromeArgv(
   executable: string,
   userDataDir: string,
-  window: BrowserProfile['window'],
+  profile: Pick<BrowserProfile, 'window' | 'windowSize'>,
   proxyServer: string,
 ): string[] {
   return [
@@ -47,7 +47,8 @@ export function chromeArgv(
     '--proxy-bypass-list=<-loopback>',
     '--no-first-run',
     '--no-default-browser-check',
-    ...(window === 'visible' ? [] : ['--headless=new']),
+    `--window-size=${String(profile.windowSize.width)},${String(profile.windowSize.height)}`,
+    ...(profile.window === 'visible' ? [] : ['--headless=new']),
     'about:blank',
   ];
 }
@@ -105,7 +106,7 @@ export function createChromeLauncher(
       await rm(portFile, { force: true });
 
       const service: RunningService = start({
-        argv: chromeArgv(executable, userDataDir, profile.window, proxyServer),
+        argv: chromeArgv(executable, userDataDir, profile, proxyServer),
         cwd: userDataDir,
         idPrefix: 'browser',
         scope: { kind: 'browser-profile', id: profile.id },

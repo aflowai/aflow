@@ -274,4 +274,27 @@ describe('the sign-in sitting', () => {
     });
     expect(h.launches.map((launch) => launch.profile.window)).toEqual(['visible', 'hidden']);
   });
+
+  it('says when the window is on screen, and the machine reports it open until it closes', async () => {
+    const h = world({ browsers: [profile()] });
+    h.cookieSites = ['mail.example.com'];
+    const whileShown: boolean[] = [];
+    h.onSleep = () => {
+      for (const page of h.pagesByLaunch[0] ?? []) page.closed = true;
+    };
+
+    await h.driver.signIn('default', {
+      onShown: () => {
+        void h.driver.machineProfiles().then((profiles) => {
+          whileShown.push(profiles[0]?.windowShown ?? false);
+        });
+      },
+    });
+    const after = await h.driver.machineProfiles();
+
+    expect(whileShown).toEqual([true]);
+    expect(after).toEqual([
+      expect.objectContaining({ running: true, windowShown: false, sites: ['mail.example.com'] }),
+    ]);
+  });
 });

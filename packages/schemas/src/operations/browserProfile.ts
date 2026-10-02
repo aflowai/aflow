@@ -120,6 +120,20 @@ export const DEFAULT_BROWSER_IDLE_MINUTES = 30;
 /** Minutes a hand-off waits for the operator before it returns `timed_out`. */
 export const DEFAULT_BROWSER_HANDOFF_MINUTES = 15;
 
+/**
+ * The size Chrome is started at, headless or windowed. Left to itself a
+ * headless Chrome is 756×469, so pages lay out as on a small screen.
+ */
+export const DEFAULT_BROWSER_WINDOW_SIZE = { width: 1280, height: 800 } as const;
+
+const WindowPixelsSchema = z.number().int().positive().max(16_384);
+
+export const BrowserWindowSizeSchema = z.object({
+  width: WindowPixelsSchema,
+  height: WindowPixelsSchema,
+});
+export type BrowserWindowSize = z.infer<typeof BrowserWindowSizeSchema>;
+
 export const BrowserProfileSchema = z.object({
   id: BrowserProfileIdSchema,
   spaces: z
@@ -132,6 +146,10 @@ export const BrowserProfileSchema = z.object({
     .enum(['hidden', 'visible'])
     .default('hidden')
     .describe('`hidden` runs the browser headless; `visible` gives it a window on this machine.'),
+  windowSize: BrowserWindowSizeSchema.default({ ...DEFAULT_BROWSER_WINDOW_SIZE }).describe(
+    'The browser’s size in pixels, headless or windowed: pages lay out for it and a ' +
+      'screenshot of the visible page is taken at it.',
+  ),
   // A job does not yet carry whether a person started its run, so a profile
   // closed to unattended runs would be one this machine cannot keep closed.
   unattended: z

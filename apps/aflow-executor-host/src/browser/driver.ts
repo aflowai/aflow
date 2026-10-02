@@ -52,6 +52,7 @@ import type {
   ReadResult,
   RunScope,
   ScreenshotResult,
+  SignInOptions,
   SignInResult,
   SnapshotResult,
 } from './driverTypes.js';
@@ -565,10 +566,11 @@ export class BrowserDriver {
     const policy = await this.deps.loadPolicy();
     return await Promise.all(
       [...policy.browsers.values()].map(async (profile): Promise<MachineProfile> => {
+        const windowShown = this.browsers.isShown(profile.id);
         const running = this.browsers.get(profile.id);
-        if (running === undefined) return { profile, running: false };
+        if (running === undefined) return { profile, running: false, windowShown };
         const sites = await running.browser.cookieSites().catch(() => undefined);
-        return { profile, running: true, ...(sites !== undefined ? { sites } : {}) };
+        return { profile, running: true, windowShown, ...(sites !== undefined ? { sites } : {}) };
       }),
     );
   }
@@ -588,8 +590,8 @@ export class BrowserDriver {
   }
 
   /** The operator's sign-in sitting on one profile; see `OperatorWindows`. */
-  async signIn(profileId: string, maxMs?: number): Promise<SignInResult> {
-    return await this.windows.signIn(profileId, maxMs);
+  async signIn(profileId: string, options?: SignInOptions): Promise<SignInResult> {
+    return await this.windows.signIn(profileId, options);
   }
 
   // -------------------------------------------------------------------------

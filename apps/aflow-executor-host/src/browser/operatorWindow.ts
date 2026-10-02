@@ -20,6 +20,7 @@ import type {
   HandoffResult,
   PageView,
   RunScope,
+  SignInOptions,
   SignInResult,
 } from './driverTypes.js';
 import { BrowserDriverError, errorText } from './errors.js';
@@ -204,12 +205,14 @@ export class OperatorWindows {
    * it, then the sites the profile holds a session for. Any profile on the
    * machine; no run is involved.
    */
-  async signIn(profileId: string, maxMs: number = SIGN_IN_SITTING_MAX_MS): Promise<SignInResult> {
+  async signIn(profileId: string, options: SignInOptions = {}): Promise<SignInResult> {
     const { browsers, clock } = this.host;
+    const maxMs = options.maxMs ?? SIGN_IN_SITTING_MAX_MS;
     const policy = await this.host.loadPolicy();
     const profile = resolveProfile(policy, profileId, undefined, true);
     const executable = chromeExecutable(policy);
     const shown = await browsers.showWindow(profile, executable);
+    options.onShown?.();
     let outcome: SignInResult['outcome'];
     try {
       const events = new PageObservations(clock.now).events();

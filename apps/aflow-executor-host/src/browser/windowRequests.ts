@@ -31,9 +31,9 @@ export const EXECUTOR_CLAIM_TIMEOUT_MS = 3_000;
 /** How often the command line looks for the claim and the result. */
 export const REQUEST_POLL_MS = 200;
 /**
- * A request older than this was left by a command line that is gone — it would
- * have withdrawn it — and a window shown for it would surprise the operator, so
- * it is discarded unanswered.
+ * A request older than this was most likely left by a command line that is
+ * gone, and a window shown for it would surprise the operator, so it is refused
+ * — answered, in case the command line is still waiting after all.
  */
 export const REQUEST_STALE_MS = 2 * EXECUTOR_CLAIM_TIMEOUT_MS;
 
@@ -117,11 +117,23 @@ export function serveBrowserRequests(
     let result: BrowserWindowResult;
     try {
       const request = BrowserWindowRequestSchema.parse(JSON.parse(await readFile(claimed, 'utf8')));
-      if (now() - request.requestedAt > REQUEST_STALE_MS) {
-        await unlink(claimed).catch(() => undefined);
-        return;
+      const ageMs = now() - request.requestedAt;
+      if (ageMs > REQUEST_STALE_MS) {
+        warn('Refused a browser request from the command line that was too old to act on', {
+          id,
+          kind: request.kind,
+          ageMs,
+        });
+        result = {
+          id,
+          kind: 'refused',
+          message:
+            `The browser executor found this request ${String(Math.round(ageMs / 1000))} ` +
+            'seconds after it was made, too old to act on, and did nothing. Run the command again.',
+        };
+      } else {
+        result = { ...(await answer({ ...request, id })), id } as BrowserWindowResult;
       }
-      result = { ...(await answer({ ...request, id })), id } as BrowserWindowResult;
     } catch (error) {
       result = { id, kind: 'refused', message: errorText(error) };
     }

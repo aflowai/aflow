@@ -97,6 +97,11 @@ export class ProfileBrowsers {
     return browsers;
   }
 
+  /** Whether the operator has the profile's window: a sign-in sitting or a hand-off. */
+  isShown(profileId: string): boolean {
+    return this.shown.has(profileId);
+  }
+
   refuseWhileShown(profileId: string): void {
     if (!this.shown.has(profileId)) return;
     throw new BrowserDriverError(

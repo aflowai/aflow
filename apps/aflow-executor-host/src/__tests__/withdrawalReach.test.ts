@@ -467,10 +467,13 @@ describe('withdrawal does not wait to be asked', () => {
     'survives a policy path that cannot be watched',
     () => {
       // Losing the watch is not losing the guarantee: every operation still
-      // reconciles, so this reports rather than throws.
-      expect(() =>
-        watchPolicy(join(base, 'does-not-exist.json'), () => undefined).close(),
-      ).not.toThrow();
+      // reconciles, so this reports rather than throws — and says it is not
+      // watching, which is what turns on the browser requests' poll.
+      const watcher = watchPolicy(join(base, 'missing', 'host-policy.json'), () => undefined);
+      expect(watcher.watching()).toBe(false);
+      expect(() => {
+        watcher.close();
+      }).not.toThrow();
     },
     WAITS_ON_THE_OS_MS,
   );
