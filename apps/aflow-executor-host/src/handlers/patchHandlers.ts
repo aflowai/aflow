@@ -38,9 +38,9 @@ import {
   resolveWithin,
 } from '../bindings.js';
 import { resolvePushBase } from '../pushBase.js';
+import { commitPatchOnBranch } from '../branchCommit.js';
 import {
   applyPatch,
-  commitPatchOnBranch,
   DIFF_CEILING_BYTES,
   isGitRepository,
   patchPaths,
@@ -162,6 +162,7 @@ async function applyHostPatch(ctx: ExecutorContext, policyPath: string): Promise
         {
           ...(input.commit.baseSha !== undefined ? { baseSha: input.commit.baseSha } : {}),
           ...(pushBaseSha !== undefined ? { pushBaseSha } : {}),
+          ...(input.commit.mergeFrom !== undefined ? { mergeFrom: input.commit.mergeFrom } : {}),
         },
       );
       return await successWithData(ctx, {

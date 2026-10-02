@@ -85,7 +85,7 @@ export async function fetchedBranch(root: string, remote: string, branch: string
   if (sha === undefined || description !== `branch '${name}' of ${source}`) {
     throw new WorktreeError(
       `\`${remote}/${branch}\` was fetched, but FETCH_HEAD no longer names it — another fetch ` +
-        'in the folder replaced it before it was read. Publish again.',
+        'in the folder replaced it before it was read. Run this again.',
       'fetch_failed',
     );
   }

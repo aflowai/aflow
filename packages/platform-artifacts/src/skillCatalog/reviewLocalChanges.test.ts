@@ -72,6 +72,17 @@ describe('Review Local Changes — the first harness inside a skill', () => {
     expect(template?.task).toContain('inputs of this task');
   });
 
+  it('reads a range’s diff from where its two ends meet, and its commits as given', () => {
+    // A branch its base moved past, read two-dot, shows every change the base
+    // took since as one the branch undoes.
+    expect(template?.task).toContain('`git log <base>..<sha>`');
+    expect(template?.task).toContain('`git diff <base>...<sha>`');
+    expect(template?.task).not.toMatch(/git diff <base>\.\.<sha>/);
+    const range = (wf.runInputs ?? []).find((i) => i.id === 'range');
+    expect(range?.description).toContain('`<base>...<sha>`');
+    expect(REVIEW_LOCAL_CHANGES.description).toContain('`main...HEAD`');
+  });
+
   it('makes brief a rung of its own, budgeted in coding-agent turns rather than asked for in prose', () => {
     const inputs = wf.runInputs ?? [];
     const depth = inputs.find((i) => i.id === 'depth')?.schema as { enum?: string[] } | undefined;

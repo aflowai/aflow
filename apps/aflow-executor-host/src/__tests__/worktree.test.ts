@@ -13,6 +13,7 @@ import {
   HARNESS_SCRATCH_PREFIX,
   recordSession,
 } from '../harnessSessions.js';
+import { PUBLICATION_SCRATCH_PREFIX } from '../branchCommit.js';
 import {
   changedRefs,
   checkApplies,
@@ -20,7 +21,6 @@ import {
   fetchRemoteBase,
   isGitRepository,
   prepareWorktree,
-  PUBLICATION_SCRATCH_PREFIX,
   removeWorktree,
   resolveCommit,
   snapshotRefs,
