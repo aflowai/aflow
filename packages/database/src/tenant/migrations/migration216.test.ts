@@ -1,18 +1,12 @@
 /**
  * Read from the SQL the migration actually sends, so the assertion is about
- * what reaches a tenant rather than a restatement of it. The registry test
- * beside this one already holds every migration to recording its own version.
+ * what reaches a tenant rather than a restatement of it.
  */
 import { describe, expect, it } from 'vitest';
 import type postgres from 'postgres';
-import { BROWSER_PAGE_OPEN_OPERATION_ID, getAllOperations, getOperation } from '@aflow/schemas';
+import { getOperation } from '@aflow/schemas';
 
 import { applyMigration216 } from './migration216.js';
-
-interface Grant {
-  capabilityGroupId: string;
-  accessMode: string;
-}
 
 async function sentSql(): Promise<string> {
   const sent: string[] = [];
@@ -26,67 +20,30 @@ async function sentSql(): Promise<string> {
   return sent.join('\n');
 }
 
-/** Each UPDATE's appended grants, keyed by the profile names it selects. */
-function grantsByProfile(sql: string): Map<string, Grant[]> {
-  const byProfile = new Map<string, Grant[]>();
-  for (const statement of sql.split(/;\s*/).filter((s) => s.includes('UPDATE'))) {
-    const appended = /\|\|\s*'(\[[\s\S]*?\])'::jsonb/.exec(statement)?.[1];
-    const names =
-      /name IN \(([^)]+)\)/.exec(statement)?.[1] ?? /name = ('[^']+')/.exec(statement)?.[1];
-    expect(appended, 'an UPDATE appends no grant').toBeDefined();
-    expect(names, 'an UPDATE selects no profile by name').toBeDefined();
-    const grants = JSON.parse(appended ?? '[]') as Grant[];
-    for (const match of (names ?? '').matchAll(/'([^']+)'/g)) {
-      byProfile.set(match[1] as string, grants);
-    }
-  }
-  return byProfile;
-}
-
-const BROWSER_GRANTS = [
-  'browser.page:read',
-  'browser.page:write',
-  'browser.profile:read',
-  'browser.profile:write',
-];
-
 describe('migration 216', () => {
-  it('grants Personal Safe read and write, and no other profile anything', async () => {
-    const byProfile = grantsByProfile(await sentSql());
-    expect([...byProfile.keys()]).toEqual(['Personal Safe']);
-    expect(
-      (byProfile.get('Personal Safe') ?? [])
-        .map((g) => `${g.capabilityGroupId}:${g.accessMode}`)
-        .sort(),
-    ).toEqual(BROWSER_GRANTS);
+  it('grants the capability host.commit.check is registered under', async () => {
+    const check = getOperation('host.commit.check');
+    expect(check).toBeDefined();
+    const grant = JSON.stringify({
+      capabilityGroupId: check?.capabilityGroupId,
+      accessMode: check?.accessMode,
+    });
+    expect(grant).toBe('{"capabilityGroupId":"host.commit","accessMode":"write"}');
+    expect(await sentSql()).toContain(`'[${grant}]'::jsonb`);
   });
 
-  it('covers every capability group and access mode the browser operations are registered under', async () => {
-    const needed = new Set(
-      [...getAllOperations().values()]
-        .filter((op) => op.stepType === 'browser')
-        .map((op) => `${op.capabilityGroupId}:${op.accessMode}`),
-    );
-    expect(
-      needed.has(
-        `${String(getOperation(BROWSER_PAGE_OPEN_OPERATION_ID)?.capabilityGroupId)}:write`,
-      ),
-    ).toBe(true);
-    const granted = new Set(
-      (grantsByProfile(await sentSql()).get('Personal Safe') ?? []).map(
-        (g) => `${g.capabilityGroupId}:${g.accessMode}`,
-      ),
-    );
-    for (const grant of needed) expect(granted, grant).toContain(grant);
+  it('grants it to the profiles that run commands, and not to Read Only', async () => {
+    const sql = await sentSql();
+    expect(sql).toContain("name IN ('Full Access', 'Standard', 'Personal Safe')");
+    expect(sql).not.toContain('Read Only');
   });
 
-  it('appends only to the system profile and only once', async () => {
+  it('appends only to system profiles, only once, and records its own version', async () => {
     const sql = await sentSql();
     const updates = sql.split(/;\s*/).filter((s) => s.includes('UPDATE'));
     expect(updates).toHaveLength(1);
-    for (const update of updates) {
-      expect(update).toContain('is_system_profile = true');
-      expect(update).toMatch(/AND NOT \(allowed_capabilities @> /);
-    }
+    expect(updates[0]).toContain('is_system_profile = true');
+    expect(updates[0]).toMatch(/AND NOT \(allowed_capabilities @> /);
+    expect(sql).toMatch(/VALUES \(216,/);
   });
 });

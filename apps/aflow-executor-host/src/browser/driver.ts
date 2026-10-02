@@ -12,7 +12,7 @@ import type { BrowserProfile } from '@aflow/schemas';
 import { type LocalAddressClassifier, machineAddresses } from './addresses.js';
 import { chromeMissingMessage, type ChromeDiscovery } from './chromeDiscovery.js';
 import type { ChromeLauncher, LaunchedChrome } from './chromeProcess.js';
-import { CREDENTIAL_FIELD_KEYS, entersValue } from './credentialFields.js';
+import { CREDENTIAL_FIELD_KEYS, entersValue, MODIFIERS } from './credentialFields.js';
 import { type EgressProxy, type StartEgressProxy, startEgressProxy } from './egressProxy.js';
 import { BrowserDriverError, errorText } from './errors.js';
 import { boundEntries, boundText, PageObservations } from './observations.js';
@@ -44,6 +44,7 @@ import { boundSnapshot, buildOutline, describeRef } from './outline.js';
 import {
   closeWithinDeadline,
   pageAddress,
+  pageGoneError,
   PageTable,
   type HeldPage,
   type PageOwner,
@@ -54,6 +55,7 @@ import {
   type BrowserEngine,
   type EngineBrowser,
   EngineCredentialField,
+  EngineFieldUnchecked,
   type EnginePage,
   EngineRefNotFound,
   type PageEvents,
@@ -288,6 +290,7 @@ export class BrowserDriver {
     if (asked !== undefined) {
       this.refuseObviouslyLocal(profile, asked);
       assertNavigationAllowed(profile, asked);
+      held.askedUrl = asked.href;
     }
     if (request.redelivered) {
       return { outcome: 'uncertain_outcome', view: await this.observe(held, running) };
@@ -370,6 +373,15 @@ export class BrowserDriver {
       if (error instanceof EngineRefNotFound) throw await this.staleRef(held, running, request.ref);
       if (error instanceof EngineCredentialField) {
         throw this.credentialRefusal(request.ref, element.name);
+      }
+      if (error instanceof EngineFieldUnchecked) {
+        throw new BrowserDriverError(
+          'field_unchecked',
+          `Whether \`${request.ref}\` is a password field could not be checked ` +
+            `(${error.reason}), so the ${request.action.kind} was not performed. The page may ` +
+            'have changed under that reference; take a fresh outline for a current one.',
+          { ref: request.ref },
+        );
       }
       throw new BrowserDriverError(
         'action_failed',
@@ -634,12 +646,7 @@ export class BrowserDriver {
     const running = this.running.get(held.profileId);
     if (running !== undefined) return running;
     this.pages.forget(held);
-    throw new BrowserDriverError(
-      'page_gone',
-      `page_gone: page \`${held.pageId}\` is no longer open — its browser stopped. It was last ` +
-        `at ${held.lastUrl}; open that address again to carry on.`,
-      { pageId: held.pageId, lastUrl: held.lastUrl },
-    );
+    throw pageGoneError(held.pageId, 'its browser stopped', held);
   }
 
   private touch(held: HeldPage, running: RunningProfile): void {
@@ -723,7 +730,7 @@ export class BrowserDriver {
       `\`${ref}\`${name !== undefined ? ` (${JSON.stringify(name)})` : ''} is a password field. ` +
         'Credentials are entered by the operator, in the browser window, never by an agent; ' +
         'nothing was entered. The keys an agent may press there are ' +
-        `${[...CREDENTIAL_FIELD_KEYS].join(', ')}.`,
+        `${[...CREDENTIAL_FIELD_KEYS].join(', ')}, alone or with ${[...MODIFIERS].join(', ')} held.`,
       { ref },
     );
   }

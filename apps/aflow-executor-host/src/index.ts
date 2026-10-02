@@ -65,7 +65,7 @@ import { loadPairedEnv } from './pairedEnv.js';
 import { followPolicy, watchPolicy } from './policyWatch.js';
 import { killAllProcesses, killProcessesForBinding, reapWithdrawn } from './sandboxedRun.js';
 import { observeRuntimes } from './runtimes.js';
-import { pushPostures } from './pushApproval.js';
+import { publishingFolders } from './pushApproval.js';
 import { type BackgroundTaskLogger, createBackgroundTaskRunner } from '@aflow/lib';
 
 const log = createServiceLogger('host-executor');
@@ -375,7 +375,7 @@ async function main(): Promise<void> {
             ...(profile.label !== undefined ? { label: profile.label } : {}),
           }))
           .sort((a, b) => a.id.localeCompare(b.id)),
-        folders: pushPostures(policy.bindings),
+        folders: publishingFolders(policy.bindings),
       }))
       .catch(() => ({ harnesses: lastHarnesses, folders: lastFolders }));
     lastHarnesses = harnesses;

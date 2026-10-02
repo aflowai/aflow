@@ -4,12 +4,14 @@
  */
 import { describe, expect, it } from 'vitest';
 
+import { pageGoneError } from '../browser/pageTable.js';
 import { harness, refusal, RUN_A } from './fixtures/fakeBrowser.js';
 
 const HOME = 'https://example.com/';
 const START = 'https://example.com/start';
 const LANDING = 'https://example.com/welcome?code=abc&state=xyz#ref=1';
 const SHOWN = 'https://example.com/welcome?code=redacted&state=redacted';
+const SEARCH = 'https://example.com/search?q=shoes&page=2';
 const PAGE = '- main [ref=e1]:\n  - button "Continue" [ref=e2]';
 
 function landing() {
@@ -19,6 +21,7 @@ function landing() {
         [HOME, { title: 'Home', snapshot: PAGE }],
         [START, { title: 'Start', snapshot: PAGE }],
         [LANDING, { title: 'Welcome', snapshot: PAGE }],
+        [SEARCH, { title: 'Search', snapshot: PAGE }],
       ]),
       redirects: new Map([[START, LANDING]]),
       onAct: (page, ref) => {
@@ -89,5 +92,65 @@ describe('the address a page is at, as it leaves the driver', () => {
     expect(lost.kind).toBe('page_gone');
     expect(lost.details['lastUrl']).toBe(SHOWN);
     expect(lost.message).not.toContain('#ref');
+  });
+});
+
+describe('page_gone names what to open again', () => {
+  it('after a close: the address the run asked for, never one the page reached itself', async () => {
+    const h = landing();
+    const redirected = await openAt(h, START);
+    await h.driver.close(RUN_A, redirected.pageId);
+    const gone = await refusal(h.driver.snapshot(RUN_A, redirected.pageId));
+    expect(gone.details['askedUrl']).toBe(START);
+    expect(gone.message).toContain(`last asked it for was ${START}; open that again`);
+    expect(gone.message).not.toContain('abc');
+
+    const navigated = await openAt(h, HOME);
+    await h.driver.navigate({
+      ...RUN_A,
+      pageId: navigated.pageId,
+      to: { kind: 'url', url: SEARCH },
+      redelivered: false,
+    });
+    await h.driver.act({
+      ...RUN_A,
+      pageId: navigated.pageId,
+      ref: 'e2',
+      action: { kind: 'click' },
+      redelivered: false,
+    });
+    await h.driver.close(RUN_A, navigated.pageId);
+    const moved = await refusal(h.driver.snapshot(RUN_A, navigated.pageId));
+    expect(moved.details['lastUrl']).toBe(SHOWN);
+    expect(moved.details['askedUrl']).toBe(SEARCH);
+    expect(moved.message).toContain(`It was last at ${SHOWN}.`);
+    expect(moved.message).toContain(`open that again`);
+    expect(moved.message).toContain(SEARCH);
+    expect(moved.message).not.toContain('abc');
+  });
+
+  it('after the browser stopped: the address the run asked for', async () => {
+    const h = landing();
+    const { pageId } = await openAt(h, HOME);
+    await h.driver.navigate({
+      ...RUN_A,
+      pageId,
+      to: { kind: 'url', url: SEARCH },
+      redelivered: false,
+    });
+    await h.endBrowser();
+    const lost = await refusal(h.driver.snapshot(RUN_A, pageId));
+    expect(lost.kind).toBe('page_gone');
+    expect(lost.message).toContain('its browser stopped');
+    expect(lost.message).toContain(`last asked it for was ${SEARCH}; open that again`);
+    expect(lost.details['askedUrl']).toBe(SEARCH);
+  });
+
+  it('with nothing asked for: the withheld address, said to be withheld', () => {
+    const gone = pageGoneError('pg_1', 'its browser stopped', { lastUrl: SHOWN });
+    expect(gone.kind).toBe('page_gone');
+    expect(gone.message).toContain(`It was last at ${SHOWN}, its query values withheld`);
+    expect(gone.message).not.toContain('open that again');
+    expect(gone.details).toEqual({ pageId: 'pg_1', lastUrl: SHOWN });
   });
 });

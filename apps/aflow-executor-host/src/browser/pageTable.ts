@@ -27,6 +27,11 @@ export interface HeldPage {
   readonly observations: PageObservations;
   /** The address the open asked for, as a URL spells it. */
   readonly requestedUrl: string;
+  /**
+   * The address this run last gave the page, by open or navigate. It is shown
+   * whole because the run wrote it; where the page went on its own is not.
+   */
+  askedUrl: string;
   /** Where the page was when last looked at, as `pageAddress` shows it. */
   lastUrl: string;
   lastTitle: string;
@@ -43,6 +48,32 @@ export interface HeldPage {
 export function pageAddress(held: Pick<HeldPage, 'page' | 'lastUrl'>): string {
   held.lastUrl = redactUrl(held.page.url());
   return held.lastUrl;
+}
+
+/** Where a page a run lost was, and what that run last asked it to load. */
+export interface GonePage {
+  readonly lastUrl: string;
+  readonly askedUrl?: string;
+}
+
+/**
+ * `page_gone` for a page that was open. The last address has its query values
+ * replaced, so loading it as written is not what the run wants; the address
+ * the run itself asked for is what it can open again.
+ */
+export function pageGoneError(pageId: string, why: string, gone: GonePage): BrowserDriverError {
+  const { lastUrl, askedUrl } = gone;
+  const again =
+    askedUrl !== undefined
+      ? `It was last at ${lastUrl}. The address this run last asked it for was ${askedUrl}; ` +
+        'open that again to carry on.'
+      : `It was last at ${lastUrl}, its query values withheld, so that address does not load ` +
+        'as written; open the page again from an address this run knows.';
+  return new BrowserDriverError(
+    'page_gone',
+    `page_gone: page \`${pageId}\` is no longer open — ${why}. ${again}`,
+    { pageId, lastUrl, ...(askedUrl !== undefined ? { askedUrl } : {}) },
+  );
 }
 
 /** Pages a run lost, remembered long enough to say where each one was. */
@@ -80,7 +111,7 @@ export async function closeWithinDeadline(page: EnginePage): Promise<void> {
 
 export class PageTable {
   private readonly held = new Map<string, Map<string, HeldPage>>();
-  private readonly gone = new Map<string, Map<string, string>>();
+  private readonly gone = new Map<string, Map<string, GonePage>>();
 
   add(
     owner: PageOwner & { readonly spaceId?: string },
@@ -99,6 +130,7 @@ export class PageTable {
       profileId,
       spaceId: owner.spaceId,
       requestedUrl,
+      askedUrl: requestedUrl,
       page,
       observations,
       lastUrl: '',
@@ -114,14 +146,12 @@ export class PageTable {
   get(owner: PageOwner, pageId: string): HeldPage {
     const entry = this.find(owner, pageId);
     if (entry !== undefined) return entry;
-    const lastUrl = this.gone.get(ownerKey(owner))?.get(pageId);
-    if (lastUrl !== undefined) {
-      throw new BrowserDriverError(
-        'page_gone',
-        `page_gone: page \`${pageId}\` is no longer open — it was closed, sat unused past its ` +
-          `profile's idle limit, or its browser stopped. It was last at ${lastUrl}; open that ` +
-          'address again to carry on.',
-        { pageId, lastUrl },
+    const gone = this.gone.get(ownerKey(owner))?.get(pageId);
+    if (gone !== undefined) {
+      throw pageGoneError(
+        pageId,
+        "it was closed, sat unused past its profile's idle limit, or its browser stopped",
+        gone,
       );
     }
     throw new BrowserDriverError(
@@ -169,8 +199,8 @@ export class PageTable {
     const pages = this.held.get(entry.ownerKey);
     pages?.delete(entry.pageId);
     if (pages?.size === 0) this.held.delete(entry.ownerKey);
-    const gone = this.gone.get(entry.ownerKey) ?? new Map<string, string>();
-    gone.set(entry.pageId, entry.lastUrl);
+    const gone = this.gone.get(entry.ownerKey) ?? new Map<string, GonePage>();
+    gone.set(entry.pageId, { lastUrl: entry.lastUrl, askedUrl: entry.askedUrl });
     while (gone.size > GONE_PER_RUN) {
       const oldest = gone.keys().next().value;
       if (oldest === undefined) break;

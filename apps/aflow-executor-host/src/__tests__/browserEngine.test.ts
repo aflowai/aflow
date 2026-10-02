@@ -6,7 +6,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createPlaywrightEngine } from '../browser/engine.js';
-import { EngineCredentialField, type EnginePage } from '../browser/types.js';
+import { EngineCredentialField, EngineFieldUnchecked, type EnginePage } from '../browser/types.js';
 
 const pressed: string[] = [];
 const filled: string[] = [];
@@ -28,8 +28,16 @@ const passwordInput = {
   hover: () => Promise.resolve(),
 };
 
+/** An ordinary element that went away between the outline and the action. */
+const detachedInput = {
+  ...passwordInput,
+  evaluate: (): Promise<never> => Promise.reject(new Error('Element is not attached to the DOM')),
+};
+
+let underRef: typeof passwordInput = passwordInput;
+
 const page = {
-  locator: () => passwordInput,
+  locator: () => underRef,
   ariaSnapshot: () => Promise.resolve('- textbox "Passphrase" [ref=e5]'),
   waitForLoadState: () => Promise.resolve(),
   url: () => 'https://example.com/',
@@ -71,5 +79,26 @@ describe('the engine on a password input', () => {
     const enginePage = await openPage();
     await enginePage.act('e5', { kind: 'press', key: 'Enter' });
     expect(pressed).toEqual(['Enter']);
+  });
+});
+
+describe('the engine on an element it cannot check', () => {
+  it('refuses a value as unchecked, not as a password field, and enters nothing', async () => {
+    underRef = detachedInput;
+    const enginePage = await openPage();
+    const before = { pressed: pressed.length, filled: filled.length };
+    for (const action of [
+      { kind: 'press', key: 'h' },
+      { kind: 'type', text: 'abc', submit: false },
+      { kind: 'select', values: ['x'] },
+    ] as const) {
+      const refused = await enginePage.act('e5', action).catch((error: unknown) => error);
+      expect(refused, action.kind).toBeInstanceOf(EngineFieldUnchecked);
+      expect(refused, action.kind).not.toBeInstanceOf(EngineCredentialField);
+      expect((refused as EngineFieldUnchecked).reason).toBe('Element is not attached to the DOM');
+    }
+    expect(pressed.length).toBe(before.pressed);
+    expect(filled.length).toBe(before.filled);
+    underRef = passwordInput;
   });
 });

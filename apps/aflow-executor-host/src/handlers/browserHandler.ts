@@ -57,6 +57,7 @@ const FAILURE: Record<BrowserFailureKind, { code: string; classification: ErrorC
   ask_unavailable: { code: 'BROWSER_ASK_NOT_AVAILABLE', classification: 'permission' },
   stale_ref: { code: 'BROWSER_REF_STALE', classification: 'validation' },
   credential_field: { code: 'BROWSER_CREDENTIAL_FIELD', classification: 'permission' },
+  field_unchecked: { code: 'BROWSER_FIELD_UNCHECKED', classification: 'validation' },
   action_failed: { code: 'BROWSER_ACTION_FAILED', classification: 'provider' },
   no_browser: { code: 'BROWSER_NOT_FOUND', classification: 'configuration' },
   launch_failed: { code: 'BROWSER_LAUNCH_FAILED', classification: 'internal' },

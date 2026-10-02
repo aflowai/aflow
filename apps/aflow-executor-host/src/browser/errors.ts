@@ -9,6 +9,7 @@ export type BrowserFailureKind =
   | 'ask_unavailable'
   | 'stale_ref'
   | 'credential_field'
+  | 'field_unchecked'
   | 'action_failed'
   | 'no_browser'
   | 'launch_failed'

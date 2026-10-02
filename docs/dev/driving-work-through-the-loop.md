@@ -14,6 +14,7 @@ built and where its gaps are logged; the gaps that still bind are listed at the 
 | Space            | Full Circle, `a28f0887-c84a-43ac-87e1-c984eae9d3b9`                                         |
 | Connected folder | binding `hb_aflow` = `~/localhd/aflow`, branch prefix `aflow/`                              |
 | Push posture     | `unless-unreviewed`: a clean scan plus a child review `approve` pushes without asking       |
+| Folder checks    | `node scripts/verify-commit.mjs`, declared on `hb_aflow`; run by every publication first    |
 | Coding agent     | `host.harness.run`, model `claude-opus-5-5`                                                 |
 | Review           | the catalog's Local Code Review, over `origin/<base>..<sha>`                                |
 | Publication      | the catalog's Local Publish, by `patchRef`, onto `aflow/<branch>`                           |
@@ -30,8 +31,8 @@ another stream's runs.
    model, `base` (`origin/main` for new work, the branch's name for a fix appended to an
    open pull request), then the findings or the slice to build, each with the file, the
    line where it is known, what is wrong and what right looks like, and the tests to add.
-   The checks the agent must run are named in the brief, because the review that follows
-   runs none: `yarn test:file` on touched and added tests, `npx tsc -p` per touched
+   The checks the agent must run are named in the brief, because the folder's checks
+   only run once the commission is published: `yarn test:file` on touched and added tests, `npx tsc -p` per touched
    workspace, the two CI guards (`scripts/large-files/cli.ts check`,
    `scripts/context-budget/cli.ts check`), `npx eslint` on touched sources, `npx prettier
 --write` with the `--check` output in the result. The standing rules go in too: comments
@@ -43,12 +44,20 @@ another stream's runs.
 2. **Read the review**: `workflow.run.detail` on the child review run gives the verdict and
    every finding with file and line. `approve` means the publication pushed on its own;
    anything else leaves it paused at `approve-push`, and the next round is the fix.
-3. **Verify the commit by hand**, because the review's depth runs no checks: a detached
-   worktree at the sha (`git -C ~/localhd/aflow worktree add --detach …`), `yarn install`,
-   the two CI guards, `npx tsc -p` per touched workspace, the package `dist`s rebuilt
-   (`schemas redis database cybernetic-runtime platform-artifacts executor-runtime
-run-view`), `yarn test:file` on every touched test, `npx eslint`, `npx prettier
---check`; then the worktree removed. Never a `*.pg.test.ts` against the live database.
+3. **The publication runs the folder's checks.** `hb_aflow` declares
+   `node scripts/verify-commit.mjs` (`aflow harness checks hb_aflow -- node
+scripts/verify-commit.mjs`), and Local Publish runs it after the commit and before the
+   scan, the review and the push, in a detached checkout of the commit with the folder's
+   dependencies linked, under the coding agent's sandbox. The script reads what changed from
+   `AFLOW_CHECK_BASE...AFLOW_CHECK_SHA` and runs, one line per step and stopping at the
+   first failure: the two CI guards; the builds of the packages the touched workspaces
+   read, whose `dist` a fresh checkout lacks; `tsc -p` per touched workspace (and
+   `web-product`'s `src/ui`); the touched tests through the test runner, with the
+   catalog guards when `platform-artifacts` is touched and never a `*.pg.test.ts`; ESLint,
+   errors only, on touched sources; and Prettier on every touched file. A failure fails
+   the publication with the end of what it printed and nothing pushed: read it on the
+   `check-commit` task, and commission the fix onto the branch. The pull request's CI
+   remains the proof. By hand, from a checkout, it measures `HEAD` against `origin/main`.
 4. **The operator merges.** A merge lands on the dev stack only when the stream that runs it
    merges `origin/main` into `live` (below).
 
@@ -93,7 +102,6 @@ aflow:session:<tenant>:<sessionId>:state status waitingOnWorkflowRunId` — `PAU
   hand before the next round, and say so in the brief.
 - **F62** — a publication with no summary opens a pull request with an empty body; give a
   summary in the brief.
-- **F63** — the pre-push review runs no checks; step 3 above is the cover.
 - **F65** — a publication appended onto a branch with a pull request pushes and then fails
   on the 422; the push is done and the failure is the step after it.
 - **F66** — nothing merges `origin/main` into an appended branch; a branch `main` moved

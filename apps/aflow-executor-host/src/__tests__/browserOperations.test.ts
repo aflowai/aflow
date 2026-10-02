@@ -5,8 +5,9 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import type { EngineAction } from '../browser/types.js';
+import { type EngineAction, EngineFieldUnchecked } from '../browser/types.js';
 import { createBrowserIdleSweep } from '../browser/idleSweep.js';
+import { browserFailure } from '../handlers/browserHandler.js';
 import { harness, profile, refusal, RUN_A, RUN_B, type FakePage } from './fixtures/fakeBrowser.js';
 
 const MINUTE = 60_000;
@@ -254,6 +255,55 @@ describe('browser.page.act', () => {
     const pressed = await h.driver.act(act(pageId, 'e5', { kind: 'press', key: 'Enter' }));
     expect(pressed.outcome).toBe('performed');
     expect(h.pages[0]?.actions).toEqual([{ ref: 'e5', action: { kind: 'press', key: 'Enter' } }]);
+  });
+
+  it('presses an allowed key under modifiers on a password field, and no other chord', async () => {
+    const h = harness();
+    const { pageId } = await h.driver.open({
+      ...RUN_A,
+      redelivered: false,
+      profileId: 'default',
+      url: 'https://example.com/',
+    });
+    await h.driver.act(act(pageId, 'e5', { kind: 'press', key: 'Shift+Tab' }));
+    for (const key of ['Shift+A', 'Control+V', 'Tab+A', 'Super+Tab']) {
+      const refused = await refusal(h.driver.act(act(pageId, 'e5', { kind: 'press', key })));
+      expect(refused.kind, key).toBe('credential_field');
+      expect(refused.message).toContain('alone or with Shift, Control, Alt, Meta held');
+    }
+    expect(h.pages[0]?.actions).toEqual([
+      { ref: 'e5', action: { kind: 'press', key: 'Shift+Tab' } },
+    ]);
+  });
+
+  it('refuses a value it could not check the field for, as unchecked, and says to look again', async () => {
+    const h = harness({
+      world: {
+        sites: new Map([['https://example.com/', { snapshot: '- textbox "Query" [ref=e3]' }]]),
+        onAct: () => {
+          throw new EngineFieldUnchecked('e3', 'Element is not attached to the DOM');
+        },
+      },
+    });
+    const { pageId } = await h.driver.open({
+      ...RUN_A,
+      redelivered: false,
+      profileId: 'default',
+      url: 'https://example.com/',
+    });
+    const refused = await refusal(
+      h.driver.act(act(pageId, 'e3', { kind: 'type', text: 'shoes', submit: false })),
+    );
+    expect(refused.kind).toBe('field_unchecked');
+    expect(refused.message).toContain('could not be checked');
+    expect(refused.message).toContain('the type was not performed');
+    expect(refused.message).toContain('fresh outline');
+    expect(refused.message).not.toContain('is a password field.');
+    expect(browserFailure(refused)).toMatchObject({
+      code: 'BROWSER_FIELD_UNCHECKED',
+      classification: 'validation',
+      retryable: false,
+    });
   });
 });
 

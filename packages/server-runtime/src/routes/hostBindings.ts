@@ -20,14 +20,14 @@ import {
   HostBranchPrefixSchema,
   HostPushApprovalSchema,
   type EditionDescriptor,
-  type HostPushApproval,
 } from '@aflow/schemas';
 import {
   getRedisConnection,
   HOST_WITHDRAWAL_CHANNEL,
-  pushApprovalsForSpace,
+  publishingFoldersForSpace,
   readLiveHostInventories,
   type HostWithdrawalNotice,
+  type PublishingFolder,
 } from '@aflow/redis';
 
 /**
@@ -179,15 +179,17 @@ export const hostBindingRoutes: FastifyPluginAsync = async (fastify) => {
       // running machines publish. A Redis that cannot answer costs the line, not
       // the list.
       const postures = await readLiveHostInventories(getRedisConnection())
-        .then((inventories) => pushApprovalsForSpace(inventories, request.params.spaceId))
-        .catch(() => new Map<string, HostPushApproval>());
+        .then((inventories) => publishingFoldersForSpace(inventories, request.params.spaceId))
+        .catch(() => new Map<string, PublishingFolder>());
       return reply.send({
         bindings: rows.map((r) => {
           const binding = HostBindingSchema.parse(r);
           return {
             ...binding,
             pushApproval:
-              binding.branchPrefix === null ? null : (postures.get(binding.hostBindingId) ?? null),
+              binding.branchPrefix === null
+                ? null
+                : (postures.get(binding.hostBindingId)?.pushApproval ?? null),
           };
         }),
       });
