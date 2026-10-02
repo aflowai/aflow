@@ -84,27 +84,40 @@ interface World {
   readonly mainHead: string;
 }
 
+type Conflicting = boolean | 'binary' | 'modify-delete' | 'delete-modify' | 'add-add';
+
+/** The worlds whose two sides leave `a.txt` alone, writing `b.txt` and `c.txt` beside it. */
+const besideA = (conflicting: Conflicting): boolean =>
+  conflicting === false ||
+  conflicting === 'modify-delete' ||
+  conflicting === 'delete-modify' ||
+  conflicting === 'add-add';
+
 /**
  * `origin` holds `main` and `aflow/fix`; the folder and a second clone of it
  * hold both as they were, and `main` then moves on `origin` alone — beside the
  * branch's change, or over the same line of it — and, for `'binary'`, over
- * the same bytes of a binary file as well; for `'modify-delete'`, `main`
- * deletes a file the branch changed, and nothing else conflicts.
+ * the same bytes of a binary file as well. For `'modify-delete'`, `main`
+ * deletes `gone.txt`, which the branch changed; for `'delete-modify'`, the
+ * branch deletes it and `main` changes it; for `'add-add'`, both add
+ * `new.txt` differently. Nothing else conflicts in those three.
  */
-async function world(conflicting: boolean | 'binary' | 'modify-delete'): Promise<World> {
+async function world(conflicting: Conflicting): Promise<World> {
   await run('git', ['init', '-q', '-b', 'main', seed]);
   await identify(seed);
   await writeFile(join(seed, 'a.txt'), 'one\ntwo\nthree\n');
   if (conflicting === 'binary') await writeFile(join(seed, 'logo.bin'), 'logo\0initial');
-  if (conflicting === 'modify-delete') await writeFile(join(seed, 'gone.txt'), 'gone\n');
+  if (conflicting === 'modify-delete' || conflicting === 'delete-modify') {
+    await writeFile(join(seed, 'gone.txt'), 'gone\n');
+  }
   await commitAll(seed, 'initial');
   await git(seed, 'checkout', '-q', '-b', 'aflow/fix');
   if (conflicting === 'binary') await writeFile(join(seed, 'logo.bin'), 'logo\0BRANCH');
-  if (conflicting === 'modify-delete') {
-    await writeFile(join(seed, 'gone.txt'), 'gone, changed\n');
-    await writeFile(join(seed, 'b.txt'), 'branch\n');
-  } else if (conflicting !== false) await writeFile(join(seed, 'a.txt'), 'one\nBRANCH\nthree\n');
-  else await writeFile(join(seed, 'b.txt'), 'branch\n');
+  if (conflicting === 'modify-delete') await writeFile(join(seed, 'gone.txt'), 'gone, changed\n');
+  if (conflicting === 'delete-modify') await rm(join(seed, 'gone.txt'));
+  if (conflicting === 'add-add') await writeFile(join(seed, 'new.txt'), 'new on the branch\n');
+  if (besideA(conflicting)) await writeFile(join(seed, 'b.txt'), 'branch\n');
+  else await writeFile(join(seed, 'a.txt'), 'one\nBRANCH\nthree\n');
   await commitAll(seed, 'the branch');
   await git(seed, 'checkout', '-q', 'main');
   await run('git', ['clone', '-q', '--bare', seed, origin]);
@@ -114,11 +127,11 @@ async function world(conflicting: boolean | 'binary' | 'modify-delete'): Promise
     await git(clone, 'branch', '-q', 'aflow/fix', 'origin/aflow/fix');
   }
   if (conflicting === 'binary') await writeFile(join(seed, 'logo.bin'), 'logo\0MAIN');
-  if (conflicting === 'modify-delete') {
-    await rm(join(seed, 'gone.txt'));
-    await writeFile(join(seed, 'c.txt'), 'main\n');
-  } else if (conflicting !== false) await writeFile(join(seed, 'a.txt'), 'one\nMAIN\nthree\n');
-  else await writeFile(join(seed, 'c.txt'), 'main\n');
+  if (conflicting === 'modify-delete') await rm(join(seed, 'gone.txt'));
+  if (conflicting === 'delete-modify') await writeFile(join(seed, 'gone.txt'), 'gone, on main\n');
+  if (conflicting === 'add-add') await writeFile(join(seed, 'new.txt'), 'new on main\n');
+  if (besideA(conflicting)) await writeFile(join(seed, 'c.txt'), 'main\n');
+  else await writeFile(join(seed, 'a.txt'), 'one\nMAIN\nthree\n');
   await commitAll(seed, 'main moved');
   await git(seed, 'push', '-q', origin, 'main');
   return { branchHead: await head(project, 'aflow/fix'), mainHead: await head(seed, 'main') };
@@ -164,8 +177,18 @@ beforeEach(async () => {
           "if grep -q '^<<<<<<< ' a.txt && grep -q '^>>>>>>> ' a.txt; then " +
             "printf 'one\\nRESOLVED\\nthree\\n' > a.txt; fi; printf 'fixed\\n' > fix.txt",
         ),
-        harness('deletes', "rm gone.txt; printf 'fixed\\n' > fix.txt"),
-        harness('amends', "printf 'kept\\n' >> gone.txt; printf 'fixed\\n' > fix.txt"),
+        harness(
+          'resolves-added',
+          "if grep -q '^<<<<<<< ' new.txt && grep -q '^>>>>>>> ' new.txt; then " +
+            "printf 'new on both\\n' > new.txt; fi; printf 'fixed\\n' > fix.txt",
+        ),
+        harness('restores', "printf 'gone, restored\\n' > gone.txt; printf 'fixed\\n' > fix.txt"),
+        // A document that holds conflict-marker lines of its own.
+        harness(
+          'documents',
+          "printf 'A conflict reads:\\n<<<<<<< ours\\nmine\\n=======\\ntheirs\\n>>>>>>> theirs\\n' " +
+            "> markers.md; printf 'fixed\\n' > fix.txt",
+        ),
       ],
     }),
   );
@@ -528,55 +551,169 @@ describe('a publication makes the merge again', () => {
     expect(await head(project, 'aflow/fix')).toBe(branchHead);
   }, 60_000);
 
-  it('records a file the base deleted and the branch changed as a modify-delete conflict, and names it in the task', async () => {
-    const { branchHead, mainHead } = await world('modify-delete');
-    const { status, output } = await commission({
-      harness: 'works',
-      base: 'aflow/fix',
-      mergeFrom: 'origin/main',
-    });
-    expect(status).toBe('SUCCEEDED');
-    const conflicts = [{ path: 'gone.txt', kind: 'modify-delete' }] as const;
-    expect(output['merge']).toEqual({ from: mainHead, conflicts });
-    expect(handed[0]?.argv.join('\n')).toContain(
-      mergeConflictSentence({ from: mainHead, conflicts }),
-    );
-    expect(mergeConflictSentence({ from: mainHead, conflicts })).toContain(
-      `\`gone.txt\` (modify-delete): this branch changed it and \`${mainHead}\` deleted it`,
-    );
-    expect(output['baseSha']).toBe(branchHead);
-  }, 60_000);
+  describe.each([
+    {
+      kind: 'modify-delete' as const,
+      sides: (from: string) => `this branch changed it and \`${from}\` deleted it`,
+      kept: 'HEAD^1:gone.txt',
+    },
+    {
+      kind: 'delete-modify' as const,
+      sides: (from: string) => `this branch deleted it and \`${from}\` changed it`,
+      kept: 'HEAD^2:gone.txt',
+    },
+  ])('a $kind conflict', ({ kind, sides, kept }) => {
+    const conflicts = [{ path: 'gone.txt', kind }];
 
-  it('refuses a modify-delete conflict the patch leaves untouched, naming the path and the kind', async () => {
-    const { branchHead, mainHead } = await world('modify-delete');
+    it('is recorded with its kind, committed deleted, and named in the task', async () => {
+      const { branchHead, mainHead } = await world(kind);
+      const { status, output } = await commission({
+        harness: 'works',
+        base: 'aflow/fix',
+        mergeFrom: 'origin/main',
+      });
+      expect(status).toBe('SUCCEEDED');
+      expect(output['merge']).toEqual({ from: mainHead, conflicts });
+      expect(output['baseSha']).toBe(branchHead);
+      const sentence = mergeConflictSentence({ from: mainHead, conflicts });
+      expect(handed[0]?.argv.join('\n')).toContain(sentence);
+      expect(sentence).toContain(
+        `\`gone.txt\` (${kind}): ${sides(mainHead)}. It is deleted in the merge; restore it ` +
+          `with the changes it needs, or leave it deleted. The version`,
+      );
+      expect(sentence).toContain(`\`${kept}\``);
+      // Deleted in the merge, so an agent that leaves it alone changes nothing there.
+      expect(changedFiles(output['patch'])).toEqual(['fix.txt']);
+      expect(String(output['patch'])).not.toContain('gone.txt');
+    }, 60_000);
+
+    it('publishes the deletion when the patch leaves it untouched', async () => {
+      const { branchHead, mainHead } = await world(kind);
+      const { output } = await commission({
+        harness: 'works',
+        base: 'aflow/fix',
+        mergeFrom: 'origin/main',
+      });
+
+      const published = await publish({
+        patch: output['patch'],
+        commit: {
+          branch: 'aflow/fix',
+          message: 'the fix',
+          baseSha: branchHead,
+          mergeFrom: mainHead,
+        },
+      });
+      expect(published.status).toBe('SUCCEEDED');
+      const sha = String((published.output['commit'] as Record<string, unknown>)['sha']);
+      expect(
+        (await git(project, 'ls-tree', '--name-only', sha)).split('\n').filter(Boolean),
+      ).toEqual(['a.txt', 'b.txt', 'c.txt', 'fix.txt']);
+    }, 60_000);
+
+    it('publishes the file kept when the patch restores it', async () => {
+      const { branchHead, mainHead } = await world(kind);
+      const { output } = await commission({
+        harness: 'restores',
+        base: 'aflow/fix',
+        mergeFrom: 'origin/main',
+      });
+      expect(changedFiles(output['patch']).sort()).toEqual(['fix.txt', 'gone.txt']);
+      expect(String(output['patch'])).toMatch(/^--- \/dev\/null\n\+\+\+ b\/gone\.txt$/m);
+
+      const published = await publish({
+        patch: output['patch'],
+        commit: {
+          branch: 'aflow/fix',
+          message: 'the fix',
+          baseSha: branchHead,
+          mergeFrom: mainHead,
+        },
+      });
+      expect(published.status).toBe('SUCCEEDED');
+      const sha = String((published.output['commit'] as Record<string, unknown>)['sha']);
+      expect(await git(project, 'show', `${sha}:gone.txt`)).toBe('gone, restored\n');
+    }, 60_000);
+  });
+
+  describe('an add-add conflict', () => {
+    const conflicts = [{ path: 'new.txt', kind: 'add-add' as const }];
+
+    it('is recorded with its kind, committed with markers, and named in the task', async () => {
+      const { branchHead, mainHead } = await world('add-add');
+      const { status, output } = await commission({
+        harness: 'resolves-added',
+        base: 'aflow/fix',
+        mergeFrom: 'origin/main',
+      });
+      expect(status).toBe('SUCCEEDED');
+      expect(output['merge']).toEqual({ from: mainHead, conflicts });
+      expect(output['baseSha']).toBe(branchHead);
+      expect(handed[0]?.argv.join('\n')).toContain(
+        mergeConflictSentence({ from: mainHead, conflicts }),
+      );
+      // The agent found the file marked and resolved it.
+      const patch = String(output['patch']);
+      expect(changedFiles(patch).sort()).toEqual(['fix.txt', 'new.txt']);
+      expect(patch).toMatch(/^-<<<<<<< HEAD$/m);
+      expect(patch).toMatch(/^\+new on both$/m);
+    }, 60_000);
+
+    it('refuses the markers left in it, naming the path and the kind, with nothing committed', async () => {
+      const { branchHead, mainHead } = await world('add-add');
+      const { output } = await commission({
+        harness: 'works',
+        base: 'aflow/fix',
+        mergeFrom: 'origin/main',
+      });
+      expect(changedFiles(output['patch'])).toEqual(['fix.txt']);
+
+      const { status, message } = await publish({
+        patch: output['patch'],
+        commit: {
+          branch: 'aflow/fix',
+          message: 'the fix',
+          baseSha: branchHead,
+          mergeFrom: mainHead,
+        },
+      });
+      expect(status).toBe('FAILED');
+      expect(message).toContain('conflict markers in `new.txt` (add-add conflict)');
+      expect(await head(project, 'aflow/fix')).toBe(branchHead);
+    }, 60_000);
+
+    it('publishes it resolved', async () => {
+      const { branchHead, mainHead } = await world('add-add');
+      const { output } = await commission({
+        harness: 'resolves-added',
+        base: 'aflow/fix',
+        mergeFrom: 'origin/main',
+      });
+
+      const published = await publish({
+        patch: output['patch'],
+        commit: {
+          branch: 'aflow/fix',
+          message: 'the fix',
+          baseSha: branchHead,
+          mergeFrom: mainHead,
+        },
+      });
+      expect(published.status).toBe('SUCCEEDED');
+      const sha = String((published.output['commit'] as Record<string, unknown>)['sha']);
+      expect(await git(project, 'show', `${sha}:new.txt`)).toBe('new on both\n');
+    }, 60_000);
+  });
+
+  it('reads no file for markers that the merge did not conflict on', async () => {
+    const { branchHead, mainHead } = await world(false);
     const { output } = await commission({
-      harness: 'works',
+      harness: 'documents',
       base: 'aflow/fix',
       mergeFrom: 'origin/main',
     });
-    expect(changedFiles(output['patch'])).toEqual(['fix.txt']);
-
-    const { status, message } = await publish({
-      patch: output['patch'],
-      commit: { branch: 'aflow/fix', message: 'the fix', baseSha: branchHead, mergeFrom: mainHead },
-    });
-    expect(status).toBe('FAILED');
-    expect(message).toContain(
-      '`gone.txt` (modify-delete conflict) as the merge committed it, which the patch neither ' +
-        'changes nor deletes',
-    );
-    expect(await head(project, 'aflow/fix')).toBe(branchHead);
-  }, 60_000);
-
-  it('publishes a modify-delete conflict the patch deletes, taking the base deletion', async () => {
-    const { branchHead, mainHead } = await world('modify-delete');
-    const { output } = await commission({
-      harness: 'deletes',
-      base: 'aflow/fix',
-      mergeFrom: 'origin/main',
-    });
-    expect(changedFiles(output['patch'])).toEqual(['fix.txt']);
-    expect(String(output['patch'])).toMatch(/^--- a\/gone\.txt\n\+\+\+ \/dev\/null$/m);
+    expect(output['merge']).toEqual({ from: mainHead, conflicts: [] });
+    expect(changedFiles(output['patch']).sort()).toEqual(['fix.txt', 'markers.md']);
 
     const published = await publish({
       patch: output['patch'],
@@ -584,27 +721,7 @@ describe('a publication makes the merge again', () => {
     });
     expect(published.status).toBe('SUCCEEDED');
     const sha = String((published.output['commit'] as Record<string, unknown>)['sha']);
-    expect((await git(project, 'ls-tree', '--name-only', sha)).split('\n').filter(Boolean)).toEqual(
-      ['a.txt', 'b.txt', 'c.txt', 'fix.txt'],
-    );
-  }, 60_000);
-
-  it('publishes a modify-delete conflict the patch keeps with a change', async () => {
-    const { branchHead, mainHead } = await world('modify-delete');
-    const { output } = await commission({
-      harness: 'amends',
-      base: 'aflow/fix',
-      mergeFrom: 'origin/main',
-    });
-    expect(changedFiles(output['patch']).sort()).toEqual(['fix.txt', 'gone.txt']);
-
-    const published = await publish({
-      patch: output['patch'],
-      commit: { branch: 'aflow/fix', message: 'the fix', baseSha: branchHead, mergeFrom: mainHead },
-    });
-    expect(published.status).toBe('SUCCEEDED');
-    const sha = String((published.output['commit'] as Record<string, unknown>)['sha']);
-    expect(await git(project, 'show', `${sha}:gone.txt`)).toBe('gone, changed\nkept\n');
+    expect(await git(project, 'show', `${sha}:markers.md`)).toMatch(/^=======$/m);
   }, 60_000);
 
   it('refuses a patch that does not fit the merge as a conflict naming its files', async () => {

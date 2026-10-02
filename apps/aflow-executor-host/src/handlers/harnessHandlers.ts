@@ -189,13 +189,15 @@ function resolvingConflict({ path, kind }: MergeConflict, from: string): string 
       );
     case 'modify-delete':
       return (
-        `${named}: this branch changed it and \`${from}\` deleted it; the merge kept this ` +
-        "branch's version. Delete it, or keep it with the change that makes it fit the merge."
+        `${named}: this branch changed it and \`${from}\` deleted it. It is deleted in the ` +
+        'merge; restore it with the changes it needs, or leave it deleted. The version this ' +
+        `branch had is \`HEAD^1:${path}\`.`
       );
     case 'delete-modify':
       return (
-        `${named}: this branch deleted it and \`${from}\` changed it; the merge kept ` +
-        `\`${from}\`'s version. Delete it, or keep it with the change that makes it fit the merge.`
+        `${named}: this branch deleted it and \`${from}\` changed it. It is deleted in the ` +
+        'merge; restore it with the changes it needs, or leave it deleted. The version ' +
+        `\`${from}\` has is \`HEAD^2:${path}\`.`
       );
   }
 }
@@ -203,15 +205,16 @@ function resolvingConflict({ path, kind }: MergeConflict, from: string): string 
 /**
  * What the agent is told of a merge that conflicted. Its checkout's last
  * commit is that merge, so nothing in the tree alone says the markers are the
- * merge's rather than the repository's, or that a file kept there was deleted
- * on the other side.
+ * merge's rather than the repository's, or that a file missing from it was
+ * changed on one side.
  */
 export function mergeConflictSentence(merge: Pick<BaseMerge, 'from' | 'conflicts'>): string {
   return [
-    `The last commit of this checkout merges \`${merge.from}\` into it, its conflicts ` +
-      'committed as they stood. Resolve every one of them as part of this task; your change ' +
-      'is measured from that merge commit, and a publication refuses a conflict your change ' +
-      'leaves untouched:',
+    `The last commit of this checkout merges \`${merge.from}\` into it, with its conflicts ` +
+      'committed: markers in a file both sides wrote, and a file one side deleted left ' +
+      'deleted. Resolve every one of them as part of this task; your change is measured from ' +
+      'that merge commit, and a publication refuses a file that still holds the markers ' +
+      'the merge left:',
     ...merge.conflicts.map((conflict) => `- ${resolvingConflict(conflict, merge.from)}`),
   ].join('\n');
 }

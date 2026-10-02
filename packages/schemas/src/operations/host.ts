@@ -484,11 +484,11 @@ export const HostFilePatchInputSchema = z
             'and the patch is folded into that merge with the commit message, so the branch ' +
             'gains one merge commit whose parents are its old head and this commit. A patch ' +
             'that does not fit the merge is a conflict naming its files, and a patch that ' +
-            'leaves a conflict of the merge undecided — conflict markers still in a file the ' +
-            'merge conflicted on or the patch changed, or a conflicted file the patch neither ' +
-            'changes nor deletes — is refused naming each path and its kind, with nothing ' +
-            'committed either way. Refused for a new ' +
-            'branch, and for a commit the branch already holds.',
+            'leaves conflict markers in a `content` or `add-add` conflict of the merge is ' +
+            'refused naming each path and its kind, with nothing committed either way; a ' +
+            '`modify-delete` or `delete-modify` conflict, which the merge commits deleted, is ' +
+            'left deleted or restored by the patch. Refused for a new branch, and for a commit ' +
+            'the branch already holds.',
         ),
       })
       // Strict so a misspelt base is refused rather than stripped: dropped, it
@@ -656,8 +656,8 @@ export const HostHarnessRunInputSchema = z.object({
       "already holds it, merged as one merge commit under the operator's commit identity, as " +
       "the publication's commit is; a folder where neither its own nor the global git config " +
       'sets `user.name` and `user.email` is refused before anything is checked out, naming ' +
-      'the keys to set. A merge that conflicts is committed as it stands — markers where git ' +
-      'left them, the surviving side of a file one side deleted — and each conflict is named ' +
+      'the keys to set. A merge that conflicts is committed with markers where git left ' +
+      'them and a file one side deleted committed deleted, and each conflict is named ' +
       'with its kind in the task and in `merge.conflicts` for the run to resolve; one that ' +
       'conflicts in a file both sides hold and git merges as binary is refused before any ' +
       'turn runs, naming the files, since that merge has to be made by hand. The diff is then taken against that ' +
@@ -757,14 +757,14 @@ export const HostHarnessRunOutputSchema = z.object({
           }),
         )
         .describe(
-          'What the merge left unmerged, each path committed as it stood for the run to ' +
-            'resolve: `content` and `add-add` with conflict markers, `modify-delete` and ' +
-            '`delete-modify` holding the side that kept the file. A publication requires each ' +
-            'one decided in the patch: a `content` or `add-add` file changed and left without ' +
-            'markers, a `modify-delete` or `delete-modify` file deleted or changed. One the ' +
-            'patch leaves as the merge committed it is refused, naming the path and the kind, ' +
-            'since keeping the committed side is a decision the patch has to show. Empty when ' +
-            'the merge was clean.',
+          'What the merge left unmerged, each path committed for the run to resolve: ' +
+            '`content` and `add-add` with conflict markers, `modify-delete` and ' +
+            "`delete-modify` deleted, so the base's deletion stands unless the run restores " +
+            'the file with the changes it needs. A publication refuses a `content` or ' +
+            '`add-add` file that still holds the markers, naming the path and the kind. A ' +
+            '`modify-delete` or `delete-modify` file is decided whatever the patch does: one ' +
+            'the patch leaves alone stays deleted, one it brings back is kept, and either is ' +
+            'what the published tree shows. Empty when the merge was clean.',
         ),
     })
     .optional()

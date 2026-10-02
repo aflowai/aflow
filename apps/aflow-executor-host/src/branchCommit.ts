@@ -14,7 +14,6 @@ import {
   reachMergeSource,
   undecidedConflicts,
   type BaseMerge,
-  type UndecidedPath,
 } from './baseMerge.js';
 import {
   APPLY_OUTPUT_CAP_BYTES,
@@ -215,13 +214,6 @@ async function commitStaged(checkout: string, messagePath: string, amend: boolea
   }
 }
 
-function describeUndecided({ path, kind, state }: UndecidedPath): string {
-  const named = kind === undefined ? `\`${path}\`` : `\`${path}\` (${kind} conflict)`;
-  return state === 'marked'
-    ? `conflict markers in ${named}`
-    : `${named} as the merge committed it, which the patch neither changes nor deletes`;
-}
-
 /**
  * Land a diff as a commit on a branch, without touching what the operator has
  * open.
@@ -279,10 +271,7 @@ export async function commitPatchOnBranch(
       return { apply: merge === undefined ? apply : filesNamedIn(apply) };
 
     await git(worktree.path, ['add', '-A', '--', '.'], APPLY_OUTPUT_CAP_BYTES);
-    // Without renames, so a conflicted file moved away counts as deleted where it stood.
-    const staged = (
-      await git(worktree.path, ['diff', '--cached', '--name-only', '--no-renames', '-z'])
-    )
+    const staged = (await git(worktree.path, ['diff', '--cached', '--name-only', '-z']))
       .split('\0')
       .filter((path) => path !== '');
     if (staged.length === 0) {
@@ -292,13 +281,14 @@ export async function commitPatchOnBranch(
       );
     }
     if (merge !== undefined) {
-      const undecided = await undecidedConflicts(worktree.path, merge.conflicts, staged);
+      const undecided = await undecidedConflicts(worktree.path, merge.conflicts);
       if (undecided.length > 0) {
+        const named = undecided.map(({ path, kind }) => `\`${path}\` (${kind} conflict)`);
         throw new WorktreeError(
-          `Merging \`${merge.from}\` into \`${branch}\` and applying the patch leaves ` +
-            `${undecided.map(describeUndecided).join('; ')}, so nothing was committed. The fix ` +
-            'has to decide every conflict the merge leaves, visibly in its patch: commission it ' +
-            'again from the branch with the same `mergeFrom`, naming these.',
+          `Merging \`${merge.from}\` into \`${branch}\` and applying the patch leaves conflict ` +
+            `markers in ${named.join(', ')}, so nothing was committed. The fix has to resolve ` +
+            'every conflict the merge marks: commission it again from the branch with the same ' +
+            '`mergeFrom`, naming these.',
           'unresolved_conflict',
         );
       }

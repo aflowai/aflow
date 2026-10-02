@@ -42,7 +42,11 @@ export interface BaseMerge {
   readonly from: string;
   /** The merge commit, which the work in the checkout is measured from. */
   readonly commit: string;
-  /** What the merge left unmerged, by path, each committed as it stood. Empty when clean. */
+  /**
+   * What the merge left unmerged, by path: a `content` or `add-add` file
+   * committed with its markers, a `modify-delete` or `delete-modify` one
+   * committed deleted. Empty when clean.
+   */
   readonly conflicts: readonly MergeConflict[];
 }
 
@@ -220,10 +224,11 @@ async function binaryConflicts(checkout: string, conflicts: readonly string[]): 
 /**
  * Merge `from` into the checkout at its HEAD, as one merge commit under
  * `identity`, or nothing when the checkout already holds it. A merge that
- * conflicts is committed as it stands — markers where git left them, and the
- * surviving side of a file one side deleted — with each conflict recorded by
- * the kind git names; one that conflicts in a binary file both sides hold is
- * refused, since no turn could resolve it.
+ * conflicts is committed with each conflict recorded by the kind git names:
+ * markers where git left them, and a file one side deleted committed deleted,
+ * so a publication that leaves it alone keeps the deletion and one that keeps
+ * the file shows it restored. One that conflicts in a binary file both sides
+ * hold is refused, since no turn could resolve it.
  */
 export async function mergeIntoCheckout(
   checkout: string,
@@ -265,13 +270,28 @@ export async function mergeIntoCheckout(
         'binary_conflict',
       );
     }
+    const deleted = new Set(
+      conflicts
+        .filter(({ kind }) => kind === 'modify-delete' || kind === 'delete-modify')
+        .map(({ path }) => path),
+    );
+    if (deleted.size > 0) {
+      await git(
+        checkout,
+        ['--literal-pathspecs', 'rm', '-q', '-f', '--', ...deleted],
+        APPLY_OUTPUT_CAP_BYTES,
+      );
+    }
     // The unmerged paths alone: the checkout a coding agent runs in carries
     // the folder's installed dependencies, untracked, which `add -A .` would stage.
-    await git(
-      checkout,
-      ['--literal-pathspecs', 'add', '-A', '--', ...stages.keys()],
-      APPLY_OUTPUT_CAP_BYTES,
-    );
+    const marked = [...stages.keys()].filter((path) => !deleted.has(path));
+    if (marked.length > 0) {
+      await git(
+        checkout,
+        ['--literal-pathspecs', 'add', '-A', '--', ...marked],
+        APPLY_OUTPUT_CAP_BYTES,
+      );
+    }
     await git(checkout, [...merging, 'commit', '--no-edit'], APPLY_OUTPUT_CAP_BYTES);
   }
   const commit = (await git(checkout, ['rev-parse', 'HEAD'])).trim();
@@ -322,39 +342,24 @@ async function filesWithConflictMarkers(
   }
 }
 
-/** A path the publication's tree leaves undecided, and why. */
-export interface UndecidedPath {
-  readonly path: string;
-  /** How the merge conflicted there; absent for a file the patch alone marked. */
-  readonly kind?: MergeConflictKind;
-  /** `marked`: conflict markers remain. `untouched`: the patch leaves it as the merge committed it. */
-  readonly state: 'marked' | 'untouched';
-}
-
 /**
- * What a merged checkout with the patch staged still leaves undecided. Every
- * conflict has to appear among `changed`, the paths the patch changed or
- * deleted, since the merge commit holds a conflict as it stood — markers, or
- * one side kept where the other deleted — and keeping that is a decision the
- * patch has to show; and no file the merge conflicted on or the patch changed
- * may still carry markers.
+ * The conflicts a merged checkout with the patch staged still leaves marked:
+ * the `content` and `add-add` ones whose file holds the merge's markers. Only
+ * those files are read, so a file never in conflict may hold marker lines of
+ * its own. A `modify-delete` or `delete-modify` conflict is decided whatever
+ * the patch does, since the merge committed it deleted: a patch that leaves it
+ * so accepts the deletion, and one that brings it back keeps the file.
  */
 export async function undecidedConflicts(
   checkout: string,
   conflicts: readonly MergeConflict[],
-  changed: readonly string[],
-): Promise<UndecidedPath[]> {
-  const kinds = new Map(conflicts.map(({ path, kind }) => [path, kind]));
-  const touched = new Set(changed);
+): Promise<MergeConflict[]> {
+  const markable = conflicts.filter(({ kind }) => kind === 'content' || kind === 'add-add');
   const marked = new Set(
-    await filesWithConflictMarkers(checkout, [...new Set([...kinds.keys(), ...changed])]),
+    await filesWithConflictMarkers(
+      checkout,
+      markable.map(({ path }) => path),
+    ),
   );
-  const undecided: UndecidedPath[] = [];
-  for (const path of [...new Set([...kinds.keys(), ...marked])].sort()) {
-    const kind = kinds.get(path);
-    const state = marked.has(path) ? 'marked' : touched.has(path) ? undefined : 'untouched';
-    if (state !== undefined)
-      undecided.push({ path, ...(kind !== undefined ? { kind } : {}), state });
-  }
-  return undecided;
+  return markable.filter(({ path }) => marked.has(path));
 }
