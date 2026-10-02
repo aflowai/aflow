@@ -175,6 +175,38 @@ describe('a policy change while a browser is starting', () => {
     expect(h.proxies).toHaveLength(1);
     expect(h.proxies[0]?.check('pay.bank.example.org', '')?.kind).toBe('rule');
   });
+
+  it('answers a failed start with the refusal the change brought', async () => {
+    const h = harness({ browsers: [profile({ spaces: ['space-1', 'space-2'] })] });
+    const launched = holdLaunch(h);
+    const open = opening(h, RUN_A, 'default');
+    await settle();
+
+    const narrowed = profile({ spaces: ['space-2'] });
+    h.setProfiles([narrowed]);
+    await h.driver.policyChanged(policyOf([narrowed]));
+    h.launchFails = new Error('Chrome exited before it was ready (exit 21)');
+    launched();
+
+    expect((await refusal(open)).kind).toBe('profile_not_for_space');
+  });
+
+  it('answers a failed start with its own error when the policy cannot be read again', async () => {
+    const h = harness({ browsers: [profile({ spaces: ['space-1', 'space-2'] })] });
+    const launched = holdLaunch(h);
+    const open = opening(h, RUN_A, 'default');
+    await settle();
+
+    const narrowed = profile({ spaces: ['space-2'] });
+    h.setProfiles([narrowed]);
+    await h.driver.policyChanged(policyOf([narrowed]));
+    const launchFailure = new Error('Chrome exited before it was ready (exit 21)');
+    h.launchFails = launchFailure;
+    h.policyReadFails = new Error('host-policy.json: Unexpected end of JSON input');
+    launched();
+
+    await expect(open).rejects.toBe(launchFailure);
+  });
 });
 
 describe('a page whose close never settles', () => {
@@ -204,6 +236,29 @@ describe('a page whose close never settles', () => {
 
     expect(done).toBe(true);
     expect((await refusal(h.driver.snapshot(RUN_ELSEWHERE, closed))).kind).toBe('page_gone');
+  });
+
+  it('is closed by its run at the deadline, and is no longer listed while the close hangs', async () => {
+    const h = harness();
+    const pageId = await openIn(h, RUN_A, 'default');
+    const hung = h.pages[0];
+    if (hung === undefined) throw new Error('expected the page');
+    hung.closeHangs = true;
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+    let answer: 'closed' | 'already_gone' | undefined;
+    const closing = h.driver.close(RUN_A, pageId).then((result) => {
+      answer = result;
+    });
+    await vi.advanceTimersByTimeAsync(PAGE_CLOSE_DEADLINE_MS - 1);
+    expect(answer).toBeUndefined();
+    expect(await h.driver.list(RUN_A)).toEqual([]);
+    expect((await refusal(h.driver.snapshot(RUN_A, pageId))).kind).toBe('page_gone');
+    await vi.advanceTimersByTimeAsync(1);
+    await closing;
+
+    expect(answer).toBe('closed');
+    expect(await h.driver.list(RUN_A)).toEqual([]);
   });
 
   it('is forgotten by the idle sweep at the deadline', async () => {

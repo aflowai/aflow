@@ -271,6 +271,10 @@ export interface Harness {
   cookieSites: string[];
   /** Every launch waits on this while it is set, as a Chrome still starting does. */
   launchHeld?: Promise<void>;
+  /** Every launch fails with this once it is let go, as a Chrome that will not start does. */
+  launchFails?: Error;
+  /** Every read of the policy fails with this while it is set, as a file caught mid-save does. */
+  policyReadFails?: Error;
 }
 
 export function harness(
@@ -311,6 +315,7 @@ export function harness(
       });
       ends.push(end);
       if (state.launchHeld !== undefined) await state.launchHeld;
+      if (state.launchFails !== undefined) throw state.launchFails;
       return {
         endpoint: 'ws://127.0.0.1:9/devtools/browser/x',
         exited,
@@ -367,7 +372,10 @@ export function harness(
     engine,
     launcher,
     hostDir: '/Users/op/.aflow',
-    loadPolicy: () => Promise.resolve(policy),
+    loadPolicy: () =>
+      state.policyReadFails !== undefined
+        ? Promise.reject(state.policyReadFails)
+        : Promise.resolve(policy),
     startProxy: (proxyOptions) => {
       const proxy = new FakeProxy(proxyOptions, world, now);
       proxies.push(proxy);

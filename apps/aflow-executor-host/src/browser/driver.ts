@@ -153,8 +153,13 @@ export class BrowserDriver {
     try {
       running = await this.ensureRunning(profile, executable);
     } catch (error) {
-      // A start the policy change stopped is answered as the change answers it.
-      await this.stillAllowed(generation, profile, request, asked);
+      // A start the policy change stopped is answered as the change answers it;
+      // a policy file unreadable mid-save says nothing about why the start failed.
+      try {
+        await this.stillAllowed(generation, profile, request, asked);
+      } catch (refusal) {
+        if (refusal instanceof BrowserDriverError) throw refusal;
+      }
       throw error;
     }
     try {
@@ -452,8 +457,9 @@ export class BrowserDriver {
   async close(owner: PageOwner, pageId: string): Promise<'closed' | 'already_gone'> {
     const held = this.pages.find(owner, pageId);
     if (held === undefined) return 'already_gone';
-    await held.page.close().catch(() => undefined);
+    // Forgotten before the close is awaited, so a hung close leaves nothing usable.
     this.pages.forget(held);
+    await closeWithinDeadline(held.page);
     const running = this.running.get(held.profileId);
     if (running !== undefined) running.state.lastActivityAt = this.now();
     return 'closed';

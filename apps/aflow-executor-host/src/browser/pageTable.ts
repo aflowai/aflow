@@ -50,9 +50,10 @@ function mintPageId(): string {
 export const PAGE_CLOSE_DEADLINE_MS = 5_000;
 
 /**
- * Close a page the host itself is ending — revoked or idle. A page that does
- * not answer is abandoned at the deadline: what waits on it is the rest of a
- * policy change or a sweep, and one hung page must not hold either up.
+ * Close a page — revoked, idle, or closed by its run. A page that does not
+ * answer is abandoned at the deadline: what waits on it is the rest of a
+ * policy change, a sweep, or the run's step, and one hung page must not hold
+ * any of them up.
  */
 export async function closeWithinDeadline(page: EnginePage): Promise<void> {
   let timer: NodeJS.Timeout | undefined;
