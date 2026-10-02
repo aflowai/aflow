@@ -129,10 +129,22 @@ export const BrowserProfileSchema = z.object({
     .enum(['hidden', 'visible'])
     .default('hidden')
     .describe('`hidden` runs the browser headless; `visible` gives it a window on this machine.'),
+  // A job does not yet carry whether a person started its run, so a profile
+  // closed to unattended runs would be one this machine cannot keep closed.
   unattended: z
     .boolean()
     .default(true)
-    .describe('Whether a run nobody started by hand — a schedule, a trigger — may use it.'),
+    .refine((value) => value, {
+      message:
+        '`unattended: false` is not enforced yet: this machine cannot tell a run someone ' +
+        'started by hand from a scheduled or triggered one, so a profile cannot promise to ' +
+        'refuse the second. Remove the setting; every run that may use the profile may use it ' +
+        'unattended.',
+    })
+    .describe(
+      'Whether a run nobody started by hand — a schedule, a trigger — may use it. Only `true` ' +
+        'is accepted until that is enforced.',
+    ),
   idleMinutes: z
     .number()
     .int()

@@ -91,6 +91,12 @@ interface RunningProfile {
   readonly state: ProfileState;
 }
 
+interface PageInUse {
+  readonly held: HeldPage;
+  readonly running: RunningProfile;
+  readonly profile: BrowserProfile;
+}
+
 /** A profile's browser from the moment its start begins; `state` is the one it will run with. */
 interface Launch {
   readonly ready: Promise<RunningProfile>;
@@ -225,7 +231,7 @@ export class BrowserDriver {
     try {
       await page.navigate({ kind: 'url', url: request.url });
     } catch (error) {
-      await page.close().catch(() => undefined);
+      await closeWithinDeadline(page);
       throw navigationFailure(
         running.proxy,
         allowed,
@@ -241,7 +247,7 @@ export class BrowserDriver {
     try {
       profile = await this.stillAllowed(generation, allowed, request, asked);
     } catch (error) {
-      await page.close().catch(() => undefined);
+      await closeWithinDeadline(page);
       throw error;
     }
     const held = this.pages.add(
@@ -259,14 +265,22 @@ export class BrowserDriver {
     } catch (error) {
       // Registered and then refused or unreadable: a run must not be left
       // holding a page it was told it does not have.
-      await page.close().catch(() => undefined);
       this.pages.forget(held);
+      await closeWithinDeadline(page);
       throw error;
     }
   }
 
   async navigate(request: NavigateRequest): Promise<NavigationResult> {
-    const { held, running, profile } = await this.pageInProfile(request, request.pageId);
+    return await this.usingPage(request, request.pageId, async (use) => {
+      return await this.navigateOn(request, use);
+    });
+  }
+
+  private async navigateOn(
+    request: NavigateRequest,
+    { held, running, profile }: PageInUse,
+  ): Promise<NavigationResult> {
     const asked = request.to.kind === 'url' ? new URL(request.to.url) : undefined;
     if (asked !== undefined) {
       this.refuseObviouslyLocal(profile, asked);
@@ -305,7 +319,15 @@ export class BrowserDriver {
   }
 
   async act(request: ActRequest): Promise<ActionResult> {
-    const { held, running, profile } = await this.pageInProfile(request, request.pageId);
+    return await this.usingPage(request, request.pageId, async (use) => {
+      return await this.actOn(request, use);
+    });
+  }
+
+  private async actOn(
+    request: ActRequest,
+    { held, running, profile }: PageInUse,
+  ): Promise<ActionResult> {
     // Where the page is now, not where the agent believes it is.
     const pageUrl = urlOrNothing(held.page.url()) ?? new URL('about:blank');
     assertActionAllowed(profile, pageUrl);
@@ -377,18 +399,19 @@ export class BrowserDriver {
   // -------------------------------------------------------------------------
 
   async snapshot(scope: RunScope, pageId: string, ref?: string): Promise<SnapshotResult> {
-    const { held, running } = await this.pageInProfile(scope, pageId);
-    const snap = await this.read(held, async () => await held.page.snapshot());
-    const title = await this.read(held, async () => await held.page.title());
-    held.lastSnapshot = snap;
-    held.lastTitle = title;
-    held.lastUrl = held.page.url();
-    this.touch(held, running);
-    const bounded = boundSnapshot(snap, ref);
-    if (bounded === undefined) {
-      throw this.staleRefError(held, ref ?? '', buildOutline(snap).text);
-    }
-    return { pageId, url: held.lastUrl, title, snapshot: bounded };
+    return await this.usingPage(scope, pageId, async ({ held, running }) => {
+      const snap = await this.read(held, async () => await held.page.snapshot());
+      const title = await this.read(held, async () => await held.page.title());
+      held.lastSnapshot = snap;
+      held.lastTitle = title;
+      held.lastUrl = held.page.url();
+      this.touch(held, running);
+      const bounded = boundSnapshot(snap, ref);
+      if (bounded === undefined) {
+        throw this.staleRefError(held, ref ?? '', buildOutline(snap).text);
+      }
+      return { pageId, url: held.lastUrl, title, snapshot: bounded };
+    });
   }
 
   async readPage(
@@ -397,8 +420,16 @@ export class BrowserDriver {
     what: ReadResult['what'],
     contains?: string,
   ): Promise<ReadResult> {
-    const { held, running } = await this.pageInProfile(scope, pageId);
-    this.touch(held, running);
+    return await this.usingPage(scope, pageId, async ({ held }) => {
+      return await this.readOn(held, what, contains);
+    });
+  }
+
+  private async readOn(
+    held: HeldPage,
+    what: ReadResult['what'],
+    contains: string | undefined,
+  ): Promise<ReadResult> {
     const url = held.page.url();
     if (what === 'text') {
       const text = await this.read(held, async () => await held.page.text());
@@ -520,8 +551,8 @@ export class BrowserDriver {
       const running = this.running.get(held.profileId);
       if (running === undefined || this.busy(held.profileId)) continue;
       if (now - held.lastUsedAt < running.state.profile.idleMinutes * MINUTE_MS) continue;
-      await closeWithinDeadline(held.page);
       this.pages.forget(held);
+      await closeWithinDeadline(held.page);
       running.state.lastActivityAt = Math.max(running.state.lastActivityAt, now);
       closedPages += 1;
     }
@@ -573,15 +604,27 @@ export class BrowserDriver {
   // Internals
   // -------------------------------------------------------------------------
 
-  private async pageInProfile(
+  /**
+   * Runs an operation on one of the run's pages, its profile counted as in
+   * flight throughout and the page marked used before the engine is called, so
+   * the idle sweep cannot close the page under it.
+   */
+  private async usingPage<T>(
     scope: RunScope,
     pageId: string,
-  ): Promise<{ held: HeldPage; running: RunningProfile; profile: BrowserProfile }> {
+    operation: (use: PageInUse) => Promise<T>,
+  ): Promise<T> {
     const held = this.pages.get(scope, pageId);
-    const policy = await this.deps.loadPolicy();
-    const profile = this.resolveProfile(policy, held.profileId, scope.spaceId);
-    const running = this.runningFor(held);
-    return { held, running, profile };
+    this.inFlight.set(held.profileId, (this.inFlight.get(held.profileId) ?? 0) + 1);
+    try {
+      const policy = await this.deps.loadPolicy();
+      const profile = this.resolveProfile(policy, held.profileId, scope.spaceId);
+      const running = this.runningFor(held);
+      this.touch(held, running);
+      return await operation({ held, running, profile });
+    } finally {
+      this.release(held.profileId);
+    }
   }
 
   private runningFor(held: HeldPage): RunningProfile {

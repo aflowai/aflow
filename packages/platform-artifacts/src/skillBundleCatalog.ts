@@ -178,7 +178,7 @@ Then run a coding skill: ask to open a PR for a change → review it → fix →
 
 const LOCAL_CODE_REVIEW_BUNDLE: SkillBundleInput = {
   bundleId: 'local-code-review' as SkillBundleId,
-  version: 5,
+  version: 6,
   name: 'Local Code Review',
   tagline: 'Review committed changes in a connected repository with the installed coding agent.',
   description: `Installs **Review Local Changes** — a read-only review of a revision range in a repository connected as a folder, carried out by the coding agent already installed on that machine.
@@ -204,7 +204,7 @@ const LOCAL_CODE_REVIEW_BUNDLE: SkillBundleInput = {
 
 const LOCAL_PUBLISH_BUNDLE: SkillBundleInput = {
   bundleId: 'local-publish' as SkillBundleId,
-  version: 14,
+  version: 15,
   name: 'Local Publish',
   tagline:
     'Commit a patch onto a branch of a connected repository, clear the push, and open the pull request.',

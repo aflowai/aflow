@@ -138,7 +138,7 @@ Loading a page runs its scripts with the operator's sessions, so opening and nav
 The host executor already runs as a login service. A scheduled or resident run that needs the browser starts the profile's Chrome headless on demand. Three things keep that from failing silently:
 
 - A sign-in that has lapsed surfaces as an operator task through `browser.page.handoff` — one Action Center item saying which site and why — and the run waits on it rather than failing or retrying.
-- A profile carries `unattended: true | false`, default true on the local edition; when false, a run with no operator-initiated trigger is refused before it opens a page.
+- A profile carries `unattended`, default true. Until a job carries whether a person started its run, `unattended: false` is refused when the policy file is parsed, because nothing could keep that promise. Enforcement follows: then, when false, a run with no operator-initiated trigger is refused before it opens a page.
 - Chrome stops after the idle limit and the profile's directory is the only thing that persists. The idle check is a background task registered in `packages/schemas/src/background/registry.ts` and run on `createBackgroundTaskRunner`; its work is the set of running profiles on this executor, so its idle cost does not grow with spaces or runs.
 
 ### 3.5 What is recorded

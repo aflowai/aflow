@@ -627,6 +627,38 @@ describe('the idle sweep and work in flight', () => {
     expect(h.launches).toHaveLength(1);
   });
 
+  it('closes nothing during a navigation on a page past its idle limit', async () => {
+    const h = harness({ browsers: [profile({ idleMinutes: 30 })] });
+    const { pageId } = await h.driver.open({
+      ...RUN_A,
+      redelivered: false,
+      profileId: 'default',
+      url: 'https://example.com/a',
+    });
+    h.clock.now += 31 * MINUTE;
+    let release: () => void = () => undefined;
+    h.world.navigationHeld = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const navigating = h.driver.navigate({
+      ...RUN_A,
+      redelivered: false,
+      pageId,
+      to: { kind: 'url', url: 'https://example.com/b' },
+    });
+    await tick();
+    expect(h.pages[0]?.navigations).toHaveLength(2);
+
+    expect(await h.driver.sweepIdle(20)).toEqual({ closedPages: 0, stoppedProfiles: 0 });
+    expect(h.pages[0]?.closed).toBe(false);
+    expect(h.stops).toEqual([]);
+
+    release();
+    const moved = await navigating;
+    expect(moved.outcome).toBe('performed');
+    expect(moved.view.url).toBe('https://example.com/b');
+  });
+
   it('starts a fresh browser for the next open once the sweep has stopped one that has not exited', async () => {
     const h = harness({ browsers: [profile({ idleMinutes: 30 })], slowExit: true });
     await idleProfile(h);

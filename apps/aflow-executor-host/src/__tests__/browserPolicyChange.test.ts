@@ -261,7 +261,7 @@ describe('a page whose close never settles', () => {
     expect(await h.driver.list(RUN_A)).toEqual([]);
   });
 
-  it('is forgotten by the idle sweep at the deadline', async () => {
+  it('is forgotten by the idle sweep at once, and holds the sweep only until the deadline', async () => {
     const h = harness({ browsers: [profile({ idleMinutes: 1 })] });
     const pageId = await openIn(h, RUN_A, 'default');
     const hung = h.pages[0];
@@ -276,11 +276,38 @@ describe('a page whose close never settles', () => {
     });
     await vi.advanceTimersByTimeAsync(PAGE_CLOSE_DEADLINE_MS - 1);
     expect(swept).toBeUndefined();
-    expect((await h.driver.list(RUN_A)).map((p) => p.pageId)).toEqual([pageId]);
+    expect(await h.driver.list(RUN_A)).toEqual([]);
+    expect((await refusal(h.driver.snapshot(RUN_A, pageId))).kind).toBe('page_gone');
     await vi.advanceTimersByTimeAsync(1);
     await sweeping;
 
     expect(swept?.closedPages).toBe(1);
+  });
+
+  it('holds an open whose navigation failed only until the deadline', async () => {
+    const h = harness({
+      world: {
+        failures: new Map([['https://shop.example.com/', 'net::ERR_CONNECTION_RESET']]),
+        duringLoad: () => {
+          const page = h.pages.at(-1);
+          if (page !== undefined) page.closeHangs = true;
+          return Promise.resolve();
+        },
+      },
+    });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+    let failure: unknown;
+    const failing = opening(h, RUN_A, 'default').catch((error: unknown) => {
+      failure = error;
+    });
+    await vi.advanceTimersByTimeAsync(PAGE_CLOSE_DEADLINE_MS - 1);
+    expect(h.pages[0]?.closeHangs).toBe(true);
+    expect(failure).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    await failing;
+
+    expect((failure as { kind?: string } | undefined)?.kind).toBe('navigation_failed');
     expect(await h.driver.list(RUN_A)).toEqual([]);
   });
 });

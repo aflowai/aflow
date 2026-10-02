@@ -45,6 +45,13 @@ import {
   requireSpace,
   requireWritable,
 } from '../bindings.js';
+import {
+  fetchMergeSource,
+  mergeIdentityArgs,
+  mergeIntoCheckout,
+  type BaseMerge,
+  type MergeConflict,
+} from '../baseMerge.js';
 import { fetchCredential, scrubSecret } from '../credentialFetch.js';
 import { noSandboxMessage, reapWithdrawn, sandboxReadiness } from '../sandboxedRun.js';
 import { describeRefusals, extractEgressRefusals } from '../egressRefusals.js';
@@ -83,10 +90,10 @@ import {
   DIFF_CEILING_BYTES,
   fetchRemoteBase,
   INLINE_DIFF_CAP_BYTES,
+  isAncestor,
   linkedWorktrees,
   NO_REPLACE_OBJECTS_ENV,
   prepareWorktree,
-  PUBLICATION_SCRATCH_PREFIX,
   removeWorktree,
   resolveCommit,
   RUN_SCRATCH_DIR,
@@ -95,6 +102,7 @@ import {
   WorktreeError,
   type LinkedWorktree,
 } from '../worktree.js';
+import { PUBLICATION_SCRATCH_PREFIX } from '../branchCommit.js';
 import { installRefGuard, noRefGuardMessage, refGuardReadiness } from '../refGuard.js';
 
 /**
@@ -166,14 +174,65 @@ export function taskWithInputs(task: string, inputs: Record<string, unknown> | u
   return `${task}\n\nInputs for this task, as JSON:\n${JSON.stringify(inputs)}`;
 }
 
-/** The task as the harness receives it: the repository's rules, the prose, the inputs. */
+function resolvingConflict({ path, kind }: MergeConflict, from: string): string {
+  const named = `\`${path}\` (${kind})`;
+  switch (kind) {
+    case 'content':
+      return (
+        `${named}: both sides changed it, and it holds conflict markers. Replace them with ` +
+        'the resolution.'
+      );
+    case 'add-add':
+      return (
+        `${named}: both sides added it differently, and it holds both between conflict ` +
+        'markers. Replace them with the resolution.'
+      );
+    case 'modify-delete':
+      return (
+        `${named}: this branch changed it and \`${from}\` deleted it. It is deleted in the ` +
+        'merge; restore it with the changes it needs, or leave it deleted. The version this ' +
+        `branch had is \`HEAD^1:${path}\`.`
+      );
+    case 'delete-modify':
+      return (
+        `${named}: this branch deleted it and \`${from}\` changed it. It is deleted in the ` +
+        'merge; restore it with the changes it needs, or leave it deleted. The version ' +
+        `\`${from}\` has is \`HEAD^2:${path}\`.`
+      );
+  }
+}
+
+/**
+ * What the agent is told of a merge that conflicted. Its checkout's last
+ * commit is that merge, so nothing in the tree alone says the markers are the
+ * merge's rather than the repository's, or that a file missing from it was
+ * changed on one side.
+ */
+export function mergeConflictSentence(merge: Pick<BaseMerge, 'from' | 'conflicts'>): string {
+  return [
+    `The last commit of this checkout merges \`${merge.from}\` into it, with its conflicts ` +
+      'committed: markers in a file both sides wrote, and a file one side deleted left ' +
+      'deleted. Resolve every one of them as part of this task; your change is measured from ' +
+      'that merge commit, and a publication refuses a file that still holds the markers ' +
+      'the merge left:',
+    ...merge.conflicts.map((conflict) => `- ${resolvingConflict(conflict, merge.from)}`),
+  ].join('\n');
+}
+
+/** The task as the harness receives it: the repository's rules, a merge's conflicts, the prose, the inputs. */
 export function composeHarnessTask(
   task: string,
   inputs: Record<string, unknown> | undefined,
   repositoryRules: boolean,
+  merge?: Pick<BaseMerge, 'from' | 'conflicts'>,
 ): string {
-  const body = taskWithInputs(task, inputs);
-  return repositoryRules ? `${REPOSITORY_RULES_SENTENCE}\n\n${body}` : body;
+  return [
+    repositoryRules ? REPOSITORY_RULES_SENTENCE : undefined,
+    merge !== undefined && merge.conflicts.length > 0 ? mergeConflictSentence(merge) : undefined,
+    taskWithInputs(task, inputs),
+  ]
+    .filter((part): part is string => part !== undefined)
+    .join('\n\n');
 }
 
 /** What the task tells the harness about where its answer goes and what shape it takes. */
@@ -491,6 +550,12 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
     if (input.base !== undefined) await fetchRemoteBase(binding.root, input.base);
     const namedBase =
       input.base === undefined ? undefined : await resolveCommit(binding.root, input.base);
+    const mergeIdentity =
+      input.mergeFrom === undefined ? undefined : await mergeIdentityArgs(binding.root);
+    const mergeSource =
+      input.mergeFrom === undefined
+        ? undefined
+        : await fetchMergeSource(binding.root, input.mergeFrom);
     // A turn that names none keeps the checkout its session's base made, and so
     // is judged against that base as well.
     const base = input.base ?? session?.base;
@@ -514,8 +579,9 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
         keepScratch = false;
         throw error;
       }
+      const { merge: _earlierMerge, ...earlier } = session;
       const moved: HarnessSession = {
-        ...session,
+        ...earlier,
         worktreePath: worktree.path,
         baseSha: worktree.baseSha,
         ...(base !== undefined ? { base } : {}),
@@ -533,6 +599,30 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
       );
     }
     worktreePath = worktree.path;
+
+    const keptCheckout = session !== undefined && namedBase === undefined;
+    let merge: BaseMerge | undefined = keptCheckout ? session?.merge : undefined;
+    if (mergeSource !== undefined && keptCheckout) {
+      // The kept checkout holds the earlier turns' work uncommitted, and a merge
+      // under it would mix the two.
+      if (!(await isAncestor(worktree.path, mergeSource, 'HEAD'))) {
+        throw new WorktreeError(
+          `Session \`${input.continueFrom ?? ''}\` keeps a checkout that does not hold ` +
+            `\`${input.mergeFrom ?? mergeSource}\` (\`${mergeSource}\`), and merging it under the ` +
+            'work already there would mix the two. Name `base` as well, to continue in a fresh ' +
+            'checkout that merges it.',
+          'stale_base',
+        );
+      }
+    } else if (mergeSource !== undefined && mergeIdentity !== undefined) {
+      merge = await mergeIntoCheckout(worktree.path, mergeSource, mergeIdentity);
+      if (merge !== undefined && session !== undefined) {
+        session = { ...session, merge };
+        recordSession(session);
+        claimed = session;
+      }
+    }
+
     const refsBefore = await snapshotRefs(binding.root);
 
     // Fetched before the run and held only for its duration.
@@ -652,6 +742,7 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
       input.task,
       input.inputs,
       await hasRepositoryRules(worktree.path),
+      keptCheckout ? undefined : merge,
     );
     let result: SandboxedRunResult;
     let check: HarnessResultCheck | undefined;
@@ -738,10 +829,15 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
     // that answers is that ref's head as it stands now, not the folder's working
     // tree. A base ref gone since the run started is refused below as a ref
     // change, and the commit the checkout started at stands in until then.
+    // A merged checkout is judged against its merge, which is where the
+    // publication applies the diff once it has made that merge again; a branch
+    // that moved since is the publication's `stale_base`, not this answer's.
     const judgedAt =
-      base === undefined
-        ? undefined
-        : await resolveCommit(binding.root, base).catch(() => worktree.baseSha);
+      merge !== undefined
+        ? merge.commit
+        : base === undefined
+          ? undefined
+          : await resolveCommit(binding.root, base).catch(() => worktree.baseSha);
     const applies = await checkApplies(binding.root, changes.patch, judgedAt);
     // A named base is judged against itself; the folder's HEAD was never the
     // starting point, so its distance from it says nothing about the run.
@@ -764,6 +860,7 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
           conversationId,
           baseSha: worktree.baseSha,
           ...(base !== undefined ? { base } : {}),
+          ...(merge !== undefined ? { merge } : {}),
           createdAt: Date.now(),
           lastUsedAt: Date.now(),
         });
@@ -795,6 +892,14 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
       ...(sessionRef !== undefined ? { sessionRef } : {}),
       continued: resuming,
       baseSha: worktree.baseSha,
+      ...(merge !== undefined
+        ? {
+            merge: {
+              from: merge.from,
+              conflicts: merge.conflicts.map(({ path, kind }) => ({ path, kind })),
+            },
+          }
+        : {}),
       ...(patchRef !== undefined ? { patchRef, patch: inlinePatch } : {}),
       filesChanged: changes.filesChanged,
       patchTruncated,

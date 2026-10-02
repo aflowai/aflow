@@ -280,13 +280,20 @@ describe('BrowserProfileSchema', () => {
         { origin: '*.example.org', effect: 'allow' },
       ],
       window: 'visible',
-      unattended: false,
+      unattended: true,
       idleMinutes: 5,
     });
     expect(profile.spaces).toEqual(['space-a']);
     expect(profile.rules[0]?.effect).toBe('deny');
     expect(profile.idleMinutes).toBe(5);
     expect(BrowserProfileSchema.safeParse({ id: 'w', idleMinutes: 0 }).success).toBe(false);
+  });
+
+  it('refuses `unattended: false`, saying it is not enforced yet', () => {
+    const parsed = BrowserProfileSchema.safeParse({ id: 'work', unattended: false });
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues[0]?.path).toEqual(['unattended']);
+    expect(parsed.error?.issues[0]?.message).toContain('`unattended: false` is not enforced yet');
   });
 
   it('refuses an id that is not a plain directory name', () => {
