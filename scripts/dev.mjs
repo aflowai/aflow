@@ -55,9 +55,9 @@ const SERVICE_REGISTRY = {
   // ambient REDIS_URL wins over the paired one and points it at another
   // instance. Unpaired, owned by the launch-agent service, or with a daemon
   // already running, it is dropped from the profile with a hint rather than
-  // duplicated or crash-looped. Restarted on a change by a watcher that waits
-  // for it to exit, because it drains what is in flight and `tsx watch` kills
-  // it five seconds after the signal.
+  // duplicated or crash-looped. Restarted on a change by a watcher that asks
+  // it to drain what is in flight and waits for it to exit, because `tsx watch`
+  // kills five seconds after its signal. Stopping the stack still stops it now.
   'executor-host': {
     cmd: 'node scripts/watch-and-drain.mjs apps/aflow-executor-host/src/index.ts apps/aflow-executor-host packages',
     dotenv: false,

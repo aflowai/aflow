@@ -5,8 +5,9 @@
  * `tsx watch` does, except that a restart waits for the service to exit.
  * `tsx watch` sends SIGTERM and SIGKILLs five seconds later, which cuts short
  * a service that drains — the host executor, whose harness runs, checks and
- * reviews take minutes. One signal per restart: a second is the operator's
- * word to stop now, so a change during a drain only waits.
+ * reviews take minutes. A restart sends the drain signal (`drainSignal.mjs`),
+ * once: a second is the word to stop now, so a change during a drain only
+ * waits. The watcher's own SIGTERM or SIGINT is passed on as itself, a stop.
  *
  * Usage: node scripts/watch-and-drain.mjs <entry.ts> <watched dir>...
  * A change is a `.ts` file under a `src` directory of a watched dir, outside
@@ -17,6 +18,7 @@ import { spawn } from 'node:child_process';
 import { watch } from 'node:fs';
 import { resolve, sep } from 'node:path';
 import process from 'node:process';
+import { signalToSend } from './drainSignal.mjs';
 
 const [entry, ...watchedDirs] = process.argv.slice(2);
 if (entry === undefined || watchedDirs.length === 0) {
@@ -73,7 +75,7 @@ function changed(path) {
   if (restartWanted) return;
   restartWanted = true;
   console.log(`[watch] ${path} changed; the service drains, then starts again.`);
-  child.kill('SIGTERM');
+  child.kill(signalToSend({ kind: 'restart' }));
 }
 
 for (const dir of watchedDirs) {
@@ -94,10 +96,12 @@ for (const signal of ['SIGTERM', 'SIGINT']) {
   process.on(signal, () => {
     stopping = true;
     if (child === null) process.exit(0);
-    // A Ctrl-C at a terminal reaches the service directly as well; passing it
-    // on would deliver it twice, and the second would mean "stop now".
-    if (signal === 'SIGINT' && process.stdin.isTTY) return;
-    child.kill(signal);
+    const relayed = signalToSend({
+      kind: 'stop',
+      signal,
+      fromTerminal: process.stdin.isTTY === true,
+    });
+    if (relayed !== null) child.kill(relayed);
   });
 }
 

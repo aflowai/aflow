@@ -26,9 +26,14 @@ export interface ShutdownDrain {
 
 export interface ShutdownController {
   readonly shuttingDown: boolean;
+  /** Stops now: ends whatever is in flight, a drain under way included, then shuts down. */
   shutdownOnce(): Promise<void>;
-  /** Ends a drain under way; outside one it does nothing. */
-  stopNow(): void;
+  /**
+   * Claims nothing more, waits for what is in flight, then shuts down. Asked
+   * again while the drain is under way, it stops now. Without a `drain` it is
+   * `shutdownOnce`.
+   */
+  drainOnce(): Promise<void>;
 }
 
 export interface CreateShutdownControllerOptions {
@@ -47,11 +52,25 @@ function latestDeadline(work: readonly InFlightWork[]): number | undefined {
   return work.length === 0 ? undefined : Math.max(...work.map((w) => w.deadlineAt));
 }
 
+/**
+ * Two ways to stop, because supervisors make two different promises.
+ *
+ * `shutdownOnce` is what SIGTERM and SIGINT ask for, and it ends every workload
+ * at once. Whatever sends those may follow with SIGKILL after a short grace —
+ * the dev runner after ten seconds, `tsx watch` after five, launchd after its
+ * default — and SIGKILL skips every exit handler and reaches no process in a
+ * group of its own. Work left running then is unaddressed: a harness holding
+ * its provider credential, a checkout on disk.
+ *
+ * `drainOnce` is what SIGUSR2 asks for, sent only by a supervisor that has
+ * promised to wait for the exit without a kill — `scripts/watch-and-drain.mjs`.
+ * It stops claiming, lets what is in flight run to its own deadline, then shuts
+ * down. A second drain request, or a `shutdownOnce` during the drain, stops now.
+ */
 export function createShutdownController(
   options: CreateShutdownControllerOptions,
 ): ShutdownController {
   const { name, logger, onShutdown, drain } = options;
-  let shuttingDown = false;
   let shutdownPromise: Promise<void> | null = null;
   let endDrain: ((outcome: DrainOutcome) => void) | null = null;
 
@@ -101,15 +120,10 @@ export function createShutdownController(
     });
   };
 
-  const shutdownOnce = async (): Promise<void> => {
-    if (shuttingDown) {
-      await shutdownPromise;
-      return;
-    }
-    shuttingDown = true;
-    shutdownPromise = (async () => {
+  const shutDownAfter = (first: () => Promise<void> | void): Promise<void> =>
+    (shutdownPromise ??= (async () => {
       try {
-        if (drain !== undefined) await runDrain(drain);
+        await first();
         logger.info(`${name}: shutting down gracefully...`);
         await onShutdown();
         logger.info(`${name}: shutdown complete`);
@@ -118,26 +132,52 @@ export function createShutdownController(
           error: error instanceof Error ? error.message : String(error),
         });
       }
-    })();
-    await shutdownPromise;
+    })());
+
+  const endInFlightNow = ({ work, endInFlight }: ShutdownDrain): void => {
+    const running = work.inFlight().map((w) => w.name);
+    if (running.length > 0) {
+      logger.info(`${name}: stopping now — ending the steps in flight`, { ended: running });
+    }
+    endInFlight();
+  };
+
+  const shutdownOnce = (): Promise<void> => {
+    if (endDrain !== null) {
+      endDrain('stopped');
+      return shutdownPromise ?? Promise.resolve();
+    }
+    return shutDownAfter(() => {
+      if (drain !== undefined) endInFlightNow(drain);
+    });
+  };
+
+  const drainOnce = (): Promise<void> => {
+    if (endDrain !== null || drain === undefined) return shutdownOnce();
+    return shutDownAfter(() => runDrain(drain));
   };
 
   return {
     get shuttingDown() {
-      return shuttingDown;
+      return shutdownPromise !== null;
     },
     shutdownOnce,
-    stopNow: () => {
-      endDrain?.('stopped');
-    },
+    drainOnce,
   };
 }
 
+/**
+ * A signal no supervisor that kills sends: only one that waits for the exit
+ * asks for a drain, so SIGTERM and SIGINT can stay a stop.
+ */
+export const DRAIN_SIGNAL = 'SIGUSR2';
+
 export interface AttachSignalHandlersOptions {
+  /** SIGTERM and SIGINT, every time either arrives; it must be safe to call again. */
   onShutdown: () => Promise<void>;
+  /** `DRAIN_SIGNAL`, every time it arrives. Without one the signal keeps its default. */
+  onDrain?: () => Promise<void>;
   exitCode?: number;
-  /** A SIGTERM or SIGINT that arrives while shutdown is already under way. */
-  onRepeatSignal?: () => void;
 }
 
 /**
@@ -158,18 +198,18 @@ async function drainSentry(): Promise<void> {
 }
 
 export function attachSignalHandlers(options: AttachSignalHandlersOptions): void {
-  const { onShutdown, exitCode = 0, onRepeatSignal } = options;
-  let handling = false;
+  const { onShutdown, onDrain, exitCode = 0 } = options;
+  let exiting = false;
 
-  const handle = () => {
-    if (handling) {
-      onRepeatSignal?.();
-      return;
-    }
-    handling = true;
+  // Every signal reaches its handler, so a later one can turn a drain into a stop;
+  // the process exits once, when the first one's shutdown settles.
+  const handleWith = (handler: () => Promise<void>) => () => {
+    const settled = handler();
+    if (exiting) return;
+    exiting = true;
     void (async () => {
       try {
-        await onShutdown();
+        await settled;
       } finally {
         await drainSentry();
         process.exit(exitCode);
@@ -177,6 +217,7 @@ export function attachSignalHandlers(options: AttachSignalHandlersOptions): void
     })();
   };
 
-  process.on('SIGTERM', handle);
-  process.on('SIGINT', handle);
+  process.on('SIGTERM', handleWith(onShutdown));
+  process.on('SIGINT', handleWith(onShutdown));
+  if (onDrain !== undefined) process.on(DRAIN_SIGNAL, handleWith(onDrain));
 }

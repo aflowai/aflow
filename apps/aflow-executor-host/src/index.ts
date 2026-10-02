@@ -333,8 +333,9 @@ async function main(): Promise<void> {
   // A detached process is spawned into its own group so a stop reaches its
   // descendants, which also means it survives this executor unless something
   // ends it. One holding a credential in its environment, unaddressable because
-  // the handles live only in memory, is the worst of both. A signal drains
-  // first, so this runs at exit, or earlier when the drain is cut short.
+  // the handles live only in memory, is the worst of both. SIGTERM and SIGINT
+  // run this at once: whatever sends them may SIGKILL seconds later, which
+  // skips the exit handler below. Only a drain defers it, to its own end.
   const endEverything = (): void => {
     policyWatch.close();
     killAllProcesses();
@@ -468,9 +469,9 @@ async function main(): Promise<void> {
     })();
   });
 
-  // A restart under the dev stack's watcher is a signal like any other, and a
-  // harness run, a check or a review in flight is minutes of work the restart
-  // has no reason to end. The browser's pages are not held open for it.
+  // A restart under the dev stack's watcher drains: a harness run, a check or a
+  // review in flight is minutes of work the restart has no reason to end. The
+  // browser's pages are not held open for it.
   let browserStopped: Promise<void> | undefined;
   const stopBrowserRuntime = (): Promise<void> => (browserStopped ??= browserRuntime.stop());
 
@@ -506,10 +507,7 @@ async function main(): Promise<void> {
   attachRedisErrorGuard(redisBlockingBrowser, () => controller.shuttingDown, log);
   attachSignalHandlers({
     onShutdown: () => controller.shutdownOnce(),
-    // The operator's word to stop now: the drain ends what it was waiting for.
-    onRepeatSignal: () => {
-      controller.stopNow();
-    },
+    onDrain: () => controller.drainOnce(),
     exitCode: 0,
   });
 }

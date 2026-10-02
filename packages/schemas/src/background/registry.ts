@@ -1501,7 +1501,7 @@ const SCAN_EXCEPTIONS: readonly BackgroundScanExceptionInput[] = [
     reason:
       "Re-reads a draining executor's deadline when it falls due, since a step that was still queued has a timeout of its own by then and a progress-aware one has slid.",
     bound:
-      'One timer per process, armed only after a shutdown signal; cleared when the last step ends, and never re-armed once the latest deadline has passed.',
+      'One timer per process, armed only once a drain begins; cleared when the last step ends, and never re-armed once the latest deadline has passed.',
   },
   {
     site: 'packages/database/src/tenant/applyAll.ts',
