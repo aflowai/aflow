@@ -30,7 +30,11 @@ import { publishingFolders, withPushApproval } from '../pushApproval.js';
 import { noPushApprovals } from './fixtures/pushApprovals.js';
 
 const ARGV = ['node', 'scripts/verify-commit.mjs'];
-const PRIVATE_ARGV = ['/Users/ada/.local/bin/verify', '--token=s3cr3t', '/Users/ada/notes/ci.env'];
+const PRIVATE_ARGV = [
+  '/Users/someone/.local/bin/verify',
+  '--token=s3cr3t',
+  '/Users/someone/notes/ci.env',
+];
 
 const PUSHING = {
   id: 'hb_app',
@@ -241,7 +245,7 @@ describe('the checks, as the machine publishes and shows them', () => {
     ]);
     const published = JSON.stringify(folders);
     expect(published).not.toContain('s3cr3t');
-    expect(published).not.toContain('/Users/ada');
+    expect(published).not.toContain('/Users/someone');
     expect(published).not.toContain('scripts/verify-commit.mjs');
   });
 

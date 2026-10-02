@@ -13,6 +13,7 @@ import {
   type StepDefinition,
   type OperationDefinition,
   type LiveDeltaChannel,
+  isDurablePayloadKind,
 } from '@aflow/schemas';
 import { appendSessionEvent, appendLiveDelta, type SessionEvent } from '@aflow/redis';
 import {
@@ -159,6 +160,7 @@ export async function buildExecutionContext(
         attempt: job.attempt,
         kind: payloadKind,
         data,
+        persist: isDurablePayloadKind(payloadKind),
       });
     },
 

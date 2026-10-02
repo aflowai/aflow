@@ -439,6 +439,7 @@ export function createHistoryManager(params: {
         attempt: params.attempt,
         kind: 'history',
         data: record,
+        persist: true,
       });
     },
 
