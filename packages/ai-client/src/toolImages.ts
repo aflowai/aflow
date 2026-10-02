@@ -22,6 +22,12 @@ export const MAX_TOOL_IMAGES_PER_TURN = 6;
 /** The most tool-image bytes one request carries. */
 export const MAX_TOOL_IMAGE_BYTES_PER_TURN = 8 * 1024 * 1024;
 /**
+ * The most bytes one tool image carries — below the smallest per-image limit
+ * any provider in the catalog is known to refuse over, which a single image
+ * past it would turn into a failed request.
+ */
+export const MAX_TOOL_IMAGE_BYTES_PER_IMAGE = 4 * 1024 * 1024;
+/**
  * How many of the most recent runs of tool results keep their images. A run
  * is the tool messages answering one assistant turn; older runs keep only the
  * description.
@@ -32,6 +38,7 @@ type Reduction =
   | { kind: 'no_vision' }
   | { kind: 'earlier_result' }
   | { kind: 'over_ceiling' }
+  | { kind: 'over_image_ceiling' }
   | { kind: 'unreadable'; reason: string };
 
 interface Candidate {
@@ -58,8 +65,10 @@ function reductionReason(reduction: Reduction): string {
         `this turn's image limit (${String(MAX_TOOL_IMAGES_PER_TURN)} images, ` +
         `${String(MAX_TOOL_IMAGE_BYTES_PER_TURN / (1024 * 1024))} MB) went to newer images`
       );
+    case 'over_image_ceiling':
+      return `it is over the ${String(MAX_TOOL_IMAGE_BYTES_PER_IMAGE / (1024 * 1024))} MB limit for one image`;
     case 'unreadable':
-      return `its bytes could not be read: ${reduction.reason}`;
+      return `its bytes could not be used: ${reduction.reason}`;
   }
 }
 
@@ -123,18 +132,17 @@ export async function prepareToolImages(
   const admitted: Candidate[] = [];
   let count = 0;
   let bytes = 0;
-  let full = false;
   for (const candidate of candidates) {
     if (!options.vision) {
       decided.set(candidate, { kind: 'no_vision' });
     } else if (candidate.run >= TOOL_RESULT_RUNS_KEEPING_IMAGES) {
       decided.set(candidate, { kind: 'earlier_result' });
+    } else if (candidate.image.sizeBytes > MAX_TOOL_IMAGE_BYTES_PER_IMAGE) {
+      decided.set(candidate, { kind: 'over_image_ceiling' });
     } else if (
-      full ||
       count >= MAX_TOOL_IMAGES_PER_TURN ||
       bytes + candidate.image.sizeBytes > MAX_TOOL_IMAGE_BYTES_PER_TURN
     ) {
-      full = true;
       decided.set(candidate, { kind: 'over_ceiling' });
     } else {
       count++;
@@ -157,21 +165,27 @@ export async function prepareToolImages(
       admitted.map((candidate) => resolve(candidate.image)),
     );
     // The declared size chose what to read; the bytes actually read are what
-    // the ceiling holds to.
-    let readBytes = 0;
+    // the ceilings hold to.
+    let shownBytes = 0;
     admitted.forEach((candidate, index) => {
       const resolution = resolutions[index]!;
       if (!resolution.ok) {
         decided.set(candidate, { kind: 'unreadable', reason: resolution.reason });
         return;
       }
-      readBytes += decodedLength(resolution.data);
-      decided.set(
-        candidate,
-        readBytes > MAX_TOOL_IMAGE_BYTES_PER_TURN
-          ? { kind: 'over_ceiling' }
-          : { kind: 'shown', data: resolution.data, mediaType: resolution.mediaType },
-      );
+      const imageBytes = decodedLength(resolution.data);
+      if (imageBytes > MAX_TOOL_IMAGE_BYTES_PER_IMAGE) {
+        decided.set(candidate, { kind: 'over_image_ceiling' });
+      } else if (shownBytes + imageBytes > MAX_TOOL_IMAGE_BYTES_PER_TURN) {
+        decided.set(candidate, { kind: 'over_ceiling' });
+      } else {
+        shownBytes += imageBytes;
+        decided.set(candidate, {
+          kind: 'shown',
+          data: resolution.data,
+          mediaType: resolution.mediaType,
+        });
+      }
     });
   }
 

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   MAX_STEP_IMAGES_PER_OUTPUT,
-  STEP_IMAGE_SEARCH_DEPTH,
+  StepImageOutputPathsSchema,
   StepImageSchema,
   findStepImages,
   type StepImage,
@@ -14,7 +14,9 @@ import {
 } from '../../runtime/aiPrompt.js';
 import { estimateMessageTokens } from '../../runtime/tokenEstimate.js';
 
-const ref = `inline:${Buffer.from(JSON.stringify({ data: 'iVBORw0KGgo=', mimeType: 'image/png' })).toString('base64')}`;
+const producer = { tenantId: 'tenant-1', runId: 'run-1', stepExecutionId: 'exec-1' };
+const ref = 'gs://aflow-payloads/tenants/tenant-1/runs/run-1/steps/exec-1/attempt/1/body.json';
+const inlineRef = `inline:${Buffer.from(JSON.stringify({ data: 'iVBORw0KGgo=', mimeType: 'image/png' })).toString('base64')}`;
 
 const screenshot: StepImage = {
   ref,
@@ -58,34 +60,87 @@ describe('StepImageSchema', () => {
   });
 });
 
-describe('findStepImages', () => {
-  it('finds the output itself when it is the image', () => {
-    expect(findStepImages(screenshot)).toEqual([screenshot]);
-  });
-
-  it('finds images nested in objects and arrays, in document order', () => {
-    const second = { ...screenshot, description: 'The dashboard' };
+describe('StepImageOutputPathsSchema', () => {
+  it('accepts names, dotted names and arrays', () => {
     expect(
-      findStepImages({ url: 'https://example.com', page: { image: screenshot }, more: [second] }),
-    ).toEqual([screenshot, second]);
+      StepImageOutputPathsSchema.safeParse(['image', 'page.screenshot', 'frames[]']).success,
+    ).toBe(true);
   });
 
-  it('finds nothing in an output with no image', () => {
-    expect(findStepImages({ text: 'hello', ref, contentType: 'image/png' })).toEqual([]);
-    expect(findStepImages('plain')).toEqual([]);
-    expect(findStepImages(null)).toEqual([]);
+  it.each([
+    ['no path', []],
+    ['an empty path', ['']],
+    ['a bracketed index', ['frames[0]']],
+    ['a wildcard', ['*']],
+    ['a leading dot', ['.image']],
+    ['a repeated path', ['image', 'image']],
+  ])('refuses %s', (_label, paths) => {
+    expect(StepImageOutputPathsSchema.safeParse(paths).success).toBe(false);
+  });
+});
+
+describe('findStepImages', () => {
+  const second = { ...screenshot, description: 'The dashboard' };
+
+  it('reads the declared paths, in declaration order', () => {
+    const output = { url: 'https://example.com', page: { image: screenshot }, frames: [second] };
+    expect(findStepImages(output, ['frames[]', 'page.image'], producer)).toEqual({
+      images: [second, screenshot],
+      withheld: [],
+    });
   });
 
-  it('stops at the depth bound', () => {
-    let deep: unknown = screenshot;
-    for (let i = 0; i < STEP_IMAGE_SEARCH_DEPTH; i++) deep = { inner: deep };
-    expect(findStepImages(deep)).toEqual([screenshot]);
-    expect(findStepImages({ inner: deep })).toEqual([]);
+  it('reads nothing outside them, however the value is shaped', () => {
+    const output = { image: 'not an image', nested: { image: screenshot }, list: [screenshot] };
+    expect(findStepImages(output, ['image'], producer)).toEqual({ images: [], withheld: [] });
+    expect(findStepImages(screenshot, ['image'], producer)).toEqual({ images: [], withheld: [] });
+    expect(findStepImages('plain', ['image'], producer)).toEqual({ images: [], withheld: [] });
+    expect(findStepImages(null, ['image'], producer)).toEqual({ images: [], withheld: [] });
   });
 
-  it('stops at the count bound', () => {
-    const many = Array.from({ length: MAX_STEP_IMAGES_PER_OUTPUT + 3 }, () => screenshot);
-    expect(findStepImages(many)).toHaveLength(MAX_STEP_IMAGES_PER_OUTPUT);
+  it('reads only own properties', () => {
+    const inherited = Object.create({ image: screenshot }) as object;
+    expect(findStepImages(inherited, ['image'], producer).images).toEqual([]);
+  });
+
+  it.each([
+    ['another step execution', ref.replace('/steps/exec-1/', '/steps/exec-2/')],
+    ['another run', ref.replace('/runs/run-1/', '/runs/run-2/')],
+    ['another tenant', ref.replace('/tenants/tenant-1/', '/tenants/tenant-2/')],
+    [
+      'content-addressed bytes',
+      `gs://aflow-payloads/tenants/tenant-1/content/${'a'.repeat(64)}/body.json`,
+    ],
+  ])('withholds an image whose reference names %s', (_label, foreign) => {
+    expect(findStepImages({ image: { ...screenshot, ref: foreign } }, ['image'], producer)).toEqual(
+      {
+        images: [],
+        withheld: [
+          'The image at image was not shown: its reference names a payload this step did not store.',
+        ],
+      },
+    );
+  });
+
+  it('withholds an inline image, naming the element it was', () => {
+    const output = { frames: [screenshot, { ...screenshot, ref: inlineRef }] };
+    expect(findStepImages(output, ['frames[]'], producer)).toEqual({
+      images: [screenshot],
+      withheld: [
+        'The image at frames[1] was not shown: it is carried inline, not stored by this step.',
+      ],
+    });
+  });
+
+  it('stops at the count bound, withheld images included', () => {
+    const frames = Array.from({ length: MAX_STEP_IMAGES_PER_OUTPUT + 3 }, () => screenshot);
+    const found = findStepImages(
+      { image: { ...screenshot, ref: inlineRef }, frames },
+      ['image', 'frames[]'],
+      producer,
+    );
+    expect(found.withheld).toHaveLength(1);
+    expect(found.images).toHaveLength(MAX_STEP_IMAGES_PER_OUTPUT - 1);
   });
 });
 

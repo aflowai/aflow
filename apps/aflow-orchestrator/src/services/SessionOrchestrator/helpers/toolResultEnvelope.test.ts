@@ -191,8 +191,9 @@ describe('buildToolResultEnvelopes (Plan 196 §4.4a)', () => {
 });
 
 describe('buildToolResultEnvelopes — images in a step output (Plan 320 D10)', () => {
+  const producer = { tenantId: 'tenant-1', runId: 'run-1', stepExecutionId: 'exec-1' };
   const screenshot = {
-    ref: `inline:${Buffer.from('{"data":"iVBORw0KGgo=","mimeType":"image/png"}').toString('base64')}`,
+    ref: 'gs://aflow-payloads/tenants/tenant-1/runs/run-1/steps/exec-1/attempt/1/body.json',
     contentType: 'image/png' as const,
     sizeBytes: 48_213,
     width: 1280,
@@ -209,12 +210,10 @@ describe('buildToolResultEnvelopes — images in a step output (Plan 320 D10)', 
     hasOutputRef: true,
   };
 
-  it('an output holding the image shape becomes a tool message with an image part', () => {
+  it('an image at a declared path becomes a tool message with an image part', () => {
     const output = { url: 'https://example.com/sign-in', image: screenshot };
-    const [envelope] = buildToolResultEnvelopes(
-      [{ ...base, images: findStepImages(output) }],
-      1_718_000_000_000,
-    );
+    const { images } = findStepImages(output, ['image'], producer);
+    const [envelope] = buildToolResultEnvelopes([{ ...base, images }], 1_718_000_000_000);
     expect(strictEnvelope.safeParse(envelope).success).toBe(true);
     expect(envelope!.images).toEqual([screenshot]);
 
@@ -223,12 +222,27 @@ describe('buildToolResultEnvelopes — images in a step output (Plan 320 D10)', 
     expect(message.parts.slice(1)).toEqual([{ kind: 'image', ...screenshot }]);
   });
 
+  it('a withheld image is a line in the JSON the model reads, and no image part', () => {
+    const output = { image: { ...screenshot, ref: screenshot.ref.replace('exec-1', 'exec-2') } };
+    const { images, withheld } = findStepImages(output, ['image'], producer);
+    expect(images).toEqual([]);
+    const [envelope] = buildToolResultEnvelopes(
+      [{ ...base, imagesWithheld: withheld }],
+      1_718_000_000_000,
+    );
+    expect(strictEnvelope.safeParse(envelope).success).toBe(true);
+    expect(toolResultMessage(envelope!).parts).toEqual([{ kind: 'json', json: envelope }]);
+    expect(envelope!.imagesWithheld).toEqual([
+      'The image at image was not shown: its reference names a payload this step did not store.',
+    ]);
+  });
+
   it('an output without one leaves the envelope and its message as they were', () => {
     const output = { url: 'https://example.com/sign-in', title: 'Sign in' };
-    const images = findStepImages(output);
-    expect(images).toEqual([]);
+    expect(findStepImages(output, ['image'], producer)).toEqual({ images: [], withheld: [] });
     const [envelope] = buildToolResultEnvelopes([base], 1_718_000_000_000);
     expect('images' in envelope!).toBe(false);
+    expect('imagesWithheld' in envelope!).toBe(false);
     expect(toolResultMessage(envelope!).parts).toEqual([{ kind: 'json', json: envelope }]);
   });
 });

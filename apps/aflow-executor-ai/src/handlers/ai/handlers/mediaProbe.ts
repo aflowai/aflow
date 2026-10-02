@@ -10,7 +10,7 @@
  * empty format: a receipt that says nothing is recoverable, one that says the
  * wrong thing is not.
  */
-import type { MediaAssetKind, MediaRenderedFormat } from '@aflow/schemas';
+import type { MediaAssetKind, MediaRenderedFormat, StepImageContentType } from '@aflow/schemas';
 
 interface Dimensions {
   width: number;
@@ -24,6 +24,25 @@ function dimensions(width: number, height: number): Dimensions | undefined {
 }
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+/** The bytes a signature needs: RIFF's four, its length's four, then WEBP's four. */
+export const IMAGE_SIGNATURE_BYTES = 12;
+
+/** Which of png, jpeg and webp the leading bytes are, by signature alone. */
+export function imageContentTypeFromSignature(bytes: Buffer): StepImageContentType | undefined {
+  if (bytes.length >= 8 && bytes.subarray(0, 8).equals(PNG_SIGNATURE)) return 'image/png';
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return 'image/jpeg';
+  }
+  if (
+    bytes.length >= IMAGE_SIGNATURE_BYTES &&
+    bytes.subarray(0, 4).toString('latin1') === 'RIFF' &&
+    bytes.subarray(8, 12).toString('latin1') === 'WEBP'
+  ) {
+    return 'image/webp';
+  }
+  return undefined;
+}
 
 function probePng(bytes: Buffer): Dimensions | undefined {
   if (bytes.length < 24 || !bytes.subarray(0, 8).equals(PNG_SIGNATURE)) return undefined;

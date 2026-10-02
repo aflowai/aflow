@@ -3,6 +3,7 @@ import type { StepImage } from '@aflow/schemas';
 import { createAIClient } from './client.js';
 import {
   MAX_TOOL_IMAGES_PER_TURN,
+  MAX_TOOL_IMAGE_BYTES_PER_IMAGE,
   MAX_TOOL_IMAGE_BYTES_PER_TURN,
   prepareToolImages,
 } from './toolImages.js';
@@ -205,44 +206,117 @@ describe('prepareToolImages', () => {
     expect(resolve.calls).toHaveLength(MAX_TOOL_IMAGES_PER_TURN);
   });
 
+  // Three of these overrun the per-turn ceiling; each stays under the per-image one.
+  const threeMiB = 3 * 1024 * 1024;
+
   it('holds the per-turn byte ceiling, newest first', async () => {
     const resolve = resolverReturningDeclaredSize();
-    const big = Math.floor(MAX_TOOL_IMAGE_BYTES_PER_TURN / 2) + 1;
     const out = await prepareToolImages(
-      [assistantCalling('c1'), toolMessage('c1', [image(1, big), image(2, big)])],
+      [
+        assistantCalling('c1'),
+        toolMessage('c1', [image(1, threeMiB), image(2, threeMiB), image(3, threeMiB)]),
+      ],
       { vision: true, resolve, provider: 'anthropic' },
     );
-    expect(resolve.calls.map((c) => c.description)).toEqual(['Screenshot 2']);
-    expect(shownImages(out)).toBe(1);
+    expect(resolve.calls.map((c) => c.description)).toEqual(['Screenshot 3', 'Screenshot 2']);
+    expect(shownImages(out)).toBe(2);
     expect(reducedTexts(out)).toEqual([
       expect.stringContaining('went to newer images. 1280×720 image/png: Screenshot 1]'),
     ]);
   });
 
-  it('holds the byte ceiling to the bytes actually read', async () => {
-    const under: ToolImageResolver = () =>
+  it('shows a small image that follows one turned away for the per-turn ceiling', async () => {
+    const resolve = resolverReturningDeclaredSize();
+    const out = await prepareToolImages(
+      [
+        assistantCalling('c1'),
+        toolMessage('c1', [
+          image(1, 1000),
+          image(2, threeMiB),
+          image(3, threeMiB),
+          image(4, threeMiB),
+        ]),
+      ],
+      { vision: true, resolve, provider: 'anthropic' },
+    );
+    expect(resolve.calls.map((c) => c.description)).toEqual([
+      'Screenshot 4',
+      'Screenshot 3',
+      'Screenshot 1',
+    ]);
+    expect(shownImages(out)).toBe(3);
+    expect(reducedTexts(out)).toEqual([expect.stringContaining('Screenshot 2]')]);
+  });
+
+  it('holds the per-turn ceiling to the bytes actually read, counting only images shown', async () => {
+    const reads = new Map([
+      ['Screenshot 4', threeMiB],
+      ['Screenshot 3', threeMiB],
+      ['Screenshot 2', threeMiB],
+      ['Screenshot 1', 1000],
+    ]);
+    const resolve: ToolImageResolver = (img) =>
       Promise.resolve({
         ok: true,
-        data: bytesOf(MAX_TOOL_IMAGE_BYTES_PER_TURN + 1),
+        data: bytesOf(reads.get(img.description ?? '') ?? 0),
+        mediaType: 'image/png',
+      });
+    const out = await prepareToolImages(
+      [
+        assistantCalling('c1'),
+        toolMessage(
+          'c1',
+          [1, 2, 3, 4].map((n) => image(n)),
+        ),
+      ],
+      { vision: true, resolve, provider: 'anthropic' },
+    );
+    expect(shownImages(out)).toBe(3);
+    expect(reducedTexts(out)).toEqual([expect.stringContaining("this turn's image limit")]);
+    expect(reducedTexts(out)[0]).toContain('Screenshot 2]');
+  });
+
+  it('reduces an image declared over the per-image ceiling without reading it', async () => {
+    const resolve = resolverReturningDeclaredSize();
+    const out = await prepareToolImages(
+      [
+        assistantCalling('c1'),
+        toolMessage('c1', [image(1), image(2, MAX_TOOL_IMAGE_BYTES_PER_IMAGE + 1)]),
+      ],
+      { vision: true, resolve, provider: 'anthropic' },
+    );
+    expect(resolve.calls.map((c) => c.description)).toEqual(['Screenshot 1']);
+    expect(shownImages(out)).toBe(1);
+    expect(reducedTexts(out)).toEqual([
+      '[Image not shown — it is over the 4 MB limit for one image. 1280×720 image/png: Screenshot 2]',
+    ]);
+  });
+
+  it('reduces an image whose bytes read over the per-image ceiling', async () => {
+    const resolve: ToolImageResolver = () =>
+      Promise.resolve({
+        ok: true,
+        data: bytesOf(MAX_TOOL_IMAGE_BYTES_PER_IMAGE + 1),
         mediaType: 'image/png',
       });
     const out = await prepareToolImages([assistantCalling('c1'), toolMessage('c1', [image(1)])], {
       vision: true,
-      resolve: under,
+      resolve,
       provider: 'anthropic',
     });
     expect(shownImages(out)).toBe(0);
-    expect(reducedTexts(out)[0]).toContain("this turn's image limit");
+    expect(reducedTexts(out)[0]).toContain('over the 4 MB limit for one image');
+    expect(MAX_TOOL_IMAGE_BYTES_PER_IMAGE).toBeLessThan(MAX_TOOL_IMAGE_BYTES_PER_TURN);
   });
 
-  it('names an image whose bytes could not be read', async () => {
+  it('names an image whose bytes could not be used', async () => {
     const out = await prepareToolImages([assistantCalling('c1'), toolMessage('c1', [image(1)])], {
       vision: true,
       resolve: () => Promise.resolve({ ok: false, reason: 'payload not found' }),
       provider: 'anthropic',
     });
     expect(reducedTexts(out)[0]).toBe(
-      '[Image not shown — its bytes could not be read: payload not found. 1280×720 image/png: Screenshot 1]',
+      '[Image not shown — its bytes could not be used: payload not found. 1280×720 image/png: Screenshot 1]',
     );
   });
 

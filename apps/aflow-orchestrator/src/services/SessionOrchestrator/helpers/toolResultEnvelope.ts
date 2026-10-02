@@ -31,6 +31,9 @@ export function buildToolResultEnvelopes(
       ? { nextSteps: tr.nextSteps.slice(0, MAX_NEXT_STEPS) }
       : {}),
     ...(tr.images && tr.images.length > 0 ? { images: tr.images } : {}),
+    ...(tr.imagesWithheld && tr.imagesWithheld.length > 0
+      ? { imagesWithheld: tr.imagesWithheld }
+      : {}),
     // Error-type-aware recovery hint for the agent.
     ...(tr.status === 'FAILED'
       ? {
