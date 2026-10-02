@@ -25,6 +25,7 @@ import type {
 } from '../types.js';
 import type { AIProviderAdapter } from '../adapter.js';
 import { AIClientError, buildStreamTruncationError } from '../errors.js';
+import { moveToolImagesToUserMessages, toolResultText } from './toolResultContent.js';
 import { parseJsonResponse } from './jsonResponseParse.js';
 
 // ============================================================================
@@ -100,7 +101,7 @@ export function toOpenAIMessage(message: ChatMessage): OpenAIMessage {
       return {
         role: 'tool',
         tool_call_id: message.toolCallId,
-        content: message.content,
+        content: toolResultText(message, 'fireworks'),
       };
 
     default: {
@@ -432,7 +433,9 @@ export function createFireworksAdapter(config: FireworksConfig): AIProviderAdapt
           applyFireworksReasoningExtras(
             {
               model: request.model,
-              messages: request.messages.map(toOpenAIMessage),
+              messages: moveToolImagesToUserMessages(request.messages, 'fireworks').map(
+                toOpenAIMessage,
+              ),
               ...(request.tools && request.tools.length > 0
                 ? { tools: toOpenAITools(request.tools) }
                 : {}),
@@ -512,7 +515,9 @@ export function createFireworksAdapter(config: FireworksConfig): AIProviderAdapt
             applyFireworksReasoningExtras(
               {
                 model: request.model,
-                messages: request.messages.map(toOpenAIMessage),
+                messages: moveToolImagesToUserMessages(request.messages, 'fireworks').map(
+                  toOpenAIMessage,
+                ),
                 stream: true,
                 stream_options: { include_usage: true },
                 ...(request.tools && request.tools.length > 0
@@ -666,7 +671,9 @@ export function createFireworksAdapter(config: FireworksConfig): AIProviderAdapt
           applyFireworksReasoningExtras(
             {
               model: request.model,
-              messages: request.messages.map(toOpenAIMessage),
+              messages: moveToolImagesToUserMessages(request.messages, 'fireworks').map(
+                toOpenAIMessage,
+              ),
               response_format: responseFormat,
               ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
               ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),

@@ -6,3 +6,4 @@
 export * from './asset.js';
 export * from './routeCapability.js';
 export * from './namedReferences.js';
+export * from './stepImage.js';

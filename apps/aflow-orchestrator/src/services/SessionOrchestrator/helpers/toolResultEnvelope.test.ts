@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import type { AflowError } from '@aflow/schemas';
-import { AiToolResultEnvelopeV1Schema, toAgentToolError } from '@aflow/schemas';
+import {
+  AiToolResultEnvelopeV1Schema,
+  findStepImages,
+  toAgentToolError,
+  toolResultMessage,
+} from '@aflow/schemas';
 import { buildToolResultEnvelopes } from './toolResultEnvelope.js';
 import type { ToolResultSummary } from '../types.js';
 
@@ -182,5 +187,48 @@ describe('buildToolResultEnvelopes (Plan 196 §4.4a)', () => {
       'Re-read with ui.applet.get and recompute',
     );
     expect(parsed.success && parsed.data.nextExpectedFromAgent?.[0]?.action).toBe('retry');
+  });
+});
+
+describe('buildToolResultEnvelopes — images in a step output (Plan 320 D10)', () => {
+  const screenshot = {
+    ref: `inline:${Buffer.from('{"data":"iVBORw0KGgo=","mimeType":"image/png"}').toString('base64')}`,
+    contentType: 'image/png' as const,
+    sizeBytes: 48_213,
+    width: 1280,
+    height: 720,
+    description: 'The sign-in page',
+  };
+  const base: ToolResultSummary = {
+    toolCallId: 'shot_0',
+    toolId: 'browser.page.screenshot',
+    name: 'browser.page.screenshot',
+    status: 'SUCCEEDED',
+    summary: 'Captured the page',
+    operationId: 'browser.page.screenshot',
+    hasOutputRef: true,
+  };
+
+  it('an output holding the image shape becomes a tool message with an image part', () => {
+    const output = { url: 'https://example.com/sign-in', image: screenshot };
+    const [envelope] = buildToolResultEnvelopes(
+      [{ ...base, images: findStepImages(output) }],
+      1_718_000_000_000,
+    );
+    expect(strictEnvelope.safeParse(envelope).success).toBe(true);
+    expect(envelope!.images).toEqual([screenshot]);
+
+    const message = toolResultMessage(envelope!);
+    expect(message.parts[0]!.kind).toBe('json');
+    expect(message.parts.slice(1)).toEqual([{ kind: 'image', ...screenshot }]);
+  });
+
+  it('an output without one leaves the envelope and its message as they were', () => {
+    const output = { url: 'https://example.com/sign-in', title: 'Sign in' };
+    const images = findStepImages(output);
+    expect(images).toEqual([]);
+    const [envelope] = buildToolResultEnvelopes([base], 1_718_000_000_000);
+    expect('images' in envelope!).toBe(false);
+    expect(toolResultMessage(envelope!).parts).toEqual([{ kind: 'json', json: envelope }]);
   });
 });

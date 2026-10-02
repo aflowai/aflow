@@ -25,6 +25,7 @@ import type {
   MediaSourceRef,
   PinnedMemoryRef,
 } from '@aflow/schemas';
+import type { ToolImageResolver } from '@aflow/ai-client';
 import type { MediaPersistenceTarget } from './mediaPersist.js';
 
 /** One resolved input, in the shape the provider adapters take it. */
@@ -47,6 +48,62 @@ export interface MediaSourceRequest {
   field: string;
 }
 
+/** Image bytes behind a PayloadRef, read with the run's own payload access. */
+export async function readPayloadImage(
+  ctx: ExecutorContext,
+  ref: string,
+  field: string,
+): Promise<MediaSourceResolution> {
+  let payload: { data?: string; mimeType?: string };
+  try {
+    payload = await ctx.readPayload<{ data?: string; mimeType?: string }>(ref);
+  } catch (error) {
+    // A ref the run may not read is a refusal about the input the caller
+    // wrote, so it names the field rather than failing the step opaquely.
+    if (!(error instanceof PayloadAccessError)) throw error;
+    return { ok: false, error: permissionError(`${field}: ${error.message}`, { field, ref }) };
+  }
+  if (!payload.data) {
+    return {
+      ok: false,
+      error: validationError(
+        `${field} resolved to a payload with no 'data' field, so there are no image bytes to ` +
+          'render from.',
+        { field, ref },
+      ),
+    };
+  }
+  return {
+    ok: true,
+    source: { data: payload.data, mimeType: payload.mimeType ?? 'image/png', bound: undefined },
+  };
+}
+
+/**
+ * How an agent turn's request reads the tool images its model is shown. An
+ * image that cannot be read becomes its description in the tool message, so a
+ * missing screenshot costs the model the picture, not the turn.
+ */
+export function toolImageResolver(ctx: ExecutorContext): ToolImageResolver {
+  return async (image) => {
+    try {
+      const resolution = await readPayloadImage(ctx, image.ref, 'image');
+      return resolution.ok
+        ? { ok: true, data: resolution.source.data, mediaType: resolution.source.mimeType }
+        : { ok: false, reason: resolution.error.message };
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      ctx.log.warn('agent_turn_tool_image_unreadable', {
+        tenantId: ctx.job.tenantId,
+        runId: ctx.runId,
+        stepExecutionId: ctx.job.stepExecutionId,
+        reason,
+      });
+      return { ok: false, reason };
+    }
+  };
+}
+
 export class MediaSourceResolver {
   /** Built on first pinned read: a request made entirely of payload refs needs no repository. */
   private repo: MemoryDocRepository | undefined;
@@ -64,34 +121,8 @@ export class MediaSourceResolver {
   async resolve(request: MediaSourceRequest): Promise<MediaSourceResolution> {
     const { ref } = request;
     return typeof ref === 'string'
-      ? await this.fromPayload(ref, request.field)
+      ? await readPayloadImage(this.ctx, ref, request.field)
       : await this.fromMemory(ref, request);
-  }
-
-  private async fromPayload(ref: string, field: string): Promise<MediaSourceResolution> {
-    let payload: { data?: string; mimeType?: string };
-    try {
-      payload = await this.ctx.readPayload<{ data?: string; mimeType?: string }>(ref);
-    } catch (error) {
-      // A ref the run may not read is a refusal about the input the caller
-      // wrote, so it names the field rather than failing the step opaquely.
-      if (!(error instanceof PayloadAccessError)) throw error;
-      return { ok: false, error: permissionError(`${field}: ${error.message}`, { field, ref }) };
-    }
-    if (!payload.data) {
-      return {
-        ok: false,
-        error: validationError(
-          `${field} resolved to a payload with no 'data' field, so there are no image bytes to ` +
-            'render from.',
-          { field, ref },
-        ),
-      };
-    }
-    return {
-      ok: true,
-      source: { data: payload.data, mimeType: payload.mimeType ?? 'image/png', bound: undefined },
-    };
   }
 
   private async fromMemory(

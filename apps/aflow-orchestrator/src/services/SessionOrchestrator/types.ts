@@ -12,6 +12,7 @@ import type {
   AgentToolError,
   SessionAgentTarget,
   SimulationRunInput,
+  StepImage,
 } from '@aflow/schemas';
 
 // ============================================================================
@@ -61,6 +62,8 @@ export interface ToolResultSummary {
   outputFields?: string[];
   error?: AgentToolError;
   nextSteps?: Array<{ action: string; note: string }>;
+  /** Images found in the step's output — references only, never bytes. */
+  images?: StepImage[];
 }
 
 export interface ScheduleStepParams {

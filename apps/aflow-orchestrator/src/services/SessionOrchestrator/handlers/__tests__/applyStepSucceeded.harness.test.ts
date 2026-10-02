@@ -338,3 +338,102 @@ describe('applyStepSucceeded — tool-result summary boundary', () => {
     expect(scheduled.lastToolResults?.[0]?.operationId).toBe('memory.run_output.get');
   });
 });
+
+describe('applyStepSucceeded — images in a tool output (Plan 320 D10)', () => {
+  const screenshot = {
+    ref: `inline:${Buffer.from('{"data":"iVBORw0KGgo=","mimeType":"image/png"}').toString('base64')}`,
+    contentType: 'image/png',
+    sizeBytes: 48_213,
+    width: 1280,
+    height: 720,
+    description: 'The sign-in page',
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAtomicCompleteStep.mockResolvedValue(undefined);
+    mockDecrementShardActiveRuns.mockResolvedValue(undefined);
+    mockRemoveBarrierWatchdog.mockResolvedValue(undefined);
+    mockBuildToolResultSummaryWithMeta.mockReturnValue({
+      text: 'summary-text',
+      meta: { kind: 'generic', chars: 12, continuationEmitted: false },
+    });
+  });
+
+  async function toolResultFor(output: unknown) {
+    const runtimeState = { version: 1, variables: {}, updatedAtMs: 0 } as never;
+    mockApplyOutputMapping.mockResolvedValue({
+      updatedState: runtimeState,
+      patch: { version: 1, changed: [] },
+    });
+    const step = (stepId: string, stepType: string, operation: string, next: string[]) => ({
+      stepId,
+      stepType,
+      operation,
+      name: stepId,
+      config: {},
+      tags: [],
+      optional: false,
+      onSuccess: { next: next.map((n) => ({ stepId: n, priority: 50 })) },
+      onFailure: { next: [] },
+    });
+    const toolStep = step('shoot', 'compute', 'compute.code.run', ['agent_loop']);
+    const agentStep = step('agent_loop', 'ai', 'ai.agent.turn', []);
+    const params: ApplyStepSucceededParams = {
+      redis: {} as never,
+      payloadStore: { retrieve: vi.fn(async () => output) } as never,
+      db: {} as never,
+      result: {
+        tenantId: TENANT,
+        sessionId: SESSION_ID,
+        stepId: 'shoot',
+        stepExecutionId: STEP_EXEC_ID,
+        stepType: 'compute',
+        operationId: 'compute.code.run',
+        attempt: 1,
+        outputRef: 'gs://bucket/output.json',
+        traceId: 'trace-1',
+        nowMs: 1_700_000_000_000,
+      },
+      runHotState: {
+        sessionId: SESSION_ID,
+        status: 'RUNNING',
+        runtimeState,
+        target: { kind: 'custom-agent' },
+      } as never,
+      stepDef: toolStep as never,
+      stepState: {
+        stepId: 'shoot',
+        startedAt: 1_700_000_000_000,
+        parentStepExecutionId: 'parent-exec-1',
+      } as never,
+      agentDef: {
+        flowId: 'flow-1',
+        schemaVersion: 1,
+        metadata: { name: 'Agent', tags: [] },
+        stateVariables: [],
+        startStepId: 'agent_loop',
+        steps: [toolStep, agentStep],
+      } as never,
+      stepUpdates: { stepExecutionId: STEP_EXEC_ID, startedAt: 1_700_000_000_000 } as never,
+      currentRuntimeState: runtimeState,
+      scheduleStep: vi.fn().mockResolvedValue('next-exec-1'),
+    };
+    await applyStepSucceeded(params);
+    const scheduled = (params.scheduleStep as ReturnType<typeof vi.fn>).mock.calls[0]![0] as {
+      lastToolResults?: Array<Record<string, unknown>>;
+    };
+    return scheduled.lastToolResults?.[0];
+  }
+
+  it('hands the agent turn the image references found in the output', async () => {
+    const result = await toolResultFor({ url: 'https://example.com', image: screenshot });
+    expect(result?.['images']).toEqual([screenshot]);
+  });
+
+  it('adds nothing for an output without one', async () => {
+    const result = await toolResultFor({ url: 'https://example.com', title: 'Sign in' });
+    expect(result).toBeDefined();
+    expect('images' in result!).toBe(false);
+  });
+});

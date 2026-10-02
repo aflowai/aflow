@@ -25,6 +25,7 @@ import type { AgentTurnInput } from '../schema.js';
 import type { HandlerDeps } from './types.js';
 import { chatMessageToAiMessage } from './agentMessageConversion.js';
 import { coerceStringifiedToolArgs } from './coerceToolArgs.js';
+import { toolImageResolver } from './mediaSourceRef.js';
 
 function mergeJsonCallUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
   const sumOptional = (x: number | undefined, y: number | undefined): number | undefined =>
@@ -572,6 +573,7 @@ export async function parseGenerateJsonAgentDecision(
     const repaired = await client.generateJson({
       model,
       messages: repairMessages,
+      resolveToolImage: toolImageResolver(ctx),
       schema: z.unknown(),
       schemaName: 'agent_turn_decision_repair',
       rawJsonSchema: agentDecisionJsonSchema,
@@ -735,6 +737,7 @@ export async function repairPersistableAgentDecision(
   const repaired = await client.generateJson({
     model,
     messages,
+    resolveToolImage: toolImageResolver(ctx),
     schema: z.unknown(),
     schemaName: 'agent_turn_decision_persistence_repair',
     rawJsonSchema: agentDecisionJsonSchema,

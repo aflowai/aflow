@@ -13,6 +13,10 @@
 export type {
   MessageRole,
   ContentPart,
+  ToolContentPart,
+  ToolImageRefPart,
+  ToolImageResolution,
+  ToolImageResolver,
   ToolCall,
   ToolResult,
   ChatMessage,
@@ -60,6 +64,8 @@ export type {
 export {
   MessageRoleSchema,
   ContentPartSchema,
+  ToolContentPartSchema,
+  ToolImageRefPartSchema,
   ToolCallSchema,
   ToolResultSchema,
   ChatMessageSchema,
@@ -71,6 +77,12 @@ export {
   AIProviderSchema,
   AIErrorCodeSchema,
 } from './types.js';
+
+export {
+  MAX_TOOL_IMAGES_PER_TURN,
+  MAX_TOOL_IMAGE_BYTES_PER_TURN,
+  TOOL_RESULT_RUNS_KEEPING_IMAGES,
+} from './toolImages.js';
 
 // Client
 export type { AIClient, AIClientConfig } from './client.js';

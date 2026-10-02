@@ -24,6 +24,7 @@ import type {
 import type { AIProviderAdapter } from '../adapter.js';
 import { createDefaultModelCatalog } from '../catalog.js';
 import { AIClientError, buildStreamTruncationError } from '../errors.js';
+import { moveToolImagesToUserMessages, toolResultText } from './toolResultContent.js';
 import {
   DEFAULT_TIMEOUT_MS,
   EMBED_TIMEOUT_MS,
@@ -230,13 +231,14 @@ function buildGeminiGenerateConfig(request: GeminiCommonRequest): Record<string,
  * Returns system instruction separately as Gemini handles it differently.
  */
 export function toGeminiContents(
-  messages: ChatMessage[],
+  input: ChatMessage[],
   options?: { nativeFunctionCalling?: boolean },
 ): {
   systemInstruction: string | undefined;
   contents: Content[];
 } {
   const nativeFC = options?.nativeFunctionCalling === true;
+  const messages = moveToolImagesToUserMessages(input, 'google');
   let systemInstruction: string | undefined;
   const contents: Content[] = [];
 
@@ -349,17 +351,12 @@ export function toGeminiContents(
           const toolParts: Part[] = [];
           let j = i;
           while (j < messages.length && messages[j]!.role === 'tool') {
-            const toolMsg = messages[j] as {
-              role: 'tool';
-              toolCallId: string;
-              name?: string;
-              content: string;
-            };
+            const toolMsg = messages[j] as Extract<ChatMessage, { role: 'tool' }>;
             toolParts.push({
               functionResponse: {
                 id: toolMsg.toolCallId,
                 name: toolMsg.name ?? toolMsg.toolCallId,
-                response: { result: toolMsg.content },
+                response: { result: toolResultText(toolMsg, 'google') },
               },
             });
             j++;
@@ -372,14 +369,9 @@ export function toGeminiContents(
           const textParts: string[] = [];
           let j = i;
           while (j < messages.length && messages[j]!.role === 'tool') {
-            const toolMsg = messages[j] as {
-              role: 'tool';
-              toolCallId: string;
-              name?: string;
-              content: string;
-            };
+            const toolMsg = messages[j] as Extract<ChatMessage, { role: 'tool' }>;
             const name = toolMsg.name ?? toolMsg.toolCallId;
-            textParts.push(`[Result from ${name}]: ${toolMsg.content}`);
+            textParts.push(`[Result from ${name}]: ${toolResultText(toolMsg, 'google')}`);
             j++;
           }
           contents.push({ role: 'user', parts: [{ text: textParts.join('\n\n') }] });

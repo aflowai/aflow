@@ -25,6 +25,7 @@ import type {
 import {
   resolveNextStep,
   getOperation,
+  findStepImages,
   StepOutputPresentationSchema,
   UI_APPLET_GET_OPERATION_ID,
   UI_APPLET_INSTANTIATE_OPERATION_ID,
@@ -515,6 +516,8 @@ export async function applyStepSucceeded(params: ApplyStepSucceededParams): Prom
           toolResult.outputFields = outputFields;
         }
       }
+      const images = resolvedOutput != null ? findStepImages(resolvedOutput) : [];
+      if (images.length > 0) toolResult.images = images;
       const opDescriptor = getOperation(actualOperationId);
       const followUp = opDescriptor?.usage.followUp;
       if (followUp && followUp.length > 0) {
