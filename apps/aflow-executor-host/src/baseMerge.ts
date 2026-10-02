@@ -113,6 +113,20 @@ export async function reachMergeSource(root: string, sha: string, head: string):
   return commit;
 }
 
+/**
+ * The `-c` arguments a commission's merge is committed under: the operator's
+ * commit identity, the one the publication's commit carries.
+ */
+export async function mergeIdentityArgs(root: string): Promise<string[]> {
+  return await commitIdentityArgs(
+    root,
+    (keys) =>
+      "A commission with `mergeFrom` commits its merge under the operator's commit identity, " +
+      `as the publication's commit is, and neither this repository nor the global git config ` +
+      `sets ${keys}. Set ${keys} in the repository, or globally, then commission it again.`,
+  );
+}
+
 async function unmergedPaths(checkout: string): Promise<string[]> {
   const listing = await git(
     checkout,
@@ -123,17 +137,62 @@ async function unmergedPaths(checkout: string): Promise<string[]> {
 }
 
 /**
- * Merge `from` into the checkout at its HEAD, as one merge commit, or nothing
- * when the checkout already holds it. A merge that conflicts is committed as
- * it stands, markers and all, so the checkout shows what needs resolving.
+ * The conflicted paths git merges as binary: a side git reads as binary, or a
+ * `merge` attribute that is unset or `binary`. git leaves no markers in such a
+ * file, only one side's version, so there is nothing in its text to resolve.
+ */
+async function binaryConflicts(checkout: string, conflicts: readonly string[]): Promise<string[]> {
+  const binary = new Set<string>();
+  // Between the two sides, since the conflicted working tree's own diff says nothing.
+  const numstat = await git(
+    checkout,
+    [
+      '--literal-pathspecs',
+      'diff',
+      '--numstat',
+      '--no-renames',
+      '-z',
+      'HEAD',
+      'MERGE_HEAD',
+      '--',
+      ...conflicts,
+    ],
+    APPLY_OUTPUT_CAP_BYTES,
+  );
+  for (const record of numstat.split('\0')) {
+    const match = /^-\t-\t(.+)$/s.exec(record);
+    if (match?.[1] !== undefined) binary.add(match[1]);
+  }
+  const attributes = (
+    await git(
+      checkout,
+      ['--literal-pathspecs', 'check-attr', '-z', 'merge', '--', ...conflicts],
+      APPLY_OUTPUT_CAP_BYTES,
+    )
+  ).split('\0');
+  for (let index = 0; index + 2 < attributes.length; index += 3) {
+    const path = attributes[index];
+    const value = attributes[index + 2];
+    if (path !== undefined && (value === 'unset' || value === 'binary')) binary.add(path);
+  }
+  return conflicts.filter((path) => binary.has(path));
+}
+
+/**
+ * Merge `from` into the checkout at its HEAD, as one merge commit under
+ * `identity`, or nothing when the checkout already holds it. A merge that
+ * conflicts in text is committed as it stands, markers and all, so the
+ * checkout shows what needs resolving; one that conflicts in a binary file is
+ * refused, since no turn could resolve it.
  */
 export async function mergeIntoCheckout(
   checkout: string,
   from: string,
+  identity: readonly string[],
 ): Promise<BaseMerge | undefined> {
   const head = (await git(checkout, ['rev-parse', 'HEAD'])).trim();
   if (await isAncestor(checkout, from, head)) return undefined;
-  const merging = [...(await commitIdentityArgs(checkout)), ...MERGE_PINS];
+  const merging = [...identity, ...MERGE_PINS];
   let conflicts: string[] = [];
   try {
     await git(
@@ -148,6 +207,18 @@ export async function mergeIntoCheckout(
       throw new WorktreeError(
         `\`${from}\` could not be merged into \`${head}\`: ${firstLine(error)}`,
         'git_failed',
+      );
+    }
+    const binary = await binaryConflicts(checkout, conflicts);
+    if (binary.length > 0) {
+      await git(checkout, ['merge', '--abort']).catch(() => {});
+      throw new WorktreeError(
+        `Merging \`${from}\` into \`${head}\` conflicts in ` +
+          `${binary.map((path) => `\`${path}\``).join(', ')}, which git merges as binary and ` +
+          'leaves no conflict markers in, so a coding agent has no text to resolve and no turn ' +
+          'ran. That merge has to be made by hand: merge it into the branch, then commission ' +
+          'the fix from there.',
+        'binary_conflict',
       );
     }
     // The conflicted paths alone: the checkout a coding agent runs in carries
@@ -166,7 +237,8 @@ export async function mergeIntoCheckout(
 /**
  * The files among `paths` whose staged text still holds all three lines of a
  * conflict — an opening marker, the divider and a closing one. Read from the
- * index, so no filter runs, and a binary file is skipped.
+ * index, so no filter runs. A binary file is skipped: a merge that conflicts
+ * in one is refused before it is committed, by `mergeIntoCheckout`.
  */
 export async function filesWithConflictMarkers(
   checkout: string,

@@ -86,7 +86,8 @@ export class WorktreeError extends Error {
       | 'stale_base'
       | 'push_target_differs'
       | 'fetch_failed'
-      | 'conflict_markers',
+      | 'conflict_markers'
+      | 'binary_conflict',
   ) {
     super(message);
     this.name = 'WorktreeError';
@@ -1211,14 +1212,18 @@ export async function applyPatch(
  * Each field resolves on its own — the repository first, then the global config
  * — so a repository that overrides only the address keeps its own.
  */
-export const NO_IDENTITY_MESSAGE =
-  'Neither this repository nor the global git config names a commit identity, so a commit made ' +
-  'here would carry none. Set `user.name` and `user.email` in the repository, or globally, ' +
-  'then run this again.';
+const IDENTITY_KEYS = ['user.name', 'user.email'] as const;
 
-interface CommitIdentity {
-  readonly name: string;
-  readonly email: string;
+function namedKeys(keys: readonly string[]): string {
+  return keys.map((key) => `\`${key}\``).join(' and ');
+}
+
+/** The refusal of a commit no identity resolves for, given the keys it lacks as named code. */
+export function noIdentityMessage(keys = namedKeys(IDENTITY_KEYS)): string {
+  return (
+    `Neither this repository nor the global git config sets ${keys}, so a commit made here ` +
+    `would carry no identity. Set ${keys} in the repository, or globally, then run this again.`
+  );
 }
 
 async function configuredValue(
@@ -1240,33 +1245,29 @@ async function configuredValue(
   }
 }
 
-async function resolveCommitIdentity(cwd: string): Promise<CommitIdentity | undefined> {
+/**
+ * The `-c` arguments a commit made here carries its identity in. The identity
+ * is passed in, and `user.useConfigOnly` keeps git's own fallback off: a name
+ * and address built from the account and the hostname would land in the
+ * operator's history as an author they never chose. Where a key resolves from
+ * neither config, `refuse` words the refusal around the keys missing.
+ */
+export async function commitIdentityArgs(
+  cwd: string,
+  refuse: (keys: string) => string = noIdentityMessage,
+): Promise<string[]> {
   const resolve = async (key: string): Promise<string | undefined> =>
     (await configuredValue(cwd, ['--get', key], 'withheld')) ??
     (await configuredValue(cwd, ['--global', '--get', key], 'read'));
   const name = await resolve('user.name');
   const email = await resolve('user.email');
-  if (name === undefined || email === undefined) return undefined;
-  return { name, email };
-}
-
-/**
- * The `-c` arguments a commit made here carries its identity in. The identity
- * is passed in, and `user.useConfigOnly` keeps git's own fallback off: a name
- * and address built from the account and the hostname would land in the
- * operator's history as an author they never chose.
- */
-export async function commitIdentityArgs(cwd: string): Promise<string[]> {
-  const identity = await resolveCommitIdentity(cwd);
-  if (identity === undefined) throw new WorktreeError(NO_IDENTITY_MESSAGE, 'no_identity');
-  return [
-    '-c',
-    'user.useConfigOnly=true',
-    '-c',
-    `user.name=${identity.name}`,
-    '-c',
-    `user.email=${identity.email}`,
-  ];
+  if (name === undefined || email === undefined) {
+    const missing = IDENTITY_KEYS.filter((key) =>
+      key === 'user.name' ? name === undefined : email === undefined,
+    );
+    throw new WorktreeError(refuse(namedKeys(missing)), 'no_identity');
+  }
+  return ['-c', 'user.useConfigOnly=true', '-c', `user.name=${name}`, '-c', `user.email=${email}`];
 }
 
 /**

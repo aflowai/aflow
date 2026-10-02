@@ -45,7 +45,12 @@ import {
   requireSpace,
   requireWritable,
 } from '../bindings.js';
-import { fetchMergeSource, mergeIntoCheckout, type BaseMerge } from '../baseMerge.js';
+import {
+  fetchMergeSource,
+  mergeIdentityArgs,
+  mergeIntoCheckout,
+  type BaseMerge,
+} from '../baseMerge.js';
 import { fetchCredential, scrubSecret } from '../credentialFetch.js';
 import { noSandboxMessage, reapWithdrawn, sandboxReadiness } from '../sandboxedRun.js';
 import { describeRefusals, extractEgressRefusals } from '../egressRefusals.js';
@@ -512,6 +517,8 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
     if (input.base !== undefined) await fetchRemoteBase(binding.root, input.base);
     const namedBase =
       input.base === undefined ? undefined : await resolveCommit(binding.root, input.base);
+    const mergeIdentity =
+      input.mergeFrom === undefined ? undefined : await mergeIdentityArgs(binding.root);
     const mergeSource =
       input.mergeFrom === undefined
         ? undefined
@@ -574,8 +581,8 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
           'stale_base',
         );
       }
-    } else if (mergeSource !== undefined) {
-      merge = await mergeIntoCheckout(worktree.path, mergeSource);
+    } else if (mergeSource !== undefined && mergeIdentity !== undefined) {
+      merge = await mergeIntoCheckout(worktree.path, mergeSource, mergeIdentity);
       if (merge !== undefined && session !== undefined) {
         session = { ...session, merge };
         recordSession(session);

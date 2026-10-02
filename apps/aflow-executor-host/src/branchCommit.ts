@@ -21,7 +21,7 @@ import {
   commitIdentityArgs,
   commitNamedBySha,
   git,
-  NO_IDENTITY_MESSAGE,
+  noIdentityMessage,
   prepareWorktree,
   removeWorktree,
   resolveCommit,
@@ -205,7 +205,7 @@ async function commitStaged(checkout: string, messagePath: string, amend: boolea
         detail,
       )
     ) {
-      throw new WorktreeError(NO_IDENTITY_MESSAGE, 'no_identity');
+      throw new WorktreeError(noIdentityMessage(), 'no_identity');
     }
     throw new WorktreeError(
       `The commit could not be made: ${detail.split('\n')[0] ?? 'git failed'}`,
@@ -258,7 +258,13 @@ export async function commitPatchOnBranch(
       ...(target.at !== undefined ? { at: target.at } : {}),
     });
     let merge: BaseMerge | undefined;
-    if (mergeFrom !== undefined) merge = await mergeIntoCheckout(worktree.path, mergeFrom);
+    if (mergeFrom !== undefined) {
+      merge = await mergeIntoCheckout(
+        worktree.path,
+        mergeFrom,
+        await commitIdentityArgs(worktree.path),
+      );
+    }
 
     const apply = await applyPatch(worktree.path, patch, mode);
     if (apply.state === 'conflict')

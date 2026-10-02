@@ -651,11 +651,16 @@ export const HostHarnessRunInputSchema = z.object({
   mergeFrom: HostBaseRefSchema.optional().describe(
     "A branch on one of the folder's remotes, `<remote>/<branch>` such as `origin/main`, merged " +
       'into the checkout once it stands at `base`. It is fetched first and, unless the checkout ' +
-      'already holds it, merged as one merge commit; a merge that conflicts is committed with ' +
-      'its markers, and the files are named in the task and in `merge.conflicts` for the run ' +
-      'to resolve. The diff is then taken against that merge commit, so it holds the work and ' +
-      "its resolution and none of the merged branch's own changes. A remote the folder does " +
-      'not have, or a branch the fetch cannot find, is refused, naming it.',
+      "already holds it, merged as one merge commit under the operator's commit identity, as " +
+      "the publication's commit is; a folder where neither its own nor the global git config " +
+      'sets `user.name` and `user.email` is refused before anything is checked out, naming ' +
+      'the keys to set. A merge that conflicts in text is committed with its markers, and the ' +
+      'files are named in the task and in `merge.conflicts` for the run to resolve; one that ' +
+      'conflicts in a file git merges as binary is refused before any turn runs, naming the ' +
+      'files, since that merge has to be made by hand. The diff is then taken against that ' +
+      "merge commit, so it holds the work and its resolution and none of the merged branch's " +
+      'own changes. A remote the folder does not have, or a branch the fetch cannot find, is ' +
+      'refused, naming it.',
   ),
   continueFrom: z
     .string()

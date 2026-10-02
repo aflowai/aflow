@@ -48,7 +48,9 @@ const { createHostHarnessHandler, mergeConflictSentence } =
   await import('../handlers/harnessHandlers.js');
 const { createHostPatchHandler } = await import('../handlers/patchHandlers.js');
 const { mergeIntoCheckout } = await import('../baseMerge.js');
-const { prepareWorktree, removeWorktree } = await import('../worktree.js');
+const { allSessions, discardScratch, forgetSession } = await import('../harnessSessions.js');
+const { commitIdentityArgs, prepareWorktree, removeWorktree, WorktreeError } =
+  await import('../worktree.js');
 
 let base: string;
 let seed: string;
@@ -85,15 +87,18 @@ interface World {
 /**
  * `origin` holds `main` and `aflow/fix`; the folder and a second clone of it
  * hold both as they were, and `main` then moves on `origin` alone — beside the
- * branch's change, or over the same line of it.
+ * branch's change, or over the same line of it — and, for `'binary'`, over
+ * the same bytes of a binary file as well.
  */
-async function world(conflicting: boolean): Promise<World> {
+async function world(conflicting: boolean | 'binary'): Promise<World> {
   await run('git', ['init', '-q', '-b', 'main', seed]);
   await identify(seed);
   await writeFile(join(seed, 'a.txt'), 'one\ntwo\nthree\n');
+  if (conflicting === 'binary') await writeFile(join(seed, 'logo.bin'), 'logo\0initial');
   await commitAll(seed, 'initial');
   await git(seed, 'checkout', '-q', '-b', 'aflow/fix');
-  if (conflicting) await writeFile(join(seed, 'a.txt'), 'one\nBRANCH\nthree\n');
+  if (conflicting === 'binary') await writeFile(join(seed, 'logo.bin'), 'logo\0BRANCH');
+  if (conflicting !== false) await writeFile(join(seed, 'a.txt'), 'one\nBRANCH\nthree\n');
   else await writeFile(join(seed, 'b.txt'), 'branch\n');
   await commitAll(seed, 'the branch');
   await git(seed, 'checkout', '-q', 'main');
@@ -103,7 +108,8 @@ async function world(conflicting: boolean): Promise<World> {
     await identify(clone);
     await git(clone, 'branch', '-q', 'aflow/fix', 'origin/aflow/fix');
   }
-  if (conflicting) await writeFile(join(seed, 'a.txt'), 'one\nMAIN\nthree\n');
+  if (conflicting === 'binary') await writeFile(join(seed, 'logo.bin'), 'logo\0MAIN');
+  if (conflicting !== false) await writeFile(join(seed, 'a.txt'), 'one\nMAIN\nthree\n');
   else await writeFile(join(seed, 'c.txt'), 'main\n');
   await commitAll(seed, 'main moved');
   await git(seed, 'push', '-q', origin, 'main');
@@ -138,6 +144,11 @@ beforeEach(async () => {
       bindings: [binding('hb', project), binding('hb_lagging', lagging)],
       harnesses: [
         harness('works', "printf 'fixed\\n' > fix.txt"),
+        {
+          ...harness('converses', "printf 'fixed\\n' > fix.txt"),
+          sessionArgs: ['{session}'],
+          resumeArgs: ['{session}'],
+        },
         // Resolves only what it finds marked, so a merge that left no markers
         // leaves `a.txt` as the merge made it.
         harness(
@@ -151,6 +162,11 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  for (const session of allSessions()) {
+    forgetSession(session.id);
+    await removeWorktree(session.bindingRoot, session.worktreePath).catch(() => {});
+    await discardScratch(session);
+  }
   await rm(base, { recursive: true, force: true });
 });
 
@@ -334,6 +350,141 @@ describe('a commission merges the branch its base moved past', () => {
   }, 60_000);
 });
 
+describe('a commission refuses a merge no turn could finish', () => {
+  it('refuses a merge that conflicts in a binary file before any turn runs, naming the file', async () => {
+    const { branchHead } = await world('binary');
+    const { status, message, output } = await commission({
+      harness: 'resolves',
+      base: 'aflow/fix',
+      mergeFrom: 'origin/main',
+    });
+    expect(status).toBe('FAILED');
+    expect(message).toContain('conflicts in `logo.bin`, which git merges as binary');
+    expect(message).not.toContain('`a.txt`');
+    expect(message).toContain('That merge has to be made by hand');
+    expect(output['merge']).toBeUndefined();
+    expect(handed).toHaveLength(0);
+    expect(await head(project, 'aflow/fix')).toBe(branchHead);
+    expect((await git(project, 'worktree', 'list')).split('\n').filter(Boolean)).toHaveLength(1);
+  }, 60_000);
+
+  it('leaves the checkout where it stood when it refuses a binary conflict', async () => {
+    const { branchHead, mainHead } = await world('binary');
+    await git(project, 'fetch', '-q', 'origin');
+    const scratch = await mkdtemp(join(tmpdir(), 'aflow-merge-binary-'));
+    const checkout = await prepareWorktree(project, scratch, 'merge', {
+      dependencies: 'none',
+      at: branchHead,
+    });
+    try {
+      const refused = await mergeIntoCheckout(
+        checkout.path,
+        mainHead,
+        await commitIdentityArgs(checkout.path),
+      ).catch((error: unknown) => error);
+      expect(refused).toBeInstanceOf(WorktreeError);
+      expect((refused as InstanceType<typeof WorktreeError>).kind).toBe('binary_conflict');
+      expect(await head(checkout.path, 'HEAD')).toBe(branchHead);
+      expect((await git(checkout.path, 'status', '--porcelain')).trim()).toBe('');
+    } finally {
+      await removeWorktree(project, checkout.path);
+      await rm(scratch, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it('refuses a `mergeFrom` where no commit identity resolves, naming what to set', async () => {
+    await world(false);
+    await git(project, 'config', '--unset', 'user.name');
+    await git(project, 'config', '--unset', 'user.email');
+    const globalConfig = join(base, 'operator.gitconfig');
+    await writeFile(globalConfig, '');
+    const previous = process.env['GIT_CONFIG_GLOBAL'];
+    process.env['GIT_CONFIG_GLOBAL'] = globalConfig;
+    try {
+      const { status, message } = await commission({
+        harness: 'works',
+        base: 'aflow/fix',
+        mergeFrom: 'origin/main',
+      });
+      expect(status).toBe('FAILED');
+      expect(message).toContain(
+        "A commission with `mergeFrom` commits its merge under the operator's commit identity",
+      );
+      expect(message).toContain('Set `user.name` and `user.email` in the repository, or globally');
+      expect(handed).toHaveLength(0);
+      expect((await git(project, 'worktree', 'list')).split('\n').filter(Boolean)).toHaveLength(1);
+    } finally {
+      if (previous === undefined) delete process.env['GIT_CONFIG_GLOBAL'];
+      else process.env['GIT_CONFIG_GLOBAL'] = previous;
+    }
+  }, 60_000);
+});
+
+describe('a continued turn and the merge its session holds', () => {
+  it('refuses a `mergeFrom` the kept checkout does not hold, naming the session and the branch', async () => {
+    const { mainHead } = await world(false);
+    const first = await commission({ harness: 'converses', base: 'aflow/fix' });
+    expect(first.status).toBe('SUCCEEDED');
+    const sessionRef = String(first.output['sessionRef']);
+
+    const { status, message } = await commission({
+      harness: 'converses',
+      continueFrom: sessionRef,
+      mergeFrom: 'origin/main',
+    });
+    expect(status).toBe('FAILED');
+    expect(message).toContain(`Session \`${sessionRef}\` keeps a checkout that does not hold`);
+    expect(message).toContain(`\`origin/main\` (\`${mainHead}\`)`);
+    expect(handed).toHaveLength(1);
+  }, 60_000);
+
+  it('reports the merge again on a turn that keeps the checkout', async () => {
+    const { branchHead, mainHead } = await world(true);
+    const first = await commission({
+      harness: 'converses',
+      base: 'aflow/fix',
+      mergeFrom: 'origin/main',
+    });
+    expect(first.output['merge']).toEqual({ from: mainHead, conflicts: ['a.txt'] });
+    const sessionRef = String(first.output['sessionRef']);
+
+    for (const mergeFrom of [undefined, 'origin/main']) {
+      const { status, output } = await commission({
+        harness: 'converses',
+        continueFrom: sessionRef,
+        ...(mergeFrom !== undefined ? { mergeFrom } : {}),
+      });
+      expect(status, String(mergeFrom)).toBe('SUCCEEDED');
+      expect(output['continued']).toBe(true);
+      expect(output['merge']).toEqual({ from: mainHead, conflicts: ['a.txt'] });
+      expect(output['baseSha']).toBe(branchHead);
+      expect(changedFiles(output['patch'])).toEqual(['fix.txt']);
+    }
+  }, 60_000);
+
+  it('drops the earlier merge from a turn whose `base` moves it to a fresh checkout', async () => {
+    const { branchHead, mainHead } = await world(false);
+    const first = await commission({
+      harness: 'converses',
+      base: 'aflow/fix',
+      mergeFrom: 'origin/main',
+    });
+    expect(first.output['merge']).toEqual({ from: mainHead, conflicts: [] });
+    const sessionRef = String(first.output['sessionRef']);
+
+    const { status, output } = await commission({
+      harness: 'converses',
+      continueFrom: sessionRef,
+      base: 'aflow/fix',
+    });
+    expect(status).toBe('SUCCEEDED');
+    expect(output['continued']).toBe(true);
+    expect(output['merge']).toBeUndefined();
+    expect(output['baseSha']).toBe(branchHead);
+    expect(changedFiles(output['patch'])).toEqual(['fix.txt']);
+  }, 60_000);
+});
+
 describe('a publication makes the merge again', () => {
   it('refuses a tree the patch left conflict markers in, naming the file, with nothing committed', async () => {
     const { branchHead, mainHead } = await world(true);
@@ -415,7 +566,11 @@ describe('the same two parents merge to the same tree', () => {
         at: branchHead,
       });
       try {
-        const merge = await mergeIntoCheckout(checkout.path, mainHead);
+        const merge = await mergeIntoCheckout(
+          checkout.path,
+          mainHead,
+          await commitIdentityArgs(checkout.path),
+        );
         expect(merge?.conflicts).toEqual(['a.txt']);
         expect(await readFile(join(checkout.path, 'a.txt'), 'utf8')).toMatch(/^<<<<<<< HEAD$/m);
         trees.push(await head(checkout.path, 'HEAD^{tree}'));
@@ -455,7 +610,11 @@ describe('the same two parents merge to the same tree', () => {
         at: branchHead,
       });
       try {
-        const merge = await mergeIntoCheckout(checkout.path, mainHead);
+        const merge = await mergeIntoCheckout(
+          checkout.path,
+          mainHead,
+          await commitIdentityArgs(checkout.path),
+        );
         expect(merge?.conflicts).toEqual([]);
         trees.push(await head(checkout.path, 'HEAD^{tree}'));
       } finally {
