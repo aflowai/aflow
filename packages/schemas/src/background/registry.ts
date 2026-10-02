@@ -1495,6 +1495,15 @@ const SCAN_EXCEPTIONS: readonly BackgroundScanExceptionInput[] = [
     bound: 'Scoped to one in-flight step attempt; cleared when the attempt settles.',
   },
   {
+    site: 'packages/lib/src/shutdown.ts',
+    discovery: ['recursive-timer'],
+    owner: 'run-execution',
+    reason:
+      "Re-reads a draining executor's deadline when it falls due, since a step that was still queued has a timeout of its own by then and a progress-aware one has slid.",
+    bound:
+      'One timer per process, armed only once a drain begins; cleared when the last step ends, and never re-armed once the latest deadline has passed.',
+  },
+  {
     site: 'packages/database/src/tenant/applyAll.ts',
     discovery: ['tenant-enumeration'],
     owner: 'platform',

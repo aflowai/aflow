@@ -11,12 +11,15 @@ import {
 import type { ConcurrencyLimiter } from '../concurrency.js';
 import type { ExecutorLogger, SlotController } from '../types.js';
 import { CLAIM_INTERVAL_MS } from './constants.js';
-import { processJob, type ProcessJobHost } from './processJob.js';
+import { processJob, type InFlightStep, type ProcessJobHost } from './processJob.js';
 
 export interface JobLoopHost extends ProcessJobHost {
   limiter: ConcurrencyLimiter;
-  inFlightMessageIds: Set<string>;
+  /** Keyed by stream message id. */
+  inFlightSteps: Map<string, InFlightStep>;
   stopRequested: boolean;
+  stepScheduled(): void;
+  stepSettled(messageId: string): void;
 }
 
 export async function claimPendingMessages(host: JobLoopHost): Promise<void> {
@@ -85,11 +88,16 @@ export async function claimPendingMessages(host: JobLoopHost): Promise<void> {
 }
 
 export function scheduleJob(host: JobLoopHost, messageId: string, job: StepJobMessage): void {
-  if (host.inFlightMessageIds.has(messageId)) {
+  if (host.inFlightSteps.has(messageId)) {
     host.log.debug('Skipping duplicate schedule', { messageId });
     return;
   }
-  host.inFlightMessageIds.add(messageId);
+  const inFlight: InFlightStep = {
+    stepExecutionId: job.stepExecutionId,
+    operationId: job.operationId,
+  };
+  host.inFlightSteps.set(messageId, inFlight);
+  host.stepScheduled();
   void (async (): Promise<void> => {
     await host.limiter.acquire();
     let held = true;
@@ -111,7 +119,7 @@ export function scheduleJob(host: JobLoopHost, messageId: string, job: StepJobMe
       },
     };
     try {
-      await processJob(host, messageId, job, slotController);
+      await processJob(host, messageId, job, slotController, inFlight);
     } catch (err) {
       host.log.error('Unhandled error in processJob', {
         messageId,
@@ -120,7 +128,7 @@ export function scheduleJob(host: JobLoopHost, messageId: string, job: StepJobMe
     } finally {
       parentEnded = true;
       host.limiter.release();
-      host.inFlightMessageIds.delete(messageId);
+      host.stepSettled(messageId);
     }
   })();
 }
@@ -153,6 +161,11 @@ export async function consumeLoop(host: JobLoopHost): Promise<void> {
         },
       );
 
+      // Run even when claiming stopped during the read. These are delivered to
+      // this consumer, and as in the leased-work protocol the holder of a claim
+      // works it rather than relying on redelivery: the reclaim skips its own
+      // name, so where that name outlives the process nothing would ever take
+      // them back.
       for (const { id: messageId, job } of jobs) {
         scheduleJob(host, messageId, job);
       }

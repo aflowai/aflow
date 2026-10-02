@@ -24,7 +24,7 @@ import {
   type ExecutorDependencies,
 } from '@aflow/executor-runtime';
 import type { Redis } from 'ioredis';
-import { createShutdownController, attachSignalHandlers } from '@aflow/lib';
+import { createShutdownController } from '@aflow/lib';
 import { resolvePayloadStore } from '@aflow/payload-store';
 import {
   attachRedisErrorGuard,
@@ -66,6 +66,7 @@ import { followPolicy, watchPolicy } from './policyWatch.js';
 import { killAllProcesses, killProcessesForBinding, reapWithdrawn } from './sandboxedRun.js';
 import { observeRuntimes } from './runtimes.js';
 import { publishingFolders } from './pushApproval.js';
+import { startUnderSignals } from './startUnderSignals.js';
 import { type BackgroundTaskLogger, createBackgroundTaskRunner } from '@aflow/lib';
 
 const log = createServiceLogger('host-executor');
@@ -333,23 +334,19 @@ async function main(): Promise<void> {
   // A detached process is spawned into its own group so a stop reaches its
   // descendants, which also means it survives this executor unless something
   // ends it. One holding a credential in its environment, unaddressable because
-  // the handles live only in memory, is the worst of both.
-  for (const signal of ['SIGINT', 'SIGTERM', 'exit'] as const) {
-    process.once(signal, () => {
-      policyWatch.close();
-      killAllProcesses();
-      // Synchronous, deliberately. An `exit` handler schedules no further work,
-      // so a promise-based removal here never ran and every session's checkout
-      // was left on disk. Handles live in memory, so after this nothing can
-      // address these — they are unreachable copies of the operator's code.
-      for (const session of allSessions()) discardNow(session.scratchDir);
-    });
-  }
-
-  await runtime.start();
-  log.info('Host executor runtime started', { stepType: STEP_TYPE });
-  await browserRuntime.start();
-  log.info('Host executor runtime started', { stepType: BROWSER_STEP_TYPE });
+  // the handles live only in memory, is the worst of both. SIGTERM and SIGINT
+  // run this at once: whatever sends them may SIGKILL seconds later, which
+  // skips the exit handler below. Only a drain defers it, to its own end.
+  const endEverything = (): void => {
+    policyWatch.close();
+    killAllProcesses();
+    // Synchronous, deliberately. An `exit` handler schedules no further work,
+    // so a promise-based removal here never ran and every session's checkout
+    // was left on disk. Handles live in memory, so after this nothing can
+    // address these — they are unreachable copies of the operator's code.
+    for (const session of allSessions()) discardNow(session.scratchDir);
+  };
+  process.once('exit', endEverything);
 
   // Last known good, so a policy read that fails mid-save does not publish an
   // empty list — "this machine offers no harness" and "the file was being
@@ -424,6 +421,61 @@ async function main(): Promise<void> {
       return { processed: 1 };
     },
   );
+  const withdrawals = createBlockingRedisConnection(
+    `${hostname}-withdrawals`,
+    getExecutorRedisConfig(),
+  );
+
+  // A restart under the dev stack's watcher drains: a harness run, a check or a
+  // review in flight is minutes of work the restart has no reason to end. The
+  // browser's pages are not held open for it.
+  let browserStopped: Promise<void> | undefined;
+  const stopBrowserRuntime = (): Promise<void> => (browserStopped ??= browserRuntime.stop());
+
+  const controller = createShutdownController({
+    name: 'Host Executor',
+    logger: log,
+    drain: {
+      work: {
+        stopClaiming: () => {
+          runtime.stopClaiming();
+          void stopBrowserRuntime();
+        },
+        inFlight: () => runtime.inFlight(),
+        whenInFlight: () => runtime.whenInFlight(),
+        idle: () => runtime.idle(),
+      },
+      endInFlight: endEverything,
+    },
+    onShutdown: async () => {
+      await inventoryTask.stop();
+      await browserIdleSweep.stop();
+      await redis.zrem(HOST_MACHINES_KEY, hostname).catch(() => undefined);
+      await runtime.stop();
+      await stopBrowserRuntime();
+      await quitRedisWithTimeout(withdrawals);
+      await quitRedisWithTimeout(redisBlocking);
+      await quitRedisWithTimeout(redisBlockingBrowser);
+      await closeRedisConnection();
+    },
+  });
+
+  attachRedisErrorGuard(redis, () => controller.shuttingDown, log);
+  attachRedisErrorGuard(redisBlocking, () => controller.shuttingDown, log);
+  attachRedisErrorGuard(redisBlockingBrowser, () => controller.shuttingDown, log);
+
+  const started = await startUnderSignals(controller, [
+    async () => {
+      await runtime.start();
+      log.info('Host executor runtime started', { stepType: STEP_TYPE });
+    },
+    async () => {
+      await browserRuntime.start();
+      log.info('Host executor runtime started', { stepType: BROWSER_STEP_TYPE });
+    },
+  ]);
+  if (!started) return;
+
   inventoryTask.start();
   browserIdleSweep.start();
 
@@ -434,10 +486,6 @@ async function main(): Promise<void> {
   // detached command or drop an idle session, which is exactly the gap: the row
   // is gone, no further step will be scheduled, and the process that was already
   // running holds the folder until it decides to exit.
-  const withdrawals = createBlockingRedisConnection(
-    `${hostname}-withdrawals`,
-    getExecutorRedisConfig(),
-  );
   await withdrawals.subscribe(HOST_WITHDRAWAL_CHANNEL).catch((error: unknown) => {
     log.warn('Could not subscribe to withdrawals; they will apply at the next policy change', {
       error,
@@ -467,27 +515,6 @@ async function main(): Promise<void> {
       }
     })();
   });
-
-  const controller = createShutdownController({
-    name: 'Host Executor',
-    logger: log,
-    onShutdown: async () => {
-      await inventoryTask.stop();
-      await browserIdleSweep.stop();
-      await redis.zrem(HOST_MACHINES_KEY, hostname).catch(() => undefined);
-      await runtime.stop();
-      await browserRuntime.stop();
-      await quitRedisWithTimeout(withdrawals);
-      await quitRedisWithTimeout(redisBlocking);
-      await quitRedisWithTimeout(redisBlockingBrowser);
-      await closeRedisConnection();
-    },
-  });
-
-  attachRedisErrorGuard(redis, () => controller.shuttingDown, log);
-  attachRedisErrorGuard(redisBlocking, () => controller.shuttingDown, log);
-  attachRedisErrorGuard(redisBlockingBrowser, () => controller.shuttingDown, log);
-  attachSignalHandlers({ onShutdown: () => controller.shutdownOnce(), exitCode: 0 });
 }
 
 main().catch((error: unknown) => {

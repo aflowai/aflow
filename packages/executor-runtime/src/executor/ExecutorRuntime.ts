@@ -20,6 +20,7 @@ import { externalAbortReason } from '../timeout.js';
 import { createJobLogger } from './logger.js';
 import { HEARTBEAT_INTERVAL_MS } from './constants.js';
 import { claimPendingMessages, consumeLoop, type JobLoopHost } from './jobLoop.js';
+import type { InFlightStep } from './processJob.js';
 
 function executorBackgroundServices(stepType: string): BackgroundTaskService[] {
   const own = BackgroundTaskServiceSchema.safeParse(`executor-${stepType}`);
@@ -33,12 +34,16 @@ export class ExecutorRuntime implements JobLoopHost {
   readonly limiter: ConcurrencyLimiter;
   readonly log;
 
-  readonly inFlightMessageIds = new Set<string>();
+  readonly inFlightSteps = new Map<string, InFlightStep>();
   readonly abortControllers = new Map<string, AbortController>();
 
   stopRequested = false;
   private running = false;
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+  private idleWaiters: Array<() => void> = [];
+  private inFlightWaiters: Array<() => void> = [];
+  private starting: Promise<void> | null = null;
+  private consuming: Promise<void> = Promise.resolve();
 
   private readonly controlPlane: BackgroundTaskControlPlane;
 
@@ -75,11 +80,16 @@ export class ExecutorRuntime implements JobLoopHost {
     return this.handlers.get(stepType);
   }
 
-  async start(): Promise<void> {
-    if (this.running) {
-      return;
-    }
+  start(): Promise<void> {
+    if (this.running) return Promise.resolve();
+    this.starting ??= this.begin().finally(() => {
+      this.starting = null;
+    });
+    return this.starting;
+  }
 
+  private async begin(): Promise<void> {
+    this.stopRequested = false;
     this.log.debug('Starting executor runtime', {
       streamKey: this.config.streamKey,
       consumerGroup: this.config.consumerGroup,
@@ -145,18 +155,71 @@ export class ExecutorRuntime implements JobLoopHost {
     }
 
     this.running = true;
-    this.stopRequested = false;
+    // A stop asked for while starting stands: a signal can land during any of
+    // the awaits above, and a drain that has begun claims nothing more.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- stopRequested can change during the awaits above
+    if (!this.stopRequested) this.consuming = consumeLoop(this);
+  }
 
-    void consumeLoop(this);
+  /**
+   * Stops reading the stream. Steps already claimed keep running, with their
+   * heartbeats and this executor's, until they end or `stop` is called.
+   */
+  stopClaiming(): void {
+    this.stopRequested = true;
+  }
+
+  /** The claimed steps, each named, with the instant its own timeout ends it. */
+  inFlight(): Array<{ name: string; deadlineAt: number }> {
+    const now = Date.now();
+    return [...this.inFlightSteps.values()].map((step) => ({
+      name: `${step.operationId} ${step.stepExecutionId}`,
+      // A step still waiting for a slot or being set up has no timeout of its
+      // own yet; the default it would fall back to stands in until it has one.
+      deadlineAt: step.deadlineRef?.current ?? now + this.config.defaultTimeoutMs,
+    }));
+  }
+
+  /** Resolves once claiming has stopped and no claimed step is in flight. */
+  async idle(): Promise<void> {
+    // The read under way when claiming stopped can still hand this consumer jobs.
+    await this.consuming;
+    if (this.inFlightSteps.size === 0) return;
+    await new Promise<void>((resolve) => {
+      this.idleWaiters.push(resolve);
+    });
+  }
+
+  /** Resolves once a claimed step is in flight, at once if one already is. */
+  whenInFlight(): Promise<void> {
+    if (this.inFlightSteps.size > 0) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      this.inFlightWaiters.push(resolve);
+    });
+  }
+
+  stepScheduled(): void {
+    const waiters = this.inFlightWaiters;
+    this.inFlightWaiters = [];
+    for (const resolve of waiters) resolve();
+  }
+
+  stepSettled(messageId: string): void {
+    this.inFlightSteps.delete(messageId);
+    if (this.inFlightSteps.size > 0) return;
+    const waiters = this.idleWaiters;
+    this.idleWaiters = [];
+    for (const resolve of waiters) resolve();
   }
 
   async stop(): Promise<void> {
+    this.stopRequested = true;
+    await this.starting?.catch(() => undefined);
     if (!this.running) {
       return;
     }
 
     this.log.info('Stopping executor runtime...');
-    this.stopRequested = true;
 
     if (this.heartbeatInterval) {
       clearInterval(this.heartbeatInterval);
