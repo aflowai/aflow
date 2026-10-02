@@ -1,33 +1,41 @@
 /**
  * Contract: in a checkout at another commit, a workspace package is that
- * commit's package.
+ * commit's package, and this repository's check builds its declarations there.
  *
  * The folder's installation links its own packages back into the repository
- * (`node_modules/@acme/a -> ../../packages/a`). Mirrored as that same relative
- * link, it resolves inside the checkout; mirrored to where it lands in the
- * folder, a check builds and type-checks against the folder's packages rather
- * than the commit it was asked about. A dependency the package manager
- * downloaded — landing inside an installation or outside the repository — is
- * still the folder's.
+ * (`node_modules/@acme/a -> ../../packages/a`); the checkout's link is relative
+ * too, so it resolves inside the checkout from wherever the checkout is
+ * reached. A dependency the package manager downloaded — landing inside an
+ * installation or outside the repository — is still the folder's.
+ *
+ * A checkout builds nothing, and a workspace type-checks against the compiled
+ * declarations of the packages it references, which the folder has from its
+ * install and the checkout never does. So `scripts/verify-commit.mjs`, run as
+ * the folder's check over a fixture workspace, passes at a commit that reads
+ * an internal package without touching it only because it builds that package
+ * first — found through the project reference alone, built in the checkout,
+ * and never in the folder, whose declarations are an older commit's.
  *
  * The check runs under a stand-in for the sandbox, as the handler suites do: a
  * nested sandbox cannot start under one, and the boundary is held by the
  * sandbox's own tests.
  */
 import { execFile, spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import {
   mkdir,
   mkdtemp,
+  readFile,
   readlink,
   realpath,
   rm,
   symlink,
-  unlink,
   writeFile,
 } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -40,16 +48,18 @@ const run = promisify(execFile);
 
 vi.mock('../sandboxedRun.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../sandboxedRun.js')>();
+  const { buildBaseEnv, workloadHome } = await import('../baseEnv.js');
   return {
     ...actual,
     sandboxReadiness: () => ({ ready: true, missing: [] }),
     runSandboxed: async (input: SandboxedRunInput): Promise<SandboxedRunResult> => {
       const [program, ...args] = input.argv;
       const startedAt = Date.now();
+      await mkdir(workloadHome(input.scratchDir), { recursive: true });
       return await new Promise((resolve) => {
         const child = spawn(program ?? '', args, {
           cwd: input.cwd,
-          env: { PATH: process.env['PATH'] ?? '', ...input.env, ...input.trustedEnv },
+          env: { ...buildBaseEnv(input.scratchDir), ...input.env, ...input.trustedEnv },
         });
         let stdout = '';
         let stderr = '';
@@ -82,22 +92,35 @@ const { createHostHandler } = await import('../handlers/hostHandler.js');
 const { noPushApprovals } = await import('./fixtures/pushApprovals.js');
 const { prepareWorktree, removeWorktree } = await import('../worktree.js');
 
-const TSC = createRequire(import.meta.url).resolve('typescript/bin/tsc');
-const TYPECHECK = [process.execPath, TSC, '-p', 'tsconfig.json'];
+const VERIFY_COMMIT = fileURLToPath(
+  new URL('../../../../scripts/verify-commit.mjs', import.meta.url),
+);
+const CHECKS = [process.execPath, 'scripts/verify-commit.mjs'];
+const COMPILER_OPTIONS = { strict: true, module: 'nodenext', types: [] };
+
+const installed = createRequire(import.meta.url);
+
+/** Where this repository's installation holds a package. */
+function installedPackage(name: string): string {
+  return dirname(installed.resolve(`${name}/package.json`));
+}
+
+/** The file a package's manifest names for one of its commands. */
+async function installedBin(name: string, command: string): Promise<string> {
+  const manifest = JSON.parse(
+    await readFile(join(installedPackage(name), 'package.json'), 'utf8'),
+  ) as { bin: string | Record<string, string> };
+  const bin = typeof manifest.bin === 'string' ? manifest.bin : manifest.bin[command];
+  return join(installedPackage(name), bin ?? '');
+}
 
 async function git(cwd: string, ...args: string[]): Promise<string> {
   return (await run('git', ['-C', cwd, ...args])).stdout;
 }
 
-async function typecheck(cwd: string): Promise<{ exitCode: number; output: string }> {
-  const [program, ...args] = TYPECHECK;
-  try {
-    const { stdout } = await run(program ?? '', args, { cwd });
-    return { exitCode: 0, output: stdout };
-  } catch (error) {
-    const failed = error as { code?: number; stdout?: string };
-    return { exitCode: failed.code ?? 1, output: failed.stdout ?? '' };
-  }
+async function writeJson(file: string, value: unknown): Promise<void> {
+  await mkdir(dirname(file), { recursive: true });
+  await writeFile(file, `${JSON.stringify(value)}\n`);
 }
 
 let dir: string;
@@ -111,53 +134,104 @@ beforeAll(async () => {
   dir = await mkdtemp(join(tmpdir(), 'aflow-workspace-links-'));
   repo = join(dir, 'repo');
   store = join(dir, 'store');
-  await mkdir(join(repo, 'packages', 'a'), { recursive: true });
+  await mkdir(repo, { recursive: true });
   await git(dir, 'init', '-q', '-b', 'main', repo);
   await git(repo, 'config', 'user.email', 't@e.com');
   await git(repo, 'config', 'user.name', 'T');
-  await writeFile(join(repo, '.gitignore'), 'node_modules\n');
+  await writeFile(join(repo, '.gitignore'), 'node_modules\ndist\n*.tsbuildinfo\n');
+  await writeFile(join(repo, 'eslint.config.mjs'), 'export default [];\n');
+  await mkdir(join(repo, 'scripts'), { recursive: true });
+  await writeFile(join(repo, 'scripts', 'verify-commit.mjs'), await readFile(VERIFY_COMMIT));
+  for (const guard of ['large-files', 'context-budget']) {
+    await mkdir(join(repo, 'scripts', guard), { recursive: true });
+    await writeFile(join(repo, 'scripts', guard, 'cli.ts'), 'export {};\n');
+  }
+  await writeJson(join(repo, 'packages', 'a', 'package.json'), {
+    name: '@acme/a',
+    version: '0.0.0',
+    types: 'dist/index.d.ts',
+    scripts: { build: 'tsc' },
+  });
+  await writeJson(join(repo, 'packages', 'a', 'tsconfig.json'), {
+    compilerOptions: {
+      ...COMPILER_OPTIONS,
+      composite: true,
+      emitDeclarationOnly: true,
+      rootDir: 'src',
+      outDir: 'dist',
+    },
+    include: ['src'],
+  });
+  await writeJson(join(repo, 'apps', 'app', 'package.json'), {
+    name: '@acme/app',
+    version: '0.0.0',
+  });
+  await writeJson(join(repo, 'apps', 'app', 'tsconfig.json'), {
+    compilerOptions: { ...COMPILER_OPTIONS, rootDir: 'src' },
+    include: ['src'],
+    references: [{ path: '../../packages/a' }],
+  });
+  await mkdir(join(repo, 'packages', 'a', 'src'), { recursive: true });
+  await mkdir(join(repo, 'apps', 'app', 'src'), { recursive: true });
   await writeFile(
-    join(repo, 'tsconfig.json'),
-    JSON.stringify({
-      compilerOptions: { strict: true, noEmit: true, module: 'nodenext', types: [] },
-      files: ['app.ts'],
-    }),
+    join(repo, 'packages', 'a', 'src', 'index.ts'),
+    'export const value: number = 1;\n',
   );
   await writeFile(
-    join(repo, 'packages', 'a', 'package.json'),
-    JSON.stringify({ name: '@acme/a', version: '0.0.0', types: 'index.d.ts' }),
-  );
-  await writeFile(
-    join(repo, 'packages', 'a', 'index.d.ts'),
-    'export declare const value: number;\n',
-  );
-  await writeFile(
-    join(repo, 'app.ts'),
-    "import { value } from '@acme/a';\nexport const doubled: number = value * 2;\n",
+    join(repo, 'apps', 'app', 'src', 'main.ts'),
+    'import { value } from "@acme/a";\n\nexport const doubled: number = value * 2;\n',
   );
   await git(repo, 'add', '-A');
-  await git(repo, 'commit', '-q', '-m', 'base');
-  base = (await git(repo, 'rev-parse', 'HEAD')).trim();
+  await git(repo, 'commit', '-q', '-m', 'the package answers a number');
+  const installedAt = (await git(repo, 'rev-parse', 'HEAD')).trim();
 
-  // The checked commit changes the package's types and the code that reads them together.
   await writeFile(
-    join(repo, 'packages', 'a', 'index.d.ts'),
-    'export declare const value: string;\n',
+    join(repo, 'packages', 'a', 'src', 'index.ts'),
+    'export const value: string = "a";\n',
   );
   await writeFile(
-    join(repo, 'app.ts'),
-    "import { value } from '@acme/a';\nexport const shouted: string = value.toUpperCase();\n",
+    join(repo, 'apps', 'app', 'src', 'main.ts'),
+    'import { value } from "@acme/a";\n\nexport const shouted: string = value.toUpperCase();\n',
   );
   await git(repo, 'add', '-A');
   await git(repo, 'commit', '-q', '-m', 'the package answers a string');
+  base = (await git(repo, 'rev-parse', 'HEAD')).trim();
+
+  // The checked commit touches only the code that reads the package, so
+  // nothing but the package's project reference says it must be built.
+  await writeFile(
+    join(repo, 'apps', 'app', 'src', 'main.ts'),
+    'import { value } from "@acme/a";\n\nexport const whispered: string = value.toLowerCase();\n',
+  );
+  await git(repo, 'add', '-A');
+  await git(repo, 'commit', '-q', '-m', 'the app whispers');
   sha = (await git(repo, 'rev-parse', 'HEAD')).trim();
-  await git(repo, 'checkout', '-q', '--detach', base);
+  await git(repo, 'checkout', '-q', '--detach', installedAt);
+
+  // The folder as its install leaves it: the package's declarations built at
+  // its own commit, which a check at another one must never read.
+  await mkdir(join(repo, 'packages', 'a', 'dist'), { recursive: true });
+  await writeFile(
+    join(repo, 'packages', 'a', 'dist', 'index.d.ts'),
+    'export declare const value: number;\n',
+  );
 
   // The installation: the workspace package as the package manager links it,
-  // a downloaded dependency kept outside the repository, and one landing in
-  // the installation's own store.
+  // the tools the check calls, a downloaded dependency kept outside the
+  // repository, and one landing in the installation's own store.
   await mkdir(join(repo, 'node_modules', '@acme'), { recursive: true });
   await symlink(join('..', '..', 'packages', 'a'), join(repo, 'node_modules', '@acme', 'a'));
+  for (const name of ['typescript', 'tsx']) {
+    await symlink(installedPackage(name), join(repo, 'node_modules', name));
+  }
+  await mkdir(join(repo, 'node_modules', '.bin'), { recursive: true });
+  for (const [name, command] of [
+    ['typescript', 'tsc'],
+    ['eslint', 'eslint'],
+    ['prettier', 'prettier'],
+  ] as const) {
+    await symlink(await installedBin(name, command), join(repo, 'node_modules', '.bin', command));
+  }
   await mkdir(join(store, 'left-pad'), { recursive: true });
   await writeFile(join(store, 'left-pad', 'index.js'), 'stored dep\n');
   await symlink(join(store, 'left-pad'), join(repo, 'node_modules', 'left-pad'));
@@ -176,7 +250,7 @@ beforeAll(async () => {
           mode: 'readwrite',
           allowsExecution: true,
           spaceId: 'space-a',
-          branchPolicy: { branchPrefix: 'aflow/', checks: TYPECHECK },
+          branchPolicy: { branchPrefix: 'aflow/', checks: CHECKS },
         },
       ],
     }),
@@ -212,24 +286,10 @@ describe('a workspace package in the isolated checkout', () => {
       await removeWorktree(repo, wt.path);
     }
   });
-
-  it('fails the commit’s typecheck when it is the folder’s copy instead', async () => {
-    const wt = await prepareWorktree(repo, join(dir, 'scratch-control'), 'work', { at: sha });
-    try {
-      const link = join(wt.path, 'node_modules', '@acme', 'a');
-      await unlink(link);
-      await symlink(join(repo, 'packages', 'a'), link);
-      const result = await typecheck(wt.path);
-      expect(result.exitCode).not.toBe(0);
-      expect(result.output).toContain('toUpperCase');
-    } finally {
-      await removeWorktree(repo, wt.path);
-    }
-  });
 });
 
-describe('host.commit.check at a commit that changes a workspace package’s types', () => {
-  it('passes the typecheck against the commit’s package', async () => {
+describe('this repository’s check, at a commit reading a workspace package it leaves alone', () => {
+  it('builds the package’s declarations in the checkout, then passes', async () => {
     let output: unknown;
     const result = await createHostHandler(policyPath, noPushApprovals).execute({
       operationId: 'host.commit.check',
@@ -250,7 +310,12 @@ describe('host.commit.check at a commit that changes a workspace package’s typ
 
     expect(result.status).toBe('SUCCEEDED');
     const answer = HostCommitCheckOutputSchema.parse(output);
-    expect(answer.tail).toBe('');
     expect(answer).toMatchObject({ passed: true, exitCode: 0, clearedSha: sha });
+    expect(answer.tail).toContain('ok   build @acme/a');
+    expect(answer.tail).toContain('ok   tsc apps/app/tsconfig.json');
+    expect(await readFile(join(repo, 'packages', 'a', 'dist', 'index.d.ts'), 'utf8')).toBe(
+      'export declare const value: number;\n',
+    );
+    expect(existsSync(join(repo, 'packages', 'a', 'tsconfig.tsbuildinfo'))).toBe(false);
   }, 60_000);
 });

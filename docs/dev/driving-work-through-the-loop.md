@@ -50,8 +50,8 @@ scripts/verify-commit.mjs`), and Local Publish runs it after the commit and befo
    scan, the review and the push, in a detached checkout of the commit with the folder's
    dependencies linked, under the coding agent's sandbox. The script reads what changed from
    `AFLOW_CHECK_BASE...AFLOW_CHECK_SHA` and runs, one line per step and stopping at the
-   first failure: the two CI guards; the builds of the packages the touched workspaces
-   read, whose `dist` a fresh checkout lacks; `tsc -p` per touched workspace (and
+   first failure: the two CI guards; a build of every package the touched workspaces
+   reference or import, since a checkout builds nothing; `tsc -p` per touched workspace (and
    `web-product`'s `src/ui`); the touched tests through the test runner, with the
    catalog guards when `platform-artifacts` is touched and never a `*.pg.test.ts`; ESLint,
    errors only, on touched sources; and Prettier on every touched file. A failure fails

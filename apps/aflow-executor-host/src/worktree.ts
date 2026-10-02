@@ -424,10 +424,10 @@ interface MirrorContext {
  * was false on any workspace.
  *
  * So an entry that resolves to a path the repository itself carries — under
- * its root and outside any installation — is a workspace package, mirrored as
- * the relative link the package manager wrote, from the mirrored entry to the
- * same path: it resolves inside the checkout, where the committed version is,
- * from wherever the checkout is reached. An entry that resolves anywhere else —
+ * its root and outside any installation — is a workspace package. Its link is
+ * computed from that real path, relative from the mirrored entry to the same
+ * path in the checkout, so from wherever the checkout is reached it resolves
+ * to the committed version. An entry that resolves anywhere else —
  * a real dependency, or a link landing within an installation — is pointed at
  * the operator's, which is the tree this lane will not duplicate.
  */
