@@ -132,14 +132,7 @@ export interface ExecutorContext {
   /** Write a payload to the store */
   readonly writePayload: (
     kind:
-      | 'output'
-      | 'error'
-      | 'input_request'
-      | 'body'
-      | 'raw_body'
-      | 'activity'
-      | 'patch'
-      | 'logs',
+      'output' | 'error' | 'input_request' | 'body' | 'raw_body' | 'activity' | 'patch' | 'logs',
     data: unknown,
   ) => Promise<PayloadRef>;
 

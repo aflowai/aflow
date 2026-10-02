@@ -20,6 +20,7 @@ import {
 import type { z } from 'zod';
 
 import type { HostBinding } from './bindings.js';
+import { SHORT_SHA_LENGTH } from './checkReceipt.js';
 import { createChatterStripper } from './egressRefusals.js';
 import { formatMinutes } from './folderChecks.js';
 import { runSandboxed, type SandboxedRunResult } from './sandboxedRun.js';
@@ -29,9 +30,6 @@ type HostCommitCheckOutput = z.infer<typeof HostCommitCheckOutputSchema>;
 
 /** The directories under the temp root a check's checkout is added in, so the boot sweep knows them. */
 export const CHECK_SCRATCH_PREFIX = 'aflow-check-';
-
-/** How much of a sha a person reads in a sentence. */
-const SHORT_SHA_LENGTH = 12;
 
 /**
  * Text kept from its end, by bytes, as it arrives. Chunks are held whole and

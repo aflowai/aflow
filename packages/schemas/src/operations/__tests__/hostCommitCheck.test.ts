@@ -48,7 +48,11 @@ describe('host.commit.check takes a folder and two commits, and nothing to run',
   });
 
   it('carries no command a caller could set, and drops one sent anyway', () => {
-    expect(Object.keys(HostCommitCheckInputSchema.shape).sort()).toEqual(['base', 'bindingId', 'sha']);
+    expect(Object.keys(HostCommitCheckInputSchema.shape).sort()).toEqual([
+      'base',
+      'bindingId',
+      'sha',
+    ]);
     const parsed = HostCommitCheckInputSchema.parse({
       bindingId: 'hb_app',
       sha: SHA,

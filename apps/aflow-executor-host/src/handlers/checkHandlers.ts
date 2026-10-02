@@ -5,7 +5,8 @@
  * nowhere else: the input names a folder and two commits, and no field of it
  * can say what runs. A folder that declares nothing is answered before
  * anything is touched; one that declares checks needs the grant to run
- * commands, since a check runs the repository's own code.
+ * commands, since a check runs the repository's own code. Checks that ran
+ * answer with a receipt, passed or failed, that a push of the commit carries.
  */
 import type { ExecutorContext, StepResult } from '@aflow/executor-runtime';
 import {
@@ -28,6 +29,7 @@ import {
   requireSpace,
   requireWritable,
 } from '../bindings.js';
+import { issueCheckReceipt } from '../checkReceipt.js';
 import { checkOutcome, runFolderChecks, skippedCheck, storedOutput } from '../commitCheck.js';
 import { checksOf } from '../folderChecks.js';
 import { noSandboxMessage, reapWithdrawn, sandboxReadiness } from '../sandboxedRun.js';
@@ -80,10 +82,15 @@ async function check(ctx: ExecutorContext, policyPath: string): Promise<StepResu
     onOutput: () => ctx.reportProgress?.(),
   });
   const outputRef = await ctx.writePayload('logs', storedOutput(run));
-  return await successWithData(
-    ctx,
-    checkOutcome({ bindingId: binding.id, argv, timeoutMs, sha, run, outputRef }),
-  );
+  const outcome = checkOutcome({ bindingId: binding.id, argv, timeoutMs, sha, run, outputRef });
+  const receipt = issueCheckReceipt({
+    bindingId: binding.id,
+    sha,
+    base,
+    argv,
+    outcome: outcome.passed ? 'passed' : 'failed',
+  });
+  return await successWithData(ctx, { ...outcome, receipt });
 }
 
 export function createHostCommitCheckHandler(policyPath: string): {

@@ -94,7 +94,9 @@ export function pushApprovalOf(binding: HostBinding): HostPushApproval {
  * folder recording no workspace reaches none, so it is left out rather than
  * published against nothing.
  */
-export function publishingFolders(bindings: ReadonlyMap<string, HostBinding>): HostInventoryFolders {
+export function publishingFolders(
+  bindings: ReadonlyMap<string, HostBinding>,
+): HostInventoryFolders {
   return [...bindings.values()]
     .flatMap((binding) =>
       binding.branchPolicy === undefined || binding.spaceId === undefined

@@ -3,7 +3,8 @@
  * those — in a detached checkout of the commit, with the commit and its base in
  * the environment, under the folder's time; it answers whether they passed with
  * the end of what they printed, stores the whole, and leaves no checkout
- * behind. A folder that declares none is answered without anything running.
+ * behind — only a receipt of the outcome for the push, holding none of the
+ * output. A folder that declares none is answered without anything running.
  *
  * The suites over the handler stand in for the sandbox with a spawn of their
  * own, recording what the handler hands it — the boundary itself is held by
@@ -39,7 +40,8 @@ vi.mock('../sandboxedRun.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../sandboxedRun.js')>();
   return {
     ...actual,
-    sandboxReadiness: () => (realSandbox ? actual.sandboxReadiness() : { ready: true, missing: [] }),
+    sandboxReadiness: () =>
+      realSandbox ? actual.sandboxReadiness() : { ready: true, missing: [] },
     runSandboxed: async (input: SandboxedRunInput): Promise<SandboxedRunResult> => {
       if (realSandbox) return await actual.runSandboxed(input);
       handed.push(input);
@@ -86,7 +88,9 @@ vi.mock('../sandboxedRun.js', async (importOriginal) => {
 const { createHostHandler } = await import('../handlers/hostHandler.js');
 const { noPushApprovals } = await import('./fixtures/pushApprovals.js');
 const { checkTail, createTailBuffer, utf8Suffix } = await import('../commitCheck.js');
-const actualSandbox = await vi.importActual<typeof import('../sandboxedRun.js')>('../sandboxedRun.js');
+const { requireCheckedPush } = await import('../checkReceipt.js');
+const actualSandbox =
+  await vi.importActual<typeof import('../sandboxedRun.js')>('../sandboxedRun.js');
 
 async function git(cwd: string, ...args: string[]): Promise<string> {
   return (await run('git', ['-C', cwd, ...args])).stdout;
@@ -123,7 +127,10 @@ interface Fixture {
   readonly policyPath: string;
 }
 
-async function fixture(branchPolicy: Record<string, unknown> | undefined, extra: Record<string, unknown> = {}): Promise<Fixture> {
+async function fixture(
+  branchPolicy: Record<string, unknown> | undefined,
+  extra: Record<string, unknown> = {},
+): Promise<Fixture> {
   const dir = await mkdtemp(join(tmpdir(), 'commit-check-'));
   const repo = join(dir, 'repo');
   await run('git', ['init', '-q', '-b', 'main', repo]);
@@ -256,9 +263,9 @@ describe('host.commit.check — a passing check', () => {
   it('removes the checkout and its scratch afterwards, and leaves the folder where it was', async () => {
     const head = (await git(world.repo, 'rev-parse', 'HEAD')).trim();
     const { captured } = await check(world);
-    const { cwd } = JSON.parse(
-      HostCommitCheckOutputSchema.parse(captured.output).tail,
-    ) as { cwd: string };
+    const { cwd } = JSON.parse(HostCommitCheckOutputSchema.parse(captured.output).tail) as {
+      cwd: string;
+    };
     expect(existsSync(cwd)).toBe(false);
     expect(existsSync(join(cwd, '..'))).toBe(false);
     expect(await checkouts(world.repo)).not.toContain(cwd);
@@ -353,6 +360,64 @@ describe('host.commit.check — a folder that declares none', () => {
     const { captured } = await check(world);
     expect(HostCommitCheckOutputSchema.parse(captured.output).skipped).toBe(true);
   });
+
+  it('issues no receipt, since a push from it needs none', async () => {
+    const world = await fixture({ branchPrefix: 'aflow/' });
+    const { captured } = await check(world);
+    expect(HostCommitCheckOutputSchema.parse(captured.output).receipt).toBeUndefined();
+  });
+});
+
+describe('host.commit.check — the receipt it leaves for the push', () => {
+  /** What a receipt's body says, read without its signature. */
+  function receiptBody(receipt: string): string {
+    return Buffer.from(receipt.split('.')[0] ?? '', 'base64url').toString('utf8');
+  }
+
+  it('says the checks passed on exactly this commit, against this base, as declared', async () => {
+    const world = await fixture({ branchPrefix: 'aflow/', checks: REPORTING });
+    const { captured } = await check(world);
+    const { receipt } = HostCommitCheckOutputSchema.parse(captured.output);
+    expect(receipt).toBeDefined();
+    const pushed = { bindingId: 'hb_app', sha: world.sha, base: world.base, receipt };
+    expect(() => requireCheckedPush({ ...pushed, argv: REPORTING })).not.toThrow();
+  });
+
+  it('says so where they failed, and a push takes it for nothing', async () => {
+    const world = await fixture({ branchPrefix: 'aflow/', checks: FAILING });
+    const { captured } = await check(world);
+    const { receipt } = HostCommitCheckOutputSchema.parse(captured.output);
+    expect(receipt).toBeDefined();
+    expect(() =>
+      requireCheckedPush({
+        bindingId: 'hb_app',
+        sha: world.sha,
+        base: world.base,
+        argv: FAILING,
+        receipt,
+      }),
+    ).toThrow(expect.objectContaining({ refusal: 'check_failed' }));
+  });
+
+  it('carries nothing of what the checks printed, nor the command itself', async () => {
+    const world = await fixture({ branchPrefix: 'aflow/', checks: FAILING });
+    const { captured } = await check(world);
+    const output = HostCommitCheckOutputSchema.parse(captured.output);
+    const body = receiptBody(output.receipt ?? '');
+    const fields = JSON.parse(body) as unknown[];
+    expect(fields).toEqual([
+      'hb_app',
+      world.sha,
+      world.base,
+      expect.any(String),
+      'failed',
+      expect.any(Number),
+    ]);
+    expect(body).not.toContain('step one ok');
+    expect(body).not.toContain('FAIL tsc');
+    expect(body).not.toContain(process.execPath);
+    expect(body).not.toContain(output.tail);
+  });
 });
 
 describe('host.commit.check — what it refuses', () => {
@@ -370,7 +435,10 @@ describe('host.commit.check — what it refuses', () => {
     const world = await fixture({ branchPrefix: 'aflow/', checks: REPORTING });
     const captured: Captured = { payloads: [], deltas: [] };
     const result = await createHostHandler(world.policyPath, noPushApprovals).execute({
-      ...(contextFor({ bindingId: 'hb_app', sha: world.sha, base: world.base }, captured) as object),
+      ...(contextFor(
+        { bindingId: 'hb_app', sha: world.sha, base: world.base },
+        captured,
+      ) as object),
       spaceId: 'space-b',
     } as never);
     expect(result.status).toBe('FAILED');

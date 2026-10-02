@@ -39,6 +39,7 @@ import {
 import { createChatterStripper } from '../egressRefusals.js';
 import { EnvPolicyError } from '../envPolicy.js';
 import { explainFailedStart } from '../executableHint.js';
+import { checksOf } from '../folderChecks.js';
 import { pushApprovalOf } from '../pushApproval.js';
 import { measurePushBase } from '../pushBase.js';
 import { type PushApprovalReader, requireScannedPush } from '../scanReceipt.js';
@@ -157,6 +158,7 @@ async function execProcess(
     for (const [field, value] of [
       ['pushBase', input.pushBase],
       ['scan', input.scan],
+      ['check', input.check],
     ] as const) {
       if (value !== undefined && push === undefined) {
         return await failureWithError(
@@ -179,6 +181,7 @@ async function execProcess(
         sources: push.sources,
         pushBase: input.pushBase,
         receipt: input.scan?.receipt,
+        checks: { argv: checksOf(binding).argv, receipt: input.check?.receipt ?? undefined },
         measureBase: (pushBase) => measurePushBase(binding.root, push.remote, pushBase),
         approvalFor: (requestHash) => approvals(ctx.tenantId, ctx.runId, requestHash),
       });

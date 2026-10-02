@@ -351,9 +351,7 @@ export async function commitPatchOnBranch(
         appended: target.appended,
         ...(merge !== undefined ? { merged: merge.from } : {}),
         range: `${worktree.baseSha}..${sha}`,
-        ...(pushBaseSha !== undefined
-          ? { pushRange: `${pushBaseSha}..${sha}`, pushBaseSha }
-          : {}),
+        ...(pushBaseSha !== undefined ? { pushRange: `${pushBaseSha}..${sha}`, pushBaseSha } : {}),
         pushRefspec: `${sha}:refs/heads/${branch}`,
       },
     };

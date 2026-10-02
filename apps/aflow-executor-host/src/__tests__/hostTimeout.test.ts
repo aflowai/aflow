@@ -82,9 +82,7 @@ describe('resolveHostTimeout', () => {
     expect(
       await resolveFor(ctxFor('host.file.get', { bindingId: 'b', path: 'x' })),
     ).toBeUndefined();
-    expect(
-      await resolveFor(ctxFor('host.harness.run', { nonsense: true })),
-    ).toBeUndefined();
+    expect(await resolveFor(ctxFor('host.harness.run', { nonsense: true }))).toBeUndefined();
     expect(
       await resolveFor(ctxFor('host.harness.run', { bindingId: 'b', task: 't' }, 120_000)),
     ).toBeUndefined();
@@ -96,7 +94,10 @@ describe('resolveHostTimeout for a check', () => {
   const BASE = 'a'.repeat(40);
 
   async function policyWith(branchPolicy: Record<string, unknown> | undefined): Promise<string> {
-    const policyPath = join(await mkdtemp(join(tmpdir(), 'host-timeout-check-')), 'host-policy.json');
+    const policyPath = join(
+      await mkdtemp(join(tmpdir(), 'host-timeout-check-')),
+      'host-policy.json',
+    );
     await writeFile(
       policyPath,
       JSON.stringify({
@@ -139,7 +140,9 @@ describe('resolveHostTimeout for a check', () => {
   });
 
   it('leaves the flat clock to a folder with no checks, one it cannot find, and no policy', async () => {
-    expect(await resolveFor(checkCtx(), await policyWith({ branchPrefix: 'aflow/' }))).toBeUndefined();
+    expect(
+      await resolveFor(checkCtx(), await policyWith({ branchPrefix: 'aflow/' })),
+    ).toBeUndefined();
     expect(await resolveFor(checkCtx(), await policyWith(undefined))).toBeUndefined();
     expect(
       await resolveFor(

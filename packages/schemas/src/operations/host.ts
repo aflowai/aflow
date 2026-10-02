@@ -99,7 +99,7 @@ export const HostChecksSchema = z
   .min(1)
   .max(HOST_CHECKS_MAX_ARGS)
   .describe(
-    "The command a publication from this folder runs before anything leaves the machine: one " +
+    'The command a publication from this folder runs before anything leaves the machine: one ' +
       "argv — a program and its arguments, never a shell line — run from the repository's root " +
       'in a detached checkout of the commit, under the sandbox a coding agent runs in. Declared ' +
       'by the operator on the machine; no workspace can set it, and no operation takes one.',
@@ -198,6 +198,23 @@ export const HostScanReceiptSchema = z
     'The `receipt` `host.commit.scan` returned, verbatim. Issued by the executor on the ' +
       'machine that scanned, for one folder and one range — its base and its last commit — ' +
       'and read only by that executor until it restarts.',
+  );
+
+/**
+ * What `host.commit.check` hands back where the folder's checks ran, passed or
+ * not, and what a push of that commit must carry from a folder that declares
+ * checks. Opaque and signed as a scan receipt is, by the executor that ran
+ * them; it holds nothing of what they printed.
+ */
+export const HostCheckReceiptSchema = z
+  .string()
+  .min(1)
+  .max(512)
+  .describe(
+    'The `receipt` `host.commit.check` returned, verbatim. Issued by the executor on the ' +
+      'machine that ran the checks, for one folder, one commit, the base it was measured ' +
+      'against and the checks as the folder declared them — and read only by that executor ' +
+      'until it restarts.',
   );
 
 /**
@@ -354,6 +371,23 @@ export const HostProcessExecInputSchema = z.object({
         'it sends, from this folder, the range a scan by this executor found no secret in, ' +
         'and — where that scan did not clear it — unless the operator approved this push in ' +
         'this run.',
+    ),
+  check: z
+    .object({
+      receipt: HostCheckReceiptSchema.nullable()
+        .optional()
+        .describe(
+          'The `receipt` `host.commit.check` returned for the source of the push’s one refspec, ' +
+            'measured against where `origin/<pushBase>` is. Null or absent where the folder ' +
+            'declares no checks, and the check issued none.',
+        ),
+    })
+    .optional()
+    .describe(
+      'Belongs to a push alone. A push from a folder that declares checks is refused unless ' +
+        'they passed, on this executor, on exactly the commit it sends, against the base it ' +
+        'measures, as the folder declares them when it pushes. A folder that declares none ' +
+        'needs no receipt, and a push from it that carries one is refused.',
     ),
 });
 
@@ -647,10 +681,10 @@ export const HostFilePatchOutputSchema = z.object({
           'given. What a publication scans and reviews before the push.',
       ),
       pushBaseSha: HostCommitShaSchema.optional().describe(
-          "Where `origin/<pushBase>` stood when it was fetched, as a full sha — the first sha " +
-            "of `pushRange`, and present exactly when it is. What a publication's checks are " +
-            "measured against.",
-        ),
+        'Where `origin/<pushBase>` stood when it was fetched, as a full sha — the first sha ' +
+          "of `pushRange`, and present exactly when it is. What a publication's checks are " +
+          'measured against.',
+      ),
       pushRefspec: z
         .string()
         .min(1)
@@ -1241,4 +1275,10 @@ export const HostCommitCheckOutputSchema = z.object({
       'The commit as a full sha, present only where the checks passed or the folder declares ' +
         'none. A step that must stop on a failing check reads this, so a failure fails it.',
     ),
+  receipt: HostCheckReceiptSchema.optional().describe(
+    'What a push of the commit must carry as `check.receipt`, present wherever the checks ran, ' +
+      'passed or not: it names the folder, the commit, the base, the checks and whether they ' +
+      'passed, and a push takes only one that says they did. Absent where the folder declares ' +
+      'none. Valid on this executor only, and only for a day.',
+  ),
 });

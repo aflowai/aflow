@@ -44,7 +44,8 @@ const LINTED_SOURCE = /\.(?:[cm]?[jt]sx?)$/;
  * them whether or not it touched one of their files.
  */
 const CATALOG_GUARD_DIR = 'packages/platform-artifacts/src';
-const CATALOG_GUARD_FILE = /(?:\.guard\.test\.ts|^storeCatalog\.test\.ts|^catalogSkillsInstallable\.test\.ts|^crossRegistryCatalogIds\.test\.ts)$/;
+const CATALOG_GUARD_FILE =
+  /(?:\.guard\.test\.ts|^storeCatalog\.test\.ts|^catalogSkillsInstallable\.test\.ts|^crossRegistryCatalogIds\.test\.ts)$/;
 
 function fail(label, startedAt, text) {
   console.log(`FAIL ${label} (${elapsed(startedAt)})`);
@@ -136,7 +137,12 @@ function readWorkspaces() {
       const reads = [...new Set([...declared, ...importedPackages(dir)])].filter(
         (name) => name !== manifest.name,
       );
-      byName.set(manifest.name, { name: manifest.name, dir, reads, build: manifest.scripts?.build });
+      byName.set(manifest.name, {
+        name: manifest.name,
+        dir,
+        reads,
+        build: manifest.scripts?.build,
+      });
     }
   }
   const byDir = new Map([...byName.values()].map((w) => [w.dir, w]));
@@ -163,12 +169,9 @@ const touchedWorkspaces = [
 // tsx as a loader rather than its CLI: the CLI opens a socket to talk to its
 // child, and the sandbox a check runs in refuses to listen on one.
 for (const guard of ['large-files', 'context-budget']) {
-  run(
-    `${guard} guard`,
-    process.execPath,
-    ['--import', 'tsx', `scripts/${guard}/cli.ts`, 'check'],
-    { env: { NODE_OPTIONS: '--conditions=ts-source' } },
-  );
+  run(`${guard} guard`, process.execPath, ['--import', 'tsx', `scripts/${guard}/cli.ts`, 'check'], {
+    env: { NODE_OPTIONS: '--conditions=ts-source' },
+  });
 }
 
 // A type-check and a test read every `@aflow/*` package they import from its
@@ -208,7 +211,11 @@ for (const workspace of ordered) {
   run(`build ${workspace.name}`, 'sh', ['-c', workspace.build], {
     cwd: path.join(repoRoot, workspace.dir),
     env: {
-      PATH: [path.join(repoRoot, workspace.dir, 'node_modules', '.bin'), binDir, process.env['PATH']]
+      PATH: [
+        path.join(repoRoot, workspace.dir, 'node_modules', '.bin'),
+        binDir,
+        process.env['PATH'],
+      ]
         .filter(Boolean)
         .join(path.delimiter),
     },
@@ -217,7 +224,8 @@ for (const workspace of ordered) {
 
 for (const workspace of touchedWorkspaces) {
   const configs = [`${workspace.dir}/tsconfig.json`];
-  if (workspace.name === '@aflow/web-product') configs.push(`${workspace.dir}/src/ui/tsconfig.json`);
+  if (workspace.name === '@aflow/web-product')
+    configs.push(`${workspace.dir}/src/ui/tsconfig.json`);
   for (const config of configs) {
     if (!existsSync(path.join(repoRoot, config))) continue;
     run(`tsc ${config}`, bin('tsc'), ['-p', config, '--noEmit']);
