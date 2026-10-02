@@ -92,6 +92,7 @@ __metadata:
     "@types/node": "npm:^22.20.4"
     ajv: "npm:^8.20.0"
     ioredis: "npm:^5.11.1"
+    playwright-core: "npm:1.63.0"
     tsx: "npm:^4.23.15"
     typescript: "npm:^5.8.3"
     vitest: "npm:^4.1.11"
@@ -8631,6 +8632,15 @@ __metadata:
     mlly: "npm:^1.7.4"
     pathe: "npm:^2.0.1"
   checksum: 10c0/19e6cb8b66dcc66c89f2344aecfa47f2431c988cfa3366bdfdcfb1dd6695f87dcce37fbd90fe9d1605e2f4440b77f391e83c23255347c35cf84e7fd774d7fcea
+  languageName: node
+  linkType: hard
+
+"playwright-core@npm:1.63.0":
+  version: 1.63.0
+  resolution: "playwright-core@npm:1.63.0"
+  bin:
+    playwright-core: cli.js
+  checksum: 10c0/39c1ebae4029ca2e9371e00a5588d962038e24b6e0bdb7d0d27374dde04838f349b83ae0c8b3b648653d0935cba7fb9011f1201adaab9dd0db7801ad6c75e9aa
   languageName: node
   linkType: hard
 
