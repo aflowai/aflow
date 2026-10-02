@@ -487,8 +487,10 @@ export const HostFilePatchInputSchema = z
             'leaves conflict markers in a `content` or `add-add` conflict of the merge is ' +
             'refused naming each path and its kind, with nothing committed either way; a ' +
             '`modify-delete` or `delete-modify` conflict, which the merge commits deleted, is ' +
-            'left deleted or restored by the patch. Refused for a new branch, and for a commit ' +
-            'the branch already holds.',
+            'left deleted or restored by the patch. Where the commission reported no ' +
+            '`patchRef`, its change is the merge alone — a clean catch-up, or a turn that left ' +
+            'every deletion standing — and the publication names no diff: the merge commit is ' +
+            'the commit. Refused for a new branch, and for a commit the branch already holds.',
         ),
       })
       // Strict so a misspelt base is refused rather than stripped: dropped, it
@@ -504,13 +506,18 @@ export const HostFilePatchInputSchema = z
       ),
   })
   .superRefine((input, ctx) => {
-    if (input.patch === undefined && input.patchRef === undefined) {
+    if (
+      input.patch === undefined &&
+      input.patchRef === undefined &&
+      input.commit?.mergeFrom === undefined
+    ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['patchRef'],
         message:
           'Name the diff to apply: `patchRef` for the change a commission reported, or ' +
-          '`patch` for a diff handed over as text.',
+          '`patch` for a diff handed over as text. Only a publication with ' +
+          '`commit.mergeFrom` goes without one, the merge being its whole change.',
       });
     }
     if (input.patch !== undefined && input.patchRef !== undefined) {
@@ -540,8 +547,8 @@ export const HostFilePatchOutputSchema = z.object({
     .nonnegative()
     .describe(
       'Zero only when nothing was written — the folder byte-identical to before, or, with ' +
-        '`commit`, no commit made. With `commit` it counts what the commit carries; the ' +
-        'working tree is untouched either way.',
+        '`commit`, no commit made or a commit that is a merge alone. With `commit` it counts ' +
+        'the files the diff carries; the working tree is untouched either way.',
     ),
   files: z.array(z.string()).describe('Paths the diff touched, relative to the binding root.'),
   conflicts: z
@@ -553,6 +560,14 @@ export const HostFilePatchOutputSchema = z.object({
       branch: z.string().describe('The branch that now exists in the repository.'),
       sha: z.string().min(1).describe('The commit the branch points at, as its full sha.'),
       message: z.string().describe('The message the commit carries, as git recorded it.'),
+      body: z
+        .string()
+        .min(1)
+        .optional()
+        .describe(
+          'The message after its first line, the blank lines that set it off removed: what ' +
+            'the commit says about the change beyond its subject. Absent for a one-line message.',
+        ),
       baseSha: z
         .string()
         .describe(
@@ -596,7 +611,7 @@ export const HostFilePatchOutputSchema = z.object({
     ),
 });
 
-export const HostHarnessRunInputSchema = z.object({
+const HostHarnessRunInputObjectSchema = z.object({
   bindingId: HostBindingRef,
   harness: z
     .string()
@@ -652,7 +667,8 @@ export const HostHarnessRunInputSchema = z.object({
   ),
   mergeFrom: HostBaseRefSchema.optional().describe(
     "A branch on one of the folder's remotes, `<remote>/<branch>` such as `origin/main`, merged " +
-      'into the checkout once it stands at `base`. It is fetched first and, unless the checkout ' +
+      'into the checkout once it stands at `base` — and only with `base`, the branch it is ' +
+      'merged into; without one it is refused. It is fetched first and, unless the checkout ' +
       "already holds it, merged as one merge commit under the operator's commit identity, as " +
       "the publication's commit is; a folder where neither its own nor the global git config " +
       'sets `user.name` and `user.email` is refused before anything is checked out, naming ' +
@@ -704,6 +720,21 @@ export const HostHarnessRunInputSchema = z.object({
     .default(1_800_000)
     .describe('Kill the harness and its descendants after this long.'),
 });
+
+export const HostHarnessRunInputSchema = HostHarnessRunInputObjectSchema.superRefine(
+  (input, ctx) => {
+    if (input.mergeFrom !== undefined && input.base === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['base'],
+        message:
+          `\`mergeFrom\` (\`${input.mergeFrom}\`) is given without \`base\`. A merge needs the ` +
+          'branch it is merged into: name that branch as `base` — the branch the fix is ' +
+          'published onto — or drop `mergeFrom`.',
+      });
+    }
+  },
+);
 
 export const HostHarnessRunOutputSchema = z.object({
   runId: z.string().describe('Handle for `host.process.inspect` and `host.process.stop`.'),
@@ -759,8 +790,10 @@ export const HostHarnessRunOutputSchema = z.object({
         .describe(
           'What the merge left unmerged, each path committed for the run to resolve: ' +
             '`content` and `add-add` with conflict markers, `modify-delete` and ' +
-            "`delete-modify` deleted, so the base's deletion stands unless the run restores " +
-            'the file with the changes it needs. A publication refuses a `content` or ' +
+            '`delete-modify` deleted — in a `modify-delete` the merged commit deleted the file ' +
+            'and the branch changed it, in a `delete-modify` the branch deleted it and the ' +
+            'merged commit changed it — so the deletion stands unless the run restores the ' +
+            'file with the changes it needs. A publication refuses a `content` or ' +
             '`add-add` file that still holds the markers, naming the path and the kind. A ' +
             '`modify-delete` or `delete-modify` file is decided whatever the patch does: one ' +
             'the patch leaves alone stays deleted, one it brings back is kept, and either is ' +
@@ -786,7 +819,8 @@ export const HostHarnessRunOutputSchema = z.object({
       'commit, where `merge` says one was made — stored by reference. ' +
       'This is what a publication takes — pass it on as `patchRef`, never the `patch` text. ' +
       'Absent when nothing changed, or when the diff was too large to keep, which ' +
-      '`boundaryNote` then says.',
+      '`boundaryNote` then says. Where nothing changed beside a `merge`, the merge is the ' +
+      'whole change, and a publication takes it with `commit.mergeFrom` and no diff.',
   ),
   patch: z
     .string()

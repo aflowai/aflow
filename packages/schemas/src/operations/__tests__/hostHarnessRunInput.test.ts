@@ -81,7 +81,7 @@ describe('a commission and a publication name the commit they start from', () =>
   });
 
   it('says a remote-qualified base is fetched before it is read', () => {
-    const description = HostHarnessRunInputSchema.shape.base.description ?? '';
+    const description = HostHarnessRunInputSchema.innerType().shape.base.description ?? '';
     expect(description).toContain('`<remote>/<ref>`');
     expect(description).toContain("`origin/main` is the remote's `main` as of now");
   });
@@ -115,15 +115,59 @@ describe('a commission and a publication name the commit they start from', () =>
 
 describe('a fix to a branch its base moved past names the merge at both layers', () => {
   it('takes a remote branch to merge into the commission, and refuses what would read as an option', () => {
-    expect(HostHarnessRunInputSchema.parse({ ...base, mergeFrom: 'origin/main' }).mergeFrom).toBe(
-      'origin/main',
+    const onto = { ...base, base: "aflow/fix" };
+    expect(HostHarnessRunInputSchema.parse({ ...onto, mergeFrom: "origin/main" }).mergeFrom).toBe(
+      "origin/main",
     );
     expect(HostHarnessRunInputSchema.parse(base).mergeFrom).toBeUndefined();
     for (const ref of ['', '--upload-pack=x', 'two words', 'origin/a..b']) {
-      expect(HostHarnessRunInputSchema.safeParse({ ...base, mergeFrom: ref }).success, ref).toBe(
+      expect(HostHarnessRunInputSchema.safeParse({ ...onto, mergeFrom: ref }).success, ref).toBe(
         false,
       );
     }
+  });
+
+  it('refuses a merge with no branch to merge into, naming both fields', () => {
+    const result = HostHarnessRunInputSchema.safeParse({ ...base, mergeFrom: 'origin/main' });
+    expect(result.success).toBe(false);
+    const issue = result.error?.issues[0];
+    expect(issue?.path).toEqual(['base']);
+    expect(issue?.message).toContain('`mergeFrom` (`origin/main`) is given without `base`');
+    expect(issue?.message).toContain('A merge needs the branch it is merged into');
+  });
+
+  it('takes a publication whose whole change is the merge, and no other without a diff', () => {
+    const commit = { branch: 'aflow/fix', message: 'Fix', baseSha: 'a'.repeat(40) };
+    const mergeOnly = HostFilePatchInputSchema.safeParse({
+      bindingId: 'hb_x',
+      commit: { ...commit, mergeFrom: 'c'.repeat(40) },
+    });
+    expect(mergeOnly.success).toBe(true);
+    for (const input of [{ bindingId: 'hb_x', commit }, { bindingId: 'hb_x' }]) {
+      const result = HostFilePatchInputSchema.safeParse(input);
+      expect(result.success).toBe(false);
+      expect(result.error?.issues[0]?.message).toContain('Name the diff to apply');
+    }
+  });
+
+  it("reports the commit message's body apart from its subject", () => {
+    const commit = {
+      branch: 'aflow/fix',
+      sha: 'b'.repeat(40),
+      message: 'Fix\n\nWhy it changed.',
+      body: 'Why it changed.',
+      baseSha: 'a'.repeat(40),
+      appended: false,
+      range: `${'a'.repeat(40)}..${'b'.repeat(40)}`,
+      pushRefspec: `${'b'.repeat(40)}:refs/heads/aflow/fix`,
+    };
+    const result = { state: 'applied', filesChanged: 1, files: ['x'], conflicts: [] };
+    expect(HostFilePatchOutputSchema.parse({ ...result, commit }).commit?.body).toBe(
+      'Why it changed.',
+    );
+    expect(HostFilePatchOutputSchema.safeParse({ ...result, commit: { ...commit, body: '' } }).success).toBe(
+      false,
+    );
   });
 
   it('carries the merged commit on the publication as a sha, never a branch name', () => {

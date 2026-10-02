@@ -131,7 +131,7 @@ async function applyHostPatch(ctx: ExecutorContext, policyPath: string): Promise
     if (typeof diff !== 'string') return await failureWithError(ctx, diff);
 
     const files = diff.trim() === '' ? [] : await patchPaths(binding.root, diff);
-    if (files.length === 0) {
+    if (files.length === 0 && input.commit?.mergeFrom === undefined) {
       return await successWithData(ctx, {
         state: 'empty',
         filesChanged: 0,

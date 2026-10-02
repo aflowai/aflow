@@ -341,12 +341,14 @@ export function validateWorkflowGraph(
   // 8. State variable declarations (104j §6.1)
   const stateVarIds = new Set<string>();
   const immutableStateVarIds = new Set<string>();
+  const alternativeWriterVarIds = new Set<string>();
   if (stateVariables && stateVariables.length > 0) {
     const stateVarCounts = new Map<string, number>();
     for (const sv of stateVariables) {
       stateVarCounts.set(sv.variableId, (stateVarCounts.get(sv.variableId) ?? 0) + 1);
       stateVarIds.add(sv.variableId);
       if (sv.immutable) immutableStateVarIds.add(sv.variableId);
+      if (sv.writers === 'alternatives') alternativeWriterVarIds.add(sv.variableId);
     }
     for (const [id, count] of stateVarCounts) {
       if (count > 1) {
@@ -451,14 +453,18 @@ export function validateWorkflowGraph(
     }
   }
 
-  // 9c. Phase 1: reject multi-writer state promotion entirely
-  // (no reducer/merge strategy exists yet — invariant §6.8 rule 5)
+  // 9c. Multi-writer promotion only where the variable declares its writers
+  // alternatives (no merge strategy exists — invariant §6.8 rule 5)
   for (const [varId, writers] of stateWriters) {
-    if (writers.length > 1 && !immutableStateVarIds.has(varId)) {
+    if (
+      writers.length > 1 &&
+      !immutableStateVarIds.has(varId) &&
+      !alternativeWriterVarIds.has(varId)
+    ) {
       errors.push({
         kind: 'promotion_multi_writer',
         taskIds: writers,
-        detail: `State variable "${varId}" has multiple writers: ${writers.join(', ')}. Phase 1 does not support multi-writer promotion; add an explicit reducer strategy or use separate variables.`,
+        detail: `State variable "${varId}" has multiple writers: ${writers.join(', ')}. Declare it \`writers: 'alternatives'\` when the writers are branches a run takes one of, or use separate variables.`,
       });
     }
   }
@@ -1017,7 +1023,7 @@ function validateInputTemplates(tasks: WorkflowTask[], errors: GraphValidationEr
         ...(malformed.path ? { field: malformed.path } : {}),
         detail:
           `Task "${task.taskId}" inputTemplate node at "${malformed.path || '(root)'}" is malformed: ` +
-          `${malformed.reason}. Write exactly { "${TEMPLATE_BIND_KEY}": "<bindAs>" }.`,
+          `${malformed.reason}.`,
       });
     }
 

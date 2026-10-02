@@ -33,5 +33,14 @@ export const WorkflowStateVariableSchema = z.object({
     .describe('Omit from result.output, score, and outcome checks'),
   /** Whether this variable is read-only after initial set. */
   immutable: z.boolean().default(false),
+  writers: z
+    .enum(['single', 'alternatives'])
+    .optional()
+    .describe(
+      "Absent or 'single': one task promotes into it. 'alternatives': several tasks do, on " +
+        'branches of which a run takes one — a task that finds the thing and one that makes it ' +
+        'where nothing was found — so whichever ran is what the variable holds. Where two of ' +
+        'them write, the later in the task list wins.',
+    ),
 });
 export type WorkflowStateVariable = z.infer<typeof WorkflowStateVariableSchema>;

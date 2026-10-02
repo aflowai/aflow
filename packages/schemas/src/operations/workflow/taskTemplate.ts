@@ -3,6 +3,37 @@ import { z } from 'zod';
 /** The reserved bind-node key. */
 export const TEMPLATE_BIND_KEY = '$bind';
 
+/**
+ * `{ "$concat": [part, …] }` — its parts joined into one string. Every part
+ * must be present and a string: a value missing one of its parts is a
+ * different value, so a part that resolved absent makes the whole node absent.
+ */
+export const TEMPLATE_CONCAT_KEY = '$concat';
+
+/** `{ "$firstOf": [alternative, …] }` — the first alternative that is present; absent when none is. */
+export const TEMPLATE_FIRST_OF_KEY = '$firstOf';
+
+const TEMPLATE_OPERATOR_KEYS = [TEMPLATE_CONCAT_KEY, TEMPLATE_FIRST_OF_KEY] as const;
+type TemplateOperatorKey = (typeof TEMPLATE_OPERATOR_KEYS)[number];
+
+/** The operator a node carries, if it carries one — well-formed or not. */
+function templateOperatorOf(rec: Record<string, unknown>): TemplateOperatorKey | undefined {
+  return TEMPLATE_OPERATOR_KEYS.find((key) => Object.prototype.hasOwnProperty.call(rec, key));
+}
+
+/** Why an operator node is malformed, or undefined when it is well formed. */
+function malformedOperator(rec: Record<string, unknown>, key: TemplateOperatorKey): string | undefined {
+  const keys = Object.keys(rec);
+  if (keys.length !== 1) {
+    return `an operator node must have exactly the single key "${key}" (found keys: ${keys.sort().join(', ')})`;
+  }
+  const operands = rec[key];
+  if (!Array.isArray(operands) || operands.length < 2) {
+    return `"${key}" takes an array of at least two operands`;
+  }
+  return undefined;
+}
+
 export const WorkflowTaskInputTemplateSchema = z.record(z.unknown());
 export type WorkflowTaskInputTemplate = z.infer<typeof WorkflowTaskInputTemplateSchema>;
 
@@ -74,13 +105,22 @@ function walk(node: unknown, path: string, out: InputTemplateAnalysis): void {
       const keys = Object.keys(rec).sort();
       out.malformed.push({
         path,
-        reason:
+        reason: `${
           keys.length === 1
             ? `"${TEMPLATE_BIND_KEY}" must be a non-empty string naming a declared binding`
-            : `a bind node must have exactly the single key "${TEMPLATE_BIND_KEY}" (found keys: ${keys.join(', ')})`,
+            : `a bind node must have exactly the single key "${TEMPLATE_BIND_KEY}" (found keys: ${keys.join(', ')})`
+        }. Write exactly { "${TEMPLATE_BIND_KEY}": "<bindAs>" }`,
       });
     }
     return; // never descend into a bind node (well-formed or not).
+  }
+  const operator = templateOperatorOf(rec);
+  if (operator !== undefined) {
+    const reason = malformedOperator(rec, operator);
+    if (reason !== undefined) {
+      out.malformed.push({ path, reason });
+      return;
+    }
   }
   for (const [key, value] of Object.entries(rec)) {
     walk(value, joinPath(path, key), out);
@@ -138,6 +178,8 @@ interface SubstituteCtx {
  *   - A malformed bind node (extra keys / non-string value) throws.
  *   - The substituted root must remain a JSON object (op inputs are
  *     objects); a root bind node that resolves absent or non-object throws.
+ *   - `$concat` and `$firstOf` nodes compute one value from their operands,
+ *     each operand substituted by these same rules.
  */
 export function substituteTemplateBinds(
   template: WorkflowTaskInputTemplate,
@@ -200,10 +242,52 @@ function substituteNode(node: unknown, path: string, ctx: SubstituteCtx): unknow
     return ctx.resolved[bindAs];
   }
 
+  const operator = templateOperatorOf(rec);
+  if (operator !== undefined) return substituteOperator(rec, operator, path, ctx);
+
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(rec)) {
     const substituted = substituteNode(value, joinPath(path, key), ctx);
     if (substituted !== OMIT) out[key] = substituted;
   }
   return out;
+}
+
+function substituteOperator(
+  rec: Record<string, unknown>,
+  operator: TemplateOperatorKey,
+  path: string,
+  ctx: SubstituteCtx,
+): unknown {
+  const reason = malformedOperator(rec, operator);
+  if (reason !== undefined) {
+    throw new TemplateSubstitutionError(
+      path,
+      undefined,
+      `malformed operator node at "${path || '(root)'}" — ${reason}`,
+    );
+  }
+  const operandsPath = joinPath(path, operator);
+  const operands = (rec[operator] as unknown[]).map((operand, i) =>
+    substituteNode(operand, `${operandsPath}[${String(i)}]`, ctx),
+  );
+
+  if (operator === TEMPLATE_FIRST_OF_KEY) {
+    const present = operands.findIndex((operand) => operand !== OMIT);
+    return present === -1 ? OMIT : operands[present];
+  }
+
+  if (operands.includes(OMIT)) return OMIT;
+  const parts: string[] = [];
+  for (const [i, operand] of operands.entries()) {
+    if (typeof operand !== 'string') {
+      throw new TemplateSubstitutionError(
+        `${operandsPath}[${String(i)}]`,
+        undefined,
+        `"${TEMPLATE_CONCAT_KEY}" at "${path || '(root)'}" joins strings, and operand ${String(i)} resolved to ${operand === null ? 'null' : typeof operand}`,
+      );
+    }
+    parts.push(operand);
+  }
+  return parts.join('');
 }

@@ -35,13 +35,17 @@ function task(
   };
 }
 
-function stateVar(variableId: string, opts?: { immutable?: boolean }): WorkflowStateVariable {
+function stateVar(
+  variableId: string,
+  opts?: { immutable?: boolean; writers?: WorkflowStateVariable['writers'] },
+): WorkflowStateVariable {
   return {
     variableId,
     name: `Var ${variableId}`,
     required: false,
     sensitive: false,
     immutable: opts?.immutable ?? false,
+    ...(opts?.writers !== undefined ? { writers: opts.writers } : {}),
   };
 }
 
@@ -257,6 +261,17 @@ describe('validateWorkflowGraph — promoteOutputs', () => {
       vars,
     );
     expect(errors.some((e) => e.kind === 'promotion_multi_writer')).toBe(true);
+  });
+
+  it('accepts several writers into a variable that declares them alternatives', () => {
+    const errors = validateWorkflowGraph(
+      [
+        task('a', { promoteOutputs: [{ kind: 'output_root', toState: 'shared' }] }),
+        task('b', { promoteOutputs: [{ kind: 'output_root', toState: 'shared' }] }),
+      ],
+      [stateVar('shared', { writers: 'alternatives' })],
+    );
+    expect(errors.filter((e) => e.kind.startsWith('promotion_'))).toEqual([]);
   });
 
   it('rejects multi-writer to immutable state var', () => {

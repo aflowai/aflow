@@ -94,8 +94,8 @@ describe('a harness widening stays a widening', () => {
       'utf8',
     );
     const harnessInput = wire.slice(
+      wire.indexOf('HostHarnessRunInputObjectSchema'),
       wire.indexOf('HostHarnessRunInputSchema'),
-      wire.indexOf('HostHarnessRunOutputSchema'),
     );
     // Field names only — descriptions are prose and may name what they exclude.
     // Pinned exactly, so a new field has to be argued for here: each of these
