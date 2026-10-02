@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { configureLogging } from '@aflow/observability';
 import { getWriteApprovalGrant, hostPushRequestHash, writeApprovalGrantKey } from '@aflow/redis';
-import type { TenantId, WorkflowRunResumeInput } from '@aflow/schemas';
+import type { TenantId, Workflow, WorkflowRunResumeInput } from '@aflow/schemas';
+import { RESUME_REPLACE_OUTPUT_ATTEMPT_CAP } from '@aflow/schemas';
+import type { SurfacedResumeContract } from '../workflowResume.js';
 
 const mockLoadRunById = vi.fn();
 const mockClaimResumeLease = vi.fn();
@@ -84,6 +86,7 @@ vi.mock('@aflow/database', async (importOriginal) => {
 });
 
 const { executeOperatorWorkflowRunResume } = await import('../operatorWorkflowRunResume.js');
+const { applyHumanReplaceOutputResolution } = await import('../workflowRunResumeModes.js');
 
 const TENANT = '00000000-0000-0000-0000-000000000001' as TenantId;
 const RUN_ID = '11111111-2222-3333-4444-555555555555';
@@ -590,44 +593,46 @@ describe('executeOperatorWorkflowRunResume — the operator approving a host pus
     } as WorkflowRunResumeInput;
   }
 
+  const surfaced = {
+    pauseVersion: 1,
+    contract: {
+      pauseCause: 'needs_decision',
+      failedTaskId: TASK_ID,
+      allowedResumeModes: ['replace_output', 'reject', 'fail'],
+      suggestedResumeCall: { op: 'workflow.run.resume', args: {} },
+    },
+  } as SurfacedResumeContract;
+  const pushWorkflow = {
+    slug: 'local-publish',
+    tasks: [
+      {
+        taskId: TASK_ID,
+        name: 'Approve the push',
+        type: 'human',
+        intent: 'approve',
+        actionPreview: { op: 'host.process.exec', input: PUSH },
+      },
+      { taskId: 'push', name: 'Push the commit' },
+    ],
+  } as Workflow;
+  const pausedRun = {
+    runId: RUN_ID,
+    spaceId: SPACE_ID,
+    status: 'paused',
+    workflowSlug: 'local-publish',
+    workflowRevision: 1,
+    resumeAttemptCount: 0,
+    pauseVersion: 1,
+    startedAt: new Date('2026-06-06T00:00:00Z'),
+    tasks: [{ taskId: TASK_ID, status: 'paused', attempt: 1 }],
+  };
+
   beforeEach(() => {
-    mockSurfaceContract.mockResolvedValue({
-      pauseVersion: 1,
-      contract: {
-        pauseCause: 'needs_decision',
-        failedTaskId: TASK_ID,
-        allowedResumeModes: ['replace_output', 'reject', 'fail'],
-        suggestedResumeCall: { op: 'workflow.run.resume', args: {} },
-      },
-    });
-    mockResolveWorkflowForRunRevision.mockResolvedValue({
-      workflow: {
-        slug: 'local-publish',
-        tasks: [
-          {
-            taskId: TASK_ID,
-            name: 'Approve the push',
-            type: 'human',
-            intent: 'approve',
-            actionPreview: { op: 'host.process.exec', input: PUSH },
-          },
-          { taskId: 'push', name: 'Push the commit' },
-        ],
-      },
-    });
-    mockLoadRunById.mockResolvedValue({
-      runId: RUN_ID,
-      spaceId: SPACE_ID,
-      status: 'paused',
-      workflowSlug: 'local-publish',
-      workflowRevision: 1,
-      resumeAttemptCount: 0,
-      pauseVersion: 1,
-      startedAt: new Date('2026-06-06T00:00:00Z'),
-      tasks: [{ taskId: TASK_ID, status: 'paused', attempt: 1 }],
-    });
+    mockSurfaceContract.mockResolvedValue(surfaced);
+    mockResolveWorkflowForRunRevision.mockResolvedValue({ workflow: pushWorkflow });
+    mockLoadRunById.mockResolvedValue(pausedRun);
     mockBumpResumeAttemptCount.mockResolvedValue(1);
-    mockCommitReplaceOutput.mockResolvedValue('committed');
+    mockCommitReplaceOutput.mockImplementation(commitThatRecords);
     mockApplyRejectResolution.mockResolvedValue({
       ok: true,
       skippedTaskId: TASK_ID,
@@ -635,18 +640,30 @@ describe('executeOperatorWorkflowRunResume — the operator approving a host pus
     });
   });
 
-  async function resume(input: WorkflowRunResumeInput) {
-    const { keys, redis } = grantRedis();
+  /** The commit's contract: its record runs inside it, and a throw rolls it back. */
+  function commitThatRecords(
+    _db: unknown,
+    _tenant: unknown,
+    args: { recordWithinCommit?: () => Promise<void> },
+  ): Promise<string> {
+    if (!args.recordWithinCommit) return Promise.resolve('committed');
+    return args.recordWithinCommit().then(
+      () => 'committed',
+      () => 'record_failed',
+    );
+  }
+
+  async function resume(input: WorkflowRunResumeInput, redis = grantRedis()) {
     const result = await executeOperatorWorkflowRunResume(
       {
         db: {} as never,
-        redis: redis as never,
+        redis: redis.redis as never,
         payloadStore: { store: () => Promise.resolve('payload:approval') } as never,
       },
       { tenantId: TENANT, spaceId: SPACE_ID, userId: 'user-1', input },
       hooks,
     );
-    return { result, keys, redis };
+    return { result, keys: redis.keys, redis: redis.redis };
   }
 
   function approveWithoutCall(): WorkflowRunResumeInput {
@@ -675,7 +692,7 @@ describe('executeOperatorWorkflowRunResume — the operator approving a host pus
     });
   }
 
-  it('grants exactly the previewed push, keyed by tenant, run and its hash, once the approval commits', async () => {
+  it('grants exactly the previewed push, keyed by tenant, run and its hash, within the approval commit', async () => {
     for (const input of [
       approveWithoutCall(),
       approveInput({ op: 'host.process.exec', input: PUSH }),
@@ -721,18 +738,57 @@ describe('executeOperatorWorkflowRunResume — the operator approving a host pus
     expect(hooks.dispatchNextOrTerminate).not.toHaveBeenCalled();
   });
 
-  it('still drives a committed approval forward when its grant cannot be written', async () => {
-    const result = await executeOperatorWorkflowRunResume(
-      {
-        db: {} as never,
-        redis: { set: () => Promise.reject(new Error('redis down')) } as never,
-        payloadStore: { store: () => Promise.resolve('payload:approval') } as never,
-      },
-      { tenantId: TENANT, spaceId: SPACE_ID, userId: 'user-1', input: approveWithoutCall() },
-      hooks,
-    );
-    expect(result).toEqual({ ok: true, runId: RUN_ID });
+  it('fails an approval whose grant cannot be written, leaving the task paused to approve again', async () => {
+    const store = grantRedis();
+    store.redis.set.mockImplementationOnce(() => Promise.reject(new Error('redis down')));
+
+    const failed = await resume(approveWithoutCall(), store);
+    expect(failed.result).toMatchObject({ ok: false, code: 'APPROVAL_NOT_RECORDED' });
+    if (!failed.result.ok) expect(failed.result.message).toContain('the task is still paused');
+    expect(mockReleaseResumeClaim).toHaveBeenCalledOnce();
+    expect(mockEmitWorkflowProgress).not.toHaveBeenCalled();
+    expect(hooks.dispatchNextOrTerminate).not.toHaveBeenCalled();
+    expect(store.keys.size).toBe(0);
+
+    const again = await resume(approveWithoutCall(), store);
+    expect(again.result).toEqual({ ok: true, runId: RUN_ID });
+    expect([...store.keys.keys()]).toEqual([
+      writeApprovalGrantKey(TENANT, RUN_ID, hostPushRequestHash(PUSH)),
+    ]);
     expect(hooks.dispatchNextOrTerminate).toHaveBeenCalledOnce();
+  });
+
+  it("spends no attempt on an agent's refused push approvals, so the operator's approve still lands", async () => {
+    let attempts = 0;
+    mockBumpResumeAttemptCount.mockImplementation(() => Promise.resolve(++attempts));
+    mockLoadRunById.mockImplementation(() =>
+      Promise.resolve({ ...pausedRun, resumeAttemptCount: attempts }),
+    );
+
+    for (let attempt = 1; attempt <= RESUME_REPLACE_OUTPUT_ATTEMPT_CAP; attempt++) {
+      const refused = await applyHumanReplaceOutputResolution({
+        db: {} as never,
+        tenantIdStr: TENANT,
+        run: { ...pausedRun, resumeAttemptCount: attempts } as never,
+        workflow: pushWorkflow,
+        surfaced,
+        output: { decision: 'approved' },
+        claimToken: `agent-${String(attempt)}`,
+        actorUserId: 'operator',
+        payloadStore: { store: () => Promise.resolve('payload:approval') } as never,
+        storeContext: { tenantId: TENANT, runId: RUN_ID, stepExecutionId: 'step-1', attempt: 1 },
+      });
+      expect(refused).toMatchObject({ ok: false, error: { code: 'PUSH_APPROVAL_OPERATOR_ONLY' } });
+    }
+    expect(attempts).toBe(0);
+    expect(mockCommitReplaceOutput).not.toHaveBeenCalled();
+
+    const { result, keys } = await resume(approveWithoutCall());
+    expect(result).toEqual({ ok: true, runId: RUN_ID });
+    expect(attempts).toBe(1);
+    expect([...keys.keys()]).toEqual([
+      writeApprovalGrantKey(TENANT, RUN_ID, hostPushRequestHash(PUSH)),
+    ]);
   });
 
   it('mints nothing for a task without actionPreview, whatever approvedCall says', async () => {

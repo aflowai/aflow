@@ -202,7 +202,15 @@ describe('applyHumanReplaceOutputResolution — the boundary records the approva
   beforeEach(() => {
     vi.clearAllMocks();
     mockBump.mockResolvedValue(1);
-    mockCommitReplace.mockResolvedValue('committed');
+    mockCommitReplace.mockImplementation(
+      (_db: unknown, _tenant: unknown, args: { recordWithinCommit?: () => Promise<void> }) =>
+        args.recordWithinCommit
+          ? args.recordWithinCommit().then(
+              () => 'committed',
+              () => 'record_failed',
+            )
+          : Promise.resolve('committed'),
+    );
     mockStore.mockResolvedValue('payload:output-1');
   });
 
@@ -231,7 +239,7 @@ describe('applyHumanReplaceOutputResolution — the boundary records the approva
     });
   }
 
-  it('hands it the resolved preview only once the approval has committed', async () => {
+  it('hands it the resolved preview within the approval commit', async () => {
     const recordApproval = vi.fn(() => Promise.resolve());
     const result = await resolve({ decision: 'approved' }, recordApproval);
     expect(result.ok).toBe(true);
@@ -241,6 +249,12 @@ describe('applyHumanReplaceOutputResolution — the boundary records the approva
     });
     const recorded = recordApproval.mock.invocationCallOrder[0] ?? -1;
     expect(recorded).toBeGreaterThan(mockCommitReplace.mock.invocationCallOrder[0] ?? Infinity);
+  });
+
+  it('fails an approval whose record throws, under its own code', async () => {
+    const recordApproval = vi.fn(() => Promise.reject(new Error('redis down')));
+    const result = await resolve({ decision: 'approved' }, recordApproval);
+    expect(result).toMatchObject({ ok: false, error: { code: 'APPROVAL_NOT_RECORDED' } });
   });
 
   it('records nothing for an approval that did not land', async () => {
@@ -273,7 +287,7 @@ describe('applyHumanReplaceOutputResolution — the boundary records the approva
     expect(recordApproval).not.toHaveBeenCalled();
   });
 
-  it('refuses a push approval from a resolver that is not the operator, and persists nothing', async () => {
+  it('refuses a push approval from a resolver that is not the operator, spending and persisting nothing', async () => {
     const result = await resolve({ decision: 'approved' }, undefined, pushWorkflow);
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -281,6 +295,7 @@ describe('applyHumanReplaceOutputResolution — the boundary records the approva
       expect(result.error.message).toContain("a push's approval is the operator's to give");
       expect(result.error.message).toContain('the task is still paused');
     }
+    expect(mockBump).not.toHaveBeenCalled();
     expect(mockStore).not.toHaveBeenCalled();
     expect(mockCommitReplace).not.toHaveBeenCalled();
 

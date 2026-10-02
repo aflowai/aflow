@@ -49,10 +49,11 @@ export interface HumanReplaceOutputContext {
   payloadStore: PayloadStore;
   /**
    * Given only by the authenticated operator boundary, so its absence is what
-   * marks a resolver that is not the operator. Called once the approval has
-   * committed, and only for a task that declares `actionPreview`, with the
-   * call the server resolved from it — an approval that never landed, or one
-   * whose call came from the client alone, leaves nothing behind.
+   * marks a resolver that is not the operator. Called within the approval's
+   * commit, once the run and task rows have passed their checks, and only for
+   * a task that declares `actionPreview`, with the call the server resolved
+   * from it — an approval that never lands, or one whose call came from the
+   * client alone, leaves nothing behind, and a throw rolls the approval back.
    */
   recordApproval?: (approvedCall: HumanApprovalCall) => Promise<void>;
   storeContext: {
@@ -79,18 +80,6 @@ export async function applyHumanReplaceOutputResolution(
     storeContext,
   } = ctx;
 
-  const postBump = await bumpResumeAttemptCount(db, tenantIdStr, run.runId, claimToken);
-  if (postBump === null) {
-    return {
-      ok: false,
-      error: {
-        code: 'RESUME_COMMIT_LOST',
-        message:
-          'Resume lease expired before mode work could begin. Re-fetch the surfaced contract and retry.',
-      },
-    };
-  }
-
   if (!surfaced?.contract.failedTaskId) {
     return {
       ok: false,
@@ -114,6 +103,54 @@ export async function applyHumanReplaceOutputResolution(
   }
 
   const intent = taskDef.intent ?? 'collect';
+  const previewResolution =
+    intent === 'approve' && taskDef.actionPreview
+      ? resolveActionPreview(
+          taskDef.actionPreview,
+          await runContextFromDetail(run, payloadStore, db, tenantIdStr),
+        )
+      : undefined;
+
+  // Decided before the attempt is counted: this refusal leaves the pause as it
+  // was, so it must not spend an attempt the operator's own approve needs.
+  if (intent === 'approve' && !ctx.recordApproval) {
+    const parsedClient = HumanApprovalResolutionInputSchema.safeParse(output);
+    const call = taskDef.actionPreview
+      ? previewResolution?.ok
+        ? { op: previewResolution.preview.op, input: previewResolution.preview.input }
+        : undefined
+      : parsedClient.success
+        ? parsedClient.data.approvedCall
+        : undefined;
+    const push = call ? hostPushOf(call) : undefined;
+    if (push) {
+      return {
+        ok: false,
+        error: {
+          code: 'PUSH_APPROVAL_OPERATOR_ONLY',
+          message:
+            `This approval would let \`${push.refspec}\` be pushed from \`${push.bindingId}\`, ` +
+            "and a push's approval is the operator's to give: one given here would be recorded " +
+            'and the push still refused. Nothing was approved and no resume attempt was spent; ' +
+            'the task is still paused and its card in the Action Center is still live for the ' +
+            'operator.',
+        },
+      };
+    }
+  }
+
+  const postBump = await bumpResumeAttemptCount(db, tenantIdStr, run.runId, claimToken);
+  if (postBump === null) {
+    return {
+      ok: false,
+      error: {
+        code: 'RESUME_COMMIT_LOST',
+        message:
+          'Resume lease expired before mode work could begin. Re-fetch the surfaced contract and retry.',
+      },
+    };
+  }
+
   let merged: Record<string, unknown>;
   let grantableCall: HumanApprovalCall | undefined;
 
@@ -133,9 +170,8 @@ export async function applyHumanReplaceOutputResolution(
     }
     const client = parsedClient.data;
     let approvedCall: HumanApprovalCall | undefined = client.approvedCall;
-    if (taskDef.actionPreview) {
-      const runContext = await runContextFromDetail(run, payloadStore, db, tenantIdStr);
-      const r = resolveActionPreview(taskDef.actionPreview, runContext);
+    if (previewResolution) {
+      const r = previewResolution;
       if (!r.ok) {
         return {
           ok: false,
@@ -207,20 +243,6 @@ export async function applyHumanReplaceOutputResolution(
         },
       };
     }
-    const push = approvedCall ? hostPushOf(approvedCall) : undefined;
-    if (push && !ctx.recordApproval) {
-      return {
-        ok: false,
-        error: {
-          code: 'PUSH_APPROVAL_OPERATOR_ONLY',
-          message:
-            `This approval would let \`${push.refspec}\` be pushed from \`${push.bindingId}\`, ` +
-            "and a push's approval is the operator's to give: one given here would be recorded " +
-            'and the push still refused. Nothing was approved; the task is still paused and its ' +
-            'card in the Action Center is still live for the operator.',
-        },
-      };
-    }
     if (taskDef.actionPreview) grantableCall = validateApprove.data.approvedCall;
   } else {
     const schema =
@@ -281,12 +303,16 @@ export async function applyHumanReplaceOutputResolution(
     contentType: 'application/json',
   });
 
+  const { recordApproval } = ctx;
   const commitResult = await commitReplaceOutputAndResume(db, tenantIdStr, {
     runId: run.runId,
     claimToken,
     failedTaskId: taskId,
     outputRef: newOutputRef,
     summary: `Resolved via workflow.run.resume replace_output (human ${intent}, pauseVersion=${String(surfaced.pauseVersion)}).`,
+    ...(grantableCall && recordApproval
+      ? { recordWithinCommit: () => recordApproval(grantableCall) }
+      : {}),
   });
 
   if (commitResult === 'claim_lost') {
@@ -308,8 +334,18 @@ export async function applyHumanReplaceOutputResolution(
       },
     };
   }
+  if (commitResult === 'record_failed') {
+    return {
+      ok: false,
+      error: {
+        code: 'APPROVAL_NOT_RECORDED',
+        message:
+          `The approval of task "${taskId}" could not be recorded, so it was not applied: the ` +
+          'task is still paused and the run has not moved. Approve it again.',
+      },
+    };
+  }
 
-  if (grantableCall && ctx.recordApproval) await ctx.recordApproval(grantableCall);
   return { ok: true, succeededTaskId: taskId };
 }
 

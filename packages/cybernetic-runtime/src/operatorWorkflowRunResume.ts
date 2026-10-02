@@ -60,14 +60,16 @@ export type OperatorWorkflowRunResumeResult =
  * human task whose previewed call is a push is the decision the host executor
  * needs before it sends what its gate does not clear alone. Minted here and
  * only here — the operator's resolve, which holds the real actor — from the
- * call the server resolved from the task's `actionPreview`, once the approval
- * has committed, keyed by tenant, run and the hash of exactly that push. A
+ * call the server resolved from the task's `actionPreview`, within the
+ * approval's commit, keyed by tenant, run and the hash of exactly that push. A
  * decline goes through `reject` and mints nothing.
  *
- * The approval has already committed and released the run when this runs, so
- * a failed write is logged rather than thrown: thrown, it would leave a
- * running run that nothing dispatches, where unthrown the push is refused
- * `unapproved` in the run, in the operator's view.
+ * A failed write is thrown so the approval rolls back and the task stays
+ * paused for the operator to approve again; an approval whose grant was never
+ * written would release a push the gate then refuses as never approved. The
+ * reverse — a grant written and the commit then failing — leaves a grant for
+ * exactly the push the operator just approved, which nothing dispatches until
+ * an approval of that task lands.
  */
 async function recordHostPushApproval(
   redis: Redis,
@@ -84,9 +86,10 @@ async function recordHostPushApproval(
     });
   } catch (err) {
     getCyberneticLogger().error(
-      `[executeOperatorWorkflowRunResume] the push approval for run=${args.runId} committed and its grant could not be written; the push will be refused`,
+      `[executeOperatorWorkflowRunResume] the push grant for run=${args.runId} could not be written; the approval was rolled back and the task is still paused`,
       err instanceof Error ? err : undefined,
     );
+    throw err;
   }
 }
 

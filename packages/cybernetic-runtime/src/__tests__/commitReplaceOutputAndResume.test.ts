@@ -204,3 +204,53 @@ describe('commitReplaceOutputAndResume — Plan 130 round 2 P0/2', () => {
     expect(result).toBe('task_row_not_paused');
   });
 });
+
+describe('commitReplaceOutputAndResume — the record written within the commit', () => {
+  function committing(runReturning: ReturningResult, taskReturning: ReturningResult) {
+    let tx: FakeTx | undefined;
+    mockWithTenantSchema.mockImplementationOnce(async (_db, _ctx, fn) => {
+      tx = makeFakeTx(runReturning, taskReturning, workflowRunsToken);
+      return fn(tx);
+    });
+    return () => tx;
+  }
+
+  it('writes it once both rows have passed their checks, inside the transaction', async () => {
+    const txOf = committing([{ id: 'run-row-id' }], [{ id: 'task-row-id' }]);
+    const recordWithinCommit = vi.fn(() => {
+      expect(txOf()!.updates).toHaveLength(2);
+      return Promise.resolve();
+    });
+    const result = await commitReplaceOutputAndResume({} as never, 'tenant', {
+      ...COMMON_ARGS,
+      recordWithinCommit,
+    });
+    expect(result).toBe('committed');
+    expect(recordWithinCommit).toHaveBeenCalledOnce();
+  });
+
+  it("rolls the commit back as 'record_failed' when the record throws", async () => {
+    committing([{ id: 'run-row-id' }], [{ id: 'task-row-id' }]);
+    const result = await commitReplaceOutputAndResume({} as never, 'tenant', {
+      ...COMMON_ARGS,
+      recordWithinCommit: () => Promise.reject(new Error('redis down')),
+    });
+    expect(result).toBe('record_failed');
+  });
+
+  it('writes nothing when either row misses its check', async () => {
+    for (const [run, task, outcome] of [
+      [[], [{ id: 'task-row-id' }], 'claim_lost'],
+      [[{ id: 'run-row-id' }], [], 'task_row_not_paused'],
+    ] as const) {
+      committing([...run], [...task]);
+      const recordWithinCommit = vi.fn(() => Promise.resolve());
+      const result = await commitReplaceOutputAndResume({} as never, 'tenant', {
+        ...COMMON_ARGS,
+        recordWithinCommit,
+      });
+      expect(result).toBe(outcome);
+      expect(recordWithinCommit).not.toHaveBeenCalled();
+    }
+  });
+});

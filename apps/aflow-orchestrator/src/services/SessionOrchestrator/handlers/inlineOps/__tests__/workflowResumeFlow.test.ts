@@ -1931,7 +1931,7 @@ describe("workflow.run.resume — a push's approval is the operator's", () => {
     return result['error'] as Record<string, unknown>;
   }
 
-  it('refuses an agent approving a push, and leaves the task paused for the operator', async () => {
+  it('refuses an agent approving a push, spends no attempt, and leaves the task paused for the operator', async () => {
     const [pausedRow] = makePausedRun().tasks;
     mockLoadRunById.mockResolvedValueOnce(
       makePausedRun({
@@ -1982,6 +1982,8 @@ describe("workflow.run.resume — a push's approval is the operator's", () => {
     const error = stepError();
     expect(error['code']).toBe('PUSH_APPROVAL_OPERATOR_ONLY');
     expect(String(error['message'])).toContain("a push's approval is the operator's to give");
+    expect(String(error['message'])).toContain('no resume attempt was spent');
+    expect(mockBumpResumeAttemptCount).not.toHaveBeenCalled();
     expect(mockCommitReplaceOutputAndResume).not.toHaveBeenCalled();
     const { store } = args.payloadStore as unknown as { store: ReturnType<typeof vi.fn> };
     expect(store).not.toHaveBeenCalled();

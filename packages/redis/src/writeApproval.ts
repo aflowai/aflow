@@ -10,10 +10,10 @@ import {
  * Write-approval grant (Plan 253). Written ONLY at the authenticated boundary —
  * the Action Center resolve handler, which holds the real actor identity — when
  * an operator approves or denies a gated write, and the operator's resolve of a
- * workflow human task whose `approvedCall` is a host push. The orchestrator
+ * workflow human task whose previewed call is a host push. The orchestrator
  * reads it to decide re-dispatch vs fail; the API executor reads it on
  * re-dispatch to let the call through, and the host executor before a push its
- * scan did not clear. Keyed by `(tenantId, runId, requestHash)`, NOT by step
+ * gate does not clear alone. Keyed by `(tenantId, runId, requestHash)`, NOT by step
  * execution id — a re-dispatch mints a fresh execution id, and the approval is
  * bound to the exact call (requestHash) within the run regardless. No
  * non-authenticated resume (a scheduled `{}` wake, an agent-driven resume) can
