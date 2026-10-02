@@ -7,10 +7,13 @@ import {
   resolvePromotedRunMetrics,
 } from '@aflow/cybernetic-runtime';
 import {
+  HOST_CHECKS_TIMEOUT_DEFAULT_MS,
   HOST_PUSH_APPROVAL_DEFAULT,
   HostApprovedPushSchema,
   HostBindingInspectOutputSchema,
   HostProcessExecInputSchema,
+  HostCommitCheckInputSchema,
+  HostCommitCheckOutputSchema,
   HostCommitScanInputSchema,
   HostCommitScanOutputSchema,
   type HostPushApproval,
@@ -44,6 +47,7 @@ const COMMIT = {
   appended: false,
   range: `${BASE}..${HEAD}`,
   pushRange: `${ORIGIN_BASE}..${HEAD}`,
+  pushBaseSha: ORIGIN_BASE,
   pushRefspec: `${HEAD}:refs/heads/aflow/x`,
 };
 
@@ -96,9 +100,10 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(validity.status).toBe('valid');
   });
 
-  it('is nine tasks — commit, scan, what decides the approval, approve, push, find or open the pull request', () => {
+  it('is ten tasks — commit, check, scan, what decides the approval, approve, push, find or open the pull request', () => {
     expect(wf.tasks.map((t) => t.taskId)).toEqual([
       'commit',
+      'check-commit',
       'scan-commit',
       'read-repository',
       'read-push-approval',
@@ -114,6 +119,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       'operation',
       'operation',
       'operation',
+      'operation',
       'human',
       'operation',
       'operation',
@@ -122,6 +128,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(wf.tasks.map((t) => t.dependsOn ?? [])).toEqual([
       [],
       ['commit'],
+      ['commit', 'check-commit'],
       ['commit'],
       ['commit', 'scan-commit'],
       ['read-push-approval', 'scan-commit'],
@@ -131,6 +138,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       ['find-pr'],
     ]);
     expect(taskOrThrow('commit').operation).toBe('host.file.patch');
+    expect(taskOrThrow('check-commit').operation).toBe('host.commit.check');
     expect(taskOrThrow('scan-commit').operation).toBe('host.commit.scan');
     expect(taskOrThrow('read-repository').operation).toBe('api.http.call');
     expect(taskOrThrow('read-push-approval').operation).toBe('host.binding.inspect');
@@ -743,11 +751,66 @@ function scanResult(scan: Scan): Record<string, unknown> {
   }
 }
 
+type Check = 'passed' | 'failed' | 'timed-out' | 'skipped';
+
+const CHECK_ARGV = ['node', 'scripts/verify-commit.mjs'];
+const CHECK_TAIL = 'ok   large-files guard (2.0 s)\nFAIL tsc apps/aflow-executor-host/tsconfig.json (41.3 s)\n';
+
+/** What `host.commit.check` returns for each ending, before the task's own projection. */
+function checkResult(check: Check): Record<string, unknown> {
+  switch (check) {
+    case 'skipped':
+      return HostCommitCheckOutputSchema.parse({
+        passed: true,
+        skipped: true,
+        exitCode: null,
+        durationMs: 0,
+        tail: '',
+        summary: '`hb_app` declares no checks, so none ran.',
+        clearedSha: HEAD,
+      });
+    case 'passed':
+      return HostCommitCheckOutputSchema.parse({
+        passed: true,
+        checks: CHECK_ARGV,
+        exitCode: 0,
+        durationMs: 90_000,
+        outputRef: 'payload:check-output',
+        tail: 'ok   prettier (3 files) (1.2 s)\n',
+        summary: '`node scripts/verify-commit.mjs` passed.',
+        clearedSha: HEAD,
+      });
+    case 'failed':
+      return HostCommitCheckOutputSchema.parse({
+        passed: false,
+        checks: CHECK_ARGV,
+        exitCode: 1,
+        durationMs: 45_000,
+        outputRef: 'payload:check-output',
+        tail: CHECK_TAIL,
+        summary: `\`node scripts/verify-commit.mjs\` exited 1: the check failed. The last of what it printed:\n${CHECK_TAIL}`,
+      });
+    case 'timed-out':
+      return HostCommitCheckOutputSchema.parse({
+        passed: false,
+        checks: CHECK_ARGV,
+        timedOut: true,
+        exitCode: null,
+        durationMs: HOST_CHECKS_TIMEOUT_DEFAULT_MS,
+        outputRef: 'payload:check-output',
+        tail: CHECK_TAIL,
+        summary: "`node scripts/verify-commit.mjs` was still running when the folder's `checksTimeoutMs` ran out.",
+      });
+  }
+}
+
 interface Scenario {
   pushApproval: HostPushApproval | 'no-prefix';
   review: Review;
   decision: Decision;
   committed?: boolean;
+  /** How the folder's checks ended on the commit; absent is passed. */
+  check?: Check;
   /** What the scan of the commit found; absent is clean. */
   scan?: Scan;
   /**
@@ -792,6 +855,8 @@ function rawOutput(
             conflicts: [],
             commit: COMMIT,
           };
+    case 'check-commit':
+      return checkResult(scenario.check ?? 'passed');
     case 'scan-commit':
       return scanResult(scenario.scan ?? 'clean');
     case 'read-repository':
@@ -801,7 +866,13 @@ function rawOutput(
         id: 'hb_app',
         ...(scenario.pushApproval === 'no-prefix'
           ? {}
-          : { branchPolicy: { branchPrefix: 'aflow/', pushApproval: scenario.pushApproval } }),
+          : {
+              branchPolicy: {
+                branchPrefix: 'aflow/',
+                pushApproval: scenario.pushApproval,
+                checksTimeoutMs: HOST_CHECKS_TIMEOUT_DEFAULT_MS,
+              },
+            }),
       });
     case 'review-commit':
       if (scenario.review === 'not-started')
@@ -1598,7 +1669,101 @@ describe("Publish Local Changes — the push checks origin's base and URL in its
     expect(failure).toContain('nothing was pushed');
     expect(failure).toContain('run the publication again on a fresh branch');
     expect(PUBLISH_LOCAL_CHANGES.description).toContain(
-      'is no longer where the run measured from, forward or back, or `origin` pushes elsewhere than it fetches, the push refused just before git ran and nothing was pushed',
+      "Where the push refused because `origin`'s base moved since the run measured it, either way, or `origin` pushes elsewhere than it fetches, nothing was pushed",
     );
+  });
+});
+
+describe("Publish Local Changes — the folder's checks run before anything leaves", () => {
+  const postures: HostPushApproval[] = ['always', 'never', 'unless-unreviewed'];
+
+  it("runs the folder's checks on the commit it made, measured against `origin`'s base", () => {
+    const check = taskOrThrow('check-commit');
+    expect(check.inputBindings).toEqual({
+      bindingId: { kind: 'run_input', path: 'bindingId' },
+      sha: { kind: 'task_output', taskId: 'commit', path: 'commit.sha' },
+      pushBaseSha: { kind: 'task_output', taskId: 'commit', path: 'commit.pushBaseSha' },
+    });
+    const outputs = new Map<string, Record<string, unknown>>([
+      ['commit', { state: 'applied', commit: COMMIT }],
+    ]);
+    const input = substituteTemplateBinds(
+      check.inputTemplate ?? {},
+      boundOutputs(check.inputBindings, outputs),
+      new Set(Object.keys(check.inputBindings ?? {})),
+    );
+    expect(HostCommitCheckInputSchema.parse(input)).toEqual({
+      bindingId: 'folder-1',
+      sha: HEAD,
+      base: ORIGIN_BASE,
+    });
+    // The command is the folder's: nothing the run passes can name one.
+    expect(Object.keys(HostCommitCheckInputSchema.shape).sort()).toEqual(['base', 'bindingId', 'sha']);
+  });
+
+  it('checks after the commit and before the scan, and so before the review, the approval and the push', () => {
+    expect(taskOrThrow('check-commit').dependsOn).toEqual(['commit']);
+    expect(taskOrThrow('scan-commit').dependsOn).toContain('check-commit');
+    const outcome = publish({ pushApproval: 'never', review: 'approve', decision: 'approved' });
+    expect(outcome.ran.indexOf('check-commit')).toBeGreaterThan(outcome.ran.indexOf('commit'));
+    expect(outcome.ran.indexOf('scan-commit')).toBeGreaterThan(outcome.ran.indexOf('check-commit'));
+    expect(outcome.pushed).toBe(true);
+  });
+
+  it('fails at the check, rather than pausing on a resolution that could clear it', () => {
+    const check = taskOrThrow('check-commit');
+    expect(check.maxAttempts).toBe(1);
+    expect(check.outputContract).toBeUndefined();
+    expect(check.optional).not.toBe(true);
+    for (const ending of ['failed', 'timed-out'] as const) {
+      expect(projectTaskOutput(check.outputProjection ?? {}, checkResult(ending), null).ok).toBe(false);
+    }
+    for (const ending of ['passed', 'skipped'] as const) {
+      expect(projectTaskOutput(check.outputProjection ?? {}, checkResult(ending), null).ok).toBe(true);
+    }
+  });
+
+  for (const pushApproval of postures) {
+    for (const check of ['failed', 'timed-out'] as const) {
+      it(`${pushApproval}: checks that ${check === 'failed' ? 'fail' : 'run out of time'} scan nothing, review nothing, ask nothing and push nothing`, () => {
+        const outcome = publish({ pushApproval, review: 'approve', decision: 'approved', check });
+        expect(outcome.ran).toContain('check-commit');
+        for (const later of ['scan-commit', 'read-push-approval', 'review-commit', 'approve-push', 'push', 'find-pr', 'open-pr']) {
+          expect(outcome.ran).not.toContain(later);
+        }
+        expect(outcome.asked).toBe(false);
+        expect(outcome.pushed).toBe(false);
+        expect(outcome.state['prUrl']).toBeUndefined();
+      });
+    }
+  }
+
+  it('goes on as before where the folder declares no checks', () => {
+    const outcome = publish({ pushApproval: 'never', review: 'approve', decision: 'approved', check: 'skipped' });
+    expect(outcome.ran).toContain('scan-commit');
+    expect(outcome.pushed).toBe(true);
+  });
+
+  it('checks nothing when the patch did not commit', () => {
+    const outcome = publish({ pushApproval: 'never', review: 'approve', decision: 'approved', committed: false });
+    expect(outcome.ran).not.toContain('check-commit');
+    expect(outcome.pushed).toBe(false);
+  });
+
+  it("carries the check's tail into the failure, and says nothing left the machine", () => {
+    const failed = checkResult('failed');
+    expect(String(failed['summary'])).toContain(CHECK_TAIL);
+    expect(failed['outputRef']).toBeDefined();
+    const failure = taskOrThrow('check-commit').failureInstruction ?? '';
+    expect(failure).toContain('Nothing was scanned, reviewed or pushed');
+    expect(failure).toContain('`checksTimeoutMs`');
+  });
+
+  it("says in its description that the folder's checks run first, and that the pull request's remain the proof", () => {
+    expect(PUBLISH_LOCAL_CHANGES.description).toContain(
+      'run in a checkout of the commit before the scan, and a failure stops the run with nothing scanned, reviewed or pushed',
+    );
+    expect(PUBLISH_LOCAL_CHANGES.description).toContain('A folder that declares none runs none, and the run says so.');
+    expect(PUBLISH_LOCAL_CHANGES.description).toContain("The pull request's own checks remain the proof.");
   });
 });

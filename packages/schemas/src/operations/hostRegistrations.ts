@@ -6,6 +6,8 @@ import type { OperationRegistration } from '../catalog/operationCatalog.js';
 import {
   HostBindingInspectInputSchema,
   HostBindingInspectOutputSchema,
+  HostCommitCheckInputSchema,
+  HostCommitCheckOutputSchema,
   HostCommitScanInputSchema,
   HostCommitScanOutputSchema,
   HostFileGetInputSchema,
@@ -457,8 +459,8 @@ export const HostOperationRegistrations: OperationRegistration[] = [
     groupDescription: 'What the operator declared about a folder on their own machine.',
     semanticDescription:
       'Read, from the policy file on the machine that holds a connected folder, which branches ' +
-      'it may push and when a publication from it asks before pushing. Touches nothing in the ' +
-      'folder itself.',
+      'it may push, when a publication from it asks before pushing, and the checks a ' +
+      'publication runs first and for how long. Touches nothing in the folder itself.',
     tags: ['host', 'binding', 'local'],
     idempotency: 'idempotent',
     accessMode: 'read',
@@ -523,5 +525,52 @@ export const HostOperationRegistrations: OperationRegistration[] = [
     },
     inputZod: HostCommitScanInputSchema,
     outputZod: HostCommitScanOutputSchema,
+  },
+  {
+    stepType: 'host',
+    group: 'commit',
+    verb: 'check',
+    name: "Run the Folder's Checks on a Commit",
+    actionLabel: "Running the folder's checks on the commit…",
+    groupDisplayName: 'Commits on this computer',
+    groupDescription: 'Read the commits of a repository the operator connected, on their machine.',
+    semanticDescription:
+      'Run the checks the operator declared for a connected repository — one command, set on ' +
+      'their machine — in a detached checkout of one commit, with the folder’s installed ' +
+      'dependencies linked so nothing is installed, under the sandbox a coding agent runs in, ' +
+      'and report whether they passed, with the end of what they printed. The commit and the ' +
+      'base it is measured against reach the command as `AFLOW_CHECK_SHA` and ' +
+      '`AFLOW_CHECK_BASE`. The checkout is removed afterwards; the folder, its working tree ' +
+      'and its refs are left as they were.',
+    tags: ['host', 'git', 'checks', 'local'],
+    idempotency: 'idempotent',
+    // It runs the repository's own code, which is execution whatever the
+    // command is.
+    accessMode: 'write',
+    // A publication runs it on the commit it made and reads the result as
+    // data; the command is the operator's, so an agent has nothing to choose.
+    agentTool: false,
+    usage: {
+      oneLine: "Run a connected folder's declared checks on one commit, before it is pushed.",
+      minimalExampleInput: {
+        bindingId: 'hb_project',
+        sha: 'c'.repeat(40),
+        base: 'a'.repeat(40),
+      },
+      whenToUse: ['A skill about to push a commit, running the checks the folder declares first'],
+      whenNotToUse: [
+        'Running a command of your choosing — that is host.process.exec; this runs only what the folder declares',
+        'Reading a change for what a check cannot see — that is the Local Code Review skill',
+      ],
+      pitfalls: [
+        'The command is declared on the machine with `aflow harness checks <folder> -- <argv>`, and nothing in this call can name one. A folder that declares none answers `passed` with `skipped`, and nothing ran.',
+        'The checks get the folder’s `checksTimeoutMs`, `HOST_CHECKS_TIMEOUT_DEFAULT_MS` where the operator chose none; a check still running then is stopped and fails, naming that time.',
+        'The checkout has the folder’s installed dependencies but none of its build output: a check that needs a package built builds it.',
+        'Egress is closed, as it is for a command: a check that reaches the network fails there.',
+        'Passing is evidence from this machine about one commit. The pull request’s own checks remain the proof.',
+      ],
+    },
+    inputZod: HostCommitCheckInputSchema,
+    outputZod: HostCommitCheckOutputSchema,
   },
 ];

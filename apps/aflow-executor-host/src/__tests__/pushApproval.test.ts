@@ -16,6 +16,7 @@ import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import {
+  HOST_CHECKS_TIMEOUT_DEFAULT_MS,
   HOST_PUSH_APPROVAL_DEFAULT,
   HostBindingInspectOutputSchema,
   resolveBranchPolicy,
@@ -29,7 +30,7 @@ import {
   chosenPushApproval,
   describePushApproval,
   pushApprovalOf,
-  pushPostures,
+  publishingFolders,
   withPushApproval,
 } from '../pushApproval.js';
 
@@ -73,7 +74,7 @@ describe('the posture a folder holds', () => {
     await writeFile(policyPath, JSON.stringify({ version: 1, bindings: [PUSHING] }));
     const policy = await loadHostPolicy(policyPath);
     expect(policy.bindings.get('hb_app')?.branchPolicy).toEqual({ branchPrefix: 'aflow/' });
-    expect(pushPostures(policy.bindings)).toEqual([
+    expect(publishingFolders(policy.bindings)).toEqual([
       { id: 'hb_app', spaceId: 'space-a', pushApproval: HOST_PUSH_APPROVAL_DEFAULT },
     ]);
   });
@@ -108,7 +109,11 @@ describe('the posture a folder holds', () => {
   it('keeps a posture the policy file names', () => {
     const binding = HostBindingSchema.parse({
       ...PUSHING,
-      branchPolicy: { branchPrefix: 'aflow/', pushApproval: 'never' },
+      branchPolicy: {
+        branchPrefix: 'aflow/',
+        pushApproval: 'never',
+        checksTimeoutMs: HOST_CHECKS_TIMEOUT_DEFAULT_MS,
+      },
     });
     expect(binding.branchPolicy?.pushApproval).toBe('never');
   });
@@ -229,7 +234,7 @@ describe('what the machine publishes', () => {
       }),
     );
     const policy = await loadHostPolicy(policyPath);
-    expect(pushPostures(policy.bindings)).toEqual([
+    expect(publishingFolders(policy.bindings)).toEqual([
       { id: 'hb_app', spaceId: 'space-a', pushApproval: 'unless-unreviewed' },
     ]);
   });
@@ -284,7 +289,7 @@ describe('host.binding.inspect', () => {
     } as never;
   }
 
-  it('returns the folder and its branch policy with the posture, and nothing else', async () => {
+  it('returns the folder and its branch policy with the posture and the time its checks get, and nothing else', async () => {
     const captured: Captured = {};
     const result = await createHostHandler(policyPath, noPushApprovals).execute(
       contextFor({ bindingId: 'hb_app' }, captured),
@@ -292,7 +297,11 @@ describe('host.binding.inspect', () => {
     expect(result.status).toBe('SUCCEEDED');
     expect(captured.output).toEqual({
       id: 'hb_app',
-      branchPolicy: { branchPrefix: 'aflow/', pushApproval: 'never' },
+      branchPolicy: {
+        branchPrefix: 'aflow/',
+        pushApproval: 'never',
+        checksTimeoutMs: HOST_CHECKS_TIMEOUT_DEFAULT_MS,
+      },
     });
   });
 
@@ -304,7 +313,11 @@ describe('host.binding.inspect', () => {
     expect(result.status).toBe('SUCCEEDED');
     expect(captured.output).toEqual({
       id: 'hb_unchosen',
-      branchPolicy: { branchPrefix: 'aflow/', pushApproval: HOST_PUSH_APPROVAL_DEFAULT },
+      branchPolicy: {
+        branchPrefix: 'aflow/',
+        pushApproval: HOST_PUSH_APPROVAL_DEFAULT,
+        checksTimeoutMs: HOST_CHECKS_TIMEOUT_DEFAULT_MS,
+      },
     });
   });
 

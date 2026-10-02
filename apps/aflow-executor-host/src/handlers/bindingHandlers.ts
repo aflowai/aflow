@@ -1,8 +1,9 @@
 /**
- * A connected folder's push posture, read from the policy file on this machine.
+ * A connected folder's push posture and checks, read from the policy file on
+ * this machine.
  *
- * Read here rather than from the workspace's copy because the posture is only
- * ever declared here. Nothing in the folder is touched, so a file-only binding
+ * Read here rather than from the workspace's copy because both are only ever
+ * declared here. Nothing in the folder is touched, so a file-only binding
  * answers it as readily as one that runs commands.
  */
 import type { ExecutorContext, StepResult } from '@aflow/executor-runtime';

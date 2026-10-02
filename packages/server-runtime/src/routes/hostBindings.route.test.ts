@@ -80,7 +80,7 @@ vi.mock('@aflow/redis', async (importOriginal) => {
           folders: published.folders,
         },
       ]),
-    pushApprovalsForSpace: actual.pushApprovalsForSpace,
+    publishingFoldersForSpace: actual.publishingFoldersForSpace,
   };
 });
 

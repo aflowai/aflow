@@ -78,12 +78,50 @@ export const HostPushApprovalSchema = z
 export type HostPushApproval = z.infer<typeof HostPushApprovalSchema>;
 
 /**
+ * Tokens in a folder's checks. One program and its arguments; a longer list is
+ * a script, and the repository is the place to keep one.
+ */
+export const HOST_CHECKS_MAX_ARGS = 64;
+export const HOST_CHECK_ARG_MAX_LENGTH = 4096;
+
+/**
+ * How long a folder's checks run when the operator chose no time. A type-check,
+ * the builds a test needs and a scoped test run take minutes on a laptop; the
+ * limit is there to end a check that hangs, not to hurry one that is slow.
+ */
+export const HOST_CHECKS_TIMEOUT_DEFAULT_MS = 30 * 60_000;
+/** The longest a host step runs at all — a coding agent's ceiling — so a check is never the outlier. */
+export const HOST_CHECKS_TIMEOUT_MAX_MS = 2 * 60 * 60_000;
+export const HOST_CHECKS_TIMEOUT_MIN_MS = 60_000;
+
+export const HostChecksSchema = z
+  .array(z.string().min(1).max(HOST_CHECK_ARG_MAX_LENGTH))
+  .min(1)
+  .max(HOST_CHECKS_MAX_ARGS)
+  .describe(
+    "The command a publication from this folder runs before anything leaves the machine: one " +
+      "argv — a program and its arguments, never a shell line — run from the repository's root " +
+      'in a detached checkout of the commit, under the sandbox a coding agent runs in. Declared ' +
+      'by the operator on the machine; no workspace can set it, and no operation takes one.',
+  );
+
+export const HostChecksTimeoutMsSchema = z
+  .number()
+  .int()
+  .min(HOST_CHECKS_TIMEOUT_MIN_MS)
+  .max(HOST_CHECKS_TIMEOUT_MAX_MS)
+  .describe(
+    "How long the folder's checks may run before they are stopped and the check fails. " +
+      'Absent, `HOST_CHECKS_TIMEOUT_DEFAULT_MS` each time it is read.',
+  );
+
+/**
  * What a push from a connected folder may do, as the machine holding the folder
  * declares it.
  *
- * The approval posture lives beside the prefix rather than in the skill that
- * publishes, because it is the operator's statement about this folder and
- * holds for every publication from it.
+ * The approval posture and the checks live beside the prefix rather than in
+ * the skill that publishes, because they are the operator's statement about
+ * this folder and hold for every publication from it.
  */
 export const HostBindingBranchPolicySchema = z.object({
   branchPrefix: HostBranchPrefixSchema,
@@ -92,17 +130,30 @@ export const HostBindingBranchPolicySchema = z.object({
       '`HOST_PUSH_APPROVAL_DEFAULT` each time it is read, so a change of default reaches every ' +
       'folder that never chose; nothing writes the default in.',
   ),
+  checks: HostChecksSchema.optional().describe(
+    'The checks the operator declared for this folder. Absent, a publication runs none and ' +
+      'says so.',
+  ),
+  checksTimeoutMs: HostChecksTimeoutMsSchema.optional(),
 });
 export type HostBindingBranchPolicy = z.infer<typeof HostBindingBranchPolicySchema>;
 
-/** The branch policy as a publication reads it: the posture chosen, else the default now. */
+/**
+ * The branch policy as a publication reads it: the posture chosen, else the
+ * default now, and the time its checks get, chosen or the default now.
+ */
 export const HostResolvedBranchPolicySchema = HostBindingBranchPolicySchema.extend({
   pushApproval: HostPushApprovalSchema,
+  checksTimeoutMs: HostChecksTimeoutMsSchema,
 });
 export type HostResolvedBranchPolicy = z.infer<typeof HostResolvedBranchPolicySchema>;
 
 export function resolveBranchPolicy(policy: HostBindingBranchPolicy): HostResolvedBranchPolicy {
-  return { ...policy, pushApproval: policy.pushApproval ?? HOST_PUSH_APPROVAL_DEFAULT };
+  return {
+    ...policy,
+    pushApproval: policy.pushApproval ?? HOST_PUSH_APPROVAL_DEFAULT,
+    checksTimeoutMs: policy.checksTimeoutMs ?? HOST_CHECKS_TIMEOUT_DEFAULT_MS,
+  };
 }
 
 export const HostBranchNameSchema = branchToken(HOST_BRANCH_NAME_MAX_LENGTH, 'branch name');
@@ -558,7 +609,7 @@ export const HostFilePatchOutputSchema = z.object({
   commit: z
     .object({
       branch: z.string().describe('The branch that now exists in the repository.'),
-      sha: z.string().min(1).describe('The commit the branch points at, as its full sha.'),
+      sha: HostCommitShaSchema.describe('The commit the branch points at, as its full sha.'),
       message: z.string().describe('The message the commit carries, as git recorded it.'),
       body: z
         .string()
@@ -595,6 +646,11 @@ export const HostFilePatchOutputSchema = z.object({
           'commit and every unpushed one under it. Present only when `commit.pushBase` was ' +
           'given. What a publication scans and reviews before the push.',
       ),
+      pushBaseSha: HostCommitShaSchema.optional().describe(
+          "Where `origin/<pushBase>` stood when it was fetched, as a full sha — the first sha " +
+            "of `pushRange`, and present exactly when it is. What a publication's checks are " +
+            "measured against.",
+        ),
       pushRefspec: z
         .string()
         .min(1)
@@ -975,8 +1031,9 @@ export const HostBindingInspectInputSchema = z.object({
 export const HostBindingInspectOutputSchema = z.object({
   id: z.string(),
   branchPolicy: HostResolvedBranchPolicySchema.optional().describe(
-    'Which branches a push from this folder may move, and when a publication asks the ' +
-      'operator before pushing. Absent, the folder pushes nothing.',
+    'Which branches a push from this folder may move, when a publication asks the operator ' +
+      'before pushing, and the checks it runs first and for how long. Absent, the folder ' +
+      'pushes nothing.',
   ),
 });
 
@@ -1099,4 +1156,89 @@ export const HostCommitScanOutputSchema = z.object({
       'it or the operator has to approve the push first. Valid on this executor only, and ' +
       'only for a day.',
   ),
+});
+
+/**
+ * How much of a check's output is returned inline. A failure message carries
+ * it, so it is sized for the end of a type-check's errors or a test run's
+ * report — where a failing check says why — and not for the whole run.
+ */
+export const HOST_CHECK_TAIL_BYTES = 4 * 1024;
+
+/**
+ * How much of a check's output is stored. A type-check's errors and a scoped
+ * test run's report fit with room to spare; past this a check is printing in a
+ * loop, and its first megabyte says nothing its last does not.
+ */
+export const HOST_CHECK_OUTPUT_KEEP_BYTES = 1024 * 1024;
+
+export const HostCommitCheckInputSchema = z.object({
+  bindingId: HostBindingRef,
+  sha: HostCommitShaSchema.describe(
+    'The commit to check — a publication passes the commit it made. The checks run in a ' +
+      'detached checkout of it and see it as `AFLOW_CHECK_SHA`, a full sha.',
+  ),
+  base: HostCommitShaSchema.describe(
+    'What the commit is measured against — a publication passes the first sha of its ' +
+      '`pushRange`, where `origin`’s base branch stood. The checks see it as ' +
+      '`AFLOW_CHECK_BASE`, a full sha, so a repository’s own script can read what changed.',
+  ),
+});
+
+export const HostCommitCheckOutputSchema = z.object({
+  passed: z
+    .boolean()
+    .describe(
+      'True when the checks exited 0 within their time, or the folder declares none. A ' +
+        'check that exited otherwise, was stopped at its time or ended by a signal did not pass.',
+    ),
+  skipped: z
+    .boolean()
+    .optional()
+    .describe(
+      'True where the folder declares no checks: nothing ran, so `passed` says only that ' +
+        'nothing failed. Absent where the checks ran.',
+    ),
+  checks: z
+    .array(z.string())
+    .optional()
+    .describe('The argv that ran, as the folder declares it. Absent where it declares none.'),
+  timedOut: z
+    .boolean()
+    .optional()
+    .describe(
+      'True when the checks were stopped at the folder’s `checksTimeoutMs`. Present only then.',
+    ),
+  exitCode: z
+    .number()
+    .int()
+    .nullable()
+    .describe('How the checks exited; null where none ran, or a signal or the time ended them.'),
+  durationMs: z.number().int().nonnegative(),
+  outputRef: z
+    .string()
+    .optional()
+    .describe(
+      'Standard output and error together, in the order they came, stored as a payload — the ' +
+        'last `HOST_CHECK_OUTPUT_KEEP_BYTES` of them where there was more. Absent where nothing ran.',
+    ),
+  tail: z
+    .string()
+    .describe(
+      'The last `HOST_CHECK_TAIL_BYTES` of that output, inline — where a failing check says ' +
+        'why. Empty where nothing ran.',
+    ),
+  summary: z
+    .string()
+    .describe(
+      'One paragraph for a person: whether the checks passed, failed, ran out of time or were ' +
+        'not declared, and, where they did not pass, the tail of what they printed.',
+    ),
+  clearedSha: z
+    .string()
+    .optional()
+    .describe(
+      'The commit as a full sha, present only where the checks passed or the folder declares ' +
+        'none. A step that must stop on a failing check reads this, so a failure fails it.',
+    ),
 });
