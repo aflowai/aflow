@@ -60,6 +60,7 @@ const FAILURE: Record<BrowserFailureKind, { code: string; classification: ErrorC
   no_browser: { code: 'BROWSER_NOT_FOUND', classification: 'configuration' },
   launch_failed: { code: 'BROWSER_LAUNCH_FAILED', classification: 'internal' },
   navigation_failed: { code: 'BROWSER_NAVIGATION_FAILED', classification: 'provider' },
+  open_uncertain: { code: 'BROWSER_OPEN_UNCERTAIN', classification: 'conflict' },
   observation_failed: { code: 'BROWSER_OBSERVATION_FAILED', classification: 'provider' },
 };
 
@@ -128,15 +129,25 @@ function route<S extends z.ZodTypeAny>(
 }
 
 const open = route(BrowserPageOpenInputSchema, async (ctx, driver, { url, profileId }) => {
-  const view = await driver.open({ ...scopeOf(ctx), profileId, url });
+  const opened = await driver.open({
+    ...scopeOf(ctx),
+    profileId,
+    url,
+    redelivered: redelivered(ctx),
+  });
   const output: Output<typeof BrowserPageOpenOutputSchema> = {
-    ...viewFields(view),
-    receipt: {
-      profileId,
-      requestedUrl: url,
-      redirected: view.url !== new URL(url).href,
-      ...outlineReceipt(view),
-    },
+    outcome: opened.outcome,
+    ...viewFields(opened),
+    ...(opened.outcome === 'performed'
+      ? {
+          receipt: {
+            profileId,
+            requestedUrl: url,
+            redirected: opened.url !== new URL(url).href,
+            ...outlineReceipt(opened),
+          },
+        }
+      : {}),
   };
   return output;
 });

@@ -16,6 +16,8 @@ export interface RunScope extends PageOwner {
 export interface OpenRequest extends RunScope {
   readonly profileId: string;
   readonly url: string;
+  /** An earlier delivery of this same step may already have opened it. */
+  readonly redelivered: boolean;
 }
 
 export interface PageView {
@@ -23,6 +25,10 @@ export interface PageView {
   readonly url: string;
   readonly title: string;
   readonly outline: Outline;
+}
+
+export interface OpenedPage extends PageView {
+  readonly outcome: 'performed' | 'uncertain_outcome';
 }
 
 export interface ChangeReceipt {

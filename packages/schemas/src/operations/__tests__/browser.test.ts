@@ -110,6 +110,7 @@ describe('the browser operations', () => {
       'search.web.fetch',
     );
     expect(taught(BROWSER_PAGE_OPEN_OPERATION_ID)).toContain('page_gone');
+    expect(taught(BROWSER_PAGE_OPEN_OPERATION_ID)).toContain('uncertain_outcome');
     expect(taught(BROWSER_PAGE_ACT_OPERATION_ID)).toContain('uncertain_outcome');
     expect(taught(BROWSER_PAGE_ACT_OPERATION_ID)).toContain('outlineChanged: false');
     expect(taught(BROWSER_PAGE_ACT_OPERATION_ID)).toMatch(/no longer resolves/);
@@ -143,6 +144,7 @@ describe('browser.page.open', () => {
 
   it('carries a census only when the outline was cut', () => {
     const base = {
+      outcome: 'performed',
       pageId: 'pg_1',
       url: 'https://example.com/',
       title: 'Example',

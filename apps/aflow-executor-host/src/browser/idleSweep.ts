@@ -35,7 +35,7 @@ export function createBrowserIdleSweep(
     async (ctx) => {
       const candidates = driver.runningProfileCount();
       if (candidates === 0 || ctx.mode === 'observe') return { candidates };
-      const swept = await driver.sweepIdle();
+      const swept = await driver.sweepIdle(ctx.maxBatch);
       return { candidates, processed: swept.closedPages + swept.stoppedProfiles };
     },
   );

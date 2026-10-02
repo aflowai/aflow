@@ -23,6 +23,8 @@ export interface HeldPage {
   readonly profileId: string;
   readonly page: EnginePage;
   readonly observations: PageObservations;
+  /** The address the open asked for, as a URL spells it. */
+  readonly requestedUrl: string;
   lastUrl: string;
   lastTitle: string;
   lastUsedAt: number;
@@ -49,6 +51,7 @@ export class PageTable {
   add(
     owner: PageOwner,
     profileId: string,
+    requestedUrl: string,
     page: EnginePage,
     observations: PageObservations,
     url: string,
@@ -61,6 +64,7 @@ export class PageTable {
       pageId: mintPageId(),
       ownerKey: key,
       profileId,
+      requestedUrl,
       page,
       observations,
       lastUrl: url,

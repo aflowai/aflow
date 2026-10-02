@@ -13,6 +13,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
   createLocalAddressClassifier,
+  INTERFACE_ADDRESSES_TTL_MS,
   isLocalName,
   machineInterfaceAddresses,
 } from '../browser/addresses.js';
@@ -21,9 +22,14 @@ import { type EgressProxy, parseAuthority, startEgressProxy } from '../browser/e
 /** Documentation-range address, standing in for one of this machine's own. */
 const PLANTED_INTERFACE = '192.0.2.10';
 const PUBLIC = '93.184.216.34';
+const OTHER_PUBLIC = '198.51.100.7';
+/** Documentation-range address, standing in for one the machine gains while running. */
+const GAINED_INTERFACE = '192.0.2.77';
 
 describe('which addresses are this machine’s', () => {
-  const classifier = createLocalAddressClassifier([PLANTED_INTERFACE, 'fe80::1%en0']);
+  const classifier = createLocalAddressClassifier({
+    readInterfaces: () => [PLANTED_INTERFACE, 'fe80::1%en0'],
+  });
 
   it('knows loopback, unspecified and link-local in every spelling, and its own interfaces', () => {
     for (const [address, kind] of [
@@ -53,6 +59,39 @@ describe('which addresses are this machine’s', () => {
     for (const address of machineInterfaceAddresses()) {
       expect(real.classify(address), address).toBeDefined();
     }
+  });
+
+  it('refuses an interface address the machine gains, once the last reading has aged out', () => {
+    const interfaces: string[] = [];
+    const clock = { now: 0 };
+    let reads = 0;
+    const live = createLocalAddressClassifier({
+      readInterfaces: () => {
+        reads += 1;
+        return interfaces;
+      },
+      now: () => clock.now,
+    });
+    expect(live.classify(GAINED_INTERFACE)).toBeUndefined();
+    interfaces.push(GAINED_INTERFACE);
+    clock.now += INTERFACE_ADDRESSES_TTL_MS - 1;
+    expect(live.classify(GAINED_INTERFACE)).toBeUndefined();
+    expect(reads).toBe(1);
+    clock.now += 1;
+    expect(live.classify(GAINED_INTERFACE)).toBe('this machine');
+    expect(reads).toBe(2);
+  });
+
+  it('reads no interface for an address a fixed range already answers', () => {
+    let reads = 0;
+    const live = createLocalAddressClassifier({
+      readInterfaces: () => {
+        reads += 1;
+        return [];
+      },
+    });
+    expect(live.classify('127.0.0.1')).toBe('loopback');
+    expect(reads).toBe(0);
   });
 
   it('takes localhost names before any lookup', () => {
@@ -116,10 +155,13 @@ describe('the egress proxy', () => {
   let proxy: EgressProxy | undefined;
   const lookups: string[] = [];
   const connects: Array<[string, number]> = [];
+  const gained: string[] = [];
+  const clock = { now: 0 };
   const RESOLVES: Readonly<Record<string, string[]>> = {
     'rebound.example.net': ['127.0.0.1'],
     'split.example.net': [PUBLIC, '127.0.0.1'],
     'public.example.net': [PUBLIC],
+    'other.example.net': [OTHER_PUBLIC],
     'denied.example.org': [PUBLIC],
   };
 
@@ -136,7 +178,10 @@ describe('the egress proxy', () => {
       });
     });
     proxy = await startEgressProxy({
-      classifier: createLocalAddressClassifier([PLANTED_INTERFACE, ...machineInterfaceAddresses()]),
+      classifier: createLocalAddressClassifier({
+        readInterfaces: () => [PLANTED_INTERFACE, ...machineInterfaceAddresses(), ...gained],
+        now: () => clock.now,
+      }),
       refuseHost: (host) =>
         host === 'denied.example.org' ? 'denied by rule `*.example.org`' : undefined,
       lookup: (host) => {
@@ -260,6 +305,41 @@ describe('the egress proxy', () => {
       [PUBLIC, targetPort],
     ]);
     expect(lookups.filter((host) => host === 'public.example.net').length).toBe(looked + 2);
+  });
+
+  it('connects each plain-http request to the address its own name resolved to', async () => {
+    connects.length = 0;
+    const port = String(targetPort);
+    const first = await exchange(
+      listening().port,
+      get(`http://public.example.net:${port}/one`, `public.example.net:${port}`),
+    );
+    const second = await exchange(
+      listening().port,
+      get(`http://other.example.net:${port}/two`, `other.example.net:${port}`),
+    );
+    expect(first).toMatch(/^HTTP\/1\.1 200/);
+    expect(first).toContain(`reached public.example.net:${port}/one`);
+    expect(second).toMatch(/^HTTP\/1\.1 200/);
+    expect(second).toContain(`reached other.example.net:${port}/two`);
+    expect(connects).toEqual([
+      [PUBLIC, targetPort],
+      [OTHER_PUBLIC, targetPort],
+    ]);
+  });
+
+  it('refuses an address the machine gained after the proxy started, once the TTL has passed', async () => {
+    const port = String(targetPort);
+    const request = get(`http://${GAINED_INTERFACE}:${port}/`, `${GAINED_INTERFACE}:${port}`);
+    expect(await exchange(listening().port, request)).toMatch(/^HTTP\/1\.1 200/);
+
+    gained.push(GAINED_INTERFACE);
+    clock.now += INTERFACE_ADDRESSES_TTL_MS;
+    connects.length = 0;
+    const refused = await exchange(listening().port, request);
+    expect(refused).toMatch(/^HTTP\/1\.1 403/);
+    expect(refused).toContain('an address of this machine');
+    expect(connects).toEqual([]);
   });
 
   it('answers a name that does not resolve with 502, not as a refusal', async () => {

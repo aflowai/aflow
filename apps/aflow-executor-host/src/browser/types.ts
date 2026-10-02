@@ -69,6 +69,13 @@ export interface EnginePage {
   navigate(to: EngineNavigation): Promise<boolean>;
   /** Throws `EngineRefNotFound` or `EngineCredentialField` before doing anything. */
   act(ref: string, action: EngineAction): Promise<void>;
+  /**
+   * The address of the frame the referenced element belongs to — the page's
+   * own for an element in the top document. A frame with no address of its
+   * own (`about:blank`, `srcdoc`) answers with the nearest frame above it
+   * that has one. Throws `EngineRefNotFound` when nothing answers to it.
+   */
+  frameUrl(ref: string): Promise<string>;
   url(): string;
   title(): Promise<string>;
   snapshot(): Promise<PageSnapshot>;

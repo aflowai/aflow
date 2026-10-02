@@ -1,8 +1,9 @@
 /**
  * What a profile's posture and origin rules let a run do on a page (D7).
  *
- * Decided on the origin of the page — read from the page at the moment of the
- * action for an action, and the destination for a navigation — never on
+ * Decided on the origin of the page — read from the page, and from the frame
+ * the element is in, at the moment of the action for an action, and the
+ * destination for a navigation — never on
  * anything the request says about where it is. Of the rules that match, the
  * most restrictive holds, so a broad `deny` cannot be narrowed by a narrower
  * `allow` written beside it.
@@ -74,19 +75,35 @@ export function assertNavigationAllowed(profile: BrowserProfile, destination: UR
   }
 }
 
-/** An interaction, gated on where the page is now. An `allow` rule lifts the posture for its origin. */
-export function assertActionAllowed(profile: BrowserProfile, pageUrl: URL): void {
-  const rule = ruleForUrl(profile, pageUrl);
+/**
+ * An interaction, gated on where the page is now and on the frame the element
+ * belongs to, when that frame is from another origin. An `allow` rule lifts
+ * the posture for its own origin only, so a rule for a page does not reach an
+ * embedded site.
+ */
+export function assertActionAllowed(profile: BrowserProfile, pageUrl: URL, frameUrl?: URL): void {
+  assertActionAllowedAt(profile, pageUrl, `The page is at ${pageUrl.origin}.`);
+  if (frameUrl === undefined || frameUrl.origin === pageUrl.origin) return;
+  assertActionAllowedAt(
+    profile,
+    frameUrl,
+    `The element is inside a frame from ${frameUrl.origin}, on a page at ${pageUrl.origin}; ` +
+      'what the rules allow on the page does not reach a frame from another origin.',
+  );
+}
+
+function assertActionAllowedAt(profile: BrowserProfile, url: URL, where: string): void {
+  const rule = ruleForUrl(profile, url);
   if (rule !== undefined) {
     if (rule.effect === 'allow') return;
-    throw refusedByRule(profile, rule, pageUrl.origin, 'acting on pages at');
+    throw refusedByRule(profile, rule, url.origin, 'acting on pages at');
   }
   if (profile.posture === 'read-only') {
     throw new BrowserDriverError(
       'posture_refused',
       `Browser profile \`${profile.id}\` is read-only: it opens, moves and reads pages but does ` +
-        `not act on them. The page is at ${pageUrl.origin}. The posture is set on the machine.`,
-      { origin: pageUrl.origin, posture: profile.posture },
+        `not act on them. ${where} The posture is set on the machine.`,
+      { origin: url.origin, posture: profile.posture },
     );
   }
   if (profile.posture === 'ask-to-act') {
@@ -94,7 +111,7 @@ export function assertActionAllowed(profile: BrowserProfile, pageUrl: URL): void
       'ask_unavailable',
       `Browser profile \`${profile.id}\` asks the operator before every action on a page. ` +
         ASKING_NOT_AVAILABLE,
-      { origin: pageUrl.origin, posture: profile.posture },
+      { origin: url.origin, posture: profile.posture },
     );
   }
 }

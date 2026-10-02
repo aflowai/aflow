@@ -51,6 +51,8 @@ export interface FakeSite {
   readonly text?: string;
   /** Its snapshot fails, as a page torn down mid-read does. */
   readonly unreadable?: boolean;
+  /** The frame each reference belongs to, by address; any other is in the page itself. */
+  readonly frames?: Readonly<Record<string, string>>;
 }
 
 export interface FakeWorld {
@@ -61,6 +63,10 @@ export interface FakeWorld {
   readonly localHosts: Set<string>;
   /** What an action does to the page, beyond being recorded. */
   onAct?: (page: FakePage, ref: string, action: EngineAction) => void;
+  /** Every navigation waits on this while it is set, as a page still loading does. */
+  navigationHeld?: Promise<void>;
+  /** Opening a page fails with this, as it does on a browser on its way out. */
+  newPageFails?: string;
 }
 
 export class FakePage implements EnginePage {
@@ -101,21 +107,18 @@ export class FakePage implements EnginePage {
     });
   }
 
-  navigate(to: EngineNavigation): Promise<boolean> {
+  async navigate(to: EngineNavigation): Promise<boolean> {
     this.navigations.push(to);
-    try {
-      if (to.kind === 'url') this.load(to.url);
-      if (to.kind === 'back' || to.kind === 'forward') {
-        const next = this.index + (to.kind === 'back' ? -1 : 1);
-        const target = this.history[next];
-        if (target === undefined) return Promise.resolve(false);
-        this.index = next;
-        this.current = target;
-      }
-    } catch (error) {
-      return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+    if (this.world.navigationHeld !== undefined) await this.world.navigationHeld;
+    if (to.kind === 'url') this.load(to.url);
+    if (to.kind === 'back' || to.kind === 'forward') {
+      const next = this.index + (to.kind === 'back' ? -1 : 1);
+      const target = this.history[next];
+      if (target === undefined) return false;
+      this.index = next;
+      this.current = target;
     }
-    return Promise.resolve(true);
+    return true;
   }
 
   act(ref: string, action: EngineAction): Promise<void> {
@@ -132,6 +135,13 @@ export class FakePage implements EnginePage {
       return Promise.reject(error instanceof Error ? error : new Error(String(error)));
     }
     return Promise.resolve();
+  }
+
+  frameUrl(ref: string): Promise<string> {
+    if (!this.snapshotText().includes(`[ref=${ref}]`)) {
+      return Promise.reject(new EngineRefNotFound(ref));
+    }
+    return Promise.resolve(this.site().frames?.[ref] ?? this.current);
   }
 
   private snapshotText(): string {
@@ -228,6 +238,10 @@ export interface Harness {
   setProfiles(profiles: BrowserProfile[]): void;
   /** End the browser of the most recent launch, as withdrawal or a crash would. */
   endBrowser(): Promise<void>;
+  /** End the browser of one launch, counted from the first. */
+  endLaunch(index: number): Promise<void>;
+  /** This machine's interface addresses, as the classifier reads them; push to add one. */
+  readonly interfaces: string[];
   cookieSites: string[];
 }
 
@@ -236,6 +250,8 @@ export function harness(
     browsers?: BrowserProfile[];
     chrome?: ChromeDiscovery;
     world?: Partial<FakeWorld>;
+    /** A browser told to stop goes on running until the test ends it, as a slow exit does. */
+    slowExit?: boolean;
   } = {},
 ): Harness {
   const world: FakeWorld = {
@@ -250,20 +266,25 @@ export function harness(
   const pages: FakePage[] = [];
   const proxies: FakeProxy[] = [];
   const stops: number[] = [];
-  let end: () => void = () => undefined;
+  const interfaces: string[] = [];
+  const ends: Array<() => void> = [];
+  const settle = async (): Promise<void> => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  };
   const launcher: ChromeLauncher = {
     launch: (input) => {
       launches.push(input);
+      let end: () => void = () => undefined;
       const exited = new Promise<void>((resolve) => {
         end = resolve;
       });
-      const stopThis = end;
+      ends.push(end);
       return Promise.resolve({
         endpoint: 'ws://127.0.0.1:9/devtools/browser/x',
         exited,
         stop: () => {
           stops.push(clock.now);
-          stopThis();
+          if (options.slowExit !== true) end();
         },
       });
     },
@@ -281,14 +302,22 @@ export function harness(
       policy = { ...policy, browsers: new Map(profiles.map((profile) => [profile.id, profile])) };
     },
     endBrowser: async () => {
-      end();
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      ends.at(-1)?.();
+      await settle();
     },
+    endLaunch: async (index) => {
+      ends[index]?.();
+      await settle();
+    },
+    interfaces,
   };
   const engine: BrowserEngine = {
     connect: () =>
       Promise.resolve({
         newPage: (events: PageEvents) => {
+          if (world.newPageFails !== undefined) {
+            return Promise.reject(new Error(world.newPageFails));
+          }
           const page = new FakePage(world, () => proxies[proxies.length - 1] as FakeProxy, events);
           pages.push(page);
           return Promise.resolve(page);
@@ -312,9 +341,9 @@ export function harness(
       proxies.push(proxy);
       return Promise.resolve(proxy);
     },
-    // The real ranges, without this machine's own interfaces, so the
-    // answer does not depend on where the test runs.
-    classifier: createLocalAddressClassifier([]),
+    // The real ranges, with the interfaces the test sets rather than this
+    // machine's, so the answer does not depend on where the test runs.
+    classifier: createLocalAddressClassifier({ readInterfaces: () => interfaces, now }),
     now,
   });
   return Object.assign(state, { driver });

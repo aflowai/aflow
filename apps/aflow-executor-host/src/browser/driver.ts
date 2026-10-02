@@ -9,8 +9,7 @@
  */
 import { type BrowserProfile, normalizeBrowserHost } from '@aflow/schemas';
 
-import type { LocalAddressClassifier } from './addresses.js';
-import { createLocalAddressClassifier } from './addresses.js';
+import { type LocalAddressClassifier, machineAddresses } from './addresses.js';
 import { chromeMissingMessage, type ChromeDiscovery } from './chromeDiscovery.js';
 import type { ChromeLauncher, LaunchedChrome } from './chromeProcess.js';
 import {
@@ -31,6 +30,7 @@ import type {
   ListedProfile,
   NavigateRequest,
   NavigationResult,
+  OpenedPage,
   OpenRequest,
   PageView,
   ReadResult,
@@ -45,6 +45,7 @@ import {
   type BrowserEngine,
   type EngineBrowser,
   EngineCredentialField,
+  type EnginePage,
   EngineRefNotFound,
   type PageEvents,
 } from './types.js';
@@ -65,6 +66,7 @@ export interface BrowserDriverDeps {
   /** Read on every open, move and action, so a profile the operator changed applies at once. */
   readonly loadPolicy: () => Promise<BrowserPolicy>;
   readonly startProxy?: StartEgressProxy;
+  /** Tests fix it; otherwise this machine's addresses, read as each decision is made. */
   readonly classifier?: LocalAddressClassifier;
   readonly now?: () => number;
 }
@@ -123,11 +125,11 @@ export class BrowserDriver {
   private readonly starting = new Map<string, Promise<RunningProfile>>();
   private readonly running = new Map<string, RunningProfile>();
   private readonly everStarted = new Set<string>();
-  private readonly classifier: LocalAddressClassifier;
+  /** Operations holding a profile's browser; the idle sweep leaves those profiles alone. */
+  private readonly inFlight = new Map<string, number>();
   private readonly now: () => number;
 
   constructor(private readonly deps: BrowserDriverDeps) {
-    this.classifier = deps.classifier ?? createLocalAddressClassifier();
     this.now = deps.now ?? Date.now;
   }
 
@@ -135,12 +137,13 @@ export class BrowserDriver {
   // Opening and moving
   // -------------------------------------------------------------------------
 
-  async open(request: OpenRequest): Promise<PageView> {
+  async open(request: OpenRequest): Promise<OpenedPage> {
     const policy = await this.deps.loadPolicy();
     const profile = this.resolveProfile(policy, request.profileId, request.spaceId);
     const asked = new URL(request.url);
     this.refuseObviouslyLocal(profile, asked);
     assertNavigationAllowed(profile, asked);
+    if (request.redelivered) return await this.reopened(request, profile, asked);
 
     const executable = policy.chrome.found?.path;
     if (executable === undefined) {
@@ -148,9 +151,61 @@ export class BrowserDriver {
     }
 
     const running = await this.ensureRunning(profile, executable);
+    try {
+      return { outcome: 'performed', ...(await this.openIn(running, profile, request, asked)) };
+    } finally {
+      this.release(profile.id);
+    }
+  }
+
+  /**
+   * A later attempt of an open: the earlier one may have loaded the address
+   * with the profile's sign-ins and left a page, so it is not loaded again.
+   */
+  private async reopened(
+    request: OpenRequest,
+    profile: BrowserProfile,
+    asked: URL,
+  ): Promise<OpenedPage> {
+    const pages = this.pages.list(request);
+    const earlier = pages
+      .filter((held) => held.profileId === profile.id && held.requestedUrl === asked.href)
+      .at(-1);
+    if (earlier === undefined) {
+      throw new BrowserDriverError(
+        'open_uncertain',
+        `This open of ${asked.href} was delivered again, and whether the earlier attempt loaded ` +
+          `it is unknown; this run holds no page opened there, so nothing was opened now. The ` +
+          `run's open pages: ${listed(pages.map((held) => held.pageId))}. List them to see ` +
+          'where each is before opening the address again.',
+        { url: asked.href },
+      );
+    }
+    return {
+      outcome: 'uncertain_outcome',
+      ...(await this.observe(earlier, this.runningFor(earlier))),
+    };
+  }
+
+  private async openIn(
+    running: RunningProfile,
+    profile: BrowserProfile,
+    request: OpenRequest,
+    asked: URL,
+  ): Promise<PageView> {
     running.state.profile = profile;
     const observations = new PageObservations(this.now);
-    const page = await running.browser.newPage(pageEvents(observations));
+    let page: EnginePage;
+    try {
+      page = await running.browser.newPage(pageEvents(observations));
+    } catch (error) {
+      throw new BrowserDriverError(
+        'navigation_failed',
+        `${request.url} did not load: the browser for profile \`${profile.id}\` could not open ` +
+          `a page (${message(error)}). It may have been stopping; opening the address again ` +
+          'starts it afresh.',
+      );
+    }
     const startedAt = this.now();
     try {
       await page.navigate({ kind: 'url', url: request.url });
@@ -166,7 +221,15 @@ export class BrowserDriver {
       );
     }
 
-    const held = this.pages.add(request, profile.id, page, observations, page.url(), this.now());
+    const held = this.pages.add(
+      request,
+      profile.id,
+      asked.href,
+      page,
+      observations,
+      page.url(),
+      this.now(),
+    );
     try {
       this.assertLanded(running, profile, page.url(), startedAt);
       return await this.observe(held, running);
@@ -235,6 +298,21 @@ export class BrowserDriver {
     if (request.action.kind === 'type' && snapshot.maskedRefs.has(request.ref)) {
       throw this.credentialRefusal(request.ref, element.name);
     }
+    // A reference can belong to an element inside a frame from another site,
+    // which a rule for the page around it says nothing about.
+    let frameUrl: string;
+    try {
+      frameUrl = await held.page.frameUrl(request.ref);
+    } catch (error) {
+      if (error instanceof EngineRefNotFound) throw await this.staleRef(held, running, request.ref);
+      throw new BrowserDriverError(
+        'action_failed',
+        `Which frame \`${request.ref}\` belongs to could not be read, so it was not acted on: ` +
+          message(error),
+        { ref: request.ref },
+      );
+    }
+    assertActionAllowed(profile, pageUrl, urlOrNothing(frameUrl) ?? new URL('about:blank'));
 
     const before = this.lastSeen(held);
     const startedAt = this.now();
@@ -398,27 +476,35 @@ export class BrowserDriver {
   }
 
   /**
-   * Close every page nothing has touched for its profile's idle limit, then
-   * stop every browser that has had no page for as long.
+   * Close pages nothing has touched for their profile's idle limit, then stop
+   * browsers that have had no page for as long — at most `limit` of the two
+   * together, the rest left for the next sweep. A profile with an operation
+   * in flight is passed over.
    */
-  async sweepIdle(): Promise<IdleSweep> {
+  async sweepIdle(limit: number): Promise<IdleSweep> {
     const now = this.now();
     let closedPages = 0;
     for (const held of this.pages.all()) {
+      if (closedPages >= limit) break;
       const running = this.running.get(held.profileId);
-      const limit = (running?.state.profile.idleMinutes ?? 0) * MINUTE_MS;
-      if (running === undefined || now - held.lastUsedAt < limit) continue;
+      if (running === undefined || this.busy(held.profileId)) continue;
+      if (now - held.lastUsedAt < running.state.profile.idleMinutes * MINUTE_MS) continue;
       await held.page.close().catch(() => undefined);
       this.pages.forget(held);
       running.state.lastActivityAt = Math.max(running.state.lastActivityAt, now);
       closedPages += 1;
     }
     let stoppedProfiles = 0;
-    for (const [profileId, running] of this.running) {
-      if (this.pages.countForProfile(profileId) > 0) continue;
+    for (const [profileId, running] of [...this.running]) {
+      if (closedPages + stoppedProfiles >= limit) break;
+      if (this.busy(profileId) || this.pages.countForProfile(profileId) > 0) continue;
       if (now - running.state.lastActivityAt < running.state.profile.idleMinutes * MINUTE_MS) {
         continue;
       }
+      // Gone from both maps before it has exited, so the next open starts a
+      // fresh browser rather than being handed this one.
+      this.running.delete(profileId);
+      this.starting.delete(profileId);
       running.chrome.stop();
       stoppedProfiles += 1;
     }
@@ -545,7 +631,7 @@ export class BrowserDriver {
   }
 
   private refuseObviouslyLocal(profile: BrowserProfile, url: URL): void {
-    const reason = obviouslyLocalDestination(url, this.classifier);
+    const reason = obviouslyLocalDestination(url, this.deps.classifier ?? machineAddresses);
     if (reason === undefined) return;
     throw new BrowserDriverError(
       'appliance_origin',
@@ -640,21 +726,35 @@ export class BrowserDriver {
     return profile;
   }
 
+  private busy(profileId: string): boolean {
+    return (this.inFlight.get(profileId) ?? 0) > 0;
+  }
+
+  private release(profileId: string): void {
+    const count = (this.inFlight.get(profileId) ?? 0) - 1;
+    if (count > 0) this.inFlight.set(profileId, count);
+    else this.inFlight.delete(profileId);
+  }
+
+  /** The profile's browser, counted as in use until the caller's `release`. */
   private async ensureRunning(
     profile: BrowserProfile,
     executable: string,
   ): Promise<RunningProfile> {
-    const existing = this.starting.get(profile.id);
-    if (existing !== undefined) return await existing;
-
-    const starting = this.start(profile, executable);
-    this.starting.set(profile.id, starting);
+    let starting = this.starting.get(profile.id);
+    if (starting === undefined) {
+      starting = this.start(profile, executable);
+      this.starting.set(profile.id, starting);
+    }
+    let running: RunningProfile;
     try {
-      return await starting;
+      running = await starting;
     } catch (error) {
       if (this.starting.get(profile.id) === starting) this.starting.delete(profile.id);
       throw error;
     }
+    this.inFlight.set(profile.id, (this.inFlight.get(profile.id) ?? 0) + 1);
+    return running;
   }
 
   private async start(profile: BrowserProfile, executable: string): Promise<RunningProfile> {
@@ -662,7 +762,7 @@ export class BrowserDriver {
     // Before Chrome, so no request of Chrome's ever goes out unchecked.
     const proxy = await (this.deps.startProxy ?? startEgressProxy)({
       refuseHost: (host) => ruleRefusingHost(state.profile, host),
-      classifier: this.classifier,
+      classifier: this.deps.classifier ?? machineAddresses,
       now: this.now,
     });
     let chrome: LaunchedChrome;
@@ -695,9 +795,13 @@ export class BrowserDriver {
     // Whoever ends it — the idle sweep, withdrawal, shutdown, a crash — its
     // proxy and its pages go with it, and the next open starts it again.
     void chrome.exited.then(async () => {
-      if (this.running.get(profile.id) === entry) this.running.delete(profile.id);
-      this.starting.delete(profile.id);
-      this.pages.dropProfile(profile.id);
+      // A browser the sweep stopped is already out of both maps, and the
+      // profile may be running again in a fresh one by now.
+      if (this.running.get(profile.id) === entry) {
+        this.running.delete(profile.id);
+        this.starting.delete(profile.id);
+        this.pages.dropProfile(profile.id);
+      }
       await browser.disconnect().catch(() => undefined);
       await proxy.stop().catch(() => undefined);
     });

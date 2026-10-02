@@ -25,10 +25,10 @@ import type { Duplex } from 'node:stream';
 
 import {
   bareAddress,
-  createLocalAddressClassifier,
   isLocalName,
   localAddressReason,
   type LocalAddressClassifier,
+  machineAddresses,
 } from './addresses.js';
 
 export interface ProxyRefusal {
@@ -119,7 +119,7 @@ function rawWithoutHopByHop(raw: readonly string[]): string[] {
 export const startEgressProxy: StartEgressProxy = async (options) => {
   const lookup = options.lookup ?? defaultLookup;
   const connect = options.connect ?? ((address, port) => netConnect({ host: address, port }));
-  const classifier = options.classifier ?? createLocalAddressClassifier();
+  const classifier = options.classifier ?? machineAddresses;
   const now = options.now ?? Date.now;
   const refusals: ProxyRefusal[] = [];
   const open = new Set<Duplex>();
@@ -205,13 +205,16 @@ export const startEgressProxy: StartEgressProxy = async (options) => {
         res.writeHead(502, { 'content-type': 'text/plain' }).end(`${decision.reason}\n`);
         return;
       }
+      // No `agent` at all: given one — even `false`, which makes a fresh
+      // default agent — Node ignores `createConnection` and connects to the
+      // request's own host and port. Without one it writes this request on
+      // the socket returned here, once, with `Connection: close`.
       const upstream = httpRequest(
         {
           method: req.method,
           path: `${target.pathname}${target.search}`,
           headers: forwardedHeaders(req.headers),
           setHost: false,
-          agent: false,
           createConnection: () => connect(decision.address, port),
         },
         (upstreamRes) => {

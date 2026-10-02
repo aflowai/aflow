@@ -98,19 +98,24 @@ export const BrowserPageOpenInputSchema = z.object({
 });
 
 export const BrowserPageOpenOutputSchema = z.object({
+  outcome: BrowserActionOutcomeSchema,
   ...pageViewShape,
   pageId: z
     .string()
     .describe(
       'The page, for the operations that act on it. Belongs to this run alone and does not ' +
-        'survive the browser executor restarting.',
+        'survive the browser executor restarting. On `uncertain_outcome`, the page the earlier ' +
+        'delivery opened at this address.',
     ),
-  receipt: z.object({
-    profileId: BrowserProfileIdSchema,
-    requestedUrl: z.string(),
-    redirected: z.boolean().describe('True when the page ended up somewhere other than asked.'),
-    ...outlineReceiptShape,
-  }),
+  receipt: z
+    .object({
+      profileId: BrowserProfileIdSchema,
+      requestedUrl: z.string(),
+      redirected: z.boolean().describe('True when the page ended up somewhere other than asked.'),
+      ...outlineReceiptShape,
+    })
+    .optional()
+    .describe('What was opened. Absent when `outcome` is `uncertain_outcome`.'),
 });
 
 // ---------------------------------------------------------------------------
@@ -283,7 +288,10 @@ export const BrowserPageActionRegistrations: OperationRegistration[] = [
         'A page this run already has open — browser.page.navigate moves it instead of opening another',
       ],
       pitfalls: [
-        'Opening a page runs its scripts with the profile’s sign-ins, so it is never retried.',
+        'Opening a page runs its scripts with the profile’s sign-ins, so it is never retried. ' +
+          '`outcome: uncertain_outcome` means a repeat delivery of this call found the page an ' +
+          'earlier one opened and did not load it again; `BROWSER_OPEN_UNCERTAIN` means it found ' +
+          'none and opened nothing — browser.page.list shows the run’s pages before opening again.',
         'The outline lists headings and controls, not the page text — browser.page.read returns ' +
           'the text. A cut outline ends with a count of what was left out, by role.',
         '`pageId` belongs to the run that opened it, and is gone after the browser executor ' +

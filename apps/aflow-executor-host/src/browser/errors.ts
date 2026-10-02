@@ -12,6 +12,7 @@ export type BrowserFailureKind =
   | 'no_browser'
   | 'launch_failed'
   | 'navigation_failed'
+  | 'open_uncertain'
   | 'observation_failed';
 
 /** A refusal or failure the driver can name, carried to the step as its own code. */

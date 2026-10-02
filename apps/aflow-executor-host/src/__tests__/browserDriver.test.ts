@@ -8,6 +8,7 @@
 import { AflowErrorSchema } from '@aflow/schemas';
 import { describe, expect, it } from 'vitest';
 
+import { INTERFACE_ADDRESSES_TTL_MS } from '../browser/addresses.js';
 import { BrowserDriverError } from '../browser/errors.js';
 import { browserFailure } from '../handlers/browserHandler.js';
 import { harness, profile, refusal, RUN_A, RUN_B } from './fixtures/fakeBrowser.js';
@@ -17,6 +18,7 @@ describe('pages belong to runs', () => {
     const { driver } = harness();
     const opened = await driver.open({
       ...RUN_A,
+      redelivered: false,
       profileId: 'default',
       url: 'https://example.com/',
     });
@@ -34,6 +36,7 @@ describe('pages belong to runs', () => {
     const { driver } = harness();
     const opened = await driver.open({
       ...RUN_A,
+      redelivered: false,
       profileId: 'default',
       url: 'https://example.com/',
     });
@@ -45,6 +48,7 @@ describe('pages belong to runs', () => {
     const { driver, endBrowser, launches, proxies } = harness();
     const opened = await driver.open({
       ...RUN_A,
+      redelivered: false,
       profileId: 'default',
       url: 'https://example.com/a',
     });
@@ -58,7 +62,12 @@ describe('pages belong to runs', () => {
     expect(proxies[0]?.stopped).toBe(true);
 
     // The next open starts the profile's browser again, behind a new proxy.
-    await driver.open({ ...RUN_A, profileId: 'default', url: 'https://example.com/b' });
+    await driver.open({
+      ...RUN_A,
+      redelivered: false,
+      profileId: 'default',
+      url: 'https://example.com/b',
+    });
     expect(launches).toHaveLength(2);
     expect(proxies).toHaveLength(2);
   });
@@ -66,8 +75,18 @@ describe('pages belong to runs', () => {
   it('starts one browser per profile, behind one proxy started first', async () => {
     const { driver, launches, proxies } = harness();
     await Promise.all([
-      driver.open({ ...RUN_A, profileId: 'default', url: 'https://example.com/1' }),
-      driver.open({ ...RUN_B, profileId: 'default', url: 'https://example.com/2' }),
+      driver.open({
+        ...RUN_A,
+        redelivered: false,
+        profileId: 'default',
+        url: 'https://example.com/1',
+      }),
+      driver.open({
+        ...RUN_B,
+        redelivered: false,
+        profileId: 'default',
+        url: 'https://example.com/2',
+      }),
     ]);
     expect(launches).toHaveLength(1);
     expect(proxies).toHaveLength(1);
@@ -80,7 +99,12 @@ describe('pages belong to runs', () => {
       world: { sites: new Map([['https://example.com/', { unreadable: true }]]) },
     });
     const refused = await refusal(
-      driver.open({ ...RUN_A, profileId: 'default', url: 'https://example.com/' }),
+      driver.open({
+        ...RUN_A,
+        redelivered: false,
+        profileId: 'default',
+        url: 'https://example.com/',
+      }),
     );
     expect(refused.kind).toBe('observation_failed');
     expect(pages[0]?.closed).toBe(true);
@@ -92,7 +116,12 @@ describe('which profile a run may use', () => {
   it('refuses an unknown profile, naming the ones configured', async () => {
     const { driver, launches } = harness({ browsers: [profile(), profile({ id: 'work' })] });
     const refused = await refusal(
-      driver.open({ ...RUN_A, profileId: 'personal', url: 'https://example.com/' }),
+      driver.open({
+        ...RUN_A,
+        redelivered: false,
+        profileId: 'personal',
+        url: 'https://example.com/',
+      }),
     );
     expect(refused.kind).toBe('unknown_profile');
     expect(refused.message).toContain('`personal`');
@@ -105,7 +134,7 @@ describe('which profile a run may use', () => {
       browsers: [profile({ spaces: ['space-1'] }), profile({ id: 'work', spaces: ['space-2'] })],
     });
     const refused = await refusal(
-      driver.open({ ...RUN_A, profileId: 'work', url: 'https://example.com/' }),
+      driver.open({ ...RUN_A, redelivered: false, profileId: 'work', url: 'https://example.com/' }),
     );
     expect(refused.kind).toBe('profile_not_for_space');
     expect(refused.message).toContain('`work` is not open to this space');
@@ -117,7 +146,12 @@ describe('which profile a run may use', () => {
     const { driver } = harness({ browsers: [profile({ spaces: ['space-1'] })] });
     const { spaceId: _omitted, ...noSpace } = RUN_A;
     const refused = await refusal(
-      driver.open({ ...noSpace, profileId: 'default', url: 'https://example.com/' }),
+      driver.open({
+        ...noSpace,
+        redelivered: false,
+        profileId: 'default',
+        url: 'https://example.com/',
+      }),
     );
     expect(refused.kind).toBe('profile_not_for_space');
     expect(refused.message).toContain('may use: none');
@@ -129,7 +163,12 @@ describe('which profile a run may use', () => {
       chrome: { searched: ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'] },
     });
     const refused = await refusal(
-      driver.open({ ...RUN_A, profileId: 'default', url: 'https://example.com/' }),
+      driver.open({
+        ...RUN_A,
+        redelivered: false,
+        profileId: 'default',
+        url: 'https://example.com/',
+      }),
     );
     expect(refused.kind).toBe('no_browser');
     expect(refused.message).toContain('/Applications/Google Chrome.app');
@@ -148,7 +187,9 @@ describe('a profile that keeps sign-ins and this machine', () => {
   ]) {
     it(`refuses ${url} before starting anything, on any port`, async () => {
       const { driver, launches } = harness();
-      const refused = await refusal(driver.open({ ...RUN_A, profileId: 'default', url }));
+      const refused = await refusal(
+        driver.open({ ...RUN_A, redelivered: false, profileId: 'default', url }),
+      );
       expect(refused.kind).toBe('appliance_origin');
       expect(refused.message).toContain('keeps sign-ins');
       expect(refused.message).toContain('does not reach services on this machine');
@@ -156,12 +197,32 @@ describe('a profile that keeps sign-ins and this machine', () => {
     });
   }
 
+  it('refuses an address the machine gained after its browser started, once the TTL has passed', async () => {
+    const { driver, interfaces, clock } = harness();
+    const gained = 'http://192.0.2.77:3001/';
+    await driver.open({ ...RUN_A, redelivered: false, profileId: 'default', url: gained });
+
+    interfaces.push('192.0.2.77');
+    await driver.open({ ...RUN_A, redelivered: false, profileId: 'default', url: gained });
+    clock.now += INTERFACE_ADDRESSES_TTL_MS;
+    const refused = await refusal(
+      driver.open({ ...RUN_A, redelivered: false, profileId: 'default', url: gained }),
+    );
+    expect(refused.kind).toBe('appliance_origin');
+    expect(refused.message).toContain('192.0.2.77 is an address of this machine');
+  });
+
   it('refuses at the connection a public name that resolves to this machine', async () => {
     const { driver, pages, proxies } = harness({
       world: { localHosts: new Set(['rebound.example.net']) },
     });
     const refused = await refusal(
-      driver.open({ ...RUN_A, profileId: 'default', url: 'https://rebound.example.net/' }),
+      driver.open({
+        ...RUN_A,
+        redelivered: false,
+        profileId: 'default',
+        url: 'https://rebound.example.net/',
+      }),
     );
     expect(refused.kind).toBe('appliance_origin');
     expect(refused.message).toContain('resolves to 127.0.0.1');
@@ -178,7 +239,12 @@ describe('a profile that keeps sign-ins and this machine', () => {
       },
     });
     const refused = await refusal(
-      driver.open({ ...RUN_A, profileId: 'default', url: 'https://example.com/go' }),
+      driver.open({
+        ...RUN_A,
+        redelivered: false,
+        profileId: 'default',
+        url: 'https://example.com/go',
+      }),
     );
     expect(refused.kind).toBe('appliance_origin');
     expect(refused.message).toContain('The connection was refused');
@@ -189,6 +255,7 @@ describe('a profile that keeps sign-ins and this machine', () => {
     const { driver } = harness({ world: { localHosts: new Set(['rebound.example.net']) } });
     const opened = await driver.open({
       ...RUN_A,
+      redelivered: false,
       profileId: 'default',
       url: 'https://example.com/',
     });
@@ -210,6 +277,7 @@ describe('what an open returns', () => {
     const { driver } = harness();
     const opened = await driver.open({
       ...RUN_A,
+      redelivered: false,
       profileId: 'default',
       url: 'https://example.com/',
     });

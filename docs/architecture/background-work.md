@@ -363,7 +363,7 @@ Datastore operations per minute with zero due work, grouped by what each scope m
 | Execution scope | per_instance |
 | Substrate | local |
 | Base cadence | 1m |
-| Max batch | 1 |
+| Max batch | 20 |
 | Max cycle | 30000 ms |
 | Idle datastore ops/min | 0 |
 | Hot-path producer budget | 0 added RTT — Traverses the in-memory page table and the browsers this process started. |
@@ -372,7 +372,7 @@ Datastore operations per minute with zero due work, grouped by what each scope m
 | Residual poll | — |
 | Source | `apps/aflow-executor-host/src/browser/idleSweep.ts`<br>`apps/aflow-executor-host/src/browser/driver.ts` |
 
-> Per instance because the resource is per instance: the browsers are processes this executor started and the pages live in its memory. The executor is not told when a run ends, so this is what bounds a page a run abandoned. A cycle with no browser running reads nothing.
+> Per instance because the resource is per instance: the browsers are processes this executor started and the pages live in its memory. The executor is not told when a run ends, so this is what bounds a page a run abandoned. A cycle with no browser running reads nothing. The batch counts closures — a page closed or a browser stopped — and a cycle stops at 20, leaving the rest for the next: each closure is one call to a browser on this machine, so 20 sit well inside the cycle budget, while a run that abandoned a page per step still drains at 20 a minute rather than one. A profile with an operation in flight is passed over until that operation ends.
 
 ### `host.runtime_inventory`
 

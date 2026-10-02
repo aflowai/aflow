@@ -48,45 +48,62 @@ export interface LocalAddressClassifier {
 }
 
 /**
- * Built once per proxy, reading the interfaces at that moment. An address the
- * machine gains later is still caught by the loopback, unspecified and
- * link-local ranges unless it is a new routable address of its own, which the
- * next profile start picks up.
+ * How long one reading of this machine's interfaces stands. An address the
+ * machine gains later — joining Wi-Fi, a VPN coming up — is refused from the
+ * first decision made after this has passed.
  */
+export const INTERFACE_ADDRESSES_TTL_MS = 5_000;
+
+export interface LocalAddressClassifierOptions {
+  readonly readInterfaces?: () => readonly string[];
+  readonly now?: () => number;
+}
+
+/** Reads the machine's interfaces when a decision needs them, not when it is built. */
 export function createLocalAddressClassifier(
-  interfaceAddresses: readonly string[] = machineInterfaceAddresses(),
+  options: LocalAddressClassifierOptions = {},
 ): LocalAddressClassifier {
+  const readInterfaces = options.readInterfaces ?? machineInterfaceAddresses;
+  const now = options.now ?? Date.now;
   // One list per kind, so a refusal can say which it was. IPv4-mapped IPv6
   // addresses are checked against the IPv4 entries by the list itself.
-  const lists = new Map<LocalAddressKind, BlockList>();
-  const listFor = (kind: LocalAddressKind): BlockList => {
-    const existing = lists.get(kind);
-    if (existing !== undefined) return existing;
-    const created = new BlockList();
-    lists.set(kind, created);
-    return created;
-  };
+  const ranges = new Map<LocalAddressKind, BlockList>();
   for (const range of RANGES) {
-    listFor(range.kind).addSubnet(range.network, range.prefix, range.family);
+    const list = ranges.get(range.kind) ?? new BlockList();
+    list.addSubnet(range.network, range.prefix, range.family);
+    ranges.set(range.kind, list);
   }
-  for (const raw of interfaceAddresses) {
-    const address = bareAddress(raw);
-    const family = blockListFamily(address);
-    if (family !== undefined) listFor('this machine').addAddress(address, family);
-  }
+  let interfaces: { readonly list: BlockList; readonly readAt: number } | undefined;
+  const interfaceList = (): BlockList => {
+    const at = now();
+    if (interfaces !== undefined && at - interfaces.readAt < INTERFACE_ADDRESSES_TTL_MS) {
+      return interfaces.list;
+    }
+    const list = new BlockList();
+    for (const raw of readInterfaces()) {
+      const address = bareAddress(raw);
+      const family = blockListFamily(address);
+      if (family !== undefined) list.addAddress(address, family);
+    }
+    interfaces = { list, readAt: at };
+    return list;
+  };
   return {
     classify: (raw) => {
       const address = bareAddress(raw);
       const family = blockListFamily(address);
       // Not an address at all: nothing to connect to, so nothing is allowed.
       if (family === undefined) return 'unspecified';
-      for (const [kind, list] of lists) {
+      for (const [kind, list] of ranges) {
         if (list.check(address, family)) return kind;
       }
-      return undefined;
+      return interfaceList().check(address, family) ? 'this machine' : undefined;
     },
   };
 }
+
+/** This machine's addresses, as they are when each decision is made. */
+export const machineAddresses: LocalAddressClassifier = createLocalAddressClassifier();
 
 export function localAddressReason(host: string, address: string, kind: LocalAddressKind): string {
   const said = address === host ? `${host} is` : `${host} resolves to ${address},`;

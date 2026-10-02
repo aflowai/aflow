@@ -80,6 +80,49 @@ describe('the browser handler', () => {
     expect(h.pages[0]?.actions).toEqual([]);
   });
 
+  it('answers a later attempt of an open with the page the earlier one opened, loading nothing again', async () => {
+    const h = harness();
+    const first = await run(h, 'browser.page.open', { url: 'https://example.com/a' });
+    const { pageId } = parsedOutput('browser.page.open', first.written) as { pageId: string };
+    expect(first.written).toMatchObject({ outcome: 'performed' });
+
+    const again = await run(h, 'browser.page.open', { url: 'https://example.com/a' }, 2);
+    expect(again.result.status).toBe('SUCCEEDED');
+    expect(parsedOutput('browser.page.open', again.written)).toMatchObject({
+      outcome: 'uncertain_outcome',
+      pageId,
+      url: 'https://example.com/a',
+      outline: expect.stringContaining('[ref=e6]') as unknown,
+    });
+    expect(again.written).not.toHaveProperty('receipt');
+    expect(h.pages).toHaveLength(1);
+    expect(h.pages[0]?.navigations).toHaveLength(1);
+  });
+
+  it('fails a later attempt of an open that finds no page opened there, naming the run’s pages', async () => {
+    const h = harness();
+    const first = await run(h, 'browser.page.open', { url: 'https://example.com/a' });
+    const { pageId } = parsedOutput('browser.page.open', first.written) as { pageId: string };
+
+    const again = await run(h, 'browser.page.open', { url: 'https://example.com/b' }, 2);
+    expect(again.result.status).toBe('FAILED');
+    expect(again.written).toMatchObject({
+      code: 'BROWSER_OPEN_UNCERTAIN',
+      retryable: false,
+      details: { url: 'https://example.com/b' },
+    });
+    const said = (again.written as { message: string }).message;
+    expect(said).toContain('whether the earlier attempt loaded it is unknown');
+    expect(said).toContain(`\`${pageId}\``);
+    expect(h.pages).toHaveLength(1);
+
+    const fresh = harness();
+    const none = await run(fresh, 'browser.page.open', { url: 'https://example.com/a' }, 2);
+    expect(none.written).toMatchObject({ code: 'BROWSER_OPEN_UNCERTAIN', retryable: false });
+    expect((none.written as { message: string }).message).toContain("The run's open pages: none");
+    expect(fresh.launches).toHaveLength(0);
+  });
+
   it('fails a stale reference with the reference named and the outline in the details', async () => {
     const h = harness();
     const opened = await run(h, 'browser.page.open', { url: 'https://example.com/' });

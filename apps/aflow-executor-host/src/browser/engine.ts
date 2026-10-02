@@ -29,9 +29,20 @@ const LOAD_EVENT_GRACE_MS = 5_000;
 /** How long an action waits for its element to become actionable. */
 const ACTION_TIMEOUT_MS = 10_000;
 
+interface PwFrame {
+  url(): string;
+  parentFrame(): PwFrame | null;
+}
+
+interface PwElementHandle {
+  ownerFrame(): Promise<PwFrame | null>;
+  dispose(): Promise<void>;
+}
+
 interface PwLocator {
   evaluate<R>(fn: (element: unknown) => R): Promise<R>;
   count(): Promise<number>;
+  elementHandle(options: { timeout: number }): Promise<PwElementHandle>;
   click(options: { timeout: number }): Promise<void>;
   hover(options: { timeout: number }): Promise<void>;
   fill(text: string, options: { timeout: number }): Promise<void>;
@@ -181,6 +192,25 @@ async function act(page: PwPage, ref: string, action: EngineAction): Promise<voi
   await settle(page);
 }
 
+const HAS_ITS_OWN_ORIGIN = /^https?:/;
+
+/**
+ * Read from Playwright's frame tree rather than from the page's own script,
+ * which the page controls.
+ */
+async function frameUrl(page: PwPage, ref: string): Promise<string> {
+  const element = page.locator(`aria-ref=${ref}`);
+  if ((await element.count()) === 0) throw new EngineRefNotFound(ref);
+  const handle = await element.elementHandle({ timeout: ACTION_TIMEOUT_MS });
+  try {
+    let frame = await handle.ownerFrame();
+    while (frame !== null && !HAS_ITS_OWN_ORIGIN.test(frame.url())) frame = frame.parentFrame();
+    return frame?.url() ?? page.url();
+  } finally {
+    await handle.dispose().catch(() => undefined);
+  }
+}
+
 function wrapPage(page: PwPage, events: PageEvents): EnginePage {
   page.on('console', (message) => {
     events.console(message.type(), message.text());
@@ -207,6 +237,7 @@ function wrapPage(page: PwPage, events: PageEvents): EnginePage {
     act: async (ref, action) => {
       await act(page, ref, action);
     },
+    frameUrl: async (ref) => await frameUrl(page, ref),
     url: () => page.url(),
     title: async () => await page.title(),
     snapshot: async (): Promise<PageSnapshot> => {

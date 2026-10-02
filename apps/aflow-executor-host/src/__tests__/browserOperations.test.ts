@@ -47,8 +47,14 @@ const goesToResults = (page: FakePage, ref: string): void => {
 };
 
 async function openShop(h: ReturnType<typeof shop>, run = RUN_A): Promise<string> {
-  return (await h.driver.open({ ...run, profileId: 'default', url: 'https://shop.example.com/' }))
-    .pageId;
+  return (
+    await h.driver.open({
+      ...run,
+      redelivered: false,
+      profileId: 'default',
+      url: 'https://shop.example.com/',
+    })
+  ).pageId;
 }
 
 function act(pageId: string, ref: string, action: EngineAction, redelivered = false) {
@@ -184,6 +190,7 @@ describe('browser.page.act', () => {
     const h = harness();
     const { pageId } = await h.driver.open({
       ...RUN_A,
+      redelivered: false,
       profileId: 'default',
       url: 'https://example.com/',
     });
@@ -206,6 +213,7 @@ describe('browser.page.act', () => {
     });
     const { pageId } = await h.driver.open({
       ...RUN_A,
+      redelivered: false,
       profileId: 'default',
       url: 'https://example.com/',
     });
@@ -263,7 +271,12 @@ describe('posture and origin rules', () => {
     expect(going.message).toContain('https://bank.example.org');
 
     const opening = await refusal(
-      h.driver.open({ ...RUN_A, profileId: 'default', url: 'https://bank.example.org/' }),
+      h.driver.open({
+        ...RUN_A,
+        redelivered: false,
+        profileId: 'default',
+        url: 'https://bank.example.org/',
+      }),
     );
     expect(opening.kind).toBe('origin_denied');
   });
@@ -276,7 +289,12 @@ describe('posture and origin rules', () => {
       },
     });
     const refused = await refusal(
-      h.driver.open({ ...RUN_A, profileId: 'default', url: 'https://shop.example.com/pay' }),
+      h.driver.open({
+        ...RUN_A,
+        redelivered: false,
+        profileId: 'default',
+        url: 'https://shop.example.com/pay',
+      }),
     );
     expect(refused.kind).toBe('origin_denied');
     expect(h.proxies[0]?.refusals.map((r) => [r.host, r.kind])).toEqual([
@@ -302,11 +320,62 @@ describe('posture and origin rules', () => {
 
     const bank = await h.driver.open({
       ...RUN_A,
+      redelivered: false,
       profileId: 'default',
       url: 'https://bank.example.org/',
     });
     const refused = await refusal(h.driver.act(act(bank.pageId, 'e6', { kind: 'click' })));
     expect(refused.kind).toBe('posture_refused');
+  });
+
+  it('allow: does not reach a frame from another origin inside the allowed page', async () => {
+    const h = harness({
+      browsers: [
+        profile({
+          posture: 'read-only',
+          rules: [{ origin: 'https://shop.example.com', effect: 'allow' }],
+        }),
+      ],
+      world: {
+        sites: new Map([
+          [
+            'https://shop.example.com/',
+            { title: 'Shop', snapshot: FORM, frames: { e6: 'https://pay.example.net/widget' } },
+          ],
+        ]),
+      },
+    });
+    const pageId = await openShop(h);
+
+    const refused = await refusal(h.driver.act(act(pageId, 'e6', { kind: 'click' })));
+    expect(refused.kind).toBe('posture_refused');
+    expect(refused.message).toContain(
+      'The element is inside a frame from https://pay.example.net, on a page at ' +
+        'https://shop.example.com',
+    );
+    expect(refused.details['origin']).toBe('https://pay.example.net');
+    expect(h.pages[0]?.actions).toEqual([]);
+
+    expect((await h.driver.act(act(pageId, 'e3', { kind: 'click' }))).outcome).toBe('performed');
+  });
+
+  it('deny: refuses acting inside a frame from a denied origin on a page it does not name', async () => {
+    const h = harness({
+      browsers: [profile({ rules: [{ origin: 'https://pay.example.net', effect: 'deny' }] })],
+      world: {
+        sites: new Map([
+          [
+            'https://shop.example.com/',
+            { title: 'Shop', snapshot: FORM, frames: { e6: 'https://pay.example.net/widget' } },
+          ],
+        ]),
+      },
+    });
+    const pageId = await openShop(h);
+    const refused = await refusal(h.driver.act(act(pageId, 'e6', { kind: 'click' })));
+    expect(refused.kind).toBe('origin_denied');
+    expect(refused.details['origin']).toBe('https://pay.example.net');
+    expect(h.pages[0]?.actions).toEqual([]);
   });
 
   it('a wildcard names the host and every name under it, and nothing that merely ends alike', async () => {
@@ -318,10 +387,17 @@ describe('posture and origin rules', () => {
       'https://bank.example.org/',
       'http://a.b.example.org:8080/',
     ]) {
-      const refused = await refusal(h.driver.open({ ...RUN_A, profileId: 'default', url }));
+      const refused = await refusal(
+        h.driver.open({ ...RUN_A, redelivered: false, profileId: 'default', url }),
+      );
       expect(refused.kind, url).toBe('origin_denied');
     }
-    await h.driver.open({ ...RUN_A, profileId: 'default', url: 'https://notexample.org/' });
+    await h.driver.open({
+      ...RUN_A,
+      redelivered: false,
+      profileId: 'default',
+      url: 'https://notexample.org/',
+    });
   });
 
   it('gates an action on where the page is now, not where it was opened or what the call says', async () => {
@@ -352,6 +428,7 @@ describe('browser.page.snapshot', () => {
     const h = harness();
     const { pageId } = await h.driver.open({
       ...RUN_A,
+      redelivered: false,
       profileId: 'default',
       url: 'https://example.com/',
     });
@@ -369,6 +446,7 @@ describe('browser.page.snapshot', () => {
     const h = harness();
     const { pageId } = await h.driver.open({
       ...RUN_A,
+      redelivered: false,
       profileId: 'default',
       url: 'https://example.com/',
     });
@@ -383,6 +461,7 @@ describe('browser.page.read', () => {
     const h = harness();
     const { pageId } = await h.driver.open({
       ...RUN_A,
+      redelivered: false,
       profileId: 'default',
       url: 'https://example.com/?session=s3cr3t&lang=en',
     });
@@ -419,6 +498,7 @@ describe('browser.page.read', () => {
     const h = harness();
     const { pageId } = await h.driver.open({
       ...RUN_A,
+      redelivered: false,
       profileId: 'default',
       url: 'https://example.com/',
     });
@@ -469,6 +549,7 @@ describe('the idle task', () => {
 
     const { pageId } = await h.driver.open({
       ...RUN_A,
+      redelivered: false,
       profileId: 'default',
       url: 'https://example.com/a',
     });
@@ -501,6 +582,111 @@ describe('the idle task', () => {
   });
 });
 
+describe('the idle sweep and work in flight', () => {
+  const tick = async (): Promise<void> => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  };
+
+  async function idleProfile(h: ReturnType<typeof harness>): Promise<void> {
+    const { pageId } = await h.driver.open({
+      ...RUN_A,
+      redelivered: false,
+      profileId: 'default',
+      url: 'https://example.com/a',
+    });
+    await h.driver.close(RUN_A, pageId);
+    h.clock.now += 31 * MINUTE;
+  }
+
+  it('does not stop a browser an open is still loading in', async () => {
+    const h = harness({ browsers: [profile({ idleMinutes: 30 })] });
+    await idleProfile(h);
+    let release: () => void = () => undefined;
+    h.world.navigationHeld = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const opening = h.driver.open({
+      ...RUN_A,
+      redelivered: false,
+      profileId: 'default',
+      url: 'https://example.com/b',
+    });
+    await tick();
+    expect(h.pages).toHaveLength(2);
+
+    expect(await h.driver.sweepIdle(20)).toEqual({ closedPages: 0, stoppedProfiles: 0 });
+    expect(h.stops).toEqual([]);
+
+    release();
+    const opened = await opening;
+    expect(opened.outcome).toBe('performed');
+    expect((await h.driver.list(RUN_A)).map((page) => page.pageId)).toEqual([opened.pageId]);
+    expect(h.launches).toHaveLength(1);
+  });
+
+  it('starts a fresh browser for the next open once the sweep has stopped one that has not exited', async () => {
+    const h = harness({ browsers: [profile({ idleMinutes: 30 })], slowExit: true });
+    await idleProfile(h);
+    expect(await h.driver.sweepIdle(20)).toEqual({ closedPages: 0, stoppedProfiles: 1 });
+    expect(h.stops).toHaveLength(1);
+
+    const opened = await h.driver.open({
+      ...RUN_A,
+      redelivered: false,
+      profileId: 'default',
+      url: 'https://example.com/b',
+    });
+    expect(h.launches).toHaveLength(2);
+    expect(h.proxies).toHaveLength(2);
+
+    // The stopped browser exits only now; the fresh one and its page stay.
+    await h.endLaunch(0);
+    expect(h.proxies[0]?.stopped).toBe(true);
+    expect(h.proxies[1]?.stopped).toBe(false);
+    expect((await h.driver.list(RUN_A)).map((page) => page.pageId)).toEqual([opened.pageId]);
+    expect((await h.driver.snapshot(RUN_A, opened.pageId)).url).toBe('https://example.com/b');
+  });
+
+  it('fails an open on a browser that cannot open a page as the browser’s failure, and lets it go idle', async () => {
+    const h = harness({ browsers: [profile({ idleMinutes: 30 })] });
+    h.world.newPageFails = 'Target page, context or browser has been closed';
+    const refused = await refusal(
+      h.driver.open({
+        ...RUN_A,
+        redelivered: false,
+        profileId: 'default',
+        url: 'https://example.com/a',
+      }),
+    );
+    expect(refused.kind).toBe('navigation_failed');
+    expect(refused.message).toContain('could not open a page');
+    expect(refused.message).toContain('browser has been closed');
+
+    h.clock.now += 31 * MINUTE;
+    expect(await h.driver.sweepIdle(20)).toEqual({ closedPages: 0, stoppedProfiles: 1 });
+  });
+
+  it('closes no more than its limit in one sweep, leaving the rest for the next', async () => {
+    const h = harness({ browsers: [profile({ idleMinutes: 30 })] });
+    for (const path of ['a', 'b', 'c']) {
+      await h.driver.open({
+        ...RUN_A,
+        redelivered: false,
+        profileId: 'default',
+        url: `https://example.com/${path}`,
+      });
+    }
+    h.clock.now += 31 * MINUTE;
+    expect(await h.driver.sweepIdle(2)).toEqual({ closedPages: 2, stoppedProfiles: 0 });
+    expect(await h.driver.list(RUN_A)).toHaveLength(1);
+    expect(await h.driver.sweepIdle(2)).toEqual({ closedPages: 1, stoppedProfiles: 0 });
+    expect(await h.driver.list(RUN_A)).toHaveLength(0);
+
+    h.clock.now += 30 * MINUTE;
+    expect(await h.driver.sweepIdle(1)).toEqual({ closedPages: 0, stoppedProfiles: 1 });
+  });
+});
+
 describe('browser.profile.list', () => {
   it('never starts a browser to answer, and names sites only while one runs', async () => {
     const h = harness({
@@ -517,7 +703,12 @@ describe('browser.profile.list', () => {
     ]);
     expect(h.launches).toHaveLength(0);
 
-    await h.driver.open({ ...RUN_A, profileId: 'default', url: 'https://example.com/' });
+    await h.driver.open({
+      ...RUN_A,
+      redelivered: false,
+      profileId: 'default',
+      url: 'https://example.com/',
+    });
     expect(await h.driver.listProfiles('space-1')).toEqual([
       {
         profileId: 'default',
