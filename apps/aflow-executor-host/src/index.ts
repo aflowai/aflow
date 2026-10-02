@@ -47,6 +47,10 @@ import {
 import { ConsumerGroups, StreamKeys } from '@aflow/schemas';
 
 import { executionPermitted, loadHostPolicy } from './bindings.js';
+import { createChromeLauncher } from './browser/chromeProcess.js';
+import { BrowserDriver } from './browser/driver.js';
+import { createBrowserIdleSweep } from './browser/idleSweep.js';
+import { createBrowserHandler } from './handlers/browserHandler.js';
 import { removeWorktree } from './worktree.js';
 import { removeOrphanedCheckouts } from './handlers/harnessHandlers.js';
 import { createHostHandler } from './handlers/hostHandler.js';
@@ -58,15 +62,31 @@ import {
 } from './harnessSessions.js';
 import { discardNow, openOrphanJournal, reapOrphans } from './orphans.js';
 import { loadPairedEnv } from './pairedEnv.js';
-import { watchPolicy } from './policyWatch.js';
+import { followPolicy, watchPolicy } from './policyWatch.js';
 import { killAllProcesses, killProcessesForBinding, reapWithdrawn } from './sandboxedRun.js';
 import { observeRuntimes } from './runtimes.js';
 import { pushPostures } from './pushApproval.js';
-import { createBackgroundTaskRunner } from '@aflow/lib';
+import { type BackgroundTaskLogger, createBackgroundTaskRunner } from '@aflow/lib';
 
 const log = createServiceLogger('host-executor');
 
+const taskLogger: BackgroundTaskLogger = {
+  debug: (message, data) => {
+    log.debug(message, data);
+  },
+  info: (message, data) => {
+    log.info(message, data);
+  },
+  warn: (message, data) => {
+    log.warn(message, data);
+  },
+  error: (message, error, data) => {
+    log.error(message, { error, ...data });
+  },
+};
+
 const STEP_TYPE = 'host';
+const BROWSER_STEP_TYPE = 'browser';
 
 /** Twice the refresh, so one missed cycle does not blank a live machine. */
 
@@ -167,6 +187,12 @@ async function main(): Promise<void> {
   });
 
   const deps: ExecutorDependencies = { redis, redisBlocking, payloadStore: resolved.store };
+  // Its own blocking connection: a runtime blocks on its stream between jobs,
+  // and two runtimes sharing one would wait on each other.
+  const redisBlockingBrowser = createBlockingRedisConnection(
+    `${hostname}-browser-blocking`,
+    getExecutorRedisConfig(),
+  );
 
   const runtime = new ExecutorRuntime(
     {
@@ -179,6 +205,22 @@ async function main(): Promise<void> {
       defaultTimeoutMs: parseInt(process.env['DEFAULT_TIMEOUT_MS'] ?? '300000', 10),
     },
     deps,
+  );
+
+  // The browser is served from this executor because it lives on this machine:
+  // a profile's directory is under the host directory, and its Chrome is in the
+  // process table that withdrawal, shutdown and the orphan sweep below read.
+  const browserRuntime = new ExecutorRuntime(
+    {
+      ...DEFAULT_EXECUTOR_CONFIG,
+      consumerName: hostname,
+      consumerGroup: ConsumerGroups.executor(BROWSER_STEP_TYPE),
+      streamKey: StreamKeys.jobStream(BROWSER_STEP_TYPE),
+      stepType: BROWSER_STEP_TYPE,
+      concurrency: parseInt(process.env['BROWSER_EXECUTOR_CONCURRENCY'] ?? '4', 10),
+      defaultTimeoutMs: 120_000,
+    },
+    { redis, redisBlocking: redisBlockingBrowser, payloadStore: resolved.store },
   );
 
   // Before the first job: anything a previous executor left running is holding
@@ -215,30 +257,54 @@ async function main(): Promise<void> {
     ),
   );
 
+  // Loaded here rather than at the top so that nothing importing this module
+  // for its helpers pulls in the browser automation library.
+  const { createPlaywrightEngine } = await import('./browser/engine.js');
+  const browserDriver = new BrowserDriver({
+    engine: createPlaywrightEngine(),
+    launcher: createChromeLauncher(),
+    hostDir: dirname(policyPath),
+    loadPolicy: async () => await loadHostPolicy(policyPath),
+  });
+  browserRuntime.registerHandler(createBrowserHandler(browserDriver));
+  const browserIdleSweep = createBrowserIdleSweep(browserDriver, taskLogger);
+
   // Withdrawal reaches running work without waiting for the next request. A
   // detached command exists so the step can end, so ordinarily no request
   // comes — and the operator would wait out a timeout instead.
   const policyWatch = watchPolicy(policyPath, () => {
     void loadHostPolicy(policyPath)
       .then(async (policy) => {
-        const permitted = executionPermitted(policy.bindings);
-        const killed = reapWithdrawn(permitted);
-        // Sessions too. A process is the loud half of a withdrawal; a session
-        // is the quiet one — idle, holding a checkout of the operator's code
-        // and the harness's state, and reachable again the moment the binding
-        // came back. Reaping only processes left that checkout on disk until
-        // another harness request or a shutdown.
-        const dropped = withdrawnSessions(permitted);
-        for (const session of dropped) {
-          await removeWorktree(session.bindingRoot, session.worktreePath).catch(() => undefined);
-          await discardScratch(session);
-        }
-        if (killed.length > 0 || dropped.length > 0) {
-          log.warn('Ended work under a binding this machine no longer grants', {
-            processes: killed.length,
-            sessions: dropped.length,
-          });
-        }
+        await followPolicy({
+          reapHostWork: async () => {
+            const permitted = executionPermitted(policy);
+            const killed = reapWithdrawn(permitted);
+            // Sessions too. A process is the loud half of a withdrawal; a session
+            // is the quiet one — idle, holding a checkout of the operator's code
+            // and the harness's state, and reachable again the moment the binding
+            // came back. Reaping only processes left that checkout on disk until
+            // another harness request or a shutdown.
+            const dropped = withdrawnSessions(permitted.bindings);
+            for (const session of dropped) {
+              await removeWorktree(session.bindingRoot, session.worktreePath).catch(
+                () => undefined,
+              );
+              await discardScratch(session);
+            }
+            if (killed.length > 0 || dropped.length > 0) {
+              log.warn('Ended work under a binding this machine no longer grants', {
+                processes: killed.length,
+                sessions: dropped.length,
+              });
+            }
+          },
+          followInBrowsers: async () => {
+            await browserDriver.policyChanged(policy);
+          },
+          warn: (message, meta) => {
+            log.warn(message, meta);
+          },
+        });
       })
       .catch((error: unknown) => {
         // A policy that is gone is the strongest withdrawal there is: the file
@@ -282,6 +348,8 @@ async function main(): Promise<void> {
 
   await runtime.start();
   log.info('Host executor runtime started', { stepType: STEP_TYPE });
+  await browserRuntime.start();
+  log.info('Host executor runtime started', { stepType: BROWSER_STEP_TYPE });
 
   // Last known good, so a policy read that fails mid-save does not publish an
   // empty list — "this machine offers no harness" and "the file was being
@@ -349,20 +417,7 @@ async function main(): Promise<void> {
       maxCycleMs: 30_000,
       mode: 'enabled',
       runImmediately: true,
-      logger: {
-        debug: (message, data) => {
-          log.debug(message, data);
-        },
-        info: (message, data) => {
-          log.info(message, data);
-        },
-        warn: (message, data) => {
-          log.warn(message, data);
-        },
-        error: (message, error, data) => {
-          log.error(message, { error, ...data });
-        },
-      },
+      logger: taskLogger,
     },
     async () => {
       await publishRuntimes();
@@ -370,6 +425,7 @@ async function main(): Promise<void> {
     },
   );
   inventoryTask.start();
+  browserIdleSweep.start();
 
   // A withdrawal decided on the appliance reaches work already running here.
   //
@@ -417,16 +473,20 @@ async function main(): Promise<void> {
     logger: log,
     onShutdown: async () => {
       await inventoryTask.stop();
+      await browserIdleSweep.stop();
       await redis.zrem(HOST_MACHINES_KEY, hostname).catch(() => undefined);
       await runtime.stop();
+      await browserRuntime.stop();
       await quitRedisWithTimeout(withdrawals);
       await quitRedisWithTimeout(redisBlocking);
+      await quitRedisWithTimeout(redisBlockingBrowser);
       await closeRedisConnection();
     },
   });
 
   attachRedisErrorGuard(redis, () => controller.shuttingDown, log);
   attachRedisErrorGuard(redisBlocking, () => controller.shuttingDown, log);
+  attachRedisErrorGuard(redisBlockingBrowser, () => controller.shuttingDown, log);
   attachSignalHandlers({ onShutdown: () => controller.shutdownOnce(), exitCode: 0 });
 }
 

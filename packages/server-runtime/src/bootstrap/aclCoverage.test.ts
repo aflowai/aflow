@@ -103,6 +103,22 @@ describe.skipIf(!AVAILABLE)('host redis grant covers the executor', () => {
       'aflow:jobs:host',
       '>',
     );
+    // The same executor's second runtime, which serves the browser lane.
+    await host.setex('aflow:executor-heartbeat:browser:probe', 60, 'alive');
+    await host
+      .call('XGROUP', 'CREATE', 'aflow:jobs:browser', 'exec_browser', '$', 'MKSTREAM')
+      .catch(() => undefined);
+    await host.call(
+      'XREADGROUP',
+      'GROUP',
+      'exec_browser',
+      'probe',
+      'COUNT',
+      '1',
+      'STREAMS',
+      'aflow:jobs:browser',
+      '>',
+    );
     await host.exists('aflow:cancelled:probe:1');
     await host.set('aflow:step-inflight:probe', '1');
     await host

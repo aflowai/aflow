@@ -130,6 +130,7 @@ export const usersRoutes: FastifyPluginAsync = async (fastify) => {
           lanes: {
             codeLane: fastify.edition.codeLane,
             hostLane: fastify.edition.hostLane,
+            browserLane: fastify.edition.browserLane,
           },
         },
       });

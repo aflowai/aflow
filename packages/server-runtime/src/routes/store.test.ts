@@ -151,6 +151,7 @@ const EVERY_LANE: ComposedLanes = {
   edition: 'enterprise',
   codeLane: 'present',
   hostLane: 'present',
+  browserLane: 'present',
 };
 
 function editionWithLanes(lanes: ComposedLanes): EditionDescriptor {
@@ -162,6 +163,7 @@ function editionWithLanes(lanes: ComposedLanes): EditionDescriptor {
     computeRuntime: 'present',
     codeLane: lanes.codeLane,
     hostLane: lanes.hostLane,
+    browserLane: lanes.browserLane,
   };
 }
 
@@ -474,12 +476,14 @@ const HOSTED_LANES: ComposedLanes = {
   edition: 'enterprise',
   codeLane: 'present',
   hostLane: 'absent',
+  browserLane: 'absent',
 };
 
 const LOCAL_WITH_MACHINE: ComposedLanes = {
   edition: 'community-local',
   codeLane: 'absent',
   hostLane: 'present',
+  browserLane: 'present',
 };
 
 describe('the edition’s composed lanes', () => {

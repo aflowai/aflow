@@ -47,6 +47,18 @@ describe('resolveEditionDescriptor', () => {
     ).toBe('present');
   });
 
+  it('composes the browser lane exactly where the host lane is', () => {
+    for (const env of [
+      {},
+      { PHOENIX_HOST_REDIS_PASSWORD: 'pw' },
+      { PHOENIX_EDITION: 'community-local' },
+      { PHOENIX_EDITION: 'community-local', PHOENIX_HOST_REDIS_PASSWORD: 'pw' },
+    ]) {
+      const descriptor = resolveEditionDescriptor(env);
+      expect(descriptor.browserLane).toBe(descriptor.hostLane);
+    }
+  });
+
   it('carries Auth0 configuration through in the hosted product', () => {
     const descriptor = resolveEditionDescriptor({
       AUTH0_DOMAIN: 'aflow.eu.auth0.com',

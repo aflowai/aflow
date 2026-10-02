@@ -14,6 +14,7 @@ const EVERY_LANE: ComposedLanes = {
   edition: 'enterprise',
   codeLane: 'present',
   hostLane: 'present',
+  browserLane: 'present',
 };
 
 describe('store catalog facade', () => {

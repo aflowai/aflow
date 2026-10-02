@@ -139,8 +139,8 @@ export function sessionsForBinding(bindingId: string): HarnessSession[] {
  * registry here so nothing resolves them again; what they left on disk is the
  * caller's to remove, since that needs the repository they belong to.
  */
-export function withdrawnSessions(permitted: ReadonlySet<string>): HarnessSession[] {
-  const gone = [...sessions.values()].filter((s) => !permitted.has(s.bindingId));
+export function withdrawnSessions(permittedBindings: ReadonlySet<string>): HarnessSession[] {
+  const gone = [...sessions.values()].filter((s) => !permittedBindings.has(s.bindingId));
   for (const session of gone) sessions.delete(session.id);
   return gone;
 }

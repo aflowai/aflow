@@ -44,6 +44,7 @@ const APPLIANCE: EditionDescriptor = {
   computeRuntime: 'absent',
   codeLane: 'absent',
   hostLane: 'absent',
+  browserLane: 'absent',
 };
 
 const ENABLED_POLICY = {

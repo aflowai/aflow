@@ -44,6 +44,22 @@ export function describeEnqueueFailure(error: unknown): AflowError {
     };
   }
 
+  // The browser is served by the same executor on the operator's machine, so
+  // its absence is the same ordinary state and gets the same reading.
+  if (noExecutor && error.stepType === 'browser') {
+    return {
+      code: 'BROWSER_EXECUTOR_NOT_CONNECTED',
+      message:
+        'No browser is connected. The browser runs on the operator machine through its host ' +
+        'executor rather than in the appliance, so pages open only while they have it running — ' +
+        '`yarn workspace @aflow/aflow-executor-host start` on that machine. Nothing was ' +
+        'attempted, and retrying will not help until it is up.',
+      classification: 'configuration',
+      retryable: false,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
   return {
     code: noExecutor ? 'EXECUTOR_UNAVAILABLE' : 'ENQUEUE_FAILED',
     message: `Job enqueue failed: ${error instanceof Error ? error.message : String(error)}`,

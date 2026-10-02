@@ -68,16 +68,29 @@ function silentLogger(): ExecutorLogger {
   return { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
 }
 
+const SPAWN_DEADLINE_MS = 10_000;
+const SPAWN_POLL_MS = 10;
+// Above the deadline, so the workspace's 5 s test timeout cannot cut the wait
+// short and hide which spawns it saw.
+const SPAWN_TEST_TIMEOUT_MS = SPAWN_DEADLINE_MS + 5_000;
+
 async function waitForChild(pred: (c: FakeChild) => boolean): Promise<FakeChild> {
-  for (let i = 0; i < 500; i++) {
+  const startedAt = Date.now();
+  for (;;) {
     const found = children.find(pred);
     if (found) return found;
-    await new Promise((r) => setImmediate(r));
+    const waitedMs = Date.now() - startedAt;
+    if (waitedMs >= SPAWN_DEADLINE_MS) {
+      const seen = spawnCalls.map((args) => `docker ${args.join(' ')}`);
+      throw new Error(
+        `No matching spawn after ${waitedMs} ms. Spawns seen: ${seen.length > 0 ? seen.join('; ') : 'none'}.`,
+      );
+    }
+    await new Promise((r) => setTimeout(r, SPAWN_POLL_MS));
   }
-  throw new Error('child not spawned in time');
 }
 
-describe('sandbox PID limit', () => {
+describe('sandbox PID limit', { timeout: SPAWN_TEST_TIMEOUT_MS }, () => {
   beforeEach(() => {
     spawnCalls.length = 0;
     execFileCalls.length = 0;

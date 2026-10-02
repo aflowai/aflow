@@ -9,7 +9,7 @@ Production background discovery must be event- or candidate-driven. A task may n
 work by scanning the Redis keyspace, reading a whole dirty set, or enumerating tenant schemas;
 idle cost may not grow with logical shards, tenants, stored keys, or connected subscribers.
 
-**44 registered tasks** across 8 services.
+**45 registered tasks** across 8 services.
 2 task(s) still carry a residual poll — a periodic datastore read that
 exists only because an event or candidate path is incomplete.
 
@@ -38,6 +38,7 @@ Datastore operations per minute with zero due work, grouped by what each scope m
 | `executor.memory.embed_consumer` | executor-memory | feature | blocking | per_instance | event-driven | 60 | safe |
 | `executor.oauth.consent_state_reaper` | executor-mcp | feature | candidate | per_instance | 5m | 0.2 | safe |
 | `executor.step_inflight_refresh` | shared-runtime | correctness | active-resource | per_instance | 10s | 0 | never |
+| `host.browser_idle` | executor-host | feature | active-resource | per_instance | 1m | 0 | safe |
 | `host.runtime_inventory` | executor-host | feature | heartbeat | per_instance | 1m | 2 | safe |
 | `mcp-server.session_store_cleanup` | mcp-server | operational | active-resource | per_instance | 5m | 0 | safe |
 | `orchestrator.active_run_reconcile` | orchestrator | operational | audit | per_instance | event-driven | 0 | safe |
@@ -344,6 +345,34 @@ Datastore operations per minute with zero due work, grouped by what each scope m
 | Disable policy | never |
 | Residual poll | — |
 | Source | `packages/executor-runtime/src/executor/processJob.ts` |
+
+### `host.browser_idle`
+
+**Purpose.** Close browser pages nothing has used for their profile's idle limit, and stop a profile's browser once it has had no page for as long.
+
+**Invariant.** No page outlives its profile's idle limit unused, and no profile's browser runs pageless for longer than that limit — sign-ins stay on disk, not loaded behind an abandoned page.
+
+**Recovery.** Pages and browsers then stay until the executor stops; shutdown ends every browser it started, and the next boot's orphan sweep ends any it left.
+
+| Field | Value |
+| ----- | ----- |
+| Service | executor-host |
+| Owner domain | ownership |
+| Criticality | feature |
+| Trigger | active-resource |
+| Execution scope | per_instance |
+| Substrate | local |
+| Base cadence | 1m |
+| Max batch | 20 |
+| Max cycle | 30000 ms |
+| Idle datastore ops/min | 0 |
+| Hot-path producer budget | 0 added RTT — Traverses the in-memory page table and the browsers this process started. |
+| Feature gate | — |
+| Disable policy | safe |
+| Residual poll | — |
+| Source | `apps/aflow-executor-host/src/browser/idleSweep.ts`<br>`apps/aflow-executor-host/src/browser/driver.ts` |
+
+> Per instance because the resource is per instance: the browsers are processes this executor started and the pages live in its memory. The executor is not told when a run ends, so this is what bounds a page a run abandoned. A cycle with no browser running reads nothing. The batch counts closures — a page closed or a browser stopped — and a cycle stops at 20, leaving the rest for the next: each closure is one call to a browser on this machine, so 20 sit well inside the cycle budget, while a run that abandoned a page per step still drains at 20 a minute rather than one. A profile with an operation in flight is passed over until that operation ends.
 
 ### `host.runtime_inventory`
 

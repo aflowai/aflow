@@ -17,18 +17,21 @@ const HOSTED: ComposedLanes = {
   edition: 'enterprise',
   codeLane: 'present',
   hostLane: 'absent',
+  browserLane: 'absent',
 };
 
 const LOCAL_WITH_MACHINE: ComposedLanes = {
   edition: 'community-local',
   codeLane: 'absent',
   hostLane: 'present',
+  browserLane: 'present',
 };
 
 const LOCAL_WITHOUT_MACHINE: ComposedLanes = {
   edition: 'community-local',
   codeLane: 'absent',
   hostLane: 'absent',
+  browserLane: 'absent',
 };
 
 function entryOrThrow(catalogId: string) {

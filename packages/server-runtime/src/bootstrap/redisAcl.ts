@@ -93,6 +93,11 @@ const HOST_COMMANDS = [
 /** Key families the executor touches, and no others. */
 const HOST_KEY_PATTERNS = [
   '~aflow:jobs:host',
+  // The same executor serves `browser.*` from a second runtime. Its consumer
+  // group lives inside this stream, so the stream is the whole of the grant;
+  // results, heartbeats and idempotency below are keyed by step type under a
+  // wildcard and already cover it.
+  '~aflow:jobs:browser',
   '~aflow:shard:*:results',
   '~aflow:step:*:state',
   '~aflow:step-inflight:*',

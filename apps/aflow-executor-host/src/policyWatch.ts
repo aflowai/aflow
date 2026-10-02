@@ -19,6 +19,30 @@ export interface PolicyWatch {
   close: () => void;
 }
 
+export interface PolicyFollowers {
+  /** Ends host processes and sessions under a binding the policy no longer grants. */
+  readonly reapHostWork: () => Promise<void>;
+  /** Brings running browsers and their pages in line with the policy. */
+  readonly followInBrowsers: () => Promise<void>;
+  readonly warn: (message: string, meta: Record<string, unknown>) => void;
+}
+
+/**
+ * Act on a policy that changed. Withdrawn host work is ended first and owes
+ * nothing to the browser: a page slow to close, or a browser that fails to
+ * follow, must not keep a withdrawn process alive.
+ */
+export async function followPolicy(followers: PolicyFollowers): Promise<void> {
+  await followers.reapHostWork();
+  try {
+    await followers.followInBrowsers();
+  } catch (error) {
+    followers.warn('Running browsers could not follow the changed host policy', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 /**
  * Call `onChange` when the policy file changes, coalescing the burst an editor
  * produces — a rename-and-replace can fire several events for one save, and

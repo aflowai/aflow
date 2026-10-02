@@ -22,12 +22,21 @@ import { dirname, join } from 'node:path';
 import { SandboxManager } from '@anthropic-ai/sandbox-runtime';
 
 import { buildBaseEnv, workloadHome } from './baseEnv.js';
-import type { HostBinding } from './bindings.js';
+import type { ExecutionPermitted, HostBinding } from './bindings.js';
 import { createStreamScrubber } from './credentialFetch.js';
 import { assertSafeEnv } from './envPolicy.js';
 import { forgetSpawn, recordSpawn } from './orphans.js';
 import { compileSandboxPolicy, type SandboxWidening } from './sandboxPolicy.js';
 import { transportEnv } from './worktree.js';
+
+/**
+ * What a process runs under, and so what withdrawing ends it. A binding and a
+ * browser profile are separate namespaces: no binding id, whatever it is
+ * spelled, can keep a profile's browser alive, nor a profile a command.
+ */
+export type ProcessScope =
+  | { readonly kind: 'binding'; readonly id: string }
+  | { readonly kind: 'browser-profile'; readonly id: string };
 
 /** Captured output is capped so one chatty build cannot become the step's payload. */
 export const OUTPUT_CAP_BYTES = 256 * 1024;
@@ -37,7 +46,7 @@ const SIGKILL_AFTER_MS = 5_000;
 
 interface RunningProcess {
   readonly child: ChildProcess;
-  readonly bindingId: string;
+  readonly scope: ProcessScope;
   /**
    * The run that started it. Handles are addressed by id, and an id is
    * guessable, so ownership is what stops one run steering another's process.
@@ -85,6 +94,40 @@ function nextProcessId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}_${String(processCounter)}`;
 }
 
+/** The registry entry every spawn path makes, so every reaping path finds it. */
+function enterRegistry(
+  child: ChildProcess,
+  idPrefix: string,
+  scope: ProcessScope,
+  ownerRunId: string,
+  startedAt: Date,
+): { processId: string; entry: RunningProcess } {
+  const processId = nextProcessId(idPrefix);
+  const entry: RunningProcess = {
+    child,
+    scope,
+    ownerRunId,
+    startedAt,
+    exitCode: null,
+    exited: false,
+    buffered: '',
+    bufferTruncated: false,
+  };
+  running.set(processId, entry);
+  return { processId, entry };
+}
+
+/** Whether the policy still grants what a process runs under, each kind against its own set. */
+export function scopePermitted(scope: ProcessScope, permitted: ExecutionPermitted): boolean {
+  return scope.kind === 'binding'
+    ? permitted.bindings.has(scope.id)
+    : permitted.browserProfiles.has(scope.id);
+}
+
+function underBinding(entry: RunningProcess, bindingId: string): boolean {
+  return entry.scope.kind === 'binding' && entry.scope.id === bindingId;
+}
+
 /** Kills the whole group, which is why the child was detached in the first place. */
 export function signalGroup(child: ChildProcess, signal: NodeJS.Signals): void {
   if (child.pid === undefined) return;
@@ -111,7 +154,7 @@ function ownedBy(
   // still granted, pass the gate on it, and go on driving a process inside the
   // binding that was withdrawn.
   if (entry.ownerRunId !== ownerRunId) return undefined;
-  return entry.bindingId === bindingId ? entry : undefined;
+  return underBinding(entry, bindingId) ? entry : undefined;
 }
 
 /**
@@ -173,7 +216,7 @@ export function processesForBinding(
   return [...running.entries()]
     .filter(
       ([id, entry]) =>
-        entry.bindingId === bindingId &&
+        underBinding(entry, bindingId) &&
         entry.ownerRunId === ownerRunId &&
         (processId === undefined || id === processId),
     )
@@ -189,10 +232,10 @@ export function processesForBinding(
  * its timeout. Reconciling against the whole current policy costs nothing
  * extra: the policy was already read to serve this operation.
  */
-export function reapWithdrawn(permitted: ReadonlySet<string>): string[] {
+export function reapWithdrawn(permitted: ExecutionPermitted): string[] {
   const killed: string[] = [];
   for (const [id, entry] of running) {
-    if (entry.exited || permitted.has(entry.bindingId)) continue;
+    if (entry.exited || scopePermitted(entry.scope, permitted)) continue;
     signalGroup(entry.child, 'SIGKILL');
     killed.push(id);
   }
@@ -209,7 +252,7 @@ export function reapWithdrawn(permitted: ReadonlySet<string>): string[] {
 export function killProcessesForBinding(bindingId: string): string[] {
   const killed: string[] = [];
   for (const [id, entry] of running) {
-    if (entry.bindingId !== bindingId || entry.exited) continue;
+    if (!underBinding(entry, bindingId) || entry.exited) continue;
     signalGroup(entry.child, 'SIGKILL');
     killed.push(id);
   }
@@ -580,7 +623,6 @@ export async function spawnConfined(input: SpawnConfinedInput): Promise<Confined
   const argv = confinedArgv(srtBin, settingsPath, statusPath, input.argv);
 
   pruneExited(Date.now());
-  const processId = nextProcessId(input.idPrefix);
   const startedAt = new Date();
   await mkdir(workloadHome(input.scratchDir), { recursive: true });
   const child = spawn(process.execPath, argv, {
@@ -598,17 +640,13 @@ export async function spawnConfined(input: SpawnConfinedInput): Promise<Confined
 
   if (child.pid !== undefined) recordSpawn(child.pid, input.scratchDir);
 
-  const entry: RunningProcess = {
+  const { processId, entry } = enterRegistry(
     child,
-    bindingId: input.binding.id,
-    ownerRunId: input.ownerRunId,
+    input.idPrefix,
+    { kind: 'binding', id: input.binding.id },
+    input.ownerRunId,
     startedAt,
-    exitCode: null,
-    exited: false,
-    buffered: '',
-    bufferTruncated: false,
-  };
-  running.set(processId, entry);
+  );
   // Struck from the journal the moment it ends, so what is left there is what
   // is still running. A journal of everything ever spawned is a list of pids
   // the operating system has since reassigned.
@@ -643,7 +681,6 @@ export async function spawnConfined(input: SpawnConfinedInput): Promise<Confined
 async function superviseSpawn(input: SupervisedSpawn): Promise<SandboxedRunResult> {
   pruneExited(Date.now());
 
-  const processId = nextProcessId(input.idPrefix);
   const startedAt = new Date();
   const child = spawn(input.program, input.args, {
     cwd: input.cwd,
@@ -663,17 +700,13 @@ async function superviseSpawn(input: SupervisedSpawn): Promise<SandboxedRunResul
 
   if (input.closeStdin === true) child.stdin.end();
 
-  const entry: RunningProcess = {
+  const { processId, entry } = enterRegistry(
     child,
-    bindingId: input.bindingId,
-    ownerRunId: input.ownerRunId,
+    input.idPrefix,
+    { kind: 'binding', id: input.bindingId },
+    input.ownerRunId,
     startedAt,
-    exitCode: null,
-    exited: false,
-    buffered: '',
-    bufferTruncated: false,
-  };
-  running.set(processId, entry);
+  );
 
   let stdout = '';
   let stderr = '';
@@ -942,4 +975,97 @@ export async function runUnconfined(input: UnconfinedRunInput): Promise<Sandboxe
     env: transportEnv(),
     bindingId: input.binding.id,
   });
+}
+
+export interface ServiceStartInput {
+  /** Program and arguments, already split, built by this executor and never by a job. */
+  readonly argv: readonly string[];
+  readonly cwd: string;
+  readonly idPrefix: string;
+  /**
+   * What reaps it: withdrawal ends it when the policy no longer grants this
+   * scope, as it ends a command under a withdrawn binding.
+   */
+  readonly scope: ProcessScope;
+  /**
+   * The whole environment, built by the caller from names it chose. Nothing of
+   * this executor's own is passed through.
+   */
+  readonly env: Readonly<Record<string, string>>;
+}
+
+export interface ServiceExit {
+  readonly code: number | null;
+  readonly signal: NodeJS.Signals | null;
+  /** The end of what it wrote to standard error, for a refusal to quote. */
+  readonly stderrTail: string;
+}
+
+export interface RunningService {
+  readonly processId: string;
+  readonly exited: Promise<ServiceExit>;
+  /** End its group politely, then for it. */
+  stop(): void;
+}
+
+const SERVICE_STDERR_TAIL_CHARS = 4_000;
+
+/**
+ * Start a long-lived process this executor serves from — the operator's own
+ * browser — unconfined, outside any binding, and running until it is stopped.
+ *
+ * Unconfined for the reason the push is: the sandbox cannot hold it. Unlike a
+ * push it is nobody's step, so it has no deadline and no output anyone reads;
+ * what it shares with every other spawn is the registry, the orphan journal and
+ * the group kill, which is what puts it in reach of withdrawal, shutdown and the
+ * next boot's sweep. It sees the environment its caller named and nothing a job sent.
+ */
+export function startUnconfinedService(input: ServiceStartInput): RunningService {
+  const [program, ...args] = input.argv;
+  if (program === undefined) throw new Error('A service with no program cannot be started.');
+  pruneExited(Date.now());
+
+  const child = spawn(program, args, {
+    cwd: input.cwd,
+    env: { ...input.env },
+    detached: true,
+    stdio: ['ignore', 'ignore', 'pipe'],
+  });
+  // No scratch directory: nothing it uses is this executor's to delete.
+  if (child.pid !== undefined) recordSpawn(child.pid);
+  const { processId, entry } = enterRegistry(child, input.idPrefix, input.scope, '', new Date());
+
+  let stderrTail = '';
+  child.stderr.on('data', (chunk: Buffer) => {
+    stderrTail = (stderrTail + chunk.toString('utf8')).slice(-SERVICE_STDERR_TAIL_CHARS);
+  });
+
+  const exited = new Promise<ServiceExit>((resolve) => {
+    const settle = (code: number | null, signal: NodeJS.Signals | null): void => {
+      if (entry.exited) return;
+      entry.exited = true;
+      entry.exitCode = code;
+      entry.exitedAt = Date.now();
+      if (child.pid !== undefined) forgetSpawn(child.pid);
+      resolve({ code, signal, stderrTail });
+    };
+    child.once('close', settle);
+    child.once('error', (error: Error) => {
+      stderrTail = `${stderrTail}${error.message}`.slice(-SERVICE_STDERR_TAIL_CHARS);
+      settle(null, null);
+    });
+  });
+  child.unref();
+
+  return {
+    processId,
+    exited,
+    stop: () => {
+      if (entry.exited) return;
+      signalGroup(child, 'SIGTERM');
+      setTimeout(() => {
+        if (!entry.exited) signalGroup(child, 'SIGKILL');
+      }, SIGKILL_AFTER_MS).unref();
+    },
+  };
 }
