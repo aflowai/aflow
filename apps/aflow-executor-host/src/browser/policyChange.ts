@@ -1,22 +1,27 @@
 /**
- * What an edit to the machine's policy does to browsers already running.
+ * What an edit to the machine's policy does to browsers already running or
+ * still starting.
  *
  * A profile gone from the policy has its browser stopped, and the pages in it
- * go with it. A profile still there takes its new rules at once, and the
- * pages of runs in spaces it no longer serves are closed. Neither waits for
- * the idle limit: until then such a page would go on serving a run that may
- * no longer use the profile, under rules the operator has since removed.
+ * go with it; one still starting is stopped as soon as it has started. A
+ * profile still there takes its new rules at once, and the pages of runs in
+ * spaces it no longer serves are closed. Neither waits for the idle limit:
+ * until then such a page would go on serving a run that may no longer use the
+ * profile, under rules the operator has since removed.
  */
 import type { BrowserProfile } from '@aflow/schemas';
 
-import type { PageTable } from './pageTable.js';
+import { closeWithinDeadline, type PageTable } from './pageTable.js';
 import { profileOpenToSpace } from './profiles.js';
 
 export interface PolicyChangeTarget {
   readonly pages: PageTable;
-  /** Running browsers by profile; the profile held here is the one its proxy reads. */
-  readonly running: ReadonlyMap<string, { readonly state: { profile: BrowserProfile } }>;
-  /** The idle sweep's stop. */
+  /**
+   * Browsers running or still starting, by profile. The profile held here is
+   * the one its proxy reads, and this change is the only thing that rewrites it.
+   */
+  readonly browsers: ReadonlyMap<string, { readonly state: { profile: BrowserProfile } }>;
+  /** Stops a running browser; one still starting stops as soon as it has started. */
   stop(profileId: string): void;
 }
 
@@ -25,7 +30,7 @@ export async function applyPolicyChange(
   browsers: ReadonlyMap<string, BrowserProfile>,
 ): Promise<void> {
   const closing: Array<Promise<void>> = [];
-  for (const [profileId, running] of [...target.running]) {
+  for (const [profileId, browser] of [...target.browsers]) {
     const profile = browsers.get(profileId);
     const revoked = target.pages
       .all()
@@ -40,8 +45,8 @@ export async function applyPolicyChange(
       target.stop(profileId);
       continue;
     }
-    running.state.profile = profile;
-    closing.push(...revoked.map(async (held) => await held.page.close().catch(() => undefined)));
+    browser.state.profile = profile;
+    closing.push(...revoked.map((held) => closeWithinDeadline(held.page)));
   }
   await Promise.all(closing);
 }

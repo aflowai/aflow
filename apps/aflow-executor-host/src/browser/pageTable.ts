@@ -46,6 +46,26 @@ function mintPageId(): string {
   return `pg_${randomBytes(12).toString('base64url')}`;
 }
 
+/** How long the host waits on a page it closes itself before it lets the page go regardless. */
+export const PAGE_CLOSE_DEADLINE_MS = 5_000;
+
+/**
+ * Close a page the host itself is ending — revoked or idle. A page that does
+ * not answer is abandoned at the deadline: what waits on it is the rest of a
+ * policy change or a sweep, and one hung page must not hold either up.
+ */
+export async function closeWithinDeadline(page: EnginePage): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, PAGE_CLOSE_DEADLINE_MS);
+  });
+  try {
+    await Promise.race([page.close().catch(() => undefined), deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export class PageTable {
   private readonly held = new Map<string, Map<string, HeldPage>>();
   private readonly gone = new Map<string, Map<string, string>>();

@@ -40,7 +40,7 @@ import type {
   SnapshotResult,
 } from './driverTypes.js';
 import { boundSnapshot, buildOutline, describeRef } from './outline.js';
-import { PageTable, type HeldPage, type PageOwner } from './pageTable.js';
+import { closeWithinDeadline, PageTable, type HeldPage, type PageOwner } from './pageTable.js';
 import { profileOpenToSpace } from './profiles.js';
 import { assertActionAllowed, assertNavigationAllowed, ruleRefusingHost } from './rules.js';
 import {
@@ -73,16 +73,27 @@ export interface BrowserDriverDeps {
   readonly now?: () => number;
 }
 
-/** What changes as the profile is used; the proxy reads the profile from here on every connection. */
+/**
+ * What changes as the profile is used; the proxy reads the profile from here on
+ * every connection. Only the start and a policy change write `profile`.
+ */
 interface ProfileState {
   profile: BrowserProfile;
   lastActivityAt: number;
+  /** A policy change removed the profile while its browser was starting. */
+  withdrawn: boolean;
 }
 
 interface RunningProfile {
   readonly browser: EngineBrowser;
   readonly chrome: LaunchedChrome;
   readonly proxy: EgressProxy;
+  readonly state: ProfileState;
+}
+
+/** A profile's browser from the moment its start begins; `state` is the one it will run with. */
+interface Launch {
+  readonly ready: Promise<RunningProfile>;
   readonly state: ProfileState;
 }
 
@@ -108,11 +119,13 @@ const HISTORY_WORDS: Readonly<Record<'back' | 'forward', string>> = {
 
 export class BrowserDriver {
   private readonly pages = new PageTable();
-  private readonly starting = new Map<string, Promise<RunningProfile>>();
+  private readonly starting = new Map<string, Launch>();
   private readonly running = new Map<string, RunningProfile>();
   private readonly everStarted = new Set<string>();
   /** Operations holding a profile's browser; the idle sweep leaves those profiles alone. */
   private readonly inFlight = new Map<string, number>();
+  /** Raised by every policy change, so an operation can tell its read of the policy is stale. */
+  private generation = 0;
   private readonly now: () => number;
 
   constructor(private readonly deps: BrowserDriverDeps) {
@@ -124,7 +137,7 @@ export class BrowserDriver {
   // -------------------------------------------------------------------------
 
   async open(request: OpenRequest): Promise<OpenedPage> {
-    const policy = await this.deps.loadPolicy();
+    const { policy, generation } = await this.currentPolicy();
     const profile = this.resolveProfile(policy, request.profileId, request.spaceId);
     const asked = new URL(request.url);
     this.refuseObviouslyLocal(profile, asked);
@@ -136,9 +149,20 @@ export class BrowserDriver {
       throw new BrowserDriverError('no_browser', chromeMissingMessage(policy.chrome));
     }
 
-    const running = await this.ensureRunning(profile, executable);
+    let running: RunningProfile;
     try {
-      return { outcome: 'performed', ...(await this.openIn(running, profile, request, asked)) };
+      running = await this.ensureRunning(profile, executable);
+    } catch (error) {
+      // A start the policy change stopped is answered as the change answers it.
+      await this.stillAllowed(generation, profile, request, asked);
+      throw error;
+    }
+    try {
+      const allowed = await this.stillAllowed(generation, profile, request, asked);
+      return {
+        outcome: 'performed',
+        ...(await this.openIn(running, allowed, generation, request, asked)),
+      };
     } finally {
       this.release(profile.id);
     }
@@ -175,11 +199,11 @@ export class BrowserDriver {
 
   private async openIn(
     running: RunningProfile,
-    profile: BrowserProfile,
+    allowed: BrowserProfile,
+    generation: number,
     request: OpenRequest,
     asked: URL,
   ): Promise<PageView> {
-    running.state.profile = profile;
     const observations = new PageObservations(this.now);
     let page: EnginePage;
     try {
@@ -187,7 +211,7 @@ export class BrowserDriver {
     } catch (error) {
       throw new BrowserDriverError(
         'navigation_failed',
-        `${request.url} did not load: the browser for profile \`${profile.id}\` could not open ` +
+        `${request.url} did not load: the browser for profile \`${allowed.id}\` could not open ` +
           `a page (${errorText(error)}). It may have been stopping; opening the address again ` +
           'starts it afresh.',
       );
@@ -199,7 +223,7 @@ export class BrowserDriver {
       await page.close().catch(() => undefined);
       throw navigationFailure(
         running.proxy,
-        profile,
+        allowed,
         asked,
         startedAt,
         `${request.url} did not load`,
@@ -207,6 +231,14 @@ export class BrowserDriver {
       );
     }
 
+    // A change applied while the page loaded never saw it, so it is checked here.
+    let profile: BrowserProfile;
+    try {
+      profile = await this.stillAllowed(generation, allowed, request, asked);
+    } catch (error) {
+      await page.close().catch(() => undefined);
+      throw error;
+    }
     const held = this.pages.add(
       request,
       profile.id,
@@ -482,7 +514,7 @@ export class BrowserDriver {
       const running = this.running.get(held.profileId);
       if (running === undefined || this.busy(held.profileId)) continue;
       if (now - held.lastUsedAt < running.state.profile.idleMinutes * MINUTE_MS) continue;
-      await held.page.close().catch(() => undefined);
+      await closeWithinDeadline(held.page);
       this.pages.forget(held);
       running.state.lastActivityAt = Math.max(running.state.lastActivityAt, now);
       closedPages += 1;
@@ -500,12 +532,18 @@ export class BrowserDriver {
     return { closedPages, stoppedProfiles };
   }
 
-  /** The machine's policy changed: running browsers and their pages follow it at once. */
+  /**
+   * The machine's policy changed: browsers running or starting, and their
+   * pages, follow it at once.
+   */
   async policyChanged(policy: BrowserPolicy): Promise<void> {
+    this.generation += 1;
+    const browsers = new Map<string, { state: ProfileState }>(this.starting);
+    for (const [profileId, running] of this.running) browsers.set(profileId, running);
     await applyPolicyChange(
       {
         pages: this.pages,
-        running: this.running,
+        browsers,
         stop: (id) => {
           this.stopBrowser(id);
         },
@@ -516,12 +554,13 @@ export class BrowserDriver {
 
   private stopBrowser(profileId: string): void {
     const running = this.running.get(profileId);
-    if (running === undefined) return;
+    const launch = this.starting.get(profileId);
     // Gone from both maps before it has exited, so the next open starts a
     // fresh browser rather than being handed this one.
     this.running.delete(profileId);
     this.starting.delete(profileId);
-    running.chrome.stop();
+    if (running !== undefined) running.chrome.stop();
+    else if (launch !== undefined) launch.state.withdrawn = true;
   }
 
   // -------------------------------------------------------------------------
@@ -536,7 +575,6 @@ export class BrowserDriver {
     const policy = await this.deps.loadPolicy();
     const profile = this.resolveProfile(policy, held.profileId, scope.spaceId);
     const running = this.runningFor(held);
-    running.state.profile = profile;
     return { held, running, profile };
   }
 
@@ -663,6 +701,36 @@ export class BrowserDriver {
     assertNavigationAllowed(profile, landed);
   }
 
+  /** The policy, with the generation it is current for. */
+  private async currentPolicy(): Promise<{ policy: BrowserPolicy; generation: number }> {
+    for (;;) {
+      const generation = this.generation;
+      const policy = await this.deps.loadPolicy();
+      // A change applied during the read may be newer than the file it read.
+      if (generation === this.generation) return { policy, generation };
+    }
+  }
+
+  /**
+   * The profile an open that read the policy at `generation` goes on with:
+   * the one it read, unless a change has landed since — then the profile as
+   * the policy now has it, refused as any open is if the run may no longer
+   * use it or the address.
+   */
+  private async stillAllowed(
+    generation: number,
+    profile: BrowserProfile,
+    request: OpenRequest,
+    asked: URL,
+  ): Promise<BrowserProfile> {
+    if (generation === this.generation) return profile;
+    const { policy } = await this.currentPolicy();
+    const now = this.resolveProfile(policy, request.profileId, request.spaceId);
+    this.refuseObviouslyLocal(now, asked);
+    assertNavigationAllowed(now, asked);
+    return now;
+  }
+
   private resolveProfile(
     policy: BrowserPolicy,
     profileId: string,
@@ -703,29 +771,41 @@ export class BrowserDriver {
     else this.inFlight.delete(profileId);
   }
 
+  private withdrawnWhileStarting(profileId: string): BrowserDriverError {
+    return new BrowserDriverError(
+      'launch_failed',
+      `The browser for profile \`${profileId}\` was stopped as it started: the profile was ` +
+        "removed from this machine's policy meanwhile.",
+    );
+  }
+
   /** The profile's browser, counted as in use until the caller's `release`. */
   private async ensureRunning(
     profile: BrowserProfile,
     executable: string,
   ): Promise<RunningProfile> {
-    let starting = this.starting.get(profile.id);
-    if (starting === undefined) {
-      starting = this.start(profile, executable);
-      this.starting.set(profile.id, starting);
+    let launch = this.starting.get(profile.id);
+    if (launch === undefined) {
+      const state: ProfileState = { profile, lastActivityAt: this.now(), withdrawn: false };
+      launch = { state, ready: this.start(profile.id, executable, state) };
+      this.starting.set(profile.id, launch);
     }
     let running: RunningProfile;
     try {
-      running = await starting;
+      running = await launch.ready;
     } catch (error) {
-      if (this.starting.get(profile.id) === starting) this.starting.delete(profile.id);
+      if (this.starting.get(profile.id) === launch) this.starting.delete(profile.id);
       throw error;
     }
     this.inFlight.set(profile.id, (this.inFlight.get(profile.id) ?? 0) + 1);
     return running;
   }
 
-  private async start(profile: BrowserProfile, executable: string): Promise<RunningProfile> {
-    const state: ProfileState = { profile, lastActivityAt: this.now() };
+  private async start(
+    profileId: string,
+    executable: string,
+    state: ProfileState,
+  ): Promise<RunningProfile> {
     // Before Chrome, so no request of Chrome's ever goes out unchecked.
     const proxy = await (this.deps.startProxy ?? startEgressProxy)({
       refuseHost: (host) => ruleRefusingHost(state.profile, host),
@@ -737,7 +817,7 @@ export class BrowserDriver {
       chrome = await this.deps.launcher.launch({
         executable,
         hostDir: this.deps.hostDir,
-        profile,
+        profile: state.profile,
         proxyServer: proxy.server,
       });
     } catch (error) {
@@ -752,22 +832,28 @@ export class BrowserDriver {
       await proxy.stop().catch(() => undefined);
       throw new BrowserDriverError(
         'launch_failed',
-        `The browser for profile \`${profile.id}\` started but could not be attached to: ` +
+        `The browser for profile \`${profileId}\` started but could not be attached to: ` +
           errorText(error),
       );
     }
+    if (state.withdrawn) {
+      chrome.stop();
+      await browser.disconnect().catch(() => undefined);
+      await proxy.stop().catch(() => undefined);
+      throw this.withdrawnWhileStarting(profileId);
+    }
     const entry: RunningProfile = { browser, chrome, proxy, state };
-    this.running.set(profile.id, entry);
-    this.everStarted.add(profile.id);
+    this.running.set(profileId, entry);
+    this.everStarted.add(profileId);
     // Whoever ends it — the idle sweep, withdrawal, shutdown, a crash — its
     // proxy and its pages go with it, and the next open starts it again.
     void chrome.exited.then(async () => {
       // A browser the sweep stopped is already out of both maps, and the
       // profile may be running again in a fresh one by now.
-      if (this.running.get(profile.id) === entry) {
-        this.running.delete(profile.id);
-        this.starting.delete(profile.id);
-        this.pages.dropProfile(profile.id);
+      if (this.running.get(profileId) === entry) {
+        this.running.delete(profileId);
+        this.starting.delete(profileId);
+        this.pages.dropProfile(profileId);
       }
       await browser.disconnect().catch(() => undefined);
       await proxy.stop().catch(() => undefined);

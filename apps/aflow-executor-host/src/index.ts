@@ -62,7 +62,7 @@ import {
 } from './harnessSessions.js';
 import { discardNow, openOrphanJournal, reapOrphans } from './orphans.js';
 import { loadPairedEnv } from './pairedEnv.js';
-import { watchPolicy } from './policyWatch.js';
+import { followPolicy, watchPolicy } from './policyWatch.js';
 import { killAllProcesses, killProcessesForBinding, reapWithdrawn } from './sandboxedRun.js';
 import { observeRuntimes } from './runtimes.js';
 import { pushPostures } from './pushApproval.js';
@@ -275,25 +275,36 @@ async function main(): Promise<void> {
   const policyWatch = watchPolicy(policyPath, () => {
     void loadHostPolicy(policyPath)
       .then(async (policy) => {
-        await browserDriver.policyChanged(policy);
-        const permitted = executionPermitted(policy);
-        const killed = reapWithdrawn(permitted);
-        // Sessions too. A process is the loud half of a withdrawal; a session
-        // is the quiet one — idle, holding a checkout of the operator's code
-        // and the harness's state, and reachable again the moment the binding
-        // came back. Reaping only processes left that checkout on disk until
-        // another harness request or a shutdown.
-        const dropped = withdrawnSessions(permitted.bindings);
-        for (const session of dropped) {
-          await removeWorktree(session.bindingRoot, session.worktreePath).catch(() => undefined);
-          await discardScratch(session);
-        }
-        if (killed.length > 0 || dropped.length > 0) {
-          log.warn('Ended work under a binding this machine no longer grants', {
-            processes: killed.length,
-            sessions: dropped.length,
-          });
-        }
+        await followPolicy({
+          reapHostWork: async () => {
+            const permitted = executionPermitted(policy);
+            const killed = reapWithdrawn(permitted);
+            // Sessions too. A process is the loud half of a withdrawal; a session
+            // is the quiet one — idle, holding a checkout of the operator's code
+            // and the harness's state, and reachable again the moment the binding
+            // came back. Reaping only processes left that checkout on disk until
+            // another harness request or a shutdown.
+            const dropped = withdrawnSessions(permitted.bindings);
+            for (const session of dropped) {
+              await removeWorktree(session.bindingRoot, session.worktreePath).catch(
+                () => undefined,
+              );
+              await discardScratch(session);
+            }
+            if (killed.length > 0 || dropped.length > 0) {
+              log.warn('Ended work under a binding this machine no longer grants', {
+                processes: killed.length,
+                sessions: dropped.length,
+              });
+            }
+          },
+          followInBrowsers: async () => {
+            await browserDriver.policyChanged(policy);
+          },
+          warn: (message, meta) => {
+            log.warn(message, meta);
+          },
+        });
       })
       .catch((error: unknown) => {
         // A policy that is gone is the strongest withdrawal there is: the file

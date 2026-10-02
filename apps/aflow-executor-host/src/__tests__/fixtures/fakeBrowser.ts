@@ -82,6 +82,8 @@ export class FakePage implements EnginePage {
   index = -1;
   closed = false;
   snapshotFails = false;
+  /** Its close never settles, as a hung page's does. */
+  closeHangs = false;
   readonly actions: Array<{ ref: string; action: EngineAction }> = [];
   readonly navigations: EngineNavigation[] = [];
 
@@ -198,6 +200,7 @@ export class FakePage implements EnginePage {
     return Promise.resolve(this.site().text ?? 'Sign in\nWelcome back to the example service.');
   }
   close(): Promise<void> {
+    if (this.closeHangs) return new Promise(() => undefined);
     this.closed = true;
     return Promise.resolve();
   }
@@ -266,6 +269,8 @@ export interface Harness {
   /** This machine's interface addresses, as the classifier reads them; push to add one. */
   readonly interfaces: string[];
   cookieSites: string[];
+  /** Every launch waits on this while it is set, as a Chrome still starting does. */
+  launchHeld?: Promise<void>;
 }
 
 export function harness(
@@ -298,21 +303,22 @@ export function harness(
     await new Promise((resolve) => setTimeout(resolve, 0));
   };
   const launcher: ChromeLauncher = {
-    launch: (input) => {
+    launch: async (input) => {
       launches.push(input);
       let end: () => void = () => undefined;
       const exited = new Promise<void>((resolve) => {
         end = resolve;
       });
       ends.push(end);
-      return Promise.resolve({
+      if (state.launchHeld !== undefined) await state.launchHeld;
+      return {
         endpoint: 'ws://127.0.0.1:9/devtools/browser/x',
         exited,
         stop: () => {
           stops.push(clock.now);
           if (options.slowExit !== true) end();
         },
-      });
+      };
     },
   };
   const state: Harness = {
