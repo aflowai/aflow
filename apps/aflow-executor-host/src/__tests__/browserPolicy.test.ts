@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { executionPermitted, HostPolicySchema, loadHostPolicy } from '../bindings.js';
 import { chromeMissingMessage, discoverChrome } from '../browser/chromeDiscovery.js';
-import { browserProfileScope } from '../browser/profiles.js';
+import { scopePermitted } from '../sandboxedRun.js';
 
 const FOUND = () => ({
   found: { label: 'Chromium', path: '/usr/bin/chromium' },
@@ -50,6 +50,7 @@ describe('a policy file written before browsers', () => {
         rules: [],
         window: 'hidden',
         unattended: true,
+        idleMinutes: 30,
       },
     ]);
     // Computed on load, never written back.
@@ -94,9 +95,67 @@ describe('a policy that declares browsers', () => {
   it("keeps a profile's browser among what withdrawal permits, for as long as it is offered", async () => {
     await writeFile(policyPath, BEFORE_BROWSERS);
     const offered = executionPermitted(await loadHostPolicy(policyPath, FOUND));
-    expect([...offered].sort()).toEqual([browserProfileScope('default'), 'hb'].sort());
+    expect([...offered.bindings]).toEqual(['hb']);
+    expect([...offered.browserProfiles]).toEqual(['default']);
     const withdrawn = executionPermitted(await loadHostPolicy(policyPath, MISSING));
-    expect([...withdrawn]).toEqual(['hb']);
+    expect([...withdrawn.bindings]).toEqual(['hb']);
+    expect([...withdrawn.browserProfiles]).toEqual([]);
+  });
+
+  it('keeps no browser alive for a binding whose id spells a profile scope', async () => {
+    // Profiles withdrawn: Chrome is missing, so nothing is offered.
+    await writeFile(
+      policyPath,
+      JSON.stringify({
+        version: 1,
+        bindings: [
+          {
+            id: 'browser-profile:default',
+            root: '/a',
+            mode: 'read',
+            allowsExecution: true,
+            spaceId: 's',
+          },
+        ],
+      }),
+    );
+    const permitted = executionPermitted(await loadHostPolicy(policyPath, MISSING));
+    expect([...permitted.bindings]).toEqual(['browser-profile:default']);
+    expect(scopePermitted({ kind: 'browser-profile', id: 'default' }, permitted)).toBe(false);
+    expect(
+      scopePermitted({ kind: 'browser-profile', id: 'browser-profile:default' }, permitted),
+    ).toBe(false);
+    // Nor a profile id a command's binding.
+    const profiles = executionPermitted(await loadHostPolicy(policyPath, FOUND));
+    expect(scopePermitted({ kind: 'binding', id: 'default' }, profiles)).toBe(false);
+    expect(scopePermitted({ kind: 'binding', id: 'browser-profile:default' }, profiles)).toBe(true);
+    expect(scopePermitted({ kind: 'browser-profile', id: 'default' }, profiles)).toBe(true);
+  });
+
+  it('refuses an origin rule that is neither an exact origin nor a wildcard host, teaching both', async () => {
+    for (const origin of [
+      'mail.example.com',
+      'https://mail.example.com/inbox',
+      '*example.com',
+      'ftp://x.com',
+    ]) {
+      await writeFile(
+        policyPath,
+        JSON.stringify({
+          version: 1,
+          bindings: [],
+          browsers: [{ id: 'a', rules: [{ origin, effect: 'deny' }] }],
+        }),
+      );
+      await expect(loadHostPolicy(policyPath, FOUND), origin).rejects.toThrow(/not valid/);
+    }
+    const refused = HostPolicySchema.safeParse({
+      version: 1,
+      bindings: [],
+      browsers: [{ id: 'a', rules: [{ origin: 'mail.example.com', effect: 'deny' }] }],
+    });
+    expect(refused.success).toBe(false);
+    expect(JSON.stringify(refused.error?.issues)).toContain('`*.example.com`');
   });
 });
 

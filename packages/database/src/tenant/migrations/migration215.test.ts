@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type postgres from 'postgres';
-import { BROWSER_PAGE_OPEN_OPERATION_ID, getOperation } from '@aflow/schemas';
+import { BROWSER_PAGE_OPEN_OPERATION_ID, getAllOperations, getOperation } from '@aflow/schemas';
 
 import { applyMigration215 } from './migration215.js';
 
@@ -43,27 +43,47 @@ function grantsByProfile(sql: string): Map<string, Grant[]> {
   return byProfile;
 }
 
+const BROWSER_GRANTS = [
+  'browser.page:read',
+  'browser.page:write',
+  'browser.profile:read',
+  'browser.profile:write',
+];
+
 describe('migration 215', () => {
-  it('grants Full Access and Standard read and write, and Read Only read', async () => {
+  it('grants Full Access and Standard read and write, and Read Only nothing', async () => {
     const byProfile = grantsByProfile(await sentSql());
     const modes = (name: string): string[] =>
       (byProfile.get(name) ?? []).map((g) => `${g.capabilityGroupId}:${g.accessMode}`).sort();
-    expect([...byProfile.keys()].sort()).toEqual(['Full Access', 'Read Only', 'Standard']);
-    expect(modes('Full Access')).toEqual(['browser.page:read', 'browser.page:write']);
-    expect(modes('Standard')).toEqual(['browser.page:read', 'browser.page:write']);
-    expect(modes('Read Only')).toEqual(['browser.page:read']);
+    expect([...byProfile.keys()].sort()).toEqual(['Full Access', 'Standard']);
+    expect(modes('Full Access')).toEqual(BROWSER_GRANTS);
+    expect(modes('Standard')).toEqual(BROWSER_GRANTS);
+    expect(await sentSql()).not.toContain('Read Only');
   });
 
-  it('names the capability group the browser operations are registered under', async () => {
-    const group = getOperation(BROWSER_PAGE_OPEN_OPERATION_ID)?.capabilityGroupId;
-    expect(group).toBe('browser.page');
-    expect(await sentSql()).toContain(`"capabilityGroupId":"${String(group)}"`);
+  it('covers every capability group and access mode the browser operations are registered under', async () => {
+    const needed = new Set(
+      [...getAllOperations().values()]
+        .filter((op) => op.stepType === 'browser')
+        .map((op) => `${op.capabilityGroupId}:${op.accessMode}`),
+    );
+    expect(
+      needed.has(
+        `${String(getOperation(BROWSER_PAGE_OPEN_OPERATION_ID)?.capabilityGroupId)}:write`,
+      ),
+    ).toBe(true);
+    const granted = new Set(
+      (grantsByProfile(await sentSql()).get('Standard') ?? []).map(
+        (g) => `${g.capabilityGroupId}:${g.accessMode}`,
+      ),
+    );
+    for (const grant of needed) expect(granted, grant).toContain(grant);
   });
 
   it('appends only to system profiles and only once', async () => {
     const sql = await sentSql();
     const updates = sql.split(/;\s*/).filter((s) => s.includes('UPDATE'));
-    expect(updates).toHaveLength(2);
+    expect(updates).toHaveLength(1);
     for (const update of updates) {
       expect(update).toContain('is_system_profile = true');
       expect(update).toMatch(/AND NOT \(allowed_capabilities @> /);

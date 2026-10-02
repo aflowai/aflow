@@ -13,7 +13,7 @@ import type { BrowserProfile } from '@aflow/schemas';
 
 import { startUnconfinedService, type RunningService } from '../sandboxedRun.js';
 import { BrowserDriverError } from './errors.js';
-import { browserProfileScope } from './profiles.js';
+import { browserServiceEnv } from './serviceEnv.js';
 
 /** Chrome writes its DevTools port and path here once it is listening. */
 export const DEVTOOLS_ACTIVE_PORT_FILE = 'DevToolsActivePort';
@@ -33,12 +33,18 @@ export function chromeArgv(
   executable: string,
   userDataDir: string,
   window: BrowserProfile['window'],
+  proxyServer: string,
 ): string[] {
   return [
     executable,
     `--user-data-dir=${userDataDir}`,
     // Chrome picks the port and binds it on loopback; the file above says which.
     '--remote-debugging-port=0',
+    // Every request through the profile's egress proxy. Chrome otherwise sends
+    // loopback straight past any proxy, which is exactly the traffic the proxy
+    // exists to refuse; `<-loopback>` takes that exemption away.
+    `--proxy-server=${proxyServer}`,
+    '--proxy-bypass-list=<-loopback>',
     '--no-first-run',
     '--no-default-browser-check',
     ...(window === 'visible' ? [] : ['--headless=new']),
@@ -66,6 +72,8 @@ export interface ChromeLaunchInput {
   readonly executable: string;
   readonly hostDir: string;
   readonly profile: BrowserProfile;
+  /** The egress proxy every request of this browser goes through. */
+  readonly proxyServer: string;
 }
 
 export interface ChromeLauncher {
@@ -84,7 +92,7 @@ export function createChromeLauncher(
   const pollMs = options.pollMs ?? READY_POLL_MS;
 
   return {
-    launch: async ({ executable, hostDir, profile }): Promise<LaunchedChrome> => {
+    launch: async ({ executable, hostDir, profile, proxyServer }): Promise<LaunchedChrome> => {
       const browsersDir = join(hostDir, 'browsers');
       const userDataDir = profileDirectory(hostDir, profile.id);
       await mkdir(userDataDir, { recursive: true, mode: 0o700 });
@@ -97,10 +105,11 @@ export function createChromeLauncher(
       await rm(portFile, { force: true });
 
       const service: RunningService = start({
-        argv: chromeArgv(executable, userDataDir, profile.window),
+        argv: chromeArgv(executable, userDataDir, profile.window, proxyServer),
         cwd: userDataDir,
         idPrefix: 'browser',
-        scopeId: browserProfileScope(profile.id),
+        scope: { kind: 'browser-profile', id: profile.id },
+        env: browserServiceEnv(),
       });
 
       let exit: { code: number | null; stderrTail: string } | undefined;

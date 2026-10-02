@@ -496,7 +496,8 @@ describe('taking the execution grant away is a withdrawal too', () => {
         bindings: new Map(policy.bindings.map((b) => [b.id, b])),
         browsers: new Map(),
       });
-      expect([...permitted]).toEqual(['runs']);
+      expect([...permitted.bindings]).toEqual(['runs']);
+      expect([...permitted.browserProfiles]).toEqual([]);
     },
     WAITS_ON_THE_OS_MS,
   );

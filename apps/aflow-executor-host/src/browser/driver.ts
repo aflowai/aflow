@@ -1,25 +1,56 @@
 /**
- * The browser driver: one Chrome per profile, started on first use, and the
- * pages each run opened in it.
+ * The browser driver: one Chrome per profile, started on first use behind its
+ * own egress proxy, and the pages each run opened in it.
  *
- * Every rule about who may open what lives here, so the step handler and any
- * later consumer of the same browser read one policy point: which profiles
- * exist, which spaces may use each, which origins a signed-in profile refuses,
- * and which run owns a page.
+ * Every rule lives here, so the step handler and any later consumer of the
+ * same browser read one policy point: which profiles exist, which spaces may
+ * use each, what a profile's posture and origin rules allow, which run owns a
+ * page, and that an action is never performed twice.
  */
-import type { BrowserProfile } from '@aflow/schemas';
+import { type BrowserProfile, normalizeBrowserHost } from '@aflow/schemas';
 
+import type { LocalAddressClassifier } from './addresses.js';
+import { createLocalAddressClassifier } from './addresses.js';
 import { chromeMissingMessage, type ChromeDiscovery } from './chromeDiscovery.js';
 import type { ChromeLauncher, LaunchedChrome } from './chromeProcess.js';
+import {
+  type EgressProxy,
+  type ProxyRefusal,
+  type StartEgressProxy,
+  startEgressProxy,
+} from './egressProxy.js';
 import { BrowserDriverError } from './errors.js';
-import { applianceOriginRefusal, isApplianceOrigin } from './origins.js';
-import { buildOutline, type Outline } from './outline.js';
+import { boundEntries, boundText, PageObservations } from './observations.js';
+import { localDestinationRefusal, obviouslyLocalDestination } from './origins.js';
+import type {
+  ActionResult,
+  ActRequest,
+  ChangeReceipt,
+  IdleSweep,
+  ListedPage,
+  ListedProfile,
+  NavigateRequest,
+  NavigationResult,
+  OpenRequest,
+  PageView,
+  ReadResult,
+  RunScope,
+  SnapshotResult,
+} from './driverTypes.js';
+import { boundSnapshot, buildOutline, describeRef } from './outline.js';
 import { PageTable, type HeldPage, type PageOwner } from './pageTable.js';
 import { profileOpenToSpace } from './profiles.js';
-import type { BrowserEngine, EngineBrowser } from './types.js';
+import { assertActionAllowed, assertNavigationAllowed, ruleRefusingHost } from './rules.js';
+import {
+  type BrowserEngine,
+  type EngineBrowser,
+  EngineCredentialField,
+  EngineRefNotFound,
+  type PageEvents,
+} from './types.js';
 
-const NAVIGATION_TIMEOUT_MS = 45_000;
 const CONNECT_TIMEOUT_MS = 15_000;
+const MINUTE_MS = 60_000;
 
 export interface BrowserPolicy {
   readonly browsers: ReadonlyMap<string, BrowserProfile>;
@@ -31,86 +62,552 @@ export interface BrowserDriverDeps {
   readonly launcher: ChromeLauncher;
   /** The directory holding host-policy.json; profiles live beneath it. */
   readonly hostDir: string;
-  /** Read on every open, so a profile the operator removed is gone at once. */
+  /** Read on every open, move and action, so a profile the operator changed applies at once. */
   readonly loadPolicy: () => Promise<BrowserPolicy>;
-  readonly navigationTimeoutMs?: number;
+  readonly startProxy?: StartEgressProxy;
+  readonly classifier?: LocalAddressClassifier;
+  readonly now?: () => number;
 }
 
-export interface OpenRequest extends PageOwner {
-  readonly spaceId?: string;
-  readonly profileId: string;
-  readonly url: string;
-}
-
-export interface OpenedPage {
-  readonly pageId: string;
-  readonly url: string;
-  readonly title: string;
-  readonly outline: Outline;
+/** What changes as the profile is used; the proxy reads the profile from here on every connection. */
+interface ProfileState {
+  profile: BrowserProfile;
+  lastActivityAt: number;
 }
 
 interface RunningProfile {
   readonly browser: EngineBrowser;
   readonly chrome: LaunchedChrome;
+  readonly proxy: EgressProxy;
+  readonly state: ProfileState;
 }
 
 function listed(ids: readonly string[]): string {
   return ids.length > 0 ? ids.map((id) => `\`${id}\``).join(', ') : 'none';
 }
 
+function message(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function hostOf(url: URL): string {
+  return normalizeBrowserHost(url.hostname);
+}
+
+function urlOrNothing(raw: string): URL | undefined {
+  try {
+    return new URL(raw);
+  } catch {
+    return undefined;
+  }
+}
+
+function pageEvents(observations: PageObservations): PageEvents {
+  return {
+    console: (level, text) => {
+      observations.recordConsole(level, text);
+    },
+    request: (request) => {
+      observations.recordRequest(request);
+    },
+  };
+}
+
+const HISTORY_WORDS: Readonly<Record<'back' | 'forward', string>> = {
+  back: 'back to',
+  forward: 'forward to',
+};
+
 export class BrowserDriver {
   private readonly pages = new PageTable();
-  private readonly running = new Map<string, Promise<RunningProfile>>();
+  private readonly starting = new Map<string, Promise<RunningProfile>>();
+  private readonly running = new Map<string, RunningProfile>();
+  private readonly everStarted = new Set<string>();
+  private readonly classifier: LocalAddressClassifier;
+  private readonly now: () => number;
 
-  constructor(private readonly deps: BrowserDriverDeps) {}
+  constructor(private readonly deps: BrowserDriverDeps) {
+    this.classifier = deps.classifier ?? createLocalAddressClassifier();
+    this.now = deps.now ?? Date.now;
+  }
 
-  async open(request: OpenRequest): Promise<OpenedPage> {
+  // -------------------------------------------------------------------------
+  // Opening and moving
+  // -------------------------------------------------------------------------
+
+  async open(request: OpenRequest): Promise<PageView> {
     const policy = await this.deps.loadPolicy();
     const profile = this.resolveProfile(policy, request.profileId, request.spaceId);
-
-    // Every profile a policy declares persists sign-ins.
     const asked = new URL(request.url);
-    if (isApplianceOrigin(asked)) {
-      throw new BrowserDriverError(
-        'appliance_origin',
-        applianceOriginRefusal(profile.id, asked, 'asked'),
-      );
-    }
+    this.refuseObviouslyLocal(profile, asked);
+    assertNavigationAllowed(profile, asked);
 
     const executable = policy.chrome.found?.path;
     if (executable === undefined) {
       throw new BrowserDriverError('no_browser', chromeMissingMessage(policy.chrome));
     }
 
-    const { browser } = await this.ensureRunning(profile, executable);
-    const page = await browser.newPage();
+    const running = await this.ensureRunning(profile, executable);
+    running.state.profile = profile;
+    const observations = new PageObservations(this.now);
+    const page = await running.browser.newPage(pageEvents(observations));
+    const startedAt = this.now();
     try {
-      await page.goto(request.url, this.deps.navigationTimeoutMs ?? NAVIGATION_TIMEOUT_MS);
+      await page.navigate({ kind: 'url', url: request.url });
     } catch (error) {
       await page.close().catch(() => undefined);
+      throw this.navigationFailure(
+        running,
+        profile,
+        asked,
+        startedAt,
+        `${request.url} did not load`,
+        error,
+      );
+    }
+
+    const held = this.pages.add(request, profile.id, page, observations, page.url(), this.now());
+    try {
+      this.assertLanded(running, profile, page.url(), startedAt);
+      return await this.observe(held, running);
+    } catch (error) {
+      // Registered and then refused or unreadable: a run must not be left
+      // holding a page it was told it does not have.
+      await page.close().catch(() => undefined);
+      this.pages.forget(held);
+      throw error;
+    }
+  }
+
+  async navigate(request: NavigateRequest): Promise<NavigationResult> {
+    const { held, running, profile } = await this.pageInProfile(request, request.pageId);
+    const asked = request.to.kind === 'url' ? new URL(request.to.url) : undefined;
+    if (asked !== undefined) {
+      this.refuseObviouslyLocal(profile, asked);
+      assertNavigationAllowed(profile, asked);
+    }
+    if (request.redelivered) {
+      return { outcome: 'uncertain_outcome', view: await this.observe(held, running) };
+    }
+
+    const before = this.lastSeen(held);
+    const startedAt = this.now();
+    let moved: boolean;
+    try {
+      moved = await held.page.navigate(request.to);
+    } catch (error) {
+      throw this.navigationFailure(
+        running,
+        profile,
+        asked,
+        startedAt,
+        asked !== undefined ? `${asked.href} did not load` : `The ${request.to.kind} did not load`,
+        error,
+      );
+    }
+    if (!moved && (request.to.kind === 'back' || request.to.kind === 'forward')) {
       throw new BrowserDriverError(
         'navigation_failed',
-        `${request.url} did not load: ${error instanceof Error ? error.message : String(error)}`,
+        `Page \`${held.pageId}\` has no page to go ${HISTORY_WORDS[request.to.kind]} in its ` +
+          `history. It is still at ${held.page.url()}.`,
+        { pageId: held.pageId },
       );
     }
+    this.assertLanded(running, profile, held.page.url(), startedAt);
+    const view = await this.observe(held, running);
+    return { outcome: 'performed', view, changed: this.changes(before, view) };
+  }
 
-    const landed = new URL(page.url());
-    if (isApplianceOrigin(landed)) {
-      await page.close().catch(() => undefined);
+  async act(request: ActRequest): Promise<ActionResult> {
+    const { held, running, profile } = await this.pageInProfile(request, request.pageId);
+    // Where the page is now, not where the agent believes it is.
+    const pageUrl = urlOrNothing(held.page.url()) ?? new URL('about:blank');
+    assertActionAllowed(profile, pageUrl);
+    if (request.redelivered) {
+      return { outcome: 'uncertain_outcome', view: await this.observe(held, running) };
+    }
+
+    const snapshot = held.lastSnapshot;
+    const element = snapshot !== undefined ? describeRef(snapshot.text, request.ref) : undefined;
+    if (snapshot === undefined || element === undefined) {
+      throw await this.staleRef(held, running, request.ref);
+    }
+    if (request.action.kind === 'type' && snapshot.maskedRefs.has(request.ref)) {
+      throw this.credentialRefusal(request.ref, element.name);
+    }
+
+    const before = this.lastSeen(held);
+    const startedAt = this.now();
+    try {
+      await held.page.act(request.ref, request.action);
+    } catch (error) {
+      if (error instanceof EngineRefNotFound) throw await this.staleRef(held, running, request.ref);
+      if (error instanceof EngineCredentialField) {
+        throw this.credentialRefusal(request.ref, element.name);
+      }
       throw new BrowserDriverError(
-        'appliance_origin',
-        applianceOriginRefusal(profile.id, landed, 'redirected'),
+        'action_failed',
+        `The ${request.action.kind} on \`${request.ref}\` did not complete: ${message(error)}`,
+        { ref: request.ref },
       );
     }
+    this.assertLanded(running, profile, held.page.url(), startedAt);
+    const view = await this.observe(held, running);
+    const action = request.action;
+    return {
+      outcome: 'performed',
+      view,
+      changed: this.changes(before, view),
+      element,
+      ...(action.kind === 'type'
+        ? {
+            typed: {
+              field: element.name ?? element.role,
+              characters: [...new Intl.Segmenter().segment(action.text)].length,
+              submitted: action.submit,
+            },
+          }
+        : {}),
+    };
+  }
 
-    const held = this.pages.add(request, profile.id, page, page.url());
-    const [title, snapshot] = await Promise.all([page.title(), page.snapshot()]);
+  // -------------------------------------------------------------------------
+  // Looking
+  // -------------------------------------------------------------------------
+
+  async snapshot(owner: PageOwner, pageId: string, ref?: string): Promise<SnapshotResult> {
+    const held = this.pages.get(owner, pageId);
+    const running = this.runningFor(held);
+    const snap = await this.read(held, async () => await held.page.snapshot());
+    const title = await this.read(held, async () => await held.page.title());
+    held.lastSnapshot = snap;
+    held.lastTitle = title;
+    held.lastUrl = held.page.url();
+    this.touch(held, running);
+    const bounded = boundSnapshot(snap, ref);
+    if (bounded === undefined) {
+      throw this.staleRefError(held, ref ?? '', buildOutline(snap).text);
+    }
+    return { pageId, url: held.lastUrl, title, snapshot: bounded };
+  }
+
+  async readPage(
+    owner: PageOwner,
+    pageId: string,
+    what: ReadResult['what'],
+    contains?: string,
+  ): Promise<ReadResult> {
+    const held = this.pages.get(owner, pageId);
+    this.touch(held, this.runningFor(held));
+    const url = held.page.url();
+    if (what === 'text') {
+      const text = await this.read(held, async () => await held.page.text());
+      return { what, url, ...boundText(text, contains) };
+    }
+    if (what === 'console') {
+      const { kept, withheld } = boundEntries(
+        held.observations.console.entries(),
+        contains,
+        (entry) => entry.text,
+      );
+      return {
+        what,
+        url,
+        console: kept,
+        withheld,
+        notRetained: held.observations.console.notRetained,
+      };
+    }
+    const { kept, withheld } = boundEntries(
+      held.observations.network.entries(),
+      contains,
+      (entry) => entry.url,
+    );
+    return {
+      what,
+      url,
+      network: kept,
+      withheld,
+      notRetained: held.observations.network.notRetained,
+    };
+  }
+
+  /** The run's open pages. Listing touches none of them. */
+  async list(owner: PageOwner): Promise<ListedPage[]> {
+    const pages = this.pages.list(owner);
+    return await Promise.all(
+      pages.map(async (held) => ({
+        pageId: held.pageId,
+        url: held.page.url(),
+        title: await held.page.title().catch(() => held.lastTitle),
+        profileId: held.profileId,
+        lastUsedAt: held.lastUsedAt,
+      })),
+    );
+  }
+
+  async close(owner: PageOwner, pageId: string): Promise<'closed' | 'already_gone'> {
+    const held = this.pages.find(owner, pageId);
+    if (held === undefined) return 'already_gone';
+    await held.page.close().catch(() => undefined);
+    this.pages.forget(held);
+    const running = this.running.get(held.profileId);
+    if (running !== undefined) running.state.lastActivityAt = this.now();
+    return 'closed';
+  }
+
+  /** The profiles a space may use. Never starts a browser to answer. */
+  async listProfiles(spaceId: string | undefined): Promise<ListedProfile[]> {
+    const policy = await this.deps.loadPolicy();
+    const open = [...policy.browsers.values()].filter((profile) =>
+      profileOpenToSpace(profile, spaceId),
+    );
+    return await Promise.all(
+      open.map(async (profile): Promise<ListedProfile> => {
+        const base = { profileId: profile.id, posture: profile.posture, window: profile.window };
+        const running = this.running.get(profile.id);
+        if (running === undefined) {
+          return {
+            ...base,
+            running: false,
+            sitesUnknown: this.everStarted.has(profile.id) ? 'stopped' : 'not_started',
+          };
+        }
+        let sites: string[];
+        try {
+          sites = await running.browser.cookieSites();
+        } catch (error) {
+          throw new BrowserDriverError(
+            'observation_failed',
+            `The browser for profile \`${profile.id}\` is running but did not say which sites ` +
+              `it holds cookies for: ${message(error)}`,
+          );
+        }
+        return { ...base, running: true, sites };
+      }),
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // Lifetime
+  // -------------------------------------------------------------------------
+
+  /** Profiles whose browser is running now: the idle sweep's whole work. */
+  runningProfileCount(): number {
+    return this.running.size;
+  }
+
+  /**
+   * Close every page nothing has touched for its profile's idle limit, then
+   * stop every browser that has had no page for as long.
+   */
+  async sweepIdle(): Promise<IdleSweep> {
+    const now = this.now();
+    let closedPages = 0;
+    for (const held of this.pages.all()) {
+      const running = this.running.get(held.profileId);
+      const limit = (running?.state.profile.idleMinutes ?? 0) * MINUTE_MS;
+      if (running === undefined || now - held.lastUsedAt < limit) continue;
+      await held.page.close().catch(() => undefined);
+      this.pages.forget(held);
+      running.state.lastActivityAt = Math.max(running.state.lastActivityAt, now);
+      closedPages += 1;
+    }
+    let stoppedProfiles = 0;
+    for (const [profileId, running] of this.running) {
+      if (this.pages.countForProfile(profileId) > 0) continue;
+      if (now - running.state.lastActivityAt < running.state.profile.idleMinutes * MINUTE_MS) {
+        continue;
+      }
+      running.chrome.stop();
+      stoppedProfiles += 1;
+    }
+    return { closedPages, stoppedProfiles };
+  }
+
+  /** The machine's policy changed: what a running browser's proxy refuses follows it at once. */
+  policyChanged(policy: BrowserPolicy): void {
+    for (const [profileId, running] of this.running) {
+      const profile = policy.browsers.get(profileId);
+      if (profile !== undefined) running.state.profile = profile;
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Internals
+  // -------------------------------------------------------------------------
+
+  private async pageInProfile(
+    scope: RunScope,
+    pageId: string,
+  ): Promise<{ held: HeldPage; running: RunningProfile; profile: BrowserProfile }> {
+    const held = this.pages.get(scope, pageId);
+    const policy = await this.deps.loadPolicy();
+    const profile = this.resolveProfile(policy, held.profileId, scope.spaceId);
+    const running = this.runningFor(held);
+    running.state.profile = profile;
+    return { held, running, profile };
+  }
+
+  private runningFor(held: HeldPage): RunningProfile {
+    const running = this.running.get(held.profileId);
+    if (running !== undefined) return running;
+    this.pages.forget(held);
+    throw new BrowserDriverError(
+      'page_gone',
+      `page_gone: page \`${held.pageId}\` is no longer open — its browser stopped. It was last ` +
+        `at ${held.lastUrl}; open that address again to carry on.`,
+      { pageId: held.pageId, lastUrl: held.lastUrl },
+    );
+  }
+
+  private touch(held: HeldPage, running: RunningProfile): void {
+    const now = this.now();
+    held.lastUsedAt = now;
+    running.state.lastActivityAt = now;
+  }
+
+  private async read<T>(held: HeldPage, fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn();
+    } catch (error) {
+      throw new BrowserDriverError(
+        'observation_failed',
+        `Page \`${held.pageId}\` could not be read: ${message(error)}`,
+        { pageId: held.pageId },
+      );
+    }
+  }
+
+  private async observe(held: HeldPage, running: RunningProfile): Promise<PageView> {
+    const snapshot = await this.read(held, async () => await held.page.snapshot());
+    const title = await this.read(held, async () => await held.page.title());
+    held.lastSnapshot = snapshot;
+    held.lastTitle = title;
+    held.lastUrl = held.page.url();
+    this.touch(held, running);
     return { pageId: held.pageId, url: held.lastUrl, title, outline: buildOutline(snapshot) };
   }
 
-  /** A page this run opened, or `page_gone`. */
-  page(owner: PageOwner, pageId: string): HeldPage {
-    return this.pages.get(owner, pageId);
+  private lastSeen(held: HeldPage): { url: string; title: string; outline?: string } {
+    return {
+      url: held.page.url(),
+      title: held.lastTitle,
+      ...(held.lastSnapshot !== undefined ? { outline: buildOutline(held.lastSnapshot).text } : {}),
+    };
+  }
+
+  private changes(
+    before: { url: string; title: string; outline?: string },
+    after: PageView,
+  ): ChangeReceipt {
+    return {
+      urlChanged: before.url !== after.url,
+      titleChanged: before.title !== after.title,
+      outlineChanged: before.outline !== after.outline.text,
+    };
+  }
+
+  private staleRefError(held: HeldPage, ref: string, outline?: string): BrowserDriverError {
+    return new BrowserDriverError(
+      'stale_ref',
+      `Reference \`${ref}\` does not resolve on page \`${held.pageId}\` as it is now ` +
+        `(${held.lastUrl}). References come from the newest outline or snapshot of the page; the ` +
+        'current outline is in this error’s details — act on its references.',
+      {
+        ref,
+        pageId: held.pageId,
+        url: held.lastUrl,
+        ...(outline !== undefined ? { outline } : {}),
+      },
+    );
+  }
+
+  private async staleRef(
+    held: HeldPage,
+    running: RunningProfile,
+    ref: string,
+  ): Promise<BrowserDriverError> {
+    const outline = await this.observe(held, running)
+      .then((view) => view.outline.text)
+      .catch(() => undefined);
+    return this.staleRefError(held, ref, outline);
+  }
+
+  private credentialRefusal(ref: string, name: string | undefined): BrowserDriverError {
+    return new BrowserDriverError(
+      'credential_field',
+      `\`${ref}\`${name !== undefined ? ` (${JSON.stringify(name)})` : ''} is a password field. ` +
+        'Credentials are entered by the operator, in the browser window, never typed by an ' +
+        'agent; nothing was typed.',
+      { ref },
+    );
+  }
+
+  private refuseObviouslyLocal(profile: BrowserProfile, url: URL): void {
+    const reason = obviouslyLocalDestination(url, this.classifier);
+    if (reason === undefined) return;
+    throw new BrowserDriverError(
+      'appliance_origin',
+      localDestinationRefusal(profile.id, reason, 'asked'),
+      {
+        origin: url.origin,
+      },
+    );
+  }
+
+  private refusalError(profile: BrowserProfile, refusal: ProxyRefusal): BrowserDriverError {
+    if (refusal.kind === 'local') {
+      return new BrowserDriverError(
+        'appliance_origin',
+        localDestinationRefusal(profile.id, refusal.reason, 'connecting'),
+        { host: refusal.host },
+      );
+    }
+    return new BrowserDriverError(
+      'origin_denied',
+      `Browser profile \`${profile.id}\` does not connect to ${refusal.host}: ${refusal.reason}. ` +
+        'Rules are set on the machine.',
+      { host: refusal.host },
+    );
+  }
+
+  /** A page that landed on a host the proxy refused — Chrome shows a plain-http refusal as a page. */
+  private assertLanded(
+    running: RunningProfile,
+    profile: BrowserProfile,
+    landedUrl: string,
+    since: number,
+  ): void {
+    const landed = urlOrNothing(landedUrl);
+    if (landed === undefined || (landed.protocol !== 'http:' && landed.protocol !== 'https:')) {
+      return;
+    }
+    const refused = running.proxy
+      .refusalsSince(since)
+      .find((refusal) => refusal.host === hostOf(landed));
+    if (refused !== undefined) throw this.refusalError(profile, refused);
+    this.refuseObviouslyLocal(profile, landed);
+    assertNavigationAllowed(profile, landed);
+  }
+
+  private navigationFailure(
+    running: RunningProfile,
+    profile: BrowserProfile,
+    asked: URL | undefined,
+    since: number,
+    what: string,
+    error: unknown,
+  ): BrowserDriverError {
+    const refusals = running.proxy.refusalsSince(since);
+    // The address asked for first; past that, a redirect's destination is a
+    // host nobody named, and the refusal during this navigation is the cause.
+    const refused =
+      (asked !== undefined
+        ? refusals.find((refusal) => refusal.host === hostOf(asked))
+        : undefined) ?? refusals[0];
+    if (refused !== undefined) return this.refusalError(profile, refused);
+    return new BrowserDriverError('navigation_failed', `${what}: ${message(error)}`);
   }
 
   private resolveProfile(
@@ -147,43 +644,62 @@ export class BrowserDriver {
     profile: BrowserProfile,
     executable: string,
   ): Promise<RunningProfile> {
-    const existing = this.running.get(profile.id);
+    const existing = this.starting.get(profile.id);
     if (existing !== undefined) return await existing;
 
     const starting = this.start(profile, executable);
-    this.running.set(profile.id, starting);
+    this.starting.set(profile.id, starting);
     try {
       return await starting;
     } catch (error) {
-      if (this.running.get(profile.id) === starting) this.running.delete(profile.id);
+      if (this.starting.get(profile.id) === starting) this.starting.delete(profile.id);
       throw error;
     }
   }
 
   private async start(profile: BrowserProfile, executable: string): Promise<RunningProfile> {
-    const chrome = await this.deps.launcher.launch({
-      executable,
-      hostDir: this.deps.hostDir,
-      profile,
+    const state: ProfileState = { profile, lastActivityAt: this.now() };
+    // Before Chrome, so no request of Chrome's ever goes out unchecked.
+    const proxy = await (this.deps.startProxy ?? startEgressProxy)({
+      refuseHost: (host) => ruleRefusingHost(state.profile, host),
+      classifier: this.classifier,
+      now: this.now,
     });
+    let chrome: LaunchedChrome;
+    try {
+      chrome = await this.deps.launcher.launch({
+        executable,
+        hostDir: this.deps.hostDir,
+        profile,
+        proxyServer: proxy.server,
+      });
+    } catch (error) {
+      await proxy.stop().catch(() => undefined);
+      throw error;
+    }
     let browser: EngineBrowser;
     try {
       browser = await this.deps.engine.connect(chrome.endpoint, CONNECT_TIMEOUT_MS);
     } catch (error) {
       chrome.stop();
+      await proxy.stop().catch(() => undefined);
       throw new BrowserDriverError(
         'launch_failed',
         `The browser for profile \`${profile.id}\` started but could not be attached to: ` +
-          (error instanceof Error ? error.message : String(error)),
+          message(error),
       );
     }
-    const entry: RunningProfile = { browser, chrome };
-    // Whoever ends it — withdrawal, shutdown, a crash — its pages go with it,
-    // and the next open starts it again.
-    void chrome.exited.then(() => {
-      void browser.disconnect().catch(() => undefined);
-      this.running.delete(profile.id);
+    const entry: RunningProfile = { browser, chrome, proxy, state };
+    this.running.set(profile.id, entry);
+    this.everStarted.add(profile.id);
+    // Whoever ends it — the idle sweep, withdrawal, shutdown, a crash — its
+    // proxy and its pages go with it, and the next open starts it again.
+    void chrome.exited.then(async () => {
+      if (this.running.get(profile.id) === entry) this.running.delete(profile.id);
+      this.starting.delete(profile.id);
       this.pages.dropProfile(profile.id);
+      await browser.disconnect().catch(() => undefined);
+      await proxy.stop().catch(() => undefined);
     });
     return entry;
   }

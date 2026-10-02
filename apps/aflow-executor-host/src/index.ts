@@ -49,6 +49,7 @@ import { ConsumerGroups, StreamKeys } from '@aflow/schemas';
 import { executionPermitted, loadHostPolicy } from './bindings.js';
 import { createChromeLauncher } from './browser/chromeProcess.js';
 import { BrowserDriver } from './browser/driver.js';
+import { createBrowserIdleSweep } from './browser/idleSweep.js';
 import { createBrowserHandler } from './handlers/browserHandler.js';
 import { removeWorktree } from './worktree.js';
 import { removeOrphanedCheckouts } from './handlers/harnessHandlers.js';
@@ -65,9 +66,24 @@ import { watchPolicy } from './policyWatch.js';
 import { killAllProcesses, killProcessesForBinding, reapWithdrawn } from './sandboxedRun.js';
 import { observeRuntimes } from './runtimes.js';
 import { pushPostures } from './pushApproval.js';
-import { createBackgroundTaskRunner } from '@aflow/lib';
+import { type BackgroundTaskLogger, createBackgroundTaskRunner } from '@aflow/lib';
 
 const log = createServiceLogger('host-executor');
+
+const taskLogger: BackgroundTaskLogger = {
+  debug: (message, data) => {
+    log.debug(message, data);
+  },
+  info: (message, data) => {
+    log.info(message, data);
+  },
+  warn: (message, data) => {
+    log.warn(message, data);
+  },
+  error: (message, error, data) => {
+    log.error(message, { error, ...data });
+  },
+};
 
 const STEP_TYPE = 'host';
 const BROWSER_STEP_TYPE = 'browser';
@@ -244,16 +260,14 @@ async function main(): Promise<void> {
   // Loaded here rather than at the top so that nothing importing this module
   // for its helpers pulls in the browser automation library.
   const { createPlaywrightEngine } = await import('./browser/engine.js');
-  browserRuntime.registerHandler(
-    createBrowserHandler(
-      new BrowserDriver({
-        engine: createPlaywrightEngine(),
-        launcher: createChromeLauncher(),
-        hostDir: dirname(policyPath),
-        loadPolicy: async () => await loadHostPolicy(policyPath),
-      }),
-    ),
-  );
+  const browserDriver = new BrowserDriver({
+    engine: createPlaywrightEngine(),
+    launcher: createChromeLauncher(),
+    hostDir: dirname(policyPath),
+    loadPolicy: async () => await loadHostPolicy(policyPath),
+  });
+  browserRuntime.registerHandler(createBrowserHandler(browserDriver));
+  const browserIdleSweep = createBrowserIdleSweep(browserDriver, taskLogger);
 
   // Withdrawal reaches running work without waiting for the next request. A
   // detached command exists so the step can end, so ordinarily no request
@@ -261,6 +275,7 @@ async function main(): Promise<void> {
   const policyWatch = watchPolicy(policyPath, () => {
     void loadHostPolicy(policyPath)
       .then(async (policy) => {
+        browserDriver.policyChanged(policy);
         const permitted = executionPermitted(policy);
         const killed = reapWithdrawn(permitted);
         // Sessions too. A process is the loud half of a withdrawal; a session
@@ -268,7 +283,7 @@ async function main(): Promise<void> {
         // and the harness's state, and reachable again the moment the binding
         // came back. Reaping only processes left that checkout on disk until
         // another harness request or a shutdown.
-        const dropped = withdrawnSessions(permitted);
+        const dropped = withdrawnSessions(permitted.bindings);
         for (const session of dropped) {
           await removeWorktree(session.bindingRoot, session.worktreePath).catch(() => undefined);
           await discardScratch(session);
@@ -391,20 +406,7 @@ async function main(): Promise<void> {
       maxCycleMs: 30_000,
       mode: 'enabled',
       runImmediately: true,
-      logger: {
-        debug: (message, data) => {
-          log.debug(message, data);
-        },
-        info: (message, data) => {
-          log.info(message, data);
-        },
-        warn: (message, data) => {
-          log.warn(message, data);
-        },
-        error: (message, error, data) => {
-          log.error(message, { error, ...data });
-        },
-      },
+      logger: taskLogger,
     },
     async () => {
       await publishRuntimes();
@@ -412,6 +414,7 @@ async function main(): Promise<void> {
     },
   );
   inventoryTask.start();
+  browserIdleSweep.start();
 
   // A withdrawal decided on the appliance reaches work already running here.
   //
@@ -459,6 +462,7 @@ async function main(): Promise<void> {
     logger: log,
     onShutdown: async () => {
       await inventoryTask.stop();
+      await browserIdleSweep.stop();
       await redis.zrem(HOST_MACHINES_KEY, hostname).catch(() => undefined);
       await runtime.stop();
       await browserRuntime.stop();

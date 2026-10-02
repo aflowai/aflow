@@ -143,19 +143,55 @@ function render(node: SnapshotNode, url: string | undefined, masked: boolean): s
   return node.value !== undefined && !masked ? `${line}: ${node.value}` : line;
 }
 
-function censusLine(census: Record<string, number>, maxChars: number): string {
+interface Line {
+  readonly role: string;
+  line: string;
+}
+
+function censusLine(what: string, census: Record<string, number>, maxChars: number): string {
   const counted = Object.entries(census)
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .map(([role, count]) => `${role} ${String(count)}`)
     .join(', ');
-  return `# Outline cut at ${String(maxChars)} characters. Not shown: ${counted}.`;
+  return `# ${what} cut at ${String(maxChars)} characters. Not shown: ${counted}.`;
+}
+
+/** Lines in order until the bound, then a census of the rest by role — the census inside the bound too. */
+function cutToBound(
+  what: string,
+  entries: readonly Line[],
+  maxChars: number,
+): { text: string; lines: number; census?: Record<string, number> } {
+  const all = entries.map((entry) => entry.line).join('\n');
+  if (all.length <= maxChars) return { text: all, lines: entries.length };
+
+  const census: Record<string, number> = {};
+  const lines = entries.map((entry) => entry.line);
+  const roles = entries.map((entry) => entry.role);
+  let length = all.length;
+  const withhold = (): void => {
+    const line = lines.pop();
+    const role = roles.pop();
+    if (line === undefined || role === undefined) return;
+    census[role] = (census[role] ?? 0) + 1;
+    length -= line.length + (lines.length > 0 ? 1 : 0);
+  };
+  while (lines.length > 0 && length > maxChars) withhold();
+  while (lines.length > 0 && length + 1 + censusLine(what, census, maxChars).length > maxChars) {
+    withhold();
+  }
+  return {
+    text: [...lines, censusLine(what, census, maxChars)].join('\n'),
+    lines: lines.length,
+    census,
+  };
 }
 
 export function buildOutline(
   snapshot: PageSnapshot,
   maxChars: number = BROWSER_OUTLINE_MAX_CHARS,
 ): Outline {
-  const kept: Array<{ role: string; line: string }> = [];
+  const kept: Line[] = [];
   let previous: { node: SnapshotNode; keptIndex?: number } | undefined;
   for (const raw of snapshot.text.split('\n')) {
     const node = parseLine(raw);
@@ -192,28 +228,75 @@ export function buildOutline(
     previous = { node, keptIndex: kept.length - 1 };
   }
 
-  const all = kept.map((entry) => entry.line).join('\n');
-  if (all.length <= maxChars) return { text: all, elements: kept.length };
-
-  const census: Record<string, number> = {};
-  const lines = kept.map((entry) => entry.line);
-  const roles = kept.map((entry) => entry.role);
-  let length = all.length;
-  const withhold = (): void => {
-    const line = lines.pop();
-    const role = roles.pop();
-    if (line === undefined || role === undefined) return;
-    census[role] = (census[role] ?? 0) + 1;
-    length -= line.length + (lines.length > 0 ? 1 : 0);
-  };
-  while (lines.length > 0 && length > maxChars) withhold();
-  // The census has to fit under the same bound, so lines give way to it.
-  while (lines.length > 0 && length + 1 + censusLine(census, maxChars).length > maxChars) {
-    withhold();
-  }
+  const cut = cutToBound('Outline', kept, maxChars);
   return {
-    text: [...lines, censusLine(census, maxChars)].join('\n'),
-    elements: lines.length,
-    census,
+    text: cut.text,
+    elements: cut.lines,
+    ...(cut.census !== undefined ? { census: cut.census } : {}),
+  };
+}
+
+/** The element a reference names in a snapshot, or nothing when the snapshot has no such reference. */
+export function describeRef(
+  snapshotText: string,
+  ref: string,
+): { role: string; name?: string } | undefined {
+  for (const raw of snapshotText.split('\n')) {
+    const node = parseLine(raw);
+    if (node === undefined || refOf(node) !== ref) continue;
+    return {
+      role: node.role,
+      ...(node.name !== undefined && node.name !== '' ? { name: node.name } : {}),
+    };
+  }
+  return undefined;
+}
+
+export interface BoundedSnapshot {
+  readonly text: string;
+  readonly lines: number;
+  readonly census?: Readonly<Record<string, number>>;
+}
+
+/**
+ * The whole snapshot, or the subtree under one reference, with every masked
+ * field's value removed and the same bound as the outline. Nothing when the
+ * reference is not in the snapshot.
+ */
+export function boundSnapshot(
+  snapshot: PageSnapshot,
+  ref?: string,
+  maxChars: number = BROWSER_OUTLINE_MAX_CHARS,
+): BoundedSnapshot | undefined {
+  const raws = snapshot.text.split('\n').filter((raw) => raw.trim() !== '');
+  let selected = raws;
+  if (ref !== undefined) {
+    const at = raws.findIndex((raw) => {
+      const node = parseLine(raw);
+      return node !== undefined && refOf(node) === ref;
+    });
+    if (at < 0) return undefined;
+    const rootIndent = parseLine(raws[at] ?? '')?.indent ?? 0;
+    const end = raws.findIndex((raw, index) => {
+      if (index <= at) return false;
+      const indent = /^(\s*)/.exec(raw)?.[1]?.length ?? 0;
+      return indent <= rootIndent;
+    });
+    selected = raws.slice(at, end < 0 ? undefined : end).map((raw) => raw.slice(rootIndent));
+  }
+  const lines: Line[] = selected.map((raw) => {
+    const node = parseLine(raw);
+    if (node === undefined) return { role: 'text', line: raw };
+    const nodeRef = refOf(node);
+    if (nodeRef === undefined || !snapshot.maskedRefs.has(nodeRef) || node.value === undefined) {
+      return { role: node.role, line: raw };
+    }
+    return { role: node.role, line: `${' '.repeat(node.indent)}${render(node, undefined, true)}` };
+  });
+  const cut = cutToBound('Snapshot', lines, maxChars);
+  return {
+    text: cut.text,
+    lines: cut.lines,
+    ...(cut.census !== undefined ? { census: cut.census } : {}),
   };
 }

@@ -5,6 +5,8 @@ import {
   SUBAGENT_HANDOFF_PAYLOAD_KIND,
   SPACE_POLICY_OPERATION_PREFIXES,
   getAllOperations,
+  isOperationComposed,
+  processEditionDescriptor,
   type TenantId,
   type ComposeIntent,
   type DesignSurface,
@@ -390,7 +392,11 @@ function isOperationOffered(operationId: string, enabledPolicies: ReadonlySet<st
 function listAvailableOperationIds(): { all: Set<string>; surface: string[] } {
   const all = new Set<string>();
   const surface: string[] = [];
+  const lanes = processEditionDescriptor();
   for (const op of getAllOperations().values()) {
+    // A lane this deployment does not compose runs nothing, so a task drafted
+    // on it could only fail mid-run.
+    if (!isOperationComposed(op.operationId, lanes)) continue;
     all.add(op.operationId);
     // Surface only excludes internal ops (those invoked by the workflow
     // engine, not agents). The draft phase grants surface ops to tasks.

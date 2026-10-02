@@ -53,9 +53,12 @@ describe('composeHelmsmanSurface', () => {
 
     expect(composed.coreOperations).toEqual([...authored.coreOperations]);
     expect(composed.promotableOperations).toEqual(
-      authored.promotableOperations.filter((op) => !op.startsWith('host.')),
+      authored.promotableOperations.filter(
+        (op) => !op.startsWith('host.') && !op.startsWith('browser.'),
+      ),
     );
     expect(authored.promotableOperations.some((op) => op.startsWith('host.'))).toBe(true);
+    expect(authored.promotableOperations.some((op) => op.startsWith('browser.'))).toBe(true);
   });
 
   it('names nothing in either tier that the edition does not compose', () => {
@@ -69,20 +72,44 @@ describe('composeHelmsmanSurface', () => {
     expect(authored.promotableOperations.some((op) => op.startsWith('code.'))).toBe(true);
   });
 
-  it('pins the machine reads and the harness on the local edition', () => {
+  it('pins the machine reads, the harness and opening a page on the local edition', () => {
     const authored = registryDefaults();
     const composed = composeHelmsmanSurface(authored, APPLIANCE);
 
     const added = composed.coreOperations.filter((op) => !authored.coreOperations.includes(op));
     const removed = authored.coreOperations.filter((op) => !composed.coreOperations.includes(op));
 
-    expect(added).toEqual(['host.harness.run', 'host.file.list', 'host.file.get']);
+    expect(added).toEqual([
+      'host.harness.run',
+      'host.file.list',
+      'host.file.get',
+      'browser.page.open',
+    ]);
     expect(removed).toEqual([
       'workflow.campaign.list',
       'workflow.campaign.get',
       'ui.surface.visualize',
     ]);
-    expect(composed.coreOperations.length).toBe(authored.coreOperations.length);
+    // The three reads and the harness are paid for; opening a page is not.
+    expect(composed.coreOperations.length).toBe(authored.coreOperations.length + 1);
+  });
+
+  it('keeps every other browser operation promotable on the local edition, as one bundle', () => {
+    const composed = composeHelmsmanSurface(registryDefaults(), APPLIANCE);
+    const browser = (ops: readonly string[]): string[] =>
+      ops.filter((op) => op.startsWith('browser.')).sort();
+    expect(browser(composed.coreOperations)).toEqual(['browser.page.open']);
+    expect(browser(composed.promotableOperations)).toEqual(
+      [
+        'browser.page.act',
+        'browser.page.close',
+        'browser.page.list',
+        'browser.page.navigate',
+        'browser.page.read',
+        'browser.page.snapshot',
+        'browser.profile.list',
+      ].sort(),
+    );
   });
 
   it('keeps the machine writes and shell promotable on the local edition', () => {

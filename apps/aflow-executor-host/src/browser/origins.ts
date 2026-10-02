@@ -1,36 +1,44 @@
 /**
- * The appliance's own pages, which a profile holding sign-ins does not open.
+ * A profile that keeps sign-ins does not reach services on this machine.
  *
- * The Action Center lives there: an agent able to drive it could approve its
- * own requests. This executor is told where Redis is and nothing else about
- * the appliance — pairing reads the API address and does not keep it — so the
- * appliance is recognised by the loopback ports the local edition serves its
- * API and web product on.
+ * The local edition's web application presents the instance secret to
+ * whoever reaches its port, so a page loaded from it is the owner's Action
+ * Center: an agent able to drive it could approve its own requests. The
+ * egress proxy is what enforces this, on every connection. The check here is
+ * only on the address asked for, so an obviously local one is refused before
+ * a browser is started or touched for it.
  */
-export const APPLIANCE_LOOPBACK_PORTS: readonly string[] = ['3000', '3001'];
+import { isIP } from 'node:net';
 
-function isLoopbackHost(hostname: string): boolean {
-  const host = hostname.toLowerCase().replace(/\.$/, '');
-  if (host === 'localhost' || host.endsWith('.localhost')) return true;
-  if (host === '[::1]' || host === '0.0.0.0') return true;
-  return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
-}
+import {
+  bareAddress,
+  isLocalName,
+  localAddressReason,
+  type LocalAddressClassifier,
+} from './addresses.js';
 
-export function isApplianceOrigin(url: URL): boolean {
-  return isLoopbackHost(url.hostname) && APPLIANCE_LOOPBACK_PORTS.includes(url.port);
-}
-
-export function applianceOriginRefusal(
-  profileId: string,
+/** Why the address asked for is plainly this machine, or nothing when its name has to be resolved to tell. */
+export function obviouslyLocalDestination(
   url: URL,
-  reached: 'asked' | 'redirected',
+  classifier: LocalAddressClassifier,
+): string | undefined {
+  const host = bareAddress(url.hostname.toLowerCase().replace(/\.$/, ''));
+  if (isLocalName(host)) return `${host} names this machine`;
+  if (isIP(host) === 0) return undefined;
+  const kind = classifier.classify(host);
+  return kind === undefined ? undefined : localAddressReason(host, host, kind);
+}
+
+export function localDestinationRefusal(
+  profileId: string,
+  reason: string,
+  when: 'asked' | 'connecting',
 ): string {
   return (
-    `Browser profile \`${profileId}\` keeps sign-ins, so it does not open this appliance's own ` +
-    `pages (${url.origin}): the Action Center is there, and an agent able to use it could ` +
-    'approve its own requests. ' +
-    (reached === 'asked'
+    `Browser profile \`${profileId}\` keeps sign-ins, so it does not reach services on this ` +
+    `machine: ${reason}. ` +
+    (when === 'asked'
       ? 'Nothing was opened.'
-      : 'The address asked for redirected there, and the page was closed.')
+      : 'The connection was refused, so the page did not load there.')
   );
 }

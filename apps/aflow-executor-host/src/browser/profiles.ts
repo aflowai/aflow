@@ -15,11 +15,6 @@ import {
 
 import type { ChromeDiscovery } from './chromeDiscovery.js';
 
-/** The scope a profile's browser is reaped under, in the namespace binding ids use. */
-export function browserProfileScope(profileId: string): string {
-  return `browser-profile:${profileId}`;
-}
-
 export function effectiveBrowserProfiles(
   declared: readonly BrowserProfile[] | undefined,
   chrome: ChromeDiscovery,

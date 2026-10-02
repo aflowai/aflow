@@ -23,21 +23,26 @@ export interface HelmsmanSurface {
 }
 
 /**
- * The machine reads and the harness, pinned on the local edition.
+ * The machine reads, the harness and opening a page, pinned on the local
+ * edition.
  *
  * Assessment is steering work and happens on most turns, and the harness is how
  * a task is commissioned once the assessment is done. Promoting either one by
  * hand is a round trip on every task that touches the operator's machine.
+ * Opening a page is the browser's one every-turn cost; the operations that
+ * act on a page promote together once one is open.
  */
 const LOCAL_PINNED_OPERATIONS: readonly string[] = [
   'host.harness.run',
   'host.file.list',
   'host.file.get',
+  'browser.page.open',
 ];
 
 /**
- * What leaves the every-turn set to pay for them, so the pinned set keeps its
- * size. Each stays promotable: the campaign reads are drill-ins the context
+ * What leaves the every-turn set to pay for the machine reads and the harness.
+ * Opening a page is paid for by nothing: it adds one tool to the local
+ * edition's every-turn set. Each stays promotable: the campaign reads are drill-ins the context
  * already summarizes, and one of the two inline renders covers the turn.
  */
 const LOCAL_UNPINNED_OPERATIONS: readonly string[] = [
@@ -74,7 +79,7 @@ export function composeHelmsmanSurface(
 
   const coreOperations = core.filter((op) => !unpinned.has(op));
   for (const op of LOCAL_PINNED_OPERATIONS) {
-    if (!coreOperations.includes(op)) coreOperations.push(op);
+    if (isOperationComposed(op, lanes) && !coreOperations.includes(op)) coreOperations.push(op);
   }
 
   const promotableOperations = promotable.filter((op) => !pinned.has(op));

@@ -386,7 +386,7 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
     // against the whole policy rather than the one being asked about.
     const permitted = executionPermitted(policy);
     reapWithdrawn(permitted);
-    for (const gone of withdrawnSessions(permitted)) {
+    for (const gone of withdrawnSessions(permitted.bindings)) {
       if (!gone.busy) await discardScratch(gone);
     }
 

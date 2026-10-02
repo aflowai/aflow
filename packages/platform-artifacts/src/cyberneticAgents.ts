@@ -128,6 +128,15 @@ export const HELMSMAN_DISCOVERY_PRESET: readonly string[] = [
   'host.harness.run',
   'host.mcp.list_tools',
   'host.mcp.call',
+  // The browser bundle beside its pinned `browser.page.open` (local edition
+  // only, `helmsmanSurface.ts`), so one promotion brings the rest together.
+  'browser.page.navigate',
+  'browser.page.act',
+  'browser.page.snapshot',
+  'browser.page.read',
+  'browser.page.list',
+  'browser.page.close',
+  'browser.profile.list',
   'mcp.server.list',
   'mcp.server.get',
   'mcp.server.upsert',

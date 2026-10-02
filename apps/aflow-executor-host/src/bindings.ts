@@ -26,7 +26,7 @@ import {
 } from '@aflow/schemas';
 
 import { type ChromeDiscovery, discoverChrome } from './browser/chromeDiscovery.js';
-import { browserProfileScope, effectiveBrowserProfiles } from './browser/profiles.js';
+import { effectiveBrowserProfiles } from './browser/profiles.js';
 import { type HarnessProfile, HarnessProfileSchema } from './harnessProfiles.js';
 import { type LocalMcpServer, LocalMcpServerSchema } from './localMcpServers.js';
 
@@ -788,15 +788,21 @@ export function requireSpace(binding: HostBinding, spaceId: string | undefined):
  * and its filesystem access until timeout. The fourth place had it right, which
  * is exactly how a rule drifts — so there is one of them now.
  */
+export interface ExecutionPermitted {
+  readonly bindings: ReadonlySet<string>;
+  /** A profile's browser is permitted for as long as the profile is offered. */
+  readonly browserProfiles: ReadonlySet<string>;
+}
+
 export function executionPermitted(
   policy: Pick<LoadedHostPolicy, 'bindings' | 'browsers'>,
-): Set<string> {
-  return new Set([
-    ...[...policy.bindings.values()]
-      .filter((binding) => binding.allowsExecution)
-      .map((binding) => binding.id),
-    // A profile's browser runs under the profile rather than a binding, and is
-    // permitted for as long as the profile is offered.
-    ...[...policy.browsers.keys()].map(browserProfileScope),
-  ]);
+): ExecutionPermitted {
+  return {
+    bindings: new Set(
+      [...policy.bindings.values()]
+        .filter((binding) => binding.allowsExecution)
+        .map((binding) => binding.id),
+    ),
+    browserProfiles: new Set(policy.browsers.keys()),
+  };
 }

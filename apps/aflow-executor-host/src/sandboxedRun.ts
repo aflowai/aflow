@@ -22,12 +22,21 @@ import { dirname, join } from 'node:path';
 import { SandboxManager } from '@anthropic-ai/sandbox-runtime';
 
 import { buildBaseEnv, workloadHome } from './baseEnv.js';
-import type { HostBinding } from './bindings.js';
+import type { ExecutionPermitted, HostBinding } from './bindings.js';
 import { createStreamScrubber } from './credentialFetch.js';
 import { assertSafeEnv } from './envPolicy.js';
 import { forgetSpawn, recordSpawn } from './orphans.js';
 import { compileSandboxPolicy, type SandboxWidening } from './sandboxPolicy.js';
 import { transportEnv } from './worktree.js';
+
+/**
+ * What a process runs under, and so what withdrawing ends it. A binding and a
+ * browser profile are separate namespaces: no binding id, whatever it is
+ * spelled, can keep a profile's browser alive, nor a profile a command.
+ */
+export type ProcessScope =
+  | { readonly kind: 'binding'; readonly id: string }
+  | { readonly kind: 'browser-profile'; readonly id: string };
 
 /** Captured output is capped so one chatty build cannot become the step's payload. */
 export const OUTPUT_CAP_BYTES = 256 * 1024;
@@ -37,7 +46,7 @@ const SIGKILL_AFTER_MS = 5_000;
 
 interface RunningProcess {
   readonly child: ChildProcess;
-  readonly bindingId: string;
+  readonly scope: ProcessScope;
   /**
    * The run that started it. Handles are addressed by id, and an id is
    * guessable, so ownership is what stops one run steering another's process.
@@ -89,14 +98,14 @@ function nextProcessId(prefix: string): string {
 function enterRegistry(
   child: ChildProcess,
   idPrefix: string,
-  bindingId: string,
+  scope: ProcessScope,
   ownerRunId: string,
   startedAt: Date,
 ): { processId: string; entry: RunningProcess } {
   const processId = nextProcessId(idPrefix);
   const entry: RunningProcess = {
     child,
-    bindingId,
+    scope,
     ownerRunId,
     startedAt,
     exitCode: null,
@@ -106,6 +115,17 @@ function enterRegistry(
   };
   running.set(processId, entry);
   return { processId, entry };
+}
+
+/** Whether the policy still grants what a process runs under, each kind against its own set. */
+export function scopePermitted(scope: ProcessScope, permitted: ExecutionPermitted): boolean {
+  return scope.kind === 'binding'
+    ? permitted.bindings.has(scope.id)
+    : permitted.browserProfiles.has(scope.id);
+}
+
+function underBinding(entry: RunningProcess, bindingId: string): boolean {
+  return entry.scope.kind === 'binding' && entry.scope.id === bindingId;
 }
 
 /** Kills the whole group, which is why the child was detached in the first place. */
@@ -134,7 +154,7 @@ function ownedBy(
   // still granted, pass the gate on it, and go on driving a process inside the
   // binding that was withdrawn.
   if (entry.ownerRunId !== ownerRunId) return undefined;
-  return entry.bindingId === bindingId ? entry : undefined;
+  return underBinding(entry, bindingId) ? entry : undefined;
 }
 
 /**
@@ -196,7 +216,7 @@ export function processesForBinding(
   return [...running.entries()]
     .filter(
       ([id, entry]) =>
-        entry.bindingId === bindingId &&
+        underBinding(entry, bindingId) &&
         entry.ownerRunId === ownerRunId &&
         (processId === undefined || id === processId),
     )
@@ -212,10 +232,10 @@ export function processesForBinding(
  * its timeout. Reconciling against the whole current policy costs nothing
  * extra: the policy was already read to serve this operation.
  */
-export function reapWithdrawn(permitted: ReadonlySet<string>): string[] {
+export function reapWithdrawn(permitted: ExecutionPermitted): string[] {
   const killed: string[] = [];
   for (const [id, entry] of running) {
-    if (entry.exited || permitted.has(entry.bindingId)) continue;
+    if (entry.exited || scopePermitted(entry.scope, permitted)) continue;
     signalGroup(entry.child, 'SIGKILL');
     killed.push(id);
   }
@@ -232,7 +252,7 @@ export function reapWithdrawn(permitted: ReadonlySet<string>): string[] {
 export function killProcessesForBinding(bindingId: string): string[] {
   const killed: string[] = [];
   for (const [id, entry] of running) {
-    if (entry.bindingId !== bindingId || entry.exited) continue;
+    if (!underBinding(entry, bindingId) || entry.exited) continue;
     signalGroup(entry.child, 'SIGKILL');
     killed.push(id);
   }
@@ -623,7 +643,7 @@ export async function spawnConfined(input: SpawnConfinedInput): Promise<Confined
   const { processId, entry } = enterRegistry(
     child,
     input.idPrefix,
-    input.binding.id,
+    { kind: 'binding', id: input.binding.id },
     input.ownerRunId,
     startedAt,
   );
@@ -683,7 +703,7 @@ async function superviseSpawn(input: SupervisedSpawn): Promise<SandboxedRunResul
   const { processId, entry } = enterRegistry(
     child,
     input.idPrefix,
-    input.bindingId,
+    { kind: 'binding', id: input.bindingId },
     input.ownerRunId,
     startedAt,
   );
@@ -963,11 +983,15 @@ export interface ServiceStartInput {
   readonly cwd: string;
   readonly idPrefix: string;
   /**
-   * What reaps it, in the namespace binding ids use: withdrawal ends it when the
-   * policy no longer grants this scope, as it ends a command under a withdrawn
-   * binding.
+   * What reaps it: withdrawal ends it when the policy no longer grants this
+   * scope, as it ends a command under a withdrawn binding.
    */
-  readonly scopeId: string;
+  readonly scope: ProcessScope;
+  /**
+   * The whole environment, built by the caller from names it chose. Nothing of
+   * this executor's own is passed through.
+   */
+  readonly env: Readonly<Record<string, string>>;
 }
 
 export interface ServiceExit {
@@ -994,7 +1018,7 @@ const SERVICE_STDERR_TAIL_CHARS = 4_000;
  * push it is nobody's step, so it has no deadline and no output anyone reads;
  * what it shares with every other spawn is the registry, the orphan journal and
  * the group kill, which is what puts it in reach of withdrawal, shutdown and the
- * next boot's sweep. It sees the operator's transport and nothing a job sent.
+ * next boot's sweep. It sees the environment its caller named and nothing a job sent.
  */
 export function startUnconfinedService(input: ServiceStartInput): RunningService {
   const [program, ...args] = input.argv;
@@ -1003,13 +1027,13 @@ export function startUnconfinedService(input: ServiceStartInput): RunningService
 
   const child = spawn(program, args, {
     cwd: input.cwd,
-    env: transportEnv(),
+    env: { ...input.env },
     detached: true,
     stdio: ['ignore', 'ignore', 'pipe'],
   });
   // No scratch directory: nothing it uses is this executor's to delete.
   if (child.pid !== undefined) recordSpawn(child.pid);
-  const { processId, entry } = enterRegistry(child, input.idPrefix, input.scopeId, '', new Date());
+  const { processId, entry } = enterRegistry(child, input.idPrefix, input.scope, '', new Date());
 
   let stderrTail = '';
   child.stderr.on('data', (chunk: Buffer) => {
