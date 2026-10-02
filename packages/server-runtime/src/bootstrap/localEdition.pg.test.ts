@@ -40,6 +40,7 @@ const EDITION: EditionDescriptor = {
   computeRuntime: 'absent',
   codeLane: 'absent',
   hostLane: 'absent',
+  browserLane: 'absent',
 };
 
 describeDb('bootstrapLocalEdition', () => {

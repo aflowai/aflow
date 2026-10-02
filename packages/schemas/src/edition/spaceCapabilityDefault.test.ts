@@ -10,6 +10,7 @@ const hosted: EditionDescriptor = {
   computeRuntime: 'present',
   codeLane: 'present',
   hostLane: 'absent',
+  browserLane: 'absent',
 };
 
 const appliance: EditionDescriptor = {
@@ -20,6 +21,7 @@ const appliance: EditionDescriptor = {
   computeRuntime: 'absent',
   codeLane: 'absent',
   hostLane: 'absent',
+  browserLane: 'absent',
 };
 
 describe('defaultsToSafeProfile', () => {

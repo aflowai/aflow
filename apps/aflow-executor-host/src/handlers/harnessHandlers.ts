@@ -443,9 +443,9 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
     // writes into a checkout of the operator's code. Withdrawal has to reach it
     // whichever binding this call happens to name, so reconciliation runs
     // against the whole policy rather than the one being asked about.
-    const permitted = executionPermitted(policy.bindings);
+    const permitted = executionPermitted(policy);
     reapWithdrawn(permitted);
-    for (const gone of withdrawnSessions(permitted)) {
+    for (const gone of withdrawnSessions(permitted.bindings)) {
       if (!gone.busy) await discardScratch(gone);
     }
 

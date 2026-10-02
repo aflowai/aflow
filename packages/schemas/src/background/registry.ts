@@ -204,6 +204,35 @@ const DEFINITIONS: readonly BackgroundTaskDefinitionInput[] = [
     ],
   },
   {
+    id: 'host.browser_idle',
+    service: 'executor-host',
+    ownerDomain: 'ownership',
+    purpose:
+      "Close browser pages nothing has used for their profile's idle limit, and stop a profile's browser once it has had no page for as long.",
+    invariant:
+      "No page outlives its profile's idle limit unused, and no profile's browser runs pageless for longer than that limit — sign-ins stay on disk, not loaded behind an abandoned page.",
+    criticality: 'feature',
+    trigger: 'active-resource',
+    scope: 'per_instance',
+    substrate: 'local',
+    baseCadenceMs: 60_000,
+    maxBatch: 20,
+    maxCycleMs: 30_000,
+    idleOperationBudgetPerMinute: 0,
+    hotPathProducerBudget: {
+      maxAdditionalNetworkRoundTrips: 0,
+      description: 'Traverses the in-memory page table and the browsers this process started.',
+    },
+    disablePolicy: 'safe',
+    recovery:
+      "Pages and browsers then stay until the executor stops; shutdown ends every browser it started, and the next boot's orphan sweep ends any it left.",
+    note: 'Per instance because the resource is per instance: the browsers are processes this executor started and the pages live in its memory. The executor is not told when a run ends, so this is what bounds a page a run abandoned. A cycle with no browser running reads nothing. The batch counts closures — a page closed or a browser stopped — and a cycle stops at 20, leaving the rest for the next: each closure is one call to a browser on this machine, so 20 sit well inside the cycle budget, while a run that abandoned a page per step still drains at 20 a minute rather than one. A profile with an operation in flight is passed over until that operation ends.',
+    sites: [
+      'apps/aflow-executor-host/src/browser/idleSweep.ts',
+      'apps/aflow-executor-host/src/browser/driver.ts',
+    ],
+  },
+  {
     id: 'orchestrator.shard_acquisition',
     service: 'orchestrator',
     ownerDomain: 'ownership',

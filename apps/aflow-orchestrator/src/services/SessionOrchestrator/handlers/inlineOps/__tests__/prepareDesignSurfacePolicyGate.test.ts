@@ -6,7 +6,7 @@ import { createMemoryPayloadStore } from '@aflow/payload-store';
 // refused. This file adds one to `SPACE_POLICY_OPERATION_PREFIXES` — the set a
 // future lane joins — and asserts the space state that never learned to read it
 // leaves it OFF rather than waving it through.
-const UNREAD_POLICY_PREFIX = vi.hoisted(() => 'browser');
+const UNREAD_POLICY_PREFIX = vi.hoisted(() => 'telescope');
 
 vi.mock('@aflow/schemas', async (importOriginal) => {
   const orig = (await importOriginal()) as Record<string, unknown>;
@@ -104,13 +104,13 @@ describe('prepare-design-surface — policy gate fails closed', () => {
     const { handlePrepareDesignSurfaceInline } = await import('../prepareDesignSurface.js');
     await handlePrepareDesignSurfaceInline(
       makeArgs({
-        intent: 'Drive a browser session',
+        intent: 'Point a telescope',
         iterationModel: 'process',
         requiredCapabilities: [
           {
             kind: 'operation',
-            identifier: `${UNREAD_POLICY_PREFIX}.session.open`,
-            rationale: 'navigates the page',
+            identifier: `${UNREAD_POLICY_PREFIX}.mount.slew`,
+            rationale: 'aims the mount',
           },
         ],
       }),
@@ -139,6 +139,6 @@ describe('prepare-design-surface — policy gate fails closed', () => {
     expect(msg.status).toBe('SUCCEEDED');
     const surface = decodeInline(msg.outputRef)['designSurface'] as Record<string, unknown>;
     expect((surface['policies'] as Record<string, boolean>)[UNREAD_POLICY_PREFIX]).toBe(false);
-    expect(surface['operations']).not.toContain(`${UNREAD_POLICY_PREFIX}.session.open`);
+    expect(surface['operations']).not.toContain(`${UNREAD_POLICY_PREFIX}.mount.slew`);
   });
 });

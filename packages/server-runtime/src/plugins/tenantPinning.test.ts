@@ -17,6 +17,7 @@ const HOSTED: EditionDescriptor = {
   computeRuntime: 'present',
   codeLane: 'present',
   hostLane: 'absent',
+  browserLane: 'absent',
 };
 
 const LOCAL: EditionDescriptor = {
@@ -27,6 +28,7 @@ const LOCAL: EditionDescriptor = {
   computeRuntime: 'absent',
   codeLane: 'absent',
   hostLane: 'absent',
+  browserLane: 'absent',
 };
 
 /** A tenant this instance is never pinned to. */

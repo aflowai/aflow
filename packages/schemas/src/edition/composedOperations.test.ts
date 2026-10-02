@@ -6,11 +6,17 @@ import {
   type ComposedLanes,
 } from './composedOperations.js';
 
-const HOSTED: ComposedLanes = { edition: 'enterprise', codeLane: 'present', hostLane: 'absent' };
+const HOSTED: ComposedLanes = {
+  edition: 'enterprise',
+  codeLane: 'present',
+  hostLane: 'absent',
+  browserLane: 'absent',
+};
 const APPLIANCE: ComposedLanes = {
   edition: 'community-local',
   codeLane: 'absent',
   hostLane: 'present',
+  browserLane: 'present',
 };
 
 describe('isOperationComposed', () => {
@@ -38,6 +44,14 @@ describe('isOperationComposed', () => {
     }
   });
 
+  it('composes the browser lane exactly where browserLane is present', () => {
+    expect(isStepTypeComposed('browser', APPLIANCE)).toBe(true);
+    expect(isStepTypeComposed('browser', HOSTED)).toBe(false);
+    expect(isStepTypeComposed('browser', { ...APPLIANCE, browserLane: 'absent' })).toBe(false);
+    expect(isOperationComposed('browser.page.open', APPLIANCE)).toBe(true);
+    expect(isOperationComposed('browser.page.open', HOSTED)).toBe(false);
+  });
+
   it('answers on the step type, so a bare step type answers the same way', () => {
     expect(isStepTypeComposed('code', APPLIANCE)).toBe(false);
     expect(isStepTypeComposed('host', HOSTED)).toBe(false);
@@ -54,5 +68,13 @@ describe('uncomposedOperationReason', () => {
     const reason = uncomposedOperationReason('code.agent.run', APPLIANCE);
     expect(reason).toContain('code.agent.run');
     expect(reason).toContain('community-local');
+  });
+
+  it('says a browser lives on a paired machine', () => {
+    expect(uncomposedOperationReason('browser.page.open', HOSTED)).toBe(
+      'lane_not_composed: "browser.page.open" needs the browser lane, a browser on a paired ' +
+        'machine, which the enterprise edition running here does not compose. No promotion or ' +
+        'call can reach it.',
+    );
   });
 });

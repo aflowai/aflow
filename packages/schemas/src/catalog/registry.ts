@@ -17,6 +17,8 @@ import { UserOperationRegistrations } from '../operations/user.js';
 import { SearchOperationRegistrations } from '../operations/search.js';
 import { ComputeOperationRegistrations } from '../operations/compute.js';
 import { HostOperationRegistrations } from '../operations/hostRegistrations.js';
+import { BrowserPageActionRegistrations } from '../operations/browser.js';
+import { BrowserObservationRegistrations } from '../operations/browserObservation.js';
 import { AgentOperationRegistrations } from '../operations/agentControl.js';
 import { PlatformOperationRegistrations } from '../operations/platform.js';
 import { GuardrailOperationRegistrations } from '../operations/guardrailOps.js';
@@ -52,6 +54,8 @@ const ALL_REGISTRATIONS: OperationRegistration[] = [
   ...SearchOperationRegistrations,
   ...ComputeOperationRegistrations,
   ...HostOperationRegistrations,
+  ...BrowserPageActionRegistrations,
+  ...BrowserObservationRegistrations,
   ...AgentOperationRegistrations,
   ...PlatformOperationRegistrations,
   ...GuardrailOperationRegistrations,

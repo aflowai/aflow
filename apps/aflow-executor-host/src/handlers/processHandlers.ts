@@ -87,7 +87,7 @@ async function bindingFor(
   // again — and detaching exists so the step can end, so ordinarily nobody
   // does. The policy is already in hand; this costs a set membership per
   // process.
-  reapWithdrawn(executionPermitted(policy.bindings));
+  reapWithdrawn(executionPermitted(policy));
 
   let binding: HostBinding;
   try {

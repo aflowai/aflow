@@ -32,6 +32,8 @@ export const STEP_TYPE_DESCRIPTIONS: Record<string, string> = {
   workflow: 'Structured workflows — outcomes, tasks, runs, learnings, evaluations',
   integration: 'External-service registry — list and look up bound API/MCP integrations',
   code: 'Coding-agent execution lane — run a managed coding harness over a real git checkout, returns a patch bundle',
+  browser:
+    'A real browser on the operator’s machine — open, read and use web pages; browser.profile.list says which sites hold a session',
 };
 
 /**

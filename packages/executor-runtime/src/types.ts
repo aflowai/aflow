@@ -395,6 +395,7 @@ export function getDefaultPendingTimeoutMs(stepType: StepType): number {
     case 'code':
     case 'store':
     case 'host':
+    case 'browser':
       return PENDING_TIMEOUT_MS_DEFAULT;
   }
 }

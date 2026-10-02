@@ -25,7 +25,12 @@ import { mkdirSync } from 'node:fs';
  */
 interface OrphanRecord {
   readonly pid: number;
-  readonly scratchDir: string;
+  /**
+   * Removed with the process. Absent for one that keeps nothing disposable —
+   * a browser's profile directory holds the operator's sign-ins and outlives
+   * every process that uses it.
+   */
+  readonly scratchDir?: string;
   /** When this executor recorded it, in epoch milliseconds. */
   readonly recordedAt?: number;
 }
@@ -39,12 +44,12 @@ export function openOrphanJournal(hostDir: string): string {
 }
 
 /** Recorded synchronously: a crash between spawning and writing loses the pid. */
-export function recordSpawn(pid: number, scratchDir: string): void {
+export function recordSpawn(pid: number, scratchDir?: string): void {
   if (journalPath === undefined) return;
   try {
     appendFileSync(
       journalPath,
-      `${JSON.stringify({ pid, scratchDir, recordedAt: Date.now() })}\n`,
+      `${JSON.stringify({ pid, ...(scratchDir !== undefined ? { scratchDir } : {}), recordedAt: Date.now() })}\n`,
       {
         mode: 0o600,
       },
@@ -68,7 +73,7 @@ export function readJournal(path: string): OrphanRecord[] {
         typeof (parsed as OrphanRecord).pid === 'number' &&
         Number.isInteger((parsed as OrphanRecord).pid) &&
         (parsed as OrphanRecord).pid > 1 &&
-        typeof (parsed as OrphanRecord).scratchDir === 'string'
+        ['string', 'undefined'].includes(typeof (parsed as OrphanRecord).scratchDir)
       ) {
         records.push(parsed as OrphanRecord);
       }
@@ -153,6 +158,7 @@ export function reapOrphans(path: string): number {
     } catch {
       // Already gone, which is the common case and not a problem.
     }
+    if (record.scratchDir === undefined) continue;
     try {
       rmSync(record.scratchDir, { recursive: true, force: true });
     } catch {
