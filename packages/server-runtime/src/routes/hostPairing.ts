@@ -21,7 +21,9 @@ import {
   getRedisConnection,
   HOST_INVENTORY_TTL_MS,
   HOST_MACHINES_KEY,
+  type HostInventory,
   hostInventoryKey,
+  HostInventorySchema,
 } from '@aflow/redis';
 
 import { applyHostIdentityToRunningServer } from '../bootstrap/redisAcl.js';
@@ -531,10 +533,11 @@ export const hostPairingRoutes: FastifyPluginAsync = async (fastify) => {
           200: z.object({
             paired: z.boolean(),
             machines: z.array(
-              z.object({
-                hostname: z.string(),
-                observedAt: z.string(),
-                runtimes: z.array(z.object({ name: z.string(), version: z.string() })),
+              HostInventorySchema.pick({
+                hostname: true,
+                observedAt: true,
+                runtimes: true,
+                browsers: true,
               }),
             ),
           }),
@@ -545,7 +548,9 @@ export const hostPairingRoutes: FastifyPluginAsync = async (fastify) => {
       // Read from what the executor publishes rather than from anything stored:
       // an inventory that outlives its machine describes tools nobody can run.
       const redis = getRedisConnection();
-      const machines: Array<{ hostname: string; observedAt: string; runtimes: unknown[] }> = [];
+      const machines: Array<
+        Pick<HostInventory, 'hostname' | 'observedAt' | 'runtimes' | 'browsers'>
+      > = [];
       // Read from the set each executor announces itself into. Scanning the
       // keyspace for them is what [[180]] forbids, and the cost here tracks
       // paired machines rather than everything stored.
@@ -561,17 +566,20 @@ export const hostPairingRoutes: FastifyPluginAsync = async (fastify) => {
         // A name whose inventory expired is a machine that stopped publishing,
         // which is not the same as one that is running and says nothing.
         if (raw === null) continue;
+        // A machine writing something unreadable is not a reason to fail the
+        // question everyone else answered.
+        let parsed: unknown;
         try {
-          machines.push(JSON.parse(raw) as (typeof machines)[number]);
+          parsed = JSON.parse(raw);
         } catch {
-          // A machine writing something unreadable is not a reason to fail the
-          // question everyone else answered.
+          continue;
         }
+        const inventory = HostInventorySchema.safeParse(parsed);
+        if (!inventory.success) continue;
+        const { hostname, observedAt, runtimes, browsers } = inventory.data;
+        machines.push({ hostname, observedAt, runtimes, browsers });
       }
-      return await reply.send({
-        paired: machines.length > 0,
-        machines: machines as never,
-      });
+      return await reply.send({ paired: machines.length > 0, machines });
     },
   );
 

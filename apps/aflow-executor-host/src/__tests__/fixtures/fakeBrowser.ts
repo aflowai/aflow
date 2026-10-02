@@ -17,6 +17,7 @@ import { entersValue } from '../../browser/credentialFields.js';
 import { BrowserDriver, type BrowserPolicy } from '../../browser/driver.js';
 import type { EgressProxy, EgressProxyOptions, ProxyRefusal } from '../../browser/egressProxy.js';
 import { BrowserDriverError } from '../../browser/errors.js';
+import type { WaitForOperator } from '../../browser/operatorWindow.js';
 import {
   type BrowserEngine,
   type EngineAction,
@@ -25,6 +26,7 @@ import {
   EngineNavigationFailed,
   type EnginePage,
   EngineRefNotFound,
+  type EngineScreenshot,
   type PageEvents,
   type PageSnapshot,
 } from '../../browser/types.js';
@@ -55,6 +57,30 @@ export interface FakeSite {
   readonly unreadable?: boolean;
   /** The frame each reference belongs to, by address; any other is in the page itself. */
   readonly frames?: Readonly<Record<string, string>>;
+  /** Bytes a PNG of it comes to, and a JPEG; small unless set. */
+  readonly pngBytes?: number;
+  readonly jpegBytes?: number;
+  /** Every read of its snapshot differs from the last, as a page animating forever does. */
+  readonly neverQuiet?: boolean;
+}
+
+/** A PNG header for an image of the given size in pixels, padded to `bytes`. */
+export function fakePng(width: number, height: number, bytes = 64): Buffer {
+  const header = Buffer.alloc(24);
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(header, 0);
+  header.writeUInt32BE(13, 8);
+  header.write('IHDR', 12, 'latin1');
+  header.writeUInt32BE(width, 16);
+  header.writeUInt32BE(height, 20);
+  return Buffer.concat([header, Buffer.alloc(Math.max(0, bytes - header.length))]);
+}
+
+/** A JPEG start-of-frame for an image of the given size in pixels, padded to `bytes`. */
+export function fakeJpeg(width: number, height: number, bytes = 64): Buffer {
+  const frame = Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, 0, 0, 0, 0]);
+  frame.writeUInt16BE(height, 7);
+  frame.writeUInt16BE(width, 9);
+  return Buffer.concat([frame, Buffer.alloc(Math.max(0, bytes - frame.length))]);
 }
 
 export interface FakeWorld {
@@ -87,6 +113,9 @@ export class FakePage implements EnginePage {
   closeHangs = false;
   readonly actions: Array<{ ref: string; action: EngineAction }> = [];
   readonly navigations: EngineNavigation[] = [];
+  readonly screenshots: EngineScreenshot[] = [];
+  /** Reads of its snapshot so far. */
+  reads = 0;
 
   constructor(
     private readonly world: FakeWorld,
@@ -101,6 +130,13 @@ export class FakePage implements EnginePage {
   private connect(url: string): ProxyRefusal | undefined {
     const parsed = new URL(url);
     return this.proxy().check(parsed.hostname.replace(/^\[(.*)\]$/, '$1'), parsed.port);
+  }
+
+  /** The page moving through its own history, as a script routing a single-page application does. */
+  pushState(url: string): void {
+    this.history = [...this.history.slice(0, this.index + 1), url];
+    this.index = this.history.length - 1;
+    this.current = url;
   }
 
   /** Where a load ends, after redirects and the proxy. A failure carries its redirect chain, as the engine's does. */
@@ -192,13 +228,29 @@ export class FakePage implements EnginePage {
     if (this.snapshotFails || this.site().unreadable === true)
       return Promise.reject(new Error('Target page, context or browser has been closed'));
     const site = this.site();
+    this.reads += 1;
     return Promise.resolve({
-      text: this.snapshotText(),
+      text:
+        site.neverQuiet === true
+          ? `${this.snapshotText()}\n- heading "Tick ${String(this.reads)}" [ref=t1]`
+          : this.snapshotText(),
       maskedRefs: new Set(site.masked ?? (site.snapshot === undefined ? ['e5'] : [])),
     });
   }
   text(): Promise<string> {
     return Promise.resolve(this.site().text ?? 'Sign in\nWelcome back to the example service.');
+  }
+  screenshot(request: EngineScreenshot): Promise<Buffer> {
+    if (request.ref !== undefined && !this.snapshotText().includes(`[ref=${request.ref}]`)) {
+      return Promise.reject(new EngineRefNotFound(request.ref));
+    }
+    this.screenshots.push(request);
+    const site = this.site();
+    return Promise.resolve(
+      request.jpegQuality !== undefined
+        ? fakeJpeg(1280, 800, site.jpegBytes ?? 64)
+        : fakePng(1280, 800, site.pngBytes ?? 64),
+    );
   }
   close(): Promise<void> {
     if (this.closeHangs) return new Promise(() => undefined);
@@ -269,6 +321,10 @@ export interface Harness {
   endLaunch(index: number): Promise<void>;
   /** This machine's interface addresses, as the classifier reads them; push to add one. */
   readonly interfaces: string[];
+  /** Pages each launch's browser holds, in the order of the launches. */
+  readonly pagesByLaunch: FakePage[][];
+  /** Runs at every wait the driver takes, after the clock has moved: the world changing meanwhile. */
+  onSleep?: (now: number) => void;
   cookieSites: string[];
   /** Every launch waits on this while it is set, as a Chrome still starting does. */
   launchHeld?: Promise<void>;
@@ -286,6 +342,7 @@ export function harness(
     world?: Partial<FakeWorld>;
     /** A browser told to stop goes on running until the test ends it, as a slow exit does. */
     slowExit?: boolean;
+    waitForOperator?: WaitForOperator;
   } = {},
 ): Harness {
   const world: FakeWorld = {
@@ -304,6 +361,7 @@ export function harness(
   const proxies: FakeProxy[] = [];
   const stops: number[] = [];
   const interfaces: string[] = [];
+  const pagesByLaunch: FakePage[][] = [];
   const ends: Array<() => void> = [];
   const settle = async (): Promise<void> => {
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -349,21 +407,32 @@ export function harness(
       await settle();
     },
     interfaces,
+    pagesByLaunch,
   };
   const engine: BrowserEngine = {
-    connect: () =>
-      Promise.resolve({
-        newPage: (events: PageEvents) => {
-          if (world.newPageFails !== undefined) {
-            return Promise.reject(new Error(world.newPageFails));
-          }
-          const page = new FakePage(world, () => proxies[proxies.length - 1] as FakeProxy, events);
-          pages.push(page);
-          return Promise.resolve(page);
+    connect: () => {
+      const held: FakePage[] = [];
+      pagesByLaunch.push(held);
+      const newPage = (events: PageEvents): Promise<FakePage> => {
+        if (world.newPageFails !== undefined) {
+          return Promise.reject(new Error(world.newPageFails));
+        }
+        const page = new FakePage(world, () => proxies[proxies.length - 1] as FakeProxy, events);
+        pages.push(page);
+        held.push(page);
+        return Promise.resolve(page);
+      };
+      return Promise.resolve({
+        newPage,
+        firstPage: (events: PageEvents) => {
+          const started = held.find((page) => !page.closed);
+          return started !== undefined ? Promise.resolve(started) : newPage(events);
         },
+        openPageCount: () => held.filter((page) => !page.closed).length,
         cookieSites: () => Promise.resolve([...state.cookieSites]),
         disconnect: () => Promise.resolve(),
-      }),
+      });
+    },
   };
   const browsers = options.browsers ?? [BrowserProfileSchema.parse({ id: 'default' })];
   let policy: BrowserPolicy = {
@@ -388,6 +457,12 @@ export function harness(
     // machine's, so the answer does not depend on where the test runs.
     classifier: createLocalAddressClassifier({ readInterfaces: () => interfaces, now }),
     now,
+    sleep: async (ms) => {
+      clock.now += ms;
+      state.onSleep?.(clock.now);
+      await Promise.resolve();
+    },
+    ...(options.waitForOperator !== undefined ? { waitForOperator: options.waitForOperator } : {}),
   });
   return Object.assign(state, { driver });
 }

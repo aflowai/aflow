@@ -40,6 +40,7 @@ import {
   HOST_WITHDRAWAL_CHANNEL,
   hostInventoryKey,
   type HostInventory,
+  type HostInventoryBrowsers,
   type HostInventoryFolders,
   type HostWithdrawalNotice,
   quitRedisWithTimeout,
@@ -50,6 +51,7 @@ import { executionPermitted, loadHostPolicy } from './bindings.js';
 import { createChromeLauncher } from './browser/chromeProcess.js';
 import { BrowserDriver } from './browser/driver.js';
 import { createBrowserIdleSweep } from './browser/idleSweep.js';
+import { isBrowserRequestFile, serveBrowserRequests } from './browser/windowRequests.js';
 import { createBrowserHandler } from './handlers/browserHandler.js';
 import { removeWorktree } from './worktree.js';
 import { removeOrphanedCheckouts } from './handlers/harnessHandlers.js';
@@ -270,10 +272,36 @@ async function main(): Promise<void> {
   browserRuntime.registerHandler(createBrowserHandler(browserDriver));
   const browserIdleSweep = createBrowserIdleSweep(browserDriver, taskLogger);
 
+  // `aflow browser` asks through files beside the policy, because the Chrome a
+  // profile's directory allows is this executor's; see windowRequests.ts.
+  const browserRequests = serveBrowserRequests(
+    dirname(policyPath),
+    async (request) => {
+      if (request.kind === 'sign_in') {
+        log.info('Showing a browser window for the operator to sign in', {
+          profileId: request.profileId,
+        });
+        return { kind: 'sign_in', ...(await browserDriver.signIn(request.profileId)) };
+      }
+      const profiles = await browserDriver.machineProfiles();
+      return {
+        kind: 'list',
+        profiles: profiles.map(({ profile, running, sites }) => ({
+          id: profile.id,
+          running,
+          ...(sites !== undefined ? { sites } : {}),
+        })),
+      };
+    },
+    (message, meta) => {
+      log.warn(message, meta);
+    },
+  );
+
   // Withdrawal reaches running work without waiting for the next request. A
   // detached command exists so the step can end, so ordinarily no request
   // comes — and the operator would wait out a timeout instead.
-  const policyWatch = watchPolicy(policyPath, () => {
+  const onPolicyChange = (): void => {
     void loadHostPolicy(policyPath)
       .then(async (policy) => {
         await followPolicy({
@@ -329,6 +357,12 @@ async function main(): Promise<void> {
           error: error instanceof Error ? error.message : String(error),
         });
       });
+  };
+  const policyWatch = watchPolicy(policyPath, onPolicyChange, undefined, {
+    matches: isBrowserRequestFile,
+    onChange: () => {
+      void browserRequests.check();
+    },
   });
 
   // A detached process is spawned into its own group so a stop reaches its
@@ -353,6 +387,7 @@ async function main(): Promise<void> {
   // written" are different facts, and only the first should reach a workspace.
   let lastHarnesses: HostInventory['harnesses'] = [];
   let lastFolders: HostInventoryFolders = [];
+  let lastBrowsers: HostInventoryBrowsers = [];
 
   // Published with a lifetime rather than stored: an inventory that outlives the
   // executor describes a machine nobody is listening on, and inviting a run
@@ -377,12 +412,26 @@ async function main(): Promise<void> {
       .catch(() => ({ harnesses: lastHarnesses, folders: lastFolders }));
     lastHarnesses = harnesses;
     lastFolders = folders;
+    const browsers = await browserDriver
+      .machineProfiles()
+      .then((profiles) =>
+        profiles.map(({ profile, running, sites }) => ({
+          id: profile.id,
+          posture: profile.posture,
+          window: profile.window,
+          running,
+          ...(sites !== undefined ? { sites } : {}),
+        })),
+      )
+      .catch(() => lastBrowsers);
+    lastBrowsers = browsers;
     const inventory: HostInventory = {
       hostname,
       observedAt: new Date().toISOString(),
       runtimes,
       harnesses,
       folders,
+      browsers,
     };
     await redis.setex(
       hostInventoryKey(hostname),

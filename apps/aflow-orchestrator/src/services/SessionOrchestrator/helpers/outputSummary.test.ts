@@ -6,7 +6,12 @@
  */
 import { describe, it, expect } from 'vitest';
 import { createHash } from 'node:crypto';
-import { AiMediaOutputSchema, deriveMediaAssetId, type AiMediaOutput } from '@aflow/schemas';
+import {
+  AiMediaOutputSchema,
+  deriveMediaAssetId,
+  TOOL_RESULT_INLINE_MAX_CHARS,
+  type AiMediaOutput,
+} from '@aflow/schemas';
 import { buildToolResultSummary, buildToolResultSummaryWithMeta } from './outputSummary.js';
 
 const RUN_ID = 'run-01K9ZH3Q7VYQ8B2C4D6E8F0G2H';
@@ -535,7 +540,7 @@ describe('buildToolResultSummary', () => {
 
     it('a 14.4K line-range read is shown whole — not re-summarized into a five-line preview', () => {
       const output = lineReadOutput();
-      expect(JSON.stringify(output).length).toBeGreaterThan(12_288);
+      expect(JSON.stringify(output).length).toBeGreaterThan(TOOL_RESULT_INLINE_MAX_CHARS);
       const summary = buildToolResultSummary(output, 'read-call-9', 'memory.run_output.get');
       expect(summary).toContain((output.data as string).slice(0, 500));
       expect(summary).toContain((output.data as string).slice(-500));
@@ -911,7 +916,7 @@ describe('buildToolResultSummary', () => {
     it('emits the affordance for API summaries whose data is an object (structured)', () => {
       // Single resource — JSON object body. UI ops accept object data;
       // this is the canonical "render a single record as a card" shape.
-      // Pad above PASSTHROUGH_THRESHOLD (12288 bytes) so the summary
+      // Pad above TOOL_RESULT_INLINE_MAX_CHARS so the summary
       // builder actually runs rather than passing the JSON verbatim.
       const positions = Array.from({ length: 200 }, (_, i) => ({
         symbol: `S${String(i)}`,

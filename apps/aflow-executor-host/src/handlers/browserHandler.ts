@@ -14,16 +14,20 @@ import {
   type ErrorClassification,
   BROWSER_PAGE_ACT_OPERATION_ID,
   BROWSER_PAGE_CLOSE_OPERATION_ID,
+  BROWSER_PAGE_HANDOFF_OPERATION_ID,
   BROWSER_PAGE_LIST_OPERATION_ID,
   BROWSER_PAGE_NAVIGATE_OPERATION_ID,
   BROWSER_PAGE_OPEN_OPERATION_ID,
   BROWSER_PAGE_READ_OPERATION_ID,
+  BROWSER_PAGE_SCREENSHOT_OPERATION_ID,
   BROWSER_PAGE_SNAPSHOT_OPERATION_ID,
   BROWSER_PROFILE_LIST_OPERATION_ID,
   BrowserPageActInputSchema,
   type BrowserPageActOutputSchema,
   BrowserPageCloseInputSchema,
   type BrowserPageCloseOutputSchema,
+  BrowserPageHandoffInputSchema,
+  type BrowserPageHandoffOutputSchema,
   BrowserPageListInputSchema,
   type BrowserPageListOutputSchema,
   BrowserPageNavigateInputSchema,
@@ -32,6 +36,8 @@ import {
   type BrowserPageOpenOutputSchema,
   BrowserPageReadInputSchema,
   type BrowserPageReadOutputSchema,
+  BrowserPageScreenshotInputSchema,
+  type BrowserPageScreenshotOutputSchema,
   BrowserPageSnapshotInputSchema,
   type BrowserPageSnapshotOutputSchema,
   BrowserProfileListInputSchema,
@@ -64,7 +70,17 @@ const FAILURE: Record<BrowserFailureKind, { code: string; classification: ErrorC
   navigation_failed: { code: 'BROWSER_NAVIGATION_FAILED', classification: 'provider' },
   open_uncertain: { code: 'BROWSER_OPEN_UNCERTAIN', classification: 'conflict' },
   observation_failed: { code: 'BROWSER_OBSERVATION_FAILED', classification: 'provider' },
+  window_shown: { code: 'BROWSER_WINDOW_IN_USE', classification: 'conflict' },
+  window_failed: { code: 'BROWSER_WINDOW_FAILED', classification: 'internal' },
+  screenshot_too_large: { code: 'BROWSER_SCREENSHOT_TOO_LARGE', classification: 'validation' },
 };
+
+/**
+ * Room past a hand-off's own wait for the browser to be restarted with a
+ * window and back again, each start allowed half a minute, and the page to
+ * load in it.
+ */
+export const BROWSER_HANDOFF_OUTER_MARGIN_MS = 150_000;
 
 export function browserFailure(error: BrowserDriverError): AflowError {
   const { code, classification } = FAILURE[error.kind];
@@ -113,8 +129,20 @@ function viewFields(view: PageView): {
   };
 }
 
-function outlineReceipt(view: PageView): { outlineElements: number; outlineCut: boolean } {
-  return { outlineElements: view.outline.elements, outlineCut: view.outline.census !== undefined };
+function outlineReceipt(view: PageView): {
+  outlineElements: number;
+  outlineCut: boolean;
+  settled: boolean;
+} {
+  return {
+    outlineElements: view.outline.elements,
+    outlineCut: view.outline.census !== undefined,
+    settled: view.settled,
+  };
+}
+
+function bound(maxChars: number | undefined): { maxChars?: number } {
+  return maxChars !== undefined ? { maxChars } : {};
 }
 
 interface Route {
@@ -130,12 +158,14 @@ function route<S extends z.ZodTypeAny>(
   return { schema, run: async (ctx, driver, input) => await run(ctx, driver, input as z.infer<S>) };
 }
 
-const open = route(BrowserPageOpenInputSchema, async (ctx, driver, { url, profileId }) => {
+const open = route(BrowserPageOpenInputSchema, async (ctx, driver, input) => {
+  const { url, profileId } = input;
   const opened = await driver.open({
     ...scopeOf(ctx),
     profileId,
     url,
     redelivered: redelivered(ctx),
+    ...bound(input.maxChars),
   });
   const output: Output<typeof BrowserPageOpenOutputSchema> = {
     outcome: opened.outcome,
@@ -168,6 +198,7 @@ const navigate = route(BrowserPageNavigateInputSchema, async (ctx, driver, input
     pageId: input.pageId,
     to,
     redelivered: redelivered(ctx),
+    ...bound(input.maxChars),
   });
   const output: Output<typeof BrowserPageNavigateOutputSchema> = {
     outcome: result.outcome,
@@ -200,6 +231,7 @@ const act = route(BrowserPageActInputSchema, async (ctx, driver, input) => {
     ref: input.ref,
     action: engineAction(input),
     redelivered: redelivered(ctx),
+    ...bound(input.maxChars),
   });
   const output: Output<typeof BrowserPageActOutputSchema> = {
     outcome: result.outcome,
@@ -220,8 +252,9 @@ const act = route(BrowserPageActInputSchema, async (ctx, driver, input) => {
   return output;
 });
 
-const snapshot = route(BrowserPageSnapshotInputSchema, async (ctx, driver, { pageId, ref }) => {
-  const taken = await driver.snapshot(scopeOf(ctx), pageId, ref);
+const snapshot = route(BrowserPageSnapshotInputSchema, async (ctx, driver, input) => {
+  const { pageId, ref } = input;
+  const taken = await driver.snapshot(scopeOf(ctx), pageId, ref, input.maxChars);
   const output: Output<typeof BrowserPageSnapshotOutputSchema> = {
     pageId,
     url: taken.url,
@@ -234,17 +267,30 @@ const snapshot = route(BrowserPageSnapshotInputSchema, async (ctx, driver, { pag
       ...(ref !== undefined ? { ref } : {}),
       lines: taken.snapshot.lines,
       cut: taken.snapshot.census !== undefined,
+      ...(taken.snapshot.continueRef !== undefined
+        ? { continueRef: taken.snapshot.continueRef }
+        : {}),
     },
   };
   return output;
 });
 
-const read = route(BrowserPageReadInputSchema, async (ctx, driver, { pageId, what, contains }) => {
-  const result = await driver.readPage(scopeOf(ctx), pageId, what, contains);
+const read = route(BrowserPageReadInputSchema, async (ctx, driver, input) => {
+  const { pageId, what, contains, offset } = input;
+  const result = await driver.readPage(scopeOf(ctx), pageId, {
+    what,
+    ...(contains !== undefined ? { contains } : {}),
+    ...(offset !== undefined ? { offset } : {}),
+    ...bound(input.maxChars),
+  });
   const base = { pageId, url: result.url, what: result.what, withheld: result.withheld };
   const output: Output<typeof BrowserPageReadOutputSchema> =
     result.what === 'text'
-      ? { ...base, text: result.text }
+      ? {
+          ...base,
+          text: result.text,
+          ...(result.nextOffset !== undefined ? { nextOffset: result.nextOffset } : {}),
+        }
       : result.what === 'console'
         ? { ...base, console: result.console, notRetained: result.notRetained }
         : { ...base, network: result.network, notRetained: result.notRetained };
@@ -277,6 +323,50 @@ const listProfiles = route(BrowserProfileListInputSchema, async (ctx, driver) =>
   return output;
 });
 
+const screenshot = route(BrowserPageScreenshotInputSchema, async (ctx, driver, input) => {
+  const { pageId, ref, fullPage } = input;
+  const taken = await driver.screenshot(scopeOf(ctx), pageId, {
+    ...(ref !== undefined ? { ref } : {}),
+    fullPage,
+  });
+  const contentRef = await ctx.writePayload('screenshot', taken.bytes, {
+    contentType: taken.contentType,
+  });
+  const output: Output<typeof BrowserPageScreenshotOutputSchema> = {
+    pageId,
+    url: taken.url,
+    contentRef,
+    contentType: taken.contentType,
+    bytes: taken.bytes.length,
+    width: taken.width,
+    height: taken.height,
+    receipt: { ...(ref !== undefined ? { ref } : {}), fullPage, retaken: taken.retaken },
+  };
+  return output;
+});
+
+const handoff = route(BrowserPageHandoffInputSchema, async (ctx, driver, input) => {
+  const result = await driver.handoff({
+    ...scopeOf(ctx),
+    pageId: input.pageId,
+    reason: input.reason,
+    message: input.message,
+    ...bound(input.maxChars),
+  });
+  const output: Output<typeof BrowserPageHandoffOutputSchema> = {
+    outcome: result.outcome,
+    ...viewFields(result.view),
+    ...(result.previousPageId !== undefined ? { previousPageId: result.previousPageId } : {}),
+    receipt: {
+      reason: input.reason,
+      waitedSeconds: Math.round(result.waitedMs / 1000),
+      restarted: result.restarted,
+      ...outlineReceipt(result.view),
+    },
+  };
+  return output;
+});
+
 const ROUTES: Readonly<Record<string, Route>> = {
   [BROWSER_PAGE_OPEN_OPERATION_ID]: open,
   [BROWSER_PAGE_NAVIGATE_OPERATION_ID]: navigate,
@@ -285,6 +375,8 @@ const ROUTES: Readonly<Record<string, Route>> = {
   [BROWSER_PAGE_READ_OPERATION_ID]: read,
   [BROWSER_PAGE_LIST_OPERATION_ID]: list,
   [BROWSER_PAGE_CLOSE_OPERATION_ID]: close,
+  [BROWSER_PAGE_SCREENSHOT_OPERATION_ID]: screenshot,
+  [BROWSER_PAGE_HANDOFF_OPERATION_ID]: handoff,
   [BROWSER_PROFILE_LIST_OPERATION_ID]: listProfiles,
 };
 
@@ -294,6 +386,18 @@ export const SERVED_BROWSER_OPERATIONS: readonly string[] = Object.keys(ROUTES);
 export function createBrowserHandler(driver: BrowserDriver): StepHandler {
   return {
     stepType: 'browser',
+    // A hand-off waits on a person for as long as the profile allows; every
+    // other operation fits the lane's default.
+    async resolveTimeoutMs(ctx: ExecutorContext): Promise<number | undefined> {
+      if (ctx.operationId !== BROWSER_PAGE_HANDOFF_OPERATION_ID) return undefined;
+      if (ctx.stepDefinition?.timeout?.executionTimeoutMs !== undefined) return undefined;
+      const parsed = BrowserPageHandoffInputSchema.safeParse(
+        await ctx.readPayload(ctx.job.inputRef),
+      );
+      if (!parsed.success) return undefined;
+      const waitMs = await driver.handoffWaitLimitMs(scopeOf(ctx), parsed.data.pageId);
+      return waitMs === undefined ? undefined : waitMs + BROWSER_HANDOFF_OUTER_MARGIN_MS;
+    },
     async execute(ctx: ExecutorContext): Promise<StepResult> {
       const route = ROUTES[ctx.operationId];
       if (route === undefined) {

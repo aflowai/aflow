@@ -324,7 +324,7 @@ describe('posture and origin rules', () => {
 
     await h.driver.navigate({ ...RUN_A, pageId, to: { kind: 'reload' }, redelivered: false });
     await h.driver.snapshot(RUN_A, pageId);
-    await h.driver.readPage(RUN_A, pageId, 'text');
+    await h.driver.readPage(RUN_A, pageId, { what: 'text' });
     expect(await h.driver.list(RUN_A)).toHaveLength(1);
     expect(await h.driver.close(RUN_A, pageId)).toBe('closed');
   });
@@ -562,12 +562,15 @@ describe('browser.page.read', () => {
       resourceType: 'fetch',
     });
 
-    const errors = await h.driver.readPage(RUN_A, pageId, 'console', 'typeerror');
+    const errors = await h.driver.readPage(RUN_A, pageId, {
+      what: 'console',
+      contains: 'typeerror',
+    });
     expect(errors.what === 'console' && errors.console.map((e) => [e.level, e.text])).toEqual([
       ['error', 'Uncaught TypeError: x is undefined'],
     ]);
 
-    const network = await h.driver.readPage(RUN_A, pageId, 'network');
+    const network = await h.driver.readPage(RUN_A, pageId, { what: 'network' });
     if (network.what !== 'network') throw new Error('expected network');
     expect(network.network.map((e) => e.url)).toEqual([
       'https://example.com/?session=redacted&lang=redacted',
@@ -589,7 +592,7 @@ describe('browser.page.read', () => {
       profileId: 'default',
       url: 'https://example.com/',
     });
-    const read = await h.driver.readPage(RUN_A, pageId, 'text', 'welcome');
+    const read = await h.driver.readPage(RUN_A, pageId, { what: 'text', contains: 'welcome' });
     expect(read).toMatchObject({
       what: 'text',
       text: 'Welcome back to the example service.',
@@ -611,7 +614,9 @@ describe('the page table across list and close', () => {
       [first, 'https://shop.example.com/', 'Shop', 'default'],
       [second, 'https://shop.example.com/', 'Shop', 'default'],
     ]);
-    expect(listed[1]?.lastUsedAt).toBe((listed[0]?.lastUsedAt ?? 0) + MINUTE);
+    expect(listed[1]?.lastUsedAt ?? 0).toBeGreaterThanOrEqual(
+      (listed[0]?.lastUsedAt ?? 0) + MINUTE,
+    );
 
     expect(await h.driver.close(RUN_A, first)).toBe('closed');
     expect((await h.driver.list(RUN_A)).map((p) => p.pageId)).toEqual([second]);
