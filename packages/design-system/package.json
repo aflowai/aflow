@@ -102,8 +102,8 @@
     "dist"
   ],
   "scripts": {
-    "build:tokens": "tsx scripts/build-tokens.ts",
-    "build:contract": "tsx scripts/build-contract.ts",
+    "build:tokens": "node --import tsx scripts/build-tokens.ts",
+    "build:contract": "node --import tsx scripts/build-contract.ts",
     "build": "npm run build:tokens && npx tsup && rm -f tsconfig.tsbuildinfo && npx tsc && npm run build:styles && npm run build:contract",
     "build:styles": "mkdir -p dist/styles && cp src/styles/*.css dist/styles/ && cp src/tokens.css dist/ && cat src/tokens.css src/styles/reset.css src/styles/base.css src/styles/components.css > dist/styles.css",
     "clean": "rm -rf dist",

@@ -4,9 +4,13 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { BrowserProfileSchema } from '@aflow/schemas';
+
 import { executionPermitted, HostPolicySchema, loadHostPolicy } from '../bindings.js';
 import { chromeMissingMessage, discoverChrome } from '../browser/chromeDiscovery.js';
+import { createHostFileHandler } from '../handlers/fileHandlers.js';
 import { scopePermitted } from '../sandboxedRun.js';
+import { harness, refusal, RUN_A } from './fixtures/fakeBrowser.js';
 
 const FOUND = () => ({
   found: { label: 'Chromium', path: '/usr/bin/chromium' },
@@ -85,10 +89,15 @@ describe('a policy that declares browsers', () => {
     expect(policy.browsers.get('work')?.posture).toBe('autonomous');
   });
 
-  it('refuses a file naming one profile twice, or one whose id is a path', async () => {
-    for (const browsers of [[{ id: 'a' }, { id: 'a' }], [{ id: '../outside' }]]) {
+  it('disables a profile id given twice, and one whose id is a path, and keeps the rest', async () => {
+    for (const [browsers, bad] of [
+      [[{ id: 'a' }, { id: 'a' }, { id: 'b' }], 'a'],
+      [[{ id: '../outside' }, { id: 'b' }], '../outside'],
+    ] as const) {
       await writeFile(policyPath, JSON.stringify({ version: 1, bindings: [], browsers }));
-      await expect(loadHostPolicy(policyPath, FOUND)).rejects.toThrow(/not valid/);
+      const policy = await loadHostPolicy(policyPath, FOUND);
+      expect([...policy.browsers.keys()]).toEqual(['b']);
+      expect([...policy.invalidBrowsers.keys()]).toEqual([bad]);
     }
   });
 
@@ -147,15 +156,102 @@ describe('a policy that declares browsers', () => {
           browsers: [{ id: 'a', rules: [{ origin, effect: 'deny' }] }],
         }),
       );
-      await expect(loadHostPolicy(policyPath, FOUND), origin).rejects.toThrow(/not valid/);
+      const policy = await loadHostPolicy(policyPath, FOUND);
+      expect(policy.browsers.has('a'), origin).toBe(false);
+      expect(policy.invalidBrowsers.get('a'), origin).toMatch(/^rules\.0\.origin: /);
     }
-    const refused = HostPolicySchema.safeParse({
-      version: 1,
-      bindings: [],
-      browsers: [{ id: 'a', rules: [{ origin: 'mail.example.com', effect: 'deny' }] }],
+    const refused = BrowserProfileSchema.safeParse({
+      id: 'a',
+      rules: [{ origin: 'mail.example.com', effect: 'deny' }],
     });
     expect(refused.success).toBe(false);
     expect(JSON.stringify(refused.error?.issues)).toContain('`*.example.com`');
+  });
+});
+
+describe('a policy with one profile the schema refuses', () => {
+  const POLICY = {
+    version: 1,
+    bindings: [{ id: 'hb', root: '', mode: 'read', spaceId: 's' }],
+    browsers: [
+      { id: 'work', spaces: 'all' },
+      { id: 'kiosk', unattended: false },
+    ],
+  };
+
+  function fileListContext(captured: { output?: unknown }): never {
+    return {
+      operationId: 'host.file.list',
+      spaceId: 's',
+      runId: 'run-a',
+      stepExecutionId: 'step-1',
+      job: { inputRef: 'inline:x' },
+      signal: new AbortController().signal,
+      log: { error: () => undefined, warn: () => undefined, info: () => undefined },
+      readPayload: () => Promise.resolve({ bindingId: 'hb' }),
+      writePayload: (_kind: string, data: unknown) => {
+        captured.output = data;
+        return Promise.resolve('inline:out');
+      },
+    } as never;
+  }
+
+  it('still serves a host.file operation and the good profile, and refuses the bad one by name with the schema’s message', async () => {
+    await writeFile(join(base, 'notes.txt'), 'hello');
+    await writeFile(
+      policyPath,
+      JSON.stringify({ ...POLICY, bindings: [{ ...POLICY.bindings[0], root: base }] }),
+    );
+    const captured: { output?: unknown } = {};
+    const listed = await createHostFileHandler(policyPath).execute(fileListContext(captured));
+    expect(listed.status).toBe('SUCCEEDED');
+    expect(JSON.stringify(captured.output)).toContain('notes.txt');
+
+    const policy = await loadHostPolicy(policyPath, FOUND);
+    expect([...policy.browsers.keys()]).toEqual(['work']);
+    const h = harness({
+      browsers: [...policy.browsers.values()],
+      invalidBrowsers: policy.invalidBrowsers,
+    });
+    const opened = await h.driver.open({
+      ...RUN_A,
+      redelivered: false,
+      profileId: 'work',
+      url: 'https://example.com/',
+    });
+    expect(opened.pageId).toBeTruthy();
+
+    const refused = await refusal(
+      h.driver.open({
+        ...RUN_A,
+        redelivered: false,
+        profileId: 'kiosk',
+        url: 'https://example.com/',
+      }),
+    );
+    expect(refused.kind).toBe('profile_invalid');
+    expect(refused.message).toContain('`kiosk`');
+    expect(refused.message).toContain('unattended: `unattended: false` is not enforced yet');
+    expect(h.launches).toHaveLength(1);
+  });
+
+  it('reports the failing path and the schema’s message when the policy is bad elsewhere', async () => {
+    await writeFile(
+      policyPath,
+      JSON.stringify({ ...POLICY, bindings: [{ ...POLICY.bindings[0], root: base, mode: 'rw' }] }),
+    );
+    await expect(loadHostPolicy(policyPath, FOUND)).rejects.toThrow(
+      /is not valid: bindings\.0\.mode: Invalid enum value/,
+    );
+    const captured: { output?: unknown } = {};
+    const listed = await createHostFileHandler(policyPath).execute(fileListContext(captured));
+    expect(listed.status).toBe('FAILED');
+    expect(listed.status === 'FAILED' ? listed.error.message : '').toContain('bindings.0.mode');
+  });
+
+  it('says why a policy that is not JSON is refused', async () => {
+    await writeFile(policyPath, '{"version": 1,');
+    await expect(loadHostPolicy(policyPath, FOUND)).rejects.toThrow(/is not valid JSON: /);
   });
 });
 

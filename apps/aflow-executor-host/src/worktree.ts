@@ -34,7 +34,14 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, isAbsolute, join, resolve as resolvePath, sep } from 'node:path';
+import {
+  dirname,
+  isAbsolute,
+  join,
+  relative as relativePath,
+  resolve as resolvePath,
+  sep,
+} from 'node:path';
 import { promisify } from 'node:util';
 
 const run = promisify(execFile);
@@ -416,13 +423,19 @@ interface MirrorContext {
  * that was never committed and the promise that a run sees committed work only
  * was false on any workspace.
  *
- * So an entry that resolves to a path the repository itself carries is pointed
- * at the checkout's copy of that path, where the committed version is. An entry
- * that resolves anywhere else — a real dependency, or a link landing within an
- * installation — is pointed at the operator's, which is the tree this lane will
- * not duplicate.
+ * So an entry that resolves to a path the repository itself carries — under
+ * its root and outside any installation — is a workspace package. Its link is
+ * computed from that real path, relative from the mirrored entry to the same
+ * path in the checkout, so from wherever the checkout is reached it resolves
+ * to the committed version. An entry that resolves anywhere else —
+ * a real dependency, or a link landing within an installation — is pointed at
+ * the operator's, which is the tree this lane will not duplicate.
  */
-async function mirrorTarget(entryPath: string, context: MirrorContext): Promise<string> {
+async function mirrorTarget(
+  entryPath: string,
+  mirroredPath: string,
+  context: MirrorContext,
+): Promise<string> {
   let resolved: string;
   try {
     resolved = await realpath(entryPath);
@@ -432,7 +445,7 @@ async function mirrorTarget(entryPath: string, context: MirrorContext): Promise<
   if (!resolved.startsWith(context.rootReal + sep)) return entryPath;
   const inside = resolved.slice(context.rootReal.length + 1);
   if (inside.split(sep).includes(DEPENDENCY_DIR)) return entryPath;
-  return join(context.worktreePath, inside);
+  return relativePath(dirname(mirroredPath), join(context.worktreePath, inside));
 }
 
 /**
@@ -468,7 +481,7 @@ async function mirrorInstallation(
       await mirrorInstallation(from, to, context, false);
       continue;
     }
-    await symlink(await mirrorTarget(from, context), to).catch(() => {});
+    await symlink(await mirrorTarget(from, to, context), to).catch(() => {});
   }
 }
 

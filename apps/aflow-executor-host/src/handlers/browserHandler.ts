@@ -49,6 +49,7 @@ type Output<S extends z.ZodTypeAny> = z.infer<S>;
 const FAILURE: Record<BrowserFailureKind, { code: string; classification: ErrorClassification }> = {
   page_gone: { code: 'PAGE_GONE', classification: 'not_found' },
   unknown_profile: { code: 'BROWSER_PROFILE_UNKNOWN', classification: 'permission' },
+  profile_invalid: { code: 'BROWSER_PROFILE_INVALID', classification: 'configuration' },
   profile_not_for_space: { code: 'BROWSER_PROFILE_NOT_FOR_SPACE', classification: 'permission' },
   appliance_origin: { code: 'BROWSER_ORIGIN_REFUSED', classification: 'permission' },
   origin_denied: { code: 'BROWSER_ORIGIN_DENIED', classification: 'permission' },
@@ -56,6 +57,7 @@ const FAILURE: Record<BrowserFailureKind, { code: string; classification: ErrorC
   ask_unavailable: { code: 'BROWSER_ASK_NOT_AVAILABLE', classification: 'permission' },
   stale_ref: { code: 'BROWSER_REF_STALE', classification: 'validation' },
   credential_field: { code: 'BROWSER_CREDENTIAL_FIELD', classification: 'permission' },
+  field_unchecked: { code: 'BROWSER_FIELD_UNCHECKED', classification: 'validation' },
   action_failed: { code: 'BROWSER_ACTION_FAILED', classification: 'provider' },
   no_browser: { code: 'BROWSER_NOT_FOUND', classification: 'configuration' },
   launch_failed: { code: 'BROWSER_LAUNCH_FAILED', classification: 'internal' },
@@ -143,7 +145,7 @@ const open = route(BrowserPageOpenInputSchema, async (ctx, driver, { url, profil
           receipt: {
             profileId,
             requestedUrl: url,
-            redirected: opened.url !== new URL(url).href,
+            redirected: opened.redirected,
             ...outlineReceipt(opened),
           },
         }

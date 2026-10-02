@@ -5,24 +5,28 @@
  *
  * What changed is read from `AFLOW_CHECK_BASE...AFLOW_CHECK_SHA` — what the
  * commit adds over the base it is measured against — and the checks are
- * scoped to it: the two CI guards over the whole tree, the builds the touched
- * workspaces read, a type-check of each, the touched tests, ESLint (errors
- * only) on touched sources and Prettier on every touched file. One line per
- * step, and the first failure ends the run with that step's output.
+ * scoped to it: the two CI guards over the whole tree, a build of every
+ * package the touched workspaces read — their project references and imports,
+ * one line per package — a type-check of each touched workspace, the touched
+ * tests, ESLint (errors only) on touched sources and Prettier on every touched
+ * file. One line per step, and the first failure ends the run with that step's
+ * output.
  *
  * Run by hand from a checkout, it measures `HEAD` against `origin/main`.
  *
  * It runs where a check runs: a detached checkout with the folder's installed
- * dependencies linked and egress closed. So it calls the installed tools
- * directly — Yarn, through Corepack, would fetch itself into an empty home —
- * and builds what a type-check or a test reads from `dist`, since a fresh
- * checkout holds none.
+ * dependencies linked, nothing built and egress closed. So it calls the
+ * installed tools directly — Yarn, through Corepack, would fetch itself into an
+ * empty home — and builds what postinstall builds after an install, since a
+ * checkout holds none of it.
  */
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+
+import ts from 'typescript';
 
 const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const binDir = path.join(repoRoot, 'node_modules', '.bin');
@@ -104,23 +108,55 @@ function git(args) {
 }
 
 /**
- * The `@aflow/*` packages a workspace's sources import. Read from the sources
- * as well as the manifest, because a test importing a package its manifest
- * never declared still needs that package built.
+ * The `@aflow/*` packages a workspace's sources import, apart by reader: a
+ * test reads every package it imports from that package's build, but only the
+ * other sources are compiled with the workspace, so only they order its build.
  */
 function importedPackages(dir) {
-  const found = new Set();
+  const compiled = new Set();
+  const tested = new Set();
   const sourceDir = path.join(repoRoot, dir, 'src');
-  if (!existsSync(sourceDir)) return found;
+  if (!existsSync(sourceDir)) return { compiled, tested };
   for (const file of readdirSync(sourceDir, { recursive: true })) {
     if (!LINTED_SOURCE.test(String(file))) continue;
+    const found = TEST_FILE.test(String(file)) ? tested : compiled;
     const text = readFileSync(path.join(sourceDir, String(file)), 'utf8');
     for (const match of text.matchAll(/['"](@aflow\/[a-z0-9-]+)/g)) found.add(match[1]);
   }
-  return found;
+  return { compiled, tested };
 }
 
-/** Every workspace, by directory, with the workspaces it reads. */
+/** The configs a workspace is type-checked under, relative to the root. */
+function typecheckedConfigs(name, dir) {
+  const configs = [`${dir}/tsconfig.json`];
+  if (name === '@aflow/web-product') configs.push(`${dir}/src/ui/tsconfig.json`);
+  return configs.filter((config) => existsSync(path.join(repoRoot, config)));
+}
+
+/** The workspace directories a config's project `references` name. */
+function referencedDirs(config) {
+  const file = path.join(repoRoot, config);
+  const { config: parsed, error } = ts.readConfigFile(file, ts.sys.readFile);
+  if (error !== undefined) {
+    console.log(`FAIL reading ${config}`);
+    console.log(ts.flattenDiagnosticMessageText(error.messageText, '\n'));
+    process.exit(1);
+  }
+  return (parsed.references ?? []).map((reference) =>
+    path
+      .relative(repoRoot, path.resolve(path.dirname(file), reference.path))
+      .split(path.sep)
+      .slice(0, 2)
+      .join('/'),
+  );
+}
+
+/**
+ * Every workspace, by name and by directory: what it is built after — the
+ * projects its configs reference and the packages its sources import, since
+ * not every import here has a reference — and everything it reads, which adds
+ * what its tests import and its manifest declares.
+ */
 function readWorkspaces() {
   const byName = new Map();
   for (const group of ['apps', 'packages']) {
@@ -129,23 +165,34 @@ function readWorkspaces() {
       const manifestPath = path.join(repoRoot, dir, 'package.json');
       if (!entry.isDirectory() || !existsSync(manifestPath)) continue;
       const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-      const declared = Object.keys({
-        ...manifest.dependencies,
-        ...manifest.devDependencies,
-        ...manifest.peerDependencies,
-      }).filter((name) => name.startsWith('@aflow/'));
-      const reads = [...new Set([...declared, ...importedPackages(dir)])].filter(
-        (name) => name !== manifest.name,
-      );
       byName.set(manifest.name, {
         name: manifest.name,
         dir,
-        reads,
         build: manifest.scripts?.build,
+        configs: typecheckedConfigs(manifest.name, dir),
+        declared: Object.keys({
+          ...manifest.dependencies,
+          ...manifest.devDependencies,
+          ...manifest.peerDependencies,
+        }).filter((name) => name.startsWith('@aflow/')),
+        imported: importedPackages(dir),
       });
     }
   }
   const byDir = new Map([...byName.values()].map((w) => [w.dir, w]));
+  for (const workspace of byName.values()) {
+    const referenced = workspace.configs
+      .flatMap(referencedDirs)
+      .map((dir) => byDir.get(dir)?.name)
+      .filter((name) => name !== undefined);
+    const others = (names) => [...new Set(names)].filter((name) => name !== workspace.name);
+    workspace.builtAfter = others([...referenced, ...workspace.imported.compiled]);
+    workspace.reads = others([
+      ...workspace.builtAfter,
+      ...workspace.imported.tested,
+      ...workspace.declared,
+    ]);
+  }
   return { byName, byDir };
 }
 
@@ -174,40 +221,34 @@ for (const guard of ['large-files', 'context-budget']) {
   });
 }
 
-// A type-check and a test read every `@aflow/*` package they import from its
-// `dist`. So the packages the touched workspaces read are built — those whose
-// `dist` is missing, and those touched along with everything built on them.
-const touchedNames = new Set(touchedWorkspaces.map((w) => w.name));
+// A type-check reads every other package from its compiled declarations, and a
+// test from its compiled output. `yarn install` builds both through
+// postinstall; a checkout mirrors the installation and builds nothing. So
+// every package the touched workspaces read is built here first, after the
+// packages it is built against, by its own `build` — which writes inside its
+// own directory, so in the checkout and never in the folder.
 const needed = new Set();
-const visit = (name) => {
+const need = (name) => {
   const workspace = workspaces.byName.get(name);
   if (workspace === undefined || needed.has(name)) return;
   needed.add(name);
-  for (const read of workspace.reads) visit(read);
+  for (const read of workspace.reads) need(read);
 };
 for (const workspace of touchedWorkspaces) {
-  for (const read of workspace.reads) visit(read);
-  if (workspace.dir.startsWith('packages/')) visit(workspace.name);
+  for (const read of workspace.reads) need(read);
+  if (workspace.dir.startsWith('packages/')) need(workspace.name);
 }
-const builtOnTouched = (name, seen = new Set()) => {
-  if (touchedNames.has(name)) return true;
-  if (seen.has(name)) return false;
-  seen.add(name);
-  return (workspaces.byName.get(name)?.reads ?? []).some((read) => builtOnTouched(read, seen));
-};
 const ordered = [];
 const placed = new Set();
 const place = (name) => {
   if (placed.has(name) || !needed.has(name)) return;
   placed.add(name);
-  for (const read of workspaces.byName.get(name).reads) place(read);
+  for (const earlier of workspaces.byName.get(name).builtAfter) place(earlier);
   ordered.push(workspaces.byName.get(name));
 };
 for (const name of [...needed].sort()) place(name);
 for (const workspace of ordered) {
   if (workspace.build === undefined || !workspace.dir.startsWith('packages/')) continue;
-  const hasDist = existsSync(path.join(repoRoot, workspace.dir, 'dist'));
-  if (hasDist && !builtOnTouched(workspace.name)) continue;
   run(`build ${workspace.name}`, 'sh', ['-c', workspace.build], {
     cwd: path.join(repoRoot, workspace.dir),
     env: {
@@ -222,14 +263,9 @@ for (const workspace of ordered) {
   });
 }
 
-for (const workspace of touchedWorkspaces) {
-  const configs = [`${workspace.dir}/tsconfig.json`];
-  if (workspace.name === '@aflow/web-product')
-    configs.push(`${workspace.dir}/src/ui/tsconfig.json`);
-  for (const config of configs) {
-    if (!existsSync(path.join(repoRoot, config))) continue;
-    run(`tsc ${config}`, bin('tsc'), ['-p', config, '--noEmit']);
-  }
+const touchedNames = new Set(touchedWorkspaces.map((w) => w.name));
+for (const config of touchedWorkspaces.flatMap((workspace) => workspace.configs)) {
+  run(`tsc ${config}`, bin('tsc'), ['-p', config, '--noEmit']);
 }
 
 const catalogGuards = touchedNames.has('@aflow/platform-artifacts')

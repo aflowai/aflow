@@ -35,7 +35,7 @@ import type {
   AppletLibrary,
   IllustrationConfig,
 } from '@aflow/schemas';
-import { APPLET_LIBRARY_REGISTRY, isDurablePayloadKind } from '@aflow/schemas';
+import { APPLET_LIBRARY_REGISTRY } from '@aflow/schemas';
 import { validateAndCompile } from '@aflow/ui-artifact-compiler';
 import { AppletHandler, type AppletDeltaPublisher } from './appletHandler.js';
 import {
@@ -1053,7 +1053,6 @@ export class UiArtifactHandler implements StepHandler {
       attempt: ctx.attempt,
       kind,
       data,
-      persist: isDurablePayloadKind(kind),
     });
     return ref;
   }
