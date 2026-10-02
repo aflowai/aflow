@@ -510,6 +510,7 @@ export async function triggerCompaction(
     attempt: config.attempt,
     kind: 'history',
     data: range.atoms,
+    persist: true,
   });
 
   const artifact: CompactionArtifact = {
@@ -533,6 +534,7 @@ export async function triggerCompaction(
     attempt: config.attempt,
     kind: 'state',
     data: artifact,
+    persist: true,
   });
 
   // 8. Create compaction_restore atom
@@ -553,6 +555,7 @@ export async function triggerCompaction(
     attempt: config.attempt,
     kind: 'history',
     data: [restoreAtom],
+    persist: true,
   });
 
   // 9. Rewrite conversation state
@@ -604,6 +607,7 @@ export async function triggerCompaction(
     attempt: config.attempt,
     kind: 'state',
     data: state,
+    persist: true,
   });
 
   // Estimate tokens saved

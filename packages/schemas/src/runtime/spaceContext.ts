@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { SkillDiagnosticSchema } from '../cybernetic/skillValidity.js';
 import { InstalledAppletSummarySchema } from '../applet/installed.js';
-import { HostChecksSchema, HostPushApprovalSchema } from '../operations/host.js';
+import { HostPublishedChecksSchema, HostPushApprovalSchema } from '../operations/host.js';
 
 // ============================================================================
 
@@ -323,12 +323,13 @@ export const SpaceContextHostFoldersSectionSchema = z.object({
        */
       pushApproval: HostPushApprovalSchema.optional(),
       /**
-       * The command a publication from this folder runs in a checkout of its
-       * commit before it scans or pushes, as the machine holding it declares.
-       * Absent where the folder declares none — a publication then runs no
-       * checks and says so — or no machine holding it is running right now.
+       * That a publication from this folder runs checks in a checkout of its
+       * commit before it scans or pushes, and the program they run, as the
+       * machine holding it declares. Absent where the folder declares none — a
+       * publication then runs no checks and says so — or no machine holding it
+       * is running right now.
        */
-      checks: HostChecksSchema.optional(),
+      checks: HostPublishedChecksSchema.optional(),
       /**
        * MCP servers the operator configured to run in this folder. Named here
        * because a capability nobody can discover is one nobody uses; what each

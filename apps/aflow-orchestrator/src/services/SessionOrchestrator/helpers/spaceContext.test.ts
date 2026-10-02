@@ -88,13 +88,13 @@ describe('hostFolderEntry', () => {
     expect(hostFolderEntry({ ...row, branchPrefix: 'aflow/' })).not.toHaveProperty('pushApproval');
   });
 
-  it('shows the checks a publication from it runs, as its machine declares', () => {
+  it('shows that a publication from it runs checks, and their program, as its machine declares', () => {
     const entry = hostFolderEntry(
       { ...row, branchPrefix: 'aflow/' },
-      { pushApproval: 'unless-unreviewed', checks: ['node', 'scripts/verify-commit.mjs'] },
+      { pushApproval: 'unless-unreviewed', checks: { program: 'node' } },
     );
     expect(SpaceContextHostFoldersSectionSchema.shape.items.element.parse(entry)).toMatchObject({
-      checks: ['node', 'scripts/verify-commit.mjs'],
+      checks: { program: 'node' },
     });
   });
 
@@ -103,7 +103,7 @@ describe('hostFolderEntry', () => {
       hostFolderEntry({ ...row, branchPrefix: 'aflow/' }, { pushApproval: 'never' }),
     ).not.toHaveProperty('checks');
     expect(
-      hostFolderEntry(row, { pushApproval: 'never', checks: ['node', 'check.mjs'] }),
+      hostFolderEntry(row, { pushApproval: 'never', checks: { program: 'node' } }),
     ).not.toHaveProperty('checks');
     expect(hostFolderEntry({ ...row, branchPrefix: 'aflow/' })).not.toHaveProperty('checks');
   });

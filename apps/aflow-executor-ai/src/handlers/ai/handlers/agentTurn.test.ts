@@ -21,7 +21,7 @@ import {
   mergeCostBreakdown,
 } from './agentTurnDecision.js';
 import { convertOrphanToolMessages } from './agentNativeFunctionCalling.js';
-import { ConversationHistoryHydrationError } from '../../conversationStateStore.js';
+import { ConversationHistoryHydrationError } from '../../historyHydrationError.js';
 import { prepareAgentRequest } from './agentTurnRequest.js';
 import { getAIClientForContext } from '../aiClient.js';
 

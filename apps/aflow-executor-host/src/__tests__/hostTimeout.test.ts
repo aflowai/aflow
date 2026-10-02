@@ -1,14 +1,15 @@
 /**
  * Contract: a streaming host job is reaped for silence, never for taking the
- * time its own ceiling allows. Everything else keeps the executor's flat clock.
+ * time its own ceiling allows. A check is never reaped for silence at all.
+ * Everything else keeps the executor's flat clock.
  */
-import type { ExecutorContext } from '@aflow/executor-runtime';
+import { withTimeout, type ExecutorContext } from '@aflow/executor-runtime';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { HOST_CHECKS_TIMEOUT_DEFAULT_MS } from '@aflow/schemas';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   HOST_CHECK_CHECKOUT_MARGIN_MS,
@@ -119,22 +120,53 @@ describe('resolveHostTimeout for a check', () => {
 
   const checkCtx = () => ctxFor('host.commit.check', { bindingId: 'hb_app', sha: SHA, base: BASE });
 
-  it("gives a check the folder's own time, with room for its checkout, and no caller a say in it", async () => {
+  it("gives a check the folder's own time as a flat deadline, with room for its checkout, and no caller a say in it", async () => {
     const policyPath = await policyWith({
       branchPrefix: 'aflow/',
       checks: ['node', 'check.mjs'],
       checksTimeoutMs: 600_000,
     });
-    const maxMs = 600_000 + HOST_CHECK_CHECKOUT_MARGIN_MS + HOST_OUTER_TIMEOUT_MARGIN_MS;
-    expect(await resolveFor(checkCtx(), policyPath)).toEqual({
-      idleMs: Math.min(HOST_STREAM_IDLE_MS, maxMs),
-      maxMs,
+    expect(await resolveFor(checkCtx(), policyPath)).toBe(
+      600_000 + HOST_CHECK_CHECKOUT_MARGIN_MS + HOST_OUTER_TIMEOUT_MARGIN_MS,
+    );
+  });
+
+  describe('a check that prints nothing', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('passes when it runs past the idle default but inside its own time', async () => {
+      const policyPath = await policyWith({
+        branchPrefix: 'aflow/',
+        checks: ['node', 'check.mjs'],
+        checksTimeoutMs: 2 * 60 * 60_000,
+      });
+      const deadline = await resolveFor(checkCtx(), policyPath);
+      expect(deadline).toBeDefined();
+
+      vi.useFakeTimers();
+      const silentFor = HOST_STREAM_IDLE_MS + 30 * 60_000;
+      const run = withTimeout(
+        async (signal) =>
+          await new Promise<string>((resolve, reject) => {
+            const done = setTimeout(() => resolve('checks passed'), silentFor);
+            signal.addEventListener('abort', () => {
+              clearTimeout(done);
+              reject(signal.reason as Error);
+            });
+          }),
+        deadline!,
+      );
+      await vi.advanceTimersByTimeAsync(silentFor);
+
+      expect(await run).toMatchObject({ success: true, value: 'checks passed' });
     });
   });
 
   it('gives checks with no time chosen the default', async () => {
     const policyPath = await policyWith({ branchPrefix: 'aflow/', checks: ['node', 'check.mjs'] });
-    expect((await resolveFor(checkCtx(), policyPath))?.maxMs).toBe(
+    expect(await resolveFor(checkCtx(), policyPath)).toBe(
       HOST_CHECKS_TIMEOUT_DEFAULT_MS + HOST_CHECK_CHECKOUT_MARGIN_MS + HOST_OUTER_TIMEOUT_MARGIN_MS,
     );
   });

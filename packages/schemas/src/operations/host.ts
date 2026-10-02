@@ -105,6 +105,22 @@ export const HostChecksSchema = z
       'by the operator on the machine; no workspace can set it, and no operation takes one.',
   );
 
+/**
+ * What leaves the machine about a folder's checks. The arguments never do: an
+ * argv can carry a token or a private path, and this reaches every agent in
+ * the workspace through its space context.
+ */
+export const HostPublishedChecksSchema = z
+  .object({
+    program: z.string().min(1).max(HOST_CHECK_ARG_MAX_LENGTH),
+  })
+  .describe(
+    'The folder declares checks, and `program` is the name of the program they run — only its ' +
+      'file name, never its arguments or where it lives. The full command is shown to the ' +
+      'operator on their machine and nowhere else.',
+  );
+export type HostPublishedChecks = z.infer<typeof HostPublishedChecksSchema>;
+
 export const HostChecksTimeoutMsSchema = z
   .number()
   .int()
