@@ -20,6 +20,7 @@ import { hostPushRequestHash } from '@aflow/redis';
 import {
   HOST_COMMIT_RANGE_PATTERN,
   type HostCommitScanOutputSchema,
+  type HostPushApproval,
   type WriteApprovalGrant,
 } from '@aflow/schemas';
 import type { z } from 'zod';
@@ -143,6 +144,8 @@ export type PushApprovalReader = (
 /** What the gate reads of the push it is about to spawn. */
 export interface PushUnderScan {
   readonly bindingId: string;
+  /** The folder's push approval as it resolves now, the default for a folder that chose none. */
+  readonly pushApproval: HostPushApproval;
   readonly refspecs: readonly string[];
   /** The source of each refspec, in the same order. */
   readonly sources: readonly string[];
@@ -165,8 +168,12 @@ function scanAgain(pushBase: string): string {
 /**
  * Refuse a push that does not send, from this folder, the range a scan by this
  * executor found no secret in — from where `origin/<pushBase>` is now to the
- * commit the push names — or, where that scan did not clear it, a push the
- * operator has not approved in this run.
+ * commit the push names — or, where that scan did not clear it or the folder's
+ * push approval is `always`, a push the operator has not approved in this run.
+ *
+ * Under `unless-unreviewed` a cleared range goes out with no grant: whether a
+ * review cleared it is the publication skill's to establish, and nothing this
+ * gate holds can verify that one ran or what it said.
  */
 export async function requireScannedPush(
   push: PushUnderScan,
@@ -230,19 +237,25 @@ export async function requireScannedPush(
       'other_range',
     );
   }
-  if (receipt.outcome === 'clean') return;
+  const asksAlways = push.pushApproval === 'always';
+  if (receipt.outcome === 'clean' && !asksAlways) return;
 
   const requestHash = hostPushRequestHash({ bindingId, refspec, receipt: push.receipt });
   const grant = await push.approvalFor(requestHash);
   if (grant?.decision === 'approved' && grant.requestHash === requestHash) return;
-  const why =
-    receipt.outcome === 'unscanned'
-      ? 'could not read all of it'
-      : 'found lines in it marked `aflow-scan: allow`';
+  const reasons = [
+    ...(asksAlways ? [`The push approval of \`${bindingId}\` is \`always\``] : []),
+    ...(receipt.outcome === 'unscanned'
+      ? [`the scan of ${scanned} could not read all of it`]
+      : receipt.outcome === 'allowed'
+        ? [`the scan of ${scanned} found lines in it marked \`aflow-scan: allow\``]
+        : []),
+  ];
+  const reason = reasons.join(', and ');
   throw new ScanReceiptError(
-    `The scan of ${scanned} ${why}, so it is pushed only once the operator has approved ` +
-      `this push — \`${refspec}\` from \`${bindingId}\` with this receipt — in this run, and ` +
-      'no such approval is on record. Nothing was pushed.',
+    `${reason.charAt(0).toUpperCase()}${reason.slice(1)}, so it is pushed only once the ` +
+      `operator has approved this push — \`${refspec}\` from \`${bindingId}\` with this ` +
+      'receipt — in this run, and no such approval is on record. Nothing was pushed.',
     'unapproved',
   );
 }

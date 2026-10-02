@@ -173,9 +173,15 @@ export interface CommitReplaceOutputArgs {
   summary: string;
   /** Optional completion timestamp (defaults to now). */
   completedAt?: Date;
+  /**
+   * Runs inside the transaction once the run and task rows have passed their
+   * checks; a throw rolls both back and the result is `record_failed`.
+   */
+  recordWithinCommit?: () => Promise<void>;
 }
 
-export type CommitReplaceOutputResult = 'committed' | 'claim_lost' | 'task_row_not_paused';
+export type CommitReplaceOutputResult =
+  'committed' | 'claim_lost' | 'task_row_not_paused' | 'record_failed';
 
 export async function commitReplaceOutputAndResume(
   db: PostgresJsDatabase,
@@ -235,12 +241,25 @@ export async function commitReplaceOutputAndResume(
     if (taskUpdate.length !== 1) {
       throw new TaskRowNotPausedError(args.runId, args.failedTaskId);
     }
+    if (args.recordWithinCommit) {
+      await args.recordWithinCommit().catch((cause: unknown) => {
+        throw new RecordWithinCommitError(cause);
+      });
+    }
     return 'committed' as const;
   }).catch((err: unknown) => {
     if (err instanceof ResumeClaimLostError) return 'claim_lost' as const;
     if (err instanceof TaskRowNotPausedError) return 'task_row_not_paused' as const;
+    if (err instanceof RecordWithinCommitError) return 'record_failed' as const;
     throw err;
   });
+}
+
+class RecordWithinCommitError extends Error {
+  constructor(cause: unknown) {
+    super('The record written within the commit failed', { cause });
+    this.name = 'RecordWithinCommitError';
+  }
 }
 
 class ResumeClaimLostError extends Error {
