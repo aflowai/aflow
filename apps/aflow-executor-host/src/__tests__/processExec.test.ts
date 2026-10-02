@@ -13,7 +13,7 @@ import { promisify } from 'node:util';
 import { describe, expect, it, beforeAll } from 'vitest';
 
 import { hostPushRequestHash } from '@aflow/redis';
-import type { WriteApprovalGrant } from '@aflow/schemas';
+import type { HostPushApproval, WriteApprovalGrant } from '@aflow/schemas';
 
 import { PUSH_REQUIRED_OPTIONS } from '../bindings.js';
 import { createHostProcessHandler } from '../handlers/processHandlers.js';
@@ -909,18 +909,26 @@ describe('a push sends only a range this executor scanned', () => {
     middle = await commitOn(base, 'unpushed, under the commit');
     tip = await commitOn(middle, 'the commit');
     pushPolicyPath = join(pushBase, 'host-policy.json');
-    const binding = (id: string) => ({
+    const binding = (id: string, pushApproval?: HostPushApproval) => ({
       id,
       root: repo,
       mode: 'readwrite',
       allowsExecution: true,
-      branchPolicy: { branchPrefix: 'aflow/' },
+      branchPolicy: { branchPrefix: 'aflow/', ...(pushApproval ? { pushApproval } : {}) },
       singleFile: false,
       spaceId: 'space-test',
     });
     await writeFile(
       pushPolicyPath,
-      JSON.stringify({ version: 1, bindings: [binding('hb_push'), binding('hb_other')] }),
+      JSON.stringify({
+        version: 1,
+        bindings: [
+          binding('hb_push'),
+          binding('hb_other'),
+          binding('hb_always', 'always'),
+          binding('hb_never', 'never'),
+        ],
+      }),
     );
   });
 
@@ -948,6 +956,7 @@ describe('a push sends only a range this executor scanned', () => {
       /** `null` sends none. */
       pushBase?: string | null;
       approvals?: PushApprovalReader;
+      bindingId?: string;
     } = {},
   ): Promise<{ status: string; captured: Captured }> {
     const captured: Captured = {};
@@ -956,7 +965,7 @@ describe('a push sends only a range this executor scanned', () => {
       contextFor(
         'host.process.exec',
         {
-          bindingId: 'hb_push',
+          bindingId: input.bindingId ?? 'hb_push',
           command: [
             input.program ?? 'git',
             'push',
@@ -1109,6 +1118,53 @@ describe('a push sends only a range this executor scanned', () => {
         expect(await remoteBranches()).toContain(`aflow/${outcome}`);
       }, 60_000);
     }
+  });
+
+  describe("the folder's push approval", () => {
+    function pushOf(bindingId: string, outcome: ScanOutcome, branch: string) {
+      const scanned = receipt(outcome, { bindingId });
+      const refspec = `${tip}:refs/heads/aflow/${branch}`;
+      const hash = hostPushRequestHash({ bindingId, refspec, receipt: scanned });
+      return {
+        input: { bindingId, receipt: scanned, refspecs: [refspec] },
+        granted: pushApprovalsHolding(
+          new Map([
+            [
+              `${TENANT}:${RUN}:${hash}`,
+              { requestHash: hash, decision: 'approved' as const, approvedBy: 'operator-1' },
+            ],
+          ]),
+        ),
+      };
+    }
+
+    it('always: a clean range is pushed only on the operator’s grant, the refusal naming the posture', async () => {
+      const clean = pushOf('hb_always', 'clean', 'always-clean');
+      expectRefused(
+        await push(clean.input),
+        'clean, no grant',
+        'The push approval of `hb_always` is `always`, so it is pushed only once the operator ' +
+          'has approved this push',
+      );
+      const allowed = pushOf('hb_always', 'allowed', 'always-allowed');
+      expectRefused(
+        await push(allowed.input),
+        'allowed, no grant',
+        'The push approval of `hb_always` is `always`, and the scan of ' +
+          `\`${base}..${tip}\` found lines in it marked \`aflow-scan: allow\`, so it is pushed`,
+      );
+      expect(await remoteBranches()).not.toContain('aflow/always-');
+
+      const approved = await push({ ...clean.input, approvals: clean.granted });
+      expect(approved.status).toBe('SUCCEEDED');
+      expect(await remoteBranches()).toContain('aflow/always-clean');
+    }, 60_000);
+
+    it('never: a clean range is pushed with no grant', async () => {
+      const clean = pushOf('hb_never', 'clean', 'never-clean');
+      expect((await push(clean.input)).status).toBe('SUCCEEDED');
+      expect(await remoteBranches()).toContain('aflow/never-clean');
+    }, 60_000);
   });
 
   it('refuses a receipt or a push base on anything but a push', async () => {

@@ -311,40 +311,47 @@ describe('the rules', () => {
     expect(endsInAllowComment(`value // ${SCAN_ALLOW_MARKER}`)).toBe(true);
   });
 
-  it('reads a line of a megabyte in linear time, whatever it is made of', () => {
-    const size = 1024 * 1024;
-    const fill = (unit: string): string =>
-      unit.repeat(Math.ceil(size / unit.length)).slice(0, size);
-    const lines = [
-      fill('a'),
-      fill('token'),
-      fill("token='"),
-      'apiToken = "' + fill('a'),
-      fill('aws_secret_'),
-      fill('awssecret'),
-      fill('eyJ'),
-      fill('-eyJ'),
-      fill('eyJaaaaaaaaa.'),
-      fill('github_pat_'),
-      fill('-xoxb-'),
-      '-----BEGIN ' + fill('A '),
-      fill('AKIA' + 'QWERTYUIOPASDFGH/'),
-      fill('A_TOKEN_'),
-      fill(`token = "${'Ab_'.repeat(170)}" `),
-      fill('token='),
-      fill('token:'),
-      fill(`token: ${'Ab'.repeat(300)} `),
-      fill('# '),
-      fill("'"),
-      fill('" // '),
-    ];
-    for (const line of lines) {
-      const started = performance.now();
-      for (const file of ['bundle.js', '.env']) scanLine(file, line);
-      // A quadratic rule takes minutes here; a linear one, milliseconds.
-      expect(performance.now() - started, line.slice(0, 24)).toBeLessThan(2000);
-    }
-  });
+  const LINEAR_LINE_BUDGET_MS = 2000;
+  const MEGABYTE = 1024 * 1024;
+  const fill = (unit: string): string =>
+    unit.repeat(Math.ceil(MEGABYTE / unit.length)).slice(0, MEGABYTE);
+  const lines = [
+    fill('a'),
+    fill('token'),
+    fill("token='"),
+    'apiToken = "' + fill('a'),
+    fill('aws_secret_'),
+    fill('awssecret'),
+    fill('eyJ'),
+    fill('-eyJ'),
+    fill('eyJaaaaaaaaa.'),
+    fill('github_pat_'),
+    fill('-xoxb-'),
+    '-----BEGIN ' + fill('A '),
+    fill('AKIA' + 'QWERTYUIOPASDFGH/'),
+    fill('A_TOKEN_'),
+    fill(`token = "${'Ab_'.repeat(170)}" `),
+    fill('token='),
+    fill('token:'),
+    fill(`token: ${'Ab'.repeat(300)} `),
+    fill('# '),
+    fill("'"),
+    fill('" // '),
+  ];
+
+  it(
+    'reads a line of a megabyte in linear time, whatever it is made of',
+    () => {
+      for (const line of lines) {
+        const started = performance.now();
+        for (const file of ['bundle.js', '.env']) scanLine(file, line);
+        // A quadratic rule takes minutes here; a linear one, milliseconds.
+        expect(performance.now() - started, line.slice(0, 24)).toBeLessThan(LINEAR_LINE_BUDGET_MS);
+      }
+    },
+    // Every line's budget, for each file name: only a quadratic rule runs out of time.
+    lines.length * LINEAR_LINE_BUDGET_MS * 2,
+  );
 
   it('finds nothing in this repository', async () => {
     const repository = fileURLToPath(new URL('../../../../', import.meta.url));

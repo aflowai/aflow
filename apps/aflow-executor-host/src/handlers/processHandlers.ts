@@ -39,6 +39,7 @@ import {
 import { createChatterStripper } from '../egressRefusals.js';
 import { EnvPolicyError } from '../envPolicy.js';
 import { explainFailedStart } from '../executableHint.js';
+import { pushApprovalOf } from '../pushApproval.js';
 import { measurePushBase } from '../pushBase.js';
 import { type PushApprovalReader, requireScannedPush } from '../scanReceipt.js';
 import { WorktreeError } from '../worktree.js';
@@ -173,6 +174,7 @@ async function execProcess(
       // remote itself in the moment they are apart.
       await requireScannedPush({
         bindingId: binding.id,
+        pushApproval: pushApprovalOf(binding),
         refspecs: push.refspecs,
         sources: push.sources,
         pushBase: input.pushBase,

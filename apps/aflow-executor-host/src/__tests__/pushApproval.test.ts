@@ -28,6 +28,7 @@ import { serializePolicy, writePolicyAtomically } from '../policyFile.js';
 import {
   chosenPushApproval,
   describePushApproval,
+  pushApprovalOf,
   pushPostures,
   withPushApproval,
 } from '../pushApproval.js';
@@ -119,6 +120,19 @@ describe('the posture a folder holds', () => {
         branchPolicy: { branchPrefix: 'aflow/', pushApproval: 'sometimes' },
       }).success,
     ).toBe(false);
+  });
+
+  it('holds a push to the posture the folder resolves to, and one from a folder that pushes nothing to asking', () => {
+    expect(pushApprovalOf(HostBindingSchema.parse(PUSHING))).toBe(HOST_PUSH_APPROVAL_DEFAULT);
+    expect(
+      pushApprovalOf(
+        HostBindingSchema.parse({
+          ...PUSHING,
+          branchPolicy: { branchPrefix: 'aflow/', pushApproval: 'never' },
+        }),
+      ),
+    ).toBe('never');
+    expect(pushApprovalOf(HostBindingSchema.parse(FILES_ONLY))).toBe('always');
   });
 
   it('says what each posture does in the words the commands print', () => {
