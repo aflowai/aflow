@@ -165,6 +165,7 @@ beforeEach(async () => {
       bindings: [binding('hb', project), binding('hb_lagging', lagging)],
       harnesses: [
         harness('works', "printf 'fixed\\n' > fix.txt"),
+        harness('idle', 'true'),
         {
           ...harness('converses', "printf 'fixed\\n' > fix.txt"),
           sessionArgs: ['{session}'],
@@ -457,21 +458,25 @@ describe('a commission refuses a merge no turn could finish', () => {
 });
 
 describe('a continued turn and the merge its session holds', () => {
-  it('refuses a `mergeFrom` the kept checkout does not hold, naming the session and the branch', async () => {
-    const { mainHead } = await world(false);
+  it('refuses a `mergeFrom` without `base` before any checkout, naming both', async () => {
+    await world(false);
     const first = await commission({ harness: 'converses', base: 'aflow/fix' });
     expect(first.status).toBe('SUCCEEDED');
     const sessionRef = String(first.output['sessionRef']);
+    const checkouts = await git(project, 'worktree', 'list');
 
-    const { status, message } = await commission({
-      harness: 'converses',
-      continueFrom: sessionRef,
-      mergeFrom: 'origin/main',
-    });
-    expect(status).toBe('FAILED');
-    expect(message).toContain(`Session \`${sessionRef}\` keeps a checkout that does not hold`);
-    expect(message).toContain(`\`origin/main\` (\`${mainHead}\`)`);
+    for (const continued of [{}, { continueFrom: sessionRef }]) {
+      const { status, message } = await commission({
+        harness: 'converses',
+        ...continued,
+        mergeFrom: 'origin/main',
+      });
+      expect(status).toBe('FAILED');
+      expect(message).toContain('`mergeFrom` (`origin/main`) is given without `base`');
+      expect(message).toContain('A merge needs the branch it is merged into');
+    }
     expect(handed).toHaveLength(1);
+    expect(await git(project, 'worktree', 'list')).toBe(checkouts);
   }, 60_000);
 
   it('reports the merge again on a turn that keeps the checkout', async () => {
@@ -487,21 +492,15 @@ describe('a continued turn and the merge its session holds', () => {
     });
     const sessionRef = String(first.output['sessionRef']);
 
-    for (const mergeFrom of [undefined, 'origin/main']) {
-      const { status, output } = await commission({
-        harness: 'converses',
-        continueFrom: sessionRef,
-        ...(mergeFrom !== undefined ? { mergeFrom } : {}),
-      });
-      expect(status, String(mergeFrom)).toBe('SUCCEEDED');
-      expect(output['continued']).toBe(true);
-      expect(output['merge']).toEqual({
-        from: mainHead,
-        conflicts: [{ path: 'a.txt', kind: 'content' }],
-      });
-      expect(output['baseSha']).toBe(branchHead);
-      expect(changedFiles(output['patch'])).toEqual(['fix.txt']);
-    }
+    const { status, output } = await commission({ harness: 'converses', continueFrom: sessionRef });
+    expect(status).toBe('SUCCEEDED');
+    expect(output['continued']).toBe(true);
+    expect(output['merge']).toEqual({
+      from: mainHead,
+      conflicts: [{ path: 'a.txt', kind: 'content' }],
+    });
+    expect(output['baseSha']).toBe(branchHead);
+    expect(changedFiles(output['patch'])).toEqual(['fix.txt']);
   }, 60_000);
 
   it('drops the earlier merge from a turn whose `base` moves it to a fresh checkout', async () => {
@@ -524,6 +523,99 @@ describe('a continued turn and the merge its session holds', () => {
     expect(output['merge']).toBeUndefined();
     expect(output['baseSha']).toBe(branchHead);
     expect(changedFiles(output['patch'])).toEqual(['fix.txt']);
+  }, 60_000);
+});
+
+/** The tree the commission's own merge of `from` into `at` makes, made the same way in a scratch checkout. */
+async function mergedTree(at: string, from: string): Promise<string> {
+  await git(project, 'fetch', '-q', 'origin');
+  const scratch = await mkdtemp(join(tmpdir(), 'aflow-merge-tree-'));
+  const checkout = await prepareWorktree(project, scratch, 'merge', { dependencies: 'none', at });
+  try {
+    await mergeIntoCheckout(checkout.path, from, await commitIdentityArgs(checkout.path));
+    return await head(checkout.path, 'HEAD^{tree}');
+  } finally {
+    await removeWorktree(project, checkout.path);
+    await rm(scratch, { recursive: true, force: true });
+  }
+}
+
+describe('a publication whose whole change is the merge', () => {
+  it.each([
+    { world: false as const, files: ['a.txt', 'b.txt', 'c.txt'], conflicts: [] },
+    {
+      world: 'modify-delete' as const,
+      files: ['a.txt', 'b.txt', 'c.txt'],
+      conflicts: [{ path: 'gone.txt', kind: 'modify-delete' }],
+    },
+  ])(
+    'lands one merge commit whose tree is the merge’s ($world)',
+    async ({ world: conflicting, files, conflicts }) => {
+      const { branchHead, mainHead } = await world(conflicting);
+      const { status, output } = await commission({
+        harness: 'idle',
+        base: 'aflow/fix',
+        mergeFrom: 'origin/main',
+      });
+      expect(status).toBe('SUCCEEDED');
+      expect(output['merge']).toEqual({ from: mainHead, conflicts });
+      expect(output['patchRef']).toBeUndefined();
+      expect(output['patch']).toBeUndefined();
+
+      const published = await publish({
+        commit: {
+          branch: 'aflow/fix',
+          message: 'Catch up with main\n\nMerges origin/main into the branch.',
+          baseSha: branchHead,
+          mergeFrom: mainHead,
+        },
+      });
+      expect(published.status, published.message).toBe('SUCCEEDED');
+      expect(published.output).toMatchObject({ state: 'applied', filesChanged: 0, files: [] });
+      const commit = published.output['commit'] as Record<string, unknown>;
+      expect(commit['merged']).toBe(mainHead);
+      expect(commit['body']).toBe('Merges origin/main into the branch.');
+      const sha = String(commit['sha']);
+      expect(await head(project, 'aflow/fix')).toBe(sha);
+      expect((await git(project, 'rev-list', '--parents', '-n', '1', sha)).trim()).toBe(
+        `${sha} ${branchHead} ${mainHead}`,
+      );
+      expect(
+        (await git(project, 'rev-list', '--first-parent', `${branchHead}..${sha}`)).trim(),
+      ).toBe(sha);
+      expect(await head(project, `${sha}^{tree}`)).toBe(await mergedTree(branchHead, mainHead));
+      expect(
+        (await git(project, 'ls-tree', '--name-only', sha)).split('\n').filter(Boolean),
+      ).toEqual(files);
+    },
+    60_000,
+  );
+
+  it('still refuses the markers a merge alone would publish', async () => {
+    const { branchHead, mainHead } = await world(true);
+    const { output } = await commission({
+      harness: 'idle',
+      base: 'aflow/fix',
+      mergeFrom: 'origin/main',
+    });
+    expect(output['patchRef']).toBeUndefined();
+
+    const { status, message } = await publish({
+      commit: { branch: 'aflow/fix', message: 'm', baseSha: branchHead, mergeFrom: mainHead },
+    });
+    expect(status).toBe('FAILED');
+    expect(message).toContain('conflict markers in `a.txt` (content conflict)');
+    expect(await head(project, 'aflow/fix')).toBe(branchHead);
+  }, 60_000);
+
+  it('is the only publication that goes without a diff', async () => {
+    const { branchHead } = await world(false);
+    const { status, message } = await publish({
+      commit: { branch: 'aflow/fix', message: 'm', baseSha: branchHead },
+    });
+    expect(status).toBe('FAILED');
+    expect(message).toContain('Name the diff to apply');
+    expect(await head(project, 'aflow/fix')).toBe(branchHead);
   }, 60_000);
 });
 

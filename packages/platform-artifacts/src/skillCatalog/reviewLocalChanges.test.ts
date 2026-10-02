@@ -189,6 +189,17 @@ describe('Review Local Changes — the first harness inside a skill', () => {
     expect(validate({ verdict: 'approve', summary: 'Nothing found.', findings: [] })).toBe(true);
   });
 
+  it('carries in the schema that minors are approved and `comment` is a range it could not judge', () => {
+    const verdict = (template?.outputSchema as { properties: Record<string, SchemaField> })
+      .properties['verdict'];
+    expect(verdict?.description).toContain('a range with only minors and nits is approved');
+    expect(verdict?.description).toContain(
+      '`comment` only when the review could not judge the range',
+    );
+    expect(verdict?.description).toContain('never as a way to attach remarks');
+    expect(verdict?.description).toContain('`comment` makes it ask the operator');
+  });
+
   it('runs beside any number of other reviews, so a waiting publication is never queued', () => {
     expect(REVIEW_LOCAL_CHANGES.bundle.manifest.concurrency?.maxConcurrentRuns).toBe('unlimited');
   });

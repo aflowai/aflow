@@ -90,7 +90,6 @@ import {
   DIFF_CEILING_BYTES,
   fetchRemoteBase,
   INLINE_DIFF_CAP_BYTES,
-  isAncestor,
   linkedWorktrees,
   NO_REPLACE_OBJECTS_ENV,
   prepareWorktree,
@@ -602,19 +601,7 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
 
     const keptCheckout = session !== undefined && namedBase === undefined;
     let merge: BaseMerge | undefined = keptCheckout ? session?.merge : undefined;
-    if (mergeSource !== undefined && keptCheckout) {
-      // The kept checkout holds the earlier turns' work uncommitted, and a merge
-      // under it would mix the two.
-      if (!(await isAncestor(worktree.path, mergeSource, 'HEAD'))) {
-        throw new WorktreeError(
-          `Session \`${input.continueFrom ?? ''}\` keeps a checkout that does not hold ` +
-            `\`${input.mergeFrom ?? mergeSource}\` (\`${mergeSource}\`), and merging it under the ` +
-            'work already there would mix the two. Name `base` as well, to continue in a fresh ' +
-            'checkout that merges it.',
-          'stale_base',
-        );
-      }
-    } else if (mergeSource !== undefined && mergeIdentity !== undefined) {
+    if (mergeSource !== undefined && mergeIdentity !== undefined) {
       merge = await mergeIntoCheckout(worktree.path, mergeSource, mergeIdentity);
       if (merge !== undefined && session !== undefined) {
         session = { ...session, merge };

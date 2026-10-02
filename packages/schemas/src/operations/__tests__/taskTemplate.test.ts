@@ -2,8 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   analyzeInputTemplate,
   isTemplateBindNode,
+  readTemplateOperatorNode,
   substituteTemplateBinds,
-  templateContainsBind,
+  templateContainsSubstitution,
   TemplateSubstitutionError,
   WorkflowTaskSchema,
 } from '../workflow.js';
@@ -72,11 +73,31 @@ describe('analyzeInputTemplate', () => {
   });
 });
 
-describe('templateContainsBind', () => {
+describe('templateContainsSubstitution', () => {
   it('detects binds at depth, including malformed attempts', () => {
-    expect(templateContainsBind({ a: [{ b: { $bind: 'x' } }] })).toBe(true);
-    expect(templateContainsBind({ a: [{ b: { $bind: 1, c: 2 } }] })).toBe(true);
-    expect(templateContainsBind({ a: [1, 'two', { b: null }] })).toBe(false);
+    expect(templateContainsSubstitution({ a: [{ b: { $bind: 'x' } }] })).toBe(true);
+    expect(templateContainsSubstitution({ a: [{ b: { $bind: 1, c: 2 } }] })).toBe(true);
+    expect(templateContainsSubstitution({ a: [1, 'two', { b: null }] })).toBe(false);
+  });
+
+  it('counts an operator node as substituted, even with literal operands', () => {
+    expect(templateContainsSubstitution({ a: { $concat: ['x', 'y'] } })).toBe(true);
+    expect(templateContainsSubstitution([{ $firstOf: ['x'] }])).toBe(true);
+  });
+});
+
+describe('readTemplateOperatorNode', () => {
+  it('reads an operator node, says why a malformed one is, and ignores anything else', () => {
+    expect(readTemplateOperatorNode({ $concat: ['a', { $bind: 'b' }] })).toEqual({
+      operator: '$concat',
+      operands: ['a', { $bind: 'b' }],
+    });
+    expect(readTemplateOperatorNode({ $firstOf: ['a'] })).toEqual({
+      operator: '$firstOf',
+      malformed: '"$firstOf" takes an array of at least two operands',
+    });
+    expect(readTemplateOperatorNode({ $bind: 'a' })).toBeUndefined();
+    expect(readTemplateOperatorNode(['$concat'])).toBeUndefined();
   });
 });
 
@@ -180,6 +201,78 @@ describe('substituteTemplateBinds', () => {
       declared,
     );
     expect(result).toEqual({ note: null });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Operator nodes
+// ---------------------------------------------------------------------------
+
+describe('$concat and $firstOf', () => {
+  const declared = new Set(['owner', 'branch', 'summary', 'messageBody']);
+
+  it('joins strings, and is absent when any part is', () => {
+    const template = { head: { $concat: [{ $bind: 'owner' }, ':', { $bind: 'branch' }] } };
+    expect(
+      substituteTemplateBinds(template, { owner: 'aflowai', branch: 'aflow/x' }, declared),
+    ).toEqual({ head: 'aflowai:aflow/x' });
+    expect(substituteTemplateBinds(template, { branch: 'aflow/x' }, declared)).toEqual({});
+  });
+
+  it('refuses a part that is not a string, naming the operand', () => {
+    const template = { head: { $concat: [{ $bind: 'owner' }, ':', { $bind: 'branch' }] } };
+    try {
+      substituteTemplateBinds(template, { owner: 7, branch: 'b' }, declared);
+      expect.unreachable();
+    } catch (err) {
+      expect(err).toBeInstanceOf(TemplateSubstitutionError);
+      expect((err as TemplateSubstitutionError).path).toBe('head.$concat[0]');
+    }
+  });
+
+  it('takes the first alternative that is present, null included, and is absent when none is', () => {
+    const template = { body: { $firstOf: [{ $bind: 'summary' }, { $bind: 'messageBody' }] } };
+    expect(substituteTemplateBinds(template, { summary: 'S', messageBody: 'M' }, declared)).toEqual(
+      { body: 'S' },
+    );
+    expect(substituteTemplateBinds(template, { messageBody: 'M' }, declared)).toEqual({
+      body: 'M',
+    });
+    expect(
+      substituteTemplateBinds(template, { summary: null, messageBody: 'M' }, declared),
+    ).toEqual({ body: null });
+    expect(substituteTemplateBinds(template, {}, declared)).toEqual({});
+  });
+
+  it('nests, each operand substituted by the same rules', () => {
+    const template = {
+      v: { $concat: ['#', { $firstOf: [{ $bind: 'summary' }, 'none'] }] },
+    };
+    expect(substituteTemplateBinds(template, {}, declared)).toEqual({ v: '#none' });
+  });
+
+  it('collects the binds inside an operator for the analyzer', () => {
+    const analysis = analyzeInputTemplate({
+      head: { $concat: [{ $bind: 'owner' }, ':', { $bind: 'branch' }] },
+    });
+    expect(analysis.malformed).toEqual([]);
+    expect(analysis.binds).toEqual([
+      { bindAs: 'owner', path: 'head.$concat[0]' },
+      { bindAs: 'branch', path: 'head.$concat[2]' },
+    ]);
+  });
+
+  it.each([
+    [{ $concat: 'owner' }, 'takes an array of at least two operands'],
+    [{ $firstOf: [{ $bind: 'summary' }] }, 'takes an array of at least two operands'],
+    [{ $concat: ['a', 'b'], extra: 1 }, 'exactly the single key "$concat"'],
+  ])('flags %j as malformed, and substitution refuses it', (node, reason) => {
+    const analysis = analyzeInputTemplate({ v: node });
+    expect(analysis.malformed).toHaveLength(1);
+    expect(analysis.malformed[0]?.reason).toContain(reason);
+    expect(() => substituteTemplateBinds({ v: node }, { summary: 's' }, declared)).toThrowError(
+      TemplateSubstitutionError,
+    );
   });
 });
 

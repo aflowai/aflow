@@ -8,9 +8,13 @@ import {
   POLL_RESERVED_OUTPUT_KEY,
   predicateExpressions,
   predicateKey,
+  readTemplateOperatorNode,
   StepTypeSchema,
   TEMPLATE_BIND_KEY,
-  templateContainsBind,
+  TEMPLATE_CONCAT_KEY,
+  TEMPLATE_FIRST_OF_KEY,
+  templateContainsSubstitution,
+  type TemplateOperatorKey,
   toJsonSchemaSync,
   type WorkflowTask,
   type WorkflowTaskInputBinding,
@@ -341,12 +345,14 @@ export function validateWorkflowGraph(
   // 8. State variable declarations (104j §6.1)
   const stateVarIds = new Set<string>();
   const immutableStateVarIds = new Set<string>();
+  const alternativeWriterVarIds = new Set<string>();
   if (stateVariables && stateVariables.length > 0) {
     const stateVarCounts = new Map<string, number>();
     for (const sv of stateVariables) {
       stateVarCounts.set(sv.variableId, (stateVarCounts.get(sv.variableId) ?? 0) + 1);
       stateVarIds.add(sv.variableId);
       if (sv.immutable) immutableStateVarIds.add(sv.variableId);
+      if (sv.writers === 'alternatives') alternativeWriterVarIds.add(sv.variableId);
     }
     for (const [id, count] of stateVarCounts) {
       if (count > 1) {
@@ -451,14 +457,18 @@ export function validateWorkflowGraph(
     }
   }
 
-  // 9c. Phase 1: reject multi-writer state promotion entirely
-  // (no reducer/merge strategy exists yet — invariant §6.8 rule 5)
+  // 9c. Multi-writer promotion only where the variable declares its writers
+  // alternatives (no merge strategy exists — invariant §6.8 rule 5)
   for (const [varId, writers] of stateWriters) {
-    if (writers.length > 1 && !immutableStateVarIds.has(varId)) {
+    if (
+      writers.length > 1 &&
+      !immutableStateVarIds.has(varId) &&
+      !alternativeWriterVarIds.has(varId)
+    ) {
       errors.push({
         kind: 'promotion_multi_writer',
         taskIds: writers,
-        detail: `State variable "${varId}" has multiple writers: ${writers.join(', ')}. Phase 1 does not support multi-writer promotion; add an explicit reducer strategy or use separate variables.`,
+        detail: `State variable "${varId}" has multiple writers: ${writers.join(', ')}. Declare it \`writers: 'alternatives'\` when the writers are branches a run takes one of, or use separate variables.`,
       });
     }
   }
@@ -1017,7 +1027,7 @@ function validateInputTemplates(tasks: WorkflowTask[], errors: GraphValidationEr
         ...(malformed.path ? { field: malformed.path } : {}),
         detail:
           `Task "${task.taskId}" inputTemplate node at "${malformed.path || '(root)'}" is malformed: ` +
-          `${malformed.reason}. Write exactly { "${TEMPLATE_BIND_KEY}": "<bindAs>" }.`,
+          `${malformed.reason}.`,
       });
     }
 
@@ -1101,6 +1111,13 @@ function validateTemplateOpInput(
       return;
     }
 
+    const operatorNode = readTemplateOperatorNode(node);
+    if (operatorNode !== undefined) {
+      // A malformed operator node is owned by `validateInputTemplates`.
+      if ('operands' in operatorNode) checkOperator(operatorNode, schemaNode, path);
+      return;
+    }
+
     // Object node — descend structurally where the op-side schema is a
     // plain object shape (regardless of binds, so per-field diagnostics
     // match the flat path's even for bind-free templates). z.record-style
@@ -1112,7 +1129,7 @@ function validateTemplateOpInput(
       if (!isObjectShape) {
         // Exotic op-side construct (union/combinator/leaf). A pure-literal
         // value can still be Ajv-validated whole; binds make it unknowable.
-        if (!templateContainsBind(node)) checkLiteral(node, schemaNode, path);
+        if (!templateContainsSubstitution(node)) checkLiteral(node, schemaNode, path);
         return;
       }
       for (const requiredKey of stringArrayOf(schemaNode['required'])) {
@@ -1150,12 +1167,12 @@ function validateTemplateOpInput(
       const recordShaped =
         Object.keys(props).length === 0 &&
         (isRecord(schemaNode['additionalProperties']) || isRecord(schemaNode['propertyNames']));
-      if (recordShaped && !templateContainsBind(node)) checkLiteral(node, schemaNode, path);
+      if (recordShaped && !templateContainsSubstitution(node)) checkLiteral(node, schemaNode, path);
       return;
     }
 
     if (Array.isArray(node)) {
-      if (!templateContainsBind(node)) {
+      if (!templateContainsSubstitution(node)) {
         // Pure-literal array — Ajv-validate whole so array-level
         // constraints (minItems, uniqueItems) are covered.
         checkLiteral(node, schemaNode, path);
@@ -1172,6 +1189,60 @@ function validateTemplateOpInput(
 
     // Primitive leaf — concrete value, validate directly.
     checkLiteral(node, schemaNode, path);
+  };
+
+  // `$firstOf` yields one of its operands, so each must suit the position;
+  // `$concat` yields a string from string operands.
+  const checkOperator = (
+    node: { operator: TemplateOperatorKey; operands: unknown[] },
+    schemaNode: Record<string, unknown>,
+    path: string,
+  ): void => {
+    const operandsPath = joinField(path, node.operator);
+    if (node.operator === TEMPLATE_FIRST_OF_KEY) {
+      node.operands.forEach((operand, i) => {
+        checkNode(operand, schemaNode, `${operandsPath}[${String(i)}]`);
+      });
+      return;
+    }
+
+    node.operands.forEach((operand, i) => {
+      const operandPath = `${operandsPath}[${String(i)}]`;
+      if (typeof operand === 'string') return;
+      if (
+        isRecord(operand) &&
+        (Object.prototype.hasOwnProperty.call(operand, TEMPLATE_BIND_KEY) ||
+          readTemplateOperatorNode(operand) !== undefined)
+      ) {
+        checkNode(operand, STRING_SCHEMA, operandPath);
+        return;
+      }
+      errors.push({
+        kind: 'op_input_incompatible',
+        taskIds: [task.taskId],
+        field: operandPath,
+        detail:
+          `Operation task "${task.taskId}" inputTemplate "${TEMPLATE_CONCAT_KEY}" at "${path || '(root)'}" joins strings, ` +
+          `and operand ${String(i)} is ${describeLiteral(operand)}. Write it as a string, or bind a string output.`,
+      });
+    });
+
+    if (node.operands.every((operand): operand is string => typeof operand === 'string')) {
+      checkLiteral(node.operands.join(''), schemaNode, path);
+      return;
+    }
+    // Only the type: a joined string cannot be shown statically to meet the
+    // position's length, pattern or enum, which the op's own input check holds.
+    if (!schemaAdmitsString(schemaNode)) {
+      errors.push({
+        kind: 'op_input_incompatible',
+        taskIds: [task.taskId],
+        ...(path ? { field: path } : {}),
+        detail:
+          `Operation task "${task.taskId}" inputTemplate position "${path || '(root)'}" holds a "${TEMPLATE_CONCAT_KEY}" node, ` +
+          `which yields a string, and "${task.operation ?? ''}" takes no string there.`,
+      });
+    }
   };
 
   const checkLiteral = (node: unknown, schemaNode: Record<string, unknown>, path: string): void => {
@@ -1237,6 +1308,30 @@ function validateLiteralAgainstSchema(
     // false-reject; the coverage check covers the structural case.
     return null;
   }
+}
+
+const STRING_SCHEMA: Record<string, unknown> = { type: 'string' };
+
+/** Whether a position's schema can admit some string; a construct this cannot read admits one. */
+function schemaAdmitsString(schema: Record<string, unknown>): boolean {
+  for (const combinator of ['anyOf', 'oneOf'] as const) {
+    const branches = schema[combinator];
+    if (Array.isArray(branches)) {
+      return branches.some((branch) => !isRecord(branch) || schemaAdmitsString(branch));
+    }
+  }
+  const ty = schema['type'];
+  if (typeof ty === 'string') return ty === 'string';
+  if (Array.isArray(ty)) return ty.includes('string');
+  if (Object.keys(recordOf(schema['properties'])).length > 0) return false;
+  return true;
+}
+
+function describeLiteral(value: unknown): string {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return 'an array';
+  if (typeof value === 'object') return 'an object';
+  return `a ${typeof value} literal`;
 }
 
 function describeBinding(binding: WorkflowTaskInputBinding): string {

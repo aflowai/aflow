@@ -28,7 +28,7 @@ const RESULT_SCHEMA = {
       type: 'string',
       enum: ['approve', 'request_changes', 'comment'],
       description:
-        'The call on the range as it stands: `request_changes` when a blocker or a major finding is present, `approve` when nothing of that weight is, `comment` when the range was read but the verdict rests on something outside it.',
+        'The call on the range as it stands. `request_changes` when a blocker or a major finding is present. `approve` when nothing of that weight is — a range with only minors and nits is approved, each of them listed in `findings`. `comment` only when the review could not judge the range from what it could read — a check the verdict turns on that it could not run, a file it could not read — and never as a way to attach remarks to a range that is otherwise clean: those are findings under `approve`. A publication waiting on this review pushes without asking on `approve` alone; `comment` makes it ask the operator, as `request_changes` does.',
     },
     summary: {
       type: 'string',
@@ -143,7 +143,7 @@ const BRIEF_MAX_TURNS = 8;
 
 const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'review-local-changes',
-  version: 6,
+  version: 7,
   name: 'Review Local Changes',
   tagline:
     "Review committed changes in a connected repository with the machine's own coding agent.",

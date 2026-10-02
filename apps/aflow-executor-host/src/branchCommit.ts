@@ -68,6 +68,8 @@ export interface PatchCommit {
   readonly branch: string;
   readonly sha: string;
   readonly message: string;
+  /** The message after its subject line, absent for a one-line message. */
+  readonly body?: string;
   /** The parent of the new commit; its first parent when it is a merge. */
   readonly baseSha: string;
   /** True when the branch existed and the commit was appended to it. */
@@ -190,6 +192,13 @@ async function mergeSource(
   return await reachMergeSource(root, mergeFrom, target.at);
 }
 
+function messageBody(message: string): string | undefined {
+  const subjectEnd = message.indexOf('\n');
+  if (subjectEnd === -1) return undefined;
+  const body = message.slice(subjectEnd + 1).replace(/^\n+/, '');
+  return body === '' ? undefined : body;
+}
+
 async function commitStaged(checkout: string, messagePath: string, amend: boolean): Promise<void> {
   const identity = await commitIdentityArgs(checkout);
   try {
@@ -222,7 +231,8 @@ async function commitStaged(checkout: string, messagePath: string, amend: boolea
  * existing one takes the commit on top of its head, provided the patch was made
  * there. With `mergeFrom` an existing branch takes instead one merge commit —
  * the merge of that commit into its head, made as the commission made it, with
- * the patch folded in — so the diff lands on the tree it was made against. The
+ * the patch folded in, or the merge alone for an empty patch — so the diff
+ * lands on the tree it was made against. The
  * apply happens in a checkout made for this call alone, so the operator's
  * working tree, index and current branch are never a party to it — they are a
  * second writer this lane does not get to interrupt. What remains afterwards is
@@ -266,7 +276,10 @@ export async function commitPatchOnBranch(
       );
     }
 
-    const apply = await applyPatch(worktree.path, patch, mode);
+    const apply: ApplyOutcome =
+      merge !== undefined && patch.trim() === ''
+        ? { state: 'applied', conflicts: [] }
+        : await applyPatch(worktree.path, patch, mode);
     if (apply.state === 'conflict')
       return { apply: merge === undefined ? apply : filesNamedIn(apply) };
 
@@ -274,7 +287,10 @@ export async function commitPatchOnBranch(
     const staged = (await git(worktree.path, ['diff', '--cached', '--name-only', '-z']))
       .split('\0')
       .filter((path) => path !== '');
-    if (staged.length === 0) {
+    // With a merge the merge commit is itself the change, so a patch that adds
+    // nothing to it — a clean catch-up, or every offered deletion accepted —
+    // still publishes.
+    if (staged.length === 0 && merge === undefined) {
       throw new WorktreeError(
         'The patch applied and changed nothing, so there is no commit to make.',
         'git_failed',
@@ -304,6 +320,7 @@ export async function commitPatchOnBranch(
     const recorded = (
       await git(worktree.path, ['show', '-s', '--format=%B', sha], APPLY_OUTPUT_CAP_BYTES)
     ).replace(/\n+$/, '');
+    const body = messageBody(recorded);
     try {
       // Compare-and-swap on the old head: a branch that moved between the check
       // above and this line is refused here rather than overwritten.
@@ -327,6 +344,7 @@ export async function commitPatchOnBranch(
         branch,
         sha,
         message: recorded,
+        ...(body !== undefined ? { body } : {}),
         baseSha: worktree.baseSha,
         appended: target.appended,
         ...(merge !== undefined ? { merged: merge.from } : {}),
