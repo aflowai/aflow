@@ -24,7 +24,7 @@ import {
   type ExecutorDependencies,
 } from '@aflow/executor-runtime';
 import type { Redis } from 'ioredis';
-import { createShutdownController, attachSignalHandlers } from '@aflow/lib';
+import { createShutdownController } from '@aflow/lib';
 import { resolvePayloadStore } from '@aflow/payload-store';
 import {
   attachRedisErrorGuard,
@@ -66,6 +66,7 @@ import { followPolicy, watchPolicy } from './policyWatch.js';
 import { killAllProcesses, killProcessesForBinding, reapWithdrawn } from './sandboxedRun.js';
 import { observeRuntimes } from './runtimes.js';
 import { publishingFolders } from './pushApproval.js';
+import { startUnderSignals } from './startUnderSignals.js';
 import { type BackgroundTaskLogger, createBackgroundTaskRunner } from '@aflow/lib';
 
 const log = createServiceLogger('host-executor');
@@ -347,11 +348,6 @@ async function main(): Promise<void> {
   };
   process.once('exit', endEverything);
 
-  await runtime.start();
-  log.info('Host executor runtime started', { stepType: STEP_TYPE });
-  await browserRuntime.start();
-  log.info('Host executor runtime started', { stepType: BROWSER_STEP_TYPE });
-
   // Last known good, so a policy read that fails mid-save does not publish an
   // empty list — "this machine offers no harness" and "the file was being
   // written" are different facts, and only the first should reach a workspace.
@@ -425,49 +421,10 @@ async function main(): Promise<void> {
       return { processed: 1 };
     },
   );
-  inventoryTask.start();
-  browserIdleSweep.start();
-
-  // A withdrawal decided on the appliance reaches work already running here.
-  //
-  // The machine's policy file stays the authority on what may START — nothing
-  // arriving over this channel can widen anything. What it can do is end a
-  // detached command or drop an idle session, which is exactly the gap: the row
-  // is gone, no further step will be scheduled, and the process that was already
-  // running holds the folder until it decides to exit.
   const withdrawals = createBlockingRedisConnection(
     `${hostname}-withdrawals`,
     getExecutorRedisConfig(),
   );
-  await withdrawals.subscribe(HOST_WITHDRAWAL_CHANNEL).catch((error: unknown) => {
-    log.warn('Could not subscribe to withdrawals; they will apply at the next policy change', {
-      error,
-    });
-  });
-  withdrawals.on('message', (_channel: string, raw: string) => {
-    void (async () => {
-      let notice: HostWithdrawalNotice;
-      try {
-        notice = JSON.parse(raw) as HostWithdrawalNotice;
-      } catch {
-        return;
-      }
-      if (typeof notice.hostBindingId !== 'string' || notice.hostBindingId === '') return;
-      const killed = killProcessesForBinding(notice.hostBindingId);
-      const dropped = dropSessionsForBinding(notice.hostBindingId);
-      for (const session of dropped) {
-        await removeWorktree(session.bindingRoot, session.worktreePath).catch(() => undefined);
-        await discardScratch(session);
-      }
-      if (killed.length > 0 || dropped.length > 0) {
-        log.warn('Ended work under a binding the workspace withdrew', {
-          bindingId: notice.hostBindingId,
-          processes: killed.length,
-          sessions: dropped.length,
-        });
-      }
-    })();
-  });
 
   // A restart under the dev stack's watcher drains: a harness run, a check or a
   // review in flight is minutes of work the restart has no reason to end. The
@@ -505,10 +462,57 @@ async function main(): Promise<void> {
   attachRedisErrorGuard(redis, () => controller.shuttingDown, log);
   attachRedisErrorGuard(redisBlocking, () => controller.shuttingDown, log);
   attachRedisErrorGuard(redisBlockingBrowser, () => controller.shuttingDown, log);
-  attachSignalHandlers({
-    onShutdown: () => controller.shutdownOnce(),
-    onDrain: () => controller.drainOnce(),
-    exitCode: 0,
+
+  const started = await startUnderSignals(controller, [
+    async () => {
+      await runtime.start();
+      log.info('Host executor runtime started', { stepType: STEP_TYPE });
+    },
+    async () => {
+      await browserRuntime.start();
+      log.info('Host executor runtime started', { stepType: BROWSER_STEP_TYPE });
+    },
+  ]);
+  if (!started) return;
+
+  inventoryTask.start();
+  browserIdleSweep.start();
+
+  // A withdrawal decided on the appliance reaches work already running here.
+  //
+  // The machine's policy file stays the authority on what may START — nothing
+  // arriving over this channel can widen anything. What it can do is end a
+  // detached command or drop an idle session, which is exactly the gap: the row
+  // is gone, no further step will be scheduled, and the process that was already
+  // running holds the folder until it decides to exit.
+  await withdrawals.subscribe(HOST_WITHDRAWAL_CHANNEL).catch((error: unknown) => {
+    log.warn('Could not subscribe to withdrawals; they will apply at the next policy change', {
+      error,
+    });
+  });
+  withdrawals.on('message', (_channel: string, raw: string) => {
+    void (async () => {
+      let notice: HostWithdrawalNotice;
+      try {
+        notice = JSON.parse(raw) as HostWithdrawalNotice;
+      } catch {
+        return;
+      }
+      if (typeof notice.hostBindingId !== 'string' || notice.hostBindingId === '') return;
+      const killed = killProcessesForBinding(notice.hostBindingId);
+      const dropped = dropSessionsForBinding(notice.hostBindingId);
+      for (const session of dropped) {
+        await removeWorktree(session.bindingRoot, session.worktreePath).catch(() => undefined);
+        await discardScratch(session);
+      }
+      if (killed.length > 0 || dropped.length > 0) {
+        log.warn('Ended work under a binding the workspace withdrew', {
+          bindingId: notice.hostBindingId,
+          processes: killed.length,
+          sessions: dropped.length,
+        });
+      }
+    })();
   });
 }
 

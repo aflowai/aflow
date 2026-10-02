@@ -132,7 +132,7 @@ describe('ExecutorRuntime drain', () => {
     expect(reportingMock.acknowledgeJob).not.toHaveBeenCalled();
   });
 
-  it('leaves jobs that a read already in progress returns pending', async () => {
+  it('runs what a read under way delivers after claiming stops, so a restart under the same name strands nothing', async () => {
     const lateRead = deferred();
     redisMock.readStepJobs.mockImplementationOnce(async () => {
       await lateRead.promise;
@@ -141,10 +141,19 @@ describe('ExecutorRuntime drain', () => {
     await new Promise((r) => setTimeout(r, READ_BLOCK_MS * 2));
 
     runtime.stopClaiming();
-    lateRead.resolve();
+    let idle = false;
+    const idled = runtime.idle().then(() => {
+      idle = true;
+    });
+    harnessEnds.resolve();
     await new Promise((r) => setTimeout(r, READ_BLOCK_MS * 2));
+    expect(idle).toBe(false);
 
-    expect(runtime.inFlight().map((s) => s.name)).toEqual(['host.harness.run step-1']);
+    lateRead.resolve();
+    await idled;
+
+    expect(reportingMock.acknowledgeJob).toHaveBeenCalledTimes(2);
+    expect(reportingMock.acknowledgeJob).toHaveBeenCalledWith(expect.anything(), 'host', 'msg-2');
   });
 
   it('is idle once the step in flight ends', async () => {
@@ -162,5 +171,46 @@ describe('ExecutorRuntime drain', () => {
     expect(runtime.inFlight()).toEqual([]);
     expect(reportingMock.emitResult).toHaveBeenCalledOnce();
     expect(reportingMock.acknowledgeJob).toHaveBeenCalledOnce();
+  });
+});
+
+describe('ExecutorRuntime stopped while it starts', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    redisMock.readStepJobs.mockImplementation(blockingRead);
+  });
+
+  function hostRuntime() {
+    return new ExecutorRuntime(
+      {
+        ...DEFAULT_EXECUTOR_CONFIG,
+        consumerName: 'host-test',
+        consumerGroup: 'executor:host',
+        streamKey: 'aflow:jobs:host',
+        stepType: 'host',
+        claimPendingOnStart: false,
+        blockMs: READ_BLOCK_MS,
+      },
+      { redis: {}, redisBlocking: {}, payloadStore: {} } as never,
+    );
+  }
+
+  it.each([
+    ['claiming stops', (runtime: ExecutorRuntime) => runtime.stopClaiming()],
+    ['it is stopped', (runtime: ExecutorRuntime) => void runtime.stop()],
+  ])('reads nothing from its stream when %s before the start resolves', async (_, halt) => {
+    const groupReady = deferred();
+    redisMock.ensureConsumerGroup.mockReturnValueOnce(groupReady.promise);
+    const runtime = hostRuntime();
+
+    const starting = runtime.start();
+    halt(runtime);
+    groupReady.resolve();
+    await starting;
+    await runtime.idle();
+    await new Promise((r) => setTimeout(r, READ_BLOCK_MS * 2));
+
+    expect(redisMock.readStepJobs).not.toHaveBeenCalled();
+    await runtime.stop();
   });
 });

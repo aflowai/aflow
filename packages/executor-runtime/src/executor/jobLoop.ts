@@ -159,18 +159,11 @@ export async function consumeLoop(host: JobLoopHost): Promise<void> {
         },
       );
 
-      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- stopRequested can change during the blocking read
-      if (host.stopRequested) {
-        // Left pending rather than run: claiming has stopped, and another
-        // consumer reclaims these once this one's heartbeat has gone.
-        if (jobs.length > 0) {
-          host.log.info('Claiming stopped during the read; leaving its jobs pending', {
-            messageIds: jobs.map(({ id }) => id),
-          });
-        }
-        break;
-      }
-
+      // Run even when claiming stopped during the read. These are delivered to
+      // this consumer, and as in the leased-work protocol the holder of a claim
+      // works it rather than relying on redelivery: the reclaim skips its own
+      // name, so where that name outlives the process nothing would ever take
+      // them back.
       for (const { id: messageId, job } of jobs) {
         scheduleJob(host, messageId, job);
       }

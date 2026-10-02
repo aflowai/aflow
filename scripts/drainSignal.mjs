@@ -7,8 +7,13 @@
  * supervisor that sends them — the dev runner, `tsx watch`, launchd — kills
  * after a short grace, and work left running past a kill holds its credential
  * and its checkout with nothing to end it.
+ *
+ * The drain signal is the one the executor handles, read from where
+ * `@aflow/lib` defines it.
  */
-export const DRAIN_SIGNAL = 'SIGUSR2';
+import drainSignal from '../packages/lib/src/drainSignal.json' with { type: 'json' };
+
+export const DRAIN_SIGNAL = drainSignal.signal;
 
 /**
  * @param {{ kind: 'restart' } | { kind: 'stop', signal: 'SIGTERM' | 'SIGINT', fromTerminal: boolean }} event

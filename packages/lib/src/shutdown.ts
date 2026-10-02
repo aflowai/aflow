@@ -1,3 +1,5 @@
+import drainSignal from './drainSignal.json' with { type: 'json' };
+
 export interface ShutdownLogger {
   debug(message: string, data?: Record<string, unknown>): void;
   info(message: string, data?: Record<string, unknown>): void;
@@ -168,9 +170,11 @@ export function createShutdownController(
 
 /**
  * A signal no supervisor that kills sends: only one that waits for the exit
- * asks for a drain, so SIGTERM and SIGINT can stay a stop.
+ * asks for a drain, so SIGTERM and SIGINT can stay a stop. Kept in JSON because
+ * the watcher that sends it, `scripts/watch-and-drain.mjs`, runs under plain
+ * Node and reads it from there.
  */
-export const DRAIN_SIGNAL = 'SIGUSR2';
+export const DRAIN_SIGNAL = drainSignal.signal;
 
 export interface AttachSignalHandlersOptions {
   /** SIGTERM and SIGINT, every time either arrives; it must be safe to call again. */

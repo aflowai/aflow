@@ -41,6 +41,8 @@ export class ExecutorRuntime implements JobLoopHost {
   private running = false;
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
   private idleWaiters: Array<() => void> = [];
+  private starting: Promise<void> | null = null;
+  private consuming: Promise<void> = Promise.resolve();
 
   private readonly controlPlane: BackgroundTaskControlPlane;
 
@@ -77,11 +79,16 @@ export class ExecutorRuntime implements JobLoopHost {
     return this.handlers.get(stepType);
   }
 
-  async start(): Promise<void> {
-    if (this.running) {
-      return;
-    }
+  start(): Promise<void> {
+    if (this.running) return Promise.resolve();
+    this.starting ??= this.begin().finally(() => {
+      this.starting = null;
+    });
+    return this.starting;
+  }
 
+  private async begin(): Promise<void> {
+    this.stopRequested = false;
     this.log.debug('Starting executor runtime', {
       streamKey: this.config.streamKey,
       consumerGroup: this.config.consumerGroup,
@@ -147,9 +154,10 @@ export class ExecutorRuntime implements JobLoopHost {
     }
 
     this.running = true;
-    this.stopRequested = false;
-
-    void consumeLoop(this);
+    // A stop asked for while starting stands: a signal can land during any of
+    // the awaits above, and a drain that has begun claims nothing more.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- stopRequested can change during the awaits above
+    if (!this.stopRequested) this.consuming = consumeLoop(this);
   }
 
   /**
@@ -171,10 +179,12 @@ export class ExecutorRuntime implements JobLoopHost {
     }));
   }
 
-  /** Resolves once no claimed step is in flight. */
-  idle(): Promise<void> {
-    if (this.inFlightSteps.size === 0) return Promise.resolve();
-    return new Promise((resolve) => {
+  /** Resolves once claiming has stopped and no claimed step is in flight. */
+  async idle(): Promise<void> {
+    // The read under way when claiming stopped can still hand this consumer jobs.
+    await this.consuming;
+    if (this.inFlightSteps.size === 0) return;
+    await new Promise<void>((resolve) => {
       this.idleWaiters.push(resolve);
     });
   }
@@ -188,12 +198,13 @@ export class ExecutorRuntime implements JobLoopHost {
   }
 
   async stop(): Promise<void> {
+    this.stopRequested = true;
+    await this.starting?.catch(() => undefined);
     if (!this.running) {
       return;
     }
 
     this.log.info('Stopping executor runtime...');
-    this.stopRequested = true;
 
     if (this.heartbeatInterval) {
       clearInterval(this.heartbeatInterval);
