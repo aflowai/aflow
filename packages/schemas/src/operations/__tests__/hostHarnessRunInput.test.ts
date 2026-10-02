@@ -159,12 +159,22 @@ describe('a fix to a branch its base moved past names the merge at both layers',
       refChanges: [],
       blockedDomains: [],
     };
-    const merge = { from: 'c'.repeat(40), conflicts: ['a.txt'] };
+    const merge = {
+      from: 'c'.repeat(40),
+      conflicts: [
+        { path: 'a.txt', kind: 'content' },
+        { path: 'gone.txt', kind: 'modify-delete' },
+      ],
+    };
     expect(HostHarnessRunOutputSchema.parse({ ...run, merge }).merge).toEqual(merge);
     expect(HostHarnessRunOutputSchema.parse(run).merge).toBeUndefined();
-    expect(
-      HostHarnessRunOutputSchema.safeParse({ ...run, merge: { from: 'c'.repeat(40) } }).success,
-    ).toBe(false);
+    for (const conflicts of [undefined, ['a.txt'], [{ path: 'a.txt', kind: 'rename' }]]) {
+      expect(
+        HostHarnessRunOutputSchema.safeParse({ ...run, merge: { from: 'c'.repeat(40), conflicts } })
+          .success,
+        JSON.stringify(conflicts),
+      ).toBe(false);
+    }
 
     const commit = {
       branch: 'aflow/fix',

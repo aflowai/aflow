@@ -86,7 +86,7 @@ export class WorktreeError extends Error {
       | 'stale_base'
       | 'push_target_differs'
       | 'fetch_failed'
-      | 'conflict_markers'
+      | 'unresolved_conflict'
       | 'binary_conflict',
   ) {
     super(message);

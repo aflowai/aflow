@@ -50,6 +50,7 @@ import {
   mergeIdentityArgs,
   mergeIntoCheckout,
   type BaseMerge,
+  type MergeConflict,
 } from '../baseMerge.js';
 import { fetchCredential, scrubSecret } from '../credentialFetch.js';
 import { noSandboxMessage, reapWithdrawn, sandboxReadiness } from '../sandboxedRun.js';
@@ -173,17 +174,46 @@ export function taskWithInputs(task: string, inputs: Record<string, unknown> | u
   return `${task}\n\nInputs for this task, as JSON:\n${JSON.stringify(inputs)}`;
 }
 
+function resolvingConflict({ path, kind }: MergeConflict, from: string): string {
+  const named = `\`${path}\` (${kind})`;
+  switch (kind) {
+    case 'content':
+      return (
+        `${named}: both sides changed it, and it holds conflict markers. Replace them with ` +
+        'the resolution.'
+      );
+    case 'add-add':
+      return (
+        `${named}: both sides added it differently, and it holds both between conflict ` +
+        'markers. Replace them with the resolution.'
+      );
+    case 'modify-delete':
+      return (
+        `${named}: this branch changed it and \`${from}\` deleted it; the merge kept this ` +
+        "branch's version. Delete it, or keep it with the change that makes it fit the merge."
+      );
+    case 'delete-modify':
+      return (
+        `${named}: this branch deleted it and \`${from}\` changed it; the merge kept ` +
+        `\`${from}\`'s version. Delete it, or keep it with the change that makes it fit the merge.`
+      );
+  }
+}
+
 /**
- * What the agent is told of a merge that left markers. Its checkout's last
+ * What the agent is told of a merge that conflicted. Its checkout's last
  * commit is that merge, so nothing in the tree alone says the markers are the
- * merge's rather than the repository's.
+ * merge's rather than the repository's, or that a file kept there was deleted
+ * on the other side.
  */
 export function mergeConflictSentence(merge: Pick<BaseMerge, 'from' | 'conflicts'>): string {
-  return (
-    `The last commit of this checkout merges \`${merge.from}\` into it and leaves conflict ` +
-    `markers, committed as they stood, in ${merge.conflicts.map((path) => `\`${path}\``).join(', ')}. ` +
-    'Resolve every one of them as part of this task; your change is measured from that merge commit.'
-  );
+  return [
+    `The last commit of this checkout merges \`${merge.from}\` into it, its conflicts ` +
+      'committed as they stood. Resolve every one of them as part of this task; your change ' +
+      'is measured from that merge commit, and a publication refuses a conflict your change ' +
+      'leaves untouched:',
+    ...merge.conflicts.map((conflict) => `- ${resolvingConflict(conflict, merge.from)}`),
+  ].join('\n');
 }
 
 /** The task as the harness receives it: the repository's rules, a merge's conflicts, the prose, the inputs. */
@@ -797,7 +827,8 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
     // tree. A base ref gone since the run started is refused below as a ref
     // change, and the commit the checkout started at stands in until then.
     // A merged checkout is judged against its merge, which is where the
-    // publication applies the diff once it has made that merge again.
+    // publication applies the diff once it has made that merge again; a branch
+    // that moved since is the publication's `stale_base`, not this answer's.
     const judgedAt =
       merge !== undefined
         ? merge.commit
@@ -859,7 +890,12 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
       continued: resuming,
       baseSha: worktree.baseSha,
       ...(merge !== undefined
-        ? { merge: { from: merge.from, conflicts: [...merge.conflicts] } }
+        ? {
+            merge: {
+              from: merge.from,
+              conflicts: merge.conflicts.map(({ path, kind }) => ({ path, kind })),
+            },
+          }
         : {}),
       ...(patchRef !== undefined ? { patchRef, patch: inlinePatch } : {}),
       filesChanged: changes.filesChanged,

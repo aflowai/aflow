@@ -23,14 +23,27 @@ import {
   WorktreeError,
 } from './worktree.js';
 
+/**
+ * How a path conflicted, read from the stages git left for it: `content` where
+ * both sides changed it, `modify-delete` where the checkout's branch changed it
+ * and the merged commit deleted it, `delete-modify` the other way round, and
+ * `add-add` where both added it differently.
+ */
+export type MergeConflictKind = 'content' | 'modify-delete' | 'delete-modify' | 'add-add';
+
+export interface MergeConflict {
+  readonly path: string;
+  readonly kind: MergeConflictKind;
+}
+
 /** What a checkout's merge brought in. */
 export interface BaseMerge {
   /** The commit merged in, as its full sha. */
   readonly from: string;
   /** The merge commit, which the work in the checkout is measured from. */
   readonly commit: string;
-  /** Files the merge left conflict markers in, committed as they stood. Empty when clean. */
-  readonly conflicts: readonly string[];
+  /** What the merge left unmerged, by path, each committed as it stood. Empty when clean. */
+  readonly conflicts: readonly MergeConflict[];
 }
 
 /**
@@ -127,19 +140,45 @@ export async function mergeIdentityArgs(root: string): Promise<string[]> {
   );
 }
 
-async function unmergedPaths(checkout: string): Promise<string[]> {
-  const listing = await git(
-    checkout,
-    ['diff', '--name-only', '--diff-filter=U', '-z'],
-    APPLY_OUTPUT_CAP_BYTES,
-  );
-  return [...new Set(listing.split('\0').filter((path) => path !== ''))];
+/**
+ * Every unmerged path with the stages git left for it: 1 the common ancestor's
+ * version, 2 the checkout's, 3 the merged commit's.
+ */
+async function unmergedStages(checkout: string): Promise<Map<string, Set<number>>> {
+  const listing = await git(checkout, ['ls-files', '-u', '-z'], APPLY_OUTPUT_CAP_BYTES);
+  const stages = new Map<string, Set<number>>();
+  for (const record of listing.split('\0')) {
+    const match = /^\d+ [0-9a-f]+ ([123])\t(.+)$/s.exec(record);
+    if (match?.[1] === undefined || match[2] === undefined) continue;
+    const held = stages.get(match[2]) ?? new Set<number>();
+    held.add(Number(match[1]));
+    stages.set(match[2], held);
+  }
+  return stages;
 }
 
 /**
- * The conflicted paths git merges as binary: a side git reads as binary, or a
- * `merge` attribute that is unset or `binary`. git leaves no markers in such a
- * file, only one side's version, so there is nothing in its text to resolve.
+ * The conflicts `stages` record, by path. A path only the ancestor holds — both
+ * sides moved it away — is left out: the merge commit lacks it whichever way it
+ * is read, so there is nothing at it to decide.
+ */
+function conflictsOf(stages: ReadonlyMap<string, ReadonlySet<number>>): MergeConflict[] {
+  const conflicts: MergeConflict[] = [];
+  for (const [path, held] of stages) {
+    if (held.has(2) && held.has(3)) {
+      conflicts.push({ path, kind: held.has(1) ? 'content' : 'add-add' });
+    } else if (held.has(2)) conflicts.push({ path, kind: 'modify-delete' });
+    else if (held.has(3)) conflicts.push({ path, kind: 'delete-modify' });
+  }
+  return conflicts.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+}
+
+/**
+ * The paths among those both sides hold that git merges as binary: a side git
+ * reads as binary, or a `merge` attribute that is unset or `binary`. git leaves
+ * no markers in such a file, only one side's version, so there is nothing in
+ * its text to resolve. A path one side deleted is not asked: whatever its
+ * bytes, resolving it is keeping or deleting it.
  */
 async function binaryConflicts(checkout: string, conflicts: readonly string[]): Promise<string[]> {
   const binary = new Set<string>();
@@ -181,8 +220,9 @@ async function binaryConflicts(checkout: string, conflicts: readonly string[]): 
 /**
  * Merge `from` into the checkout at its HEAD, as one merge commit under
  * `identity`, or nothing when the checkout already holds it. A merge that
- * conflicts in text is committed as it stands, markers and all, so the
- * checkout shows what needs resolving; one that conflicts in a binary file is
+ * conflicts is committed as it stands — markers where git left them, and the
+ * surviving side of a file one side deleted — with each conflict recorded by
+ * the kind git names; one that conflicts in a binary file both sides hold is
  * refused, since no turn could resolve it.
  */
 export async function mergeIntoCheckout(
@@ -193,7 +233,7 @@ export async function mergeIntoCheckout(
   const head = (await git(checkout, ['rev-parse', 'HEAD'])).trim();
   if (await isAncestor(checkout, from, head)) return undefined;
   const merging = [...identity, ...MERGE_PINS];
-  let conflicts: string[] = [];
+  let conflicts: MergeConflict[] = [];
   try {
     await git(
       checkout,
@@ -201,15 +241,19 @@ export async function mergeIntoCheckout(
       APPLY_OUTPUT_CAP_BYTES,
     );
   } catch (error) {
-    conflicts = await unmergedPaths(checkout);
-    if (conflicts.length === 0) {
+    const stages = await unmergedStages(checkout);
+    if (stages.size === 0) {
       await git(checkout, ['merge', '--abort']).catch(() => {});
       throw new WorktreeError(
         `\`${from}\` could not be merged into \`${head}\`: ${firstLine(error)}`,
         'git_failed',
       );
     }
-    const binary = await binaryConflicts(checkout, conflicts);
+    conflicts = conflictsOf(stages);
+    const bothSides = conflicts
+      .filter(({ kind }) => kind === 'content' || kind === 'add-add')
+      .map(({ path }) => path);
+    const binary = bothSides.length === 0 ? [] : await binaryConflicts(checkout, bothSides);
     if (binary.length > 0) {
       await git(checkout, ['merge', '--abort']).catch(() => {});
       throw new WorktreeError(
@@ -221,11 +265,11 @@ export async function mergeIntoCheckout(
         'binary_conflict',
       );
     }
-    // The conflicted paths alone: the checkout a coding agent runs in carries
+    // The unmerged paths alone: the checkout a coding agent runs in carries
     // the folder's installed dependencies, untracked, which `add -A .` would stage.
     await git(
       checkout,
-      ['--literal-pathspecs', 'add', '-A', '--', ...conflicts],
+      ['--literal-pathspecs', 'add', '-A', '--', ...stages.keys()],
       APPLY_OUTPUT_CAP_BYTES,
     );
     await git(checkout, [...merging, 'commit', '--no-edit'], APPLY_OUTPUT_CAP_BYTES);
@@ -240,7 +284,7 @@ export async function mergeIntoCheckout(
  * index, so no filter runs. A binary file is skipped: a merge that conflicts
  * in one is refused before it is committed, by `mergeIntoCheckout`.
  */
-export async function filesWithConflictMarkers(
+async function filesWithConflictMarkers(
   checkout: string,
   paths: readonly string[],
 ): Promise<string[]> {
@@ -276,4 +320,41 @@ export async function filesWithConflictMarkers(
     }
     throw error;
   }
+}
+
+/** A path the publication's tree leaves undecided, and why. */
+export interface UndecidedPath {
+  readonly path: string;
+  /** How the merge conflicted there; absent for a file the patch alone marked. */
+  readonly kind?: MergeConflictKind;
+  /** `marked`: conflict markers remain. `untouched`: the patch leaves it as the merge committed it. */
+  readonly state: 'marked' | 'untouched';
+}
+
+/**
+ * What a merged checkout with the patch staged still leaves undecided. Every
+ * conflict has to appear among `changed`, the paths the patch changed or
+ * deleted, since the merge commit holds a conflict as it stood — markers, or
+ * one side kept where the other deleted — and keeping that is a decision the
+ * patch has to show; and no file the merge conflicted on or the patch changed
+ * may still carry markers.
+ */
+export async function undecidedConflicts(
+  checkout: string,
+  conflicts: readonly MergeConflict[],
+  changed: readonly string[],
+): Promise<UndecidedPath[]> {
+  const kinds = new Map(conflicts.map(({ path, kind }) => [path, kind]));
+  const touched = new Set(changed);
+  const marked = new Set(
+    await filesWithConflictMarkers(checkout, [...new Set([...kinds.keys(), ...changed])]),
+  );
+  const undecided: UndecidedPath[] = [];
+  for (const path of [...new Set([...kinds.keys(), ...marked])].sort()) {
+    const kind = kinds.get(path);
+    const state = marked.has(path) ? 'marked' : touched.has(path) ? undefined : 'untouched';
+    if (state !== undefined)
+      undecided.push({ path, ...(kind !== undefined ? { kind } : {}), state });
+  }
+  return undecided;
 }
