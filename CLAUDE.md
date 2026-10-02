@@ -221,6 +221,15 @@ The root **`Dockerfile`** carries every workspace through two stages, and adding
 
 **Never push directly to `main`.** Every change goes through a branch and a pull request.
 
+### Driving a change through the loop
+
+A change can be built by the platform itself — Helmsman commissions the coding agent on
+the connected checkout, Local Code Review reads the range, Local Publish commits, scans,
+pushes and opens the pull request. Every session that works this way follows
+`docs/dev/driving-work-through-the-loop.md`: one dev stack, one Helmsman conversation per
+stream of work, a merge into `live` only when no harness is in flight, and the checks the
+review does not run done by hand before the operator merges.
+
 ## Key files to read first
 
 | File                                                        | Purpose                                                                                    |
