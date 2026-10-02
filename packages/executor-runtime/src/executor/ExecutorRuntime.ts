@@ -20,6 +20,7 @@ import { externalAbortReason } from '../timeout.js';
 import { createJobLogger } from './logger.js';
 import { HEARTBEAT_INTERVAL_MS } from './constants.js';
 import { claimPendingMessages, consumeLoop, type JobLoopHost } from './jobLoop.js';
+import type { InFlightStep } from './processJob.js';
 
 function executorBackgroundServices(stepType: string): BackgroundTaskService[] {
   const own = BackgroundTaskServiceSchema.safeParse(`executor-${stepType}`);
@@ -33,12 +34,13 @@ export class ExecutorRuntime implements JobLoopHost {
   readonly limiter: ConcurrencyLimiter;
   readonly log;
 
-  readonly inFlightMessageIds = new Set<string>();
+  readonly inFlightSteps = new Map<string, InFlightStep>();
   readonly abortControllers = new Map<string, AbortController>();
 
   stopRequested = false;
   private running = false;
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+  private idleWaiters: Array<() => void> = [];
 
   private readonly controlPlane: BackgroundTaskControlPlane;
 
@@ -148,6 +150,41 @@ export class ExecutorRuntime implements JobLoopHost {
     this.stopRequested = false;
 
     void consumeLoop(this);
+  }
+
+  /**
+   * Stops reading the stream. Steps already claimed keep running, with their
+   * heartbeats and this executor's, until they end or `stop` is called.
+   */
+  stopClaiming(): void {
+    this.stopRequested = true;
+  }
+
+  /** The claimed steps, each named, with the instant its own timeout ends it. */
+  inFlight(): Array<{ name: string; deadlineAt: number }> {
+    const now = Date.now();
+    return [...this.inFlightSteps.values()].map((step) => ({
+      name: `${step.operationId} ${step.stepExecutionId}`,
+      // A step still waiting for a slot or being set up has no timeout of its
+      // own yet; the default it would fall back to stands in until it has one.
+      deadlineAt: step.deadlineRef?.current ?? now + this.config.defaultTimeoutMs,
+    }));
+  }
+
+  /** Resolves once no claimed step is in flight. */
+  idle(): Promise<void> {
+    if (this.inFlightSteps.size === 0) return Promise.resolve();
+    return new Promise((resolve) => {
+      this.idleWaiters.push(resolve);
+    });
+  }
+
+  stepSettled(messageId: string): void {
+    this.inFlightSteps.delete(messageId);
+    if (this.inFlightSteps.size > 0) return;
+    const waiters = this.idleWaiters;
+    this.idleWaiters = [];
+    for (const resolve of waiters) resolve();
   }
 
   async stop(): Promise<void> {

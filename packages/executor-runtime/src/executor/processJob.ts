@@ -49,6 +49,14 @@ export function isSupersededStepJob(
   );
 }
 
+/** A claimed job, from its claim to its end. */
+export interface InFlightStep {
+  stepExecutionId: string;
+  operationId: string;
+  /** Set once the step's timeout is known; a progress-aware timeout keeps it current. */
+  deadlineRef?: { current: number };
+}
+
 export interface ProcessJobHost {
   config: ExecutorConfig;
   deps: ExecutorDependencies;
@@ -62,6 +70,7 @@ export async function processJob(
   messageId: string,
   job: StepJobMessage,
   slotController: SlotController,
+  inFlight?: InFlightStep,
 ): Promise<void> {
   const startTime = Date.now();
 
@@ -257,6 +266,7 @@ export async function processJob(
     // progress-aware timeout withTimeout keeps this ref current, so an
     // idle-extended stream carries its extended deadline to the watchdog.
     const deadlineRef = { current: heartbeatStart + timeoutMs };
+    if (inFlight !== undefined) inFlight.deadlineRef = deadlineRef;
     const refreshStepInFlight = () => {
       void registerStepInFlight(host.deps.redis, job.stepExecutionId, deadlineRef.current).catch(
         (err: unknown) => {

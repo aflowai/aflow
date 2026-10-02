@@ -333,18 +333,18 @@ async function main(): Promise<void> {
   // A detached process is spawned into its own group so a stop reaches its
   // descendants, which also means it survives this executor unless something
   // ends it. One holding a credential in its environment, unaddressable because
-  // the handles live only in memory, is the worst of both.
-  for (const signal of ['SIGINT', 'SIGTERM', 'exit'] as const) {
-    process.once(signal, () => {
-      policyWatch.close();
-      killAllProcesses();
-      // Synchronous, deliberately. An `exit` handler schedules no further work,
-      // so a promise-based removal here never ran and every session's checkout
-      // was left on disk. Handles live in memory, so after this nothing can
-      // address these — they are unreachable copies of the operator's code.
-      for (const session of allSessions()) discardNow(session.scratchDir);
-    });
-  }
+  // the handles live only in memory, is the worst of both. A signal drains
+  // first, so this runs at exit, or earlier when the drain is cut short.
+  const endEverything = (): void => {
+    policyWatch.close();
+    killAllProcesses();
+    // Synchronous, deliberately. An `exit` handler schedules no further work,
+    // so a promise-based removal here never ran and every session's checkout
+    // was left on disk. Handles live in memory, so after this nothing can
+    // address these — they are unreachable copies of the operator's code.
+    for (const session of allSessions()) discardNow(session.scratchDir);
+  };
+  process.once('exit', endEverything);
 
   await runtime.start();
   log.info('Host executor runtime started', { stepType: STEP_TYPE });
@@ -468,15 +468,32 @@ async function main(): Promise<void> {
     })();
   });
 
+  // A restart under the dev stack's watcher is a signal like any other, and a
+  // harness run, a check or a review in flight is minutes of work the restart
+  // has no reason to end. The browser's pages are not held open for it.
+  let browserStopped: Promise<void> | undefined;
+  const stopBrowserRuntime = (): Promise<void> => (browserStopped ??= browserRuntime.stop());
+
   const controller = createShutdownController({
     name: 'Host Executor',
     logger: log,
+    drain: {
+      work: {
+        stopClaiming: () => {
+          runtime.stopClaiming();
+          void stopBrowserRuntime();
+        },
+        inFlight: () => runtime.inFlight(),
+        idle: () => runtime.idle(),
+      },
+      endInFlight: endEverything,
+    },
     onShutdown: async () => {
       await inventoryTask.stop();
       await browserIdleSweep.stop();
       await redis.zrem(HOST_MACHINES_KEY, hostname).catch(() => undefined);
       await runtime.stop();
-      await browserRuntime.stop();
+      await stopBrowserRuntime();
       await quitRedisWithTimeout(withdrawals);
       await quitRedisWithTimeout(redisBlocking);
       await quitRedisWithTimeout(redisBlockingBrowser);
@@ -487,7 +504,14 @@ async function main(): Promise<void> {
   attachRedisErrorGuard(redis, () => controller.shuttingDown, log);
   attachRedisErrorGuard(redisBlocking, () => controller.shuttingDown, log);
   attachRedisErrorGuard(redisBlockingBrowser, () => controller.shuttingDown, log);
-  attachSignalHandlers({ onShutdown: () => controller.shutdownOnce(), exitCode: 0 });
+  attachSignalHandlers({
+    onShutdown: () => controller.shutdownOnce(),
+    // The operator's word to stop now: the drain ends what it was waiting for.
+    onRepeatSignal: () => {
+      controller.stopNow();
+    },
+    exitCode: 0,
+  });
 }
 
 main().catch((error: unknown) => {

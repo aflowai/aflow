@@ -69,9 +69,11 @@ review may still send back.
 - **One stack.** The dev stack belongs to the stream that started it. No other stream runs
   `yarn start`, `yarn dev:*` or a host executor: two stacks on one Redis share consumer
   groups and run each other's work, and a second host executor takes the lane.
-- **A merge into `live` restarts executors**, and a restart ends every harness run in
-  flight. Before merging anything into `live`: `pgrep -f aflow-harness` is empty and no
-  Helmsman conversation of any stream is mid-commission. A stream that needs its branch
+- **A merge into `live` restarts executors.** The host executor drains (Plan 315 D17): it
+  claims nothing new and restarts once its harness runs, checks and reviews have ended or
+  their own timeouts have passed, so a merge delays the host lane rather than ending a
+  commission. A second signal to it still ends everything at once. The other executors
+  restart straight away, so merge only when no Helmsman turn is in flight. A stream that needs its branch
   on the stack asks the stream that runs it; that stream merges, runs `yarn db:migrate`
   when a migration arrived, rebuilds the `dist`s the web app reads, and updates the
   installed bundles through the Store when a catalog version moved.

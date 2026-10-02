@@ -55,8 +55,13 @@ const SERVICE_REGISTRY = {
   // ambient REDIS_URL wins over the paired one and points it at another
   // instance. Unpaired, owned by the launch-agent service, or with a daemon
   // already running, it is dropped from the profile with a hint rather than
-  // duplicated or crash-looped.
-  'executor-host': { cmd: 'yarn executor:host', dotenv: false },
+  // duplicated or crash-looped. Restarted on a change by a watcher that waits
+  // for it to exit, because it drains what is in flight and `tsx watch` kills
+  // it five seconds after the signal.
+  'executor-host': {
+    cmd: 'node scripts/watch-and-drain.mjs apps/aflow-executor-host/src/index.ts apps/aflow-executor-host packages',
+    dotenv: false,
+  },
   voice: { cmd: 'yarn voice:dev' },
   web: { cmd: 'yarn web:dev', ports: [3001] },
   // The local edition's own application, on the port the hosted one uses in its

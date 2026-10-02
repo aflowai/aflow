@@ -11,12 +11,14 @@ import {
 import type { ConcurrencyLimiter } from '../concurrency.js';
 import type { ExecutorLogger, SlotController } from '../types.js';
 import { CLAIM_INTERVAL_MS } from './constants.js';
-import { processJob, type ProcessJobHost } from './processJob.js';
+import { processJob, type InFlightStep, type ProcessJobHost } from './processJob.js';
 
 export interface JobLoopHost extends ProcessJobHost {
   limiter: ConcurrencyLimiter;
-  inFlightMessageIds: Set<string>;
+  /** Keyed by stream message id. */
+  inFlightSteps: Map<string, InFlightStep>;
   stopRequested: boolean;
+  stepSettled(messageId: string): void;
 }
 
 export async function claimPendingMessages(host: JobLoopHost): Promise<void> {
@@ -85,11 +87,15 @@ export async function claimPendingMessages(host: JobLoopHost): Promise<void> {
 }
 
 export function scheduleJob(host: JobLoopHost, messageId: string, job: StepJobMessage): void {
-  if (host.inFlightMessageIds.has(messageId)) {
+  if (host.inFlightSteps.has(messageId)) {
     host.log.debug('Skipping duplicate schedule', { messageId });
     return;
   }
-  host.inFlightMessageIds.add(messageId);
+  const inFlight: InFlightStep = {
+    stepExecutionId: job.stepExecutionId,
+    operationId: job.operationId,
+  };
+  host.inFlightSteps.set(messageId, inFlight);
   void (async (): Promise<void> => {
     await host.limiter.acquire();
     let held = true;
@@ -111,7 +117,7 @@ export function scheduleJob(host: JobLoopHost, messageId: string, job: StepJobMe
       },
     };
     try {
-      await processJob(host, messageId, job, slotController);
+      await processJob(host, messageId, job, slotController, inFlight);
     } catch (err) {
       host.log.error('Unhandled error in processJob', {
         messageId,
@@ -120,7 +126,7 @@ export function scheduleJob(host: JobLoopHost, messageId: string, job: StepJobMe
     } finally {
       parentEnded = true;
       host.limiter.release();
-      host.inFlightMessageIds.delete(messageId);
+      host.stepSettled(messageId);
     }
   })();
 }
@@ -152,6 +158,18 @@ export async function consumeLoop(host: JobLoopHost): Promise<void> {
           consumerGroup: host.config.consumerGroup,
         },
       );
+
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- stopRequested can change during the blocking read
+      if (host.stopRequested) {
+        // Left pending rather than run: claiming has stopped, and another
+        // consumer reclaims these once this one's heartbeat has gone.
+        if (jobs.length > 0) {
+          host.log.info('Claiming stopped during the read; leaving its jobs pending', {
+            messageIds: jobs.map(({ id }) => id),
+          });
+        }
+        break;
+      }
 
       for (const { id: messageId, job } of jobs) {
         scheduleJob(host, messageId, job);
