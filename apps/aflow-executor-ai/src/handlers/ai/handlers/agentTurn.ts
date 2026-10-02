@@ -7,10 +7,10 @@ import type { TenantId, StepExecutionId } from '@aflow/schemas';
 import { AIClientError, DEFAULT_AI_MODELS } from '@aflow/ai-client';
 import type { AIClient, ChatMessage } from '@aflow/ai-client';
 import {
-  ConversationHistoryHydrationError,
   ConversationStateCorruptError,
   type ConversationStateStore,
 } from '../../conversationStateStore.js';
+import { ConversationHistoryHydrationError } from '../../historyHydrationError.js';
 import { MEMORY_READ_OPERATION_ID, RUN_OUTPUT_READ_OPERATION_ID } from '@aflow/schemas';
 import type { AgentTurnInput } from '../schema.js';
 import { getAIClientForContext } from '../aiClient.js';
@@ -461,12 +461,7 @@ export async function handleAgentTurn(
     );
   } catch (error) {
     if (error instanceof ConversationHistoryHydrationError) {
-      return await failureWithError(
-        ctx,
-        internalError(`${error.message} Refs: ${error.failedBatchRefs.join(', ') || '(none)'}`, {
-          retryable: true,
-        }),
-      );
+      return await failureWithError(ctx, internalError(error.message, { retryable: true }));
     }
     if (error instanceof ConversationStateCorruptError) {
       return await failureWithError(ctx, internalError(error.message, { retryable: false }));

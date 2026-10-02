@@ -160,7 +160,7 @@ describe('host inventories', () => {
     expect(await readLiveHostInventories(redis, now)).toEqual([]);
   });
 
-  it('refuses checks that are not an argv', async () => {
+  it('refuses checks published as a command rather than the program they run', async () => {
     const now = Date.now();
     const redis = fakeRedis(
       { [now - 1_000]: 'laptop' },
@@ -168,7 +168,12 @@ describe('host inventories', () => {
         [hostInventoryKey('laptop')]: JSON.stringify({
           ...inventory('laptop', []),
           folders: [
-            { id: 'hb_app', spaceId: 'space-a', pushApproval: 'never', checks: 'yarn test' },
+            {
+              id: 'hb_app',
+              spaceId: 'space-a',
+              pushApproval: 'never',
+              checks: ['node', 'scripts/verify-commit.mjs'],
+            },
           ],
         }),
       },
@@ -205,7 +210,7 @@ describe('publishing folders for one workspace', () => {
               id: 'hb_app',
               spaceId: 'space-a',
               pushApproval: 'always',
-              checks: ['node', 'scripts/verify-commit.mjs'],
+              checks: { program: 'node' },
             },
             { id: 'hb_lib', spaceId: 'space-b', pushApproval: 'never' },
           ],
@@ -216,7 +221,7 @@ describe('publishing folders for one workspace', () => {
     );
 
     expect(Object.fromEntries(postures)).toEqual({
-      hb_app: { pushApproval: 'always', checks: ['node', 'scripts/verify-commit.mjs'] },
+      hb_app: { pushApproval: 'always', checks: { program: 'node' } },
       hb_lib: { pushApproval: 'never' },
     });
   });

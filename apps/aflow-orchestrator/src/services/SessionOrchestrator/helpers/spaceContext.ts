@@ -152,7 +152,7 @@ export function hostFolderEntry(
     ...(row.branchPrefix !== null && publishing !== undefined
       ? {
           pushApproval: publishing.pushApproval,
-          ...(publishing.checks !== undefined ? { checks: [...publishing.checks] } : {}),
+          ...(publishing.checks !== undefined ? { checks: { ...publishing.checks } } : {}),
         }
       : {}),
 

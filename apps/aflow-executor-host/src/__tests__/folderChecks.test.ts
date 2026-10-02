@@ -30,6 +30,7 @@ import { publishingFolders, withPushApproval } from '../pushApproval.js';
 import { noPushApprovals } from './fixtures/pushApprovals.js';
 
 const ARGV = ['node', 'scripts/verify-commit.mjs'];
+const PRIVATE_ARGV = ['/Users/ada/.local/bin/verify', '--token=s3cr3t', '/Users/ada/notes/ci.env'];
 
 const PUSHING = {
   id: 'hb_app',
@@ -208,6 +209,11 @@ describe('the checks, as the machine publishes and shows them', () => {
             ...PUSHING,
             branchPolicy: { branchPrefix: 'aflow/', checks: ARGV, checksTimeoutMs: 600_000 },
           },
+          {
+            ...PUSHING,
+            id: 'hb_private',
+            branchPolicy: { branchPrefix: 'aflow/', checks: PRIVATE_ARGV },
+          },
           { ...PUSHING, id: 'hb_unchecked' },
           FILES_ONLY,
         ],
@@ -215,17 +221,28 @@ describe('the checks, as the machine publishes and shows them', () => {
     );
   });
 
-  it('puts each pushing folder’s checks in the inventory beside its posture, and none where it declares none', async () => {
+  it('puts in the inventory that each pushing folder declares checks and their program, never the arguments', async () => {
     const policy = await loadHostPolicy(policyPath);
-    expect(publishingFolders(policy.bindings)).toEqual([
+    const folders = publishingFolders(policy.bindings);
+    expect(folders).toEqual([
       {
         id: 'hb_app',
         spaceId: 'space-a',
         pushApproval: 'unless-unreviewed',
-        checks: ARGV,
+        checks: { program: 'node' },
+      },
+      {
+        id: 'hb_private',
+        spaceId: 'space-a',
+        pushApproval: 'unless-unreviewed',
+        checks: { program: 'verify' },
       },
       { id: 'hb_unchecked', spaceId: 'space-a', pushApproval: 'unless-unreviewed' },
     ]);
+    const published = JSON.stringify(folders);
+    expect(published).not.toContain('s3cr3t');
+    expect(published).not.toContain('/Users/ada');
+    expect(published).not.toContain('scripts/verify-commit.mjs');
   });
 
   function inspectContext(bindingId: string, captured: { output?: unknown }): never {

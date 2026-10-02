@@ -8,7 +8,12 @@
  */
 import { z } from 'zod';
 
-import { HostChecksSchema, type HostPushApproval, HostPushApprovalSchema } from '@aflow/schemas';
+import {
+  type HostPublishedChecks,
+  HostPublishedChecksSchema,
+  type HostPushApproval,
+  HostPushApprovalSchema,
+} from '@aflow/schemas';
 
 /** Per-machine inventory, written with a lifetime so silence expires. */
 export function hostInventoryKey(hostname: string): string {
@@ -72,8 +77,9 @@ export const HostInventorySchema = z.object({
   runtimes: z.array(z.object({ name: z.string(), version: z.string() })),
   harnesses: z.array(z.object({ id: z.string(), label: z.string().optional() })),
   /**
-   * The push posture of each folder this machine lets push, and the checks a
-   * publication from it runs, from the same policy file. Published rather than
+   * The push posture of each folder this machine lets push, and whether a
+   * publication from it runs checks and which program, from the same policy
+   * file. Published rather than
    * recorded by the workspace because the operator changes both on the
    * machine, where the workspace never hears of it.
    *
@@ -85,7 +91,7 @@ export const HostInventorySchema = z.object({
       id: z.string(),
       spaceId: z.string(),
       pushApproval: HostPushApprovalSchema,
-      checks: HostChecksSchema.optional(),
+      checks: HostPublishedChecksSchema.optional(),
     }),
   ),
 });
@@ -95,7 +101,7 @@ export type HostInventoryFolders = HostInventory['folders'];
 /** What the machine holding a pushing folder declares about publishing from it. */
 export interface PublishingFolder {
   readonly pushApproval: HostPushApproval;
-  readonly checks?: readonly string[];
+  readonly checks?: HostPublishedChecks;
 }
 
 /**

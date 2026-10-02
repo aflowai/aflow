@@ -3,6 +3,7 @@ import {
   buildSpaceContextNavigation,
   NAVIGATION_GUIDANCE,
   projectSpaceContextForModel,
+  SpaceContextHostFoldersSectionSchema,
   SpaceContextNavigationSchema,
   SpaceContextRepositoriesSectionSchema,
   SpaceContextSchema,
@@ -34,6 +35,33 @@ describe('SpaceContext repositories section', () => {
   it('carries only the coordinate + default branch (status lives on the operator surface)', () => {
     const parsed = SpaceContextRepositoriesSectionSchema.parse(section);
     expect(Object.keys(parsed.items[0]!).sort()).toEqual(['defaultBranch', 'repo']);
+  });
+});
+
+describe('SpaceContext host folders section', () => {
+  const folder = {
+    id: 'hb_app',
+    label: 'app',
+    root: '/tmp/app',
+    access: 'read_write',
+    canRunCommands: true,
+    branchPrefix: 'aflow/',
+    pushApproval: 'unless-unreviewed',
+  };
+  const parse = (checks: unknown) =>
+    SpaceContextHostFoldersSectionSchema.safeParse({
+      items: [{ ...folder, checks }],
+      harnesses: [],
+      total: 1,
+      guidance: 'g',
+    });
+
+  it('carries that a folder declares checks and the program they run', () => {
+    expect(parse({ program: 'node' }).success).toBe(true);
+  });
+
+  it('refuses checks carried as a command, so no argument can reach an agent', () => {
+    expect(parse(['node', 'scripts/verify-commit.mjs', '--token=s3cr3t']).success).toBe(false);
   });
 });
 

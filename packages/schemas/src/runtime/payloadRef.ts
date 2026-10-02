@@ -56,6 +56,12 @@ export const PayloadKindSchema = z.enum([
   // are deterministic per (stepExecutionId, attempt, kind), so no other
   // writer may reuse this kind for the same step — reusing it silently
   // replaces the conversation state.
+  //
+  // Every store of 'state' and 'history' passes `persist: true`. Committed
+  // conversation state is durable by definition — the next turn cannot be
+  // built without every batch it names — and a conversation can outlive the
+  // store's default TTL by days, so an expiring batch fails that conversation
+  // at whichever turn first reads it after the TTL.
   'state',
   // Orchestrator-owned workflow state-variable spill (large variable values,
   // subagent complete.result). Distinct from 'state' so the two writers can

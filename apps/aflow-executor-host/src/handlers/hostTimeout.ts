@@ -6,7 +6,7 @@
  * for a long tool call without being dead. So those two get a sliding idle
  * deadline under a ceiling the operation's own `timeoutMs` already names, with
  * room for the handler's own kill to return first — the same pairing the AI
- * and compute executors declare.
+ * and compute executors declare. A check is neither: see `checkDeadlineMs`.
  */
 import type { ExecutorContext, TimeoutSpec } from '@aflow/executor-runtime';
 import { positiveMsEnv } from '@aflow/lib';
@@ -33,11 +33,17 @@ export const HOST_OUTER_TIMEOUT_MARGIN_MS = 30_000;
 export const HOST_CHECK_CHECKOUT_MARGIN_MS = 120_000;
 
 /**
- * A check's ceiling is the folder's, read from the machine's policy: the step
+ * A check's deadline is the folder's, read from the machine's policy: the step
  * names no time, so that no caller can choose how long the operator's checks
- * get. A folder that declares none answers at once, on the flat clock.
+ * get. A folder that declares none answers at once, on the executor's clock.
+ *
+ * It is a flat deadline with no idle window. A check is a batch program, not a
+ * stream: a test suite or a build can print nothing for longer than any idle
+ * window and still be working, so silence says nothing about it. Only the
+ * folder's `checksTimeoutMs` stops it, and the handler's own kill at that time
+ * reports it as the check's timeout before this deadline is reached.
  */
-async function checkCeilingMs(raw: unknown, policyPath: string): Promise<number | undefined> {
+async function checkDeadlineMs(raw: unknown, policyPath: string): Promise<number | undefined> {
   const parsed = HostCommitCheckInputSchema.safeParse(raw);
   if (!parsed.success) return undefined;
   const binding = (await loadHostPolicy(policyPath).catch(() => undefined))?.bindings.get(
@@ -45,14 +51,12 @@ async function checkCeilingMs(raw: unknown, policyPath: string): Promise<number 
   );
   if (binding === undefined) return undefined;
   const { argv, timeoutMs } = checksOf(binding);
-  return argv === undefined ? undefined : timeoutMs + HOST_CHECK_CHECKOUT_MARGIN_MS;
+  return argv === undefined
+    ? undefined
+    : timeoutMs + HOST_CHECK_CHECKOUT_MARGIN_MS + HOST_OUTER_TIMEOUT_MARGIN_MS;
 }
 
-async function streamCeilingMs(
-  operationId: string,
-  raw: unknown,
-  policyPath: string,
-): Promise<number | undefined> {
+function streamCeilingMs(operationId: string, raw: unknown): number | undefined {
   if (operationId === 'host.harness.run') {
     const parsed = HostHarnessRunInputSchema.safeParse(raw);
     return parsed.success ? parsed.data.timeoutMs : undefined;
@@ -62,7 +66,6 @@ async function streamCeilingMs(
     // A detached process returns its handle at once; the step is not the process.
     return parsed.success && !parsed.data.detach ? parsed.data.timeoutMs : undefined;
   }
-  if (operationId === 'host.commit.check') return await checkCeilingMs(raw, policyPath);
   return undefined;
 }
 
@@ -72,11 +75,9 @@ export async function resolveHostTimeout(
 ): Promise<TimeoutSpec | undefined> {
   // A number the operator set on the step is a number: it stays a flat clock.
   if (ctx.stepDefinition?.timeout?.executionTimeoutMs !== undefined) return undefined;
-  const ceiling = await streamCeilingMs(
-    ctx.operationId,
-    await ctx.readPayload(ctx.job.inputRef),
-    policyPath,
-  );
+  const input = await ctx.readPayload(ctx.job.inputRef);
+  if (ctx.operationId === 'host.commit.check') return await checkDeadlineMs(input, policyPath);
+  const ceiling = streamCeilingMs(ctx.operationId, input);
   if (ceiling === undefined) return undefined;
   const maxMs = ceiling + HOST_OUTER_TIMEOUT_MARGIN_MS;
   return { idleMs: Math.min(HOST_STREAM_IDLE_MS, maxMs), maxMs };
