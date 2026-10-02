@@ -21,6 +21,7 @@ import {
   type EngineAction,
   EngineCredentialField,
   type EngineNavigation,
+  EngineNavigationFailed,
   type EnginePage,
   EngineRefNotFound,
   type PageEvents,
@@ -61,6 +62,12 @@ export interface FakeWorld {
   readonly redirects: Map<string, string>;
   /** Hosts the fake proxy treats as this machine, as resolving would. */
   readonly localHosts: Set<string>;
+  /** A load of the address fails with this, after its document and subresources were asked for. */
+  readonly failures: Map<string, string>;
+  /** What a page at the address loads besides its document, each through the proxy. */
+  readonly subresources: Map<string, readonly string[]>;
+  /** Runs while a navigation to an address is under way, before it settles. */
+  duringLoad?: (url: string) => Promise<void>;
   /** What an action does to the page, beyond being recorded. */
   onAct?: (page: FakePage, ref: string, action: EngineAction) => void;
   /** Every navigation waits on this while it is set, as a page still loading does. */
@@ -88,14 +95,27 @@ export class FakePage implements EnginePage {
     return this.world.sites.get(this.current) ?? {};
   }
 
-  /** Where a load ends, after redirects and the proxy. */
+  private connect(url: string): ProxyRefusal | undefined {
+    const parsed = new URL(url);
+    return this.proxy().check(parsed.hostname.replace(/^\[(.*)\]$/, '$1'), parsed.port);
+  }
+
+  /** Where a load ends, after redirects and the proxy. A failure carries its redirect chain, as the engine's does. */
   load(url: string): void {
-    const landed = this.world.redirects.get(url) ?? url;
-    const host = new URL(landed).hostname.replace(/^\[(.*)\]$/, '$1');
-    const refused = this.proxy().check(host, new URL(landed).port);
-    if (refused !== undefined && landed.startsWith('https:')) {
-      throw new Error(`net::ERR_TUNNEL_CONNECTION_FAILED at ${landed}`);
+    const chain = [url];
+    let refused = this.connect(url);
+    const target = this.world.redirects.get(url);
+    if (refused === undefined && target !== undefined) {
+      chain.push(target);
+      refused = this.connect(target);
     }
+    const landed = chain.at(-1) ?? url;
+    if (refused !== undefined && landed.startsWith('https:')) {
+      throw new EngineNavigationFailed(`net::ERR_TUNNEL_CONNECTION_FAILED at ${landed}`, chain);
+    }
+    for (const subresource of this.world.subresources.get(landed) ?? []) this.connect(subresource);
+    const failure = this.world.failures.get(landed);
+    if (failure !== undefined) throw new EngineNavigationFailed(failure, chain);
     this.history = [...this.history.slice(0, this.index + 1), landed];
     this.index = this.history.length - 1;
     this.current = landed;
@@ -110,7 +130,10 @@ export class FakePage implements EnginePage {
   async navigate(to: EngineNavigation): Promise<boolean> {
     this.navigations.push(to);
     if (this.world.navigationHeld !== undefined) await this.world.navigationHeld;
-    if (to.kind === 'url') this.load(to.url);
+    if (to.kind === 'url') {
+      await this.world.duringLoad?.(to.url);
+      this.load(to.url);
+    }
     if (to.kind === 'back' || to.kind === 'forward') {
       const next = this.index + (to.kind === 'back' ? -1 : 1);
       const target = this.history[next];
@@ -258,7 +281,10 @@ export function harness(
     sites: options.world?.sites ?? new Map(),
     redirects: options.world?.redirects ?? new Map(),
     localHosts: options.world?.localHosts ?? new Set(),
+    failures: options.world?.failures ?? new Map(),
+    subresources: options.world?.subresources ?? new Map(),
     ...(options.world?.onAct !== undefined ? { onAct: options.world.onAct } : {}),
+    ...(options.world?.duringLoad !== undefined ? { duringLoad: options.world.duringLoad } : {}),
   };
   const clock = { now: 1_000_000 };
   const now = (): number => clock.now;

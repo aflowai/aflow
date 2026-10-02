@@ -13,6 +13,7 @@ import {
   type EngineBrowser,
   EngineCredentialField,
   type EngineNavigation,
+  EngineNavigationFailed,
   type EnginePage,
   EngineRefNotFound,
   type PageEvents,
@@ -56,6 +57,9 @@ interface PwRequest {
   url(): string;
   resourceType(): string;
   failure(): { errorText: string } | null;
+  isNavigationRequest(): boolean;
+  frame(): PwFrame;
+  redirectedFrom(): PwRequest | null;
 }
 
 interface PwResponse {
@@ -80,12 +84,14 @@ interface PwPage {
   reload(options: WaitUntil): Promise<unknown>;
   waitForLoadState(state: 'load', options: { timeout: number }): Promise<void>;
   url(): string;
+  mainFrame(): PwFrame;
   title(): Promise<string>;
   ariaSnapshot(options: { mode: 'ai' }): Promise<string>;
   locator(selector: string): PwLocator;
   on(event: 'console', listener: (message: PwConsoleMessage) => void): void;
   on(event: 'response', listener: (response: PwResponse) => void): void;
-  on(event: 'requestfailed', listener: (request: PwRequest) => void): void;
+  on(event: 'request' | 'requestfailed', listener: (request: PwRequest) => void): void;
+  off(event: 'request', listener: (request: PwRequest) => void): void;
   close(): Promise<void>;
   isClosed(): boolean;
 }
@@ -162,6 +168,40 @@ async function navigate(page: PwPage, to: EngineNavigation): Promise<boolean> {
   return moved;
 }
 
+function isMainFrameNavigation(page: PwPage, request: PwRequest): boolean {
+  if (!request.isNavigationRequest()) return false;
+  try {
+    return request.frame() === page.mainFrame();
+  } catch {
+    // Playwright throws for a navigation issued before its frame exists: a popup's, never this page's.
+    return false;
+  }
+}
+
+/**
+ * The chain is followed by `redirectedFrom`, so a navigation the page starts
+ * on its own while this one is under way is not mistaken for part of it.
+ */
+async function navigateReportingChain(page: PwPage, to: EngineNavigation): Promise<boolean> {
+  const chain: PwRequest[] = [];
+  const onRequest = (request: PwRequest): void => {
+    if (!isMainFrameNavigation(page, request)) return;
+    const tail = chain.at(-1);
+    if (tail === undefined || request.redirectedFrom() === tail) chain.push(request);
+  };
+  page.on('request', onRequest);
+  try {
+    return await navigate(page, to);
+  } catch (error) {
+    throw new EngineNavigationFailed(
+      error instanceof Error ? error.message : String(error),
+      chain.map((request) => request.url()),
+    );
+  } finally {
+    page.off('request', onRequest);
+  }
+}
+
 async function act(page: PwPage, ref: string, action: EngineAction): Promise<void> {
   const element = page.locator(`aria-ref=${ref}`);
   if ((await element.count()) === 0) throw new EngineRefNotFound(ref);
@@ -233,7 +273,7 @@ function wrapPage(page: PwPage, events: PageEvents): EnginePage {
     });
   });
   return {
-    navigate: async (to) => await navigate(page, to),
+    navigate: async (to) => await navigateReportingChain(page, to),
     act: async (ref, action) => {
       await act(page, ref, action);
     },

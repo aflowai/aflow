@@ -418,7 +418,10 @@ describe('posture and origin rules', () => {
     await openShop(h);
     expect(h.proxies[0]?.check('bank.example.org', '')).toBeUndefined();
     const denying = profile({ rules: [{ origin: 'https://bank.example.org', effect: 'deny' }] });
-    h.driver.policyChanged({ browsers: new Map([['default', denying]]), chrome: { searched: [] } });
+    await h.driver.policyChanged({
+      browsers: new Map([['default', denying]]),
+      chrome: { searched: [] },
+    });
     expect(h.proxies[0]?.check('bank.example.org', '')?.kind).toBe('rule');
   });
 });

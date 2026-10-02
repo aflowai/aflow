@@ -275,7 +275,7 @@ async function main(): Promise<void> {
   const policyWatch = watchPolicy(policyPath, () => {
     void loadHostPolicy(policyPath)
       .then(async (policy) => {
-        browserDriver.policyChanged(policy);
+        await browserDriver.policyChanged(policy);
         const permitted = executionPermitted(policy);
         const killed = reapWithdrawn(permitted);
         // Sessions too. A process is the loud half of a withdrawal; a session

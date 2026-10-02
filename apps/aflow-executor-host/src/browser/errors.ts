@@ -15,6 +15,10 @@ export type BrowserFailureKind =
   | 'open_uncertain'
   | 'observation_failed';
 
+export function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 /** A refusal or failure the driver can name, carried to the step as its own code. */
 export class BrowserDriverError extends Error {
   constructor(

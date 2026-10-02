@@ -46,6 +46,21 @@ export class EngineCredentialField extends Error {
   }
 }
 
+/**
+ * A navigation that did not complete. `redirectChain` is the addresses the
+ * page's main frame requested for it, the first request and then each
+ * redirect from it, in order — the only hosts a refusal may be blamed on.
+ */
+export class EngineNavigationFailed extends Error {
+  constructor(
+    message: string,
+    readonly redirectChain: readonly string[],
+  ) {
+    super(message);
+    this.name = 'EngineNavigationFailed';
+  }
+}
+
 export interface PageRequest {
   readonly method: string;
   readonly url: string;
@@ -64,7 +79,8 @@ export interface EnginePage {
   /**
    * Moves the page and settles once its document has loaded, waiting a short
    * while longer for the load event and going on without it. False when there
-   * was no history entry to go back or forward to.
+   * was no history entry to go back or forward to. Fails with
+   * `EngineNavigationFailed`.
    */
   navigate(to: EngineNavigation): Promise<boolean>;
   /** Throws `EngineRefNotFound` or `EngineCredentialField` before doing anything. */

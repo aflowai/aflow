@@ -7,20 +7,22 @@
  * use each, what a profile's posture and origin rules allow, which run owns a
  * page, and that an action is never performed twice.
  */
-import { type BrowserProfile, normalizeBrowserHost } from '@aflow/schemas';
+import type { BrowserProfile } from '@aflow/schemas';
 
 import { type LocalAddressClassifier, machineAddresses } from './addresses.js';
 import { chromeMissingMessage, type ChromeDiscovery } from './chromeDiscovery.js';
 import type { ChromeLauncher, LaunchedChrome } from './chromeProcess.js';
-import {
-  type EgressProxy,
-  type ProxyRefusal,
-  type StartEgressProxy,
-  startEgressProxy,
-} from './egressProxy.js';
-import { BrowserDriverError } from './errors.js';
+import { type EgressProxy, type StartEgressProxy, startEgressProxy } from './egressProxy.js';
+import { BrowserDriverError, errorText } from './errors.js';
 import { boundEntries, boundText, PageObservations } from './observations.js';
 import { localDestinationRefusal, obviouslyLocalDestination } from './origins.js';
+import { applyPolicyChange } from './policyChange.js';
+import {
+  landedRefusal,
+  navigationFailure,
+  refusalError,
+  urlOrNothing,
+} from './refusalAttribution.js';
 import type {
   ActionResult,
   ActRequest,
@@ -86,22 +88,6 @@ interface RunningProfile {
 
 function listed(ids: readonly string[]): string {
   return ids.length > 0 ? ids.map((id) => `\`${id}\``).join(', ') : 'none';
-}
-
-function message(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function hostOf(url: URL): string {
-  return normalizeBrowserHost(url.hostname);
-}
-
-function urlOrNothing(raw: string): URL | undefined {
-  try {
-    return new URL(raw);
-  } catch {
-    return undefined;
-  }
 }
 
 function pageEvents(observations: PageObservations): PageEvents {
@@ -202,7 +188,7 @@ export class BrowserDriver {
       throw new BrowserDriverError(
         'navigation_failed',
         `${request.url} did not load: the browser for profile \`${profile.id}\` could not open ` +
-          `a page (${message(error)}). It may have been stopping; opening the address again ` +
+          `a page (${errorText(error)}). It may have been stopping; opening the address again ` +
           'starts it afresh.',
       );
     }
@@ -211,8 +197,8 @@ export class BrowserDriver {
       await page.navigate({ kind: 'url', url: request.url });
     } catch (error) {
       await page.close().catch(() => undefined);
-      throw this.navigationFailure(
-        running,
+      throw navigationFailure(
+        running.proxy,
         profile,
         asked,
         startedAt,
@@ -259,8 +245,8 @@ export class BrowserDriver {
     try {
       moved = await held.page.navigate(request.to);
     } catch (error) {
-      throw this.navigationFailure(
-        running,
+      throw navigationFailure(
+        running.proxy,
         profile,
         asked,
         startedAt,
@@ -308,7 +294,7 @@ export class BrowserDriver {
       throw new BrowserDriverError(
         'action_failed',
         `Which frame \`${request.ref}\` belongs to could not be read, so it was not acted on: ` +
-          message(error),
+          errorText(error),
         { ref: request.ref },
       );
     }
@@ -325,7 +311,7 @@ export class BrowserDriver {
       }
       throw new BrowserDriverError(
         'action_failed',
-        `The ${request.action.kind} on \`${request.ref}\` did not complete: ${message(error)}`,
+        `The ${request.action.kind} on \`${request.ref}\` did not complete: ${errorText(error)}`,
         { ref: request.ref },
       );
     }
@@ -353,9 +339,8 @@ export class BrowserDriver {
   // Looking
   // -------------------------------------------------------------------------
 
-  async snapshot(owner: PageOwner, pageId: string, ref?: string): Promise<SnapshotResult> {
-    const held = this.pages.get(owner, pageId);
-    const running = this.runningFor(held);
+  async snapshot(scope: RunScope, pageId: string, ref?: string): Promise<SnapshotResult> {
+    const { held, running } = await this.pageInProfile(scope, pageId);
     const snap = await this.read(held, async () => await held.page.snapshot());
     const title = await this.read(held, async () => await held.page.title());
     held.lastSnapshot = snap;
@@ -370,13 +355,13 @@ export class BrowserDriver {
   }
 
   async readPage(
-    owner: PageOwner,
+    scope: RunScope,
     pageId: string,
     what: ReadResult['what'],
     contains?: string,
   ): Promise<ReadResult> {
-    const held = this.pages.get(owner, pageId);
-    this.touch(held, this.runningFor(held));
+    const { held, running } = await this.pageInProfile(scope, pageId);
+    this.touch(held, running);
     const url = held.page.url();
     if (what === 'text') {
       const text = await this.read(held, async () => await held.page.text());
@@ -410,9 +395,17 @@ export class BrowserDriver {
     };
   }
 
-  /** The run's open pages. Listing touches none of them. */
-  async list(owner: PageOwner): Promise<ListedPage[]> {
-    const pages = this.pages.list(owner);
+  /**
+   * The run's open pages in profiles its space may still use. A page in one it
+   * may not is refused by every operation but close, so it is not offered.
+   * Listing touches none of them.
+   */
+  async list(scope: RunScope): Promise<ListedPage[]> {
+    const policy = await this.deps.loadPolicy();
+    const pages = this.pages.list(scope).filter((held) => {
+      const profile = policy.browsers.get(held.profileId);
+      return profile !== undefined && profileOpenToSpace(profile, scope.spaceId);
+    });
     return await Promise.all(
       pages.map(async (held) => ({
         pageId: held.pageId,
@@ -458,7 +451,7 @@ export class BrowserDriver {
           throw new BrowserDriverError(
             'observation_failed',
             `The browser for profile \`${profile.id}\` is running but did not say which sites ` +
-              `it holds cookies for: ${message(error)}`,
+              `it holds cookies for: ${errorText(error)}`,
           );
         }
         return { ...base, running: true, sites };
@@ -501,22 +494,34 @@ export class BrowserDriver {
       if (now - running.state.lastActivityAt < running.state.profile.idleMinutes * MINUTE_MS) {
         continue;
       }
-      // Gone from both maps before it has exited, so the next open starts a
-      // fresh browser rather than being handed this one.
-      this.running.delete(profileId);
-      this.starting.delete(profileId);
-      running.chrome.stop();
+      this.stopBrowser(profileId);
       stoppedProfiles += 1;
     }
     return { closedPages, stoppedProfiles };
   }
 
-  /** The machine's policy changed: what a running browser's proxy refuses follows it at once. */
-  policyChanged(policy: BrowserPolicy): void {
-    for (const [profileId, running] of this.running) {
-      const profile = policy.browsers.get(profileId);
-      if (profile !== undefined) running.state.profile = profile;
-    }
+  /** The machine's policy changed: running browsers and their pages follow it at once. */
+  async policyChanged(policy: BrowserPolicy): Promise<void> {
+    await applyPolicyChange(
+      {
+        pages: this.pages,
+        running: this.running,
+        stop: (id) => {
+          this.stopBrowser(id);
+        },
+      },
+      policy.browsers,
+    );
+  }
+
+  private stopBrowser(profileId: string): void {
+    const running = this.running.get(profileId);
+    if (running === undefined) return;
+    // Gone from both maps before it has exited, so the next open starts a
+    // fresh browser rather than being handed this one.
+    this.running.delete(profileId);
+    this.starting.delete(profileId);
+    running.chrome.stop();
   }
 
   // -------------------------------------------------------------------------
@@ -559,7 +564,7 @@ export class BrowserDriver {
     } catch (error) {
       throw new BrowserDriverError(
         'observation_failed',
-        `Page \`${held.pageId}\` could not be read: ${message(error)}`,
+        `Page \`${held.pageId}\` could not be read: ${errorText(error)}`,
         { pageId: held.pageId },
       );
     }
@@ -642,23 +647,6 @@ export class BrowserDriver {
     );
   }
 
-  private refusalError(profile: BrowserProfile, refusal: ProxyRefusal): BrowserDriverError {
-    if (refusal.kind === 'local') {
-      return new BrowserDriverError(
-        'appliance_origin',
-        localDestinationRefusal(profile.id, refusal.reason, 'connecting'),
-        { host: refusal.host },
-      );
-    }
-    return new BrowserDriverError(
-      'origin_denied',
-      `Browser profile \`${profile.id}\` does not connect to ${refusal.host}: ${refusal.reason}. ` +
-        'Rules are set on the machine.',
-      { host: refusal.host },
-    );
-  }
-
-  /** A page that landed on a host the proxy refused — Chrome shows a plain-http refusal as a page. */
   private assertLanded(
     running: RunningProfile,
     profile: BrowserProfile,
@@ -669,31 +657,10 @@ export class BrowserDriver {
     if (landed === undefined || (landed.protocol !== 'http:' && landed.protocol !== 'https:')) {
       return;
     }
-    const refused = running.proxy
-      .refusalsSince(since)
-      .find((refusal) => refusal.host === hostOf(landed));
-    if (refused !== undefined) throw this.refusalError(profile, refused);
+    const refused = landedRefusal(running.proxy, landed, since);
+    if (refused !== undefined) throw refusalError(profile, refused);
     this.refuseObviouslyLocal(profile, landed);
     assertNavigationAllowed(profile, landed);
-  }
-
-  private navigationFailure(
-    running: RunningProfile,
-    profile: BrowserProfile,
-    asked: URL | undefined,
-    since: number,
-    what: string,
-    error: unknown,
-  ): BrowserDriverError {
-    const refusals = running.proxy.refusalsSince(since);
-    // The address asked for first; past that, a redirect's destination is a
-    // host nobody named, and the refusal during this navigation is the cause.
-    const refused =
-      (asked !== undefined
-        ? refusals.find((refusal) => refusal.host === hostOf(asked))
-        : undefined) ?? refusals[0];
-    if (refused !== undefined) return this.refusalError(profile, refused);
-    return new BrowserDriverError('navigation_failed', `${what}: ${message(error)}`);
   }
 
   private resolveProfile(
@@ -786,7 +753,7 @@ export class BrowserDriver {
       throw new BrowserDriverError(
         'launch_failed',
         `The browser for profile \`${profile.id}\` started but could not be attached to: ` +
-          message(error),
+          errorText(error),
       );
     }
     const entry: RunningProfile = { browser, chrome, proxy, state };
