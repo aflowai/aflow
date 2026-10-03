@@ -7,10 +7,12 @@ import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { BROWSER_REQUEST_POLL_MS, followBrowserRequests } from '../browser/requestPoll.js';
 import { EXECUTOR_CLAIM_TIMEOUT_MS, serveBrowserRequests } from '../browser/windowRequests.js';
+
+const ANSWER_DEADLINE_MS = 5_000;
 
 const quiet = {
   debug: () => undefined,
@@ -76,7 +78,14 @@ describe('browser requests no watch announced', () => {
       () => undefined,
     );
     followBrowserRequests(server, () => true, quiet);
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(await readdir(dir)).toEqual(['browser-result-early.json']);
+    // Served without being awaited — a sign-in sitting lasts as long as the
+    // operator takes — and answered through a synced write, so it is waited
+    // for against a deadline rather than a fixed pause a loaded machine misses.
+    await vi.waitFor(
+      async () => {
+        expect(await readdir(dir)).toEqual(['browser-result-early.json']);
+      },
+      { timeout: ANSWER_DEADLINE_MS, interval: 20 },
+    );
   });
 });

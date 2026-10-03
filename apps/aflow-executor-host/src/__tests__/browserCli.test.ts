@@ -8,7 +8,7 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   type BrowserCliDeps,
@@ -367,9 +367,14 @@ describe('asking the running executor', () => {
       }),
     );
     await server.check();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // Served without being awaited, and answered through a synced write.
+    await vi.waitFor(
+      async () => {
+        expect(await readdir(dir)).toEqual(['browser-result-left.json']);
+      },
+      { timeout: 5_000, interval: 20 },
+    );
     expect(answered).toBe(0);
-    expect(await readdir(dir)).toEqual(['browser-result-left.json']);
     const result = JSON.parse(
       await readFile(join(dir, 'browser-result-left.json'), 'utf8'),
     ) as Record<string, unknown>;
