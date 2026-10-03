@@ -28,7 +28,11 @@ const PAGE = [
 
 describe('the outline', () => {
   it('keeps interactive elements and headings, in document order, with their references', () => {
-    const outline = buildOutline({ text: PAGE, maskedRefs: new Set(['e15']) });
+    const outline = buildOutline({
+      text: PAGE,
+      maskedRefs: new Set(['e15']),
+      holdsCredentialField: true,
+    });
     expect(outline.text.split('\n')).toEqual([
       '- link "Home" [ref=e3] [url=https://example.com/]',
       '- link "Docs" [ref=e7] [url=/docs]',
@@ -43,7 +47,11 @@ describe('the outline', () => {
   });
 
   it('never carries the value of a password field', () => {
-    const outline = buildOutline({ text: PAGE, maskedRefs: new Set(['e15']) });
+    const outline = buildOutline({
+      text: PAGE,
+      maskedRefs: new Set(['e15']),
+      holdsCredentialField: true,
+    });
     expect(outline.text).not.toContain('correct-horse');
   });
 
@@ -56,7 +64,11 @@ describe('the outline', () => {
         lines.push(`  - heading "Section ${String(i)}" [level=2] [ref=h${String(i)}]`);
       if (i % 25 === 0) lines.push(`  - button "More ${String(i)}" [ref=b${String(i)}]`);
     }
-    const outline = buildOutline({ text: lines.join('\n'), maskedRefs: new Set() });
+    const outline = buildOutline({
+      text: lines.join('\n'),
+      maskedRefs: new Set(),
+      holdsCredentialField: false,
+    });
 
     expect(encodedLength(outline.text)).toBeLessThanOrEqual(BROWSER_OUTLINE_DEFAULT_CHARS);
     expect(outline.census).toBeDefined();
@@ -84,7 +96,7 @@ describe('the outline', () => {
       (_, i) => `- link "Item ${String(i)}" [ref=l${String(i)}]`,
     );
     const outline = buildOutline(
-      { text: big.join('\n'), maskedRefs: new Set() },
+      { text: big.join('\n'), maskedRefs: new Set(), holdsCredentialField: false },
       BROWSER_MIN_CHARS,
     );
     expect(encodedLength(outline.text)).toBeLessThanOrEqual(BROWSER_MIN_CHARS);

@@ -2,11 +2,15 @@
  * The operator at the profile's window: a run's page handed over, and the
  * sign-in sitting with no run involved.
  *
- * A hand-off is over when the page has left the site it was handed over on
- * and stopped changing — a sign-in that worked redirects away from the
- * sign-in page — when the operator presses Done on its Action Center item,
- * when they close the window, or at the profile's deadline. The sitting is
- * over when the window is closed.
+ * A hand-off is over when the page is no longer the one it was handed over
+ * on, holds no field that takes a credential, is not under a sign-in path and
+ * has stopped changing — a sign-in that worked leaves the sign-in pages, most
+ * often for another page of the same site — when the operator presses Done on
+ * its Action Center item, when they close the window, or at the profile's
+ * deadline. A page waiting for approval on another device that shows no field
+ * and sits under no sign-in path looks exactly like a signed-in page, and
+ * completes as one; Done and the window's closing are what end those
+ * faithfully. The sitting is over when the window is closed.
  */
 import {
   type BrowserHandoffOutcome,
@@ -30,13 +34,15 @@ import type { ProfileBrowsers, RunningProfile } from './profileBrowsers.js';
 import { type BrowserPolicy, chromeExecutable, resolveProfile } from './profiles.js';
 import { navigationFailure, urlOrNothing } from './refusalAttribution.js';
 import type { SettleClock } from './settle.js';
+import { onSignInPath } from './signInPath.js';
+import { SIGN_IN_START_PAGE } from './signInStartPage.js';
 import type { EnginePage } from './types.js';
 
 const MINUTE_MS = 60_000;
 
 /** How often the window is looked at while the operator has it. */
 export const WINDOW_POLL_MS = 500;
-/** How long a page that left the hand-off's site must stay unchanged to count as done. */
+/** How long the window's page, once moved on from the one handed over, must stay unchanged to count as done. */
 export const HANDOFF_QUIET_MS = 2_000;
 /** The longest a sign-in sitting keeps the window before handing the profile back to runs. */
 export const SIGN_IN_SITTING_MAX_MS = 60 * MINUTE_MS;
@@ -53,8 +59,8 @@ export interface HandoffWait {
   readonly reason: BrowserHandoffReason;
   /** The run's words for the operator. */
   readonly message: string;
-  /** The origin the page was on when the hand-off began. */
-  readonly startOrigin: string;
+  /** The page the hand-off began on, as `pageOf` gives it. */
+  readonly startPage: string;
   readonly deadlineAt: number;
   readonly clock: SettleClock;
   /** Settles when the operator presses Done on the hand-off's Action Center item. */
@@ -63,9 +69,11 @@ export interface HandoffWait {
 
 export type WaitForOperator = (wait: HandoffWait) => Promise<BrowserHandoffOutcome>;
 
-export function originOf(address: string): string {
+/** An address without its query and fragment: what stays put while one page reloads or redraws. */
+export function pageOf(address: string): string {
   try {
-    return new URL(address).origin;
+    const url = new URL(address);
+    return `${url.origin}${url.pathname}`;
   } catch {
     return address;
   }
@@ -73,7 +81,7 @@ export function originOf(address: string): string {
 
 export const waitInWindow: WaitForOperator = async ({
   window,
-  startOrigin,
+  startPage,
   deadlineAt,
   clock,
   operatorDone,
@@ -89,15 +97,20 @@ export const waitInWindow: WaitForOperator = async ({
     if (window.closed()) return 'window_closed';
     if (clock.now() >= deadlineAt) return 'timed_out';
     const url = window.page.url();
-    if (originOf(url) === startOrigin) {
+    if (pageOf(url) === startPage) {
       lastSeen = undefined;
     } else {
       const snapshot = await window.page.snapshot().catch(() => undefined);
       const seen = `${url}\n${snapshot?.text ?? ''}`;
+      // A second step of a sign-in — a one-time code, a password on its own
+      // page, a wait for approval on another device — has moved on from the
+      // first and is still not done.
+      const stillSigningIn =
+        snapshot === undefined || snapshot.holdsCredentialField || onSignInPath(url);
       if (seen !== lastSeen) {
         lastSeen = seen;
         unchangedSince = clock.now();
-      } else if (snapshot !== undefined && clock.now() - unchangedSince >= HANDOFF_QUIET_MS) {
+      } else if (!stillSigningIn && clock.now() - unchangedSince >= HANDOFF_QUIET_MS) {
         return 'completed';
       }
     }
@@ -168,18 +181,14 @@ export class OperatorWindows {
         { pageId: held.pageId },
       );
     }
+    browsers.refuseWhileShown(profile.id);
     const startedAt = clock.now();
-    const shown = await browsers.showWindow(profile, executable);
-    let outcome: BrowserHandoffOutcome;
-    let page: EnginePage = held.page;
-    try {
-      if (shown.restarted) {
-        page = await shown.running.browser.firstPage(new PageObservations(clock.now).events());
-        await page.navigate({ kind: 'url', url: address });
-      }
-      const waiting = page;
-      const deadlineAt = startedAt + profile.handoffMinutes * MINUTE_MS;
-      const posting = await this.host.handoffs.post({
+    const deadlineAt = startedAt + profile.handoffMinutes * MINUTE_MS;
+    // Posted before the window is shown: a window nobody is told about is one
+    // only its closing or the deadline ends, and showing it can restart the
+    // profile's browser, closing every other run's pages for nothing.
+    const posting = await this.host.handoffs
+      .post({
         tenantId: request.tenantId,
         ...(request.spaceId !== undefined ? { spaceId: request.spaceId } : {}),
         runId: request.runId,
@@ -189,32 +198,48 @@ export class OperatorWindows {
         site,
         reason: request.reason,
         message: request.message,
-        waitMs: deadlineAt - clock.now(),
+        waitMs: deadlineAt - startedAt,
+      })
+      .catch((error: unknown) => {
+        throw error instanceof BrowserDriverError
+          ? new BrowserDriverError(error.kind, error.message, { pageId: held.pageId })
+          : error;
       });
+    let outcome: BrowserHandoffOutcome;
+    let page: EnginePage = held.page;
+    let shown: Awaited<ReturnType<ProfileBrowsers['showWindow']>>;
+    try {
+      shown = await browsers.showWindow(profile, executable);
+      const running = shown.running;
       try {
+        if (shown.restarted) {
+          page = await running.browser.firstPage(new PageObservations(clock.now).events());
+          await page.navigate({ kind: 'url', url: address });
+        }
+        const waiting = page;
         outcome = await this.host.waitForOperator({
           window: {
             page: waiting,
-            closed: () => waiting.isClosed() || browsers.get(profile.id) !== shown.running,
+            closed: () => waiting.isClosed() || browsers.get(profile.id) !== running,
           },
           reason: request.reason,
           message: request.message,
-          startOrigin: originOf(address),
+          startPage: pageOf(address),
           deadlineAt,
           clock,
           operatorDone: posting.done,
         });
-      } finally {
-        await posting.close();
+      } catch (error) {
+        await this.handBack(profile, executable, shown.restarted);
+        throw new BrowserDriverError(
+          'window_failed',
+          `The window for profile \`${profile.id}\` could not be shown at ${pageAddress(held)}: ` +
+            `${errorText(error)}. The profile is back in use by runs.`,
+          { pageId: held.pageId },
+        );
       }
-    } catch (error) {
-      await this.handBack(profile, executable, shown.restarted);
-      throw new BrowserDriverError(
-        'window_failed',
-        `The window for profile \`${profile.id}\` could not be shown at ${pageAddress(held)}: ` +
-          `${errorText(error)}. The profile is back in use by runs.`,
-        { pageId: held.pageId },
-      );
+    } finally {
+      await posting.close();
     }
     const landedAt = page.url();
     const headless = await browsers.returnWindow(profile, executable, shown.restarted);
@@ -244,9 +269,9 @@ export class OperatorWindows {
   }
 
   /**
-   * The operator's sign-in sitting: the profile's window, open until they close
-   * it, then the sites the profile holds a session for. Any profile on the
-   * machine; no run is involved.
+   * The operator's sign-in sitting: the profile's window, on a start page that
+   * says whose browser it is, open until they close it, then the sites the
+   * profile holds a session for. Any profile on the machine; no run is involved.
    */
   async signIn(profileId: string, options: SignInOptions = {}): Promise<SignInResult> {
     const { browsers, clock } = this.host;
@@ -264,6 +289,8 @@ export class OperatorWindows {
       const page = shown.restarted
         ? await shown.running.browser.firstPage(events)
         : await shown.running.browser.newPage(events);
+      // A blank window is still one the operator can sign in from.
+      await page.navigate({ kind: 'url', url: SIGN_IN_START_PAGE }).catch(() => undefined);
       const ended = (): boolean => browsers.get(profile.id) !== shown.running;
       outcome = await waitForWindowClosed(
         shown.restarted

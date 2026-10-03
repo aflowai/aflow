@@ -5,6 +5,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 
+import { MAX_TEXTBOXES_CHECKED, readCredentialFields } from '../browser/credentialFields.js';
 import { createPlaywrightEngine } from '../browser/engine.js';
 import { EngineCredentialField, EngineFieldUnchecked, type EnginePage } from '../browser/types.js';
 
@@ -45,6 +46,8 @@ const detachedInput = {
 };
 
 let underRef: typeof passwordInput = passwordInput;
+const SIGNED_IN = 'https://example.com/';
+let pageAddress = SIGNED_IN;
 
 const page = {
   locator: (selector: string) => {
@@ -57,7 +60,7 @@ const page = {
   },
   ariaSnapshot: () => Promise.resolve('- textbox "Passphrase" [ref=e5]'),
   waitForLoadState: () => Promise.resolve(),
-  url: () => 'https://example.com/',
+  url: () => pageAddress,
   on: () => undefined,
   off: () => undefined,
 };
@@ -127,6 +130,80 @@ describe('the engine after an action that starts no navigation', () => {
     await enginePage.act('e5', { kind: 'click' });
     expect(Date.now() - startedAt).toBeLessThan(2_000);
     expect(clicks.at(-1)).toMatchObject({ noWaitAfter: true });
+  });
+});
+
+describe('the engine reading a page’s text fields', () => {
+  const field = (properties: Record<string, unknown>): typeof passwordInput => ({
+    ...passwordInput,
+    evaluate: <R>(fn: (element: unknown) => R): Promise<R> =>
+      Promise.resolve(fn({ tagName: 'INPUT', maxLength: -1, ...properties })),
+  });
+
+  const SIGN_IN = 'https://example.com/two-factor/code';
+  const shortNumeric = { type: 'tel', inputMode: 'numeric', maxLength: 6 };
+
+  it.each([
+    ['a password field', SIGNED_IN, { type: 'password' }, true, true],
+    [
+      'a one-time-code field',
+      SIGNED_IN,
+      { type: 'text', autocomplete: 'one-time-code' },
+      false,
+      true,
+    ],
+    [
+      'a passkey field',
+      SIGNED_IN,
+      { type: 'text', autocomplete: 'username webauthn' },
+      false,
+      true,
+    ],
+    ['a short numeric field on a sign-in path', SIGN_IN, shortNumeric, false, true],
+    ['a short numeric field off a sign-in path', SIGNED_IN, shortNumeric, false, false],
+    [
+      'a long numeric field',
+      SIGN_IN,
+      { type: 'text', inputMode: 'numeric', maxLength: 20 },
+      false,
+      false,
+    ],
+    ['a search field', SIGNED_IN, { type: 'search', autocomplete: 'off' }, false, false],
+  ])('reads %s', async (_name, address, properties, masked, credential) => {
+    underRef = field(properties);
+    pageAddress = address;
+    const read = await (await openPage()).snapshot();
+    underRef = passwordInput;
+    pageAddress = SIGNED_IN;
+    expect(read.maskedRefs.has('e5')).toBe(masked);
+    expect(read.holdsCredentialField).toBe(credential);
+  });
+
+  it('masks the fields past the bound, and does not hold a hand-off open for them', async () => {
+    const text = Array.from(
+      { length: MAX_TEXTBOXES_CHECKED + 1 },
+      (_, index) => `- textbox "Field ${String(index)}" [ref=f${String(index)}]`,
+    ).join('\n');
+    const plain = {
+      tagName: 'INPUT',
+      type: 'text',
+      autocomplete: '',
+      inputMode: '',
+      maxLength: -1,
+    };
+
+    const read = await readCredentialFields(text, SIGN_IN, () => Promise.resolve(plain));
+
+    expect([...read.maskedRefs]).toEqual([`f${String(MAX_TEXTBOXES_CHECKED)}`]);
+    expect(read.holdsCredentialField).toBe(false);
+  });
+
+  it('takes a field it could not read as one that might take a credential', async () => {
+    underRef = detachedInput;
+    const read = await (await openPage()).snapshot();
+    underRef = passwordInput;
+    expect(read.maskedRefs.has('e5')).toBe(true);
+    expect(read.holdsCredentialField).toBe(true);
   });
 });
 
