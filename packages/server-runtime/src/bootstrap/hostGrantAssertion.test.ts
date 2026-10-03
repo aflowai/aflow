@@ -1,12 +1,14 @@
 /**
  * Contract: the server's per-start assertion brings the host grant up to the
- * running code's and never touches the host password; the full start creates
- * a missing identity with the password it has just read, and otherwise does
- * the same as the server's start.
+ * running code's and never touches the host password; the full start applies
+ * the whole identity with the password it has just read, whether or not the
+ * identity exists.
  *
  * The environment a server restarts with was read when its supervisor started,
  * so after a revocation the host password in it is the revoked one. An
  * assertion that set it put the revoked credential back on the next restart.
+ * A full start reads `instance.env` fresh, so its password is the durable one,
+ * and applying it is what retires a live password that drifted from it.
  *
  * The recorded call runs everywhere; the live half, which proves what Redis
  * does with that call, is skipped without a reachable Redis.
@@ -21,13 +23,14 @@ import {
   redisReachable,
 } from './__fixtures__/hostGrantRedis.js';
 import {
+  applyHostIdentityToRunningServer,
   assertHostGrantOnRunningServer,
-  ensureHostIdentityOnRunningServer,
   renderRedisAcl,
 } from './redisAcl.js';
 
 const ROTATED_STAND_IN = 'rotated-stand-in';
 const FRESH_STAND_IN = 'fresh-stand-in';
+const REVOKED_STAND_IN = 'revoked-stand-in';
 const RETIRED_PATTERN = '~aflow:retired:*';
 
 /** The grant as the renderer writes it, without the identity and its credential. */
@@ -93,37 +96,17 @@ describe('the per-start host grant assertion, as sent', () => {
 describe('the full start’s host identity, as sent', () => {
   const freshlyRead = { defaultPassword: 'd', hostPassword: FRESH_STAND_IN };
 
-  it('creates a missing identity with the password the start just read', async () => {
-    const { redis, calls } = recordingRedis(false);
-
-    expect(await ensureHostIdentityOnRunningServer(redis, freshlyRead)).toEqual({
-      outcome: 'created',
-    });
-
-    expect(calls[0]).toEqual(['ACL', 'GETUSER', 'hostexec']);
-    expect(calls[1]).toEqual([
-      'ACL',
-      'SETUSER',
-      'hostexec',
-      'resetpass',
-      'on',
-      `>${FRESH_STAND_IN}`,
-      ...renderedGrant,
-    ]);
-    expect(calls).toHaveLength(2);
-  });
-
-  it('brings an existing identity’s grant up to date and sends no password', async () => {
+  it('replaces an existing user’s password with the one just read, where the restart in place sends none', async () => {
     const { redis, calls } = recordingRedis(true);
 
-    expect(await ensureHostIdentityOnRunningServer(redis, freshlyRead)).toEqual({
-      outcome: 'asserted',
-    });
+    await assertHostGrantOnRunningServer(redis);
+    const restartInPlace = calls.splice(0);
+    await applyHostIdentityToRunningServer(redis, freshlyRead);
 
-    const setusers = calls.filter((c) => c[1] === 'SETUSER');
-    expect(setusers).toHaveLength(1);
-    expect(setusers[0]?.slice(7)).toEqual(renderedGrant);
-    expect(setusers.flat().filter(touchesPassword)).toEqual([]);
+    expect(restartInPlace.flat().filter(touchesPassword)).toEqual([]);
+    expect(calls).toEqual([
+      ['ACL', 'SETUSER', 'hostexec', 'resetpass', 'on', `>${FRESH_STAND_IN}`, ...renderedGrant],
+    ]);
   });
 });
 
@@ -221,9 +204,7 @@ describe.skipIf(!AVAILABLE)('the full start’s host identity, on a live Redis',
     if (admin === null) return;
     await admin.call('ACL', 'DELUSER', FULL_START_USER);
 
-    expect(await ensureHostIdentityOnRunningServer(admin, freshlyRead, FULL_START_USER)).toEqual({
-      outcome: 'created',
-    });
+    await applyHostIdentityToRunningServer(admin, freshlyRead, FULL_START_USER);
 
     expect(await authenticates(FRESH_STAND_IN, FULL_START_USER)).toBe(true);
     const { keys, channels } = await liveRules(FULL_START_USER);
@@ -232,20 +213,26 @@ describe.skipIf(!AVAILABLE)('the full start’s host identity, on a live Redis',
     );
   });
 
-  it('leaves an existing identity’s password and brings its grant up to date', async () => {
+  it('corrects a live password that drifted from instance.env, which the restart in place leaves', async () => {
     if (admin === null) return;
+    // A revocation rotated instance.env and then failed at ACL SETUSER: the
+    // live user still answers to the credential it meant to revoke.
     await applyHostGrant(admin, FULL_START_USER, (rules) => [
       ...rules.filter((rule) => rule !== '~aflow:jobs:browser'),
       RETIRED_PATTERN,
     ]);
-    await admin.call('ACL', 'SETUSER', FULL_START_USER, 'resetpass', `>${ROTATED_STAND_IN}`);
+    await admin.call('ACL', 'SETUSER', FULL_START_USER, 'resetpass', `>${REVOKED_STAND_IN}`);
 
-    expect(await ensureHostIdentityOnRunningServer(admin, freshlyRead, FULL_START_USER)).toEqual({
+    expect(await assertHostGrantOnRunningServer(admin, FULL_START_USER)).toEqual({
       outcome: 'asserted',
     });
-
-    expect(await authenticates(ROTATED_STAND_IN, FULL_START_USER)).toBe(true);
+    expect(await authenticates(REVOKED_STAND_IN, FULL_START_USER)).toBe(true);
     expect(await authenticates(FRESH_STAND_IN, FULL_START_USER)).toBe(false);
+
+    await applyHostIdentityToRunningServer(admin, freshlyRead, FULL_START_USER);
+
+    expect(await authenticates(FRESH_STAND_IN, FULL_START_USER)).toBe(true);
+    expect(await authenticates(REVOKED_STAND_IN, FULL_START_USER)).toBe(false);
     const { keys } = await liveRules(FULL_START_USER);
     expect(keys).toContain('~aflow:jobs:browser');
     expect(keys).not.toContain(RETIRED_PATTERN);

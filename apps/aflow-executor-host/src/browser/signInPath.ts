@@ -7,8 +7,6 @@ export const SIGN_IN_PATH_SEGMENTS: ReadonlySet<string> = new Set([
   'login',
   'signin',
   'sign-in',
-  'session',
-  'sessions',
   'two-factor',
   '2fa',
   'mfa',

@@ -62,6 +62,7 @@ describe('a sign-in path', () => {
     'https://accounts.example.com/v3/signin/challenge/pwd',
     'https://example.com/account/2fa',
     'https://example.com/MFA/Verify',
+    'https://accounts.example.com/sessions/two-factor/app',
   ])('is %s', (address) => {
     expect(onSignInPath(address)).toBe(true);
   });
@@ -70,6 +71,8 @@ describe('a sign-in path', () => {
     'https://accounts.example.com/',
     'https://mail.example.com/inbox',
     'https://example.com/settings/security',
+    'https://example.com/settings/sessions',
+    'https://example.com/session',
     'https://example.com/blog/how-we-sign-in-faster',
     'about:blank',
   ])('is not %s', (address) => {

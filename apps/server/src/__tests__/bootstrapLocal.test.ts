@@ -13,12 +13,9 @@ const boot = vi.hoisted(() => ({
   redis: { call: vi.fn() },
   closed: vi.fn(() => Promise.resolve()),
   aclOutcome: vi.fn<() => Promise<{ outcome: 'loaded' } | { outcome: 'skipped'; reason: null }>>(),
-  ensured:
+  applied:
     vi.fn<
-      (
-        redis: unknown,
-        input: { defaultPassword: string; hostPassword: string },
-      ) => Promise<{ outcome: 'created' | 'asserted' }>
+      (redis: unknown, input: { defaultPassword: string; hostPassword: string }) => Promise<void>
     >(),
   instanceValues: {} as Record<string, string>,
 }));
@@ -44,7 +41,7 @@ vi.mock('@aflow/server-runtime/bootstrap', () => ({
     }),
   findLocalAuthConfigViolations: () => [],
   loadRedisAclIntoRunningServer: boot.aclOutcome,
-  ensureHostIdentityOnRunningServer: boot.ensured,
+  applyHostIdentityToRunningServer: boot.applied,
   localOwner: () => ({ userId: 'owner' }),
 }));
 
@@ -64,7 +61,7 @@ beforeEach(() => {
   vi.stubEnv('PHOENIX_HOST_REDIS_PASSWORD', STALE_STAND_IN);
   boot.instanceValues = { PHOENIX_HOST_REDIS_PASSWORD: FRESH_STAND_IN, REDIS_PASSWORD: 'd' };
   boot.aclOutcome.mockResolvedValue({ outcome: 'skipped', reason: null });
-  boot.ensured.mockResolvedValue({ outcome: 'created' });
+  boot.applied.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -74,43 +71,33 @@ afterEach(() => {
 });
 
 describe('the full start, on a Redis without an ACL file', () => {
-  it('establishes the host identity with the password instance.env holds now', async () => {
+  it('applies the host identity with the password instance.env holds now', async () => {
     await fullStart();
 
-    expect(boot.ensured).toHaveBeenCalledTimes(1);
-    expect(boot.ensured.mock.calls[0]?.[0]).toBe(boot.redis);
-    expect(boot.ensured.mock.calls[0]?.[1].hostPassword).toBe(FRESH_STAND_IN);
+    expect(boot.applied).toHaveBeenCalledTimes(1);
+    expect(boot.applied.mock.calls[0]?.[0]).toBe(boot.redis);
+    expect(boot.applied.mock.calls[0]?.[1].hostPassword).toBe(FRESH_STAND_IN);
     expect(console.log).toHaveBeenCalledWith(
-      '[bootstrap] created the host identity on the running Redis',
+      '[bootstrap] applied the host identity to the running Redis',
     );
   });
 
-  it('says it brought the grant up to date when the identity was already there', async () => {
-    boot.ensured.mockResolvedValueOnce({ outcome: 'asserted' });
-
-    await fullStart();
-
-    expect(console.log).toHaveBeenCalledWith(
-      '[bootstrap] asserted the host grant on the running Redis',
-    );
-  });
-
-  it('establishes nothing where the instance has no host lane', async () => {
+  it('applies nothing where the instance has no host lane', async () => {
     boot.instanceValues = { REDIS_PASSWORD: 'd' };
     vi.stubEnv('PHOENIX_HOST_REDIS_PASSWORD', '');
 
     await fullStart();
 
-    expect(boot.ensured).not.toHaveBeenCalled();
+    expect(boot.applied).not.toHaveBeenCalled();
   });
 
   it('finishes the start when Redis refuses, and says what it could not do', async () => {
-    boot.ensured.mockRejectedValueOnce(new Error('NOPERM this user has no permissions'));
+    boot.applied.mockRejectedValueOnce(new Error('NOPERM this user has no permissions'));
 
     await fullStart();
 
     expect(console.warn).toHaveBeenCalledWith(
-      expect.stringContaining('could not establish the host identity'),
+      expect.stringContaining('could not apply the host identity'),
     );
   });
 });
@@ -121,6 +108,6 @@ describe('the full start, on a Redis that loaded its ACL file', () => {
 
     await fullStart();
 
-    expect(boot.ensured).not.toHaveBeenCalled();
+    expect(boot.applied).not.toHaveBeenCalled();
   });
 });

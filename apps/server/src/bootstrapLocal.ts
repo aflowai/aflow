@@ -14,7 +14,7 @@ import {
   ensureInstanceConfig,
   findLocalAuthConfigViolations,
   loadRedisAclIntoRunningServer,
-  ensureHostIdentityOnRunningServer,
+  applyHostIdentityToRunningServer,
   localOwner,
 } from '@aflow/server-runtime/bootstrap';
 import { closeRedisConnection, getRedisConnection } from '@aflow/redis';
@@ -22,27 +22,25 @@ import { closeRedisConnection, getRedisConnection } from '@aflow/redis';
 /**
  * A Redis started without an ACL file — the development Redis — holds the host
  * identity in memory only, so a Redis restart removes it. This full start is
- * the one start path that may set the host password: it has just read the
- * durable value from `instance.env`. The server restarting in place (`start.ts`)
- * holds whatever its supervisor captured, which after a revocation is the
- * revoked credential, so it asserts the grant and never the password.
+ * the one start path that sets the host password, and it sets it whether or
+ * not the identity exists: it has just read the durable value from
+ * `instance.env`, and applying it is what corrects a live password that drifted
+ * from it. The server restarting in place (`start.ts`) holds whatever its
+ * supervisor captured, which after a revocation is the revoked credential, so
+ * it asserts the grant and never the password.
  */
-async function ensureHostIdentity(values: Record<string, string | undefined>): Promise<void> {
+async function applyHostIdentity(values: Record<string, string | undefined>): Promise<void> {
   const hostPassword = values['PHOENIX_HOST_REDIS_PASSWORD']?.trim();
   if (hostPassword === undefined || hostPassword === '') return;
   try {
-    const { outcome } = await ensureHostIdentityOnRunningServer(getRedisConnection(), {
+    await applyHostIdentityToRunningServer(getRedisConnection(), {
       defaultPassword: values['REDIS_PASSWORD'] ?? '',
       hostPassword,
     });
-    console.log(
-      outcome === 'created'
-        ? '[bootstrap] created the host identity on the running Redis'
-        : '[bootstrap] asserted the host grant on the running Redis',
-    );
+    console.log('[bootstrap] applied the host identity to the running Redis');
   } catch (error) {
     console.warn(
-      `[bootstrap] could not establish the host identity on the running Redis: ${error instanceof Error ? error.message : String(error)}`,
+      `[bootstrap] could not apply the host identity to the running Redis: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
 }
@@ -123,7 +121,7 @@ async function main(): Promise<void> {
         `[bootstrap] the running Redis refused the ACL reload and keeps its previous grants: ${aclOutcome.reason}`,
       );
     }
-    if (aclOutcome.outcome === 'skipped') await ensureHostIdentity(instanceValues);
+    if (aclOutcome.outcome === 'skipped') await applyHostIdentity(instanceValues);
   } finally {
     await close();
     // The ACL reload above opens the shared connection, and a one-shot command

@@ -221,8 +221,12 @@ interface RedisCaller {
  * `ACL SETUSER` with `resetpass` replaces the password rather than adding one,
  * so a user that is missing is created with this credential and one that holds
  * another is moved to it. Pairing and revocation call this, because they are
- * what decide the credential; a full start calls it only through
- * `ensureHostIdentityOnRunningServer`, for an identity that is missing.
+ * what decide the credential. So does a full start, whether or not the user
+ * exists, because it has just read the credential they last wrote to
+ * `instance.env`: that is what puts back an identity a Redis restart removed,
+ * and what corrects a live password that drifted from the durable one — a
+ * revocation that rotated the file and then failed here leaves the revoked
+ * credential working until it does.
  */
 export async function applyHostIdentityToRunningServer(
   redis: RedisCaller,
@@ -234,28 +238,6 @@ export async function applyHostIdentityToRunningServer(
     .find((l) => l.startsWith(`user ${HOST_USER} `));
   if (line === undefined) throw new Error('Rendered ACL carries no host identity.');
   await redis.call('ACL', 'SETUSER', username, ...line.split(' ').slice(2));
-}
-
-/**
- * The full start's half: create the host identity when the running server has
- * none, otherwise bring its grant up to date and leave its password alone.
- *
- * A server started without an ACL file — the development Redis — holds the
- * identity in memory only, so a Redis restart removes it and nothing but this
- * or a pairing puts it back. Only a full start may call this, because only it
- * has just read the password from `instance.env`, the durable value a pairing
- * or revocation last wrote. A server restarted in place holds whatever its
- * supervisor captured, and asserts the grant alone.
- */
-export async function ensureHostIdentityOnRunningServer(
-  redis: RedisCaller,
-  input: RedisAclInput,
-  username: string = HOST_USER,
-): Promise<{ outcome: 'created' } | { outcome: 'asserted' }> {
-  const { outcome } = await assertHostGrantOnRunningServer(redis, username);
-  if (outcome === 'asserted') return { outcome };
-  await applyHostIdentityToRunningServer(redis, input, username);
-  return { outcome: 'created' };
 }
 
 /**

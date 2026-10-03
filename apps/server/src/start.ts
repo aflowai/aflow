@@ -32,8 +32,8 @@ type ServerLog = Awaited<ReturnType<typeof serve>>['log'];
  * The host password in this environment only says that a host lane is set up.
  * It is never applied here: it was read when the supervisor started, so after a
  * revocation it is the revoked one. The full start (`bootstrapLocal.ts`) is the
- * start path that may set it, and creates a missing identity with it, because
- * it has just read the durable value from `instance.env`.
+ * start path that sets it, whether or not the identity exists, because it has
+ * just read the durable value from `instance.env`.
  */
 async function assertHostGrant(log: ServerLog): Promise<void> {
   const hostLane = process.env['PHOENIX_HOST_REDIS_PASSWORD']?.trim();
