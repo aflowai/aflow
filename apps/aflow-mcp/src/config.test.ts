@@ -12,7 +12,7 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 
 import { loadConfig } from './config.js';
 
-const ENV_KEYS = ['NODE_ENV', 'PHOENIX_EDITION'] as const;
+const ENV_KEYS = ['NODE_ENV', 'PHOENIX_EDITION', 'MCP_HOST', 'HOST'] as const;
 let saved: Record<string, string | undefined>;
 
 beforeEach(() => {
@@ -64,5 +64,28 @@ describe('a browser preflight', () => {
     const config = configWith({ NODE_ENV: 'development', PHOENIX_EDITION: 'community-local' });
     expect(config.allowBrowserOrigins).toBe(true);
     expect(config.unauthenticatedFallback).toBe(false);
+  });
+});
+
+/**
+ * A session that picks up the local auth file is the owner, so the listener is
+ * what keeps the owner on this machine.
+ */
+describe('the listen host', () => {
+  it('is loopback when none is configured', () => {
+    expect(configWith({}).host).toBe('127.0.0.1');
+  });
+
+  it('is loopback when MCP_HOST is blank', () => {
+    expect(configWith({ MCP_HOST: '   ' }).host).toBe('127.0.0.1');
+  });
+
+  /** The shared `.env` sets HOST to every interface for the API server. */
+  it('ignores HOST', () => {
+    expect(configWith({ HOST: '0.0.0.0' }).host).toBe('127.0.0.1');
+  });
+
+  it('is MCP_HOST when one is configured', () => {
+    expect(configWith({ MCP_HOST: '0.0.0.0' }).host).toBe('0.0.0.0');
   });
 });

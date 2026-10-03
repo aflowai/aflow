@@ -7,6 +7,15 @@ export interface McpServerConfig {
   readonly apiUrl: string;
   /** MCP HTTP server port */
   readonly port: number;
+  /**
+   * The interface the HTTP server listens on: `MCP_HOST`, else loopback.
+   *
+   * A session that picks up the local auth file is the instance's owner, so
+   * listening on every interface hands the owner to anything on the operator's
+   * network that reaches the port. Not `HOST`: the shared `.env` sets that to
+   * every interface for the API server.
+   */
+  readonly host: string;
   /** Log level */
   readonly logLevel: 'debug' | 'info' | 'warn' | 'error';
   /**
@@ -49,6 +58,7 @@ export function loadConfig(): McpServerConfig {
   const localAuthJsonRaw = process.env['AFLOW_MCP_LOCAL_AUTH_JSON']?.trim();
   const localAuthJsonPath =
     nodeEnv === 'production' || !localAuthJsonRaw ? undefined : localAuthJsonRaw;
+  const configuredHost = process.env['MCP_HOST']?.trim();
 
   return {
     apiUrl: process.env['AFLOW_API_URL'] ?? 'http://localhost:3000',
@@ -56,6 +66,7 @@ export function loadConfig(): McpServerConfig {
     // MCP_PORT first (avoids conflict with API server on 3000 when both run in yarn dev).
     // PORT fallback for hosts that inject PORT for the listening process.
     port: Number(process.env['MCP_PORT'] ?? process.env['PORT'] ?? '3100'),
+    host: configuredHost === undefined || configuredHost === '' ? '127.0.0.1' : configuredHost,
     logLevel,
     // The local edition composes no development bypass, so the fallback has
     // nothing to reach whatever NODE_ENV says.

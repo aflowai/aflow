@@ -272,14 +272,15 @@ const httpServer = createServer((req: IncomingMessage, res: ServerResponse) => {
 // Startup
 // ---------------------------------------------------------------------------
 
-httpServer.listen(config.port, () => {
+httpServer.listen(config.port, config.host, () => {
   log('info', 'server_started', {
+    host: config.host,
     port: config.port,
     api_url: config.apiUrl,
     unauthenticated_fallback: config.unauthenticatedFallback,
     browser_origins: config.allowBrowserOrigins,
   });
-  console.error(`Aflow MCP server v2 listening on http://localhost:${config.port}`);
+  console.error(`Aflow MCP server v2 listening on http://${config.host}:${config.port}`);
   console.error(`  Platform API: ${config.apiUrl}`);
   console.error(
     `  Uncredentialed sessions: ${config.unauthenticatedFallback ? 'allowed' : 'refused'}`,

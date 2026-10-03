@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Kill Phoenix dev processes (supervisors, server, orchestrator, executors, web).
-# MCP is excluded so it can run separately via yarn dev:mcp and survive restarts.
+# MCP is excluded: one left running keeps serving, and the next stack uses it.
 # Usage: ./scripts/kill-dev.sh  or  yarn kill
 
 set -euo pipefail
@@ -35,7 +35,7 @@ for port in "${PORTS[@]}"; do
 done
 
 # Kill any process running from the aflow-* app directories (executors, orchestrator)
-# Note: aflow-mcp is intentionally excluded — run separately with yarn dev:mcp
+# aflow-mcp is excluded, as above.
 pkill -9 -f "aflow-executor" 2>/dev/null && echo "  killed executor processes" || true
 pkill -9 -f "aflow-orchestrator" 2>/dev/null && echo "  killed orchestrator processes" || true
 pkill -9 -f "tsx.*apps/server" 2>/dev/null && echo "  killed server processes" || true

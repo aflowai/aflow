@@ -390,6 +390,10 @@ services:
       NODE_ENV: production
       PHOENIX_EDITION: community-local
       MCP_PORT: '3100'
+      # Every interface inside the container: the published port forwards to the
+      # container's address, never its loopback. The loopback-only publish below
+      # is what keeps it on this machine.
+      MCP_HOST: '0.0.0.0'
       # The name the MCP server actually reads; `API_URL` is the web BFF's.
       AFLOW_API_URL: http://api:3000
     ports:

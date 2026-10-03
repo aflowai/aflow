@@ -8,6 +8,8 @@
  * call 401s, and one that expires a good token early stops working before the
  * credential does.
  */
+import { fileURLToPath } from 'node:url';
+
 import { describe, expect, it } from 'vitest';
 
 import { AuthManager } from './AuthManager.js';
@@ -17,6 +19,7 @@ import type { Session } from './SessionStore.js';
 const CONFIG = {
   apiUrl: 'http://localhost:3000',
   port: 3100,
+  host: '127.0.0.1',
   logLevel: 'error',
   unauthenticatedFallback: false,
   allowBrowserOrigins: false,
@@ -78,5 +81,19 @@ describe('an API key the client supplied', () => {
     const s = session();
     new AuthManager(CONFIG).initFromHeaders(s, { authorization: 'Bearer phx_abc123' });
     expect(s.auth).toMatchObject({ method: 'api_key', apiKey: 'phx_abc123' });
+  });
+});
+
+/**
+ * The file is read strictly, and a refusal falls back to no credential with
+ * nothing but a log line to say so — an example that does not parse as copied
+ * leaves every session unauthenticated.
+ */
+describe('the local auth file example', () => {
+  it('is accepted as copied', () => {
+    const example = fileURLToPath(new URL('../../mcp.local.json.example', import.meta.url));
+    const s = session();
+    new AuthManager({ ...CONFIG, localAuthJsonPath: example }).initFromHeaders(s, {});
+    expect(s.auth).toMatchObject({ method: 'api_key', apiKey: 'phx_replace_me' });
   });
 });

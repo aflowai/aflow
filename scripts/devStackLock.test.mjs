@@ -167,6 +167,11 @@ describe('the real profile table', () => {
     expect(profileConflicts('local', profiles)).toBe(true);
     expect(profileConflicts('all', profiles)).toBe(true);
   });
+
+  /** `.mcp.json` points every session in this checkout at it. */
+  it('serves the MCP server from local, which `yarn start` runs', () => {
+    expect(profiles['local']).toContain('mcp');
+  });
 });
 
 /**
