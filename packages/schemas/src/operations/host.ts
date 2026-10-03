@@ -78,6 +78,28 @@ export const HostPushApprovalSchema = z
   );
 export type HostPushApproval = z.infer<typeof HostPushApprovalSchema>;
 
+export const HostSandboxPostureSchema = z
+  .enum(['open', 'confined'])
+  .describe(
+    'What a coding agent and the checks run under in this folder. ' +
+      "`open`: unconfined, as the operator's own user, in a detached checkout of the commit. " +
+      "`confined`: inside the machine's sandbox, which reaches only the hosts a harness is " +
+      "allowed, writes only the checkout and keeps the machine's loopback closed. " +
+      'Under either, the ref guard, the scan, the checks, the review and the push gate stand ' +
+      'between the change and a pushed branch. Declared on the machine; no workspace can set it.',
+  );
+export type HostSandboxPosture = z.infer<typeof HostSandboxPostureSchema>;
+
+/**
+ * `open` in the local edition: the lane runs the operator's own tool with the
+ * operator's own credentials on the operator's own repository, which the
+ * operator already runs unconfined in a terminal. What protects `main` is not
+ * the sandbox but the ref guard, the scan, the check, the review and the push
+ * gate, every one bound to a sha. `confined` is the choice for a repository
+ * the operator does not trust.
+ */
+export const HOST_SANDBOX_POSTURE_DEFAULT: HostSandboxPosture = 'open';
+
 /**
  * Tokens in a folder's checks. One program and its arguments; a longer list is
  * a script, and the repository is the place to keep one.
@@ -121,7 +143,7 @@ export const HostChecksSchema = z
   .describe(
     'The command a publication from this folder runs before anything leaves the machine: one ' +
       "argv — a program and its arguments, never a shell line — run from the repository's root " +
-      'in a detached checkout of the commit, under the sandbox a coding agent runs in. Declared ' +
+      "in a detached checkout of the commit, under the folder's sandbox posture. Declared " +
       'by the operator on the machine; no workspace can set it, and no operation takes one.',
   );
 
@@ -1094,8 +1116,8 @@ export const HostHarnessRunOutputSchema = z.object({
   blockedDomains: z
     .array(z.string())
     .describe(
-      'Hosts the boundary refused during the run. A harness that produced nothing while this ' +
-        'is non-empty was cut off from what it needed, not idle.',
+      'Hosts the boundary refused during the run, always empty in an `open` folder. A harness ' +
+        'that produced nothing while this is non-empty was cut off from what it needed, not idle.',
     ),
   boundaryNote: z
     .string()
@@ -1172,6 +1194,10 @@ export const HostBindingInspectOutputSchema = z.object({
     'Which branches a push from this folder may move, when a publication asks the operator ' +
       'before pushing, and the checks it runs first and for how long. Absent, the folder ' +
       'pushes nothing.',
+  ),
+  sandbox: HostSandboxPostureSchema.describe(
+    'What a coding agent and the checks run under in this folder: the posture the operator ' +
+      'chose, else the default now.',
   ),
   maxConcurrentHarnessRuns: z
     .number()

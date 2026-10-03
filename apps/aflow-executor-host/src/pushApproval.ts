@@ -20,6 +20,7 @@ import { type HostPushApproval, HostPushApprovalSchema, resolveBranchPolicy } fr
 import type { HostInventoryFolders } from '@aflow/redis';
 
 import type { HostBinding, HostPolicySchema } from './bindings.js';
+import { sandboxPostureOf } from './sandboxPosture.js';
 
 type HostPolicy = z.infer<typeof HostPolicySchema>;
 
@@ -91,7 +92,7 @@ export function pushApprovalOf(binding: HostBinding): HostPushApproval {
 }
 
 /**
- * What the machine's inventory says about pushing folders: each one's posture
+ * What the machine's inventory says about pushing folders: each one's postures
  * and the program its checks run, against the workspace it was connected for.
  * A folder recording no workspace reaches none, so it is left out rather than
  * published against nothing. The checks' arguments and the program's directory
@@ -110,6 +111,7 @@ export function publishingFolders(
           spaceId: binding.spaceId,
           pushApproval: resolveBranchPolicy(binding.branchPolicy).pushApproval,
           ...(argv0 !== undefined ? { checks: { program: basename(argv0) || argv0 } } : {}),
+          sandbox: sandboxPostureOf(binding),
         },
       ];
     })

@@ -15,6 +15,7 @@ built and where its gaps are logged; the gaps that still bind are listed at the 
 | Connected folder | binding `hb_aflow` = `~/localhd/aflow`, branch prefix `aflow/`                              |
 | Push posture     | `unless-unreviewed`: a clean scan plus a child review `approve` pushes without asking       |
 | Folder checks    | `node scripts/verify-commit.mjs`, declared on `hb_aflow`; run by every publication first    |
+| Sandbox posture  | `open`, the default: commissions and checks run unconfined, as the operator (below)         |
 | Commission       | the catalog's Commission Change, on `host.harness.run`, model `claude-opus-5-5`             |
 | Review           | the catalog's Local Code Review, over `origin/<base>..<sha>`                                |
 | Publication      | the catalog's Local Publish, by `patchRef`, onto `aflow/<branch>`                           |
@@ -57,7 +58,7 @@ another stream's runs.
    `node scripts/verify-commit.mjs` (`aflow harness checks hb_aflow -- node
 scripts/verify-commit.mjs`), and Local Publish runs it after the commit and before the
    scan, the review and the push, in a detached checkout of the commit with the folder's
-   dependencies linked, under the coding agent's sandbox, whose loopback is its own on Linux and closed on macOS, where a test that serves itself on loopback fails. The script reads what changed from
+   dependencies linked, under the folder's sandbox posture (below). The script reads what changed from
    `AFLOW_CHECK_BASE...AFLOW_CHECK_SHA` and runs, one line per step and stopping at the
    first failure: the two CI guards; a build of every package the touched workspaces
    or the workspaces reading a touched package reference or import, since a checkout builds
@@ -76,6 +77,23 @@ scripts/verify-commit.mjs`), and Local Publish runs it after the commit and befo
 
 Approvals are held until the verdict is in; an approval given early pushes a commit the
 review may still send back.
+
+## What a commission runs under
+
+A commission, a review and the folder's checks run under the folder's sandbox posture
+(Plan 315 D19), which `host.binding.inspect` shows. `open`, the default, runs the coding
+agent and the checks unconfined, as the operator's own user, in a detached checkout of the
+commit. They get the credential, the configuration directory, the ref guard and
+`GIT_NO_REPLACE_OBJECTS` the lane sets, so `yarn`, a registry, the machine's loopback and
+the checkout's agent configuration all work as they do in a terminal. `confined` runs them
+inside the machine's sandbox, as every command runs. There a coding agent reaches only the
+hosts it was allowed (`aflow harness allow`), the checks reach no network, and loopback is
+the sandbox's own on Linux and closed on macOS, so a test that serves itself on loopback
+fails. Choose on the machine with `aflow harness sandbox <folder> open|confined`. Keep
+`open` for a repository you would run in your own terminal. Choose `confined` for one you
+do not trust. Under either posture, what stands between a change and `main` is the ref
+guard, the secret scan, the folder's checks, the review and the push gate, each bound to a
+sha. `hb_aflow` chose none, so it takes the default, `open`.
 
 ## Sharing the machine
 

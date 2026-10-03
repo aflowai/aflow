@@ -3,7 +3,8 @@
  *
  * Commands and coding harnesses differ in what they are asked to do and in how
  * much of the boundary they need open, and a permitted push differs further
- * still — it runs unconfined, as the operator's own git. None of them differ in
+ * still — it runs unconfined, as the operator's own git, as a coding agent and
+ * a folder's checks do in a folder whose posture is `open`. None of them differ in
  * how they are supervised, captured or stopped, which is what `superviseSpawn`
  * holds: a second spawn path would mean the group-kill, the output cap and the
  * timeout each had two implementations, and a fix to one would silently miss the
@@ -937,13 +938,44 @@ export async function runSandboxed(input: SandboxedRunInput): Promise<SandboxedR
     // so nothing between here and exec has to split or quote a string.
     args: confinedArgv(srtBin, settingsPath, statusPath, input.argv),
     statusPath,
-    // Named inheritance, never the executor's whole environment: that
-    // environment holds the credentials this executor was paired with.
-    env: {
-      ...buildBaseEnv(input.scratchDir, input.inheritEnv ?? []),
-      ...input.env,
-      ...input.trustedEnv,
-    },
+    env: workloadEnv(input),
+    bindingId: input.binding.id,
+  });
+}
+
+/**
+ * Named inheritance, never the executor's whole environment: that environment
+ * holds the credentials this executor was paired with, whichever way the
+ * workload is spawned.
+ */
+function workloadEnv(input: SandboxedRunInput): Record<string, string> {
+  return {
+    ...buildBaseEnv(input.scratchDir, input.inheritEnv ?? []),
+    ...input.env,
+    ...input.trustedEnv,
+  };
+}
+
+/**
+ * Run a coding agent or a folder's checks unconfined, as the operator's own
+ * user, in a folder whose sandbox posture is `open` (Plan 315 D19).
+ *
+ * The environment is the one a confined run is handed, so the run's own
+ * `TMPDIR` and `HOME`, its credential, its configuration directory and the ref
+ * guard reach it the same way; the widening and tool paths, which only bound a
+ * sandbox, are not read. No launcher stands between it and this executor, so
+ * its exit is its own.
+ */
+export async function runOpen(input: SandboxedRunInput): Promise<SandboxedRunResult> {
+  assertSafeEnv(input.env);
+  const [program, ...args] = input.argv;
+  if (program === undefined) throw new Error('A command with no program cannot be run.');
+  await mkdir(workloadHome(input.scratchDir), { recursive: true });
+  return await superviseSpawn({
+    ...input,
+    program,
+    args,
+    env: workloadEnv(input),
     bindingId: input.binding.id,
   });
 }

@@ -150,6 +150,7 @@ beforeEach(async () => {
     root,
     mode: 'readwrite',
     allowsExecution: true,
+    sandbox: 'confined',
     singleFile: false,
     spaceId: 'space-test',
   });

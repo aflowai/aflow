@@ -182,8 +182,9 @@ async function setAsideUnstarted(
   admission: Exclude<Admission, 'admitted'>,
 ): Promise<void> {
   if (admission === 'released') {
-    // A step given back stays STARTED, and the stall watchdog fails a STARTED
-    // step whose in-flight record lapses. Where this executor is the stream's
+    // A step given back stays SCHEDULED, and the stall watchdog reads its
+    // in-flight record as the executor's claim on it; a lapsed one is a stall
+    // once the pickup grace has passed. Where this executor is the stream's
     // only reader nothing claims the step until it exits, so the record lives
     // as long as this process does: written once before the hand-back, then
     // only extended, so the deadline a next executor records is never replaced.
@@ -259,6 +260,53 @@ function vouchUntilStopped(host: ProcessJobHost, renew: () => Promise<void>): vo
   );
 }
 
+/**
+ * Records a session step `STARTED`, with its `StepStarted` event. Called once
+ * the step is admitted, so `queueWaitMs` counts any wait for its slot and the
+ * run never shows a step running that is still waiting for one.
+ */
+async function markStarted(
+  host: ProcessJobHost,
+  job: StepJobMessage,
+  jobLog: ExecutorLogger,
+): Promise<void> {
+  if (!job.sessionId) return;
+  try {
+    const now = Date.now();
+    const stepState = await getStepState(host.deps.redis, job.tenantId, job.stepExecutionId);
+    if (stepState && stepState.status !== 'SCHEDULED') return;
+
+    await updateStepState(host.deps.redis, job.tenantId, job.stepExecutionId, {
+      sessionId: job.sessionId,
+      status: 'STARTED',
+      startedAt: now,
+    });
+
+    const queueWaitMs =
+      stepState?.scheduledAt !== undefined ? Math.max(0, now - stepState.scheduledAt) : null;
+
+    await appendSessionEvent(host.deps.redis, job.tenantId, job.sessionId, {
+      eventId: crypto.randomUUID(),
+      eventType: 'StepStarted',
+      timestamp: now,
+      sessionId: job.sessionId,
+      stepId: job.stepId,
+      stepExecutionId: job.stepExecutionId,
+      stepType: job.stepType,
+      attempt: job.attempt,
+      metadata: {
+        operationId: job.operationId,
+        executorConsumer: host.config.consumerName,
+        ...(queueWaitMs !== null ? { queueWaitMs } : {}),
+      },
+    });
+  } catch (err) {
+    jobLog.warn('Failed to record StepStarted', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 export async function processJob(
   host: ProcessJobHost,
   messageId: string,
@@ -266,7 +314,7 @@ export async function processJob(
   slotController: SlotController,
   inFlight?: InFlightStep,
 ): Promise<void> {
-  const startTime = Date.now();
+  let startTime = Date.now();
 
   const jobLog = createJobLogger(`Executor:${host.config.consumerName}`, {
     stepExecutionId: job.stepExecutionId,
@@ -309,45 +357,6 @@ export async function processJob(
       return;
     }
 
-    if (job.sessionId) {
-      try {
-        const now = Date.now();
-        const stepState = await getStepState(host.deps.redis, job.tenantId, job.stepExecutionId);
-        const shouldMarkStarted = stepState?.status === 'SCHEDULED' || !stepState;
-
-        if (shouldMarkStarted) {
-          await updateStepState(host.deps.redis, job.tenantId, job.stepExecutionId, {
-            sessionId: job.sessionId,
-            status: 'STARTED',
-            startedAt: now,
-          });
-
-          const queueWaitMs =
-            stepState?.scheduledAt !== undefined ? Math.max(0, now - stepState.scheduledAt) : null;
-
-          await appendSessionEvent(host.deps.redis, job.tenantId, job.sessionId, {
-            eventId: crypto.randomUUID(),
-            eventType: 'StepStarted',
-            timestamp: now,
-            sessionId: job.sessionId,
-            stepId: job.stepId,
-            stepExecutionId: job.stepExecutionId,
-            stepType: job.stepType,
-            attempt: job.attempt,
-            metadata: {
-              operationId: job.operationId,
-              executorConsumer: host.config.consumerName,
-              ...(queueWaitMs !== null ? { queueWaitMs } : {}),
-            },
-          });
-        }
-      } catch (err) {
-        jobLog.warn('Failed to record StepStarted', {
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-
     // Claim per-step in-flight liveness before any wait or slow setup (slot
     // admission / validate / context build / output probe), so the stall
     // watchdog never mistakes a freshly-claimed step for a disappeared
@@ -376,11 +385,14 @@ export async function processJob(
       admittedBy = operationLimiter;
     }
 
-    // Started from here on: a drain counts this step and waits for it.
+    // Started from here on: a drain counts this step and waits for it, and its
+    // run shows it running, timed from now rather than from its claim.
+    startTime = Date.now();
     if (inFlight !== undefined) {
-      inFlight.deadlineRef = { current: Date.now() + host.config.defaultTimeoutMs };
+      inFlight.deadlineRef = { current: startTime + host.config.defaultTimeoutMs };
     }
     host.stepStarted();
+    await markStarted(host, job, jobLog);
 
     const handler = host.handlers.get(job.stepType);
     if (!handler) {

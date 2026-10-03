@@ -23,6 +23,7 @@ import {
   type BrowserProfile,
   HOST_HARNESS_CONCURRENCY_DEFAULT,
   HostBindingBranchPolicySchema,
+  HostSandboxPostureSchema,
 } from '@aflow/schemas';
 
 import { type ChromeDiscovery, discoverChrome } from './browser/chromeDiscovery.js';
@@ -60,6 +61,12 @@ export const HostBindingSchema = z.object({
    * setting that turns it off.
    */
   branchPolicy: HostBindingBranchPolicySchema.optional(),
+  /**
+   * What a coding agent and the checks run under here, written only when the
+   * operator chose it: absent, `HOST_SANDBOX_POSTURE_DEFAULT` is read each
+   * time, so a change of default reaches a folder that never chose.
+   */
+  sandbox: HostSandboxPostureSchema.optional(),
   /** Present for a binding the operator connected as a single file rather than a folder. */
   singleFile: z.boolean().default(false),
   /**

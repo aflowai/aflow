@@ -32,6 +32,7 @@ import {
 import { serializePolicy, writePolicyAtomically } from './policyFile.js';
 import { describeChecks, keptChecks } from './folderChecks.js';
 import { chosenPushApproval, describePushApproval, PUSH_SCAN_NOTE } from './pushApproval.js';
+import { describeFolderSandbox, keptSandboxPosture } from './sandboxPosture.js';
 import {
   assertRootOutsideRepositoryMetadata,
   type HostBinding,
@@ -263,11 +264,11 @@ async function main(): Promise<void> {
     await mkdir(HOST_DIR, { recursive: true, mode: 0o700 });
     const raw = await readFile(POLICY_PATH, 'utf8').catch(() => '{"version":1,"bindings":[]}');
     const policy = HostPolicySchema.parse(JSON.parse(raw));
-    // A reconnect keeps the posture and the checks the operator set since,
-    // unless it names a posture.
-    const currentBranchPolicy = policy.bindings.find(
-      (b) => b.id === id && b.root === root,
-    )?.branchPolicy;
+    // A reconnect keeps the postures and the checks the operator set since,
+    // unless it names a push posture.
+    const current = policy.bindings.find((b) => b.id === id && b.root === root);
+    const currentBranchPolicy = current?.branchPolicy;
+    const sandbox = keptSandboxPosture(current, allowsExecution);
     const pushApproval = chosenPushApproval({
       requested: arg('push-approval'),
       branchPrefix,
@@ -433,6 +434,7 @@ async function main(): Promise<void> {
             },
           }
         : {}),
+      ...sandbox,
       singleFile: info.isFile(),
       spaceId: material.spaceId,
     };
@@ -469,6 +471,12 @@ async function main(): Promise<void> {
       );
       prompter.say(`  ${PUSH_SCAN_NOTE}`);
       prompter.say(`  A publication from it ${describeChecks(binding.branchPolicy)}.`);
+    }
+    if (allowsExecution) {
+      prompter.say(
+        `  It ${describeFolderSandbox(binding)}; \`aflow harness sandbox ${recorded} ` +
+          'confined` for a repository you do not trust.',
+      );
     }
     prompter.say('');
     // Asked rather than assumed. Telling an operator to start something already

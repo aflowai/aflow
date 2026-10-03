@@ -3,8 +3,10 @@
  *
  * The checkout is prepared as a commission's is — detached at the commit, the
  * folder's installed dependencies linked so nothing is installed — and the
- * command runs there under the sandbox a coding agent runs in: egress closed,
- * the checkout writable and the folder itself not. What it printed is kept in
+ * command runs there as a coding agent does, under the folder's sandbox
+ * posture: unconfined where it is `open`, and where it is `confined` with
+ * egress and the machine's loopback closed, the checkout writable and the
+ * folder itself not. What it printed is kept in
  * the order it came, and from both ends where there is too much of it:
  * its start says what ran, and a failing check says why last.
  */
@@ -24,7 +26,8 @@ import type { HostBinding } from './bindings.js';
 import { SHORT_SHA_LENGTH } from './checkReceipt.js';
 import { createChatterStripper } from './egressRefusals.js';
 import { formatMinutes } from './folderChecks.js';
-import { runSandboxed, type SandboxedRunResult } from './sandboxedRun.js';
+import { runUnderFolderPosture } from './folderRun.js';
+import type { SandboxedRunResult } from './sandboxedRun.js';
 import { NO_REPLACE_OBJECTS_ENV, prepareWorktree, removeWorktree } from './worktree.js';
 
 type HostCommitCheckOutput = z.infer<typeof HostCommitCheckOutputSchema>;
@@ -177,7 +180,7 @@ export async function runFolderChecks(input: FolderCheckInput): Promise<FolderCh
       kept.push(text);
       input.onDelta?.(text);
     };
-    const result = await runSandboxed({
+    const result = await runUnderFolderPosture({
       binding: input.binding,
       argv: [...input.argv],
       cwd: worktree.path,
@@ -191,10 +194,8 @@ export async function runFolderChecks(input: FolderCheckInput): Promise<FolderCh
       },
       timeoutMs: input.timeoutMs,
       scratchDir: scratch,
-      // No egress, and no loopback but the sandbox's own: this runs code a
-      // coding agent wrote, and the machine's loopback holds the stack's
-      // services. Egress is where a check could carry the folder off the
-      // machine, or pass because something outside answered for it.
+      // Read only in a confined folder, which has no egress and no loopback
+      // but the sandbox's own.
       widening: {
         authPaths: [],
         allowedDomains: [],

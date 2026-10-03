@@ -1,12 +1,14 @@
 /**
  * The coding-harness half of the host lane.
  *
- * A harness is a command, so it runs through the same confined spawn path as
- * any other. Two things differ, and both are the operator's to grant rather
- * than this executor's to assume: the harness reads a credential under the home
- * region the boundary denies, and it reaches a provider the boundary blocks.
- * Its profile — in the machine's own policy file — is what opens exactly those
- * and nothing else.
+ * A harness runs under its folder's sandbox posture (Plan 315 D19). In an
+ * `open` folder it is the operator's own tool run as the operator. In a
+ * `confined` one it goes through the same confined spawn path as any command,
+ * and two things differ, both the operator's to grant rather than this
+ * executor's to assume: the harness reads a credential under the home region
+ * the boundary denies, and it reaches a provider the boundary blocks. Its
+ * profile — in the machine's own policy file — is what opens exactly those and
+ * nothing else.
  *
  * The run happens in a detached worktree, never the operator's checkout. That
  * is what lets a run start while they have uncommitted work, and what makes the
@@ -63,7 +65,9 @@ import {
   type HarnessBrowser,
 } from '../browser/harnessBrowser.js';
 import { fetchCredential, scrubSecret } from '../credentialFetch.js';
-import { noSandboxMessage, reapWithdrawn, sandboxReadiness } from '../sandboxedRun.js';
+import { folderRunReadiness, runUnderFolderPosture } from '../folderRun.js';
+import { sandboxPostureOf } from '../sandboxPosture.js';
+import { noSandboxMessage, reapWithdrawn, type SandboxedRunResult } from '../sandboxedRun.js';
 import { describeRefusals, extractEgressRefusals } from '../egressRefusals.js';
 import {
   assertTakesMcpConfig,
@@ -90,7 +94,6 @@ import {
   recordSession,
   type HarnessSession,
 } from '../harnessSessions.js';
-import { runSandboxed, type SandboxedRunResult } from '../sandboxedRun.js';
 import { createChatterStripper } from '../egressRefusals.js';
 import { createHarnessEventReader } from '../harnessEvents.js';
 import {
@@ -534,7 +537,8 @@ async function runHarness(
     }
     bindingRoot = binding.root;
 
-    const readiness = sandboxReadiness();
+    const confined = sandboxPostureOf(binding) === 'confined';
+    const readiness = folderRunReadiness(binding);
     if (!readiness.ready) {
       return await failureWithError(ctx, permissionError(noSandboxMessage(readiness.missing)));
     }
@@ -741,7 +745,7 @@ async function runHarness(
       // from 1 again.
       const browserTurn = await browser?.openTurn();
       try {
-        return await runSandboxed({
+        return await runUnderFolderPosture({
           binding,
           argv: harnessTurnArgv(
             profile,
@@ -752,11 +756,12 @@ async function runHarness(
             browserTurn?.mcpConfigPath,
           ),
           cwd: worktree.path,
-          // The sandbox's proxy names the host it refused only when asked to, and
-          // that name is the whole diagnosis for a harness that reached nothing.
           env: {},
           trustedEnv: {
-            SRT_DEBUG: '1',
+            // The sandbox's proxy names the host it refused only when asked to,
+            // and that name is the whole diagnosis for a harness that reached
+            // nothing.
+            ...(confined ? { SRT_DEBUG: '1' } : {}),
             ...refGuardEnv,
             // Commissions see the stored objects too, as the checkout they run
             // in does: a review reads the range with its own git, and the
