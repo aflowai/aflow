@@ -8,12 +8,17 @@
  * page, and that an action is never performed twice. Each profile's Chrome is
  * `ProfileBrowsers`'; the operator's window is `OperatorWindows`'.
  */
-import { BROWSER_OUTLINE_MAX_CHARS, type BrowserProfile } from '@aflow/schemas';
+import {
+  BROWSER_OUTLINE_MAX_CHARS,
+  BROWSER_READ_DEFAULT_CHARS,
+  type BrowserProfile,
+} from '@aflow/schemas';
 
 import { type LocalAddressClassifier, machineAddresses } from './addresses.js';
 import type { ChromeLauncher } from './chromeProcess.js';
 import { CREDENTIAL_FIELD_KEYS, entersValue, MODIFIERS } from './credentialFields.js';
 import { type StartEgressProxy, startEgressProxy } from './egressProxy.js';
+import { EphemeralProfiles } from './ephemeralProfiles.js';
 import { BrowserDriverError, errorText } from './errors.js';
 import { boundEntries, boundText, PageObservations } from './observations.js';
 import { type HandoffBoard, NO_BOARD } from './handoffBoard.js';
@@ -49,6 +54,7 @@ import type {
   OpenedPage,
   OpenRequest,
   PageView,
+  EvaluateResult,
   ReadRequest,
   ReadResult,
   RunScope,
@@ -79,6 +85,10 @@ import {
 } from './types.js';
 
 const MINUTE_MS = 60_000;
+/** How long a script in the page may run before the call gives up on it. */
+const EVALUATE_TIMEOUT_MS = 30_000;
+
+const EPHEMERAL_ENDED = 'the harness run it belonged to ended, and its ephemeral profile with it';
 
 export type { BrowserPolicy } from './profiles.js';
 
@@ -119,6 +129,7 @@ const HISTORY_WORDS: Readonly<Record<'back' | 'forward', string>> = {
 
 export class BrowserDriver {
   private readonly pages = new PageTable();
+  private readonly ephemeral = new EphemeralProfiles();
   private readonly browsers: ProfileBrowsers;
   private readonly windows: OperatorWindows;
   /** Raised by every policy change, so an operation can tell its read of the policy is stale. */
@@ -137,6 +148,7 @@ export class BrowserDriver {
       classifier: deps.classifier ?? machineAddresses,
       pages: this.pages,
       now: this.now,
+      ephemeralDirectory: (profileId) => this.ephemeral.directory(profileId),
     });
     this.windows = new OperatorWindows({
       pages: this.pages,
@@ -158,7 +170,7 @@ export class BrowserDriver {
 
   async open(request: OpenRequest): Promise<OpenedPage> {
     const { policy, generation } = await this.currentPolicy();
-    const profile = resolveProfile(policy, request.profileId, request.spaceId);
+    const profile = this.profileFor(policy, request.profileId, request);
     this.browsers.refuseWhileShown(profile.id);
     const asked = new URL(request.url);
     this.refuseObviouslyLocal(profile, asked);
@@ -509,6 +521,7 @@ export class BrowserDriver {
   async list(scope: RunScope): Promise<ListedPage[]> {
     const policy = await this.deps.loadPolicy();
     const pages = this.pages.list(scope).filter((held) => {
+      if (this.ephemeral.has(held.profileId)) return true;
       const profile = policy.browsers.get(held.profileId);
       return profile !== undefined && profileOpenToSpace(profile, scope.spaceId);
     });
@@ -578,6 +591,68 @@ export class BrowserDriver {
         return { profile, running: true, windowShown, ...(sites !== undefined ? { sites } : {}) };
       }),
     );
+  }
+
+  /**
+   * Runs a script in a page of an ephemeral profile and returns its value as
+   * JSON, bounded. Refused on any other profile: a script there would act with
+   * the operator's sign-ins, past every outline and receipt.
+   */
+  async evaluate(scope: RunScope, pageId: string, expression: string): Promise<EvaluateResult> {
+    return await this.usingPage(scope, pageId, async ({ held, profile }) => {
+      if (!this.ephemeral.has(profile.id)) {
+        throw new BrowserDriverError(
+          'script_refused',
+          `Scripts run only in an ephemeral profile, which holds no sign-ins; page \`${pageId}\` is ` +
+            `in profile \`${profile.id}\`, so nothing was run.`,
+          { pageId, profileId: profile.id },
+        );
+      }
+      assertActionAllowed(profile, urlOrNothing(held.page.url()) ?? new URL('about:blank'));
+      let value: unknown;
+      try {
+        value = await withinDeadline(held.page.evaluate(expression), EVALUATE_TIMEOUT_MS);
+      } catch (error) {
+        throw new BrowserDriverError(
+          'action_failed',
+          `The script on page \`${pageId}\` did not complete: ${errorText(error)}`,
+          { pageId },
+        );
+      }
+      // A value JSON cannot carry — undefined, a function — stringifies to nothing.
+      const json = (JSON.stringify(value) as string | undefined) ?? 'undefined';
+      const cut = json.length > BROWSER_READ_DEFAULT_CHARS;
+      return {
+        pageId,
+        url: pageAddress(held),
+        value: cut ? json.slice(0, BROWSER_READ_DEFAULT_CHARS) : json,
+        cut,
+      };
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // Ephemeral profiles
+  // -------------------------------------------------------------------------
+
+  /** A profile for one run, in a directory the caller made and deletes; its id. */
+  startEphemeral(owner: RunScope, userDataDir: string): string {
+    return this.ephemeral.add(owner, userDataDir).id;
+  }
+
+  /** Ends a run's ephemeral profile: its pages gone, its browser stopped and exited. */
+  async endEphemeral(profileId: string): Promise<void> {
+    if (!this.ephemeral.has(profileId)) return;
+    // Forgotten first, so nothing opens in it while its browser stops.
+    this.ephemeral.remove(profileId);
+    await this.browsers.stopAndWait(profileId, EPHEMERAL_ENDED);
+  }
+
+  /** The machine profile a harness run asked for, refused as an open in it would be. */
+  async harnessProfile(scope: RunScope, profileId: string): Promise<BrowserProfile> {
+    const profile = this.profileFor(await this.deps.loadPolicy(), profileId, scope);
+    this.browsers.refuseWhileShown(profile.id);
+    return profile;
   }
 
   // -------------------------------------------------------------------------
@@ -654,7 +729,10 @@ export class BrowserDriver {
           this.browsers.stop(id);
         },
       },
-      policy.browsers,
+      new Map([
+        ...policy.browsers,
+        ...this.ephemeral.all().map((profile) => [profile.id, profile] as const),
+      ]),
     );
   }
 
@@ -686,7 +764,7 @@ export class BrowserDriver {
     this.browsers.acquire(held.profileId);
     try {
       const policy = await this.deps.loadPolicy();
-      const profile = resolveProfile(policy, held.profileId, scope.spaceId);
+      const profile = this.profileFor(policy, held.profileId, scope);
       const running = this.runningFor(held);
       this.touch(held, running);
       return await operation({ held, running, profile });
@@ -844,6 +922,7 @@ export class BrowserDriver {
   }
 
   private refuseObviouslyLocal(profile: BrowserProfile, url: URL): void {
+    if (this.ephemeral.has(profile.id)) return;
     const reason = obviouslyLocalDestination(url, this.deps.classifier ?? machineAddresses);
     if (reason === undefined) return;
     throw new BrowserDriverError(
@@ -867,6 +946,13 @@ export class BrowserDriver {
     if (refused !== undefined) throw refusalError(profile, refused);
     this.refuseObviouslyLocal(profile, landed);
     assertNavigationAllowed(profile, landed);
+  }
+
+  /** A run's own ephemeral profile, or the machine's profile as the run's space may use it. */
+  private profileFor(policy: BrowserPolicy, profileId: string, scope: RunScope): BrowserProfile {
+    return (
+      this.ephemeral.resolve(profileId, scope) ?? resolveProfile(policy, profileId, scope.spaceId)
+    );
   }
 
   /** The policy, with the generation it is current for. */
@@ -893,9 +979,23 @@ export class BrowserDriver {
   ): Promise<BrowserProfile> {
     if (generation === this.generation) return profile;
     const { policy } = await this.currentPolicy();
-    const now = resolveProfile(policy, request.profileId, request.spaceId);
+    const now = this.profileFor(policy, request.profileId, request);
     this.refuseObviouslyLocal(now, asked);
     assertNavigationAllowed(now, asked);
     return now;
+  }
+}
+
+async function withinDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`no answer within ${String(Math.round(ms / 1000))} seconds`));
+    }, ms);
+  });
+  try {
+    return await Promise.race([work, deadline]);
+  } finally {
+    clearTimeout(timer);
   }
 }

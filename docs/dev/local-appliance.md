@@ -481,6 +481,20 @@ yarn workspace @aflow/aflow-executor-host harness model claude --clear
 A harness that takes no model argument refuses a profile model the same way it
 refuses a task's.
 
+**Its browser.** A task with `browser: { profile: 'ephemeral' }` gives the harness
+this machine's browser as MCP tools — a throwaway Chrome profile made for the run,
+which can open a dev server here — and one naming a declared profile gives it that
+profile, under its rules. The harness is handed the configuration through its
+profile's `mcpArgs`; `harness add claude` writes the measured ones, and a profile
+added before them is given them, or has them taken away, with:
+
+```bash
+yarn workspace @aflow/aflow-executor-host harness browser claude
+yarn workspace @aflow/aflow-executor-host harness browser claude --clear
+```
+
+A harness without `mcpArgs` refuses a task asking for a browser, and says so.
+
 A harness run needs `allowsExecution` on the binding, like any command, and the
 **Coding agents on this computer** capability, which no profile carries by
 default.

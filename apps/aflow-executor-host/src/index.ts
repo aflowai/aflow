@@ -19,7 +19,8 @@ import { dirname } from 'node:path';
 import { createServiceLogger } from '@aflow/executor-runtime';
 import type { Redis } from 'ioredis';
 import { createShutdownController } from '@aflow/lib';
-import { resolvePayloadStore } from '@aflow/payload-store';
+import { contentAddressForJson, resolvePayloadStore } from '@aflow/payload-store';
+import type { TenantId } from '@aflow/schemas';
 import {
   attachRedisErrorGuard,
   closeRedisConnection,
@@ -212,12 +213,6 @@ async function main(): Promise<void> {
     });
   }
 
-  runtime.registerHandler(
-    createHostHandler(policyPath, (tenantId, runId, requestHash) =>
-      getWriteApprovalGrant(redis, tenantId, runId, requestHash),
-    ),
-  );
-
   // Loaded here rather than at the top so that nothing importing this module
   // for its helpers pulls in the browser automation library.
   const { createPlaywrightEngine } = await import('./browser/engine.js');
@@ -228,6 +223,26 @@ async function main(): Promise<void> {
     loadPolicy: async () => await loadHostPolicy(policyPath),
     handoffs,
   });
+
+  runtime.registerHandler(
+    createHostHandler(
+      policyPath,
+      (tenantId, runId, requestHash) => getWriteApprovalGrant(redis, tenantId, runId, requestHash),
+      {
+        driver: browserDriver,
+        // At its content's address: one harness step takes any number of
+        // screenshots, and a step's own payload path holds one per kind.
+        storeScreenshot: async (tenantId, image) =>
+          await resolved.store.storeContentAddressed({
+            tenantId: tenantId as TenantId,
+            contentHash: contentAddressForJson(image),
+            kind: 'screenshot',
+            data: image,
+          }),
+      },
+    ),
+  );
+
   browserRuntime.registerHandler(createBrowserHandler(browserDriver));
   const browserIdleSweep = createBrowserIdleSweep(browserDriver, taskLogger);
 

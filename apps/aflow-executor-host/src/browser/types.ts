@@ -121,6 +121,12 @@ export interface EnginePage {
    * when nothing answers to the reference.
    */
   screenshot(request: EngineScreenshot): Promise<Buffer>;
+  /**
+   * Runs a script expression in the page and returns its value as the page
+   * serialised it. Offered only on an ephemeral profile, which holds no
+   * session a script could act with.
+   */
+  evaluate(expression: string): Promise<unknown>;
   close(): Promise<void>;
   isClosed(): boolean;
 }

@@ -115,6 +115,7 @@ export class FakePage implements EnginePage {
   readonly actions: Array<{ ref: string; action: EngineAction }> = [];
   readonly navigations: EngineNavigation[] = [];
   readonly screenshots: EngineScreenshot[] = [];
+  readonly evaluations: string[] = [];
   /** Reads of its snapshot so far. */
   reads = 0;
 
@@ -253,6 +254,10 @@ export class FakePage implements EnginePage {
         : fakePng(1280, 800, site.pngBytes ?? 64),
     );
   }
+  evaluate(expression: string): Promise<unknown> {
+    this.evaluations.push(expression);
+    return Promise.resolve({ evaluated: expression, at: this.current });
+  }
   close(): Promise<void> {
     if (this.closeHangs) return new Promise(() => undefined);
     this.closed = true;
@@ -283,7 +288,7 @@ export class FakeProxy implements EgressProxy {
     const refusal: ProxyRefusal | undefined =
       ruled !== undefined
         ? { host, port: numericPort, kind: 'rule', reason: ruled, at }
-        : this.world.localHosts.has(host)
+        : this.options.reachesThisMachine !== true && this.world.localHosts.has(host)
           ? {
               host,
               port: numericPort,

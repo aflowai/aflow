@@ -313,3 +313,38 @@ describe("a commission's diff travels by reference", () => {
     expect(input.properties['patch']?.description).toContain('pass its `patchRef` instead');
   });
 });
+
+describe('host.harness.run asks for a browser by profile', () => {
+  it('takes ephemeral or a declared profile id, and leaves an absent browser absent', () => {
+    expect(
+      HostHarnessRunInputSchema.parse({ ...base, browser: { profile: 'ephemeral' } }).browser,
+    ).toEqual({ profile: 'ephemeral' });
+    expect(
+      HostHarnessRunInputSchema.parse({ ...base, browser: { profile: 'work' } }).browser,
+    ).toEqual({ profile: 'work' });
+    expect(HostHarnessRunInputSchema.parse(base).browser).toBeUndefined();
+    expect(
+      HostHarnessRunInputSchema.safeParse({ ...base, browser: { profile: '../escape' } }).success,
+    ).toBe(false);
+    expect(HostHarnessRunInputSchema.safeParse({ ...base, browser: {} }).success).toBe(false);
+  });
+
+  it('tells the caller when to ask for one and that ephemeral is the default choice', () => {
+    const json = toJsonSchemaSync(HostHarnessRunInputSchema) as {
+      properties: Record<
+        string,
+        { description?: string; properties?: Record<string, { description?: string }> }
+      >;
+    };
+    const browser = json.properties['browser'];
+    expect(browser?.description).toContain('touches a UI');
+    expect(browser?.properties?.['profile']?.description).toContain('the default choice');
+  });
+
+  it('names the browser log on the result', () => {
+    const json = toJsonSchemaSync(HostHarnessRunOutputSchema) as {
+      properties: Record<string, { description?: string }>;
+    };
+    expect(json.properties['browserLog']?.description).toContain('typed text by its length only');
+  });
+});

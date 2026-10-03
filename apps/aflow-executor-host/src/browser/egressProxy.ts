@@ -52,6 +52,12 @@ export interface EgressProxyOptions {
   readonly connect?: (address: string, port: number) => Socket;
   readonly classifier?: LocalAddressClassifier;
   readonly now?: () => number;
+  /**
+   * Lets connections reach this machine. Only an ephemeral profile's proxy
+   * sets it: that profile holds no session, and opening a dev server on this
+   * machine is what it is for (D12). Rules still apply.
+   */
+  readonly reachesThisMachine?: boolean;
 }
 
 export interface EgressProxy {
@@ -140,7 +146,10 @@ export const startEgressProxy: StartEgressProxy = async (options) => {
     const host = bareAddress(rawHost.toLowerCase().replace(/\.$/, ''));
     const ruled = options.refuseHost?.(host);
     if (ruled !== undefined) return refuse(host, port, 'rule', ruled);
-    if (isLocalName(host)) return refuse(host, port, 'local', `${host} names this machine`);
+    const local = options.reachesThisMachine !== true;
+    if (local && isLocalName(host)) {
+      return refuse(host, port, 'local', `${host} names this machine`);
+    }
 
     let addresses: readonly ResolvedAddress[];
     try {
@@ -155,7 +164,7 @@ export const startEgressProxy: StartEgressProxy = async (options) => {
       return { verdict: 'unreachable', reason: `${host} did not resolve` };
     // Every address, not the first: a name answering with a public address and
     // a loopback one is a name that can reach this machine.
-    for (const { address } of addresses) {
+    for (const { address } of local ? addresses : []) {
       const kind = classifier.classify(address);
       if (kind === undefined) continue;
       return refuse(host, port, 'local', localAddressReason(host, address, kind));

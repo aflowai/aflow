@@ -43,6 +43,9 @@ export default [
             'scripts/lib/*.ts',
             'scripts/flows/l2c/seed-l2c-flows.ts',
             'scripts/*.mjs',
+            // Copied into a harness run's scratch and run there, so it is plain
+            // JavaScript outside every TypeScript project.
+            'apps/aflow-executor-host/src/browser/harnessRelay.mjs',
           ],
           // Cap must exceed total allowDefaultProject matches or ESLint fails (see tail-run-events.ts).
           maximumDefaultProjectFileMatchCount_THIS_WILL_SLOW_DOWN_LINTING: 96,
@@ -134,6 +137,7 @@ export default [
       'eslint-rules/**',
       'packages/*/scripts/**',
       'apps/*/scripts/**',
+      'apps/aflow-executor-host/src/browser/harnessRelay.mjs',
     ],
     rules: {
       '@typescript-eslint/no-explicit-any': 'off',

@@ -61,6 +61,8 @@ export interface ProfileBrowsersDeps {
   readonly classifier: LocalAddressClassifier;
   readonly pages: PageTable;
   readonly now: () => number;
+  /** The directory of an ephemeral profile, which is not under the host directory; nothing for any other. */
+  readonly ephemeralDirectory: (profileId: string) => string | undefined;
 }
 
 export class ProfileBrowsers {
@@ -162,7 +164,7 @@ export class ProfileBrowsers {
   }
 
   /** Stops the profile's browser, its pages reported gone for `why`, and waits for it to exit. */
-  private async stopAndWait(profileId: string, why: string): Promise<void> {
+  async stopAndWait(profileId: string, why: string): Promise<void> {
     await this.starting.get(profileId)?.ready.catch(() => undefined);
     const running = this.running.get(profileId);
     this.deps.pages.dropProfile(profileId, why);
@@ -220,11 +222,13 @@ export class ProfileBrowsers {
     state: ProfileState,
     window: BrowserProfile['window'],
   ): Promise<RunningProfile> {
+    const ephemeral = this.deps.ephemeralDirectory(profileId);
     // Before Chrome, so no request of Chrome's ever goes out unchecked.
     const proxy = await this.deps.startProxy({
       refuseHost: (host) => ruleRefusingHost(state.profile, host),
       classifier: this.deps.classifier,
       now: this.deps.now,
+      ...(ephemeral !== undefined ? { reachesThisMachine: true } : {}),
     });
     let chrome: LaunchedChrome;
     try {
@@ -233,6 +237,7 @@ export class ProfileBrowsers {
         hostDir: this.deps.hostDir,
         profile: { ...state.profile, window },
         proxyServer: proxy.server,
+        ...(ephemeral !== undefined ? { userDataDir: ephemeral } : {}),
       });
     } catch (error) {
       await proxy.stop().catch(() => undefined);

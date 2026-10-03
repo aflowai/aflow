@@ -95,6 +95,14 @@ export const HarnessProfileSchema = z.object({
    */
   model: z.string().min(1).optional(),
   /**
+   * How this harness is handed an MCP configuration file, carrying
+   * `{mcpConfig}` where its path goes. A run asking for a browser gets it this
+   * way, as a server the executor answers; empty means the harness cannot be
+   * handed one, and such a run is refused rather than run without the browser
+   * it asked for.
+   */
+  mcpArgs: z.array(z.string()).default([]),
+  /**
    * An environment variable that should receive a fresh, writable configuration
    * directory for the run. A harness given one keeps its state there instead of
    * under the operator's home, which means the standing denial of home survives
@@ -132,6 +140,7 @@ export const PROMPT_PLACEHOLDER = '{prompt}';
 export const SESSION_PLACEHOLDER = '{session}';
 export const TURNS_PLACEHOLDER = '{turns}';
 export const MODEL_PLACEHOLDER = '{model}';
+export const MCP_CONFIG_PLACEHOLDER = '{mcpConfig}';
 
 export class HarnessProfileError extends Error {
   constructor(
@@ -225,6 +234,31 @@ function buildModelArgs(profile: HarnessProfile, runModel: string | undefined): 
   return fillTemplate(profile, profile.modelArgs, 'modelArgs', MODEL_PLACEHOLDER, model);
 }
 
+/** The command on the machine that gives an existing harness profile its `mcpArgs`. */
+export function setMcpArgsCommand(profileId: string): string {
+  return `aflow harness browser ${profileId}`;
+}
+
+/**
+ * Refuses a run that asks for a browser when the profile has no way to hand
+ * the harness an MCP configuration. Asked before any checkout is made.
+ */
+export function assertTakesMcpConfig(profile: HarnessProfile): void {
+  if (profile.mcpArgs.length > 0) return;
+  throw new HarnessProfileError(
+    `Harness '${profile.id}' has no \`mcpArgs\` on this machine, so it cannot be handed a ` +
+      'browser. Send the task without `browser`, or have the operator set them on the machine: ' +
+      setMcpArgsCommand(profile.id),
+    'unsupported_request',
+  );
+}
+
+function buildMcpArgs(profile: HarnessProfile, mcpConfig: string | undefined): string[] {
+  if (mcpConfig === undefined) return [];
+  assertTakesMcpConfig(profile);
+  return fillTemplate(profile, profile.mcpArgs, 'mcpArgs', MCP_CONFIG_PLACEHOLDER, mcpConfig);
+}
+
 /**
  * Build the harness argv. The prompt occupies its own element, so no quoting,
  * escaping or shell parsing stands between the task text and the harness.
@@ -235,6 +269,7 @@ export function buildHarnessArgv(
   sessionArgs: string[] = [],
   maxTurns?: number,
   model?: string,
+  mcpConfig?: string,
 ): string[] {
   // Filled before anything else so a profile that cannot take the task at all
   // says so, rather than reporting a dial the run could simply drop.
@@ -251,6 +286,7 @@ export function buildHarnessArgv(
     ...sessionArgs,
     ...buildTurnsArgs(profile, maxTurns),
     ...buildModelArgs(profile, model),
+    ...buildMcpArgs(profile, mcpConfig),
     ...promptArgs,
   ];
 }
