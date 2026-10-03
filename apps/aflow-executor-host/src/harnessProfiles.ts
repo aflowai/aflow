@@ -112,6 +112,12 @@ export const HarnessProfileSchema = z.object({
   /** Hosts this harness may reach. Empty means the run has no egress at all. */
   allowedDomains: z.array(z.string()).default([]),
   /**
+   * Ports on this machine the harness's ephemeral browser may load, on
+   * loopback alone. The harness itself stays off loopback; these are for a dev
+   * server it starts and wants to see. Set on the machine, never by a run.
+   */
+  browserLocalPorts: z.array(z.number().int().min(1).max(65_535)).default([]),
+  /**
    * How to obtain the credential the harness already holds, for the case where
    * it does not hold it in a file. On macOS a signed-in coding agent typically
    * keeps its token in the Keychain, which the boundary cannot reach — reaching

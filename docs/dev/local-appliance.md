@@ -483,7 +483,7 @@ refuses a task's.
 
 **Its browser.** A task with `browser: { profile: 'ephemeral' }` gives the harness
 this machine's browser as MCP tools — a throwaway Chrome profile made for the run,
-which can open a dev server here — and one naming a declared profile gives it that
+which can open a dev server here on a port declared for the harness — and one naming a declared profile gives it that
 profile, under its rules. The harness is handed the configuration through its
 profile's `mcpArgs`; `harness add claude` writes the measured ones, and a profile
 added before them is given them, or has them taken away, with:
@@ -494,6 +494,20 @@ yarn workspace @aflow/aflow-executor-host harness browser claude --clear
 ```
 
 A harness without `mcpArgs` refuses a task asking for a browser, and says so.
+
+The throwaway profile reaches no more than the harness itself: the hosts allowed
+with `harness allow`, and on this machine only the ports declared for it, on
+loopback (`localhost`, `127.0.0.1`, `[::1]`) and never on a LAN address:
+
+```bash
+yarn workspace @aflow/aflow-executor-host harness browser-ports claude 5173
+yarn workspace @aflow/aflow-executor-host harness browser-ports claude --clear
+```
+
+Declaring the appliance's own API or web port (3000 and 3001 by default) lets the
+harness's browser load the web app, which presents the instance secret to whoever
+loads it, so the harness could approve its own requests. The command warns before
+it writes such a port.
 
 A harness run needs `allowsExecution` on the binding, like any command, and the
 **Coding agents on this computer** capability, which no profile carries by

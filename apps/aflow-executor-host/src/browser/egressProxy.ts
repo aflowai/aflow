@@ -1,6 +1,6 @@
 /**
- * The egress proxy a profile that keeps sign-ins sends all its traffic
- * through (Plan 320 D12).
+ * The egress proxy every profile's browser sends all its traffic through
+ * (Plan 320 D12).
  *
  * The refusal is made here, at the connection, rather than on the page's
  * address: it then holds for a redirect, a page that navigates itself after
@@ -8,6 +8,10 @@
  * machine. Each destination is resolved here, every address it resolves to is
  * checked, and the connection goes to the address that was checked — never to
  * the name, which could resolve differently a moment later.
+ *
+ * No profile reaches this machine. An ephemeral profile's proxy also admits
+ * nothing beyond its harness's reach, with the loopback ports declared for
+ * that harness as the one exception to both.
  *
  * One per running profile, bound to loopback on a port the system picks, and
  * stopped with the profile's browser.
@@ -30,12 +34,18 @@ import {
   type LocalAddressClassifier,
   machineAddresses,
 } from './addresses.js';
+import { declaredLoopback, harnessMayReach, type HarnessReach } from './harnessReach.js';
+
+/**
+ * `local`: this machine's own address. `rule`: an origin rule the operator
+ * set. `reach`: beyond what an ephemeral profile's harness may reach.
+ */
+export type RefusalKind = 'local' | 'rule' | 'reach';
 
 export interface ProxyRefusal {
   readonly host: string;
   readonly port: number;
-  /** `local`: this machine's own address. `rule`: an origin rule the operator set. */
-  readonly kind: 'local' | 'rule';
+  readonly kind: RefusalKind;
   readonly reason: string;
   readonly at: number;
 }
@@ -44,20 +54,110 @@ export interface ResolvedAddress {
   readonly address: string;
 }
 
-export interface EgressProxyOptions {
+/** What a profile's proxy admits. */
+export interface EgressPolicy {
   /** Why the operator's rules refuse connections to this host, or nothing when they do not. */
   readonly refuseHost?: (host: string) => string | undefined;
+  /** An ephemeral profile's: its harness's reach. Absent for a profile the machine declares. */
+  readonly reach?: HarnessReach;
+}
+
+export interface EgressProxyOptions extends EgressPolicy {
   readonly lookup?: (host: string) => Promise<readonly ResolvedAddress[]>;
   /** Opens the upstream connection to an address already checked. */
   readonly connect?: (address: string, port: number) => Socket;
   readonly classifier?: LocalAddressClassifier;
   readonly now?: () => number;
-  /**
-   * Lets connections reach this machine. Only an ephemeral profile's proxy
-   * sets it: that profile holds no session, and opening a dev server on this
-   * machine is what it is for (D12). Rules still apply.
-   */
-  readonly reachesThisMachine?: boolean;
+}
+
+export type EgressDecision =
+  | { readonly verdict: 'connect'; readonly address: string }
+  | { readonly verdict: 'refuse'; readonly kind: RefusalKind; readonly reason: string }
+  | { readonly verdict: 'unreachable'; readonly reason: string };
+
+/** A host as a URL or a CONNECT authority carries it, in the form every check compares. */
+export function egressHost(raw: string): string {
+  return bareAddress(raw.toLowerCase().replace(/\.$/, ''));
+}
+
+/**
+ * What the name alone decides, or nothing when it has to be resolved and the
+ * addresses given to `decideResolved`. `host` is as `egressHost` returns it.
+ */
+export function decideByName(
+  host: string,
+  port: number,
+  policy: EgressPolicy,
+  classifier: LocalAddressClassifier,
+): EgressDecision | undefined {
+  const ruled = policy.refuseHost?.(host);
+  if (ruled !== undefined) return { verdict: 'refuse', kind: 'rule', reason: ruled };
+  const { reach } = policy;
+  if (reach !== undefined) {
+    const loopback = declaredLoopback(host, port, reach, classifier);
+    if (loopback !== undefined) return { verdict: 'connect', address: loopback };
+  }
+  if (isLocalName(host)) {
+    return { verdict: 'refuse', kind: 'local', reason: `${host} names this machine` };
+  }
+  const literal = isIP(host) !== 0;
+  if (literal) {
+    const kind = classifier.classify(host);
+    if (kind !== undefined) {
+      return { verdict: 'refuse', kind: 'local', reason: localAddressReason(host, host, kind) };
+    }
+  }
+  if (reach !== undefined && !harnessMayReach(host, port, reach)) {
+    return {
+      verdict: 'refuse',
+      kind: 'reach',
+      reason: `${host}:${String(port)} is not among the hosts its harness may reach`,
+    };
+  }
+  return literal ? { verdict: 'connect', address: host } : undefined;
+}
+
+/** The decision on a name `decideByName` left open, from every address it resolved to. */
+export function decideResolved(
+  host: string,
+  addresses: readonly ResolvedAddress[],
+  classifier: LocalAddressClassifier,
+): EgressDecision {
+  // Every address, not the first: a name answering with a public address and
+  // a loopback one is a name that can reach this machine.
+  for (const { address } of addresses) {
+    const kind = classifier.classify(address);
+    if (kind === undefined) continue;
+    return { verdict: 'refuse', kind: 'local', reason: localAddressReason(host, address, kind) };
+  }
+  const first = addresses[0];
+  if (first === undefined) return { verdict: 'unreachable', reason: `${host} did not resolve` };
+  return { verdict: 'connect', address: first.address };
+}
+
+/** Whether, and where, a connection to `rawHost:port` goes. */
+export async function decideEgress(
+  rawHost: string,
+  port: number,
+  policy: EgressPolicy,
+  deps: {
+    readonly lookup: (host: string) => Promise<readonly ResolvedAddress[]>;
+    readonly classifier: LocalAddressClassifier;
+  },
+): Promise<EgressDecision> {
+  const host = egressHost(rawHost);
+  const byName = decideByName(host, port, policy, deps.classifier);
+  if (byName !== undefined) return byName;
+  let addresses: readonly ResolvedAddress[];
+  try {
+    addresses = await deps.lookup(host);
+  } catch (error) {
+    return {
+      verdict: 'unreachable',
+      reason: `${host} did not resolve: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  return decideResolved(host, addresses, deps.classifier);
 }
 
 export interface EgressProxy {
@@ -89,6 +189,17 @@ type Decision =
   | { readonly verdict: 'connect'; readonly address: string }
   | { readonly verdict: 'refuse'; readonly refusal: ProxyRefusal }
   | { readonly verdict: 'unreachable'; readonly reason: string };
+
+/** What the browser's request is answered with when the proxy refuses it. */
+function proxyRefusalText(refusal: ProxyRefusal, ephemeral: boolean): string {
+  return (
+    `Refused by this profile's egress proxy: ${refusal.reason}. ` +
+    (ephemeral
+      ? 'An ephemeral profile reaches only what its harness may reach, and on this machine only ' +
+        'the loopback ports the operator declared for that harness.'
+      : "A profile that keeps sign-ins does not reach services on this machine, or origins the operator's rules deny.")
+  );
+}
 
 async function defaultLookup(host: string): Promise<readonly ResolvedAddress[]> {
   return await dnsLookup(host, { all: true, verbatim: true });
@@ -130,53 +241,23 @@ export const startEgressProxy: StartEgressProxy = async (options) => {
   const refusals: ProxyRefusal[] = [];
   const open = new Set<Duplex>();
 
-  const refuse = (
-    host: string,
-    port: number,
-    kind: ProxyRefusal['kind'],
-    reason: string,
-  ): Decision => {
-    const refusal: ProxyRefusal = { host, port, kind, reason, at: now() };
+  const decide = async (rawHost: string, port: number): Promise<Decision> => {
+    const decision = await decideEgress(rawHost, port, options, { lookup, classifier });
+    if (decision.verdict !== 'refuse') return decision;
+    const refusal: ProxyRefusal = {
+      host: egressHost(rawHost),
+      port,
+      kind: decision.kind,
+      reason: decision.reason,
+      at: now(),
+    };
     refusals.push(refusal);
     if (refusals.length > REFUSALS_KEPT) refusals.shift();
     return { verdict: 'refuse', refusal };
   };
 
-  const decide = async (rawHost: string, port: number): Promise<Decision> => {
-    const host = bareAddress(rawHost.toLowerCase().replace(/\.$/, ''));
-    const ruled = options.refuseHost?.(host);
-    if (ruled !== undefined) return refuse(host, port, 'rule', ruled);
-    const local = options.reachesThisMachine !== true;
-    if (local && isLocalName(host)) {
-      return refuse(host, port, 'local', `${host} names this machine`);
-    }
-
-    let addresses: readonly ResolvedAddress[];
-    try {
-      addresses = isIP(host) !== 0 ? [{ address: host }] : await lookup(host);
-    } catch (error) {
-      return {
-        verdict: 'unreachable',
-        reason: `${host} did not resolve: ${error instanceof Error ? error.message : String(error)}`,
-      };
-    }
-    if (addresses.length === 0)
-      return { verdict: 'unreachable', reason: `${host} did not resolve` };
-    // Every address, not the first: a name answering with a public address and
-    // a loopback one is a name that can reach this machine.
-    for (const { address } of local ? addresses : []) {
-      const kind = classifier.classify(address);
-      if (kind === undefined) continue;
-      return refuse(host, port, 'local', localAddressReason(host, address, kind));
-    }
-    const first = addresses[0];
-    if (first === undefined) return { verdict: 'unreachable', reason: `${host} did not resolve` };
-    return { verdict: 'connect', address: first.address };
-  };
-
-  const refusalText = (reason: string): string =>
-    `Refused by this profile's egress proxy: ${reason}. A profile that keeps sign-ins does not ` +
-    "reach services on this machine, or origins the operator's rules deny.";
+  const refusalText = (refusal: ProxyRefusal): string =>
+    proxyRefusalText(refusal, options.reach !== undefined);
 
   const track = (socket: Duplex): void => {
     open.add(socket);
@@ -207,7 +288,7 @@ export const startEgressProxy: StartEgressProxy = async (options) => {
       if (decision.verdict === 'refuse') {
         res
           .writeHead(403, { 'content-type': 'text/plain' })
-          .end(`${refusalText(decision.refusal.reason)}\n`);
+          .end(`${refusalText(decision.refusal)}\n`);
         return;
       }
       if (decision.verdict === 'unreachable') {
@@ -254,7 +335,7 @@ export const startEgressProxy: StartEgressProxy = async (options) => {
       if (decision.verdict !== 'connect') {
         const [status, text] =
           decision.verdict === 'refuse'
-            ? ['403 Forbidden', refusalText(decision.refusal.reason)]
+            ? ['403 Forbidden', refusalText(decision.refusal)]
             : ['502 Bad Gateway', decision.reason];
         const body = `${text}\n`;
         client.end(

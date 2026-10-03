@@ -724,8 +724,10 @@ export const HostHarnessBrowserSchema = z
       .union([z.literal(EPHEMERAL_BROWSER_PROFILE), BrowserProfileIdSchema])
       .describe(
         '`ephemeral` — the default choice — is a browser made for this run and deleted with ' +
-          "it: no sign-ins, its own Chrome, and it reaches this machine's own servers, so a dev " +
-          'server the change runs can be opened. A profile id names one the machine declares ' +
+          'it: no sign-ins, its own Chrome, and it reaches only the hosts this harness may reach ' +
+          'and, on this machine, the loopback ports the operator declared for the harness — a ' +
+          'dev server the change runs is opened on one of those, at `localhost` or `127.0.0.1`. ' +
+          'A profile id names one the machine declares ' +
           'and this space may use, with its sign-ins, posture and origin rules; it never ' +
           "reaches this machine's own servers.",
       ),

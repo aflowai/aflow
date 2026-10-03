@@ -17,13 +17,19 @@ import {
 import { type LocalAddressClassifier, machineAddresses } from './addresses.js';
 import type { ChromeLauncher } from './chromeProcess.js';
 import { CREDENTIAL_FIELD_KEYS, entersValue, MODIFIERS } from './credentialFields.js';
-import { type StartEgressProxy, startEgressProxy } from './egressProxy.js';
+import {
+  decideByName,
+  egressHost,
+  type StartEgressProxy,
+  startEgressProxy,
+} from './egressProxy.js';
 import { EphemeralProfiles } from './ephemeralProfiles.js';
 import { BrowserDriverError, errorText } from './errors.js';
 import { boundEntries, boundText, PageObservations } from './observations.js';
 import { type HandoffBoard, NO_BOARD } from './handoffBoard.js';
 import { OperatorWindows, type WaitForOperator, waitInWindow } from './operatorWindow.js';
-import { localDestinationRefusal, obviouslyLocalDestination } from './origins.js';
+import type { HarnessReach } from './harnessReach.js';
+import { localDestinationRefusal, reachRefusal } from './origins.js';
 import { applyPolicyChange } from './policyChange.js';
 import { ProfileBrowsers, type RunningProfile } from './profileBrowsers.js';
 import {
@@ -148,7 +154,7 @@ export class BrowserDriver {
       classifier: deps.classifier ?? machineAddresses,
       pages: this.pages,
       now: this.now,
-      ephemeralDirectory: (profileId) => this.ephemeral.directory(profileId),
+      ephemeral: (profileId) => this.ephemeral.launch(profileId),
     });
     this.windows = new OperatorWindows({
       pages: this.pages,
@@ -173,7 +179,7 @@ export class BrowserDriver {
     const profile = this.profileFor(policy, request.profileId, request);
     this.browsers.refuseWhileShown(profile.id);
     const asked = new URL(request.url);
-    this.refuseObviouslyLocal(profile, asked);
+    this.refuseBeforeConnecting(profile, asked);
     assertNavigationAllowed(profile, asked);
     if (request.redelivered) return await this.reopened(request, profile, asked);
 
@@ -300,7 +306,7 @@ export class BrowserDriver {
   ): Promise<NavigationResult> {
     const asked = request.to.kind === 'url' ? new URL(request.to.url) : undefined;
     if (asked !== undefined) {
-      this.refuseObviouslyLocal(profile, asked);
+      this.refuseBeforeConnecting(profile, asked);
       assertNavigationAllowed(profile, asked);
       held.askedUrl = asked.href;
     }
@@ -635,9 +641,12 @@ export class BrowserDriver {
   // Ephemeral profiles
   // -------------------------------------------------------------------------
 
-  /** A profile for one run, in a directory the caller made and deletes; its id. */
-  startEphemeral(owner: RunScope, userDataDir: string): string {
-    return this.ephemeral.add(owner, userDataDir).id;
+  /**
+   * A profile for one run, in a directory the caller made and deletes,
+   * reaching what the run's harness may reach; its id.
+   */
+  startEphemeral(owner: RunScope, userDataDir: string, reach: HarnessReach): string {
+    return this.ephemeral.add(owner, userDataDir, reach).id;
   }
 
   /** Ends a run's ephemeral profile: its pages gone, its browser stopped and exited. */
@@ -913,7 +922,7 @@ export class BrowserDriver {
     const url = urlOrNothing(address);
     if (url === undefined || (url.protocol !== 'http:' && url.protocol !== 'https:')) return false;
     try {
-      this.refuseObviouslyLocal(profile, url);
+      this.refuseBeforeConnecting(profile, url);
       assertNavigationAllowed(profile, url);
       return true;
     } catch {
@@ -921,15 +930,33 @@ export class BrowserDriver {
     }
   }
 
-  private refuseObviouslyLocal(profile: BrowserProfile, url: URL): void {
-    if (this.ephemeral.has(profile.id)) return;
-    const reason = obviouslyLocalDestination(url, this.deps.classifier ?? machineAddresses);
-    if (reason === undefined) return;
-    throw new BrowserDriverError(
-      'appliance_origin',
-      localDestinationRefusal(profile.id, reason, 'asked'),
-      { origin: url.origin },
+  /**
+   * Refuses an address the proxy would refuse by its name alone, before a
+   * browser is started or touched for it. The proxy still decides every
+   * connection, this one included.
+   */
+  private refuseBeforeConnecting(profile: BrowserProfile, url: URL): void {
+    const reach = this.ephemeral.reach(profile.id);
+    const port = url.port !== '' ? Number(url.port) : url.protocol === 'https:' ? 443 : 80;
+    const decision = decideByName(
+      egressHost(url.hostname),
+      port,
+      reach !== undefined ? { reach } : {},
+      this.deps.classifier ?? machineAddresses,
     );
+    if (decision?.verdict !== 'refuse') return;
+    const details = { origin: url.origin };
+    throw decision.kind === 'reach'
+      ? new BrowserDriverError(
+          'origin_denied',
+          reachRefusal(profile.id, decision.reason, 'asked'),
+          details,
+        )
+      : new BrowserDriverError(
+          'appliance_origin',
+          localDestinationRefusal(profile.id, decision.reason, 'asked'),
+          details,
+        );
   }
 
   private assertLanded(
@@ -944,7 +971,7 @@ export class BrowserDriver {
     }
     const refused = landedRefusal(running.proxy, landed, since);
     if (refused !== undefined) throw refusalError(profile, refused);
-    this.refuseObviouslyLocal(profile, landed);
+    this.refuseBeforeConnecting(profile, landed);
     assertNavigationAllowed(profile, landed);
   }
 
@@ -980,7 +1007,7 @@ export class BrowserDriver {
     if (generation === this.generation) return profile;
     const { policy } = await this.currentPolicy();
     const now = this.profileFor(policy, request.profileId, request);
-    this.refuseObviouslyLocal(now, asked);
+    this.refuseBeforeConnecting(now, asked);
     assertNavigationAllowed(now, asked);
     return now;
   }

@@ -53,6 +53,7 @@ import {
 import type { BrowserDriver } from './driver.js';
 import type { RunScope } from './driverTypes.js';
 import { BrowserDriverError } from './errors.js';
+import type { HarnessReach } from './harnessReach.js';
 
 /** The directory under the run's scratch that holds everything written here. */
 export const HARNESS_BROWSER_DIR = 'browser';
@@ -162,6 +163,8 @@ export interface HarnessBrowserOptions {
   readonly scope: RunScope;
   /** What the run asked for: `ephemeral`, or a profile the machine declares. */
   readonly profile: string;
+  /** What the harness may reach, from its profile on this machine; an ephemeral profile reaches no more. */
+  readonly reach: HarnessReach;
   /** The run's scratch directory, which its sandbox may already read and write. */
   readonly scratchDir: string;
   readonly stepExecutionId: string;
@@ -242,7 +245,7 @@ export async function openHarnessBrowser(options: HarnessBrowserOptions): Promis
     ephemeralDir = await mkdtemp(
       join(options.ephemeralRoot ?? tmpdir(), EPHEMERAL_PROFILE_SCRATCH_PREFIX),
     );
-    profileId = driver.startEphemeral(scope, ephemeralDir);
+    profileId = driver.startEphemeral(scope, ephemeralDir, options.reach);
   } else {
     profileId = (await driver.harnessProfile(scope, options.profile)).id;
   }

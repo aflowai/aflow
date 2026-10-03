@@ -15,7 +15,14 @@ import type { ChromeDiscovery } from '../../browser/chromeDiscovery.js';
 import type { ChromeLauncher, ChromeLaunchInput } from '../../browser/chromeProcess.js';
 import { entersValue } from '../../browser/credentialFields.js';
 import { BrowserDriver, type BrowserPolicy } from '../../browser/driver.js';
-import type { EgressProxy, EgressProxyOptions, ProxyRefusal } from '../../browser/egressProxy.js';
+import {
+  decideByName,
+  decideResolved,
+  type EgressProxy,
+  type EgressProxyOptions,
+  egressHost,
+  type ProxyRefusal,
+} from '../../browser/egressProxy.js';
 import { BrowserDriverError } from '../../browser/errors.js';
 import type { HandoffBoard } from '../../browser/handoffBoard.js';
 import type { WaitForOperator } from '../../browser/operatorWindow.js';
@@ -268,6 +275,9 @@ export class FakePage implements EnginePage {
   }
 }
 
+/** Where every host the world does not hold local resolves. */
+const FAKE_PUBLIC_ADDRESS = '93.184.216.34';
+
 export class FakeProxy implements EgressProxy {
   readonly port = 41_000;
   readonly server = 'http://127.0.0.1:41000';
@@ -280,24 +290,31 @@ export class FakeProxy implements EgressProxy {
     private readonly now: () => number,
   ) {}
 
-  /** The real proxy's decision, by name: the operator's rules first, then this machine. */
-  check(host: string, port: string): ProxyRefusal | undefined {
-    const at = this.now();
+  /**
+   * The real proxy's decision, with the world's names resolved: a local host
+   * to loopback, anything else to a public address.
+   */
+  check(rawHost: string, port: string): ProxyRefusal | undefined {
+    const host = egressHost(rawHost);
     const numericPort = port === '' ? 443 : Number(port);
-    const ruled = this.options.refuseHost?.(host);
-    const refusal: ProxyRefusal | undefined =
-      ruled !== undefined
-        ? { host, port: numericPort, kind: 'rule', reason: ruled, at }
-        : this.options.reachesThisMachine !== true && this.world.localHosts.has(host)
-          ? {
-              host,
-              port: numericPort,
-              kind: 'local',
-              reason: `${host} resolves to 127.0.0.1, a loopback address`,
-              at,
-            }
-          : undefined;
-    if (refusal !== undefined) this.refusals.push(refusal);
+    const classifier =
+      this.options.classifier ?? createLocalAddressClassifier({ readInterfaces: () => [] });
+    const decision =
+      decideByName(host, numericPort, this.options, classifier) ??
+      decideResolved(
+        host,
+        [{ address: this.world.localHosts.has(host) ? '127.0.0.1' : FAKE_PUBLIC_ADDRESS }],
+        classifier,
+      );
+    if (decision.verdict !== 'refuse') return undefined;
+    const refusal: ProxyRefusal = {
+      host,
+      port: numericPort,
+      kind: decision.kind,
+      reason: decision.reason,
+      at: this.now(),
+    };
+    this.refusals.push(refusal);
     return refusal;
   }
 

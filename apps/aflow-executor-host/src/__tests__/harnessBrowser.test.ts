@@ -40,6 +40,7 @@ import {
   openHarnessBrowser,
   relayToolDefinitions,
 } from '../browser/harnessBrowser.js';
+import type { HarnessReach } from '../browser/harnessReach.js';
 import { createBrowserHandler } from '../handlers/browserHandler.js';
 import { harness, type Harness, profile, RUN_A } from './fixtures/fakeBrowser.js';
 import { executorEnd, RELAY_SCRIPT, relayEnd, startRelay } from './fixtures/relayPipes.js';
@@ -57,6 +58,12 @@ const VOCABULARY: ReadonlyArray<readonly [string, string]> = [
 
 const BLOCKED = 'https://www.blocked.example/';
 const DEV_SERVER = 'http://localhost:5173/';
+/** The port the operator declared for the harness in these tests. */
+const DEV_PORT = 5173;
+/** A harness that may reach nothing, with its dev server's port declared. */
+const DEV_REACH: HarnessReach = { allowedDomains: [], localPorts: [DEV_PORT] };
+/** Documentation-range address, standing in for this machine's LAN address. */
+const LAN_ADDRESS = '192.0.2.10';
 
 const cleanup: Array<() => Promise<void>> = [];
 
@@ -91,7 +98,11 @@ interface Opened {
   readonly ephemeralRoot: string;
 }
 
-async function openBrowser(h: Harness, profileName: string): Promise<Opened> {
+async function openBrowser(
+  h: Harness,
+  profileName: string,
+  reach: HarnessReach = DEV_REACH,
+): Promise<Opened> {
   const scratch = await tempDir('aflow-harness-browser-');
   const ephemeralRoot = await tempDir('aflow-harness-ephemeral-');
   const activity: HarnessActivityLine[] = [];
@@ -100,6 +111,7 @@ async function openBrowser(h: Harness, profileName: string): Promise<Opened> {
     driver: h.driver,
     scope: RUN_A,
     profile: profileName,
+    reach,
     scratchDir: scratch,
     stepExecutionId: 'se-harness',
     storeScreenshot: (image) => {
@@ -293,7 +305,7 @@ describe('a deny rule', () => {
 });
 
 describe('the ephemeral profile', () => {
-  it('is made for the run, reaches this machine, and is gone with the run', async () => {
+  it('is made for the run, reaches its declared port, and is gone with the run', async () => {
     const h = world();
     const { browser, ephemeralRoot, scratch, activity } = await openBrowser(h, 'ephemeral');
     const [made] = await readdir(ephemeralRoot);
@@ -322,7 +334,7 @@ describe('the ephemeral profile', () => {
     ).rejects.toMatchObject({ kind: 'unknown_profile' });
   });
 
-  it('is the only profile that reaches this machine', async () => {
+  it('is the only profile that reaches a declared port', async () => {
     const h = world();
     const { browser } = await openBrowser(h, 'default');
     const refused = await asRelay(browser).call('open', { url: DEV_SERVER });
@@ -345,6 +357,96 @@ describe('the ephemeral profile', () => {
         redelivered: false,
       }),
     ).rejects.toMatchObject({ kind: 'unknown_profile' });
+  });
+});
+
+describe('what the ephemeral profile reaches', () => {
+  function code(result: CallResult): string | undefined {
+    return (body(result)['error'] as { code?: string } | undefined)?.code;
+  }
+
+  it('reaches no public address when its harness may reach none', async () => {
+    const h = world();
+    const { browser } = await openBrowser(h, 'ephemeral', { allowedDomains: [], localPorts: [] });
+    const refused = await asRelay(browser).call('open', { url: 'https://example.com/' });
+    expect(refused.isError).toBe(true);
+    expect(code(refused)).toBe('BROWSER_ORIGIN_DENIED');
+    expect(body(refused)['error']).toMatchObject({
+      message: expect.stringContaining('reaches only what its harness may reach'),
+    });
+    expect(h.pages.flatMap((page) => page.history)).toEqual([]);
+  });
+
+  it('reaches what its harness may reach, and nothing else', async () => {
+    const h = world();
+    const { browser } = await openBrowser(h, 'ephemeral', {
+      allowedDomains: ['example.com'],
+      localPorts: [],
+    });
+    const relay = asRelay(browser);
+    const opened = await relay.call('open', { url: 'https://example.com/' });
+    expect(opened.isError).toBeUndefined();
+    const { pageId } = body(opened) as { pageId: string };
+
+    const other = await relay.call('open', { url: 'https://example.org/' });
+    expect(code(other)).toBe('BROWSER_ORIGIN_DENIED');
+    const moved = await relay.call('navigate', { pageId, url: 'https://example.org/' });
+    expect(code(moved)).toBe('BROWSER_ORIGIN_DENIED');
+    expect(h.pages.flatMap((page) => page.history)).toEqual(['https://example.com/']);
+  });
+
+  it('is refused at the proxy for a redirect or a subresource beyond its harness’s reach', async () => {
+    const h = world();
+    h.world.redirects.set('https://example.com/out', 'https://example.org/landing');
+    h.world.subresources.set('https://example.com/', ['https://tracker.example.net/pixel']);
+    const { browser } = await openBrowser(h, 'ephemeral', {
+      allowedDomains: ['example.com'],
+      localPorts: [],
+    });
+    const relay = asRelay(browser);
+    expect((await relay.call('open', { url: 'https://example.com/' })).isError).toBeUndefined();
+    const redirected = await relay.call('open', { url: 'https://example.com/out' });
+    expect(code(redirected)).toBe('BROWSER_ORIGIN_DENIED');
+    expect(h.proxies.at(-1)?.refusals.map(({ host, kind }) => ({ host, kind }))).toEqual([
+      { host: 'tracker.example.net', kind: 'reach' },
+      { host: 'example.org', kind: 'reach' },
+    ]);
+  });
+
+  it('reaches no port on this machine when none was declared', async () => {
+    const h = world();
+    h.interfaces.push(LAN_ADDRESS);
+    const { browser } = await openBrowser(h, 'ephemeral', { allowedDomains: [], localPorts: [] });
+    const relay = asRelay(browser);
+    for (const url of [
+      DEV_SERVER,
+      'http://127.0.0.1:5173/',
+      'http://[::1]:5173/',
+      'http://[::ffff:127.0.0.1]:5173/',
+      'http://0.0.0.0:5173/',
+      `http://${LAN_ADDRESS}:5173/`,
+    ]) {
+      const refused = await relay.call('open', { url });
+      expect(code(refused), url).toBe('BROWSER_ORIGIN_REFUSED');
+    }
+    expect(h.launches).toHaveLength(0);
+  });
+
+  it('reaches a declared port on loopback, and not on the LAN address nor any other port', async () => {
+    const h = world();
+    h.interfaces.push(LAN_ADDRESS);
+    const { browser } = await openBrowser(h, 'ephemeral');
+    const relay = asRelay(browser);
+    for (const url of [DEV_SERVER, 'http://127.0.0.1:5173/']) {
+      expect((await relay.call('open', { url })).isError, url).toBeUndefined();
+    }
+    for (const url of [
+      `http://${LAN_ADDRESS}:5173/`,
+      'http://localhost:3001/',
+      'http://127.0.0.1:3000/',
+    ]) {
+      expect(code(await relay.call('open', { url })), url).toBe('BROWSER_ORIGIN_REFUSED');
+    }
   });
 });
 

@@ -698,6 +698,7 @@ async function runHarness(
           ...(ctx.spaceId !== undefined ? { spaceId: ctx.spaceId } : {}),
         },
         profile: input.browser.profile,
+        reach: { allowedDomains: profile.allowedDomains, localPorts: profile.browserLocalPorts },
         scratchDir,
         stepExecutionId: ctx.stepExecutionId,
         storeScreenshot: async (image) => await browserService.storeScreenshot(tenantId, image),

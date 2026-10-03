@@ -121,6 +121,7 @@ beforeAll(async () => {
           args: ['-c', 'true'],
           mcpArgs: MCP_ARGS,
           allowedDomains: ['api.example.com'],
+          browserLocalPorts: [5173],
         },
         { id: 'bare', executable: '/bin/sh', args: ['-c', 'true'] },
       ],

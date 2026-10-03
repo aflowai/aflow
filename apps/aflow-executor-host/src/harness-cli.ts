@@ -17,6 +17,7 @@ import { dirname, resolve } from 'node:path';
 import { resolveBranchPolicy } from '@aflow/schemas';
 
 import { HostPolicySchema } from './bindings.js';
+import { appliancePortWarning, parseLocalPorts } from './browserLocalPorts.js';
 import { LocalMcpServerSchema } from './localMcpServers.js';
 import { discoverHarnesses, knownMcpArgs } from './harnessDiscovery.js';
 import {
@@ -44,6 +45,10 @@ function usage(): never {
       '                                     an MCP configuration file, with {mcpConfig} where\n' +
       '                                     its path goes. With none, those measured for it.\n' +
       '  harness browser <id> --clear       Hand it no browser.\n' +
+      '  harness browser-ports <id> <port>...\n' +
+      '                                     Ports on this machine its ephemeral browser may load,\n' +
+      '                                     on loopback only.\n' +
+      '  harness browser-ports <id> --clear Let it load none.\n' +
       '  harness push-approval <folder> <always|never|unless-unreviewed>\n' +
       '                                     When a publication from a folder asks before pushing.\n' +
       '  harness checks <folder> [--timeout-minutes <n>] -- <program> [args...]\n' +
@@ -97,7 +102,11 @@ function describe(profile: HarnessProfile): string {
   const credential = profile.credential ? `, credential via ${profile.credential.env}` : '';
   const named = profile.label === undefined ? '' : ` (${profile.label})`;
   const model = profile.model === undefined ? 'its default model' : `model ${profile.model}`;
-  const browser = profile.mcpArgs.length === 0 ? ', no browser' : ', takes a browser';
+  const ports =
+    profile.browserLocalPorts.length === 0
+      ? ''
+      : ` on loopback ports ${profile.browserLocalPorts.join(', ')}`;
+  const browser = profile.mcpArgs.length === 0 ? ', no browser' : `, takes a browser${ports}`;
   return `  ${profile.id}${named} — ${profile.executable}, ${model}, ${egress}${credential}${browser}`;
 }
 
@@ -284,6 +293,7 @@ async function add(id: string): Promise<void> {
   // message.
   if (existing) {
     profile.allowedDomains = existing.allowedDomains;
+    profile.browserLocalPorts = existing.browserLocalPorts;
     if (profile.credential === undefined && existing.credential !== undefined) {
       profile.credential = existing.credential;
     }
@@ -384,6 +394,34 @@ async function setMcpArgs(id: string, given: readonly string[]): Promise<void> {
   console.log(`\`${id}\` is handed a browser as: ${mcpArgs.join(' ')}`);
 }
 
+async function setBrowserLocalPorts(id: string, given: readonly string[]): Promise<void> {
+  const policy = await loadPolicy();
+  const profile = policy.harnesses.find((h) => h.id === id);
+  if (!profile) {
+    console.error(`'${id}' is not configured here. Add it first: aflow harness add ${id}`);
+    process.exit(1);
+  }
+  if (given.length === 1 && given[0] === '--clear') {
+    profile.browserLocalPorts = [];
+    await savePolicy(policy);
+    console.log(`\`${id}\`'s ephemeral browser now loads nothing on this machine.`);
+    return;
+  }
+  const parsed = parseLocalPorts(given);
+  if (!parsed.ok) {
+    console.error(`'${parsed.word}' is not a port: give whole numbers from 1 to 65535.`);
+    process.exit(1);
+  }
+  const warning = appliancePortWarning(id, parsed.ports, process.env);
+  if (warning !== undefined) console.warn(warning);
+  profile.browserLocalPorts = [...new Set([...profile.browserLocalPorts, ...parsed.ports])];
+  await savePolicy(policy);
+  console.log(
+    `\`${id}\`'s ephemeral browser now loads ports ${profile.browserLocalPorts.join(', ')} ` +
+      'on loopback — localhost, 127.0.0.1, [::1] — and on no other address of this machine.',
+  );
+}
+
 async function setPushApproval(bindingId: string, requested: string): Promise<void> {
   const updated = withPushApproval(await loadPolicy(), bindingId, requested);
   await savePolicy(updated);
@@ -469,6 +507,11 @@ async function main(): Promise<void> {
   }
   if (command === 'browser') {
     await setMcpArgs(id, rest);
+    return;
+  }
+  if (command === 'browser-ports') {
+    if (rest.length === 0) usage();
+    await setBrowserLocalPorts(id, rest);
     return;
   }
   if (command === 'push-approval') {

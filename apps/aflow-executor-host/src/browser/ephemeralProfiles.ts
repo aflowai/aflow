@@ -3,9 +3,9 @@
  *
  * One per run that asked for it: a fresh directory made for the run and
  * deleted with it, no sign-ins, its own Chrome. It belongs to the run that
- * asked for it — any other run is answered as if it did not exist — and it is
- * the one profile whose proxy lets it reach this machine, because it carries
- * no session an agent could act with there.
+ * asked for it — any other run is answered as if it did not exist — and it
+ * reaches only what that run's harness may reach, plus the loopback ports the
+ * operator declared for the harness.
  */
 import { randomBytes } from 'node:crypto';
 
@@ -17,24 +17,28 @@ import {
 } from '@aflow/schemas';
 
 import { BrowserDriverError } from './errors.js';
+import type { HarnessReach } from './harnessReach.js';
 import type { PageOwner } from './pageTable.js';
+import type { EphemeralLaunch } from './profileBrowsers.js';
 
 interface HeldEphemeral {
   readonly profile: BrowserProfile;
   readonly owner: PageOwner;
   readonly userDataDir: string;
+  readonly reach: HarnessReach;
 }
 
 export class EphemeralProfiles {
   private readonly held = new Map<string, HeldEphemeral>();
 
-  add(owner: PageOwner, userDataDir: string): BrowserProfile {
+  add(owner: PageOwner, userDataDir: string, reach: HarnessReach): BrowserProfile {
     const id = `${EPHEMERAL_BROWSER_PROFILE}-${randomBytes(6).toString('hex')}`;
     const profile: BrowserProfile = { ...BrowserProfileSchema.omit({ id: true }).parse({}), id };
     this.held.set(id, {
       profile,
       owner: { tenantId: owner.tenantId, runId: owner.runId },
       userDataDir,
+      reach,
     });
     return profile;
   }
@@ -47,8 +51,14 @@ export class EphemeralProfiles {
     return this.held.has(profileId);
   }
 
-  directory(profileId: string): string | undefined {
-    return this.held.get(profileId)?.userDataDir;
+  /** Where its browser keeps its directory, and what it reaches. */
+  launch(profileId: string): EphemeralLaunch | undefined {
+    const held = this.held.get(profileId);
+    return held === undefined ? undefined : { userDataDir: held.userDataDir, reach: held.reach };
+  }
+
+  reach(profileId: string): HarnessReach | undefined {
+    return this.held.get(profileId)?.reach;
   }
 
   all(): BrowserProfile[] {

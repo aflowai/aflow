@@ -13,6 +13,7 @@ import type { BrowserProfile } from '@aflow/schemas';
 import type { LocalAddressClassifier } from './addresses.js';
 import type { ChromeLauncher, LaunchedChrome } from './chromeProcess.js';
 import type { EgressProxy, StartEgressProxy } from './egressProxy.js';
+import type { HarnessReach } from './harnessReach.js';
 import { BrowserDriverError, errorText } from './errors.js';
 import type { PageTable } from './pageTable.js';
 import { ruleRefusingHost } from './rules.js';
@@ -61,8 +62,16 @@ export interface ProfileBrowsersDeps {
   readonly classifier: LocalAddressClassifier;
   readonly pages: PageTable;
   readonly now: () => number;
-  /** The directory of an ephemeral profile, which is not under the host directory; nothing for any other. */
-  readonly ephemeralDirectory: (profileId: string) => string | undefined;
+  /**
+   * An ephemeral profile's directory, which is not under the host directory,
+   * and its harness's reach; nothing for any other profile.
+   */
+  readonly ephemeral: (profileId: string) => EphemeralLaunch | undefined;
+}
+
+export interface EphemeralLaunch {
+  readonly userDataDir: string;
+  readonly reach: HarnessReach;
 }
 
 export class ProfileBrowsers {
@@ -222,13 +231,13 @@ export class ProfileBrowsers {
     state: ProfileState,
     window: BrowserProfile['window'],
   ): Promise<RunningProfile> {
-    const ephemeral = this.deps.ephemeralDirectory(profileId);
+    const ephemeral = this.deps.ephemeral(profileId);
     // Before Chrome, so no request of Chrome's ever goes out unchecked.
     const proxy = await this.deps.startProxy({
       refuseHost: (host) => ruleRefusingHost(state.profile, host),
       classifier: this.deps.classifier,
       now: this.deps.now,
-      ...(ephemeral !== undefined ? { reachesThisMachine: true } : {}),
+      ...(ephemeral !== undefined ? { reach: ephemeral.reach } : {}),
     });
     let chrome: LaunchedChrome;
     try {
@@ -237,7 +246,7 @@ export class ProfileBrowsers {
         hostDir: this.deps.hostDir,
         profile: { ...state.profile, window },
         proxyServer: proxy.server,
-        ...(ephemeral !== undefined ? { userDataDir: ephemeral } : {}),
+        ...(ephemeral !== undefined ? { userDataDir: ephemeral.userDataDir } : {}),
       });
     } catch (error) {
       await proxy.stop().catch(() => undefined);
