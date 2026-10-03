@@ -10,10 +10,12 @@ export interface McpServerConfig {
   /**
    * The interface the HTTP server listens on: `MCP_HOST`, else loopback.
    *
-   * A session that picks up the local auth file is the instance's owner, so
-   * listening on every interface hands the owner to anything on the operator's
-   * network that reaches the port. Not `HOST`: the shared `.env` sets that to
-   * every interface for the API server.
+   * A session that picks up the local auth file is the instance's owner.
+   * Loopback keeps other machines from reaching the port; the Host and Origin
+   * checks in `requestGate.ts` keep a web page the operator visits from reaching
+   * it through a name rebound to loopback. It takes both to keep the owner on
+   * this machine. Not `HOST`: the shared `.env` sets that to every interface for
+   * the API server.
    */
   readonly host: string;
   /** Log level */
@@ -29,13 +31,20 @@ export interface McpServerConfig {
    */
   readonly unauthenticatedFallback: boolean;
   /**
-   * Answer a browser's CORS preflight with the caller's own origin.
+   * Whether any browser origin may be admitted; `allowedOrigins` names which.
    *
    * MCP clients are not browsers. This is for a developer driving the endpoint
-   * from one, and is unrelated to whether a session may go uncredentialed.
+   * from one, and is unrelated to whether a session may go uncredentialed. A
+   * configured local auth file overrides it: no browser page is admitted while
+   * a session could be handed the owner's key.
    */
   readonly allowBrowserOrigins: boolean;
-  /** Allowed Host headers in production (rejects direct provider URLs) */
+  /** `MCP_ALLOWED_ORIGINS`: the exact origins (`scheme://host[:port]`) a browser request may carry. */
+  readonly allowedOrigins: readonly string[];
+  /**
+   * `ALLOWED_HOSTS`: the hostnames this server answers to, on any port. Empty:
+   * `localhost`, `127.0.0.1` and `[::1]` on `port`, and nothing else.
+   */
   readonly allowedHosts: readonly string[];
   /** Shared secret for Cloudflare origin verification (skips bot challenges) */
   readonly cfOriginSecret: string | undefined;
@@ -46,14 +55,19 @@ export interface McpServerConfig {
   readonly localAuthJsonPath: string | undefined;
 }
 
+function listFromEnv(key: string): string[] {
+  return (process.env[key] ?? '')
+    .split(',')
+    .map((entry) => entry.trim().toLowerCase())
+    .filter((entry) => entry !== '');
+}
+
 export function loadConfig(): McpServerConfig {
   const logLevel = (process.env['LOG_LEVEL'] ?? 'info') as McpServerConfig['logLevel'];
   const nodeEnv = process.env['NODE_ENV'] ?? 'development';
 
-  const allowedHostsRaw = process.env['ALLOWED_HOSTS'] ?? '';
-  const allowedHosts = allowedHostsRaw
-    ? allowedHostsRaw.split(',').map((h) => h.trim().toLowerCase())
-    : [];
+  const allowedHosts = listFromEnv('ALLOWED_HOSTS');
+  const allowedOrigins = listFromEnv('MCP_ALLOWED_ORIGINS').map((o) => o.replace(/\/+$/, ''));
 
   const localAuthJsonRaw = process.env['AFLOW_MCP_LOCAL_AUTH_JSON']?.trim();
   const localAuthJsonPath =
@@ -73,6 +87,7 @@ export function loadConfig(): McpServerConfig {
     unauthenticatedFallback:
       nodeEnv !== 'production' && process.env['PHOENIX_EDITION']?.trim() !== 'community-local',
     allowBrowserOrigins: nodeEnv !== 'production',
+    allowedOrigins,
     allowedHosts,
     localAuthJsonPath,
   };
