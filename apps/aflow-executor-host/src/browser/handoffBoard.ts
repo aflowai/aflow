@@ -59,8 +59,23 @@ function notPosted(entry: HandoffEntry, why: string): BrowserDriverError {
   return new BrowserDriverError(
     'handoff_not_posted',
     `The hand-off of profile \`${entry.profileId}\` at ${entry.site} could not be put in the ` +
-      `Action Center (${why}), so nobody would have been told the run was waiting; it was not ` +
-      'left waiting. The profile is back in use by runs.',
+      `Action Center (${why}), so nobody would have been told the run was waiting; the window ` +
+      'was not shown and the run was not left waiting. The profile stays in use by runs.',
+  );
+}
+
+/**
+ * A `NOPERM` is this machine's grant on the stack's Redis lacking what the
+ * hand-off writes — a grant from before the code that writes it — and the
+ * remedy is on the stack, not here.
+ */
+function refusalText(error: unknown): string {
+  const text = errorText(error);
+  if (!/^NOPERM\b/.test(text)) return text;
+  return (
+    `the stack's Redis refused this machine: ${text}. The stack's Redis grant for the host is ` +
+    'out of date — the API server asserts it each time it starts, so restarting the API server ' +
+    'brings it up to date; nothing on this machine needs changing'
   );
 }
 
@@ -174,7 +189,7 @@ export function createRedisHandoffBoard(deps: RedisHandoffBoardDeps): HandoffBoa
           ...where,
           error: errorText(error),
         });
-        throw notPosted(entry, errorText(error));
+        throw notPosted(entry, refusalText(error));
       }
 
       let closed = false;

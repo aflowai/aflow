@@ -506,7 +506,7 @@ async function runHarness(
       if (error instanceof HostBindingError) await discardSessionsForBinding(input.bindingId);
       throw error;
     }
-    requireSpace(binding, ctx.spaceId);
+    const spaceId = requireSpace(binding, ctx.spaceId);
     requireDirectory(binding);
     // A harness edits files and runs commands. It needs the grant that had to
     // be typed, not the one a folder gets by being connected.
@@ -706,11 +706,7 @@ async function runHarness(
       const tenantId = ctx.tenantId;
       browser = await openHarnessBrowser({
         driver: browserService.driver,
-        scope: {
-          tenantId,
-          runId: ctx.runId,
-          ...(ctx.spaceId !== undefined ? { spaceId: ctx.spaceId } : {}),
-        },
+        scope: { tenantId, runId: ctx.runId, spaceId },
         profile: input.browser.profile,
         reach: { allowedDomains: profile.allowedDomains, localPorts: profile.browserLocalPorts },
         scratchDir,

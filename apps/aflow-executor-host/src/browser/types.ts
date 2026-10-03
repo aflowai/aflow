@@ -15,6 +15,12 @@ export interface PageSnapshot {
    * any text field the engine could not confirm is not one.
    */
   readonly maskedRefs: ReadonlySet<string>;
+  /**
+   * Whether any text field on the page takes a credential — a password, a
+   * one-time code, a passkey — by its declared type and attributes
+   * (`takesCredential`), or could not be read to say it does not.
+   */
+  readonly holdsCredentialField: boolean;
 }
 
 export type EngineNavigation =

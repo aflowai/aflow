@@ -130,6 +130,37 @@ describe('the engine after an action that starts no navigation', () => {
   });
 });
 
+describe('the engine reading a page’s text fields', () => {
+  const field = (properties: Record<string, unknown>): typeof passwordInput => ({
+    ...passwordInput,
+    evaluate: <R>(fn: (element: unknown) => R): Promise<R> =>
+      Promise.resolve(fn({ tagName: 'INPUT', maxLength: -1, ...properties })),
+  });
+
+  it.each([
+    ['a password field', { type: 'password' }, true, true],
+    ['a one-time-code field', { type: 'text', autocomplete: 'one-time-code' }, false, true],
+    ['a passkey field', { type: 'text', autocomplete: 'username webauthn' }, false, true],
+    ['a short numeric field', { type: 'tel', inputMode: 'numeric', maxLength: 6 }, false, true],
+    ['a long numeric field', { type: 'text', inputMode: 'numeric', maxLength: 20 }, false, false],
+    ['a search field', { type: 'search', autocomplete: 'off' }, false, false],
+  ])('reads %s', async (_name, properties, masked, credential) => {
+    underRef = field(properties);
+    const read = await (await openPage()).snapshot();
+    underRef = passwordInput;
+    expect(read.maskedRefs.has('e5')).toBe(masked);
+    expect(read.holdsCredentialField).toBe(credential);
+  });
+
+  it('takes a field it could not read as one that might take a credential', async () => {
+    underRef = detachedInput;
+    const read = await (await openPage()).snapshot();
+    underRef = passwordInput;
+    expect(read.maskedRefs.has('e5')).toBe(true);
+    expect(read.holdsCredentialField).toBe(true);
+  });
+});
+
 describe('the engine taking a screenshot', () => {
   it('masks every password field, of the page or of one element', async () => {
     const enginePage = await openPage();

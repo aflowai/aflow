@@ -3,11 +3,14 @@
  * sign-in sitting with no run involved.
  *
  * A hand-off is over when the page is no longer the one it was handed over
- * on, shows no credential field and has stopped changing — a sign-in that
- * worked leaves the sign-in page, most often for another page of the same
- * site — when the operator presses Done on its Action Center item, when they
- * close the window, or at the profile's deadline. The sitting is
- * over when the window is closed.
+ * on, holds no field that takes a credential, is not under a sign-in path and
+ * has stopped changing — a sign-in that worked leaves the sign-in pages, most
+ * often for another page of the same site — when the operator presses Done on
+ * its Action Center item, when they close the window, or at the profile's
+ * deadline. A page waiting for approval on another device that shows no field
+ * and sits under no sign-in path looks exactly like a signed-in page, and
+ * completes as one; Done and the window's closing are what end those
+ * faithfully. The sitting is over when the window is closed.
  */
 import {
   type BrowserHandoffOutcome,
@@ -74,6 +77,52 @@ export function pageOf(address: string): string {
   }
 }
 
+/**
+ * Path segments a sign-in's own pages are commonly under. A page that asks for
+ * nothing but has not left them — "check your phone", "approve on your device"
+ * — is a sign-in still under way.
+ */
+export const SIGN_IN_PATH_SEGMENTS: ReadonlySet<string> = new Set([
+  'login',
+  'signin',
+  'sign-in',
+  'session',
+  'sessions',
+  'two-factor',
+  '2fa',
+  'mfa',
+  'verify',
+  'challenge',
+  'otp',
+  'authorize',
+  'oauth',
+  'sso',
+]);
+
+/**
+ * Whether any segment of the address's path is one of `SIGN_IN_PATH_SEGMENTS`,
+ * read without case, an extension or a version number: `/users/sign_in`,
+ * `/login.php` and `/oauth2/authorize` all are.
+ */
+export function onSignInPath(address: string): boolean {
+  let path: string;
+  try {
+    path = new URL(address).pathname;
+  } catch {
+    return false;
+  }
+  return path
+    .toLowerCase()
+    .split('/')
+    .map((segment) =>
+      segment
+        .replace(/\.[a-z]+$/, '')
+        .replace(/(?<=[a-z])\d+$/, '')
+        .replaceAll('_', '-'),
+    )
+    .some((segment) => SIGN_IN_PATH_SEGMENTS.has(segment));
+}
+
 export const waitInWindow: WaitForOperator = async ({
   window,
   startPage,
@@ -98,12 +147,14 @@ export const waitInWindow: WaitForOperator = async ({
       const snapshot = await window.page.snapshot().catch(() => undefined);
       const seen = `${url}\n${snapshot?.text ?? ''}`;
       // A second step of a sign-in — a one-time code, a password on its own
-      // page — has moved on from the first and is still not done.
-      const asksForCredential = snapshot === undefined || snapshot.maskedRefs.size > 0;
+      // page, a wait for approval on another device — has moved on from the
+      // first and is still not done.
+      const stillSigningIn =
+        snapshot === undefined || snapshot.holdsCredentialField || onSignInPath(url);
       if (seen !== lastSeen) {
         lastSeen = seen;
         unchangedSince = clock.now();
-      } else if (!asksForCredential && clock.now() - unchangedSince >= HANDOFF_QUIET_MS) {
+      } else if (!stillSigningIn && clock.now() - unchangedSince >= HANDOFF_QUIET_MS) {
         return 'completed';
       }
     }
@@ -174,18 +225,14 @@ export class OperatorWindows {
         { pageId: held.pageId },
       );
     }
+    browsers.refuseWhileShown(profile.id);
     const startedAt = clock.now();
-    const shown = await browsers.showWindow(profile, executable);
-    let outcome: BrowserHandoffOutcome;
-    let page: EnginePage = held.page;
-    try {
-      if (shown.restarted) {
-        page = await shown.running.browser.firstPage(new PageObservations(clock.now).events());
-        await page.navigate({ kind: 'url', url: address });
-      }
-      const waiting = page;
-      const deadlineAt = startedAt + profile.handoffMinutes * MINUTE_MS;
-      const posting = await this.host.handoffs.post({
+    const deadlineAt = startedAt + profile.handoffMinutes * MINUTE_MS;
+    // Posted before the window is shown: a window nobody is told about is one
+    // only its closing or the deadline ends, and showing it can restart the
+    // profile's browser, closing every other run's pages for nothing.
+    const posting = await this.host.handoffs
+      .post({
         tenantId: request.tenantId,
         ...(request.spaceId !== undefined ? { spaceId: request.spaceId } : {}),
         runId: request.runId,
@@ -195,13 +242,29 @@ export class OperatorWindows {
         site,
         reason: request.reason,
         message: request.message,
-        waitMs: deadlineAt - clock.now(),
+        waitMs: deadlineAt - startedAt,
+      })
+      .catch((error: unknown) => {
+        throw error instanceof BrowserDriverError
+          ? new BrowserDriverError(error.kind, error.message, { pageId: held.pageId })
+          : error;
       });
+    let outcome: BrowserHandoffOutcome;
+    let page: EnginePage = held.page;
+    let shown: Awaited<ReturnType<ProfileBrowsers['showWindow']>>;
+    try {
+      shown = await browsers.showWindow(profile, executable);
+      const running = shown.running;
       try {
+        if (shown.restarted) {
+          page = await running.browser.firstPage(new PageObservations(clock.now).events());
+          await page.navigate({ kind: 'url', url: address });
+        }
+        const waiting = page;
         outcome = await this.host.waitForOperator({
           window: {
             page: waiting,
-            closed: () => waiting.isClosed() || browsers.get(profile.id) !== shown.running,
+            closed: () => waiting.isClosed() || browsers.get(profile.id) !== running,
           },
           reason: request.reason,
           message: request.message,
@@ -210,20 +273,17 @@ export class OperatorWindows {
           clock,
           operatorDone: posting.done,
         });
-      } finally {
-        await posting.close();
+      } catch (error) {
+        await this.handBack(profile, executable, shown.restarted);
+        throw new BrowserDriverError(
+          'window_failed',
+          `The window for profile \`${profile.id}\` could not be shown at ${pageAddress(held)}: ` +
+            `${errorText(error)}. The profile is back in use by runs.`,
+          { pageId: held.pageId },
+        );
       }
-    } catch (error) {
-      await this.handBack(profile, executable, shown.restarted);
-      if (error instanceof BrowserDriverError && error.kind === 'handoff_not_posted') {
-        throw new BrowserDriverError(error.kind, error.message, { pageId: held.pageId });
-      }
-      throw new BrowserDriverError(
-        'window_failed',
-        `The window for profile \`${profile.id}\` could not be shown at ${pageAddress(held)}: ` +
-          `${errorText(error)}. The profile is back in use by runs.`,
-        { pageId: held.pageId },
-      );
+    } finally {
+      await posting.close();
     }
     const landedAt = page.url();
     const headless = await browsers.returnWindow(profile, executable, shown.restarted);

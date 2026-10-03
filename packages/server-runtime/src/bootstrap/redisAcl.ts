@@ -210,6 +210,29 @@ export function renderRedisAcl(input: RedisAclInput): string {
 export const REDIS_ACL_FILENAME = 'redis-acl.conf';
 
 /**
+ * Apply the host identity to a running server, whatever it holds now.
+ *
+ * `ACL SETUSER` with `resetpass` replaces the password rather than adding one,
+ * and the rendered line is the whole grant, so this is idempotent: a user that
+ * is missing is created, one that drifted is corrected, one that is right is
+ * left as it was. The pairing route rotates through it; the API server asserts
+ * through it each time it starts, because the grant is the running code's —
+ * one a release added, or an identity a server with no ACL file lost from
+ * memory, would otherwise leave the paired machine refused until someone
+ * restarted the whole stack.
+ */
+export async function applyHostIdentityToRunningServer(
+  redis: { call: (command: string, ...args: string[]) => Promise<unknown> },
+  input: RedisAclInput,
+): Promise<void> {
+  const line = renderRedisAcl(input)
+    .split('\n')
+    .find((l) => l.startsWith('user hostexec'));
+  if (line === undefined) throw new Error('Rendered ACL carries no host identity.');
+  await redis.call('ACL', 'SETUSER', ...line.split(' ').slice(1));
+}
+
+/**
  * Make a rendered ACL take effect on a server that is already running.
  *
  * Redis reads `--aclfile` once, at startup. `instance-init` rewrites that file
@@ -225,28 +248,6 @@ export const REDIS_ACL_FILENAME = 'redis-acl.conf';
  * before the first start there is nothing to reload, and the file is read
  * anyway when the server comes up.
  */
-/**
- * Apply the host identity to a running server, whatever it holds now.
- *
- * `ACL SETUSER` with `resetpass` replaces the password rather than adding one,
- * and the rendered line is the whole grant, so this is idempotent: a user that
- * is missing is created, one that drifted is corrected, one that is right is
- * left as it was. The pairing route rotates through it; the local boot
- * re-asserts through it, because on a server with no ACL file the identity
- * lives in memory and anything that deletes it — a test, a restart — would
- * otherwise leave the paired machine refused until someone noticed.
- */
-export async function applyHostIdentityToRunningServer(
-  redis: { call: (command: string, ...args: string[]) => Promise<unknown> },
-  input: RedisAclInput,
-): Promise<void> {
-  const line = renderRedisAcl(input)
-    .split('\n')
-    .find((l) => l.startsWith('user hostexec'));
-  if (line === undefined) throw new Error('Rendered ACL carries no host identity.');
-  await redis.call('ACL', 'SETUSER', ...line.split(' ').slice(1));
-}
-
 export async function loadRedisAclIntoRunningServer(redis: {
   call: (command: string, ...args: string[]) => Promise<unknown>;
 }): Promise<{ outcome: 'loaded' } | { outcome: 'skipped'; reason: string | null }> {

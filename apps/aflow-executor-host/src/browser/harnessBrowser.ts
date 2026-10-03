@@ -190,7 +190,8 @@ export interface McpCallResult {
 
 export interface HarnessBrowserOptions {
   readonly driver: BrowserDriver;
-  readonly scope: RunScope;
+  /** Required, as a browser step's is: which profiles a run may use depends on its space. */
+  readonly scope: RunScope & { readonly spaceId: string };
   /** What the run asked for: `ephemeral`, or a profile the machine declares. */
   readonly profile: string;
   /** What the harness may reach, from its profile on this machine; an ephemeral profile reaches no more. */

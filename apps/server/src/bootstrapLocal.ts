@@ -14,7 +14,6 @@ import {
   ensureInstanceConfig,
   findLocalAuthConfigViolations,
   loadRedisAclIntoRunningServer,
-  applyHostIdentityToRunningServer,
   localOwner,
 } from '@aflow/server-runtime/bootstrap';
 import { closeRedisConnection, getRedisConnection } from '@aflow/redis';
@@ -92,23 +91,6 @@ async function main(): Promise<void> {
       console.warn(
         `[bootstrap] the running Redis refused the ACL reload and keeps its previous grants: ${aclOutcome.reason}`,
       );
-    }
-    // A server that takes no ACL file holds the host identity in memory alone,
-    // so whatever removed it since the last boot stays removed until the next
-    // pairing. The instance owns that identity; boot asserts it.
-    const hostPassword = process.env['PHOENIX_HOST_REDIS_PASSWORD']?.trim();
-    if (aclOutcome.outcome === 'skipped' && hostPassword !== undefined && hostPassword !== '') {
-      try {
-        await applyHostIdentityToRunningServer(getRedisConnection(), {
-          defaultPassword: process.env['REDIS_PASSWORD'] ?? '',
-          hostPassword,
-        });
-        console.log('[bootstrap] asserted the host identity on the running Redis');
-      } catch (error) {
-        console.warn(
-          `[bootstrap] could not assert the host identity: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
     }
   } finally {
     await close();

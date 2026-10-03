@@ -188,8 +188,10 @@ describe('a hand-off in the Action Center', () => {
 });
 
 describe('a hand-off that cannot be put in the Action Center', () => {
-  it('fails the step with that said, waits for nobody, and gives the profile back', async () => {
-    vi.spyOn(redis, 'eval').mockRejectedValueOnce(new Error('NOPERM no permissions'));
+  it('fails the step naming the refusal and its remedy, before any window is shown', async () => {
+    vi.spyOn(subscriber, 'subscribe').mockRejectedValueOnce(
+      new Error('NOPERM No permissions to access a channel'),
+    );
     let waited = false;
     const h = world(() => {
       waited = true;
@@ -219,14 +221,13 @@ describe('a hand-off that cannot be put in the Action Center', () => {
       details: { pageId },
     });
     const said = (written as { message: string }).message;
-    expect(said).toContain('could not be put in the Action Center (NOPERM no permissions)');
-    expect(said).toContain('it was not left waiting');
+    expect(said).toContain('could not be put in the Action Center');
+    expect(said).toContain('NOPERM No permissions to access a channel');
+    expect(said).toContain("The stack's Redis grant for the host is out of date");
+    expect(said).toContain('the API server asserts it each time it starts');
+    expect(said).toContain('the window was not shown and the run was not left waiting');
     expect(waited).toBe(false);
-    expect(h.launches.map((launch) => launch.profile.window)).toEqual([
-      'hidden',
-      'visible',
-      'hidden',
-    ]);
+    expect(h.launches.map((launch) => launch.profile.window)).toEqual(['hidden']);
     expect(await openItems()).toEqual([]);
     expect(await redis.publish(StreamKeys.browserHandoffDoneChannel(STEP), 'late')).toBe(0);
   });

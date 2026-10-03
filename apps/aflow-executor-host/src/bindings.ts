@@ -779,9 +779,9 @@ export async function resolveWithin(
 /**
  * The workspace a job came from must be the one the folder was connected for.
  * Checked on the machine, because the appliance is the half that can be
- * compromised into asking for someone else's binding.
+ * compromised into asking for someone else's binding. Returns the space it checked.
  */
-export function requireSpace(binding: HostBinding, spaceId: string | undefined): void {
+export function requireSpace(binding: HostBinding, spaceId: string | undefined): string {
   if (binding.spaceId === undefined) {
     throw new HostBindingError(
       `Binding \`${binding.id}\` does not record which workspace it was connected for, so it ` +
@@ -803,6 +803,7 @@ export function requireSpace(binding: HostBinding, spaceId: string | undefined):
       'wrong_space',
     );
   }
+  return spaceId;
 }
 
 /**
