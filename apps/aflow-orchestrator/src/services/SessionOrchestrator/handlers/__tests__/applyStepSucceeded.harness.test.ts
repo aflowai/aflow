@@ -73,6 +73,29 @@ vi.mock('../forwardChildEvent.js', () => ({
   forwardEventToParent: vi.fn(),
 }));
 
+// No registered operation declares image outputs yet, so a fixture stands in
+// for one that does.
+const { IMAGE_FIXTURE_OPERATION } = vi.hoisted(() => ({
+  IMAGE_FIXTURE_OPERATION: 'browser.page.screenshot_fixture',
+}));
+vi.mock('@aflow/schemas', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@aflow/schemas')>();
+  const base = actual.getOperation('api.http.call')!;
+  const fixture = {
+    ...base,
+    operationId: IMAGE_FIXTURE_OPERATION,
+    stepType: 'browser',
+    group: 'page',
+    verb: 'screenshot_fixture',
+    imageOutputPaths: ['image', 'frames[]'],
+  };
+  return {
+    ...actual,
+    getOperation: (id: string) =>
+      id === IMAGE_FIXTURE_OPERATION ? fixture : actual.getOperation(id),
+  };
+});
+
 vi.mock('@aflow/database', async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return {
@@ -81,7 +104,10 @@ vi.mock('@aflow/database', async (importOriginal) => {
   };
 });
 
+import { toolResultMessage } from '@aflow/schemas';
 import { applyStepSucceeded, type ApplyStepSucceededParams } from '../applyStepSucceeded.js';
+import { buildToolResultEnvelopes } from '../../helpers/toolResultEnvelope.js';
+import type { ToolResultSummary } from '../../types.js';
 
 const TENANT = 'a0000000-0000-0000-0000-000000000001';
 const SESSION_ID = 'runner-session-1';
@@ -336,5 +362,173 @@ describe('applyStepSucceeded — tool-result summary boundary', () => {
     };
     expect(scheduled.lastToolResults?.[0]?.summary).toBe('summary-text');
     expect(scheduled.lastToolResults?.[0]?.operationId).toBe('memory.run_output.get');
+  });
+});
+
+describe('applyStepSucceeded — images in a tool output (Plan 320 D10)', () => {
+  const ownRef = `gs://aflow-payloads/tenants/${TENANT}/runs/${SESSION_ID}/steps/${STEP_EXEC_ID}/attempt/1/body.json`;
+  const screenshot = {
+    ref: ownRef,
+    contentType: 'image/png' as const,
+    sizeBytes: 48_213,
+    width: 1280,
+    height: 720,
+    description: 'The sign-in page',
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAtomicCompleteStep.mockResolvedValue(undefined);
+    mockDecrementShardActiveRuns.mockResolvedValue(undefined);
+    mockRemoveBarrierWatchdog.mockResolvedValue(undefined);
+    mockBuildToolResultSummaryWithMeta.mockReturnValue({
+      text: 'summary-text',
+      meta: { kind: 'generic', chars: 12, continuationEmitted: false },
+    });
+  });
+
+  async function toolResultFor(
+    operation: string,
+    stepType: string,
+    output: unknown,
+  ): Promise<ToolResultSummary> {
+    const runtimeState = { version: 1, variables: {}, updatedAtMs: 0 } as never;
+    mockApplyOutputMapping.mockResolvedValue({
+      updatedState: runtimeState,
+      patch: { version: 1, changed: [] },
+    });
+    const step = (stepId: string, type: string, op: string, next: string[]) => ({
+      stepId,
+      stepType: type,
+      operation: op,
+      name: stepId,
+      config: {},
+      tags: [],
+      optional: false,
+      onSuccess: { next: next.map((n) => ({ stepId: n, priority: 50 })) },
+      onFailure: { next: [] },
+    });
+    const toolStep = step('tool', stepType, operation, ['agent_loop']);
+    const agentStep = step('agent_loop', 'ai', 'ai.agent.turn', []);
+    const params: ApplyStepSucceededParams = {
+      redis: {} as never,
+      payloadStore: { retrieve: vi.fn(async () => output) } as never,
+      db: {} as never,
+      result: {
+        tenantId: TENANT,
+        sessionId: SESSION_ID,
+        stepId: 'tool',
+        stepExecutionId: STEP_EXEC_ID,
+        stepType,
+        operationId: operation,
+        attempt: 1,
+        outputRef: `gs://aflow-payloads/tenants/${TENANT}/runs/${SESSION_ID}/steps/${STEP_EXEC_ID}/attempt/1/output.json`,
+        traceId: 'trace-1',
+        nowMs: 1_700_000_000_000,
+      },
+      runHotState: {
+        sessionId: SESSION_ID,
+        status: 'RUNNING',
+        runtimeState,
+        target: { kind: 'custom-agent' },
+      } as never,
+      stepDef: toolStep as never,
+      stepState: {
+        stepId: 'tool',
+        startedAt: 1_700_000_000_000,
+        parentStepExecutionId: 'parent-exec-1',
+      } as never,
+      agentDef: {
+        flowId: 'flow-1',
+        schemaVersion: 1,
+        metadata: { name: 'Agent', tags: [] },
+        stateVariables: [],
+        startStepId: 'agent_loop',
+        steps: [toolStep, agentStep],
+      } as never,
+      stepUpdates: { stepExecutionId: STEP_EXEC_ID, startedAt: 1_700_000_000_000 } as never,
+      currentRuntimeState: runtimeState,
+      scheduleStep: vi.fn().mockResolvedValue('next-exec-1'),
+    };
+    await applyStepSucceeded(params);
+    const scheduled = (params.scheduleStep as ReturnType<typeof vi.fn>).mock.calls[0]![0] as {
+      lastToolResults?: ToolResultSummary[];
+    };
+    const result = scheduled.lastToolResults?.[0];
+    if (!result) throw new Error('expected a tool result for the agent turn');
+    return result;
+  }
+
+  function messagePartsFor(result: ToolResultSummary) {
+    const [envelope] = buildToolResultEnvelopes([result], 1_700_000_000_000);
+    return toolResultMessage(envelope!).parts;
+  }
+
+  it('an api.http.call output holding a perfectly shaped image reaches the model as its JSON alone', async () => {
+    const output = { status: 200, body: { image: screenshot, frames: [screenshot] } };
+    const result = await toolResultFor('api.http.call', 'api', { image: screenshot, ...output });
+    expect(result.images).toBeUndefined();
+    expect(result.imagesWithheld).toBeUndefined();
+    const parts = messagePartsFor(result);
+    expect(parts).toHaveLength(1);
+    expect(parts[0]!.kind).toBe('json');
+  });
+
+  it("carries the image a declaring operation's step stored, at each declared path", async () => {
+    const frame = { ...screenshot, description: 'The dashboard' };
+    const result = await toolResultFor(IMAGE_FIXTURE_OPERATION, 'browser', {
+      url: 'https://example.com',
+      image: screenshot,
+      frames: [frame],
+      elsewhere: { ...screenshot, description: 'Not at a declared path' },
+    });
+    expect(result.images).toEqual([screenshot, frame]);
+    expect(result.imagesWithheld).toBeUndefined();
+    expect(messagePartsFor(result).slice(1)).toEqual([
+      { kind: 'image', ...screenshot },
+      { kind: 'image', ...frame },
+    ]);
+  });
+
+  it.each([
+    [
+      'another step execution',
+      `gs://aflow-payloads/tenants/${TENANT}/runs/${SESSION_ID}/steps/step-exec-2/attempt/1/body.json`,
+    ],
+    [
+      'another run',
+      `gs://aflow-payloads/tenants/${TENANT}/runs/other-session/steps/${STEP_EXEC_ID}/attempt/1/body.json`,
+    ],
+    [
+      'another tenant',
+      `gs://aflow-payloads/tenants/f0000000-0000-0000-0000-0000000000ff/runs/${SESSION_ID}/steps/${STEP_EXEC_ID}/attempt/1/body.json`,
+    ],
+    [
+      'content-addressed bytes',
+      `gs://aflow-payloads/tenants/${TENANT}/content/${'a'.repeat(64)}/body.json`,
+    ],
+  ])('carries no image whose reference names %s', async (_label, ref) => {
+    const result = await toolResultFor(IMAGE_FIXTURE_OPERATION, 'browser', {
+      image: { ...screenshot, ref },
+    });
+    expect(result.images).toBeUndefined();
+    expect(result.imagesWithheld).toEqual([
+      'The image at image was not shown: its reference names a payload this step did not store.',
+    ]);
+    const parts = messagePartsFor(result);
+    expect(parts).toHaveLength(1);
+    expect(JSON.stringify(parts[0])).toContain('this step did not store');
+  });
+
+  it('carries no image whose reference is inline', async () => {
+    const inline = `inline:${Buffer.from('{"data":"iVBORw0KGgo=","mimeType":"image/png"}').toString('base64')}`;
+    const result = await toolResultFor(IMAGE_FIXTURE_OPERATION, 'browser', {
+      image: screenshot,
+      frames: [{ ...screenshot, ref: inline }],
+    });
+    expect(result.images).toEqual([screenshot]);
+    expect(result.imagesWithheld).toEqual([
+      'The image at frames[0] was not shown: it is carried inline, not stored by this step.',
+    ]);
   });
 });

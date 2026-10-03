@@ -9,6 +9,7 @@ import type { AIClient, ChatMessage, ProviderReasoning } from '@aflow/ai-client'
 import type { AgentTurnInput } from '../schema.js';
 import type { HandlerDeps } from './types.js';
 import { chatMessageToAiMessage } from './agentMessageConversion.js';
+import { toolImageResolver } from './mediaSourceRef.js';
 import {
   buildFunctionDeclarations,
   mapToolCallsToDecision,
@@ -423,6 +424,7 @@ async function streamAndCollect(
   const { stream, response: responsePromise } = client.generateTextStream({
     model: p.model,
     messages: p.messages,
+    resolveToolImage: toolImageResolver(ctx),
     tools: p.tools,
     toolChoice: 'auto',
     ...(p.temperature !== undefined ? { temperature: p.temperature } : {}),
@@ -724,6 +726,7 @@ async function runGenerateJsonPath(
   const response = await client.generateJson({
     model,
     messages: merged,
+    resolveToolImage: toolImageResolver(ctx),
     schema: z.unknown(),
     schemaName: 'agent_turn_decision',
     rawJsonSchema: agentDecisionJsonSchema,

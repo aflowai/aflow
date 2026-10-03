@@ -11,6 +11,10 @@ import type { AiMessageV1 } from './aiPrompt.js';
  */
 export const ESTIMATED_CHARS_PER_TOKEN = 3.5;
 
+/** Rough pixels per token for an image a model sees, and the most one image is counted at. */
+const PIXELS_PER_IMAGE_TOKEN = 750;
+const IMAGE_TOKENS_CEILING = 1600;
+
 /** Estimate tokens from a string. */
 export function estimateStringTokens(text: string): number {
   return Math.ceil(text.length / ESTIMATED_CHARS_PER_TOKEN);
@@ -34,6 +38,14 @@ export function estimateMessageTokens(msg: AiMessageV1): number {
       } else if (part.kind === 'ref') {
         // Ref parts include a summary and/or the ref string itself
         chars += (part.summary ?? '').length + (part.ref ?? '').length;
+      } else {
+        // Whether the model sees the pixels is decided later, per model, so
+        // the larger of the two renderings is counted.
+        const imageTokens = Math.min(
+          IMAGE_TOKENS_CEILING,
+          Math.ceil((part.width * part.height) / PIXELS_PER_IMAGE_TOKEN),
+        );
+        chars += Math.ceil(imageTokens * ESTIMATED_CHARS_PER_TOKEN);
       }
     }
   }
