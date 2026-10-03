@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   LOCAL_TOKEN_ENV,
+  RETIRED_EXAMPLE_SESSION_TOKEN,
   admitRequest,
   requestGatePolicy,
   transportRebindingOptions,
@@ -160,6 +161,18 @@ describe('while the server holds the owner’s key, a local session', () => {
 
   it('needs none where the server holds no key to give', () => {
     expect(decide({ host }).admitted).toBe(true);
+  });
+
+  /** It was published in the example, so a file copied from it handed the key to anyone. */
+  it('is refused by name when it presents the placeholder the example once carried', () => {
+    const placeholder = { authorization: `Bearer ${RETIRED_EXAMPLE_SESSION_TOKEN}` };
+    for (const config of [withAuthFile, {}]) {
+      const decision = decide({ host, ...placeholder }, config);
+      expect(decision).toMatchObject({ admitted: false, status: 401 });
+      if (decision.admitted) throw new Error('expected a refusal');
+      expect(decision.reason).toContain(RETIRED_EXAMPLE_SESSION_TOKEN);
+      expect(decision.reason).toContain('yarn mcp:setup');
+    }
   });
 });
 

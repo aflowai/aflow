@@ -34,6 +34,22 @@ export const WRONG_TOKEN_REFUSAL =
   'Refused: the token this session presented is not the one in the local auth file, so it ' +
   `is not given the owner's key. ${HOW_TO_SET_UP}`;
 
+export const NO_SESSION_TOKEN_REFUSAL =
+  'Refused: the local auth file this server was set up with sets no session token, so it ' +
+  `gives no session the owner's key. ${HOW_TO_SET_UP}`;
+
+/**
+ * The session token the local auth file example once carried. It is published,
+ * so a file copied from that example gave the owner's key to any process that
+ * sent it.
+ */
+export const RETIRED_EXAMPLE_SESSION_TOKEN = 'replace_me_with_the_token_yarn_mcp_setup_writes';
+
+export const RETIRED_EXAMPLE_TOKEN_REFUSAL =
+  `Refused: this session presented ${RETIRED_EXAMPLE_SESSION_TOKEN}, the placeholder the ` +
+  'local auth file example once carried, which is published and is never a session token. ' +
+  HOW_TO_SET_UP;
+
 export const UNREADABLE_AUTH_FILE_REFUSAL =
   'Refused: the local auth file this server was set up with cannot be read, so it gives no ' +
   `session the owner's key; its log says why (local_auth_json_invalid). ${HOW_TO_SET_UP}`;
@@ -140,8 +156,12 @@ export function admitRequest(
     };
   }
 
-  if (policy.holdsOwnerKey && presentedBearer(headers) === undefined) {
+  const bearer = presentedBearer(headers);
+  if (policy.holdsOwnerKey && bearer === undefined) {
     return { admitted: false, status: 401, reason: CREDENTIAL_LESS_REFUSAL };
+  }
+  if (bearer === RETIRED_EXAMPLE_SESSION_TOKEN) {
+    return { admitted: false, status: 401, reason: RETIRED_EXAMPLE_TOKEN_REFUSAL };
   }
 
   return { admitted: true, headers: headers as AdmittedHeaders, host, origin };

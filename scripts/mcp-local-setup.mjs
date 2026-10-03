@@ -42,11 +42,14 @@ export const KEY_NAME = 'aflow-local MCP server';
 export const KEY_EXPIRES_IN_DAYS = 365;
 const LOCAL_EDITION = 'community-local';
 const SESSION_TOKEN_BYTES = 32;
+/** The MCP server's `RETIRED_EXAMPLE_SESSION_TOKEN`; a test pins the two together. */
+export const RETIRED_EXAMPLE_SESSION_TOKEN = 'replace_me_with_the_token_yarn_mcp_setup_writes';
 
 const BY_HAND =
   'Create a key under Settings → API Keys and write it into mcp.local.json as `apiKey`, ' +
-  'with its `tenantId` (shape: apps/aflow-mcp/mcp.local.json.example), or give it to the ' +
-  'MCP client as an `Authorization: Bearer phx_…` header.';
+  'with its `tenantId` (shape: apps/aflow-mcp/mcp.local.json.example), then run ' +
+  '`yarn mcp:setup` again: it generates the `sessionToken` sessions present, which is ' +
+  'never typed. Or give the key to the MCP client as an `Authorization: Bearer phx_…` header.';
 
 /** `KEY=value` lines, as both `.env` and the shell-quoted `instance.env` write them. */
 export function parseEnvFile(text) {
@@ -184,12 +187,17 @@ export function newSessionToken() {
   return randomBytes(SESSION_TOKEN_BYTES).toString('hex');
 }
 
-/** The session token in the file, kept when its key is replaced so clients need no change. */
+/**
+ * The session token in the file, kept when its key is replaced so clients need
+ * no change. The retired example placeholder is no token: it is published.
+ */
 export function sessionTokenIn(text) {
   if (text === undefined) return undefined;
   try {
     const token = JSON.parse(text)?.sessionToken;
-    return typeof token === 'string' && token !== '' ? token : undefined;
+    return typeof token === 'string' && token !== '' && token !== RETIRED_EXAMPLE_SESSION_TOKEN
+      ? token
+      : undefined;
   } catch {
     return undefined;
   }

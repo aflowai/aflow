@@ -1,7 +1,7 @@
 {
   "apiKey": "phx_replace_me",
   "tenantId": "00000000-0000-0000-0000-000000000000",
-  "sessionToken": "replace_me_with_the_token_yarn_mcp_setup_writes",
+  "sessionToken": "",
   "user": {
     "email": "owner@example.com",
     "name": "Local user",

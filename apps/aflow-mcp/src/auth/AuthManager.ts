@@ -18,6 +18,7 @@ import { z } from 'zod';
 import type { McpServerConfig } from '../config.js';
 import {
   CREDENTIAL_LESS_REFUSAL,
+  NO_SESSION_TOKEN_REFUSAL,
   UNREADABLE_AUTH_FILE_REFUSAL,
   WRONG_TOKEN_REFUSAL,
   presentedBearer,
@@ -34,8 +35,12 @@ const LocalMcpAuthJsonSchema = z
     tokenExpiresAt: z.number().optional(),
     tenantId: z.string().optional(),
     defaultSpaceId: z.string().optional(),
-    /** What a session presents (`Authorization: Bearer <token>`) to be given the key. */
-    sessionToken: z.string().min(1),
+    /**
+     * What a session presents (`Authorization: Bearer <token>`) to be given the
+     * key. Empty is not set: the example carries it so, and `yarn mcp:setup`
+     * generates one wherever it is.
+     */
+    sessionToken: z.string(),
     user: z
       .object({
         email: z.string(),
@@ -192,6 +197,10 @@ export class AuthManager {
       }
 
       const j = parsed.data;
+      if (j.sessionToken === '') {
+        log('warn', 'local_auth_token_unset', { path: absolute });
+        return { accepted: false, reason: NO_SESSION_TOKEN_REFUSAL };
+      }
       if (!sameToken(presented, j.sessionToken)) {
         log('warn', 'local_auth_token_refused', { session: session.id });
         return { accepted: false, reason: WRONG_TOKEN_REFUSAL };

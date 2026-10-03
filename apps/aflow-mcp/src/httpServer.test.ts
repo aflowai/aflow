@@ -5,13 +5,16 @@
  *
  * @module-tag listener
  */
+import { randomBytes } from 'node:crypto';
 import { once } from 'node:events';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, request } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { AuthManager } from './auth/AuthManager.js';
 import { SessionStore } from './auth/SessionStore.js';
@@ -19,11 +22,17 @@ import type { McpServerConfig } from './config.js';
 import { createMcpHttpServer, type McpHttpServer } from './httpServer.js';
 import { setLogLevel } from './util/logger.js';
 
-const AUTH_FILE = fileURLToPath(new URL('../mcp.local.json.example', import.meta.url));
-const OWNER = JSON.parse(readFileSync(AUTH_FILE, 'utf8')) as {
-  apiKey: string;
-  sessionToken: string;
+const EXAMPLE = fileURLToPath(new URL('../mcp.local.json.example', import.meta.url));
+const OWNER = {
+  ...(JSON.parse(readFileSync(EXAMPLE, 'utf8')) as { apiKey: string }),
+  sessionToken: randomBytes(32).toString('hex'),
 };
+const AUTH_DIR = mkdtempSync(join(tmpdir(), 'mcp-http-'));
+const AUTH_FILE = join(AUTH_DIR, 'mcp.local.json');
+writeFileSync(AUTH_FILE, JSON.stringify(OWNER));
+afterAll(() => {
+  rmSync(AUTH_DIR, { recursive: true, force: true });
+});
 const LOCAL_TOKEN = { authorization: `Bearer ${OWNER.sessionToken}` };
 
 /** A free loopback port, or undefined where the environment refuses a listener. */
