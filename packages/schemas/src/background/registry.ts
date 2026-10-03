@@ -1114,7 +1114,8 @@ const DEFINITIONS: readonly BackgroundTaskDefinitionInput[] = [
     id: 'executor.step_inflight_refresh',
     service: 'shared-runtime',
     ownerDomain: 'run-execution',
-    purpose: 'Refresh the in-flight key for the step attempt this process is running.',
+    purpose:
+      'Refresh the in-flight key for each step attempt this process has claimed, running or waiting for a slot.',
     invariant: 'A live step attempt is never reaped as stalled by the orchestrator watchdog.',
     criticality: 'correctness',
     trigger: 'active-resource',
@@ -1132,6 +1133,10 @@ const DEFINITIONS: readonly BackgroundTaskDefinitionInput[] = [
     recovery: 'Key TTL expiry surrenders the step to the stall watchdog.',
     sites: [
       { path: 'packages/executor-runtime/src/executor/processJob.ts', discovery: ['setInterval'] },
+      {
+        path: 'packages/executor-runtime/src/executor/operationAdmission.ts',
+        discovery: ['setInterval'],
+      },
     ],
   },
   {

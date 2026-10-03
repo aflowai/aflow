@@ -89,6 +89,19 @@ export const HOST_HARNESS_TIMEOUT_MIN_MS = 1_000;
 export const HOST_HARNESS_TIMEOUT_DEFAULT_MS = 30 * 60_000;
 /** The longest a coding agent runs, and so the longest any host step runs. */
 export const HOST_HARNESS_TIMEOUT_MAX_MS = 2 * 60 * 60_000;
+/**
+ * The turn budget a run gets when it names none, on a harness that can take
+ * one. Every tool call is a turn, and a slice of work takes several hundred:
+ * a cap sized to a guess ends the run while it is still reading.
+ */
+export const HOST_HARNESS_MAX_TURNS_DEFAULT = 600;
+/**
+ * How many coding agents a machine runs at once when the operator chose no
+ * number. The machine is usually a laptop that also runs the stack, and two
+ * coding agents beside it, each running the project's checks in its own
+ * checkout, is what one carries without the stack itself slowing to a crawl.
+ */
+export const HOST_HARNESS_CONCURRENCY_DEFAULT = 2;
 
 /**
  * How long a folder's checks run when the operator chose no time. A type-check,
@@ -808,9 +821,11 @@ const HostHarnessRunInputObjectSchema = z.object({
     .min(1)
     .optional()
     .describe(
-      'The number of assistant turns the harness may take before it must answer. Absent means ' +
-        'the harness decides. A harness the machine configured without a turn budget refuses ' +
-        'the run rather than ignoring it, and the refusal names it.',
+      'The number of assistant turns the harness may take before it must answer. Absent, a ' +
+        `harness that takes a turn budget gets ${String(HOST_HARNESS_MAX_TURNS_DEFAULT)} — ` +
+        'several hundred, because every tool call is a turn — and one that takes none runs ' +
+        'without. Named, a harness the machine configured without a turn budget refuses the ' +
+        'run rather than ignoring it, and the refusal names it.',
     ),
   model: z
     .string()
@@ -1091,6 +1106,14 @@ export const HostBindingInspectOutputSchema = z.object({
       'before pushing, and the checks it runs first and for how long. Absent, the folder ' +
       'pushes nothing.',
   ),
+  maxConcurrentHarnessRuns: z
+    .number()
+    .int()
+    .min(1)
+    .describe(
+      'How many coding agents the machine holding the folder runs at once. A run past it ' +
+        'waits for one to end rather than being refused.',
+    ),
 });
 
 export const HostCommitScanInputSchema = z.object({

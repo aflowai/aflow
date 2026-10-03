@@ -23,7 +23,9 @@ import type {
   StepHandler,
   StepResult,
 } from '../types.js';
+import type { ConcurrencyLimiter } from '../concurrency.js';
 import { withTimeout } from '../timeout.js';
+import { admitOperation } from './operationAdmission.js';
 import { createAflowError, toAflowError } from './errors.js';
 import { createJobLogger } from './logger.js';
 import { STEP_HEARTBEAT_INTERVAL_MS } from './constants.js';
@@ -63,6 +65,8 @@ export interface ProcessJobHost {
   handlers: Map<string, StepHandler>;
   log: ExecutorLogger;
   abortControllers: Map<string, AbortController>;
+  /** Operations admitted through a limit of their own, by operation id. */
+  operationLimiters: ReadonlyMap<string, ConcurrencyLimiter>;
 }
 
 export async function processJob(
@@ -85,6 +89,7 @@ export async function processJob(
   const reportSimulatedFulfillment = (report: SimulatedFulfillmentReport): void => {
     simulatedFulfillment = report;
   };
+  let admittedBy: ConcurrencyLimiter | undefined;
 
   try {
     // Breaker check per claimed job, not only at startup. Startup keeps a
@@ -212,6 +217,30 @@ export async function processJob(
       await emitSuccess(host.deps, job, existingOutput, Date.now() - startTime);
       await acknowledgeJob(host.deps, job.stepType, messageId);
       return;
+    }
+
+    const operationLimiter = host.operationLimiters.get(job.operationId);
+    if (operationLimiter !== undefined) {
+      await admitOperation({
+        limiter: operationLimiter,
+        slotController,
+        refreshInFlight: () => {
+          void registerStepInFlight(host.deps.redis, job.stepExecutionId, null).catch(
+            (err: unknown) => {
+              jobLog.warn('Failed to refresh step in-flight heartbeat', {
+                error: err instanceof Error ? err.message : String(err),
+              });
+            },
+          );
+        },
+        waiting: () => {
+          jobLog.info('Waiting for a slot', {
+            operationId: job.operationId,
+            limit: operationLimiter.limit,
+          });
+        },
+      });
+      admittedBy = operationLimiter;
     }
 
     const handlerTimeout = handler.resolveTimeoutMs
@@ -361,5 +390,7 @@ export async function processJob(
 
     await emitFailure(host.deps, job, aflowError, durationMs, simulatedFulfillment);
     await acknowledgeJob(host.deps, job.stepType, messageId);
+  } finally {
+    admittedBy?.release();
   }
 }

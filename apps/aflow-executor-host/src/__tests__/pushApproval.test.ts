@@ -17,6 +17,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 
 import {
   HOST_CHECKS_TIMEOUT_DEFAULT_MS,
+  HOST_HARNESS_CONCURRENCY_DEFAULT,
   HOST_PUSH_APPROVAL_DEFAULT,
   HostBindingInspectOutputSchema,
   resolveBranchPolicy,
@@ -302,6 +303,7 @@ describe('host.binding.inspect', () => {
         pushApproval: 'never',
         checksTimeoutMs: HOST_CHECKS_TIMEOUT_DEFAULT_MS,
       },
+      maxConcurrentHarnessRuns: HOST_HARNESS_CONCURRENCY_DEFAULT,
     });
   });
 
@@ -318,6 +320,7 @@ describe('host.binding.inspect', () => {
         pushApproval: HOST_PUSH_APPROVAL_DEFAULT,
         checksTimeoutMs: HOST_CHECKS_TIMEOUT_DEFAULT_MS,
       },
+      maxConcurrentHarnessRuns: HOST_HARNESS_CONCURRENCY_DEFAULT,
     });
   });
 

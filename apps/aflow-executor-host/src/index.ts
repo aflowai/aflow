@@ -44,7 +44,7 @@ import {
   type HostWithdrawalNotice,
   quitRedisWithTimeout,
 } from '@aflow/redis';
-import { ConsumerGroups, StreamKeys } from '@aflow/schemas';
+import { ConsumerGroups, HOST_HARNESS_CONCURRENCY_DEFAULT, StreamKeys } from '@aflow/schemas';
 
 import { executionPermitted, loadHostPolicy } from './bindings.js';
 import { createChromeLauncher } from './browser/chromeProcess.js';
@@ -52,7 +52,7 @@ import { BrowserDriver } from './browser/driver.js';
 import { createBrowserIdleSweep } from './browser/idleSweep.js';
 import { createBrowserHandler } from './handlers/browserHandler.js';
 import { removeWorktree } from './worktree.js';
-import { removeOrphanedCheckouts } from './handlers/harnessHandlers.js';
+import { HARNESS_RUN_OPERATION, removeOrphanedCheckouts } from './handlers/harnessHandlers.js';
 import { createHostHandler } from './handlers/hostHandler.js';
 import {
   allSessions,
@@ -257,6 +257,14 @@ async function main(): Promise<void> {
       getWriteApprovalGrant(redis, tenantId, runId, requestHash),
     ),
   );
+  // A policy that cannot be read yet runs no harness at all, so the default
+  // stands until the watch below reads one.
+  runtime.limitOperation(
+    HARNESS_RUN_OPERATION,
+    await loadHostPolicy(policyPath)
+      .then((policy) => policy.maxConcurrentHarnessRuns)
+      .catch(() => HOST_HARNESS_CONCURRENCY_DEFAULT),
+  );
 
   // Loaded here rather than at the top so that nothing importing this module
   // for its helpers pulls in the browser automation library.
@@ -276,6 +284,7 @@ async function main(): Promise<void> {
   const policyWatch = watchPolicy(policyPath, () => {
     void loadHostPolicy(policyPath)
       .then(async (policy) => {
+        runtime.limitOperation(HARNESS_RUN_OPERATION, policy.maxConcurrentHarnessRuns);
         await followPolicy({
           reapHostWork: async () => {
             const permitted = executionPermitted(policy);
@@ -353,6 +362,7 @@ async function main(): Promise<void> {
   // written" are different facts, and only the first should reach a workspace.
   let lastHarnesses: HostInventory['harnesses'] = [];
   let lastFolders: HostInventoryFolders = [];
+  let lastMaxConcurrentHarnessRuns = HOST_HARNESS_CONCURRENCY_DEFAULT;
 
   // Published with a lifetime rather than stored: an inventory that outlives the
   // executor describes a machine nobody is listening on, and inviting a run
@@ -364,7 +374,7 @@ async function main(): Promise<void> {
     // From the policy rather than from discovery: an installed harness the
     // operator never added to the file cannot be addressed by a run, so naming
     // it here would offer work that is refused.
-    const { harnesses, folders } = await loadHostPolicy(policyPath)
+    const { harnesses, folders, maxConcurrentHarnessRuns } = await loadHostPolicy(policyPath)
       .then((policy) => ({
         harnesses: [...policy.harnesses.values()]
           .map((profile) => ({
@@ -373,15 +383,22 @@ async function main(): Promise<void> {
           }))
           .sort((a, b) => a.id.localeCompare(b.id)),
         folders: publishingFolders(policy.bindings),
+        maxConcurrentHarnessRuns: policy.maxConcurrentHarnessRuns,
       }))
-      .catch(() => ({ harnesses: lastHarnesses, folders: lastFolders }));
+      .catch(() => ({
+        harnesses: lastHarnesses,
+        folders: lastFolders,
+        maxConcurrentHarnessRuns: lastMaxConcurrentHarnessRuns,
+      }));
     lastHarnesses = harnesses;
     lastFolders = folders;
+    lastMaxConcurrentHarnessRuns = maxConcurrentHarnessRuns;
     const inventory: HostInventory = {
       hostname,
       observedAt: new Date().toISOString(),
       runtimes,
       harnesses,
+      maxConcurrentHarnessRuns,
       folders,
     };
     await redis.setex(

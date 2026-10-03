@@ -6,15 +6,38 @@
  * Simple semaphore-based concurrency limiter.
  */
 export class ConcurrencyLimiter {
-  private readonly maxConcurrent: number;
+  private maxConcurrent: number;
   private currentCount = 0;
   private readonly waitQueue: Array<() => void> = [];
 
   constructor(maxConcurrent: number) {
-    if (maxConcurrent < 1) {
-      throw new Error('maxConcurrent must be at least 1');
+    this.maxConcurrent = ConcurrencyLimiter.checked(maxConcurrent);
+  }
+
+  private static checked(maxConcurrent: number): number {
+    if (!Number.isInteger(maxConcurrent) || maxConcurrent < 1) {
+      throw new Error('maxConcurrent must be an integer of at least 1');
     }
-    this.maxConcurrent = maxConcurrent;
+    return maxConcurrent;
+  }
+
+  /** The most operations that run at once. */
+  get limit(): number {
+    return this.maxConcurrent;
+  }
+
+  /**
+   * Change the limit. A raise admits waiters at once; a cut ends nothing
+   * already running and admits no one until enough of it has ended.
+   */
+  setLimit(maxConcurrent: number): void {
+    this.maxConcurrent = ConcurrencyLimiter.checked(maxConcurrent);
+    while (this.currentCount < this.maxConcurrent) {
+      const next = this.waitQueue.shift();
+      if (!next) break;
+      this.currentCount++;
+      next();
+    }
   }
 
   /**
@@ -63,7 +86,7 @@ export class ConcurrencyLimiter {
 
     this.currentCount--;
 
-    // Wake up next waiter if any
+    if (this.currentCount >= this.maxConcurrent) return;
     const next = this.waitQueue.shift();
     if (next) {
       this.currentCount++;

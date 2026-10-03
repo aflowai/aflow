@@ -5,6 +5,8 @@
  */
 import { describe, expect, it } from 'vitest';
 
+import { HOST_HARNESS_CONCURRENCY_DEFAULT } from '@aflow/schemas';
+
 import {
   HOST_INVENTORY_TTL_MS,
   HOST_MACHINES_KEY,
@@ -24,6 +26,7 @@ function inventory(
     observedAt: new Date().toISOString(),
     runtimes: [{ name: 'node', version: 'v22.0.0' }],
     harnesses,
+    maxConcurrentHarnessRuns: HOST_HARNESS_CONCURRENCY_DEFAULT,
     folders,
   };
 }
@@ -147,6 +150,34 @@ describe('host inventories', () => {
     const live = await readLiveHostInventories(redis, now);
 
     expect(live[0]?.folders).toEqual([{ id: 'hb_app', spaceId: 'space-a', pushApproval: 'never' }]);
+  });
+
+  it('carries how many coding agents the machine runs at once', async () => {
+    const now = Date.now();
+    const redis = fakeRedis(
+      { [now - 1_000]: 'laptop' },
+      {
+        [hostInventoryKey('laptop')]: JSON.stringify({
+          ...inventory('laptop', [{ id: 'claude' }]),
+          maxConcurrentHarnessRuns: 3,
+        }),
+      },
+    );
+
+    const live = await readLiveHostInventories(redis, now);
+
+    expect(live[0]?.maxConcurrentHarnessRuns).toBe(3);
+  });
+
+  it('refuses an inventory that does not say how many coding agents run at once', async () => {
+    const now = Date.now();
+    const { maxConcurrentHarnessRuns: _limit, ...older } = inventory('laptop', [{ id: 'claude' }]);
+    const redis = fakeRedis(
+      { [now - 1_000]: 'laptop' },
+      { [hostInventoryKey('laptop')]: JSON.stringify(older) },
+    );
+
+    expect(await readLiveHostInventories(redis, now)).toEqual([]);
   });
 
   it('refuses an inventory missing the folder list', async () => {

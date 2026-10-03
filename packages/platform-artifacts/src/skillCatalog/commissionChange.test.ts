@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { materializeAndValidateSkillConfig } from '@aflow/cybernetic-runtime';
 import {
+  HOST_HARNESS_CONCURRENCY_DEFAULT,
+  HOST_HARNESS_MAX_TURNS_DEFAULT,
   HOST_HARNESS_TIMEOUT_DEFAULT_MS,
   HOST_HARNESS_TIMEOUT_MAX_MS,
   HostHarnessRunInputSchema,
@@ -58,6 +60,7 @@ describe('Commission Change — a brief to the machine’s coding agent', () => 
       'base',
       'mergeFrom',
       'continueFrom',
+      'harness',
       'model',
       'maxTurns',
       'timeoutMs',
@@ -69,24 +72,43 @@ describe('Commission Change — a brief to the machine’s coding agent', () => 
     }
   });
 
-  it('runs two hours and several hundred turns when the brief names neither', () => {
+  it('runs two hours when the brief names no time, and sends no turn budget it did not name', () => {
     const op = substituteTemplateBinds(template, { bindingId: 'hb_repo', task: BRIEF }, declared);
     expect(op).toEqual({
       bindingId: 'hb_repo',
       task: BRIEF,
-      maxTurns: expect.any(Number) as number,
       timeoutMs: HOST_HARNESS_TIMEOUT_MAX_MS,
     });
+    expect('maxTurns' in op).toBe(false);
     expect(op['timeoutMs']).toBeGreaterThan(HOST_HARNESS_TIMEOUT_DEFAULT_MS);
-    expect(op['maxTurns']).toBeGreaterThanOrEqual(300);
-    expect(HostHarnessRunInputSchema.safeParse(op).success).toBe(true);
+    const parsed = HostHarnessRunInputSchema.safeParse(op);
+    expect(parsed.success).toBe(true);
+    // Absent, the operation chooses: its own default on a coding agent that
+    // takes a budget, and none on one that does not, so nothing is refused.
+    expect(parsed.data?.maxTurns).toBeUndefined();
 
     const timeout = (wf.runInputs ?? []).find((i) => i.id === 'timeoutMs');
     expect(timeout?.schema).toMatchObject({ default: HOST_HARNESS_TIMEOUT_MAX_MS });
     expect(timeout?.description).toContain('thirty to forty minutes');
     const turns = (wf.runInputs ?? []).find((i) => i.id === 'maxTurns');
-    expect(turns?.schema).toMatchObject({ default: op['maxTurns'] });
+    expect(turns?.schema).not.toHaveProperty('default');
     expect(turns?.description).toContain('Every tool call is a turn');
+    expect(turns?.description).toContain(String(HOST_HARNESS_MAX_TURNS_DEFAULT));
+    expect(turns?.description).toContain('none on one that does not');
+  });
+
+  it('binds the harness through, and leaves it to the machine when the brief names none', () => {
+    expect(template['harness']).toEqual({ $bind: 'harness' });
+    const op = substituteTemplateBinds(
+      template,
+      { bindingId: 'hb_repo', task: BRIEF, harness: 'opencode' },
+      declared,
+    );
+    expect(op['harness']).toBe('opencode');
+    expect(HostHarnessRunInputSchema.safeParse(op).success).toBe(true);
+    const harness = (wf.runInputs ?? []).find((i) => i.id === 'harness');
+    expect(harness?.required).toBe(false);
+    expect(harness?.description).toContain('offering several refuses');
   });
 
   it('carries what the brief names to the operation as it stands', () => {
@@ -96,6 +118,7 @@ describe('Commission Change — a brief to the machine’s coding agent', () => 
       base: 'aflow/fix-cache',
       mergeFrom: 'origin/main',
       continueFrom: 'session-1',
+      harness: 'claude',
       model: 'claude-opus-5-5',
       maxTurns: 40,
       timeoutMs: 600_000,
@@ -128,7 +151,10 @@ describe('Commission Change — a brief to the machine’s coding agent', () => 
     const description = COMMISSION_CHANGE.description;
     expect(description).toContain("`wait: 'none'`");
     expect(description).toContain('wakes it');
-    expect(description).toContain("within the machine's limit");
+    expect(description).toContain(
+      `${String(HOST_HARNESS_CONCURRENCY_DEFAULT)} unless its operator chose another number`,
+    );
+    expect(description).toContain('waits for one to end rather than being refused');
     expect(description).toContain("The checks a brief asks for are the folder's own");
   });
 

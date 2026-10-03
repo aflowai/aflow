@@ -32,6 +32,7 @@ export class ExecutorRuntime implements JobLoopHost {
   readonly deps: ExecutorDependencies;
   readonly handlers = new Map<string, StepHandler>();
   readonly limiter: ConcurrencyLimiter;
+  readonly operationLimiters = new Map<string, ConcurrencyLimiter>();
   readonly log;
 
   readonly inFlightSteps = new Map<string, InFlightStep>();
@@ -74,6 +75,20 @@ export class ExecutorRuntime implements JobLoopHost {
     }
     this.handlers.set(handler.stepType, handler);
     this.log.debug(`Registered handler for step type: ${handler.stepType}`);
+  }
+
+  /**
+   * Run at most `maxConcurrent` steps of one operation at once, within the
+   * executor's own limit. A step past it waits, claimed, for one to end; a
+   * later call changes the number without ending anything already running.
+   */
+  limitOperation(operationId: string, maxConcurrent: number): void {
+    const existing = this.operationLimiters.get(operationId);
+    if (existing === undefined) {
+      this.operationLimiters.set(operationId, new ConcurrencyLimiter(maxConcurrent));
+    } else {
+      existing.setLimit(maxConcurrent);
+    }
   }
 
   getHandler(stepType: string): StepHandler | undefined {

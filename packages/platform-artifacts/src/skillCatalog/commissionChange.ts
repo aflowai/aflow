@@ -1,5 +1,7 @@
 import {
   HOST_BRANCH_NAME_MAX_LENGTH,
+  HOST_HARNESS_CONCURRENCY_DEFAULT,
+  HOST_HARNESS_MAX_TURNS_DEFAULT,
   HOST_HARNESS_TASK_MAX_LENGTH,
   HOST_HARNESS_TIMEOUT_MAX_MS,
   HOST_HARNESS_TIMEOUT_MIN_MS,
@@ -15,13 +17,6 @@ import {
  */
 const COMMISSION_TIMEOUT_DEFAULT_MS = HOST_HARNESS_TIMEOUT_MAX_MS;
 
-/**
- * The coding agent's turn budget when the brief names none. Every tool call is
- * a turn, and a slice of this size takes several hundred: a cap sized to a
- * guess ends the run while it is still reading.
- */
-const COMMISSION_MAX_TURNS_DEFAULT = 600;
-
 /** The run's inputs together, and so the most the task text can carry beside the rest. */
 const RUN_INPUTS_KB = MAX_PARENT_INPUTS_SERIALIZED_BYTES / 1024;
 
@@ -29,15 +24,15 @@ const MINUTES = 60_000;
 
 const COMMISSION_CHANGE: SkillCatalogEntry = {
   catalogId: 'commission-change',
-  version: 1,
+  version: 2,
   name: 'Commission Change',
   tagline:
     "Have the machine's own coding agent make a change in a connected repository, and get the change back as a patch.",
   description: `Fits a request to make a change in a repository on the operator's machine — "build this slice", "fix these findings", "now fix the test that broke". A commission hands a brief to the coding agent installed on that machine, which works in an isolated checkout of the connected folder and leaves the folder itself untouched; what it changed comes back as a stored patch. Nothing is committed, pushed or published: publishing the patch is Publish Local Changes, and reviewing it once published is Review Local Changes.
 
-**What it needs**: the connected folder and the brief — the task text, everything the coding agent needs and nothing it has to guess: the files and the lines where they are known, what is wrong and what right looks like, the tests to add, the checks to run and what its result reports. \`base\` is where the checkout starts: \`origin/main\` for new work, the branch's name for a fix appended to a branch with an open pull request. A fix to a branch \`main\` has moved past also takes \`mergeFrom: origin/<base>\`, so the checkout merges it first and the agent resolves what conflicts. A further turn on the same work takes \`continueFrom\`, the \`sessionRef\` the earlier run reported. \`model\`, \`maxTurns\` and \`timeoutMs\` are optional; the budgets are sized for a slice already (${String(COMMISSION_MAX_TURNS_DEFAULT)} turns, ${String(COMMISSION_TIMEOUT_DEFAULT_MS / MINUTES)} minutes) and are named only to change them.
+**What it needs**: the connected folder and the brief — the task text, everything the coding agent needs and nothing it has to guess: the files and the lines where they are known, what is wrong and what right looks like, the tests to add, the checks to run and what its result reports. \`base\` is where the checkout starts: \`origin/main\` for new work, the branch's name for a fix appended to a branch with an open pull request. A fix to a branch \`main\` has moved past also takes \`mergeFrom: origin/<base>\`, so the checkout merges it first and the agent resolves what conflicts. A further turn on the same work takes \`continueFrom\`, the \`sessionRef\` the earlier run reported. \`harness\`, \`model\`, \`maxTurns\` and \`timeoutMs\` are optional. \`harness\` is needed only on a machine that offers more than one coding agent, which refuses a commission that names none and lists the ones it offers. The budgets are sized for a slice already — ${String(COMMISSION_TIMEOUT_DEFAULT_MS / MINUTES)} minutes, and ${String(HOST_HARNESS_MAX_TURNS_DEFAULT)} turns on a coding agent that takes a turn budget — and are named only to change them.
 
-**Start it with \`wait: 'none'\`.** A commission runs for tens of minutes. Started that way it returns the run id at once, the conversation stays free, and the commission's end wakes it with the result. Several commissions may run at once on one machine, each in its own checkout, within the machine's limit on coding agents running together.
+**Start it with \`wait: 'none'\`.** A commission runs for tens of minutes. Started that way it returns the run id at once, the conversation stays free, and the commission's end wakes it with the result. Several commissions may run at once on one machine, each in its own checkout. The machine runs only so many coding agents at once — ${String(HOST_HARNESS_CONCURRENCY_DEFAULT)} unless its operator chose another number — and a commission past that waits for one to end rather than being refused; its time counts from when it starts.
 
 **The checks a brief asks for are the folder's own** — its test runner on the touched tests, its type check, its linter, its formatter — run by the coding agent in the commission's checkout, with their output in the result the brief asks for. Nothing else runs them before publication, where the folder's declared checks run again on the commit.
 
@@ -97,6 +92,13 @@ const COMMISSION_CHANGE: SkillCatalogEntry = {
           schema: { type: 'string', minLength: 1 },
         },
         {
+          id: 'harness',
+          required: false,
+          description:
+            'Which coding agent runs the brief, by the id the operator configured on the machine. Absent, the one the machine offers; a machine offering several refuses the commission and lists their ids.',
+          schema: { type: 'string', minLength: 1 },
+        },
+        {
           id: 'model',
           required: false,
           description:
@@ -106,8 +108,8 @@ const COMMISSION_CHANGE: SkillCatalogEntry = {
         {
           id: 'maxTurns',
           required: false,
-          description: `The coding agent's turn budget. Every tool call is a turn, and a slice takes several hundred; absent, ${String(COMMISSION_MAX_TURNS_DEFAULT)}. Name it only to raise it for larger work or to keep a small task small.`,
-          schema: { type: 'integer', minimum: 1, default: COMMISSION_MAX_TURNS_DEFAULT },
+          description: `The coding agent's turn budget. Every tool call is a turn, and a slice takes several hundred. Absent, ${String(HOST_HARNESS_MAX_TURNS_DEFAULT)} on a coding agent that takes a turn budget, and none on one that does not. Named, it is refused by a coding agent that takes no budget, so name it only to raise it for larger work or to keep a small task small.`,
+          schema: { type: 'integer', minimum: 1 },
         },
         {
           id: 'timeoutMs',
@@ -136,6 +138,7 @@ const COMMISSION_CHANGE: SkillCatalogEntry = {
             base: { kind: 'run_input' as const, path: 'base' },
             mergeFrom: { kind: 'run_input' as const, path: 'mergeFrom' },
             continueFrom: { kind: 'run_input' as const, path: 'continueFrom' },
+            harness: { kind: 'run_input' as const, path: 'harness' },
             model: { kind: 'run_input' as const, path: 'model' },
             maxTurns: { kind: 'run_input' as const, path: 'maxTurns' },
             timeoutMs: { kind: 'run_input' as const, path: 'timeoutMs' },
@@ -149,16 +152,18 @@ const COMMISSION_CHANGE: SkillCatalogEntry = {
               integrations: [],
             },
           },
-          // A run input's `default` documents the value and is never applied,
-          // so each budget falls back here when the brief names none.
+          // A run input's `default` documents the value and is never applied, so
+          // the time falls back here. The turn budget does not: only the
+          // operation knows whether the machine's coding agent can take one.
           inputTemplate: {
             bindingId: { $bind: 'bindingId' },
             task: { $bind: 'task' },
             base: { $bind: 'base' },
             mergeFrom: { $bind: 'mergeFrom' },
             continueFrom: { $bind: 'continueFrom' },
+            harness: { $bind: 'harness' },
             model: { $bind: 'model' },
-            maxTurns: { $firstOf: [{ $bind: 'maxTurns' }, COMMISSION_MAX_TURNS_DEFAULT] },
+            maxTurns: { $bind: 'maxTurns' },
             timeoutMs: { $firstOf: [{ $bind: 'timeoutMs' }, COMMISSION_TIMEOUT_DEFAULT_MS] },
           },
           promoteOutputs: [
@@ -267,7 +272,7 @@ const COMMISSION_CHANGE: SkillCatalogEntry = {
       },
       mode: 'process' as const,
       // Each commission works in its own checkout, so none waits on another;
-      // what bounds them is the machine, not the skill.
+      // what bounds them is the machine's limit on coding agents, not the skill.
       concurrency: {
         maxParallelTasksPerRun: 1,
         maxConcurrentRuns: 'unlimited' as const,
@@ -289,7 +294,7 @@ const COMMISSION_CHANGE: SkillCatalogEntry = {
       priority: 50,
     },
     rationale:
-      "One operation task on host.harness.run with every input a brief names as a run input: the description steers the Helmsman (what a brief carries, wait: 'none', what to do with the result) and the brief itself instructs the coding agent. No outputSchema: what the brief asks the agent to report is the brief's, and the change is the operation's own patchRef, which the run promotes with baseSha and merge so a publication takes them as they stand. The budgets default in the template, because a run input's default is never applied.",
+      "One operation task on host.harness.run with every input a brief names as a run input: the description steers the Helmsman (what a brief carries, wait: 'none', what to do with the result) and the brief itself instructs the coding agent. No outputSchema: what the brief asks the agent to report is the brief's, and the change is the operation's own patchRef, which the run promotes with baseSha and merge so a publication takes them as they stand. The time defaults in the template, because a run input's default is never applied; the turn budget is the operation's own, because only the machine knows whether its coding agent can take one. How many run at once is the machine's, which holds a commission past its limit until a coding agent ends.",
   },
 };
 

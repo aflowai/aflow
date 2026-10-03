@@ -178,7 +178,7 @@ Then run a coding skill: ask to open a PR for a change → review it → fix →
 
 const LOCAL_COMMISSION_BUNDLE: SkillBundleInput = {
   bundleId: 'local-commission' as SkillBundleId,
-  version: 1,
+  version: 2,
   name: 'Local Commission',
   tagline: "Have the machine's own coding agent make a change in a connected repository.",
   description: `Installs **Commission Change** — a brief handed to the coding agent already installed on the machine, carried out in an isolated checkout of a repository connected as a folder, with the change returned as a stored patch.

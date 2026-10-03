@@ -20,6 +20,7 @@ import { resolveBranchPolicy } from '@aflow/schemas';
 import { HostPolicySchema } from './bindings.js';
 import { LocalMcpServerSchema } from './localMcpServers.js';
 import { discoverHarnesses } from './harnessDiscovery.js';
+import { describeHarnessConcurrency, withHarnessConcurrency } from './harnessConcurrency.js';
 import { HarnessProfileSchema, type HarnessProfile } from './harnessProfiles.js';
 import { serializePolicy, writePolicyAtomically } from './policyFile.js';
 import { checksChangeFromArgs, describeChecks, withChecks } from './folderChecks.js';
@@ -38,6 +39,8 @@ function usage(): never {
       '  harness allow <id> <host>...       Let a harness reach these hosts.\n' +
       '  harness model <id> <model>         Run this model when a task names none.\n' +
       "  harness model <id> --clear         Run the harness's own default instead.\n" +
+      '  harness concurrency <n>            Run at most this many coding agents at once.\n' +
+      '  harness concurrency --clear        Run the default number instead.\n' +
       '  harness push-approval <folder> <always|never|unless-unreviewed>\n' +
       '                                     When a publication from a folder asks before pushing.\n' +
       '  harness checks <folder> [--timeout-minutes <n>] -- <program> [args...]\n' +
@@ -182,6 +185,7 @@ async function list(): Promise<void> {
   console.log('Configured on this machine:');
   if (policy.harnesses.length === 0) console.log('  (none)');
   else for (const profile of policy.harnesses) console.log(describe(profile));
+  console.log(`This machine ${describeHarnessConcurrency(policy)}.`);
 
   if (policy.mcpServers.length > 0) {
     console.log('\nMCP servers configured on this machine:');
@@ -341,6 +345,12 @@ async function setModel(id: string, model: string): Promise<void> {
   console.log(`\`${id}\` now runs ${model} when a task names none.`);
 }
 
+async function setHarnessConcurrency(requested: string): Promise<void> {
+  const updated = withHarnessConcurrency(await loadPolicy(), requested);
+  await savePolicy(updated);
+  console.log(`This machine now ${describeHarnessConcurrency(updated)}.`);
+}
+
 async function setPushApproval(bindingId: string, requested: string): Promise<void> {
   const updated = withPushApproval(await loadPolicy(), bindingId, requested);
   await savePolicy(updated);
@@ -422,6 +432,10 @@ async function main(): Promise<void> {
     if (model === undefined || model === '') usage();
     if (model.startsWith('--') && model !== '--clear') usage();
     await setModel(id, model);
+    return;
+  }
+  if (command === 'concurrency') {
+    await setHarnessConcurrency(id);
     return;
   }
   if (command === 'push-approval') {

@@ -63,6 +63,7 @@ function makeHost(execute: (ctx: ExecutorContext) => Promise<StepResult>) {
     handlers: new Map([['api', { stepType: 'api', execute }]]),
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
     abortControllers: new Map<string, AbortController>(),
+    operationLimiters: new Map(),
   } as never;
 }
 

@@ -322,7 +322,7 @@ Datastore operations per minute with zero due work, grouped by what each scope m
 
 ### `executor.step_inflight_refresh`
 
-**Purpose.** Refresh the in-flight key for the step attempt this process is running.
+**Purpose.** Refresh the in-flight key for each step attempt this process has claimed, running or waiting for a slot.
 
 **Invariant.** A live step attempt is never reaped as stalled by the orchestrator watchdog.
 
@@ -344,7 +344,7 @@ Datastore operations per minute with zero due work, grouped by what each scope m
 | Feature gate | — |
 | Disable policy | never |
 | Residual poll | — |
-| Source | `packages/executor-runtime/src/executor/processJob.ts` |
+| Source | `packages/executor-runtime/src/executor/processJob.ts`<br>`packages/executor-runtime/src/executor/operationAdmission.ts` |
 
 ### `host.browser_idle`
 

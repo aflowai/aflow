@@ -34,9 +34,10 @@ another stream's runs.
    name for a fix appended to an open pull request, with `mergeFrom: origin/main` where
    `main` has moved past it), and `task`: the findings or the slice to build, each with
    the file, the line where it is known, what is wrong and what right looks like, and the
-   tests to add. Its two hours and several hundred turns are sized for a slice; name
-   `timeoutMs` or `maxTurns` only to change them. Several commissions may run at once,
-   within what the machine carries (below).
+   tests to add. `harness` is needed only where the machine offers more than one coding
+   agent. Its two hours, and the operation's several hundred turns on an agent that
+   takes a turn budget, are sized for a slice; name `timeoutMs` or `maxTurns` only to
+   change them. Several commissions may run at once, within the machine's limit (below).
    The checks the agent must run are named in the brief, because the folder's checks
    only run once the commission is published: `yarn test:file` on touched and added tests, `npx tsc -p` per touched
    workspace, the two CI guards (`scripts/large-files/cli.ts check`,
@@ -90,9 +91,10 @@ review may still send back.
   on the stack asks the stream that runs it; that stream merges, runs `yarn db:migrate`
   when a migration arrived, rebuilds the `dist`s the web app reads, and updates the
   installed bundles through the Store when a catalog version moved.
-- **Commissions can overlap**; each runs in its own detached checkout. Two coding agents
-  and two reviews at once do load the machine, so a stream about to commission checks
-  whether another harness is running and waits for a large one.
+- **Commissions can overlap**; each runs in its own detached checkout. The machine runs
+  two coding agents at once unless `aflow harness concurrency <n>` says otherwise, and a
+  review is a coding agent too; a commission or review past that waits for one to end,
+  and its time counts from when it starts, so nothing needs holding back by hand.
 - **Branch names carry the stream** (`aflow/320-…`, `aflow/publish-…`), and migration
   numbers are taken from `origin/main` at commission time, never from a branch.
 - **CI minutes are billed.** Nothing is pushed to an open pull request outside the
