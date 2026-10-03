@@ -144,6 +144,7 @@ export interface MachineProfile {
 export interface ScreenshotResult extends TakenScreenshot {
   readonly pageId: string;
   readonly url: string;
+  readonly title: string;
 }
 
 export interface HandoffRequest extends RunScope {

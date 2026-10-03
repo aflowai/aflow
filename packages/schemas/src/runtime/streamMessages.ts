@@ -411,7 +411,9 @@ export const StreamKeys = {
    * (server → host executor), one per waiting step. A sibling of the abort
    * channel rather than the channel itself: an abort ends the step as
    * cancelled, with no result, and Done ends the hand-off as `completed`.
-   * Published only by the Action Center's resolve route.
+   * No surface an agent reaches publishes it; in code, only the Action
+   * Center's resolve route does. The host identity's channel grant would
+   * let it publish here too: Redis has no subscribe-only grant.
    */
   browserHandoffDoneChannel: (stepExecutionId: string) =>
     `aflow:handoff-done:${stepExecutionId}` as const,

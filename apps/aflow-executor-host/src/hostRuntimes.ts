@@ -3,7 +3,11 @@
  */
 import { ExecutorRuntime, DEFAULT_EXECUTOR_CONFIG } from '@aflow/executor-runtime';
 import type { PayloadStore } from '@aflow/payload-store';
-import type { BlockingRedisConnection } from '@aflow/redis';
+import {
+  attachRedisErrorGuard,
+  type BlockingRedisConnection,
+  type RedisErrorGuardLogger,
+} from '@aflow/redis';
 import { ConsumerGroups, StreamKeys } from '@aflow/schemas';
 import type { Redis } from 'ioredis';
 
@@ -76,4 +80,19 @@ export function createHostRuntimes(params: {
     hostChannels,
     connections: { blocking, hostChannels, browserBlocking, browserChannels },
   };
+}
+
+/**
+ * A connection's error with no listener ends the process, and every one of
+ * these carries something a run waits on — the subscribers carry aborts,
+ * hand-off Done, withdrawals and sign-in requests.
+ */
+export function guardHostConnections(
+  host: HostRuntimes,
+  getShuttingDown: () => boolean,
+  logger: RedisErrorGuardLogger,
+): void {
+  for (const connection of Object.values(host.connections)) {
+    attachRedisErrorGuard(connection, getShuttingDown, logger);
+  }
 }

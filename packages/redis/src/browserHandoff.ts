@@ -4,10 +4,14 @@
  *
  * Written by the host executor, which reaches nothing durable — only Redis —
  * and read by the Action Center, which renders one item per record. A record
- * is keyed by machine, profile and site, so a second run waiting on the same
- * site joins the record already there; each run is one field of it, added when
+ * is keyed by machine, profile and site; each run is one field of it, added when
  * its wait begins and removed when the wait ends, however it ends. The last
  * one out deletes the record.
+ *
+ * The record can hold several runs, but no path writes a second one today: the
+ * host executor refuses a hand-off on a profile whose window is already shown
+ * (`window_shown`), so while one run waits on a profile, no other run reaches
+ * this record.
  *
  * What the system knows of the hand-off — the site, the reason, when it began —
  * is shared by every space waiting on it. The message an agent wrote is kept

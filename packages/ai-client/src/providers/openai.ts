@@ -38,6 +38,7 @@ import type {
 import type { AIProviderAdapter } from '../adapter.js';
 import type { AsyncReplayGuarantee } from '@aflow/schemas';
 import { AIClientError, buildStreamTruncationError, normalizeOpenAIError } from '../errors.js';
+import { moveToolImagesToUserMessages, toolResultText } from './toolResultContent.js';
 import { refuseImageReferences } from './imageReferences.js';
 import { parseJsonResponse } from './jsonResponseParse.js';
 import {
@@ -66,7 +67,7 @@ function toResponsesInput(
   const systemBlocks: string[] = [];
   const input: ResponsesInputItem[] = [];
 
-  for (const message of messages) {
+  for (const message of moveToolImagesToUserMessages(messages, 'openai')) {
     switch (message.role) {
       case 'system':
         // Every system block, joined — an agent turn sends several (instructions,
@@ -148,7 +149,7 @@ function toResponsesInput(
         input.push({
           type: 'function_call_output',
           call_id: message.toolCallId,
-          output: message.content,
+          output: toolResultText(message, 'openai'),
         });
         break;
     }
@@ -362,7 +363,7 @@ function toOpenAIMessage(message: ChatMessage): OpenAIMessage {
       return {
         role: 'tool',
         tool_call_id: message.toolCallId,
-        content: message.content,
+        content: toolResultText(message, 'openai'),
       };
   }
 }
@@ -711,7 +712,9 @@ export function createOpenAIAdapter(
 
     async generateJson<T>(request: GenerateJsonRequest<T>): Promise<GenerateJsonResponse<T>> {
       try {
-        const messages = request.messages.map(toOpenAIMessage);
+        const messages = moveToolImagesToUserMessages(request.messages, 'openai').map(
+          toOpenAIMessage,
+        );
 
         // When rawJsonSchema is provided, use it directly instead of converting from Zod.
         // This supports cases where the caller has a JSON Schema (e.g., from user input)

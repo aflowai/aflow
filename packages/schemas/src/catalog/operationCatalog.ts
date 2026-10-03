@@ -8,6 +8,7 @@ import { type z } from 'zod';
 import type { StepType } from '../artifact/operationDefinition.js';
 import type { SemanticType } from '../artifact/stateVariable.js';
 import type { CapabilityAccessMode, RiskModifier } from './capabilityGroups.js';
+import type { StepImageOutputPaths } from '../media/stepImage.js';
 
 // ============================================================================
 // Idempotency & Usage Metadata
@@ -188,6 +189,16 @@ export interface OperationRegistration {
   outputSemanticType?: SemanticType;
 
   /**
+   * The output paths where this operation returns a `StepImage` (Plan 320 D10),
+   * shaped by `StepImageOutputPathsSchema`. An agent turn is shown images only
+   * from an operation that declares them, read at these paths and nowhere else;
+   * every other output reaches the model as its JSON, however it is shaped.
+   * An operation whose data originates outside the platform declares this only
+   * through the allowlist in `imageOutputDeclarations.test.ts`.
+   */
+  imageOutputPaths?: StepImageOutputPaths;
+
+  /**
    * Optional display name for this operation's group (used in catalog/admin UI).
    * Set on one operation per group; registry picks the first non-null value.
    * E.g., 'Text Generation' for the 'ai.text' group.
@@ -267,6 +278,8 @@ export interface OperationDescriptor {
 
   /** Semantic type for this operation's output (from registration). */
   outputSemanticType?: SemanticType;
+  /** See `OperationRegistration.imageOutputPaths`. */
+  imageOutputPaths?: StepImageOutputPaths;
 
   capabilityGroupId: string;
   /** Coarse permission mode: 'read' or 'write'. */

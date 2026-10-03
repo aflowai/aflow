@@ -11,6 +11,7 @@ import type {
   StreamingResponse,
   ProviderConfig,
   ChatMessage,
+  ContentPart,
   ToolCall,
   ToolDefinition,
   TextStreamChunk,
@@ -23,6 +24,7 @@ import type {
 import type { AIProviderAdapter } from '../adapter.js';
 import { AIClientError, buildStreamTruncationError, normalizeAnthropicError } from '../errors.js';
 import { TRUNCATED_HISTORY_USER_BRIDGE_TEXT } from './wireIntegrity.js';
+import { toolResultParts } from './toolResultContent.js';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 
 // ============================================================================
@@ -31,6 +33,31 @@ import { zodToJsonSchema } from 'zod-to-json-schema';
 
 type AnthropicMessage = Anthropic.MessageParam;
 type AnthropicContent = Anthropic.ContentBlockParam;
+
+function toAnthropicContentPart(
+  part: ContentPart,
+): Anthropic.TextBlockParam | Anthropic.ImageBlockParam {
+  if (part.type === 'text') {
+    return { type: 'text' as const, text: part.text };
+  }
+  if (part.source.type === 'url') {
+    // Anthropic requires base64 for images, not URLs directly
+    throw new AIClientError(
+      'Anthropic requires base64 images, URL images are not supported',
+      'invalid_request',
+      'anthropic',
+      false,
+    );
+  }
+  return {
+    type: 'image' as const,
+    source: {
+      type: 'base64' as const,
+      media_type: part.source.mediaType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
+      data: part.source.data,
+    },
+  };
+}
 
 export function toAnthropicMessages(
   messages: ChatMessage[],
@@ -58,31 +85,7 @@ export function toAnthropicMessages(
           anthropicMessages.push({ role: 'user', content: message.content });
         } else {
           // Multi-modal content
-          const content: AnthropicContent[] = message.content.map((part) => {
-            if (part.type === 'text') {
-              return { type: 'text' as const, text: part.text };
-            }
-            // Image
-            if (part.source.type === 'url') {
-              // Anthropic requires base64 for images, not URLs directly
-              // For now, we'll need to fetch the URL (or throw an error)
-              throw new AIClientError(
-                'Anthropic requires base64 images, URL images are not supported',
-                'invalid_request',
-                'anthropic',
-                false,
-              );
-            }
-            return {
-              type: 'image' as const,
-              source: {
-                type: 'base64' as const,
-                media_type: part.source.mediaType as
-                  'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
-                data: part.source.data,
-              },
-            };
-          });
+          const content: AnthropicContent[] = message.content.map(toAnthropicContentPart);
           anthropicMessages.push({ role: 'user', content });
         }
         break;
@@ -127,10 +130,15 @@ export function toAnthropicMessages(
         // Anthropic uses tool_result blocks inside user messages. Coalesce a
         // contiguous run of tool messages into one user message so an assistant's
         // parallel results all land in the single message after it (§7.2).
+        // A tool result takes image blocks beside its text, so a tool's
+        // images stay inside its own result.
         const toolResultBlock: AnthropicContent = {
           type: 'tool_result',
           tool_use_id: message.toolCallId,
-          content: message.content,
+          content:
+            typeof message.content === 'string'
+              ? message.content
+              : toolResultParts(message, 'anthropic').map(toAnthropicContentPart),
         };
         const last = anthropicMessages[anthropicMessages.length - 1];
         const lastIsToolResultUser =

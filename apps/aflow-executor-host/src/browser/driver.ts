@@ -487,7 +487,8 @@ export class BrowserDriver {
     return await this.usingPage(scope, pageId, async ({ held, running }) => {
       try {
         const taken = await screenshotWithinCeiling(held.page, request);
-        return { pageId, url: pageAddress(held), ...taken };
+        const title = await held.page.title().catch(() => held.lastTitle);
+        return { pageId, url: pageAddress(held), title, ...taken };
       } catch (error) {
         if (error instanceof BrowserDriverError) throw error;
         if (error instanceof EngineRefNotFound) throw await this.staleRef(held, running, error.ref);

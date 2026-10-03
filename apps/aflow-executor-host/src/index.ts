@@ -53,7 +53,12 @@ import { isBrowserRequestFile, serveBrowserRequests } from './browser/windowRequ
 import { createBrowserHandler } from './handlers/browserHandler.js';
 import { removeWorktree } from './worktree.js';
 import { removeOrphanedCheckouts } from './handlers/harnessHandlers.js';
-import { BROWSER_STEP_TYPE, STEP_TYPE, createHostRuntimes } from './hostRuntimes.js';
+import {
+  BROWSER_STEP_TYPE,
+  STEP_TYPE,
+  createHostRuntimes,
+  guardHostConnections,
+} from './hostRuntimes.js';
 import { createHostHandler } from './handlers/hostHandler.js';
 import {
   allSessions,
@@ -164,12 +169,13 @@ async function main(): Promise<void> {
     ...(paired.applied.length > 0 ? { pairedEnv: paired.applied.join(',') } : { paired: false }),
   });
 
-  const { runtime, browserRuntime, hostChannels, connections } = createHostRuntimes({
+  const host = createHostRuntimes({
     hostname,
     redis,
     payloadStore: resolved.store,
     connect: (name) => createBlockingRedisConnection(name, getExecutorRedisConfig()),
   });
+  const { runtime, browserRuntime, hostChannels, connections } = host;
 
   // Before the first job: anything a previous executor left running is holding
   // a credential nothing can address any more, so it is ended rather than
@@ -479,9 +485,7 @@ async function main(): Promise<void> {
   });
 
   attachRedisErrorGuard(redis, () => controller.shuttingDown, log);
-  attachRedisErrorGuard(connections.blocking, () => controller.shuttingDown, log);
-  attachRedisErrorGuard(connections.browserBlocking, () => controller.shuttingDown, log);
-  attachRedisErrorGuard(connections.browserChannels, () => controller.shuttingDown, log);
+  guardHostConnections(host, () => controller.shuttingDown, log);
 
   const started = await startUnderSignals(controller, [
     async () => {

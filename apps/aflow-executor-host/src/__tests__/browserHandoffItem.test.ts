@@ -6,12 +6,12 @@
 import type { Redis } from 'ioredis';
 import RedisMock from 'ioredis-mock';
 import { readSpaceBrowserHandoffs } from '@aflow/redis';
-import { type BrowserHandoffOutcome, StreamKeys } from '@aflow/schemas';
+import { type BrowserHandoffOutcome, type BrowserProfile, StreamKeys } from '@aflow/schemas';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createRedisHandoffBoard, registrableSite } from '../browser/handoffBoard.js';
 import { type HandoffWait, waitInWindow, type WaitForOperator } from '../browser/operatorWindow.js';
-import { harness, type Harness, refusal, RUN_A } from './fixtures/fakeBrowser.js';
+import { harness, type Harness, profile, refusal, RUN_A } from './fixtures/fakeBrowser.js';
 
 const LOGIN = 'https://accounts.example.com/login';
 const STEP = 'step-a';
@@ -30,7 +30,7 @@ afterEach(() => {
   redis.disconnect();
 });
 
-function world(waitForOperator?: WaitForOperator): Harness {
+function world(waitForOperator?: WaitForOperator, browsers?: BrowserProfile[]): Harness {
   return harness({
     handoffs: createRedisHandoffBoard({
       redis,
@@ -39,6 +39,7 @@ function world(waitForOperator?: WaitForOperator): Harness {
       log: { warn: () => undefined },
     }),
     ...(waitForOperator !== undefined ? { waitForOperator } : {}),
+    ...(browsers !== undefined ? { browsers } : {}),
   });
 }
 
@@ -127,6 +128,38 @@ describe('a hand-off in the Action Center', () => {
     expect(result.outcome).toBe('completed');
     expect(await openItems()).toEqual([]);
     expect(await redis.publish(channel, 'late')).toBe(0);
+  });
+
+  it('lists one run: a second hand-off of the same site while the window is shown is refused', async () => {
+    const meanwhile: { second?: () => Promise<string> } = {};
+    let second: string | undefined;
+    let listed: Awaited<ReturnType<typeof openItems>> = [];
+    // A window already on screen, so showing it closes no page of the second run.
+    const h = world(async () => {
+      second = await meanwhile.second?.();
+      listed = await openItems();
+      return 'window_closed';
+    }, [profile({ window: 'visible' })]);
+    const mine = await openLogin(h);
+    const other = await openLogin(h);
+    meanwhile.second = async () =>
+      (
+        await refusal(
+          h.driver.handoff({
+            ...RUN_A,
+            stepExecutionId: 'step-b',
+            sessionId: RUN_A.runId,
+            pageId: other,
+            reason: 'sign_in',
+            message: 'Sign in to the mail account.',
+          }),
+        )
+      ).kind;
+    await handOver(h, mine);
+
+    expect(second).toBe('window_shown');
+    expect(listed).toHaveLength(1);
+    expect(listed[0]?.waiting.map((waiter) => waiter.stepExecutionId)).toEqual([STEP]);
   });
 });
 

@@ -1032,4 +1032,89 @@ describe('buildToolResultSummary', () => {
       expect(summary).not.toContain('To visualize:');
     });
   });
+
+  describe('Plan 320 D10 — an image an operation declares', () => {
+    const OWN_REF =
+      'gs://aflow-payloads/tenants/t1/runs/run-1/steps/step-shot/attempt/1/screenshot.json';
+    const DESCRIPTION =
+      'Screenshot of the visible window of "Report" at https://example.com/report';
+
+    function screenshotOutput(ref: string, url = 'https://example.com/report') {
+      return {
+        pageId: 'pg_1',
+        url,
+        image: {
+          ref,
+          contentType: 'image/png',
+          sizeBytes: 48_213,
+          width: 1280,
+          height: 800,
+          description: DESCRIPTION,
+        },
+        receipt: { fullPage: false, retaken: false },
+      };
+    }
+
+    it('shows its description and size in place of the image, never its reference', () => {
+      const summary = buildToolResultSummary(
+        screenshotOutput(OWN_REF),
+        'call-1',
+        'browser.page.screenshot',
+      );
+      expect(summary).not.toContain(OWN_REF);
+      expect(summary).not.toContain('gs://');
+      expect(JSON.parse(summary)).toEqual({
+        pageId: 'pg_1',
+        url: 'https://example.com/report',
+        image: {
+          contentType: 'image/png',
+          sizeBytes: 48_213,
+          width: 1280,
+          height: 800,
+          description: DESCRIPTION,
+        },
+        receipt: { fullPage: false, retaken: false },
+      });
+    });
+
+    it.each([
+      [
+        'another step',
+        'gs://aflow-payloads/tenants/t1/runs/run-1/steps/step-2/attempt/1/body.json',
+      ],
+      ['an inline payload', `inline:${Buffer.from('{"data":"iVBORw0KGgo="}').toString('base64')}`],
+    ])('never shows the reference of an image it withholds, naming %s', (_label, ref) => {
+      const summary = buildToolResultSummary(
+        screenshotOutput(ref),
+        'call-1',
+        'browser.page.screenshot',
+      );
+      expect(summary).not.toContain(ref);
+      expect((JSON.parse(summary) as { image: unknown }).image).toEqual({
+        contentType: 'image/png',
+        sizeBytes: 48_213,
+        width: 1280,
+        height: 800,
+        description: DESCRIPTION,
+      });
+    });
+
+    it('keeps the reference out of a summary too large to pass through', () => {
+      const long = `https://example.com/report?${'q'.repeat(TOOL_RESULT_INLINE_MAX_CHARS)}`;
+      const { text, meta } = buildToolResultSummaryWithMeta(
+        screenshotOutput(OWN_REF, long),
+        'call-1',
+        'browser.page.screenshot',
+      );
+      expect(meta.kind).toBe('source_preview');
+      expect(text).not.toContain(OWN_REF);
+      expect(text).not.toContain('gs://');
+    });
+
+    it('leaves the same shape alone in an operation that declares no image', () => {
+      const output = { status: 200, data: screenshotOutput(OWN_REF) };
+      const summary = buildToolResultSummary(output, 'call-1', 'api.http.call');
+      expect(JSON.parse(summary)).toEqual(output);
+    });
+  });
 });

@@ -16,7 +16,7 @@ vi.mock('@aflow/redis', async (importOriginal) => ({
 import type { BlockingRedisConnection } from '@aflow/redis';
 import { StreamKeys } from '@aflow/schemas';
 
-import { createHostRuntimes, type HostRuntimes } from '../hostRuntimes.js';
+import { createHostRuntimes, guardHostConnections, type HostRuntimes } from '../hostRuntimes.js';
 
 /** Holds pattern subscriptions the way Redis does: per connection, not per caller. */
 class FakeConnection extends EventEmitter {
@@ -95,5 +95,29 @@ describe('host runtimes', () => {
     fake.publish(StreamKeys.stepAbortChannel('step-browser'), 'operator');
 
     expect(browserStep.signal.aborted).toBe(true);
+  });
+
+  it('logs an error on any of its connections, the harness subscriber included, rather than ending the process', () => {
+    const fake = hostOnFakeRedis();
+    const logger = { debug: vi.fn(), error: vi.fn() };
+    guardHostConnections(fake.host, () => false, logger);
+
+    expect(() => fake.host.hostChannels.emit('error', new Error('connection reset'))).not.toThrow();
+    expect(logger.error).toHaveBeenCalledWith('Redis error', { error: 'connection reset' });
+
+    for (const [name, connection] of Object.entries(fake.host.connections)) {
+      expect(connection.listenerCount('error'), name).toBe(1);
+    }
+  });
+
+  it('lowers an error during shutdown to debug', () => {
+    const fake = hostOnFakeRedis();
+    const logger = { debug: vi.fn(), error: vi.fn() };
+    guardHostConnections(fake.host, () => true, logger);
+
+    fake.host.connections.hostChannels.emit('error', new Error('closed'));
+
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(logger.debug).toHaveBeenCalledOnce();
   });
 });

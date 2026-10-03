@@ -154,6 +154,11 @@ const HOST_KEY_PATTERNS = [
 /**
  * Channels it subscribes to for aborts, session wakeups and the operator's
  * Done on a browser hand-off.
+ *
+ * A channel grant admits PUBLISH as well as SUBSCRIBE, and Redis has no
+ * subscribe-only grant, so this identity could publish Done on any hand-off.
+ * What holds is narrower: no surface an agent reaches publishes it — in code,
+ * only the Action Center's resolve route does, and a guard test holds that.
  */
 const HOST_CHANNEL_PATTERNS = [
   '&aflow:pubsub:*',

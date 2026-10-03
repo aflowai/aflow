@@ -180,7 +180,10 @@ function naming(pattern: RegExp): string[] {
 }
 
 describe('Done on a browser hand-off', () => {
-  it('is published by this source alone and heard by the host executor alone', () => {
+  // The host identity's channel grant would let it publish Done — Redis has no
+  // subscribe-only grant — so what holds is the code: no surface an agent
+  // reaches publishes it.
+  it('is published in code by this source alone and heard by the host executor alone', () => {
     expect(naming(/browserHandoffDoneChannel/)).toEqual([
       'apps/aflow-executor-host/src/browser/handoffBoard.ts',
       'packages/schemas/src/runtime/streamMessages.ts',
@@ -191,6 +194,13 @@ describe('Done on a browser hand-off', () => {
       'utf8',
     );
     expect(board).not.toMatch(/\.publish\(/);
+  });
+
+  it('is spelled out only where it is defined and granted, so nothing publishes around the helper', () => {
+    expect(naming(/handoff-done/)).toEqual([
+      'packages/schemas/src/runtime/streamMessages.ts',
+      'packages/server-runtime/src/bootstrap/redisAcl.ts',
+    ]);
   });
 
   it('reaches the source only through the operator’s authenticated resolve route', () => {

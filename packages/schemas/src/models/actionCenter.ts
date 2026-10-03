@@ -112,11 +112,13 @@ export type SessionInvitationOrigin = z.infer<typeof SessionInvitationOriginSche
  * A run's page handed to the operator in a browser window on their machine
  * (`browser.page.handoff`), while the step that asked waits there.
  *
- * One item per profile and site, not per run: a second run that needs the same
- * site signed in joins the item already open. Read from the record the host
- * executor keeps in Redis for as long as some run waits on it, so the item is
- * gone when the last wait ends, however it ends. **Done** ends every wait the
- * item lists with `completed`.
+ * One item per profile and site, and the record behind it can list several
+ * runs. Today it lists one: the host executor refuses a second hand-off on a
+ * profile whose window is already shown (`window_shown`), so a second run never
+ * waits on an open item. Read from the record the host executor keeps in Redis
+ * for as long as some run waits on it, so the item is gone when the last wait
+ * ends, however it ends. **Done** ends every wait the item lists with
+ * `completed`.
  */
 export const BrowserHandoffOriginSchema = z.object({
   type: z.literal('browser_handoff'),
