@@ -15,7 +15,8 @@
  * nothing one turn's relay left in them reaches the next; the browser and its
  * pages stay for the run. When the run ends, however it ends, the pages the
  * harness opened close, an ephemeral profile's browser stops, and every file
- * written here is removed.
+ * written here is removed. A call still in flight past a short grace is logged
+ * as abandoned, and a page it opens later is closed as soon as it exists.
  */
 import { execFile } from 'node:child_process';
 import { constants, openSync } from 'node:fs';
@@ -152,6 +153,21 @@ interface RelayRequest {
   readonly arguments?: unknown;
 }
 
+/** One relayed call from the moment it is read until its record is in the log. */
+interface Call {
+  readonly tool: string;
+  readonly args: Record<string, unknown>;
+  logged: boolean;
+}
+
+type CallOutcome = { ok: true; output: unknown } | { ok: false; error: AflowError };
+
+function actionOf(call: Call): string {
+  return call.tool === 'act' && typeof call.args['action'] === 'string'
+    ? `act.${call.args['action']}`
+    : call.tool;
+}
+
 type McpContent =
   | { readonly type: 'text'; readonly text: string }
   | { readonly type: 'image'; readonly data: string; readonly mimeType: string };
@@ -179,6 +195,8 @@ export interface HarnessBrowserOptions {
   readonly now?: () => number;
   /** Where an ephemeral profile's directory is made; the temp root unless a test says. */
   readonly ephemeralRoot?: string;
+  /** How long the end of a run waits for calls in flight; `IN_FLIGHT_GRACE_MS` unless a test says. */
+  readonly inFlightGraceMs?: number;
 }
 
 /** One harness turn's way to the run's browser: a pipe pair of its own and the configuration naming it. */
@@ -288,15 +306,43 @@ export async function openHarnessBrowser(options: HarnessBrowserOptions): Promis
 
   const records: HarnessBrowserLogRecord[] = [];
   const opened = new Set<string>();
-  const inFlight = new Set<Promise<void>>();
-  let closed = false;
+  const inFlight = new Map<Call, Promise<void>>();
+  let closing = false;
   let turnCount = 0;
 
-  const record = (
-    tool: string,
-    args: Record<string, unknown>,
-    outcome: { ok: true; output: unknown } | { ok: false; error: AflowError },
-  ): void => {
+  const log = (call: Call, entry: HarnessBrowserLogRecord, said: string): void => {
+    call.logged = true;
+    records.push(entry);
+    const where = entry.origin ?? entry.pageId;
+    options.onActivity({
+      kind: 'tool',
+      at: Math.max(0, now() - options.startedAt),
+      tool: `browser.page.${call.tool}`,
+      text: `${entry.action}${where !== undefined ? ` ${where}` : ''} — ${said}`,
+    });
+  };
+
+  // The log is read as soon as close() returns, so a call still running then
+  // is written now; whatever it does later is not written again.
+  const abandon = (call: Call): void => {
+    if (call.logged) return;
+    const pageId = call.args['pageId'];
+    log(
+      call,
+      {
+        at: new Date(now()).toISOString(),
+        profile: options.profile,
+        action: actionOf(call),
+        ...(typeof pageId === 'string' ? { pageId } : {}),
+        outcome: 'abandoned',
+      },
+      'abandoned',
+    );
+  };
+
+  const record = (call: Call, outcome: CallOutcome, screenshot?: PayloadRef): void => {
+    if (call.logged) return;
+    const { tool, args } = call;
     const output = outcome.ok ? outcome.output : undefined;
     const receipt = field(output, 'receipt');
     const element = field(receipt, 'element') as HarnessBrowserLogRecord['element'] | undefined;
@@ -312,7 +358,7 @@ export async function openHarnessBrowser(options: HarnessBrowserOptions): Promis
     const entry: HarnessBrowserLogRecord = {
       at: new Date(now()).toISOString(),
       profile: options.profile,
-      action: tool === 'act' && typeof args['action'] === 'string' ? `act.${args['action']}` : tool,
+      action: actionOf(call),
       ...(typeof pageId === 'string' ? { pageId } : {}),
       ...(origin !== undefined ? { origin } : {}),
       ...(element !== undefined ? { element: { ...element } } : {}),
@@ -327,16 +373,9 @@ export async function openHarnessBrowser(options: HarnessBrowserOptions): Promis
             ? 'read'
             : 'performed',
       ...(!outcome.ok ? { code: outcome.error.code } : {}),
+      ...(screenshot !== undefined ? { screenshot } : {}),
     };
-    records.push(entry);
-    const where = entry.origin ?? entry.pageId;
-    const said = outcome.ok ? entry.outcome : `${entry.outcome}: ${outcome.error.code}`;
-    options.onActivity({
-      kind: 'tool',
-      at: Math.max(0, now() - options.startedAt),
-      tool: `browser.page.${tool}`,
-      text: `${entry.action}${where !== undefined ? ` ${where}` : ''} — ${said}`,
-    });
+    log(call, entry, outcome.ok ? entry.outcome : `${entry.outcome}: ${outcome.error.code}`);
   };
 
   const notOpenedHere = (pageId: string): AflowError =>
@@ -349,22 +388,18 @@ export async function openHarnessBrowser(options: HarnessBrowserOptions): Promis
       ),
     );
 
-  const perform = async (request: RelayRequest): Promise<McpCallResult> => {
-    const { tool } = request;
-    const args =
-      typeof request.arguments === 'object' && request.arguments !== null
-        ? (request.arguments as Record<string, unknown>)
-        : {};
+  const perform = async (call: Call): Promise<McpCallResult> => {
+    const { tool, args } = call;
     const pageId = args['pageId'];
     if (typeof pageId === 'string' && !opened.has(pageId)) {
       const error = notOpenedHere(pageId);
-      record(tool, args, { ok: false, error });
+      record(call, { ok: false, error });
       return errorResult(error);
     }
 
     if (tool === 'evaluate') {
       const parsed = HarnessBrowserEvaluateInputSchema.safeParse(args);
-      let outcome: { ok: true; output: unknown } | { ok: false; error: AflowError };
+      let outcome: CallOutcome;
       if (!parsed.success) {
         outcome = { ok: false, error: validationError(parsed.error.message) };
       } else {
@@ -378,32 +413,38 @@ export async function openHarnessBrowser(options: HarnessBrowserOptions): Promis
           outcome = { ok: false, error: browserFailure(error) };
         }
       }
-      record(tool, args, outcome);
+      record(call, outcome);
       return outcome.ok ? textResult(outcome.output) : errorResult(outcome.error);
     }
 
     const relayed = relayTools(ephemeral).find((each) => each.name === tool);
     if (relayed?.operationId === undefined) {
       const error = validationError(`This browser has no tool \`${tool}\`.`);
-      record(tool, args, { ok: false, error });
+      record(call, { ok: false, error });
       return errorResult(error);
     }
     let image: { data: string; mimeType: string } | undefined;
-    const call: BrowserCall = {
+    let screenshot: PayloadRef | undefined;
+    const browserCall: BrowserCall = {
       ...scope,
       // A relayed call is sent once; the relay never resends one.
       redelivered: false,
       stepExecutionId: options.stepExecutionId,
       storeScreenshot: async (taken) => {
         image = taken;
-        return await options.storeScreenshot(taken);
+        screenshot = await options.storeScreenshot(taken);
+        return screenshot;
       },
     };
     const input = tool === 'open' ? { ...args, profileId } : args;
-    const outcome = await performBrowserOperation(driver, relayed.operationId, input, call);
+    const outcome = await performBrowserOperation(driver, relayed.operationId, input, browserCall);
     if (outcome.ok && tool === 'open') {
       const openedPageId = field(outcome.output, 'pageId');
-      if (typeof openedPageId === 'string') opened.add(openedPageId);
+      if (typeof openedPageId === 'string') {
+        // The end of the run closes the pages in one pass; one arriving after it would outlive the run.
+        if (closing) await driver.close(scope, openedPageId).catch(() => undefined);
+        else opened.add(openedPageId);
+      }
     }
     if (outcome.ok && tool === 'close') opened.delete(String(args['pageId']));
     const shown =
@@ -416,7 +457,7 @@ export async function openHarnessBrowser(options: HarnessBrowserOptions): Promis
         : outcome.ok
           ? outcome.output
           : undefined;
-    record(tool, args, outcome.ok ? { ok: true, output: shown } : outcome);
+    record(call, outcome.ok ? { ok: true, output: shown } : outcome, screenshot);
     if (!outcome.ok) return errorResult(outcome.error);
     if (image === undefined) return textResult(shown);
     // The model reads the image itself; the reference is the platform's, not the harness's.
@@ -430,7 +471,7 @@ export async function openHarnessBrowser(options: HarnessBrowserOptions): Promis
   };
 
   const openTurn = async (): Promise<HarnessBrowserTurn> => {
-    if (closed) throw new Error('The run has ended, and its browser with it.');
+    if (closing) throw new Error('The run has ended, and its browser with it.');
     turnCount += 1;
     const turnDir = join(dir, `turn-${String(turnCount)}`);
     const requestPath = join(turnDir, 'request.pipe');
@@ -498,7 +539,15 @@ export async function openHarnessBrowser(options: HarnessBrowserOptions): Promis
         return;
       }
       if (typeof request.id !== 'number' || typeof request.tool !== 'string') return;
-      const work = perform(request)
+      const call: Call = {
+        tool: request.tool,
+        args:
+          typeof request.arguments === 'object' && request.arguments !== null
+            ? (request.arguments as Record<string, unknown>)
+            : {},
+        logged: false,
+      };
+      const work = perform(call)
         .then((result) => {
           answer(request.id, result);
         })
@@ -508,8 +557,8 @@ export async function openHarnessBrowser(options: HarnessBrowserOptions): Promis
             textResult({ error: { code: 'INTERNAL', message: String(error) } }, true),
           );
         });
-      inFlight.add(work);
-      void work.finally(() => inFlight.delete(work));
+      inFlight.set(call, work);
+      void work.finally(() => inFlight.delete(call));
     };
 
     createInterface({ input: requests }).on('line', serve);
@@ -522,17 +571,18 @@ export async function openHarnessBrowser(options: HarnessBrowserOptions): Promis
     openTurn,
     records: () => [...records],
     close: async () => {
-      if (closed) return;
-      closed = true;
+      if (closing) return;
+      closing = true;
       for (const turn of [...turns]) await turn.close();
       let grace: NodeJS.Timeout | undefined;
       await Promise.race([
-        Promise.allSettled([...inFlight]),
+        Promise.allSettled([...inFlight.values()]),
         new Promise((resolve) => {
-          grace = setTimeout(resolve, IN_FLIGHT_GRACE_MS);
+          grace = setTimeout(resolve, options.inFlightGraceMs ?? IN_FLIGHT_GRACE_MS);
         }),
       ]);
       clearTimeout(grace);
+      for (const call of inFlight.keys()) abandon(call);
       if (!ephemeral) {
         for (const pageId of opened) await driver.close(scope, pageId).catch(() => undefined);
       }

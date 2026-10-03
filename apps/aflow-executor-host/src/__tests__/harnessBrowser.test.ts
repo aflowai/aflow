@@ -31,8 +31,9 @@ import {
   type PayloadRef,
   toJsonSchemaSync,
 } from '@aflow/schemas';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import type { OpenRequest } from '../browser/driverTypes.js';
 import {
   browserLogText,
   EPHEMERAL_PROFILE_SCRATCH_PREFIX,
@@ -103,6 +104,7 @@ async function openBrowser(
   h: Harness,
   profileName: string,
   reach: HarnessReach = DEV_REACH,
+  inFlightGraceMs?: number,
 ): Promise<Opened> {
   const scratch = await tempDir('aflow-harness-browser-');
   const ephemeralRoot = await tempDir('aflow-harness-ephemeral-');
@@ -117,11 +119,12 @@ async function openBrowser(
     stepExecutionId: 'se-harness',
     storeScreenshot: (image) => {
       stored.push(image);
-      return Promise.resolve(`inline:shot-${String(stored.length)}` as PayloadRef);
+      return Promise.resolve(`inline:shot${String(stored.length)}` as PayloadRef);
     },
     onActivity: (line) => activity.push(line),
     startedAt: 0,
     ephemeralRoot,
+    ...(inFlightGraceMs !== undefined ? { inFlightGraceMs } : {}),
   });
   cleanup.push(async () => {
     await browser.close();
@@ -550,6 +553,61 @@ describe('script evaluation', () => {
   });
 });
 
+/** The harness's driver, its `open` held until the test lets it go. */
+function openHeld(h: Harness): { harness: Harness; reached: Promise<void>; release: () => void } {
+  let release: () => void = () => undefined;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let arrive: () => void = () => undefined;
+  const reached = new Promise<void>((resolve) => {
+    arrive = resolve;
+  });
+  const driver = new Proxy(h.driver, {
+    get: (target, key) => {
+      if (key === 'open') {
+        return async (request: OpenRequest) => {
+          arrive();
+          await held;
+          return await target.open(request);
+        };
+      }
+      const value: unknown = Reflect.get(target, key, target);
+      return typeof value === 'function' ? (value as () => unknown).bind(target) : value;
+    },
+  });
+  return { harness: { ...h, driver }, reached, release };
+}
+
+describe('the end of a run', () => {
+  it('closes a page an open still in flight makes after the run ended, and logs the call as abandoned', async () => {
+    const h = world();
+    const slow = openHeld(h);
+    const { browser, activity } = await openBrowser(slow.harness, 'default', DEV_REACH, 0);
+    // Its answer would go to a turn that is gone, so it is never awaited.
+    void asRelay(browser).call('open', { url: 'https://app.example/' });
+    await slow.reached;
+
+    await browser.close();
+    const logged = browserLogText(browser.records())
+      .trimEnd()
+      .split('\n')
+      .map((line) => HarnessBrowserLogRecordSchema.strict().parse(JSON.parse(line)));
+    expect(logged).toEqual([
+      { at: expect.any(String), profile: 'default', action: 'open', outcome: 'abandoned' },
+    ]);
+    expect(activity.at(-1)).toMatchObject({ tool: 'browser.page.open', text: 'open — abandoned' });
+    expect(h.pages).toEqual([]);
+
+    slow.release();
+    await vi.waitFor(() => {
+      expect(h.pages.length).toBeGreaterThan(0);
+      expect(h.pages.filter((page) => !page.closed)).toEqual([]);
+    });
+    expect(browser.records()).toHaveLength(1);
+  });
+});
+
 describe('the browser log', () => {
   it('records every call, typed text by length only, and each as a tool line in the feed', async () => {
     const h = world();
@@ -566,7 +624,7 @@ describe('the browser log', () => {
 
     expect(shot.content.map((part) => part.type)).toEqual(['text', 'image']);
     expect(shot.content[1]).toMatchObject({ mimeType: 'image/png', data: stored[0]?.data });
-    expect(shot.content[0]?.text).not.toContain('inline:shot-1');
+    expect(shot.content[0]?.text).not.toContain('inline:shot1');
     expect(foreign.isError).toBe(true);
 
     const text = browserLogText(browser.records());
@@ -595,6 +653,14 @@ describe('the browser log', () => {
       element: { role: 'textbox', name: 'Email' },
       typedCharacters: 19,
     });
+    // What the harness saw is kept for the operator, though the harness never sees the reference.
+    expect(records.map((entry) => entry.screenshot)).toEqual([
+      undefined,
+      undefined,
+      'inline:shot1',
+      undefined,
+      undefined,
+    ]);
     expect(activity.map((line) => (line.kind === 'tool' ? line.tool : line.kind))).toEqual([
       'browser.page.open',
       'browser.page.act',

@@ -759,14 +759,20 @@ export const HarnessBrowserLogRecordSchema = z.object({
     .optional()
     .describe('For a `type` action: how many characters were entered. Never the text.'),
   outcome: z
-    .enum(['performed', 'uncertain_outcome', 'read', 'refused', 'failed'])
+    .enum(['performed', 'uncertain_outcome', 'read', 'refused', 'failed', 'abandoned'])
     .describe(
       '`performed`: the call changed or opened a page, or ran a script in one, which can. ' +
         '`read`: it only looked. ' +
         '`uncertain_outcome`: as the operation reports it. `refused`: a rule, posture or ' +
-        'ownership check stopped it. `failed`: it was allowed and did not complete.',
+        'ownership check stopped it. `failed`: it was allowed and did not complete. ' +
+        '`abandoned`: the run ended with the call still in flight; recorded when the run ' +
+        'ended, its answer reached no one, and a page it opened was closed as soon as it ' +
+        'existed.',
     ),
   code: z.string().optional().describe('The refusal or failure code, when there is one.'),
+  screenshot: PayloadRefSchema.optional().describe(
+    'For a screenshot: the image the harness was shown, stored as a payload of its own.',
+  ),
 });
 export type HarnessBrowserLogRecord = z.infer<typeof HarnessBrowserLogRecordSchema>;
 
@@ -1013,7 +1019,8 @@ export const HostHarnessRunOutputSchema = z.object({
   ),
   browserLog: PayloadRefSchema.optional().describe(
     'Every browser call the harness made, one JSON record per line: profile, page, origin, ' +
-      'action, the element acted on, and the outcome; typed text by its length only. Present ' +
+      'action, the element acted on, and the outcome; typed text by its length only, and a ' +
+      'screenshot by the payload holding the image. Present ' +
       'when the run asked for `browser` and the harness used it.',
   ),
   stderr: z

@@ -122,22 +122,69 @@ describe('which addresses are this machine’s', () => {
   });
 });
 
-/** A request written to the proxy as Chrome writes it, and everything that comes back. */
+/** Under the shortest test timeout, so an answer that never completes fails as itself. */
+const EXCHANGE_TIMEOUT_MS = 2_000;
+
+/**
+ * Where the response starting at `from` ends, or undefined while it is still
+ * arriving or ends only when the connection closes. A tunnel's 2xx has no body.
+ */
+function responseEnd(data: Buffer, from: number, tunnel: boolean): number | undefined {
+  const headEnd = data.indexOf('\r\n\r\n', from);
+  if (headEnd === -1) return undefined;
+  const bodyStart = headEnd + 4;
+  const head = data.subarray(from, headEnd).toString('latin1');
+  if (tunnel && /^HTTP\/1\.[01] 2\d\d/.test(head)) return bodyStart;
+  const length = /\r\ncontent-length:\s*(\d+)/i.exec(head)?.[1];
+  if (length !== undefined) {
+    const end = bodyStart + Number(length);
+    return data.length >= end ? end : undefined;
+  }
+  if (/\r\ntransfer-encoding:\s*chunked/i.test(head)) {
+    const last = data.indexOf('\r\n0\r\n\r\n', headEnd);
+    return last === -1 ? undefined : last + '\r\n0\r\n\r\n'.length;
+  }
+  return undefined;
+}
+
+/**
+ * A request written to the proxy as Chrome writes it, and what comes back: the
+ * proxy's answer and, when the tunnel opens and `thenSend` goes through it, the
+ * target's. Settles once those are complete, so an open tunnel is not waited on.
+ */
 async function exchange(port: number, request: string, thenSend?: string): Promise<string> {
+  const tunnel = request.startsWith('CONNECT ');
   return await new Promise<string>((resolve, reject) => {
     const socket = netConnect({ host: '127.0.0.1', port });
-    let received = '';
-    let sentFollowUp = false;
+    let received = Buffer.alloc(0);
+    let proxyAnswerEnd: number | undefined;
+    const finish = (): void => {
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(received.toString('utf8'));
+    };
     const timer = setTimeout(() => {
       socket.destroy();
-      resolve(received);
-    }, 5_000);
+      reject(
+        new Error(
+          `No complete answer within ${String(EXCHANGE_TIMEOUT_MS)} ms; received: ` +
+            JSON.stringify(received.toString('utf8')),
+        ),
+      );
+    }, EXCHANGE_TIMEOUT_MS);
     socket.on('data', (chunk: Buffer) => {
-      received += chunk.toString('utf8');
-      if (thenSend !== undefined && !sentFollowUp && received.includes('\r\n\r\n')) {
-        sentFollowUp = true;
-        if (received.startsWith('HTTP/1.1 200')) socket.write(thenSend);
+      received = Buffer.concat([received, chunk]);
+      if (proxyAnswerEnd === undefined) {
+        proxyAnswerEnd = responseEnd(received, 0, tunnel);
+        if (proxyAnswerEnd === undefined) return;
+        const opened = tunnel && /^HTTP\/1\.[01] 2/.test(received.toString('latin1'));
+        if (!opened || thenSend === undefined) {
+          finish();
+          return;
+        }
+        socket.write(thenSend);
       }
+      if (responseEnd(received, proxyAnswerEnd, false) !== undefined) finish();
     });
     socket.on('error', (error) => {
       clearTimeout(timer);
@@ -145,7 +192,7 @@ async function exchange(port: number, request: string, thenSend?: string): Promi
     });
     socket.on('close', () => {
       clearTimeout(timer);
-      resolve(received);
+      resolve(received.toString('utf8'));
     });
     socket.write(request);
   });
@@ -554,10 +601,21 @@ describe.skipIf(onLoopback.skip)(onLoopback.title('an ephemeral profile’s prox
     for (const host of ['127.0.0.1', 'localhost']) {
       const plain = await exchange(proxy.port, get(`http://${host}:${port}/`, `${host}:${port}`));
       expect(plain, host).toMatch(/^HTTP\/1\.1 200/);
-      const tunnel = await exchange(proxy.port, connectTo(`${host}:${port}`));
+      expect(plain, host).toContain('the local web app');
+      const tunnel = await exchange(
+        proxy.port,
+        connectTo(`${host}:${port}`),
+        get('/through-the-tunnel', `${host}:${port}`),
+      );
       expect(tunnel, host).toMatch(/^HTTP\/1\.1 200 Connection Established/);
+      expect(tunnel, host).toContain('the local web app');
     }
-    expect(reached).toEqual([`127.0.0.1:${port}/`, `localhost:${port}/`]);
+    expect(reached).toEqual([
+      `127.0.0.1:${port}/`,
+      `127.0.0.1:${port}/through-the-tunnel`,
+      `localhost:${port}/`,
+      `localhost:${port}/through-the-tunnel`,
+    ]);
 
     reached.length = 0;
     const refusedHosts = [PLANTED_INTERFACE, ...(lan !== undefined ? [lan] : [])];
