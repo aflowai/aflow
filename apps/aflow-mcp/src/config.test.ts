@@ -19,6 +19,7 @@ const ENV_KEYS = [
   'HOST',
   'ALLOWED_HOSTS',
   'MCP_ALLOWED_ORIGINS',
+  'AFLOW_MCP_LOCAL_AUTH_JSON',
 ] as const;
 let saved: Record<string, string | undefined>;
 
@@ -39,6 +40,7 @@ function configWith(env: Partial<Record<(typeof ENV_KEYS)[number], string>>) {
 }
 
 const PRODUCTION = { NODE_ENV: 'production', ALLOWED_HOSTS: 'mcp.example.test' } as const;
+const LOCAL_AUTH_FILE = { AFLOW_MCP_LOCAL_AUTH_JSON: 'mcp.local.json' } as const;
 
 describe('an uncredentialed session', () => {
   it('may proceed against a development stack', () => {
@@ -115,7 +117,9 @@ describe('the listen host', () => {
 
 /**
  * In production an empty ALLOWED_HOSTS leaves only loopback names answered, so
- * a server a load balancer reaches would refuse every request with 421.
+ * a server a load balancer reaches would refuse every request with 421. Outside
+ * production the local auth file makes a session with no credential the owner,
+ * and the Host check stops only browsers, so only loopback may listen with it.
  */
 describe('starting', () => {
   it('is refused in production on every interface with ALLOWED_HOSTS empty', () => {
@@ -138,8 +142,37 @@ describe('starting', () => {
     expect(configWith({ NODE_ENV: 'production', MCP_HOST: '127.0.0.1' }).host).toBe('127.0.0.1');
   });
 
-  it('proceeds in development on every interface with ALLOWED_HOSTS empty', () => {
-    expect(configWith({ NODE_ENV: 'development', MCP_HOST: '0.0.0.0' }).host).toBe('0.0.0.0');
+  it('proceeds in development on every interface only without a local auth file', () => {
+    const config = configWith({ NODE_ENV: 'development', MCP_HOST: '0.0.0.0' });
+    expect(config.host).toBe('0.0.0.0');
+    expect(config.localAuthJsonPath).toBeUndefined();
+  });
+
+  it('is refused in development on every interface with a local auth file', () => {
+    expect(() =>
+      configWith({ NODE_ENV: 'development', MCP_HOST: '0.0.0.0', ...LOCAL_AUTH_FILE }),
+    ).toThrow(
+      /listens on 0\.0\.0\.0 and AFLOW_MCP_LOCAL_AUTH_JSON.*Unset MCP_HOST.*or unset AFLOW_MCP_LOCAL_AUTH_JSON/,
+    );
+  });
+
+  it('is refused on a named non-loopback interface with a local auth file', () => {
+    expect(() => configWith({ MCP_HOST: '192.168.1.20', ...LOCAL_AUTH_FILE })).toThrow(
+      /listens on 192\.168\.1\.20/,
+    );
+  });
+
+  it('proceeds on loopback with a local auth file', () => {
+    for (const host of ['127.0.0.1', 'localhost', '::1']) {
+      expect(configWith({ MCP_HOST: host, ...LOCAL_AUTH_FILE }).localAuthJsonPath).toBe(
+        'mcp.local.json',
+      );
+    }
+  });
+
+  it('proceeds in production on every interface, which reads no local auth file', () => {
+    const config = configWith({ ...PRODUCTION, MCP_HOST: '0.0.0.0', ...LOCAL_AUTH_FILE });
+    expect(config.localAuthJsonPath).toBeUndefined();
   });
 });
 

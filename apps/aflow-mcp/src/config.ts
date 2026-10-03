@@ -15,7 +15,8 @@ export interface McpServerConfig {
    * instance's owner. Loopback keeps other machines from reaching the port; the
    * Host and Origin checks in `requestGate.ts` keep a web page the operator
    * visits from reaching it through a name rebound to loopback. It takes both to
-   * keep the owner on this machine. Production reads no auth file and runs in a
+   * keep the owner on this machine, so a non-loopback host with the auth file
+   * configured is refused at startup. Production reads no auth file and runs in a
    * container behind a load balancer, which reaches it on the container's own
    * interface; there `ALLOWED_HOSTS` and the same checks bound who is answered.
    * Not `HOST`: the shared `.env` sets that to every interface for the API
@@ -71,10 +72,15 @@ function isLoopbackListenHost(host: string): boolean {
 }
 
 /**
- * Throws instead of returning a production config with an empty `ALLOWED_HOSTS`
- * on a non-loopback interface: the gate would answer only loopback names, so
- * every request that reaches the server would get a 421 while `/health`,
- * answered before the gate, stayed green.
+ * Throws instead of returning a config that cannot serve safely.
+ *
+ * A production config with an empty `ALLOWED_HOSTS` on a non-loopback interface:
+ * the gate would answer only loopback names, so every request that reaches the
+ * server would get a 421 while `/health`, answered before the gate, stayed green.
+ *
+ * A local auth file with a non-loopback listen host: the Host check stops only
+ * browsers — any other client on the network can send `Host: localhost` — so a
+ * session with no credential of its own would be handed the owner's key.
  */
 export function loadConfig(): McpServerConfig {
   const logLevel = (process.env['LOG_LEVEL'] ?? 'info') as McpServerConfig['logLevel'];
@@ -100,6 +106,16 @@ export function loadConfig(): McpServerConfig {
         'so it would answer only to localhost and refuse every request that reaches it from ' +
         'elsewhere. Set ALLOWED_HOSTS to the hostnames clients reach this server by, ' +
         'comma-separated: the name the load balancer serves it under, such as mcp.example.com.',
+    );
+  }
+
+  if (localAuthJsonPath !== undefined && !isLoopbackListenHost(host)) {
+    throw new Error(
+      `MCP server not started: it listens on ${host} and AFLOW_MCP_LOCAL_AUTH_JSON names a ` +
+        'local auth file, so any client that can reach that interface would be served as the ' +
+        "owner — the Host check stops browsers, not a client that sends 'Host: localhost'. " +
+        'Unset MCP_HOST to listen on loopback, or unset AFLOW_MCP_LOCAL_AUTH_JSON so sessions ' +
+        'bring their own credential.',
     );
   }
 
