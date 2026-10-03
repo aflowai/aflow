@@ -1,18 +1,21 @@
 /**
  * A harness run's browser, from the executor's side (Plan 320 D11).
  *
- * The run's scratch directory gets the relay script, its tool list, an MCP
- * configuration naming it, and a pair of named pipes. The harness starts the
- * relay inside its sandbox; the relay passes each tool call down the request
- * pipe, and this module performs it through `performBrowserOperation` — the
- * function a browser step runs — so posture, rules, egress proxy, page
- * ownership, bounds and refusals are the operations' own. Nothing here widens
- * the sandbox: the pipes sit in a directory the run could already write.
+ * The run's scratch directory gets the relay script and its tool list, and
+ * each turn of the harness gets a pair of named pipes of its own and an MCP
+ * configuration naming them. The harness starts the relay inside its sandbox;
+ * the relay passes each tool call down the request pipe, and this module
+ * performs it through `performBrowserOperation` — the function a browser step
+ * runs — so posture, rules, egress proxy, page ownership, bounds and refusals
+ * are the operations' own. Nothing here widens the sandbox: the pipes sit in a
+ * directory the run could already write.
  *
  * Every call becomes a line in the run's activity feed and a record in its
- * browser log. When the run ends, however it ends, the pipes close, the pages
- * the harness opened close, an ephemeral profile's browser stops, and every
- * file written here is removed.
+ * browser log. When a turn's process ends, its pipes close and are removed, so
+ * nothing one turn's relay left in them reaches the next; the browser and its
+ * pages stay for the run. When the run ends, however it ends, the pages the
+ * harness opened close, an ephemeral profile's browser stops, and every file
+ * written here is removed.
  */
 import { execFile } from 'node:child_process';
 import { constants, openSync } from 'node:fs';
@@ -178,12 +181,23 @@ export interface HarnessBrowserOptions {
   readonly ephemeralRoot?: string;
 }
 
-export interface HarnessBrowser {
+/** One harness turn's way to the run's browser: a pipe pair of its own and the configuration naming it. */
+export interface HarnessBrowserTurn {
   /** The MCP configuration file the harness is handed through its profile's `mcpArgs`. */
   readonly mcpConfigPath: string;
-  /** Where a relay finds its pipes and tool list; what the configuration names. */
+  /** Where the turn's relay finds its pipes and tool list; what the configuration names. */
   readonly relayArgs: readonly string[];
-  /** Every call so far, in the order each ended. */
+  /**
+   * Closes and removes the turn's pipes. A call still in flight is performed and
+   * logged, but its answer goes nowhere. Safe to call twice.
+   */
+  close(): Promise<void>;
+}
+
+export interface HarnessBrowser {
+  /** Makes the pipes for the next turn of the harness; closed when that turn's process ends. */
+  openTurn(): Promise<HarnessBrowserTurn>;
+  /** Every call so far, across every turn, in the order each ended. */
   records(): readonly HarnessBrowserLogRecord[];
   /** Ends the browser and removes everything written for it. Safe to call twice. */
   close(): Promise<void>;
@@ -227,11 +241,11 @@ function errorResult(error: AflowError): McpCallResult {
   );
 }
 
-const READS = new Set(['snapshot', 'read', 'screenshot', 'list', 'evaluate']);
+const READS = new Set(['snapshot', 'read', 'screenshot', 'list']);
 
 /**
- * Opens a run's browser: the profile resolved or made, the relay and its pipes
- * written. A named profile the run's space may not use is refused here, before
+ * Opens a run's browser: the profile resolved or made, the relay and its tool
+ * list written. A named profile the run's space may not use is refused here, before
  * the harness starts.
  */
 export async function openHarnessBrowser(options: HarnessBrowserOptions): Promise<HarnessBrowser> {
@@ -251,18 +265,12 @@ export async function openHarnessBrowser(options: HarnessBrowserOptions): Promis
   }
 
   const dir = join(options.scratchDir, HARNESS_BROWSER_DIR);
-  const requestPath = join(dir, 'request.pipe');
-  const responsePath = join(dir, 'response.pipe');
   const relayPath = join(dir, 'relay.mjs');
   const toolsPath = join(dir, 'tools.json');
-  const mcpConfigPath = join(dir, 'mcp.json');
-  const relayArgs = [relayPath, toolsPath, requestPath, responsePath];
 
-  let requests: Socket | undefined;
-  let responses: Socket | undefined;
+  const turns = new Set<HarnessBrowserTurn>();
   const removeAll = async (): Promise<void> => {
-    requests?.destroy();
-    responses?.destroy();
+    for (const turn of [...turns]) await turn.close();
     if (ephemeral) await driver.endEphemeral(profileId);
     await rm(dir, { recursive: true, force: true });
     if (ephemeralDir !== undefined) await rm(ephemeralDir, { recursive: true, force: true });
@@ -273,27 +281,6 @@ export async function openHarnessBrowser(options: HarnessBrowserOptions): Promis
     await mkdir(dir, { recursive: true, mode: 0o700 });
     await copyFile(RELAY_SOURCE, relayPath);
     await writeFile(toolsPath, JSON.stringify(relayToolDefinitions(ephemeral)));
-    await writeFile(
-      mcpConfigPath,
-      JSON.stringify({
-        mcpServers: {
-          [HARNESS_BROWSER_SERVER]: { type: 'stdio', command: process.execPath, args: relayArgs },
-        },
-      }),
-    );
-    await makeFifo('mkfifo', ['-m', '600', requestPath, responsePath]);
-    // Opened for reading and writing both, so neither open waits for the relay
-    // and the request pipe never reads as ended between two relays.
-    requests = new Socket({
-      fd: openSync(requestPath, constants.O_RDWR | constants.O_NONBLOCK),
-      readable: true,
-      writable: false,
-    });
-    responses = new Socket({
-      fd: openSync(responsePath, constants.O_RDWR | constants.O_NONBLOCK),
-      readable: false,
-      writable: true,
-    });
   } catch (error) {
     await removeAll();
     throw error;
@@ -303,11 +290,7 @@ export async function openHarnessBrowser(options: HarnessBrowserOptions): Promis
   const opened = new Set<string>();
   const inFlight = new Set<Promise<void>>();
   let closed = false;
-
-  const answer = (id: number, result: McpCallResult): void => {
-    if (closed || responses.destroyed) return;
-    responses.write(`${JSON.stringify({ id, result })}\n`);
-  };
+  let turnCount = 0;
 
   const record = (
     tool: string,
@@ -446,42 +429,102 @@ export async function openHarnessBrowser(options: HarnessBrowserOptions): Promis
     };
   };
 
-  const serve = (line: string): void => {
-    if (closed || line.trim() === '') return;
-    let request: RelayRequest;
+  const openTurn = async (): Promise<HarnessBrowserTurn> => {
+    if (closed) throw new Error('The run has ended, and its browser with it.');
+    turnCount += 1;
+    const turnDir = join(dir, `turn-${String(turnCount)}`);
+    const requestPath = join(turnDir, 'request.pipe');
+    const responsePath = join(turnDir, 'response.pipe');
+    const mcpConfigPath = join(turnDir, 'mcp.json');
+    const relayArgs = [relayPath, toolsPath, requestPath, responsePath];
+
+    let requests: Socket | undefined;
+    let responses: Socket | undefined;
+    let ended = false;
+    const turn: HarnessBrowserTurn = {
+      mcpConfigPath,
+      relayArgs,
+      close: async () => {
+        if (ended) return;
+        ended = true;
+        turns.delete(turn);
+        requests?.destroy();
+        responses?.destroy();
+        await rm(turnDir, { recursive: true, force: true });
+      },
+    };
+    turns.add(turn);
+
     try {
-      request = JSON.parse(line) as RelayRequest;
-    } catch {
-      return;
-    }
-    if (typeof request.id !== 'number' || typeof request.tool !== 'string') return;
-    const work = perform(request)
-      .then((result) => {
-        answer(request.id, result);
-      })
-      .catch((error: unknown) => {
-        answer(
-          request.id,
-          textResult({ error: { code: 'INTERNAL', message: String(error) } }, true),
-        );
+      await mkdir(turnDir, { mode: 0o700 });
+      await writeFile(
+        mcpConfigPath,
+        JSON.stringify({
+          mcpServers: {
+            [HARNESS_BROWSER_SERVER]: { type: 'stdio', command: process.execPath, args: relayArgs },
+          },
+        }),
+      );
+      await makeFifo('mkfifo', ['-m', '600', requestPath, responsePath]);
+      // Opened for reading and writing both, so neither open waits for the
+      // relay and the request pipe never reads as ended while the turn lasts.
+      requests = new Socket({
+        fd: openSync(requestPath, constants.O_RDWR | constants.O_NONBLOCK),
+        readable: true,
+        writable: false,
       });
-    inFlight.add(work);
-    void work.finally(() => inFlight.delete(work));
+      responses = new Socket({
+        fd: openSync(responsePath, constants.O_RDWR | constants.O_NONBLOCK),
+        readable: false,
+        writable: true,
+      });
+    } catch (error) {
+      await turn.close();
+      throw error;
+    }
+    const replies = responses;
+
+    const answer = (id: number, result: McpCallResult): void => {
+      if (ended || replies.destroyed) return;
+      replies.write(`${JSON.stringify({ id, result })}\n`);
+    };
+
+    const serve = (line: string): void => {
+      if (ended || line.trim() === '') return;
+      let request: RelayRequest;
+      try {
+        request = JSON.parse(line) as RelayRequest;
+      } catch {
+        return;
+      }
+      if (typeof request.id !== 'number' || typeof request.tool !== 'string') return;
+      const work = perform(request)
+        .then((result) => {
+          answer(request.id, result);
+        })
+        .catch((error: unknown) => {
+          answer(
+            request.id,
+            textResult({ error: { code: 'INTERNAL', message: String(error) } }, true),
+          );
+        });
+      inFlight.add(work);
+      void work.finally(() => inFlight.delete(work));
+    };
+
+    createInterface({ input: requests }).on('line', serve);
+    requests.on('error', () => undefined);
+    replies.on('error', () => undefined);
+    return turn;
   };
 
-  createInterface({ input: requests }).on('line', serve);
-  requests.on('error', () => undefined);
-  responses.on('error', () => undefined);
-
   return {
-    mcpConfigPath,
-    relayArgs,
+    openTurn,
     records: () => [...records],
     close: async () => {
       if (closed) return;
       closed = true;
-      requests.destroy();
-      responses.destroy();
+      for (const turn of [...turns]) await turn.close();
       let grace: NodeJS.Timeout | undefined;
       await Promise.race([
         Promise.allSettled([...inFlight]),

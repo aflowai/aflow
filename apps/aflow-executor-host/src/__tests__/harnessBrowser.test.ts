@@ -8,6 +8,7 @@
  * the fake one, and the pipes are named pipes in a temporary directory.
  */
 import { execFile } from 'node:child_process';
+import { closeSync, constants, openSync, writeSync } from 'node:fs';
 import { access, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -128,19 +129,23 @@ async function openBrowser(
   return { browser, activity, stored, scratch, ephemeralRoot };
 }
 
-/** Speaks as the relay does, straight down the pipes. */
+/** Speaks as a turn's relay does, straight down that turn's pipes. */
 function asRelay(browser: HarnessBrowser): {
   call(tool: string, args: Record<string, unknown>): Promise<CallResult>;
 } {
-  const [, , requestPath = '', responsePath = ''] = browser.relayArgs;
-  const end = relayEnd(requestPath, responsePath);
-  cleanup.push(() => {
-    end.close();
-    return Promise.resolve();
+  const opening = browser.openTurn().then((turn) => {
+    const [, , requestPath = '', responsePath = ''] = turn.relayArgs;
+    const end = relayEnd(requestPath, responsePath);
+    cleanup.push(() => {
+      end.close();
+      return Promise.resolve();
+    });
+    return end;
   });
   let id = 0;
   return {
     call: async (tool, args) => {
+      const end = await opening;
       id += 1;
       const sent = id;
       end.send({ id: sent, tool, arguments: args });
@@ -239,9 +244,10 @@ describe('the relay', () => {
   it('carries a call from the harness through real pipes to the driver and back', async () => {
     const h = world();
     const { browser, scratch } = await openBrowser(h, 'default');
-    expect(browser.mcpConfigPath).toBe(join(scratch, HARNESS_BROWSER_DIR, 'mcp.json'));
+    const turn = await browser.openTurn();
+    expect(turn.mcpConfigPath).toBe(join(scratch, HARNESS_BROWSER_DIR, 'turn-1', 'mcp.json'));
 
-    const relay = startRelay(browser.relayArgs);
+    const relay = startRelay(turn.relayArgs);
     cleanup.push(async () => {
       await relay.stop();
     });
@@ -259,6 +265,56 @@ describe('the relay', () => {
       receipt: { profileId: 'default' },
     });
     expect(h.pages).toHaveLength(1);
+  });
+
+  it('gives each turn pipes of its own, so a killed turn’s call never answers the next turn’s', async () => {
+    const h = world();
+    const { browser } = await openBrowser(h, 'default');
+    let release = (): void => undefined;
+    h.world.navigationHeld = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const first = await browser.openTurn();
+    const killed = startRelay(first.relayArgs);
+    cleanup.push(async () => {
+      await killed.stop();
+    });
+    await killed.request('initialize', { protocolVersion: '2025-06-18' });
+    void killed.request('tools/call', { name: 'open', arguments: { url: 'https://app.example/' } });
+    await expect.poll(() => h.pages.length).toBe(1);
+    killed.child.kill('SIGKILL');
+    await killed.stop();
+    // Half a request, as a relay killed while writing one leaves it.
+    const [, , firstRequestPath = ''] = first.relayArgs;
+    const half = openSync(firstRequestPath, constants.O_WRONLY | constants.O_NONBLOCK);
+    writeSync(half, '{"id":2,"tool":"li');
+    closeSync(half);
+    await first.close();
+    await expect(access(join(first.mcpConfigPath, '..'))).rejects.toThrow();
+
+    const second = await browser.openTurn();
+    expect(second.relayArgs).not.toEqual(first.relayArgs);
+    const relay = startRelay(second.relayArgs);
+    cleanup.push(async () => {
+      await relay.stop();
+    });
+    await relay.request('initialize', { protocolVersion: '2025-06-18' });
+    const calling = relay.request('tools/call', {
+      name: 'open',
+      arguments: { url: 'https://other.example/' },
+    });
+    await expect.poll(() => h.pages.length).toBe(2);
+    release();
+
+    const answered = (await calling)['result'] as CallResult;
+    expect(answered.isError).toBeUndefined();
+    expect(body(answered)).toMatchObject({ url: 'https://other.example/' });
+    // The killed turn's call was still performed and logged; only its answer went nowhere.
+    expect(browser.records().map((entry) => entry.origin)).toEqual([
+      'https://app.example',
+      'https://other.example',
+    ]);
   });
 });
 
@@ -460,6 +516,23 @@ describe('script evaluation', () => {
     expect(evaluated.isError).toBeUndefined();
     expect(body(evaluated)).toMatchObject({ pageId, cut: false });
     expect(h.pages[0]?.evaluations).toEqual(['document.title']);
+  });
+
+  it('is logged as performed, since a page script can click or submit', async () => {
+    const h = world();
+    const { browser, activity } = await openBrowser(h, 'ephemeral');
+    const relay = asRelay(browser);
+    const { pageId } = body(await relay.call('open', { url: DEV_SERVER })) as { pageId: string };
+    await relay.call('evaluate', { pageId, expression: 'document.forms[0].submit()' });
+    expect(browser.records().at(-1)).toMatchObject({
+      action: 'evaluate',
+      pageId,
+      outcome: 'performed',
+    });
+    expect(activity.at(-1)).toMatchObject({
+      tool: 'browser.page.evaluate',
+      text: expect.stringMatching(/— performed$/),
+    });
   });
 
   it('is refused on a named profile, and not offered there', async () => {

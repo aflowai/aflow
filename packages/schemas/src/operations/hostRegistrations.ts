@@ -328,7 +328,7 @@ export const HostOperationRegistrations: OperationRegistration[] = [
         'A fix to a branch its base has moved past is commissioned with `mergeFrom: origin/<base>` and published with the sha the commission reported in `merge.from` as `commit.mergeFrom`; the branch then carries one merge commit holding the fix',
         'A smoke test or a brief look, with `maxTurns` naming how many turns brief means',
         "Pinning the model for a run that has a reason to — a comparison, a cost ceiling, a capability the default lacks; otherwise leave it out, and the run gets the model the operator configured for that harness on the machine, or the harness's own default when none is",
-        "A change to a UI that should be seen working — the harness opens the page it changed on the dev server and checks it: `browser: { profile: 'ephemeral' }`, the default choice, which reaches this machine's own servers and holds no sign-ins",
+        "A change to a UI that should be seen working — the harness opens the page it changed on the dev server and checks it: `browser: { profile: 'ephemeral' }`, the default choice, which holds no sign-ins and reaches the harness's allowed domains plus the dev-server ports the operator declared for that harness on this machine",
       ],
       whenNotToUse: [
         'Running a build or a test suite — that is host.process.exec, which needs no worktree',
@@ -347,7 +347,7 @@ export const HostOperationRegistrations: OperationRegistration[] = [
         'The folder must be a git repository with at least one commit — the run needs a base to diff against.',
         'A `maxTurns` budget the task cannot meet ends the run with whatever the harness had reached, and that result is still validated against `outputSchema` — a budget too small for the task fails the step rather than returning a partial answer.',
         '`model` is spelled the way the harness spells it, not as this platform names a model in its own catalog — the harness resolves the name, and an id from the catalog is one it has never heard of.',
-        "A named browser profile carries the operator's sign-ins and never reaches this machine's own servers, so it cannot open a dev server; `ephemeral` can. A harness the machine configured without `mcpArgs` refuses a run asking for a browser, and the refusal names the command that sets them.",
+        "A named browser profile carries the operator's sign-ins and never reaches this machine's own servers, so it cannot open a dev server; `ephemeral` opens one only on a port the operator declared for that harness, and on none when no port is declared. A harness the machine configured without `mcpArgs` refuses a run asking for a browser, and the refusal names the command that sets them.",
         "Leaving `model` out does not guarantee the harness's own default: the run gets the model the operator configured for that harness on the machine, and the harness default only when none is configured. A run naming no model can still be refused when that configured model cannot be passed to the harness — the refusal names it.",
       ],
     },

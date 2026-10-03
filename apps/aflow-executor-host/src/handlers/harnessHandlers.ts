@@ -706,7 +706,6 @@ async function runHarness(
         startedAt,
       });
     }
-    const mcpConfig = browser?.mcpConfigPath;
     const runTurn = async (
       task: string,
       continued: boolean,
@@ -723,10 +722,21 @@ async function runHarness(
       const emit = (text: string): void => {
         events.push(text);
       };
+      // Pipes of the turn's own: a turn killed mid-call leaves its answer, or
+      // half a request, in them, and the next turn's relay numbers its calls
+      // from 1 again.
+      const browserTurn = await browser?.openTurn();
       try {
         return await runSandboxed({
           binding,
-          argv: harnessTurnArgv(profile, input, task, conversation, continued, mcpConfig),
+          argv: harnessTurnArgv(
+            profile,
+            input,
+            task,
+            conversation,
+            continued,
+            browserTurn?.mcpConfigPath,
+          ),
           cwd: worktree.path,
           // The sandbox's proxy names the host it refused only when asked to, and
           // that name is the whole diagnosis for a harness that reached nothing.
@@ -787,6 +797,7 @@ async function runHarness(
         emit(visible.flush());
         events.flush();
         spoken = events.answer();
+        await browserTurn?.close();
       }
     };
 

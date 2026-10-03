@@ -15,7 +15,7 @@ import { z } from 'zod';
 import { coerceJsonObjectArg } from './jsonObjectArg.js';
 
 import { PayloadRefSchema, STORED_PAYLOAD_REF_PATTERN } from '../runtime/payloadRef.js';
-import { BrowserProfileIdSchema, EPHEMERAL_BROWSER_PROFILE } from './browserProfile.js';
+import { DeclaredBrowserProfileIdSchema, EPHEMERAL_BROWSER_PROFILE } from './browserProfile.js';
 
 /**
  * What a branch name and a branch prefix may be, in one place.
@@ -721,7 +721,7 @@ export const HostFilePatchOutputSchema = z.object({
 export const HostHarnessBrowserSchema = z
   .object({
     profile: z
-      .union([z.literal(EPHEMERAL_BROWSER_PROFILE), BrowserProfileIdSchema])
+      .union([z.literal(EPHEMERAL_BROWSER_PROFILE), DeclaredBrowserProfileIdSchema])
       .describe(
         '`ephemeral` — the default choice — is a browser made for this run and deleted with ' +
           'it: no sign-ins, its own Chrome, and it reaches only the hosts this harness may reach ' +
@@ -761,7 +761,8 @@ export const HarnessBrowserLogRecordSchema = z.object({
   outcome: z
     .enum(['performed', 'uncertain_outcome', 'read', 'refused', 'failed'])
     .describe(
-      '`performed`: the call changed or opened a page. `read`: it only looked. ' +
+      '`performed`: the call changed or opened a page, or ran a script in one, which can. ' +
+        '`read`: it only looked. ' +
         '`uncertain_outcome`: as the operation reports it. `refused`: a rule, posture or ' +
         'ownership check stopped it. `failed`: it was allowed and did not complete.',
     ),

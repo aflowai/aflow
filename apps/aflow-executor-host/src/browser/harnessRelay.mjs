@@ -6,9 +6,13 @@
  * in the MCP configuration the harness is started with, so it runs inside the
  * harness's sandbox, as the harness's child. It answers the handshake and the
  * tool list itself and passes every tool call, unchanged, to the executor over
- * two named pipes in that same directory — newline-delimited JSON, one pipe
+ * two named pipes under that same directory — newline-delimited JSON, one pipe
  * each way — which is the one route out of the sandbox that needs nothing
  * widened (§8.2). It opens no socket and reads nothing but its tool list.
+ *
+ * The pipes are its turn's alone: the executor makes a pair for each turn of
+ * the harness and removes it when that turn ends, so the call ids it numbers
+ * from 1 never meet another relay's.
  *
  * Node's standard library only: it runs from a directory where nothing else
  * of this repository can be resolved.
