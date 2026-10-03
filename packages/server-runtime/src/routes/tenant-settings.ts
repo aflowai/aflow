@@ -124,7 +124,7 @@ export const tenantSettingsRoutes: FastifyPluginAsync = async (fastify) => {
         }
         // Stored as catalog ids, never as the alias the admin happened to type:
         // the gates compare ids, so `luna` would enable a model the picker then
-        // writes back as `gpt-5.6-luna` and the space write path refuses.
+        // writes back as `gpt-6-luna` and the space write path refuses.
         canonical = [...new Set(requested.map((ref) => canonicalModelId(ref) ?? ref))];
       }
 

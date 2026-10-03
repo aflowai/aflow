@@ -58,6 +58,15 @@ function client() {
   });
 }
 
+const PROBE_TOOL = {
+  type: 'function' as const,
+  function: {
+    name: 'record_answer',
+    description: 'Record the final answer.',
+    parameters: { type: 'object', properties: {}, additionalProperties: false },
+  },
+};
+
 async function callWith(
   model: string,
   reasoning?: GenerateTextRequest['reasoning'],
@@ -103,15 +112,42 @@ describe('reasoning effort reaching the provider adapter', () => {
   });
 
   it('withholds a temperature from a model that rejects one', async () => {
-    // The whole GPT-5.6 family 400s on a temperature, and the agent turn sends
+    // The whole GPT-6 family 400s on a temperature, and the agent turn sends
     // 0.1 by default — so every OpenAI agent turn depends on this.
-    const request = await callWith('gpt-5.6-terra', { effort: 'low' }, 0.1);
+    const request = await callWith('gpt-6.1-sol', { effort: 'low' }, 0.1);
     expect(request?.temperature).toBeUndefined();
     expect(request?.reasoning).toEqual({ effort: 'low' });
   });
 
+  it('degrades a forced tool choice to auto for a model that rejects one', async () => {
+    await client().generateText({
+      model: 'claude-opus-5-5',
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [PROBE_TOOL],
+      toolChoice: 'required',
+    });
+    expect(seen.at(-1)?.toolChoice).toBe('auto');
+  });
+
+  it('forwards a forced tool choice to a model that accepts one', async () => {
+    await client().generateText({
+      model: 'claude-haiku-4-5',
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [PROBE_TOOL],
+      toolChoice: 'required',
+    });
+    expect(seen.at(-1)?.toolChoice).toBe('required');
+  });
+
+  it('snaps "off" up to low on a model whose thinking cannot be disabled', async () => {
+    for (const model of ['claude-sonnet-5-5', 'claude-opus-5-5', 'gpt-6-astra', 'gpt-6.1-sol']) {
+      const request = await callWith(model, { effort: 'off' });
+      expect(request?.reasoning, model).toEqual({ effort: 'low' });
+    }
+  });
+
   it('passes a temperature through to a model that accepts one', async () => {
-    const request = await callWith('claude-sonnet-5', { effort: 'low' }, 0.1);
+    const request = await callWith('claude-haiku-4-5', undefined, 0.1);
     expect(request?.temperature).toBe(0.1);
   });
 

@@ -12,8 +12,8 @@ const GLM_ID = 'accounts/fireworks/models/glm-5p3';
 
 describe('canonical comparison', () => {
   it('resolves an alias and an id to the same model', () => {
-    expect(canonicalModelId('luna')).toBe('gpt-5.6-luna');
-    expect(canonicalModelId('gpt-5.6-luna')).toBe('gpt-5.6-luna');
+    expect(canonicalModelId('luna')).toBe('gpt-6-luna');
+    expect(canonicalModelId('gpt-6-luna')).toBe('gpt-6-luna');
     expect(canonicalModelId('glm-pro')).toBe(GLM_ID);
   });
 
@@ -27,11 +27,11 @@ describe('canonical comparison', () => {
 
   it('admits an id against an allowlist stored as an alias', () => {
     const allowed = allowedModelIds(['luna']);
-    expect(isModelIdAllowed('gpt-5.6-luna', allowed)).toBe(true);
+    expect(isModelIdAllowed('gpt-6-luna', allowed)).toBe(true);
   });
 
   it('still refuses a model the tenant did not enable', () => {
-    expect(isModelIdAllowed('claude-sonnet-5', allowedModelIds(['luna']))).toBe(false);
+    expect(isModelIdAllowed('claude-sonnet-5-5', allowedModelIds(['luna']))).toBe(false);
   });
 
   it('refuses a ref that names no model', () => {
@@ -39,17 +39,17 @@ describe('canonical comparison', () => {
   });
 
   it('falls back to the platform recommendations when the tenant never chose', () => {
-    expect(isModelIdAllowed('claude-sonnet-5', allowedModelIds(null))).toBe(true);
+    expect(isModelIdAllowed('claude-sonnet-5-5', allowedModelIds(null))).toBe(true);
   });
 });
 
 describe('tenantDefaultModelId', () => {
   it('keeps the platform default when the tenant allows it', () => {
-    expect(tenantDefaultModelId(allowedModelIds([GLM_ID, 'gpt-5.6-luna']))).toBe(GLM_ID);
+    expect(tenantDefaultModelId(allowedModelIds([GLM_ID, 'gpt-6-luna']))).toBe(GLM_ID);
   });
 
   it('picks one the tenant does allow when the platform default is excluded', () => {
-    expect(tenantDefaultModelId(allowedModelIds(['gpt-5.6-luna']))).toBe('gpt-5.6-luna');
+    expect(tenantDefaultModelId(allowedModelIds(['gpt-6-luna']))).toBe('gpt-6-luna');
   });
 });
 
@@ -80,11 +80,11 @@ describe('withTenantDefaultModels', () => {
   it('leaves a deliberately chosen other model alone for the gate to refuse', () => {
     const allowed = allowedModelIds(['gemini-3.8-flash']);
     const out = withTenantDefaultModels(
-      { modelDefaults: { default: 'claude-sonnet-5' } },
+      { modelDefaults: { default: 'claude-sonnet-5-5' } },
       allowed,
       new Set(['default']),
     );
-    expect(out.modelDefaults?.['default']).toBe('claude-sonnet-5');
+    expect(out.modelDefaults?.['default']).toBe('claude-sonnet-5-5');
   });
 
   it('leaves an allowed default untouched', () => {
@@ -94,16 +94,16 @@ describe('withTenantDefaultModels', () => {
   });
 
   it('rehomes only the roles the caller left unnamed', () => {
-    const allowed = allowedModelIds(['gpt-5.6-luna']);
+    const allowed = allowedModelIds(['gpt-6-luna']);
     const out = withTenantDefaultModels(
-      { modelDefaults: { default: 'glm-pro', runner: 'glm-pro', coach: 'gpt-5.6-luna' } },
+      { modelDefaults: { default: 'glm-pro', runner: 'glm-pro', coach: 'gpt-6-luna' } },
       allowed,
       new Set(['runner']),
     );
     expect(out.modelDefaults).toEqual({
-      default: 'gpt-5.6-luna',
+      default: 'gpt-6-luna',
       runner: 'glm-pro',
-      coach: 'gpt-5.6-luna',
+      coach: 'gpt-6-luna',
     });
   });
 });

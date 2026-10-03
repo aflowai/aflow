@@ -67,8 +67,8 @@ describe('the evidence pack is part of judge identity', () => {
     // authority it no longer has, and the shift would read as the subject
     // drifting rather than the ruler.
     const rubric = [{ criterion: 'clarity', description: 'is it clear', scale: 'binary' as const }];
-    const before = computeJudgeVersion(rubric, 'gpt-5.6-luna', 'critique-then-verdict-1', 'pack-1');
-    const after = computeJudgeVersion(rubric, 'gpt-5.6-luna', 'critique-then-verdict-1', 'pack-2');
+    const before = computeJudgeVersion(rubric, 'gpt-6-luna', 'critique-then-verdict-1', 'pack-1');
+    const after = computeJudgeVersion(rubric, 'gpt-6-luna', 'critique-then-verdict-1', 'pack-2');
     expect(before).not.toBe(after);
   });
 });

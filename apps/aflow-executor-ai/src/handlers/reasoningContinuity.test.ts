@@ -32,7 +32,7 @@ function atom(
 }
 
 const AN = 'anthropic' as const;
-const M = 'claude-sonnet-5';
+const M = 'claude-sonnet-5-5';
 
 describe('retainReasoningForRequest', () => {
   it('off — retains only the most recent compatible assistant turn (wire floor)', () => {
@@ -106,7 +106,7 @@ describe('retainReasoningForRequest', () => {
   });
 
   it('resets on model switch and reports the reason', () => {
-    const a1 = atom('assistant', 'assistant_turn', reasoning(AN, 'claude-opus-5'));
+    const a1 = atom('assistant', 'assistant_turn', reasoning(AN, 'claude-opus-5-5'));
     const atoms = [atom('user', 'user_input'), a1];
     const r = retainReasoningForRequest(atoms, { mode: 'off', provider: AN, model: M });
     expect(r.keptAtomIds.size).toBe(0);

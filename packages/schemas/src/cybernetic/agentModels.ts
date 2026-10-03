@@ -37,10 +37,10 @@ export const RECOMMENDED_AGENT_MODELS: readonly RecommendedAgentModel[] = [
     recommended: true,
   },
   {
-    modelId: 'claude-sonnet-5',
+    modelId: 'claude-sonnet-5-5',
     alias: 'sonnet',
     credentialProviderId: 'anthropic',
-    label: 'Claude Sonnet 5',
+    label: 'Claude Sonnet 5.5',
     tagline: 'Excellent coding and analysis with dependable tool use',
   },
   {
@@ -51,11 +51,11 @@ export const RECOMMENDED_AGENT_MODELS: readonly RecommendedAgentModel[] = [
     tagline: 'Deep multimodal reasoning with a 1M-token context',
   },
   {
-    modelId: 'gpt-5.6-terra',
+    modelId: 'gpt-6.1-sol',
     alias: 'gpt',
     credentialProviderId: 'openai',
-    label: 'GPT-5.6 Terra',
-    tagline: 'Flagship-grade quality at a mid-range price',
+    label: 'GPT-6.1 Sol',
+    tagline: 'Near-frontier quality at a mid-range price',
   },
   {
     modelId: 'accounts/fireworks/models/kimi-k3',
