@@ -11,6 +11,7 @@ import {
   updateStepState,
   appendSessionEvent,
   registerStepInFlight,
+  extendStepInFlight,
   clearStepInFlight,
   releaseStepJob,
   StepJobNotPendingError,
@@ -181,13 +182,15 @@ async function setAsideUnstarted(
   admission: Exclude<Admission, 'admitted'>,
 ): Promise<void> {
   if (admission === 'released') {
-    // A step given back is already STARTED, and the stall watchdog fails a
-    // STARTED step whose in-flight record lapses: renewed before the hand-back
-    // and never after, it spans the record's whole lifetime for the next
-    // executor without overwriting the record that executor writes.
+    // A step given back stays STARTED, and the stall watchdog fails a STARTED
+    // step whose in-flight record lapses. Where this executor is the stream's
+    // only reader nothing claims the step until it exits, so the record lives
+    // as long as this process does: written once before the hand-back, then
+    // only extended, so the deadline a next executor records is never replaced.
     await refreshInFlight(host, job, jobLog);
     await releaseStepJob(host.deps.redis, job, messageId).then(
       () => {
+        vouchUntilStopped(host, () => extendInFlight(host, job, jobLog));
         jobLog.info('Gave back a step still waiting for a slot: claiming has stopped', {
           operationId: job.operationId,
         });
@@ -201,7 +204,7 @@ async function setAsideUnstarted(
         }
         // Left pending, so still this process's: once its heartbeat lapses the
         // reclaim hands it to another, which is slower but loses nothing.
-        vouchUntilStopped(host, job, jobLog);
+        vouchUntilStopped(host, () => refreshInFlight(host, job, jobLog));
         jobLog.warn('Could not give back a step still waiting for a slot', {
           operationId: job.operationId,
           error: err instanceof Error ? err.message : String(err),
@@ -229,15 +232,23 @@ async function refreshInFlight(
   });
 }
 
-/** Keeps the in-flight record of a step this process still holds alive until it stops. */
-function vouchUntilStopped(
+async function extendInFlight(
   host: ProcessJobHost,
   job: StepJobMessage,
   jobLog: ExecutorLogger,
-): void {
+): Promise<void> {
+  await extendStepInFlight(host.deps.redis, job.stepExecutionId).catch((err: unknown) => {
+    jobLog.warn('Failed to extend the in-flight heartbeat of a step given back', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  });
+}
+
+/** Keeps the in-flight record of a step this process vouches for alive until it stops. */
+function vouchUntilStopped(host: ProcessJobHost, renew: () => Promise<void>): void {
   if (host.stopped.aborted) return;
   const refresh = setInterval(() => {
-    void refreshInFlight(host, job, jobLog);
+    void renew();
   }, STEP_HEARTBEAT_INTERVAL_MS);
   host.stopped.addEventListener(
     'abort',

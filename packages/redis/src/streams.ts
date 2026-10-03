@@ -15,6 +15,7 @@ export {
   hasAvailableExecutor,
   isExecutorConsumerAlive,
   registerStepInFlight,
+  extendStepInFlight,
   clearStepInFlight,
   getStepInFlight,
   type StepInFlightStatus,

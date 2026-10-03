@@ -25,6 +25,7 @@ const { stream, redisMock } = vi.hoisted(() => {
       appendSessionEvent: vi.fn().mockResolvedValue(undefined),
       appendLiveDelta: vi.fn().mockResolvedValue(undefined),
       registerStepInFlight: vi.fn().mockResolvedValue(undefined),
+      extendStepInFlight: vi.fn().mockResolvedValue(undefined),
       clearStepInFlight: vi.fn().mockResolvedValue(undefined),
       wasStepCancelled: vi.fn().mockResolvedValue(false),
       ackStepJob: vi.fn().mockResolvedValue(undefined),

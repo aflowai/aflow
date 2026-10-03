@@ -1,8 +1,9 @@
 /**
  * A step still waiting for its operation's slot when claiming stops is given
  * back to its stream. It was already STARTED, so its in-flight record is
- * renewed just before — a lapsed one is a stall to the watchdog — and never
- * after, when the record belongs to the step's next executor.
+ * written just before — a lapsed one is a stall to the watchdog — and then
+ * only extended until this process stops, so the record a next executor writes
+ * is never replaced.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -12,6 +13,7 @@ const { redisMock } = vi.hoisted(() => ({
     updateStepState: vi.fn().mockResolvedValue(undefined),
     appendSessionEvent: vi.fn().mockResolvedValue(undefined),
     registerStepInFlight: vi.fn().mockResolvedValue(undefined),
+    extendStepInFlight: vi.fn().mockResolvedValue(undefined),
     clearStepInFlight: vi.fn().mockResolvedValue(undefined),
     wasStepCancelled: vi.fn().mockResolvedValue(false),
     releaseStepJob: vi.fn().mockResolvedValue('2-0'),
@@ -74,6 +76,8 @@ describe('processJob — a step given back while it waits for a slot', () => {
 
   const inFlightRefreshes = (): number =>
     redisMock.registerStepInFlight.mock.calls.filter(([, id]) => id === 'run-queued').length;
+  const inFlightExtensions = (): number =>
+    redisMock.extendStepInFlight.mock.calls.filter(([, id]) => id === 'run-queued').length;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -88,7 +92,7 @@ describe('processJob — a step given back while it waits for a slot', () => {
     vi.useRealTimers();
   });
 
-  it('hands the job back unworked, renewing its in-flight record first and never after', async () => {
+  it('hands the job back unworked, then extends its in-flight record until the runtime stops', async () => {
     const processing = processJob(host(), '1-0', HARNESS_JOB, slotController);
     await vi.advanceTimersByTimeAsync(0);
     const beforeRelease = inFlightRefreshes();
@@ -108,6 +112,11 @@ describe('processJob — a step given back while it waits for a slot', () => {
 
     await vi.advanceTimersByTimeAsync(STEP_HEARTBEAT_INTERVAL_MS * 3);
     expect(inFlightRefreshes()).toBe(released);
+    expect(inFlightExtensions()).toBe(3);
+
+    lifetime.abort();
+    await vi.advanceTimersByTimeAsync(STEP_HEARTBEAT_INTERVAL_MS * 2);
+    expect(inFlightExtensions()).toBe(3);
   });
 
   it('keeps vouching for a step it could not give back until the runtime stops', async () => {
@@ -140,6 +149,7 @@ describe('processJob — a step given back while it waits for a slot', () => {
     const afterRelease = inFlightRefreshes();
     await vi.advanceTimersByTimeAsync(STEP_HEARTBEAT_INTERVAL_MS * 3);
     expect(inFlightRefreshes()).toBe(afterRelease);
+    expect(inFlightExtensions()).toBe(0);
   });
 
   it('drops a step cancelled while it waits, releasing its in-flight record', async () => {

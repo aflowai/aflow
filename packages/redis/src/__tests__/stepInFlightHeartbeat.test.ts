@@ -3,6 +3,7 @@ import Redis from 'ioredis-mock';
 import type { Redis as RedisType } from 'ioredis';
 import {
   registerStepInFlight,
+  extendStepInFlight,
   getStepInFlight,
   clearStepInFlight,
 } from '../streams/executorHeartbeat.js';
@@ -42,6 +43,21 @@ describe('per-step in-flight heartbeat', () => {
   it('clears liveness so a reaped step cannot be resurrected', async () => {
     await registerStepInFlight(redis, stepId, 1);
     await clearStepInFlight(redis, stepId);
+    expect(await getStepInFlight(redis, stepId)).toEqual({ alive: false, deadlineAtMs: null });
+  });
+
+  it('an extension keeps the recorded deadline and renews the lifetime', async () => {
+    await registerStepInFlight(redis, stepId, 42);
+    await redis.expire('aflow:step-inflight:' + stepId, 5);
+    await extendStepInFlight(redis, stepId);
+    expect((await getStepInFlight(redis, stepId)).deadlineAtMs).toBe(42);
+    expect(await redis.ttl('aflow:step-inflight:' + stepId)).toBeGreaterThan(5);
+  });
+
+  it('an extension never resurrects a cleared record', async () => {
+    await registerStepInFlight(redis, stepId, 1);
+    await clearStepInFlight(redis, stepId);
+    await extendStepInFlight(redis, stepId);
     expect(await getStepInFlight(redis, stepId)).toEqual({ alive: false, deadlineAtMs: null });
   });
 

@@ -80,21 +80,18 @@ describe('sandbox policy compilation', () => {
     expect(compile().network.allowedDomains).toEqual([]);
   });
 
-  it('keeps loopback closed unless a widening asks for it', () => {
-    expect(compile().network.allowLocalBinding).toBeUndefined();
-  });
-
-  it('opens loopback without opening egress', () => {
+  it('hands a check’s widening no reach to the machine’s loopback', () => {
     const policy = compileSandboxPolicy(binding, {
       home: HOME,
       scratchDir: '/tmp/aflow-host',
-      widening: { authPaths: [], allowedDomains: [], loopback: true },
+      widening: {
+        authPaths: [],
+        allowedDomains: [],
+        writableRoot: '/tmp/aflow-check',
+        withholdBindingWrite: true,
+      },
     });
-    expect(policy.network).toEqual({
-      allowedDomains: [],
-      deniedDomains: [],
-      allowLocalBinding: true,
-    });
+    expect(policy.network).toEqual({ allowedDomains: [], deniedDomains: [] });
     expect(() => SandboxRuntimeConfigSchema.parse(policy)).not.toThrow();
   });
 

@@ -13,6 +13,7 @@
  */
 import { execFile, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { createServer, type AddressInfo } from 'node:net';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -125,24 +126,28 @@ const FAILING = nodeCheck(
 const HANGING = nodeCheck('setTimeout(() => {}, 60_000);');
 
 /**
- * A server of its own on loopback, answered; then a connection to a
- * documentation-only address, which only closed egress refuses at once.
+ * A server of its own on loopback; then the machine's listener on `machinePort`,
+ * standing in for the stack's Redis; then a documentation-only address, which
+ * only closed egress refuses at once. Each line says what it reached.
  */
-const LOOPBACK_AND_EGRESS = nodeCheck(
-  [
-    "const net = require('net');",
-    "const server = net.createServer((socket) => socket.end('pong'));",
-    "server.listen(0, '127.0.0.1', () => {",
-    "  net.connect(server.address().port, '127.0.0.1').on('data', (data) => {",
-    "    console.log('loopback ' + data);",
-    '    server.close();',
-    "    net.connect(80, '192.0.2.1')",
-    "      .on('connect', () => { console.log('egress open'); process.exit(1); })",
-    "      .on('error', (error) => { console.log('egress ' + error.code); process.exit(0); });",
-    '  });',
-    '});',
-  ].join('\n'),
-);
+function loopbackAndEgress(machinePort: number): string[] {
+  return nodeCheck(
+    [
+      "const net = require('net');",
+      'const reach = (label, port, host, next) => net.connect(port, host)',
+      "  .on('data', (data) => { console.log(label + ' ' + data); next(); })",
+      "  .on('error', (error) => { console.log(label + ' ' + error.code); next(); });",
+      "const server = net.createServer((socket) => socket.end('pong'));",
+      'const beyond = () => {',
+      `  reach('machine', ${String(machinePort)}, '127.0.0.1', () =>`,
+      "    reach('egress', 80, '192.0.2.1', () => process.exit(0)));",
+      '};',
+      "server.on('error', (error) => { console.log('own ' + error.code); beyond(); });",
+      "server.listen(0, '127.0.0.1', () =>",
+      "  reach('own', server.address().port, '127.0.0.1', () => { server.close(); beyond(); }));",
+    ].join('\n'),
+  );
+}
 
 interface Fixture {
   readonly repo: string;
@@ -267,14 +272,13 @@ describe('host.commit.check — a passing check', () => {
     expect(output.summary).toContain('passed');
   });
 
-  it('confines it as a coding agent is confined, loopback added: no egress, the checkout writable and the folder not', async () => {
+  it('confines it as a coding agent is confined: no egress, the checkout writable and the folder not', async () => {
     await check(world);
     const input = handed[0];
     expect(input?.argv).toEqual(REPORTING);
     expect(input?.widening).toEqual({
       authPaths: [],
       allowedDomains: [],
-      loopback: true,
       writableRoot: input?.cwd,
       withholdBindingWrite: true,
     });
@@ -555,15 +559,26 @@ describe.skipIf(!CAN_CONFINE)('host.commit.check — through the real sandbox', 
   );
 
   it.skipIf(confined.skip)(
-    confined.title('lets a check reach its own server on loopback, and nothing off the machine'),
+    confined.title(
+      'reaches neither the machine’s loopback nor anything off it, and its own loopback only where the sandbox has one',
+    ),
     async () => {
-      realSandbox = true;
-      const world = await fixture({ branchPrefix: 'aflow/', checks: LOOPBACK_AND_EGRESS });
-      const output = HostCommitCheckOutputSchema.parse((await check(world)).captured.output);
-      realSandbox = false;
-      expect(output.tail).toContain('loopback pong');
-      expect(output.tail).toMatch(/egress E[A-Z]+/);
-      expect(output.passed, output.summary).toBe(true);
+      const machine = createServer((socket) => socket.end('pong'));
+      await new Promise<void>((resolve) => machine.listen(0, '127.0.0.1', resolve));
+      const { port } = machine.address() as AddressInfo;
+      try {
+        realSandbox = true;
+        const world = await fixture({ branchPrefix: 'aflow/', checks: loopbackAndEgress(port) });
+        const output = HostCommitCheckOutputSchema.parse((await check(world)).captured.output);
+        realSandbox = false;
+        expect(output.passed, output.summary).toBe(true);
+        expect(output.tail).toMatch(/machine E[A-Z]+/);
+        expect(output.tail).toMatch(/egress E[A-Z]+/);
+        if (process.platform === 'linux') expect(output.tail).toContain('own pong');
+        else expect(output.tail).toMatch(/own E[A-Z]+/);
+      } finally {
+        machine.close();
+      }
     },
   );
 });

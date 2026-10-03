@@ -57,7 +57,7 @@ another stream's runs.
    `node scripts/verify-commit.mjs` (`aflow harness checks hb_aflow -- node
 scripts/verify-commit.mjs`), and Local Publish runs it after the commit and before the
    scan, the review and the push, in a detached checkout of the commit with the folder's
-   dependencies linked, under the coding agent's sandbox with loopback open. The script reads what changed from
+   dependencies linked, under the coding agent's sandbox, whose loopback is its own on Linux and closed on macOS, where a test that serves itself on loopback fails. The script reads what changed from
    `AFLOW_CHECK_BASE...AFLOW_CHECK_SHA` and runs, one line per step and stopping at the
    first failure: the two CI guards; a build of every package the touched workspaces
    or the workspaces reading a touched package reference or import, since a checkout builds

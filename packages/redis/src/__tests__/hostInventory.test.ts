@@ -244,17 +244,15 @@ describe('host inventories', () => {
     expect(live[0]?.maxConcurrentHarnessRuns).toBe(3);
   });
 
-  it('reads an inventory that does not say how many coding agents run at once as the default', async () => {
+  it('refuses an inventory that does not say how many coding agents run at once', async () => {
     const now = Date.now();
-    const { maxConcurrentHarnessRuns: _limit, ...older } = inventory('laptop', [{ id: 'claude' }]);
+    const { maxConcurrentHarnessRuns: _limit, ...stale } = inventory('laptop', [{ id: 'claude' }]);
     const redis = fakeRedis(
       { [now - 1_000]: 'laptop' },
-      { [hostInventoryKey('laptop')]: JSON.stringify(older) },
+      { [hostInventoryKey('laptop')]: JSON.stringify(stale) },
     );
 
-    const live = await readLiveHostInventories(redis, now);
-
-    expect(live[0]?.maxConcurrentHarnessRuns).toBe(HOST_HARNESS_CONCURRENCY_DEFAULT);
+    expect(await readLiveHostInventories(redis, now)).toEqual([]);
   });
 
   it('refuses an inventory missing the folder list', async () => {
