@@ -89,6 +89,10 @@ async function check(ctx: ExecutorContext, policyPath: string): Promise<StepResu
     base,
     argv,
     outcome: outcome.passed ? 'passed' : 'failed',
+    sandbox: run.sandbox,
+    ...(run.skippedListenerTests !== undefined
+      ? { skippedListenerTests: run.skippedListenerTests }
+      : {}),
   });
   return await successWithData(ctx, { ...outcome, receipt });
 }

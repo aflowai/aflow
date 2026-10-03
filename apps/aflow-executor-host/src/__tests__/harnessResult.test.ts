@@ -275,6 +275,7 @@ describe('the wire contract', () => {
 describe('a harness is never waiting on input nobody is sending', () => {
   it.skipIf(!sandboxAvailable() || confined.skip)(
     confined.title('ends the standard input of a run that asked for it closed'),
+    { tags: ['listener'], timeout: 60_000 },
     async () => {
       // `cat` with no argument reads stdin until it ends. Left open it would
       // sit there until the timeout below, which is what a harness CLI does
@@ -307,7 +308,6 @@ describe('a harness is never waiting on input nobody is sending', () => {
         await rm(scratch, { recursive: true, force: true });
       }
     },
-    60_000,
   );
 });
 
@@ -358,6 +358,7 @@ describe.runIf(sandboxReadiness().ready)('a check that rejects an answer keeps t
 
   it.skipIf(confined.skip)(
     confined.title('returns the diff on the failure when no valid result was written'),
+    { tags: ['listener'], timeout: 120_000 },
     async () => {
       const written: Record<string, unknown> = {};
       const ctx = {
@@ -398,7 +399,6 @@ describe.runIf(sandboxReadiness().ready)('a check that rejects an answer keeps t
       // the same name to show whether the run answered or not.
       expect(error.details['harness']).toEqual({ id: 'fake', label: 'Fake harness' });
     },
-    120_000,
   );
 });
 
@@ -502,6 +502,7 @@ describe.runIf(sandboxReadiness().ready)('a commission starts from a named ref',
 
   it.skipIf(confined.skip)(
     confined.title('checks out the named ref and reports it as the base, judged against itself'),
+    { tags: ['listener'], timeout: 120_000 },
     async () => {
       const { outcome, written } = await runWith({ harness: 'edits', base: 'feat/reviewed' });
       expect(outcome.status).toBe('SUCCEEDED');
@@ -515,13 +516,13 @@ describe.runIf(sandboxReadiness().ready)('a commission starts from a named ref',
       expect(written['patch']).toBe(output['patch']);
       expect(output['patchTruncated']).toBe(false);
     },
-    120_000,
   );
 
   it.skipIf(confined.skip)(
     confined.title(
       'judges whether the diff applies against the base, not the folder it moved away from',
     ),
+    { tags: ['listener'], timeout: 120_000 },
     async () => {
       // The folder's README has moved on from the base's, so the same edit reads
       // as a conflict against it and applies cleanly where it would be published.
@@ -532,13 +533,13 @@ describe.runIf(sandboxReadiness().ready)('a commission starts from a named ref',
       expect(output['applies']).toBe('clean');
       expect(output['applyConflict']).toBeUndefined();
     },
-    120_000,
   );
 
   it.skipIf(confined.skip)(
     confined.title(
       'judges a continued turn that names no base against the base its session started from',
     ),
+    { tags: ['listener'], timeout: 120_000 },
     async () => {
       const first = await runWith({ harness: 'converses', base: 'feat/reviewed' });
       expect(first.outcome.status).toBe('SUCCEEDED');
@@ -557,7 +558,6 @@ describe.runIf(sandboxReadiness().ready)('a commission starts from a named ref',
       expect(output['applies']).toBe('clean');
       expect(output['headMoved']).toBe(false);
     },
-    120_000,
   );
 
   it('refuses a ref the folder does not have, naming it', async () => {
@@ -570,6 +570,7 @@ describe.runIf(sandboxReadiness().ready)('a commission starts from a named ref',
 
   it.skipIf(confined.skip)(
     confined.title("stops the agent's own git from deleting a branch, and the run still succeeds"),
+    { tags: ['listener'], timeout: 120_000 },
     async () => {
       await vcs('branch', '-f', 'other', other);
       const { outcome, written } = await runWith({ harness: 'deletes' });
@@ -582,13 +583,13 @@ describe.runIf(sandboxReadiness().ready)('a commission starts from a named ref',
       );
       expect(String(output['patch'])).toContain('touched.txt');
     },
-    120_000,
   );
 
   it.skipIf(confined.skip)(
     confined.title(
       'reports a branch moved by a git call that names its own hooks path, which the guard does not stop',
     ),
+    { tags: ['listener'], timeout: 120_000 },
     async () => {
       await vcs('branch', '-f', 'other', other);
       try {
@@ -602,13 +603,13 @@ describe.runIf(sandboxReadiness().ready)('a commission starts from a named ref',
         await vcs('branch', '-f', 'other', other);
       }
     },
-    120_000,
   );
 
   it.skipIf(confined.skip)(
     confined.title(
       'reports a branch made by a local push from the checkout, which the guard does not stop',
     ),
+    { tags: ['listener'], timeout: 120_000 },
     async () => {
       try {
         const { outcome, written } = await runWith({ harness: 'pushes' });
@@ -621,13 +622,13 @@ describe.runIf(sandboxReadiness().ready)('a commission starts from a named ref',
         await vcs('branch', '-D', 'pushed').catch(() => undefined);
       }
     },
-    120_000,
   );
 
   it.skipIf(confined.skip)(
     confined.title(
       'reports a branch the operator made while the run was in flight, and refuses nothing',
     ),
+    { tags: ['listener'], timeout: 120_000 },
     async () => {
       await rm(operatorDone, { force: true });
       const running = runWith({ harness: 'waits' });
@@ -664,7 +665,6 @@ describe.runIf(sandboxReadiness().ready)('a commission starts from a named ref',
       ]);
       expect(String(output['patch'])).toContain('touched.txt');
     },
-    120_000,
   );
 
   it("starts from the remote's branch as it is now when the base names a remote", async () => {
@@ -755,6 +755,7 @@ describe.runIf(sandboxReadiness().ready)(
 
     it.skipIf(confined.skip)(
       confined.title('is stored by the run, read back by the patch, and committed byte for byte'),
+      { tags: ['listener'], timeout: 180_000 },
       async () => {
         const store = new Map<string, unknown>();
         const contextFor = (
@@ -828,7 +829,6 @@ describe.runIf(sandboxReadiness().ready)(
         ).join('');
         expect(await vcs('show', 'aflow/large:large.txt')).toBe(expected);
       },
-      180_000,
     );
   },
 );

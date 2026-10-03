@@ -344,9 +344,9 @@ export const HostOperationRegistrations: OperationRegistration[] = [
         'A continued run returns the diff of the whole conversation against its original starting commit, not only the latest turn — unless it names a `base`, which continues the conversation in a fresh checkout at that base.',
         "A patch made from a `base` is relative to that base, not the folder's HEAD: publish it with the run's `baseSha`, onto the branch it started from or onto a new branch, which is created at that base.",
         'A harness only runs if the operator configured it on that machine; the id here cannot introduce one. Omitted, it resolves to the one offered machine-side — the space context lists them.',
-        'A harness needs egress to its provider. `blockedDomains` names every host it could not reach, and `boundaryNote` says whether that stopped the run or only narrowed it.',
+        "The run takes the folder's `sandbox` posture, which `host.binding.inspect` shows. Under both the harness runs in the machine's sandbox and writes only its checkout, never the folder or its `.git`. `open` reaches every host but this machine; `confined` reaches only the hosts its profile allows. Under neither does it reach a server on the machine's loopback, and on macOS it cannot listen on loopback either. `blockedDomains` names every host it could not reach, and `boundaryNote` says whether that stopped the run or only narrowed it.",
         'The folder must be a git repository with at least one commit — the run needs a base to diff against.',
-        `A machine runs only so many coding agents at once — the number its operator set, ${String(HOST_HARNESS_CONCURRENCY_DEFAULT)} unless they chose another. A run past it waits for one to end rather than being refused, and its \`timeoutMs\` counts from when it starts.`,
+        `A machine runs only so many coding agents at once — the number its operator set, ${String(HOST_HARNESS_CONCURRENCY_DEFAULT)} unless they chose another. A run past it waits for one to end rather than being refused; it is scheduled, not started, while it waits, and its \`timeoutMs\` and its duration count from when it starts.`,
         'A `maxTurns` budget the task cannot meet ends the run with whatever the harness had reached, and that result is still validated against `outputSchema` — a budget too small for the task fails the step rather than returning a partial answer.',
         '`model` is spelled the way the harness spells it, not as this platform names a model in its own catalog — the harness resolves the name, and an id from the catalog is one it has never heard of.',
         "A named browser profile carries the operator's sign-ins and never reaches this machine's own servers, so it cannot open a dev server; `ephemeral` opens one only on a port the operator declared for that harness, and on none when no port is declared. A harness the machine configured without `mcpArgs` refuses a run asking for a browser, and the refusal names the command that sets them.",
@@ -543,7 +543,7 @@ export const HostOperationRegistrations: OperationRegistration[] = [
     semanticDescription:
       'Run the checks the operator declared for a connected repository — one command, set on ' +
       'their machine — in a detached checkout of one commit, with the folder’s installed ' +
-      'dependencies linked so nothing is installed, under the sandbox a coding agent runs in, ' +
+      "dependencies linked so nothing is installed, under the folder's sandbox posture, " +
       'and report whether they passed, with the end of what they printed. The commit and the ' +
       'base it is measured against reach the command as `AFLOW_CHECK_SHA` and ' +
       '`AFLOW_CHECK_BASE`. The checkout is removed afterwards; the folder, its working tree ' +
@@ -572,7 +572,7 @@ export const HostOperationRegistrations: OperationRegistration[] = [
         'The command is declared on the machine with `aflow harness checks <folder> -- <argv>`, and nothing in this call can name one. A folder that declares none answers `passed` with `skipped`, and nothing ran.',
         'The checks get the folder’s `checksTimeoutMs`, `HOST_CHECKS_TIMEOUT_DEFAULT_MS` where the operator chose none; a check still running then is stopped and fails, naming that time.',
         'The checkout has the folder’s installed dependencies but none of its build output: a check that needs a package built builds it.',
-        'Egress is closed, as it is for a command: a check that reaches the network fails there.',
+        "The checks run as a coding agent does in the folder, in the machine's sandbox: with every host but this machine in an `open` folder, and in a `confined` one with egress closed. The machine's loopback is closed under both, and on macOS a check cannot listen on loopback either, so a test that serves itself fails there. The posture they ran under is in the result and the receipt, and a push records it.",
         '`receipt` is what a push of the commit from a folder that declares checks must carry as `check.receipt`; it is issued whether the checks passed or failed, and a push takes only one that says they passed, for the commit and base it sends and the checks the folder declares then. It is valid on the executor that ran them until that executor restarts, and for a day at most.',
         'Passing is evidence from this machine about one commit. The pull request’s own checks remain the proof.',
       ],

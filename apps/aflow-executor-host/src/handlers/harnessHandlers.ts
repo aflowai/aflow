@@ -1,12 +1,13 @@
 /**
  * The coding-harness half of the host lane.
  *
- * A harness is a command, so it runs through the same confined spawn path as
- * any other. Two things differ, and both are the operator's to grant rather
- * than this executor's to assume: the harness reads a credential under the home
- * region the boundary denies, and it reaches a provider the boundary blocks.
- * Its profile — in the machine's own policy file — is what opens exactly those
- * and nothing else.
+ * A harness is a command, so it runs through the same sandboxed spawn path as
+ * any other, under its folder's posture (Plan 315 D19), which decides the
+ * network. Two things differ, and both are the operator's to grant rather than
+ * this executor's to assume: the harness reads a credential under the home
+ * region the boundary denies, and in a `confined` folder it reaches a provider
+ * the boundary blocks. Its profile — in the machine's own policy file — is what
+ * opens exactly those and nothing else.
  *
  * The run happens in a detached worktree, never the operator's checkout. That
  * is what lets a run start while they have uncommitted work, and what makes the
@@ -63,7 +64,13 @@ import {
   type HarnessBrowser,
 } from '../browser/harnessBrowser.js';
 import { fetchCredential, scrubSecret } from '../credentialFetch.js';
-import { noSandboxMessage, reapWithdrawn, sandboxReadiness } from '../sandboxedRun.js';
+import { runUnderFolderPosture } from '../folderRun.js';
+import {
+  noSandboxMessage,
+  reapWithdrawn,
+  sandboxReadiness,
+  type SandboxedRunResult,
+} from '../sandboxedRun.js';
 import { describeRefusals, extractEgressRefusals } from '../egressRefusals.js';
 import {
   assertTakesMcpConfig,
@@ -90,7 +97,6 @@ import {
   recordSession,
   type HarnessSession,
 } from '../harnessSessions.js';
-import { runSandboxed, type SandboxedRunResult } from '../sandboxedRun.js';
 import { createChatterStripper } from '../egressRefusals.js';
 import { createHarnessEventReader } from '../harnessEvents.js';
 import {
@@ -737,7 +743,7 @@ async function runHarness(
       // from 1 again.
       const browserTurn = await browser?.openTurn();
       try {
-        return await runSandboxed({
+        return await runUnderFolderPosture({
           binding,
           argv: harnessTurnArgv(
             profile,

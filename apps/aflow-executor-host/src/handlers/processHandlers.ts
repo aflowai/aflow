@@ -42,7 +42,8 @@ import { explainFailedStart } from '../executableHint.js';
 import { checksOf } from '../folderChecks.js';
 import { pushApprovalOf } from '../pushApproval.js';
 import { measurePushBase } from '../pushBase.js';
-import { type PushApprovalReader, requireScannedPush } from '../scanReceipt.js';
+import { sandboxPostureOf } from '../sandboxPosture.js';
+import { type PushApprovalReader, type PushClearance, requireScannedPush } from '../scanReceipt.js';
 import { WorktreeError } from '../worktree.js';
 import {
   type HostBinding,
@@ -170,18 +171,23 @@ async function execProcess(
         );
       }
     }
+    let clearance: PushClearance | undefined;
     if (push !== undefined) {
       // In the push's own step rather than one before it, so nothing between
       // the measure and git's own push can move the base unnoticed but the
       // remote itself in the moment they are apart.
-      await requireScannedPush({
+      clearance = await requireScannedPush({
         bindingId: binding.id,
         pushApproval: pushApprovalOf(binding),
         refspecs: push.refspecs,
         sources: push.sources,
         pushBase: input.pushBase,
         receipt: input.scan?.receipt,
-        checks: { argv: checksOf(binding).argv, receipt: input.check?.receipt ?? undefined },
+        checks: {
+          argv: checksOf(binding).argv,
+          receipt: input.check?.receipt ?? undefined,
+          posture: sandboxPostureOf(binding),
+        },
         measureBase: (pushBase) => measurePushBase(binding.root, push.remote, pushBase),
         approvalFor: (requestHash) => approvals(ctx.tenantId, ctx.runId, requestHash),
       });
@@ -279,12 +285,13 @@ async function execProcess(
       stderr: result.stderr,
       truncated: result.truncated,
       ...(note !== undefined ? { boundaryNote: note } : {}),
+      ...(clearance?.checkedUnder !== undefined ? { checkedUnder: clearance.checkedUnder } : {}),
     });
   } catch (error) {
     return await failure(ctx, error);
   } finally {
     // A detached process is still using this — its policy file lives there, and
-    // it is that process's TMPDIR. The spawn path removes it when it ends.
+    // so is that process's TMPDIR. The spawn path removes it when it ends.
     if (scratch !== undefined && detached !== true) {
       await rm(scratch, { recursive: true, force: true });
     }

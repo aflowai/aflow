@@ -310,6 +310,7 @@ describe('the wrapper, over a real process', () => {
 describe.runIf(CAN_CONFINE)('host process execution', () => {
   it.skipIf(confined.skip)(
     confined.title('runs a command inside the binding'),
+    { tags: ['listener'], timeout: 60_000 },
     async () => {
       const captured: Captured = {};
       const handler = createHostProcessHandler(policyPath, noPushApprovals);
@@ -322,11 +323,11 @@ describe.runIf(CAN_CONFINE)('host process execution', () => {
       // and a reader of the step should not have to infer which it got.
       expect(captured.output?.['confined']).toBe(true);
     },
-    60_000,
   );
 
   it.skipIf(confined.skip)(
     confined.title('reports a pipeline into `head` as having worked'),
+    { tags: ['listener'], timeout: 60_000 },
     async () => {
       // The writer is the process the launcher supervises, which is the shape that
       // reaches this executor: `head` reads its three lines, exits, and whatever
@@ -357,11 +358,11 @@ describe.runIf(CAN_CONFINE)('host process execution', () => {
       // changed the operator's project.
       await rm(join(root, 'fifo'), { force: true });
     },
-    60_000,
   );
 
   it.skipIf(confined.skip)(
     confined.title("fails a command whose closing words are the launcher's signal line"),
+    { tags: ['listener'], timeout: 60_000 },
     async () => {
       // The launcher spawns the command with `stdio: 'inherit'`, so this text
       // arrives on exactly the stream the launcher writes its own line to. The
@@ -381,11 +382,11 @@ describe.runIf(CAN_CONFINE)('host process execution', () => {
       expect(captured.output?.['exitCode']).toBe(2);
       expect(captured.output?.['signal']).toBeNull();
     },
-    60_000,
   );
 
   it.skipIf(confined.skip)(
     confined.title("runs a command whose own flags spell the launcher's"),
+    { tags: ['listener'], timeout: 60_000 },
     async () => {
       // `-c` is the launcher's option as well as the shell's, and it took it from
       // anywhere in the argv: the script was lifted out and run without `python`.
@@ -401,11 +402,11 @@ describe.runIf(CAN_CONFINE)('host process execution', () => {
       expect(captured.output?.['exitCode']).toBe(0);
       expect(String(captured.output?.['stdout'] ?? '')).toContain('named-zero');
     },
-    60_000,
   );
 
   it.skipIf(confined.skip)(
     confined.title('reports a shell-absorbed pipeline into `head` as success too'),
+    { tags: ['listener'], timeout: 60_000 },
     async () => {
       // The ordinary spelling, where the shell outlives the writer and reports
       // `head`'s own status. It was already right; asserted so it stays right.
@@ -421,11 +422,11 @@ describe.runIf(CAN_CONFINE)('host process execution', () => {
       expect(captured.output?.['exitCode']).toBe(0);
       expect(String(captured.output?.['stdout'] ?? '')).toContain('1\n2\n3\n');
     },
-    60_000,
   );
 
   it.skipIf(confined.skip)(
     confined.title('still fails a command that failed for its own reason'),
+    { tags: ['listener'], timeout: 60_000 },
     async () => {
       // The other half of the fix: nothing about a broken pipe weakens this.
       const captured: Captured = {};
@@ -439,7 +440,6 @@ describe.runIf(CAN_CONFINE)('host process execution', () => {
       );
       expect(captured.output?.['exitCode']).toBe(3);
     },
-    60_000,
   );
 
   it('denies the command what lives under the operator home', async () => {
@@ -460,6 +460,7 @@ describe.runIf(CAN_CONFINE)('host process execution', () => {
 
   it.skipIf(confined.skip)(
     confined.title('does NOT confine reads outside home, which is the disclosed limitation'),
+    { tags: ['listener'], timeout: 60_000 },
     async () => {
       // Not a bug and not an oversight: the adapter permits reads by default and
       // narrows by denial, so there is no allow-list to write. `/usr`, `/opt` and
@@ -477,7 +478,6 @@ describe.runIf(CAN_CONFINE)('host process execution', () => {
       );
       expect(captured.output?.['exitCode']).toBe(0);
     },
-    60_000,
   );
 
   it('refuses a command in a binding that only carries files', async () => {
@@ -558,6 +558,7 @@ describe.runIf(CAN_CONFINE)('host process execution', () => {
 
   it.skipIf(confined.skip)(
     confined.title('runs in the binding root when no working directory is given'),
+    { tags: ['listener'], timeout: 30_000 },
     async () => {
       const captured: Captured = {};
       const handler = createHostProcessHandler(policyPath, noPushApprovals);
@@ -567,11 +568,11 @@ describe.runIf(CAN_CONFINE)('host process execution', () => {
       expect(result.status).toBe('SUCCEEDED');
       expect(String(captured.output?.['stdout'] ?? '')).toContain('project');
     },
-    30_000,
   );
 
   it.skipIf(confined.skip)(
     confined.title('narrates what the command said on standard error'),
+    { tags: ['listener'], timeout: 60_000 },
     async () => {
       // Where a command's progress usually speaks. Withheld, a build that logs
       // steadily and prints nothing at the end looks like a step doing nothing.
@@ -586,11 +587,11 @@ describe.runIf(CAN_CONFINE)('host process execution', () => {
       );
       expect((captured.deltas ?? []).join('')).toContain('compiling-something');
     },
-    60_000,
   );
 
   it.skipIf(confined.skip)(
     confined.title('answers `exited` for a run that finished, not `unknown`'),
+    { tags: ['listener'], timeout: 30_000 },
     async () => {
       // `unknown` is the answer that means this executor cannot tell — deleting
       // the handle on exit made every completed run indistinguishable from one
@@ -611,7 +612,6 @@ describe.runIf(CAN_CONFINE)('host process execution', () => {
       expect(inspected.output?.['state']).toBe('exited');
       expect(inspected.output?.['exitCode']).toBe(0);
     },
-    30_000,
   );
 });
 

@@ -211,20 +211,37 @@ describe('host inventories', () => {
     expect(await readLiveHostInventories(redis, now)).toEqual([]);
   });
 
-  it('carries each pushing folder’s posture through, keyed by its workspace', async () => {
+  it('carries each pushing folder’s postures through, keyed by its workspace', async () => {
     const now = Date.now();
+    const folder = {
+      id: 'hb_app',
+      spaceId: 'space-a',
+      pushApproval: 'never',
+      sandbox: 'confined',
+    } as const;
     const redis = fakeRedis(
       { [now - 1_000]: 'laptop' },
-      {
-        [hostInventoryKey('laptop')]: JSON.stringify(
-          inventory('laptop', [], [{ id: 'hb_app', spaceId: 'space-a', pushApproval: 'never' }]),
-        ),
-      },
+      { [hostInventoryKey('laptop')]: JSON.stringify(inventory('laptop', [], [folder])) },
     );
 
     const live = await readLiveHostInventories(redis, now);
 
-    expect(live[0]?.folders).toEqual([{ id: 'hb_app', spaceId: 'space-a', pushApproval: 'never' }]);
+    expect(live[0]?.folders).toEqual([folder]);
+  });
+
+  it('refuses a folder that does not say what its coding agents run under', async () => {
+    const now = Date.now();
+    const redis = fakeRedis(
+      { [now - 1_000]: 'laptop' },
+      {
+        [hostInventoryKey('laptop')]: JSON.stringify({
+          ...inventory('laptop', []),
+          folders: [{ id: 'hb_app', spaceId: 'space-a', pushApproval: 'never' }],
+        }),
+      },
+    );
+
+    expect(await readLiveHostInventories(redis, now)).toEqual([]);
   });
 
   it('carries how many coding agents the machine runs at once', async () => {
@@ -279,8 +296,24 @@ describe('host inventories', () => {
               spaceId: 'space-a',
               pushApproval: 'never',
               checks: ['node', 'scripts/verify-commit.mjs'],
+              sandbox: 'open',
             },
           ],
+        }),
+      },
+    );
+
+    expect(await readLiveHostInventories(redis, now)).toEqual([]);
+  });
+
+  it('refuses a sandbox posture outside the two a folder can hold', async () => {
+    const now = Date.now();
+    const redis = fakeRedis(
+      { [now - 1_000]: 'laptop' },
+      {
+        [hostInventoryKey('laptop')]: JSON.stringify({
+          ...inventory('laptop', []),
+          folders: [{ id: 'hb_app', spaceId: 'space-a', pushApproval: 'never', sandbox: 'loose' }],
         }),
       },
     );
@@ -295,7 +328,9 @@ describe('host inventories', () => {
       {
         [hostInventoryKey('laptop')]: JSON.stringify({
           ...inventory('laptop', []),
-          folders: [{ id: 'hb_app', spaceId: 'space-a', pushApproval: 'sometimes' }],
+          folders: [
+            { id: 'hb_app', spaceId: 'space-a', pushApproval: 'sometimes', sandbox: 'open' },
+          ],
         }),
       },
     );
@@ -317,11 +352,16 @@ describe('publishing folders for one workspace', () => {
               spaceId: 'space-a',
               pushApproval: 'always',
               checks: { program: 'node' },
+              sandbox: 'open',
             },
-            { id: 'hb_lib', spaceId: 'space-b', pushApproval: 'never' },
+            { id: 'hb_lib', spaceId: 'space-b', pushApproval: 'never', sandbox: 'open' },
           ],
         ),
-        inventory('desktop', [], [{ id: 'hb_lib', spaceId: 'space-a', pushApproval: 'never' }]),
+        inventory(
+          'desktop',
+          [],
+          [{ id: 'hb_lib', spaceId: 'space-a', pushApproval: 'never', sandbox: 'open' }],
+        ),
       ],
       'space-a',
     );

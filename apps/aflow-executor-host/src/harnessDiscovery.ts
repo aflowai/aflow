@@ -152,13 +152,10 @@ const KNOWN: readonly HarnessProbe[] = [
     // another's — the isolation the worktree exists to provide, given away to
     // avoid one error message.
     //
-    // The cost, stated because it is real: the harness's shell writes a
-    // working-directory marker directly in the temp root, and cannot. Commands
-    // run and produce output, but the shell reports a non-zero exit, so a
-    // harness asked to run tests may believe they failed. An operator who would
-    // rather have accurate exit codes than per-run isolation can widen this in
-    // their own profile; it is not the default, because the default should not
-    // trade isolation for tidiness.
+    // The working-directory marker its shell writes after every command goes
+    // where `CLAUDE_CODE_TMPDIR` says, and the lane points that at the run's
+    // own temporary directory (`baseEnv.ts`); left to itself it writes the temp
+    // root, is refused, and every command reads as failed.
     writePaths: [join(SYSTEM_TEMP_ROOT, `claude-${String(process.getuid?.() ?? 0)}`)],
   },
   {

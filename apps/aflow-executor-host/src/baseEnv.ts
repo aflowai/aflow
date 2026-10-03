@@ -14,9 +14,12 @@
  * lane exists to reach — a command that cannot find the operator's node or
  * their virtualenv is not worth confining.
  *
- * `TMPDIR` is set rather than inherited. It points at the run's own scratch,
- * which is writable inside the policy, so a tool that needs a temporary
- * directory finds one it is allowed to use instead of failing on the host's.
+ * The temporary directory is set rather than inherited, under every name a
+ * toolchain reads it by. It is the run's own, inside its scratch, which is
+ * writable inside the policy, so a tool that needs one finds one it is allowed
+ * to use. The system's own is writable under no posture: on Linux every run's
+ * scratch lives there, so a run able to write it could write another's
+ * checkout, or the policy and status files the sandbox reads for it.
  *
  * `HOME` is set for exactly the same reason, and passing it through was the
  * mistake that reasoning was meant to prevent. Home is denied as a region, so
@@ -66,6 +69,7 @@ const TOOLCHAIN_NAMES = [
   'VOLTA_HOME',
 ] as const;
 
+import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export const INHERITED_ENV_NAMES: readonly string[] = [...SHELL_NAMES, ...TOOLCHAIN_NAMES];
@@ -73,11 +77,31 @@ export const INHERITED_ENV_NAMES: readonly string[] = [...SHELL_NAMES, ...TOOLCH
 /**
  * The home a confined workload is given. Under the scratch, so it is removed
  * with the run rather than accumulating, and writable because the scratch is.
- * The caller creates it — a tool handed a `HOME` that does not exist fails in
- * its own way, which is no better than the EPERM this replaces.
+ * Created by {@link createWorkloadDirs} — a tool handed a `HOME` that does not
+ * exist fails in its own way, which is no better than the EPERM this replaces.
  */
-export function workloadHome(scratchDir: string): string {
+function workloadHome(scratchDir: string): string {
   return join(scratchDir, 'home');
+}
+
+/** The temporary directory a confined workload is given, beside its home. */
+export function workloadTemp(scratchDir: string): string {
+  return join(scratchDir, 'tmp');
+}
+
+/**
+ * Every name a toolchain reads its temporary directory by. `TMPDIR` alone is
+ * POSIX; Windows-born tools read `TMP` and `TEMP`, and Claude Code puts the
+ * file its shell records the working directory in where
+ * `CLAUDE_CODE_TMPDIR` says, and in `/tmp` otherwise, whatever `TMPDIR` says.
+ */
+export const WORKLOAD_TEMP_ENV_NAMES = ['TMPDIR', 'TMP', 'TEMP', 'CLAUDE_CODE_TMPDIR'] as const;
+
+/** The home and the temporary directory {@link buildBaseEnv} names, made before the spawn. */
+export async function createWorkloadDirs(scratchDir: string): Promise<void> {
+  for (const dir of [workloadHome(scratchDir), workloadTemp(scratchDir)]) {
+    await mkdir(dir, { recursive: true });
+  }
 }
 
 export function buildBaseEnv(
@@ -90,7 +114,7 @@ export function buildBaseEnv(
     const value = source[name];
     if (value !== undefined) env[name] = value;
   }
-  env['TMPDIR'] = scratchDir;
+  for (const name of WORKLOAD_TEMP_ENV_NAMES) env[name] = workloadTemp(scratchDir);
   env['HOME'] = workloadHome(scratchDir);
   return env;
 }

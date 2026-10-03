@@ -15,6 +15,7 @@ import {
   HostPublishedChecksSchema,
   type HostPushApproval,
   HostPushApprovalSchema,
+  HostSandboxPostureSchema,
 } from '@aflow/schemas';
 
 /** Per-machine inventory, written with a lifetime so silence expires. */
@@ -118,9 +119,10 @@ export const HostInventorySchema = z.object({
    */
   maxConcurrentHarnessRuns: z.number().int().min(1),
   /**
-   * The push posture of each folder this machine lets push, and whether a
-   * publication from it runs checks and which program, from the same policy
-   * file. Published rather than
+   * The push posture of each folder this machine lets push, whether a
+   * publication from it runs checks and which program, and the sandbox posture
+   * its coding agents and checks run under, from the same policy file.
+   * Published rather than
    * recorded by the workspace because the operator changes both on the
    * machine, where the workspace never hears of it.
    *
@@ -133,6 +135,7 @@ export const HostInventorySchema = z.object({
       spaceId: z.string(),
       pushApproval: HostPushApprovalSchema,
       checks: HostPublishedChecksSchema.optional(),
+      sandbox: HostSandboxPostureSchema,
     }),
   ),
   /**

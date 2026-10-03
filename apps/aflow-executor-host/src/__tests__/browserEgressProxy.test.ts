@@ -207,209 +207,215 @@ function connectTo(authority: string): string {
 }
 
 // The whole suite, not each test: its shared setup is what listens.
-describe.skipIf(onLoopback.skip)(onLoopback.title('the egress proxy'), () => {
-  let target: Server;
-  let targetPort: number;
-  let proxy: EgressProxy | undefined;
-  const lookups: string[] = [];
-  const connects: Array<[string, number]> = [];
-  const gained: string[] = [];
-  const clock = { now: 0 };
-  const RESOLVES: Readonly<Record<string, string[]>> = {
-    'rebound.example.net': ['127.0.0.1'],
-    'split.example.net': [PUBLIC, '127.0.0.1'],
-    'public.example.net': [PUBLIC],
-    'other.example.net': [OTHER_PUBLIC],
-    'denied.example.org': [PUBLIC],
-  };
+describe.skipIf(onLoopback.skip)(
+  onLoopback.title('the egress proxy'),
+  { tags: ['listener'] },
+  () => {
+    let target: Server;
+    let targetPort: number;
+    let proxy: EgressProxy | undefined;
+    const lookups: string[] = [];
+    const connects: Array<[string, number]> = [];
+    const gained: string[] = [];
+    const clock = { now: 0 };
+    const RESOLVES: Readonly<Record<string, string[]>> = {
+      'rebound.example.net': ['127.0.0.1'],
+      'split.example.net': [PUBLIC, '127.0.0.1'],
+      'public.example.net': [PUBLIC],
+      'other.example.net': [OTHER_PUBLIC],
+      'denied.example.org': [PUBLIC],
+    };
 
-  beforeAll(async () => {
-    target = createServer((req, res) => {
-      res.writeHead(200, { 'content-type': 'text/plain', connection: 'close' });
-      res.end(`reached ${req.headers.host ?? ''}${req.url ?? ''}`);
-    });
-    targetPort = await new Promise<number>((resolve, reject) => {
-      target.once('error', reject);
-      target.listen(0, '127.0.0.1', () => {
-        const address = target.address();
-        resolve(typeof address === 'object' && address !== null ? address.port : 0);
+    beforeAll(async () => {
+      target = createServer((req, res) => {
+        res.writeHead(200, { 'content-type': 'text/plain', connection: 'close' });
+        res.end(`reached ${req.headers.host ?? ''}${req.url ?? ''}`);
+      });
+      targetPort = await new Promise<number>((resolve, reject) => {
+        target.once('error', reject);
+        target.listen(0, '127.0.0.1', () => {
+          const address = target.address();
+          resolve(typeof address === 'object' && address !== null ? address.port : 0);
+        });
+      });
+      proxy = await startEgressProxy({
+        classifier: createLocalAddressClassifier({
+          readInterfaces: () => [PLANTED_INTERFACE, ...machineInterfaceAddresses(), ...gained],
+          now: () => clock.now,
+        }),
+        refuseHost: (host) =>
+          host === 'denied.example.org' ? 'denied by rule `*.example.org`' : undefined,
+        lookup: (host) => {
+          lookups.push(host);
+          const addresses = RESOLVES[host];
+          return addresses === undefined
+            ? Promise.reject(new Error(`getaddrinfo ENOTFOUND ${host}`))
+            : Promise.resolve(addresses.map((address) => ({ address })));
+        },
+        // The allowed destination is reached on the local server, but only after
+        // the proxy has said which address it is connecting to.
+        connect: (address, port): Socket => {
+          connects.push([address, port]);
+          return netConnect({ host: '127.0.0.1', port: targetPort });
+        },
       });
     });
-    proxy = await startEgressProxy({
-      classifier: createLocalAddressClassifier({
-        readInterfaces: () => [PLANTED_INTERFACE, ...machineInterfaceAddresses(), ...gained],
-        now: () => clock.now,
-      }),
-      refuseHost: (host) =>
-        host === 'denied.example.org' ? 'denied by rule `*.example.org`' : undefined,
-      lookup: (host) => {
-        lookups.push(host);
-        const addresses = RESOLVES[host];
-        return addresses === undefined
-          ? Promise.reject(new Error(`getaddrinfo ENOTFOUND ${host}`))
-          : Promise.resolve(addresses.map((address) => ({ address })));
-      },
-      // The allowed destination is reached on the local server, but only after
-      // the proxy has said which address it is connecting to.
-      connect: (address, port): Socket => {
-        connects.push([address, port]);
-        return netConnect({ host: '127.0.0.1', port: targetPort });
-      },
+
+    const listening = (): EgressProxy => {
+      if (proxy === undefined) throw new Error('The proxy did not start.');
+      return proxy;
+    };
+
+    afterAll(async () => {
+      await proxy?.stop();
+      if (target.listening) {
+        await new Promise<void>((resolve) => {
+          target.close(() => resolve());
+        });
+      }
     });
-  });
 
-  const listening = (): EgressProxy => {
-    if (proxy === undefined) throw new Error('The proxy did not start.');
-    return proxy;
-  };
+    const someInterface = machineInterfaceAddresses().find(
+      (address) => !address.startsWith('127.') && address !== '::1',
+    );
+    const LOCAL: Array<[string, string]> = [
+      ['127.0.0.1', '127.0.0.1'],
+      ['localhost', 'localhost'],
+      ['[::1]', '[::1]'],
+      ['[::ffff:127.0.0.1]', '[::ffff:127.0.0.1]'],
+      ['0.0.0.0', '0.0.0.0'],
+      ['a planted interface address', PLANTED_INTERFACE],
+      ['a name that resolves to 127.0.0.1', 'rebound.example.net'],
+      ['a name with a public and a loopback address', 'split.example.net'],
+      ...(someInterface !== undefined
+        ? [
+            [
+              'one of this machine’s interface addresses',
+              someInterface.includes(':') ? `[${someInterface}]` : someInterface,
+            ] as [string, string],
+          ]
+        : []),
+    ];
 
-  afterAll(async () => {
-    await proxy?.stop();
-    if (target.listening) {
-      await new Promise<void>((resolve) => {
-        target.close(() => resolve());
-      });
+    for (const [what, host] of LOCAL) {
+      for (const port of ['3001', '47123']) {
+        it(`refuses ${what} on port ${port}, over plain http and over CONNECT`, async () => {
+          const before = connects.length;
+          const plain = await exchange(
+            listening().port,
+            get(`http://${host}:${port}/action-center`, `${host}:${port}`),
+          );
+          expect(plain).toMatch(/^HTTP\/1\.1 403/);
+          expect(plain).toContain('does not reach services on this machine');
+          const tunnel = await exchange(listening().port, connectTo(`${host}:${port}`));
+          expect(tunnel).toMatch(/^HTTP\/1\.1 403/);
+          expect(connects.length).toBe(before);
+        });
+      }
     }
-  });
 
-  const someInterface = machineInterfaceAddresses().find(
-    (address) => !address.startsWith('127.') && address !== '::1',
-  );
-  const LOCAL: Array<[string, string]> = [
-    ['127.0.0.1', '127.0.0.1'],
-    ['localhost', 'localhost'],
-    ['[::1]', '[::1]'],
-    ['[::ffff:127.0.0.1]', '[::ffff:127.0.0.1]'],
-    ['0.0.0.0', '0.0.0.0'],
-    ['a planted interface address', PLANTED_INTERFACE],
-    ['a name that resolves to 127.0.0.1', 'rebound.example.net'],
-    ['a name with a public and a loopback address', 'split.example.net'],
-    ...(someInterface !== undefined
-      ? [
-          [
-            'one of this machine’s interface addresses',
-            someInterface.includes(':') ? `[${someInterface}]` : someInterface,
-          ] as [string, string],
-        ]
-      : []),
-  ];
+    it('records each refusal with why, for the operation to report', () => {
+      const refused = listening().refusalsSince(0);
+      expect(refused.some((r) => r.host === 'rebound.example.net' && r.kind === 'local')).toBe(
+        true,
+      );
+      expect(refused.find((r) => r.host === 'rebound.example.net')?.reason).toContain(
+        'resolves to 127.0.0.1',
+      );
+    });
 
-  for (const [what, host] of LOCAL) {
-    for (const port of ['3001', '47123']) {
-      it(`refuses ${what} on port ${port}, over plain http and over CONNECT`, async () => {
-        const before = connects.length;
-        const plain = await exchange(
-          listening().port,
-          get(`http://${host}:${port}/action-center`, `${host}:${port}`),
-        );
-        expect(plain).toMatch(/^HTTP\/1\.1 403/);
-        expect(plain).toContain('does not reach services on this machine');
-        const tunnel = await exchange(listening().port, connectTo(`${host}:${port}`));
-        expect(tunnel).toMatch(/^HTTP\/1\.1 403/);
-        expect(connects.length).toBe(before);
-      });
-    }
-  }
+    it('refuses a host the operator’s rules deny, before resolving it', async () => {
+      const looked = lookups.length;
+      const plain = await exchange(
+        listening().port,
+        get('http://denied.example.org/', 'denied.example.org'),
+      );
+      expect(plain).toMatch(/^HTTP\/1\.1 403/);
+      expect(plain).toContain('denied by rule');
+      const tunnel = await exchange(listening().port, connectTo('denied.example.org:443'));
+      expect(tunnel).toMatch(/^HTTP\/1\.1 403/);
+      expect(lookups.length).toBe(looked);
+      expect(
+        listening()
+          .refusalsSince(0)
+          .some((r) => r.host === 'denied.example.org' && r.kind === 'rule'),
+      ).toBe(true);
+    });
 
-  it('records each refusal with why, for the operation to report', () => {
-    const refused = listening().refusalsSince(0);
-    expect(refused.some((r) => r.host === 'rebound.example.net' && r.kind === 'local')).toBe(true);
-    expect(refused.find((r) => r.host === 'rebound.example.net')?.reason).toContain(
-      'resolves to 127.0.0.1',
-    );
-  });
+    it('connects a public destination at exactly the address it checked, resolving once', async () => {
+      connects.length = 0;
+      const looked = lookups.filter((host) => host === 'public.example.net').length;
+      const plain = await exchange(
+        listening().port,
+        get(
+          `http://public.example.net:${String(targetPort)}/page?q=1`,
+          `public.example.net:${String(targetPort)}`,
+        ),
+      );
+      expect(plain).toMatch(/^HTTP\/1\.1 200/);
+      expect(plain).toContain(`reached public.example.net:${String(targetPort)}/page?q=1`);
+      expect(connects).toEqual([[PUBLIC, targetPort]]);
 
-  it('refuses a host the operator’s rules deny, before resolving it', async () => {
-    const looked = lookups.length;
-    const plain = await exchange(
-      listening().port,
-      get('http://denied.example.org/', 'denied.example.org'),
-    );
-    expect(plain).toMatch(/^HTTP\/1\.1 403/);
-    expect(plain).toContain('denied by rule');
-    const tunnel = await exchange(listening().port, connectTo('denied.example.org:443'));
-    expect(tunnel).toMatch(/^HTTP\/1\.1 403/);
-    expect(lookups.length).toBe(looked);
-    expect(
-      listening()
-        .refusalsSince(0)
-        .some((r) => r.host === 'denied.example.org' && r.kind === 'rule'),
-    ).toBe(true);
-  });
+      const tunnel = await exchange(
+        listening().port,
+        connectTo(`public.example.net:${String(targetPort)}`),
+        get('/through-the-tunnel', 'public.example.net'),
+      );
+      expect(tunnel).toMatch(/^HTTP\/1\.1 200 Connection Established/);
+      expect(tunnel).toContain('reached public.example.net/through-the-tunnel');
+      expect(connects).toEqual([
+        [PUBLIC, targetPort],
+        [PUBLIC, targetPort],
+      ]);
+      expect(lookups.filter((host) => host === 'public.example.net').length).toBe(looked + 2);
+    });
 
-  it('connects a public destination at exactly the address it checked, resolving once', async () => {
-    connects.length = 0;
-    const looked = lookups.filter((host) => host === 'public.example.net').length;
-    const plain = await exchange(
-      listening().port,
-      get(
-        `http://public.example.net:${String(targetPort)}/page?q=1`,
-        `public.example.net:${String(targetPort)}`,
-      ),
-    );
-    expect(plain).toMatch(/^HTTP\/1\.1 200/);
-    expect(plain).toContain(`reached public.example.net:${String(targetPort)}/page?q=1`);
-    expect(connects).toEqual([[PUBLIC, targetPort]]);
+    it('connects each plain-http request to the address its own name resolved to', async () => {
+      connects.length = 0;
+      const port = String(targetPort);
+      const first = await exchange(
+        listening().port,
+        get(`http://public.example.net:${port}/one`, `public.example.net:${port}`),
+      );
+      const second = await exchange(
+        listening().port,
+        get(`http://other.example.net:${port}/two`, `other.example.net:${port}`),
+      );
+      expect(first).toMatch(/^HTTP\/1\.1 200/);
+      expect(first).toContain(`reached public.example.net:${port}/one`);
+      expect(second).toMatch(/^HTTP\/1\.1 200/);
+      expect(second).toContain(`reached other.example.net:${port}/two`);
+      expect(connects).toEqual([
+        [PUBLIC, targetPort],
+        [OTHER_PUBLIC, targetPort],
+      ]);
+    });
 
-    const tunnel = await exchange(
-      listening().port,
-      connectTo(`public.example.net:${String(targetPort)}`),
-      get('/through-the-tunnel', 'public.example.net'),
-    );
-    expect(tunnel).toMatch(/^HTTP\/1\.1 200 Connection Established/);
-    expect(tunnel).toContain('reached public.example.net/through-the-tunnel');
-    expect(connects).toEqual([
-      [PUBLIC, targetPort],
-      [PUBLIC, targetPort],
-    ]);
-    expect(lookups.filter((host) => host === 'public.example.net').length).toBe(looked + 2);
-  });
+    it('refuses an address the machine gained after the proxy started, once the TTL has passed', async () => {
+      const port = String(targetPort);
+      const request = get(`http://${GAINED_INTERFACE}:${port}/`, `${GAINED_INTERFACE}:${port}`);
+      expect(await exchange(listening().port, request)).toMatch(/^HTTP\/1\.1 200/);
 
-  it('connects each plain-http request to the address its own name resolved to', async () => {
-    connects.length = 0;
-    const port = String(targetPort);
-    const first = await exchange(
-      listening().port,
-      get(`http://public.example.net:${port}/one`, `public.example.net:${port}`),
-    );
-    const second = await exchange(
-      listening().port,
-      get(`http://other.example.net:${port}/two`, `other.example.net:${port}`),
-    );
-    expect(first).toMatch(/^HTTP\/1\.1 200/);
-    expect(first).toContain(`reached public.example.net:${port}/one`);
-    expect(second).toMatch(/^HTTP\/1\.1 200/);
-    expect(second).toContain(`reached other.example.net:${port}/two`);
-    expect(connects).toEqual([
-      [PUBLIC, targetPort],
-      [OTHER_PUBLIC, targetPort],
-    ]);
-  });
+      gained.push(GAINED_INTERFACE);
+      clock.now += INTERFACE_ADDRESSES_TTL_MS;
+      connects.length = 0;
+      const refused = await exchange(listening().port, request);
+      expect(refused).toMatch(/^HTTP\/1\.1 403/);
+      expect(refused).toContain('an address of this machine');
+      expect(connects).toEqual([]);
+    });
 
-  it('refuses an address the machine gained after the proxy started, once the TTL has passed', async () => {
-    const port = String(targetPort);
-    const request = get(`http://${GAINED_INTERFACE}:${port}/`, `${GAINED_INTERFACE}:${port}`);
-    expect(await exchange(listening().port, request)).toMatch(/^HTTP\/1\.1 200/);
-
-    gained.push(GAINED_INTERFACE);
-    clock.now += INTERFACE_ADDRESSES_TTL_MS;
-    connects.length = 0;
-    const refused = await exchange(listening().port, request);
-    expect(refused).toMatch(/^HTTP\/1\.1 403/);
-    expect(refused).toContain('an address of this machine');
-    expect(connects).toEqual([]);
-  });
-
-  it('answers a name that does not resolve with 502, not as a refusal', async () => {
-    const tunnel = await exchange(listening().port, connectTo('nowhere.example.invalid:443'));
-    expect(tunnel).toMatch(/^HTTP\/1\.1 502/);
-    expect(
-      listening()
-        .refusalsSince(0)
-        .some((r) => r.host === 'nowhere.example.invalid'),
-    ).toBe(false);
-  });
-});
+    it('answers a name that does not resolve with 502, not as a refusal', async () => {
+      const tunnel = await exchange(listening().port, connectTo('nowhere.example.invalid:443'));
+      expect(tunnel).toMatch(/^HTTP\/1\.1 502/);
+      expect(
+        listening()
+          .refusalsSince(0)
+          .some((r) => r.host === 'nowhere.example.invalid'),
+      ).toBe(false);
+    });
+  },
+);
 
 /** The port the operator declared for the harness, in the decision's tests. */
 const DECLARED = 5173;
@@ -534,112 +540,120 @@ describe('what an ephemeral profile’s proxy decides', () => {
 });
 
 // The whole suite, not each test: its shared setup is what listens.
-describe.skipIf(onLoopback.skip)(onLoopback.title('an ephemeral profile’s proxy'), () => {
-  let target: Server;
-  let targetPort = 0;
-  const reached: string[] = [];
-  const proxies: EgressProxy[] = [];
+describe.skipIf(onLoopback.skip)(
+  onLoopback.title('an ephemeral profile’s proxy'),
+  { tags: ['listener'] },
+  () => {
+    let target: Server;
+    let targetPort = 0;
+    const reached: string[] = [];
+    const proxies: EgressProxy[] = [];
 
-  beforeAll(async () => {
-    target = createServer((req, res) => {
-      reached.push(`${req.headers.host ?? ''}${req.url ?? ''}`);
-      res.writeHead(200, { 'content-type': 'text/plain', connection: 'close' });
-      res.end('the local web app');
-    });
-    targetPort = await new Promise<number>((resolve, reject) => {
-      target.once('error', reject);
-      target.listen(0, '127.0.0.1', () => {
-        const address = target.address();
-        resolve(typeof address === 'object' && address !== null ? address.port : 0);
+    beforeAll(async () => {
+      target = createServer((req, res) => {
+        reached.push(`${req.headers.host ?? ''}${req.url ?? ''}`);
+        res.writeHead(200, { 'content-type': 'text/plain', connection: 'close' });
+        res.end('the local web app');
+      });
+      targetPort = await new Promise<number>((resolve, reject) => {
+        target.once('error', reject);
+        target.listen(0, '127.0.0.1', () => {
+          const address = target.address();
+          resolve(typeof address === 'object' && address !== null ? address.port : 0);
+        });
       });
     });
-  });
 
-  afterAll(async () => {
-    for (const proxy of proxies) await proxy.stop();
-    if (target.listening) {
-      await new Promise<void>((resolve) => {
-        target.close(() => resolve());
-      });
-    }
-  });
-
-  /** A proxy that connects for real; only `rebound.example.net` is given a lookup. */
-  const proxyFor = async (reach: HarnessReach): Promise<EgressProxy> => {
-    const proxy = await startEgressProxy({
-      reach,
-      classifier: createLocalAddressClassifier({
-        readInterfaces: () => [PLANTED_INTERFACE, ...machineInterfaceAddresses()],
-      }),
-      lookup: (host) =>
-        host === 'rebound.example.net'
-          ? Promise.resolve([{ address: '127.0.0.1' }])
-          : Promise.reject(new Error(`getaddrinfo ENOTFOUND ${host}`)),
+    afterAll(async () => {
+      for (const proxy of proxies) await proxy.stop();
+      if (target.listening) {
+        await new Promise<void>((resolve) => {
+          target.close(() => resolve());
+        });
+      }
     });
-    proxies.push(proxy);
-    return proxy;
-  };
 
-  const someInterface = machineInterfaceAddresses().find(
-    (address) => !address.startsWith('127.') && address !== '::1' && !address.startsWith('fe80'),
-  );
-  const lan = someInterface?.includes(':') === true ? `[${someInterface}]` : someInterface;
+    /** A proxy that connects for real; only `rebound.example.net` is given a lookup. */
+    const proxyFor = async (reach: HarnessReach): Promise<EgressProxy> => {
+      const proxy = await startEgressProxy({
+        reach,
+        classifier: createLocalAddressClassifier({
+          readInterfaces: () => [PLANTED_INTERFACE, ...machineInterfaceAddresses()],
+        }),
+        lookup: (host) =>
+          host === 'rebound.example.net'
+            ? Promise.resolve([{ address: '127.0.0.1' }])
+            : Promise.reject(new Error(`getaddrinfo ENOTFOUND ${host}`)),
+      });
+      proxies.push(proxy);
+      return proxy;
+    };
 
-  it('reaches the local server by no spelling when no port was declared', async () => {
-    const proxy = await proxyFor({ allowedDomains: REBOUND_ALLOWED, localPorts: [] });
-    const port = String(targetPort);
-    const hosts = [...SELF_SPELLINGS.map(([, host]) => host), ...(lan !== undefined ? [lan] : [])];
-    for (const host of hosts) {
-      const plain = await exchange(proxy.port, get(`http://${host}:${port}/`, `${host}:${port}`));
-      expect(plain, host).toMatch(/^HTTP\/1\.1 403/);
-      const tunnel = await exchange(proxy.port, connectTo(`${host}:${port}`));
-      expect(tunnel, host).toMatch(/^HTTP\/1\.1 403/);
-    }
-    expect(reached).toEqual([]);
-  });
+    const someInterface = machineInterfaceAddresses().find(
+      (address) => !address.startsWith('127.') && address !== '::1' && !address.startsWith('fe80'),
+    );
+    const lan = someInterface?.includes(':') === true ? `[${someInterface}]` : someInterface;
 
-  it('reaches a declared port on 127.0.0.1 and localhost, and not on the LAN address nor another port', async () => {
-    reached.length = 0;
-    const proxy = await proxyFor({ allowedDomains: [], localPorts: [targetPort] });
-    const port = String(targetPort);
-    for (const host of ['127.0.0.1', 'localhost']) {
-      const plain = await exchange(proxy.port, get(`http://${host}:${port}/`, `${host}:${port}`));
-      expect(plain, host).toMatch(/^HTTP\/1\.1 200/);
-      expect(plain, host).toContain('the local web app');
-      const tunnel = await exchange(
-        proxy.port,
-        connectTo(`${host}:${port}`),
-        get('/through-the-tunnel', `${host}:${port}`),
-      );
-      expect(tunnel, host).toMatch(/^HTTP\/1\.1 200 Connection Established/);
-      expect(tunnel, host).toContain('the local web app');
-    }
-    expect(reached).toEqual([
-      `127.0.0.1:${port}/`,
-      `127.0.0.1:${port}/through-the-tunnel`,
-      `localhost:${port}/`,
-      `localhost:${port}/through-the-tunnel`,
-    ]);
+    it('reaches the local server by no spelling when no port was declared', async () => {
+      const proxy = await proxyFor({ allowedDomains: REBOUND_ALLOWED, localPorts: [] });
+      const port = String(targetPort);
+      const hosts = [
+        ...SELF_SPELLINGS.map(([, host]) => host),
+        ...(lan !== undefined ? [lan] : []),
+      ];
+      for (const host of hosts) {
+        const plain = await exchange(proxy.port, get(`http://${host}:${port}/`, `${host}:${port}`));
+        expect(plain, host).toMatch(/^HTTP\/1\.1 403/);
+        const tunnel = await exchange(proxy.port, connectTo(`${host}:${port}`));
+        expect(tunnel, host).toMatch(/^HTTP\/1\.1 403/);
+      }
+      expect(reached).toEqual([]);
+    });
 
-    reached.length = 0;
-    const refusedHosts = [PLANTED_INTERFACE, ...(lan !== undefined ? [lan] : [])];
-    for (const host of refusedHosts) {
-      const plain = await exchange(proxy.port, get(`http://${host}:${port}/`, `${host}:${port}`));
-      expect(plain, host).toMatch(/^HTTP\/1\.1 403/);
-    }
-    const otherPort = String(targetPort === 65_535 ? 1 : targetPort + 1);
-    for (const host of ['127.0.0.1', 'localhost']) {
-      const tunnel = await exchange(proxy.port, connectTo(`${host}:${otherPort}`));
-      expect(tunnel, `${host}:${otherPort}`).toMatch(/^HTTP\/1\.1 403/);
-    }
-    expect(reached).toEqual([]);
-  });
-});
+    it('reaches a declared port on 127.0.0.1 and localhost, and not on the LAN address nor another port', async () => {
+      reached.length = 0;
+      const proxy = await proxyFor({ allowedDomains: [], localPorts: [targetPort] });
+      const port = String(targetPort);
+      for (const host of ['127.0.0.1', 'localhost']) {
+        const plain = await exchange(proxy.port, get(`http://${host}:${port}/`, `${host}:${port}`));
+        expect(plain, host).toMatch(/^HTTP\/1\.1 200/);
+        expect(plain, host).toContain('the local web app');
+        const tunnel = await exchange(
+          proxy.port,
+          connectTo(`${host}:${port}`),
+          get('/through-the-tunnel', `${host}:${port}`),
+        );
+        expect(tunnel, host).toMatch(/^HTTP\/1\.1 200 Connection Established/);
+        expect(tunnel, host).toContain('the local web app');
+      }
+      expect(reached).toEqual([
+        `127.0.0.1:${port}/`,
+        `127.0.0.1:${port}/through-the-tunnel`,
+        `localhost:${port}/`,
+        `localhost:${port}/through-the-tunnel`,
+      ]);
+
+      reached.length = 0;
+      const refusedHosts = [PLANTED_INTERFACE, ...(lan !== undefined ? [lan] : [])];
+      for (const host of refusedHosts) {
+        const plain = await exchange(proxy.port, get(`http://${host}:${port}/`, `${host}:${port}`));
+        expect(plain, host).toMatch(/^HTTP\/1\.1 403/);
+      }
+      const otherPort = String(targetPort === 65_535 ? 1 : targetPort + 1);
+      for (const host of ['127.0.0.1', 'localhost']) {
+        const tunnel = await exchange(proxy.port, connectTo(`${host}:${otherPort}`));
+        expect(tunnel, `${host}:${otherPort}`).toMatch(/^HTTP\/1\.1 403/);
+      }
+      expect(reached).toEqual([]);
+    });
+  },
+);
 
 const onBothLoopbacks = requires(LOOPBACK_LISTENER, IPV6_LOOPBACK_LISTENER);
 
 describe.skipIf(onBothLoopbacks.skip)(
   onBothLoopbacks.title('a dev server listening on ::1 alone, as Vite does on macOS'),
+  { tags: ['listener'] },
   () => {
     let target: Server;
     let targetPort = 0;

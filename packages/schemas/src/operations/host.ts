@@ -78,6 +78,36 @@ export const HostPushApprovalSchema = z
   );
 export type HostPushApproval = z.infer<typeof HostPushApprovalSchema>;
 
+export const HostSandboxPostureSchema = z
+  .enum(['open', 'confined'])
+  .describe(
+    'What network a coding agent and the checks have in this folder. Not whether there is a ' +
+      "sandbox: under both they run inside the machine's sandbox in a detached checkout of the " +
+      "commit, writing the checkout and the run's scratch, where the temporary directory it " +
+      "is handed lives, never the system's `/tmp`, where other runs' scratch lives, never " +
+      "the folder or its `.git`, never reading or writing the machine's host directory, where " +
+      'the policy every gate reads and the pairing credential live, and never reaching the ' +
+      "machine's loopback, where the stack's Redis holds the approvals the push gate reads — " +
+      'so the state the gates stand on is reachable only by the executor. ' +
+      '`open` is the sandbox Claude Code runs under with every domain allowed: every host ' +
+      "but this machine. `confined` is Codex CLI's workspace-write default: no network but " +
+      "the hosts a harness is allowed. Under either the job's loopback is its own on Linux " +
+      'and absent on macOS. Declared on the machine; no workspace can set it.',
+  );
+export type HostSandboxPosture = z.infer<typeof HostSandboxPostureSchema>;
+
+/**
+ * `open` in the local edition: the lane runs the operator's own tool on the
+ * operator's own repository, and what that tool needs from the machine is the
+ * network — its own search and fetch, Corepack and the registry. The sandbox
+ * still withholds the host directory, the operator's folder and its `.git`,
+ * and the machine's loopback under `open`, which is what lets the ref guard,
+ * the scan, the check, the review and the push gate stand: their configuration
+ * and the approvals they read live there. `confined` is the choice for a
+ * repository the operator does not trust.
+ */
+export const HOST_SANDBOX_POSTURE_DEFAULT: HostSandboxPosture = 'open';
+
 /**
  * Tokens in a folder's checks. One program and its arguments; a longer list is
  * a script, and the repository is the place to keep one.
@@ -121,7 +151,7 @@ export const HostChecksSchema = z
   .describe(
     'The command a publication from this folder runs before anything leaves the machine: one ' +
       "argv — a program and its arguments, never a shell line — run from the repository's root " +
-      'in a detached checkout of the commit, under the sandbox a coding agent runs in. Declared ' +
+      "in a detached checkout of the commit, under the folder's sandbox posture. Declared " +
       'by the operator on the machine; no workspace can set it, and no operation takes one.',
   );
 
@@ -249,8 +279,8 @@ export const HostCheckReceiptSchema = z
   .describe(
     'The `receipt` `host.commit.check` returned, verbatim. Issued by the executor on the ' +
       'machine that ran the checks, for one folder, one commit, the base it was measured ' +
-      'against and the checks as the folder declared them — and read only by that executor ' +
-      'until it restarts.',
+      'against, the checks as the folder declared them and the sandbox posture they ran ' +
+      'under — and read only by that executor until it restarts.',
   );
 
 /**
@@ -422,7 +452,8 @@ export const HostProcessExecInputSchema = z.object({
     .describe(
       'Belongs to a push alone. A push from a folder that declares checks is refused unless ' +
         'they passed, on this executor, on exactly the commit it sends, against the base it ' +
-        'measures, as the folder declares them when it pushes. A folder that declares none ' +
+        'measures, as the folder declares them, under the sandbox posture it declares, when it ' +
+        'pushes. A folder that declares none ' +
         'needs no receipt, and a push from it that carries one is refused.',
     ),
 });
@@ -470,6 +501,10 @@ export const HostProcessExecOutputSchema = z.object({
       'Whether the command ran inside the sandbox. A permitted push runs as the ' +
         "operator's own git and does not.",
     ),
+  checkedUnder: HostSandboxPostureSchema.optional().describe(
+    "The sandbox posture the folder's checks ran under, as the push's check receipt says, " +
+      'recorded with the push. Present only on a push from a folder that declares checks.',
+  ),
   boundaryNote: z
     .string()
     .optional()
@@ -1173,6 +1208,10 @@ export const HostBindingInspectOutputSchema = z.object({
       'before pushing, and the checks it runs first and for how long. Absent, the folder ' +
       'pushes nothing.',
   ),
+  sandbox: HostSandboxPostureSchema.describe(
+    'What a coding agent and the checks run under in this folder: the posture the operator ' +
+      'chose, else the default now.',
+  ),
   maxConcurrentHarnessRuns: z
     .number()
     .int()
@@ -1399,8 +1438,24 @@ export const HostCommitCheckOutputSchema = z.object({
     ),
   receipt: HostCheckReceiptSchema.optional().describe(
     'What a push of the commit must carry as `check.receipt`, present wherever the checks ran, ' +
-      'passed or not: it names the folder, the commit, the base, the checks and whether they ' +
-      'passed, and a push takes only one that says they did. Absent where the folder declares ' +
+      'passed or not: it names the folder, the commit, the base, the checks, the posture they ran under, ' +
+      'how many tests that listen on a port of their own they skipped and whether they passed, ' +
+      'and a push takes only one that says they did. Absent where the folder declares ' +
       'none. Valid on this executor only, and only for a day.',
   ),
+  sandbox: HostSandboxPostureSchema.optional().describe(
+    'The sandbox posture the checks ran under, which their `receipt` carries and a push ' +
+      'records. Absent where the folder declares none.',
+  ),
+  skippedListenerTests: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .describe(
+      'How many tests that listen on a port of their own the checks skipped, as they reported ' +
+        'it in the file `AFLOW_CHECK_REPORT` names; the `receipt` carries the same count. Such ' +
+        'a test cannot listen under the sandbox on macOS, and runs in the pull request’s ' +
+        'checks instead. Absent where the checks reported nothing.',
+    ),
 });

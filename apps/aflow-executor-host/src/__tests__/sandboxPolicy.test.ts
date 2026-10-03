@@ -16,6 +16,7 @@ const binding: HostBinding = {
   id: 'hb',
   root: '/Users/probe/projects/demo',
   mode: 'readwrite',
+  allowsExecution: true,
   singleFile: false,
 };
 

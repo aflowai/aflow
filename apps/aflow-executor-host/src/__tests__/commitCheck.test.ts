@@ -28,6 +28,7 @@ import {
 } from '@aflow/schemas';
 
 import type { SandboxedRunInput, SandboxedRunResult } from '../sandboxedRun.js';
+import { compileSandboxPolicy } from '../sandboxPolicy.js';
 import { CONFINEMENT_LISTENERS, requires } from './fixtures/capabilities.js';
 
 const confined = requires(...CONFINEMENT_LISTENERS);
@@ -39,13 +40,18 @@ const CLOCK_SPEEDUP = 1000;
 
 const handed: SandboxedRunInput[] = [];
 let realSandbox = false;
+let sandboxMissing = false;
 
 vi.mock('../sandboxedRun.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../sandboxedRun.js')>();
   return {
     ...actual,
-    sandboxReadiness: () =>
-      realSandbox ? actual.sandboxReadiness() : { ready: true, missing: [] },
+    sandboxReadiness: () => {
+      if (realSandbox) return actual.sandboxReadiness();
+      return sandboxMissing
+        ? { ready: false, missing: ['a sandbox mechanism for this operating system'] }
+        : { ready: true, missing: [] };
+    },
     runSandboxed: async (input: SandboxedRunInput): Promise<SandboxedRunResult> => {
       if (realSandbox) return await actual.runSandboxed(input);
       handed.push(input);
@@ -91,7 +97,7 @@ vi.mock('../sandboxedRun.js', async (importOriginal) => {
 
 const { createHostHandler } = await import('../handlers/hostHandler.js');
 const { noPushApprovals } = await import('./fixtures/pushApprovals.js');
-const { checkTail, createHeadTailBuffer, createTailBuffer, utf8Suffix } =
+const { CHECK_REPORT_ENV, checkTail, createHeadTailBuffer, createTailBuffer, utf8Suffix } =
   await import('../commitCheck.js');
 const { requireCheckedPush } = await import('../checkReceipt.js');
 const actualSandbox =
@@ -124,6 +130,15 @@ const FAILING = nodeCheck(
 );
 
 const HANGING = nodeCheck('setTimeout(() => {}, 60_000);');
+
+/** A check that writes `report` where the lane names its report file, and passes. */
+function reportScript(report: string): string {
+  return `require('fs').writeFileSync(process.env['AFLOW_CHECK_REPORT'], ${JSON.stringify(report)});`;
+}
+
+function reportingSkipped(count: number): string[] {
+  return nodeCheck(reportScript(JSON.stringify({ skippedListenerTests: count })));
+}
 
 /**
  * A server of its own on loopback; then the machine's listener on `machinePort`,
@@ -241,6 +256,7 @@ async function checkouts(repo: string): Promise<string> {
 beforeEach(() => {
   handed.length = 0;
   realSandbox = false;
+  sandboxMissing = false;
 });
 
 describe('host.commit.check — a passing check', () => {
@@ -409,7 +425,7 @@ describe('host.commit.check — the receipt it leaves for the push', () => {
     const { receipt } = HostCommitCheckOutputSchema.parse(captured.output);
     expect(receipt).toBeDefined();
     const pushed = { bindingId: 'hb_app', sha: world.sha, base: world.base, receipt };
-    expect(() => requireCheckedPush({ ...pushed, argv: REPORTING })).not.toThrow();
+    expect(() => requireCheckedPush({ ...pushed, argv: REPORTING, posture: 'open' })).not.toThrow();
   });
 
   it('says so where they failed, and a push takes it for nothing', async () => {
@@ -424,9 +440,60 @@ describe('host.commit.check — the receipt it leaves for the push', () => {
         base: world.base,
         argv: FAILING,
         receipt,
+        posture: 'open',
       }),
     ).toThrow(expect.objectContaining({ refusal: 'check_failed' }));
   });
+
+  it.each(['open', 'confined'] as const)(
+    'carries the posture the checks ran under, `%s`, in the result and the receipt, and the push gate answers it',
+    async (sandbox) => {
+      const world = await fixture({ branchPrefix: 'aflow/', checks: REPORTING }, { sandbox });
+      const { captured } = await check(world);
+      const output = HostCommitCheckOutputSchema.parse(captured.output);
+      expect(handed.map((input) => input.posture)).toEqual([sandbox]);
+      expect(output.sandbox).toBe(sandbox);
+      expect(JSON.parse(receiptBody(output.receipt ?? '')) as unknown[]).toContain(sandbox);
+      const pushed = { bindingId: 'hb_app', sha: world.sha, base: world.base };
+      expect(
+        requireCheckedPush({
+          ...pushed,
+          argv: REPORTING,
+          receipt: output.receipt,
+          posture: sandbox,
+        }),
+      ).toBe(sandbox);
+    },
+  );
+
+  it.each([
+    ['open', 'confined'],
+    ['confined', 'open'],
+  ] as const)(
+    'clears no push once the folder has moved from `%s` to `%s` since its checks ran',
+    async (ranUnder, now) => {
+      const world = await fixture(
+        { branchPrefix: 'aflow/', checks: REPORTING },
+        { sandbox: ranUnder },
+      );
+      const { captured } = await check(world);
+      const { receipt } = HostCommitCheckOutputSchema.parse(captured.output);
+      const push = {
+        bindingId: 'hb_app',
+        sha: world.sha,
+        base: world.base,
+        argv: REPORTING,
+        receipt,
+        posture: now,
+      };
+      expect(() => requireCheckedPush(push)).toThrow(
+        expect.objectContaining({ refusal: 'check_other_posture' }),
+      );
+      expect(() => requireCheckedPush(push)).toThrow(
+        `\`hb_app\` runs its checks \`${now}\`, and its check receipt is for checks run \`${ranUnder}\``,
+      );
+    },
+  );
 
   it('carries nothing of what the checks printed, nor the command itself', async () => {
     const world = await fixture({ branchPrefix: 'aflow/', checks: FAILING });
@@ -440,12 +507,106 @@ describe('host.commit.check — the receipt it leaves for the push', () => {
       world.base,
       expect.any(String),
       'failed',
+      'open',
+      null,
       expect.any(Number),
     ]);
     expect(body).not.toContain('step one ok');
     expect(body).not.toContain('FAIL tsc');
     expect(body).not.toContain(process.execPath);
     expect(body).not.toContain(output.tail);
+  });
+
+  it('carries the count of listener tests the checks reported skipping, in the result and the receipt', async () => {
+    const world = await fixture({ branchPrefix: 'aflow/', checks: reportingSkipped(10) });
+    const { captured } = await check(world);
+    const output = HostCommitCheckOutputSchema.parse(captured.output);
+    expect(handed[0]?.trustedEnv?.[CHECK_REPORT_ENV]).toBe(
+      join(handed[0]?.scratchDir ?? '', 'check-report.json'),
+    );
+    expect(output.passed, output.summary).toBe(true);
+    expect(output.skippedListenerTests).toBe(10);
+    const fields = JSON.parse(receiptBody(output.receipt ?? '')) as unknown[];
+    expect(fields.slice(5, 7)).toEqual(['open', 10]);
+    expect(() =>
+      requireCheckedPush({
+        bindingId: 'hb_app',
+        sha: world.sha,
+        base: world.base,
+        argv: reportingSkipped(10),
+        receipt: output.receipt,
+        posture: 'open',
+      }),
+    ).not.toThrow();
+  });
+
+  it('records no count where the checks reported none, or reported one it cannot read', async () => {
+    for (const checks of [REPORTING, nodeCheck(reportScript('{"skippedListenerTests":-1}'))]) {
+      handed.length = 0;
+      const world = await fixture({ branchPrefix: 'aflow/', checks });
+      const output = HostCommitCheckOutputSchema.parse((await check(world)).captured.output);
+      expect(output.skippedListenerTests).toBeUndefined();
+      expect((JSON.parse(receiptBody(output.receipt ?? '')) as unknown[])[6]).toBeNull();
+    }
+  });
+});
+
+describe("host.commit.check — the folder's sandbox posture", () => {
+  function compiled(input: SandboxedRunInput): ReturnType<typeof compileSandboxPolicy> {
+    return compileSandboxPolicy(input.binding, {
+      scratchDir: input.scratchDir,
+      ...(input.widening !== undefined ? { widening: input.widening } : {}),
+    });
+  }
+
+  it('runs an `open` folder’s checks in the sandbox under the open launcher, writing only the checkout and the scratch its temporary directory is in', async () => {
+    const world = await fixture({ branchPrefix: 'aflow/', checks: REPORTING }, { sandbox: 'open' });
+    const { result } = await check(world);
+    expect(result.status).toBe('SUCCEEDED');
+    const input = handed[0];
+    if (input === undefined) throw new Error('the check was not handed to the sandbox');
+    expect(input.posture).toBe('open');
+    expect(input.cwd).not.toBe(world.repo);
+    expect(input.widening).toMatchObject({ writableRoot: input.cwd, withholdBindingWrite: true });
+    const policy = compiled(input);
+    expect(policy.network).toEqual({ allowedDomains: [], deniedDomains: [] });
+    expect(JSON.stringify(policy)).not.toContain('allowLocalBinding');
+    expect(policy.filesystem.allowWrite).toEqual([input.scratchDir, input.cwd]);
+  });
+
+  it('takes the default, `open`, for a folder that chose none', async () => {
+    const world = await fixture(
+      { branchPrefix: 'aflow/', checks: REPORTING },
+      { sandbox: undefined },
+    );
+    await check(world);
+    expect(handed.map((input) => input.posture)).toEqual(['open']);
+  });
+
+  it('refuses a folder’s checks on a machine with no qualified sandbox, under either posture', async () => {
+    sandboxMissing = true;
+    for (const sandbox of ['open', 'confined'] as const) {
+      const world = await fixture({ branchPrefix: 'aflow/', checks: REPORTING }, { sandbox });
+      const refused = await check(world);
+      expect(refused.result.status).toBe('FAILED');
+      expect(JSON.stringify(refused.captured.output)).toContain('no qualified sandbox');
+    }
+    expect(handed).toHaveLength(0);
+  });
+
+  it('keeps a `confined` folder’s loopback and egress closed, writing what an `open` one writes', async () => {
+    const world = await fixture(
+      { branchPrefix: 'aflow/', checks: REPORTING },
+      { sandbox: 'confined' },
+    );
+    await check(world);
+    const input = handed[0];
+    if (input === undefined) throw new Error('the check was not handed to the sandbox');
+    expect(input.posture).toBe('confined');
+    const policy = compiled(input);
+    expect(policy.network).toEqual({ allowedDomains: [], deniedDomains: [] });
+    expect(JSON.stringify(policy)).not.toContain('allowLocalBinding');
+    expect(policy.filesystem.allowWrite).toEqual([input.scratchDir, input.cwd]);
   });
 });
 
@@ -540,45 +701,58 @@ describe('what a check’s output keeps', () => {
 /** Only where this machine can actually confine a process, as `processExec.test.ts` gates. */
 const CAN_CONFINE = actualSandbox.sandboxReadiness().ready;
 
-describe.skipIf(!CAN_CONFINE)('host.commit.check — through the real sandbox', () => {
-  it.skipIf(confined.skip)(
-    confined.title('runs a passing check confined, and a failing one to its failure'),
-    async () => {
-      realSandbox = true;
-      const passing = await fixture({ branchPrefix: 'aflow/', checks: REPORTING });
-      const passed = await check(passing);
-      const output = HostCommitCheckOutputSchema.parse(passed.captured.output);
-      expect(output.passed, output.summary).toBe(true);
-      expect(output.tail).toContain(passing.sha);
-
-      const failing = await fixture({ branchPrefix: 'aflow/', checks: FAILING });
-      const failed = await check(failing);
-      expect(HostCommitCheckOutputSchema.parse(failed.captured.output).passed).toBe(false);
-      realSandbox = false;
-    },
-  );
-
-  it.skipIf(confined.skip)(
-    confined.title(
-      'reaches neither the machine’s loopback nor anything off it, and its own loopback only where the sandbox has one',
-    ),
-    async () => {
-      const machine = createServer((socket) => socket.end('pong'));
-      await new Promise<void>((resolve) => machine.listen(0, '127.0.0.1', resolve));
-      const { port } = machine.address() as AddressInfo;
-      try {
+describe.skipIf(!CAN_CONFINE)(
+  'host.commit.check — through the real sandbox',
+  { tags: ['listener'] },
+  () => {
+    it.skipIf(confined.skip)(
+      confined.title('runs a passing check confined, and a failing one to its failure'),
+      async () => {
         realSandbox = true;
-        const world = await fixture({ branchPrefix: 'aflow/', checks: loopbackAndEgress(port) });
-        const output = HostCommitCheckOutputSchema.parse((await check(world)).captured.output);
-        realSandbox = false;
+        const passing = await fixture(
+          { branchPrefix: 'aflow/', checks: REPORTING },
+          { sandbox: 'confined' },
+        );
+        const passed = await check(passing);
+        const output = HostCommitCheckOutputSchema.parse(passed.captured.output);
         expect(output.passed, output.summary).toBe(true);
-        expect(output.tail).toMatch(/machine E[A-Z]+/);
-        expect(output.tail).toMatch(/egress E[A-Z]+/);
-        if (process.platform === 'linux') expect(output.tail).toContain('own pong');
-        else expect(output.tail).toMatch(/own E[A-Z]+/);
-      } finally {
-        machine.close();
-      }
-    },
-  );
-});
+        expect(output.tail).toContain(passing.sha);
+
+        const failing = await fixture(
+          { branchPrefix: 'aflow/', checks: FAILING },
+          { sandbox: 'confined' },
+        );
+        const failed = await check(failing);
+        expect(HostCommitCheckOutputSchema.parse(failed.captured.output).passed).toBe(false);
+        realSandbox = false;
+      },
+    );
+
+    it.skipIf(confined.skip)(
+      confined.title(
+        'reaches neither the machine’s loopback nor anything off it, and its own loopback only where the sandbox has one',
+      ),
+      async () => {
+        const machine = createServer((socket) => socket.end('pong'));
+        await new Promise<void>((resolve) => machine.listen(0, '127.0.0.1', resolve));
+        const { port } = machine.address() as AddressInfo;
+        try {
+          realSandbox = true;
+          const world = await fixture(
+            { branchPrefix: 'aflow/', checks: loopbackAndEgress(port) },
+            { sandbox: 'confined' },
+          );
+          const output = HostCommitCheckOutputSchema.parse((await check(world)).captured.output);
+          realSandbox = false;
+          expect(output.passed, output.summary).toBe(true);
+          expect(output.tail).toMatch(/machine E[A-Z]+/);
+          expect(output.tail).toMatch(/egress E[A-Z]+/);
+          if (process.platform === 'linux') expect(output.tail).toContain('own pong');
+          else expect(output.tail).toMatch(/own E[A-Z]+/);
+        } finally {
+          machine.close();
+        }
+      },
+    );
+  },
+);

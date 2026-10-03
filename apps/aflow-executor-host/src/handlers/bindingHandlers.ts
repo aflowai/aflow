@@ -1,6 +1,7 @@
 /**
- * A connected folder's push posture and checks, and how many coding agents its
- * machine runs at once, read from the policy file on this machine.
+ * A connected folder's push posture, checks and sandbox posture, and how many
+ * coding agents its machine runs at once, read from the policy file on this
+ * machine.
  *
  * Read here rather than from the workspace's copy because both are only ever
  * declared here. Nothing in the folder is touched, so a file-only binding
@@ -22,6 +23,7 @@ import {
 import type { z } from 'zod';
 
 import { HostBindingError, loadHostPolicy, requireBinding, requireSpace } from '../bindings.js';
+import { sandboxPostureOf } from '../sandboxPosture.js';
 
 type HostBindingInspectOutput = z.infer<typeof HostBindingInspectOutputSchema>;
 
@@ -40,6 +42,7 @@ async function inspect(ctx: ExecutorContext, policyPath: string): Promise<StepRe
       ...(binding.branchPolicy !== undefined
         ? { branchPolicy: resolveBranchPolicy(binding.branchPolicy) }
         : {}),
+      sandbox: sandboxPostureOf(binding),
       maxConcurrentHarnessRuns: policy.maxConcurrentHarnessRuns,
     };
     return await successWithData(ctx, output);

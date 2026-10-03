@@ -1,7 +1,8 @@
 /**
  * A step still waiting for its operation's slot when claiming stops is given
- * back to its stream. It was already STARTED, so its in-flight record is
- * written just before — a lapsed one is a stall to the watchdog — and then
+ * back to its stream. It is still SCHEDULED, and the watchdog reads its
+ * in-flight record as this executor's claim, so the record is written just
+ * before — a lapsed one is a stall once the pickup grace has passed — and then
  * only extended until this process stops, so the record a next executor writes
  * is never replaced.
  */

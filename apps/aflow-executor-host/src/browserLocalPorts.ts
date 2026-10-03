@@ -7,6 +7,10 @@
  * requests. Declaring that port is allowed — it is the operator's machine —
  * but never without being told.
  */
+import { BAKED_API_PORT } from '@aflow/lib/appliance-bundle';
+
+const APPLIANCE_API_PORT_DEFAULT = Number(BAKED_API_PORT);
+const APPLIANCE_WEB_PORT_DEFAULT = 3001;
 
 /**
  * Where the appliance answers, as far as this machine can tell. The host
@@ -15,8 +19,8 @@
  */
 export function appliancePorts(env: NodeJS.ProcessEnv): Map<number, string> {
   const ports = new Map<number, string>([
-    [3000, "the appliance's API port by default"],
-    [3001, "the appliance's web port by default"],
+    [APPLIANCE_API_PORT_DEFAULT, "the appliance's API port by default"],
+    [APPLIANCE_WEB_PORT_DEFAULT, "the appliance's web port by default"],
   ]);
   const api = env['AFLOW_API_URL']?.trim();
   if (api !== undefined && api !== '' && URL.canParse(api)) {

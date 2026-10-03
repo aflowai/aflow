@@ -70,6 +70,7 @@ import {
 } from './harnessSessions.js';
 import { discardNow, openOrphanJournal, reapOrphans } from './orphans.js';
 import { resolveHostPolicyPath } from './hostDir.js';
+import { reportOpenPostureSelfTest } from './openPostureSelfTest.js';
 import { loadPairedEnv } from './pairedEnv.js';
 import { followPolicy, watchPolicy } from './policyWatch.js';
 import { killAllProcesses, killProcessesForBinding, reapWithdrawn } from './sandboxedRun.js';
@@ -190,6 +191,8 @@ async function main(): Promise<void> {
       count: reaped,
     });
   }
+  // Not awaited: Corepack may fetch a Yarn, and no job waits on the answer.
+  void reportOpenPostureSelfTest(log);
   const handoffs = await startHandoffBoard({
     redis,
     subscriber: hostChannels,
