@@ -3,17 +3,13 @@
  * declared image is read from the step's output, carried on its tool result,
  * converted for the request, and at the client's choke point either read from
  * the payload store and shown to a model with vision, or reduced to its
- * description for one without. Everything but the provider is the real code;
- * the stored form and the image are what `browser.page.screenshot` writes
+ * description for one without. Everything up to the provider's SDK is the real
+ * code, the adapters included; the stored form and the image are what
+ * `browser.page.screenshot` writes
  * (`apps/aflow-executor-host/src/__tests__/browserScreenshot.test.ts`).
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  createAIClient,
-  type ChatMessage,
-  type GenerateTextRequest,
-  type GenerateTextResponse,
-} from '@aflow/ai-client';
+import { createAIClient, type ChatMessage, type GenerateTextRequest } from '@aflow/ai-client';
 import type { ExecutorContext } from '@aflow/executor-runtime';
 import { createMemoryPayloadStore } from '@aflow/payload-store';
 import {
@@ -29,29 +25,47 @@ import {
 import { aiMessageToChatMessage } from './agentMessageConversion.js';
 import { toolImageResolver } from './mediaSourceRef.js';
 
-const seen: GenerateTextRequest[] = [];
+// The SDKs, not the adapters' files: `@aflow/ai-client` resolves to its source
+// or to its bundle depending on how the runner is configured, and a path into
+// `src/providers` matches only the first, which sent these requests to the
+// real providers.
+const { sent } = vi.hoisted(() => ({ sent: [] as Array<Record<string, unknown>> }));
 
-function recordingAdapter(provider: 'anthropic' | 'fireworks') {
-  return {
-    provider,
-    generateText: (request: GenerateTextRequest): Promise<GenerateTextResponse> => {
-      seen.push(request);
-      return Promise.resolve({
-        content: 'ok',
-        finishReason: 'stop',
-        usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
-        model: 'stub',
-        provider,
-      });
-    },
-  };
-}
-
-vi.mock('../../../../../../packages/ai-client/src/providers/anthropic.js', () => ({
-  createAnthropicAdapter: () => recordingAdapter('anthropic'),
+vi.mock('@anthropic-ai/sdk', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  default: class {
+    messages = {
+      create: (params: Record<string, unknown>) => {
+        sent.push(params);
+        return Promise.resolve({
+          content: [{ type: 'text', text: 'ok' }],
+          stop_reason: 'end_turn',
+          usage: { input_tokens: 1, output_tokens: 1 },
+          model: 'stub',
+        });
+      },
+    };
+  },
 }));
-vi.mock('../../../../../../packages/ai-client/src/providers/fireworks.js', () => ({
-  createFireworksAdapter: () => recordingAdapter('fireworks'),
+
+vi.mock('openai', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  default: class {
+    chat = {
+      completions: {
+        create: (params: Record<string, unknown>) => {
+          sent.push(params);
+          return Promise.resolve({
+            choices: [
+              { index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' },
+            ],
+            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+            model: 'stub',
+          });
+        },
+      },
+    };
+  },
 }));
 
 const VISION_MODEL = 'claude-sonnet-5';
@@ -135,20 +149,28 @@ async function nextTurn() {
   return { messages, ctx, ref: step.ref };
 }
 
-function toolParts(request: GenerateTextRequest) {
-  const tool = request.messages.find((message) => message.role === 'tool');
-  if (tool === undefined || typeof tool.content === 'string') {
-    throw new Error('expected the tool result with parts');
-  }
-  return tool.content;
+interface WireBlock {
+  type: string;
+  tool_use_id?: string;
+  content?: unknown;
+}
+
+/** The content of the Anthropic `tool_result` block answering call `c1`. */
+function anthropicToolResult(params: Record<string, unknown>): unknown[] {
+  const messages = params['messages'] as Array<{ role: string; content: unknown }>;
+  const block = messages
+    .flatMap((message) => (Array.isArray(message.content) ? (message.content as WireBlock[]) : []))
+    .find((candidate) => candidate.type === 'tool_result' && candidate.tool_use_id === 'c1');
+  if (!Array.isArray(block?.content)) throw new Error('expected the tool result with parts');
+  return block.content as unknown[];
 }
 
 describe('a screenshot on the next agent turn', () => {
   beforeEach(() => {
-    seen.length = 0;
+    sent.length = 0;
   });
 
-  it('reaches a model with vision as an image part holding the stored bytes', async () => {
+  it('reaches a model with vision as an image block holding the stored bytes', async () => {
     const { messages, ctx, ref } = await nextTurn();
     await createAIClient({ providers: { anthropic: {} } }).generateText({
       model: VISION_MODEL,
@@ -156,18 +178,17 @@ describe('a screenshot on the next agent turn', () => {
       resolveToolImage: toolImageResolver(ctx),
     } as GenerateTextRequest);
 
-    const parts = toolParts(seen.at(-1)!);
-    expect(parts.filter((part) => part.type === 'image')).toEqual([
-      {
-        type: 'image',
-        source: { type: 'base64', mediaType: 'image/png', data: PNG.toString('base64') },
-      },
-    ]);
-    expect(parts).toContainEqual({
+    expect(sent).toHaveLength(1);
+    const content = anthropicToolResult(sent[0]!);
+    expect(content).toContainEqual({
+      type: 'image',
+      source: { type: 'base64', media_type: 'image/png', data: PNG.toString('base64') },
+    });
+    expect(content).toContainEqual({
       type: 'text',
       text: `Image 1280×800 image/png: ${DESCRIPTION}`,
     });
-    expect(JSON.stringify(seen.at(-1)!.messages)).not.toContain(ref);
+    expect(JSON.stringify(sent[0])).not.toContain(ref);
   });
 
   it('reaches a model without vision as its description and size, reading nothing', async () => {
@@ -179,13 +200,17 @@ describe('a screenshot on the next agent turn', () => {
       resolveToolImage: toolImageResolver(ctx),
     } as GenerateTextRequest);
 
-    const parts = toolParts(seen.at(-1)!);
-    expect(parts.some((part) => part.type === 'image' || part.type === 'image_ref')).toBe(false);
-    expect(parts).toContainEqual({
-      type: 'text',
-      text: `[Image not shown — this model does not take images. 1280×800 image/png: ${DESCRIPTION}]`,
-    });
+    expect(sent).toHaveLength(1);
+    const wire = JSON.stringify(sent[0]);
+    const tool = (sent[0]!['messages'] as Array<{ role: string; content: unknown }>).find(
+      (message) => message.role === 'tool',
+    );
+    expect(tool?.content).toContain(
+      `[Image not shown — this model does not take images. 1280×800 image/png: ${DESCRIPTION}]`,
+    );
+    expect(wire).not.toContain('image_url');
+    expect(wire).not.toContain(PNG.toString('base64'));
     expect(readPayload).not.toHaveBeenCalled();
-    expect(JSON.stringify(seen.at(-1)!.messages)).not.toContain(ref);
+    expect(wire).not.toContain(ref);
   });
 });
