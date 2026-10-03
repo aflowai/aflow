@@ -37,10 +37,11 @@ const LocalMcpAuthJsonSchema = z
     defaultSpaceId: z.string().optional(),
     /**
      * What a session presents (`Authorization: Bearer <token>`) to be given the
-     * key. Empty is not set: the example carries it so, and `yarn mcp:setup`
-     * generates one wherever it is.
+     * key. Absent or empty is not set, which is refused by name rather than as
+     * an unreadable file: the example carries it empty, files written before it
+     * existed lack it, and `yarn mcp:setup` generates one for either.
      */
-    sessionToken: z.string(),
+    sessionToken: z.string().optional(),
     user: z
       .object({
         email: z.string(),
@@ -197,7 +198,7 @@ export class AuthManager {
       }
 
       const j = parsed.data;
-      if (j.sessionToken === '') {
+      if (j.sessionToken === undefined || j.sessionToken === '') {
         log('warn', 'local_auth_token_unset', { path: absolute });
         return { accepted: false, reason: NO_SESSION_TOKEN_REFUSAL };
       }

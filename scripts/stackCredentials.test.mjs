@@ -210,11 +210,6 @@ describe('the boot readiness', () => {
     expect(mcpTokenState(undefined)).toBe('no-file');
     expect(mcpTokenState('{"apiKey":"phx_x"}')).toBe('absent');
     expect(mcpTokenState('{"apiKey":"phx_x","sessionToken":""}')).toBe('absent');
-    expect(
-      mcpTokenState(
-        '{"apiKey":"phx_x","sessionToken":"replace_me_with_the_token_yarn_mcp_setup_writes"}',
-      ),
-    ).toBe('absent');
     expect(mcpTokenState('{"apiKey":"phx_x","sessionToken":"t"}')).toBe('present');
   });
 

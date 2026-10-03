@@ -21,7 +21,6 @@ import type { McpServerConfig } from '../config.js';
 import {
   CREDENTIAL_LESS_REFUSAL,
   NO_SESSION_TOKEN_REFUSAL,
-  UNREADABLE_AUTH_FILE_REFUSAL,
   WRONG_TOKEN_REFUSAL,
   admitRequest,
   requestGatePolicy,
@@ -169,7 +168,8 @@ describe('the owner’s key, from the local auth file', () => {
     expect(s.auth.apiKey).toBeUndefined();
   });
 
-  it('is given to nobody from a file with no session token', () => {
+  /** A file written before session tokens has no such field; it is unset, not unreadable. */
+  it('is given to nobody from a file with no session token, and says how to set one up', () => {
     const dir = mkdtempSync(join(tmpdir(), 'mcp-auth-'));
     try {
       const file = join(dir, 'mcp.local.json');
@@ -179,7 +179,9 @@ describe('the owner’s key, from the local auth file', () => {
         s,
         admitted({ authorization: 'Bearer anything' }),
       );
-      expect(outcome).toMatchObject({ accepted: false, reason: UNREADABLE_AUTH_FILE_REFUSAL });
+      expect(outcome).toMatchObject({ accepted: false, reason: NO_SESSION_TOKEN_REFUSAL });
+      if (outcome.accepted) throw new Error('expected a refusal');
+      expect(outcome.reason).toContain('yarn mcp:setup');
       expect(s.auth.apiKey).toBeUndefined();
     } finally {
       rmSync(dir, { recursive: true, force: true });

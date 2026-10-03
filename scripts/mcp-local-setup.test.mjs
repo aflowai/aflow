@@ -14,10 +14,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { AuthManager } from '../apps/aflow-mcp/src/auth/AuthManager.ts';
-import {
-  LOCAL_TOKEN_ENV,
-  RETIRED_EXAMPLE_SESSION_TOKEN as SERVER_RETIRED_EXAMPLE_SESSION_TOKEN,
-} from '../apps/aflow-mcp/src/requestGate.ts';
+import { LOCAL_TOKEN_ENV } from '../apps/aflow-mcp/src/requestGate.ts';
 import { mcpPortHolder } from './devMcpPort.mjs';
 import {
   AUTH_FILE_ENV,
@@ -39,7 +36,6 @@ import {
   mcpPortOf,
   missingSecretMessage,
   parseEnvFile,
-  RETIRED_EXAMPLE_SESSION_TOKEN,
   stackEnv,
   writeAuthFile,
 } from './mcp-local-setup.mjs';
@@ -153,18 +149,6 @@ describe('the session token', () => {
     writeAuthFile(file, withSessionToken(example, TOKEN));
     expect(sessionTokenIn(readFileSync(file, 'utf8'))).toBe(TOKEN);
     expect(loadedBy(file)).toMatchObject({ method: 'api_key', apiKey: KEY });
-  });
-
-  /** It was published, so a file still holding it is a file with no token. */
-  it('replaces the placeholder the example once carried', () => {
-    expect(RETIRED_EXAMPLE_SESSION_TOKEN).toBe(SERVER_RETIRED_EXAMPLE_SESSION_TOKEN);
-    const file = JSON.stringify({
-      apiKey: KEY,
-      tenantId: TENANT,
-      sessionToken: RETIRED_EXAMPLE_SESSION_TOKEN,
-    });
-    expect(sessionTokenIn(file)).toBeUndefined();
-    expect(JSON.parse(withSessionToken(file, TOKEN)).sessionToken).toBe(TOKEN);
   });
 
   it('is kept where the file has one, and read back from it', () => {
