@@ -97,8 +97,9 @@ the check on Linux and cannot listen on macOS, where the check leaves it out (ab
 both, each job writes a temporary directory of its own, where a shell records its working
 directory after every command, and not the system's `/tmp`, where other jobs' checkouts
 live; it writes its checkout and nothing of the folder or its `.git`, and cannot read or
-write `~/.aflow/`, where the policy every gate reads and the pairing credential live. Agent
-configuration files such as `.mcp.json` stay protected under both. The executor's boot log
+write `~/.aflow/`, where the policy every gate reads and the pairing credential live. A
+change to `.mcp.json` is made by hand, because the sandbox refuses the coding agent writes to
+agent-configuration files in its checkout (F104). The executor's boot log
 says whether a shell command and `yarn --version` work under `open` on this machine, and
 whether a listener on the machine's loopback stays out of reach.
 Choose on the machine with `aflow harness sandbox <folder> open|confined`; `hb_aflow` chose

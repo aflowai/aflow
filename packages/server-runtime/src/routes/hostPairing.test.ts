@@ -81,6 +81,34 @@ describe('pairing a machine', () => {
     expect(body.redisPassword).toBe('host-password');
   });
 
+  /** The development stack names its own URL here, password and all. */
+  it('hands back the Redis address without the stack’s own credential', async () => {
+    process.env['PHOENIX_HOST_REDIS_URL'] = 'redis://:stack-password@127.0.0.1:6379';
+    try {
+      const body = JSON.parse((await pair(await buildApp())).body) as { redisUrl: string };
+      expect(body.redisUrl).toBe('redis://127.0.0.1:6379');
+    } finally {
+      delete process.env['PHOENIX_HOST_REDIS_URL'];
+    }
+  });
+
+  it.each([
+    ['unparseable', 'redis://:stack-password@[127.0.0.1:6379'],
+    ['schemeless', 'localhost:6379'],
+  ])('refuses an %s Redis address by name, pairing nothing', async (_kind, configured) => {
+    process.env['PHOENIX_HOST_REDIS_URL'] = configured;
+    try {
+      const response = await pair(await buildApp());
+
+      expect(response.statusCode).toBe(503);
+      expect(JSON.parse(response.body).message).toContain('PHOENIX_HOST_REDIS_URL');
+      expect(response.body).not.toContain('stack-password');
+      expect(mocks.call).not.toHaveBeenCalled();
+    } finally {
+      delete process.env['PHOENIX_HOST_REDIS_URL'];
+    }
+  });
+
   /**
    * The failure this replaces: a password for an identity that does not exist
    * authenticates nowhere, and reporting success sends the operator to a daemon

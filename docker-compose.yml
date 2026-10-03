@@ -1,7 +1,7 @@
 # =============================================================================
 # Aflow Platform - Local Development Infrastructure
 # =============================================================================
-# Start with: docker compose up -d
+# Start with: yarn infra:up
 # Stop with:  docker compose down
 # Reset data: docker compose down -v
 #
@@ -38,17 +38,31 @@ services:
   # ---------------------------------------------------------------------------
   # Redis (Streams + Pub/Sub + Hot State)
   # ---------------------------------------------------------------------------
+  # The password is the one REDIS_URL in .env carries; `yarn infra:up` passes it
+  # here as AFLOW_DEV_REDIS_PASSWORD (scripts/infra.mjs). It holds the write
+  # approvals the push gate reads, so it never starts without one.
   redis:
     image: redis:7-alpine
     container_name: aflow-redis
     restart: unless-stopped
     ports:
-      - '6379:6379'
+      - '127.0.0.1:6379:6379'
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes
+    environment:
+      AFLOW_DEV_REDIS_PASSWORD: ${AFLOW_DEV_REDIS_PASSWORD:-}
+    command:
+      - sh
+      - -c
+      - |
+        if [ -z "$$AFLOW_DEV_REDIS_PASSWORD" ]; then
+          echo 'Redis not started: REDIS_URL in .env carries no password. Run yarn redis:password.' >&2
+          exit 1
+        fi
+        exec docker-entrypoint.sh redis-server --appendonly yes --requirepass "$$AFLOW_DEV_REDIS_PASSWORD"
     healthcheck:
-      test: ['CMD', 'redis-cli', 'ping']
+      test:
+        ['CMD-SHELL', 'REDISCLI_AUTH="$$AFLOW_DEV_REDIS_PASSWORD" redis-cli ping | grep -q PONG']
       interval: 5s
       timeout: 5s
       retries: 5
@@ -56,14 +70,18 @@ services:
   # ---------------------------------------------------------------------------
   # Redis Commander (Optional - Web UI for Redis)
   # ---------------------------------------------------------------------------
+  # Behind the Redis password, as user aflow: a browser on this machine that
+  # reached it without one would hold everything the password guards.
   redis-commander:
     image: rediscommander/redis-commander:latest
     container_name: aflow-redis-ui
     restart: unless-stopped
     environment:
-      REDIS_HOSTS: local:redis:6379
+      REDIS_HOSTS: local:redis:6379:0:${AFLOW_DEV_REDIS_PASSWORD:-}
+      HTTP_USER: aflow
+      HTTP_PASSWORD: ${AFLOW_DEV_REDIS_PASSWORD:-}
     ports:
-      - '8081:8081'
+      - '127.0.0.1:8081:8081'
     depends_on:
       redis:
         condition: service_healthy
@@ -73,18 +91,20 @@ services:
   # ---------------------------------------------------------------------------
   # pgAdmin (Optional - Web UI for PostgreSQL)
   # ---------------------------------------------------------------------------
+  # Server mode, which asks for a login: the Redis password. pgAdmin sets its
+  # login once, when it creates its volume, so the volume is named for the
+  # login it holds; one created under the old fixed login is left unused.
   pgadmin:
     image: dpage/pgadmin4:latest
     container_name: aflow-pgadmin
     restart: unless-stopped
     environment:
       PGADMIN_DEFAULT_EMAIL: admin@phoenix.dev
-      PGADMIN_DEFAULT_PASSWORD: admin
-      PGADMIN_CONFIG_SERVER_MODE: 'False'
+      PGADMIN_DEFAULT_PASSWORD: ${AFLOW_DEV_REDIS_PASSWORD:-}
     ports:
-      - '8080:80'
+      - '127.0.0.1:8080:80'
     volumes:
-      - pgadmin_data:/var/lib/pgadmin
+      - pgadmin_login:/var/lib/pgadmin
     depends_on:
       postgres:
         condition: service_healthy
@@ -94,16 +114,17 @@ services:
 volumes:
   postgres_data:
   redis_data:
-  pgadmin_data:
+  pgadmin_login:
 
 # =============================================================================
 # Usage:
 #
-# Start core services:
-#   docker compose up -d
+# Start core services (with the Redis password from REDIS_URL in .env):
+#   yarn infra:up
 #
-# Start with admin tools (pgAdmin + Redis Commander):
-#   docker compose --profile tools up -d
+# Start with admin tools (pgAdmin + Redis Commander, on 127.0.0.1, logging in
+# with the Redis password):
+#   yarn infra:tools
 #
 # View logs:
 #   docker compose logs -f postgres redis
@@ -112,6 +133,6 @@ volumes:
 #   psql postgres://phoenix:phoenix@localhost:5432/phoenix
 #
 # Connect to Redis:
-#   redis-cli -h localhost -p 6379
+#   redis-cli -u "$REDIS_URL"
 #
 # =============================================================================

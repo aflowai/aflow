@@ -5,16 +5,25 @@
  * and holds no directory configuration of its own:
  * - API key (`Bearer phx_...`), forwarded upstream
  * - Bearer token, forwarded upstream verbatim and never refreshed
- * - Dev-only JSON file (AFLOW_MCP_LOCAL_AUTH_JSON — disabled in production)
+ * - Dev-only JSON file (AFLOW_MCP_LOCAL_AUTH_JSON — disabled in production),
+ *   given only to a session that presents the file's own session token
  * - Dev bypass, which sends no credential at all and therefore only reaches a
  *   stack that has one to spare
  */
 
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { z } from 'zod';
 import type { McpServerConfig } from '../config.js';
-import type { AdmittedHeaders } from '../requestGate.js';
+import {
+  CREDENTIAL_LESS_REFUSAL,
+  NO_SESSION_TOKEN_REFUSAL,
+  UNREADABLE_AUTH_FILE_REFUSAL,
+  WRONG_TOKEN_REFUSAL,
+  presentedBearer,
+  type AdmittedHeaders,
+} from '../requestGate.js';
 import type { Session } from './SessionStore.js';
 import { log } from '../util/logger.js';
 
@@ -26,6 +35,12 @@ const LocalMcpAuthJsonSchema = z
     tokenExpiresAt: z.number().optional(),
     tenantId: z.string().optional(),
     defaultSpaceId: z.string().optional(),
+    /**
+     * What a session presents (`Authorization: Bearer <token>`) to be given the
+     * key. Empty is not set: the example carries it so, and `yarn mcp:setup`
+     * generates one wherever it is.
+     */
+    sessionToken: z.string(),
     user: z
       .object({
         email: z.string(),
@@ -59,6 +74,18 @@ function assertedExpiry(token: string): number | undefined {
   }
 }
 
+/** Whether a session may proceed, and if not, what to tell its client. */
+export type SessionAuthOutcome =
+  { readonly accepted: true } | { readonly accepted: false; readonly reason: string };
+
+const ACCEPTED: SessionAuthOutcome = { accepted: true };
+
+/** Compared as digests, so neither the time taken nor a length mismatch says how close a guess was. */
+function sameToken(presented: string, expected: string): boolean {
+  const digest = (value: string) => createHash('sha256').update(value).digest();
+  return timingSafeEqual(digest(presented), digest(expected));
+}
+
 export class AuthManager {
   constructor(private readonly config: McpServerConfig) {}
 
@@ -66,50 +93,46 @@ export class AuthManager {
    * Initialize auth for a session from incoming request headers.
    * Called once when a new MCP session is created.
    */
-  initFromHeaders(session: Session, headers: AdmittedHeaders): void {
-    const authHeader = headers['authorization'];
+  initFromHeaders(session: Session, headers: AdmittedHeaders): SessionAuthOutcome {
+    const presented = presentedBearer(headers);
 
-    if (authHeader?.startsWith('Bearer phx_')) {
-      // API key mode
-      session.auth = {
-        method: 'api_key',
-        apiKey: authHeader.slice('Bearer '.length),
-      };
+    if (presented?.startsWith('phx_')) {
+      session.auth = { method: 'api_key', apiKey: presented };
       log('info', 'session_auth', { session: session.id, method: 'api_key' });
-      return;
+      return ACCEPTED;
     }
 
-    if (authHeader?.startsWith('Bearer ey')) {
+    if (presented?.startsWith('ey')) {
       // Forwarded verbatim, with the expiry the token itself asserts. Guessing
       // one is wrong in both directions: a short-lived credential goes on
       // reporting itself authenticated while every call 401s, and a long-lived
       // one is refused here while it is still good. A token that claims no
       // expiry gets none — the API is the verifier, and it is entitled to
       // answer.
-      const token = authHeader.slice('Bearer '.length);
-      const expiry = assertedExpiry(token);
+      const expiry = assertedExpiry(presented);
       session.auth = {
         method: 'bearer_token',
-        accessToken: token,
+        accessToken: presented,
         ...(expiry === undefined ? {} : { tokenExpiresAt: expiry }),
       };
       log('info', 'session_auth', { session: session.id, method: 'bearer_token' });
-      return;
+      return ACCEPTED;
     }
 
-    if (this.tryApplyLocalAuthJson(session)) {
-      return;
+    if (this.config.localAuthJsonPath !== undefined) {
+      return this.applyLocalAuthJson(session, this.config.localAuthJsonPath, presented);
     }
 
     if (this.config.unauthenticatedFallback) {
       session.auth = { method: 'dev_bypass' };
       log('info', 'session_auth', { session: session.id, method: 'dev_bypass' });
-      return;
+      return ACCEPTED;
     }
 
     // No credential. The client has to supply one on its next connection —
     // `auth_status` says what is missing.
     session.auth = { method: 'none' };
+    return ACCEPTED;
   }
 
   /**
@@ -150,12 +173,16 @@ export class AuthManager {
   }
 
   /**
-   * Dev-only: load API key or bearer token from a JSON file.
-   * `localAuthJsonPath` is stripped in production by loadConfig().
+   * Dev-only: the owner's API key or bearer token from a JSON file, for a
+   * session that presents the file's session token. `localAuthJsonPath` is
+   * stripped in production by loadConfig().
    */
-  private tryApplyLocalAuthJson(session: Session): boolean {
-    const filePath = this.config.localAuthJsonPath;
-    if (!filePath) return false;
+  private applyLocalAuthJson(
+    session: Session,
+    filePath: string,
+    presented: string | undefined,
+  ): SessionAuthOutcome {
+    if (presented === undefined) return { accepted: false, reason: CREDENTIAL_LESS_REFUSAL };
 
     try {
       const absolute = resolve(process.cwd(), filePath);
@@ -166,10 +193,18 @@ export class AuthManager {
           path: absolute,
           issues: parsed.error.flatten(),
         });
-        return false;
+        return { accepted: false, reason: UNREADABLE_AUTH_FILE_REFUSAL };
       }
 
       const j = parsed.data;
+      if (j.sessionToken === '') {
+        log('warn', 'local_auth_token_unset', { path: absolute });
+        return { accepted: false, reason: NO_SESSION_TOKEN_REFUSAL };
+      }
+      if (!sameToken(presented, j.sessionToken)) {
+        log('warn', 'local_auth_token_refused', { session: session.id });
+        return { accepted: false, reason: WRONG_TOKEN_REFUSAL };
+      }
       const user =
         j.user !== undefined
           ? {
@@ -205,18 +240,18 @@ export class AuthManager {
           source: 'local_auth_json',
         });
       } else {
-        return false;
+        return { accepted: false, reason: UNREADABLE_AUTH_FILE_REFUSAL };
       }
 
       if (j.defaultSpaceId) {
         session.mcpLocalDefaults = { defaultSpaceId: j.defaultSpaceId };
       }
 
-      return true;
+      return ACCEPTED;
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
-      log('warn', 'local_auth_json_read_failed', { path: filePath, message });
-      return false;
+      log('warn', 'local_auth_json_invalid', { path: filePath, message });
+      return { accepted: false, reason: UNREADABLE_AUTH_FILE_REFUSAL };
     }
   }
 }

@@ -6,13 +6,18 @@
  * say why. So it is read back through the server's own loader, not a restated
  * schema.
  */
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { AuthManager } from '../apps/aflow-mcp/src/auth/AuthManager.ts';
+import {
+  LOCAL_TOKEN_ENV,
+  RETIRED_EXAMPLE_SESSION_TOKEN as SERVER_RETIRED_EXAMPLE_SESSION_TOKEN,
+} from '../apps/aflow-mcp/src/requestGate.ts';
 import { mcpPortHolder } from './devMcpPort.mjs';
 import {
   AUTH_FILE_ENV,
@@ -26,14 +31,21 @@ import {
   foreignHolderMessage,
   instanceDir,
   keyInAuthFile,
+  MCP_TOKEN_ENV,
+  newSessionToken,
+  sessionTokenIn,
+  tokenExportLine,
+  withSessionToken,
   mcpPortOf,
   missingSecretMessage,
   parseEnvFile,
+  RETIRED_EXAMPLE_SESSION_TOKEN,
   stackEnv,
   writeAuthFile,
 } from './mcp-local-setup.mjs';
 
 const KEY = 'phx_replace_me';
+const TOKEN = newSessionToken();
 const TENANT = '00000000-0000-4000-8000-00000000000a';
 const OWNER = '00000000-0000-4000-8000-0000000ed1c1';
 
@@ -65,14 +77,14 @@ function loadedBy(file) {
     allowedHosts: [],
     cfOriginSecret: undefined,
     localAuthJsonPath: file,
-  }).initFromHeaders(session, {});
+  }).initFromHeaders(session, { authorization: `Bearer ${TOKEN}` });
   return session.auth;
 }
 
 describe('the file it writes', () => {
   it('is accepted by the MCP server as the owner, in the tenant /users/me names', () => {
     const file = join(scratchDir(), 'mcp.local.json');
-    writeAuthFile(file, authFileContents(KEY, ME));
+    writeAuthFile(file, authFileContents(KEY, ME, TOKEN));
     expect(loadedBy(file)).toMatchObject({
       method: 'api_key',
       apiKey: KEY,
@@ -82,8 +94,9 @@ describe('the file it writes', () => {
   });
 
   it('carries exactly the schema fields, and no comment', () => {
-    expect(Object.keys(JSON.parse(authFileContents(KEY, ME))).sort()).toEqual([
+    expect(Object.keys(JSON.parse(authFileContents(KEY, ME, TOKEN))).sort()).toEqual([
       'apiKey',
+      'sessionToken',
       'tenantId',
       'user',
     ]);
@@ -92,25 +105,91 @@ describe('the file it writes', () => {
   it('is readable by its owner alone', () => {
     const file = join(scratchDir(), 'mcp.local.json');
     writeFileSync(file, '{}', { mode: 0o644 });
-    writeAuthFile(file, authFileContents(KEY, ME));
+    writeAuthFile(file, authFileContents(KEY, ME, TOKEN));
     expect(statSync(file).mode & 0o777).toBe(0o600);
   });
 
   /** `user.email` is required where `user` is present, and the owner may have none. */
   it('leaves the user out rather than writing an email the owner does not have', () => {
     const file = join(scratchDir(), 'mcp.local.json');
-    writeAuthFile(file, authFileContents(KEY, { ...ME, user: { ...ME.user, email: null } }));
+    writeAuthFile(file, authFileContents(KEY, { ...ME, user: { ...ME.user, email: null } }, TOKEN));
     expect(JSON.parse(readFileSync(file, 'utf8'))).not.toHaveProperty('user');
     expect(loadedBy(file)).toMatchObject({ method: 'api_key', tenantId: TENANT });
   });
 
   it('takes the active membership over an earlier one', () => {
     const tenants = [{ tenantId: 'left', status: 'removed' }, ...ME.tenants];
-    expect(JSON.parse(authFileContents(KEY, { ...ME, tenants })).tenantId).toBe(TENANT);
+    expect(JSON.parse(authFileContents(KEY, { ...ME, tenants }, TOKEN)).tenantId).toBe(TENANT);
   });
 
   it('refuses an owner with no tenant rather than writing a file without one', () => {
-    expect(() => authFileContents(KEY, { ...ME, tenants: [] })).toThrow(/no tenant/);
+    expect(() => authFileContents(KEY, { ...ME, tenants: [] }, TOKEN)).toThrow(/no tenant/);
+  });
+});
+
+describe('the session token', () => {
+  it('is neither an API key nor a token the server forwards', () => {
+    expect(TOKEN).toMatch(/^[0-9a-f]+$/);
+    expect(TOKEN).not.toBe(newSessionToken());
+  });
+
+  it('is added to a file that has none, keeping every other field', () => {
+    const file = JSON.stringify({ apiKey: KEY, tenantId: TENANT });
+    expect(JSON.parse(withSessionToken(file, TOKEN))).toEqual({
+      apiKey: KEY,
+      tenantId: TENANT,
+      sessionToken: TOKEN,
+    });
+  });
+
+  /** The example carries none, so a file copied from it gets one generated. */
+  it('is generated into a file copied from the example, which the server then accepts', () => {
+    const example = readFileSync(
+      new URL('../apps/aflow-mcp/mcp.local.json.example', import.meta.url),
+      'utf8',
+    );
+    expect(sessionTokenIn(example)).toBeUndefined();
+    const file = join(scratchDir(), 'mcp.local.json');
+    writeAuthFile(file, withSessionToken(example, TOKEN));
+    expect(sessionTokenIn(readFileSync(file, 'utf8'))).toBe(TOKEN);
+    expect(loadedBy(file)).toMatchObject({ method: 'api_key', apiKey: KEY });
+  });
+
+  /** It was published, so a file still holding it is a file with no token. */
+  it('replaces the placeholder the example once carried', () => {
+    expect(RETIRED_EXAMPLE_SESSION_TOKEN).toBe(SERVER_RETIRED_EXAMPLE_SESSION_TOKEN);
+    const file = JSON.stringify({
+      apiKey: KEY,
+      tenantId: TENANT,
+      sessionToken: RETIRED_EXAMPLE_SESSION_TOKEN,
+    });
+    expect(sessionTokenIn(file)).toBeUndefined();
+    expect(JSON.parse(withSessionToken(file, TOKEN)).sessionToken).toBe(TOKEN);
+  });
+
+  it('is kept where the file has one, and read back from it', () => {
+    const file = authFileContents(KEY, ME, TOKEN);
+    expect(withSessionToken(file, newSessionToken())).toBeUndefined();
+    expect(sessionTokenIn(file)).toBe(TOKEN);
+    expect(sessionTokenIn(undefined)).toBeUndefined();
+    expect(sessionTokenIn('not json')).toBeUndefined();
+  });
+
+  it('is read from the variable the server names in its refusal', () => {
+    expect(MCP_TOKEN_ENV).toBe(LOCAL_TOKEN_ENV);
+  });
+
+  /** Run as the operator would paste it, from a path a shell would split. */
+  it('reaches that variable through the line setup prints, without being printed', () => {
+    const file = join(scratchDir(), "it's here", 'mcp.local.json');
+    mkdirSync(join(file, '..'));
+    writeAuthFile(file, authFileContents(KEY, ME, TOKEN));
+    const line = tokenExportLine(file);
+    expect(line).not.toContain(TOKEN);
+    const shell = spawnSync('sh', ['-c', `${line}; printf %s "$${MCP_TOKEN_ENV}"`], {
+      encoding: 'utf8',
+    });
+    expect(shell.stdout).toBe(TOKEN);
   });
 });
 
@@ -152,6 +231,13 @@ describe('minting', () => {
     const message = missingSecretMessage('/home/dev/.aflow/dev-local/instance.env');
     expect(message).toContain('/home/dev/.aflow/dev-local/instance.env');
     expect(message).toContain('Settings → API Keys');
+  });
+
+  it('says by hand that the session token is generated, never typed', () => {
+    for (const message of [editionRefusal('enterprise'), missingSecretMessage('instance.env')]) {
+      expect(message).toContain('`yarn mcp:setup` again: it generates the `sessionToken`');
+      expect(message).toContain('never typed');
+    }
   });
 
   it('asks for the longest expiry the route allows', () => {

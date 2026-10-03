@@ -8,9 +8,14 @@
  * ordinary API key rather than the secret, so the two stay separately revocable
  * — the key is listed, and revoked, under Settings → API Keys.
  *
- * Idempotent: a file whose key the API still accepts is left alone. Never prints
- * a key or the secret.
+ * The server gives that key only to a session presenting the file's session
+ * token, which this generates beside it; a client started from `.mcp.json`
+ * sends it from `AFLOW_MCP_LOCAL_TOKEN`.
+ *
+ * Idempotent: a file whose key the API still accepts is left alone, gaining a
+ * session token only when it has none. Never prints a key, the token or the secret.
  */
+import { randomBytes } from 'node:crypto';
 import {
   chmodSync,
   existsSync,
@@ -29,16 +34,22 @@ import { listenersOn, mcpPortHolder, readProcessTable } from './devMcpPort.mjs';
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 export const AUTH_FILE_ENV = 'AFLOW_MCP_LOCAL_AUTH_JSON';
+/** Where a client started from `.mcp.json` reads the session token it presents. */
+export const MCP_TOKEN_ENV = 'AFLOW_MCP_LOCAL_TOKEN';
 export const DEFAULT_AUTH_FILE = 'mcp.local.json';
 export const KEY_NAME = 'aflow-local MCP server';
 /** The longest `POST /v1/api-keys` allows; a test pins the two together. */
 export const KEY_EXPIRES_IN_DAYS = 365;
 const LOCAL_EDITION = 'community-local';
+const SESSION_TOKEN_BYTES = 32;
+/** The MCP server's `RETIRED_EXAMPLE_SESSION_TOKEN`; a test pins the two together. */
+export const RETIRED_EXAMPLE_SESSION_TOKEN = 'replace_me_with_the_token_yarn_mcp_setup_writes';
 
 const BY_HAND =
   'Create a key under Settings → API Keys and write it into mcp.local.json as `apiKey`, ' +
-  'with its `tenantId` (shape: apps/aflow-mcp/mcp.local.json.example), or give it to the ' +
-  'MCP client as an `Authorization: Bearer phx_…` header.';
+  'with its `tenantId` (shape: apps/aflow-mcp/mcp.local.json.example), then run ' +
+  '`yarn mcp:setup` again: it generates the `sessionToken` sessions present, which is ' +
+  'never typed. Or give the key to the MCP client as an `Authorization: Bearer phx_…` header.';
 
 /** `KEY=value` lines, as both `.env` and the shell-quoted `instance.env` write them. */
 export function parseEnvFile(text) {
@@ -171,15 +182,51 @@ export function missingSecretMessage(instanceFile) {
   );
 }
 
+/** Hex, so it can never be read as an API key (`phx_`) or a token (`ey`). */
+export function newSessionToken() {
+  return randomBytes(SESSION_TOKEN_BYTES).toString('hex');
+}
+
+/**
+ * The session token in the file, kept when its key is replaced so clients need
+ * no change. The retired example placeholder is no token: it is published.
+ */
+export function sessionTokenIn(text) {
+  if (text === undefined) return undefined;
+  try {
+    const token = JSON.parse(text)?.sessionToken;
+    return typeof token === 'string' && token !== '' && token !== RETIRED_EXAMPLE_SESSION_TOKEN
+      ? token
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The file's contents with a session token added, or undefined when it has one. */
+export function withSessionToken(text, sessionToken) {
+  if (sessionTokenIn(text) !== undefined) return undefined;
+  return `${JSON.stringify({ ...JSON.parse(text), sessionToken }, null, 2)}\n`;
+}
+
+/**
+ * The line that puts the file's session token where a client started from
+ * `.mcp.json` reads it, without the token itself appearing anywhere.
+ */
+export function tokenExportLine(authFile) {
+  const quoted = `'${authFile.replace(/'/g, "'\\''")}'`;
+  return `export ${MCP_TOKEN_ENV}="$(node -p 'require(process.argv[1]).sessionToken' ${quoted})"`;
+}
+
 /**
  * The file the MCP server reads, with exactly the fields its schema accepts —
  * it is parsed strictly, and a refused file leaves every session uncredentialed.
  */
-export function authFileContents(apiKey, me) {
+export function authFileContents(apiKey, me, sessionToken) {
   const tenants = Array.isArray(me?.tenants) ? me.tenants : [];
   const tenant = tenants.find((t) => t.status === 'active') ?? tenants[0];
   if (tenant === undefined) throw new Error('The key authenticates, but its owner has no tenant.');
-  const file = { apiKey, tenantId: tenant.tenantId };
+  const file = { apiKey, tenantId: tenant.tenantId, sessionToken };
   const user = me.user;
   if (typeof user?.email === 'string' && user.email !== '') {
     file.user = { email: user.email, name: user.displayName, userId: user.userId };
@@ -256,16 +303,24 @@ async function main() {
     );
   }
 
-  const existing = existsSync(authFile) ? keyInAuthFile(readFileSync(authFile, 'utf8')) : undefined;
+  const existingText = existsSync(authFile) ? readFileSync(authFile, 'utf8') : undefined;
+  const existing = existingText === undefined ? undefined : keyInAuthFile(existingText);
   if (existing !== undefined) {
     const { status } = await call(api, '/v1/users/me', { bearer: existing });
     const verdict = existingKeyVerdict(status);
     if (verdict === 'keep') {
-      say(`${shown} holds a key the API accepts; nothing to do.`);
+      const tokened = withSessionToken(existingText, newSessionToken());
+      if (tokened === undefined) {
+        say(`${shown} holds a key the API accepts and a session token; nothing to do.`);
+      } else {
+        writeAuthFile(authFile, tokened);
+        say(`${shown} holds a key the API accepts; added the session token sessions present.`);
+      }
       const envNamesItNow = ensureEnvNamesAuthFile();
       const foreign = foreignHolderOfPort(env, shown);
       if (foreign !== undefined) say(foreign);
       else if (envNamesItNow) say('restart the MCP server so it reads that line.');
+      sayHowClientsPresentIt(authFile);
       return;
     }
     if (verdict === 'undecided') {
@@ -305,7 +360,10 @@ async function main() {
         'under Settings → API Keys and run this again.',
     );
   }
-  writeAuthFile(authFile, authFileContents(created.body.key, me.body));
+  writeAuthFile(
+    authFile,
+    authFileContents(created.body.key, me.body, sessionTokenIn(existingText) ?? newSessionToken()),
+  );
   const expires = created.body.expiresAt?.slice(0, 10) ?? 'never';
   say(
     `wrote ${shown}: the key "${KEY_NAME}", expiring ${expires}, listed under Settings → API Keys.`,
@@ -320,6 +378,16 @@ async function main() {
   } else {
     say('the next MCP session picks it up; auth_status reports api_key.');
   }
+  sayHowClientsPresentIt(authFile);
+}
+
+function sayHowClientsPresentIt(authFile) {
+  say(
+    `a session is given the key only when it presents the file's session token; ` +
+      `.mcp.json sends it from ${MCP_TOKEN_ENV}. Set it in the shell your MCP client starts ` +
+      'from (your shell profile keeps it):',
+  );
+  say(`  ${tokenExportLine(authFile)}`);
 }
 
 function canonical(path) {

@@ -79,8 +79,9 @@ function isLoopbackListenHost(host: string): boolean {
  * server would get a 421 while `/health`, answered before the gate, stayed green.
  *
  * A local auth file with a non-loopback listen host: the Host check stops only
- * browsers — any other client on the network can send `Host: localhost` — so a
- * session with no credential of its own would be handed the owner's key.
+ * browsers — any other client on the network can send `Host: localhost` — so the
+ * owner's key would be one session token away from it, and the token crosses
+ * that network in the clear.
  */
 export function loadConfig(): McpServerConfig {
   const logLevel = (process.env['LOG_LEVEL'] ?? 'info') as McpServerConfig['logLevel'];
@@ -112,8 +113,8 @@ export function loadConfig(): McpServerConfig {
   if (localAuthJsonPath !== undefined && !isLoopbackListenHost(host)) {
     throw new Error(
       `MCP server not started: it listens on ${host} and AFLOW_MCP_LOCAL_AUTH_JSON names a ` +
-        'local auth file, so any client that can reach that interface would be served as the ' +
-        "owner — the Host check stops browsers, not a client that sends 'Host: localhost'. " +
+        'local auth file, so the session token that makes a client the owner would cross that ' +
+        "interface in the clear — the Host check stops browsers, not a client that sends 'Host: localhost'. " +
         'Unset MCP_HOST to listen on loopback, or unset AFLOW_MCP_LOCAL_AUTH_JSON so sessions ' +
         'bring their own credential.',
     );
