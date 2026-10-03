@@ -58,13 +58,16 @@ const embeddingCapabilities: ModelCapabilities = {
 export const builtInModels: ModelDefinition[] = [
   // ============================================================================
   // OpenAI Text Models
+  //
+  // Rates below are the tier for prompts up to 272k input tokens; a longer
+  // prompt is billed at double the input and cache rates and 1.5x the output.
   // ============================================================================
   {
     id: 'gpt-6-astra',
     provider: 'openai',
     displayName: 'GPT-6 Astra',
     description:
-      'Frontier tier of the GPT-6 family — the most capable model OpenAI offers, for the most demanding reasoning and coding. 1M context. Vision, web search, file search, computer use.',
+      'Frontier tier of the GPT-6 family — the most capable model OpenAI offers, for the most demanding reasoning and coding. 1M context. Vision, code interpreter, web search, file search, computer use.',
     contextWindow: 1050000,
     maxOutputTokens: 128000,
     capabilities: {
@@ -73,9 +76,10 @@ export const builtInModels: ModelDefinition[] = [
       reasoning: true,
       samplingTemperature: false,
       structuredOutputs: true,
+      codeInterpreter: true,
       webSearch: true,
     },
-    pricing: { promptPer1M: 10, completionPer1M: 50, currency: 'USD' },
+    pricing: { promptPer1M: 10, cachedPromptPer1M: 1, completionPer1M: 50, currency: 'USD' },
     traits: { speed: 2, cost: 5, intelligence: 5, outputType: 'text' },
     aliases: ['astra', 'openai-astra'],
     // Reasoning cannot be disabled on this tier: there is no `none`, so `off`
@@ -89,7 +93,7 @@ export const builtInModels: ModelDefinition[] = [
     provider: 'openai',
     displayName: 'GPT-6.1 Sol',
     description:
-      'Near-Astra performance for complex work at mid-range pricing. 1M context. Reasoning, vision, web search, file search, computer use.',
+      'Near-Astra performance for complex work at mid-range pricing. 1M context. Reasoning, vision, code interpreter, web search, file search, computer use.',
     contextWindow: 1050000,
     maxOutputTokens: 128000,
     capabilities: {
@@ -98,9 +102,10 @@ export const builtInModels: ModelDefinition[] = [
       reasoning: true,
       samplingTemperature: false,
       structuredOutputs: true,
+      codeInterpreter: true,
       webSearch: true,
     },
-    pricing: { promptPer1M: 2, completionPer1M: 10, currency: 'USD' },
+    pricing: { promptPer1M: 2, cachedPromptPer1M: 0.1, completionPer1M: 10, currency: 'USD' },
     traits: { speed: 3, cost: 3, intelligence: 5, outputType: 'text' },
     aliases: ['gpt', 'openai-gpt', 'sol', 'openai-sol', 'gpt-6.1'],
     // No `none` on this tier either; `off` clamps to `low`.
@@ -111,7 +116,7 @@ export const builtInModels: ModelDefinition[] = [
     provider: 'openai',
     displayName: 'GPT-6 Luna',
     description:
-      'Cost tier of the GPT-6 family, for focused, high-volume work. Same 1M context and tool surface as its siblings at a fraction of the price. Vision, web search, file search, computer use.',
+      'Cost tier of the GPT-6 family, for focused, high-volume work. Same 1M context and tool surface as its siblings at a fraction of the price. Vision, code interpreter, web search, file search, computer use.',
     contextWindow: 1050000,
     maxOutputTokens: 128000,
     capabilities: {
@@ -120,9 +125,10 @@ export const builtInModels: ModelDefinition[] = [
       reasoning: true,
       samplingTemperature: false,
       structuredOutputs: true,
+      codeInterpreter: true,
       webSearch: true,
     },
-    pricing: { promptPer1M: 0.1, completionPer1M: 0.5, currency: 'USD' },
+    pricing: { promptPer1M: 0.1, cachedPromptPer1M: 0.01, completionPer1M: 0.5, currency: 'USD' },
     traits: { speed: 5, cost: 1, intelligence: 4, outputType: 'text' },
     aliases: ['luna', 'openai-luna'],
     // The one tier of the family that accepts `none`, which `off` maps to.
@@ -501,8 +507,10 @@ export const builtInModels: ModelDefinition[] = [
   // ============================================================================
   // OpenAI Image Generation Models (GPT Image)
   // ============================================================================
-  // No per-image rate is recorded for either: a render is reported unpriced
-  // rather than at a figure carried over from the model it replaced.
+  // Both bill by token at the same rates — text in, image out — and publish no
+  // per-image figure, since the count depends on the quality and size asked
+  // for. With no `imagePerImage` a render is reported unpriced rather than at a
+  // figure carried over from the model it replaced.
   {
     id: 'gpt-image-2.5-sunburst',
     provider: 'openai',
@@ -521,7 +529,7 @@ export const builtInModels: ModelDefinition[] = [
       streaming: false,
       imageGeneration: true,
     },
-    pricing: { promptPer1M: 0, completionPer1M: 0, currency: 'USD' },
+    pricing: { promptPer1M: 5, completionPer1M: 30, currency: 'USD' },
     traits: { speed: 3, cost: 3, outputType: 'image' },
     aliases: ['gpt-image'],
   },
@@ -543,7 +551,7 @@ export const builtInModels: ModelDefinition[] = [
       streaming: false,
       imageGeneration: true,
     },
-    pricing: { promptPer1M: 0, completionPer1M: 0, currency: 'USD' },
+    pricing: { promptPer1M: 5, completionPer1M: 30, currency: 'USD' },
     traits: { speed: 4, cost: 2, outputType: 'image' },
     aliases: ['gpt-image-flare'],
   },
@@ -556,7 +564,7 @@ export const builtInModels: ModelDefinition[] = [
     provider: 'openai',
     displayName: 'GPT-Live 1',
     description:
-      'Realtime speech-to-speech model for natural, expressive voice conversations with smooth interruption handling.',
+      'Realtime speech-to-speech model for natural, expressive voice conversations with smooth interruption handling. $0.05 per minute of session, billed per second; the backend model it calls is billed separately.',
     contextWindow: 0,
     maxOutputTokens: 0,
     capabilities: {
@@ -565,12 +573,12 @@ export const builtInModels: ModelDefinition[] = [
       embedding: false,
       vision: false,
       audio: true,
-      functionCalling: false,
+      functionCalling: true,
       jsonMode: false,
-      streaming: false,
+      streaming: true,
     },
     pricing: { promptPer1M: 0, completionPer1M: 0, currency: 'USD' },
-    traits: { speed: 4, outputType: 'audio' },
+    traits: { speed: 4, cost: 2, outputType: 'audio' },
     aliases: ['gpt-live'],
   },
 
