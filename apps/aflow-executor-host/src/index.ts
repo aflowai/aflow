@@ -46,7 +46,7 @@ import { executionPermitted, loadHostPolicy } from './bindings.js';
 import { createChromeLauncher } from './browser/chromeProcess.js';
 import { BrowserDriver } from './browser/driver.js';
 import type { SignInResult } from './browser/driverTypes.js';
-import { clearHandoffsLeftBehind, createRedisHandoffBoard } from './browser/handoffBoard.js';
+import { startHandoffBoard } from './browser/handoffBoard.js';
 import { createBrowserIdleSweep } from './browser/idleSweep.js';
 import { followBrowserRequests } from './browser/requestPoll.js';
 import { isBrowserRequestFile, serveBrowserRequests } from './browser/windowRequests.js';
@@ -188,7 +188,7 @@ async function main(): Promise<void> {
       count: reaped,
     });
   }
-  await clearHandoffsLeftBehind({ redis, hostname, log });
+  const handoffs = await startHandoffBoard({ redis, subscriber: hostChannels, log });
 
   // Checkouts too: every session died with the previous executor, so what they
   // held on disk and in the operator's repositories has nothing left that would
@@ -220,7 +220,7 @@ async function main(): Promise<void> {
     launcher: createChromeLauncher(),
     hostDir: dirname(policyPath),
     loadPolicy: async () => await loadHostPolicy(policyPath),
-    handoffs: createRedisHandoffBoard({ redis, subscriber: hostChannels, hostname, log }),
+    handoffs,
   });
   browserRuntime.registerHandler(createBrowserHandler(browserDriver));
   const browserIdleSweep = createBrowserIdleSweep(browserDriver, taskLogger);

@@ -3,6 +3,8 @@
  * while the run waits and gone when the wait ends, however it ends, and the
  * operator's Done ends the wait as `completed`.
  */
+import { hostname } from 'node:os';
+
 import type { Redis } from 'ioredis';
 import RedisMock from 'ioredis-mock';
 import {
@@ -17,12 +19,13 @@ import {
   type BrowserProfile,
   StreamKeys,
 } from '@aflow/schemas';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   clearHandoffsLeftBehind,
   createRedisHandoffBoard,
   registrableSite,
+  startHandoffBoard,
 } from '../browser/handoffBoard.js';
 import { type HandoffWait, waitInWindow, type WaitForOperator } from '../browser/operatorWindow.js';
 import { harness, type Harness, profile, refusal, RUN_A } from './fixtures/fakeBrowser.js';
@@ -49,7 +52,7 @@ function world(waitForOperator?: WaitForOperator, browsers?: BrowserProfile[]): 
     handoffs: createRedisHandoffBoard({
       redis,
       subscriber,
-      hostname: 'laptop',
+      machine: 'laptop',
       log: { warn: () => undefined },
     }),
     ...(waitForOperator !== undefined ? { waitForOperator } : {}),
@@ -289,7 +292,7 @@ describe('the hand-offs a previous run of the executor left', () => {
 
     await clearHandoffsLeftBehind({
       redis,
-      hostname: 'laptop',
+      machine: 'laptop',
       log: { warn: () => undefined, info: (message) => info.push(message) },
     });
 
@@ -305,9 +308,44 @@ describe('the hand-offs a previous run of the executor left', () => {
     const info: string[] = [];
     await clearHandoffsLeftBehind({
       redis,
-      hostname: 'laptop',
+      machine: 'laptop',
       log: { warn: () => undefined, info: (message) => info.push(message) },
     });
     expect(info).toEqual([]);
+  });
+
+  it('are found by a restarted executor, whose pid and process name are new', async () => {
+    const pid = Object.getOwnPropertyDescriptor(process, 'pid');
+    const asProcess = async (processPid: number, processName: string | undefined) => {
+      Object.defineProperty(process, 'pid', { value: processPid, configurable: true });
+      if (processName === undefined) vi.stubEnv('HOSTNAME', undefined);
+      else vi.stubEnv('HOSTNAME', processName);
+      return await startHandoffBoard({
+        redis,
+        subscriber,
+        log: { warn: () => undefined, info: () => undefined },
+      });
+    };
+    try {
+      const first = await asProcess(4101, undefined);
+      await first.post({
+        ...RUN_A,
+        stepExecutionId: STEP,
+        profileId: 'default',
+        site: 'example.com',
+        reason: 'sign_in',
+        message: 'Sign in to the mail account.',
+        waitMs: 15 * 60_000,
+      });
+      expect(await openItems()).toHaveLength(1);
+
+      await asProcess(4102, 'executor-after-restart');
+
+      expect(await openItems()).toEqual([]);
+      expect(await redis.zcard(browserHandoffMachineIndexKey(hostname()))).toBe(0);
+    } finally {
+      if (pid !== undefined) Object.defineProperty(process, 'pid', pid);
+      vi.unstubAllEnvs();
+    }
   });
 });
