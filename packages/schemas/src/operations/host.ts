@@ -85,6 +85,25 @@ export type HostPushApproval = z.infer<typeof HostPushApprovalSchema>;
 export const HOST_CHECKS_MAX_ARGS = 64;
 export const HOST_CHECK_ARG_MAX_LENGTH = 4096;
 
+export const HOST_HARNESS_TASK_MAX_LENGTH = 32_000;
+export const HOST_HARNESS_TIMEOUT_MIN_MS = 1_000;
+export const HOST_HARNESS_TIMEOUT_DEFAULT_MS = 30 * 60_000;
+/** The longest a coding agent runs, and so the longest any host step runs. */
+export const HOST_HARNESS_TIMEOUT_MAX_MS = 2 * 60 * 60_000;
+/**
+ * The turn budget a run gets when it names none, on a harness that can take
+ * one. Every tool call is a turn, and a slice of work takes several hundred:
+ * a cap sized to a guess ends the run while it is still reading.
+ */
+export const HOST_HARNESS_MAX_TURNS_DEFAULT = 600;
+/**
+ * How many coding agents a machine runs at once when the operator chose no
+ * number. The machine is usually a laptop that also runs the stack, and two
+ * coding agents beside it, each running the project's checks in its own
+ * checkout, is what one carries without the stack itself slowing to a crawl.
+ */
+export const HOST_HARNESS_CONCURRENCY_DEFAULT = 2;
+
 /**
  * How long a folder's checks run when the operator chose no time. A type-check,
  * the builds a test needs and a scoped test run take minutes on a laptop; the
@@ -92,7 +111,7 @@ export const HOST_CHECK_ARG_MAX_LENGTH = 4096;
  */
 export const HOST_CHECKS_TIMEOUT_DEFAULT_MS = 30 * 60_000;
 /** The longest a host step runs at all — a coding agent's ceiling — so a check is never the outlier. */
-export const HOST_CHECKS_TIMEOUT_MAX_MS = 2 * 60 * 60_000;
+export const HOST_CHECKS_TIMEOUT_MAX_MS = HOST_HARNESS_TIMEOUT_MAX_MS;
 export const HOST_CHECKS_TIMEOUT_MIN_MS = 60_000;
 
 export const HostChecksSchema = z
@@ -792,7 +811,7 @@ const HostHarnessRunInputObjectSchema = z.object({
   task: z
     .string()
     .min(1)
-    .max(32_000)
+    .max(HOST_HARNESS_TASK_MAX_LENGTH)
     .describe('What the harness should do, in prose. Passed through verbatim as one argument.'),
   inputs: z
     .preprocess(coerceJsonObjectArg, z.record(z.unknown()))
@@ -862,9 +881,11 @@ const HostHarnessRunInputObjectSchema = z.object({
     .min(1)
     .optional()
     .describe(
-      'The number of assistant turns the harness may take before it must answer. Absent means ' +
-        'the harness decides. A harness the machine configured without a turn budget refuses ' +
-        'the run rather than ignoring it, and the refusal names it.',
+      'The number of assistant turns the harness may take before it must answer. Absent, a ' +
+        `harness that takes a turn budget gets ${String(HOST_HARNESS_MAX_TURNS_DEFAULT)} — ` +
+        'several hundred, because every tool call is a turn — and one that takes none runs ' +
+        'without. Named, a harness the machine configured without a turn budget refuses the ' +
+        'run rather than ignoring it, and the refusal names it.',
     ),
   model: z
     .string()
@@ -881,9 +902,9 @@ const HostHarnessRunInputObjectSchema = z.object({
   timeoutMs: z
     .number()
     .int()
-    .min(1_000)
-    .max(7_200_000)
-    .default(1_800_000)
+    .min(HOST_HARNESS_TIMEOUT_MIN_MS)
+    .max(HOST_HARNESS_TIMEOUT_MAX_MS)
+    .default(HOST_HARNESS_TIMEOUT_DEFAULT_MS)
     .describe('Kill the harness and its descendants after this long.'),
   browser: HostHarnessBrowserSchema.optional(),
 });
@@ -1152,6 +1173,14 @@ export const HostBindingInspectOutputSchema = z.object({
       'before pushing, and the checks it runs first and for how long. Absent, the folder ' +
       'pushes nothing.',
   ),
+  maxConcurrentHarnessRuns: z
+    .number()
+    .int()
+    .min(1)
+    .describe(
+      'How many coding agents the machine holding the folder runs at once. A run past it ' +
+        'waits for one to end rather than being refused.',
+    ),
 });
 
 export const HostCommitScanInputSchema = z.object({
@@ -1283,11 +1312,19 @@ export const HostCommitScanOutputSchema = z.object({
 export const HOST_CHECK_TAIL_BYTES = 4 * 1024;
 
 /**
- * How much of a check's output is stored. A type-check's errors and a scoped
- * test run's report fit with room to spare; past this a check is printing in a
- * loop, and its first megabyte says nothing its last does not.
+ * How much of the start of a check's output is stored: the steps it reports
+ * before the first failure — what ran and what passed — with room to spare.
  */
-export const HOST_CHECK_OUTPUT_KEEP_BYTES = 1024 * 1024;
+export const HOST_CHECK_OUTPUT_HEAD_BYTES = 64 * 1024;
+
+/**
+ * How much of the end of a check's output is stored, where a failing check
+ * says why. A test runner's failure block — the assertion, its diff, the code
+ * frame and the stack — runs to a few kilobytes, and every failure of a scoped
+ * run with its summary fits with room to spare; past this a check is printing
+ * in a loop. What falls between the head and this is let go, the cut marked.
+ */
+export const HOST_CHECK_OUTPUT_TAIL_BYTES = 1024 * 1024;
 
 export const HostCommitCheckInputSchema = z.object({
   bindingId: HostBindingRef,
@@ -1336,8 +1373,10 @@ export const HostCommitCheckOutputSchema = z.object({
     .string()
     .optional()
     .describe(
-      'Standard output and error together, in the order they came, stored as a payload — the ' +
-        'last `HOST_CHECK_OUTPUT_KEEP_BYTES` of them where there was more. Absent where nothing ran.',
+      'Standard output and error together, in the order they came, stored as a payload — where ' +
+        'there was more, the first `HOST_CHECK_OUTPUT_HEAD_BYTES` and the last ' +
+        '`HOST_CHECK_OUTPUT_TAIL_BYTES` of them, with a line between saying how much was not ' +
+        'kept. Absent where nothing ran.',
     ),
   tail: z
     .string()

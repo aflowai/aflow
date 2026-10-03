@@ -1,6 +1,6 @@
 /**
- * A connected folder's push posture and checks, read from the policy file on
- * this machine.
+ * A connected folder's push posture and checks, and how many coding agents its
+ * machine runs at once, read from the policy file on this machine.
  *
  * Read here rather than from the workspace's copy because both are only ever
  * declared here. Nothing in the folder is touched, so a file-only binding
@@ -40,6 +40,7 @@ async function inspect(ctx: ExecutorContext, policyPath: string): Promise<StepRe
       ...(binding.branchPolicy !== undefined
         ? { branchPolicy: resolveBranchPolicy(binding.branchPolicy) }
         : {}),
+      maxConcurrentHarnessRuns: policy.maxConcurrentHarnessRuns,
     };
     return await successWithData(ctx, output);
   } catch (error) {

@@ -3,17 +3,18 @@
  *
  * The checkout is prepared as a commission's is — detached at the commit, the
  * folder's installed dependencies linked so nothing is installed — and the
- * command runs there under the same sandbox a coding agent runs in: egress
- * closed, the checkout writable and the folder itself not. What it printed is
- * kept in the order it came, and from the end where there is too much of it,
- * since a failing check says why last.
+ * command runs there under the sandbox a coding agent runs in: egress closed,
+ * the checkout writable and the folder itself not. What it printed is kept in
+ * the order it came, and from both ends where there is too much of it:
+ * its start says what ran, and a failing check says why last.
  */
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
-  HOST_CHECK_OUTPUT_KEEP_BYTES,
+  HOST_CHECK_OUTPUT_HEAD_BYTES,
+  HOST_CHECK_OUTPUT_TAIL_BYTES,
   HOST_CHECK_TAIL_BYTES,
   type HostCommitCheckOutputSchema,
 } from '@aflow/schemas';
@@ -37,16 +38,16 @@ export const CHECK_SCRATCH_PREFIX = 'aflow-check-';
  * proportional to what is kept rather than to what was printed.
  */
 export function createTailBuffer(maxBytes: number): {
-  push: (text: string) => void;
+  push: (text: string | Buffer) => void;
   text: () => { text: string; droppedBytes: number };
 } {
   const chunks: Buffer[] = [];
   let held = 0;
   let dropped = 0;
   return {
-    push(text: string): void {
-      if (text === '') return;
-      const chunk = Buffer.from(text, 'utf8');
+    push(text: string | Buffer): void {
+      if (text.length === 0) return;
+      const chunk = typeof text === 'string' ? Buffer.from(text, 'utf8') : text;
       chunks.push(chunk);
       held += chunk.length;
       while (chunks.length > 1 && held - (chunks[0]?.length ?? 0) >= maxBytes) {
@@ -77,6 +78,61 @@ export function utf8Suffix(text: string | Buffer, maxBytes: number): string {
   return bytes.subarray(start).toString('utf8');
 }
 
+/** How many leading bytes of `bytes`, at most `maxBytes`, end on a character boundary. */
+function utf8PrefixLength(bytes: Buffer, maxBytes: number): number {
+  if (bytes.length <= maxBytes) return bytes.length;
+  let end = maxBytes;
+  while (end > 0 && ((bytes[end] ?? 0) & 0xc0) === 0x80) end -= 1;
+  return end;
+}
+
+/**
+ * Text kept from both ends, by bytes, as it arrives: the first `headBytes`,
+ * and the last `tailBytes` as `createTailBuffer` keeps them. A run's start
+ * says what ran and its end why it failed, so it is the middle that goes; the
+ * head then ends and the tail starts at whole lines, with a line between
+ * saying how much was not kept.
+ */
+export function createHeadTailBuffer(
+  headBytes: number,
+  tailBytes: number,
+): {
+  push: (text: string) => void;
+  text: () => string;
+} {
+  const head: Buffer[] = [];
+  let headHeld = 0;
+  const tail = createTailBuffer(tailBytes);
+  return {
+    push(text: string): void {
+      const chunk = Buffer.from(text, 'utf8');
+      const taken = utf8PrefixLength(chunk, headBytes - headHeld);
+      if (taken > 0) {
+        head.push(chunk.subarray(0, taken));
+        headHeld += taken;
+      }
+      tail.push(chunk.subarray(taken));
+    },
+    text(): string {
+      const start = Buffer.concat(head).toString('utf8');
+      const end = tail.text();
+      if (end.droppedBytes === 0) return `${start}${end.text}`;
+      const headLineEnd = start.lastIndexOf('\n') + 1;
+      const keptHead = headLineEnd === 0 ? `${start}\n` : start.slice(0, headLineEnd);
+      const tailLineStart = end.text.indexOf('\n') + 1;
+      const keptTail =
+        tailLineStart === 0 || tailLineStart === end.text.length
+          ? end.text
+          : end.text.slice(tailLineStart);
+      const dropped =
+        end.droppedBytes +
+        Buffer.byteLength(start.slice(keptHead.length)) +
+        Buffer.byteLength(end.text.slice(0, end.text.length - keptTail.length));
+      return `${keptHead}[${String(dropped)} bytes printed here were not kept]\n${keptTail}`;
+    },
+  };
+}
+
 /** The tail a person reads: whole lines where the cut fell inside one and a later line exists. */
 export function checkTail(output: string): string {
   const tail = utf8Suffix(output, HOST_CHECK_TAIL_BYTES);
@@ -87,9 +143,8 @@ export function checkTail(output: string): string {
 
 export interface FolderCheckRun {
   readonly result: SandboxedRunResult;
-  /** Standard output and error together, the end of them where there was more. */
+  /** Standard output and error together: the start and the end of them, the cut marked, where there was more. */
   readonly output: string;
-  readonly droppedBytes: number;
 }
 
 export interface FolderCheckInput {
@@ -115,7 +170,7 @@ export async function runFolderChecks(input: FolderCheckInput): Promise<FolderCh
       at: input.sha,
     });
     worktreePath = worktree.path;
-    const kept = createTailBuffer(HOST_CHECK_OUTPUT_KEEP_BYTES);
+    const kept = createHeadTailBuffer(HOST_CHECK_OUTPUT_HEAD_BYTES, HOST_CHECK_OUTPUT_TAIL_BYTES);
     const visible = createChatterStripper();
     const take = (text: string): void => {
       if (text === '') return;
@@ -136,6 +191,10 @@ export async function runFolderChecks(input: FolderCheckInput): Promise<FolderCh
       },
       timeoutMs: input.timeoutMs,
       scratchDir: scratch,
+      // No egress, and no loopback but the sandbox's own: this runs code a
+      // coding agent wrote, and the machine's loopback holds the stack's
+      // services. Egress is where a check could carry the folder off the
+      // machine, or pass because something outside answered for it.
       widening: {
         authPaths: [],
         allowedDomains: [],
@@ -156,8 +215,7 @@ export async function runFolderChecks(input: FolderCheckInput): Promise<FolderCh
       ...(input.onOutput !== undefined ? { onOutput: input.onOutput } : {}),
     });
     take(visible.flush());
-    const { text, droppedBytes } = kept.text();
-    return { result, output: text, droppedBytes };
+    return { result, output: kept.text() };
   } finally {
     if (worktreePath !== undefined) await removeWorktree(input.binding.root, worktreePath);
     await rm(scratch, { recursive: true, force: true });
@@ -229,11 +287,4 @@ export function checkOutcome(params: {
     summary,
     ...(passed ? { clearedSha: params.sha } : {}),
   };
-}
-
-/** What is stored: the output, with a line saying how much of its start was let go. */
-export function storedOutput(run: FolderCheckRun): string {
-  return run.droppedBytes === 0
-    ? run.output
-    : `[${String(run.droppedBytes)} bytes printed before this were not kept]\n${run.output}`;
 }

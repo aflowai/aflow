@@ -11,7 +11,10 @@ import {
   updateStepState,
   appendSessionEvent,
   registerStepInFlight,
+  extendStepInFlight,
   clearStepInFlight,
+  releaseStepJob,
+  StepJobNotPendingError,
   wasStepCancelled,
 } from '@aflow/redis';
 import type {
@@ -23,7 +26,9 @@ import type {
   StepHandler,
   StepResult,
 } from '../types.js';
+import type { ConcurrencyLimiter } from '../concurrency.js';
 import { withTimeout } from '../timeout.js';
+import { admitOperation } from './operationAdmission.js';
 import { createAflowError, toAflowError } from './errors.js';
 import { createJobLogger } from './logger.js';
 import { STEP_HEARTBEAT_INTERVAL_MS } from './constants.js';
@@ -53,7 +58,10 @@ export function isSupersededStepJob(
 export interface InFlightStep {
   stepExecutionId: string;
   operationId: string;
-  /** Set once the step's timeout is known; a progress-aware timeout keeps it current. */
+  /**
+   * Set once the step starts, past any wait for a slot: the default timeout
+   * until its own is known, which a progress-aware timeout then keeps current.
+   */
   deadlineRef?: { current: number };
 }
 
@@ -63,6 +71,192 @@ export interface ProcessJobHost {
   handlers: Map<string, StepHandler>;
   log: ExecutorLogger;
   abortControllers: Map<string, AbortController>;
+  /** Operations admitted through a limit of their own, by operation id. */
+  operationLimiters: ReadonlyMap<string, ConcurrencyLimiter>;
+  /** Aborts once claiming stops; a step not yet admitted to its slot is then given back. */
+  readonly claimingStopped: AbortSignal;
+  /** Aborts once the runtime stops, ending what this process still vouches for. */
+  readonly stopped: AbortSignal;
+  /** A claimed step has started: it is past any wait for a slot and will run. */
+  stepStarted(): void;
+}
+
+/** How a step under an operation limit leaves its wait for a slot. */
+type Admission = 'admitted' | 'cancelled' | 'released' | 'superseded';
+
+/**
+ * Stale-attempt fence: if a newer attempt of this step has already been
+ * scheduled (the stall watchdog failed attempt N and retry enqueued N+1 while
+ * this attempt-N job was still pending in the stream), or the step is already
+ * terminally FAILED at this attempt, running the job would re-execute the step
+ * against a slot that no longer owns it — the current attempt owns the step.
+ * Fail open: a read error proceeds.
+ */
+async function isSuperseded(
+  host: ProcessJobHost,
+  job: StepJobMessage,
+  jobLog: ExecutorLogger,
+): Promise<boolean> {
+  try {
+    const fenceState = await getStepState(host.deps.redis, job.tenantId, job.stepExecutionId);
+    if (fenceState && isSupersededStepJob(fenceState, job.attempt)) {
+      jobLog.info('Dropping superseded step job', {
+        jobAttempt: job.attempt,
+        currentAttempt: fenceState.attempt,
+        currentStatus: fenceState.status,
+      });
+      return true;
+    }
+  } catch (err) {
+    jobLog.warn('Stale-attempt fence check failed; proceeding', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  return false;
+}
+
+/**
+ * Waits for the step's operation slot. A cancel or a stop to claiming ends the
+ * wait, and a step that did wait is checked again once admitted, because
+ * minutes may have passed: the run may have been cancelled, failed or retried
+ * meanwhile. Anything but `admitted` holds no operation slot on return.
+ */
+async function admitLimitedStep(admission: {
+  host: ProcessJobHost;
+  job: StepJobMessage;
+  jobLog: ExecutorLogger;
+  limiter: ConcurrencyLimiter;
+  slotController: SlotController;
+  externalAbort: AbortSignal;
+}): Promise<Admission> {
+  const { host, job, jobLog, limiter, slotController, externalAbort } = admission;
+  const refusal = (): Admission | undefined => {
+    if (externalAbort.aborted) return 'cancelled';
+    if (host.claimingStopped.aborted) return 'released';
+    return undefined;
+  };
+
+  const before = refusal();
+  if (before !== undefined) return before;
+
+  let waited: boolean;
+  try {
+    waited = await admitOperation({
+      limiter,
+      slotController,
+      signal: AbortSignal.any([externalAbort, host.claimingStopped]),
+      refreshInFlight: () => {
+        void refreshInFlight(host, job, jobLog);
+      },
+      waiting: () => {
+        jobLog.info('Waiting for a slot', {
+          operationId: job.operationId,
+          limit: limiter.limit,
+        });
+      },
+    });
+  } catch (error) {
+    const ended = refusal();
+    if (ended !== undefined) return ended;
+    throw error;
+  }
+
+  let after = refusal();
+  if (after === undefined && waited) {
+    if (await isSuperseded(host, job, jobLog)) after = 'superseded';
+    else if (await wasStepCancelled(host.deps.redis, job.stepExecutionId, job.attempt)) {
+      after = 'cancelled';
+    }
+  }
+  if (after === undefined) return 'admitted';
+  limiter.release();
+  return after;
+}
+
+/** Ends a claimed step that never started, without emitting a result for it. */
+async function setAsideUnstarted(
+  host: ProcessJobHost,
+  job: StepJobMessage,
+  messageId: string,
+  jobLog: ExecutorLogger,
+  admission: Exclude<Admission, 'admitted'>,
+): Promise<void> {
+  if (admission === 'released') {
+    // A step given back stays STARTED, and the stall watchdog fails a STARTED
+    // step whose in-flight record lapses. Where this executor is the stream's
+    // only reader nothing claims the step until it exits, so the record lives
+    // as long as this process does: written once before the hand-back, then
+    // only extended, so the deadline a next executor records is never replaced.
+    await refreshInFlight(host, job, jobLog);
+    await releaseStepJob(host.deps.redis, job, messageId).then(
+      () => {
+        vouchUntilStopped(host, () => extendInFlight(host, job, jobLog));
+        jobLog.info('Gave back a step still waiting for a slot: claiming has stopped', {
+          operationId: job.operationId,
+        });
+      },
+      (err: unknown) => {
+        if (err instanceof StepJobNotPendingError) {
+          jobLog.info('Gave back nothing: the step was no longer this executor’s', {
+            operationId: job.operationId,
+          });
+          return;
+        }
+        // Left pending, so still this process's: once its heartbeat lapses the
+        // reclaim hands it to another, which is slower but loses nothing.
+        vouchUntilStopped(host, () => refreshInFlight(host, job, jobLog));
+        jobLog.warn('Could not give back a step still waiting for a slot', {
+          operationId: job.operationId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      },
+    );
+    return;
+  }
+  await clearStepInFlight(host.deps.redis, job.stepExecutionId).catch(() => {});
+  if (admission === 'cancelled') {
+    jobLog.info('Dropping cancelled step job', { attempt: job.attempt });
+  }
+  await acknowledgeJob(host.deps, job.stepType, messageId);
+}
+
+async function refreshInFlight(
+  host: ProcessJobHost,
+  job: StepJobMessage,
+  jobLog: ExecutorLogger,
+): Promise<void> {
+  await registerStepInFlight(host.deps.redis, job.stepExecutionId, null).catch((err: unknown) => {
+    jobLog.warn('Failed to refresh the in-flight heartbeat of a step not yet started', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  });
+}
+
+async function extendInFlight(
+  host: ProcessJobHost,
+  job: StepJobMessage,
+  jobLog: ExecutorLogger,
+): Promise<void> {
+  await extendStepInFlight(host.deps.redis, job.stepExecutionId).catch((err: unknown) => {
+    jobLog.warn('Failed to extend the in-flight heartbeat of a step given back', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  });
+}
+
+/** Keeps the in-flight record of a step this process vouches for alive until it stops. */
+function vouchUntilStopped(host: ProcessJobHost, renew: () => Promise<void>): void {
+  if (host.stopped.aborted) return;
+  const refresh = setInterval(() => {
+    void renew();
+  }, STEP_HEARTBEAT_INTERVAL_MS);
+  host.stopped.addEventListener(
+    'abort',
+    () => {
+      clearInterval(refresh);
+    },
+    { once: true },
+  );
 }
 
 export async function processJob(
@@ -85,6 +279,8 @@ export async function processJob(
   const reportSimulatedFulfillment = (report: SimulatedFulfillmentReport): void => {
     simulatedFulfillment = report;
   };
+  let admittedBy: ConcurrencyLimiter | undefined;
+  const externalAbort = new AbortController();
 
   try {
     // Breaker check per claimed job, not only at startup. Startup keeps a
@@ -104,27 +300,13 @@ export async function processJob(
       return;
     }
 
-    // Stale-attempt fence: if a newer attempt of this step has already been
-    // scheduled (the stall watchdog failed attempt N and retry enqueued N+1
-    // while this attempt-N job was still pending in the stream), or the step is
-    // already terminally FAILED at this attempt, running the job would
-    // re-execute the step against a slot that no longer owns it. Ack and drop —
-    // the current attempt owns the step. Fail open: a read error proceeds.
-    try {
-      const fenceState = await getStepState(host.deps.redis, job.tenantId, job.stepExecutionId);
-      if (fenceState && isSupersededStepJob(fenceState, job.attempt)) {
-        jobLog.info('Dropping superseded step job', {
-          jobAttempt: job.attempt,
-          currentAttempt: fenceState.attempt,
-          currentStatus: fenceState.status,
-        });
-        await acknowledgeJob(host.deps, job.stepType, messageId);
-        return;
-      }
-    } catch (err) {
-      jobLog.warn('Stale-attempt fence check failed; proceeding', {
-        error: err instanceof Error ? err.message : String(err),
-      });
+    // Registered before anything can wait, so a cancel published while the step
+    // is queued for a slot ends the wait instead of reaching it once admitted.
+    host.abortControllers.set(job.stepExecutionId, externalAbort);
+
+    if (await isSuperseded(host, job, jobLog)) {
+      await acknowledgeJob(host.deps, job.stepType, messageId);
+      return;
     }
 
     if (job.sessionId) {
@@ -166,15 +348,39 @@ export async function processJob(
       }
     }
 
-    // Claim per-step in-flight liveness before any slow setup (validate /
-    // context build / output probe), so the stall watchdog never mistakes a
-    // freshly-claimed step for a disappeared executor. The real deadline is
-    // filled in once the effective timeout is known (below).
+    // Claim per-step in-flight liveness before any wait or slow setup (slot
+    // admission / validate / context build / output probe), so the stall
+    // watchdog never mistakes a freshly-claimed step for a disappeared
+    // executor. The real deadline is filled in once the effective timeout is
+    // known (below).
     await registerStepInFlight(host.deps.redis, job.stepExecutionId, null).catch((err: unknown) => {
       jobLog.warn('Failed to register step in-flight heartbeat', {
         error: err instanceof Error ? err.message : String(err),
       });
     });
+
+    const operationLimiter = host.operationLimiters.get(job.operationId);
+    if (operationLimiter !== undefined) {
+      const admission = await admitLimitedStep({
+        host,
+        job,
+        jobLog,
+        limiter: operationLimiter,
+        slotController,
+        externalAbort: externalAbort.signal,
+      });
+      if (admission !== 'admitted') {
+        await setAsideUnstarted(host, job, messageId, jobLog, admission);
+        return;
+      }
+      admittedBy = operationLimiter;
+    }
+
+    // Started from here on: a drain counts this step and waits for it.
+    if (inFlight !== undefined) {
+      inFlight.deadlineRef = { current: Date.now() + host.config.defaultTimeoutMs };
+    }
+    host.stepStarted();
 
     const handler = host.handlers.get(job.stepType);
     if (!handler) {
@@ -230,21 +436,22 @@ export async function processJob(
     // ceiling; a progress-aware spec slides the live deadline via deadlineRef.
     const timeoutMs = typeof timeoutSpec === 'number' ? timeoutSpec : timeoutSpec.maxMs;
 
-    const externalAbort = new AbortController();
-    host.abortControllers.set(job.stepExecutionId, externalAbort);
-
     // Cancellation check, deliberately AFTER the controller is registered: from
-    // here on the abort Pub/Sub can reach this job, so anything published earlier
+    // then on the abort Pub/Sub can reach this job, so anything published earlier
     // is what the durable record has to catch. The two together leave no gap —
-    // reading before registering would leave exactly that window open.
+    // reading before registering would leave exactly that window open. An abort
+    // that already landed during setup is caught here too, since `withTimeout`
+    // would start the handler regardless.
     //
     // A workflow OPERATION task depends on this entirely: it has no session, so
     // the stale-attempt fence above reads no state and cannot tell that its run
     // was cancelled. Without this, a cancelled ledger row is still followed by a
     // container start — a coding job outliving a dev-stack restart is this.
-    if (await wasStepCancelled(host.deps.redis, job.stepExecutionId, job.attempt)) {
+    if (
+      externalAbort.signal.aborted ||
+      (await wasStepCancelled(host.deps.redis, job.stepExecutionId, job.attempt))
+    ) {
       jobLog.info('Dropping cancelled step job', { attempt: job.attempt });
-      host.abortControllers.delete(job.stepExecutionId);
       await clearStepInFlight(host.deps.redis, job.stepExecutionId).catch(() => {});
       await acknowledgeJob(host.deps, job.stepType, messageId);
       return;
@@ -341,7 +548,6 @@ export async function processJob(
       }
     } finally {
       clearInterval(heartbeat);
-      host.abortControllers.delete(job.stepExecutionId);
       await clearStepInFlight(host.deps.redis, job.stepExecutionId).catch(() => {});
     }
   } catch (error) {
@@ -361,5 +567,10 @@ export async function processJob(
 
     await emitFailure(host.deps, job, aflowError, durationMs, simulatedFulfillment);
     await acknowledgeJob(host.deps, job.stepType, messageId);
+  } finally {
+    admittedBy?.release();
+    if (host.abortControllers.get(job.stepExecutionId) === externalAbort) {
+      host.abortControllers.delete(job.stepExecutionId);
+    }
   }
 }

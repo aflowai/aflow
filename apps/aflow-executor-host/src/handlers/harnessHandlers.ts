@@ -30,6 +30,7 @@ import {
   internalError,
 } from '@aflow/executor-runtime';
 import {
+  HOST_HARNESS_MAX_TURNS_DEFAULT,
   HostHarnessRunInputSchema,
   MAX_INLINE_PAYLOAD_BYTES,
   type HarnessActivityLine,
@@ -403,6 +404,19 @@ async function failure(
   return await failureWithError(ctx, internalError(message));
 }
 
+/**
+ * The turn budget a run gets: its own, else the operation's default where the
+ * harness can take one. A harness with no turn argument runs without a budget
+ * rather than refusing a run that never asked for one.
+ */
+export function effectiveMaxTurns(
+  profile: HarnessProfile,
+  maxTurns: number | undefined,
+): number | undefined {
+  if (maxTurns !== undefined) return maxTurns;
+  return profile.turnsArgs.length > 0 ? HOST_HARNESS_MAX_TURNS_DEFAULT : undefined;
+}
+
 /** The argv one turn of a harness run starts with. */
 export function harnessTurnArgv(
   profile: HarnessProfile,
@@ -416,7 +430,7 @@ export function harnessTurnArgv(
     profile,
     task,
     buildSessionArgs(profile, conversation, continued),
-    input.maxTurns,
+    effectiveMaxTurns(profile, input.maxTurns),
     input.model,
     mcpConfig,
   );
@@ -1043,6 +1057,8 @@ async function runHarness(
   }
 }
 
+export const HARNESS_RUN_OPERATION = 'host.harness.run';
+
 export function createHostHarnessHandler(
   policyPath: string,
   browser?: HarnessBrowserService,
@@ -1051,7 +1067,7 @@ export function createHostHarnessHandler(
   execute: (ctx: ExecutorContext) => Promise<StepResult>;
 } {
   return {
-    handles: new Set(['host.harness.run']),
+    handles: new Set([HARNESS_RUN_OPERATION]),
     execute: async (ctx: ExecutorContext): Promise<StepResult> =>
       await runHarness(ctx, policyPath, browser),
   };

@@ -13,6 +13,7 @@
  */
 import { execFile, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { createServer, type AddressInfo } from 'node:net';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -21,7 +22,7 @@ import { promisify } from 'node:util';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  HOST_CHECK_OUTPUT_KEEP_BYTES,
+  HOST_CHECK_OUTPUT_TAIL_BYTES,
   HOST_CHECK_TAIL_BYTES,
   HostCommitCheckOutputSchema,
 } from '@aflow/schemas';
@@ -90,7 +91,8 @@ vi.mock('../sandboxedRun.js', async (importOriginal) => {
 
 const { createHostHandler } = await import('../handlers/hostHandler.js');
 const { noPushApprovals } = await import('./fixtures/pushApprovals.js');
-const { checkTail, createTailBuffer, utf8Suffix } = await import('../commitCheck.js');
+const { checkTail, createHeadTailBuffer, createTailBuffer, utf8Suffix } =
+  await import('../commitCheck.js');
 const { requireCheckedPush } = await import('../checkReceipt.js');
 const actualSandbox =
   await vi.importActual<typeof import('../sandboxedRun.js')>('../sandboxedRun.js');
@@ -122,6 +124,30 @@ const FAILING = nodeCheck(
 );
 
 const HANGING = nodeCheck('setTimeout(() => {}, 60_000);');
+
+/**
+ * A server of its own on loopback; then the machine's listener on `machinePort`,
+ * standing in for the stack's Redis; then a documentation-only address, which
+ * only closed egress refuses at once. Each line says what it reached.
+ */
+function loopbackAndEgress(machinePort: number): string[] {
+  return nodeCheck(
+    [
+      "const net = require('net');",
+      'const reach = (label, port, host, next) => net.connect(port, host)',
+      "  .on('data', (data) => { console.log(label + ' ' + data); next(); })",
+      "  .on('error', (error) => { console.log(label + ' ' + error.code); next(); });",
+      "const server = net.createServer((socket) => socket.end('pong'));",
+      'const beyond = () => {',
+      `  reach('machine', ${String(machinePort)}, '127.0.0.1', () =>`,
+      "    reach('egress', 80, '192.0.2.1', () => process.exit(0)));",
+      '};',
+      "server.on('error', (error) => { console.log('own ' + error.code); beyond(); });",
+      "server.listen(0, '127.0.0.1', () =>",
+      "  reach('own', server.address().port, '127.0.0.1', () => { server.close(); beyond(); }));",
+    ].join('\n'),
+  );
+}
 
 interface Fixture {
   readonly repo: string;
@@ -464,6 +490,37 @@ describe('what a check’s output keeps', () => {
     expect(kept.text()).toEqual({ text: '6789abcdef', droppedBytes: 6 });
   });
 
+  it('keeps the whole output where it fits both ends', () => {
+    const kept = createHeadTailBuffer(8, 16);
+    kept.push('ok a\nok b\n');
+    kept.push('FAIL c\n');
+    expect(kept.text()).toBe('ok a\nok b\nFAIL c\n');
+  });
+
+  it('keeps the start and the failure at the end, the cut marked between whole lines', () => {
+    const failure = 'FAIL x.test.ts > a test\nAssertionError: expected 1 to be 2\n';
+    const printed = [
+      'ok   guards\nok   build a\n',
+      ...Array.from({ length: 50 }, (_, i) => `ok   build ${String(i)}\n`),
+      failure,
+    ];
+    const kept = createHeadTailBuffer(16, failure.length + 4);
+    for (const chunk of printed) kept.push(chunk);
+
+    const text = kept.text();
+    expect(text.startsWith('ok   guards\n[')).toBe(true);
+    expect(text.endsWith(`]\n${failure}`)).toBe(true);
+    const marker = /^\[(\d+) bytes printed here were not kept\]\n/m.exec(text);
+    const keptBytes = Buffer.byteLength(text) - Buffer.byteLength(marker?.[0] ?? '');
+    expect(keptBytes + Number(marker?.[1])).toBe(Buffer.byteLength(printed.join('')));
+  });
+
+  it('never splits a character between the start and the end', () => {
+    const kept = createHeadTailBuffer(2, 8);
+    kept.push('aéb');
+    expect(kept.text()).toBe('aéb');
+  });
+
   it('never starts inside a character', () => {
     expect(utf8Suffix('aé', 1)).toBe('');
     expect(utf8Suffix('aéb', 2)).toBe('b');
@@ -476,7 +533,7 @@ describe('what a check’s output keeps', () => {
     expect(Buffer.byteLength(tail)).toBeLessThanOrEqual(HOST_CHECK_TAIL_BYTES);
     expect(tail.startsWith('line ')).toBe(true);
     expect(tail.endsWith('line 1999')).toBe(true);
-    expect(HOST_CHECK_OUTPUT_KEEP_BYTES).toBeGreaterThan(HOST_CHECK_TAIL_BYTES);
+    expect(HOST_CHECK_OUTPUT_TAIL_BYTES).toBeGreaterThan(HOST_CHECK_TAIL_BYTES);
   });
 });
 
@@ -498,6 +555,30 @@ describe.skipIf(!CAN_CONFINE)('host.commit.check — through the real sandbox', 
       const failed = await check(failing);
       expect(HostCommitCheckOutputSchema.parse(failed.captured.output).passed).toBe(false);
       realSandbox = false;
+    },
+  );
+
+  it.skipIf(confined.skip)(
+    confined.title(
+      'reaches neither the machine’s loopback nor anything off it, and its own loopback only where the sandbox has one',
+    ),
+    async () => {
+      const machine = createServer((socket) => socket.end('pong'));
+      await new Promise<void>((resolve) => machine.listen(0, '127.0.0.1', resolve));
+      const { port } = machine.address() as AddressInfo;
+      try {
+        realSandbox = true;
+        const world = await fixture({ branchPrefix: 'aflow/', checks: loopbackAndEgress(port) });
+        const output = HostCommitCheckOutputSchema.parse((await check(world)).captured.output);
+        realSandbox = false;
+        expect(output.passed, output.summary).toBe(true);
+        expect(output.tail).toMatch(/machine E[A-Z]+/);
+        expect(output.tail).toMatch(/egress E[A-Z]+/);
+        if (process.platform === 'linux') expect(output.tail).toContain('own pong');
+        else expect(output.tail).toMatch(/own E[A-Z]+/);
+      } finally {
+        machine.close();
+      }
     },
   );
 });

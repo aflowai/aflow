@@ -9,13 +9,25 @@
  * outside home stay readable, and the operator is told so; what keeps their
  * contents on the machine is the egress policy, not the read policy.
  *
- * Four adapter options void the contract, so nothing here can set them:
+ * Five adapter options void the contract, so nothing here can set them:
  * `allowAppleEvents` removes code-execution isolation, `enableWeakerNetworkIsolation`
  * opens an exfiltration path through the trust daemon, `enableWeakerNestedSandbox`
- * exists to make the sandbox work inside Docker and materially weakens it, and
+ * exists to make the sandbox work inside Docker and materially weakens it,
  * allowing a Unix socket hands over whatever listens on it — all-or-nothing on
- * Linux, so permitting the SSH agent would also expose the Docker socket. A test
+ * Linux, so permitting the SSH agent would also expose the Docker socket — and
+ * `allowLocalBinding` hands over whatever listens on loopback the same way. A test
  * asserts every compiled policy is free of them rather than trusting this comment.
+ *
+ * Loopback is therefore the sandbox's own or nothing. On Linux the adapter
+ * gives every process a network namespace of its own: a command binds, accepts
+ * and connects on a loopback that holds only its own listeners, and the
+ * machine's — the stack's Redis, which takes no password and holds run state
+ * and write-approval grants, its Postgres, its API — are not there to reach. On
+ * macOS there is no such namespace. Bind and accept are local, but the
+ * profile's only loopback grant also admits a connection to every localhost
+ * port, and a sandbox profile can name one port or all of them, never the
+ * command's own. So on macOS a confined command cannot listen on loopback at
+ * all, and a test that serves itself there fails under the sandbox.
  */
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -39,6 +51,7 @@ export const FORBIDDEN_SANDBOX_OPTIONS = [
   'enableWeakerNetworkIsolation',
   'enableWeakerNestedSandbox',
   'allowUnixSockets',
+  'allowLocalBinding',
 ] as const;
 
 /**

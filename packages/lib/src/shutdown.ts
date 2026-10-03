@@ -14,7 +14,9 @@ export interface InFlightWork {
 
 /** Work a signal lets finish: claiming stops at once, and what was claimed runs to its end. */
 export interface DrainableWork {
+  /** Claims nothing more, and gives back whatever was claimed but has not started. */
   stopClaiming(): void;
+  /** The work that has started. Work still waiting its turn is not in flight. */
   inFlight(): readonly InFlightWork[];
   /** Resolves once something is in flight, at once if something already is. */
   whenInFlight(): Promise<void>;
@@ -98,8 +100,9 @@ export function createShutdownController(
         resolve(result);
       };
       endDrain = settle;
-      // Read again each time it fires rather than fixed at the start: a step
-      // still queued had no timeout yet, and a progress-aware one slides its own.
+      // Read again each time it fires rather than fixed at the start: a step a
+      // read under way delivers starts later, and a progress-aware one slides
+      // its own.
       const arm = (): void => {
         if (settled) return;
         const latest = latestDeadline(work.inFlight());

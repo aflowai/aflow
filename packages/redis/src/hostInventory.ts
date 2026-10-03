@@ -113,6 +113,11 @@ export const HostInventorySchema = z.object({
   runtimes: z.array(z.object({ name: z.string(), version: z.string() })),
   harnesses: z.array(z.object({ id: z.string(), label: z.string().optional() })),
   /**
+   * How many of those run at once on this machine; a run past it waits for one
+   * to end.
+   */
+  maxConcurrentHarnessRuns: z.number().int().min(1),
+  /**
    * The push posture of each folder this machine lets push, and whether a
    * publication from it runs checks and which program, from the same policy
    * file. Published rather than
