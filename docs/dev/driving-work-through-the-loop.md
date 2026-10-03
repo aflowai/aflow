@@ -57,15 +57,16 @@ another stream's runs.
    `node scripts/verify-commit.mjs` (`aflow harness checks hb_aflow -- node
 scripts/verify-commit.mjs`), and Local Publish runs it after the commit and before the
    scan, the review and the push, in a detached checkout of the commit with the folder's
-   dependencies linked, under the coding agent's sandbox. The script reads what changed from
+   dependencies linked, under the coding agent's sandbox with loopback open. The script reads what changed from
    `AFLOW_CHECK_BASE...AFLOW_CHECK_SHA` and runs, one line per step and stopping at the
    first failure: the two CI guards; a build of every package the touched workspaces
    or the workspaces reading a touched package reference or import, since a checkout builds
    nothing; `tsc -p` per touched workspace (and `web-product`'s `src/ui`); the touched tests
-   through the test runner, reporting only failures and the summary, with every test of
-   each workspace that reads a touched package, so a contract change meets its consumers
-   before the push — such a package built first, such an application's build reported
-   skipped by name — the catalog guards when `platform-artifacts` is touched and never a `*.pg.test.ts`; ESLint,
+   through the test runner on half the machine's cores, reporting only failures and the
+   summary, with every test of the touched workspaces and of each workspace that reads a
+   touched package whose imports reach a touched file, so a contract change meets its
+   consumers before the push — such a package built first, such an application's build
+   reported skipped by name — the catalog guards when `platform-artifacts` is touched and never a `*.pg.test.ts`; ESLint,
    errors only, on touched sources; and Prettier on every touched file. A failure fails
    the publication with the end of what it printed and nothing pushed: read it on the
    `check-commit` task, and commission the fix onto the branch. The pull request's CI

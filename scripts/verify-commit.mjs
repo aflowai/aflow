@@ -7,9 +7,10 @@
  * commit adds over the base it is measured against — and the checks are
  * scoped to it: the two CI guards over the whole tree, a build of every
  * package the touched workspaces read — their project references and imports,
- * one line per package — a type-check of each touched workspace, the touched
- * tests with every test of each workspace that reads a touched package — such
- * a package built first, such an application's build named as skipped — ESLint
+ * one line per package — a type-check of each touched workspace, the tests
+ * whose imports reach a touched file, in the touched workspaces and every
+ * workspace that reads a touched package — such a package built first, such an
+ * application's build named as skipped — on half the machine's cores, ESLint
  * (errors only) on touched sources and Prettier on every touched file. One
  * line per step, the tests reporting only their failures and summary, and the
  * first failure ends the run with that step's output.
@@ -24,11 +25,14 @@
  */
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { availableParallelism } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 import ts from 'typescript';
+
+import { testsReaching } from './test-selection.mjs';
 
 const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const binDir = path.join(repoRoot, 'node_modules', '.bin');
@@ -216,13 +220,25 @@ const touchedWorkspaces = [
   .map((dir) => workspaces.byDir.get(dir));
 
 // A touched package's contract meets its consumers here rather than after the
-// push: every workspace that reads one has its tests run with the touched ones.
+// push — but only the tests that can observe the change: of every test in the
+// touched workspaces and in those that read a touched package, directly or
+// through another, the ones whose import closure reaches a touched file.
 const touchedPackageNames = new Set(
   touchedWorkspaces.filter((w) => w.dir.startsWith('packages/')).map((w) => w.name),
 );
-const dependentWorkspaces = [...workspaces.byName.values()]
-  .filter((w) => !touchedPackageNames.has(w.name))
-  .filter((w) => w.reads.some((name) => touchedPackageNames.has(name)))
+const dependentNames = new Set();
+for (let grew = true; grew;) {
+  grew = false;
+  for (const workspace of workspaces.byName.values()) {
+    if (touchedPackageNames.has(workspace.name) || dependentNames.has(workspace.name)) continue;
+    if (workspace.reads.some((name) => touchedPackageNames.has(name) || dependentNames.has(name))) {
+      dependentNames.add(workspace.name);
+      grew = true;
+    }
+  }
+}
+const dependentWorkspaces = [...dependentNames]
+  .map((name) => workspaces.byName.get(name))
   .sort((a, b) => a.dir.localeCompare(b.dir));
 const testsOf = (workspace) => {
   const sourceDir = path.join(repoRoot, workspace.dir, 'src');
@@ -231,14 +247,32 @@ const testsOf = (workspace) => {
     .map((file) => `${workspace.dir}/src/${String(file).split(path.sep).join('/')}`)
     .filter((file) => TEST_FILE.test(file) && !DATABASE_TEST_FILE.test(file));
 };
-const testedDependents = dependentWorkspaces
-  .map((workspace) => ({ workspace, tests: testsOf(workspace) }))
-  .filter(({ tests }) => tests.length > 0);
-if (dependentWorkspaces.length > 0) {
-  console.log(
-    `dependents of the touched packages: ${dependentWorkspaces.map((w) => w.name).join(', ')}`,
-  );
-}
+const mergeBase = git(['merge-base', base, sha]).trim();
+const added = new Set(
+  git(['diff', '--name-only', '--no-renames', '--diff-filter=A', '-z', `${base}...${sha}`]).split(
+    '\0',
+  ),
+);
+const reaching = testsReaching({
+  repository: repoRoot,
+  files: touched,
+  candidates: [...touchedWorkspaces, ...dependentWorkspaces].flatMap(testsOf),
+  textAtBase: (file) => (added.has(file) ? undefined : git(['show', `${mergeBase}:${file}`])),
+  packageDirOf: (specifier) =>
+    workspaces.byName.get(specifier.match(/^@aflow\/[a-z0-9-]+/)?.[0])?.dir,
+});
+const reachingByWorkspace = Map.groupBy(reaching, (file) =>
+  workspaces.byDir.get(file.split('/').slice(0, 2).join('/')),
+);
+const testedDependents = dependentWorkspaces.filter((w) => reachingByWorkspace.has(w));
+console.log(
+  `${String(reaching.length)} tests reach the touched files` +
+    (reachingByWorkspace.size > 0
+      ? `: ${[...reachingByWorkspace]
+          .map(([workspace, files]) => `${workspace.name} ${String(files.length)}`)
+          .join(', ')}`
+      : ''),
+);
 
 // tsx as a loader rather than its CLI: the CLI opens a socket to talk to its
 // child, and the sandbox a check runs in refuses to listen on one.
@@ -270,10 +304,10 @@ for (const workspace of touchedWorkspaces) {
   for (const read of workspace.reads) need(read);
   if (workspace.dir.startsWith('packages/')) need(workspace.name);
 }
-for (const workspace of dependentWorkspaces) {
+for (const workspace of testedDependents) {
   for (const read of workspace.reads) need(read);
+  need(workspace.name);
 }
-for (const { workspace } of testedDependents) need(workspace.name);
 const ordered = [];
 const placed = new Set();
 const place = (name) => {
@@ -314,24 +348,23 @@ const catalogGuards = touchedNames.has('@aflow/platform-artifacts')
       .filter((file) => CATALOG_GUARD_FILE.test(path.basename(file)))
   : [];
 const tests = [
-  ...new Set([
-    ...present.filter((file) => TEST_FILE.test(file)),
-    ...catalogGuards,
-    ...testedDependents.flatMap(({ tests: dependentTests }) => dependentTests),
-  ]),
+  ...new Set([...present.filter((file) => TEST_FILE.test(file)), ...catalogGuards, ...reaching]),
 ].filter((file) => !DATABASE_TEST_FILE.test(file));
 if (tests.length === 0) {
-  console.log('ok   tests: none touched');
+  console.log('ok   tests: none reach the touched files');
 } else {
   // What `yarn test:file` runs, reporting only the failures and the summary: a
   // sweep passes hundreds of files, and a line for each pushes the failure out
-  // of what is read.
-  run(`tests (${String(tests.length)} files)`, process.execPath, [
-    'scripts/test-runner.mjs',
-    'file',
-    ...tests.sort(),
-    '--reporter=minimal',
-  ]);
+  // of what is read. Half the cores, because a check runs on the operator's
+  // machine beside the stack it serves, and a test that waits on a timer fails
+  // when every core is taken.
+  const workers = Math.max(1, Math.floor(availableParallelism() / 2));
+  run(
+    `tests (${String(tests.length)} files, ${String(workers)} workers)`,
+    process.execPath,
+    ['scripts/test-runner.mjs', 'file', ...tests.sort(), '--reporter=minimal'],
+    { env: { PHOENIX_TEST_WORKERS: String(workers) } },
+  );
 }
 
 const sources = present.filter((file) => LINTED_SOURCE.test(file));

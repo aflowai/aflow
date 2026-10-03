@@ -3,8 +3,8 @@
  *
  * The checkout is prepared as a commission's is — detached at the commit, the
  * folder's installed dependencies linked so nothing is installed — and the
- * command runs there under the same sandbox a coding agent runs in: egress
- * closed, the checkout writable and the folder itself not. What it printed is
+ * command runs there under the sandbox a coding agent runs in, loopback
+ * added: egress closed, the checkout writable and the folder itself not. What it printed is
  * kept in the order it came, and from both ends where there is too much of it:
  * its start says what ran, and a failing check says why last.
  */
@@ -191,9 +191,15 @@ export async function runFolderChecks(input: FolderCheckInput): Promise<FolderCh
       },
       timeoutMs: input.timeoutMs,
       scratchDir: scratch,
+      // Loopback is admitted and egress is not. A test that starts its own
+      // server and connects to it over 127.0.0.1 is the repository talking to
+      // itself, and refused, it waits out its timeout and fails a commit with
+      // nothing wrong in it. Egress is where a check could carry the folder off
+      // the machine, or pass because something outside answered for it.
       widening: {
         authPaths: [],
         allowedDomains: [],
+        loopback: true,
         writableRoot: worktree.path,
         withholdBindingWrite: true,
       },

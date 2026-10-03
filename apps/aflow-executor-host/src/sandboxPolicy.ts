@@ -24,7 +24,7 @@ import type { HostBinding } from './bindings.js';
 
 /** Only the fields this compiler sets. The adapter's own schema validates the rest. */
 export interface CompiledSandboxPolicy {
-  network: { allowedDomains: string[]; deniedDomains: string[] };
+  network: { allowedDomains: string[]; deniedDomains: string[]; allowLocalBinding?: boolean };
   filesystem: {
     denyRead: string[];
     allowRead: string[];
@@ -87,6 +87,12 @@ export interface SandboxWidening {
   readonly writePaths?: readonly string[];
   /** Hosts it may reach. */
   readonly allowedDomains: readonly string[];
+  /**
+   * Listen on, and connect to, this machine's loopback. Egress stays bounded
+   * by `allowedDomains`: the adapter admits outbound connections only to
+   * loopback under this, never to another host.
+   */
+  readonly loopback?: boolean;
   /**
    * A writable root that is not the binding's, so a harness can edit an
    * isolated worktree while the connected folder stays untouched.
@@ -153,6 +159,7 @@ export function compileSandboxPolicy(
       // network finds it closed rather than open-by-default.
       allowedDomains: [...(widening?.allowedDomains ?? [])],
       deniedDomains: [],
+      ...(widening?.loopback === true ? { allowLocalBinding: true } : {}),
     },
     filesystem: {
       denyRead: [

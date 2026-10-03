@@ -80,6 +80,24 @@ describe('sandbox policy compilation', () => {
     expect(compile().network.allowedDomains).toEqual([]);
   });
 
+  it('keeps loopback closed unless a widening asks for it', () => {
+    expect(compile().network.allowLocalBinding).toBeUndefined();
+  });
+
+  it('opens loopback without opening egress', () => {
+    const policy = compileSandboxPolicy(binding, {
+      home: HOME,
+      scratchDir: '/tmp/aflow-host',
+      widening: { authPaths: [], allowedDomains: [], loopback: true },
+    });
+    expect(policy.network).toEqual({
+      allowedDomains: [],
+      deniedDomains: [],
+      allowLocalBinding: true,
+    });
+    expect(() => SandboxRuntimeConfigSchema.parse(policy)).not.toThrow();
+  });
+
   it('never emits an option that voids the contract', () => {
     const serialized = JSON.stringify(compile());
     for (const option of FORBIDDEN_SANDBOX_OPTIONS) {
