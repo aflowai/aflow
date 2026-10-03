@@ -32,7 +32,10 @@ export function sandboxPostureOf(binding: Pick<HostBinding, 'sandbox'>): HostSan
 export function describeSandboxPosture(posture: HostSandboxPosture): string {
   switch (posture) {
     case 'open':
-      return 'runs its coding agents and checks unconfined, as you, in a checkout of the commit';
+      return (
+        "runs its coding agents and checks inside this machine's sandbox with the network " +
+        'open: every host and its local servers'
+      );
     case 'confined':
       return (
         "runs its coding agents and checks inside this machine's sandbox, reaching only the " +

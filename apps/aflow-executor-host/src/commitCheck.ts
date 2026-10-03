@@ -3,12 +3,12 @@
  *
  * The checkout is prepared as a commission's is — detached at the commit, the
  * folder's installed dependencies linked so nothing is installed — and the
- * command runs there as a coding agent does, under the folder's sandbox
- * posture: unconfined where it is `open`, and where it is `confined` with
- * egress and the machine's loopback closed, the checkout writable and the
- * folder itself not. What it printed is kept in
- * the order it came, and from both ends where there is too much of it:
- * its start says what ran, and a failing check says why last.
+ * command runs there as a coding agent does, under the sandbox and the folder's
+ * posture: the checkout writable and the folder itself not, and the network
+ * the posture opens — every host and loopback under `open`, none but the
+ * sandbox's own under `confined`. What it printed is kept in the order it came,
+ * and from both ends where there is too much of it: its start says what ran,
+ * and a failing check says why last.
  */
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -194,8 +194,8 @@ export async function runFolderChecks(input: FolderCheckInput): Promise<FolderCh
       },
       timeoutMs: input.timeoutMs,
       scratchDir: scratch,
-      // Read only in a confined folder, which has no egress and no loopback
-      // but the sandbox's own.
+      // No host named: a check in a `confined` folder reaches none, and one
+      // in an `open` folder reaches every host without being told.
       widening: {
         authPaths: [],
         allowedDomains: [],

@@ -80,7 +80,6 @@ beforeAll(async () => {
           root: repo,
           mode: 'readwrite',
           allowsExecution: true,
-          sandbox: 'confined',
           singleFile: false,
           spaceId: 'space-test',
         },

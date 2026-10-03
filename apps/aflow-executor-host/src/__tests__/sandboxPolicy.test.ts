@@ -9,7 +9,11 @@ import { SandboxRuntimeConfigSchema } from '@anthropic-ai/sandbox-runtime';
 import { describe, expect, it } from 'vitest';
 
 import type { HostBinding } from '../bindings.js';
-import { FORBIDDEN_SANDBOX_OPTIONS, compileSandboxPolicy } from '../sandboxPolicy.js';
+import {
+  FORBIDDEN_SANDBOX_OPTIONS,
+  OPEN_ONLY_SANDBOX_OPTION,
+  compileSandboxPolicy,
+} from '../sandboxPolicy.js';
 
 const HOME = '/Users/probe';
 const binding: HostBinding = {
@@ -105,5 +109,18 @@ describe('sandbox policy compilation', () => {
   it('produces a policy the adapter itself accepts', () => {
     // Guards against the adapter's schema moving under a pinned beta.
     expect(() => SandboxRuntimeConfigSchema.parse(compile())).not.toThrow();
+  });
+
+  it('produces an `open` policy the adapter accepts, its one extra option included', () => {
+    const open = compileSandboxPolicy(binding, {
+      home: HOME,
+      scratchDir: '/tmp/aflow-host',
+      posture: 'open',
+    });
+    expect(SandboxRuntimeConfigSchema.parse(open).network[OPEN_ONLY_SANDBOX_OPTION]).toBe(true);
+    const serialized = JSON.stringify(open);
+    for (const option of FORBIDDEN_SANDBOX_OPTIONS) {
+      expect(serialized).not.toContain(option);
+    }
   });
 });

@@ -81,22 +81,26 @@ export type HostPushApproval = z.infer<typeof HostPushApprovalSchema>;
 export const HostSandboxPostureSchema = z
   .enum(['open', 'confined'])
   .describe(
-    'What a coding agent and the checks run under in this folder. ' +
-      "`open`: unconfined, as the operator's own user, in a detached checkout of the commit. " +
-      "`confined`: inside the machine's sandbox, which reaches only the hosts a harness is " +
-      "allowed, writes only the checkout and keeps the machine's loopback closed. " +
-      'Under either, the ref guard, the scan, the checks, the review and the push gate stand ' +
-      'between the change and a pushed branch. Declared on the machine; no workspace can set it.',
+    'What network a coding agent and the checks have in this folder. Not whether there is a ' +
+      "sandbox: under both they run inside the machine's sandbox in a detached checkout of the " +
+      "commit, writing the checkout and the run's scratch, never the folder or its `.git`, " +
+      "and never reading or writing the machine's host directory, where the policy every gate " +
+      'reads and the pairing credential live. ' +
+      '`open`: every host and loopback, and the system temporary directory writable. ' +
+      "`confined`: only the hosts a harness is allowed, and the machine's loopback closed. " +
+      'Declared on the machine; no workspace can set it.',
   );
 export type HostSandboxPosture = z.infer<typeof HostSandboxPostureSchema>;
 
 /**
- * `open` in the local edition: the lane runs the operator's own tool with the
- * operator's own credentials on the operator's own repository, which the
- * operator already runs unconfined in a terminal. What protects `main` is not
- * the sandbox but the ref guard, the scan, the check, the review and the push
- * gate, every one bound to a sha. `confined` is the choice for a repository
- * the operator does not trust.
+ * `open` in the local edition: the lane runs the operator's own tool on the
+ * operator's own repository, and what that tool needs from the machine is the
+ * network — its own search and fetch, Corepack and the registry, a test's
+ * loopback server. The sandbox still withholds the host directory, the
+ * operator's folder and its `.git` under `open`, which is what lets the ref
+ * guard, the scan, the check, the review and the push gate stand: each reads
+ * its configuration from there. `confined` is the choice for a repository the
+ * operator does not trust.
  */
 export const HOST_SANDBOX_POSTURE_DEFAULT: HostSandboxPosture = 'open';
 
@@ -1116,8 +1120,8 @@ export const HostHarnessRunOutputSchema = z.object({
   blockedDomains: z
     .array(z.string())
     .describe(
-      'Hosts the boundary refused during the run, always empty in an `open` folder. A harness ' +
-        'that produced nothing while this is non-empty was cut off from what it needed, not idle.',
+      'Hosts the boundary refused during the run. A harness that produced nothing while this ' +
+        'is non-empty was cut off from what it needed, not idle.',
     ),
   boundaryNote: z
     .string()

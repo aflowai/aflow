@@ -3,8 +3,7 @@
  *
  * Commands and coding harnesses differ in what they are asked to do and in how
  * much of the boundary they need open, and a permitted push differs further
- * still — it runs unconfined, as the operator's own git, as a coding agent and
- * a folder's checks do in a folder whose posture is `open`. None of them differ in
+ * still — it runs unconfined, as the operator's own git. None of them differ in
  * how they are supervised, captured or stopped, which is what `superviseSpawn`
  * holds: a second spawn path would mean the group-kill, the output cap and the
  * timeout each had two implementations, and a fix to one would silently miss the
@@ -19,8 +18,11 @@ import { createRequire } from 'node:module';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { constants } from 'node:os';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { SandboxManager } from '@anthropic-ai/sandbox-runtime';
+
+import type { HostSandboxPosture } from '@aflow/schemas';
 
 import { buildBaseEnv, workloadHome } from './baseEnv.js';
 import type { ExecutionPermitted, HostBinding } from './bindings.js';
@@ -411,6 +413,12 @@ export interface SandboxedRunInput extends SupervisedRun {
   readonly inheritEnv?: readonly string[];
   /** Where the machine says the operator's tools live. Read-only. */
   readonly toolPaths?: readonly string[];
+  /**
+   * The folder's posture, for a coding agent and a folder's checks. Anything
+   * else runs `confined` whatever the folder says, because it is a command an
+   * agent wrote rather than the operator's own tool.
+   */
+  readonly posture?: HostSandboxPosture;
 }
 
 export interface UnconfinedRunInput extends SupervisedRun {
@@ -910,74 +918,55 @@ export async function runSandboxed(input: SandboxedRunInput): Promise<SandboxedR
   // dangerous variables would act on.
   assertSafeEnv(input.env);
 
+  const posture = input.posture ?? 'confined';
   // The policy lives outside the binding: a command that could rewrite the
   // file bounding it would not be bounded by it.
   const policy = compileSandboxPolicy(input.binding, {
     scratchDir: input.scratchDir,
+    posture,
     ...(input.widening ? { widening: input.widening } : {}),
     ...(input.toolPaths ? { toolPaths: input.toolPaths } : {}),
   });
   const settingsPath = join(input.scratchDir, 'srt-settings.json');
   await writeFile(settingsPath, JSON.stringify(policy), { mode: 0o600 });
-
-  // Resolved from this module, not the working directory. An executor
-  // installed on the operator's machine is started from wherever they happen
-  // to be, and a cwd-relative path would find the adapter only by luck.
-  const srtBin = join(
-    dirname(createRequire(import.meta.url).resolve('@anthropic-ai/sandbox-runtime/package.json')),
-    'dist',
-    'cli.js',
-  );
   await mkdir(workloadHome(input.scratchDir), { recursive: true });
 
   const statusPath = workloadStatusPath(input.scratchDir);
   return await superviseSpawn({
     ...input,
     program: process.execPath,
-    // Argv all the way through: the adapter's CLI takes the command as varargs,
+    // Argv all the way through: both launchers take the command as varargs,
     // so nothing between here and exec has to split or quote a string.
-    args: confinedArgv(srtBin, settingsPath, statusPath, input.argv),
+    args: confinedArgv(sandboxLauncher(posture), settingsPath, statusPath, input.argv),
     statusPath,
-    env: workloadEnv(input),
+    // Named inheritance, never the executor's whole environment: that
+    // environment holds the credentials this executor was paired with.
+    env: {
+      ...buildBaseEnv(input.scratchDir, input.inheritEnv ?? []),
+      ...input.env,
+      ...input.trustedEnv,
+    },
     bindingId: input.binding.id,
   });
 }
 
 /**
- * Named inheritance, never the executor's whole environment: that environment
- * holds the credentials this executor was paired with, whichever way the
- * workload is spawned.
- */
-function workloadEnv(input: SandboxedRunInput): Record<string, string> {
-  return {
-    ...buildBaseEnv(input.scratchDir, input.inheritEnv ?? []),
-    ...input.env,
-    ...input.trustedEnv,
-  };
-}
-
-/**
- * Run a coding agent or a folder's checks unconfined, as the operator's own
- * user, in a folder whose sandbox posture is `open` (Plan 315 D19).
+ * The adapter's own command line for `confined`, which refuses every host the
+ * policy does not name; for `open`, the launcher that admits them.
  *
- * The environment is the one a confined run is handed, so the run's own
- * `TMPDIR` and `HOME`, its credential, its configuration directory and the ref
- * guard reach it the same way; the widening and tool paths, which only bound a
- * sandbox, are not read. No launcher stands between it and this executor, so
- * its exit is its own.
+ * Resolved from this module, not the working directory. An executor installed
+ * on the operator's machine is started from wherever they happen to be, and a
+ * cwd-relative path would find either only by luck.
  */
-export async function runOpen(input: SandboxedRunInput): Promise<SandboxedRunResult> {
-  assertSafeEnv(input.env);
-  const [program, ...args] = input.argv;
-  if (program === undefined) throw new Error('A command with no program cannot be run.');
-  await mkdir(workloadHome(input.scratchDir), { recursive: true });
-  return await superviseSpawn({
-    ...input,
-    program,
-    args,
-    env: workloadEnv(input),
-    bindingId: input.binding.id,
-  });
+function sandboxLauncher(posture: HostSandboxPosture): string {
+  if (posture === 'open') {
+    return fileURLToPath(new URL('./openSandboxLauncher.mjs', import.meta.url));
+  }
+  return join(
+    dirname(createRequire(import.meta.url).resolve('@anthropic-ai/sandbox-runtime/package.json')),
+    'dist',
+    'cli.js',
+  );
 }
 
 /**

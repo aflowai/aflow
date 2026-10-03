@@ -9,16 +9,20 @@
  * outside home stay readable, and the operator is told so; what keeps their
  * contents on the machine is the egress policy, not the read policy.
  *
- * Five adapter options void the contract, so nothing here can set them:
+ * Four adapter options void the contract, so nothing here can set them:
  * `allowAppleEvents` removes code-execution isolation, `enableWeakerNetworkIsolation`
  * opens an exfiltration path through the trust daemon, `enableWeakerNestedSandbox`
- * exists to make the sandbox work inside Docker and materially weakens it,
+ * exists to make the sandbox work inside Docker and materially weakens it, and
  * allowing a Unix socket hands over whatever listens on it — all-or-nothing on
- * Linux, so permitting the SSH agent would also expose the Docker socket — and
- * `allowLocalBinding` hands over whatever listens on loopback the same way. A test
+ * Linux, so permitting the SSH agent would also expose the Docker socket. A test
  * asserts every compiled policy is free of them rather than trusting this comment.
  *
- * Loopback is therefore the sandbox's own or nothing. On Linux the adapter
+ * `allowLocalBinding` hands over whatever listens on loopback the same way, so
+ * only the `open` posture sets it: the network is what that posture opens. What
+ * keeps the machine's trust configuration and the operator's own files from a
+ * job is the filesystem policy, and that is the same under both.
+ *
+ * Under `confined`, loopback is the sandbox's own or nothing. On Linux the adapter
  * gives every process a network namespace of its own: a command binds, accepts
  * and connects on a loopback that holds only its own listeners, and the
  * machine's — the stack's Redis, which takes no password and holds run state
@@ -29,14 +33,18 @@
  * command's own. So on macOS a confined command cannot listen on loopback at
  * all, and a test that serves itself there fails under the sandbox.
  */
+import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join, relative, sep } from 'node:path';
+
+import type { HostSandboxPosture } from '@aflow/schemas';
 
 import type { HostBinding } from './bindings.js';
+import { resolveHostDir } from './hostDir.js';
 
 /** Only the fields this compiler sets. The adapter's own schema validates the rest. */
 export interface CompiledSandboxPolicy {
-  network: { allowedDomains: string[]; deniedDomains: string[] };
+  network: { allowedDomains: string[]; deniedDomains: string[]; allowLocalBinding?: true };
   filesystem: {
     denyRead: string[];
     allowRead: string[];
@@ -51,8 +59,38 @@ export const FORBIDDEN_SANDBOX_OPTIONS = [
   'enableWeakerNetworkIsolation',
   'enableWeakerNestedSandbox',
   'allowUnixSockets',
-  'allowLocalBinding',
 ] as const;
+
+/** Set only under `open`, whose loopback is the machine's. */
+export const OPEN_ONLY_SANDBOX_OPTION = 'allowLocalBinding';
+
+/**
+ * The system's own temporary directory. A shell and much of a toolchain write
+ * here whatever `TMPDIR` says — a coding agent's shell records its working
+ * directory in a file here after every command — so under `confined` each of
+ * those commands reads as failed. Under `open` it is writable.
+ */
+export const SYSTEM_TEMP_ROOT = '/tmp';
+
+/**
+ * The system temporary directory under each name it has: the adapter matches
+ * paths as the kernel reports them, and on macOS `/tmp` is a link to
+ * `/private/tmp`.
+ */
+export function systemTempWritePaths(): string[] {
+  let resolved = SYSTEM_TEMP_ROOT;
+  try {
+    resolved = realpathSync(SYSTEM_TEMP_ROOT);
+  } catch {
+    // No `/tmp` on this machine: there is nothing there for a command to write.
+  }
+  return [...new Set([SYSTEM_TEMP_ROOT, resolved])];
+}
+
+function atOrUnder(path: string, dir: string): boolean {
+  const rel = relative(dir, path);
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
 
 /**
  * Interpreter and toolchain installations under the denied home region.
@@ -153,28 +191,47 @@ export function compileSandboxPolicy(
     widening?: SandboxWidening;
     /** Where the machine says the operator's tools live. Read-only. */
     toolPaths?: readonly string[];
+    /** What the folder runs under. A command no folder posture governs is `confined`. */
+    posture?: HostSandboxPosture;
+    /** The machine's host directory; resolved as the executor resolves it when absent. */
+    hostDir?: string;
   } = { scratchDir: '' },
 ): CompiledSandboxPolicy {
   const home = options.home ?? homedir();
+  const hostDir = options.hostDir ?? resolveHostDir(process.env, home);
+  const open = options.posture === 'open';
   const scratch = options.scratchDir ? [options.scratchDir] : [];
   const widening = options.widening;
   const writableRoot = widening?.writableRoot ? [widening.writableRoot] : [];
+  // The host directory holds the policy every gate reads — push approval, the
+  // checks, the posture itself — and pairing's credential. Nothing a job is
+  // granted reaches into it, under either posture, whatever a profile or the
+  // machine's tool paths name.
+  const outsideHostDir = (paths: readonly string[]): string[] =>
+    paths.filter((path) => !atOrUnder(path, hostDir));
+  const bindingWritable = binding.mode === 'readwrite' && widening?.withholdBindingWrite !== true;
+  // A folder under the system temporary directory would otherwise become
+  // writable with it.
+  const bindingWithheldUnderOpen = open && !bindingWritable ? [binding.root] : [];
 
   return {
     network: {
       // No egress until something declares one. A command that reaches the
-      // network finds it closed rather than open-by-default.
+      // network finds it closed rather than open-by-default. Under `open` the
+      // launcher admits every host this list does not name.
       allowedDomains: [...(widening?.allowedDomains ?? [])],
       deniedDomains: [],
+      ...(open ? { [OPEN_ONLY_SANDBOX_OPTION]: true as const } : {}),
     },
     filesystem: {
       denyRead: [
         home,
+        hostDir,
         ...credentialFilesInToolchains(home),
         ...repositoryExecutableSurfaces(binding.root),
         ...writableRoot.flatMap((r) => repositoryExecutableSurfaces(r)),
       ],
-      allowRead: [
+      allowRead: outsideHostDir([
         binding.root,
         ...scratch,
         ...writableRoot,
@@ -182,15 +239,14 @@ export function compileSandboxPolicy(
         ...(options.toolPaths ?? []),
         ...(widening?.authPaths ?? []),
         ...(widening?.writePaths ?? []),
-      ],
-      allowWrite: [
-        ...(binding.mode === 'readwrite' && widening?.withholdBindingWrite !== true
-          ? [binding.root]
-          : []),
+      ]),
+      allowWrite: outsideHostDir([
+        ...(bindingWritable ? [binding.root] : []),
         ...scratch,
         ...writableRoot,
         ...(widening?.writePaths ?? []),
-      ],
+        ...(open ? systemTempWritePaths() : []),
+      ]),
       // Writing here is the escalation, and it is the only part that is.
       //
       // Git runs `hooks/` and a `filter.*.smudge` defined in `config` as the
@@ -211,6 +267,8 @@ export function compileSandboxPolicy(
       // So: disclosure inside a folder the operator connected is theirs to
       // allow, and escalation out of it is not.
       denyWrite: [
+        hostDir,
+        ...bindingWithheldUnderOpen,
         ...repositoryExecutableSurfaces(binding.root),
         ...writableRoot.flatMap((r) => repositoryExecutableSurfaces(r)),
         ...repositoryConfigUnder(binding.root),

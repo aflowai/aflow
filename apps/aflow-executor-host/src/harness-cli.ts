@@ -62,7 +62,7 @@ function usage(): never {
       '                                     How long those checks may run.\n' +
       '  harness checks <folder> --clear    Run none.\n' +
       '  harness sandbox <folder> <open|confined>\n' +
-      '                                     What its coding agents and checks run under.\n' +
+      '                                     What network its coding agents and checks have.\n' +
       '  harness remove <id>                Stop allowing it.\n' +
       '  harness mcp <id> <command...>      Allow an MCP server to run here.\n' +
       '  harness mcp-remove <id>            Stop allowing it.\n' +

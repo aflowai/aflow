@@ -2,33 +2,37 @@
  * Contract: what a coding agent and a folder's checks run under is the
  * folder's sandbox posture (Plan 315 D19). It is `open` unless the operator
  * chose `confined`, the policy file holds it only when they did, and
- * `host.binding.inspect` shows it either way. A harness run in an `open`
- * folder is spawned unconfined with the environment the lane assembles; in a
- * `confined` one it is handed to the sandbox as before.
+ * `host.binding.inspect` shows it either way. Both postures are the sandbox:
+ * `open` opens the network and the system temporary directory, and neither
+ * lets a job read or write the machine's host directory, write the operator's
+ * folder or its `.git`.
  *
- * The handler suites stand in for both spawns and record what each is handed;
- * the last suite spawns an `open` run for real.
+ * The handler suites stand in for the spawn and record what it is handed; the
+ * last suite runs a command under each posture for real, where this machine
+ * can confine one.
  */
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
-import { createServer, type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { HOST_SANDBOX_POSTURE_DEFAULT, HostBindingInspectOutputSchema } from '@aflow/schemas';
+import {
+  HOST_SANDBOX_POSTURE_DEFAULT,
+  HostBindingInspectOutputSchema,
+  type HostSandboxPosture,
+} from '@aflow/schemas';
 
 import type { SandboxedRunInput, SandboxedRunResult } from '../sandboxedRun.js';
-import { LOOPBACK_LISTENER, requires } from './fixtures/capabilities.js';
+import { CONFINEMENT_LISTENERS, requires } from './fixtures/capabilities.js';
 
 const run = promisify(execFile);
-const listens = requires(LOOPBACK_LISTENER);
+const confinable = requires(...CONFINEMENT_LISTENERS);
 
 const sandboxed: SandboxedRunInput[] = [];
-const opened: SandboxedRunInput[] = [];
 let sandboxMissing = false;
 
 function finished(processId: string): SandboxedRunResult {
@@ -54,11 +58,7 @@ vi.mock('../sandboxedRun.js', async (importOriginal) => {
         : { ready: true, missing: [] },
     runSandboxed: (input: SandboxedRunInput): Promise<SandboxedRunResult> => {
       sandboxed.push(input);
-      return Promise.resolve(finished('hr_confined'));
-    },
-    runOpen: (input: SandboxedRunInput): Promise<SandboxedRunResult> => {
-      opened.push(input);
-      return Promise.resolve(finished('hr_open'));
+      return Promise.resolve(finished('hr_sandboxed'));
     },
   };
 });
@@ -76,6 +76,9 @@ const {
   withSandboxPosture,
 } = await import('../sandboxPosture.js');
 const actual = await vi.importActual<typeof import('../sandboxedRun.js')>('../sandboxedRun.js');
+const { compileSandboxPolicy, OPEN_ONLY_SANDBOX_OPTION, SYSTEM_TEMP_ROOT } =
+  await import('../sandboxPolicy.js');
+const { runOpenPostureSelfTest } = await import('../openPostureSelfTest.js');
 
 const RUNNING = {
   id: 'hb_app',
@@ -98,7 +101,6 @@ function policyWith(bindings: unknown[]) {
 
 beforeEach(() => {
   sandboxed.length = 0;
-  opened.length = 0;
   sandboxMissing = false;
 });
 
@@ -159,7 +161,7 @@ describe('aflow harness sandbox <folder> open|confined', () => {
 
     const open = sandboxVerb(confined.policy, 'hb_app', ['open']);
     expect(open.policy.bindings[0]?.sandbox).toBe('open');
-    expect(open.said).toContain('unconfined');
+    expect(open.said).toContain('network open');
   });
 
   it('takes exactly one posture', () => {
@@ -268,37 +270,18 @@ describe('a harness run under the folder’s posture', () => {
     } as never);
   }
 
-  it('spawns an `open` folder’s coding agent unconfined, in its checkout, with the lane’s environment', async () => {
+  it('hands an `open` folder’s coding agent to the sandbox as `open`, in its checkout, with the lane’s environment', async () => {
     expect((await commission('hb_open')).status).toBe('SUCCEEDED');
-    expect(sandboxed).toHaveLength(0);
-    expect(opened).toHaveLength(1);
-    const input = opened[0];
+    expect(sandboxed).toHaveLength(1);
+    const input = sandboxed[0];
+    expect(input?.posture).toBe('open');
     expect(input?.cwd.startsWith(tmpdir())).toBe(true);
     expect(input?.cwd).not.toBe(repo);
     expect(input?.env).toEqual({});
     expect(input?.trustedEnv).toMatchObject({
-      AGENT_TOKEN: 'agent-credential',
-      AGENT_CONFIG_DIR: expect.stringContaining('harness-config'),
-      GIT_NO_REPLACE_OBJECTS: '1',
-      GIT_CONFIG_KEY_0: 'core.hooksPath',
-    });
-    expect(input?.trustedEnv).not.toHaveProperty('SRT_DEBUG');
-  });
-
-  it('spawns a folder that chose none as `open`', async () => {
-    expect((await commission('hb_default')).status).toBe('SUCCEEDED');
-    expect(sandboxed).toHaveLength(0);
-    expect(opened).toHaveLength(1);
-  });
-
-  it('hands a `confined` folder’s coding agent to the sandbox, as before', async () => {
-    expect((await commission('hb_confined')).status).toBe('SUCCEEDED');
-    expect(opened).toHaveLength(0);
-    expect(sandboxed).toHaveLength(1);
-    const input = sandboxed[0];
-    expect(input?.trustedEnv).toMatchObject({
       SRT_DEBUG: '1',
       AGENT_TOKEN: 'agent-credential',
+      AGENT_CONFIG_DIR: expect.stringContaining('harness-config'),
       GIT_NO_REPLACE_OBJECTS: '1',
       GIT_CONFIG_KEY_0: 'core.hooksPath',
     });
@@ -308,88 +291,264 @@ describe('a harness run under the folder’s posture', () => {
     });
   });
 
-  it('runs an `open` folder on a machine with no qualified sandbox, and refuses a `confined` one there', async () => {
+  it('hands a folder that chose none to the sandbox as `open`', async () => {
+    expect((await commission('hb_default')).status).toBe('SUCCEEDED');
+    expect(sandboxed.map((input) => input.posture)).toEqual(['open']);
+  });
+
+  it('hands a `confined` folder’s coding agent to the sandbox as `confined`', async () => {
+    expect((await commission('hb_confined')).status).toBe('SUCCEEDED');
+    expect(sandboxed.map((input) => input.posture)).toEqual(['confined']);
+    expect(sandboxed[0]?.trustedEnv).toMatchObject({
+      SRT_DEBUG: '1',
+      AGENT_TOKEN: 'agent-credential',
+      GIT_NO_REPLACE_OBJECTS: '1',
+      GIT_CONFIG_KEY_0: 'core.hooksPath',
+    });
+  });
+
+  it('refuses a coding agent under either posture on a machine with no qualified sandbox', async () => {
     sandboxMissing = true;
-    expect((await commission('hb_open')).status).toBe('SUCCEEDED');
+    expect((await commission('hb_open')).status).toBe('FAILED');
     expect((await commission('hb_confined')).status).toBe('FAILED');
     expect(sandboxed).toHaveLength(0);
   });
 });
 
-describe('an `open` spawn', () => {
-  async function openRun(script: string, trustedEnv: Record<string, string> = {}) {
-    const scratchDir = await mkdtemp(join(tmpdir(), 'open-run-'));
-    const root = await mkdtemp(join(tmpdir(), 'open-folder-'));
-    const binding = HostPolicySchema.parse({
-      version: 1,
-      bindings: [{ ...RUNNING, root, sandbox: 'open' }],
-    }).bindings[0];
-    if (binding === undefined) throw new Error('no binding');
-    const result = await actual.runOpen({
-      binding,
-      argv: [process.execPath, '-e', script],
-      cwd: root,
-      env: {},
-      trustedEnv,
-      timeoutMs: 30_000,
-      scratchDir,
-      idPrefix: 'hr',
-      ownerRunId: 'run-open',
-      signal: new AbortController().signal,
-      closeStdin: true,
-      onDelta: () => undefined,
-    });
-    return { result, scratchDir, root };
+describe('what a posture compiles to', () => {
+  const HOME = '/Users/probe';
+  const HOST_DIR = join(HOME, '.aflow');
+  const ROOT = join(HOME, 'projects', 'app');
+  const SCRATCH = '/var/scratch/aflow-harness-x';
+  const CHECKOUT = join(SCRATCH, 'work');
+
+  function policyFor(posture: HostSandboxPosture) {
+    return compileSandboxPolicy(
+      { ...RUNNING, root: ROOT, singleFile: false, sandbox: posture } as never,
+      {
+        home: HOME,
+        hostDir: HOST_DIR,
+        scratchDir: SCRATCH,
+        posture,
+        // A profile naming the host directory is given none of it.
+        widening: {
+          authPaths: [join(HOST_DIR, 'agent-auth')],
+          writePaths: [HOST_DIR],
+          allowedDomains: [],
+          writableRoot: CHECKOUT,
+          withholdBindingWrite: true,
+        },
+        toolPaths: [join(HOST_DIR, 'bin')],
+      },
+    );
   }
 
-  it('runs as the operator, writes the folder, and sees only the environment the lane assembled', async () => {
-    process.env['AFLOW_EXECUTOR_ONLY'] = 'not for the workload';
-    try {
-      const { result, scratchDir, root } = await openRun(
-        [
-          "require('fs').writeFileSync('written-by-the-agent.txt', 'ok');",
-          'console.log(JSON.stringify({',
-          '  uid: process.getuid(),',
-          "  home: process.env['HOME'],",
-          "  tmp: process.env['TMPDIR'],",
-          "  token: process.env['AGENT_TOKEN'],",
-          "  executorOnly: process.env['AFLOW_EXECUTOR_ONLY'] ?? null,",
-          '}));',
-        ].join('\n'),
-        { AGENT_TOKEN: 'agent-credential' },
-      );
-      expect(result.exitCode, result.stderr).toBe(0);
-      expect(JSON.parse(result.stdout)).toEqual({
-        uid: process.getuid?.(),
-        home: join(scratchDir, 'home'),
-        tmp: scratchDir,
-        token: 'agent-credential',
-        executorOnly: null,
-      });
-      expect(existsSync(join(root, 'written-by-the-agent.txt'))).toBe(true);
-    } finally {
-      delete process.env['AFLOW_EXECUTOR_ONLY'];
+  const under = (paths: readonly string[], dir: string): string[] =>
+    paths.filter((path) => path === dir || path.startsWith(`${dir}/`));
+
+  it.each(['open', 'confined'] as const)(
+    'withholds the host directory and the operator’s folder under `%s`',
+    (posture) => {
+      const policy = policyFor(posture);
+      expect(policy.filesystem.denyRead).toContain(HOST_DIR);
+      expect(policy.filesystem.denyWrite).toContain(HOST_DIR);
+      expect(under(policy.filesystem.allowRead, HOST_DIR)).toEqual([]);
+      expect(under(policy.filesystem.allowWrite, HOST_DIR)).toEqual([]);
+      expect(under(policy.filesystem.allowWrite, ROOT)).toEqual([]);
+      expect(policy.filesystem.allowRead).toContain(ROOT);
+      expect(policy.filesystem.allowWrite).toEqual(expect.arrayContaining([SCRATCH, CHECKOUT]));
+    },
+  );
+
+  it('opens the network and the system temporary directory under `open` alone', () => {
+    const open = policyFor('open');
+    expect(open.network[OPEN_ONLY_SANDBOX_OPTION]).toBe(true);
+    expect(open.filesystem.allowWrite).toContain(SYSTEM_TEMP_ROOT);
+
+    const confined = policyFor('confined');
+    expect(confined.network).toEqual({ allowedDomains: [], deniedDomains: [] });
+    expect(confined.filesystem.allowWrite).not.toContain(SYSTEM_TEMP_ROOT);
+  });
+
+  it('keeps a folder that lives in the system temporary directory unwritable under `open`', () => {
+    const root = join(SYSTEM_TEMP_ROOT, 'app');
+    const policy = compileSandboxPolicy(
+      { ...RUNNING, root, singleFile: false, sandbox: 'open' } as never,
+      {
+        home: HOME,
+        hostDir: HOST_DIR,
+        scratchDir: SCRATCH,
+        posture: 'open',
+        widening: {
+          authPaths: [],
+          allowedDomains: [],
+          writableRoot: CHECKOUT,
+          withholdBindingWrite: true,
+        },
+      },
+    );
+    expect(policy.filesystem.allowWrite).toContain(SYSTEM_TEMP_ROOT);
+    expect(policy.filesystem.denyWrite).toContain(root);
+  });
+});
+
+/**
+ * Each attempt a job could make on what the gates read or the operator owns,
+ * and the two writes a coding agent needs. Run as `node -e` with the host
+ * directory, the folder, the checkout and a temp-root path as its arguments.
+ */
+const ATTEMPTS = [
+  "const fs = require('fs');",
+  "const path = require('path');",
+  'const [hostDir, root, checkout, tempProbe] = process.argv.slice(1);',
+  'const attempts = {',
+  "  'rewrite the host policy': () => fs.writeFileSync(path.join(hostDir, 'host-policy.json'), '{}'),",
+  "  'read the pairing credential': () => fs.readFileSync(path.join(hostDir, 'host.env'), 'utf8'),",
+  "  'write the operator’s folder': () => fs.writeFileSync(path.join(root, 'README.md'), 'changed'),",
+  "  'plant a hook in its .git': () => fs.writeFileSync(path.join(root, '.git', 'hooks', 'post-checkout'), '#!/bin/sh'),",
+  "  'move a branch in its .git': () => fs.writeFileSync(path.join(root, '.git', 'refs', 'heads', 'main'), '0'.repeat(40)),",
+  "  'write the checkout': () => fs.writeFileSync(path.join(checkout, 'made-by-the-agent.txt'), 'ok'),",
+  "  'write the system temp root': () => { fs.writeFileSync(tempProbe, 'ok'); fs.rmSync(tempProbe); },",
+  '};',
+  'const seen = {};',
+  'for (const [name, attempt] of Object.entries(attempts)) {',
+  "  try { attempt(); seen[name] = 'done'; } catch { seen[name] = 'refused'; }",
+  '}',
+  'console.log(JSON.stringify(seen));',
+].join('\n');
+
+const CAN_CONFINE = actual.sandboxAvailable() && !confinable.skip;
+
+describe.each(['open', 'confined'] as const)('a command under `%s`, for real', (posture) => {
+  const saved = {
+    dir: process.env['PHOENIX_HOST_DIR'],
+    path: process.env['PHOENIX_HOST_POLICY_PATH'],
+  };
+  afterEach(() => {
+    for (const [key, value] of [
+      ['PHOENIX_HOST_DIR', saved.dir],
+      ['PHOENIX_HOST_POLICY_PATH', saved.path],
+    ] as const) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
     }
   });
 
-  it.skipIf(listens.skip)(
-    listens.title('reaches the machine’s loopback, which is simply the machine’s'),
+  it.skipIf(!CAN_CONFINE)(
+    confinable.title('reaches neither the machine’s trust configuration nor the operator’s folder'),
     async () => {
-      const machine = createServer((socket) => socket.end('pong'));
-      await new Promise<void>((resolve) => machine.listen(0, '127.0.0.1', resolve));
-      const { port } = machine.address() as AddressInfo;
-      try {
-        const { result } = await openRun(
-          [
-            `require('net').connect(${String(port)}, '127.0.0.1')`,
-            "  .on('data', (data) => { console.log('machine ' + data); process.exit(0); })",
-            "  .on('error', (error) => { console.log('machine ' + error.code); process.exit(1); });",
-          ].join('\n'),
-        );
-        expect(result.stdout.trim()).toBe('machine pong');
-      } finally {
-        machine.close();
+      const base = await mkdtemp(join(tmpdir(), 'posture-invariant-'));
+      const hostDir = join(base, 'host');
+      const root = join(base, 'folder');
+      const scratchDir = join(base, 'scratch');
+      const checkout = join(scratchDir, 'work');
+      for (const dir of [
+        hostDir,
+        join(root, '.git', 'hooks'),
+        join(root, '.git', 'refs', 'heads'),
+      ]) {
+        await mkdir(dir, { recursive: true });
       }
+      await mkdir(checkout, { recursive: true });
+      const policyText = JSON.stringify({ version: 1, bindings: [] });
+      await writeFile(join(hostDir, 'host-policy.json'), policyText);
+      await writeFile(join(hostDir, 'host.env'), 'REDIS_URL=redis://:paired@localhost:6379\n');
+      await writeFile(join(root, 'README.md'), 'the operator’s\n');
+      process.env['PHOENIX_HOST_DIR'] = hostDir;
+      delete process.env['PHOENIX_HOST_POLICY_PATH'];
+
+      const tempProbe = join(SYSTEM_TEMP_ROOT, `posture-invariant-${String(process.pid)}`);
+      const result = await actual.runSandboxed({
+        binding: { ...RUNNING, root, singleFile: false, sandbox: posture } as never,
+        posture,
+        argv: [process.execPath, '-e', ATTEMPTS, hostDir, root, checkout, tempProbe],
+        cwd: checkout,
+        env: {},
+        timeoutMs: 60_000,
+        scratchDir,
+        widening: {
+          authPaths: [],
+          allowedDomains: [],
+          writableRoot: checkout,
+          withholdBindingWrite: true,
+        },
+        idPrefix: 'hr',
+        ownerRunId: 'run-invariant',
+        signal: new AbortController().signal,
+        closeStdin: true,
+        onDelta: () => undefined,
+      });
+      expect(result.exitCode, result.stderr).toBe(0);
+      const last = result.stdout.trim().split('\n').at(-1) ?? '{}';
+      expect(JSON.parse(last)).toEqual({
+        'rewrite the host policy': 'refused',
+        'read the pairing credential': 'refused',
+        'write the operator’s folder': 'refused',
+        'plant a hook in its .git': 'refused',
+        'move a branch in its .git': 'refused',
+        'write the checkout': 'done',
+        'write the system temp root': posture === 'open' ? 'done' : 'refused',
+      });
+      expect(await readFile(join(hostDir, 'host-policy.json'), 'utf8')).toBe(policyText);
+      expect(existsSync(join(root, '.git', 'hooks', 'post-checkout'))).toBe(false);
+    },
+  );
+});
+
+describe('the boot self-test of the `open` posture', () => {
+  it('runs each probe in a folder of its own, under `open`, writing only its checkout', async () => {
+    const outcomes = await runOpenPostureSelfTest();
+    expect(outcomes.map((outcome) => outcome.name)).toEqual([
+      'a shell command exits 0',
+      '`yarn --version` runs',
+      'a loopback server is reachable',
+    ]);
+    expect(outcomes.every((outcome) => outcome.passed)).toBe(true);
+    expect(sandboxed.map((input) => input.posture)).toEqual(['open', 'open', 'open']);
+    for (const input of sandboxed) {
+      expect(input.widening).toMatchObject({
+        writableRoot: input.cwd,
+        withholdBindingWrite: true,
+      });
+    }
+    expect(sandboxed[0]?.argv[0]).toBe('/bin/sh');
+    expect(sandboxed[0]?.argv.at(-1)?.startsWith(SYSTEM_TEMP_ROOT)).toBe(true);
+    expect(sandboxed[1]?.argv).toEqual(['yarn', '--version']);
+  });
+
+  it('names a probe that failed and what it said', async () => {
+    const outcomes = await runOpenPostureSelfTest((input) =>
+      Promise.resolve({
+        ...finished('st_probe'),
+        ...(input.argv[0] === 'yarn'
+          ? { exitCode: 1, stdout: '', stderr: 'Corepack could not fetch Yarn' }
+          : {}),
+      }),
+    );
+    expect(outcomes.filter((outcome) => !outcome.passed)).toEqual([
+      {
+        name: '`yarn --version` runs',
+        passed: false,
+        detail: 'exited 1: Corepack could not fetch Yarn',
+      },
+    ]);
+  });
+
+  it.skipIf(!CAN_CONFINE)(
+    confinable.title('finds a shell command and a loopback server working under `open`, for real'),
+    async () => {
+      const outcomes = await runOpenPostureSelfTest(
+        async (input) => await actual.runSandboxed({ ...input, posture: 'open' }),
+      );
+      const byName = new Map(outcomes.map((outcome) => [outcome.name, outcome]));
+      expect(byName.get('a shell command exits 0')).toEqual({
+        name: 'a shell command exits 0',
+        passed: true,
+      });
+      expect(byName.get('a loopback server is reachable')).toEqual({
+        name: 'a loopback server is reachable',
+        passed: true,
+      });
     },
   );
 });

@@ -32,8 +32,7 @@ import {
 import { issueCheckReceipt } from '../checkReceipt.js';
 import { checkOutcome, runFolderChecks, skippedCheck } from '../commitCheck.js';
 import { checksOf } from '../folderChecks.js';
-import { folderRunReadiness } from '../folderRun.js';
-import { noSandboxMessage, reapWithdrawn } from '../sandboxedRun.js';
+import { noSandboxMessage, reapWithdrawn, sandboxReadiness } from '../sandboxedRun.js';
 import { isGitRepository, resolveCommit, WorktreeError } from '../worktree.js';
 
 async function check(ctx: ExecutorContext, policyPath: string): Promise<StepResult> {
@@ -63,7 +62,7 @@ async function check(ctx: ExecutorContext, policyPath: string): Promise<StepResu
   // The checkout is recorded under the repository's own `.git`, as a
   // commission's is; the check itself is never given the folder to write.
   requireWritable(binding);
-  const readiness = folderRunReadiness(binding);
+  const readiness = sandboxReadiness();
   if (!readiness.ready) {
     return await failureWithError(ctx, permissionError(noSandboxMessage(readiness.missing)));
   }

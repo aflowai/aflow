@@ -15,7 +15,7 @@ built and where its gaps are logged; the gaps that still bind are listed at the 
 | Connected folder | binding `hb_aflow` = `~/localhd/aflow`, branch prefix `aflow/`                              |
 | Push posture     | `unless-unreviewed`: a clean scan plus a child review `approve` pushes without asking       |
 | Folder checks    | `node scripts/verify-commit.mjs`, declared on `hb_aflow`; run by every publication first    |
-| Sandbox posture  | `open`, the default: commissions and checks run unconfined, as the operator (below)         |
+| Sandbox posture  | `open`, the default: commissions and checks run sandboxed, network open (below)             |
 | Commission       | the catalog's Commission Change, on `host.harness.run`, model `claude-opus-5-5`             |
 | Review           | the catalog's Local Code Review, over `origin/<base>..<sha>`                                |
 | Publication      | the catalog's Local Publish, by `patchRef`, onto `aflow/<branch>`                           |
@@ -80,20 +80,20 @@ review may still send back.
 
 ## What a commission runs under
 
-A commission, a review and the folder's checks run under the folder's sandbox posture
-(Plan 315 D19), which `host.binding.inspect` shows. `open`, the default, runs the coding
-agent and the checks unconfined, as the operator's own user, in a detached checkout of the
-commit. They get the credential, the configuration directory, the ref guard and
-`GIT_NO_REPLACE_OBJECTS` the lane sets, so `yarn`, a registry, the machine's loopback and
-the checkout's agent configuration all work as they do in a terminal. `confined` runs them
-inside the machine's sandbox, as every command runs. There a coding agent reaches only the
-hosts it was allowed (`aflow harness allow`), the checks reach no network, and loopback is
-the sandbox's own on Linux and closed on macOS, so a test that serves itself on loopback
-fails. Choose on the machine with `aflow harness sandbox <folder> open|confined`. Keep
-`open` for a repository you would run in your own terminal. Choose `confined` for one you
-do not trust. Under either posture, what stands between a change and `main` is the ref
-guard, the secret scan, the folder's checks, the review and the push gate, each bound to a
-sha. `hb_aflow` chose none, so it takes the default, `open`.
+A commission, a review and the folder's checks run inside the machine's sandbox under the
+folder's sandbox posture (Plan 315 D19), which `host.binding.inspect` shows. The posture is
+what the network is. `open`, the default, opens it: every host and loopback, so the agent's
+own search and fetch, Corepack, `yarn` and the registry work, and a test that serves itself
+on loopback passes. The system temporary directory is writable too, where a shell records
+its working directory after every command. `confined` keeps it closed: a coding agent
+reaches only the hosts it was allowed (`aflow harness allow`), the checks reach no network,
+and loopback is the sandbox's own on Linux and closed on macOS. Under both, a job writes its
+checkout and nothing of the folder or its `.git`, and cannot read or write `~/.aflow/`,
+where the policy every gate reads and the pairing credential live. Agent configuration
+files such as `.mcp.json` stay protected under both. The executor's boot log says whether a
+shell command, `yarn --version` and a loopback server work under `open` on this machine.
+Choose on the machine with `aflow harness sandbox <folder> open|confined`; `hb_aflow` chose
+none, so it takes the default, `open`.
 
 ## Sharing the machine
 

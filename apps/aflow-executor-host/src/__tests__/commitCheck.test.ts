@@ -6,15 +6,13 @@
  * behind — only a receipt of the outcome for the push, holding none of the
  * output. A folder that declares none is answered without anything running.
  *
- * The suites over the handler stand in for both spawns — the sandbox's, and
- * the unconfined one of an `open` folder — with a spawn of their own, recording
- * what the handler hands each; their fixtures are `confined` unless a suite
- * says otherwise. The boundary itself is held by the sandbox's own tests, and a
- * nested sandbox cannot start under one. The last suite runs a check through
- * the real sandbox where this machine can.
+ * The suites over the handler stand in for the sandbox with a spawn of their
+ * own, recording what the handler hands it — the boundary itself is held by
+ * the sandbox's own tests, and a nested sandbox cannot start under one. The
+ * last suite runs a check through the real sandbox where this machine can.
  */
 import { execFile, spawn } from 'node:child_process';
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { createServer, type AddressInfo } from 'node:net';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -30,7 +28,11 @@ import {
 } from '@aflow/schemas';
 
 import type { SandboxedRunInput, SandboxedRunResult } from '../sandboxedRun.js';
-import { compileSandboxPolicy } from '../sandboxPolicy.js';
+import {
+  compileSandboxPolicy,
+  OPEN_ONLY_SANDBOX_OPTION,
+  SYSTEM_TEMP_ROOT,
+} from '../sandboxPolicy.js';
 import { CONFINEMENT_LISTENERS, requires } from './fixtures/capabilities.js';
 
 const confined = requires(...CONFINEMENT_LISTENERS);
@@ -40,50 +42,9 @@ const run = promisify(execFile);
 /** The stand-in's clock runs this many times faster than the one it is handed. */
 const CLOCK_SPEEDUP = 1000;
 
-/** What each spawn path was handed: the sandbox's, and the unconfined one of an `open` folder. */
 const handed: SandboxedRunInput[] = [];
-const openHanded: SandboxedRunInput[] = [];
 let realSandbox = false;
 let sandboxMissing = false;
-
-async function standIn(input: SandboxedRunInput): Promise<SandboxedRunResult> {
-  const [program, ...args] = input.argv;
-  const startedAt = Date.now();
-  return await new Promise((resolve) => {
-    const child = spawn(program ?? '', args, {
-      cwd: input.cwd,
-      env: { PATH: process.env['PATH'] ?? '', ...input.env, ...input.trustedEnv },
-    });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString();
-      input.onDelta(chunk.toString());
-    });
-    child.stderr.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString();
-      input.onDelta(chunk.toString());
-    });
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill('SIGKILL');
-    }, input.timeoutMs / CLOCK_SPEEDUP);
-    child.on('close', (code, signal) => {
-      clearTimeout(timer);
-      resolve({
-        processId: 'hc_test',
-        exitCode: code,
-        signal,
-        timedOut,
-        durationMs: Date.now() - startedAt,
-        stdout,
-        stderr,
-        truncated: false,
-      });
-    });
-  });
-}
 
 vi.mock('../sandboxedRun.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../sandboxedRun.js')>();
@@ -98,11 +59,42 @@ vi.mock('../sandboxedRun.js', async (importOriginal) => {
     runSandboxed: async (input: SandboxedRunInput): Promise<SandboxedRunResult> => {
       if (realSandbox) return await actual.runSandboxed(input);
       handed.push(input);
-      return await standIn(input);
-    },
-    runOpen: async (input: SandboxedRunInput): Promise<SandboxedRunResult> => {
-      openHanded.push(input);
-      return await standIn(input);
+      const [program, ...args] = input.argv;
+      const startedAt = Date.now();
+      return await new Promise((resolve) => {
+        const child = spawn(program ?? '', args, {
+          cwd: input.cwd,
+          env: { PATH: process.env['PATH'] ?? '', ...input.env, ...input.trustedEnv },
+        });
+        let stdout = '';
+        let stderr = '';
+        child.stdout.on('data', (chunk: Buffer) => {
+          stdout += chunk.toString();
+          input.onDelta(chunk.toString());
+        });
+        child.stderr.on('data', (chunk: Buffer) => {
+          stderr += chunk.toString();
+          input.onDelta(chunk.toString());
+        });
+        let timedOut = false;
+        const timer = setTimeout(() => {
+          timedOut = true;
+          child.kill('SIGKILL');
+        }, input.timeoutMs / CLOCK_SPEEDUP);
+        child.on('close', (code, signal) => {
+          clearTimeout(timer);
+          resolve({
+            processId: 'hc_test',
+            exitCode: code,
+            signal,
+            timedOut,
+            durationMs: Date.now() - startedAt,
+            stdout,
+            stderr,
+            truncated: false,
+          });
+        });
+      });
     },
   };
 });
@@ -206,7 +198,6 @@ async function fixture(
           mode: 'readwrite',
           allowsExecution: true,
           spaceId: 'space-a',
-          sandbox: 'confined',
           ...(branchPolicy !== undefined ? { branchPolicy } : {}),
           ...extra,
         },
@@ -259,7 +250,6 @@ async function checkouts(repo: string): Promise<string> {
 
 beforeEach(() => {
   handed.length = 0;
-  openHanded.length = 0;
   realSandbox = false;
   sandboxMissing = false;
 });
@@ -471,27 +461,29 @@ describe('host.commit.check — the receipt it leaves for the push', () => {
 });
 
 describe("host.commit.check — the folder's sandbox posture", () => {
-  it('runs an `open` folder’s checks unconfined, in the checkout, with the environment the lane assembles', async () => {
-    const world = await fixture({ branchPrefix: 'aflow/', checks: REPORTING }, { sandbox: 'open' });
-    const { result, captured } = await check(world);
-    expect(result.status).toBe('SUCCEEDED');
-    expect(handed).toHaveLength(0);
-    expect(openHanded).toHaveLength(1);
-    const input = openHanded[0];
-    expect(input?.argv).toEqual(REPORTING);
-    expect(input?.cwd).not.toBe(world.repo);
-    expect(input?.trustedEnv).toEqual({
-      AFLOW_CHECK_SHA: world.sha,
-      AFLOW_CHECK_BASE: world.base,
-      GIT_NO_REPLACE_OBJECTS: '1',
+  function compiled(input: SandboxedRunInput): ReturnType<typeof compileSandboxPolicy> {
+    return compileSandboxPolicy(input.binding, {
+      scratchDir: input.scratchDir,
+      ...(input.posture !== undefined ? { posture: input.posture } : {}),
+      ...(input.widening !== undefined ? { widening: input.widening } : {}),
     });
-    const output = HostCommitCheckOutputSchema.parse(captured.output);
-    expect(output.passed).toBe(true);
-    const seen = JSON.parse(output.tail) as { cwd: string; sha: string };
-    expect(seen.sha).toBe(world.sha);
-    // The temp root is reached through a link on macOS, so the check sees its realpath.
-    const underTemp = (input?.cwd ?? '').slice(tmpdir().length);
-    expect(seen.cwd).toBe(join(realpathSync(tmpdir()), underTemp));
+  }
+
+  it('runs an `open` folder’s checks in the sandbox with the network open, writing only the checkout, the scratch and the temp root', async () => {
+    const world = await fixture({ branchPrefix: 'aflow/', checks: REPORTING }, { sandbox: 'open' });
+    const { result } = await check(world);
+    expect(result.status).toBe('SUCCEEDED');
+    const input = handed[0];
+    if (input === undefined) throw new Error('the check was not handed to the sandbox');
+    expect(input.posture).toBe('open');
+    expect(input.cwd).not.toBe(world.repo);
+    expect(input.widening).toMatchObject({ writableRoot: input.cwd, withholdBindingWrite: true });
+    const policy = compiled(input);
+    expect(policy.network[OPEN_ONLY_SANDBOX_OPTION]).toBe(true);
+    expect(policy.filesystem.allowWrite).toEqual(
+      expect.arrayContaining([input.scratchDir, input.cwd, SYSTEM_TEMP_ROOT]),
+    );
+    expect(policy.filesystem.allowWrite).not.toContain(world.repo);
   });
 
   it('takes the default, `open`, for a folder that chose none', async () => {
@@ -500,34 +492,33 @@ describe("host.commit.check — the folder's sandbox posture", () => {
       { sandbox: undefined },
     );
     await check(world);
-    expect(handed).toHaveLength(0);
-    expect(openHanded).toHaveLength(1);
+    expect(handed.map((input) => input.posture)).toEqual(['open']);
   });
 
-  it('runs an `open` folder’s checks on a machine with no qualified sandbox, and refuses a `confined` one’s there', async () => {
+  it('refuses a folder’s checks on a machine with no qualified sandbox, under either posture', async () => {
     sandboxMissing = true;
-    const open = await fixture({ branchPrefix: 'aflow/', checks: REPORTING }, { sandbox: 'open' });
-    expect((await check(open)).result.status).toBe('SUCCEEDED');
-
-    const confinedWorld = await fixture({ branchPrefix: 'aflow/', checks: REPORTING });
-    const refused = await check(confinedWorld);
-    expect(refused.result.status).toBe('FAILED');
-    expect(JSON.stringify(refused.captured.output)).toContain('no qualified sandbox');
+    for (const sandbox of ['open', 'confined'] as const) {
+      const world = await fixture({ branchPrefix: 'aflow/', checks: REPORTING }, { sandbox });
+      const refused = await check(world);
+      expect(refused.result.status).toBe('FAILED');
+      expect(JSON.stringify(refused.captured.output)).toContain('no qualified sandbox');
+    }
     expect(handed).toHaveLength(0);
   });
 
-  it('keeps a `confined` folder’s loopback and egress closed', async () => {
-    const world = await fixture({ branchPrefix: 'aflow/', checks: REPORTING });
+  it('keeps a `confined` folder’s loopback, egress and temp root closed', async () => {
+    const world = await fixture(
+      { branchPrefix: 'aflow/', checks: REPORTING },
+      { sandbox: 'confined' },
+    );
     await check(world);
-    expect(openHanded).toHaveLength(0);
     const input = handed[0];
     if (input === undefined) throw new Error('the check was not handed to the sandbox');
-    const policy = compileSandboxPolicy(input.binding, {
-      scratchDir: input.scratchDir,
-      ...(input.widening !== undefined ? { widening: input.widening } : {}),
-    });
+    expect(input.posture).toBe('confined');
+    const policy = compiled(input);
     expect(policy.network).toEqual({ allowedDomains: [], deniedDomains: [] });
-    expect(JSON.stringify(policy)).not.toContain('allowLocalBinding');
+    expect(JSON.stringify(policy)).not.toContain(OPEN_ONLY_SANDBOX_OPTION);
+    expect(policy.filesystem.allowWrite).not.toContain(SYSTEM_TEMP_ROOT);
   });
 });
 
@@ -627,13 +618,19 @@ describe.skipIf(!CAN_CONFINE)('host.commit.check — through the real sandbox', 
     confined.title('runs a passing check confined, and a failing one to its failure'),
     async () => {
       realSandbox = true;
-      const passing = await fixture({ branchPrefix: 'aflow/', checks: REPORTING });
+      const passing = await fixture(
+        { branchPrefix: 'aflow/', checks: REPORTING },
+        { sandbox: 'confined' },
+      );
       const passed = await check(passing);
       const output = HostCommitCheckOutputSchema.parse(passed.captured.output);
       expect(output.passed, output.summary).toBe(true);
       expect(output.tail).toContain(passing.sha);
 
-      const failing = await fixture({ branchPrefix: 'aflow/', checks: FAILING });
+      const failing = await fixture(
+        { branchPrefix: 'aflow/', checks: FAILING },
+        { sandbox: 'confined' },
+      );
       const failed = await check(failing);
       expect(HostCommitCheckOutputSchema.parse(failed.captured.output).passed).toBe(false);
       realSandbox = false;
@@ -650,7 +647,10 @@ describe.skipIf(!CAN_CONFINE)('host.commit.check — through the real sandbox', 
       const { port } = machine.address() as AddressInfo;
       try {
         realSandbox = true;
-        const world = await fixture({ branchPrefix: 'aflow/', checks: loopbackAndEgress(port) });
+        const world = await fixture(
+          { branchPrefix: 'aflow/', checks: loopbackAndEgress(port) },
+          { sandbox: 'confined' },
+        );
         const output = HostCommitCheckOutputSchema.parse((await check(world)).captured.output);
         realSandbox = false;
         expect(output.passed, output.summary).toBe(true);
