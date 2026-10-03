@@ -149,6 +149,15 @@ export function createMcpHttpServer(deps: {
       }
       const { headers } = decision;
 
+      // The gate has already refused any origin not explicitly allowed, so one
+      // that reaches here is echoed back, never a wildcard. Set on the response
+      // itself so the transport's own writeHead keeps them.
+      if (decision.origin !== undefined) {
+        res.setHeader('Access-Control-Allow-Origin', decision.origin);
+        res.setHeader('Vary', 'Origin');
+        res.setHeader('Access-Control-Expose-Headers', 'Mcp-Session-Id');
+      }
+
       // All MCP traffic goes to the root path
       if (url !== '/' && !url.startsWith('/?')) {
         res.writeHead(404, { 'Content-Type': 'application/json' });
@@ -203,12 +212,7 @@ export function createMcpHttpServer(deps: {
           res.writeHead(200);
           res.end();
         } else if (req.method === 'OPTIONS') {
-          // The gate has already refused any origin not explicitly allowed, so
-          // one that reaches here is echoed back; never a wildcard.
           res.writeHead(204, {
-            ...(decision.origin === undefined
-              ? {}
-              : { 'Access-Control-Allow-Origin': decision.origin, Vary: 'Origin' }),
             'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
             'Access-Control-Allow-Headers':
               'Content-Type, Authorization, Mcp-Session-Id, X-Space-ID, X-Resolve-Payloads, X-Request-ID',

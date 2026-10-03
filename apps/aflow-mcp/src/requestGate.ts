@@ -9,7 +9,7 @@
  */
 import type { McpServerConfig } from './config.js';
 
-const LOOPBACK_HOSTNAMES: readonly string[] = ['localhost', '127.0.0.1', '[::1]'];
+const LOOPBACK_HOSTNAMES: readonly string[] = ['localhost', '127.0.0.1'];
 const DEFAULT_HTTP_PORT = 80;
 
 export interface RequestGatePolicy {

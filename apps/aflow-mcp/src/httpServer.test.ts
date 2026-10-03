@@ -86,12 +86,12 @@ async function start(overrides: Partial<McpServerConfig> = {}): Promise<Running>
 
 async function send(
   port: number,
-  options: { method?: string; headers: Record<string, string>; body?: string },
+  options: { method?: string; path?: string; headers: Record<string, string>; body?: string },
 ): Promise<{ status: number; headers: Record<string, unknown>; body: string }> {
   const req = request({
     host: '127.0.0.1',
     port,
-    path: '/',
+    path: options.path ?? '/',
     method: options.method ?? 'POST',
     headers: {
       'content-type': 'application/json',
@@ -110,6 +110,7 @@ async function send(
 async function healthSessions(port: number): Promise<number> {
   const health = await send(port, {
     method: 'GET',
+    path: '/health',
     headers: { host: `localhost:${String(port)}` },
   });
   return (JSON.parse(health.body) as { sessions: number }).sessions;
@@ -180,6 +181,24 @@ describe.skipIf(!listenerAllowed)('the MCP HTTP server', () => {
     expect(preflight.headers['access-control-allow-origin']).toBeUndefined();
 
     expect(server.activeSessions.size).toBe(0);
+  });
+
+  it('lets a configured origin read a POST response and its session id', async () => {
+    const origin = 'http://app.example.test';
+    const server = await start({ localAuthJsonPath: undefined, allowedOrigins: [origin] });
+    const res = await send(server.port, {
+      headers: { host: `localhost:${String(server.port)}`, origin },
+      body: INITIALIZE,
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toContain('"serverInfo"');
+    expect(res.headers['access-control-allow-origin']).toBe(origin);
+    expect(res.headers['vary']).toBe('Origin');
+    expect(res.headers['access-control-expose-headers']).toBe('Mcp-Session-Id');
+    const sessionId = res.headers['mcp-session-id'];
+    expect(typeof sessionId).toBe('string');
+    expect(server.activeSessions.has(sessionId as string)).toBe(true);
   });
 
   it('admits a configured ALLOWED_HOSTS entry', async () => {

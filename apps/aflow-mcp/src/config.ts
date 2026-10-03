@@ -48,7 +48,7 @@ export interface McpServerConfig {
   readonly allowedOrigins: readonly string[];
   /**
    * `ALLOWED_HOSTS`: the hostnames this server answers to, on any port. Empty:
-   * `localhost`, `127.0.0.1` and `[::1]` on `port`, and nothing else.
+   * `localhost` and `127.0.0.1` on `port`, and nothing else.
    */
   readonly allowedHosts: readonly string[];
   /** Shared secret for Cloudflare origin verification (skips bot challenges) */

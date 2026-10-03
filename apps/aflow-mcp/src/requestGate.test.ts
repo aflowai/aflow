@@ -25,12 +25,9 @@ function decide(headers: Record<string, string>, config: Partial<GateConfig> = {
 }
 
 describe('with no ALLOWED_HOSTS, the Host', () => {
-  it.each(['localhost:3100', '127.0.0.1:3100', '[::1]:3100', 'LocalHost:3100'])(
-    '%s is admitted',
-    (host) => {
-      expect(decide({ host }).admitted).toBe(true);
-    },
-  );
+  it.each(['localhost:3100', '127.0.0.1:3100', 'LocalHost:3100'])('%s is admitted', (host) => {
+    expect(decide({ host }).admitted).toBe(true);
+  });
 
   it.each([
     ['a name of the page’s own', 'evil.example:3100'],
@@ -38,6 +35,7 @@ describe('with no ALLOWED_HOSTS, the Host', () => {
     ['a loopback name on another port', 'localhost:3101'],
     ['a loopback name with no port, which means 80', 'localhost'],
     ['another loopback address', '127.0.0.2:3100'],
+    ['an IPv6 loopback address, which the listener is not bound to', '[::1]:3100'],
     ['an unbracketed IPv6 address', '::1:3100'],
     ['a name with userinfo smuggled in', 'localhost:3100@evil.example'],
     ['the wildcard address', '0.0.0.0:3100'],
