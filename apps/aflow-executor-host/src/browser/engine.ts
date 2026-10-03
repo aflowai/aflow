@@ -115,6 +115,7 @@ interface PwPage {
   off(event: 'request' | 'requestfailed', listener: (request: PwRequest) => void): void;
   off(event: 'domcontentloaded' | 'download', listener: () => void): void;
   screenshot(options: PwScreenshotOptions & { fullPage: boolean }): Promise<Buffer>;
+  evaluate(expression: string): Promise<unknown>;
   close(): Promise<void>;
   isClosed(): boolean;
 }
@@ -388,6 +389,7 @@ function wrapPage(page: PwPage, events: PageEvents): EnginePage {
     },
     text: async () => await page.locator('body').innerText({ timeout: ACTION_TIMEOUT_MS }),
     screenshot: async (request) => await screenshot(page, request),
+    evaluate: async (expression) => await page.evaluate(expression),
     close: async () => {
       await page.close();
     },

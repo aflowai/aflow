@@ -63,6 +63,8 @@ interface HarnessProbe {
   readonly turnsArgs: string[];
   /** How it is told which model to run. Empty when the CLI takes no such argument. */
   readonly modelArgs: string[];
+  /** How it is handed an MCP configuration file. Empty when it cannot be. */
+  readonly mcpArgs: string[];
   /** Where it keeps the credential the operator already signed in with. */
   readonly authPaths: string[];
   /** Scratch outside the worktree it needs to write, relative to `/tmp`. */
@@ -131,6 +133,11 @@ const KNOWN: readonly HarnessProbe[] = [
     // an unrecognised model rather than refused at parse, so what this grants is
     // the harness's own vocabulary, not this platform's catalog.
     modelArgs: ['--model', '{model}'],
+    // Measured under the headless flags above: given a file declaring a stdio
+    // server, the init event reports it connected and the model calls its
+    // tools. `--strict-mcp-config` keeps out every server the operator
+    // configured for their own sessions, so the run reaches only the browser.
+    mcpArgs: ['--mcp-config', '{mcpConfig}', '--strict-mcp-config'],
     // Given a configuration directory of its own it reads nothing under home,
     // so nothing is carved out of the standing denial.
     authPaths: [],
@@ -168,10 +175,20 @@ const KNOWN: readonly HarnessProbe[] = [
     // flags is measured. Empty is the honest answer: a run naming a model is
     // refused by name, where a guessed flag would fail inside the harness.
     modelArgs: [],
+    mcpArgs: [],
     authPaths: ['.config/opencode', '.local/share/opencode'],
     writePaths: [],
   },
 ];
+
+/**
+ * The MCP arguments measured for a harness this lane knows, for a profile
+ * written before they were; nothing when none were measured for it.
+ */
+export function knownMcpArgs(harnessId: string): string[] | undefined {
+  const args = KNOWN.find((probe) => probe.id === harnessId)?.mcpArgs;
+  return args === undefined || args.length === 0 ? undefined : [...args];
+}
 
 export interface DiscoveredHarness {
   readonly id: string;
@@ -188,6 +205,7 @@ export interface DiscoveredHarness {
     readonly resumeArgs: string[];
     readonly turnsArgs: string[];
     readonly modelArgs: string[];
+    readonly mcpArgs: string[];
     readonly authPaths: string[];
     readonly writePaths: string[];
     readonly configDirEnv?: string;
@@ -239,6 +257,7 @@ export async function discoverHarnesses(home = homedir()): Promise<DiscoveredHar
           resumeArgs: [...probe.resumeArgs],
           turnsArgs: [...probe.turnsArgs],
           modelArgs: [...probe.modelArgs],
+          mcpArgs: [...probe.mcpArgs],
           authPaths: probe.authPaths.map((p) => join(home, p)),
           writePaths: [...probe.writePaths],
           ...(probe.configDirEnv !== undefined ? { configDirEnv: probe.configDirEnv } : {}),

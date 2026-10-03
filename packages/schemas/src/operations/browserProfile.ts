@@ -20,6 +20,27 @@ export const BrowserProfileIdSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-
 
 export const DEFAULT_BROWSER_PROFILE_ID = 'default';
 
+/**
+ * What a harness run asks for to get a browser of its own: a throwaway profile
+ * with no sign-ins, made for the run and deleted with it. The executor names
+ * each one `ephemeral-…`, so no profile the machine declares may take the word.
+ */
+export const EPHEMERAL_BROWSER_PROFILE = 'ephemeral';
+
+export function isEphemeralBrowserProfileId(id: string): boolean {
+  return id === EPHEMERAL_BROWSER_PROFILE || id.startsWith(`${EPHEMERAL_BROWSER_PROFILE}-`);
+}
+
+/** The id of a profile the machine declares, which can never be one of the ephemeral ones. */
+export const DeclaredBrowserProfileIdSchema = BrowserProfileIdSchema.refine(
+  (id) => !isEphemeralBrowserProfileId(id),
+  {
+    message:
+      '`ephemeral` names the throwaway browser a harness run gets, so no profile declared on ' +
+      'the machine may be called `ephemeral` or start with `ephemeral-`. Choose another id.',
+  },
+);
+
 export const BrowserPostureSchema = z
   .enum(['autonomous', 'ask-to-act', 'read-only'])
   .describe(
@@ -135,7 +156,7 @@ export const BrowserWindowSizeSchema = z.object({
 export type BrowserWindowSize = z.infer<typeof BrowserWindowSizeSchema>;
 
 export const BrowserProfileSchema = z.object({
-  id: BrowserProfileIdSchema,
+  id: DeclaredBrowserProfileIdSchema,
   spaces: z
     .union([z.literal('all'), z.array(z.string().min(1))])
     .default('all')

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  assertTakesMcpConfig,
   buildHarnessArgv,
   buildSessionArgs,
   HarnessProfileError,
@@ -162,6 +163,39 @@ describe('harness profiles', () => {
     ).toThrow(/exactly one/);
     expect(() =>
       buildHarnessArgv(profile({ modelArgs: ['{model}', '{model}'] }), 'x', [], undefined, 'fable'),
+    ).toThrow(/exactly one/);
+  });
+
+  it('refuses a browser to a profile written before mcpArgs, naming the field and the command', () => {
+    // A policy file from before the field reads as a profile with none.
+    const written = profile();
+    expect(written.mcpArgs).toEqual([]);
+    try {
+      assertTakesMcpConfig(written);
+      expect.unreachable();
+    } catch (error) {
+      expect((error as HarnessProfileError).kind).toBe('unsupported_request');
+      expect((error as Error).message).toContain('`mcpArgs`');
+      expect((error as Error).message).toContain('aflow harness browser claude');
+    }
+    expect(() => buildHarnessArgv(written, 'x', [], undefined, undefined, '/s/mcp.json')).toThrow(
+      /mcpArgs/,
+    );
+  });
+
+  it('refuses an mcpArgs template with nowhere to put the path, or two places', () => {
+    expect(() =>
+      buildHarnessArgv(profile({ mcpArgs: ['--mcp-config'] }), 'x', [], undefined, undefined, '/m'),
+    ).toThrow(/exactly one \{mcpConfig\}/);
+    expect(() =>
+      buildHarnessArgv(
+        profile({ mcpArgs: ['{mcpConfig}', '{mcpConfig}'] }),
+        'x',
+        [],
+        undefined,
+        undefined,
+        '/m',
+      ),
     ).toThrow(/exactly one/);
   });
 

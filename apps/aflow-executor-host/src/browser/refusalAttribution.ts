@@ -11,7 +11,7 @@ import { type BrowserProfile, normalizeBrowserHost } from '@aflow/schemas';
 
 import type { EgressProxy, ProxyRefusal } from './egressProxy.js';
 import { BrowserDriverError, errorText } from './errors.js';
-import { localDestinationRefusal } from './origins.js';
+import { localDestinationRefusal, reachRefusal } from './origins.js';
 import { EngineNavigationFailed } from './types.js';
 
 export function urlOrNothing(raw: string): URL | undefined {
@@ -31,6 +31,13 @@ export function refusalError(profile: BrowserProfile, refusal: ProxyRefusal): Br
     return new BrowserDriverError(
       'appliance_origin',
       localDestinationRefusal(profile.id, refusal.reason, 'connecting'),
+      { host: refusal.host },
+    );
+  }
+  if (refusal.kind === 'reach') {
+    return new BrowserDriverError(
+      'origin_denied',
+      reachRefusal(profile.id, refusal.reason, 'connecting'),
       { host: refusal.host },
     );
   }

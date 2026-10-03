@@ -13,6 +13,7 @@ import type { BrowserProfile } from '@aflow/schemas';
 import type { LocalAddressClassifier } from './addresses.js';
 import type { ChromeLauncher, LaunchedChrome } from './chromeProcess.js';
 import type { EgressProxy, StartEgressProxy } from './egressProxy.js';
+import type { HarnessReach } from './harnessReach.js';
 import { BrowserDriverError, errorText } from './errors.js';
 import type { PageTable } from './pageTable.js';
 import { ruleRefusingHost } from './rules.js';
@@ -61,6 +62,16 @@ export interface ProfileBrowsersDeps {
   readonly classifier: LocalAddressClassifier;
   readonly pages: PageTable;
   readonly now: () => number;
+  /**
+   * An ephemeral profile's directory, which is not under the host directory,
+   * and its harness's reach; nothing for any other profile.
+   */
+  readonly ephemeral: (profileId: string) => EphemeralLaunch | undefined;
+}
+
+export interface EphemeralLaunch {
+  readonly userDataDir: string;
+  readonly reach: HarnessReach;
 }
 
 export class ProfileBrowsers {
@@ -162,7 +173,7 @@ export class ProfileBrowsers {
   }
 
   /** Stops the profile's browser, its pages reported gone for `why`, and waits for it to exit. */
-  private async stopAndWait(profileId: string, why: string): Promise<void> {
+  async stopAndWait(profileId: string, why: string): Promise<void> {
     await this.starting.get(profileId)?.ready.catch(() => undefined);
     const running = this.running.get(profileId);
     this.deps.pages.dropProfile(profileId, why);
@@ -220,11 +231,13 @@ export class ProfileBrowsers {
     state: ProfileState,
     window: BrowserProfile['window'],
   ): Promise<RunningProfile> {
+    const ephemeral = this.deps.ephemeral(profileId);
     // Before Chrome, so no request of Chrome's ever goes out unchecked.
     const proxy = await this.deps.startProxy({
       refuseHost: (host) => ruleRefusingHost(state.profile, host),
       classifier: this.deps.classifier,
       now: this.deps.now,
+      ...(ephemeral !== undefined ? { reach: ephemeral.reach } : {}),
     });
     let chrome: LaunchedChrome;
     try {
@@ -233,6 +246,7 @@ export class ProfileBrowsers {
         hostDir: this.deps.hostDir,
         profile: { ...state.profile, window },
         proxyServer: proxy.server,
+        ...(ephemeral !== undefined ? { userDataDir: ephemeral.userDataDir } : {}),
       });
     } catch (error) {
       await proxy.stop().catch(() => undefined);

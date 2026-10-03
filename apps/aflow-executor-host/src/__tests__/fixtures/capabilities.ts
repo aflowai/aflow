@@ -131,6 +131,13 @@ export async function probeLoopbackListener(
   return await listenOnce('a loopback listener (TCP on 127.0.0.1)', listen);
 }
 
+/** Whether a TCP listener can be opened on ::1; a machine with no IPv6 loopback has none. */
+export async function probeIpv6LoopbackListener(): Promise<Capability> {
+  return await listenOnce('an IPv6 loopback listener (TCP on ::1)', (server) =>
+    server.listen(0, '::1'),
+  );
+}
+
 /** Whether a Unix-domain socket can be listened on in the temporary directory. */
 export async function probeLocalSocketListener(): Promise<Capability> {
   const dir = await mkdtemp(join(tmpdir(), 'aflow-sock-probe-'));
@@ -145,6 +152,7 @@ export async function probeLocalSocketListener(): Promise<Capability> {
 
 export const FILE_WATCHING = await probeFileWatching();
 export const LOOPBACK_LISTENER = await probeLoopbackListener();
+export const IPV6_LOOPBACK_LISTENER = await probeIpv6LoopbackListener();
 export const LOCAL_SOCKET_LISTENER = await probeLocalSocketListener();
 
 /**

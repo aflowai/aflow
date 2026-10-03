@@ -9,7 +9,7 @@
     "shipsInImageReason": "Runs as the operator's own user on their machine, not in the appliance image. Reaching their real projects and installed toolchains is the point of it, and a container cannot."
   },
   "scripts": {
-    "build": "npx tsc",
+    "build": "npx tsc && cp src/browser/harnessRelay.mjs dist/browser/harnessRelay.mjs",
     "dev": "NODE_OPTIONS='--conditions=ts-source' npx tsx watch src/index.ts",
     "start": "node dist/index.js",
     "lint": "eslint src",

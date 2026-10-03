@@ -317,6 +317,12 @@ describe('browser.page.read and browser.profile.list', () => {
 });
 
 describe('BrowserProfileSchema', () => {
+  it('keeps the word ephemeral for the throwaway profile a harness run gets', () => {
+    expect(BrowserProfileSchema.safeParse({ id: 'ephemeral' }).success).toBe(false);
+    expect(BrowserProfileSchema.safeParse({ id: 'ephemeral-work' }).success).toBe(false);
+    expect(BrowserProfileSchema.safeParse({ id: 'ephemeralish' }).success).toBe(true);
+  });
+
   it('defaults everything but the id', () => {
     expect(BrowserProfileSchema.parse({ id: 'default' })).toEqual({
       id: 'default',

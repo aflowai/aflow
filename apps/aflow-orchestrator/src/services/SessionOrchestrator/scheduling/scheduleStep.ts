@@ -38,7 +38,7 @@ import { serializeOverlay, readInlineVar } from '../helpers/runtimeState.js';
 import { persistAgentTurnToolSurface } from '../helpers/persistToolSurface.js';
 import { resolveConfigRecursive } from '../helpers/configResolution.js';
 import { resolveConfigRecursiveWithReport } from '../helpers/configResolution.js';
-import { decideStepGating } from '../../gates/decideStepGating.js';
+import { decideHarnessBrowserGating, decideStepGating } from '../../gates/decideStepGating.js';
 import { getOrchestratorLogger } from '../../../lib/orchestratorLogger.js';
 import { describeEnqueueFailure, enqueueFailureResultError } from '../../../lib/enqueueFailure.js';
 import type { SessionOrchestratorBindings } from '../lifecycle/context.js';
@@ -190,6 +190,7 @@ export function createScheduleStep(bindings: SessionOrchestratorBindings) {
       // on every operation; this is the one that could otherwise never refuse,
       // which is why deleting a binding row revoked nothing.
       let bindingRefusal: string | undefined;
+      let harnessBrowserResult: GrantEnforcementResult = { allowed: true };
       if (stepDef.stepType === 'host') {
         try {
           const { getDatabase, withTenantSchema, createTenantContext } =
@@ -199,6 +200,12 @@ export function createScheduleStep(bindings: SessionOrchestratorBindings) {
           // large body is a stored ref, and treating that as unreadable would
           // refuse the operation rather than check it.
           const resolvedInput = await payloadStore.retrieve(inputRef);
+          harnessBrowserResult = decideHarnessBrowserGating({
+            stepDef,
+            grant,
+            resolvedInput,
+            allSteps: context.agentDefinition.steps,
+          });
           const outcome = await withTenantSchema(
             getDatabase(),
             createTenantContext(context.tenantId),
@@ -221,12 +228,16 @@ export function createScheduleStep(bindings: SessionOrchestratorBindings) {
         }
       }
 
-      if (!grantResult.allowed || bindingRefusal !== undefined) {
+      const grantRefusal = !grantResult.allowed
+        ? grantResult.reason
+        : !harnessBrowserResult.allowed
+          ? harnessBrowserResult.reason
+          : undefined;
+      if (grantRefusal !== undefined || bindingRefusal !== undefined) {
         // Denied → fail just this step via a synthetic result. Never park the
         // run: this point is reached before any step state exists, so a pause
         // here emits no resume contract for anyone to act on.
-        const denialReason =
-          bindingRefusal ?? (grantResult.allowed ? 'Denied.' : grantResult.reason);
+        const denialReason = bindingRefusal ?? grantRefusal ?? 'Denied.';
         console.warn(`[SessionOrchestrator] Denied step ${stepId}: ${denialReason}`);
 
         const errorPayload = {

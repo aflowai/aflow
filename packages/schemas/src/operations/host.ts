@@ -15,6 +15,7 @@ import { z } from 'zod';
 import { coerceJsonObjectArg } from './jsonObjectArg.js';
 
 import { PayloadRefSchema, STORED_PAYLOAD_REF_PATTERN } from '../runtime/payloadRef.js';
+import { DeclaredBrowserProfileIdSchema, EPHEMERAL_BROWSER_PROFILE } from './browserProfile.js';
 
 /**
  * What a branch name and a branch prefix may be, in one place.
@@ -736,6 +737,65 @@ export const HostFilePatchOutputSchema = z.object({
     ),
 });
 
+export const HostHarnessBrowserSchema = z
+  .object({
+    profile: z
+      .union([z.literal(EPHEMERAL_BROWSER_PROFILE), DeclaredBrowserProfileIdSchema])
+      .describe(
+        '`ephemeral` — the default choice — is a browser made for this run and deleted with ' +
+          'it: no sign-ins, its own Chrome, and it reaches only the hosts this harness may reach ' +
+          'and, on this machine, the loopback ports the operator declared for the harness — a ' +
+          'dev server the change runs is opened on one of those, at `localhost`, `127.0.0.1` or ' +
+          '`[::1]` — `localhost` reaches a server listening on either loopback. ' +
+          'A profile id names one the machine declares ' +
+          'and this space may use, with its sign-ins, posture and origin rules; it never ' +
+          "reaches this machine's own servers.",
+      ),
+  })
+  .describe(
+    "A browser for the harness, driven through the operator's Chrome on this machine with the " +
+      'same rules as the `browser.page.*` operations: open, navigate, snapshot, read, ' +
+      'screenshot, act, list and close as tools, and script evaluation on `ephemeral` only. ' +
+      'Ask for one when the change touches a UI that should be looked at — opening the page ' +
+      'it changed on the dev server and checking it renders and behaves — and leave it out ' +
+      'otherwise. Absent, the harness has no browser.',
+  );
+
+/** One browser call a harness made, as `browserLog` records it. Typed text is recorded by length only. */
+export const HarnessBrowserLogRecordSchema = z.object({
+  at: z.string().describe('When the call ended, ISO 8601.'),
+  profile: z.string().describe('`ephemeral`, or the id of the machine profile the run asked for.'),
+  action: z.string().describe('The tool called: open, navigate, act, screenshot, evaluate, …'),
+  pageId: z.string().optional(),
+  origin: z.string().optional().describe('The origin of the page the call ended on.'),
+  element: z
+    .object({ role: z.string(), name: z.string().optional() })
+    .optional()
+    .describe('The element acted on, as the outline named it.'),
+  typedCharacters: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .describe('For a `type` action: how many characters were entered. Never the text.'),
+  outcome: z
+    .enum(['performed', 'uncertain_outcome', 'read', 'refused', 'failed', 'abandoned'])
+    .describe(
+      '`performed`: the call changed or opened a page, or ran a script in one, which can. ' +
+        '`read`: it only looked. ' +
+        '`uncertain_outcome`: as the operation reports it. `refused`: a rule, posture or ' +
+        'ownership check stopped it. `failed`: it was allowed and did not complete. ' +
+        '`abandoned`: the run ended with the call still in flight; recorded when the run ' +
+        'ended, its answer reached no one, and a page it opened was closed as soon as it ' +
+        'existed.',
+    ),
+  code: z.string().optional().describe('The refusal or failure code, when there is one.'),
+  screenshot: PayloadRefSchema.optional().describe(
+    'For a screenshot: the image the harness was shown, stored as a payload of its own.',
+  ),
+});
+export type HarnessBrowserLogRecord = z.infer<typeof HarnessBrowserLogRecordSchema>;
+
 const HostHarnessRunInputObjectSchema = z.object({
   bindingId: HostBindingRef,
   harness: z
@@ -846,6 +906,7 @@ const HostHarnessRunInputObjectSchema = z.object({
     .max(HOST_HARNESS_TIMEOUT_MAX_MS)
     .default(HOST_HARNESS_TIMEOUT_DEFAULT_MS)
     .describe('Kill the harness and its descendants after this long.'),
+  browser: HostHarnessBrowserSchema.optional(),
 });
 
 export const HostHarnessRunInputSchema = HostHarnessRunInputObjectSchema.superRefine(
@@ -977,6 +1038,12 @@ export const HostHarnessRunOutputSchema = z.object({
   activityRef: PayloadRefSchema.optional().describe(
     'The activity feed of this run — every tool call and result as one line — stored once ' +
       'for the run view.',
+  ),
+  browserLog: PayloadRefSchema.optional().describe(
+    'Every browser call the harness made, one JSON record per line: profile, page, origin, ' +
+      'action, the element acted on, and the outcome; typed text by its length only, and a ' +
+      'screenshot by the payload holding the image. Present ' +
+      'when the run asked for `browser` and the harness used it.',
   ),
   stderr: z
     .string()

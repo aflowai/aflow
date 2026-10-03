@@ -115,7 +115,11 @@ describe('a harness widening stays a widening', () => {
     // chooses where the checkout starts, never what the harness may reach.
     // `mergeFrom` names a branch on one of the folder's own remotes, fetched and
     // merged by the machine before the harness runs; it chooses what the
-    // checkout holds, never what the harness may reach.
+    // checkout holds, never what the harness may reach. `browser` names a
+    // profile the machine declares and this space may use, or a throwaway one;
+    // the harness reaches it through pipes in the scratch it could already
+    // write, and its compiled policy is byte-identical to a run without one
+    // (harnessBrowserRun.test.ts).
     const fields = [...harnessInput.matchAll(/^ {2}(\w+):/gm)].map((m) => m[1]);
     expect(fields).toEqual([
       'bindingId',
@@ -130,6 +134,7 @@ describe('a harness widening stays a widening', () => {
       'maxTurns',
       'model',
       'timeoutMs',
+      'browser',
     ]);
   });
 
@@ -189,8 +194,11 @@ describe('one spawn path', () => {
     // setup command rather than in a job, and service.ts drives `launchctl` to
     // install the launch agent that keeps this executor running — also a setup
     // command, and the operator's own login session rather than any workload.
+    // browser/harnessBrowser.ts runs `mkfifo` for a harness browser's pipe
+    // pair, which Node has no call for; it runs nothing else.
     // Named rather than matched, so a new unconfined spawn is argued for here.
     expect(importers).toEqual([
+      'browser/harnessBrowser.ts',
       'credentialFetch.ts',
       'folderPicker.ts',
       'harnessDiscovery.ts',

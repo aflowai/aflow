@@ -19,7 +19,8 @@ export type BrowserFailureKind =
   | 'window_shown'
   | 'window_failed'
   | 'no_site'
-  | 'screenshot_too_large';
+  | 'screenshot_too_large'
+  | 'script_refused';
 
 export function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
