@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { AuthManager } from '../apps/aflow-mcp/src/auth/AuthManager.ts';
+import { mcpPortHolder } from './devMcpPort.mjs';
 import {
   AUTH_FILE_ENV,
   KEY_EXPIRES_IN_DAYS,
@@ -22,8 +23,10 @@ import {
   editionRefusal,
   envNamingAuthFile,
   existingKeyVerdict,
+  foreignHolderMessage,
   instanceDir,
   keyInAuthFile,
+  mcpPortOf,
   missingSecretMessage,
   parseEnvFile,
   stackEnv,
@@ -228,5 +231,52 @@ describe('the environment it reads', () => {
   it('writes the file .env names, resolved from the checkout', () => {
     expect(authFileOf({}, '/repo')).toBe('/repo/mcp.local.json');
     expect(authFileOf({ [AUTH_FILE_ENV]: 'auth/mcp.json' }, '/repo')).toBe('/repo/auth/mcp.json');
+  });
+
+  it('reads the port as the MCP server does', () => {
+    expect(mcpPortOf({})).toBe(3100);
+    expect(mcpPortOf({ PORT: '3000', MCP_PORT: '3200' })).toBe(3200);
+    expect(mcpPortOf({ PORT: '3300' })).toBe(3300);
+  });
+});
+
+describe('the line on who reads the key', () => {
+  const HERE = '/home/dev/src/aflow';
+  const THERE = '/home/dev/src/aflow-worktrees/topic';
+  /** The node process under `tsx watch` that `yarn mcp:dev` leaves listening. */
+  const serverFrom = (checkout) =>
+    `node --require ${checkout}/node_modules/tsx/dist/preflight.cjs apps/aflow-mcp/src/index.ts`;
+  const lineFor = (listeners, ps) =>
+    foreignHolderMessage({
+      port: 3100,
+      holder: mcpPortHolder(listeners, ps),
+      repo: HERE,
+      shown: 'mcp.local.json',
+    });
+
+  it('defers to the usual line when this checkout’s server holds the port', () => {
+    expect(lineFor(['512'], `  512 ${serverFrom(HERE)}`)).toBeUndefined();
+  });
+
+  it('says another checkout’s server reads that checkout’s file, and names it', () => {
+    const line = lineFor(['512'], `  512 ${serverFrom(THERE)}`);
+    expect(line).toContain(THERE);
+    expect(line).toContain("reads that checkout's credential file, not mcp.local.json");
+    expect(line).toContain('512');
+  });
+
+  it('says so without a name when the server’s checkout cannot be told', () => {
+    const line = lineFor(['512'], '  512 node apps/aflow-mcp/src/index.ts');
+    expect(line).toContain("its own checkout's credential file");
+    expect(line).not.toContain('undefined');
+    expect(lineFor([], `  512 ${serverFrom(THERE)}`)).toContain('cannot be told');
+  });
+
+  it('says aflow-local is unavailable when something else holds the port', () => {
+    expect(lineFor(['700'], '  700 other --port 3100')).toContain('not the Aflow MCP server');
+  });
+
+  it('defers to the usual line when nothing is seen on the port', () => {
+    expect(lineFor([], '  700 other')).toBeUndefined();
   });
 });

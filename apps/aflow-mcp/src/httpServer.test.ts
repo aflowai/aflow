@@ -201,6 +201,28 @@ describe.skipIf(!listenerAllowed)('the MCP HTTP server', () => {
     expect(server.activeSessions.has(sessionId as string)).toBe(true);
   });
 
+  it('allows a configured origin every header the SDK client sends after initialize', async () => {
+    const origin = 'http://app.example.test';
+    const server = await start({ localAuthJsonPath: undefined, allowedOrigins: [origin] });
+    const requested = ['mcp-session-id', 'mcp-protocol-version', 'last-event-id'];
+    const preflight = await send(server.port, {
+      method: 'OPTIONS',
+      headers: {
+        host: `localhost:${String(server.port)}`,
+        origin,
+        'access-control-request-method': 'POST',
+        'access-control-request-headers': requested.join(', '),
+      },
+    });
+
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers['access-control-allow-origin']).toBe(origin);
+    const allowed = String(preflight.headers['access-control-allow-headers'])
+      .split(',')
+      .map((name) => name.trim().toLowerCase());
+    for (const name of requested) expect(allowed).toContain(name);
+  });
+
   it('admits a configured ALLOWED_HOSTS entry', async () => {
     const server = await start({ allowedHosts: ['mcp.example.test'] });
     const res = await send(server.port, {

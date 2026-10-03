@@ -215,7 +215,7 @@ export function createMcpHttpServer(deps: {
           res.writeHead(204, {
             'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
             'Access-Control-Allow-Headers':
-              'Content-Type, Authorization, Mcp-Session-Id, X-Space-ID, X-Resolve-Payloads, X-Request-ID',
+              'Content-Type, Authorization, Mcp-Session-Id, Mcp-Protocol-Version, Last-Event-ID, X-Space-ID, X-Resolve-Payloads, X-Request-ID',
             'Access-Control-Max-Age': '86400',
           });
           res.end();

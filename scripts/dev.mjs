@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
 import process from 'node:process';
 
-import { mcpPortHeldMessage } from './devMcpPort.mjs';
+import { listenersOn, mcpPortHeldMessage, readProcessTable } from './devMcpPort.mjs';
 import { findRunningStack, profileConflicts, stackConflictMessage } from './devStackLock.mjs';
 
 /** When true, child exit must not remove entries until shutdown finishes (see shutdown + port sweep). */
@@ -425,29 +425,6 @@ async function portTaken(port) {
 }
 
 /**
- * The pids listening on a TCP port here, best effort: empty without lsof, and
- * missing whatever another user owns when this is not root.
- */
-function listenersOn(port) {
-  try {
-    const out = execSync(`lsof -t -sTCP:LISTEN -iTCP:${port} 2>/dev/null || true`, {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-    return [
-      ...new Set(
-        out
-          .split('\n')
-          .map((line) => line.trim())
-          .filter(Boolean),
-      ),
-    ];
-  } catch {
-    return [];
-  }
-}
-
-/**
  * Refuses a profile whose ports something already listens on. The usual holder
  * is the previous runner, still stopping: its teardown sweeps these ports, so it
  * would kill this stack's server and web, and `tsx watch` would then keep the
@@ -485,16 +462,7 @@ async function yieldHeldMcpPort(services) {
   if (!services.includes('mcp') || services.length === 1) return services;
   const [port] = SERVICE_REGISTRY.mcp.ports;
   if (!(await portTaken(port))) return services;
-  let ps = '';
-  try {
-    ps = execSync('ps ax -o pid=,command=', {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-  } catch {
-    // The listener pids alone still say something.
-  }
-  console.error(`[dev] ${mcpPortHeldMessage(port, listenersOn(port), ps)}`);
+  console.error(`[dev] ${mcpPortHeldMessage(port, listenersOn(port), readProcessTable())}`);
   return services.filter((name) => name !== 'mcp');
 }
 

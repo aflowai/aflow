@@ -11,11 +11,20 @@
  * Idempotent: a file whose key the API still accepts is left alone. Never prints
  * a key or the secret.
  */
-import { chmodSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import process from 'node:process';
+
+import { listenersOn, mcpPortHolder, readProcessTable } from './devMcpPort.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -78,6 +87,43 @@ export function apiUrlOf(env) {
 /** The file the MCP server reads, resolved from the checkout as `yarn` runs it. */
 export function authFileOf(env, repo = REPO) {
   return resolve(repo, setting(env, AUTH_FILE_ENV) ?? DEFAULT_AUTH_FILE);
+}
+
+/** The port the MCP server listens on, by `apps/aflow-mcp/src/config.ts`'s rule. */
+export function mcpPortOf(env) {
+  return Number(setting(env, 'MCP_PORT') ?? setting(env, 'PORT') ?? '3100');
+}
+
+/**
+ * What to say when the port is not held by this checkout's MCP server, or
+ * undefined when it is (or nothing is seen on it). The server resolves its
+ * credential file from its own working directory, so one another checkout
+ * started never reads the file written here.
+ */
+export function foreignHolderMessage({ port, holder, repo, shown }) {
+  const onPort = `port ${String(port)}`;
+  if (holder.kind === 'mcp-server' && holder.worktree !== undefined) {
+    if (holder.worktree === repo) return undefined;
+    return (
+      `${onPort} is held by the Aflow MCP server from ${holder.worktree} (pid ${holder.pids.join(', ')}), ` +
+      `which reads that checkout's credential file, not ${shown}. Run \`yarn mcp:setup\` there, ` +
+      'or stop that server and run `yarn dev:mcp` here.'
+    );
+  }
+  if (holder.kind === 'mcp-server' || holder.kind === 'unseen-mcp-server') {
+    return (
+      `${onPort} is held by an Aflow MCP server whose checkout cannot be told; unless it is this ` +
+      `one, it reads its own checkout's credential file, not ${shown}.`
+    );
+  }
+  if (holder.kind === 'other') {
+    const pids = holder.listeners.map(({ pid }) => String(pid)).join(', ');
+    return (
+      `${onPort} is held by pid ${pids}, which is not the Aflow MCP server; aflow-local is ` +
+      'unavailable until that port is free.'
+    );
+  }
+  return undefined;
 }
 
 /** `.env` with the line naming the file added, or undefined when it already names one. */
@@ -216,7 +262,10 @@ async function main() {
     const verdict = existingKeyVerdict(status);
     if (verdict === 'keep') {
       say(`${shown} holds a key the API accepts; nothing to do.`);
-      if (ensureEnvNamesAuthFile()) say('restart the MCP server so it reads that line.');
+      const envNamesItNow = ensureEnvNamesAuthFile();
+      const foreign = foreignHolderOfPort(env, shown);
+      if (foreign !== undefined) say(foreign);
+      else if (envNamesItNow) say('restart the MCP server so it reads that line.');
       return;
     }
     if (verdict === 'undecided') {
@@ -262,11 +311,33 @@ async function main() {
     `wrote ${shown}: the key "${KEY_NAME}", expiring ${expires}, listed under Settings → API Keys.`,
   );
 
-  if (ensureEnvNamesAuthFile()) {
+  const envNamesItNow = ensureEnvNamesAuthFile();
+  const foreign = foreignHolderOfPort(env, shown);
+  if (foreign !== undefined) {
+    say(foreign);
+  } else if (envNamesItNow) {
     say('restart the MCP server so it reads that line; auth_status then reports api_key.');
   } else {
     say('the next MCP session picks it up; auth_status reports api_key.');
   }
+}
+
+function canonical(path) {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
+function foreignHolderOfPort(env, shown) {
+  const port = mcpPortOf(env);
+  const holder = mcpPortHolder(listenersOn(port), readProcessTable());
+  const placed =
+    holder.kind === 'mcp-server' && holder.worktree !== undefined
+      ? { ...holder, worktree: canonical(holder.worktree) }
+      : holder;
+  return foreignHolderMessage({ port, holder: placed, repo: canonical(REPO), shown });
 }
 
 const invoked =
