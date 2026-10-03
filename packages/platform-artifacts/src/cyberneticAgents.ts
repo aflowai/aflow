@@ -136,6 +136,8 @@ export const HELMSMAN_DISCOVERY_PRESET: readonly string[] = [
   'browser.page.read',
   'browser.page.list',
   'browser.page.close',
+  'browser.page.screenshot',
+  'browser.page.handoff',
   'browser.profile.list',
   'mcp.server.list',
   'mcp.server.get',

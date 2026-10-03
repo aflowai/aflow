@@ -43,12 +43,24 @@ export async function followPolicy(followers: PolicyFollowers): Promise<void> {
   }
 }
 
+/** Other files in the policy's directory the same watch looks out for. */
+export interface DirectoryFollower {
+  matches(filename: string): boolean;
+  onChange(): void;
+}
+
 /**
  * Call `onChange` when the policy file changes, coalescing the burst an editor
  * produces — a rename-and-replace can fire several events for one save, and
- * reconciling four times is wasted work, not four withdrawals.
+ * reconciling four times is wasted work, not four withdrawals. A `follower`
+ * is told of its own files at once, through the same descriptor.
  */
-export function watchPolicy(policyPath: string, onChange: () => void, settleMs = 250): PolicyWatch {
+export function watchPolicy(
+  policyPath: string,
+  onChange: () => void,
+  settleMs = 250,
+  follower?: DirectoryFollower,
+): PolicyWatch {
   let pending: NodeJS.Timeout | undefined;
   let watcher: FSWatcher | undefined;
 
@@ -74,6 +86,9 @@ export function watchPolicy(policyPath: string, onChange: () => void, settleMs =
       // `filename` can be null on some platforms; a change in a directory that
       // holds one file we care about is worth reconciling either way.
       if (filename === null || basename(filename) === target) fire();
+      if (follower !== undefined && (filename === null || follower.matches(basename(filename)))) {
+        follower.onChange();
+      }
     });
     watcher.on('error', () => {
       watcher?.close();

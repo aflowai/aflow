@@ -88,15 +88,19 @@ export interface PageEvents {
 
 export interface EnginePage {
   /**
-   * Moves the page and settles once its document has loaded, waiting a short
-   * while longer for the load event and going on without it. False when there
+   * Moves the page and returns once its document has reached DOMContentLoaded;
+   * a page still rendering after that is the caller's to wait for. False when there
    * was no history entry to go back or forward to. Fails with
    * `EngineNavigationFailed`.
    */
   navigate(to: EngineNavigation): Promise<boolean>;
   /**
-   * Throws `EngineRefNotFound`, `EngineCredentialField` or
-   * `EngineFieldUnchecked` before doing anything.
+   * Does the action and returns once its effect has begun: when it started a
+   * document navigation in the page's main frame, after that document's
+   * DOMContentLoaded or the navigation bound; otherwise at once — a script
+   * re-rendering the page is the caller's to wait for. Throws
+   * `EngineRefNotFound`, `EngineCredentialField` or `EngineFieldUnchecked`
+   * before doing anything.
    */
   act(ref: string, action: EngineAction): Promise<void>;
   /**
@@ -111,12 +115,29 @@ export interface EnginePage {
   snapshot(): Promise<PageSnapshot>;
   /** The page's visible text. */
   text(): Promise<string>;
+  /**
+   * An image of what the window shows, the whole scrollable page, or one
+   * element, with every password field masked. Throws `EngineRefNotFound`
+   * when nothing answers to the reference.
+   */
+  screenshot(request: EngineScreenshot): Promise<Buffer>;
   close(): Promise<void>;
   isClosed(): boolean;
 }
 
+export interface EngineScreenshot {
+  readonly ref?: string;
+  readonly fullPage: boolean;
+  /** PNG, or JPEG at this quality. */
+  readonly jpegQuality?: number;
+}
+
 export interface EngineBrowser {
   newPage(events: PageEvents): Promise<EnginePage>;
+  /** The page the browser started with, when it is still open; otherwise a new one. */
+  firstPage(events: PageEvents): Promise<EnginePage>;
+  /** Pages open in the browser now, whoever opened them — a person at its window included. */
+  openPageCount(): number;
   /** The hosts the profile holds cookies for, by name. Never a value. */
   cookieSites(): Promise<string[]>;
   /** Drop the connection. The browser process is the launcher's to end. */

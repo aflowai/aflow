@@ -7,7 +7,9 @@ import { z } from 'zod';
 import type { OperationRegistration } from '../catalog/operationCatalog.js';
 import { buildOperationId } from '../catalog/operationId.js';
 import {
+  BROWSER_OUTLINE_MAX_CHARS,
   BrowserElementRefSchema,
+  browserMaxCharsSchema,
   BrowserOutlineCensusSchema,
   BrowserPageIdSchema,
 } from './browser.js';
@@ -19,10 +21,18 @@ export const BROWSER_PAGE_LIST_OPERATION_ID = buildOperationId('browser', 'page'
 export const BROWSER_PAGE_CLOSE_OPERATION_ID = buildOperationId('browser', 'page', 'close');
 export const BROWSER_PROFILE_LIST_OPERATION_ID = buildOperationId('browser', 'profile', 'list');
 
-/** Characters of page text one read returns. */
+/** The most text, console or network one read may ask for with `maxChars`. */
 export const BROWSER_READ_MAX_CHARS = 32_000;
 /** Console messages or network requests one read returns. */
 export const BROWSER_READ_MAX_ENTRIES = 200;
+
+/**
+ * What a snapshot and a read return unless the call asks for more: under
+ * `TOOL_RESULT_INLINE_MAX_CHARS` with the rest of the result, so the agent
+ * reads it in the same call. Counted as the result carries the characters.
+ */
+export const BROWSER_SNAPSHOT_DEFAULT_CHARS = 8_000;
+export const BROWSER_READ_DEFAULT_CHARS = 8_000;
 
 // ---------------------------------------------------------------------------
 // browser.page.snapshot
@@ -32,6 +42,11 @@ export const BrowserPageSnapshotInputSchema = z.object({
   pageId: BrowserPageIdSchema,
   ref: BrowserElementRefSchema.optional().describe(
     'Snapshot only this element and what is inside it. Omit for the whole page.',
+  ),
+  maxChars: browserMaxCharsSchema(
+    'snapshot',
+    BROWSER_SNAPSHOT_DEFAULT_CHARS,
+    BROWSER_OUTLINE_MAX_CHARS,
   ),
 });
 
@@ -50,6 +65,13 @@ export const BrowserPageSnapshotOutputSchema = z.object({
     ref: z.string().optional().describe('The element the snapshot was scoped to, when it was.'),
     lines: z.number().int().nonnegative().describe('Lines the snapshot carries.'),
     cut: z.boolean().describe('True when the snapshot reached its bound.'),
+    continueRef: z
+      .string()
+      .optional()
+      .describe(
+        'When cut: the element enclosing the first part left out. Snapshot with `ref` set to it ' +
+          'to read on from there.',
+      ),
   }),
 });
 
@@ -72,6 +94,20 @@ export const BrowserPageReadInputSchema = z.object({
     .min(1)
     .optional()
     .describe('Keep only lines, messages or request addresses containing this, ignoring case.'),
+  offset: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .describe(
+      'For `text`: start this many characters in — the `nextOffset` of a read that was cut. ' +
+        'Counted in the text after `contains` has filtered it.',
+    ),
+  maxChars: browserMaxCharsSchema(
+    'text or entries',
+    BROWSER_READ_DEFAULT_CHARS,
+    BROWSER_READ_MAX_CHARS,
+  ),
 });
 
 export const BrowserConsoleEntrySchema = z.object({
@@ -105,10 +141,16 @@ export const BrowserPageReadOutputSchema = z.object({
     .int()
     .nonnegative()
     .describe(
-      'What matched but was left out because the result reached its bound: characters for ' +
-        '`text`, entries for `console` and `network` (the oldest go first). Narrow with ' +
-        '`contains` to see them.',
+      'What matched but was left out because the result reached its bound: for `text`, the ' +
+        'characters after what is shown — read on from `nextOffset`; for `console` and ' +
+        '`network`, the oldest entries — narrow with `contains`, or raise `maxChars`.',
     ),
+  nextOffset: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .describe('For `text` cut short: the `offset` that reads on from where this one stopped.'),
   notRetained: z
     .number()
     .int()
@@ -210,7 +252,8 @@ export const BrowserObservationRegistrations: OperationRegistration[] = [
       ],
       whenNotToUse: ['Reading prose — browser.page.read with `what: text` is smaller'],
       pitfalls: [
-        'A whole-page snapshot is large; scope it with `ref` where you can.',
+        'A whole-page snapshot is large; scope it with `ref` where you can. A cut one names ' +
+          'in `receipt.continueRef` the element to scope the next snapshot to.',
         'Its references replace the outline’s: act on the newest one taken.',
         PAGE_IS_THE_RUNS,
       ],
@@ -241,7 +284,8 @@ export const BrowserObservationRegistrations: OperationRegistration[] = [
       ],
       whenNotToUse: ['Finding something to click — the outline names every control'],
       pitfalls: [
-        '`withheld` above zero means more matched than fits: narrow with `contains`.',
+        '`withheld` above zero means more matched than fits: read text on from `nextOffset`, or ' +
+          'narrow with `contains`.',
         'Console messages and requests are kept from when the page was opened, the oldest ' +
           'dropping first; `notRetained` counts those no longer kept.',
         PAGE_IS_THE_RUNS,

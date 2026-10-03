@@ -91,6 +91,10 @@ export const PayloadKindSchema = z.enum([
   // step's result carries only a capped inline copy of it at that path, and a
   // publication reads this one by reference.
   'patch',
+  // The image a browser screenshot step took, stored as bytes. Distinct from
+  // 'output' because the step's result — its metadata and this reference —
+  // takes that path.
+  'screenshot',
   // One simulated call's world mutations. Distinct from the step's own output
   // because the payload path is deterministic per (step, attempt, kind): the
   // delta and the response the agent sees would otherwise be one object, and

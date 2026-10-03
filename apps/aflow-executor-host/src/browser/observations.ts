@@ -6,7 +6,10 @@
  * is ever kept, and every query value is replaced before an address is stored,
  * because a query is where tokens travel.
  */
-import { BROWSER_READ_MAX_CHARS, BROWSER_READ_MAX_ENTRIES } from '@aflow/schemas';
+import { BROWSER_READ_DEFAULT_CHARS, BROWSER_READ_MAX_ENTRIES } from '@aflow/schemas';
+
+import { encodedLength, encodedPrefix } from './encodedLength.js';
+import type { PageEvents } from './types.js';
 
 /** Messages one page keeps; the oldest go first. */
 export const CONSOLE_BUFFER_ENTRIES = 500;
@@ -78,6 +81,18 @@ export class PageObservations {
 
   constructor(private readonly now: () => number) {}
 
+  /** What a page reports, recorded here from the moment it is created. */
+  events(): PageEvents {
+    return {
+      console: (level, text) => {
+        this.recordConsole(level, text);
+      },
+      request: (request) => {
+        this.recordRequest(request);
+      },
+    };
+  }
+
   recordConsole(level: string, text: string): void {
     this.console.push({
       level,
@@ -103,21 +118,21 @@ function matches(text: string, contains: string | undefined): boolean {
 /**
  * The newest matching entries that fit, oldest first, and how many matched
  * but were left out. Newest kept because a read is usually about what just
- * happened.
+ * happened. Each entry is counted as it is serialized, with its separator.
  */
 export function boundEntries<T>(
   entries: readonly T[],
   contains: string | undefined,
   textOf: (entry: T) => string,
   maxEntries: number = BROWSER_READ_MAX_ENTRIES,
-  maxChars: number = BROWSER_READ_MAX_CHARS,
+  maxChars: number = BROWSER_READ_DEFAULT_CHARS,
 ): { kept: T[]; withheld: number } {
   const matched = entries.filter((entry) => matches(textOf(entry), contains));
   const kept: T[] = [];
   let chars = 0;
   for (let i = matched.length - 1; i >= 0 && kept.length < maxEntries; i -= 1) {
     const entry = matched[i] as T;
-    const size = JSON.stringify(entry).length;
+    const size = JSON.stringify(entry).length + 1;
     if (chars + size > maxChars) break;
     chars += size;
     kept.push(entry);
@@ -125,12 +140,26 @@ export function boundEntries<T>(
   return { kept: kept.reverse(), withheld: matched.length - kept.length };
 }
 
-/** Page text, filtered to matching lines when asked, cut at the bound. */
+export interface BoundedText {
+  readonly text: string;
+  /** Where in the selected text this window starts. */
+  readonly offset: number;
+  /** Characters of the selected text after this window. */
+  readonly withheld: number;
+  /** The offset that reads on, when anything was withheld. */
+  readonly nextOffset?: number;
+}
+
+/**
+ * Page text, filtered to matching lines when asked, from `offset` for as
+ * much as the bound holds. Offsets count the selected text's own characters;
+ * the bound counts them as the result carries them.
+ */
 export function boundText(
   text: string,
   contains: string | undefined,
-  maxChars: number = BROWSER_READ_MAX_CHARS,
-): { text: string; withheld: number } {
+  options: { readonly offset?: number; readonly maxChars?: number } = {},
+): BoundedText {
   const selected =
     contains === undefined
       ? text
@@ -138,6 +167,15 @@ export function boundText(
           .split('\n')
           .filter((line) => matches(line, contains))
           .join('\n');
-  if (selected.length <= maxChars) return { text: selected, withheld: 0 };
-  return { text: selected.slice(0, maxChars), withheld: selected.length - maxChars };
+  const offset = Math.min(options.offset ?? 0, selected.length);
+  const rest = selected.slice(offset);
+  const maxChars = options.maxChars ?? BROWSER_READ_DEFAULT_CHARS;
+  const shown = encodedLength(rest) <= maxChars ? rest : encodedPrefix(rest, maxChars);
+  const withheld = rest.length - shown.length;
+  return {
+    text: shown,
+    offset,
+    withheld,
+    ...(withheld > 0 ? { nextOffset: offset + shown.length } : {}),
+  };
 }

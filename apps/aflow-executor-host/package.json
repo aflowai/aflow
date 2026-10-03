@@ -17,6 +17,7 @@
     "pair": "NODE_OPTIONS='--conditions=ts-source' npx tsx src/pair.ts",
     "connect": "NODE_OPTIONS='--conditions=ts-source' npx tsx src/connect.ts",
     "harness": "NODE_OPTIONS='--conditions=ts-source' npx tsx src/harness-cli.ts",
+    "browser": "NODE_OPTIONS='--conditions=ts-source' npx tsx src/browser-cli.ts",
     "service": "NODE_OPTIONS='--conditions=ts-source' npx tsx src/service.ts"
   },
   "dependencies": {
