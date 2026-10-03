@@ -70,7 +70,7 @@ describe('ApiSessionEventSchema (Plan 56)', () => {
       metadata: { stepName: 'Generate response' },
       usage: {
         provider: 'openai',
-        model: 'gpt-5.6-terra',
+        model: 'gpt-6.1-sol',
         promptTokens: 100,
         completionTokens: 50,
         totalTokens: 150,
@@ -83,7 +83,7 @@ describe('ApiSessionEventSchema (Plan 56)', () => {
         totalCompletionTokens: 100,
         totalTokens: 300,
         totalCostUsd: 0.006,
-        models: ['gpt-5.6-terra'],
+        models: ['gpt-6.1-sol'],
       },
       surfaceMutations: [{ op: 'append', path: '/items', value: { text: 'hi' } }],
       surfaceId: 'surface-1',

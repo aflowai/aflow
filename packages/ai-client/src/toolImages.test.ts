@@ -47,7 +47,7 @@ vi.mock('./providers/fireworks.js', () => ({
   }),
 }));
 
-const VISION_MODEL = 'claude-sonnet-5';
+const VISION_MODEL = 'claude-sonnet-5-5';
 const TEXT_ONLY_MODEL = 'accounts/fireworks/models/deepseek-v4-pro-0813';
 
 function image(n: number, sizeBytes = 1000): StepImage {

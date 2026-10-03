@@ -882,7 +882,7 @@ describe('handleAgentTurn (integration seams)', () => {
         ],
         finishReason: 'tool_calls' as const,
         usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
-        model: 'gpt-5.6-terra',
+        model: 'gpt-6.1-sol',
         provider: 'openai',
       }),
     });
@@ -890,7 +890,7 @@ describe('handleAgentTurn (integration seams)', () => {
 
     vi.mocked(getAIClientForContext).mockResolvedValue({
       getModel: () => ({
-        id: 'gpt-5.6-terra',
+        id: 'gpt-6.1-sol',
         provider: 'openai',
         capabilities: { functionCalling: true },
       }),
@@ -898,7 +898,7 @@ describe('handleAgentTurn (integration seams)', () => {
       generateJson,
     } as never);
 
-    const result = await handleAgentTurn(ctx, baseAgentInput({ model: 'gpt-5.6-terra' }), deps);
+    const result = await handleAgentTurn(ctx, baseAgentInput({ model: 'gpt-6.1-sol' }), deps);
     expect(result.status).toBe('SUCCEEDED');
     expect(generateTextStream).toHaveBeenCalledTimes(1);
     expect(generateJson).not.toHaveBeenCalled();
@@ -994,7 +994,7 @@ describe('handleAgentTurn (integration seams)', () => {
           ],
           finishReason: 'tool_calls' as const,
           usage: { promptTokens: 5, completionTokens: 2, totalTokens: 7 },
-          model: 'gpt-5.6-terra',
+          model: 'gpt-6.1-sol',
           provider: 'openai',
         }),
       };
@@ -1003,7 +1003,7 @@ describe('handleAgentTurn (integration seams)', () => {
 
     vi.mocked(getAIClientForContext).mockResolvedValue({
       getModel: () => ({
-        id: 'gpt-5.6-terra',
+        id: 'gpt-6.1-sol',
         provider: 'openai',
         capabilities: { functionCalling: true },
       }),
@@ -1011,7 +1011,7 @@ describe('handleAgentTurn (integration seams)', () => {
       generateJson,
     } as never);
 
-    const result = await handleAgentTurn(ctx, baseAgentInput({ model: 'gpt-5.6-terra' }), deps);
+    const result = await handleAgentTurn(ctx, baseAgentInput({ model: 'gpt-6.1-sol' }), deps);
     expect(result.status).toBe('SUCCEEDED');
     expect(generateTextStream).toHaveBeenCalledTimes(2); // original + native-FC repair
     expect(generateJson).not.toHaveBeenCalled(); // repair did NOT fall back to structured output

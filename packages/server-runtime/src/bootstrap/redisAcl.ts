@@ -220,18 +220,42 @@ interface RedisCaller {
  *
  * `ACL SETUSER` with `resetpass` replaces the password rather than adding one,
  * so a user that is missing is created with this credential and one that holds
- * another is moved to it. Only pairing and revocation call this: they are what
- * decide the credential.
+ * another is moved to it. Pairing and revocation call this, because they are
+ * what decide the credential; a full start calls it only through
+ * `ensureHostIdentityOnRunningServer`, for an identity that is missing.
  */
 export async function applyHostIdentityToRunningServer(
   redis: RedisCaller,
   input: RedisAclInput,
+  username: string = HOST_USER,
 ): Promise<void> {
   const line = renderRedisAcl(input)
     .split('\n')
     .find((l) => l.startsWith(`user ${HOST_USER} `));
   if (line === undefined) throw new Error('Rendered ACL carries no host identity.');
-  await redis.call('ACL', 'SETUSER', ...line.split(' ').slice(1));
+  await redis.call('ACL', 'SETUSER', username, ...line.split(' ').slice(2));
+}
+
+/**
+ * The full start's half: create the host identity when the running server has
+ * none, otherwise bring its grant up to date and leave its password alone.
+ *
+ * A server started without an ACL file — the development Redis — holds the
+ * identity in memory only, so a Redis restart removes it and nothing but this
+ * or a pairing puts it back. Only a full start may call this, because only it
+ * has just read the password from `instance.env`, the durable value a pairing
+ * or revocation last wrote. A server restarted in place holds whatever its
+ * supervisor captured, and asserts the grant alone.
+ */
+export async function ensureHostIdentityOnRunningServer(
+  redis: RedisCaller,
+  input: RedisAclInput,
+  username: string = HOST_USER,
+): Promise<{ outcome: 'created' } | { outcome: 'asserted' }> {
+  const { outcome } = await assertHostGrantOnRunningServer(redis, username);
+  if (outcome === 'asserted') return { outcome };
+  await applyHostIdentityToRunningServer(redis, input, username);
+  return { outcome: 'created' };
 }
 
 /**
@@ -248,7 +272,8 @@ export async function applyHostIdentityToRunningServer(
  * The rules are reset before they are applied, so a pattern removed from the
  * code is removed from the live user as well; the resets touch keys, channels,
  * selectors and commands, never passwords. A missing user is reported rather
- * than created, because creating it needs the credential.
+ * than created, because creating it needs the credential, which only a full
+ * start has read fresh.
  */
 export async function assertHostGrantOnRunningServer(
   redis: RedisCaller,

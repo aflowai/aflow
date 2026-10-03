@@ -5,7 +5,7 @@ const sdk = vi.hoisted(() => ({
   captured: [] as Record<string, unknown>[],
   reply: {
     id: 'msg_1',
-    model: 'claude-opus-5',
+    model: 'claude-opus-5-5',
     stop_reason: 'end_turn',
     content: [
       { type: 'thinking', thinking: '…' },
@@ -195,7 +195,7 @@ describe('toAnthropicMessages — reasoning-continuity replay (Plan 259)', () =>
       toolCalls: [{ id: 'a_0', type: 'function', function: { name: 'q', arguments: '{}' } }],
       providerReasoning: {
         provider: 'anthropic',
-        model: 'claude-sonnet-5',
+        model: 'claude-sonnet-5-5',
         blocks: [{ type: 'thinking', thinking: 'let me think', signature: 'sig123' }],
       },
     },
@@ -358,7 +358,7 @@ describe('generateJson — structured output must not ride a forced tool call', 
     const adapter = createAnthropicAdapter({ apiKey: 'k' });
 
     const result = await adapter.generateJson({
-      model: 'claude-opus-5',
+      model: 'claude-opus-5-5',
       messages: [{ role: 'user', content: 'q' }],
       schema: z.object({ answer: z.string() }),
       rawJsonSchema: {

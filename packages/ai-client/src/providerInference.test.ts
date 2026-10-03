@@ -5,7 +5,7 @@ describe('inferProviderForModelRef', () => {
   it('answers from the catalog before any spelling rule', () => {
     expect(inferProviderForModelRef('glm-pro')).toBe('fireworks');
     expect(inferProviderForModelRef('accounts/fireworks/models/glm-5p3')).toBe('fireworks');
-    expect(inferProviderForModelRef('claude-sonnet-5')).toBe('anthropic');
+    expect(inferProviderForModelRef('claude-sonnet-5-5')).toBe('anthropic');
   });
 
   it('reads a retired ref as its successor’s provider', () => {

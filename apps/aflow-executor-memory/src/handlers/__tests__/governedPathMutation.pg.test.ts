@@ -220,7 +220,7 @@ describeDb('governed paths refuse every mutation, not only the write (real DB)',
     await fileAsMediaLane(assetPath, { kind: 'binary', bytes: PNG_BYTES }, 'image', 'image/png');
     receiptId = await fileAsMediaLane(
       receiptPath,
-      { kind: 'text', text: JSON.stringify({ model: 'gpt-image-1.5' }) },
+      { kind: 'text', text: JSON.stringify({ model: 'gpt-image-2.5-sunburst' }) },
       'json',
       'application/json',
     );
@@ -283,7 +283,7 @@ describeDb('governed paths refuse every mutation, not only the write (real DB)',
     expect(result.status).toBe('FAILED');
     const held = await docRepo.getByPath(receiptPath, SPACE);
     expect(held?.currentVersion).toBe(1);
-    expect(held?.inlineContent).toContain('gpt-image-1.5');
+    expect(held?.inlineContent).toContain('gpt-image-2.5-sunburst');
   });
 
   it('refuses a receipt reached by id, where the request names no path', async (ctx: TestContext) => {

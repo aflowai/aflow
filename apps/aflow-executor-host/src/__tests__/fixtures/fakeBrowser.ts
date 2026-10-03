@@ -178,6 +178,8 @@ export class FakePage implements EnginePage {
 
   private connect(url: string): ProxyRefusal | undefined {
     const parsed = new URL(url);
+    // A browser fetches nothing for a `data:` address, so its proxy is never asked.
+    if (parsed.protocol === 'data:') return undefined;
     return this.proxy().check(parsed.hostname.replace(/^\[(.*)\]$/, '$1'), parsed.port);
   }
 

@@ -436,10 +436,11 @@ function normalizeJsonSchemaForOpenAI(schema: Record<string, unknown>): Record<s
 /**
  * Map Phoenix reasoning effort to OpenAI's reasoning-effort scale.
  *
- * gpt-5.x reasoning models accept `none | low | medium | high`. `off` → `none`
- * (no reasoning performed). Returns undefined when no reasoning config is
- * supplied, leaving the model's own default. The client forwards a reasoning
- * config only for models whose catalog profile accepts the resolved effort.
+ * `off` → `none` (no reasoning performed), which only some models accept —
+ * the catalog profile decides, and an `off` reaching here was allowed by it.
+ * Returns undefined when no reasoning config is supplied, leaving the model's
+ * own default. The client forwards a reasoning config only for models whose
+ * catalog profile accepts the resolved effort.
  */
 export function mapOpenAiReasoningEffort(
   reasoning: ReasoningConfig | undefined,
@@ -894,7 +895,7 @@ export function createOpenAIAdapter(
       try {
         refuseImageReferences(request, 'openai', 'this provider generates from the prompt alone');
 
-        // GPT image models (gpt-image-1, gpt-image-1-mini, gpt-image-1.5)
+        // GPT image models (every `gpt-image-*` id)
         // always return base64 and do NOT accept response_format.
         // DALL-E models (dall-e-2, dall-e-3) require response_format.
         const isGptImage = request.model.startsWith('gpt-image');

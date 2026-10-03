@@ -35,6 +35,7 @@ import { type BrowserPolicy, chromeExecutable, resolveProfile } from './profiles
 import { navigationFailure, urlOrNothing } from './refusalAttribution.js';
 import type { SettleClock } from './settle.js';
 import { onSignInPath } from './signInPath.js';
+import { SIGN_IN_START_PAGE } from './signInStartPage.js';
 import type { EnginePage } from './types.js';
 
 const MINUTE_MS = 60_000;
@@ -268,9 +269,9 @@ export class OperatorWindows {
   }
 
   /**
-   * The operator's sign-in sitting: the profile's window, open until they close
-   * it, then the sites the profile holds a session for. Any profile on the
-   * machine; no run is involved.
+   * The operator's sign-in sitting: the profile's window, on a start page that
+   * says whose browser it is, open until they close it, then the sites the
+   * profile holds a session for. Any profile on the machine; no run is involved.
    */
   async signIn(profileId: string, options: SignInOptions = {}): Promise<SignInResult> {
     const { browsers, clock } = this.host;
@@ -288,6 +289,8 @@ export class OperatorWindows {
       const page = shown.restarted
         ? await shown.running.browser.firstPage(events)
         : await shown.running.browser.newPage(events);
+      // A blank window is still one the operator can sign in from.
+      await page.navigate({ kind: 'url', url: SIGN_IN_START_PAGE }).catch(() => undefined);
       const ended = (): boolean => browsers.get(profile.id) !== shown.running;
       outcome = await waitForWindowClosed(
         shown.restarted

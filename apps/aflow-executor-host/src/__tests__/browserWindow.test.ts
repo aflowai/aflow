@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest';
 
 import { HANDOFF_QUIET_MS } from '../browser/operatorWindow.js';
 import { onSignInPath } from '../browser/signInPath.js';
+import { SIGN_IN_START_PAGE } from '../browser/signInStartPage.js';
 import { browserFailure, createBrowserHandler } from '../handlers/browserHandler.js';
 import {
   type FakePage,
@@ -522,6 +523,42 @@ describe('the sign-in sitting', () => {
       sites: ['accounts.example.com', 'mail.example.com'],
     });
     expect(h.launches.map((launch) => launch.profile.window)).toEqual(['visible', 'hidden']);
+  });
+
+  it('opens the window on the start page, an address that reaches no network', async () => {
+    const h = world({ browsers: [profile()] });
+    h.onSleep = () => {
+      for (const page of h.pagesByLaunch[0] ?? []) page.closed = true;
+    };
+
+    await h.driver.signIn('default');
+
+    const page = h.pagesByLaunch[0]?.[0];
+    expect(page?.navigations).toEqual([{ kind: 'url', url: SIGN_IN_START_PAGE }]);
+    expect(page?.url()).toBe(SIGN_IN_START_PAGE);
+    expect(SIGN_IN_START_PAGE.startsWith('data:text/html;charset=utf-8,')).toBe(true);
+    const shown = decodeURIComponent(SIGN_IN_START_PAGE.slice(SIGN_IN_START_PAGE.indexOf(',') + 1));
+    expect(shown).toContain('This is the agent’s own browser on this machine.');
+    expect(shown).toContain('Sign in here to whatever the agent should reach.');
+    expect(shown).toContain('Close this window when you are done.');
+    expect(shown).toContain('Nothing of your everyday browser is here');
+    // Nothing on the page asks the network for anything.
+    expect(shown).not.toMatch(/https?:|src=|href=|<script/i);
+  });
+
+  it('opens the operator’s own tab on the start page when the window is already up for runs', async () => {
+    const h = world({ browsers: [profile({ window: 'visible' })] });
+    const theirs = await open(h, RUN_A, NEWS);
+    h.onSleep = () => {
+      const tab = h.pagesByLaunch[0]?.[1];
+      if (tab !== undefined) tab.closed = true;
+    };
+
+    const result = await h.driver.signIn('default');
+
+    expect(result.restarted).toBe(false);
+    expect(h.pagesByLaunch[0]?.[1]?.url()).toBe(SIGN_IN_START_PAGE);
+    expect((await h.driver.snapshot(RUN_A, theirs)).url).toBe(NEWS);
   });
 
   it('says when the window is on screen, and the machine reports it open until it closes', async () => {

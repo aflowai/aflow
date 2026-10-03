@@ -9,7 +9,7 @@ import { resolveMediaSpend } from '../mediaCost.js';
 const catalog = createDefaultModelCatalog();
 
 const VEO = 'veo-3.1-generate-preview';
-const IMAGE = 'gpt-image-1.5';
+const IMAGE = 'grok-imagine-image-2.0';
 
 describe('resolveMediaSpend', () => {
   it('prices video against the catalog per-second rate', () => {

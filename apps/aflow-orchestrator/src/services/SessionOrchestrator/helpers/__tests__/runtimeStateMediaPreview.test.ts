@@ -14,7 +14,8 @@ import { resolveOutputToValueRef } from '../runtimeState.js';
 const TENANT = 'tenant-media-preview' as TenantId;
 const SESSION = 'run-media-preview' as SessionId;
 const STEP = 'step-media-preview' as StepExecutionId;
-const REQUEST_KEY = 'run-media-preview|step-media-preview|0|ai.media.image|openai|gpt-image-1.5|ab';
+const REQUEST_KEY =
+  'run-media-preview|step-media-preview|0|ai.media.image|openai|gpt-image-2.5-sunburst|ab';
 const DOC_IDS = [
   '3f1c9a52-2b7e-4c31-9c0d-8a2f4e6b1d70',
   '8b2d0f14-77aa-4a51-9c6e-1e5f3c8a9b21',
@@ -57,8 +58,8 @@ function receipt() {
       boundEntityVersions: [],
     },
     provider: 'openai',
-    model: 'gpt-image-1.5',
-    capabilityRoute: { routeId: 'openai:gpt-image-1.5:sync' },
+    model: 'gpt-image-2.5-sunburst',
+    capabilityRoute: { routeId: 'openai:gpt-image-2.5-sunburst:sync' },
     cost: { actual: { currency: 'USD', micros: 80_000 } },
     rendered: { width: 1024, height: 1024 },
     createdAt: '2026-08-18T10:00:00.000Z',

@@ -12,5 +12,6 @@ export {
   renderRedisAcl,
   loadRedisAclIntoRunningServer,
   assertHostGrantOnRunningServer,
+  ensureHostIdentityOnRunningServer,
 } from './redisAcl.js';
 export { findLocalAuthConfigViolations, localOwner } from '../plugins/localInstanceAuth.js';

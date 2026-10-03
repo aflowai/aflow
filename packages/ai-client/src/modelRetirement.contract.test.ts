@@ -28,6 +28,19 @@ describe('model retirement', () => {
     }
   });
 
+  it('resolves a model-line alias to the current model of that line', () => {
+    // An alias that is a model's name follows the name across generations, so
+    // a stored `sol` is never served by a model called something else.
+    const catalog = createDefaultModelCatalog();
+    expect(catalog.getModel('sol')?.id).toBe('gpt-6.1-sol');
+    expect(catalog.getModel('gpt-5.6-sol')?.id).toBe('gpt-6.1-sol');
+    expect(catalog.getModel('astra')?.id).toBe('gpt-6-astra');
+    expect(catalog.getModel('gpt')?.id).toBe('gpt-6.1-sol');
+    expect(catalog.getModel('luna')?.id).toBe('gpt-6-luna');
+    expect(catalog.getModel('sonnet')?.id).toBe('claude-sonnet-5-5');
+    expect(catalog.getModel('opus')?.id).toBe('claude-opus-5-5');
+  });
+
   it('leaves a model that never existed unresolved', () => {
     expect(
       createDefaultModelCatalog().getModel('accounts/fireworks/models/not-a-model'),

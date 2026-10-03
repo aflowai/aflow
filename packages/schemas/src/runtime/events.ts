@@ -195,7 +195,7 @@ export type WorkflowRunUpdateEvent = z.infer<typeof WorkflowRunUpdateEventSchema
 export const StepUsageBreakdownSchema = z.object({
   /** AI provider (e.g., "openai", "google", "anthropic") */
   provider: z.string(),
-  /** Model identifier from the catalog (e.g., "gpt-5.6-terra", "gemini-3.8-flash") */
+  /** Model identifier from the catalog (e.g., "gpt-6.1-sol", "gemini-3.8-flash") */
   model: z.string(),
 
   // ── Token counts ──────────────────────────────────────────────────────

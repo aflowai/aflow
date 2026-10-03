@@ -63,7 +63,7 @@ describe('the server’s start', () => {
     expect(boot.log.info).toHaveBeenCalledWith('Asserted the host grant on the running Redis');
   });
 
-  it('says so when Redis has no host identity, and keeps serving', async () => {
+  it('creates no host identity when Redis has none, says what does, and keeps serving', async () => {
     boot.asserted.mockResolvedValueOnce({ outcome: 'absent' });
 
     start(composition);
@@ -71,7 +71,11 @@ describe('the server’s start', () => {
       expect(boot.log.warn).toHaveBeenCalledTimes(1);
     });
 
-    expect(String(boot.log.warn.mock.calls[0]?.[0])).toContain('no host identity');
+    const warning = String(boot.log.warn.mock.calls[0]?.[0]);
+    expect(warning).toContain('no host identity');
+    expect(warning).toContain('Pairing a machine, or a full start, creates it.');
+    expect(boot.asserted.mock.calls).toEqual([[boot.redis]]);
+    expect(boot.redis.call).not.toHaveBeenCalled();
     expect(boot.log.info).not.toHaveBeenCalled();
   });
 

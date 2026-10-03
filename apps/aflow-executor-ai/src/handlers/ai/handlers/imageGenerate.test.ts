@@ -63,7 +63,7 @@ const editImage = vi.fn();
 function stubClient(): void {
   vi.mocked(getAIClientForContext).mockResolvedValue({
     resolveModelId: (key: string) =>
-      key === REFERENCE_CAPABLE ? 'gemini-3-pro-image' : 'gpt-image-1.5',
+      key === REFERENCE_CAPABLE ? 'gemini-3-pro-image' : 'gpt-image-2.5-sunburst',
     getAdapter: () => Promise.resolve({ generateImage, editImage }),
     getModel: (key: string) =>
       key === REFERENCE_CAPABLE
@@ -76,7 +76,11 @@ function stubClient(): void {
         aliases: ['pro-image', REFERENCE_CAPABLE],
         capabilities: { imageGeneration: true, imageReferences: { character: 5, style: 3 } },
       },
-      { id: 'gpt-image-1.5', aliases: [REFERENCE_BLIND], capabilities: { imageGeneration: true } },
+      {
+        id: 'gpt-image-2.5-sunburst',
+        aliases: [REFERENCE_BLIND],
+        capabilities: { imageGeneration: true },
+      },
       // A video route declares references of its own. Suggesting it to an image
       // caller would name a model that cannot answer the request at all.
       {
