@@ -166,6 +166,7 @@ describe.runIf(CAN_CONFINE)('a detached process', () => {
 
   it.skipIf(confined.skip)(
     confined.title('holds what it said until someone reads it, then reports only what is new'),
+    { tags: ['listener'], timeout: 40_000 },
     async () => {
       const processId = await startDetached(['sh', '-c', 'echo first; sleep 20']);
       const seen = await drainUntil(processId, (out) => out.includes('first'));
@@ -183,11 +184,11 @@ describe.runIf(CAN_CONFINE)('a detached process', () => {
         contextFor('host.process.stop', { bindingId: 'hb', processId, graceMs: 0 }, stop),
       );
     },
-    40_000,
   );
 
   it.skipIf(confined.skip)(
     confined.title('takes input and acts on it'),
+    { tags: ['listener'], timeout: 40_000 },
     async () => {
       const processId = await startDetached(['sh', '-c', 'read line; echo "got:$line"; sleep 10']);
       await settle(500);
@@ -208,13 +209,13 @@ describe.runIf(CAN_CONFINE)('a detached process', () => {
         contextFor('host.process.stop', { bindingId: 'hb', processId, graceMs: 0 }, stop),
       );
     },
-    40_000,
   );
 });
 
 describe.runIf(CAN_CONFINE)('a handle answers only to its own run', () => {
   it.skipIf(confined.skip)(
     confined.title('another run cannot read it'),
+    { tags: ['listener'], timeout: 40_000 },
     async () => {
       const processId = await startDetached(['sh', '-c', 'echo secret-output; sleep 20'], 'run-a');
       await settle(1_000);
@@ -236,7 +237,6 @@ describe.runIf(CAN_CONFINE)('a handle answers only to its own run', () => {
         contextFor('host.process.stop', { bindingId: 'hb', processId, graceMs: 0 }, stop, 'run-a'),
       );
     },
-    40_000,
   );
 
   it('another run cannot steer it', async () => {
@@ -310,6 +310,7 @@ describe.runIf(CAN_CONFINE)('withdrawing a binding reaches what is already runni
 describe.runIf(CAN_CONFINE)('a handle is scoped to its binding, not only to its run', () => {
   it.skipIf(confined.skip)(
     confined.title('cannot be read by naming a different binding the same run holds'),
+    { tags: ['listener'], timeout: 40_000 },
     async () => {
       // A run holding two bindings could otherwise name the one still granted to
       // pass the gate, then go on addressing a process inside the withdrawn one.
@@ -337,7 +338,6 @@ describe.runIf(CAN_CONFINE)('a handle is scoped to its binding, not only to its 
         contextFor('host.process.stop', { bindingId: 'hb', processId, graceMs: 0 }, stop, 'run-a'),
       );
     },
-    40_000,
   );
 
   it('cannot be steered by naming a different binding', async () => {
@@ -368,6 +368,7 @@ describe.runIf(CAN_CONFINE)('a handle is scoped to its binding, not only to its 
 describe.runIf(CAN_CONFINE)('a long-lived process keeps talking', () => {
   it.skipIf(confined.skip)(
     confined.title('does not go permanently silent once its lifetime output passes the cap'),
+    { tags: ['listener'], timeout: 40_000 },
     async () => {
       // The cap used to count everything the process had ever said, which for a
       // detached one is never drained — so past the cap it stopped reporting
@@ -393,6 +394,5 @@ describe.runIf(CAN_CONFINE)('a long-lived process keeps talking', () => {
         contextFor('host.process.stop', { bindingId: 'hb', processId, graceMs: 0 }, stop),
       );
     },
-    40_000,
   );
 });

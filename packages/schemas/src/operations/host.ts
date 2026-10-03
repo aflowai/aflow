@@ -15,6 +15,7 @@ import { z } from 'zod';
 import { coerceJsonObjectArg } from './jsonObjectArg.js';
 
 import { PayloadRefSchema, STORED_PAYLOAD_REF_PATTERN } from '../runtime/payloadRef.js';
+import { DeclaredBrowserProfileIdSchema, EPHEMERAL_BROWSER_PROFILE } from './browserProfile.js';
 
 /**
  * What a branch name and a branch prefix may be, in one place.
@@ -77,12 +78,61 @@ export const HostPushApprovalSchema = z
   );
 export type HostPushApproval = z.infer<typeof HostPushApprovalSchema>;
 
+export const HostSandboxPostureSchema = z
+  .enum(['open', 'confined'])
+  .describe(
+    'What network a coding agent and the checks have in this folder. Not whether there is a ' +
+      "sandbox: under both they run inside the machine's sandbox in a detached checkout of the " +
+      "commit, writing the checkout and the run's scratch, where the temporary directory it " +
+      "is handed lives, never the system's `/tmp`, where other runs' scratch lives, never " +
+      "the folder or its `.git`, never reading or writing the machine's host directory, where " +
+      'the policy every gate reads and the pairing credential live, and never reaching the ' +
+      "machine's loopback, where the stack's Redis holds the approvals the push gate reads — " +
+      'so the state the gates stand on is reachable only by the executor. ' +
+      '`open` is the sandbox Claude Code runs under with every domain allowed: every host ' +
+      "but this machine. `confined` is Codex CLI's workspace-write default: no network but " +
+      "the hosts a harness is allowed. Under either the job's loopback is its own on Linux " +
+      'and absent on macOS. Declared on the machine; no workspace can set it.',
+  );
+export type HostSandboxPosture = z.infer<typeof HostSandboxPostureSchema>;
+
+/**
+ * `open` in the local edition: the lane runs the operator's own tool on the
+ * operator's own repository, and what that tool needs from the machine is the
+ * network — its own search and fetch, Corepack and the registry. The sandbox
+ * still withholds the host directory, the operator's folder and its `.git`,
+ * and the machine's loopback under `open`, which is what lets the ref guard,
+ * the scan, the check, the review and the push gate stand: their configuration
+ * and the approvals they read live there. `confined` is the choice for a
+ * repository the operator does not trust.
+ */
+export const HOST_SANDBOX_POSTURE_DEFAULT: HostSandboxPosture = 'open';
+
 /**
  * Tokens in a folder's checks. One program and its arguments; a longer list is
  * a script, and the repository is the place to keep one.
  */
 export const HOST_CHECKS_MAX_ARGS = 64;
 export const HOST_CHECK_ARG_MAX_LENGTH = 4096;
+
+export const HOST_HARNESS_TASK_MAX_LENGTH = 32_000;
+export const HOST_HARNESS_TIMEOUT_MIN_MS = 1_000;
+export const HOST_HARNESS_TIMEOUT_DEFAULT_MS = 30 * 60_000;
+/** The longest a coding agent runs, and so the longest any host step runs. */
+export const HOST_HARNESS_TIMEOUT_MAX_MS = 2 * 60 * 60_000;
+/**
+ * The turn budget a run gets when it names none, on a harness that can take
+ * one. Every tool call is a turn, and a slice of work takes several hundred:
+ * a cap sized to a guess ends the run while it is still reading.
+ */
+export const HOST_HARNESS_MAX_TURNS_DEFAULT = 600;
+/**
+ * How many coding agents a machine runs at once when the operator chose no
+ * number. The machine is usually a laptop that also runs the stack, and two
+ * coding agents beside it, each running the project's checks in its own
+ * checkout, is what one carries without the stack itself slowing to a crawl.
+ */
+export const HOST_HARNESS_CONCURRENCY_DEFAULT = 2;
 
 /**
  * How long a folder's checks run when the operator chose no time. A type-check,
@@ -91,7 +141,7 @@ export const HOST_CHECK_ARG_MAX_LENGTH = 4096;
  */
 export const HOST_CHECKS_TIMEOUT_DEFAULT_MS = 30 * 60_000;
 /** The longest a host step runs at all — a coding agent's ceiling — so a check is never the outlier. */
-export const HOST_CHECKS_TIMEOUT_MAX_MS = 2 * 60 * 60_000;
+export const HOST_CHECKS_TIMEOUT_MAX_MS = HOST_HARNESS_TIMEOUT_MAX_MS;
 export const HOST_CHECKS_TIMEOUT_MIN_MS = 60_000;
 
 export const HostChecksSchema = z
@@ -101,7 +151,7 @@ export const HostChecksSchema = z
   .describe(
     'The command a publication from this folder runs before anything leaves the machine: one ' +
       "argv — a program and its arguments, never a shell line — run from the repository's root " +
-      'in a detached checkout of the commit, under the sandbox a coding agent runs in. Declared ' +
+      "in a detached checkout of the commit, under the folder's sandbox posture. Declared " +
       'by the operator on the machine; no workspace can set it, and no operation takes one.',
   );
 
@@ -229,8 +279,8 @@ export const HostCheckReceiptSchema = z
   .describe(
     'The `receipt` `host.commit.check` returned, verbatim. Issued by the executor on the ' +
       'machine that ran the checks, for one folder, one commit, the base it was measured ' +
-      'against and the checks as the folder declared them — and read only by that executor ' +
-      'until it restarts.',
+      'against, the checks as the folder declared them and the sandbox posture they ran ' +
+      'under — and read only by that executor until it restarts.',
   );
 
 /**
@@ -402,7 +452,8 @@ export const HostProcessExecInputSchema = z.object({
     .describe(
       'Belongs to a push alone. A push from a folder that declares checks is refused unless ' +
         'they passed, on this executor, on exactly the commit it sends, against the base it ' +
-        'measures, as the folder declares them when it pushes. A folder that declares none ' +
+        'measures, as the folder declares them, under the sandbox posture it declares, when it ' +
+        'pushes. A folder that declares none ' +
         'needs no receipt, and a push from it that carries one is refused.',
     ),
 });
@@ -450,6 +501,10 @@ export const HostProcessExecOutputSchema = z.object({
       'Whether the command ran inside the sandbox. A permitted push runs as the ' +
         "operator's own git and does not.",
     ),
+  checkedUnder: HostSandboxPostureSchema.optional().describe(
+    "The sandbox posture the folder's checks ran under, as the push's check receipt says, " +
+      'recorded with the push. Present only on a push from a folder that declares checks.',
+  ),
   boundaryNote: z
     .string()
     .optional()
@@ -717,6 +772,65 @@ export const HostFilePatchOutputSchema = z.object({
     ),
 });
 
+export const HostHarnessBrowserSchema = z
+  .object({
+    profile: z
+      .union([z.literal(EPHEMERAL_BROWSER_PROFILE), DeclaredBrowserProfileIdSchema])
+      .describe(
+        '`ephemeral` — the default choice — is a browser made for this run and deleted with ' +
+          'it: no sign-ins, its own Chrome, and it reaches only the hosts this harness may reach ' +
+          'and, on this machine, the loopback ports the operator declared for the harness — a ' +
+          'dev server the change runs is opened on one of those, at `localhost`, `127.0.0.1` or ' +
+          '`[::1]` — `localhost` reaches a server listening on either loopback. ' +
+          'A profile id names one the machine declares ' +
+          'and this space may use, with its sign-ins, posture and origin rules; it never ' +
+          "reaches this machine's own servers.",
+      ),
+  })
+  .describe(
+    "A browser for the harness, driven through the operator's Chrome on this machine with the " +
+      'same rules as the `browser.page.*` operations: open, navigate, snapshot, read, ' +
+      'screenshot, act, list and close as tools, and script evaluation on `ephemeral` only. ' +
+      'Ask for one when the change touches a UI that should be looked at — opening the page ' +
+      'it changed on the dev server and checking it renders and behaves — and leave it out ' +
+      'otherwise. Absent, the harness has no browser.',
+  );
+
+/** One browser call a harness made, as `browserLog` records it. Typed text is recorded by length only. */
+export const HarnessBrowserLogRecordSchema = z.object({
+  at: z.string().describe('When the call ended, ISO 8601.'),
+  profile: z.string().describe('`ephemeral`, or the id of the machine profile the run asked for.'),
+  action: z.string().describe('The tool called: open, navigate, act, screenshot, evaluate, …'),
+  pageId: z.string().optional(),
+  origin: z.string().optional().describe('The origin of the page the call ended on.'),
+  element: z
+    .object({ role: z.string(), name: z.string().optional() })
+    .optional()
+    .describe('The element acted on, as the outline named it.'),
+  typedCharacters: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .describe('For a `type` action: how many characters were entered. Never the text.'),
+  outcome: z
+    .enum(['performed', 'uncertain_outcome', 'read', 'refused', 'failed', 'abandoned'])
+    .describe(
+      '`performed`: the call changed or opened a page, or ran a script in one, which can. ' +
+        '`read`: it only looked. ' +
+        '`uncertain_outcome`: as the operation reports it. `refused`: a rule, posture or ' +
+        'ownership check stopped it. `failed`: it was allowed and did not complete. ' +
+        '`abandoned`: the run ended with the call still in flight; recorded when the run ' +
+        'ended, its answer reached no one, and a page it opened was closed as soon as it ' +
+        'existed.',
+    ),
+  code: z.string().optional().describe('The refusal or failure code, when there is one.'),
+  screenshot: PayloadRefSchema.optional().describe(
+    'For a screenshot: the image the harness was shown, stored as a payload of its own.',
+  ),
+});
+export type HarnessBrowserLogRecord = z.infer<typeof HarnessBrowserLogRecordSchema>;
+
 const HostHarnessRunInputObjectSchema = z.object({
   bindingId: HostBindingRef,
   harness: z
@@ -732,7 +846,7 @@ const HostHarnessRunInputObjectSchema = z.object({
   task: z
     .string()
     .min(1)
-    .max(32_000)
+    .max(HOST_HARNESS_TASK_MAX_LENGTH)
     .describe('What the harness should do, in prose. Passed through verbatim as one argument.'),
   inputs: z
     .preprocess(coerceJsonObjectArg, z.record(z.unknown()))
@@ -802,9 +916,11 @@ const HostHarnessRunInputObjectSchema = z.object({
     .min(1)
     .optional()
     .describe(
-      'The number of assistant turns the harness may take before it must answer. Absent means ' +
-        'the harness decides. A harness the machine configured without a turn budget refuses ' +
-        'the run rather than ignoring it, and the refusal names it.',
+      'The number of assistant turns the harness may take before it must answer. Absent, a ' +
+        `harness that takes a turn budget gets ${String(HOST_HARNESS_MAX_TURNS_DEFAULT)} — ` +
+        'several hundred, because every tool call is a turn — and one that takes none runs ' +
+        'without. Named, a harness the machine configured without a turn budget refuses the ' +
+        'run rather than ignoring it, and the refusal names it.',
     ),
   model: z
     .string()
@@ -821,10 +937,11 @@ const HostHarnessRunInputObjectSchema = z.object({
   timeoutMs: z
     .number()
     .int()
-    .min(1_000)
-    .max(7_200_000)
-    .default(1_800_000)
+    .min(HOST_HARNESS_TIMEOUT_MIN_MS)
+    .max(HOST_HARNESS_TIMEOUT_MAX_MS)
+    .default(HOST_HARNESS_TIMEOUT_DEFAULT_MS)
     .describe('Kill the harness and its descendants after this long.'),
+  browser: HostHarnessBrowserSchema.optional(),
 });
 
 export const HostHarnessRunInputSchema = HostHarnessRunInputObjectSchema.superRefine(
@@ -957,6 +1074,12 @@ export const HostHarnessRunOutputSchema = z.object({
     'The activity feed of this run — every tool call and result as one line — stored once ' +
       'for the run view.',
   ),
+  browserLog: PayloadRefSchema.optional().describe(
+    'Every browser call the harness made, one JSON record per line: profile, page, origin, ' +
+      'action, the element acted on, and the outcome; typed text by its length only, and a ' +
+      'screenshot by the payload holding the image. Present ' +
+      'when the run asked for `browser` and the harness used it.',
+  ),
   stderr: z
     .string()
     .optional()
@@ -1085,6 +1208,18 @@ export const HostBindingInspectOutputSchema = z.object({
       'before pushing, and the checks it runs first and for how long. Absent, the folder ' +
       'pushes nothing.',
   ),
+  sandbox: HostSandboxPostureSchema.describe(
+    'What a coding agent and the checks run under in this folder: the posture the operator ' +
+      'chose, else the default now.',
+  ),
+  maxConcurrentHarnessRuns: z
+    .number()
+    .int()
+    .min(1)
+    .describe(
+      'How many coding agents the machine holding the folder runs at once. A run past it ' +
+        'waits for one to end rather than being refused.',
+    ),
 });
 
 export const HostCommitScanInputSchema = z.object({
@@ -1216,11 +1351,19 @@ export const HostCommitScanOutputSchema = z.object({
 export const HOST_CHECK_TAIL_BYTES = 4 * 1024;
 
 /**
- * How much of a check's output is stored. A type-check's errors and a scoped
- * test run's report fit with room to spare; past this a check is printing in a
- * loop, and its first megabyte says nothing its last does not.
+ * How much of the start of a check's output is stored: the steps it reports
+ * before the first failure — what ran and what passed — with room to spare.
  */
-export const HOST_CHECK_OUTPUT_KEEP_BYTES = 1024 * 1024;
+export const HOST_CHECK_OUTPUT_HEAD_BYTES = 64 * 1024;
+
+/**
+ * How much of the end of a check's output is stored, where a failing check
+ * says why. A test runner's failure block — the assertion, its diff, the code
+ * frame and the stack — runs to a few kilobytes, and every failure of a scoped
+ * run with its summary fits with room to spare; past this a check is printing
+ * in a loop. What falls between the head and this is let go, the cut marked.
+ */
+export const HOST_CHECK_OUTPUT_TAIL_BYTES = 1024 * 1024;
 
 export const HostCommitCheckInputSchema = z.object({
   bindingId: HostBindingRef,
@@ -1269,8 +1412,10 @@ export const HostCommitCheckOutputSchema = z.object({
     .string()
     .optional()
     .describe(
-      'Standard output and error together, in the order they came, stored as a payload — the ' +
-        'last `HOST_CHECK_OUTPUT_KEEP_BYTES` of them where there was more. Absent where nothing ran.',
+      'Standard output and error together, in the order they came, stored as a payload — where ' +
+        'there was more, the first `HOST_CHECK_OUTPUT_HEAD_BYTES` and the last ' +
+        '`HOST_CHECK_OUTPUT_TAIL_BYTES` of them, with a line between saying how much was not ' +
+        'kept. Absent where nothing ran.',
     ),
   tail: z
     .string()
@@ -1293,8 +1438,24 @@ export const HostCommitCheckOutputSchema = z.object({
     ),
   receipt: HostCheckReceiptSchema.optional().describe(
     'What a push of the commit must carry as `check.receipt`, present wherever the checks ran, ' +
-      'passed or not: it names the folder, the commit, the base, the checks and whether they ' +
-      'passed, and a push takes only one that says they did. Absent where the folder declares ' +
+      'passed or not: it names the folder, the commit, the base, the checks, the posture they ran under, ' +
+      'how many tests that listen on a port of their own they skipped and whether they passed, ' +
+      'and a push takes only one that says they did. Absent where the folder declares ' +
       'none. Valid on this executor only, and only for a day.',
   ),
+  sandbox: HostSandboxPostureSchema.optional().describe(
+    'The sandbox posture the checks ran under, which their `receipt` carries and a push ' +
+      'records. Absent where the folder declares none.',
+  ),
+  skippedListenerTests: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .describe(
+      'How many tests that listen on a port of their own the checks skipped, as they reported ' +
+        'it in the file `AFLOW_CHECK_REPORT` names; the `receipt` carries the same count. Such ' +
+        'a test cannot listen under the sandbox on macOS, and runs in the pull request’s ' +
+        'checks instead. Absent where the checks reported nothing.',
+    ),
 });

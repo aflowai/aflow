@@ -2,6 +2,8 @@
  * The gate through the real HTTP server on a loopback port: a request a
  * rebinding page can make is refused before a session exists, and the owner's
  * key reaches only a session whose request passed.
+ *
+ * @module-tag listener
  */
 import { once } from 'node:events';
 import { readFileSync } from 'node:fs';

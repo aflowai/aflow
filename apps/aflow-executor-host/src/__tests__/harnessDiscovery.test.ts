@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { discoverHarnesses, type DiscoveredHarness } from '../harnessDiscovery.js';
-import { buildHarnessArgv, buildSessionArgs, HarnessProfileSchema } from '../harnessProfiles.js';
+import { discoverHarnesses, knownMcpArgs, type DiscoveredHarness } from '../harnessDiscovery.js';
+import {
+  buildHarnessArgv,
+  buildSessionArgs,
+  HarnessProfileError,
+  HarnessProfileSchema,
+} from '../harnessProfiles.js';
 
 // Discovery finds only what is installed, so a machine with no harness would
 // run these loops zero times and pass. This one is always there.
@@ -18,6 +23,7 @@ const FIXED_HARNESS: DiscoveredHarness = {
     resumeArgs: [],
     turnsArgs: [],
     modelArgs: ['--model', '{model}'],
+    mcpArgs: ['--mcp-config', '{mcpConfig}', '--strict-mcp-config'],
     authPaths: [],
     writePaths: [],
   },
@@ -146,6 +152,39 @@ describe('harness discovery', () => {
       const argv = buildHarnessArgv(profile, 'the task', [], undefined, 'fable');
       expect(argv).toContain('fable');
       expect(argv.indexOf('fable')).toBeLessThan(argv.indexOf('the task'));
+    }
+  });
+
+  it('hands Claude Code a browser through its own MCP configuration and nothing else', async () => {
+    // Measured under the lane's flags: given `--mcp-config <file>`, the init
+    // event reports the stdio server connected and the model calls its tools;
+    // `--strict-mcp-config` leaves out every server the operator configured.
+    expect(knownMcpArgs('claude')).toEqual(['--mcp-config', '{mcpConfig}', '--strict-mcp-config']);
+    expect(knownMcpArgs('opencode')).toBeUndefined();
+    for (const found of await withFixedHarness()) {
+      if (found.suggested.output === 'claude-stream-json' || found === FIXED_HARNESS) {
+        expect(found.suggested.mcpArgs).toEqual(knownMcpArgs('claude'));
+      }
+      const confirmed = HarnessProfileSchema.parse({
+        id: found.id,
+        executable: found.executable,
+        promptArgs: found.suggested.promptArgs,
+        mcpArgs: found.suggested.mcpArgs,
+      });
+      if (confirmed.mcpArgs.length === 0) {
+        expect(() =>
+          buildHarnessArgv(confirmed, 'the task', [], undefined, undefined, '/s/mcp.json'),
+        ).toThrow(HarnessProfileError);
+        continue;
+      }
+      const argv = buildHarnessArgv(confirmed, 'the task', [], undefined, undefined, '/s/mcp.json');
+      expect(argv.slice(argv.indexOf('--mcp-config'), argv.indexOf('--mcp-config') + 3)).toEqual([
+        '--mcp-config',
+        '/s/mcp.json',
+        '--strict-mcp-config',
+      ]);
+      expect(argv.indexOf('/s/mcp.json')).toBeLessThan(argv.indexOf('the task'));
+      expect(buildHarnessArgv(confirmed, 'the task')).not.toContain('--mcp-config');
     }
   });
 

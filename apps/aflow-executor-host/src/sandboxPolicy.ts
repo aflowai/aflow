@@ -9,18 +9,40 @@
  * outside home stay readable, and the operator is told so; what keeps their
  * contents on the machine is the egress policy, not the read policy.
  *
- * Four adapter options void the contract, so nothing here can set them:
+ * Five adapter options void the contract, so nothing here can set them:
  * `allowAppleEvents` removes code-execution isolation, `enableWeakerNetworkIsolation`
  * opens an exfiltration path through the trust daemon, `enableWeakerNestedSandbox`
- * exists to make the sandbox work inside Docker and materially weakens it, and
+ * exists to make the sandbox work inside Docker and materially weakens it,
  * allowing a Unix socket hands over whatever listens on it — all-or-nothing on
- * Linux, so permitting the SSH agent would also expose the Docker socket. A test
+ * Linux, so permitting the SSH agent would also expose the Docker socket — and
+ * `allowLocalBinding` hands over whatever listens on loopback the same way. A test
  * asserts every compiled policy is free of them rather than trusting this comment.
+ *
+ * So the policy is the same under both postures; what `open` changes is the
+ * launcher, which admits every host off the list but this machine's
+ * (`openSandboxLauncher.mjs`). The machine's loopback is never a job's: it holds
+ * listeners no list of ports can name — the stack's Redis, which takes no
+ * password and holds the write-approval grants the push gate reads, an MCP
+ * server that hands the owner's key to a session bringing none, an admin tool
+ * published without a login. On Linux the adapter gives every process a network
+ * namespace of its own: a command binds, accepts and connects on a loopback that
+ * holds only its own listeners. On macOS there is no such namespace, and the
+ * profile's only loopback grant would admit every localhost port, so a command
+ * there cannot listen on loopback at all, and a test that serves itself fails
+ * under the sandbox.
+ *
+ * Neither posture lets a job write the system's `/tmp`. On Linux every job's
+ * scratch lives there — its checkout, the policy and status files the sandbox
+ * reads for it — so a job able to write `/tmp` could write into another's. A
+ * job writes the temporary directory it is handed instead, inside its own
+ * scratch (`baseEnv.ts`). What keeps the machine's trust configuration and the
+ * operator's own files from a job is the filesystem policy, the same under both.
  */
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join, relative, sep } from 'node:path';
 
 import type { HostBinding } from './bindings.js';
+import { resolveHostDir } from './hostDir.js';
 
 /** Only the fields this compiler sets. The adapter's own schema validates the rest. */
 export interface CompiledSandboxPolicy {
@@ -39,7 +61,13 @@ export const FORBIDDEN_SANDBOX_OPTIONS = [
   'enableWeakerNetworkIsolation',
   'enableWeakerNestedSandbox',
   'allowUnixSockets',
+  'allowLocalBinding',
 ] as const;
+
+function atOrUnder(path: string, dir: string): boolean {
+  const rel = relative(dir, path);
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
 
 /**
  * Interpreter and toolchain installations under the denied home region.
@@ -140,28 +168,40 @@ export function compileSandboxPolicy(
     widening?: SandboxWidening;
     /** Where the machine says the operator's tools live. Read-only. */
     toolPaths?: readonly string[];
+    /** The machine's host directory; resolved as the executor resolves it when absent. */
+    hostDir?: string;
   } = { scratchDir: '' },
 ): CompiledSandboxPolicy {
   const home = options.home ?? homedir();
+  const hostDir = options.hostDir ?? resolveHostDir(process.env, home);
   const scratch = options.scratchDir ? [options.scratchDir] : [];
   const widening = options.widening;
   const writableRoot = widening?.writableRoot ? [widening.writableRoot] : [];
+  // The host directory holds the policy every gate reads — push approval, the
+  // checks, the posture itself — and pairing's credential. Nothing a job is
+  // granted reaches into it, under either posture, whatever a profile or the
+  // machine's tool paths name.
+  const outsideHostDir = (paths: readonly string[]): string[] =>
+    paths.filter((path) => !atOrUnder(path, hostDir));
+  const bindingWritable = binding.mode === 'readwrite' && widening?.withholdBindingWrite !== true;
 
   return {
     network: {
       // No egress until something declares one. A command that reaches the
-      // network finds it closed rather than open-by-default.
+      // network finds it closed rather than open-by-default. Under `open` the
+      // launcher admits every host this list does not name but this machine.
       allowedDomains: [...(widening?.allowedDomains ?? [])],
       deniedDomains: [],
     },
     filesystem: {
       denyRead: [
         home,
+        hostDir,
         ...credentialFilesInToolchains(home),
         ...repositoryExecutableSurfaces(binding.root),
         ...writableRoot.flatMap((r) => repositoryExecutableSurfaces(r)),
       ],
-      allowRead: [
+      allowRead: outsideHostDir([
         binding.root,
         ...scratch,
         ...writableRoot,
@@ -169,15 +209,13 @@ export function compileSandboxPolicy(
         ...(options.toolPaths ?? []),
         ...(widening?.authPaths ?? []),
         ...(widening?.writePaths ?? []),
-      ],
-      allowWrite: [
-        ...(binding.mode === 'readwrite' && widening?.withholdBindingWrite !== true
-          ? [binding.root]
-          : []),
+      ]),
+      allowWrite: outsideHostDir([
+        ...(bindingWritable ? [binding.root] : []),
         ...scratch,
         ...writableRoot,
         ...(widening?.writePaths ?? []),
-      ],
+      ]),
       // Writing here is the escalation, and it is the only part that is.
       //
       // Git runs `hooks/` and a `filter.*.smudge` defined in `config` as the
@@ -198,6 +236,7 @@ export function compileSandboxPolicy(
       // So: disclosure inside a folder the operator connected is theirs to
       // allow, and escalation out of it is not.
       denyWrite: [
+        hostDir,
         ...repositoryExecutableSurfaces(binding.root),
         ...writableRoot.flatMap((r) => repositoryExecutableSurfaces(r)),
         ...repositoryConfigUnder(binding.root),

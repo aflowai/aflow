@@ -3,7 +3,7 @@
  *
  * Every ref is compared as its catalog id. Refs reach these gates in whichever
  * spelling the caller used — a space may hold `sonnet`, the picker writes
- * `claude-sonnet-5`, and an admin may enable either — so comparing the strings
+ * `claude-sonnet-5-5`, and an admin may enable either — so comparing the strings
  * as given would let a model be enabled under one name and rejected under
  * another. Resolution happens here, in the one place both the governance route
  * and the space write path read, because `@aflow/schemas` cannot reach the

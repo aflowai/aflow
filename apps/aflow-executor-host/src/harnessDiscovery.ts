@@ -63,6 +63,8 @@ interface HarnessProbe {
   readonly turnsArgs: string[];
   /** How it is told which model to run. Empty when the CLI takes no such argument. */
   readonly modelArgs: string[];
+  /** How it is handed an MCP configuration file. Empty when it cannot be. */
+  readonly mcpArgs: string[];
   /** Where it keeps the credential the operator already signed in with. */
   readonly authPaths: string[];
   /** Scratch outside the worktree it needs to write, relative to `/tmp`. */
@@ -131,6 +133,11 @@ const KNOWN: readonly HarnessProbe[] = [
     // an unrecognised model rather than refused at parse, so what this grants is
     // the harness's own vocabulary, not this platform's catalog.
     modelArgs: ['--model', '{model}'],
+    // Measured under the headless flags above: given a file declaring a stdio
+    // server, the init event reports it connected and the model calls its
+    // tools. `--strict-mcp-config` keeps out every server the operator
+    // configured for their own sessions, so the run reaches only the browser.
+    mcpArgs: ['--mcp-config', '{mcpConfig}', '--strict-mcp-config'],
     // Given a configuration directory of its own it reads nothing under home,
     // so nothing is carved out of the standing denial.
     authPaths: [],
@@ -145,13 +152,10 @@ const KNOWN: readonly HarnessProbe[] = [
     // another's — the isolation the worktree exists to provide, given away to
     // avoid one error message.
     //
-    // The cost, stated because it is real: the harness's shell writes a
-    // working-directory marker directly in the temp root, and cannot. Commands
-    // run and produce output, but the shell reports a non-zero exit, so a
-    // harness asked to run tests may believe they failed. An operator who would
-    // rather have accurate exit codes than per-run isolation can widen this in
-    // their own profile; it is not the default, because the default should not
-    // trade isolation for tidiness.
+    // The working-directory marker its shell writes after every command goes
+    // where `CLAUDE_CODE_TMPDIR` says, and the lane points that at the run's
+    // own temporary directory (`baseEnv.ts`); left to itself it writes the temp
+    // root, is refused, and every command reads as failed.
     writePaths: [join(SYSTEM_TEMP_ROOT, `claude-${String(process.getuid?.() ?? 0)}`)],
   },
   {
@@ -168,10 +172,20 @@ const KNOWN: readonly HarnessProbe[] = [
     // flags is measured. Empty is the honest answer: a run naming a model is
     // refused by name, where a guessed flag would fail inside the harness.
     modelArgs: [],
+    mcpArgs: [],
     authPaths: ['.config/opencode', '.local/share/opencode'],
     writePaths: [],
   },
 ];
+
+/**
+ * The MCP arguments measured for a harness this lane knows, for a profile
+ * written before they were; nothing when none were measured for it.
+ */
+export function knownMcpArgs(harnessId: string): string[] | undefined {
+  const args = KNOWN.find((probe) => probe.id === harnessId)?.mcpArgs;
+  return args === undefined || args.length === 0 ? undefined : [...args];
+}
 
 export interface DiscoveredHarness {
   readonly id: string;
@@ -188,6 +202,7 @@ export interface DiscoveredHarness {
     readonly resumeArgs: string[];
     readonly turnsArgs: string[];
     readonly modelArgs: string[];
+    readonly mcpArgs: string[];
     readonly authPaths: string[];
     readonly writePaths: string[];
     readonly configDirEnv?: string;
@@ -239,6 +254,7 @@ export async function discoverHarnesses(home = homedir()): Promise<DiscoveredHar
           resumeArgs: [...probe.resumeArgs],
           turnsArgs: [...probe.turnsArgs],
           modelArgs: [...probe.modelArgs],
+          mcpArgs: [...probe.mcpArgs],
           authPaths: probe.authPaths.map((p) => join(home, p)),
           writePaths: [...probe.writePaths],
           ...(probe.configDirEnv !== undefined ? { configDirEnv: probe.configDirEnv } : {}),

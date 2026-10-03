@@ -48,14 +48,14 @@ const run = promisify(execFile);
 
 vi.mock('../sandboxedRun.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../sandboxedRun.js')>();
-  const { buildBaseEnv, workloadHome } = await import('../baseEnv.js');
+  const { buildBaseEnv, createWorkloadDirs } = await import('../baseEnv.js');
   return {
     ...actual,
     sandboxReadiness: () => ({ ready: true, missing: [] }),
     runSandboxed: async (input: SandboxedRunInput): Promise<SandboxedRunResult> => {
       const [program, ...args] = input.argv;
       const startedAt = Date.now();
-      await mkdir(workloadHome(input.scratchDir), { recursive: true });
+      await createWorkloadDirs(input.scratchDir);
       return await new Promise((resolve) => {
         const child = spawn(program ?? '', args, {
           cwd: input.cwd,
@@ -92,9 +92,9 @@ const { createHostHandler } = await import('../handlers/hostHandler.js');
 const { noPushApprovals } = await import('./fixtures/pushApprovals.js');
 const { prepareWorktree, removeWorktree } = await import('../worktree.js');
 
-const VERIFY_COMMIT = fileURLToPath(
-  new URL('../../../../scripts/verify-commit.mjs', import.meta.url),
-);
+const SCRIPTS = fileURLToPath(new URL('../../../../scripts/', import.meta.url));
+/** The check, the module it selects tests with and the one it counts listener tests with. */
+const CHECK_SCRIPTS = ['verify-commit.mjs', 'test-selection.mjs', 'listener-tests.mjs'];
 const CHECKS = [process.execPath, 'scripts/verify-commit.mjs'];
 const COMPILER_OPTIONS = { strict: true, module: 'nodenext', types: [] };
 
@@ -141,7 +141,9 @@ beforeAll(async () => {
   await writeFile(join(repo, '.gitignore'), 'node_modules\ndist\n*.tsbuildinfo\n');
   await writeFile(join(repo, 'eslint.config.mjs'), 'export default [];\n');
   await mkdir(join(repo, 'scripts'), { recursive: true });
-  await writeFile(join(repo, 'scripts', 'verify-commit.mjs'), await readFile(VERIFY_COMMIT));
+  for (const script of CHECK_SCRIPTS) {
+    await writeFile(join(repo, 'scripts', script), await readFile(join(SCRIPTS, script)));
+  }
   for (const guard of ['large-files', 'context-budget']) {
     await mkdir(join(repo, 'scripts', guard), { recursive: true });
     await writeFile(join(repo, 'scripts', guard, 'cli.ts'), 'export {};\n');

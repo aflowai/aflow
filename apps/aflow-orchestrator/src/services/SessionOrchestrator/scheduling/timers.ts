@@ -851,8 +851,9 @@ export function createProcessDueTimers(bindings: SessionOrchestratorBindings) {
           // The single shared completion-path authority (also used by orphan
           // recovery and the parallel-barrier sweep) — a STARTED step with a
           // live in-flight key within its deadline+backstop, a SCHEDULED step
-          // inside its pickup grace, or any step inside the snooze window still
-          // has a completion path. Never reap on elapsed time alone.
+          // with a live one or inside its pickup grace, or any step inside the
+          // snooze window still has a completion path. Never reap on elapsed
+          // time alone.
           const { hasCompletionPath, isStarted, executorOwnsStep, stepDeadlineAtMs } =
             await classifyStepCompletionPath(
               { redis, getStepInFlight, hasAvailableExecutor },

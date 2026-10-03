@@ -15,7 +15,8 @@ built and where its gaps are logged; the gaps that still bind are listed at the 
 | Connected folder | binding `hb_aflow` = `~/localhd/aflow`, branch prefix `aflow/`                              |
 | Push posture     | `unless-unreviewed`: a clean scan plus a child review `approve` pushes without asking       |
 | Folder checks    | `node scripts/verify-commit.mjs`, declared on `hb_aflow`; run by every publication first    |
-| Coding agent     | `host.harness.run`, model `claude-opus-5-5`                                                 |
+| Sandbox posture  | `open`, the default: commissions and checks run sandboxed, network open (below)             |
+| Commission       | the catalog's Commission Change, on `host.harness.run`, model `claude-opus-5-5`             |
 | Review           | the catalog's Local Code Review, over `origin/<base>..<sha>`                                |
 | Publication      | the catalog's Local Publish, by `patchRef`, onto `aflow/<branch>`                           |
 | Pull requests    | opened through the space's GitHub binding; merged by the operator                           |
@@ -28,10 +29,17 @@ another stream's runs.
 
 ## A round
 
-1. **Brief Helmsman**, one message, numbered. Part 1 is the commission: the binding, the
-   model, `base` (`origin/main` for new work, the branch's name for a fix appended to an
-   open pull request), then the findings or the slice to build, each with the file, the
-   line where it is known, what is wrong and what right looks like, and the tests to add.
+1. **Brief Helmsman**, one message, numbered. Part 1 is the commission: a run of the
+   catalog's Commission Change started with `wait: 'none'`, so the conversation stays free
+   and the commission's end wakes it with `patchRef`, `baseSha`, `merge` and `sessionRef`.
+   Its inputs are the binding, the model, `base` (`origin/main` for new work, the branch's
+   name for a fix appended to an open pull request, with `mergeFrom: origin/main` where
+   `main` has moved past it), and `task`: the findings or the slice to build, each with
+   the file, the line where it is known, what is wrong and what right looks like, and the
+   tests to add. `harness` is needed only where the machine offers more than one coding
+   agent. Its two hours, and the operation's several hundred turns on an agent that
+   takes a turn budget, are sized for a slice; name `timeoutMs` or `maxTurns` only to
+   change them. Several commissions may run at once, within the machine's limit (below).
    The checks the agent must run are named in the brief, because the folder's checks
    only run once the commission is published: `yarn test:file` on touched and added tests, `npx tsc -p` per touched
    workspace, the two CI guards (`scripts/large-files/cli.ts check`,
@@ -39,7 +47,8 @@ another stream's runs.
 --write` with the `--check` output in the result. The standing rules go in too: comments
    only for non-obvious whys, copy in the system's voice, no shims, nothing written under
    `.aflow/` but the result file, and the agent starts or stops no process. Part 2 is the
-   publication: by `patchRef`, `baseSha` the commission's, `base: main`, the branch, owner
+   publication, started once the commission's end has woken the conversation: by
+   `patchRef`, `baseSha` the commission's, `mergeFrom` its `merge.from` where it merged, `base: main`, the branch, owner
    and repository, the title, started with `wait: 'none'`, and the run id reported back.
    For a branch that already has a pull request, name its number for the 422.
 2. **Read the review**: `workflow.run.detail` on the child review run gives the verdict and
@@ -49,12 +58,19 @@ another stream's runs.
    `node scripts/verify-commit.mjs` (`aflow harness checks hb_aflow -- node
 scripts/verify-commit.mjs`), and Local Publish runs it after the commit and before the
    scan, the review and the push, in a detached checkout of the commit with the folder's
-   dependencies linked, under the coding agent's sandbox. The script reads what changed from
+   dependencies linked, under the folder's sandbox posture (below). The script reads what changed from
    `AFLOW_CHECK_BASE...AFLOW_CHECK_SHA` and runs, one line per step and stopping at the
    first failure: the two CI guards; a build of every package the touched workspaces
-   reference or import, since a checkout builds nothing; `tsc -p` per touched workspace (and
-   `web-product`'s `src/ui`); the touched tests through the test runner, with the
-   catalog guards when `platform-artifacts` is touched and never a `*.pg.test.ts`; ESLint,
+   or the workspaces reading a touched package reference or import, since a checkout builds
+   nothing; `tsc -p` per touched workspace (and `web-product`'s `src/ui`); the touched tests
+   through the test runner on half the machine's cores, reporting only failures and the
+   summary, with every test of the touched workspaces and of each workspace that reads a
+   touched package whose imports reach a touched file, so a contract change meets its
+   consumers before the push — such a package built first, such an application's build
+   reported skipped by name — the catalog guards when `platform-artifacts` is touched and never a `*.pg.test.ts`;
+   on macOS, where the sandbox gives a test no loopback, less the tests tagged `listener`,
+   each named as skipped with one line saying CI runs them, their count carried in the
+   check's receipt; ESLint,
    errors only, on touched sources; and Prettier on every touched file. A failure fails
    the publication with the end of what it printed and nothing pushed: read it on the
    `check-commit` task, and commission the fix onto the branch. The pull request's CI
@@ -64,6 +80,30 @@ scripts/verify-commit.mjs`), and Local Publish runs it after the commit and befo
 
 Approvals are held until the verdict is in; an approval given early pushes a commit the
 review may still send back.
+
+## What a commission runs under
+
+A commission, a review and the folder's checks run inside the machine's sandbox under the
+folder's sandbox posture (Plan 315 D19), which `host.binding.inspect` shows. The posture is
+what the network is. `open`, the default, is the sandbox the operator's own coding tool runs
+under with every domain allowed — Claude Code's: every host but this machine, so the agent's
+own search and fetch, Corepack, `yarn` and the registry work. `confined` is the
+workspace-write default of the other — Codex CLI's: the network off, a coding agent reaching
+only the hosts it was allowed (`aflow harness allow`) and the checks none. Loopback to the
+machine is never a job's under either: no list of ports could keep the stack's Redis, its MCP
+server or the admin tools `yarn infra:tools` publishes out of reach, so none is kept. A job's
+loopback is its own on Linux and absent on macOS, so a test that serves itself passes under
+the check on Linux and cannot listen on macOS, where the check leaves it out (above). Under
+both, each job writes a temporary directory of its own, where a shell records its working
+directory after every command, and not the system's `/tmp`, where other jobs' checkouts
+live; it writes its checkout and nothing of the folder or its `.git`, and cannot read or
+write `~/.aflow/`, where the policy every gate reads and the pairing credential live. Agent
+configuration files such as `.mcp.json` stay protected under both. The executor's boot log
+says whether a shell command and `yarn --version` work under `open` on this machine, and
+whether a listener on the machine's loopback stays out of reach.
+Choose on the machine with `aflow harness sandbox <folder> open|confined`; `hb_aflow` chose
+none, so it takes the default, `open`. A push takes a check receipt only from checks run under the
+folder's posture as it pushes, so a commit checked before the posture changed is checked again.
 
 ## Sharing the machine
 
@@ -84,9 +124,10 @@ review may still send back.
   on the stack asks the stream that runs it; that stream merges, runs `yarn db:migrate`
   when a migration arrived, rebuilds the `dist`s the web app reads, and updates the
   installed bundles through the Store when a catalog version moved.
-- **Commissions can overlap**; each runs in its own detached checkout. Two coding agents
-  and two reviews at once do load the machine, so a stream about to commission checks
-  whether another harness is running and waits for a large one.
+- **Commissions can overlap**; each runs in its own detached checkout. The machine runs
+  two coding agents at once unless `aflow harness concurrency <n>` says otherwise, and a
+  review is a coding agent too; a commission or review past that waits for one to end,
+  and its time counts from when it starts, so nothing needs holding back by hand.
 - **Branch names carry the stream** (`aflow/320-…`, `aflow/publish-…`), and migration
   numbers are taken from `origin/main` at commission time, never from a branch.
 - **CI minutes are billed.** Nothing is pushed to an open pull request outside the

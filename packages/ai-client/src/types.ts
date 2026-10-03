@@ -805,13 +805,20 @@ export interface ModelCapabilities {
   reasoning?: boolean | undefined;
   /**
    * `false` when the provider **rejects** a sampling temperature for this model
-   * — the whole GPT-5.6 family 400s on one, with or without a reasoning effort.
+   * — the whole GPT-6 family 400s on one, with or without a reasoning effort.
    * Absent means accepted. This is refusal, not advice: Gemini 3.x merely
    * recommends against setting temperature and its adapter handles that
    * separately, because a recommendation and a rejection want different
    * treatment.
    */
   samplingTemperature?: boolean | undefined;
+  /**
+   * `false` when the provider **rejects** a tool choice that forces a call —
+   * `required` or a named tool — and accepts only `auto` or `none`. Absent
+   * means accepted. The client degrades a forced choice to `auto` for such a
+   * model rather than forwarding it and failing the request.
+   */
+  forcedToolChoice?: boolean | undefined;
   /** Tools can be used within chain-of-thought (o3/o4-mini) */
   toolInCoT?: boolean | undefined;
   /** Native structured outputs with JSON schema */
@@ -897,7 +904,7 @@ export interface ModelTraits {
  * Model definition in the catalog.
  */
 export interface ModelDefinition {
-  /** Unique key in the catalog (e.g., "gpt-5.6-terra", "openai/gpt-oss-120b") */
+  /** Unique key in the catalog (e.g., "gpt-6.1-sol", "openai/gpt-oss-120b") */
   id: string;
   /** Provider to route requests to */
   provider: AIProvider;

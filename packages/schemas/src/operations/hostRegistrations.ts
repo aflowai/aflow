@@ -4,6 +4,7 @@
  */
 import type { OperationRegistration } from '../catalog/operationCatalog.js';
 import {
+  HOST_HARNESS_CONCURRENCY_DEFAULT,
   HostBindingInspectInputSchema,
   HostBindingInspectOutputSchema,
   HostCommitCheckInputSchema,
@@ -328,6 +329,7 @@ export const HostOperationRegistrations: OperationRegistration[] = [
         'A fix to a branch its base has moved past is commissioned with `mergeFrom: origin/<base>` and published with the sha the commission reported in `merge.from` as `commit.mergeFrom`; the branch then carries one merge commit holding the fix',
         'A smoke test or a brief look, with `maxTurns` naming how many turns brief means',
         "Pinning the model for a run that has a reason to — a comparison, a cost ceiling, a capability the default lacks; otherwise leave it out, and the run gets the model the operator configured for that harness on the machine, or the harness's own default when none is",
+        "A change to a UI that should be seen working — the harness opens the page it changed on the dev server and checks it: `browser: { profile: 'ephemeral' }`, the default choice, which holds no sign-ins and reaches the harness's allowed domains plus the dev-server ports the operator declared for that harness on this machine",
       ],
       whenNotToUse: [
         'Running a build or a test suite — that is host.process.exec, which needs no worktree',
@@ -342,10 +344,12 @@ export const HostOperationRegistrations: OperationRegistration[] = [
         'A continued run returns the diff of the whole conversation against its original starting commit, not only the latest turn — unless it names a `base`, which continues the conversation in a fresh checkout at that base.',
         "A patch made from a `base` is relative to that base, not the folder's HEAD: publish it with the run's `baseSha`, onto the branch it started from or onto a new branch, which is created at that base.",
         'A harness only runs if the operator configured it on that machine; the id here cannot introduce one. Omitted, it resolves to the one offered machine-side — the space context lists them.',
-        'A harness needs egress to its provider. `blockedDomains` names every host it could not reach, and `boundaryNote` says whether that stopped the run or only narrowed it.',
+        "The run takes the folder's `sandbox` posture, which `host.binding.inspect` shows. Under both the harness runs in the machine's sandbox and writes only its checkout, never the folder or its `.git`. `open` reaches every host but this machine; `confined` reaches only the hosts its profile allows. Under neither does it reach a server on the machine's loopback, and on macOS it cannot listen on loopback either. `blockedDomains` names every host it could not reach, and `boundaryNote` says whether that stopped the run or only narrowed it.",
         'The folder must be a git repository with at least one commit — the run needs a base to diff against.',
+        `A machine runs only so many coding agents at once — the number its operator set, ${String(HOST_HARNESS_CONCURRENCY_DEFAULT)} unless they chose another. A run past it waits for one to end rather than being refused; it is scheduled, not started, while it waits, and its \`timeoutMs\` and its duration count from when it starts.`,
         'A `maxTurns` budget the task cannot meet ends the run with whatever the harness had reached, and that result is still validated against `outputSchema` — a budget too small for the task fails the step rather than returning a partial answer.',
         '`model` is spelled the way the harness spells it, not as this platform names a model in its own catalog — the harness resolves the name, and an id from the catalog is one it has never heard of.',
+        "A named browser profile carries the operator's sign-ins and never reaches this machine's own servers, so it cannot open a dev server; `ephemeral` opens one only on a port the operator declared for that harness, and on none when no port is declared. A harness the machine configured without `mcpArgs` refuses a run asking for a browser, and the refusal names the command that sets them.",
         "Leaving `model` out does not guarantee the harness's own default: the run gets the model the operator configured for that harness on the machine, and the harness default only when none is configured. A run naming no model can still be refused when that configured model cannot be passed to the harness — the refusal names it.",
       ],
     },
@@ -460,8 +464,9 @@ export const HostOperationRegistrations: OperationRegistration[] = [
     groupDescription: 'What the operator declared about a folder on their own machine.',
     semanticDescription:
       'Read, from the policy file on the machine that holds a connected folder, which branches ' +
-      'it may push, when a publication from it asks before pushing, and the checks a ' +
-      'publication runs first and for how long. Touches nothing in the folder itself.',
+      'it may push, when a publication from it asks before pushing, the checks a ' +
+      'publication runs first and for how long, and how many coding agents that machine ' +
+      'runs at once. Touches nothing in the folder itself.',
     tags: ['host', 'binding', 'local'],
     idempotency: 'idempotent',
     accessMode: 'read',
@@ -538,7 +543,7 @@ export const HostOperationRegistrations: OperationRegistration[] = [
     semanticDescription:
       'Run the checks the operator declared for a connected repository — one command, set on ' +
       'their machine — in a detached checkout of one commit, with the folder’s installed ' +
-      'dependencies linked so nothing is installed, under the sandbox a coding agent runs in, ' +
+      "dependencies linked so nothing is installed, under the folder's sandbox posture, " +
       'and report whether they passed, with the end of what they printed. The commit and the ' +
       'base it is measured against reach the command as `AFLOW_CHECK_SHA` and ' +
       '`AFLOW_CHECK_BASE`. The checkout is removed afterwards; the folder, its working tree ' +
@@ -567,7 +572,7 @@ export const HostOperationRegistrations: OperationRegistration[] = [
         'The command is declared on the machine with `aflow harness checks <folder> -- <argv>`, and nothing in this call can name one. A folder that declares none answers `passed` with `skipped`, and nothing ran.',
         'The checks get the folder’s `checksTimeoutMs`, `HOST_CHECKS_TIMEOUT_DEFAULT_MS` where the operator chose none; a check still running then is stopped and fails, naming that time.',
         'The checkout has the folder’s installed dependencies but none of its build output: a check that needs a package built builds it.',
-        'Egress is closed, as it is for a command: a check that reaches the network fails there.',
+        "The checks run as a coding agent does in the folder, in the machine's sandbox: with every host but this machine in an `open` folder, and in a `confined` one with egress closed. The machine's loopback is closed under both, and on macOS a check cannot listen on loopback either, so a test that serves itself fails there. The posture they ran under is in the result and the receipt, and a push records it.",
         '`receipt` is what a push of the commit from a folder that declares checks must carry as `check.receipt`; it is issued whether the checks passed or failed, and a push takes only one that says they passed, for the commit and base it sends and the checks the folder declares then. It is valid on the executor that ran them until that executor restarts, and for a day at most.',
         'Passing is evidence from this machine about one commit. The pull request’s own checks remain the proof.',
       ],

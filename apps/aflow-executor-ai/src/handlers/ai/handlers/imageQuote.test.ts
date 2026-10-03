@@ -26,7 +26,7 @@ const editImage = vi.fn();
 
 function stubClient(): void {
   vi.mocked(getAIClientForContext).mockResolvedValue({
-    resolveModelId: () => 'gpt-image-1.5',
+    resolveModelId: () => 'gpt-image-2.5-sunburst',
     getAdapter: () => Promise.resolve({ generateImage, editImage, provider: 'openai' }),
     getModel: () => ({ capabilities: { imageGeneration: true } }),
     listModels: () => [],
@@ -79,7 +79,7 @@ function renderedImages(count: number): { images: unknown[]; provider: string; m
   return {
     images: Array.from({ length: count }, () => ({ data: 'BBBB', mimeType: 'image/png' })),
     provider: 'openai',
-    model: 'gpt-image-1.5',
+    model: 'gpt-image-2.5-sunburst',
   };
 }
 

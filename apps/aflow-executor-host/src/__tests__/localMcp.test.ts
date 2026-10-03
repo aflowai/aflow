@@ -177,6 +177,7 @@ const CAN_CONFINE = sandboxReadiness().ready;
 describe.runIf(CAN_CONFINE)('a local MCP server answers through the lane', () => {
   it.skipIf(confined.skip)(
     confined.title('lists the tools it really has'),
+    { tags: ['listener'], timeout: 60_000 },
     async () => {
       const captured: Captured = {};
       const result = await createHostMcpHandler(policyPath).execute(
@@ -186,11 +187,11 @@ describe.runIf(CAN_CONFINE)('a local MCP server answers through the lane', () =>
       const names = (captured.output?.['tools'] as Array<{ name: string }>).map((t) => t.name);
       expect(names.sort()).toEqual(['echo', 'read_file', 'where']);
     },
-    60_000,
   );
 
   it.skipIf(confined.skip)(
     confined.title('calls a tool and returns what the server said'),
+    { tags: ['listener'], timeout: 60_000 },
     async () => {
       const captured: Captured = {};
       const result = await createHostMcpHandler(policyPath).execute(
@@ -209,11 +210,11 @@ describe.runIf(CAN_CONFINE)('a local MCP server answers through the lane', () =>
       expect(textOf(captured.output)).toContain('hello mesh');
       expect(captured.output?.['isError']).toBe(false);
     },
-    60_000,
   );
 
   it.skipIf(confined.skip)(
     confined.title('runs it inside the binding root'),
+    { tags: ['listener'], timeout: 60_000 },
     async () => {
       const captured: Captured = {};
       await createHostMcpHandler(policyPath).execute(
@@ -225,13 +226,13 @@ describe.runIf(CAN_CONFINE)('a local MCP server answers through the lane', () =>
       );
       expect(textOf(captured.output)).toContain('project');
     },
-    60_000,
   );
 });
 
 describe.runIf(CAN_CONFINE)('the boundary holds around it, not the server behaving', () => {
   it.skipIf(confined.skip)(
     confined.title('lets it read inside the binding'),
+    { tags: ['listener'], timeout: 60_000 },
     async () => {
       const captured: Captured = {};
       await createHostMcpHandler(policyPath).execute(
@@ -249,11 +250,11 @@ describe.runIf(CAN_CONFINE)('the boundary holds around it, not the server behavi
       expect(textOf(captured.output)).toContain('inside the binding');
       expect(captured.output?.['isError']).toBe(false);
     },
-    60_000,
   );
 
   it.skipIf(confined.skip)(
     confined.title('refuses a read outside it, though the server tried'),
+    { tags: ['listener'], timeout: 60_000 },
     async () => {
       // The fixture reads whatever it is handed. What stops it is the operating
       // system, which is the difference between a local server and a remote one
@@ -277,7 +278,6 @@ describe.runIf(CAN_CONFINE)('the boundary holds around it, not the server behavi
       expect(captured.output?.['isError']).toBe(true);
       expect(textOf(captured.output)).not.toContain('PRIVATE KEY');
     },
-    60_000,
   );
 });
 

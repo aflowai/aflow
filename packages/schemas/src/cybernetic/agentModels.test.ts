@@ -13,9 +13,9 @@ describe('effectiveAgentModelRefs', () => {
   });
 
   it('uses the tenant set once one is stored', () => {
-    expect(effectiveAgentModelRefs(['gemini-3.8-flash', 'gpt-5.6-luna'])).toEqual([
+    expect(effectiveAgentModelRefs(['gemini-3.8-flash', 'gpt-6-luna'])).toEqual([
       'gemini-3.8-flash',
-      'gpt-5.6-luna',
+      'gpt-6-luna',
     ]);
   });
 
@@ -32,11 +32,11 @@ describe('isAllowedAgentModelRef', () => {
   });
 
   it('refuses a model outside the tenant set even when the platform recommends it', () => {
-    expect(isAllowedAgentModelRef('claude-sonnet-5', ['gemini-3.8-flash'])).toBe(false);
+    expect(isAllowedAgentModelRef('claude-sonnet-5-5', ['gemini-3.8-flash'])).toBe(false);
   });
 
   it('admits the platform set when the tenant never chose', () => {
-    expect(isAllowedAgentModelRef('claude-sonnet-5', null)).toBe(true);
+    expect(isAllowedAgentModelRef('claude-sonnet-5-5', null)).toBe(true);
     expect(isAllowedAgentModelRef('grok', null)).toBe(true);
   });
 });
@@ -51,6 +51,6 @@ describe('TenantAgentModelAllowlistSchema', () => {
   });
 
   it('accepts a normal set', () => {
-    expect(TenantAgentModelAllowlistSchema.safeParse(['gpt-5.6-sol', 'luna']).success).toBe(true);
+    expect(TenantAgentModelAllowlistSchema.safeParse(['gpt-6-astra', 'luna']).success).toBe(true);
   });
 });

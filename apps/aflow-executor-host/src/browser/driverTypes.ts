@@ -147,6 +147,15 @@ export interface ScreenshotResult extends TakenScreenshot {
   readonly title: string;
 }
 
+export interface EvaluateResult {
+  readonly pageId: string;
+  readonly url: string;
+  /** The script's value as JSON, `undefined` when it had none. */
+  readonly value: string;
+  /** The JSON was longer than a read returns, and `value` is its start. */
+  readonly cut: boolean;
+}
+
 export interface HandoffRequest extends RunScope {
   /** The step that waits: the Action Center's Done is addressed to it. */
   readonly stepExecutionId: string;

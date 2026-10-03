@@ -11,7 +11,7 @@ import { createHostBindingHandler } from './bindingHandlers.js';
 import { createHostCommitCheckHandler } from './checkHandlers.js';
 import { createHostCommitHandler } from './commitHandlers.js';
 import { createHostFileHandler } from './fileHandlers.js';
-import { createHostHarnessHandler } from './harnessHandlers.js';
+import { createHostHarnessHandler, type HarnessBrowserService } from './harnessHandlers.js';
 import { createHostMcpHandler } from './mcpHandlers.js';
 import { createHostPatchHandler } from './patchHandlers.js';
 import { createHostProcessHandler } from './processHandlers.js';
@@ -21,10 +21,11 @@ import type { PushApprovalReader } from '../scanReceipt.js';
 export function createHostHandler(
   policyPath: string,
   pushApprovals: PushApprovalReader,
+  browser?: HarnessBrowserService,
 ): StepHandler {
   const files = createHostFileHandler(policyPath);
   const processes = createHostProcessHandler(policyPath, pushApprovals);
-  const harnesses = createHostHarnessHandler(policyPath);
+  const harnesses = createHostHarnessHandler(policyPath, browser);
   const patches = createHostPatchHandler(policyPath);
   const mcpServers = createHostMcpHandler(policyPath);
   const bindings = createHostBindingHandler(policyPath);

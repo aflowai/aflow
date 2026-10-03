@@ -19,7 +19,8 @@ import { dirname } from 'node:path';
 import { createServiceLogger } from '@aflow/executor-runtime';
 import type { Redis } from 'ioredis';
 import { createShutdownController } from '@aflow/lib';
-import { resolvePayloadStore } from '@aflow/payload-store';
+import { contentAddressForJson, resolvePayloadStore } from '@aflow/payload-store';
+import type { TenantId } from '@aflow/schemas';
 import {
   attachRedisErrorGuard,
   closeRedisConnection,
@@ -41,6 +42,7 @@ import {
   quitRedisWithTimeout,
   readHostBrowserSignInRequest,
 } from '@aflow/redis';
+import { HOST_HARNESS_CONCURRENCY_DEFAULT } from '@aflow/schemas';
 
 import { executionPermitted, loadHostPolicy } from './bindings.js';
 import { createChromeLauncher } from './browser/chromeProcess.js';
@@ -52,7 +54,7 @@ import { followBrowserRequests } from './browser/requestPoll.js';
 import { isBrowserRequestFile, serveBrowserRequests } from './browser/windowRequests.js';
 import { createBrowserHandler } from './handlers/browserHandler.js';
 import { removeWorktree } from './worktree.js';
-import { removeOrphanedCheckouts } from './handlers/harnessHandlers.js';
+import { HARNESS_RUN_OPERATION, removeOrphanedCheckouts } from './handlers/harnessHandlers.js';
 import {
   BROWSER_STEP_TYPE,
   STEP_TYPE,
@@ -68,6 +70,7 @@ import {
 } from './harnessSessions.js';
 import { discardNow, openOrphanJournal, reapOrphans } from './orphans.js';
 import { resolveHostPolicyPath } from './hostDir.js';
+import { reportOpenPostureSelfTest } from './openPostureSelfTest.js';
 import { loadPairedEnv } from './pairedEnv.js';
 import { followPolicy, watchPolicy } from './policyWatch.js';
 import { killAllProcesses, killProcessesForBinding, reapWithdrawn } from './sandboxedRun.js';
@@ -188,6 +191,8 @@ async function main(): Promise<void> {
       count: reaped,
     });
   }
+  // Not awaited: Corepack may fetch a Yarn, and no job waits on the answer.
+  void reportOpenPostureSelfTest(log);
   const handoffs = await startHandoffBoard({
     redis,
     subscriber: hostChannels,
@@ -212,10 +217,13 @@ async function main(): Promise<void> {
     });
   }
 
-  runtime.registerHandler(
-    createHostHandler(policyPath, (tenantId, runId, requestHash) =>
-      getWriteApprovalGrant(redis, tenantId, runId, requestHash),
-    ),
+  // A policy that cannot be read yet runs no harness at all, so the default
+  // stands until the watch below reads one.
+  runtime.limitOperation(
+    HARNESS_RUN_OPERATION,
+    await loadHostPolicy(policyPath)
+      .then((policy) => policy.maxConcurrentHarnessRuns)
+      .catch(() => HOST_HARNESS_CONCURRENCY_DEFAULT),
   );
 
   // Loaded here rather than at the top so that nothing importing this module
@@ -228,6 +236,26 @@ async function main(): Promise<void> {
     loadPolicy: async () => await loadHostPolicy(policyPath),
     handoffs,
   });
+
+  runtime.registerHandler(
+    createHostHandler(
+      policyPath,
+      (tenantId, runId, requestHash) => getWriteApprovalGrant(redis, tenantId, runId, requestHash),
+      {
+        driver: browserDriver,
+        // At its content's address: one harness step takes any number of
+        // screenshots, and a step's own payload path holds one per kind.
+        storeScreenshot: async (tenantId, image) =>
+          await resolved.store.storeContentAddressed({
+            tenantId: tenantId as TenantId,
+            contentHash: contentAddressForJson(image),
+            kind: 'screenshot',
+            data: image,
+          }),
+      },
+    ),
+  );
+
   browserRuntime.registerHandler(createBrowserHandler(browserDriver));
   const browserIdleSweep = createBrowserIdleSweep(browserDriver, taskLogger);
 
@@ -236,6 +264,7 @@ async function main(): Promise<void> {
   // written" are different facts, and only the first should reach a workspace.
   let lastHarnesses: HostInventory['harnesses'] = [];
   let lastFolders: HostInventoryFolders = [];
+  let lastMaxConcurrentHarnessRuns = HOST_HARNESS_CONCURRENCY_DEFAULT;
   let lastBrowsers: HostInventoryBrowsers = [];
 
   // Published with a lifetime rather than stored: an inventory that outlives the
@@ -248,7 +277,7 @@ async function main(): Promise<void> {
     // From the policy rather than from discovery: an installed harness the
     // operator never added to the file cannot be addressed by a run, so naming
     // it here would offer work that is refused.
-    const { harnesses, folders } = await loadHostPolicy(policyPath)
+    const { harnesses, folders, maxConcurrentHarnessRuns } = await loadHostPolicy(policyPath)
       .then((policy) => ({
         harnesses: [...policy.harnesses.values()]
           .map((profile) => ({
@@ -257,10 +286,16 @@ async function main(): Promise<void> {
           }))
           .sort((a, b) => a.id.localeCompare(b.id)),
         folders: publishingFolders(policy.bindings),
+        maxConcurrentHarnessRuns: policy.maxConcurrentHarnessRuns,
       }))
-      .catch(() => ({ harnesses: lastHarnesses, folders: lastFolders }));
+      .catch(() => ({
+        harnesses: lastHarnesses,
+        folders: lastFolders,
+        maxConcurrentHarnessRuns: lastMaxConcurrentHarnessRuns,
+      }));
     lastHarnesses = harnesses;
     lastFolders = folders;
+    lastMaxConcurrentHarnessRuns = maxConcurrentHarnessRuns;
     const browsers = await browserDriver
       .machineProfiles()
       .then((profiles) =>
@@ -283,6 +318,7 @@ async function main(): Promise<void> {
       observedAt: new Date().toISOString(),
       runtimes,
       harnesses,
+      maxConcurrentHarnessRuns,
       folders,
       browsers,
     };
@@ -372,6 +408,7 @@ async function main(): Promise<void> {
   const onPolicyChange = (): void => {
     void loadHostPolicy(policyPath)
       .then(async (policy) => {
+        runtime.limitOperation(HARNESS_RUN_OPERATION, policy.maxConcurrentHarnessRuns);
         await followPolicy({
           reapHostWork: async () => {
             const permitted = executionPermitted(policy);
@@ -456,8 +493,10 @@ async function main(): Promise<void> {
   process.once('exit', endEverything);
 
   // A restart under the dev stack's watcher drains: a harness run, a check or a
-  // review in flight is minutes of work the restart has no reason to end. The
-  // browser's pages are not held open for it.
+  // review in flight is minutes of work the restart has no reason to end. A
+  // harness run still waiting for a slot is not in flight: it goes back to the
+  // stream for the next executor rather than starting once claiming has
+  // stopped. The browser's pages are not held open for it.
   let browserStopped: Promise<void> | undefined;
   const stopBrowserRuntime = (): Promise<void> => (browserStopped ??= browserRuntime.stop());
 

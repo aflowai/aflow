@@ -1,5 +1,8 @@
 import {
+  BROWSER_PAGE_OPEN_OPERATION_ID,
+  buildOperationId,
   enforceGrant,
+  getOperation,
   type GrantEnforcementResult,
   type RunAccessGrant,
   type OperationDescriptor,
@@ -80,4 +83,50 @@ export function decideStepGating(args: DecideStepGatingArgs): GrantEnforcementRe
     },
     { kind: callerKind },
   );
+}
+
+const HOST_HARNESS_RUN_OPERATION_ID = buildOperationId('host', 'harness', 'run');
+
+export interface DecideHarnessBrowserGatingArgs {
+  stepDef: StepDefinition;
+  grant: RunAccessGrant | null;
+  /** The step's input as it will be sent. */
+  resolvedInput: unknown;
+  allSteps?: readonly StepDefinition[];
+}
+
+/**
+ * A harness run given `browser` opens and drives pages in the operator's
+ * Chrome, in any profile its space may use — the reach of `browser.page.open`.
+ * The harness operation's own capability says nothing about that, so the run's
+ * grant has to cover opening a page as well.
+ */
+export function decideHarnessBrowserGating(
+  args: DecideHarnessBrowserGatingArgs,
+): GrantEnforcementResult {
+  if (args.stepDef.operation !== HOST_HARNESS_RUN_OPERATION_ID) return { allowed: true };
+  const input = args.resolvedInput;
+  if (typeof input !== 'object' || input === null) return { allowed: true };
+  if ((input as Record<string, unknown>)['browser'] === undefined) return { allowed: true };
+
+  const open = getOperation(BROWSER_PAGE_OPEN_OPERATION_ID);
+  const decision = enforceGrant(
+    args.grant,
+    BROWSER_PAGE_OPEN_OPERATION_ID,
+    open?.mutates ?? true,
+    open?.privileged ?? false,
+    open?.capabilityGroupId ?? 'browser.page',
+    open?.accessMode ?? 'write',
+    open?.riskModifiers ?? [],
+    {},
+    { kind: callerKindFromStep(args.stepDef, args.allSteps) },
+  );
+  if (decision.allowed) return decision;
+  return {
+    allowed: false,
+    reason:
+      `${HOST_HARNESS_RUN_OPERATION_ID} with \`browser\` is not authorized: a harness browser ` +
+      `opens pages, which needs browser.page:write, and this run's grant does not cover it — ` +
+      `${decision.reason.replace(/\.$/, '')}. Leave \`browser\` out to run the harness without one.`,
+  };
 }

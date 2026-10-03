@@ -13,11 +13,23 @@ import { BrowserProfileSchema, type BrowserProfile } from '@aflow/schemas';
 import { createLocalAddressClassifier } from '../../browser/addresses.js';
 import type { ChromeDiscovery } from '../../browser/chromeDiscovery.js';
 import type { ChromeLauncher, ChromeLaunchInput } from '../../browser/chromeProcess.js';
-import { entersValue } from '../../browser/credentialFields.js';
+import {
+  entersValue,
+  type FieldAttributes,
+  isMaskedField,
+  readCredentialFields,
+} from '../../browser/credentialFields.js';
 import { BrowserDriver, type BrowserPolicy } from '../../browser/driver.js';
-import type { EgressProxy, EgressProxyOptions, ProxyRefusal } from '../../browser/egressProxy.js';
+import {
+  decideByName,
+  decideResolved,
+  type EgressProxy,
+  type EgressProxyOptions,
+  egressHost,
+  type ProxyRefusal,
+} from '../../browser/egressProxy.js';
 import { BrowserDriverError } from '../../browser/errors.js';
-import type { HandoffBoard } from '../../browser/handoffBoard.js';
+import type { HandoffBoard, HandoffPosting } from '../../browser/handoffBoard.js';
 import type { WaitForOperator } from '../../browser/operatorWindow.js';
 import {
   type BrowserEngine,
@@ -49,10 +61,31 @@ export const SIGN_IN = [
   '  - button "Continue" [ref=e6] [cursor=pointer]',
 ].join('\n');
 
+/** A text field as the page declares it; any attribute left out is a plain text input's. */
+export type FakeField = Partial<Omit<FieldAttributes, 'tagName'>>;
+
+const SIGN_IN_FIELDS: Readonly<Record<string, FakeField>> = {
+  e4: { type: 'email', autocomplete: 'username' },
+  e5: { type: 'password', autocomplete: 'current-password' },
+};
+
+const PLAIN_TEXT_INPUT: FieldAttributes = {
+  tagName: 'INPUT',
+  type: 'text',
+  autocomplete: '',
+  inputMode: '',
+  maxLength: -1,
+};
+
 export interface FakeSite {
   readonly title?: string;
   readonly snapshot?: string;
-  readonly masked?: readonly string[];
+  /**
+   * Its text fields as the page declares them, by reference. The engine's
+   * reading of them — which are masked, whether one takes a credential — is
+   * computed from these the way the real engine computes it from the DOM.
+   */
+  readonly fields?: Readonly<Record<string, FakeField>>;
   readonly text?: string;
   /** Its snapshot fails, as a page torn down mid-read does. */
   readonly unreadable?: boolean;
@@ -83,6 +116,20 @@ export function fakeJpeg(width: number, height: number, bytes = 64): Buffer {
   frame.writeUInt16BE(width, 9);
   return Buffer.concat([frame, Buffer.alloc(Math.max(0, bytes - frame.length))]);
 }
+
+/**
+ * An Action Center that takes every hand-off and is never pressed: the wait
+ * ends on the machine, as one does whose operator never presses Done.
+ */
+export const UNANSWERED_BOARD: HandoffBoard = {
+  post: () => {
+    const posting: HandoffPosting = {
+      done: new Promise<void>(() => undefined),
+      close: () => Promise.resolve(),
+    };
+    return Promise.resolve(posting);
+  },
+};
 
 export interface FakeWorld {
   /** Content by URL; anything else is the sign-in page. */
@@ -115,6 +162,7 @@ export class FakePage implements EnginePage {
   readonly actions: Array<{ ref: string; action: EngineAction }> = [];
   readonly navigations: EngineNavigation[] = [];
   readonly screenshots: EngineScreenshot[] = [];
+  readonly evaluations: string[] = [];
   /** Reads of its snapshot so far. */
   reads = 0;
 
@@ -130,6 +178,8 @@ export class FakePage implements EnginePage {
 
   private connect(url: string): ProxyRefusal | undefined {
     const parsed = new URL(url);
+    // A browser fetches nothing for a `data:` address, so its proxy is never asked.
+    if (parsed.protocol === 'data:') return undefined;
     return this.proxy().check(parsed.hostname.replace(/^\[(.*)\]$/, '$1'), parsed.port);
   }
 
@@ -188,7 +238,7 @@ export class FakePage implements EnginePage {
     if (!this.snapshotText().includes(`[ref=${ref}]`)) {
       return Promise.reject(new EngineRefNotFound(ref));
     }
-    if (entersValue(action) && /textbox "Password"/.test(this.lineOf(ref))) {
+    if (entersValue(action) && isMaskedField(this.field(ref))) {
       return Promise.reject(new EngineCredentialField(ref));
     }
     this.actions.push({ ref, action });
@@ -211,12 +261,11 @@ export class FakePage implements EnginePage {
     return this.site().snapshot ?? SIGN_IN;
   }
 
-  private lineOf(ref: string): string {
-    return (
-      this.snapshotText()
-        .split('\n')
-        .find((line) => line.includes(`[ref=${ref}]`)) ?? ''
-    );
+  /** The field under a reference as the engine reads it off the element. */
+  private field(ref: string): FieldAttributes {
+    const site = this.site();
+    const declared = (site.fields ?? (site.snapshot === undefined ? SIGN_IN_FIELDS : {}))[ref];
+    return { ...PLAIN_TEXT_INPUT, ...declared };
   }
 
   url(): string {
@@ -225,18 +274,21 @@ export class FakePage implements EnginePage {
   title(): Promise<string> {
     return Promise.resolve(this.site().title ?? 'Example');
   }
-  snapshot(): Promise<PageSnapshot> {
+  async snapshot(): Promise<PageSnapshot> {
     if (this.snapshotFails || this.site().unreadable === true)
-      return Promise.reject(new Error('Target page, context or browser has been closed'));
+      throw new Error('Target page, context or browser has been closed');
     const site = this.site();
     this.reads += 1;
-    return Promise.resolve({
-      text:
-        site.neverQuiet === true
-          ? `${this.snapshotText()}\n- heading "Tick ${String(this.reads)}" [ref=t1]`
-          : this.snapshotText(),
-      maskedRefs: new Set(site.masked ?? (site.snapshot === undefined ? ['e5'] : [])),
-    });
+    const text =
+      site.neverQuiet === true
+        ? `${this.snapshotText()}\n- heading "Tick ${String(this.reads)}" [ref=t1]`
+        : this.snapshotText();
+    return {
+      text,
+      ...(await readCredentialFields(text, this.current, (ref) =>
+        Promise.resolve(this.field(ref)),
+      )),
+    };
   }
   text(): Promise<string> {
     return Promise.resolve(this.site().text ?? 'Sign in\nWelcome back to the example service.');
@@ -253,6 +305,10 @@ export class FakePage implements EnginePage {
         : fakePng(1280, 800, site.pngBytes ?? 64),
     );
   }
+  evaluate(expression: string): Promise<unknown> {
+    this.evaluations.push(expression);
+    return Promise.resolve({ evaluated: expression, at: this.current });
+  }
   close(): Promise<void> {
     if (this.closeHangs) return new Promise(() => undefined);
     this.closed = true;
@@ -262,6 +318,9 @@ export class FakePage implements EnginePage {
     return this.closed;
   }
 }
+
+/** Where every host the world does not hold local resolves. */
+const FAKE_PUBLIC_ADDRESS = '93.184.216.34';
 
 export class FakeProxy implements EgressProxy {
   readonly port = 41_000;
@@ -275,24 +334,31 @@ export class FakeProxy implements EgressProxy {
     private readonly now: () => number,
   ) {}
 
-  /** The real proxy's decision, by name: the operator's rules first, then this machine. */
-  check(host: string, port: string): ProxyRefusal | undefined {
-    const at = this.now();
+  /**
+   * The real proxy's decision, with the world's names resolved: a local host
+   * to loopback, anything else to a public address.
+   */
+  check(rawHost: string, port: string): ProxyRefusal | undefined {
+    const host = egressHost(rawHost);
     const numericPort = port === '' ? 443 : Number(port);
-    const ruled = this.options.refuseHost?.(host);
-    const refusal: ProxyRefusal | undefined =
-      ruled !== undefined
-        ? { host, port: numericPort, kind: 'rule', reason: ruled, at }
-        : this.world.localHosts.has(host)
-          ? {
-              host,
-              port: numericPort,
-              kind: 'local',
-              reason: `${host} resolves to 127.0.0.1, a loopback address`,
-              at,
-            }
-          : undefined;
-    if (refusal !== undefined) this.refusals.push(refusal);
+    const classifier =
+      this.options.classifier ?? createLocalAddressClassifier({ readInterfaces: () => [] });
+    const decision =
+      decideByName(host, numericPort, this.options, classifier) ??
+      decideResolved(
+        host,
+        [{ address: this.world.localHosts.has(host) ? '127.0.0.1' : FAKE_PUBLIC_ADDRESS }],
+        classifier,
+      );
+    if (decision.verdict !== 'refuse') return undefined;
+    const refusal: ProxyRefusal = {
+      host,
+      port: numericPort,
+      kind: decision.kind,
+      reason: decision.reason,
+      at: this.now(),
+    };
+    this.refusals.push(refusal);
     return refusal;
   }
 
@@ -465,7 +531,7 @@ export function harness(
       await Promise.resolve();
     },
     ...(options.waitForOperator !== undefined ? { waitForOperator: options.waitForOperator } : {}),
-    ...(options.handoffs !== undefined ? { handoffs: options.handoffs } : {}),
+    handoffs: options.handoffs ?? UNANSWERED_BOARD,
   });
   return Object.assign(state, { driver });
 }

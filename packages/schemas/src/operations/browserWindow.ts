@@ -65,8 +65,11 @@ export const BrowserPageHandoffOutputSchema = z.object({
   outcome: z
     .enum(BROWSER_HANDOFF_OUTCOMES)
     .describe(
-      '`completed`: the page left the site it was on and settled — usually signed in — or the ' +
-        'operator pressed Done on the Action Center item. ' +
+      '`completed`: the page moved on from the one handed over, holds no field for a password, ' +
+        'code or passkey, is under no sign-in path and settled — usually signed in — or the ' +
+        'operator pressed Done on the Action Center item. A page that waits for approval on ' +
+        'another device with no field and outside a sign-in path also reads this way; read the ' +
+        'outline. ' +
         '`window_closed`: the operator closed the window; read the outline before assuming ' +
         'anything was done. `timed_out`: nobody finished in time; the page is as they left it.',
     ),
@@ -148,8 +151,13 @@ export const BrowserWindowRegistrations: OperationRegistration[] = [
       'Show a page this run opened to the operator in a browser window on their machine, for ' +
       'what only they may do — sign in, pass a challenge, confirm a step — and wait, with one ' +
       'Action Center item per site that every run waiting on it shares. Returns when the page ' +
-      'leaves the site it was on and settles, when they press Done on the item or close the ' +
-      'window, or at the profile’s deadline, with a fresh outline.',
+      'has moved on from the one handed over, holds no field for a password, a one-time code ' +
+      'or a passkey, is under no sign-in path (login, signin, two-factor, verify, oauth, …) and ' +
+      'has settled; when they press Done on the item or close the window; or at the profile’s ' +
+      'deadline — with a fresh outline. A page asking the operator to approve the sign-in on ' +
+      'another device, showing no field and outside a sign-in path, cannot be told apart from ' +
+      'a signed-in page and ends the wait as one; Done or closing the window is what ends those ' +
+      'faithfully.',
     tags: ['browser', 'web', 'page', 'local', 'operator'],
     idempotency: 'non_idempotent',
     mutates: true,
@@ -170,6 +178,12 @@ export const BrowserWindowRegistrations: OperationRegistration[] = [
         'While the window is shown, every other browser call on the profile is refused.',
         '`window_closed` and `timed_out` say nothing about whether the operator finished: read ' +
           'the outline before going on.',
+        '`completed` on a push-approval page — "check your phone", "approve on your device" — ' +
+          'that shows no field outside a sign-in path can come before the approval: when the ' +
+          'outline still asks for it, hand the page over again.',
+        'The operator pressing Done or closing the window always ends a hand-off, whatever the ' +
+          'page shows. Without either, a page that still holds a field for a password, code or ' +
+          'passkey, or is still under a sign-in path, keeps the wait open until the deadline.',
       ],
       minimalExampleInput: {
         pageId: 'pg_…',
@@ -203,8 +217,8 @@ export const BrowserWindowRegistrations: OperationRegistration[] = [
       ],
       whenNotToUse: ['Reading the page — the outline and browser.page.read are smaller'],
       pitfalls: [
-        'Only the most recent tool results keep their images; an earlier screenshot is ' +
-          'reduced to its description on later turns — take another to look again.',
+        'Only the last three rounds of tool results keep their images; an older screenshot is ' +
+          'reduced to its description — take another to look again.',
         'An image over the size ceiling is retaken once as a smaller JPEG, then refused with ' +
           'its size — capture one element or the visible window instead.',
       ],

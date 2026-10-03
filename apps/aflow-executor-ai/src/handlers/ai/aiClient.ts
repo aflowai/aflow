@@ -192,7 +192,7 @@ export function resolveProviderForModel(model: string): AIProvider {
   throw new AISetupError(
     `Cannot determine AI provider for model "${model}". ` +
       'The model is not in the catalog and does not match any known provider prefix. ' +
-      'Use a recognized model name (e.g., gpt-5.6-terra, claude-sonnet-5, gemini-3.8-flash) ' +
+      'Use a recognized model name (e.g., gpt-6.1-sol, claude-sonnet-5-5, gemini-3.8-flash) ' +
       'or configure the model in the operation input with an explicit provider.',
     'AI_MODEL_PROVIDER_UNKNOWN',
     'configuration',

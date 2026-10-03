@@ -15,13 +15,16 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { readFile, rm, writeFile } from 'node:fs/promises';
 import { constants } from 'node:os';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { SandboxManager } from '@anthropic-ai/sandbox-runtime';
 
-import { buildBaseEnv, workloadHome } from './baseEnv.js';
+import type { HostSandboxPosture } from '@aflow/schemas';
+
+import { buildBaseEnv, createWorkloadDirs } from './baseEnv.js';
 import type { ExecutionPermitted, HostBinding } from './bindings.js';
 import { createStreamScrubber } from './credentialFetch.js';
 import { assertSafeEnv } from './envPolicy.js';
@@ -410,6 +413,12 @@ export interface SandboxedRunInput extends SupervisedRun {
   readonly inheritEnv?: readonly string[];
   /** Where the machine says the operator's tools live. Read-only. */
   readonly toolPaths?: readonly string[];
+  /**
+   * The folder's posture, for a coding agent and a folder's checks. Anything
+   * else runs `confined` whatever the folder says, because it is a command an
+   * agent wrote rather than the operator's own tool.
+   */
+  readonly posture?: HostSandboxPosture;
 }
 
 export interface UnconfinedRunInput extends SupervisedRun {
@@ -624,7 +633,7 @@ export async function spawnConfined(input: SpawnConfinedInput): Promise<Confined
 
   pruneExited(Date.now());
   const startedAt = new Date();
-  await mkdir(workloadHome(input.scratchDir), { recursive: true });
+  await createWorkloadDirs(input.scratchDir);
   const child = spawn(process.execPath, argv, {
     cwd: input.cwd,
     env: {
@@ -799,7 +808,7 @@ async function superviseSpawn(input: SupervisedSpawn): Promise<SandboxedRunResul
 
   // A detached run reports that it started; the handle carries the rest.
   if (detached) {
-    // The scratch holds the compiled policy the sandbox launcher reads, and is
+    // The scratch holds the compiled policy the sandbox launcher reads, and
     // this process's TMPDIR. A caller cannot clean it up on return the way it
     // does for a run it waited for, so ownership moves here.
     const cleanUp = (): void => {
@@ -918,24 +927,20 @@ export async function runSandboxed(input: SandboxedRunInput): Promise<SandboxedR
   });
   const settingsPath = join(input.scratchDir, 'srt-settings.json');
   await writeFile(settingsPath, JSON.stringify(policy), { mode: 0o600 });
-
-  // Resolved from this module, not the working directory. An executor
-  // installed on the operator's machine is started from wherever they happen
-  // to be, and a cwd-relative path would find the adapter only by luck.
-  const srtBin = join(
-    dirname(createRequire(import.meta.url).resolve('@anthropic-ai/sandbox-runtime/package.json')),
-    'dist',
-    'cli.js',
-  );
-  await mkdir(workloadHome(input.scratchDir), { recursive: true });
+  await createWorkloadDirs(input.scratchDir);
 
   const statusPath = workloadStatusPath(input.scratchDir);
   return await superviseSpawn({
     ...input,
     program: process.execPath,
-    // Argv all the way through: the adapter's CLI takes the command as varargs,
+    // Argv all the way through: both launchers take the command as varargs,
     // so nothing between here and exec has to split or quote a string.
-    args: confinedArgv(srtBin, settingsPath, statusPath, input.argv),
+    args: confinedArgv(
+      sandboxLauncher(input.posture ?? 'confined'),
+      settingsPath,
+      statusPath,
+      input.argv,
+    ),
     statusPath,
     // Named inheritance, never the executor's whole environment: that
     // environment holds the credentials this executor was paired with.
@@ -946,6 +951,26 @@ export async function runSandboxed(input: SandboxedRunInput): Promise<SandboxedR
     },
     bindingId: input.binding.id,
   });
+}
+
+/**
+ * The adapter's own command line for `confined`, which refuses every host the
+ * policy does not name; for `open`, the launcher that admits every one of them
+ * but this machine.
+ *
+ * Resolved from this module, not the working directory. An executor installed
+ * on the operator's machine is started from wherever they happen to be, and a
+ * cwd-relative path would find either only by luck.
+ */
+function sandboxLauncher(posture: HostSandboxPosture): string {
+  if (posture === 'open') {
+    return fileURLToPath(new URL('./openSandboxLauncher.mjs', import.meta.url));
+  }
+  return join(
+    dirname(createRequire(import.meta.url).resolve('@anthropic-ai/sandbox-runtime/package.json')),
+    'dist',
+    'cli.js',
+  );
 }
 
 /**

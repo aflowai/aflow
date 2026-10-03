@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { getOperation } from '../../catalog/registry.js';
 import {
-  HOST_CHECK_OUTPUT_KEEP_BYTES,
+  HOST_CHECK_OUTPUT_TAIL_BYTES,
   HOST_CHECK_TAIL_BYTES,
   HOST_CHECKS_MAX_ARGS,
   HOST_CHECKS_TIMEOUT_DEFAULT_MS,
@@ -87,7 +87,7 @@ describe('what host.commit.check answers', () => {
   });
 
   it('keeps far more output than it returns inline', () => {
-    expect(HOST_CHECK_OUTPUT_KEEP_BYTES).toBeGreaterThan(HOST_CHECK_TAIL_BYTES * 100);
+    expect(HOST_CHECK_OUTPUT_TAIL_BYTES).toBeGreaterThan(HOST_CHECK_TAIL_BYTES * 100);
   });
 });
 

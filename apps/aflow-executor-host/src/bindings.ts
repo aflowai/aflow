@@ -19,7 +19,12 @@ import { basename, isAbsolute, resolve, sep } from 'node:path';
 
 import { z } from 'zod';
 
-import { type BrowserProfile, HostBindingBranchPolicySchema } from '@aflow/schemas';
+import {
+  type BrowserProfile,
+  HOST_HARNESS_CONCURRENCY_DEFAULT,
+  HostBindingBranchPolicySchema,
+  HostSandboxPostureSchema,
+} from '@aflow/schemas';
 
 import { type ChromeDiscovery, discoverChrome } from './browser/chromeDiscovery.js';
 import { effectiveBrowserProfiles, parseBrowserProfiles } from './browser/profiles.js';
@@ -56,6 +61,12 @@ export const HostBindingSchema = z.object({
    * setting that turns it off.
    */
   branchPolicy: HostBindingBranchPolicySchema.optional(),
+  /**
+   * What a coding agent and the checks run under here, written only when the
+   * operator chose it: absent, `HOST_SANDBOX_POSTURE_DEFAULT` is read each
+   * time, so a change of default reaches a folder that never chose.
+   */
+  sandbox: HostSandboxPostureSchema.optional(),
   /** Present for a binding the operator connected as a single file rather than a folder. */
   singleFile: z.boolean().default(false),
   /**
@@ -81,6 +92,12 @@ export const HostPolicySchema = z.object({
   bindings: z.array(HostBindingSchema),
   /** Coding harnesses this machine will run. Absent means none may run here. */
   harnesses: z.array(HarnessProfileSchema).default([]),
+  /**
+   * How many coding agents run here at once, written only when the operator
+   * chose a number: absent, the platform's default is read each time, so a
+   * change of default reaches a machine that never chose.
+   */
+  maxConcurrentHarnessRuns: z.number().int().min(1).optional(),
   /** MCP servers this machine will run. Absent means none may run here. */
   mcpServers: z.array(LocalMcpServerSchema).default([]),
   /**
@@ -134,6 +151,8 @@ export class HostBindingError extends Error {
 export interface LoadedHostPolicy {
   bindings: Map<string, HostBinding>;
   harnesses: Map<string, HarnessProfile>;
+  /** The operator's number, or the default when they chose none. */
+  maxConcurrentHarnessRuns: number;
   mcpServers: Map<string, LocalMcpServer>;
   /** Extra read paths every command in this machine's bindings may use. */
   toolPaths: readonly string[];
@@ -180,6 +199,8 @@ export async function loadHostPolicy(
   return {
     bindings: new Map(parsed.data.bindings.map((b) => [b.id, b])),
     harnesses: new Map(parsed.data.harnesses.map((h) => [h.id, h])),
+    maxConcurrentHarnessRuns:
+      parsed.data.maxConcurrentHarnessRuns ?? HOST_HARNESS_CONCURRENCY_DEFAULT,
     mcpServers: new Map(parsed.data.mcpServers.map((m) => [m.id, m])),
     toolPaths: parsed.data.toolPaths,
     browsers: effectiveBrowserProfiles(declared?.profiles, chrome),
@@ -765,9 +786,9 @@ export async function resolveWithin(
 /**
  * The workspace a job came from must be the one the folder was connected for.
  * Checked on the machine, because the appliance is the half that can be
- * compromised into asking for someone else's binding.
+ * compromised into asking for someone else's binding. Returns the space it checked.
  */
-export function requireSpace(binding: HostBinding, spaceId: string | undefined): void {
+export function requireSpace(binding: HostBinding, spaceId: string | undefined): string {
   if (binding.spaceId === undefined) {
     throw new HostBindingError(
       `Binding \`${binding.id}\` does not record which workspace it was connected for, so it ` +
@@ -789,6 +810,7 @@ export function requireSpace(binding: HostBinding, spaceId: string | undefined):
       'wrong_space',
     );
   }
+  return spaceId;
 }
 
 /**

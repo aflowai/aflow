@@ -75,6 +75,8 @@ export interface ChromeLaunchInput {
   readonly profile: BrowserProfile;
   /** The egress proxy every request of this browser goes through. */
   readonly proxyServer: string;
+  /** An ephemeral profile's own directory, in place of one under the host directory. */
+  readonly userDataDir?: string;
 }
 
 export interface ChromeLauncher {
@@ -93,13 +95,13 @@ export function createChromeLauncher(
   const pollMs = options.pollMs ?? READY_POLL_MS;
 
   return {
-    launch: async ({ executable, hostDir, profile, proxyServer }): Promise<LaunchedChrome> => {
-      const browsersDir = join(hostDir, 'browsers');
-      const userDataDir = profileDirectory(hostDir, profile.id);
+    launch: async (input): Promise<LaunchedChrome> => {
+      const { executable, hostDir, profile, proxyServer } = input;
+      const userDataDir = input.userDataDir ?? profileDirectory(hostDir, profile.id);
       await mkdir(userDataDir, { recursive: true, mode: 0o700 });
       // `mode` applies only to what mkdir creates; a directory that already
       // existed keeps whatever it had, and these hold the operator's sign-ins.
-      await chmod(browsersDir, 0o700);
+      if (input.userDataDir === undefined) await chmod(join(hostDir, 'browsers'), 0o700);
       await chmod(userDataDir, 0o700);
       const portFile = join(userDataDir, DEVTOOLS_ACTIVE_PORT_FILE);
       // A file left by the last run names a port nothing listens on any more.

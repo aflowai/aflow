@@ -23,7 +23,7 @@ import {
 import { harnessCardTitle, readHarnessId, readResultHarness } from '../lib/harness-title.js';
 
 const FEED: HarnessActivityLine[] = [
-  { kind: 'status', at: 0, text: 'Model claude-opus-5' },
+  { kind: 'status', at: 0, text: 'Model claude-opus-5-5' },
   { kind: 'thought', at: 1_200, text: 'Looking at how the parser handles empty input.' },
   { kind: 'tool', at: 1_400, tool: 'Read', text: 'Read src/parser.ts' },
   { kind: 'tool_result', at: 2_000, tool: 'Read', ok: true, text: 'export function parse(' },

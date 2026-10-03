@@ -10,10 +10,12 @@ import type { GenerateTextRequest, TextStreamChunk } from '../types.js';
  * Pins the streaming path to `/v1/responses`.
  *
  * Chat Completions rejects function tools alongside a reasoning effort on the
- * gpt-5.x family — and rejects them even when no effort is sent, because those
+ * GPT-6 family — and rejects them even when no effort is sent, because those
  * models default to one. Since every agent turn streams with tools, that made
  * Chat Completions structurally the wrong endpoint for this adapter, and a unit
  * test over the param mapping could not see it. This test watches the wire.
+ *
+ * @module-tag listener
  */
 
 interface Capture {
@@ -38,7 +40,7 @@ const STREAM_EVENTS = [
     type: 'response.completed',
     response: {
       id: 'resp_123',
-      model: 'gpt-5.6-terra',
+      model: 'gpt-6.1-sol',
       status: 'completed',
       output: [
         { type: 'message', content: [{ type: 'output_text', text: 'Hello' }] },
@@ -93,7 +95,7 @@ async function drain(stream: AsyncGenerator<TextStreamChunk>): Promise<TextStrea
 }
 
 const REQUEST: GenerateTextRequest = {
-  model: 'gpt-5.6-terra',
+  model: 'gpt-6.1-sol',
   messages: [{ role: 'user', content: 'hi' }],
   reasoning: { effort: 'high' },
   tools: [

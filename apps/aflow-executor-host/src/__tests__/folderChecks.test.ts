@@ -234,14 +234,21 @@ describe('the checks, as the machine publishes and shows them', () => {
         spaceId: 'space-a',
         pushApproval: 'unless-unreviewed',
         checks: { program: 'node' },
+        sandbox: 'open',
       },
       {
         id: 'hb_private',
         spaceId: 'space-a',
         pushApproval: 'unless-unreviewed',
         checks: { program: 'verify' },
+        sandbox: 'open',
       },
-      { id: 'hb_unchecked', spaceId: 'space-a', pushApproval: 'unless-unreviewed' },
+      {
+        id: 'hb_unchecked',
+        spaceId: 'space-a',
+        pushApproval: 'unless-unreviewed',
+        sandbox: 'open',
+      },
     ]);
     const published = JSON.stringify(folders);
     expect(published).not.toContain('s3cr3t');

@@ -112,32 +112,52 @@ export function readJournal(path: string): OrphanRecord[] {
  * machine, and the cost of getting that wrong is refusing to reap a genuine
  * orphan that is holding a credential.
  */
-const START_TIME_TOLERANCE_MS = 120_000;
+export const START_TIME_TOLERANCE_MS = 120_000;
 
-function stillTheRecordedProcess(record: OrphanRecord): boolean {
-  let line: string;
+/** A live process's group and, where it could be read, when it started. */
+export interface ProcessStart {
+  readonly pgid: number;
+  readonly startedAt?: number;
+}
+
+/** Nothing when the pid names no process or its start cannot be read. */
+export type ProcessStartSource = (pid: number) => ProcessStart | undefined;
+
+/** One line of `ps -o pgid=,lstart=`. */
+export function parseProcessStart(line: string): ProcessStart | undefined {
+  const [pgidText, ...rest] = line.trim().split(/\s+/);
+  const pgid = Number(pgidText);
+  if (pgidText === undefined || pgidText === '' || !Number.isInteger(pgid)) return undefined;
+  const startedAt = Date.parse(rest.join(' '));
+  return Number.isFinite(startedAt) ? { pgid, startedAt } : { pgid };
+}
+
+/**
+ * `ps` is setuid root on macOS, and the kernel refuses to exec a setuid binary
+ * from inside any sandbox — so under one, this answers nothing for every pid
+ * and the reap ends nothing. The executor reaps at its own startup, unconfined.
+ */
+export function readProcessStart(pid: number): ProcessStart | undefined {
   try {
-    line = execFileSync('ps', ['-p', String(record.pid), '-o', 'pgid=,lstart='], {
-      encoding: 'utf8',
-      timeout: 2000,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
+    return parseProcessStart(
+      execFileSync('ps', ['-p', String(pid), '-o', 'pgid=,lstart='], {
+        encoding: 'utf8',
+        timeout: 2000,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }),
+    );
   } catch {
     // No such process, or `ps` is unavailable. Either way there is nothing
     // this may safely signal.
-    return false;
+    return undefined;
   }
-  if (line === '') return false;
+}
 
-  const [pgidText, ...rest] = line.split(/\s+/);
-  if (Number(pgidText) !== record.pid) return false;
-
-  if (record.recordedAt !== undefined) {
-    const started = Date.parse(rest.join(' '));
-    if (Number.isFinite(started) && Math.abs(started - record.recordedAt) > START_TIME_TOLERANCE_MS)
-      return false;
-  }
-  return true;
+function stillTheRecordedProcess(record: OrphanRecord, processStart: ProcessStartSource): boolean {
+  const live = processStart(record.pid);
+  if (live?.pgid !== record.pid) return false;
+  if (record.recordedAt === undefined || live.startedAt === undefined) return true;
+  return Math.abs(live.startedAt - record.recordedAt) <= START_TIME_TOLERANCE_MS;
 }
 
 /** A live process's parent and command line, or nothing when `ps` cannot say. */
@@ -162,12 +182,15 @@ export function describeProcess(pid: number): { parentPid: number; command: stri
  * Called before this executor consumes its first job, so nothing from before is
  * still holding a credential while new work starts.
  */
-export function reapOrphans(path: string): number {
+export function reapOrphans(
+  path: string,
+  processStart: ProcessStartSource = readProcessStart,
+): number {
   const records = readJournal(path);
   let ended = 0;
   for (const record of records) {
     try {
-      if (stillTheRecordedProcess(record)) {
+      if (stillTheRecordedProcess(record, processStart)) {
         // Negative pid: the group, so descendants go with it.
         process.kill(-record.pid, 'SIGKILL');
         ended += 1;

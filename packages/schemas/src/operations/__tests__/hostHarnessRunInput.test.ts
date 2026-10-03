@@ -313,3 +313,62 @@ describe("a commission's diff travels by reference", () => {
     expect(input.properties['patch']?.description).toContain('pass its `patchRef` instead');
   });
 });
+
+describe('host.harness.run asks for a browser by profile', () => {
+  it('takes ephemeral or a declared profile id, and leaves an absent browser absent', () => {
+    expect(
+      HostHarnessRunInputSchema.parse({ ...base, browser: { profile: 'ephemeral' } }).browser,
+    ).toEqual({ profile: 'ephemeral' });
+    expect(
+      HostHarnessRunInputSchema.parse({ ...base, browser: { profile: 'work' } }).browser,
+    ).toEqual({ profile: 'work' });
+    expect(HostHarnessRunInputSchema.parse(base).browser).toBeUndefined();
+    expect(
+      HostHarnessRunInputSchema.safeParse({ ...base, browser: { profile: '../escape' } }).success,
+    ).toBe(false);
+    expect(HostHarnessRunInputSchema.safeParse({ ...base, browser: {} }).success).toBe(false);
+  });
+
+  it('refuses a profile id under the ephemeral prefix with the rule a declared profile keeps', () => {
+    const result = HostHarnessRunInputSchema.safeParse({
+      ...base,
+      browser: { profile: 'ephemeral-0a1b' },
+    });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.map((issue) => issue.message)).toEqual([
+      '`ephemeral` names the throwaway browser a harness run gets, so no profile declared on ' +
+        'the machine may be called `ephemeral` or start with `ephemeral-`. Choose another id.',
+    ]);
+  });
+
+  it('tells the model the ephemeral profile reaches only its harness’s domains and declared ports', () => {
+    const usage = HostOperationRegistrations.find((r) => r.verb === 'run')?.usage;
+    const lines = [...(usage?.whenToUse ?? []), ...(usage?.pitfalls ?? [])];
+    expect(lines).toContain(
+      "A change to a UI that should be seen working — the harness opens the page it changed on the dev server and checks it: `browser: { profile: 'ephemeral' }`, the default choice, which holds no sign-ins and reaches the harness's allowed domains plus the dev-server ports the operator declared for that harness on this machine",
+    );
+    expect(lines.join('\n')).toContain(
+      '`ephemeral` opens one only on a port the operator declared for that harness, and on none ' +
+        'when no port is declared.',
+    );
+  });
+
+  it('tells the caller when to ask for one and that ephemeral is the default choice', () => {
+    const json = toJsonSchemaSync(HostHarnessRunInputSchema) as {
+      properties: Record<
+        string,
+        { description?: string; properties?: Record<string, { description?: string }> }
+      >;
+    };
+    const browser = json.properties['browser'];
+    expect(browser?.description).toContain('touches a UI');
+    expect(browser?.properties?.['profile']?.description).toContain('the default choice');
+  });
+
+  it('names the browser log on the result', () => {
+    const json = toJsonSchemaSync(HostHarnessRunOutputSchema) as {
+      properties: Record<string, { description?: string }>;
+    };
+    expect(json.properties['browserLog']?.description).toContain('typed text by its length only');
+  });
+});

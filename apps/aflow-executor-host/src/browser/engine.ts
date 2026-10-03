@@ -7,7 +7,12 @@
  */
 import { chromium } from 'playwright-core';
 
-import { entersValue } from './credentialFields.js';
+import {
+  entersValue,
+  isMaskedField,
+  readCredentialFields,
+  readFieldAttributes,
+} from './credentialFields.js';
 import { errorText } from './errors.js';
 import {
   type BrowserEngine,
@@ -115,6 +120,7 @@ interface PwPage {
   off(event: 'request' | 'requestfailed', listener: (request: PwRequest) => void): void;
   off(event: 'domcontentloaded' | 'download', listener: () => void): void;
   screenshot(options: PwScreenshotOptions & { fullPage: boolean }): Promise<Buffer>;
+  evaluate(expression: string): Promise<unknown>;
   close(): Promise<void>;
   isClosed(): boolean;
 }
@@ -133,35 +139,6 @@ interface PwBrowser {
 
 interface PwChromium {
   connectOverCDP(endpoint: string, options: { timeout: number }): Promise<PwBrowser>;
-}
-
-/** Beyond this many text fields a page's remaining ones are masked unchecked. */
-const MAX_TEXTBOXES_CHECKED = 200;
-
-const TEXTBOX_REF = /^\s*- '?textbox\b[^\n]*?\[ref=([^\]\s]+)\]/gm;
-
-function isPasswordInput(element: unknown): boolean {
-  const candidate = element as { tagName?: unknown; type?: unknown };
-  return candidate.tagName === 'INPUT' && candidate.type === 'password';
-}
-
-async function maskedRefs(page: PwPage, text: string): Promise<Set<string>> {
-  const masked = new Set<string>();
-  const refs = [...text.matchAll(TEXTBOX_REF)].map((match) => match[1] ?? '');
-  for (const [index, ref] of refs.entries()) {
-    if (ref === '') continue;
-    if (index >= MAX_TEXTBOXES_CHECKED) {
-      masked.add(ref);
-      continue;
-    }
-    try {
-      if (await page.locator(`aria-ref=${ref}`).evaluate(isPasswordInput)) masked.add(ref);
-    } catch {
-      // A field that could not be inspected is treated as the one it might be.
-      masked.add(ref);
-    }
-  }
-  return masked;
 }
 
 async function navigate(page: PwPage, to: EngineNavigation): Promise<boolean> {
@@ -282,7 +259,7 @@ async function act(page: PwPage, ref: string, action: EngineAction): Promise<voi
   if (entersValue(action)) {
     let password: boolean;
     try {
-      password = await element.evaluate(isPasswordInput);
+      password = isMaskedField(await element.evaluate(readFieldAttributes));
     } catch (error) {
       throw new EngineFieldUnchecked(ref, errorText(error));
     }
@@ -384,10 +361,16 @@ function wrapPage(page: PwPage, events: PageEvents): EnginePage {
     title: async () => await page.title(),
     snapshot: async (): Promise<PageSnapshot> => {
       const text = await page.ariaSnapshot({ mode: 'ai' });
-      return { text, maskedRefs: await maskedRefs(page, text) };
+      const fields = await readCredentialFields(
+        text,
+        page.url(),
+        async (ref) => await page.locator(`aria-ref=${ref}`).evaluate(readFieldAttributes),
+      );
+      return { text, ...fields };
     },
     text: async () => await page.locator('body').innerText({ timeout: ACTION_TIMEOUT_MS }),
     screenshot: async (request) => await screenshot(page, request),
+    evaluate: async (expression) => await page.evaluate(expression),
     close: async () => {
       await page.close();
     },

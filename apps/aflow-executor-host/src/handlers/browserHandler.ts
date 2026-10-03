@@ -12,6 +12,7 @@ import {
 import {
   type AflowError,
   type ErrorClassification,
+  type PayloadRef,
   BROWSER_PAGE_ACT_OPERATION_ID,
   BROWSER_PAGE_CLOSE_OPERATION_ID,
   BROWSER_PAGE_HANDOFF_OPERATION_ID,
@@ -73,8 +74,10 @@ const FAILURE: Record<BrowserFailureKind, { code: string; classification: ErrorC
   observation_failed: { code: 'BROWSER_OBSERVATION_FAILED', classification: 'provider' },
   window_shown: { code: 'BROWSER_WINDOW_IN_USE', classification: 'conflict' },
   window_failed: { code: 'BROWSER_WINDOW_FAILED', classification: 'internal' },
+  handoff_not_posted: { code: 'BROWSER_HANDOFF_NOT_POSTED', classification: 'internal' },
   no_site: { code: 'BROWSER_PAGE_HAS_NO_SITE', classification: 'validation' },
   screenshot_too_large: { code: 'BROWSER_SCREENSHOT_TOO_LARGE', classification: 'validation' },
+  script_refused: { code: 'BROWSER_SCRIPT_REFUSED', classification: 'permission' },
 };
 
 /**
@@ -98,21 +101,41 @@ export function browserFailure(error: BrowserDriverError): AflowError {
   };
 }
 
-function scopeOf(ctx: ExecutorContext): RunScope {
+/**
+ * What a browser operation needs from whoever asked for it: a step on the
+ * browser lane, or a harness run through its relay. Everything else — the
+ * input's schema, the driver's rules, the refusal's code — is the same for both.
+ */
+export interface BrowserCall extends RunScope {
+  /** An earlier delivery of this same call may already have acted. */
+  readonly redelivered: boolean;
+  readonly stepExecutionId: string;
+  readonly sessionId?: string;
+  /** Keeps a screenshot, in the form a StepImage's reference names. */
+  storeScreenshot(image: { data: string; mimeType: string }): Promise<PayloadRef>;
+}
+
+function scopeOf(scope: RunScope | ExecutorContext): RunScope {
   return {
-    tenantId: ctx.tenantId,
-    runId: ctx.runId,
-    ...(ctx.spaceId !== undefined ? { spaceId: ctx.spaceId } : {}),
+    tenantId: scope.tenantId,
+    runId: scope.runId,
+    ...(scope.spaceId !== undefined ? { spaceId: scope.spaceId } : {}),
   };
 }
 
 /**
- * Whether this delivery may follow one that already acted. The executor-host
- * keeps pages in memory, so a job reclaimed from a dead executor finds its
- * page gone; what reaches a live page twice is a later attempt of the step.
+ * A step's call. Whether this delivery may follow one that already acted: the
+ * executor-host keeps pages in memory, so a job reclaimed from a dead executor
+ * finds its page gone; what reaches a live page twice is a later attempt.
  */
-function redelivered(ctx: ExecutorContext): boolean {
-  return ctx.attempt > 1;
+function callOf(ctx: ExecutorContext): BrowserCall {
+  return {
+    ...scopeOf(ctx),
+    redelivered: ctx.attempt > 1,
+    stepExecutionId: ctx.stepExecutionId,
+    ...(ctx.job.sessionId !== undefined ? { sessionId: ctx.job.sessionId } : {}),
+    storeScreenshot: async (image) => await ctx.writePayload('screenshot', image),
+  };
 }
 
 function viewFields(view: PageView): {
@@ -149,24 +172,27 @@ function bound(maxChars: number | undefined): { maxChars?: number } {
 
 interface Route {
   readonly schema: z.ZodTypeAny;
-  run(ctx: ExecutorContext, driver: BrowserDriver, input: unknown): Promise<unknown>;
+  run(call: BrowserCall, driver: BrowserDriver, input: unknown): Promise<unknown>;
 }
 
 /** A route receives its input as its schema parsed it, once. */
 function route<S extends z.ZodTypeAny>(
   schema: S,
-  run: (ctx: ExecutorContext, driver: BrowserDriver, input: z.infer<S>) => Promise<unknown>,
+  run: (call: BrowserCall, driver: BrowserDriver, input: z.infer<S>) => Promise<unknown>,
 ): Route {
-  return { schema, run: async (ctx, driver, input) => await run(ctx, driver, input as z.infer<S>) };
+  return {
+    schema,
+    run: async (call, driver, input) => await run(call, driver, input as z.infer<S>),
+  };
 }
 
-const open = route(BrowserPageOpenInputSchema, async (ctx, driver, input) => {
+const open = route(BrowserPageOpenInputSchema, async (call, driver, input) => {
   const { url, profileId } = input;
   const opened = await driver.open({
-    ...scopeOf(ctx),
+    ...scopeOf(call),
     profileId,
     url,
-    redelivered: redelivered(ctx),
+    redelivered: call.redelivered,
     ...bound(input.maxChars),
   });
   const output: Output<typeof BrowserPageOpenOutputSchema> = {
@@ -186,7 +212,7 @@ const open = route(BrowserPageOpenInputSchema, async (ctx, driver, input) => {
   return output;
 });
 
-const navigate = route(BrowserPageNavigateInputSchema, async (ctx, driver, input) => {
+const navigate = route(BrowserPageNavigateInputSchema, async (call, driver, input) => {
   const to: EngineNavigation =
     input.url !== undefined
       ? { kind: 'url', url: input.url }
@@ -196,10 +222,10 @@ const navigate = route(BrowserPageNavigateInputSchema, async (ctx, driver, input
           ? { kind: 'forward' }
           : { kind: 'reload' };
   const result = await driver.navigate({
-    ...scopeOf(ctx),
+    ...scopeOf(call),
     pageId: input.pageId,
     to,
-    redelivered: redelivered(ctx),
+    redelivered: call.redelivered,
     ...bound(input.maxChars),
   });
   const output: Output<typeof BrowserPageNavigateOutputSchema> = {
@@ -226,13 +252,13 @@ function engineAction(input: z.infer<typeof BrowserPageActInputSchema>): EngineA
   }
 }
 
-const act = route(BrowserPageActInputSchema, async (ctx, driver, input) => {
+const act = route(BrowserPageActInputSchema, async (call, driver, input) => {
   const result = await driver.act({
-    ...scopeOf(ctx),
+    ...scopeOf(call),
     pageId: input.pageId,
     ref: input.ref,
     action: engineAction(input),
-    redelivered: redelivered(ctx),
+    redelivered: call.redelivered,
     ...bound(input.maxChars),
   });
   const output: Output<typeof BrowserPageActOutputSchema> = {
@@ -254,9 +280,9 @@ const act = route(BrowserPageActInputSchema, async (ctx, driver, input) => {
   return output;
 });
 
-const snapshot = route(BrowserPageSnapshotInputSchema, async (ctx, driver, input) => {
+const snapshot = route(BrowserPageSnapshotInputSchema, async (call, driver, input) => {
   const { pageId, ref } = input;
-  const taken = await driver.snapshot(scopeOf(ctx), pageId, ref, input.maxChars);
+  const taken = await driver.snapshot(scopeOf(call), pageId, ref, input.maxChars);
   const output: Output<typeof BrowserPageSnapshotOutputSchema> = {
     pageId,
     url: taken.url,
@@ -277,9 +303,9 @@ const snapshot = route(BrowserPageSnapshotInputSchema, async (ctx, driver, input
   return output;
 });
 
-const read = route(BrowserPageReadInputSchema, async (ctx, driver, input) => {
+const read = route(BrowserPageReadInputSchema, async (call, driver, input) => {
   const { pageId, what, contains, offset } = input;
-  const result = await driver.readPage(scopeOf(ctx), pageId, {
+  const result = await driver.readPage(scopeOf(call), pageId, {
     what,
     ...(contains !== undefined ? { contains } : {}),
     ...(offset !== undefined ? { offset } : {}),
@@ -299,25 +325,25 @@ const read = route(BrowserPageReadInputSchema, async (ctx, driver, input) => {
   return output;
 });
 
-const list = route(BrowserPageListInputSchema, async (ctx, driver) => {
-  const pages = await driver.list(scopeOf(ctx));
+const list = route(BrowserPageListInputSchema, async (call, driver) => {
+  const pages = await driver.list(scopeOf(call));
   const output: Output<typeof BrowserPageListOutputSchema> = {
     pages: pages.map((page) => ({ ...page, lastUsedAt: new Date(page.lastUsedAt).toISOString() })),
   };
   return output;
 });
 
-const close = route(BrowserPageCloseInputSchema, async (ctx, driver, { pageId }) => {
+const close = route(BrowserPageCloseInputSchema, async (call, driver, { pageId }) => {
   const output: Output<typeof BrowserPageCloseOutputSchema> = {
     pageId,
-    state: await driver.close(scopeOf(ctx), pageId),
+    state: await driver.close(scopeOf(call), pageId),
   };
   return output;
 });
 
-const listProfiles = route(BrowserProfileListInputSchema, async (ctx, driver) => {
+const listProfiles = route(BrowserProfileListInputSchema, async (call, driver) => {
   const output: Output<typeof BrowserProfileListOutputSchema> = {
-    profiles: (await driver.listProfiles(ctx.spaceId)).map((profile) => ({
+    profiles: (await driver.listProfiles(call.spaceId)).map((profile) => ({
       ...profile,
       ...(profile.sites !== undefined ? { sites: [...profile.sites] } : {}),
     })),
@@ -325,13 +351,13 @@ const listProfiles = route(BrowserProfileListInputSchema, async (ctx, driver) =>
   return output;
 });
 
-const screenshot = route(BrowserPageScreenshotInputSchema, async (ctx, driver, input) => {
+const screenshot = route(BrowserPageScreenshotInputSchema, async (call, driver, input) => {
   const { pageId, ref, fullPage } = input;
   const request = { ...(ref !== undefined ? { ref } : {}), fullPage };
-  const taken = await driver.screenshot(scopeOf(ctx), pageId, request);
+  const taken = await driver.screenshot(scopeOf(call), pageId, request);
   // The form a StepImage's reference names, which the agent turn reads to show
   // the model the image.
-  const imageRef = await ctx.writePayload('screenshot', {
+  const imageRef = await call.storeScreenshot({
     data: taken.bytes.toString('base64'),
     mimeType: taken.contentType,
   });
@@ -351,11 +377,11 @@ const screenshot = route(BrowserPageScreenshotInputSchema, async (ctx, driver, i
   return output;
 });
 
-const handoff = route(BrowserPageHandoffInputSchema, async (ctx, driver, input) => {
+const handoff = route(BrowserPageHandoffInputSchema, async (call, driver, input) => {
   const result = await driver.handoff({
-    ...scopeOf(ctx),
-    stepExecutionId: ctx.stepExecutionId,
-    ...(ctx.job.sessionId !== undefined ? { sessionId: ctx.job.sessionId } : {}),
+    ...scopeOf(call),
+    stepExecutionId: call.stepExecutionId,
+    ...(call.sessionId !== undefined ? { sessionId: call.sessionId } : {}),
     pageId: input.pageId,
     reason: input.reason,
     message: input.message,
@@ -391,6 +417,55 @@ const ROUTES: Readonly<Record<string, Route>> = {
 /** The operations this lane serves, for a test to hold against the registry. */
 export const SERVED_BROWSER_OPERATIONS: readonly string[] = Object.keys(ROUTES);
 
+export type BrowserOperationOutcome =
+  | { readonly ok: true; readonly output: unknown }
+  | { readonly ok: false; readonly error: AflowError };
+
+/**
+ * One browser operation, from its raw input to its output or its refusal. The
+ * step handler and the harness relay both call this and nothing beneath it, so
+ * a rule, a bound or a refusal cannot differ between them.
+ */
+export async function performBrowserOperation(
+  driver: BrowserDriver,
+  operationId: string,
+  raw: unknown,
+  call: BrowserCall,
+): Promise<BrowserOperationOutcome> {
+  const route = ROUTES[operationId];
+  if (route === undefined) {
+    return {
+      ok: false,
+      error: validationError(`The browser lane on this machine does not serve \`${operationId}\`.`),
+    };
+  }
+  const parsed = route.schema.safeParse(raw);
+  if (!parsed.success) return { ok: false, error: validationError(parsed.error.message) };
+  try {
+    return { ok: true, output: await route.run(call, driver, parsed.data) };
+  } catch (error) {
+    if (error instanceof BrowserDriverError) return { ok: false, error: browserFailure(error) };
+    return {
+      ok: false,
+      error: internalError(error instanceof Error ? error.message : String(error), {
+        retryable: false,
+      }),
+    };
+  }
+}
+
+function noSpace(): AflowError {
+  return {
+    code: 'BROWSER_JOB_HAS_NO_SPACE',
+    message:
+      'This browser step reached the machine carrying no space, so it was refused: which ' +
+      'profiles it may use and where a hand-off is shown both depend on the space its run is in.',
+    classification: 'internal',
+    retryable: false,
+    timestamp: new Date().toISOString(),
+  };
+}
+
 export function createBrowserHandler(driver: BrowserDriver): StepHandler {
   return {
     stepType: 'browser',
@@ -407,32 +482,15 @@ export function createBrowserHandler(driver: BrowserDriver): StepHandler {
       return waitMs === undefined ? undefined : waitMs + BROWSER_HANDOFF_OUTER_MARGIN_MS;
     },
     async execute(ctx: ExecutorContext): Promise<StepResult> {
-      const route = ROUTES[ctx.operationId];
-      if (route === undefined) {
-        return await failureWithError(
-          ctx,
-          validationError(
-            `The browser lane on this machine does not serve \`${ctx.operationId}\`.`,
-          ),
-        );
-      }
+      // Without a space, every check that asks which profiles a space may use
+      // would be answered for no space at all, and a hand-off would have no
+      // Action Center to be shown in.
+      if (ctx.spaceId === undefined) return await failureWithError(ctx, noSpace());
       const raw = await ctx.readPayload(ctx.job.inputRef);
-      const parsed = route.schema.safeParse(raw);
-      if (!parsed.success)
-        return await failureWithError(ctx, validationError(parsed.error.message));
-      try {
-        return await successWithData(ctx, await route.run(ctx, driver, parsed.data));
-      } catch (error) {
-        if (error instanceof BrowserDriverError) {
-          return await failureWithError(ctx, browserFailure(error));
-        }
-        return await failureWithError(
-          ctx,
-          internalError(error instanceof Error ? error.message : String(error), {
-            retryable: false,
-          }),
-        );
-      }
+      const outcome = await performBrowserOperation(driver, ctx.operationId, raw, callOf(ctx));
+      return outcome.ok
+        ? await successWithData(ctx, outcome.output)
+        : await failureWithError(ctx, outcome.error);
     },
   };
 }

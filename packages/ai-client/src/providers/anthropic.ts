@@ -348,7 +348,7 @@ export function applyCacheStrategy(
  * Claude models (Sonnet 4.x and earlier) still accept and expect it.
  */
 function isTemperatureUnsupportedModel(modelId: string): boolean {
-  return /claude-sonnet-5/i.test(modelId);
+  return /claude-sonnet-5-5/i.test(modelId);
 }
 
 /**

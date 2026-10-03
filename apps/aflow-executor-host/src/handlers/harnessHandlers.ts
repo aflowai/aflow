@@ -1,12 +1,13 @@
 /**
  * The coding-harness half of the host lane.
  *
- * A harness is a command, so it runs through the same confined spawn path as
- * any other. Two things differ, and both are the operator's to grant rather
- * than this executor's to assume: the harness reads a credential under the home
- * region the boundary denies, and it reaches a provider the boundary blocks.
- * Its profile — in the machine's own policy file — is what opens exactly those
- * and nothing else.
+ * A harness is a command, so it runs through the same sandboxed spawn path as
+ * any other, under its folder's posture (Plan 315 D19), which decides the
+ * network. Two things differ, and both are the operator's to grant rather than
+ * this executor's to assume: the harness reads a credential under the home
+ * region the boundary denies, and in a `confined` folder it reaches a provider
+ * the boundary blocks. Its profile — in the machine's own policy file — is what
+ * opens exactly those and nothing else.
  *
  * The run happens in a detached worktree, never the operator's checkout. That
  * is what lets a run start while they have uncommitted work, and what makes the
@@ -30,9 +31,11 @@ import {
   internalError,
 } from '@aflow/executor-runtime';
 import {
+  HOST_HARNESS_MAX_TURNS_DEFAULT,
   HostHarnessRunInputSchema,
   MAX_INLINE_PAYLOAD_BYTES,
   type HarnessActivityLine,
+  type PayloadRef,
 } from '@aflow/schemas';
 
 import {
@@ -52,10 +55,25 @@ import {
   type BaseMerge,
   type MergeConflict,
 } from '../baseMerge.js';
+import type { BrowserDriver } from '../browser/driver.js';
+import { BrowserDriverError } from '../browser/errors.js';
+import {
+  browserLogText,
+  EPHEMERAL_PROFILE_SCRATCH_PREFIX,
+  openHarnessBrowser,
+  type HarnessBrowser,
+} from '../browser/harnessBrowser.js';
 import { fetchCredential, scrubSecret } from '../credentialFetch.js';
-import { noSandboxMessage, reapWithdrawn, sandboxReadiness } from '../sandboxedRun.js';
+import { runUnderFolderPosture } from '../folderRun.js';
+import {
+  noSandboxMessage,
+  reapWithdrawn,
+  sandboxReadiness,
+  type SandboxedRunResult,
+} from '../sandboxedRun.js';
 import { describeRefusals, extractEgressRefusals } from '../egressRefusals.js';
 import {
+  assertTakesMcpConfig,
   buildHarnessArgv,
   buildSessionArgs,
   HarnessProfileError,
@@ -79,7 +97,6 @@ import {
   recordSession,
   type HarnessSession,
 } from '../harnessSessions.js';
-import { runSandboxed, type SandboxedRunResult } from '../sandboxedRun.js';
 import { createChatterStripper } from '../egressRefusals.js';
 import { createHarnessEventReader } from '../harnessEvents.js';
 import {
@@ -104,6 +121,7 @@ import {
 import { PUBLICATION_SCRATCH_PREFIX } from '../branchCommit.js';
 import { CHECK_SCRATCH_PREFIX } from '../commitCheck.js';
 import { installRefGuard, noRefGuardMessage, refGuardReadiness } from '../refGuard.js';
+import { browserFailure } from './browserHandler.js';
 
 /**
  * Where a task that declared an output schema leaves its answer. It is inside
@@ -121,6 +139,7 @@ const CHECKOUT_SCRATCH_PREFIXES = [
   HARNESS_SCRATCH_PREFIX,
   PUBLICATION_SCRATCH_PREFIX,
   CHECK_SCRATCH_PREFIX,
+  EPHEMERAL_PROFILE_SCRATCH_PREFIX,
 ] as const;
 /** A result is an answer, not a dataset; past this it is a mistake, not a big one. */
 const RESULT_CAP_BYTES = 1_000_000;
@@ -382,10 +401,26 @@ async function failure(
   if (error instanceof HostBindingError) {
     return await failureWithError(ctx, permissionError(message));
   }
+  if (error instanceof BrowserDriverError) {
+    return await failureWithError(ctx, browserFailure(error));
+  }
   if (error instanceof WorktreeError) {
     return await failureWithError(ctx, validationError(message));
   }
   return await failureWithError(ctx, internalError(message));
+}
+
+/**
+ * The turn budget a run gets: its own, else the operation's default where the
+ * harness can take one. A harness with no turn argument runs without a budget
+ * rather than refusing a run that never asked for one.
+ */
+export function effectiveMaxTurns(
+  profile: HarnessProfile,
+  maxTurns: number | undefined,
+): number | undefined {
+  if (maxTurns !== undefined) return maxTurns;
+  return profile.turnsArgs.length > 0 ? HOST_HARNESS_MAX_TURNS_DEFAULT : undefined;
 }
 
 /** The argv one turn of a harness run starts with. */
@@ -395,17 +430,30 @@ export function harnessTurnArgv(
   task: string,
   conversation: string,
   continued: boolean,
+  mcpConfig?: string,
 ): string[] {
   return buildHarnessArgv(
     profile,
     task,
     buildSessionArgs(profile, conversation, continued),
-    input.maxTurns,
+    effectiveMaxTurns(profile, input.maxTurns),
     input.model,
+    mcpConfig,
   );
 }
 
-async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<StepResult> {
+/** What a harness run that asks for a browser is served with. */
+export interface HarnessBrowserService {
+  readonly driver: BrowserDriver;
+  /** Keeps one screenshot under the run's tenant, each a payload of its own. */
+  storeScreenshot(tenantId: string, image: { data: string; mimeType: string }): Promise<PayloadRef>;
+}
+
+async function runHarness(
+  ctx: ExecutorContext,
+  policyPath: string,
+  browserService: HarnessBrowserService | undefined,
+): Promise<StepResult> {
   const raw = await ctx.readPayload(ctx.job.inputRef);
   const parsed = HostHarnessRunInputSchema.safeParse(raw);
   if (!parsed.success) {
@@ -437,6 +485,7 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
   let bindingRoot: string | undefined;
   let credential: string | undefined;
   let claimed: HarnessSession | undefined;
+  let browser: HarnessBrowser | undefined;
   // A session's checkout outlives the run, so the teardown below must not take
   // it away. Set only when this run owns the scratch it made.
   let keepScratch = false;
@@ -463,7 +512,7 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
       if (error instanceof HostBindingError) await discardSessionsForBinding(input.bindingId);
       throw error;
     }
-    requireSpace(binding, ctx.spaceId);
+    const spaceId = requireSpace(binding, ctx.spaceId);
     requireDirectory(binding);
     // A harness edits files and runs commands. It needs the grant that had to
     // be typed, not the one a folder gets by being connected.
@@ -477,6 +526,18 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
       return await failureWithError(ctx, validationError(selection.problem));
     }
     const profile = selection.profile;
+    if (input.browser !== undefined) {
+      assertTakesMcpConfig(profile);
+      if (browserService === undefined) {
+        return await failureWithError(
+          ctx,
+          validationError(
+            'This executor serves no browser, so the run cannot be given one. Send the task ' +
+              'without `browser`.',
+          ),
+        );
+      }
+    }
     bindingRoot = binding.root;
 
     const readiness = sandboxReadiness();
@@ -647,6 +708,20 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
       // next.
       void ctx.emitLiveDelta('activity', `${JSON.stringify(line)}\n`);
     };
+    if (input.browser !== undefined && browserService !== undefined) {
+      const tenantId = ctx.tenantId;
+      browser = await openHarnessBrowser({
+        driver: browserService.driver,
+        scope: { tenantId, runId: ctx.runId, spaceId },
+        profile: input.browser.profile,
+        reach: { allowedDomains: profile.allowedDomains, localPorts: profile.browserLocalPorts },
+        scratchDir,
+        stepExecutionId: ctx.stepExecutionId,
+        storeScreenshot: async (image) => await browserService.storeScreenshot(tenantId, image),
+        onActivity,
+        startedAt,
+      });
+    }
     const runTurn = async (
       task: string,
       continued: boolean,
@@ -663,10 +738,21 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
       const emit = (text: string): void => {
         events.push(text);
       };
+      // Pipes of the turn's own: a turn killed mid-call leaves its answer, or
+      // half a request, in them, and the next turn's relay numbers its calls
+      // from 1 again.
+      const browserTurn = await browser?.openTurn();
       try {
-        return await runSandboxed({
+        return await runUnderFolderPosture({
           binding,
-          argv: harnessTurnArgv(profile, input, task, conversation, continued),
+          argv: harnessTurnArgv(
+            profile,
+            input,
+            task,
+            conversation,
+            continued,
+            browserTurn?.mcpConfigPath,
+          ),
           cwd: worktree.path,
           // The sandbox's proxy names the host it refused only when asked to, and
           // that name is the whole diagnosis for a harness that reached nothing.
@@ -727,6 +813,7 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
         emit(visible.flush());
         events.flush();
         spoken = events.answer();
+        await browserTurn?.close();
       }
     };
 
@@ -765,6 +852,14 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
       // Taken out of the checkout before the diff is read: the answer is a
       // result, not a change to the operator's folder.
       await rm(resultPath, { force: true });
+    }
+
+    // Ended before anything is reported, so the log holds every call the harness made.
+    let browserLog: PayloadRef | undefined;
+    if (browser !== undefined) {
+      await browser.close();
+      const records = browser.records();
+      if (records.length > 0) browserLog = await ctx.writePayload('logs', browserLogText(records));
     }
 
     // Changes are collected before the worktree goes away, and regardless of how
@@ -907,6 +1002,7 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
       // harness said.
       stdout: spoken ?? result.stdout,
       ...(activityRef !== undefined ? { activityRef } : {}),
+      ...(browserLog !== undefined ? { browserLog } : {}),
       stderr: scrubbed.text,
       truncated: result.truncated,
       blockedDomains: [...new Set(scrubbed.refusals.map((r) => r.host))],
@@ -952,6 +1048,7 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
   } catch (error) {
     return await failure(ctx, error, credential);
   } finally {
+    await browser?.close();
     if (claimed !== undefined) releaseSession(claimed);
     if (!keepScratch) {
       if (worktreePath !== undefined && bindingRoot !== undefined) {
@@ -962,13 +1059,19 @@ async function runHarness(ctx: ExecutorContext, policyPath: string): Promise<Ste
   }
 }
 
-export function createHostHarnessHandler(policyPath: string): {
+export const HARNESS_RUN_OPERATION = 'host.harness.run';
+
+export function createHostHarnessHandler(
+  policyPath: string,
+  browser?: HarnessBrowserService,
+): {
   handles: ReadonlySet<string>;
   execute: (ctx: ExecutorContext) => Promise<StepResult>;
 } {
   return {
-    handles: new Set(['host.harness.run']),
-    execute: async (ctx: ExecutorContext): Promise<StepResult> => await runHarness(ctx, policyPath),
+    handles: new Set([HARNESS_RUN_OPERATION]),
+    execute: async (ctx: ExecutorContext): Promise<StepResult> =>
+      await runHarness(ctx, policyPath, browser),
   };
 }
 

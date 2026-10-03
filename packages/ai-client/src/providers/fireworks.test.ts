@@ -86,7 +86,7 @@ describe('toOpenAIMessage — reasoning_content continuity replay (Plan 259)', (
       content: 'answer',
       providerReasoning: {
         provider: 'anthropic',
-        model: 'claude-sonnet-5',
+        model: 'claude-sonnet-5-5',
         blocks: [{ type: 'thinking', thinking: 'x', signature: 's' }],
       },
     }) as Record<string, unknown>;
