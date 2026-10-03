@@ -117,6 +117,9 @@ export type BrowserOriginRule = z.infer<typeof BrowserOriginRuleSchema>;
 /** Minutes a page, and then a browser with no pages, may sit untouched before it is closed. */
 export const DEFAULT_BROWSER_IDLE_MINUTES = 30;
 
+/** Minutes a hand-off waits for the operator before it returns `timed_out`. */
+export const DEFAULT_BROWSER_HANDOFF_MINUTES = 15;
+
 export const BrowserProfileSchema = z.object({
   id: BrowserProfileIdSchema,
   spaces: z
@@ -153,6 +156,15 @@ export const BrowserProfileSchema = z.object({
     .describe(
       'A page nothing has touched for this long is closed, and a browser left with no pages ' +
         'for this long is stopped. Its sign-ins stay on disk.',
+    ),
+  handoffMinutes: z
+    .number()
+    .int()
+    .positive()
+    .default(DEFAULT_BROWSER_HANDOFF_MINUTES)
+    .describe(
+      'How long a hand-off waits for the operator in the window before the run goes on without ' +
+        'them.',
     ),
 });
 export type BrowserProfile = z.infer<typeof BrowserProfileSchema>;

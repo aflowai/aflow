@@ -8,14 +8,18 @@ export interface McpServerConfig {
   /** MCP HTTP server port */
   readonly port: number;
   /**
-   * The interface the HTTP server listens on: `MCP_HOST`, else loopback.
+   * The interface the HTTP server listens on: `MCP_HOST`, else loopback
+   * outside production and every interface in production.
    *
-   * A session that picks up the local auth file is the instance's owner.
-   * Loopback keeps other machines from reaching the port; the Host and Origin
-   * checks in `requestGate.ts` keep a web page the operator visits from reaching
-   * it through a name rebound to loopback. It takes both to keep the owner on
-   * this machine. Not `HOST`: the shared `.env` sets that to every interface for
-   * the API server.
+   * Outside production a session that picks up the local auth file is the
+   * instance's owner. Loopback keeps other machines from reaching the port; the
+   * Host and Origin checks in `requestGate.ts` keep a web page the operator
+   * visits from reaching it through a name rebound to loopback. It takes both to
+   * keep the owner on this machine. Production reads no auth file and runs in a
+   * container behind a load balancer, which reaches it on the container's own
+   * interface; there `ALLOWED_HOSTS` and the same checks bound who is answered.
+   * Not `HOST`: the shared `.env` sets that to every interface for the API
+   * server.
    */
   readonly host: string;
   /** Log level */
@@ -80,7 +84,12 @@ export function loadConfig(): McpServerConfig {
     // MCP_PORT first (avoids conflict with API server on 3000 when both run in yarn dev).
     // PORT fallback for hosts that inject PORT for the listening process.
     port: Number(process.env['MCP_PORT'] ?? process.env['PORT'] ?? '3100'),
-    host: configuredHost === undefined || configuredHost === '' ? '127.0.0.1' : configuredHost,
+    host:
+      configuredHost !== undefined && configuredHost !== ''
+        ? configuredHost
+        : nodeEnv === 'production'
+          ? '0.0.0.0'
+          : '127.0.0.1',
     logLevel,
     // The local edition composes no development bypass, so the fallback has
     // nothing to reach whatever NODE_ENV says.

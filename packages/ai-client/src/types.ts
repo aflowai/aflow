@@ -2,12 +2,14 @@
  * Core types for the AI client layer.
  */
 import { z } from 'zod';
+import { StepImageSchema } from '@aflow/schemas';
 import type {
   TenantId,
   SessionId,
   StepExecutionId,
   ImageReferenceRole,
   AsyncJobCost,
+  StepImage,
   DecisionEntry,
   DecisionQuestions,
 } from '@aflow/schemas';
@@ -40,6 +42,31 @@ export const ContentPartSchema = z.discriminatedUnion('type', [
   }),
 ]);
 export type ContentPart = z.infer<typeof ContentPartSchema>;
+
+/**
+ * An image a tool returned, still behind its payload reference. The client
+ * turns each one into an `image` part or into text before any adapter sees the
+ * request, so adapters only ever render `text` and `image`.
+ */
+export const ToolImageRefPartSchema = z.object({
+  type: z.literal('image_ref'),
+  image: StepImageSchema,
+});
+export type ToolImageRefPart = z.infer<typeof ToolImageRefPartSchema>;
+
+/** Content part of a tool message. */
+export const ToolContentPartSchema = z.discriminatedUnion('type', [
+  ...ContentPartSchema.options,
+  ToolImageRefPartSchema,
+]);
+export type ToolContentPart = z.infer<typeof ToolContentPartSchema>;
+
+/** What reading a tool image's bytes produced. */
+export type ToolImageResolution =
+  { ok: true; data: string; mediaType: string } | { ok: false; reason: string };
+
+/** Reads a tool image's bytes from its payload reference, as base64. */
+export type ToolImageResolver = (image: StepImage) => Promise<ToolImageResolution>;
 
 /**
  * Tool call made by the assistant.
@@ -105,12 +132,12 @@ export const ChatMessageSchema = z.discriminatedUnion('role', [
      */
     providerReasoning: ProviderReasoningSchema.optional(),
   }),
-  // Tool result message
+  // Tool result message (text, or text and images)
   z.object({
     role: z.literal('tool'),
     toolCallId: z.string(),
     name: z.string().optional(),
-    content: z.string(),
+    content: z.union([z.string(), z.array(ToolContentPartSchema)]),
   }),
 ]);
 export type ChatMessage = z.infer<typeof ChatMessageSchema>;
@@ -324,6 +351,8 @@ export interface AIRequestOptions {
  */
 export interface GenerateTextRequest extends AIRequestOptions {
   messages: ChatMessage[];
+  /** Reads the bytes of tool images the model is shown. Required when a tool message carries one. */
+  resolveToolImage?: ToolImageResolver | undefined;
   tools?: ToolDefinition[] | undefined;
   toolChoice?:
     'auto' | 'none' | 'required' | { type: 'function'; function: { name: string } } | undefined;
@@ -334,6 +363,8 @@ export interface GenerateTextRequest extends AIRequestOptions {
  */
 export interface GenerateJsonRequest<T = unknown> extends AIRequestOptions {
   messages: ChatMessage[];
+  /** Reads the bytes of tool images the model is shown. Required when a tool message carries one. */
+  resolveToolImage?: ToolImageResolver | undefined;
   /**
    * Parses and validates the model's JSON. The input type is left open so a
    * schema may COERCE what a provider actually sent — a nested array handed

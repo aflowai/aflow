@@ -2,11 +2,12 @@
  * What the browser driver is asked and what it answers, apart from how it
  * does it: the step handler builds outputs from these and nothing else.
  */
-import type { BrowserProfile } from '@aflow/schemas';
+import type { BrowserHandoffOutcome, BrowserHandoffReason, BrowserProfile } from '@aflow/schemas';
 
 import type { ConsoleEntry, NetworkEntry } from './observations.js';
 import type { BoundedSnapshot, Outline } from './outline.js';
 import type { PageOwner } from './pageTable.js';
+import type { TakenScreenshot } from './screenshot.js';
 import type { EngineAction, EngineNavigation } from './types.js';
 
 export interface RunScope extends PageOwner {
@@ -18,6 +19,7 @@ export interface OpenRequest extends RunScope {
   readonly url: string;
   /** An earlier delivery of this same step may already have opened it. */
   readonly redelivered: boolean;
+  readonly maxChars?: number;
 }
 
 export interface PageView {
@@ -25,6 +27,8 @@ export interface PageView {
   readonly url: string;
   readonly title: string;
   readonly outline: Outline;
+  /** Two reads a moment apart agreed before this one was returned. */
+  readonly settled: boolean;
 }
 
 export interface OpenedPage extends PageView {
@@ -62,6 +66,7 @@ export interface NavigateRequest extends RunScope {
   readonly to: EngineNavigation;
   /** An earlier delivery of this same step may already have done it. */
   readonly redelivered: boolean;
+  readonly maxChars?: number;
 }
 
 export interface ActRequest extends RunScope {
@@ -69,6 +74,7 @@ export interface ActRequest extends RunScope {
   readonly ref: string;
   readonly action: EngineAction;
   readonly redelivered: boolean;
+  readonly maxChars?: number;
 }
 
 export interface SnapshotResult {
@@ -84,6 +90,7 @@ export type ReadResult =
       readonly url: string;
       readonly text: string;
       readonly withheld: number;
+      readonly nextOffset?: number;
     }
   | {
       readonly what: 'console';
@@ -115,6 +122,50 @@ export interface ListedProfile {
   readonly running: boolean;
   readonly sites?: string[];
   readonly sitesUnknown?: 'not_started' | 'stopped';
+}
+
+export interface ReadRequest {
+  readonly what: ReadResult['what'];
+  readonly contains?: string;
+  readonly offset?: number;
+  readonly maxChars?: number;
+}
+
+/** A profile as the machine sees it, whichever spaces it serves. */
+export interface MachineProfile {
+  readonly profile: BrowserProfile;
+  readonly running: boolean;
+  /** The hosts it holds cookies for, while it runs. */
+  readonly sites?: string[];
+}
+
+export interface ScreenshotResult extends TakenScreenshot {
+  readonly pageId: string;
+  readonly url: string;
+}
+
+export interface HandoffRequest extends RunScope {
+  readonly pageId: string;
+  readonly reason: BrowserHandoffReason;
+  /** For the operator: what is needed, and what the run does next. */
+  readonly message: string;
+  readonly maxChars?: number;
+}
+
+export interface HandoffResult {
+  readonly outcome: BrowserHandoffOutcome;
+  readonly view: PageView;
+  /** The page this hand-off was given, when a new page replaced it. */
+  readonly previousPageId?: string;
+  readonly restarted: boolean;
+  readonly waitedMs: number;
+}
+
+export interface SignInResult {
+  readonly outcome: 'window_closed' | 'timed_out';
+  readonly restarted: boolean;
+  /** The hosts the profile holds cookies for once the operator was done. */
+  readonly sites: string[];
 }
 
 export interface IdleSweep {

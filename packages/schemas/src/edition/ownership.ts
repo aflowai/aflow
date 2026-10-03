@@ -494,6 +494,7 @@ export const ENV_OWNERSHIP: Readonly<Record<string, OwnershipClass>> = {
   LOG_LEVEL: 'core',
   MCP_PORT: 'core',
   MCP_HOST: 'core',
+  MCP_ALLOWED_ORIGINS: 'core',
   DB_MAX_CONNECTIONS: 'core',
   DB_IDLE_TIMEOUT: 'core',
   DB_CONNECT_TIMEOUT: 'core',

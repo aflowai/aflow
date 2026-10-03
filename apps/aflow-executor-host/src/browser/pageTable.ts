@@ -54,6 +54,8 @@ export function pageAddress(held: Pick<HeldPage, 'page' | 'lastUrl'>): string {
 export interface GonePage {
   readonly lastUrl: string;
   readonly askedUrl?: string;
+  /** Why it went, when the host knows better than `get`'s general account. */
+  readonly why?: string;
 }
 
 /**
@@ -150,7 +152,8 @@ export class PageTable {
     if (gone !== undefined) {
       throw pageGoneError(
         pageId,
-        "it was closed, sat unused past its profile's idle limit, or its browser stopped",
+        gone.why ??
+          "it was closed, sat unused past its profile's idle limit, or its browser stopped",
         gone,
       );
     }
@@ -189,18 +192,22 @@ export class PageTable {
   }
 
   /** Every page a profile's browser held, after that browser ended. */
-  dropProfile(profileId: string): number {
+  dropProfile(profileId: string, why?: string): number {
     const dropped = this.all().filter((entry) => entry.profileId === profileId);
-    for (const entry of dropped) this.forget(entry);
+    for (const entry of dropped) this.forget(entry, why);
     return dropped.length;
   }
 
-  forget(entry: HeldPage): void {
+  forget(entry: HeldPage, why?: string): void {
     const pages = this.held.get(entry.ownerKey);
     pages?.delete(entry.pageId);
     if (pages?.size === 0) this.held.delete(entry.ownerKey);
     const gone = this.gone.get(entry.ownerKey) ?? new Map<string, GonePage>();
-    gone.set(entry.pageId, { lastUrl: entry.lastUrl, askedUrl: entry.askedUrl });
+    gone.set(entry.pageId, {
+      lastUrl: entry.lastUrl,
+      askedUrl: entry.askedUrl,
+      ...(why !== undefined ? { why } : {}),
+    });
     while (gone.size > GONE_PER_RUN) {
       const oldest = gone.keys().next().value;
       if (oldest === undefined) break;

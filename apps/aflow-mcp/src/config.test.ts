@@ -75,14 +75,26 @@ describe('a browser origin', () => {
 });
 
 /**
- * A session that picks up the local auth file is the owner. The loopback
- * listener keeps other machines out; the Host and Origin checks keep out a web
- * page reaching it through a rebound name. It takes both to keep the owner on
- * this machine.
+ * Outside production a session that picks up the local auth file is the owner.
+ * The loopback listener keeps other machines out; the Host and Origin checks
+ * keep out a web page reaching it through a rebound name. In production a load
+ * balancer reaches the container on its own interface.
  */
 describe('the listen host', () => {
-  it('is loopback when none is configured', () => {
+  it('is loopback outside production when none is configured', () => {
+    expect(configWith({ NODE_ENV: 'development' }).host).toBe('127.0.0.1');
+  });
+
+  it('is loopback when NODE_ENV is unset', () => {
     expect(configWith({}).host).toBe('127.0.0.1');
+  });
+
+  it('is every interface in production when none is configured', () => {
+    expect(configWith({ NODE_ENV: 'production' }).host).toBe('0.0.0.0');
+  });
+
+  it('is MCP_HOST in production when one is configured', () => {
+    expect(configWith({ NODE_ENV: 'production', MCP_HOST: '127.0.0.1' }).host).toBe('127.0.0.1');
   });
 
   it('is loopback when MCP_HOST is blank', () => {

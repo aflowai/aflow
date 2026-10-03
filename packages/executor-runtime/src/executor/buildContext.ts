@@ -24,6 +24,7 @@ import type {
   ExecutorContext,
   ExecutorDependencies,
   ExecutorLogger,
+  ExecutorPayloadKind,
   ResolvedInput,
   SlotController,
 } from '../types.js';
@@ -147,18 +148,33 @@ export async function buildExecutionContext(
     },
 
     writePayload: async (
-      kind:
-        'output' | 'error' | 'input_request' | 'body' | 'raw_body' | 'activity' | 'patch' | 'logs',
+      kind: ExecutorPayloadKind,
       data: unknown,
+      options?: { readonly contentType?: string },
     ): Promise<PayloadRef> => {
       const payloadKind = kind === 'input_request' ? ('requested_input' as const) : kind;
+      const contentType =
+        options?.contentType !== undefined ? { contentType: options.contentType } : {};
+      const stepExecutionId = job.stepExecutionId as StepExecutionId;
+      if (Buffer.isBuffer(data)) {
+        return payloadStore.storeBytes({
+          tenantId,
+          runId: executionRunId,
+          stepExecutionId,
+          attempt: job.attempt,
+          kind: payloadKind,
+          data,
+          ...contentType,
+        });
+      }
       return payloadStore.store({
         tenantId,
         runId: executionRunId,
-        stepExecutionId: job.stepExecutionId as StepExecutionId,
+        stepExecutionId,
         attempt: job.attempt,
         kind: payloadKind,
         data,
+        ...contentType,
       });
     },
 

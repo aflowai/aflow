@@ -14,14 +14,25 @@
  * rename itself survives a power cut rather than only the bytes.
  */
 import { open, rename, unlink, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 
 const MODE = 0o600;
 
 export async function writePolicyAtomically(policyPath: string, contents: string): Promise<void> {
-  const dir = dirname(policyPath);
+  await writeFileAtomically(policyPath, contents);
+}
+
+/**
+ * The same replacement for any file the executor reads while it runs: a
+ * browser request or its answer is never seen half-written either.
+ */
+export async function writeFileAtomically(path: string, contents: string): Promise<void> {
+  const dir = dirname(path);
   // Same directory, so the rename is within one filesystem and therefore atomic.
-  const temporary = join(dir, `.host-policy.${String(process.pid)}.${Date.now().toString(36)}.tmp`);
+  const temporary = join(
+    dir,
+    `.${basename(path)}.${String(process.pid)}.${Date.now().toString(36)}.tmp`,
+  );
   try {
     await writeFile(temporary, contents, { mode: MODE, flag: 'wx' });
     const handle = await open(temporary, 'r+');
@@ -30,7 +41,7 @@ export async function writePolicyAtomically(policyPath: string, contents: string
     } finally {
       await handle.close();
     }
-    await rename(temporary, policyPath);
+    await rename(temporary, path);
     const dirHandle = await open(dir, 'r').catch(() => null);
     if (dirHandle !== null) {
       try {

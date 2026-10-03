@@ -15,7 +15,10 @@ export type BrowserFailureKind =
   | 'launch_failed'
   | 'navigation_failed'
   | 'open_uncertain'
-  | 'observation_failed';
+  | 'observation_failed'
+  | 'window_shown'
+  | 'window_failed'
+  | 'screenshot_too_large';
 
 export function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);

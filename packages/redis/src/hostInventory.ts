@@ -9,6 +9,7 @@
 import { z } from 'zod';
 
 import {
+  BrowserPostureSchema,
   type HostPublishedChecks,
   HostPublishedChecksSchema,
   type HostPushApproval,
@@ -94,9 +95,25 @@ export const HostInventorySchema = z.object({
       checks: HostPublishedChecksSchema.optional(),
     }),
   ),
+  /**
+   * The browser profiles this machine offers, from its policy file, and
+   * whether each one's browser is running now. Sites are the hosts a running
+   * profile holds cookies for, by name: never a value, and absent while the
+   * browser is stopped, because only a running browser can be asked.
+   */
+  browsers: z.array(
+    z.object({
+      id: z.string(),
+      posture: BrowserPostureSchema,
+      window: z.enum(['hidden', 'visible']),
+      running: z.boolean(),
+      sites: z.array(z.string()).optional(),
+    }),
+  ),
 });
 export type HostInventory = z.infer<typeof HostInventorySchema>;
 export type HostInventoryFolders = HostInventory['folders'];
+export type HostInventoryBrowsers = HostInventory['browsers'];
 
 /** What the machine holding a pushing folder declares about publishing from it. */
 export interface PublishingFolder {

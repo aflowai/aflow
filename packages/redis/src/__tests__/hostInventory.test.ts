@@ -18,6 +18,7 @@ function inventory(
   hostname: string,
   harnesses: HostInventory['harnesses'],
   folders: HostInventory['folders'] = [],
+  browsers: HostInventory['browsers'] = [],
 ): HostInventory {
   return {
     hostname,
@@ -25,6 +26,7 @@ function inventory(
     runtimes: [{ name: 'node', version: 'v22.0.0' }],
     harnesses,
     folders,
+    browsers,
   };
 }
 
@@ -98,6 +100,42 @@ describe('host inventories', () => {
           harnesses: ['claude'],
         }),
       },
+    );
+
+    expect(await readLiveHostInventories(redis, now)).toEqual([]);
+  });
+
+  it('carries each browser profile by name, with sites only for one that is running', async () => {
+    const now = Date.now();
+    const browsers: HostInventory['browsers'] = [
+      {
+        id: 'default',
+        posture: 'autonomous',
+        window: 'hidden',
+        running: true,
+        sites: ['accounts.example.com', 'mail.example.com'],
+      },
+      { id: 'work', posture: 'read-only', window: 'visible', running: false },
+    ];
+    const redis = fakeRedis(
+      { [now - 1_000]: 'laptop' },
+      { [hostInventoryKey('laptop')]: JSON.stringify(inventory('laptop', [], [], browsers)) },
+    );
+
+    const live = await readLiveHostInventories(redis, now);
+
+    expect(live[0]?.browsers).toEqual(browsers);
+    expect(Object.keys(live[0]?.browsers[0] ?? {}).sort()).toEqual(
+      ['id', 'posture', 'running', 'sites', 'window'].sort(),
+    );
+  });
+
+  it('refuses an inventory with no browser list rather than reading the machine as having none', async () => {
+    const now = Date.now();
+    const { browsers: _omitted, ...withoutBrowsers } = inventory('laptop', []);
+    const redis = fakeRedis(
+      { [now - 1_000]: 'laptop' },
+      { [hostInventoryKey('laptop')]: JSON.stringify(withoutBrowsers) },
     );
 
     expect(await readLiveHostInventories(redis, now)).toEqual([]);

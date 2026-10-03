@@ -24,6 +24,7 @@ import type {
 } from '../types.js';
 import type { AIProviderAdapter } from '../adapter.js';
 import { AIClientError, buildStreamTruncationError } from '../errors.js';
+import { moveToolImagesToUserMessages, toolResultText } from './toolResultContent.js';
 import { parseJsonResponse } from './jsonResponseParse.js';
 
 // ============================================================================
@@ -130,7 +131,7 @@ function toOpenAIMessage(message: ChatMessage): OpenAIMessage {
       return {
         role: 'tool',
         tool_call_id: message.toolCallId,
-        content: message.content,
+        content: toolResultText(message, 'openrouter'),
       };
 
     default: {
@@ -546,7 +547,9 @@ export function createOpenRouterAdapter(config: OpenRouterConfig): AIProviderAda
         const response = await client.chat.completions.create(
           {
             model: normalizeModel(request.model),
-            messages: request.messages.map(toOpenAIMessage),
+            messages: moveToolImagesToUserMessages(request.messages, 'openrouter').map(
+              toOpenAIMessage,
+            ),
             ...providerBody,
             ...reasoningBody,
             ...(request.tools && request.tools.length > 0
@@ -628,7 +631,9 @@ export function createOpenRouterAdapter(config: OpenRouterConfig): AIProviderAda
           const streamResponse = await client.chat.completions.create(
             {
               model: normalizeModel(request.model),
-              messages: request.messages.map(toOpenAIMessage),
+              messages: moveToolImagesToUserMessages(request.messages, 'openrouter').map(
+                toOpenAIMessage,
+              ),
               stream: true,
               stream_options: { include_usage: true },
               ...providerBody,
@@ -789,7 +794,9 @@ export function createOpenRouterAdapter(config: OpenRouterConfig): AIProviderAda
         const response = await client.chat.completions.create(
           {
             model: normalizeModel(request.model),
-            messages: request.messages.map(toOpenAIMessage),
+            messages: moveToolImagesToUserMessages(request.messages, 'openrouter').map(
+              toOpenAIMessage,
+            ),
             ...providerBody,
             ...reasoningBody,
             response_format: responseFormat,

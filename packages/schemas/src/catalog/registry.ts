@@ -9,6 +9,7 @@ import type { OperationDescriptor, OperationRegistration } from './operationCata
 import type { CapabilityAccessMode, RiskModifier } from './capabilityGroups.js';
 import { buildOperationId, buildGroupId, validateSegment } from './operationId.js';
 import { StepTypeSchema } from '../artifact/operationDefinition.js';
+import { StepImageOutputPathsSchema } from '../media/stepImage.js';
 
 import { AiOperationRegistrations } from '../operations/ai.js';
 import { ApiOperationRegistrations } from '../operations/api.js';
@@ -19,6 +20,7 @@ import { ComputeOperationRegistrations } from '../operations/compute.js';
 import { HostOperationRegistrations } from '../operations/hostRegistrations.js';
 import { BrowserPageActionRegistrations } from '../operations/browser.js';
 import { BrowserObservationRegistrations } from '../operations/browserObservation.js';
+import { BrowserWindowRegistrations } from '../operations/browserWindow.js';
 import { AgentOperationRegistrations } from '../operations/agentControl.js';
 import { PlatformOperationRegistrations } from '../operations/platform.js';
 import { GuardrailOperationRegistrations } from '../operations/guardrailOps.js';
@@ -56,6 +58,7 @@ const ALL_REGISTRATIONS: OperationRegistration[] = [
   ...HostOperationRegistrations,
   ...BrowserPageActionRegistrations,
   ...BrowserObservationRegistrations,
+  ...BrowserWindowRegistrations,
   ...AgentOperationRegistrations,
   ...PlatformOperationRegistrations,
   ...GuardrailOperationRegistrations,
@@ -96,6 +99,14 @@ function validateRegistration(reg: OperationRegistration): void {
     validateSegment(reg.group, 'group');
   }
   validateSegment(reg.verb, 'verb');
+  if (reg.imageOutputPaths !== undefined) {
+    const paths = StepImageOutputPathsSchema.safeParse(reg.imageOutputPaths);
+    if (!paths.success) {
+      throw new Error(
+        `Invalid imageOutputPaths on "${buildOperationId(reg.stepType, reg.group, reg.verb)}": ${paths.error.message}`,
+      );
+    }
+  }
 }
 
 // ============================================================================
@@ -144,6 +155,7 @@ function buildRegistry(): Map<string, OperationDescriptor> {
       ...(reg.skipInputValidation ? { skipInputValidation: true } : {}),
       ...(reg.bypassGrant ? { bypassGrant: true } : {}),
       ...(reg.outputSemanticType != null ? { outputSemanticType: reg.outputSemanticType } : {}),
+      ...(reg.imageOutputPaths != null ? { imageOutputPaths: reg.imageOutputPaths } : {}),
       capabilityGroupId: buildGroupId(reg.stepType, reg.group),
       accessMode: reg.accessMode,
       riskModifiers: reg.riskModifiers ?? [],

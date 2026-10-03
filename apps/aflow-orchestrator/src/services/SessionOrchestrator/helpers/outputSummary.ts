@@ -10,12 +10,13 @@ import {
   MEMORY_READ_OPERATION_ID,
   MemoryReadRangeMetaSchema,
   RUN_OUTPUT_READ_OPERATION_ID,
+  TOOL_RESULT_INLINE_MAX_CHARS,
   type AiMediaOutput,
   type MemoryReadRangeMeta,
 } from '@aflow/schemas';
 
 const SUMMARY_HARD_CAP = 12_000;
-const PASSTHROUGH_THRESHOLD = 12_288;
+const PASSTHROUGH_THRESHOLD = TOOL_RESULT_INLINE_MAX_CHARS;
 /** Lines to show in preview sections */
 const PREVIEW_LINES = 5;
 
