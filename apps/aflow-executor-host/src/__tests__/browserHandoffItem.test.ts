@@ -202,7 +202,7 @@ describe('a page that is not on a site', () => {
   const NOWHERE = [
     'about:blank',
     'data:text/html,<form><input type=password></form>',
-    'file:///Users/operator/Downloads/login.html',
+    'file:///Users/op/Downloads/login.html',
   ];
 
   it.each(NOWHERE)(

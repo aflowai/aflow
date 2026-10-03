@@ -123,6 +123,15 @@ const HOST_KEY_PATTERNS = [
   // A browser hand-off waiting on the operator: the record per profile and
   // site, and the per-space index the Action Center reads it through. Both
   // expire on their own, so a machine that dies mid-wait leaves neither behind.
+  //
+  // The grant is the whole family, so a paired machine can put a hand-off in
+  // any space's index, with a site and message of its choosing, and the Action
+  // Center will show it. Nothing lets the reader refuse one: every paired
+  // machine shares this one identity, a binding row records a space and a
+  // folder but no machine, and the installation id and inventory a record
+  // could be checked against are written by this same identity. What holds is
+  // narrower: a forged item can say anything, but its only answer is Done,
+  // published on channels this identity can already publish on itself.
   '~aflow:browser-handoff:*',
   // A step a workflow dispatched has no session to wake; its executor puts the
   // live-delta wake on the task's own progress stream and indexes the stream,
