@@ -11,6 +11,7 @@ import { z } from 'zod';
 import {
   BrowserProfileIdSchema,
   BrowserProfileSchema,
+  HOST_HARNESS_CONCURRENCY_DEFAULT,
   type HostPublishedChecks,
   HostPublishedChecksSchema,
   type HostPushApproval,
@@ -112,8 +113,12 @@ export const HostInventorySchema = z.object({
   observedAt: z.string(),
   runtimes: z.array(z.object({ name: z.string(), version: z.string() })),
   harnesses: z.array(z.object({ id: z.string(), label: z.string().optional() })),
-  /** How many of those run at once on this machine; a run past it waits for one to end. */
-  maxConcurrentHarnessRuns: z.number().int().min(1),
+  /**
+   * How many of those run at once on this machine; a run past it waits for one
+   * to end. An executor from before the limit published none, and runs the
+   * default.
+   */
+  maxConcurrentHarnessRuns: z.number().int().min(1).default(HOST_HARNESS_CONCURRENCY_DEFAULT),
   /**
    * The push posture of each folder this machine lets push, and whether a
    * publication from it runs checks and which program, from the same policy

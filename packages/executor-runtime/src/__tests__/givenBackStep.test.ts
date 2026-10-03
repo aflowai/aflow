@@ -1,7 +1,8 @@
 /**
  * A step still waiting for its operation's slot when claiming stops is given
- * back to its stream. It was already STARTED, so its in-flight record is kept
- * alive until this runtime stops — a lapsed one is a stall to the watchdog.
+ * back to its stream. It was already STARTED, so its in-flight record is
+ * renewed just before — a lapsed one is a stall to the watchdog — and never
+ * after, when the record belongs to the step's next executor.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -86,9 +87,10 @@ describe('processJob — a step given back while it waits for a slot', () => {
     vi.useRealTimers();
   });
 
-  it('hands the job back unworked and keeps its in-flight record alive until the runtime stops', async () => {
+  it('hands the job back unworked, renewing its in-flight record first and never after', async () => {
     const processing = processJob(host(), '1-0', HARNESS_JOB, slotController);
     await vi.advanceTimersByTimeAsync(0);
+    const beforeRelease = inFlightRefreshes();
     claiming.abort();
     await processing;
 
@@ -97,7 +99,24 @@ describe('processJob — a step given back while it waits for a slot', () => {
     expect(reportingMock.acknowledgeJob).not.toHaveBeenCalled();
     expect(reportingMock.emitFailure).not.toHaveBeenCalled();
     expect(redisMock.clearStepInFlight).not.toHaveBeenCalled();
+    const released = inFlightRefreshes();
+    expect(released).toBe(beforeRelease + 1);
+    expect(redisMock.registerStepInFlight.mock.invocationCallOrder.at(-1)).toBeLessThan(
+      redisMock.releaseStepJob.mock.invocationCallOrder[0] ?? 0,
+    );
 
+    await vi.advanceTimersByTimeAsync(STEP_HEARTBEAT_INTERVAL_MS * 3);
+    expect(inFlightRefreshes()).toBe(released);
+  });
+
+  it('keeps vouching for a step it could not give back until the runtime stops', async () => {
+    redisMock.releaseStepJob.mockRejectedValueOnce(new Error('NOGROUP'));
+    const processing = processJob(host(), '1-0', HARNESS_JOB, slotController);
+    await vi.advanceTimersByTimeAsync(0);
+    claiming.abort();
+    await processing;
+
+    expect(reportingMock.acknowledgeJob).not.toHaveBeenCalled();
     const beforeRefresh = inFlightRefreshes();
     await vi.advanceTimersByTimeAsync(STEP_HEARTBEAT_INTERVAL_MS);
     expect(inFlightRefreshes()).toBe(beforeRefresh + 1);

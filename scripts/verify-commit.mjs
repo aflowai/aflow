@@ -8,7 +8,7 @@
  * scoped to it: the two CI guards over the whole tree, a build of every
  * package the touched workspaces read — their project references and imports,
  * one line per package — a type-check of each touched workspace, the touched
- * tests, ESLint (errors only) on touched sources and Prettier on every touched
+ * tests with every test of each workspace that reads a touched package, ESLint (errors only) on touched sources and Prettier on every touched
  * file. One line per step, and the first failure ends the run with that step's
  * output.
  *
@@ -213,6 +213,16 @@ const touchedWorkspaces = [
   .sort()
   .map((dir) => workspaces.byDir.get(dir));
 
+// A touched package's contract meets its consumers here rather than after the
+// push: every workspace that reads one has its tests run with the touched ones.
+const touchedPackageNames = new Set(
+  touchedWorkspaces.filter((w) => w.dir.startsWith('packages/')).map((w) => w.name),
+);
+const dependentWorkspaces = [...workspaces.byName.values()]
+  .filter((w) => !touchedPackageNames.has(w.name))
+  .filter((w) => w.reads.some((name) => touchedPackageNames.has(name)))
+  .sort((a, b) => a.dir.localeCompare(b.dir));
+
 // tsx as a loader rather than its CLI: the CLI opens a socket to talk to its
 // child, and the sandbox a check runs in refuses to listen on one.
 for (const guard of ['large-files', 'context-budget']) {
@@ -237,6 +247,9 @@ const need = (name) => {
 for (const workspace of touchedWorkspaces) {
   for (const read of workspace.reads) need(read);
   if (workspace.dir.startsWith('packages/')) need(workspace.name);
+}
+for (const workspace of dependentWorkspaces) {
+  for (const read of workspace.reads) need(read);
 }
 const ordered = [];
 const placed = new Set();
@@ -273,8 +286,24 @@ const catalogGuards = touchedNames.has('@aflow/platform-artifacts')
       .map((file) => `${CATALOG_GUARD_DIR}/${String(file)}`)
       .filter((file) => CATALOG_GUARD_FILE.test(path.basename(file)))
   : [];
+const dependentTests = dependentWorkspaces.flatMap((workspace) => {
+  const sourceDir = path.join(repoRoot, workspace.dir, 'src');
+  if (!existsSync(sourceDir)) return [];
+  return readdirSync(sourceDir, { recursive: true })
+    .map((file) => `${workspace.dir}/src/${String(file).split(path.sep).join('/')}`)
+    .filter((file) => TEST_FILE.test(file));
+});
+if (dependentWorkspaces.length > 0) {
+  console.log(
+    `dependents of the touched packages: ${dependentWorkspaces.map((w) => w.name).join(', ')}`,
+  );
+}
 const tests = [
-  ...new Set([...present.filter((file) => TEST_FILE.test(file)), ...catalogGuards]),
+  ...new Set([
+    ...present.filter((file) => TEST_FILE.test(file)),
+    ...catalogGuards,
+    ...dependentTests,
+  ]),
 ].filter((file) => !DATABASE_TEST_FILE.test(file));
 if (tests.length === 0) {
   console.log('ok   tests: none touched');

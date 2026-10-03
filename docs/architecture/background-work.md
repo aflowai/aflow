@@ -323,7 +323,7 @@ Datastore operations per minute with zero due work, grouped by what each scope m
 
 ### `executor.step_inflight_refresh`
 
-**Purpose.** Refresh the in-flight key for each step attempt this process has claimed, running or waiting for a slot, and for one it gave back to its stream until this process stops.
+**Purpose.** Refresh the in-flight key for each step attempt this process has claimed, running or waiting for a slot, and for one it could not give back to its stream until this process stops.
 
 **Invariant.** A live step attempt is never reaped as stalled by the orchestrator watchdog.
 

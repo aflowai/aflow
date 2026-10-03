@@ -1141,7 +1141,7 @@ const DEFINITIONS: readonly BackgroundTaskDefinitionInput[] = [
     service: 'shared-runtime',
     ownerDomain: 'run-execution',
     purpose:
-      'Refresh the in-flight key for each step attempt this process has claimed, running or waiting for a slot, and for one it gave back to its stream until this process stops.',
+      'Refresh the in-flight key for each step attempt this process has claimed, running or waiting for a slot, and for one it could not give back to its stream until this process stops.',
     invariant: 'A live step attempt is never reaped as stalled by the orchestrator watchdog.',
     criticality: 'correctness',
     trigger: 'active-resource',

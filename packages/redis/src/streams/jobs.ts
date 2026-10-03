@@ -151,11 +151,26 @@ export async function ackStepJob(
 }
 
 /**
+ * A script rather than MULTI, which runs the acknowledgement even when the
+ * re-entry failed and so loses the job: here a failed XADD acknowledges
+ * nothing, leaving the entry pending for the reclaim, and a failed XACK
+ * deletes the entry it just added, so the job is neither lost nor doubled.
+ */
+const RELEASE_STEP_JOB_LUA = `
+local releasedId = redis.call('XADD', KEYS[1], '*', unpack(ARGV, 3))
+local acked = redis.pcall('XACK', KEYS[1], ARGV[1], ARGV[2])
+if type(acked) == 'table' and acked.err then
+  redis.call('XDEL', KEYS[1], releasedId)
+  return redis.error_reply(acked.err)
+end
+return releasedId
+`;
+
+/**
  * Hand a claimed job back to its stream unworked, for whichever consumer reads
  * next. Re-entered rather than left pending: the reclaim skips a live consumer
  * and its own name, so a message left in this consumer's pending list would
- * wait on this executor's heartbeat lapsing. One transaction, so the job is
- * neither lost nor doubled by a failure between the two.
+ * wait on this executor's heartbeat lapsing.
  */
 export async function releaseStepJob(
   redis: Redis,
@@ -164,15 +179,11 @@ export async function releaseStepJob(
 ): Promise<string> {
   const streamKey = StreamKeys.jobStream(job.stepType);
   const groupName = ConsumerGroups.executor(job.stepType);
-  const transaction = redis
-    .multi()
-    .xadd(streamKey, '*', ...serializeMessage(job))
-    .xack(streamKey, groupName, messageId);
-  armRetentionCandidate(transaction, streamKey);
-  const replies = await transaction.exec();
-  const ack = replies?.[1];
-  if (ack?.[0]) throw ack[0];
-  const releasedId = firstReplyString(replies);
+  const pipeline = redis
+    .pipeline()
+    .eval(RELEASE_STEP_JOB_LUA, 1, streamKey, groupName, messageId, ...serializeMessage(job));
+  armRetentionCandidate(pipeline, streamKey);
+  const releasedId = firstReplyString(await pipeline.exec());
   if (releasedId === null) {
     throw new Error('Failed to release job to stream');
   }

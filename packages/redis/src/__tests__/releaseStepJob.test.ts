@@ -36,29 +36,26 @@ const JOB = {
 } as unknown as StepJobMessage;
 
 describe('releaseStepJob — a failed give back', () => {
-  it('raises when the ack fails, so the job is not reported as handed back', async () => {
-    const commands: string[] = [];
-    const transaction = {
-      xadd: (streamKey: string) => {
-        commands.push(`xadd ${streamKey}`);
-        return transaction;
+  it('raises when the give back fails, so the job is not reported as handed back', async () => {
+    const evaluated: unknown[][] = [];
+    const pipeline = {
+      eval: (...args: unknown[]) => {
+        evaluated.push(args.slice(1, 5));
+        return pipeline;
       },
-      xack: (_streamKey: string, _group: string, messageId: string) => {
-        commands.push(`xack ${messageId}`);
-        return transaction;
-      },
-      sadd: () => transaction,
+      sadd: () => pipeline,
       exec: () =>
         Promise.resolve([
-          [null, '2-0'],
           [new Error('NOGROUP'), null],
           [null, 1],
         ]),
     };
-    const redis = { multi: () => transaction } as unknown as RedisType;
+    const redis = { pipeline: () => pipeline } as unknown as RedisType;
 
     await expect(releaseStepJob(redis, JOB, '1-0')).rejects.toThrow('NOGROUP');
-    expect(commands).toEqual([`xadd ${StreamKeys.jobStream(STEP_TYPE)}`, 'xack 1-0']);
+    expect(evaluated).toEqual([
+      [1, StreamKeys.jobStream(STEP_TYPE), ConsumerGroups.executor(STEP_TYPE), '1-0'],
+    ]);
   });
 });
 
@@ -132,5 +129,42 @@ describe.skipIf(!AVAILABLE)('releaseStepJob against real Redis', () => {
       draining.disconnect();
       next.disconnect();
     }
+  });
+
+  async function claimOne(): Promise<{ id: string; job: StepJobMessage }> {
+    const draining = createBlockingRedisConnection('release-a', {
+      host: '127.0.0.1',
+      port: 6379,
+      db: TEST_DB,
+    });
+    try {
+      await addStepJob(redis, JOB, { checkExecutorAvailable: false });
+      const [claimed] = await readStepJobs(draining, STEP_TYPE, 'executor-a', { blockMs: 10 });
+      if (claimed === undefined) throw new Error('nothing claimed');
+      return claimed;
+    } finally {
+      draining.disconnect();
+    }
+  }
+
+  it('leaves the job pending for the reclaim when it cannot re-enter the stream', async () => {
+    const claimed = await claimOne();
+    // A stream whose last id is the largest there is takes no further entry.
+    await redis.xadd(streamKey, '18446744073709551615-18446744073709551615', 'filler', '1');
+
+    await expect(releaseStepJob(redis, claimed.job, claimed.id)).rejects.toThrow();
+
+    const pending = (await redis.xpending(streamKey, group)) as [number, ...unknown[]];
+    expect(pending[0]).toBe(1);
+    expect(await redis.xlen(streamKey)).toBe(2);
+  });
+
+  it('adds nothing to the stream when the job cannot be acknowledged', async () => {
+    const claimed = await claimOne();
+    await redis.xgroup('DESTROY', streamKey, group);
+
+    await expect(releaseStepJob(redis, claimed.job, claimed.id)).rejects.toThrow('NOGROUP');
+
+    expect(await redis.xlen(streamKey)).toBe(1);
   });
 });

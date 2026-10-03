@@ -144,13 +144,7 @@ async function admitLimitedStep(admission: {
       slotController,
       signal: AbortSignal.any([externalAbort, host.claimingStopped]),
       refreshInFlight: () => {
-        void registerStepInFlight(host.deps.redis, job.stepExecutionId, null).catch(
-          (err: unknown) => {
-            jobLog.warn('Failed to refresh step in-flight heartbeat', {
-              error: err instanceof Error ? err.message : String(err),
-            });
-          },
-        );
+        void refreshInFlight(host, job, jobLog);
       },
       waiting: () => {
         jobLog.info('Waiting for a slot', {
@@ -186,9 +180,11 @@ async function setAsideUnstarted(
   admission: Exclude<Admission, 'admitted'>,
 ): Promise<void> {
   if (admission === 'released') {
-    vouchUntilStopped(host, job, jobLog);
-    // Left pending if this fails: once this executor's heartbeat lapses, the
-    // reclaim hands it to another, which is slower but loses nothing.
+    // A step given back is already STARTED, and the stall watchdog fails a
+    // STARTED step whose in-flight record lapses: renewed before the hand-back
+    // and never after, it spans the record's whole lifetime for the next
+    // executor without overwriting the record that executor writes.
+    await refreshInFlight(host, job, jobLog);
     await releaseStepJob(host.deps.redis, job, messageId).then(
       () => {
         jobLog.info('Gave back a step still waiting for a slot: claiming has stopped', {
@@ -196,6 +192,9 @@ async function setAsideUnstarted(
         });
       },
       (err: unknown) => {
+        // Left pending, so still this process's: once its heartbeat lapses the
+        // reclaim hands it to another, which is slower but loses nothing.
+        vouchUntilStopped(host, job, jobLog);
         jobLog.warn('Could not give back a step still waiting for a slot', {
           operationId: job.operationId,
           error: err instanceof Error ? err.message : String(err),
@@ -211,12 +210,19 @@ async function setAsideUnstarted(
   await acknowledgeJob(host.deps, job.stepType, messageId);
 }
 
-/**
- * A step given back is already STARTED, and the stall watchdog fails a STARTED
- * step whose in-flight record lapses. Until it stops, this process keeps the
- * record alive for the step's next executor, whose own record takes over once
- * it picks the step up; a restart inside the record's lifetime loses nothing.
- */
+async function refreshInFlight(
+  host: ProcessJobHost,
+  job: StepJobMessage,
+  jobLog: ExecutorLogger,
+): Promise<void> {
+  await registerStepInFlight(host.deps.redis, job.stepExecutionId, null).catch((err: unknown) => {
+    jobLog.warn('Failed to refresh the in-flight heartbeat of a step not yet started', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  });
+}
+
+/** Keeps the in-flight record of a step this process still holds alive until it stops. */
 function vouchUntilStopped(
   host: ProcessJobHost,
   job: StepJobMessage,
@@ -224,11 +230,7 @@ function vouchUntilStopped(
 ): void {
   if (host.stopped.aborted) return;
   const refresh = setInterval(() => {
-    void registerStepInFlight(host.deps.redis, job.stepExecutionId, null).catch((err: unknown) => {
-      jobLog.warn('Failed to refresh the in-flight heartbeat of a step given back', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    });
+    void refreshInFlight(host, job, jobLog);
   }, STEP_HEARTBEAT_INTERVAL_MS);
   host.stopped.addEventListener(
     'abort',
