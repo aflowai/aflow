@@ -14,6 +14,7 @@ import { createTriggerArmedSource } from './sources/triggerArmedSource.js';
 import { createWorkflowHumanTaskSource } from './sources/workflowHumanTaskSource.js';
 import { createWorkflowOAuthConsentSource } from './sources/workflowOAuthConsentSource.js';
 import { createSessionInvitationSource } from './sources/sessionInvitationSource.js';
+import { createBrowserHandoffSource } from './sources/browserHandoffSource.js';
 
 export interface BuildSpaceActionCenterAggregatorDeps {
   db: PostgresJsDatabase;
@@ -45,6 +46,7 @@ export function buildSpaceActionCenterAggregator(
       createWorkflowHumanTaskSource(sourceDeps),
       createWorkflowOAuthConsentSource(sourceDeps),
       createSessionInvitationSource(sourceDeps),
+      createBrowserHandoffSource(sourceDeps),
     ],
   });
 }

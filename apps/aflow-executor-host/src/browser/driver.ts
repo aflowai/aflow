@@ -16,6 +16,7 @@ import { CREDENTIAL_FIELD_KEYS, entersValue, MODIFIERS } from './credentialField
 import { type StartEgressProxy, startEgressProxy } from './egressProxy.js';
 import { BrowserDriverError, errorText } from './errors.js';
 import { boundEntries, boundText, PageObservations } from './observations.js';
+import { type HandoffBoard, NO_BOARD } from './handoffBoard.js';
 import { OperatorWindows, type WaitForOperator, waitInWindow } from './operatorWindow.js';
 import { localDestinationRefusal, obviouslyLocalDestination } from './origins.js';
 import { applyPolicyChange } from './policyChange.js';
@@ -52,6 +53,7 @@ import type {
   ReadResult,
   RunScope,
   ScreenshotResult,
+  SignInOptions,
   SignInResult,
   SnapshotResult,
 } from './driverTypes.js';
@@ -95,6 +97,8 @@ export interface BrowserDriverDeps {
   readonly sleep?: (ms: number) => Promise<void>;
   /** How a hand-off waits for the operator. */
   readonly waitForOperator?: WaitForOperator;
+  /** Where a waiting hand-off is shown to the operator; none for the command line. */
+  readonly handoffs?: HandoffBoard;
 }
 
 interface PageInUse {
@@ -139,6 +143,7 @@ export class BrowserDriver {
       browsers: this.browsers,
       clock: this.clock,
       waitForOperator: deps.waitForOperator ?? waitInWindow,
+      handoffs: deps.handoffs ?? NO_BOARD,
       loadPolicy: deps.loadPolicy,
       mayGoTo: (profile, address) => this.mayGoTo(profile, address),
       settledView: async (held, running, maxChars) =>
@@ -482,7 +487,8 @@ export class BrowserDriver {
     return await this.usingPage(scope, pageId, async ({ held, running }) => {
       try {
         const taken = await screenshotWithinCeiling(held.page, request);
-        return { pageId, url: pageAddress(held), ...taken };
+        const title = await held.page.title().catch(() => held.lastTitle);
+        return { pageId, url: pageAddress(held), title, ...taken };
       } catch (error) {
         if (error instanceof BrowserDriverError) throw error;
         if (error instanceof EngineRefNotFound) throw await this.staleRef(held, running, error.ref);
@@ -565,10 +571,11 @@ export class BrowserDriver {
     const policy = await this.deps.loadPolicy();
     return await Promise.all(
       [...policy.browsers.values()].map(async (profile): Promise<MachineProfile> => {
+        const windowShown = this.browsers.isShown(profile.id);
         const running = this.browsers.get(profile.id);
-        if (running === undefined) return { profile, running: false };
+        if (running === undefined) return { profile, running: false, windowShown };
         const sites = await running.browser.cookieSites().catch(() => undefined);
-        return { profile, running: true, ...(sites !== undefined ? { sites } : {}) };
+        return { profile, running: true, windowShown, ...(sites !== undefined ? { sites } : {}) };
       }),
     );
   }
@@ -588,8 +595,8 @@ export class BrowserDriver {
   }
 
   /** The operator's sign-in sitting on one profile; see `OperatorWindows`. */
-  async signIn(profileId: string, maxMs?: number): Promise<SignInResult> {
-    return await this.windows.signIn(profileId, maxMs);
+  async signIn(profileId: string, options?: SignInOptions): Promise<SignInResult> {
+    return await this.windows.signIn(profileId, options);
   }
 
   // -------------------------------------------------------------------------

@@ -4,6 +4,7 @@ import {
   StepImageOutputPathsSchema,
   StepImageSchema,
   findStepImages,
+  stubStepImages,
   type StepImage,
 } from '../stepImage.js';
 import {
@@ -175,5 +176,38 @@ describe('toolResultMessage', () => {
       toolResultMessage({ ...envelope, images: [screenshot] }),
     );
     expect(withImage - plain).toBeGreaterThan(1000);
+  });
+});
+
+describe('stubStepImages', () => {
+  const { ref: _ref, ...stub } = screenshot;
+
+  it('replaces every image at a declared path with all of it but the reference', () => {
+    const output = {
+      url: 'https://example.com',
+      image: screenshot,
+      frames: [screenshot, { ...screenshot, ref: inlineRef }, 'not an image'],
+      elsewhere: screenshot,
+    };
+    expect(stubStepImages(output, ['image', 'frames[]'])).toEqual({
+      url: 'https://example.com',
+      image: stub,
+      frames: [stub, stub, 'not an image'],
+      elsewhere: screenshot,
+    });
+  });
+
+  it('stubs past the count of images carried', () => {
+    const frames = Array.from({ length: MAX_STEP_IMAGES_PER_OUTPUT + 3 }, () => screenshot);
+    const stubbed = stubStepImages({ frames }, ['frames[]']) as { frames: unknown[] };
+    expect(stubbed.frames).toHaveLength(frames.length);
+    expect(JSON.stringify(stubbed)).not.toContain('gs://');
+  });
+
+  it('leaves the output it was given as it was, and a missing path alone', () => {
+    const output = { image: screenshot };
+    expect(stubStepImages(output, ['page.image', 'frames[]'])).toBe(output);
+    stubStepImages(output, ['image']);
+    expect(output.image).toBe(screenshot);
   });
 });

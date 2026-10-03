@@ -17,6 +17,8 @@ import { basename, dirname } from 'node:path';
 
 export interface PolicyWatch {
   close: () => void;
+  /** False when no watch could be set up on the directory, or the one there was failed. */
+  watching: () => boolean;
 }
 
 export interface PolicyFollowers {
@@ -96,7 +98,8 @@ export function watchPolicy(
     });
   } catch {
     // No watch available on this filesystem. The per-operation reconciliation
-    // remains, which is what this supplements rather than replaces.
+    // remains, which is what this supplements rather than replaces, and the
+    // browser requests are polled for instead (`watching`).
   }
 
   return {
@@ -105,5 +108,6 @@ export function watchPolicy(
       watcher?.close();
       watcher = undefined;
     },
+    watching: (): boolean => watcher !== undefined,
   };
 }

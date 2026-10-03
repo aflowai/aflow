@@ -11,7 +11,7 @@ import { z } from 'zod';
 
 import type { OperationRegistration } from '../catalog/operationCatalog.js';
 import { buildOperationId } from '../catalog/operationId.js';
-import { PayloadRefSchema } from '../runtime/payloadRef.js';
+import { StepImageSchema } from '../media/stepImage.js';
 import {
   BrowserElementRefSchema,
   BrowserOutlineMaxCharsSchema,
@@ -65,7 +65,8 @@ export const BrowserPageHandoffOutputSchema = z.object({
   outcome: z
     .enum(BROWSER_HANDOFF_OUTCOMES)
     .describe(
-      '`completed`: the page left the site it was on and settled — usually signed in. ' +
+      '`completed`: the page left the site it was on and settled — usually signed in — or the ' +
+        'operator pressed Done on the Action Center item. ' +
         '`window_closed`: the operator closed the window; read the outline before assuming ' +
         'anything was done. `timed_out`: nobody finished in time; the page is as they left it.',
     ),
@@ -117,11 +118,10 @@ export const BrowserPageScreenshotInputSchema = z
 export const BrowserPageScreenshotOutputSchema = z.object({
   pageId: BrowserPageIdSchema,
   url: z.string(),
-  contentRef: PayloadRefSchema.describe('The stored image.'),
-  contentType: z.enum(['image/png', 'image/jpeg']),
-  bytes: z.number().int().positive(),
-  width: z.number().int().positive().describe('In pixels, as stored.'),
-  height: z.number().int().positive().describe('In pixels, as stored.'),
+  image: StepImageSchema.describe(
+    'The stored image. A model that takes images is shown it on the next turn; one that does ' +
+      'not reads its description and size.',
+  ),
   receipt: z.object({
     ref: z.string().optional(),
     fullPage: z.boolean(),
@@ -146,9 +146,10 @@ export const BrowserWindowRegistrations: OperationRegistration[] = [
     actionLabel: 'Waiting for the operator in the browser window…',
     semanticDescription:
       'Show a page this run opened to the operator in a browser window on their machine, for ' +
-      'what only they may do — sign in, pass a challenge, confirm a step — and wait. Returns ' +
-      'when the page leaves the site it was on and settles, when they close the window, or at ' +
-      'the profile’s deadline, with a fresh outline.',
+      'what only they may do — sign in, pass a challenge, confirm a step — and wait, with one ' +
+      'Action Center item per site that every run waiting on it shares. Returns when the page ' +
+      'leaves the site it was on and settles, when they press Done on the item or close the ' +
+      'window, or at the profile’s deadline, with a fresh outline.',
     tags: ['browser', 'web', 'page', 'local', 'operator'],
     idempotency: 'non_idempotent',
     mutates: true,
@@ -160,6 +161,8 @@ export const BrowserWindowRegistrations: OperationRegistration[] = [
       whenNotToUse: [
         'Anything the agent may do itself — browser.page.act does it',
         'A site browser.profile.list already shows a session for — try it first',
+        'A page with no site — about:blank, a data: or file: address — has nothing to sign in to ' +
+          'and is refused; go to the site’s own page first',
       ],
       pitfalls: [
         'Showing the window may restart the profile’s browser: every other page open in it is ' +
@@ -186,20 +189,22 @@ export const BrowserWindowRegistrations: OperationRegistration[] = [
     actionLabel: 'Taking a screenshot…',
     semanticDescription:
       'An image of a page this run opened — what the window shows, the whole scrollable page, ' +
-      'or one element — stored and returned by reference with its type, size and dimensions. ' +
-      'Password fields are masked in the image.',
+      'or one element. A model that takes images sees it on the next turn; one that does not ' +
+      'reads a one-line description naming the page, with its size. Password fields are masked ' +
+      'in the image.',
     tags: ['browser', 'web', 'page', 'local', 'image'],
     idempotency: 'idempotent',
     mutates: false,
     usage: {
-      oneLine: 'An image of a page or one element, stored and returned by reference.',
+      oneLine: 'See a page or one element as an image.',
       whenToUse: [
         'Evidence of what a page showed, for a report or for the operator',
         'A layout or visual state the outline and text cannot describe',
       ],
       whenNotToUse: ['Reading the page — the outline and browser.page.read are smaller'],
       pitfalls: [
-        'The result is a reference to the stored image, never the image itself.',
+        'Only the most recent tool results keep their images; an earlier screenshot is ' +
+          'reduced to its description on later turns — take another to look again.',
         'An image over the size ceiling is retaken once as a smaller JPEG, then refused with ' +
           'its size — capture one element or the visible window instead.',
       ],
@@ -208,5 +213,6 @@ export const BrowserWindowRegistrations: OperationRegistration[] = [
     accessMode: 'read',
     inputZod: BrowserPageScreenshotInputSchema,
     outputZod: BrowserPageScreenshotOutputSchema,
+    imageOutputPaths: ['image'],
   },
 ];

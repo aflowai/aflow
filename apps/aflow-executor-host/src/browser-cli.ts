@@ -2,19 +2,19 @@
  * `aflow browser` — the agent's browser, from the machine that holds it. What
  * each command does is in `browser/browserCommands.ts`.
  */
-import { homedir } from 'node:os';
-import { resolve } from 'node:path';
+import { dirname } from 'node:path';
 
 import { loadHostPolicy } from './bindings.js';
 import { BROWSER_USAGE, parseBrowserArgs, runBrowserCommand } from './browser/browserCommands.js';
 import { discoverChrome } from './browser/chromeDiscovery.js';
-import { createChromeLauncher } from './browser/chromeProcess.js';
+import { createChromeLauncher, profileDirectory } from './browser/chromeProcess.js';
 import { BrowserDriver } from './browser/driver.js';
+import { profileHolder } from './browser/profileLock.js';
 import { realClock } from './browser/settle.js';
+import { resolveHostPolicyPath } from './hostDir.js';
 
-// The same resolution `connect` and `harness` use, so all three read one file.
-const HOST_DIR = process.env['PHOENIX_HOST_DIR']?.trim() ?? resolve(homedir(), '.aflow');
-const POLICY_PATH = resolve(HOST_DIR, 'host-policy.json');
+const POLICY_PATH = resolveHostPolicyPath();
+const HOST_DIR = dirname(POLICY_PATH);
 
 async function main(): Promise<void> {
   const command = parseBrowserArgs(process.argv.slice(2));
@@ -30,6 +30,7 @@ async function main(): Promise<void> {
     },
     findChrome: discoverChrome,
     clock: realClock,
+    profileHolder: async (profileId) => await profileHolder(profileDirectory(HOST_DIR, profileId)),
     ownDriver: async () => {
       // Loaded only when this command drives Chrome itself.
       const { createPlaywrightEngine } = await import('./browser/engine.js');

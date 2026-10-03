@@ -65,6 +65,39 @@ export const StepImageOutputPathsSchema = z
   .refine((paths) => new Set(paths).size === paths.length, 'Each image output path once.');
 export type StepImageOutputPaths = z.infer<typeof StepImageOutputPathsSchema>;
 
+/** A `StepImage` as the output's text shows it: everything but the reference. */
+export type StepImageStub = Omit<StepImage, 'ref'>;
+
+function stubAt(value: unknown, segments: readonly string[]): unknown {
+  const [segment, ...rest] = segments;
+  if (segment === undefined) {
+    const parsed = StepImageSchema.safeParse(value);
+    if (!parsed.success) return value;
+    const { ref: _ref, ...stub } = parsed.data;
+    return stub satisfies StepImageStub;
+  }
+  const many = segment.endsWith('[]');
+  const name = many ? segment.slice(0, -2) : segment;
+  const child = ownProperty(value, name);
+  if (child === undefined) return value;
+  if (many && !Array.isArray(child)) return value;
+  const next = many
+    ? (child as unknown[]).map((element) => stubAt(element, rest))
+    : stubAt(child, rest);
+  return { ...(value as Record<string, unknown>), [name]: next };
+}
+
+/**
+ * The output with every image at the declared paths replaced by its stub. The
+ * text of a tool result is built from this, so no reference reaches the model
+ * through it — not one carried as an image, which arrives beside the text, and
+ * not one withheld, whose reference was never the model's to read. Every image
+ * at a declared path is stubbed, past the count `findStepImages` carries too.
+ */
+export function stubStepImages(output: unknown, paths: readonly StepImageOutputPath[]): unknown {
+  return paths.reduce((current, path) => stubAt(current, path.split('.')), output);
+}
+
 /** The step whose output is being read — the only producer its images may name. */
 export interface StepImageProducer {
   tenantId: string;

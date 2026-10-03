@@ -29,7 +29,8 @@ import {
   withRule,
 } from './policyEdit.js';
 import { effectiveBrowserProfiles } from './profiles.js';
-import { askExecutor, type RequestClock } from './windowRequests.js';
+import type { ProfileHolder } from './profileLock.js';
+import { askExecutor, EXECUTOR_CLAIM_TIMEOUT_MS, type RequestClock } from './windowRequests.js';
 
 export type BrowserCommand =
   | { readonly kind: 'list' }
@@ -100,6 +101,8 @@ export interface BrowserCliDeps {
   readonly clock: RequestClock;
   /** A driver of this command's own, for when no executor is running. */
   readonly ownDriver: () => Promise<BrowserDriver>;
+  /** The live Chrome holding a profile's directory, if one does. */
+  readonly profileHolder: (profileId: string) => Promise<ProfileHolder | undefined>;
 }
 
 export class BrowserCliError extends Error {
@@ -212,6 +215,19 @@ async function list(deps: BrowserCliDeps): Promise<void> {
   }
 }
 
+function heldMessage(profileId: string, holder: ProfileHolder): string {
+  const by =
+    holder.startedBy === undefined
+      ? `Chrome, process ${String(holder.chromePid)}`
+      : `process ${String(holder.startedBy.pid)} (${holder.startedBy.command}), through its ` +
+        `Chrome, process ${String(holder.chromePid)}`;
+  return (
+    `Profile \`${profileId}\` is in use by ${by}, and only one browser can use a profile at a ` +
+    'time. A browser executor holding it did not take this request within ' +
+    `${String(EXECUTOR_CLAIM_TIMEOUT_MS / 1000)} seconds; its log says why. Nothing was opened.`
+  );
+}
+
 async function signIn(deps: BrowserCliDeps, profileId: string): Promise<void> {
   const instructions =
     'Sign in to every site the agent should reach, in as many tabs as you like, then close the ' +
@@ -242,6 +258,8 @@ async function signIn(deps: BrowserCliDeps, profileId: string): Promise<void> {
     deps.print(sitesLine(result.sites));
     return;
   }
+  const holder = await deps.profileHolder(profileId);
+  if (holder !== undefined) throw new BrowserCliError(heldMessage(profileId, holder));
   deps.print(
     'No browser executor is running on this machine, so this command opens profile ' +
       `\`${profileId}\` itself. ${instructions}`,

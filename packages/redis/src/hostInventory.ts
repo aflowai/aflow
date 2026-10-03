@@ -9,7 +9,8 @@
 import { z } from 'zod';
 
 import {
-  BrowserPostureSchema,
+  BrowserProfileIdSchema,
+  BrowserProfileSchema,
   type HostPublishedChecks,
   HostPublishedChecksSchema,
   type HostPushApproval,
@@ -63,6 +64,40 @@ export interface HostWithdrawalNotice {
 }
 
 /**
+ * The operator asking, from the workspace, for a profile's window to sign in:
+ * the same sitting `aflow browser sign-in` holds on the machine. Published only
+ * by the authenticated operator route — no operation dispatches it, so no agent
+ * can — and acted on only by the executor of the machine it names.
+ *
+ * One channel per machine, named as its inventory is, so the count of
+ * receivers a publish returns is whether that machine's executor heard it.
+ * On a channel every executor shared, another machine being up answered for a
+ * target that was down, and the operator was told a window was coming.
+ */
+export function hostBrowserSignInChannel(hostname: string): string {
+  return `aflow:pubsub:host-browser-sign-in:${hostname}`;
+}
+
+export const HostBrowserSignInRequestSchema = z.object({
+  hostname: z.string().min(1),
+  profileId: BrowserProfileIdSchema,
+});
+export type HostBrowserSignInRequest = z.infer<typeof HostBrowserSignInRequestSchema>;
+
+/** The profile a sign-in request asks for, when it is well formed and names `hostname`. */
+export function readHostBrowserSignInRequest(raw: string, hostname: string): string | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+  const request = HostBrowserSignInRequestSchema.safeParse(parsed);
+  if (!request.success || request.data.hostname !== hostname) return undefined;
+  return request.data.profileId;
+}
+
+/**
  * What a machine publishes about itself.
  *
  * Both halves are observed rather than declared: the runtimes by probing the
@@ -100,13 +135,20 @@ export const HostInventorySchema = z.object({
    * whether each one's browser is running now. Sites are the hosts a running
    * profile holds cookies for, by name: never a value, and absent while the
    * browser is stopped, because only a running browser can be asked.
+   * `windowOpen` is the operator holding the profile's window — a sign-in
+   * sitting or a hand-off — during which runs on it are refused.
    */
   browsers: z.array(
-    z.object({
-      id: z.string(),
-      posture: BrowserPostureSchema,
-      window: z.enum(['hidden', 'visible']),
+    BrowserProfileSchema.pick({
+      id: true,
+      posture: true,
+      window: true,
+      spaces: true,
+      rules: true,
+      idleMinutes: true,
+    }).extend({
       running: z.boolean(),
+      windowOpen: z.boolean(),
       sites: z.array(z.string()).optional(),
     }),
   ),

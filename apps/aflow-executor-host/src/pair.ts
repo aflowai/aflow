@@ -12,13 +12,14 @@
  * every future one.
  */
 import { mkdir, readFile, writeFile, chmod } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { HostPolicySchema } from './bindings.js';
+import { resolveHostPolicyPath } from './hostDir.js';
 import { serializePolicy, writePolicyAtomically } from './policyFile.js';
 
-const HOST_DIR = process.env['PHOENIX_HOST_DIR']?.trim() ?? join(homedir(), '.aflow');
+const POLICY_PATH = resolveHostPolicyPath();
+const HOST_DIR = dirname(POLICY_PATH);
 
 interface PairingMaterial {
   redisUrl: string;
@@ -108,22 +109,21 @@ async function main(): Promise<void> {
 
   // An existing policy is left alone: re-pairing after a password rotation
   // must not silently drop the folders the operator already connected.
-  const policyPath = join(HOST_DIR, 'host-policy.json');
-  const existing = await readFile(policyPath, 'utf8').catch(() => null);
+  const existing = await readFile(POLICY_PATH, 'utf8').catch(() => null);
   if (existing === null) {
-    await writePolicyAtomically(policyPath, serializePolicy({ version: 1, bindings: [] }));
+    await writePolicyAtomically(POLICY_PATH, serializePolicy({ version: 1, bindings: [] }));
   } else {
     HostPolicySchema.parse(JSON.parse(existing));
   }
 
-  console.log(`Paired. Credential in ${envPath}, bindings in ${policyPath}.`);
+  console.log(`Paired. Credential in ${envPath}, bindings in ${POLICY_PATH}.`);
 
   // The two halves refer to each other by id, and a mismatch is silent by
   // construction: the appliance thinks a folder is connected, the machine has
   // never heard of it, and a run against it fails much later with a refusal
   // that looks like a bug. Pairing is the one moment both lists are in hand.
   const local = HostPolicySchema.parse(
-    JSON.parse((await readFile(policyPath, 'utf8')) || '{"version":1,"bindings":[]}'),
+    JSON.parse((await readFile(POLICY_PATH, 'utf8')) || '{"version":1,"bindings":[]}'),
   );
   const localIds = new Set(local.bindings.map((b) => b.id));
   const declared = material.bindings;

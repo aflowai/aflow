@@ -135,6 +135,8 @@ export interface ReadRequest {
 export interface MachineProfile {
   readonly profile: BrowserProfile;
   readonly running: boolean;
+  /** Whether the operator has its window now. */
+  readonly windowShown: boolean;
   /** The hosts it holds cookies for, while it runs. */
   readonly sites?: string[];
 }
@@ -142,9 +144,13 @@ export interface MachineProfile {
 export interface ScreenshotResult extends TakenScreenshot {
   readonly pageId: string;
   readonly url: string;
+  readonly title: string;
 }
 
 export interface HandoffRequest extends RunScope {
+  /** The step that waits: the Action Center's Done is addressed to it. */
+  readonly stepExecutionId: string;
+  readonly sessionId?: string;
   readonly pageId: string;
   readonly reason: BrowserHandoffReason;
   /** For the operator: what is needed, and what the run does next. */
@@ -159,6 +165,13 @@ export interface HandoffResult {
   readonly previousPageId?: string;
   readonly restarted: boolean;
   readonly waitedMs: number;
+}
+
+export interface SignInOptions {
+  /** The longest the window stays open; the sitting's own limit when absent. */
+  readonly maxMs?: number;
+  /** Told once the window is on the operator's screen. */
+  readonly onShown?: () => void;
 }
 
 export interface SignInResult {

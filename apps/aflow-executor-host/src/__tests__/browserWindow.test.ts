@@ -59,6 +59,7 @@ describe('the windowed restart', () => {
 
     const result = await h.driver.handoff({
       ...RUN_A,
+      stepExecutionId: 'step-a',
       pageId: mine,
       reason: 'sign_in',
       message: 'Sign in to the mail account.',
@@ -90,6 +91,7 @@ describe('the windowed restart', () => {
 
     const result = await h.driver.handoff({
       ...RUN_A,
+      stepExecutionId: 'step-a',
       pageId: mine,
       reason: 'challenge',
       message: 'Pass the check on this page.',
@@ -117,6 +119,7 @@ describe('a hand-off', () => {
 
     const result = await h.driver.handoff({
       ...RUN_A,
+      stepExecutionId: 'step-a',
       pageId: mine,
       reason: 'sign_in',
       message: 'Sign in to the mail account; the run then reads the inbox.',
@@ -143,6 +146,7 @@ describe('a hand-off', () => {
 
     const result = await h.driver.handoff({
       ...RUN_A,
+      stepExecutionId: 'step-a',
       pageId: mine,
       reason: 'confirm',
       message: 'Confirm the payment yourself.',
@@ -160,6 +164,7 @@ describe('a hand-off', () => {
       tenantId: RUN_A.tenantId,
       runId: RUN_A.runId,
       spaceId: RUN_A.spaceId,
+      stepExecutionId: 'step-a',
       attempt: 1,
       operationId: 'browser.page.handoff',
       job: { inputRef: 'inline:input' },
@@ -193,6 +198,7 @@ describe('a hand-off', () => {
     const mine = await open(h, RUN_A, LOGIN);
     const result = await h.driver.handoff({
       ...RUN_A,
+      stepExecutionId: 'step-a',
       pageId: mine,
       reason: 'sign_in',
       message: 'Sign in.',
@@ -225,7 +231,13 @@ describe('while the operator has the window', () => {
       refusals.push(browserFailure(opening).code);
     };
 
-    await h.driver.handoff({ ...RUN_A, pageId: mine, reason: 'sign_in', message: 'Sign in.' });
+    await h.driver.handoff({
+      ...RUN_A,
+      stepExecutionId: 'step-a',
+      pageId: mine,
+      reason: 'sign_in',
+      message: 'Sign in.',
+    });
 
     expect(refusals.slice(0, 3)).toEqual(['window_shown', 'window_shown', 'window_shown']);
     expect(refusals[3]).toContain('The operator is using the browser window');
@@ -249,10 +261,22 @@ describe('while the operator has the window', () => {
     meanwhile.second = async () =>
       (
         await refusal(
-          h.driver.handoff({ ...RUN_A, pageId: other, reason: 'sign_in', message: 'Again.' }),
+          h.driver.handoff({
+            ...RUN_A,
+            stepExecutionId: 'step-a',
+            pageId: other,
+            reason: 'sign_in',
+            message: 'Again.',
+          }),
         )
       ).kind;
-    await h.driver.handoff({ ...RUN_A, pageId: mine, reason: 'sign_in', message: 'Sign in.' });
+    await h.driver.handoff({
+      ...RUN_A,
+      stepExecutionId: 'step-a',
+      pageId: mine,
+      reason: 'sign_in',
+      message: 'Sign in.',
+    });
     expect(second).toBe('window_shown');
   });
 });
@@ -273,5 +297,28 @@ describe('the sign-in sitting', () => {
       sites: ['accounts.example.com', 'mail.example.com'],
     });
     expect(h.launches.map((launch) => launch.profile.window)).toEqual(['visible', 'hidden']);
+  });
+
+  it('says when the window is on screen, and the machine reports it open until it closes', async () => {
+    const h = world({ browsers: [profile()] });
+    h.cookieSites = ['mail.example.com'];
+    const whileShown: boolean[] = [];
+    h.onSleep = () => {
+      for (const page of h.pagesByLaunch[0] ?? []) page.closed = true;
+    };
+
+    await h.driver.signIn('default', {
+      onShown: () => {
+        void h.driver.machineProfiles().then((profiles) => {
+          whileShown.push(profiles[0]?.windowShown ?? false);
+        });
+      },
+    });
+    const after = await h.driver.machineProfiles();
+
+    expect(whileShown).toEqual([true]);
+    expect(after).toEqual([
+      expect.objectContaining({ running: true, windowShown: false, sites: ['mail.example.com'] }),
+    ]);
   });
 });

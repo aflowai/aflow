@@ -324,6 +324,7 @@ describe('BrowserProfileSchema', () => {
       posture: 'autonomous',
       rules: [],
       window: 'hidden',
+      windowSize: { width: 1280, height: 800 },
       unattended: true,
       idleMinutes: 30,
       handoffMinutes: 15,

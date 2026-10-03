@@ -73,8 +73,8 @@ vi.mock('../forwardChildEvent.js', () => ({
   forwardEventToParent: vi.fn(),
 }));
 
-// No registered operation declares image outputs yet, so a fixture stands in
-// for one that does.
+// A fixture declaring an array path beside a single one, which no registered
+// operation does.
 const { IMAGE_FIXTURE_OPERATION } = vi.hoisted(() => ({
   IMAGE_FIXTURE_OPERATION: 'browser.page.screenshot_fixture',
 }));
@@ -518,6 +518,44 @@ describe('applyStepSucceeded — images in a tool output (Plan 320 D10)', () => 
     const parts = messagePartsFor(result);
     expect(parts).toHaveLength(1);
     expect(JSON.stringify(parts[0])).toContain('this step did not store');
+  });
+
+  describe('browser.page.screenshot, summarised by the real summariser', () => {
+    beforeEach(async () => {
+      const real = await vi.importActual<typeof import('../../helpers/outputSummary.js')>(
+        '../../helpers/outputSummary.js',
+      );
+      mockBuildToolResultSummaryWithMeta.mockImplementation(real.buildToolResultSummaryWithMeta);
+    });
+
+    const shot = (image: typeof screenshot) => ({
+      pageId: 'pg_1',
+      url: 'https://example.com/login',
+      image,
+      receipt: { fullPage: false, retaken: false },
+    });
+
+    it('gives the next turn the image, and its text the description and size, never the reference', async () => {
+      const result = await toolResultFor('browser.page.screenshot', 'browser', shot(screenshot));
+      expect(result.images).toEqual([screenshot]);
+      expect(result.summary).not.toContain(ownRef);
+      const { ref: _ref, ...stub } = screenshot;
+      expect(JSON.parse(result.summary!)).toMatchObject({ image: stub });
+      const parts = messagePartsFor(result);
+      expect(JSON.stringify(parts[0])).not.toContain(ownRef);
+      expect(parts.slice(1)).toEqual([{ kind: 'image', ...screenshot }]);
+    });
+
+    it('shows a withheld image’s reference nowhere', async () => {
+      const foreign = `gs://aflow-payloads/tenants/${TENANT}/runs/${SESSION_ID}/steps/step-exec-2/attempt/1/body.json`;
+      const result = await toolResultFor(
+        'browser.page.screenshot',
+        'browser',
+        shot({ ...screenshot, ref: foreign }),
+      );
+      expect(result.images).toBeUndefined();
+      expect(JSON.stringify(messagePartsFor(result))).not.toContain(foreign);
+    });
   });
 
   it('carries no image whose reference is inline', async () => {

@@ -14,8 +14,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createHostFileHandler } from '../handlers/fileHandlers.js';
 import { watchPolicy } from '../policyWatch.js';
+import { FILE_WATCHING, requires } from './fixtures/capabilities.js';
 
 const run = promisify(execFile);
+const watching = requires(FILE_WATCHING);
 
 let base: string;
 let root: string;
@@ -340,8 +342,8 @@ describe('file writes still honour create-only and replace', () => {
 });
 
 describe('withdrawal does not wait to be asked', () => {
-  it(
-    'fires when the policy file changes',
+  it.skipIf(watching.skip)(
+    watching.title('fires when the policy file changes'),
     async () => {
       // A detached command exists so the step can end, so ordinarily nothing
       // arrives afterwards and per-operation reconciliation never runs.
@@ -366,8 +368,8 @@ describe('withdrawal does not wait to be asked', () => {
     WAITS_ON_THE_OS_MS,
   );
 
-  it(
-    'survives an atomic save, which is how the file is actually written',
+  it.skipIf(watching.skip)(
+    watching.title('survives an atomic save, which is how the file is actually written'),
     async () => {
       // Watching the file follows its inode; a write-temp-then-rename leaves the
       // watch pointed at an inode nothing will touch again. Every editor saves
@@ -405,8 +407,8 @@ describe('withdrawal does not wait to be asked', () => {
     WAITS_ON_THE_OS_MS,
   );
 
-  it(
-    'coalesces the burst one save produces',
+  it.skipIf(watching.skip)(
+    watching.title('coalesces the burst one save produces'),
     async () => {
       // A rename-and-replace fires several events for one edit; reconciling four
       // times is wasted work, not four withdrawals.
@@ -443,8 +445,10 @@ describe('withdrawal does not wait to be asked', () => {
     WAITS_ON_THE_OS_MS,
   );
 
-  it(
-    'stops firing once closed, and closing twice is harmless',
+  // Needs a working watch to mean anything: a refused one never fires, closed
+  // or not, and would pass here having tested nothing.
+  it.skipIf(watching.skip)(
+    watching.title('stops firing once closed, and closing twice is harmless'),
     async () => {
       let fired = 0;
       const watcher = watchPolicy(
@@ -467,10 +471,13 @@ describe('withdrawal does not wait to be asked', () => {
     'survives a policy path that cannot be watched',
     () => {
       // Losing the watch is not losing the guarantee: every operation still
-      // reconciles, so this reports rather than throws.
-      expect(() =>
-        watchPolicy(join(base, 'does-not-exist.json'), () => undefined).close(),
-      ).not.toThrow();
+      // reconciles, so this reports rather than throws — and says it is not
+      // watching, which is what turns on the browser requests' poll.
+      const watcher = watchPolicy(join(base, 'missing', 'host-policy.json'), () => undefined);
+      expect(watcher.watching()).toBe(false);
+      expect(() => {
+        watcher.close();
+      }).not.toThrow();
     },
     WAITS_ON_THE_OS_MS,
   );

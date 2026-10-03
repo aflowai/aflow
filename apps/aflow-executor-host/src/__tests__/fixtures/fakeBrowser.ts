@@ -17,6 +17,7 @@ import { entersValue } from '../../browser/credentialFields.js';
 import { BrowserDriver, type BrowserPolicy } from '../../browser/driver.js';
 import type { EgressProxy, EgressProxyOptions, ProxyRefusal } from '../../browser/egressProxy.js';
 import { BrowserDriverError } from '../../browser/errors.js';
+import type { HandoffBoard } from '../../browser/handoffBoard.js';
 import type { WaitForOperator } from '../../browser/operatorWindow.js';
 import {
   type BrowserEngine,
@@ -343,6 +344,7 @@ export function harness(
     /** A browser told to stop goes on running until the test ends it, as a slow exit does. */
     slowExit?: boolean;
     waitForOperator?: WaitForOperator;
+    handoffs?: HandoffBoard;
   } = {},
 ): Harness {
   const world: FakeWorld = {
@@ -463,6 +465,7 @@ export function harness(
       await Promise.resolve();
     },
     ...(options.waitForOperator !== undefined ? { waitForOperator: options.waitForOperator } : {}),
+    ...(options.handoffs !== undefined ? { handoffs: options.handoffs } : {}),
   });
   return Object.assign(state, { driver });
 }

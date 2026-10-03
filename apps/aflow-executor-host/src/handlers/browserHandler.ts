@@ -48,6 +48,7 @@ import type { z } from 'zod';
 import type { BrowserDriver } from '../browser/driver.js';
 import type { PageView, RunScope } from '../browser/driverTypes.js';
 import { BrowserDriverError, type BrowserFailureKind } from '../browser/errors.js';
+import { screenshotDescription } from '../browser/screenshot.js';
 import type { EngineAction, EngineNavigation } from '../browser/types.js';
 
 type Output<S extends z.ZodTypeAny> = z.infer<S>;
@@ -72,6 +73,7 @@ const FAILURE: Record<BrowserFailureKind, { code: string; classification: ErrorC
   observation_failed: { code: 'BROWSER_OBSERVATION_FAILED', classification: 'provider' },
   window_shown: { code: 'BROWSER_WINDOW_IN_USE', classification: 'conflict' },
   window_failed: { code: 'BROWSER_WINDOW_FAILED', classification: 'internal' },
+  no_site: { code: 'BROWSER_PAGE_HAS_NO_SITE', classification: 'validation' },
   screenshot_too_large: { code: 'BROWSER_SCREENSHOT_TOO_LARGE', classification: 'validation' },
 };
 
@@ -325,22 +327,26 @@ const listProfiles = route(BrowserProfileListInputSchema, async (ctx, driver) =>
 
 const screenshot = route(BrowserPageScreenshotInputSchema, async (ctx, driver, input) => {
   const { pageId, ref, fullPage } = input;
-  const taken = await driver.screenshot(scopeOf(ctx), pageId, {
-    ...(ref !== undefined ? { ref } : {}),
-    fullPage,
-  });
-  const contentRef = await ctx.writePayload('screenshot', taken.bytes, {
-    contentType: taken.contentType,
+  const request = { ...(ref !== undefined ? { ref } : {}), fullPage };
+  const taken = await driver.screenshot(scopeOf(ctx), pageId, request);
+  // The form a StepImage's reference names, which the agent turn reads to show
+  // the model the image.
+  const imageRef = await ctx.writePayload('screenshot', {
+    data: taken.bytes.toString('base64'),
+    mimeType: taken.contentType,
   });
   const output: Output<typeof BrowserPageScreenshotOutputSchema> = {
     pageId,
     url: taken.url,
-    contentRef,
-    contentType: taken.contentType,
-    bytes: taken.bytes.length,
-    width: taken.width,
-    height: taken.height,
-    receipt: { ...(ref !== undefined ? { ref } : {}), fullPage, retaken: taken.retaken },
+    image: {
+      ref: imageRef,
+      contentType: taken.contentType,
+      sizeBytes: taken.bytes.length,
+      width: taken.width,
+      height: taken.height,
+      description: screenshotDescription(taken, request),
+    },
+    receipt: { ...request, retaken: taken.retaken },
   };
   return output;
 });
@@ -348,6 +354,8 @@ const screenshot = route(BrowserPageScreenshotInputSchema, async (ctx, driver, i
 const handoff = route(BrowserPageHandoffInputSchema, async (ctx, driver, input) => {
   const result = await driver.handoff({
     ...scopeOf(ctx),
+    stepExecutionId: ctx.stepExecutionId,
+    ...(ctx.job.sessionId !== undefined ? { sessionId: ctx.job.sessionId } : {}),
     pageId: input.pageId,
     reason: input.reason,
     message: input.message,

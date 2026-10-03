@@ -8,7 +8,7 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   type BrowserCliDeps,
@@ -63,6 +63,7 @@ function deps(
   printed: string[],
   clock: { now: () => number; sleep: (ms: number) => Promise<void> },
   ownDriver: BrowserCliDeps['ownDriver'] = () => Promise.reject(new Error('not expected')),
+  profileHolder: BrowserCliDeps['profileHolder'] = () => Promise.resolve(undefined),
 ): BrowserCliDeps {
   return {
     hostDir: dir,
@@ -71,6 +72,7 @@ function deps(
     findChrome: () => CHROME,
     clock,
     ownDriver,
+    profileHolder,
   };
 }
 
@@ -295,6 +297,38 @@ describe('asking the running executor', () => {
     expect(h.driver.runningProfileCount()).toBe(0);
   });
 
+  it('refuses to act alone on a profile a live executor’s Chrome holds, naming the executor', async () => {
+    await writePolicy({});
+    const asked: string[] = [];
+    let drove = false;
+    await expect(
+      runBrowserCommand(
+        { kind: 'sign_in', profileId: 'default' },
+        deps(
+          [],
+          testClock(),
+          () => {
+            drove = true;
+            return Promise.reject(new Error('not expected'));
+          },
+          (profileId) => {
+            asked.push(profileId);
+            return Promise.resolve({
+              chromePid: 4242,
+              startedBy: { pid: 777, command: 'node dist/index.js' },
+            });
+          },
+        ),
+      ),
+    ).rejects.toThrow(
+      'Profile `default` is in use by process 777 (node dist/index.js), through its Chrome, ' +
+        'process 4242',
+    );
+    expect(asked).toEqual(['default']);
+    expect(drove).toBe(false);
+    expect(await readdir(dir)).toEqual(['host-policy.json']);
+  });
+
   it('lists profiles with their directory, saying none runs when no executor answers', async () => {
     await writePolicy({
       browsers: [{ id: 'work', rules: [{ origin: '*.example.com', effect: 'deny' }] }],
@@ -310,17 +344,18 @@ describe('asking the running executor', () => {
     ]);
   });
 
-  it('leaves a request a vanished command line left behind unanswered', async () => {
+  it('refuses a request too old to act on, answering it and logging why', async () => {
     const clock = testClock();
     let answered = 0;
+    const warned: Array<[string, Record<string, unknown>]> = [];
     const server = serveBrowserRequests(
       dir,
       () => {
         answered += 1;
         return Promise.resolve({ kind: 'list' as const, profiles: [] });
       },
-      () => undefined,
-      () => clock.now() + REQUEST_STALE_MS + 1,
+      (message, meta) => warned.push([message, meta]),
+      () => clock.now() + REQUEST_STALE_MS + 1_000,
     );
     await writeFile(
       join(dir, 'browser-request-left.json'),
@@ -332,8 +367,42 @@ describe('asking the running executor', () => {
       }),
     );
     await server.check();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // Served without being awaited, and answered through a synced write.
+    await vi.waitFor(
+      async () => {
+        expect(await readdir(dir)).toEqual(['browser-result-left.json']);
+      },
+      { timeout: 5_000, interval: 20 },
+    );
     expect(answered).toBe(0);
-    expect(await readdir(dir)).toEqual([]);
+    const result = JSON.parse(
+      await readFile(join(dir, 'browser-result-left.json'), 'utf8'),
+    ) as Record<string, unknown>;
+    expect(result).toEqual({
+      id: 'left',
+      kind: 'refused',
+      message: expect.stringContaining('too old to act on') as unknown,
+    });
+    expect(warned).toEqual([
+      [
+        'Refused a browser request from the command line that was too old to act on',
+        { id: 'left', kind: 'sign_in', ageMs: REQUEST_STALE_MS + 1_000 },
+      ],
+    ]);
+  });
+
+  it('carries that refusal to a command line still waiting, rather than a timeout', async () => {
+    await writePolicy({});
+    const server = serveBrowserRequests(
+      dir,
+      () => Promise.reject(new Error('not expected')),
+      () => undefined,
+      () => clock.now() + REQUEST_STALE_MS + 1_000,
+    );
+    const clock = testClock(() => server);
+    await expect(
+      runBrowserCommand({ kind: 'sign_in', profileId: 'default' }, deps([], clock)),
+    ).rejects.toThrow('too old to act on');
+    expect(await readdir(dir)).toEqual(['host-policy.json']);
   });
 });

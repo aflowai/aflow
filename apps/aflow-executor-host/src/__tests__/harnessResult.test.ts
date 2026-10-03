@@ -27,6 +27,9 @@ import { createHostPatchHandler } from '../handlers/patchHandlers.js';
 import { runSandboxed, sandboxAvailable, sandboxReadiness } from '../sandboxedRun.js';
 import { INLINE_DIFF_CAP_BYTES } from '../worktree.js';
 import { HostBindingSchema } from '../bindings.js';
+import { CONFINEMENT_LISTENERS, requires } from './fixtures/capabilities.js';
+
+const confined = requires(...CONFINEMENT_LISTENERS);
 
 const schema = {
   type: 'object',
@@ -270,8 +273,8 @@ describe('the wire contract', () => {
 });
 
 describe('a harness is never waiting on input nobody is sending', () => {
-  it.runIf(sandboxAvailable())(
-    'ends the standard input of a run that asked for it closed',
+  it.skipIf(!sandboxAvailable() || confined.skip)(
+    confined.title('ends the standard input of a run that asked for it closed'),
     async () => {
       // `cat` with no argument reads stdin until it ends. Left open it would
       // sit there until the timeout below, which is what a harness CLI does
@@ -353,46 +356,50 @@ describe.runIf(sandboxReadiness().ready)('a check that rejects an answer keeps t
     );
   });
 
-  it('returns the diff on the failure when no valid result was written', async () => {
-    const written: Record<string, unknown> = {};
-    const ctx = {
-      operationId: 'host.harness.run',
-      spaceId: 'space-test',
-      runId: 'run-test',
-      job: { inputRef: 'inline:x' },
-      signal: new AbortController().signal,
-      log: { error: () => undefined, warn: () => undefined, info: () => undefined },
-      readPayload: () =>
-        Promise.resolve({
-          bindingId: 'hb',
-          harness: 'fake',
-          task: 'Assess the repository.',
-          outputSchema: schema,
-          resultRetries: 0,
-          timeoutMs: 60_000,
-        }),
-      emitLiveDelta: () => Promise.resolve(),
-      writePayload: (kind: string, data: unknown) => {
-        written[kind] = data;
-        return Promise.resolve(`inline:${kind}`);
-      },
-    } as never;
+  it.skipIf(confined.skip)(
+    confined.title('returns the diff on the failure when no valid result was written'),
+    async () => {
+      const written: Record<string, unknown> = {};
+      const ctx = {
+        operationId: 'host.harness.run',
+        spaceId: 'space-test',
+        runId: 'run-test',
+        job: { inputRef: 'inline:x' },
+        signal: new AbortController().signal,
+        log: { error: () => undefined, warn: () => undefined, info: () => undefined },
+        readPayload: () =>
+          Promise.resolve({
+            bindingId: 'hb',
+            harness: 'fake',
+            task: 'Assess the repository.',
+            outputSchema: schema,
+            resultRetries: 0,
+            timeoutMs: 60_000,
+          }),
+        emitLiveDelta: () => Promise.resolve(),
+        writePayload: (kind: string, data: unknown) => {
+          written[kind] = data;
+          return Promise.resolve(`inline:${kind}`);
+        },
+      } as never;
 
-    const outcome = await createHostHarnessHandler(policyPath).execute(ctx);
-    expect(outcome.status).toBe('FAILED');
-    const error = written['error'] as { message: string; details: Record<string, unknown> };
-    expect(error.message).toContain('.aflow/result.json');
-    // The run edited a file and answered nothing. Both facts come back.
-    expect(error.details['filesChanged']).toBe(1);
-    expect(String(error.details['patch'])).toContain('touched.txt');
-    expect(String(error.details['patch'])).toContain('changed');
-    expect(error.details['patchRef']).toBe('inline:patch');
-    expect(error.details['baseSha']).toEqual(expect.any(String));
-    expect(error.details).not.toHaveProperty('result');
-    // Which harness ran travels on a failure too: the card that reports it has
-    // the same name to show whether the run answered or not.
-    expect(error.details['harness']).toEqual({ id: 'fake', label: 'Fake harness' });
-  }, 120_000);
+      const outcome = await createHostHarnessHandler(policyPath).execute(ctx);
+      expect(outcome.status).toBe('FAILED');
+      const error = written['error'] as { message: string; details: Record<string, unknown> };
+      expect(error.message).toContain('.aflow/result.json');
+      // The run edited a file and answered nothing. Both facts come back.
+      expect(error.details['filesChanged']).toBe(1);
+      expect(String(error.details['patch'])).toContain('touched.txt');
+      expect(String(error.details['patch'])).toContain('changed');
+      expect(error.details['patchRef']).toBe('inline:patch');
+      expect(error.details['baseSha']).toEqual(expect.any(String));
+      expect(error.details).not.toHaveProperty('result');
+      // Which harness ran travels on a failure too: the card that reports it has
+      // the same name to show whether the run answered or not.
+      expect(error.details['harness']).toEqual({ id: 'fake', label: 'Fake harness' });
+    },
+    120_000,
+  );
 });
 
 describe.runIf(sandboxReadiness().ready)('a commission starts from a named ref', () => {
@@ -493,46 +500,65 @@ describe.runIf(sandboxReadiness().ready)('a commission starts from a named ref',
     return { outcome, written };
   }
 
-  it('checks out the named ref and reports it as the base, judged against itself', async () => {
-    const { outcome, written } = await runWith({ harness: 'edits', base: 'feat/reviewed' });
-    expect(outcome.status).toBe('SUCCEEDED');
-    const output = written['output'] as Record<string, unknown>;
-    expect(output['baseSha']).toBe(feature);
-    expect(output['headMoved']).toBe(false);
-    expect(String(output['patch'])).toContain('touched.txt');
-    // Stored whole under its own kind, whatever its size; a small one is also
-    // inline in full.
-    expect(output['patchRef']).toBe('inline:patch');
-    expect(written['patch']).toBe(output['patch']);
-    expect(output['patchTruncated']).toBe(false);
-  }, 120_000);
+  it.skipIf(confined.skip)(
+    confined.title('checks out the named ref and reports it as the base, judged against itself'),
+    async () => {
+      const { outcome, written } = await runWith({ harness: 'edits', base: 'feat/reviewed' });
+      expect(outcome.status).toBe('SUCCEEDED');
+      const output = written['output'] as Record<string, unknown>;
+      expect(output['baseSha']).toBe(feature);
+      expect(output['headMoved']).toBe(false);
+      expect(String(output['patch'])).toContain('touched.txt');
+      // Stored whole under its own kind, whatever its size; a small one is also
+      // inline in full.
+      expect(output['patchRef']).toBe('inline:patch');
+      expect(written['patch']).toBe(output['patch']);
+      expect(output['patchTruncated']).toBe(false);
+    },
+    120_000,
+  );
 
-  it('judges whether the diff applies against the base, not the folder it moved away from', async () => {
-    // The folder's README has moved on from the base's, so the same edit reads
-    // as a conflict against it and applies cleanly where it would be published.
-    const { outcome, written } = await runWith({ harness: 'rewrites', base: 'feat/reviewed' });
-    expect(outcome.status).toBe('SUCCEEDED');
-    const output = written['output'] as Record<string, unknown>;
-    expect(String(output['patch'])).toContain('README.md');
-    expect(output['applies']).toBe('clean');
-    expect(output['applyConflict']).toBeUndefined();
-  }, 120_000);
+  it.skipIf(confined.skip)(
+    confined.title(
+      'judges whether the diff applies against the base, not the folder it moved away from',
+    ),
+    async () => {
+      // The folder's README has moved on from the base's, so the same edit reads
+      // as a conflict against it and applies cleanly where it would be published.
+      const { outcome, written } = await runWith({ harness: 'rewrites', base: 'feat/reviewed' });
+      expect(outcome.status).toBe('SUCCEEDED');
+      const output = written['output'] as Record<string, unknown>;
+      expect(String(output['patch'])).toContain('README.md');
+      expect(output['applies']).toBe('clean');
+      expect(output['applyConflict']).toBeUndefined();
+    },
+    120_000,
+  );
 
-  it('judges a continued turn that names no base against the base its session started from', async () => {
-    const first = await runWith({ harness: 'converses', base: 'feat/reviewed' });
-    expect(first.outcome.status).toBe('SUCCEEDED');
-    const sessionRef = (first.written['output'] as Record<string, unknown>)['sessionRef'];
-    expect(sessionRef).toEqual(expect.any(String));
+  it.skipIf(confined.skip)(
+    confined.title(
+      'judges a continued turn that names no base against the base its session started from',
+    ),
+    async () => {
+      const first = await runWith({ harness: 'converses', base: 'feat/reviewed' });
+      expect(first.outcome.status).toBe('SUCCEEDED');
+      const sessionRef = (first.written['output'] as Record<string, unknown>)['sessionRef'];
+      expect(sessionRef).toEqual(expect.any(String));
 
-    const { outcome, written } = await runWith({ harness: 'converses', continueFrom: sessionRef });
-    expect(outcome.status).toBe('SUCCEEDED');
-    const output = written['output'] as Record<string, unknown>;
-    expect(output['continued']).toBe(true);
-    expect(output['baseSha']).toBe(feature);
-    expect(String(output['patch'])).toContain('README.md');
-    expect(output['applies']).toBe('clean');
-    expect(output['headMoved']).toBe(false);
-  }, 120_000);
+      const { outcome, written } = await runWith({
+        harness: 'converses',
+        continueFrom: sessionRef,
+      });
+      expect(outcome.status).toBe('SUCCEEDED');
+      const output = written['output'] as Record<string, unknown>;
+      expect(output['continued']).toBe(true);
+      expect(output['baseSha']).toBe(feature);
+      expect(String(output['patch'])).toContain('README.md');
+      expect(output['applies']).toBe('clean');
+      expect(output['headMoved']).toBe(false);
+    },
+    120_000,
+  );
 
   it('refuses a ref the folder does not have, naming it', async () => {
     const { outcome, written } = await runWith({ harness: 'edits', base: 'no-such-branch' });
@@ -542,82 +568,104 @@ describe.runIf(sandboxReadiness().ready)('a commission starts from a named ref',
     expect(error.classification).toBe('validation');
   }, 120_000);
 
-  it("stops the agent's own git from deleting a branch, and the run still succeeds", async () => {
-    await vcs('branch', '-f', 'other', other);
-    const { outcome, written } = await runWith({ harness: 'deletes' });
-    expect(outcome.status).toBe('SUCCEEDED');
-    const output = written['output'] as Record<string, unknown>;
-    expect(await vcs('rev-parse', 'other')).toBe(other);
-    expect(output['refChanges']).toEqual([]);
-    expect(String(output['stderr'])).toContain(
-      'Refused `refs/heads/other`: a commission may not move branches or tags',
-    );
-    expect(String(output['patch'])).toContain('touched.txt');
-  }, 120_000);
-
-  it('reports a branch moved by a git call that names its own hooks path, which the guard does not stop', async () => {
-    await vcs('branch', '-f', 'other', other);
-    try {
-      const { outcome, written } = await runWith({ harness: 'opts-out' });
-      expect(outcome.status).toBe('SUCCEEDED');
-      const output = written['output'] as Record<string, unknown>;
-      expect(output['refChanges']).toEqual([
-        { ref: 'refs/heads/other', change: 'deleted', from: other },
-      ]);
-    } finally {
+  it.skipIf(confined.skip)(
+    confined.title("stops the agent's own git from deleting a branch, and the run still succeeds"),
+    async () => {
       await vcs('branch', '-f', 'other', other);
-    }
-  }, 120_000);
+      const { outcome, written } = await runWith({ harness: 'deletes' });
+      expect(outcome.status).toBe('SUCCEEDED');
+      const output = written['output'] as Record<string, unknown>;
+      expect(await vcs('rev-parse', 'other')).toBe(other);
+      expect(output['refChanges']).toEqual([]);
+      expect(String(output['stderr'])).toContain(
+        'Refused `refs/heads/other`: a commission may not move branches or tags',
+      );
+      expect(String(output['patch'])).toContain('touched.txt');
+    },
+    120_000,
+  );
 
-  it('reports a branch made by a local push from the checkout, which the guard does not stop', async () => {
-    try {
-      const { outcome, written } = await runWith({ harness: 'pushes' });
+  it.skipIf(confined.skip)(
+    confined.title(
+      'reports a branch moved by a git call that names its own hooks path, which the guard does not stop',
+    ),
+    async () => {
+      await vcs('branch', '-f', 'other', other);
+      try {
+        const { outcome, written } = await runWith({ harness: 'opts-out' });
+        expect(outcome.status).toBe('SUCCEEDED');
+        const output = written['output'] as Record<string, unknown>;
+        expect(output['refChanges']).toEqual([
+          { ref: 'refs/heads/other', change: 'deleted', from: other },
+        ]);
+      } finally {
+        await vcs('branch', '-f', 'other', other);
+      }
+    },
+    120_000,
+  );
+
+  it.skipIf(confined.skip)(
+    confined.title(
+      'reports a branch made by a local push from the checkout, which the guard does not stop',
+    ),
+    async () => {
+      try {
+        const { outcome, written } = await runWith({ harness: 'pushes' });
+        expect(outcome.status).toBe('SUCCEEDED');
+        const output = written['output'] as Record<string, unknown>;
+        expect(output['refChanges']).toEqual([
+          { ref: 'refs/heads/pushed', change: 'created', to: output['baseSha'] },
+        ]);
+      } finally {
+        await vcs('branch', '-D', 'pushed').catch(() => undefined);
+      }
+    },
+    120_000,
+  );
+
+  it.skipIf(confined.skip)(
+    confined.title(
+      'reports a branch the operator made while the run was in flight, and refuses nothing',
+    ),
+    async () => {
+      await rm(operatorDone, { force: true });
+      const running = runWith({ harness: 'waits' });
+      // The harness has started once its edit is in its checkout, which is after
+      // the refs were first read.
+      let started = false;
+      for (let i = 0; i < 600 && !started; i += 1) {
+        const listing = await vcs('worktree', 'list', '--porcelain');
+        const checkouts = listing
+          .split('\n')
+          .filter((line) => line.startsWith('worktree '))
+          .map((line) => line.slice('worktree '.length));
+        for (const path of checkouts) {
+          if (
+            await stat(join(path, 'touched.txt')).then(
+              () => true,
+              () => false,
+            )
+          )
+            started = true;
+        }
+        if (!started) await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      expect(started).toBe(true);
+      await vcs('branch', 'operator-work');
+      const made = await vcs('rev-parse', 'operator-work');
+      await writeFile(operatorDone, '', 'utf8');
+
+      const { outcome, written } = await running;
       expect(outcome.status).toBe('SUCCEEDED');
       const output = written['output'] as Record<string, unknown>;
       expect(output['refChanges']).toEqual([
-        { ref: 'refs/heads/pushed', change: 'created', to: output['baseSha'] },
+        { ref: 'refs/heads/operator-work', change: 'created', to: made },
       ]);
-    } finally {
-      await vcs('branch', '-D', 'pushed').catch(() => undefined);
-    }
-  }, 120_000);
-
-  it('reports a branch the operator made while the run was in flight, and refuses nothing', async () => {
-    await rm(operatorDone, { force: true });
-    const running = runWith({ harness: 'waits' });
-    // The harness has started once its edit is in its checkout, which is after
-    // the refs were first read.
-    let started = false;
-    for (let i = 0; i < 600 && !started; i += 1) {
-      const listing = await vcs('worktree', 'list', '--porcelain');
-      const checkouts = listing
-        .split('\n')
-        .filter((line) => line.startsWith('worktree '))
-        .map((line) => line.slice('worktree '.length));
-      for (const path of checkouts) {
-        if (
-          await stat(join(path, 'touched.txt')).then(
-            () => true,
-            () => false,
-          )
-        )
-          started = true;
-      }
-      if (!started) await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-    expect(started).toBe(true);
-    await vcs('branch', 'operator-work');
-    const made = await vcs('rev-parse', 'operator-work');
-    await writeFile(operatorDone, '', 'utf8');
-
-    const { outcome, written } = await running;
-    expect(outcome.status).toBe('SUCCEEDED');
-    const output = written['output'] as Record<string, unknown>;
-    expect(output['refChanges']).toEqual([
-      { ref: 'refs/heads/operator-work', change: 'created', to: made },
-    ]);
-    expect(String(output['patch'])).toContain('touched.txt');
-  }, 120_000);
+      expect(String(output['patch'])).toContain('touched.txt');
+    },
+    120_000,
+  );
 
   it("starts from the remote's branch as it is now when the base names a remote", async () => {
     const upstream = await mkdtemp(join(tmpdir(), 'host-harness-upstream-'));
@@ -705,70 +753,82 @@ describe.runIf(sandboxReadiness().ready)(
       );
     });
 
-    it('is stored by the run, read back by the patch, and committed byte for byte', async () => {
-      const store = new Map<string, unknown>();
-      const contextFor = (operationId: string, input: unknown, outputs: Record<string, unknown>) =>
-        ({
-          operationId,
-          spaceId: 'space-test',
-          runId: 'run-large',
-          job: { inputRef: `gs://test/${operationId}/input.json` },
-          signal: new AbortController().signal,
-          log: { error: () => undefined, warn: () => undefined, info: () => undefined },
-          emitLiveDelta: () => Promise.resolve(),
-          readPayload: (ref: string) => {
-            if (ref === `gs://test/${operationId}/input.json`) return Promise.resolve(input);
-            if (!store.has(ref)) return Promise.reject(new Error(`Payload not found: ${ref}`));
-            return Promise.resolve(store.get(ref));
-          },
-          writePayload: (kind: string, data: unknown) => {
-            // The store's own layout: the patch operation reads the kind off it.
-            const step = operationId.replaceAll('.', '_');
-            const ref = `gs://test/tenants/t_1/runs/run-large/steps/${step}/attempt/1/${kind}.json`;
-            store.set(ref, data);
-            outputs[kind] = data;
-            return Promise.resolve(ref);
-          },
-        }) as never;
+    it.skipIf(confined.skip)(
+      confined.title('is stored by the run, read back by the patch, and committed byte for byte'),
+      async () => {
+        const store = new Map<string, unknown>();
+        const contextFor = (
+          operationId: string,
+          input: unknown,
+          outputs: Record<string, unknown>,
+        ) =>
+          ({
+            operationId,
+            spaceId: 'space-test',
+            runId: 'run-large',
+            job: { inputRef: `gs://test/${operationId}/input.json` },
+            signal: new AbortController().signal,
+            log: { error: () => undefined, warn: () => undefined, info: () => undefined },
+            emitLiveDelta: () => Promise.resolve(),
+            readPayload: (ref: string) => {
+              if (ref === `gs://test/${operationId}/input.json`) return Promise.resolve(input);
+              if (!store.has(ref)) return Promise.reject(new Error(`Payload not found: ${ref}`));
+              return Promise.resolve(store.get(ref));
+            },
+            writePayload: (kind: string, data: unknown) => {
+              // The store's own layout: the patch operation reads the kind off it.
+              const step = operationId.replaceAll('.', '_');
+              const ref = `gs://test/tenants/t_1/runs/run-large/steps/${step}/attempt/1/${kind}.json`;
+              store.set(ref, data);
+              outputs[kind] = data;
+              return Promise.resolve(ref);
+            },
+          }) as never;
 
-      const ran: Record<string, unknown> = {};
-      const run = await createHostHarnessHandler(policyPath).execute(
-        contextFor(
-          'host.harness.run',
-          { bindingId: 'hb', harness: 'large', task: 'Write it.', timeoutMs: 120_000 },
-          ran,
-        ),
-      );
-      expect(run.status).toBe('SUCCEEDED');
-      const output = HostHarnessRunOutputSchema.parse(ran['output']);
-      const stored = store.get(output.patchRef ?? '');
-      expect(typeof stored).toBe('string');
-      expect(Buffer.byteLength(String(stored), 'utf8')).toBeGreaterThan(INLINE_DIFF_CAP_BYTES);
-      // The inline copy is the cap's worth of the start, and says so.
-      expect(output.patchTruncated).toBe(true);
-      expect(Buffer.byteLength(output.patch ?? '', 'utf8')).toBe(INLINE_DIFF_CAP_BYTES);
-      expect(String(stored).startsWith(output.patch ?? '')).toBe(true);
-      expect(output.applies).toBe('clean');
+        const ran: Record<string, unknown> = {};
+        const run = await createHostHarnessHandler(policyPath).execute(
+          contextFor(
+            'host.harness.run',
+            { bindingId: 'hb', harness: 'large', task: 'Write it.', timeoutMs: 120_000 },
+            ran,
+          ),
+        );
+        expect(run.status).toBe('SUCCEEDED');
+        const output = HostHarnessRunOutputSchema.parse(ran['output']);
+        const stored = store.get(output.patchRef ?? '');
+        expect(typeof stored).toBe('string');
+        expect(Buffer.byteLength(String(stored), 'utf8')).toBeGreaterThan(INLINE_DIFF_CAP_BYTES);
+        // The inline copy is the cap's worth of the start, and says so.
+        expect(output.patchTruncated).toBe(true);
+        expect(Buffer.byteLength(output.patch ?? '', 'utf8')).toBe(INLINE_DIFF_CAP_BYTES);
+        expect(String(stored).startsWith(output.patch ?? '')).toBe(true);
+        expect(output.applies).toBe('clean');
 
-      const published: Record<string, unknown> = {};
-      const commit = await createHostPatchHandler(policyPath).execute(
-        contextFor(
-          'host.file.patch',
-          {
-            bindingId: 'hb',
-            patchRef: output.patchRef,
-            commit: { branch: 'aflow/large', message: 'The large change', baseSha: output.baseSha },
-          },
-          published,
-        ),
-      );
-      expect(commit.status).toBe('SUCCEEDED');
-      expect((published['output'] as Record<string, unknown>)['state']).toBe('applied');
-      const expected = Array.from(
-        { length: LINES },
-        (_, i) => `line ${String(i)} of a change larger than any inline copy of it\n`,
-      ).join('');
-      expect(await vcs('show', 'aflow/large:large.txt')).toBe(expected);
-    }, 180_000);
+        const published: Record<string, unknown> = {};
+        const commit = await createHostPatchHandler(policyPath).execute(
+          contextFor(
+            'host.file.patch',
+            {
+              bindingId: 'hb',
+              patchRef: output.patchRef,
+              commit: {
+                branch: 'aflow/large',
+                message: 'The large change',
+                baseSha: output.baseSha,
+              },
+            },
+            published,
+          ),
+        );
+        expect(commit.status).toBe('SUCCEEDED');
+        expect((published['output'] as Record<string, unknown>)['state']).toBe('applied');
+        const expected = Array.from(
+          { length: LINES },
+          (_, i) => `line ${String(i)} of a change larger than any inline copy of it\n`,
+        ).join('');
+        expect(await vcs('show', 'aflow/large:large.txt')).toBe(expected);
+      },
+      180_000,
+    );
   },
 );

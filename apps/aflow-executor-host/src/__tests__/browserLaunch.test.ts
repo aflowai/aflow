@@ -64,9 +64,13 @@ afterEach(async () => {
 
 const PROXY = 'http://127.0.0.1:41000';
 
+function shape(window: 'hidden' | 'visible') {
+  return BrowserProfileSchema.parse({ id: 'default', window });
+}
+
 describe('the Chrome command line', () => {
   it('sends every request through the profile’s proxy, loopback included', () => {
-    const argv = chromeArgv('/usr/bin/chromium', '/p', 'hidden', PROXY);
+    const argv = chromeArgv('/usr/bin/chromium', '/p', shape('hidden'), PROXY);
     expect(argv).toContain(`--proxy-server=${PROXY}`);
     // Without this Chrome sends loopback straight past the proxy, and the
     // proxy then protects nothing.
@@ -81,7 +85,7 @@ describe('the Chrome command line', () => {
     const dir = profileDirectory('/Users/op/.aflow', 'default');
     expect(dir).toBe('/Users/op/.aflow/browsers/default');
     for (const window of ['hidden', 'visible'] as const) {
-      const argv = chromeArgv('/usr/bin/chromium', dir, window, PROXY);
+      const argv = chromeArgv('/usr/bin/chromium', dir, shape(window), PROXY);
       expect(argv[0]).toBe('/usr/bin/chromium');
       expect(argv).toContain(`--user-data-dir=${dir}`);
       expect(argv).toContain('--remote-debugging-port=0');
@@ -91,8 +95,29 @@ describe('the Chrome command line', () => {
         expect(argv.some((arg) => arg.startsWith(flag))).toBe(false);
       }
     }
-    expect(chromeArgv('/usr/bin/chromium', dir, 'hidden', PROXY)).toContain('--headless=new');
-    expect(chromeArgv('/usr/bin/chromium', dir, 'visible', PROXY)).not.toContain('--headless=new');
+    expect(chromeArgv('/usr/bin/chromium', dir, shape('hidden'), PROXY)).toContain(
+      '--headless=new',
+    );
+    expect(chromeArgv('/usr/bin/chromium', dir, shape('visible'), PROXY)).not.toContain(
+      '--headless=new',
+    );
+  });
+
+  it('starts Chrome at 1280×800 headless and windowed alike, unless the profile names a size', () => {
+    for (const window of ['hidden', 'visible'] as const) {
+      const sizes = chromeArgv('/usr/bin/chromium', '/p', shape(window), PROXY).filter((arg) =>
+        arg.startsWith('--window-size'),
+      );
+      expect(sizes).toEqual(['--window-size=1280,800']);
+    }
+    const own = BrowserProfileSchema.parse({
+      id: 'wide',
+      windowSize: { width: 1920, height: 1080 },
+    });
+    expect(chromeArgv('/usr/bin/chromium', '/p', own, PROXY)).toContain('--window-size=1920,1080');
+    expect(
+      BrowserProfileSchema.safeParse({ id: 'none', windowSize: { width: 0, height: 800 } }).success,
+    ).toBe(false);
   });
 });
 

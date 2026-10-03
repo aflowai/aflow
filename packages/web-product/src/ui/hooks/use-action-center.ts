@@ -47,6 +47,7 @@ export interface ActionCenterCounts {
     needs_oauth_consent: number;
     write_approval: number;
     session_invitation: number;
+    browser_handoff: number;
   };
   highPriority: number;
   /**
@@ -396,6 +397,7 @@ export function useActionCenter(spaceId: string | null): UseActionCenterResult {
         needs_oauth_consent: 0,
         write_approval: 0,
         session_invitation: 0,
+        browser_handoff: 0,
       },
       highPriority: 0,
     };

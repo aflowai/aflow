@@ -19,7 +19,9 @@ import { eq } from 'drizzle-orm';
 import { createTenantContext, withTenantSchema, hostBindings, spaces } from '@aflow/database';
 import {
   getRedisConnection,
+  hostBrowserSignInChannel,
   HOST_INVENTORY_TTL_MS,
+  type HostBrowserSignInRequest,
   HOST_MACHINES_KEY,
   type HostInventory,
   hostInventoryKey,
@@ -33,7 +35,7 @@ import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import { HostBranchPrefixSchema } from '@aflow/schemas';
+import { BrowserProfileIdSchema, HostBranchPrefixSchema } from '@aflow/schemas';
 
 const HostBindingSchema = z.object({
   id: z.string(),
@@ -164,6 +166,14 @@ function hostReachableRedisUrl(): string {
   if (configured !== undefined && configured !== '') return configured;
   const port = process.env['AFLOW_REDIS_PORT']?.trim() ?? '6380';
   return `redis://127.0.0.1:${port}`;
+}
+
+function safeJson(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
 }
 
 export const hostPairingRoutes: FastifyPluginAsync = async (fastify) => {
@@ -580,6 +590,72 @@ export const hostPairingRoutes: FastifyPluginAsync = async (fastify) => {
         machines.push({ hostname, observedAt, runtimes, browsers });
       }
       return await reply.send({ paired: machines.length > 0, machines });
+    },
+  );
+
+  app.post(
+    '/browsers/:profileId/sign-in',
+    {
+      // An operator action, dispatched straight to the machine. No catalog
+      // operation reaches the channel this publishes on, so no agent surface —
+      // tool list, skill or grant — can name it; this authenticated route is
+      // the only way in, as it is for the rest of this machine's pairing.
+      config: { authz: { resource: 'tenant', action: 'admin' } },
+      schema: {
+        tags: ['Host'],
+        summary: "Show a browser profile's window on the machine for the operator to sign in",
+        description:
+          'The sign-in sitting `aflow browser sign-in` holds on the machine: the profile’s ' +
+          'window opens there, runs on the profile wait until it closes, and the machine’s ' +
+          'inventory reports the window open and, after, the sites that hold a session.',
+        params: z.object({ profileId: BrowserProfileIdSchema }),
+        body: z.object({ hostname: z.string().min(1).max(256) }),
+        response: {
+          202: z.object({ asked: z.literal(true) }),
+          404: z.object({ error: z.string(), message: z.string() }),
+          409: z.object({ error: z.string(), message: z.string() }),
+          503: z.object({ error: z.string(), message: z.string() }),
+        },
+      },
+    },
+    async (request, reply) => {
+      const { profileId } = request.params;
+      const { hostname } = request.body;
+      const redis = getRedisConnection();
+      const raw = await redis.get(hostInventoryKey(hostname));
+      const inventory =
+        raw === null ? undefined : HostInventorySchema.safeParse(safeJson(raw)).data;
+      if (inventory === undefined) {
+        return await reply.status(404).send({
+          error: 'HostNotRunning',
+          message: `The machine ${hostname} is not running its executor, so it cannot open a window.`,
+        });
+      }
+      const profile = inventory.browsers.find((browser) => browser.id === profileId);
+      if (profile === undefined) {
+        return await reply.status(404).send({
+          error: 'BrowserProfileNotFound',
+          message: `The machine ${hostname} has no browser profile \`${profileId}\`.`,
+        });
+      }
+      if (profile.windowOpen) {
+        return await reply.status(409).send({
+          error: 'BrowserWindowOpen',
+          message: `Profile \`${profileId}\`'s window is already open on ${hostname}.`,
+        });
+      }
+      const asked: HostBrowserSignInRequest = { hostname, profileId };
+      const receivers = await redis.publish(
+        hostBrowserSignInChannel(hostname),
+        JSON.stringify(asked),
+      );
+      if (receivers === 0) {
+        return await reply.status(503).send({
+          error: 'HostNotListening',
+          message: `No executor on ${hostname} is listening for sign-in requests. Restart it there and try again.`,
+        });
+      }
+      return await reply.status(202).send({ asked: true as const });
     },
   );
 

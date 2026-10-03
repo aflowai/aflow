@@ -11,6 +11,9 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { createHostProcessHandler } from '../handlers/processHandlers.js';
 import { noPushApprovals } from './fixtures/pushApprovals.js';
 import { sandboxReadiness } from '../sandboxedRun.js';
+import { CONFINEMENT_LISTENERS, requires } from './fixtures/capabilities.js';
+
+const confined = requires(...CONFINEMENT_LISTENERS);
 
 let policyPath: string;
 let narrowedPolicyPath: string;
@@ -161,66 +164,80 @@ describe.runIf(CAN_CONFINE)('a detached process', () => {
     expect(captured.output?.['stopped']).toEqual([processId]);
   }, 30_000);
 
-  it('holds what it said until someone reads it, then reports only what is new', async () => {
-    const processId = await startDetached(['sh', '-c', 'echo first; sleep 20']);
-    const seen = await drainUntil(processId, (out) => out.includes('first'));
-    expect(seen).toContain('first');
+  it.skipIf(confined.skip)(
+    confined.title('holds what it said until someone reads it, then reports only what is new'),
+    async () => {
+      const processId = await startDetached(['sh', '-c', 'echo first; sleep 20']);
+      const seen = await drainUntil(processId, (out) => out.includes('first'));
+      expect(seen).toContain('first');
 
-    // Reading drains it — a second look does not repeat what was already seen.
-    const second: Captured = {};
-    await createHostProcessHandler(policyPath, noPushApprovals).execute(
-      contextFor('host.process.inspect', { bindingId: 'hb', processId }, second),
-    );
-    expect(second.output?.['output']).toBeUndefined();
+      // Reading drains it — a second look does not repeat what was already seen.
+      const second: Captured = {};
+      await createHostProcessHandler(policyPath, noPushApprovals).execute(
+        contextFor('host.process.inspect', { bindingId: 'hb', processId }, second),
+      );
+      expect(second.output?.['output']).toBeUndefined();
 
-    const stop: Captured = {};
-    await createHostProcessHandler(policyPath, noPushApprovals).execute(
-      contextFor('host.process.stop', { bindingId: 'hb', processId, graceMs: 0 }, stop),
-    );
-  }, 40_000);
+      const stop: Captured = {};
+      await createHostProcessHandler(policyPath, noPushApprovals).execute(
+        contextFor('host.process.stop', { bindingId: 'hb', processId, graceMs: 0 }, stop),
+      );
+    },
+    40_000,
+  );
 
-  it('takes input and acts on it', async () => {
-    const processId = await startDetached(['sh', '-c', 'read line; echo "got:$line"; sleep 10']);
-    await settle(500);
+  it.skipIf(confined.skip)(
+    confined.title('takes input and acts on it'),
+    async () => {
+      const processId = await startDetached(['sh', '-c', 'read line; echo "got:$line"; sleep 10']);
+      await settle(500);
 
-    const sent: Captured = {};
-    const result = await createHostProcessHandler(policyPath, noPushApprovals).execute(
-      contextFor('host.process.input', { bindingId: 'hb', processId, input: 'hello\n' }, sent),
-    );
-    expect(result.status).toBe('SUCCEEDED');
-    expect(sent.output?.['state']).toBe('written');
+      const sent: Captured = {};
+      const result = await createHostProcessHandler(policyPath, noPushApprovals).execute(
+        contextFor('host.process.input', { bindingId: 'hb', processId, input: 'hello\n' }, sent),
+      );
+      expect(result.status).toBe('SUCCEEDED');
+      expect(sent.output?.['state']).toBe('written');
 
-    expect(await drainUntil(processId, (out) => out.includes('got:hello'))).toContain('got:hello');
+      expect(await drainUntil(processId, (out) => out.includes('got:hello'))).toContain(
+        'got:hello',
+      );
 
-    const stop: Captured = {};
-    await createHostProcessHandler(policyPath, noPushApprovals).execute(
-      contextFor('host.process.stop', { bindingId: 'hb', processId, graceMs: 0 }, stop),
-    );
-  }, 40_000);
+      const stop: Captured = {};
+      await createHostProcessHandler(policyPath, noPushApprovals).execute(
+        contextFor('host.process.stop', { bindingId: 'hb', processId, graceMs: 0 }, stop),
+      );
+    },
+    40_000,
+  );
 });
 
 describe.runIf(CAN_CONFINE)('a handle answers only to its own run', () => {
-  it('another run cannot read it', async () => {
-    const processId = await startDetached(['sh', '-c', 'echo secret-output; sleep 20'], 'run-a');
-    await settle(1_000);
+  it.skipIf(confined.skip)(
+    confined.title('another run cannot read it'),
+    async () => {
+      const processId = await startDetached(['sh', '-c', 'echo secret-output; sleep 20'], 'run-a');
+      await settle(1_000);
 
-    const other: Captured = {};
-    await createHostProcessHandler(policyPath, noPushApprovals).execute(
-      contextFor('host.process.inspect', { bindingId: 'hb', processId }, other, 'run-b'),
-    );
-    // Absent rather than refused: saying "not yours" confirms the id exists.
-    expect(other.output?.['state']).toBe('unknown');
-    expect(other.output?.['output']).toBeUndefined();
+      const other: Captured = {};
+      await createHostProcessHandler(policyPath, noPushApprovals).execute(
+        contextFor('host.process.inspect', { bindingId: 'hb', processId }, other, 'run-b'),
+      );
+      // Absent rather than refused: saying "not yours" confirms the id exists.
+      expect(other.output?.['state']).toBe('unknown');
+      expect(other.output?.['output']).toBeUndefined();
 
-    expect(await drainUntil(processId, (out) => out.includes('secret-output'))).toContain(
-      'secret-output',
-    );
+      expect(await drainUntil(processId, (out) => out.includes('secret-output'))).toContain(
+        'secret-output',
+      );
 
-    const stop: Captured = {};
-    await createHostProcessHandler(policyPath, noPushApprovals).execute(
-      contextFor('host.process.stop', { bindingId: 'hb', processId, graceMs: 0 }, stop, 'run-a'),
-    );
-  }, 40_000);
+      const stop: Captured = {};
+      await createHostProcessHandler(policyPath, noPushApprovals).execute(
+        contextFor('host.process.stop', { bindingId: 'hb', processId, graceMs: 0 }, stop, 'run-a'),
+      );
+    },
+    40_000,
+  );
 
   it('another run cannot steer it', async () => {
     const processId = await startDetached(
@@ -291,31 +308,37 @@ describe.runIf(CAN_CONFINE)('withdrawing a binding reaches what is already runni
 });
 
 describe.runIf(CAN_CONFINE)('a handle is scoped to its binding, not only to its run', () => {
-  it('cannot be read by naming a different binding the same run holds', async () => {
-    // A run holding two bindings could otherwise name the one still granted to
-    // pass the gate, then go on addressing a process inside the withdrawn one.
-    const processId = await startDetached(['sh', '-c', 'echo inside-hb; sleep 20'], 'run-a');
-    await settle(1_000);
+  it.skipIf(confined.skip)(
+    confined.title('cannot be read by naming a different binding the same run holds'),
+    async () => {
+      // A run holding two bindings could otherwise name the one still granted to
+      // pass the gate, then go on addressing a process inside the withdrawn one.
+      const processId = await startDetached(['sh', '-c', 'echo inside-hb; sleep 20'], 'run-a');
+      await settle(1_000);
 
-    const wrongBinding: Captured = {};
-    await createHostProcessHandler(policyPath, noPushApprovals).execute(
-      contextFor(
-        'host.process.inspect',
-        { bindingId: 'hb_other', processId },
-        wrongBinding,
-        'run-a',
-      ),
-    );
-    expect(wrongBinding.output?.['state']).toBe('unknown');
-    expect(wrongBinding.output?.['output']).toBeUndefined();
+      const wrongBinding: Captured = {};
+      await createHostProcessHandler(policyPath, noPushApprovals).execute(
+        contextFor(
+          'host.process.inspect',
+          { bindingId: 'hb_other', processId },
+          wrongBinding,
+          'run-a',
+        ),
+      );
+      expect(wrongBinding.output?.['state']).toBe('unknown');
+      expect(wrongBinding.output?.['output']).toBeUndefined();
 
-    expect(await drainUntil(processId, (out) => out.includes('inside-hb'))).toContain('inside-hb');
+      expect(await drainUntil(processId, (out) => out.includes('inside-hb'))).toContain(
+        'inside-hb',
+      );
 
-    const stop: Captured = {};
-    await createHostProcessHandler(policyPath, noPushApprovals).execute(
-      contextFor('host.process.stop', { bindingId: 'hb', processId, graceMs: 0 }, stop, 'run-a'),
-    );
-  }, 40_000);
+      const stop: Captured = {};
+      await createHostProcessHandler(policyPath, noPushApprovals).execute(
+        contextFor('host.process.stop', { bindingId: 'hb', processId, graceMs: 0 }, stop, 'run-a'),
+      );
+    },
+    40_000,
+  );
 
   it('cannot be steered by naming a different binding', async () => {
     const processId = await startDetached(
@@ -343,29 +366,33 @@ describe.runIf(CAN_CONFINE)('a handle is scoped to its binding, not only to its 
 });
 
 describe.runIf(CAN_CONFINE)('a long-lived process keeps talking', () => {
-  it('does not go permanently silent once its lifetime output passes the cap', async () => {
-    // The cap used to count everything the process had ever said, which for a
-    // detached one is never drained — so past the cap it stopped reporting
-    // anything, indistinguishable from a process that had gone quiet.
-    const chunk = 'x'.repeat(4096);
-    const processId = await startDetached([
-      'sh',
-      '-c',
-      `i=0; while [ $i -lt 90 ]; do echo "${chunk}"; i=$((i+1)); done; sleep 20`,
-    ]);
-    // Drain until it has said something — well past 256KB by then.
-    expect((await drainUntil(processId, (out) => out.length > 0)).length).toBeGreaterThan(0);
+  it.skipIf(confined.skip)(
+    confined.title('does not go permanently silent once its lifetime output passes the cap'),
+    async () => {
+      // The cap used to count everything the process had ever said, which for a
+      // detached one is never drained — so past the cap it stopped reporting
+      // anything, indistinguishable from a process that had gone quiet.
+      const chunk = 'x'.repeat(4096);
+      const processId = await startDetached([
+        'sh',
+        '-c',
+        `i=0; while [ $i -lt 90 ]; do echo "${chunk}"; i=$((i+1)); done; sleep 20`,
+      ]);
+      // Drain until it has said something — well past 256KB by then.
+      expect((await drainUntil(processId, (out) => out.length > 0)).length).toBeGreaterThan(0);
 
-    // It is still running and still able to say something new.
-    const second: Captured = {};
-    await createHostProcessHandler(policyPath, noPushApprovals).execute(
-      contextFor('host.process.inspect', { bindingId: 'hb', processId }, second),
-    );
-    expect(second.output?.['state']).toBe('running');
+      // It is still running and still able to say something new.
+      const second: Captured = {};
+      await createHostProcessHandler(policyPath, noPushApprovals).execute(
+        contextFor('host.process.inspect', { bindingId: 'hb', processId }, second),
+      );
+      expect(second.output?.['state']).toBe('running');
 
-    const stop: Captured = {};
-    await createHostProcessHandler(policyPath, noPushApprovals).execute(
-      contextFor('host.process.stop', { bindingId: 'hb', processId, graceMs: 0 }, stop),
-    );
-  }, 40_000);
+      const stop: Captured = {};
+      await createHostProcessHandler(policyPath, noPushApprovals).execute(
+        contextFor('host.process.stop', { bindingId: 'hb', processId, graceMs: 0 }, stop),
+      );
+    },
+    40_000,
+  );
 });
