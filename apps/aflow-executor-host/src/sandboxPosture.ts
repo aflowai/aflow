@@ -34,7 +34,7 @@ export function describeSandboxPosture(posture: HostSandboxPosture): string {
     case 'open':
       return (
         "runs its coding agents and checks inside this machine's sandbox with the network " +
-        'open: every host and its local servers'
+        "open: every host and every local server but the stack's own"
       );
     case 'confined':
       return (

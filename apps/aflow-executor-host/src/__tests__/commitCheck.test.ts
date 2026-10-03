@@ -104,6 +104,7 @@ const { noPushApprovals } = await import('./fixtures/pushApprovals.js');
 const { checkTail, createHeadTailBuffer, createTailBuffer, utf8Suffix } =
   await import('../commitCheck.js');
 const { requireCheckedPush } = await import('../checkReceipt.js');
+const { stackServiceDenials, stackServicesOf } = await import('../stackServices.js');
 const actualSandbox =
   await vi.importActual<typeof import('../sandboxedRun.js')>('../sandboxedRun.js');
 
@@ -439,6 +440,22 @@ describe('host.commit.check — the receipt it leaves for the push', () => {
     ).toThrow(expect.objectContaining({ refusal: 'check_failed' }));
   });
 
+  it.each(['open', 'confined'] as const)(
+    'carries the posture the checks ran under, `%s`, in the result and the receipt, and the push gate answers it',
+    async (sandbox) => {
+      const world = await fixture({ branchPrefix: 'aflow/', checks: REPORTING }, { sandbox });
+      const { captured } = await check(world);
+      const output = HostCommitCheckOutputSchema.parse(captured.output);
+      expect(handed.map((input) => input.posture)).toEqual([sandbox]);
+      expect(output.sandbox).toBe(sandbox);
+      expect(JSON.parse(receiptBody(output.receipt ?? '')) as unknown[]).toContain(sandbox);
+      const pushed = { bindingId: 'hb_app', sha: world.sha, base: world.base };
+      expect(requireCheckedPush({ ...pushed, argv: REPORTING, receipt: output.receipt })).toBe(
+        sandbox,
+      );
+    },
+  );
+
   it('carries nothing of what the checks printed, nor the command itself', async () => {
     const world = await fixture({ branchPrefix: 'aflow/', checks: FAILING });
     const { captured } = await check(world);
@@ -451,6 +468,7 @@ describe('host.commit.check — the receipt it leaves for the push', () => {
       world.base,
       expect.any(String),
       'failed',
+      'open',
       expect.any(Number),
     ]);
     expect(body).not.toContain('step one ok');
@@ -516,7 +534,10 @@ describe("host.commit.check — the folder's sandbox posture", () => {
     if (input === undefined) throw new Error('the check was not handed to the sandbox');
     expect(input.posture).toBe('confined');
     const policy = compiled(input);
-    expect(policy.network).toEqual({ allowedDomains: [], deniedDomains: [] });
+    expect(policy.network).toEqual({
+      allowedDomains: [],
+      deniedDomains: stackServiceDenials(stackServicesOf()),
+    });
     expect(JSON.stringify(policy)).not.toContain(OPEN_ONLY_SANDBOX_OPTION);
     expect(policy.filesystem.allowWrite).not.toContain(SYSTEM_TEMP_ROOT);
   });

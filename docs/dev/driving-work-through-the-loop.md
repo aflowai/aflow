@@ -82,14 +82,16 @@ review may still send back.
 
 A commission, a review and the folder's checks run inside the machine's sandbox under the
 folder's sandbox posture (Plan 315 D19), which `host.binding.inspect` shows. The posture is
-what the network is. `open`, the default, opens it: every host and loopback, so the agent's
+what the network is. `open`, the default, opens it: every host and every loopback port but the
+stack's own services' — its Redis, its database, its API and its web application — so the agent's
 own search and fetch, Corepack, `yarn` and the registry work, and a test that serves itself
 on loopback passes. The system temporary directory is writable too, where a shell records
 its working directory after every command. `confined` keeps it closed: a coding agent
 reaches only the hosts it was allowed (`aflow harness allow`), the checks reach no network,
 and loopback is the sandbox's own on Linux and closed on macOS. Under both, a job writes its
 checkout and nothing of the folder or its `.git`, and cannot read or write `~/.aflow/`,
-where the policy every gate reads and the pairing credential live. Agent configuration
+where the policy every gate reads and the pairing credential live, nor reach the stack's
+services, where the push gate reads its approvals. Agent configuration
 files such as `.mcp.json` stay protected under both. The executor's boot log says whether a
 shell command, `yarn --version` and a loopback server work under `open` on this machine.
 Choose on the machine with `aflow harness sandbox <folder> open|confined`; `hb_aflow` chose

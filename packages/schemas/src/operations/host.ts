@@ -84,9 +84,12 @@ export const HostSandboxPostureSchema = z
     'What network a coding agent and the checks have in this folder. Not whether there is a ' +
       "sandbox: under both they run inside the machine's sandbox in a detached checkout of the " +
       "commit, writing the checkout and the run's scratch, never the folder or its `.git`, " +
-      "and never reading or writing the machine's host directory, where the policy every gate " +
-      'reads and the pairing credential live. ' +
-      '`open`: every host and loopback, and the system temporary directory writable. ' +
+      "never reading or writing the machine's host directory, where the policy every gate " +
+      "reads and the pairing credential live, and never reaching the stack's own services — " +
+      'its Redis, where the push gate reads its approvals, its database, its API and its web ' +
+      'application — so the state the gates stand on is reachable only by the executor. ' +
+      '`open`: every host, every other loopback port, the paths the toolchain needs, and the ' +
+      'system temporary directory writable. ' +
       "`confined`: only the hosts a harness is allowed, and the machine's loopback closed. " +
       'Declared on the machine; no workspace can set it.',
   );
@@ -275,8 +278,8 @@ export const HostCheckReceiptSchema = z
   .describe(
     'The `receipt` `host.commit.check` returned, verbatim. Issued by the executor on the ' +
       'machine that ran the checks, for one folder, one commit, the base it was measured ' +
-      'against and the checks as the folder declared them — and read only by that executor ' +
-      'until it restarts.',
+      'against, the checks as the folder declared them and the sandbox posture they ran ' +
+      'under — and read only by that executor until it restarts.',
   );
 
 /**
@@ -496,6 +499,10 @@ export const HostProcessExecOutputSchema = z.object({
       'Whether the command ran inside the sandbox. A permitted push runs as the ' +
         "operator's own git and does not.",
     ),
+  checkedUnder: HostSandboxPostureSchema.optional().describe(
+    "The sandbox posture the folder's checks ran under, as the push's check receipt says, " +
+      'recorded with the push. Present only on a push from a folder that declares checks.',
+  ),
   boundaryNote: z
     .string()
     .optional()
@@ -1429,8 +1436,12 @@ export const HostCommitCheckOutputSchema = z.object({
     ),
   receipt: HostCheckReceiptSchema.optional().describe(
     'What a push of the commit must carry as `check.receipt`, present wherever the checks ran, ' +
-      'passed or not: it names the folder, the commit, the base, the checks and whether they ' +
-      'passed, and a push takes only one that says they did. Absent where the folder declares ' +
+      'passed or not: it names the folder, the commit, the base, the checks, the posture they ran under ' +
+      'and whether they passed, and a push takes only one that says they did. Absent where the folder declares ' +
       'none. Valid on this executor only, and only for a day.',
+  ),
+  sandbox: HostSandboxPostureSchema.optional().describe(
+    'The sandbox posture the checks ran under, which their `receipt` carries and a push ' +
+      'records. Absent where the folder declares none.',
   ),
 });

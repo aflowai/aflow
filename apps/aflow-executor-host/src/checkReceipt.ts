@@ -5,8 +5,8 @@
  * order of a skill's tasks: a copy of the skill without the check, or any
  * workflow that scans and then pushes, would push unchecked. So the check
  * issues a receipt, as the scan does and signed with the same key — the
- * folder, the commit, the base, the checks it ran, whether they passed, and
- * when — and the push of a folder that declares checks carries the one for
+ * folder, the commit, the base, the checks it ran, the sandbox posture they ran
+ * under, whether they passed, and when — and the push of a folder that declares checks carries the one for
  * exactly the commit it sends, against the base it measures, under the checks
  * the folder declares as it pushes.
  *
@@ -15,6 +15,8 @@
  * the output is the check's result to report.
  */
 import { createHash } from 'node:crypto';
+
+import { type HostSandboxPosture, HostSandboxPostureSchema } from '@aflow/schemas';
 
 import { HostBindingError } from './bindings.js';
 import { readSignedReceipt, receiptExpired, signReceipt } from './receiptSigning.js';
@@ -36,6 +38,8 @@ interface CheckReceipt {
   /** {@link checksArgvHash} of the argv that ran. */
   readonly checks: string;
   readonly outcome: CheckOutcome;
+  /** The sandbox posture the checks ran under. */
+  readonly sandbox: HostSandboxPosture;
   readonly issuedAt: number;
 }
 
@@ -51,6 +55,7 @@ export function issueCheckReceipt(
     readonly base: string;
     readonly argv: readonly string[];
     readonly outcome: CheckOutcome;
+    readonly sandbox: HostSandboxPosture;
   },
   now: number = Date.now(),
 ): string {
@@ -60,6 +65,7 @@ export function issueCheckReceipt(
     receipt.base.toLowerCase(),
     checksArgvHash(receipt.argv),
     receipt.outcome,
+    receipt.sandbox,
     now,
   ]);
 }
@@ -67,18 +73,28 @@ export function issueCheckReceipt(
 function readCheckReceipt(token: string): CheckReceipt | undefined {
   const fields = readSignedReceipt('check', token);
   if (fields === undefined) return undefined;
-  const [bindingId, sha, base, checks, outcome, issuedAt] = fields;
+  const [bindingId, sha, base, checks, outcome, sandbox, issuedAt] = fields;
+  const posture = HostSandboxPostureSchema.safeParse(sandbox);
   if (
     typeof bindingId !== 'string' ||
     typeof sha !== 'string' ||
     typeof base !== 'string' ||
     typeof checks !== 'string' ||
     !OUTCOMES.includes(outcome as CheckOutcome) ||
+    !posture.success ||
     typeof issuedAt !== 'number'
   ) {
     return undefined;
   }
-  return { bindingId, sha, base, checks, outcome: outcome as CheckOutcome, issuedAt };
+  return {
+    bindingId,
+    sha,
+    base,
+    checks,
+    outcome: outcome as CheckOutcome,
+    sandbox: posture.data,
+    issuedAt,
+  };
 }
 
 /** Why a push was refused for the check receipt it carried, or did not. */
@@ -114,7 +130,8 @@ export interface PushUnderCheck {
  * receipt of those checks passing here on exactly the commit it sends, against
  * the base the push measured — and a push from one that declares none that
  * carries a receipt anyway, since nothing the folder asks for can be what it
- * attests to.
+ * attests to. Answers the posture the checks ran under, which the push records,
+ * or nothing where the folder declares none.
  */
 export function requireCheckedPush(
   push: PushUnderCheck & {
@@ -125,10 +142,10 @@ export function requireCheckedPush(
     readonly base: string;
   },
   now: number = Date.now(),
-): void {
+): HostSandboxPosture | undefined {
   const { bindingId, argv } = push;
   if (argv === undefined) {
-    if (push.receipt === undefined) return;
+    if (push.receipt === undefined) return undefined;
     throw new CheckReceiptError(
       `\`${bindingId}\` declares no checks, so a push from it needs no check receipt, and ` +
         'this push carries one. Nothing was pushed. Send the push without `check.receipt`.',
@@ -197,4 +214,5 @@ export function requireCheckedPush(
       'check_failed',
     );
   }
+  return receipt.sandbox;
 }

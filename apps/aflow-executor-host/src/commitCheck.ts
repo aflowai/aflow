@@ -5,10 +5,10 @@
  * folder's installed dependencies linked so nothing is installed — and the
  * command runs there as a coding agent does, under the sandbox and the folder's
  * posture: the checkout writable and the folder itself not, and the network
- * the posture opens — every host and loopback under `open`, none but the
- * sandbox's own under `confined`. What it printed is kept in the order it came,
- * and from both ends where there is too much of it: its start says what ran,
- * and a failing check says why last.
+ * the posture opens — every host and every loopback port but the stack's own
+ * services' under `open`, none but the sandbox's own under `confined`. What it
+ * printed is kept in the order it came, and from both ends where there is too
+ * much of it: its start says what ran, and a failing check says why last.
  */
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -19,6 +19,7 @@ import {
   HOST_CHECK_OUTPUT_TAIL_BYTES,
   HOST_CHECK_TAIL_BYTES,
   type HostCommitCheckOutputSchema,
+  type HostSandboxPosture,
 } from '@aflow/schemas';
 import type { z } from 'zod';
 
@@ -28,6 +29,7 @@ import { createChatterStripper } from './egressRefusals.js';
 import { formatMinutes } from './folderChecks.js';
 import { runUnderFolderPosture } from './folderRun.js';
 import type { SandboxedRunResult } from './sandboxedRun.js';
+import { sandboxPostureOf } from './sandboxPosture.js';
 import { NO_REPLACE_OBJECTS_ENV, prepareWorktree, removeWorktree } from './worktree.js';
 
 type HostCommitCheckOutput = z.infer<typeof HostCommitCheckOutputSchema>;
@@ -146,6 +148,8 @@ export function checkTail(output: string): string {
 
 export interface FolderCheckRun {
   readonly result: SandboxedRunResult;
+  /** The sandbox posture the checks ran under. */
+  readonly sandbox: HostSandboxPosture;
   /** Standard output and error together: the start and the end of them, the cut marked, where there was more. */
   readonly output: string;
 }
@@ -216,7 +220,7 @@ export async function runFolderChecks(input: FolderCheckInput): Promise<FolderCh
       ...(input.onOutput !== undefined ? { onOutput: input.onOutput } : {}),
     });
     take(visible.flush());
-    return { result, output: kept.text() };
+    return { result, output: kept.text(), sandbox: sandboxPostureOf(input.binding) };
   } finally {
     if (worktreePath !== undefined) await removeWorktree(input.binding.root, worktreePath);
     await rm(scratch, { recursive: true, force: true });
@@ -286,6 +290,7 @@ export function checkOutcome(params: {
     outputRef: params.outputRef,
     tail,
     summary,
+    sandbox: params.run.sandbox,
     ...(passed ? { clearedSha: params.sha } : {}),
   };
 }

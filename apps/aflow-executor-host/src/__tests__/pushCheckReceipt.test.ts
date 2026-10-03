@@ -16,6 +16,8 @@ import { promisify } from 'node:util';
 
 import { beforeAll, describe, expect, it } from 'vitest';
 
+import type { HostSandboxPosture } from '@aflow/schemas';
+
 import { PUSH_REQUIRED_OPTIONS } from '../bindings.js';
 import { type CheckOutcome, issueCheckReceipt } from '../checkReceipt.js';
 import { createHostProcessHandler } from '../handlers/processHandlers.js';
@@ -107,6 +109,7 @@ describe('a push carries the receipt of the folder’s checks passing', () => {
       base?: string;
       argv?: readonly string[];
       bindingId?: string;
+      sandbox?: HostSandboxPosture;
       now?: number;
     } = {},
   ): string {
@@ -117,6 +120,7 @@ describe('a push carries the receipt of the folder’s checks passing', () => {
         base: fields.base ?? base,
         argv: fields.argv ?? CHECKS,
         outcome: fields.outcome ?? 'passed',
+        sandbox: fields.sandbox ?? 'open',
       },
       fields.now,
     );
@@ -253,6 +257,18 @@ describe('a push carries the receipt of the folder’s checks passing', () => {
     const { status } = await push('checked', { receipt: checkReceipt() });
     expect(status).toBe('SUCCEEDED');
     expect(await onOrigin('checked')).toBe(true);
+  }, 60_000);
+
+  it('records with the push the posture its checks ran under, as the receipt carries it', async () => {
+    for (const sandbox of ['open', 'confined'] as const) {
+      const branch = `checked-${sandbox}`;
+      const { status, captured } = await push(branch, { receipt: checkReceipt({ sandbox }) });
+      expect(status, branch).toBe('SUCCEEDED');
+      expect(captured.output?.['checkedUnder'], branch).toBe(sandbox);
+    }
+    const unchecked = await push('unchecked-posture', undefined, 'hb_unchecked');
+    expect(unchecked.status).toBe('SUCCEEDED');
+    expect(unchecked.captured.output).not.toHaveProperty('checkedUnder');
   }, 60_000);
 
   it('pushes from a folder that declares no checks with no receipt', async () => {

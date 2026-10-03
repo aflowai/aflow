@@ -42,7 +42,7 @@ import { explainFailedStart } from '../executableHint.js';
 import { checksOf } from '../folderChecks.js';
 import { pushApprovalOf } from '../pushApproval.js';
 import { measurePushBase } from '../pushBase.js';
-import { type PushApprovalReader, requireScannedPush } from '../scanReceipt.js';
+import { type PushApprovalReader, type PushClearance, requireScannedPush } from '../scanReceipt.js';
 import { WorktreeError } from '../worktree.js';
 import {
   type HostBinding,
@@ -170,11 +170,12 @@ async function execProcess(
         );
       }
     }
+    let clearance: PushClearance | undefined;
     if (push !== undefined) {
       // In the push's own step rather than one before it, so nothing between
       // the measure and git's own push can move the base unnoticed but the
       // remote itself in the moment they are apart.
-      await requireScannedPush({
+      clearance = await requireScannedPush({
         bindingId: binding.id,
         pushApproval: pushApprovalOf(binding),
         refspecs: push.refspecs,
@@ -279,6 +280,7 @@ async function execProcess(
       stderr: result.stderr,
       truncated: result.truncated,
       ...(note !== undefined ? { boundaryNote: note } : {}),
+      ...(clearance?.checkedUnder !== undefined ? { checkedUnder: clearance.checkedUnder } : {}),
     });
   } catch (error) {
     return await failure(ctx, error);

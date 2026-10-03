@@ -5,7 +5,7 @@
  * `host.binding.inspect` shows it either way. Both postures are the sandbox:
  * `open` opens the network and the system temporary directory, and neither
  * lets a job read or write the machine's host directory, write the operator's
- * folder or its `.git`.
+ * folder or its `.git`, or reach the stack's own services on loopback.
  *
  * The handler suites stand in for the spawn and record what it is handed; the
  * last suite runs a command under each posture for real, where this machine
@@ -14,6 +14,7 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { type AddressInfo, createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -79,6 +80,7 @@ const actual = await vi.importActual<typeof import('../sandboxedRun.js')>('../sa
 const { compileSandboxPolicy, OPEN_ONLY_SANDBOX_OPTION, SYSTEM_TEMP_ROOT } =
   await import('../sandboxPolicy.js');
 const { runOpenPostureSelfTest } = await import('../openPostureSelfTest.js');
+const { stackServiceDenials, stackServicesOf } = await import('../stackServices.js');
 
 const RUNNING = {
   id: 'hb_app',
@@ -366,7 +368,10 @@ describe('what a posture compiles to', () => {
     expect(open.filesystem.allowWrite).toContain(SYSTEM_TEMP_ROOT);
 
     const confined = policyFor('confined');
-    expect(confined.network).toEqual({ allowedDomains: [], deniedDomains: [] });
+    expect(confined.network).toEqual({
+      allowedDomains: [],
+      deniedDomains: stackServiceDenials(stackServicesOf()),
+    });
     expect(confined.filesystem.allowWrite).not.toContain(SYSTEM_TEMP_ROOT);
   });
 
@@ -491,6 +496,106 @@ describe.each(['open', 'confined'] as const)('a command under `%s`, for real', (
       });
       expect(await readFile(join(hostDir, 'host-policy.json'), 'utf8')).toBe(policyText);
       expect(existsSync(join(root, '.git', 'hooks', 'post-checkout'))).toBe(false);
+    },
+  );
+});
+
+/**
+ * What a job under `open` reaches on loopback, run as `node -e` with the port
+ * standing in for the stack's Redis as its argument: that port directly and
+ * through the sandbox's proxy, and a server the job binds itself.
+ */
+const LOOPBACK_REACH = [
+  "const net = require('net');",
+  "const http = require('http');",
+  'const stackPort = Number(process.argv[1]);',
+  'function direct(port) {',
+  '  return new Promise((resolve) => {',
+  "    const socket = net.connect(port, '127.0.0.1');",
+  "    socket.on('connect', () => { socket.destroy(); resolve('done'); });",
+  "    socket.on('error', () => resolve('refused'));",
+  '  });',
+  '}',
+  'function throughProxy(port) {',
+  '  const proxy = process.env.HTTP_PROXY ?? process.env.http_proxy;',
+  "  if (proxy === undefined) return Promise.resolve('no proxy');",
+  '  const url = new URL(proxy);',
+  '  const auth = url.username === "" ? {} : { "Proxy-Authorization": "Basic " +',
+  '    Buffer.from(decodeURIComponent(url.username) + ":" + decodeURIComponent(url.password)).toString("base64") };',
+  '  return new Promise((resolve) => {',
+  "    const request = http.request({ host: url.hostname, port: url.port, method: 'CONNECT', path: '127.0.0.1:' + port, headers: auth });",
+  "    request.on('connect', (response, socket) => { socket.destroy(); resolve(response.statusCode === 200 ? 'done' : 'refused'); });",
+  "    request.on('response', () => resolve('refused'));",
+  "    request.on('error', () => resolve('refused'));",
+  '    request.end();',
+  '  });',
+  '}',
+  '(async () => {',
+  "  const own = net.createServer((socket) => socket.end('pong'));",
+  "  await new Promise((resolve, reject) => { own.on('error', reject); own.listen(0, '127.0.0.1', resolve); });",
+  '  const seen = {',
+  "    'reach the stack’s Redis': await direct(stackPort),",
+  "    'reach it through the proxy': await throughProxy(stackPort),",
+  "    'reach a server it bound itself': await direct(own.address().port),",
+  '  };',
+  '  own.close();',
+  '  console.log(JSON.stringify(seen));',
+  '})();',
+].join('\n');
+
+describe('loopback under `open`, for real', () => {
+  const savedRedisUrl = process.env['REDIS_URL'];
+  afterEach(() => {
+    if (savedRedisUrl === undefined) delete process.env['REDIS_URL'];
+    else process.env['REDIS_URL'] = savedRedisUrl;
+  });
+
+  it.skipIf(!CAN_CONFINE)(
+    confinable.title(
+      'is refused on the stack’s Redis port, directly and through the proxy, and admitted on a port the command bound itself',
+    ),
+    async () => {
+      const stackRedis = createServer((socket) => socket.end('+PONG\r\n'));
+      await new Promise<void>((resolve) => stackRedis.listen(0, '127.0.0.1', resolve));
+      const { port } = stackRedis.address() as AddressInfo;
+      process.env['REDIS_URL'] = `redis://localhost:${String(port)}`;
+      try {
+        const base = await mkdtemp(join(tmpdir(), 'posture-loopback-'));
+        const root = join(base, 'folder');
+        const scratchDir = join(base, 'scratch');
+        const checkout = join(scratchDir, 'work');
+        await mkdir(root, { recursive: true });
+        await mkdir(checkout, { recursive: true });
+        const result = await actual.runSandboxed({
+          binding: { ...RUNNING, root, singleFile: false, sandbox: 'open' } as never,
+          posture: 'open',
+          argv: [process.execPath, '-e', LOOPBACK_REACH, String(port)],
+          cwd: checkout,
+          env: {},
+          timeoutMs: 60_000,
+          scratchDir,
+          widening: {
+            authPaths: [],
+            allowedDomains: [],
+            writableRoot: checkout,
+            withholdBindingWrite: true,
+          },
+          idPrefix: 'hr',
+          ownerRunId: 'run-loopback',
+          signal: new AbortController().signal,
+          closeStdin: true,
+          onDelta: () => undefined,
+        });
+        expect(result.exitCode, result.stderr).toBe(0);
+        const last = result.stdout.trim().split('\n').at(-1) ?? '{}';
+        expect(JSON.parse(last)).toEqual({
+          'reach the stack’s Redis': 'refused',
+          'reach it through the proxy': 'refused',
+          'reach a server it bound itself': 'done',
+        });
+      } finally {
+        stackRedis.close();
+      }
     },
   );
 });

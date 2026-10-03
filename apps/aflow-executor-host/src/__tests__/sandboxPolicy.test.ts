@@ -9,6 +9,7 @@ import { SandboxRuntimeConfigSchema } from '@anthropic-ai/sandbox-runtime';
 import { describe, expect, it } from 'vitest';
 
 import type { HostBinding } from '../bindings.js';
+import { stackServiceDenials, stackServicesOf } from '../stackServices.js';
 import {
   FORBIDDEN_SANDBOX_OPTIONS,
   OPEN_ONLY_SANDBOX_OPTION,
@@ -95,7 +96,10 @@ describe('sandbox policy compilation', () => {
         withholdBindingWrite: true,
       },
     });
-    expect(policy.network).toEqual({ allowedDomains: [], deniedDomains: [] });
+    expect(policy.network).toEqual({
+      allowedDomains: [],
+      deniedDomains: stackServiceDenials(stackServicesOf()),
+    });
     expect(() => SandboxRuntimeConfigSchema.parse(policy)).not.toThrow();
   });
 

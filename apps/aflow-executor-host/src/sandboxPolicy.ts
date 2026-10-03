@@ -18,9 +18,17 @@
  * asserts every compiled policy is free of them rather than trusting this comment.
  *
  * `allowLocalBinding` hands over whatever listens on loopback the same way, so
- * only the `open` posture sets it: the network is what that posture opens. What
- * keeps the machine's trust configuration and the operator's own files from a
- * job is the filesystem policy, and that is the same under both.
+ * only the `open` posture sets it, and never alone. The machine's loopback
+ * holds the stack's own services — its Redis, which takes no password and holds
+ * run state and the write-approval grants the push gate reads, its database,
+ * its API and its web application — and code a coding agent wrote that reaches
+ * Redis can mint the grant that clears its own push. So under both postures the
+ * policy denies each of their ports by name (`stackServices.ts`), and under
+ * `open` the launcher refuses those ports on every address this machine answers
+ * on and, on macOS, where loopback is reached without the proxy, in the profile
+ * itself. Every other loopback port stays admitted, so a test that serves
+ * itself still works. What keeps the machine's trust configuration and the
+ * operator's own files from a job is the filesystem policy, the same under both.
  *
  * Under `confined`, loopback is the sandbox's own or nothing. On Linux the adapter
  * gives every process a network namespace of its own: a command binds, accepts
@@ -41,6 +49,7 @@ import type { HostSandboxPosture } from '@aflow/schemas';
 
 import type { HostBinding } from './bindings.js';
 import { resolveHostDir } from './hostDir.js';
+import { type StackService, stackServiceDenials, stackServicesOf } from './stackServices.js';
 
 /** Only the fields this compiler sets. The adapter's own schema validates the rest. */
 export interface CompiledSandboxPolicy {
@@ -61,7 +70,7 @@ export const FORBIDDEN_SANDBOX_OPTIONS = [
   'allowUnixSockets',
 ] as const;
 
-/** Set only under `open`, whose loopback is the machine's. */
+/** Set only under `open`, whose loopback is the machine's but for the stack's own services. */
 export const OPEN_ONLY_SANDBOX_OPTION = 'allowLocalBinding';
 
 /**
@@ -195,6 +204,8 @@ export function compileSandboxPolicy(
     posture?: HostSandboxPosture;
     /** The machine's host directory; resolved as the executor resolves it when absent. */
     hostDir?: string;
+    /** The stack's own services; read from what the lane holds when absent. */
+    stackServices?: readonly StackService[];
   } = { scratchDir: '' },
 ): CompiledSandboxPolicy {
   const home = options.home ?? homedir();
@@ -218,9 +229,11 @@ export function compileSandboxPolicy(
     network: {
       // No egress until something declares one. A command that reaches the
       // network finds it closed rather than open-by-default. Under `open` the
-      // launcher admits every host this list does not name.
+      // launcher admits every host this list does not name, and every loopback
+      // port but the stack's own services', which are denied here whatever a
+      // profile allows.
       allowedDomains: [...(widening?.allowedDomains ?? [])],
-      deniedDomains: [],
+      deniedDomains: stackServiceDenials(options.stackServices ?? stackServicesOf()),
       ...(open ? { [OPEN_ONLY_SANDBOX_OPTION]: true as const } : {}),
     },
     filesystem: {
