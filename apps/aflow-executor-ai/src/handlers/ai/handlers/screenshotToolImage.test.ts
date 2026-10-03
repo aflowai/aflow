@@ -9,7 +9,12 @@
  * (`apps/aflow-executor-host/src/__tests__/browserScreenshot.test.ts`).
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createAIClient, type ChatMessage, type GenerateTextRequest } from '@aflow/ai-client';
+import {
+  createAIClient,
+  type ChatMessage,
+  type GenerateTextRequest,
+  type ToolImageResolver,
+} from '@aflow/ai-client';
 import type { ExecutorContext } from '@aflow/executor-runtime';
 import { createMemoryPayloadStore } from '@aflow/payload-store';
 import {
@@ -165,6 +170,21 @@ function anthropicToolResult(params: Record<string, unknown>): unknown[] {
   return block.content as unknown[];
 }
 
+function turnRequest(
+  model: string,
+  messages: ChatMessage[],
+  resolveToolImage: ToolImageResolver,
+): GenerateTextRequest {
+  return {
+    model,
+    messages,
+    resolveToolImage,
+    tenantId: TENANT as TenantId,
+    runId: RUN as SessionId,
+    stepExecutionId: 'step-turn-2' as StepExecutionId,
+  };
+}
+
 describe('a screenshot on the next agent turn', () => {
   beforeEach(() => {
     sent.length = 0;
@@ -172,12 +192,12 @@ describe('a screenshot on the next agent turn', () => {
 
   it('reaches a model with vision as an image block holding the stored bytes', async () => {
     const { messages, ctx, ref } = await nextTurn();
-    await createAIClient({ providers: { anthropic: {} } }).generateText({
-      model: VISION_MODEL,
-      messages,
-      resolveToolImage: toolImageResolver(ctx),
-    } as GenerateTextRequest);
+    const resolveToolImage = vi.fn<ToolImageResolver>(toolImageResolver(ctx));
+    await createAIClient({ providers: { anthropic: {} } }).generateText(
+      turnRequest(VISION_MODEL, messages, resolveToolImage),
+    );
 
+    expect(resolveToolImage).toHaveBeenCalledTimes(1);
     expect(sent).toHaveLength(1);
     const content = anthropicToolResult(sent[0]!);
     expect(content).toContainEqual({
@@ -194,11 +214,10 @@ describe('a screenshot on the next agent turn', () => {
   it('reaches a model without vision as its description and size, reading nothing', async () => {
     const { messages, ctx, ref } = await nextTurn();
     const readPayload = vi.spyOn(ctx, 'readPayload');
-    await createAIClient({ providers: { fireworks: {} } }).generateText({
-      model: TEXT_ONLY_MODEL,
-      messages,
-      resolveToolImage: toolImageResolver(ctx),
-    } as GenerateTextRequest);
+    const resolveToolImage = vi.fn<ToolImageResolver>(toolImageResolver(ctx));
+    await createAIClient({ providers: { fireworks: {} } }).generateText(
+      turnRequest(TEXT_ONLY_MODEL, messages, resolveToolImage),
+    );
 
     expect(sent).toHaveLength(1);
     const wire = JSON.stringify(sent[0]);
@@ -210,6 +229,7 @@ describe('a screenshot on the next agent turn', () => {
     );
     expect(wire).not.toContain('image_url');
     expect(wire).not.toContain(PNG.toString('base64'));
+    expect(resolveToolImage).not.toHaveBeenCalled();
     expect(readPayload).not.toHaveBeenCalled();
     expect(wire).not.toContain(ref);
   });
