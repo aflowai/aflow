@@ -21,7 +21,7 @@ vi.mock('@aflow/redis', async (importOriginal) => {
   return { ...actual, getRedisConnection: () => ({ get: mocks.get, publish: mocks.publish }) };
 });
 
-const { HOST_BROWSER_SIGN_IN_CHANNEL, hostInventoryKey } = await import('@aflow/redis');
+const { hostBrowserSignInChannel, hostInventoryKey } = await import('@aflow/redis');
 const { hostPairingRoutes } = await import('./hostPairing.js');
 
 async function buildApp(): Promise<FastifyInstance> {
@@ -41,9 +41,9 @@ async function buildApp(): Promise<FastifyInstance> {
   return app;
 }
 
-function inventory(windowOpen = false): string {
+function inventory(windowOpen = false, hostname = 'laptop'): string {
   return JSON.stringify({
-    hostname: 'laptop',
+    hostname,
     observedAt: new Date().toISOString(),
     runtimes: [],
     harnesses: [],
@@ -79,14 +79,36 @@ beforeEach(() => {
 });
 
 describe('asking a machine for a sign-in window', () => {
-  it('publishes the machine and the profile on the sign-in channel', async () => {
+  it('publishes the machine and the profile on that machine’s sign-in channel', async () => {
     const app = await buildApp();
     const response = await signIn(app, 'default');
     expect(response.statusCode).toBe(202);
     expect(mocks.publish).toHaveBeenCalledWith(
-      HOST_BROWSER_SIGN_IN_CHANNEL,
+      hostBrowserSignInChannel('laptop'),
       JSON.stringify({ hostname: 'laptop', profileId: 'default' }),
     );
+  });
+
+  it('says no executor is listening when only another machine’s is', async () => {
+    // The inventory outlives the executor by up to its lifetime, so the
+    // target can still be listed while only the desktop's executor is up.
+    mocks.get.mockImplementation((key) =>
+      Promise.resolve(
+        key === hostInventoryKey('laptop')
+          ? inventory()
+          : key === hostInventoryKey('desktop')
+            ? inventory(false, 'desktop')
+            : null,
+      ),
+    );
+    const listening = new Set([hostBrowserSignInChannel('desktop')]);
+    mocks.publish.mockImplementation((channel) => Promise.resolve(listening.has(channel) ? 1 : 0));
+    const app = await buildApp();
+
+    const toLaptop = await signIn(app, 'default', 'laptop');
+    expect(toLaptop.statusCode).toBe(503);
+    expect(toLaptop.json<{ error: string }>().error).toBe('HostNotListening');
+    expect((await signIn(app, 'default', 'desktop')).statusCode).toBe(202);
   });
 
   it('refuses a machine that is not running, and a profile it does not have', async () => {
@@ -135,7 +157,7 @@ describe('the sign-in channel', () => {
   it('is published by the operator route alone and heard by the host executor alone', () => {
     const naming = ['apps', 'packages']
       .flatMap((root) => sources(join(REPO, root)))
-      .filter((file) => readFileSync(file, 'utf8').includes('HOST_BROWSER_SIGN_IN_CHANNEL'))
+      .filter((file) => readFileSync(file, 'utf8').includes('hostBrowserSignInChannel'))
       .map((file) => relative(REPO, file))
       .sort();
     expect(naming).toEqual([

@@ -129,8 +129,8 @@ export const BrowserHandoffSiteSchema = z.string().min(1).max(253);
 export const BrowserHandoffOriginSchema = z.object({
   type: z.literal('browser_handoff'),
   spaceId: z.string(),
-  /** The machine whose window it is. */
-  hostname: z.string().min(1).max(255),
+  /** The machine whose window it is, by the name its inventory and machine page give it. */
+  machineLabel: z.string().min(1).max(255),
   profileId: BrowserProfileIdSchema,
   /** The registrable host of the page when it was handed over. */
   site: BrowserHandoffSiteSchema,

@@ -3,7 +3,9 @@
  * while the run waits and gone when the wait ends, however it ends, and the
  * operator's Done ends the wait as `completed`.
  */
-import { hostname } from 'node:os';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import type { Redis } from 'ioredis';
 import RedisMock from 'ioredis-mock';
@@ -27,6 +29,7 @@ import {
   registrableSite,
   startHandoffBoard,
 } from '../browser/handoffBoard.js';
+import { loadInstallationId } from '../installationId.js';
 import { type HandoffWait, waitInWindow, type WaitForOperator } from '../browser/operatorWindow.js';
 import { harness, type Harness, profile, refusal, RUN_A } from './fixtures/fakeBrowser.js';
 
@@ -52,7 +55,8 @@ function world(waitForOperator?: WaitForOperator, browsers?: BrowserProfile[]): 
     handoffs: createRedisHandoffBoard({
       redis,
       subscriber,
-      machine: 'laptop',
+      installationId: 'install-a',
+      machineLabel: 'laptop',
       log: { warn: () => undefined },
     }),
     ...(waitForOperator !== undefined ? { waitForOperator } : {}),
@@ -88,7 +92,8 @@ describe('a hand-off in the Action Center', () => {
 
     expect(seen).toHaveLength(1);
     expect(seen[0]).toMatchObject({
-      hostname: 'laptop',
+      installationId: 'install-a',
+      machineLabel: 'laptop',
       profileId: 'default',
       site: 'example.com',
       reason: 'sign_in',
@@ -221,7 +226,7 @@ describe('a page that is not on a site', () => {
       expect(waited).toBe(false);
       expect(h.launches).toHaveLength(launches);
       expect(await openItems()).toEqual([]);
-      expect(await redis.zcard(browserHandoffMachineIndexKey('laptop'))).toBe(0);
+      expect(await redis.zcard(browserHandoffMachineIndexKey('install-a'))).toBe(0);
     },
   );
 
@@ -258,7 +263,8 @@ describe('the site a record carries', () => {
     const startedAt = Date.now();
     await expect(
       joinBrowserHandoff(redis, {
-        hostname: 'laptop',
+        installationId: 'install-a',
+        machineLabel: 'laptop',
         profileId: 'default',
         site,
         reason: 'sign_in',
@@ -267,7 +273,7 @@ describe('the site a record carries', () => {
         waiter: { ...RUN_A, stepExecutionId: STEP, deadlineAt: startedAt + 60_000 },
       }),
     ).rejects.toThrow(/253/);
-    expect(await redis.exists(browserHandoffKey('laptop', 'default', site))).toBe(0);
+    expect(await redis.exists(browserHandoffKey('install-a', 'default', site))).toBe(0);
     expect(await openItems()).toEqual([]);
   });
 });
@@ -276,14 +282,16 @@ describe('the hand-offs a previous run of the executor left', () => {
   it('are taken down when the executor starts, and their spaces told', async () => {
     const startedAt = Date.now();
     const leftBehind = {
+      machineLabel: 'laptop',
       profileId: 'default',
+      site: 'example.com',
       reason: 'sign_in' as const,
       message: 'Sign in to the mail account.',
       startedAt,
       waiter: { ...RUN_A, stepExecutionId: STEP, deadlineAt: startedAt + 15 * 60_000 },
     };
-    await joinBrowserHandoff(redis, { ...leftBehind, hostname: 'laptop', site: 'example.com' });
-    await joinBrowserHandoff(redis, { ...leftBehind, hostname: 'desktop', site: 'example.com' });
+    await joinBrowserHandoff(redis, { ...leftBehind, installationId: 'install-a' });
+    await joinBrowserHandoff(redis, { ...leftBehind, installationId: 'install-b' });
     expect(await openItems()).toHaveLength(2);
     const wakes: string[] = [];
     await subscriber.subscribe(StreamKeys.actionCenterWakeChannel(RUN_A.tenantId, RUN_A.spaceId));
@@ -292,13 +300,13 @@ describe('the hand-offs a previous run of the executor left', () => {
 
     await clearHandoffsLeftBehind({
       redis,
-      machine: 'laptop',
+      installationId: 'install-a',
       log: { warn: () => undefined, info: (message) => info.push(message) },
     });
 
-    expect((await openItems()).map((item) => item.hostname)).toEqual(['desktop']);
-    expect(await redis.exists(browserHandoffKey('laptop', 'default', 'example.com'))).toBe(0);
-    expect(await redis.zcard(browserHandoffMachineIndexKey('laptop'))).toBe(0);
+    expect((await openItems()).map((item) => item.installationId)).toEqual(['install-b']);
+    expect(await redis.exists(browserHandoffKey('install-a', 'default', 'example.com'))).toBe(0);
+    expect(await redis.zcard(browserHandoffMachineIndexKey('install-a'))).toBe(0);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(wakes).toHaveLength(1);
     expect(info).toHaveLength(1);
@@ -308,44 +316,70 @@ describe('the hand-offs a previous run of the executor left', () => {
     const info: string[] = [];
     await clearHandoffsLeftBehind({
       redis,
-      machine: 'laptop',
+      installationId: 'install-a',
       log: { warn: () => undefined, info: (message) => info.push(message) },
     });
     expect(info).toEqual([]);
   });
 
-  it('are found by a restarted executor, whose pid and process name are new', async () => {
-    const pid = Object.getOwnPropertyDescriptor(process, 'pid');
-    const asProcess = async (processPid: number, processName: string | undefined) => {
-      Object.defineProperty(process, 'pid', { value: processPid, configurable: true });
-      if (processName === undefined) vi.stubEnv('HOSTNAME', undefined);
-      else vi.stubEnv('HOSTNAME', processName);
-      return await startHandoffBoard({
+  describe('as the executor starts', () => {
+    const hostDirs: string[] = [];
+    const hostDir = async (): Promise<string> => {
+      const dir = await mkdtemp(join(tmpdir(), 'handoff-installation-'));
+      hostDirs.push(dir);
+      return dir;
+    };
+    afterEach(async () => {
+      await Promise.all(hostDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+    });
+
+    const start = (dir: string, machineLabel: string) =>
+      startHandoffBoard({
         redis,
         subscriber,
+        hostDir: dir,
+        machineLabel,
         log: { warn: () => undefined, info: () => undefined },
       });
-    };
-    try {
-      const first = await asProcess(4101, undefined);
-      await first.post({
-        ...RUN_A,
-        stepExecutionId: STEP,
-        profileId: 'default',
-        site: 'example.com',
-        reason: 'sign_in',
-        message: 'Sign in to the mail account.',
-        waitMs: 15 * 60_000,
-      });
+    const signIn = (stepExecutionId: string) => ({
+      ...RUN_A,
+      stepExecutionId,
+      profileId: 'default',
+      site: 'example.com',
+      reason: 'sign_in' as const,
+      message: 'Sign in to the mail account.',
+      waitMs: 15 * 60_000,
+    });
+
+    it('are found by the same installation restarted under a new executor name', async () => {
+      const dir = await hostDir();
+      await (await start(dir, 'host-executor-4101')).post(signIn(STEP));
       expect(await openItems()).toHaveLength(1);
 
-      await asProcess(4102, 'executor-after-restart');
+      await start(dir, 'host-executor-4102');
 
       expect(await openItems()).toEqual([]);
-      expect(await redis.zcard(browserHandoffMachineIndexKey(hostname()))).toBe(0);
-    } finally {
-      if (pid !== undefined) Object.defineProperty(process, 'pid', pid);
-      vi.unstubAllEnvs();
-    }
+      const installationId = await loadInstallationId(dir);
+      expect(await redis.zcard(browserHandoffMachineIndexKey(installationId))).toBe(0);
+    });
+
+    it('are not another installation’s to take down, though both carry the same machine name', async () => {
+      // Both installations run in this one process, so they share the OS's
+      // name for the machine as well as the executor's.
+      const laptop = await hostDir();
+      const twin = await hostDir();
+      await (await start(laptop, 'laptop')).post(signIn('step-laptop'));
+      await (await start(twin, 'laptop')).post(signIn('step-twin'));
+
+      const both = await openItems();
+      expect(both.map((item) => item.machineLabel)).toEqual(['laptop', 'laptop']);
+      expect(new Set(both.map((item) => item.installationId)).size).toBe(2);
+
+      await start(laptop, 'laptop');
+
+      const left = await openItems();
+      expect(left.map((item) => item.installationId)).toEqual([await loadInstallationId(twin)]);
+      expect(left[0]?.waiting.map((waiter) => waiter.stepExecutionId)).toEqual(['step-twin']);
+    });
   });
 });

@@ -63,7 +63,8 @@ Same Docker image, different `PHOENIX_PROFILE`.
 
 ```bash
 yarn start            # Everything: Postgres, Redis, migrations, services, web
-yarn dev:mcp          # MCP only — run separately so it survives restarts
+yarn dev:mcp          # MCP only; `yarn start` already serves it
+yarn mcp:setup        # Give the MCP server its API key (mcp.local.json)
 yarn dev:core         # Server + orchestrator + mock executor only
 yarn infra:up         # Start Postgres + Redis via Docker
 yarn typecheck        # Type-check all packages

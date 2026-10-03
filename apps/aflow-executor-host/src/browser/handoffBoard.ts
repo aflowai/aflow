@@ -8,8 +8,6 @@
  * reaches the waiting step on its own channel, which this executor listens on
  * from before the record exists, so no Done can arrive unheard.
  */
-import { hostname } from 'node:os';
-
 import type { Redis } from 'ioredis';
 import {
   browserHandoffKey,
@@ -20,6 +18,8 @@ import {
 } from '@aflow/redis';
 import { type BrowserHandoffReason, BrowserHandoffSiteSchema, StreamKeys } from '@aflow/schemas';
 import { getDomain } from 'tldts';
+
+import { loadInstallationId } from '../installationId.js';
 
 export interface HandoffEntry {
   readonly tenantId: string;
@@ -92,8 +92,10 @@ export interface RedisHandoffBoardDeps {
   readonly redis: Redis;
   /** A connection in subscriber mode; the board subscribes per waiting step. */
   readonly subscriber: Redis;
-  /** Whose records these are; `startHandoffBoard` says why it is the OS's name for the machine. */
-  readonly machine: string;
+  /** Whose records these are (`loadInstallationId`). */
+  readonly installationId: string;
+  /** The machine as the operator knows it: the name its inventory is published under. */
+  readonly machineLabel: string;
   readonly log: BoardLog;
 }
 
@@ -120,7 +122,7 @@ export function createRedisHandoffBoard(deps: RedisHandoffBoardDeps): HandoffBoa
         markDone = resolve;
       });
       waiting.set(channel, markDone);
-      const key = browserHandoffKey(deps.machine, entry.profileId, entry.site);
+      const key = browserHandoffKey(deps.installationId, entry.profileId, entry.site);
       const where = {
         profileId: entry.profileId,
         site: entry.site,
@@ -138,7 +140,8 @@ export function createRedisHandoffBoard(deps: RedisHandoffBoardDeps): HandoffBoa
         await deps.subscriber.subscribe(channel);
         const startedAt = Date.now();
         await joinBrowserHandoff(deps.redis, {
-          hostname: deps.machine,
+          installationId: deps.installationId,
+          machineLabel: deps.machineLabel,
           profileId: entry.profileId,
           site: entry.site,
           reason: entry.reason,
@@ -170,7 +173,7 @@ export function createRedisHandoffBoard(deps: RedisHandoffBoardDeps): HandoffBoa
           waiting.delete(channel);
           await leaveBrowserHandoff(deps.redis, {
             key,
-            hostname: deps.machine,
+            installationId: deps.installationId,
             tenantId: entry.tenantId,
             spaceId,
             stepExecutionId: entry.stepExecutionId,
@@ -192,7 +195,7 @@ type StartLog = BoardLog & { info(message: string, meta?: Record<string, unknown
 
 export interface HandoffsLeftBehindDeps {
   readonly redis: Redis;
-  readonly machine: string;
+  readonly installationId: string;
   readonly log: StartLog;
 }
 
@@ -205,7 +208,7 @@ export interface HandoffsLeftBehindDeps {
 export async function clearHandoffsLeftBehind(deps: HandoffsLeftBehindDeps): Promise<void> {
   let spaces: Awaited<ReturnType<typeof clearMachineBrowserHandoffs>>;
   try {
-    spaces = await clearMachineBrowserHandoffs(deps.redis, deps.machine);
+    spaces = await clearMachineBrowserHandoffs(deps.redis, deps.installationId);
   } catch (error) {
     deps.log.warn(
       'The hand-offs a previous run of this executor left could not be taken out of the Action ' +
@@ -230,21 +233,25 @@ export interface HandoffBoardStartDeps {
   readonly redis: Redis;
   /** A connection in subscriber mode; the board subscribes per waiting step. */
   readonly subscriber: Redis;
+  /** The host directory, which keeps the installation's identity. */
+  readonly hostDir: string;
+  /** The name the executor publishes its inventory under. */
+  readonly machineLabel: string;
   readonly log: StartLog;
 }
 
 /**
- * The board this run of the executor posts to, once what a previous run left on
- * it is taken down.
- *
- * Keyed by the OS's name for this machine, which a restart keeps. The
- * executor's own name falls back to one carrying its pid, so a restarted
- * executor looked for its records under a name nothing had written. Pairing
- * gives a machine no name of its own: `host.env` holds only the Redis
- * credential, under a username every paired machine shares.
+ * The board this run of the executor posts to, once what a previous run of the
+ * same installation left on it is taken down.
  */
 export async function startHandoffBoard(deps: HandoffBoardStartDeps): Promise<HandoffBoard> {
-  const machine = hostname();
-  await clearHandoffsLeftBehind({ redis: deps.redis, machine, log: deps.log });
-  return createRedisHandoffBoard({ ...deps, machine });
+  const installationId = await loadInstallationId(deps.hostDir);
+  await clearHandoffsLeftBehind({ redis: deps.redis, installationId, log: deps.log });
+  return createRedisHandoffBoard({
+    redis: deps.redis,
+    subscriber: deps.subscriber,
+    installationId,
+    machineLabel: deps.machineLabel,
+    log: deps.log,
+  });
 }

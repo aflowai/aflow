@@ -53,7 +53,7 @@ export function BrowserHandoffCard({
           </Row>
 
           <Text size="sm" variant="muted">
-            In the browser window on {origin.hostname} · profile {origin.profileId} ·{' '}
+            In the browser window on {origin.machineLabel} · profile {origin.profileId} ·{' '}
             {runs === 1 ? '1 run waiting' : `${String(runs)} runs waiting`}
           </Text>
 

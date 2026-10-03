@@ -361,7 +361,7 @@ function originMatches(current: ActionCenterItemOrigin, claimed: ActionCenterIte
     case 'browser_handoff':
       return (
         claimed.type === 'browser_handoff' &&
-        current.hostname === claimed.hostname &&
+        current.machineLabel === claimed.machineLabel &&
         current.profileId === claimed.profileId &&
         current.site === claimed.site &&
         current.startedAt === claimed.startedAt

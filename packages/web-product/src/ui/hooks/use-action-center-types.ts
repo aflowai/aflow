@@ -95,7 +95,7 @@ export type ActionCenterItemOrigin =
   | {
       type: 'browser_handoff';
       spaceId: string;
-      hostname: string;
+      machineLabel: string;
       profileId: string;
       site: string;
       reason: 'sign_in' | 'challenge' | 'confirm';

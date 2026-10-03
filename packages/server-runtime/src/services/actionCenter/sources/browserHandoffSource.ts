@@ -59,7 +59,7 @@ function toItem(record: BrowserHandoffRecord, scope: ActionCenterScope): ActionC
   const origin: BrowserHandoffOrigin = {
     type: 'browser_handoff',
     spaceId: scope.spaceId,
-    hostname: record.hostname,
+    machineLabel: record.machineLabel,
     profileId: record.profileId,
     site: record.site,
     reason: record.reason,
@@ -87,7 +87,7 @@ function toItem(record: BrowserHandoffRecord, scope: ActionCenterScope): ActionC
     expiresAt: lastDeadline,
     requestedBy: {
       kind: 'agent',
-      label: `Browser on ${record.hostname}`,
+      label: `Browser on ${record.machineLabel}`,
       ...(waiting[0]?.sessionId !== undefined ? { sessionId: waiting[0].sessionId } : {}),
     },
     priority: 'normal',
@@ -142,7 +142,7 @@ export function createBrowserHandoffSource(deps: ActionCenterSourceDeps): Action
         if (heard === 0) {
           await leaveBrowserHandoff(deps.redis, {
             key: record.key,
-            hostname: record.hostname,
+            installationId: record.installationId,
             tenantId: waiter.tenantId,
             spaceId: waiter.spaceId,
             stepExecutionId: waiter.stepExecutionId,

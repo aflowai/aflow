@@ -4,7 +4,7 @@
  *
  * Written by the host executor, which reaches nothing durable — only Redis —
  * and read by the Action Center, which renders one item per record. A record
- * is keyed by machine, profile and site; each run is one field of it, added when
+ * is keyed by executor installation, profile and site; each run is one field of it, added when
  * its wait begins and removed when the wait ends, however it ends. The last
  * one out deletes the record.
  *
@@ -24,7 +24,7 @@
  * the members still in date and never reads the keyspace or a whole set.
  *
  * An executor that died mid-wait leaves its records until they expire, so each
- * machine has an index of its own records too, scored the same way: the host
+ * installation has an index of its own records too, scored the same way: the host
  * executor takes them down when it starts, before any wait of its own begins.
  * A run joining a record whose every waiter is past its deadline starts the
  * record afresh rather than inheriting a dead run's reason and start.
@@ -45,23 +45,23 @@ export const BROWSER_HANDOFF_EXPIRY_MARGIN_MS = 5 * 60_000;
 /** The most hand-offs one space's Action Center reads at once. */
 export const BROWSER_HANDOFFS_READ_LIMIT = 50;
 
-/** How many of a machine's records one pass of the start-up clear takes down. */
+/** How many of an installation's records one pass of the start-up clear takes down. */
 export const BROWSER_HANDOFF_CLEAR_BATCH = 100;
 
 const RECORD_PREFIX = 'aflow:browser-handoff:record:';
 const WAITER_PREFIX = 'w:';
 const MESSAGE_PREFIX = 'm:';
 
-export function browserHandoffKey(hostname: string, profileId: string, site: string): string {
-  return `${RECORD_PREFIX}${hostname}:${profileId}:${site}`;
+export function browserHandoffKey(installationId: string, profileId: string, site: string): string {
+  return `${RECORD_PREFIX}${installationId}:${profileId}:${site}`;
 }
 
 export function browserHandoffSpaceIndexKey(tenantId: string, spaceId: string): string {
   return `aflow:browser-handoff:space:${tenantId}:${spaceId}`;
 }
 
-export function browserHandoffMachineIndexKey(hostname: string): string {
-  return `aflow:browser-handoff:machine:${hostname}`;
+export function browserHandoffMachineIndexKey(installationId: string): string {
+  return `aflow:browser-handoff:machine:${installationId}`;
 }
 
 function waiterField(spaceId: string, stepExecutionId: string): string {
@@ -73,7 +73,8 @@ function messageField(spaceId: string): string {
 }
 
 const HandoffMetaSchema = z.object({
-  hostname: z.string().min(1),
+  installationId: z.string().min(1),
+  machineLabel: z.string().min(1),
   profileId: BrowserProfileIdSchema,
   site: BrowserHandoffSiteSchema,
   reason: z.enum(BROWSER_HANDOFF_REASONS),
@@ -94,7 +95,10 @@ export type BrowserHandoffWaiter = z.infer<typeof HandoffWaiterSchema>;
 
 export interface BrowserHandoffRecord {
   readonly key: string;
-  readonly hostname: string;
+  /** The executor installation that keeps the record, and what it is keyed by. */
+  readonly installationId: string;
+  /** The machine as the operator knows it: the name its inventory is published under. */
+  readonly machineLabel: string;
   readonly profileId: string;
   readonly site: string;
   readonly reason: BrowserHandoffReason;
@@ -106,7 +110,8 @@ export interface BrowserHandoffRecord {
 }
 
 export interface JoinBrowserHandoffInput {
-  readonly hostname: string;
+  readonly installationId: string;
+  readonly machineLabel: string;
   readonly profileId: string;
   readonly site: string;
   readonly reason: BrowserHandoffReason;
@@ -207,10 +212,11 @@ export async function joinBrowserHandoff(
       `A hand-off is for a site, a host of 1 to 253 characters; this one has ${String(input.site.length)}`,
     );
   }
-  const key = browserHandoffKey(input.hostname, input.profileId, input.site);
+  const key = browserHandoffKey(input.installationId, input.profileId, input.site);
   const now = Date.now();
   const meta = {
-    hostname: input.hostname,
+    installationId: input.installationId,
+    machineLabel: input.machineLabel,
     profileId: input.profileId,
     site: input.site,
     reason: input.reason,
@@ -225,7 +231,7 @@ export async function joinBrowserHandoff(
     3,
     key,
     browserHandoffSpaceIndexKey(waiter.tenantId, waiter.spaceId),
-    browserHandoffMachineIndexKey(input.hostname),
+    browserHandoffMachineIndexKey(input.installationId),
     JSON.stringify(meta),
     waiterField(waiter.spaceId, waiter.stepExecutionId),
     JSON.stringify(stored),
@@ -239,8 +245,8 @@ export async function joinBrowserHandoff(
 
 export interface LeaveBrowserHandoffInput {
   readonly key: string;
-  /** The machine whose record it is. */
-  readonly hostname: string;
+  /** The executor installation whose record it is. */
+  readonly installationId: string;
   readonly tenantId: string;
   readonly spaceId: string;
   readonly stepExecutionId: string;
@@ -256,7 +262,7 @@ export async function leaveBrowserHandoff(
     3,
     input.key,
     browserHandoffSpaceIndexKey(input.tenantId, input.spaceId),
-    browserHandoffMachineIndexKey(input.hostname),
+    browserHandoffMachineIndexKey(input.installationId),
     waiterField(input.spaceId, input.stepExecutionId),
     `${WAITER_PREFIX}${input.spaceId}:`,
     messageField(input.spaceId),
@@ -328,16 +334,16 @@ export interface BrowserHandoffSpace {
 }
 
 /**
- * Takes down every record this machine holds, and each from its spaces'
- * indexes, through the machine's own index. Only for an executor that is
+ * Takes down every record this installation holds, and each from its spaces'
+ * indexes, through the installation's own index. Only for an executor that is
  * starting: none of its waits has begun, so every record there belongs to one
  * that is gone. Returns the spaces whose Action Center lost an item.
  */
 export async function clearMachineBrowserHandoffs(
   redis: Redis,
-  hostname: string,
+  installationId: string,
 ): Promise<BrowserHandoffSpace[]> {
-  const index = browserHandoffMachineIndexKey(hostname);
+  const index = browserHandoffMachineIndexKey(installationId);
   const spaces = new Map<string, BrowserHandoffSpace>();
   for (;;) {
     const keys = await redis.zrange(index, 0, BROWSER_HANDOFF_CLEAR_BATCH - 1);

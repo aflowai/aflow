@@ -14,6 +14,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { z } from 'zod';
 import type { McpServerConfig } from '../config.js';
+import type { AdmittedHeaders } from '../requestGate.js';
 import type { Session } from './SessionStore.js';
 import { log } from '../util/logger.js';
 
@@ -65,7 +66,7 @@ export class AuthManager {
    * Initialize auth for a session from incoming request headers.
    * Called once when a new MCP session is created.
    */
-  initFromHeaders(session: Session, headers: Record<string, string | undefined>): void {
+  initFromHeaders(session: Session, headers: AdmittedHeaders): void {
     const authHeader = headers['authorization'];
 
     if (authHeader?.startsWith('Bearer phx_')) {

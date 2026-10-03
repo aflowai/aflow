@@ -8,22 +8,37 @@
  * call 401s, and one that expires a good token early stops working before the
  * credential does.
  */
+import { fileURLToPath } from 'node:url';
+
 import { describe, expect, it } from 'vitest';
 
 import { AuthManager } from './AuthManager.js';
 import type { McpServerConfig } from '../config.js';
+import { admitRequest, requestGatePolicy, type AdmittedHeaders } from '../requestGate.js';
 import type { Session } from './SessionStore.js';
 
 const CONFIG = {
   apiUrl: 'http://localhost:3000',
   port: 3100,
+  host: '127.0.0.1',
   logLevel: 'error',
   unauthenticatedFallback: false,
   allowBrowserOrigins: false,
+  allowedOrigins: [],
   allowedHosts: [],
   cfOriginSecret: undefined,
   localAuthJsonPath: undefined,
 } as const satisfies McpServerConfig;
+
+/** Headers as they reach a session: only through the gate. */
+function admitted(headers: Record<string, string>): AdmittedHeaders {
+  const decision = admitRequest(requestGatePolicy(CONFIG), {
+    host: `localhost:${String(CONFIG.port)}`,
+    ...headers,
+  });
+  if (!decision.admitted) throw new Error(decision.reason);
+  return decision.headers;
+}
 
 function session(): Session {
   return { id: 'sess-1', auth: { method: 'none' }, createdAt: 0, lastActivityAt: 0 };
@@ -41,7 +56,7 @@ describe('a bearer token the client supplied', () => {
   it('expires when the token says it does, not an hour from now', () => {
     const s = session();
     const expiresAt = Math.floor(Date.now() / 1000) + 8 * 3600;
-    manager.initFromHeaders(s, { authorization: `Bearer ${token({ exp: expiresAt })}` });
+    manager.initFromHeaders(s, admitted({ authorization: `Bearer ${token({ exp: expiresAt })}` }));
 
     expect(s.auth.method).toBe('bearer_token');
     expect(s.auth.tokenExpiresAt).toBe(expiresAt * 1000);
@@ -50,9 +65,12 @@ describe('a bearer token the client supplied', () => {
 
   it('is not authenticated once the token says it has expired', () => {
     const s = session();
-    manager.initFromHeaders(s, {
-      authorization: `Bearer ${token({ exp: Math.floor(Date.now() / 1000) - 60 })}`,
-    });
+    manager.initFromHeaders(
+      s,
+      admitted({
+        authorization: `Bearer ${token({ exp: Math.floor(Date.now() / 1000) - 60 })}`,
+      }),
+    );
     expect(manager.isAuthenticated(s)).toBe(false);
   });
 
@@ -60,14 +78,14 @@ describe('a bearer token the client supplied', () => {
     // Refusing here would deny a credential the API would have accepted, on
     // the strength of a claim the token never made.
     const s = session();
-    manager.initFromHeaders(s, { authorization: `Bearer ${token({ sub: 'someone' })}` });
+    manager.initFromHeaders(s, admitted({ authorization: `Bearer ${token({ sub: 'someone' })}` }));
     expect(s.auth.tokenExpiresAt).toBeUndefined();
     expect(manager.isAuthenticated(s)).toBe(true);
   });
 
   it('survives a token whose payload is not decodable', () => {
     const s = session();
-    manager.initFromHeaders(s, { authorization: 'Bearer eyJhbGciOiJub25lIn0.@@@.' });
+    manager.initFromHeaders(s, admitted({ authorization: 'Bearer eyJhbGciOiJub25lIn0.@@@.' }));
     expect(s.auth.method).toBe('bearer_token');
     expect(manager.isAuthenticated(s)).toBe(true);
   });
@@ -76,7 +94,21 @@ describe('a bearer token the client supplied', () => {
 describe('an API key the client supplied', () => {
   it('carries no expiry of its own and stays usable', () => {
     const s = session();
-    new AuthManager(CONFIG).initFromHeaders(s, { authorization: 'Bearer phx_abc123' });
+    new AuthManager(CONFIG).initFromHeaders(s, admitted({ authorization: 'Bearer phx_abc123' }));
     expect(s.auth).toMatchObject({ method: 'api_key', apiKey: 'phx_abc123' });
+  });
+});
+
+/**
+ * The file is read strictly, and a refusal falls back to no credential with
+ * nothing but a log line to say so — an example that does not parse as copied
+ * leaves every session unauthenticated.
+ */
+describe('the local auth file example', () => {
+  it('is accepted as copied', () => {
+    const example = fileURLToPath(new URL('../../mcp.local.json.example', import.meta.url));
+    const s = session();
+    new AuthManager({ ...CONFIG, localAuthJsonPath: example }).initFromHeaders(s, admitted({}));
+    expect(s.auth).toMatchObject({ method: 'api_key', apiKey: 'phx_replace_me' });
   });
 });

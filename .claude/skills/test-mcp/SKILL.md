@@ -14,8 +14,8 @@ Before testing, verify the local stack is running:
 
 1. **Stack**: `yarn start` (Postgres, Redis, server, orchestrator, executors, web)
 2. **Or engine only**: `yarn dev:core` (server + orchestrator + mock executor)
-3. **MCP server**: `yarn dev:mcp` (port 3100, runs separately)
-4. **Auth**: `mcp.local.json` exists in project root (dev auth bypass)
+3. **MCP server**: served by `yarn start` on port 3100 (`yarn dev:mcp` beside `yarn dev:core`)
+4. **Auth**: `mcp.local.json` in the project root holds its API key — `yarn mcp:setup` writes it; `auth_status` reports `api_key`
 
 Quick health check:
 

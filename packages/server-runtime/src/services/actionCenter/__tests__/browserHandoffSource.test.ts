@@ -25,6 +25,7 @@ import { ActionCenterResolveError, type ActionCenterContext } from '../types.js'
 const TENANT = '00000000-0000-0000-0000-000000000001';
 const SPACE = '00000000-0000-0000-0000-0000000000a1';
 const EDITOR = '00000000-0000-0000-0000-000000000005';
+const INSTALLATION = '6f1c2a9e-0b7d-4c35-9e41-2d8a7f30c5b6';
 
 let redis: Redis;
 
@@ -50,7 +51,8 @@ function source() {
 function waitOn(stepExecutionId: string, runId: string): JoinBrowserHandoffInput {
   const startedAt = Date.now();
   return {
-    hostname: 'laptop',
+    installationId: INSTALLATION,
+    machineLabel: 'laptop',
     profileId: 'default',
     site: 'example.com',
     reason: 'sign_in',
@@ -86,11 +88,13 @@ describe('the browser hand-off source', () => {
     expect(item?.origin).toMatchObject({
       type: 'browser_handoff',
       spaceId: SPACE,
-      hostname: 'laptop',
+      machineLabel: 'laptop',
       profileId: 'default',
       site: 'example.com',
       reason: 'sign_in',
     });
+    expect(item?.origin).not.toHaveProperty('installationId');
+    expect(item?.requestedBy.label).toBe('Browser on laptop');
     const waiting = item?.origin.type === 'browser_handoff' ? item.origin.waiting : [];
     expect(waiting.map((w) => w.runId).sort()).toEqual(['run-1', 'run-2']);
 
@@ -104,11 +108,11 @@ describe('the browser hand-off source', () => {
     const [item] = await source().listOpen(ctx());
     expect(await source().getById(ctx(), item!.id)).toMatchObject({ id: item!.id });
 
-    const key = browserHandoffKey('laptop', 'default', 'example.com');
+    const key = browserHandoffKey(INSTALLATION, 'default', 'example.com');
     for (const stepExecutionId of ['step-1', 'step-2']) {
       await leaveBrowserHandoff(redis, {
         key,
-        hostname: 'laptop',
+        installationId: INSTALLATION,
         tenantId: TENANT,
         spaceId: SPACE,
         stepExecutionId,

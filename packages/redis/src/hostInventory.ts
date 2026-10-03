@@ -68,8 +68,15 @@ export interface HostWithdrawalNotice {
  * the same sitting `aflow browser sign-in` holds on the machine. Published only
  * by the authenticated operator route — no operation dispatches it, so no agent
  * can — and acted on only by the executor of the machine it names.
+ *
+ * One channel per machine, named as its inventory is, so the count of
+ * receivers a publish returns is whether that machine's executor heard it.
+ * On a channel every executor shared, another machine being up answered for a
+ * target that was down, and the operator was told a window was coming.
  */
-export const HOST_BROWSER_SIGN_IN_CHANNEL = 'aflow:pubsub:host-browser-sign-in';
+export function hostBrowserSignInChannel(hostname: string): string {
+  return `aflow:pubsub:host-browser-sign-in:${hostname}`;
+}
 
 export const HostBrowserSignInRequestSchema = z.object({
   hostname: z.string().min(1),

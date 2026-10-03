@@ -19,7 +19,7 @@ import { eq } from 'drizzle-orm';
 import { createTenantContext, withTenantSchema, hostBindings, spaces } from '@aflow/database';
 import {
   getRedisConnection,
-  HOST_BROWSER_SIGN_IN_CHANNEL,
+  hostBrowserSignInChannel,
   HOST_INVENTORY_TTL_MS,
   type HostBrowserSignInRequest,
   HOST_MACHINES_KEY,
@@ -645,7 +645,10 @@ export const hostPairingRoutes: FastifyPluginAsync = async (fastify) => {
         });
       }
       const asked: HostBrowserSignInRequest = { hostname, profileId };
-      const receivers = await redis.publish(HOST_BROWSER_SIGN_IN_CHANNEL, JSON.stringify(asked));
+      const receivers = await redis.publish(
+        hostBrowserSignInChannel(hostname),
+        JSON.stringify(asked),
+      );
       if (receivers === 0) {
         return await reply.status(503).send({
           error: 'HostNotListening',

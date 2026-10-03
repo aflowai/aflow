@@ -31,7 +31,7 @@ import {
   HOST_INVENTORY_REFRESH_MS,
   HOST_INVENTORY_TTL_SECONDS,
   HOST_MACHINES_KEY,
-  HOST_BROWSER_SIGN_IN_CHANNEL,
+  hostBrowserSignInChannel,
   HOST_WITHDRAWAL_CHANNEL,
   hostInventoryKey,
   type HostInventory,
@@ -188,7 +188,13 @@ async function main(): Promise<void> {
       count: reaped,
     });
   }
-  const handoffs = await startHandoffBoard({ redis, subscriber: hostChannels, log });
+  const handoffs = await startHandoffBoard({
+    redis,
+    subscriber: hostChannels,
+    hostDir: dirname(policyPath),
+    machineLabel: hostname,
+    log,
+  });
 
   // Checkouts too: every session died with the previous executor, so what they
   // held on disk and in the operator's repositories has nothing left that would
@@ -519,7 +525,8 @@ async function main(): Promise<void> {
   // The operator asking from the workspace for a profile's sign-in window. It
   // opens a window on this machine and widens nothing: the sitting is the one
   // `aflow browser sign-in` holds, on a profile this machine declares.
-  await hostChannels.subscribe(HOST_BROWSER_SIGN_IN_CHANNEL).catch((error: unknown) => {
+  const signInChannel = hostBrowserSignInChannel(hostname);
+  await hostChannels.subscribe(signInChannel).catch((error: unknown) => {
     log.warn('Could not subscribe to sign-in requests from the workspace', { error });
   });
   const signInAskedFromWorkspace = (raw: string): void => {
@@ -541,7 +548,7 @@ async function main(): Promise<void> {
       });
   };
   hostChannels.on('message', (channel: string, raw: string) => {
-    if (channel === HOST_BROWSER_SIGN_IN_CHANNEL) {
+    if (channel === signInChannel) {
       signInAskedFromWorkspace(raw);
       return;
     }

@@ -37,7 +37,8 @@ function waitOn(
   startedAt = Date.now(),
 ): JoinBrowserHandoffInput {
   return {
-    hostname: 'laptop',
+    installationId: 'install-a',
+    machineLabel: 'laptop',
     profileId: 'default',
     site: 'example.com',
     reason: 'sign_in',
@@ -54,7 +55,7 @@ function waitOn(
   };
 }
 
-const KEY = browserHandoffKey('laptop', 'default', 'example.com');
+const KEY = browserHandoffKey('install-a', 'default', 'example.com');
 
 describe('an open hand-off', () => {
   it('is one record for two runs waiting on one site, the first run’s words standing', async () => {
@@ -89,7 +90,7 @@ describe('an open hand-off', () => {
 
     const stepOne = {
       key: KEY,
-      hostname: 'laptop',
+      installationId: 'install-a',
       tenantId: TENANT,
       spaceId: SPACE,
       stepExecutionId: 'step-1',
@@ -108,7 +109,7 @@ describe('an open hand-off', () => {
     await joinBrowserHandoff(redis, waitOn('step-9', { spaceId: OTHER_SPACE }));
     await leaveBrowserHandoff(redis, {
       key: KEY,
-      hostname: 'laptop',
+      installationId: 'install-a',
       tenantId: TENANT,
       spaceId: SPACE,
       stepExecutionId: 'step-1',
@@ -186,17 +187,17 @@ describe('a hand-off whose every run has stopped waiting', () => {
   });
 });
 
-describe('a machine’s own hand-offs', () => {
-  const MACHINE = browserHandoffMachineIndexKey('laptop');
+describe('an installation’s own hand-offs', () => {
+  const MACHINE = browserHandoffMachineIndexKey('install-a');
 
-  it('are indexed under the machine while a run waits, and leave it with the last one', async () => {
+  it('are indexed under the installation while a run waits, and leave it with the last one', async () => {
     await joinBrowserHandoff(redis, waitOn('step-1'));
     expect(await redis.zrange(MACHINE, 0, 9)).toEqual([KEY]);
     expect(await redis.pttl(MACHINE)).toBeGreaterThan(0);
 
     await leaveBrowserHandoff(redis, {
       key: KEY,
-      hostname: 'laptop',
+      installationId: 'install-a',
       tenantId: TENANT,
       spaceId: SPACE,
       stepExecutionId: 'step-1',
@@ -204,13 +205,13 @@ describe('a machine’s own hand-offs', () => {
     expect(await redis.zcard(MACHINE)).toBe(0);
   });
 
-  it('are all taken down by the start-up clear, from every space, and no other machine’s', async () => {
+  it('are all taken down by the start-up clear, from every space, and no other installation’s, though it shows the same machine name', async () => {
     await joinBrowserHandoff(redis, waitOn('step-1'));
     await joinBrowserHandoff(redis, { ...waitOn('step-2'), site: 'example.org' });
     await joinBrowserHandoff(redis, waitOn('step-9', { spaceId: OTHER_SPACE }));
-    await joinBrowserHandoff(redis, { ...waitOn('step-d'), hostname: 'desktop' });
+    await joinBrowserHandoff(redis, { ...waitOn('step-d'), installationId: 'install-b' });
 
-    const spaces = await clearMachineBrowserHandoffs(redis, 'laptop');
+    const spaces = await clearMachineBrowserHandoffs(redis, 'install-a');
 
     expect(spaces).toEqual(
       expect.arrayContaining([
@@ -220,15 +221,17 @@ describe('a machine’s own hand-offs', () => {
     );
     expect(spaces).toHaveLength(2);
     expect(await redis.exists(KEY)).toBe(0);
-    expect(await redis.exists(browserHandoffKey('laptop', 'default', 'example.org'))).toBe(0);
+    expect(await redis.exists(browserHandoffKey('install-a', 'default', 'example.org'))).toBe(0);
     expect(await redis.zcard(MACHINE)).toBe(0);
     expect(await readSpaceBrowserHandoffs(redis, TENANT, OTHER_SPACE)).toEqual([]);
     const left = await readSpaceBrowserHandoffs(redis, TENANT, SPACE);
-    expect(left.map((record) => record.hostname)).toEqual(['desktop']);
+    expect(left.map(({ installationId, machineLabel }) => [installationId, machineLabel])).toEqual([
+      ['install-b', 'laptop'],
+    ]);
     expect(await redis.zcard(browserHandoffSpaceIndexKey(TENANT, SPACE))).toBe(1);
   });
 
-  it('are cleared in batches, however many a machine left', async () => {
+  it('are cleared in batches, however many an installation left', async () => {
     const count = BROWSER_HANDOFF_CLEAR_BATCH + 3;
     for (let at = 0; at < count; at++) {
       await joinBrowserHandoff(redis, {
@@ -238,13 +241,13 @@ describe('a machine’s own hand-offs', () => {
     }
     expect(await redis.zcard(MACHINE)).toBe(count);
 
-    await clearMachineBrowserHandoffs(redis, 'laptop');
+    await clearMachineBrowserHandoffs(redis, 'install-a');
 
     expect(await redis.zcard(MACHINE)).toBe(0);
     expect(await redis.zcard(browserHandoffSpaceIndexKey(TENANT, SPACE))).toBe(0);
   });
 
-  it('is nothing to clear on a machine that left none', async () => {
-    expect(await clearMachineBrowserHandoffs(redis, 'laptop')).toEqual([]);
+  it('is nothing to clear for an installation that left none', async () => {
+    expect(await clearMachineBrowserHandoffs(redis, 'install-a')).toEqual([]);
   });
 });
