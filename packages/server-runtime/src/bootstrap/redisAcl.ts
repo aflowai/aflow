@@ -120,6 +120,10 @@ const HOST_KEY_PATTERNS = [
   // appliance, and expiring on its own so it never outlives the machine.
   '~aflow:host-inventory:*',
   '~aflow:host-machines',
+  // A browser hand-off waiting on the operator: the record per profile and
+  // site, and the per-space index the Action Center reads it through. Both
+  // expire on their own, so a machine that dies mid-wait leaves neither behind.
+  '~aflow:browser-handoff:*',
   // A step a workflow dispatched has no session to wake; its executor puts the
   // live-delta wake on the task's own progress stream and indexes the stream,
   // the road the task's progress already travels.
@@ -147,9 +151,15 @@ const HOST_KEY_PATTERNS = [
   '%R~aflow:write-approval:*',
 ] as const;
 
-/** Channels it subscribes to for aborts and session wakeups. */
-
-const HOST_CHANNEL_PATTERNS = ['&aflow:pubsub:*', '&aflow:abort:*'] as const;
+/**
+ * Channels it subscribes to for aborts, session wakeups and the operator's
+ * Done on a browser hand-off.
+ */
+const HOST_CHANNEL_PATTERNS = [
+  '&aflow:pubsub:*',
+  '&aflow:abort:*',
+  '&aflow:handoff-done:*',
+] as const;
 
 export interface RedisAclInput {
   /** Every in-appliance service authenticates with this. */

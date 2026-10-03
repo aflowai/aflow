@@ -16,6 +16,7 @@ import { CREDENTIAL_FIELD_KEYS, entersValue, MODIFIERS } from './credentialField
 import { type StartEgressProxy, startEgressProxy } from './egressProxy.js';
 import { BrowserDriverError, errorText } from './errors.js';
 import { boundEntries, boundText, PageObservations } from './observations.js';
+import { type HandoffBoard, NO_BOARD } from './handoffBoard.js';
 import { OperatorWindows, type WaitForOperator, waitInWindow } from './operatorWindow.js';
 import { localDestinationRefusal, obviouslyLocalDestination } from './origins.js';
 import { applyPolicyChange } from './policyChange.js';
@@ -96,6 +97,8 @@ export interface BrowserDriverDeps {
   readonly sleep?: (ms: number) => Promise<void>;
   /** How a hand-off waits for the operator. */
   readonly waitForOperator?: WaitForOperator;
+  /** Where a waiting hand-off is shown to the operator; none for the command line. */
+  readonly handoffs?: HandoffBoard;
 }
 
 interface PageInUse {
@@ -140,6 +143,7 @@ export class BrowserDriver {
       browsers: this.browsers,
       clock: this.clock,
       waitForOperator: deps.waitForOperator ?? waitInWindow,
+      handoffs: deps.handoffs ?? NO_BOARD,
       loadPolicy: deps.loadPolicy,
       mayGoTo: (profile, address) => this.mayGoTo(profile, address),
       settledView: async (held, running, maxChars) =>

@@ -407,6 +407,16 @@ export const StreamKeys = {
   stepAbortPattern: 'aflow:abort:*' as const,
 
   /**
+   * Pub/Sub channel for the operator's **Done** on a browser hand-off item
+   * (server → host executor), one per waiting step. A sibling of the abort
+   * channel rather than the channel itself: an abort ends the step as
+   * cancelled, with no result, and Done ends the hand-off as `completed`.
+   * Published only by the Action Center's resolve route.
+   */
+  browserHandoffDoneChannel: (stepExecutionId: string) =>
+    `aflow:handoff-done:${stepExecutionId}` as const,
+
+  /**
    * Durable record that a step attempt was cancelled, read by an executor before
    * it runs the job. The abort Pub/Sub above is the low-latency path and is lost
    * whenever nobody is listening yet — the job still queued, the executor between

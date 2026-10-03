@@ -4,10 +4,9 @@
  *
  * A hand-off is over when the page has left the site it was handed over on
  * and stopped changing — a sign-in that worked redirects away from the
- * sign-in page — when the operator closes the window, or at the profile's
- * deadline. The sitting is over when the window is closed. Both wait on the
- * machine; the pause through the Action Center replaces `waitInWindow`, the
- * one function a hand-off waits through.
+ * sign-in page — when the operator presses Done on its Action Center item,
+ * when they close the window, or at the profile's deadline. The sitting is
+ * over when the window is closed.
  */
 import {
   type BrowserHandoffOutcome,
@@ -24,6 +23,7 @@ import type {
   SignInResult,
 } from './driverTypes.js';
 import { BrowserDriverError, errorText } from './errors.js';
+import { type HandoffBoard, registrableSite } from './handoffBoard.js';
 import { PageObservations } from './observations.js';
 import { closeWithinDeadline, type HeldPage, pageAddress, type PageTable } from './pageTable.js';
 import type { ProfileBrowsers, RunningProfile } from './profileBrowsers.js';
@@ -57,6 +57,8 @@ export interface HandoffWait {
   readonly startOrigin: string;
   readonly deadlineAt: number;
   readonly clock: SettleClock;
+  /** Settles when the operator presses Done on the hand-off's Action Center item. */
+  readonly operatorDone: Promise<void>;
 }
 
 export type WaitForOperator = (wait: HandoffWait) => Promise<BrowserHandoffOutcome>;
@@ -69,10 +71,21 @@ export function originOf(address: string): string {
   }
 }
 
-export const waitInWindow: WaitForOperator = async ({ window, startOrigin, deadlineAt, clock }) => {
+export const waitInWindow: WaitForOperator = async ({
+  window,
+  startOrigin,
+  deadlineAt,
+  clock,
+  operatorDone,
+}) => {
+  const operator = { done: false };
+  void operatorDone.then(() => {
+    operator.done = true;
+  });
   let lastSeen: string | undefined;
   let unchangedSince = 0;
   for (;;) {
+    if (operator.done) return 'completed';
     if (window.closed()) return 'window_closed';
     if (clock.now() >= deadlineAt) return 'timed_out';
     const url = window.page.url();
@@ -88,7 +101,7 @@ export const waitInWindow: WaitForOperator = async ({ window, startOrigin, deadl
         return 'completed';
       }
     }
-    await clock.sleep(WINDOW_POLL_MS);
+    await Promise.race([clock.sleep(WINDOW_POLL_MS), operatorDone]);
   }
 };
 
@@ -110,6 +123,8 @@ export interface WindowHost {
   readonly browsers: ProfileBrowsers;
   readonly clock: SettleClock;
   readonly waitForOperator: WaitForOperator;
+  /** Where a waiting hand-off is shown to the operator, and Done heard from. */
+  readonly handoffs: HandoffBoard;
   loadPolicy(): Promise<BrowserPolicy>;
   /** Whether a run of this profile may be at the address; refuses nothing. */
   mayGoTo(profile: BrowserProfile, address: string): boolean;
@@ -153,17 +168,35 @@ export class OperatorWindows {
         await page.navigate({ kind: 'url', url: address });
       }
       const waiting = page;
-      outcome = await this.host.waitForOperator({
-        window: {
-          page: waiting,
-          closed: () => waiting.isClosed() || browsers.get(profile.id) !== shown.running,
-        },
+      const deadlineAt = startedAt + profile.handoffMinutes * MINUTE_MS;
+      const posting = await this.host.handoffs.post({
+        tenantId: request.tenantId,
+        ...(request.spaceId !== undefined ? { spaceId: request.spaceId } : {}),
+        runId: request.runId,
+        stepExecutionId: request.stepExecutionId,
+        ...(request.sessionId !== undefined ? { sessionId: request.sessionId } : {}),
+        profileId: profile.id,
+        site: registrableSite(address),
         reason: request.reason,
         message: request.message,
-        startOrigin: originOf(address),
-        deadlineAt: startedAt + profile.handoffMinutes * MINUTE_MS,
-        clock,
+        waitMs: deadlineAt - clock.now(),
       });
+      try {
+        outcome = await this.host.waitForOperator({
+          window: {
+            page: waiting,
+            closed: () => waiting.isClosed() || browsers.get(profile.id) !== shown.running,
+          },
+          reason: request.reason,
+          message: request.message,
+          startOrigin: originOf(address),
+          deadlineAt,
+          clock,
+          operatorDone: posting.done,
+        });
+      } finally {
+        await posting.close();
+      }
     } catch (error) {
       await this.handBack(profile, executable, shown.restarted);
       throw new BrowserDriverError(

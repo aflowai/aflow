@@ -348,6 +348,8 @@ const screenshot = route(BrowserPageScreenshotInputSchema, async (ctx, driver, i
 const handoff = route(BrowserPageHandoffInputSchema, async (ctx, driver, input) => {
   const result = await driver.handoff({
     ...scopeOf(ctx),
+    stepExecutionId: ctx.stepExecutionId,
+    ...(ctx.job.sessionId !== undefined ? { sessionId: ctx.job.sessionId } : {}),
     pageId: input.pageId,
     reason: input.reason,
     message: input.message,

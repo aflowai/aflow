@@ -52,6 +52,7 @@ import { executionPermitted, loadHostPolicy } from './bindings.js';
 import { createChromeLauncher } from './browser/chromeProcess.js';
 import { BrowserDriver } from './browser/driver.js';
 import type { SignInResult } from './browser/driverTypes.js';
+import { createRedisHandoffBoard } from './browser/handoffBoard.js';
 import { createBrowserIdleSweep } from './browser/idleSweep.js';
 import { followBrowserRequests } from './browser/requestPoll.js';
 import { isBrowserRequestFile, serveBrowserRequests } from './browser/windowRequests.js';
@@ -175,7 +176,18 @@ async function main(): Promise<void> {
     ...(paired.applied.length > 0 ? { pairedEnv: paired.applied.join(',') } : { paired: false }),
   });
 
-  const deps: ExecutorDependencies = { redis, redisBlocking, payloadStore: resolved.store };
+  // The machine's subscriptions: withdrawals and sign-in requests, the abort
+  // pattern both runtimes listen on, and the Done of each hand-off waiting.
+  const hostChannels = createBlockingRedisConnection(
+    `${hostname}-host-channels`,
+    getExecutorRedisConfig(),
+  );
+  const deps: ExecutorDependencies = {
+    redis,
+    redisBlocking,
+    redisSubscriber: hostChannels,
+    payloadStore: resolved.store,
+  };
   // Its own blocking connection: a runtime blocks on its stream between jobs,
   // and two runtimes sharing one would wait on each other.
   const redisBlockingBrowser = createBlockingRedisConnection(
@@ -209,7 +221,12 @@ async function main(): Promise<void> {
       concurrency: parseInt(process.env['BROWSER_EXECUTOR_CONCURRENCY'] ?? '4', 10),
       defaultTimeoutMs: 120_000,
     },
-    { redis, redisBlocking: redisBlockingBrowser, payloadStore: resolved.store },
+    {
+      redis,
+      redisBlocking: redisBlockingBrowser,
+      redisSubscriber: hostChannels,
+      payloadStore: resolved.store,
+    },
   );
 
   // Before the first job: anything a previous executor left running is holding
@@ -254,6 +271,7 @@ async function main(): Promise<void> {
     launcher: createChromeLauncher(),
     hostDir: dirname(policyPath),
     loadPolicy: async () => await loadHostPolicy(policyPath),
+    handoffs: createRedisHandoffBoard({ redis, subscriber: hostChannels, hostname, log }),
   });
   browserRuntime.registerHandler(createBrowserHandler(browserDriver));
   const browserIdleSweep = createBrowserIdleSweep(browserDriver, taskLogger);
@@ -481,11 +499,6 @@ async function main(): Promise<void> {
     for (const session of allSessions()) discardNow(session.scratchDir);
   };
   process.once('exit', endEverything);
-
-  const hostChannels = createBlockingRedisConnection(
-    `${hostname}-host-channels`,
-    getExecutorRedisConfig(),
-  );
 
   // A restart under the dev stack's watcher drains: a harness run, a check or a
   // review in flight is minutes of work the restart has no reason to end. The

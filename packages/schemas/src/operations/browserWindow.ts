@@ -65,7 +65,8 @@ export const BrowserPageHandoffOutputSchema = z.object({
   outcome: z
     .enum(BROWSER_HANDOFF_OUTCOMES)
     .describe(
-      '`completed`: the page left the site it was on and settled — usually signed in. ' +
+      '`completed`: the page left the site it was on and settled — usually signed in — or the ' +
+        'operator pressed Done on the Action Center item. ' +
         '`window_closed`: the operator closed the window; read the outline before assuming ' +
         'anything was done. `timed_out`: nobody finished in time; the page is as they left it.',
     ),
@@ -146,9 +147,10 @@ export const BrowserWindowRegistrations: OperationRegistration[] = [
     actionLabel: 'Waiting for the operator in the browser window…',
     semanticDescription:
       'Show a page this run opened to the operator in a browser window on their machine, for ' +
-      'what only they may do — sign in, pass a challenge, confirm a step — and wait. Returns ' +
-      'when the page leaves the site it was on and settles, when they close the window, or at ' +
-      'the profile’s deadline, with a fresh outline.',
+      'what only they may do — sign in, pass a challenge, confirm a step — and wait, with one ' +
+      'Action Center item per site that every run waiting on it shares. Returns when the page ' +
+      'leaves the site it was on and settles, when they press Done on the item or close the ' +
+      'window, or at the profile’s deadline, with a fresh outline.',
     tags: ['browser', 'web', 'page', 'local', 'operator'],
     idempotency: 'non_idempotent',
     mutates: true,

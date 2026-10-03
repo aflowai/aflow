@@ -9,6 +9,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
+import { browserHandoffKey, browserHandoffSpaceIndexKey } from '@aflow/redis';
 import { ConsumerGroups, StreamKeys } from '@aflow/schemas';
 
 import { renderRedisAcl } from './redisAcl.js';
@@ -101,6 +102,35 @@ describe('redis acl', () => {
     for (const lane of ['ai', 'api', 'search', 'compute', 'code']) {
       expect(admitted(StreamKeys.jobStream(lane))).toBe(false);
     }
+  });
+
+  it('admits a browser hand-off’s record and index, and the Done that ends its wait', () => {
+    const rules = hostLine.split(' ');
+    const admits = (prefix: '~' | '&', name: string): boolean =>
+      rules
+        .filter((rule) => rule.startsWith(prefix))
+        .map(
+          (rule) =>
+            new RegExp(
+              `^${rule
+                .slice(1)
+                .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
+                .replace(/\*/g, '.*')}$`,
+            ),
+        )
+        .some((pattern) => pattern.test(name));
+
+    expect(admits('~', browserHandoffKey('laptop', 'default', 'example.com'))).toBe(true);
+    expect(admits('~', browserHandoffSpaceIndexKey('t', 'space-1'))).toBe(true);
+    expect(admits('&', StreamKeys.browserHandoffDoneChannel('step-1'))).toBe(true);
+    // The wake the executor sends when an item appears or goes.
+    expect(admits('&', StreamKeys.actionCenterWakeChannel('t', 'space-1'))).toBe(true);
+    expect(rules.filter((rule) => rule.includes('browser-handoff'))).toEqual([
+      '~aflow:browser-handoff:*',
+    ]);
+    expect(rules.filter((rule) => rule.includes('handoff-done'))).toEqual([
+      '&aflow:handoff-done:*',
+    ]);
   });
 
   it('separates the two identities', () => {

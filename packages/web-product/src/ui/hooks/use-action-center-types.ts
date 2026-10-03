@@ -28,6 +28,7 @@ export const ACTION_CENTER_ITEM_KINDS = [
   'needs_oauth_consent',
   'write_approval',
   'session_invitation',
+  'browser_handoff',
 ] as const;
 
 export type ActionCenterItemKind = (typeof ACTION_CENTER_ITEM_KINDS)[number];
@@ -90,6 +91,17 @@ export type ActionCenterItemOrigin =
       type: 'trigger_armed';
       scheduleId: string;
       createdAt: string;
+    }
+  | {
+      type: 'browser_handoff';
+      spaceId: string;
+      hostname: string;
+      profileId: string;
+      site: string;
+      reason: 'sign_in' | 'challenge' | 'confirm';
+      message: string;
+      startedAt: string;
+      waiting: Array<{ runId: string; stepExecutionId: string; sessionId?: string }>;
     };
 
 export interface CoachProposalExtension {

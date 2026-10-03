@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { GateContextSchema, RelatesToEntrySchema } from '../operations/user.js';
 import { RatificationApplyReasonSchema } from '../cybernetic/stagedChange.js';
+import { BrowserProfileIdSchema } from '../operations/browserProfile.js';
+import { BROWSER_HANDOFF_REASONS } from '../operations/browserWindow.js';
 
 // ============================================================================
 // Origin discriminator — where this item came from
@@ -106,6 +108,42 @@ export const SessionInvitationOriginSchema = z.object({
 });
 export type SessionInvitationOrigin = z.infer<typeof SessionInvitationOriginSchema>;
 
+/**
+ * A run's page handed to the operator in a browser window on their machine
+ * (`browser.page.handoff`), while the step that asked waits there.
+ *
+ * One item per profile and site, not per run: a second run that needs the same
+ * site signed in joins the item already open. Read from the record the host
+ * executor keeps in Redis for as long as some run waits on it, so the item is
+ * gone when the last wait ends, however it ends. **Done** ends every wait the
+ * item lists with `completed`.
+ */
+export const BrowserHandoffOriginSchema = z.object({
+  type: z.literal('browser_handoff'),
+  spaceId: z.string(),
+  /** The machine whose window it is. */
+  hostname: z.string().min(1).max(255),
+  profileId: BrowserProfileIdSchema,
+  /** The registrable host of the page when it was handed over. */
+  site: z.string().min(1).max(253),
+  reason: z.enum(BROWSER_HANDOFF_REASONS),
+  /** The first run's words for the operator. */
+  message: z.string().min(1).max(8_000),
+  startedAt: z.string().datetime(),
+  /** Each run waiting on it in this space, and the step that is waiting. */
+  waiting: z
+    .array(
+      z.object({
+        runId: z.string(),
+        stepExecutionId: z.string(),
+        sessionId: z.string().optional(),
+      }),
+    )
+    .min(1)
+    .max(50),
+});
+export type BrowserHandoffOrigin = z.infer<typeof BrowserHandoffOriginSchema>;
+
 export const ActionCenterItemOriginSchema = z.discriminatedUnion('type', [
   StepOriginSchema,
   ProposalOriginSchema,
@@ -115,6 +153,7 @@ export const ActionCenterItemOriginSchema = z.discriminatedUnion('type', [
   TriggerArmedOriginSchema,
   WorkflowTaskOriginSchema,
   SessionInvitationOriginSchema,
+  BrowserHandoffOriginSchema,
 ]);
 export type ActionCenterItemOrigin = z.infer<typeof ActionCenterItemOriginSchema>;
 
@@ -239,6 +278,7 @@ export const ActionCenterItemKindSchema = z.enum([
   'needs_oauth_consent',
   'write_approval',
   'session_invitation',
+  'browser_handoff',
 ]);
 export type ActionCenterItemKind = z.infer<typeof ActionCenterItemKindSchema>;
 

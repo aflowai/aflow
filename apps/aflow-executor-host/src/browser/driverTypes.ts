@@ -147,6 +147,9 @@ export interface ScreenshotResult extends TakenScreenshot {
 }
 
 export interface HandoffRequest extends RunScope {
+  /** The step that waits: the Action Center's Done is addressed to it. */
+  readonly stepExecutionId: string;
+  readonly sessionId?: string;
   readonly pageId: string;
   readonly reason: BrowserHandoffReason;
   /** For the operator: what is needed, and what the run does next. */
