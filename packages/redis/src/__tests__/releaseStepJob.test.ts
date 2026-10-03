@@ -15,7 +15,12 @@ import {
   type TenantId,
 } from '@aflow/schemas';
 import { createBlockingRedisConnection } from '../connection.js';
-import { addStepJob, readStepJobs, releaseStepJob } from '../streams/jobs.js';
+import {
+  addStepJob,
+  readStepJobs,
+  releaseStepJob,
+  StepJobNotPendingError,
+} from '../streams/jobs.js';
 
 const STEP_TYPE = 'eval';
 const TEST_DB = 14;
@@ -36,7 +41,7 @@ const JOB = {
 } as unknown as StepJobMessage;
 
 describe('releaseStepJob — a failed give back', () => {
-  it('raises when the give back fails, so the job is not reported as handed back', async () => {
+  function failingWith(error: Error): { redis: RedisType; evaluated: unknown[][] } {
     const evaluated: unknown[][] = [];
     const pipeline = {
       eval: (...args: unknown[]) => {
@@ -46,16 +51,30 @@ describe('releaseStepJob — a failed give back', () => {
       sadd: () => pipeline,
       exec: () =>
         Promise.resolve([
-          [new Error('NOGROUP'), null],
+          [error, null],
           [null, 1],
         ]),
     };
-    const redis = { pipeline: () => pipeline } as unknown as RedisType;
+    return { redis: { pipeline: () => pipeline } as unknown as RedisType, evaluated };
+  }
 
-    await expect(releaseStepJob(redis, JOB, '1-0')).rejects.toThrow('NOGROUP');
+  it('raises when the give back fails, so the job is not reported as handed back', async () => {
+    const { redis, evaluated } = failingWith(
+      new Error('ERR The stream has exhausted the last possible ID'),
+    );
+
+    await expect(releaseStepJob(redis, JOB, '1-0')).rejects.toThrow('exhausted');
     expect(evaluated).toEqual([
       [1, StreamKeys.jobStream(STEP_TYPE), ConsumerGroups.executor(STEP_TYPE), '1-0'],
     ]);
+  });
+
+  it('says so apart when the job was no longer pending in its group', async () => {
+    const { redis } = failingWith(
+      new Error('NOTPENDING 1-0 is not pending in group executor:eval'),
+    );
+
+    await expect(releaseStepJob(redis, JOB, '1-0')).rejects.toBeInstanceOf(StepJobNotPendingError);
   });
 });
 
@@ -159,11 +178,34 @@ describe.skipIf(!AVAILABLE)('releaseStepJob against real Redis', () => {
     expect(await redis.xlen(streamKey)).toBe(2);
   });
 
-  it('adds nothing to the stream when the job cannot be acknowledged', async () => {
+  it('never doubles a job another consumer already finished: the re-entry is taken back out', async () => {
+    const claimed = await claimOne();
+    await redis.xack(streamKey, group, claimed.id);
+
+    await expect(releaseStepJob(redis, claimed.job, claimed.id)).rejects.toBeInstanceOf(
+      StepJobNotPendingError,
+    );
+
+    expect(await redis.xlen(streamKey)).toBe(1);
+    const next = createBlockingRedisConnection('release-b', {
+      host: '127.0.0.1',
+      port: 6379,
+      db: TEST_DB,
+    });
+    try {
+      expect(await readStepJobs(next, STEP_TYPE, 'executor-b', { blockMs: 10 })).toEqual([]);
+    } finally {
+      next.disconnect();
+    }
+  });
+
+  it('takes the re-entry back out when the group is gone, since nothing was acknowledged', async () => {
     const claimed = await claimOne();
     await redis.xgroup('DESTROY', streamKey, group);
 
-    await expect(releaseStepJob(redis, claimed.job, claimed.id)).rejects.toThrow('NOGROUP');
+    await expect(releaseStepJob(redis, claimed.job, claimed.id)).rejects.toBeInstanceOf(
+      StepJobNotPendingError,
+    );
 
     expect(await redis.xlen(streamKey)).toBe(1);
   });

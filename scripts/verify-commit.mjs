@@ -8,9 +8,11 @@
  * scoped to it: the two CI guards over the whole tree, a build of every
  * package the touched workspaces read — their project references and imports,
  * one line per package — a type-check of each touched workspace, the touched
- * tests with every test of each workspace that reads a touched package, ESLint (errors only) on touched sources and Prettier on every touched
- * file. One line per step, and the first failure ends the run with that step's
- * output.
+ * tests with every test of each workspace that reads a touched package — such
+ * a package built first, such an application's build named as skipped — ESLint
+ * (errors only) on touched sources and Prettier on every touched file. One
+ * line per step, the tests reporting only their failures and summary, and the
+ * first failure ends the run with that step's output.
  *
  * Run by hand from a checkout, it measures `HEAD` against `origin/main`.
  *
@@ -222,6 +224,21 @@ const dependentWorkspaces = [...workspaces.byName.values()]
   .filter((w) => !touchedPackageNames.has(w.name))
   .filter((w) => w.reads.some((name) => touchedPackageNames.has(name)))
   .sort((a, b) => a.dir.localeCompare(b.dir));
+const testsOf = (workspace) => {
+  const sourceDir = path.join(repoRoot, workspace.dir, 'src');
+  if (!existsSync(sourceDir)) return [];
+  return readdirSync(sourceDir, { recursive: true })
+    .map((file) => `${workspace.dir}/src/${String(file).split(path.sep).join('/')}`)
+    .filter((file) => TEST_FILE.test(file) && !DATABASE_TEST_FILE.test(file));
+};
+const testedDependents = dependentWorkspaces
+  .map((workspace) => ({ workspace, tests: testsOf(workspace) }))
+  .filter(({ tests }) => tests.length > 0);
+if (dependentWorkspaces.length > 0) {
+  console.log(
+    `dependents of the touched packages: ${dependentWorkspaces.map((w) => w.name).join(', ')}`,
+  );
+}
 
 // tsx as a loader rather than its CLI: the CLI opens a socket to talk to its
 // child, and the sandbox a check runs in refuses to listen on one.
@@ -236,7 +253,12 @@ for (const guard of ['large-files', 'context-budget']) {
 // postinstall; a checkout mirrors the installation and builds nothing. So
 // every package the touched workspaces read is built here first, after the
 // packages it is built against, by its own `build` — which writes inside its
-// own directory, so in the checkout and never in the folder.
+// own directory, so in the checkout and never in the folder. A dependent about
+// to be tested is built too, since its tests can read its own output as they
+// read any other package's. Only packages are built, as postinstall builds
+// them: an application builds in its deploy pipeline — `web-local`'s fetches
+// its fonts, which a check's closed egress refuses — so its build is skipped,
+// by name, and its tests run without it.
 const needed = new Set();
 const need = (name) => {
   const workspace = workspaces.byName.get(name);
@@ -251,6 +273,7 @@ for (const workspace of touchedWorkspaces) {
 for (const workspace of dependentWorkspaces) {
   for (const read of workspace.reads) need(read);
 }
+for (const { workspace } of testedDependents) need(workspace.name);
 const ordered = [];
 const placed = new Set();
 const place = (name) => {
@@ -261,7 +284,11 @@ const place = (name) => {
 };
 for (const name of [...needed].sort()) place(name);
 for (const workspace of ordered) {
-  if (workspace.build === undefined || !workspace.dir.startsWith('packages/')) continue;
+  if (workspace.build === undefined) continue;
+  if (!workspace.dir.startsWith('packages/')) {
+    console.log(`skip build ${workspace.name}: an application builds in its deploy pipeline`);
+    continue;
+  }
   run(`build ${workspace.name}`, 'sh', ['-c', workspace.build], {
     cwd: path.join(repoRoot, workspace.dir),
     env: {
@@ -286,33 +313,24 @@ const catalogGuards = touchedNames.has('@aflow/platform-artifacts')
       .map((file) => `${CATALOG_GUARD_DIR}/${String(file)}`)
       .filter((file) => CATALOG_GUARD_FILE.test(path.basename(file)))
   : [];
-const dependentTests = dependentWorkspaces.flatMap((workspace) => {
-  const sourceDir = path.join(repoRoot, workspace.dir, 'src');
-  if (!existsSync(sourceDir)) return [];
-  return readdirSync(sourceDir, { recursive: true })
-    .map((file) => `${workspace.dir}/src/${String(file).split(path.sep).join('/')}`)
-    .filter((file) => TEST_FILE.test(file));
-});
-if (dependentWorkspaces.length > 0) {
-  console.log(
-    `dependents of the touched packages: ${dependentWorkspaces.map((w) => w.name).join(', ')}`,
-  );
-}
 const tests = [
   ...new Set([
     ...present.filter((file) => TEST_FILE.test(file)),
     ...catalogGuards,
-    ...dependentTests,
+    ...testedDependents.flatMap(({ tests: dependentTests }) => dependentTests),
   ]),
 ].filter((file) => !DATABASE_TEST_FILE.test(file));
 if (tests.length === 0) {
   console.log('ok   tests: none touched');
 } else {
-  // What `yarn test:file` runs.
+  // What `yarn test:file` runs, reporting only the failures and the summary: a
+  // sweep passes hundreds of files, and a line for each pushes the failure out
+  // of what is read.
   run(`tests (${String(tests.length)} files)`, process.execPath, [
     'scripts/test-runner.mjs',
     'file',
     ...tests.sort(),
+    '--reporter=minimal',
   ]);
 }
 

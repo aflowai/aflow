@@ -30,7 +30,7 @@ import {
   requireWritable,
 } from '../bindings.js';
 import { issueCheckReceipt } from '../checkReceipt.js';
-import { checkOutcome, runFolderChecks, skippedCheck, storedOutput } from '../commitCheck.js';
+import { checkOutcome, runFolderChecks, skippedCheck } from '../commitCheck.js';
 import { checksOf } from '../folderChecks.js';
 import { noSandboxMessage, reapWithdrawn, sandboxReadiness } from '../sandboxedRun.js';
 import { isGitRepository, resolveCommit, WorktreeError } from '../worktree.js';
@@ -81,7 +81,7 @@ async function check(ctx: ExecutorContext, policyPath: string): Promise<StepResu
     },
     onOutput: () => ctx.reportProgress?.(),
   });
-  const outputRef = await ctx.writePayload('logs', storedOutput(run));
+  const outputRef = await ctx.writePayload('logs', run.output);
   const outcome = checkOutcome({ bindingId: binding.id, argv, timeoutMs, sha, run, outputRef });
   const receipt = issueCheckReceipt({
     bindingId: binding.id,

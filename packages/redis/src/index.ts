@@ -65,6 +65,7 @@ export {
   readStepJobs,
   ackStepJob,
   releaseStepJob,
+  StepJobNotPendingError,
   claimPendingStepJobs,
   addControlMessage,
   publishStepAbort,

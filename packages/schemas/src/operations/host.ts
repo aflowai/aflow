@@ -1245,11 +1245,19 @@ export const HostCommitScanOutputSchema = z.object({
 export const HOST_CHECK_TAIL_BYTES = 4 * 1024;
 
 /**
- * How much of a check's output is stored. A type-check's errors and a scoped
- * test run's report fit with room to spare; past this a check is printing in a
- * loop, and its first megabyte says nothing its last does not.
+ * How much of the start of a check's output is stored: the steps it reports
+ * before the first failure — what ran and what passed — with room to spare.
  */
-export const HOST_CHECK_OUTPUT_KEEP_BYTES = 1024 * 1024;
+export const HOST_CHECK_OUTPUT_HEAD_BYTES = 64 * 1024;
+
+/**
+ * How much of the end of a check's output is stored, where a failing check
+ * says why. A test runner's failure block — the assertion, its diff, the code
+ * frame and the stack — runs to a few kilobytes, and every failure of a scoped
+ * run with its summary fits with room to spare; past this a check is printing
+ * in a loop. What falls between the head and this is let go, the cut marked.
+ */
+export const HOST_CHECK_OUTPUT_TAIL_BYTES = 1024 * 1024;
 
 export const HostCommitCheckInputSchema = z.object({
   bindingId: HostBindingRef,
@@ -1298,8 +1306,10 @@ export const HostCommitCheckOutputSchema = z.object({
     .string()
     .optional()
     .describe(
-      'Standard output and error together, in the order they came, stored as a payload — the ' +
-        'last `HOST_CHECK_OUTPUT_KEEP_BYTES` of them where there was more. Absent where nothing ran.',
+      'Standard output and error together, in the order they came, stored as a payload — where ' +
+        'there was more, the first `HOST_CHECK_OUTPUT_HEAD_BYTES` and the last ' +
+        '`HOST_CHECK_OUTPUT_TAIL_BYTES` of them, with a line between saying how much was not ' +
+        'kept. Absent where nothing ran.',
     ),
   tail: z
     .string()

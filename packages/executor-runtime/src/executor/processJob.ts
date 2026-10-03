@@ -13,6 +13,7 @@ import {
   registerStepInFlight,
   clearStepInFlight,
   releaseStepJob,
+  StepJobNotPendingError,
   wasStepCancelled,
 } from '@aflow/redis';
 import type {
@@ -192,6 +193,12 @@ async function setAsideUnstarted(
         });
       },
       (err: unknown) => {
+        if (err instanceof StepJobNotPendingError) {
+          jobLog.info('Gave back nothing: the step was no longer this executor’s', {
+            operationId: job.operationId,
+          });
+          return;
+        }
         // Left pending, so still this process's: once its heartbeat lapses the
         // reclaim hands it to another, which is slower but loses nothing.
         vouchUntilStopped(host, job, jobLog);

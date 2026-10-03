@@ -62,8 +62,10 @@ scripts/verify-commit.mjs`), and Local Publish runs it after the commit and befo
    first failure: the two CI guards; a build of every package the touched workspaces
    or the workspaces reading a touched package reference or import, since a checkout builds
    nothing; `tsc -p` per touched workspace (and `web-product`'s `src/ui`); the touched tests
-   through the test runner, with every test of each workspace that reads a touched package,
-   so a contract change meets its consumers before the push, the catalog guards when `platform-artifacts` is touched and never a `*.pg.test.ts`; ESLint,
+   through the test runner, reporting only failures and the summary, with every test of
+   each workspace that reads a touched package, so a contract change meets its consumers
+   before the push — such a package built first, such an application's build reported
+   skipped by name — the catalog guards when `platform-artifacts` is touched and never a `*.pg.test.ts`; ESLint,
    errors only, on touched sources; and Prettier on every touched file. A failure fails
    the publication with the end of what it printed and nothing pushed: read it on the
    `check-commit` task, and commission the fix onto the branch. The pull request's CI

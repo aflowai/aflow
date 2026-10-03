@@ -41,6 +41,7 @@ export {
   readStepJobs,
   ackStepJob,
   releaseStepJob,
+  StepJobNotPendingError,
   claimPendingStepJobs,
   listPendingStepJobs,
   claimPendingStepJobsByIds,

@@ -15,6 +15,7 @@ const { redisMock } = vi.hoisted(() => ({
     clearStepInFlight: vi.fn().mockResolvedValue(undefined),
     wasStepCancelled: vi.fn().mockResolvedValue(false),
     releaseStepJob: vi.fn().mockResolvedValue('2-0'),
+    StepJobNotPendingError: class StepJobNotPendingError extends Error {},
   },
 }));
 vi.mock('@aflow/redis', () => redisMock);
@@ -124,6 +125,21 @@ describe('processJob — a step given back while it waits for a slot', () => {
     lifetime.abort();
     await vi.advanceTimersByTimeAsync(STEP_HEARTBEAT_INTERVAL_MS * 2);
     expect(inFlightRefreshes()).toBe(beforeRefresh + 1);
+  });
+
+  it('vouches for nothing once the step is no longer pending as its own', async () => {
+    redisMock.releaseStepJob.mockRejectedValueOnce(
+      new redisMock.StepJobNotPendingError('NOTPENDING 1-0 is not pending'),
+    );
+    const processing = processJob(host(), '1-0', HARNESS_JOB, slotController);
+    await vi.advanceTimersByTimeAsync(0);
+    claiming.abort();
+    await processing;
+
+    expect(reportingMock.acknowledgeJob).not.toHaveBeenCalled();
+    const afterRelease = inFlightRefreshes();
+    await vi.advanceTimersByTimeAsync(STEP_HEARTBEAT_INTERVAL_MS * 3);
+    expect(inFlightRefreshes()).toBe(afterRelease);
   });
 
   it('drops a step cancelled while it waits, releasing its in-flight record', async () => {
