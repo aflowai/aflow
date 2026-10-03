@@ -52,7 +52,7 @@ describe('resolveClerkModel', () => {
     const resolved = resolveClerkModel({ default: DEFAULT_CYBERNETIC_MODEL }, [
       'accounts/fireworks/models/glm-5p3',
       'accounts/fireworks/models/glm-5p3-flash',
-      'claude-sonnet-5',
+      'claude-sonnet-5-5',
     ]);
     expect(resolved).toMatchObject({ resolved: true, mode: 'auto', modelRef: 'glm-flash' });
   });

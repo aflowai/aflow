@@ -244,6 +244,7 @@ export function createAIClient(config: AIClientConfig): AIClient {
     reasoning?: ModelDefinition['reasoning'];
     /** False when the provider rejects a sampling temperature for this model. */
     acceptsTemperature?: boolean;
+    acceptsForcedToolChoice?: boolean;
     /**
      * The most output tokens this model will emit in one call. Absent for
      * models outside the catalog, where the caller is trusted.
@@ -277,6 +278,7 @@ export function createAIClient(config: AIClientConfig): AIClient {
           ? { reasoning: model.reasoning }
           : {}),
         acceptsTemperature: model.capabilities.samplingTemperature !== false,
+        acceptsForcedToolChoice: model.capabilities.forcedToolChoice !== false,
         maxOutputTokens: model.maxOutputTokens,
         fromCatalog: true,
         vision: model.capabilities.vision,
@@ -363,6 +365,10 @@ export function createAIClient(config: AIClientConfig): AIClient {
       resolved.maxOutputTokens,
     );
 
+    const toolChoice = (rest as { toolChoice?: unknown }).toolChoice;
+    const forcesToolCall =
+      toolChoice !== undefined && toolChoice !== 'auto' && toolChoice !== 'none';
+
     const base = {
       ...rest,
       ...(messages ? { messages } : {}),
@@ -373,6 +379,9 @@ export function createAIClient(config: AIClientConfig): AIClient {
         : {}),
       ...(_temperature !== undefined && resolved.acceptsTemperature !== false
         ? { temperature: _temperature }
+        : {}),
+      ...(forcesToolCall && resolved.acceptsForcedToolChoice === false
+        ? { toolChoice: 'auto' as const }
         : {}),
     };
     if (resolved.provider === 'openrouter' && resolved.openRouterProvider) {

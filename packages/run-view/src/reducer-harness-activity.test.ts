@@ -14,7 +14,7 @@ import type { SessionEvent } from './types.js';
 const STEP = '33333333-3333-3333-3333-333333333333';
 const TIMESTAMP = '2026-09-24T10:00:00.000Z';
 
-const STATUS: HarnessActivityLine = { kind: 'status', at: 0, text: 'Model claude-opus-5' };
+const STATUS: HarnessActivityLine = { kind: 'status', at: 0, text: 'Model claude-opus-5-5' };
 const THOUGHT: HarnessActivityLine = { kind: 'thought', at: 120, text: 'Reading the parser.' };
 const TOOL: HarnessActivityLine = {
   kind: 'tool',

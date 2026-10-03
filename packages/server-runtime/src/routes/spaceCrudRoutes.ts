@@ -870,7 +870,7 @@ export const spaceCrudRoutes: FastifyPluginAsync = async (fastify) => {
           })) as Array<{ directives: { modelDefaults?: Record<string, string> } | null }>;
           // Per role, and by catalog id: a space-wide set of prior refs both
           // refuses a harmless renaming of what a role already holds (`luna`
-          // re-saved as `gpt-5.6-luna`) and waves through a genuinely new
+          // re-saved as `gpt-6-luna`) and waves through a genuinely new
           // assignment whenever some other role happened to hold the same
           // excluded model.
           const introduced = introducedOffListModels(

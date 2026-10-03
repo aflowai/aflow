@@ -14,9 +14,9 @@ describe('the selection a resumed workspace starts from', () => {
   it('is the one the workspace already holds', () => {
     expect(
       selectionFromDirectives({
-        modelDefaults: { default: 'glm-pro', coach: 'claude-sonnet-5' },
+        modelDefaults: { default: 'glm-pro', coach: 'claude-sonnet-5-5' },
       }),
-    ).toEqual({ defaultRef: 'glm-pro', roleOverrides: { coach: 'claude-sonnet-5' } });
+    ).toEqual({ defaultRef: 'glm-pro', roleOverrides: { coach: 'claude-sonnet-5-5' } });
   });
 
   /** The workspace is running on it, whatever the recommendation set says. */

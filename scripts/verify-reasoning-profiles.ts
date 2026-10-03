@@ -38,7 +38,7 @@ const PROBE_TOOL = {
 
 /** A provider that cannot authenticate tells us nothing about its models. */
 function isCredentialFailure(message: string): boolean {
-  return /auth|api key|unauthor|forbidden|user not found|credential/i.test(message);
+  return /auth|api key|unauthor|forbidden|user not found|credential|not configured/i.test(message);
 }
 
 const client = createAIClient({
@@ -48,6 +48,7 @@ const client = createAIClient({
     google: { apiKey: process.env['GEMINI_API_KEY'] ?? '' },
     fireworks: { apiKey: process.env['FIREWORKS_API_KEY'] ?? '' },
     openrouter: { apiKey: process.env['OPENROUTER_API_KEY'] ?? '' },
+    xai: { apiKey: process.env['XAI_API_KEY'] ?? '' },
   },
 });
 

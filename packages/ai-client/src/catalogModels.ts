@@ -5,7 +5,7 @@
  * - Each model has a provider-specific `id` (sent to the API).
  * - Generic aliases (e.g. "gpt", "flash-lite", "opus") point to the latest
  *   version in that class. When a new version ships, move the generic alias.
- * - Version-pinned aliases (e.g. "gpt-5.6", "flash-3.8") let flows lock to a
+ * - Version-pinned aliases (e.g. "gpt-6.1", "flash-3.8") let flows lock to a
  *   specific version.
  */
 import { mediaRouteReferenceLimits } from '@aflow/schemas';
@@ -60,11 +60,11 @@ export const builtInModels: ModelDefinition[] = [
   // OpenAI Text Models
   // ============================================================================
   {
-    id: 'gpt-5.6-terra',
+    id: 'gpt-6-astra',
     provider: 'openai',
-    displayName: 'GPT-5.6 Terra',
+    displayName: 'GPT-6 Astra',
     description:
-      'Flagship-grade tier of the GPT-5.6 family at mid-range pricing. 1M context. Reasoning, vision, code interpreter, web search.',
+      'Frontier tier of the GPT-6 family — the most capable model OpenAI offers, for the most demanding reasoning and coding. 1M context. Vision, web search, file search, computer use.',
     contextWindow: 1050000,
     maxOutputTokens: 128000,
     capabilities: {
@@ -73,23 +73,45 @@ export const builtInModels: ModelDefinition[] = [
       reasoning: true,
       samplingTemperature: false,
       structuredOutputs: true,
-      codeInterpreter: true,
       webSearch: true,
     },
-    pricing: { promptPer1M: 2.5, cachedPromptPer1M: 0.25, completionPer1M: 15, currency: 'USD' },
+    pricing: { promptPer1M: 10, completionPer1M: 50, currency: 'USD' },
+    traits: { speed: 2, cost: 5, intelligence: 5, outputType: 'text' },
+    aliases: ['astra', 'openai-astra'],
+    // Reasoning cannot be disabled on this tier: there is no `none`, so `off`
+    // clamps to `low`. No default — the provider's own is the one we want. The
+    // family also exposes `xhigh`/`max`, which the shared effort ladder has no
+    // rung for.
+    reasoning: { supported: ['low', 'medium', 'high'] },
+  },
+  {
+    id: 'gpt-6.1-sol',
+    provider: 'openai',
+    displayName: 'GPT-6.1 Sol',
+    description:
+      'Near-Astra performance for complex work at mid-range pricing. 1M context. Reasoning, vision, web search, file search, computer use.',
+    contextWindow: 1050000,
+    maxOutputTokens: 128000,
+    capabilities: {
+      ...defaultCapabilities,
+      vision: true,
+      reasoning: true,
+      samplingTemperature: false,
+      structuredOutputs: true,
+      webSearch: true,
+    },
+    pricing: { promptPer1M: 2, completionPer1M: 10, currency: 'USD' },
     traits: { speed: 3, cost: 3, intelligence: 5, outputType: 'text' },
-    aliases: ['gpt', 'openai-gpt', 'gpt-5.6'],
-    // No default — the provider's own `medium` is the one we want. `off` maps to
-    // OpenAI's `none`. The family also exposes `xhigh`/`max`, which the shared
-    // effort ladder has no rung for.
-    reasoning: { supported: ['off', 'low', 'medium', 'high'] },
+    aliases: ['gpt', 'openai-gpt', 'sol', 'openai-sol', 'gpt-6.1'],
+    // No `none` on this tier either; `off` clamps to `low`.
+    reasoning: { supported: ['low', 'medium', 'high'] },
   },
   {
-    id: 'gpt-5.6-sol',
+    id: 'gpt-6-luna',
     provider: 'openai',
-    displayName: 'GPT-5.6 Sol',
+    displayName: 'GPT-6 Luna',
     description:
-      'Frontier tier of the GPT-5.6 family — the deepest reasoning OpenAI offers, for complex professional work. 1M context. Vision, code interpreter, web search.',
+      'Cost tier of the GPT-6 family, for focused, high-volume work. Same 1M context and tool surface as its siblings at a fraction of the price. Vision, web search, file search, computer use.',
     contextWindow: 1050000,
     maxOutputTokens: 128000,
     capabilities: {
@@ -98,34 +120,12 @@ export const builtInModels: ModelDefinition[] = [
       reasoning: true,
       samplingTemperature: false,
       structuredOutputs: true,
-      codeInterpreter: true,
       webSearch: true,
     },
-    pricing: { promptPer1M: 5, cachedPromptPer1M: 0.5, completionPer1M: 30, currency: 'USD' },
-    traits: { speed: 2, cost: 4, intelligence: 5, outputType: 'text' },
-    aliases: ['sol', 'openai-sol', 'gpt-5.6-frontier'],
-    reasoning: { supported: ['off', 'low', 'medium', 'high'] },
-  },
-  {
-    id: 'gpt-5.6-luna',
-    provider: 'openai',
-    displayName: 'GPT-5.6 Luna',
-    description:
-      'Cost tier of the GPT-5.6 family, for high-volume work. Same 1M context and tool surface as its siblings at a fraction of the price. Vision, code interpreter, web search.',
-    contextWindow: 1050000,
-    maxOutputTokens: 128000,
-    capabilities: {
-      ...defaultCapabilities,
-      vision: true,
-      reasoning: true,
-      samplingTemperature: false,
-      structuredOutputs: true,
-      codeInterpreter: true,
-      webSearch: true,
-    },
-    pricing: { promptPer1M: 0.2, cachedPromptPer1M: 0.02, completionPer1M: 1.2, currency: 'USD' },
+    pricing: { promptPer1M: 0.1, completionPer1M: 0.5, currency: 'USD' },
     traits: { speed: 5, cost: 1, intelligence: 4, outputType: 'text' },
     aliases: ['luna', 'openai-luna'],
+    // The one tier of the family that accepts `none`, which `off` maps to.
     reasoning: { supported: ['off', 'low', 'medium', 'high'] },
   },
   {
@@ -220,43 +220,74 @@ export const builtInModels: ModelDefinition[] = [
   // ============================================================================
   // Anthropic Models
   // ============================================================================
+  // Thinking cannot be disabled on Fable 5.1, Opus 5.5 or Sonnet 5.5 — an
+  // explicit `disabled` is a 400 — so none has an `off` rung and `off` clamps
+  // to `low`. All three also reject a sampling temperature and a forced tool
+  // choice. They expose `xhigh`/`max` too, which the shared effort ladder has
+  // no rung for.
   {
-    id: 'claude-opus-5',
+    id: 'claude-fable-5-1',
     provider: 'anthropic',
-    displayName: 'Claude Opus 5',
+    displayName: 'Claude Fable 5.1',
     description:
-      'Anthropic flagship for complex agentic coding and long-horizon reasoning. 1M context, adaptive thinking.',
+      "Anthropic's most capable model, for demanding reasoning and long-horizon agentic work. 1M context, always-on adaptive thinking.",
     contextWindow: 1000000,
     maxOutputTokens: 128000,
     capabilities: {
       ...defaultCapabilities,
       vision: true,
       reasoning: true,
+      samplingTemperature: false,
+      forcedToolChoice: false,
       structuredOutputs: true,
     },
-    pricing: { promptPer1M: 5, cachedPromptPer1M: 0.5, completionPer1M: 25, currency: 'USD' },
-    traits: { speed: 2, cost: 4, intelligence: 5, outputType: 'text' },
-    aliases: ['opus', 'anthropic-opus', 'claude-opus'],
-    reasoning: { supported: ['off', 'low', 'medium', 'high'] },
+    pricing: { promptPer1M: 10, cachedPromptPer1M: 0.25, completionPer1M: 50, currency: 'USD' },
+    traits: { speed: 2, cost: 5, intelligence: 5, outputType: 'text' },
+    aliases: ['fable', 'anthropic-fable', 'claude-fable'],
+    reasoning: { supported: ['low', 'medium', 'high'] },
   },
   {
-    id: 'claude-sonnet-5',
+    id: 'claude-opus-5-5',
     provider: 'anthropic',
-    displayName: 'Claude Sonnet 5',
+    displayName: 'Claude Opus 5.5',
     description:
-      'Balanced Anthropic model for coding, analysis, and everyday agentic tasks. 1M context, adaptive thinking.',
+      'Anthropic model for long-running agentic coding and knowledge work. 1M context, always-on adaptive thinking.',
     contextWindow: 1000000,
     maxOutputTokens: 128000,
     capabilities: {
       ...defaultCapabilities,
       vision: true,
       reasoning: true,
+      samplingTemperature: false,
+      forcedToolChoice: false,
       structuredOutputs: true,
     },
-    pricing: { promptPer1M: 3, cachedPromptPer1M: 0.3, completionPer1M: 15, currency: 'USD' },
+    pricing: { promptPer1M: 4, cachedPromptPer1M: 0.2, completionPer1M: 20, currency: 'USD' },
+    traits: { speed: 2, cost: 4, intelligence: 5, outputType: 'text' },
+    aliases: ['opus', 'anthropic-opus', 'claude-opus'],
+    // No default — left unset the provider reasons at `medium` on this model.
+    reasoning: { supported: ['low', 'medium', 'high'] },
+  },
+  {
+    id: 'claude-sonnet-5-5',
+    provider: 'anthropic',
+    displayName: 'Claude Sonnet 5.5',
+    description:
+      'Balanced Anthropic model — the best combination of speed and intelligence for coding, analysis, and everyday agentic tasks. 1M context, adaptive thinking.',
+    contextWindow: 1000000,
+    maxOutputTokens: 128000,
+    capabilities: {
+      ...defaultCapabilities,
+      vision: true,
+      reasoning: true,
+      samplingTemperature: false,
+      forcedToolChoice: false,
+      structuredOutputs: true,
+    },
+    pricing: { promptPer1M: 2, cachedPromptPer1M: 0.2, completionPer1M: 10, currency: 'USD' },
     traits: { speed: 3, cost: 3, intelligence: 5, outputType: 'text' },
     aliases: ['sonnet', 'anthropic-sonnet', 'claude-sonnet'],
-    reasoning: { supported: ['off', 'low', 'medium', 'high'] },
+    reasoning: { supported: ['low', 'medium', 'high'] },
   },
   {
     id: 'claude-haiku-4-5',
@@ -270,7 +301,7 @@ export const builtInModels: ModelDefinition[] = [
       vision: true,
       structuredOutputs: true,
     },
-    pricing: { promptPer1M: 0.8, cachedPromptPer1M: 0.08, completionPer1M: 4, currency: 'USD' },
+    pricing: { promptPer1M: 1, cachedPromptPer1M: 0.1, completionPer1M: 5, currency: 'USD' },
     traits: { speed: 4, cost: 2, intelligence: 3, outputType: 'text' },
     aliases: ['haiku', 'anthropic-haiku', 'claude-haiku', 'claude-4.5-haiku'],
   },
@@ -470,12 +501,13 @@ export const builtInModels: ModelDefinition[] = [
   // ============================================================================
   // OpenAI Image Generation Models (GPT Image)
   // ============================================================================
+  // No per-image rate is recorded for either: a render is reported unpriced
+  // rather than at a figure carried over from the model it replaced.
   {
-    id: 'gpt-image-1.5',
+    id: 'gpt-image-2.5-sunburst',
     provider: 'openai',
-    displayName: 'GPT Image 1.5',
-    description:
-      'State-of-the-art image generation. Superior instruction following, text rendering, and detailed editing.',
+    displayName: 'GPT-Image-2.5 Sunburst',
+    description: "OpenAI's most capable model for image generation and editing.",
     contextWindow: 0,
     maxOutputTokens: 0,
     capabilities: {
@@ -489,9 +521,57 @@ export const builtInModels: ModelDefinition[] = [
       streaming: false,
       imageGeneration: true,
     },
-    pricing: { promptPer1M: 0, completionPer1M: 0, imagePerImage: 0.042, currency: 'USD' },
+    pricing: { promptPer1M: 0, completionPer1M: 0, currency: 'USD' },
     traits: { speed: 3, cost: 3, outputType: 'image' },
     aliases: ['gpt-image'],
+  },
+  {
+    id: 'gpt-image-2.5-flare',
+    provider: 'openai',
+    displayName: 'GPT-Image-2.5 Flare',
+    description: 'Fast, high-quality everyday image generation.',
+    contextWindow: 0,
+    maxOutputTokens: 0,
+    capabilities: {
+      chat: false,
+      completion: false,
+      embedding: false,
+      vision: true,
+      audio: false,
+      functionCalling: false,
+      jsonMode: false,
+      streaming: false,
+      imageGeneration: true,
+    },
+    pricing: { promptPer1M: 0, completionPer1M: 0, currency: 'USD' },
+    traits: { speed: 4, cost: 2, outputType: 'image' },
+    aliases: ['gpt-image-flare'],
+  },
+
+  // ============================================================================
+  // OpenAI Realtime Models
+  // ============================================================================
+  {
+    id: 'gpt-live-1',
+    provider: 'openai',
+    displayName: 'GPT-Live 1',
+    description:
+      'Realtime speech-to-speech model for natural, expressive voice conversations with smooth interruption handling.',
+    contextWindow: 0,
+    maxOutputTokens: 0,
+    capabilities: {
+      chat: false,
+      completion: false,
+      embedding: false,
+      vision: false,
+      audio: true,
+      functionCalling: false,
+      jsonMode: false,
+      streaming: false,
+    },
+    pricing: { promptPer1M: 0, completionPer1M: 0, currency: 'USD' },
+    traits: { speed: 4, outputType: 'audio' },
+    aliases: ['gpt-live'],
   },
 
   // ============================================================================
@@ -955,4 +1035,12 @@ export const builtInModels: ModelDefinition[] = [
 export const retiredModels: Readonly<Record<string, string>> = {
   'accounts/fireworks/models/glm-5p2': 'accounts/fireworks/models/glm-5p3',
   'gemini-3.7-flash': 'gemini-3.8-flash',
+  'claude-opus-5': 'claude-opus-5-5',
+  'claude-sonnet-5': 'claude-sonnet-5-5',
+  'gpt-5.6-sol': 'gpt-6.1-sol',
+  'gpt-5.6-frontier': 'gpt-6-astra',
+  'gpt-5.6-terra': 'gpt-6.1-sol',
+  'gpt-5.6': 'gpt-6.1-sol',
+  'gpt-5.6-luna': 'gpt-6-luna',
+  'gpt-image-1.5': 'gpt-image-2.5-sunburst',
 };
