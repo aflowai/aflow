@@ -7,6 +7,8 @@
  * timeout starts only once it is admitted, so the wait is not charged to the
  * work. While it waits it gives back its executor-wide slot, so the
  * operations behind it that have no limit of their own are not held up by it.
+ * The signal ends the wait and leaves the place in the queue; a step it
+ * reaches has neither slot. Resolves to whether the step had to wait.
  */
 import type { ConcurrencyLimiter } from '../concurrency.js';
 import type { SlotController } from '../types.js';
@@ -17,16 +19,19 @@ export async function admitOperation(admission: {
   readonly slotController: SlotController;
   readonly refreshInFlight: () => void;
   readonly waiting: () => void;
-}): Promise<void> {
-  const { limiter, slotController, refreshInFlight, waiting } = admission;
-  if (limiter.tryAcquire()) return;
+  readonly signal: AbortSignal;
+}): Promise<boolean> {
+  const { limiter, slotController, refreshInFlight, waiting, signal } = admission;
+  signal.throwIfAborted();
+  if (limiter.tryAcquire()) return false;
   waiting();
   slotController.release();
   const heartbeat = setInterval(refreshInFlight, STEP_HEARTBEAT_INTERVAL_MS);
   try {
-    await limiter.acquire();
+    await limiter.acquire(signal);
   } finally {
     clearInterval(heartbeat);
   }
   await slotController.acquire();
+  return true;
 }

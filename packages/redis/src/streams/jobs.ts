@@ -151,6 +151,35 @@ export async function ackStepJob(
 }
 
 /**
+ * Hand a claimed job back to its stream unworked, for whichever consumer reads
+ * next. Re-entered rather than left pending: the reclaim skips a live consumer
+ * and its own name, so a message left in this consumer's pending list would
+ * wait on this executor's heartbeat lapsing. One transaction, so the job is
+ * neither lost nor doubled by a failure between the two.
+ */
+export async function releaseStepJob(
+  redis: Redis,
+  job: StepJobMessage,
+  messageId: string,
+): Promise<string> {
+  const streamKey = StreamKeys.jobStream(job.stepType);
+  const groupName = ConsumerGroups.executor(job.stepType);
+  const transaction = redis
+    .multi()
+    .xadd(streamKey, '*', ...serializeMessage(job))
+    .xack(streamKey, groupName, messageId);
+  armRetentionCandidate(transaction, streamKey);
+  const replies = await transaction.exec();
+  const ack = replies?.[1];
+  if (ack?.[0]) throw ack[0];
+  const releasedId = firstReplyString(replies);
+  if (releasedId === null) {
+    throw new Error('Failed to release job to stream');
+  }
+  return releasedId;
+}
+
+/**
  * List pending step job entries with owner and idle time.
  * Uses XPENDING with IDLE filter (Redis 6.2+).
  *

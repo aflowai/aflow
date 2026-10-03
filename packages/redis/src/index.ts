@@ -64,6 +64,7 @@ export {
   addStepJob,
   readStepJobs,
   ackStepJob,
+  releaseStepJob,
   claimPendingStepJobs,
   addControlMessage,
   publishStepAbort,
@@ -496,4 +497,5 @@ export {
 } from './computeBudget.js';
 
 export * from './hostInventory.js';
+export * from './browserHandoff.js';
 export * from './sessionResidue.js';

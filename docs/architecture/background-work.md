@@ -9,7 +9,7 @@ Production background discovery must be event- or candidate-driven. A task may n
 work by scanning the Redis keyspace, reading a whole dirty set, or enumerating tenant schemas;
 idle cost may not grow with logical shards, tenants, stored keys, or connected subscribers.
 
-**45 registered tasks** across 8 services.
+**46 registered tasks** across 8 services.
 2 task(s) still carry a residual poll — a periodic datastore read that
 exists only because an event or candidate path is incomplete.
 
@@ -39,6 +39,7 @@ Datastore operations per minute with zero due work, grouped by what each scope m
 | `executor.oauth.consent_state_reaper` | executor-mcp | feature | candidate | per_instance | 5m | 0.2 | safe |
 | `executor.step_inflight_refresh` | shared-runtime | correctness | active-resource | per_instance | 10s | 0 | never |
 | `host.browser_idle` | executor-host | feature | active-resource | per_instance | 1m | 0 | safe |
+| `host.browser_requests` | executor-host | feature | candidate | per_instance | 1.5s | 0 | safe |
 | `host.runtime_inventory` | executor-host | feature | heartbeat | per_instance | 1m | 2 | safe |
 | `mcp-server.session_store_cleanup` | mcp-server | operational | active-resource | per_instance | 5m | 0 | safe |
 | `orchestrator.active_run_reconcile` | orchestrator | operational | audit | per_instance | event-driven | 0 | safe |
@@ -322,7 +323,7 @@ Datastore operations per minute with zero due work, grouped by what each scope m
 
 ### `executor.step_inflight_refresh`
 
-**Purpose.** Refresh the in-flight key for each step attempt this process has claimed, running or waiting for a slot.
+**Purpose.** Refresh the in-flight key for each step attempt this process has claimed, running or waiting for a slot, and for one it gave back to its stream until this process stops.
 
 **Invariant.** A live step attempt is never reaped as stalled by the orchestrator watchdog.
 
@@ -373,6 +374,34 @@ Datastore operations per minute with zero due work, grouped by what each scope m
 | Source | `apps/aflow-executor-host/src/browser/idleSweep.ts`<br>`apps/aflow-executor-host/src/browser/driver.ts` |
 
 > Per instance because the resource is per instance: the browsers are processes this executor started and the pages live in its memory. The executor is not told when a run ends, so this is what bounds a page a run abandoned. A cycle with no browser running reads nothing. The batch counts closures — a page closed or a browser stopped — and a cycle stops at 20, leaving the rest for the next: each closure is one call to a browser on this machine, so 20 sit well inside the cycle budget, while a run that abandoned a page per step still drains at 20 a minute rather than one. A profile with an operation in flight is passed over until that operation ends.
+
+### `host.browser_requests`
+
+**Purpose.** Serve the machine's `aflow browser` requests — a sign-in window, a list — while the watch on the host directory is down.
+
+**Invariant.** A request written beside the policy is claimed while its command line still waits for a claim, whether or not the directory can be watched; with the watch up the poll reads nothing.
+
+**Recovery.** Without it, a request arriving while the watch is down goes unclaimed and the command line refuses to act on a profile the executor holds, saying which process holds it; the requests pending at startup are still served once.
+
+| Field | Value |
+| ----- | ----- |
+| Service | executor-host |
+| Owner domain | ownership |
+| Criticality | feature |
+| Trigger | candidate |
+| Execution scope | per_instance |
+| Substrate | local |
+| Base cadence | 1.5s |
+| Max batch | 1 |
+| Max cycle | 5000 ms |
+| Idle datastore ops/min | 0 |
+| Hot-path producer budget | 0 added RTT — Reads one local directory; nothing in Redis. |
+| Feature gate | — |
+| Disable policy | safe |
+| Residual poll | — |
+| Source | `apps/aflow-executor-host/src/browser/requestPoll.ts` |
+
+> Polls only while the directory watch is down — a filesystem without one, or a watch that failed — and its cadence sits inside the command line’s three-second claim timeout so a request is claimed before the command line gives up on it. Each cycle is one directory listing on this machine.
 
 ### `host.runtime_inventory`
 

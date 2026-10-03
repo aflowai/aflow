@@ -14,6 +14,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { createHostMcpHandler } from '../handlers/mcpHandlers.js';
 import { sandboxReadiness } from '../sandboxedRun.js';
+import { CONFINEMENT_LISTENERS, requires } from './fixtures/capabilities.js';
+
+const confined = requires(...CONFINEMENT_LISTENERS);
 
 const FIXTURE = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'echoMcpServer.mjs');
 /** Where this server's own code and its dependencies live. */
@@ -172,85 +175,110 @@ async function settleUntilNoneRunning(
 const CAN_CONFINE = sandboxReadiness().ready;
 
 describe.runIf(CAN_CONFINE)('a local MCP server answers through the lane', () => {
-  it('lists the tools it really has', async () => {
-    const captured: Captured = {};
-    const result = await createHostMcpHandler(policyPath).execute(
-      contextFor('host.mcp.list_tools', { bindingId: 'hb', serverId: 'echo' }, captured),
-    );
-    expect(result.status).toBe('SUCCEEDED');
-    const names = (captured.output?.['tools'] as Array<{ name: string }>).map((t) => t.name);
-    expect(names.sort()).toEqual(['echo', 'read_file', 'where']);
-  }, 60_000);
+  it.skipIf(confined.skip)(
+    confined.title('lists the tools it really has'),
+    async () => {
+      const captured: Captured = {};
+      const result = await createHostMcpHandler(policyPath).execute(
+        contextFor('host.mcp.list_tools', { bindingId: 'hb', serverId: 'echo' }, captured),
+      );
+      expect(result.status).toBe('SUCCEEDED');
+      const names = (captured.output?.['tools'] as Array<{ name: string }>).map((t) => t.name);
+      expect(names.sort()).toEqual(['echo', 'read_file', 'where']);
+    },
+    60_000,
+  );
 
-  it('calls a tool and returns what the server said', async () => {
-    const captured: Captured = {};
-    const result = await createHostMcpHandler(policyPath).execute(
-      contextFor(
-        'host.mcp.call',
-        { bindingId: 'hb', serverId: 'echo', toolName: 'echo', arguments: { text: 'hello mesh' } },
-        captured,
-      ),
-    );
-    expect(result.status).toBe('SUCCEEDED');
-    expect(textOf(captured.output)).toContain('hello mesh');
-    expect(captured.output?.['isError']).toBe(false);
-  }, 60_000);
+  it.skipIf(confined.skip)(
+    confined.title('calls a tool and returns what the server said'),
+    async () => {
+      const captured: Captured = {};
+      const result = await createHostMcpHandler(policyPath).execute(
+        contextFor(
+          'host.mcp.call',
+          {
+            bindingId: 'hb',
+            serverId: 'echo',
+            toolName: 'echo',
+            arguments: { text: 'hello mesh' },
+          },
+          captured,
+        ),
+      );
+      expect(result.status).toBe('SUCCEEDED');
+      expect(textOf(captured.output)).toContain('hello mesh');
+      expect(captured.output?.['isError']).toBe(false);
+    },
+    60_000,
+  );
 
-  it('runs it inside the binding root', async () => {
-    const captured: Captured = {};
-    await createHostMcpHandler(policyPath).execute(
-      contextFor(
-        'host.mcp.call',
-        { bindingId: 'hb', serverId: 'echo', toolName: 'where' },
-        captured,
-      ),
-    );
-    expect(textOf(captured.output)).toContain('project');
-  }, 60_000);
+  it.skipIf(confined.skip)(
+    confined.title('runs it inside the binding root'),
+    async () => {
+      const captured: Captured = {};
+      await createHostMcpHandler(policyPath).execute(
+        contextFor(
+          'host.mcp.call',
+          { bindingId: 'hb', serverId: 'echo', toolName: 'where' },
+          captured,
+        ),
+      );
+      expect(textOf(captured.output)).toContain('project');
+    },
+    60_000,
+  );
 });
 
 describe.runIf(CAN_CONFINE)('the boundary holds around it, not the server behaving', () => {
-  it('lets it read inside the binding', async () => {
-    const captured: Captured = {};
-    await createHostMcpHandler(policyPath).execute(
-      contextFor(
-        'host.mcp.call',
-        {
-          bindingId: 'hb',
-          serverId: 'echo',
-          toolName: 'read_file',
-          arguments: { path: join(root, 'inside.txt') },
-        },
-        captured,
-      ),
-    );
-    expect(textOf(captured.output)).toContain('inside the binding');
-    expect(captured.output?.['isError']).toBe(false);
-  }, 60_000);
+  it.skipIf(confined.skip)(
+    confined.title('lets it read inside the binding'),
+    async () => {
+      const captured: Captured = {};
+      await createHostMcpHandler(policyPath).execute(
+        contextFor(
+          'host.mcp.call',
+          {
+            bindingId: 'hb',
+            serverId: 'echo',
+            toolName: 'read_file',
+            arguments: { path: join(root, 'inside.txt') },
+          },
+          captured,
+        ),
+      );
+      expect(textOf(captured.output)).toContain('inside the binding');
+      expect(captured.output?.['isError']).toBe(false);
+    },
+    60_000,
+  );
 
-  it('refuses a read outside it, though the server tried', async () => {
-    // The fixture reads whatever it is handed. What stops it is the operating
-    // system, which is the difference between a local server and a remote one
-    // that is trusted to police its own side.
-    const captured: Captured = {};
-    const result = await createHostMcpHandler(policyPath).execute(
-      contextFor(
-        'host.mcp.call',
-        {
-          bindingId: 'hb',
-          serverId: 'echo',
-          toolName: 'read_file',
-          arguments: { path: '/etc/ssh/ssh_host_rsa_key' },
-        },
-        captured,
-      ),
-    );
-    // The step succeeds; the server reports its own failure, which is the
-    // distinction the output schema draws.
-    expect(result.status).toBe('SUCCEEDED');
-    expect(captured.output?.['isError']).toBe(true);
-    expect(textOf(captured.output)).not.toContain('PRIVATE KEY');
-  }, 60_000);
+  it.skipIf(confined.skip)(
+    confined.title('refuses a read outside it, though the server tried'),
+    async () => {
+      // The fixture reads whatever it is handed. What stops it is the operating
+      // system, which is the difference between a local server and a remote one
+      // that is trusted to police its own side.
+      const captured: Captured = {};
+      const result = await createHostMcpHandler(policyPath).execute(
+        contextFor(
+          'host.mcp.call',
+          {
+            bindingId: 'hb',
+            serverId: 'echo',
+            toolName: 'read_file',
+            arguments: { path: '/etc/ssh/ssh_host_rsa_key' },
+          },
+          captured,
+        ),
+      );
+      // The step succeeds; the server reports its own failure, which is the
+      // distinction the output schema draws.
+      expect(result.status).toBe('SUCCEEDED');
+      expect(captured.output?.['isError']).toBe(true);
+      expect(textOf(captured.output)).not.toContain('PRIVATE KEY');
+    },
+    60_000,
+  );
 });
 
 describe('which server runs, and where, is the machine decision', () => {

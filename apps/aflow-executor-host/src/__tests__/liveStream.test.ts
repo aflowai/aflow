@@ -15,6 +15,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { HostBindingSchema } from '../bindings.js';
 import { OUTPUT_CAP_BYTES, runSandboxed, sandboxAvailable } from '../sandboxedRun.js';
+import { CONFINEMENT_LISTENERS, requires } from './fixtures/capabilities.js';
+
+const confined = requires(...CONFINEMENT_LISTENERS);
 
 let root: string;
 let scratch: string;
@@ -29,8 +32,8 @@ afterEach(async () => {
 });
 
 describe('the live stream', () => {
-  it.runIf(sandboxAvailable())(
-    'carries standard output and keeps standard error as diagnostics',
+  it.skipIf(!sandboxAvailable() || confined.skip)(
+    confined.title('carries standard output and keeps standard error as diagnostics'),
     async () => {
       const deltas: string[] = [];
       const result = await runSandboxed({
@@ -69,8 +72,8 @@ describe('the live stream', () => {
     120_000,
   );
 
-  it.runIf(sandboxAvailable())(
-    'reports output on either stream, and streams standard error only when asked',
+  it.skipIf(!sandboxAvailable() || confined.skip)(
+    confined.title('reports output on either stream, and streams standard error only when asked'),
     async () => {
       const deltas: string[] = [];
       let outputs = 0;
@@ -112,8 +115,10 @@ describe('the live stream', () => {
     120_000,
   );
 
-  it.runIf(sandboxAvailable())(
-    'keeps streaming past the stored-output budget, and says the stored copy is short',
+  it.skipIf(!sandboxAvailable() || confined.skip)(
+    confined.title(
+      'keeps streaming past the stored-output budget, and says the stored copy is short',
+    ),
     async () => {
       // The budget bounds the payload, not the feed. Enforced on the live path
       // it silenced a working harness at the cap: the deltas are parsed as they

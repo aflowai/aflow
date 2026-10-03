@@ -17,6 +17,7 @@
     "pair": "NODE_OPTIONS='--conditions=ts-source' npx tsx src/pair.ts",
     "connect": "NODE_OPTIONS='--conditions=ts-source' npx tsx src/connect.ts",
     "harness": "NODE_OPTIONS='--conditions=ts-source' npx tsx src/harness-cli.ts",
+    "browser": "NODE_OPTIONS='--conditions=ts-source' npx tsx src/browser-cli.ts",
     "service": "NODE_OPTIONS='--conditions=ts-source' npx tsx src/service.ts"
   },
   "dependencies": {
@@ -31,10 +32,13 @@
     "ajv": "^8.20.0",
     "ioredis": "^5.11.1",
     "playwright-core": "1.63.0",
+    "tldts": "^7.0.5",
     "zod": "^3.24.0"
   },
   "devDependencies": {
+    "@types/ioredis-mock": "^8",
     "@types/node": "^22.20.4",
+    "ioredis-mock": "^8.13.1",
     "tsx": "^4.23.15",
     "typescript": "^5.8.3",
     "vitest": "^4.1.11"

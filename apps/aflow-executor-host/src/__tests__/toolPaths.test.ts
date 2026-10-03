@@ -12,6 +12,9 @@ import { HostBindingSchema, HostPolicySchema } from '../bindings.js';
 import { explainFailedStart } from '../executableHint.js';
 import { compileSandboxPolicy } from '../sandboxPolicy.js';
 import { runSandboxed, sandboxAvailable } from '../sandboxedRun.js';
+import { CONFINEMENT_LISTENERS, requires } from './fixtures/capabilities.js';
+
+const confined = requires(...CONFINEMENT_LISTENERS);
 
 let fakeHome: string;
 let toolDir: string;
@@ -60,8 +63,8 @@ describe('declaring where tools live', () => {
     expect(HostPolicySchema.parse({ version: 1, bindings: [] }).toolPaths).toEqual([]);
   });
 
-  it.runIf(sandboxAvailable())(
-    'actually runs a command installed under home once it is named',
+  it.skipIf(!sandboxAvailable() || confined.skip)(
+    confined.title('actually runs a command installed under home once it is named'),
     async () => {
       const exe = join(toolDir, 'mycli');
       const common = {

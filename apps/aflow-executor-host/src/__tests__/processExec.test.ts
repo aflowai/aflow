@@ -28,6 +28,9 @@ import {
   statusWrappedArgv,
   workloadStatusPath,
 } from '../sandboxedRun.js';
+import { CONFINEMENT_LISTENERS, requires } from './fixtures/capabilities.js';
+
+const confined = requires(...CONFINEMENT_LISTENERS);
 
 const execFileAsync = promisify(execFile);
 
@@ -305,115 +308,139 @@ describe('the wrapper, over a real process', () => {
 });
 
 describe.runIf(CAN_CONFINE)('host process execution', () => {
-  it('runs a command inside the binding', async () => {
-    const captured: Captured = {};
-    const handler = createHostProcessHandler(policyPath, noPushApprovals);
-    await handler.execute(
-      contextFor('host.process.exec', { bindingId: 'hb', command: ['echo', 'hello'] }, captured),
-    );
-    expect(captured.output?.['exitCode']).toBe(0);
-    expect(String(captured.output?.['stdout'])).toContain('hello');
-    // The result says how it ran. Everything but a permitted push is confined,
-    // and a reader of the step should not have to infer which it got.
-    expect(captured.output?.['confined']).toBe(true);
-  }, 60_000);
+  it.skipIf(confined.skip)(
+    confined.title('runs a command inside the binding'),
+    async () => {
+      const captured: Captured = {};
+      const handler = createHostProcessHandler(policyPath, noPushApprovals);
+      await handler.execute(
+        contextFor('host.process.exec', { bindingId: 'hb', command: ['echo', 'hello'] }, captured),
+      );
+      expect(captured.output?.['exitCode']).toBe(0);
+      expect(String(captured.output?.['stdout'])).toContain('hello');
+      // The result says how it ran. Everything but a permitted push is confined,
+      // and a reader of the step should not have to infer which it got.
+      expect(captured.output?.['confined']).toBe(true);
+    },
+    60_000,
+  );
 
-  it('reports a pipeline into `head` as having worked', async () => {
-    // The writer is the process the launcher supervises, which is the shape that
-    // reaches this executor: `head` reads its three lines, exits, and whatever
-    // feeds it is killed for writing to a pipe nobody reads. The launcher reports
-    // that as `exit 1` with no signal, so a pipeline that produced exactly what
-    // was asked of it was indistinguishable from a command that failed.
-    const captured: Captured = {};
-    const handler = createHostProcessHandler(policyPath, noPushApprovals);
-    await handler.execute(
-      contextFor(
-        'host.process.exec',
-        {
-          bindingId: 'hb',
-          command: [
-            '/bin/bash',
-            '-c',
-            'rm -f fifo; mkfifo fifo; head -n 3 < fifo & exec seq 1 200000 > fifo',
-          ],
-        },
-        captured,
-      ),
-    );
-    expect(captured.output?.['exitCode']).toBe(0);
-    expect(captured.output?.['signal']).toBe('SIGPIPE');
-    expect(String(captured.output?.['stdout'] ?? '')).toContain('1\n2\n3\n');
-    // The pipe was made inside the connected folder, which is a real one on this
-    // machine; a test that leaves a device node behind in it is a test that
-    // changed the operator's project.
-    await rm(join(root, 'fifo'), { force: true });
-  }, 60_000);
+  it.skipIf(confined.skip)(
+    confined.title('reports a pipeline into `head` as having worked'),
+    async () => {
+      // The writer is the process the launcher supervises, which is the shape that
+      // reaches this executor: `head` reads its three lines, exits, and whatever
+      // feeds it is killed for writing to a pipe nobody reads. The launcher reports
+      // that as `exit 1` with no signal, so a pipeline that produced exactly what
+      // was asked of it was indistinguishable from a command that failed.
+      const captured: Captured = {};
+      const handler = createHostProcessHandler(policyPath, noPushApprovals);
+      await handler.execute(
+        contextFor(
+          'host.process.exec',
+          {
+            bindingId: 'hb',
+            command: [
+              '/bin/bash',
+              '-c',
+              'rm -f fifo; mkfifo fifo; head -n 3 < fifo & exec seq 1 200000 > fifo',
+            ],
+          },
+          captured,
+        ),
+      );
+      expect(captured.output?.['exitCode']).toBe(0);
+      expect(captured.output?.['signal']).toBe('SIGPIPE');
+      expect(String(captured.output?.['stdout'] ?? '')).toContain('1\n2\n3\n');
+      // The pipe was made inside the connected folder, which is a real one on this
+      // machine; a test that leaves a device node behind in it is a test that
+      // changed the operator's project.
+      await rm(join(root, 'fifo'), { force: true });
+    },
+    60_000,
+  );
 
-  it("fails a command whose closing words are the launcher's signal line", async () => {
-    // The launcher spawns the command with `stdio: 'inherit'`, so this text
-    // arrives on exactly the stream the launcher writes its own line to. The
-    // status comes from the wrapper's file instead, so the command still fails.
-    const captured: Captured = {};
-    const handler = createHostProcessHandler(policyPath, noPushApprovals);
-    await handler.execute(
-      contextFor(
-        'host.process.exec',
-        {
-          bindingId: 'hb',
-          command: ['/bin/bash', '-c', 'echo "Process killed by signal: SIGPIPE" 1>&2; exit 2'],
-        },
-        captured,
-      ),
-    );
-    expect(captured.output?.['exitCode']).toBe(2);
-    expect(captured.output?.['signal']).toBeNull();
-  }, 60_000);
+  it.skipIf(confined.skip)(
+    confined.title("fails a command whose closing words are the launcher's signal line"),
+    async () => {
+      // The launcher spawns the command with `stdio: 'inherit'`, so this text
+      // arrives on exactly the stream the launcher writes its own line to. The
+      // status comes from the wrapper's file instead, so the command still fails.
+      const captured: Captured = {};
+      const handler = createHostProcessHandler(policyPath, noPushApprovals);
+      await handler.execute(
+        contextFor(
+          'host.process.exec',
+          {
+            bindingId: 'hb',
+            command: ['/bin/bash', '-c', 'echo "Process killed by signal: SIGPIPE" 1>&2; exit 2'],
+          },
+          captured,
+        ),
+      );
+      expect(captured.output?.['exitCode']).toBe(2);
+      expect(captured.output?.['signal']).toBeNull();
+    },
+    60_000,
+  );
 
-  it("runs a command whose own flags spell the launcher's", async () => {
-    // `-c` is the launcher's option as well as the shell's, and it took it from
-    // anywhere in the argv: the script was lifted out and run without `python`.
-    const captured: Captured = {};
-    const handler = createHostProcessHandler(policyPath, noPushApprovals);
-    await handler.execute(
-      contextFor(
-        'host.process.exec',
-        { bindingId: 'hb', command: ['/bin/bash', '-c', 'printf %s "$0"', 'named-zero'] },
-        captured,
-      ),
-    );
-    expect(captured.output?.['exitCode']).toBe(0);
-    expect(String(captured.output?.['stdout'] ?? '')).toContain('named-zero');
-  }, 60_000);
+  it.skipIf(confined.skip)(
+    confined.title("runs a command whose own flags spell the launcher's"),
+    async () => {
+      // `-c` is the launcher's option as well as the shell's, and it took it from
+      // anywhere in the argv: the script was lifted out and run without `python`.
+      const captured: Captured = {};
+      const handler = createHostProcessHandler(policyPath, noPushApprovals);
+      await handler.execute(
+        contextFor(
+          'host.process.exec',
+          { bindingId: 'hb', command: ['/bin/bash', '-c', 'printf %s "$0"', 'named-zero'] },
+          captured,
+        ),
+      );
+      expect(captured.output?.['exitCode']).toBe(0);
+      expect(String(captured.output?.['stdout'] ?? '')).toContain('named-zero');
+    },
+    60_000,
+  );
 
-  it('reports a shell-absorbed pipeline into `head` as success too', async () => {
-    // The ordinary spelling, where the shell outlives the writer and reports
-    // `head`'s own status. It was already right; asserted so it stays right.
-    const captured: Captured = {};
-    const handler = createHostProcessHandler(policyPath, noPushApprovals);
-    await handler.execute(
-      contextFor(
-        'host.process.exec',
-        { bindingId: 'hb', command: ['/bin/bash', '-c', 'seq 1 200000 | head -n 3'] },
-        captured,
-      ),
-    );
-    expect(captured.output?.['exitCode']).toBe(0);
-    expect(String(captured.output?.['stdout'] ?? '')).toContain('1\n2\n3\n');
-  }, 60_000);
+  it.skipIf(confined.skip)(
+    confined.title('reports a shell-absorbed pipeline into `head` as success too'),
+    async () => {
+      // The ordinary spelling, where the shell outlives the writer and reports
+      // `head`'s own status. It was already right; asserted so it stays right.
+      const captured: Captured = {};
+      const handler = createHostProcessHandler(policyPath, noPushApprovals);
+      await handler.execute(
+        contextFor(
+          'host.process.exec',
+          { bindingId: 'hb', command: ['/bin/bash', '-c', 'seq 1 200000 | head -n 3'] },
+          captured,
+        ),
+      );
+      expect(captured.output?.['exitCode']).toBe(0);
+      expect(String(captured.output?.['stdout'] ?? '')).toContain('1\n2\n3\n');
+    },
+    60_000,
+  );
 
-  it('still fails a command that failed for its own reason', async () => {
-    // The other half of the fix: nothing about a broken pipe weakens this.
-    const captured: Captured = {};
-    const handler = createHostProcessHandler(policyPath, noPushApprovals);
-    await handler.execute(
-      contextFor(
-        'host.process.exec',
-        { bindingId: 'hb', command: ['/bin/bash', '-c', 'exit 3'] },
-        captured,
-      ),
-    );
-    expect(captured.output?.['exitCode']).toBe(3);
-  }, 60_000);
+  it.skipIf(confined.skip)(
+    confined.title('still fails a command that failed for its own reason'),
+    async () => {
+      // The other half of the fix: nothing about a broken pipe weakens this.
+      const captured: Captured = {};
+      const handler = createHostProcessHandler(policyPath, noPushApprovals);
+      await handler.execute(
+        contextFor(
+          'host.process.exec',
+          { bindingId: 'hb', command: ['/bin/bash', '-c', 'exit 3'] },
+          captured,
+        ),
+      );
+      expect(captured.output?.['exitCode']).toBe(3);
+    },
+    60_000,
+  );
 
   it('denies the command what lives under the operator home', async () => {
     // The property that matters: keys, cloud credentials, browser profiles and
@@ -431,23 +458,27 @@ describe.runIf(CAN_CONFINE)('host process execution', () => {
     expect(captured.output?.['exitCode']).not.toBe(0);
   }, 60_000);
 
-  it('does NOT confine reads outside home, which is the disclosed limitation', async () => {
-    // Not a bug and not an oversight: the adapter permits reads by default and
-    // narrows by denial, so there is no allow-list to write. `/usr`, `/opt` and
-    // anything else outside home stays readable, and what keeps its contents on
-    // the machine is the egress policy rather than the read policy. This test
-    // exists so the property is asserted rather than discovered.
-    const captured: Captured = {};
-    const handler = createHostProcessHandler(policyPath, noPushApprovals);
-    await handler.execute(
-      contextFor(
-        'host.process.exec',
-        { bindingId: 'hb', command: ['cat', join(outside, 'secret.txt')] },
-        captured,
-      ),
-    );
-    expect(captured.output?.['exitCode']).toBe(0);
-  }, 60_000);
+  it.skipIf(confined.skip)(
+    confined.title('does NOT confine reads outside home, which is the disclosed limitation'),
+    async () => {
+      // Not a bug and not an oversight: the adapter permits reads by default and
+      // narrows by denial, so there is no allow-list to write. `/usr`, `/opt` and
+      // anything else outside home stays readable, and what keeps its contents on
+      // the machine is the egress policy rather than the read policy. This test
+      // exists so the property is asserted rather than discovered.
+      const captured: Captured = {};
+      const handler = createHostProcessHandler(policyPath, noPushApprovals);
+      await handler.execute(
+        contextFor(
+          'host.process.exec',
+          { bindingId: 'hb', command: ['cat', join(outside, 'secret.txt')] },
+          captured,
+        ),
+      );
+      expect(captured.output?.['exitCode']).toBe(0);
+    },
+    60_000,
+  );
 
   it('refuses a command in a binding that only carries files', async () => {
     // The machine's own ceiling, checked before a policy is compiled or a
@@ -525,51 +556,63 @@ describe.runIf(CAN_CONFINE)('host process execution', () => {
     expect(result.status).toBe('FAILED');
   }, 30_000);
 
-  it('runs in the binding root when no working directory is given', async () => {
-    const captured: Captured = {};
-    const handler = createHostProcessHandler(policyPath, noPushApprovals);
-    const result = await handler.execute(
-      contextFor('host.process.exec', { bindingId: 'hb', command: ['pwd'] }, captured),
-    );
-    expect(result.status).toBe('SUCCEEDED');
-    expect(String(captured.output?.['stdout'] ?? '')).toContain('project');
-  }, 30_000);
+  it.skipIf(confined.skip)(
+    confined.title('runs in the binding root when no working directory is given'),
+    async () => {
+      const captured: Captured = {};
+      const handler = createHostProcessHandler(policyPath, noPushApprovals);
+      const result = await handler.execute(
+        contextFor('host.process.exec', { bindingId: 'hb', command: ['pwd'] }, captured),
+      );
+      expect(result.status).toBe('SUCCEEDED');
+      expect(String(captured.output?.['stdout'] ?? '')).toContain('project');
+    },
+    30_000,
+  );
 
-  it('narrates what the command said on standard error', async () => {
-    // Where a command's progress usually speaks. Withheld, a build that logs
-    // steadily and prints nothing at the end looks like a step doing nothing.
-    const captured: Captured = { deltas: [] };
-    const handler = createHostProcessHandler(policyPath, noPushApprovals);
-    await handler.execute(
-      contextFor(
-        'host.process.exec',
-        { bindingId: 'hb', command: ['/bin/sh', '-c', 'echo compiling-something 1>&2'] },
-        captured,
-      ),
-    );
-    expect((captured.deltas ?? []).join('')).toContain('compiling-something');
-  }, 60_000);
+  it.skipIf(confined.skip)(
+    confined.title('narrates what the command said on standard error'),
+    async () => {
+      // Where a command's progress usually speaks. Withheld, a build that logs
+      // steadily and prints nothing at the end looks like a step doing nothing.
+      const captured: Captured = { deltas: [] };
+      const handler = createHostProcessHandler(policyPath, noPushApprovals);
+      await handler.execute(
+        contextFor(
+          'host.process.exec',
+          { bindingId: 'hb', command: ['/bin/sh', '-c', 'echo compiling-something 1>&2'] },
+          captured,
+        ),
+      );
+      expect((captured.deltas ?? []).join('')).toContain('compiling-something');
+    },
+    60_000,
+  );
 
-  it('answers `exited` for a run that finished, not `unknown`', async () => {
-    // `unknown` is the answer that means this executor cannot tell — deleting
-    // the handle on exit made every completed run indistinguishable from one
-    // lost to a restart.
-    const captured: Captured = {};
-    const handler = createHostProcessHandler(policyPath, noPushApprovals);
-    await handler.execute(
-      contextFor('host.process.exec', { bindingId: 'hb', command: ['echo', 'done'] }, captured),
-    );
-    const processId = String(captured.output?.['processId'] ?? '');
-    expect(processId).not.toBe('');
+  it.skipIf(confined.skip)(
+    confined.title('answers `exited` for a run that finished, not `unknown`'),
+    async () => {
+      // `unknown` is the answer that means this executor cannot tell — deleting
+      // the handle on exit made every completed run indistinguishable from one
+      // lost to a restart.
+      const captured: Captured = {};
+      const handler = createHostProcessHandler(policyPath, noPushApprovals);
+      await handler.execute(
+        contextFor('host.process.exec', { bindingId: 'hb', command: ['echo', 'done'] }, captured),
+      );
+      const processId = String(captured.output?.['processId'] ?? '');
+      expect(processId).not.toBe('');
 
-    const inspected: Captured = {};
-    const result = await handler.execute(
-      contextFor('host.process.inspect', { bindingId: 'hb', processId }, inspected),
-    );
-    expect(result.status).toBe('SUCCEEDED');
-    expect(inspected.output?.['state']).toBe('exited');
-    expect(inspected.output?.['exitCode']).toBe(0);
-  }, 30_000);
+      const inspected: Captured = {};
+      const result = await handler.execute(
+        contextFor('host.process.inspect', { bindingId: 'hb', processId }, inspected),
+      );
+      expect(result.status).toBe('SUCCEEDED');
+      expect(inspected.output?.['state']).toBe('exited');
+      expect(inspected.output?.['exitCode']).toBe(0);
+    },
+    30_000,
+  );
 });
 
 /**

@@ -55,6 +55,9 @@ function makeHost(execute: ReturnType<typeof vi.fn>, stepType = 'code') {
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
     abortControllers: new Map<string, AbortController>(),
     operationLimiters: new Map(),
+    claimingStopped: new AbortController().signal,
+    stopped: new AbortController().signal,
+    stepStarted: vi.fn(),
   } as never;
 }
 

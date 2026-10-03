@@ -32,6 +32,9 @@ const KIND_ACTIONS: Record<ActionCenterItemKind, readonly ActionCenterAllowedAct
   // A gated write is approved or denied in place (Plan 253) — deny fails the
   // step, approve writes the grant and re-dispatches it.
   write_approval: ['approve', 'reject'],
+  // approve = Done: the operator finished in the window. There is nothing to
+  // refuse — a hand-off nobody finishes ends at its own deadline.
+  browser_handoff: ['approve'],
 };
 
 /**

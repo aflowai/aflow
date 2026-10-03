@@ -10,6 +10,7 @@
  */
 import { z } from 'zod';
 import { AgentToolErrorSchema } from './errors.js';
+import { MAX_STEP_IMAGES_PER_OUTPUT, StepImageSchema } from '../media/stepImage.js';
 
 // ============================================================================
 // AI Roles
@@ -52,10 +53,20 @@ export const AiRefPartSchema = z.object({
 });
 export type AiRefPart = z.infer<typeof AiRefPartSchema>;
 
+/**
+ * An image a tool step returned. Only the reference is kept in history; the
+ * bytes are read when a request is built, and only for a model that sees images.
+ */
+export const AiImagePartSchema = StepImageSchema.extend({
+  kind: z.literal('image'),
+});
+export type AiImagePart = z.infer<typeof AiImagePartSchema>;
+
 export const AiContentPartSchema = z.discriminatedUnion('kind', [
   AiTextPartSchema,
   AiJsonPartSchema,
   AiRefPartSchema,
+  AiImagePartSchema,
 ]);
 export type AiContentPart = z.infer<typeof AiContentPartSchema>;
 
@@ -179,6 +190,10 @@ export const AiToolResultEnvelopeV1Schema = z.object({
     )
     .max(MAX_NEXT_STEPS)
     .optional(),
+  /** Images found in the step's output; the tool message carries them as image parts. */
+  images: z.array(StepImageSchema).optional(),
+  /** Images the step's output held that are not shown, each with where it was and why not. */
+  imagesWithheld: z.array(z.string()).max(MAX_STEP_IMAGES_PER_OUTPUT).optional(),
 });
 export type AiToolResultEnvelopeV1 = z.infer<typeof AiToolResultEnvelopeV1Schema>;
 
@@ -197,7 +212,7 @@ export const AiMessageV1Schema = z.object({
   toolCallId: z.string().optional(),
   /** Optional name (e.g., tool name for tool-role messages) */
   name: z.string().optional(),
-  /** Content parts (text, json, ref) */
+  /** Content parts (text, json, ref, image) */
   parts: z.array(AiContentPartSchema),
   /** Tool calls made by the assistant (present only on assistant messages that invoke tools) */
   toolCalls: z.array(AiToolCallV1Schema).optional(),
@@ -539,11 +554,23 @@ export function assistantToolCallMessage(toolCalls: AiToolCallV1[], text?: strin
  * Create a tool result message from an envelope.
  */
 export function toolResultMessage(envelope: AiToolResultEnvelopeV1): AiMessageV1 {
+  if (envelope.images === undefined) {
+    return {
+      role: 'tool',
+      toolCallId: envelope.toolCallId,
+      name: envelope.toolName,
+      parts: [{ kind: 'json', json: envelope }],
+    };
+  }
+  const { images, ...rest } = envelope;
   return {
     role: 'tool',
     toolCallId: envelope.toolCallId,
     name: envelope.toolName,
-    parts: [{ kind: 'json', json: envelope }],
+    parts: [
+      { kind: 'json', json: rest },
+      ...images.map((image): AiImagePart => ({ kind: 'image', ...image })),
+    ],
   };
 }
 

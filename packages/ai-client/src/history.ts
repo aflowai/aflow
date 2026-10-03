@@ -292,7 +292,7 @@ export function createHistoryManager(params: {
           role: 'tool',
           toolCallId: msg.toolCallId,
           name: msg.name ?? 'unknown',
-          content: msg.content,
+          content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
           timestamp,
         });
         break;

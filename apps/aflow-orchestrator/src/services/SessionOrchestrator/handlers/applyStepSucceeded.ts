@@ -25,6 +25,7 @@ import type {
 import {
   resolveNextStep,
   getOperation,
+  findStepImages,
   StepOutputPresentationSchema,
   UI_APPLET_GET_OPERATION_ID,
   UI_APPLET_INSTANTIATE_OPERATION_ID,
@@ -516,6 +517,15 @@ export async function applyStepSucceeded(params: ApplyStepSucceededParams): Prom
         }
       }
       const opDescriptor = getOperation(actualOperationId);
+      if (opDescriptor?.imageOutputPaths && resolvedOutput != null) {
+        const { images, withheld } = findStepImages(resolvedOutput, opDescriptor.imageOutputPaths, {
+          tenantId: result.tenantId,
+          runId: result.sessionId,
+          stepExecutionId: result.stepExecutionId,
+        });
+        if (images.length > 0) toolResult.images = images;
+        if (withheld.length > 0) toolResult.imagesWithheld = withheld;
+      }
       const followUp = opDescriptor?.usage.followUp;
       if (followUp && followUp.length > 0) {
         const steps: Array<{ action: string; note: string }> = [];

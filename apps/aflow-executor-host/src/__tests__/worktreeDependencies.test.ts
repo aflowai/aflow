@@ -27,6 +27,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { HostBindingSchema } from '../bindings.js';
 import { runSandboxed, sandboxAvailable } from '../sandboxedRun.js';
 import { collectChanges, prepareWorktree, removeWorktree } from '../worktree.js';
+import { CONFINEMENT_LISTENERS, requires } from './fixtures/capabilities.js';
+
+const confined = requires(...CONFINEMENT_LISTENERS);
 
 const run = promisify(execFile);
 
@@ -200,8 +203,8 @@ describe('dependencies in the isolated checkout', () => {
     await removeWorktree(repo, wt.path);
   });
 
-  it.runIf(sandboxAvailable())(
-    'lets a confined harness read through the link and refuses it the write',
+  it.skipIf(!sandboxAvailable() || confined.skip)(
+    confined.title('lets a confined harness read through the link and refuses it the write'),
     async () => {
       // The property the link rests on: the sandbox grants writes to the
       // worktree by path, and a write through the link lands on the operator's

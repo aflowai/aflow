@@ -40,6 +40,7 @@ export {
   addStepJob,
   readStepJobs,
   ackStepJob,
+  releaseStepJob,
   claimPendingStepJobs,
   listPendingStepJobs,
   claimPendingStepJobsByIds,

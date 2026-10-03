@@ -12,8 +12,7 @@
  * should be a thing the operator sees and decides about, not a default.
  */
 import { mkdir, readFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 
 import { resolveBranchPolicy } from '@aflow/schemas';
 
@@ -22,14 +21,13 @@ import { LocalMcpServerSchema } from './localMcpServers.js';
 import { discoverHarnesses } from './harnessDiscovery.js';
 import { describeHarnessConcurrency, withHarnessConcurrency } from './harnessConcurrency.js';
 import { HarnessProfileSchema, type HarnessProfile } from './harnessProfiles.js';
+import { resolveHostPolicyPath } from './hostDir.js';
 import { serializePolicy, writePolicyAtomically } from './policyFile.js';
 import { checksChangeFromArgs, describeChecks, withChecks } from './folderChecks.js';
 import { describePushApproval, withPushApproval } from './pushApproval.js';
 
-// The same resolution `connect` uses. Disagreeing about where the policy lives
-// meant one command wrote a file the other never read.
-const HOST_DIR = process.env['PHOENIX_HOST_DIR']?.trim() ?? resolve(homedir(), '.aflow');
-const POLICY_PATH = resolve(HOST_DIR, 'host-policy.json');
+const POLICY_PATH = resolveHostPolicyPath();
+const HOST_DIR = dirname(POLICY_PATH);
 
 function usage(): never {
   console.error(

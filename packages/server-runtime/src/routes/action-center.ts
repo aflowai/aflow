@@ -356,5 +356,15 @@ function originMatches(current: ActionCenterItemOrigin, claimed: ActionCenterIte
         current.taskId === claimed.taskId &&
         current.pauseVersion === claimed.pauseVersion
       );
+    // The same hand-off, whoever has joined it since: Done is meant for every
+    // run waiting on the site, including one that arrived after the page loaded.
+    case 'browser_handoff':
+      return (
+        claimed.type === 'browser_handoff' &&
+        current.machineLabel === claimed.machineLabel &&
+        current.profileId === claimed.profileId &&
+        current.site === claimed.site &&
+        current.startedAt === claimed.startedAt
+      );
   }
 }

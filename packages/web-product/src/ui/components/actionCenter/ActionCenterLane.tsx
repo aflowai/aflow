@@ -11,6 +11,7 @@ import type {
 import { ProposalCard, type ProposalCardSummary } from '../cybernetic/ProposalCard.js';
 import { OAuthConsentCard } from './OAuthConsentCard.js';
 import { WriteApprovalCard } from './WriteApprovalCard.js';
+import { BrowserHandoffCard } from './BrowserHandoffCard.js';
 import { SetupChecklist } from '../setup-checklist.js';
 import { useSpaceFromRoute } from '../providers.js';
 import { useNavigation } from '../navigation-provider.js';
@@ -161,6 +162,23 @@ function ActionCenterItemBody({
         }}
         resolveState={resolveState}
         {...(resolveError ? { errorMessage: resolveError } : {})}
+      />
+    );
+  }
+
+  // Plan 320 — a run's page waiting in the browser window on the operator's
+  // machine. Done tells every run waiting on the site to go on.
+  if (item.kind === 'browser_handoff' && item.origin.type === 'browser_handoff') {
+    return (
+      <BrowserHandoffCard
+        item={item}
+        origin={item.origin}
+        onResolve={async (resolution) => {
+          await state.resolve(item.id, resolution);
+        }}
+        resolveState={resolveState}
+        {...(resolveError ? { errorMessage: resolveError } : {})}
+        backlinks={onNavigate ? buildBacklinks(item, onNavigate) : null}
       />
     );
   }
@@ -331,6 +349,22 @@ function buildBacklinks(item: ActionCenterItem, onNavigate: ActionCenterNavigate
         }}
       />,
     );
+  }
+  if (item.origin.type === 'browser_handoff') {
+    const sessions = item.origin.waiting.flatMap((run) =>
+      run.sessionId !== undefined ? [run.sessionId] : [],
+    );
+    for (const [index, sessionId] of sessions.entries()) {
+      links.push(
+        <BacklinkButton
+          key={`session-${sessionId}`}
+          label={sessions.length === 1 ? 'Open run' : `Open run ${String(index + 1)}`}
+          onClick={() => {
+            onNavigate({ type: 'session', id: sessionId });
+          }}
+        />,
+      );
+    }
   }
   if (item.origin.type === 'proposal') {
     const proposalId = item.origin.proposalId;

@@ -17,6 +17,7 @@ import type { HostPushApproval } from '@aflow/schemas';
 import { useSpace, useSpaceFromRoute } from '../components/providers.js';
 import { useEdition } from '../hooks/useEdition.js';
 import { useApiQuery, useApiMutation } from '../hooks/useApiQuery.js';
+import { HostBrowserProfiles } from '../components/host/HostBrowserProfiles.js';
 
 interface HostBinding {
   hostBindingId: string;
@@ -121,7 +122,10 @@ export function SpaceHostBindingsPage() {
       <Column gap="lg">
         <Column gap="xs">
           <Heading level={2}>This Computer</Heading>
-          <Text variant="muted">Folders on your machine that this workspace can reach.</Text>
+          <Text variant="muted">
+            Folders on your machine that this workspace can reach, and the browser its agents use
+            there.
+          </Text>
         </Column>
 
         <Card>
@@ -242,6 +246,8 @@ export function SpaceHostBindingsPage() {
             ))
           )}
         </Column>
+
+        <HostBrowserProfiles />
       </Column>
     </PageContainer>
   );

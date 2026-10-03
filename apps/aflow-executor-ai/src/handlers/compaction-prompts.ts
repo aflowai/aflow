@@ -70,6 +70,10 @@ function serializeMessagesForSummarizer(messages: AiMessageV1[]): string {
         contentParts.push(JSON.stringify(part.json, null, 2));
       } else if (part.kind === 'ref') {
         contentParts.push(`[ref: ${part.ref}${part.summary ? ` — ${part.summary}` : ''}]`);
+      } else {
+        contentParts.push(
+          `[image: ${String(part.width)}×${String(part.height)} ${part.contentType}${part.description ? ` — ${part.description}` : ''}]`,
+        );
       }
     }
 

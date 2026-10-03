@@ -68,6 +68,12 @@ describe('partitionLanes — Plan 156 §7A.2 Coach lane split', () => {
     expect(lanes.coachProposals).toHaveLength(0);
   });
 
+  it('routes a browser hand-off to inputs: a person is needed at the window', () => {
+    const lanes = partitionLanes([item('browser_handoff', { id: 'browser_handoff:abc' })]);
+    expect(lanes.inputs.map((it) => it.id)).toEqual(['browser_handoff:abc']);
+    expect(lanes.approvals).toHaveLength(0);
+  });
+
   it('returns six empty lanes for an empty input', () => {
     const lanes = partitionLanes([]);
     expect(lanes).toEqual({

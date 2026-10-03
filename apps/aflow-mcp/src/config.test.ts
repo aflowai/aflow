@@ -3,7 +3,7 @@
  *
  * Whether a session may proceed with no credential is a property of the API
  * this talks to — sending nothing reaches something only where that stack has a
- * development bypass. Whether a browser's preflight is answered is a property of
+ * development bypass. Whether a browser origin may be admitted is a property of
  * this process's exposure. Reading both from `NODE_ENV` tied the local edition,
  * which composes no bypass, to a fallback that can only produce a 401 two hops
  * from the cause.
@@ -12,7 +12,15 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 
 import { loadConfig } from './config.js';
 
-const ENV_KEYS = ['NODE_ENV', 'PHOENIX_EDITION'] as const;
+const ENV_KEYS = [
+  'NODE_ENV',
+  'PHOENIX_EDITION',
+  'MCP_HOST',
+  'HOST',
+  'ALLOWED_HOSTS',
+  'MCP_ALLOWED_ORIGINS',
+  'AFLOW_MCP_LOCAL_AUTH_JSON',
+] as const;
 let saved: Record<string, string | undefined>;
 
 beforeEach(() => {
@@ -31,13 +39,16 @@ function configWith(env: Partial<Record<(typeof ENV_KEYS)[number], string>>) {
   return loadConfig();
 }
 
+const PRODUCTION = { NODE_ENV: 'production', ALLOWED_HOSTS: 'mcp.example.test' } as const;
+const LOCAL_AUTH_FILE = { AFLOW_MCP_LOCAL_AUTH_JSON: 'mcp.local.json' } as const;
+
 describe('an uncredentialed session', () => {
   it('may proceed against a development stack', () => {
     expect(configWith({ NODE_ENV: 'development' }).unauthenticatedFallback).toBe(true);
   });
 
   it('is refused in production', () => {
-    expect(configWith({ NODE_ENV: 'production' }).unauthenticatedFallback).toBe(false);
+    expect(configWith(PRODUCTION).unauthenticatedFallback).toBe(false);
   });
 
   /** The appliance sets NODE_ENV=production, but the edition is what decides. */
@@ -47,13 +58,13 @@ describe('an uncredentialed session', () => {
   });
 });
 
-describe('a browser preflight', () => {
-  it('is answered outside production', () => {
+describe('a browser origin', () => {
+  it('may be configured outside production', () => {
     expect(configWith({ NODE_ENV: 'development' }).allowBrowserOrigins).toBe(true);
   });
 
-  it('is not answered in production', () => {
-    expect(configWith({ NODE_ENV: 'production' }).allowBrowserOrigins).toBe(false);
+  it('is never admitted in production', () => {
+    expect(configWith(PRODUCTION).allowBrowserOrigins).toBe(false);
   });
 
   /**
@@ -64,5 +75,120 @@ describe('a browser preflight', () => {
     const config = configWith({ NODE_ENV: 'development', PHOENIX_EDITION: 'community-local' });
     expect(config.allowBrowserOrigins).toBe(true);
     expect(config.unauthenticatedFallback).toBe(false);
+  });
+});
+
+/**
+ * Outside production a session that picks up the local auth file is the owner.
+ * The loopback listener keeps other machines out; the Host and Origin checks
+ * keep out a web page reaching it through a rebound name. In production a load
+ * balancer reaches the container on its own interface.
+ */
+describe('the listen host', () => {
+  it('is loopback outside production when none is configured', () => {
+    expect(configWith({ NODE_ENV: 'development' }).host).toBe('127.0.0.1');
+  });
+
+  it('is loopback when NODE_ENV is unset', () => {
+    expect(configWith({}).host).toBe('127.0.0.1');
+  });
+
+  it('is every interface in production when none is configured', () => {
+    expect(configWith(PRODUCTION).host).toBe('0.0.0.0');
+  });
+
+  it('is MCP_HOST in production when one is configured', () => {
+    expect(configWith({ NODE_ENV: 'production', MCP_HOST: '127.0.0.1' }).host).toBe('127.0.0.1');
+  });
+
+  it('is loopback when MCP_HOST is blank', () => {
+    expect(configWith({ MCP_HOST: '   ' }).host).toBe('127.0.0.1');
+  });
+
+  /** The shared `.env` sets HOST to every interface for the API server. */
+  it('ignores HOST', () => {
+    expect(configWith({ HOST: '0.0.0.0' }).host).toBe('127.0.0.1');
+  });
+
+  it('is MCP_HOST when one is configured', () => {
+    expect(configWith({ MCP_HOST: '0.0.0.0' }).host).toBe('0.0.0.0');
+  });
+});
+
+/**
+ * In production an empty ALLOWED_HOSTS leaves only loopback names answered, so
+ * a server a load balancer reaches would refuse every request with 421. Outside
+ * production the local auth file makes a session with no credential the owner,
+ * and the Host check stops only browsers, so only loopback may listen with it.
+ */
+describe('starting', () => {
+  it('is refused in production on every interface with ALLOWED_HOSTS empty', () => {
+    expect(() => configWith({ NODE_ENV: 'production', MCP_HOST: '0.0.0.0' })).toThrow(
+      /ALLOWED_HOSTS is empty.*Set ALLOWED_HOSTS to the hostnames clients reach this server by/,
+    );
+  });
+
+  it('is refused in production by default, which listens on every interface', () => {
+    expect(() => configWith({ NODE_ENV: 'production' })).toThrow(/ALLOWED_HOSTS/);
+  });
+
+  it('proceeds in production with ALLOWED_HOSTS set', () => {
+    expect(configWith({ ...PRODUCTION, MCP_HOST: '0.0.0.0' }).allowedHosts).toEqual([
+      'mcp.example.test',
+    ]);
+  });
+
+  it('proceeds in production on loopback with ALLOWED_HOSTS empty', () => {
+    expect(configWith({ NODE_ENV: 'production', MCP_HOST: '127.0.0.1' }).host).toBe('127.0.0.1');
+  });
+
+  it('proceeds in development on every interface only without a local auth file', () => {
+    const config = configWith({ NODE_ENV: 'development', MCP_HOST: '0.0.0.0' });
+    expect(config.host).toBe('0.0.0.0');
+    expect(config.localAuthJsonPath).toBeUndefined();
+  });
+
+  it('is refused in development on every interface with a local auth file', () => {
+    expect(() =>
+      configWith({ NODE_ENV: 'development', MCP_HOST: '0.0.0.0', ...LOCAL_AUTH_FILE }),
+    ).toThrow(
+      /listens on 0\.0\.0\.0 and AFLOW_MCP_LOCAL_AUTH_JSON.*Unset MCP_HOST.*or unset AFLOW_MCP_LOCAL_AUTH_JSON/,
+    );
+  });
+
+  it('is refused on a named non-loopback interface with a local auth file', () => {
+    expect(() => configWith({ MCP_HOST: '192.168.1.20', ...LOCAL_AUTH_FILE })).toThrow(
+      /listens on 192\.168\.1\.20/,
+    );
+  });
+
+  it('proceeds on loopback with a local auth file', () => {
+    for (const host of ['127.0.0.1', 'localhost', '::1']) {
+      expect(configWith({ MCP_HOST: host, ...LOCAL_AUTH_FILE }).localAuthJsonPath).toBe(
+        'mcp.local.json',
+      );
+    }
+  });
+
+  it('proceeds in production on every interface, which reads no local auth file', () => {
+    const config = configWith({ ...PRODUCTION, MCP_HOST: '0.0.0.0', ...LOCAL_AUTH_FILE });
+    expect(config.localAuthJsonPath).toBeUndefined();
+  });
+});
+
+describe('the hosts and origins this server answers to', () => {
+  it('are none beyond the loopback default when nothing is configured', () => {
+    const config = configWith({});
+    expect(config.allowedHosts).toEqual([]);
+    expect(config.allowedOrigins).toEqual([]);
+  });
+
+  it('are read as trimmed, lower-case lists with blanks dropped', () => {
+    const config = configWith({
+      ALLOWED_HOSTS: ' MCP.example.test, ,localhost ',
+      MCP_ALLOWED_ORIGINS: 'http://LOCALHOST:5173/ ,',
+    });
+    expect(config.allowedHosts).toEqual(['mcp.example.test', 'localhost']);
+    expect(config.allowedOrigins).toEqual(['http://localhost:5173']);
   });
 });

@@ -1,4 +1,5 @@
 import type { ChatMessage } from '@aflow/ai-client';
+import { toolContentText } from './agentMessageConversion.js';
 
 // ============================================================================
 
@@ -107,7 +108,7 @@ export function convertOrphanToolMessages(
     const name = msg.name ?? msg.toolCallId;
     result.push({
       role: 'user' as const,
-      content: `[Context result from ${name}]: ${msg.content}`,
+      content: `[Context result from ${name}]: ${toolContentText(msg.content)}`,
     });
     if (stats) stats.orphanToUserConversions++;
   }
@@ -216,7 +217,7 @@ export function enforceToolResultAdjacency(
         // as a labelled user note instead of silently dropping it.
         out.push({
           role: 'user',
-          content: `[Duplicate tool result for ${msg.name ?? msg.toolCallId}]: ${msg.content}`,
+          content: `[Duplicate tool result for ${msg.name ?? msg.toolCallId}]: ${toolContentText(msg.content)}`,
         });
         changed = true;
         if (stats) stats.orphanToUserConversions++;

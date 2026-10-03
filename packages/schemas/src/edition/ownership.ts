@@ -249,6 +249,11 @@ export const OWNERSHIP_MANIFEST: readonly OwnershipRule[] = [
   },
   { path: 'AGENTS.md', owner: 'development' },
   {
+    path: '.mcp.json',
+    owner: 'development',
+    why: 'Registers the dev stack’s MCP server (`aflow-local`) with a coding agent working in the checkout.',
+  },
+  {
     path: 'docs/',
     owner: 'development',
     why: 'Architecture and contributor documentation. The publication audit ran over this tree and the exceptions below are its result: what stays here is engineering reference a contributor reads, and everything that is working material, positioning, or a record of internal review is named as cloud.',
@@ -488,6 +493,8 @@ export const ENV_OWNERSHIP: Readonly<Record<string, OwnershipClass>> = {
   HOST: 'core',
   LOG_LEVEL: 'core',
   MCP_PORT: 'core',
+  MCP_HOST: 'core',
+  MCP_ALLOWED_ORIGINS: 'core',
   DB_MAX_CONNECTIONS: 'core',
   DB_IDLE_TIMEOUT: 'core',
   DB_CONNECT_TIMEOUT: 'core',

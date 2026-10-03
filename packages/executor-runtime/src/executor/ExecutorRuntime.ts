@@ -39,6 +39,8 @@ export class ExecutorRuntime implements JobLoopHost {
   readonly abortControllers = new Map<string, AbortController>();
 
   stopRequested = false;
+  private claiming = new AbortController();
+  private lifetime = new AbortController();
   private running = false;
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
   private idleWaiters: Array<() => void> = [];
@@ -103,8 +105,18 @@ export class ExecutorRuntime implements JobLoopHost {
     return this.starting;
   }
 
+  get claimingStopped(): AbortSignal {
+    return this.claiming.signal;
+  }
+
+  get stopped(): AbortSignal {
+    return this.lifetime.signal;
+  }
+
   private async begin(): Promise<void> {
     this.stopRequested = false;
+    if (this.claiming.signal.aborted) this.claiming = new AbortController();
+    if (this.lifetime.signal.aborted) this.lifetime = new AbortController();
     this.log.debug('Starting executor runtime', {
       streamKey: this.config.streamKey,
       consumerGroup: this.config.consumerGroup,
@@ -177,22 +189,32 @@ export class ExecutorRuntime implements JobLoopHost {
   }
 
   /**
-   * Stops reading the stream. Steps already claimed keep running, with their
-   * heartbeats and this executor's, until they end or `stop` is called.
+   * Stops reading the stream. Steps already started keep running, with their
+   * heartbeats and this executor's, until they end or `stop` is called; a step
+   * still waiting for its operation's slot is given back to the stream for the
+   * next executor, unworked.
    */
   stopClaiming(): void {
     this.stopRequested = true;
+    this.claiming.abort();
   }
 
-  /** The claimed steps, each named, with the instant its own timeout ends it. */
+  /**
+   * The started steps, each named, with the instant its own timeout ends it. A
+   * claimed step still waiting for a slot is not among them: it holds nothing
+   * a drain should wait for.
+   */
   inFlight(): Array<{ name: string; deadlineAt: number }> {
-    const now = Date.now();
-    return [...this.inFlightSteps.values()].map((step) => ({
-      name: `${step.operationId} ${step.stepExecutionId}`,
-      // A step still waiting for a slot or being set up has no timeout of its
-      // own yet; the default it would fall back to stands in until it has one.
-      deadlineAt: step.deadlineRef?.current ?? now + this.config.defaultTimeoutMs,
-    }));
+    return [...this.inFlightSteps.values()].flatMap((step) =>
+      step.deadlineRef === undefined
+        ? []
+        : [
+            {
+              name: `${step.operationId} ${step.stepExecutionId}`,
+              deadlineAt: step.deadlineRef.current,
+            },
+          ],
+    );
   }
 
   /** Resolves once claiming has stopped and no claimed step is in flight. */
@@ -205,15 +227,15 @@ export class ExecutorRuntime implements JobLoopHost {
     });
   }
 
-  /** Resolves once a claimed step is in flight, at once if one already is. */
+  /** Resolves once a claimed step has started, at once if one already has. */
   whenInFlight(): Promise<void> {
-    if (this.inFlightSteps.size > 0) return Promise.resolve();
+    if (this.inFlight().length > 0) return Promise.resolve();
     return new Promise<void>((resolve) => {
       this.inFlightWaiters.push(resolve);
     });
   }
 
-  stepScheduled(): void {
+  stepStarted(): void {
     const waiters = this.inFlightWaiters;
     this.inFlightWaiters = [];
     for (const resolve of waiters) resolve();
@@ -229,6 +251,8 @@ export class ExecutorRuntime implements JobLoopHost {
 
   async stop(): Promise<void> {
     this.stopRequested = true;
+    this.claiming.abort();
+    this.lifetime.abort();
     await this.starting?.catch(() => undefined);
     if (!this.running) {
       return;

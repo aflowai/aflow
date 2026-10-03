@@ -62,17 +62,37 @@ export class ConcurrencyLimiter {
   }
 
   /**
-   * Acquire a slot. Resolves when a slot is available.
+   * Acquire a slot. Resolves when a slot is available; an abort before then
+   * gives up the place in the queue and rejects.
    */
-  async acquire(): Promise<void> {
+  async acquire(signal?: AbortSignal): Promise<void> {
     if (this.currentCount < this.maxConcurrent) {
       this.currentCount++;
       return;
     }
+    if (signal === undefined) {
+      return new Promise<void>((resolve) => {
+        this.waitQueue.push(resolve);
+      });
+    }
+    signal.throwIfAborted();
 
-    // Wait for a slot to become available
-    return new Promise<void>((resolve) => {
-      this.waitQueue.push(resolve);
+    return new Promise<void>((resolve, reject) => {
+      const leave = (): void => {
+        const place = this.waitQueue.indexOf(admit);
+        if (place >= 0) this.waitQueue.splice(place, 1);
+        reject(
+          signal.reason instanceof Error
+            ? signal.reason
+            : new Error('Gave up waiting for a slot', { cause: signal.reason }),
+        );
+      };
+      const admit = (): void => {
+        signal.removeEventListener('abort', leave);
+        resolve();
+      };
+      this.waitQueue.push(admit);
+      signal.addEventListener('abort', leave, { once: true });
     });
   }
 

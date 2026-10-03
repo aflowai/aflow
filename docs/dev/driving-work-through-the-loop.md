@@ -20,6 +20,7 @@ built and where its gaps are logged; the gaps that still bind are listed at the 
 | Publication      | the catalog's Local Publish, by `patchRef`, onto `aflow/<branch>`                           |
 | Pull requests    | opened through the space's GitHub binding; merged by the operator                           |
 | Dev stack        | one, from `~/localhd/aflow-worktrees/live`, branch `live` = `main` plus branches under test |
+| Driving client   | the `aflow-local` MCP server from `.mcp.json`, set up by `yarn mcp:setup`                   |
 
 One Helmsman conversation per stream of work. A second stream starts its own conversation
 in the same space; it never posts into another stream's conversation and never cancels

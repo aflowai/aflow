@@ -12,6 +12,7 @@ import {
   HOST_MACHINES_KEY,
   hostInventoryKey,
   publishingFoldersForSpace,
+  readHostBrowserSignInRequest,
   readLiveHostInventories,
   type HostInventory,
 } from '../hostInventory.js';
@@ -20,6 +21,7 @@ function inventory(
   hostname: string,
   harnesses: HostInventory['harnesses'],
   folders: HostInventory['folders'] = [],
+  browsers: HostInventory['browsers'] = [],
 ): HostInventory {
   return {
     hostname,
@@ -28,6 +30,7 @@ function inventory(
     harnesses,
     maxConcurrentHarnessRuns: HOST_HARNESS_CONCURRENCY_DEFAULT,
     folders,
+    browsers,
   };
 }
 
@@ -101,6 +104,78 @@ describe('host inventories', () => {
           harnesses: ['claude'],
         }),
       },
+    );
+
+    expect(await readLiveHostInventories(redis, now)).toEqual([]);
+  });
+
+  it('carries each browser profile by name, with sites only for one that is running', async () => {
+    const now = Date.now();
+    const browsers: HostInventory['browsers'] = [
+      {
+        id: 'default',
+        posture: 'autonomous',
+        window: 'hidden',
+        spaces: 'all',
+        rules: [],
+        idleMinutes: 30,
+        running: true,
+        windowOpen: false,
+        sites: ['accounts.example.com', 'mail.example.com'],
+      },
+      {
+        id: 'work',
+        posture: 'read-only',
+        window: 'visible',
+        spaces: ['space-a'],
+        rules: [{ origin: '*.example.com', effect: 'deny' }],
+        idleMinutes: 5,
+        running: false,
+        windowOpen: false,
+      },
+    ];
+    const redis = fakeRedis(
+      { [now - 1_000]: 'laptop' },
+      { [hostInventoryKey('laptop')]: JSON.stringify(inventory('laptop', [], [], browsers)) },
+    );
+
+    const live = await readLiveHostInventories(redis, now);
+
+    expect(live[0]?.browsers).toEqual(browsers);
+    expect(Object.keys(live[0]?.browsers[0] ?? {}).sort()).toEqual(
+      [
+        'id',
+        'idleMinutes',
+        'posture',
+        'rules',
+        'running',
+        'sites',
+        'spaces',
+        'window',
+        'windowOpen',
+      ].sort(),
+    );
+  });
+
+  it('reads a sign-in asked for from the workspace only when it names this machine', () => {
+    const asked = JSON.stringify({ hostname: 'laptop', profileId: 'work' });
+    expect(readHostBrowserSignInRequest(asked, 'laptop')).toBe('work');
+    expect(readHostBrowserSignInRequest(asked, 'desktop')).toBeUndefined();
+    for (const raw of [
+      'not json',
+      JSON.stringify({ hostname: 'laptop' }),
+      JSON.stringify({ hostname: 'laptop', profileId: '../escape' }),
+    ]) {
+      expect(readHostBrowserSignInRequest(raw, 'laptop'), raw).toBeUndefined();
+    }
+  });
+
+  it('refuses an inventory with no browser list rather than reading the machine as having none', async () => {
+    const now = Date.now();
+    const { browsers: _omitted, ...withoutBrowsers } = inventory('laptop', []);
+    const redis = fakeRedis(
+      { [now - 1_000]: 'laptop' },
+      { [hostInventoryKey('laptop')]: JSON.stringify(withoutBrowsers) },
     );
 
     expect(await readLiveHostInventories(redis, now)).toEqual([]);

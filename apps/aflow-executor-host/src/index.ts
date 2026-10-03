@@ -13,16 +13,10 @@
  */
 import './instrument.js';
 
-import { homedir } from 'node:os';
 import { existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 
-import {
-  ExecutorRuntime,
-  DEFAULT_EXECUTOR_CONFIG,
-  createServiceLogger,
-  type ExecutorDependencies,
-} from '@aflow/executor-runtime';
+import { createServiceLogger } from '@aflow/executor-runtime';
 import type { Redis } from 'ioredis';
 import { createShutdownController } from '@aflow/lib';
 import { resolvePayloadStore } from '@aflow/payload-store';
@@ -37,22 +31,35 @@ import {
   HOST_INVENTORY_REFRESH_MS,
   HOST_INVENTORY_TTL_SECONDS,
   HOST_MACHINES_KEY,
+  hostBrowserSignInChannel,
   HOST_WITHDRAWAL_CHANNEL,
   hostInventoryKey,
   type HostInventory,
+  type HostInventoryBrowsers,
   type HostInventoryFolders,
   type HostWithdrawalNotice,
   quitRedisWithTimeout,
+  readHostBrowserSignInRequest,
 } from '@aflow/redis';
-import { ConsumerGroups, HOST_HARNESS_CONCURRENCY_DEFAULT, StreamKeys } from '@aflow/schemas';
+import { HOST_HARNESS_CONCURRENCY_DEFAULT } from '@aflow/schemas';
 
 import { executionPermitted, loadHostPolicy } from './bindings.js';
 import { createChromeLauncher } from './browser/chromeProcess.js';
 import { BrowserDriver } from './browser/driver.js';
+import type { SignInResult } from './browser/driverTypes.js';
+import { startHandoffBoard } from './browser/handoffBoard.js';
 import { createBrowserIdleSweep } from './browser/idleSweep.js';
+import { followBrowserRequests } from './browser/requestPoll.js';
+import { isBrowserRequestFile, serveBrowserRequests } from './browser/windowRequests.js';
 import { createBrowserHandler } from './handlers/browserHandler.js';
 import { removeWorktree } from './worktree.js';
 import { HARNESS_RUN_OPERATION, removeOrphanedCheckouts } from './handlers/harnessHandlers.js';
+import {
+  BROWSER_STEP_TYPE,
+  STEP_TYPE,
+  createHostRuntimes,
+  guardHostConnections,
+} from './hostRuntimes.js';
 import { createHostHandler } from './handlers/hostHandler.js';
 import {
   allSessions,
@@ -61,6 +68,7 @@ import {
   withdrawnSessions,
 } from './harnessSessions.js';
 import { discardNow, openOrphanJournal, reapOrphans } from './orphans.js';
+import { resolveHostPolicyPath } from './hostDir.js';
 import { loadPairedEnv } from './pairedEnv.js';
 import { followPolicy, watchPolicy } from './policyWatch.js';
 import { killAllProcesses, killProcessesForBinding, reapWithdrawn } from './sandboxedRun.js';
@@ -85,27 +93,6 @@ const taskLogger: BackgroundTaskLogger = {
     log.error(message, { error, ...data });
   },
 };
-
-const STEP_TYPE = 'host';
-const BROWSER_STEP_TYPE = 'browser';
-
-/** Twice the refresh, so one missed cycle does not blank a live machine. */
-
-/**
- * Outside any path a job can write, so a job cannot grant itself a binding by
- * editing the file that lists them.
- */
-function resolvePolicyPath(): string {
-  const configured = process.env['PHOENIX_HOST_POLICY_PATH']?.trim();
-  if (configured !== undefined && configured !== '') return configured;
-  // The same directory `pair`, `connect` and the harness CLI write to. Reading
-  // it only from home while those honoured an override meant a machine set up
-  // in a custom directory was paired, connected, and invisible: the executor
-  // started cleanly against an unrelated policy and refused every binding.
-  const dir = process.env['PHOENIX_HOST_DIR']?.trim();
-  if (dir !== undefined && dir !== '') return join(dir, 'host-policy.json');
-  return join(homedir(), '.aflow', 'host-policy.json');
-}
 
 const CREDENTIAL_RETRY_MS: readonly number[] = [5_000, 15_000, 30_000, 60_000];
 
@@ -147,7 +134,7 @@ export async function waitForRedisCredential(
 
 async function main(): Promise<void> {
   const hostname = process.env['HOSTNAME'] ?? `host-executor-${String(process.pid)}`;
-  const policyPath = resolvePolicyPath();
+  const policyPath = resolveHostPolicyPath();
 
   // Before anything reads the environment for a connection. Pairing wrote the
   // credential here; not reading it left the executor resolving Redis from
@@ -165,10 +152,6 @@ async function main(): Promise<void> {
 
   await waitForRedisCredential(getExecutorRedisConfig(), log);
   const redis = getRedisConnection(getExecutorRedisConfig());
-  const redisBlocking = createBlockingRedisConnection(
-    `${hostname}-blocking`,
-    getExecutorRedisConfig(),
-  );
 
   // No in-memory fallback: a payload store that forgets is indistinguishable
   // from one that works until something reads back, and Phase 1 asks for an
@@ -187,42 +170,13 @@ async function main(): Promise<void> {
     ...(paired.applied.length > 0 ? { pairedEnv: paired.applied.join(',') } : { paired: false }),
   });
 
-  const deps: ExecutorDependencies = { redis, redisBlocking, payloadStore: resolved.store };
-  // Its own blocking connection: a runtime blocks on its stream between jobs,
-  // and two runtimes sharing one would wait on each other.
-  const redisBlockingBrowser = createBlockingRedisConnection(
-    `${hostname}-browser-blocking`,
-    getExecutorRedisConfig(),
-  );
-
-  const runtime = new ExecutorRuntime(
-    {
-      ...DEFAULT_EXECUTOR_CONFIG,
-      consumerName: hostname,
-      consumerGroup: ConsumerGroups.executor(STEP_TYPE),
-      streamKey: StreamKeys.jobStream(STEP_TYPE),
-      stepType: STEP_TYPE,
-      concurrency: parseInt(process.env['EXECUTOR_CONCURRENCY'] ?? '4', 10),
-      defaultTimeoutMs: parseInt(process.env['DEFAULT_TIMEOUT_MS'] ?? '300000', 10),
-    },
-    deps,
-  );
-
-  // The browser is served from this executor because it lives on this machine:
-  // a profile's directory is under the host directory, and its Chrome is in the
-  // process table that withdrawal, shutdown and the orphan sweep below read.
-  const browserRuntime = new ExecutorRuntime(
-    {
-      ...DEFAULT_EXECUTOR_CONFIG,
-      consumerName: hostname,
-      consumerGroup: ConsumerGroups.executor(BROWSER_STEP_TYPE),
-      streamKey: StreamKeys.jobStream(BROWSER_STEP_TYPE),
-      stepType: BROWSER_STEP_TYPE,
-      concurrency: parseInt(process.env['BROWSER_EXECUTOR_CONCURRENCY'] ?? '4', 10),
-      defaultTimeoutMs: 120_000,
-    },
-    { redis, redisBlocking: redisBlockingBrowser, payloadStore: resolved.store },
-  );
+  const host = createHostRuntimes({
+    hostname,
+    redis,
+    payloadStore: resolved.store,
+    connect: (name) => createBlockingRedisConnection(name, getExecutorRedisConfig()),
+  });
+  const { runtime, browserRuntime, hostChannels, connections } = host;
 
   // Before the first job: anything a previous executor left running is holding
   // a credential nothing can address any more, so it is ended rather than
@@ -235,6 +189,13 @@ async function main(): Promise<void> {
       count: reaped,
     });
   }
+  const handoffs = await startHandoffBoard({
+    redis,
+    subscriber: hostChannels,
+    hostDir: dirname(policyPath),
+    machineLabel: hostname,
+    log,
+  });
 
   // Checkouts too: every session died with the previous executor, so what they
   // held on disk and in the operator's repositories has nothing left that would
@@ -274,14 +235,158 @@ async function main(): Promise<void> {
     launcher: createChromeLauncher(),
     hostDir: dirname(policyPath),
     loadPolicy: async () => await loadHostPolicy(policyPath),
+    handoffs,
   });
   browserRuntime.registerHandler(createBrowserHandler(browserDriver));
   const browserIdleSweep = createBrowserIdleSweep(browserDriver, taskLogger);
 
+  // Last known good, so a policy read that fails mid-save does not publish an
+  // empty list — "this machine offers no harness" and "the file was being
+  // written" are different facts, and only the first should reach a workspace.
+  let lastHarnesses: HostInventory['harnesses'] = [];
+  let lastFolders: HostInventoryFolders = [];
+  let lastMaxConcurrentHarnessRuns = HOST_HARNESS_CONCURRENCY_DEFAULT;
+  let lastBrowsers: HostInventoryBrowsers = [];
+
+  // Published with a lifetime rather than stored: an inventory that outlives the
+  // executor describes a machine nobody is listening on, and inviting a run
+  // against a tool that may no longer be there is worse than saying nothing.
+  // Refreshed on the same cadence, so it disappears shortly after the executor
+  // does.
+  const publishRuntimes = async (): Promise<void> => {
+    const runtimes = await observeRuntimes();
+    // From the policy rather than from discovery: an installed harness the
+    // operator never added to the file cannot be addressed by a run, so naming
+    // it here would offer work that is refused.
+    const { harnesses, folders, maxConcurrentHarnessRuns } = await loadHostPolicy(policyPath)
+      .then((policy) => ({
+        harnesses: [...policy.harnesses.values()]
+          .map((profile) => ({
+            id: profile.id,
+            ...(profile.label !== undefined ? { label: profile.label } : {}),
+          }))
+          .sort((a, b) => a.id.localeCompare(b.id)),
+        folders: publishingFolders(policy.bindings),
+        maxConcurrentHarnessRuns: policy.maxConcurrentHarnessRuns,
+      }))
+      .catch(() => ({
+        harnesses: lastHarnesses,
+        folders: lastFolders,
+        maxConcurrentHarnessRuns: lastMaxConcurrentHarnessRuns,
+      }));
+    lastHarnesses = harnesses;
+    lastFolders = folders;
+    lastMaxConcurrentHarnessRuns = maxConcurrentHarnessRuns;
+    const browsers = await browserDriver
+      .machineProfiles()
+      .then((profiles) =>
+        profiles.map(({ profile, running, windowShown, sites }) => ({
+          id: profile.id,
+          posture: profile.posture,
+          window: profile.window,
+          spaces: profile.spaces,
+          rules: profile.rules,
+          idleMinutes: profile.idleMinutes,
+          running,
+          windowOpen: windowShown,
+          ...(sites !== undefined ? { sites } : {}),
+        })),
+      )
+      .catch(() => lastBrowsers);
+    lastBrowsers = browsers;
+    const inventory: HostInventory = {
+      hostname,
+      observedAt: new Date().toISOString(),
+      runtimes,
+      harnesses,
+      maxConcurrentHarnessRuns,
+      folders,
+      browsers,
+    };
+    await redis.setex(
+      hostInventoryKey(hostname),
+      HOST_INVENTORY_TTL_SECONDS,
+      JSON.stringify(inventory),
+    );
+    // Announced into a small set rather than left to be scanned for. Finding
+    // work by walking the keyspace is what [[180]] forbids, and the appliance
+    // has no other way to learn a machine's name.
+    //
+    // Scored by when it was last heard from, not merely present: a member
+    // only leaves on a clean shutdown, and the default name carries this
+    // process's pid, so every crash-and-restart used to add one more name
+    // that nothing would ever remove. The reader drops what has aged out, so
+    // the cost of listing machines follows the live ones.
+    await redis.zadd(HOST_MACHINES_KEY, Date.now(), hostname);
+  };
+  // Through the shared runner rather than a bare `setInterval`: cycles cannot
+  // overlap when a runtime probe or Redis stalls, and it inherits the jitter,
+  // budget, abort and error backoff every declared task is supposed to have.
+  // [[180]] asks for exactly this, and a task added after the rule was written
+  // has no excuse for being the exception.
+  const inventoryTask = createBackgroundTaskRunner(
+    {
+      taskId: 'host.runtime_inventory',
+      scope: 'per_instance',
+      intervalMs: HOST_INVENTORY_REFRESH_MS,
+      maxBatch: 1,
+      maxCycleMs: 30_000,
+      mode: 'enabled',
+      runImmediately: true,
+      logger: taskLogger,
+    },
+    async () => {
+      await publishRuntimes();
+      return { processed: 1 };
+    },
+  );
+
+  // One sitting however the operator asked for it — `aflow browser sign-in` on
+  // the machine, or Sign in to sites on the workspace's machine page. The
+  // inventory is republished as the window opens and as it closes, which is
+  // how that page learns of both.
+  const republishInventory = (): void => {
+    void inventoryTask.runOnce().catch(() => undefined);
+  };
+  const signInSitting = async (
+    profileId: string,
+    askedFrom: 'machine' | 'workspace',
+  ): Promise<SignInResult> => {
+    log.info('Showing a browser window for the operator to sign in', { profileId, askedFrom });
+    try {
+      return await browserDriver.signIn(profileId, { onShown: republishInventory });
+    } finally {
+      republishInventory();
+    }
+  };
+
+  // `aflow browser` asks through files beside the policy, because the Chrome a
+  // profile's directory allows is this executor's; see windowRequests.ts.
+  const browserRequests = serveBrowserRequests(
+    dirname(policyPath),
+    async (request) => {
+      if (request.kind === 'sign_in') {
+        return { kind: 'sign_in', ...(await signInSitting(request.profileId, 'machine')) };
+      }
+      const profiles = await browserDriver.machineProfiles();
+      return {
+        kind: 'list',
+        profiles: profiles.map(({ profile, running, sites }) => ({
+          id: profile.id,
+          running,
+          ...(sites !== undefined ? { sites } : {}),
+        })),
+      };
+    },
+    (message, meta) => {
+      log.warn(message, meta);
+    },
+  );
+
   // Withdrawal reaches running work without waiting for the next request. A
   // detached command exists so the step can end, so ordinarily no request
   // comes — and the operator would wait out a timeout instead.
-  const policyWatch = watchPolicy(policyPath, () => {
+  const onPolicyChange = (): void => {
     void loadHostPolicy(policyPath)
       .then(async (policy) => {
         runtime.limitOperation(HARNESS_RUN_OPERATION, policy.maxConcurrentHarnessRuns);
@@ -338,7 +443,18 @@ async function main(): Promise<void> {
           error: error instanceof Error ? error.message : String(error),
         });
       });
+  };
+  const policyWatch = watchPolicy(policyPath, onPolicyChange, undefined, {
+    matches: isBrowserRequestFile,
+    onChange: () => {
+      void browserRequests.check();
+    },
   });
+  const browserRequestPoll = followBrowserRequests(
+    browserRequests,
+    policyWatch.watching,
+    taskLogger,
+  );
 
   // A detached process is spawned into its own group so a stop reaches its
   // descendants, which also means it survives this executor unless something
@@ -357,95 +473,11 @@ async function main(): Promise<void> {
   };
   process.once('exit', endEverything);
 
-  // Last known good, so a policy read that fails mid-save does not publish an
-  // empty list — "this machine offers no harness" and "the file was being
-  // written" are different facts, and only the first should reach a workspace.
-  let lastHarnesses: HostInventory['harnesses'] = [];
-  let lastFolders: HostInventoryFolders = [];
-  let lastMaxConcurrentHarnessRuns = HOST_HARNESS_CONCURRENCY_DEFAULT;
-
-  // Published with a lifetime rather than stored: an inventory that outlives the
-  // executor describes a machine nobody is listening on, and inviting a run
-  // against a tool that may no longer be there is worse than saying nothing.
-  // Refreshed on the same cadence, so it disappears shortly after the executor
-  // does.
-  const publishRuntimes = async (): Promise<void> => {
-    const runtimes = await observeRuntimes();
-    // From the policy rather than from discovery: an installed harness the
-    // operator never added to the file cannot be addressed by a run, so naming
-    // it here would offer work that is refused.
-    const { harnesses, folders, maxConcurrentHarnessRuns } = await loadHostPolicy(policyPath)
-      .then((policy) => ({
-        harnesses: [...policy.harnesses.values()]
-          .map((profile) => ({
-            id: profile.id,
-            ...(profile.label !== undefined ? { label: profile.label } : {}),
-          }))
-          .sort((a, b) => a.id.localeCompare(b.id)),
-        folders: publishingFolders(policy.bindings),
-        maxConcurrentHarnessRuns: policy.maxConcurrentHarnessRuns,
-      }))
-      .catch(() => ({
-        harnesses: lastHarnesses,
-        folders: lastFolders,
-        maxConcurrentHarnessRuns: lastMaxConcurrentHarnessRuns,
-      }));
-    lastHarnesses = harnesses;
-    lastFolders = folders;
-    lastMaxConcurrentHarnessRuns = maxConcurrentHarnessRuns;
-    const inventory: HostInventory = {
-      hostname,
-      observedAt: new Date().toISOString(),
-      runtimes,
-      harnesses,
-      maxConcurrentHarnessRuns,
-      folders,
-    };
-    await redis.setex(
-      hostInventoryKey(hostname),
-      HOST_INVENTORY_TTL_SECONDS,
-      JSON.stringify(inventory),
-    );
-    // Announced into a small set rather than left to be scanned for. Finding
-    // work by walking the keyspace is what [[180]] forbids, and the appliance
-    // has no other way to learn a machine's name.
-    //
-    // Scored by when it was last heard from, not merely present: a member
-    // only leaves on a clean shutdown, and the default name carries this
-    // process's pid, so every crash-and-restart used to add one more name
-    // that nothing would ever remove. The reader drops what has aged out, so
-    // the cost of listing machines follows the live ones.
-    await redis.zadd(HOST_MACHINES_KEY, Date.now(), hostname);
-  };
-  // Through the shared runner rather than a bare `setInterval`: cycles cannot
-  // overlap when a runtime probe or Redis stalls, and it inherits the jitter,
-  // budget, abort and error backoff every declared task is supposed to have.
-  // [[180]] asks for exactly this, and a task added after the rule was written
-  // has no excuse for being the exception.
-  const inventoryTask = createBackgroundTaskRunner(
-    {
-      taskId: 'host.runtime_inventory',
-      scope: 'per_instance',
-      intervalMs: HOST_INVENTORY_REFRESH_MS,
-      maxBatch: 1,
-      maxCycleMs: 30_000,
-      mode: 'enabled',
-      runImmediately: true,
-      logger: taskLogger,
-    },
-    async () => {
-      await publishRuntimes();
-      return { processed: 1 };
-    },
-  );
-  const withdrawals = createBlockingRedisConnection(
-    `${hostname}-withdrawals`,
-    getExecutorRedisConfig(),
-  );
-
   // A restart under the dev stack's watcher drains: a harness run, a check or a
-  // review in flight is minutes of work the restart has no reason to end. The
-  // browser's pages are not held open for it.
+  // review in flight is minutes of work the restart has no reason to end. A
+  // harness run still waiting for a slot is not in flight: it goes back to the
+  // stream for the next executor rather than starting once claiming has
+  // stopped. The browser's pages are not held open for it.
   let browserStopped: Promise<void> | undefined;
   const stopBrowserRuntime = (): Promise<void> => (browserStopped ??= browserRuntime.stop());
 
@@ -467,19 +499,20 @@ async function main(): Promise<void> {
     onShutdown: async () => {
       await inventoryTask.stop();
       await browserIdleSweep.stop();
+      await browserRequestPoll.stop();
       await redis.zrem(HOST_MACHINES_KEY, hostname).catch(() => undefined);
       await runtime.stop();
       await stopBrowserRuntime();
-      await quitRedisWithTimeout(withdrawals);
-      await quitRedisWithTimeout(redisBlocking);
-      await quitRedisWithTimeout(redisBlockingBrowser);
+      await quitRedisWithTimeout(connections.hostChannels);
+      await quitRedisWithTimeout(connections.blocking);
+      await quitRedisWithTimeout(connections.browserBlocking);
+      await quitRedisWithTimeout(connections.browserChannels);
       await closeRedisConnection();
     },
   });
 
   attachRedisErrorGuard(redis, () => controller.shuttingDown, log);
-  attachRedisErrorGuard(redisBlocking, () => controller.shuttingDown, log);
-  attachRedisErrorGuard(redisBlockingBrowser, () => controller.shuttingDown, log);
+  guardHostConnections(host, () => controller.shuttingDown, log);
 
   const started = await startUnderSignals(controller, [
     async () => {
@@ -495,6 +528,7 @@ async function main(): Promise<void> {
 
   inventoryTask.start();
   browserIdleSweep.start();
+  browserRequestPoll.start();
 
   // A withdrawal decided on the appliance reaches work already running here.
   //
@@ -503,12 +537,42 @@ async function main(): Promise<void> {
   // detached command or drop an idle session, which is exactly the gap: the row
   // is gone, no further step will be scheduled, and the process that was already
   // running holds the folder until it decides to exit.
-  await withdrawals.subscribe(HOST_WITHDRAWAL_CHANNEL).catch((error: unknown) => {
+  await hostChannels.subscribe(HOST_WITHDRAWAL_CHANNEL).catch((error: unknown) => {
     log.warn('Could not subscribe to withdrawals; they will apply at the next policy change', {
       error,
     });
   });
-  withdrawals.on('message', (_channel: string, raw: string) => {
+  // The operator asking from the workspace for a profile's sign-in window. It
+  // opens a window on this machine and widens nothing: the sitting is the one
+  // `aflow browser sign-in` holds, on a profile this machine declares.
+  const signInChannel = hostBrowserSignInChannel(hostname);
+  await hostChannels.subscribe(signInChannel).catch((error: unknown) => {
+    log.warn('Could not subscribe to sign-in requests from the workspace', { error });
+  });
+  const signInAskedFromWorkspace = (raw: string): void => {
+    const profileId = readHostBrowserSignInRequest(raw, hostname);
+    if (profileId === undefined) return;
+    signInSitting(profileId, 'workspace')
+      .then((result) => {
+        log.info('The operator closed the sign-in window', {
+          profileId,
+          outcome: result.outcome,
+          sites: result.sites.length,
+        });
+      })
+      .catch((error: unknown) => {
+        log.warn('Could not show the sign-in window the workspace asked for', {
+          profileId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+  };
+  hostChannels.on('message', (channel: string, raw: string) => {
+    if (channel === signInChannel) {
+      signInAskedFromWorkspace(raw);
+      return;
+    }
+    if (channel !== HOST_WITHDRAWAL_CHANNEL) return;
     void (async () => {
       let notice: HostWithdrawalNotice;
       try {

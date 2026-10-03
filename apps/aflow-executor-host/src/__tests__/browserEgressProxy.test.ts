@@ -18,6 +18,9 @@ import {
   machineInterfaceAddresses,
 } from '../browser/addresses.js';
 import { type EgressProxy, parseAuthority, startEgressProxy } from '../browser/egressProxy.js';
+import { LOOPBACK_LISTENER, requires } from './fixtures/capabilities.js';
+
+const onLoopback = requires(LOOPBACK_LISTENER);
 
 /** Documentation-range address, standing in for one of this machine's own. */
 const PLANTED_INTERFACE = '192.0.2.10';
@@ -149,7 +152,8 @@ function connectTo(authority: string): string {
   return `CONNECT ${authority} HTTP/1.1\r\nHost: ${authority}\r\n\r\n`;
 }
 
-describe('the egress proxy', () => {
+// The whole suite, not each test: its shared setup is what listens.
+describe.skipIf(onLoopback.skip)(onLoopback.title('the egress proxy'), () => {
   let target: Server;
   let targetPort: number;
   let proxy: EgressProxy | undefined;

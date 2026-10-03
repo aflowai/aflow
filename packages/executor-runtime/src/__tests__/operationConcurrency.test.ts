@@ -52,6 +52,7 @@ function job(stepExecutionId: string, operationId: string) {
     stepExecutionId,
     stepType: 'host',
     stepId: stepExecutionId,
+    sessionId: 'session-1',
     attempt: 1,
     operationId,
     inputRef: 'inline:e30=',
@@ -71,9 +72,30 @@ describe('ExecutorRuntime — an operation with a limit of its own', () => {
   let running: Set<string>;
   let peak: number;
   let finish: Map<string, () => void>;
+  let everStarted: Set<string>;
+
+  const waitingRuns = (): string[] =>
+    [1, 2, 3, 4].map((n) => `harness-${String(n)}`).filter((id) => !running.has(id));
+  const messageOf = (stepExecutionId: string | undefined): string =>
+    `msg-${stepExecutionId?.split('-')[1] ?? ''}`;
+  const resultsFor = (stepExecutionId: string | undefined): unknown[] =>
+    [reportingMock.emitResult, reportingMock.emitFailure, reportingMock.emitSuccess].flatMap(
+      (emit) =>
+        emit.mock.calls.filter(
+          ([, job]: [unknown, { stepExecutionId: string }]) =>
+            job.stepExecutionId === stepExecutionId,
+        ),
+    );
+  const endOneRunning = (): void => {
+    const [first] = [...running];
+    finish.get(first ?? '')?.();
+  };
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    redisMock.getStepState.mockResolvedValue(null);
+    redisMock.wasStepCancelled.mockResolvedValue(false);
+    everStarted = new Set();
     running = new Set();
     peak = 0;
     finish = new Map();
@@ -108,6 +130,7 @@ describe('ExecutorRuntime — an operation with a limit of its own', () => {
         if (operationId !== LIMITED)
           return { status: 'SUCCEEDED', outputRef: 'inline:e30=' } as never;
         running.add(stepExecutionId);
+        everStarted.add(stepExecutionId);
         peak = Math.max(peak, running.size);
         await new Promise<void>((resolve) => finish.set(stepExecutionId, resolve));
         running.delete(stepExecutionId);
@@ -120,7 +143,7 @@ describe('ExecutorRuntime — an operation with a limit of its own', () => {
 
   // Ending what runs admits what waits, so each round ends the newly admitted.
   afterEach(async () => {
-    while (runtime.inFlight().length > 0) {
+    while (runtime.inFlightSteps.size > 0) {
       for (const end of finish.values()) end();
       await settle();
     }
@@ -129,7 +152,9 @@ describe('ExecutorRuntime — an operation with a limit of its own', () => {
 
   it('runs no more than its limit at once, and holds the rest claimed rather than refusing them', () => {
     expect(running.size).toBe(HARNESS_LIMIT);
-    expect(runtime.inFlight().filter((s) => s.name.startsWith(LIMITED))).toHaveLength(4);
+    expect(
+      [...runtime.inFlightSteps.values()].filter((s) => s.operationId === LIMITED),
+    ).toHaveLength(4);
     expect(reportingMock.emitFailure).not.toHaveBeenCalled();
     expect(reportingMock.acknowledgeJob).toHaveBeenCalledTimes(1);
   });
@@ -178,6 +203,74 @@ describe('ExecutorRuntime — an operation with a limit of its own', () => {
     await settle();
     expect(running.size).toBe(1);
     expect(running.has(second ?? '')).toBe(false);
+  });
+
+  it('names only the started runs as in flight, never one waiting for a slot', () => {
+    expect(
+      runtime
+        .inFlight()
+        .filter((s) => s.name.startsWith(LIMITED))
+        .map((s) => s.name.split(' ')[1])
+        .sort(),
+    ).toEqual([...running].sort());
+  });
+
+  it('ends the wait of a step cancelled while it waits: it never starts, and gives up its place', async () => {
+    const [cancelled, next] = waitingRuns();
+    runtime.abortControllers.get(cancelled ?? '')?.abort();
+    await settle();
+
+    expect(reportingMock.acknowledgeJob).toHaveBeenCalledWith(
+      expect.anything(),
+      'host',
+      messageOf(cancelled),
+    );
+    expect(resultsFor(cancelled)).toHaveLength(0);
+    expect(reportingMock.emitFailure).not.toHaveBeenCalled();
+
+    endOneRunning();
+    await settle();
+    expect(running.has(next ?? '')).toBe(true);
+    expect(everStarted.has(cancelled ?? '')).toBe(false);
+  });
+
+  it('does not start a step whose cancel was recorded while it waited', async () => {
+    const [cancelled, next] = waitingRuns();
+    redisMock.wasStepCancelled.mockImplementation((_redis: unknown, stepExecutionId: string) =>
+      Promise.resolve(stepExecutionId === cancelled),
+    );
+
+    endOneRunning();
+    await settle();
+
+    expect(everStarted.has(cancelled ?? '')).toBe(false);
+    expect(resultsFor(cancelled)).toHaveLength(0);
+    expect(running.has(next ?? '')).toBe(true);
+    expect(reportingMock.acknowledgeJob).toHaveBeenCalledWith(
+      expect.anything(),
+      'host',
+      messageOf(cancelled),
+    );
+  });
+
+  it.each([
+    ['failed', { attempt: 1, status: 'FAILED' }],
+    ['superseded by a newer attempt', { attempt: 2, status: 'SCHEDULED' }],
+  ])('does not start a session step %s while it waited, once admitted', async (_, laterState) => {
+    const [dropped, next] = waitingRuns();
+    redisMock.getStepState.mockImplementation(
+      (_redis: unknown, _tenantId: string, stepExecutionId: string) =>
+        Promise.resolve(stepExecutionId === dropped ? laterState : null),
+    );
+
+    endOneRunning();
+    await settle();
+
+    expect(everStarted.has(dropped ?? '')).toBe(false);
+    expect(resultsFor(dropped)).toHaveLength(0);
+    expect(redisMock.clearStepInFlight).toHaveBeenCalledWith(expect.anything(), dropped);
+    expect(running.has(next ?? '')).toBe(true);
+    expect(reportingMock.emitFailure).not.toHaveBeenCalled();
   });
 
   it('keeps a waiting step claimed by refreshing its in-flight record before its timeout is known', () => {

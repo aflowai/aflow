@@ -7,8 +7,9 @@
  * for. Past the bound it stops and counts what it left out, by role, so the
  * agent knows what kind of thing it is not seeing.
  */
-import { BROWSER_OUTLINE_MAX_CHARS } from '@aflow/schemas';
+import { BROWSER_OUTLINE_DEFAULT_CHARS, BROWSER_SNAPSHOT_DEFAULT_CHARS } from '@aflow/schemas';
 
+import { encodedLength } from './encodedLength.js';
 import type { PageSnapshot } from './types.js';
 
 export const OUTLINE_INTERACTIVE_ROLES: ReadonlySet<string> = new Set([
@@ -148,48 +149,66 @@ interface Line {
   line: string;
 }
 
-function censusLine(what: string, census: Record<string, number>, maxChars: number): string {
+/** A line joined after another costs its own length and the escaped line break before it. */
+const SEPARATOR_COST = 2;
+
+function censusLine(
+  what: string,
+  census: Record<string, number>,
+  maxChars: number,
+  remedy: string,
+): string {
   const counted = Object.entries(census)
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0]))
     .map(([role, count]) => `${role} ${String(count)}`)
     .join(', ');
-  return `# ${what} cut at ${String(maxChars)} characters. Not shown: ${counted}.`;
+  return `# ${what} cut at ${String(maxChars)} characters. Not shown: ${counted}. ${remedy}`;
 }
 
-/** Lines in order until the bound, then a census of the rest by role — the census inside the bound too. */
+/**
+ * Lines in order until the bound, then a census of the rest by role — the
+ * census inside the bound too. The bound counts characters as the result
+ * carries them.
+ */
 function cutToBound(
   what: string,
   entries: readonly Line[],
   maxChars: number,
+  remedy: (kept: number) => string,
 ): { text: string; lines: number; census?: Record<string, number> } {
-  const all = entries.map((entry) => entry.line).join('\n');
-  if (all.length <= maxChars) return { text: all, lines: entries.length };
+  const costs = entries.map((entry) => encodedLength(entry.line));
+  const total =
+    costs.reduce((sum, cost) => sum + cost, 0) + SEPARATOR_COST * Math.max(0, entries.length - 1);
+  if (total <= maxChars) {
+    return { text: entries.map((entry) => entry.line).join('\n'), lines: entries.length };
+  }
 
   const census: Record<string, number> = {};
-  const lines = entries.map((entry) => entry.line);
-  const roles = entries.map((entry) => entry.role);
-  let length = all.length;
+  let kept = entries.length;
+  let length = total;
   const withhold = (): void => {
-    const line = lines.pop();
-    const role = roles.pop();
-    if (line === undefined || role === undefined) return;
-    census[role] = (census[role] ?? 0) + 1;
-    length -= line.length + (lines.length > 0 ? 1 : 0);
+    kept -= 1;
+    const entry = entries[kept];
+    if (entry === undefined) return;
+    census[entry.role] = (census[entry.role] ?? 0) + 1;
+    length -= (costs[kept] ?? 0) + (kept > 0 ? SEPARATOR_COST : 0);
   };
-  while (lines.length > 0 && length > maxChars) withhold();
-  while (lines.length > 0 && length + 1 + censusLine(what, census, maxChars).length > maxChars) {
-    withhold();
-  }
+  const closing = (): string => censusLine(what, census, maxChars, remedy(kept));
+  while (kept > 0 && length > maxChars) withhold();
+  while (kept > 0 && length + SEPARATOR_COST + encodedLength(closing()) > maxChars) withhold();
   return {
-    text: [...lines, censusLine(what, census, maxChars)].join('\n'),
-    lines: lines.length,
+    text: [...entries.slice(0, kept).map((entry) => entry.line), closing()].join('\n'),
+    lines: kept,
     census,
   };
 }
 
+const OUTLINE_REMEDY =
+  'browser.page.snapshot with a `ref` shows one region whole, or raise `maxChars`.';
+
 export function buildOutline(
   snapshot: PageSnapshot,
-  maxChars: number = BROWSER_OUTLINE_MAX_CHARS,
+  maxChars: number = BROWSER_OUTLINE_DEFAULT_CHARS,
 ): Outline {
   const kept: Line[] = [];
   let previous: { node: SnapshotNode; keptIndex?: number } | undefined;
@@ -228,7 +247,7 @@ export function buildOutline(
     previous = { node, keptIndex: kept.length - 1 };
   }
 
-  const cut = cutToBound('Outline', kept, maxChars);
+  const cut = cutToBound('Outline', kept, maxChars, () => OUTLINE_REMEDY);
   return {
     text: cut.text,
     elements: cut.lines,
@@ -256,6 +275,31 @@ export interface BoundedSnapshot {
   readonly text: string;
   readonly lines: number;
   readonly census?: Readonly<Record<string, number>>;
+  /** When cut: the element enclosing the first line left out, to scope the next snapshot to. */
+  readonly continueRef?: string;
+}
+
+interface SnapshotLine extends Line {
+  readonly indent: number;
+  readonly ref?: string;
+}
+
+/**
+ * The nearest element with a reference that encloses the first line left out
+ * and is not the top of the snapshot — or, failing one, the first reference
+ * at or after that line.
+ */
+function continueRefAt(lines: readonly SnapshotLine[], firstLeftOut: number): string | undefined {
+  const first = lines[firstLeftOut];
+  if (first === undefined) return undefined;
+  let indent = first.indent;
+  for (let i = firstLeftOut - 1; i > 0; i -= 1) {
+    const line = lines[i];
+    if (line === undefined || line.indent >= indent) continue;
+    if (line.ref !== undefined) return line.ref;
+    indent = line.indent;
+  }
+  return lines.slice(firstLeftOut).find((line) => line.ref !== undefined)?.ref;
 }
 
 /**
@@ -266,7 +310,7 @@ export interface BoundedSnapshot {
 export function boundSnapshot(
   snapshot: PageSnapshot,
   ref?: string,
-  maxChars: number = BROWSER_OUTLINE_MAX_CHARS,
+  maxChars: number = BROWSER_SNAPSHOT_DEFAULT_CHARS,
 ): BoundedSnapshot | undefined {
   const raws = snapshot.text.split('\n').filter((raw) => raw.trim() !== '');
   let selected = raws;
@@ -284,19 +328,33 @@ export function boundSnapshot(
     });
     selected = raws.slice(at, end < 0 ? undefined : end).map((raw) => raw.slice(rootIndent));
   }
-  const lines: Line[] = selected.map((raw) => {
+  const lines: SnapshotLine[] = selected.map((raw) => {
     const node = parseLine(raw);
-    if (node === undefined) return { role: 'text', line: raw };
-    const nodeRef = refOf(node);
-    if (nodeRef === undefined || !snapshot.maskedRefs.has(nodeRef) || node.value === undefined) {
-      return { role: node.role, line: raw };
+    if (node === undefined) {
+      return { role: 'text', line: raw, indent: /^(\s*)/.exec(raw)?.[1]?.length ?? 0 };
     }
-    return { role: node.role, line: `${' '.repeat(node.indent)}${render(node, undefined, true)}` };
+    const nodeRef = refOf(node);
+    const at = {
+      role: node.role,
+      indent: node.indent,
+      ...(nodeRef !== undefined ? { ref: nodeRef } : {}),
+    };
+    if (nodeRef === undefined || !snapshot.maskedRefs.has(nodeRef) || node.value === undefined) {
+      return { ...at, line: raw };
+    }
+    return { ...at, line: `${' '.repeat(node.indent)}${render(node, undefined, true)}` };
   });
-  const cut = cutToBound('Snapshot', lines, maxChars);
+  let continueRef: string | undefined;
+  const cut = cutToBound('Snapshot', lines, maxChars, (kept) => {
+    continueRef = continueRefAt(lines, kept);
+    return continueRef !== undefined
+      ? `To read on, snapshot with \`ref: ${continueRef}\`, or raise \`maxChars\`.`
+      : 'Scope the snapshot with a `ref` above, or raise `maxChars`.';
+  });
   return {
     text: cut.text,
     lines: cut.lines,
     ...(cut.census !== undefined ? { census: cut.census } : {}),
+    ...(cut.census !== undefined && continueRef !== undefined ? { continueRef } : {}),
   };
 }

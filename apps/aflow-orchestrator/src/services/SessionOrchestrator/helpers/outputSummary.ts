@@ -10,12 +10,15 @@ import {
   MEMORY_READ_OPERATION_ID,
   MemoryReadRangeMetaSchema,
   RUN_OUTPUT_READ_OPERATION_ID,
+  TOOL_RESULT_INLINE_MAX_CHARS,
+  getOperation,
+  stubStepImages,
   type AiMediaOutput,
   type MemoryReadRangeMeta,
 } from '@aflow/schemas';
 
 const SUMMARY_HARD_CAP = 12_000;
-const PASSTHROUGH_THRESHOLD = 12_288;
+const PASSTHROUGH_THRESHOLD = TOOL_RESULT_INLINE_MAX_CHARS;
 /** Lines to show in preview sections */
 const PREVIEW_LINES = 5;
 
@@ -969,7 +972,10 @@ export function buildToolResultSummaryWithMeta(
   toolCallId: string,
   operationId?: string,
 ): { text: string; meta: ToolSummaryMeta } {
-  const result = buildToolResultSummaryUnbounded(output, toolCallId, operationId);
+  const imagePaths =
+    operationId !== undefined ? getOperation(operationId)?.imageOutputPaths : undefined;
+  const shown = imagePaths !== undefined ? stubStepImages(output, imagePaths) : output;
+  const result = buildToolResultSummaryUnbounded(shown, toolCallId, operationId);
   if (result.text.length <= READ_SUMMARY_SAFE_MAX) return result;
   // Last-resort cap: the turn input rejects oversized summaries outright, and
   // a rejected turn kills the session — degrade instead, whatever the path.
