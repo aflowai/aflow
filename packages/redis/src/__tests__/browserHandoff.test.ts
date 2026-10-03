@@ -69,6 +69,11 @@ describe('an open hand-off', () => {
     const theirs = await readSpaceBrowserHandoffs(redis, TENANT, OTHER_SPACE);
     expect(mine[0]?.waiting.map((w) => w.stepExecutionId)).toEqual(['step-1']);
     expect(theirs[0]?.waiting.map((w) => w.stepExecutionId)).toEqual(['step-9']);
+    // What an agent wrote is its own space's; what the system knows is shared.
+    expect(mine[0]?.message).toBe('Sign in for step-1.');
+    expect(theirs[0]?.message).toBe('Sign in for step-9.');
+    expect(theirs[0]?.key).toBe(mine[0]?.key);
+    expect(theirs[0]?.startedAt).toBe(mine[0]?.startedAt);
   });
 
   it('is gone when its last run leaves, and kept while one remains', async () => {
@@ -95,7 +100,10 @@ describe('an open hand-off', () => {
       stepExecutionId: 'step-1',
     });
     expect(await readSpaceBrowserHandoffs(redis, TENANT, SPACE)).toEqual([]);
-    expect(await readSpaceBrowserHandoffs(redis, TENANT, OTHER_SPACE)).toHaveLength(1);
+    const theirs = await readSpaceBrowserHandoffs(redis, TENANT, OTHER_SPACE);
+    expect(theirs).toHaveLength(1);
+    expect(theirs[0]?.message).toBe('Sign in for step-9.');
+    expect(await redis.hvals(KEY)).not.toContain('Sign in for step-1.');
   });
 });
 

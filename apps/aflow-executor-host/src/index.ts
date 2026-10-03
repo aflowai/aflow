@@ -16,12 +16,7 @@ import './instrument.js';
 import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-import {
-  ExecutorRuntime,
-  DEFAULT_EXECUTOR_CONFIG,
-  createServiceLogger,
-  type ExecutorDependencies,
-} from '@aflow/executor-runtime';
+import { createServiceLogger } from '@aflow/executor-runtime';
 import type { Redis } from 'ioredis';
 import { createShutdownController } from '@aflow/lib';
 import { resolvePayloadStore } from '@aflow/payload-store';
@@ -46,7 +41,6 @@ import {
   quitRedisWithTimeout,
   readHostBrowserSignInRequest,
 } from '@aflow/redis';
-import { ConsumerGroups, StreamKeys } from '@aflow/schemas';
 
 import { executionPermitted, loadHostPolicy } from './bindings.js';
 import { createChromeLauncher } from './browser/chromeProcess.js';
@@ -59,6 +53,7 @@ import { isBrowserRequestFile, serveBrowserRequests } from './browser/windowRequ
 import { createBrowserHandler } from './handlers/browserHandler.js';
 import { removeWorktree } from './worktree.js';
 import { removeOrphanedCheckouts } from './handlers/harnessHandlers.js';
+import { BROWSER_STEP_TYPE, STEP_TYPE, createHostRuntimes } from './hostRuntimes.js';
 import { createHostHandler } from './handlers/hostHandler.js';
 import {
   allSessions,
@@ -92,9 +87,6 @@ const taskLogger: BackgroundTaskLogger = {
     log.error(message, { error, ...data });
   },
 };
-
-const STEP_TYPE = 'host';
-const BROWSER_STEP_TYPE = 'browser';
 
 const CREDENTIAL_RETRY_MS: readonly number[] = [5_000, 15_000, 30_000, 60_000];
 
@@ -154,10 +146,6 @@ async function main(): Promise<void> {
 
   await waitForRedisCredential(getExecutorRedisConfig(), log);
   const redis = getRedisConnection(getExecutorRedisConfig());
-  const redisBlocking = createBlockingRedisConnection(
-    `${hostname}-blocking`,
-    getExecutorRedisConfig(),
-  );
 
   // No in-memory fallback: a payload store that forgets is indistinguishable
   // from one that works until something reads back, and Phase 1 asks for an
@@ -176,58 +164,12 @@ async function main(): Promise<void> {
     ...(paired.applied.length > 0 ? { pairedEnv: paired.applied.join(',') } : { paired: false }),
   });
 
-  // The machine's subscriptions: withdrawals and sign-in requests, the abort
-  // pattern both runtimes listen on, and the Done of each hand-off waiting.
-  const hostChannels = createBlockingRedisConnection(
-    `${hostname}-host-channels`,
-    getExecutorRedisConfig(),
-  );
-  const deps: ExecutorDependencies = {
+  const { runtime, browserRuntime, hostChannels, connections } = createHostRuntimes({
+    hostname,
     redis,
-    redisBlocking,
-    redisSubscriber: hostChannels,
     payloadStore: resolved.store,
-  };
-  // Its own blocking connection: a runtime blocks on its stream between jobs,
-  // and two runtimes sharing one would wait on each other.
-  const redisBlockingBrowser = createBlockingRedisConnection(
-    `${hostname}-browser-blocking`,
-    getExecutorRedisConfig(),
-  );
-
-  const runtime = new ExecutorRuntime(
-    {
-      ...DEFAULT_EXECUTOR_CONFIG,
-      consumerName: hostname,
-      consumerGroup: ConsumerGroups.executor(STEP_TYPE),
-      streamKey: StreamKeys.jobStream(STEP_TYPE),
-      stepType: STEP_TYPE,
-      concurrency: parseInt(process.env['EXECUTOR_CONCURRENCY'] ?? '4', 10),
-      defaultTimeoutMs: parseInt(process.env['DEFAULT_TIMEOUT_MS'] ?? '300000', 10),
-    },
-    deps,
-  );
-
-  // The browser is served from this executor because it lives on this machine:
-  // a profile's directory is under the host directory, and its Chrome is in the
-  // process table that withdrawal, shutdown and the orphan sweep below read.
-  const browserRuntime = new ExecutorRuntime(
-    {
-      ...DEFAULT_EXECUTOR_CONFIG,
-      consumerName: hostname,
-      consumerGroup: ConsumerGroups.executor(BROWSER_STEP_TYPE),
-      streamKey: StreamKeys.jobStream(BROWSER_STEP_TYPE),
-      stepType: BROWSER_STEP_TYPE,
-      concurrency: parseInt(process.env['BROWSER_EXECUTOR_CONCURRENCY'] ?? '4', 10),
-      defaultTimeoutMs: 120_000,
-    },
-    {
-      redis,
-      redisBlocking: redisBlockingBrowser,
-      redisSubscriber: hostChannels,
-      payloadStore: resolved.store,
-    },
-  );
+    connect: (name) => createBlockingRedisConnection(name, getExecutorRedisConfig()),
+  });
 
   // Before the first job: anything a previous executor left running is holding
   // a credential nothing can address any more, so it is ended rather than
@@ -528,16 +470,18 @@ async function main(): Promise<void> {
       await redis.zrem(HOST_MACHINES_KEY, hostname).catch(() => undefined);
       await runtime.stop();
       await stopBrowserRuntime();
-      await quitRedisWithTimeout(hostChannels);
-      await quitRedisWithTimeout(redisBlocking);
-      await quitRedisWithTimeout(redisBlockingBrowser);
+      await quitRedisWithTimeout(connections.hostChannels);
+      await quitRedisWithTimeout(connections.blocking);
+      await quitRedisWithTimeout(connections.browserBlocking);
+      await quitRedisWithTimeout(connections.browserChannels);
       await closeRedisConnection();
     },
   });
 
   attachRedisErrorGuard(redis, () => controller.shuttingDown, log);
-  attachRedisErrorGuard(redisBlocking, () => controller.shuttingDown, log);
-  attachRedisErrorGuard(redisBlockingBrowser, () => controller.shuttingDown, log);
+  attachRedisErrorGuard(connections.blocking, () => controller.shuttingDown, log);
+  attachRedisErrorGuard(connections.browserBlocking, () => controller.shuttingDown, log);
+  attachRedisErrorGuard(connections.browserChannels, () => controller.shuttingDown, log);
 
   const started = await startUnderSignals(controller, [
     async () => {

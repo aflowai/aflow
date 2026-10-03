@@ -9,6 +9,11 @@
  * its wait begins and removed when the wait ends, however it ends. The last
  * one out deletes the record.
  *
+ * What the system knows of the hand-off — the site, the reason, when it began —
+ * is shared by every space waiting on it. The message an agent wrote is kept
+ * per space, because a profile can serve several spaces and one space's words
+ * are not another's to read.
+ *
  * Bounded twice: the record expires at the latest waiting run's deadline plus
  * a margin, so an executor that dies mid-wait cannot leave it forever; and the
  * per-space index is a sorted set scored by that expiry, so its reader asks for
@@ -31,6 +36,7 @@ export const BROWSER_HANDOFFS_READ_LIMIT = 50;
 
 const RECORD_PREFIX = 'aflow:browser-handoff:record:';
 const WAITER_PREFIX = 'w:';
+const MESSAGE_PREFIX = 'm:';
 
 export function browserHandoffKey(hostname: string, profileId: string, site: string): string {
   return `${RECORD_PREFIX}${hostname}:${profileId}:${site}`;
@@ -44,12 +50,15 @@ function waiterField(spaceId: string, stepExecutionId: string): string {
   return `${WAITER_PREFIX}${spaceId}:${stepExecutionId}`;
 }
 
+function messageField(spaceId: string): string {
+  return `${MESSAGE_PREFIX}${spaceId}`;
+}
+
 const HandoffMetaSchema = z.object({
   hostname: z.string().min(1),
   profileId: BrowserProfileIdSchema,
   site: z.string().min(1),
   reason: z.enum(BROWSER_HANDOFF_REASONS),
-  message: z.string().min(1),
   startedAt: z.string(),
 });
 
@@ -71,6 +80,7 @@ export interface BrowserHandoffRecord {
   readonly profileId: string;
   readonly site: string;
   readonly reason: BrowserHandoffReason;
+  /** What the first run of the space it was read for asked the operator. */
   readonly message: string;
   readonly startedAt: string;
   /** The runs of the space it was read for, soonest deadline first. */
@@ -89,13 +99,16 @@ export interface JoinBrowserHandoffInput {
 
 /**
  * Adds a run to the record, creating it when it is the first. The first run's
- * reason and words stand; a later one only adds itself and, when its deadline
- * is later, moves the expiry out.
+ * reason stands, and the first run of each space's words stand for that space;
+ * a later one only adds itself and, when its deadline is later, moves the
+ * expiry out.
  *
- * KEYS: record, space index. ARGV: meta, waiter field, waiter, expiry (ms), now (ms).
+ * KEYS: record, space index.
+ * ARGV: meta, waiter field, waiter, expiry (ms), now (ms), message field, message.
  */
 const JOIN = `
 redis.call('HSETNX', KEYS[1], 'meta', ARGV[1])
+redis.call('HSETNX', KEYS[1], ARGV[6], ARGV[7])
 redis.call('HSET', KEYS[1], ARGV[2], ARGV[3])
 local expiresAt = tonumber(ARGV[4])
 local current = tonumber(redis.call('HGET', KEYS[1], 'expiresAt') or '0')
@@ -117,9 +130,9 @@ return 1
 
 /**
  * Takes a run off the record: the record goes when nobody is left, and the
- * space's index forgets it when nobody from that space is.
+ * space's index and its message go when nobody from that space is.
  *
- * KEYS: record, space index. ARGV: waiter field, the space's field prefix.
+ * KEYS: record, space index. ARGV: waiter field, the space's field prefix, message field.
  */
 const LEAVE = `
 redis.call('HDEL', KEYS[1], ARGV[1])
@@ -138,6 +151,9 @@ if not anyone then
 end
 if not sameSpace then
   redis.call('ZREM', KEYS[2], KEYS[1])
+  if anyone then
+    redis.call('HDEL', KEYS[1], ARGV[3])
+  end
 end
 if anyone then return 1 end
 return 0
@@ -154,7 +170,6 @@ export async function joinBrowserHandoff(
     profileId: input.profileId,
     site: input.site,
     reason: input.reason,
-    message: input.message,
     startedAt: new Date(input.startedAt).toISOString(),
   };
   const stored: BrowserHandoffWaiter = {
@@ -171,6 +186,8 @@ export async function joinBrowserHandoff(
     JSON.stringify(stored),
     String(waiter.deadlineAt + BROWSER_HANDOFF_EXPIRY_MARGIN_MS),
     String(Date.now()),
+    messageField(waiter.spaceId),
+    input.message,
   );
 }
 
@@ -193,6 +210,7 @@ export async function leaveBrowserHandoff(
     browserHandoffSpaceIndexKey(input.tenantId, input.spaceId),
     waiterField(input.spaceId, input.stepExecutionId),
     `${WAITER_PREFIX}${input.spaceId}:`,
+    messageField(input.spaceId),
   );
   return left === 1;
 }
@@ -212,7 +230,8 @@ function toRecord(
   spaceId: string,
 ): BrowserHandoffRecord | null {
   const meta = HandoffMetaSchema.safeParse(parseJson(fields['meta'] ?? ''));
-  if (!meta.success) return null;
+  const message = fields[messageField(spaceId)];
+  if (!meta.success || message === undefined || message === '') return null;
   const prefix = `${WAITER_PREFIX}${spaceId}:`;
   const waiting = Object.entries(fields)
     .filter(([field]) => field.startsWith(prefix))
@@ -221,7 +240,7 @@ function toRecord(
     .filter((waiter) => waiter.tenantId === tenantId && waiter.spaceId === spaceId)
     .sort((a, b) => (a.deadlineAt < b.deadlineAt ? -1 : a.deadlineAt > b.deadlineAt ? 1 : 0));
   if (waiting.length === 0) return null;
-  return { key, ...meta.data, waiting };
+  return { key, ...meta.data, message, waiting };
 }
 
 /**
