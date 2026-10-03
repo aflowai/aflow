@@ -16,7 +16,7 @@ import {
   serve,
   type ServerComposition,
 } from '@aflow/server-runtime';
-import { applyHostIdentityToRunningServer } from '@aflow/server-runtime/bootstrap';
+import { assertHostGrantOnRunningServer } from '@aflow/server-runtime/bootstrap';
 import { resolveEditionDescriptor } from '@aflow/schemas';
 
 type ServerLog = Awaited<ReturnType<typeof serve>>['log'];
@@ -28,20 +28,28 @@ type ServerLog = Awaited<ReturnType<typeof serve>>['log'];
  * on every edit: a grant a release added stayed refused (`NOPERM`) to the paired
  * machine until somebody restarted everything. Not fatal — everything but the
  * host lane works without it, and the log says what is missing.
+ *
+ * The host password in this environment only says that a host lane is set up.
+ * It is never applied here: it was read when the supervisor started, so after a
+ * revocation it is the revoked one.
  */
-async function assertHostIdentity(log: ServerLog): Promise<void> {
-  const hostPassword = process.env['PHOENIX_HOST_REDIS_PASSWORD']?.trim();
-  if (hostPassword === undefined || hostPassword === '') return;
+async function assertHostGrant(log: ServerLog): Promise<void> {
+  const hostLane = process.env['PHOENIX_HOST_REDIS_PASSWORD']?.trim();
+  if (hostLane === undefined || hostLane === '') return;
   try {
-    await applyHostIdentityToRunningServer(getRedisConnection(), {
-      defaultPassword: process.env['REDIS_PASSWORD'] ?? '',
-      hostPassword,
-    });
-    log.info('Asserted the host identity on the running Redis');
+    const { outcome } = await assertHostGrantOnRunningServer(getRedisConnection());
+    if (outcome === 'absent') {
+      log.warn(
+        'The running Redis has no host identity, so no paired machine can connect. ' +
+          'Pairing a machine, or a full start, creates it.',
+      );
+      return;
+    }
+    log.info('Asserted the host grant on the running Redis');
   } catch (err) {
     log.error(
       { err },
-      'Could not assert the host identity on the running Redis: a paired machine is refused ' +
+      'Could not assert the host grant on the running Redis: a paired machine is refused ' +
         'whatever this release added to its grant until a start of this server asserts it',
     );
   }
@@ -54,7 +62,7 @@ export function start(composition: ServerComposition): void {
   serve(composition, { host, port })
     .then(async (app) => {
       closeOnSignal(app, (code) => process.exit(code));
-      await assertHostIdentity(app.log);
+      await assertHostGrant(app.log);
     })
     .catch((err: unknown) => {
       // The logger belongs to an app that may never have been built.

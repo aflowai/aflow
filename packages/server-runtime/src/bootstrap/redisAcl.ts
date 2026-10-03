@@ -175,6 +175,10 @@ const HOST_CHANNEL_PATTERNS = [
   '&aflow:handoff-done:*',
 ] as const;
 
+const HOST_USER = 'hostexec';
+
+const HOST_GRANT_RULES = [...HOST_KEY_PATTERNS, ...HOST_CHANNEL_PATTERNS, ...HOST_COMMANDS];
+
 export interface RedisAclInput {
   /** Every in-appliance service authenticates with this. */
   defaultPassword: string;
@@ -197,11 +201,9 @@ export function renderRedisAcl(input: RedisAclInput): string {
   // applies it — the file at boot, a live rotation — replaces rather than
   // accumulates, instead of each caller having to remember.
   const host = [
-    'user hostexec resetpass on',
+    `user ${HOST_USER} resetpass on`,
     `>${input.hostPassword}`,
-    ...HOST_KEY_PATTERNS,
-    ...HOST_CHANNEL_PATTERNS,
-    ...HOST_COMMANDS,
+    ...HOST_GRANT_RULES,
   ].join(' ');
 
   return [`user default resetpass on >${input.defaultPassword} ~* &* +@all`, host, ''].join('\n');
@@ -209,27 +211,62 @@ export function renderRedisAcl(input: RedisAclInput): string {
 
 export const REDIS_ACL_FILENAME = 'redis-acl.conf';
 
+interface RedisCaller {
+  call: (command: string, ...args: string[]) => Promise<unknown>;
+}
+
 /**
- * Apply the host identity to a running server, whatever it holds now.
+ * Apply the host identity, credential included, to a running server.
  *
  * `ACL SETUSER` with `resetpass` replaces the password rather than adding one,
- * and the rendered line is the whole grant, so this is idempotent: a user that
- * is missing is created, one that drifted is corrected, one that is right is
- * left as it was. The pairing route rotates through it; the API server asserts
- * through it each time it starts, because the grant is the running code's —
- * one a release added, or an identity a server with no ACL file lost from
- * memory, would otherwise leave the paired machine refused until someone
- * restarted the whole stack.
+ * so a user that is missing is created with this credential and one that holds
+ * another is moved to it. Only pairing and revocation call this: they are what
+ * decide the credential.
  */
 export async function applyHostIdentityToRunningServer(
-  redis: { call: (command: string, ...args: string[]) => Promise<unknown> },
+  redis: RedisCaller,
   input: RedisAclInput,
 ): Promise<void> {
   const line = renderRedisAcl(input)
     .split('\n')
-    .find((l) => l.startsWith('user hostexec'));
+    .find((l) => l.startsWith(`user ${HOST_USER} `));
   if (line === undefined) throw new Error('Rendered ACL carries no host identity.');
   await redis.call('ACL', 'SETUSER', ...line.split(' ').slice(1));
+}
+
+/**
+ * Bring an existing host identity's grant up to the running code's, leaving its
+ * password as it is.
+ *
+ * The server asserts this on every start, because a grant a release added would
+ * otherwise stay refused to the paired machine until someone restarted the
+ * whole stack. It must not carry a password: the one in this process's
+ * environment was read when its supervisor started, and every restart since
+ * reuses it — after a revocation it is the revoked credential, and setting it
+ * here would quietly undo the revocation.
+ *
+ * The rules are reset before they are applied, so a pattern removed from the
+ * code is removed from the live user as well; the resets touch keys, channels,
+ * selectors and commands, never passwords. A missing user is reported rather
+ * than created, because creating it needs the credential.
+ */
+export async function assertHostGrantOnRunningServer(
+  redis: RedisCaller,
+  username: string = HOST_USER,
+): Promise<{ outcome: 'asserted' } | { outcome: 'absent' }> {
+  const existing = await redis.call('ACL', 'GETUSER', username);
+  if (existing === null) return { outcome: 'absent' };
+  await redis.call(
+    'ACL',
+    'SETUSER',
+    username,
+    'resetkeys',
+    'resetchannels',
+    'clearselectors',
+    '-@all',
+    ...HOST_GRANT_RULES,
+  );
+  return { outcome: 'asserted' };
 }
 
 /**

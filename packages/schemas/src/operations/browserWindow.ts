@@ -181,6 +181,9 @@ export const BrowserWindowRegistrations: OperationRegistration[] = [
         '`completed` on a push-approval page — "check your phone", "approve on your device" — ' +
           'that shows no field outside a sign-in path can come before the approval: when the ' +
           'outline still asks for it, hand the page over again.',
+        'The operator pressing Done or closing the window always ends a hand-off, whatever the ' +
+          'page shows. Without either, a page that still holds a field for a password, code or ' +
+          'passkey, or is still under a sign-in path, keeps the wait open until the deadline.',
       ],
       minimalExampleInput: {
         pageId: 'pg_…',

@@ -17,8 +17,9 @@ export interface PageSnapshot {
   readonly maskedRefs: ReadonlySet<string>;
   /**
    * Whether any text field on the page takes a credential — a password, a
-   * one-time code, a passkey — by its declared type and attributes
-   * (`takesCredential`), or could not be read to say it does not.
+   * one-time code, a passkey — by its declared type and attributes, or by its
+   * shape on a sign-in path (`takesCredential`), or failed to read to say it
+   * does not. Fields past the bound on how many are read do not count.
    */
   readonly holdsCredentialField: boolean;
 }

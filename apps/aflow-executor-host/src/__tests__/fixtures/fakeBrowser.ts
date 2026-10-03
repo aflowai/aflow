@@ -283,7 +283,9 @@ export class FakePage implements EnginePage {
         : this.snapshotText();
     return {
       text,
-      ...(await readCredentialFields(text, (ref) => Promise.resolve(this.field(ref)))),
+      ...(await readCredentialFields(text, this.current, (ref) =>
+        Promise.resolve(this.field(ref)),
+      )),
     };
   }
   text(): Promise<string> {

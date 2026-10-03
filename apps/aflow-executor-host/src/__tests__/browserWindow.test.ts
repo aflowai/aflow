@@ -8,7 +8,8 @@ import type { ExecutorContext } from '@aflow/executor-runtime';
 import { getOperation } from '@aflow/schemas';
 import { describe, expect, it } from 'vitest';
 
-import { HANDOFF_QUIET_MS, onSignInPath } from '../browser/operatorWindow.js';
+import { HANDOFF_QUIET_MS } from '../browser/operatorWindow.js';
+import { onSignInPath } from '../browser/signInPath.js';
 import { browserFailure, createBrowserHandler } from '../handlers/browserHandler.js';
 import {
   type FakePage,
@@ -162,10 +163,17 @@ describe('a hand-off', () => {
 
   describe('on a site that signs in without leaving its origin', () => {
     const HOME = 'https://accounts.example.com/';
-    // Off every sign-in path, so only the field says the sign-in is not done.
+    // Off every sign-in path, so only its field says the sign-in is not done.
     const ONE_TIME_CODE = 'https://accounts.example.com/continue';
-    const SHORT_CODE = 'https://accounts.example.com/next-step';
+    const SHORT_CODE = 'https://accounts.example.com/two-factor/code';
+    const DELIVERY = 'https://accounts.example.com/delivery';
     const CHECK_YOUR_PHONE = 'https://accounts.example.com/sessions/two-factor/app';
+    const DELIVERY_PAGE = [
+      '- main [ref=e1]:',
+      '  - heading "Delivery address" [level=1] [ref=e2]',
+      '  - textbox "Postcode" [ref=e3]',
+      '  - button "Save" [ref=e4] [cursor=pointer]',
+    ].join('\n');
     const CODE_PAGE = [
       '- main [ref=e1]:',
       '  - heading "Enter the code from your app" [level=1] [ref=e2]',
@@ -201,6 +209,14 @@ describe('a hand-off', () => {
               },
             ],
             [CHECK_YOUR_PHONE, { title: 'Two-factor', snapshot: PHONE_PAGE }],
+            [
+              DELIVERY,
+              {
+                title: 'Delivery',
+                snapshot: DELIVERY_PAGE,
+                fields: { e3: { type: 'text', inputMode: 'numeric', maxLength: 5 } },
+              },
+            ],
           ]),
         },
       });
@@ -299,17 +315,36 @@ describe('a hand-off', () => {
       expect(onHome?.holdsCredentialField).toBe(false);
     });
 
-    it('waits through a short numeric code field that declares nothing else', async () => {
-      const h = sameOrigin();
+    it('does not complete on a code page under a sign-in path whose short numeric field declares nothing else', async () => {
+      const h = sameOrigin({ browsers: [profile({ handoffMinutes: 1 })] });
       const mine = await open(h, RUN_A, LOGIN);
-      const steps = throughStep(h, SHORT_CODE);
+      h.onSleep = () => {
+        const page = windowPage(h);
+        if (page?.url() === LOGIN) page.load(SHORT_CODE);
+      };
+
+      const result = await handOver(h, mine);
+
+      expect(result.outcome).toBe('timed_out');
+      expect(result.view.url).toBe(SHORT_CODE);
+    });
+
+    it('completes on a signed-in page with a postcode field', async () => {
+      const h = sameOrigin({ browsers: [profile({ handoffMinutes: 1 })] });
+      const mine = await open(h, RUN_A, LOGIN);
+      let signedInAt: number | undefined;
+      h.onSleep = (now) => {
+        const page = windowPage(h);
+        if (page === undefined || signedInAt !== undefined || page.url() !== LOGIN) return;
+        page.load(DELIVERY);
+        signedInAt = now;
+      };
 
       const result = await handOver(h, mine);
 
       expect(result.outcome).toBe('completed');
-      expect(result.view.url).toBe(HOME);
-      expect(steps.signedInAt()).toBeDefined();
-      expect(h.clock.now - (steps.signedInAt() ?? 0)).toBeGreaterThanOrEqual(HANDOFF_QUIET_MS);
+      expect(result.view.url).toBe(DELIVERY);
+      expect(h.clock.now - (signedInAt ?? 0)).toBeGreaterThanOrEqual(HANDOFF_QUIET_MS);
     });
 
     it('waits through a page with no field that is still under a sign-in path', async () => {

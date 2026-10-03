@@ -1,3 +1,4 @@
+import { onSignInPath } from './signInPath.js';
 import type { EngineAction } from './types.js';
 
 /**
@@ -80,21 +81,23 @@ const CODE_MAX_LENGTH = 8;
 
 /**
  * Whether the field is where someone signing in enters something: a password,
- * a field the page marks for a code, a password or a passkey, or a short
- * numeric field, which is how most code pages that mark nothing still look.
+ * or a field the page marks for a code, a password or a passkey. On a sign-in
+ * path a short numeric field counts too, which is how most code pages that mark
+ * nothing still look; anywhere else it is a postcode, a quantity or a search.
  */
-export function takesCredential(field: FieldAttributes): boolean {
+export function takesCredential(field: FieldAttributes, signingIn: boolean): boolean {
   if (isMaskedField(field)) return true;
   const tokens = field.autocomplete.toLowerCase().split(/\s+/);
   if (tokens.some((token) => CREDENTIAL_AUTOCOMPLETE.has(token))) return true;
   return (
+    signingIn &&
     field.inputMode.toLowerCase() === 'numeric' &&
     field.maxLength > 0 &&
     field.maxLength <= CODE_MAX_LENGTH
   );
 }
 
-/** Beyond this many text fields a page's remaining ones are taken as credential fields unchecked. */
+/** How many of a page's text fields are read; the rest are masked unread. */
 export const MAX_TEXTBOXES_CHECKED = 200;
 
 const TEXTBOX_REF = /^\s*- '?textbox\b[^\n]*?\[ref=([^\]\s]+)\]/gm;
@@ -105,28 +108,38 @@ export interface CredentialFields {
 }
 
 /**
- * Every text field the snapshot lists, read through `read`. A field that could
- * not be read, or one past the bound, is treated as the field it might be.
+ * Every text field the snapshot lists, read through `read`, on the page at
+ * `address`.
+ *
+ * Two decisions, kept apart. Masking keeps a value off the machine, so a field
+ * not read — past the bound, or one that failed to read — is masked as the
+ * password it might be. Holding a hand-off open keeps the operator waiting, so
+ * a field past the bound does not count: a page with that many fields is a
+ * long form, not a sign-in. One that failed to read still does.
  */
 export async function readCredentialFields(
   snapshotText: string,
+  address: string,
   read: (ref: string) => Promise<FieldAttributes>,
 ): Promise<CredentialFields> {
+  const signingIn = onSignInPath(address);
   const maskedRefs = new Set<string>();
   let holdsCredentialField = false;
   const refs = [...snapshotText.matchAll(TEXTBOX_REF)].map((match) => match[1] ?? '');
   for (const [index, ref] of refs.entries()) {
     if (ref === '') continue;
+    if (index >= MAX_TEXTBOXES_CHECKED) {
+      maskedRefs.add(ref);
+      continue;
+    }
     let field: FieldAttributes | undefined;
-    if (index < MAX_TEXTBOXES_CHECKED) {
-      try {
-        field = await read(ref);
-      } catch {
-        field = undefined;
-      }
+    try {
+      field = await read(ref);
+    } catch {
+      field = undefined;
     }
     if (field === undefined || isMaskedField(field)) maskedRefs.add(ref);
-    if (field === undefined || takesCredential(field)) holdsCredentialField = true;
+    if (field === undefined || takesCredential(field, signingIn)) holdsCredentialField = true;
   }
   return { maskedRefs, holdsCredentialField };
 }

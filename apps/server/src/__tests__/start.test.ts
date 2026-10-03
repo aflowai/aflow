@@ -5,11 +5,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const boot = vi.hoisted(() => {
-  const log = { info: vi.fn(), error: vi.fn() };
+  const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   return {
     log,
     redis: { call: vi.fn() },
-    asserted: vi.fn<(redis: unknown, input: unknown) => Promise<void>>(),
+    asserted: vi.fn<(redis: unknown) => Promise<{ outcome: 'asserted' | 'absent' }>>(),
     serve: vi.fn(() => Promise.resolve({ log })),
   };
 });
@@ -23,19 +23,17 @@ vi.mock('@aflow/server-runtime', () => ({
   serve: boot.serve,
 }));
 vi.mock('@aflow/server-runtime/bootstrap', () => ({
-  applyHostIdentityToRunningServer: boot.asserted,
+  assertHostGrantOnRunningServer: boot.asserted,
 }));
 
 import { start } from '../start.js';
 
 const composition = {} as Parameters<typeof start>[0];
-const HOST_STAND_IN = 'stand-in-host';
-const DEFAULT_STAND_IN = 'stand-in-default';
+const STALE_STAND_IN = 'stand-in';
 
 beforeEach(() => {
-  vi.stubEnv('PHOENIX_HOST_REDIS_PASSWORD', HOST_STAND_IN);
-  vi.stubEnv('REDIS_PASSWORD', DEFAULT_STAND_IN);
-  boot.asserted.mockResolvedValue(undefined);
+  vi.stubEnv('PHOENIX_HOST_REDIS_PASSWORD', STALE_STAND_IN);
+  boot.asserted.mockResolvedValue({ outcome: 'asserted' });
 });
 
 afterEach(() => {
@@ -44,7 +42,7 @@ afterEach(() => {
 });
 
 describe('the server’s start', () => {
-  it('asserts the host identity on the running Redis each time it starts, and says so', async () => {
+  it('asserts the host grant on the running Redis each time it starts, and says so', async () => {
     start(composition);
     await vi.waitFor(() => {
       expect(boot.asserted).toHaveBeenCalledTimes(1);
@@ -54,17 +52,27 @@ describe('the server’s start', () => {
       expect(boot.asserted).toHaveBeenCalledTimes(2);
     });
 
-    for (const [redis, input] of boot.asserted.mock.calls) {
-      expect(redis).toBe(boot.redis);
-      expect(input).toEqual({
-        defaultPassword: DEFAULT_STAND_IN,
-        hostPassword: HOST_STAND_IN,
-      });
+    // The environment's host password goes nowhere: after a revocation it is
+    // the revoked one.
+    for (const call of boot.asserted.mock.calls) {
+      expect(call).toEqual([boot.redis]);
     }
     await vi.waitFor(() => {
       expect(boot.log.info).toHaveBeenCalledTimes(2);
     });
-    expect(boot.log.info).toHaveBeenCalledWith('Asserted the host identity on the running Redis');
+    expect(boot.log.info).toHaveBeenCalledWith('Asserted the host grant on the running Redis');
+  });
+
+  it('says so when Redis has no host identity, and keeps serving', async () => {
+    boot.asserted.mockResolvedValueOnce({ outcome: 'absent' });
+
+    start(composition);
+    await vi.waitFor(() => {
+      expect(boot.log.warn).toHaveBeenCalledTimes(1);
+    });
+
+    expect(String(boot.log.warn.mock.calls[0]?.[0])).toContain('no host identity');
+    expect(boot.log.info).not.toHaveBeenCalled();
   });
 
   it('asserts nothing where there is no host lane', async () => {

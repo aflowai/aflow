@@ -363,6 +363,7 @@ function wrapPage(page: PwPage, events: PageEvents): EnginePage {
       const text = await page.ariaSnapshot({ mode: 'ai' });
       const fields = await readCredentialFields(
         text,
+        page.url(),
         async (ref) => await page.locator(`aria-ref=${ref}`).evaluate(readFieldAttributes),
       );
       return { text, ...fields };
