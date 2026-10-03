@@ -11,6 +11,8 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 
+import { HOST_HARNESS_CONCURRENCY_DEFAULT } from '@aflow/schemas';
+
 const mocks = vi.hoisted(() => ({
   get: vi.fn<(key: string) => Promise<string | null>>(),
   publish: vi.fn<(channel: string, message: string) => Promise<number>>(),
@@ -47,6 +49,7 @@ function inventory(windowOpen = false, hostname = 'laptop'): string {
     observedAt: new Date().toISOString(),
     runtimes: [],
     harnesses: [],
+    maxConcurrentHarnessRuns: HOST_HARNESS_CONCURRENCY_DEFAULT,
     folders: [],
     browsers: [
       {

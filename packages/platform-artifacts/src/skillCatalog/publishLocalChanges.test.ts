@@ -8,6 +8,7 @@ import {
 } from '@aflow/cybernetic-runtime';
 import {
   HOST_CHECKS_TIMEOUT_DEFAULT_MS,
+  HOST_HARNESS_CONCURRENCY_DEFAULT,
   HOST_PUSH_APPROVAL_DEFAULT,
   HostApprovedPushSchema,
   HostBindingInspectOutputSchema,
@@ -876,6 +877,7 @@ function rawOutput(
     case 'read-push-approval':
       return HostBindingInspectOutputSchema.parse({
         id: 'hb_app',
+        maxConcurrentHarnessRuns: HOST_HARNESS_CONCURRENCY_DEFAULT,
         ...(scenario.pushApproval === 'no-prefix'
           ? {}
           : {

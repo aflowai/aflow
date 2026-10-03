@@ -18,7 +18,6 @@ export interface JobLoopHost extends ProcessJobHost {
   /** Keyed by stream message id. */
   inFlightSteps: Map<string, InFlightStep>;
   stopRequested: boolean;
-  stepScheduled(): void;
   stepSettled(messageId: string): void;
 }
 
@@ -97,7 +96,6 @@ export function scheduleJob(host: JobLoopHost, messageId: string, job: StepJobMe
     operationId: job.operationId,
   };
   host.inFlightSteps.set(messageId, inFlight);
-  host.stepScheduled();
   void (async (): Promise<void> => {
     await host.limiter.acquire();
     let held = true;
@@ -127,7 +125,7 @@ export function scheduleJob(host: JobLoopHost, messageId: string, job: StepJobMe
       });
     } finally {
       parentEnded = true;
-      host.limiter.release();
+      slotController.release();
       host.stepSettled(messageId);
     }
   })();
@@ -165,7 +163,8 @@ export async function consumeLoop(host: JobLoopHost): Promise<void> {
       // this consumer, and as in the leased-work protocol the holder of a claim
       // works it rather than relying on redelivery: the reclaim skips its own
       // name, so where that name outlives the process nothing would ever take
-      // them back.
+      // them back. One that would wait for an operation's slot is re-entered
+      // into the stream instead, which hands it on without redelivery.
       for (const { id: messageId, job } of jobs) {
         scheduleJob(host, messageId, job);
       }

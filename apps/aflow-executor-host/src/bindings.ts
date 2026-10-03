@@ -19,7 +19,11 @@ import { basename, isAbsolute, resolve, sep } from 'node:path';
 
 import { z } from 'zod';
 
-import { type BrowserProfile, HostBindingBranchPolicySchema } from '@aflow/schemas';
+import {
+  type BrowserProfile,
+  HOST_HARNESS_CONCURRENCY_DEFAULT,
+  HostBindingBranchPolicySchema,
+} from '@aflow/schemas';
 
 import { type ChromeDiscovery, discoverChrome } from './browser/chromeDiscovery.js';
 import { effectiveBrowserProfiles, parseBrowserProfiles } from './browser/profiles.js';
@@ -81,6 +85,12 @@ export const HostPolicySchema = z.object({
   bindings: z.array(HostBindingSchema),
   /** Coding harnesses this machine will run. Absent means none may run here. */
   harnesses: z.array(HarnessProfileSchema).default([]),
+  /**
+   * How many coding agents run here at once, written only when the operator
+   * chose a number: absent, the platform's default is read each time, so a
+   * change of default reaches a machine that never chose.
+   */
+  maxConcurrentHarnessRuns: z.number().int().min(1).optional(),
   /** MCP servers this machine will run. Absent means none may run here. */
   mcpServers: z.array(LocalMcpServerSchema).default([]),
   /**
@@ -134,6 +144,8 @@ export class HostBindingError extends Error {
 export interface LoadedHostPolicy {
   bindings: Map<string, HostBinding>;
   harnesses: Map<string, HarnessProfile>;
+  /** The operator's number, or the default when they chose none. */
+  maxConcurrentHarnessRuns: number;
   mcpServers: Map<string, LocalMcpServer>;
   /** Extra read paths every command in this machine's bindings may use. */
   toolPaths: readonly string[];
@@ -180,6 +192,8 @@ export async function loadHostPolicy(
   return {
     bindings: new Map(parsed.data.bindings.map((b) => [b.id, b])),
     harnesses: new Map(parsed.data.harnesses.map((h) => [h.id, h])),
+    maxConcurrentHarnessRuns:
+      parsed.data.maxConcurrentHarnessRuns ?? HOST_HARNESS_CONCURRENCY_DEFAULT,
     mcpServers: new Map(parsed.data.mcpServers.map((m) => [m.id, m])),
     toolPaths: parsed.data.toolPaths,
     browsers: effectiveBrowserProfiles(declared?.profiles, chrome),

@@ -119,6 +119,15 @@ export async function registerStepInFlight(
   await redis.setex(key, STEP_INFLIGHT_HEARTBEAT_TTL_SECONDS, JSON.stringify({ deadlineAtMs }));
 }
 
+/**
+ * Extend the lifetime of whatever in-flight record the step holds without
+ * writing it: the deadline another executor recorded survives, and a record
+ * already cleared stays cleared.
+ */
+export async function extendStepInFlight(redis: Redis, stepExecutionId: string): Promise<void> {
+  await redis.expire(stepInFlightKey(stepExecutionId), STEP_INFLIGHT_HEARTBEAT_TTL_SECONDS);
+}
+
 /** Clear the per-step in-flight heartbeat. Idempotent. */
 export async function clearStepInFlight(redis: Redis, stepExecutionId: string): Promise<void> {
   await redis.del(stepInFlightKey(stepExecutionId));

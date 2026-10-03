@@ -150,6 +150,74 @@ export async function ackStepJob(
   await execAckPipeline(pipeline, 1);
 }
 
+const NOT_PENDING_REPLY = 'NOTPENDING';
+
+/**
+ * A script rather than MULTI, which runs the acknowledgement even when the
+ * re-entry failed and so loses the job. The re-entry goes first because a
+ * script's writes are not rolled back: a failed XADD ends it before anything
+ * is acknowledged, leaving the entry pending for the reclaim. XACK of an entry
+ * the group no longer holds pending — another consumer finished it, or the
+ * group is gone — is no error but a count of 0, so the count is what is
+ * checked: anything but one acknowledgement deletes the entry just added, and
+ * the job is neither lost nor doubled.
+ */
+const RELEASE_STEP_JOB_LUA = `
+local releasedId = redis.call('XADD', KEYS[1], '*', unpack(ARGV, 3))
+local acked = redis.pcall('XACK', KEYS[1], ARGV[1], ARGV[2])
+if acked ~= 1 then
+  redis.call('XDEL', KEYS[1], releasedId)
+  if type(acked) == 'table' and acked.err then
+    return redis.error_reply(acked.err)
+  end
+  return redis.error_reply('${NOT_PENDING_REPLY} ' .. ARGV[2] .. ' is not pending in group ' .. ARGV[1])
+end
+return releasedId
+`;
+
+/**
+ * Thrown where the job being given back was no longer pending in its group, so
+ * nothing was re-entered: it is not this consumer's to give back or to vouch for.
+ */
+export class StepJobNotPendingError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'StepJobNotPendingError';
+  }
+}
+
+/**
+ * Hand a claimed job back to its stream unworked, for whichever consumer reads
+ * next. Re-entered rather than left pending: the reclaim skips a live consumer
+ * and its own name, so a message left in this consumer's pending list would
+ * wait on this executor's heartbeat lapsing.
+ */
+export async function releaseStepJob(
+  redis: Redis,
+  job: StepJobMessage,
+  messageId: string,
+): Promise<string> {
+  const streamKey = StreamKeys.jobStream(job.stepType);
+  const groupName = ConsumerGroups.executor(job.stepType);
+  const pipeline = redis
+    .pipeline()
+    .eval(RELEASE_STEP_JOB_LUA, 1, streamKey, groupName, messageId, ...serializeMessage(job));
+  armRetentionCandidate(pipeline, streamKey);
+  let releasedId: string | null;
+  try {
+    releasedId = firstReplyString(await pipeline.exec());
+  } catch (err) {
+    if (err instanceof Error && err.message.startsWith(NOT_PENDING_REPLY)) {
+      throw new StepJobNotPendingError(err.message);
+    }
+    throw err;
+  }
+  if (releasedId === null) {
+    throw new Error('Failed to release job to stream');
+  }
+  return releasedId;
+}
+
 /**
  * List pending step job entries with owner and idle time.
  * Uses XPENDING with IDLE filter (Redis 6.2+).

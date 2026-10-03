@@ -1,5 +1,6 @@
 import { SkillCatalogEntrySchema, type SkillCatalogEntry } from '@aflow/schemas';
 
+import { COMMISSION_CHANGE } from './commissionChange.js';
 import { DAILY_TRADING_CYCLE } from './dailyTradingCycle.js';
 import { KAGGLE_COMPETITION_OPTIMIZER } from './kaggleCompetitionOptimizer.js';
 import { OPEN_PR_FROM_REQUEST } from './openPrFromRequest.js';
@@ -22,6 +23,7 @@ const RAW_SKILLS: readonly SkillCatalogEntry[] = [
   OPEN_PR_FROM_REQUEST,
   PR_SHEPHERD,
   REVIEW_PULL_REQUEST,
+  COMMISSION_CHANGE,
   REVIEW_LOCAL_CHANGES,
   PUBLISH_LOCAL_CHANGES,
   TICKER_MARKET_DIGEST,

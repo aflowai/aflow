@@ -4,6 +4,7 @@
  */
 import type { OperationRegistration } from '../catalog/operationCatalog.js';
 import {
+  HOST_HARNESS_CONCURRENCY_DEFAULT,
   HostBindingInspectInputSchema,
   HostBindingInspectOutputSchema,
   HostCommitCheckInputSchema,
@@ -344,6 +345,7 @@ export const HostOperationRegistrations: OperationRegistration[] = [
         'A harness only runs if the operator configured it on that machine; the id here cannot introduce one. Omitted, it resolves to the one offered machine-side — the space context lists them.',
         'A harness needs egress to its provider. `blockedDomains` names every host it could not reach, and `boundaryNote` says whether that stopped the run or only narrowed it.',
         'The folder must be a git repository with at least one commit — the run needs a base to diff against.',
+        `A machine runs only so many coding agents at once — the number its operator set, ${String(HOST_HARNESS_CONCURRENCY_DEFAULT)} unless they chose another. A run past it waits for one to end rather than being refused, and its \`timeoutMs\` counts from when it starts.`,
         'A `maxTurns` budget the task cannot meet ends the run with whatever the harness had reached, and that result is still validated against `outputSchema` — a budget too small for the task fails the step rather than returning a partial answer.',
         '`model` is spelled the way the harness spells it, not as this platform names a model in its own catalog — the harness resolves the name, and an id from the catalog is one it has never heard of.',
         "Leaving `model` out does not guarantee the harness's own default: the run gets the model the operator configured for that harness on the machine, and the harness default only when none is configured. A run naming no model can still be refused when that configured model cannot be passed to the harness — the refusal names it.",
@@ -460,8 +462,9 @@ export const HostOperationRegistrations: OperationRegistration[] = [
     groupDescription: 'What the operator declared about a folder on their own machine.',
     semanticDescription:
       'Read, from the policy file on the machine that holds a connected folder, which branches ' +
-      'it may push, when a publication from it asks before pushing, and the checks a ' +
-      'publication runs first and for how long. Touches nothing in the folder itself.',
+      'it may push, when a publication from it asks before pushing, the checks a ' +
+      'publication runs first and for how long, and how many coding agents that machine ' +
+      'runs at once. Touches nothing in the folder itself.',
     tags: ['host', 'binding', 'local'],
     idempotency: 'idempotent',
     accessMode: 'read',
