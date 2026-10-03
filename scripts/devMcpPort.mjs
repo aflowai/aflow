@@ -23,8 +23,9 @@ export function parseProcessTable(psOutput) {
 
 /**
  * The line for a held port. `listenerPids` is what lsof saw listening, which is
- * nothing for a process another user owns; the MCP servers in the process table
- * then stand in for it.
+ * nothing for a process another user owns. An MCP server in the process table
+ * then makes one the likely holder, but it may be listening on another port, so
+ * none is named.
  */
 export function mcpPortHeldMessage(port, listenerPids, psOutput) {
   const table = parseProcessTable(psOutput);
@@ -32,9 +33,8 @@ export function mcpPortHeldMessage(port, listenerPids, psOutput) {
     pid: Number(pid),
     command: table.get(Number(pid)),
   }));
-  const servers = (
-    listeners.length > 0 ? listeners : [...table].map(([pid, command]) => ({ pid, command }))
-  ).filter(({ command }) => command !== undefined && MCP_SERVER.test(command));
+  const isMcpServer = (command) => command !== undefined && MCP_SERVER.test(command);
+  const servers = listeners.filter(({ command }) => isMcpServer(command));
 
   if (servers.length > 0) {
     const worktree = servers.map(({ command }) => worktreeOfCommand(command)).find(Boolean);
@@ -54,6 +54,13 @@ export function mcpPortHeldMessage(port, listenerPids, psOutput) {
     return (
       `mcp not started: port ${String(port)} is held by ${holder}, which is not the Aflow MCP ` +
       'server. aflow-local is unavailable until that port is free.'
+    );
+  }
+  if ([...table.values()].some(isMcpServer)) {
+    return (
+      `mcp not started: port ${String(port)} is held, probably by an Aflow MCP server this user ` +
+      'cannot see listening. If so it serves this stack as aflow-local; stop it to have this ' +
+      'stack run its own.'
     );
   }
   return (

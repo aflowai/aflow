@@ -38,13 +38,15 @@ function configWith(env: Partial<Record<(typeof ENV_KEYS)[number], string>>) {
   return loadConfig();
 }
 
+const PRODUCTION = { NODE_ENV: 'production', ALLOWED_HOSTS: 'mcp.example.test' } as const;
+
 describe('an uncredentialed session', () => {
   it('may proceed against a development stack', () => {
     expect(configWith({ NODE_ENV: 'development' }).unauthenticatedFallback).toBe(true);
   });
 
   it('is refused in production', () => {
-    expect(configWith({ NODE_ENV: 'production' }).unauthenticatedFallback).toBe(false);
+    expect(configWith(PRODUCTION).unauthenticatedFallback).toBe(false);
   });
 
   /** The appliance sets NODE_ENV=production, but the edition is what decides. */
@@ -60,7 +62,7 @@ describe('a browser origin', () => {
   });
 
   it('is never admitted in production', () => {
-    expect(configWith({ NODE_ENV: 'production' }).allowBrowserOrigins).toBe(false);
+    expect(configWith(PRODUCTION).allowBrowserOrigins).toBe(false);
   });
 
   /**
@@ -90,7 +92,7 @@ describe('the listen host', () => {
   });
 
   it('is every interface in production when none is configured', () => {
-    expect(configWith({ NODE_ENV: 'production' }).host).toBe('0.0.0.0');
+    expect(configWith(PRODUCTION).host).toBe('0.0.0.0');
   });
 
   it('is MCP_HOST in production when one is configured', () => {
@@ -108,6 +110,36 @@ describe('the listen host', () => {
 
   it('is MCP_HOST when one is configured', () => {
     expect(configWith({ MCP_HOST: '0.0.0.0' }).host).toBe('0.0.0.0');
+  });
+});
+
+/**
+ * In production an empty ALLOWED_HOSTS leaves only loopback names answered, so
+ * a server a load balancer reaches would refuse every request with 421.
+ */
+describe('starting', () => {
+  it('is refused in production on every interface with ALLOWED_HOSTS empty', () => {
+    expect(() => configWith({ NODE_ENV: 'production', MCP_HOST: '0.0.0.0' })).toThrow(
+      /ALLOWED_HOSTS is empty.*Set ALLOWED_HOSTS to the hostnames clients reach this server by/,
+    );
+  });
+
+  it('is refused in production by default, which listens on every interface', () => {
+    expect(() => configWith({ NODE_ENV: 'production' })).toThrow(/ALLOWED_HOSTS/);
+  });
+
+  it('proceeds in production with ALLOWED_HOSTS set', () => {
+    expect(configWith({ ...PRODUCTION, MCP_HOST: '0.0.0.0' }).allowedHosts).toEqual([
+      'mcp.example.test',
+    ]);
+  });
+
+  it('proceeds in production on loopback with ALLOWED_HOSTS empty', () => {
+    expect(configWith({ NODE_ENV: 'production', MCP_HOST: '127.0.0.1' }).host).toBe('127.0.0.1');
+  });
+
+  it('proceeds in development on every interface with ALLOWED_HOSTS empty', () => {
+    expect(configWith({ NODE_ENV: 'development', MCP_HOST: '0.0.0.0' }).host).toBe('0.0.0.0');
   });
 });
 

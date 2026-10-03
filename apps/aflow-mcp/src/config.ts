@@ -66,6 +66,16 @@ function listFromEnv(key: string): string[] {
     .filter((entry) => entry !== '');
 }
 
+function isLoopbackListenHost(host: string): boolean {
+  return host === 'localhost' || host === '::1' || /^127\.\d+\.\d+\.\d+$/.test(host);
+}
+
+/**
+ * Throws instead of returning a production config with an empty `ALLOWED_HOSTS`
+ * on a non-loopback interface: the gate would answer only loopback names, so
+ * every request that reaches the server would get a 421 while `/health`,
+ * answered before the gate, stayed green.
+ */
 export function loadConfig(): McpServerConfig {
   const logLevel = (process.env['LOG_LEVEL'] ?? 'info') as McpServerConfig['logLevel'];
   const nodeEnv = process.env['NODE_ENV'] ?? 'development';
@@ -77,6 +87,21 @@ export function loadConfig(): McpServerConfig {
   const localAuthJsonPath =
     nodeEnv === 'production' || !localAuthJsonRaw ? undefined : localAuthJsonRaw;
   const configuredHost = process.env['MCP_HOST']?.trim();
+  const host =
+    configuredHost !== undefined && configuredHost !== ''
+      ? configuredHost
+      : nodeEnv === 'production'
+        ? '0.0.0.0'
+        : '127.0.0.1';
+
+  if (nodeEnv === 'production' && allowedHosts.length === 0 && !isLoopbackListenHost(host)) {
+    throw new Error(
+      `MCP server not started: it listens on ${host} in production and ALLOWED_HOSTS is empty, ` +
+        'so it would answer only to localhost and refuse every request that reaches it from ' +
+        'elsewhere. Set ALLOWED_HOSTS to the hostnames clients reach this server by, ' +
+        'comma-separated: the name the load balancer serves it under, such as mcp.example.com.',
+    );
+  }
 
   return {
     apiUrl: process.env['AFLOW_API_URL'] ?? 'http://localhost:3000',
@@ -84,12 +109,7 @@ export function loadConfig(): McpServerConfig {
     // MCP_PORT first (avoids conflict with API server on 3000 when both run in yarn dev).
     // PORT fallback for hosts that inject PORT for the listening process.
     port: Number(process.env['MCP_PORT'] ?? process.env['PORT'] ?? '3100'),
-    host:
-      configuredHost !== undefined && configuredHost !== ''
-        ? configuredHost
-        : nodeEnv === 'production'
-          ? '0.0.0.0'
-          : '127.0.0.1',
+    host,
     logLevel,
     // The local edition composes no development bypass, so the fallback has
     // nothing to reach whatever NODE_ENV says.

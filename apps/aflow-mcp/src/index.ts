@@ -12,7 +12,7 @@
 
 // Must precede all other imports so Sentry can patch http before it loads.
 import './instrument.js';
-import { loadConfig } from './config.js';
+import { loadConfig, type McpServerConfig } from './config.js';
 import { SessionStore } from './auth/SessionStore.js';
 import { AuthManager } from './auth/AuthManager.js';
 import { createMcpHttpServer } from './httpServer.js';
@@ -26,7 +26,13 @@ import { flushCrashReporting } from '@aflow/observability/crashReporting';
 // Configuration
 // ---------------------------------------------------------------------------
 
-const config = loadConfig();
+let config: McpServerConfig;
+try {
+  config = loadConfig();
+} catch (err) {
+  console.error(err instanceof Error ? err.message : String(err));
+  process.exit(1);
+}
 setLogLevel(config.logLevel);
 
 installBackgroundTaskControlPlane({

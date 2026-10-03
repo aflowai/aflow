@@ -31,8 +31,10 @@ describe('a held MCP port', () => {
   });
 
   /** lsof sees nothing another user owns; the process table still shows the server. */
-  it('falls back to the MCP servers running when no listener is visible', () => {
-    expect(mcpPortHeldMessage(3100, [], PS)).toContain('held by an Aflow MCP server');
+  it('names no pid when no listener is visible and an MCP server is running', () => {
+    const message = mcpPortHeldMessage(3100, [], PS);
+    expect(message).toContain('is held, probably by an Aflow MCP server');
+    expect(message).not.toMatch(/pid|501|512/);
   });
 
   it('says it cannot see the holder rather than naming none', () => {
