@@ -12,8 +12,10 @@ import { z } from 'zod';
 import type { OperationRegistration } from '../catalog/operationCatalog.js';
 import { buildOperationId } from '../catalog/operationId.js';
 import { StepImageSchema } from '../media/stepImage.js';
+import type { OperationObservation } from '../runtime/toolObservation.js';
 import {
-  BROWSER_PAGE_OBSERVATION,
+  BROWSER_PAGE_OBSERVATION_GROUP,
+  BROWSER_PAGE_OUTLINE_FACET,
   BrowserElementRefSchema,
   BrowserOutlineMaxCharsSchema,
   BrowserPageIdSchema,
@@ -138,6 +140,13 @@ export const BrowserPageScreenshotOutputSchema = z.object({
 // Registrations
 // ---------------------------------------------------------------------------
 
+/** A hand-off that brought the page back under a new `pageId` ends the one it replaced. */
+export const BROWSER_PAGE_HANDOFF_OBSERVATION: OperationObservation = {
+  group: BROWSER_PAGE_OBSERVATION_GROUP,
+  facets: [BROWSER_PAGE_OUTLINE_FACET],
+  ends: ['previousPageId'],
+};
+
 export const BrowserWindowRegistrations: OperationRegistration[] = [
   {
     stepType: 'browser',
@@ -181,7 +190,7 @@ export const BrowserWindowRegistrations: OperationRegistration[] = [
     accessMode: 'write',
     inputZod: BrowserPageHandoffInputSchema,
     outputZod: BrowserPageHandoffOutputSchema,
-    observation: BROWSER_PAGE_OBSERVATION,
+    observation: BROWSER_PAGE_HANDOFF_OBSERVATION,
   },
   {
     stepType: 'browser',

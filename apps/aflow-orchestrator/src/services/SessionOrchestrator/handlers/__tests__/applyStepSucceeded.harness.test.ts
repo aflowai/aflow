@@ -593,23 +593,44 @@ describe('applyStepSucceeded — observations in a tool result (Plan 320 D9)', (
     receipt: { action: 'click', ref: 'e2', outlineChanged: true },
   };
 
-  it('stamps a declaring operation’s envelope with its group, key and receipt', async () => {
+  it('stamps a declaring operation’s envelope with its facets and receipt', async () => {
     const result = await toolResultFor('browser.page.act', 'browser', acted);
     const [envelope] = buildToolResultEnvelopes([result], 1_700_000_000_000);
     expect(envelope!.observation).toEqual({
-      role: 'observes',
       group: 'browser.page',
-      key: 'pg_1',
-      receipt: JSON.stringify({
-        outcome: 'performed',
-        pageId: 'pg_1',
-        url: 'https://example.com/pulls',
-        title: 'Pull requests',
-        receipt: { action: 'click', ref: 'e2', outlineChanged: true },
-      }),
-      currentStateOperation: 'browser.page.snapshot',
+      facets: [
+        {
+          facet: 'outline',
+          key: 'pg_1',
+          part: [],
+          fields: ['outline', 'outlineCensus'],
+          currentStateOperation: 'browser.page.snapshot',
+        },
+      ],
+      receipts: [
+        {
+          without: ['outline', 'outlineCensus'],
+          text: JSON.stringify({
+            outcome: 'performed',
+            pageId: 'pg_1',
+            url: 'https://example.com/pulls',
+            title: 'Pull requests',
+            receipt: { action: 'click', ref: 'e2', outlineChanged: true },
+          }),
+        },
+      ],
+      moved: [],
+      ended: [],
     });
     expect(envelope!.summary).toContain('[ref=e2]');
+  });
+
+  it('stamps an action that changed the address as moving its page', async () => {
+    const result = await toolResultFor('browser.page.act', 'browser', {
+      ...acted,
+      receipt: { ...acted.receipt, urlChanged: true },
+    });
+    expect(result.observation?.moved).toEqual(['pg_1']);
   });
 
   it('stamps an ending operation with the key it ends', async () => {
@@ -617,7 +638,27 @@ describe('applyStepSucceeded — observations in a tool result (Plan 320 D9)', (
       pageId: 'pg_1',
       state: 'closed',
     });
-    expect(result.observation).toEqual({ role: 'ends', group: 'browser.page', key: 'pg_1' });
+    expect(result.observation).toEqual({
+      group: 'browser.page',
+      facets: [],
+      receipts: [],
+      moved: [],
+      ended: ['pg_1'],
+    });
+  });
+
+  it('stamps a hand-off that returned a new page as ending the one it was given', async () => {
+    const result = await toolResultFor('browser.page.handoff', 'browser', {
+      outcome: 'completed',
+      pageId: 'pg_2',
+      previousPageId: 'pg_1',
+      url: 'https://example.com/pulls',
+      title: 'Pull requests',
+      outline: '- main [ref=e1]:',
+      receipt: { reason: 'sign_in', waitedSeconds: 30, restarted: true },
+    });
+    expect(result.observation?.facets.map((f) => f.key)).toEqual(['pg_2']);
+    expect(result.observation?.ended).toEqual(['pg_1']);
   });
 
   it('leaves the envelope of an operation that declares nothing as it was', async () => {

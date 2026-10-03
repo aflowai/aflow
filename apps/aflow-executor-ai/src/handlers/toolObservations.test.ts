@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { PayloadStore } from '@aflow/payload-store';
 import {
-  BROWSER_PAGE_OBSERVATION,
   MEMORY_READ_OPERATION_ID,
   estimateMessageTokens,
+  getOperation,
   textMessage,
   toolResultMessage,
+  toolResultObservationOf,
   withoutObservedFields,
   type AiConversationStateV1,
   type AiMessageAtomV1,
@@ -17,12 +18,24 @@ import { ConversationStateStore } from './conversationStateStore.js';
 import { RETENTION_POLICY } from './retentionPolicy.js';
 import { renderToolObservations } from './toolObservations.js';
 
-const OBSERVED_FIELDS =
-  BROWSER_PAGE_OBSERVATION.role === 'observes' ? BROWSER_PAGE_OBSERVATION.observedFields : [];
+type Output = Record<string, unknown>;
 
-const REPLACED = (pageId: string) =>
-  `A later browser.page result for ${pageId} replaced this one's observation; ` +
-  'browser.page.snapshot returns the current state.';
+const OPEN = 'browser.page.open';
+const ACT = 'browser.page.act';
+const READ = 'browser.page.read';
+const SNAPSHOT = 'browser.page.snapshot';
+const CLOSE = 'browser.page.close';
+const HANDOFF = 'browser.page.handoff';
+
+const PAGE_URL = 'https://example.com/pulls';
+
+const OUTLINE_REPLACED = (pageId: string) =>
+  `A later outline of ${pageId} replaced this result's; browser.page.snapshot returns the current one.`;
+const MOVED = (pageId: string, current: string) =>
+  `browser.page.act moved ${pageId} to another address after this result, so nothing this ` +
+  `result observed of ${pageId} is kept; ${current} returns it as it is now.`;
+const ENDED = (operation: string, pageId: string) =>
+  `${operation} ended ${pageId} after this result, so nothing this result observed of ${pageId} is kept.`;
 
 /** Outline lines of the shape the browser driver returns, to `chars` characters. */
 function outlineOf(chars: number): string {
@@ -49,34 +62,132 @@ function outlineOf(chars: number): string {
   return rows.join('\n').slice(0, chars);
 }
 
-function actOutput(pageId: string, step: number, outline = outlineOf(600)) {
+/** Page prose, to `chars` characters. */
+function proseOf(chars: number, from = 0): string {
+  let text = '';
+  for (let i = from; text.length < chars; i += 1) {
+    text += `Pull request ${String(4000 + i)} moves the scheduler's retry window to the next hour. `;
+  }
+  return text.slice(0, chars);
+}
+
+const outlineReceipt = { outlineElements: 120, outlineCut: false, settled: true };
+
+function openOutput(pageId: string): Output {
   return {
     outcome: 'performed',
     pageId,
-    url: `https://example.com/pulls?page=${String(step)}`,
+    url: PAGE_URL,
+    title: 'Pull requests',
+    outline: outlineOf(600),
+    receipt: { profileId: 'default', requestedUrl: PAGE_URL, redirected: false, ...outlineReceipt },
+  };
+}
+
+function actOutput(
+  pageId: string,
+  step: number,
+  { urlChanged = false, outline = outlineOf(600) }: { urlChanged?: boolean; outline?: string } = {},
+): Output {
+  return {
+    outcome: 'performed',
+    pageId,
+    url: urlChanged ? `${PAGE_URL}?page=${String(step)}` : PAGE_URL,
     title: 'Pull requests',
     outline,
     receipt: {
       action: 'click',
       ref: `e${String(10 + step)}`,
       element: { role: 'link', name: 'Next' },
-      urlChanged: true,
+      urlChanged,
       titleChanged: false,
       outlineChanged: true,
-      outlineElements: 120,
-      outlineCut: false,
-      settled: true,
+      ...outlineReceipt,
     },
   };
 }
 
+function readTextOutput(pageId: string, offset: number, text: string, nextOffset?: number): Output {
+  return {
+    pageId,
+    url: PAGE_URL,
+    what: 'text',
+    text,
+    offset,
+    withheld: nextOffset === undefined ? 0 : 5_000,
+    ...(nextOffset !== undefined ? { nextOffset } : {}),
+  };
+}
+
+function readEntriesOutput(pageId: string, what: 'console' | 'network'): Output {
+  const at = '2026-10-03T10:00:00.000Z';
+  return {
+    pageId,
+    url: PAGE_URL,
+    what,
+    ...(what === 'console'
+      ? { console: [{ level: 'error', text: 'Failed to load resource', at }] }
+      : {
+          network: [
+            {
+              method: 'GET',
+              url: `${PAGE_URL}?page=redacted`,
+              status: 200,
+              resourceType: 'fetch',
+              at,
+            },
+          ],
+        }),
+    withheld: 0,
+    notRetained: 0,
+  };
+}
+
+function snapshotOutput(pageId: string, ref?: string, continueRef?: string): Output {
+  return {
+    pageId,
+    url: PAGE_URL,
+    title: 'Pull requests',
+    snapshot: outlineOf(900),
+    ...(continueRef !== undefined ? { snapshotCensus: { link: 30 } } : {}),
+    receipt: {
+      ...(ref !== undefined ? { ref } : {}),
+      lines: 20,
+      cut: continueRef !== undefined,
+      ...(continueRef !== undefined ? { continueRef } : {}),
+    },
+  };
+}
+
+function handoffOutput(pageId: string, previousPageId?: string): Output {
+  return {
+    outcome: 'completed',
+    pageId,
+    ...(previousPageId !== undefined ? { previousPageId } : {}),
+    url: PAGE_URL,
+    title: 'Pull requests',
+    outline: outlineOf(600),
+    receipt: {
+      reason: 'sign_in',
+      waitedSeconds: 40,
+      restarted: previousPageId !== undefined,
+      ...outlineReceipt,
+    },
+  };
+}
+
+/** The envelope the orchestrator builds, stamped from the operation's own declaration. */
 function envelopeFor(
   base: string,
   operationId: string,
-  output: Record<string, unknown>,
-  stamp: 'observes' | 'ends' | 'none',
+  output: Output,
+  stamped = true,
 ): AiToolResultEnvelopeV1 {
-  const pageId = output['pageId'] as string;
+  const declaration = getOperation(operationId)?.observation;
+  const observation =
+    stamped && declaration !== undefined
+      ? toolResultObservationOf(declaration, output, (shown) => JSON.stringify(shown))
+      : undefined;
   return {
     kind: 'tool_result',
     toolCallId: `${base}_0`,
@@ -86,19 +197,7 @@ function envelopeFor(
     completedAtMs: 1_700_000_000_000,
     outputPath: `/run/outputs/${base}_0`,
     summary: JSON.stringify(output),
-    ...(stamp === 'observes'
-      ? {
-          observation: {
-            role: 'observes' as const,
-            group: 'browser.page',
-            key: pageId,
-            receipt: JSON.stringify(withoutObservedFields(output, OBSERVED_FIELDS)),
-            currentStateOperation: 'browser.page.snapshot',
-          },
-        }
-      : stamp === 'ends'
-        ? { observation: { role: 'ends' as const, group: 'browser.page', key: pageId } }
-        : {}),
+    ...(observation !== undefined ? { observation } : {}),
   };
 }
 
@@ -113,11 +212,11 @@ function exchange(base: string, envelope: AiToolResultEnvelopeV1): [AiMessageV1,
   ];
 }
 
-const act = (base: string, pageId: string, step: number) =>
-  exchange(base, envelopeFor(base, 'browser.page.act', actOutput(pageId, step), 'observes'));
+const call = (base: string, operationId: string, output: Output, stamped = true) =>
+  exchange(base, envelopeFor(base, operationId, output, stamped));
 
-const close = (base: string, pageId: string) =>
-  exchange(base, envelopeFor(base, 'browser.page.close', { pageId, state: 'closed' }, 'ends'));
+const act = (base: string, pageId: string, step: number, urlChanged = false) =>
+  call(base, ACT, actOutput(pageId, step, { urlChanged }));
 
 function summaryOf(message: AiMessageV1): string | undefined {
   const part = message.parts[0];
@@ -132,8 +231,18 @@ function isFull(summary: string | undefined): boolean {
   return summary?.startsWith('{') === true && summary.includes('"outline"');
 }
 
-describe('renderToolObservations', () => {
-  it('shows the newest of three observations of a page in full, the first two as receipts', () => {
+/** Each tool result as shown: `full`, or the first line of its reduced form. */
+function forms(messages: AiMessageV1[]): string[] {
+  const rendered = renderToolObservations(messages);
+  return messages.flatMap((message, i) => {
+    if (message.role !== 'tool') return [];
+    const shown = summaryOf(rendered[i]!)!;
+    return [shown === summaryOf(message) ? 'full' : shown.split('\n')[0]!];
+  });
+}
+
+describe('renderToolObservations — reduced facet by facet', () => {
+  it('shows the newest of three outlines of a page in full, the first two as receipts', () => {
     const messages = [
       textMessage('user', 'Merge it'),
       ...act('a1', 'pg_1', 1),
@@ -143,54 +252,189 @@ describe('renderToolObservations', () => {
     const stored = JSON.stringify(messages);
     const summaries = toolSummaries(renderToolObservations(messages));
 
-    expect(summaries.map(isFull)).toEqual([false, false, true]);
+    expect(forms(messages)).toEqual([OUTLINE_REPLACED('pg_1'), OUTLINE_REPLACED('pg_1'), 'full']);
     for (const [i, summary] of summaries.slice(0, 2).entries()) {
-      const [line, receipt] = summary!.split('\n');
-      expect(line).toBe(REPLACED('pg_1'));
-      expect(JSON.parse(receipt!)).toEqual(
-        withoutObservedFields(actOutput('pg_1', i + 1), OBSERVED_FIELDS),
+      expect(JSON.parse(summary!.split('\n')[1]!)).toEqual(
+        withoutObservedFields(actOutput('pg_1', i + 1), ['outline', 'outlineCensus']),
       );
     }
-    expect(summaries[2]).toBe(JSON.stringify(actOutput('pg_1', 3)));
     expect(JSON.stringify(renderToolObservations(messages))).not.toContain('"observation"');
     expect(JSON.stringify(messages)).toBe(stored);
   });
 
-  it('keeps each page’s newest observation in full when two pages interleave', () => {
+  it('keeps each page’s newest outline in full when two pages interleave', () => {
     const messages = [
       ...act('a1', 'pg_1', 1),
       ...act('b1', 'pg_2', 1),
       ...act('a2', 'pg_1', 2),
       ...act('b2', 'pg_2', 2),
     ];
-    const summaries = toolSummaries(renderToolObservations(messages));
-    expect(summaries.map(isFull)).toEqual([false, false, true, true]);
-    expect(summaries[0]!.split('\n')[0]).toBe(REPLACED('pg_1'));
-    expect(summaries[1]!.split('\n')[0]).toBe(REPLACED('pg_2'));
+    expect(forms(messages)).toEqual([
+      OUTLINE_REPLACED('pg_1'),
+      OUTLINE_REPLACED('pg_2'),
+      'full',
+      'full',
+    ]);
   });
 
-  it('keeps no observation of a page in full once it is closed', () => {
-    const messages = [...act('a1', 'pg_1', 1), ...act('a2', 'pg_1', 2), ...close('c1', 'pg_1')];
+  it('keeps a text read and its continuation from nextOffset in full', () => {
+    const messages = [
+      ...call('o1', OPEN, openOutput('pg_1')),
+      ...call('r1', READ, readTextOutput('pg_1', 0, proseOf(800), 800)),
+      ...call('r2', READ, readTextOutput('pg_1', 800, proseOf(800, 20))),
+    ];
+    expect(forms(messages)).toEqual(['full', 'full', 'full']);
+  });
+
+  it('reduces the first of two text reads at the same offset', () => {
+    const messages = [
+      ...call('r1', READ, readTextOutput('pg_1', 0, proseOf(800))),
+      ...call('r2', READ, readTextOutput('pg_1', 0, proseOf(800))),
+    ];
+    expect(forms(messages)).toEqual([
+      "A later read (what text, offset 0) of pg_1 replaced this result's; " +
+        'browser.page.read returns the current one.',
+      'full',
+    ]);
+  });
+
+  it('keeps a console read and a network read in full, and reduces a console read read again', () => {
+    const messages = [
+      ...call('r1', READ, readEntriesOutput('pg_1', 'console')),
+      ...call('r2', READ, readEntriesOutput('pg_1', 'network')),
+      ...call('r3', READ, readEntriesOutput('pg_1', 'console')),
+    ];
+    expect(forms(messages)).toEqual([
+      "A later read (what console) of pg_1 replaced this result's; " +
+        'browser.page.read returns the current one.',
+      'full',
+      'full',
+    ]);
+  });
+
+  it('keeps a read after an action that stayed at the address, and reduces the earlier outline', () => {
+    const messages = [
+      ...call('o1', OPEN, openOutput('pg_1')),
+      ...call('r1', READ, readTextOutput('pg_1', 0, proseOf(800))),
+      ...act('a1', 'pg_1', 1),
+    ];
+    expect(forms(messages)).toEqual([OUTLINE_REPLACED('pg_1'), 'full', 'full']);
+  });
+
+  it('reduces every earlier read, snapshot and outline once an action moved the page', () => {
+    const messages = [
+      ...call('o1', OPEN, openOutput('pg_1')),
+      ...call('r1', READ, readTextOutput('pg_1', 0, proseOf(800))),
+      ...call('s1', SNAPSHOT, snapshotOutput('pg_1', 'e40')),
+      ...call('s2', SNAPSHOT, snapshotOutput('pg_1')),
+      ...act('a1', 'pg_1', 1, true),
+      ...call('r2', READ, readTextOutput('pg_2', 0, proseOf(800))),
+    ];
     const rendered = renderToolObservations(messages);
-    const summaries = toolSummaries(rendered);
-    expect(summaries[0]!.split('\n')[0]).toBe(REPLACED('pg_1'));
-    expect(summaries[1]!.split('\n')[0]).toBe(
-      'browser.page.close ended pg_1 after this result; its observation is not kept.',
-    );
-    expect(summaries[2]).toBe(JSON.stringify({ pageId: 'pg_1', state: 'closed' }));
+    expect(forms(messages)).toEqual([
+      OUTLINE_REPLACED('pg_1'),
+      MOVED('pg_1', 'browser.page.read'),
+      MOVED('pg_1', 'browser.page.snapshot'),
+      MOVED('pg_1', 'browser.page.snapshot'),
+      'full',
+      'full',
+    ]);
+    expect(JSON.parse(summaryOf(rendered[3]!)!.split('\n')[1]!)).toEqual({
+      pageId: 'pg_1',
+      url: PAGE_URL,
+      what: 'text',
+      offset: 0,
+      withheld: 0,
+    });
+  });
+
+  it('keeps a scoped snapshot through a whole-page snapshot and an outline', () => {
+    const messages = [
+      ...call('o1', OPEN, openOutput('pg_1')),
+      ...call('s1', SNAPSHOT, snapshotOutput('pg_1', 'e40', 'e90')),
+      ...call('s2', SNAPSHOT, snapshotOutput('pg_1', 'e90')),
+      ...call('s3', SNAPSHOT, snapshotOutput('pg_1')),
+      ...act('a1', 'pg_1', 1),
+    ];
+    expect(forms(messages)).toEqual([OUTLINE_REPLACED('pg_1'), 'full', 'full', 'full', 'full']);
+
+    const again = [
+      ...messages,
+      ...call('s4', SNAPSHOT, snapshotOutput('pg_1', 'e40')),
+      ...call('s5', SNAPSHOT, snapshotOutput('pg_1')),
+    ];
+    const rendered = renderToolObservations(again);
+    expect(forms(again)).toEqual([
+      OUTLINE_REPLACED('pg_1'),
+      "A later snapshot (ref e40) of pg_1 replaced this result's; " +
+        'browser.page.snapshot returns the current one.',
+      'full',
+      "A later snapshot of pg_1 replaced this result's; browser.page.snapshot returns the current one.",
+      OUTLINE_REPLACED('pg_1'),
+      'full',
+      'full',
+    ]);
+    expect(summaryOf(rendered[7]!)!.split('\n').slice(0, 2)).toEqual([
+      "A later snapshot of pg_1 replaced this result's; browser.page.snapshot returns the current one.",
+      OUTLINE_REPLACED('pg_1'),
+    ]);
+  });
+
+  it('reduces every observation of a page once it is closed', () => {
+    const messages = [
+      ...call('o1', OPEN, openOutput('pg_1')),
+      ...call('r1', READ, readTextOutput('pg_1', 0, proseOf(800))),
+      ...call('s1', SNAPSHOT, snapshotOutput('pg_1', 'e40')),
+      ...call('r2', READ, readEntriesOutput('pg_1', 'network')),
+      ...call('c1', CLOSE, { pageId: 'pg_1', state: 'closed' }),
+    ];
+    const rendered = renderToolObservations(messages);
+    expect(forms(messages)).toEqual([...Array<string>(4).fill(ENDED(CLOSE, 'pg_1')), 'full']);
     expect(JSON.stringify(rendered)).not.toContain('"observation"');
   });
 
+  it('reduces the observations of a page a hand-off replaced with a new one', () => {
+    const messages = [
+      ...call('o1', OPEN, openOutput('pg_1')),
+      ...call('r1', READ, readTextOutput('pg_1', 0, proseOf(800))),
+      ...call('h1', HANDOFF, handoffOutput('pg_2', 'pg_1')),
+      ...call('r2', READ, readTextOutput('pg_2', 0, proseOf(800))),
+    ];
+    expect(forms(messages)).toEqual([
+      ENDED(HANDOFF, 'pg_1'),
+      ENDED(HANDOFF, 'pg_1'),
+      'full',
+      'full',
+    ]);
+  });
+
+  it('reduces only the outline before a hand-off that kept the page', () => {
+    const messages = [
+      ...call('o1', OPEN, openOutput('pg_1')),
+      ...call('r1', READ, readTextOutput('pg_1', 0, proseOf(800))),
+      ...call('h1', HANDOFF, handoffOutput('pg_1')),
+    ];
+    expect(forms(messages)).toEqual([OUTLINE_REPLACED('pg_1'), 'full', 'full']);
+  });
+
   it('leaves a result whose operation declares nothing exactly as stored', () => {
-    const undeclared = exchange(
-      'h1',
-      envelopeFor('h1', 'api.http.call', { pageId: 'pg_1', outline: outlineOf(300) }, 'none'),
-    );
+    const undeclared = call('h1', 'api.http.call', { pageId: 'pg_1', outline: outlineOf(300) });
     const messages = [...act('a1', 'pg_1', 1), ...undeclared, ...act('a2', 'pg_1', 2)];
     const rendered = renderToolObservations(messages);
     expect(rendered[2]).toBe(messages[2]);
     expect(rendered[3]).toBe(messages[3]);
     expect(toolSummaries(rendered).map(isFull)).toEqual([false, true, true]);
+  });
+
+  it('shows a result whose stamp does not parse in full, without the stamp', () => {
+    const envelope = { ...envelopeFor('a1', ACT, actOutput('pg_1', 1)), observation: 'stale' };
+    const messages = [
+      toolResultMessage(envelope as unknown as AiToolResultEnvelopeV1),
+      ...act('a2', 'pg_1', 2),
+    ];
+    const rendered = renderToolObservations(messages);
+    expect(summaryOf(rendered[0]!)).toBe(JSON.stringify(actOutput('pg_1', 1)));
+    expect(JSON.stringify(rendered[0])).not.toContain('"observation"');
   });
 
   it('keeps the tool call id and name of a reduced result, and none of its images', () => {
@@ -202,18 +446,77 @@ describe('renderToolObservations', () => {
       height: 10,
     };
     const first = toolResultMessage({
-      ...envelopeFor('a1', 'browser.page.act', actOutput('pg_1', 1), 'observes'),
+      ...envelopeFor('a1', ACT, actOutput('pg_1', 1)),
       images: [image],
     });
     const rendered = renderToolObservations([first, ...act('a2', 'pg_1', 2)]);
     expect(first.parts.some((p) => p.kind === 'image')).toBe(true);
-    expect(rendered[0]).toMatchObject({
-      role: 'tool',
-      toolCallId: 'a1_0',
-      name: 'browser.page.act',
-    });
+    expect(rendered[0]).toMatchObject({ role: 'tool', toolCallId: 'a1_0', name: ACT });
     expect(rendered[0]!.parts.map((p) => p.kind)).toEqual(['json']);
     expect(JSON.stringify(rendered[0])).not.toContain('"images"');
+  });
+});
+
+/** A long run of every kind of browser call on two pages, from a fixed seed. */
+function mixedRun(calls: number): AiMessageV1[] {
+  let seed = 20_261_003;
+  const next = (n: number) => {
+    seed = (seed * 1_103_515_245 + 12_345) % 2 ** 31;
+    return seed % n;
+  };
+  const messages: AiMessageV1[] = [];
+  for (let t = 0; t < calls; t += 1) {
+    const page = next(2) === 0 ? 'pg_1' : 'pg_2';
+    const base = `m${String(t)}`;
+    const kind = next(9);
+    if (kind === 0) messages.push(...call(base, OPEN, openOutput(page)));
+    if (kind === 1) messages.push(...act(base, page, t));
+    if (kind === 2) messages.push(...act(base, page, t, true));
+    if (kind === 3) {
+      const offset = next(3) * 800;
+      messages.push(...call(base, READ, readTextOutput(page, offset, proseOf(800), offset + 800)));
+    }
+    if (kind === 4) {
+      messages.push(
+        ...call(base, READ, readEntriesOutput(page, next(2) === 0 ? 'console' : 'network')),
+      );
+    }
+    if (kind === 5 || kind === 6) {
+      const ref = ['e40', 'e90', undefined][next(3)];
+      messages.push(...call(base, SNAPSHOT, snapshotOutput(page, ref)));
+    }
+    if (kind === 7) messages.push(...call(base, HANDOFF, handoffOutput(page)));
+    if (kind === 8 && next(4) === 0) {
+      messages.push(...call(base, CLOSE, { pageId: page, state: 'closed' }));
+    }
+  }
+  return messages;
+}
+
+describe('renderToolObservations — a pure function that changes a result once per facet', () => {
+  it('changes no result more often than it has facets, across every prefix of a long run', () => {
+    const messages = mixedRun(120);
+    const stored = JSON.stringify(messages);
+    const changes = new Array<number>(messages.length).fill(0);
+    let previous: string[] = [];
+    for (let n = 1; n <= messages.length; n += 1) {
+      const now = renderToolObservations(messages.slice(0, n)).map((m) => JSON.stringify(m));
+      expect(now).toEqual(
+        renderToolObservations(messages.slice(0, n)).map((m) => JSON.stringify(m)),
+      );
+      for (const [i, form] of previous.entries()) if (now[i] !== form) changes[i]! += 1;
+      previous = now;
+    }
+    const facetsOf = (message: AiMessageV1) => {
+      const part = message.parts[0];
+      const envelope = part?.kind === 'json' ? (part.json as AiToolResultEnvelopeV1) : undefined;
+      return envelope?.observation?.facets.length ?? 0;
+    };
+    for (const [i, message] of messages.entries()) {
+      expect(changes[i], `message ${String(i)}`).toBeLessThanOrEqual(facetsOf(message));
+    }
+    expect(changes.filter((c) => c > 0).length).toBeGreaterThan(20);
+    expect(JSON.stringify(messages)).toBe(stored);
   });
 });
 
@@ -315,6 +618,31 @@ describe('ConversationStateStore.assembleRequest — observations', () => {
     expect(JSON.stringify(later[newlyReduced])).toBe(JSON.stringify(after[newlyReduced]));
   });
 
+  it('changes from one turn to the next only the results that just went stale', async () => {
+    const run = mixedRun(40);
+    const turns: Turn[] = [opener];
+    for (let i = 0; i < run.length; i += 2) {
+      turns.push({ turn: turns.length, messages: run.slice(i, i + 2) });
+    }
+    let previous = (await assemble(turns.slice(0, 2), 2)).request.messages;
+    let changed = 0;
+    for (let n = 3; n <= turns.length; n += 1) {
+      const now = (await assemble(turns.slice(0, n), n)).request.messages;
+      for (const [i, message] of previous.entries()) {
+        if (message.role === 'system' || JSON.stringify(now[i]) === JSON.stringify(message)) {
+          continue;
+        }
+        changed += 1;
+        expect(message.role).toBe('tool');
+        expect(summaryOf(message)!.startsWith('{')).toBe(true);
+        expect(summaryOf(now[i]!)!).toMatch(/^(A later |browser\.page\.\w+ (moved|ended) )/);
+        expect(now[i]!.toolCallId).toBe(message.toolCallId);
+      }
+      previous = now;
+    }
+    expect(changed).toBeGreaterThan(5);
+  });
+
   it('counts the reduced form in the history estimate', async () => {
     const turns = [
       opener,
@@ -351,40 +679,90 @@ describe('ConversationStateStore.assembleRequest — observations', () => {
   });
 });
 
-describe('ten actions on one page with an 8,000-character outline', () => {
-  it('reports the request before and after reduction', async () => {
-    const outline = outlineOf(8_000);
-    const turns = [opener];
-    const unstamped = [opener];
-    for (let t = 1; t <= 10; t += 1) {
-      const base = `ten${String(t).padStart(2, '0')}`;
-      const output = actOutput('pg_1', t, outline);
-      turns.push({
-        turn: t,
-        messages: exchange(base, envelopeFor(base, 'browser.page.act', output, 'observes')),
-      });
-      unstamped.push({
-        turn: t,
-        messages: exchange(base, envelopeFor(base, 'browser.page.act', output, 'none')),
-      });
-    }
-    const size = (messages: AiMessageV1[]) =>
-      messages
-        .map(aiMessageToChatMessage)
-        .reduce((sum, m) => sum + (typeof m.content === 'string' ? m.content.length : 0), 0);
+// ============================================================================
+// Measurements
+// ============================================================================
 
-    const before = (await assemble(unstamped, 11)).request;
-    const after = (await assemble(turns, 11)).request;
-    const report = {
-      outlineChars: outline.length,
+type Turn = { turn: number; messages: AiMessageV1[] };
+
+/** The same calls with and without their stamps, one call per turn after the opener. */
+function runOf(calls: Array<[string, Output]>): { stamped: Turn[]; unstamped: Turn[] } {
+  const stamped: Turn[] = [opener];
+  const unstamped: Turn[] = [opener];
+  for (const [i, [operationId, output]] of calls.entries()) {
+    const base = `run${String(i + 1).padStart(2, '0')}`;
+    stamped.push({ turn: i + 1, messages: call(base, operationId, output) });
+    unstamped.push({ turn: i + 1, messages: call(base, operationId, output, false) });
+  }
+  return { stamped, unstamped };
+}
+
+async function measure(run: { stamped: Turn[]; unstamped: Turn[] }) {
+  const size = (messages: AiMessageV1[]) =>
+    messages
+      .map(aiMessageToChatMessage)
+      .reduce((sum, m) => sum + (typeof m.content === 'string' ? m.content.length : 0), 0);
+  const turnNumber = run.stamped.length;
+  const before = (await assemble(run.unstamped, turnNumber)).request;
+  const after = (await assemble(run.stamped, turnNumber)).request;
+  return {
+    after: after.messages,
+    report: {
       beforeChars: size(before.messages),
       afterChars: size(after.messages),
       beforeHistoryTokens: before.tokenBreakdown.history,
       afterHistoryTokens: after.tokenBreakdown.history,
-    };
-    console.info('observation reduction', JSON.stringify(report));
+    },
+  };
+}
 
-    expect(toolSummaries(after.messages).map(isFull)).toEqual([...Array(9).fill(false), true]);
+describe('ten actions on one page with an 8,000-character outline', () => {
+  it('reports the request before and after reduction', async () => {
+    const outline = outlineOf(8_000);
+    const calls = Array.from({ length: 10 }, (_, i): [string, Output] => [
+      ACT,
+      actOutput('pg_1', i + 1, { urlChanged: true, outline }),
+    ]);
+    const { after, report } = await measure(runOf(calls));
+    console.info('ten actions', JSON.stringify({ outlineChars: outline.length, ...report }));
+
+    expect(toolSummaries(after).map(isFull)).toEqual([...Array<boolean>(9).fill(false), true]);
+    expect(report.afterChars).toBeLessThan(report.beforeChars / 4);
+  });
+});
+
+describe('open, three continued text reads, an action, then a move', () => {
+  const chunk = 8_000;
+  const reads: Array<[string, Output]> = [0, 1, 2].map((i) => [
+    READ,
+    readTextOutput('pg_1', i * chunk, proseOf(chunk, i * 100), i < 2 ? (i + 1) * chunk : undefined),
+  ]);
+  const open: [string, Output] = [OPEN, { ...openOutput('pg_1'), outline: outlineOf(7_000) }];
+  const stay: [string, Output] = [ACT, actOutput('pg_1', 1, { outline: outlineOf(7_000) })];
+  const move: [string, Output] = [
+    ACT,
+    actOutput('pg_1', 2, { urlChanged: true, outline: outlineOf(7_000) }),
+  ];
+  const textShown = (messages: AiMessageV1[]) =>
+    messages
+      .filter((m) => m.role === 'tool')
+      .map((m) => summaryOf(m)!)
+      .filter((s) => s.includes('"what":"text"'))
+      .map((s) => (s.includes('"text":') ? 'full' : s.split('\n')[0]!));
+
+  it('keeps all three chunks in full through an action that stayed at the address', async () => {
+    const { after, report } = await measure(runOf([open, ...reads, stay]));
+    console.info('three chunks, then an action', JSON.stringify(report));
+
+    expect(textShown(after)).toEqual(['full', 'full', 'full']);
+    expect(toolSummaries(after).map(isFull)).toEqual([false, false, false, false, true]);
+  });
+
+  it('reduces all three chunks once the page moves', async () => {
+    const { after, report } = await measure(runOf([open, ...reads, stay, move]));
+    console.info('three chunks, an action, then a move', JSON.stringify(report));
+
+    expect(textShown(after)).toEqual(Array<string>(3).fill(MOVED('pg_1', 'browser.page.read')));
     expect(report.afterChars).toBeLessThan(report.beforeChars / 4);
   });
 });

@@ -316,6 +316,7 @@ const read = route(BrowserPageReadInputSchema, async (call, driver, input) => {
       ? {
           ...base,
           text: result.text,
+          offset: offset ?? 0,
           ...(result.nextOffset !== undefined ? { nextOffset: result.nextOffset } : {}),
         }
       : result.what === 'console'

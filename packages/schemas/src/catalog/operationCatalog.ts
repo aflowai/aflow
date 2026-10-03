@@ -200,10 +200,10 @@ export interface OperationRegistration {
   imageOutputPaths?: StepImageOutputPaths;
 
   /**
-   * That this operation's result observes something a later result makes stale
-   * (`observes`), or ends it (`ends`), shaped by `OperationObservationSchema`.
-   * The agent turn shows the newest observation per group and key in full and
-   * reduces every earlier one to its receipt. Absent: the result is always
+   * The facets of a thing this operation's result holds, and whether it moves
+   * or ends that thing, shaped by `OperationObservationSchema`. The agent turn
+   * reduces an earlier result only in the facets a later one replaced, and in
+   * all of them once the thing moved on or ended. Absent: the result is always
    * shown as it was returned.
    */
   observation?: OperationObservation;
