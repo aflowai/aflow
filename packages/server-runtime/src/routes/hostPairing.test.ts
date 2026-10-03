@@ -86,6 +86,17 @@ describe('pairing a machine', () => {
    * authenticates nowhere, and reporting success sends the operator to a daemon
    * log to find out.
    */
+  /** The development stack names its own URL here, password and all. */
+  it('hands back the Redis address without the stack’s own credential', async () => {
+    process.env['PHOENIX_HOST_REDIS_URL'] = 'redis://:stack-password@127.0.0.1:6379';
+    try {
+      const body = JSON.parse((await pair(await buildApp())).body) as { redisUrl: string };
+      expect(body.redisUrl).toBe('redis://127.0.0.1:6379');
+    } finally {
+      delete process.env['PHOENIX_HOST_REDIS_URL'];
+    }
+  });
+
   it('pairs nothing when the identity cannot be created', async () => {
     mocks.call.mockImplementation((command: string) =>
       command === 'ACL' ? Promise.reject(new Error('NOPERM')) : Promise.resolve('OK'),

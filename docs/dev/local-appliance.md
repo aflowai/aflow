@@ -579,3 +579,48 @@ want `~/.aflow/dev-local/`, not the checkout.
 `PHOENIX_INSTANCE_DIR` still names a directory explicitly, which is how a
 deliberately separate instance is asked for. Nothing is adopted into it — a
 request for a separate instance is answered with one.
+
+### Every service asks for a credential
+
+The development stack's services listen on loopback, and loopback is the whole
+machine: any process here reaches them. So each of them asks for a credential
+(Plan 315 D20), and `yarn start` prints each one's state before it starts
+anything.
+
+- **Redis** requires a password. `yarn start` generates it into `REDIS_URL` in
+  `.env` when it creates the file, so every service and script that reads the
+  URL authenticates without change, and `yarn infra:up` starts Redis with the
+  same password (`scripts/infra.mjs` hands it to compose, which cannot take part
+  of a variable). It publishes on `127.0.0.1` only. A paired machine keeps its
+  own identity in `~/.aflow/host.env`, read-only on write approvals; pairing
+  hands it the address without the stack's password.
+- **The MCP server** gives the owner's key only to a session that presents the
+  session token `yarn mcp:setup` wrote into `mcp.local.json`. `.mcp.json` sends
+  it from `AFLOW_MCP_LOCAL_TOKEN`, and `yarn mcp:setup` prints the line that sets
+  that from the file. A session presenting nothing is refused with a `401` that
+  says so.
+- **Redis Commander and pgAdmin** (`yarn infra:tools`, off otherwise) log in
+  with the Redis password — Commander as `aflow`, pgAdmin as
+  `admin@phoenix.dev` — and publish on `127.0.0.1`. Behind a login rather than
+  left open as loopback-only tooling, because Commander needs the Redis password
+  to reach Redis at all: an open Commander would hand everything the password
+  guards to any page or process that reached it, and with the password already
+  in the compose file the login is two lines. pgAdmin sets its login once, when
+  it creates its volume, so the volume is now `pgadmin_login`; the old
+  `pgadmin_data`, which still holds the fixed login, is unused and can go
+  (`docker volume rm aflow-dev_pgadmin_data`).
+
+`yarn start` stops, naming the setting, when `REDIS_URL` carries no password, and
+when the Redis it finds answers without one.
+
+**With a `.env` from before this, run one command:**
+
+```bash
+yarn redis:password
+```
+
+It writes a generated password into `REDIS_URL` and restarts Redis with it; the
+data is in a volume and stays. Then `yarn start` as usual: it gives an existing
+`mcp.local.json` its session token (`yarn mcp:setup`, once the stack is
+healthy), which a Claude Code session started from a shell where
+`AFLOW_MCP_LOCAL_TOKEN` is set then presents.

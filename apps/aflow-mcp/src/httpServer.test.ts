@@ -20,6 +20,11 @@ import { createMcpHttpServer, type McpHttpServer } from './httpServer.js';
 import { setLogLevel } from './util/logger.js';
 
 const AUTH_FILE = fileURLToPath(new URL('../mcp.local.json.example', import.meta.url));
+const OWNER = JSON.parse(readFileSync(AUTH_FILE, 'utf8')) as {
+  apiKey: string;
+  sessionToken: string;
+};
+const LOCAL_TOKEN = { authorization: `Bearer ${OWNER.sessionToken}` };
 
 /** A free loopback port, or undefined where the environment refuses a listener. */
 async function freeLoopbackPort(): Promise<number | undefined> {
@@ -147,21 +152,37 @@ describe.skipIf(!listenerAllowed)('the MCP HTTP server', () => {
     expect(await healthSessions(server.port)).toBe(0);
   });
 
-  it('admits localhost on its port, and the owner key reaches that session', async () => {
+  it('admits localhost on its port, and the owner key reaches a session presenting the token', async () => {
     const server = await start();
     const res = await send(server.port, {
-      headers: { host: `localhost:${String(server.port)}` },
+      headers: { host: `localhost:${String(server.port)}`, ...LOCAL_TOKEN },
       body: INITIALIZE,
     });
 
     expect(res.status).toBe(200);
     const sessionId = res.headers['mcp-session-id'];
     expect(typeof sessionId).toBe('string');
-    const ownerKey = (JSON.parse(readFileSync(AUTH_FILE, 'utf8')) as { apiKey: string }).apiKey;
     expect(server.activeSessions.get(sessionId as string)?.session.auth).toMatchObject({
       method: 'api_key',
-      apiKey: ownerKey,
+      apiKey: OWNER.apiKey,
     });
+  });
+
+  it.each([
+    ['no credential', {}],
+    ['another token', { authorization: 'Bearer guess' }],
+  ])('refuses a local session presenting %s with 401, and creates none', async (_case, auth) => {
+    const server = await start();
+    const res = await send(server.port, {
+      headers: { host: `localhost:${String(server.port)}`, ...auth },
+      body: INITIALIZE,
+    });
+
+    expect(res.status).toBe(401);
+    expect((JSON.parse(res.body) as { error: string }).error).toContain('yarn mcp:setup');
+    expect(res.headers['mcp-session-id']).toBeUndefined();
+    expect(server.activeSessions.size).toBe(0);
+    expect(await healthSessions(server.port)).toBe(0);
   });
 
   it('refuses a browser origin while the auth file is loaded, even one configured', async () => {
@@ -228,7 +249,7 @@ describe.skipIf(!listenerAllowed)('the MCP HTTP server', () => {
   it('admits a configured ALLOWED_HOSTS entry', async () => {
     const server = await start({ allowedHosts: ['mcp.example.test'] });
     const res = await send(server.port, {
-      headers: { host: `mcp.example.test:${String(server.port)}` },
+      headers: { host: `mcp.example.test:${String(server.port)}`, ...LOCAL_TOKEN },
       body: INITIALIZE,
     });
 
@@ -240,7 +261,7 @@ describe.skipIf(!listenerAllowed)('the MCP HTTP server', () => {
   it('refuses a session’s later request under a different Host, through the transport', async () => {
     const server = await start();
     const init = await send(server.port, {
-      headers: { host: `localhost:${String(server.port)}` },
+      headers: { host: `localhost:${String(server.port)}`, ...LOCAL_TOKEN },
       body: INITIALIZE,
     });
     const sessionId = init.headers['mcp-session-id'] as string;
@@ -248,6 +269,7 @@ describe.skipIf(!listenerAllowed)('the MCP HTTP server', () => {
     const later = await send(server.port, {
       headers: {
         host: `127.0.0.1:${String(server.port)}`,
+        ...LOCAL_TOKEN,
         'mcp-session-id': sessionId,
         'mcp-protocol-version': '2025-03-26',
       },

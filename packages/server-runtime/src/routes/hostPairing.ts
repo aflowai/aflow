@@ -160,10 +160,19 @@ const PairingResponseSchema = z.object({
  * Where the host reaches Redis. Inside the appliance it is `redis:6379`, which
  * resolves nowhere on the operator's machine — the published loopback port is
  * the address that means anything there.
+ *
+ * Without its credentials: the development stack names its own `REDIS_URL`
+ * here, which carries the password every service authenticates with, and the
+ * machine is handed the host identity's alone.
  */
 function hostReachableRedisUrl(): string {
   const configured = process.env['PHOENIX_HOST_REDIS_URL']?.trim();
-  if (configured !== undefined && configured !== '') return configured;
+  if (configured !== undefined && configured !== '') {
+    const url = new URL(configured);
+    url.username = '';
+    url.password = '';
+    return url.toString();
+  }
   const port = process.env['AFLOW_REDIS_PORT']?.trim() ?? '6380';
   return `redis://127.0.0.1:${port}`;
 }

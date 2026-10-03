@@ -51,14 +51,19 @@ export function createMcpHttpServer(deps: {
   const gatePolicy: RequestGatePolicy = requestGatePolicy(config);
   const activeSessions = new Map<string, McpSession>();
 
+  /** A new session, or why its credential was refused, in which case none exists. */
   function createMcpSession(
     sessionId: string,
     headers: AdmittedHeaders,
     admittedHost: string,
-  ): McpSession {
+  ): McpSession | { refused: string } {
     const session = sessionStore.getOrCreate(sessionId);
 
-    authManager.initFromHeaders(session, headers);
+    const outcome = authManager.initFromHeaders(session, headers);
+    if (!outcome.accepted) {
+      sessionStore.delete(sessionId);
+      return { refused: outcome.reason };
+    }
 
     // Per-session space gate (every space-scoped tool passes space_id explicitly)
     const spaceGate = new SpaceGate();
@@ -179,7 +184,14 @@ export function createMcpHttpServer(deps: {
               return;
             }
           } else {
-            mcpSession = createMcpSession(randomUUID(), headers, decision.host);
+            const created = createMcpSession(randomUUID(), headers, decision.host);
+            if ('refused' in created) {
+              log('warn', 'session_refused', { host: req.headers.host });
+              res.writeHead(401, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: created.refused }));
+              return;
+            }
+            mcpSession = created;
           }
 
           await mcpSession.transport.handleRequest(req, res);

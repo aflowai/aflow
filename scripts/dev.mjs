@@ -8,7 +8,6 @@
 import { execSync, spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, writeSync } from 'node:fs';
 import { createServer } from 'node:net';
-import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
@@ -16,6 +15,7 @@ import process from 'node:process';
 
 import { listenersOn, mcpPortHeldMessage, readProcessTable } from './devMcpPort.mjs';
 import { findRunningStack, profileConflicts, stackConflictMessage } from './devStackLock.mjs';
+import { pairedHostEnvPath } from './stackCredentials.mjs';
 
 /** When true, child exit must not remove entries until shutdown finishes (see shutdown + port sweep). */
 let devRunnerShuttingDown = false;
@@ -352,21 +352,6 @@ function spawnService(serviceName, command, env) {
 
   processes.set(serviceName, child);
   return child;
-}
-
-/**
- * Where `pair` wrote this machine's host env, or null when it never ran. The
- * host executor resolves the same directory (`PHOENIX_HOST_POLICY_PATH`, then
- * `PHOENIX_HOST_DIR`, then `~/.aflow`).
- */
-function pairedHostEnvPath() {
-  const policyPath = process.env.PHOENIX_HOST_POLICY_PATH?.trim();
-  const dir =
-    policyPath !== undefined && policyPath !== ''
-      ? join(policyPath, '..')
-      : process.env.PHOENIX_HOST_DIR?.trim() || join(homedir(), '.aflow');
-  const envPath = join(dir, 'host.env');
-  return existsSync(envPath) ? envPath : null;
 }
 
 /** Set when the profile wanted `executor-host` and yielded to a foreground one already running. */
