@@ -83,13 +83,15 @@ export const HostSandboxPostureSchema = z
   .describe(
     'What network a coding agent and the checks have in this folder. Not whether there is a ' +
       "sandbox: under both they run inside the machine's sandbox in a detached checkout of the " +
-      "commit, writing the checkout and the run's scratch, never the folder or its `.git`, " +
-      "never reading or writing the machine's host directory, where the policy every gate " +
-      "reads and the pairing credential live, and never reaching the stack's own services — " +
+      "commit, writing the checkout and the run's scratch, where the temporary directory it " +
+      "is handed lives, never the system's `/tmp`, where other runs' scratch lives, never " +
+      "the folder or its `.git`, never reading or writing the machine's host directory, where " +
+      'the policy every gate reads and the pairing credential live, and never reaching the ' +
+      "stack's own services — " +
       'its Redis, where the push gate reads its approvals, its database, its API and its web ' +
       'application — so the state the gates stand on is reachable only by the executor. ' +
-      '`open`: every host, every other loopback port, the paths the toolchain needs, and the ' +
-      'system temporary directory writable. ' +
+      '`open` is exactly `confined` with the network open — every host and every other ' +
+      "loopback port — and the run's own temporary directory writable. " +
       "`confined`: only the hosts a harness is allowed, and the machine's loopback closed. " +
       'Declared on the machine; no workspace can set it.',
   );
@@ -451,7 +453,8 @@ export const HostProcessExecInputSchema = z.object({
     .describe(
       'Belongs to a push alone. A push from a folder that declares checks is refused unless ' +
         'they passed, on this executor, on exactly the commit it sends, against the base it ' +
-        'measures, as the folder declares them when it pushes. A folder that declares none ' +
+        'measures, as the folder declares them, under the sandbox posture it declares, when it ' +
+        'pushes. A folder that declares none ' +
         'needs no receipt, and a push from it that carries one is refused.',
     ),
 });

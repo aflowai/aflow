@@ -48,14 +48,14 @@ const run = promisify(execFile);
 
 vi.mock('../sandboxedRun.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../sandboxedRun.js')>();
-  const { buildBaseEnv, workloadHome } = await import('../baseEnv.js');
+  const { buildBaseEnv, createWorkloadDirs } = await import('../baseEnv.js');
   return {
     ...actual,
     sandboxReadiness: () => ({ ready: true, missing: [] }),
     runSandboxed: async (input: SandboxedRunInput): Promise<SandboxedRunResult> => {
       const [program, ...args] = input.argv;
       const startedAt = Date.now();
-      await mkdir(workloadHome(input.scratchDir), { recursive: true });
+      await createWorkloadDirs(input.scratchDir);
       return await new Promise((resolve) => {
         const child = spawn(program ?? '', args, {
           cwd: input.cwd,

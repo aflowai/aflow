@@ -33,8 +33,9 @@ export function describeSandboxPosture(posture: HostSandboxPosture): string {
   switch (posture) {
     case 'open':
       return (
-        "runs its coding agents and checks inside this machine's sandbox with the network " +
-        "open: every host and every local server but the stack's own"
+        'runs its coding agents and checks exactly as `confined` does, with the network open — ' +
+        "every host and every local server but the stack's own — and each job's own " +
+        'temporary directory writable'
       );
     case 'confined':
       return (

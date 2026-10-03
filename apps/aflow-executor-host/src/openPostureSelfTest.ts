@@ -23,7 +23,6 @@ import {
   type SandboxedRunInput,
   type SandboxedRunResult,
 } from './sandboxedRun.js';
-import { SYSTEM_TEMP_ROOT } from './sandboxPolicy.js';
 
 export const SELF_TEST_SCRATCH_PREFIX = 'aflow-self-test-';
 /** Long enough for Corepack to fetch a Yarn it has not cached. */
@@ -59,16 +58,16 @@ const LOOPBACK_ROUND_TRIP = [
 ].join('\n');
 
 /**
- * The shell probe writes its working directory to a file in the system
- * temporary directory and removes it, as a coding agent's shell does after
+ * The shell probe writes its working directory to a file in the temporary
+ * directory it is handed and removes it, as a coding agent's shell does after
  * every command.
  */
 export function openPostureProbes(): SelfTestProbe[] {
-  const cwdFile = join(SYSTEM_TEMP_ROOT, `${SELF_TEST_SCRATCH_PREFIX}${randomUUID()}-cwd`);
+  const cwdFile = `${SELF_TEST_SCRATCH_PREFIX}${randomUUID()}-cwd`;
   return [
     {
       name: 'a shell command exits 0',
-      argv: ['/bin/sh', '-c', 'pwd -P >"$1" && rm -f "$1"', 'sh', cwdFile],
+      argv: ['/bin/sh', '-c', 'pwd -P >"$TMPDIR/$1" && rm -f "$TMPDIR/$1"', 'sh', cwdFile],
     },
     { name: '`yarn --version` runs', argv: ['yarn', '--version'] },
     {

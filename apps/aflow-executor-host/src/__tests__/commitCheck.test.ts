@@ -28,11 +28,7 @@ import {
 } from '@aflow/schemas';
 
 import type { SandboxedRunInput, SandboxedRunResult } from '../sandboxedRun.js';
-import {
-  compileSandboxPolicy,
-  OPEN_ONLY_SANDBOX_OPTION,
-  SYSTEM_TEMP_ROOT,
-} from '../sandboxPolicy.js';
+import { compileSandboxPolicy, OPEN_ONLY_SANDBOX_OPTION } from '../sandboxPolicy.js';
 import { CONFINEMENT_LISTENERS, requires } from './fixtures/capabilities.js';
 
 const confined = requires(...CONFINEMENT_LISTENERS);
@@ -421,7 +417,7 @@ describe('host.commit.check — the receipt it leaves for the push', () => {
     const { receipt } = HostCommitCheckOutputSchema.parse(captured.output);
     expect(receipt).toBeDefined();
     const pushed = { bindingId: 'hb_app', sha: world.sha, base: world.base, receipt };
-    expect(() => requireCheckedPush({ ...pushed, argv: REPORTING })).not.toThrow();
+    expect(() => requireCheckedPush({ ...pushed, argv: REPORTING, posture: 'open' })).not.toThrow();
   });
 
   it('says so where they failed, and a push takes it for nothing', async () => {
@@ -436,6 +432,7 @@ describe('host.commit.check — the receipt it leaves for the push', () => {
         base: world.base,
         argv: FAILING,
         receipt,
+        posture: 'open',
       }),
     ).toThrow(expect.objectContaining({ refusal: 'check_failed' }));
   });
@@ -450,8 +447,42 @@ describe('host.commit.check — the receipt it leaves for the push', () => {
       expect(output.sandbox).toBe(sandbox);
       expect(JSON.parse(receiptBody(output.receipt ?? '')) as unknown[]).toContain(sandbox);
       const pushed = { bindingId: 'hb_app', sha: world.sha, base: world.base };
-      expect(requireCheckedPush({ ...pushed, argv: REPORTING, receipt: output.receipt })).toBe(
-        sandbox,
+      expect(
+        requireCheckedPush({
+          ...pushed,
+          argv: REPORTING,
+          receipt: output.receipt,
+          posture: sandbox,
+        }),
+      ).toBe(sandbox);
+    },
+  );
+
+  it.each([
+    ['open', 'confined'],
+    ['confined', 'open'],
+  ] as const)(
+    'clears no push once the folder has moved from `%s` to `%s` since its checks ran',
+    async (ranUnder, now) => {
+      const world = await fixture(
+        { branchPrefix: 'aflow/', checks: REPORTING },
+        { sandbox: ranUnder },
+      );
+      const { captured } = await check(world);
+      const { receipt } = HostCommitCheckOutputSchema.parse(captured.output);
+      const push = {
+        bindingId: 'hb_app',
+        sha: world.sha,
+        base: world.base,
+        argv: REPORTING,
+        receipt,
+        posture: now,
+      };
+      expect(() => requireCheckedPush(push)).toThrow(
+        expect.objectContaining({ refusal: 'check_other_posture' }),
+      );
+      expect(() => requireCheckedPush(push)).toThrow(
+        `\`hb_app\` runs its checks \`${now}\`, and its check receipt is for checks run \`${ranUnder}\``,
       );
     },
   );
@@ -487,7 +518,7 @@ describe("host.commit.check — the folder's sandbox posture", () => {
     });
   }
 
-  it('runs an `open` folder’s checks in the sandbox with the network open, writing only the checkout, the scratch and the temp root', async () => {
+  it('runs an `open` folder’s checks in the sandbox with the network open, writing only the checkout and the scratch its temporary directory is in', async () => {
     const world = await fixture({ branchPrefix: 'aflow/', checks: REPORTING }, { sandbox: 'open' });
     const { result } = await check(world);
     expect(result.status).toBe('SUCCEEDED');
@@ -498,10 +529,7 @@ describe("host.commit.check — the folder's sandbox posture", () => {
     expect(input.widening).toMatchObject({ writableRoot: input.cwd, withholdBindingWrite: true });
     const policy = compiled(input);
     expect(policy.network[OPEN_ONLY_SANDBOX_OPTION]).toBe(true);
-    expect(policy.filesystem.allowWrite).toEqual(
-      expect.arrayContaining([input.scratchDir, input.cwd, SYSTEM_TEMP_ROOT]),
-    );
-    expect(policy.filesystem.allowWrite).not.toContain(world.repo);
+    expect(policy.filesystem.allowWrite).toEqual([input.scratchDir, input.cwd]);
   });
 
   it('takes the default, `open`, for a folder that chose none', async () => {
@@ -524,7 +552,7 @@ describe("host.commit.check — the folder's sandbox posture", () => {
     expect(handed).toHaveLength(0);
   });
 
-  it('keeps a `confined` folder’s loopback, egress and temp root closed', async () => {
+  it('keeps a `confined` folder’s loopback and egress closed, writing what an `open` one writes', async () => {
     const world = await fixture(
       { branchPrefix: 'aflow/', checks: REPORTING },
       { sandbox: 'confined' },
@@ -539,7 +567,7 @@ describe("host.commit.check — the folder's sandbox posture", () => {
       deniedDomains: stackServiceDenials(stackServicesOf()),
     });
     expect(JSON.stringify(policy)).not.toContain(OPEN_ONLY_SANDBOX_OPTION);
-    expect(policy.filesystem.allowWrite).not.toContain(SYSTEM_TEMP_ROOT);
+    expect(policy.filesystem.allowWrite).toEqual([input.scratchDir, input.cwd]);
   });
 });
 

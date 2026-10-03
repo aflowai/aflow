@@ -15,7 +15,7 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { readFile, rm, writeFile } from 'node:fs/promises';
 import { constants } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -24,7 +24,7 @@ import { SandboxManager } from '@anthropic-ai/sandbox-runtime';
 
 import type { HostSandboxPosture } from '@aflow/schemas';
 
-import { buildBaseEnv, workloadHome } from './baseEnv.js';
+import { buildBaseEnv, createWorkloadDirs } from './baseEnv.js';
 import type { ExecutionPermitted, HostBinding } from './bindings.js';
 import { createStreamScrubber } from './credentialFetch.js';
 import { assertSafeEnv } from './envPolicy.js';
@@ -633,7 +633,7 @@ export async function spawnConfined(input: SpawnConfinedInput): Promise<Confined
 
   pruneExited(Date.now());
   const startedAt = new Date();
-  await mkdir(workloadHome(input.scratchDir), { recursive: true });
+  await createWorkloadDirs(input.scratchDir);
   const child = spawn(process.execPath, argv, {
     cwd: input.cwd,
     env: {
@@ -808,7 +808,7 @@ async function superviseSpawn(input: SupervisedSpawn): Promise<SandboxedRunResul
 
   // A detached run reports that it started; the handle carries the rest.
   if (detached) {
-    // The scratch holds the compiled policy the sandbox launcher reads, and is
+    // The scratch holds the compiled policy the sandbox launcher reads, and
     // this process's TMPDIR. A caller cannot clean it up on return the way it
     // does for a run it waited for, so ownership moves here.
     const cleanUp = (): void => {
@@ -929,7 +929,7 @@ export async function runSandboxed(input: SandboxedRunInput): Promise<SandboxedR
   });
   const settingsPath = join(input.scratchDir, 'srt-settings.json');
   await writeFile(settingsPath, JSON.stringify(policy), { mode: 0o600 });
-  await mkdir(workloadHome(input.scratchDir), { recursive: true });
+  await createWorkloadDirs(input.scratchDir);
 
   const statusPath = workloadStatusPath(input.scratchDir);
   return await superviseSpawn({

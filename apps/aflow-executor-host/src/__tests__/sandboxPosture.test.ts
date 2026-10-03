@@ -3,9 +3,10 @@
  * folder's sandbox posture (Plan 315 D19). It is `open` unless the operator
  * chose `confined`, the policy file holds it only when they did, and
  * `host.binding.inspect` shows it either way. Both postures are the sandbox:
- * `open` opens the network and the system temporary directory, and neither
- * lets a job read or write the machine's host directory, write the operator's
- * folder or its `.git`, or reach the stack's own services on loopback.
+ * `open` is `confined` with the network open, and neither lets a job read or
+ * write the machine's host directory, write the operator's folder or its
+ * `.git`, write `/tmp` or another job's scratch, or reach the stack's own
+ * services on loopback. A job writes the temporary directory it is handed.
  *
  * The handler suites stand in for the spawn and record what it is handed; the
  * last suite runs a command under each posture for real, where this machine
@@ -77,10 +78,13 @@ const {
   withSandboxPosture,
 } = await import('../sandboxPosture.js');
 const actual = await vi.importActual<typeof import('../sandboxedRun.js')>('../sandboxedRun.js');
-const { compileSandboxPolicy, OPEN_ONLY_SANDBOX_OPTION, SYSTEM_TEMP_ROOT } =
-  await import('../sandboxPolicy.js');
+const { compileSandboxPolicy, OPEN_ONLY_SANDBOX_OPTION } = await import('../sandboxPolicy.js');
+const { workloadTemp } = await import('../baseEnv.js');
 const { runOpenPostureSelfTest } = await import('../openPostureSelfTest.js');
 const { stackServiceDenials, stackServicesOf } = await import('../stackServices.js');
+
+/** Where the system keeps its temporary files, and on Linux every job's scratch. */
+const SYSTEM_TEMP = '/tmp';
 
 const RUNNING = {
   id: 'hb_app',
@@ -362,50 +366,67 @@ describe('what a posture compiles to', () => {
     },
   );
 
-  it('opens the network and the system temporary directory under `open` alone', () => {
+  it('opens the network under `open` alone, and writes exactly what `confined` writes', () => {
     const open = policyFor('open');
-    expect(open.network[OPEN_ONLY_SANDBOX_OPTION]).toBe(true);
-    expect(open.filesystem.allowWrite).toContain(SYSTEM_TEMP_ROOT);
-
     const confined = policyFor('confined');
+    expect(open.network[OPEN_ONLY_SANDBOX_OPTION]).toBe(true);
     expect(confined.network).toEqual({
       allowedDomains: [],
       deniedDomains: stackServiceDenials(stackServicesOf()),
     });
-    expect(confined.filesystem.allowWrite).not.toContain(SYSTEM_TEMP_ROOT);
+    expect(open.filesystem).toEqual(confined.filesystem);
   });
 
-  it('keeps a folder that lives in the system temporary directory unwritable under `open`', () => {
-    const root = join(SYSTEM_TEMP_ROOT, 'app');
-    const policy = compileSandboxPolicy(
-      { ...RUNNING, root, singleFile: false, sandbox: 'open' } as never,
-      {
-        home: HOME,
-        hostDir: HOST_DIR,
-        scratchDir: SCRATCH,
-        posture: 'open',
-        widening: {
-          authPaths: [],
-          allowedDomains: [],
-          writableRoot: CHECKOUT,
-          withholdBindingWrite: true,
+  it.each(['open', 'confined'] as const)(
+    'writes its own temporary directory under `%s`, and neither /tmp nor a concurrent job’s scratch there',
+    (posture) => {
+      // On Linux the system temporary directory holds every job's scratch, and
+      // a folder may live there too.
+      const ownScratch = join(SYSTEM_TEMP, 'aflow-harness-own');
+      const otherScratch = join(SYSTEM_TEMP, 'aflow-check-other');
+      const root = join(SYSTEM_TEMP, 'app');
+      const policy = compileSandboxPolicy(
+        { ...RUNNING, root, singleFile: false, sandbox: posture } as never,
+        {
+          home: HOME,
+          hostDir: HOST_DIR,
+          scratchDir: ownScratch,
+          posture,
+          widening: {
+            authPaths: [],
+            allowedDomains: [],
+            writableRoot: join(ownScratch, 'work'),
+            withholdBindingWrite: true,
+          },
         },
-      },
-    );
-    expect(policy.filesystem.allowWrite).toContain(SYSTEM_TEMP_ROOT);
-    expect(policy.filesystem.denyWrite).toContain(root);
-  });
+      );
+      const writable = (path: string): boolean =>
+        policy.filesystem.allowWrite.some(
+          (granted) => path === granted || path.startsWith(`${granted}/`),
+        );
+      expect(writable(workloadTemp(ownScratch))).toBe(true);
+      for (const refused of [
+        join(SYSTEM_TEMP, 'anything'),
+        join(otherScratch, 'work', 'README.md'),
+        join(otherScratch, 'srt-settings.json'),
+        join(root, 'README.md'),
+      ]) {
+        expect(writable(refused), refused).toBe(false);
+      }
+    },
+  );
 });
 
 /**
- * Each attempt a job could make on what the gates read or the operator owns,
- * and the two writes a coding agent needs. Run as `node -e` with the host
- * directory, the folder, the checkout and a temp-root path as its arguments.
+ * Each attempt a job could make on what the gates read, the operator owns or
+ * another job holds, and the two writes a coding agent needs. Run as `node -e`
+ * with the host directory, the folder, the checkout, a path in the system
+ * temporary directory and a concurrent job's scratch as its arguments.
  */
 const ATTEMPTS = [
   "const fs = require('fs');",
   "const path = require('path');",
-  'const [hostDir, root, checkout, tempProbe] = process.argv.slice(1);',
+  'const [hostDir, root, checkout, tempProbe, otherScratch] = process.argv.slice(1);',
   'const attempts = {',
   "  'rewrite the host policy': () => fs.writeFileSync(path.join(hostDir, 'host-policy.json'), '{}'),",
   "  'read the pairing credential': () => fs.readFileSync(path.join(hostDir, 'host.env'), 'utf8'),",
@@ -414,6 +435,9 @@ const ATTEMPTS = [
   "  'move a branch in its .git': () => fs.writeFileSync(path.join(root, '.git', 'refs', 'heads', 'main'), '0'.repeat(40)),",
   "  'write the checkout': () => fs.writeFileSync(path.join(checkout, 'made-by-the-agent.txt'), 'ok'),",
   "  'write the system temp root': () => { fs.writeFileSync(tempProbe, 'ok'); fs.rmSync(tempProbe); },",
+  "  'rewrite another job’s sandbox settings': () => fs.writeFileSync(path.join(otherScratch, 'srt-settings.json'), '{}'),",
+  "  'write another job’s checkout': () => fs.writeFileSync(path.join(otherScratch, 'work', 'made-by-the-agent.txt'), 'ok'),",
+  "  'write its own temporary directory': () => fs.writeFileSync(path.join(require('os').tmpdir(), 'made-by-the-agent.txt'), 'ok'),",
   '};',
   'const seen = {};',
   'for (const [name, attempt] of Object.entries(attempts)) {',
@@ -440,7 +464,9 @@ describe.each(['open', 'confined'] as const)('a command under `%s`, for real', (
   });
 
   it.skipIf(!CAN_CONFINE)(
-    confinable.title('reaches neither the machine’s trust configuration nor the operator’s folder'),
+    confinable.title(
+      'reaches neither the machine’s trust configuration, the operator’s folder, /tmp nor another job’s scratch',
+    ),
     async () => {
       const base = await mkdtemp(join(tmpdir(), 'posture-invariant-'));
       const hostDir = join(base, 'host');
@@ -455,6 +481,11 @@ describe.each(['open', 'confined'] as const)('a command under `%s`, for real', (
         await mkdir(dir, { recursive: true });
       }
       await mkdir(checkout, { recursive: true });
+      // A concurrent job's scratch, made where the executor makes every job's.
+      const otherScratch = await mkdtemp(join(tmpdir(), 'posture-other-job-'));
+      await mkdir(join(otherScratch, 'work'));
+      const otherSettings = JSON.stringify({ network: { allowedDomains: [] } });
+      await writeFile(join(otherScratch, 'srt-settings.json'), otherSettings);
       const policyText = JSON.stringify({ version: 1, bindings: [] });
       await writeFile(join(hostDir, 'host-policy.json'), policyText);
       await writeFile(join(hostDir, 'host.env'), 'REDIS_URL=redis://:paired@localhost:6379\n');
@@ -462,11 +493,11 @@ describe.each(['open', 'confined'] as const)('a command under `%s`, for real', (
       process.env['PHOENIX_HOST_DIR'] = hostDir;
       delete process.env['PHOENIX_HOST_POLICY_PATH'];
 
-      const tempProbe = join(SYSTEM_TEMP_ROOT, `posture-invariant-${String(process.pid)}`);
+      const tempProbe = join(SYSTEM_TEMP, `posture-invariant-${String(process.pid)}`);
       const result = await actual.runSandboxed({
         binding: { ...RUNNING, root, singleFile: false, sandbox: posture } as never,
         posture,
-        argv: [process.execPath, '-e', ATTEMPTS, hostDir, root, checkout, tempProbe],
+        argv: [process.execPath, '-e', ATTEMPTS, hostDir, root, checkout, tempProbe, otherScratch],
         cwd: checkout,
         env: {},
         timeoutMs: 60_000,
@@ -492,8 +523,14 @@ describe.each(['open', 'confined'] as const)('a command under `%s`, for real', (
         'plant a hook in its .git': 'refused',
         'move a branch in its .git': 'refused',
         'write the checkout': 'done',
-        'write the system temp root': posture === 'open' ? 'done' : 'refused',
+        'write the system temp root': 'refused',
+        'rewrite another job’s sandbox settings': 'refused',
+        'write another job’s checkout': 'refused',
+        'write its own temporary directory': 'done',
       });
+      expect(existsSync(join(workloadTemp(scratchDir), 'made-by-the-agent.txt'))).toBe(true);
+      expect(await readFile(join(otherScratch, 'srt-settings.json'), 'utf8')).toBe(otherSettings);
+      expect(existsSync(join(otherScratch, 'work', 'made-by-the-agent.txt'))).toBe(false);
       expect(await readFile(join(hostDir, 'host-policy.json'), 'utf8')).toBe(policyText);
       expect(existsSync(join(root, '.git', 'hooks', 'post-checkout'))).toBe(false);
     },
@@ -617,7 +654,7 @@ describe('the boot self-test of the `open` posture', () => {
       });
     }
     expect(sandboxed[0]?.argv[0]).toBe('/bin/sh');
-    expect(sandboxed[0]?.argv.at(-1)?.startsWith(SYSTEM_TEMP_ROOT)).toBe(true);
+    expect(sandboxed[0]?.argv[2]).toContain('"$TMPDIR/$1"');
     expect(sandboxed[1]?.argv).toEqual(['yarn', '--version']);
   });
 

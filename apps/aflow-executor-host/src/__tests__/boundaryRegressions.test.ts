@@ -11,7 +11,7 @@ import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { HostBindingError, HostBindingSchema, resolveWithin } from '../bindings.js';
-import { buildBaseEnv } from '../baseEnv.js';
+import { buildBaseEnv, WORKLOAD_TEMP_ENV_NAMES, workloadTemp } from '../baseEnv.js';
 import { createStreamScrubber } from '../credentialFetch.js';
 import { assertSafeEnv, EnvPolicyError } from '../envPolicy.js';
 import { createHostFileHandler } from '../handlers/fileHandlers.js';
@@ -352,9 +352,17 @@ describe('the executor own credentials do not travel into a workload', () => {
     }
   });
 
-  it('points TMPDIR at the run own scratch rather than inheriting the host one', () => {
-    const built = buildBaseEnv('/tmp/run-scratch', [], { TMPDIR: '/somewhere/else' });
-    expect(built['TMPDIR']).toBe('/tmp/run-scratch');
+  it('points every temporary-directory name at a directory inside the run scratch, inheriting none', () => {
+    const built = buildBaseEnv('/tmp/run-scratch', ['TMP', 'TEMP'], {
+      TMPDIR: '/somewhere/else',
+      TMP: '/tmp',
+      TEMP: '/tmp',
+      CLAUDE_CODE_TMPDIR: '/tmp',
+    });
+    expect(workloadTemp('/tmp/run-scratch')).toBe('/tmp/run-scratch/tmp');
+    for (const name of WORKLOAD_TEMP_ENV_NAMES) {
+      expect(built[name], name).toBe('/tmp/run-scratch/tmp');
+    }
   });
 
   it('gives the workload a home it may read, not the one that is denied', () => {

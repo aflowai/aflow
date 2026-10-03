@@ -30,6 +30,12 @@
  * itself still works. What keeps the machine's trust configuration and the
  * operator's own files from a job is the filesystem policy, the same under both.
  *
+ * That includes the system's `/tmp`, which neither posture lets a job write. On
+ * Linux every job's scratch lives there — its checkout, the policy and status
+ * files the sandbox reads for it — so a job able to write `/tmp` could write
+ * into another's, a `confined` folder's among them. A job writes the temporary
+ * directory it is handed instead, inside its own scratch (`baseEnv.ts`).
+ *
  * Under `confined`, loopback is the sandbox's own or nothing. On Linux the adapter
  * gives every process a network namespace of its own: a command binds, accepts
  * and connects on a loopback that holds only its own listeners, and the
@@ -41,7 +47,6 @@
  * command's own. So on macOS a confined command cannot listen on loopback at
  * all, and a test that serves itself there fails under the sandbox.
  */
-import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative, sep } from 'node:path';
 
@@ -72,29 +77,6 @@ export const FORBIDDEN_SANDBOX_OPTIONS = [
 
 /** Set only under `open`, whose loopback is the machine's but for the stack's own services. */
 export const OPEN_ONLY_SANDBOX_OPTION = 'allowLocalBinding';
-
-/**
- * The system's own temporary directory. A shell and much of a toolchain write
- * here whatever `TMPDIR` says — a coding agent's shell records its working
- * directory in a file here after every command — so under `confined` each of
- * those commands reads as failed. Under `open` it is writable.
- */
-export const SYSTEM_TEMP_ROOT = '/tmp';
-
-/**
- * The system temporary directory under each name it has: the adapter matches
- * paths as the kernel reports them, and on macOS `/tmp` is a link to
- * `/private/tmp`.
- */
-export function systemTempWritePaths(): string[] {
-  let resolved = SYSTEM_TEMP_ROOT;
-  try {
-    resolved = realpathSync(SYSTEM_TEMP_ROOT);
-  } catch {
-    // No `/tmp` on this machine: there is nothing there for a command to write.
-  }
-  return [...new Set([SYSTEM_TEMP_ROOT, resolved])];
-}
 
 function atOrUnder(path: string, dir: string): boolean {
   const rel = relative(dir, path);
@@ -221,9 +203,6 @@ export function compileSandboxPolicy(
   const outsideHostDir = (paths: readonly string[]): string[] =>
     paths.filter((path) => !atOrUnder(path, hostDir));
   const bindingWritable = binding.mode === 'readwrite' && widening?.withholdBindingWrite !== true;
-  // A folder under the system temporary directory would otherwise become
-  // writable with it.
-  const bindingWithheldUnderOpen = open && !bindingWritable ? [binding.root] : [];
 
   return {
     network: {
@@ -258,7 +237,6 @@ export function compileSandboxPolicy(
         ...scratch,
         ...writableRoot,
         ...(widening?.writePaths ?? []),
-        ...(open ? systemTempWritePaths() : []),
       ]),
       // Writing here is the escalation, and it is the only part that is.
       //
@@ -281,7 +259,6 @@ export function compileSandboxPolicy(
       // allow, and escalation out of it is not.
       denyWrite: [
         hostDir,
-        ...bindingWithheldUnderOpen,
         ...repositoryExecutableSurfaces(binding.root),
         ...writableRoot.flatMap((r) => repositoryExecutableSurfaces(r)),
         ...repositoryConfigUnder(binding.root),

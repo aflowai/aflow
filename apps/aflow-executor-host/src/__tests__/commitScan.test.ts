@@ -311,46 +311,65 @@ describe('the rules', () => {
     expect(endsInAllowComment(`value // ${SCAN_ALLOW_MARKER}`)).toBe(true);
   });
 
-  const LINEAR_LINE_BUDGET_MS = 2000;
   const MEGABYTE = 1024 * 1024;
-  const fill = (unit: string): string =>
-    unit.repeat(Math.ceil(MEGABYTE / unit.length)).slice(0, MEGABYTE);
-  const lines = [
-    fill('a'),
-    fill('token'),
-    fill("token='"),
-    'apiToken = "' + fill('a'),
-    fill('aws_secret_'),
-    fill('awssecret'),
-    fill('eyJ'),
-    fill('-eyJ'),
-    fill('eyJaaaaaaaaa.'),
-    fill('github_pat_'),
-    fill('-xoxb-'),
-    '-----BEGIN ' + fill('A '),
-    fill('AKIA' + 'QWERTYUIOPASDFGH/'),
-    fill('A_TOKEN_'),
-    fill(`token = "${'Ab_'.repeat(170)}" `),
-    fill('token='),
-    fill('token:'),
-    fill(`token: ${'Ab'.repeat(300)} `),
-    fill('# '),
-    fill("'"),
-    fill('" // '),
+  /** How many times longer the megabyte line is than the line it is measured against. */
+  const LINE_GROWTH = 10;
+  /** Linear time grows by `LINE_GROWTH`, quadratic by its square; this sits well between. */
+  const LINEAR_TIME_GROWTH_CEILING = 3 * LINE_GROWTH;
+  /** The fastest of several reads is the one a loaded machine interrupted least. */
+  const READS_PER_SIZE = 5;
+  const SCANNED_AS = ['bundle.js', '.env'];
+  /**
+   * A linear read of a megabyte line on a loaded machine, with room to spare.
+   * It bounds how long the test may run and decides nothing: a slow machine
+   * slows both lengths alike, so only the growth between them is the verdict.
+   */
+  const LOADED_MEGABYTE_READ_MS = 2000;
+  const fill = (unit: string, bytes: number): string =>
+    unit.repeat(Math.ceil(bytes / unit.length)).slice(0, bytes);
+  const shapes: readonly ((bytes: number) => string)[] = [
+    (bytes) => fill('a', bytes),
+    (bytes) => fill('token', bytes),
+    (bytes) => fill("token='", bytes),
+    (bytes) => 'apiToken = "' + fill('a', bytes),
+    (bytes) => fill('aws_secret_', bytes),
+    (bytes) => fill('awssecret', bytes),
+    (bytes) => fill('eyJ', bytes),
+    (bytes) => fill('-eyJ', bytes),
+    (bytes) => fill('eyJaaaaaaaaa.', bytes),
+    (bytes) => fill('github_pat_', bytes),
+    (bytes) => fill('-xoxb-', bytes),
+    (bytes) => '-----BEGIN ' + fill('A ', bytes),
+    (bytes) => fill('AKIA' + 'QWERTYUIOPASDFGH/', bytes),
+    (bytes) => fill('A_TOKEN_', bytes),
+    (bytes) => fill(`token = "${'Ab_'.repeat(170)}" `, bytes),
+    (bytes) => fill('token=', bytes),
+    (bytes) => fill('token:', bytes),
+    (bytes) => fill(`token: ${'Ab'.repeat(300)} `, bytes),
+    (bytes) => fill('# ', bytes),
+    (bytes) => fill("'", bytes),
+    (bytes) => fill('" // ', bytes),
   ];
+  const fastestRead = (line: string): number => {
+    let fastest = Number.POSITIVE_INFINITY;
+    for (let read = 0; read < READS_PER_SIZE; read += 1) {
+      const started = performance.now();
+      for (const file of SCANNED_AS) scanLine(file, line);
+      fastest = Math.min(fastest, performance.now() - started);
+    }
+    return fastest;
+  };
 
   it(
     'reads a line of a megabyte in linear time, whatever it is made of',
     () => {
-      for (const line of lines) {
-        const started = performance.now();
-        for (const file of ['bundle.js', '.env']) scanLine(file, line);
-        // A quadratic rule takes minutes here; a linear one, milliseconds.
-        expect(performance.now() - started, line.slice(0, 24)).toBeLessThan(LINEAR_LINE_BUDGET_MS);
+      for (const shape of shapes) {
+        const short = fastestRead(shape(Math.floor(MEGABYTE / LINE_GROWTH)));
+        const long = fastestRead(shape(MEGABYTE));
+        expect(long / short, shape(24)).toBeLessThan(LINEAR_TIME_GROWTH_CEILING);
       }
     },
-    // Every line's budget, for each file name: only a quadratic rule runs out of time.
-    lines.length * LINEAR_LINE_BUDGET_MS * 2,
+    shapes.length * READS_PER_SIZE * LOADED_MEGABYTE_READ_MS * (1 + 1 / LINE_GROWTH),
   );
 
   it('finds nothing in this repository', async () => {

@@ -1,8 +1,9 @@
 /**
  * Contract: a push from a folder that declares checks goes out only with the
  * receipt of those checks passing, on this executor, on exactly the commit it
- * sends, against the base it measures, as the folder declares them when it
- * pushes — whatever ordered the tasks that led to it. A folder that declares
+ * sends, against the base it measures, as the folder declares them and under
+ * the posture it declares when it pushes — whatever ordered the tasks that led
+ * to it. A folder that declares
  * none needs no receipt, and a push from it that carries one is refused.
  *
  * Every push here goes through the handler to a real bare `origin`, so a
@@ -64,7 +65,10 @@ describe('a push carries the receipt of the folder’s checks passing', () => {
     return (await execFileAsync('git', ['-C', repo, ...args])).stdout.trim();
   }
 
-  async function writePolicy(checks: readonly string[]): Promise<void> {
+  async function writePolicy(
+    checks: readonly string[],
+    sandbox?: HostSandboxPosture,
+  ): Promise<void> {
     const binding = (id: string, declared?: readonly string[]) => ({
       id,
       root: repo,
@@ -73,6 +77,7 @@ describe('a push carries the receipt of the folder’s checks passing', () => {
       branchPolicy: { branchPrefix: 'aflow/', ...(declared ? { checks: declared } : {}) },
       singleFile: false,
       spaceId: 'space-test',
+      ...(sandbox !== undefined ? { sandbox } : {}),
     });
     await writeFile(
       policyPath,
@@ -261,14 +266,29 @@ describe('a push carries the receipt of the folder’s checks passing', () => {
 
   it('records with the push the posture its checks ran under, as the receipt carries it', async () => {
     for (const sandbox of ['open', 'confined'] as const) {
+      await writePolicy(CHECKS, sandbox);
       const branch = `checked-${sandbox}`;
       const { status, captured } = await push(branch, { receipt: checkReceipt({ sandbox }) });
       expect(status, branch).toBe('SUCCEEDED');
       expect(captured.output?.['checkedUnder'], branch).toBe(sandbox);
     }
+    await writePolicy(CHECKS);
     const unchecked = await push('unchecked-posture', undefined, 'hb_unchecked');
     expect(unchecked.status).toBe('SUCCEEDED');
     expect(unchecked.captured.output).not.toHaveProperty('checkedUnder');
+  }, 60_000);
+
+  it('refuses the receipt of checks run `open` once the folder is `confined`, by name', async () => {
+    await writePolicy(CHECKS, 'confined');
+    try {
+      await expectRefused(
+        'checked-then-confined',
+        push('checked-then-confined', { receipt: checkReceipt({ sandbox: 'open' }) }),
+        '`hb_checked` runs its checks `confined`, and its check receipt is for checks run `open`',
+      );
+    } finally {
+      await writePolicy(CHECKS);
+    }
   }, 60_000);
 
   it('pushes from a folder that declares no checks with no receipt', async () => {
