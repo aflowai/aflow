@@ -173,6 +173,32 @@ Then run a coding skill: ask to open a PR for a change → review it → fix →
 };
 
 // ============================================================================
+// local-commission — have the machine's coding agent make a change
+// ============================================================================
+
+const LOCAL_COMMISSION_BUNDLE: SkillBundleInput = {
+  bundleId: 'local-commission' as SkillBundleId,
+  version: 1,
+  name: 'Local Commission',
+  tagline: "Have the machine's own coding agent make a change in a connected repository.",
+  description: `Installs **Commission Change** — a brief handed to the coding agent already installed on the machine, carried out in an isolated checkout of a repository connected as a folder, with the change returned as a stored patch.
+
+**What it installs**:
+- The **Commission Change** skill — one task that starts the checkout at the base the brief names, merges \`origin/<base>\` first where the brief asks, and returns the patch with the base it was made against, the merge it carries, whether it still applies, and the session a further turn continues. The connected folder's working tree is never touched, and nothing is committed or pushed.
+
+**After install**: connect the repository as a folder, then commission a change with a brief. A commission runs for tens of minutes: start it with \`wait: 'none'\` and its end wakes the conversation. Publishing the patch is Local Publish.`,
+  tags: ['coding', 'commission', 'local', 'developer-tools'],
+  skillCatalogIds: ['commission-change'],
+  prerequisiteBundleIds: [],
+  apiDefinitions: [],
+  apiBindingTemplates: [],
+  memorySeed: [],
+  helmsmanHints: [
+    "A brief names the checks the coding agent runs, and they are the folder's own — its tests, type check, linter and formatter. The folder's declared checks run only once the patch is published.",
+  ],
+};
+
+// ============================================================================
 // local-code-review — review committed changes in a connected repository
 // ============================================================================
 
@@ -254,6 +280,7 @@ const RAW_BUNDLES: readonly SkillBundleInput[] = [
   ALPACA_THESIS_TRADING,
   KAGGLE_COMPETITION_BUNDLE,
   CODING_PR_LOOP_BUNDLE,
+  LOCAL_COMMISSION_BUNDLE,
   LOCAL_CODE_REVIEW_BUNDLE,
   LOCAL_PUBLISH_BUNDLE,
   TICKER_DIGEST,

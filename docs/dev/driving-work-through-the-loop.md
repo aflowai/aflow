@@ -15,7 +15,7 @@ built and where its gaps are logged; the gaps that still bind are listed at the 
 | Connected folder | binding `hb_aflow` = `~/localhd/aflow`, branch prefix `aflow/`                              |
 | Push posture     | `unless-unreviewed`: a clean scan plus a child review `approve` pushes without asking       |
 | Folder checks    | `node scripts/verify-commit.mjs`, declared on `hb_aflow`; run by every publication first    |
-| Coding agent     | `host.harness.run`, model `claude-opus-5-5`                                                 |
+| Commission       | the catalog's Commission Change, on `host.harness.run`, model `claude-opus-5-5`             |
 | Review           | the catalog's Local Code Review, over `origin/<base>..<sha>`                                |
 | Publication      | the catalog's Local Publish, by `patchRef`, onto `aflow/<branch>`                           |
 | Pull requests    | opened through the space's GitHub binding; merged by the operator                           |
@@ -27,10 +27,16 @@ another stream's runs.
 
 ## A round
 
-1. **Brief Helmsman**, one message, numbered. Part 1 is the commission: the binding, the
-   model, `base` (`origin/main` for new work, the branch's name for a fix appended to an
-   open pull request), then the findings or the slice to build, each with the file, the
-   line where it is known, what is wrong and what right looks like, and the tests to add.
+1. **Brief Helmsman**, one message, numbered. Part 1 is the commission: a run of the
+   catalog's Commission Change started with `wait: 'none'`, so the conversation stays free
+   and the commission's end wakes it with `patchRef`, `baseSha`, `merge` and `sessionRef`.
+   Its inputs are the binding, the model, `base` (`origin/main` for new work, the branch's
+   name for a fix appended to an open pull request, with `mergeFrom: origin/main` where
+   `main` has moved past it), and `task`: the findings or the slice to build, each with
+   the file, the line where it is known, what is wrong and what right looks like, and the
+   tests to add. Its two hours and several hundred turns are sized for a slice; name
+   `timeoutMs` or `maxTurns` only to change them. Several commissions may run at once,
+   within what the machine carries (below).
    The checks the agent must run are named in the brief, because the folder's checks
    only run once the commission is published: `yarn test:file` on touched and added tests, `npx tsc -p` per touched
    workspace, the two CI guards (`scripts/large-files/cli.ts check`,
@@ -38,7 +44,8 @@ another stream's runs.
 --write` with the `--check` output in the result. The standing rules go in too: comments
    only for non-obvious whys, copy in the system's voice, no shims, nothing written under
    `.aflow/` but the result file, and the agent starts or stops no process. Part 2 is the
-   publication: by `patchRef`, `baseSha` the commission's, `base: main`, the branch, owner
+   publication, started once the commission's end has woken the conversation: by
+   `patchRef`, `baseSha` the commission's, `mergeFrom` its `merge.from` where it merged, `base: main`, the branch, owner
    and repository, the title, started with `wait: 'none'`, and the run id reported back.
    For a branch that already has a pull request, name its number for the 422.
 2. **Read the review**: `workflow.run.detail` on the child review run gives the verdict and

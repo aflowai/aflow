@@ -84,6 +84,12 @@ export type HostPushApproval = z.infer<typeof HostPushApprovalSchema>;
 export const HOST_CHECKS_MAX_ARGS = 64;
 export const HOST_CHECK_ARG_MAX_LENGTH = 4096;
 
+export const HOST_HARNESS_TASK_MAX_LENGTH = 32_000;
+export const HOST_HARNESS_TIMEOUT_MIN_MS = 1_000;
+export const HOST_HARNESS_TIMEOUT_DEFAULT_MS = 30 * 60_000;
+/** The longest a coding agent runs, and so the longest any host step runs. */
+export const HOST_HARNESS_TIMEOUT_MAX_MS = 2 * 60 * 60_000;
+
 /**
  * How long a folder's checks run when the operator chose no time. A type-check,
  * the builds a test needs and a scoped test run take minutes on a laptop; the
@@ -91,7 +97,7 @@ export const HOST_CHECK_ARG_MAX_LENGTH = 4096;
  */
 export const HOST_CHECKS_TIMEOUT_DEFAULT_MS = 30 * 60_000;
 /** The longest a host step runs at all — a coding agent's ceiling — so a check is never the outlier. */
-export const HOST_CHECKS_TIMEOUT_MAX_MS = 2 * 60 * 60_000;
+export const HOST_CHECKS_TIMEOUT_MAX_MS = HOST_HARNESS_TIMEOUT_MAX_MS;
 export const HOST_CHECKS_TIMEOUT_MIN_MS = 60_000;
 
 export const HostChecksSchema = z
@@ -732,7 +738,7 @@ const HostHarnessRunInputObjectSchema = z.object({
   task: z
     .string()
     .min(1)
-    .max(32_000)
+    .max(HOST_HARNESS_TASK_MAX_LENGTH)
     .describe('What the harness should do, in prose. Passed through verbatim as one argument.'),
   inputs: z
     .preprocess(coerceJsonObjectArg, z.record(z.unknown()))
@@ -821,9 +827,9 @@ const HostHarnessRunInputObjectSchema = z.object({
   timeoutMs: z
     .number()
     .int()
-    .min(1_000)
-    .max(7_200_000)
-    .default(1_800_000)
+    .min(HOST_HARNESS_TIMEOUT_MIN_MS)
+    .max(HOST_HARNESS_TIMEOUT_MAX_MS)
+    .default(HOST_HARNESS_TIMEOUT_DEFAULT_MS)
     .describe('Kill the harness and its descendants after this long.'),
 });
 

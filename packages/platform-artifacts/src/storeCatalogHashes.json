@@ -99,6 +99,10 @@
     "version": 7,
     "contentHash": "cd6f27ade9b8f319bd43cafed7e48afffb8412148560638f5181fabb505f8815"
   },
+  "local-commission": {
+    "version": 1,
+    "contentHash": "35998b7e73fb024809520f7738c4f169e18858a800d924baf195f43e6648a90a"
+  },
   "local-publish": {
     "version": 19,
     "contentHash": "f057649642c86d22709bc6857f26ce78ecbd460a244815a075fe83d47a60295a"
