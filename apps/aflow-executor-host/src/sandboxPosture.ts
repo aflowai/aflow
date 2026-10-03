@@ -33,14 +33,15 @@ export function describeSandboxPosture(posture: HostSandboxPosture): string {
   switch (posture) {
     case 'open':
       return (
-        'runs its coding agents and checks exactly as `confined` does, with the network open — ' +
-        "every host and every local server but the stack's own — and each job's own " +
-        'temporary directory writable'
+        "runs its coding agents and checks inside this machine's sandbox with the network open, " +
+        'as Claude Code runs with every domain allowed: every host but this machine, whose ' +
+        'local servers stay out of reach'
       );
     case 'confined':
       return (
-        "runs its coding agents and checks inside this machine's sandbox, reaching only the " +
-        'hosts a coding agent is allowed and none of its local servers'
+        "runs its coding agents and checks inside this machine's sandbox as Codex CLI's " +
+        'workspace-write default does, with no network but the hosts a coding agent is ' +
+        'allowed, and none of its local servers'
       );
   }
 }

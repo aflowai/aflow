@@ -93,8 +93,8 @@ const { noPushApprovals } = await import('./fixtures/pushApprovals.js');
 const { prepareWorktree, removeWorktree } = await import('../worktree.js');
 
 const SCRIPTS = fileURLToPath(new URL('../../../../scripts/', import.meta.url));
-/** The check and the module it selects tests with. */
-const CHECK_SCRIPTS = ['verify-commit.mjs', 'test-selection.mjs'];
+/** The check, the module it selects tests with and the one it counts listener tests with. */
+const CHECK_SCRIPTS = ['verify-commit.mjs', 'test-selection.mjs', 'listener-tests.mjs'];
 const CHECKS = [process.execPath, 'scripts/verify-commit.mjs'];
 const COMPILER_OPTIONS = { strict: true, module: 'nodenext', types: [] };
 

@@ -205,6 +205,7 @@ describe('dependencies in the isolated checkout', () => {
 
   it.skipIf(!sandboxAvailable() || confined.skip)(
     confined.title('lets a confined harness read through the link and refuses it the write'),
+    { tags: ['listener'], timeout: 120_000 },
     async () => {
       // The property the link rests on: the sandbox grants writes to the
       // worktree by path, and a write through the link lands on the operator's
@@ -250,6 +251,5 @@ describe('dependencies in the isolated checkout', () => {
 
       await removeWorktree(repo, wt.path);
     },
-    120_000,
   );
 });

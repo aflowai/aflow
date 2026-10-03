@@ -9,56 +9,44 @@
  * outside home stay readable, and the operator is told so; what keeps their
  * contents on the machine is the egress policy, not the read policy.
  *
- * Four adapter options void the contract, so nothing here can set them:
+ * Five adapter options void the contract, so nothing here can set them:
  * `allowAppleEvents` removes code-execution isolation, `enableWeakerNetworkIsolation`
  * opens an exfiltration path through the trust daemon, `enableWeakerNestedSandbox`
- * exists to make the sandbox work inside Docker and materially weakens it, and
+ * exists to make the sandbox work inside Docker and materially weakens it,
  * allowing a Unix socket hands over whatever listens on it — all-or-nothing on
- * Linux, so permitting the SSH agent would also expose the Docker socket. A test
+ * Linux, so permitting the SSH agent would also expose the Docker socket — and
+ * `allowLocalBinding` hands over whatever listens on loopback the same way. A test
  * asserts every compiled policy is free of them rather than trusting this comment.
  *
- * `allowLocalBinding` hands over whatever listens on loopback the same way, so
- * only the `open` posture sets it, and never alone. The machine's loopback
- * holds the stack's own services — its Redis, which takes no password and holds
- * run state and the write-approval grants the push gate reads, its database,
- * its API and its web application — and code a coding agent wrote that reaches
- * Redis can mint the grant that clears its own push. So under both postures the
- * policy denies each of their ports by name (`stackServices.ts`), and under
- * `open` the launcher refuses those ports on every address this machine answers
- * on and, on macOS, where loopback is reached without the proxy, in the profile
- * itself. Every other loopback port stays admitted, so a test that serves
- * itself still works. What keeps the machine's trust configuration and the
+ * So the policy is the same under both postures; what `open` changes is the
+ * launcher, which admits every host off the list but this machine's
+ * (`openSandboxLauncher.mjs`). The machine's loopback is never a job's: it holds
+ * listeners no list of ports can name — the stack's Redis, which takes no
+ * password and holds the write-approval grants the push gate reads, an MCP
+ * server that hands the owner's key to a session bringing none, an admin tool
+ * published without a login. On Linux the adapter gives every process a network
+ * namespace of its own: a command binds, accepts and connects on a loopback that
+ * holds only its own listeners. On macOS there is no such namespace, and the
+ * profile's only loopback grant would admit every localhost port, so a command
+ * there cannot listen on loopback at all, and a test that serves itself fails
+ * under the sandbox.
+ *
+ * Neither posture lets a job write the system's `/tmp`. On Linux every job's
+ * scratch lives there — its checkout, the policy and status files the sandbox
+ * reads for it — so a job able to write `/tmp` could write into another's. A
+ * job writes the temporary directory it is handed instead, inside its own
+ * scratch (`baseEnv.ts`). What keeps the machine's trust configuration and the
  * operator's own files from a job is the filesystem policy, the same under both.
- *
- * That includes the system's `/tmp`, which neither posture lets a job write. On
- * Linux every job's scratch lives there — its checkout, the policy and status
- * files the sandbox reads for it — so a job able to write `/tmp` could write
- * into another's, a `confined` folder's among them. A job writes the temporary
- * directory it is handed instead, inside its own scratch (`baseEnv.ts`).
- *
- * Under `confined`, loopback is the sandbox's own or nothing. On Linux the adapter
- * gives every process a network namespace of its own: a command binds, accepts
- * and connects on a loopback that holds only its own listeners, and the
- * machine's — the stack's Redis, which takes no password and holds run state
- * and write-approval grants, its Postgres, its API — are not there to reach. On
- * macOS there is no such namespace. Bind and accept are local, but the
- * profile's only loopback grant also admits a connection to every localhost
- * port, and a sandbox profile can name one port or all of them, never the
- * command's own. So on macOS a confined command cannot listen on loopback at
- * all, and a test that serves itself there fails under the sandbox.
  */
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative, sep } from 'node:path';
 
-import type { HostSandboxPosture } from '@aflow/schemas';
-
 import type { HostBinding } from './bindings.js';
 import { resolveHostDir } from './hostDir.js';
-import { type StackService, stackServiceDenials, stackServicesOf } from './stackServices.js';
 
 /** Only the fields this compiler sets. The adapter's own schema validates the rest. */
 export interface CompiledSandboxPolicy {
-  network: { allowedDomains: string[]; deniedDomains: string[]; allowLocalBinding?: true };
+  network: { allowedDomains: string[]; deniedDomains: string[] };
   filesystem: {
     denyRead: string[];
     allowRead: string[];
@@ -73,10 +61,8 @@ export const FORBIDDEN_SANDBOX_OPTIONS = [
   'enableWeakerNetworkIsolation',
   'enableWeakerNestedSandbox',
   'allowUnixSockets',
+  'allowLocalBinding',
 ] as const;
-
-/** Set only under `open`, whose loopback is the machine's but for the stack's own services. */
-export const OPEN_ONLY_SANDBOX_OPTION = 'allowLocalBinding';
 
 function atOrUnder(path: string, dir: string): boolean {
   const rel = relative(dir, path);
@@ -182,17 +168,12 @@ export function compileSandboxPolicy(
     widening?: SandboxWidening;
     /** Where the machine says the operator's tools live. Read-only. */
     toolPaths?: readonly string[];
-    /** What the folder runs under. A command no folder posture governs is `confined`. */
-    posture?: HostSandboxPosture;
     /** The machine's host directory; resolved as the executor resolves it when absent. */
     hostDir?: string;
-    /** The stack's own services; read from what the lane holds when absent. */
-    stackServices?: readonly StackService[];
   } = { scratchDir: '' },
 ): CompiledSandboxPolicy {
   const home = options.home ?? homedir();
   const hostDir = options.hostDir ?? resolveHostDir(process.env, home);
-  const open = options.posture === 'open';
   const scratch = options.scratchDir ? [options.scratchDir] : [];
   const widening = options.widening;
   const writableRoot = widening?.writableRoot ? [widening.writableRoot] : [];
@@ -208,12 +189,9 @@ export function compileSandboxPolicy(
     network: {
       // No egress until something declares one. A command that reaches the
       // network finds it closed rather than open-by-default. Under `open` the
-      // launcher admits every host this list does not name, and every loopback
-      // port but the stack's own services', which are denied here whatever a
-      // profile allows.
+      // launcher admits every host this list does not name but this machine.
       allowedDomains: [...(widening?.allowedDomains ?? [])],
-      deniedDomains: stackServiceDenials(options.stackServices ?? stackServicesOf()),
-      ...(open ? { [OPEN_ONLY_SANDBOX_OPTION]: true as const } : {}),
+      deniedDomains: [],
     },
     filesystem: {
       denyRead: [

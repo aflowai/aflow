@@ -67,7 +67,10 @@ scripts/verify-commit.mjs`), and Local Publish runs it after the commit and befo
    summary, with every test of the touched workspaces and of each workspace that reads a
    touched package whose imports reach a touched file, so a contract change meets its
    consumers before the push — such a package built first, such an application's build
-   reported skipped by name — the catalog guards when `platform-artifacts` is touched and never a `*.pg.test.ts`; ESLint,
+   reported skipped by name — the catalog guards when `platform-artifacts` is touched and never a `*.pg.test.ts`;
+   on macOS, where the sandbox gives a test no loopback, less the tests tagged `listener`,
+   each named as skipped with one line saying CI runs them, their count carried in the
+   check's receipt; ESLint,
    errors only, on touched sources; and Prettier on every touched file. A failure fails
    the publication with the end of what it printed and nothing pushed: read it on the
    `check-commit` task, and commission the fix onto the branch. The pull request's CI
@@ -82,20 +85,22 @@ review may still send back.
 
 A commission, a review and the folder's checks run inside the machine's sandbox under the
 folder's sandbox posture (Plan 315 D19), which `host.binding.inspect` shows. The posture is
-what the network is. `open`, the default, opens it: every host and every loopback port but the
-stack's own services' — its Redis, its database, its API and its web application — so the agent's
-own search and fetch, Corepack, `yarn` and the registry work, and a test that serves itself
-on loopback passes. Apart from the network, `open` is exactly `confined`: each job writes a
-temporary directory of its own, where a shell records its working directory after every
-command, and not the system's `/tmp`, where other jobs' checkouts live. `confined` keeps the
-network closed: a coding agent
-reaches only the hosts it was allowed (`aflow harness allow`), the checks reach no network,
-and loopback is the sandbox's own on Linux and closed on macOS. Under both, a job writes its
-checkout and nothing of the folder or its `.git`, and cannot read or write `~/.aflow/`,
-where the policy every gate reads and the pairing credential live, nor reach the stack's
-services, where the push gate reads its approvals. Agent configuration
-files such as `.mcp.json` stay protected under both. The executor's boot log says whether a
-shell command, `yarn --version` and a loopback server work under `open` on this machine.
+what the network is. `open`, the default, is the sandbox the operator's own coding tool runs
+under with every domain allowed — Claude Code's: every host but this machine, so the agent's
+own search and fetch, Corepack, `yarn` and the registry work. `confined` is the
+workspace-write default of the other — Codex CLI's: the network off, a coding agent reaching
+only the hosts it was allowed (`aflow harness allow`) and the checks none. Loopback to the
+machine is never a job's under either: no list of ports could keep the stack's Redis, its MCP
+server or the admin tools `yarn infra:tools` publishes out of reach, so none is kept. A job's
+loopback is its own on Linux and absent on macOS, so a test that serves itself passes under
+the check on Linux and cannot listen on macOS, where the check leaves it out (above). Under
+both, each job writes a temporary directory of its own, where a shell records its working
+directory after every command, and not the system's `/tmp`, where other jobs' checkouts
+live; it writes its checkout and nothing of the folder or its `.git`, and cannot read or
+write `~/.aflow/`, where the policy every gate reads and the pairing credential live. Agent
+configuration files such as `.mcp.json` stay protected under both. The executor's boot log
+says whether a shell command and `yarn --version` work under `open` on this machine, and
+whether a listener on the machine's loopback stays out of reach.
 Choose on the machine with `aflow harness sandbox <folder> open|confined`; `hb_aflow` chose
 none, so it takes the default, `open`. A push takes a check receipt only from checks run under the
 folder's posture as it pushes, so a commit checked before the posture changed is checked again.

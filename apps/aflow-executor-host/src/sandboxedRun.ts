@@ -918,12 +918,10 @@ export async function runSandboxed(input: SandboxedRunInput): Promise<SandboxedR
   // dangerous variables would act on.
   assertSafeEnv(input.env);
 
-  const posture = input.posture ?? 'confined';
   // The policy lives outside the binding: a command that could rewrite the
   // file bounding it would not be bounded by it.
   const policy = compileSandboxPolicy(input.binding, {
     scratchDir: input.scratchDir,
-    posture,
     ...(input.widening ? { widening: input.widening } : {}),
     ...(input.toolPaths ? { toolPaths: input.toolPaths } : {}),
   });
@@ -937,7 +935,12 @@ export async function runSandboxed(input: SandboxedRunInput): Promise<SandboxedR
     program: process.execPath,
     // Argv all the way through: both launchers take the command as varargs,
     // so nothing between here and exec has to split or quote a string.
-    args: confinedArgv(sandboxLauncher(posture), settingsPath, statusPath, input.argv),
+    args: confinedArgv(
+      sandboxLauncher(input.posture ?? 'confined'),
+      settingsPath,
+      statusPath,
+      input.argv,
+    ),
     statusPath,
     // Named inheritance, never the executor's whole environment: that
     // environment holds the credentials this executor was paired with.
@@ -952,7 +955,8 @@ export async function runSandboxed(input: SandboxedRunInput): Promise<SandboxedR
 
 /**
  * The adapter's own command line for `confined`, which refuses every host the
- * policy does not name; for `open`, the launcher that admits them.
+ * policy does not name; for `open`, the launcher that admits every one of them
+ * but this machine.
  *
  * Resolved from this module, not the working directory. An executor installed
  * on the operator's machine is started from wherever they happen to be, and a

@@ -1,16 +1,19 @@
 /**
  * What the lane proves at boot about the `open` posture (Plan 315 D19): that
- * inside it a shell command exits 0, `yarn --version` runs and a loopback
- * server is reachable — the three things the sandbox refused a coding agent
- * before the posture opened them (F84, F85, F82). Measured on this machine,
- * through the spawn every coding agent and check takes, because what the
- * sandbox admits depends on the operating system and the toolchain it finds.
+ * inside it a shell command exits 0 and `yarn --version` runs — two things the
+ * sandbox refused a coding agent before the posture opened the network (F84,
+ * F85) — and that a listener on the machine's loopback stays out of reach,
+ * which is what the posture must never open. Measured on this machine, through
+ * the spawn every coding agent and check takes, because what the sandbox
+ * admits depends on the operating system and the toolchain it finds.
  *
  * A failure is reported, not fatal: the lane still serves files, commands and
  * `confined` folders, and the operator reads which probe failed and why.
  */
 import { randomUUID } from 'node:crypto';
+import { once } from 'node:events';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { type AddressInfo, createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -43,26 +46,50 @@ export interface SelfTestOutcome {
 }
 
 /**
- * A server on loopback and a connection to it, in one process: what a test
- * that serves itself does.
+ * Connections to a listener on the machine's loopback, its port the script's
+ * argument: directly and through the sandbox's proxy, each by address and by
+ * name. Prints what each attempt met, and exits 0 only when none reached it.
  */
-const LOOPBACK_ROUND_TRIP = [
+export const MACHINE_LOOPBACK_REACH = [
   "const net = require('net');",
-  "const server = net.createServer((socket) => socket.end('pong'));",
-  "server.listen(0, '127.0.0.1', () => {",
-  "  net.connect(server.address().port, '127.0.0.1')",
-  "    .on('data', (data) => { process.stdout.write(String(data)); process.exit(0); })",
-  "    .on('error', (error) => { process.stderr.write(error.code ?? error.message); process.exit(1); });",
+  "const http = require('http');",
+  'const port = Number(process.argv[1]);',
+  'const direct = (host) => new Promise((resolve) => {',
+  '  const socket = net.connect(port, host);',
+  "  socket.on('connect', () => { socket.destroy(); resolve('reached'); });",
+  "  socket.on('error', (error) => resolve(error.code ?? 'refused'));",
   '});',
-  "server.on('error', (error) => { process.stderr.write(error.code ?? error.message); process.exit(1); });",
+  'const proxied = (host) => new Promise((resolve) => {',
+  '  const proxy = process.env.HTTP_PROXY ?? process.env.http_proxy;',
+  "  if (proxy === undefined) { resolve('no proxy'); return; }",
+  '  const url = new URL(proxy);',
+  "  const headers = url.username === '' ? {} : { 'Proxy-Authorization': 'Basic ' +",
+  "    Buffer.from(decodeURIComponent(url.username) + ':' + decodeURIComponent(url.password)).toString('base64') };",
+  "  const request = http.request({ host: url.hostname, port: url.port, method: 'CONNECT', path: host + ':' + port, headers });",
+  "  request.on('connect', (response, socket) => { socket.destroy(); resolve(response.statusCode === 200 ? 'reached' : String(response.statusCode)); });",
+  "  request.on('response', (response) => resolve(String(response.statusCode)));",
+  "  request.on('error', (error) => resolve(error.code ?? 'refused'));",
+  '  request.end();',
+  '});',
+  '(async () => {',
+  '  const seen = {',
+  "    directly: await direct('127.0.0.1'),",
+  "    'directly by name': await direct('localhost'),",
+  "    'through the proxy': await proxied('127.0.0.1'),",
+  "    'through the proxy by name': await proxied('localhost'),",
+  '  };',
+  '  console.log(JSON.stringify(seen));',
+  "  process.exit(Object.values(seen).includes('reached') ? 1 : 0);",
+  '})();',
 ].join('\n');
 
 /**
  * The shell probe writes its working directory to a file in the temporary
  * directory it is handed and removes it, as a coding agent's shell does after
- * every command.
+ * every command. The loopback probe reaches for the port of a listener the
+ * self-test holds outside the sandbox.
  */
-export function openPostureProbes(): SelfTestProbe[] {
+export function openPostureProbes(machinePort: number): SelfTestProbe[] {
   const cwdFile = `${SELF_TEST_SCRATCH_PREFIX}${randomUUID()}-cwd`;
   return [
     {
@@ -71,8 +98,8 @@ export function openPostureProbes(): SelfTestProbe[] {
     },
     { name: '`yarn --version` runs', argv: ['yarn', '--version'] },
     {
-      name: 'a loopback server is reachable',
-      argv: [process.execPath, '-e', LOOPBACK_ROUND_TRIP],
+      name: "a listener on the machine's loopback is out of reach",
+      argv: [process.execPath, '-e', MACHINE_LOOPBACK_REACH, String(machinePort)],
     },
   ];
 }
@@ -82,7 +109,11 @@ export async function runOpenPostureSelfTest(
   run: Spawn = runUnderFolderPosture,
 ): Promise<SelfTestOutcome[]> {
   const scratch = await mkdtemp(join(tmpdir(), SELF_TEST_SCRATCH_PREFIX));
+  const machine = createServer((socket) => socket.end());
   try {
+    machine.listen(0, '127.0.0.1');
+    await once(machine, 'listening');
+    const machinePort = (machine.address() as AddressInfo).port;
     const root = join(scratch, 'folder');
     const checkout = join(scratch, 'checkout');
     await mkdir(root, { recursive: true });
@@ -96,11 +127,12 @@ export async function runOpenPostureSelfTest(
       sandbox: 'open',
     };
     const outcomes: SelfTestOutcome[] = [];
-    for (const probe of openPostureProbes()) {
+    for (const probe of openPostureProbes(machinePort)) {
       outcomes.push(await runProbe(run, probe, binding, checkout, scratch));
     }
     return outcomes;
   } finally {
+    machine.close();
     await rm(scratch, { recursive: true, force: true });
   }
 }
@@ -172,9 +204,11 @@ export async function reportOpenPostureSelfTest(log: ExecutorLogger): Promise<vo
   ]);
   const failed = outcomes.filter((outcome) => !outcome.passed);
   if (failed.length === 0) {
-    log.info('The open posture admits what a coding agent needs', {
-      probes: outcomes.map((outcome) => outcome.name).join('; '),
-    });
+    log.info(
+      "The open posture admits what a coding agent needs and keeps the machine's loopback " +
+        'out of reach',
+      { probes: outcomes.map((outcome) => outcome.name).join('; ') },
+    );
     return;
   }
   for (const outcome of failed) {

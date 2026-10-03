@@ -2,11 +2,13 @@
  * Contract: what a coding agent and a folder's checks run under is the
  * folder's sandbox posture (Plan 315 D19). It is `open` unless the operator
  * chose `confined`, the policy file holds it only when they did, and
- * `host.binding.inspect` shows it either way. Both postures are the sandbox:
- * `open` is `confined` with the network open, and neither lets a job read or
- * write the machine's host directory, write the operator's folder or its
- * `.git`, write `/tmp` or another job's scratch, or reach the stack's own
- * services on loopback. A job writes the temporary directory it is handed.
+ * `host.binding.inspect` shows it either way. Both postures are the sandbox,
+ * under one policy: `open` is Claude Code's sandbox with every domain allowed,
+ * `confined` Codex CLI's workspace-write default, and neither lets a job read
+ * or write the machine's host directory, write the operator's folder or its
+ * `.git`, write `/tmp` or another job's scratch, or reach a listener on the
+ * machine's loopback. A job writes the temporary directory it is handed, and
+ * its loopback is its own on Linux and absent on macOS.
  *
  * The handler suites stand in for the spawn and record what it is handed; the
  * last suite runs a command under each posture for real, where this machine
@@ -78,10 +80,10 @@ const {
   withSandboxPosture,
 } = await import('../sandboxPosture.js');
 const actual = await vi.importActual<typeof import('../sandboxedRun.js')>('../sandboxedRun.js');
-const { compileSandboxPolicy, OPEN_ONLY_SANDBOX_OPTION } = await import('../sandboxPolicy.js');
+const { compileSandboxPolicy, FORBIDDEN_SANDBOX_OPTIONS } = await import('../sandboxPolicy.js');
 const { workloadTemp } = await import('../baseEnv.js');
-const { runOpenPostureSelfTest } = await import('../openPostureSelfTest.js');
-const { stackServiceDenials, stackServicesOf } = await import('../stackServices.js');
+const { MACHINE_LOOPBACK_REACH, runOpenPostureSelfTest } =
+  await import('../openPostureSelfTest.js');
 
 /** Where the system keeps its temporary files, and on Linux every job's scratch. */
 const SYSTEM_TEMP = '/tmp';
@@ -335,7 +337,6 @@ describe('what a posture compiles to', () => {
         home: HOME,
         hostDir: HOST_DIR,
         scratchDir: SCRATCH,
-        posture,
         // A profile naming the host directory is given none of it.
         widening: {
           authPaths: [join(HOST_DIR, 'agent-auth')],
@@ -366,15 +367,14 @@ describe('what a posture compiles to', () => {
     },
   );
 
-  it('opens the network under `open` alone, and writes exactly what `confined` writes', () => {
+  it('is one policy under both, which grants the machine’s loopback under neither', () => {
     const open = policyFor('open');
-    const confined = policyFor('confined');
-    expect(open.network[OPEN_ONLY_SANDBOX_OPTION]).toBe(true);
-    expect(confined.network).toEqual({
-      allowedDomains: [],
-      deniedDomains: stackServiceDenials(stackServicesOf()),
-    });
-    expect(open.filesystem).toEqual(confined.filesystem);
+    expect(open).toEqual(policyFor('confined'));
+    expect(open.network).toEqual({ allowedDomains: [], deniedDomains: [] });
+    const serialized = JSON.stringify(open);
+    for (const option of FORBIDDEN_SANDBOX_OPTIONS) {
+      expect(serialized).not.toContain(option);
+    }
   });
 
   it.each(['open', 'confined'] as const)(
@@ -391,7 +391,6 @@ describe('what a posture compiles to', () => {
           home: HOME,
           hostDir: HOST_DIR,
           scratchDir: ownScratch,
-          posture,
           widening: {
             authPaths: [],
             allowedDomains: [],
@@ -467,6 +466,7 @@ describe.each(['open', 'confined'] as const)('a command under `%s`, for real', (
     confinable.title(
       'reaches neither the machine’s trust configuration, the operator’s folder, /tmp nor another job’s scratch',
     ),
+    { tags: ['listener'] },
     async () => {
       const base = await mkdtemp(join(tmpdir(), 'posture-invariant-'));
       const hostDir = join(base, 'host');
@@ -537,113 +537,153 @@ describe.each(['open', 'confined'] as const)('a command under `%s`, for real', (
   );
 });
 
+/** A documentation-only address: off this machine, and answered by nobody. */
+const OFF_MACHINE = '192.0.2.1:9';
+
 /**
- * What a job under `open` reaches on loopback, run as `node -e` with the port
- * standing in for the stack's Redis as its argument: that port directly and
- * through the sandbox's proxy, and a server the job binds itself.
+ * Long enough for the sandbox's proxy to refuse a host, which it does before
+ * dialling; one it admits is still being dialled when this runs out.
  */
-const LOOPBACK_REACH = [
+const PROXY_ANSWER_DEADLINE_MS = 2_000;
+
+/**
+ * A server the job binds on its own loopback and a connection to it, then a
+ * connection through the sandbox's proxy to a host off the machine, run as
+ * `node -e` with that host and the deadline as its arguments. The proxy's own
+ * refusal carries `X-Proxy-Error`; anything else means it let the job through.
+ */
+const OWN_LOOPBACK_AND_NETWORK = [
   "const net = require('net');",
   "const http = require('http');",
-  'const stackPort = Number(process.argv[1]);',
-  'function direct(port) {',
-  '  return new Promise((resolve) => {',
-  "    const socket = net.connect(port, '127.0.0.1');",
-  "    socket.on('connect', () => { socket.destroy(); resolve('done'); });",
-  "    socket.on('error', () => resolve('refused'));",
+  'const [offMachine, deadlineMs] = process.argv.slice(1);',
+  'const own = () => new Promise((resolve) => {',
+  "  const server = net.createServer((socket) => socket.end('pong'));",
+  "  server.on('error', (error) => resolve(error.code ?? 'refused'));",
+  "  server.listen(0, '127.0.0.1', () => {",
+  "    net.connect(server.address().port, '127.0.0.1')",
+  "      .on('data', () => { server.close(); resolve('reached'); })",
+  "      .on('error', (error) => { server.close(); resolve(error.code ?? 'refused'); });",
   '  });',
-  '}',
-  'function throughProxy(port) {',
+  '});',
+  'const network = () => new Promise((resolve) => {',
   '  const proxy = process.env.HTTP_PROXY ?? process.env.http_proxy;',
-  "  if (proxy === undefined) return Promise.resolve('no proxy');",
+  "  if (proxy === undefined) { resolve('no proxy'); return; }",
   '  const url = new URL(proxy);',
-  '  const auth = url.username === "" ? {} : { "Proxy-Authorization": "Basic " +',
-  '    Buffer.from(decodeURIComponent(url.username) + ":" + decodeURIComponent(url.password)).toString("base64") };',
-  '  return new Promise((resolve) => {',
-  "    const request = http.request({ host: url.hostname, port: url.port, method: 'CONNECT', path: '127.0.0.1:' + port, headers: auth });",
-  "    request.on('connect', (response, socket) => { socket.destroy(); resolve(response.statusCode === 200 ? 'done' : 'refused'); });",
-  "    request.on('response', () => resolve('refused'));",
-  "    request.on('error', () => resolve('refused'));",
-  '    request.end();',
-  '  });',
-  '}',
+  "  const headers = url.username === '' ? {} : { 'Proxy-Authorization': 'Basic ' +",
+  "    Buffer.from(decodeURIComponent(url.username) + ':' + decodeURIComponent(url.password)).toString('base64') };",
+  "  const answer = (response) => resolve(response.headers['x-proxy-error'] === undefined ? 'admitted' : 'refused');",
+  "  const request = http.request({ host: url.hostname, port: url.port, method: 'CONNECT', path: offMachine, headers });",
+  "  request.on('connect', (response, socket) => { socket.destroy(); answer(response); });",
+  "  request.on('response', answer);",
+  "  request.on('error', (error) => resolve(error.code ?? 'refused'));",
+  "  setTimeout(() => resolve('admitted'), Number(deadlineMs)).unref();",
+  '  request.end();',
+  '});',
   '(async () => {',
-  "  const own = net.createServer((socket) => socket.end('pong'));",
-  "  await new Promise((resolve, reject) => { own.on('error', reject); own.listen(0, '127.0.0.1', resolve); });",
-  '  const seen = {',
-  "    'reach the stack’s Redis': await direct(stackPort),",
-  "    'reach it through the proxy': await throughProxy(stackPort),",
-  "    'reach a server it bound itself': await direct(own.address().port),",
-  '  };',
-  '  own.close();',
-  '  console.log(JSON.stringify(seen));',
+  "  console.log(JSON.stringify({ 'its own server': await own(), 'a host off the machine': await network() }));",
+  '  process.exit(0);',
   '})();',
 ].join('\n');
 
-describe('loopback under `open`, for real', () => {
-  const savedRedisUrl = process.env['REDIS_URL'];
-  afterEach(() => {
-    if (savedRedisUrl === undefined) delete process.env['REDIS_URL'];
-    else process.env['REDIS_URL'] = savedRedisUrl;
-  });
+/** What a job has on loopback when the sandbox keeps the machine's: its own on Linux, none on macOS. */
+const OWN_LOOPBACK = process.platform === 'linux' ? 'reached' : 'EPERM';
+
+describe.each([
+  ['open', 'admitted'],
+  ['confined', 'refused'],
+] as const)('the network under `%s`, for real', (posture, offMachine) => {
+  async function runUnder(argv: string[]): Promise<SandboxedRunResult> {
+    const base = await mkdtemp(join(tmpdir(), 'posture-network-'));
+    const root = join(base, 'folder');
+    const scratchDir = join(base, 'scratch');
+    const checkout = join(scratchDir, 'work');
+    await mkdir(root, { recursive: true });
+    await mkdir(checkout, { recursive: true });
+    return await actual.runSandboxed({
+      binding: { ...RUNNING, root, singleFile: false, sandbox: posture } as never,
+      posture,
+      argv,
+      cwd: checkout,
+      env: {},
+      timeoutMs: 60_000,
+      scratchDir,
+      widening: {
+        authPaths: [],
+        allowedDomains: [],
+        writableRoot: checkout,
+        withholdBindingWrite: true,
+      },
+      idPrefix: 'hr',
+      ownerRunId: 'run-network',
+      signal: new AbortController().signal,
+      closeStdin: true,
+      onDelta: () => undefined,
+    });
+  }
+
+  const lastLine = (result: SandboxedRunResult): unknown =>
+    JSON.parse(result.stdout.trim().split('\n').at(-1) ?? '{}');
 
   it.skipIf(!CAN_CONFINE)(
     confinable.title(
-      'is refused on the stack’s Redis port, directly and through the proxy, and admitted on a port the command bound itself',
+      'reaches no listener on the machine’s loopback, directly or through the proxy, by address or by name',
     ),
+    { tags: ['listener'] },
     async () => {
-      const stackRedis = createServer((socket) => socket.end('+PONG\r\n'));
-      await new Promise<void>((resolve) => stackRedis.listen(0, '127.0.0.1', resolve));
-      const { port } = stackRedis.address() as AddressInfo;
-      process.env['REDIS_URL'] = `redis://localhost:${String(port)}`;
+      const machine = createServer((socket) => socket.end('+PONG\r\n'));
+      await new Promise<void>((resolve) => machine.listen(0, '127.0.0.1', resolve));
+      const { port } = machine.address() as AddressInfo;
       try {
-        const base = await mkdtemp(join(tmpdir(), 'posture-loopback-'));
-        const root = join(base, 'folder');
-        const scratchDir = join(base, 'scratch');
-        const checkout = join(scratchDir, 'work');
-        await mkdir(root, { recursive: true });
-        await mkdir(checkout, { recursive: true });
-        const result = await actual.runSandboxed({
-          binding: { ...RUNNING, root, singleFile: false, sandbox: 'open' } as never,
-          posture: 'open',
-          argv: [process.execPath, '-e', LOOPBACK_REACH, String(port)],
-          cwd: checkout,
-          env: {},
-          timeoutMs: 60_000,
-          scratchDir,
-          widening: {
-            authPaths: [],
-            allowedDomains: [],
-            writableRoot: checkout,
-            withholdBindingWrite: true,
-          },
-          idPrefix: 'hr',
-          ownerRunId: 'run-loopback',
-          signal: new AbortController().signal,
-          closeStdin: true,
-          onDelta: () => undefined,
-        });
-        expect(result.exitCode, result.stderr).toBe(0);
-        const last = result.stdout.trim().split('\n').at(-1) ?? '{}';
-        expect(JSON.parse(last)).toEqual({
-          'reach the stack’s Redis': 'refused',
-          'reach it through the proxy': 'refused',
-          'reach a server it bound itself': 'done',
-        });
+        const result = await runUnder([
+          process.execPath,
+          '-e',
+          MACHINE_LOOPBACK_REACH,
+          String(port),
+        ]);
+        expect(result.exitCode, result.stdout + result.stderr).toBe(0);
+        const seen = lastLine(result) as Record<string, string>;
+        expect(Object.keys(seen)).toEqual([
+          'directly',
+          'directly by name',
+          'through the proxy',
+          'through the proxy by name',
+        ]);
+        expect(Object.values(seen)).not.toContain('reached');
       } finally {
-        stackRedis.close();
+        machine.close();
       }
+    },
+  );
+
+  it.skipIf(!CAN_CONFINE)(
+    confinable.title(
+      `has its own loopback only on Linux, and ${offMachine === 'admitted' ? 'reaches' : 'does not reach'} a host off the machine`,
+    ),
+    { tags: ['listener'] },
+    async () => {
+      const result = await runUnder([
+        process.execPath,
+        '-e',
+        OWN_LOOPBACK_AND_NETWORK,
+        OFF_MACHINE,
+        String(PROXY_ANSWER_DEADLINE_MS),
+      ]);
+      expect(result.exitCode, result.stderr).toBe(0);
+      expect(lastLine(result)).toEqual({
+        'its own server': OWN_LOOPBACK,
+        'a host off the machine': offMachine,
+      });
     },
   );
 });
 
-describe('the boot self-test of the `open` posture', () => {
+describe('the boot self-test of the `open` posture', { tags: ['listener'] }, () => {
   it('runs each probe in a folder of its own, under `open`, writing only its checkout', async () => {
     const outcomes = await runOpenPostureSelfTest();
     expect(outcomes.map((outcome) => outcome.name)).toEqual([
       'a shell command exits 0',
       '`yarn --version` runs',
-      'a loopback server is reachable',
+      "a listener on the machine's loopback is out of reach",
     ]);
     expect(outcomes.every((outcome) => outcome.passed)).toBe(true);
     expect(sandboxed.map((input) => input.posture)).toEqual(['open', 'open', 'open']);
@@ -656,6 +696,12 @@ describe('the boot self-test of the `open` posture', () => {
     expect(sandboxed[0]?.argv[0]).toBe('/bin/sh');
     expect(sandboxed[0]?.argv[2]).toContain('"$TMPDIR/$1"');
     expect(sandboxed[1]?.argv).toEqual(['yarn', '--version']);
+    expect(sandboxed[2]?.argv.slice(0, 3)).toEqual([
+      process.execPath,
+      '-e',
+      MACHINE_LOOPBACK_REACH,
+    ]);
+    expect(Number(sandboxed[2]?.argv[3])).toBeGreaterThan(0);
   });
 
   it('names a probe that failed and what it said', async () => {
@@ -677,20 +723,20 @@ describe('the boot self-test of the `open` posture', () => {
   });
 
   it.skipIf(!CAN_CONFINE)(
-    confinable.title('finds a shell command and a loopback server working under `open`, for real'),
+    confinable.title(
+      'finds a shell command working and the machine’s loopback out of reach under `open`, for real',
+    ),
     async () => {
       const outcomes = await runOpenPostureSelfTest(
         async (input) => await actual.runSandboxed({ ...input, posture: 'open' }),
       );
       const byName = new Map(outcomes.map((outcome) => [outcome.name, outcome]));
-      expect(byName.get('a shell command exits 0')).toEqual({
-        name: 'a shell command exits 0',
-        passed: true,
-      });
-      expect(byName.get('a loopback server is reachable')).toEqual({
-        name: 'a loopback server is reachable',
-        passed: true,
-      });
+      for (const name of [
+        'a shell command exits 0',
+        "a listener on the machine's loopback is out of reach",
+      ]) {
+        expect(byName.get(name)).toEqual({ name, passed: true });
+      }
     },
   );
 });

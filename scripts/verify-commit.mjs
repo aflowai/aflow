@@ -10,7 +10,9 @@
  * one line per package — a type-check of each touched workspace, the tests
  * whose imports reach a touched file, in the touched workspaces and every
  * workspace that reads a touched package — such a package built first, such an
- * application's build named as skipped — on half the machine's cores, ESLint
+ * application's build named as skipped — on half the machine's cores, on
+ * macOS less the tests tagged `listener`, each named as skipped and their count
+ * written where `AFLOW_CHECK_REPORT` says (`listener-tests.mjs`), ESLint
  * (errors only) on touched sources and Prettier on every touched file. One
  * line per step, the tests reporting only their failures and summary, and the
  * first failure ends the run with that step's output.
@@ -24,14 +26,20 @@
  * checkout holds none of it.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { availableParallelism } from 'node:os';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { availableParallelism, tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 import ts from 'typescript';
 
+import {
+  listenerSkipLines,
+  listenersRefused,
+  skippedListenerTests,
+  WITHOUT_LISTENER_TESTS,
+} from './listener-tests.mjs';
 import { testsReaching } from './test-selection.mjs';
 
 const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -350,6 +358,7 @@ const catalogGuards = touchedNames.has('@aflow/platform-artifacts')
 const tests = [
   ...new Set([...present.filter((file) => TEST_FILE.test(file)), ...catalogGuards, ...reaching]),
 ].filter((file) => !DATABASE_TEST_FILE.test(file));
+let skippedListeners = [];
 if (tests.length === 0) {
   console.log('ok   tests: none reach the touched files');
 } else {
@@ -357,14 +366,36 @@ if (tests.length === 0) {
   // sweep passes hundreds of files, and a line for each pushes the failure out
   // of what is read. Half the cores, because a check runs on the operator's
   // machine beside the stack it serves, and a test that waits on a timer fails
-  // when every core is taken.
+  // when every core is taken. Where no test can listen, the ones that must are
+  // left out, and a JSON report beside the summary says which they were.
   const workers = Math.max(1, Math.floor(availableParallelism() / 2));
+  const jsonReport = listenersRefused()
+    ? path.join(mkdtempSync(path.join(tmpdir(), 'verify-commit-')), 'tests.json')
+    : undefined;
   run(
     `tests (${String(tests.length)} files, ${String(workers)} workers)`,
     process.execPath,
-    ['scripts/test-runner.mjs', 'file', ...tests.sort(), '--reporter=minimal'],
+    [
+      'scripts/test-runner.mjs',
+      'file',
+      ...tests.sort(),
+      '--reporter=minimal',
+      ...(jsonReport === undefined
+        ? []
+        : [...WITHOUT_LISTENER_TESTS, '--reporter=json', `--outputFile.json=${jsonReport}`]),
+    ],
     { env: { PHOENIX_TEST_WORKERS: String(workers) } },
   );
+  if (jsonReport !== undefined) {
+    skippedListeners = skippedListenerTests(JSON.parse(readFileSync(jsonReport, 'utf8')), repoRoot);
+    for (const line of listenerSkipLines(skippedListeners)) console.log(line);
+  }
+}
+// The executor names this file to a check it runs, and signs the count into
+// the check's receipt; run by hand, nothing names it.
+const checkReport = process.env['AFLOW_CHECK_REPORT'];
+if (checkReport !== undefined && checkReport !== '') {
+  writeFileSync(checkReport, JSON.stringify({ skippedListenerTests: skippedListeners.length }));
 }
 
 const sources = present.filter((file) => LINTED_SOURCE.test(file));

@@ -121,6 +121,14 @@ export default defineConfig({
   test: {
     pool: 'forks',
     maxWorkers: resolveWorkerBudget(),
+    tags: [
+      {
+        name: 'listener',
+        description:
+          'Listens on a port of its own. The check leaves it out on macOS, where its sandbox ' +
+          'refuses a listener, and names it (scripts/listener-tests.mjs); CI runs it.',
+      },
+    ],
     projects: [
       ...discoverWorkspaceProjects(),
       ...(!process.env['PHOENIX_TEST_PROJECTS'] ||

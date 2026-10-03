@@ -87,25 +87,24 @@ export const HostSandboxPostureSchema = z
       "is handed lives, never the system's `/tmp`, where other runs' scratch lives, never " +
       "the folder or its `.git`, never reading or writing the machine's host directory, where " +
       'the policy every gate reads and the pairing credential live, and never reaching the ' +
-      "stack's own services — " +
-      'its Redis, where the push gate reads its approvals, its database, its API and its web ' +
-      'application — so the state the gates stand on is reachable only by the executor. ' +
-      '`open` is exactly `confined` with the network open — every host and every other ' +
-      "loopback port — and the run's own temporary directory writable. " +
-      "`confined`: only the hosts a harness is allowed, and the machine's loopback closed. " +
-      'Declared on the machine; no workspace can set it.',
+      "machine's loopback, where the stack's Redis holds the approvals the push gate reads — " +
+      'so the state the gates stand on is reachable only by the executor. ' +
+      '`open` is the sandbox Claude Code runs under with every domain allowed: every host ' +
+      "but this machine. `confined` is Codex CLI's workspace-write default: no network but " +
+      "the hosts a harness is allowed. Under either the job's loopback is its own on Linux " +
+      'and absent on macOS. Declared on the machine; no workspace can set it.',
   );
 export type HostSandboxPosture = z.infer<typeof HostSandboxPostureSchema>;
 
 /**
  * `open` in the local edition: the lane runs the operator's own tool on the
  * operator's own repository, and what that tool needs from the machine is the
- * network — its own search and fetch, Corepack and the registry, a test's
- * loopback server. The sandbox still withholds the host directory, the
- * operator's folder and its `.git` under `open`, which is what lets the ref
- * guard, the scan, the check, the review and the push gate stand: each reads
- * its configuration from there. `confined` is the choice for a repository the
- * operator does not trust.
+ * network — its own search and fetch, Corepack and the registry. The sandbox
+ * still withholds the host directory, the operator's folder and its `.git`,
+ * and the machine's loopback under `open`, which is what lets the ref guard,
+ * the scan, the check, the review and the push gate stand: their configuration
+ * and the approvals they read live there. `confined` is the choice for a
+ * repository the operator does not trust.
  */
 export const HOST_SANDBOX_POSTURE_DEFAULT: HostSandboxPosture = 'open';
 
@@ -1439,12 +1438,24 @@ export const HostCommitCheckOutputSchema = z.object({
     ),
   receipt: HostCheckReceiptSchema.optional().describe(
     'What a push of the commit must carry as `check.receipt`, present wherever the checks ran, ' +
-      'passed or not: it names the folder, the commit, the base, the checks, the posture they ran under ' +
-      'and whether they passed, and a push takes only one that says they did. Absent where the folder declares ' +
+      'passed or not: it names the folder, the commit, the base, the checks, the posture they ran under, ' +
+      'how many tests that listen on a port of their own they skipped and whether they passed, ' +
+      'and a push takes only one that says they did. Absent where the folder declares ' +
       'none. Valid on this executor only, and only for a day.',
   ),
   sandbox: HostSandboxPostureSchema.optional().describe(
     'The sandbox posture the checks ran under, which their `receipt` carries and a push ' +
       'records. Absent where the folder declares none.',
   ),
+  skippedListenerTests: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .describe(
+      'How many tests that listen on a port of their own the checks skipped, as they reported ' +
+        'it in the file `AFLOW_CHECK_REPORT` names; the `receipt` carries the same count. Such ' +
+        'a test cannot listen under the sandbox on macOS, and runs in the pull request’s ' +
+        'checks instead. Absent where the checks reported nothing.',
+    ),
 });

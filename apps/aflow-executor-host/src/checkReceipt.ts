@@ -14,7 +14,9 @@
  *
  * The receipt names the checks by a hash of their argv rather than the argv,
  * and carries nothing of what they printed: it is evidence of an outcome, and
- * the output is the check's result to report.
+ * the output is the check's result to report. It does carry how many tests
+ * that listen on a port of their own the checks reported skipping, because a
+ * pass that left them out is evidence of less than one that ran them.
  */
 import { createHash } from 'node:crypto';
 
@@ -42,7 +44,13 @@ interface CheckReceipt {
   readonly outcome: CheckOutcome;
   /** The sandbox posture the checks ran under. */
   readonly sandbox: HostSandboxPosture;
+  /** Tests that listen on a port of their own the checks skipped; null where they reported none. */
+  readonly skippedListenerTests: number | null;
   readonly issuedAt: number;
+}
+
+function isSkippedCount(value: unknown): value is number | null {
+  return value === null || (Number.isInteger(value) && (value as number) >= 0);
 }
 
 /** The checks' argv as one value, token boundaries kept: `["a b"]` is not `["a", "b"]`. */
@@ -58,6 +66,7 @@ export function issueCheckReceipt(
     readonly argv: readonly string[];
     readonly outcome: CheckOutcome;
     readonly sandbox: HostSandboxPosture;
+    readonly skippedListenerTests?: number;
   },
   now: number = Date.now(),
 ): string {
@@ -68,6 +77,7 @@ export function issueCheckReceipt(
     checksArgvHash(receipt.argv),
     receipt.outcome,
     receipt.sandbox,
+    receipt.skippedListenerTests ?? null,
     now,
   ]);
 }
@@ -75,7 +85,7 @@ export function issueCheckReceipt(
 function readCheckReceipt(token: string): CheckReceipt | undefined {
   const fields = readSignedReceipt('check', token);
   if (fields === undefined) return undefined;
-  const [bindingId, sha, base, checks, outcome, sandbox, issuedAt] = fields;
+  const [bindingId, sha, base, checks, outcome, sandbox, skippedListenerTests, issuedAt] = fields;
   const posture = HostSandboxPostureSchema.safeParse(sandbox);
   if (
     typeof bindingId !== 'string' ||
@@ -84,6 +94,7 @@ function readCheckReceipt(token: string): CheckReceipt | undefined {
     typeof checks !== 'string' ||
     !OUTCOMES.includes(outcome as CheckOutcome) ||
     !posture.success ||
+    !isSkippedCount(skippedListenerTests) ||
     typeof issuedAt !== 'number'
   ) {
     return undefined;
@@ -95,6 +106,7 @@ function readCheckReceipt(token: string): CheckReceipt | undefined {
     checks,
     outcome: outcome as CheckOutcome,
     sandbox: posture.data,
+    skippedListenerTests,
     issuedAt,
   };
 }
