@@ -18,6 +18,8 @@ import type {
   TextStreamChunk,
   ReasoningConfig,
   ReasoningEffort,
+  ChatMessage,
+  ToolImageResolver,
 } from './types.js';
 import type { AIProviderAdapter } from './adapter.js';
 import { type ModelCatalog, createDefaultModelCatalog } from './catalog.js';
@@ -25,6 +27,7 @@ import { type UsageRecorder, createUsageRecorder } from './usage.js';
 import { AIClientError } from './errors.js';
 import { resolveReasoningForModel } from './reasoningEffort.js';
 import { resolveMaxOutputTokens } from './outputBudget.js';
+import { prepareToolImages } from './toolImages.js';
 
 /**
  * A clamp repeats for every call a space makes with the same settings, so it is
@@ -248,6 +251,11 @@ export function createAIClient(config: AIClientConfig): AIClient {
     maxOutputTokens?: number | undefined;
     /** True once the catalog has been consulted, whether or not it had an entry. */
     fromCatalog?: boolean;
+    /**
+     * Whether the model is shown tool images. Catalog data only: a model
+     * outside the catalog gets each image's description instead.
+     */
+    vision?: boolean;
   }
 
   /**
@@ -271,6 +279,7 @@ export function createAIClient(config: AIClientConfig): AIClient {
         acceptsTemperature: model.capabilities.samplingTemperature !== false,
         maxOutputTokens: model.maxOutputTokens,
         fromCatalog: true,
+        vision: model.capabilities.vision,
       };
     }
 
@@ -298,9 +307,9 @@ export function createAIClient(config: AIClientConfig): AIClient {
   }
 
   /** Build adapter request with model-specific options (e.g. OpenRouter provider routing, reasoning defaults) */
-  function buildAdapterRequest<
+  async function buildAdapterRequest<
     T extends { model: string; openRouterProvider?: unknown; reasoning?: unknown },
-  >(request: T, resolved: ResolvedModel): T & { model: string } {
+  >(request: T, resolved: ResolvedModel): Promise<T & { model: string }> {
     // The one place a reasoning effort is reconciled with the model that has to
     // honour it. Providers reject rungs their model does not implement — as a
     // 400 mid-run — so an effort the model cannot take is snapped to the
@@ -326,10 +335,22 @@ export function createAIClient(config: AIClientConfig): AIClient {
     const {
       reasoning: _requested,
       temperature: _temperature,
+      resolveToolImage,
       ...rest
     } = request as typeof request & {
       temperature?: number;
+      messages?: ChatMessage[];
+      resolveToolImage?: ToolImageResolver;
     };
+    // Also the one place a model's `vision` decides whether tool images are
+    // read: every adapter receives images or text, never a reference.
+    const messages = rest.messages
+      ? await prepareToolImages(rest.messages, {
+          vision: resolved.vision === true,
+          resolve: resolveToolImage,
+          provider: resolved.provider,
+        })
+      : undefined;
     // Thinking is paid for out of the SAME output budget as the answer, so a
     // request that names no ceiling gets whatever the provider defaults to —
     // and on a thinking-only model that default is spent reasoning, returning
@@ -344,6 +365,7 @@ export function createAIClient(config: AIClientConfig): AIClient {
 
     const base = {
       ...rest,
+      ...(messages ? { messages } : {}),
       model: resolved.providerModelId,
       ...(maxTokens !== undefined ? { maxTokens } : {}),
       ...(resolvedReasoning.reasoning !== undefined
@@ -408,7 +430,7 @@ export function createAIClient(config: AIClientConfig): AIClient {
       const startTime = Date.now();
 
       // Use providerModelId when calling the adapter
-      const adapterRequest = buildAdapterRequest(request, resolved);
+      const adapterRequest = await buildAdapterRequest(request, resolved);
       const response = await adapter.generateText(adapterRequest);
 
       // Record usage
@@ -476,7 +498,7 @@ export function createAIClient(config: AIClientConfig): AIClient {
 
         try {
           // Use providerModelId when calling the adapter
-          const adapterRequest = buildAdapterRequest(request, resolved);
+          const adapterRequest = await buildAdapterRequest(request, resolved);
           const streamResponse = adapter.generateTextStream(adapterRequest);
 
           // Prevent unhandled rejection crash if stream fails before response is awaited.
@@ -561,7 +583,7 @@ export function createAIClient(config: AIClientConfig): AIClient {
       const startTime = Date.now();
 
       // Use providerModelId when calling the adapter
-      const adapterRequest = buildAdapterRequest(request, resolved);
+      const adapterRequest = await buildAdapterRequest(request, resolved);
       const response = await adapter.generateJson(adapterRequest);
 
       // Record usage
@@ -606,7 +628,7 @@ export function createAIClient(config: AIClientConfig): AIClient {
       const startTime = Date.now();
 
       // Use providerModelId when calling the adapter
-      const adapterRequest = buildAdapterRequest(request, resolved);
+      const adapterRequest = await buildAdapterRequest(request, resolved);
       const response = await adapter.generateEmbedding(adapterRequest);
 
       // Record usage

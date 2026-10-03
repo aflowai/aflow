@@ -1,5 +1,5 @@
-import type { AiMessageV1, AiContentPart, AiToolCallV1 } from '@aflow/schemas';
-import type { ChatMessage } from '@aflow/ai-client';
+import type { AiMessageV1, AiContentPart, AiImagePart, AiToolCallV1 } from '@aflow/schemas';
+import type { ChatMessage, ToolContentPart } from '@aflow/ai-client';
 
 /**
  * Convert an AiMessageV1 to a ChatMessage, preserving tool metadata.
@@ -16,11 +16,28 @@ export function aiMessageToChatMessage(msg: AiMessageV1): ChatMessage {
   const content = [textContent, jsonContent].filter(Boolean).join('\n');
 
   if (msg.role === 'tool') {
+    const images = msg.parts.filter((p): p is AiImagePart => p.kind === 'image');
+    if (images.length === 0) {
+      return {
+        role: 'tool' as const,
+        toolCallId: msg.toolCallId ?? '',
+        name: msg.name,
+        content: content || '[Tool result]',
+      };
+    }
+    // The image stays a reference here; the client reads its bytes, or
+    // substitutes its description, when the request is built for a model.
     return {
       role: 'tool' as const,
       toolCallId: msg.toolCallId ?? '',
       name: msg.name,
-      content: content || '[Tool result]',
+      content: [
+        { type: 'text', text: content || '[Tool result]' },
+        ...images.map(({ kind: _kind, ...image }): ToolContentPart => ({
+          type: 'image_ref',
+          image,
+        })),
+      ],
     };
   }
   if (msg.role === 'system') {
@@ -47,6 +64,27 @@ export function aiMessageToChatMessage(msg: AiMessageV1): ChatMessage {
     };
   }
   return { role: 'user' as const, content };
+}
+
+/**
+ * A tool message's content as text, for when it is moved out of its tool
+ * result into a user note. An image there is named by its description; only a
+ * tool result carries an image to the model.
+ */
+export function toolContentText(
+  content: Extract<ChatMessage, { role: 'tool' }>['content'],
+): string {
+  if (typeof content === 'string') return content;
+  return content
+    .map((part) => {
+      if (part.type === 'text') return part.text;
+      if (part.type === 'image_ref') {
+        const { width, height, contentType, description } = part.image;
+        return `[Image ${String(width)}×${String(height)} ${contentType}: ${description ?? 'no description given'}]`;
+      }
+      return '[Image]';
+    })
+    .join('\n');
 }
 
 /**
@@ -92,7 +130,16 @@ export function chatMessageToAiMessage(msg: ChatMessage): AiMessageV1 {
       role: 'tool',
       toolCallId: msg.toolCallId,
       name: msg.name,
-      parts: [{ kind: 'text', text: msg.content }],
+      parts:
+        typeof msg.content === 'string'
+          ? [{ kind: 'text', text: msg.content }]
+          : msg.content.map((part): AiContentPart => {
+              if (part.type === 'text') return { kind: 'text', text: part.text };
+              if (part.type === 'image_ref') return { kind: 'image', ...part.image };
+              // Bytes are never written to a snapshot; the snapshot is taken
+              // before the client resolves references, so this is not reached.
+              return { kind: 'text', text: '[Image]' };
+            }),
     };
   }
   // assistant

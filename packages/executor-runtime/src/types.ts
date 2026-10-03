@@ -61,6 +61,18 @@ export interface PausedResult {
  */
 export type StepResult = SuccessResult | FailureResult | PausedResult;
 
+/** The payload kinds a step handler writes; `input_request` is stored as `requested_input`. */
+export type ExecutorPayloadKind =
+  | 'output'
+  | 'error'
+  | 'input_request'
+  | 'body'
+  | 'raw_body'
+  | 'activity'
+  | 'patch'
+  | 'logs'
+  | 'screenshot';
+
 // ============================================================================
 // Executor Context
 // ============================================================================
@@ -129,11 +141,14 @@ export interface ExecutorContext {
   /** Read a payload from the store */
   readonly readPayload: <T = unknown>(ref: PayloadRef) => Promise<T>;
 
-  /** Write a payload to the store */
+  /**
+   * Write a payload to the store. A `Buffer` is stored as bytes under the
+   * content type given; anything else is stored as JSON.
+   */
   readonly writePayload: (
-    kind:
-      'output' | 'error' | 'input_request' | 'body' | 'raw_body' | 'activity' | 'patch' | 'logs',
+    kind: ExecutorPayloadKind,
     data: unknown,
+    options?: { readonly contentType?: string },
   ) => Promise<PayloadRef>;
 
   /** Check if output already exists (for idempotency) */

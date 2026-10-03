@@ -233,6 +233,32 @@ const DEFINITIONS: readonly BackgroundTaskDefinitionInput[] = [
     ],
   },
   {
+    id: 'host.browser_requests',
+    service: 'executor-host',
+    ownerDomain: 'ownership',
+    purpose:
+      "Serve the machine's `aflow browser` requests — a sign-in window, a list — while the watch on the host directory is down.",
+    invariant:
+      'A request written beside the policy is claimed while its command line still waits for a claim, whether or not the directory can be watched; with the watch up the poll reads nothing.',
+    criticality: 'feature',
+    trigger: 'candidate',
+    scope: 'per_instance',
+    substrate: 'local',
+    baseCadenceMs: 1_500,
+    maxBatch: 1,
+    maxCycleMs: 5_000,
+    idleOperationBudgetPerMinute: 0,
+    hotPathProducerBudget: {
+      maxAdditionalNetworkRoundTrips: 0,
+      description: 'Reads one local directory; nothing in Redis.',
+    },
+    disablePolicy: 'safe',
+    recovery:
+      'Without it, a request arriving while the watch is down goes unclaimed and the command line refuses to act on a profile the executor holds, saying which process holds it; the requests pending at startup are still served once.',
+    note: 'Polls only while the directory watch is down — a filesystem without one, or a watch that failed — and its cadence sits inside the command line’s three-second claim timeout so a request is claimed before the command line gives up on it. Each cycle is one directory listing on this machine.',
+    sites: ['apps/aflow-executor-host/src/browser/requestPoll.ts'],
+  },
+  {
     id: 'orchestrator.shard_acquisition',
     service: 'orchestrator',
     ownerDomain: 'ownership',

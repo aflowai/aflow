@@ -103,9 +103,11 @@ describe('composeHelmsmanSurface', () => {
       [
         'browser.page.act',
         'browser.page.close',
+        'browser.page.handoff',
         'browser.page.list',
         'browser.page.navigate',
         'browser.page.read',
+        'browser.page.screenshot',
         'browser.page.snapshot',
         'browser.profile.list',
       ].sort(),

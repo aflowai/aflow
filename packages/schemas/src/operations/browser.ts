@@ -19,8 +19,40 @@ export const BROWSER_PAGE_OPEN_OPERATION_ID = buildOperationId('browser', 'page'
 export const BROWSER_PAGE_NAVIGATE_OPERATION_ID = buildOperationId('browser', 'page', 'navigate');
 export const BROWSER_PAGE_ACT_OPERATION_ID = buildOperationId('browser', 'page', 'act');
 
-/** How much outline or snapshot a result carries before it is cut and the rest is counted. */
+/** The most outline or snapshot one call may ask for with `maxChars`. */
 export const BROWSER_OUTLINE_MAX_CHARS = 32_000;
+
+/**
+ * The outline an open, a move, an action or a hand-off returns unless the
+ * call asks for more. With the rest of the result it stays under
+ * `TOOL_RESULT_INLINE_MAX_CHARS`, so the agent reads it in the same call.
+ * Characters are counted as the result carries them: a quote or a line break
+ * counts twice.
+ */
+export const BROWSER_OUTLINE_DEFAULT_CHARS = 7_000;
+
+/** The smallest bound a call may ask for: room for a few elements and the census of the rest. */
+export const BROWSER_MIN_CHARS = 500;
+
+export function browserMaxCharsSchema(what: string, defaultChars: number, maxChars: number) {
+  return z
+    .number()
+    .int()
+    .min(BROWSER_MIN_CHARS)
+    .max(maxChars)
+    .optional()
+    .describe(
+      `How much ${what} to return, in characters as the result carries them. Defaults to ` +
+        `${String(defaultChars)}, which reaches you inline; up to ${String(maxChars)} for a ` +
+        'larger page, at the cost of a result stored and handed back as a path.',
+    );
+}
+
+export const BrowserOutlineMaxCharsSchema = browserMaxCharsSchema(
+  'outline',
+  BROWSER_OUTLINE_DEFAULT_CHARS,
+  BROWSER_OUTLINE_MAX_CHARS,
+);
 
 const HttpUrlSchema = z
   .string()
@@ -49,7 +81,7 @@ export const BrowserOutlineCensusSchema = z
   .record(z.string(), z.number().int().nonnegative())
   .describe('Elements left out because the result reached its bound, counted by role.');
 
-const pageViewShape = {
+export const browserPageViewShape = {
   pageId: BrowserPageIdSchema,
   url: z.string().describe('Where the page is now, after any redirect.'),
   title: z.string(),
@@ -63,9 +95,15 @@ const pageViewShape = {
   outlineCensus: BrowserOutlineCensusSchema.optional(),
 };
 
-const outlineReceiptShape = {
+export const outlineReceiptShape = {
   outlineElements: z.number().int().nonnegative().describe('Elements the outline carries.'),
   outlineCut: z.boolean().describe('True when the outline reached its bound.'),
+  settled: z
+    .boolean()
+    .describe(
+      'True when two reads of the page a moment apart agreed before the outline was returned. ' +
+        'False: the page was still changing when the wait ran out, and a later snapshot may differ.',
+    ),
 };
 
 const changeReceiptShape = {
@@ -95,11 +133,12 @@ export const BrowserPageOpenInputSchema = z.object({
   profileId: BrowserProfileIdSchema.default(DEFAULT_BROWSER_PROFILE_ID).describe(
     'The browser profile to open it in. Its sign-ins are the accounts the page is read with.',
   ),
+  maxChars: BrowserOutlineMaxCharsSchema,
 });
 
 export const BrowserPageOpenOutputSchema = z.object({
   outcome: BrowserActionOutcomeSchema,
-  ...pageViewShape,
+  ...browserPageViewShape,
   pageId: z
     .string()
     .describe(
@@ -132,6 +171,7 @@ export const BrowserPageNavigateInputSchema = z
     back: z.literal(true).optional().describe('Go back one entry in the page history.'),
     forward: z.literal(true).optional().describe('Go forward one entry in the page history.'),
     reload: z.literal(true).optional().describe('Load the current address again.'),
+    maxChars: BrowserOutlineMaxCharsSchema,
   })
   .superRefine((input, ctx) => {
     const given = BROWSER_NAVIGATIONS.filter((name) => input[name] !== undefined);
@@ -149,7 +189,7 @@ export const BrowserPageNavigateInputSchema = z
 
 export const BrowserPageNavigateOutputSchema = z.object({
   outcome: BrowserActionOutcomeSchema,
-  ...pageViewShape,
+  ...browserPageViewShape,
   receipt: z
     .object({ went: z.enum(BROWSER_NAVIGATIONS), ...changeReceiptShape })
     .optional()
@@ -190,6 +230,7 @@ export const BrowserPageActInputSchema = z
       .describe(
         'For `press`: a key or chord, such as `Enter`, `Escape`, `ArrowDown` or `Control+A`.',
       ),
+    maxChars: BrowserOutlineMaxCharsSchema,
   })
   .superRefine((input, ctx) => {
     const needs: Partial<Record<BrowserAction, keyof typeof ACTION_FIELDS>> = {
@@ -219,7 +260,7 @@ export const BrowserPageActInputSchema = z
 
 export const BrowserPageActOutputSchema = z.object({
   outcome: BrowserActionOutcomeSchema,
-  ...pageViewShape,
+  ...browserPageViewShape,
   receipt: z
     .object({
       action: z.enum(BROWSER_ACTIONS),
@@ -268,10 +309,10 @@ export const BrowserPageActionRegistrations: OperationRegistration[] = [
       'Open and use web pages in a real browser on the operator’s machine. ' +
       'browser.profile.list says which sites each profile holds a session for.',
     semanticDescription:
-      'Open a web page in a real browser — the operator’s installed Chrome, in a profile of its ' +
-      'own on their machine — and return an outline of it: its headings and interactive ' +
-      'elements in document order, each with the reference later actions name it by. The page ' +
-      'runs its JavaScript and carries whatever sign-ins the profile holds. ' +
+      'Open a web page in the operator’s Chrome, in a profile of its own, and return its ' +
+      'outline: headings and controls in order, each with its reference. Scripts run with the ' +
+      'profile’s sign-ins. On its pageId: browser.page.act (click, type, select, press, ' +
+      'hover), navigate, read, snapshot, screenshot, handoff, list, close. ' +
       REACH_FOR_IT_LAST,
     tags: ['browser', 'web', 'page', 'local'],
     idempotency: 'non_idempotent',

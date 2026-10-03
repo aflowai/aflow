@@ -30,7 +30,7 @@ Plan 106 replaced that with a **runtime registry overlay**:
 
 1. Edit `packages/platform-artifacts/src/skillBundles.ts` (or `cyberneticAgents.ts` for agents).
 2. Run `yarn typecheck` — the bundle is type-checked end-to-end.
-3. Test via the `aflow-local` MCP server (`yarn dev:core` + `yarn dev:mcp`) — see the `test-mcp` skill.
+3. Test via the `aflow-local` MCP server (served by `yarn start`) — see the `test-mcp` skill.
 4. Commit & deploy. **No per-tenant migration needed.** Every tenant picks up the new bundle on the next request that resolves the slug.
 
 ### Space overlay rules (Phase 1)

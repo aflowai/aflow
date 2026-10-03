@@ -10,6 +10,7 @@ export type {
   PausedResult,
   ExecutorContext,
   ExecutorLogger,
+  ExecutorPayloadKind,
   StepHandler,
   ExecutorConfig,
   ExecutorDependencies,

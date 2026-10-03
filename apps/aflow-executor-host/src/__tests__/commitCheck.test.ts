@@ -27,6 +27,9 @@ import {
 } from '@aflow/schemas';
 
 import type { SandboxedRunInput, SandboxedRunResult } from '../sandboxedRun.js';
+import { CONFINEMENT_LISTENERS, requires } from './fixtures/capabilities.js';
+
+const confined = requires(...CONFINEMENT_LISTENERS);
 
 const run = promisify(execFile);
 
@@ -481,17 +484,20 @@ describe('what a check’s output keeps', () => {
 const CAN_CONFINE = actualSandbox.sandboxReadiness().ready;
 
 describe.skipIf(!CAN_CONFINE)('host.commit.check — through the real sandbox', () => {
-  it('runs a passing check confined, and a failing one to its failure', async () => {
-    realSandbox = true;
-    const passing = await fixture({ branchPrefix: 'aflow/', checks: REPORTING });
-    const passed = await check(passing);
-    const output = HostCommitCheckOutputSchema.parse(passed.captured.output);
-    expect(output.passed, output.summary).toBe(true);
-    expect(output.tail).toContain(passing.sha);
+  it.skipIf(confined.skip)(
+    confined.title('runs a passing check confined, and a failing one to its failure'),
+    async () => {
+      realSandbox = true;
+      const passing = await fixture({ branchPrefix: 'aflow/', checks: REPORTING });
+      const passed = await check(passing);
+      const output = HostCommitCheckOutputSchema.parse(passed.captured.output);
+      expect(output.passed, output.summary).toBe(true);
+      expect(output.tail).toContain(passing.sha);
 
-    const failing = await fixture({ branchPrefix: 'aflow/', checks: FAILING });
-    const failed = await check(failing);
-    expect(HostCommitCheckOutputSchema.parse(failed.captured.output).passed).toBe(false);
-    realSandbox = false;
-  });
+      const failing = await fixture({ branchPrefix: 'aflow/', checks: FAILING });
+      const failed = await check(failing);
+      expect(HostCommitCheckOutputSchema.parse(failed.captured.output).passed).toBe(false);
+      realSandbox = false;
+    },
+  );
 });

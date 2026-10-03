@@ -1,4 +1,6 @@
-import { BROWSER_OUTLINE_MAX_CHARS } from '@aflow/schemas';
+import { BROWSER_SNAPSHOT_DEFAULT_CHARS } from '@aflow/schemas';
+
+import { encodedLength } from '../browser/encodedLength.js';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -74,9 +76,21 @@ describe('what a read returns', () => {
   });
 
   it('cuts text at its bound and says how much was left', () => {
-    expect(boundText('a\nb\nc', undefined, 3)).toEqual({ text: 'a\nb', withheld: 2 });
+    // A line break is two characters as the result carries it.
+    expect(boundText('a\nb\nc', undefined, { maxChars: 4 })).toEqual({
+      text: 'a\nb',
+      offset: 0,
+      withheld: 2,
+      nextOffset: 3,
+    });
+    expect(boundText('a\nb\nc', undefined, { offset: 3, maxChars: 4 })).toEqual({
+      text: '\nc',
+      offset: 3,
+      withheld: 0,
+    });
     expect(boundText('Alpha\nbeta\nALPHABET', 'alpha')).toEqual({
       text: 'Alpha\nALPHABET',
+      offset: 0,
       withheld: 0,
     });
   });
@@ -89,10 +103,10 @@ describe('a full snapshot', () => {
       (_, i) => `- link "Item ${String(i)}" [ref=e${String(i)}]`,
     );
     const cut = boundSnapshot({ text: lines.join('\n'), maskedRefs: new Set() });
-    expect(cut?.text.length).toBeLessThanOrEqual(BROWSER_OUTLINE_MAX_CHARS);
+    expect(encodedLength(cut?.text ?? '')).toBeLessThanOrEqual(BROWSER_SNAPSHOT_DEFAULT_CHARS);
     expect(cut?.census?.['link']).toBe(4_000 - (cut?.lines ?? 0));
     expect(cut?.text.split('\n').at(-1)).toMatch(
-      /^# Snapshot cut at 32000 characters\. Not shown: link \d+\.$/,
+      /^# Snapshot cut at 8000 characters\. Not shown: link \d+\. To read on, snapshot with `ref: e\d+`, or raise `maxChars`\.$/,
     );
   });
 });

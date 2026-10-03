@@ -13,12 +13,13 @@
  */
 import { chmod, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 
 import { createRedisConnection, HOST_INVENTORY_TTL_MS, HOST_MACHINES_KEY } from '@aflow/redis';
 import { HOST_PUSH_APPROVAL_DEFAULT, resolveBranchPolicy } from '@aflow/schemas';
 
 import { chooseFolder } from './folderPicker.js';
+import { resolveHostPolicyPath } from './hostDir.js';
 import { namesInUseFor } from './connectNaming.js';
 import { listLocalTools } from './localMcpClient.js';
 import { isGitRepository } from './worktree.js';
@@ -37,7 +38,8 @@ import {
   HostPolicySchema,
 } from './bindings.js';
 
-const HOST_DIR = process.env['PHOENIX_HOST_DIR']?.trim() ?? resolve(homedir(), '.aflow');
+const POLICY_PATH = resolveHostPolicyPath();
+const HOST_DIR = dirname(POLICY_PATH);
 
 interface ConnectMaterial {
   redisUrl: string;
@@ -258,9 +260,8 @@ async function main(): Promise<void> {
       root,
     });
 
-    const policyPath = resolve(HOST_DIR, 'host-policy.json');
     await mkdir(HOST_DIR, { recursive: true, mode: 0o700 });
-    const raw = await readFile(policyPath, 'utf8').catch(() => '{"version":1,"bindings":[]}');
+    const raw = await readFile(POLICY_PATH, 'utf8').catch(() => '{"version":1,"bindings":[]}');
     const policy = HostPolicySchema.parse(JSON.parse(raw));
     // A reconnect keeps the posture and the checks the operator set since,
     // unless it names a posture.
@@ -436,7 +437,7 @@ async function main(): Promise<void> {
       spaceId: material.spaceId,
     };
     policy.bindings = [...policy.bindings.filter((b) => b.id !== recorded), binding];
-    await writePolicyAtomically(policyPath, serializePolicy(policy));
+    await writePolicyAtomically(POLICY_PATH, serializePolicy(policy));
 
     // The credential arrives with the same call, so one command leaves the
     // machine able to do the work rather than merely permitted to.

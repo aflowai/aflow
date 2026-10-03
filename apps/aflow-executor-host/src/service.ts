@@ -15,13 +15,15 @@
 import { execFile } from 'node:child_process';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
+
+import { resolveHostDir } from './hostDir.js';
 
 const run = promisify(execFile);
 
 const LABEL = 'ai.aflow.host-executor';
-const HOST_DIR = process.env['PHOENIX_HOST_DIR']?.trim() ?? resolve(homedir(), '.aflow');
+const HOST_DIR = resolveHostDir();
 
 function plistPath(): string {
   return join(homedir(), 'Library', 'LaunchAgents', `${LABEL}.plist`);

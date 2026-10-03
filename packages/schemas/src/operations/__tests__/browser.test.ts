@@ -28,6 +28,11 @@ import {
   browserOriginPatternMatchesUrl,
   parseBrowserOriginPattern,
 } from '../browserProfile.js';
+import {
+  BROWSER_PAGE_HANDOFF_OPERATION_ID,
+  BROWSER_PAGE_SCREENSHOT_OPERATION_ID,
+  BrowserPageScreenshotInputSchema,
+} from '../browserWindow.js';
 
 const BROWSER_OPS = () =>
   [...getAllOperations().values()].filter((op) => op.stepType === 'browser');
@@ -42,10 +47,12 @@ describe('the browser operations', () => {
       [
         BROWSER_PAGE_ACT_OPERATION_ID,
         BROWSER_PAGE_CLOSE_OPERATION_ID,
+        BROWSER_PAGE_HANDOFF_OPERATION_ID,
         BROWSER_PAGE_LIST_OPERATION_ID,
         BROWSER_PAGE_NAVIGATE_OPERATION_ID,
         BROWSER_PAGE_OPEN_OPERATION_ID,
         BROWSER_PAGE_READ_OPERATION_ID,
+        BROWSER_PAGE_SCREENSHOT_OPERATION_ID,
         BROWSER_PAGE_SNAPSHOT_OPERATION_ID,
         BROWSER_PROFILE_LIST_OPERATION_ID,
       ].sort(),
@@ -91,6 +98,7 @@ describe('the browser operations', () => {
       BROWSER_PAGE_SNAPSHOT_OPERATION_ID,
       BROWSER_PAGE_READ_OPERATION_ID,
       BROWSER_PAGE_LIST_OPERATION_ID,
+      BROWSER_PAGE_SCREENSHOT_OPERATION_ID,
       BROWSER_PROFILE_LIST_OPERATION_ID,
     ]) {
       expect(getOperation(id)).toMatchObject({
@@ -127,6 +135,47 @@ describe('the browser operations', () => {
   });
 });
 
+describe('the pinned browser.page.open', () => {
+  it('names every other page operation of its bundle in the description it is pinned with', () => {
+    const described = getOperation(BROWSER_PAGE_OPEN_OPERATION_ID)?.semanticDescription ?? '';
+    for (const op of BROWSER_OPS()) {
+      if (op.operationId === BROWSER_PAGE_OPEN_OPERATION_ID || op.verb === 'list') continue;
+      if (op.operationId === BROWSER_PROFILE_LIST_OPERATION_ID) continue;
+      const named = op.operationId === BROWSER_PAGE_ACT_OPERATION_ID ? op.operationId : op.verb;
+      expect(described, op.operationId).toContain(named);
+    }
+    expect(described).toContain('list');
+  });
+});
+
+describe('browser.page.screenshot and browser.page.handoff', () => {
+  it('takes an element or the full page, not both', () => {
+    expect(BrowserPageScreenshotInputSchema.parse({ pageId: 'p' })).toEqual({
+      pageId: 'p',
+      fullPage: false,
+    });
+    const both = BrowserPageScreenshotInputSchema.safeParse({
+      pageId: 'p',
+      ref: 'e3',
+      fullPage: true,
+    });
+    expect(both.success).toBe(false);
+    expect(both.error?.issues[0]?.message).toContain('not both');
+  });
+
+  it('registers the hand-off as a write never retried and the screenshot as a read, both in browser.page', () => {
+    expect(getOperation(BROWSER_PAGE_HANDOFF_OPERATION_ID)).toMatchObject({
+      accessMode: 'write',
+      idempotency: 'non_idempotent',
+      capabilityGroupId: 'browser.page',
+    });
+    expect(getOperation(BROWSER_PAGE_SCREENSHOT_OPERATION_ID)).toMatchObject({
+      accessMode: 'read',
+      capabilityGroupId: 'browser.page',
+    });
+  });
+});
+
 describe('browser.page.open', () => {
   it('opens http and https only, in the default profile unless one is named', () => {
     expect(BrowserPageOpenInputSchema.parse({ url: 'https://example.com' })).toEqual({
@@ -155,6 +204,7 @@ describe('browser.page.open', () => {
         redirected: false,
         outlineElements: 1,
         outlineCut: false,
+        settled: true,
       },
     };
     expect(BrowserPageOpenOutputSchema.parse(base)).not.toHaveProperty('outlineCensus');
@@ -240,6 +290,15 @@ describe('browser.page.read and browser.profile.list', () => {
     );
   });
 
+  it('reads on from an offset, and takes a larger bound only up to the ceiling', () => {
+    const read = (extra: Record<string, unknown>) =>
+      BrowserPageReadInputSchema.safeParse({ pageId: 'p', what: 'text', ...extra }).success;
+    expect(read({ offset: 8_000 })).toBe(true);
+    expect(read({ maxChars: 32_000 })).toBe(true);
+    expect(read({ maxChars: 32_001 })).toBe(false);
+    expect(read({ maxChars: 10 })).toBe(false);
+  });
+
   it('lists sites by name only, or says why it cannot', () => {
     expect(
       BrowserProfileListOutputSchema.parse({
@@ -265,8 +324,10 @@ describe('BrowserProfileSchema', () => {
       posture: 'autonomous',
       rules: [],
       window: 'hidden',
+      windowSize: { width: 1280, height: 800 },
       unattended: true,
       idleMinutes: 30,
+      handoffMinutes: 15,
     });
   });
 

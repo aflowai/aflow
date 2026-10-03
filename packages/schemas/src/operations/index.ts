@@ -27,6 +27,7 @@ export * from './hostRegistrations.js';
 export * from './browser.js';
 export * from './browserObservation.js';
 export * from './browserProfile.js';
+export * from './browserWindow.js';
 export * from './agentControl.js';
 export * from './platform.js';
 export * from './guardrailOps.js';

@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
 import process from 'node:process';
 
+import { listenersOn, mcpPortHeldMessage, readProcessTable } from './devMcpPort.mjs';
 import { findRunningStack, profileConflicts, stackConflictMessage } from './devStackLock.mjs';
 
 /** When true, child exit must not remove entries until shutdown finishes (see shutdown + port sweep). */
@@ -162,7 +163,9 @@ const PROFILES = {
   // is for, so it starts with everything else rather than waiting to be asked
   // for. Needs Docker on the host, as the `all` profile does. The host executor
   // is the local edition's coding and command lane; it starts when this machine
-  // is paired (see `pairedHostEnvPath`).
+  // is paired (see `pairedHostEnvPath`). The MCP server is how a coding agent in
+  // this checkout drives the stack (`.mcp.json`); one already on its port is
+  // used instead (see `yieldHeldMcpPort`).
   local: [
     'orchestrator',
     'server',
@@ -176,6 +179,7 @@ const PROFILES = {
     'executor-compute',
     'web-product',
     'web-local',
+    'mcp',
   ],
   mcp: ['mcp'],
   // 'mock' profile: legacy — uses mock executor for everything
@@ -421,29 +425,6 @@ async function portTaken(port) {
 }
 
 /**
- * The pids listening on a TCP port here, best effort: empty without lsof, and
- * missing whatever another user owns when this is not root.
- */
-function listenersOn(port) {
-  try {
-    const out = execSync(`lsof -t -sTCP:LISTEN -iTCP:${port} 2>/dev/null || true`, {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-    return [
-      ...new Set(
-        out
-          .split('\n')
-          .map((line) => line.trim())
-          .filter(Boolean),
-      ),
-    ];
-  } catch {
-    return [];
-  }
-}
-
-/**
  * Refuses a profile whose ports something already listens on. The usual holder
  * is the previous runner, still stopping: its teardown sweeps these ports, so it
  * would kill this stack's server and web, and `tsx watch` would then keep the
@@ -470,6 +451,19 @@ async function refuseTakenPorts(services) {
       'that process. Then run this again.\n',
   );
   process.exit(1);
+}
+
+/**
+ * Drops the MCP server from a stack whose port for it is already held, naming
+ * the holder (`scripts/devMcpPort.mjs`). Only beside other services: the `mcp`
+ * profile alone is a request for that server, and is refused as before.
+ */
+async function yieldHeldMcpPort(services) {
+  if (!services.includes('mcp') || services.length === 1) return services;
+  const [port] = SERVICE_REGISTRY.mcp.ports;
+  if (!(await portTaken(port))) return services;
+  console.error(`[dev] ${mcpPortHeldMessage(port, listenersOn(port), readProcessTable())}`);
+  return services.filter((name) => name !== 'mcp');
 }
 
 /** Starts one registry service with its environment: the `.env` values, its own, or none. */
@@ -773,7 +767,7 @@ async function main() {
   }
 
   // Resolve services to run
-  const services = resolveServices(options);
+  let services = resolveServices(options);
 
   // One stack per machine, refused rather than raced. Two of them attach to the
   // same Redis and join the same consumer group, so the second looks healthy
@@ -792,6 +786,7 @@ async function main() {
       process.exit(1);
     }
   }
+  services = await yieldHeldMcpPort(services);
   await refuseTakenPorts(services);
 
   // Check for stale packages (advisory)

@@ -27,11 +27,14 @@ import { AgentDecisionCard, extractAgentAction } from './AgentDecisionCard.js';
 // ---------------------------------------------------------------------------
 
 interface AiContentPart {
-  kind: 'text' | 'json' | 'ref';
+  kind: 'text' | 'json' | 'ref' | 'image';
   text?: string;
   json?: unknown;
   ref?: string;
   summary?: string;
+  width?: number;
+  height?: number;
+  description?: string;
 }
 
 interface AiToolCall {
@@ -82,6 +85,9 @@ function renderTextContent(msg: AiMessage): string {
     .map((p) => {
       if (p.kind === 'text' && p.text) return p.text;
       if (p.kind === 'ref') return `[Ref: ${p.summary ?? p.ref ?? '…'}]`;
+      if (p.kind === 'image') {
+        return `[Image ${String(p.width ?? '?')}×${String(p.height ?? '?')}: ${p.description ?? 'no description'}]`;
+      }
       return '';
     })
     .filter(Boolean)
@@ -198,6 +204,7 @@ function estimateMessageChars(msg: AiMessage): number {
       if (p.kind === 'text' && p.text) chars += p.text.length;
       if (p.kind === 'json' && p.json) chars += JSON.stringify(p.json).length;
       if (p.kind === 'ref') chars += 60; // approximate ref overhead
+      if (p.kind === 'image') chars += 60 + (p.description?.length ?? 0);
     }
   }
   if (msg.toolCalls) {

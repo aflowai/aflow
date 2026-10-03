@@ -19,6 +19,7 @@ import {
   EngineNavigationFailed,
   type EnginePage,
   EngineRefNotFound,
+  type EngineScreenshot,
   type PageEvents,
   type PageSnapshot,
 } from './types.js';
@@ -26,16 +27,29 @@ import {
 /** How long a navigation may take to reach DOMContentLoaded before it fails. */
 const DOM_CONTENT_LOADED_TIMEOUT_MS = 30_000;
 /**
- * How long to wait past DOMContentLoaded for the load event. A page that keeps
- * a connection open or loads forever never fires it, and is read as it stands.
+ * How long after an action a navigation it caused may take to be requested.
+ * A click on a link or a submit asks for its document within milliseconds;
+ * an action that asks for none re-rendered the page by script, and nothing is
+ * waited for.
  */
-const LOAD_EVENT_GRACE_MS = 5_000;
+const NAVIGATION_START_GRACE_MS = 150;
+/** How long a screenshot may take, a long full page included. */
+const SCREENSHOT_TIMEOUT_MS = 30_000;
+/** Every password field, masked in an image as the outline masks its value. */
+const CREDENTIAL_INPUT_SELECTOR = 'input[type=password]';
 /** How long an action waits for its element to become actionable. */
 const ACTION_TIMEOUT_MS = 10_000;
 
 interface PwFrame {
   url(): string;
   parentFrame(): PwFrame | null;
+}
+
+interface PwScreenshotOptions {
+  timeout: number;
+  type: 'png' | 'jpeg';
+  quality?: number;
+  mask: PwLocator[];
 }
 
 interface PwElementHandle {
@@ -47,12 +61,16 @@ interface PwLocator {
   evaluate<R>(fn: (element: unknown) => R): Promise<R>;
   count(): Promise<number>;
   elementHandle(options: { timeout: number }): Promise<PwElementHandle>;
-  click(options: { timeout: number }): Promise<void>;
+  click(options: { timeout: number; noWaitAfter: boolean }): Promise<void>;
   hover(options: { timeout: number }): Promise<void>;
   fill(text: string, options: { timeout: number }): Promise<void>;
-  press(key: string, options: { timeout: number }): Promise<void>;
-  selectOption(values: string[], options: { timeout: number }): Promise<string[]>;
+  press(key: string, options: { timeout: number; noWaitAfter: boolean }): Promise<void>;
+  selectOption(
+    values: string[],
+    options: { timeout: number; noWaitAfter: boolean },
+  ): Promise<string[]>;
   innerText(options: { timeout: number }): Promise<string>;
+  screenshot(options: PwScreenshotOptions): Promise<Buffer>;
 }
 
 interface PwRequest {
@@ -85,7 +103,6 @@ interface PwPage {
   goBack(options: WaitUntil): Promise<unknown>;
   goForward(options: WaitUntil): Promise<unknown>;
   reload(options: WaitUntil): Promise<unknown>;
-  waitForLoadState(state: 'load', options: { timeout: number }): Promise<void>;
   url(): string;
   mainFrame(): PwFrame;
   title(): Promise<string>;
@@ -94,13 +111,17 @@ interface PwPage {
   on(event: 'console', listener: (message: PwConsoleMessage) => void): void;
   on(event: 'response', listener: (response: PwResponse) => void): void;
   on(event: 'request' | 'requestfailed', listener: (request: PwRequest) => void): void;
-  off(event: 'request', listener: (request: PwRequest) => void): void;
+  on(event: 'domcontentloaded' | 'download', listener: () => void): void;
+  off(event: 'request' | 'requestfailed', listener: (request: PwRequest) => void): void;
+  off(event: 'domcontentloaded' | 'download', listener: () => void): void;
+  screenshot(options: PwScreenshotOptions & { fullPage: boolean }): Promise<Buffer>;
   close(): Promise<void>;
   isClosed(): boolean;
 }
 
 interface PwContext {
   newPage(): Promise<PwPage>;
+  pages(): PwPage[];
   cookies(): Promise<Array<{ domain: string }>>;
 }
 
@@ -143,10 +164,6 @@ async function maskedRefs(page: PwPage, text: string): Promise<Set<string>> {
   return masked;
 }
 
-async function settle(page: PwPage): Promise<void> {
-  await page.waitForLoadState('load', { timeout: LOAD_EVENT_GRACE_MS }).catch(() => undefined);
-}
-
 async function navigate(page: PwPage, to: EngineNavigation): Promise<boolean> {
   const options: WaitUntil = {
     timeout: DOM_CONTENT_LOADED_TIMEOUT_MS,
@@ -167,7 +184,6 @@ async function navigate(page: PwPage, to: EngineNavigation): Promise<boolean> {
       await page.reload(options);
       break;
   }
-  await settle(page);
   return moved;
 }
 
@@ -205,6 +221,58 @@ async function navigateReportingChain(page: PwPage, to: EngineNavigation): Promi
   }
 }
 
+/**
+ * Watches the page from before an action until whatever document navigation
+ * the action caused has loaded. Nothing waits on a navigation that was never
+ * requested: without one, `settled` resolves after the short grace.
+ */
+function watchForNavigation(page: PwPage): { settled: () => Promise<void>; stop: () => void } {
+  let requested = false;
+  let ended = false;
+  let wake: () => void = () => undefined;
+  const onRequest = (request: PwRequest): void => {
+    if (!isMainFrameNavigation(page, request)) return;
+    requested = true;
+    wake();
+  };
+  const onEnd = (): void => {
+    if (!requested) return;
+    ended = true;
+    wake();
+  };
+  const onFailed = (request: PwRequest): void => {
+    if (isMainFrameNavigation(page, request)) onEnd();
+  };
+  page.on('request', onRequest);
+  page.on('requestfailed', onFailed);
+  page.on('domcontentloaded', onEnd);
+  page.on('download', onEnd);
+  const until = async (done: () => boolean, ms: number): Promise<void> => {
+    if (done()) return;
+    let timer: NodeJS.Timeout | undefined;
+    await new Promise<void>((resolve) => {
+      wake = () => {
+        if (done()) resolve();
+      };
+      timer = setTimeout(resolve, ms);
+    });
+    clearTimeout(timer);
+    wake = () => undefined;
+  };
+  return {
+    settled: async () => {
+      await until(() => requested, NAVIGATION_START_GRACE_MS);
+      if (requested) await until(() => ended, DOM_CONTENT_LOADED_TIMEOUT_MS);
+    },
+    stop: () => {
+      page.off('request', onRequest);
+      page.off('requestfailed', onFailed);
+      page.off('domcontentloaded', onEnd);
+      page.off('download', onEnd);
+    },
+  };
+}
+
 async function act(page: PwPage, ref: string, action: EngineAction): Promise<void> {
   const element = page.locator(`aria-ref=${ref}`);
   if ((await element.count()) === 0) throw new EngineRefNotFound(ref);
@@ -220,25 +288,50 @@ async function act(page: PwPage, ref: string, action: EngineAction): Promise<voi
     }
     if (password) throw new EngineCredentialField(ref);
   }
-  switch (action.kind) {
-    case 'click':
-      await element.click({ timeout });
-      break;
-    case 'hover':
-      await element.hover({ timeout });
-      break;
-    case 'type':
-      await element.fill(action.text, { timeout });
-      if (action.submit) await element.press('Enter', { timeout });
-      break;
-    case 'select':
-      await element.selectOption([...action.values], { timeout });
-      break;
-    case 'press':
-      await element.press(action.key, { timeout });
-      break;
+  // Playwright's own wait after an action is for a navigation it merely
+  // suspects; on a page that routes by script none comes, and the action sat
+  // out the navigation timeout. The watch waits on evidence instead.
+  const noWaitAfter = true;
+  const navigation = watchForNavigation(page);
+  try {
+    switch (action.kind) {
+      case 'click':
+        await element.click({ timeout, noWaitAfter });
+        break;
+      case 'hover':
+        await element.hover({ timeout });
+        break;
+      case 'type':
+        await element.fill(action.text, { timeout });
+        if (action.submit) await element.press('Enter', { timeout, noWaitAfter });
+        break;
+      case 'select':
+        await element.selectOption([...action.values], { timeout, noWaitAfter });
+        break;
+      case 'press':
+        await element.press(action.key, { timeout, noWaitAfter });
+        break;
+    }
+    await navigation.settled();
+  } finally {
+    navigation.stop();
   }
-  await settle(page);
+}
+
+async function screenshot(page: PwPage, request: EngineScreenshot): Promise<Buffer> {
+  const options: PwScreenshotOptions = {
+    timeout: SCREENSHOT_TIMEOUT_MS,
+    mask: [page.locator(CREDENTIAL_INPUT_SELECTOR)],
+    ...(request.jpegQuality !== undefined
+      ? { type: 'jpeg', quality: request.jpegQuality }
+      : { type: 'png' }),
+  };
+  if (request.ref === undefined) {
+    return await page.screenshot({ ...options, fullPage: request.fullPage });
+  }
+  const element = page.locator(`aria-ref=${request.ref}`);
+  if ((await element.count()) === 0) throw new EngineRefNotFound(request.ref);
+  return await element.screenshot(options);
 }
 
 const HAS_ITS_OWN_ORIGIN = /^https?:/;
@@ -294,6 +387,7 @@ function wrapPage(page: PwPage, events: PageEvents): EnginePage {
       return { text, maskedRefs: await maskedRefs(page, text) };
     },
     text: async () => await page.locator('body').innerText({ timeout: ACTION_TIMEOUT_MS }),
+    screenshot: async (request) => await screenshot(page, request),
     close: async () => {
       await page.close();
     },
@@ -310,6 +404,11 @@ export function createPlaywrightEngine(): BrowserEngine {
       const context = browser.contexts()[0] ?? (await browser.newContext());
       return {
         newPage: async (events) => wrapPage(await context.newPage(), events),
+        firstPage: async (events) => {
+          const started = context.pages().find((page) => !page.isClosed());
+          return wrapPage(started ?? (await context.newPage()), events);
+        },
+        openPageCount: () => context.pages().filter((page) => !page.isClosed()).length,
         cookieSites: async () => {
           const domains = (await context.cookies()).map((cookie) =>
             cookie.domain.replace(/^\./, '').toLowerCase(),

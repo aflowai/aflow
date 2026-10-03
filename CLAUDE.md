@@ -147,7 +147,8 @@ All `packages/*` have conditional exports with a `ts-source` condition. Dev scri
 yarn start                 # First run and every run: .env, Postgres + Redis, build, migrate, all services
 yarn dev:local             # What `yarn start` runs once its checks pass
 yarn dev:core              # Server + orchestrator + mock executor (no web)
-yarn dev:mcp               # MCP server only (port 3100) — run separately
+yarn dev:mcp               # MCP server alone (port 3100); `yarn start` already serves it
+yarn mcp:setup             # Give the MCP server its API key (mcp.local.json); idempotent
 yarn infra:up              # Postgres (port 5433) + Redis (port 6379) only
 yarn infra:tools           # Same, with pgAdmin (8080) + Redis Commander (8081)
 
@@ -247,13 +248,13 @@ review does not run done by hand before the operator merges.
 
 ## Local MCP server
 
-The Aflow MCP server (`apps/aflow-mcp/`) can be registered as a Claude Code MCP server named **`aflow-local`**, pointed at the local stack (`localhost:3000`). Use it to test operations end-to-end, inspect sessions, and browse the catalog.
+The Aflow MCP server (`apps/aflow-mcp/`), **`aflow-local`**, is how a coding agent drives the local stack (`localhost:3000`): run operations, start and watch sessions, inspect them, browse the catalog.
 
-**Prerequisites**: a running stack + `yarn dev:mcp` (separate process). Local auth via `mcp.local.json` (copy from `apps/aflow-mcp/mcp.local.json.example` if missing).
+**Set up.** `yarn start` serves it on `127.0.0.1:3100` (`MCP_HOST` names another interface, refused at startup while the auth file is configured — the Host check stops browsers, not another client on the network, which would be served as the owner; unset one of them. An MCP server already holding the port is used instead of a second). It answers only to `localhost` and `127.0.0.1` on that port (`ALLOWED_HOSTS` replaces the list) and refuses any request carrying a browser `Origin` while the auth file is configured, so a web page cannot reach the owner's key through a name rebound to loopback; a `421` or `403` from it says which check refused. It is the owner, through an API key of its own in `mcp.local.json`, which `AFLOW_MCP_LOCAL_AUTH_JSON` in `.env` names. `yarn mcp:setup` mints the key and writes both; `yarn start` runs it once the stack is healthy when the file is missing, and run by hand it replaces the key only when the API no longer accepts it. When `auth_status` reports a method other than `api_key`, check that `.env` names the file (read when the MCP server starts — restart it after adding the line), that the file parses (exactly the fields of `apps/aflow-mcp/mcp.local.json.example`; a refused file is a `local_auth_json_invalid` line in the server's log), and that the key is still listed under Settings → API Keys.
 
-**Tools** (prefixed `mcp__aflow-local__`): `auth_login`, `auth_check`, `auth_status`, `space_list`, `catalog`, `run_operation`, `start_session`, `watch_session`, `watch_run`, `inspect_session`, `fetch_payload` (lazy/auto payload mode only).
+**Connect.** `.mcp.json` registers `aflow-local` at `http://localhost:3100` for Claude Code in this checkout and every worktree of it, with no credential in it. A port moved off 3100 (`MCP_PORT`, then `PORT`) needs `aflow-local` registered again at the new port with `claude mcp add` in local scope, which overrides the project file. The next session in the checkout offers it; approve it, and `claude mcp list` should report it connected. After the MCP server restarts, start a new session to pick up changed tool schemas.
 
-**Notes**: MCP sessions are in-memory (lost on restart). Every space-scoped tool takes an explicit `space_id` (discover via `space_list`). When `start_session`/`run_operation` time out waiting, the response carries a `continuation` (tool + args) — call it verbatim (`watch_session`/`watch_run`) instead of polling. After MCP restart, close and resume the Claude Code session to pick up updated schemas.
+**Drive.** Follow `docs/dev/driving-work-through-the-loop.md`. Tools (prefixed `mcp__aflow-local__`): `auth_status`, `space_list`, `catalog`, `run_operation`, `start_session`, `watch_session`, `watch_run`, `inspect_session`, `fetch_payload` (lazy/auto payload mode only). MCP sessions are in-memory (lost on restart). Every space-scoped tool takes an explicit `space_id` (discover via `space_list`). When `start_session`/`run_operation` time out waiting, the response carries a `continuation` (tool + args) — call it verbatim (`watch_session`/`watch_run`) instead of polling. A session `inspect_session` shows `FAILED` with its steps `unknown` failed on a step whose stored error no MCP tool reads yet (`error_ref` is the session's): the web UI's run view shows it, with a retry.
 
 ## Documentation practices
 

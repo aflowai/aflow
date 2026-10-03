@@ -493,6 +493,15 @@ export const AgentTurnInputSchema = z.object({
 });
 export type AgentTurnInput = z.infer<typeof AgentTurnInputSchema>;
 
+/**
+ * The largest step output, as JSON with its internal payload references
+ * removed, that an agent is shown whole. Anything larger is stored and the
+ * agent is handed a summary and a path to read it back from — a second call
+ * for what was one result. A producer that wants its results read in one call
+ * bounds them under this.
+ */
+export const TOOL_RESULT_INLINE_MAX_CHARS = 12_288;
+
 // ============================================================================
 // Agent Turn Decision (output from ai.agent.turn)
 // ============================================================================

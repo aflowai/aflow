@@ -2,7 +2,12 @@ import { describe, it, expect } from 'vitest';
 import type { AiMessageV1, AiToolResultEnvelopeV1 } from '@aflow/schemas';
 import { toolResultMessage } from '@aflow/schemas';
 import type { ChatMessage } from '@aflow/ai-client';
-import { aiMessageToChatMessage, mergeConsecutiveMessages } from './agentMessageConversion.js';
+import {
+  aiMessageToChatMessage,
+  chatMessageToAiMessage,
+  mergeConsecutiveMessages,
+  toolContentText,
+} from './agentMessageConversion.js';
 
 function assertToolMessage(
   msg: ChatMessage,
@@ -281,5 +286,61 @@ describe('mergeConsecutiveMessages', () => {
       'tool',
       'user',
     ]);
+  });
+});
+
+describe('tool results carrying an image', () => {
+  const screenshot = {
+    ref: `inline:${Buffer.from('{"data":"iVBORw0KGgo=","mimeType":"image/png"}').toString('base64')}`,
+    contentType: 'image/png' as const,
+    sizeBytes: 48_213,
+    width: 1280,
+    height: 720,
+    description: 'The sign-in page',
+  };
+  const envelope: AiToolResultEnvelopeV1 = {
+    kind: 'tool_result',
+    toolCallId: 'shot_0',
+    toolName: 'browser.page.screenshot',
+    status: 'SUCCEEDED',
+    completedAtMs: 1,
+    summary: 'Captured the page',
+  };
+
+  it('renders an envelope without images byte for byte as before', () => {
+    const result = aiMessageToChatMessage(toolResultMessage(envelope));
+    expect(JSON.stringify(result)).toBe(
+      JSON.stringify({
+        role: 'tool',
+        toolCallId: 'shot_0',
+        name: 'browser.page.screenshot',
+        content: JSON.stringify(envelope, null, 2),
+      }),
+    );
+  });
+
+  it('carries the image as a reference beside the envelope text', () => {
+    const result = aiMessageToChatMessage(toolResultMessage({ ...envelope, images: [screenshot] }));
+    assertToolMessage(result);
+    expect(result.content).toEqual([
+      { type: 'text', text: JSON.stringify(envelope, null, 2) },
+      { type: 'image_ref', image: screenshot },
+    ]);
+  });
+
+  it('keeps the reference, not bytes, in the request snapshot', () => {
+    const chat = aiMessageToChatMessage(toolResultMessage({ ...envelope, images: [screenshot] }));
+    expect(chatMessageToAiMessage(chat).parts).toEqual([
+      { kind: 'text', text: JSON.stringify(envelope, null, 2) },
+      { kind: 'image', ...screenshot },
+    ]);
+  });
+
+  it('names an image by its description when the result becomes a user note', () => {
+    const chat = aiMessageToChatMessage(toolResultMessage({ ...envelope, images: [screenshot] }));
+    assertToolMessage(chat);
+    expect(toolContentText(chat.content)).toBe(
+      `${JSON.stringify(envelope, null, 2)}\n[Image 1280×720 image/png: The sign-in page]`,
+    );
   });
 });

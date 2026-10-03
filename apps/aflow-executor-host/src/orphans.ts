@@ -140,6 +140,23 @@ function stillTheRecordedProcess(record: OrphanRecord): boolean {
   return true;
 }
 
+/** A live process's parent and command line, or nothing when `ps` cannot say. */
+export function describeProcess(pid: number): { parentPid: number; command: string } | undefined {
+  let line: string;
+  try {
+    line = execFileSync('ps', ['-o', 'ppid=,command=', '-p', String(pid)], {
+      encoding: 'utf8',
+      timeout: 2000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+  } catch {
+    return undefined;
+  }
+  const match = /^(\d+)\s+(.*)$/.exec(line);
+  if (match?.[1] === undefined || match[2] === undefined) return undefined;
+  return { parentPid: Number(match[1]), command: match[2] };
+}
+
 /**
  * End anything a previous executor left running and remove what it was using.
  * Called before this executor consumes its first job, so nothing from before is

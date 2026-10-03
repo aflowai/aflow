@@ -1,4 +1,6 @@
-import { BROWSER_OUTLINE_MAX_CHARS } from '@aflow/schemas';
+import { BROWSER_MIN_CHARS, BROWSER_OUTLINE_DEFAULT_CHARS } from '@aflow/schemas';
+
+import { encodedLength } from '../browser/encodedLength.js';
 import { describe, expect, it } from 'vitest';
 
 import { buildOutline } from '../browser/outline.js';
@@ -56,7 +58,7 @@ describe('the outline', () => {
     }
     const outline = buildOutline({ text: lines.join('\n'), maskedRefs: new Set() });
 
-    expect(outline.text.length).toBeLessThanOrEqual(BROWSER_OUTLINE_MAX_CHARS);
+    expect(encodedLength(outline.text)).toBeLessThanOrEqual(BROWSER_OUTLINE_DEFAULT_CHARS);
     expect(outline.census).toBeDefined();
     const census = outline.census ?? {};
     const shown = outline.text.split('\n').slice(0, -1);
@@ -70,15 +72,22 @@ describe('the outline', () => {
 
     const last = outline.text.split('\n').at(-1) ?? '';
     expect(last).toMatch(
-      /^# Outline cut at 32000 characters\. Not shown: link \d+, heading \d+, button \d+\.$/,
+      /^# Outline cut at 7000 characters\. Not shown: link \d+, heading \d+, button \d+\. browser\.page\.snapshot with a `ref` shows one region whole, or raise `maxChars`\.$/,
     );
     // What was kept is the start of the page, in order.
     expect(shown[0]).toBe('- link "Article number 1" [ref=l1] [url=/articles/1]');
   });
 
   it('honours a smaller bound', () => {
-    const outline = buildOutline({ text: PAGE, maskedRefs: new Set(['e15']) }, 120);
-    expect(outline.text.length).toBeLessThanOrEqual(120);
+    const big = Array.from(
+      { length: 40 },
+      (_, i) => `- link "Item ${String(i)}" [ref=l${String(i)}]`,
+    );
+    const outline = buildOutline(
+      { text: big.join('\n'), maskedRefs: new Set() },
+      BROWSER_MIN_CHARS,
+    );
+    expect(encodedLength(outline.text)).toBeLessThanOrEqual(BROWSER_MIN_CHARS);
     expect(outline.census).toBeDefined();
   });
 });

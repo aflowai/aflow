@@ -47,6 +47,10 @@ export function partitionLanes(items: readonly ActionCenterItem[]): ActionCenter
       case 'session_invitation':
         approvals.push(it);
         break;
+      case 'browser_handoff':
+        // A person is needed at the window, not a decision.
+        inputs.push(it);
+        break;
       case 'coach_activity':
         // No Action Center lane — coach activity surfaces elsewhere (see ActionCenterPanel).
         break;

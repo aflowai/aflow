@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import type { AflowError } from '@aflow/schemas';
-import { AiToolResultEnvelopeV1Schema, toAgentToolError } from '@aflow/schemas';
+import {
+  AiToolResultEnvelopeV1Schema,
+  findStepImages,
+  toAgentToolError,
+  toolResultMessage,
+} from '@aflow/schemas';
 import { buildToolResultEnvelopes } from './toolResultEnvelope.js';
 import type { ToolResultSummary } from '../types.js';
 
@@ -182,5 +187,62 @@ describe('buildToolResultEnvelopes (Plan 196 §4.4a)', () => {
       'Re-read with ui.applet.get and recompute',
     );
     expect(parsed.success && parsed.data.nextExpectedFromAgent?.[0]?.action).toBe('retry');
+  });
+});
+
+describe('buildToolResultEnvelopes — images in a step output (Plan 320 D10)', () => {
+  const producer = { tenantId: 'tenant-1', runId: 'run-1', stepExecutionId: 'exec-1' };
+  const screenshot = {
+    ref: 'gs://aflow-payloads/tenants/tenant-1/runs/run-1/steps/exec-1/attempt/1/body.json',
+    contentType: 'image/png' as const,
+    sizeBytes: 48_213,
+    width: 1280,
+    height: 720,
+    description: 'The sign-in page',
+  };
+  const base: ToolResultSummary = {
+    toolCallId: 'shot_0',
+    toolId: 'browser.page.screenshot',
+    name: 'browser.page.screenshot',
+    status: 'SUCCEEDED',
+    summary: 'Captured the page',
+    operationId: 'browser.page.screenshot',
+    hasOutputRef: true,
+  };
+
+  it('an image at a declared path becomes a tool message with an image part', () => {
+    const output = { url: 'https://example.com/sign-in', image: screenshot };
+    const { images } = findStepImages(output, ['image'], producer);
+    const [envelope] = buildToolResultEnvelopes([{ ...base, images }], 1_718_000_000_000);
+    expect(strictEnvelope.safeParse(envelope).success).toBe(true);
+    expect(envelope!.images).toEqual([screenshot]);
+
+    const message = toolResultMessage(envelope!);
+    expect(message.parts[0]!.kind).toBe('json');
+    expect(message.parts.slice(1)).toEqual([{ kind: 'image', ...screenshot }]);
+  });
+
+  it('a withheld image is a line in the JSON the model reads, and no image part', () => {
+    const output = { image: { ...screenshot, ref: screenshot.ref.replace('exec-1', 'exec-2') } };
+    const { images, withheld } = findStepImages(output, ['image'], producer);
+    expect(images).toEqual([]);
+    const [envelope] = buildToolResultEnvelopes(
+      [{ ...base, imagesWithheld: withheld }],
+      1_718_000_000_000,
+    );
+    expect(strictEnvelope.safeParse(envelope).success).toBe(true);
+    expect(toolResultMessage(envelope!).parts).toEqual([{ kind: 'json', json: envelope }]);
+    expect(envelope!.imagesWithheld).toEqual([
+      'The image at image was not shown: its reference names a payload this step did not store.',
+    ]);
+  });
+
+  it('an output without one leaves the envelope and its message as they were', () => {
+    const output = { url: 'https://example.com/sign-in', title: 'Sign in' };
+    expect(findStepImages(output, ['image'], producer)).toEqual({ images: [], withheld: [] });
+    const [envelope] = buildToolResultEnvelopes([base], 1_718_000_000_000);
+    expect('images' in envelope!).toBe(false);
+    expect('imagesWithheld' in envelope!).toBe(false);
+    expect(toolResultMessage(envelope!).parts).toEqual([{ kind: 'json', json: envelope }]);
   });
 });

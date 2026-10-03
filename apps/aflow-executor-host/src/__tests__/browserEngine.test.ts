@@ -10,6 +10,9 @@ import { EngineCredentialField, EngineFieldUnchecked, type EnginePage } from '..
 
 const pressed: string[] = [];
 const filled: string[] = [];
+const clicks: Array<{ noWaitAfter?: boolean }> = [];
+const located: string[] = [];
+const shots: Array<{ type: string; mask: unknown[]; fullPage?: boolean }> = [];
 
 const passwordInput = {
   evaluate: <R>(fn: (element: unknown) => R): Promise<R> =>
@@ -24,7 +27,14 @@ const passwordInput = {
     return Promise.resolve();
   },
   selectOption: () => Promise.resolve([]),
-  click: () => Promise.resolve(),
+  click: (options: { noWaitAfter?: boolean }) => {
+    clicks.push(options);
+    return Promise.resolve();
+  },
+  screenshot: (options: { type: string; mask: unknown[] }) => {
+    shots.push(options);
+    return Promise.resolve(Buffer.alloc(0));
+  },
   hover: () => Promise.resolve(),
 };
 
@@ -37,7 +47,14 @@ const detachedInput = {
 let underRef: typeof passwordInput = passwordInput;
 
 const page = {
-  locator: () => underRef,
+  locator: (selector: string) => {
+    located.push(selector);
+    return underRef;
+  },
+  screenshot: (options: { type: string; mask: unknown[]; fullPage: boolean }) => {
+    shots.push(options);
+    return Promise.resolve(Buffer.alloc(0));
+  },
   ariaSnapshot: () => Promise.resolve('- textbox "Passphrase" [ref=e5]'),
   waitForLoadState: () => Promise.resolve(),
   url: () => 'https://example.com/',
@@ -100,5 +117,29 @@ describe('the engine on an element it cannot check', () => {
     expect(pressed.length).toBe(before.pressed);
     expect(filled.length).toBe(before.filled);
     underRef = passwordInput;
+  });
+});
+
+describe('the engine after an action that starts no navigation', () => {
+  it('asks Playwright not to wait, and returns without waiting on a navigation', async () => {
+    const enginePage = await openPage();
+    const startedAt = Date.now();
+    await enginePage.act('e5', { kind: 'click' });
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
+    expect(clicks.at(-1)).toMatchObject({ noWaitAfter: true });
+  });
+});
+
+describe('the engine taking a screenshot', () => {
+  it('masks every password field, of the page or of one element', async () => {
+    const enginePage = await openPage();
+    located.length = 0;
+    await enginePage.screenshot({ fullPage: true });
+    await enginePage.screenshot({ ref: 'e5', fullPage: false, jpegQuality: 60 });
+    expect(located.filter((selector) => selector === 'input[type=password]')).toHaveLength(2);
+    expect(shots.map((shot) => [shot.type, shot.mask.length, shot.fullPage])).toEqual([
+      ['png', 1, true],
+      ['jpeg', 1, undefined],
+    ]);
   });
 });

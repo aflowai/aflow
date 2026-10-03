@@ -17,7 +17,8 @@ const TENANT = 'a0000000-0000-0000-0000-000000000001' as TenantId;
 const SPACE = '11111111-1111-4111-8111-111111111111';
 
 const store = new Map<string, string>();
-vi.mock('@aflow/redis', () => ({
+vi.mock('@aflow/redis', async (importOriginal) => ({
+  HostInventorySchema: (await importOriginal<typeof import('@aflow/redis')>()).HostInventorySchema,
   getRedisConnection: () => ({
     setex: (k: string, _ttl: number, v: string) => (store.set(k, v), Promise.resolve('OK')),
     get: (k: string) => Promise.resolve(store.get(k) ?? null),
