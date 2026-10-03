@@ -5,14 +5,17 @@
  * `scripts/dev-local.ts` already brings up the datastores, applies migrations,
  * provisions the instance and starts the edition's services — this adds only the
  * preconditions it assumes and cannot recover from, each of which otherwise
- * surfaces minutes later as an error naming something other than the cause.
+ * surfaces minutes later as an error naming something other than the cause —
+ * and, once the stack is healthy, the MCP server's key when it has none.
  */
 import { spawn, spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, readFileSync } from 'node:fs';
+import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { constants } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
+
+import { apiUrlOf, authFileOf, envNamingAuthFile, parseEnvFile } from './mcp-local-setup.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const say = (message) => {
@@ -43,6 +46,19 @@ if (!existsSync(join(REPO, '.env'))) {
   copyFileSync(join(REPO, '.env.example'), join(REPO, '.env'));
   say('created .env from .env.example');
   say('  nothing to edit — a model provider key is entered in the app');
+}
+
+// ── The MCP server's credential ───────────────────────────────────────────────
+// Minted by `yarn mcp:setup` once the API is healthy (below). The line naming
+// the file goes into `.env` now: the MCP server reads it once, at its start, and
+// reads the file itself per session — so the key reaches the next session
+// without a restart.
+const envFile = join(REPO, '.env');
+const envValues = { ...process.env, ...parseEnvFile(readFileSync(envFile, 'utf-8')) };
+const mcpCredentialMissing = !existsSync(authFileOf(envValues, REPO));
+if (mcpCredentialMissing) {
+  const named = envNamingAuthFile(readFileSync(envFile, 'utf-8'));
+  if (named !== undefined) writeFileSync(envFile, named);
 }
 
 // ── Build output the web application reads ────────────────────────────────────
@@ -129,3 +145,42 @@ dev.on('exit', (code, signal) => {
     process.exit(status);
   }, 100);
 });
+
+// ── Once the stack is healthy: the MCP server's key ───────────────────────────
+// Allowed to fail: the stack is no less up without it, and the line says how to
+// finish by hand.
+const BY_HAND = 'run `yarn mcp:setup` once the stack is up to give the MCP server its key';
+// A first run migrates and provisions before the API listens.
+const HEALTHY_WITHIN_MS = 10 * 60_000;
+
+async function apiHealthy(api) {
+  try {
+    const response = await fetch(`${api}/health`, { signal: AbortSignal.timeout(3_000) });
+    return response.ok && (await response.json()).status === 'ok';
+  } catch {
+    return false;
+  }
+}
+
+async function setUpMcpWhenHealthy(api) {
+  const deadline = Date.now() + HEALTHY_WITHIN_MS;
+  while (!(await apiHealthy(api))) {
+    if (stopping) return;
+    if (Date.now() > deadline) {
+      say(`the API at ${api} was not healthy in time; ${BY_HAND}`);
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+  }
+  if (stopping) return;
+  say('the stack is healthy; giving the MCP server its key (yarn mcp:setup)');
+  const setup = spawn('yarn', ['mcp:setup'], { cwd: REPO, stdio: 'inherit' });
+  setup.on('error', () => {
+    say(`could not run yarn mcp:setup; ${BY_HAND}`);
+  });
+  setup.on('exit', (code) => {
+    if (code !== 0 && !stopping) say(`yarn mcp:setup did not finish; ${BY_HAND}`);
+  });
+}
+
+if (mcpCredentialMissing) void setUpMcpWhenHealthy(apiUrlOf(envValues));

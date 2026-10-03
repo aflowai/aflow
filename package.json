@@ -66,6 +66,7 @@
     "local:smoke": "bash scripts/appliance-smoke.sh",
     "local:up": "docker compose -f docker-compose.local.yml up -d --build",
     "mcp:dev": "NODE_OPTIONS='--conditions=ts-source' dotenv -e .env -- tsx watch --include 'packages/*/src/**/*.ts' apps/aflow-mcp/src/index.ts",
+    "mcp:setup": "node scripts/mcp-local-setup.mjs",
     "models:verify-reasoning": "NODE_OPTIONS='--conditions=ts-source' npx tsx scripts/verify-reasoning-profiles.ts",
     "orchestrator:dev": "NODE_OPTIONS='--conditions=ts-source' dotenv -e .env -- tsx watch --include 'packages/*/src/**/*.ts' apps/aflow-orchestrator/src/index.ts",
     "packages:watch": "yarn workspaces foreach -A --include '@aflow/schemas' --include '@aflow/redis' --include '@aflow/database' --include '@aflow/executor-runtime' --include '@aflow/payload-store' --include '@aflow/ai-client' --include '@aflow/input-resolution' --include '@aflow/observability' --include '@aflow/lib' -p run dev",
