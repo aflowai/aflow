@@ -17,6 +17,9 @@
  * harness opened close, an ephemeral profile's browser stops, and every file
  * written here is removed. A call still in flight past a short grace is logged
  * as abandoned, and a page it opens later is closed as soon as it exists.
+ *
+ * A turn performs a few calls at once and the rest wait; a request line past
+ * its cap closes that turn's pipes, and the feed says why.
  */
 import { execFile } from 'node:child_process';
 import { constants, openSync } from 'node:fs';
@@ -24,7 +27,6 @@ import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
@@ -69,6 +71,13 @@ export const HARNESS_BROWSER_SERVER = 'browser';
 const RELAY_SOURCE = fileURLToPath(new URL('./harnessRelay.mjs', import.meta.url));
 /** How long the end of a run waits for calls still in flight before it closes the pages under them. */
 const IN_FLIGHT_GRACE_MS = 5_000;
+/** Calls one turn may have performing at once; the host executor is shared, so the rest wait their turn. */
+export const MAX_CALLS_IN_FLIGHT_PER_TURN = 4;
+/**
+ * The longest request line a turn's relay may send. Typed text and evaluated
+ * expressions are the large arguments, and none comes near this.
+ */
+export const MAX_REQUEST_LINE_BYTES = 1024 * 1024;
 
 export const HarnessBrowserEvaluateInputSchema = z.object({
   pageId: BrowserPageIdSchema,
@@ -482,6 +491,7 @@ export async function openHarnessBrowser(options: HarnessBrowserOptions): Promis
     let requests: Socket | undefined;
     let responses: Socket | undefined;
     let ended = false;
+    const waiting: Array<{ readonly id: number; readonly call: Call }> = [];
     const turn: HarnessBrowserTurn = {
       mcpConfigPath,
       relayArgs,
@@ -489,6 +499,7 @@ export async function openHarnessBrowser(options: HarnessBrowserOptions): Promis
         if (ended) return;
         ended = true;
         turns.delete(turn);
+        for (const { call } of waiting.splice(0)) abandon(call);
         requests?.destroy();
         responses?.destroy();
         await rm(turnDir, { recursive: true, force: true });
@@ -530,6 +541,31 @@ export async function openHarnessBrowser(options: HarnessBrowserOptions): Promis
       replies.write(`${JSON.stringify({ id, result })}\n`);
     };
 
+    let performing = 0;
+    const startWaiting = (): void => {
+      while (!ended && performing < MAX_CALLS_IN_FLIGHT_PER_TURN) {
+        const next = waiting.shift();
+        if (next === undefined) return;
+        performing += 1;
+        const work = perform(next.call)
+          .then((result) => {
+            answer(next.id, result);
+          })
+          .catch((error: unknown) => {
+            answer(
+              next.id,
+              textResult({ error: { code: 'INTERNAL', message: String(error) } }, true),
+            );
+          });
+        inFlight.set(next.call, work);
+        void work.finally(() => {
+          inFlight.delete(next.call);
+          performing -= 1;
+          startWaiting();
+        });
+      }
+    };
+
     const serve = (line: string): void => {
       if (ended || line.trim() === '') return;
       let request: RelayRequest;
@@ -539,29 +575,56 @@ export async function openHarnessBrowser(options: HarnessBrowserOptions): Promis
         return;
       }
       if (typeof request.id !== 'number' || typeof request.tool !== 'string') return;
-      const call: Call = {
-        tool: request.tool,
-        args:
-          typeof request.arguments === 'object' && request.arguments !== null
-            ? (request.arguments as Record<string, unknown>)
-            : {},
-        logged: false,
-      };
-      const work = perform(call)
-        .then((result) => {
-          answer(request.id, result);
-        })
-        .catch((error: unknown) => {
-          answer(
-            request.id,
-            textResult({ error: { code: 'INTERNAL', message: String(error) } }, true),
-          );
-        });
-      inFlight.set(call, work);
-      void work.finally(() => inFlight.delete(call));
+      waiting.push({
+        id: request.id,
+        call: {
+          tool: request.tool,
+          args:
+            typeof request.arguments === 'object' && request.arguments !== null
+              ? (request.arguments as Record<string, unknown>)
+              : {},
+          logged: false,
+        },
+      });
+      startWaiting();
     };
 
-    createInterface({ input: requests }).on('line', serve);
+    // The request pipe is writable from inside the sandbox, so what arrives on
+    // it is bounded here rather than trusted to be the relay's.
+    let partial: Buffer[] = [];
+    let partialBytes = 0;
+    const overflow = (): void => {
+      partial = [];
+      options.onActivity({
+        kind: 'status',
+        at: Math.max(0, now() - options.startedAt),
+        text:
+          `The browser closed for this turn: a request to it ran past ` +
+          `${String(MAX_REQUEST_LINE_BYTES)} bytes without ending.`,
+      });
+      void turn.close();
+    };
+    requests.on('data', (chunk: Buffer) => {
+      let rest = chunk;
+      while (!ended) {
+        const newline = rest.indexOf(0x0a);
+        const segment = newline === -1 ? rest : rest.subarray(0, newline);
+        if (partialBytes + segment.length > MAX_REQUEST_LINE_BYTES) {
+          overflow();
+          return;
+        }
+        if (newline === -1) {
+          partial.push(segment);
+          partialBytes += segment.length;
+          return;
+        }
+        const line = Buffer.concat([...partial, segment]).toString('utf8');
+        partial = [];
+        partialBytes = 0;
+        rest = rest.subarray(newline + 1);
+        serve(line);
+      }
+    });
     requests.on('error', () => undefined);
     replies.on('error', () => undefined);
     return turn;

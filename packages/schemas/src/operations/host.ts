@@ -726,7 +726,8 @@ export const HostHarnessBrowserSchema = z
         '`ephemeral` — the default choice — is a browser made for this run and deleted with ' +
           'it: no sign-ins, its own Chrome, and it reaches only the hosts this harness may reach ' +
           'and, on this machine, the loopback ports the operator declared for the harness — a ' +
-          'dev server the change runs is opened on one of those, at `localhost` or `127.0.0.1`. ' +
+          'dev server the change runs is opened on one of those, at `localhost`, `127.0.0.1` or ' +
+          '`[::1]` — `localhost` reaches a server listening on either loopback. ' +
           'A profile id names one the machine declares ' +
           'and this space may use, with its sign-ins, posture and origin rules; it never ' +
           "reaches this machine's own servers.",

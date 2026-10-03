@@ -37,20 +37,26 @@ export function harnessMayReach(host: string, port: number, reach: HarnessReach)
 }
 
 /**
- * The loopback address a declared local port is reached on, or nothing when
- * `host:port` is not one. Only a loopback name or a loopback address
- * qualifies — never an interface address the LAN also reaches, never
- * link-local, never a public name that resolves to loopback.
+ * A localhost name on a declared port is tried on IPv4 loopback, then IPv6:
+ * a dev server may listen on either alone, as Vite does on `::1` on macOS.
+ */
+export const LOCALHOST_ADDRESSES: readonly [string, ...string[]] = ['127.0.0.1', '::1'];
+
+/**
+ * The loopback addresses a declared local port is reached on, in the order
+ * they are tried, or nothing when `host:port` is not one. Only a loopback name
+ * or a loopback address qualifies — never an interface address the LAN also
+ * reaches, never link-local, never a public name that resolves to loopback.
  */
 export function declaredLoopback(
   host: string,
   port: number,
   reach: HarnessReach,
   classifier: LocalAddressClassifier,
-): string | undefined {
+): readonly [string, ...string[]] | undefined {
   if (!reach.localPorts.includes(port)) return undefined;
   // A localhost name is loopback by definition (RFC 6761) and Chrome treats it
   // so; resolving it would let a hosts-file entry send it somewhere else.
-  if (isLocalName(host)) return '127.0.0.1';
-  return isIP(host) !== 0 && classifier.classify(host) === 'loopback' ? host : undefined;
+  if (isLocalName(host)) return LOCALHOST_ADDRESSES;
+  return isIP(host) !== 0 && classifier.classify(host) === 'loopback' ? [host] : undefined;
 }

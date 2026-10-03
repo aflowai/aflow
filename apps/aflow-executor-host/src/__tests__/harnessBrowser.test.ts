@@ -10,6 +10,7 @@
 import { execFile } from 'node:child_process';
 import { closeSync, constants, openSync, writeSync } from 'node:fs';
 import { access, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -39,6 +40,8 @@ import {
   EPHEMERAL_PROFILE_SCRATCH_PREFIX,
   HARNESS_BROWSER_DIR,
   type HarnessBrowser,
+  MAX_CALLS_IN_FLIGHT_PER_TURN,
+  MAX_REQUEST_LINE_BYTES,
   openHarnessBrowser,
   relayToolDefinitions,
 } from '../browser/harnessBrowser.js';
@@ -318,6 +321,64 @@ describe('the relay', () => {
       'https://app.example',
       'https://other.example',
     ]);
+  });
+});
+
+describe('what one turn may ask of the executor', () => {
+  it(`performs ${String(MAX_CALLS_IN_FLIGHT_PER_TURN)} calls at once, and the rest wait their turn`, async () => {
+    const h = world();
+    const { browser } = await openBrowser(h, 'default');
+    let release = (): void => undefined;
+    h.world.navigationHeld = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const relay = asRelay(browser);
+    const sent = MAX_CALLS_IN_FLIGHT_PER_TURN + 2;
+    const calls = Array.from({ length: sent }, (_, index) =>
+      relay.call('open', { url: `https://app${String(index)}.example/` }),
+    );
+
+    await expect.poll(() => h.pages.length).toBe(MAX_CALLS_IN_FLIGHT_PER_TURN);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(h.pages).toHaveLength(MAX_CALLS_IN_FLIGHT_PER_TURN);
+
+    release();
+    const answers = await Promise.all(calls);
+    expect(answers.map((answer) => answer.isError)).toEqual(Array(sent).fill(undefined));
+    expect(h.pages).toHaveLength(sent);
+  });
+
+  it('closes the turn’s pipes on a request line past the cap, says why, and leaves the next turn working', async () => {
+    const h = world();
+    const { browser, activity } = await openBrowser(h, 'default');
+    const flooded = await browser.openTurn();
+    const [, , requestPath = ''] = flooded.relayArgs;
+    const flood = new Socket({
+      fd: openSync(requestPath, constants.O_WRONLY | constants.O_NONBLOCK),
+      readable: false,
+      writable: true,
+    });
+    // The executor's end goes away mid-write; that is what is being tested.
+    flood.on('error', () => undefined);
+    cleanup.push(() => {
+      flood.destroy();
+      return Promise.resolve();
+    });
+    flood.write(Buffer.alloc(MAX_REQUEST_LINE_BYTES + 1, 'a'));
+
+    await vi.waitFor(async () => {
+      await expect(access(join(flooded.mcpConfigPath, '..'))).rejects.toThrow();
+    });
+    expect(activity).toContainEqual({
+      kind: 'status',
+      at: expect.any(Number),
+      text: `The browser closed for this turn: a request to it ran past ${String(MAX_REQUEST_LINE_BYTES)} bytes without ending.`,
+    });
+    expect(h.pages).toEqual([]);
+
+    const answered = await asRelay(browser).call('open', { url: 'https://app.example/' });
+    expect(answered.isError).toBeUndefined();
+    expect(h.pages).toHaveLength(1);
   });
 });
 

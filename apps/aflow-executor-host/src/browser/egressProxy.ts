@@ -71,7 +71,8 @@ export interface EgressProxyOptions extends EgressPolicy {
 }
 
 export type EgressDecision =
-  | { readonly verdict: 'connect'; readonly address: string }
+  /** `addresses` are tried in order; the first that accepts is the one connected to. */
+  | { readonly verdict: 'connect'; readonly addresses: readonly [string, ...string[]] }
   | { readonly verdict: 'refuse'; readonly kind: RefusalKind; readonly reason: string }
   | { readonly verdict: 'unreachable'; readonly reason: string };
 
@@ -95,7 +96,7 @@ export function decideByName(
   const { reach } = policy;
   if (reach !== undefined) {
     const loopback = declaredLoopback(host, port, reach, classifier);
-    if (loopback !== undefined) return { verdict: 'connect', address: loopback };
+    if (loopback !== undefined) return { verdict: 'connect', addresses: loopback };
   }
   if (isLocalName(host)) {
     return { verdict: 'refuse', kind: 'local', reason: `${host} names this machine` };
@@ -114,7 +115,7 @@ export function decideByName(
       reason: `${host}:${String(port)} is not among the hosts its harness may reach`,
     };
   }
-  return literal ? { verdict: 'connect', address: host } : undefined;
+  return literal ? { verdict: 'connect', addresses: [host] } : undefined;
 }
 
 /** The decision on a name `decideByName` left open, from every address it resolved to. */
@@ -132,7 +133,7 @@ export function decideResolved(
   }
   const first = addresses[0];
   if (first === undefined) return { verdict: 'unreachable', reason: `${host} did not resolve` };
-  return { verdict: 'connect', address: first.address };
+  return { verdict: 'connect', addresses: [first.address] };
 }
 
 /** Whether, and where, a connection to `rawHost:port` goes. */
@@ -186,7 +187,7 @@ const HOP_BY_HOP = new Set([
 ]);
 
 type Decision =
-  | { readonly verdict: 'connect'; readonly address: string }
+  | { readonly verdict: 'connect'; readonly addresses: readonly [string, ...string[]] }
   | { readonly verdict: 'refuse'; readonly refusal: ProxyRefusal }
   | { readonly verdict: 'unreachable'; readonly reason: string };
 
@@ -266,6 +267,32 @@ export const startEgressProxy: StartEgressProxy = async (options) => {
     });
   };
 
+  /** The first of `addresses` that accepts a connection on `port`, tried in order. */
+  const connectFirst = async (
+    addresses: readonly [string, ...string[]],
+    port: number,
+  ): Promise<Socket> => {
+    let refusal = new Error(`Nothing accepted a connection on port ${String(port)}.`);
+    for (const address of addresses) {
+      const socket = connect(address, port);
+      track(socket);
+      try {
+        await new Promise<void>((resolve, reject) => {
+          socket.once('connect', () => {
+            socket.off('error', reject);
+            resolve();
+          });
+          socket.once('error', reject);
+        });
+        return socket;
+      } catch (error) {
+        socket.destroy();
+        refusal = error instanceof Error ? error : new Error(String(error));
+      }
+    }
+    throw refusal;
+  };
+
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     track(req.socket);
     let target: URL;
@@ -295,31 +322,43 @@ export const startEgressProxy: StartEgressProxy = async (options) => {
         res.writeHead(502, { 'content-type': 'text/plain' }).end(`${decision.reason}\n`);
         return;
       }
-      // No `agent` at all: given one — even `false`, which makes a fresh
-      // default agent — Node ignores `createConnection` and connects to the
-      // request's own host and port. Without one it writes this request on
-      // the socket returned here, once, with `Connection: close`.
-      const upstream = httpRequest(
-        {
-          method: req.method,
-          path: `${target.pathname}${target.search}`,
-          headers: forwardedHeaders(req.headers),
-          setHost: false,
-          createConnection: () => connect(decision.address, port),
+      void connectFirst(decision.addresses, port).then(
+        (socket) => {
+          // No `agent` at all: given one — even `false`, which makes a fresh
+          // default agent — Node ignores `createConnection` and connects to the
+          // request's own host and port. Without one it writes this request on
+          // the socket returned here, once, with `Connection: close`.
+          const upstream = httpRequest(
+            {
+              method: req.method,
+              path: `${target.pathname}${target.search}`,
+              headers: forwardedHeaders(req.headers),
+              setHost: false,
+              createConnection: () => socket,
+            },
+            (upstreamRes) => {
+              res.writeHead(
+                upstreamRes.statusCode ?? 502,
+                rawWithoutHopByHop(upstreamRes.rawHeaders),
+              );
+              upstreamRes.pipe(res);
+            },
+          );
+          upstream.on('error', (error) => {
+            if (!res.headersSent) {
+              res.writeHead(502, { 'content-type': 'text/plain' }).end(`${error.message}\n`);
+            } else {
+              res.destroy();
+            }
+          });
+          req.pipe(upstream);
         },
-        (upstreamRes) => {
-          res.writeHead(upstreamRes.statusCode ?? 502, rawWithoutHopByHop(upstreamRes.rawHeaders));
-          upstreamRes.pipe(res);
+        (error: unknown) => {
+          res
+            .writeHead(502, { 'content-type': 'text/plain' })
+            .end(`${error instanceof Error ? error.message : String(error)}\n`);
         },
       );
-      upstream.on('error', (error) => {
-        if (!res.headersSent) {
-          res.writeHead(502, { 'content-type': 'text/plain' }).end(`${error.message}\n`);
-        } else {
-          res.destroy();
-        }
-      });
-      req.pipe(upstream);
     });
   });
 
@@ -344,23 +383,29 @@ export const startEgressProxy: StartEgressProxy = async (options) => {
         );
         return;
       }
-      const upstream = connect(decision.address, authority.port);
-      track(upstream);
-      upstream.once('connect', () => {
-        client.write('HTTP/1.1 200 Connection Established\r\n\r\n');
-        if (head.length > 0) upstream.write(head);
-        upstream.pipe(client);
-        client.pipe(upstream);
-      });
-      upstream.on('error', (error) => {
-        if (client.writable && upstream.connecting) {
-          client.end(`HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n${error.message}\n`);
-        } else {
-          client.destroy();
-        }
-      });
-      client.once('close', () => upstream.destroy());
-      upstream.once('close', () => client.destroy());
+      void connectFirst(decision.addresses, authority.port).then(
+        (upstream) => {
+          if (client.destroyed) {
+            upstream.destroy();
+            return;
+          }
+          client.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+          if (head.length > 0) upstream.write(head);
+          upstream.pipe(client);
+          client.pipe(upstream);
+          upstream.on('error', () => client.destroy());
+          client.once('close', () => upstream.destroy());
+          upstream.once('close', () => client.destroy());
+        },
+        (error: unknown) => {
+          if (!client.writable) return;
+          client.end(
+            `HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n${
+              error instanceof Error ? error.message : String(error)
+            }\n`,
+          );
+        },
+      );
     });
   });
 

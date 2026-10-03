@@ -25,7 +25,7 @@ import {
   startEgressProxy,
 } from '../browser/egressProxy.js';
 import type { HarnessReach } from '../browser/harnessReach.js';
-import { LOOPBACK_LISTENER, requires } from './fixtures/capabilities.js';
+import { IPV6_LOOPBACK_LISTENER, LOOPBACK_LISTENER, requires } from './fixtures/capabilities.js';
 
 const onLoopback = requires(LOOPBACK_LISTENER);
 
@@ -466,13 +466,17 @@ describe('what an ephemeral profile’s proxy decides', () => {
     const reach: HarnessReach = { allowedDomains: REBOUND_ALLOWED, localPorts: [DECLARED] };
     expect(await decide('127.0.0.1', DECLARED, reach)).toEqual({
       verdict: 'connect',
-      address: '127.0.0.1',
+      addresses: ['127.0.0.1'],
     });
+    // Unresolved, IPv4 first: a dev server may listen on either loopback alone.
     expect(await decide('localhost', DECLARED, reach)).toEqual({
       verdict: 'connect',
-      address: '127.0.0.1',
+      addresses: ['127.0.0.1', '::1'],
     });
-    expect(await decide('[::1]', DECLARED, reach)).toEqual({ verdict: 'connect', address: '::1' });
+    expect(await decide('[::1]', DECLARED, reach)).toEqual({
+      verdict: 'connect',
+      addresses: ['::1'],
+    });
     for (const host of [PLANTED_INTERFACE, '0.0.0.0', '169.254.169.254', '[fe80::1]']) {
       expect(await decide(host, DECLARED, reach), host).toMatchObject({
         verdict: 'refuse',
@@ -501,11 +505,11 @@ describe('what an ephemeral profile’s proxy decides', () => {
     const reach: HarnessReach = { allowedDomains: ['example.com'], localPorts: [] };
     expect(await decide('example.com', 443, reach)).toEqual({
       verdict: 'connect',
-      address: PUBLIC,
+      addresses: [PUBLIC],
     });
     expect(await decide('EXAMPLE.COM.', 443, reach)).toEqual({
       verdict: 'connect',
-      address: PUBLIC,
+      addresses: [PUBLIC],
     });
     for (const host of ['example.org', 'www.example.com', PUBLIC]) {
       expect(await decide(host, 443, reach), host).toMatchObject({
@@ -525,7 +529,7 @@ describe('what an ephemeral profile’s proxy decides', () => {
       {},
       { classifier, lookup: () => Promise.resolve([{ address: OTHER_PUBLIC }]) },
     );
-    expect(decision).toEqual({ verdict: 'connect', address: OTHER_PUBLIC });
+    expect(decision).toEqual({ verdict: 'connect', addresses: [OTHER_PUBLIC] });
   });
 });
 
@@ -631,3 +635,66 @@ describe.skipIf(onLoopback.skip)(onLoopback.title('an ephemeral profile’s prox
     expect(reached).toEqual([]);
   });
 });
+
+const onBothLoopbacks = requires(LOOPBACK_LISTENER, IPV6_LOOPBACK_LISTENER);
+
+describe.skipIf(onBothLoopbacks.skip)(
+  onBothLoopbacks.title('a dev server listening on ::1 alone, as Vite does on macOS'),
+  () => {
+    let target: Server;
+    let targetPort = 0;
+    const reached: string[] = [];
+    let proxy: EgressProxy | undefined;
+
+    beforeAll(async () => {
+      target = createServer((req, res) => {
+        reached.push(`${req.headers.host ?? ''}${req.url ?? ''}`);
+        res.writeHead(200, { 'content-type': 'text/plain', connection: 'close' });
+        res.end('the local web app');
+      });
+      targetPort = await new Promise<number>((resolve, reject) => {
+        target.once('error', reject);
+        target.listen(0, '::1', () => {
+          const address = target.address();
+          resolve(typeof address === 'object' && address !== null ? address.port : 0);
+        });
+      });
+      proxy = await startEgressProxy({
+        reach: { allowedDomains: [], localPorts: [targetPort] },
+        classifier: createLocalAddressClassifier(),
+      });
+    });
+
+    afterAll(async () => {
+      await proxy?.stop();
+      if (target.listening) {
+        await new Promise<void>((resolve) => {
+          target.close(() => resolve());
+        });
+      }
+    });
+
+    it('is reached at localhost and [::1] on its declared port, plainly and through a tunnel', async () => {
+      if (proxy === undefined) throw new Error('The proxy did not start.');
+      const port = String(targetPort);
+      for (const host of ['localhost', '[::1]']) {
+        const plain = await exchange(proxy.port, get(`http://${host}:${port}/`, `${host}:${port}`));
+        expect(plain, host).toMatch(/^HTTP\/1\.1 200/);
+        expect(plain, host).toContain('the local web app');
+        const tunnel = await exchange(
+          proxy.port,
+          connectTo(`${host}:${port}`),
+          get('/through-the-tunnel', `${host}:${port}`),
+        );
+        expect(tunnel, host).toMatch(/^HTTP\/1\.1 200 Connection Established/);
+        expect(tunnel, host).toContain('the local web app');
+      }
+      expect(reached).toEqual([
+        `localhost:${port}/`,
+        `localhost:${port}/through-the-tunnel`,
+        `[::1]:${port}/`,
+        `[::1]:${port}/through-the-tunnel`,
+      ]);
+    });
+  },
+);

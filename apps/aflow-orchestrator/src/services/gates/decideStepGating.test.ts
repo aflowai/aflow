@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import type { OperationDescriptor, RunAccessGrant, StepDefinition } from '@aflow/schemas';
-import { callerKindFromStep, decideStepGating } from './decideStepGating.js';
+import {
+  BROWSER_PAGE_OPEN_OPERATION_ID,
+  getOperation,
+  type OperationDescriptor,
+  type RunAccessGrant,
+  type StepDefinition,
+} from '@aflow/schemas';
+import {
+  callerKindFromStep,
+  decideHarnessBrowserGating,
+  decideStepGating,
+} from './decideStepGating.js';
 
 function grant(overrides: Partial<RunAccessGrant['capabilities']> = {}): RunAccessGrant {
   return {
@@ -161,6 +171,94 @@ describe('decideStepGating — bypassGrant', () => {
       provenSimulated: false,
     });
     expect(result).toEqual({ allowed: true });
+  });
+});
+
+describe('a harness run asking for a browser', () => {
+  const harnessRun = getOperation('host.harness.run');
+  const pageOpen = getOperation(BROWSER_PAGE_OPEN_OPERATION_ID);
+  if (harnessRun === undefined || pageOpen === undefined) {
+    throw new Error('host.harness.run and browser.page.open are registered operations');
+  }
+  const harnessStep = step({
+    stepId: 'harness_1',
+    stepType: 'host',
+    operation: 'host.harness.run',
+    tags: ['dynamic', 'parent:agent_1'],
+  });
+  const harnessInput = { bindingId: 'binding_1', task: 'Fix the failing test.' };
+  const withBrowser = { ...harnessInput, browser: { profile: 'work' } };
+  const riskModifiers = [...(harnessRun.riskModifiers ?? []), ...(pageOpen.riskModifiers ?? [])];
+  const hostHarnessOnly = grant({
+    allowedCapabilities: [{ capabilityGroupId: 'host.harness', accessMode: 'write' }],
+    allowedRiskModifiers: riskModifiers,
+    allowPrivileged: true,
+  });
+
+  /** Both decisions `scheduleStep` makes on a host step, in its order. */
+  const schedule = (runGrant: RunAccessGrant, input: unknown) => {
+    const operation = decideStepGating({
+      stepDef: harnessStep,
+      opDesc: harnessRun,
+      grant: runGrant,
+      opMutates: harnessRun.mutates ?? false,
+      opPrivileged: harnessRun.privileged ?? false,
+      opCapabilityGroupId: harnessRun.capabilityGroupId ?? 'host.harness',
+      opAccessMode: harnessRun.accessMode ?? 'write',
+      opRiskModifiers: harnessRun.riskModifiers ?? [],
+    });
+    if (!operation.allowed) return operation;
+    return decideHarnessBrowserGating({
+      stepDef: harnessStep,
+      grant: runGrant,
+      resolvedInput: input,
+    });
+  };
+
+  it('is allowed without a browser on a grant covering host.harness only', () => {
+    expect(schedule(hostHarnessOnly, harnessInput)).toEqual({ allowed: true });
+  });
+
+  it('is refused a browser on that grant, naming browser.page:write', () => {
+    const result = schedule(hostHarnessOnly, withBrowser);
+    expect(result.allowed).toBe(false);
+    if (!result.allowed) {
+      expect(result.reason).toContain('host.harness.run with `browser` is not authorized');
+      expect(result.reason).toContain('browser.page:write');
+      expect(result.reason).toContain('Leave `browser` out');
+    }
+  });
+
+  it('is refused a browser when the grant names browser.page for reading only', () => {
+    const readOnlyPages = grant({
+      ...hostHarnessOnly.capabilities,
+      allowedCapabilities: [
+        ...hostHarnessOnly.capabilities.allowedCapabilities,
+        { capabilityGroupId: 'browser.page', accessMode: 'read' },
+      ],
+    });
+    expect(schedule(readOnlyPages, withBrowser).allowed).toBe(false);
+  });
+
+  it('is allowed a browser when the grant also covers browser.page:write', () => {
+    const withPages = grant({
+      ...hostHarnessOnly.capabilities,
+      allowedCapabilities: [
+        ...hostHarnessOnly.capabilities.allowedCapabilities,
+        { capabilityGroupId: 'browser.page', accessMode: 'write' },
+      ],
+    });
+    expect(schedule(withPages, withBrowser)).toEqual({ allowed: true });
+  });
+
+  it('leaves other operations alone, whatever their input holds', () => {
+    expect(
+      decideHarnessBrowserGating({
+        stepDef: step({ stepType: 'host', operation: 'host.process.exec' }),
+        grant: hostHarnessOnly,
+        resolvedInput: withBrowser,
+      }),
+    ).toEqual({ allowed: true });
   });
 });
 
