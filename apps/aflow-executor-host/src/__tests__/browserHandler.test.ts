@@ -15,12 +15,16 @@ interface Ran {
   written: unknown;
 }
 
-async function run(h: Harness, operationId: string, input: unknown, attempt = 1): Promise<Ran> {
+async function run(
+  h: Harness,
+  operationId: string,
+  input: unknown,
+  attempt = 1,
+  scope: { tenantId: string; runId: string; spaceId?: string } = RUN_A,
+): Promise<Ran> {
   let written: unknown;
   const ctx = {
-    tenantId: RUN_A.tenantId,
-    runId: RUN_A.runId,
-    spaceId: RUN_A.spaceId,
+    ...scope,
     attempt,
     operationId,
     job: { inputRef: 'inline:input' },
@@ -146,5 +150,25 @@ describe('the browser handler', () => {
     });
     expect(both.result.status).toBe('FAILED');
     expect(JSON.stringify(both.written)).toContain('exactly one of');
+  });
+
+  it('refuses a job that carries no space, and touches no browser', async () => {
+    const h = harness();
+    const { spaceId: _spaceId, ...spaceless } = RUN_A;
+    for (const [operationId, input] of [
+      ['browser.page.open', { url: 'https://example.com/' }],
+      ['browser.page.list', {}],
+      ['browser.profile.list', {}],
+      ['browser.page.handoff', { pageId: 'pg_x', reason: 'sign_in', message: 'Sign in.' }],
+    ] as const) {
+      const ran = await run(h, operationId, input, 1, spaceless);
+      expect(ran.result.status, operationId).toBe('FAILED');
+      expect(ran.written, operationId).toMatchObject({
+        code: 'BROWSER_JOB_HAS_NO_SPACE',
+        retryable: false,
+      });
+      expect((ran.written as { message: string }).message).toContain('carrying no space');
+    }
+    expect(h.launches).toHaveLength(0);
   });
 });

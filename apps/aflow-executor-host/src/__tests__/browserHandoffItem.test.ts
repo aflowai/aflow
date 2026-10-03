@@ -7,6 +7,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import type { ExecutorContext } from '@aflow/executor-runtime';
 import type { Redis } from 'ioredis';
 import RedisMock from 'ioredis-mock';
 import {
@@ -29,6 +30,7 @@ import {
   registrableSite,
   startHandoffBoard,
 } from '../browser/handoffBoard.js';
+import { createBrowserHandler } from '../handlers/browserHandler.js';
 import { loadInstallationId } from '../installationId.js';
 import { type HandoffWait, waitInWindow, type WaitForOperator } from '../browser/operatorWindow.js';
 import { harness, type Harness, profile, refusal, RUN_A } from './fixtures/fakeBrowser.js';
@@ -182,6 +184,78 @@ describe('a hand-off in the Action Center', () => {
     expect(second).toBe('window_shown');
     expect(listed).toHaveLength(1);
     expect(listed[0]?.waiting.map((waiter) => waiter.stepExecutionId)).toEqual([STEP]);
+  });
+});
+
+describe('a hand-off that cannot be put in the Action Center', () => {
+  it('fails the step with that said, waits for nobody, and gives the profile back', async () => {
+    vi.spyOn(redis, 'eval').mockRejectedValueOnce(new Error('NOPERM no permissions'));
+    let waited = false;
+    const h = world(() => {
+      waited = true;
+      return Promise.resolve('completed');
+    });
+    const pageId = await openLogin(h);
+    let written: unknown;
+    const ctx = {
+      ...RUN_A,
+      stepExecutionId: STEP,
+      attempt: 1,
+      operationId: 'browser.page.handoff',
+      job: { inputRef: 'inline:input', sessionId: RUN_A.runId },
+      readPayload: () => Promise.resolve({ pageId, reason: 'sign_in', message: 'Sign in.' }),
+      writePayload: (_kind: string, data: unknown) => {
+        written = data;
+        return Promise.resolve('inline:output');
+      },
+    } as unknown as ExecutorContext;
+
+    const result = await createBrowserHandler(h.driver).execute(ctx);
+
+    expect(result.status).toBe('FAILED');
+    expect(written).toMatchObject({
+      code: 'BROWSER_HANDOFF_NOT_POSTED',
+      retryable: false,
+      details: { pageId },
+    });
+    const said = (written as { message: string }).message;
+    expect(said).toContain('could not be put in the Action Center (NOPERM no permissions)');
+    expect(said).toContain('it was not left waiting');
+    expect(waited).toBe(false);
+    expect(h.launches.map((launch) => launch.profile.window)).toEqual([
+      'hidden',
+      'visible',
+      'hidden',
+    ]);
+    expect(await openItems()).toEqual([]);
+    expect(await redis.publish(StreamKeys.browserHandoffDoneChannel(STEP), 'late')).toBe(0);
+  });
+
+  it('is refused for a run with no space, which has no Action Center to show it in', async () => {
+    let waited = false;
+    const h = world(() => {
+      waited = true;
+      return Promise.resolve('completed');
+    });
+    const { spaceId: _spaceId, ...spaceless } = RUN_A;
+    const pageId = (
+      await h.driver.open({ ...spaceless, redelivered: false, profileId: 'default', url: LOGIN })
+    ).pageId;
+
+    const failed = await refusal(
+      h.driver.handoff({
+        ...spaceless,
+        stepExecutionId: STEP,
+        pageId,
+        reason: 'sign_in',
+        message: 'Sign in.',
+      }),
+    );
+
+    expect(failed.kind).toBe('handoff_not_posted');
+    expect(failed.message).toContain('the run has no space');
+    expect(waited).toBe(false);
+    expect(await redis.keys('aflow:browser-handoff:*')).toEqual([]);
   });
 });
 

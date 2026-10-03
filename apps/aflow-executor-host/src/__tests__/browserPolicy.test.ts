@@ -8,6 +8,7 @@ import { BrowserProfileSchema } from '@aflow/schemas';
 
 import { executionPermitted, HostPolicySchema, loadHostPolicy } from '../bindings.js';
 import { chromeMissingMessage, discoverChrome } from '../browser/chromeDiscovery.js';
+import { profileOpenToSpace } from '../browser/profiles.js';
 import { createHostFileHandler } from '../handlers/fileHandlers.js';
 import { scopePermitted } from '../sandboxedRun.js';
 import { harness, refusal, RUN_A } from './fixtures/fakeBrowser.js';
@@ -284,5 +285,31 @@ describe('finding a browser', () => {
     const message = chromeMissingMessage(none);
     expect(message).toContain('Google Chrome, Chromium or Microsoft Edge');
     for (const path of none.searched) expect(message).toContain(path);
+  });
+});
+
+describe('a run with no space', () => {
+  const pinned = BrowserProfileSchema.parse({ id: 'work', spaces: ['space-1'] });
+
+  it('is not admitted to a profile pinned to particular spaces', () => {
+    expect(profileOpenToSpace(pinned, undefined)).toBe(false);
+    expect(profileOpenToSpace(pinned, 'space-1')).toBe(true);
+  });
+
+  it('is neither shown nor given a pinned profile by the driver', async () => {
+    const h = harness({ browsers: [pinned] });
+    const { spaceId: _spaceId, ...spaceless } = RUN_A;
+
+    expect(await h.driver.listProfiles(undefined)).toEqual([]);
+    const refused = await refusal(
+      h.driver.open({
+        ...spaceless,
+        redelivered: false,
+        profileId: 'work',
+        url: 'https://example.com/',
+      }),
+    );
+    expect(refused.kind).toBe('profile_not_for_space');
+    expect(h.launches).toHaveLength(0);
   });
 });

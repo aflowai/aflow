@@ -73,6 +73,8 @@ const RELAY_SOURCE = fileURLToPath(new URL('./harnessRelay.mjs', import.meta.url
 const IN_FLIGHT_GRACE_MS = 5_000;
 /** Calls one turn may have performing at once; the host executor is shared, so the rest wait their turn. */
 export const MAX_CALLS_IN_FLIGHT_PER_TURN = 4;
+/** Calls one turn may have waiting behind those; one past it is answered at once and not kept. */
+export const MAX_CALLS_WAITING_PER_TURN = 4 * MAX_CALLS_IN_FLIGHT_PER_TURN;
 /**
  * The longest request line a turn's relay may send. Typed text and evaluated
  * expressions are the large arguments, and none comes near this.
@@ -575,6 +577,24 @@ export async function openHarnessBrowser(options: HarnessBrowserOptions): Promis
         return;
       }
       if (typeof request.id !== 'number' || typeof request.tool !== 'string') return;
+      if (waiting.length >= MAX_CALLS_WAITING_PER_TURN) {
+        answer(
+          request.id,
+          textResult(
+            {
+              error: {
+                code: 'BROWSER_TOO_MANY_CALLS',
+                message:
+                  `This turn already has ${String(MAX_CALLS_IN_FLIGHT_PER_TURN)} browser calls ` +
+                  `running and ${String(MAX_CALLS_WAITING_PER_TURN)} waiting, so this one was ` +
+                  'not taken. Send it again once some of them have answered.',
+              },
+            },
+            true,
+          ),
+        );
+        return;
+      }
       waiting.push({
         id: request.id,
         call: {

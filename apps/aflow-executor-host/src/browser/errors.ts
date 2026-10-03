@@ -18,6 +18,7 @@ export type BrowserFailureKind =
   | 'observation_failed'
   | 'window_shown'
   | 'window_failed'
+  | 'handoff_not_posted'
   | 'no_site'
   | 'screenshot_too_large'
   | 'script_refused';

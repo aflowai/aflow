@@ -74,6 +74,7 @@ const FAILURE: Record<BrowserFailureKind, { code: string; classification: ErrorC
   observation_failed: { code: 'BROWSER_OBSERVATION_FAILED', classification: 'provider' },
   window_shown: { code: 'BROWSER_WINDOW_IN_USE', classification: 'conflict' },
   window_failed: { code: 'BROWSER_WINDOW_FAILED', classification: 'internal' },
+  handoff_not_posted: { code: 'BROWSER_HANDOFF_NOT_POSTED', classification: 'internal' },
   no_site: { code: 'BROWSER_PAGE_HAS_NO_SITE', classification: 'validation' },
   screenshot_too_large: { code: 'BROWSER_SCREENSHOT_TOO_LARGE', classification: 'validation' },
   script_refused: { code: 'BROWSER_SCRIPT_REFUSED', classification: 'permission' },
@@ -453,6 +454,18 @@ export async function performBrowserOperation(
   }
 }
 
+function noSpace(): AflowError {
+  return {
+    code: 'BROWSER_JOB_HAS_NO_SPACE',
+    message:
+      'This browser step reached the machine carrying no space, so it was refused: which ' +
+      'profiles it may use and where a hand-off is shown both depend on the space its run is in.',
+    classification: 'internal',
+    retryable: false,
+    timestamp: new Date().toISOString(),
+  };
+}
+
 export function createBrowserHandler(driver: BrowserDriver): StepHandler {
   return {
     stepType: 'browser',
@@ -469,6 +482,10 @@ export function createBrowserHandler(driver: BrowserDriver): StepHandler {
       return waitMs === undefined ? undefined : waitMs + BROWSER_HANDOFF_OUTER_MARGIN_MS;
     },
     async execute(ctx: ExecutorContext): Promise<StepResult> {
+      // Without a space, every check that asks which profiles a space may use
+      // would be answered for no space at all, and a hand-off would have no
+      // Action Center to be shown in.
+      if (ctx.spaceId === undefined) return await failureWithError(ctx, noSpace());
       const raw = await ctx.readPayload(ctx.job.inputRef);
       const outcome = await performBrowserOperation(driver, ctx.operationId, raw, callOf(ctx));
       return outcome.ok

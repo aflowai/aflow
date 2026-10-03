@@ -20,6 +20,7 @@ import { type BrowserHandoffReason, BrowserHandoffSiteSchema, StreamKeys } from 
 import { getDomain } from 'tldts';
 
 import { loadInstallationId } from '../installationId.js';
+import { BrowserDriverError } from './errors.js';
 
 export interface HandoffEntry {
   readonly tenantId: string;
@@ -47,17 +48,26 @@ export interface HandoffPosting {
 }
 
 export interface HandoffBoard {
-  /** Never throws: a hand-off that cannot be posted still waits on the machine. */
+  /**
+   * Rejects with `handoff_not_posted` when the item cannot be put up: a wait
+   * nobody is told about is one only the window's closing or the deadline ends.
+   */
   post(entry: HandoffEntry): Promise<HandoffPosting>;
 }
 
-const NEVER: Promise<void> = new Promise<void>(() => undefined);
+function notPosted(entry: HandoffEntry, why: string): BrowserDriverError {
+  return new BrowserDriverError(
+    'handoff_not_posted',
+    `The hand-off of profile \`${entry.profileId}\` at ${entry.site} could not be put in the ` +
+      `Action Center (${why}), so nobody would have been told the run was waiting; it was not ` +
+      'left waiting. The profile is back in use by runs.',
+  );
+}
 
-/** A posting nobody can see: the wait ends on the machine alone. */
-export const UNPOSTED: HandoffPosting = { done: NEVER, close: () => Promise.resolve() };
-
-/** For a driver with no Action Center to post to — the command line, tests. */
-export const NO_BOARD: HandoffBoard = { post: () => Promise.resolve(UNPOSTED) };
+/** For a driver with no Action Center to post to — the command line, which hands nothing off. */
+export const NO_BOARD: HandoffBoard = {
+  post: (entry) => Promise.reject(notPosted(entry, 'this driver has no Action Center')),
+};
 
 /**
  * The site a page is on, as the hand-off is shared by: its registrable host,
@@ -112,9 +122,9 @@ export function createRedisHandoffBoard(deps: RedisHandoffBoardDeps): HandoffBoa
   return {
     async post(entry) {
       const { spaceId } = entry;
-      // An item belongs to a space's Action Center; a run with no space has
-      // none to show it in, and waits on the machine.
-      if (spaceId === undefined) return UNPOSTED;
+      if (spaceId === undefined) {
+        throw notPosted(entry, 'the run has no space, so it has no Action Center to show it in');
+      }
 
       const channel = StreamKeys.browserHandoffDoneChannel(entry.stepExecutionId);
       let markDone: () => void = () => undefined;
@@ -158,10 +168,13 @@ export function createRedisHandoffBoard(deps: RedisHandoffBoardDeps): HandoffBoa
         });
         wake();
       } catch (error) {
-        deps.log.warn(
-          'The hand-off could not be put in the Action Center; it waits on the machine only',
-          { ...where, error: errorText(error) },
-        );
+        waiting.delete(channel);
+        await deps.subscriber.unsubscribe(channel).catch(() => undefined);
+        deps.log.warn('The hand-off could not be put in the Action Center', {
+          ...where,
+          error: errorText(error),
+        });
+        throw notPosted(entry, errorText(error));
       }
 
       let closed = false;

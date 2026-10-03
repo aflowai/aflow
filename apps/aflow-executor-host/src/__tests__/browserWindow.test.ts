@@ -136,6 +136,103 @@ describe('a hand-off', () => {
     expect((await h.driver.snapshot(RUN_A, result.view.pageId)).url).toBe(INBOX);
   });
 
+  describe('on a site that signs in without leaving its origin', () => {
+    const HOME = 'https://accounts.example.com/';
+    const ONE_TIME_CODE = 'https://accounts.example.com/sessions/two-factor';
+    const CODE_PAGE = [
+      '- main [ref=e1]:',
+      '  - heading "Enter the code from your app" [level=1] [ref=e2]',
+      '  - textbox "Authentication code" [ref=e3]',
+      '  - button "Verify" [ref=e4] [cursor=pointer]',
+    ].join('\n');
+
+    function sameOrigin(options: Parameters<typeof harness>[0] = {}): Harness {
+      return harness({
+        ...options,
+        world: {
+          sites: new Map([
+            [HOME, { title: 'Home', snapshot: INBOX_PAGE }],
+            [ONE_TIME_CODE, { title: 'Two-factor', snapshot: CODE_PAGE, masked: ['e3'] }],
+          ]),
+        },
+      });
+    }
+
+    const handOver = async (h: Harness, pageId: string) =>
+      await h.driver.handoff({
+        ...RUN_A,
+        stepExecutionId: 'step-a',
+        pageId,
+        reason: 'sign_in',
+        message: 'Sign in to the account; the run then reads its settings.',
+      });
+
+    it('completes once the sign-in page gives way to the home page and goes quiet', async () => {
+      const h = sameOrigin();
+      const mine = await open(h, RUN_A, LOGIN);
+      let signedInAt: number | undefined;
+      h.onSleep = (now) => {
+        const page = windowPage(h);
+        if (page === undefined || signedInAt !== undefined || page.url() !== LOGIN) return;
+        page.load(HOME);
+        signedInAt = now;
+      };
+
+      const result = await handOver(h, mine);
+
+      expect(result.outcome).toBe('completed');
+      expect(result.view.url).toBe(HOME);
+      expect(h.clock.now - (signedInAt ?? 0)).toBeGreaterThanOrEqual(HANDOFF_QUIET_MS);
+    });
+
+    it('does not complete while the page is still the sign-in page with its password field', async () => {
+      const h = sameOrigin({ browsers: [profile({ handoffMinutes: 1 })] });
+      const mine = await open(h, RUN_A, LOGIN);
+      let tries = 0;
+      h.onSleep = () => {
+        const page = windowPage(h);
+        if (page === undefined || tries >= 3) return;
+        tries += 1;
+        // A failed attempt comes back to the same page, saying so in its query.
+        page.pushState(`${LOGIN}?error=${String(tries)}#password`);
+      };
+
+      const result = await handOver(h, mine);
+
+      expect(result.outcome).toBe('timed_out');
+      expect(tries).toBe(3);
+    });
+
+    it('waits through a one-time-code page, and completes once its field is gone', async () => {
+      const h = sameOrigin();
+      const mine = await open(h, RUN_A, LOGIN);
+      let codeShownAt: number | undefined;
+      let signedInAt: number | undefined;
+      h.onSleep = (now) => {
+        const page = windowPage(h);
+        if (page === undefined) return;
+        if (page.url() === LOGIN) {
+          page.load(ONE_TIME_CODE);
+          codeShownAt = now;
+        } else if (
+          page.url() === ONE_TIME_CODE &&
+          codeShownAt !== undefined &&
+          now - codeShownAt >= 30_000
+        ) {
+          page.load(HOME);
+          signedInAt = now;
+        }
+      };
+
+      const result = await handOver(h, mine);
+
+      expect(result.outcome).toBe('completed');
+      expect(result.view.url).toBe(HOME);
+      expect(signedInAt).toBeDefined();
+      expect(h.clock.now - (signedInAt ?? 0)).toBeGreaterThanOrEqual(HANDOFF_QUIET_MS);
+    });
+  });
+
   it('ends as window_closed when the operator closes the window, back where it began', async () => {
     const h = world();
     const mine = await open(h, RUN_A, LOGIN);

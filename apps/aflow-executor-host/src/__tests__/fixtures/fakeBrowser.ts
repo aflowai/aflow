@@ -24,7 +24,7 @@ import {
   type ProxyRefusal,
 } from '../../browser/egressProxy.js';
 import { BrowserDriverError } from '../../browser/errors.js';
-import type { HandoffBoard } from '../../browser/handoffBoard.js';
+import type { HandoffBoard, HandoffPosting } from '../../browser/handoffBoard.js';
 import type { WaitForOperator } from '../../browser/operatorWindow.js';
 import {
   type BrowserEngine,
@@ -90,6 +90,20 @@ export function fakeJpeg(width: number, height: number, bytes = 64): Buffer {
   frame.writeUInt16BE(width, 9);
   return Buffer.concat([frame, Buffer.alloc(Math.max(0, bytes - frame.length))]);
 }
+
+/**
+ * An Action Center that takes every hand-off and is never pressed: the wait
+ * ends on the machine, as one does whose operator never presses Done.
+ */
+export const UNANSWERED_BOARD: HandoffBoard = {
+  post: () => {
+    const posting: HandoffPosting = {
+      done: new Promise<void>(() => undefined),
+      close: () => Promise.resolve(),
+    };
+    return Promise.resolve(posting);
+  },
+};
 
 export interface FakeWorld {
   /** Content by URL; anything else is the sign-in page. */
@@ -487,7 +501,7 @@ export function harness(
       await Promise.resolve();
     },
     ...(options.waitForOperator !== undefined ? { waitForOperator: options.waitForOperator } : {}),
-    ...(options.handoffs !== undefined ? { handoffs: options.handoffs } : {}),
+    handoffs: options.handoffs ?? UNANSWERED_BOARD,
   });
   return Object.assign(state, { driver });
 }

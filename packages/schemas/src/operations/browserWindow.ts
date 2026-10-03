@@ -203,8 +203,8 @@ export const BrowserWindowRegistrations: OperationRegistration[] = [
       ],
       whenNotToUse: ['Reading the page — the outline and browser.page.read are smaller'],
       pitfalls: [
-        'Only the most recent tool results keep their images; an earlier screenshot is ' +
-          'reduced to its description on later turns — take another to look again.',
+        'Only the last three rounds of tool results keep their images; an older screenshot is ' +
+          'reduced to its description — take another to look again.',
         'An image over the size ceiling is retaken once as a smaller JPEG, then refused with ' +
           'its size — capture one element or the visible window instead.',
       ],

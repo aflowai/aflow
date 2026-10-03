@@ -6,6 +6,7 @@ import {
   MAX_TOOL_IMAGE_BYTES_PER_IMAGE,
   MAX_TOOL_IMAGE_BYTES_PER_TURN,
   prepareToolImages,
+  TOOL_RESULT_RUNS_KEEPING_IMAGES,
 } from './toolImages.js';
 import type {
   ChatMessage,
@@ -166,26 +167,93 @@ describe('prepareToolImages', () => {
     });
   });
 
-  it('shows images only from the most recent tool results', async () => {
+  it(`keeps images from the last ${String(TOOL_RESULT_RUNS_KEEPING_IMAGES)} runs of tool results, and says how to see an older one again`, async () => {
     const resolve = resolverReturningDeclaredSize();
     const out = await prepareToolImages(
       [
         assistantCalling('c1'),
         toolMessage('c1', [image(1)]),
-        assistantCalling('c2', 'c3'),
-        toolMessage('c2', [image(2)]),
+        assistantCalling('c2'),
+        toolMessage('c2', []),
+        assistantCalling('c3'),
         toolMessage('c3', [image(3)]),
+        assistantCalling('c4'),
+        toolMessage('c4', []),
+        assistantCalling('c5'),
+        toolMessage('c5', []),
+      ],
+      { vision: true, resolve, provider: 'anthropic' },
+    );
+    expect(resolve.calls.map((c) => c.description)).toEqual(['Screenshot 3']);
+    expect(shownImages(out)).toBe(1);
+    expect(partsOf(out[1])[1]).toEqual({
+      type: 'text',
+      text:
+        '[Image not shown — it is older than the last 3 rounds of tool results; take the ' +
+        'screenshot again to see it. 1280×720 image/png: Screenshot 1]',
+    });
+  });
+
+  it('shows a screenshot after the agent has taken another step, such as closing the page', async () => {
+    const resolve = resolverReturningDeclaredSize();
+    const out = await prepareToolImages(
+      [
+        assistantCalling('shot'),
+        toolMessage('shot', [image(1)]),
+        assistantCalling('close'),
+        toolMessage('close', []),
+      ],
+      { vision: true, resolve, provider: 'anthropic' },
+    );
+    expect(shownImages(out)).toBe(1);
+    expect(reducedTexts(out)).toEqual([]);
+  });
+
+  it('holds the per-turn count across three runs of images, newest first', async () => {
+    const resolve = resolverReturningDeclaredSize();
+    const out = await prepareToolImages(
+      [
+        assistantCalling('c1'),
+        toolMessage('c1', [image(1), image(2), image(3)]),
+        assistantCalling('c2'),
+        toolMessage('c2', [image(4), image(5), image(6)]),
+        assistantCalling('c3'),
+        toolMessage('c3', [image(7), image(8), image(9)]),
+      ],
+      { vision: true, resolve, provider: 'anthropic' },
+    );
+    expect(shownImages(out)).toBe(MAX_TOOL_IMAGES_PER_TURN);
+    expect(resolve.calls.map((c) => c.description)).toEqual([
+      'Screenshot 9',
+      'Screenshot 8',
+      'Screenshot 7',
+      'Screenshot 6',
+      'Screenshot 5',
+      'Screenshot 4',
+    ]);
+    const reduced = reducedTexts(out);
+    expect(reduced).toHaveLength(3);
+    for (const text of reduced) expect(text).toContain("this turn's image limit");
+  });
+
+  it('holds the per-turn byte ceiling across three runs of images, newest first', async () => {
+    const resolve = resolverReturningDeclaredSize();
+    const threeMiBEach = 3 * 1024 * 1024;
+    const out = await prepareToolImages(
+      [
+        assistantCalling('c1'),
+        toolMessage('c1', [image(1, threeMiBEach)]),
+        assistantCalling('c2'),
+        toolMessage('c2', [image(2, threeMiBEach)]),
+        assistantCalling('c3'),
+        toolMessage('c3', [image(3, threeMiBEach)]),
       ],
       { vision: true, resolve, provider: 'anthropic' },
     );
     expect(resolve.calls.map((c) => c.description)).toEqual(['Screenshot 3', 'Screenshot 2']);
-    expect(partsOf(out[1])[1]).toEqual({
-      type: 'text',
-      text:
-        '[Image not shown — images are shown only from the most recent tool results. ' +
-        '1280×720 image/png: Screenshot 1]',
-    });
-    expect(shownImages(out)).toBe(2);
+    expect(reducedTexts(out)).toEqual([
+      expect.stringContaining('went to newer images. 1280×720 image/png: Screenshot 1]'),
+    ]);
   });
 
   it('sends the newest images up to the per-turn count and reduces the older ones', async () => {

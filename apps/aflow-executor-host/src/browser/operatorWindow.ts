@@ -2,10 +2,11 @@
  * The operator at the profile's window: a run's page handed over, and the
  * sign-in sitting with no run involved.
  *
- * A hand-off is over when the page has left the site it was handed over on
- * and stopped changing — a sign-in that worked redirects away from the
- * sign-in page — when the operator presses Done on its Action Center item,
- * when they close the window, or at the profile's deadline. The sitting is
+ * A hand-off is over when the page is no longer the one it was handed over
+ * on, shows no credential field and has stopped changing — a sign-in that
+ * worked leaves the sign-in page, most often for another page of the same
+ * site — when the operator presses Done on its Action Center item, when they
+ * close the window, or at the profile's deadline. The sitting is
  * over when the window is closed.
  */
 import {
@@ -36,7 +37,7 @@ const MINUTE_MS = 60_000;
 
 /** How often the window is looked at while the operator has it. */
 export const WINDOW_POLL_MS = 500;
-/** How long a page that left the hand-off's site must stay unchanged to count as done. */
+/** How long the window's page, once moved on from the one handed over, must stay unchanged to count as done. */
 export const HANDOFF_QUIET_MS = 2_000;
 /** The longest a sign-in sitting keeps the window before handing the profile back to runs. */
 export const SIGN_IN_SITTING_MAX_MS = 60 * MINUTE_MS;
@@ -53,8 +54,8 @@ export interface HandoffWait {
   readonly reason: BrowserHandoffReason;
   /** The run's words for the operator. */
   readonly message: string;
-  /** The origin the page was on when the hand-off began. */
-  readonly startOrigin: string;
+  /** The page the hand-off began on, as `pageOf` gives it. */
+  readonly startPage: string;
   readonly deadlineAt: number;
   readonly clock: SettleClock;
   /** Settles when the operator presses Done on the hand-off's Action Center item. */
@@ -63,9 +64,11 @@ export interface HandoffWait {
 
 export type WaitForOperator = (wait: HandoffWait) => Promise<BrowserHandoffOutcome>;
 
-export function originOf(address: string): string {
+/** An address without its query and fragment: what stays put while one page reloads or redraws. */
+export function pageOf(address: string): string {
   try {
-    return new URL(address).origin;
+    const url = new URL(address);
+    return `${url.origin}${url.pathname}`;
   } catch {
     return address;
   }
@@ -73,7 +76,7 @@ export function originOf(address: string): string {
 
 export const waitInWindow: WaitForOperator = async ({
   window,
-  startOrigin,
+  startPage,
   deadlineAt,
   clock,
   operatorDone,
@@ -89,15 +92,18 @@ export const waitInWindow: WaitForOperator = async ({
     if (window.closed()) return 'window_closed';
     if (clock.now() >= deadlineAt) return 'timed_out';
     const url = window.page.url();
-    if (originOf(url) === startOrigin) {
+    if (pageOf(url) === startPage) {
       lastSeen = undefined;
     } else {
       const snapshot = await window.page.snapshot().catch(() => undefined);
       const seen = `${url}\n${snapshot?.text ?? ''}`;
+      // A second step of a sign-in — a one-time code, a password on its own
+      // page — has moved on from the first and is still not done.
+      const asksForCredential = snapshot === undefined || snapshot.maskedRefs.size > 0;
       if (seen !== lastSeen) {
         lastSeen = seen;
         unchangedSince = clock.now();
-      } else if (snapshot !== undefined && clock.now() - unchangedSince >= HANDOFF_QUIET_MS) {
+      } else if (!asksForCredential && clock.now() - unchangedSince >= HANDOFF_QUIET_MS) {
         return 'completed';
       }
     }
@@ -199,7 +205,7 @@ export class OperatorWindows {
           },
           reason: request.reason,
           message: request.message,
-          startOrigin: originOf(address),
+          startPage: pageOf(address),
           deadlineAt,
           clock,
           operatorDone: posting.done,
@@ -209,6 +215,9 @@ export class OperatorWindows {
       }
     } catch (error) {
       await this.handBack(profile, executable, shown.restarted);
+      if (error instanceof BrowserDriverError && error.kind === 'handoff_not_posted') {
+        throw new BrowserDriverError(error.kind, error.message, { pageId: held.pageId });
+      }
       throw new BrowserDriverError(
         'window_failed',
         `The window for profile \`${profile.id}\` could not be shown at ${pageAddress(held)}: ` +
