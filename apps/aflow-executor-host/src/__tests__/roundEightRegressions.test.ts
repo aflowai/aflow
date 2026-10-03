@@ -20,9 +20,12 @@ import {
 import {
   forgetSpawn,
   openOrphanJournal,
+  parseProcessStart,
   readJournal,
   reapOrphans,
   recordSpawn,
+  START_TIME_TOLERANCE_MS,
+  type ProcessStart,
 } from '../orphans.js';
 import { serializePolicy, writePolicyAtomically } from '../policyFile.js';
 
@@ -104,28 +107,39 @@ describe('the policy file is replaced, never rewritten in place', () => {
 describe('the orphan journal names processes, and a pid is not a name', () => {
   it('does not signal a pid recorded before the process now holding it started', async () => {
     const path = openOrphanJournal(dir);
-    // The pid-reuse case, made observable: a live process group, and a journal
-    // entry claiming that pid was recorded long before this process began. That
-    // is exactly what the operating system hands back after a pid wraps around,
-    // and the old reap killed the group on the strength of the number alone.
+    // A live group of its own, so the kill is observable. Its start is supplied
+    // rather than read with `ps`: `ps` is setuid on macOS, no sandbox may exec
+    // it, and the folder's check runs this under one — where the reap rightly
+    // ends nothing, and this test would measure the sandbox instead of the rule.
     const victim = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' });
     victim.unref();
     await once(victim, 'spawn');
     const pid = victim.pid;
-    expect(pid).toBeDefined();
+    if (pid === undefined) throw new Error('sleep did not start');
+    const startedAt = Date.now();
+    const asSpawned = (asked: number): ProcessStart | undefined =>
+      asked === pid ? { pgid: pid, startedAt } : undefined;
+    const scratchDir = join(dir, 'scratch');
 
-    writeJournal(path, [
-      { pid, scratchDir: join(dir, 'scratch'), recordedAt: Date.now() - 86_400_000 },
-    ]);
-    expect(reapOrphans(path)).toBe(0);
-    expect(alive(pid!)).toBe(true);
+    // What the operating system hands back after a pid wraps around: the number
+    // was written down before the process now holding it began.
+    writeJournal(path, [{ pid, scratchDir, recordedAt: startedAt - START_TIME_TOLERANCE_MS - 1 }]);
+    expect(reapOrphans(path, asSpawned)).toBe(0);
+    expect(alive(pid)).toBe(true);
 
-    // And it IS killed when the record is the one this executor actually wrote,
-    // rather than a timestamp manufactured by the test — which is the path that
-    // runs, and the one whose tolerance has to hold on a loaded machine.
-    recordSpawn(pid!, join(dir, 'scratch'));
-    expect(reapOrphans(path)).toBe(1);
-    await until(() => !alive(pid!));
+    // The journal write trails the spawn, by as much as a loaded machine makes it.
+    writeJournal(path, [{ pid, scratchDir, recordedAt: startedAt + START_TIME_TOLERANCE_MS }]);
+    expect(reapOrphans(path, asSpawned)).toBe(1);
+    await until(() => !alive(pid));
+  });
+
+  it('reads a group and a start from what ps prints', () => {
+    expect(parseProcessStart('  4242 Sat Oct  3 18:02:07 2026\n')).toEqual({
+      pgid: 4242,
+      startedAt: new Date(2026, 9, 3, 18, 2, 7).getTime(),
+    });
+    expect(parseProcessStart('4242 not-a-date')).toEqual({ pgid: 4242 });
+    expect(parseProcessStart('')).toBeUndefined();
   });
 
   it('does not signal a pid that no longer exists', () => {
