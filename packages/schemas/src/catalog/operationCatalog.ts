@@ -9,6 +9,7 @@ import type { StepType } from '../artifact/operationDefinition.js';
 import type { SemanticType } from '../artifact/stateVariable.js';
 import type { CapabilityAccessMode, RiskModifier } from './capabilityGroups.js';
 import type { StepImageOutputPaths } from '../media/stepImage.js';
+import type { OperationObservation } from '../runtime/toolObservation.js';
 
 // ============================================================================
 // Idempotency & Usage Metadata
@@ -199,6 +200,15 @@ export interface OperationRegistration {
   imageOutputPaths?: StepImageOutputPaths;
 
   /**
+   * That this operation's result observes something a later result makes stale
+   * (`observes`), or ends it (`ends`), shaped by `OperationObservationSchema`.
+   * The agent turn shows the newest observation per group and key in full and
+   * reduces every earlier one to its receipt. Absent: the result is always
+   * shown as it was returned.
+   */
+  observation?: OperationObservation;
+
+  /**
    * Optional display name for this operation's group (used in catalog/admin UI).
    * Set on one operation per group; registry picks the first non-null value.
    * E.g., 'Text Generation' for the 'ai.text' group.
@@ -280,6 +290,8 @@ export interface OperationDescriptor {
   outputSemanticType?: SemanticType;
   /** See `OperationRegistration.imageOutputPaths`. */
   imageOutputPaths?: StepImageOutputPaths;
+  /** See `OperationRegistration.observation`. */
+  observation?: OperationObservation;
 
   capabilityGroupId: string;
   /** Coarse permission mode: 'read' or 'write'. */

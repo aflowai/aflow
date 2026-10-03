@@ -13,6 +13,7 @@ import type { OperationRegistration } from '../catalog/operationCatalog.js';
 import { buildOperationId } from '../catalog/operationId.js';
 import { StepImageSchema } from '../media/stepImage.js';
 import {
+  BROWSER_PAGE_OBSERVATION,
   BrowserElementRefSchema,
   BrowserOutlineMaxCharsSchema,
   BrowserPageIdSchema,
@@ -180,6 +181,7 @@ export const BrowserWindowRegistrations: OperationRegistration[] = [
     accessMode: 'write',
     inputZod: BrowserPageHandoffInputSchema,
     outputZod: BrowserPageHandoffOutputSchema,
+    observation: BROWSER_PAGE_OBSERVATION,
   },
   {
     stepType: 'browser',

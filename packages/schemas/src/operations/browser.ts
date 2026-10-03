@@ -13,11 +13,36 @@ import { z } from 'zod';
 
 import type { OperationRegistration } from '../catalog/operationCatalog.js';
 import { buildOperationId } from '../catalog/operationId.js';
+import type { OperationObservation } from '../runtime/toolObservation.js';
 import { BrowserProfileIdSchema, DEFAULT_BROWSER_PROFILE_ID } from './browserProfile.js';
 
 export const BROWSER_PAGE_OPEN_OPERATION_ID = buildOperationId('browser', 'page', 'open');
 export const BROWSER_PAGE_NAVIGATE_OPERATION_ID = buildOperationId('browser', 'page', 'navigate');
 export const BROWSER_PAGE_ACT_OPERATION_ID = buildOperationId('browser', 'page', 'act');
+
+/** What every browser result that looks at a page observes, keyed by its `pageId`. */
+export const BROWSER_PAGE_OBSERVATION_GROUP = 'browser.page';
+
+/**
+ * Declared by each operation that returns a look at a page — its outline,
+ * snapshot, text, console or requests. An earlier look at a page is shown to
+ * the agent as the rest of its result once a later one exists.
+ */
+export const BROWSER_PAGE_OBSERVATION: OperationObservation = {
+  role: 'observes',
+  group: BROWSER_PAGE_OBSERVATION_GROUP,
+  keyPath: 'pageId',
+  observedFields: [
+    'outline',
+    'outlineCensus',
+    'snapshot',
+    'snapshotCensus',
+    'text',
+    'console',
+    'network',
+  ],
+  currentStateOperation: buildOperationId('browser', 'page', 'snapshot'),
+};
 
 /** The most outline or snapshot one call may ask for with `maxChars`. */
 export const BROWSER_OUTLINE_MAX_CHARS = 32_000;
@@ -348,6 +373,7 @@ export const BrowserPageActionRegistrations: OperationRegistration[] = [
     riskModifiers: ['external_side_effect'],
     inputZod: BrowserPageOpenInputSchema,
     outputZod: BrowserPageOpenOutputSchema,
+    observation: BROWSER_PAGE_OBSERVATION,
   },
   {
     stepType: 'browser',
@@ -380,6 +406,7 @@ export const BrowserPageActionRegistrations: OperationRegistration[] = [
     riskModifiers: ['external_side_effect'],
     inputZod: BrowserPageNavigateInputSchema,
     outputZod: BrowserPageNavigateOutputSchema,
+    observation: BROWSER_PAGE_OBSERVATION,
   },
   {
     stepType: 'browser',
@@ -420,5 +447,6 @@ export const BrowserPageActionRegistrations: OperationRegistration[] = [
     riskModifiers: ['external_side_effect'],
     inputZod: BrowserPageActInputSchema,
     outputZod: BrowserPageActOutputSchema,
+    observation: BROWSER_PAGE_OBSERVATION,
   },
 ];

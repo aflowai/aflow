@@ -8,6 +8,8 @@ import type { OperationRegistration } from '../catalog/operationCatalog.js';
 import { buildOperationId } from '../catalog/operationId.js';
 import {
   BROWSER_OUTLINE_MAX_CHARS,
+  BROWSER_PAGE_OBSERVATION,
+  BROWSER_PAGE_OBSERVATION_GROUP,
   BrowserElementRefSchema,
   browserMaxCharsSchema,
   BrowserOutlineCensusSchema,
@@ -262,6 +264,7 @@ export const BrowserObservationRegistrations: OperationRegistration[] = [
     accessMode: 'read',
     inputZod: BrowserPageSnapshotInputSchema,
     outputZod: BrowserPageSnapshotOutputSchema,
+    observation: BROWSER_PAGE_OBSERVATION,
   },
   {
     stepType: 'browser',
@@ -295,6 +298,7 @@ export const BrowserObservationRegistrations: OperationRegistration[] = [
     accessMode: 'read',
     inputZod: BrowserPageReadInputSchema,
     outputZod: BrowserPageReadOutputSchema,
+    observation: BROWSER_PAGE_OBSERVATION,
   },
   {
     stepType: 'browser',
@@ -342,6 +346,7 @@ export const BrowserObservationRegistrations: OperationRegistration[] = [
     accessMode: 'write',
     inputZod: BrowserPageCloseInputSchema,
     outputZod: BrowserPageCloseOutputSchema,
+    observation: { role: 'ends', group: BROWSER_PAGE_OBSERVATION_GROUP, keyPath: 'pageId' },
   },
   {
     stepType: 'browser',

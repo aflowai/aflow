@@ -80,6 +80,7 @@ import {
   detectResurrections,
 } from './exchangeClearing.js';
 import { estimateStringTokens, estimateMessageTokens } from './tokenEstimate.js';
+import { renderToolObservations } from './toolObservations.js';
 import {
   ConversationHistoryHydrationError,
   type HistoryIntegrityIssue,
@@ -561,8 +562,14 @@ export class ConversationStateStore {
       }
     }
 
-    // Push history messages
-    for (const msg of hydratedMessages) {
+    // Earlier observations of a key are reduced here, at assembly, and never in
+    // stored history. A result changes form exactly once — on the first turn a
+    // later result observes or ends its key — and is byte-identical on every
+    // turn after, so the provider's prefix cache breaks once at that message
+    // and the messages before it are untouched. Nothing in the reduced form may
+    // vary turn to turn: no count of later results, no time.
+    const historyMessages = renderToolObservations(hydratedMessages);
+    for (const msg of historyMessages) {
       messages.push(msg);
     }
 
@@ -607,7 +614,7 @@ export class ConversationStateStore {
     const contextTokens =
       tierTexts.reduce((sum, text) => sum + estimateStringTokens(text), 0) + activeMemoryTokens;
     let historyTokens = 0;
-    for (const msg of hydratedMessages) {
+    for (const msg of historyMessages) {
       historyTokens += estimateMessageTokens(msg);
     }
     // `tools` is partitioned by the caller (it knows deliveryMode + the tool
