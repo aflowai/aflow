@@ -554,10 +554,20 @@ describe.skipIf(onLoopback.skip)(onLoopback.title('an ephemeral profile’s prox
     for (const host of ['127.0.0.1', 'localhost']) {
       const plain = await exchange(proxy.port, get(`http://${host}:${port}/`, `${host}:${port}`));
       expect(plain, host).toMatch(/^HTTP\/1\.1 200/);
-      const tunnel = await exchange(proxy.port, connectTo(`${host}:${port}`));
+      const tunnel = await exchange(
+        proxy.port,
+        connectTo(`${host}:${port}`),
+        get('/through-the-tunnel', `${host}:${port}`),
+      );
       expect(tunnel, host).toMatch(/^HTTP\/1\.1 200 Connection Established/);
+      expect(tunnel, host).toContain('the local web app');
     }
-    expect(reached).toEqual([`127.0.0.1:${port}/`, `localhost:${port}/`]);
+    expect(reached).toEqual([
+      `127.0.0.1:${port}/`,
+      `127.0.0.1:${port}/through-the-tunnel`,
+      `localhost:${port}/`,
+      `localhost:${port}/through-the-tunnel`,
+    ]);
 
     reached.length = 0;
     const refusedHosts = [PLANTED_INTERFACE, ...(lan !== undefined ? [lan] : [])];
