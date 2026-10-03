@@ -22,12 +22,19 @@
  * a margin, so an executor that dies mid-wait cannot leave it forever; and the
  * per-space index is a sorted set scored by that expiry, so its reader asks for
  * the members still in date and never reads the keyspace or a whole set.
+ *
+ * An executor that died mid-wait leaves its records until they expire, so each
+ * machine has an index of its own records too, scored the same way: the host
+ * executor takes them down when it starts, before any wait of its own begins.
+ * A run joining a record whose every waiter is past its deadline starts the
+ * record afresh rather than inheriting a dead run's reason and start.
  */
 import type { Redis } from 'ioredis';
 import { z } from 'zod';
 
 import {
   BROWSER_HANDOFF_REASONS,
+  BrowserHandoffSiteSchema,
   BrowserProfileIdSchema,
   type BrowserHandoffReason,
 } from '@aflow/schemas';
@@ -37,6 +44,9 @@ export const BROWSER_HANDOFF_EXPIRY_MARGIN_MS = 5 * 60_000;
 
 /** The most hand-offs one space's Action Center reads at once. */
 export const BROWSER_HANDOFFS_READ_LIMIT = 50;
+
+/** How many of a machine's records one pass of the start-up clear takes down. */
+export const BROWSER_HANDOFF_CLEAR_BATCH = 100;
 
 const RECORD_PREFIX = 'aflow:browser-handoff:record:';
 const WAITER_PREFIX = 'w:';
@@ -50,6 +60,10 @@ export function browserHandoffSpaceIndexKey(tenantId: string, spaceId: string): 
   return `aflow:browser-handoff:space:${tenantId}:${spaceId}`;
 }
 
+export function browserHandoffMachineIndexKey(hostname: string): string {
+  return `aflow:browser-handoff:machine:${hostname}`;
+}
+
 function waiterField(spaceId: string, stepExecutionId: string): string {
   return `${WAITER_PREFIX}${spaceId}:${stepExecutionId}`;
 }
@@ -61,7 +75,7 @@ function messageField(spaceId: string): string {
 const HandoffMetaSchema = z.object({
   hostname: z.string().min(1),
   profileId: BrowserProfileIdSchema,
-  site: z.string().min(1),
+  site: BrowserHandoffSiteSchema,
   reason: z.enum(BROWSER_HANDOFF_REASONS),
   startedAt: z.string(),
 });
@@ -105,12 +119,28 @@ export interface JoinBrowserHandoffInput {
  * Adds a run to the record, creating it when it is the first. The first run's
  * reason stands, and the first run of each space's words stand for that space;
  * a later one only adds itself and, when its deadline is later, moves the
- * expiry out.
+ * expiry out. A record none of whose runs may still be waiting is begun again,
+ * so a run never joins one a dead executor left.
  *
- * KEYS: record, space index.
- * ARGV: meta, waiter field, waiter, expiry (ms), now (ms), message field, message.
+ * Deadlines are compared as ISO-8601 strings, which order as the instants do.
+ *
+ * KEYS: record, space index, machine index.
+ * ARGV: meta, waiter field, waiter, expiry (ms), now (ms), message field, message, now (ISO).
  */
 const JOIN = `
+local live = false
+local fields = redis.call('HGETALL', KEYS[1])
+for i = 1, #fields, 2 do
+  if string.sub(fields[i], 1, 2) == 'w:' then
+    local deadline = string.match(fields[i + 1], '"deadlineAt":"([^"]+)"')
+    if deadline and deadline > ARGV[8] then
+      live = true
+    end
+  end
+end
+if not live then
+  redis.call('DEL', KEYS[1])
+end
 redis.call('HSETNX', KEYS[1], 'meta', ARGV[1])
 redis.call('HSETNX', KEYS[1], ARGV[6], ARGV[7])
 redis.call('HSET', KEYS[1], ARGV[2], ARGV[3])
@@ -120,14 +150,16 @@ if expiresAt > current then
   redis.call('HSET', KEYS[1], 'expiresAt', ARGV[4])
   redis.call('PEXPIREAT', KEYS[1], expiresAt)
 end
-local scored = redis.call('ZSCORE', KEYS[2], KEYS[1])
-if not scored or tonumber(scored) < expiresAt then
-  redis.call('ZADD', KEYS[2], expiresAt, KEYS[1])
-end
-redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', ARGV[5])
-local latest = redis.call('ZREVRANGE', KEYS[2], 0, 0, 'WITHSCORES')
-if latest[2] then
-  redis.call('PEXPIREAT', KEYS[2], tonumber(latest[2]))
+for _, index in ipairs({ KEYS[2], KEYS[3] }) do
+  local scored = redis.call('ZSCORE', index, KEYS[1])
+  if not live or not scored or tonumber(scored) < expiresAt then
+    redis.call('ZADD', index, expiresAt, KEYS[1])
+  end
+  redis.call('ZREMRANGEBYSCORE', index, '-inf', ARGV[5])
+  local latest = redis.call('ZREVRANGE', index, 0, 0, 'WITHSCORES')
+  if latest[2] then
+    redis.call('PEXPIREAT', index, tonumber(latest[2]))
+  end
 end
 return 1
 `;
@@ -136,7 +168,8 @@ return 1
  * Takes a run off the record: the record goes when nobody is left, and the
  * space's index and its message go when nobody from that space is.
  *
- * KEYS: record, space index. ARGV: waiter field, the space's field prefix, message field.
+ * KEYS: record, space index, machine index.
+ * ARGV: waiter field, the space's field prefix, message field.
  */
 const LEAVE = `
 redis.call('HDEL', KEYS[1], ARGV[1])
@@ -152,6 +185,7 @@ for _, field in ipairs(redis.call('HKEYS', KEYS[1])) do
 end
 if not anyone then
   redis.call('DEL', KEYS[1])
+  redis.call('ZREM', KEYS[3], KEYS[1])
 end
 if not sameSpace then
   redis.call('ZREM', KEYS[2], KEYS[1])
@@ -168,7 +202,13 @@ export async function joinBrowserHandoff(
   input: JoinBrowserHandoffInput,
 ): Promise<void> {
   const { waiter } = input;
+  if (!BrowserHandoffSiteSchema.safeParse(input.site).success) {
+    throw new Error(
+      `A hand-off is for a site, a host of 1 to 253 characters; this one has ${String(input.site.length)}`,
+    );
+  }
   const key = browserHandoffKey(input.hostname, input.profileId, input.site);
+  const now = Date.now();
   const meta = {
     hostname: input.hostname,
     profileId: input.profileId,
@@ -182,21 +222,25 @@ export async function joinBrowserHandoff(
   };
   await redis.eval(
     JOIN,
-    2,
+    3,
     key,
     browserHandoffSpaceIndexKey(waiter.tenantId, waiter.spaceId),
+    browserHandoffMachineIndexKey(input.hostname),
     JSON.stringify(meta),
     waiterField(waiter.spaceId, waiter.stepExecutionId),
     JSON.stringify(stored),
     String(waiter.deadlineAt + BROWSER_HANDOFF_EXPIRY_MARGIN_MS),
-    String(Date.now()),
+    String(now),
     messageField(waiter.spaceId),
     input.message,
+    new Date(now).toISOString(),
   );
 }
 
 export interface LeaveBrowserHandoffInput {
   readonly key: string;
+  /** The machine whose record it is. */
+  readonly hostname: string;
   readonly tenantId: string;
   readonly spaceId: string;
   readonly stepExecutionId: string;
@@ -209,9 +253,10 @@ export async function leaveBrowserHandoff(
 ): Promise<boolean> {
   const left = await redis.eval(
     LEAVE,
-    2,
+    3,
     input.key,
     browserHandoffSpaceIndexKey(input.tenantId, input.spaceId),
+    browserHandoffMachineIndexKey(input.hostname),
     waiterField(input.spaceId, input.stepExecutionId),
     `${WAITER_PREFIX}${input.spaceId}:`,
     messageField(input.spaceId),
@@ -275,4 +320,50 @@ export async function readSpaceBrowserHandoffs(
     const record = toRecord(key, fields as Record<string, string>, tenantId, spaceId);
     return record === null ? [] : [record];
   });
+}
+
+export interface BrowserHandoffSpace {
+  readonly tenantId: string;
+  readonly spaceId: string;
+}
+
+/**
+ * Takes down every record this machine holds, and each from its spaces'
+ * indexes, through the machine's own index. Only for an executor that is
+ * starting: none of its waits has begun, so every record there belongs to one
+ * that is gone. Returns the spaces whose Action Center lost an item.
+ */
+export async function clearMachineBrowserHandoffs(
+  redis: Redis,
+  hostname: string,
+): Promise<BrowserHandoffSpace[]> {
+  const index = browserHandoffMachineIndexKey(hostname);
+  const spaces = new Map<string, BrowserHandoffSpace>();
+  for (;;) {
+    const keys = await redis.zrange(index, 0, BROWSER_HANDOFF_CLEAR_BATCH - 1);
+    if (keys.length === 0) break;
+    const read = redis.pipeline();
+    for (const key of keys) read.hgetall(key);
+    const replies = (await read.exec()) ?? [];
+    const clear = redis.multi();
+    keys.forEach((key, at) => {
+      const [error, fields] = replies[at] ?? [null, null];
+      if (error === null && fields !== null && typeof fields === 'object') {
+        for (const [field, raw] of Object.entries(fields as Record<string, string>)) {
+          if (!field.startsWith(WAITER_PREFIX)) continue;
+          const waiter = HandoffWaiterSchema.safeParse(parseJson(raw));
+          if (!waiter.success) continue;
+          const { tenantId, spaceId } = waiter.data;
+          clear.zrem(browserHandoffSpaceIndexKey(tenantId, spaceId), key);
+          spaces.set(`${tenantId}:${spaceId}`, { tenantId, spaceId });
+        }
+      }
+      clear.del(key);
+      clear.zrem(index, key);
+    });
+    const failed = ((await clear.exec()) ?? []).find(([error]) => error !== null)?.[0];
+    if (failed) throw failed;
+    if (keys.length < BROWSER_HANDOFF_CLEAR_BATCH) break;
+  }
+  return [...spaces.values()];
 }

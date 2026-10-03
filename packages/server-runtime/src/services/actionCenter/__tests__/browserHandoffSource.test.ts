@@ -106,7 +106,13 @@ describe('the browser hand-off source', () => {
 
     const key = browserHandoffKey('laptop', 'default', 'example.com');
     for (const stepExecutionId of ['step-1', 'step-2']) {
-      await leaveBrowserHandoff(redis, { key, tenantId: TENANT, spaceId: SPACE, stepExecutionId });
+      await leaveBrowserHandoff(redis, {
+        key,
+        hostname: 'laptop',
+        tenantId: TENANT,
+        spaceId: SPACE,
+        stepExecutionId,
+      });
     }
     expect(await source().listOpen(ctx())).toEqual([]);
     expect(await source().getById(ctx(), item!.id)).toBeNull();

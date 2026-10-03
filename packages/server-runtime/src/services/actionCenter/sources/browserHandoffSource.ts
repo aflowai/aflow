@@ -142,6 +142,7 @@ export function createBrowserHandoffSource(deps: ActionCenterSourceDeps): Action
         if (heard === 0) {
           await leaveBrowserHandoff(deps.redis, {
             key: record.key,
+            hostname: record.hostname,
             tenantId: waiter.tenantId,
             spaceId: waiter.spaceId,
             stepExecutionId: waiter.stepExecutionId,

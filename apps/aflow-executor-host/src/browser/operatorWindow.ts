@@ -158,6 +158,16 @@ export class OperatorWindows {
     // The page's own address, not the one shown to the run: the operator needs
     // the page exactly as it is, and it never leaves the machine.
     const address = held.page.url();
+    const site = registrableSite(address);
+    if (site === undefined) {
+      throw new BrowserDriverError(
+        'no_site',
+        `Page \`${held.pageId}\` is not on a site — an about:, data:, file: or javascript: ` +
+          'page has none — and the operator cannot sign in to a page that has no site, so it ' +
+          'was not handed over. Go to the site’s own page first, then hand that over.',
+        { pageId: held.pageId },
+      );
+    }
     const startedAt = clock.now();
     const shown = await browsers.showWindow(profile, executable);
     let outcome: BrowserHandoffOutcome;
@@ -176,7 +186,7 @@ export class OperatorWindows {
         stepExecutionId: request.stepExecutionId,
         ...(request.sessionId !== undefined ? { sessionId: request.sessionId } : {}),
         profileId: profile.id,
-        site: registrableSite(address),
+        site,
         reason: request.reason,
         message: request.message,
         waitMs: deadlineAt - clock.now(),

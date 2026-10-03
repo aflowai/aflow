@@ -11,11 +11,12 @@
 import type { Redis } from 'ioredis';
 import {
   browserHandoffKey,
+  clearMachineBrowserHandoffs,
   joinBrowserHandoff,
   leaveBrowserHandoff,
   publishActionCenterWake,
 } from '@aflow/redis';
-import { type BrowserHandoffReason, StreamKeys } from '@aflow/schemas';
+import { type BrowserHandoffReason, BrowserHandoffSiteSchema, StreamKeys } from '@aflow/schemas';
 import { getDomain } from 'tldts';
 
 export interface HandoffEntry {
@@ -60,18 +61,25 @@ export const NO_BOARD: HandoffBoard = { post: () => Promise.resolve(UNPOSTED) };
  * The site a page is on, as the hand-off is shared by: its registrable host,
  * so a sign-in at `accounts.example.com` and a run waiting at `mail.example.com`
  * are one item. An address with no registrable host — an IP, `localhost` —
- * stands as its host.
+ * stands as its host. A `blob:` page is on the site that made it.
+ *
+ * Undefined for a page that is not on a site — `about:`, `data:`, `file:`,
+ * `javascript:` — and for a host no DNS name could be: there is nothing there
+ * for the operator to sign in to.
  */
-export function registrableSite(address: string): string {
+export function registrableSite(address: string): string | undefined {
   let url: URL;
   try {
     url = new URL(address);
+    if (url.protocol === 'blob:') url = new URL(url.pathname);
   } catch {
-    return address;
+    return undefined;
   }
-  const host = url.hostname.toLowerCase();
-  if (host === '') return url.origin !== 'null' ? url.origin : address;
-  return getDomain(host) ?? host;
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') return undefined;
+  const host = url.hostname;
+  if (host === '') return undefined;
+  const site = getDomain(host) ?? host;
+  return BrowserHandoffSiteSchema.safeParse(site).success ? site : undefined;
 }
 
 interface BoardLog {
@@ -160,6 +168,7 @@ export function createRedisHandoffBoard(deps: RedisHandoffBoardDeps): HandoffBoa
           waiting.delete(channel);
           await leaveBrowserHandoff(deps.redis, {
             key,
+            hostname: deps.hostname,
             tenantId: entry.tenantId,
             spaceId,
             stepExecutionId: entry.stepExecutionId,
@@ -175,4 +184,40 @@ export function createRedisHandoffBoard(deps: RedisHandoffBoardDeps): HandoffBoa
       };
     },
   };
+}
+
+export interface HandoffsLeftBehindDeps {
+  readonly redis: Redis;
+  readonly hostname: string;
+  readonly log: BoardLog & { info(message: string, meta?: Record<string, unknown>): void };
+}
+
+/**
+ * Takes down the hand-offs a previous run of this executor left in the Action
+ * Center. Every wait they stood for died with it, and a later run joining one
+ * would otherwise inherit its reason, its start and its dead waiters. Never
+ * throws: a record it misses still expires.
+ */
+export async function clearHandoffsLeftBehind(deps: HandoffsLeftBehindDeps): Promise<void> {
+  let spaces: Awaited<ReturnType<typeof clearMachineBrowserHandoffs>>;
+  try {
+    spaces = await clearMachineBrowserHandoffs(deps.redis, deps.hostname);
+  } catch (error) {
+    deps.log.warn(
+      'The hand-offs a previous run of this executor left could not be taken out of the Action ' +
+        'Center; they go when they expire',
+      { error: errorText(error) },
+    );
+    return;
+  }
+  if (spaces.length === 0) return;
+  for (const space of spaces) {
+    publishActionCenterWake(deps.redis, { source: 'browser_handoff', ...space });
+  }
+  deps.log.info(
+    'Took down the hand-offs a previous run of this executor left in the Action Center',
+    {
+      spaces: spaces.length,
+    },
+  );
 }

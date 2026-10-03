@@ -109,6 +109,12 @@ export const SessionInvitationOriginSchema = z.object({
 export type SessionInvitationOrigin = z.infer<typeof SessionInvitationOriginSchema>;
 
 /**
+ * The registrable host of the page a hand-off is for: a DNS name, so 253
+ * characters at most. A page with no host has no site and is not handed over.
+ */
+export const BrowserHandoffSiteSchema = z.string().min(1).max(253);
+
+/**
  * A run's page handed to the operator in a browser window on their machine
  * (`browser.page.handoff`), while the step that asked waits there.
  *
@@ -127,7 +133,7 @@ export const BrowserHandoffOriginSchema = z.object({
   hostname: z.string().min(1).max(255),
   profileId: BrowserProfileIdSchema,
   /** The registrable host of the page when it was handed over. */
-  site: z.string().min(1).max(253),
+  site: BrowserHandoffSiteSchema,
   reason: z.enum(BROWSER_HANDOFF_REASONS),
   /** The first run's words for the operator. */
   message: z.string().min(1).max(8_000),

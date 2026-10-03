@@ -161,6 +161,8 @@ export const BrowserWindowRegistrations: OperationRegistration[] = [
       whenNotToUse: [
         'Anything the agent may do itself — browser.page.act does it',
         'A site browser.profile.list already shows a session for — try it first',
+        'A page with no site — about:blank, a data: or file: address — has nothing to sign in to ' +
+          'and is refused; go to the site’s own page first',
       ],
       pitfalls: [
         'Showing the window may restart the profile’s browser: every other page open in it is ' +

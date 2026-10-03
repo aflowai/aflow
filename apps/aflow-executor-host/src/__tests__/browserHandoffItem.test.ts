@@ -5,11 +5,25 @@
  */
 import type { Redis } from 'ioredis';
 import RedisMock from 'ioredis-mock';
-import { readSpaceBrowserHandoffs } from '@aflow/redis';
-import { type BrowserHandoffOutcome, type BrowserProfile, StreamKeys } from '@aflow/schemas';
+import {
+  browserHandoffKey,
+  browserHandoffMachineIndexKey,
+  joinBrowserHandoff,
+  readSpaceBrowserHandoffs,
+} from '@aflow/redis';
+import {
+  BrowserHandoffOriginSchema,
+  type BrowserHandoffOutcome,
+  type BrowserProfile,
+  StreamKeys,
+} from '@aflow/schemas';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { createRedisHandoffBoard, registrableSite } from '../browser/handoffBoard.js';
+import {
+  clearHandoffsLeftBehind,
+  createRedisHandoffBoard,
+  registrableSite,
+} from '../browser/handoffBoard.js';
 import { type HandoffWait, waitInWindow, type WaitForOperator } from '../browser/operatorWindow.js';
 import { harness, type Harness, profile, refusal, RUN_A } from './fixtures/fakeBrowser.js';
 
@@ -173,5 +187,127 @@ describe('the site a hand-off is shared by', () => {
   it('is the host itself where there is no registrable one', () => {
     expect(registrableSite('http://127.0.0.1:8080/')).toBe('127.0.0.1');
     expect(registrableSite('http://localhost:3001/')).toBe('localhost');
+  });
+});
+
+describe('a page that is not on a site', () => {
+  const NOWHERE = [
+    'about:blank',
+    'data:text/html,<form><input type=password></form>',
+    'file:///Users/operator/Downloads/login.html',
+  ];
+
+  it.each(NOWHERE)(
+    'is not handed over from %s, and nothing reaches the Action Center',
+    async (at) => {
+      let waited = false;
+      const h = world(async () => {
+        waited = true;
+        return 'window_closed';
+      });
+      const pageId = await openLogin(h);
+      const page = h.pages.at(-1);
+      if (page === undefined) throw new Error('the run opened no page');
+      page.current = at;
+      const launches = h.launches.length;
+
+      const refused = await refusal(handOver(h, pageId));
+
+      expect(refused.kind).toBe('no_site');
+      expect(refused.message).toContain('the operator cannot sign in to a page that has no site');
+      expect(waited).toBe(false);
+      expect(h.launches).toHaveLength(launches);
+      expect(await openItems()).toEqual([]);
+      expect(await redis.zcard(browserHandoffMachineIndexKey('laptop'))).toBe(0);
+    },
+  );
+
+  it.each([...NOWHERE, 'javascript:void(0)', 'not an address'])('has no site: %s', (at) => {
+    expect(registrableSite(at)).toBeUndefined();
+  });
+});
+
+describe('the site a record carries', () => {
+  const longLabel = 'a'.repeat(63);
+  const longHost = `${[longLabel, longLabel, longLabel, longLabel, longLabel].join('.')}.com`;
+
+  it('is a host no longer than the Action Center item allows, or none at all', () => {
+    const site = BrowserHandoffOriginSchema.shape.site;
+    for (const at of [
+      `https://${longHost}/login`,
+      `https://${'b'.repeat(300)}/`,
+      `blob:https://${longHost}/1b4e28ba`,
+      `data:text/html,${'x'.repeat(10_000)}`,
+      'https://accounts.example.com/login',
+    ]) {
+      const named = registrableSite(at);
+      if (named !== undefined) expect(site.safeParse(named).success).toBe(true);
+    }
+    expect(registrableSite(`https://${longHost}/login`)).toBeUndefined();
+  });
+
+  it('is the site that made a blob: page', () => {
+    expect(registrableSite('blob:https://mail.example.com/1b4e28ba')).toBe('example.com');
+  });
+
+  it('is never written longer than that, whoever asks', async () => {
+    const site = 'c'.repeat(254);
+    const startedAt = Date.now();
+    await expect(
+      joinBrowserHandoff(redis, {
+        hostname: 'laptop',
+        profileId: 'default',
+        site,
+        reason: 'sign_in',
+        message: 'Sign in.',
+        startedAt,
+        waiter: { ...RUN_A, stepExecutionId: STEP, deadlineAt: startedAt + 60_000 },
+      }),
+    ).rejects.toThrow(/253/);
+    expect(await redis.exists(browserHandoffKey('laptop', 'default', site))).toBe(0);
+    expect(await openItems()).toEqual([]);
+  });
+});
+
+describe('the hand-offs a previous run of the executor left', () => {
+  it('are taken down when the executor starts, and their spaces told', async () => {
+    const startedAt = Date.now();
+    const leftBehind = {
+      profileId: 'default',
+      reason: 'sign_in' as const,
+      message: 'Sign in to the mail account.',
+      startedAt,
+      waiter: { ...RUN_A, stepExecutionId: STEP, deadlineAt: startedAt + 15 * 60_000 },
+    };
+    await joinBrowserHandoff(redis, { ...leftBehind, hostname: 'laptop', site: 'example.com' });
+    await joinBrowserHandoff(redis, { ...leftBehind, hostname: 'desktop', site: 'example.com' });
+    expect(await openItems()).toHaveLength(2);
+    const wakes: string[] = [];
+    await subscriber.subscribe(StreamKeys.actionCenterWakeChannel(RUN_A.tenantId, RUN_A.spaceId));
+    subscriber.on('message', (channel: string) => wakes.push(channel));
+    const info: string[] = [];
+
+    await clearHandoffsLeftBehind({
+      redis,
+      hostname: 'laptop',
+      log: { warn: () => undefined, info: (message) => info.push(message) },
+    });
+
+    expect((await openItems()).map((item) => item.hostname)).toEqual(['desktop']);
+    expect(await redis.exists(browserHandoffKey('laptop', 'default', 'example.com'))).toBe(0);
+    expect(await redis.zcard(browserHandoffMachineIndexKey('laptop'))).toBe(0);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(wakes).toHaveLength(1);
+    expect(info).toHaveLength(1);
+  });
+
+  it('leave nothing to say when there were none', async () => {
+    const info: string[] = [];
+    await clearHandoffsLeftBehind({
+      redis,
+      hostname: 'laptop',
+      log: { warn: () => undefined, info: (message) => info.push(message) },
+    });
+    expect(info).toEqual([]);
   });
 });

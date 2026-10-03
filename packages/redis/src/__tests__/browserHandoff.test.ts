@@ -1,11 +1,14 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import Redis from 'ioredis-mock';
 import type { Redis as RedisType } from 'ioredis';
 
 import {
+  BROWSER_HANDOFF_CLEAR_BATCH,
   BROWSER_HANDOFF_EXPIRY_MARGIN_MS,
   browserHandoffKey,
+  browserHandoffMachineIndexKey,
   browserHandoffSpaceIndexKey,
+  clearMachineBrowserHandoffs,
   joinBrowserHandoff,
   type JoinBrowserHandoffInput,
   leaveBrowserHandoff,
@@ -22,6 +25,10 @@ let redis: RedisType;
 beforeEach(async () => {
   redis = new Redis() as unknown as RedisType;
   await redis.flushall();
+});
+
+afterEach(() => {
+  redis.disconnect();
 });
 
 function waitOn(
@@ -80,7 +87,13 @@ describe('an open hand-off', () => {
     await joinBrowserHandoff(redis, waitOn('step-1'));
     await joinBrowserHandoff(redis, waitOn('step-2'));
 
-    const stepOne = { key: KEY, tenantId: TENANT, spaceId: SPACE, stepExecutionId: 'step-1' };
+    const stepOne = {
+      key: KEY,
+      hostname: 'laptop',
+      tenantId: TENANT,
+      spaceId: SPACE,
+      stepExecutionId: 'step-1',
+    };
     expect(await leaveBrowserHandoff(redis, stepOne)).toBe(true);
     expect((await readSpaceBrowserHandoffs(redis, TENANT, SPACE))[0]?.waiting).toHaveLength(1);
 
@@ -95,6 +108,7 @@ describe('an open hand-off', () => {
     await joinBrowserHandoff(redis, waitOn('step-9', { spaceId: OTHER_SPACE }));
     await leaveBrowserHandoff(redis, {
       key: KEY,
+      hostname: 'laptop',
       tenantId: TENANT,
       spaceId: SPACE,
       stepExecutionId: 'step-1',
@@ -134,5 +148,103 @@ describe('a hand-off nobody ends', () => {
     await joinBrowserHandoff(redis, waitOn('step-1', {}, startedAt));
     const after = startedAt + 15 * MINUTE + BROWSER_HANDOFF_EXPIRY_MARGIN_MS + 1;
     expect(await readSpaceBrowserHandoffs(redis, TENANT, SPACE, after)).toEqual([]);
+  });
+});
+
+describe('a hand-off whose every run has stopped waiting', () => {
+  it('is begun again by the next run: its reason, start, words and runs, not the dead one’s', async () => {
+    const now = Date.now();
+    await joinBrowserHandoff(redis, {
+      ...waitOn('step-dead', { deadlineAt: now - MINUTE }, now - 16 * MINUTE),
+      reason: 'challenge',
+    });
+    expect(await redis.exists(KEY)).toBe(1);
+
+    await joinBrowserHandoff(redis, waitOn('step-new', {}, now));
+
+    const [open] = await readSpaceBrowserHandoffs(redis, TENANT, SPACE);
+    expect(open?.reason).toBe('sign_in');
+    expect(open?.startedAt).toBe(new Date(now).toISOString());
+    expect(open?.message).toBe('Sign in for step-new.');
+    expect(open?.waiting.map((w) => w.stepExecutionId)).toEqual(['step-new']);
+    const expiresIn = 15 * MINUTE + BROWSER_HANDOFF_EXPIRY_MARGIN_MS;
+    expect(await redis.pttl(KEY)).toBeLessThanOrEqual(expiresIn);
+  });
+
+  it('keeps the first run’s reason and start while one of its runs may still be waiting', async () => {
+    const now = Date.now();
+    await joinBrowserHandoff(redis, {
+      ...waitOn('step-1', {}, now - MINUTE),
+      reason: 'challenge',
+    });
+    await joinBrowserHandoff(redis, waitOn('step-2', {}, now));
+
+    const [open] = await readSpaceBrowserHandoffs(redis, TENANT, SPACE);
+    expect(open?.reason).toBe('challenge');
+    expect(open?.startedAt).toBe(new Date(now - MINUTE).toISOString());
+    expect(open?.waiting.map((w) => w.stepExecutionId).sort()).toEqual(['step-1', 'step-2']);
+  });
+});
+
+describe('a machine’s own hand-offs', () => {
+  const MACHINE = browserHandoffMachineIndexKey('laptop');
+
+  it('are indexed under the machine while a run waits, and leave it with the last one', async () => {
+    await joinBrowserHandoff(redis, waitOn('step-1'));
+    expect(await redis.zrange(MACHINE, 0, 9)).toEqual([KEY]);
+    expect(await redis.pttl(MACHINE)).toBeGreaterThan(0);
+
+    await leaveBrowserHandoff(redis, {
+      key: KEY,
+      hostname: 'laptop',
+      tenantId: TENANT,
+      spaceId: SPACE,
+      stepExecutionId: 'step-1',
+    });
+    expect(await redis.zcard(MACHINE)).toBe(0);
+  });
+
+  it('are all taken down by the start-up clear, from every space, and no other machine’s', async () => {
+    await joinBrowserHandoff(redis, waitOn('step-1'));
+    await joinBrowserHandoff(redis, { ...waitOn('step-2'), site: 'example.org' });
+    await joinBrowserHandoff(redis, waitOn('step-9', { spaceId: OTHER_SPACE }));
+    await joinBrowserHandoff(redis, { ...waitOn('step-d'), hostname: 'desktop' });
+
+    const spaces = await clearMachineBrowserHandoffs(redis, 'laptop');
+
+    expect(spaces).toEqual(
+      expect.arrayContaining([
+        { tenantId: TENANT, spaceId: SPACE },
+        { tenantId: TENANT, spaceId: OTHER_SPACE },
+      ]),
+    );
+    expect(spaces).toHaveLength(2);
+    expect(await redis.exists(KEY)).toBe(0);
+    expect(await redis.exists(browserHandoffKey('laptop', 'default', 'example.org'))).toBe(0);
+    expect(await redis.zcard(MACHINE)).toBe(0);
+    expect(await readSpaceBrowserHandoffs(redis, TENANT, OTHER_SPACE)).toEqual([]);
+    const left = await readSpaceBrowserHandoffs(redis, TENANT, SPACE);
+    expect(left.map((record) => record.hostname)).toEqual(['desktop']);
+    expect(await redis.zcard(browserHandoffSpaceIndexKey(TENANT, SPACE))).toBe(1);
+  });
+
+  it('are cleared in batches, however many a machine left', async () => {
+    const count = BROWSER_HANDOFF_CLEAR_BATCH + 3;
+    for (let at = 0; at < count; at++) {
+      await joinBrowserHandoff(redis, {
+        ...waitOn(`step-${String(at)}`),
+        site: `site${String(at)}.com`,
+      });
+    }
+    expect(await redis.zcard(MACHINE)).toBe(count);
+
+    await clearMachineBrowserHandoffs(redis, 'laptop');
+
+    expect(await redis.zcard(MACHINE)).toBe(0);
+    expect(await redis.zcard(browserHandoffSpaceIndexKey(TENANT, SPACE))).toBe(0);
+  });
+
+  it('is nothing to clear on a machine that left none', async () => {
+    expect(await clearMachineBrowserHandoffs(redis, 'laptop')).toEqual([]);
   });
 });

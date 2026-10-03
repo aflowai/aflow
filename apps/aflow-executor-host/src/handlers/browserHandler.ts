@@ -73,6 +73,7 @@ const FAILURE: Record<BrowserFailureKind, { code: string; classification: ErrorC
   observation_failed: { code: 'BROWSER_OBSERVATION_FAILED', classification: 'provider' },
   window_shown: { code: 'BROWSER_WINDOW_IN_USE', classification: 'conflict' },
   window_failed: { code: 'BROWSER_WINDOW_FAILED', classification: 'internal' },
+  no_site: { code: 'BROWSER_PAGE_HAS_NO_SITE', classification: 'validation' },
   screenshot_too_large: { code: 'BROWSER_SCREENSHOT_TOO_LARGE', classification: 'validation' },
 };
 
