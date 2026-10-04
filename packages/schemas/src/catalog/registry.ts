@@ -10,6 +10,7 @@ import type { CapabilityAccessMode, RiskModifier } from './capabilityGroups.js';
 import { buildOperationId, buildGroupId, validateSegment } from './operationId.js';
 import { StepTypeSchema } from '../artifact/operationDefinition.js';
 import { StepImageOutputPathsSchema } from '../media/stepImage.js';
+import { OperationObservationSchema } from '../runtime/toolObservation.js';
 
 import { AiOperationRegistrations } from '../operations/ai.js';
 import { ApiOperationRegistrations } from '../operations/api.js';
@@ -107,6 +108,14 @@ function validateRegistration(reg: OperationRegistration): void {
       );
     }
   }
+  if (reg.observation !== undefined) {
+    const observation = OperationObservationSchema.safeParse(reg.observation);
+    if (!observation.success) {
+      throw new Error(
+        `Invalid observation on "${buildOperationId(reg.stepType, reg.group, reg.verb)}": ${observation.error.message}`,
+      );
+    }
+  }
 }
 
 // ============================================================================
@@ -156,6 +165,7 @@ function buildRegistry(): Map<string, OperationDescriptor> {
       ...(reg.bypassGrant ? { bypassGrant: true } : {}),
       ...(reg.outputSemanticType != null ? { outputSemanticType: reg.outputSemanticType } : {}),
       ...(reg.imageOutputPaths != null ? { imageOutputPaths: reg.imageOutputPaths } : {}),
+      ...(reg.observation != null ? { observation: reg.observation } : {}),
       capabilityGroupId: buildGroupId(reg.stepType, reg.group),
       accessMode: reg.accessMode,
       riskModifiers: reg.riskModifiers ?? [],

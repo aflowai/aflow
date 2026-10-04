@@ -5,7 +5,7 @@ import {
   STEP_STARTED_DEAD_EXECUTOR_GRACE_MS,
   STEP_SCHEDULED_STALL_GRACE_MS,
   STEP_SCHEDULED_DEAD_EXECUTOR_GRACE_MS,
-  EXECUTOR_WAIT_LOOKS,
+  executorWaitHasLooksLeft,
 } from '@aflow/redis';
 import type { SessionId, StepExecutionId, StepType, TimerItem } from '@aflow/schemas';
 import { SNOOZE_OPERATION_ID, getSnoozeMaxMs } from '@aflow/schemas';
@@ -139,10 +139,10 @@ async function classifyExecutorWait(
     reason: 'executor_wait',
     attempt: stepState.attempt,
   });
-  const marker = stepState.executorWaitSince;
+  const marker = stepState.executorWait?.sinceMs;
   const wait = timer?.executorWait;
   if (wait !== undefined && (marker === undefined || wait.sinceMs === marker)) {
-    return wait.looks < EXECUTOR_WAIT_LOOKS ? 'armed' : null;
+    return executorWaitHasLooksLeft(wait) ? 'armed' : null;
   }
   return marker !== undefined ? 'timer_lost' : null;
 }

@@ -13,7 +13,7 @@ export {
   registerExecutorHeartbeat,
   unregisterExecutorHeartbeat,
   hasAvailableExecutor,
-  executorSeenSinceStart,
+  hasExecutorEverBeenSeen,
   isExecutorConsumerAlive,
   registerStepInFlight,
   extendStepInFlight,
@@ -28,6 +28,7 @@ export {
   EXECUTOR_WAIT_LONGEST_LOOK_MS,
   executorWaitGapMs,
   executorWaitClockJumped,
+  executorWaitHasLooksLeft,
 } from './streams/executorWait.js';
 
 export {

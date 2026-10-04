@@ -8,29 +8,16 @@
  * followed by one more before any can give up.
  */
 import type { Redis } from 'ioredis';
-import type {
-  AflowError,
-  IdempotencyKey,
-  OperationId,
-  SessionId,
-  StepExecutionId,
-  StepId,
-  StepJobMessage,
-  StepResultMessage,
-  StepType,
-  TenantId,
-  TimerItem,
-  TraceId,
-} from '@aflow/schemas';
-import type { SessionEvent, SessionHotState, StepHotState } from '@aflow/redis';
+import type { AflowError, StepJobMessage, StepResultMessage, TimerItem } from '@aflow/schemas';
+import type { SessionEvent, StepHotState } from '@aflow/redis';
 import {
   addStepJob,
   appendSessionEvent,
   EXECUTOR_WAIT_LONGEST_LOOK_MS,
   EXECUTOR_WAIT_LOOKS,
-  executorSeenSinceStart,
   executorWaitClockJumped,
   executorWaitGapMs,
+  hasExecutorEverBeenSeen,
   NoExecutorAvailableError,
   scheduleShardTimer,
   updateStepState,
@@ -144,7 +131,12 @@ export async function lookAgainForExecutor(
       await endExecutorWait(redis, job);
       return {
         kind: 'gave_up',
-        failure: executorWaitFailure(error, sinceMs, nowMs, executorSeenSinceStart(job.stepType)),
+        failure: executorWaitFailure(
+          error,
+          sinceMs,
+          nowMs,
+          await hasExecutorEverBeenSeen(redis, job.stepType),
+        ),
       };
     }
     return await park(redis, job, sinceMs, looks, nowMs + executorWaitGapMs(looks));
@@ -156,38 +148,20 @@ export async function lookAgainForExecutor(
 /**
  * Arm the wait again for a step still marked waiting whose timer is gone, so
  * it is looked for now rather than failed. The looks the lost timer had taken
- * went with it, so the wait starts its budget again from its marker. The job is
- * rebuilt from the step and its run as a retry rebuilds it: the caller's
- * model, which the step does not record, goes without.
+ * went with it, so the wait starts its budget again from its marker, with the
+ * job the step was parked with.
  */
 export async function rearmExecutorWait(
   redis: Redis,
   step: StepHotState,
-  run: SessionHotState,
   nowMs: number = Date.now(),
 ): Promise<void> {
-  const sinceMs = step.executorWaitSince;
-  if (sinceMs === undefined) return;
-  const sessionId = step.sessionId as SessionId;
-  const stepExecutionId = step.stepExecutionId as StepExecutionId;
-  const job: StepJobMessage = {
-    messageVersion: 1,
-    tenantId: step.tenantId as TenantId,
-    sessionId,
-    stepExecutionId,
-    parentStepExecutionId: (step.parentStepExecutionId ?? null) as StepExecutionId | null,
-    stepId: step.stepId as StepId,
-    stepType: step.stepType as StepType,
-    operationId: step.operationId as OperationId,
-    attempt: step.attempt,
-    idempotencyKey: `${sessionId}:${stepExecutionId}:${String(step.attempt)}` as IdempotencyKey,
-    inputRef: step.inputRef,
-    traceId: (step.traceId ?? run.traceId ?? crypto.randomUUID()) as TraceId,
-    scheduledAtMs: nowMs,
-    ...(run.createdBy !== undefined ? { credentialOwnerId: run.createdBy } : {}),
-    ...(run.spaceId !== undefined ? { spaceId: run.spaceId } : {}),
-  };
-  await scheduleShardTimer(redis, executorWaitTimer(job, sinceMs, 0, nowMs));
+  const { executorWait } = step;
+  if (executorWait === undefined) return;
+  await scheduleShardTimer(
+    redis,
+    executorWaitTimer(executorWait.job, executorWait.sinceMs, 0, nowMs),
+  );
 }
 
 /** Patched without a status, which the executor owns once the job is in its stream. */
@@ -195,7 +169,7 @@ async function endExecutorWait(redis: Redis, job: StepJobMessage): Promise<void>
   if (job.sessionId === undefined) return;
   await updateStepState(redis, job.tenantId, job.stepExecutionId, {
     sessionId: job.sessionId,
-    executorWaitSince: undefined,
+    executorWait: undefined,
   });
 }
 
@@ -210,7 +184,7 @@ async function park(
     await updateStepState(redis, job.tenantId, job.stepExecutionId, {
       sessionId: job.sessionId,
       status: 'SCHEDULED',
-      executorWaitSince: sinceMs,
+      executorWait: { sinceMs, job },
     });
   }
   // Upserted under the timer's own id, so a look that finds the executor
@@ -220,9 +194,9 @@ async function park(
 }
 
 /**
- * An executor this orchestrator has seen and lost is asleep or restarting, and
- * a retry may find it back. One it has never seen was never started, and a
- * retry would only wait for it again.
+ * An executor seen and lost is asleep or restarting, and a retry may find it
+ * back. One never seen was never started, and a retry would only wait for it
+ * again.
  */
 export function executorWaitFailure(
   error: NoExecutorAvailableError,
@@ -243,8 +217,8 @@ export function executorWaitFailure(
   return {
     ...error.toAflowError(),
     message:
-      `${error.message} None has connected since the orchestrator started, so it is not ` +
-      `asleep but was never started. Waited ${waited}; nothing was attempted.`,
+      `${error.message} None has ever connected, so it is not asleep but was never ` +
+      `started. Waited ${waited}; nothing was attempted.`,
     classification: 'configuration',
     retryable: false,
     timestamp,

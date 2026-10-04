@@ -191,8 +191,8 @@ describe('processDueTimers — session-leg snooze (Plan 194 §4.1)', () => {
     await createProcessDueTimers(makeBindings())();
 
     expect(mockProcessWorkflowCorrelatedTimer).toHaveBeenCalledTimes(1);
-    expect(mockProcessWorkflowCorrelatedTimer.mock.calls[0]![2]).toEqual(timer);
-    expect(mockProcessWorkflowCorrelatedTimer.mock.calls[0]![3]).toEqual(timer.workflowExecution);
+    expect(mockProcessWorkflowCorrelatedTimer.mock.calls[0]![1]).toEqual(timer);
+    expect(mockProcessWorkflowCorrelatedTimer.mock.calls[0]![2]).toEqual(timer.workflowExecution);
     // The session-leg machinery must not run for workflow timers.
     expect(mockIsSessionCorrupt).not.toHaveBeenCalled();
     expect(mockDispatchInlineOp).not.toHaveBeenCalled();

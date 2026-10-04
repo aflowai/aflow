@@ -21,6 +21,14 @@ function executorConsumerHeartbeatKey(stepType: StepType, consumerName: string):
 }
 
 /**
+ * When an executor of a step type first registered a heartbeat.
+ * Key: aflow:executor-seen:<stepType>
+ */
+function executorSeenKey(stepType: StepType): string {
+  return `aflow:executor-seen:${stepType}`;
+}
+
+/**
  * Build the heartbeat key prefix for a step type (for scanning).
  */
 function executorHeartbeatPrefix(stepType: StepType): string {
@@ -38,7 +46,12 @@ export async function registerExecutorHeartbeat(
   consumerName: string,
 ): Promise<void> {
   const key = executorConsumerHeartbeatKey(stepType, consumerName);
-  await redis.setex(key, EXECUTOR_HEARTBEAT_TTL_SECONDS, `${consumerName}:${Date.now()}`);
+  const nowMs = Date.now();
+  await redis
+    .multi()
+    .setex(key, EXECUTOR_HEARTBEAT_TTL_SECONDS, `${consumerName}:${nowMs}`)
+    .set(executorSeenKey(stepType), String(nowMs), 'NX')
+    .exec();
 }
 
 /**
@@ -67,8 +80,6 @@ export async function isExecutorConsumerAlive(
   return exists === 1;
 }
 
-const executorsSeenSinceStart = new Set<StepType>();
-
 /**
  * Check if any executor is available for a step type.
  * Scans for any heartbeat key with the step type prefix.
@@ -76,18 +87,17 @@ const executorsSeenSinceStart = new Set<StepType>();
 export async function hasAvailableExecutor(redis: Redis, stepType: StepType): Promise<boolean> {
   const prefix = executorHeartbeatPrefix(stepType);
   const keys = await redis.keys(`${prefix}*`);
-  if (keys.length > 0) executorsSeenSinceStart.add(stepType);
   return keys.length > 0;
 }
 
 /**
- * Whether this process has found a heartbeat for `stepType` since it started.
- * Kept in the process rather than in Redis because a heartbeat outlives no
- * sleep, and a record the executor wrote would need its credential to reach a
- * key family beyond its heartbeat.
+ * Whether an executor of `stepType` has ever registered a heartbeat. Kept in
+ * Redis, without a TTL, because no orchestrator process can know it: one that
+ * restarted, or a replica that never happened to look while the executor was
+ * up, would take an executor asleep for one never started.
  */
-export function executorSeenSinceStart(stepType: StepType): boolean {
-  return executorsSeenSinceStart.has(stepType);
+export async function hasExecutorEverBeenSeen(redis: Redis, stepType: StepType): Promise<boolean> {
+  return (await redis.exists(executorSeenKey(stepType))) === 1;
 }
 
 // ============================================================================

@@ -1,7 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { Redis } from 'ioredis';
 import type { StepHotState } from '@aflow/redis';
-import { SNOOZE_OPERATION_ID, getSnoozeMaxMs, type TimerItem } from '@aflow/schemas';
+import {
+  SNOOZE_OPERATION_ID,
+  getSnoozeMaxMs,
+  type StepJobMessage,
+  type TimerItem,
+} from '@aflow/schemas';
 import {
   classifyStepCompletionPath,
   type StepInFlightStatus,
@@ -158,7 +163,11 @@ describe('classifyStepCompletionPath — SCHEDULED', () => {
 
 describe('classifyStepCompletionPath — waiting on its executor', () => {
   const SINCE = NOW - 8 * 60 * 60_000;
-  const parked = step({ status: 'SCHEDULED', scheduledAt: SINCE, executorWaitSince: SINCE });
+  const parked = step({
+    status: 'SCHEDULED',
+    scheduledAt: SINCE,
+    executorWait: { sinceMs: SINCE, job: {} as StepJobMessage },
+  });
 
   function waitTimer(sinceMs: number, looks: number): TimerItem {
     return { reason: 'executor_wait', executorWait: { sinceMs, looks } } as unknown as TimerItem;
@@ -177,7 +186,7 @@ describe('classifyStepCompletionPath — waiting on its executor', () => {
   });
 
   it('is recognised by its live timer alone', async () => {
-    const { executorWaitSince: _unmarked, ...unmarked } = parked;
+    const { executorWait: _unmarked, ...unmarked } = parked;
     const r = await classifyStepCompletionPath(waiting(waitTimer(SINCE, 3)), unmarked, NOW);
     expect(r).toMatchObject({ hasCompletionPath: true, executorWait: 'armed' });
   });

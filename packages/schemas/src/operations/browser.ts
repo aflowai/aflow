@@ -13,11 +13,45 @@ import { z } from 'zod';
 
 import type { OperationRegistration } from '../catalog/operationCatalog.js';
 import { buildOperationId } from '../catalog/operationId.js';
+import type { ObservedFacet, OperationObservation } from '../runtime/toolObservation.js';
 import { BrowserProfileIdSchema, DEFAULT_BROWSER_PROFILE_ID } from './browserProfile.js';
 
 export const BROWSER_PAGE_OPEN_OPERATION_ID = buildOperationId('browser', 'page', 'open');
 export const BROWSER_PAGE_NAVIGATE_OPERATION_ID = buildOperationId('browser', 'page', 'navigate');
 export const BROWSER_PAGE_ACT_OPERATION_ID = buildOperationId('browser', 'page', 'act');
+
+/** The thing every browser result that looks at a page observes, keyed by its `pageId`. */
+export const BROWSER_PAGE_OBSERVATION_GROUP = 'browser.page';
+
+/**
+ * The page's outline. Any later outline replaces it, and so does a whole-page
+ * snapshot, however much either left out: its references stop resolving once
+ * a later look exists.
+ */
+export const BROWSER_PAGE_OUTLINE_FACET: ObservedFacet = {
+  facet: 'outline',
+  fields: ['outline', 'outlineCensus'],
+  keyPath: 'pageId',
+  expires: 'on_any_later_look',
+  currentStateOperation: buildOperationId('browser', 'page', 'snapshot'),
+};
+
+const PAGE_MOVES: NonNullable<OperationObservation['moves']> = {
+  keyPath: 'pageId',
+  whenTrueAt: 'receipt.urlChanged',
+};
+
+export const BROWSER_PAGE_OPEN_OBSERVATION: OperationObservation = {
+  group: BROWSER_PAGE_OBSERVATION_GROUP,
+  facets: [BROWSER_PAGE_OUTLINE_FACET],
+};
+
+/** A navigation or an action that took the page to another address makes every earlier look stale. */
+export const BROWSER_PAGE_CHANGE_OBSERVATION: OperationObservation = {
+  group: BROWSER_PAGE_OBSERVATION_GROUP,
+  facets: [BROWSER_PAGE_OUTLINE_FACET],
+  moves: PAGE_MOVES,
+};
 
 /** The most outline or snapshot one call may ask for with `maxChars`. */
 export const BROWSER_OUTLINE_MAX_CHARS = 32_000;
@@ -348,6 +382,7 @@ export const BrowserPageActionRegistrations: OperationRegistration[] = [
     riskModifiers: ['external_side_effect'],
     inputZod: BrowserPageOpenInputSchema,
     outputZod: BrowserPageOpenOutputSchema,
+    observation: BROWSER_PAGE_OPEN_OBSERVATION,
   },
   {
     stepType: 'browser',
@@ -380,6 +415,7 @@ export const BrowserPageActionRegistrations: OperationRegistration[] = [
     riskModifiers: ['external_side_effect'],
     inputZod: BrowserPageNavigateInputSchema,
     outputZod: BrowserPageNavigateOutputSchema,
+    observation: BROWSER_PAGE_CHANGE_OBSERVATION,
   },
   {
     stepType: 'browser',
@@ -420,5 +456,6 @@ export const BrowserPageActionRegistrations: OperationRegistration[] = [
     riskModifiers: ['external_side_effect'],
     inputZod: BrowserPageActInputSchema,
     outputZod: BrowserPageActOutputSchema,
+    observation: BROWSER_PAGE_CHANGE_OBSERVATION,
   },
 ];

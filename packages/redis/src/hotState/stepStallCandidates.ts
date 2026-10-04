@@ -85,7 +85,7 @@ export function stepStallEarliestReapAtMs(
   }
   if (step.status !== 'SCHEDULED') return null;
   const snoozeWindowMs = step.operationId === SNOOZE_OPERATION_ID ? getSnoozeMaxMs() : 0;
-  const executorWaitMs = step.executorWaitSince !== undefined ? EXECUTOR_WAIT_LONGEST_LOOK_MS : 0;
+  const executorWaitMs = step.executorWait !== undefined ? EXECUTOR_WAIT_LONGEST_LOOK_MS : 0;
   return (
     (step.scheduledAt ?? nowMs) +
     STEP_SCHEDULED_DEAD_EXECUTOR_GRACE_MS +

@@ -16,7 +16,7 @@ import type { StepJobMessage, StepResultMessage, TimerItem } from '@aflow/schema
 const fake = vi.hoisted(() => ({
   /** Step types with a live executor heartbeat. */
   heartbeats: new Set<string>(),
-  /** Step types whose heartbeat this orchestrator has found since it started. */
+  /** Step types an executor has ever registered a heartbeat for. */
   seen: new Set<string>(),
   events: [] as SessionEvent[],
   stream: [] as StepJobMessage[],
@@ -36,7 +36,39 @@ const fake = vi.hoisted(() => ({
   /** Sessions the step-stall index has due. */
   stallCandidates: [] as Array<{ tenantId: string; sessionId: string; dueAtMs: number }>,
   currentStepExecutionId: '',
+  /** The row of the workflow task the operation-task suites dispatch. */
+  task: null as null | {
+    runId: string;
+    taskId: string;
+    attempt: number;
+    status: string;
+    sessionId: null;
+    workerSessionId: string;
+    dispatchAttemptToken: string;
+  },
+  /** completion_pending rows the sweeper has due. */
+  pending: [] as Array<{
+    runId: string;
+    taskId: string;
+    attempt: number;
+    workerSessionId: string;
+    attemptCount: number;
+  }>,
 }));
+
+vi.mock('@aflow/cybernetic-runtime', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@aflow/cybernetic-runtime')>();
+  return {
+    ...actual,
+    getTaskRow: vi.fn(() => Promise.resolve(fake.task)),
+    loadWorkflowTaskByWorkerSession: vi.fn(() => Promise.resolve(fake.task)),
+    listDueCompletionPending: vi.fn(() => Promise.resolve(fake.pending)),
+    bumpCompletionPendingDueAt: vi.fn(() => Promise.resolve(true)),
+    casCompleteTask: vi.fn(() => Promise.resolve(false)),
+    clearCompletionPending: vi.fn(() => Promise.resolve()),
+    loadParkedStepWaitersForSession: vi.fn(() => Promise.resolve([])),
+  };
+});
 
 vi.mock('@aflow/redis', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@aflow/redis')>();
@@ -57,7 +89,9 @@ vi.mock('@aflow/redis', async (importOriginal) => {
       fake.stream.push(job);
       return Promise.resolve(`1-${String(fake.stream.length)}`);
     }),
-    executorSeenSinceStart: vi.fn((stepType: string) => fake.seen.has(stepType)),
+    hasExecutorEverBeenSeen: vi.fn((_redis: unknown, stepType: string) =>
+      Promise.resolve(fake.seen.has(stepType)),
+    ),
     addStepResult: vi.fn((_redis: unknown, result: StepResultMessage) => {
       const thrown = fake.resultError;
       fake.resultError = undefined;
@@ -164,6 +198,8 @@ import {
 } from '@aflow/schemas';
 
 import { dispatchClaimedOperationTask } from '../../../cybernetic/harness/operationTaskDispatch.js';
+import { reconcileStaleRunForTenant } from '../../../cybernetic/harness/staleReconciliation.js';
+import { casCompleteTask } from '@aflow/cybernetic-runtime';
 import type { SessionOrchestratorBindings } from '../../lifecycle/context.js';
 import { dispatchOrWaitOnExecutor, lookAgainForExecutor } from '../executorWait.js';
 import { createRecoverOrphanedSessions } from '../recovery.js';
@@ -281,6 +317,9 @@ beforeEach(() => {
   fake.laneEnv = {};
   fake.stallCandidates = [];
   fake.currentStepExecutionId = stepExecutionId(1);
+  fake.task = null;
+  fake.pending = [];
+  vi.mocked(casCompleteTask).mockClear();
   vi.mocked(updateSessionState).mockClear();
 });
 
@@ -307,7 +346,7 @@ describe('a step whose executor is missing', () => {
     expect(timer?.executorWait).toEqual({ sinceMs: START_MS, looks: 0, job });
     expect(fake.steps.get(job.stepExecutionId)).toMatchObject({
       status: 'SCHEDULED',
-      executorWaitSince: START_MS,
+      executorWait: { sinceMs: START_MS },
     });
   });
 
@@ -344,7 +383,7 @@ describe('a step whose executor is missing', () => {
     expect(fake.steps.get(job.stepExecutionId)).toMatchObject({
       status: 'SCHEDULED',
       attempt: 2,
-      executorWaitSince: START_MS,
+      executorWait: { sinceMs: START_MS },
     });
   });
 
@@ -363,7 +402,7 @@ describe('a step whose executor is missing', () => {
       scheduledAtMs: START_MS + EXECUTOR_WAIT_FIRST_LOOK_MS,
     });
     expect(fake.timers.size).toBe(0);
-    expect(fake.steps.get(job.stepExecutionId)?.['executorWaitSince']).toBeUndefined();
+    expect(fake.steps.get(job.stepExecutionId)?.['executorWait']).toBeUndefined();
     expect(applyResult).not.toHaveBeenCalled();
   });
 
@@ -382,7 +421,9 @@ describe('a step whose executor is missing', () => {
 
     expect(looks).toEqual([20_000, 40_000, 80_000, 140_000, 200_000]);
     expect(looks.at(-1)! - looks.at(-2)!).toBe(EXECUTOR_WAIT_LONGEST_LOOK_MS);
-    expect(fake.steps.get(job.stepExecutionId)?.['executorWaitSince']).toBe(START_MS);
+    expect(fake.steps.get(job.stepExecutionId)?.['executorWait']).toMatchObject({
+      sinceMs: START_MS,
+    });
   });
 
   it('gives up after its budgeted looks on an executor that went away as EXECUTOR_UNAVAILABLE, transient and retryable', async () => {
@@ -409,7 +450,7 @@ describe('a step whose executor is missing', () => {
     });
     expect(failed?.error?.message).toContain('host executor');
     expect(failed?.error?.message).toContain('Waited 10 minutes');
-    expect(fake.steps.get(job.stepExecutionId)?.['executorWaitSince']).toBeUndefined();
+    expect(fake.steps.get(job.stepExecutionId)?.['executorWait']).toBeUndefined();
   });
 
   describe('across a sleep of the machine', () => {
@@ -438,7 +479,7 @@ describe('a step whose executor is missing', () => {
       expect(applyResult).not.toHaveBeenCalled();
       expect(fake.steps.get(job.stepExecutionId)).toMatchObject({
         status: 'SCHEDULED',
-        executorWaitSince: START_MS,
+        executorWait: { sinceMs: START_MS },
       });
       const [rearmed] = [...fake.timers.values()];
       expect(rearmed?.executorWait?.looks).toBe(EXECUTOR_WAIT_LOOKS - 1);
@@ -567,7 +608,7 @@ describe('a step whose executor is missing', () => {
     expect(fake.timers.size).toBe(1);
     expect(fake.steps.get(job.stepExecutionId)).toMatchObject({
       status: 'SCHEDULED',
-      executorWaitSince: START_MS,
+      executorWait: { sinceMs: START_MS },
     });
 
     await processDueTimers();
@@ -575,7 +616,7 @@ describe('a step whose executor is missing', () => {
     expect(fake.stream).toHaveLength(1);
     expect(fake.stream[0]?.stepExecutionId).toBe(job.stepExecutionId);
     expect(fake.timers.size).toBe(0);
-    expect(fake.steps.get(job.stepExecutionId)?.['executorWaitSince']).toBeUndefined();
+    expect(fake.steps.get(job.stepExecutionId)?.['executorWait']).toBeUndefined();
     expect(applyResult).not.toHaveBeenCalled();
   });
 
@@ -589,7 +630,10 @@ describe('a step whose executor is missing', () => {
     await expect(
       lookAgainForExecutor(redis, job, { sinceMs: START_MS, looks: 0, dueAtMs: Date.now() }),
     ).rejects.toBe(streamDown);
-    expect(fake.steps.get(job.stepExecutionId)?.['executorWaitSince']).toBe(START_MS);
+    expect(fake.steps.get(job.stepExecutionId)?.['executorWait']).toEqual({
+      sinceMs: START_MS,
+      job,
+    });
   });
 });
 
@@ -740,7 +784,7 @@ describe('a waiting step across a restart of the orchestrator or a sleep of the 
     expect(bindings.forceCompleteInFlightStep).not.toHaveBeenCalled();
     expect(fake.steps.get(parked.stepExecutionId)).toMatchObject({
       status: 'SCHEDULED',
-      executorWaitSince: START_MS,
+      executorWait: { sinceMs: START_MS },
     });
     expect([...fake.timers.values()][0]?.executorWait?.looks).toBe(0);
 
@@ -751,7 +795,7 @@ describe('a waiting step across a restart of the orchestrator or a sleep of the 
     expect(applyResult).not.toHaveBeenCalled();
   });
 
-  it('arms the wait again at orphan recovery when its timer is gone, rather than failing it', async () => {
+  it('arms the wait again at orphan recovery when its timer is gone, with the job it parked, rather than failing it', async () => {
     const job = sessionJob();
     await parkAndSleep(job);
     fake.timers.clear();
@@ -770,17 +814,13 @@ describe('a waiting step across a restart of the orchestrator or a sleep of the 
       dueAtMs: START_MS + NIGHT_MS,
       executorWait: { sinceMs: START_MS, looks: 0 },
     });
-    const { callerModel: _notOnTheStep, ...rebuilt } = job;
-    expect(rearmed?.executorWait?.job).toEqual({
-      ...rebuilt,
-      traceId: 'trace-run',
-      scheduledAtMs: START_MS + NIGHT_MS,
-    });
+    expect(job.callerModel).toBe('luna');
+    expect(rearmed?.executorWait?.job).toEqual(job);
 
     fake.heartbeats.add('host');
     await createProcessDueTimers(makeBindings(applyResult))();
 
-    expect(fake.stream.map((queued) => queued.stepExecutionId)).toEqual([job.stepExecutionId]);
+    expect(fake.stream).toEqual([{ ...job, scheduledAtMs: START_MS + NIGHT_MS }]);
   });
 
   it('arms the wait again in the watchdog when its timer is gone', async () => {
@@ -833,6 +873,18 @@ describe('a workflow operation task whose executor is missing', () => {
     attempt: 1,
     dispatchAttemptToken: token,
   };
+
+  beforeEach(() => {
+    fake.task = {
+      runId: RUN_ID,
+      taskId: 'commission',
+      attempt: 1,
+      status: 'running',
+      sessionId: null,
+      workerSessionId: stepExecutionId(9),
+      dispatchAttemptToken: token,
+    };
+  });
 
   async function dispatchTask(): Promise<string> {
     return await dispatchClaimedOperationTask(
@@ -980,6 +1032,49 @@ describe('a workflow operation task whose executor is missing', () => {
       error: { code: 'EXECUTOR_UNAVAILABLE', classification: 'transient', retryable: true },
     });
     expect(fake.timers.size).toBe(0);
+  });
+
+  it.each([
+    ['failed by the completion_pending sweeper', { status: 'failed' }],
+    ['cancelled', { status: 'cancelled' }],
+    ['retried as another attempt', { attempt: 2 }],
+  ])('settles its wait without a look once the task was %s', async (_, movedOn) => {
+    await dispatchTask();
+    fake.task = { ...fake.task!, ...movedOn };
+    fake.heartbeats.add('host');
+
+    await nextLook(createProcessDueTimers(makeBindings()));
+
+    expect(fake.enqueueAttempts).toBe(1);
+    expect(fake.stream).toHaveLength(0);
+    expect(fake.results).toHaveLength(0);
+    expect(fake.timers.size).toBe(0);
+  });
+
+  it('is not escalated by the completion_pending sweeper while the timer of its wait lives, and is once its looks are spent', async () => {
+    await dispatchTask();
+    const deps = { db: {} as never, redis, payloadStore: {} as never };
+    fake.pending = [
+      {
+        runId: RUN_ID,
+        taskId: 'commission',
+        attempt: 1,
+        workerSessionId: stepExecutionId(9),
+        attemptCount: 45,
+      },
+    ];
+
+    const waiting = await reconcileStaleRunForTenant(deps, TENANT as never);
+
+    expect(waiting).toMatchObject({ escalations: 0, operationBumps: 1 });
+    expect(casCompleteTask).not.toHaveBeenCalled();
+
+    const processDueTimers = createProcessDueTimers(makeBindings());
+    while (await nextLook(processDueTimers));
+    const spent = await reconcileStaleRunForTenant(deps, TENANT as never);
+
+    expect(fake.results).toHaveLength(1);
+    expect(spent).toMatchObject({ escalations: 1, operationBumps: 0 });
   });
 });
 

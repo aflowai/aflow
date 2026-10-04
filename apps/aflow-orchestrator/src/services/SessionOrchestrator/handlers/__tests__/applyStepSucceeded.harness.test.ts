@@ -365,6 +365,83 @@ describe('applyStepSucceeded — tool-result summary boundary', () => {
   });
 });
 
+async function toolResultFor(
+  operation: string,
+  stepType: string,
+  output: unknown,
+): Promise<ToolResultSummary> {
+  const runtimeState = { version: 1, variables: {}, updatedAtMs: 0 } as never;
+  mockApplyOutputMapping.mockResolvedValue({
+    updatedState: runtimeState,
+    patch: { version: 1, changed: [] },
+  });
+  const step = (stepId: string, type: string, op: string, next: string[]) => ({
+    stepId,
+    stepType: type,
+    operation: op,
+    name: stepId,
+    config: {},
+    tags: [],
+    optional: false,
+    onSuccess: { next: next.map((n) => ({ stepId: n, priority: 50 })) },
+    onFailure: { next: [] },
+  });
+  const toolStep = step('tool', stepType, operation, ['agent_loop']);
+  const agentStep = step('agent_loop', 'ai', 'ai.agent.turn', []);
+  const params: ApplyStepSucceededParams = {
+    redis: {} as never,
+    payloadStore: { retrieve: vi.fn(async () => output) } as never,
+    db: {} as never,
+    result: {
+      tenantId: TENANT,
+      sessionId: SESSION_ID,
+      stepId: 'tool',
+      stepExecutionId: STEP_EXEC_ID,
+      stepType,
+      operationId: operation,
+      attempt: 1,
+      outputRef: `gs://aflow-payloads/tenants/${TENANT}/runs/${SESSION_ID}/steps/${STEP_EXEC_ID}/attempt/1/output.json`,
+      traceId: 'trace-1',
+      nowMs: 1_700_000_000_000,
+    },
+    runHotState: {
+      sessionId: SESSION_ID,
+      status: 'RUNNING',
+      runtimeState,
+      target: { kind: 'custom-agent' },
+    } as never,
+    stepDef: toolStep as never,
+    stepState: {
+      stepId: 'tool',
+      startedAt: 1_700_000_000_000,
+      parentStepExecutionId: 'parent-exec-1',
+    } as never,
+    agentDef: {
+      flowId: 'flow-1',
+      schemaVersion: 1,
+      metadata: { name: 'Agent', tags: [] },
+      stateVariables: [],
+      startStepId: 'agent_loop',
+      steps: [toolStep, agentStep],
+    } as never,
+    stepUpdates: { stepExecutionId: STEP_EXEC_ID, startedAt: 1_700_000_000_000 } as never,
+    currentRuntimeState: runtimeState,
+    scheduleStep: vi.fn().mockResolvedValue('next-exec-1'),
+  };
+  await applyStepSucceeded(params);
+  const scheduled = (params.scheduleStep as ReturnType<typeof vi.fn>).mock.calls[0]![0] as {
+    lastToolResults?: ToolResultSummary[];
+  };
+  const result = scheduled.lastToolResults?.[0];
+  if (!result) throw new Error('expected a tool result for the agent turn');
+  return result;
+}
+
+function messagePartsFor(result: ToolResultSummary) {
+  const [envelope] = buildToolResultEnvelopes([result], 1_700_000_000_000);
+  return toolResultMessage(envelope!).parts;
+}
+
 describe('applyStepSucceeded — images in a tool output (Plan 320 D10)', () => {
   const ownRef = `gs://aflow-payloads/tenants/${TENANT}/runs/${SESSION_ID}/steps/${STEP_EXEC_ID}/attempt/1/body.json`;
   const screenshot = {
@@ -386,83 +463,6 @@ describe('applyStepSucceeded — images in a tool output (Plan 320 D10)', () => 
       meta: { kind: 'generic', chars: 12, continuationEmitted: false },
     });
   });
-
-  async function toolResultFor(
-    operation: string,
-    stepType: string,
-    output: unknown,
-  ): Promise<ToolResultSummary> {
-    const runtimeState = { version: 1, variables: {}, updatedAtMs: 0 } as never;
-    mockApplyOutputMapping.mockResolvedValue({
-      updatedState: runtimeState,
-      patch: { version: 1, changed: [] },
-    });
-    const step = (stepId: string, type: string, op: string, next: string[]) => ({
-      stepId,
-      stepType: type,
-      operation: op,
-      name: stepId,
-      config: {},
-      tags: [],
-      optional: false,
-      onSuccess: { next: next.map((n) => ({ stepId: n, priority: 50 })) },
-      onFailure: { next: [] },
-    });
-    const toolStep = step('tool', stepType, operation, ['agent_loop']);
-    const agentStep = step('agent_loop', 'ai', 'ai.agent.turn', []);
-    const params: ApplyStepSucceededParams = {
-      redis: {} as never,
-      payloadStore: { retrieve: vi.fn(async () => output) } as never,
-      db: {} as never,
-      result: {
-        tenantId: TENANT,
-        sessionId: SESSION_ID,
-        stepId: 'tool',
-        stepExecutionId: STEP_EXEC_ID,
-        stepType,
-        operationId: operation,
-        attempt: 1,
-        outputRef: `gs://aflow-payloads/tenants/${TENANT}/runs/${SESSION_ID}/steps/${STEP_EXEC_ID}/attempt/1/output.json`,
-        traceId: 'trace-1',
-        nowMs: 1_700_000_000_000,
-      },
-      runHotState: {
-        sessionId: SESSION_ID,
-        status: 'RUNNING',
-        runtimeState,
-        target: { kind: 'custom-agent' },
-      } as never,
-      stepDef: toolStep as never,
-      stepState: {
-        stepId: 'tool',
-        startedAt: 1_700_000_000_000,
-        parentStepExecutionId: 'parent-exec-1',
-      } as never,
-      agentDef: {
-        flowId: 'flow-1',
-        schemaVersion: 1,
-        metadata: { name: 'Agent', tags: [] },
-        stateVariables: [],
-        startStepId: 'agent_loop',
-        steps: [toolStep, agentStep],
-      } as never,
-      stepUpdates: { stepExecutionId: STEP_EXEC_ID, startedAt: 1_700_000_000_000 } as never,
-      currentRuntimeState: runtimeState,
-      scheduleStep: vi.fn().mockResolvedValue('next-exec-1'),
-    };
-    await applyStepSucceeded(params);
-    const scheduled = (params.scheduleStep as ReturnType<typeof vi.fn>).mock.calls[0]![0] as {
-      lastToolResults?: ToolResultSummary[];
-    };
-    const result = scheduled.lastToolResults?.[0];
-    if (!result) throw new Error('expected a tool result for the agent turn');
-    return result;
-  }
-
-  function messagePartsFor(result: ToolResultSummary) {
-    const [envelope] = buildToolResultEnvelopes([result], 1_700_000_000_000);
-    return toolResultMessage(envelope!).parts;
-  }
 
   it('an api.http.call output holding a perfectly shaped image reaches the model as its JSON alone', async () => {
     const output = { status: 200, body: { image: screenshot, frames: [screenshot] } };
@@ -568,5 +568,111 @@ describe('applyStepSucceeded — images in a tool output (Plan 320 D10)', () => 
     expect(result.imagesWithheld).toEqual([
       'The image at frames[0] was not shown: it is carried inline, not stored by this step.',
     ]);
+  });
+});
+
+describe('applyStepSucceeded — observations in a tool result (Plan 320 D9)', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mockAtomicCompleteStep.mockResolvedValue(undefined);
+    mockDecrementShardActiveRuns.mockResolvedValue(undefined);
+    mockRemoveBarrierWatchdog.mockResolvedValue(undefined);
+    const real = await vi.importActual<typeof import('../../helpers/outputSummary.js')>(
+      '../../helpers/outputSummary.js',
+    );
+    mockBuildToolResultSummaryWithMeta.mockImplementation(real.buildToolResultSummaryWithMeta);
+  });
+
+  const acted = {
+    outcome: 'performed',
+    pageId: 'pg_1',
+    url: 'https://example.com/pulls',
+    title: 'Pull requests',
+    outline: '- main [ref=e1]:\n  - button "Merge" [ref=e2]',
+    outlineCensus: { link: 40 },
+    receipt: { action: 'click', ref: 'e2', outlineChanged: true },
+  };
+
+  it('stamps a declaring operation’s envelope with its facets and receipt', async () => {
+    const result = await toolResultFor('browser.page.act', 'browser', acted);
+    const [envelope] = buildToolResultEnvelopes([result], 1_700_000_000_000);
+    expect(envelope!.observation).toEqual({
+      group: 'browser.page',
+      facets: [
+        {
+          facet: 'outline',
+          key: 'pg_1',
+          part: [],
+          fields: ['outline', 'outlineCensus'],
+          expires: 'on_any_later_look',
+          currentStateOperation: 'browser.page.snapshot',
+        },
+      ],
+      receipts: [
+        {
+          without: ['outline', 'outlineCensus'],
+          text: JSON.stringify({
+            outcome: 'performed',
+            pageId: 'pg_1',
+            url: 'https://example.com/pulls',
+            title: 'Pull requests',
+            receipt: { action: 'click', ref: 'e2', outlineChanged: true },
+          }),
+        },
+      ],
+      moved: [],
+      ended: [],
+    });
+    expect(envelope!.summary).toContain('[ref=e2]');
+  });
+
+  it('stamps an action that changed the address as moving its page', async () => {
+    const result = await toolResultFor('browser.page.act', 'browser', {
+      ...acted,
+      receipt: { ...acted.receipt, urlChanged: true },
+    });
+    expect(result.observation?.moved).toEqual(['pg_1']);
+  });
+
+  it('stamps an ending operation with the key it ends', async () => {
+    const result = await toolResultFor('browser.page.close', 'browser', {
+      pageId: 'pg_1',
+      state: 'closed',
+    });
+    expect(result.observation).toEqual({
+      group: 'browser.page',
+      facets: [],
+      receipts: [],
+      moved: [],
+      ended: ['pg_1'],
+    });
+  });
+
+  it('stamps a hand-off that returned a new page as ending the one it was given', async () => {
+    const result = await toolResultFor('browser.page.handoff', 'browser', {
+      outcome: 'completed',
+      pageId: 'pg_2',
+      previousPageId: 'pg_1',
+      url: 'https://example.com/pulls',
+      title: 'Pull requests',
+      outline: '- main [ref=e1]:',
+      receipt: { reason: 'sign_in', waitedSeconds: 30, restarted: true },
+    });
+    expect(result.observation?.facets.map((f) => f.key)).toEqual(['pg_2']);
+    expect(result.observation?.ended).toEqual(['pg_1']);
+  });
+
+  it('leaves the envelope of an operation that declares nothing as it was', async () => {
+    const result = await toolResultFor('api.http.call', 'api', acted);
+    const [envelope] = buildToolResultEnvelopes([result], 1_700_000_000_000);
+    expect(result.observation).toBeUndefined();
+    expect(Object.keys(envelope!)).not.toContain('observation');
+    expect(JSON.stringify(envelope)).not.toContain('"observation"');
+  });
+
+  it('does not stamp a declaring operation whose output has no key', async () => {
+    const { pageId: _pageId, ...keyless } = acted;
+    const result = await toolResultFor('browser.page.act', 'browser', keyless);
+    expect(result.observation).toBeUndefined();
   });
 });

@@ -1,5 +1,6 @@
 import type { Redis } from 'ioredis';
-import type { PayloadStore } from '@aflow/payload-store';
+import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import { getTaskRow } from '@aflow/cybernetic-runtime';
 import type {
   IdempotencyKey,
   OperationId,
@@ -13,6 +14,8 @@ import { isInlineOperation } from '../helpers/inlineOperations.js';
 import { dispatchInlineOp } from '../handlers/dispatchInlineOp.js';
 import { getOrchestratorLogger, logOrchestratorError } from '../../../lib/orchestratorLogger.js';
 import { describeEnqueueFailure } from '../../../lib/enqueueFailure.js';
+import { isRestingTaskStatus } from '../../cybernetic/harness/helpers.js';
+import type { HarnessDeps } from '../../cybernetic/harness/types.js';
 import { buildWorkflowTimerStepJob } from './workflowTimerJob.js';
 import {
   dispatchOrWaitOnExecutor,
@@ -29,13 +32,13 @@ import {
  * timer is left for redelivery rather than acknowledged.
  */
 export async function processWorkflowCorrelatedTimer(
-  redis: Redis,
-  payloadStore: PayloadStore,
+  deps: Pick<HarnessDeps, 'db' | 'redis' | 'payloadStore'>,
   timer: TimerItem,
   workflowExecution: WorkflowExecutionRef,
 ): Promise<void> {
+  const { db, redis, payloadStore } = deps;
   if (timer.executorWait !== undefined) {
-    await lookAgainForTaskExecutor(redis, timer, timer.executorWait, workflowExecution);
+    await lookAgainForTaskExecutor(db, redis, timer, timer.executorWait, workflowExecution);
     return;
   }
   try {
@@ -104,9 +107,13 @@ export async function processWorkflowCorrelatedTimer(
  * A lane breaker's refusal and a wait that spent its looks are answered with the
  * FAILED result the task's executor would have sent. Anything else is logged
  * under the classification the task would carry and thrown, so the timer is
- * redelivered and its next look is still this wait's to take.
+ * redelivered and its next look is still this wait's to take. A task that
+ * moved on while it waited — failed by the completion_pending sweeper,
+ * cancelled, retried as another attempt — is no longer this wait's to
+ * dispatch, and the timer is settled without a look.
  */
 async function lookAgainForTaskExecutor(
+  db: PostgresJsDatabase,
   redis: Redis,
   timer: TimerItem,
   wait: NonNullable<TimerItem['executorWait']>,
@@ -124,6 +131,13 @@ async function lookAgainForTaskExecutor(
     operationId: job.operationId,
     traceId: job.traceId,
   };
+  if (!(await taskStillAwaitsItsResult(db, timer.tenantId, workflowExecution))) {
+    getOrchestratorLogger().info(
+      `[SessionOrchestrator] Task ${workflowExecution.taskId} moved on while it waited for the ${job.stepType} executor; its wait ends`,
+      logContext,
+    );
+    return;
+  }
   let dispatched: ExecutorDispatch;
   try {
     dispatched = await lookAgainForExecutor(
@@ -154,4 +168,15 @@ async function lookAgainForTaskExecutor(
     );
     throw error;
   }
+}
+
+async function taskStillAwaitsItsResult(
+  db: PostgresJsDatabase,
+  tenantId: string,
+  workflowExecution: WorkflowExecutionRef,
+): Promise<boolean> {
+  const row = await getTaskRow(db, tenantId, workflowExecution.runId, workflowExecution.taskId);
+  return (
+    row !== null && row.attempt === workflowExecution.attempt && !isRestingTaskStatus(row.status)
+  );
 }

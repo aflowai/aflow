@@ -58,4 +58,5 @@ export * from './workflowHumanTaskHydration.js';
 export * from './sessionBlockedOn.js';
 export * from './sessionMetadata.js';
 export * from './tokenEstimate.js';
+export * from './toolObservation.js';
 export * from './draftRepairProgress.js';

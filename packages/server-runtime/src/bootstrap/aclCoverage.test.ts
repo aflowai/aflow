@@ -19,6 +19,7 @@
  * Skipped without a reachable Redis, like every other real-redis test here.
  */
 import { Redis } from 'ioredis';
+import { registerExecutorHeartbeat } from '@aflow/redis';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { stackRedis } from '../../../../scripts/stackRedis.mjs';
@@ -51,6 +52,9 @@ beforeAll(async () => {
   await admin.del(
     'aflow:jobs:host',
     'aflow:executor-heartbeat:host:probe',
+    'aflow:executor-heartbeat:browser:probe',
+    'aflow:executor-seen:host',
+    'aflow:executor-seen:browser',
     'aflow:step-inflight:probe',
     'aflow:step:t:probe:state',
     'aflow:session_events:t:s',
@@ -81,7 +85,7 @@ describe.skipIf(!STACK_REDIS.available)('host redis grant covers the executor', 
 
     // The bookkeeping every executor does around a job, in the order it does it:
     // register itself, claim from its stream, mark the step, report a result.
-    await host.setex('aflow:executor-heartbeat:host:probe', 60, 'alive');
+    await registerExecutorHeartbeat(host, 'host', 'probe');
     // Idempotent: a group left by a previous run is not what this test measures.
     await host
       .call('XGROUP', 'CREATE', 'aflow:jobs:host', 'exec_host', '$', 'MKSTREAM')
@@ -99,7 +103,7 @@ describe.skipIf(!STACK_REDIS.available)('host redis grant covers the executor', 
       '>',
     );
     // The same executor's second runtime, which serves the browser lane.
-    await host.setex('aflow:executor-heartbeat:browser:probe', 60, 'alive');
+    await registerExecutorHeartbeat(host, 'browser', 'probe');
     await host
       .call('XGROUP', 'CREATE', 'aflow:jobs:browser', 'exec_browser', '$', 'MKSTREAM')
       .catch(() => undefined);

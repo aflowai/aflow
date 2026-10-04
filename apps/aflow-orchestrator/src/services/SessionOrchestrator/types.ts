@@ -10,6 +10,7 @@ import type {
   IdempotencyKey,
   ActorContext,
   AgentToolError,
+  ToolResultObservation,
   SessionAgentTarget,
   SimulationRunInput,
   StepImage,
@@ -66,6 +67,8 @@ export interface ToolResultSummary {
   images?: StepImage[];
   /** Images found there and not carried, each with where and why. */
   imagesWithheld?: string[];
+  /** What the result observes or ends, when its operation declares an observation. */
+  observation?: ToolResultObservation;
 }
 
 export interface ScheduleStepParams {

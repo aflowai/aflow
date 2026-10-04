@@ -46,6 +46,15 @@ function looksSpanning(spanMs: number): number {
 export const EXECUTOR_WAIT_LOOKS = looksSpanning(10 * MS_PER_MINUTE);
 
 /**
+ * Whether a wait has looks left to take, which is what makes its timer a
+ * completion path of its own — for a session step and for a workflow
+ * operation task alike — however long the step or task has been pending.
+ */
+export function executorWaitHasLooksLeft(wait: { looks: number }): boolean {
+  return wait.looks < EXECUTOR_WAIT_LOOKS;
+}
+
+/**
  * Whether a look came so long after it was due that the clock jumped under it
  * — the machine slept, or the orchestrator was stopped — rather than the look
  * merely running late. Every executor's heartbeat lapses across such a jump,

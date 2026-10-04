@@ -81,7 +81,7 @@ export function createRecoverOrphanedSessions(bindings: SessionOrchestratorBindi
           now,
         );
         if (path.executorWait === 'timer_lost') {
-          await rearmExecutorWait(redis, stepState, state, now);
+          await rearmExecutorWait(redis, stepState, now);
           rearmed++;
           log.info(
             `Re-armed the executor wait of step ${stepState.stepId} (${stepState.stepType}) in run ${runId}: its timer was gone`,

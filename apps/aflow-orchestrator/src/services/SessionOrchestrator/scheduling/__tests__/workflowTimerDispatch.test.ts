@@ -28,8 +28,7 @@ const SPACE_ID = '55555555-5555-4555-9555-555555555555';
 
 const TOKEN = `dispatch:${RUN_ID}:fetch-data:3`;
 
-const redis = {} as never;
-const payloadStore = {} as never;
+const deps = { db: {} as never, redis: {} as never, payloadStore: {} as never };
 
 function poppedWorkflowTimer(overrides: Record<string, unknown> = {}): TimerItem {
   return TimerItemSchema.parse({
@@ -148,7 +147,7 @@ describe('processWorkflowCorrelatedTimer (Plan 194 §4.1)', () => {
     const timer = poppedSnoozeTimer();
     const wfx = timer.workflowExecution as WorkflowExecutionRef;
 
-    await processWorkflowCorrelatedTimer(redis, payloadStore, timer, wfx);
+    await processWorkflowCorrelatedTimer(deps, timer, wfx);
 
     // Snooze's stepType 'agent' has no executor — re-enqueueing would strand it.
     expect(mockAddStepJob).not.toHaveBeenCalled();
@@ -181,7 +180,7 @@ describe('processWorkflowCorrelatedTimer (Plan 194 §4.1)', () => {
     const timer = poppedWorkflowTimer();
     const wfx = timer.workflowExecution as WorkflowExecutionRef;
 
-    await processWorkflowCorrelatedTimer(redis, payloadStore, timer, wfx);
+    await processWorkflowCorrelatedTimer(deps, timer, wfx);
 
     expect(mockDispatchInlineOp).not.toHaveBeenCalled();
     expect(mockAddStepJob).toHaveBeenCalledTimes(1);
@@ -197,8 +196,7 @@ describe('processWorkflowCorrelatedTimer (Plan 194 §4.1)', () => {
     const snooze = poppedSnoozeTimer();
     await expect(
       processWorkflowCorrelatedTimer(
-        redis,
-        payloadStore,
+        deps,
         snooze,
         snooze.workflowExecution as WorkflowExecutionRef,
       ),
@@ -207,12 +205,7 @@ describe('processWorkflowCorrelatedTimer (Plan 194 §4.1)', () => {
     mockAddStepJob.mockRejectedValueOnce(new Error('stream gone'));
     const job = poppedWorkflowTimer();
     await expect(
-      processWorkflowCorrelatedTimer(
-        redis,
-        payloadStore,
-        job,
-        job.workflowExecution as WorkflowExecutionRef,
-      ),
+      processWorkflowCorrelatedTimer(deps, job, job.workflowExecution as WorkflowExecutionRef),
     ).resolves.toBeUndefined();
   });
 });

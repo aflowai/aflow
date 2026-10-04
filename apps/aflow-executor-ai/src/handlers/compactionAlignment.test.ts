@@ -8,13 +8,20 @@ import type {
   SessionId,
   StepExecutionId,
 } from '@aflow/schemas';
-import { textMessage, toolResultMessage, MEMORY_READ_OPERATION_ID } from '@aflow/schemas';
+import {
+  getOperation,
+  textMessage,
+  toolResultMessage,
+  toolResultObservationOf,
+  MEMORY_READ_OPERATION_ID,
+} from '@aflow/schemas';
 import { createMemoryPayloadStore, type PayloadStore } from '@aflow/payload-store';
 import type { AIClient } from '@aflow/ai-client';
 import { ConversationStateStore } from './conversationStateStore.js';
 import { triggerCompaction } from './compaction.js';
 import { buildClearedExchangeNote, extractNoteReadPointers } from './exchangeClearing.js';
 import { RETENTION_POLICY, computePinnedAtomIds } from './retentionPolicy.js';
+import { estimateStringTokens } from './tokenEstimate.js';
 
 // ============================================================================
 // Fixtures
@@ -492,5 +499,107 @@ describe('triggerCompaction — range snaps to exchange boundaries', () => {
       surviving.filter((a) => a.sourceKind === 'tool_result').map((a) => a.message.toolCallId),
     );
     expect([...callIds].sort()).toEqual([...resultIds].sort());
+  });
+});
+
+// ============================================================================
+// The summarizer reads history as the agent was shown it
+// ============================================================================
+
+function actResultAtom(turnNumber: number, base: string): AiMessageAtomV1 {
+  const output = {
+    outcome: 'performed',
+    pageId: 'pg_1',
+    url: 'https://example.com/pulls',
+    title: 'Pull requests',
+    outline:
+      `- heading "stale outline ${String(turnNumber)}" [ref=e1]\n` +
+      '  - link "Fix the retry window" [ref=e2]\n'.repeat(150),
+    receipt: { action: 'click', ref: 'e2', urlChanged: false, outlineElements: 151 },
+  };
+  const observation = toolResultObservationOf(
+    getOperation('browser.page.act')!.observation!,
+    output,
+    (shown) => JSON.stringify(shown),
+  )!;
+  const envelope: AiToolResultEnvelopeV1 = {
+    kind: 'tool_result',
+    toolCallId: `${base}_0`,
+    toolName: 'browser.page.act',
+    operationId: 'browser.page.act',
+    status: 'SUCCEEDED',
+    outputRef: `/run/outputs/${base}_0`,
+    summary: JSON.stringify(output),
+    observation,
+  };
+  return {
+    schemaVersion: 1,
+    atomId: `res-${base}`,
+    role: 'tool',
+    sourceId: `${base}_0`,
+    sourceKind: 'tool_result',
+    message: toolResultMessage(envelope),
+    createdAtMs: turnNumber * 1000 + 1,
+    turnNumber,
+  };
+}
+
+describe('triggerCompaction — the range as the agent was shown it', () => {
+  it('gives the summarizer no stamp and no reduced outline, and measures the saving on what was sent', async () => {
+    const mem = createMemoryPayloadStore();
+    const atoms: AiMessageAtomV1[] = [userAtom(0)];
+    for (let t = 2; t <= 10; t++) {
+      atoms.push(assistantToolAtom(t, `act${String(t)}`, 'browser.page.act'));
+      atoms.push(actResultAtom(t, `act${String(t)}`));
+    }
+    atoms.push(assistantToolAtom(19, 'act19', 'browser.page.act'));
+    atoms.push(actResultAtom(19, 'act19'));
+
+    const seedRef = await storeBatch(mem, 'seed', atoms);
+    const state: AiConversationStateV1 = {
+      schemaVersion: 1,
+      conversationId: 'c1',
+      turnNumber: 20,
+      context: {},
+      seenSourceIds: {},
+      history: {
+        maxAtomsStructural: RETENTION_POLICY.maxAtomsStructural,
+        atoms: atoms.map((a) => refOf(a, seedRef)),
+      },
+    };
+    const client = mockClient();
+    const hydrated = await hydrateFromState(mem, state);
+    const storedRangeTokens = hydrated
+      .filter((a) => a.turnNumber !== undefined && a.turnNumber >= 2 && a.turnNumber <= 10)
+      .reduce((sum, a) => sum + estimateStringTokens(JSON.stringify(a.message)), 0);
+
+    const compact = await triggerCompaction(
+      {
+        payloadStore: mem,
+        tenantId: TENANT,
+        runId: RUN,
+        stepId: 'agent',
+        stepExecutionId: 'exec-1',
+        attempt: 1,
+        availableReadOpId: MEMORY_READ_OPERATION_ID,
+      },
+      state,
+      hydrated,
+      undefined,
+      client,
+      'test-flow',
+    );
+    expect(compact).toBeDefined();
+    expect(state.history.atoms.some((a) => a.atomId === 'res-act5')).toBe(false);
+
+    const prompt = vi.mocked(client.generateText).mock.calls[0]![0].messages[0]!.content as string;
+    expect(prompt).toContain("A later outline of pg_1 replaced this result's");
+    for (let t = 2; t <= 10; t++) {
+      expect(prompt).not.toContain(`stale outline ${String(t)}`);
+    }
+    expect(prompt).not.toContain('"observation"');
+    expect(prompt).not.toContain('"receipts"');
+    expect(prompt).not.toContain('currentStateOperation');
+    expect(compact!.tokensSaved).toBeLessThan(storedRangeTokens / 4);
   });
 });

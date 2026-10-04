@@ -453,8 +453,7 @@ export function createProcessDueTimers(bindings: SessionOrchestratorBindings) {
     async function handleTimer(timer: TimerItem): Promise<void> {
       if (timer.workflowExecution !== undefined) {
         await processWorkflowCorrelatedTimer(
-          redis,
-          deps.payloadStore,
+          { db, redis, payloadStore: deps.payloadStore },
           timer,
           timer.workflowExecution,
         );
@@ -753,7 +752,7 @@ export function createProcessDueTimers(bindings: SessionOrchestratorBindings) {
             endedAt: undefined,
             errorRef: undefined,
             outputRef: undefined,
-            executorWaitSince: undefined,
+            executorWait: undefined,
           });
 
           const job: StepJobMessage = {
@@ -832,7 +831,7 @@ export function createProcessDueTimers(bindings: SessionOrchestratorBindings) {
           !RUN_ENDED_STATUSES.has(waitRunState.status) &&
           waitStepState?.status === 'SCHEDULED' &&
           waitStepState.attempt === timer.attempt &&
-          waitStepState.executorWaitSince === sinceMs;
+          waitStepState.executorWait?.sinceMs === sinceMs;
         if (stillWaiting) {
           const now = Date.now();
           let dispatched: ExecutorDispatch;
@@ -939,7 +938,7 @@ export function createProcessDueTimers(bindings: SessionOrchestratorBindings) {
               now,
             );
           if (executorWait === 'timer_lost') {
-            await rearmExecutorWait(redis, stepState, state, now);
+            await rearmExecutorWait(redis, stepState, now);
             getOrchestratorLogger().warn(
               `[watchdog] Re-armed the executor wait of step ${stepState.stepId} (${stepState.stepType}): its timer was gone`,
               { tenantId, runId, stepExecutionId: stepState.stepExecutionId },
