@@ -8,8 +8,10 @@
  * `yarn redis:password`. A checkout's `REDIS_URL` names where Redis is, and the
  * password is laid into it here, so no checkout mints a password of its own.
  *
- * `scripts/dev.mjs`, `scripts/infra.mjs`, `yarn start` and the integration
- * suites' probe (`scripts/stackRedis.mjs`) all read it through this module.
+ * Every root script that starts a process reads its environment through
+ * `scripts/with-stack-env.mjs`, which composes it here; `scripts/dev.mjs`,
+ * `scripts/infra.mjs`, `yarn start` and the integration suites' probe
+ * (`scripts/stackRedis.mjs`) read this module directly.
  */
 import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -22,6 +24,13 @@ export const REDIS_PASSWORD_KEY = 'REDIS_PASSWORD';
 export const STACK_PASSWORD_KEY = 'AFLOW_DEV_REDIS_PASSWORD';
 export const STACK_ENV_FILE = 'stack.env';
 export const LOCAL_REDIS_URL = 'redis://localhost:6379';
+/** The hosts this machine's Redis answers on; `URL` keeps an IPv6 host in brackets. */
+export const MACHINE_REDIS_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+/**
+ * The values the dev runner's caller must win with, as JSON. `.env` is merged
+ * over the shell, so a value merely exported would be refilled from the file.
+ */
+export const DEV_ENV_OVERRIDES_KEY = 'PHOENIX_DEV_ENV_OVERRIDES';
 const REDIS_PASSWORD_BYTES = 32;
 const OWNER_ONLY_FILE = 0o600;
 const OWNER_ONLY_DIR = 0o700;
@@ -105,12 +114,26 @@ export function redisPasswordOf(url) {
   return decodeURIComponent(parsed.password);
 }
 
+/** Whether `url` names this machine's Redis: a loopback host, or no URL at all. */
+export function isMachineRedisUrl(url) {
+  if (url === undefined || url === '') return true;
+  const parsed = URL.parse(url);
+  return parsed !== null && MACHINE_REDIS_HOSTS.has(parsed.hostname);
+}
+
 /**
  * `url` carrying the machine's password: unchanged when it carries a password
- * of its own or there is no machine password, the local Redis when it is unset.
+ * of its own, names a Redis on another host, or there is no machine password;
+ * the local Redis when it is unset.
  */
 export function redisUrlWithMachinePassword(url, machinePassword) {
-  if (machinePassword === undefined || redisPasswordOf(url) !== undefined) return url;
+  if (
+    machinePassword === undefined ||
+    redisPasswordOf(url) !== undefined ||
+    !isMachineRedisUrl(url)
+  ) {
+    return url;
+  }
   const parsed = new URL(url || LOCAL_REDIS_URL);
   parsed.password = encodeURIComponent(machinePassword);
   return parsed.toString();
@@ -127,13 +150,23 @@ export function stackEnv(processEnv, dotenv, { instance, machinePassword } = {})
   return redisUrl === undefined ? env : { ...env, [REDIS_URL_KEY]: redisUrl };
 }
 
-/** Checkout `repo`'s environment, from its `.env` and this machine's `stack.env`. */
+/** The values the dev runner's caller handed it to win with (`DEV_ENV_OVERRIDES_KEY`). */
+export function devEnvOverrides(processEnv) {
+  const overrides = processEnv[DEV_ENV_OVERRIDES_KEY];
+  return overrides === undefined || overrides === '' ? {} : JSON.parse(overrides);
+}
+
+/**
+ * Checkout `repo`'s environment, from its `.env` and this machine's
+ * `stack.env`, with the values the dev runner's caller must win with over both.
+ */
 export function loadStackEnv(
   repo,
   processEnv = process.env,
   machineFile = stackEnvPath(processEnv),
 ) {
   return stackEnv(processEnv, readEnvFile(join(repo, '.env')), {
+    instance: devEnvOverrides(processEnv),
     machinePassword: readMachinePassword(machineFile),
   });
 }

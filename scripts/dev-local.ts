@@ -186,10 +186,13 @@ async function readInstanceConfig(): Promise<Record<string, string>> {
 }
 
 async function main(): Promise<void> {
+  // The loader the root scripts run under merges `.env` over the shell, so the
+  // edition reaches `db:migrate` the way it reaches the dev runner.
   const base: NodeJS.ProcessEnv = {
     ...process.env,
     ...editionEnv,
     PHOENIX_INSTANCE_DIR: INSTANCE_DIR,
+    PHOENIX_DEV_ENV_OVERRIDES: JSON.stringify(editionEnv),
   };
 
   // Started only when something is missing, and judged by what is listening
@@ -237,8 +240,8 @@ async function main(): Promise<void> {
 
   // The dev runner merges `.env` over its own environment, so what must win is
   // handed to it separately and applied last.
-  // The development Redis's password is the machine's, which the dev runner lays
-  // into REDIS_URL (scripts/stackEnv.mjs). The instance file's REDIS_PASSWORD is
+  // The development Redis's password is the machine's, which the stack's loader
+  // lays into REDIS_URL (scripts/stackEnv.mjs). The instance file's REDIS_PASSWORD is
   // the appliance's, and ioredis lays a password option over the URL's, so it
   // would replace the right one.
   const redisPassword = { REDIS_PASSWORD: '' };

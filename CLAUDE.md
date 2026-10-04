@@ -271,8 +271,9 @@ After every change that affects behavior, schemas, or architecture:
 **5433** (not the default 5432), Redis on 6379. Model provider keys are added in the web UI.
 
 **Every service requires a credential** (Plan 315 D20). Every checkout shares one Redis, so its
-password is the machine's, in `~/.aflow/stack.env` (written by the first `yarn start`); the dev
-runner lays it into each checkout's `REDIS_URL` (`scripts/stackEnv.mjs`), so `.env` carries
+password is the machine's, in `~/.aflow/stack.env` (written by the first `yarn start`); every
+root script that starts a service or reaches a datastore runs under `scripts/with-stack-env.mjs`,
+which lays it into a `REDIS_URL` naming this machine (`scripts/stackEnv.mjs`), so `.env` carries
 none. Redis Commander and pgAdmin log in with it, on `127.0.0.1` — pgAdmin with the password as
 it was when its volume was created, until that volume is removed. The Redis integration suites
 resolve the URL as the services do (`scripts/stackRedis.mjs`): they skip where no Redis answers

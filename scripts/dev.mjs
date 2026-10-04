@@ -16,7 +16,13 @@ import process from 'node:process';
 import { listenersOn, mcpPortHeldMessage, readProcessTable } from './devMcpPort.mjs';
 import { findRunningStack, profileConflicts, stackConflictMessage } from './devStackLock.mjs';
 import { pairedHostEnvPath } from './stackCredentials.mjs';
-import { readEnvFile, readMachinePassword, stackEnv, stackEnvPath } from './stackEnv.mjs';
+import {
+  devEnvOverrides,
+  readEnvFile,
+  readMachinePassword,
+  stackEnv,
+  stackEnvPath,
+} from './stackEnv.mjs';
 
 /** When true, child exit must not remove entries until shutdown finishes (see shutdown + port sweep). */
 let devRunnerShuttingDown = false;
@@ -279,13 +285,9 @@ function buildSpawnEnv(dotenvVars) {
   // `null` means the service reads its connection from its own paired file:
   // it gets the parent environment alone, with neither `.env` nor the overrides.
   const merged = dotenvVars === null ? { ...process.env } : { ...process.env, ...dotenvVars };
-  // `.env` is merged over the parent environment, so a caller that must win —
-  // `dev:local` pinning an edition the shared file contradicts — hands its
-  // values here instead of exporting them and watching the file refill them.
-  const overrides = process.env['PHOENIX_DEV_ENV_OVERRIDES'];
-  if (dotenvVars !== null && overrides !== undefined && overrides !== '') {
-    Object.assign(merged, JSON.parse(overrides));
-  }
+  // `dev:local` pins an edition the shared `.env` contradicts this way, and the
+  // loader each service's script runs under applies the same values again.
+  if (dotenvVars !== null) Object.assign(merged, devEnvOverrides(process.env));
   if (
     process.stdout.isTTY === true &&
     merged['NO_COLOR'] == null &&

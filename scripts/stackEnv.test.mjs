@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  DEV_ENV_OVERRIDES_KEY,
   STACK_ENV_FILE,
   STACK_PASSWORD_KEY,
   ensureMachinePassword,
@@ -72,6 +73,26 @@ describe('the environment a stack process sees', () => {
     );
   });
 
+  it('gives the machine’s password to the machine’s own Redis on every loopback name', () => {
+    for (const host of ['localhost', '127.0.0.1', '[::1]']) {
+      expect(
+        stackEnv({}, { REDIS_URL: `redis://${host}:6379` }, { machinePassword: MACHINE })[
+          'REDIS_URL'
+        ],
+      ).toBe(`redis://:${MACHINE}@${host}:6379`);
+    }
+  });
+
+  it('never sends the machine’s password to a Redis on another host', () => {
+    for (const url of [
+      'redis://redis.internal.example:6379',
+      'rediss://managed.example.com:6380/0',
+      'redis://10.0.0.5:6379',
+    ]) {
+      expect(stackEnv({}, { REDIS_URL: url }, { machinePassword: MACHINE })['REDIS_URL']).toBe(url);
+    }
+  });
+
   it('leaves a URL carrying a password of its own as it is, for the readiness to name', () => {
     const own = `redis://:${OWN}@localhost:6379`;
     expect(stackEnv({}, { REDIS_URL: own }, { machinePassword: MACHINE })['REDIS_URL']).toBe(own);
@@ -93,6 +114,15 @@ describe('the environment a stack process sees', () => {
       `redis://:${MACHINE}@localhost:6379`,
     );
     expect(redisPasswordOf(loadStackEnv(repo, {}, machineFile)['REDIS_URL'])).toBe(MACHINE);
+  });
+
+  it('lays the values the dev runner’s caller must win with over the checkout’s .env', () => {
+    const repo = dir();
+    writeFileSync(join(repo, '.env'), 'PHOENIX_EDITION=enterprise\nKEPT=dotenv\n');
+    const overrides = { [DEV_ENV_OVERRIDES_KEY]: '{"PHOENIX_EDITION":"community-local"}' };
+    const env = loadStackEnv(repo, overrides, join(repo, STACK_ENV_FILE));
+    expect(env['PHOENIX_EDITION']).toBe('community-local');
+    expect(env['KEPT']).toBe('dotenv');
   });
 });
 

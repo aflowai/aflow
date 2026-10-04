@@ -591,11 +591,13 @@ anything.
   checkout's: every checkout and worktree here shares the one Redis container,
   so a password per checkout would be one the running Redis never had. It lives
   in `~/.aflow/stack.env`, which the sandbox withholds from jobs, written once
-  by the first `yarn start` or `yarn redis:password`. The dev runner lays it
+  by the first `yarn start` or `yarn redis:password`. The stack's loader lays it
   into each checkout's `REDIS_URL` (`scripts/stackEnv.mjs`), so `.env` names
   only where Redis is, and `yarn infra:up` starts Redis with the same password
-  (`scripts/infra.mjs`). It publishes on `127.0.0.1` only. A service started
-  outside the dev runner, with `dotenv -e .env` alone, does not get it. A paired machine keeps its
+  (`scripts/infra.mjs`). It publishes on `127.0.0.1` only. Every entry point
+  gets it through that one loader: each root script that starts a service or
+  reaches a datastore runs under `scripts/with-stack-env.mjs`, and it is laid
+  only into a `REDIS_URL` naming this machine. A paired machine keeps its
   own identity in `~/.aflow/host.env`, read-only on write approvals; pairing
   hands it the address without the stack's password.
 - **The MCP server** gives the owner's key only to a session that presents the

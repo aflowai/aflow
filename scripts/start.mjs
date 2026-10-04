@@ -25,6 +25,7 @@ import {
 import {
   REDIS_URL_KEY,
   ensureMachinePassword,
+  isMachineRedisUrl,
   parseEnvFile,
   stackEnv,
   stackEnvPath,
@@ -98,7 +99,7 @@ const readiness = credentialReadiness({
   machinePassword: machine.password,
   machineFile,
   redisUrl,
-  redis: await probeRedis(redisUrl, machine.password),
+  redis: await probeRedis(redisUrl, isMachineRedisUrl(redisUrl) ? machine.password : undefined),
   mcpToken,
   mcpAuthFile: relative(REPO, mcpAuthFile) || mcpAuthFile,
   hostEnvPath: pairedHostEnvPath(),
