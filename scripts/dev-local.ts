@@ -21,6 +21,8 @@ import { fileURLToPath } from 'node:url';
 
 import { ENTERPRISE_ONLY_ENV_KEYS } from '@aflow/schemas';
 
+import { ensureMachinePassword, stackEnvPath, withoutRedisPasswordOption } from './stackEnv.mjs';
+
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 /**
@@ -67,43 +69,6 @@ editionEnv['HOST'] = '';
 const explicitDatabaseUrl = process.env['PHOENIX_DEV_LOCAL_DATABASE_URL']?.trim();
 if (explicitDatabaseUrl !== undefined && explicitDatabaseUrl !== '') {
   editionEnv['DATABASE_URL'] = explicitDatabaseUrl;
-}
-
-/**
- * Whether the Redis at `url` refuses an unauthenticated command.
- *
- * The instance file carries the appliance's Redis password, and the development
- * Redis has none; sending one anyway draws a warning from every connection of
- * every service. Asked of the server rather than assumed, so a development Redis
- * that does require a password still gets it.
- */
-function redisRequiresPassword(url: string | undefined): Promise<boolean> {
-  const parsed = url === undefined ? undefined : URL.parse(url);
-  const host = parsed?.hostname ?? '127.0.0.1';
-  const port = Number(parsed?.port !== undefined && parsed.port !== '' ? parsed.port : 6379);
-  return new Promise((resolve) => {
-    let reply = '';
-    const socket = connect({ host, port }, () => socket.write('PING\r\n'))
-      .on('data', (chunk) => {
-        reply += chunk.toString();
-        if (reply.includes('\r\n')) {
-          socket.destroy();
-          resolve(reply.startsWith('-NOAUTH'));
-        }
-      })
-      .on('error', () => {
-        resolve(true);
-      })
-      // A peer that closes without replying settles nothing else: the idle
-      // timer stops with the socket, and the start would wait forever.
-      .on('close', () => {
-        resolve(true);
-      });
-    socket.setTimeout(1500, () => {
-      socket.destroy();
-      resolve(true);
-    });
-  });
 }
 
 /** A datastore already listening is the only thing `infra:up` is asked for. */
@@ -229,6 +194,12 @@ async function main(): Promise<void> {
     PHOENIX_INSTANCE_DIR: INSTANCE_DIR,
   };
 
+  // Before the datastores: `infra:up` refuses to start Redis without it.
+  const machineFile = stackEnvPath(process.env);
+  if (ensureMachinePassword(machineFile).created) {
+    console.log(`[dev:local] wrote this machine's Redis password to ${machineFile}`);
+  }
+
   // Started only when something is missing, and judged by what is listening
   // rather than by the exit code: `infra:up` fails on a container that already
   // exists, which is the normal state of a machine that has run this before.
@@ -272,15 +243,10 @@ async function main(): Promise<void> {
     throw new Error(`No PHOENIX_LOCAL_TENANT_ID in ${join(INSTANCE_DIR, 'instance.env')}`);
   }
 
-  // The dev runner merges `.env` over its own environment, so what must win is
-  // handed to it separately and applied last.
-  const redisPassword = (await redisRequiresPassword(base['REDIS_URL']))
-    ? {}
-    : { REDIS_PASSWORD: '' };
-  const overrides = {
-    ...editionEnv,
+  const runnerEnv: NodeJS.ProcessEnv = withoutRedisPasswordOption({
+    ...base,
     ...instance,
-    ...redisPassword,
+    ...editionEnv,
     // The capacity every pool is sized from; the default is the hosted tier's,
     // and the development Postgres runs with its own default of 100.
     DB_SERVER_MAX_CONNECTIONS: base['DB_SERVER_MAX_CONNECTIONS'] ?? '100',
@@ -291,18 +257,13 @@ async function main(): Promise<void> {
     ...(process.env['PHOENIX_HOST_REDIS_URL']?.trim()
       ? {}
       : { PHOENIX_HOST_REDIS_URL: base['REDIS_URL'] ?? 'redis://127.0.0.1:6379' }),
-  };
-
-  console.log('[dev:local] starting the local edition — http://localhost:3001\n');
-  await run('node scripts/dev.mjs --profile local', {
-    ...base,
-    ...instance,
-    ...redisPassword,
     // Named so the single-stack refusal tells the reader the command they ran,
     // rather than the one the runner underneath it happens to be.
     PHOENIX_DEV_RESTART_HINT: 'yarn dev:local',
-    PHOENIX_DEV_ENV_OVERRIDES: JSON.stringify(overrides),
   });
+
+  console.log('[dev:local] starting the local edition — http://localhost:3001\n');
+  await run('node scripts/dev.mjs --profile local', runnerEnv);
 }
 
 main().catch((error: unknown) => {

@@ -6,7 +6,13 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { admitRequest, requestGatePolicy, transportRebindingOptions } from './requestGate.js';
+import {
+  LOCAL_TOKEN_ENV,
+  admitRequest,
+  presentedBearer,
+  requestGatePolicy,
+  transportRebindingOptions,
+} from './requestGate.js';
 
 type GateConfig = Parameters<typeof requestGatePolicy>[0];
 
@@ -109,7 +115,7 @@ describe('the Origin', () => {
     const decision = decide({ host, origin: DEV_ORIGIN }, withAuthFile);
     expect(decision).toMatchObject({ admitted: false, status: 403 });
     expect(decision.admitted || decision.reason).toContain("owner's key");
-    expect(decide({ host }, withAuthFile).admitted).toBe(true);
+    expect(decide({ host, authorization: 'Bearer local-token' }, withAuthFile).admitted).toBe(true);
   });
 
   it('is only weighed once the Host is one this server answers to', () => {
@@ -120,6 +126,63 @@ describe('the Origin', () => {
   });
 });
 
+/**
+ * Another process on this machine sends whatever Host it likes and no Origin,
+ * so neither check above stops it; what it does not have is the token.
+ */
+describe('while the server holds the owner’s key, a local session', () => {
+  const host = 'localhost:3100';
+  const withAuthFile = { localAuthJsonPath: 'mcp.local.json' };
+
+  it.each([
+    ['no Authorization at all', {}],
+    ['an empty bearer, as an unset token expands to', { authorization: 'Bearer ' }],
+    ['a bare scheme', { authorization: 'Bearer' }],
+    ['another scheme', { authorization: 'Basic dXNlcjpwdw==' }],
+  ])('is refused with 401 when it presents %s', (_case, credential) => {
+    expect(decide({ host, ...credential }, withAuthFile)).toMatchObject({
+      admitted: false,
+      status: 401,
+    });
+  });
+
+  it('is told how to set the credential up', () => {
+    const decision = decide({ host }, withAuthFile);
+    if (decision.admitted) throw new Error('expected a refusal');
+    expect(decision.reason).toContain('yarn mcp:setup');
+    expect(decision.reason).toContain(LOCAL_TOKEN_ENV);
+    expect(decision.reason).toContain('Bearer phx_');
+  });
+
+  it('is admitted with a credential, which the session then has to match', () => {
+    expect(decide({ host, authorization: 'Bearer some-token' }, withAuthFile).admitted).toBe(true);
+    expect(decide({ host, authorization: 'Bearer phx_own_key' }, withAuthFile).admitted).toBe(true);
+  });
+
+  /** The scheme is case-insensitive (RFC 7235 §2.1). */
+  it.each(['bearer some-token', 'BEARER some-token', 'BeArEr some-token'])(
+    'is admitted presenting %s, the credential read as sent',
+    (authorization) => {
+      expect(decide({ host, authorization }, withAuthFile).admitted).toBe(true);
+      expect(presentedBearer({ authorization })).toBe('some-token');
+    },
+  );
+
+  it.each(['bearer', 'bearer ', 'bearersome-token'])(
+    'is refused with 401 presenting %s under a lower-case scheme',
+    (authorization) => {
+      expect(decide({ host, authorization }, withAuthFile)).toMatchObject({
+        admitted: false,
+        status: 401,
+      });
+    },
+  );
+
+  it('needs none where the server holds no key to give', () => {
+    expect(decide({ host }).admitted).toBe(true);
+  });
+});
+
 describe('a refusal', () => {
   it('says why in one line', () => {
     for (const decision of [
@@ -127,6 +190,7 @@ describe('a refusal', () => {
       decide({ host: 'evil.example:3100' }),
       decide({ host: 'localhost:3100', origin: 'http://evil.example' }),
       decide({ host: 'localhost:3100', origin: 'http://evil.example' }, { localAuthJsonPath: 'f' }),
+      decide({ host: 'localhost:3100' }, { localAuthJsonPath: 'f' }),
     ]) {
       if (decision.admitted) throw new Error('expected a refusal');
       expect(decision.reason).toMatch(/^Refused: [^\n]+$/);

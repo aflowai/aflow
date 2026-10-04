@@ -12,6 +12,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Redis from 'ioredis';
 import type { Redis as RedisType } from 'ioredis';
+import { stackRedis } from '../../../../scripts/stackRedis.mjs';
 
 /**
  * Its own database. Writing session state on db 0 puts entries into the shared
@@ -30,28 +31,7 @@ import {
 const TENANT = 'tenant-cas-test';
 const RUN = '00000000-0000-0000-0000-0000000000c5';
 
-async function redisReachable(): Promise<boolean> {
-  const probe = new Redis({
-    host: '127.0.0.1',
-    port: 6379,
-    db: TEST_DB,
-    lazyConnect: true,
-    connectTimeout: 500,
-    maxRetriesPerRequest: 1,
-    retryStrategy: () => null,
-  });
-  try {
-    await probe.connect();
-    await probe.ping();
-    return true;
-  } catch {
-    return false;
-  } finally {
-    probe.disconnect();
-  }
-}
-
-const AVAILABLE = await redisReachable();
+const STACK_REDIS = await stackRedis(TEST_DB);
 
 function makeState(version: number): SessionHotState {
   return {
@@ -70,11 +50,11 @@ function runtime(version: number, x: number): SessionHotState['runtimeState'] {
   return { schemaVersion: 1, variables: { x }, version, updatedAtMs: 2000 };
 }
 
-describe.skipIf(!AVAILABLE)('casUpdateSessionRuntimeState (real-redis Lua)', () => {
+describe.skipIf(!STACK_REDIS.available)('casUpdateSessionRuntimeState (real-redis Lua)', () => {
   let redis: RedisType;
   const key = StreamKeys.sessionStateKey(TENANT, RUN);
   beforeEach(async () => {
-    redis = new Redis({ host: '127.0.0.1', port: 6379, db: TEST_DB });
+    redis = new Redis(STACK_REDIS.url);
     await redis.del(key);
   });
   afterEach(async () => {

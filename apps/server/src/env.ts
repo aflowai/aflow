@@ -8,7 +8,7 @@
  * value this file exists to supply before it was supplied. Sentry's DSN and the
  * invite limits are read that way.
  *
- * Loaded for a process started without `dotenv -e .env` — the workspace scripts
+ * Loaded for a process started without `scripts/with-stack-env.mjs` — the workspace scripts
  * run with cwd `apps/server`, not the repository root. The repository root is
  * read first and the cwd second; neither overrides a variable already set, which
  * is how the appliance's Docker environment keeps precedence over a stray file.

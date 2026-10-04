@@ -8,7 +8,6 @@
 import { execSync, spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, writeSync } from 'node:fs';
 import { createServer } from 'node:net';
-import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
@@ -16,6 +15,8 @@ import process from 'node:process';
 
 import { listenersOn, mcpPortHeldMessage, readProcessTable } from './devMcpPort.mjs';
 import { findRunningStack, profileConflicts, stackConflictMessage } from './devStackLock.mjs';
+import { pairedHostEnvPath } from './stackCredentials.mjs';
+import { loadStackEnv } from './stackEnv.mjs';
 
 /** When true, child exit must not remove entries until shutdown finishes (see shutdown + port sweep). */
 let devRunnerShuttingDown = false;
@@ -52,7 +53,7 @@ const SERVICE_REGISTRY = {
   // The paired daemon for the operator's own machine. It reads its Redis from
   // the env `pair` wrote next to the host policy, so which stack it joins is
   // that file's decision; the profile only starts it. `dotenv: false` keeps the
-  // shared `.env` and the runner's overrides out of its environment, because an
+  // env file's values out of its environment, because an
   // ambient REDIS_URL wins over the paired one and points it at another
   // instance. Unpaired, owned by the launch-agent service, or with a daemon
   // already running, it is dropped from the profile with a hint rather than
@@ -251,50 +252,30 @@ async function handleInfra(command) {
 }
 
 /**
- * Load environment variables from .env file
+ * The services' environment: the env file under this runner's own, and
+ * `REDIS_URL` carrying this machine's Redis password (`scripts/stackEnv.mjs`).
+ * Each service's script runs under the same loader, which finds these values
+ * above the checkout's `.env` — so a file passed with `--env` reaches it as is.
  */
 function loadEnv(envPath) {
-  try {
-    const content = readFileSync(envPath, 'utf-8');
-    const env = {};
-    for (const line of content.split('\n')) {
-      const trimmed = line.trim();
-      if (trimmed && !trimmed.startsWith('#')) {
-        const [key, ...valueParts] = trimmed.split('=');
-        if (key && valueParts.length > 0) {
-          env[key.trim()] = valueParts.join('=').trim();
-        }
-      }
-    }
-    return env;
-  } catch (error) {
-    if (error.code === 'ENOENT') {
-      console.warn(`Warning: .env file not found at ${envPath}, continuing without it`);
-      return {};
-    }
-    throw error;
+  if (!existsSync(envPath)) {
+    console.warn(`Warning: .env file not found at ${envPath}, continuing without it`);
   }
+  return loadStackEnv(envPath, process.env);
 }
 
 /**
- * Merge .env-derived vars onto process.env and enable ANSI in children when safe.
+ * A service's environment, with ANSI enabled in children when safe.
  *
  * Children use stdio: 'pipe' for prefixed logs, so their stdout is not a TTY and
  * @aflow/observability (and pino-pretty) would skip colors unless FORCE_COLOR is set.
  * When the dev runner itself is in a real terminal, force colors so logs match
  * `yarn server:dev` etc.; respect NO_COLOR and explicit FORCE_COLOR from the user.
  */
-function buildSpawnEnv(dotenvVars) {
+function buildSpawnEnv(stackVars) {
   // `null` means the service reads its connection from its own paired file:
-  // it gets the parent environment alone, with neither `.env` nor the overrides.
-  const merged = dotenvVars === null ? { ...process.env } : { ...process.env, ...dotenvVars };
-  // `.env` is merged over the parent environment, so a caller that must win —
-  // `dev:local` pinning an edition the shared file contradicts — hands its
-  // values here instead of exporting them and watching the file refill them.
-  const overrides = process.env['PHOENIX_DEV_ENV_OVERRIDES'];
-  if (dotenvVars !== null && overrides !== undefined && overrides !== '') {
-    Object.assign(merged, JSON.parse(overrides));
-  }
+  // it gets this runner's environment alone, without the env file's values.
+  const merged = { ...(stackVars ?? process.env) };
   if (
     process.stdout.isTTY === true &&
     merged['NO_COLOR'] == null &&
@@ -352,21 +333,6 @@ function spawnService(serviceName, command, env) {
 
   processes.set(serviceName, child);
   return child;
-}
-
-/**
- * Where `pair` wrote this machine's host env, or null when it never ran. The
- * host executor resolves the same directory (`PHOENIX_HOST_POLICY_PATH`, then
- * `PHOENIX_HOST_DIR`, then `~/.aflow`).
- */
-function pairedHostEnvPath() {
-  const policyPath = process.env.PHOENIX_HOST_POLICY_PATH?.trim();
-  const dir =
-    policyPath !== undefined && policyPath !== ''
-      ? join(policyPath, '..')
-      : process.env.PHOENIX_HOST_DIR?.trim() || join(homedir(), '.aflow');
-  const envPath = join(dir, 'host.env');
-  return existsSync(envPath) ? envPath : null;
 }
 
 /** Set when the profile wanted `executor-host` and yielded to a foreground one already running. */
@@ -466,7 +432,7 @@ async function yieldHeldMcpPort(services) {
   return services.filter((name) => name !== 'mcp');
 }
 
-/** Starts one registry service with its environment: the `.env` values, its own, or none. */
+/** Starts one registry service with its environment: the stack's, with its own over it, or the runner's alone. */
 function startService(serviceName, env) {
   const entry = SERVICE_REGISTRY[serviceName];
   if (!entry) {

@@ -68,10 +68,17 @@ scripts/verify-commit.mjs`), and Local Publish runs it after the commit and befo
    touched package whose imports reach a touched file, so a contract change meets its
    consumers before the push — such a package built first, such an application's build
    reported skipped by name — the catalog guards when `platform-artifacts` is touched and never a `*.pg.test.ts`;
+   for a touched file outside every workspace, which no test imports, the repository-shape
+   guards under `packages/schemas/src/edition`, reported as run for that file by name, or
+   in a repository without that directory one line saying it has none to run;
    on macOS, where the sandbox gives a test no loopback, less the tests tagged `listener`,
    each named as skipped with one line saying CI runs them, their count carried in the
    check's receipt; ESLint,
-   errors only, on touched sources; and Prettier on every touched file. A failure fails
+   errors only, on touched sources; and Prettier on every touched file. A test running a
+   touched file by path imports nothing from it, so every `.mjs` or `.ts` test of those
+   workspaces whose source names a touched file's repository path, whole
+   (`scripts/verify-commit.mjs`, not `verify-commit`), in a string literal runs too, counted
+   and named in the same line as the tests imports reach. A failure fails
    the publication with the end of what it printed and nothing pushed: read it on the
    `check-commit` task, and commission the fix onto the branch. The pull request's CI
    remains the proof. By hand, from a checkout, it measures `HEAD` against `origin/main`.
@@ -97,8 +104,10 @@ the check on Linux and cannot listen on macOS, where the check leaves it out (ab
 both, each job writes a temporary directory of its own, where a shell records its working
 directory after every command, and not the system's `/tmp`, where other jobs' checkouts
 live; it writes its checkout and nothing of the folder or its `.git`, and cannot read or
-write `~/.aflow/`, where the policy every gate reads and the pairing credential live. Agent
-configuration files such as `.mcp.json` stay protected under both. The executor's boot log
+write `~/.aflow/`, where the policy every gate reads, the pairing credential and the stack's
+Redis password live. A
+change to `.mcp.json` is made by hand, because the sandbox refuses the coding agent writes to
+agent-configuration files in its checkout (F104). The executor's boot log
 says whether a shell command and `yarn --version` work under `open` on this machine, and
 whether a listener on the machine's loopback stays out of reach.
 Choose on the machine with `aflow harness sandbox <folder> open|confined`; `hb_aflow` chose

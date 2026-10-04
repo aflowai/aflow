@@ -48,7 +48,7 @@ To add a new test flow:
 ```bash
 yarn infra:up                    # Start Postgres + Redis
 yarn infra:reset                 # Wipe and reinitialize (runs init-db.sql)
-yarn infra:tools                 # Start with pgAdmin (8080) + Redis Commander (8081)
+yarn infra:tools                 # Start with pgAdmin (8080) + Redis Commander (8081); Redis password as login
 ```
 
 Database is initialized by `scripts/init-db.sql` which runs on container creation.

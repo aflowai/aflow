@@ -8,9 +8,11 @@
  * scoped to it: the two CI guards over the whole tree, a build of every
  * package the touched workspaces read — their project references and imports,
  * one line per package — a type-check of each touched workspace, the tests
- * whose imports reach a touched file, in the touched workspaces and every
- * workspace that reads a touched package — such a package built first, such an
- * application's build named as skipped — on half the machine's cores, on
+ * whose imports reach a touched file or whose source names one by its path, in
+ * the touched workspaces and every workspace that reads a touched package —
+ * such a package built first, such an application's build named as skipped —
+ * and the repository-shape guards for a touched file outside every workspace,
+ * where the repository has them, on half the machine's cores, on
  * macOS less the tests tagged `listener`, each named as skipped and their count
  * written where `AFLOW_CHECK_REPORT` says (`listener-tests.mjs`), ESLint
  * (errors only) on touched sources and Prettier on every touched file. One
@@ -40,7 +42,7 @@ import {
   skippedListenerTests,
   WITHOUT_LISTENER_TESTS,
 } from './listener-tests.mjs';
-import { testsReaching } from './test-selection.mjs';
+import { repositoryShapeGuards, testsNaming, testsReaching } from './test-selection.mjs';
 
 const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const binDir = path.join(repoRoot, 'node_modules', '.bin');
@@ -64,6 +66,12 @@ const LINTED_SOURCE = /\.(?:[cm]?[jt]sx?)$/;
 const CATALOG_GUARD_DIR = 'packages/platform-artifacts/src';
 const CATALOG_GUARD_FILE =
   /(?:\.guard\.test\.ts|^storeCatalog\.test\.ts|^catalogSkillsInstallable\.test\.ts|^crossRegistryCatalogIds\.test\.ts)$/;
+
+/**
+ * The guards over the repository's own files, which run for a touched file
+ * outside every workspace. A repository without this directory has none.
+ */
+const REPOSITORY_SHAPE_GUARD_DIR = 'packages/schemas/src/edition';
 
 function fail(label, startedAt, text) {
   console.log(`FAIL ${label} (${elapsed(startedAt)})`);
@@ -230,7 +238,8 @@ const touchedWorkspaces = [
 // A touched package's contract meets its consumers here rather than after the
 // push — but only the tests that can observe the change: of every test in the
 // touched workspaces and in those that read a touched package, directly or
-// through another, the ones whose import closure reaches a touched file.
+// through another, the ones whose import closure reaches a touched file, and
+// the ones naming a touched file by its path, as a test running a script does.
 const touchedPackageNames = new Set(
   touchedWorkspaces.filter((w) => w.dir.startsWith('packages/')).map((w) => w.name),
 );
@@ -261,14 +270,19 @@ const added = new Set(
     '\0',
   ),
 );
-const reaching = testsReaching({
+const candidates = [...touchedWorkspaces, ...dependentWorkspaces].flatMap(testsOf);
+const imported = testsReaching({
   repository: repoRoot,
   files: touched,
-  candidates: [...touchedWorkspaces, ...dependentWorkspaces].flatMap(testsOf),
+  candidates,
   textAtBase: (file) => (added.has(file) ? undefined : git(['show', `${mergeBase}:${file}`])),
   packageDirOf: (specifier) =>
     workspaces.byName.get(specifier.match(/^@aflow\/[a-z0-9-]+/)?.[0])?.dir,
 });
+const namedOnly = testsNaming({ repository: repoRoot, files: touched, candidates }).filter(
+  (file) => !imported.includes(file),
+);
+const reaching = [...imported, ...namedOnly];
 const reachingByWorkspace = Map.groupBy(reaching, (file) =>
   workspaces.byDir.get(file.split('/').slice(0, 2).join('/')),
 );
@@ -279,8 +293,27 @@ console.log(
       ? `: ${[...reachingByWorkspace]
           .map(([workspace, files]) => `${workspace.name} ${String(files.length)}`)
           .join(', ')}`
-      : ''),
+      : '') +
+    (namedOnly.length > 0 ? `; by path, importing none: ${namedOnly.join(', ')}` : ''),
 );
+const shapeGuardDir = path.join(repoRoot, REPOSITORY_SHAPE_GUARD_DIR);
+const shapeGuards = repositoryShapeGuards({
+  files: touched,
+  workspaceDirs: new Set(workspaces.byDir.keys()),
+  guards: existsSync(shapeGuardDir)
+    ? readdirSync(shapeGuardDir)
+        .map((file) => `${REPOSITORY_SHAPE_GUARD_DIR}/${file}`)
+        .filter((file) => TEST_FILE.test(file))
+    : [],
+});
+if (shapeGuards.outside.length > 0) {
+  console.log(
+    (shapeGuards.guards.length > 0
+      ? `${String(shapeGuards.guards.length)} repository-shape guards (${REPOSITORY_SHAPE_GUARD_DIR}) run`
+      : `no repository-shape guards (${REPOSITORY_SHAPE_GUARD_DIR}) in this repository to run`) +
+      ` for the files outside every workspace: ${shapeGuards.outside.join(', ')}`,
+  );
+}
 
 // tsx as a loader rather than its CLI: the CLI opens a socket to talk to its
 // child, and the sandbox a check runs in refuses to listen on one.
@@ -356,7 +389,12 @@ const catalogGuards = touchedNames.has('@aflow/platform-artifacts')
       .filter((file) => CATALOG_GUARD_FILE.test(path.basename(file)))
   : [];
 const tests = [
-  ...new Set([...present.filter((file) => TEST_FILE.test(file)), ...catalogGuards, ...reaching]),
+  ...new Set([
+    ...present.filter((file) => TEST_FILE.test(file)),
+    ...catalogGuards,
+    ...shapeGuards.guards,
+    ...reaching,
+  ]),
 ].filter((file) => !DATABASE_TEST_FILE.test(file));
 let skippedListeners = [];
 if (tests.length === 0) {

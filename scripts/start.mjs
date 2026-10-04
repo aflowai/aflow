@@ -11,11 +11,26 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { constants } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 
-import { apiUrlOf, authFileOf, envNamingAuthFile, parseEnvFile } from './mcp-local-setup.mjs';
+import { apiUrlOf, authFileOf, envNamingAuthFile } from './mcp-local-setup.mjs';
+import {
+  composeProjectOf,
+  credentialReadiness,
+  mcpTokenState,
+  pairedHostEnvPath,
+} from './stackCredentials.mjs';
+import {
+  REDIS_URL_KEY,
+  ensureMachinePassword,
+  isMachineRedisUrl,
+  parseEnvFile,
+  stackEnv,
+  stackEnvPath,
+} from './stackEnv.mjs';
+import { probeRedis } from './stackRedis.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const say = (message) => {
@@ -48,18 +63,52 @@ if (!existsSync(join(REPO, '.env'))) {
   say('  nothing to edit — a model provider key is entered in the app');
 }
 
+// ── The machine's Redis password ──────────────────────────────────────────────
+// One for every checkout, because they all share one Redis container.
+const machineFile = stackEnvPath(process.env);
+const machine = ensureMachinePassword(machineFile);
+if (machine.created) say(`wrote this machine's Redis password to ${machineFile}`);
+
 // ── The MCP server's credential ───────────────────────────────────────────────
-// Minted by `yarn mcp:setup` once the API is healthy (below). The line naming
-// the file goes into `.env` now: the MCP server reads it once, at its start, and
-// reads the file itself per session — so the key reaches the next session
-// without a restart.
+// Minted by `yarn mcp:setup` once the API is healthy (below), with the session
+// token a client presents for it. The line naming the file goes into `.env`
+// now: the MCP server reads it once, at its start, and reads the file itself per
+// session — so the key reaches the next session without a restart.
 const envFile = join(REPO, '.env');
-const envValues = { ...process.env, ...parseEnvFile(readFileSync(envFile, 'utf-8')) };
-const mcpCredentialMissing = !existsSync(authFileOf(envValues, REPO));
+const envValues = stackEnv(process.env, parseEnvFile(readFileSync(envFile, 'utf-8')));
+const mcpAuthFile = authFileOf(envValues, REPO);
+const mcpToken = mcpTokenState(
+  existsSync(mcpAuthFile) ? readFileSync(mcpAuthFile, 'utf-8') : undefined,
+);
+const mcpCredentialMissing = mcpToken !== 'present';
 if (mcpCredentialMissing) {
   const named = envNamingAuthFile(readFileSync(envFile, 'utf-8'));
   if (named !== undefined) writeFileSync(envFile, named);
 }
+
+// ── Each service's credential ─────────────────────────────────────────────────
+// Before anything starts: a Redis started, or still running, without its
+// password would serve the write approvals the push gate reads to anything on
+// this machine.
+const dotenv = parseEnvFile(readFileSync(envFile, 'utf-8'));
+const redisUrl = stackEnv(process.env, dotenv, { machinePassword: machine.password })[
+  REDIS_URL_KEY
+];
+const readiness = credentialReadiness({
+  checkoutRedisUrl: stackEnv(process.env, dotenv)[REDIS_URL_KEY],
+  checkoutRedisSource: process.env[REDIS_URL_KEY] === undefined ? '.env' : 'the shell',
+  machinePassword: machine.password,
+  machineFile,
+  redisUrl,
+  redis: await probeRedis(redisUrl, isMachineRedisUrl(redisUrl) ? machine.password : undefined),
+  mcpToken,
+  mcpAuthFile: relative(REPO, mcpAuthFile) || mcpAuthFile,
+  hostEnvPath: pairedHostEnvPath(),
+  composeProject: composeProjectOf(process.env, dotenv),
+});
+say('credentials:');
+for (const line of readiness.lines) say(`  ${line}`);
+if (readiness.failure !== undefined) fail(readiness.failure.message, readiness.failure.remedy);
 
 // ── Build output the web application reads ────────────────────────────────────
 // Its bundler resolves the `import` condition, so it reads compiled packages even

@@ -5,13 +5,16 @@
  *
  * @module-tag listener
  */
+import { randomBytes } from 'node:crypto';
 import { once } from 'node:events';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, request } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { AuthManager } from './auth/AuthManager.js';
 import { SessionStore } from './auth/SessionStore.js';
@@ -19,7 +22,18 @@ import type { McpServerConfig } from './config.js';
 import { createMcpHttpServer, type McpHttpServer } from './httpServer.js';
 import { setLogLevel } from './util/logger.js';
 
-const AUTH_FILE = fileURLToPath(new URL('../mcp.local.json.example', import.meta.url));
+const EXAMPLE = fileURLToPath(new URL('../mcp.local.json.example', import.meta.url));
+const OWNER = {
+  ...(JSON.parse(readFileSync(EXAMPLE, 'utf8')) as { apiKey: string }),
+  sessionToken: randomBytes(32).toString('hex'),
+};
+const AUTH_DIR = mkdtempSync(join(tmpdir(), 'mcp-http-'));
+const AUTH_FILE = join(AUTH_DIR, 'mcp.local.json');
+writeFileSync(AUTH_FILE, JSON.stringify(OWNER));
+afterAll(() => {
+  rmSync(AUTH_DIR, { recursive: true, force: true });
+});
+const LOCAL_TOKEN = { authorization: `Bearer ${OWNER.sessionToken}` };
 
 /** A free loopback port, or undefined where the environment refuses a listener. */
 async function freeLoopbackPort(): Promise<number | undefined> {
@@ -147,21 +161,37 @@ describe.skipIf(!listenerAllowed)('the MCP HTTP server', () => {
     expect(await healthSessions(server.port)).toBe(0);
   });
 
-  it('admits localhost on its port, and the owner key reaches that session', async () => {
+  it('admits localhost on its port, and the owner key reaches a session presenting the token', async () => {
     const server = await start();
     const res = await send(server.port, {
-      headers: { host: `localhost:${String(server.port)}` },
+      headers: { host: `localhost:${String(server.port)}`, ...LOCAL_TOKEN },
       body: INITIALIZE,
     });
 
     expect(res.status).toBe(200);
     const sessionId = res.headers['mcp-session-id'];
     expect(typeof sessionId).toBe('string');
-    const ownerKey = (JSON.parse(readFileSync(AUTH_FILE, 'utf8')) as { apiKey: string }).apiKey;
     expect(server.activeSessions.get(sessionId as string)?.session.auth).toMatchObject({
       method: 'api_key',
-      apiKey: ownerKey,
+      apiKey: OWNER.apiKey,
     });
+  });
+
+  it.each([
+    ['no credential', {}],
+    ['another token', { authorization: 'Bearer guess' }],
+  ])('refuses a local session presenting %s with 401, and creates none', async (_case, auth) => {
+    const server = await start();
+    const res = await send(server.port, {
+      headers: { host: `localhost:${String(server.port)}`, ...auth },
+      body: INITIALIZE,
+    });
+
+    expect(res.status).toBe(401);
+    expect((JSON.parse(res.body) as { error: string }).error).toContain('yarn mcp:setup');
+    expect(res.headers['mcp-session-id']).toBeUndefined();
+    expect(server.activeSessions.size).toBe(0);
+    expect(await healthSessions(server.port)).toBe(0);
   });
 
   it('refuses a browser origin while the auth file is loaded, even one configured', async () => {
@@ -228,7 +258,7 @@ describe.skipIf(!listenerAllowed)('the MCP HTTP server', () => {
   it('admits a configured ALLOWED_HOSTS entry', async () => {
     const server = await start({ allowedHosts: ['mcp.example.test'] });
     const res = await send(server.port, {
-      headers: { host: `mcp.example.test:${String(server.port)}` },
+      headers: { host: `mcp.example.test:${String(server.port)}`, ...LOCAL_TOKEN },
       body: INITIALIZE,
     });
 
@@ -236,11 +266,41 @@ describe.skipIf(!listenerAllowed)('the MCP HTTP server', () => {
     expect(server.activeSessions.size).toBe(1);
   });
 
+  /** The session id is not a credential: the token is asked for on every request. */
+  it('refuses a later request on an owner-keyed session presenting another bearer, with 401', async () => {
+    const server = await start();
+    const host = `localhost:${String(server.port)}`;
+    const init = await send(server.port, {
+      headers: { host, ...LOCAL_TOKEN },
+      body: INITIALIZE,
+    });
+    const sessionId = init.headers['mcp-session-id'] as string;
+    const onSession = { host, 'mcp-session-id': sessionId, 'mcp-protocol-version': '2025-03-26' };
+    const initialized = JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' });
+
+    for (const method of ['POST', 'GET', 'DELETE']) {
+      const later = await send(server.port, {
+        method,
+        headers: { ...onSession, authorization: 'Bearer guess' },
+        ...(method === 'POST' ? { body: initialized } : {}),
+      });
+      expect(later.status).toBe(401);
+      expect((JSON.parse(later.body) as { error: string }).error).toContain('yarn mcp:setup');
+    }
+    expect(server.activeSessions.has(sessionId)).toBe(true);
+
+    const same = await send(server.port, {
+      headers: { ...onSession, ...LOCAL_TOKEN },
+      body: initialized,
+    });
+    expect(same.status).toBe(202);
+  });
+
   /** The SDK's own check, pinned to the Host the session was admitted under. */
   it('refuses a session’s later request under a different Host, through the transport', async () => {
     const server = await start();
     const init = await send(server.port, {
-      headers: { host: `localhost:${String(server.port)}` },
+      headers: { host: `localhost:${String(server.port)}`, ...LOCAL_TOKEN },
       body: INITIALIZE,
     });
     const sessionId = init.headers['mcp-session-id'] as string;
@@ -248,6 +308,7 @@ describe.skipIf(!listenerAllowed)('the MCP HTTP server', () => {
     const later = await send(server.port, {
       headers: {
         host: `127.0.0.1:${String(server.port)}`,
+        ...LOCAL_TOKEN,
         'mcp-session-id': sessionId,
         'mcp-protocol-version': '2025-03-26',
       },

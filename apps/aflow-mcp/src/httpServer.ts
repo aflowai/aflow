@@ -51,14 +51,19 @@ export function createMcpHttpServer(deps: {
   const gatePolicy: RequestGatePolicy = requestGatePolicy(config);
   const activeSessions = new Map<string, McpSession>();
 
+  /** A new session, or why its credential was refused, in which case none exists. */
   function createMcpSession(
     sessionId: string,
     headers: AdmittedHeaders,
     admittedHost: string,
-  ): McpSession {
+  ): McpSession | { refused: string } {
     const session = sessionStore.getOrCreate(sessionId);
 
-    authManager.initFromHeaders(session, headers);
+    const outcome = authManager.initFromHeaders(session, headers);
+    if (!outcome.accepted) {
+      sessionStore.delete(sessionId);
+      return { refused: outcome.reason };
+    }
 
     // Per-session space gate (every space-scoped tool passes space_id explicitly)
     const spaceGate = new SpaceGate();
@@ -116,6 +121,20 @@ export function createMcpHttpServer(deps: {
     void mcpServer.connect(transport as Parameters<typeof mcpServer.connect>[0]);
 
     return mcpSession;
+  }
+
+  /** Answers 401, and says so, when a request on `mcpSession` does not present the credential it was admitted with. */
+  function refusedOnSession(
+    mcpSession: McpSession,
+    headers: AdmittedHeaders,
+    res: ServerResponse,
+  ): boolean {
+    const outcome = authManager.admitSessionRequest(mcpSession.session, headers);
+    if (outcome.accepted) return false;
+    log('warn', 'session_request_refused', { session: mcpSession.session.id });
+    res.writeHead(401, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: outcome.reason }));
+    return true;
   }
 
   const httpServer = createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -178,8 +197,16 @@ export function createMcpHttpServer(deps: {
               res.end(JSON.stringify({ error: 'Session not found. Re-initialize.' }));
               return;
             }
+            if (refusedOnSession(mcpSession, headers, res)) return;
           } else {
-            mcpSession = createMcpSession(randomUUID(), headers, decision.host);
+            const created = createMcpSession(randomUUID(), headers, decision.host);
+            if ('refused' in created) {
+              log('warn', 'session_refused', { host: req.headers.host });
+              res.writeHead(401, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: created.refused }));
+              return;
+            }
+            mcpSession = created;
           }
 
           await mcpSession.transport.handleRequest(req, res);
@@ -197,12 +224,14 @@ export function createMcpHttpServer(deps: {
             res.end(JSON.stringify({ error: 'Session not found' }));
             return;
           }
+          if (refusedOnSession(mcpSession, headers, res)) return;
 
           await mcpSession.transport.handleRequest(req, res);
         } else if (req.method === 'DELETE') {
           if (mcpSessionId) {
             const mcpSession = activeSessions.get(mcpSessionId);
             if (mcpSession) {
+              if (refusedOnSession(mcpSession, headers, res)) return;
               await mcpSession.transport.close();
               activeSessions.delete(mcpSessionId);
               sessionStore.delete(mcpSessionId);

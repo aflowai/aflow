@@ -148,9 +148,10 @@ yarn start                 # First run and every run: .env, Postgres + Redis, bu
 yarn dev:local             # What `yarn start` runs once its checks pass
 yarn dev:core              # Server + orchestrator + mock executor (no web)
 yarn dev:mcp               # MCP server alone (port 3100); `yarn start` already serves it
-yarn mcp:setup             # Give the MCP server its API key (mcp.local.json); idempotent
-yarn infra:up              # Postgres (port 5433) + Redis (port 6379) only
-yarn infra:tools           # Same, with pgAdmin (8080) + Redis Commander (8081)
+yarn mcp:setup             # Give the MCP server its API key and session token (mcp.local.json); idempotent
+yarn redis:password        # Put this checkout and Redis on the machine's password (~/.aflow/stack.env)
+yarn infra:up              # Postgres (port 5433) + Redis (port 6379, the machine's password) only
+yarn infra:tools           # Same, with pgAdmin (8080) + Redis Commander (8081), Redis password as login
 
 # Build and test
 yarn build                 # Build all packages
@@ -250,9 +251,9 @@ review does not run done by hand before the operator merges.
 
 The Aflow MCP server (`apps/aflow-mcp/`), **`aflow-local`**, is how a coding agent drives the local stack (`localhost:3000`): run operations, start and watch sessions, inspect them, browse the catalog.
 
-**Set up.** `yarn start` serves it on `127.0.0.1:3100` (`MCP_HOST` names another interface, refused at startup while the auth file is configured — the Host check stops browsers, not another client on the network, which would be served as the owner; unset one of them. An MCP server already holding the port is used instead of a second). It answers only to `localhost` and `127.0.0.1` on that port (`ALLOWED_HOSTS` replaces the list) and refuses any request carrying a browser `Origin` while the auth file is configured, so a web page cannot reach the owner's key through a name rebound to loopback; a `421` or `403` from it says which check refused. It is the owner, through an API key of its own in `mcp.local.json`, which `AFLOW_MCP_LOCAL_AUTH_JSON` in `.env` names. `yarn mcp:setup` mints the key and writes both; `yarn start` runs it once the stack is healthy when the file is missing, and run by hand it replaces the key only when the API no longer accepts it. When `auth_status` reports a method other than `api_key`, check that `.env` names the file (read when the MCP server starts — restart it after adding the line), that the file parses (exactly the fields of `apps/aflow-mcp/mcp.local.json.example`; a refused file is a `local_auth_json_invalid` line in the server's log), and that the key is still listed under Settings → API Keys.
+**Set up.** `yarn start` serves it on `127.0.0.1:3100` (`MCP_HOST` names another interface, refused at startup while the auth file is configured — the Host check stops browsers, not another client on the network, which the session token would reach in the clear; unset one of them. An MCP server already holding the port is used instead of a second). It answers only to `localhost` and `127.0.0.1` on that port (`ALLOWED_HOSTS` replaces the list) and refuses any request carrying a browser `Origin` while the auth file is configured, so a web page cannot reach the owner's key through a name rebound to loopback; a `421` or `403` from it says which check refused. It is the owner, through an API key of its own in `mcp.local.json`, which `AFLOW_MCP_LOCAL_AUTH_JSON` in `.env` names, and it gives that key only to a session presenting the file's `sessionToken` as `Authorization: Bearer <token>`: a session presenting nothing, or another token, is refused with a `401` that says how to set it up. `yarn mcp:setup` mints the key and the token and writes both, and prints the line that sets `AFLOW_MCP_LOCAL_TOKEN` from the file without printing the token; `yarn start` runs it once the stack is healthy when the file is missing or sets no session token, and run by hand it replaces the key only when the API no longer accepts it. When `auth_status` reports a method other than `api_key`, check that `.env` names the file (read when the MCP server starts — restart it after adding the line), that the file parses (exactly the fields of `apps/aflow-mcp/mcp.local.json.example`; a refused file is a `local_auth_json_invalid` line in the server's log), and that the key is still listed under Settings → API Keys.
 
-**Connect.** `.mcp.json` registers `aflow-local` at `http://localhost:3100` for Claude Code in this checkout and every worktree of it, with no credential in it. A port moved off 3100 (`MCP_PORT`, then `PORT`) needs `aflow-local` registered again at the new port with `claude mcp add` in local scope, which overrides the project file. The next session in the checkout offers it; approve it, and `claude mcp list` should report it connected. After the MCP server restarts, start a new session to pick up changed tool schemas.
+**Connect.** `.mcp.json` registers `aflow-local` at `http://localhost:3100` for Claude Code in this checkout and every worktree of it, sending `Bearer ${AFLOW_MCP_LOCAL_TOKEN}` and holding no credential itself: start Claude Code from a shell where that line has run (a shell profile keeps it). A port moved off 3100 (`MCP_PORT`, then `PORT`) needs `aflow-local` registered again at the new port with `claude mcp add` in local scope, which overrides the project file. The next session in the checkout offers it; approve it, and `claude mcp list` should report it connected. After the MCP server restarts, start a new session to pick up changed tool schemas.
 
 **Drive.** Follow `docs/dev/driving-work-through-the-loop.md`. Tools (prefixed `mcp__aflow-local__`): `auth_status`, `space_list`, `catalog`, `run_operation`, `start_session`, `watch_session`, `watch_run`, `inspect_session`, `fetch_payload` (lazy/auto payload mode only). MCP sessions are in-memory (lost on restart). Every space-scoped tool takes an explicit `space_id` (discover via `space_list`). When `start_session`/`run_operation` time out waiting, the response carries a `continuation` (tool + args) — call it verbatim (`watch_session`/`watch_run`) instead of polling. A session `inspect_session` shows `FAILED` with its steps `unknown` failed on a step whose stored error no MCP tool reads yet (`error_ref` is the session's): the web UI's run view shows it, with a retry.
 
@@ -268,5 +269,21 @@ After every change that affects behavior, schemas, or architecture:
 
 `yarn start` creates `.env` from `.env.example` on first run. Postgres listens on port
 **5433** (not the default 5432), Redis on 6379. Model provider keys are added in the web UI.
+
+**Every service requires a credential** (Plan 315 D20). Every checkout shares one Redis, so its
+password is the machine's, in `~/.aflow/stack.env` (written by the first `yarn start` or `yarn dev:local`); every
+script that runs tsx on a file of the repository runs under `scripts/with-stack-env.mjs`
+(`with-stack-env.test.mjs` names the entry points that cannot, and why), which reads `.env`
+under what the caller set, as `dotenv` did, and lays the password into a `REDIS_URL` naming this
+machine (`scripts/stackEnv.mjs`), so `.env` carries none. Redis Commander and pgAdmin log in with
+it, on `127.0.0.1` — pgAdmin with the password as it was when its volume was created, until that
+volume is removed. The Redis integration suites resolve the URL as the services do
+(`scripts/stackRedis.mjs`) and connect only to this machine's Redis: they skip where no Redis
+answers or the URL names another host, and fail where one refuses its credential. `yarn start`
+prints each service's credential state and stops on a Redis without the machine's password or a
+`REDIS_URL` for it carrying its own; a `REDIS_URL` naming another host is the checkout's own
+Redis, checked with the credential it carries and never rewritten. **Then run
+`yarn redis:password` once** — it adopts the machine's password and restarts Redis with it; the
+data stays.
 
 @CLAUDE.hosted.md

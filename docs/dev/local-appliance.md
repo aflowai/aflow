@@ -579,3 +579,80 @@ want `~/.aflow/dev-local/`, not the checkout.
 `PHOENIX_INSTANCE_DIR` still names a directory explicitly, which is how a
 deliberately separate instance is asked for. Nothing is adopted into it — a
 request for a separate instance is answered with one.
+
+### Every service asks for a credential
+
+The development stack's services listen on loopback, and loopback is the whole
+machine: any process here reaches them. So each of them asks for a credential
+(Plan 315 D20), and `yarn start` prints each one's state before it starts
+anything.
+
+- **Redis** requires a password, and it is the machine's rather than the
+  checkout's: every checkout and worktree here shares the one Redis container,
+  so a password per checkout would be one the running Redis never had. It lives
+  in `~/.aflow/stack.env`, which the sandbox withholds from jobs, written once
+  by the first `yarn start`, `yarn dev:local` or `yarn redis:password`. The stack's loader lays it
+  into each checkout's `REDIS_URL` (`scripts/stackEnv.mjs`), so `.env` names
+  only where Redis is, and `yarn infra:up` starts Redis with the same password
+  (`scripts/infra.mjs`). It publishes on `127.0.0.1` only. Every entry point
+  gets it through that one loader: each script that runs tsx on a file of the
+  repository runs under `scripts/with-stack-env.mjs`, which reads `.env` under
+  whatever the caller set — `DATABASE_URL=… yarn db:seed` seeds that database,
+  and `yarn dev --env <file>` hands its services that file — and lays it only
+  into a `REDIS_URL` naming this machine. A `REDIS_URL` naming another host is
+  the checkout's own Redis: `yarn start` checks it with the credential it
+  carries, and `yarn redis:password` leaves it as it is. A paired machine keeps its
+  own identity in `~/.aflow/host.env`, read-only on write approvals; pairing
+  hands it the address without the stack's password.
+- **The MCP server** gives the owner's key only to a session that presents the
+  session token `yarn mcp:setup` wrote into `mcp.local.json`. `.mcp.json` sends
+  it from `AFLOW_MCP_LOCAL_TOKEN`, and `yarn mcp:setup` prints the line that sets
+  that from the file. A session presenting nothing is refused with a `401` that
+  says so.
+- **Redis Commander and pgAdmin** (`yarn infra:tools`, off otherwise) log in
+  with the Redis password — Commander as `aflow`, pgAdmin as
+  `admin@phoenix.dev` — and publish on `127.0.0.1`. Behind a login rather than
+  left open as loopback-only tooling, because Commander needs the Redis password
+  to reach Redis at all: an open Commander would hand everything the password
+  guards to any page or process that reached it, and with the password already
+  in the compose file the login is two lines. pgAdmin sets its login once, when
+  it creates its volume, so the volume is now `pgadmin_login`; the old
+  `pgadmin_data`, which still holds the fixed login, is unused and can go
+  (`docker volume rm aflow-dev_pgadmin_data`). For the same reason pgAdmin
+  keeps the password it was first created with when the machine's changes, and
+  `yarn start`'s readiness says so: removing its volume
+  (`docker rm -f aflow-pgadmin && docker volume rm aflow-dev_pgadmin_login`)
+  gives it the current one at the next `yarn infra:tools`. The login is not
+  written at every start because compose has no way to: pgAdmin reads it only
+  into an empty volume, so it would mean discarding pgAdmin's saved servers at
+  every start or reaching into the image's own setup script.
+- **Postgres** publishes on `127.0.0.1` only, with the fixed development
+  login it has always had. A generated one is its own slice: `DATABASE_URL`
+  reaches every tool and every Postgres-gated test.
+- **The Redis integration suites** resolve the URL exactly as the services do —
+  the shell over `.env`, the machine's password laid in, `REDIS_PASSWORD`
+  emptied as `yarn dev:local` empties it for the services — through `scripts/stackRedis.mjs`, and connect only to this machine's
+  own Redis: some empty their database and rewrite ACL users, so a URL naming
+  another host, a managed Redis included, skips them without a connection and
+  names the host. Where no Redis answers they skip;
+  where one answers and refuses that credential they fail, naming the refusal,
+  because a credential the stack wrote that a test cannot use is a defect.
+
+`yarn start` authenticates to Redis with the machine's password and says which
+it found — no password required, the password accepted, the password refused —
+and stops, naming the remedy, on the first and the last, and when this
+checkout's `REDIS_URL` carries a Redis password of its own for this machine's
+Redis.
+
+**With a `.env` or a Redis from before this, run one command:**
+
+```bash
+yarn redis:password
+```
+
+It writes the machine's password if there is none yet, takes a password of the
+checkout's own out of `REDIS_URL`, and restarts Redis with the machine's; the
+data is in a volume and stays. Then `yarn start` as usual: it gives an existing
+`mcp.local.json` its session token (`yarn mcp:setup`, once the stack is
+healthy), which a Claude Code session started from a shell where
+`AFLOW_MCP_LOCAL_TOKEN` is set then presents.

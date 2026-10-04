@@ -2,7 +2,10 @@
   "mcpServers": {
     "aflow-local": {
       "type": "http",
-      "url": "http://localhost:3100"
+      "url": "http://localhost:3100",
+      "headers": {
+        "Authorization": "Bearer ${AFLOW_MCP_LOCAL_TOKEN:-}"
+      }
     }
   }
 }

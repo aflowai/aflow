@@ -10,6 +10,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import Redis from 'ioredis';
 import type { Redis as RedisType } from 'ioredis';
+import { stackRedis } from '../../../../scripts/stackRedis.mjs';
 
 /**
  * Its own database. Writing session state on db 0 puts entries into the shared
@@ -24,34 +25,13 @@ const TENANT = 'tenant-live-stream-test';
 const SESSION = '00000000-0000-0000-0000-00000000live';
 const STEP = '00000000-0000-0000-0000-0000000005+e';
 
-async function redisReachable(): Promise<boolean> {
-  const probe = new Redis({
-    host: '127.0.0.1',
-    port: 6379,
-    db: TEST_DB,
-    lazyConnect: true,
-    connectTimeout: 500,
-    maxRetriesPerRequest: 1,
-    retryStrategy: () => null,
-  });
-  try {
-    await probe.connect();
-    await probe.ping();
-    return true;
-  } catch {
-    return false;
-  } finally {
-    probe.disconnect();
-  }
-}
-
-const AVAILABLE = await redisReachable();
+const STACK_REDIS = await stackRedis(TEST_DB);
 
 function client(): RedisType {
-  return new Redis({ host: '127.0.0.1', port: 6379, db: TEST_DB, maxRetriesPerRequest: 1 });
+  return new Redis(STACK_REDIS.url, { maxRetriesPerRequest: 1 });
 }
 
-describe.skipIf(!AVAILABLE)('live stream buffer', () => {
+describe.skipIf(!STACK_REDIS.available)('live stream buffer', () => {
   let redis: RedisType | null = null;
 
   afterEach(async () => {

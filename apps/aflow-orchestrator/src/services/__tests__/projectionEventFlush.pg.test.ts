@@ -20,6 +20,7 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import { StreamKeys, type TenantId } from '@aflow/schemas';
 import { createDatabase, tenantIdToSchemaName, PROJECTION_FAILURES_TABLE } from '@aflow/database';
 import { setSessionState, appendSessionEvent, type SessionHotState } from '@aflow/redis';
+import { stackRedis } from '../../../../../scripts/stackRedis.mjs';
 const logs = vi.hoisted(() => ({ info: [] as string[], error: [] as string[] }));
 vi.mock('../../lib/orchestratorLogger.js', async () => {
   const actual = await vi.importActual<Record<string, unknown>>('../../lib/orchestratorLogger.js');
@@ -45,25 +46,10 @@ const SCHEMA = tenantIdToSchemaName(TENANT);
 
 let handle: { sql: postgres.Sql; close: () => Promise<void> } | undefined;
 
+const STACK_REDIS = await stackRedis(REDIS_DB);
+
 async function substrateReady(): Promise<boolean> {
-  if (!DATABASE_URL) return false;
-  const probe = new Redis({
-    host: '127.0.0.1',
-    port: 6379,
-    db: REDIS_DB,
-    lazyConnect: true,
-    connectTimeout: 500,
-    maxRetriesPerRequest: 1,
-    retryStrategy: () => null,
-  });
-  try {
-    await probe.connect();
-    await probe.ping();
-  } catch {
-    return false;
-  } finally {
-    probe.disconnect();
-  }
+  if (!DATABASE_URL || !STACK_REDIS.available) return false;
   handle = createDatabase({ connectionString: DATABASE_URL });
   try {
     // Gated on the base schema only, never on the artifact under test: a gate
@@ -180,7 +166,7 @@ describe.skipIf(!READY)('projection event flush', () => {
   });
 
   beforeEach(async () => {
-    redis = new Redis({ host: '127.0.0.1', port: 6379, db: REDIS_DB, maxRetriesPerRequest: 1 });
+    redis = new Redis(STACK_REDIS.url, { maxRetriesPerRequest: 1 });
     // Scoped deletes, never flushdb: the instance is shared, and vitest is
     // known to collect sibling worktrees' suites onto the same databases.
     const mine = await redis.keys(`aflow:*${TENANT}*`);
