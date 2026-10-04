@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 
 import { Watcher, type WatchHttpClient } from './Watcher.js';
+import { decodeSessionCursor } from './sessionCursor.js';
+import { inspectSession } from './sessionInspection.js';
 import type { Session } from '../auth/SessionStore.js';
 import type { SessionDebugResponse, SessionRunStatusView } from './sessionViews.js';
 
@@ -71,6 +73,19 @@ function debugWithEntries(entries: Array<[stepId: string, status: string]>): Ses
   return {
     session: { sessionId: SESSION_ID, status: 'RUNNING' },
     dynamicSteps: entries.map(([stepId, status]) => ({ stepId, status })),
+  };
+}
+
+/** One page of events read: a step whose events have left it carries no status. */
+function debugFromNewestPage(
+  entries: Array<[stepId: string, status: string | undefined]>,
+): SessionDebugResponse {
+  return {
+    session: { sessionId: SESSION_ID, status: 'RUNNING' },
+    dynamicSteps: entries.map(([stepId, status]) =>
+      status === undefined ? { stepId } : { stepId, status },
+    ),
+    stepEvents: { read: 200, complete: false },
   };
 }
 
@@ -243,12 +258,9 @@ describe('watchSession', () => {
     expect(degraded.status).toBe('WAITING_ON_CHILD');
     expect(degraded.new_steps).toEqual([]);
 
-    const cursor = JSON.parse(Buffer.from(degraded.cursor, 'base64').toString('utf-8')) as {
-      status: string;
-      steps: Record<string, string>;
-    };
-    expect(cursor.status).toBe('WAITING_ON_CHILD');
-    expect(cursor.steps).toEqual({ 'step-1': 'SUCCEEDED' });
+    const cursor = decodeSessionCursor(degraded.cursor);
+    expect(cursor?.status).toBe('WAITING_ON_CHILD');
+    expect(cursor?.seen).toEqual(decodeSessionCursor(running.cursor)?.seen);
   });
 
   it('a degraded-read cursor does not re-trigger the same transition but still delivers step diffs', async () => {
@@ -287,6 +299,155 @@ describe('watchSession', () => {
     });
     expect(recovered.done).toBe(true);
     expect(recovered.new_steps.map((s) => s.step_id)).toEqual(['step-2']);
+  });
+
+  it("until 'update': a step whose events leave the newest page between polls is not a change", async () => {
+    const first = await watcher(
+      fakeClient([
+        {
+          status: sessionStatus({ updatedAt: 'T1' }),
+          debug: debugFromNewestPage([
+            ['step-1', 'SUCCEEDED'],
+            ['step-2', 'RUNNING'],
+          ]),
+        },
+      ]),
+    ).watchSession(SESSION, { session_id: SESSION_ID, space_id: SPACE_ID });
+
+    const client = fakeClient([
+      {
+        status: sessionStatus({ updatedAt: 'T1' }),
+        debug: debugFromNewestPage([
+          ['step-1', 'SUCCEEDED'],
+          ['step-2', 'RUNNING'],
+        ]),
+      },
+      {
+        status: sessionStatus({ updatedAt: 'T2' }),
+        debug: debugFromNewestPage([
+          ['step-1', undefined],
+          ['step-2', 'RUNNING'],
+        ]),
+      },
+    ]);
+    const aged = await watcher(client).watchSession(SESSION, {
+      session_id: SESSION_ID,
+      space_id: SPACE_ID,
+      cursor: first.cursor,
+      timeout_seconds: SHORT_TIMEOUT_SECONDS,
+    });
+
+    expect(client.debugPolls()).toBeGreaterThanOrEqual(2);
+    expect(aged.done).toBe(false);
+    expect(aged.new_steps).toEqual([]);
+
+    const readAgain = await watcher(
+      fakeClient([
+        {
+          status: sessionStatus({ updatedAt: 'T3' }),
+          debug: debugWithEntries([
+            ['step-1', 'SUCCEEDED'],
+            ['step-2', 'RUNNING'],
+          ]),
+        },
+      ]),
+    ).watchSession(SESSION, {
+      session_id: SESSION_ID,
+      space_id: SPACE_ID,
+      cursor: aged.cursor,
+      timeout_seconds: SHORT_TIMEOUT_SECONDS,
+    });
+    expect(readAgain.done).toBe(false);
+    expect(readAgain.new_steps).toEqual([]);
+  });
+
+  it('a step read SUCCEEDED, then unreadable, then FAILED is reported once it is read FAILED', async () => {
+    const succeeded = await watcher(
+      fakeClient([{ status: sessionStatus(), debug: debugWithEntries([['step-1', 'SUCCEEDED']]) }]),
+    ).watchSession(SESSION, { session_id: SESSION_ID, space_id: SPACE_ID });
+
+    const unreadable = await watcher(
+      fakeClient([
+        { status: sessionStatus(), debug: debugFromNewestPage([['step-1', undefined]]) },
+      ]),
+    ).watchSession(SESSION, {
+      session_id: SESSION_ID,
+      space_id: SPACE_ID,
+      cursor: succeeded.cursor,
+      timeout_seconds: SHORT_TIMEOUT_SECONDS,
+    });
+    expect(unreadable.new_steps).toEqual([]);
+
+    const failed = await watcher(
+      fakeClient([{ status: sessionStatus(), debug: debugWithEntries([['step-1', 'FAILED']]) }]),
+    ).watchSession(SESSION, {
+      session_id: SESSION_ID,
+      space_id: SPACE_ID,
+      cursor: unreadable.cursor,
+      timeout_seconds: 5,
+    });
+    expect(failed.done).toBe(true);
+    expect(failed.new_steps).toEqual([{ step_id: 'step-1', status: 'FAILED' }]);
+  });
+
+  it('a cursor from inspect_session, which walks the history, reports nothing for unchanged steps', async () => {
+    const walked = debugWithEntries([
+      ['step-1', 'SUCCEEDED'],
+      ['step-2', 'SUCCEEDED'],
+      ['step-3', 'RUNNING'],
+    ]);
+    walked.stepEvents = { read: 900, complete: true };
+    const inspected = await inspectSession(fakeClient([{ debug: walked }]), SESSION, {
+      session_id: SESSION_ID,
+      space_id: SPACE_ID,
+    });
+
+    const result = await watcher(
+      fakeClient([
+        {
+          status: sessionStatus(),
+          debug: debugFromNewestPage([
+            ['step-1', undefined],
+            ['step-2', undefined],
+            ['step-3', 'RUNNING'],
+          ]),
+        },
+      ]),
+    ).watchSession(SESSION, {
+      session_id: SESSION_ID,
+      space_id: SPACE_ID,
+      cursor: inspected.cursor,
+      timeout_seconds: SHORT_TIMEOUT_SECONDS,
+    });
+
+    expect(result.done).toBe(false);
+    expect(result.new_steps).toEqual([]);
+  });
+
+  it('a step never seen is new even when its status cannot be read', async () => {
+    const first = await watcher(
+      fakeClient([{ status: sessionStatus(), debug: debugWithEntries([['step-1', 'SUCCEEDED']]) }]),
+    ).watchSession(SESSION, { session_id: SESSION_ID, space_id: SPACE_ID });
+
+    const result = await watcher(
+      fakeClient([
+        {
+          status: sessionStatus(),
+          debug: debugFromNewestPage([
+            ['step-1', undefined],
+            ['step-2', undefined],
+          ]),
+        },
+      ]),
+    ).watchSession(SESSION, {
+      session_id: SESSION_ID,
+      space_id: SPACE_ID,
+      cursor: first.cursor,
+      timeout_seconds: 5,
+    });
+
+    expect(result.done).toBe(true);
+    expect(result.new_steps).toEqual([{ step_id: 'step-2', status: 'NOT_READ' }]);
   });
 
   it("until 'pause': resolves when the session pauses, with required_input", async () => {

@@ -10,13 +10,16 @@
  *
  * The server gives that key only to a session presenting the file's session
  * token, which this generates beside it; a client started from `.mcp.json`
- * sends it from `AFLOW_MCP_LOCAL_TOKEN`.
+ * sends it from `AFLOW_MCP_LOCAL_TOKEN`, read from the shell it starts in. Run
+ * in a terminal, it offers to add the line that sets it to the shell's profile;
+ * `--write-profile` adds it without asking, from a terminal or not.
  *
  * Idempotent: a file whose key the API still accepts is left alone, gaining a
  * session token only when it has none. Never prints a key, the token or the secret.
  */
 import { randomBytes } from 'node:crypto';
 import {
+  appendFileSync,
   chmodSync,
   existsSync,
   readFileSync,
@@ -26,6 +29,7 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
+import { createInterface } from 'node:readline/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import process from 'node:process';
 
@@ -201,6 +205,55 @@ export function tokenExportLine(authFile) {
 }
 
 /**
+ * The shell profile a new shell of the operator's reads, from `$SHELL`: zsh
+ * reads `~/.zshrc`; bash reads `~/.bash_profile` where a terminal opens a login
+ * shell, as macOS's does, and `~/.bashrc` where it opens an interactive one, as
+ * Linux's do. Undefined for any other shell, whose profile is not guessed at.
+ */
+export function profileFor(shell, platform, home) {
+  const name = shell === undefined ? '' : shell.split('/').pop();
+  if (name === 'zsh') return join(home, '.zshrc');
+  if (name === 'bash') return join(home, platform === 'darwin' ? '.bash_profile' : '.bashrc');
+  return undefined;
+}
+
+/** Whether the profile already sets the token variable on a line that is not a comment. */
+export function profileSetsToken(profileText) {
+  return new RegExp(`^[^#\\n]*\\b${MCP_TOKEN_ENV}=`, 'm').test(profileText);
+}
+
+/**
+ * What is appended to the profile: the printed line, run only while the file
+ * exists, so a removed file costs a new shell nothing.
+ */
+export function profileAddition(profileText, authFile) {
+  const quoted = `'${authFile.replace(/'/g, "'\\''")}'`;
+  const separator = profileText === '' || profileText.endsWith('\n') ? '' : '\n';
+  return (
+    `${separator}\n# aflow-local MCP server: the session token .mcp.json sends\n` +
+    `if [ -f ${quoted} ]; then ${tokenExportLine(authFile)}; fi\n`
+  );
+}
+
+/**
+ * What to do about the profile. Nothing is written without a yes: one typed at
+ * a terminal, or `--write-profile`, which gives it in advance and so holds
+ * where nobody can type one — a coding agent's shell is not a terminal.
+ */
+export function profilePlan({ interactive, writeProfile, profile, profileText }) {
+  if (profile === undefined) return { kind: 'no-profile' };
+  if (profileText !== undefined && profileSetsToken(profileText))
+    return { kind: 'present', profile };
+  if (writeProfile) return { kind: 'write', profile };
+  return { kind: interactive ? 'ask' : 'print', profile };
+}
+
+/** Only an explicit yes. */
+export function isYes(answer) {
+  return /^\s*y(es)?\s*$/i.test(answer ?? '');
+}
+
+/**
  * The file the MCP server reads, with exactly the fields its schema accepts —
  * it is parsed strictly, and a refused file leaves every session uncredentialed.
  */
@@ -298,7 +351,7 @@ async function main() {
       const foreign = foreignHolderOfPort(env, shown);
       if (foreign !== undefined) say(foreign);
       else if (envNamesItNow) say('restart the MCP server so it reads that line.');
-      sayHowClientsPresentIt(authFile);
+      await finish(authFile);
       return;
     }
     if (verdict === 'undecided') {
@@ -356,16 +409,88 @@ async function main() {
   } else {
     say('the next MCP session picks it up; auth_status reports api_key.');
   }
-  sayHowClientsPresentIt(authFile);
+  await finish(authFile);
 }
 
-function sayHowClientsPresentIt(authFile) {
+async function askYes(question) {
+  const prompt = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return isYes(await prompt.question(question));
+  } finally {
+    prompt.close();
+  }
+}
+
+/** Adds the token line to the shell's profile, offers to, or prints it, as `profilePlan` decides. */
+export async function settleProfile({
+  shell,
+  platform,
+  home,
+  authFile,
+  interactive,
+  writeProfile,
+  ask,
+  tell,
+}) {
+  const profile = profileFor(shell, platform, home);
+  const profileText =
+    profile === undefined ? undefined : existsSync(profile) ? readFileSync(profile, 'utf8') : '';
+  const plan = profilePlan({ interactive, writeProfile, profile, profileText });
+  const line = `  ${tokenExportLine(authFile)}`;
+  const shown = profile?.startsWith(`${home}/`) ? `~${profile.slice(home.length)}` : profile;
+  const append = () => {
+    appendFileSync(profile, profileAddition(profileText ?? '', authFile));
+    tell(`added it to ${shown}; it reads the token from ${authFile} each time a shell starts.`);
+  };
+
+  if (plan.kind === 'present') {
+    tell(`${shown} already sets ${MCP_TOKEN_ENV}; left unchanged.`);
+  } else if (plan.kind === 'no-profile') {
+    tell(
+      `cannot tell which profile your shell (${shell ?? '$SHELL unset'}) reads; ` +
+        'add this line to it:',
+    );
+    tell(line);
+  } else if (plan.kind === 'print') {
+    tell(`add this line to ${shown}, which a new shell reads:`);
+    tell(line);
+    tell(
+      'or run `yarn mcp:setup --write-profile`, which adds it, or `yarn mcp:setup` in a ' +
+        'terminal, which offers to.',
+    );
+  } else if (plan.kind === 'write') {
+    append();
+  } else {
+    tell(`this line sets it:`);
+    tell(line);
+    if (await ask(`\x1b[36m[mcp:setup]\x1b[0m append it to ${shown}? [y/N] `)) append();
+    else tell(`${shown} left unchanged; add the line to it yourself.`);
+  }
+  return plan.kind;
+}
+
+/** Puts the token where a new shell finds it, then says what is left to do. */
+async function finish(authFile) {
   say(
     `a session is given the key only when it presents the file's session token; ` +
-      `.mcp.json sends it from ${MCP_TOKEN_ENV}. Set it in the shell your MCP client starts ` +
-      'from (your shell profile keeps it):',
+      `.mcp.json sends it from ${MCP_TOKEN_ENV}, which the MCP client reads from the shell it starts in.`,
   );
-  say(`  ${tokenExportLine(authFile)}`);
+  await settleProfile({
+    shell: process.env['SHELL'],
+    platform: process.platform,
+    home: homedir(),
+    authFile,
+    interactive: process.stdin.isTTY === true && process.stdout.isTTY === true,
+    writeProfile: process.argv.includes('--write-profile'),
+    ask: askYes,
+    tell: say,
+  });
+
+  say(
+    'still to do: start your MCP client from a NEW shell — a session already running, or a ' +
+      'shell opened before the line was set, has no token and no aflow-local server — and ' +
+      'approve the project’s MCP server, aflow-local, when the client offers it.',
+  );
 }
 
 function canonical(path) {

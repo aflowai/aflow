@@ -114,6 +114,7 @@ export function registerRunOperationTool(
           status: result.status,
           output: result.output,
           ...(result.error ? { error: result.error } : {}),
+          ...(result.failure ? { failure: result.failure } : {}),
           ...(result.steps ? { steps: result.steps } : {}),
           ...(result.timedOutWaiting ? { timed_out_waiting: true } : {}),
           ...(result.continuation ? { continuation: result.continuation } : {}),
