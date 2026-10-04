@@ -41,7 +41,7 @@ export function StepGroupCard({ group }: { group: StepGroup }) {
 
   const statusColor = stepStatusColor(group.status);
   const statusIcon = stepStatusIcon(group.status);
-  const statusLabel = stepStatusLabel(group.status, group.pauseKind);
+  const statusLabel = stepStatusLabel(group.status, group.pauseKind, group.stepType);
 
   const rawOpLabel = friendlyOperationLabel(group.operationId);
 
@@ -251,7 +251,13 @@ export function StepGroupCard({ group }: { group: StepGroup }) {
   );
 }
 
-const HARNESS_RUNNING_STATUSES = new Set(['scheduled', 'running', 'retrying', 'waiting_on_child']);
+const HARNESS_RUNNING_STATUSES = new Set([
+  'scheduled',
+  'waiting_on_executor',
+  'running',
+  'retrying',
+  'waiting_on_child',
+]);
 
 function HarnessStepActivity({ group }: { group: StepGroup }) {
   const lines = useHarnessActivityLines(group.stepExecutionId);

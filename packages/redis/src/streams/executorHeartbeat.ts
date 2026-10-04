@@ -67,6 +67,8 @@ export async function isExecutorConsumerAlive(
   return exists === 1;
 }
 
+const executorsSeenSinceStart = new Set<StepType>();
+
 /**
  * Check if any executor is available for a step type.
  * Scans for any heartbeat key with the step type prefix.
@@ -74,7 +76,18 @@ export async function isExecutorConsumerAlive(
 export async function hasAvailableExecutor(redis: Redis, stepType: StepType): Promise<boolean> {
   const prefix = executorHeartbeatPrefix(stepType);
   const keys = await redis.keys(`${prefix}*`);
+  if (keys.length > 0) executorsSeenSinceStart.add(stepType);
   return keys.length > 0;
+}
+
+/**
+ * Whether this process has found a heartbeat for `stepType` since it started.
+ * Kept in the process rather than in Redis because a heartbeat outlives no
+ * sleep, and a record the executor wrote would need its credential to reach a
+ * key family beyond its heartbeat.
+ */
+export function executorSeenSinceStart(stepType: StepType): boolean {
+  return executorsSeenSinceStart.has(stepType);
 }
 
 // ============================================================================

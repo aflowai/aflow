@@ -38,6 +38,7 @@ export {
   registerExecutorHeartbeat,
   unregisterExecutorHeartbeat,
   hasAvailableExecutor,
+  executorSeenSinceStart,
   isExecutorConsumerAlive,
   registerStepInFlight,
   extendStepInFlight,

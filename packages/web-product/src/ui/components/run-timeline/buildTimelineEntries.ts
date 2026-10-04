@@ -174,6 +174,7 @@ export function buildTimelineEntries(events: SessionEvent[]): TimelineEntry[] {
       // Step-level child events → unified StepGroup rendering
       const STEP_SOURCE_EVENTS = new Set([
         'StepScheduled',
+        'StepWaitingOnExecutor',
         'StepSucceeded',
         'StepCompleted',
         'StepFailed',
@@ -274,6 +275,8 @@ export function buildTimelineEntries(events: SessionEvent[]): TimelineEntry[] {
         if (sourceEventType === 'StepScheduled') {
           group.scheduledAt = event.timestamp;
           group.status = 'scheduled';
+        } else if (sourceEventType === 'StepWaitingOnExecutor') {
+          group.status = 'waiting_on_executor';
         } else if (sourceEventType === 'StepSucceeded' || sourceEventType === 'StepCompleted') {
           group.completedAt = event.timestamp;
           group.status = 'succeeded';
@@ -403,6 +406,8 @@ export function buildTimelineEntries(events: SessionEvent[]): TimelineEntry[] {
     if (event.eventType === 'StepScheduled') {
       group.scheduledAt = event.timestamp;
       group.status = 'scheduled';
+    } else if (event.eventType === 'StepWaitingOnExecutor') {
+      group.status = 'waiting_on_executor';
     } else if (event.eventType === 'StepStarted') {
       group.startedAt = event.timestamp;
       group.status = 'running';

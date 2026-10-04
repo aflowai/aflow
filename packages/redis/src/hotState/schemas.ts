@@ -287,6 +287,7 @@ export const SessionEventSchema = z.object({
     'StepSucceeded',
     'StepFailed',
     'StepPaused',
+    'StepWaitingOnExecutor',
     'SessionCompleted',
     'SessionFailed',
     'SessionPaused',

@@ -1,5 +1,6 @@
 import type { IconName } from '@aflow/design-system';
 
+import { executorWaitLabel } from '../../lib/op-labels.js';
 import type { StepGroup, SubflowEntry } from './types';
 
 /** Build a concise label for a delegate event, preferring step/operation context. */
@@ -65,6 +66,9 @@ export function friendlyEventLabel(
     StepCompleted: stepName ? `${stepName} completed` : 'Step completed',
     StepFailed: stepName ? `${stepName} failed` : 'Step failed',
     StepPaused: stepName ? `${stepName} paused` : 'Step paused',
+    StepWaitingOnExecutor: stepName
+      ? `${stepName} waiting for its executor`
+      : 'Step waiting for its executor',
   };
   return labels[eventType] ?? eventType;
 }
@@ -116,6 +120,7 @@ export function stepStatusColor(status: StepGroup['status']): string {
     case 'retrying':
       return 'var(--color-status-paused)';
     case 'scheduled':
+    case 'waiting_on_executor':
       return 'var(--color-status-paused)';
     default:
       return 'var(--color-text-muted)';
@@ -136,14 +141,22 @@ export function stepStatusIcon(status: StepGroup['status']): IconName {
       return 'git-branch';
     case 'retrying':
       return 'sync';
+    case 'waiting_on_executor':
+      return 'plugs';
     case 'scheduled':
     default:
       return 'clock';
   }
 }
 
-export function stepStatusLabel(status: StepGroup['status'], pauseKind?: string): string {
+export function stepStatusLabel(
+  status: StepGroup['status'],
+  pauseKind?: string,
+  stepType?: string,
+): string {
   switch (status) {
+    case 'waiting_on_executor':
+      return executorWaitLabel(stepType);
     case 'succeeded':
       return 'Completed';
     case 'failed':

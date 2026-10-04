@@ -16,6 +16,9 @@ import type { StepJobMessage, StepResultMessage, TimerItem } from '@aflow/schema
 const fake = vi.hoisted(() => ({
   /** Step types with a live executor heartbeat. */
   heartbeats: new Set<string>(),
+  /** Step types whose heartbeat this orchestrator has found since it started. */
+  seen: new Set<string>(),
+  events: [] as SessionEvent[],
   stream: [] as StepJobMessage[],
   timers: new Map<string, TimerItem>(),
   /** The instance each claimed timer was claimed as, for compare-and-ack. */
@@ -26,6 +29,8 @@ const fake = vi.hoisted(() => ({
   enqueueAttempts: 0,
   /** Thrown by the next enqueue in place of its outcome, then cleared. */
   enqueueError: undefined as Error | undefined,
+  /** Thrown by the next result write in place of its outcome, then cleared. */
+  resultError: undefined as Error | undefined,
   /** The environment the lane breaker reads. */
   laneEnv: {} as Record<string, string | undefined>,
   /** Sessions the step-stall index has due. */
@@ -48,10 +53,15 @@ vi.mock('@aflow/redis', async (importOriginal) => {
       if (!fake.heartbeats.has(job.stepType)) {
         return Promise.reject(new actual.NoExecutorAvailableError(job.stepType));
       }
+      fake.seen.add(job.stepType);
       fake.stream.push(job);
       return Promise.resolve(`1-${String(fake.stream.length)}`);
     }),
+    executorSeenSinceStart: vi.fn((stepType: string) => fake.seen.has(stepType)),
     addStepResult: vi.fn((_redis: unknown, result: StepResultMessage) => {
+      const thrown = fake.resultError;
+      fake.resultError = undefined;
+      if (thrown !== undefined) return Promise.reject(thrown);
       fake.results.push(result);
       return Promise.resolve('1-0');
     }),
@@ -118,7 +128,12 @@ vi.mock('@aflow/redis', async (importOriginal) => {
     ),
     isSessionCorrupt: vi.fn(() => Promise.resolve(false)),
     updateSessionState: vi.fn(() => Promise.resolve()),
-    appendSessionEvent: vi.fn(() => Promise.resolve()),
+    appendSessionEvent: vi.fn(
+      (_redis: unknown, _tenantId: string, _sessionId: string, event: SessionEvent) => {
+        fake.events.push(event);
+        return Promise.resolve('1-0');
+      },
+    ),
     markSessionDirty: vi.fn(() => Promise.resolve()),
   };
 });
@@ -136,6 +151,7 @@ import {
   stepStallEarliestReapAtMs,
   timerId,
   updateSessionState,
+  type SessionEvent,
   type StepHotState,
 } from '@aflow/redis';
 import {
@@ -249,6 +265,11 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(START_MS);
   fake.heartbeats.clear();
+  // Every suite but the one about a never-started executor takes away a lane
+  // that was up before.
+  fake.seen = new Set(['host']);
+  fake.events.length = 0;
+  fake.resultError = undefined;
   fake.stream.length = 0;
   fake.timers.clear();
   fake.claimed.clear();
@@ -364,7 +385,7 @@ describe('a step whose executor is missing', () => {
     expect(fake.steps.get(job.stepExecutionId)?.['executorWaitSince']).toBe(START_MS);
   });
 
-  it('gives up after its budgeted looks as EXECUTOR_UNAVAILABLE, transient and retryable', async () => {
+  it('gives up after its budgeted looks on an executor that went away as EXECUTOR_UNAVAILABLE, transient and retryable', async () => {
     const job = sessionJob();
     scheduledStep(job);
     await dispatchOrWaitOnExecutor(redis, job);
@@ -569,6 +590,98 @@ describe('a step whose executor is missing', () => {
       lookAgainForExecutor(redis, job, { sinceMs: START_MS, looks: 0, dueAtMs: Date.now() }),
     ).rejects.toBe(streamDown);
     expect(fake.steps.get(job.stepExecutionId)?.['executorWaitSince']).toBe(START_MS);
+  });
+});
+
+describe('what a wait shows, and how it ends, by whether its executor was ever seen', () => {
+  beforeEach(() => {
+    fake.seen.clear();
+  });
+
+  /** An earlier step finds the host executor, which then goes away. */
+  async function hostExecutorLapses(): Promise<void> {
+    fake.heartbeats.add('host');
+    const earlier = sessionJob(2);
+    scheduledStep(earlier);
+    await dispatchOrWaitOnExecutor(redis, earlier);
+    fake.heartbeats.delete('host');
+    fake.stream.length = 0;
+  }
+
+  async function parkCommission(): Promise<StepJobMessage> {
+    const job = sessionJob();
+    scheduledStep(job);
+    await dispatchOrWaitOnExecutor(redis, job);
+    return job;
+  }
+
+  it('shows the step waiting the moment it parks, and fails it as configuration once its looks are spent on an executor never started', async () => {
+    const job = await parkCommission();
+
+    expect(fake.events).toEqual([
+      expect.objectContaining({
+        eventType: 'StepWaitingOnExecutor',
+        timestamp: START_MS,
+        sessionId: SESSION,
+        stepId: job.stepId,
+        stepExecutionId: job.stepExecutionId,
+        stepType: 'host',
+        attempt: 1,
+        metadata: { operationId: job.operationId, executorWaitLooks: EXECUTOR_WAIT_LOOKS },
+      }),
+    ]);
+
+    const applyResult = vi.fn();
+    const processDueTimers = createProcessDueTimers(makeBindings(applyResult));
+    while (await nextLook(processDueTimers));
+
+    expect(fake.events).toHaveLength(1);
+    expect(applyResult).toHaveBeenCalledTimes(1);
+    const [failed] = failuresIn(applyResult);
+    expect(Date.now()).toBe(START_MS + awakeSpanMs());
+    expect(failed?.error).toMatchObject({
+      code: 'EXECUTOR_UNAVAILABLE',
+      classification: 'configuration',
+      retryable: false,
+    });
+    expect(failed?.error?.message).toContain('No host executor is connected');
+    expect(failed?.error?.message).toContain('was never started');
+    expect(toAgentToolError(failed!.error!)).toMatchObject({ retry: false });
+  });
+
+  it('dispatches a step whose executor lapsed and returned while it waited', async () => {
+    await hostExecutorLapses();
+    const job = await parkCommission();
+    const applyResult = vi.fn();
+    const processDueTimers = createProcessDueTimers(makeBindings(applyResult));
+    await nextLook(processDueTimers);
+    await nextLook(processDueTimers);
+
+    fake.heartbeats.add('host');
+    await nextLook(processDueTimers);
+
+    expect(fake.events.map((e) => e.eventType)).toEqual(['StepWaitingOnExecutor']);
+    expect(fake.stream.map((queued) => queued.stepExecutionId)).toEqual([job.stepExecutionId]);
+    expect(fake.timers.size).toBe(0);
+    expect(applyResult).not.toHaveBeenCalled();
+  });
+
+  it('fails a step whose executor lapsed and never returned as transient, for its retry policy to decide', async () => {
+    await hostExecutorLapses();
+    await parkCommission();
+    const applyResult = vi.fn();
+    const processDueTimers = createProcessDueTimers(makeBindings(applyResult));
+
+    while (await nextLook(processDueTimers));
+
+    const [failed] = failuresIn(applyResult);
+    expect(applyResult).toHaveBeenCalledTimes(1);
+    expect(failed?.error).toMatchObject({
+      code: 'EXECUTOR_UNAVAILABLE',
+      classification: 'transient',
+      retryable: true,
+    });
+    expect(failed?.error?.message).toContain('Waited 10 minutes for it to come back');
   });
 });
 
@@ -821,6 +934,52 @@ describe('a workflow operation task whose executor is missing', () => {
       idempotencyKey: token,
       error: { code: 'EXECUTOR_UNAVAILABLE', classification: 'transient', retryable: true },
     });
+  });
+
+  it('is left for redelivery when a look fails another way, and enqueued under its claim when the redelivered look succeeds', async () => {
+    await dispatchTask();
+    fake.heartbeats.add('host');
+    fake.enqueueError = new Error('Connection is closed.');
+    const processDueTimers = createProcessDueTimers(makeBindings());
+
+    await nextLook(processDueTimers);
+
+    expect(fake.stream).toHaveLength(0);
+    expect(fake.results).toHaveLength(0);
+    expect(fake.timers.size).toBe(1);
+
+    await processDueTimers();
+
+    expect(fake.stream).toHaveLength(1);
+    expect(fake.stream[0]?.workflowExecution).toEqual(workflowExecution);
+    expect(fake.stream[0]?.idempotencyKey).toBe(token);
+    expect(fake.timers.size).toBe(0);
+    expect(fake.results).toHaveLength(0);
+  });
+
+  it('records the FAILED result of its spent looks on the redelivery when the first write of it fails', async () => {
+    await dispatchTask();
+    const processDueTimers = createProcessDueTimers(makeBindings());
+    while ([...fake.timers.values()][0]!.executorWait!.looks < EXECUTOR_WAIT_LOOKS - 1) {
+      await nextLook(processDueTimers);
+    }
+    fake.resultError = new Error('Connection is closed.');
+
+    await nextLook(processDueTimers);
+
+    expect(fake.results).toHaveLength(0);
+    expect(fake.timers.size).toBe(1);
+
+    await processDueTimers();
+
+    expect(fake.results).toHaveLength(1);
+    expect(fake.results[0]).toMatchObject({
+      status: 'FAILED',
+      workflowExecution,
+      idempotencyKey: token,
+      error: { code: 'EXECUTOR_UNAVAILABLE', classification: 'transient', retryable: true },
+    });
+    expect(fake.timers.size).toBe(0);
   });
 });
 

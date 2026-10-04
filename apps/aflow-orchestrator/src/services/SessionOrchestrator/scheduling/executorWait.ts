@@ -1,25 +1,11 @@
 /**
  * A missing executor is a wait, not a failure (Plan 315 D21).
  *
- * An executor's heartbeat lapses whenever its machine sleeps, restarts or has
- * not yet ticked, and every executor on a machine that slept is missing at once
- * until its first beat. Failing work on that reading failed every conversation
- * in flight across a night's sleep. So a step or a workflow operation task whose
- * executor is missing is parked on its shard timer, `executor_wait`, carrying
- * the job whole, and looked at again with a growing gap until its executor is
- * back or `EXECUTOR_WAIT_LOOKS` have been taken — and only then fails, as the
- * transient, retryable outage it is.
- *
- * The budget is counted in looks rather than in time because a machine asleep
- * takes none: a wait the machine sleeps through has spent nothing of it on
- * waking. A look that comes a heartbeat's lifetime or more after it was due is
- * that wake, or a stack stopped and started again, and counts for nothing —
- * every executor is missing across it — so it is followed by one more look
- * before any can give up, and a waking executor has beaten by then.
- *
- * The budget and the gap are also what keep a lane that is down from becoming
- * a retry herd: nothing enters a retry budget while it waits, and what fails at
- * the budget's end fails at its own time, its looks after it was dispatched.
+ * The budget is counted in looks rather than in time because a sleeping machine
+ * delivers no looks: a wait it sleeps through has spent nothing of it on waking.
+ * A look that comes a heartbeat's lifetime or more after it was due is that
+ * wake, when every executor is missing at once, so it counts for nothing and is
+ * followed by one more before any can give up.
  */
 import type { Redis } from 'ioredis';
 import type {
@@ -36,17 +22,22 @@ import type {
   TimerItem,
   TraceId,
 } from '@aflow/schemas';
-import type { SessionHotState, StepHotState } from '@aflow/redis';
+import type { SessionEvent, SessionHotState, StepHotState } from '@aflow/redis';
 import {
   addStepJob,
+  appendSessionEvent,
   EXECUTOR_WAIT_LONGEST_LOOK_MS,
   EXECUTOR_WAIT_LOOKS,
+  executorSeenSinceStart,
   executorWaitClockJumped,
   executorWaitGapMs,
   NoExecutorAvailableError,
   scheduleShardTimer,
   updateStepState,
 } from '@aflow/redis';
+import { logOrchestratorError } from '../../../lib/orchestratorLogger.js';
+import { forwardEventToParent } from '../handlers/forwardChildEvent.js';
+import { generateEventId } from '../helpers/ids.js';
 
 const MS_PER_MINUTE = 60_000;
 
@@ -79,8 +70,39 @@ export async function dispatchOrWaitOnExecutor(
     return { kind: 'enqueued' };
   } catch (error) {
     if (!(error instanceof NoExecutorAvailableError)) throw error;
-    return await park(redis, job, nowMs, 0, nowMs + executorWaitGapMs(0));
+    const parked = await park(redis, job, nowMs, 0, nowMs + executorWaitGapMs(0));
+    await announceExecutorWait(redis, job, nowMs);
+    return parked;
   }
+}
+
+/** Shows a session step as waiting for its executor rather than as an ordinary SCHEDULED. */
+async function announceExecutorWait(
+  redis: Redis,
+  job: StepJobMessage,
+  nowMs: number,
+): Promise<void> {
+  const { sessionId } = job;
+  if (sessionId === undefined) return;
+  const event: SessionEvent = {
+    eventId: generateEventId(),
+    eventType: 'StepWaitingOnExecutor',
+    timestamp: nowMs,
+    sessionId,
+    stepId: job.stepId,
+    stepExecutionId: job.stepExecutionId,
+    stepType: job.stepType,
+    attempt: job.attempt,
+    metadata: { operationId: job.operationId, executorWaitLooks: EXECUTOR_WAIT_LOOKS },
+  };
+  await appendSessionEvent(redis, job.tenantId, sessionId, event);
+  await forwardEventToParent(redis, job.tenantId, sessionId, event).catch((error: unknown) => {
+    logOrchestratorError('[executorWait] Failed to forward the wait to the parent session', error, {
+      tenantId: job.tenantId,
+      sessionId,
+      stepExecutionId: job.stepExecutionId,
+    });
+  });
 }
 
 /**
@@ -120,7 +142,10 @@ export async function lookAgainForExecutor(
       // Unmarked before the failure is applied, so a step whose failure never
       // lands is left to the stall watchdog rather than re-armed as a wait.
       await endExecutorWait(redis, job);
-      return { kind: 'gave_up', failure: executorWaitFailure(error, sinceMs, nowMs) };
+      return {
+        kind: 'gave_up',
+        failure: executorWaitFailure(error, sinceMs, nowMs, executorSeenSinceStart(job.stepType)),
+      };
     }
     return await park(redis, job, sinceMs, looks, nowMs + executorWaitGapMs(looks));
   }
@@ -194,18 +219,35 @@ async function park(
   return { kind: 'waiting', sinceMs, nextLookAtMs };
 }
 
+/**
+ * An executor this orchestrator has seen and lost is asleep or restarting, and
+ * a retry may find it back. One it has never seen was never started, and a
+ * retry would only wait for it again.
+ */
 export function executorWaitFailure(
   error: NoExecutorAvailableError,
   sinceMs: number,
   nowMs: number,
+  executorSeen: boolean,
 ): AflowError {
   const minutes = Math.round((nowMs - sinceMs) / MS_PER_MINUTE);
+  const waited = `${String(minutes)} minute${minutes === 1 ? '' : 's'}`;
+  const timestamp = new Date(nowMs).toISOString();
+  if (executorSeen) {
+    return {
+      ...error.toAflowError(),
+      message: `${error.message} Waited ${waited} for it to come back; nothing was attempted.`,
+      timestamp,
+    };
+  }
   return {
     ...error.toAflowError(),
     message:
-      `${error.message} Waited ${String(minutes)} minute${minutes === 1 ? '' : 's'} for it to ` +
-      'come back; nothing was attempted.',
-    timestamp: new Date(nowMs).toISOString(),
+      `${error.message} None has connected since the orchestrator started, so it is not ` +
+      `asleep but was never started. Waited ${waited}; nothing was attempted.`,
+    classification: 'configuration',
+    retryable: false,
+    timestamp,
   };
 }
 

@@ -174,7 +174,9 @@ function missingExecutorMessage(stepType: StepType): string {
  * No executor for a step type has a live heartbeat. An `AflowError` in its own
  * right, so a log or a result that carries it says what it is: an executor that
  * is away — asleep, restarting, not yet ticked — is transient, and the work
- * waits for it before it fails.
+ * waits for it before it fails. A wait that ends without this orchestrator ever
+ * having seen one reclassifies it as `configuration`: that executor was never
+ * started, and no retry starts it.
  */
 export class NoExecutorAvailableError extends Error {
   readonly stepType: StepType;

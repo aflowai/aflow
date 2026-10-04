@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { SessionEvent } from '@aflow/web-product/ui';
 
 import { buildTimelineEntries, stepGroupKey } from './buildTimelineEntries';
+import { stepStatusLabel } from './displayHelpers';
 import type { StepGroup } from './types';
 
 let seq = 0;
@@ -81,5 +82,56 @@ describe('tool-call attribution to the dispatching agent turn', () => {
     ]);
 
     expect(groups.map((g) => g.parentTurnKey)).toEqual([undefined, undefined]);
+  });
+});
+
+describe('a step waiting for its executor', () => {
+  function hostEvent(eventType: string): SessionEvent {
+    const base = event(eventType, 'commission', 'host.harness.run');
+    return { ...base, data: { ...base.data, stepType: 'host' } } as SessionEvent;
+  }
+
+  it('reads as waiting for the host executor from the moment it parks, and as running once it starts', () => {
+    const [parked] = stepGroups([hostEvent('StepScheduled'), hostEvent('StepWaitingOnExecutor')]);
+
+    expect(parked?.status).toBe('waiting_on_executor');
+    expect(stepStatusLabel(parked!.status, parked!.pauseKind, parked!.stepType)).toBe(
+      'Waiting for the host executor',
+    );
+
+    const [started] = stepGroups([
+      hostEvent('StepScheduled'),
+      hostEvent('StepWaitingOnExecutor'),
+      hostEvent('StepStarted'),
+    ]);
+    expect(started?.status).toBe('running');
+  });
+
+  it("reads a delegate's parked step the same way, through the event its session forwarded", () => {
+    function forwarded(sourceEventType: string): SessionEvent {
+      seq += 1;
+      return {
+        eventId: `evt-${String(seq)}`,
+        eventType: 'SubflowEventForwarded',
+        sessionId: 'session-1',
+        timestamp: new Date(1_700_000_000_000 + seq * 1000).toISOString(),
+        sequenceNumber: seq,
+        eventVersion: 1,
+        data: {},
+        metadata: {
+          sourceEventType,
+          sourceRunId: 'child-1',
+          sourceStepId: 'commission',
+          sourceStepExecutionId: 'exec-child-commission',
+          stepType: 'host',
+          operationId: 'host.harness.run',
+        },
+      } as unknown as SessionEvent;
+    }
+
+    const [parked] = stepGroups([forwarded('StepScheduled'), forwarded('StepWaitingOnExecutor')]);
+
+    expect(parked?.status).toBe('waiting_on_executor');
+    expect(parked?.stepType).toBe('host');
   });
 });
