@@ -17,7 +17,7 @@ import {
 } from '@aflow/schemas';
 import { aiMessageToChatMessage } from './ai/handlers/agentMessageConversion.js';
 import { ConversationStateStore } from './conversationStateStore.js';
-import { RETENTION_POLICY } from './retentionPolicy.js';
+import { RETENTION_POLICY, turnBudgets } from './retentionPolicy.js';
 import { estimateExchangeClearingTokens } from './exchangeClearing.js';
 import { atomsAsSent, renderToolObservations } from './toolObservations.js';
 
@@ -881,7 +881,7 @@ describe('ConversationStateStore.assembleRequest — observations', () => {
     const { store } = await assemble(turns, 20);
     const result = await store.clearUnderPressure({
       pressureTokens: 9_500,
-      effectiveBudget: 10_000,
+      workingBudget: 10_000,
       availableReadOpId: MEMORY_READ_OPERATION_ID,
     });
 
@@ -994,7 +994,7 @@ describe('ConversationStateStore.clearUnderPressure — a cleared look still rep
     const before = await store.assembleRequest('sys', []);
     const cleared = await store.clearUnderPressure({
       pressureTokens: 5_600,
-      effectiveBudget: 10_000,
+      workingBudget: 10_000,
       availableReadOpId: MEMORY_READ_OPERATION_ID,
     });
     const after = await store.assembleRequest('sys', []);
@@ -1057,6 +1057,45 @@ describe('ConversationStateStore.clearUnderPressure — a cleared look still rep
     expect(JSON.stringify(noteIn(fresh.messages))).toBe(JSON.stringify(noteIn(after.messages)));
     for (const id of ['a1_0', 'a2_0']) {
       expect(sentAs(fresh.messages, id)).toBe(sentAs(after.messages, id));
+    }
+  });
+});
+
+describe('ConversationStateStore.clearUnderPressure — a working-budget clearing on a 1M-token model', () => {
+  it('sends the newest look at a page in full afterwards, and its reduced predecessors as they were', async () => {
+    const { hardBudget, workingBudget } = turnBudgets(1_000_000);
+    const pressureTokens = 120_000;
+    expect(pressureTokens / hardBudget).toBeLessThan(RETENTION_POLICY.clearHighWater);
+    const outline = outlineOf(BROWSER_OUTLINE_DEFAULT_CHARS);
+    const store = storeKeeping(
+      atomsOf([
+        opener,
+        { turn: 1, messages: call('a1', ACT, actOutput('pg_1', 1, { outline })) },
+        { turn: 2, messages: call('a2', ACT, actOutput('pg_1', 2, { outline })) },
+        { turn: 3, messages: call('a3', ACT, actOutput('pg_2', 3, { outline })) },
+        { turn: 6, messages: call('a6', ACT, actOutput('pg_1', 6, { outline })) },
+      ]),
+      8,
+    );
+    const sentAs = (messages: AiMessageV1[], toolCallId: string) =>
+      JSON.stringify(messages.find((m) => m.toolCallId === toolCallId));
+
+    const before = await store.assembleRequest('sys', []);
+    await store.clearUnderPressure({
+      pressureTokens,
+      workingBudget,
+      availableReadOpId: MEMORY_READ_OPERATION_ID,
+    });
+    const after = await store.assembleRequest('sys', []);
+
+    expect(store.getState().clearing?.clearedExchanges).toEqual(['a3']);
+    expect(isFull(summaryOf(after.messages.find((m) => m.toolCallId === 'a6_0')!))).toBe(true);
+    expect(sentAs(after.messages, 'a6_0')).toBe(sentAs(before.messages, 'a6_0'));
+    for (const id of ['a1_0', 'a2_0']) {
+      expect(summaryOf(JSON.parse(sentAs(after.messages, id)) as AiMessageV1)!.split('\n')[0]).toBe(
+        OUTLINE_REPLACED('pg_1'),
+      );
+      expect(sentAs(after.messages, id)).toBe(sentAs(before.messages, id));
     }
   });
 });

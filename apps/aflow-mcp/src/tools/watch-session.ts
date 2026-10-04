@@ -48,8 +48,9 @@ const WatchSessionInputSchema = z.object({
     .string()
     .optional()
     .describe(
-      'Opaque cursor from a prior watch_session response. Pass it back to receive only ' +
-        'steps and changes you have not seen yet.',
+      'Opaque cursor from a prior watch_session or inspect_session response. It marks the ' +
+        "session's state at that call: passed back, only steps that are new, or whose status " +
+        'changed, since then are returned, whether or not the earlier call showed them.',
     ),
 });
 

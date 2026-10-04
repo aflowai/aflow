@@ -27,10 +27,16 @@ import {
   existingKeyVerdict,
   foreignHolderMessage,
   instanceDir,
+  isYes,
   keyInAuthFile,
   MCP_TOKEN_ENV,
   newSessionToken,
+  profileAddition,
+  profileFor,
+  profilePlan,
+  profileSetsToken,
   sessionTokenIn,
+  settleProfile,
   tokenExportLine,
   withSessionToken,
   mcpPortOf,
@@ -340,5 +346,164 @@ describe('the line on who reads the key', () => {
 
   it('defers to the usual line when nothing is seen on the port', () => {
     expect(lineFor([], '  700 other')).toBeUndefined();
+  });
+});
+
+describe('the shell profile', () => {
+  const HOME = '/Users/you';
+
+  it('is chosen from the shell, by the platform’s convention for bash', () => {
+    expect(profileFor('/bin/zsh', 'darwin', HOME)).toBe('/Users/you/.zshrc');
+    expect(profileFor('/usr/bin/zsh', 'linux', '/home/you')).toBe('/home/you/.zshrc');
+    expect(profileFor('/bin/bash', 'darwin', HOME)).toBe('/Users/you/.bash_profile');
+    expect(profileFor('/bin/bash', 'linux', '/home/you')).toBe('/home/you/.bashrc');
+  });
+
+  it('is not guessed for any other shell', () => {
+    expect(profileFor('/opt/homebrew/bin/fish', 'darwin', HOME)).toBeUndefined();
+    expect(profileFor(undefined, 'darwin', HOME)).toBeUndefined();
+  });
+
+  it('already sets the token when a live line assigns the variable', () => {
+    expect(
+      profileSetsToken(`export PATH=x\n${tokenExportLine('/Users/you/mcp.local.json')}\n`),
+    ).toBe(true);
+    expect(profileSetsToken(`${MCP_TOKEN_ENV}=from-elsewhere\n`)).toBe(true);
+  });
+
+  it('does not, when the line is only commented or names another variable', () => {
+    expect(profileSetsToken(`# export ${MCP_TOKEN_ENV}=x\n`)).toBe(false);
+    expect(profileSetsToken(`export ${MCP_TOKEN_ENV}_OLD=x\n`)).toBe(false);
+    expect(profileSetsToken('')).toBe(false);
+  });
+
+  it('gains text that sets the token from the file as a shell starts, without the token in it', () => {
+    const dir = scratchDir();
+    const file = join(dir, "it's here", 'mcp.local.json');
+    mkdirSync(join(file, '..'));
+    writeAuthFile(file, authFileContents(KEY, ME, TOKEN));
+    const profile = join(dir, '.zshrc');
+    writeFileSync(profile, 'export EDITOR=vi');
+
+    const addition = profileAddition(readFileSync(profile, 'utf8'), file);
+    writeFileSync(profile, `${readFileSync(profile, 'utf8')}${addition}`);
+
+    expect(addition).not.toContain(TOKEN);
+    expect(addition).toContain(tokenExportLine(file));
+    expect(readFileSync(profile, 'utf8')).toMatch(/^export EDITOR=vi\n\n# aflow-local/);
+    const shell = spawnSync('sh', ['-c', `. '${profile}'; printf %s "$${MCP_TOKEN_ENV}"`], {
+      encoding: 'utf8',
+    });
+    expect(shell.stdout).toBe(TOKEN);
+    expect(profileSetsToken(readFileSync(profile, 'utf8'))).toBe(true);
+  });
+
+  it('costs a new shell nothing once the file is gone', () => {
+    const profile = join(scratchDir(), '.bashrc');
+    writeFileSync(profile, profileAddition('', join(scratch, 'removed', 'mcp.local.json')));
+
+    const shell = spawnSync(
+      'sh',
+      ['-c', `. '${profile}'; printf %s "\${${MCP_TOKEN_ENV}-unset}"`],
+      {
+        encoding: 'utf8',
+      },
+    );
+    expect(shell.status).toBe(0);
+    expect(shell.stderr).toBe('');
+    expect(shell.stdout).toBe('unset');
+  });
+});
+
+describe('writing the profile', () => {
+  const profile = '/Users/you/.zshrc';
+
+  it('never happens without a terminal unless --write-profile asks for it', () => {
+    expect(
+      profilePlan({ interactive: false, writeProfile: false, profile, profileText: '' }),
+    ).toEqual({ kind: 'print', profile });
+    expect(
+      profilePlan({ interactive: false, writeProfile: true, profile, profileText: '' }),
+    ).toEqual({ kind: 'write', profile });
+  });
+
+  it('is offered in a terminal, and done without asking under --write-profile', () => {
+    expect(
+      profilePlan({ interactive: true, writeProfile: false, profile, profileText: '' }).kind,
+    ).toBe('ask');
+    expect(
+      profilePlan({ interactive: true, writeProfile: true, profile, profileText: '' }).kind,
+    ).toBe('write');
+  });
+
+  function settleWithoutTerminal(home, writeProfile) {
+    const told = [];
+    const authFile = join(home, 'mcp.local.json');
+    writeAuthFile(authFile, authFileContents(KEY, ME, TOKEN));
+    return settleProfile({
+      shell: '/bin/zsh',
+      platform: 'linux',
+      home,
+      authFile,
+      interactive: false,
+      writeProfile,
+      ask: () => {
+        throw new Error('asked without a terminal');
+      },
+      tell: (message) => told.push(message),
+    }).then((kind) => ({ kind, told, profile: join(home, '.zshrc') }));
+  }
+
+  it('is written under --write-profile from a shell that is not a terminal', async () => {
+    const home = scratchDir();
+    writeFileSync(join(home, '.zshrc'), 'export EDITOR=vi\n');
+
+    const { kind, told, profile: written } = await settleWithoutTerminal(home, true);
+
+    expect(kind).toBe('write');
+    expect(told.join('\n')).toContain('added it to ~/.zshrc');
+    const shell = spawnSync('sh', ['-c', `. '${written}'; printf %s "$${MCP_TOKEN_ENV}"`], {
+      encoding: 'utf8',
+    });
+    expect(shell.stdout).toBe(TOKEN);
+  });
+
+  it('is left alone without --write-profile from a shell that is not a terminal', async () => {
+    const home = scratchDir();
+    writeFileSync(join(home, '.zshrc'), 'export EDITOR=vi\n');
+
+    const { kind, told, profile: untouched } = await settleWithoutTerminal(home, false);
+
+    expect(kind).toBe('print');
+    expect(readFileSync(untouched, 'utf8')).toBe('export EDITOR=vi\n');
+    expect(told.join('\n')).toContain('yarn mcp:setup --write-profile');
+    expect(told.join('\n')).not.toContain(TOKEN);
+  });
+
+  it('is skipped when the profile already sets the token', () => {
+    const profileText = `${tokenExportLine('/Users/you/mcp.local.json')}\n`;
+    expect(profilePlan({ interactive: true, writeProfile: true, profile, profileText }).kind).toBe(
+      'present',
+    );
+  });
+
+  it('is not attempted for a shell whose profile cannot be chosen', () => {
+    expect(
+      profilePlan({
+        interactive: true,
+        writeProfile: true,
+        profile: undefined,
+        profileText: undefined,
+      }),
+    ).toEqual({ kind: 'no-profile' });
+  });
+
+  it('takes only an explicit yes', () => {
+    expect(isYes('y')).toBe(true);
+    expect(isYes(' Yes ')).toBe(true);
+    expect(isYes('')).toBe(false);
+    expect(isYes('n')).toBe(false);
+    expect(isYes('yeah')).toBe(false);
+    expect(isYes(undefined)).toBe(false);
   });
 });

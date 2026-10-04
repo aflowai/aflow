@@ -13,6 +13,14 @@
 import type { Session } from '../auth/SessionStore.js';
 import { ApiError } from './ApiClient.js';
 import {
+  decodeSessionCursor,
+  encodeSessionCursor,
+  rememberSteps,
+  stepsNotSeen,
+  type SessionCursor,
+} from './sessionCursor.js';
+import { resolveSessionFailure, type SessionFailure } from './sessionFailure.js';
+import {
   buildStepSummaries,
   type SessionDebugResponse,
   type SessionRunStatusView,
@@ -52,6 +60,8 @@ export interface WatchSessionResult {
   status: string;
   new_steps: StepSummary[];
   required_input?: WatchRequiredInput | undefined;
+  /** Why it failed, when the session ended FAILED. */
+  failure?: SessionFailure | undefined;
   done: boolean;
   cursor: string;
   continuation?: ToolContinuation | undefined;
@@ -86,58 +96,12 @@ interface WorkflowRunDetailView {
   resumeContract?: unknown;
 }
 
-/**
- * Step statuses keyed by step id: the diff survives the debug view switching
- * between hot-state and event-derived step lists (counts are not comparable
- * across modes), and re-delivers steps whose status changed in place.
- */
-interface SessionWatchCursor {
-  v: 2;
-  steps: Record<string, string>;
-  status: string;
-}
-
 export const DEFAULT_WATCH_TIMEOUT_SECONDS = 60;
 export const MAX_WATCH_TIMEOUT_SECONDS = 240;
 const DEFAULT_POLL_INTERVAL_MS = 2500;
 
 const SESSION_TERMINAL_STATUSES = ['SUCCEEDED', 'FAILED', 'CANCELLED'];
 const RUN_TERMINAL_STATUSES = ['completed', 'failed', 'cancelled'];
-
-function encodeCursor(cursor: SessionWatchCursor): string {
-  return Buffer.from(JSON.stringify(cursor), 'utf-8').toString('base64');
-}
-
-/** Unreadable/foreign cursors watch from the beginning — resends steps rather than losing them. */
-function decodeCursor(raw: string | undefined): SessionWatchCursor | undefined {
-  if (!raw) return undefined;
-  try {
-    const parsed = JSON.parse(Buffer.from(raw, 'base64').toString('utf-8')) as unknown;
-    if (parsed !== null && typeof parsed === 'object') {
-      const obj = parsed as Record<string, unknown>;
-      const steps = obj['steps'];
-      if (
-        obj['v'] === 2 &&
-        typeof obj['status'] === 'string' &&
-        steps !== null &&
-        typeof steps === 'object' &&
-        !Array.isArray(steps) &&
-        Object.values(steps).every((s) => typeof s === 'string')
-      ) {
-        return { v: 2, steps: steps as Record<string, string>, status: obj['status'] };
-      }
-    }
-  } catch {
-    // fall through
-  }
-  return undefined;
-}
-
-/** Steps the caller has not seen in their current status — new ids and in-place transitions. */
-function diffSteps(baseline: SessionWatchCursor | undefined, steps: StepSummary[]): StepSummary[] {
-  if (!baseline) return steps;
-  return steps.filter((s) => baseline.steps[s.step_id] !== s.status);
-}
 
 function lightSignal(run: SessionRunStatusView): string {
   return [run.status, run.updatedAt ?? '', run.currentStepId ?? ''].join('|');
@@ -175,7 +139,7 @@ export class Watcher {
     const sq = `spaceId=${encodeURIComponent(args.space_id)}`;
     const statusPath = `/v1/sessions/${args.session_id}?${sq}`;
     const debugPath = `/v1/sessions/${args.session_id}/debug?${sq}`;
-    const baseline = decodeCursor(args.cursor);
+    const baseline = decodeSessionCursor(args.cursor);
 
     let lastRun: SessionRunStatusView | undefined;
     let steps: StepSummary[] | undefined;
@@ -193,18 +157,41 @@ export class Watcher {
         const isInputPause = status === 'PAUSED' && !sessionBlockedOnChild(status, run.blockedOn);
 
         if (isTerminal || isInputPause) {
-          steps = (await this.tryFetchSteps(session, debugPath, args.session_id)) ?? steps;
-          return this.buildSessionResult(args, until, timeoutSeconds, baseline, run, steps, true);
+          const debug = await this.tryFetchDebug(session, debugPath, args.session_id);
+          if (debug) steps = buildStepSummaries(debug);
+          const result = this.buildSessionResult(
+            args,
+            until,
+            timeoutSeconds,
+            baseline,
+            run,
+            steps,
+            true,
+          );
+          if (status === 'FAILED') {
+            result.failure = await resolveSessionFailure(this.client, session, args.space_id, {
+              ...(debug ?? {
+                session: {
+                  sessionId: args.session_id,
+                  status,
+                  ...(run.errorRef !== undefined ? { errorRef: run.errorRef } : {}),
+                },
+              }),
+              statusError: run.error,
+            });
+          }
+          return result;
         }
 
         if (until === 'update') {
           const statusChanged = baseline !== undefined && status !== baseline.status;
           if (statusChanged || lastSignal !== inspectedSignal) {
-            const fetched = await this.tryFetchSteps(session, debugPath, args.session_id);
-            if (fetched) {
+            const debug = await this.tryFetchDebug(session, debugPath, args.session_id);
+            if (debug) {
+              const fetched = buildStepSummaries(debug);
               steps = fetched;
               inspectedSignal = lastSignal;
-              if (statusChanged || diffSteps(baseline, fetched).length > 0) {
+              if (statusChanged || stepsNotSeen(baseline, fetched).length > 0) {
                 return this.buildSessionResult(
                   args,
                   until,
@@ -240,7 +227,8 @@ export class Watcher {
 
       if (Date.now() + this.pollIntervalMs >= deadline) {
         if (lastRun && (steps === undefined || lastSignal !== inspectedSignal)) {
-          steps = (await this.tryFetchSteps(session, debugPath, args.session_id)) ?? steps;
+          const debug = await this.tryFetchDebug(session, debugPath, args.session_id);
+          if (debug) steps = buildStepSummaries(debug);
         }
         return this.buildSessionResult(
           args,
@@ -257,14 +245,13 @@ export class Watcher {
   }
 
   /** The debug read is heavyweight server-side — called only when the light status read moves or the watch concludes. */
-  private async tryFetchSteps(
+  private async tryFetchDebug(
     session: Session,
     debugPath: string,
     sessionId: string,
-  ): Promise<StepSummary[] | undefined> {
+  ): Promise<SessionDebugResponse | undefined> {
     try {
-      const debug = await this.client.get<SessionDebugResponse>(session, debugPath);
-      return buildStepSummaries(debug);
+      return await this.client.get<SessionDebugResponse>(session, debugPath);
     } catch (err) {
       log('warn', 'watch_session_poll_error', { session_id: sessionId, error: String(err) });
       return undefined;
@@ -275,23 +262,20 @@ export class Watcher {
     args: WatchSessionArgs,
     until: WatchSessionUntil,
     timeoutSeconds: number,
-    baseline: SessionWatchCursor | undefined,
+    baseline: SessionCursor | undefined,
     run: SessionRunStatusView | undefined,
     steps: StepSummary[] | undefined,
     done: boolean,
   ): WatchSessionResult {
     const status = run?.status.toUpperCase() ?? 'UNKNOWN';
-    const newSteps = steps ? diffSteps(baseline, steps) : [];
-    // Without a step read, keep the baseline step map (diffs still deliver on
+    const newSteps = steps ? stepsNotSeen(baseline, steps) : [];
+    // Without a step read, keep the baseline's steps (diffs still deliver on
     // the next successful read) but acknowledge any observed status — the same
     // transition must not re-trigger the next call.
-    const cursor = encodeCursor({
-      v: 2,
-      steps: steps
-        ? Object.fromEntries(steps.map((s) => [s.step_id, s.status]))
-        : (baseline?.steps ?? {}),
-      status: run ? status : (baseline?.status ?? status),
-    });
+    const cursor = encodeSessionCursor(
+      run ? status : (baseline?.status ?? status),
+      rememberSteps(baseline, steps ?? []),
+    );
 
     const result: WatchSessionResult = {
       session_id: args.session_id,

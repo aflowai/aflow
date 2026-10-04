@@ -176,7 +176,7 @@ async function makeStoreAndAssemble(
 
 const overPressure = {
   pressureTokens: 9_500,
-  effectiveBudget: 10_000,
+  workingBudget: 10_000,
   availableReadOpId: MEMORY_READ_OPERATION_ID,
 };
 
