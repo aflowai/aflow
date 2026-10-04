@@ -1,7 +1,7 @@
 /**
  * Which tests can observe a change: those whose imports reach a file it
- * touched. `scripts/verify-commit.mjs` runs these rather than every test of
- * every workspace that reads a touched package.
+ * touched, and those naming one by its path. `scripts/verify-commit.mjs` runs
+ * these rather than every test of every workspace that reads a touched package.
  */
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
@@ -11,6 +11,10 @@ import ts from 'typescript';
 const MODULE_FILE = /\.[cm]?[jt]sx?$/;
 /** What `vitest.config.ts` resolves workspace packages under, so a test runs their source. */
 const SOURCE_CONDITION = 'ts-source';
+/** The test sources `testsNaming` reads for a touched file's path. */
+const NAMING_TEST_SOURCE = /\.(?:mjs|ts)$/;
+/** A character that continues a path, so a match beside one is part of a longer path. */
+const PATH_CHARACTER = /[\w./-]/;
 
 /**
  * What one module does with the modules it imports, read from its syntax: the
@@ -267,6 +271,45 @@ export function testsReaching({ repository, files, candidates, textAtBase, packa
     }
   }
   return [...new Set(candidates)].filter((file) => reaches.has(body(file)));
+}
+
+/**
+ * The tests among `candidates` naming one of `files` by its repository path in
+ * a string literal — a test that runs a script by path imports nothing from it,
+ * so `testsReaching` never selects it. Only `.mjs` and `.ts` tests are read,
+ * and a path counts only whole: `scripts/verify-commit.mjs` names that file,
+ * `verify-commit` and `other/scripts/verify-commit.mjs` do not.
+ */
+export function testsNaming({ repository, files, candidates }) {
+  const root = realpathSync(repository);
+  const namesFile = (literal) =>
+    files.some((file) => {
+      for (let at = literal.indexOf(file); at !== -1; at = literal.indexOf(file, at + 1)) {
+        const before = literal[at - 1];
+        const after = literal[at + file.length];
+        if (
+          (before === undefined || !PATH_CHARACTER.test(before)) &&
+          (after === undefined || !PATH_CHARACTER.test(after))
+        ) {
+          return true;
+        }
+      }
+      return false;
+    });
+  const named = (file) => {
+    const source = ts.createSourceFile(
+      file,
+      readFileSync(path.join(root, file), 'utf8'),
+      ts.ScriptTarget.Latest,
+    );
+    const visit = (node) =>
+      ((ts.isStringLiteralLike(node) || ts.isTemplateLiteralToken(node)) && namesFile(node.text)) ||
+      (ts.forEachChild(node, visit) ?? false);
+    return visit(source);
+  };
+  return [...new Set(candidates)].filter(
+    (file) => NAMING_TEST_SOURCE.test(file) && existsSync(path.join(root, file)) && named(file),
+  );
 }
 
 /**

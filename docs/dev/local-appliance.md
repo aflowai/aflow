@@ -630,8 +630,8 @@ anything.
   login it has always had. A generated one is its own slice: `DATABASE_URL`
   reaches every tool and every Postgres-gated test.
 - **The Redis integration suites** resolve the URL exactly as the services do —
-  the shell over `.env`, the machine's password laid in, `REDIS_PASSWORD` over
-  both — through `scripts/stackRedis.mjs`, and connect only to this machine's
+  the shell over `.env`, the machine's password laid in, `REDIS_PASSWORD`
+  emptied as `yarn dev:local` empties it for the services — through `scripts/stackRedis.mjs`, and connect only to this machine's
   own Redis: some empty their database and rewrite ACL users, so a URL naming
   another host, a managed Redis included, skips them without a connection and
   names the host. Where no Redis answers they skip;

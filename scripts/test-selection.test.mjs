@@ -1,6 +1,7 @@
 /**
  * Contract: the check runs the tests that can observe a change, followed by
- * name through every re-export, and none that cannot.
+ * name through every re-export or naming a touched file by its path, and none
+ * that cannot.
  */
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -8,7 +9,7 @@ import path from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { repositoryShapeGuards, testsReaching } from './test-selection.mjs';
+import { repositoryShapeGuards, testsNaming, testsReaching } from './test-selection.mjs';
 
 const INDEX = [
   'export * from "./a.js";',
@@ -41,9 +42,16 @@ const FILES = {
   'apps/app/src/viaHelper.test.ts': 'import { helper } from "./helper.js";\n\nvoid helper;\n',
   'apps/app/src/typeOnly.test.ts': 'import type { A } from "./types.js";\n\nexport type B = A;\n',
   'apps/app/src/usesGone.test.ts': 'import { gone } from "./gone.js";\n\nvoid gone;\n',
+  'apps/app/src/runsCheck.test.ts': 'export const CHECK = ["node", "scripts/verify-commit.mjs"];\n',
+  'apps/app/src/runsInShell.test.mjs':
+    'export const command = `cd ${process.cwd()} && node scripts/verify-commit.mjs --quiet`;\n',
+  'apps/app/src/runsOther.test.ts': 'export const OTHER = "scripts/other.mjs";\n',
+  'apps/app/src/namesPart.test.ts':
+    'export const PARTS = ["verify-commit", "vendor/scripts/verify-commit.mjs"];\n',
+  'apps/app/src/runsCheck.test.tsx': 'export const CHECK = "scripts/verify-commit.mjs";\n',
 };
 
-const TESTS = Object.keys(FILES).filter((file) => file.endsWith('.test.ts'));
+const TESTS = Object.keys(FILES).filter((file) => /\.test\.(?:mjs|tsx?)$/.test(file));
 
 let repository;
 
@@ -112,6 +120,27 @@ describe('the tests a change reaches', () => {
 
   it('selects a touched test itself', () => {
     expect(reaching(['apps/app/src/takesB.test.ts'])).toEqual(['apps/app/src/takesB.test.ts']);
+  });
+});
+
+describe('the tests naming a touched file by its path', () => {
+  const naming = (files) => testsNaming({ repository, files, candidates: TESTS }).sort();
+
+  it('selects a test naming a touched script by path, which imports nothing from it', () => {
+    expect(naming(['scripts/verify-commit.mjs'])).toEqual([
+      'apps/app/src/runsCheck.test.ts',
+      'apps/app/src/runsInShell.test.mjs',
+    ]);
+  });
+
+  it('leaves out a test naming an unrelated path', () => {
+    expect(naming(['scripts/verify-commit.mjs'])).not.toContain('apps/app/src/runsOther.test.ts');
+    expect(naming(['scripts/unrelated.mjs'])).toEqual([]);
+  });
+
+  it('counts a path only whole, and reads only .mjs and .ts tests', () => {
+    expect(naming(['scripts/verify-commit.mjs'])).not.toContain('apps/app/src/namesPart.test.ts');
+    expect(naming(['scripts/verify-commit.mjs'])).not.toContain('apps/app/src/runsCheck.test.tsx');
   });
 });
 

@@ -3,11 +3,12 @@
  * integration suites find it.
  *
  * Test support lives here rather than in `@aflow/redis` because it reads the
- * URL through the stack's own loader (`scripts/stackEnv.mjs`): the shell over
- * `.env`, this machine's password laid in, `REDIS_PASSWORD` over both as
- * `getRedisConfig` lays it — so a suite probes the Redis the services use, with
- * their credential. With no `.env` and no machine password it is the shell's
- * `REDIS_URL`, or a bare local Redis, which is what CI runs.
+ * URL through the stack's own loader (`scripts/stackEnv.mjs`) under the
+ * environment the dev runner hands its services: the shell over `.env`, this
+ * machine's password laid in, and `REDIS_PASSWORD` emptied as the runner
+ * empties it (`withoutRedisPasswordOption`) — so a suite probes the Redis the
+ * services use, with their credential. With no `.env` and no machine password
+ * it is the shell's `REDIS_URL`, or a bare local Redis, which is what CI runs.
  *
  * Nothing answering is a machine without Redis, and a URL naming another host
  * or port is not this machine's Redis: both skip. A Redis of this machine's that
@@ -22,11 +23,11 @@ import { fileURLToPath } from 'node:url';
 import {
   DEFAULT_REDIS_PORT,
   LOCAL_REDIS_URL,
-  REDIS_PASSWORD_KEY,
   REDIS_URL_KEY,
   isMachineRedisUrl,
   loadStackEnv,
   stackEnvPath,
+  withoutRedisPasswordOption,
 } from './stackEnv.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -129,8 +130,6 @@ export function probeRedis(url, password) {
 /** The URL a stack process connects with, on database `db`, from its resolved environment. */
 export function stackRedisUrl(db, env) {
   const url = new URL(env[REDIS_URL_KEY] || LOCAL_REDIS_URL);
-  const password = env[REDIS_PASSWORD_KEY];
-  if (password !== undefined && password !== '') url.password = encodeURIComponent(password);
   url.pathname = `/${String(db)}`;
   return url.toString();
 }
@@ -148,7 +147,11 @@ export function stackRedisUrl(db, env) {
 export async function stackRedis(db, options = {}) {
   const processEnv = options.processEnv ?? process.env;
   const machineFile = options.machineFile ?? stackEnvPath(processEnv);
-  const env = loadStackEnv(join(options.repo ?? REPO, '.env'), processEnv, machineFile);
+  const env = loadStackEnv(
+    join(options.repo ?? REPO, '.env'),
+    withoutRedisPasswordOption(processEnv),
+    machineFile,
+  );
   const url = stackRedisUrl(db, env);
   if (!isMachineRedisUrl(url)) {
     const skipped =
@@ -165,8 +168,8 @@ export async function stackRedis(db, options = {}) {
         ? `REDIS_URL carries no password and ${machineFile} does not exist: ` +
           `\`${ADOPT_PASSWORD_COMMAND}\` writes this machine's password and restarts Redis with it.`
         : `The services use this machine's password in ${machineFile}, unless REDIS_URL in ` +
-          `.env carries one of its own or REDIS_PASSWORD is set; \`${ADOPT_PASSWORD_COMMAND}\` ` +
-          "adopts the machine's password and restarts Redis with it.";
+          `.env carries one of its own; \`${ADOPT_PASSWORD_COMMAND}\` adopts the machine's ` +
+          'password and restarts Redis with it.';
     throw new Error(
       `The Redis at ${redisUrlWithoutCredentials(url)} answers and refuses the credential the ` +
         `stack's services use (${probe.reason}). A credential the stack wrote that a test ` +

@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { probeOutcome, probeRedis, stackRedis, stackRedisUrl } from './stackRedis.mjs';
-import { STACK_PASSWORD_KEY } from './stackEnv.mjs';
+import { STACK_PASSWORD_KEY, loadStackEnv, withoutRedisPasswordOption } from './stackEnv.mjs';
 
 const MACHINE = 'f3'.repeat(32);
 const OWN = 'a1'.repeat(32);
@@ -69,13 +69,31 @@ describe('the stack Redis a suite reaches, resolved as the services resolve it',
     );
   });
 
-  it('honours REDIS_PASSWORD over the URL’s, as getRedisConfig does', async () => {
+  it('gives a .env setting REDIS_PASSWORD the services’ credential, as the dev runner empties it', async () => {
+    const { repo, machineFile } = checkout(
+      `REDIS_URL=redis://localhost:6379\nREDIS_PASSWORD=${OWN}\n`,
+      MACHINE,
+    );
+    const services = loadStackEnv(join(repo, '.env'), withoutRedisPasswordOption({}), machineFile);
+    expect(services.REDIS_PASSWORD).toBe('');
+    const probed = [];
+    await stackRedis(15, {
+      processEnv: {},
+      repo,
+      machineFile,
+      probe: (url) => {
+        probed.push(url);
+        return Promise.resolve({ outcome: 'accepted' });
+      },
+    });
+    expect(probed).toEqual([stackRedisUrl(15, services)]);
+    expect(probed).toEqual([`redis://:${MACHINE}@localhost:6379/15`]);
+  });
+
+  it('gives a shell setting REDIS_PASSWORD the services’ credential too', async () => {
     expect(
       await urlSeen({ REDIS_PASSWORD: OWN }, 'REDIS_URL=redis://localhost:6379\n', MACHINE),
-    ).toBe(`redis://:${OWN}@localhost:6379/15`);
-    expect(stackRedisUrl(3, { REDIS_URL: 'redis://:x@h:1', REDIS_PASSWORD: '' })).toBe(
-      'redis://:x@h:1/3',
-    );
+    ).toBe(`redis://:${MACHINE}@localhost:6379/15`);
   });
 
   it('is the shell’s URL, or a bare local Redis, with no .env and no machine password, as in CI', async () => {

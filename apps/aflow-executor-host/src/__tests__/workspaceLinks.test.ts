@@ -14,7 +14,9 @@
  * the folder's check over a fixture workspace, passes at a commit that reads
  * an internal package without touching it only because it builds that package
  * first — found through the project reference alone, built in the checkout,
- * and never in the folder, whose declarations are an older commit's.
+ * and never in the folder, whose declarations are an older commit's. The same
+ * commit touches a root file in a repository holding no repository-shape
+ * guards, which the check says in one line and passes.
  *
  * The check runs under a stand-in for the sandbox, as the handler suites do: a
  * nested sandbox cannot start under one, and the boundary is held by the
@@ -97,6 +99,8 @@ const SCRIPTS = fileURLToPath(new URL('../../../../scripts/', import.meta.url));
 const CHECK_SCRIPTS = ['verify-commit.mjs', 'test-selection.mjs', 'listener-tests.mjs'];
 const CHECKS = [process.execPath, 'scripts/verify-commit.mjs'];
 const COMPILER_OPTIONS = { strict: true, module: 'nodenext', types: [] };
+/** A file the checked commit touches outside every workspace. */
+const ROOT_FILE = 'README.md';
 
 const installed = createRequire(import.meta.url);
 
@@ -199,12 +203,14 @@ beforeAll(async () => {
   await git(repo, 'commit', '-q', '-m', 'the package answers a string');
   base = (await git(repo, 'rev-parse', 'HEAD')).trim();
 
-  // The checked commit touches only the code that reads the package, so
-  // nothing but the package's project reference says it must be built.
+  // The checked commit touches the code that reads the package and a root
+  // file, so nothing but the package's project reference says it must be
+  // built, and the root file meets a repository with no repository-shape guards.
   await writeFile(
     join(repo, 'apps', 'app', 'src', 'main.ts'),
     'import { value } from "@acme/a";\n\nexport const whispered: string = value.toLowerCase();\n',
   );
+  await writeFile(join(repo, ROOT_FILE), '# The fixture\n');
   await git(repo, 'add', '-A');
   await git(repo, 'commit', '-q', '-m', 'the app whispers');
   sha = (await git(repo, 'rev-parse', 'HEAD')).trim();
@@ -315,6 +321,10 @@ describe('this repository’s check, at a commit reading a workspace package it 
     expect(answer).toMatchObject({ passed: true, exitCode: 0, clearedSha: sha });
     expect(answer.tail).toContain('ok   build @acme/a');
     expect(answer.tail).toContain('ok   tsc apps/app/tsconfig.json');
+    expect(answer.tail).toContain(
+      'no repository-shape guards (packages/schemas/src/edition) in this repository to run ' +
+        `for the files outside every workspace: ${ROOT_FILE}`,
+    );
     expect(await readFile(join(repo, 'packages', 'a', 'dist', 'index.d.ts'), 'utf8')).toBe(
       'export declare const value: number;\n',
     );

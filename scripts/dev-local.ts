@@ -21,7 +21,7 @@ import { fileURLToPath } from 'node:url';
 
 import { ENTERPRISE_ONLY_ENV_KEYS } from '@aflow/schemas';
 
-import { ensureMachinePassword, stackEnvPath } from './stackEnv.mjs';
+import { ensureMachinePassword, stackEnvPath, withoutRedisPasswordOption } from './stackEnv.mjs';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -243,16 +243,10 @@ async function main(): Promise<void> {
     throw new Error(`No PHOENIX_LOCAL_TENANT_ID in ${join(INSTANCE_DIR, 'instance.env')}`);
   }
 
-  // The development Redis's password is the machine's, which the stack's loader
-  // lays into REDIS_URL (scripts/stackEnv.mjs). The instance file's REDIS_PASSWORD is
-  // the appliance's, and ioredis lays a password option over the URL's, so it
-  // would replace the right one; set empty, it also keeps `.env`'s out, because
-  // the loader fills only what the caller left unset.
-  const runnerEnv: NodeJS.ProcessEnv = {
+  const runnerEnv: NodeJS.ProcessEnv = withoutRedisPasswordOption({
     ...base,
     ...instance,
     ...editionEnv,
-    REDIS_PASSWORD: '',
     // The capacity every pool is sized from; the default is the hosted tier's,
     // and the development Postgres runs with its own default of 100.
     DB_SERVER_MAX_CONNECTIONS: base['DB_SERVER_MAX_CONNECTIONS'] ?? '100',
@@ -266,7 +260,7 @@ async function main(): Promise<void> {
     // Named so the single-stack refusal tells the reader the command they ran,
     // rather than the one the runner underneath it happens to be.
     PHOENIX_DEV_RESTART_HINT: 'yarn dev:local',
-  };
+  });
 
   console.log('[dev:local] starting the local edition — http://localhost:3001\n');
   await run('node scripts/dev.mjs --profile local', runnerEnv);

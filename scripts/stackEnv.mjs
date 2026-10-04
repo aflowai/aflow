@@ -175,6 +175,18 @@ export function stackEnv(processEnv, dotenv, options = {}) {
   return redisUrl === undefined ? env : { ...env, [REDIS_URL_KEY]: redisUrl };
 }
 
+/**
+ * `env` as the dev runner hands it to its services: `REDIS_PASSWORD` empty.
+ * The development Redis's password is the one the loader lays into
+ * `REDIS_URL`, and ioredis lays a password option over the URL's, so the
+ * instance file's — the appliance's — would replace it; set empty, it also
+ * keeps the shell's and `.env`'s out, because the loader fills only what the
+ * caller left unset.
+ */
+export function withoutRedisPasswordOption(env) {
+  return { ...env, [REDIS_PASSWORD_KEY]: '' };
+}
+
 /** The stack's environment from `envFile` — a checkout's `.env`, or the dev runner's `--env` — and this machine's `stack.env`. */
 export function loadStackEnv(
   envFile,
