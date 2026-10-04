@@ -1,6 +1,7 @@
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { and, asc, eq, inArray, isNull, sql, type SQL } from 'drizzle-orm';
 import {
+  PLAN_NODE_POSITION_MAX,
   PLAN_TREE_DEPTH_LIMIT,
   type PlanNode,
   type PlanNodeKind,
@@ -11,9 +12,11 @@ import {
 import { createTenantContext, planNodes, withTenantSchema } from '@aflow/database';
 import type { PlanNodeRow } from '@aflow/database';
 import {
-  checkNewParent,
+  checkPlacement,
   PLAN_SIBLING_ORDER,
   walkPlanTree,
+  type PlacementCheck,
+  type PlacementReads,
   type PlanTreeLevel,
   type PlanTreeWalk,
   type PlanTreeWalkBounds,
@@ -43,17 +46,20 @@ export interface PlanNodePatch {
   criteria?: string;
   title?: string;
   position?: number;
-  outcome?: string;
+  outcome?: string | null;
   closedAt?: Date | null;
 }
+
+/** Why a node may not go where a write puts it. */
+export type PlanPlacementRefusal = Exclude<PlacementCheck, { outcome: 'clear' }>;
+
+export type PlanNodeInsert = { outcome: 'inserted'; node: PlanNode } | PlanPlacementRefusal;
 
 export type PlanNodeMove =
   | { outcome: 'moved'; node: PlanNode }
   /** Not at the expected revision, or gone. */
   | { outcome: 'stale' }
-  | { outcome: 'parent_not_found' }
-  | { outcome: 'cycle' }
-  | { outcome: 'too_deep' };
+  | PlanPlacementRefusal;
 
 export interface PlanTreeWalkOptions extends PlanTreeWalkBounds {
   /** Walk from this node rather than from the roots. */
@@ -67,7 +73,13 @@ export interface PlanTreeWalkOptions extends PlanTreeWalkBounds {
  * `./operations.ts` is the only caller; it holds the rules, this holds the SQL.
  */
 export interface PlanNodeStore {
-  insert(spaceId: string, values: NewPlanNode): Promise<PlanNode>;
+  /**
+   * Writes the node unless its parent is gone or it would sit past
+   * `PLAN_TREE_DEPTH_LIMIT`. The check and the write are one transaction
+   * holding the rows from the parent up to its root, so no concurrent move
+   * can carry the parent deeper between them.
+   */
+  insert(spaceId: string, values: NewPlanNode): Promise<PlanNodeInsert>;
   find(spaceId: string, nodeId: string): Promise<PlanNode | null>;
   /** Writes only while the node is still at `expectedRevision`; null when it is not (or is gone). */
   updateAtRevision(
@@ -79,10 +91,12 @@ export interface PlanNodeStore {
   /**
    * Puts the node under `parentId` (null: a root) and writes `patch`, while it
    * is still at `expectedRevision` — after the last of its new siblings unless
-   * the patch names a position. The check that the new parent is not the node
-   * or under it, and the write, are one transaction that holds the rows from
-   * the new parent up to its root, so no concurrent move can close a loop
-   * through them.
+   * the patch names a position. The checks — the new parent is not the node or
+   * under it, and the node's deepest descendant stays within
+   * `PLAN_TREE_DEPTH_LIMIT` — and the write are one transaction. It holds the
+   * node's row, which a create anywhere below it must also take, and the rows
+   * from the new parent up to its root, so no concurrent write can close a
+   * loop through them or deepen the subtree after it was measured.
    */
   moveAtRevision(
     spaceId: string,
@@ -102,11 +116,12 @@ export interface PlanNodeStore {
 }
 
 /**
- * Attempts at a move. Two moves that would close a loop between them each
- * hold a row the other's walk needs; Postgres ends one as a deadlock, and its
- * next attempt reads the other's committed move and refuses the cycle by name.
+ * Attempts at a create or a move. Two writes whose walks cross each hold a row
+ * the other's needs — two moves that would close a loop, or a create below a
+ * node being moved under it; Postgres ends one as a deadlock, and its next
+ * attempt reads the other's committed write and refuses or places by it.
  */
-export const PLAN_MOVE_ATTEMPTS = 3;
+export const PLAN_PLACEMENT_ATTEMPTS = 3;
 
 const DEADLOCK_DETECTED = '40P01';
 
@@ -115,6 +130,16 @@ function isDeadlock(err: unknown): boolean {
     if ((cause as { code?: unknown }).code === DEADLOCK_DETECTED) return true;
   }
   return false;
+}
+
+async function retryingDeadlocks<T>(write: () => Promise<T>): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await write();
+    } catch (err) {
+      if (attempt >= PLAN_PLACEMENT_ATTEMPTS || !isDeadlock(err)) throw err;
+    }
+  }
 }
 
 export function rowToPlanNode(row: PlanNodeRow): PlanNode {
@@ -211,11 +236,48 @@ async function nextPositionIn(
   spaceId: string,
   parentId: string | null,
 ): Promise<number> {
+  // Summed in bigint so a sibling at the INTEGER ceiling cannot overflow it; a
+  // node placed after that sibling shares the ceiling, and the two read by id.
   const [row] = await tx
-    .select({ next: sql<number>`coalesce(max(${planNodes.position}) + 1, 0)::int` })
+    .select({
+      next: sql<number>`least(coalesce(max(${planNodes.position})::bigint + 1, 0), ${PLAN_NODE_POSITION_MAX})::int`,
+    })
     .from(planNodes)
     .where(and(eq(planNodes.spaceId, spaceId), parentIs(parentId)));
   return row?.next ?? 0;
+}
+
+/**
+ * What a placement check reads inside a write's transaction: each ancestor
+ * row locked as the walk passes it, and the height below a node in one query.
+ */
+function placementReads(tx: PostgresJsDatabase, spaceId: string): PlacementReads {
+  return {
+    parentOf: async (id) => {
+      const [row] = await tx
+        .select({ parentId: planNodes.parentId })
+        .from(planNodes)
+        .where(and(eq(planNodes.spaceId, spaceId), eq(planNodes.id, id)))
+        .for('update');
+      return row ? row.parentId : undefined;
+    },
+    heightBelow: async (nodeId, maxHeight) => {
+      const rows = await tx.execute(sql`
+        WITH RECURSIVE below AS (
+          SELECT id, 0 AS height
+          FROM plan_nodes
+          WHERE space_id = ${spaceId}::uuid AND id = ${nodeId}::uuid
+          UNION ALL
+          SELECT n.id, b.height + 1
+          FROM plan_nodes n
+          INNER JOIN below b ON n.parent_id = b.id
+          WHERE n.space_id = ${spaceId}::uuid AND b.height < ${maxHeight}
+        )
+        SELECT coalesce(max(height), 0)::int AS height FROM below
+      `);
+      return Number((rows as Array<Record<string, unknown>>)[0]?.['height'] ?? 0);
+    },
+  };
 }
 
 async function writeAtRevision(
@@ -257,20 +319,11 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
   ): Promise<PlanNodeMove> =>
     inTenant(async (tx) => {
       if (parentId !== null) {
-        const check = await checkNewParent(
-          nodeId,
-          parentId,
-          async (id) => {
-            const [row] = await tx
-              .select({ parentId: planNodes.parentId })
-              .from(planNodes)
-              .where(and(eq(planNodes.spaceId, spaceId), eq(planNodes.id, id)))
-              .for('update');
-            return row ? row.parentId : undefined;
-          },
-          PLAN_TREE_DEPTH_LIMIT,
-        );
-        if (check !== 'clear') return { outcome: check };
+        const reads = placementReads(tx, spaceId);
+        // Held before the subtree is measured, so a create below it waits.
+        if ((await reads.parentOf(nodeId)) === undefined) return { outcome: 'stale' };
+        const check = await checkPlacement(parentId, nodeId, reads, PLAN_TREE_DEPTH_LIMIT);
+        if (check.outcome !== 'clear') return check;
       }
       const position = patch.position ?? (await nextPositionIn(tx, spaceId, parentId));
       const node = await writeAtRevision(tx, spaceId, nodeId, expectedRevision, {
@@ -283,14 +336,25 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
 
   return {
     insert: (spaceId, values) =>
-      inTenant(async (tx) => {
-        const [row] = await tx
-          .insert(planNodes)
-          .values({ spaceId, ...values })
-          .returning();
-        if (!row) throw new Error('plan_nodes insert returned no row');
-        return rowToPlanNode(row);
-      }),
+      retryingDeadlocks(() =>
+        inTenant(async (tx): Promise<PlanNodeInsert> => {
+          if (values.parentId !== null) {
+            const check = await checkPlacement(
+              values.parentId,
+              null,
+              placementReads(tx, spaceId),
+              PLAN_TREE_DEPTH_LIMIT,
+            );
+            if (check.outcome !== 'clear') return check;
+          }
+          const [row] = await tx
+            .insert(planNodes)
+            .values({ spaceId, ...values })
+            .returning();
+          if (!row) throw new Error('plan_nodes insert returned no row');
+          return { outcome: 'inserted', node: rowToPlanNode(row) };
+        }),
+      ),
 
     find: (spaceId, nodeId) =>
       inTenant(async (tx) => {
@@ -305,15 +369,8 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
     updateAtRevision: (spaceId, nodeId, expectedRevision, patch) =>
       inTenant((tx) => writeAtRevision(tx, spaceId, nodeId, expectedRevision, patch)),
 
-    moveAtRevision: async (spaceId, nodeId, expectedRevision, parentId, patch) => {
-      for (let attempt = 1; ; attempt++) {
-        try {
-          return await moveOnce(spaceId, nodeId, expectedRevision, parentId, patch);
-        } catch (err) {
-          if (attempt >= PLAN_MOVE_ATTEMPTS || !isDeadlock(err)) throw err;
-        }
-      }
-    },
+    moveAtRevision: (spaceId, nodeId, expectedRevision, parentId, patch) =>
+      retryingDeadlocks(() => moveOnce(spaceId, nodeId, expectedRevision, parentId, patch)),
 
     nextPosition: (spaceId, parentId) => inTenant((tx) => nextPositionIn(tx, spaceId, parentId)),
 

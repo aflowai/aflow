@@ -6,6 +6,8 @@ import {
   isPlanOperation,
   isRunnerExcludedOperation,
   PLAN_NODE_DONE_NEEDS_OUTCOME_MESSAGE,
+  PLAN_NODE_OPEN_HAS_NO_OUTCOME_MESSAGE,
+  PLAN_NODE_POSITION_MAX,
   PLAN_NODE_PROSE_MAX_CHARS,
   PLAN_NODE_UPDATE_EMPTY_MESSAGE,
   PlanNodeCreateInputSchema,
@@ -104,6 +106,21 @@ describe('PlanNodeUpdateInputSchema', () => {
     ).toBe(true);
   });
 
+  it('refuses an outcome on an open status, since reopening clears it', () => {
+    const result = PlanNodeUpdateInputSchema.safeParse({
+      nodeId: NODE_ID,
+      expectedRevision: 2,
+      status: 'active',
+      outcome: 'Still holds.',
+    });
+    expect(result.error?.issues).toEqual([
+      expect.objectContaining({
+        path: ['outcome'],
+        message: PLAN_NODE_OPEN_HAS_NO_OUTCOME_MESSAGE,
+      }),
+    ]);
+  });
+
   it('refuses an update that changes nothing', () => {
     const result = PlanNodeUpdateInputSchema.safeParse({ nodeId: NODE_ID, expectedRevision: 3 });
     expect(result.error?.issues.map((i) => i.message)).toEqual([PLAN_NODE_UPDATE_EMPTY_MESSAGE]);
@@ -148,6 +165,31 @@ describe('plan node prose caps', () => {
     expect(
       PlanNodeCreateInputSchema.safeParse({ ...base, goal: over, criteria: 'c' }).success,
     ).toBe(false);
+  });
+});
+
+describe('plan node position', () => {
+  const base = { kind: 'execute', title: 't', goal: 'g', criteria: 'c' };
+
+  it('holds the whole INTEGER range of its column and refuses past it, saying how to order instead', () => {
+    expect(
+      PlanNodeCreateInputSchema.safeParse({ ...base, position: PLAN_NODE_POSITION_MAX }).success,
+    ).toBe(true);
+    for (const result of [
+      PlanNodeCreateInputSchema.safeParse({ ...base, position: PLAN_NODE_POSITION_MAX + 1 }),
+      PlanNodeUpdateInputSchema.safeParse({
+        nodeId: NODE_ID,
+        expectedRevision: 1,
+        position: PLAN_NODE_POSITION_MAX + 1,
+      }),
+    ]) {
+      expect(result.error?.issues).toEqual([
+        expect.objectContaining({
+          path: ['position'],
+          message: expect.stringContaining('leave it out to place the node after its last sibling'),
+        }),
+      ]);
+    }
   });
 });
 

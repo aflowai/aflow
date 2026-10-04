@@ -26,11 +26,14 @@ export function isClosedPlanNodeStatus(status: PlanNodeStatus): boolean {
 }
 
 /**
- * The most levels a walk of the tree reads: below where a read begins, and
- * above a node another is moved under. A move reads its new parent's
- * ancestors one locked row at a time, so this is what bounds a move's cost.
+ * The deepest a node may sit below its root, a root being depth 0. Create and
+ * move refuse past it and a read walks no further down. A write reads its
+ * parent's ancestors one locked row at a time, so this bounds a write's cost.
  */
 export const PLAN_TREE_DEPTH_LIMIT = 64;
+
+/** `plan_nodes.position` is a Postgres INTEGER; a larger value fails in the database. */
+export const PLAN_NODE_POSITION_MAX = 2_147_483_647;
 
 /** Storage ceilings: these fields hold model-authored prose a person reads. */
 export const PLAN_NODE_TITLE_MAX_CHARS = 500;
@@ -46,6 +49,9 @@ const PlanNodePositionSchema = z
   .number()
   .int()
   .min(0)
+  .max(PLAN_NODE_POSITION_MAX, {
+    message: `A position is at most ${String(PLAN_NODE_POSITION_MAX)}. Only the order among siblings counts, so number them 0, 1, 2… — or leave it out to place the node after its last sibling.`,
+  })
   .describe('Order among siblings, lowest first.');
 
 export const PlanNodeSchema = z
@@ -110,6 +116,9 @@ export type PlanNodeCreate = z.infer<typeof PlanNodeCreateSchema>;
 export const PLAN_NODE_DONE_NEEDS_OUTCOME_MESSAGE =
   'A node is done against its own criteria: pass `outcome` with how they were met, in the same update that sets status "done".';
 
+export const PLAN_NODE_OPEN_HAS_NO_OUTCOME_MESSAGE =
+  'An open node has no outcome: pass `outcome` with status "done" or "dropped", or leave it out. Reopening a node moves its outcome into the note.';
+
 export const PLAN_NODE_UPDATE_EMPTY_MESSAGE =
   'This update changes nothing. Name at least one of status, note, criteria, title, parentId, position or outcome.';
 
@@ -148,6 +157,17 @@ export const PlanNodeUpdateSchema = z
         code: z.ZodIssueCode.custom,
         path: ['outcome'],
         message: PLAN_NODE_DONE_NEEDS_OUTCOME_MESSAGE,
+      });
+    }
+    if (
+      update.status !== undefined &&
+      !isClosedPlanNodeStatus(update.status) &&
+      update.outcome !== undefined
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['outcome'],
+        message: PLAN_NODE_OPEN_HAS_NO_OUTCOME_MESSAGE,
       });
     }
     if (PLAN_NODE_UPDATE_FIELDS.every((field) => update[field] === undefined)) {

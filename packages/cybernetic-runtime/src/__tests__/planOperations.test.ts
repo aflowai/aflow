@@ -3,6 +3,7 @@ import Redis from 'ioredis-mock';
 import type { Redis as RedisType } from 'ioredis';
 import {
   PLAN_NODE_LIST_MAX_LIMIT,
+  PLAN_NODE_POSITION_MAX,
   PLAN_TREE_DEPTH_LIMIT,
   PLAN_TREE_WALK_NODE_LIMIT,
   type PlanNode,
@@ -43,6 +44,17 @@ async function created(input: Partial<PlanNodeCreateInput> = {}): Promise<PlanNo
   return result.node;
 }
 
+/** A root and one node under the last at each depth to `deepest`, indexed by depth. */
+async function chainOf(deepest: number, title = 'level'): Promise<PlanNode[]> {
+  const chain = [await created({ title: `${title} 0` })];
+  for (let depth = 1; depth <= deepest; depth++) {
+    chain.push(
+      await created({ parentId: chain[depth - 1]!.nodeId, title: `${title} ${String(depth)}` }),
+    );
+  }
+  return chain;
+}
+
 beforeEach(async () => {
   store = new InMemoryPlanNodeStore();
   redis = new Redis() as unknown as RedisType;
@@ -70,6 +82,12 @@ describe('createPlanNode', () => {
     expect([first.position, second.position, pinned.position]).toEqual([0, 1, 7]);
   });
 
+  it('places a node after a sibling at the position ceiling at the ceiling, not past it', async () => {
+    await created({ title: 'last', position: PLAN_NODE_POSITION_MAX });
+    const after = await created({ title: 'after' });
+    expect(after.position).toBe(PLAN_NODE_POSITION_MAX);
+  });
+
   it('refuses a parent that is not in the space', async () => {
     const elsewhere = await createPlanNode({ ...session('session-a'), spaceId: OTHER_SPACE }, NODE);
     if (!elsewhere.ok) throw new Error(elsewhere.message);
@@ -78,6 +96,30 @@ describe('createPlanNode', () => {
       parentId: elsewhere.node.nodeId,
     });
     expect(result).toMatchObject({ ok: false, code: 'PLAN_NODE_NOT_FOUND' });
+  });
+
+  it(`refuses a child past depth ${String(PLAN_TREE_DEPTH_LIMIT)}, by name and depth, and writes nothing`, async () => {
+    const chain = await chainOf(PLAN_TREE_DEPTH_LIMIT);
+    const before = store.nodes.size;
+
+    const tooDeep = await createPlanNode(session('session-a'), {
+      ...NODE,
+      parentId: chain[PLAN_TREE_DEPTH_LIMIT]!.nodeId,
+    });
+    expect(tooDeep).toMatchObject({
+      ok: false,
+      code: 'PLAN_NODE_TOO_DEEP',
+      details: {
+        parentId: chain[PLAN_TREE_DEPTH_LIMIT]!.nodeId,
+        parentDepth: PLAN_TREE_DEPTH_LIMIT,
+        height: 0,
+        depthLimit: PLAN_TREE_DEPTH_LIMIT,
+      },
+    });
+    expect(!tooDeep.ok && tooDeep.message).toContain(
+      `sits at depth ${String(PLAN_TREE_DEPTH_LIMIT)} (a root is depth 0) and a new node under it would sit at depth ${String(PLAN_TREE_DEPTH_LIMIT + 1)}`,
+    );
+    expect(store.nodes.size).toBe(before);
   });
 });
 
@@ -236,13 +278,8 @@ describe('updatePlanNode — status, note and parent', () => {
     expect(tree.ok && tree.nodes.map((n) => n.title).sort()).toEqual(['a', 'b']);
   });
 
-  it(`refuses a parent ${String(PLAN_TREE_DEPTH_LIMIT)} levels below its root, by name`, async () => {
-    const chain = [await created({ title: 'level 0' })];
-    for (let depth = 1; depth <= PLAN_TREE_DEPTH_LIMIT; depth++) {
-      chain.push(
-        await created({ parentId: chain[depth - 1]!.nodeId, title: `level ${String(depth)}` }),
-      );
-    }
+  it(`refuses a move under a node at depth ${String(PLAN_TREE_DEPTH_LIMIT)}, by name and depth`, async () => {
+    const chain = await chainOf(PLAN_TREE_DEPTH_LIMIT);
     const loose = await created({ title: 'loose' });
 
     const tooDeep = await updatePlanNode(session('session-a'), {
@@ -253,8 +290,16 @@ describe('updatePlanNode — status, note and parent', () => {
     expect(tooDeep).toMatchObject({
       ok: false,
       code: 'PLAN_NODE_TOO_DEEP',
-      details: { depthLimit: PLAN_TREE_DEPTH_LIMIT },
+      details: {
+        nodeId: loose.nodeId,
+        parentDepth: PLAN_TREE_DEPTH_LIMIT,
+        height: 0,
+        depthLimit: PLAN_TREE_DEPTH_LIMIT,
+      },
     });
+    expect(!tooDeep.ok && tooDeep.message).toContain(
+      `sits at depth ${String(PLAN_TREE_DEPTH_LIMIT)}`,
+    );
 
     const deepest = await updatePlanNode(session('session-a'), {
       nodeId: loose.nodeId,
@@ -262,6 +307,108 @@ describe('updatePlanNode — status, note and parent', () => {
       parentId: chain[PLAN_TREE_DEPTH_LIMIT - 1]!.nodeId,
     });
     expect(deepest).toMatchObject({ ok: true, node: { revision: 2 } });
+  });
+
+  it('counts the height of the subtree a move carries, not only the new parent’s depth', async () => {
+    const SUBTREE_HEIGHT = 4;
+    const chain = await chainOf(PLAN_TREE_DEPTH_LIMIT - SUBTREE_HEIGHT);
+    const subtree = await chainOf(SUBTREE_HEIGHT, 'moved');
+    const moved = subtree[0]!;
+    // A shallower sibling branch must not hide the deeper one.
+    await created({ parentId: moved.nodeId, title: 'moved shallow' });
+
+    const deepParent = chain[PLAN_TREE_DEPTH_LIMIT - SUBTREE_HEIGHT]!;
+    const tooDeep = await updatePlanNode(session('session-a'), {
+      nodeId: moved.nodeId,
+      expectedRevision: 1,
+      parentId: deepParent.nodeId,
+    });
+    const deepest = PLAN_TREE_DEPTH_LIMIT + 1;
+    expect(tooDeep).toMatchObject({
+      ok: false,
+      code: 'PLAN_NODE_TOO_DEEP',
+      details: {
+        parentDepth: PLAN_TREE_DEPTH_LIMIT - SUBTREE_HEIGHT,
+        height: SUBTREE_HEIGHT,
+        depthLimit: PLAN_TREE_DEPTH_LIMIT,
+      },
+    });
+    expect(!tooDeep.ok && tooDeep.message).toContain(
+      `has ${String(SUBTREE_HEIGHT)} levels below it, so moving it there would put its deepest node at depth ${String(deepest)}`,
+    );
+    expect(store.nodes.get(moved.nodeId)).toMatchObject({ parentId: null, revision: 1 });
+
+    const fits = await updatePlanNode(session('session-a'), {
+      nodeId: moved.nodeId,
+      expectedRevision: 1,
+      parentId: chain[PLAN_TREE_DEPTH_LIMIT - SUBTREE_HEIGHT - 1]!.nodeId,
+    });
+    expect(fits).toMatchObject({ ok: true, node: { revision: 2 } });
+  });
+});
+
+describe('updatePlanNode — reopening a closed node', () => {
+  const OUTCOME = 'Two clean machines reached a serving space.';
+
+  async function closed(status: 'done' | 'dropped', note?: string): Promise<PlanNode> {
+    const node = await created(note !== undefined ? { note } : {});
+    const result = await updatePlanNode(session('session-a'), {
+      nodeId: node.nodeId,
+      expectedRevision: 1,
+      status,
+      outcome: OUTCOME,
+    });
+    if (!result.ok) throw new Error(result.message);
+    return result.node;
+  }
+
+  it('clears the outcome and keeps it as the first line of the note', async () => {
+    const node = await closed('done', 'next: F114\nmore');
+    const reopened = await updatePlanNode(session('session-a'), {
+      nodeId: node.nodeId,
+      expectedRevision: node.revision,
+      status: 'active',
+    });
+    expect(reopened.ok && reopened.node).not.toHaveProperty('outcome');
+    expect(reopened.ok && reopened.node.note).toBe(
+      `Reopened; it was done: ${OUTCOME}\nnext: F114\nmore`,
+    );
+    expect(store.nodes.get(node.nodeId)).not.toHaveProperty('outcome');
+  });
+
+  it('puts the outcome above a note written in the same update', async () => {
+    const node = await closed('dropped', 'old note');
+    const reopened = await updatePlanNode(session('session-a'), {
+      nodeId: node.nodeId,
+      expectedRevision: node.revision,
+      status: 'blocked',
+      note: 'waiting on the operator',
+    });
+    expect(reopened.ok && reopened.node.note).toBe(
+      `Reopened; it was dropped: ${OUTCOME}\nwaiting on the operator`,
+    );
+  });
+
+  it('keeps the outcome alone when the same update clears the note', async () => {
+    const node = await closed('done', 'old note');
+    const reopened = await updatePlanNode(session('session-a'), {
+      nodeId: node.nodeId,
+      expectedRevision: node.revision,
+      status: 'active',
+      note: '',
+    });
+    expect(reopened.ok && reopened.node.note).toBe(`Reopened; it was done: ${OUTCOME}`);
+  });
+
+  it('leaves the outcome of a node that moves between closed statuses', async () => {
+    const node = await closed('done');
+    const dropped = await updatePlanNode(session('session-a'), {
+      nodeId: node.nodeId,
+      expectedRevision: node.revision,
+      status: 'dropped',
+    });
+    expect(dropped).toMatchObject({ ok: true, node: { outcome: OUTCOME } });
+    expect(dropped.ok && dropped.node).not.toHaveProperty('note');
   });
 });
 
@@ -366,11 +513,12 @@ describe('getPlanNode / listPlanNodes', () => {
     expect(subtree).not.toHaveProperty('truncated');
   });
 
-  it(`names the depth bound when nodes sit more than ${String(PLAN_TREE_DEPTH_LIMIT)} levels down`, async () => {
-    let parent = await created({ title: 'level 0' });
+  it(`names the depth bound when rows sit more than ${String(PLAN_TREE_DEPTH_LIMIT)} levels down`, async () => {
+    // No create or move leaves a node there; the walk is bounded all the same.
+    let parent = store.seed(SPACE, { title: 'level 0' });
     const root = parent;
     for (let depth = 1; depth <= PLAN_TREE_DEPTH_LIMIT + 1; depth++) {
-      parent = await created({ parentId: parent.nodeId, title: `level ${String(depth)}` });
+      parent = store.seed(SPACE, { parentId: parent.nodeId, title: `level ${String(depth)}` });
     }
 
     const result = await listPlanNodes(
@@ -382,6 +530,42 @@ describe('getPlanNode / listPlanNodes', () => {
       truncated: { bound: 'depth', value: PLAN_TREE_DEPTH_LIMIT },
     });
     expect(result.ok && result.nodes).toHaveLength(PLAN_TREE_DEPTH_LIMIT + 1);
+  });
+
+  it('lists every open node past more closed ones than a walk reads, and reaches closed ones by status', async () => {
+    const CLOSED = PLAN_TREE_WALK_NODE_LIMIT + 1;
+    for (let i = 0; i < CLOSED; i++) {
+      store.seed(SPACE, { title: `closed ${String(i)}`, status: 'done', position: i });
+    }
+    const open = await created({ title: 'open', position: CLOSED });
+    await created({ parentId: open.nodeId, title: 'open.a' });
+    const doneParent = await created({ title: 'done parent', position: CLOSED + 1 });
+    await created({ parentId: doneParent.nodeId, title: 'open under done' });
+    await updatePlanNode(session('session-a'), {
+      nodeId: doneParent.nodeId,
+      expectedRevision: 1,
+      status: 'done',
+      outcome: 'Met.',
+    });
+
+    const listed = await listPlanNodes({ store, spaceId: SPACE }, {});
+    expect(listed.ok && listed.nodes.map((n) => n.title)).toEqual(['open', 'open.a']);
+    expect(listed).not.toHaveProperty('truncated');
+
+    const throughClosed = await listPlanNodes(
+      { store, spaceId: SPACE },
+      { status: ['active', 'done'], rootId: doneParent.nodeId },
+    );
+    expect(throughClosed.ok && throughClosed.nodes.map((n) => n.title)).toEqual([
+      'done parent',
+      'open under done',
+    ]);
+
+    const done = await listPlanNodes({ store, spaceId: SPACE }, { status: ['done'] });
+    expect(done).toMatchObject({
+      ok: true,
+      truncated: { bound: 'nodes', value: PLAN_TREE_WALK_NODE_LIMIT },
+    });
   });
 
   it('orders siblings sharing a position the same way in get and in list', async () => {

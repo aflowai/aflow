@@ -23,7 +23,7 @@ import {
 } from '@aflow/schemas';
 import { bumpAttentionGeneration } from '../attentionCache.js';
 import { orderPlanTree, type PlanTreeWalkBounds } from './tree.js';
-import type { PlanNodeMove, PlanNodePatch, PlanNodeStore } from './store.js';
+import type { PlanNodePatch, PlanNodeStore, PlanPlacementRefusal } from './store.js';
 
 /** How far any read of a space's plan walks the tree. */
 export const PLAN_TREE_WALK_BOUNDS: PlanTreeWalkBounds = {
@@ -86,29 +86,56 @@ function cycle(nodeId: string, parentId: string): PlanOpError {
   };
 }
 
-function tooDeep(nodeId: string, parentId: string): PlanOpError {
+type TooDeep = Extract<PlanPlacementRefusal, { outcome: 'too_deep' }>;
+
+/** `nodeId` is null for a node not yet created. */
+function tooDeep(nodeId: string | null, parentId: string, check: TooDeep): PlanOpError {
+  const deepest = check.parentDepth + 1 + check.height;
+  const placed =
+    nodeId === null
+      ? `a new node under it would sit at depth ${String(deepest)}`
+      : `"${nodeId}" has ${String(check.height)} level${check.height === 1 ? '' : 's'} below it, so moving it there would put its deepest node at depth ${String(deepest)}`;
   return {
     ok: false,
     code: 'PLAN_NODE_TOO_DEEP',
     message:
-      `Plan node "${parentId}" sits ${String(PLAN_TREE_DEPTH_LIMIT)} or more levels below its root, so ` +
-      `"${nodeId}" cannot go under it. Nothing was written; choose a parent nearer the root.`,
-    details: { nodeId, parentId, depthLimit: PLAN_TREE_DEPTH_LIMIT },
+      `Plan node "${parentId}" sits at depth ${String(check.parentDepth)} (a root is depth 0) and ${placed}; ` +
+      `a plan holds nodes to depth ${String(PLAN_TREE_DEPTH_LIMIT)}. Nothing was written; choose a parent nearer the root.`,
+    details: {
+      ...(nodeId !== null ? { nodeId } : {}),
+      parentId,
+      parentDepth: check.parentDepth,
+      height: check.height,
+      depthLimit: PLAN_TREE_DEPTH_LIMIT,
+    },
   };
 }
 
-function moveRefusal(move: PlanNodeMove, nodeId: string, parentId: string): PlanOpError | null {
-  switch (move.outcome) {
+function placementRefusal(
+  refusal: PlanPlacementRefusal,
+  nodeId: string | null,
+  parentId: string,
+): PlanOpError {
+  switch (refusal.outcome) {
     case 'cycle':
+      if (nodeId === null) throw new Error('a placement check met a node not yet created');
       return cycle(nodeId, parentId);
     case 'too_deep':
-      return tooDeep(nodeId, parentId);
+      return tooDeep(nodeId, parentId, refusal);
     case 'parent_not_found':
       return notFound(parentId, 'parent');
-    case 'moved':
-    case 'stale':
-      return null;
   }
+}
+
+/** A reopened node keeps what it claimed, as the head of its note, not as its outcome. */
+function reopenedNote(
+  current: PlanNode,
+  note: string | null | undefined,
+): string | null | undefined {
+  if (current.outcome === undefined) return note;
+  const kept = `Reopened; it was ${current.status}: ${current.outcome}`;
+  const rest = note === undefined ? (current.note ?? null) : note;
+  return rest === null ? kept : `${kept}\n${rest}`;
 }
 
 async function written<T>(ctx: PlanWriteContext, value: T): Promise<T> {
@@ -125,11 +152,8 @@ export async function createPlanNode(
   input: PlanNodeCreateInput,
 ): Promise<PlanOpResult<{ node: PlanNode }>> {
   const parentId = input.parentId ?? null;
-  if (parentId !== null && !(await ctx.store.find(ctx.spaceId, parentId))) {
-    return notFound(parentId, 'parent');
-  }
   const position = input.position ?? (await ctx.store.nextPosition(ctx.spaceId, parentId));
-  const node = await ctx.store.insert(ctx.spaceId, {
+  const inserted = await ctx.store.insert(ctx.spaceId, {
     parentId,
     kind: input.kind,
     title: input.title,
@@ -139,7 +163,11 @@ export async function createPlanNode(
     position,
     createdBy: ctx.createdBy ?? null,
   });
-  return written(ctx, { ok: true as const, node });
+  if (inserted.outcome === 'inserted') {
+    return written(ctx, { ok: true as const, node: inserted.node });
+  }
+  if (parentId === null) throw new Error('the plan store refused a place to a root');
+  return placementRefusal(inserted, null, parentId);
 }
 
 // ============================================================================
@@ -163,8 +191,14 @@ export async function updatePlanNode(
 
   if (input.status !== undefined) {
     patch.status = input.status;
-    if (!isClosedPlanNodeStatus(input.status)) patch.closedAt = null;
-    else if (current.closedAt === undefined) patch.closedAt = new Date();
+    if (!isClosedPlanNodeStatus(input.status)) {
+      patch.closedAt = null;
+      if (isClosedPlanNodeStatus(current.status)) {
+        const note = reopenedNote(current, patch.note);
+        if (note !== undefined) patch.note = note;
+        patch.outcome = null;
+      }
+    } else if (current.closedAt === undefined) patch.closedAt = new Date();
   }
 
   const parentId = input.parentId;
@@ -177,9 +211,10 @@ export async function updatePlanNode(
       parentId,
       patch,
     );
-    const refusal = parentId === null ? null : moveRefusal(move, input.nodeId, parentId);
-    if (refusal) return refusal;
-    node = move.outcome === 'moved' ? move.node : null;
+    if (move.outcome === 'moved') node = move.node;
+    else if (move.outcome === 'stale') node = null;
+    else if (parentId === null) throw new Error('the plan store refused a move to the root');
+    else return placementRefusal(move, input.nodeId, parentId);
   } else {
     node = await ctx.store.updateAtRevision(
       ctx.spaceId,
@@ -225,7 +260,14 @@ export async function listPlanNodes(
   if (start.rootId !== undefined && !(await ctx.store.find(ctx.spaceId, start.rootId))) {
     return notFound(start.rootId, 'root');
   }
-  const walk = await ctx.store.walk(ctx.spaceId, { ...start, ...PLAN_TREE_WALK_BOUNDS });
+  // A list of open nodes walks through open nodes only, so the walk's node
+  // ceiling counts what the caller is shown rather than closed history.
+  const openOnly = [...statuses].every((status) => !isClosedPlanNodeStatus(status));
+  const walk = await ctx.store.walk(ctx.spaceId, {
+    ...start,
+    ...(openOnly ? { statuses: OPEN_PLAN_NODE_STATUSES } : {}),
+    ...PLAN_TREE_WALK_BOUNDS,
+  });
   const matching = orderPlanTree(walk.nodes, start)
     .map((placed) => placed.node)
     .filter((node) => statuses.has(node.status));

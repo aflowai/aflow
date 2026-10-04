@@ -1,11 +1,12 @@
 /**
- * Plan moves against a real database.
+ * Plan placement against a real database.
  *
- * The engine's tests prove a move's cycle check and its write are one step of
- * the store; only Postgres can show that the step holds when two moves that
- * cross each other run at once — each walk locking the rows the other needs,
- * one of them ended as a deadlock and refused as a cycle on its next attempt.
- * Gated on DATABASE_URL like every pg test.
+ * The engine's tests prove a write's placement checks and the write are one
+ * step of the store; only Postgres can show that the step holds when two moves
+ * that cross each other run at once — each walk locking the rows the other
+ * needs, one of them ended as a deadlock and refused as a cycle on its next
+ * attempt — and that the store's own SQL measures a subtree and sums a
+ * position as the fake does. Gated on DATABASE_URL like every pg test.
  */
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -18,7 +19,7 @@ import {
   withTenantSchema,
   type TenantContext,
 } from '@aflow/database';
-import type { PlanNode } from '@aflow/schemas';
+import { PLAN_NODE_POSITION_MAX, PLAN_TREE_DEPTH_LIMIT, type PlanNode } from '@aflow/schemas';
 import { createPlanNode, listPlanNodes, updatePlanNode } from '../plan/operations.js';
 import { createPlanNodeStore } from '../plan/store.js';
 
@@ -114,5 +115,49 @@ describeDb('moveAtRevision — two crossing moves never close a loop (real DB)',
     expect(tree.ok && tree.nodes.map((n) => n.title)).toEqual(
       expect.arrayContaining(['a', 'b', 'under a', 'under b']),
     );
+  });
+
+  it('measures the height a move carries in SQL and refuses it past the depth limit', async () => {
+    const chain = [await node('deep 0')];
+    for (let depth = 1; depth <= PLAN_TREE_DEPTH_LIMIT - 1; depth++) {
+      chain.push(await node(`deep ${String(depth)}`, chain[depth - 1]!.nodeId));
+    }
+    const moved = await node('moved');
+    await node('moved.a', (await node('moved.b', moved.nodeId)).nodeId);
+
+    const refused = await move(moved.nodeId, chain[PLAN_TREE_DEPTH_LIMIT - 2]!.nodeId);
+    expect(refused).toMatchObject({
+      ok: false,
+      code: 'PLAN_NODE_TOO_DEEP',
+      details: { parentDepth: PLAN_TREE_DEPTH_LIMIT - 2, height: 2 },
+    });
+
+    const tooDeepChild = await createPlanNode(ctx, {
+      kind: 'execute',
+      title: 'past the limit',
+      goal: 'Be refused.',
+      criteria: 'It is not written.',
+      parentId: (await node('deepest', chain[PLAN_TREE_DEPTH_LIMIT - 1]!.nodeId)).nodeId,
+    });
+    expect(tooDeepChild).toMatchObject({
+      ok: false,
+      code: 'PLAN_NODE_TOO_DEEP',
+      details: { parentDepth: PLAN_TREE_DEPTH_LIMIT },
+    });
+  });
+
+  it('places a node after a sibling at the INTEGER ceiling without overflowing', async () => {
+    const root = await node('ceiling root');
+    await createPlanNode(ctx, {
+      kind: 'execute',
+      title: 'at the ceiling',
+      goal: 'Sit last.',
+      criteria: 'Its position is the ceiling.',
+      parentId: root.nodeId,
+      position: PLAN_NODE_POSITION_MAX,
+    });
+    expect(await node('after it', root.nodeId)).toMatchObject({
+      position: PLAN_NODE_POSITION_MAX,
+    });
   });
 });

@@ -34,6 +34,7 @@ export const planNodes = pgTable(
     outcome: text('outcome'),
     note: text('note'),
     revision: integer('revision').notNull().default(1),
+    /** INTEGER: `PLAN_NODE_POSITION_MAX` in `@aflow/schemas` is its ceiling, held by validation. */
     position: integer('position').notNull().default(0),
     /** The user behind the session that created the node. */
     createdBy: text('created_by'),

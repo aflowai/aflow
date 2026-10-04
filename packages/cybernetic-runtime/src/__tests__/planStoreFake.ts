@@ -1,23 +1,35 @@
 import { randomUUID } from 'node:crypto';
-import { PLAN_TREE_DEPTH_LIMIT, type PlanNode, type PlanNodeSummary } from '@aflow/schemas';
+import {
+  PLAN_NODE_POSITION_MAX,
+  PLAN_TREE_DEPTH_LIMIT,
+  type PlanNode,
+  type PlanNodeSummary,
+} from '@aflow/schemas';
 import {
   planNoteHead,
+  type PlanNodeInsert,
   type PlanNodeMove,
   type PlanNodePatch,
   type PlanNodeStore,
 } from '../plan/store.js';
-import { bySiblingOrder, checkNewParent, walkPlanTree, type PlanTreeLevel } from '../plan/tree.js';
+import {
+  bySiblingOrder,
+  checkPlacement,
+  walkPlanTree,
+  type PlacementReads,
+  type PlanTreeLevel,
+} from '../plan/tree.js';
 
 /**
  * `PlanNodeStore` in memory, with the two properties the engine leans on kept
  * exact: a write lands only while the node is still at the expected revision,
- * as the SQL `WHERE revision = $expected` does; and moves run one at a time,
- * as the row locks on a move's path make two moves that cross each other do.
+ * as the SQL `WHERE revision = $expected` does; and creates and moves run one
+ * at a time, as the row locks on their paths make two that cross each other do.
  */
 export class InMemoryPlanNodeStore implements PlanNodeStore {
   readonly nodes = new Map<string, PlanNode>();
   private clock = Date.parse('2026-10-04T09:00:00.000Z');
-  private moves: Promise<unknown> = Promise.resolve();
+  private placements: Promise<unknown> = Promise.resolve();
 
   private tick(): string {
     this.clock += 1000;
@@ -43,27 +55,72 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
     return [...this.nodes.values()].filter((n) => n.spaceId === spaceId);
   }
 
-  insert: PlanNodeStore['insert'] = (spaceId, values) => {
+  private placementReads(spaceId: string): PlacementReads {
+    return {
+      parentOf: (id) => {
+        const node = this.nodes.get(id);
+        return Promise.resolve(node && node.spaceId === spaceId ? node.parentId : undefined);
+      },
+      heightBelow: (nodeId, maxHeight) => {
+        let height = 0;
+        let level = [nodeId];
+        while (height < maxHeight) {
+          const ids = new Set(level);
+          level = this.inSpace(spaceId)
+            .filter((n) => n.parentId !== null && ids.has(n.parentId))
+            .map((n) => n.nodeId);
+          if (level.length === 0) break;
+          height++;
+        }
+        return Promise.resolve(height);
+      },
+    };
+  }
+
+  /** Writes rows as given, past every rule: the shape of data no engine write leaves. */
+  seed(spaceId: string, values: Partial<PlanNode> & Pick<PlanNode, 'title'>): PlanNode {
     const at = this.tick();
     const node: PlanNode = {
       nodeId: randomUUID(),
       spaceId,
-      parentId: values.parentId,
-      kind: values.kind,
-      title: values.title,
-      goal: values.goal,
-      criteria: values.criteria,
+      parentId: null,
+      kind: 'execute',
+      goal: 'Seeded.',
+      criteria: 'Seeded.',
       status: 'active',
-      ...(values.note !== null ? { note: values.note } : {}),
       revision: 1,
-      position: values.position,
-      ...(values.createdBy !== null ? { createdBy: values.createdBy } : {}),
+      position: 0,
       createdAt: at,
       updatedAt: at,
+      ...values,
     };
     this.nodes.set(node.nodeId, node);
-    return Promise.resolve(structuredClone(node));
-  };
+    return structuredClone(node);
+  }
+
+  insert: PlanNodeStore['insert'] = (spaceId, values) =>
+    this.oneAtATime(async (): Promise<PlanNodeInsert> => {
+      if (values.parentId !== null) {
+        const check = await checkPlacement(
+          values.parentId,
+          null,
+          this.placementReads(spaceId),
+          PLAN_TREE_DEPTH_LIMIT,
+        );
+        if (check.outcome !== 'clear') return check;
+      }
+      const node = this.seed(spaceId, {
+        parentId: values.parentId,
+        kind: values.kind,
+        title: values.title,
+        goal: values.goal,
+        criteria: values.criteria,
+        ...(values.note !== null ? { note: values.note } : {}),
+        position: values.position,
+        ...(values.createdBy !== null ? { createdBy: values.createdBy } : {}),
+      });
+      return { outcome: 'inserted', node };
+    });
 
   find: PlanNodeStore['find'] = (spaceId, nodeId) => {
     const node = this.nodes.get(nodeId);
@@ -83,13 +140,13 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
     expectedRevision,
     parentId,
     patch,
-  ) => {
-    const move = this.moves.then(() =>
-      this.moveNow(spaceId, nodeId, expectedRevision, parentId, patch),
-    );
-    this.moves = move.catch(() => undefined);
-    return move;
-  };
+  ) => this.oneAtATime(() => this.moveNow(spaceId, nodeId, expectedRevision, parentId, patch));
+
+  private oneAtATime<T>(write: () => Promise<T>): Promise<T> {
+    const done = this.placements.then(write);
+    this.placements = done.catch(() => undefined);
+    return done;
+  }
 
   private async moveNow(
     spaceId: string,
@@ -99,16 +156,15 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
     patch: PlanNodePatch,
   ): Promise<PlanNodeMove> {
     if (parentId !== null) {
-      const check = await checkNewParent(
-        nodeId,
+      const node = this.nodes.get(nodeId);
+      if (!node || node.spaceId !== spaceId) return { outcome: 'stale' };
+      const check = await checkPlacement(
         parentId,
-        (id) => {
-          const node = this.nodes.get(id);
-          return Promise.resolve(node && node.spaceId === spaceId ? node.parentId : undefined);
-        },
+        nodeId,
+        this.placementReads(spaceId),
         PLAN_TREE_DEPTH_LIMIT,
       );
-      if (check !== 'clear') return { outcome: check };
+      if (check.outcome !== 'clear') return check;
     }
     const position = patch.position ?? (await this.nextPosition(spaceId, parentId));
     const node = this.write(spaceId, nodeId, expectedRevision, { ...patch, parentId, position });
@@ -125,7 +181,7 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
     if (!node || node.spaceId !== spaceId || node.revision !== expectedRevision) {
       return null;
     }
-    const { note, closedAt, ...rest } = patch;
+    const { note, outcome, closedAt, ...rest } = patch;
     const next: PlanNode = {
       ...node,
       ...rest,
@@ -135,6 +191,10 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
     if (note !== undefined) {
       if (note === null) delete next.note;
       else next.note = note;
+    }
+    if (outcome !== undefined) {
+      if (outcome === null) delete next.outcome;
+      else next.outcome = outcome;
     }
     if (closedAt !== undefined) {
       if (closedAt === null) delete next.closedAt;
@@ -147,7 +207,9 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
   nextPosition: PlanNodeStore['nextPosition'] = (spaceId, parentId) => {
     const siblings = this.inSpace(spaceId).filter((n) => n.parentId === parentId);
     return Promise.resolve(
-      siblings.length === 0 ? 0 : Math.max(...siblings.map((n) => n.position)) + 1,
+      siblings.length === 0
+        ? 0
+        : Math.min(Math.max(...siblings.map((n) => n.position)) + 1, PLAN_NODE_POSITION_MAX),
     );
   };
 

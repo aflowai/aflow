@@ -79,32 +79,57 @@ export async function walkPlanTree(
 }
 
 // ============================================================================
-// Walking up: may a node go under a new parent?
+// Walking up: may a node go under a parent?
 // ============================================================================
 
-export type NewParentCheck = 'clear' | 'cycle' | 'parent_not_found' | 'too_deep';
+export type PlacementCheck =
+  | { outcome: 'clear' }
+  | { outcome: 'cycle' }
+  | { outcome: 'parent_not_found' }
+  | {
+      outcome: 'too_deep';
+      /** Levels above the parent; a root's is 0. */
+      parentDepth: number;
+      /** Levels below the node placed; a new node's, or a leaf's, is 0. */
+      height: number;
+    };
+
+export interface PlacementReads {
+  /** The node's parent: null for a root, undefined for a node that is not there. */
+  parentOf(nodeId: string): Promise<string | null | undefined>;
+  /** The levels below `nodeId`, read no further than `maxHeight` down. */
+  heightBelow(nodeId: string, maxHeight: number): Promise<number>;
+}
 
 /**
- * Walk from `parentId` up to its root, by key, and say whether `nodeId` may
- * move under it: not if the walk meets `nodeId` (it would sit under itself),
- * nor if the walk is longer than `maxDepth`. `parentOf` answers undefined for
- * a node that is not there.
+ * Walk from `parentId` up to its root, by key, and say whether a node may go
+ * under it — a new node, or `movingId` with everything below it. Not if the
+ * walk meets `movingId` (it would sit under itself), nor if the deepest node
+ * placed would sit more than `maxDepth` levels below its root.
  */
-export async function checkNewParent(
-  nodeId: string,
+export async function checkPlacement(
   parentId: string,
-  parentOf: (nodeId: string) => Promise<string | null | undefined>,
+  movingId: string | null,
+  reads: PlacementReads,
   maxDepth: number,
-): Promise<NewParentCheck> {
-  let current: string | null = parentId;
-  for (let depth = 0; current !== null; depth++) {
-    if (current === nodeId) return 'cycle';
-    if (depth === maxDepth) return 'too_deep';
-    const next = await parentOf(current);
-    if (next === undefined) return 'parent_not_found';
+): Promise<PlacementCheck> {
+  let parentDepth = 0;
+  for (let current = parentId; ; parentDepth++) {
+    if (current === movingId) return { outcome: 'cycle' };
+    const next = await reads.parentOf(current);
+    if (next === undefined) return { outcome: 'parent_not_found' };
+    if (next === null) break;
+    if (parentDepth === maxDepth) {
+      // Deeper than any write leaves a node; how much deeper is not read.
+      parentDepth++;
+      break;
+    }
     current = next;
   }
-  return 'clear';
+  const height = movingId === null ? 0 : await reads.heightBelow(movingId, maxDepth);
+  return parentDepth + 1 + height > maxDepth
+    ? { outcome: 'too_deep', parentDepth, height }
+    : { outcome: 'clear' };
 }
 
 // ============================================================================

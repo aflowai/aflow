@@ -67,7 +67,9 @@ export const PlanNodeListInputSchema = z
       .array(PlanNodeStatusSchema)
       .min(1)
       .default([...OPEN_PLAN_NODE_STATUSES])
-      .describe('Defaults to the open statuses.'),
+      .describe(
+        'Defaults to the open statuses. Open statuses alone read through open nodes only, so a node under a closed one is listed by naming that closed status too.',
+      ),
     rootId: z.string().uuid().optional().describe('Only this node and those under it.'),
     limit: z
       .number()
