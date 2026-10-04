@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 import {
   LOCAL_TOKEN_ENV,
   admitRequest,
+  presentedBearer,
   requestGatePolicy,
   transportRebindingOptions,
 } from './requestGate.js';
@@ -157,6 +158,25 @@ describe('while the server holds the owner’s key, a local session', () => {
     expect(decide({ host, authorization: 'Bearer some-token' }, withAuthFile).admitted).toBe(true);
     expect(decide({ host, authorization: 'Bearer phx_own_key' }, withAuthFile).admitted).toBe(true);
   });
+
+  /** The scheme is case-insensitive (RFC 7235 §2.1). */
+  it.each(['bearer some-token', 'BEARER some-token', 'BeArEr some-token'])(
+    'is admitted presenting %s, the credential read as sent',
+    (authorization) => {
+      expect(decide({ host, authorization }, withAuthFile).admitted).toBe(true);
+      expect(presentedBearer({ authorization })).toBe('some-token');
+    },
+  );
+
+  it.each(['bearer', 'bearer ', 'bearersome-token'])(
+    'is refused with 401 presenting %s under a lower-case scheme',
+    (authorization) => {
+      expect(decide({ host, authorization }, withAuthFile)).toMatchObject({
+        admitted: false,
+        status: 401,
+      });
+    },
+  );
 
   it('needs none where the server holds no key to give', () => {
     expect(decide({ host }).admitted).toBe(true);

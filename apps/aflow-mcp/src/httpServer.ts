@@ -123,6 +123,20 @@ export function createMcpHttpServer(deps: {
     return mcpSession;
   }
 
+  /** Answers 401, and says so, when a request on `mcpSession` does not present the credential it was admitted with. */
+  function refusedOnSession(
+    mcpSession: McpSession,
+    headers: AdmittedHeaders,
+    res: ServerResponse,
+  ): boolean {
+    const outcome = authManager.admitSessionRequest(mcpSession.session, headers);
+    if (outcome.accepted) return false;
+    log('warn', 'session_request_refused', { session: mcpSession.session.id });
+    res.writeHead(401, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: outcome.reason }));
+    return true;
+  }
+
   const httpServer = createServer((req: IncomingMessage, res: ServerResponse) => {
     void (async () => {
       const url = req.url ?? '/';
@@ -183,6 +197,7 @@ export function createMcpHttpServer(deps: {
               res.end(JSON.stringify({ error: 'Session not found. Re-initialize.' }));
               return;
             }
+            if (refusedOnSession(mcpSession, headers, res)) return;
           } else {
             const created = createMcpSession(randomUUID(), headers, decision.host);
             if ('refused' in created) {
@@ -209,12 +224,14 @@ export function createMcpHttpServer(deps: {
             res.end(JSON.stringify({ error: 'Session not found' }));
             return;
           }
+          if (refusedOnSession(mcpSession, headers, res)) return;
 
           await mcpSession.transport.handleRequest(req, res);
         } else if (req.method === 'DELETE') {
           if (mcpSessionId) {
             const mcpSession = activeSessions.get(mcpSessionId);
             if (mcpSession) {
+              if (refusedOnSession(mcpSession, headers, res)) return;
               await mcpSession.transport.close();
               activeSessions.delete(mcpSessionId);
               sessionStore.delete(mcpSessionId);

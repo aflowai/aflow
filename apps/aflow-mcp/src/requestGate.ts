@@ -10,13 +10,15 @@
  * Neither stops another process on this machine, which sends whatever Host it
  * likes and no Origin. So while the server holds the owner's key, a request
  * that presents no credential at all is refused here, and one that presents a
- * token is given the key only when it is the file's own (`AuthManager`).
+ * token is given the key only when it is the file's own (`AuthManager`) — on
+ * the request that creates the session and on every request after it.
  */
 import type { McpServerConfig } from './config.js';
 
 const LOOPBACK_HOSTNAMES: readonly string[] = ['localhost', '127.0.0.1'];
 const DEFAULT_HTTP_PORT = 80;
-const BEARER_PREFIX = 'Bearer ';
+/** The scheme is case-insensitive (RFC 7235 §2.1); one space, then the credential. */
+const BEARER_SCHEME = /^bearer /i;
 
 /** Where an MCP client started from this checkout's `.mcp.json` reads the session token. */
 export const LOCAL_TOKEN_ENV = 'AFLOW_MCP_LOCAL_TOKEN';
@@ -47,8 +49,8 @@ export function presentedBearer(
   headers: Readonly<Record<string, string | undefined>>,
 ): string | undefined {
   const value = headers['authorization']?.trim();
-  if (!value?.startsWith(BEARER_PREFIX)) return undefined;
-  const credential = value.slice(BEARER_PREFIX.length).trim();
+  if (value === undefined || !BEARER_SCHEME.test(value)) return undefined;
+  const credential = value.replace(BEARER_SCHEME, '').trim();
   return credential === '' ? undefined : credential;
 }
 

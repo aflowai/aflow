@@ -54,12 +54,12 @@ describe('the stack Redis a suite reaches, resolved as the services resolve it',
   });
 
   it('reads the shell over .env, as every entry point of the stack does', async () => {
-    const shell = { REDIS_URL: 'redis://127.0.0.1:6380' };
+    const shell = { REDIS_URL: 'redis://127.0.0.1:6379' };
     expect(await urlSeen(shell, 'REDIS_URL="redis://localhost:6379"\n', MACHINE)).toBe(
-      `redis://:${MACHINE}@127.0.0.1:6380/15`,
+      `redis://:${MACHINE}@127.0.0.1:6379/15`,
     );
     expect(await urlSeen(shell, '# no Redis named here\n', MACHINE)).toBe(
-      `redis://:${MACHINE}@127.0.0.1:6380/15`,
+      `redis://:${MACHINE}@127.0.0.1:6379/15`,
     );
   });
 
@@ -131,6 +131,12 @@ describe('a suite’s three outcomes', () => {
       { REDIS_URL: 'redis://10.0.0.5:6379' },
       'REDIS_URL=redis://localhost:6379\n',
       '10.0.0.5:6379',
+    ],
+    [
+      'the appliance’s Redis on its loopback port',
+      { REDIS_URL: 'redis://127.0.0.1:6380' },
+      'REDIS_URL=redis://localhost:6379\n',
+      '127.0.0.1:6380',
     ],
   ])(
     'never connects to %s, and says the suites run only against this machine’s Redis',

@@ -591,7 +591,7 @@ anything.
   checkout's: every checkout and worktree here shares the one Redis container,
   so a password per checkout would be one the running Redis never had. It lives
   in `~/.aflow/stack.env`, which the sandbox withholds from jobs, written once
-  by the first `yarn start` or `yarn redis:password`. The stack's loader lays it
+  by the first `yarn start`, `yarn dev:local` or `yarn redis:password`. The stack's loader lays it
   into each checkout's `REDIS_URL` (`scripts/stackEnv.mjs`), so `.env` names
   only where Redis is, and `yarn infra:up` starts Redis with the same password
   (`scripts/infra.mjs`). It publishes on `127.0.0.1` only. Every entry point

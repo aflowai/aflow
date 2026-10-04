@@ -193,4 +193,56 @@ describe('the owner’s key, from the local auth file', () => {
     withSetUpFile.initFromHeaders(s, admitted({ authorization: 'Bearer phx_own' }));
     expect(s.auth).toMatchObject({ method: 'api_key', apiKey: 'phx_own' });
   });
+
+  it('is given to a session presenting the token under a lower-case scheme', () => {
+    const s = session();
+    expect(
+      withSetUpFile.initFromHeaders(s, admitted({ authorization: `bearer ${SESSION_TOKEN}` })),
+    ).toEqual({ accepted: true });
+    expect(s.auth.apiKey).toBe('phx_replace_me');
+  });
+});
+
+describe('a later request on a session the token gave the owner’s key', () => {
+  function ownerSession(): Session {
+    const s = session();
+    withSetUpFile.initFromHeaders(s, admitted({ authorization: `Bearer ${SESSION_TOKEN}` }));
+    return s;
+  }
+
+  it('is accepted presenting the same token', () => {
+    expect(
+      withSetUpFile.admitSessionRequest(
+        ownerSession(),
+        admitted({ authorization: `Bearer ${SESSION_TOKEN}` }),
+      ),
+    ).toEqual({ accepted: true });
+  });
+
+  it.each([
+    ['another token', 'Bearer guess', WRONG_TOKEN_REFUSAL],
+    [
+      'the token with one character changed',
+      `Bearer ${SESSION_TOKEN.slice(0, -1)}x`,
+      WRONG_TOKEN_REFUSAL,
+    ],
+    ['an API key of its own', 'Bearer phx_own', WRONG_TOKEN_REFUSAL],
+  ])('is refused presenting %s, as a new session would be', (_case, authorization, reason) => {
+    expect(
+      withSetUpFile.admitSessionRequest(ownerSession(), admitted({ authorization })),
+    ).toMatchObject({ accepted: false, reason });
+  });
+
+  it('is refused presenting nothing', () => {
+    expect(withSetUpFile.admitSessionRequest(ownerSession(), admitted({}))).toMatchObject({
+      accepted: false,
+      reason: CREDENTIAL_LESS_REFUSAL,
+    });
+  });
+
+  it('holds a session that brought its own credential to nothing more than before', () => {
+    const s = session();
+    withSetUpFile.initFromHeaders(s, admitted({ authorization: 'Bearer phx_own' }));
+    expect(withSetUpFile.admitSessionRequest(s, admitted({}))).toEqual({ accepted: true });
+  });
 });

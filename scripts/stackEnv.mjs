@@ -4,8 +4,8 @@
  *
  * Every checkout on a machine shares one Redis container, so its password is
  * the machine's: it lives in `stack.env` in the host directory — the one the
- * sandbox withholds from jobs — written once by the first `yarn start` or
- * `yarn redis:password`. A checkout's `REDIS_URL` names where Redis is, and the
+ * sandbox withholds from jobs — written once by the first `yarn start`,
+ * `yarn dev:local` or `yarn redis:password`. A checkout's `REDIS_URL` names where Redis is, and the
  * password is laid into it here, so no checkout mints a password of its own.
  *
  * One precedence for every entry point, the one `dotenv -e .env` had: what the
@@ -29,9 +29,13 @@ export const REDIS_PASSWORD_KEY = 'REDIS_PASSWORD';
 /** The key in `stack.env`, and the variable compose starts Redis with. */
 export const STACK_PASSWORD_KEY = 'AFLOW_DEV_REDIS_PASSWORD';
 export const STACK_ENV_FILE = 'stack.env';
+/** Where compose publishes this machine's Redis. */
 export const LOCAL_REDIS_URL = 'redis://localhost:6379';
 /** The hosts this machine's Redis answers on; `URL` keeps an IPv6 host in brackets. */
 export const MACHINE_REDIS_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+const MACHINE_REDIS_PORT = new URL(LOCAL_REDIS_URL).port;
+/** The port a Redis client connects to when a URL names none. */
+export const DEFAULT_REDIS_PORT = '6379';
 const REDIS_PASSWORD_BYTES = 32;
 const OWNER_ONLY_FILE = 0o600;
 const OWNER_ONLY_DIR = 0o700;
@@ -115,16 +119,24 @@ export function redisPasswordOf(url) {
   return decodeURIComponent(parsed.password);
 }
 
-/** Whether `url` names this machine's Redis: a loopback host, or no URL at all. */
+/**
+ * Whether `url` names this machine's Redis: a loopback host on the port compose
+ * publishes it on, or no URL at all. Another loopback port is another Redis —
+ * the appliance's among them — and keeps its own credential.
+ */
 export function isMachineRedisUrl(url) {
   if (url === undefined || url === '') return true;
   const parsed = URL.parse(url);
-  return parsed !== null && MACHINE_REDIS_HOSTS.has(parsed.hostname);
+  return (
+    parsed !== null &&
+    MACHINE_REDIS_HOSTS.has(parsed.hostname) &&
+    (parsed.port || DEFAULT_REDIS_PORT) === MACHINE_REDIS_PORT
+  );
 }
 
 /**
  * `url` carrying the machine's password: unchanged when it carries a password
- * of its own, names a Redis on another host, or there is no machine password;
+ * of its own, names a Redis other than the machine's, or there is no machine password;
  * the local Redis when it is unset.
  */
 export function redisUrlWithMachinePassword(url, machinePassword) {

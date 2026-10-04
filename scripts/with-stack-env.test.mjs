@@ -76,10 +76,10 @@ describe('the stack loader', () => {
     const env = await childEnv(repo, {
       PATH: process.env['PATH'],
       PHOENIX_HOST_DIR: hostDir,
-      REDIS_URL: 'redis://localhost:6380',
+      REDIS_URL: 'redis://127.0.0.1:6379',
       SET_IN_BOTH: 'shell',
     });
-    expect(env['REDIS_URL']).toBe(`redis://:${MACHINE}@localhost:6380`);
+    expect(env['REDIS_URL']).toBe(`redis://:${MACHINE}@127.0.0.1:6379`);
     expect(env['SET_IN_BOTH']).toBe('shell');
     expect(env['FROM_DOTENV']).toBe('dotenv');
   });
@@ -103,13 +103,13 @@ describe('the stack loader', () => {
     const runnerFile = join(scratch, 'runner.env');
     writeFileSync(
       runnerFile,
-      'REDIS_URL=redis://127.0.0.1:6390/4\nDATABASE_URL=postgres://localhost:5433/runner\n',
+      'REDIS_URL=redis://127.0.0.1:6379/4\nDATABASE_URL=postgres://localhost:5433/runner\n',
     );
     const runner = { PATH: process.env['PATH'], PHOENIX_HOST_DIR: hostDir };
     const services = loadStackEnv(runnerFile, runner);
     const env = await childEnv(repo, services);
     expect(env['DATABASE_URL']).toBe('postgres://localhost:5433/runner');
-    expect(env['REDIS_URL']).toBe(`redis://:${MACHINE}@127.0.0.1:6390/4`);
+    expect(env['REDIS_URL']).toBe(`redis://:${MACHINE}@127.0.0.1:6379/4`);
     expect(env['REDIS_URL']).toBe(services['REDIS_URL']);
   });
 });

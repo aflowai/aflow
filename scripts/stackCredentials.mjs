@@ -39,8 +39,8 @@ export function envRedisUrl(envText) {
 
 /**
  * `.env` with the password taken out of its `REDIS_URL`, so the checkout uses
- * the machine's; undefined when that URL carries none, or names a Redis on
- * another host, whose password is that Redis's own.
+ * the machine's; undefined when that URL carries none, or names a Redis other
+ * than the machine's, whose password is that Redis's own.
  */
 export function envAdoptingMachinePassword(envText) {
   const current = envRedisUrl(envText);
@@ -130,7 +130,7 @@ function redisReadiness({ redisUrl, redis, machineFile }) {
 }
 
 /**
- * A Redis on another host, which the checkout's `REDIS_URL` names: its own,
+ * A Redis other than the machine's, which the checkout's `REDIS_URL` names: its own,
  * checked with the credential that URL carries, and failed only where it
  * refuses it. The machine's password and `yarn redis:password` are for this
  * machine's Redis alone.
@@ -153,7 +153,7 @@ function ownRedisReadiness({ redisUrl, redis, source }) {
           remedy:
             `Put the password that Redis requires in ${REDIS_URL_KEY}. This machine's password ` +
             `is for its own Redis alone, and \`${ADOPT_PASSWORD_COMMAND}\` leaves a URL naming ` +
-            'another host as it is.',
+            'another Redis as it is.',
         },
       };
     case 'unreachable':
@@ -165,7 +165,7 @@ function ownRedisReadiness({ redisUrl, redis, source }) {
  * Each service's credential state, one line each, and the failure that stops
  * the start when this machine's Redis would run without the machine's
  * password, this checkout would connect to it with a password of its own, or
- * a Redis of the checkout's own on another host refuses its credential.
+ * a Redis of the checkout's own refuses its credential.
  *
  * @param {{
  *   checkoutRedisUrl: string | undefined,

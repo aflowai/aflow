@@ -21,6 +21,8 @@ import { fileURLToPath } from 'node:url';
 
 import { ENTERPRISE_ONLY_ENV_KEYS } from '@aflow/schemas';
 
+import { ensureMachinePassword, stackEnvPath } from './stackEnv.mjs';
+
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 /**
@@ -191,6 +193,12 @@ async function main(): Promise<void> {
     ...editionEnv,
     PHOENIX_INSTANCE_DIR: INSTANCE_DIR,
   };
+
+  // Before the datastores: `infra:up` refuses to start Redis without it.
+  const machineFile = stackEnvPath(process.env);
+  if (ensureMachinePassword(machineFile).created) {
+    console.log(`[dev:local] wrote this machine's Redis password to ${machineFile}`);
+  }
 
   // Started only when something is missing, and judged by what is listening
   // rather than by the exit code: `infra:up` fails on a container that already

@@ -271,7 +271,7 @@ After every change that affects behavior, schemas, or architecture:
 **5433** (not the default 5432), Redis on 6379. Model provider keys are added in the web UI.
 
 **Every service requires a credential** (Plan 315 D20). Every checkout shares one Redis, so its
-password is the machine's, in `~/.aflow/stack.env` (written by the first `yarn start`); every
+password is the machine's, in `~/.aflow/stack.env` (written by the first `yarn start` or `yarn dev:local`); every
 script that runs tsx on a file of the repository runs under `scripts/with-stack-env.mjs`
 (`with-stack-env.test.mjs` names the entry points that cannot, and why), which reads `.env`
 under what the caller set, as `dotenv` did, and lays the password into a `REDIS_URL` naming this

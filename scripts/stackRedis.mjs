@@ -10,7 +10,7 @@
  * `REDIS_URL`, or a bare local Redis, which is what CI runs.
  *
  * Nothing answering is a machine without Redis, and a URL naming another host
- * is not this machine's Redis: both skip. A Redis of this machine's that
+ * or port is not this machine's Redis: both skip. A Redis of this machine's that
  * answers and refuses the credential is a broken stack, and a suite skipping
  * there would hide its own coverage.
  */
@@ -20,6 +20,7 @@ import { connect as connectTls } from 'node:tls';
 import { fileURLToPath } from 'node:url';
 
 import {
+  DEFAULT_REDIS_PORT,
   LOCAL_REDIS_URL,
   REDIS_PASSWORD_KEY,
   REDIS_URL_KEY,
@@ -29,7 +30,6 @@ import {
 } from './stackEnv.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
-const DEFAULT_REDIS_PORT = 6379;
 const PROBE_TIMEOUT_MS = 1000;
 export const ADOPT_PASSWORD_COMMAND = 'yarn redis:password';
 
@@ -141,8 +141,9 @@ export function stackRedisUrl(db, env) {
  * credential the services would use.
  *
  * Only this machine's own Redis is ever connected to. Some suites empty their
- * database and rewrite ACL users, so a URL naming any other host — a managed
- * Redis included — is unavailable without a connection, and says so.
+ * database and rewrite ACL users, so a URL naming any other Redis — on another
+ * loopback port, as the appliance's is, or a managed one — is unavailable
+ * without a connection, and says so.
  */
 export async function stackRedis(db, options = {}) {
   const processEnv = options.processEnv ?? process.env;

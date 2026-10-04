@@ -14,6 +14,7 @@ import {
   ensureMachinePassword,
   generateRedisPassword,
   hostDirOf,
+  isMachineRedisUrl,
   loadStackEnv,
   parseEnvFile,
   readMachinePassword,
@@ -94,11 +95,14 @@ describe('the environment a stack process sees', () => {
 
   it('gives the REDIS_URL that results the machine’s password, keeping where it points', () => {
     const env = stackEnv(
-      { REDIS_URL: 'redis://127.0.0.1:6380' },
+      { REDIS_URL: 'redis://127.0.0.1:6379/3' },
       { REDIS_URL: 'redis://localhost:6379/2' },
       { machinePassword: MACHINE },
     );
-    expect(env['REDIS_URL']).toBe(`redis://:${MACHINE}@127.0.0.1:6380`);
+    expect(env['REDIS_URL']).toBe(`redis://:${MACHINE}@127.0.0.1:6379/3`);
+    expect(
+      stackEnv({}, { REDIS_URL: 'redis://localhost' }, { machinePassword: MACHINE })['REDIS_URL'],
+    ).toBe(`redis://:${MACHINE}@localhost`);
     expect(
       stackEnv({}, { REDIS_URL: 'redis://localhost:6379/2' }, { machinePassword: MACHINE })[
         'REDIS_URL'
@@ -116,6 +120,17 @@ describe('the environment a stack process sees', () => {
           'REDIS_URL'
         ],
       ).toBe(`redis://:${MACHINE}@${host}:6379`);
+    }
+  });
+
+  it('never sends the machine’s password to a Redis on another loopback port, as the appliance’s is', () => {
+    for (const url of [
+      'redis://127.0.0.1:6380',
+      'redis://localhost:6380/0',
+      'redis://[::1]:6380',
+    ]) {
+      expect(isMachineRedisUrl(url)).toBe(false);
+      expect(stackEnv({}, { REDIS_URL: url }, { machinePassword: MACHINE })['REDIS_URL']).toBe(url);
     }
   });
 

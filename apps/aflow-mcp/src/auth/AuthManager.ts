@@ -81,10 +81,13 @@ export type SessionAuthOutcome =
 
 const ACCEPTED: SessionAuthOutcome = { accepted: true };
 
+function tokenDigest(token: string): Buffer {
+  return createHash('sha256').update(token).digest();
+}
+
 /** Compared as digests, so neither the time taken nor a length mismatch says how close a guess was. */
-function sameToken(presented: string, expected: string): boolean {
-  const digest = (value: string) => createHash('sha256').update(value).digest();
-  return timingSafeEqual(digest(presented), digest(expected));
+function presentsToken(presented: string, expectedDigest: Buffer): boolean {
+  return timingSafeEqual(tokenDigest(presented), expectedDigest);
 }
 
 export class AuthManager {
@@ -133,6 +136,24 @@ export class AuthManager {
     // No credential. The client has to supply one on its next connection —
     // `auth_status` says what is missing.
     session.auth = { method: 'none' };
+    return ACCEPTED;
+  }
+
+  /**
+   * Whether a request on an existing session may use it. A session given the
+   * owner's key for the session token is held to that token on every request,
+   * compared as when it was created, so a request presenting any other bearer
+   * is refused as a new session presenting it would be.
+   */
+  admitSessionRequest(session: Session, headers: AdmittedHeaders): SessionAuthOutcome {
+    const expected = session.sessionTokenDigest;
+    if (expected === undefined) return ACCEPTED;
+    const presented = presentedBearer(headers);
+    if (presented === undefined) return { accepted: false, reason: CREDENTIAL_LESS_REFUSAL };
+    if (!presentsToken(presented, expected)) {
+      log('warn', 'local_auth_token_refused', { session: session.id });
+      return { accepted: false, reason: WRONG_TOKEN_REFUSAL };
+    }
     return ACCEPTED;
   }
 
@@ -202,7 +223,8 @@ export class AuthManager {
         log('warn', 'local_auth_token_unset', { path: absolute });
         return { accepted: false, reason: NO_SESSION_TOKEN_REFUSAL };
       }
-      if (!sameToken(presented, j.sessionToken)) {
+      const sessionTokenDigest = tokenDigest(j.sessionToken);
+      if (!presentsToken(presented, sessionTokenDigest)) {
         log('warn', 'local_auth_token_refused', { session: session.id });
         return { accepted: false, reason: WRONG_TOKEN_REFUSAL };
       }
@@ -247,6 +269,7 @@ export class AuthManager {
       if (j.defaultSpaceId) {
         session.mcpLocalDefaults = { defaultSpaceId: j.defaultSpaceId };
       }
+      session.sessionTokenDigest = sessionTokenDigest;
 
       return ACCEPTED;
     } catch (err: unknown) {

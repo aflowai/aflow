@@ -266,6 +266,36 @@ describe.skipIf(!listenerAllowed)('the MCP HTTP server', () => {
     expect(server.activeSessions.size).toBe(1);
   });
 
+  /** The session id is not a credential: the token is asked for on every request. */
+  it('refuses a later request on an owner-keyed session presenting another bearer, with 401', async () => {
+    const server = await start();
+    const host = `localhost:${String(server.port)}`;
+    const init = await send(server.port, {
+      headers: { host, ...LOCAL_TOKEN },
+      body: INITIALIZE,
+    });
+    const sessionId = init.headers['mcp-session-id'] as string;
+    const onSession = { host, 'mcp-session-id': sessionId, 'mcp-protocol-version': '2025-03-26' };
+    const initialized = JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' });
+
+    for (const method of ['POST', 'GET', 'DELETE']) {
+      const later = await send(server.port, {
+        method,
+        headers: { ...onSession, authorization: 'Bearer guess' },
+        ...(method === 'POST' ? { body: initialized } : {}),
+      });
+      expect(later.status).toBe(401);
+      expect((JSON.parse(later.body) as { error: string }).error).toContain('yarn mcp:setup');
+    }
+    expect(server.activeSessions.has(sessionId)).toBe(true);
+
+    const same = await send(server.port, {
+      headers: { ...onSession, ...LOCAL_TOKEN },
+      body: initialized,
+    });
+    expect(same.status).toBe(202);
+  });
+
   /** The SDK's own check, pinned to the Host the session was admitted under. */
   it('refuses a session’s later request under a different Host, through the transport', async () => {
     const server = await start();

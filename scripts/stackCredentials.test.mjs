@@ -153,10 +153,11 @@ describe('a checkout adopting the machine’s password', () => {
     expect(envAdoptingMachinePassword('PORT=3000\n')).toBeUndefined();
   });
 
-  it('never rewrites a URL naming another host, whose password is that Redis’s own', () => {
+  it('never rewrites a URL naming another Redis, whose password is that Redis’s own', () => {
     for (const url of [
       `rediss://default:${PASSWORD}@managed.example.com:6380`,
       `redis://:${PASSWORD}@10.0.0.5:6379/2`,
+      `redis://:${PASSWORD}@127.0.0.1:6380`,
     ]) {
       expect(envAdoptingMachinePassword(`${REDIS_URL_KEY}='${url}'\n`)).toBeUndefined();
       expect(envRedisUrl(`${REDIS_URL_KEY}='${url}'\n`)).toBe(url);
@@ -280,8 +281,21 @@ describe('the boot readiness', () => {
       expect(readiness.failure?.message).toContain('rediss://managed.example.com:6380');
       expect(readiness.failure?.message).toContain('WRONGPASS');
       expect(readiness.failure?.message).not.toContain(own);
-      expect(readiness.failure?.remedy).toContain('leaves a URL naming another host as it is');
+      expect(readiness.failure?.remedy).toContain('leaves a URL naming another Redis as it is');
     });
+  });
+
+  it('reads the appliance’s Redis, on another loopback port, as the checkout’s own', () => {
+    const own = generateRedisPassword();
+    const appliance = `redis://:${own}@127.0.0.1:6380`;
+    const readiness = credentialReadiness({
+      ...ready,
+      checkoutRedisUrl: appliance,
+      redisUrl: appliance,
+    });
+    expect(readiness.failure).toBeUndefined();
+    expect(readiness.lines[0]).toContain("Redis: this checkout's own, at 127.0.0.1:6380");
+    expect(readiness.lines.join('\n')).not.toContain(own);
   });
 
   it('passes a checkout whose .env carries the machine’s own password', () => {

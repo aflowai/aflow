@@ -4,7 +4,7 @@
  * `stack.env` if this is the first command on the machine to need it, takes a
  * password of the checkout's own out of a `REDIS_URL` in `.env` naming this
  * machine so the loader lays the machine's in, and starts Redis with that
- * password. A `REDIS_URL` naming another host is never rewritten. The data is in a
+ * password. A `REDIS_URL` naming another Redis is never rewritten. The data is in a
  * volume and stays. Idempotent — run again, it changes nothing.
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
