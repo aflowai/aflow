@@ -61,12 +61,12 @@ export const PlanNodeSchema = z
     parentId: z.string().uuid().nullable(),
     kind: PlanNodeKindSchema,
     title: z.string(),
-    goal: z.string(),
-    criteria: z.string(),
+    goal: z.string().max(PLAN_NODE_PROSE_MAX_CHARS),
+    criteria: z.string().max(PLAN_NODE_PROSE_MAX_CHARS),
     status: PlanNodeStatusSchema,
     /** How the criteria were met (done) or why the node was let go (dropped). */
-    outcome: z.string().optional(),
-    note: z.string().optional(),
+    outcome: z.string().max(PLAN_NODE_PROSE_MAX_CHARS).optional(),
+    note: z.string().max(PLAN_NODE_PROSE_MAX_CHARS).optional(),
     /** Name it as `expectedRevision` on the next update. */
     revision: z.number().int().min(1),
     position: z.number().int().min(0),
@@ -122,7 +122,7 @@ export const PLAN_NODE_OPEN_HAS_NO_OUTCOME_MESSAGE =
 export const PLAN_NODE_UPDATE_EMPTY_MESSAGE =
   'This update changes nothing. Name at least one of status, note, criteria, title, parentId, position or outcome.';
 
-const PLAN_NODE_UPDATE_FIELDS = [
+export const PLAN_NODE_UPDATE_FIELDS = [
   'status',
   'note',
   'criteria',
@@ -131,6 +131,8 @@ const PLAN_NODE_UPDATE_FIELDS = [
   'position',
   'outcome',
 ] as const;
+export const PlanNodeUpdateFieldSchema = z.enum(PLAN_NODE_UPDATE_FIELDS);
+export type PlanNodeUpdateField = z.infer<typeof PlanNodeUpdateFieldSchema>;
 
 export const PlanNodeUpdateSchema = z
   .object({

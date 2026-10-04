@@ -6,6 +6,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   PLAN_NODE_DONE_NEEDS_OUTCOME_MESSAGE,
+  PlanNodeRefusalDetailsSchema,
   type IdempotencyKey,
   type StepDefinition,
   type StepExecutionId,
@@ -64,6 +65,13 @@ const NODE = {
   updatedAt: '2026-10-04T09:05:00.000Z',
 };
 
+const REFUSAL_DETAILS = {
+  nodeId: NODE.nodeId,
+  revision: NODE.revision,
+  status: NODE.status,
+  updatedAt: NODE.updatedAt,
+};
+
 function makeArgs(operation: string, input: unknown): InlineHandlerArgs {
   return {
     redis: { kind: 'redis' } as never,
@@ -93,12 +101,12 @@ beforeEach(() => {
 });
 
 describe('plan.node.update', () => {
-  it('surfaces a stale write as a validation error carrying the current revision and node', async () => {
+  it('surfaces a stale write as a validation error carrying what a retry needs, not the node', async () => {
     mockUpdatePlanNode.mockResolvedValue({
       ok: false,
       code: 'PLAN_NODE_STALE',
       message: 'Plan node is at revision 2; nothing was written.',
-      details: { currentRevision: 2, node: NODE },
+      details: { ...REFUSAL_DETAILS, differingFields: ['note'] },
     });
 
     await handlePlanNodeInline(
@@ -111,16 +119,20 @@ describe('plan.node.update', () => {
       code: 'PLAN_NODE_STALE',
       classification: 'validation',
       retryable: false,
-      details: { currentRevision: 2, node: { note: NODE.note } },
+    });
+    const error = msg['error'] as { details: unknown };
+    expect(PlanNodeRefusalDetailsSchema.parse(error.details)).toEqual({
+      ...REFUSAL_DETAILS,
+      differingFields: ['note'],
     });
   });
 
-  it('surfaces an update that changes nothing as a non-retryable validation error carrying the node', async () => {
+  it('surfaces an update that changes nothing as a non-retryable validation error carrying what a retry needs', async () => {
     mockUpdatePlanNode.mockResolvedValue({
       ok: false,
       code: 'PLAN_NODE_UNCHANGED',
       message: 'Plan node already stands as this update would leave it, so nothing was written.',
-      details: { node: NODE },
+      details: { ...REFUSAL_DETAILS, differingFields: [] },
     });
 
     await handlePlanNodeInline(
@@ -133,7 +145,11 @@ describe('plan.node.update', () => {
       code: 'PLAN_NODE_UNCHANGED',
       classification: 'validation',
       retryable: false,
-      details: { node: { revision: NODE.revision } },
+    });
+    const error = msg['error'] as { details: unknown };
+    expect(PlanNodeRefusalDetailsSchema.parse(error.details)).toEqual({
+      ...REFUSAL_DETAILS,
+      differingFields: [],
     });
   });
 

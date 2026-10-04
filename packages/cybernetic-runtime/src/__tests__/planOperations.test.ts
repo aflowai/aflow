@@ -4,12 +4,12 @@ import type { Redis as RedisType } from 'ioredis';
 import {
   PLAN_NODE_LIST_MAX_LIMIT,
   PLAN_NODE_POSITION_MAX,
+  PLAN_NODE_PROSE_MAX_CHARS,
   PLAN_TREE_DEPTH_LIMIT,
   PLAN_TREE_WALK_NODE_LIMIT,
+  PlanNodeRefusalDetailsSchema,
   type PlanNode,
   type PlanNodeCreateInput,
-  type PlanNodeStaleErrorDetails,
-  type PlanNodeUnchangedErrorDetails,
 } from '@aflow/schemas';
 import {
   createPlanNode,
@@ -143,10 +143,16 @@ describe('updatePlanNode — no lost update (Plan 322 D6)', () => {
     expect(first).toMatchObject({ ok: true, node: { revision: 2 } });
     expect(second).toMatchObject({ ok: false, code: 'PLAN_NODE_STALE' });
     if (second.ok) return;
-    const details = second.details as unknown as PlanNodeStaleErrorDetails;
-    expect(details.currentRevision).toBe(2);
-    expect(details.node.note).toBe('next: F114 findings out of the plan file');
+    const now = store.nodes.get(node.nodeId)!;
+    expect(PlanNodeRefusalDetailsSchema.parse(second.details)).toEqual({
+      nodeId: node.nodeId,
+      revision: 2,
+      status: 'active',
+      updatedAt: now.updatedAt,
+      differingFields: ['note'],
+    });
     expect(second.message).toContain('nothing was written');
+    expect(second.message).toContain('plan.node.get');
     expect(store.nodes.get(node.nodeId)?.note).toBe('next: F114 findings out of the plan file');
   });
 
@@ -169,11 +175,44 @@ describe('updatePlanNode — no lost update (Plan 322 D6)', () => {
       note: 'written by session a',
     });
 
-    expect(result).toMatchObject({ ok: false, code: 'PLAN_NODE_STALE' });
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'PLAN_NODE_STALE',
+      details: { nodeId: node.nodeId, revision: 2, differingFields: ['note'] },
+    });
     expect(store.nodes.get(node.nodeId)).toMatchObject({
       revision: 2,
       note: 'written by session b',
     });
+  });
+
+  it('refuses a stale write on a large node with its revision and the differing fields, never its prose', async () => {
+    const prose = 'x'.repeat(PLAN_NODE_PROSE_MAX_CHARS);
+    const node = await created({ goal: prose, criteria: prose, note: prose });
+    const moved = await updatePlanNode(session('session-a'), {
+      nodeId: node.nodeId,
+      expectedRevision: 1,
+      status: 'blocked',
+    });
+    if (!moved.ok) throw new Error(moved.message);
+
+    const refused = await updatePlanNode(session('session-b'), {
+      nodeId: node.nodeId,
+      expectedRevision: 1,
+      status: 'blocked',
+      title: 'Renamed',
+    });
+
+    expect(refused).toMatchObject({ ok: false, code: 'PLAN_NODE_STALE' });
+    if (refused.ok) return;
+    expect(refused.details).toEqual({
+      nodeId: node.nodeId,
+      revision: 2,
+      status: 'blocked',
+      updatedAt: moved.node.updatedAt,
+      differingFields: ['title'],
+    });
+    expect(JSON.stringify(refused).length).toBeLessThan(PLAN_NODE_PROSE_MAX_CHARS);
   });
 
   it('answers an unknown node as not found', async () => {
@@ -401,6 +440,70 @@ describe('updatePlanNode — reopening a closed node', () => {
     expect(reopened.ok && reopened.node.note).toBe(`Reopened; it was done: ${OUTCOME}`);
   });
 
+  it('refuses a reopen whose note would pass the ceiling, by name, with the ceiling and the length', async () => {
+    const head = `Reopened; it was done: ${OUTCOME}`;
+    const room = PLAN_NODE_PROSE_MAX_CHARS - head.length - 1;
+    const node = await closed('done', 'n'.repeat(room + 1));
+
+    const refused = await updatePlanNode(session('session-a'), {
+      nodeId: node.nodeId,
+      expectedRevision: node.revision,
+      status: 'active',
+    });
+
+    expect(refused).toMatchObject({
+      ok: false,
+      code: 'PLAN_NODE_NOTE_TOO_LONG',
+      details: {
+        nodeId: node.nodeId,
+        noteLength: PLAN_NODE_PROSE_MAX_CHARS + 1,
+        noteMaxChars: PLAN_NODE_PROSE_MAX_CHARS,
+      },
+    });
+    expect(!refused.ok && refused.message).toContain(
+      `which would then hold ${String(PLAN_NODE_PROSE_MAX_CHARS + 1)} characters; a note holds at most ${String(PLAN_NODE_PROSE_MAX_CHARS)}, so nothing was written`,
+    );
+    expect(!refused.ok && refused.message).toContain(
+      `at most ${String(room)} characters fit under the reopened line`,
+    );
+    expect(store.nodes.get(node.nodeId)).toMatchObject({
+      status: 'done',
+      outcome: OUTCOME,
+      revision: node.revision,
+    });
+
+    const trimmed = await updatePlanNode(session('session-a'), {
+      nodeId: node.nodeId,
+      expectedRevision: node.revision,
+      status: 'active',
+      note: 'n'.repeat(room),
+    });
+    expect(trimmed.ok && trimmed.node.note?.length).toBe(PLAN_NODE_PROSE_MAX_CHARS);
+  });
+
+  it('refuses a reopen whose outcome alone would pass the note ceiling, and says to shorten it', async () => {
+    const node = await created();
+    const done = await updatePlanNode(session('session-a'), {
+      nodeId: node.nodeId,
+      expectedRevision: 1,
+      status: 'done',
+      outcome: 'o'.repeat(PLAN_NODE_PROSE_MAX_CHARS),
+    });
+    if (!done.ok) throw new Error(done.message);
+
+    const refused = await updatePlanNode(session('session-a'), {
+      nodeId: node.nodeId,
+      expectedRevision: done.node.revision,
+      status: 'active',
+      note: '',
+    });
+
+    expect(refused).toMatchObject({ ok: false, code: 'PLAN_NODE_NOTE_TOO_LONG' });
+    expect(!refused.ok && refused.message).toContain(
+      'Its outcome alone passes that: shorten the outcome with an update while the node is still done, then reopen it.',
+    );
+  });
+
   it('leaves the outcome of a node that moves between closed statuses', async () => {
     const node = await closed('done');
     const dropped = await updatePlanNode(session('session-a'), {
@@ -539,11 +642,15 @@ describe('updatePlanNode — an update that changes nothing is refused', () => {
       expect(refused, JSON.stringify(fields)).toMatchObject({
         ok: false,
         code: 'PLAN_NODE_UNCHANGED',
-        details: { node: { nodeId: node.nodeId, revision: node.revision } },
       });
       if (refused.ok) return;
-      const details = refused.details as unknown as PlanNodeUnchangedErrorDetails;
-      expect(details.node).toEqual(store.nodes.get(node.nodeId));
+      expect(PlanNodeRefusalDetailsSchema.parse(refused.details)).toEqual({
+        nodeId: node.nodeId,
+        revision: node.revision,
+        status: node.status,
+        updatedAt: node.updatedAt,
+        differingFields: [],
+      });
       expect(refused.message).toContain(
         `already stands as this update would leave it, so nothing was written and it stays at revision ${String(node.revision)}`,
       );

@@ -59,7 +59,7 @@ export const PlanOperationRegistrations: OperationRegistration[] = [
     name: 'Update Plan Node',
     actionLabel: 'Updating the plan…',
     semanticDescription:
-      'Change a node against the revision it was read at; a node written since is refused with its current state, so nothing is lost. A node is done when its own criteria are met, never because its children are.',
+      'Change a node against the revision it was read at; a node written since is refused with its current revision, so nothing is lost. A node is done when its own criteria are met, never because its children are.',
     tags: ['plan', 'node', 'update'],
     idempotency: 'non_idempotent',
     mutates: true,

@@ -6,6 +6,7 @@ import {
   PlanNodeSchema,
   PlanNodeStatusSchema,
   PlanNodeSummarySchema,
+  PlanNodeUpdateFieldSchema,
   PlanNodeUpdateSchema,
 } from '../../cybernetic/plan.js';
 
@@ -37,18 +38,23 @@ export type PlanNodeUpdateInput = z.infer<typeof PlanNodeUpdateInputSchema>;
 export const PlanNodeUpdateOutputSchema = z.object({ node: PlanNodeSchema });
 export type PlanNodeUpdateOutput = z.infer<typeof PlanNodeUpdateOutputSchema>;
 
-/** `error.details` for `PLAN_NODE_STALE`: the node as it stands now. */
-export const PlanNodeStaleErrorDetailsSchema = z
+/**
+ * `error.details` for `PLAN_NODE_STALE` and `PLAN_NODE_UNCHANGED`: what a retry
+ * needs and no more. A refusal travels inline on the results stream, so it
+ * never carries the node's prose; `plan.node.get` reads that.
+ */
+export const PlanNodeRefusalDetailsSchema = z
   .object({
-    currentRevision: z.number().int().min(1),
-    node: PlanNodeSchema,
+    nodeId: z.string().uuid(),
+    revision: z.number().int().min(1),
+    status: PlanNodeStatusSchema,
+    updatedAt: z.string().datetime(),
+    differingFields: z
+      .array(PlanNodeUpdateFieldSchema)
+      .describe('The fields this update names whose value differs from the node as it stands.'),
   })
   .strict();
-export type PlanNodeStaleErrorDetails = z.infer<typeof PlanNodeStaleErrorDetailsSchema>;
-
-/** `error.details` for `PLAN_NODE_UNCHANGED`: the node, already as the update would leave it. */
-export const PlanNodeUnchangedErrorDetailsSchema = z.object({ node: PlanNodeSchema }).strict();
-export type PlanNodeUnchangedErrorDetails = z.infer<typeof PlanNodeUnchangedErrorDetailsSchema>;
+export type PlanNodeRefusalDetails = z.infer<typeof PlanNodeRefusalDetailsSchema>;
 
 // ============================================================================
 // plan.node.get / plan.node.list

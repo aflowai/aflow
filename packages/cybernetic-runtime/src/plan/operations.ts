@@ -10,6 +10,8 @@ import {
   isClosedPlanNodeStatus,
   PLAN_NODE_CHILDREN_LIMIT,
   PLAN_NODE_LIST_DEFAULT_LIMIT,
+  PLAN_NODE_PROSE_MAX_CHARS,
+  PLAN_NODE_UPDATE_FIELDS,
   PLAN_TREE_DEPTH_LIMIT,
   PLAN_TREE_WALK_NODE_LIMIT,
   OPEN_PLAN_NODE_STATUSES,
@@ -18,9 +20,8 @@ import {
   type PlanNodeGetOutput,
   type PlanNodeListInput,
   type PlanNodeListOutput,
-  type PlanNodeStaleErrorDetails,
+  type PlanNodeRefusalDetails,
   type PlanNodeStatus,
-  type PlanNodeUnchangedErrorDetails,
   type PlanNodeUpdateInput,
 } from '@aflow/schemas';
 import { bumpAttentionGeneration } from '../attentionCache.js';
@@ -39,7 +40,8 @@ export type PlanOpErrorCode =
   | 'PLAN_NODE_CYCLE'
   | 'PLAN_NODE_TOO_DEEP'
   | 'PLAN_NODE_OPEN_HAS_NO_OUTCOME'
-  | 'PLAN_NODE_UNCHANGED';
+  | 'PLAN_NODE_UNCHANGED'
+  | 'PLAN_NODE_NOTE_TOO_LONG';
 
 export interface PlanOpError {
   ok: false;
@@ -71,16 +73,38 @@ function notFound(nodeId: string, role: 'node' | 'parent' | 'root' = 'node'): Pl
   };
 }
 
-function stale(current: PlanNode, expectedRevision: number): PlanOpError {
-  const details: PlanNodeStaleErrorDetails = { currentRevision: current.revision, node: current };
+/** A patch column against the node's: absent is null, and a time compares as its ISO string. */
+function sameColumn(patched: unknown, held: unknown): boolean {
+  const stored = (value: unknown) =>
+    value instanceof Date ? value.toISOString() : (value ?? null);
+  return stored(patched) === stored(held);
+}
+
+function refusalDetails(current: PlanNode, input: PlanNodeUpdateInput): Record<string, unknown> {
+  const differingFields = PLAN_NODE_UPDATE_FIELDS.filter((field) => {
+    const value = field === 'note' && input.note === '' ? null : input[field];
+    return value !== undefined && !sameColumn(value, current[field]);
+  });
+  const details: PlanNodeRefusalDetails = {
+    nodeId: current.nodeId,
+    revision: current.revision,
+    status: current.status,
+    updatedAt: current.updatedAt,
+    differingFields,
+  };
+  return details;
+}
+
+function stale(current: PlanNode, input: PlanNodeUpdateInput): PlanOpError {
   return {
     ok: false,
     code: 'PLAN_NODE_STALE',
     message:
       `Plan node "${current.title}" is at revision ${String(current.revision)}; this update was decided against revision ` +
-      `${String(expectedRevision)}, so nothing was written. Its current state is in error.details.node — reconcile ` +
-      `with it and update against revision ${String(current.revision)}.`,
-    details: details as unknown as Record<string, unknown>,
+      `${String(input.expectedRevision)}, so nothing was written. error.details.differingFields names what this update ` +
+      `would still change; read the node with plan.node.get, reconcile with it, and update against revision ` +
+      `${String(current.revision)}.`,
+    details: refusalDetails(current, input),
   };
 }
 
@@ -97,16 +121,35 @@ function openHasNoOutcome(current: PlanNode, status: PlanNodeStatus): PlanOpErro
   };
 }
 
-function unchanged(current: PlanNode): PlanOpError {
-  const details: PlanNodeUnchangedErrorDetails = { node: current };
+function unchanged(current: PlanNode, input: PlanNodeUpdateInput): PlanOpError {
   return {
     ok: false,
     code: 'PLAN_NODE_UNCHANGED',
     message:
       `Plan node "${current.title}" already stands as this update would leave it, so nothing was written ` +
-      `and it stays at revision ${String(current.revision)}. Its current state is in error.details.node; ` +
-      'an update names at least one field whose value differs from it.',
-    details: details as unknown as Record<string, unknown>,
+      `and it stays at revision ${String(current.revision)}. An update names at least one field whose value ` +
+      'differs from the node; plan.node.get reads it as it stands.',
+    details: refusalDetails(current, input),
+  };
+}
+
+function reopenedNoteTooLong(current: PlanNode, noteLength: number): PlanOpError {
+  const headLength = reopenedNote(current, null)?.length ?? 0;
+  const room = PLAN_NODE_PROSE_MAX_CHARS - headLength - 1;
+  const shortenOutcome = `shorten the outcome with an update while the node is still ${current.status}`;
+  const remedy =
+    headLength > PLAN_NODE_PROSE_MAX_CHARS
+      ? `Its outcome alone passes that: ${shortenOutcome}, then reopen it.`
+      : `Pass a shorter \`note\` in this update${room > 0 ? ` (at most ${String(room)} characters fit under the reopened line)` : ''}, ` +
+        `or "" to keep only that line, or ${shortenOutcome} first.`;
+  return {
+    ok: false,
+    code: 'PLAN_NODE_NOTE_TOO_LONG',
+    message:
+      `Reopening plan node "${current.title}" puts its outcome at the head of its note, which would then hold ` +
+      `${String(noteLength)} characters; a note holds at most ${String(PLAN_NODE_PROSE_MAX_CHARS)}, so nothing was ` +
+      `written. ${remedy}`,
+    details: { nodeId: current.nodeId, noteLength, noteMaxChars: PLAN_NODE_PROSE_MAX_CHARS },
   };
 }
 
@@ -171,13 +214,6 @@ function reopenedNote(
   return rest === null ? kept : `${kept}\n${rest}`;
 }
 
-/** A patch column against the node's: absent is null, and a time compares as its ISO string. */
-function sameColumn(patched: unknown, held: unknown): boolean {
-  const stored = (value: unknown) =>
-    value instanceof Date ? value.toISOString() : (value ?? null);
-  return stored(patched) === stored(held);
-}
-
 function changesNothing(
   current: PlanNode,
   patch: PlanNodePatch,
@@ -233,7 +269,7 @@ export async function updatePlanNode(
 ): Promise<PlanOpResult<{ node: PlanNode }>> {
   const current = await ctx.store.find(ctx.spaceId, input.nodeId);
   if (!current) return notFound(input.nodeId);
-  if (current.revision !== input.expectedRevision) return stale(current, input.expectedRevision);
+  if (current.revision !== input.expectedRevision) return stale(current, input);
   // The refusals below judge `current`, and the write lands only on its
   // revision: a node changed since this read is refused as stale instead.
   const status = input.status ?? current.status;
@@ -254,6 +290,9 @@ export async function updatePlanNode(
       patch.closedAt = null;
       if (isClosedPlanNodeStatus(current.status)) {
         const note = reopenedNote(current, patch.note);
+        if (typeof note === 'string' && note.length > PLAN_NODE_PROSE_MAX_CHARS) {
+          return reopenedNoteTooLong(current, note.length);
+        }
         if (note !== undefined) patch.note = note;
         patch.outcome = null;
       }
@@ -261,7 +300,7 @@ export async function updatePlanNode(
   }
 
   const parentId = input.parentId;
-  if (changesNothing(current, patch, parentId)) return unchanged(current);
+  if (changesNothing(current, patch, parentId)) return unchanged(current, input);
   let node: PlanNode | null;
   if (parentId !== undefined && parentId !== current.parentId) {
     const move = await ctx.store.moveAtRevision(
@@ -286,7 +325,7 @@ export async function updatePlanNode(
   if (!node) {
     // Another session wrote between the read and this write.
     const now = await ctx.store.find(ctx.spaceId, input.nodeId);
-    return now ? stale(now, input.expectedRevision) : notFound(input.nodeId);
+    return now ? stale(now, input) : notFound(input.nodeId);
   }
   return written(ctx, { ok: true as const, node });
 }
