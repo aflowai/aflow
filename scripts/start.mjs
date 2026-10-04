@@ -18,6 +18,7 @@ import process from 'node:process';
 import { apiUrlOf, authFileOf, envNamingAuthFile, parseEnvFile } from './mcp-local-setup.mjs';
 import {
   REDIS_URL_KEY,
+  composeProjectOf,
   credentialReadiness,
   envWithRedisPassword,
   generateRedisPassword,
@@ -89,6 +90,7 @@ const readiness = credentialReadiness({
   mcpToken,
   mcpAuthFile: relative(REPO, mcpAuthFile) || mcpAuthFile,
   hostEnvPath: pairedHostEnvPath(),
+  composeProject: composeProjectOf(process.env, parseEnvFile(readFileSync(envFile, 'utf-8'))),
 });
 say('credentials:');
 for (const line of readiness.lines) say(`  ${line}`);

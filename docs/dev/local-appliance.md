@@ -608,7 +608,19 @@ anything.
   in the compose file the login is two lines. pgAdmin sets its login once, when
   it creates its volume, so the volume is now `pgadmin_login`; the old
   `pgadmin_data`, which still holds the fixed login, is unused and can go
-  (`docker volume rm aflow-dev_pgadmin_data`).
+  (`docker volume rm aflow-dev_pgadmin_data`). For the same reason pgAdmin
+  keeps the password it was first created with when `REDIS_URL` changes, and
+  `yarn start`'s readiness says so: removing its volume
+  (`docker rm -f aflow-pgadmin && docker volume rm aflow-dev_pgadmin_login`)
+  gives it the current one at the next `yarn infra:tools`. The login is not
+  written at every start because compose has no way to: pgAdmin reads it only
+  into an empty volume, so it would mean discarding pgAdmin's saved servers at
+  every start or reaching into the image's own setup script.
+- **The Redis integration suites** read the same `REDIS_URL` — the shell's,
+  then `.env`'s, through `dotenv` as the services do — from
+  `@aflow/redis/testing`. Where no Redis answers they skip; where one answers
+  and refuses that credential they fail, naming the refusal, because a
+  credential the stack wrote that a test cannot use is a defect.
 
 `yarn start` stops, naming the setting, when `REDIS_URL` carries no password, and
 when the Redis it finds answers without one.

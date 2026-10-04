@@ -272,7 +272,10 @@ After every change that affects behavior, schemas, or architecture:
 
 **Every service requires a credential** (Plan 315 D20). Redis's password is generated into
 `REDIS_URL` on first run, so everything that reads the URL authenticates; Redis Commander and
-pgAdmin log in with it, on `127.0.0.1`. `yarn start` prints each service's credential state
+pgAdmin log in with it, on `127.0.0.1` — pgAdmin with the password as it was when its volume
+was created, until that volume is removed. The Redis integration suites read the same URL
+(`@aflow/redis/testing`): they skip where no Redis answers and fail where one refuses its
+credential. `yarn start` prints each service's credential state
 and stops when `REDIS_URL` carries no password. **With a `.env` from before, run
 `yarn redis:password` once** — it writes the password in and restarts Redis with it; the data
 stays.

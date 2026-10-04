@@ -27,6 +27,7 @@ import {
   PROJECTION_FAILURES_TABLE,
 } from '@aflow/database';
 import { setSessionState, type SessionHotState } from '@aflow/redis';
+import { stackRedis } from '@aflow/redis/testing';
 import { createProjectionWorker } from '../ProjectionWorker.js';
 
 const DATABASE_URL = process.env['DATABASE_URL'];
@@ -45,25 +46,10 @@ const MAX_PROJECTION_RETRIES = 10;
 
 let handle: { sql: postgres.Sql; close: () => Promise<void> } | undefined;
 
+const STACK_REDIS = await stackRedis(REDIS_DB);
+
 async function substrateReady(): Promise<boolean> {
-  if (!DATABASE_URL) return false;
-  const probe = new Redis({
-    host: '127.0.0.1',
-    port: 6379,
-    db: REDIS_DB,
-    lazyConnect: true,
-    connectTimeout: 500,
-    maxRetriesPerRequest: 1,
-    retryStrategy: () => null,
-  });
-  try {
-    await probe.connect();
-    await probe.ping();
-  } catch {
-    return false;
-  } finally {
-    probe.disconnect();
-  }
+  if (!DATABASE_URL || !STACK_REDIS.available) return false;
   handle = createDatabase({ connectionString: DATABASE_URL });
   try {
     const rows = await handle.sql<Array<{ ok: boolean }>>`
@@ -183,7 +169,7 @@ describe.skipIf(!READY)('projection failure record', () => {
   });
 
   beforeEach(async () => {
-    redis = new Redis({ host: '127.0.0.1', port: 6379, db: REDIS_DB, maxRetriesPerRequest: 1 });
+    redis = new Redis(STACK_REDIS.url, { maxRetriesPerRequest: 1 });
     await redis.flushdb();
     await sql().unsafe(`TRUNCATE "${SCHEMA}".sessions CASCADE`);
     await sql().unsafe(

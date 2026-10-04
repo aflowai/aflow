@@ -12,6 +12,11 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
+    },
+    "./testing": {
+      "ts-source": "./src/testing/stackRedis.ts",
+      "types": "./dist/testing/stackRedis.d.ts",
+      "import": "./dist/testing/stackRedis.js"
     }
   },
   "files": [
@@ -25,6 +30,7 @@
   },
   "dependencies": {
     "@aflow/schemas": "workspace:*",
+    "dotenv": "^16.4.5",
     "ioredis": "^5.11.1"
   },
   "devDependencies": {

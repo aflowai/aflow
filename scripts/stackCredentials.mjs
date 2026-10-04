@@ -21,6 +21,10 @@ export const COMPOSE_PASSWORD_KEY = 'AFLOW_DEV_REDIS_PASSWORD';
 export const ADD_PASSWORD_COMMAND = 'yarn redis:password';
 export const TOOLS_LOGIN_USER = 'aflow';
 export const PGADMIN_LOGIN_EMAIL = 'admin@phoenix.dev';
+export const PGADMIN_CONTAINER = 'aflow-pgadmin';
+export const PGADMIN_VOLUME = 'pgadmin_login';
+export const DEFAULT_COMPOSE_PROJECT = 'aflow-dev';
+const COMPOSE_PROJECT_KEY = 'COMPOSE_PROJECT_NAME';
 const REDIS_PASSWORD_BYTES = 32;
 const DEFAULT_REDIS_PORT = 6379;
 const PROBE_TIMEOUT_MS = 1500;
@@ -89,6 +93,21 @@ export function pairedHostEnvPath(env = process.env) {
   return existsSync(envPath) ? envPath : null;
 }
 
+/** The compose project as compose resolves it: the shell, then `.env`, then the file's `name:`. */
+export function composeProjectOf(processEnv, dotenv) {
+  return processEnv[COMPOSE_PROJECT_KEY] || dotenv[COMPOSE_PROJECT_KEY] || DEFAULT_COMPOSE_PROJECT;
+}
+
+/**
+ * pgAdmin reads its login only when it initialises an empty volume, so the one
+ * it holds is the password as it was then. Writing it at every start would mean
+ * discarding pgAdmin's state at every start or reaching into the image's own
+ * setup script; removing this volume is what gives it the current password.
+ */
+export function pgAdminVolume(composeProject) {
+  return `${composeProject}_${PGADMIN_VOLUME}`;
+}
+
 /** Whether the MCP server's auth file holds a session token: `present`, `absent`, or `no-file`. */
 export function mcpTokenState(authFileText) {
   if (authFileText === undefined) return 'no-file';
@@ -136,6 +155,7 @@ export function probeRedisWithoutPassword(url) {
  *   mcpToken: 'present' | 'absent' | 'no-file',
  *   mcpAuthFile: string,
  *   hostEnvPath: string | null,
+ *   composeProject: string,
  * }} input
  */
 export function credentialReadiness({
@@ -144,6 +164,7 @@ export function credentialReadiness({
   mcpToken,
   mcpAuthFile,
   hostEnvPath,
+  composeProject,
 }) {
   const lines = [];
   let failure;
@@ -176,8 +197,14 @@ export function credentialReadiness({
         : `MCP server: no ${mcpAuthFile} yet, so it refuses every session; yarn mcp:setup writes it once the stack is healthy`,
   );
   lines.push(
-    'Redis Commander and pgAdmin: off unless `yarn infra:tools`; on 127.0.0.1, ' +
-      `logging in with the Redis password as ${TOOLS_LOGIN_USER} and ${PGADMIN_LOGIN_EMAIL}`,
+    'Redis Commander: off unless `yarn infra:tools`; on 127.0.0.1, ' +
+      `logging in as ${TOOLS_LOGIN_USER} with the Redis password`,
+  );
+  lines.push(
+    'pgAdmin: off unless `yarn infra:tools`; on 127.0.0.1, ' +
+      `logging in as ${PGADMIN_LOGIN_EMAIL} with the Redis password as it was when pgAdmin ` +
+      'was first created; a changed REDIS_URL reaches it only once its volume is removed ' +
+      `(\`docker rm -f ${PGADMIN_CONTAINER} && docker volume rm ${pgAdminVolume(composeProject)}\`)`,
   );
   lines.push(
     hostEnvPath === null

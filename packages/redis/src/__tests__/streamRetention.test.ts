@@ -15,6 +15,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Redis from 'ioredis';
 import type { Redis as RedisType } from 'ioredis';
+import { stackRedis } from '../testing/stackRedis.js';
 import {
   StreamKeys,
   ConsumerGroups,
@@ -282,37 +283,16 @@ describe('ack pipeline error handling', () => {
 
 const TEST_DB = 14;
 
-async function redisReachable(): Promise<boolean> {
-  const probe = new Redis({
-    host: '127.0.0.1',
-    port: 6379,
-    db: TEST_DB,
-    lazyConnect: true,
-    connectTimeout: 500,
-    maxRetriesPerRequest: 1,
-    retryStrategy: () => null,
-  });
-  try {
-    await probe.connect();
-    await probe.ping();
-    return true;
-  } catch {
-    return false;
-  } finally {
-    probe.disconnect();
-  }
-}
-
-const AVAILABLE = await redisReachable();
+const STACK_REDIS = await stackRedis(TEST_DB);
 
 const STREAM = 'aflow:jobs:retention-test';
 const GROUP = 'exec_retention_test';
 
-describe.skipIf(!AVAILABLE)('retention against real Redis', () => {
+describe.skipIf(!STACK_REDIS.available)('retention against real Redis', () => {
   let redis: RedisType;
 
   beforeEach(async () => {
-    redis = new Redis({ host: '127.0.0.1', port: 6379, db: TEST_DB });
+    redis = new Redis(STACK_REDIS.url);
     // Targeted cleanup — never flushdb, the database is shared with other suites.
     await redis.del(STREAM, StreamKeys.retentionCandidateSet);
     await redis.xgroup('CREATE', STREAM, GROUP, '0', 'MKSTREAM');

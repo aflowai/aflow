@@ -16,10 +16,14 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   ADD_PASSWORD_COMMAND,
   COMPOSE_PASSWORD_KEY,
+  DEFAULT_COMPOSE_PROJECT,
+  PGADMIN_CONTAINER,
   PGADMIN_LOGIN_EMAIL,
+  PGADMIN_VOLUME,
   REDIS_URL_KEY,
   TOOLS_LOGIN_USER,
   composeEnv,
+  composeProjectOf,
   credentialReadiness,
   envWithRedisPassword,
   generateRedisPassword,
@@ -116,6 +120,13 @@ describe('the admin tools', () => {
     expect(block).toContain(`PGADMIN_DEFAULT_PASSWORD: ${password}`);
   });
 
+  it('keep pgAdmin’s login in the volume the readiness names, in the container it names', () => {
+    const block = service('pgadmin');
+    expect(block).toContain(`container_name: ${PGADMIN_CONTAINER}`);
+    expect(block).toContain(`- ${PGADMIN_VOLUME}:/var/lib/pgadmin`);
+    expect(COMPOSE).toMatch(new RegExp(`^name: ${DEFAULT_COMPOSE_PROJECT}$`, 'm'));
+  });
+
   it('stay off unless asked for', () => {
     for (const name of ['redis-commander', 'pgadmin']) {
       expect(service(name)).toMatch(/profiles:\n\s+- tools/);
@@ -166,6 +177,7 @@ describe('the boot readiness', () => {
     mcpToken: 'present',
     mcpAuthFile: 'mcp.local.json',
     hostEnvPath: '/home/dev/.aflow/host.env',
+    composeProject: DEFAULT_COMPOSE_PROJECT,
   };
 
   it('fails a Redis URL without a password, naming it and the command that adds one', () => {
@@ -193,7 +205,8 @@ describe('the boot readiness', () => {
       expect(readiness.lines.map((line) => line.split(':')[0])).toEqual([
         'Redis',
         'MCP server',
-        'Redis Commander and pgAdmin',
+        'Redis Commander',
+        'pgAdmin',
         'Host lane',
       ]);
     }
@@ -214,9 +227,35 @@ describe('the boot readiness', () => {
   });
 
   it('names a paired machine’s own credential, and an unpaired one', () => {
-    expect(credentialReadiness(ready).lines[3]).toContain('/home/dev/.aflow/host.env');
-    expect(credentialReadiness({ ...ready, hostEnvPath: null }).lines[3]).toBe(
+    expect(credentialReadiness(ready).lines[4]).toContain('/home/dev/.aflow/host.env');
+    expect(credentialReadiness({ ...ready, hostEnvPath: null }).lines[4]).toBe(
       'Host lane: not paired',
     );
+  });
+});
+
+describe('pgAdmin’s login in the readiness', () => {
+  it('says it is the password pgAdmin was created with, and how a changed one reaches it', () => {
+    const line = credentialReadiness({
+      redisUrl: `redis://:${PASSWORD}@localhost:6379`,
+      redisAnswers: 'closed',
+      mcpToken: 'present',
+      mcpAuthFile: 'mcp.local.json',
+      hostEnvPath: null,
+      composeProject: 'kept-data',
+    }).lines[3];
+    expect(line).toContain(PGADMIN_LOGIN_EMAIL);
+    expect(line).toContain('first created');
+    expect(line).toContain(
+      `docker rm -f ${PGADMIN_CONTAINER} && docker volume rm kept-data_${PGADMIN_VOLUME}`,
+    );
+    expect(line).not.toContain('infra:reset');
+  });
+
+  it('names the volume under the project compose uses: the shell, then .env, then the file', () => {
+    const named = { COMPOSE_PROJECT_NAME: 'from-file' };
+    expect(composeProjectOf({ COMPOSE_PROJECT_NAME: 'from-shell' }, named)).toBe('from-shell');
+    expect(composeProjectOf({}, named)).toBe('from-file');
+    expect(composeProjectOf({}, {})).toBe(DEFAULT_COMPOSE_PROJECT);
   });
 });

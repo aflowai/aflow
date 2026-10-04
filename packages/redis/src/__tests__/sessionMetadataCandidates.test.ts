@@ -10,6 +10,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Redis from 'ioredis';
 import type { Redis as RedisType } from 'ioredis';
+import { stackRedis } from '../testing/stackRedis.js';
 import { StreamKeys, SESSION_METADATA_DEBOUNCE_MS } from '@aflow/schemas';
 import {
   claimSessionMetadataCandidates,
@@ -27,34 +28,13 @@ import {
  */
 const TEST_DB = 14;
 
-async function redisReachable(): Promise<boolean> {
-  const probe = new Redis({
-    host: '127.0.0.1',
-    port: 6379,
-    db: TEST_DB,
-    lazyConnect: true,
-    connectTimeout: 500,
-    maxRetriesPerRequest: 1,
-    retryStrategy: () => null,
-  });
-  try {
-    await probe.connect();
-    await probe.ping();
-    return true;
-  } catch {
-    return false;
-  } finally {
-    probe.disconnect();
-  }
-}
-
-const AVAILABLE = await redisReachable();
+const STACK_REDIS = await stackRedis(TEST_DB);
 
 const TENANT = 'tenant-session-metadata-test';
 const A = 'conversation-A';
 const B = 'conversation-B';
 
-describe.skipIf(!AVAILABLE)('session metadata candidates', () => {
+describe.skipIf(!STACK_REDIS.available)('session metadata candidates', () => {
   let redis: RedisType;
 
   const member = (id: string) => `${TENANT}:${id}`;
@@ -116,7 +96,7 @@ describe.skipIf(!AVAILABLE)('session metadata candidates', () => {
   }
 
   beforeEach(async () => {
-    redis = new Redis({ host: '127.0.0.1', port: 6379, db: TEST_DB, maxRetriesPerRequest: 1 });
+    redis = new Redis(STACK_REDIS.url, { maxRetriesPerRequest: 1 });
     await clearOwn();
   });
 

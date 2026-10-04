@@ -10,6 +10,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Redis from 'ioredis';
 import type { Redis as RedisType } from 'ioredis';
+import { stackRedis } from '../testing/stackRedis.js';
 import {
   StreamKeys,
   type OperationId,
@@ -43,28 +44,7 @@ import { shardFor, SHARD_COUNT } from '../shard.js';
  */
 const TEST_DB = 15;
 
-async function redisReachable(): Promise<boolean> {
-  const probe = new Redis({
-    host: '127.0.0.1',
-    port: 6379,
-    db: TEST_DB,
-    lazyConnect: true,
-    connectTimeout: 500,
-    maxRetriesPerRequest: 1,
-    retryStrategy: () => null,
-  });
-  try {
-    await probe.connect();
-    await probe.ping();
-    return true;
-  } catch {
-    return false;
-  } finally {
-    probe.disconnect();
-  }
-}
-
-const AVAILABLE = await redisReachable();
+const STACK_REDIS = await stackRedis(TEST_DB);
 
 const TENANT = 'a0000000-0000-0000-0000-0000000180ff' as TenantId;
 
@@ -105,12 +85,12 @@ function sessionForDistinctShards(count: number): string[] {
   return [...found.values()];
 }
 
-describe.skipIf(!AVAILABLE)('shard timer index (real Redis)', () => {
+describe.skipIf(!STACK_REDIS.available)('shard timer index (real Redis)', () => {
   let redis: RedisType;
   let touchedShards: Set<number>;
 
   beforeEach(() => {
-    redis = new Redis({ host: '127.0.0.1', port: 6379, db: TEST_DB, maxRetriesPerRequest: 1 });
+    redis = new Redis(STACK_REDIS.url, { maxRetriesPerRequest: 1 });
     touchedShards = new Set();
   });
 

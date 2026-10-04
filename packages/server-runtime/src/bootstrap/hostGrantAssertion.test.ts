@@ -16,12 +16,9 @@
 import { Redis } from 'ioredis';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import {
-  HOST_TEST_PASSWORD,
-  applyHostGrant,
-  hostTestUser,
-  redisReachable,
-} from './__fixtures__/hostGrantRedis.js';
+import { stackRedis, stackRedisUrlAs } from '@aflow/redis/testing';
+
+import { HOST_TEST_PASSWORD, applyHostGrant, hostTestUser } from './__fixtures__/hostGrantRedis.js';
 import {
   applyHostIdentityToRunningServer,
   assertHostGrantOnRunningServer,
@@ -111,7 +108,7 @@ describe('the full start’s host identity, as sent', () => {
 });
 
 const TEST_DB = 14;
-const AVAILABLE = await redisReachable(TEST_DB);
+const STACK_REDIS = await stackRedis(TEST_DB);
 const TEST_USER = hostTestUser('assert');
 const ABSENT_USER = hostTestUser('absent');
 const FULL_START_USER = hostTestUser('full-start');
@@ -119,7 +116,7 @@ const FULL_START_USER = hostTestUser('full-start');
 let admin: Redis | null = null;
 
 beforeAll(() => {
-  if (AVAILABLE) admin = new Redis({ host: '127.0.0.1', port: 6379, db: TEST_DB });
+  if (STACK_REDIS.available) admin = new Redis(STACK_REDIS.url);
 });
 
 afterAll(async () => {
@@ -132,12 +129,7 @@ afterAll(async () => {
 });
 
 async function authenticates(password: string, username: string = TEST_USER): Promise<boolean> {
-  const client = new Redis({
-    host: '127.0.0.1',
-    port: 6379,
-    db: TEST_DB,
-    username,
-    password,
+  const client = new Redis(stackRedisUrlAs(STACK_REDIS.url, username, password), {
     lazyConnect: true,
     maxRetriesPerRequest: 0,
     retryStrategy: () => null,
@@ -161,43 +153,46 @@ async function liveRules(username: string): Promise<{ keys: string[]; channels: 
   return { keys: field('keys'), channels: field('channels') };
 }
 
-describe.skipIf(!AVAILABLE)('the per-start host grant assertion, on a live Redis', () => {
-  it('after a rotation, keeps the rotated password and brings the grant up to date', async () => {
-    if (admin === null) return;
-    // A user paired under an older release: one grant this code adds is
-    // missing, and one it dropped is still there.
-    await applyHostGrant(admin, TEST_USER, (rules) => [
-      ...rules.filter((rule) => rule !== '~aflow:jobs:browser'),
-      RETIRED_PATTERN,
-    ]);
-    await admin.call('ACL', 'SETUSER', TEST_USER, 'resetpass', `>${ROTATED_STAND_IN}`);
+describe.skipIf(!STACK_REDIS.available)(
+  'the per-start host grant assertion, on a live Redis',
+  () => {
+    it('after a rotation, keeps the rotated password and brings the grant up to date', async () => {
+      if (admin === null) return;
+      // A user paired under an older release: one grant this code adds is
+      // missing, and one it dropped is still there.
+      await applyHostGrant(admin, TEST_USER, (rules) => [
+        ...rules.filter((rule) => rule !== '~aflow:jobs:browser'),
+        RETIRED_PATTERN,
+      ]);
+      await admin.call('ACL', 'SETUSER', TEST_USER, 'resetpass', `>${ROTATED_STAND_IN}`);
 
-    expect(await assertHostGrantOnRunningServer(admin, TEST_USER)).toEqual({
-      outcome: 'asserted',
+      expect(await assertHostGrantOnRunningServer(admin, TEST_USER)).toEqual({
+        outcome: 'asserted',
+      });
+
+      expect(await authenticates(ROTATED_STAND_IN)).toBe(true);
+      expect(await authenticates(HOST_TEST_PASSWORD)).toBe(false);
+      const { keys, channels } = await liveRules(TEST_USER);
+      expect(keys).toContain('~aflow:jobs:browser');
+      expect(keys).not.toContain(RETIRED_PATTERN);
+      expect([...keys, ...channels].sort()).toEqual(
+        renderedGrant.filter((rule) => /^(~|%|&)/.test(rule)).sort(),
+      );
     });
 
-    expect(await authenticates(ROTATED_STAND_IN)).toBe(true);
-    expect(await authenticates(HOST_TEST_PASSWORD)).toBe(false);
-    const { keys, channels } = await liveRules(TEST_USER);
-    expect(keys).toContain('~aflow:jobs:browser');
-    expect(keys).not.toContain(RETIRED_PATTERN);
-    expect([...keys, ...channels].sort()).toEqual(
-      renderedGrant.filter((rule) => /^(~|%|&)/.test(rule)).sort(),
-    );
-  });
+    it('does not create a user that does not exist', async () => {
+      if (admin === null) return;
+      await admin.call('ACL', 'DELUSER', ABSENT_USER);
 
-  it('does not create a user that does not exist', async () => {
-    if (admin === null) return;
-    await admin.call('ACL', 'DELUSER', ABSENT_USER);
-
-    expect(await assertHostGrantOnRunningServer(admin, ABSENT_USER)).toEqual({
-      outcome: 'absent',
+      expect(await assertHostGrantOnRunningServer(admin, ABSENT_USER)).toEqual({
+        outcome: 'absent',
+      });
+      expect(await admin.call('ACL', 'GETUSER', ABSENT_USER)).toBeNull();
     });
-    expect(await admin.call('ACL', 'GETUSER', ABSENT_USER)).toBeNull();
-  });
-});
+  },
+);
 
-describe.skipIf(!AVAILABLE)('the full start’s host identity, on a live Redis', () => {
+describe.skipIf(!STACK_REDIS.available)('the full start’s host identity, on a live Redis', () => {
   const freshlyRead = { defaultPassword: 'd', hostPassword: FRESH_STAND_IN };
 
   it('creates the identity a Redis restart removed, with the password just read', async () => {

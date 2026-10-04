@@ -6,6 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import Redis from 'ioredis';
 import type { Redis as RedisType } from 'ioredis';
+import { stackRedis } from '../testing/stackRedis.js';
 import {
   ConsumerGroups,
   StreamKeys,
@@ -78,36 +79,15 @@ describe('releaseStepJob — a failed give back', () => {
   });
 });
 
-async function redisReachable(): Promise<boolean> {
-  const probe = new Redis({
-    host: '127.0.0.1',
-    port: 6379,
-    db: TEST_DB,
-    lazyConnect: true,
-    connectTimeout: 500,
-    maxRetriesPerRequest: 1,
-    retryStrategy: () => null,
-  });
-  try {
-    await probe.connect();
-    await probe.ping();
-    return true;
-  } catch {
-    return false;
-  } finally {
-    probe.disconnect();
-  }
-}
+const STACK_REDIS = await stackRedis(TEST_DB);
 
-const AVAILABLE = await redisReachable();
-
-describe.skipIf(!AVAILABLE)('releaseStepJob against real Redis', () => {
+describe.skipIf(!STACK_REDIS.available)('releaseStepJob against real Redis', () => {
   const streamKey = StreamKeys.jobStream(STEP_TYPE);
   const group = ConsumerGroups.executor(STEP_TYPE);
   let redis: RedisType;
 
   beforeEach(async () => {
-    redis = new Redis({ host: '127.0.0.1', port: 6379, db: TEST_DB });
+    redis = new Redis(STACK_REDIS.url);
     // Targeted cleanup — never flushdb, the database is shared with other suites.
     await redis.del(streamKey);
     await redis.xgroup('CREATE', streamKey, group, '0', 'MKSTREAM');
@@ -119,16 +99,8 @@ describe.skipIf(!AVAILABLE)('releaseStepJob against real Redis', () => {
   });
 
   it('takes the job off this consumer and hands the same job to the next reader', async () => {
-    const draining = createBlockingRedisConnection('release-a', {
-      host: '127.0.0.1',
-      port: 6379,
-      db: TEST_DB,
-    });
-    const next = createBlockingRedisConnection('release-b', {
-      host: '127.0.0.1',
-      port: 6379,
-      db: TEST_DB,
-    });
+    const draining = createBlockingRedisConnection('release-a', { url: STACK_REDIS.url });
+    const next = createBlockingRedisConnection('release-b', { url: STACK_REDIS.url });
     try {
       await addStepJob(redis, JOB, { checkExecutorAvailable: false });
       const [claimed] = await readStepJobs(draining, STEP_TYPE, 'executor-a', { blockMs: 10 });
@@ -151,11 +123,7 @@ describe.skipIf(!AVAILABLE)('releaseStepJob against real Redis', () => {
   });
 
   async function claimOne(): Promise<{ id: string; job: StepJobMessage }> {
-    const draining = createBlockingRedisConnection('release-a', {
-      host: '127.0.0.1',
-      port: 6379,
-      db: TEST_DB,
-    });
+    const draining = createBlockingRedisConnection('release-a', { url: STACK_REDIS.url });
     try {
       await addStepJob(redis, JOB, { checkExecutorAvailable: false });
       const [claimed] = await readStepJobs(draining, STEP_TYPE, 'executor-a', { blockMs: 10 });
@@ -187,11 +155,7 @@ describe.skipIf(!AVAILABLE)('releaseStepJob against real Redis', () => {
     );
 
     expect(await redis.xlen(streamKey)).toBe(1);
-    const next = createBlockingRedisConnection('release-b', {
-      host: '127.0.0.1',
-      port: 6379,
-      db: TEST_DB,
-    });
+    const next = createBlockingRedisConnection('release-b', { url: STACK_REDIS.url });
     try {
       expect(await readStepJobs(next, STEP_TYPE, 'executor-b', { blockMs: 10 })).toEqual([]);
     } finally {

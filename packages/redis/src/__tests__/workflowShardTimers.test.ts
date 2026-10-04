@@ -7,6 +7,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Redis from 'ioredis';
 import type { Redis as RedisType } from 'ioredis';
+import { stackRedis } from '../testing/stackRedis.js';
 import { StreamKeys, TimerItemSchema, type TimerItem } from '@aflow/schemas';
 import {
   ackShardTimer,
@@ -24,28 +25,7 @@ import { shardFor, SHARD_COUNT } from '../shard.js';
  */
 const TEST_DB = 15;
 
-async function redisReachable(): Promise<boolean> {
-  const probe = new Redis({
-    host: '127.0.0.1',
-    port: 6379,
-    db: TEST_DB,
-    lazyConnect: true,
-    connectTimeout: 500,
-    maxRetriesPerRequest: 1,
-    retryStrategy: () => null,
-  });
-  try {
-    await probe.connect();
-    await probe.ping();
-    return true;
-  } catch {
-    return false;
-  } finally {
-    probe.disconnect();
-  }
-}
-
-const AVAILABLE = await redisReachable();
+const STACK_REDIS = await stackRedis(TEST_DB);
 
 const TENANT = '11111111-1111-4111-9111-111111111111';
 const RUN_ID = '22222222-2222-4222-9222-222222222222';
@@ -93,11 +73,11 @@ function sessionTimer(): TimerItem {
   });
 }
 
-describe.skipIf(!AVAILABLE)('workflow-correlated shard timers', () => {
+describe.skipIf(!STACK_REDIS.available)('workflow-correlated shard timers', () => {
   let redis: RedisType;
 
   beforeEach(() => {
-    redis = new Redis({ host: '127.0.0.1', port: 6379, db: TEST_DB, maxRetriesPerRequest: 1 });
+    redis = new Redis(STACK_REDIS.url, { maxRetriesPerRequest: 1 });
   });
 
   afterEach(async () => {

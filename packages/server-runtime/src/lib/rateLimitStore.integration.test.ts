@@ -13,6 +13,7 @@ import { describe, it, expect, afterAll } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import rateLimit from '@fastify/rate-limit';
 import { Redis } from 'ioredis';
+import { stackRedis } from '@aflow/redis/testing';
 import {
   RATE_LIMIT_WINDOW_MS,
   isAuthenticatedRequest,
@@ -21,37 +22,12 @@ import {
   shouldBypassRateLimit,
 } from './rateLimitPolicy.js';
 
-async function redisReachable(): Promise<boolean> {
-  const probe = new Redis({
-    host: '127.0.0.1',
-    port: 6379,
-    lazyConnect: true,
-    connectTimeout: 500,
-    maxRetriesPerRequest: 1,
-    retryStrategy: () => null,
-  });
-  try {
-    await probe.connect();
-    await probe.ping();
-    return true;
-  } catch {
-    return false;
-  } finally {
-    probe.disconnect();
-  }
-}
-
-const AVAILABLE = await redisReachable();
+const STACK_REDIS = await stackRedis(0);
 const NAMESPACE = `aflow:ratelimit:test:${String(Date.now())}:`;
 const clients: Redis[] = [];
 
 async function store(): Promise<Redis> {
-  const c = new Redis({
-    host: '127.0.0.1',
-    port: 6379,
-    enableOfflineQueue: false,
-    lazyConnect: true,
-  });
+  const c = new Redis(STACK_REDIS.url, { enableOfflineQueue: false, lazyConnect: true });
   clients.push(c);
   // With the offline queue disabled, commands issued before the socket is up
   // fail immediately and the limiter falls open — correct in production, but
@@ -94,7 +70,7 @@ afterAll(() => {
   for (const c of clients) c.disconnect();
 });
 
-describe.skipIf(!AVAILABLE)('rate limiter backed by Redis', () => {
+describe.skipIf(!STACK_REDIS.available)('rate limiter backed by Redis', () => {
   it('shares one budget across instances', async () => {
     // Two apps stand in for two Cloud Run instances behind the load balancer.
     const one = await appWithLimiter();

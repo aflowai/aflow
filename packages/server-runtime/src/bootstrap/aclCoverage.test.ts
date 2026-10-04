@@ -21,12 +21,13 @@
 import { Redis } from 'ioredis';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { stackRedis } from '@aflow/redis/testing';
+
 import {
-  HOST_TEST_PASSWORD,
   applyHostGrant,
   hostGrantDenials,
+  hostGrantUrl,
   hostTestUser,
-  redisReachable,
 } from './__fixtures__/hostGrantRedis.js';
 
 const TEST_DB = 14;
@@ -39,11 +40,11 @@ let admin: Redis | null = null;
 
 // Resolved at module scope: `describe.skipIf` is evaluated when the file is
 // collected, which is before any `beforeAll` has run.
-const AVAILABLE = await redisReachable(TEST_DB);
+const STACK_REDIS = await stackRedis(TEST_DB);
 
 beforeAll(async () => {
-  if (!AVAILABLE) return;
-  admin = new Redis({ host: '127.0.0.1', port: 6379, db: TEST_DB });
+  if (!STACK_REDIS.available) return;
+  admin = new Redis(STACK_REDIS.url);
   await applyHostGrant(admin, TEST_USER);
   // Only the keys this file creates. Never a flush: this database belongs to
   // whoever else is using it.
@@ -69,20 +70,14 @@ afterAll(async () => {
   }
 });
 
-describe.skipIf(!AVAILABLE)('host redis grant covers the executor', () => {
+describe.skipIf(!STACK_REDIS.available)('host redis grant covers the executor', () => {
   it('applies as a valid ACL', async () => {
     const users = (await admin?.call('ACL', 'LIST')) as string[];
     expect(users.some((u) => u.startsWith(`user ${TEST_USER} `))).toBe(true);
   });
 
   it('refuses nothing while the executor does its own bookkeeping', async () => {
-    const host = new Redis({
-      host: '127.0.0.1',
-      port: 6379,
-      db: TEST_DB,
-      username: TEST_USER,
-      password: HOST_TEST_PASSWORD,
-    });
+    const host = new Redis(hostGrantUrl(STACK_REDIS.url, TEST_USER));
 
     // The bookkeeping every executor does around a job, in the order it does it:
     // register itself, claim from its stream, mark the step, report a result.
@@ -166,13 +161,7 @@ describe.skipIf(!AVAILABLE)('host redis grant covers the executor', () => {
   it('reads a write-approval grant and is refused writing one', async () => {
     const key = 'aflow:write-approval:t:r:probe';
     await admin?.set(key, '{"requestHash":"probe","decision":"approved"}');
-    const host = new Redis({
-      host: '127.0.0.1',
-      port: 6379,
-      db: TEST_DB,
-      username: TEST_USER,
-      password: HOST_TEST_PASSWORD,
-    });
+    const host = new Redis(hostGrantUrl(STACK_REDIS.url, TEST_USER));
     try {
       expect(await host.get(key)).toContain('"decision":"approved"');
       await expect(host.set(key, '{"requestHash":"forged","decision":"approved"}')).rejects.toThrow(

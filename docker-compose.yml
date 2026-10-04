@@ -91,9 +91,11 @@ services:
   # ---------------------------------------------------------------------------
   # pgAdmin (Optional - Web UI for PostgreSQL)
   # ---------------------------------------------------------------------------
-  # Server mode, which asks for a login: the Redis password. pgAdmin sets its
-  # login once, when it creates its volume, so the volume is named for the
-  # login it holds; one created under the old fixed login is left unused.
+  # Server mode, which asks for a login: the Redis password. pgAdmin reads it
+  # only when it initialises an empty volume, so it keeps the password it was
+  # first created with, and a changed REDIS_URL reaches it only once this volume
+  # is removed — `yarn start`'s readiness names the command. The volume is named
+  # for the login it holds; one created under the old fixed login is unused.
   pgadmin:
     image: dpage/pgadmin4:latest
     container_name: aflow-pgadmin

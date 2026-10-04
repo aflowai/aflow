@@ -19,6 +19,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Redis from 'ioredis';
 import type { Redis as RedisType } from 'ioredis';
+import { stackRedis } from '../testing/stackRedis.js';
 import { StreamKeys } from '@aflow/schemas';
 import {
   claimProjectionCandidates,
@@ -41,34 +42,13 @@ import { markSessionDirty } from '../hotState/dirty.js';
  */
 const TEST_DB = 15;
 
-async function redisReachable(): Promise<boolean> {
-  const probe = new Redis({
-    host: '127.0.0.1',
-    port: 6379,
-    db: TEST_DB,
-    lazyConnect: true,
-    connectTimeout: 500,
-    maxRetriesPerRequest: 1,
-    retryStrategy: () => null,
-  });
-  try {
-    await probe.connect();
-    await probe.ping();
-    return true;
-  } catch {
-    return false;
-  } finally {
-    probe.disconnect();
-  }
-}
-
-const AVAILABLE = await redisReachable();
+const STACK_REDIS = await stackRedis(TEST_DB);
 
 const TENANT = 'tenant-projection-test';
 const RUN_A = 'run-A';
 const RUN_B = 'run-B';
 
-describe.skipIf(!AVAILABLE)('projection candidates', () => {
+describe.skipIf(!STACK_REDIS.available)('projection candidates', () => {
   let redis: RedisType;
 
   const stateKey = (runId: string) => StreamKeys.sessionStateKey(TENANT, runId);
@@ -102,7 +82,7 @@ describe.skipIf(!AVAILABLE)('projection candidates', () => {
   }
 
   beforeEach(async () => {
-    redis = new Redis({ host: '127.0.0.1', port: 6379, db: TEST_DB, maxRetriesPerRequest: 1 });
+    redis = new Redis(STACK_REDIS.url, { maxRetriesPerRequest: 1 });
     await clearOwn();
   });
 
