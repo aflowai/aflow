@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest';
 import { SessionRunner } from './FlowRunner.js';
 import type { ApiClient } from './ApiClient.js';
 import type { Session } from '../auth/SessionStore.js';
-import type { SessionRunStatusView } from './sessionViews.js';
+import type { SessionDebugResponse, SessionRunStatusView } from './sessionViews.js';
 
 const SESSION: Session = {
   id: 'mcp-session',
@@ -61,5 +61,52 @@ describe('SessionRunner timeout continuation', () => {
       tool: 'watch_session',
       args: { session_id: SESSION_ID, space_id: SPACE_ID, until: 'terminal', timeout_seconds: 1 },
     });
+  });
+});
+
+describe('SessionRunner result steps', () => {
+  it('carries the execution id of the step that failed, read from one page of events', async () => {
+    const reads: string[] = [];
+    const api = {
+      get: <T>(_session: Session, path: string): Promise<T> => {
+        reads.push(path);
+        if (path.includes('/debug')) {
+          const debug: SessionDebugResponse = {
+            session: { sessionId: SESSION_ID, status: 'FAILED' },
+            dynamicSteps: [
+              {
+                stepId: 'dynamic_tool_0',
+                stepExecutionId: 'exec-tool-0',
+                operation: 'browser.page.open',
+                status: 'FAILED',
+                error: { message: 'page refused' },
+              },
+            ],
+            stepEvents: { read: 3, complete: true },
+          };
+          return Promise.resolve(debug as T);
+        }
+        return Promise.resolve({ sessionId: SESSION_ID, status: 'FAILED' } as T);
+      },
+      post: <T>(): Promise<T> =>
+        Promise.resolve({ sessionId: SESSION_ID, status: 'RUNNING', eventsUrl: '' } as T),
+    } as unknown as ApiClient;
+
+    const result = await new SessionRunner(api).run(SESSION, {
+      spaceId: SPACE_ID,
+      operationId: 'browser.page.open',
+      timeoutMs: 1000,
+    });
+
+    expect(result.steps).toEqual([
+      {
+        step_id: 'dynamic_tool_0',
+        step_execution_id: 'exec-tool-0',
+        operation: 'browser.page.open',
+        status: 'FAILED',
+        error: 'page refused',
+      },
+    ]);
+    expect(reads.find((p) => p.includes('/debug'))).not.toContain('walkStepHistory');
   });
 });

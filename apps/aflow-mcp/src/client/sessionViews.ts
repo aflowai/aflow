@@ -41,7 +41,6 @@ export interface DebugStepEntry {
   stepExecutionId?: string | undefined;
   stepId?: string | undefined;
   operation?: string | undefined;
-  name?: string | undefined;
   status?: string | undefined;
   error?: { message?: string } | undefined;
   durationMs?: number | undefined;
@@ -94,13 +93,16 @@ export interface SessionDebugResponse {
 
 export interface StepSummary {
   step_id: string;
+  step_execution_id?: string;
   operation?: string;
   status: string;
   duration_ms?: number;
   error?: string;
 }
 
-/** A step whose state can no longer be read: no event left records it and no hot state holds it. */
+/** A step the hot state lists that no step event names yet, after a read of the whole history. */
+export const STEP_NOT_SCHEDULED = 'NOT_SCHEDULED';
+/** A step named by the events alone, whose status none of them carries, once the hot state is gone. */
 export const STEP_HOT_STATE_EXPIRED = 'HOT_STATE_EXPIRED';
 /** A step whose status lies further back than the events read for it. */
 export const STEP_STATUS_NOT_READ = 'NOT_READ';
@@ -125,10 +127,11 @@ function stringField(record: Record<string, unknown> | undefined, key: string): 
 export function buildStepSummaries(debug: SessionDebugResponse): StepSummary[] {
   if (debug.dynamicSteps && debug.dynamicSteps.length > 0) {
     const unplaced =
-      debug.stepEvents?.complete === false ? STEP_STATUS_NOT_READ : STEP_HOT_STATE_EXPIRED;
+      debug.stepEvents?.complete === true ? STEP_NOT_SCHEDULED : STEP_STATUS_NOT_READ;
     return debug.dynamicSteps.flatMap((s) => {
       if (!s.stepId) return [];
       const entry: StepSummary = { step_id: s.stepId, status: s.status ?? unplaced };
+      if (s.stepExecutionId) entry.step_execution_id = s.stepExecutionId;
       if (s.operation) entry.operation = s.operation;
       if (s.durationMs !== undefined) entry.duration_ms = s.durationMs;
       if (s.error?.message) entry.error = s.error.message;
@@ -136,11 +139,13 @@ export function buildStepSummaries(debug: SessionDebugResponse): StepSummary[] {
     });
   }
 
+  const unplaced = debug.hotState === 'expired' ? STEP_HOT_STATE_EXPIRED : STEP_STATUS_NOT_READ;
   const stepMap = new Map<string, StepSummary>();
   for (const evt of debug.recentEvents ?? []) {
     const stepId = stringField(evt.data, 'stepId');
     if (!stepId) continue;
-    const existing = stepMap.get(stepId) ?? { step_id: stepId, status: STEP_STATUS_NOT_READ };
+    const existing = stepMap.get(stepId) ?? { step_id: stepId, status: unplaced };
+    if (evt.stepExecutionId) existing.step_execution_id = evt.stepExecutionId;
     const operation =
       stringField(evt.metadata, 'operationId') ?? stringField(evt.data, 'operationId');
     if (operation) existing.operation = operation;

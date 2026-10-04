@@ -433,6 +433,17 @@ export interface DelegationTreeEntry {
   completedAt?: number | undefined;
 }
 
+export interface SessionDebugOptions {
+  eventsLimit?: number;
+  /**
+   * Walk the history back past the newest page until every dynamic step has a
+   * status, up to STEP_STATUS_SCAN_MAX_EVENTS events. Without it the view reads
+   * one page, which is all a caller after the session or its delegation tree
+   * should pay.
+   */
+  walkStepHistory?: boolean;
+}
+
 export interface SessionDebugView {
   session: SessionDetails;
   /** The newest events, oldest first. */
@@ -442,10 +453,11 @@ export interface SessionDebugView {
   currentStep?: CurrentStepDebugInfo | undefined;
   dynamicSteps?: DynamicStepDebugInfo[] | undefined;
   /**
-   * How the dynamic steps' statuses were read: events walked back from the
-   * newest, and whether that placed every step or reached the start of the
-   * history. A step left without a status after a complete walk has no record
-   * left to read it from.
+   * How the dynamic steps' statuses were read: from the newest page of events,
+   * or — with `walkStepHistory` — walked back from it until every step was
+   * placed; and whether that placed every step or reached the start of the
+   * history. A step left without a status after a complete read has no step
+   * event yet.
    */
   stepEvents?: { read: number; complete: boolean } | undefined;
   /** Whether the session's hot state could be read; `expired` once Redis has let it go. */
@@ -532,7 +544,7 @@ export interface SessionService {
   getSessionDebug(
     tenantId: TenantId,
     sessionId: SessionId,
-    options?: { eventsLimit?: number },
+    options?: SessionDebugOptions,
   ): Promise<SessionDebugView | null>;
   getSessionStateView(tenantId: TenantId, sessionId: SessionId): Promise<SessionStateView | null>;
   postRoomMessage(request: PostRoomMessageRequest): Promise<PostRoomMessageResponse>;
@@ -1567,7 +1579,7 @@ function createRealSessionService(ctx: AppContext): SessionService {
       this: SessionService,
       tenantId: TenantId,
       sessionId: SessionId,
-      options?: { eventsLimit?: number },
+      options?: SessionDebugOptions,
     ) {
       const session = await this.getSessionById(tenantId, sessionId);
       if (!session) return null;
@@ -1725,15 +1737,17 @@ function createRealSessionService(ctx: AppContext): SessionService {
         const scan = await scanStepStatuses(
           new Set(defs.map((d) => toStr(d['stepId'] ?? ''))),
           newestPage.kind === 'events' ? newestPage : { events: [], hasOlder: false },
-          async (cursor) => {
-            const older = await this.getSessionEventsBefore(
-              tenantId,
-              sessionId,
-              cursor,
-              STEP_STATUS_PAGE_SIZE,
-            );
-            return older.kind === 'events' ? older : undefined;
-          },
+          options?.walkStepHistory === true
+            ? async (cursor) => {
+                const older = await this.getSessionEventsBefore(
+                  tenantId,
+                  sessionId,
+                  cursor,
+                  STEP_STATUS_PAGE_SIZE,
+                );
+                return older.kind === 'events' ? older : undefined;
+              }
+            : () => Promise.resolve(undefined),
         );
         stepEvents = {
           read: scan.eventsRead,

@@ -208,6 +208,37 @@ describe('inspect_session on a long conversation', () => {
     expect(JSON.stringify(result)).not.toContain('unknown');
   });
 
+  it('asks the debug view to walk the step history', async () => {
+    const paths: string[] = [];
+    const debug = longConversation();
+    await inspectSession(
+      {
+        get: <T>(_session: Session, path: string): Promise<T> => {
+          paths.push(path);
+          return Promise.resolve(debug as T);
+        },
+      },
+      SESSION,
+      { session_id: SESSION_ID, space_id: SPACE_ID },
+    );
+
+    expect(paths).toHaveLength(1);
+    expect(new URL(paths[0] ?? '', 'http://x').searchParams.get('walkStepHistory')).toBe('true');
+  });
+
+  it('calls a listed step with no event after a complete walk not scheduled', async () => {
+    const debug = longConversation();
+    debug.dynamicSteps?.push({ stepId: 'dynamic_tool_150', operation: 'browser.page.open' });
+
+    const result = await inspect(debug, { status: ['NOT_SCHEDULED'] });
+
+    expect(result.steps).toEqual([
+      { step_id: 'dynamic_tool_150', operation: 'browser.page.open', status: 'NOT_SCHEDULED' },
+    ]);
+    expect(result.step_state).toContain('no event in its whole history has scheduled them yet');
+    expect(JSON.stringify(result)).not.toContain('HOT_STATE_EXPIRED');
+  });
+
   it('says the hot state has expired when the steps come from events alone', async () => {
     const result = await inspect({
       session: { sessionId: SESSION_ID, status: 'SUCCEEDED' },
@@ -218,13 +249,20 @@ describe('inspect_session on a long conversation', () => {
           data: { stepId: 'agent-turn' },
           metadata: { operationId: 'ai.agent.turn' },
         },
+        {
+          eventType: 'SurfaceUpdate',
+          stepExecutionId: 'exec-tool',
+          data: { stepId: 'tool' },
+        },
       ],
     });
 
     expect(result.steps).toEqual([
       { step_id: 'agent-turn', operation: 'ai.agent.turn', status: 'SUCCEEDED' },
+      { step_id: 'tool', step_execution_id: 'exec-tool', status: 'HOT_STATE_EXPIRED' },
     ]);
     expect(result.step_state).toContain('hot state has expired');
+    expect(result.step_state).toContain('1 steps are HOT_STATE_EXPIRED');
   });
 });
 

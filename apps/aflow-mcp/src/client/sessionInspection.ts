@@ -20,6 +20,7 @@ import { resolveSessionFailure, type SessionFailure } from './sessionFailure.js'
 import {
   buildStepSummaries,
   STEP_HOT_STATE_EXPIRED,
+  STEP_NOT_SCHEDULED,
   STEP_STATUS_NOT_READ,
   type DebugEvent,
   type SessionDebugResponse,
@@ -193,11 +194,18 @@ function stepStateNote(
         `${String(debug.stepEvents?.read ?? debug.recentEvents?.length ?? 0)} events read for it.`,
     );
   }
+  const notScheduled = steps.filter((s) => s.status === STEP_NOT_SCHEDULED).length;
+  if (notScheduled > 0) {
+    notes.push(
+      `${String(notScheduled)} steps are ${STEP_NOT_SCHEDULED}: the session lists them, and no ` +
+        'event in its whole history has scheduled them yet.',
+    );
+  }
   const expired = steps.filter((s) => s.status === STEP_HOT_STATE_EXPIRED).length;
   if (expired > 0) {
     notes.push(
-      `${String(expired)} steps are ${STEP_HOT_STATE_EXPIRED}: no event left records them and no hot ` +
-        'state holds them.',
+      `${String(expired)} steps are ${STEP_HOT_STATE_EXPIRED}: the hot state that held their status ` +
+        'has expired, and none of the events read carries it.',
     );
   }
   return notes.length > 0 ? notes.join(' ') : undefined;
@@ -210,7 +218,7 @@ export async function inspectSession(
 ): Promise<InspectSessionResult> {
   const debug = await client.get<SessionDebugResponse>(
     session,
-    `/v1/sessions/${encodeURIComponent(args.session_id)}/debug?spaceId=${encodeURIComponent(args.space_id)}`,
+    `/v1/sessions/${encodeURIComponent(args.session_id)}/debug?spaceId=${encodeURIComponent(args.space_id)}&walkStepHistory=true`,
   );
   const status = debug.session.status.toUpperCase();
   const steps = buildStepSummaries(debug);

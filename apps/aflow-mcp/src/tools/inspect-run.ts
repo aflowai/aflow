@@ -46,7 +46,8 @@ const InspectSessionInputSchema = z.object({
     .optional()
     .describe(
       "Only steps in these states, e.g. ['FAILED'] or ['RUNNING','PAUSED']. States: SCHEDULED, " +
-        'RUNNING, SUCCEEDED, FAILED, PAUSED; NOT_READ and HOT_STATE_EXPIRED where a status cannot be read.',
+        'RUNNING, SUCCEEDED, FAILED, PAUSED; NOT_SCHEDULED for a listed step no event has scheduled yet; ' +
+        'NOT_READ and HOT_STATE_EXPIRED where a status cannot be read.',
     ),
   operation: z
     .array(z.string().min(1))

@@ -90,9 +90,21 @@ describe('the session debug view', () => {
     expect(debug?.recentEvents.at(-1)?.eventId).toBe(HISTORY.at(-1)?.eventId);
   });
 
-  it('reads a status for every step, walking back past the newest page', async () => {
-    const debug = await service.getSessionDebug(TENANT, SESSION, { eventsLimit: 30 });
+  it('reads one page when the step history is not asked for', async () => {
+    const debug = await service.getSessionDebug(TENANT, SESSION, { eventsLimit: 1 });
 
+    expect(service.getSessionEventsBefore).toHaveBeenCalledTimes(1);
+    expect(debug?.stepEvents).toEqual({ read: 1, complete: false });
+    expect(debug?.dynamicSteps?.filter((s) => s.status !== undefined)).toHaveLength(1);
+  });
+
+  it('reads a status for every step, walking back past the newest page when asked', async () => {
+    const debug = await service.getSessionDebug(TENANT, SESSION, {
+      eventsLimit: 30,
+      walkStepHistory: true,
+    });
+
+    expect(service.getSessionEventsBefore).toHaveBeenCalledTimes(2);
     expect(debug?.dynamicSteps).toHaveLength(60);
     expect(debug?.dynamicSteps?.every((s) => s.status === 'SUCCEEDED')).toBe(true);
     expect(debug?.stepEvents?.complete).toBe(true);

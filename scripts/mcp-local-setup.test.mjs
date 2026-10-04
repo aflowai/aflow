@@ -36,6 +36,7 @@ import {
   profilePlan,
   profileSetsToken,
   sessionTokenIn,
+  settleProfile,
   tokenExportLine,
   withSessionToken,
   mcpPortOf,
@@ -417,21 +418,13 @@ describe('the shell profile', () => {
 describe('writing the profile', () => {
   const profile = '/Users/you/.zshrc';
 
-  it('never happens without a terminal, even when asked for', () => {
+  it('never happens without a terminal unless --write-profile asks for it', () => {
     expect(
       profilePlan({ interactive: false, writeProfile: false, profile, profileText: '' }),
-    ).toEqual({
-      kind: 'print',
-      profile,
-      flagIgnored: false,
-    });
+    ).toEqual({ kind: 'print', profile });
     expect(
       profilePlan({ interactive: false, writeProfile: true, profile, profileText: '' }),
-    ).toEqual({
-      kind: 'print',
-      profile,
-      flagIgnored: true,
-    });
+    ).toEqual({ kind: 'write', profile });
   });
 
   it('is offered in a terminal, and done without asking under --write-profile', () => {
@@ -441,6 +434,50 @@ describe('writing the profile', () => {
     expect(
       profilePlan({ interactive: true, writeProfile: true, profile, profileText: '' }).kind,
     ).toBe('write');
+  });
+
+  function settleWithoutTerminal(home, writeProfile) {
+    const told = [];
+    const authFile = join(home, 'mcp.local.json');
+    writeAuthFile(authFile, authFileContents(KEY, ME, TOKEN));
+    return settleProfile({
+      shell: '/bin/zsh',
+      platform: 'linux',
+      home,
+      authFile,
+      interactive: false,
+      writeProfile,
+      ask: () => {
+        throw new Error('asked without a terminal');
+      },
+      tell: (message) => told.push(message),
+    }).then((kind) => ({ kind, told, profile: join(home, '.zshrc') }));
+  }
+
+  it('is written under --write-profile from a shell that is not a terminal', async () => {
+    const home = scratchDir();
+    writeFileSync(join(home, '.zshrc'), 'export EDITOR=vi\n');
+
+    const { kind, told, profile: written } = await settleWithoutTerminal(home, true);
+
+    expect(kind).toBe('write');
+    expect(told.join('\n')).toContain('added it to ~/.zshrc');
+    const shell = spawnSync('sh', ['-c', `. '${written}'; printf %s "$${MCP_TOKEN_ENV}"`], {
+      encoding: 'utf8',
+    });
+    expect(shell.stdout).toBe(TOKEN);
+  });
+
+  it('is left alone without --write-profile from a shell that is not a terminal', async () => {
+    const home = scratchDir();
+    writeFileSync(join(home, '.zshrc'), 'export EDITOR=vi\n');
+
+    const { kind, told, profile: untouched } = await settleWithoutTerminal(home, false);
+
+    expect(kind).toBe('print');
+    expect(readFileSync(untouched, 'utf8')).toBe('export EDITOR=vi\n');
+    expect(told.join('\n')).toContain('yarn mcp:setup --write-profile');
+    expect(told.join('\n')).not.toContain(TOKEN);
   });
 
   it('is skipped when the profile already sets the token', () => {
