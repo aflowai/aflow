@@ -437,6 +437,7 @@ export const BrowserWriteApprovalExtensionSchema = z.object({
   target: z.literal('browser'),
   profileId: z.string(),
   pageOrigin: z.string(),
+  pagePath: BrowserWriteApprovalRequestPayloadSchema.shape.pagePath,
   pageTitle: z.string(),
   action: BrowserWriteApprovalRequestPayloadSchema.shape.action,
   element: BrowserWriteApprovalRequestPayloadSchema.shape.element,

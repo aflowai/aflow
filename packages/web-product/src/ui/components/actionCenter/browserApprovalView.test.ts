@@ -39,6 +39,7 @@ const EXTENSION: BrowserWriteApprovalExtension = {
   target: 'browser',
   profileId: 'default',
   pageOrigin: 'https://shop.example.com',
+  pagePath: '/orders/4417/checkout',
   pageTitle: 'Checkout',
   action: 'type',
   element: { ref: 'e3', role: 'textbox', name: 'Note' },
@@ -71,9 +72,11 @@ function render(extension: BrowserWriteApprovalExtension): string {
 }
 
 describe('the approval card for a browser action', () => {
-  it('shows the site, the page, what will be done to which element, the value and the page', () => {
+  it('shows the site, the path, the page, what will be done to which element, the value and the page', () => {
     const html = render(EXTENSION);
     expect(html).toContain('shop.example.com');
+    expect(html).toContain('/orders/4417/checkout');
+    expect(browserApprovalView(EXTENSION).path).toBe('/orders/4417/checkout');
     expect(html).toContain('Checkout');
     expect(html).toContain('Type 17 characters into textbox “Note” and press Enter.');
     expect(html).toContain('leave at the door');

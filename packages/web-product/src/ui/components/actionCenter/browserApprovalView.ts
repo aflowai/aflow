@@ -5,6 +5,8 @@ import type { BrowserWriteApprovalExtension } from '../../hooks/use-action-cente
 export interface BrowserApprovalView {
   /** The site, by host. */
   readonly site: string;
+  /** Where on the site: the path of the element's frame, without its query or fragment. */
+  readonly path: string;
   readonly pageTitle: string;
   /** "Click button “Pay now”." */
   readonly doing: string;
@@ -58,6 +60,7 @@ export function browserApprovalView(extension: BrowserWriteApprovalExtension): B
   const value = valueOf(extension);
   return {
     site: siteOf(extension.pageOrigin),
+    path: extension.pagePath,
     pageTitle: extension.pageTitle,
     doing: `${phrase.charAt(0).toUpperCase()}${phrase.slice(1)}.`,
     ...(value !== undefined ? { value } : {}),

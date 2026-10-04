@@ -2,6 +2,7 @@ import type { Redis } from 'ioredis';
 import { getWriteApprovalGrant } from '@aflow/redis';
 import {
   type AflowError,
+  grantAnswersAsk,
   WriteApprovalRequestPayloadSchema,
   type WriteApprovalRequestPayload,
   type SessionBlockedOn,
@@ -71,7 +72,7 @@ export async function resolveWriteApprovalBlockedOn(
 
 /** What a resume of a step parked on an approval does. */
 export type WriteApprovalResume =
-  /** No authenticated decision is on record: this resume is not one, so the step stays paused. */
+  /** No authenticated decision answers the pause: this resume is not one, so the step stays paused. */
   | { readonly decision: 'undecided' }
   /** Re-dispatch; the executor finds the same grant and proceeds. */
   | { readonly decision: 'approved' }
@@ -82,8 +83,11 @@ export type WriteApprovalResume =
  * The single authority on a resume of an approval pause: the grant the
  * authenticated Action Center resolve wrote, keyed by run and the request's
  * hash — never the resume input, which a scheduled `{}` wake or an
- * agent-driven resume could forge. `null` when the step is not an approval
- * pause.
+ * agent-driven resume could forge. A grant decides only a pause raised before
+ * it was made: a browser request asked again after its approval was spent
+ * still has that approval on record, and reading it as an answer would
+ * re-dispatch the step only for it to ask again. `null` when the step is not
+ * an approval pause.
  */
 export async function decideWriteApprovalResume(
   deps: { readonly payloadStore: PayloadStore; readonly redis: Redis },
@@ -101,7 +105,8 @@ export async function decideWriteApprovalResume(
     params.runId,
     request.requestHash,
   );
-  if (!grant) return { decision: 'undecided' };
+  const decidedBefore = request.target === 'browser' ? request.decidedBefore : undefined;
+  if (!grant || !grantAnswersAsk(grant, decidedBefore)) return { decision: 'undecided' };
   if (grant.decision === 'approved') return { decision: 'approved' };
   return { decision: 'denied', error: writeApprovalDenial(request, grant.reason) };
 }

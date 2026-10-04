@@ -148,6 +148,9 @@ describe('an action on a profile that asks', () => {
     // The same call again is a new request to the operator, not a second ride on the first.
     const again = asked(await dispatch(h, approvals, 'browser.page.act', pay(pageId)));
     expect(again.requestHash).toBe(request.requestHash);
+    // It names the spent approval, so neither side reads that one as its answer.
+    expect(request.decidedBefore).toBeUndefined();
+    expect(again.decidedBefore).toBe(approvals.grants.values().next().value?.decidedAt);
     expect(h.pages[0]?.actions).toHaveLength(1);
   });
 
@@ -202,6 +205,29 @@ describe('an action on a profile that asks', () => {
       title: 'Checkout',
       snapshot: FORM,
       frames: { e6: 'https://pay.example.net/widget' },
+    });
+    approvals.decide(RUN_A, request.requestHash, 'approved');
+
+    expect(failure(await dispatch(h, approvals, 'browser.page.act', pay(pageId))).code).toBe(
+      'BROWSER_REF_STALE',
+    );
+    expect(h.pages[0]?.actions).toEqual([]);
+    expect(approvals.spent.size).toBe(1);
+  });
+
+  it('does not act when the frame the element is in moved to another path on its origin', async () => {
+    const { h, approvals, pageId } = await shopFor(profile({ posture: 'ask-to-act' }));
+    h.world.sites.set(SHOP, {
+      title: 'Checkout',
+      snapshot: FORM,
+      frames: { e6: 'https://shop.example.com/widgets/order-1' },
+    });
+    const request = asked(await dispatch(h, approvals, 'browser.page.act', pay(pageId)));
+    expect(request.pagePath).toBe('/widgets/order-1');
+    h.world.sites.set(SHOP, {
+      title: 'Checkout',
+      snapshot: FORM,
+      frames: { e6: 'https://shop.example.com/widgets/order-2' },
     });
     approvals.decide(RUN_A, request.requestHash, 'approved');
 
@@ -318,6 +344,89 @@ describe('an action on a profile that asks', () => {
   });
 });
 
+describe('an approval bound to the address the operator saw', () => {
+  const RECORD = `${SHOP}records/1?tab=details#notes`;
+  const DELETE = FORM.replace('button "Pay now"', 'button "Delete"');
+
+  /**
+   * A single-page application keeps its elements across routes: the same
+   * button, with the same reference, role and name, at every address it routes to.
+   */
+  async function recordPage() {
+    const shop = await shopFor(profile({ posture: 'ask-to-act' }));
+    for (const url of [
+      RECORD,
+      `${SHOP}records/2?tab=details#notes`,
+      `${SHOP}records/1?tab=history#notes`,
+      `${SHOP}records/1?tab=details#delete`,
+    ]) {
+      shop.h.world.sites.set(url, { title: 'Record', snapshot: DELETE });
+    }
+    routeTo(shop.h, RECORD);
+    return shop;
+  }
+
+  function routeTo(h: Harness, url: string): void {
+    const page = h.pages[0];
+    if (page === undefined) throw new Error('expected an open page');
+    page.pushState(url);
+  }
+
+  const remove = (pageId: string) => ({ pageId, ref: 'e6', action: 'click' });
+
+  it('shows the path beside the site, and neither the query nor the fragment', async () => {
+    const { h, approvals, pageId } = await recordPage();
+    const ran = await dispatch(h, approvals, 'browser.page.act', remove(pageId));
+    const request = asked(ran);
+    expect(request).toMatchObject({
+      pageOrigin: 'https://shop.example.com',
+      pagePath: '/records/1',
+    });
+    const written = JSON.stringify(ran.writes);
+    expect(written).not.toContain('tab=details');
+    expect(written).not.toContain('#notes');
+  });
+
+  for (const [what, elsewhere] of [
+    ['another path', `${SHOP}records/2?tab=details#notes`],
+    ['another query', `${SHOP}records/1?tab=history#notes`],
+    ['another fragment', `${SHOP}records/1?tab=details#delete`],
+  ] as const) {
+    it(`does not act once the page routed to ${what} on the same origin, and spends the approval`, async () => {
+      const { h, approvals, pageId } = await recordPage();
+      const request = asked(await dispatch(h, approvals, 'browser.page.act', remove(pageId)));
+      routeTo(h, elsewhere);
+      approvals.decide(RUN_A, request.requestHash, 'approved');
+
+      const after = await dispatch(h, approvals, 'browser.page.act', remove(pageId));
+      const error = failure(after);
+      expect(error.code).toBe('BROWSER_REF_STALE');
+      expect(error.message).toContain('the page has changed since');
+      expect(error.details?.['outline']).toContain('Delete');
+      expect(h.pages[0]?.actions).toEqual([]);
+      expect(approvals.spent.size).toBe(1);
+
+      // The approval is gone: the same call asks again, about the address the page is at now.
+      const next = asked(await dispatch(h, approvals, 'browser.page.act', remove(pageId)));
+      expect(next.requestHash).not.toBe(request.requestHash);
+      expect(h.pages[0]?.actions).toEqual([]);
+    });
+  }
+
+  it('acts once at an unchanged address', async () => {
+    const { h, approvals, pageId } = await recordPage();
+    const request = asked(await dispatch(h, approvals, 'browser.page.act', remove(pageId)));
+    approvals.decide(RUN_A, request.requestHash, 'approved');
+
+    const approved = await dispatch(h, approvals, 'browser.page.act', remove(pageId));
+    expect(approved.result.status).toBe('SUCCEEDED');
+    expect(h.pages[0]?.actions).toEqual([{ ref: 'e6', action: { kind: 'click' } }]);
+    expect(approvals.spent.size).toBe(1);
+    asked(await dispatch(h, approvals, 'browser.page.act', remove(pageId)));
+    expect(h.pages[0]?.actions).toHaveLength(1);
+  });
+});
+
 describe('a page waiting on the operator’s answer', () => {
   const MINUTE = 60_000;
 
@@ -386,6 +495,7 @@ describe('an approval request the schema refuses', () => {
       target: 'browser',
       profileId: 'default',
       pageOrigin: 'https://shop.example.com',
+      pagePath: '/',
       pageTitle: 'Checkout',
       action: 'type',
       element: { ref: 'e3', role: 'textbox', name: 'Note' },
@@ -400,7 +510,7 @@ describe('an approval request the schema refuses', () => {
       requestHash: 'hash-1',
     };
     const driver = {
-      act: () => Promise.reject(new BrowserApprovalRequired(request, undefined)),
+      act: () => Promise.reject(new BrowserApprovalRequired(request)),
     } as unknown as BrowserDriver;
     const writes: Written[] = [];
     const ctx = {
@@ -464,7 +574,10 @@ describe('the request hash', () => {
   const ask: ActionAsk = {
     profileId: 'default',
     pageId: 'pg_1',
+    pageUrl: 'https://shop.example.com/orders/1?tab=items#note',
+    frameUrl: 'https://shop.example.com/orders/1?tab=items#note',
     pageOrigin: 'https://shop.example.com',
+    pagePath: '/orders/1',
     pageTitle: 'Checkout',
     ref: 'e3',
     element: { role: 'textbox', name: 'Note' },
@@ -484,11 +597,15 @@ describe('the request hash', () => {
     ).toBe(browserActionRequestHash(ask));
   });
 
-  it('differs with the profile, page, origin, element, action or value', () => {
+  it('differs with the profile, page, address, origin, element, action or value', () => {
     const base = browserActionRequestHash(ask);
     for (const changed of [
       { ...ask, profileId: 'work' },
       { ...ask, pageId: 'pg_2' },
+      { ...ask, pageUrl: 'https://shop.example.com/orders/2?tab=items#note' },
+      { ...ask, pageUrl: 'https://shop.example.com/orders/1?tab=refunds#note' },
+      { ...ask, pageUrl: 'https://shop.example.com/orders/1?tab=items#delete' },
+      { ...ask, frameUrl: 'https://shop.example.com/orders/2?tab=items#note' },
       { ...ask, pageOrigin: 'https://pay.example.net' },
       { ...ask, ref: 'e4' },
       { ...ask, element: { role: 'textbox', name: 'Gift message' } },

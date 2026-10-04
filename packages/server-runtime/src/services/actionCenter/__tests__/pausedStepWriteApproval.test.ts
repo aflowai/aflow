@@ -52,6 +52,7 @@ const BROWSER_REQUEST: BrowserWriteApprovalRequestPayload = {
   target: 'browser',
   profileId: 'default',
   pageOrigin: 'https://shop.example.com',
+  pagePath: '/checkout',
   pageTitle: 'Checkout',
   action: 'type',
   element: { ref: 'e3', role: 'textbox', name: 'Note' },
@@ -65,6 +66,7 @@ const BROWSER_REQUEST: BrowserWriteApprovalRequestPayload = {
   askedBy: { kind: 'posture' },
   screenshotRef: 'inline:shot',
   standsUntil: '2026-10-04T13:00:00.000Z',
+  decidedBefore: '2026-10-04T12:00:01.000Z',
   requestHash: 'browser-hash-1',
 };
 
@@ -156,6 +158,7 @@ describe('pausedStepSource — a browser action waiting on the operator', () => 
       target: 'browser',
       profileId: 'default',
       pageOrigin: 'https://shop.example.com',
+      pagePath: '/checkout',
       pageTitle: 'Checkout',
       action: 'type',
       element: { ref: 'e3', role: 'textbox', name: 'Note' },

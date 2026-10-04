@@ -12,6 +12,7 @@ import {
   BROWSER_OUTLINE_MAX_CHARS,
   BROWSER_READ_DEFAULT_CHARS,
   type BrowserProfile,
+  grantAnswersAsk,
 } from '@aflow/schemas';
 
 import {
@@ -363,7 +364,8 @@ export class BrowserDriver {
     { held, running, profile }: PageInUse,
   ): Promise<ActionResult> {
     // Where the page is now, not where the agent believes it is.
-    const pageUrl = urlOrNothing(held.page.url()) ?? new URL('about:blank');
+    const pageHref = held.page.url();
+    const pageUrl = urlOrNothing(pageHref) ?? new URL('about:blank');
     gateAction(profile, pageUrl);
     if (request.redelivered) {
       return {
@@ -425,7 +427,10 @@ export class BrowserDriver {
         {
           profileId: profile.id,
           pageId: held.pageId,
+          pageUrl: pageHref,
+          frameUrl,
           pageOrigin: frame.origin,
+          pagePath: frame.pathname,
           pageTitle: now.title,
           ref: request.ref,
           element: current,
@@ -441,7 +446,7 @@ export class BrowserDriver {
             owner: { tenantId: request.tenantId, runId: request.runId },
             store: approvals.store,
             standsUntil,
-            decidedBefore: error.decidedBefore,
+            decidedBefore: error.request.decidedBefore,
           });
         }
         throw error;
@@ -812,7 +817,7 @@ export class BrowserDriver {
         continue;
       }
       const grant = await ask.store.grant(ask.owner, requestHash).catch(() => null);
-      if (grant !== null && grant.decidedAt !== ask.decidedBefore) {
+      if (grantAnswersAsk(grant, ask.decidedBefore)) {
         held.pendingAsks.delete(requestHash);
         held.lastUsedAt = Math.max(held.lastUsedAt, now);
       }

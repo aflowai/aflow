@@ -118,6 +118,9 @@ export type ApiWriteApprovalRequestPayload = z.infer<typeof ApiWriteApprovalRequ
 /** Room for an excerpt in UTF-16 units, the length a string's `length` counts. */
 export const BROWSER_APPROVAL_EXCERPT_MAX_UNITS = 8000;
 
+/** Room for the path the approver is shown, in UTF-16 units: a `data:` address's path is its whole content. */
+export const BROWSER_APPROVAL_PATH_MAX_UNITS = 2000;
+
 /**
  * What a browser action would enter, as the approver sees it. The value itself
  * appears only as a bounded excerpt, and never for a field that takes a
@@ -149,6 +152,8 @@ export const BrowserWriteApprovalRequestPayloadSchema = z.object({
   profileId: z.string(),
   /** The origin of the frame the element belongs to, read from the page as the action gate reads it. */
   pageOrigin: z.string(),
+  /** That frame's path, shown beside its origin. Its query and fragment are in the hash, never here. */
+  pagePath: z.string().max(BROWSER_APPROVAL_PATH_MAX_UNITS),
   pageTitle: z.string().max(500),
   action: z.enum(BROWSER_ACTIONS),
   element: z.object({
@@ -165,7 +170,16 @@ export const BrowserWriteApprovalRequestPayloadSchema = z.object({
    * answer until then, and an answer after it may find the page gone.
    */
   standsUntil: z.string().datetime(),
-  /** Binds an approval to profile, page, origin, element, action and the value's digest. */
+  /**
+   * When the decision on record for this request was made, as the operator
+   * was asked — an approval already spent, asked about again. Only a decision
+   * made after it answers this request (`grantAnswersAsk`).
+   */
+  decidedBefore: z.string().optional(),
+  /**
+   * Binds an approval to profile, page, the addresses of the page and of the
+   * element's frame, element, action and the value's digest.
+   */
   requestHash: z.string(),
 });
 export type BrowserWriteApprovalRequestPayload = z.infer<
@@ -228,3 +242,21 @@ export const WriteApprovalGrantSchema = z.object({
   reason: z.string().max(2000).optional(),
 });
 export type WriteApprovalGrant = z.infer<typeof WriteApprovalGrantSchema>;
+
+/**
+ * Whether the decision on record answers a request asked while
+ * `decidedBefore` was the decision on record for it: only one made after the
+ * ask does. Both decision times come from the resolve boundary's clock. The
+ * host reads it to know a parked page's ask was answered, and the
+ * orchestrator to know a resume carries an answer, so an approval already
+ * spent reads as undecided on both sides instead of re-dispatching the step
+ * to ask again.
+ */
+export function grantAnswersAsk(
+  grant: Pick<WriteApprovalGrant, 'decidedAt'> | null,
+  decidedBefore: string | undefined,
+): boolean {
+  if (grant === null) return false;
+  if (decidedBefore === undefined) return true;
+  return grant.decidedAt !== undefined && Date.parse(grant.decidedAt) > Date.parse(decidedBefore);
+}

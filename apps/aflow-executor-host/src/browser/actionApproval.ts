@@ -6,10 +6,13 @@
  * this module reads it and spends it, and never writes it.
  *
  * Three facts make it hold. The request hash covers what the operator saw:
- * profile and page, the origin of the frame the element is in, the element's
- * reference, role and accessible name, the action and a digest of its value,
- * all read from the page at the moment of the action. An approval is spent by the one
- * action it lets through, or by finding the page changed under it. A denial
+ * profile and page, the address of the page and of the frame the element is
+ * in, the element's reference, role and accessible name, the action and a
+ * digest of its value, all read from the page at the moment of the action.
+ * The addresses are in it because a reference is bound to the element, and an
+ * application that routes by script keeps its elements across routes. An
+ * approval is spent by the one action it lets through, or by finding the page
+ * changed under it. A denial
  * stays on record for as long as a request stands, so the same request on the
  * same page is refused with the operator's reason rather than put to them again.
  */
@@ -17,6 +20,7 @@ import { createHash } from 'node:crypto';
 
 import {
   BROWSER_APPROVAL_EXCERPT_MAX_UNITS,
+  BROWSER_APPROVAL_PATH_MAX_UNITS,
   type BrowserAction,
   type BrowserApprovalAskedBy,
   type BrowserApprovalValueSummary,
@@ -68,8 +72,14 @@ export interface ActionAsk {
   readonly profileId: string;
   /** The run's page: an approval for one page does not reach another opened later at the same place. */
   readonly pageId: string;
-  /** The origin of the frame the element belongs to. */
+  /** The top page's address as the engine gives it, query and fragment included: hashed, never shown. */
+  readonly pageUrl: string;
+  /** The address of the frame the element belongs to, as given: hashed, never shown whole. */
+  readonly frameUrl: string;
+  /** The origin of that frame. */
   readonly pageOrigin: string;
+  /** That frame's path, which the approver is shown beside its origin. */
+  readonly pagePath: string;
   readonly pageTitle: string;
   readonly ref: string;
   readonly element: { readonly role: string; readonly name?: string };
@@ -81,11 +91,7 @@ export interface ActionAsk {
 
 /** The step parks here; the handler turns it into the approval pause. */
 export class BrowserApprovalRequired extends Error {
-  constructor(
-    readonly request: BrowserWriteApprovalRequestPayload,
-    /** When the decision already on record for this request was made: an answer is a newer one. */
-    readonly decidedBefore: string | undefined,
-  ) {
+  constructor(readonly request: BrowserWriteApprovalRequestPayload) {
     super(`The operator is asked before this ${request.action} on ${request.pageOrigin}.`);
     this.name = 'BrowserApprovalRequired';
   }
@@ -115,6 +121,8 @@ export function browserActionRequestHash(ask: ActionAsk): string {
     target: 'browser',
     profileId: ask.profileId,
     pageId: ask.pageId,
+    pageUrl: ask.pageUrl,
+    frameUrl: ask.frameUrl,
     pageOrigin: ask.pageOrigin,
     ref: ask.ref,
     role: ask.element.role,
@@ -127,7 +135,9 @@ export function browserActionRequestHash(ask: ActionAsk): string {
 /**
  * The call as the agent made it — page, reference, action and value — which
  * the dispatch after an approval makes again unchanged, whatever the page did
- * meanwhile.
+ * meanwhile. The page's address stays out of it for that reason: a call made
+ * again after the page routed elsewhere finds the request it was parked on,
+ * whose hash names the old address, and spends its approval as superseded.
  */
 export function browserCallKey(pageId: string, ref: string, action: EngineAction): string {
   return stableHash({ pageId, ref, action: action.kind, value: valueDigest(action) });
@@ -243,6 +253,7 @@ export async function clearAction(
     target: 'browser',
     profileId: ask.profileId,
     pageOrigin: ask.pageOrigin,
+    pagePath: ask.pagePath.slice(0, BROWSER_APPROVAL_PATH_MAX_UNITS),
     pageTitle: ask.pageTitle.slice(0, 500),
     action: ask.action.kind satisfies BrowserAction,
     element: {
@@ -254,9 +265,10 @@ export async function clearAction(
     askedBy: ask.askedBy,
     ...(screenshotRef !== undefined ? { screenshotRef } : {}),
     standsUntil: new Date(standsUntil).toISOString(),
+    ...(grant?.decidedAt !== undefined ? { decidedBefore: grant.decidedAt } : {}),
     requestHash,
   };
-  throw new BrowserApprovalRequired(request, grant?.decidedAt);
+  throw new BrowserApprovalRequired(request);
 }
 
 async function forfeitHash(
