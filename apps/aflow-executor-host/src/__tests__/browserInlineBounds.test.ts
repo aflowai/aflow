@@ -100,6 +100,7 @@ describe('browser results and the inline threshold', () => {
     const next = first['nextOffset'] as number;
     expect(first['withheld']).toBe(HUGE_TEXT.length - next);
     const second = await run(h, 'browser.page.read', { pageId, what: 'text', offset: next });
+    expect([first['offset'], second['offset']]).toEqual([0, next]);
     expect((first['text'] as string) + (second['text'] as string)).toBe(
       HUGE_TEXT.slice(0, next + (second['text'] as string).length),
     );

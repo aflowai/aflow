@@ -21,6 +21,7 @@ import {
 } from './exchangeClearing.js';
 import { estimateStringTokens } from './tokenEstimate.js';
 import { RETENTION_POLICY, computePinnedAtomIds } from './retentionPolicy.js';
+import { atomsAsSent } from './toolObservations.js';
 
 // ============================================================================
 // Types
@@ -191,7 +192,7 @@ interface CompactionRange {
   contentFromTurn: number;
   /** Atoms in the compaction range (to be archived and summarized). */
   atoms: AiMessageAtomV1[];
-  /** Hydrated messages in the compaction range (for summarizer input). */
+  /** The range's messages as the agent was shown them (for summarizer input). */
   messages: AiMessageV1[];
 }
 
@@ -202,6 +203,7 @@ interface CompactionRange {
  */
 function identifyCompactionRange(
   allAtoms: AiMessageAtomV1[],
+  shownAtoms: AiMessageAtomV1[],
   currentTurn: number,
   pinnedAtomIds: Set<string>,
   lastCompactedTurn?: number,
@@ -281,6 +283,7 @@ function identifyCompactionRange(
   const toTurn = Math.max(...rangeTurns);
   const contentFromTurn = Math.min(...contentTurns);
 
+  const shownById = new Map(shownAtoms.map((a) => [a.atomId, a.message]));
   const atoms: AiMessageAtomV1[] = [];
   const messages: AiMessageV1[] = [];
   for (const tn of rangeTurns) {
@@ -291,7 +294,7 @@ function identifyCompactionRange(
       // they're metadata, not real conversation. The previous summary
       // is passed separately via the merge prompt.
       if (atom.sourceKind !== 'compaction_restore') {
-        messages.push(atom.message);
+        messages.push(shownById.get(atom.atomId) ?? atom.message);
       }
     }
   }
@@ -429,6 +432,11 @@ export async function triggerCompaction(
   // 1. Idempotency guard: check watermark
   const lastCompactedTurn = state.compaction?.lastCompactedTurn;
 
+  // The summarizer reads, and the saving is measured against, history as
+  // assembleRequest sends it: observations reduced and stamps removed. The
+  // archive keeps the atoms as stored.
+  const shownAtoms = atomsAsSent(hydratedAtoms);
+
   // 2. Identify compaction range
   const pinnedAtomIds = new Set<string>();
   const atomById = new Map(hydratedAtoms.map((a) => [a.atomId, a]));
@@ -437,6 +445,7 @@ export async function triggerCompaction(
   }
   const range = identifyCompactionRange(
     hydratedAtoms,
+    shownAtoms,
     currentTurn,
     pinnedAtomIds,
     lastCompactedTurn,
@@ -466,7 +475,7 @@ export async function triggerCompaction(
 
   // 4. Extract pinned state (deterministic) + §4.8 sweep: pointers from
   // clear-to-ref notes in range and from superseded restores stay reachable.
-  const pinnedState = extractPinnedState(hydratedAtoms, flowName);
+  const pinnedState = extractPinnedState(shownAtoms, flowName);
   const mergedRefs = mergeActiveRefs(
     previousArtifact?.pinnedState.activeRefs,
     pinnedState.activeRefs,

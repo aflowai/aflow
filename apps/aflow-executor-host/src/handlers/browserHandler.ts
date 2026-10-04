@@ -311,12 +311,19 @@ const read = route(BrowserPageReadInputSchema, async (call, driver, input) => {
     ...(offset !== undefined ? { offset } : {}),
     ...bound(input.maxChars),
   });
-  const base = { pageId, url: result.url, what: result.what, withheld: result.withheld };
+  const base = {
+    pageId,
+    url: result.url,
+    what: result.what,
+    contains: contains ?? '',
+    withheld: result.withheld,
+  };
   const output: Output<typeof BrowserPageReadOutputSchema> =
     result.what === 'text'
       ? {
           ...base,
           text: result.text,
+          offset: offset ?? 0,
           ...(result.nextOffset !== undefined ? { nextOffset: result.nextOffset } : {}),
         }
       : result.what === 'console'
