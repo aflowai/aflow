@@ -206,7 +206,13 @@ describe('the probe, against a stand-in Redis', { tags: ['listener'] }, () => {
   }
 
   afterEach(async () => {
-    await new Promise((resolve) => server?.close(resolve) ?? resolve(undefined));
+    await new Promise((resolve) => {
+      if (server) {
+        server.close(resolve);
+      } else {
+        resolve(undefined);
+      }
+    });
     server = null;
   });
 
