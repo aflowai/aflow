@@ -675,6 +675,7 @@ function browserApprovalShown(req: BrowserWriteApprovalRequestPayload): WriteApp
       askedBy: req.askedBy,
       ...(req.value !== undefined ? { value: { ...req.value } } : {}),
       ...(req.screenshotRef !== undefined ? { screenshotRef: req.screenshotRef } : {}),
+      standsUntil: req.standsUntil,
     },
     operationId: BROWSER_PAGE_ACT_OPERATION_ID,
     priority: 'normal',

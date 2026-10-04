@@ -24,6 +24,7 @@ const BROWSER_REQUEST = {
   action: 'click',
   element: { ref: 'e6', role: 'button', name: 'Pay now' },
   askedBy: { kind: 'posture' },
+  standsUntil: '2026-10-04T13:00:00.000Z',
   requestHash: 'browser-hash-1',
 };
 

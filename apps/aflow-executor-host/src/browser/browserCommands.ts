@@ -59,14 +59,14 @@ export const BROWSER_USAGE =
   '                                            or read-only.\n' +
   '  browser rule <profile> <origin> <effect>  allow, ask or deny pages at an origin, such as\n' +
   '                                            https://mail.example.com or *.example.com.\n' +
-  '                                            ask: an action on a page there waits for your\n' +
-  '                                            approval, and no page there is loaded.\n' +
+  '                                            ask: pages there open and are read, and every\n' +
+  '                                            action on one waits for your approval.\n' +
   '  browser rule <profile> <origin> --remove  Drop that rule.';
 
 const RULE_GLOSS: Readonly<Record<BrowserOriginRule['effect'], string>> = {
   allow: '',
   deny: '',
-  ask: ' — actions there wait for your approval; no page there is loaded',
+  ask: ' — pages there open and are read; every action waits for your approval',
 };
 
 /** How long a list waits for the executor's answer once it has taken the request. */

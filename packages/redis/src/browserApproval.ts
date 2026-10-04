@@ -1,7 +1,9 @@
 import type { Redis } from 'ioredis';
-import { stableHash, type WriteApprovalGrant } from '@aflow/schemas';
-
-import { WRITE_APPROVAL_GRANT_TTL_SECONDS } from './writeApproval.js';
+import {
+  stableHash,
+  WRITE_APPROVAL_GRANT_TTL_SECONDS,
+  type WriteApprovalGrant,
+} from '@aflow/schemas';
 
 /**
  * What the host executor keeps beside a browser action's approval (Plan 320

@@ -11,6 +11,8 @@ export interface BrowserApprovalView {
   /** What would be entered, when anything would. */
   readonly value?: { readonly label: string; readonly text?: string };
   readonly askedBy: string;
+  /** "This request stands until …" */
+  readonly standsUntil: string;
 }
 
 function siteOf(origin: string): string {
@@ -33,15 +35,16 @@ function valueOf(extension: BrowserWriteApprovalExtension): BrowserApprovalView[
       return { label: `A credential field: ${characters(value.length)}, not shown.` };
     case 'text':
       return {
-        label:
-          value.excerpt !== undefined && value.excerpt.length < value.length
-            ? `Text, ${characters(value.length)} — the start of it:`
-            : `Text, ${characters(value.length)}:`,
+        label: value.truncated
+          ? `Text, ${characters(value.length)} — the start of it:`
+          : `Text, ${characters(value.length)}:`,
         ...(value.excerpt !== undefined ? { text: value.excerpt } : {}),
       };
     case 'options':
       return {
-        label: value.length === 1 ? 'Option:' : `${String(value.length)} options:`,
+        label:
+          (value.length === 1 ? 'Option' : `${String(value.length)} options`) +
+          (value.truncated ? ' — the start of the list:' : ':'),
         ...(value.excerpt !== undefined ? { text: value.excerpt } : {}),
       };
     case 'key':
@@ -62,6 +65,13 @@ export function browserApprovalView(extension: BrowserWriteApprovalExtension): B
       extension.askedBy.kind === 'rule'
         ? `Asked because the rule ${extension.askedBy.rule} on browser profile ${extension.profileId} asks before actions there.`
         : `Asked because browser profile ${extension.profileId} asks before every action.`,
+    standsUntil: `This request stands until ${new Date(extension.standsUntil).toLocaleString(
+      undefined,
+      {
+        dateStyle: 'medium',
+        timeStyle: 'short',
+      },
+    )}. Unanswered by then, it lapses and the agent's page may be closed.`,
   };
 }
 

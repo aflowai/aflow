@@ -42,9 +42,16 @@ const EXTENSION: BrowserWriteApprovalExtension = {
   pageTitle: 'Checkout',
   action: 'type',
   element: { ref: 'e3', role: 'textbox', name: 'Note' },
-  value: { kind: 'text', length: 17, excerpt: 'leave at the door', submit: true },
+  value: {
+    kind: 'text',
+    length: 17,
+    excerpt: 'leave at the door',
+    truncated: false,
+    submit: true,
+  },
   askedBy: { kind: 'posture' },
   screenshotRef: 'redis:payload:shot-1',
+  standsUntil: '2026-10-04T13:00:00.000Z',
 };
 
 function render(extension: BrowserWriteApprovalExtension): string {
@@ -80,7 +87,7 @@ describe('the approval card for a browser action', () => {
   it('shows a credential field by its length alone', () => {
     const view = browserApprovalView({
       ...EXTENSION,
-      value: { kind: 'credential', length: 12, submit: false },
+      value: { kind: 'credential', length: 12, truncated: false, submit: false },
     });
     expect(view.value).toEqual({ label: 'A credential field: 12 characters, not shown.' });
   });
@@ -89,10 +96,33 @@ describe('the approval card for a browser action', () => {
     const view = browserApprovalView({
       ...EXTENSION,
       askedBy: { kind: 'rule', rule: '*.example.com' },
-      value: { kind: 'text', length: 900, excerpt: 'a long note…' },
+      value: { kind: 'text', length: 900, excerpt: 'a long note', truncated: true },
     });
     expect(view.askedBy).toContain('the rule *.example.com');
     expect(view.value?.label).toBe('Text, 900 characters — the start of it:');
+  });
+
+  it('reads the truncated flag, not the lengths, to say a value is only its start', () => {
+    // Ten graphemes of twenty UTF-16 units, the start of fifteen: comparing the excerpt's length
+    // with the value's would read it as the whole.
+    const start = '\u{1F600}'.repeat(10);
+    expect(
+      browserApprovalView({
+        ...EXTENSION,
+        value: { kind: 'text', length: 15, excerpt: start, truncated: true },
+      }).value?.label,
+    ).toBe('Text, 15 characters — the start of it:');
+    expect(
+      browserApprovalView({
+        ...EXTENSION,
+        value: { kind: 'options', length: 40, excerpt: 'Red, Green', truncated: true },
+      }).value?.label,
+    ).toBe('40 options — the start of the list:');
+  });
+
+  it('says until when the request stands', () => {
+    expect(render(EXTENSION)).toContain('This request stands until ');
+    expect(browserApprovalView(EXTENSION).standsUntil).toContain('2026');
   });
 
   it('names a click with nothing entered, and a page with no screenshot shows none', () => {

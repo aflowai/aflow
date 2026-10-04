@@ -3,22 +3,29 @@
  * its step on the write approval's pause, runs on the fresh dispatch after an
  * approval and spends it, is refused with the operator's reason after a
  * denial, and is not performed on a page that changed while the operator
- * decided. Against the fake browser, through the step handler a job reaches.
+ * decided. The page it waits on is held open for the answer. Against the fake
+ * browser, through the step handler a job reaches.
  */
 import type { ExecutorContext, StepResult } from '@aflow/executor-runtime';
 import {
   type AflowError,
+  BROWSER_APPROVAL_EXCERPT_MAX_UNITS,
   type BrowserProfile,
   type BrowserWriteApprovalRequestPayload,
+  WRITE_APPROVAL_GRANT_TTL_SECONDS,
+  writeApprovalLifetimeWords,
   WriteApprovalRequestPayloadSchema,
 } from '@aflow/schemas';
 import { describe, expect, it } from 'vitest';
 
 import {
   type ActionAsk,
+  BrowserApprovalRequired,
   browserActionRequestHash,
   summarizeValue,
 } from '../browser/actionApproval.js';
+import type { BrowserDriver } from '../browser/driver.js';
+import { askUnanswerable, scriptAsks } from '../browser/rules.js';
 import { createBrowserHandler } from '../handlers/browserHandler.js';
 import { memoryApprovals, type MemoryApprovals } from './fixtures/approvals.js';
 import { harness, profile, refusal, RUN_A, type Harness } from './fixtures/fakeBrowser.js';
@@ -115,11 +122,17 @@ describe('an action on a profile that asks', () => {
     expect(h.pages[0]?.actions).toEqual([]);
   });
 
-  it('asks on a page an `ask` rule names, saying which rule asked', async () => {
-    const { h, approvals, pageId } = await shopFor(profile());
-    h.setProfiles([profile({ rules: [{ origin: 'https://shop.example.com', effect: 'ask' }] })]);
+  it('opens and reads a page an `ask` rule names, through the proxy, and asks before acting there', async () => {
+    const { h, approvals, pageId } = await shopFor(
+      profile({ rules: [{ origin: 'https://shop.example.com', effect: 'ask' }] }),
+    );
+    expect(h.proxies[0]?.refusals).toEqual([]);
+    const read = await dispatch(h, approvals, 'browser.page.read', { pageId, what: 'text' });
+    expect(read.result.status).toBe('SUCCEEDED');
+
     const request = asked(await dispatch(h, approvals, 'browser.page.act', pay(pageId)));
     expect(request.askedBy).toEqual({ kind: 'rule', rule: 'https://shop.example.com' });
+    expect(h.pages[0]?.actions).toEqual([]);
   });
 
   it('runs once on the dispatch after an approval, and the approval is spent', async () => {
@@ -151,6 +164,10 @@ describe('an action on a profile that asks', () => {
       retryable: false,
     });
     expect(error.message).toContain('Not this card.');
+    expect(error.message).toContain(
+      `stays denied on this page for as long as the request stands, ${writeApprovalLifetimeWords()} from the decision`,
+    );
+    expect(error.message).not.toContain('final');
     expect(repeated.writes.some((write) => write.kind === 'input_request')).toBe(false);
     expect(h.pages[0]?.actions).toEqual([]);
   });
@@ -233,7 +250,12 @@ describe('an action on a profile that asks', () => {
     expect(ran.writes.some((write) => write.kind === 'input_request')).toBe(false);
 
     const summary = summarizeValue({ kind: 'type', text: typed, submit: true }, true);
-    expect(summary).toEqual({ kind: 'credential', length: typed.length, submit: true });
+    expect(summary).toEqual({
+      kind: 'credential',
+      length: typed.length,
+      truncated: false,
+      submit: true,
+    });
     expect(JSON.stringify(summary)).not.toContain('horse');
   });
 
@@ -250,8 +272,40 @@ describe('an action on a profile that asks', () => {
       }),
     );
     expect(request.value).toMatchObject({ kind: 'text', length: note.length, submit: true });
+    expect(request.value?.truncated).toBe(true);
     expect(request.value?.excerpt?.length).toBeLessThan(note.length);
-    expect(note.startsWith(request.value?.excerpt?.slice(0, -1) ?? '-')).toBe(true);
+    expect(note.startsWith(request.value?.excerpt ?? '-')).toBe(true);
+
+    const short = summarizeValue(
+      { kind: 'type', text: 'Leave it at the door.', submit: false },
+      false,
+    );
+    expect(short).toMatchObject({ excerpt: 'Leave it at the door.', truncated: false });
+  });
+
+  it('cuts a value of many-unit graphemes between graphemes, within the schema’s bound', async () => {
+    const { h, approvals, pageId } = await shopFor(profile({ posture: 'ask-to-act' }));
+    // A family of four is eleven UTF-16 units, so two hundred of them pass the old bound of
+    // 400; a letter under a hundred marks is one grapheme of 101, which the bound itself cuts.
+    const family = '\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}';
+    const marked = `a${'\u0301'.repeat(100)}`;
+    for (const text of [family.repeat(400), marked.repeat(300)]) {
+      const ran = await dispatch(h, approvals, 'browser.page.act', {
+        pageId,
+        ref: 'e3',
+        action: 'type',
+        text,
+      });
+      const request = asked(ran);
+      expect(request.value?.truncated).toBe(true);
+      const excerpt = request.value?.excerpt ?? '';
+      expect(excerpt.length).toBeGreaterThan(0);
+      expect(excerpt.length).toBeLessThanOrEqual(BROWSER_APPROVAL_EXCERPT_MAX_UNITS);
+      expect(text.startsWith(excerpt)).toBe(true);
+      // Ends on a grapheme boundary: what follows starts a whole grapheme.
+      const unit = excerpt.endsWith(family) ? family : marked;
+      expect(excerpt.length % unit.length).toBe(0);
+    }
   });
 
   it('is refused, not asked, when the call comes from a coding harness', async () => {
@@ -261,6 +315,130 @@ describe('an action on a profile that asks', () => {
     );
     expect(refused.kind).toBe('ask_unanswerable');
     expect(h.pages[0]?.actions).toEqual([]);
+  });
+});
+
+describe('a page waiting on the operator’s answer', () => {
+  const MINUTE = 60_000;
+
+  it('stays open, its browser running, past the idle limit; an approval after 31 minutes runs', async () => {
+    const { h, approvals, pageId } = await shopFor(profile({ posture: 'ask-to-act' }));
+    const parkedAt = h.clock.now;
+    const request = asked(await dispatch(h, approvals, 'browser.page.act', pay(pageId)));
+    expect(Date.parse(request.standsUntil)).toBe(
+      parkedAt + WRITE_APPROVAL_GRANT_TTL_SECONDS * 1000,
+    );
+
+    h.clock.now += 31 * MINUTE;
+    expect(await h.driver.sweepIdle(20)).toEqual({ closedPages: 0, stoppedProfiles: 0 });
+    expect(h.pages[0]?.closed).toBe(false);
+    expect(h.stops).toEqual([]);
+
+    approvals.decide(RUN_A, request.requestHash, 'approved');
+    // A sweep between the answer and the dispatch it brings leaves the page for that dispatch.
+    expect(await h.driver.sweepIdle(20)).toEqual({ closedPages: 0, stoppedProfiles: 0 });
+    const approved = await dispatch(h, approvals, 'browser.page.act', pay(pageId));
+    expect(approved.result.status).toBe('SUCCEEDED');
+    expect(h.pages[0]?.actions).toEqual([{ ref: 'e6', action: { kind: 'click' } }]);
+  });
+
+  it('is swept as any idle page once the request lapses unanswered', async () => {
+    const { h, approvals, pageId } = await shopFor(profile({ posture: 'ask-to-act' }));
+    asked(await dispatch(h, approvals, 'browser.page.act', pay(pageId)));
+
+    h.clock.now += 31 * MINUTE;
+    expect(await h.driver.sweepIdle(20)).toEqual({ closedPages: 0, stoppedProfiles: 0 });
+    h.clock.now += WRITE_APPROVAL_GRANT_TTL_SECONDS * 1000 - 31 * MINUTE;
+    expect(await h.driver.sweepIdle(20)).toEqual({ closedPages: 1, stoppedProfiles: 0 });
+    expect(h.pages[0]?.closed).toBe(true);
+    h.clock.now += 31 * MINUTE;
+    expect(await h.driver.sweepIdle(20)).toEqual({ closedPages: 0, stoppedProfiles: 1 });
+  });
+
+  it('is swept after the idle limit once a denial is on record', async () => {
+    const { h, approvals, pageId } = await shopFor(profile({ posture: 'ask-to-act' }));
+    const request = asked(await dispatch(h, approvals, 'browser.page.act', pay(pageId)));
+    h.clock.now += 31 * MINUTE;
+    approvals.decide(RUN_A, request.requestHash, 'denied');
+    expect(await h.driver.sweepIdle(20)).toEqual({ closedPages: 0, stoppedProfiles: 0 });
+    h.clock.now += 31 * MINUTE;
+    expect(await h.driver.sweepIdle(20)).toEqual({ closedPages: 1, stoppedProfiles: 0 });
+  });
+
+  it('reads an earlier approval, already spent, as no answer to the request asked again', async () => {
+    const { h, approvals, pageId } = await shopFor(profile({ posture: 'ask-to-act' }));
+    const first = asked(await dispatch(h, approvals, 'browser.page.act', pay(pageId)));
+    approvals.decide(RUN_A, first.requestHash, 'approved');
+    await dispatch(h, approvals, 'browser.page.act', pay(pageId));
+    asked(await dispatch(h, approvals, 'browser.page.act', pay(pageId)));
+
+    h.clock.now += 31 * MINUTE;
+    expect(await h.driver.sweepIdle(20)).toEqual({ closedPages: 0, stoppedProfiles: 0 });
+    h.clock.now += 20 * MINUTE;
+    expect(await h.driver.sweepIdle(20)).toEqual({ closedPages: 0, stoppedProfiles: 0 });
+  });
+});
+
+describe('an approval request the schema refuses', () => {
+  it('fails the step with an internal error naming the schema, and parks nothing', async () => {
+    const request: BrowserWriteApprovalRequestPayload = {
+      kind: 'write_approval',
+      target: 'browser',
+      profileId: 'default',
+      pageOrigin: 'https://shop.example.com',
+      pageTitle: 'Checkout',
+      action: 'type',
+      element: { ref: 'e3', role: 'textbox', name: 'Note' },
+      value: {
+        kind: 'text',
+        length: 1,
+        excerpt: 'x'.repeat(BROWSER_APPROVAL_EXCERPT_MAX_UNITS + 1),
+        truncated: true,
+      },
+      askedBy: { kind: 'posture' },
+      standsUntil: '2026-10-04T13:00:00.000Z',
+      requestHash: 'hash-1',
+    };
+    const driver = {
+      act: () => Promise.reject(new BrowserApprovalRequired(request, undefined)),
+    } as unknown as BrowserDriver;
+    const writes: Written[] = [];
+    const ctx = {
+      ...RUN_A,
+      attempt: 1,
+      stepExecutionId: 'step-1',
+      operationId: 'browser.page.act',
+      job: { inputRef: 'inline:input' },
+      readPayload: () => Promise.resolve({ pageId: 'pg_1', ref: 'e3', action: 'type', text: 'x' }),
+      writePayload: (kind: string, data: unknown) => {
+        writes.push({ kind, data });
+        return Promise.resolve(`inline:${kind}`);
+      },
+    } as unknown as ExecutorContext;
+
+    const result = await createBrowserHandler(driver, memoryApprovals()).execute(ctx);
+    expect(result.status).toBe('FAILED');
+    expect(writes.some((write) => write.kind === 'input_request')).toBe(false);
+    const error = writes.find((write) => write.kind === 'error')?.data as AflowError;
+    expect(error).toMatchObject({ code: 'INTERNAL_ERROR', classification: 'internal' });
+    expect(error.message).toContain('WriteApprovalRequestPayloadSchema');
+  });
+});
+
+describe('what a refusal to ask says', () => {
+  const asking = profile({ posture: 'ask-to-act' });
+
+  it('names the coding harness only where a harness could not wait', () => {
+    expect(askUnanswerable(asking, 'https://shop.example.com').message).toContain(
+      'a coding harness cannot wait for an answer',
+    );
+  });
+
+  it('refuses a script as something that cannot be shown as one action, whoever asked', () => {
+    const refused = scriptAsks(asking, 'https://shop.example.com');
+    expect(refused.kind).toBe('script_refused');
+    expect(refused.message).toContain('a script cannot be shown to them as one action to approve');
+    expect(refused.message).not.toContain('harness');
   });
 });
 

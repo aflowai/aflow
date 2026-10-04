@@ -14,7 +14,13 @@ import {
   type BrowserProfile,
 } from '@aflow/schemas';
 
-import { browserCallKey, clearAction, forfeitApproval } from './actionApproval.js';
+import {
+  askStandsUntil,
+  BrowserApprovalRequired,
+  browserCallKey,
+  clearAction,
+  forfeitApproval,
+} from './actionApproval.js';
 import { type LocalAddressClassifier, machineAddresses } from './addresses.js';
 import type { ChromeLauncher } from './chromeProcess.js';
 import { CREDENTIAL_FIELD_KEYS, entersValue, MODIFIERS } from './credentialFields.js';
@@ -79,7 +85,7 @@ import {
   type HeldPage,
   type PageOwner,
 } from './pageTable.js';
-import { askUnanswerable, assertNavigationAllowed, gateAction } from './rules.js';
+import { askUnanswerable, assertNavigationAllowed, gateAction, scriptAsks } from './rules.js';
 import { screenshotWithinCeiling, type ScreenshotRequest } from './screenshot.js';
 import { readWhenQuiet, realClock, type SettleClock } from './settle.js';
 import {
@@ -410,8 +416,10 @@ export class BrowserDriver {
         throw this.credentialRefusal(request.ref, current.name);
       }
       element = current;
+      const approvals = request.approvals;
+      const standsUntil = askStandsUntil(this.now());
       const cleared = await clearAction(
-        request.approvals,
+        approvals,
         request,
         callKey,
         {
@@ -425,8 +433,19 @@ export class BrowserDriver {
           credentialField: now.snapshot.maskedRefs.has(request.ref),
           askedBy: gate.askedBy,
         },
+        standsUntil,
         async () => await this.approvalScreenshot(held),
-      );
+      ).catch((error: unknown) => {
+        if (error instanceof BrowserApprovalRequired) {
+          held.pendingAsks.set(error.request.requestHash, {
+            owner: { tenantId: request.tenantId, runId: request.runId },
+            store: approvals.store,
+            standsUntil,
+            decidedBefore: error.decidedBefore,
+          });
+        }
+        throw error;
+      });
       if (cleared === 'superseded') {
         throw this.staleRefError(
           held,
@@ -665,7 +684,7 @@ export class BrowserDriver {
       }
       const pageUrl = urlOrNothing(held.page.url()) ?? new URL('about:blank');
       if (gateAction(profile, pageUrl).verdict === 'ask') {
-        throw askUnanswerable(profile, pageUrl.origin);
+        throw scriptAsks(profile, pageUrl.origin);
       }
       let value: unknown;
       try {
@@ -748,7 +767,8 @@ export class BrowserDriver {
    * Close pages nothing has touched for their profile's idle limit, then stop
    * browsers that have had no page for as long — at most `limit` of the two
    * together, the rest left for the next sweep. A profile with an operation in
-   * flight, or its window shown, is passed over.
+   * flight, or its window shown, is passed over, and so is a page with an ask
+   * waiting on the operator, which keeps its browser running too.
    */
   async sweepIdle(limit: number): Promise<IdleSweep> {
     const now = this.now();
@@ -757,6 +777,9 @@ export class BrowserDriver {
       if (closedPages >= limit) break;
       const running = this.browsers.get(held.profileId);
       if (running === undefined || this.browsers.busy(held.profileId)) continue;
+      if (now - held.lastUsedAt < running.state.profile.idleMinutes * MINUTE_MS) continue;
+      if (await this.heldForAnswer(held, now)) continue;
+      // An answer the sweep has just found counts as use.
       if (now - held.lastUsedAt < running.state.profile.idleMinutes * MINUTE_MS) continue;
       this.pages.forget(held);
       await closeWithinDeadline(held.page);
@@ -774,6 +797,27 @@ export class BrowserDriver {
       stoppedProfiles += 1;
     }
     return { closedPages, stoppedProfiles };
+  }
+
+  /**
+   * Whether an ask parked on the page still waits for the operator. An ask
+   * that lapsed unanswered is dropped; one answered since the last sweep is
+   * dropped too, and the page counts as used now, so the dispatch the answer
+   * brings finds it open.
+   */
+  private async heldForAnswer(held: HeldPage, now: number): Promise<boolean> {
+    for (const [requestHash, ask] of held.pendingAsks) {
+      if (now >= ask.standsUntil) {
+        held.pendingAsks.delete(requestHash);
+        continue;
+      }
+      const grant = await ask.store.grant(ask.owner, requestHash).catch(() => null);
+      if (grant !== null && grant.decidedAt !== ask.decidedBefore) {
+        held.pendingAsks.delete(requestHash);
+        held.lastUsedAt = Math.max(held.lastUsedAt, now);
+      }
+    }
+    return held.pendingAsks.size > 0;
   }
 
   /**

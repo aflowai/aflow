@@ -8,6 +8,7 @@
  */
 import { randomBytes } from 'node:crypto';
 
+import type { ApprovalStore } from './actionApproval.js';
 import { BrowserDriverError } from './errors.js';
 import { type PageObservations, redactUrl } from './observations.js';
 import type { EnginePage, PageSnapshot } from './types.js';
@@ -15,6 +16,20 @@ import type { EnginePage, PageSnapshot } from './types.js';
 export interface PageOwner {
   readonly tenantId: string;
   readonly runId: string;
+}
+
+/**
+ * An action on a page parked for the operator's answer. The idle sweep holds
+ * the page until the answer is on record or the request no longer stands: the
+ * page is in the request hash, so an approval reaching a closed page would
+ * find nothing to act on.
+ */
+export interface PendingAsk {
+  readonly owner: PageOwner;
+  readonly store: Pick<ApprovalStore, 'grant'>;
+  readonly standsUntil: number;
+  /** When the decision already on record for the request was made; an answer is a newer one. */
+  readonly decidedBefore: string | undefined;
 }
 
 export interface HeldPage {
@@ -38,6 +53,8 @@ export interface HeldPage {
   lastUsedAt: number;
   /** The newest snapshot taken of the page: its references are the ones that resolve. */
   lastSnapshot?: PageSnapshot;
+  /** Asks parked on this page, by request hash. */
+  readonly pendingAsks: Map<string, PendingAsk>;
 }
 
 /**
@@ -138,6 +155,7 @@ export class PageTable {
       lastUrl: '',
       lastTitle: '',
       lastUsedAt: now,
+      pendingAsks: new Map(),
     };
     pageAddress(entry);
     pages.set(entry.pageId, entry);

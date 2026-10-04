@@ -10,12 +10,13 @@
  * reference, role and accessible name, the action and a digest of its value,
  * all read from the page at the moment of the action. An approval is spent by the one
  * action it lets through, or by finding the page changed under it. A denial
- * stays on record, so the same request is refused with the operator's reason
- * rather than put to them again.
+ * stays on record for as long as a request stands, so the same request on the
+ * same page is refused with the operator's reason rather than put to them again.
  */
 import { createHash } from 'node:crypto';
 
 import {
+  BROWSER_APPROVAL_EXCERPT_MAX_UNITS,
   type BrowserAction,
   type BrowserApprovalAskedBy,
   type BrowserApprovalValueSummary,
@@ -23,15 +24,25 @@ import {
   type PayloadRef,
   stableHash,
   stableStringify,
+  WRITE_APPROVAL_GRANT_TTL_SECONDS,
   type WriteApprovalGrant,
+  writeApprovalLifetimeWords,
 } from '@aflow/schemas';
 
 import { BrowserDriverError } from './errors.js';
 import type { PageOwner } from './pageTable.js';
 import type { EngineAction } from './types.js';
 
-/** What the approver is shown of a value: enough to judge it, bounded. */
-export const APPROVAL_EXCERPT_CHARS = 200;
+/** What the approver is shown of a value: enough to judge it. */
+export const APPROVAL_EXCERPT_GRAPHEMES = 200;
+
+/**
+ * Until when a request asked for at `now` stands: the record of the ask, and
+ * the grant an answer mints, live as long.
+ */
+export function askStandsUntil(now: number): number {
+  return now + WRITE_APPROVAL_GRANT_TTL_SECONDS * 1000;
+}
 
 /** Where approvals are read and spent, and which request a call was parked on. */
 export interface ApprovalStore {
@@ -70,7 +81,11 @@ export interface ActionAsk {
 
 /** The step parks here; the handler turns it into the approval pause. */
 export class BrowserApprovalRequired extends Error {
-  constructor(readonly request: BrowserWriteApprovalRequestPayload) {
+  constructor(
+    readonly request: BrowserWriteApprovalRequestPayload,
+    /** When the decision already on record for this request was made: an answer is a newer one. */
+    readonly decidedBefore: string | undefined,
+  ) {
     super(`The operator is asked before this ${request.action} on ${request.pageOrigin}.`);
     this.name = 'BrowserApprovalRequired';
   }
@@ -122,11 +137,23 @@ function graphemes(text: string): string[] {
   return [...new Intl.Segmenter().segment(text)].map((part) => part.segment);
 }
 
-function excerpt(text: string): string {
-  const parts = graphemes(text);
-  return parts.length > APPROVAL_EXCERPT_CHARS
-    ? `${parts.slice(0, APPROVAL_EXCERPT_CHARS).join('')}…`
-    : text;
+/**
+ * The start of the text, cut between graphemes: at most
+ * `APPROVAL_EXCERPT_GRAPHEMES` of them, and never past the schema's bound,
+ * which one grapheme of combining marks could otherwise exceed alone.
+ */
+function excerpt(text: string): { excerpt: string; truncated: boolean } {
+  let kept = '';
+  let count = 0;
+  for (const part of graphemes(text)) {
+    if (count === APPROVAL_EXCERPT_GRAPHEMES) return { excerpt: kept, truncated: true };
+    if (kept.length + part.length > BROWSER_APPROVAL_EXCERPT_MAX_UNITS) {
+      return { excerpt: kept, truncated: true };
+    }
+    kept += part;
+    count += 1;
+  }
+  return { excerpt: kept, truncated: false };
 }
 
 /** What the approver is shown of the value. Never a credential field's value. */
@@ -138,19 +165,15 @@ export function summarizeValue(
     case 'type': {
       const length = graphemes(action.text).length;
       return credentialField
-        ? { kind: 'credential', length, submit: action.submit }
-        : { kind: 'text', length, excerpt: excerpt(action.text), submit: action.submit };
+        ? { kind: 'credential', length, truncated: false, submit: action.submit }
+        : { kind: 'text', length, ...excerpt(action.text), submit: action.submit };
     }
     case 'select':
       return credentialField
-        ? { kind: 'credential', length: action.values.length }
-        : {
-            kind: 'options',
-            length: action.values.length,
-            excerpt: excerpt(action.values.join(', ')),
-          };
+        ? { kind: 'credential', length: action.values.length, truncated: false }
+        : { kind: 'options', length: action.values.length, ...excerpt(action.values.join(', ')) };
     case 'press':
-      return { kind: 'key', length: 1, excerpt: excerpt(action.key) };
+      return { kind: 'key', length: 1, ...excerpt(action.key) };
     case 'click':
     case 'hover':
       return undefined;
@@ -162,9 +185,10 @@ function deniedError(ask: ActionAsk, grant: WriteApprovalGrant): BrowserDriverEr
     'approval_denied',
     `The operator denied this ${ask.action.kind} on ${ask.pageOrigin}` +
       (grant.reason !== undefined ? `. Operator's reason: "${grant.reason}"` : '') +
-      '. A denial is final for this request: the same action on the same element with the same ' +
-      'value is refused with this reason rather than asked again. Propose a different action, ' +
-      'or tell the user it was declined and ask how to proceed.',
+      `. It stays denied on this page for as long as the request stands, ${writeApprovalLifetimeWords()} ` +
+      'from the decision: the same action on the same element with the same value is refused ' +
+      'with this reason rather than asked again. Propose a different action, or tell the user ' +
+      'it was declined and ask how to proceed.',
     {
       origin: ask.pageOrigin,
       action: ask.action.kind,
@@ -191,6 +215,7 @@ export async function clearAction(
   scope: PageOwner,
   callKey: string,
   ask: ActionAsk,
+  standsUntil: number,
   screenshot: () => Promise<{ data: string; mimeType: string } | undefined>,
 ): Promise<Cleared> {
   const { store } = approvals;
@@ -213,7 +238,7 @@ export async function clearAction(
   const screenshotRef =
     image !== undefined ? await approvals.storeScreenshot(image).catch(() => undefined) : undefined;
   const value = summarizeValue(ask.action, ask.credentialField);
-  throw new BrowserApprovalRequired({
+  const request: BrowserWriteApprovalRequestPayload = {
     kind: 'write_approval',
     target: 'browser',
     profileId: ask.profileId,
@@ -228,8 +253,10 @@ export async function clearAction(
     ...(value !== undefined ? { value } : {}),
     askedBy: ask.askedBy,
     ...(screenshotRef !== undefined ? { screenshotRef } : {}),
+    standsUntil: new Date(standsUntil).toISOString(),
     requestHash,
-  });
+  };
+  throw new BrowserApprovalRequired(request, grant?.decidedAt);
 }
 
 async function forfeitHash(

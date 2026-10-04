@@ -387,38 +387,74 @@ describe('posture and origin rules', () => {
     ]);
   });
 
-  it('ask: loads no page at the origin, and the proxy refuses it a connection', async () => {
+  it('ask: pages there open, directly and by a redirect, and are read; a deny beside it is still refused', async () => {
     const h = harness({
-      browsers: [profile({ rules: [{ origin: '*.bank.example.org', effect: 'ask' }] })],
+      browsers: [
+        profile({
+          rules: [
+            { origin: '*.bank.example.org', effect: 'ask' },
+            { origin: '*.casino.example.net', effect: 'deny' },
+          ],
+        }),
+      ],
       world: {
-        sites: new Map([['https://shop.example.com/', { title: 'Shop', snapshot: FORM }]]),
-        redirects: new Map([['https://shop.example.com/pay', 'https://pay.bank.example.org/']]),
+        sites: new Map([['https://pay.bank.example.org/', { title: 'Pay', snapshot: FORM }]]),
+        redirects: new Map([
+          ['https://shop.example.com/pay', 'https://pay.bank.example.org/'],
+          ['https://shop.example.com/play', 'https://www.casino.example.net/'],
+        ]),
       },
     });
+    const direct = await h.driver.open({
+      ...RUN_A,
+      redelivered: false,
+      profileId: 'default',
+      url: 'https://pay.bank.example.org/',
+    });
+    expect(direct.outcome).toBe('performed');
+    expect(direct.outline.text).toContain('Search');
+    const redirected = await h.driver.open({
+      ...RUN_A,
+      redelivered: false,
+      profileId: 'default',
+      url: 'https://shop.example.com/pay',
+    });
+    expect(redirected.url).toBe('https://pay.bank.example.org/');
+    await h.driver.readPage(RUN_A, redirected.pageId, { what: 'text' });
+    await h.driver.navigate({
+      ...RUN_A,
+      pageId: direct.pageId,
+      to: { kind: 'url', url: 'https://pay.bank.example.org/' },
+      redelivered: false,
+    });
+    expect(h.proxies[0]?.refusals).toEqual([]);
+
+    // Acting there asks, so a caller that cannot wait is refused and nothing is done.
+    const acting = await refusal(h.driver.act(act(direct.pageId, 'e6', { kind: 'click' })));
+    expect(acting.kind).toBe('ask_unanswerable');
+    expect(h.pages[0]?.actions).toEqual([]);
+
     const opening = await refusal(
       h.driver.open({
         ...RUN_A,
         redelivered: false,
         profileId: 'default',
-        url: 'https://pay.bank.example.org/',
+        url: 'https://www.casino.example.net/',
       }),
     );
-    expect(opening.kind).toBe('origin_asks');
-    expect(opening.message).not.toContain('not available yet');
-
-    const redirected = await refusal(
+    expect(opening.kind).toBe('origin_denied');
+    const played = await refusal(
       h.driver.open({
         ...RUN_A,
         redelivered: false,
         profileId: 'default',
-        url: 'https://shop.example.com/pay',
+        url: 'https://shop.example.com/play',
       }),
     );
-    // Refused at the connection, as a `deny` is, naming the rule that asks.
-    expect(redirected.kind).toBe('origin_denied');
-    expect(redirected.message).toContain('(ask)');
+    expect(played.kind).toBe('origin_denied');
+    expect(played.message).toContain('(deny)');
     expect(h.proxies[0]?.refusals.map((r) => [r.host, r.kind])).toEqual([
-      ['pay.bank.example.org', 'rule'],
+      ['www.casino.example.net', 'rule'],
     ]);
   });
 

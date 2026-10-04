@@ -14,6 +14,7 @@ import { z } from 'zod';
 import type { OperationRegistration } from '../catalog/operationCatalog.js';
 import { buildOperationId } from '../catalog/operationId.js';
 import type { ObservedFacet, OperationObservation } from '../runtime/toolObservation.js';
+import { writeApprovalLifetimeWords } from '../runtime/writeApprovalLifetime.js';
 import { BrowserProfileIdSchema, DEFAULT_BROWSER_PROFILE_ID } from './browserProfile.js';
 
 export const BROWSER_PAGE_OPEN_OPERATION_ID = buildOperationId('browser', 'page', 'open');
@@ -449,9 +450,10 @@ export const BrowserPageActionRegistrations: OperationRegistration[] = [
           'characters, never the text.',
         'On a profile whose posture is `ask-to-act`, or on a page an `ask` rule names, this call ' +
           'waits for the operator to approve it in the Action Center and then runs once. A ' +
-          'denial is final for that request: the same call is refused with the operator’s ' +
-          'reason rather than asked again. If the page changed while the operator decided, the ' +
-          'action is not performed and fails with the current outline.',
+          `denial holds on that page for as long as the request stands, ${writeApprovalLifetimeWords()} ` +
+          'from the decision: the same call there is refused with the operator’s reason rather ' +
+          'than asked again. If the page changed while the operator decided, the action is not ' +
+          'performed and fails with the current outline.',
         POLICY_REFUSALS,
         UNTRUSTED_CONTENT,
       ],

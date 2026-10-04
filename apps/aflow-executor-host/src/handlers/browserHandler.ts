@@ -44,6 +44,7 @@ import {
   type BrowserPageSnapshotOutputSchema,
   BrowserProfileListInputSchema,
   type BrowserProfileListOutputSchema,
+  WriteApprovalRequestPayloadSchema,
 } from '@aflow/schemas';
 import type { z } from 'zod';
 
@@ -64,7 +65,6 @@ const FAILURE: Record<BrowserFailureKind, { code: string; classification: ErrorC
   appliance_origin: { code: 'BROWSER_ORIGIN_REFUSED', classification: 'permission' },
   origin_denied: { code: 'BROWSER_ORIGIN_DENIED', classification: 'permission' },
   posture_refused: { code: 'BROWSER_POSTURE_REFUSED', classification: 'permission' },
-  origin_asks: { code: 'BROWSER_ORIGIN_ASKS', classification: 'permission' },
   approval_denied: { code: 'BROWSER_ACTION_DENIED', classification: 'permission' },
   ask_unanswerable: { code: 'BROWSER_ASK_UNANSWERABLE', classification: 'permission' },
   stale_ref: { code: 'BROWSER_REF_STALE', classification: 'validation' },
@@ -496,6 +496,30 @@ function noSpace(): AflowError {
   };
 }
 
+/**
+ * The approval pause, once its request is one the orchestrator and the Action
+ * Center will read as an approval: a request they refuse parks the run on a
+ * card that never appears, so the step fails instead.
+ */
+async function approvalPause(
+  ctx: ExecutorContext,
+  asked: BrowserApprovalRequired,
+): Promise<StepResult> {
+  const parsed = WriteApprovalRequestPayloadSchema.safeParse(asked.request);
+  if (!parsed.success) {
+    return await failureWithError(
+      ctx,
+      internalError(
+        `This ${asked.request.action} waits for the operator, but its approval request does not ` +
+          `parse as WriteApprovalRequestPayloadSchema, so nothing was asked and nothing was ` +
+          `done: ${parsed.error.message}`,
+        { retryable: false },
+      ),
+    );
+  }
+  return await pausedWithRequest(ctx, parsed.data);
+}
+
 export function createBrowserHandler(driver: BrowserDriver, approvals: ApprovalStore): StepHandler {
   return {
     stepType: 'browser',
@@ -529,9 +553,7 @@ export function createBrowserHandler(driver: BrowserDriver, approvals: ApprovalS
         // The write approval's own pause: the orchestrator parks the run, the
         // Action Center shows the card, and only the operator's resolve mints
         // the grant the dispatch after it reads.
-        if (error instanceof BrowserApprovalRequired) {
-          return await pausedWithRequest(ctx, error.request);
-        }
+        if (error instanceof BrowserApprovalRequired) return await approvalPause(ctx, error);
         throw error;
       }
       return outcome.ok

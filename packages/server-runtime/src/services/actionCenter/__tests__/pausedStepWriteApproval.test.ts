@@ -55,9 +55,16 @@ const BROWSER_REQUEST: BrowserWriteApprovalRequestPayload = {
   pageTitle: 'Checkout',
   action: 'type',
   element: { ref: 'e3', role: 'textbox', name: 'Note' },
-  value: { kind: 'text', length: 17, excerpt: 'leave at the door', submit: true },
+  value: {
+    kind: 'text',
+    length: 17,
+    excerpt: 'leave at the door',
+    truncated: false,
+    submit: true,
+  },
   askedBy: { kind: 'posture' },
   screenshotRef: 'inline:shot',
+  standsUntil: '2026-10-04T13:00:00.000Z',
   requestHash: 'browser-hash-1',
 };
 
@@ -152,9 +159,16 @@ describe('pausedStepSource — a browser action waiting on the operator', () => 
       pageTitle: 'Checkout',
       action: 'type',
       element: { ref: 'e3', role: 'textbox', name: 'Note' },
-      value: { kind: 'text', length: 17, excerpt: 'leave at the door', submit: true },
+      value: {
+        kind: 'text',
+        length: 17,
+        excerpt: 'leave at the door',
+        truncated: false,
+        submit: true,
+      },
       askedBy: { kind: 'posture' },
       screenshotRef: 'inline:shot',
+      standsUntil: '2026-10-04T13:00:00.000Z',
     });
     expect(item.title).toBe(
       'Approve in the browser: type 17 characters into textbox “Note” and press Enter on shop.example.com',

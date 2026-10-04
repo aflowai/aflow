@@ -6,7 +6,6 @@ export type BrowserFailureKind =
   | 'appliance_origin'
   | 'origin_denied'
   | 'posture_refused'
-  | 'origin_asks'
   | 'approval_denied'
   | 'ask_unanswerable'
   | 'stale_ref'

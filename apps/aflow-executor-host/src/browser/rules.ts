@@ -48,16 +48,6 @@ function refusedByRule(
   origin: string,
   doing: string,
 ): BrowserDriverError {
-  if (rule.effect === 'ask') {
-    return new BrowserDriverError(
-      'origin_asks',
-      `Browser profile \`${profile.id}\` asks the operator before acting on pages at ${origin} ` +
-        `(rule \`${rule.origin}\`), and does not load pages there: its egress proxy serves ` +
-        'every page of the profile at once, so it cannot let the one page an operator approved ' +
-        'reach that site without letting the others. Rules are set on the machine.',
-      { origin, rule: rule.origin },
-    );
-  }
   return new BrowserDriverError(
     'origin_denied',
     `Browser profile \`${profile.id}\` does not allow ${doing} ${origin}: the operator's rule ` +
@@ -67,13 +57,12 @@ function refusedByRule(
 }
 
 /**
- * Navigation runs under every posture; only a `deny` or `ask` rule on the
- * destination stops it. An `ask` refuses rather than asks (D7, as built): a
- * connection to the site cannot be tied to the page an approval named.
+ * Navigation runs under every posture and at an origin an `ask` rule names,
+ * as reading does; only a `deny` rule on the destination stops it.
  */
 export function assertNavigationAllowed(profile: BrowserProfile, destination: URL): void {
   const rule = ruleForUrl(profile, destination);
-  if (rule !== undefined && rule.effect !== 'allow') {
+  if (rule?.effect === 'deny') {
     throw refusedByRule(profile, rule, destination.origin, 'opening pages at');
   }
 }
@@ -140,17 +129,30 @@ export function askUnanswerable(profile: BrowserProfile, origin: string): Browse
 }
 
 /**
+ * A script where the profile asks before acting: what a script will do cannot
+ * be shown to the operator as one action to approve, so it is not run at all.
+ */
+export function scriptAsks(profile: BrowserProfile, origin: string): BrowserDriverError {
+  return new BrowserDriverError(
+    'script_refused',
+    `Browser profile \`${profile.id}\` asks the operator before acting on pages at ${origin}, ` +
+      'and a script cannot be shown to them as one action to approve, so nothing was run. An ' +
+      'action on one element at a time is what an operator can be asked to approve.',
+    { origin, profileId: profile.id },
+  );
+}
+
+/**
  * Why the egress proxy refuses connections to `host`, or nothing. A `deny`
  * reaches the connection so that no redirect, subresource or script gets
- * there either. `ask` is held to the same: the proxy serves every page of the
- * profile, and a connection says nothing of which page made it, so admitting
- * the site for the one page an operator approved would admit it for all.
+ * there either. An `ask` does not: it gates actions on a page, which the
+ * browser performs, not what the page loads.
  */
 export function ruleRefusingHost(profile: BrowserProfile, host: string): string | undefined {
   const rule = strictest(profile.rules, (candidate) => {
     const pattern = parseBrowserOriginPattern(candidate.origin);
     return pattern !== undefined && browserOriginPatternMatchesHost(pattern, host);
   });
-  if (rule === undefined || rule.effect === 'allow') return undefined;
-  return `${host} is under the operator's rule \`${rule.origin}\` (${rule.effect})`;
+  if (rule?.effect !== 'deny') return undefined;
+  return `${host} is under the operator's rule \`${rule.origin}\` (deny)`;
 }

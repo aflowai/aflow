@@ -115,6 +115,9 @@ export const ApiWriteApprovalRequestPayloadSchema = z.object({
 });
 export type ApiWriteApprovalRequestPayload = z.infer<typeof ApiWriteApprovalRequestPayloadSchema>;
 
+/** Room for an excerpt in UTF-16 units, the length a string's `length` counts. */
+export const BROWSER_APPROVAL_EXCERPT_MAX_UNITS = 8000;
+
 /**
  * What a browser action would enter, as the approver sees it. The value itself
  * appears only as a bounded excerpt, and never for a field that takes a
@@ -124,8 +127,10 @@ export const BrowserApprovalValueSummarySchema = z.object({
   kind: z.enum(['text', 'credential', 'options', 'key']),
   /** Characters entered, options chosen, or 1 for a key. */
   length: z.number().int().nonnegative(),
-  /** The start of what is entered. Absent for a credential field. */
-  excerpt: z.string().max(400).optional(),
+  /** What is entered, or the start of it. Absent for a credential field. */
+  excerpt: z.string().max(BROWSER_APPROVAL_EXCERPT_MAX_UNITS).optional(),
+  /** The excerpt is the start of the value only. */
+  truncated: z.boolean(),
   /** For `type`: Enter is pressed after the text. */
   submit: z.boolean().optional(),
 });
@@ -155,6 +160,11 @@ export const BrowserWriteApprovalRequestPayloadSchema = z.object({
   askedBy: BrowserApprovalAskedBySchema,
   /** The page as it stood when the action was asked for, password fields masked. */
   screenshotRef: z.string().optional(),
+  /**
+   * Until when the request stands: the agent's page is held open for the
+   * answer until then, and an answer after it may find the page gone.
+   */
+  standsUntil: z.string().datetime(),
   /** Binds an approval to profile, page, origin, element, action and the value's digest. */
   requestHash: z.string(),
 });

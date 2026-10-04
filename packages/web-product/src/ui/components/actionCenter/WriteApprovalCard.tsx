@@ -195,6 +195,10 @@ function BrowserActionDetail({
         {view.askedBy}
       </Text>
 
+      <Text size="sm" variant="muted">
+        {view.standsUntil}
+      </Text>
+
       {extension.screenshotRef && <PageScreenshot payloadRef={extension.screenshotRef} />}
     </>
   );

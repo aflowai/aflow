@@ -360,7 +360,7 @@ describe('asking the running executor', () => {
     expect(printed.slice(0, 3)).toEqual([
       'work — ask-to-act, window hidden, idle after 30 minutes, open to every space',
       '    every action waits for your approval in the Action Center',
-      '    ask https://bank.example.org — actions there wait for your approval; no page there is loaded',
+      '    ask https://bank.example.org — pages there open and are read; every action waits for your approval',
     ]);
     expect(printed.join('\n')).not.toContain('not available');
   });
