@@ -154,7 +154,7 @@ export function resolveProfile(
       `Browser profile \`${profileId}\` is closed to runs nobody is present for, and this ` +
         'run is one now: what last set it going — its start or its latest resume — was not a ' +
         'person in a conversation or a voice session, but a schedule, a webhook, the API, an ' +
-        'MCP client, an eval, a timer, a sub-agent finishing or an agent. Nothing was done, and ' +
+        'MCP client, an eval, a timer or an agent. Nothing was done, and ' +
         'no call on this profile is let in until a person next sets the run going. The ' +
         'operator opens the profile to such runs on the machine: ' +
         `\`aflow browser unattended ${profileId} allow\`.`,

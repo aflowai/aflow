@@ -30,9 +30,9 @@ const ONLY_A_PERSON_USES: Readonly<Record<RunTrigger, boolean>> = {
 };
 
 /**
- * Whether a run started through this surface was started by a person. The API
- * takes these triggers only from a request authenticated as an interactive
- * user, so a start carrying one is a person's.
+ * Whether only a person uses this surface, so the API refuses it from a
+ * request not authenticated as an interactive user. Not whether a run is
+ * attended: that is the request's credential, whatever surface it names.
  */
 export function isPersonTrigger(trigger: RunTrigger | undefined): boolean {
   return trigger !== undefined && ONLY_A_PERSON_USES[trigger];

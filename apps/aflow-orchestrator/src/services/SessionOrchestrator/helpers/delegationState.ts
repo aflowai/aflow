@@ -77,9 +77,8 @@ export async function enterChildWait(
 // Leave child-wait → RUNNING (child completed or returned control)
 // ============================================================================
 
-// A wake that is not a person: a child finishing, pausing back to its parent,
-// the supervision sweep or a timer. The parent was attended when it delegated,
-// but whoever was there then may be gone by the time the child returns.
+// Ending a wait on the parent's own delegated work continues the activation
+// that delegated it, so `activatedByPerson` is left as the wait found it.
 
 export async function leaveChildWaitToRunning(
   redis: Redis,
@@ -102,7 +101,6 @@ export async function leaveChildWaitToRunning(
           runStatePatch: {
             status: 'RUNNING',
             waitingForChildSessionIds: [],
-            activatedByPerson: false,
           },
           clearedRunStateFields: LEAVE_CHILD_WAIT_CLEARED_FIELDS,
         },
@@ -116,7 +114,6 @@ export async function leaveChildWaitToRunning(
     {
       status: 'RUNNING',
       ...getClearedDelegationStatePatch(),
-      activatedByPerson: false,
     },
     recoveryEvents,
   );

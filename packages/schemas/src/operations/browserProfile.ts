@@ -178,10 +178,10 @@ export const BrowserProfileSchema = z.object({
     .default(true)
     .describe(
       'Whether a run nobody is present for may use it — one a schedule, a webhook, the API, ' +
-        'an MCP client, an eval, a timer, a sub-agent finishing or an agent last started or ' +
-        'resumed. `false` keeps it to runs a person last set going — a message in a ' +
-        'conversation or by voice, an answer in the Action Center — and runs delegated from ' +
-        'one while it was.',
+        'an MCP client, an eval, a timer or an agent last started or resumed. `false` keeps it ' +
+        'to runs a person last set going — a message in a conversation or by voice, an answer ' +
+        'in the Action Center — including once a sub-agent they waited on returns to them, and ' +
+        'runs delegated from one while it was.',
     ),
   idleMinutes: z
     .number()

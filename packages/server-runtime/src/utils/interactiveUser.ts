@@ -31,9 +31,11 @@ export function isInteractiveActor(actor: ActorContext | undefined): boolean {
 }
 
 /**
- * The surface a run is started from. `chat` and `voice` are a person's, so a
- * credential that is not an interactive user is refused them rather than
- * having them rewritten: a misconfigured client learns.
+ * The surface a run is started from. It names the surface only: whether a
+ * person set the run going is the credential's, so an interactive user's `api`
+ * start is attended. `chat` and `voice` are a person's, so a credential that is
+ * not an interactive user is refused them rather than having them rewritten: a
+ * misconfigured client learns.
  */
 export const StartModeSchema = z.enum(['chat', 'api', 'mcp', 'voice']);
 export type StartMode = z.infer<typeof StartModeSchema>;

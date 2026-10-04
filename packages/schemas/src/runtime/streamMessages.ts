@@ -855,7 +855,8 @@ export const StartRunCommandSchema = z.object({
   /**
    * Whether a person sets the run going with this command: decided where the
    * command is made, from how its request was authenticated, never from what
-   * the request says. The session's jobs carry it until the next activation.
+   * the request says — `trigger` names the surface and decides nothing here.
+   * The session's jobs carry it until the next activation.
    */
   activatedByPerson: z.boolean().default(false),
   /** Whether the user is interacting via voice — mutable, can change on resume */

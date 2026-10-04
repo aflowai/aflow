@@ -61,11 +61,12 @@ export const BROWSER_USAGE =
   '                                            or read-only.\n' +
   '  browser unattended <profile> allow|refuse Whether runs nobody is present for may use it:\n' +
   '                                            one a schedule, a webhook, the API, an MCP\n' +
-  '                                            client, an eval, a timer, a sub-agent finishing\n' +
-  '                                            or an agent last set going. A run a person last\n' +
-  '                                            set going — a message in a conversation or by\n' +
-  '                                            voice, an answer in the Action Center — may\n' +
-  '                                            either way, as may a run delegated from it then.\n' +
+  '                                            client, an eval, a timer or an agent last set\n' +
+  '                                            going. A run a person last set going — a\n' +
+  '                                            message in a conversation or by voice, an\n' +
+  '                                            answer in the Action Center — may either way,\n' +
+  '                                            still when a sub-agent it waited on returns to\n' +
+  '                                            it, as may a run delegated from it then.\n' +
   '  browser rule <profile> <origin> <effect>  allow, ask or deny pages at an origin, such as\n' +
   '                                            https://mail.example.com or *.example.com.\n' +
   '                                            ask: pages there open and are read, and every\n' +

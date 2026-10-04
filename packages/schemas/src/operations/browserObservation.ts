@@ -217,8 +217,9 @@ export const BrowserProfileListOutputSchema = z.object({
         .boolean()
         .describe(
           'Whether runs nobody is present for may use it: one a schedule, a webhook, the API, an ' +
-            'MCP client, an eval, a timer, a sub-agent finishing or an agent last set going, ' +
-            'rather than a person’s message or answer in the Action Center.',
+            'MCP client, an eval, a timer or an agent last set going, rather than a person’s ' +
+            'message or answer in the Action Center. A sub-agent returning to the run that ' +
+            'waited on it changes neither.',
         ),
       openToThisRun: z
         .boolean()

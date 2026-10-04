@@ -1,8 +1,8 @@
 /**
  * Whether a person started a run is the server's to decide, from how the
- * request was authenticated: `mode` names the surface and is refused `chat`
- * and `voice` from a credential that is not an interactive user, rather than
- * rewritten. The local edition's authentication is the real one: its web
+ * request was authenticated, by one rule for a start, a resume and a retry:
+ * `mode` only names the surface, and is refused `chat` and `voice` from a
+ * credential that is not an interactive user, rather than rewritten. The local edition's authentication is the real one: its web
  * server presents the instance secret and is the owner; an API key is a key.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -170,15 +170,34 @@ describe('POST /v1/sessions — who may start a run as a person', () => {
     await app.close();
   });
 
-  it('starts a signed-in user’s voice session attended, and their api run unattended', async () => {
+  it('starts a signed-in user’s run attended whatever surface it names', async () => {
     hostedPrincipal = SIGNED_IN;
     const app = await buildApp();
-    await start(app, {}, { ...HELMSMAN, mode: 'voice' });
-    await start(app, {}, { ...HELMSMAN, mode: 'api' });
+    for (const mode of ['voice', 'api', 'mcp'] as const) {
+      expect((await start(app, {}, { ...HELMSMAN, mode })).statusCode).toBe(201);
+    }
     expect(mockStartSession.mock.calls.map(([request]) => request)).toMatchObject([
       { trigger: 'voice', voiceMode: true, activatedByPerson: true },
-      { trigger: 'api', activatedByPerson: false },
+      { trigger: 'api', activatedByPerson: true },
+      { trigger: 'mcp', activatedByPerson: true },
     ]);
+    await app.close();
+  });
+
+  it('starts and resumes the web application’s api run alike, attended', async () => {
+    const app = await buildApp();
+    await start(app, WEB_APP, { ...HELMSMAN, mode: 'api' });
+    await app.inject({
+      method: 'POST',
+      url: `/v1/sessions/${SESSION}/resume?spaceId=${SPACE}`,
+      headers: WEB_APP,
+      payload: { stepExecutionId: STEP, input: { message: 'go on' } },
+    });
+    expect(mockStartSession.mock.calls[0]?.[0]).toMatchObject({
+      trigger: 'api',
+      activatedByPerson: true,
+    });
+    expect(mockResumeSession.mock.calls[0]?.[0]).toMatchObject({ activatedByPerson: true });
     await app.close();
   });
 

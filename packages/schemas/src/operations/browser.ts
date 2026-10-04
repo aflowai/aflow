@@ -376,9 +376,10 @@ export const BrowserPageActionRegistrations: OperationRegistration[] = [
         'A profile that keeps sign-ins does not reach services on this machine (localhost, its ' +
           'own addresses), whatever address names them.',
         'A profile may be closed to runs nobody is present for — last set going by a schedule, ' +
-          'a webhook, the API, an MCP client, an eval, a timer, a sub-agent finishing or an ' +
-          'agent. Such a run is refused `BROWSER_PROFILE_CLOSED_TO_UNATTENDED` until a person ' +
-          'next sends it a message or answers it; browser.profile.list shows `openToThisRun: false`.',
+          'a webhook, the API, an MCP client, an eval, a timer or an agent. A sub-agent ' +
+          'returning to the run that waited on it leaves it as it was. Such a run is refused ' +
+          '`BROWSER_PROFILE_CLOSED_TO_UNATTENDED` until a person next sends it a message or ' +
+          'answers it; browser.profile.list shows `openToThisRun: false`.',
         UNTRUSTED_CONTENT,
       ],
       minimalExampleInput: { url: 'https://example.com' },

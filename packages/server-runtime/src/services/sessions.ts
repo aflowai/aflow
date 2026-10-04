@@ -114,9 +114,9 @@ export interface StartSessionRequest {
   trigger?: RunTrigger | undefined;
   /**
    * Whether a person sets the run going with this request: true only for a
-   * request authenticated as an interactive user (`isInteractiveUser`), never
-   * from anything the request says. The run's jobs carry it until its next
-   * start, resume or retry.
+   * request authenticated as an interactive user (`isInteractiveUser`), whatever
+   * surface `trigger` names, and never from anything the request says. The
+   * run's jobs carry it until its next start, resume or retry.
    */
   activatedByPerson: boolean;
   /** Whether the user is interacting via voice (set when mode='voice') */

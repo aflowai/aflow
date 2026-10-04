@@ -14,7 +14,6 @@ import {
   ClientMessageIdSchema,
   SimulationRunInputSchema,
   SessionMetadataSchema,
-  isPersonTrigger,
   type SessionId,
   type StepExecutionId,
   type SessionAgentTarget,
@@ -355,7 +354,8 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
       const body = request.body;
       const waitParam = request.query.wait;
       const mode = body.mode ?? 'api';
-      const modeRefusal = refusedStartMode(mode, isInteractiveUser(request.authUser));
+      const interactiveUser = isInteractiveUser(request.authUser);
+      const modeRefusal = refusedStartMode(mode, interactiveUser);
       if (modeRefusal) return reply.status(400).send({ error: 'BadRequest', message: modeRefusal });
 
       try {
@@ -478,7 +478,7 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
             createdBy:
               (request.headers['x-on-behalf-of'] as string | undefined) ?? request.authUser?.userId,
             trigger: mode,
-            activatedByPerson: isPersonTrigger(mode),
+            activatedByPerson: interactiveUser,
             ...(mode === 'voice' ? { voiceMode: true } : {}),
             ...(actorContext ? { actorContext } : {}),
             ...(body.clientMessageId ? { clientMessageId: body.clientMessageId } : {}),

@@ -27,7 +27,7 @@ describe('isPersonTrigger', () => {
     });
   });
 
-  it('reads a run with no recorded trigger as one nobody started', () => {
+  it('reads no recorded trigger as no surface only a person uses', () => {
     expect(isPersonTrigger(undefined)).toBe(false);
   });
 

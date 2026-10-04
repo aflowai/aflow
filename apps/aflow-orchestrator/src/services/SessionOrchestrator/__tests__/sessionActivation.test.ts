@@ -3,10 +3,11 @@
  * not of how it was born. A conversation a person starts is attended; a
  * schedule that resumes it hours later finds nobody there, and every job it
  * schedules says so; the person's next message, or an operator's answer in
- * the Action Center, makes it attended again. A child run finishing wakes its
- * parent unattended: whoever was there when the parent delegated may be gone
- * by the time the child returns. Hot state lives in a Redis the whole chain
- * reads and writes, so each step sees what the one before it stored.
+ * the Action Center, makes it attended again. A child run returning to the
+ * parent that waited on it is not a new activation but the rest of the one
+ * that delegated, so the parent stays as attended as it was. Hot state lives
+ * in a Redis the whole chain reads and writes, so each step sees what the one
+ * before it stored.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import RedisMock from 'ioredis-mock';
@@ -30,6 +31,7 @@ import {
   type RunAccessGrant,
   type SessionId,
   type StepExecutionId,
+  type StepId,
   type SystemRole,
   type TenantId,
   type TraceId,
@@ -141,7 +143,11 @@ function build(store: RedisType) {
     applyResult: () => Promise.resolve(undefined),
   } as unknown as Parameters<typeof createStartRun>[0];
   bindings.scheduleStep = createScheduleStep(bindings);
-  return { startRun: createStartRun(bindings), resumeRun: createResumeRun(bindings) };
+  return {
+    startRun: createStartRun(bindings),
+    resumeRun: createResumeRun(bindings),
+    scheduleStep: bindings.scheduleStep,
+  };
 }
 
 /** The session parked on its current step, as an executor's pause leaves it. */
@@ -308,11 +314,12 @@ describe('a conversation a person starts, then a schedule resumes', () => {
   });
 });
 
-describe('a parent a person started, woken by the child it delegated to', () => {
+describe('a parent woken by the child it delegated to and waited on', () => {
   const CHILD = '00000000-0000-4000-8000-0000000000f6' as SessionId;
   const DELEGATE_STEP = '00000000-0000-4000-8000-0000000000f7' as StepExecutionId;
 
-  it('wakes unattended, though it was attended when it delegated', async () => {
+  /** The parent delegates and waits, then its child succeeds and wakes it. */
+  async function childReturnsTo(parentActivatedByPerson: boolean): Promise<void> {
     const now = Date.now();
     await setSessionState(redis, {
       sessionId: RUN,
@@ -323,8 +330,9 @@ describe('a parent a person started, woken by the child it delegated to', () => 
       createdAt: now,
       lastUpdatedAt: now,
       spaceId: SPACE,
+      grantJson: serializeRunAccessGrant(grant()),
       trigger: 'chat',
-      activatedByPerson: true,
+      activatedByPerson: parentActivatedByPerson,
       traceId: 'trace-parent',
       currentStepExecutionId: DELEGATE_STEP,
       delegationPauseSource: 'child_running',
@@ -339,7 +347,7 @@ describe('a parent a person started, woken by the child it delegated to', () => 
       createdAt: now,
       lastUpdatedAt: now,
       spaceId: SPACE,
-      activatedByPerson: true,
+      activatedByPerson: parentActivatedByPerson,
       parentSessionId: RUN,
       parentStepExecutionId: DELEGATE_STEP,
     });
@@ -359,9 +367,47 @@ describe('a parent a person started, woken by the child it delegated to', () => 
     });
 
     await resumeParentOnChildComplete(redis, TENANT, CHILD, 'SUCCEEDED', EMPTY);
+    expect((await getSessionState(redis, TENANT, RUN))?.status).toBe('RUNNING');
+  }
 
-    const parent = await getSessionState(redis, TENANT, RUN);
-    expect(parent?.status).toBe('RUNNING');
-    expect(parent?.activatedByPerson).toBe(false);
+  /** The parent's next browser call, as its agent would take it with the child's answer. */
+  async function parentSchedulesNext(): Promise<Record<string, unknown>> {
+    await lifecycle.scheduleStep({
+      context: {
+        tenantId: TENANT,
+        runId: RUN,
+        agentDefinition,
+        traceId: 'trace-parent' as TraceId,
+      },
+      stepId: OPEN as StepId,
+      inputRef: EMPTY,
+    });
+    expect(lastJob()).toMatchObject({
+      sessionId: RUN,
+      operationId: BROWSER_PAGE_OPEN_OPERATION_ID,
+    });
+    return lastJob();
+  }
+
+  it('stays attended when a person was there as it delegated, so its next jobs are too', async () => {
+    await childReturnsTo(true);
+    expect((await getSessionState(redis, TENANT, RUN))?.activatedByPerson).toBe(true);
+    expect((await parentSchedulesNext())['activatedByPerson']).toBe(true);
+  });
+
+  it('stays unattended when nobody was', async () => {
+    await childReturnsTo(false);
+    expect((await getSessionState(redis, TENANT, RUN))?.activatedByPerson).toBe(false);
+    expect((await parentSchedulesNext())['activatedByPerson']).toBe(false);
+  });
+
+  it('is unattended once a schedule resumes it afterwards', async () => {
+    await childReturnsTo(true);
+    await parentSchedulesNext();
+    await pauseOnCurrentStep();
+    await deliverResume(await scheduleFiresResume());
+
+    expect((await getSessionState(redis, TENANT, RUN))?.activatedByPerson).toBe(false);
+    expect(lastJob()['activatedByPerson']).toBe(false);
   });
 });

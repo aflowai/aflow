@@ -1,10 +1,11 @@
 /**
  * A profile with `unattended: false` takes only runs a person last set going —
- * a message in a conversation or by voice, an answer in the Action Center, or a
- * run delegated from one while it was — and refuses every other before it opens
- * or reuses a page. Whether a person did is the `activatedByPerson` each job
- * carries, which changes as the run is resumed; a job without it is nobody's.
- * A profile left at the default takes every run, as it always has.
+ * a message in a conversation or by voice, an answer in the Action Center, the
+ * same run once a sub-agent it waited on returns, or a run delegated from one
+ * while it was — and refuses every other before it opens or reuses a page.
+ * Whether a person did is the `activatedByPerson` each job carries, which
+ * changes as the run is resumed; a job without it is nobody's. A profile left
+ * at the default takes every run, as it always has.
  */
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -61,6 +62,7 @@ describe('a profile closed to runs nobody is present for', () => {
       );
       expect(refused.message).toContain('until a person next sets the run going');
       expect(refused.message).toContain('`aflow browser unattended work allow`');
+      expect(refused.message).not.toContain('sub-agent');
       expect(refused.details).toEqual({ profileId: 'work' });
       expect(h.launches).toHaveLength(0);
     },
@@ -84,6 +86,17 @@ describe('a profile closed to runs nobody is present for', () => {
 
     const resumedByMessage = { ...RUN_A, activatedByPerson: true };
     expect((await h.driver.readPage(resumedByMessage, pageId, { what: 'text' })).what).toBe('text');
+  });
+
+  it('lets in a person’s run once the sub-agent it waited on returns to it', async () => {
+    const h = machine();
+    const pageId = await open(h, { ...RUN_A, activatedByPerson: true });
+
+    // The orchestrator leaves the parent's activation as the wait found it,
+    // so its next job carries the same fact.
+    const afterSubAgent = { ...RUN_A, activatedByPerson: true };
+    expect((await h.driver.readPage(afterSubAgent, pageId, { what: 'text' })).what).toBe('text');
+    expect(await open(h, afterSubAgent)).toMatch(/^pg_/);
   });
 
   it('closes a page on a policy change by its run’s latest call, not by how it opened', async () => {

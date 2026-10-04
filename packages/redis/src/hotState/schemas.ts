@@ -128,10 +128,13 @@ export const SessionHotStateSchema = z.object({
   /**
    * Whether a person set this session going in its latest activation: true
    * only when its start, or its latest resume or retry, came from an
-   * interactive user's request at the API — a message, an operator's resolve.
-   * Every other activation — a schedule, a webhook, a timer, a child run
-   * finishing, an agent's resume — writes false, and so does the queued start
-   * of a child run whose parent is not attended at that moment. The
+   * interactive user's request at the API — a message, an operator's resolve —
+   * whatever surface the request names. Every activation nobody asked for — a
+   * schedule, a webhook, a timer, an API or MCP client's start or resume, an
+   * agent's resume of a session that was not waiting on that agent's work —
+   * writes false, and so does the queued start of a child run whose parent is
+   * not attended at that moment. Waiting on its own delegated work is one
+   * activation: the child returning leaves this as the wait found it. The
    * orchestrator writes it in the same write that starts or resumes the
    * session, and stamps it on every job the session schedules. Absent reads as
    * nobody.

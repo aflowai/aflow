@@ -205,7 +205,7 @@ export async function dispatchClaimedOperationTask(
     scheduledAtMs: Date.now(),
     ...(credentialOwnerId !== undefined ? { credentialOwnerId } : {}),
     spaceId,
-    ...(activatedByPerson !== undefined ? { activatedByPerson } : {}),
+    activatedByPerson,
   });
   return dispatched.kind === 'waiting' ? 'executor_wait' : 'enqueued';
 }

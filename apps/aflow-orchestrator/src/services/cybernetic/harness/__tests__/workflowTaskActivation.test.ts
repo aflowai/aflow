@@ -79,7 +79,7 @@ async function runnerActivation(): Promise<boolean | undefined> {
   return queued.activatedByPerson;
 }
 
-async function operationJobActivation(operationId: string): Promise<boolean | undefined> {
+async function operationJobActivation(operationId: string): Promise<boolean> {
   const authority = await resolveWorkflowTaskAuthority(
     deps.redis,
     deps.db,
@@ -104,7 +104,8 @@ async function operationJobActivation(operationId: string): Promise<boolean | un
   });
   const job = mockAddStepJob.mock.calls[0]?.[1] as Record<string, unknown>;
   expect(job['operationId']).toBe(operationId);
-  return job['activatedByPerson'] as boolean | undefined;
+  expect(typeof job['activatedByPerson']).toBe('boolean');
+  return job['activatedByPerson'] as boolean;
 }
 
 beforeEach(() => {
