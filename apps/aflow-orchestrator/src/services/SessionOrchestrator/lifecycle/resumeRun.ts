@@ -21,11 +21,10 @@ import {
   atomicCompleteStep,
   setRunAccessGrant,
   updateSessionState,
-  getWriteApprovalGrant,
   takeRoomMessagePosition,
 } from '@aflow/redis';
 import { chooseResumeInputRef } from '../helpers/resumeInputRef.js';
-import { readWriteApprovalRequest } from '../scheduling/writeApprovalPause.js';
+import { decideWriteApprovalResume } from '../scheduling/writeApprovalPause.js';
 import {
   getEffectiveStateVariables,
   getVariableVersion,
@@ -637,86 +636,57 @@ export function createResumeRun(bindings: SessionOrchestratorBindings) {
       return { status: 'RUNNING' as SessionStatus };
     }
 
-    // Write-approval pause (Plan 253): a gated api-call step parked as a
-    // `write_approval` PAUSE is driven ONLY by the grant the authenticated
-    // Action Center resolve handler wrote — never by the resume input, which a
-    // scheduled `{}` wake or an agent-driven resume could forge. Reading the
-    // grant here (keyed by run + the exact call's requestHash) is the single
-    // authority: approved → re-dispatch (the executor gate finds the same
+    // Approval pause (Plan 253; Plan 320 D7): a gated API write or browser
+    // action parked as a `write_approval` PAUSE is driven ONLY by the grant
+    // the authenticated Action Center resolve handler wrote — never by the
+    // resume input, which a scheduled `{}` wake or an agent-driven resume
+    // could forge. Approved → re-dispatch (the executor gate finds the same
     // grant and proceeds); denied → fail the step so the agent sees a tool
-    // error; absent → this resume is not a human decision, so leave the step
-    // paused rather than implicitly approving it.
+    // error; undecided → this resume is not a human decision, so leave the
+    // step paused rather than implicitly approving it.
     if (targetStepDef && runState.requestedInputRef) {
-      const writeApprovalReq = await readWriteApprovalRequest(
-        payloadStore,
-        runState.requestedInputRef,
+      const approval = await decideWriteApprovalResume(
+        { payloadStore, redis },
+        {
+          tenantId: params.tenantId,
+          runId: params.runId,
+          requestedInputRef: runState.requestedInputRef,
+        },
       );
-      if (writeApprovalReq) {
-        const grant = await getWriteApprovalGrant(
-          redis,
-          params.tenantId,
-          params.runId,
-          writeApprovalReq.requestHash,
-        );
-
-        if (!grant) {
-          // No authenticated decision on record — do not re-dispatch (which
-          // would re-gate anyway) and do not approve. Stay paused.
-          return { status: 'PAUSED' as SessionStatus };
-        }
-
-        if (grant.decision === 'denied') {
-          const errorPayload = {
-            code: 'write_approval_denied',
-            // `permission` classification is load-bearing: toAgentToolError maps
-            // it to retry:false, so the calling agent sees a firm denial rather
-            // than a retryable system error and does not re-issue the call. The
-            // message is self-contained because the agent envelope is lossy, and
-            // carries the operator's reason (the highest-signal part — it tells
-            // the agent WHAT to change) when one was given.
-            classification: 'permission' as const,
-            retryable: false,
-            message:
-              'This write was denied by a human operator in the Action Center' +
-              (grant.reason ? `. Operator's reason: "${grant.reason}"` : '') +
-              '. It is not a system error and will NOT succeed on retry — do not call this ' +
-              'endpoint again with the same request. Use the operator’s reason to decide what to ' +
-              'do: adjust and propose a different action, or tell the user it was declined and ask ' +
-              'how to proceed.',
-            timestamp: new Date().toISOString(),
-          };
-          const errorRef = `inline:${Buffer.from(JSON.stringify(errorPayload)).toString('base64')}`;
-          // Reset PAUSED → STARTED so applyResult's idempotency guard accepts
-          // the synthetic FAILED result (a PAUSED step's result is discarded).
-          const { updateStepState } = await import('@aflow/redis');
-          await updateStepState(redis, params.tenantId, params.stepExecutionId, {
-            sessionId: params.runId,
-            status: 'STARTED',
-          });
-          await addStepResult(redis, {
-            messageVersion: 1,
-            tenantId: params.tenantId,
-            sessionId: params.runId,
-            stepExecutionId: params.stepExecutionId,
-            parentStepExecutionId: null,
-            stepId: targetStepId,
-            stepType: targetStepDef.stepType,
-            operationId: targetStepDef.operation as OperationId,
-            attempt: stepState.attempt,
-            idempotencyKey:
-              `write-approval-resume:${params.runId}:${params.stepExecutionId}` as IdempotencyKey,
-            status: 'FAILED',
-            errorRef,
-            error: errorPayload,
-            resolvedInputRef: stepState.inputRef || '',
-            durationMs: 0,
-            traceId: params.traceId,
-            finishedAtMs: Date.now(),
-          });
-          return { status: 'RUNNING' as SessionStatus };
-        }
-        // grant.decision === 'approved' → fall through to scheduleStep. The
-        // re-dispatched executor reads the same run+requestHash grant and sends.
+      if (approval?.decision === 'undecided') {
+        return { status: 'PAUSED' as SessionStatus };
+      }
+      if (approval?.decision === 'denied') {
+        const errorPayload = approval.error;
+        const errorRef = `inline:${Buffer.from(JSON.stringify(errorPayload)).toString('base64')}`;
+        // Reset PAUSED → STARTED so applyResult's idempotency guard accepts
+        // the synthetic FAILED result (a PAUSED step's result is discarded).
+        const { updateStepState } = await import('@aflow/redis');
+        await updateStepState(redis, params.tenantId, params.stepExecutionId, {
+          sessionId: params.runId,
+          status: 'STARTED',
+        });
+        await addStepResult(redis, {
+          messageVersion: 1,
+          tenantId: params.tenantId,
+          sessionId: params.runId,
+          stepExecutionId: params.stepExecutionId,
+          parentStepExecutionId: null,
+          stepId: targetStepId,
+          stepType: targetStepDef.stepType,
+          operationId: targetStepDef.operation as OperationId,
+          attempt: stepState.attempt,
+          idempotencyKey:
+            `write-approval-resume:${params.runId}:${params.stepExecutionId}` as IdempotencyKey,
+          status: 'FAILED',
+          errorRef,
+          error: errorPayload,
+          resolvedInputRef: stepState.inputRef || '',
+          durationMs: 0,
+          traceId: params.traceId,
+          finishedAtMs: Date.now(),
+        });
+        return { status: 'RUNNING' as SessionStatus };
       }
     }
 

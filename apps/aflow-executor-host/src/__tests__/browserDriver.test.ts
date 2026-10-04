@@ -312,7 +312,9 @@ describe('what the step is told', () => {
       'appliance_origin',
       'origin_denied',
       'posture_refused',
-      'ask_unavailable',
+      'origin_asks',
+      'approval_denied',
+      'ask_unanswerable',
       'credential_field',
     ] as const) {
       const failure = browserFailure(new BrowserDriverError(kind, 'refused'));

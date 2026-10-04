@@ -20,7 +20,7 @@ import {
  * mint this, so a resume that is not an explicit human decision cannot approve.
  * TTL-bounded: an unconsumed grant simply expires.
  */
-const WRITE_APPROVAL_GRANT_TTL_SECONDS = 3600;
+export const WRITE_APPROVAL_GRANT_TTL_SECONDS = 3600;
 
 export function writeApprovalGrantKey(
   tenantId: string,

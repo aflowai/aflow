@@ -49,6 +49,7 @@ import {
 import type { HarnessReach } from '../browser/harnessReach.js';
 import { createBrowserHandler } from '../handlers/browserHandler.js';
 import { harness, type Harness, profile, RUN_A } from './fixtures/fakeBrowser.js';
+import { memoryApprovals } from './fixtures/approvals.js';
 import { executorEnd, RELAY_SCRIPT, relayEnd, startRelay } from './fixtures/relayPipes.js';
 
 const VOCABULARY: ReadonlyArray<readonly [string, string]> = [
@@ -450,7 +451,7 @@ describe('a deny rule', () => {
           return Promise.resolve('inline:error');
         },
       } as unknown as ExecutorContext;
-      const result = await createBrowserHandler(h.driver).execute(ctx);
+      const result = await createBrowserHandler(h.driver, memoryApprovals()).execute(ctx);
       expect(result.status).toBe('FAILED');
       return written as { code: string; message: string };
     }

@@ -344,6 +344,27 @@ describe('asking the running executor', () => {
     ]);
   });
 
+  it('sets and lists asking — the posture and the rule — saying what each does', async () => {
+    await writePolicy({ browsers: [{ id: 'work' }] });
+    const clock = testClock();
+    await runBrowserCommand(
+      { kind: 'posture', profileId: 'work', posture: 'ask-to-act' },
+      deps([], clock),
+    );
+    await runBrowserCommand(
+      { kind: 'rule', profileId: 'work', origin: 'https://bank.example.org', effect: 'ask' },
+      deps([], clock),
+    );
+    const printed: string[] = [];
+    await runBrowserCommand({ kind: 'list' }, deps(printed, clock));
+    expect(printed.slice(0, 3)).toEqual([
+      'work — ask-to-act, window hidden, idle after 30 minutes, open to every space',
+      '    every action waits for your approval in the Action Center',
+      '    ask https://bank.example.org — actions there wait for your approval; no page there is loaded',
+    ]);
+    expect(printed.join('\n')).not.toContain('not available');
+  });
+
   it('refuses a request too old to act on, answering it and logging why', async () => {
     const clock = testClock();
     let answered = 0;

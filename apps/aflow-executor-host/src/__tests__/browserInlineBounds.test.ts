@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createBrowserHandler } from '../handlers/browserHandler.js';
 import { harness, RUN_A, type Harness } from './fixtures/fakeBrowser.js';
+import { memoryApprovals } from './fixtures/approvals.js';
 
 const URL_ = 'https://docs.example.com/reference';
 
@@ -52,7 +53,7 @@ async function run(
       return Promise.resolve('inline:output');
     },
   } as unknown as ExecutorContext;
-  const result = await createBrowserHandler(h.driver).execute(ctx);
+  const result = await createBrowserHandler(h.driver, memoryApprovals()).execute(ctx);
   expect(result.status, operationId).toBe('SUCCEEDED');
   return written as Record<string, unknown>;
 }

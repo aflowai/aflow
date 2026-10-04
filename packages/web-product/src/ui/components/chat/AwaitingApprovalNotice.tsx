@@ -5,6 +5,15 @@ import type { SessionBlockedOn } from '@aflow/schemas';
 
 type WriteApprovalBlock = Extract<SessionBlockedOn, { kind: 'needs_write_approval' }>;
 
+function waitingOn(block: WriteApprovalBlock): string {
+  if (block.target === 'api') return `${block.method} ${block.endpointId} on ${block.urlHost}`;
+  const element =
+    block.elementName !== undefined
+      ? `${block.elementRole} “${block.elementName}”`
+      : block.elementRole;
+  return `${block.action} ${element} on ${block.pageOrigin}`;
+}
+
 /**
  * In-transcript notice that the run is parked on a write approval.
  *
@@ -13,8 +22,9 @@ type WriteApprovalBlock = Extract<SessionBlockedOn, { kind: 'needs_write_approva
  * indicator — leaving a conversation that reads as hung when the platform is
  * in fact waiting correctly. This says what is waiting and where to answer it.
  *
- * It names the method and host but never the path or body: a resolved write URL
- * can carry secrets, which is why `blockedOn` only carries the host.
+ * For an API write it names the method and host but never the path or body: a
+ * resolved write URL can carry secrets, which is why `blockedOn` only carries
+ * the host. For a browser action it names the action, the element and the site.
  */
 export function AwaitingApprovalNotice({
   block,
@@ -41,10 +51,12 @@ export function AwaitingApprovalNotice({
           <Text size="sm" weight="medium">
             Waiting for your approval
           </Text>
-          {block.writeRiskTier === 'high' && <Badge variant="warning">High risk</Badge>}
+          {block.target === 'api' && block.writeRiskTier === 'high' && (
+            <Badge variant="warning">High risk</Badge>
+          )}
         </Row>
         <Text size="xs" color="muted">
-          {`${block.method} ${block.endpointId} on ${block.urlHost}`}
+          {waitingOn(block)}
         </Text>
       </Column>
       {onReview && (

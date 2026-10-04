@@ -330,12 +330,13 @@ describe('posture and origin rules', () => {
     expect(await h.driver.close(RUN_A, pageId)).toBe('closed');
   });
 
-  it('ask-to-act: action refused, saying asking is not available yet, and nothing pauses', async () => {
+  it('ask-to-act: navigation runs; an action from a caller that cannot wait is refused', async () => {
     const { h, pageId } = await opened({ posture: 'ask-to-act' });
-    const refused = await refusal(h.driver.act(act(pageId, 'e6', { kind: 'click' })));
-    expect(refused.kind).toBe('ask_unavailable');
-    expect(refused.message).toContain('not available yet');
     await h.driver.navigate({ ...RUN_A, pageId, to: { kind: 'reload' }, redelivered: false });
+    const refused = await refusal(h.driver.act(act(pageId, 'e6', { kind: 'click' })));
+    expect(refused.kind).toBe('ask_unanswerable');
+    expect(refused.message).not.toContain('not available yet');
+    expect(h.pages[0]?.actions).toEqual([]);
   });
 
   it('deny: refuses navigating to the origin and acting on a page there', async () => {
@@ -386,13 +387,39 @@ describe('posture and origin rules', () => {
     ]);
   });
 
-  it('ask: treated as deny, saying asking is not available yet', async () => {
-    const h = shop();
-    const pageId = await openShop(h);
-    h.setProfiles([profile({ rules: [{ origin: 'https://shop.example.com', effect: 'ask' }] })]);
-    const refused = await refusal(h.driver.act(act(pageId, 'e6', { kind: 'click' })));
-    expect(refused.kind).toBe('ask_unavailable');
-    expect(refused.message).toContain('not available yet');
+  it('ask: loads no page at the origin, and the proxy refuses it a connection', async () => {
+    const h = harness({
+      browsers: [profile({ rules: [{ origin: '*.bank.example.org', effect: 'ask' }] })],
+      world: {
+        sites: new Map([['https://shop.example.com/', { title: 'Shop', snapshot: FORM }]]),
+        redirects: new Map([['https://shop.example.com/pay', 'https://pay.bank.example.org/']]),
+      },
+    });
+    const opening = await refusal(
+      h.driver.open({
+        ...RUN_A,
+        redelivered: false,
+        profileId: 'default',
+        url: 'https://pay.bank.example.org/',
+      }),
+    );
+    expect(opening.kind).toBe('origin_asks');
+    expect(opening.message).not.toContain('not available yet');
+
+    const redirected = await refusal(
+      h.driver.open({
+        ...RUN_A,
+        redelivered: false,
+        profileId: 'default',
+        url: 'https://shop.example.com/pay',
+      }),
+    );
+    // Refused at the connection, as a `deny` is, naming the rule that asks.
+    expect(redirected.kind).toBe('origin_denied');
+    expect(redirected.message).toContain('(ask)');
+    expect(h.proxies[0]?.refusals.map((r) => [r.host, r.kind])).toEqual([
+      ['pay.bank.example.org', 'rule'],
+    ]);
   });
 
   it('allow: lifts the posture for its origin and no other', async () => {

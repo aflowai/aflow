@@ -9,7 +9,12 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { browserHandoffKey, browserHandoffSpaceIndexKey } from '@aflow/redis';
+import {
+  browserApprovalSpentKey,
+  browserAskKey,
+  browserHandoffKey,
+  browserHandoffSpaceIndexKey,
+} from '@aflow/redis';
 import { ConsumerGroups, StreamKeys } from '@aflow/schemas';
 
 import { renderRedisAcl } from './redisAcl.js';
@@ -40,6 +45,19 @@ describe('redis acl', () => {
     // minted; a credential that could write one could approve its own push.
     const patterns = hostLine.split(' ').filter((rule) => rule.includes('aflow:write-approval'));
     expect(patterns).toEqual(['%R~aflow:write-approval:*']);
+  });
+
+  it('writes the records beside a browser approval, which sit outside the grant family', () => {
+    const askKeys = [
+      browserAskKey('t', 'run-1', 'call'),
+      browserApprovalSpentKey('t', 'run-1', { requestHash: 'h', decidedAt: 'now' }),
+    ];
+    const rules = hostLine.split(' ');
+    expect(rules.filter((rule) => rule.includes('browser-ask'))).toEqual(['~aflow:browser-ask:*']);
+    for (const key of askKeys) {
+      expect(key.startsWith('aflow:browser-ask:')).toBe(true);
+      expect(key.startsWith('aflow:write-approval:')).toBe(false);
+    }
   });
 
   it('reaches no other lane, the control stream, or session state', () => {

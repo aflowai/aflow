@@ -447,6 +447,11 @@ export const BrowserPageActionRegistrations: OperationRegistration[] = [
           'acting again.',
         '`type` replaces the field’s contents; the receipt records the field and how many ' +
           'characters, never the text.',
+        'On a profile whose posture is `ask-to-act`, or on a page an `ask` rule names, this call ' +
+          'waits for the operator to approve it in the Action Center and then runs once. A ' +
+          'denial is final for that request: the same call is refused with the operator’s ' +
+          'reason rather than asked again. If the page changed while the operator decided, the ' +
+          'action is not performed and fails with the current outline.',
         POLICY_REFUSALS,
         UNTRUSTED_CONTENT,
       ],

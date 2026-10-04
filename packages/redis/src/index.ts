@@ -289,7 +289,15 @@ export {
   setWriteApprovalGrant,
   getWriteApprovalGrant,
   hostPushRequestHash,
+  WRITE_APPROVAL_GRANT_TTL_SECONDS,
 } from './writeApproval.js';
+export {
+  browserAskKey,
+  browserApprovalSpentKey,
+  rememberBrowserAsk,
+  readBrowserAsk,
+  spendBrowserApproval,
+} from './browserApproval.js';
 
 // Memory embedding operations
 export {

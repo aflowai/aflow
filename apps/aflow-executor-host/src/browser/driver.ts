@@ -14,6 +14,7 @@ import {
   type BrowserProfile,
 } from '@aflow/schemas';
 
+import { browserCallKey, clearAction, forfeitApproval } from './actionApproval.js';
 import { type LocalAddressClassifier, machineAddresses } from './addresses.js';
 import type { ChromeLauncher } from './chromeProcess.js';
 import { CREDENTIAL_FIELD_KEYS, entersValue, MODIFIERS } from './credentialFields.js';
@@ -78,7 +79,7 @@ import {
   type HeldPage,
   type PageOwner,
 } from './pageTable.js';
-import { assertActionAllowed, assertNavigationAllowed } from './rules.js';
+import { askUnanswerable, assertNavigationAllowed, gateAction } from './rules.js';
 import { screenshotWithinCeiling, type ScreenshotRequest } from './screenshot.js';
 import { readWhenQuiet, realClock, type SettleClock } from './settle.js';
 import {
@@ -357,7 +358,7 @@ export class BrowserDriver {
   ): Promise<ActionResult> {
     // Where the page is now, not where the agent believes it is.
     const pageUrl = urlOrNothing(held.page.url()) ?? new URL('about:blank');
-    assertActionAllowed(profile, pageUrl);
+    gateAction(profile, pageUrl);
     if (request.redelivered) {
       return {
         outcome: 'uncertain_outcome',
@@ -365,11 +366,19 @@ export class BrowserDriver {
       };
     }
 
+    const callKey = browserCallKey(held.pageId, request.ref, request.action);
+    // A reference that no longer resolves spends any approval the call was
+    // parked on: the operator approved an element that is not there to act on.
+    const stale = async (): Promise<BrowserDriverError> => {
+      if (request.approvals !== undefined) {
+        await forfeitApproval(request.approvals, request, callKey);
+      }
+      return await this.staleRef(held, running, request.ref);
+    };
+
     const snapshot = held.lastSnapshot;
-    const element = snapshot !== undefined ? describeRef(snapshot.text, request.ref) : undefined;
-    if (snapshot === undefined || element === undefined) {
-      throw await this.staleRef(held, running, request.ref);
-    }
+    let element = snapshot !== undefined ? describeRef(snapshot.text, request.ref) : undefined;
+    if (snapshot === undefined || element === undefined) throw await stale();
     if (entersValue(request.action) && snapshot.maskedRefs.has(request.ref)) {
       throw this.credentialRefusal(request.ref, element.name);
     }
@@ -379,7 +388,7 @@ export class BrowserDriver {
     try {
       frameUrl = await held.page.frameUrl(request.ref);
     } catch (error) {
-      if (error instanceof EngineRefNotFound) throw await this.staleRef(held, running, request.ref);
+      if (error instanceof EngineRefNotFound) throw await stale();
       throw new BrowserDriverError(
         'action_failed',
         `Which frame \`${request.ref}\` belongs to could not be read, so it was not acted on: ` +
@@ -387,7 +396,47 @@ export class BrowserDriver {
         { ref: request.ref },
       );
     }
-    assertActionAllowed(profile, pageUrl, urlOrNothing(frameUrl) ?? new URL('about:blank'));
+    const frame = urlOrNothing(frameUrl) ?? new URL('about:blank');
+    const gate = gateAction(profile, pageUrl, frame);
+    if (gate.verdict === 'ask') {
+      if (request.approvals === undefined) throw askUnanswerable(profile, frame.origin);
+      // The operator judges the element as the page holds it now, and the
+      // dispatch after an approval reads it again: a page that changed in
+      // between hashes differently and is not acted on.
+      const now = await this.readNow(held);
+      const current = describeRef(now.snapshot.text, request.ref);
+      if (current === undefined) throw await stale();
+      if (entersValue(request.action) && now.snapshot.maskedRefs.has(request.ref)) {
+        throw this.credentialRefusal(request.ref, current.name);
+      }
+      element = current;
+      const cleared = await clearAction(
+        request.approvals,
+        request,
+        callKey,
+        {
+          profileId: profile.id,
+          pageId: held.pageId,
+          pageOrigin: frame.origin,
+          pageTitle: now.title,
+          ref: request.ref,
+          element: current,
+          action: request.action,
+          credentialField: now.snapshot.maskedRefs.has(request.ref),
+          askedBy: gate.askedBy,
+        },
+        async () => await this.approvalScreenshot(held),
+      );
+      if (cleared === 'superseded') {
+        throw this.staleRefError(
+          held,
+          request.ref,
+          (await this.observe(held, running).catch(() => undefined))?.outline.text,
+          'The operator approved this action on the page as it stood when it was asked for, and ' +
+            'the page has changed since, so it was not performed and the approval is spent. ',
+        );
+      }
+    }
 
     const before = this.lastSeen(held);
     const startedAt = this.now();
@@ -614,7 +663,10 @@ export class BrowserDriver {
           { pageId, profileId: profile.id },
         );
       }
-      assertActionAllowed(profile, urlOrNothing(held.page.url()) ?? new URL('about:blank'));
+      const pageUrl = urlOrNothing(held.page.url()) ?? new URL('about:blank');
+      if (gateAction(profile, pageUrl).verdict === 'ask') {
+        throw askUnanswerable(profile, pageUrl.origin);
+      }
       let value: unknown;
       try {
         value = await withinDeadline(held.page.evaluate(expression), EVALUATE_TIMEOUT_MS);
@@ -880,10 +932,15 @@ export class BrowserDriver {
     };
   }
 
-  private staleRefError(held: HeldPage, ref: string, outline?: string): BrowserDriverError {
+  private staleRefError(
+    held: HeldPage,
+    ref: string,
+    outline?: string,
+    why = '',
+  ): BrowserDriverError {
     return new BrowserDriverError(
       'stale_ref',
-      `Reference \`${ref}\` does not resolve on page \`${held.pageId}\` as it is now ` +
+      `${why}Reference \`${ref}\` does not resolve on page \`${held.pageId}\` as it is now ` +
         `(${held.lastUrl}). References come from the newest outline or snapshot of the page; the ` +
         'current outline is in this error’s details — act on its references.',
       {
@@ -904,6 +961,18 @@ export class BrowserDriver {
       .then((view) => view.outline.text)
       .catch(() => undefined);
     return this.staleRefError(held, ref, outline);
+  }
+
+  /** The page as the operator is asked about it, password fields masked; nothing when it cannot be taken. */
+  private async approvalScreenshot(
+    held: HeldPage,
+  ): Promise<{ data: string; mimeType: string } | undefined> {
+    const taken = await screenshotWithinCeiling(held.page, { fullPage: false }).catch(
+      () => undefined,
+    );
+    return taken === undefined
+      ? undefined
+      : { data: taken.bytes.toString('base64'), mimeType: taken.contentType };
   }
 
   private credentialRefusal(ref: string, name: string | undefined): BrowserDriverError {

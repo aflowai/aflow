@@ -49,7 +49,7 @@ const CLI = 'yarn workspace @aflow/aflow-executor-host browser';
 
 const POSTURE_LINE: Record<BrowserPosture, string> = {
   autonomous: 'Navigates, reads and acts without asking.',
-  'ask-to-act': 'Navigates and reads; every action is refused until asking is built.',
+  'ask-to-act': 'Navigates and reads; every action waits for your approval in the Action Center.',
   'read-only': 'Navigates and reads; every action is refused.',
 };
 

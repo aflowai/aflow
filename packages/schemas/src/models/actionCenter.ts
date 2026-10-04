@@ -3,6 +3,11 @@ import { GateContextSchema, RelatesToEntrySchema } from '../operations/user.js';
 import { RatificationApplyReasonSchema } from '../cybernetic/stagedChange.js';
 import { BrowserProfileIdSchema } from '../operations/browserProfile.js';
 import { BROWSER_HANDOFF_REASONS } from '../operations/browserWindow.js';
+import {
+  BrowserApprovalAskedBySchema,
+  BrowserApprovalValueSummarySchema,
+  BrowserWriteApprovalRequestPayloadSchema,
+} from '../runtime/requestedInput.js';
 
 // ============================================================================
 // Origin discriminator — where this item came from
@@ -406,8 +411,9 @@ export type OAuthConsentExtension = z.infer<typeof OAuthConsentExtensionSchema>;
  * approves or denies before a gated write fires. Carries no secrets: host only
  * (never the full URL), and a truncated body preview.
  */
-export const WriteApprovalExtensionSchema = z.object({
+export const ApiWriteApprovalExtensionSchema = z.object({
   kind: z.literal('write_approval'),
+  target: z.literal('api'),
   apiId: z.string(),
   endpointId: z.string(),
   endpointName: z.string().optional(),
@@ -418,9 +424,36 @@ export const WriteApprovalExtensionSchema = z.object({
   bodyPreview: z.string().optional(),
   initiatedBy: z.string().optional(),
 });
+export type ApiWriteApprovalExtension = z.infer<typeof ApiWriteApprovalExtensionSchema>;
+
+/**
+ * The same card for an action in the agent's browser (Plan 320 D7): the site
+ * and page, what will be done to which element, what would be entered — a
+ * credential field by its length alone — and the page as it stood.
+ */
+export const BrowserWriteApprovalExtensionSchema = z.object({
+  kind: z.literal('write_approval'),
+  target: z.literal('browser'),
+  profileId: z.string(),
+  pageOrigin: z.string(),
+  pageTitle: z.string(),
+  action: BrowserWriteApprovalRequestPayloadSchema.shape.action,
+  element: BrowserWriteApprovalRequestPayloadSchema.shape.element,
+  value: BrowserApprovalValueSummarySchema.optional(),
+  askedBy: BrowserApprovalAskedBySchema,
+  screenshotRef: z.string().optional(),
+});
+export type BrowserWriteApprovalExtension = z.infer<typeof BrowserWriteApprovalExtensionSchema>;
+
+export const WriteApprovalExtensionSchema = z.discriminatedUnion('target', [
+  ApiWriteApprovalExtensionSchema,
+  BrowserWriteApprovalExtensionSchema,
+]);
 export type WriteApprovalExtension = z.infer<typeof WriteApprovalExtensionSchema>;
 
-export const ActionCenterItemExtensionSchema = z.discriminatedUnion('kind', [
+// A union rather than one discriminated on `kind`: both write-approval
+// variants share that kind and differ by `target`.
+export const ActionCenterItemExtensionSchema = z.union([
   CoachProposalExtensionSchema,
   OAuthConsentExtensionSchema,
   WriteApprovalExtensionSchema,
