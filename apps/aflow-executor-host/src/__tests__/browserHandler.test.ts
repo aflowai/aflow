@@ -73,6 +73,16 @@ describe('the browser handler', () => {
     }
   });
 
+  it('echoes the filter a read applied, the empty string when it applied none', async () => {
+    const h = harness();
+    const opened = await run(h, 'browser.page.open', { url: 'https://example.com/' });
+    const { pageId } = parsedOutput('browser.page.open', opened.written) as { pageId: string };
+    const filtered = await run(h, 'browser.page.read', { pageId, what: 'text', contains: 'sign' });
+    const unfiltered = await run(h, 'browser.page.read', { pageId, what: 'console' });
+    expect(parsedOutput('browser.page.read', filtered.written)).toMatchObject({ contains: 'sign' });
+    expect(parsedOutput('browser.page.read', unfiltered.written)).toMatchObject({ contains: '' });
+  });
+
   it('treats a later attempt of an action as a redelivery, and does not act', async () => {
     const h = harness();
     const opened = await run(h, 'browser.page.open', { url: 'https://example.com/' });

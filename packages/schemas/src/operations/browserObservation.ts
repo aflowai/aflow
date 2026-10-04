@@ -6,8 +6,11 @@ import { z } from 'zod';
 
 import type { OperationRegistration } from '../catalog/operationCatalog.js';
 import { buildOperationId } from '../catalog/operationId.js';
+import type { OperationObservation } from '../runtime/toolObservation.js';
 import {
   BROWSER_OUTLINE_MAX_CHARS,
+  BROWSER_PAGE_OBSERVATION_GROUP,
+  BROWSER_PAGE_OUTLINE_FACET,
   BrowserElementRefSchema,
   browserMaxCharsSchema,
   BrowserOutlineCensusSchema,
@@ -133,7 +136,16 @@ export const BrowserPageReadOutputSchema = z.object({
   pageId: BrowserPageIdSchema,
   url: z.string(),
   what: z.enum(BROWSER_READ_KINDS),
+  contains: z
+    .string()
+    .describe('The `contains` this read was filtered by, the empty string when none was.'),
   text: z.string().optional().describe('For `text`.'),
+  offset: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .describe('For `text`: the `offset` this read was given, 0 when none was.'),
   console: z.array(BrowserConsoleEntrySchema).optional().describe('For `console`, oldest first.'),
   network: z.array(BrowserNetworkEntrySchema).optional().describe('For `network`, oldest first.'),
   withheld: z
@@ -226,6 +238,65 @@ export const BrowserProfileListOutputSchema = z.object({
 // Registrations
 // ---------------------------------------------------------------------------
 
+/**
+ * A snapshot scoped to an element is replaced only by a later snapshot of the
+ * same element; one continued from `continueRef` is another part, not a
+ * replacement. A whole-page snapshot is the empty scope, and also the page's
+ * outline. `maxChars` is not a part key: its references resolve only in the
+ * newest look at the page, so any later snapshot of the same part replaces
+ * it, however much either left out.
+ */
+export const BROWSER_PAGE_SNAPSHOT_OBSERVATION: OperationObservation = {
+  group: BROWSER_PAGE_OBSERVATION_GROUP,
+  facets: [
+    {
+      facet: 'snapshot',
+      fields: ['snapshot', 'snapshotCensus'],
+      keyPath: 'pageId',
+      partKeyPaths: ['receipt.ref'],
+      expires: 'on_any_later_look',
+      currentStateOperation: BROWSER_PAGE_SNAPSHOT_OPERATION_ID,
+    },
+    {
+      ...BROWSER_PAGE_OUTLINE_FACET,
+      fields: ['snapshot', 'snapshotCensus'],
+      onlyWhenAbsent: 'receipt.ref',
+    },
+  ],
+};
+
+/**
+ * Text, console and network are different reads of a page, text read on from
+ * `nextOffset` is another part of it, and a read filtered by `contains` shows
+ * lines another filter does not: a later read replaces this one only when it
+ * reads the same kind at the same offset through the same filter. `maxChars`
+ * is not a part key, and what a read holds carries nothing that expires: a
+ * later read of the same part replaces this one only when it leaves out no
+ * more — what it `withheld` at its bound, and for console and network the
+ * entries the browser no longer keeps (`notRetained`) — so a smaller read, or
+ * one made after the oldest entries this one shows were dropped, leaves this
+ * one in full.
+ */
+export const BROWSER_PAGE_READ_OBSERVATION: OperationObservation = {
+  group: BROWSER_PAGE_OBSERVATION_GROUP,
+  facets: [
+    {
+      facet: 'read',
+      fields: ['text', 'console', 'network'],
+      keyPath: 'pageId',
+      partKeyPaths: ['what', 'offset', 'contains'],
+      expires: 'on_covering_look',
+      withheldAt: ['withheld', 'notRetained'],
+      currentStateOperation: BROWSER_PAGE_READ_OPERATION_ID,
+    },
+  ],
+};
+
+export const BROWSER_PAGE_CLOSE_OBSERVATION: OperationObservation = {
+  group: BROWSER_PAGE_OBSERVATION_GROUP,
+  ends: ['pageId'],
+};
+
 const PAGE_IS_THE_RUNS =
   '`pageId` belongs to the run that opened it; a page that is gone fails with `page_gone` and ' +
   'the address it was last at.';
@@ -262,6 +333,7 @@ export const BrowserObservationRegistrations: OperationRegistration[] = [
     accessMode: 'read',
     inputZod: BrowserPageSnapshotInputSchema,
     outputZod: BrowserPageSnapshotOutputSchema,
+    observation: BROWSER_PAGE_SNAPSHOT_OBSERVATION,
   },
   {
     stepType: 'browser',
@@ -295,6 +367,7 @@ export const BrowserObservationRegistrations: OperationRegistration[] = [
     accessMode: 'read',
     inputZod: BrowserPageReadInputSchema,
     outputZod: BrowserPageReadOutputSchema,
+    observation: BROWSER_PAGE_READ_OBSERVATION,
   },
   {
     stepType: 'browser',
@@ -342,6 +415,7 @@ export const BrowserObservationRegistrations: OperationRegistration[] = [
     accessMode: 'write',
     inputZod: BrowserPageCloseInputSchema,
     outputZod: BrowserPageCloseOutputSchema,
+    observation: BROWSER_PAGE_CLOSE_OBSERVATION,
   },
   {
     stepType: 'browser',

@@ -56,6 +56,7 @@ import {
   writeInlineVar,
 } from '../helpers/runtimeState.js';
 import { buildToolResultSummaryWithMeta, type ToolSummaryMeta } from '../helpers/outputSummary.js';
+import { toolResultObservation } from '../helpers/toolResultObservation.js';
 import {
   isHistoryEnabled,
   loadOrCreateConversation,
@@ -525,6 +526,15 @@ export async function applyStepSucceeded(params: ApplyStepSucceededParams): Prom
         });
         if (images.length > 0) toolResult.images = images;
         if (withheld.length > 0) toolResult.imagesWithheld = withheld;
+      }
+      if (opDescriptor?.observation && resolvedOutput != null) {
+        const observation = toolResultObservation(
+          opDescriptor.observation,
+          resolvedOutput,
+          matchedToolCallId,
+          actualOperationId,
+        );
+        if (observation) toolResult.observation = observation;
       }
       const followUp = opDescriptor?.usage.followUp;
       if (followUp && followUp.length > 0) {

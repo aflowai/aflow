@@ -34,6 +34,7 @@ export function buildToolResultEnvelopes(
     ...(tr.imagesWithheld && tr.imagesWithheld.length > 0
       ? { imagesWithheld: tr.imagesWithheld }
       : {}),
+    ...(tr.observation ? { observation: tr.observation } : {}),
     // Error-type-aware recovery hint for the agent.
     ...(tr.status === 'FAILED'
       ? {

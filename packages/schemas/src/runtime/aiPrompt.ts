@@ -11,6 +11,7 @@
 import { z } from 'zod';
 import { AgentToolErrorSchema } from './errors.js';
 import { MAX_STEP_IMAGES_PER_OUTPUT, StepImageSchema } from '../media/stepImage.js';
+import { ToolResultObservationSchema } from './toolObservation.js';
 
 // ============================================================================
 // AI Roles
@@ -194,6 +195,8 @@ export const AiToolResultEnvelopeV1Schema = z.object({
   images: z.array(StepImageSchema).optional(),
   /** Images the step's output held that are not shown, each with where it was and why not. */
   imagesWithheld: z.array(z.string()).max(MAX_STEP_IMAGES_PER_OUTPUT).optional(),
+  /** What this result observes, from the operation's declaration; assembly reads it and drops it. */
+  observation: ToolResultObservationSchema.optional(),
 });
 export type AiToolResultEnvelopeV1 = z.infer<typeof AiToolResultEnvelopeV1Schema>;
 
