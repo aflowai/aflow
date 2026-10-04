@@ -301,6 +301,13 @@ export {
   getWriteApprovalGrant,
   hostPushRequestHash,
 } from './writeApproval.js';
+export {
+  browserAskKey,
+  browserApprovalSpentKey,
+  rememberBrowserAsk,
+  readBrowserAsk,
+  spendBrowserApproval,
+} from './browserApproval.js';
 
 // Memory embedding operations
 export {

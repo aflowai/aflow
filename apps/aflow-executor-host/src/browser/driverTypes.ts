@@ -4,6 +4,7 @@
  */
 import type { BrowserHandoffOutcome, BrowserHandoffReason, BrowserProfile } from '@aflow/schemas';
 
+import type { ActionApprovals } from './actionApproval.js';
 import type { ConsoleEntry, NetworkEntry } from './observations.js';
 import type { BoundedSnapshot, Outline } from './outline.js';
 import type { PageOwner } from './pageTable.js';
@@ -75,6 +76,8 @@ export interface ActRequest extends RunScope {
   readonly action: EngineAction;
   readonly redelivered: boolean;
   readonly maxChars?: number;
+  /** How this call asks the operator; absent, an action that would ask is refused. */
+  readonly approvals?: ActionApprovals;
 }
 
 export interface SnapshotResult {

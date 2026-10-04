@@ -161,6 +161,11 @@ const HOST_KEY_PATTERNS = [
   // grant the operator's approval minted at the authenticated boundary, and a
   // credential that could write one could approve its own push.
   '%R~aflow:write-approval:*',
+  // Beside a browser action's approval: which request a call was parked on,
+  // and that an approval has been spent. Neither can approve anything — the
+  // grant stays read-only above — so writing one can only make the executor
+  // ask again or refuse.
+  '~aflow:browser-ask:*',
 ] as const;
 
 /**

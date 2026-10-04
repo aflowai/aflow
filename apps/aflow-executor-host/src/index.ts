@@ -53,6 +53,7 @@ import { createBrowserIdleSweep } from './browser/idleSweep.js';
 import { followBrowserRequests } from './browser/requestPoll.js';
 import { isBrowserRequestFile, serveBrowserRequests } from './browser/windowRequests.js';
 import { createBrowserHandler } from './handlers/browserHandler.js';
+import { redisApprovalStore } from './browser/approvalStore.js';
 import { removeWorktree } from './worktree.js';
 import { createKeepAwake, describeKeepAwake } from './keepAwake.js';
 import { HARNESS_RUN_OPERATION, removeOrphanedCheckouts } from './handlers/harnessHandlers.js';
@@ -265,7 +266,7 @@ async function main(): Promise<void> {
     ),
   );
 
-  browserRuntime.registerHandler(createBrowserHandler(browserDriver));
+  browserRuntime.registerHandler(createBrowserHandler(browserDriver, redisApprovalStore(redis)));
   const browserIdleSweep = createBrowserIdleSweep(browserDriver, taskLogger);
 
   // Last known good, so a policy read that fails mid-save does not publish an

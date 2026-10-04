@@ -10,7 +10,11 @@ import {
   type RelatesToEntry,
   type SessionId,
   type StepExecutionId,
+  type ApiWriteApprovalRequestPayload,
+  type BrowserWriteApprovalRequestPayload,
   type WriteApprovalExtension,
+  BROWSER_PAGE_ACT_OPERATION_ID,
+  browserApprovalActionPhrase,
   derivePauseToken,
   WriteApprovalRequestPayloadSchema,
 } from '@aflow/schemas';
@@ -551,7 +555,7 @@ function buildOAuthConsentItem(
 }
 
 // ============================================================================
-// Write-approval pause → "Approve this write" item (Plan 253)
+// Approval pause → approve/deny item: an API write (Plan 253) or a browser action (Plan 320 D7)
 // ============================================================================
 
 const WRITE_TIER_LABEL: Record<string, string> = {
@@ -561,10 +565,10 @@ const WRITE_TIER_LABEL: Record<string, string> = {
 
 /**
  * Build a `write_approval` Action Center item from a paused step whose
- * `requestedInputRef` carries a `WriteApprovalRequestPayload`. Unlike OAuth
- * consent, this IS a resolvable HITL item — approve/reject resolve through the
- * standard route; the orchestrator writes the grant and re-dispatches on
- * approve, and fails the step on reject.
+ * `requestedInputRef` carries a `WriteApprovalRequestPayload` — an API write
+ * or a browser action. Unlike OAuth consent, this IS a resolvable HITL item —
+ * approve/reject resolve through the standard route; the resolve writes the
+ * grant, the orchestrator re-dispatches on approve, and fails the step on reject.
  */
 function buildWriteApprovalItem(
   scope: ActionCenterScope,
@@ -575,24 +579,7 @@ function buildWriteApprovalItem(
   const parsed = WriteApprovalRequestPayloadSchema.safeParse(payload);
   if (!parsed.success) return null;
   const req = parsed.data;
-
-  const label = req.operationLabel ?? req.endpointName ?? `${req.method} ${req.endpointId}`;
-  const tierNote = WRITE_TIER_LABEL[req.writeRiskTier] ?? req.writeRiskTier;
-  const title = `Approve write: ${label}`;
-  const summary = `A skill wants to call ${req.method} ${req.urlHost} (${req.apiId}/${req.endpointId}) — ${tierNote}. Approve to let it send, or deny to stop it.`;
-
-  const extension: WriteApprovalExtension = {
-    kind: 'write_approval',
-    apiId: req.apiId,
-    endpointId: req.endpointId,
-    method: req.method,
-    urlHost: req.urlHost,
-    writeRiskTier: req.writeRiskTier,
-    ...(req.endpointName ? { endpointName: req.endpointName } : {}),
-    ...(req.operationLabel ? { operationLabel: req.operationLabel } : {}),
-    ...(req.bodyPreview ? { bodyPreview: req.bodyPreview } : {}),
-    ...(req.initiatedBy ? { initiatedBy: req.initiatedBy } : {}),
-  };
+  const shown = req.target === 'browser' ? browserApprovalShown(req) : apiWriteApprovalShown(req);
 
   const origin: ActionCenterItemOrigin = {
     type: 'step',
@@ -600,7 +587,7 @@ function buildWriteApprovalItem(
     stepExecutionId: row.currentStepExecutionId,
     sessionId: row.sessionId,
     pauseVersion: row.status === 'PAUSED' ? 0 : 1,
-    operationId: 'api.http.call',
+    operationId: shown.operationId,
   };
 
   const requestedAtRaw = typeof payload['requestedAt'] === 'string' ? payload['requestedAt'] : null;
@@ -611,15 +598,89 @@ function buildWriteApprovalItem(
     spaceId: scope.spaceId,
     kind: 'write_approval',
     origin,
-    title: title.slice(0, 256),
-    summary: summary.slice(0, 2_000),
-    extension,
+    title: shown.title.slice(0, 256),
+    summary: shown.summary.slice(0, 2_000),
+    extension: shown.extension,
     requestedAt,
     requestedBy: { kind: 'agent' as const, label: 'Agent', sessionId: row.sessionId },
-    priority: req.writeRiskTier === 'high' ? 'high' : 'normal',
-    relatesTo: [{ kind: 'binding', id: req.apiId, label: req.apiId }],
+    priority: shown.priority,
+    relatesTo: shown.relatesTo,
     resolverAuthority: { kind: 'space' },
     status: row.status === 'PAUSED' ? 'open' : 'resolved',
+  };
+}
+
+interface WriteApprovalShown {
+  readonly title: string;
+  readonly summary: string;
+  readonly extension: WriteApprovalExtension;
+  readonly operationId: string;
+  readonly priority: 'normal' | 'high';
+  readonly relatesTo: RelatesToEntry[];
+}
+
+function apiWriteApprovalShown(req: ApiWriteApprovalRequestPayload): WriteApprovalShown {
+  const label = req.operationLabel ?? req.endpointName ?? `${req.method} ${req.endpointId}`;
+  const tierNote = WRITE_TIER_LABEL[req.writeRiskTier] ?? req.writeRiskTier;
+  return {
+    title: `Approve write: ${label}`,
+    summary: `A skill wants to call ${req.method} ${req.urlHost} (${req.apiId}/${req.endpointId}) — ${tierNote}. Approve to let it send, or deny to stop it.`,
+    extension: {
+      kind: 'write_approval',
+      target: 'api',
+      apiId: req.apiId,
+      endpointId: req.endpointId,
+      method: req.method,
+      urlHost: req.urlHost,
+      writeRiskTier: req.writeRiskTier,
+      ...(req.endpointName ? { endpointName: req.endpointName } : {}),
+      ...(req.operationLabel ? { operationLabel: req.operationLabel } : {}),
+      ...(req.bodyPreview ? { bodyPreview: req.bodyPreview } : {}),
+      ...(req.initiatedBy ? { initiatedBy: req.initiatedBy } : {}),
+    },
+    operationId: 'api.http.call',
+    priority: req.writeRiskTier === 'high' ? 'high' : 'normal',
+    relatesTo: [{ kind: 'binding', id: req.apiId, label: req.apiId }],
+  };
+}
+
+function siteOf(origin: string): string {
+  try {
+    return new URL(origin).host;
+  } catch {
+    return origin;
+  }
+}
+
+function browserApprovalShown(req: BrowserWriteApprovalRequestPayload): WriteApprovalShown {
+  const site = siteOf(req.pageOrigin);
+  const doing = browserApprovalActionPhrase(req);
+  const asked =
+    req.askedBy.kind === 'rule'
+      ? `The operator's rule \`${req.askedBy.rule}\` asks before actions on this site.`
+      : `Browser profile \`${req.profileId}\` asks before every action.`;
+  return {
+    title: `Approve in the browser: ${doing} on ${site}`,
+    summary:
+      `An agent wants to ${doing} on “${req.pageTitle}” (${req.pageOrigin}). ${asked} ` +
+      'Approve to let it do this once, or deny to stop it.',
+    extension: {
+      kind: 'write_approval',
+      target: 'browser',
+      profileId: req.profileId,
+      pageOrigin: req.pageOrigin,
+      pagePath: req.pagePath,
+      pageTitle: req.pageTitle,
+      action: req.action,
+      element: { ...req.element },
+      askedBy: req.askedBy,
+      ...(req.value !== undefined ? { value: { ...req.value } } : {}),
+      ...(req.screenshotRef !== undefined ? { screenshotRef: req.screenshotRef } : {}),
+      standsUntil: req.standsUntil,
+    },
+    operationId: BROWSER_PAGE_ACT_OPERATION_ID,
+    priority: 'normal',
+    relatesTo: [],
   };
 }
 

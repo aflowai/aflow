@@ -21,6 +21,7 @@ import {
   RUN_A,
   RUN_B,
 } from './fixtures/fakeBrowser.js';
+import { memoryApprovals } from './fixtures/approvals.js';
 
 const LOGIN = 'https://accounts.example.com/login';
 const INBOX = 'https://mail.example.com/inbox';
@@ -404,7 +405,7 @@ describe('a hand-off', () => {
         return Promise.resolve('inline:output');
       },
     } as unknown as ExecutorContext;
-    const handler = createBrowserHandler(h.driver);
+    const handler = createBrowserHandler(h.driver, memoryApprovals());
 
     expect(await handler.resolveTimeoutMs?.(ctx)).toBeGreaterThan(2 * 60_000);
     const result = await handler.execute(ctx);

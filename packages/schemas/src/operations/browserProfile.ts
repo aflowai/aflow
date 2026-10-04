@@ -130,7 +130,9 @@ export const BrowserOriginRuleSchema = z.object({
     .describe(
       'What navigating to or acting on a page at this origin does, over the posture. `deny` ' +
         'also refuses every connection to its host, so no redirect, subresource or script ' +
-        'reaches it. Where several rules match, the most restrictive one holds.',
+        'reaches it. `ask` is `ask-to-act` for that origin alone: pages there open and are ' +
+        'read, and every action on one waits for the operator’s approval. ' +
+        'Where several rules match, the most restrictive one holds.',
     ),
 });
 export type BrowserOriginRule = z.infer<typeof BrowserOriginRuleSchema>;

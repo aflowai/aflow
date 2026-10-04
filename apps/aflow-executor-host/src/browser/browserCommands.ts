@@ -10,7 +10,11 @@
  */
 import { readFile } from 'node:fs/promises';
 
-import { type BrowserProfile, DEFAULT_BROWSER_PROFILE_ID } from '@aflow/schemas';
+import {
+  type BrowserOriginRule,
+  type BrowserProfile,
+  DEFAULT_BROWSER_PROFILE_ID,
+} from '@aflow/schemas';
 
 import { HostPolicySchema, loadHostPolicy } from '../bindings.js';
 import { serializePolicy, writePolicyAtomically } from '../policyFile.js';
@@ -50,10 +54,20 @@ export const BROWSER_USAGE =
   '  browser sign-in [profile]                 Open the profile’s browser in a window to sign\n' +
   '                                            in to what the agent should reach; close it\n' +
   '                                            when done. The `default` profile unless named.\n' +
-  '  browser posture <profile> <posture>       autonomous, ask-to-act or read-only.\n' +
+  '  browser posture <profile> <posture>       autonomous; ask-to-act, where every action\n' +
+  '                                            waits for your approval in the Action Center;\n' +
+  '                                            or read-only.\n' +
   '  browser rule <profile> <origin> <effect>  allow, ask or deny pages at an origin, such as\n' +
   '                                            https://mail.example.com or *.example.com.\n' +
+  '                                            ask: pages there open and are read, and every\n' +
+  '                                            action on one waits for your approval.\n' +
   '  browser rule <profile> <origin> --remove  Drop that rule.';
+
+const RULE_GLOSS: Readonly<Record<BrowserOriginRule['effect'], string>> = {
+  allow: '',
+  deny: '',
+  ask: ' — pages there open and are read; every action waits for your approval',
+};
 
 /** How long a list waits for the executor's answer once it has taken the request. */
 const LIST_ANSWER_TIMEOUT_MS = 30_000;
@@ -200,7 +214,12 @@ async function list(deps: BrowserCliDeps): Promise<void> {
       `${profile.id} — ${profile.posture}, window ${profile.window}, idle after ` +
         `${String(profile.idleMinutes)} minutes, open to ${spaces}`,
     );
-    for (const rule of profile.rules) deps.print(`    ${rule.effect} ${rule.origin}`);
+    if (profile.posture === 'ask-to-act') {
+      deps.print('    every action waits for your approval in the Action Center');
+    }
+    for (const rule of profile.rules) {
+      deps.print(`    ${rule.effect} ${rule.origin}${RULE_GLOSS[rule.effect]}`);
+    }
     deps.print(`    directory: ${profileDirectory(deps.hostDir, profile.id)}`);
     const now = running.get(profile.id);
     deps.print(

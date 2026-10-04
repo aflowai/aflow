@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createBrowserHandler, SERVED_BROWSER_OPERATIONS } from '../handlers/browserHandler.js';
 import { harness, RUN_A, type Harness } from './fixtures/fakeBrowser.js';
+import { memoryApprovals } from './fixtures/approvals.js';
 
 interface Ran {
   result: StepResult;
@@ -34,7 +35,7 @@ async function run(
       return Promise.resolve('inline:output');
     },
   } as unknown as ExecutorContext;
-  const result = await createBrowserHandler(h.driver).execute(ctx);
+  const result = await createBrowserHandler(h.driver, memoryApprovals()).execute(ctx);
   return { result, written };
 }
 
