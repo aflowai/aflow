@@ -739,7 +739,7 @@ describe('same-turn Tier-2 + Tier-4 clearing (payload-key isolation)', () => {
 
     const tier2 = await store.clearUnderPressure({
       pressureTokens: 6_500,
-      effectiveBudget: 10_000,
+      workingBudget: 10_000,
       availableReadOpId: MEMORY_READ_OPERATION_ID,
     });
     expect(tier2!.clearedExchangeCount).toBeGreaterThan(0);

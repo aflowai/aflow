@@ -357,7 +357,7 @@ describe('ConversationStateStore.clearUnderPressure (Plan 189 §5 / Plan 196 §4
   // clearHighWater, so the only gates left are recency/pinning/net-savings.
   const overPressure = {
     pressureTokens: 9_000,
-    effectiveBudget: 10_000,
+    workingBudget: 10_000,
     availableReadOpId: MEMORY_READ_OPERATION_ID,
   };
 
@@ -478,7 +478,7 @@ describe('ConversationStateStore.clearUnderPressure (Plan 189 §5 / Plan 196 §4
     const { store } = await makeStoreAndAssemble(parallelExchangeAtoms(), 7);
     const result = await store.clearUnderPressure({
       pressureTokens: 5_000,
-      effectiveBudget: 10_000,
+      workingBudget: 10_000,
       availableReadOpId: MEMORY_READ_OPERATION_ID,
     });
     expect(result).toBeUndefined();

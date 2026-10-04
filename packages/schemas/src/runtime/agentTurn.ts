@@ -885,10 +885,14 @@ export const TokenEstimateSchema = z.object({
   modelWindow: z.number().int().nonnegative(),
   /** Tokens reserved for model completion response */
   reservedForCompletion: z.number().int().nonnegative().default(4096),
-  /** Effective budget = modelWindow - reservedForCompletion - safetyMargin */
+  /** Hard budget = modelWindow - reservedForCompletion - safetyMargin; bounds the forced clearing. */
   effectiveBudget: z.number().int().nonnegative(),
   /** Utilization = total / effectiveBudget */
   utilization: z.number().nonnegative(),
+  /** Working budget = effectiveBudget capped by the retention policy; triggers clearing and compaction. */
+  workingBudget: z.number().int().nonnegative(),
+  /** Working utilization = total / workingBudget */
+  workingUtilization: z.number().nonnegative(),
 });
 export type TokenEstimate = z.infer<typeof TokenEstimateSchema>;
 
