@@ -1,10 +1,12 @@
 import {
+  ClearedObservationSchema,
   ToolResultObservationSchema,
   staleFieldsOf,
   type AiContentPart,
   type AiMessageAtomV1,
   type AiMessageV1,
   type AiToolResultEnvelopeV1,
+  type ClearedObservation,
   type StampedFacet,
   type ToolResultObservation,
 } from '@aflow/schemas';
@@ -59,6 +61,42 @@ function observedResultOf(message: AiMessageV1): ObservedResult | undefined {
     return { partIndex, envelope, observation: observation.success ? observation.data : undefined };
   }
   return undefined;
+}
+
+/** A cleared exchange's note: what it shows, and what its results observed, in their order. */
+function clearedObservationsOf(
+  message: AiMessageV1,
+): { shown: AiContentPart[]; observations: ClearedObservation[] } | undefined {
+  const shown: AiContentPart[] = [];
+  const observations: ClearedObservation[] = [];
+  for (const part of message.parts) {
+    const json = part.kind === 'json' ? (part.json as Record<string, unknown> | null) : null;
+    if (json?.['kind'] !== 'cleared_observation') {
+      shown.push(part);
+      continue;
+    }
+    const parsed = ClearedObservationSchema.safeParse(json);
+    if (parsed.success) observations.push(parsed.data);
+  }
+  return shown.length === message.parts.length ? undefined : { shown, observations };
+}
+
+const observedOperation = (envelope: Pick<AiToolResultEnvelopeV1, 'operationId' | 'toolName'>) =>
+  envelope.operationId ?? envelope.toolName;
+
+/**
+ * What a tool result observed, kept on the note that replaces it when its
+ * exchange is cleared; nothing for a result without a stamp that parses.
+ */
+export function clearedObservationOf(message: AiMessageV1): ClearedObservation | undefined {
+  const observed = observedResultOf(message);
+  if (observed?.observation === undefined) return undefined;
+  const { receipts: _receipts, ...observation } = observed.observation;
+  return {
+    kind: 'cleared_observation',
+    operation: observedOperation(observed.envelope),
+    observation,
+  };
 }
 
 const thingSlot = (group: string, key: string) => `${group}\u0000${key}`;
@@ -130,15 +168,51 @@ function earlier(a: Staleness | undefined, b: Staleness | undefined): Staleness 
  *
  * A pure function of the list. What a result shows depends only on which of
  * its facets are stale and on the first later result that made each so —
- * which never changes once it exists — so a result changes form at most once
- * per facet and is identical on every turn after.
+ * which never changes once it exists, because a cleared result's note carries
+ * what it observed and counts as that result — so a result changes form at
+ * most once per facet and is identical on every turn after. A note is never
+ * reduced: it is the last word on what its results observed until a later look.
  */
 export function renderToolObservations(messages: readonly AiMessageV1[]): AiMessageV1[] {
   const laterLooks = new Map<string, LaterLook[]>();
   const movedOrEndedBy = new Map<string, Staleness>();
+  const recordLook = (
+    { group, facets, moved, ended }: Omit<ToolResultObservation, 'receipts'>,
+    index: number,
+    operation: string,
+  ) => {
+    for (const facet of facets) {
+      const slot = facetSlot(group, facet);
+      laterLooks.set(
+        slot,
+        withNearerLook(laterLooks.get(slot) ?? [], {
+          withheld: facet.expires === 'on_covering_look' ? facet.withheld : 0,
+          staleness: { index, cause: 'replaced', operation },
+        }),
+      );
+    }
+    for (const key of moved) {
+      movedOrEndedBy.set(thingSlot(group, key), { index, cause: 'moved', operation });
+    }
+    for (const key of ended) {
+      movedOrEndedBy.set(thingSlot(group, key), { index, cause: 'ended', operation });
+    }
+  };
   const rendered: AiMessageV1[] = new Array<AiMessageV1>(messages.length);
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]!;
+    const cleared = clearedObservationsOf(message);
+    if (cleared !== undefined) {
+      rendered[index] = { ...message, parts: cleared.shown };
+      // The note stands where its results stood, so each one still counts as
+      // the later look it was, in the order the results came.
+      const { observations } = cleared;
+      for (let i = observations.length - 1; i >= 0; i -= 1) {
+        const { observation, operation } = observations[i]!;
+        recordLook(observation, index + i / observations.length, operation);
+      }
+      continue;
+    }
     const observed = observedResultOf(message);
     if (observed === undefined) {
       rendered[index] = message;
@@ -185,23 +259,7 @@ export function renderToolObservations(messages: readonly AiMessageV1[]): AiMess
       };
     }
 
-    const operation = envelope.operationId ?? envelope.toolName;
-    for (const facet of facets) {
-      const slot = facetSlot(group, facet);
-      laterLooks.set(
-        slot,
-        withNearerLook(laterLooks.get(slot) ?? [], {
-          withheld: facet.expires === 'on_covering_look' ? facet.withheld : 0,
-          staleness: { index, cause: 'replaced', operation },
-        }),
-      );
-    }
-    for (const key of observation.moved) {
-      movedOrEndedBy.set(thingSlot(group, key), { index, cause: 'moved', operation });
-    }
-    for (const key of observation.ended) {
-      movedOrEndedBy.set(thingSlot(group, key), { index, cause: 'ended', operation });
-    }
+    recordLook(observation, index, observedOperation(envelope));
   }
   return rendered;
 }

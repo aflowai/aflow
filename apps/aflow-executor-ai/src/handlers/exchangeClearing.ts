@@ -2,6 +2,7 @@ import type {
   AiClearedToolCallV1,
   AiConversationStateV1,
   AiMessageAtomV1,
+  AiMessageV1,
   AiToolResultEnvelopeV1,
 } from '@aflow/schemas';
 import {
@@ -9,9 +10,11 @@ import {
   RUN_OUTPUT_READ_OPERATION_ID,
   computeToolCallArgsHash,
   getOperation,
+  textMessage,
 } from '@aflow/schemas';
 import { buildOutline, type OutlineNode } from '@aflow/memory-paths';
 import { RETENTION_POLICY } from './retentionPolicy.js';
+import { clearedObservationOf, renderToolObservations } from './toolObservations.js';
 import {
   ESTIMATED_CHARS_PER_TOKEN,
   estimateMessageTokens,
@@ -237,7 +240,8 @@ export interface ExchangeClearingEstimate {
 
 /**
  * Estimated token effect of clearing an exchange: its atoms as the model is
- * sent them (`sentById`) removed, the note added.
+ * sent them (`sentById`) removed, the note added as it is sent. Every other
+ * message is sent as before, so this is the change in the assembled history.
  */
 export function estimateExchangeClearingTokens(
   ex: Exchange,
@@ -250,7 +254,8 @@ export function estimateExchangeClearingTokens(
     const sent = sentById.get(ref.atomId);
     if (sent) removedTokens += estimateMessageTokens(sent.message);
   }
-  const noteTokens = estimateStringTokens(buildClearedExchangeNote(ex, hydratedById, noteOptions));
+  const note = clearedExchangeNoteMessage(ex, hydratedById, noteOptions);
+  const noteTokens = estimateMessageTokens(renderToolObservations([note])[0]!);
   return { removedTokens, noteTokens, netSavings: removedTokens - noteTokens };
 }
 
@@ -279,6 +284,29 @@ function digestArgs(args: unknown): string {
  */
 export interface ClearNoteOptions {
   availableReadOpId: string | undefined;
+}
+
+/**
+ * The message that replaces a cleared exchange: its note, and what each of
+ * its results observed, so an earlier result one of them made stale stays as
+ * it was sent.
+ */
+export function clearedExchangeNoteMessage(
+  ex: {
+    atomRefs: Array<{ atomId: string; sourceKind?: string | undefined }>;
+    assistantAtom?: AiMessageAtomV1 | undefined;
+  },
+  hydratedById: Map<string, AiMessageAtomV1>,
+  options: ClearNoteOptions,
+): AiMessageV1 {
+  const note = textMessage('user', buildClearedExchangeNote(ex, hydratedById, options));
+  const observations = ex.atomRefs.flatMap((ref) => {
+    if (ref.sourceKind !== 'tool_result') return [];
+    const full = hydratedById.get(ref.atomId);
+    const observation = full !== undefined ? clearedObservationOf(full.message) : undefined;
+    return observation !== undefined ? [{ kind: 'json' as const, json: observation }] : [];
+  });
+  return { ...note, parts: [...note.parts, ...observations] };
 }
 
 export function buildClearedExchangeNote(

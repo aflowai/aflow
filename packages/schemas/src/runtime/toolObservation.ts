@@ -87,10 +87,14 @@ const ObservedFacetSchema = z.discriminatedUnion('expires', [
           'What the facet holds stays true after a later look, so a later look at the same ' +
             'part replaces it only when it left out no more of the part than this one did.',
         ),
-      withheldAt: OutputKeyPathSchema.describe(
-        'Where the result says how much of this part it left out at its bound: a count, or ' +
-          'counts by kind, which are added up; nothing there is nothing left out.',
-      ),
+      withheldAt: z
+        .array(OutputKeyPathSchema)
+        .min(1)
+        .describe(
+          'Where the result says how much of this part it does not show — left out at its ' +
+            'bound, or no longer kept by the thing observed: each a count, or counts by kind, ' +
+            'all added up; nothing at a path is nothing left out there.',
+        ),
     })
     .strict(),
 ]);
@@ -146,7 +150,7 @@ export const ToolResultObservationSchema = z.object({
       z.object({
         ...stampedFacetShape,
         expires: z.literal('on_covering_look'),
-        /** What the result left out of the part, read at the declared `withheldAt`. */
+        /** What the result does not show of the part: the sum at the declared `withheldAt`. */
         withheld: z.number().nonnegative(),
       }),
     ]),
@@ -158,6 +162,20 @@ export const ToolResultObservationSchema = z.object({
 });
 export type ToolResultObservation = z.infer<typeof ToolResultObservationSchema>;
 export type StampedFacet = ToolResultObservation['facets'][number];
+
+/**
+ * What a cleared tool result observed, carried on the note that replaced it,
+ * one json part per result. The note stands where the result stood, so every
+ * earlier result the cleared one made stale stays reduced exactly as it was
+ * sent. Never shown to the model: assembly reads it and drops it.
+ */
+export const ClearedObservationSchema = z.object({
+  kind: z.literal('cleared_observation'),
+  /** The operation that returned the cleared result, named where it moved or ended a thing. */
+  operation: z.string().min(1),
+  observation: ToolResultObservationSchema.omit({ receipts: true }),
+});
+export type ClearedObservation = z.infer<typeof ClearedObservationSchema>;
 
 function valueAt(output: unknown, keyPath: string): unknown {
   let current: unknown = output;
@@ -171,13 +189,14 @@ function valueAt(output: unknown, keyPath: string): unknown {
   return current;
 }
 
-/** The count at `path`, or the sum of the counts there; 0 when there is none. */
-function withheldAt(output: unknown, path: string): number {
-  const value = valueAt(output, path);
-  const counts =
-    value !== null && typeof value === 'object' && !Array.isArray(value)
-      ? Object.values(value)
+/** The counts at `paths`, each a count or counts by kind, added up; 0 where there is none. */
+function withheldAt(output: unknown, paths: readonly string[]): number {
+  const counts = paths.flatMap((path): unknown[] => {
+    const value = valueAt(output, path);
+    return value !== null && typeof value === 'object' && !Array.isArray(value)
+      ? Object.values(value as Record<string, unknown>)
       : [value];
+  });
   return counts.reduce<number>(
     (sum, count) => (typeof count === 'number' && Number.isFinite(count) ? sum + count : sum),
     0,

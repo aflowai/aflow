@@ -271,9 +271,11 @@ export const BROWSER_PAGE_SNAPSHOT_OBSERVATION: OperationObservation = {
  * lines another filter does not: a later read replaces this one only when it
  * reads the same kind at the same offset through the same filter. `maxChars`
  * is not a part key, and what a read holds carries nothing that expires: a
- * later read of the same part replaces this one only when it `withheld` no
- * more, so a smaller one leaves this one, and what it holds past the smaller
- * bound, in full.
+ * later read of the same part replaces this one only when it leaves out no
+ * more — what it `withheld` at its bound, and for console and network the
+ * entries the browser no longer keeps (`notRetained`) — so a smaller read, or
+ * one made after the oldest entries this one shows were dropped, leaves this
+ * one in full.
  */
 export const BROWSER_PAGE_READ_OBSERVATION: OperationObservation = {
   group: BROWSER_PAGE_OBSERVATION_GROUP,
@@ -284,7 +286,7 @@ export const BROWSER_PAGE_READ_OBSERVATION: OperationObservation = {
       keyPath: 'pageId',
       partKeyPaths: ['what', 'offset', 'contains'],
       expires: 'on_covering_look',
-      withheldAt: 'withheld',
+      withheldAt: ['withheld', 'notRetained'],
       currentStateOperation: BROWSER_PAGE_READ_OPERATION_ID,
     },
   ],

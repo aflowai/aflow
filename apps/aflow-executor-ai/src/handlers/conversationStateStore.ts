@@ -75,7 +75,7 @@ import {
   earliestCreatedAtMs,
   estimateExchangeClearingTokens,
   estimateExchangeNetTokenSavings,
-  buildClearedExchangeNote,
+  clearedExchangeNoteMessage,
   clearedCallEntries,
   detectResurrections,
 } from './exchangeClearing.js';
@@ -1058,7 +1058,7 @@ export class ConversationStateStore {
         role: 'user',
         sourceId: `cleared:exchange:${ex.key}`,
         sourceKind: 'cleared_summary',
-        message: textMessage('user', buildClearedExchangeNote(ex, hydratedById, noteOptions)),
+        message: clearedExchangeNoteMessage(ex, hydratedById, noteOptions),
         createdAtMs: placementCreatedAtMs,
         turnNumber: placementTurn,
       });

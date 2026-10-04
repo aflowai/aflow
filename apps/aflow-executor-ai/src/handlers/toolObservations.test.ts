@@ -647,6 +647,20 @@ describe('renderToolObservations — a later read replaces one of the same part 
     }
     expect(Object.fromEntries(changedAt)).toEqual({ 0: 6, 1: 3, 2: 4, 3: 5, 4: 6, 5: 7 });
   });
+
+  it('keeps a console read in full after a later one whose oldest entries are no longer kept', () => {
+    const consoleRead = (base: string, notRetained: number) =>
+      call(base, READ, { ...readEntriesOutput('pg_1', 'console'), notRetained });
+    const CONSOLE_REPLACED =
+      "A later read (what console) of pg_1 replaced this result's; " +
+      'browser.page.read returns the current one.';
+
+    expect(forms([...consoleRead('c1', 0), ...consoleRead('c2', 40)])).toEqual(['full', 'full']);
+    expect(forms([...consoleRead('c1', 0), ...consoleRead('c2', 0)])).toEqual([
+      CONSOLE_REPLACED,
+      'full',
+    ]);
+  });
 });
 
 /** A long run of every kind of browser call on two pages, from a fixed seed. */
@@ -742,7 +756,14 @@ function atomsOf(turns: Array<{ turn: number; messages: AiMessageV1[] }>): AiMes
   return atoms;
 }
 
-function storeFor(atoms: AiMessageAtomV1[], turnNumber: number) {
+function storeFor(
+  atoms: AiMessageAtomV1[],
+  turnNumber: number,
+  payloadStore = {
+    retrieve: vi.fn().mockResolvedValue(atoms),
+    store: vi.fn().mockResolvedValue('ref:new'),
+  } as unknown as PayloadStore,
+) {
   const state: AiConversationStateV1 = {
     schemaVersion: 1,
     conversationId: 'c1',
@@ -762,10 +783,6 @@ function storeFor(atoms: AiMessageAtomV1[], turnNumber: number) {
       })),
     },
   };
-  const payloadStore = {
-    retrieve: vi.fn().mockResolvedValue(atoms),
-    store: vi.fn().mockResolvedValue('ref:new'),
-  } as unknown as PayloadStore;
   return new ConversationStateStore(
     {
       payloadStore,
@@ -917,6 +934,130 @@ describe('ConversationStateStore.assembleRequest — observations', () => {
     });
     expect(store.getState().clearing?.clearedExchanges).toEqual(['a1']);
     expect(forced?.estimatedTokensFreed).toBe(Math.max(0, estimate.netSavings));
+  });
+});
+
+/** A store whose payloads are kept in memory, so history is assembled again after a clearing. */
+function storeKeeping(atoms: AiMessageAtomV1[], turnNumber: number) {
+  const payloads = new Map<string, unknown>([['batch:1', atoms]]);
+  const payloadStore = {
+    retrieve: vi.fn((ref: string) =>
+      payloads.has(ref)
+        ? Promise.resolve(payloads.get(ref))
+        : Promise.reject(new Error(`not found: ${ref}`)),
+    ),
+    store: vi.fn(({ data }: { data: unknown }) => {
+      const ref = `ref:${String(payloads.size)}`;
+      payloads.set(ref, data);
+      return Promise.resolve(ref);
+    }),
+  } as unknown as PayloadStore;
+  return storeFor(atoms, turnNumber, payloadStore);
+}
+
+function navigateOutput(pageId: string, step: number): Output {
+  return {
+    outcome: 'performed',
+    pageId,
+    url: `${PAGE_URL}?page=${String(step)}`,
+    title: 'Pull requests',
+    outline: outlineOf(BROWSER_OUTLINE_DEFAULT_CHARS),
+    receipt: {
+      went: 'url',
+      urlChanged: true,
+      titleChanged: false,
+      outlineChanged: true,
+      ...outlineReceipt,
+    },
+  };
+}
+
+describe('ConversationStateStore.clearUnderPressure — a cleared look still replaces the looks before it', () => {
+  const outline = outlineOf(BROWSER_OUTLINE_DEFAULT_CHARS);
+  const looks = (newest: [string, Output]) => [
+    opener,
+    { turn: 1, messages: call('a1', ACT, actOutput('pg_1', 1, { outline })) },
+    { turn: 2, messages: call('a2', ACT, actOutput('pg_1', 2, { outline })) },
+    { turn: 3, messages: call('a3', ...newest) },
+  ];
+  const sentAs = (messages: AiMessageV1[], toolCallId: string) =>
+    JSON.stringify(messages.find((m) => m.toolCallId === toolCallId));
+  const noteIn = (messages: AiMessageV1[]) =>
+    messages.find(
+      (m) =>
+        m.role === 'user' &&
+        m.parts.some((p) => p.kind === 'text' && p.text.startsWith('[Context note')),
+    );
+
+  async function clearNewest(newest: [string, Output]) {
+    const store = storeKeeping(atomsOf(looks(newest)), 8);
+    const before = await store.assembleRequest('sys', []);
+    const cleared = await store.clearUnderPressure({
+      pressureTokens: 5_600,
+      effectiveBudget: 10_000,
+      availableReadOpId: MEMORY_READ_OPERATION_ID,
+    });
+    const after = await store.assembleRequest('sys', []);
+    return { store, before, cleared, after };
+  }
+
+  it('keeps the two earlier outlines reduced, byte for byte, and frees what it says it frees', async () => {
+    const { store, before, cleared, after } = await clearNewest([
+      ACT,
+      actOutput('pg_1', 3, { outline }),
+    ]);
+
+    expect(store.getState().clearing?.clearedExchanges).toEqual(['a3']);
+    expect(after.messages.some((m) => m.toolCallId === 'a3_0')).toBe(false);
+    for (const id of ['a1_0', 'a2_0']) {
+      expect(
+        summaryOf(JSON.parse(sentAs(before.messages, id)) as AiMessageV1)!.split('\n')[0],
+      ).toBe(OUTLINE_REPLACED('pg_1'));
+      expect(sentAs(after.messages, id)).toBe(sentAs(before.messages, id));
+    }
+    expect(cleared?.estimatedTokensFreed).toBe(
+      before.tokenBreakdown.history - after.tokenBreakdown.history,
+    );
+    const note = noteIn(after.messages)!;
+    expect(note.parts.map((p) => p.kind)).toEqual(['text']);
+    expect(JSON.stringify(note)).toContain('browser.page.act');
+    expect(JSON.stringify(note)).toContain(`read: ${MEMORY_READ_OPERATION_ID}`);
+  });
+
+  it('keeps the outline before it reduced as moved when the cleared look is a navigation that moved the page', async () => {
+    const { store, before, cleared, after } = await clearNewest([
+      'browser.page.navigate',
+      navigateOutput('pg_1', 3),
+    ]);
+
+    expect(store.getState().clearing?.clearedExchanges).toEqual(['a3']);
+    const firstLines = {
+      a1_0: OUTLINE_REPLACED('pg_1'),
+      a2_0:
+        'browser.page.navigate moved pg_1 to another address after this result, so nothing ' +
+        'this result observed of pg_1 is kept; browser.page.snapshot returns it as it is now.',
+    };
+    for (const [id, firstLine] of Object.entries(firstLines)) {
+      expect(
+        summaryOf(JSON.parse(sentAs(before.messages, id)) as AiMessageV1)!.split('\n')[0],
+      ).toBe(firstLine);
+      expect(sentAs(after.messages, id)).toBe(sentAs(before.messages, id));
+    }
+    expect(cleared?.estimatedTokensFreed).toBe(
+      before.tokenBreakdown.history - after.tokenBreakdown.history,
+    );
+  });
+
+  it('sends a fresh outline of the page in full afterwards, and leaves the note as it was', async () => {
+    const { store, after } = await clearNewest([ACT, actOutput('pg_1', 3, { outline })]);
+    store.appendToolResults([envelopeFor('a4', ACT, actOutput('pg_1', 4, { outline }))]);
+    const fresh = await store.assembleRequest('sys', []);
+
+    expect(isFull(summaryOf(fresh.messages.find((m) => m.toolCallId === 'a4_0')!))).toBe(true);
+    expect(JSON.stringify(noteIn(fresh.messages))).toBe(JSON.stringify(noteIn(after.messages)));
+    for (const id of ['a1_0', 'a2_0']) {
+      expect(sentAs(fresh.messages, id)).toBe(sentAs(after.messages, id));
+    }
   });
 });
 
