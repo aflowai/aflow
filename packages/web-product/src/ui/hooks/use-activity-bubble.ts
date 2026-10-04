@@ -16,7 +16,7 @@ const ACTIVE_STEP_MAX_AGE_MS = 3 * 60 * 1000;
 // in the future, we can import it directly.
 // ---------------------------------------------------------------------------
 
-import { resolveActionLabel, humanizeToken } from '../lib/op-labels.js';
+import { executorWaitLabel, resolveActionLabel, humanizeToken } from '../lib/op-labels.js';
 
 // ---------------------------------------------------------------------------
 // Delegate / cybernetic role fallback labels
@@ -216,7 +216,7 @@ export function useActivityBubble(
       return;
     }
 
-    const activityEventTypes = ['StepScheduled', 'StepStarted'];
+    const activityEventTypes = ['StepScheduled', 'StepWaitingOnExecutor', 'StepStarted'];
 
     // SubflowEventForwarded — resolve step-level labels from child events
     if (lastEvent.eventType === 'SubflowEventForwarded') {
@@ -242,8 +242,15 @@ export function useActivityBubble(
 
       // For step-level forwarded events, resolve the action label the same way
       // we do for direct step events — gives "Thinking…", "Running code…", etc.
-      if (sourceType === 'StepScheduled' || sourceType === 'StepStarted') {
-        const label = resolveActionLabel(childOperationId, childStepType);
+      if (
+        sourceType === 'StepScheduled' ||
+        sourceType === 'StepWaitingOnExecutor' ||
+        sourceType === 'StepStarted'
+      ) {
+        const label =
+          sourceType === 'StepWaitingOnExecutor'
+            ? `${executorWaitLabel(childStepType)}…`
+            : resolveActionLabel(childOperationId, childStepType);
         const signal: ActivitySignal = {
           type: 'activity',
           runId,
@@ -355,7 +362,10 @@ export function useActivityBubble(
       // Persist for the next event
       stepContextRef.current = resolved;
 
-      const label = resolveActionLabel(resolved.operationId, resolved.stepType);
+      const label =
+        lastEvent.eventType === 'StepWaitingOnExecutor'
+          ? `${executorWaitLabel(resolved.stepType)}…`
+          : resolveActionLabel(resolved.operationId, resolved.stepType);
 
       const signal: ActivitySignal = {
         type: 'activity',

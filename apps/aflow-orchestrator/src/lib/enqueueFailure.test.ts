@@ -5,11 +5,14 @@
  * or not, came back as "operation failed due to a system error". The agent could
  * not tell a refusal from an outage, reported the lane as broken, and the actual
  * cause — an executor nobody had started — was in the orchestrator log alone.
+ *
+ * A missing executor now waits for its executor first (Plan 315 D21), so what
+ * reaches here is an outage that outlasted the wait — and it says so whole.
  */
 import { describe, expect, it } from 'vitest';
 
 import { NoExecutorAvailableError } from '@aflow/redis';
-import { toAgentToolError, type StepType } from '@aflow/schemas';
+import { errorContextFromUnknown, toAgentToolError, type StepType } from '@aflow/schemas';
 
 import { describeEnqueueFailure, enqueueFailureResultError } from './enqueueFailure.js';
 
@@ -17,23 +20,22 @@ describe('no executor for the host lane', () => {
   const failure = describeEnqueueFailure(new NoExecutorAvailableError('host' as StepType));
 
   it('says what is wrong and what fixes it', () => {
+    expect(failure.message).toContain('host executor');
+    expect(failure.message).toMatch(/start/i);
+  });
+
+  it('reaches the agent as an outage to retry, never as a system error', () => {
+    // Transient errors reach the agent compact, so the message above is the
+    // run's and the operator's; the agent is told only that it may resolve.
     const shown = toAgentToolError(failure);
-    expect(shown.message).toContain('host executor');
-    expect(shown.message).toMatch(/start/i);
-    // The words the agent must not be given instead.
     expect(shown.message).not.toContain('system error');
+    expect(shown.retry).toBe(true);
   });
 
-  it('does not invite a retry that cannot succeed', () => {
-    // The executor is on the operator's machine. Nothing the agent does brings
-    // it up, so "may resolve if retried" is advice to wait for something that
-    // will not happen on its own.
-    expect(toAgentToolError(failure).retry).toBe(false);
-    expect(failure.retryable).toBe(false);
-  });
-
-  it('reports nothing was attempted, since dispatch never happened', () => {
-    expect(failure.message).toMatch(/nothing was attempted/i);
+  it('is the same transient outage as any lane, since a sleeping machine is one that returns', () => {
+    expect(failure.code).toBe('EXECUTOR_UNAVAILABLE');
+    expect(failure.classification).toBe('transient');
+    expect(failure.retryable).toBe(true);
   });
 });
 
@@ -41,48 +43,36 @@ describe('no executor for the browser lane', () => {
   const failure = describeEnqueueFailure(new NoExecutorAvailableError('browser' as StepType));
 
   it('names the machine the browser runs on and how to start it', () => {
-    const shown = toAgentToolError(failure);
-    expect(shown.message).toContain('host executor');
-    expect(shown.message).toMatch(/browser/i);
-    expect(shown.message).not.toContain('system error');
-    expect(failure.message).toMatch(/nothing was attempted/i);
-  });
-
-  it('does not invite a retry that cannot succeed', () => {
-    expect(failure.classification).toBe('configuration');
-    expect(toAgentToolError(failure).retry).toBe(false);
+    expect(failure.message).toContain('host executor');
+    expect(failure.message).toMatch(/browser/i);
+    expect(failure.classification).toBe('transient');
+    expect(toAgentToolError(failure).message).not.toContain('system error');
   });
 });
 
 describe('every other lane', () => {
-  it('still reads a missing executor as an outage worth retrying', () => {
-    // Those executors are the appliance's own, so their absence is
-    // infrastructure and the agent waiting is the right response.
+  it('reads a missing executor as an outage worth retrying', () => {
     const failure = describeEnqueueFailure(new NoExecutorAvailableError('ai' as StepType));
     expect(failure.classification).toBe('transient');
     expect(toAgentToolError(failure).retry).toBe(true);
   });
 });
 
+describe('the error itself', () => {
+  it('is an AflowError, so a log tags it by its own code rather than as an unknown exception', () => {
+    const logged = errorContextFromUnknown(new NoExecutorAvailableError('host' as StepType));
+    expect(logged['errorCode']).toBe('EXECUTOR_UNAVAILABLE');
+    expect(logged['errorClassification']).toBe('transient');
+    expect(logged['errorRetryable']).toBe(true);
+  });
+});
+
 describe('what the result payload carries', () => {
-  it('still says nothing on a retryable outage, which keeps it out of the retry budget', () => {
-    // Tempting to carry the classification here so the agent hears "temporary,
-    // may resolve" instead of "system error". It would also make it true that
-    // `shouldRetry` fires — that check wants `retryable === true` and a
-    // classification in its retryable set — so one executor going down would
-    // enter every step behind it into the retry budget at once.
+  it('keeps the classification of a missing executor, so the agent hears an outage, not a system error', () => {
     const failure = describeEnqueueFailure(new NoExecutorAvailableError('ai' as StepType));
     const payload = enqueueFailureResultError(failure);
-    expect(payload.classification).toBeUndefined();
-    expect(payload.retryable).toBeUndefined();
-  });
-
-  it('carries both on a non-retryable one, which is how the host case speaks', () => {
-    // A lane with something to say says it by not being retryable, which is the
-    // branch that keeps its classification and therefore its message.
-    const failure = describeEnqueueFailure(new NoExecutorAvailableError('host' as StepType));
-    const payload = enqueueFailureResultError(failure);
-    expect(payload.classification).toBe('configuration');
-    expect(payload.retryable).toBe(false);
+    expect(payload.code).toBe('EXECUTOR_UNAVAILABLE');
+    expect(payload.classification).toBe('transient');
+    expect(payload.retryable).toBe(true);
   });
 });

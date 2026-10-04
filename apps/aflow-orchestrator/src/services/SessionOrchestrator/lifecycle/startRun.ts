@@ -3,11 +3,11 @@ import {
   type IdempotencyKey,
   type StepResultMessage,
   type RunAccessGrant,
+  type AflowError,
   errorContext,
   processFlowInput,
 } from '@aflow/schemas';
 import {
-  addStepJob,
   type SessionHotState,
   type StepHotState,
   type SessionEvent,
@@ -32,6 +32,7 @@ import { resolveConfigRecursiveWithReport } from '../helpers/configResolution.js
 import { getOrchestratorLogger } from '../../../lib/orchestratorLogger.js';
 import { describeEnqueueFailure, enqueueFailureResultError } from '../../../lib/enqueueFailure.js';
 import { encodeTaskInput } from '../../../lib/encodeTaskInput.js';
+import { dispatchOrWaitOnExecutor } from '../scheduling/executorWait.js';
 import type { SessionOrchestratorBindings } from '../lifecycle/context.js';
 import type { FlowExecutionContext, SessionStatus, SessionOrchestrator } from '../types.js';
 import { generateStepExecutionId, generateEventId } from '../helpers/ids.js';
@@ -610,8 +611,10 @@ export function createStartRun(bindings: SessionOrchestratorBindings) {
         now,
       );
     } else {
+      let failure: AflowError | undefined;
+      let thrown: unknown;
       try {
-        await addStepJob(redis, {
+        const dispatched = await dispatchOrWaitOnExecutor(redis, {
           messageVersion: 1,
           tenantId: params.tenantId,
           sessionId: runId,
@@ -628,15 +631,30 @@ export function createStartRun(bindings: SessionOrchestratorBindings) {
           credentialOwnerId: params.createdBy,
           spaceId: params.spaceId,
         });
+        if (dispatched.kind === 'waiting') {
+          getOrchestratorLogger().info(
+            `Start step ${startStepId} is waiting for its ${stepDef.stepType} executor`,
+            {
+              tenantId: params.tenantId,
+              runId,
+              stepExecutionId,
+              operationId: stepDef.operation,
+              nextLookAtMs: dispatched.nextLookAtMs,
+            },
+          );
+        }
       } catch (error) {
-        // All enqueue failures (including NoExecutorAvailableError and a lane
-        // breaker refusal) route through applyResult so onFailure routing works.
-        // For start steps with no onFailure, applyResult will still fail the run.
-        const enqueueAflowError = describeEnqueueFailure(error);
+        thrown = error;
+        failure = describeEnqueueFailure(error);
+      }
+      if (failure !== undefined) {
+        // A refused enqueue routes through applyResult so onFailure routing
+        // works. For start steps with no onFailure, applyResult still fails the
+        // run.
         getOrchestratorLogger().error(
-          `Job enqueue failed for start step ${startStepId} (${enqueueAflowError.code})`,
-          error instanceof Error ? error : undefined,
-          errorContext(enqueueAflowError, {
+          `Job enqueue failed for start step ${startStepId} (${failure.code})`,
+          thrown instanceof Error ? thrown : undefined,
+          errorContext(failure, {
             tenantId: params.tenantId,
             runId,
             stepExecutionId,
@@ -646,7 +664,7 @@ export function createStartRun(bindings: SessionOrchestratorBindings) {
             traceId: params.traceId,
           }),
         );
-        const errorPayload = enqueueFailureResultError(enqueueAflowError);
+        const errorPayload = enqueueFailureResultError(failure);
         const errorRef = `inline:${Buffer.from(JSON.stringify(errorPayload)).toString('base64')}`;
         await bindings.applyResult({
           result: {

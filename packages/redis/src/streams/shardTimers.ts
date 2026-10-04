@@ -39,7 +39,13 @@ export const TIMER_CLAIM_PER_SHARD = 100;
 /** Ceiling on one cycle's reply, so a fleet-wide backlog cannot produce an unbounded batch. */
 export const TIMER_CLAIM_MAX_TOTAL = 1000;
 
-export function timerShardKey(timer: TimerItem): string {
+/** What names a timer: enough to find it without its payload. */
+export type TimerIdentity = Pick<
+  TimerItem,
+  'sessionId' | 'workflowExecution' | 'stepExecutionId' | 'reason' | 'attempt'
+>;
+
+export function timerShardKey(timer: Pick<TimerItem, 'sessionId' | 'workflowExecution'>): string {
   // Schema invariant guarantees one of the two; the non-null assertion is safe.
   return timer.sessionId ?? timer.workflowExecution!.runId;
 }
@@ -50,7 +56,7 @@ export function timerShardKey(timer: TimerItem): string {
  * successive workflow poll cycles distinct — they share a task and attempt but
  * never a token.
  */
-export function timerId(timer: TimerItem): string {
+export function timerId(timer: TimerIdentity): string {
   const token = timer.workflowExecution?.dispatchAttemptToken ?? '';
   return `${timer.stepExecutionId}|${timer.reason}|${String(timer.attempt)}|${token}`;
 }
@@ -99,6 +105,29 @@ export async function scheduleShardTimer(redis: Redis, timer: TimerItem): Promis
     JSON.stringify(validatedTimer),
     String(shardId),
   );
+}
+
+/**
+ * The timer stored under this identity, armed or leased, or null when there is
+ * none. A payload that no longer parses reads as none: nothing can dispatch it.
+ */
+export async function getShardTimer(
+  redis: Redis,
+  identity: TimerIdentity,
+): Promise<TimerItem | null> {
+  const shardId = shardFor(timerShardKey(identity));
+  const id = timerId(identity);
+  const [score, payload] = await Promise.all([
+    redis.zscore(StreamKeys.shardTimersKey(shardId), id),
+    redis.hget(StreamKeys.shardTimerDataKey(shardId), `d:${id}`),
+  ]);
+  if (score === null || payload === null) return null;
+  try {
+    const parsed = TimerItemSchema.safeParse(JSON.parse(payload));
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

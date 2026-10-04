@@ -694,8 +694,10 @@ export const TimerItemSchema = z
     /**
      * Reason for the timer. `event_wake` is a session's next event-driven turn
      * slot: it wakes the session only if run wakeups are still unread by then.
+     * `executor_wait` is a step or operation task whose executor was missing
+     * when it was dispatched, looking for it again.
      */
-    reason: z.enum(['retry', 'timeout', 'resume', 'delayed_start', 'event_wake']),
+    reason: z.enum(['retry', 'timeout', 'resume', 'delayed_start', 'event_wake', 'executor_wait']),
 
     /** Retry attempt number */
     attempt: z.number().int().min(1),
@@ -718,10 +720,29 @@ export const TimerItemSchema = z
     credentialOwnerId: z.string().optional(),
 
     spaceId: z.string().uuid().optional(),
+
+    /**
+     * What an `executor_wait` timer dispatches, whole, since when it has
+     * waited, and how many of its looks it has taken. The job is carried
+     * rather than rebuilt from the fields above because a dispatch carries
+     * more than a timer does — the caller's model, the idempotency key it was
+     * scheduled under — and a job rebuilt without them is a different job.
+     */
+    executorWait: z
+      .object({
+        sinceMs: z.number().int().positive(),
+        looks: z.number().int().nonnegative(),
+        job: StepJobMessageSchema,
+      })
+      .optional(),
   })
   .refine((t) => (t.sessionId !== undefined) !== (t.workflowExecution !== undefined), {
     message: 'TimerItem must have exactly one of `sessionId` or `workflowExecution`',
     path: ['sessionId'],
+  })
+  .refine((t) => (t.reason === 'executor_wait') === (t.executorWait !== undefined), {
+    message: 'An `executor_wait` timer, and no other, carries the job it waits to dispatch',
+    path: ['executorWait'],
   });
 
 export type TimerItem = z.infer<typeof TimerItemSchema>;

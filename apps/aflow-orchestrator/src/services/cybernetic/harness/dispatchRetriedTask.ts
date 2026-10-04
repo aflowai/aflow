@@ -20,6 +20,7 @@ import {
   DISPATCH_PENDING_INTERVAL_MS,
   dispatchClaimedOperationTask,
   operationTaskClaimDueAt,
+  describeOperationTaskDispatch,
   resolveOperationTaskSnoozeDelayMs,
   type OperationTaskDispatchMode,
 } from './operationTaskDispatch.js';
@@ -168,13 +169,7 @@ export async function dispatchRetriedTask(
       throw new PostClaimDispatchError(taskId, reason);
     }
     log.info(
-      `[dispatchRetriedTask] ${
-        dispatchMode === 'snooze_timer'
-          ? `scheduled snooze timer (+${String(snoozeDelayMs)}ms) for`
-          : dispatchMode === 'inline'
-            ? 'ran inline'
-            : 'enqueued'
-      } retried operation task: ${operationId}`,
+      `[dispatchRetriedTask] ${describeOperationTaskDispatch(dispatchMode, snoozeDelayMs)} retried operation task: ${operationId}`,
     );
     return;
   }

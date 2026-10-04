@@ -10,7 +10,7 @@ import { type StepType } from '@aflow/schemas';
 
 // 60s TTL with a 10s tick interval (see executor runtime) tolerates a
 // single missed heartbeat without false-positive liveness loss. Critical
-const EXECUTOR_HEARTBEAT_TTL_SECONDS = 60;
+export const EXECUTOR_HEARTBEAT_TTL_SECONDS = 60;
 
 /**
  * Build the per-consumer heartbeat key.
@@ -18,6 +18,14 @@ const EXECUTOR_HEARTBEAT_TTL_SECONDS = 60;
  */
 function executorConsumerHeartbeatKey(stepType: StepType, consumerName: string): string {
   return `aflow:executor-heartbeat:${stepType}:${consumerName}`;
+}
+
+/**
+ * When an executor of a step type first registered a heartbeat.
+ * Key: aflow:executor-seen:<stepType>
+ */
+function executorSeenKey(stepType: StepType): string {
+  return `aflow:executor-seen:${stepType}`;
 }
 
 /**
@@ -38,7 +46,12 @@ export async function registerExecutorHeartbeat(
   consumerName: string,
 ): Promise<void> {
   const key = executorConsumerHeartbeatKey(stepType, consumerName);
-  await redis.setex(key, EXECUTOR_HEARTBEAT_TTL_SECONDS, `${consumerName}:${Date.now()}`);
+  const nowMs = Date.now();
+  await redis
+    .multi()
+    .setex(key, EXECUTOR_HEARTBEAT_TTL_SECONDS, `${consumerName}:${nowMs}`)
+    .set(executorSeenKey(stepType), String(nowMs), 'NX')
+    .exec();
 }
 
 /**
@@ -75,6 +88,16 @@ export async function hasAvailableExecutor(redis: Redis, stepType: StepType): Pr
   const prefix = executorHeartbeatPrefix(stepType);
   const keys = await redis.keys(`${prefix}*`);
   return keys.length > 0;
+}
+
+/**
+ * Whether an executor of `stepType` has ever registered a heartbeat. Kept in
+ * Redis, without a TTL, because no orchestrator process can know it: one that
+ * restarted, or a replica that never happened to look while the executor was
+ * up, would take an executor asleep for one never started.
+ */
+export async function hasExecutorEverBeenSeen(redis: Redis, stepType: StepType): Promise<boolean> {
+  return (await redis.exists(executorSeenKey(stepType))) === 1;
 }
 
 // ============================================================================

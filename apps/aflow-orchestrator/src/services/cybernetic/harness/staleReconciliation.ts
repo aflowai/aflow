@@ -1,7 +1,12 @@
 /**
  * Periodic sweeper for stale workflow run completion-pending rows.
  */
-import { getSessionState, getStepInFlight } from '@aflow/redis';
+import {
+  executorWaitHasLooksLeft,
+  getSessionState,
+  getShardTimer,
+  getStepInFlight,
+} from '@aflow/redis';
 import {
   getTaskRow,
   casCompleteTask as ledgerCasCompleteTask,
@@ -11,9 +16,10 @@ import {
   addCompletionPending,
   recoverOrphanedTaskAttempt,
   loadParkedStepWaitersForSession,
+  loadWorkflowTaskByWorkerSession,
 } from '@aflow/cybernetic-runtime';
 import type { TenantId } from '@aflow/schemas';
-import type { SessionId } from '@aflow/schemas';
+import type { SessionId, StepExecutionId } from '@aflow/schemas';
 import { getOrchestratorLogger, logOrchestratorError } from '../../../lib/orchestratorLogger.js';
 import { dispatchNextOrTerminate } from './dispatch.js';
 import { applyFailureMode } from './pauseResume.js';
@@ -41,6 +47,33 @@ async function waitsOnARun(
   if (workerSessionId === null) return false;
   const waiting = await loadParkedStepWaitersForSession(deps.db, tenantId, workerSessionId);
   return waiting.length > 0;
+}
+
+/**
+ * A task parked on its missing executor is answered by its `executor_wait`
+ * timer — dispatched when a look finds the executor, failed once its looks are
+ * spent — which a sleeping machine can stretch past any bump budget. The wait
+ * is recognised as a session step's is: by a live timer with looks left.
+ */
+async function waitsOnItsExecutor(
+  deps: HarnessDeps,
+  tenantId: string,
+  row: { attempt: number; workerSessionId: string },
+): Promise<boolean> {
+  const task = await loadWorkflowTaskByWorkerSession(deps.db, tenantId, row.workerSessionId);
+  if (task?.dispatchAttemptToken == null || task.attempt !== row.attempt) return false;
+  const timer = await getShardTimer(deps.redis, {
+    workflowExecution: {
+      runId: task.runId,
+      taskId: task.taskId,
+      attempt: task.attempt,
+      dispatchAttemptToken: task.dispatchAttemptToken,
+    },
+    stepExecutionId: row.workerSessionId as StepExecutionId,
+    reason: 'executor_wait',
+    attempt: row.attempt,
+  });
+  return timer?.executorWait !== undefined && executorWaitHasLooksLeft(timer.executorWait);
 }
 
 export async function reconcileStaleRunForTenant(
@@ -133,7 +166,8 @@ export async function reconcileStaleRunForTenant(
         if (
           row.attemptCount >= SWEEPER_OPERATION_ESCALATION_BUMPS &&
           !executorStillOnIt &&
-          !(await waitsOnARun(deps, tenantIdStr, row.workerSessionId))
+          !(await waitsOnARun(deps, tenantIdStr, row.workerSessionId)) &&
+          !(await waitsOnItsExecutor(deps, tenantIdStr, row))
         ) {
           log.warn(
             `[reconcileStaleRun] escalating stalled operation task to failed: ` +

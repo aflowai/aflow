@@ -288,6 +288,13 @@ export function humanizeToken(value: string): string {
     .join(' ');
 }
 
+/** What a step parked on its missing executor is waiting for. */
+export function executorWaitLabel(stepType: string | undefined): string {
+  if (stepType === 'host') return 'Waiting for the host executor';
+  if (stepType === 'browser') return 'Waiting for the browser';
+  return stepType ? `Waiting for the ${stepType} executor` : 'Waiting for its executor';
+}
+
 /**
  * Resolve the best user-facing action label for a step.
  *

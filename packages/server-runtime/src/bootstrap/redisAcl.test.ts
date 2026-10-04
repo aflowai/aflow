@@ -33,6 +33,7 @@ describe('redis acl', () => {
     expect(hostLine).toContain('~aflow:shard:*:results');
     expect(hostLine).toContain('~aflow:step:*:state');
     expect(hostLine).toContain('~aflow:executor-heartbeat:*');
+    expect(hostLine).toContain('~aflow:executor-seen:*');
   });
 
   it('reads write-approval grants and cannot write one', () => {

@@ -35,7 +35,14 @@ export interface StepGroup {
    */
   dispatchWrapper?: boolean | undefined;
   status:
-    'scheduled' | 'running' | 'succeeded' | 'failed' | 'paused' | 'waiting_on_child' | 'retrying';
+    | 'scheduled'
+    | 'waiting_on_executor'
+    | 'running'
+    | 'succeeded'
+    | 'failed'
+    | 'paused'
+    | 'waiting_on_child'
+    | 'retrying';
   pauseKind?: string | undefined;
   events: SessionEvent[];
   scheduledAt?: string | number | undefined;

@@ -165,6 +165,7 @@ function makeDeps(over: DepOverrides): {
     getStepState: over.getStepState ?? vi.fn().mockResolvedValue(makeStepState()),
     getStepInFlight: over.getStepInFlight ?? vi.fn().mockResolvedValue(INFLIGHT_DEAD),
     hasAvailableExecutor: over.hasAvailableExecutor ?? vi.fn().mockResolvedValue(false),
+    getShardTimer: vi.fn().mockResolvedValue(null),
     casUpdateSessionRuntimeState:
       cas as unknown as SweepStaleBarriersDeps['casUpdateSessionRuntimeState'],
     shardManager: 'shardManager' in over ? over.shardManager : undefined,

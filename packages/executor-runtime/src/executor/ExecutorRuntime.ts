@@ -22,6 +22,17 @@ import { HEARTBEAT_INTERVAL_MS } from './constants.js';
 import { claimPendingMessages, consumeLoop, type JobLoopHost } from './jobLoop.js';
 import type { InFlightStep } from './processJob.js';
 
+/**
+ * Told when this runtime starts its first step while none was running, and
+ * when its last running step settles. A claimed step still waiting for its
+ * slot is not running: it holds nothing that needs the machine.
+ */
+export interface WorkListener {
+  /** `firstStep` names the step that started the work, as `inFlight()` does. */
+  busy(firstStep: string): void;
+  idle(): void;
+}
+
 function executorBackgroundServices(stepType: string): BackgroundTaskService[] {
   const own = BackgroundTaskServiceSchema.safeParse(`executor-${stepType}`);
   return own.success ? ['shared-runtime', own.data] : ['shared-runtime'];
@@ -45,6 +56,8 @@ export class ExecutorRuntime implements JobLoopHost {
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
   private idleWaiters: Array<() => void> = [];
   private inFlightWaiters: Array<() => void> = [];
+  private readonly workListeners = new Set<WorkListener>();
+  private working = false;
   private starting: Promise<void> | null = null;
   private consuming: Promise<void> = Promise.resolve();
 
@@ -235,14 +248,31 @@ export class ExecutorRuntime implements JobLoopHost {
     });
   }
 
+  /** Follow this runtime's work; returns what stops following it. */
+  onWork(listener: WorkListener): () => void {
+    this.workListeners.add(listener);
+    return () => {
+      this.workListeners.delete(listener);
+    };
+  }
+
   stepStarted(): void {
     const waiters = this.inFlightWaiters;
     this.inFlightWaiters = [];
     for (const resolve of waiters) resolve();
+    if (this.working) return;
+    const [first] = this.inFlight();
+    if (first === undefined) return;
+    this.working = true;
+    for (const listener of this.workListeners) listener.busy(first.name);
   }
 
   stepSettled(messageId: string): void {
     this.inFlightSteps.delete(messageId);
+    if (this.working && this.inFlight().length === 0) {
+      this.working = false;
+      for (const listener of this.workListeners) listener.idle();
+    }
     if (this.inFlightSteps.size > 0) return;
     const waiters = this.idleWaiters;
     this.idleWaiters = [];

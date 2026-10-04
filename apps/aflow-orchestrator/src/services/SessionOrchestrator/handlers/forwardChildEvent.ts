@@ -8,6 +8,7 @@ const MAX_FORWARD_DEPTH = 3;
 const FORWARDABLE_EVENT_TYPES = new Set([
   'StepSucceeded',
   'StepScheduled',
+  'StepWaitingOnExecutor',
   'StepFailed',
   'SessionCompleted',
   'SessionFailed',

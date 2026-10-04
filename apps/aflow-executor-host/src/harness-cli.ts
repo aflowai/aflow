@@ -20,6 +20,7 @@ import { HostPolicySchema } from './bindings.js';
 import { appliancePortWarning, parseLocalPorts } from './browserLocalPorts.js';
 import { LocalMcpServerSchema } from './localMcpServers.js';
 import { describeHarnessConcurrency, withHarnessConcurrency } from './harnessConcurrency.js';
+import { describePolicyKeepAwake, withKeepAwake } from './keepAwake.js';
 import { discoverHarnesses, knownMcpArgs } from './harnessDiscovery.js';
 import {
   HarnessProfileSchema,
@@ -53,6 +54,10 @@ function usage(): never {
       '  harness browser-ports <id> --clear Let it load none.\n' +
       '  harness concurrency <n>            Run at most this many coding agents at once.\n' +
       '  harness concurrency --clear        Run the default number instead.\n' +
+      '  harness keep-awake <on-ac|never|always>\n' +
+      '                                     Whether this machine stays awake while it has work:\n' +
+      '                                     on power, on battery too, or never.\n' +
+      '  harness keep-awake --clear         Follow the default instead.\n' +
       '  harness push-approval <folder> <always|never|unless-unreviewed>\n' +
       '                                     When a publication from a folder asks before pushing.\n' +
       '  harness checks <folder> [--timeout-minutes <n>] -- <program> [args...]\n' +
@@ -205,6 +210,7 @@ async function list(): Promise<void> {
   if (policy.harnesses.length === 0) console.log('  (none)');
   else for (const profile of policy.harnesses) console.log(describe(profile));
   console.log(`This machine ${describeHarnessConcurrency(policy)}.`);
+  console.log(`This machine ${describePolicyKeepAwake(policy)}.`);
 
   if (policy.mcpServers.length > 0) {
     console.log('\nMCP servers configured on this machine:');
@@ -443,6 +449,12 @@ async function setHarnessConcurrency(requested: string): Promise<void> {
   console.log(`This machine now ${describeHarnessConcurrency(updated)}.`);
 }
 
+async function setKeepAwake(requested: string): Promise<void> {
+  const updated = withKeepAwake(await loadPolicy(), requested);
+  await savePolicy(updated);
+  console.log(`This machine now ${describePolicyKeepAwake(updated)}.`);
+}
+
 async function setPushApproval(bindingId: string, requested: string): Promise<void> {
   const updated = withPushApproval(await loadPolicy(), bindingId, requested);
   await savePolicy(updated);
@@ -543,6 +555,10 @@ async function main(): Promise<void> {
   }
   if (command === 'concurrency') {
     await setHarnessConcurrency(id);
+    return;
+  }
+  if (command === 'keep-awake') {
+    await setKeepAwake(id);
     return;
   }
   if (command === 'push-approval') {

@@ -233,6 +233,7 @@ vi.mock('@aflow/redis', () => ({
   markSessionDirty: (...args: unknown[]) => mockMarkSessionDirty(...args),
   addStepResult: (...args: unknown[]) => mockAddStepResult(...args),
   addStepJob: (...args: unknown[]) => mockAddStepJob(...args),
+  NoExecutorAvailableError: class NoExecutorAvailableError extends Error {},
   addControlMessage: (...args: unknown[]) => mockAddControlMessage(...args),
   publishStepAbort: (...args: unknown[]) => mockPublishStepAbort(...args),
   markStepCancelled: (...args: unknown[]) => mockMarkStepCancelled(...args),

@@ -103,6 +103,9 @@ const HOST_KEY_PATTERNS = [
   '~aflow:step-inflight:*',
   '~aflow:session_events:*',
   '~aflow:executor-heartbeat:*',
+  // Set beside the first heartbeat and never expired: a wait that gives up on
+  // an executor reads it to tell one asleep from one never started.
+  '~aflow:executor-seen:*',
   '~aflow:idempotency:*',
   // Armed on every ack: a lane whose acked frontier moved is exactly the stream
   // whose retention has to notice ([[294]]). Without it the executor authenticates,

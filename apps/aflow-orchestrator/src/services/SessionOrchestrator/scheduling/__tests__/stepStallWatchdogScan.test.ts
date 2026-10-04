@@ -25,6 +25,7 @@ vi.mock('@aflow/redis', () => ({
   NoExecutorAvailableError: class NoExecutorAvailableError extends Error {},
   hasAvailableExecutor: vi.fn(),
   getStepInFlight: vi.fn(),
+  getShardTimer: vi.fn(),
   clearStepInFlight: vi.fn(async () => undefined),
   peekDueStepStallCandidates: (...args: unknown[]) => mockPeekDueStepStallCandidates(...args),
   refreshStepStallCandidate: (...args: unknown[]) => mockRefreshStepStallCandidate(...args),

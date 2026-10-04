@@ -2,6 +2,7 @@ import type { ChainableCommander, Redis } from 'ioredis';
 import { StreamKeys, SNOOZE_OPERATION_ID, getSnoozeMaxMs } from '@aflow/schemas';
 import type { SessionHotState, StepHotState } from './schemas.js';
 import { sessionCandidateMember, parseSessionCandidateMember } from './candidateMember.js';
+import { EXECUTOR_WAIT_LONGEST_LOOK_MS } from '../streams/executorWait.js';
 
 /**
  * Sessions whose current step is SCHEDULED or STARTED, as one sorted set scored
@@ -67,7 +68,9 @@ export interface StepStallCandidate {
  * SCHEDULED step gets the dead-executor floor even when an executor is alive,
  * since the executor can die at any point and the grace then drops to that
  * floor retroactively. The snooze window is additive rather than an override —
- * a snoozing step's timer is its completion path for the whole window.
+ * a snoozing step's timer is its completion path for the whole window — and so
+ * is the gap to the next look of a step parked on its executor, whose every
+ * look stamps `scheduledAt` again.
  *
  * Tolerates a partial patch: a caller that flips only `status` supplies no
  * timestamps, and `nowMs` is then the reference. That is a lower bound too —
@@ -82,7 +85,13 @@ export function stepStallEarliestReapAtMs(
   }
   if (step.status !== 'SCHEDULED') return null;
   const snoozeWindowMs = step.operationId === SNOOZE_OPERATION_ID ? getSnoozeMaxMs() : 0;
-  return (step.scheduledAt ?? nowMs) + STEP_SCHEDULED_DEAD_EXECUTOR_GRACE_MS + snoozeWindowMs;
+  const executorWaitMs = step.executorWait !== undefined ? EXECUTOR_WAIT_LONGEST_LOOK_MS : 0;
+  return (
+    (step.scheduledAt ?? nowMs) +
+    STEP_SCHEDULED_DEAD_EXECUTOR_GRACE_MS +
+    snoozeWindowMs +
+    executorWaitMs
+  );
 }
 
 /**
@@ -100,11 +109,43 @@ export function stepStallNextCheckAtMs(step: StepHotState, nowMs: number): numbe
 }
 
 /**
- * Derive the candidate from a step write, inside the pipeline that write
- * already issues.
+ * The score a step write arms its session's candidate with, or null when the
+ * write leaves the index alone.
  *
  * A patch that carries no status says nothing about whether the step is in
- * flight, so it leaves the index alone.
+ * flight. Null is never a clear: the member is the session but the status is
+ * one step's, and a session can hold several at once — in a parallel tool
+ * fan-out the first sibling to finish would otherwise clear the session while
+ * the others are still in flight, and nothing would arm it again. Clearing
+ * belongs to the session rule, which knows the session is done, and to the
+ * readers, which drop a candidate they find nothing in flight for.
+ */
+function stepStallCandidateDueAtMs(step: Partial<StepHotState>, nowMs: number): number | null {
+  if (step.status === undefined) return null;
+  return stepStallEarliestReapAtMs(step, nowMs);
+}
+
+/**
+ * The candidate a step write arms, for a Lua script that writes the step and
+ * cannot take the pipeline: the index, the score (null to leave it alone) and
+ * the member, to ZADD only once the script's write lands.
+ */
+export function stepStallCandidateForScript(
+  tenantId: string,
+  sessionId: string,
+  step: Partial<StepHotState>,
+  nowMs: number,
+): { key: string; dueAtMs: number | null; member: string } {
+  return {
+    key: StreamKeys.stepStallCandidatesKey,
+    dueAtMs: stepStallCandidateDueAtMs(step, nowMs),
+    member: sessionCandidateMember(tenantId, sessionId),
+  };
+}
+
+/**
+ * Derive the candidate from a step write, inside the pipeline that write
+ * already issues.
  */
 export function syncStepStallCandidateForStep(
   pipeline: ChainableCommander,
@@ -113,14 +154,7 @@ export function syncStepStallCandidateForStep(
   step: Partial<StepHotState>,
   nowMs: number,
 ): void {
-  if (step.status === undefined) return;
-  const dueAtMs = stepStallEarliestReapAtMs(step, nowMs);
-  // Arm only. The member is the session but the status is one step's, and a
-  // session can hold several at once: in a parallel tool fan-out the first
-  // sibling to finish would otherwise clear the session while the others are
-  // still in flight, and nothing would arm it again. Clearing belongs to the
-  // session rule, which knows the session is done, and to the readers, which
-  // drop a candidate they find nothing in flight for.
+  const dueAtMs = stepStallCandidateDueAtMs(step, nowMs);
   if (dueAtMs === null) return;
   pipeline.zadd(
     StreamKeys.stepStallCandidatesKey,

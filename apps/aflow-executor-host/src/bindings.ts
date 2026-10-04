@@ -22,7 +22,10 @@ import { z } from 'zod';
 import {
   type BrowserProfile,
   HOST_HARNESS_CONCURRENCY_DEFAULT,
+  HOST_KEEP_AWAKE_DEFAULT,
   HostBindingBranchPolicySchema,
+  type HostKeepAwakeMode,
+  HostKeepAwakeModeSchema,
   HostSandboxPostureSchema,
 } from '@aflow/schemas';
 
@@ -98,6 +101,12 @@ export const HostPolicySchema = z.object({
    * change of default reaches a machine that never chose.
    */
   maxConcurrentHarnessRuns: z.number().int().min(1).optional(),
+  /**
+   * Whether this machine is held awake while its executor has work, written
+   * only when the operator chose: absent, `HOST_KEEP_AWAKE_DEFAULT` is read
+   * each time, so a change of default reaches a machine that never chose.
+   */
+  keepAwake: HostKeepAwakeModeSchema.optional(),
   /** MCP servers this machine will run. Absent means none may run here. */
   mcpServers: z.array(LocalMcpServerSchema).default([]),
   /**
@@ -153,6 +162,8 @@ export interface LoadedHostPolicy {
   harnesses: Map<string, HarnessProfile>;
   /** The operator's number, or the default when they chose none. */
   maxConcurrentHarnessRuns: number;
+  /** The operator's choice, or the default when they made none. */
+  keepAwake: HostKeepAwakeMode;
   mcpServers: Map<string, LocalMcpServer>;
   /** Extra read paths every command in this machine's bindings may use. */
   toolPaths: readonly string[];
@@ -201,6 +212,7 @@ export async function loadHostPolicy(
     harnesses: new Map(parsed.data.harnesses.map((h) => [h.id, h])),
     maxConcurrentHarnessRuns:
       parsed.data.maxConcurrentHarnessRuns ?? HOST_HARNESS_CONCURRENCY_DEFAULT,
+    keepAwake: parsed.data.keepAwake ?? HOST_KEEP_AWAKE_DEFAULT,
     mcpServers: new Map(parsed.data.mcpServers.map((m) => [m.id, m])),
     toolPaths: parsed.data.toolPaths,
     browsers: effectiveBrowserProfiles(declared?.profiles, chrome),

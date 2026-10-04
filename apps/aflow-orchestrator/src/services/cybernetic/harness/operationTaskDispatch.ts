@@ -10,8 +10,9 @@ import type {
 } from '@aflow/schemas';
 import { SNOOZE_OPERATION_ID, resolveSnoozeDelayMs } from '@aflow/schemas';
 import type { PayloadStore } from '@aflow/payload-store';
-import { addStepJob, scheduleShardTimer } from '@aflow/redis';
+import { scheduleShardTimer } from '@aflow/redis';
 import { dispatchInlineOp } from '../../SessionOrchestrator/handlers/dispatchInlineOp.js';
+import { dispatchOrWaitOnExecutor } from '../../SessionOrchestrator/scheduling/executorWait.js';
 import {
   isInlineOperation,
   isWorkflowTaskSafeInlineOperation,
@@ -45,7 +46,24 @@ export function operationTaskClaimDueAt(snoozeDelayMs: number): Date {
 }
 
 /** How a claimed operation task was dispatched (for caller logging). */
-export type OperationTaskDispatchMode = 'snooze_timer' | 'inline' | 'enqueued';
+export type OperationTaskDispatchMode = 'snooze_timer' | 'inline' | 'enqueued' | 'executor_wait';
+
+/** How a dispatch went, as the dispatcher's log line says it. */
+export function describeOperationTaskDispatch(
+  mode: OperationTaskDispatchMode,
+  snoozeDelayMs: number,
+): string {
+  switch (mode) {
+    case 'snooze_timer':
+      return `scheduled snooze timer (+${String(snoozeDelayMs)}ms) for`;
+    case 'inline':
+      return 'ran inline';
+    case 'enqueued':
+      return 'enqueued';
+    case 'executor_wait':
+      return 'waiting for its executor to dispatch';
+  }
+}
 
 export interface DispatchClaimedOperationTaskArgs {
   tenantId: TenantId;
@@ -68,7 +86,10 @@ export interface DispatchClaimedOperationTaskArgs {
 /**
  * POST-CLAIM dispatch of a claimed workflow operation task. Throws on
  * dispatch failure — callers run this inside their post-claim try/catch and
- * drive `postClaimFailure` + `PostClaimDispatchError`.
+ * drive `postClaimFailure` + `PostClaimDispatchError`. A missing executor is
+ * not one: the task waits for it on an `executor_wait` timer, inside the
+ * claim's completion_pending supervision, which bumps rather than escalates
+ * for longer than the wait's looks span.
  */
 export async function dispatchClaimedOperationTask(
   deps: Pick<HarnessDeps, 'redis' | 'payloadStore'>,
@@ -165,7 +186,7 @@ export async function dispatchClaimedOperationTask(
 
   // Enqueue the workflow-task job. Schema invariant guarantees this path
   // uses workflowExecution + no sessionId.
-  await addStepJob(deps.redis, {
+  const dispatched = await dispatchOrWaitOnExecutor(deps.redis, {
     messageVersion: 1,
     tenantId,
     workflowExecution,
@@ -181,5 +202,5 @@ export async function dispatchClaimedOperationTask(
     ...(credentialOwnerId !== undefined ? { credentialOwnerId } : {}),
     spaceId,
   });
-  return 'enqueued';
+  return dispatched.kind === 'waiting' ? 'executor_wait' : 'enqueued';
 }

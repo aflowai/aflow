@@ -13,6 +13,7 @@ export {
   registerExecutorHeartbeat,
   unregisterExecutorHeartbeat,
   hasAvailableExecutor,
+  hasExecutorEverBeenSeen,
   isExecutorConsumerAlive,
   registerStepInFlight,
   extendStepInFlight,
@@ -20,6 +21,15 @@ export {
   getStepInFlight,
   type StepInFlightStatus,
 } from './streams/executorHeartbeat.js';
+
+export {
+  EXECUTOR_WAIT_LOOKS,
+  EXECUTOR_WAIT_FIRST_LOOK_MS,
+  EXECUTOR_WAIT_LONGEST_LOOK_MS,
+  executorWaitGapMs,
+  executorWaitClockJumped,
+  executorWaitHasLooksLeft,
+} from './streams/executorWait.js';
 
 export {
   registerOrchestratorHeartbeat,
@@ -35,6 +45,7 @@ export {
   type EngineHealthStatus,
   getEngineHealth,
   NoExecutorAvailableError,
+  EXECUTOR_UNAVAILABLE_CODE,
 } from './streams/engineHealth.js';
 
 export {
@@ -99,6 +110,7 @@ export { ensureShardStreamGroups } from './streams/shardGroups.js';
 
 export {
   scheduleShardTimer,
+  getShardTimer,
   claimDueShardTimers,
   ackShardTimer,
   ackShardTimerById,
@@ -112,6 +124,7 @@ export {
   TIMER_LEASE_MS,
   TIMER_MAX_CLAIMS,
   type ClaimedTimers,
+  type TimerIdentity,
 } from './streams/shardTimers.js';
 
 export {

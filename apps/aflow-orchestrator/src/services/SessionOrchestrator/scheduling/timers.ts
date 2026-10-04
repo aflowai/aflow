@@ -8,6 +8,7 @@ import {
   type TraceId,
   type StepType,
   type StepResultMessage,
+  type StepJobMessage,
   type AflowError,
   CodeLaneDisabledError,
   toFailedRunDisplay,
@@ -15,12 +16,11 @@ import {
   StreamKeys,
 } from '@aflow/schemas';
 import {
-  addStepJob,
   addStepResult,
   addControlMessage,
-  NoExecutorAvailableError,
   hasAvailableExecutor,
   getStepInFlight,
+  getShardTimer,
   clearStepInFlight,
   peekDueStepStallCandidates,
   refreshStepStallCandidate,
@@ -45,6 +45,13 @@ import { createLeasedWorkConsumer } from '@aflow/lib';
 import { dispatchInlineOp } from '../handlers/dispatchInlineOp.js';
 import { processWorkflowCorrelatedTimer } from './workflowTimerDispatch.js';
 import { wakeSessionForRunWakeups } from '../../cybernetic/harness/sessionWakeup.js';
+import {
+  dispatchOrWaitOnExecutor,
+  failedDispatchResult,
+  lookAgainForExecutor,
+  rearmExecutorWait,
+  type ExecutorDispatch,
+} from './executorWait.js';
 
 /**
  * Re-arm offset for a timer this instance may not dispatch. Long enough that a
@@ -52,6 +59,14 @@ import { wakeSessionForRunWakeups } from '../../cybernetic/harness/sessionWakeup
  * that the real owner is not made to wait.
  */
 const FENCING_REARM_DELAY_MS = 2000;
+
+/** A run in one of these has nothing left for a parked step to rejoin. */
+const RUN_ENDED_STATUSES: ReadonlySet<string> = new Set([
+  'SUCCEEDED',
+  'FAILED',
+  'CANCELLED',
+  'CANCELLING',
+]);
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -438,8 +453,7 @@ export function createProcessDueTimers(bindings: SessionOrchestratorBindings) {
     async function handleTimer(timer: TimerItem): Promise<void> {
       if (timer.workflowExecution !== undefined) {
         await processWorkflowCorrelatedTimer(
-          redis,
-          deps.payloadStore,
+          { db, redis, payloadStore: deps.payloadStore },
           timer,
           timer.workflowExecution,
         );
@@ -738,9 +752,10 @@ export function createProcessDueTimers(bindings: SessionOrchestratorBindings) {
             endedAt: undefined,
             errorRef: undefined,
             outputRef: undefined,
+            executorWait: undefined,
           });
 
-          await addStepJob(redis, {
+          const job: StepJobMessage = {
             messageVersion: 1,
             tenantId: timer.tenantId,
             sessionId: timer.sessionId,
@@ -756,20 +771,14 @@ export function createProcessDueTimers(bindings: SessionOrchestratorBindings) {
             scheduledAtMs: Date.now(),
             credentialOwnerId: timerRunState?.createdBy,
             spaceId: timerRunState?.spaceId,
-          });
+          };
+          await dispatchOrWaitOnExecutor(redis, job);
         } catch (error) {
           // A retry timer re-enters dispatch, so it meets the same gates a first
           // attempt does — including a lane breaker that opened after the step
           // was first scheduled.
-          const refusal = error instanceof CodeLaneDisabledError ? error.toAflowError() : undefined;
-          if (refusal !== undefined || error instanceof NoExecutorAvailableError) {
-            const failure: AflowError = refusal ?? {
-              code: 'EXECUTOR_UNAVAILABLE',
-              message: error instanceof Error ? error.message : String(error),
-              classification: 'internal',
-              retryable: true,
-              timestamp: new Date().toISOString(),
-            };
+          if (error instanceof CodeLaneDisabledError) {
+            const failure: AflowError = error.toAflowError();
             logOrchestratorError(
               `[SessionOrchestrator] Timer re-dispatch refused (${failure.code}): ${timer.stepType}`,
               error,
@@ -806,6 +815,74 @@ export function createProcessDueTimers(bindings: SessionOrchestratorBindings) {
             return;
           }
           throw error;
+        }
+      }
+
+      if (timer.reason === 'executor_wait' && timer.executorWait !== undefined) {
+        const { job, sinceMs, looks } = timer.executorWait;
+        const [waitRunState, waitStepState] = await Promise.all([
+          getSessionState(redis, timer.tenantId, timer.sessionId),
+          getStepState(redis, timer.tenantId, timer.stepExecutionId),
+        ]);
+        // A run that ended, or a step that moved on while it waited — cancelled,
+        // retried, failed by another path — is no longer this timer's to dispatch.
+        const stillWaiting =
+          waitRunState !== null &&
+          !RUN_ENDED_STATUSES.has(waitRunState.status) &&
+          waitStepState?.status === 'SCHEDULED' &&
+          waitStepState.attempt === timer.attempt &&
+          waitStepState.executorWait?.sinceMs === sinceMs;
+        if (stillWaiting) {
+          const now = Date.now();
+          let dispatched: ExecutorDispatch;
+          try {
+            dispatched = await lookAgainForExecutor(
+              redis,
+              { ...job, scheduledAtMs: now },
+              { sinceMs, looks, dueAtMs: timer.dueAtMs },
+              now,
+            );
+          } catch (error) {
+            // A look re-enters dispatch, so it meets the lane breaker as a
+            // retry does — one opened while the step waited refuses it, and the
+            // refusal goes to the agent rather than back onto the timer.
+            if (!(error instanceof CodeLaneDisabledError)) throw error;
+            const refusal: AflowError = error.toAflowError();
+            logOrchestratorError(
+              `[SessionOrchestrator] Timer re-dispatch refused (${refusal.code}): ${job.stepType}`,
+              error,
+              {
+                tenantId: job.tenantId,
+                sessionId: job.sessionId,
+                stepType: job.stepType,
+                stepExecutionId: job.stepExecutionId,
+              },
+            );
+            await bindings.applyResult({
+              result: failedDispatchResult(job, refusal, now),
+              messageId: `synthetic:dispatch-refused:${job.stepExecutionId}:${String(job.attempt)}`,
+            });
+            await settle(timer);
+            return;
+          }
+          if (dispatched.kind === 'gave_up') {
+            // Failed through applyResult, as the executor's own FAILED result
+            // would be, so the step's retry and onFailure policy decide.
+            logOrchestratorError(
+              `[SessionOrchestrator] Gave up waiting for the ${job.stepType} executor`,
+              dispatched.failure,
+              {
+                tenantId: job.tenantId,
+                sessionId: job.sessionId,
+                stepExecutionId: job.stepExecutionId,
+                operationId: job.operationId,
+              },
+            );
+            await bindings.applyResult({
+              result: failedDispatchResult(job, dispatched.failure, now),
+              messageId: `synthetic:executor-unavailable:${job.stepExecutionId}:${String(job.attempt)}`,
+            });
+          }
         }
       }
 
@@ -851,15 +928,22 @@ export function createProcessDueTimers(bindings: SessionOrchestratorBindings) {
           // The single shared completion-path authority (also used by orphan
           // recovery and the parallel-barrier sweep) — a STARTED step with a
           // live in-flight key within its deadline+backstop, a SCHEDULED step
-          // with a live one or inside its pickup grace, or any step inside the
-          // snooze window still has a completion path. Never reap on elapsed
-          // time alone.
-          const { hasCompletionPath, isStarted, executorOwnsStep, stepDeadlineAtMs } =
+          // with a live one or inside its pickup grace, any step inside the
+          // snooze window, or a step waiting on its executor still has a
+          // completion path. Never reap on elapsed time alone.
+          const { hasCompletionPath, isStarted, executorOwnsStep, stepDeadlineAtMs, executorWait } =
             await classifyStepCompletionPath(
-              { redis, getStepInFlight, hasAvailableExecutor },
+              { redis, getStepInFlight, hasAvailableExecutor, getShardTimer },
               stepState,
               now,
             );
+          if (executorWait === 'timer_lost') {
+            await rearmExecutorWait(redis, stepState, now);
+            getOrchestratorLogger().warn(
+              `[watchdog] Re-armed the executor wait of step ${stepState.stepId} (${stepState.stepType}): its timer was gone`,
+              { tenantId, runId, stepExecutionId: stepState.stepExecutionId },
+            );
+          }
           if (hasCompletionPath) {
             await refreshStepStallCandidate(
               redis,

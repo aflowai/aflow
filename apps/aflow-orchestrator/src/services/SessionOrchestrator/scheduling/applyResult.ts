@@ -19,7 +19,6 @@ import {
 import { isDraftRepair } from '@aflow/schemas';
 import {
   scheduleShardTimer,
-  NoExecutorAvailableError,
   markSessionDirty,
   type StepHotState,
   type SessionEvent,
@@ -1109,11 +1108,9 @@ export function createApplyResult(bindings: SessionOrchestratorBindings) {
             },
           );
           const errorCode =
-            err instanceof NoExecutorAvailableError
-              ? 'EXECUTOR_UNAVAILABLE'
-              : errMsg.includes('validation failed') || errMsg.includes('Invalid enum')
-                ? 'INVALID_TOOL_CALL'
-                : 'AGENT_SCHEDULING_ERROR';
+            errMsg.includes('validation failed') || errMsg.includes('Invalid enum')
+              ? 'INVALID_TOOL_CALL'
+              : 'AGENT_SCHEDULING_ERROR';
           await failRunWithCleanup(
             result.tenantId,
             result.sessionId,
@@ -1230,11 +1227,9 @@ export function createApplyResult(bindings: SessionOrchestratorBindings) {
           { tenantId: result.tenantId, sessionId: result.sessionId, stepId: result.stepId },
         );
         const errorCode =
-          err instanceof NoExecutorAvailableError
-            ? 'EXECUTOR_UNAVAILABLE'
-            : errMsg.includes('validation failed') || errMsg.includes('Invalid enum')
-              ? 'STEP_INPUT_VALIDATION_ERROR'
-              : 'NEXT_STEP_SCHEDULING_ERROR';
+          errMsg.includes('validation failed') || errMsg.includes('Invalid enum')
+            ? 'STEP_INPUT_VALIDATION_ERROR'
+            : 'NEXT_STEP_SCHEDULING_ERROR';
         await failRunWithCleanup(
           result.tenantId,
           result.sessionId,

@@ -9,6 +9,7 @@ import {
   StepOutputPresentationSchema,
   SessionAgentTargetSchema,
   McpCredentialBlockSchema,
+  StepJobMessageSchema,
 } from '@aflow/schemas';
 
 /** Default TTL for hot state (24 hours) */
@@ -257,6 +258,22 @@ export const StepHotStateSchema = z.object({
   traceId: z.string().optional(),
   parentStepExecutionId: z.string().uuid().optional(),
 
+  /**
+   * Set while this SCHEDULED step waits for its executor, which had no
+   * heartbeat when the step was dispatched: since when (epoch ms), and the job
+   * it waits to dispatch. Its `executor_wait` timer is its completion path
+   * until `EXECUTOR_WAIT_LOOKS` have been taken; absent on a step whose job is
+   * in its stream. The job is kept whole so a wait whose timer is lost is armed
+   * again with the job that was parked, not one rebuilt without what only a
+   * dispatch carries.
+   */
+  executorWait: z
+    .object({
+      sinceMs: z.number(),
+      job: StepJobMessageSchema,
+    })
+    .optional(),
+
   // Sync tracking
 });
 
@@ -279,6 +296,7 @@ export const SessionEventSchema = z.object({
     'StepSucceeded',
     'StepFailed',
     'StepPaused',
+    'StepWaitingOnExecutor',
     'SessionCompleted',
     'SessionFailed',
     'SessionPaused',

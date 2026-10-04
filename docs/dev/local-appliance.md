@@ -432,6 +432,11 @@ yarn workspace @aflow/aflow-executor-host harness list
 yarn workspace @aflow/aflow-executor-host harness add claude
 ```
 
+While a run is in flight the executor holds the machine awake on power —
+`harness keep-awake always` holds it on battery too, `never` not at all — and work
+the appliance dispatches while the machine sleeps waits up to ten minutes for it to
+wake rather than failing.
+
 A harness needs two things the boundary refuses by default, and both are granted
 on the machine rather than assumed by the platform.
 

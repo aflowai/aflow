@@ -26,6 +26,7 @@ import {
   ackShardTimer,
   ackShardTimerById,
   claimDueShardTimers,
+  getShardTimer,
   migrateLegacyShardTimers,
   repairDueShardIndex,
   rescheduleClaimedTimer,
@@ -171,6 +172,29 @@ describe.skipIf(!STACK_REDIS.available)('shard timer index (real Redis)', () => 
     expect(await redis.zcard(StreamKeys.shardTimersKey(shardId))).toBe(0);
     expect(await redis.hlen(StreamKeys.shardTimerDataKey(shardId))).toBe(0);
     expect(await redis.zscore(StreamKeys.dueShardsKey, String(shardId))).toBeNull();
+  });
+
+  it('reads a timer by its identity while it is armed or leased, and none once acknowledged', async () => {
+    const [session] = sessionForDistinctShards(1) as [string];
+    const timer = makeTimer(session, Date.now() - 1000);
+    const shardId = track(timer);
+    const identity = {
+      sessionId: timer.sessionId,
+      stepExecutionId: timer.stepExecutionId,
+      reason: timer.reason,
+      attempt: timer.attempt,
+    };
+
+    expect(await getShardTimer(redis, identity)).toBeNull();
+    await scheduleShardTimer(redis, timer);
+    expect(await getShardTimer(redis, identity)).toEqual(timer);
+    expect(await getShardTimer(redis, { ...identity, attempt: 2 })).toBeNull();
+
+    const claimed = await claimDueShardTimers(redis, [shardId]);
+    expect(await getShardTimer(redis, identity)).toEqual(timer);
+
+    await ackShardTimer(redis, timer, claimed.leaseUntilMs);
+    expect(await getShardTimer(redis, identity)).toBeNull();
   });
 
   it('upserts rather than duplicating when the same wake-up is rescheduled', async () => {

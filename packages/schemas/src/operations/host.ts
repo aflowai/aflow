@@ -134,6 +134,20 @@ export const HOST_HARNESS_MAX_TURNS_DEFAULT = 600;
  */
 export const HOST_HARNESS_CONCURRENCY_DEFAULT = 2;
 
+export const HostKeepAwakeModeSchema = z
+  .enum(['on-ac', 'never', 'always'])
+  .describe(
+    'Whether the machine is held awake while its host executor has a step running: `on-ac` ' +
+      'while it is on power, `always` on battery too, `never` not at all.',
+  );
+export type HostKeepAwakeMode = z.infer<typeof HostKeepAwakeModeSchema>;
+/**
+ * Held awake on power, not on battery. A machine that sleeps with a coding
+ * agent mid-run loses the run and every conversation waiting on it, while a
+ * laptop held awake on battery is one an operator closed expecting it to stop.
+ */
+export const HOST_KEEP_AWAKE_DEFAULT: HostKeepAwakeMode = 'on-ac';
+
 /**
  * How long a folder's checks run when the operator chose no time. A type-check,
  * the builds a test needs and a scoped test run take minutes on a laptop; the
@@ -1220,6 +1234,10 @@ export const HostBindingInspectOutputSchema = z.object({
       'How many coding agents the machine holding the folder runs at once. A run past it ' +
         'waits for one to end rather than being refused.',
     ),
+  keepAwake: HostKeepAwakeModeSchema.describe(
+    'Whether the machine holding the folder is held awake while it has work: the mode the ' +
+      'operator chose, else the default now.',
+  ),
 });
 
 export const HostCommitScanInputSchema = z.object({

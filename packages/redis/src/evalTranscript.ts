@@ -202,6 +202,7 @@ export async function buildTranscript(
       }
 
       case 'StepPaused':
+      case 'StepWaitingOnExecutor':
       case 'SessionPaused':
       case 'SessionResumed':
       case 'SessionRetried':

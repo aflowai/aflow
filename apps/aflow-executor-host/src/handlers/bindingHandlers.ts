@@ -1,7 +1,7 @@
 /**
- * A connected folder's push posture, checks and sandbox posture, and how many
- * coding agents its machine runs at once, read from the policy file on this
- * machine.
+ * A connected folder's push posture, checks and sandbox posture, how many
+ * coding agents its machine runs at once and whether it holds itself awake
+ * while they run, read from the policy file on this machine.
  *
  * Read here rather than from the workspace's copy because both are only ever
  * declared here. Nothing in the folder is touched, so a file-only binding
@@ -44,6 +44,7 @@ async function inspect(ctx: ExecutorContext, policyPath: string): Promise<StepRe
         : {}),
       sandbox: sandboxPostureOf(binding),
       maxConcurrentHarnessRuns: policy.maxConcurrentHarnessRuns,
+      keepAwake: policy.keepAwake,
     };
     return await successWithData(ctx, output);
   } catch (error) {

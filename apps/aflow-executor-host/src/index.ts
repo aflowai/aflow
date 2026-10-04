@@ -42,7 +42,7 @@ import {
   quitRedisWithTimeout,
   readHostBrowserSignInRequest,
 } from '@aflow/redis';
-import { HOST_HARNESS_CONCURRENCY_DEFAULT } from '@aflow/schemas';
+import { HOST_HARNESS_CONCURRENCY_DEFAULT, HOST_KEEP_AWAKE_DEFAULT } from '@aflow/schemas';
 
 import { executionPermitted, loadHostPolicy } from './bindings.js';
 import { createChromeLauncher } from './browser/chromeProcess.js';
@@ -54,6 +54,7 @@ import { followBrowserRequests } from './browser/requestPoll.js';
 import { isBrowserRequestFile, serveBrowserRequests } from './browser/windowRequests.js';
 import { createBrowserHandler } from './handlers/browserHandler.js';
 import { removeWorktree } from './worktree.js';
+import { createKeepAwake, describeKeepAwake } from './keepAwake.js';
 import { HARNESS_RUN_OPERATION, removeOrphanedCheckouts } from './handlers/harnessHandlers.js';
 import {
   BROWSER_STEP_TYPE,
@@ -225,6 +226,14 @@ async function main(): Promise<void> {
       .then((policy) => policy.maxConcurrentHarnessRuns)
       .catch(() => HOST_HARNESS_CONCURRENCY_DEFAULT),
   );
+
+  const keepAwakeMode = await loadHostPolicy(policyPath)
+    .then((policy) => policy.keepAwake)
+    .catch(() => HOST_KEEP_AWAKE_DEFAULT);
+  const keepAwake = createKeepAwake({ mode: keepAwakeMode, log });
+  keepAwake.follow(STEP_TYPE, runtime);
+  keepAwake.follow(BROWSER_STEP_TYPE, browserRuntime);
+  log.info(`This machine ${describeKeepAwake(keepAwakeMode)}`);
 
   // Loaded here rather than at the top so that nothing importing this module
   // for its helpers pulls in the browser automation library.
@@ -409,6 +418,7 @@ async function main(): Promise<void> {
     void loadHostPolicy(policyPath)
       .then(async (policy) => {
         runtime.limitOperation(HARNESS_RUN_OPERATION, policy.maxConcurrentHarnessRuns);
+        keepAwake.setMode(policy.keepAwake);
         await followPolicy({
           reapHostWork: async () => {
             const permitted = executionPermitted(policy);
@@ -482,6 +492,7 @@ async function main(): Promise<void> {
   // run this at once: whatever sends them may SIGKILL seconds later, which
   // skips the exit handler below. Only a drain defers it, to its own end.
   const endEverything = (): void => {
+    keepAwake.stop();
     policyWatch.close();
     killAllProcesses();
     // Synchronous, deliberately. An `exit` handler schedules no further work,
@@ -516,6 +527,7 @@ async function main(): Promise<void> {
       endInFlight: endEverything,
     },
     onShutdown: async () => {
+      keepAwake.stop();
       await inventoryTask.stop();
       await browserIdleSweep.stop();
       await browserRequestPoll.stop();
