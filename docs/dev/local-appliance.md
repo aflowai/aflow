@@ -595,9 +595,13 @@ anything.
   into each checkout's `REDIS_URL` (`scripts/stackEnv.mjs`), so `.env` names
   only where Redis is, and `yarn infra:up` starts Redis with the same password
   (`scripts/infra.mjs`). It publishes on `127.0.0.1` only. Every entry point
-  gets it through that one loader: each root script that starts a service or
-  reaches a datastore runs under `scripts/with-stack-env.mjs`, and it is laid
-  only into a `REDIS_URL` naming this machine. A paired machine keeps its
+  gets it through that one loader: each script that runs tsx on a file of the
+  repository runs under `scripts/with-stack-env.mjs`, which reads `.env` under
+  whatever the caller set — `DATABASE_URL=… yarn db:seed` seeds that database,
+  and `yarn dev --env <file>` hands its services that file — and lays it only
+  into a `REDIS_URL` naming this machine. A `REDIS_URL` naming another host is
+  the checkout's own Redis: `yarn start` checks it with the credential it
+  carries, and `yarn redis:password` leaves it as it is. A paired machine keeps its
   own identity in `~/.aflow/host.env`, read-only on write approvals; pairing
   hands it the address without the stack's password.
 - **The MCP server** gives the owner's key only to a session that presents the
@@ -626,15 +630,19 @@ anything.
   login it has always had. A generated one is its own slice: `DATABASE_URL`
   reaches every tool and every Postgres-gated test.
 - **The Redis integration suites** resolve the URL exactly as the services do —
-  `.env` over the shell, the machine's password laid in, `REDIS_PASSWORD` over
-  both — through `scripts/stackRedis.mjs`. Where no Redis answers they skip;
+  the shell over `.env`, the machine's password laid in, `REDIS_PASSWORD` over
+  both — through `scripts/stackRedis.mjs`, and connect only to this machine's
+  own Redis: some empty their database and rewrite ACL users, so a URL naming
+  another host, a managed Redis included, skips them without a connection and
+  names the host. Where no Redis answers they skip;
   where one answers and refuses that credential they fail, naming the refusal,
   because a credential the stack wrote that a test cannot use is a defect.
 
 `yarn start` authenticates to Redis with the machine's password and says which
 it found — no password required, the password accepted, the password refused —
 and stops, naming the remedy, on the first and the last, and when this
-checkout's `.env` carries a Redis password of its own.
+checkout's `REDIS_URL` carries a Redis password of its own for this machine's
+Redis.
 
 **With a `.env` or a Redis from before this, run one command:**
 

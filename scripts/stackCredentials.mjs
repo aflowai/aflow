@@ -12,7 +12,13 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { MCP_TOKEN_ENV, sessionTokenIn } from './mcp-local-setup.mjs';
-import { REDIS_URL_KEY, STACK_PASSWORD_KEY, hostDirOf, redisPasswordOf } from './stackEnv.mjs';
+import {
+  REDIS_URL_KEY,
+  STACK_PASSWORD_KEY,
+  hostDirOf,
+  isMachineRedisUrl,
+  redisPasswordOf,
+} from './stackEnv.mjs';
 import { ADOPT_PASSWORD_COMMAND, redisUrlWithoutCredentials } from './stackRedis.mjs';
 
 export const TOOLS_LOGIN_USER = 'aflow';
@@ -24,14 +30,27 @@ const COMPOSE_PROJECT_KEY = 'COMPOSE_PROJECT_NAME';
 
 const REDIS_URL_LINE = new RegExp(`^(\\s*(?:export\\s+)?${REDIS_URL_KEY}=)(.*)$`, 'm');
 
+/** The `REDIS_URL` `.env` sets, unquoted, or undefined when it sets none. */
+export function envRedisUrl(envText) {
+  return REDIS_URL_LINE.exec(envText)?.[2]
+    .trim()
+    .replace(/^(['"])(.*)\1$/, '$2');
+}
+
 /**
  * `.env` with the password taken out of its `REDIS_URL`, so the checkout uses
- * the machine's; undefined when that URL carries none.
+ * the machine's; undefined when that URL carries none, or names a Redis on
+ * another host, whose password is that Redis's own.
  */
 export function envAdoptingMachinePassword(envText) {
-  const match = REDIS_URL_LINE.exec(envText);
-  const current = match?.[2].trim().replace(/^(['"])(.*)\1$/, '$2');
-  if (current === undefined || redisPasswordOf(current) === undefined) return undefined;
+  const current = envRedisUrl(envText);
+  if (
+    current === undefined ||
+    redisPasswordOf(current) === undefined ||
+    !isMachineRedisUrl(current)
+  ) {
+    return undefined;
+  }
   const url = new URL(current);
   url.password = '';
   return envText.replace(REDIS_URL_LINE, `$1${url.toString()}`);
@@ -40,6 +59,10 @@ export function envAdoptingMachinePassword(envText) {
 /**
  * The environment `docker compose` runs with: the machine's password, or an
  * empty one when there is none, which the Redis service refuses to start on.
+ *
+ * The one merge where the caller does not win: every checkout's compose drives
+ * the same Redis container, so a password exported in one shell would recreate
+ * it under every other checkout's services.
  */
 export function composeEnv(processEnv, machinePassword) {
   return { ...processEnv, [STACK_PASSWORD_KEY]: machinePassword ?? '' };
@@ -107,12 +130,46 @@ function redisReadiness({ redisUrl, redis, machineFile }) {
 }
 
 /**
+ * A Redis on another host, which the checkout's `REDIS_URL` names: its own,
+ * checked with the credential that URL carries, and failed only where it
+ * refuses it. The machine's password and `yarn redis:password` are for this
+ * machine's Redis alone.
+ */
+function ownRedisReadiness({ redisUrl, redis, source }) {
+  const at = redisUrlWithoutCredentials(redisUrl);
+  const own = `Redis: this checkout's own, at ${new URL(redisUrl).host}`;
+  switch (redis.outcome) {
+    case 'accepted':
+      return { line: `${own}; accepts the credential ${REDIS_URL_KEY} carries` };
+    case 'no-password-required':
+      return { line: `${own}; requires no password` };
+    case 'refused':
+      return {
+        line: `${own}; refuses the credential ${REDIS_URL_KEY} carries (${redis.reason})`,
+        failure: {
+          message:
+            `The Redis at ${at}, which ${REDIS_URL_KEY} in ${source} names, refuses the ` +
+            `credential it carries (${redis.reason}).`,
+          remedy:
+            `Put the password that Redis requires in ${REDIS_URL_KEY}. This machine's password ` +
+            `is for its own Redis alone, and \`${ADOPT_PASSWORD_COMMAND}\` leaves a URL naming ` +
+            'another host as it is.',
+        },
+      };
+    case 'unreachable':
+      return { line: `${own}; not answering (${redis.reason})` };
+  }
+}
+
+/**
  * Each service's credential state, one line each, and the failure that stops
- * the start when Redis would run without the machine's password, or this
- * checkout would connect with a password of its own.
+ * the start when this machine's Redis would run without the machine's
+ * password, this checkout would connect to it with a password of its own, or
+ * a Redis of the checkout's own on another host refuses its credential.
  *
  * @param {{
  *   checkoutRedisUrl: string | undefined,
+ *   checkoutRedisSource: '.env' | 'the shell',
  *   machinePassword: string,
  *   machineFile: string,
  *   redisUrl: string,
@@ -125,6 +182,7 @@ function redisReadiness({ redisUrl, redis, machineFile }) {
  */
 export function credentialReadiness({
   checkoutRedisUrl,
+  checkoutRedisSource,
   machinePassword,
   machineFile,
   redisUrl,
@@ -135,22 +193,32 @@ export function credentialReadiness({
   composeProject,
 }) {
   const lines = [];
-  const redisState = redisReadiness({ redisUrl, redis, machineFile });
+  const redisState = isMachineRedisUrl(redisUrl)
+    ? redisReadiness({ redisUrl, redis, machineFile })
+    : ownRedisReadiness({ redisUrl, redis, source: checkoutRedisSource });
   lines.push(redisState.line);
   let failure = redisState.failure;
 
   const checkoutPassword = redisPasswordOf(checkoutRedisUrl);
-  if (checkoutPassword !== undefined && checkoutPassword !== machinePassword) {
+  if (!isMachineRedisUrl(redisUrl)) {
     lines.push(
-      `This checkout: ${REDIS_URL_KEY} in .env carries a password other than the machine's`,
+      `This checkout: ${REDIS_URL_KEY} in ${checkoutRedisSource} names its own Redis, at ` +
+        `${new URL(redisUrl).host}, with the credential it carries`,
+    );
+  } else if (checkoutPassword !== undefined && checkoutPassword !== machinePassword) {
+    lines.push(
+      `This checkout: ${REDIS_URL_KEY} in ${checkoutRedisSource} carries a password other than the machine's`,
     );
     failure = {
       message:
-        `${REDIS_URL_KEY} in .env carries a Redis password of its own, and the Redis every ` +
-        `checkout on this machine shares requires the one in ${machineFile}.`,
+        `${REDIS_URL_KEY} in ${checkoutRedisSource} carries a Redis password of its own, and the ` +
+        `Redis every checkout on this machine shares requires the one in ${machineFile}.`,
       remedy:
-        `Run \`${ADOPT_PASSWORD_COMMAND}\` once: it takes the password out of ${REDIS_URL_KEY}, ` +
-        "so this checkout uses the machine's, and starts Redis with it if it is not already.",
+        checkoutRedisSource === '.env'
+          ? `Run \`${ADOPT_PASSWORD_COMMAND}\` once: it takes the password out of ${REDIS_URL_KEY}, ` +
+            "so this checkout uses the machine's, and starts Redis with it if it is not already."
+          : `Unset ${REDIS_URL_KEY} in the shell, or take the password out of it, so the ` +
+            "machine's is laid in.",
     };
   } else {
     lines.push(`This checkout: ${REDIS_URL_KEY} uses the machine's password`);

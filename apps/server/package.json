@@ -4,14 +4,14 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "NODE_OPTIONS='--conditions=ts-source' tsx watch src/index.ts",
+    "dev": "NODE_OPTIONS='--conditions=ts-source' node ../../scripts/with-stack-env.mjs tsx watch src/index.ts",
     "build": "npx tsup",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
     "clean": "rm -rf dist",
     "test": "vitest run --passWithNoTests",
-    "bootstrap:local": "PHOENIX_EDITION=community-local tsx src/bootstrapLocal.ts"
+    "bootstrap:local": "PHOENIX_EDITION=community-local node ../../scripts/with-stack-env.mjs tsx src/bootstrapLocal.ts"
   },
   "dependencies": {
     "@aflow/database": "workspace:*",

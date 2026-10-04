@@ -23,6 +23,7 @@ import {
   composeProjectOf,
   credentialReadiness,
   envAdoptingMachinePassword,
+  envRedisUrl,
   mcpTokenState,
 } from './stackCredentials.mjs';
 import {
@@ -152,6 +153,16 @@ describe('a checkout adopting the machine’s password', () => {
     expect(envAdoptingMachinePassword('PORT=3000\n')).toBeUndefined();
   });
 
+  it('never rewrites a URL naming another host, whose password is that Redis’s own', () => {
+    for (const url of [
+      `rediss://default:${PASSWORD}@managed.example.com:6380`,
+      `redis://:${PASSWORD}@10.0.0.5:6379/2`,
+    ]) {
+      expect(envAdoptingMachinePassword(`${REDIS_URL_KEY}='${url}'\n`)).toBeUndefined();
+      expect(envRedisUrl(`${REDIS_URL_KEY}='${url}'\n`)).toBe(url);
+    }
+  });
+
   it('hands compose the machine’s password, and nothing when the machine has none', () => {
     expect(composeEnv({ PATH: '/bin' }, PASSWORD)).toEqual({
       PATH: '/bin',
@@ -165,6 +176,7 @@ describe('the boot readiness', () => {
   const MACHINE_FILE = `/home/dev/.aflow/${STACK_ENV_FILE}`;
   const ready = {
     checkoutRedisUrl: 'redis://localhost:6379',
+    checkoutRedisSource: '.env',
     machinePassword: PASSWORD,
     machineFile: MACHINE_FILE,
     redisUrl: `redis://:${PASSWORD}@localhost:6379`,
@@ -221,6 +233,55 @@ describe('the boot readiness', () => {
     expect(readiness.failure?.message).toContain(MACHINE_FILE);
     expect(readiness.failure?.message).not.toContain(other);
     expect(readiness.failure?.remedy).toContain(ADOPT_PASSWORD_COMMAND);
+  });
+
+  it('names a REDIS_URL with its own password set in the shell, and how to clear it there', () => {
+    const readiness = credentialReadiness({
+      ...ready,
+      checkoutRedisUrl: `redis://:${generateRedisPassword()}@localhost:6379`,
+      checkoutRedisSource: 'the shell',
+    });
+    expect(readiness.failure?.message).toContain(`${REDIS_URL_KEY} in the shell`);
+    expect(readiness.failure?.remedy).toContain(`Unset ${REDIS_URL_KEY} in the shell`);
+  });
+
+  describe('a REDIS_URL naming another host', () => {
+    const own = generateRedisPassword();
+    const remote = {
+      ...ready,
+      checkoutRedisUrl: `rediss://default:${own}@managed.example.com:6380`,
+      redisUrl: `rediss://default:${own}@managed.example.com:6380`,
+    };
+
+    it('is the checkout’s own Redis, passing on the credential it carries', () => {
+      const readiness = credentialReadiness(remote);
+      expect(readiness.failure).toBeUndefined();
+      expect(readiness.lines[0]).toBe(
+        `Redis: this checkout's own, at managed.example.com:6380; accepts the credential ${REDIS_URL_KEY} carries`,
+      );
+      expect(readiness.lines[1]).toContain('names its own Redis, at managed.example.com:6380');
+      expect(readiness.lines.join('\n')).not.toContain(own);
+    });
+
+    it('is never asked for the machine’s password, and one asking for none is not a failure', () => {
+      const readiness = credentialReadiness({
+        ...remote,
+        redis: { outcome: 'no-password-required' },
+      });
+      expect(readiness.failure).toBeUndefined();
+      expect(readiness.lines.join('\n')).not.toContain(MACHINE_FILE);
+    });
+
+    it('fails where it refuses its own credential, without offering the machine’s', () => {
+      const readiness = credentialReadiness({
+        ...remote,
+        redis: { outcome: 'refused', reason: 'WRONGPASS invalid username-password pair' },
+      });
+      expect(readiness.failure?.message).toContain('rediss://managed.example.com:6380');
+      expect(readiness.failure?.message).toContain('WRONGPASS');
+      expect(readiness.failure?.message).not.toContain(own);
+      expect(readiness.failure?.remedy).toContain('leaves a URL naming another host as it is');
+    });
   });
 
   it('passes a checkout whose .env carries the machine’s own password', () => {

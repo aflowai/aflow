@@ -3,15 +3,16 @@
  * integration suites find it.
  *
  * Test support lives here rather than in `@aflow/redis` because it reads the
- * URL through the stack's own loader (`scripts/stackEnv.mjs`): `.env` over the
- * shell, this machine's password laid in, `REDIS_PASSWORD` over both as
+ * URL through the stack's own loader (`scripts/stackEnv.mjs`): the shell over
+ * `.env`, this machine's password laid in, `REDIS_PASSWORD` over both as
  * `getRedisConfig` lays it — so a suite probes the Redis the services use, with
  * their credential. With no `.env` and no machine password it is the shell's
  * `REDIS_URL`, or a bare local Redis, which is what CI runs.
  *
- * Of a suite's three outcomes only one is a skip. Nothing answering is a
- * machine without Redis. A Redis that answers and refuses the credential is a
- * broken stack, and a suite skipping there would hide its own coverage.
+ * Nothing answering is a machine without Redis, and a URL naming another host
+ * is not this machine's Redis: both skip. A Redis of this machine's that
+ * answers and refuses the credential is a broken stack, and a suite skipping
+ * there would hide its own coverage.
  */
 import { connect as connectTcp } from 'node:net';
 import { dirname, join } from 'node:path';
@@ -22,6 +23,7 @@ import {
   LOCAL_REDIS_URL,
   REDIS_PASSWORD_KEY,
   REDIS_URL_KEY,
+  isMachineRedisUrl,
   loadStackEnv,
   stackEnvPath,
 } from './stackEnv.mjs';
@@ -137,12 +139,24 @@ export function stackRedisUrl(db, env) {
  * The stack's Redis on database `db`: available when it answers, unavailable
  * when nothing does, and an error naming the refusal when it refuses the
  * credential the services would use.
+ *
+ * Only this machine's own Redis is ever connected to. Some suites empty their
+ * database and rewrite ACL users, so a URL naming any other host — a managed
+ * Redis included — is unavailable without a connection, and says so.
  */
 export async function stackRedis(db, options = {}) {
   const processEnv = options.processEnv ?? process.env;
   const machineFile = options.machineFile ?? stackEnvPath(processEnv);
-  const env = loadStackEnv(options.repo ?? REPO, processEnv, machineFile);
+  const env = loadStackEnv(join(options.repo ?? REPO, '.env'), processEnv, machineFile);
   const url = stackRedisUrl(db, env);
+  if (!isMachineRedisUrl(url)) {
+    const skipped =
+      `${REDIS_URL_KEY} names the Redis at ${new URL(url).host}, not this machine's. The Redis ` +
+      "integration suites run only against this machine's own Redis, because some empty their " +
+      'database and rewrite ACL users; skipping without connecting.';
+    (options.warn ?? console.warn)(skipped);
+    return { available: false, url, skipped };
+  }
   const probe = await (options.probe ?? probeRedis)(url);
   if (probe.outcome === 'refused') {
     const remedy =

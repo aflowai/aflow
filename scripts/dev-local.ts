@@ -186,13 +186,10 @@ async function readInstanceConfig(): Promise<Record<string, string>> {
 }
 
 async function main(): Promise<void> {
-  // The loader the root scripts run under merges `.env` over the shell, so the
-  // edition reaches `db:migrate` the way it reaches the dev runner.
   const base: NodeJS.ProcessEnv = {
     ...process.env,
     ...editionEnv,
     PHOENIX_INSTANCE_DIR: INSTANCE_DIR,
-    PHOENIX_DEV_ENV_OVERRIDES: JSON.stringify(editionEnv),
   };
 
   // Started only when something is missing, and judged by what is listening
@@ -238,17 +235,16 @@ async function main(): Promise<void> {
     throw new Error(`No PHOENIX_LOCAL_TENANT_ID in ${join(INSTANCE_DIR, 'instance.env')}`);
   }
 
-  // The dev runner merges `.env` over its own environment, so what must win is
-  // handed to it separately and applied last.
   // The development Redis's password is the machine's, which the stack's loader
   // lays into REDIS_URL (scripts/stackEnv.mjs). The instance file's REDIS_PASSWORD is
   // the appliance's, and ioredis lays a password option over the URL's, so it
-  // would replace the right one.
-  const redisPassword = { REDIS_PASSWORD: '' };
-  const overrides = {
-    ...editionEnv,
+  // would replace the right one; set empty, it also keeps `.env`'s out, because
+  // the loader fills only what the caller left unset.
+  const runnerEnv: NodeJS.ProcessEnv = {
+    ...base,
     ...instance,
-    ...redisPassword,
+    ...editionEnv,
+    REDIS_PASSWORD: '',
     // The capacity every pool is sized from; the default is the hosted tier's,
     // and the development Postgres runs with its own default of 100.
     DB_SERVER_MAX_CONNECTIONS: base['DB_SERVER_MAX_CONNECTIONS'] ?? '100',
@@ -259,18 +255,13 @@ async function main(): Promise<void> {
     ...(process.env['PHOENIX_HOST_REDIS_URL']?.trim()
       ? {}
       : { PHOENIX_HOST_REDIS_URL: base['REDIS_URL'] ?? 'redis://127.0.0.1:6379' }),
-  };
-
-  console.log('[dev:local] starting the local edition — http://localhost:3001\n');
-  await run('node scripts/dev.mjs --profile local', {
-    ...base,
-    ...instance,
-    ...redisPassword,
     // Named so the single-stack refusal tells the reader the command they ran,
     // rather than the one the runner underneath it happens to be.
     PHOENIX_DEV_RESTART_HINT: 'yarn dev:local',
-    PHOENIX_DEV_ENV_OVERRIDES: JSON.stringify(overrides),
-  });
+  };
+
+  console.log('[dev:local] starting the local edition — http://localhost:3001\n');
+  await run('node scripts/dev.mjs --profile local', runnerEnv);
 }
 
 main().catch((error: unknown) => {

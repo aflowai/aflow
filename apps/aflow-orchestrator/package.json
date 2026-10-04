@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "NODE_OPTIONS='--conditions=ts-source' tsx watch src/index.ts",
+    "dev": "NODE_OPTIONS='--conditions=ts-source' node ../../scripts/with-stack-env.mjs tsx watch src/index.ts",
     "build": "npx tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "test": "vitest run --passWithNoTests"

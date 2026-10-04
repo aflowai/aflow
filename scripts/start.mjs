@@ -75,7 +75,7 @@ if (machine.created) say(`wrote this machine's Redis password to ${machineFile}`
 // now: the MCP server reads it once, at its start, and reads the file itself per
 // session — so the key reaches the next session without a restart.
 const envFile = join(REPO, '.env');
-const envValues = { ...process.env, ...parseEnvFile(readFileSync(envFile, 'utf-8')) };
+const envValues = stackEnv(process.env, parseEnvFile(readFileSync(envFile, 'utf-8')));
 const mcpAuthFile = authFileOf(envValues, REPO);
 const mcpToken = mcpTokenState(
   existsSync(mcpAuthFile) ? readFileSync(mcpAuthFile, 'utf-8') : undefined,
@@ -95,7 +95,8 @@ const redisUrl = stackEnv(process.env, dotenv, { machinePassword: machine.passwo
   REDIS_URL_KEY
 ];
 const readiness = credentialReadiness({
-  checkoutRedisUrl: dotenv[REDIS_URL_KEY],
+  checkoutRedisUrl: stackEnv(process.env, dotenv)[REDIS_URL_KEY],
+  checkoutRedisSource: process.env[REDIS_URL_KEY] === undefined ? '.env' : 'the shell',
   machinePassword: machine.password,
   machineFile,
   redisUrl,

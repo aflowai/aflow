@@ -2,8 +2,9 @@
 /**
  * Puts this checkout and the machine's Redis on the machine's password: writes
  * `stack.env` if this is the first command on the machine to need it, takes a
- * password of the checkout's own out of `REDIS_URL` in `.env` so the loader
- * lays the machine's in, and starts Redis with that password. The data is in a
+ * password of the checkout's own out of a `REDIS_URL` in `.env` naming this
+ * machine so the loader lays the machine's in, and starts Redis with that
+ * password. A `REDIS_URL` naming another host is never rewritten. The data is in a
  * volume and stays. Idempotent — run again, it changes nothing.
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -12,8 +13,13 @@ import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 
 import { compose } from './infra.mjs';
-import { envAdoptingMachinePassword } from './stackCredentials.mjs';
-import { REDIS_URL_KEY, ensureMachinePassword, stackEnvPath } from './stackEnv.mjs';
+import { envAdoptingMachinePassword, envRedisUrl } from './stackCredentials.mjs';
+import {
+  REDIS_URL_KEY,
+  ensureMachinePassword,
+  isMachineRedisUrl,
+  stackEnvPath,
+} from './stackEnv.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const envPath = join(REPO, '.env');
@@ -28,12 +34,22 @@ say(
     : `this machine's Redis password is in ${machineFile}.`,
 );
 
-const adopted = existsSync(envPath)
-  ? envAdoptingMachinePassword(readFileSync(envPath, 'utf8'))
-  : undefined;
+const envText = existsSync(envPath) ? readFileSync(envPath, 'utf8') : '';
+const checkoutUrl = envRedisUrl(envText);
+const otherHost =
+  checkoutUrl === undefined || isMachineRedisUrl(checkoutUrl)
+    ? undefined
+    : URL.parse(checkoutUrl)?.host;
+const adopted = envAdoptingMachinePassword(envText);
 if (adopted !== undefined) {
   writeFileSync(envPath, adopted);
   say(`took this checkout's own password out of ${REDIS_URL_KEY} in .env; it uses the machine's.`);
+} else if (otherHost !== undefined) {
+  say(
+    `${REDIS_URL_KEY} in .env names the Redis at ${otherHost}, this checkout's ` +
+      "own; left as it is, with its own credential. The machine's password is for this " +
+      "machine's Redis.",
+  );
 }
 
 // `up` recreates the container when its environment changed, and leaves one

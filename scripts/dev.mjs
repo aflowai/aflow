@@ -16,13 +16,7 @@ import process from 'node:process';
 import { listenersOn, mcpPortHeldMessage, readProcessTable } from './devMcpPort.mjs';
 import { findRunningStack, profileConflicts, stackConflictMessage } from './devStackLock.mjs';
 import { pairedHostEnvPath } from './stackCredentials.mjs';
-import {
-  devEnvOverrides,
-  readEnvFile,
-  readMachinePassword,
-  stackEnv,
-  stackEnvPath,
-} from './stackEnv.mjs';
+import { loadStackEnv } from './stackEnv.mjs';
 
 /** When true, child exit must not remove entries until shutdown finishes (see shutdown + port sweep). */
 let devRunnerShuttingDown = false;
@@ -59,7 +53,7 @@ const SERVICE_REGISTRY = {
   // The paired daemon for the operator's own machine. It reads its Redis from
   // the env `pair` wrote next to the host policy, so which stack it joins is
   // that file's decision; the profile only starts it. `dotenv: false` keeps the
-  // shared `.env` and the runner's overrides out of its environment, because an
+  // env file's values out of its environment, because an
   // ambient REDIS_URL wins over the paired one and points it at another
   // instance. Unpaired, owned by the launch-agent service, or with a daemon
   // already running, it is dropped from the profile with a hint rather than
@@ -258,36 +252,30 @@ async function handleInfra(command) {
 }
 
 /**
- * The `.env` values, with `REDIS_URL` carrying this machine's Redis password
- * (`scripts/stackEnv.mjs`): every checkout shares one Redis, so no checkout's
- * file holds its password.
+ * The services' environment: the env file under this runner's own, and
+ * `REDIS_URL` carrying this machine's Redis password (`scripts/stackEnv.mjs`).
+ * Each service's script runs under the same loader, which finds these values
+ * above the checkout's `.env` — so a file passed with `--env` reaches it as is.
  */
 function loadEnv(envPath) {
   if (!existsSync(envPath)) {
     console.warn(`Warning: .env file not found at ${envPath}, continuing without it`);
   }
-  const dotenv = readEnvFile(envPath);
-  const { REDIS_URL } = stackEnv(process.env, dotenv, {
-    machinePassword: readMachinePassword(stackEnvPath(process.env)),
-  });
-  return REDIS_URL === undefined ? dotenv : { ...dotenv, REDIS_URL };
+  return loadStackEnv(envPath, process.env);
 }
 
 /**
- * Merge .env-derived vars onto process.env and enable ANSI in children when safe.
+ * A service's environment, with ANSI enabled in children when safe.
  *
  * Children use stdio: 'pipe' for prefixed logs, so their stdout is not a TTY and
  * @aflow/observability (and pino-pretty) would skip colors unless FORCE_COLOR is set.
  * When the dev runner itself is in a real terminal, force colors so logs match
  * `yarn server:dev` etc.; respect NO_COLOR and explicit FORCE_COLOR from the user.
  */
-function buildSpawnEnv(dotenvVars) {
+function buildSpawnEnv(stackVars) {
   // `null` means the service reads its connection from its own paired file:
-  // it gets the parent environment alone, with neither `.env` nor the overrides.
-  const merged = dotenvVars === null ? { ...process.env } : { ...process.env, ...dotenvVars };
-  // `dev:local` pins an edition the shared `.env` contradicts this way, and the
-  // loader each service's script runs under applies the same values again.
-  if (dotenvVars !== null) Object.assign(merged, devEnvOverrides(process.env));
+  // it gets this runner's environment alone, without the env file's values.
+  const merged = { ...(stackVars ?? process.env) };
   if (
     process.stdout.isTTY === true &&
     merged['NO_COLOR'] == null &&
@@ -444,7 +432,7 @@ async function yieldHeldMcpPort(services) {
   return services.filter((name) => name !== 'mcp');
 }
 
-/** Starts one registry service with its environment: the `.env` values, its own, or none. */
+/** Starts one registry service with its environment: the stack's, with its own over it, or the runner's alone. */
 function startService(serviceName, env) {
   const entry = SERVICE_REGISTRY[serviceName];
   if (!entry) {

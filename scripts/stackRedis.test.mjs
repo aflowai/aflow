@@ -53,10 +53,10 @@ describe('the stack Redis a suite reaches, resolved as the services resolve it',
     );
   });
 
-  it('reads .env over the shell, as yarn start and the dev runner merge them', async () => {
+  it('reads the shell over .env, as every entry point of the stack does', async () => {
     const shell = { REDIS_URL: 'redis://127.0.0.1:6380' };
     expect(await urlSeen(shell, 'REDIS_URL="redis://localhost:6379"\n', MACHINE)).toBe(
-      `redis://:${MACHINE}@localhost:6379/15`,
+      `redis://:${MACHINE}@127.0.0.1:6380/15`,
     );
     expect(await urlSeen(shell, '# no Redis named here\n', MACHINE)).toBe(
       `redis://:${MACHINE}@127.0.0.1:6380/15`,
@@ -118,6 +118,45 @@ describe('a suite’s three outcomes', () => {
     await expect(failure).rejects.toThrow(/yarn redis:password/);
     await expect(failure).rejects.not.toThrow(MACHINE);
   });
+
+  it.each([
+    [
+      'a managed Redis in .env',
+      {},
+      'REDIS_URL=rediss://default:secret@managed.example.com:6380\n',
+      'managed.example.com:6380',
+    ],
+    [
+      'another host in the shell',
+      { REDIS_URL: 'redis://10.0.0.5:6379' },
+      'REDIS_URL=redis://localhost:6379\n',
+      '10.0.0.5:6379',
+    ],
+  ])(
+    'never connects to %s, and says the suites run only against this machine’s Redis',
+    async (_, processEnv, dotenv, host) => {
+      const { repo, machineFile } = checkout(dotenv, MACHINE);
+      const probed = [];
+      const warned = [];
+      const redis = await stackRedis(11, {
+        processEnv,
+        repo,
+        machineFile,
+        probe: (url) => {
+          probed.push(url);
+          return Promise.resolve({ outcome: 'accepted' });
+        },
+        warn: (message) => warned.push(message),
+      });
+      expect(probed).toEqual([]);
+      expect(redis.available).toBe(false);
+      expect(warned).toEqual([redis.skipped]);
+      expect(redis.skipped).toContain(`the Redis at ${host}`);
+      expect(redis.skipped).toContain("run only against this machine's own Redis");
+      expect(redis.skipped).not.toContain('secret');
+      expect(redis.skipped).not.toContain(MACHINE);
+    },
+  );
 
   it('names the missing machine password when the URL carries none', async () => {
     const { repo, machineFile } = checkout(undefined, undefined);

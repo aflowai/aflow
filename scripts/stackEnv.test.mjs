@@ -9,7 +9,6 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
-  DEV_ENV_OVERRIDES_KEY,
   STACK_ENV_FILE,
   STACK_PASSWORD_KEY,
   ensureMachinePassword,
@@ -52,22 +51,26 @@ describe('the environment a stack process sees', () => {
     ).toEqual({ QUOTED: "it's", DOUBLE: 'two words', BARE: 'value', EXPORTED: 'yes' });
   });
 
-  it('merges as the dev runner does: .env over the shell, the instance file over both', () => {
+  it('has one precedence, as `dotenv -e .env` had it: the caller’s environment over the env file', () => {
     const merged = stackEnv(
-      { A: 'shell', B: 'shell' },
-      { A: 'dotenv', C: 'dotenv' },
-      { instance: { C: 'instance' } },
+      { A: 'shell', B: 'shell', E: '' },
+      { A: 'dotenv', C: 'dotenv', E: 'x' },
     );
-    expect(merged).toEqual({ A: 'dotenv', B: 'shell', C: 'instance' });
+    expect(merged).toEqual({ A: 'shell', B: 'shell', C: 'dotenv', E: '' });
   });
 
-  it('gives every checkout’s REDIS_URL the machine’s password, keeping where it points', () => {
+  it('gives the REDIS_URL that results the machine’s password, keeping where it points', () => {
     const env = stackEnv(
       { REDIS_URL: 'redis://127.0.0.1:6380' },
       { REDIS_URL: 'redis://localhost:6379/2' },
       { machinePassword: MACHINE },
     );
-    expect(env['REDIS_URL']).toBe(`redis://:${MACHINE}@localhost:6379/2`);
+    expect(env['REDIS_URL']).toBe(`redis://:${MACHINE}@127.0.0.1:6380`);
+    expect(
+      stackEnv({}, { REDIS_URL: 'redis://localhost:6379/2' }, { machinePassword: MACHINE })[
+        'REDIS_URL'
+      ],
+    ).toBe(`redis://:${MACHINE}@localhost:6379/2`);
     expect(stackEnv({}, {}, { machinePassword: MACHINE })['REDIS_URL']).toBe(
       `redis://:${MACHINE}@localhost:6379`,
     );
@@ -110,17 +113,25 @@ describe('the environment a stack process sees', () => {
     writeFileSync(join(repo, '.env'), 'REDIS_URL=redis://localhost:6379\n');
     const machineFile = join(repo, STACK_ENV_FILE);
     writeFileSync(machineFile, `${STACK_PASSWORD_KEY}=${MACHINE}\n`);
-    expect(loadStackEnv(repo, {}, machineFile)['REDIS_URL']).toBe(
+    const envFile = join(repo, '.env');
+    expect(loadStackEnv(envFile, {}, machineFile)['REDIS_URL']).toBe(
       `redis://:${MACHINE}@localhost:6379`,
     );
-    expect(redisPasswordOf(loadStackEnv(repo, {}, machineFile)['REDIS_URL'])).toBe(MACHINE);
+    expect(redisPasswordOf(loadStackEnv(envFile, {}, machineFile)['REDIS_URL'])).toBe(MACHINE);
   });
 
-  it('lays the values the dev runner’s caller must win with over the checkout’s .env', () => {
+  it('seeds the database the caller names, not the one .env names', () => {
     const repo = dir();
-    writeFileSync(join(repo, '.env'), 'PHOENIX_EDITION=enterprise\nKEPT=dotenv\n');
-    const overrides = { [DEV_ENV_OVERRIDES_KEY]: '{"PHOENIX_EDITION":"community-local"}' };
-    const env = loadStackEnv(repo, overrides, join(repo, STACK_ENV_FILE));
+    writeFileSync(
+      join(repo, '.env'),
+      'DATABASE_URL=postgres://localhost:5433/phoenix\nPHOENIX_EDITION=enterprise\nKEPT=dotenv\n',
+    );
+    const env = loadStackEnv(
+      join(repo, '.env'),
+      { DATABASE_URL: 'postgres://localhost:5433/scratch', PHOENIX_EDITION: 'community-local' },
+      join(repo, STACK_ENV_FILE),
+    );
+    expect(env['DATABASE_URL']).toBe('postgres://localhost:5433/scratch');
     expect(env['PHOENIX_EDITION']).toBe('community-local');
     expect(env['KEPT']).toBe('dotenv');
   });

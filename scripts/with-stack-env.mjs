@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /**
- * Runs a command in the stack's environment: the checkout's `.env` over the
- * shell, and `REDIS_URL` carrying this machine's Redis password
+ * Runs a command in the stack's environment: the checkout's `.env` under what
+ * the caller set, and `REDIS_URL` carrying this machine's Redis password
  * (`scripts/stackEnv.mjs`, Plan 315 D20).
  *
- * Every root script that starts a stack process or reaches its datastores runs
+ * Every script that runs tsx on an entry point of this repository runs it
  * under this, so a service started on its own authenticates as one the dev
- * runner starts. `with-stack-env.test.mjs` fails on a script that loads `.env`
- * any other way.
+ * runner starts; `with-stack-env.test.mjs` names the entry points that do not,
+ * and why.
  *
  *   node scripts/with-stack-env.mjs <command> [args…]
  */
@@ -28,7 +28,7 @@ const FORWARDED_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGUSR1', 'SIGUSR2', 
 export function spawnWithStackEnv(command, args, options = {}) {
   return spawn(command, args, {
     stdio: options.stdio ?? 'inherit',
-    env: loadStackEnv(options.repo ?? REPO, options.processEnv ?? process.env),
+    env: loadStackEnv(join(options.repo ?? REPO, '.env'), options.processEnv ?? process.env),
   });
 }
 

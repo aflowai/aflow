@@ -272,13 +272,17 @@ After every change that affects behavior, schemas, or architecture:
 
 **Every service requires a credential** (Plan 315 D20). Every checkout shares one Redis, so its
 password is the machine's, in `~/.aflow/stack.env` (written by the first `yarn start`); every
-root script that starts a service or reaches a datastore runs under `scripts/with-stack-env.mjs`,
-which lays it into a `REDIS_URL` naming this machine (`scripts/stackEnv.mjs`), so `.env` carries
-none. Redis Commander and pgAdmin log in with it, on `127.0.0.1` — pgAdmin with the password as
-it was when its volume was created, until that volume is removed. The Redis integration suites
-resolve the URL as the services do (`scripts/stackRedis.mjs`): they skip where no Redis answers
-and fail where one refuses its credential. `yarn start` prints each service's credential state
-and stops on a Redis without the machine's password or a `.env` carrying its own. **Then run
+script that runs tsx on a file of the repository runs under `scripts/with-stack-env.mjs`
+(`with-stack-env.test.mjs` names the entry points that cannot, and why), which reads `.env`
+under what the caller set, as `dotenv` did, and lays the password into a `REDIS_URL` naming this
+machine (`scripts/stackEnv.mjs`), so `.env` carries none. Redis Commander and pgAdmin log in with
+it, on `127.0.0.1` — pgAdmin with the password as it was when its volume was created, until that
+volume is removed. The Redis integration suites resolve the URL as the services do
+(`scripts/stackRedis.mjs`) and connect only to this machine's Redis: they skip where no Redis
+answers or the URL names another host, and fail where one refuses its credential. `yarn start`
+prints each service's credential state and stops on a Redis without the machine's password or a
+`REDIS_URL` for it carrying its own; a `REDIS_URL` naming another host is the checkout's own
+Redis, checked with the credential it carries and never rewritten. **Then run
 `yarn redis:password` once** — it adopts the machine's password and restarts Redis with it; the
 data stays.
 
