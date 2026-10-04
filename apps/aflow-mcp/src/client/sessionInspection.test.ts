@@ -6,9 +6,14 @@ import {
   CONTROL_STEP_OPERATION,
   DEFAULT_INSPECT_LAST_N_STEPS,
   inspectSession,
+  selectSteps,
   type InspectSessionArgs,
 } from './sessionInspection.js';
-import type { DebugStepEntry, SessionDebugResponse } from './sessionViews.js';
+import {
+  buildStepSummaries,
+  type DebugStepEntry,
+  type SessionDebugResponse,
+} from './sessionViews.js';
 
 const SESSION: Session = {
   id: 'mcp-session',
@@ -190,7 +195,26 @@ describe('inspect_session on a long conversation', () => {
   it('hands back a cursor far smaller than the step ids it covers', async () => {
     const result = await inspect(longConversation());
 
-    expect(result.cursor.length).toBeLessThan(300 * 7);
+    expect(result.cursor.length).toBeLessThan(300 * 9);
+  });
+
+  it('counts the steps a cursor leaves out as unchanged since it, shown before or not', async () => {
+    const first = await inspect(longConversation(), { last_n_steps: 1 });
+    expect(first.steps).toHaveLength(1);
+
+    const { shown, census } = selectSteps(buildStepSummaries(longConversation()), {
+      cursor: first.cursor,
+    });
+
+    expect(shown).toEqual([]);
+    expect(census?.left_out).toEqual([
+      {
+        count: 300,
+        by_status: { SUCCEEDED: 297, FAILED: 2, RUNNING: 1 },
+        why: 'unchanged since the cursor',
+        returned_by: 'cursor (leave it out)',
+      },
+    ]);
   });
 
   it('says a status could not be read rather than calling it unknown', async () => {

@@ -3,14 +3,15 @@
  *
  * The failing step is found from the session's failure event, its current
  * step and its step list; the error from the failed step's stored error, else
- * the session's own. Both are resolved here because the event's message is the
+ * the session's own, else what its events and step list say, else what the
+ * session's status read said. Both are resolved here because the event's message is the
  * one shown to a person, which hides a provider's refusal behind a generic
  * sentence, while the stored error keeps the provider's own words.
  */
 
 import type { Session } from '../auth/SessionStore.js';
 import { resolvePayloadRef, type PayloadReadClient } from './payloads.js';
-import type { DebugEvent, SessionDebugResponse } from './sessionViews.js';
+import type { DebugEvent, SessionDebugResponse, SessionRunStatusView } from './sessionViews.js';
 
 export interface SessionFailure {
   step_id?: string;
@@ -37,7 +38,10 @@ export interface SessionFailure {
 export type FailureSource = Pick<
   SessionDebugResponse,
   'session' | 'recentEvents' | 'currentStep' | 'dynamicSteps' | 'refs' | 'hotState'
->;
+> & {
+  /** The error the session's status read returned, where one was made. */
+  statusError?: SessionRunStatusView['error'];
+};
 
 const DETAILS_MAX_CHARS = 2000;
 
@@ -123,6 +127,8 @@ export async function resolveSessionFailure(
     userMessage ??
     failedStep?.error?.message ??
     str(stepFailedEvent?.metadata?.['errorMessage']) ??
+    str(source.statusError?.message) ??
+    str(source.statusError?.title) ??
     unreadableFailure(source, errorRef);
 
   const failure: SessionFailure = {
@@ -137,7 +143,7 @@ export async function resolveSessionFailure(
   if (operation !== undefined) failure.operation = operation;
   const stepName = str(meta?.['stepName']);
   if (stepName !== undefined && stepName !== stepId) failure.step_name = stepName;
-  const code = str(stored?.['code']) ?? str(meta?.['errorCode']);
+  const code = str(stored?.['code']) ?? str(meta?.['errorCode']) ?? str(source.statusError?.code);
   if (code !== undefined) failure.code = code;
   const classification = str(stored?.['classification']) ?? str(meta?.['errorClassification']);
   if (classification !== undefined) failure.classification = classification;

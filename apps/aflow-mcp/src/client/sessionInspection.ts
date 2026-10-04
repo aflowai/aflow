@@ -13,7 +13,7 @@ import type { PayloadReadClient } from './payloads.js';
 import {
   decodeSessionCursor,
   encodeSessionCursor,
-  seenSteps,
+  rememberSteps,
   stepsNotSeen,
 } from './sessionCursor.js';
 import { resolveSessionFailure, type SessionFailure } from './sessionFailure.js';
@@ -139,7 +139,7 @@ export function selectSteps(
     `not operation ${[...(operations ?? [])].join(', ')}`,
     'operation (leave it out)',
   );
-  add(groups.cursor, 'already seen at the cursor', 'cursor (leave it out)');
+  add(groups.cursor, 'unchanged since the cursor', 'cursor (leave it out)');
 
   if (left_out.length === 0) return { shown };
   return { shown, census: { total: steps.length, shown: shown.length, left_out } };
@@ -228,7 +228,7 @@ export async function inspectSession(
     session_id: debug.session.sessionId,
     status,
     steps: shown,
-    cursor: encodeSessionCursor(status, seenSteps(steps)),
+    cursor: encodeSessionCursor(status, rememberSteps(decodeSessionCursor(args.cursor), steps)),
   };
   if (debug.session.target) result.target = debug.session.target;
 

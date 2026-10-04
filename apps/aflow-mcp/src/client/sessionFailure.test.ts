@@ -168,4 +168,27 @@ describe('a failed session', () => {
     expect(result.done).toBe(true);
     expect(result.failure).toMatchObject(EXPECTED_FAILURE);
   });
+
+  it('watch_session reports what the status read said when nothing else can be read', async () => {
+    const api = {
+      get: <T>(_session: Session, path: string): Promise<T> => {
+        if (path.includes('/debug')) return Promise.reject(new Error('debug unavailable'));
+        const status: SessionRunStatusView = {
+          sessionId: SESSION_ID,
+          status: 'FAILED',
+          error: { code: 'INPUT_INVALID', message: 'The agent input is missing `prompt`.' },
+        };
+        return Promise.resolve(status as T);
+      },
+    };
+
+    const result = await new Watcher(api, 5).watchSession(SESSION, {
+      session_id: SESSION_ID,
+      space_id: SPACE_ID,
+      until: 'terminal',
+    });
+
+    expect(result.failure?.message).toBe('The agent input is missing `prompt`.');
+    expect(result.failure?.code).toBe('INPUT_INVALID');
+  });
 });

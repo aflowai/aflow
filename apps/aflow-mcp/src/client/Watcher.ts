@@ -15,7 +15,7 @@ import { ApiError } from './ApiClient.js';
 import {
   decodeSessionCursor,
   encodeSessionCursor,
-  seenSteps,
+  rememberSteps,
   stepsNotSeen,
   type SessionCursor,
 } from './sessionCursor.js';
@@ -169,18 +169,16 @@ export class Watcher {
             true,
           );
           if (status === 'FAILED') {
-            result.failure = await resolveSessionFailure(
-              this.client,
-              session,
-              args.space_id,
-              debug ?? {
+            result.failure = await resolveSessionFailure(this.client, session, args.space_id, {
+              ...(debug ?? {
                 session: {
                   sessionId: args.session_id,
                   status,
                   ...(run.errorRef !== undefined ? { errorRef: run.errorRef } : {}),
                 },
-              },
-            );
+              }),
+              statusError: run.error,
+            });
           }
           return result;
         }
@@ -276,7 +274,7 @@ export class Watcher {
     // transition must not re-trigger the next call.
     const cursor = encodeSessionCursor(
       run ? status : (baseline?.status ?? status),
-      steps ? seenSteps(steps) : (baseline?.seen ?? new Set()),
+      rememberSteps(baseline, steps ?? []),
     );
 
     const result: WatchSessionResult = {

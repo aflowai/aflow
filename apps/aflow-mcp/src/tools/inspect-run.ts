@@ -38,8 +38,9 @@ const InspectSessionInputSchema = z.object({
     .string()
     .optional()
     .describe(
-      'Opaque cursor from a prior inspect_session or watch_session response. Pass it back to ' +
-        'return only steps that are new, or whose status changed, since then.',
+      'Opaque cursor from a prior inspect_session or watch_session response. It marks the ' +
+        "session's state at that call: passed back, only steps that are new, or whose status " +
+        'changed, since then are returned, whether or not the earlier call showed them.',
     ),
   status: z
     .array(z.string().min(1))
@@ -77,8 +78,9 @@ export function registerInspectRunTool(
         "A session's status and target, its newest steps, the agent's latest reply or the " +
         'question it is paused on, and — when it FAILED — the failing step with its stored error ' +
         '(code, message, classification, provider details). Steps left out are counted by status ' +
-        'in `census`, with the parameter that returns them. Pass the returned `cursor` back to ' +
-        'see only what is new.',
+        'in `census`, with the parameter that returns them. The returned `cursor` marks the ' +
+        "session's state at this call, every step included whether shown or not; pass it back " +
+        '(here or to watch_session) for only the steps new or changed since.',
       // DO NOT use full schema: MCP SDK Zod v3/v4 compat → TS2589 + OOM. Use .shape as any.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment
       inputSchema: InspectSessionInputSchema.shape as any,

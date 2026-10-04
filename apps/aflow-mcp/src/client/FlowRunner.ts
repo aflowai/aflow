@@ -440,18 +440,16 @@ export class SessionRunner {
     }
 
     if (status === 'FAILED') {
-      result.failure = await resolveSessionFailure(
-        this.client,
-        session,
-        spaceId,
-        debug ?? {
+      result.failure = await resolveSessionFailure(this.client, session, spaceId, {
+        ...(debug ?? {
           session: {
             sessionId: runId,
             status,
             ...(run.errorRef !== undefined ? { errorRef: run.errorRef } : {}),
           },
-        },
-      );
+        }),
+        statusError: run.error,
+      });
       result.error = result.failure.message;
     }
 

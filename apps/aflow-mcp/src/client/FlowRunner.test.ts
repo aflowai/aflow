@@ -110,3 +110,30 @@ describe('SessionRunner result steps', () => {
     expect(reads.find((p) => p.includes('/debug'))).not.toContain('walkStepHistory');
   });
 });
+
+describe('SessionRunner failure', () => {
+  it('is what the status read said when the debug read fails and no stored error is named', async () => {
+    const api = {
+      get: <T>(_session: Session, path: string): Promise<T> => {
+        if (path.includes('/debug')) return Promise.reject(new Error('debug unavailable'));
+        const status: SessionRunStatusView = {
+          sessionId: SESSION_ID,
+          status: 'FAILED',
+          error: { title: 'Run failed', message: 'The agent input is missing `prompt`.' },
+        };
+        return Promise.resolve(status as T);
+      },
+      post: <T>(): Promise<T> =>
+        Promise.resolve({ sessionId: SESSION_ID, status: 'RUNNING', eventsUrl: '' } as T),
+    } as unknown as ApiClient;
+
+    const result = await new SessionRunner(api).run(SESSION, {
+      spaceId: SPACE_ID,
+      operationId: 'browser.page.open',
+      timeoutMs: 1000,
+    });
+
+    expect(result.failure?.message).toBe('The agent input is missing `prompt`.');
+    expect(result.error).toBe('The agent input is missing `prompt`.');
+  });
+});
