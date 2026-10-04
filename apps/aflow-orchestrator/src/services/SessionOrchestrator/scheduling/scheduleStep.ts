@@ -3,6 +3,7 @@ import {
   type StepExecutionId,
   type IdempotencyKey,
   type StepResultMessage,
+  type AflowError,
   errorContext,
   getOperation,
   type GrantEnforcementResult,
@@ -10,7 +11,6 @@ import {
   resolveSnoozeDelayMs,
 } from '@aflow/schemas';
 import {
-  addStepJob,
   scheduleShardTimer,
   type SessionHotState,
   type StepHotState,
@@ -41,6 +41,7 @@ import { resolveConfigRecursiveWithReport } from '../helpers/configResolution.js
 import { decideHarnessBrowserGating, decideStepGating } from '../../gates/decideStepGating.js';
 import { getOrchestratorLogger } from '../../../lib/orchestratorLogger.js';
 import { describeEnqueueFailure, enqueueFailureResultError } from '../../../lib/enqueueFailure.js';
+import { dispatchOrWaitOnExecutor } from './executorWait.js';
 import type { SessionOrchestratorBindings } from '../lifecycle/context.js';
 import { resolveAndGate as stepServiceResolveAndGate } from '../../StepService/index.js';
 import type { ScheduleStepParams } from '../types.js';
@@ -692,8 +693,10 @@ export function createScheduleStep(bindings: SessionOrchestratorBindings) {
         dueAtMs: now + delayMs,
       });
     } else {
+      let failure: AflowError | undefined;
+      let thrown: unknown;
       try {
-        await addStepJob(redis, {
+        const dispatched = await dispatchOrWaitOnExecutor(redis, {
           messageVersion: 1,
           tenantId: context.tenantId,
           sessionId: context.runId,
@@ -715,16 +718,30 @@ export function createScheduleStep(bindings: SessionOrchestratorBindings) {
           // have already committed, so anything it counted for itself would be
           // arrival order wearing a deterministic name.
         });
+        if (dispatched.kind === 'waiting') {
+          getOrchestratorLogger().info(
+            `Step ${stepId} is waiting for its ${stepDef.stepType} executor`,
+            {
+              tenantId: context.tenantId,
+              sessionId: context.runId,
+              stepExecutionId,
+              operationId: stepDef.operation,
+              nextLookAtMs: dispatched.nextLookAtMs,
+            },
+          );
+        }
       } catch (error) {
-        // All enqueue failures (including NoExecutorAvailableError and a lane
-        // breaker refusal) emit a synthetic FAILED result routed through
-        // applyResult. This ensures the step's onFailure routing fires (e.g.,
-        // back to agent) instead of killing the entire run.
-        const enqueueAflowError = describeEnqueueFailure(error);
+        thrown = error;
+        failure = describeEnqueueFailure(error);
+      }
+      if (failure !== undefined) {
+        // A refused enqueue emits a synthetic FAILED result routed through
+        // applyResult, so the step's onFailure routing fires (e.g. back to
+        // the agent) instead of killing the entire run.
         getOrchestratorLogger().error(
-          `Job enqueue failed for step ${stepId} (${enqueueAflowError.code})`,
-          error instanceof Error ? error : undefined,
-          errorContext(enqueueAflowError, {
+          `Job enqueue failed for step ${stepId} (${failure.code})`,
+          thrown instanceof Error ? thrown : undefined,
+          errorContext(failure, {
             tenantId: context.tenantId,
             sessionId: context.runId,
             stepExecutionId,
@@ -734,7 +751,7 @@ export function createScheduleStep(bindings: SessionOrchestratorBindings) {
             traceId: context.traceId,
           }),
         );
-        const errorPayload = enqueueFailureResultError(enqueueAflowError);
+        const errorPayload = enqueueFailureResultError(failure);
         const errorRef = `inline:${Buffer.from(JSON.stringify(errorPayload)).toString('base64')}`;
         await bindings.applyResult({
           result: {

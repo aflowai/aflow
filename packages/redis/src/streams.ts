@@ -22,6 +22,14 @@ export {
 } from './streams/executorHeartbeat.js';
 
 export {
+  EXECUTOR_WAIT_WINDOW_MS,
+  EXECUTOR_WAIT_FIRST_LOOK_MS,
+  EXECUTOR_WAIT_LONGEST_LOOK_MS,
+  executorWaitNextLookAtMs,
+  executorWaitExpired,
+} from './streams/executorWait.js';
+
+export {
   registerOrchestratorHeartbeat,
   unregisterOrchestratorHeartbeat,
   isOrchestratorAlive,
@@ -35,6 +43,7 @@ export {
   type EngineHealthStatus,
   getEngineHealth,
   NoExecutorAvailableError,
+  EXECUTOR_UNAVAILABLE_CODE,
 } from './streams/engineHealth.js';
 
 export {

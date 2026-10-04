@@ -28,6 +28,7 @@ import {
   DISPATCH_PENDING_INTERVAL_MS,
   dispatchClaimedOperationTask,
   operationTaskClaimDueAt,
+  describeOperationTaskDispatch,
   resolveOperationTaskSnoozeDelayMs,
   type OperationTaskDispatchMode,
 } from './operationTaskDispatch.js';
@@ -231,13 +232,7 @@ export async function dispatchTask(deps: HarnessDeps, args: DispatchTaskArgs): P
     }
 
     log.info(
-      `[dispatchTask] ${
-        dispatchMode === 'snooze_timer'
-          ? `scheduled snooze timer (+${String(snoozeDelayMs)}ms) for`
-          : dispatchMode === 'inline'
-            ? 'ran inline'
-            : 'enqueued'
-      } operation task: ${operationId}`,
+      `[dispatchTask] ${describeOperationTaskDispatch(dispatchMode, snoozeDelayMs)} operation task: ${operationId}`,
     );
     return;
   }

@@ -7,16 +7,24 @@ import type {
   TimerItem,
   WorkflowExecutionRef,
 } from '@aflow/schemas';
-import { addStepJob } from '@aflow/redis';
+import { addStepResult } from '@aflow/redis';
 import { isInlineOperation } from '../helpers/inlineOperations.js';
 import { dispatchInlineOp } from '../handlers/dispatchInlineOp.js';
 import { logOrchestratorError } from '../../../lib/orchestratorLogger.js';
 import { buildWorkflowTimerStepJob } from './workflowTimerJob.js';
+import {
+  dispatchOrWaitOnExecutor,
+  failedDispatchResult,
+  lookAgainForExecutor,
+} from './executorWait.js';
 
 /**
  * Process a popped workflow-correlated timer. Best-effort: errors are
  * logged, never thrown — a failed re-dispatch is reaped by the
- * completion_pending sweeper.
+ * completion_pending sweeper. A missing executor is neither: the task waits
+ * for it on an `executor_wait` timer, and one that waited out the window is
+ * answered with the FAILED result its executor would have sent, so the task's
+ * own retry policy reads the outage as transient.
  */
 export async function processWorkflowCorrelatedTimer(
   redis: Redis,
@@ -67,7 +75,19 @@ export async function processWorkflowCorrelatedTimer(
       return;
     }
 
-    await addStepJob(redis, buildWorkflowTimerStepJob(timer, workflowExecution, Date.now()));
+    const now = Date.now();
+    if (timer.executorWait === undefined) {
+      await dispatchOrWaitOnExecutor(
+        redis,
+        buildWorkflowTimerStepJob(timer, workflowExecution, now),
+      );
+      return;
+    }
+    const job = { ...timer.executorWait.job, scheduledAtMs: now };
+    const dispatched = await lookAgainForExecutor(redis, job, timer.executorWait.sinceMs, now);
+    if (dispatched.kind === 'gave_up') {
+      await addStepResult(redis, failedDispatchResult(job, dispatched.failure, now));
+    }
   } catch (error) {
     logOrchestratorError(
       `[SessionOrchestrator] Failed to re-dispatch workflow-correlated timer (${timer.operationId})`,

@@ -27,7 +27,7 @@ export {
 } from './types.js';
 
 // Main executor runtime
-export { ExecutorRuntime, createServiceLogger } from './executor.js';
+export { ExecutorRuntime, createServiceLogger, type WorkListener } from './executor.js';
 
 // Job correlation
 export { deriveExecutionRunId, deriveLogicalExecutionId } from './executor/correlation.js';

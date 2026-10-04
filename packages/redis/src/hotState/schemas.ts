@@ -257,6 +257,14 @@ export const StepHotStateSchema = z.object({
   traceId: z.string().optional(),
   parentStepExecutionId: z.string().uuid().optional(),
 
+  /**
+   * Since when this SCHEDULED step has waited for its executor, which had no
+   * heartbeat when the step was dispatched (epoch ms). Its `executor_wait`
+   * timer is its completion path until `EXECUTOR_WAIT_WINDOW_MS` has passed;
+   * absent on a step whose job is in its stream.
+   */
+  executorWaitSince: z.number().optional(),
+
   // Sync tracking
 });
 

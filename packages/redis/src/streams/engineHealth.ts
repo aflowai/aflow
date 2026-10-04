@@ -1,5 +1,10 @@
 import type { Redis } from 'ioredis';
-import { StreamKeys, type StepType } from '@aflow/schemas';
+import {
+  StreamKeys,
+  type AflowError,
+  type ErrorClassification,
+  type StepType,
+} from '@aflow/schemas';
 import { INSTANCE_LEASE_TTL_MS, listLiveOrchestrators } from './orchestratorHeartbeat.js';
 // ============================================================================
 // Engine Health (combined liveness check for UI/API)
@@ -140,17 +145,58 @@ export async function getEngineHealth(redis: Redis): Promise<EngineHealthStatus>
   };
 }
 
+export const EXECUTOR_UNAVAILABLE_CODE = 'EXECUTOR_UNAVAILABLE';
+
 /**
- * Error thrown when no executor is available for a step type.
+ * The host and browser lanes run on the operator's own machine, outside the
+ * appliance, so their executor is off whenever that machine sleeps or they
+ * have not started it — and only they can start it, so the message says how.
+ */
+function missingExecutorMessage(stepType: StepType): string {
+  if (stepType === 'host') {
+    return (
+      'No host executor is connected. This lane runs on the operator machine rather than in ' +
+      'the appliance, so folders are reachable only while it runs there — ' +
+      '`yarn workspace @aflow/aflow-executor-host start` on that machine.'
+    );
+  }
+  if (stepType === 'browser') {
+    return (
+      'No browser is connected. The browser runs on the operator machine through its host ' +
+      'executor rather than in the appliance, so pages open only while it runs there — ' +
+      '`yarn workspace @aflow/aflow-executor-host start` on that machine.'
+    );
+  }
+  return `No executor available for step type: ${stepType}. Ensure the ${stepType} executor is running.`;
+}
+
+/**
+ * No executor for a step type has a live heartbeat. An `AflowError` in its own
+ * right, so a log or a result that carries it says what it is: an executor that
+ * is away — asleep, restarting, not yet ticked — is transient, and the work
+ * waits for it before it fails.
  */
 export class NoExecutorAvailableError extends Error {
   readonly stepType: StepType;
+  readonly code = EXECUTOR_UNAVAILABLE_CODE;
+  readonly classification = 'transient' satisfies ErrorClassification;
+  readonly retryable = true;
+  readonly timestamp: string;
 
   constructor(stepType: StepType) {
-    super(
-      `No executor available for step type: ${stepType}. Ensure the ${stepType} executor is running.`,
-    );
+    super(missingExecutorMessage(stepType));
     this.name = 'NoExecutorAvailableError';
     this.stepType = stepType;
+    this.timestamp = new Date().toISOString();
+  }
+
+  toAflowError(): AflowError {
+    return {
+      code: this.code,
+      message: this.message,
+      classification: this.classification,
+      retryable: this.retryable,
+      timestamp: this.timestamp,
+    };
   }
 }

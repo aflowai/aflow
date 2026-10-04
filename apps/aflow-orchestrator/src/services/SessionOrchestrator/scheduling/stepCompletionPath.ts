@@ -5,6 +5,7 @@ import {
   STEP_STARTED_DEAD_EXECUTOR_GRACE_MS,
   STEP_SCHEDULED_STALL_GRACE_MS,
   STEP_SCHEDULED_DEAD_EXECUTOR_GRACE_MS,
+  EXECUTOR_WAIT_WINDOW_MS,
 } from '@aflow/redis';
 import type { StepType } from '@aflow/schemas';
 import { SNOOZE_OPERATION_ID, getSnoozeMaxMs } from '@aflow/schemas';
@@ -51,7 +52,8 @@ export interface StepCompletionPath {
  * as long as the key is. One with none has no owner yet, so it falls back to
  * process-level executor availability plus a pickup grace; the snooze op
  * additionally gets the full snooze window because a long snooze is a healthy
- * timer-wait, not a stall.
+ * timer-wait, not a stall, and a step parked on its missing executor gets the
+ * executor wait's window for the same reason.
  */
 export async function classifyStepCompletionPath(
   deps: StepCompletionPathDeps,
@@ -63,6 +65,7 @@ export async function classifyStepCompletionPath(
     ? now - (stepState.startedAt ?? stepState.scheduledAt)
     : now - stepState.scheduledAt;
   const snoozeWindowMs = stepState.operationId === SNOOZE_OPERATION_ID ? getSnoozeMaxMs() : 0;
+  const executorWaitMs = stepState.executorWaitSince !== undefined ? EXECUTOR_WAIT_WINDOW_MS : 0;
 
   const inflight = await deps.getStepInFlight(deps.redis, stepState.stepExecutionId);
   let executorOwnsStep: boolean;
@@ -92,7 +95,7 @@ export async function classifyStepCompletionPath(
     const graceMs = executorOwnsStep
       ? STEP_SCHEDULED_STALL_GRACE_MS
       : STEP_SCHEDULED_DEAD_EXECUTOR_GRACE_MS;
-    hasCompletionPath = ageMs < graceMs + snoozeWindowMs;
+    hasCompletionPath = ageMs < graceMs + snoozeWindowMs + executorWaitMs;
   }
 
   return { hasCompletionPath, isStarted, executorOwnsStep, stepDeadlineAtMs };

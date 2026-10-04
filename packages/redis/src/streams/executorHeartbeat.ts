@@ -10,7 +10,7 @@ import { type StepType } from '@aflow/schemas';
 
 // 60s TTL with a 10s tick interval (see executor runtime) tolerates a
 // single missed heartbeat without false-positive liveness loss. Critical
-const EXECUTOR_HEARTBEAT_TTL_SECONDS = 60;
+export const EXECUTOR_HEARTBEAT_TTL_SECONDS = 60;
 
 /**
  * Build the per-consumer heartbeat key.

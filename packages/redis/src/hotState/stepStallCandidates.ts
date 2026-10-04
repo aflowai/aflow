@@ -2,6 +2,7 @@ import type { ChainableCommander, Redis } from 'ioredis';
 import { StreamKeys, SNOOZE_OPERATION_ID, getSnoozeMaxMs } from '@aflow/schemas';
 import type { SessionHotState, StepHotState } from './schemas.js';
 import { sessionCandidateMember, parseSessionCandidateMember } from './candidateMember.js';
+import { EXECUTOR_WAIT_WINDOW_MS } from '../streams/executorWait.js';
 
 /**
  * Sessions whose current step is SCHEDULED or STARTED, as one sorted set scored
@@ -67,7 +68,8 @@ export interface StepStallCandidate {
  * SCHEDULED step gets the dead-executor floor even when an executor is alive,
  * since the executor can die at any point and the grace then drops to that
  * floor retroactively. The snooze window is additive rather than an override —
- * a snoozing step's timer is its completion path for the whole window.
+ * a snoozing step's timer is its completion path for the whole window — and so
+ * is the executor wait of a step parked on its executor.
  *
  * Tolerates a partial patch: a caller that flips only `status` supplies no
  * timestamps, and `nowMs` is then the reference. That is a lower bound too —
@@ -82,7 +84,13 @@ export function stepStallEarliestReapAtMs(
   }
   if (step.status !== 'SCHEDULED') return null;
   const snoozeWindowMs = step.operationId === SNOOZE_OPERATION_ID ? getSnoozeMaxMs() : 0;
-  return (step.scheduledAt ?? nowMs) + STEP_SCHEDULED_DEAD_EXECUTOR_GRACE_MS + snoozeWindowMs;
+  const executorWaitMs = step.executorWaitSince !== undefined ? EXECUTOR_WAIT_WINDOW_MS : 0;
+  return (
+    (step.scheduledAt ?? nowMs) +
+    STEP_SCHEDULED_DEAD_EXECUTOR_GRACE_MS +
+    snoozeWindowMs +
+    executorWaitMs
+  );
 }
 
 /**

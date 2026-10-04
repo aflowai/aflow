@@ -195,13 +195,17 @@ describe('one spawn path', () => {
     // install the launch agent that keeps this executor running — also a setup
     // command, and the operator's own login session rather than any workload.
     // browser/harnessBrowser.ts runs `mkfifo` for a harness browser's pipe
-    // pair, which Node has no call for; it runs nothing else.
+    // pair, which Node has no call for; it runs nothing else. keepAwake.ts
+    // starts the `caffeinate` or `systemd-inhibit` that holds the machine awake
+    // while a step runs, a system call by another name that reads and runs no
+    // workload.
     // Named rather than matched, so a new unconfined spawn is argued for here.
     expect(importers).toEqual([
       'browser/harnessBrowser.ts',
       'credentialFetch.ts',
       'folderPicker.ts',
       'harnessDiscovery.ts',
+      'keepAwake.ts',
       'orphans.ts',
       'runtimes.ts',
       'sandboxedRun.ts',

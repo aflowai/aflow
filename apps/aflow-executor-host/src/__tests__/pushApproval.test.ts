@@ -18,6 +18,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import {
   HOST_CHECKS_TIMEOUT_DEFAULT_MS,
   HOST_HARNESS_CONCURRENCY_DEFAULT,
+  HOST_KEEP_AWAKE_DEFAULT,
   HOST_PUSH_APPROVAL_DEFAULT,
   HOST_SANDBOX_POSTURE_DEFAULT,
   HostBindingInspectOutputSchema,
@@ -317,6 +318,7 @@ describe('host.binding.inspect', () => {
       },
       sandbox: HOST_SANDBOX_POSTURE_DEFAULT,
       maxConcurrentHarnessRuns: HOST_HARNESS_CONCURRENCY_DEFAULT,
+      keepAwake: HOST_KEEP_AWAKE_DEFAULT,
     });
   });
 
@@ -335,6 +337,7 @@ describe('host.binding.inspect', () => {
       },
       sandbox: HOST_SANDBOX_POSTURE_DEFAULT,
       maxConcurrentHarnessRuns: HOST_HARNESS_CONCURRENCY_DEFAULT,
+      keepAwake: HOST_KEEP_AWAKE_DEFAULT,
     });
   });
 

@@ -47,6 +47,12 @@ export {
   listPendingStepJobs,
   claimPendingStepJobsByIds,
   NoExecutorAvailableError,
+  EXECUTOR_UNAVAILABLE_CODE,
+  EXECUTOR_WAIT_WINDOW_MS,
+  EXECUTOR_WAIT_FIRST_LOOK_MS,
+  EXECUTOR_WAIT_LONGEST_LOOK_MS,
+  executorWaitNextLookAtMs,
+  executorWaitExpired,
   // Stream hygiene
   type StreamCleanupResult,
   cleanupStaleConsumers,

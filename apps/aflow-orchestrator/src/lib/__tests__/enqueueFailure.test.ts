@@ -80,11 +80,13 @@ describe('enqueueFailureResultError', () => {
     expect(agentError.retry).toBe(false);
   });
 
-  it('leaves a retryable outage opaque, as it has always been', () => {
+  it('carries a missing executor as the transient, retryable outage it is', () => {
+    // It reaches here only after waiting out EXECUTOR_WAIT_WINDOW_MS, so the
+    // retry it enters is one step's, not a herd behind a lane that blinked.
     const resultError = enqueueFailureResultError(
       describeEnqueueFailure(new NoExecutorAvailableError('ai')),
     );
-    expect(resultError.classification).toBeUndefined();
-    expect(resultError.retryable).toBeUndefined();
+    expect(resultError.classification).toBe('transient');
+    expect(resultError.retryable).toBe(true);
   });
 });
