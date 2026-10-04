@@ -118,8 +118,8 @@ describe.skipIf(needed.skip)(
 
       const opened = await dispatch('browser.page.open', { url: `${origin}/` });
       expect(opened.result.status).toBe('SUCCEEDED');
-      const page = opened.written.get('output') as { pageId: string; outline: { text: string } };
-      const ref = /button "Pay now" \[ref=(\w+)\]/.exec(page.outline.text)?.[1];
+      const page = opened.written.get('output') as { pageId: string; outline: string };
+      const ref = /button "Pay now" \[ref=(\w+)\]/.exec(page.outline)?.[1];
       expect(ref).toBeDefined();
       const pay = { pageId: page.pageId, ref, action: 'click' };
 
