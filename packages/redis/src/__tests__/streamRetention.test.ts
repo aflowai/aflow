@@ -15,7 +15,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Redis from 'ioredis';
 import type { Redis as RedisType } from 'ioredis';
-import { stackRedis } from '../testing/stackRedis.js';
+import { stackRedis } from '../../../../scripts/stackRedis.mjs';
 import {
   StreamKeys,
   ConsumerGroups,

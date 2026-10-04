@@ -9,11 +9,18 @@
  * sibling suite's refusals are not this one's evidence.
  */
 import type { Redis } from 'ioredis';
-import { stackRedisUrlAs } from '@aflow/redis/testing';
 
 import { renderRedisAcl } from '../redisAcl.js';
 
 export const HOST_TEST_PASSWORD = 'h'.repeat(48);
+
+/** The same Redis and database, authenticating as another identity. */
+export function stackRedisUrlAs(url: string, username: string, password: string): string {
+  const parsed = new URL(url);
+  parsed.username = encodeURIComponent(username);
+  parsed.password = encodeURIComponent(password);
+  return parsed.toString();
+}
 
 /** A name no live identity answers to, and no two test processes share. */
 export function hostTestUser(suite: string): string {

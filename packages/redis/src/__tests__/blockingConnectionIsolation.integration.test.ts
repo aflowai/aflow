@@ -6,7 +6,7 @@ import {
   quitRedisWithTimeout,
   type BlockingRedisConnection,
 } from '../connection.js';
-import { stackRedis } from '../testing/stackRedis.js';
+import { stackRedis } from '../../../../scripts/stackRedis.mjs';
 import type { Redis } from 'ioredis';
 
 const TEST_TIMEOUT_MS = 30_000;

@@ -14,22 +14,24 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
-  ADD_PASSWORD_COMMAND,
-  COMPOSE_PASSWORD_KEY,
   DEFAULT_COMPOSE_PROJECT,
   PGADMIN_CONTAINER,
   PGADMIN_LOGIN_EMAIL,
   PGADMIN_VOLUME,
-  REDIS_URL_KEY,
   TOOLS_LOGIN_USER,
   composeEnv,
   composeProjectOf,
   credentialReadiness,
-  envWithRedisPassword,
-  generateRedisPassword,
+  envAdoptingMachinePassword,
   mcpTokenState,
-  redisPasswordOf,
 } from './stackCredentials.mjs';
+import {
+  REDIS_URL_KEY,
+  STACK_ENV_FILE,
+  STACK_PASSWORD_KEY,
+  generateRedisPassword,
+} from './stackEnv.mjs';
+import { ADOPT_PASSWORD_COMMAND } from './stackRedis.mjs';
 
 const COMPOSE = readFileSync(new URL('../docker-compose.yml', import.meta.url), 'utf8');
 const PASSWORD = generateRedisPassword();
@@ -71,7 +73,7 @@ function startRedis(password) {
   chmodSync(entrypoint, 0o755);
   return spawnSync('sh', ['-c', redisStartScript()], {
     encoding: 'utf8',
-    env: { PATH: `${scratch}:${process.env['PATH'] ?? ''}`, [COMPOSE_PASSWORD_KEY]: password },
+    env: { PATH: `${scratch}:${process.env['PATH'] ?? ''}`, [STACK_PASSWORD_KEY]: password },
   });
 }
 
@@ -88,23 +90,26 @@ describe("the stack's Redis, as compose starts it", () => {
     const started = startRedis('');
     expect(started.status).not.toBe(0);
     expect(started.stdout).toBe('');
-    expect(started.stderr).toContain(REDIS_URL_KEY);
-    expect(started.stderr).toContain(ADD_PASSWORD_COMMAND);
+    expect(started.stderr).toContain(STACK_ENV_FILE);
+    expect(started.stderr).toContain(ADOPT_PASSWORD_COMMAND);
   });
 
   it('is asked for health with the password', () => {
-    expect(service('redis')).toContain(`REDISCLI_AUTH="$$${COMPOSE_PASSWORD_KEY}"`);
+    expect(service('redis')).toContain(`REDISCLI_AUTH="$$${STACK_PASSWORD_KEY}"`);
   });
 
-  it.each(['redis', 'redis-commander', 'pgadmin'])('%s publishes on loopback only', (name) => {
-    const published = [...service(name).matchAll(/^\s+- '([^']+)'$/gm)].map((m) => m[1]);
-    expect(published.length).toBeGreaterThan(0);
-    for (const port of published) expect(port).toMatch(/^127\.0\.0\.1:/);
-  });
+  it.each(['postgres', 'redis', 'redis-commander', 'pgadmin'])(
+    '%s publishes on loopback only',
+    (name) => {
+      const published = [...service(name).matchAll(/^\s+- '([^']+)'$/gm)].map((m) => m[1]);
+      expect(published.length).toBeGreaterThan(0);
+      for (const port of published) expect(port).toMatch(/^127\.0\.0\.1:/);
+    },
+  );
 });
 
 describe('the admin tools', () => {
-  const password = `\${${COMPOSE_PASSWORD_KEY}:-}`;
+  const password = `\${${STACK_PASSWORD_KEY}:-}`;
 
   it('put Redis Commander behind the Redis password, and give it that password for Redis', () => {
     const block = service('redis-commander');
@@ -134,86 +139,110 @@ describe('the admin tools', () => {
   });
 });
 
-describe('the password in REDIS_URL', () => {
-  it('is read back as written', () => {
-    expect(redisPasswordOf(`redis://:${PASSWORD}@localhost:6379`)).toBe(PASSWORD);
-    expect(redisPasswordOf('redis://localhost:6379')).toBeUndefined();
-    expect(redisPasswordOf(undefined)).toBeUndefined();
-  });
-
-  it('is written into a URL that has none, keeping its host and every other line', () => {
-    const env = `DATABASE_URL=postgres://x\n${REDIS_URL_KEY}=redis://localhost:6379\nPORT=3000\n`;
-    expect(envWithRedisPassword(env, PASSWORD)).toBe(
-      `DATABASE_URL=postgres://x\n${REDIS_URL_KEY}=redis://:${PASSWORD}@localhost:6379\nPORT=3000\n`,
+describe('a checkout adopting the machine’s password', () => {
+  it('takes a password of its own out of REDIS_URL, keeping its host and every other line', () => {
+    const env = `DATABASE_URL=postgres://x\n${REDIS_URL_KEY}=redis://:${PASSWORD}@localhost:6379\nPORT=3000\n`;
+    expect(envAdoptingMachinePassword(env)).toBe(
+      `DATABASE_URL=postgres://x\n${REDIS_URL_KEY}=redis://localhost:6379\nPORT=3000\n`,
     );
   });
 
-  it('is added with the local URL to a file that names none', () => {
-    expect(envWithRedisPassword('PORT=3000', PASSWORD)).toBe(
-      `PORT=3000\n${REDIS_URL_KEY}=redis://:${PASSWORD}@localhost:6379\n`,
-    );
+  it('leaves a URL carrying none, or a file naming none, alone', () => {
+    expect(envAdoptingMachinePassword(`${REDIS_URL_KEY}=redis://localhost:6379\n`)).toBeUndefined();
+    expect(envAdoptingMachinePassword('PORT=3000\n')).toBeUndefined();
   });
 
-  it('is left alone where the URL already carries one', () => {
-    expect(
-      envWithRedisPassword(`${REDIS_URL_KEY}=redis://:kept@localhost:6379\n`, PASSWORD),
-    ).toBeUndefined();
-  });
-
-  it('is what compose is handed, and nothing when the URL carries none', () => {
-    const url = `redis://:${PASSWORD}@localhost:6379`;
-    expect(composeEnv({}, { [REDIS_URL_KEY]: url })[COMPOSE_PASSWORD_KEY]).toBe(PASSWORD);
-    expect(composeEnv({ [REDIS_URL_KEY]: url }, {})[COMPOSE_PASSWORD_KEY]).toBe(PASSWORD);
-    expect(
-      composeEnv({}, { [REDIS_URL_KEY]: 'redis://localhost:6379' })[COMPOSE_PASSWORD_KEY],
-    ).toBe('');
+  it('hands compose the machine’s password, and nothing when the machine has none', () => {
+    expect(composeEnv({ PATH: '/bin' }, PASSWORD)).toEqual({
+      PATH: '/bin',
+      [STACK_PASSWORD_KEY]: PASSWORD,
+    });
+    expect(composeEnv({ [STACK_PASSWORD_KEY]: 'shell' }, undefined)[STACK_PASSWORD_KEY]).toBe('');
   });
 });
 
 describe('the boot readiness', () => {
+  const MACHINE_FILE = `/home/dev/.aflow/${STACK_ENV_FILE}`;
   const ready = {
+    checkoutRedisUrl: 'redis://localhost:6379',
+    machinePassword: PASSWORD,
+    machineFile: MACHINE_FILE,
     redisUrl: `redis://:${PASSWORD}@localhost:6379`,
-    redisAnswers: 'closed',
+    redis: { outcome: 'accepted' },
     mcpToken: 'present',
     mcpAuthFile: 'mcp.local.json',
     hostEnvPath: '/home/dev/.aflow/host.env',
     composeProject: DEFAULT_COMPOSE_PROJECT,
   };
 
-  it('fails a Redis URL without a password, naming it and the command that adds one', () => {
-    const readiness = credentialReadiness({ ...ready, redisUrl: 'redis://localhost:6379' });
-    expect(readiness.failure?.message).toContain(REDIS_URL_KEY);
-    expect(readiness.failure?.remedy).toContain(ADD_PASSWORD_COMMAND);
-    expect(readiness.lines[0]).toBe(`Redis: ${REDIS_URL_KEY} carries no password`);
+  it('passes a Redis that accepts the machine’s password, naming where it lives', () => {
+    const readiness = credentialReadiness(ready);
+    expect(readiness.failure).toBeUndefined();
+    expect(readiness.lines[0]).toBe(`Redis: accepts this machine's password (${MACHINE_FILE})`);
   });
 
-  it('fails when there is no Redis URL at all', () => {
-    expect(credentialReadiness({ ...ready, redisUrl: undefined }).failure).toBeDefined();
+  it('passes a Redis not yet running, which is started next with the machine’s password', () => {
+    const readiness = credentialReadiness({
+      ...ready,
+      redis: { outcome: 'unreachable', reason: 'ECONNREFUSED' },
+    });
+    expect(readiness.failure).toBeUndefined();
+    expect(readiness.lines[0]).toContain('not running yet');
   });
 
-  it('fails a Redis that answers without the password the URL carries', () => {
-    const readiness = credentialReadiness({ ...ready, redisAnswers: 'open' });
+  it('fails a Redis that requires no password, never echoing the password', () => {
+    const readiness = credentialReadiness({ ...ready, redis: { outcome: 'no-password-required' } });
+    expect(readiness.lines[0]).toBe('Redis: requires no password');
     expect(readiness.failure?.message).toContain('redis://localhost:6379');
     expect(readiness.failure?.message).not.toContain(PASSWORD);
-    expect(readiness.failure?.remedy).toContain(ADD_PASSWORD_COMMAND);
+    expect(readiness.failure?.remedy).toContain(ADOPT_PASSWORD_COMMAND);
   });
 
-  it('names every service’s credential, and passes when each has one', () => {
-    for (const redisAnswers of ['closed', 'unreachable']) {
-      const readiness = credentialReadiness({ ...ready, redisAnswers });
-      expect(readiness.failure).toBeUndefined();
-      expect(readiness.lines.map((line) => line.split(':')[0])).toEqual([
-        'Redis',
-        'MCP server',
-        'Redis Commander',
-        'pgAdmin',
-        'Host lane',
-      ]);
-    }
+  it('fails a Redis that refuses the machine’s password, with its reply', () => {
+    const readiness = credentialReadiness({
+      ...ready,
+      redis: { outcome: 'refused', reason: 'WRONGPASS invalid username-password pair' },
+    });
+    expect(readiness.lines[0]).toContain('refuses this machine');
+    expect(readiness.failure?.message).toContain('WRONGPASS');
+    expect(readiness.failure?.message).toContain(MACHINE_FILE);
+    expect(readiness.failure?.message).not.toContain(PASSWORD);
+    expect(readiness.failure?.remedy).toContain(ADOPT_PASSWORD_COMMAND);
+  });
+
+  it('names a checkout whose .env carries another password, and the command that adopts the machine’s', () => {
+    const other = generateRedisPassword();
+    const readiness = credentialReadiness({
+      ...ready,
+      checkoutRedisUrl: `redis://:${other}@localhost:6379`,
+    });
+    expect(readiness.lines[1]).toContain('carries a password other than the machine');
+    expect(readiness.failure?.message).toContain(`${REDIS_URL_KEY} in .env`);
+    expect(readiness.failure?.message).toContain(MACHINE_FILE);
+    expect(readiness.failure?.message).not.toContain(other);
+    expect(readiness.failure?.remedy).toContain(ADOPT_PASSWORD_COMMAND);
+  });
+
+  it('passes a checkout whose .env carries the machine’s own password', () => {
+    expect(
+      credentialReadiness({ ...ready, checkoutRedisUrl: `redis://:${PASSWORD}@localhost:6379` })
+        .failure,
+    ).toBeUndefined();
+  });
+
+  it('names every service’s credential', () => {
+    expect(credentialReadiness(ready).lines.map((line) => line.split(':')[0])).toEqual([
+      'Redis',
+      'This checkout',
+      'MCP server',
+      'Redis Commander',
+      'pgAdmin',
+      'Host lane',
+    ]);
   });
 
   it('says when the MCP server has no token to check sessions against', () => {
-    const lines = (mcpToken) => credentialReadiness({ ...ready, mcpToken }).lines[1];
+    const lines = (mcpToken) => credentialReadiness({ ...ready, mcpToken }).lines[2];
     expect(lines('absent')).toContain('refuses every session');
     expect(lines('no-file')).toContain('refuses every session');
     expect(lines('present')).toContain('AFLOW_MCP_LOCAL_TOKEN');
@@ -227,23 +256,14 @@ describe('the boot readiness', () => {
   });
 
   it('names a paired machine’s own credential, and an unpaired one', () => {
-    expect(credentialReadiness(ready).lines[4]).toContain('/home/dev/.aflow/host.env');
-    expect(credentialReadiness({ ...ready, hostEnvPath: null }).lines[4]).toBe(
+    expect(credentialReadiness(ready).lines[5]).toContain('/home/dev/.aflow/host.env');
+    expect(credentialReadiness({ ...ready, hostEnvPath: null }).lines[5]).toBe(
       'Host lane: not paired',
     );
   });
-});
 
-describe('pgAdmin’s login in the readiness', () => {
-  it('says it is the password pgAdmin was created with, and how a changed one reaches it', () => {
-    const line = credentialReadiness({
-      redisUrl: `redis://:${PASSWORD}@localhost:6379`,
-      redisAnswers: 'closed',
-      mcpToken: 'present',
-      mcpAuthFile: 'mcp.local.json',
-      hostEnvPath: null,
-      composeProject: 'kept-data',
-    }).lines[3];
+  it('says pgAdmin holds the password it was created with, and how a changed one reaches it', () => {
+    const line = credentialReadiness({ ...ready, composeProject: 'kept-data' }).lines[4];
     expect(line).toContain(PGADMIN_LOGIN_EMAIL);
     expect(line).toContain('first created');
     expect(line).toContain(

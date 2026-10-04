@@ -51,7 +51,7 @@ import {
   shardFor,
   type BlockingRedisConnection,
 } from '@aflow/redis';
-import { stackRedis } from '@aflow/redis/testing';
+import { stackRedis } from '../../../../scripts/stackRedis.mjs';
 import { createRedisPayloadStore } from '@aflow/payload-store';
 import {
   DEFAULT_EXECUTOR_CONFIG,

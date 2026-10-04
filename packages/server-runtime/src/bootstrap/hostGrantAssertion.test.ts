@@ -16,9 +16,14 @@
 import { Redis } from 'ioredis';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { stackRedis, stackRedisUrlAs } from '@aflow/redis/testing';
+import { stackRedis } from '../../../../scripts/stackRedis.mjs';
 
-import { HOST_TEST_PASSWORD, applyHostGrant, hostTestUser } from './__fixtures__/hostGrantRedis.js';
+import {
+  HOST_TEST_PASSWORD,
+  applyHostGrant,
+  hostTestUser,
+  stackRedisUrlAs,
+} from './__fixtures__/hostGrantRedis.js';
 import {
   applyHostIdentityToRunningServer,
   assertHostGrantOnRunningServer,

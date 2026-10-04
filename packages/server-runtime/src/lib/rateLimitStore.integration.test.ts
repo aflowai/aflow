@@ -13,7 +13,7 @@ import { describe, it, expect, afterAll } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import rateLimit from '@fastify/rate-limit';
 import { Redis } from 'ioredis';
-import { stackRedis } from '@aflow/redis/testing';
+import { stackRedis } from '../../../../scripts/stackRedis.mjs';
 import {
   RATE_LIMIT_WINDOW_MS,
   isAuthenticatedRequest,

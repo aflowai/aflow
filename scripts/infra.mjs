@@ -1,42 +1,37 @@
 #!/usr/bin/env node
 /**
- * `docker compose`, given the stack's Redis password from the `REDIS_URL` in
- * `.env` — the one place it lives (`scripts/stackCredentials.mjs`).
+ * `docker compose`, given the stack's Redis password from this machine's
+ * `stack.env` — the one place it lives (`scripts/stackEnv.mjs`), because every
+ * checkout's compose drives the same Redis container, and one handing it
+ * another password would recreate it under every other checkout.
  *
- * Refuses before compose runs when the URL carries none, because compose
+ * Refuses before compose runs when the machine has none yet, because compose
  * would start nothing useful: the Redis service refuses to start without one.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import process from 'node:process';
 
-import { parseEnvFile } from './mcp-local-setup.mjs';
-import {
-  ADD_PASSWORD_COMMAND,
-  COMPOSE_PASSWORD_KEY,
-  REDIS_URL_KEY,
-  composeEnv,
-} from './stackCredentials.mjs';
+import { composeEnv } from './stackCredentials.mjs';
+import { readMachinePassword, stackEnvPath } from './stackEnv.mjs';
+import { ADOPT_PASSWORD_COMMAND } from './stackRedis.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 
-export function readDotenv(repo = REPO) {
-  const envPath = join(repo, '.env');
-  return existsSync(envPath) ? parseEnvFile(readFileSync(envPath, 'utf8')) : {};
-}
-
 /** Runs `docker compose <args>` from the checkout; its exit status. */
-export function compose(args, dotenv = readDotenv()) {
-  const env = composeEnv(process.env, dotenv);
-  if (env[COMPOSE_PASSWORD_KEY] === '') {
+export function compose(args) {
+  const machineFile = stackEnvPath(process.env);
+  const machinePassword = readMachinePassword(machineFile);
+  if (machinePassword === undefined) {
     console.error(
-      `\x1b[31m[infra]\x1b[0m ${REDIS_URL_KEY} in .env carries no password, and the stack's ` +
-        `Redis requires one. Run \`${ADD_PASSWORD_COMMAND}\` once to add it.`,
+      `\x1b[31m[infra]\x1b[0m this machine has no stack Redis password yet (${machineFile}), ` +
+        `and the stack's Redis requires one. Run \`yarn start\` or \`${ADOPT_PASSWORD_COMMAND}\` ` +
+        'once to write it.',
     );
     return 1;
   }
+  const env = composeEnv(process.env, machinePassword);
   return (
     spawnSync('docker', ['compose', ...args], { cwd: REPO, env, stdio: 'inherit' }).status ?? 1
   );

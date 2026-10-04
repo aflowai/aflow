@@ -13,7 +13,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Redis from 'ioredis';
 import type { Redis as RedisType } from 'ioredis';
-import { stackRedis } from '../testing/stackRedis.js';
+import { stackRedis } from '../../../../scripts/stackRedis.mjs';
 import { ConsumerGroups, StreamKeys } from '@aflow/schemas';
 import { buildResultStreamSet, readShardStepResults } from '../streams/shardReads.js';
 import { SHARD_COUNT } from '../shard.js';

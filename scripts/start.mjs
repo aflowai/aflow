@@ -15,17 +15,21 @@ import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 
-import { apiUrlOf, authFileOf, envNamingAuthFile, parseEnvFile } from './mcp-local-setup.mjs';
+import { apiUrlOf, authFileOf, envNamingAuthFile } from './mcp-local-setup.mjs';
 import {
-  REDIS_URL_KEY,
   composeProjectOf,
   credentialReadiness,
-  envWithRedisPassword,
-  generateRedisPassword,
   mcpTokenState,
   pairedHostEnvPath,
-  probeRedisWithoutPassword,
 } from './stackCredentials.mjs';
+import {
+  REDIS_URL_KEY,
+  ensureMachinePassword,
+  parseEnvFile,
+  stackEnv,
+  stackEnvPath,
+} from './stackEnv.mjs';
+import { probeRedis } from './stackRedis.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const say = (message) => {
@@ -54,14 +58,15 @@ if (spawnSync('docker', ['info'], { stdio: 'ignore' }).status !== 0) {
 // ── The environment file ──────────────────────────────────────────────────────
 if (!existsSync(join(REPO, '.env'))) {
   copyFileSync(join(REPO, '.env.example'), join(REPO, '.env'));
-  const withPassword = envWithRedisPassword(
-    readFileSync(join(REPO, '.env'), 'utf-8'),
-    generateRedisPassword(),
-  );
-  if (withPassword !== undefined) writeFileSync(join(REPO, '.env'), withPassword);
-  say(`created .env from .env.example, with a generated Redis password in ${REDIS_URL_KEY}`);
+  say('created .env from .env.example');
   say('  nothing to edit — a model provider key is entered in the app');
 }
+
+// ── The machine's Redis password ──────────────────────────────────────────────
+// One for every checkout, because they all share one Redis container.
+const machineFile = stackEnvPath(process.env);
+const machine = ensureMachinePassword(machineFile);
+if (machine.created) say(`wrote this machine's Redis password to ${machineFile}`);
 
 // ── The MCP server's credential ───────────────────────────────────────────────
 // Minted by `yarn mcp:setup` once the API is healthy (below), with the session
@@ -84,13 +89,20 @@ if (mcpCredentialMissing) {
 // Before anything starts: a Redis started, or still running, without its
 // password would serve the write approvals the push gate reads to anything on
 // this machine.
+const dotenv = parseEnvFile(readFileSync(envFile, 'utf-8'));
+const redisUrl = stackEnv(process.env, dotenv, { machinePassword: machine.password })[
+  REDIS_URL_KEY
+];
 const readiness = credentialReadiness({
-  redisUrl: envValues[REDIS_URL_KEY],
-  redisAnswers: await probeRedisWithoutPassword(envValues[REDIS_URL_KEY]),
+  checkoutRedisUrl: dotenv[REDIS_URL_KEY],
+  machinePassword: machine.password,
+  machineFile,
+  redisUrl,
+  redis: await probeRedis(redisUrl, machine.password),
   mcpToken,
   mcpAuthFile: relative(REPO, mcpAuthFile) || mcpAuthFile,
   hostEnvPath: pairedHostEnvPath(),
-  composeProject: composeProjectOf(process.env, parseEnvFile(readFileSync(envFile, 'utf-8'))),
+  composeProject: composeProjectOf(process.env, dotenv),
 });
 say('credentials:');
 for (const line of readiness.lines) say(`  ${line}`);

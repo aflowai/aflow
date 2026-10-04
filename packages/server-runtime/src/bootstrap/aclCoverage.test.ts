@@ -21,7 +21,7 @@
 import { Redis } from 'ioredis';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { stackRedis } from '@aflow/redis/testing';
+import { stackRedis } from '../../../../scripts/stackRedis.mjs';
 
 import {
   applyHostGrant,

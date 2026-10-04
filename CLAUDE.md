@@ -149,8 +149,8 @@ yarn dev:local             # What `yarn start` runs once its checks pass
 yarn dev:core              # Server + orchestrator + mock executor (no web)
 yarn dev:mcp               # MCP server alone (port 3100); `yarn start` already serves it
 yarn mcp:setup             # Give the MCP server its API key and session token (mcp.local.json); idempotent
-yarn redis:password        # A .env from before Redis had a password: add one to REDIS_URL, restart Redis
-yarn infra:up              # Postgres (port 5433) + Redis (port 6379, password from REDIS_URL) only
+yarn redis:password        # Put this checkout and Redis on the machine's password (~/.aflow/stack.env)
+yarn infra:up              # Postgres (port 5433) + Redis (port 6379, the machine's password) only
 yarn infra:tools           # Same, with pgAdmin (8080) + Redis Commander (8081), Redis password as login
 
 # Build and test
@@ -270,14 +270,15 @@ After every change that affects behavior, schemas, or architecture:
 `yarn start` creates `.env` from `.env.example` on first run. Postgres listens on port
 **5433** (not the default 5432), Redis on 6379. Model provider keys are added in the web UI.
 
-**Every service requires a credential** (Plan 315 D20). Redis's password is generated into
-`REDIS_URL` on first run, so everything that reads the URL authenticates; Redis Commander and
-pgAdmin log in with it, on `127.0.0.1` — pgAdmin with the password as it was when its volume
-was created, until that volume is removed. The Redis integration suites read the same URL
-(`@aflow/redis/testing`): they skip where no Redis answers and fail where one refuses its
-credential. `yarn start` prints each service's credential state
-and stops when `REDIS_URL` carries no password. **With a `.env` from before, run
-`yarn redis:password` once** — it writes the password in and restarts Redis with it; the data
-stays.
+**Every service requires a credential** (Plan 315 D20). Every checkout shares one Redis, so its
+password is the machine's, in `~/.aflow/stack.env` (written by the first `yarn start`); the dev
+runner lays it into each checkout's `REDIS_URL` (`scripts/stackEnv.mjs`), so `.env` carries
+none. Redis Commander and pgAdmin log in with it, on `127.0.0.1` — pgAdmin with the password as
+it was when its volume was created, until that volume is removed. The Redis integration suites
+resolve the URL as the services do (`scripts/stackRedis.mjs`): they skip where no Redis answers
+and fail where one refuses its credential. `yarn start` prints each service's credential state
+and stops on a Redis without the machine's password or a `.env` carrying its own. **Then run
+`yarn redis:password` once** — it adopts the machine's password and restarts Redis with it; the
+data stays.
 
 @CLAUDE.hosted.md

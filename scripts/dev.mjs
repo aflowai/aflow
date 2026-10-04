@@ -16,6 +16,7 @@ import process from 'node:process';
 import { listenersOn, mcpPortHeldMessage, readProcessTable } from './devMcpPort.mjs';
 import { findRunningStack, profileConflicts, stackConflictMessage } from './devStackLock.mjs';
 import { pairedHostEnvPath } from './stackCredentials.mjs';
+import { readEnvFile, readMachinePassword, stackEnv, stackEnvPath } from './stackEnv.mjs';
 
 /** When true, child exit must not remove entries until shutdown finishes (see shutdown + port sweep). */
 let devRunnerShuttingDown = false;
@@ -251,29 +252,19 @@ async function handleInfra(command) {
 }
 
 /**
- * Load environment variables from .env file
+ * The `.env` values, with `REDIS_URL` carrying this machine's Redis password
+ * (`scripts/stackEnv.mjs`): every checkout shares one Redis, so no checkout's
+ * file holds its password.
  */
 function loadEnv(envPath) {
-  try {
-    const content = readFileSync(envPath, 'utf-8');
-    const env = {};
-    for (const line of content.split('\n')) {
-      const trimmed = line.trim();
-      if (trimmed && !trimmed.startsWith('#')) {
-        const [key, ...valueParts] = trimmed.split('=');
-        if (key && valueParts.length > 0) {
-          env[key.trim()] = valueParts.join('=').trim();
-        }
-      }
-    }
-    return env;
-  } catch (error) {
-    if (error.code === 'ENOENT') {
-      console.warn(`Warning: .env file not found at ${envPath}, continuing without it`);
-      return {};
-    }
-    throw error;
+  if (!existsSync(envPath)) {
+    console.warn(`Warning: .env file not found at ${envPath}, continuing without it`);
   }
+  const dotenv = readEnvFile(envPath);
+  const { REDIS_URL } = stackEnv(process.env, dotenv, {
+    machinePassword: readMachinePassword(stackEnvPath(process.env)),
+  });
+  return REDIS_URL === undefined ? dotenv : { ...dotenv, REDIS_URL };
 }
 
 /**

@@ -20,7 +20,7 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import { StreamKeys, type TenantId } from '@aflow/schemas';
 import { createDatabase, tenantIdToSchemaName, PROJECTION_FAILURES_TABLE } from '@aflow/database';
 import { setSessionState, appendSessionEvent, type SessionHotState } from '@aflow/redis';
-import { stackRedis } from '@aflow/redis/testing';
+import { stackRedis } from '../../../../../scripts/stackRedis.mjs';
 const logs = vi.hoisted(() => ({ info: [] as string[], error: [] as string[] }));
 vi.mock('../../lib/orchestratorLogger.js', async () => {
   const actual = await vi.importActual<Record<string, unknown>>('../../lib/orchestratorLogger.js');

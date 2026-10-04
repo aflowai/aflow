@@ -2,94 +2,52 @@
  * What each service of the development stack authenticates with, and whether
  * it does — the readiness `yarn start` prints before anything starts.
  *
- * The stack's Redis password lives in one place, the `REDIS_URL` in `.env`,
- * so every reader of that URL authenticates without knowing a password exists.
- * Compose cannot take part of a variable, so `scripts/infra.mjs` hands it the
- * password as `AFLOW_DEV_REDIS_PASSWORD`; Redis, Redis Commander and pgAdmin
- * all start from that one value.
+ * The stack's Redis password is the machine's, in `stack.env`
+ * (`scripts/stackEnv.mjs`), because every checkout shares one Redis container.
+ * Compose is handed it as `AFLOW_DEV_REDIS_PASSWORD` by `scripts/infra.mjs`;
+ * Redis, Redis Commander and pgAdmin all start from that one value, and every
+ * checkout's `REDIS_URL` is given it by the loader.
  */
-import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { connect } from 'node:net';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { MCP_TOKEN_ENV, sessionTokenIn } from './mcp-local-setup.mjs';
+import { REDIS_URL_KEY, STACK_PASSWORD_KEY, hostDirOf, redisPasswordOf } from './stackEnv.mjs';
+import { ADOPT_PASSWORD_COMMAND, redisUrlWithoutCredentials } from './stackRedis.mjs';
 
-export const REDIS_URL_KEY = 'REDIS_URL';
-export const COMPOSE_PASSWORD_KEY = 'AFLOW_DEV_REDIS_PASSWORD';
-export const ADD_PASSWORD_COMMAND = 'yarn redis:password';
 export const TOOLS_LOGIN_USER = 'aflow';
 export const PGADMIN_LOGIN_EMAIL = 'admin@phoenix.dev';
 export const PGADMIN_CONTAINER = 'aflow-pgadmin';
 export const PGADMIN_VOLUME = 'pgadmin_login';
 export const DEFAULT_COMPOSE_PROJECT = 'aflow-dev';
 const COMPOSE_PROJECT_KEY = 'COMPOSE_PROJECT_NAME';
-const REDIS_PASSWORD_BYTES = 32;
-const DEFAULT_REDIS_PORT = 6379;
-const PROBE_TIMEOUT_MS = 1500;
-const DEFAULT_REDIS_URL = `redis://localhost:${String(DEFAULT_REDIS_PORT)}`;
-
-/** Hex, so it needs no percent-encoding in the URL and no quoting in compose. */
-export function generateRedisPassword() {
-  return randomBytes(REDIS_PASSWORD_BYTES).toString('hex');
-}
-
-/** The password a Redis URL carries, or undefined when it carries none. */
-export function redisPasswordOf(url) {
-  const parsed = url === undefined ? null : URL.parse(url);
-  if (parsed === null || parsed.password === '') return undefined;
-  return decodeURIComponent(parsed.password);
-}
-
-export function redisUrlWithoutCredentials(url) {
-  const parsed = new URL(url);
-  parsed.username = '';
-  parsed.password = '';
-  return parsed.toString();
-}
 
 const REDIS_URL_LINE = new RegExp(`^(\\s*(?:export\\s+)?${REDIS_URL_KEY}=)(.*)$`, 'm');
 
 /**
- * `.env` with a password written into its `REDIS_URL`, or undefined when that
- * URL already carries one. A file with no `REDIS_URL` gains the local one.
+ * `.env` with the password taken out of its `REDIS_URL`, so the checkout uses
+ * the machine's; undefined when that URL carries none.
  */
-export function envWithRedisPassword(envText, password) {
+export function envAdoptingMachinePassword(envText) {
   const match = REDIS_URL_LINE.exec(envText);
   const current = match?.[2].trim().replace(/^(['"])(.*)\1$/, '$2');
-  const named = current !== undefined && current !== '';
-  if (named && redisPasswordOf(current) !== undefined) return undefined;
-  const url = new URL(named ? current : DEFAULT_REDIS_URL);
-  url.password = password;
-  if (match === null) {
-    const separator = envText === '' || envText.endsWith('\n') ? '' : '\n';
-    return `${envText}${separator}${REDIS_URL_KEY}=${url.toString()}\n`;
-  }
+  if (current === undefined || redisPasswordOf(current) === undefined) return undefined;
+  const url = new URL(current);
+  url.password = '';
   return envText.replace(REDIS_URL_LINE, `$1${url.toString()}`);
 }
 
 /**
- * The environment `docker compose` runs with: the password from the URL, or an
- * empty one when the URL has none, which the Redis service refuses to start on.
+ * The environment `docker compose` runs with: the machine's password, or an
+ * empty one when there is none, which the Redis service refuses to start on.
  */
-export function composeEnv(processEnv, dotenv) {
-  const redisUrl = dotenv[REDIS_URL_KEY] ?? processEnv[REDIS_URL_KEY];
-  return { ...processEnv, [COMPOSE_PASSWORD_KEY]: redisPasswordOf(redisUrl) ?? '' };
+export function composeEnv(processEnv, machinePassword) {
+  return { ...processEnv, [STACK_PASSWORD_KEY]: machinePassword ?? '' };
 }
 
-/**
- * Where `pair` wrote this machine's host env, or null when it never ran. The
- * host executor resolves the same directory (`PHOENIX_HOST_POLICY_PATH`, then
- * `PHOENIX_HOST_DIR`, then `~/.aflow`).
- */
+/** Where `pair` wrote this machine's host env, or null when it never ran. */
 export function pairedHostEnvPath(env = process.env) {
-  const policyPath = env['PHOENIX_HOST_POLICY_PATH']?.trim();
-  const dir =
-    policyPath !== undefined && policyPath !== ''
-      ? join(policyPath, '..')
-      : env['PHOENIX_HOST_DIR']?.trim() || join(homedir(), '.aflow');
-  const envPath = join(dir, 'host.env');
+  const envPath = join(hostDirOf(env), 'host.env');
   return existsSync(envPath) ? envPath : null;
 }
 
@@ -114,44 +72,51 @@ export function mcpTokenState(authFileText) {
   return sessionTokenIn(authFileText) === undefined ? 'absent' : 'present';
 }
 
-/**
- * How the Redis at `url` answers a PING sent with no password: `open` when it
- * answers, `closed` when it asks for one, `unreachable` when nothing answers.
- */
-export function probeRedisWithoutPassword(url) {
-  const parsed = url === undefined ? null : URL.parse(url);
-  const host = parsed?.hostname || '127.0.0.1';
-  const port = Number(parsed?.port || DEFAULT_REDIS_PORT);
-  return new Promise((resolve) => {
-    let reply = '';
-    const socket = connect({ host, port }, () => socket.write('PING\r\n'))
-      .on('data', (chunk) => {
-        reply += chunk.toString();
-        if (!reply.includes('\r\n')) return;
-        socket.destroy();
-        resolve(reply.startsWith('+PONG') ? 'open' : 'closed');
-      })
-      .on('error', () => {
-        resolve('unreachable');
-      })
-      // A peer that closes without replying settles nothing else.
-      .on('close', () => {
-        resolve('unreachable');
-      });
-    socket.setTimeout(PROBE_TIMEOUT_MS, () => {
-      socket.destroy();
-      resolve('unreachable');
-    });
-  });
+/** The Redis line, and the failure when the Redis does not hold the machine's password. */
+function redisReadiness({ redisUrl, redis, machineFile }) {
+  const at = redisUrlWithoutCredentials(redisUrl);
+  const restart =
+    `Run \`${ADOPT_PASSWORD_COMMAND}\` to restart it with this machine's password, which every ` +
+    "checkout's services use. The data stays.";
+  switch (redis.outcome) {
+    case 'accepted':
+      return { line: `Redis: accepts this machine's password (${machineFile})` };
+    case 'no-password-required':
+      return {
+        line: 'Redis: requires no password',
+        failure: {
+          message: `The Redis at ${at} requires no password: it was started before ${machineFile} was written.`,
+          remedy: restart,
+        },
+      };
+    case 'refused':
+      return {
+        line: `Redis: refuses this machine's password (${redis.reason})`,
+        failure: {
+          message:
+            `The Redis at ${at} refuses this machine's password in ${machineFile} ` +
+            `(${redis.reason}): it was started with another one.`,
+          remedy: restart,
+        },
+      };
+    case 'unreachable':
+      return {
+        line: `Redis: not running yet; started next with this machine's password (${machineFile})`,
+      };
+  }
 }
 
 /**
  * Each service's credential state, one line each, and the failure that stops
- * the start when Redis would run, or is running, without its password.
+ * the start when Redis would run without the machine's password, or this
+ * checkout would connect with a password of its own.
  *
  * @param {{
- *   redisUrl: string | undefined,
- *   redisAnswers: 'open' | 'closed' | 'unreachable',
+ *   checkoutRedisUrl: string | undefined,
+ *   machinePassword: string,
+ *   machineFile: string,
+ *   redisUrl: string,
+ *   redis: { outcome: 'accepted' | 'no-password-required' | 'refused' | 'unreachable', reason?: string },
  *   mcpToken: 'present' | 'absent' | 'no-file',
  *   mcpAuthFile: string,
  *   hostEnvPath: string | null,
@@ -159,34 +124,36 @@ export function probeRedisWithoutPassword(url) {
  * }} input
  */
 export function credentialReadiness({
+  checkoutRedisUrl,
+  machinePassword,
+  machineFile,
   redisUrl,
-  redisAnswers,
+  redis,
   mcpToken,
   mcpAuthFile,
   hostEnvPath,
   composeProject,
 }) {
   const lines = [];
-  let failure;
+  const redisState = redisReadiness({ redisUrl, redis, machineFile });
+  lines.push(redisState.line);
+  let failure = redisState.failure;
 
-  if (redisUrl === undefined || redisPasswordOf(redisUrl) === undefined) {
-    lines.push(`Redis: ${REDIS_URL_KEY} carries no password`);
-    failure = {
-      message: `${REDIS_URL_KEY} in .env carries no password, and the stack's Redis requires one.`,
-      remedy:
-        `Run \`${ADD_PASSWORD_COMMAND}\` once: it writes a generated password into ` +
-        `${REDIS_URL_KEY} and restarts Redis with it. The data stays.`,
-    };
-  } else if (redisAnswers === 'open') {
-    lines.push('Redis: answers without a password');
+  const checkoutPassword = redisPasswordOf(checkoutRedisUrl);
+  if (checkoutPassword !== undefined && checkoutPassword !== machinePassword) {
+    lines.push(
+      `This checkout: ${REDIS_URL_KEY} in .env carries a password other than the machine's`,
+    );
     failure = {
       message:
-        `The Redis at ${redisUrlWithoutCredentials(redisUrl)} answers without a password, ` +
-        `although ${REDIS_URL_KEY} carries one: it was started before the password was.`,
-      remedy: `Run \`${ADD_PASSWORD_COMMAND}\` to restart it with the password. The data stays.`,
+        `${REDIS_URL_KEY} in .env carries a Redis password of its own, and the Redis every ` +
+        `checkout on this machine shares requires the one in ${machineFile}.`,
+      remedy:
+        `Run \`${ADOPT_PASSWORD_COMMAND}\` once: it takes the password out of ${REDIS_URL_KEY}, ` +
+        "so this checkout uses the machine's, and starts Redis with it if it is not already.",
     };
   } else {
-    lines.push(`Redis: requires the password ${REDIS_URL_KEY} carries`);
+    lines.push(`This checkout: ${REDIS_URL_KEY} uses the machine's password`);
   }
 
   lines.push(
@@ -198,12 +165,12 @@ export function credentialReadiness({
   );
   lines.push(
     'Redis Commander: off unless `yarn infra:tools`; on 127.0.0.1, ' +
-      `logging in as ${TOOLS_LOGIN_USER} with the Redis password`,
+      `logging in as ${TOOLS_LOGIN_USER} with this machine's Redis password`,
   );
   lines.push(
     'pgAdmin: off unless `yarn infra:tools`; on 127.0.0.1, ' +
       `logging in as ${PGADMIN_LOGIN_EMAIL} with the Redis password as it was when pgAdmin ` +
-      'was first created; a changed REDIS_URL reaches it only once its volume is removed ' +
+      'was first created; a changed one reaches it only once its volume is removed ' +
       `(\`docker rm -f ${PGADMIN_CONTAINER} && docker volume rm ${pgAdminVolume(composeProject)}\`)`,
   );
   lines.push(

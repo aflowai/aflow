@@ -237,9 +237,10 @@ async function main(): Promise<void> {
 
   // The dev runner merges `.env` over its own environment, so what must win is
   // handed to it separately and applied last.
-  // The development Redis's password is the one its REDIS_URL carries. The
-  // instance file's REDIS_PASSWORD is the appliance's, and ioredis lays a
-  // password option over the URL's, so it would replace the right one.
+  // The development Redis's password is the machine's, which the dev runner lays
+  // into REDIS_URL (scripts/stackEnv.mjs). The instance file's REDIS_PASSWORD is
+  // the appliance's, and ioredis lays a password option over the URL's, so it
+  // would replace the right one.
   const redisPassword = { REDIS_PASSWORD: '' };
   const overrides = {
     ...editionEnv,

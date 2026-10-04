@@ -27,7 +27,7 @@ import {
   PROJECTION_FAILURES_TABLE,
 } from '@aflow/database';
 import { setSessionState, type SessionHotState } from '@aflow/redis';
-import { stackRedis } from '@aflow/redis/testing';
+import { stackRedis } from '../../../../../scripts/stackRedis.mjs';
 import { createProjectionWorker } from '../ProjectionWorker.js';
 
 const DATABASE_URL = process.env['DATABASE_URL'];

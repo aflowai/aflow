@@ -30,7 +30,7 @@ import {
   TIMER_MAX_CLAIMS,
   type SessionHotState,
 } from '@aflow/redis';
-import { stackRedis } from '@aflow/redis/testing';
+import { stackRedis } from '../../../../../../../scripts/stackRedis.mjs';
 import { createMemoryPayloadStore } from '@aflow/payload-store';
 import { createSessionOrchestrator } from '../../index.js';
 import type { ShardManager } from '../../../ShardManager.js';

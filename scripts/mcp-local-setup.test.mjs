@@ -35,8 +35,6 @@ import {
   withSessionToken,
   mcpPortOf,
   missingSecretMessage,
-  parseEnvFile,
-  stackEnv,
   writeAuthFile,
 } from './mcp-local-setup.mjs';
 
@@ -262,29 +260,6 @@ describe('.env', () => {
 });
 
 describe('the environment it reads', () => {
-  it('parses .env and the shell-quoted instance file alike', () => {
-    expect(
-      parseEnvFile(
-        [
-          '# a comment',
-          "QUOTED='it'\\''s'",
-          'DOUBLE="two words"',
-          'BARE=value # trailing',
-          'export EXPORTED=yes',
-        ].join('\n'),
-      ),
-    ).toEqual({ QUOTED: "it's", DOUBLE: 'two words', BARE: 'value', EXPORTED: 'yes' });
-  });
-
-  it('merges as the dev runner does: .env over the shell, the instance file over both', () => {
-    const merged = stackEnv(
-      { A: 'shell', B: 'shell' },
-      { A: 'dotenv', C: 'dotenv' },
-      { C: 'instance' },
-    );
-    expect(merged).toEqual({ A: 'dotenv', B: 'shell', C: 'instance' });
-  });
-
   it('finds the instance where dev:local keeps it', () => {
     expect(instanceDir({ PHOENIX_INSTANCE_DIR: '/srv/instance' })).toBe('/srv/instance');
     expect(instanceDir({})).toMatch(/\.aflow\/dev-local$/);

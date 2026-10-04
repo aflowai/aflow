@@ -1,17 +1,19 @@
 #!/usr/bin/env node
 /**
- * Gives the development stack's Redis a password, for a `.env` written before
- * it had one: a generated password into `REDIS_URL`, then Redis restarted with
- * it. The data is in a volume and stays. Idempotent — a URL that already
- * carries a password keeps it, and Redis is restarted with that one.
+ * Puts this checkout and the machine's Redis on the machine's password: writes
+ * `stack.env` if this is the first command on the machine to need it, takes a
+ * password of the checkout's own out of `REDIS_URL` in `.env` so the loader
+ * lays the machine's in, and starts Redis with that password. The data is in a
+ * volume and stays. Idempotent — run again, it changes nothing.
  */
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 
-import { compose, readDotenv } from './infra.mjs';
-import { REDIS_URL_KEY, envWithRedisPassword, generateRedisPassword } from './stackCredentials.mjs';
+import { compose } from './infra.mjs';
+import { envAdoptingMachinePassword } from './stackCredentials.mjs';
+import { REDIS_URL_KEY, ensureMachinePassword, stackEnvPath } from './stackEnv.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const envPath = join(REPO, '.env');
@@ -19,23 +21,25 @@ const say = (message) => {
   console.log(`\x1b[36m[redis:password]\x1b[0m ${message}`);
 };
 
-if (!existsSync(envPath)) {
-  say('no .env here; `yarn start` creates one with a generated password.');
-  process.exit(1);
-}
+const machineFile = stackEnvPath(process.env);
+say(
+  ensureMachinePassword(machineFile).created
+    ? `wrote this machine's Redis password to ${machineFile}; every checkout reads it there.`
+    : `this machine's Redis password is in ${machineFile}.`,
+);
 
-const updated = envWithRedisPassword(readFileSync(envPath, 'utf8'), generateRedisPassword());
-if (updated === undefined) {
-  say(`${REDIS_URL_KEY} in .env already carries a password; restarting Redis with it.`);
-} else {
-  writeFileSync(envPath, updated);
-  say(`wrote a generated password into ${REDIS_URL_KEY} in .env.`);
+const adopted = existsSync(envPath)
+  ? envAdoptingMachinePassword(readFileSync(envPath, 'utf8'))
+  : undefined;
+if (adopted !== undefined) {
+  writeFileSync(envPath, adopted);
+  say(`took this checkout's own password out of ${REDIS_URL_KEY} in .env; it uses the machine's.`);
 }
 
 // `up` recreates the container when its environment changed, and leaves one
-// already started with this password alone.
-if (compose(['up', '-d', 'redis'], readDotenv(REPO)) !== 0) process.exit(1);
+// already started with this password alone — so it disturbs no other checkout.
+if (compose(['up', '-d', 'redis']) !== 0) process.exit(1);
 say(
-  'Redis now requires it. Restart the stack (`yarn start`) so every service reads the new ' +
-    `${REDIS_URL_KEY}; a paired machine keeps its own credential in ~/.aflow/host.env.`,
+  "Redis requires the machine's password. Restart the stack (`yarn start`) so every service " +
+    `connects with it; a paired machine keeps its own credential in ~/.aflow/host.env.`,
 );

@@ -30,6 +30,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import process from 'node:process';
 
 import { listenersOn, mcpPortHolder, readProcessTable } from './devMcpPort.mjs';
+import { parseEnvFile, stackEnv } from './stackEnv.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -49,36 +50,12 @@ const BY_HAND =
   '`yarn mcp:setup` again: it generates the `sessionToken` sessions present, which is ' +
   'never typed. Or give the key to the MCP client as an `Authorization: Bearer phx_…` header.';
 
-/** `KEY=value` lines, as both `.env` and the shell-quoted `instance.env` write them. */
-export function parseEnvFile(text) {
-  const values = {};
-  for (const line of text.split('\n')) {
-    const match = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(line);
-    if (match === null) continue;
-    const raw = match[2].trim();
-    values[match[1]] = /^'.*'$/s.test(raw)
-      ? raw.slice(1, -1).replace(/'\\''/g, "'")
-      : /^".*"$/s.test(raw)
-        ? raw.slice(1, -1)
-        : raw.replace(/\s+#.*$/, '');
-  }
-  return values;
-}
-
 /** Where the dev stack keeps its instance identity — `scripts/dev-local.ts`'s rule. */
 export function instanceDir(processEnv) {
   const explicit = processEnv['PHOENIX_INSTANCE_DIR']?.trim();
   return explicit !== undefined && explicit !== ''
     ? explicit
     : join(homedir(), '.aflow', 'dev-local');
-}
-
-/**
- * The environment the stack's processes see: `.env` over the shell's and the
- * instance file over both, the order the dev runner merges them in.
- */
-export function stackEnv(processEnv, dotenv, instance) {
-  return { ...processEnv, ...dotenv, ...instance };
 }
 
 function setting(env, key) {
@@ -288,7 +265,7 @@ async function main() {
   const dotenv = existsSync(envPath) ? parseEnvFile(readFileSync(envPath, 'utf8')) : {};
   const instanceFile = join(instanceDir(process.env), 'instance.env');
   const instance = existsSync(instanceFile) ? parseEnvFile(readFileSync(instanceFile, 'utf8')) : {};
-  const env = stackEnv(process.env, dotenv, instance);
+  const env = stackEnv(process.env, dotenv, { instance });
   const api = apiUrlOf(env);
   const authFile = authFileOf(env);
   const shown = relative(REPO, authFile) || authFile;
