@@ -81,7 +81,7 @@ describe('enqueueFailureResultError', () => {
   });
 
   it('carries a missing executor as the transient, retryable outage it is', () => {
-    // It reaches here only after waiting out EXECUTOR_WAIT_WINDOW_MS, so the
+    // It reaches here only after spending EXECUTOR_WAIT_LOOKS, so the
     // retry it enters is one step's, not a herd behind a lane that blinked.
     const resultError = enqueueFailureResultError(
       describeEnqueueFailure(new NoExecutorAvailableError('ai')),

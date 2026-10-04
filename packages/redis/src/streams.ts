@@ -22,11 +22,11 @@ export {
 } from './streams/executorHeartbeat.js';
 
 export {
-  EXECUTOR_WAIT_WINDOW_MS,
+  EXECUTOR_WAIT_LOOKS,
   EXECUTOR_WAIT_FIRST_LOOK_MS,
   EXECUTOR_WAIT_LONGEST_LOOK_MS,
-  executorWaitNextLookAtMs,
-  executorWaitExpired,
+  executorWaitGapMs,
+  executorWaitClockJumped,
 } from './streams/executorWait.js';
 
 export {

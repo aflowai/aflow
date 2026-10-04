@@ -7,19 +7,28 @@
  * in flight across a night's sleep. So a step or a workflow operation task whose
  * executor is missing is parked on its shard timer, `executor_wait`, carrying
  * the job whole, and looked at again with a growing gap until its executor is
- * back or `EXECUTOR_WAIT_WINDOW_MS` has passed — and only then fails, as the
+ * back or `EXECUTOR_WAIT_LOOKS` have been taken — and only then fails, as the
  * transient, retryable outage it is.
  *
- * The window and the gap are also what keep a lane that is down from becoming
+ * The budget is counted in looks rather than in time because a machine asleep
+ * takes none: a wait the machine sleeps through has spent nothing of it on
+ * waking. A look that comes a heartbeat's lifetime or more after it was due is
+ * that wake, or a stack stopped and started again, and counts for nothing —
+ * every executor is missing across it — so it is followed by one more look
+ * before any can give up, and a waking executor has beaten by then.
+ *
+ * The budget and the gap are also what keep a lane that is down from becoming
  * a retry herd: nothing enters a retry budget while it waits, and what fails at
- * the window's end fails at its own time, a window after it was dispatched.
+ * the budget's end fails at its own time, its looks after it was dispatched.
  */
 import type { Redis } from 'ioredis';
 import type { AflowError, StepJobMessage, StepResultMessage, TimerItem } from '@aflow/schemas';
 import {
   addStepJob,
-  executorWaitExpired,
-  executorWaitNextLookAtMs,
+  EXECUTOR_WAIT_LONGEST_LOOK_MS,
+  EXECUTOR_WAIT_LOOKS,
+  executorWaitClockJumped,
+  executorWaitGapMs,
   NoExecutorAvailableError,
   scheduleShardTimer,
   updateStepState,
@@ -31,6 +40,15 @@ export type FirstDispatch =
   { kind: 'enqueued' } | { kind: 'waiting'; sinceMs: number; nextLookAtMs: number };
 
 export type ExecutorDispatch = FirstDispatch | { kind: 'gave_up'; failure: AflowError };
+
+/** A parked job's wait, as its `executor_wait` timer carries it. */
+export interface ExecutorWaitLook {
+  sinceMs: number;
+  /** Looks already taken, not counting the one being taken now. */
+  looks: number;
+  /** When the look being taken now was due. */
+  dueAtMs: number;
+}
 
 /**
  * Enqueue `job`, or park it on its executor when none has a heartbeat.
@@ -47,18 +65,18 @@ export async function dispatchOrWaitOnExecutor(
     return { kind: 'enqueued' };
   } catch (error) {
     if (!(error instanceof NoExecutorAvailableError)) throw error;
-    return await park(redis, job, nowMs, nowMs);
+    return await park(redis, job, nowMs, 0, nowMs + executorWaitGapMs(0));
   }
 }
 
 /**
- * Look again for the executor of a job parked since `sinceMs`: enqueue it,
- * park it until the next look, or give up once the window has passed.
+ * Look again for the executor of a parked job: enqueue it, park it until the
+ * next look, or give up once its looks are spent.
  */
 export async function lookAgainForExecutor(
   redis: Redis,
   job: StepJobMessage,
-  sinceMs: number,
+  wait: ExecutorWaitLook,
   nowMs: number = Date.now(),
 ): Promise<ExecutorDispatch> {
   const { sessionId } = job;
@@ -79,10 +97,15 @@ export async function lookAgainForExecutor(
     return { kind: 'enqueued' };
   } catch (error) {
     if (!(error instanceof NoExecutorAvailableError)) throw error;
-    if (executorWaitExpired(sinceMs, nowMs)) {
+    const { sinceMs } = wait;
+    if (executorWaitClockJumped(wait.dueAtMs, nowMs)) {
+      return await park(redis, job, sinceMs, wait.looks, nowMs + EXECUTOR_WAIT_LONGEST_LOOK_MS);
+    }
+    const looks = wait.looks + 1;
+    if (looks >= EXECUTOR_WAIT_LOOKS) {
       return { kind: 'gave_up', failure: executorWaitFailure(error, sinceMs, nowMs) };
     }
-    return await park(redis, job, sinceMs, nowMs);
+    return await park(redis, job, sinceMs, looks, nowMs + executorWaitGapMs(looks));
   }
 }
 
@@ -90,9 +113,9 @@ async function park(
   redis: Redis,
   job: StepJobMessage,
   sinceMs: number,
-  nowMs: number,
+  looks: number,
+  nextLookAtMs: number,
 ): Promise<FirstDispatch> {
-  const nextLookAtMs = executorWaitNextLookAtMs(sinceMs, nowMs);
   if (job.sessionId !== undefined) {
     await updateStepState(redis, job.tenantId, job.stepExecutionId, {
       sessionId: job.sessionId,
@@ -102,7 +125,7 @@ async function park(
   }
   // Upserted under the timer's own id, so a look that finds the executor
   // still missing re-arms the claimed timer rather than adding a second.
-  await scheduleShardTimer(redis, executorWaitTimer(job, sinceMs, nextLookAtMs));
+  await scheduleShardTimer(redis, executorWaitTimer(job, sinceMs, looks, nextLookAtMs));
   return { kind: 'waiting', sinceMs, nextLookAtMs };
 }
 
@@ -121,7 +144,7 @@ export function executorWaitFailure(
   };
 }
 
-/** The FAILED result for a job that waited out its window, or was refused. */
+/** The FAILED result for a job that spent its looks, or was refused. */
 export function failedDispatchResult(
   job: StepJobMessage,
   failure: AflowError,
@@ -154,7 +177,12 @@ export function failedDispatchResult(
   };
 }
 
-function executorWaitTimer(job: StepJobMessage, sinceMs: number, dueAtMs: number): TimerItem {
+function executorWaitTimer(
+  job: StepJobMessage,
+  sinceMs: number,
+  looks: number,
+  dueAtMs: number,
+): TimerItem {
   return {
     tenantId: job.tenantId,
     ...(job.sessionId !== undefined ? { sessionId: job.sessionId } : {}),
@@ -173,6 +201,6 @@ function executorWaitTimer(job: StepJobMessage, sinceMs: number, dueAtMs: number
       : {}),
     ...(job.credentialOwnerId !== undefined ? { credentialOwnerId: job.credentialOwnerId } : {}),
     ...(job.spaceId !== undefined ? { spaceId: job.spaceId } : {}),
-    executorWait: { sinceMs, job },
+    executorWait: { sinceMs, looks, job },
   };
 }

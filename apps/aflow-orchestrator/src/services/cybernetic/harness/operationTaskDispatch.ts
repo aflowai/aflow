@@ -89,7 +89,7 @@ export interface DispatchClaimedOperationTaskArgs {
  * drive `postClaimFailure` + `PostClaimDispatchError`. A missing executor is
  * not one: the task waits for it on an `executor_wait` timer, inside the
  * claim's completion_pending supervision, which bumps rather than escalates
- * for longer than the wait's window.
+ * for longer than the wait's looks span.
  */
 export async function dispatchClaimedOperationTask(
   deps: Pick<HarnessDeps, 'redis' | 'payloadStore'>,

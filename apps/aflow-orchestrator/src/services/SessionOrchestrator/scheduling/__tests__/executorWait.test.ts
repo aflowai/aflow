@@ -4,9 +4,10 @@
  * A step or workflow operation task dispatched while its executor has no
  * heartbeat — a machine asleep, a restart, the first tick after either — is
  * parked on its shard timer, `executor_wait`, and dispatched when a look finds
- * the executor back. Past `EXECUTOR_WAIT_WINDOW_MS` it fails as the transient,
- * retryable outage it is. The stream, the shard timers and the step hash are an
- * in-memory stand-in here, driven by the real timer handler on a test clock.
+ * the executor back. Once `EXECUTOR_WAIT_LOOKS` have found it missing it fails
+ * as the transient, retryable outage it is; a look across a clock jump is not
+ * one of them. The stream, the shard timers and the step hash are an in-memory
+ * stand-in here, driven by the real timer handler on a test clock.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -23,15 +24,19 @@ const fake = vi.hoisted(() => ({
   sessionStatus: 'RUNNING',
   results: [] as StepResultMessage[],
   enqueueAttempts: 0,
+  /** The environment the lane breaker reads. */
+  laneEnv: {} as Record<string, string | undefined>,
 }));
 
 vi.mock('@aflow/redis', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@aflow/redis')>();
-  const { TimerItemSchema } = await import('@aflow/schemas');
+  const { TimerItemSchema, codeLaneBreakerRefusal } = await import('@aflow/schemas');
   return {
     ...actual,
     addStepJob: vi.fn((_redis: unknown, job: StepJobMessage) => {
       fake.enqueueAttempts += 1;
+      const laneRefusal = codeLaneBreakerRefusal(job.stepType, undefined, fake.laneEnv);
+      if (laneRefusal !== undefined) return Promise.reject(laneRefusal);
       if (!fake.heartbeats.has(job.stepType)) {
         return Promise.reject(new actual.NoExecutorAvailableError(job.stepType));
       }
@@ -95,15 +100,21 @@ vi.mock('@aflow/redis', async (importOriginal) => {
 import {
   EXECUTOR_WAIT_FIRST_LOOK_MS,
   EXECUTOR_WAIT_LONGEST_LOOK_MS,
-  EXECUTOR_WAIT_WINDOW_MS,
+  EXECUTOR_WAIT_LOOKS,
   STEP_SCHEDULED_DEAD_EXECUTOR_GRACE_MS,
-  executorWaitNextLookAtMs,
+  executorWaitGapMs,
   stepStallEarliestReapAtMs,
   timerId,
   updateSessionState,
   type StepHotState,
 } from '@aflow/redis';
-import { StepJobMessageSchema, TimerItemSchema } from '@aflow/schemas';
+import {
+  CODE_LANE_DISABLED_CODE,
+  CODE_LANE_ENABLED_ENV,
+  StepJobMessageSchema,
+  TimerItemSchema,
+  toAgentToolError,
+} from '@aflow/schemas';
 
 import { dispatchClaimedOperationTask } from '../../../cybernetic/harness/operationTaskDispatch.js';
 import type { SessionOrchestratorBindings } from '../../lifecycle/context.js';
@@ -118,6 +129,14 @@ const RUN_ID = '66666666-6666-4666-9666-666666666666';
 const OWNER = 'user-1';
 const START_MS = Date.UTC(2026, 9, 4, 2, 0, 0);
 const MINUTE_MS = 60_000;
+const NIGHT_MS = 8 * 60 * MINUTE_MS;
+
+/** How long the budgeted looks span on a machine that stays awake. */
+function awakeSpanMs(): number {
+  let spanMs = 0;
+  for (let looks = 0; looks < EXECUTOR_WAIT_LOOKS; looks += 1) spanMs += executorWaitGapMs(looks);
+  return spanMs;
+}
 
 function stepExecutionId(n: number): string {
   return `44444444-4444-4444-9444-${String(n).padStart(12, '0')}`;
@@ -201,6 +220,7 @@ beforeEach(() => {
   fake.results.length = 0;
   fake.sessionStatus = 'RUNNING';
   fake.enqueueAttempts = 0;
+  fake.laneEnv = {};
   vi.mocked(updateSessionState).mockClear();
 });
 
@@ -224,7 +244,7 @@ describe('a step whose executor is missing', () => {
     const [timer] = [...fake.timers.values()];
     expect(timer?.reason).toBe('executor_wait');
     expect(timer?.dueAtMs).toBe(START_MS + EXECUTOR_WAIT_FIRST_LOOK_MS);
-    expect(timer?.executorWait).toEqual({ sinceMs: START_MS, job });
+    expect(timer?.executorWait).toEqual({ sinceMs: START_MS, looks: 0, job });
     expect(fake.steps.get(job.stepExecutionId)).toMatchObject({
       status: 'SCHEDULED',
       executorWaitSince: START_MS,
@@ -305,7 +325,7 @@ describe('a step whose executor is missing', () => {
     expect(fake.steps.get(job.stepExecutionId)?.['executorWaitSince']).toBe(START_MS);
   });
 
-  it('fails past the window as EXECUTOR_UNAVAILABLE, transient and retryable', async () => {
+  it('gives up after its budgeted looks as EXECUTOR_UNAVAILABLE, transient and retryable', async () => {
     const job = sessionJob();
     scheduledStep(job);
     await dispatchOrWaitOnExecutor(redis, job);
@@ -314,7 +334,10 @@ describe('a step whose executor is missing', () => {
 
     while (await nextLook(processDueTimers));
 
-    expect(Date.now()).toBe(START_MS + EXECUTOR_WAIT_WINDOW_MS);
+    expect(fake.enqueueAttempts).toBe(1 + EXECUTOR_WAIT_LOOKS);
+    expect(Date.now()).toBe(START_MS + awakeSpanMs());
+    expect(awakeSpanMs()).toBeGreaterThanOrEqual(10 * MINUTE_MS);
+    expect(awakeSpanMs() - executorWaitGapMs(EXECUTOR_WAIT_LOOKS - 1)).toBeLessThan(10 * MINUTE_MS);
     const [failed] = failuresIn(applyResult);
     expect(applyResult).toHaveBeenCalledTimes(1);
     expect(failed?.status).toBe('FAILED');
@@ -327,6 +350,96 @@ describe('a step whose executor is missing', () => {
     expect(failed?.error?.message).toContain('host executor');
     expect(failed?.error?.message).toContain('Waited 10 minutes');
     expect(fake.steps.get(job.stepExecutionId)?.['executorWaitSince']).toBeUndefined();
+  });
+
+  describe('across a sleep of the machine', () => {
+    /** Takes awake looks until the next one is the last the budget allows. */
+    async function parkToTheLastLook(
+      processDueTimers: () => Promise<number>,
+    ): Promise<StepJobMessage> {
+      const job = sessionJob();
+      scheduledStep(job);
+      await dispatchOrWaitOnExecutor(redis, job);
+      while ([...fake.timers.values()][0]!.executorWait!.looks < EXECUTOR_WAIT_LOOKS - 1) {
+        await nextLook(processDueTimers);
+      }
+      return job;
+    }
+
+    it('takes no look across the clock jump, and dispatches on the next one with the heartbeat back', async () => {
+      const applyResult = vi.fn();
+      const processDueTimers = createProcessDueTimers(makeBindings(applyResult));
+      const job = await parkToTheLastLook(processDueTimers);
+
+      const wokeAt = nextDueMs() + NIGHT_MS;
+      vi.setSystemTime(wokeAt);
+      await processDueTimers();
+
+      expect(applyResult).not.toHaveBeenCalled();
+      expect(fake.steps.get(job.stepExecutionId)).toMatchObject({
+        status: 'SCHEDULED',
+        executorWaitSince: START_MS,
+      });
+      const [rearmed] = [...fake.timers.values()];
+      expect(rearmed?.executorWait?.looks).toBe(EXECUTOR_WAIT_LOOKS - 1);
+      expect(rearmed?.dueAtMs).toBe(wokeAt + EXECUTOR_WAIT_LONGEST_LOOK_MS);
+
+      fake.heartbeats.add('host');
+      await nextLook(processDueTimers);
+
+      expect(fake.stream).toHaveLength(1);
+      expect(fake.stream[0]?.stepExecutionId).toBe(job.stepExecutionId);
+      expect(fake.timers.size).toBe(0);
+      expect(applyResult).not.toHaveBeenCalled();
+    });
+
+    it('gives up on the look after the wake when the executor did not come back with it', async () => {
+      const applyResult = vi.fn();
+      const processDueTimers = createProcessDueTimers(makeBindings(applyResult));
+      await parkToTheLastLook(processDueTimers);
+
+      vi.setSystemTime(nextDueMs() + NIGHT_MS);
+      await processDueTimers();
+      expect(applyResult).not.toHaveBeenCalled();
+
+      await nextLook(processDueTimers);
+
+      expect(failuresIn(applyResult)).toHaveLength(1);
+      expect(failuresIn(applyResult)[0]?.error).toMatchObject({
+        code: 'EXECUTOR_UNAVAILABLE',
+        classification: 'transient',
+        retryable: true,
+      });
+    });
+  });
+
+  it('meets a lane breaker opened while it waited as a refusal the agent answers', async () => {
+    fake.laneEnv = { [CODE_LANE_ENABLED_ENV]: 'true' };
+    const job = StepJobMessageSchema.parse({
+      ...sessionJob(),
+      stepType: 'code',
+      operationId: 'code.agent.run',
+    });
+    scheduledStep(job);
+    await dispatchOrWaitOnExecutor(redis, job);
+    const applyResult = vi.fn();
+
+    fake.laneEnv = {};
+    await nextLook(createProcessDueTimers(makeBindings(applyResult)));
+
+    const [refused] = failuresIn(applyResult);
+    expect(applyResult).toHaveBeenCalledTimes(1);
+    expect(refused?.status).toBe('FAILED');
+    expect(refused?.stepExecutionId).toBe(job.stepExecutionId);
+    expect(refused?.error).toMatchObject({
+      code: CODE_LANE_DISABLED_CODE,
+      classification: 'permission',
+      retryable: false,
+    });
+    expect(toAgentToolError(refused!.error!)).toMatchObject({ error: 'permission', retry: false });
+    expect(updateSessionState).not.toHaveBeenCalled();
+    expect(fake.timers.size).toBe(0);
+    expect(fake.stream).toHaveLength(0);
   });
 
   it('drops the wait of a step that moved on, or of a run that ended', async () => {
@@ -359,7 +472,7 @@ describe('a step whose executor is missing', () => {
     }
   });
 
-  it('is not reaped by the stall watchdog while it waits, and is once the window is past', async () => {
+  it('is not reaped by the stall watchdog before its next look, and is once that is overdue', async () => {
     const job = sessionJob();
     scheduledStep(job);
     await dispatchOrWaitOnExecutor(redis, job);
@@ -370,17 +483,21 @@ describe('a step whose executor is missing', () => {
       hasAvailableExecutor: () => Promise.resolve(false),
     };
 
-    const midWait = await classifyStepCompletionPath(deps, step, START_MS + 5 * MINUTE_MS);
-    const pastWindow = await classifyStepCompletionPath(
+    const beforeNextLook = await classifyStepCompletionPath(
       deps,
       step,
-      START_MS + EXECUTOR_WAIT_WINDOW_MS + STEP_SCHEDULED_DEAD_EXECUTOR_GRACE_MS,
+      START_MS + EXECUTOR_WAIT_LONGEST_LOOK_MS,
+    );
+    const lookOverdue = await classifyStepCompletionPath(
+      deps,
+      step,
+      START_MS + EXECUTOR_WAIT_LONGEST_LOOK_MS + STEP_SCHEDULED_DEAD_EXECUTOR_GRACE_MS,
     );
 
-    expect(midWait.hasCompletionPath).toBe(true);
-    expect(pastWindow.hasCompletionPath).toBe(false);
+    expect(beforeNextLook.hasCompletionPath).toBe(true);
+    expect(lookOverdue.hasCompletionPath).toBe(false);
     expect(stepStallEarliestReapAtMs(step, START_MS)).toBe(
-      START_MS + STEP_SCHEDULED_DEAD_EXECUTOR_GRACE_MS + EXECUTOR_WAIT_WINDOW_MS,
+      START_MS + STEP_SCHEDULED_DEAD_EXECUTOR_GRACE_MS + EXECUTOR_WAIT_LONGEST_LOOK_MS,
     );
   });
 });
@@ -437,7 +554,7 @@ describe('a workflow operation task whose executor is missing', () => {
     expect(fake.results).toHaveLength(0);
   });
 
-  it('is answered past the window with the FAILED result its executor would have sent', async () => {
+  it('is answered once its looks are spent with the FAILED result its executor would have sent', async () => {
     await dispatchTask();
     const processDueTimers = createProcessDueTimers(makeBindings());
 
@@ -480,12 +597,12 @@ describe('a lane that goes away with work in flight', () => {
     expect(Date.now() - returnsAt).toBeLessThanOrEqual(EXECUTOR_WAIT_LONGEST_LOOK_MS);
   });
 
-  it('asks about a lane that stays down a bounded number of times per step, and fails each once, a window later', async () => {
+  it('asks about a lane that stays down a bounded number of times per step, and fails each once, its looks later', async () => {
     // What dropping the classification used to guard against: carried at once,
     // every step behind a missing executor would have entered its retry budget
     // the moment the lane blinked. Waiting first means a lane that returns
     // costs no retry at all, and one that does not costs each step one failure,
-    // at the window's end, after a dozen looks at most.
+    // once its looks are spent, a dozen or so.
     await parkAll();
     const applyResult = vi.fn();
     const processDueTimers = createProcessDueTimers(makeBindings(applyResult));
@@ -497,15 +614,11 @@ describe('a lane that goes away with work in flight', () => {
     }
 
     const looksPerStep = fake.enqueueAttempts / STEPS;
-    let expectedLooks = 1;
-    for (let t = START_MS; t < START_MS + EXECUTOR_WAIT_WINDOW_MS; expectedLooks += 1) {
-      t = executorWaitNextLookAtMs(START_MS, t);
-    }
-    expect(looksPerStep).toBe(expectedLooks);
+    expect(looksPerStep).toBe(1 + EXECUTOR_WAIT_LOOKS);
     expect(looksPerStep).toBeLessThanOrEqual(15);
     expect(failuresIn(applyResult)).toHaveLength(STEPS);
     expect(new Set(failuresIn(applyResult).map((r) => r.stepExecutionId)).size).toBe(STEPS);
-    expect(failedAt.every((at) => at === START_MS + EXECUTOR_WAIT_WINDOW_MS)).toBe(true);
+    expect(failedAt.every((at) => at === START_MS + awakeSpanMs())).toBe(true);
     expect(failuresIn(applyResult).every((r) => r.error?.retryable === true)).toBe(true);
   });
 });

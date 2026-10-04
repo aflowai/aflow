@@ -722,15 +722,16 @@ export const TimerItemSchema = z
     spaceId: z.string().uuid().optional(),
 
     /**
-     * What an `executor_wait` timer dispatches, whole, and since when it has
-     * waited. The job is carried rather than rebuilt from the fields above
-     * because a dispatch carries more than a timer does — the caller's model,
-     * the idempotency key it was scheduled under — and a job rebuilt without
-     * them is a different job.
+     * What an `executor_wait` timer dispatches, whole, since when it has
+     * waited, and how many of its looks it has taken. The job is carried
+     * rather than rebuilt from the fields above because a dispatch carries
+     * more than a timer does — the caller's model, the idempotency key it was
+     * scheduled under — and a job rebuilt without them is a different job.
      */
     executorWait: z
       .object({
         sinceMs: z.number().int().positive(),
+        looks: z.number().int().nonnegative(),
         job: StepJobMessageSchema,
       })
       .optional(),

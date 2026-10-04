@@ -22,7 +22,7 @@ import {
  * Process a popped workflow-correlated timer. Best-effort: errors are
  * logged, never thrown — a failed re-dispatch is reaped by the
  * completion_pending sweeper. A missing executor is neither: the task waits
- * for it on an `executor_wait` timer, and one that waited out the window is
+ * for it on an `executor_wait` timer, and one that spent its looks is
  * answered with the FAILED result its executor would have sent, so the task's
  * own retry policy reads the outage as transient.
  */
@@ -83,8 +83,14 @@ export async function processWorkflowCorrelatedTimer(
       );
       return;
     }
-    const job = { ...timer.executorWait.job, scheduledAtMs: now };
-    const dispatched = await lookAgainForExecutor(redis, job, timer.executorWait.sinceMs, now);
+    const { job: waitingJob, sinceMs, looks } = timer.executorWait;
+    const job = { ...waitingJob, scheduledAtMs: now };
+    const dispatched = await lookAgainForExecutor(
+      redis,
+      job,
+      { sinceMs, looks, dueAtMs: timer.dueAtMs },
+      now,
+    );
     if (dispatched.kind === 'gave_up') {
       await addStepResult(redis, failedDispatchResult(job, dispatched.failure, now));
     }

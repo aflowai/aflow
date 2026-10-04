@@ -6,8 +6,8 @@
  * open is a decision, and it has to reach the agent as one — `toAgentToolError`
  * turns a non-retryable `permission` error into `signal_blocked`. An executor
  * that is missing is an outage, and no dispatch path fails on one at once: the
- * work waits for its executor (`executorWait.ts`), and only a wait that outlasts
- * its window reaches here as a failure.
+ * work waits for its executor (`executorWait.ts`), and only a wait that spends
+ * its looks reaches here as a failure.
  */
 import { CodeLaneDisabledError, type AflowError, type ErrorClassification } from '@aflow/schemas';
 import { NoExecutorAvailableError } from '@aflow/redis';

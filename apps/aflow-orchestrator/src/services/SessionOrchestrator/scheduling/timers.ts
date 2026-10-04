@@ -48,6 +48,7 @@ import {
   dispatchOrWaitOnExecutor,
   failedDispatchResult,
   lookAgainForExecutor,
+  type ExecutorDispatch,
 } from './executorWait.js';
 
 /**
@@ -816,7 +817,7 @@ export function createProcessDueTimers(bindings: SessionOrchestratorBindings) {
       }
 
       if (timer.reason === 'executor_wait' && timer.executorWait !== undefined) {
-        const { job, sinceMs } = timer.executorWait;
+        const { job, sinceMs, looks } = timer.executorWait;
         const [waitRunState, waitStepState] = await Promise.all([
           getSessionState(redis, timer.tenantId, timer.sessionId),
           getStepState(redis, timer.tenantId, timer.stepExecutionId),
@@ -831,12 +832,37 @@ export function createProcessDueTimers(bindings: SessionOrchestratorBindings) {
           waitStepState.executorWaitSince === sinceMs;
         if (stillWaiting) {
           const now = Date.now();
-          const dispatched = await lookAgainForExecutor(
-            redis,
-            { ...job, scheduledAtMs: now },
-            sinceMs,
-            now,
-          );
+          let dispatched: ExecutorDispatch;
+          try {
+            dispatched = await lookAgainForExecutor(
+              redis,
+              { ...job, scheduledAtMs: now },
+              { sinceMs, looks, dueAtMs: timer.dueAtMs },
+              now,
+            );
+          } catch (error) {
+            // A look re-enters dispatch, so it meets the lane breaker as a
+            // retry does — one opened while the step waited refuses it, and the
+            // refusal goes to the agent rather than back onto the timer.
+            if (!(error instanceof CodeLaneDisabledError)) throw error;
+            const refusal: AflowError = error.toAflowError();
+            logOrchestratorError(
+              `[SessionOrchestrator] Timer re-dispatch refused (${refusal.code}): ${job.stepType}`,
+              error,
+              {
+                tenantId: job.tenantId,
+                sessionId: job.sessionId,
+                stepType: job.stepType,
+                stepExecutionId: job.stepExecutionId,
+              },
+            );
+            await bindings.applyResult({
+              result: failedDispatchResult(job, refusal, now),
+              messageId: `synthetic:dispatch-refused:${job.stepExecutionId}:${String(job.attempt)}`,
+            });
+            await settle(timer);
+            return;
+          }
           if (dispatched.kind === 'gave_up') {
             // Failed through applyResult, as the executor's own FAILED result
             // would be, so the step's retry and onFailure policy decide.
