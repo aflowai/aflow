@@ -631,6 +631,12 @@ No large payloads embedded — use refs with GET /v1/payloads?ref= to hydrate.`,
         }),
         querystring: z.object({
           eventsLimit: z.coerce.number().int().positive().max(500).optional(),
+          walkStepHistory: z
+            .enum(['true', 'false'])
+            .optional()
+            .describe(
+              'Read back past the newest page until every dynamic step has a status, up to 10,000 events. Off by default: one page is read.',
+            ),
           spaceId: z.string().uuid().optional(),
         }),
         response: {
@@ -646,10 +652,11 @@ No large payloads embedded — use refs with GET /v1/payloads?ref= to hydrate.`,
       if (!(await assertSessionSpaceAccess(app, request, reply, { action: 'read', sessionId }))) {
         return;
       }
-      const eventsLimit = request.query.eventsLimit;
+      const { eventsLimit, walkStepHistory } = request.query;
 
       const debug = await sessionService.getSessionDebug(tenant.tenantId, sessionId as SessionId, {
         ...(eventsLimit !== undefined && { eventsLimit }),
+        ...(walkStepHistory === 'true' && { walkStepHistory: true }),
       });
 
       if (!debug) {

@@ -1,7 +1,7 @@
 /**
  * Tool registration — wires all tools to the MCP server.
  *
- * Up to 9 tools (fetch_payload hidden in eager mode). Every space-scoped tool takes
+ * Up to 10 tools (fetch_payload hidden in eager mode). Every space-scoped tool takes
  * an explicit space_id — there is no session default and no set_space:
  *   1. auth_status     — whoami
  *   2. space_list      — list accessible spaces (direct API)
@@ -9,9 +9,10 @@
  *   4. run_operation   — run any operation by ID (via mcp-runner agent)
  *   5. start_session   — start agent sessions / resume conversations
  *   6. fetch_payload   — resolve a payload reference on demand (lazy/auto only)
- *   7. inspect_session — debug summary for any session (direct API)
+ *   7. inspect_session — a session's state, bounded, with why it failed (direct API)
  *   8. watch_session   — follow a session until update/pause/terminal (direct API)
  *   9. watch_run       — follow a workflow run until pause/terminal (direct API)
+ *  10. retry_session   — run a FAILED session again, as the web UI's Retry (direct API)
  *
  * There is no login tool. A session authenticates with the credential its
  * client supplies on the connection.
@@ -25,7 +26,7 @@ import type { SessionRunner } from '../client/FlowRunner.js';
 import type { Watcher } from '../client/Watcher.js';
 import type { SpaceGate } from '../middleware/spaceGate.js';
 import type { McpServerConfig } from '../config.js';
-import type { PayloadResolveMode } from '../client/FlowRunner.js';
+import type { PayloadResolveMode } from '../client/payloads.js';
 import { registerAuthTools } from './auth.js';
 import { registerSpaceTools } from './space.js';
 import { registerCatalogTool } from './catalog.js';
@@ -35,6 +36,7 @@ import { registerFetchPayloadTool } from './fetch-payload.js';
 import { registerInspectRunTool } from './inspect-run.js';
 import { registerWatchSessionTool } from './watch-session.js';
 import { registerWatchRunTool } from './watch-run.js';
+import { registerRetrySessionTool } from './retry-session.js';
 
 export interface ToolDeps {
   authManager: AuthManager;
@@ -99,4 +101,12 @@ export function registerAllTools(server: McpServer, deps: ToolDeps): void {
   registerWatchSessionTool(server, deps.watcher, deps.authManager, deps.spaceGate, deps.getSession);
 
   registerWatchRunTool(server, deps.watcher, deps.authManager, deps.spaceGate, deps.getSession);
+
+  registerRetrySessionTool(
+    server,
+    deps.apiClient,
+    deps.authManager,
+    deps.spaceGate,
+    deps.getSession,
+  );
 }

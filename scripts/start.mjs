@@ -223,7 +223,11 @@ async function setUpMcpWhenHealthy(api) {
   }
   if (stopping) return;
   say('the stack is healthy; giving the MCP server its key (yarn mcp:setup)');
-  const setup = spawn('yarn', ['mcp:setup'], { cwd: REPO, stdio: 'inherit' });
+  // No stdin: a question asked here would sit among the stack's log lines.
+  const setup = spawn('yarn', ['mcp:setup'], {
+    cwd: REPO,
+    stdio: ['ignore', 'inherit', 'inherit'],
+  });
   setup.on('error', () => {
     say(`could not run yarn mcp:setup; ${BY_HAND}`);
   });

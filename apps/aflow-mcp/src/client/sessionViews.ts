@@ -41,10 +41,27 @@ export interface DebugStepEntry {
   stepExecutionId?: string | undefined;
   stepId?: string | undefined;
   operation?: string | undefined;
-  name?: string | undefined;
   status?: string | undefined;
   error?: { message?: string } | undefined;
   durationMs?: number | undefined;
+}
+
+export interface DebugCurrentStep {
+  stepExecutionId?: string | undefined;
+  stepId?: string | undefined;
+  operationId?: string | undefined;
+  status?: string | undefined;
+  errorRef?: string | undefined;
+}
+
+export interface DebugEvent {
+  eventType?: string | undefined;
+  data?: Record<string, unknown> | undefined;
+  metadata?: Record<string, unknown> | undefined;
+  stepExecutionId?: string | undefined;
+  timestamp?: string | undefined;
+  usageSummary?:
+    { totalPromptTokens: number; totalCompletionTokens: number; totalTokens: number } | undefined;
 }
 
 export interface SessionDebugResponse {
@@ -59,88 +76,89 @@ export interface SessionDebugResponse {
     durationMs?: number | undefined;
     outputRef?: string | undefined;
     errorRef?: string | undefined;
+    requiredInput?: SessionRunStatusView['requiredInput'];
+    blockedOn?: SessionRunStatusView['blockedOn'];
   };
-  recentEvents?:
-    | Array<{
-        eventType?: string | undefined;
-        data?: Record<string, unknown> | undefined;
-        metadata?: Record<string, unknown> | undefined;
-        stepExecutionId?: string | undefined;
-        timestamp?: string | undefined;
-      }>
-    | undefined;
-  currentStep?: DebugStepEntry | undefined;
+  /** The newest events, oldest first. */
+  recentEvents?: DebugEvent[] | undefined;
+  currentStep?: DebugCurrentStep | undefined;
   dynamicSteps?: DebugStepEntry[] | undefined;
+  /** How far back the dynamic steps' statuses were read, and whether that placed them all. */
+  stepEvents?: { read: number; complete: boolean } | undefined;
+  hotState?: 'present' | 'expired' | 'corrupt' | undefined;
   runtimeState?: Record<string, unknown> | undefined;
-  agent?: Record<string, { lastDecision?: Record<string, unknown> }> | undefined;
   refs?: Record<string, string | undefined> | undefined;
   warnings?: string[] | undefined;
 }
 
 export interface StepSummary {
   step_id: string;
+  step_execution_id?: string;
   operation?: string;
   status: string;
   duration_ms?: number;
   error?: string;
 }
 
-export function buildStepSummaries(debug: SessionDebugResponse): StepSummary[] {
-  const steps: StepSummary[] = [];
+/** A step the hot state lists that no step event names yet, after a read of the whole history. */
+export const STEP_NOT_SCHEDULED = 'NOT_SCHEDULED';
+/** A step named by the events alone, whose status none of them carries, once the hot state is gone. */
+export const STEP_HOT_STATE_EXPIRED = 'HOT_STATE_EXPIRED';
+/** A step whose status lies further back than the events read for it. */
+export const STEP_STATUS_NOT_READ = 'NOT_READ';
 
+const STATUS_OF_EVENT: Readonly<Record<string, string>> = {
+  StepScheduled: 'SCHEDULED',
+  StepStarted: 'RUNNING',
+  StepSucceeded: 'SUCCEEDED',
+  StepFailed: 'FAILED',
+  StepPaused: 'PAUSED',
+};
+
+function stringField(record: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = record?.[key];
+  return typeof value === 'string' && value !== '' ? value : undefined;
+}
+
+/**
+ * The session's steps, oldest first. From the hot state's step list while it
+ * is held; once it has expired, from the steps the newest events name.
+ */
+export function buildStepSummaries(debug: SessionDebugResponse): StepSummary[] {
   if (debug.dynamicSteps && debug.dynamicSteps.length > 0) {
-    for (const s of debug.dynamicSteps) {
-      const entry: StepSummary = {
-        step_id: s.stepId ?? 'unknown',
-        status: s.status ?? 'unknown',
-      };
+    const unplaced =
+      debug.stepEvents?.complete === true ? STEP_NOT_SCHEDULED : STEP_STATUS_NOT_READ;
+    return debug.dynamicSteps.flatMap((s) => {
+      if (!s.stepId) return [];
+      const entry: StepSummary = { step_id: s.stepId, status: s.status ?? unplaced };
+      if (s.stepExecutionId) entry.step_execution_id = s.stepExecutionId;
       if (s.operation) entry.operation = s.operation;
       if (s.durationMs !== undefined) entry.duration_ms = s.durationMs;
       if (s.error?.message) entry.error = s.error.message;
-      steps.push(entry);
-    }
-    return steps;
+      return [entry];
+    });
   }
 
-  // Fallback: derive from recentEvents
-  if (debug.recentEvents) {
-    const stepMap = new Map<string, StepSummary>();
-    for (const evt of debug.recentEvents) {
-      const stepId = evt.data?.['stepId'] as string | undefined;
-      if (!stepId) continue;
-
-      const existing = stepMap.get(stepId) ?? {
-        step_id: stepId,
-        status: 'unknown',
-      };
-
-      const operation =
-        (evt.metadata?.['operationId'] as string | undefined) ??
-        (evt.data?.['operationId'] as string | undefined);
-      if (operation) existing.operation = operation;
-
-      const et = evt.eventType;
-      if (et === 'StepScheduled') {
-        if (existing.status === 'unknown') existing.status = 'SCHEDULED';
-      } else if (et === 'StepStarted') {
-        if (existing.status === 'unknown' || existing.status === 'SCHEDULED')
-          existing.status = 'RUNNING';
-      } else if (et === 'StepSucceeded') {
-        existing.status = 'SUCCEEDED';
-      } else if (et === 'StepFailed') {
-        existing.status = 'FAILED';
-        const errMsg =
-          (evt.metadata?.['errorMessage'] as string | undefined) ??
-          (evt.data?.['errorMessage'] as string | undefined);
-        if (errMsg) existing.error = errMsg;
-      } else if (et === 'StepPaused') {
-        existing.status = 'PAUSED';
+  const unplaced = debug.hotState === 'expired' ? STEP_HOT_STATE_EXPIRED : STEP_STATUS_NOT_READ;
+  const stepMap = new Map<string, StepSummary>();
+  for (const evt of debug.recentEvents ?? []) {
+    const stepId = stringField(evt.data, 'stepId');
+    if (!stepId) continue;
+    const existing = stepMap.get(stepId) ?? { step_id: stepId, status: unplaced };
+    if (evt.stepExecutionId) existing.step_execution_id = evt.stepExecutionId;
+    const operation =
+      stringField(evt.metadata, 'operationId') ?? stringField(evt.data, 'operationId');
+    if (operation) existing.operation = operation;
+    const status = evt.eventType === undefined ? undefined : STATUS_OF_EVENT[evt.eventType];
+    if (status !== undefined) {
+      existing.status = status;
+      if (status === 'FAILED') {
+        const message =
+          stringField(evt.metadata, 'errorMessage') ?? stringField(evt.data, 'errorMessage');
+        if (message) existing.error = message;
       }
-
-      stepMap.set(stepId, existing);
     }
-    return [...stepMap.values()];
+    stepMap.set(stepId, existing);
   }
-
-  return steps;
+  return [...stepMap.values()];
 }
