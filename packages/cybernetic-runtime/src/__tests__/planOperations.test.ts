@@ -1,7 +1,14 @@
 import { describe, expect, it, beforeEach } from 'vitest';
 import Redis from 'ioredis-mock';
 import type { Redis as RedisType } from 'ioredis';
-import type { PlanNode, PlanNodeCreateInput, PlanNodeStaleErrorDetails } from '@aflow/schemas';
+import {
+  PLAN_NODE_LIST_MAX_LIMIT,
+  PLAN_TREE_DEPTH_LIMIT,
+  PLAN_TREE_WALK_NODE_LIMIT,
+  type PlanNode,
+  type PlanNodeCreateInput,
+  type PlanNodeStaleErrorDetails,
+} from '@aflow/schemas';
 import {
   createPlanNode,
   getPlanNode,
@@ -201,6 +208,61 @@ describe('updatePlanNode — status, note and parent', () => {
     }
     expect(store.nodes.get(root.nodeId)?.revision).toBe(1);
   });
+
+  it('refuses one of two moves that would close a loop between them, and the tree keeps its root', async () => {
+    const a = await created({ title: 'a' });
+    const b = await created({ title: 'b' });
+
+    // Both sessions read their node, then move it under the other at once.
+    const [aUnderB, bUnderA] = await Promise.all([
+      updatePlanNode(session('session-a'), {
+        nodeId: a.nodeId,
+        expectedRevision: 1,
+        parentId: b.nodeId,
+      }),
+      updatePlanNode(session('session-b'), {
+        nodeId: b.nodeId,
+        expectedRevision: 1,
+        parentId: a.nodeId,
+      }),
+    ]);
+
+    expect([aUnderB.ok, bUnderA.ok].sort()).toEqual([false, true]);
+    const refused = aUnderB.ok ? bUnderA : aUnderB;
+    expect(refused).toMatchObject({ ok: false, code: 'PLAN_NODE_CYCLE' });
+    const roots = [...store.nodes.values()].filter((n) => n.parentId === null);
+    expect(roots).toHaveLength(1);
+    const tree = await listPlanNodes({ store, spaceId: SPACE }, {});
+    expect(tree.ok && tree.nodes.map((n) => n.title).sort()).toEqual(['a', 'b']);
+  });
+
+  it(`refuses a parent ${String(PLAN_TREE_DEPTH_LIMIT)} levels below its root, by name`, async () => {
+    const chain = [await created({ title: 'level 0' })];
+    for (let depth = 1; depth <= PLAN_TREE_DEPTH_LIMIT; depth++) {
+      chain.push(
+        await created({ parentId: chain[depth - 1]!.nodeId, title: `level ${String(depth)}` }),
+      );
+    }
+    const loose = await created({ title: 'loose' });
+
+    const tooDeep = await updatePlanNode(session('session-a'), {
+      nodeId: loose.nodeId,
+      expectedRevision: 1,
+      parentId: chain[PLAN_TREE_DEPTH_LIMIT]!.nodeId,
+    });
+    expect(tooDeep).toMatchObject({
+      ok: false,
+      code: 'PLAN_NODE_TOO_DEEP',
+      details: { depthLimit: PLAN_TREE_DEPTH_LIMIT },
+    });
+
+    const deepest = await updatePlanNode(session('session-a'), {
+      nodeId: loose.nodeId,
+      expectedRevision: 1,
+      parentId: chain[PLAN_TREE_DEPTH_LIMIT - 1]!.nodeId,
+    });
+    expect(deepest).toMatchObject({ ok: true, node: { revision: 2 } });
+  });
 });
 
 describe('plan writes invalidate the attention block', () => {
@@ -272,8 +334,67 @@ describe('getPlanNode / listPlanNodes', () => {
     expect(subtree.ok && subtree.nodes.map((n) => n.title)).toEqual(['one.a', 'one.a.i']);
 
     const bounded = await listPlanNodes({ store, spaceId: SPACE }, { limit: 2 });
-    expect(bounded).toMatchObject({ ok: true, truncated: true });
+    expect(bounded).toMatchObject({ ok: true, truncated: { bound: 'limit', value: 2 } });
     expect(bounded.ok && bounded.nodes).toHaveLength(2);
+    expect(open).not.toHaveProperty('truncated');
+  });
+
+  it('finds a root by its key past the most nodes a walk reads, and names that bound', async () => {
+    for (let i = 0; i < PLAN_TREE_WALK_NODE_LIMIT; i++) {
+      await store.insert(SPACE, {
+        parentId: null,
+        kind: 'execute',
+        title: `filler ${String(i)}`,
+        goal: NODE.goal,
+        criteria: NODE.criteria,
+        note: null,
+        position: i,
+        createdBy: null,
+      });
+    }
+    const last = await created({ title: 'last', position: PLAN_TREE_WALK_NODE_LIMIT });
+    await created({ parentId: last.nodeId, title: 'last.a' });
+
+    const whole = await listPlanNodes({ store, spaceId: SPACE }, {});
+    expect(whole).toMatchObject({
+      ok: true,
+      truncated: { bound: 'nodes', value: PLAN_TREE_WALK_NODE_LIMIT },
+    });
+
+    const subtree = await listPlanNodes({ store, spaceId: SPACE }, { rootId: last.nodeId });
+    expect(subtree.ok && subtree.nodes.map((n) => n.title)).toEqual(['last', 'last.a']);
+    expect(subtree).not.toHaveProperty('truncated');
+  });
+
+  it(`names the depth bound when nodes sit more than ${String(PLAN_TREE_DEPTH_LIMIT)} levels down`, async () => {
+    let parent = await created({ title: 'level 0' });
+    const root = parent;
+    for (let depth = 1; depth <= PLAN_TREE_DEPTH_LIMIT + 1; depth++) {
+      parent = await created({ parentId: parent.nodeId, title: `level ${String(depth)}` });
+    }
+
+    const result = await listPlanNodes(
+      { store, spaceId: SPACE },
+      { rootId: root.nodeId, limit: PLAN_NODE_LIST_MAX_LIMIT },
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      truncated: { bound: 'depth', value: PLAN_TREE_DEPTH_LIMIT },
+    });
+    expect(result.ok && result.nodes).toHaveLength(PLAN_TREE_DEPTH_LIMIT + 1);
+  });
+
+  it('orders siblings sharing a position the same way in get and in list', async () => {
+    const root = await created();
+    for (const title of ['x', 'y', 'z']) {
+      await created({ parentId: root.nodeId, title, position: 0 });
+    }
+
+    const got = await getPlanNode({ store, spaceId: SPACE }, root.nodeId);
+    const listed = await listPlanNodes({ store, spaceId: SPACE }, { rootId: root.nodeId });
+    const byId = (got.ok ? got.children : []).map((c) => c.nodeId);
+    expect(byId).toEqual([...byId].sort());
+    expect(listed.ok && listed.nodes.slice(1).map((n) => n.nodeId)).toEqual(byId);
   });
 
   it('answers an unknown root as not found', async () => {

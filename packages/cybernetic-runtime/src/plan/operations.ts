@@ -10,6 +10,8 @@ import {
   isClosedPlanNodeStatus,
   PLAN_NODE_CHILDREN_LIMIT,
   PLAN_NODE_LIST_DEFAULT_LIMIT,
+  PLAN_TREE_DEPTH_LIMIT,
+  PLAN_TREE_WALK_NODE_LIMIT,
   OPEN_PLAN_NODE_STATUSES,
   type PlanNode,
   type PlanNodeCreateInput,
@@ -20,13 +22,17 @@ import {
   type PlanNodeUpdateInput,
 } from '@aflow/schemas';
 import { bumpAttentionGeneration } from '../attentionCache.js';
-import { orderPlanTree } from './tree.js';
-import type { PlanNodePatch, PlanNodeStore } from './store.js';
+import { orderPlanTree, type PlanTreeWalkBounds } from './tree.js';
+import type { PlanNodeMove, PlanNodePatch, PlanNodeStore } from './store.js';
 
-/** The most nodes one read of a space's plan considers; past it, reads say they are truncated. */
-export const PLAN_NODE_SCAN_LIMIT = 2000;
+/** How far any read of a space's plan walks the tree. */
+export const PLAN_TREE_WALK_BOUNDS: PlanTreeWalkBounds = {
+  maxDepth: PLAN_TREE_DEPTH_LIMIT,
+  maxNodes: PLAN_TREE_WALK_NODE_LIMIT,
+};
 
-export type PlanOpErrorCode = 'PLAN_NODE_NOT_FOUND' | 'PLAN_NODE_STALE' | 'PLAN_NODE_CYCLE';
+export type PlanOpErrorCode =
+  'PLAN_NODE_NOT_FOUND' | 'PLAN_NODE_STALE' | 'PLAN_NODE_CYCLE' | 'PLAN_NODE_TOO_DEEP';
 
 export interface PlanOpError {
   ok: false;
@@ -80,6 +86,31 @@ function cycle(nodeId: string, parentId: string): PlanOpError {
   };
 }
 
+function tooDeep(nodeId: string, parentId: string): PlanOpError {
+  return {
+    ok: false,
+    code: 'PLAN_NODE_TOO_DEEP',
+    message:
+      `Plan node "${parentId}" sits ${String(PLAN_TREE_DEPTH_LIMIT)} or more levels below its root, so ` +
+      `"${nodeId}" cannot go under it. Nothing was written; choose a parent nearer the root.`,
+    details: { nodeId, parentId, depthLimit: PLAN_TREE_DEPTH_LIMIT },
+  };
+}
+
+function moveRefusal(move: PlanNodeMove, nodeId: string, parentId: string): PlanOpError | null {
+  switch (move.outcome) {
+    case 'cycle':
+      return cycle(nodeId, parentId);
+    case 'too_deep':
+      return tooDeep(nodeId, parentId);
+    case 'parent_not_found':
+      return notFound(parentId, 'parent');
+    case 'moved':
+    case 'stale':
+      return null;
+  }
+}
+
 async function written<T>(ctx: PlanWriteContext, value: T): Promise<T> {
   await bumpAttentionGeneration(ctx.redis, ctx.tenantId, ctx.spaceId);
   return value;
@@ -115,17 +146,6 @@ export async function createPlanNode(
 // plan.node.update — compare-and-set on the node's revision (Plan 322 D6)
 // ============================================================================
 
-/** True when `candidateParentId` is `nodeId` or one of its descendants. */
-async function wouldCycle(
-  ctx: PlanReadContext,
-  nodeId: string,
-  candidateParentId: string,
-): Promise<boolean> {
-  const all = await ctx.store.scan(ctx.spaceId, { limit: PLAN_NODE_SCAN_LIMIT });
-  const subtree = orderPlanTree(all, { rootId: nodeId });
-  return subtree.some((placed) => placed.node.nodeId === candidateParentId);
-}
-
 export async function updatePlanNode(
   ctx: PlanWriteContext,
   input: PlanNodeUpdateInput,
@@ -147,26 +167,27 @@ export async function updatePlanNode(
     else if (current.closedAt === undefined) patch.closedAt = new Date();
   }
 
-  if (input.parentId !== undefined && input.parentId !== current.parentId) {
-    if (input.parentId !== null) {
-      if (input.parentId === current.nodeId) return cycle(current.nodeId, input.parentId);
-      if (!(await ctx.store.find(ctx.spaceId, input.parentId))) {
-        return notFound(input.parentId, 'parent');
-      }
-      if (await wouldCycle(ctx, current.nodeId, input.parentId)) {
-        return cycle(current.nodeId, input.parentId);
-      }
-    }
-    patch.parentId = input.parentId;
-    patch.position ??= await ctx.store.nextPosition(ctx.spaceId, input.parentId);
+  const parentId = input.parentId;
+  let node: PlanNode | null;
+  if (parentId !== undefined && parentId !== current.parentId) {
+    const move = await ctx.store.moveAtRevision(
+      ctx.spaceId,
+      input.nodeId,
+      input.expectedRevision,
+      parentId,
+      patch,
+    );
+    const refusal = parentId === null ? null : moveRefusal(move, input.nodeId, parentId);
+    if (refusal) return refusal;
+    node = move.outcome === 'moved' ? move.node : null;
+  } else {
+    node = await ctx.store.updateAtRevision(
+      ctx.spaceId,
+      input.nodeId,
+      input.expectedRevision,
+      patch,
+    );
   }
-
-  const node = await ctx.store.updateAtRevision(
-    ctx.spaceId,
-    input.nodeId,
-    input.expectedRevision,
-    patch,
-  );
   if (!node) {
     // Another session wrote between the read and this write.
     const now = await ctx.store.find(ctx.spaceId, input.nodeId);
@@ -200,17 +221,22 @@ export async function listPlanNodes(
   const statuses = new Set(input.status ?? OPEN_PLAN_NODE_STATUSES);
   const limit = input.limit ?? PLAN_NODE_LIST_DEFAULT_LIMIT;
 
-  const all = await ctx.store.scan(ctx.spaceId, { limit: PLAN_NODE_SCAN_LIMIT });
-  if (input.rootId !== undefined && !all.some((n) => n.nodeId === input.rootId)) {
-    return notFound(input.rootId, 'root');
+  const start = input.rootId !== undefined ? { rootId: input.rootId } : {};
+  if (start.rootId !== undefined && !(await ctx.store.find(ctx.spaceId, start.rootId))) {
+    return notFound(start.rootId, 'root');
   }
-  const matching = orderPlanTree(all, input.rootId !== undefined ? { rootId: input.rootId } : {})
+  const walk = await ctx.store.walk(ctx.spaceId, { ...start, ...PLAN_TREE_WALK_BOUNDS });
+  const matching = orderPlanTree(walk.nodes, start)
     .map((placed) => placed.node)
     .filter((node) => statuses.has(node.status));
 
+  // A bound the walk met hides nodes whatever `limit` is, so it is the one to name.
+  const truncated =
+    walk.truncated ??
+    (matching.length > limit ? { bound: 'limit' as const, value: limit } : undefined);
   return {
     ok: true,
     nodes: matching.slice(0, limit),
-    truncated: matching.length > limit || all.length >= PLAN_NODE_SCAN_LIMIT,
+    ...(truncated !== undefined ? { truncated } : {}),
   };
 }

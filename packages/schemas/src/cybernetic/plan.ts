@@ -25,6 +25,13 @@ export function isClosedPlanNodeStatus(status: PlanNodeStatus): boolean {
   return CLOSED_PLAN_NODE_STATUSES.includes(status);
 }
 
+/**
+ * The most levels a walk of the tree reads: below where a read begins, and
+ * above a node another is moved under. A move reads its new parent's
+ * ancestors one locked row at a time, so this is what bounds a move's cost.
+ */
+export const PLAN_TREE_DEPTH_LIMIT = 64;
+
 /** Storage ceilings: these fields hold model-authored prose a person reads. */
 export const PLAN_NODE_TITLE_MAX_CHARS = 500;
 export const PLAN_NODE_PROSE_MAX_CHARS = 8000;

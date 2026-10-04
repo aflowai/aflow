@@ -18,6 +18,8 @@ export const PLAN_NODE_LIST_DEFAULT_LIMIT = 50;
 export const PLAN_NODE_LIST_MAX_LIMIT = 200;
 /** Children `plan.node.get` returns; `plan.node.list` with `rootId` reaches the rest. */
 export const PLAN_NODE_CHILDREN_LIMIT = 100;
+/** The most nodes one walk of the tree reads, whatever `limit` then returns of them. */
+export const PLAN_TREE_WALK_NODE_LIMIT = 2000;
 
 // ============================================================================
 // plan.node.create / plan.node.update
@@ -77,10 +79,26 @@ export const PlanNodeListInputSchema = z
   .strict();
 export type PlanNodeListInput = z.infer<typeof PlanNodeListInputSchema>;
 
+export const PlanTreeBoundSchema = z.enum(['limit', 'depth', 'nodes']);
+export type PlanTreeBound = z.infer<typeof PlanTreeBoundSchema>;
+
+export const PlanNodeListTruncationSchema = z
+  .object({
+    bound: PlanTreeBoundSchema.describe(
+      '`limit`: more nodes match than `limit` returned. `depth`: nodes sit more than `value` ' +
+        'levels below where the list began — list again with `rootId` nearer them. `nodes`: ' +
+        'the read reached its ceiling of `value` nodes — narrow it with `rootId`.',
+    ),
+    value: z.number().int().min(1),
+  })
+  .strict();
+export type PlanNodeListTruncation = z.infer<typeof PlanNodeListTruncationSchema>;
+
 export const PlanNodeListOutputSchema = z.object({
   /** Parents before their children, siblings by position. */
   nodes: z.array(PlanNodeSummarySchema),
-  /** True when more nodes match than `limit` returned. */
-  truncated: z.boolean(),
+  truncated: PlanNodeListTruncationSchema.optional().describe(
+    'Absent when every matching node is here; otherwise the bound that cut the list short.',
+  ),
 });
 export type PlanNodeListOutput = z.infer<typeof PlanNodeListOutputSchema>;

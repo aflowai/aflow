@@ -377,6 +377,17 @@ export function isPlanOperation(operationId: string): boolean {
   return operationId === 'plan' || operationId.startsWith('plan.');
 }
 
+/**
+ * Operations that never reach a Runner, through any channel: a delegation's
+ * `runner_tools`, a capability grant's direct or promotable tier, or the
+ * surface a Runner's turn is handed. Every Runner exclusion asks this rather
+ * than one plane's own predicate, so a plane added here is excluded from all
+ * of them at once.
+ */
+export function isRunnerExcludedOperation(operationId: string): boolean {
+  return isEvalPlaneOperation(operationId) || isPlanOperation(operationId);
+}
+
 // ============================================================================
 // Action Label Lookup (lightweight, for client-side activity display)
 // ============================================================================

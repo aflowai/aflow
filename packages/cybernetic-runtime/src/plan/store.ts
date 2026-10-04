@@ -1,14 +1,23 @@
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { and, asc, eq, inArray, isNull, sql, type SQL } from 'drizzle-orm';
-import type {
-  PlanNode,
-  PlanNodeKind,
-  PlanNodeStatus,
-  PlanNodeSummary,
-  TenantId,
+import {
+  PLAN_TREE_DEPTH_LIMIT,
+  type PlanNode,
+  type PlanNodeKind,
+  type PlanNodeStatus,
+  type PlanNodeSummary,
+  type TenantId,
 } from '@aflow/schemas';
 import { createTenantContext, planNodes, withTenantSchema } from '@aflow/database';
 import type { PlanNodeRow } from '@aflow/database';
+import {
+  checkNewParent,
+  PLAN_SIBLING_ORDER,
+  walkPlanTree,
+  type PlanTreeLevel,
+  type PlanTreeWalk,
+  type PlanTreeWalkBounds,
+} from './tree.js';
 
 /** How much of the note's first line a summary carries. */
 export const PLAN_NOTE_HEAD_MAX_CHARS = 200;
@@ -24,16 +33,33 @@ export interface NewPlanNode {
   createdBy: string | null;
 }
 
-/** The columns an update writes; `revision` and `updatedAt` move on their own. */
+/**
+ * The columns an update writes; `revision` and `updatedAt` move on their own.
+ * A parent is not among them: only `moveAtRevision` changes one.
+ */
 export interface PlanNodePatch {
   status?: PlanNodeStatus;
   note?: string | null;
   criteria?: string;
   title?: string;
-  parentId?: string | null;
   position?: number;
   outcome?: string;
   closedAt?: Date | null;
+}
+
+export type PlanNodeMove =
+  | { outcome: 'moved'; node: PlanNode }
+  /** Not at the expected revision, or gone. */
+  | { outcome: 'stale' }
+  | { outcome: 'parent_not_found' }
+  | { outcome: 'cycle' }
+  | { outcome: 'too_deep' };
+
+export interface PlanTreeWalkOptions extends PlanTreeWalkBounds {
+  /** Walk from this node rather than from the roots. */
+  rootId?: string;
+  /** Walk through only these statuses: a node of another, and all below it, is not read. */
+  statuses?: readonly PlanNodeStatus[];
 }
 
 /**
@@ -50,6 +76,21 @@ export interface PlanNodeStore {
     expectedRevision: number,
     patch: PlanNodePatch,
   ): Promise<PlanNode | null>;
+  /**
+   * Puts the node under `parentId` (null: a root) and writes `patch`, while it
+   * is still at `expectedRevision` — after the last of its new siblings unless
+   * the patch names a position. The check that the new parent is not the node
+   * or under it, and the write, are one transaction that holds the rows from
+   * the new parent up to its root, so no concurrent move can close a loop
+   * through them.
+   */
+  moveAtRevision(
+    spaceId: string,
+    nodeId: string,
+    expectedRevision: number,
+    parentId: string | null,
+    patch: PlanNodePatch,
+  ): Promise<PlanNodeMove>;
   /** The position after the last sibling under `parentId` (null: the roots). */
   nextPosition(spaceId: string, parentId: string | null): Promise<number>;
   listChildren(
@@ -57,11 +98,23 @@ export interface PlanNodeStore {
     parentId: string,
     limit: number,
   ): Promise<{ children: PlanNodeSummary[]; total: number }>;
-  /** The space's nodes as summaries, at most `limit`, optionally only these statuses. */
-  scan(
-    spaceId: string,
-    opts: { statuses?: readonly PlanNodeStatus[]; limit: number },
-  ): Promise<PlanNodeSummary[]>;
+  walk(spaceId: string, opts: PlanTreeWalkOptions): Promise<PlanTreeWalk>;
+}
+
+/**
+ * Attempts at a move. Two moves that would close a loop between them each
+ * hold a row the other's walk needs; Postgres ends one as a deadlock, and its
+ * next attempt reads the other's committed move and refuses the cycle by name.
+ */
+export const PLAN_MOVE_ATTEMPTS = 3;
+
+const DEADLOCK_DETECTED = '40P01';
+
+function isDeadlock(err: unknown): boolean {
+  for (let cause: unknown = err; cause instanceof Error; cause = cause.cause) {
+    if ((cause as { code?: unknown }).code === DEADLOCK_DETECTED) return true;
+  }
+  return false;
 }
 
 export function rowToPlanNode(row: PlanNodeRow): PlanNode {
@@ -137,10 +190,96 @@ function parentIs(parentId: string | null): SQL {
   return parentId === null ? isNull(planNodes.parentId) : eq(planNodes.parentId, parentId);
 }
 
+const siblingOrder = (): SQL[] => {
+  const columns = { position: planNodes.position, nodeId: planNodes.id };
+  return PLAN_SIBLING_ORDER.map((key) => asc(columns[key]));
+};
+
+function levelIs(level: PlanTreeLevel): SQL {
+  switch (level.kind) {
+    case 'roots':
+      return isNull(planNodes.parentId);
+    case 'node':
+      return eq(planNodes.id, level.nodeId);
+    case 'children':
+      return inArray(planNodes.parentId, [...level.parentIds]);
+  }
+}
+
+async function nextPositionIn(
+  tx: PostgresJsDatabase,
+  spaceId: string,
+  parentId: string | null,
+): Promise<number> {
+  const [row] = await tx
+    .select({ next: sql<number>`coalesce(max(${planNodes.position}) + 1, 0)::int` })
+    .from(planNodes)
+    .where(and(eq(planNodes.spaceId, spaceId), parentIs(parentId)));
+  return row?.next ?? 0;
+}
+
+async function writeAtRevision(
+  tx: PostgresJsDatabase,
+  spaceId: string,
+  nodeId: string,
+  expectedRevision: number,
+  columns: PlanNodePatch & { parentId?: string | null },
+): Promise<PlanNode | null> {
+  const [row] = await tx
+    .update(planNodes)
+    .set({
+      ...columns,
+      revision: sql`${planNodes.revision} + 1`,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(planNodes.spaceId, spaceId),
+        eq(planNodes.id, nodeId),
+        eq(planNodes.revision, expectedRevision),
+      ),
+    )
+    .returning();
+  return row ? rowToPlanNode(row) : null;
+}
+
 export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): PlanNodeStore {
   const tenantCtx = createTenantContext(tenantId as TenantId);
   const inTenant = <T>(fn: (tx: PostgresJsDatabase) => Promise<T>): Promise<T> =>
     withTenantSchema(db, tenantCtx, fn);
+
+  const moveOnce = (
+    spaceId: string,
+    nodeId: string,
+    expectedRevision: number,
+    parentId: string | null,
+    patch: PlanNodePatch,
+  ): Promise<PlanNodeMove> =>
+    inTenant(async (tx) => {
+      if (parentId !== null) {
+        const check = await checkNewParent(
+          nodeId,
+          parentId,
+          async (id) => {
+            const [row] = await tx
+              .select({ parentId: planNodes.parentId })
+              .from(planNodes)
+              .where(and(eq(planNodes.spaceId, spaceId), eq(planNodes.id, id)))
+              .for('update');
+            return row ? row.parentId : undefined;
+          },
+          PLAN_TREE_DEPTH_LIMIT,
+        );
+        if (check !== 'clear') return { outcome: check };
+      }
+      const position = patch.position ?? (await nextPositionIn(tx, spaceId, parentId));
+      const node = await writeAtRevision(tx, spaceId, nodeId, expectedRevision, {
+        ...patch,
+        parentId,
+        position,
+      });
+      return node ? { outcome: 'moved', node } : { outcome: 'stale' };
+    });
 
   return {
     insert: (spaceId, values) =>
@@ -164,33 +303,19 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
       }),
 
     updateAtRevision: (spaceId, nodeId, expectedRevision, patch) =>
-      inTenant(async (tx) => {
-        const [row] = await tx
-          .update(planNodes)
-          .set({
-            ...patch,
-            revision: sql`${planNodes.revision} + 1`,
-            updatedAt: new Date(),
-          })
-          .where(
-            and(
-              eq(planNodes.spaceId, spaceId),
-              eq(planNodes.id, nodeId),
-              eq(planNodes.revision, expectedRevision),
-            ),
-          )
-          .returning();
-        return row ? rowToPlanNode(row) : null;
-      }),
+      inTenant((tx) => writeAtRevision(tx, spaceId, nodeId, expectedRevision, patch)),
 
-    nextPosition: (spaceId, parentId) =>
-      inTenant(async (tx) => {
-        const [row] = await tx
-          .select({ next: sql<number>`coalesce(max(${planNodes.position}) + 1, 0)::int` })
-          .from(planNodes)
-          .where(and(eq(planNodes.spaceId, spaceId), parentIs(parentId)));
-        return row?.next ?? 0;
-      }),
+    moveAtRevision: async (spaceId, nodeId, expectedRevision, parentId, patch) => {
+      for (let attempt = 1; ; attempt++) {
+        try {
+          return await moveOnce(spaceId, nodeId, expectedRevision, parentId, patch);
+        } catch (err) {
+          if (attempt >= PLAN_MOVE_ATTEMPTS || !isDeadlock(err)) throw err;
+        }
+      }
+    },
+
+    nextPosition: (spaceId, parentId) => inTenant((tx) => nextPositionIn(tx, spaceId, parentId)),
 
     listChildren: (spaceId, parentId, limit) =>
       inTenant(async (tx) => {
@@ -199,7 +324,7 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
           .select(summaryColumns())
           .from(planNodes)
           .where(where)
-          .orderBy(asc(planNodes.position), asc(planNodes.createdAt))
+          .orderBy(...siblingOrder())
           .limit(limit);
         const [count] = await tx
           .select({ total: sql<number>`count(*)::int` })
@@ -208,22 +333,29 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
         return { children: rows.map(summaryRowToSummary), total: count?.total ?? 0 };
       }),
 
-    scan: (spaceId, opts) =>
-      inTenant(async (tx) => {
-        const rows = await tx
-          .select(summaryColumns())
-          .from(planNodes)
-          .where(
-            and(
-              eq(planNodes.spaceId, spaceId),
-              opts.statuses !== undefined
-                ? inArray(planNodes.status, [...opts.statuses])
-                : undefined,
-            ),
-          )
-          .orderBy(asc(planNodes.position), asc(planNodes.createdAt))
-          .limit(opts.limit);
-        return rows.map(summaryRowToSummary);
-      }),
+    walk: (spaceId, opts) =>
+      inTenant((tx) =>
+        walkPlanTree(
+          async (level, limit) => {
+            const rows = await tx
+              .select(summaryColumns())
+              .from(planNodes)
+              .where(
+                and(
+                  eq(planNodes.spaceId, spaceId),
+                  levelIs(level),
+                  opts.statuses !== undefined
+                    ? inArray(planNodes.status, [...opts.statuses])
+                    : undefined,
+                ),
+              )
+              .orderBy(...siblingOrder())
+              .limit(limit);
+            return rows.map(summaryRowToSummary);
+          },
+          opts.rootId !== undefined ? { rootId: opts.rootId } : {},
+          opts,
+        ),
+      ),
   };
 }

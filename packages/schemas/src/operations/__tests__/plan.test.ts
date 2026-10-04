@@ -4,6 +4,7 @@ import {
   getOperation,
   getOperationsByStepType,
   isPlanOperation,
+  isRunnerExcludedOperation,
   PLAN_NODE_DONE_NEEDS_OUTCOME_MESSAGE,
   PLAN_NODE_PROSE_MAX_CHARS,
   PLAN_NODE_UPDATE_EMPTY_MESSAGE,
@@ -64,6 +65,18 @@ describe('plan.node operations (Plan 322 P0)', () => {
     expect(isPlanOperation('planner.node.get')).toBe(false);
     expect(isPlanOperation('workflow.plan.get')).toBe(false);
     expect(isPlanOperation('memory.store.get')).toBe(false);
+  });
+
+  it('keeps every plan and eval-plane operation from a Runner, and nothing else', () => {
+    const excluded = [
+      ...getOperationsByStepType('plan').keys(),
+      'plan.node.link',
+      'eval.batch.run',
+    ];
+    for (const id of excluded) expect(isRunnerExcludedOperation(id), id).toBe(true);
+    for (const id of ['eval.case.propose', 'planner.node.get', 'memory.store.get']) {
+      expect(isRunnerExcludedOperation(id), id).toBe(false);
+    }
   });
 });
 

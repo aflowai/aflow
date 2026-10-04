@@ -1,5 +1,5 @@
 import { OPEN_PLAN_NODE_STATUSES, type PlanNodeKind, type PlanNodeStatus } from '@aflow/schemas';
-import { PLAN_NODE_SCAN_LIMIT } from './operations.js';
+import { PLAN_TREE_WALK_BOUNDS } from './operations.js';
 import type { PlanNodeStore } from './store.js';
 import { orderPlanTree } from './tree.js';
 
@@ -32,11 +32,11 @@ export async function loadActivePlanTree(
   store: PlanNodeStore,
   spaceId: string,
 ): Promise<PlanAttention | undefined> {
-  const open = await store.scan(spaceId, {
+  const open = await store.walk(spaceId, {
     statuses: OPEN_PLAN_NODE_STATUSES,
-    limit: PLAN_NODE_SCAN_LIMIT,
+    ...PLAN_TREE_WALK_BOUNDS,
   });
-  const tree = orderPlanTree(open);
+  const tree = orderPlanTree(open.nodes);
   if (tree.length === 0) return undefined;
   return {
     nodes: tree.slice(0, PLAN_ATTENTION_NODE_LIMIT).map(({ node, depth }) => ({

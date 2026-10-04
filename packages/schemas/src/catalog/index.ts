@@ -26,6 +26,7 @@ export {
   isPrivilegedOperation,
   isEvalPlaneOperation,
   isPlanOperation,
+  isRunnerExcludedOperation,
   getOperationCapability,
   deriveCapabilityGroups,
   getDerivedCapabilityGroup,

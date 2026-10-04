@@ -187,7 +187,7 @@ describe('plan.node.create / get / list', () => {
   });
 
   it('lists with the schema’s defaults applied', async () => {
-    mockListPlanNodes.mockResolvedValue({ ok: true, nodes: [], truncated: false });
+    mockListPlanNodes.mockResolvedValue({ ok: true, nodes: [] });
     await handlePlanNodeInline(makeArgs('plan.node.list', {}));
     expect(mockListPlanNodes.mock.calls[0]![1]).toMatchObject({
       status: ['active', 'waiting', 'blocked'],

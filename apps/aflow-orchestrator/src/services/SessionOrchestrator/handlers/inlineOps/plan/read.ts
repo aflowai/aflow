@@ -36,6 +36,9 @@ export async function handlePlanNodeList(
     await emitPlanError(args, result, startTime);
     return;
   }
-  const output: PlanNodeListOutput = { nodes: result.nodes, truncated: result.truncated };
+  const output: PlanNodeListOutput = {
+    nodes: result.nodes,
+    ...(result.truncated !== undefined ? { truncated: result.truncated } : {}),
+  };
   await emitStepSuccess(args, output as unknown as Record<string, unknown>, startTime);
 }
