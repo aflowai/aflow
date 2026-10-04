@@ -7,7 +7,10 @@ import {
   serializeForHashWithDeletes,
   deserializeFromHash,
 } from './serialization.js';
-import { syncStepStallCandidateForStep } from './stepStallCandidates.js';
+import {
+  stepStallCandidateForScript,
+  syncStepStallCandidateForStep,
+} from './stepStallCandidates.js';
 // ============================================================================
 // Step State Operations
 // ============================================================================
@@ -124,4 +127,59 @@ export async function updateStepState(
   pipeline.expire(key, ttlSeconds);
   syncStepStallCandidateForStep(pipeline, tenantId, updates.sessionId, updates, Date.now());
   await pipeline.exec();
+}
+
+const CAS_STEP_STATE_LUA = `
+if redis.call('HGET', KEYS[1], 'status') ~= ARGV[1] then return 0 end
+if redis.call('HGET', KEYS[1], 'attempt') ~= ARGV[2] then return 0 end
+local setArgCount = tonumber(ARGV[6])
+if setArgCount > 0 then
+  redis.call('HSET', KEYS[1], unpack(ARGV, 7, 6 + setArgCount))
+end
+if #ARGV > 6 + setArgCount then
+  redis.call('HDEL', KEYS[1], unpack(ARGV, 7 + setArgCount))
+end
+redis.call('EXPIRE', KEYS[1], tonumber(ARGV[3]))
+if ARGV[4] ~= '' then
+  redis.call('ZADD', KEYS[2], tonumber(ARGV[4]), ARGV[5])
+end
+return 1
+`;
+
+/**
+ * `updateStepState`, applied only while the step still holds `expected`'s
+ * status and attempt. Returns false, with nothing written, once it does not.
+ *
+ * For a writer that read the step and decided from what it read: a cancel,
+ * retry or result landing between that read and this write is authoritative,
+ * and a last-write-wins patch would put the step back to what it was. The
+ * stall candidate is armed inside the same script, and only when the write
+ * lands.
+ */
+export async function casUpdateStepState(
+  redis: Redis,
+  tenantId: string,
+  stepExecutionId: string,
+  expected: Pick<StepHotState, 'status' | 'attempt'>,
+  updates: Partial<StepHotState> & { sessionId: string },
+  ttlSeconds: number = HOT_STATE_TTL_SECONDS,
+): Promise<boolean> {
+  const { toSet, toDelete } = serializeForHashWithDeletes(updates);
+  const setArgs = Object.entries(toSet).flat();
+  const stall = stepStallCandidateForScript(tenantId, updates.sessionId, updates, Date.now());
+  const written = await redis.eval(
+    CAS_STEP_STATE_LUA,
+    2,
+    StreamKeys.stepStateKey(tenantId, stepExecutionId),
+    stall.key,
+    expected.status,
+    String(expected.attempt),
+    String(ttlSeconds),
+    stall.dueAtMs === null ? '' : String(stall.dueAtMs),
+    stall.member,
+    String(setArgs.length),
+    ...setArgs,
+    ...toDelete,
+  );
+  return written === 1;
 }

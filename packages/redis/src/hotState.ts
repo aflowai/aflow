@@ -93,6 +93,7 @@ export {
   setStepStateIfAbsent,
   getStepState,
   updateStepState,
+  casUpdateStepState,
 } from './hotState/step.js';
 
 export { markSessionDirty } from './hotState/dirty.js';

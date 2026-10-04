@@ -174,6 +174,7 @@ export {
   setStepStateIfAbsent,
   getStepState,
   updateStepState,
+  casUpdateStepState,
   markSessionDirty,
   appendSessionEvent,
   readSessionEvents,

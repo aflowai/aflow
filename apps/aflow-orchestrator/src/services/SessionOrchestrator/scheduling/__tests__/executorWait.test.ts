@@ -31,6 +31,10 @@ const fake = vi.hoisted(() => ({
   enqueueError: undefined as Error | undefined,
   /** Thrown by the next result write in place of its outcome, then cleared. */
   resultError: undefined as Error | undefined,
+  /** Thrown by the next session event append in place of its outcome, then cleared. */
+  eventError: undefined as Error | undefined,
+  /** Run once, just before the next step compare-and-set compares, then cleared. */
+  beforeStepCas: undefined as (() => void) | undefined,
   /** The environment the lane breaker reads. */
   laneEnv: {} as Record<string, string | undefined>,
   /** Sessions the step-stall index has due. */
@@ -55,6 +59,16 @@ const fake = vi.hoisted(() => ({
     attemptCount: number;
   }>,
 }));
+
+/** Applies a step-state patch as `updateStepState` does: an undefined field is removed. */
+function patchStep(id: string, updates: Record<string, unknown>): void {
+  const step = { ...(fake.steps.get(id) ?? {}) };
+  for (const [field, value] of Object.entries(updates)) {
+    if (value === undefined) delete step[field];
+    else step[field] = value;
+  }
+  fake.steps.set(id, step);
+}
 
 vi.mock('@aflow/cybernetic-runtime', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@aflow/cybernetic-runtime')>();
@@ -127,13 +141,27 @@ vi.mock('@aflow/redis', async (importOriginal) => {
     }),
     updateStepState: vi.fn(
       (_redis: unknown, _tenantId: string, id: string, updates: Record<string, unknown>) => {
-        const step = { ...(fake.steps.get(id) ?? {}) };
-        for (const [field, value] of Object.entries(updates)) {
-          if (value === undefined) delete step[field];
-          else step[field] = value;
-        }
-        fake.steps.set(id, step);
+        patchStep(id, updates);
         return Promise.resolve();
+      },
+    ),
+    casUpdateStepState: vi.fn(
+      (
+        _redis: unknown,
+        _tenantId: string,
+        id: string,
+        expected: { status: string; attempt: number },
+        updates: Record<string, unknown>,
+      ) => {
+        const race = fake.beforeStepCas;
+        fake.beforeStepCas = undefined;
+        race?.();
+        const step = fake.steps.get(id);
+        if (step?.['status'] !== expected.status || step['attempt'] !== expected.attempt) {
+          return Promise.resolve(false);
+        }
+        patchStep(id, updates);
+        return Promise.resolve(true);
       },
     ),
     getStepState: vi.fn((_redis: unknown, _tenantId: string, id: string) =>
@@ -164,6 +192,9 @@ vi.mock('@aflow/redis', async (importOriginal) => {
     updateSessionState: vi.fn(() => Promise.resolve()),
     appendSessionEvent: vi.fn(
       (_redis: unknown, _tenantId: string, _sessionId: string, event: SessionEvent) => {
+        const thrown = fake.eventError;
+        fake.eventError = undefined;
+        if (thrown !== undefined) return Promise.reject(thrown);
         fake.events.push(event);
         return Promise.resolve('1-0');
       },
@@ -306,6 +337,8 @@ beforeEach(() => {
   fake.seen = new Set(['host']);
   fake.events.length = 0;
   fake.resultError = undefined;
+  fake.eventError = undefined;
+  fake.beforeStepCas = undefined;
   fake.stream.length = 0;
   fake.timers.clear();
   fake.claimed.clear();
@@ -571,6 +604,58 @@ describe('a step whose executor is missing', () => {
       expect(applyResult).not.toHaveBeenCalled();
       fake.heartbeats.clear();
     }
+  });
+
+  it('enqueues nothing for a step cancelled between the look reading it waiting and writing it', async () => {
+    const job = sessionJob();
+    scheduledStep(job);
+    await dispatchOrWaitOnExecutor(redis, job);
+    fake.heartbeats.add('host');
+    fake.beforeStepCas = () => {
+      patchStep(job.stepExecutionId, { status: 'CANCELLED', endedAt: Date.now() });
+      fake.sessionStatus = 'CANCELLED';
+    };
+    const applyResult = vi.fn();
+
+    await nextLook(createProcessDueTimers(makeBindings(applyResult)));
+
+    expect(fake.beforeStepCas).toBeUndefined();
+    expect(fake.enqueueAttempts).toBe(1);
+    expect(fake.stream).toHaveLength(0);
+    expect(fake.steps.get(job.stepExecutionId)?.['status']).toBe('CANCELLED');
+    expect(fake.timers.size).toBe(0);
+    expect(applyResult).not.toHaveBeenCalled();
+  });
+
+  it('stays parked with its timer when showing it waiting fails, and is dispatched by its look', async () => {
+    const job = sessionJob();
+    scheduledStep(job);
+    fake.eventError = new Error('Connection is closed.');
+
+    const dispatched = await dispatchOrWaitOnExecutor(redis, job);
+
+    expect(dispatched).toEqual({
+      kind: 'waiting',
+      sinceMs: START_MS,
+      nextLookAtMs: START_MS + EXECUTOR_WAIT_FIRST_LOOK_MS,
+    });
+    expect(fake.eventError).toBeUndefined();
+    expect(fake.events).toHaveLength(0);
+    expect(fake.steps.get(job.stepExecutionId)).toMatchObject({
+      status: 'SCHEDULED',
+      executorWait: { sinceMs: START_MS, job },
+    });
+    const [timer] = [...fake.timers.values()];
+    expect(timer?.reason).toBe('executor_wait');
+    expect(timer?.dueAtMs).toBe(START_MS + EXECUTOR_WAIT_FIRST_LOOK_MS);
+
+    const applyResult = vi.fn();
+    fake.heartbeats.add('host');
+    await nextLook(createProcessDueTimers(makeBindings(applyResult)));
+
+    expect(fake.stream.map((queued) => queued.stepExecutionId)).toEqual([job.stepExecutionId]);
+    expect(fake.results).toHaveLength(0);
+    expect(applyResult).not.toHaveBeenCalled();
   });
 
   it('is its own completion path for as long as its timer lives, however long that is', async () => {

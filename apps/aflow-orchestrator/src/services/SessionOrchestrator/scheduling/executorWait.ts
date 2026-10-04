@@ -13,6 +13,7 @@ import type { SessionEvent, StepHotState } from '@aflow/redis';
 import {
   addStepJob,
   appendSessionEvent,
+  casUpdateStepState,
   EXECUTOR_WAIT_LONGEST_LOOK_MS,
   EXECUTOR_WAIT_LOOKS,
   executorWaitClockJumped,
@@ -31,7 +32,8 @@ const MS_PER_MINUTE = 60_000;
 export type FirstDispatch =
   { kind: 'enqueued' } | { kind: 'waiting'; sinceMs: number; nextLookAtMs: number };
 
-export type ExecutorDispatch = FirstDispatch | { kind: 'gave_up'; failure: AflowError };
+export type ExecutorDispatch =
+  FirstDispatch | { kind: 'gave_up'; failure: AflowError } | { kind: 'moved_on' };
 
 /** A parked job's wait, as its `executor_wait` timer carries it. */
 export interface ExecutorWaitLook {
@@ -58,7 +60,21 @@ export async function dispatchOrWaitOnExecutor(
   } catch (error) {
     if (!(error instanceof NoExecutorAvailableError)) throw error;
     const parked = await park(redis, job, nowMs, 0, nowMs + executorWaitGapMs(0));
-    await announceExecutorWait(redis, job, nowMs);
+    // Parked is the outcome from here: the timer is armed, and a throw would
+    // have the caller fail a step that is waiting.
+    await announceExecutorWait(redis, job, nowMs).catch((announceError: unknown) => {
+      logOrchestratorError(
+        '[executorWait] Failed to show the step waiting for its executor',
+        announceError,
+        {
+          tenantId: job.tenantId,
+          sessionId: job.sessionId,
+          stepExecutionId: job.stepExecutionId,
+          stepId: job.stepId,
+          operationId: job.operationId,
+        },
+      );
+    });
     return parked;
   }
 }
@@ -94,10 +110,11 @@ async function announceExecutorWait(
 
 /**
  * Look again for the executor of a parked job: enqueue it, park it until the
- * next look, or give up once its looks are spent. The step stays marked
- * waiting until its job is in its stream, so an enqueue that throws anything
- * but a missing executor leaves the timer's redelivery still this wait's to
- * dispatch.
+ * next look, or give up once its looks are spent. A session step no longer
+ * SCHEDULED on the job's attempt — cancelled, retried, failed by another path —
+ * has moved on, and its job is not dispatched. The step stays marked waiting
+ * until its job is in its stream, so an enqueue that throws anything but a
+ * missing executor leaves the timer's redelivery still this wait's to dispatch.
  */
 export async function lookAgainForExecutor(
   redis: Redis,
@@ -110,11 +127,14 @@ export async function lookAgainForExecutor(
     // The status is written before the enqueue rather than after: once the
     // job is in its stream the executor owns it, and a write after could put
     // a step it has started back to SCHEDULED.
-    await updateStepState(redis, job.tenantId, job.stepExecutionId, {
-      sessionId,
-      status: 'SCHEDULED',
-      scheduledAt: nowMs,
-    });
+    const stillWaiting = await casUpdateStepState(
+      redis,
+      job.tenantId,
+      job.stepExecutionId,
+      { status: 'SCHEDULED', attempt: job.attempt },
+      { sessionId, status: 'SCHEDULED', scheduledAt: nowMs },
+    );
+    if (!stillWaiting) return { kind: 'moved_on' };
   }
   try {
     await addStepJob(redis, job);
