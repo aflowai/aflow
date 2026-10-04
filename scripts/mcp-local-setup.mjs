@@ -30,7 +30,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import process from 'node:process';
 
 import { listenersOn, mcpPortHolder, readProcessTable } from './devMcpPort.mjs';
-import { parseEnvFile, stackEnv } from './stackEnv.mjs';
+import { readEnvFile, stackEnv } from './stackEnv.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -56,6 +56,15 @@ export function instanceDir(processEnv) {
   return explicit !== undefined && explicit !== ''
     ? explicit
     : join(homedir(), '.aflow', 'dev-local');
+}
+
+/** The stack's environment with the instance file's, where the instance secret the key is minted with lives. */
+export function setupEnv(processEnv, repo = REPO) {
+  const instanceFile = join(instanceDir(processEnv), 'instance.env');
+  const env = stackEnv(processEnv, readEnvFile(join(repo, '.env')), {
+    instance: readEnvFile(instanceFile),
+  });
+  return { env, instanceFile };
 }
 
 function setting(env, key) {
@@ -261,11 +270,7 @@ function ensureEnvNamesAuthFile() {
 }
 
 async function main() {
-  const envPath = join(REPO, '.env');
-  const dotenv = existsSync(envPath) ? parseEnvFile(readFileSync(envPath, 'utf8')) : {};
-  const instanceFile = join(instanceDir(process.env), 'instance.env');
-  const instance = existsSync(instanceFile) ? parseEnvFile(readFileSync(instanceFile, 'utf8')) : {};
-  const env = stackEnv(process.env, dotenv, { instance });
+  const { env, instanceFile } = setupEnv(process.env);
   const api = apiUrlOf(env);
   const authFile = authFileOf(env);
   const shown = relative(REPO, authFile) || authFile;

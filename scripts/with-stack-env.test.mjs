@@ -124,29 +124,101 @@ function segments(command) {
   );
 }
 
+const LOADER = join(REPO, 'scripts', 'with-stack-env.mjs');
+const ROOT_MANIFEST = 'package.json';
+
+const manifests = [
+  ROOT_MANIFEST,
+  ...['apps', 'packages'].flatMap((root) =>
+    readdirSync(join(REPO, root), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => join(root, entry.name, 'package.json')),
+  ),
+].filter((manifest) => existsSync(join(REPO, manifest)));
+
+function readManifest(manifest) {
+  return JSON.parse(readFileSync(join(REPO, manifest), 'utf8'));
+}
+
+const workspaceManifests = new Map(
+  manifests
+    .filter((manifest) => manifest !== ROOT_MANIFEST)
+    .map((manifest) => [readManifest(manifest).name, manifest]),
+);
+
+function isBuilt(path) {
+  const inRepo = relative(REPO, path);
+  return !inRepo.startsWith('..') && inRepo.split(sep).includes('dist');
+}
+
 /**
- * Each script that runs tsx on a file of this repository: the entry point,
- * repository-relative, and whether the loader runs it. The entry point is the
- * first argument after `tsx` naming a file that exists, so option values and
- * watch globs are passed over.
+ * Where in `tokens` a repository entry point is run, and its path. A tsx entry
+ * is the first argument after `tsx` naming a file that exists, so option values
+ * and watch globs are passed over. A built one is `node`'s first argument when
+ * it lies in a `dist` directory, which need not exist before a build.
  */
-function tsxEntryPoints(manifest) {
+function runOf(tokens, dir, { built }) {
+  for (const [at, token] of tokens.entries()) {
+    if (token === 'tsx') {
+      const path = tokens
+        .slice(at + 1)
+        .map((argument) => resolve(dir, argument))
+        .find((candidate) => existsSync(candidate) && statSync(candidate).isFile());
+      if (path !== undefined) return { at, path };
+    }
+    if (token === 'node' && built) {
+      const argument = tokens.slice(at + 1).find((candidate) => !candidate.startsWith('-'));
+      const path = argument === undefined ? undefined : resolve(dir, argument);
+      if (path !== undefined && isBuilt(path)) return { at, path };
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The repository entry points a script command runs, repository-relative, and
+ * whether the loader runs each. `yarn workspace <name> <script>` runs that
+ * workspace's script, under the loader when either command puts it there.
+ */
+function entryPointsOf(command, dir, { built }) {
+  return segments(command).flatMap((tokens) => {
+    const loadedBefore = (index) =>
+      tokens.slice(0, index).some((token) => resolve(dir, token) === LOADER);
+    const workspace = tokens.indexOf('workspace');
+    if (workspace > 0 && tokens[workspace - 1] === 'yarn') {
+      const [name, first, second] = tokens.slice(workspace + 1);
+      const manifest = workspaceManifests.get(name);
+      const delegated =
+        manifest === undefined
+          ? undefined
+          : readManifest(manifest).scripts?.[first === 'run' ? second : first];
+      if (delegated === undefined) return [];
+      return entryPointsOf(delegated, dirname(join(REPO, manifest)), { built }).map((entry) => ({
+        ...entry,
+        loaded: entry.loaded || loadedBefore(workspace),
+      }));
+    }
+    const run = runOf(tokens, dir, { built });
+    return run === undefined
+      ? []
+      : [{ entry: relative(REPO, run.path), loaded: loadedBefore(run.at) }];
+  });
+}
+
+/**
+ * Every script's entry points. A workspace's own `node dist/…` script is what
+ * the image runs, where `REDIS_URL` carries its own credential and no machine
+ * file exists, so built entry points are read from the root scripts — and from
+ * the workspace scripts those run.
+ */
+function scriptEntryPoints(manifest) {
   const dir = dirname(join(REPO, manifest));
-  const { scripts = {} } = JSON.parse(readFileSync(join(REPO, manifest), 'utf8'));
-  return Object.entries(scripts).flatMap(([name, command]) =>
-    segments(command).flatMap((tokens) => {
-      const tsx = tokens.indexOf('tsx');
-      if (tsx === -1) return [];
-      const entry = tokens
-        .slice(tsx + 1)
-        .map((token) => resolve(dir, token))
-        .find((path) => existsSync(path) && statSync(path).isFile());
-      if (entry === undefined) return [];
-      const loaded = tokens
-        .slice(0, tsx)
-        .some((token) => resolve(dir, token) === join(REPO, 'scripts', 'with-stack-env.mjs'));
-      return [{ script: `${manifest}: ${name}`, entry: relative(REPO, entry), loaded }];
-    }),
+  const built = manifest === ROOT_MANIFEST;
+  return Object.entries(readManifest(manifest).scripts ?? {}).flatMap(([name, command]) =>
+    entryPointsOf(command, dir, { built }).map((entry) => ({
+      script: `${manifest}: ${name}`,
+      ...entry,
+    })),
   );
 }
 
@@ -161,24 +233,17 @@ function runsWithoutLoader(entry) {
   if (entry.startsWith(`packages${sep}`)) {
     return 'a package’s build step runs in the image builder, which carries no loader';
   }
-  if (readFileSync(join(REPO, entry), 'utf8').includes('scripts/dev.mjs')) {
+  const path = join(REPO, entry);
+  if (existsSync(path) && readFileSync(path, 'utf8').includes('scripts/dev.mjs')) {
     return 'the dev runner composes its services’ environment itself, and hands the host executor the one it was given';
   }
   return undefined;
 }
 
 describe('every entry point', () => {
-  const manifests = [
-    'package.json',
-    ...['apps', 'packages'].flatMap((root) =>
-      readdirSync(join(REPO, root), { withFileTypes: true })
-        .filter((entry) => entry.isDirectory())
-        .map((entry) => join(root, entry.name, 'package.json')),
-    ),
-  ].filter((manifest) => existsSync(join(REPO, manifest)));
-  const entryPoints = manifests.flatMap(tsxEntryPoints);
+  const entryPoints = manifests.flatMap(scriptEntryPoints);
 
-  it('runs tsx on a file of this repository through the loader', () => {
+  it('runs tsx on a file of this repository, or node on a built one, through the loader', () => {
     expect(entryPoints.length).toBeGreaterThan(0);
     const bypassing = entryPoints
       .filter(({ entry, loaded }) => !loaded && runsWithoutLoader(entry) === undefined)
@@ -196,5 +261,31 @@ describe('every entry point', () => {
         `NODE_OPTIONS='--conditions=ts-source' node scripts/with-stack-env.mjs tsx watch --include 'packages/*/src/**/*.ts' a.ts && npx tsx b.ts`,
       ).map((tokens) => tokens.at(-1)),
     ).toEqual(['a.ts', 'b.ts']);
+  });
+
+  it('reads a built entry point a root script runs, directly or through its workspace', () => {
+    const serverStart = entryPoints.find(({ script }) => script === 'package.json: server:start');
+    expect(serverStart).toEqual({
+      script: 'package.json: server:start',
+      entry: join('apps', 'server', 'dist', 'index.js'),
+      loaded: true,
+    });
+    expect(entryPointsOf('yarn workspace @aflow/server start', REPO, { built: true })).toEqual([
+      { entry: join('apps', 'server', 'dist', 'index.js'), loaded: false },
+    ]);
+    expect(
+      entryPointsOf('node scripts/with-stack-env.mjs yarn workspace @aflow/server start', REPO, {
+        built: true,
+      }),
+    ).toEqual([{ entry: join('apps', 'server', 'dist', 'index.js'), loaded: true }]);
+    expect(entryPointsOf('node scripts/start.mjs', REPO, { built: true })).toEqual([]);
+  });
+
+  it('leaves a workspace’s own built start to the image it runs in', () => {
+    expect(
+      scriptEntryPoints(join('apps', 'server', 'package.json')).filter(({ entry }) =>
+        entry.split(sep).includes('dist'),
+      ),
+    ).toEqual([]);
   });
 });

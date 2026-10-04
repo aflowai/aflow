@@ -35,6 +35,7 @@ import {
   withSessionToken,
   mcpPortOf,
   missingSecretMessage,
+  setupEnv,
   writeAuthFile,
 } from './mcp-local-setup.mjs';
 
@@ -263,6 +264,22 @@ describe('the environment it reads', () => {
   it('finds the instance where dev:local keeps it', () => {
     expect(instanceDir({ PHOENIX_INSTANCE_DIR: '/srv/instance' })).toBe('/srv/instance');
     expect(instanceDir({})).toMatch(/\.aflow\/dev-local$/);
+  });
+
+  it('reads the instance secret it mints the key with from the instance file', () => {
+    const repo = scratchDir();
+    const instance = join(repo, 'instance');
+    mkdirSync(instance);
+    writeFileSync(join(repo, '.env'), 'API_BASE_URL=http://localhost:3000\n');
+    writeFileSync(
+      join(instance, 'instance.env'),
+      `PHOENIX_INSTANCE_SECRET='from-the-instance'\nPHOENIX_LOCAL_TENANT_ID=${TENANT}\n`,
+    );
+    const { env, instanceFile } = setupEnv({ PHOENIX_INSTANCE_DIR: instance }, repo);
+    expect(instanceFile).toBe(join(instance, 'instance.env'));
+    expect(env['PHOENIX_INSTANCE_SECRET']).toBe('from-the-instance');
+    expect(env['PHOENIX_LOCAL_TENANT_ID']).toBe(TENANT);
+    expect(apiUrlOf(env)).toBe('http://localhost:3000');
   });
 
   it('calls the API the MCP server calls, then the one the stack names', () => {

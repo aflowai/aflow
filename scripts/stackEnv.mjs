@@ -140,12 +140,25 @@ export function redisUrlWithMachinePassword(url, machinePassword) {
   return parsed.toString();
 }
 
+const STACK_ENV_OPTIONS = new Set(['machinePassword', 'instance']);
+
 /**
  * What a stack process sees: the env file's values under the caller's
- * environment, and `REDIS_URL` carrying the machine's password.
+ * environment, the instance file's over both, and `REDIS_URL` carrying the
+ * machine's password — the order `scripts/dev-local.ts` hands its services.
+ * The instance file's `REDIS_PASSWORD` is the appliance's and is left out, as
+ * the dev runner empties it: ioredis lays it over the URL's, replacing the machine's.
  */
-export function stackEnv(processEnv, dotenv, { machinePassword } = {}) {
-  const env = { ...dotenv, ...processEnv };
+export function stackEnv(processEnv, dotenv, options = {}) {
+  const unknown = Object.keys(options).filter((key) => !STACK_ENV_OPTIONS.has(key));
+  if (unknown.length > 0) {
+    throw new Error(
+      `stackEnv reads ${[...STACK_ENV_OPTIONS].join(' and ')}, not ${unknown.join(', ')}.`,
+    );
+  }
+  const { machinePassword, instance = {} } = options;
+  const { [REDIS_PASSWORD_KEY]: _appliancePassword, ...instanceValues } = instance;
+  const env = { ...dotenv, ...processEnv, ...instanceValues };
   const redisUrl = redisUrlWithMachinePassword(env[REDIS_URL_KEY], machinePassword);
   return redisUrl === undefined ? env : { ...env, [REDIS_URL_KEY]: redisUrl };
 }

@@ -75,7 +75,7 @@
     "preflight:no-test": "./scripts/preflight.sh --no-test",
     "redis:password": "node scripts/redis-password.mjs",
     "server:dev": "NODE_OPTIONS='--conditions=ts-source' node scripts/with-stack-env.mjs tsx watch --include 'packages/*/src/**/*.ts' apps/server/src/index.ts",
-    "server:start": "yarn workspace @aflow/server start",
+    "server:start": "node scripts/with-stack-env.mjs node apps/server/dist/index.js",
     "space:nuke": "NODE_OPTIONS='--conditions=ts-source' node scripts/with-stack-env.mjs tsx scripts/space-nuke.ts",
     "test": "node scripts/test-runner.mjs full",
     "test:changed": "node scripts/test-runner.mjs changed",

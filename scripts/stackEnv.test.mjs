@@ -59,6 +59,39 @@ describe('the environment a stack process sees', () => {
     expect(merged).toEqual({ A: 'shell', B: 'shell', C: 'dotenv', E: '' });
   });
 
+  it('lays the instance file over both, as the dev runner hands it to its services', () => {
+    const merged = stackEnv(
+      { A: 'shell', B: 'shell' },
+      { A: 'dotenv', C: 'dotenv', D: 'dotenv' },
+      { instance: { B: 'instance', C: 'instance', PHOENIX_INSTANCE_SECRET: 'secret' } },
+    );
+    expect(merged).toEqual({
+      A: 'shell',
+      B: 'instance',
+      C: 'instance',
+      D: 'dotenv',
+      PHOENIX_INSTANCE_SECRET: 'secret',
+    });
+  });
+
+  it('keeps the appliance’s REDIS_PASSWORD from the instance file off the machine’s Redis', () => {
+    const env = stackEnv(
+      {},
+      { REDIS_URL: 'redis://localhost:6379' },
+      { machinePassword: MACHINE, instance: { REDIS_PASSWORD: OWN, PHOENIX_LOCAL_TENANT_ID: 't' } },
+    );
+    expect(env).toEqual({
+      REDIS_URL: `redis://:${MACHINE}@localhost:6379`,
+      PHOENIX_LOCAL_TENANT_ID: 't',
+    });
+  });
+
+  it('refuses an option it does not read, rather than dropping it', () => {
+    expect(() => stackEnv({}, {}, { instanceFile: '/srv/instance.env' })).toThrow(
+      /reads machinePassword and instance, not instanceFile/,
+    );
+  });
+
   it('gives the REDIS_URL that results the machine’s password, keeping where it points', () => {
     const env = stackEnv(
       { REDIS_URL: 'redis://127.0.0.1:6380' },
