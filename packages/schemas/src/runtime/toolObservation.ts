@@ -4,9 +4,10 @@
  * An operation whose result is a look at one thing — a page — declares the
  * facets of that thing its result holds: which output fields, where the key of
  * the thing is, the further keys that tell one part of a facet from another,
- * and the operation that returns the facet as it is now. The agent turn
- * reduces a result only in the facets a later result replaced, and in every
- * facet once the thing moved on or ended.
+ * where it says how much of that part it left out, and the operation that
+ * returns the facet as it is now. The agent turn reduces a result only in the
+ * facets a later result replaced, and in every facet once the thing moved on
+ * or ended.
  */
 import { z } from 'zod';
 
@@ -55,6 +56,11 @@ const ObservedFacetSchema = z
         'Further keys that tell one part of the facet from another. A later look replaces this ' +
           'one only when every part key matches; a key absent from the output is the empty part.',
       ),
+    withheldAt: OutputKeyPathSchema.optional().describe(
+      'Where the result says how much of this part it left out at its bound: a count, or ' +
+        'counts by kind, which are added up; nothing there is nothing left out. A later look ' +
+        'replaces this one only when it left out no more. Undeclared, any later look replaces it.',
+    ),
     onlyWhenAbsent: OutputKeyPathSchema.optional().describe(
       'The result holds this facet only when its output has nothing at this path.',
     ),
@@ -108,6 +114,8 @@ export const ToolResultObservationSchema = z.object({
       part: z.array(z.object({ path: z.string(), value: z.string() })),
       /** The declared fields the output has. */
       fields: z.array(z.string()),
+      /** What the result left out of the part, read at the declared `withheldAt`. */
+      withheld: z.number().nonnegative().optional(),
       currentStateOperation: z.string().min(1),
     }),
   ),
@@ -129,6 +137,19 @@ function valueAt(output: unknown, keyPath: string): unknown {
     current = (current as Record<string, unknown>)[segment];
   }
   return current;
+}
+
+/** The count at `path`, or the sum of the counts there; 0 when there is none. */
+function withheldAt(output: unknown, path: string): number {
+  const value = valueAt(output, path);
+  const counts =
+    value !== null && typeof value === 'object' && !Array.isArray(value)
+      ? Object.values(value)
+      : [value];
+  return counts.reduce<number>(
+    (sum, count) => (typeof count === 'number' && Number.isFinite(count) ? sum + count : sum),
+    0,
+  );
 }
 
 /** The key at `keyPath` in a step's output, when it is a non-empty string or a number. */
@@ -189,6 +210,7 @@ export function toolResultObservationOf(
         value: observationKeyOf(output, path) ?? '',
       })),
       fields: facet.fields.filter((field) => valueAt(output, field) !== undefined),
+      ...(facet.withheldAt !== undefined ? { withheld: withheldAt(output, facet.withheldAt) } : {}),
       currentStateOperation: facet.currentStateOperation,
     });
   }

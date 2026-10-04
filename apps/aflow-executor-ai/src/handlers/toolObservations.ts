@@ -22,6 +22,32 @@ interface Staleness {
   operation: string;
 }
 
+/** A later look at one part of a facet, and what it left out of that part. */
+interface LaterLook {
+  withheld: number;
+  staleness: Staleness;
+}
+
+/**
+ * The first later look that covers an earlier one leaving out `withheld`: one
+ * that left out no more. A look that declares nothing left out covers any.
+ */
+function firstCovering(
+  looks: readonly LaterLook[],
+  withheld: number | undefined,
+): Staleness | undefined {
+  return looks.find((look) => withheld === undefined || look.withheld <= withheld)?.staleness;
+}
+
+/**
+ * `looks` stays in result order, nearest first, holding only looks that left
+ * out less than every nearer one: a further look leaving out as much or more
+ * covers nothing a nearer one does not.
+ */
+function withNearerLook(looks: readonly LaterLook[], look: LaterLook): LaterLook[] {
+  return [look, ...looks.filter((later) => later.withheld < look.withheld)];
+}
+
 function observedResultOf(message: AiMessageV1): ObservedResult | undefined {
   if (message.role !== 'tool') return undefined;
   for (const [partIndex, part] of message.parts.entries()) {
@@ -95,7 +121,8 @@ function earlier(a: Staleness | undefined, b: Staleness | undefined): Staleness 
 /**
  * The messages as the model is shown them. A stamped tool result is reduced
  * only in the facets a later result replaced — the same facet of the same
- * thing, with the same part keys — and in every facet once a later result
+ * thing, with the same part keys, leaving out no more of that part than this
+ * result did — and in every facet once a later result
  * moved its thing to another address or ended it. A reduced result is its
  * receipt for the fields it no longer shows, under one line per stale facet
  * naming what made it stale. The stamp itself is never shown.
@@ -106,7 +133,7 @@ function earlier(a: Staleness | undefined, b: Staleness | undefined): Staleness 
  * per facet and is identical on every turn after.
  */
 export function renderToolObservations(messages: readonly AiMessageV1[]): AiMessageV1[] {
-  const replacedBy = new Map<string, Staleness>();
+  const laterLooks = new Map<string, LaterLook[]>();
   const movedOrEndedBy = new Map<string, Staleness>();
   const rendered: AiMessageV1[] = new Array<AiMessageV1>(messages.length);
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -132,7 +159,7 @@ export function renderToolObservations(messages: readonly AiMessageV1[]): AiMess
     const stale = new Map<number, Staleness>();
     for (const [i, facet] of facets.entries()) {
       const first = earlier(
-        replacedBy.get(facetSlot(group, facet)),
+        firstCovering(laterLooks.get(facetSlot(group, facet)) ?? [], facet.withheld),
         movedOrEndedBy.get(thingSlot(group, facet.key)),
       );
       if (first !== undefined) stale.set(i, first);
@@ -159,7 +186,14 @@ export function renderToolObservations(messages: readonly AiMessageV1[]): AiMess
 
     const operation = envelope.operationId ?? envelope.toolName;
     for (const facet of facets) {
-      replacedBy.set(facetSlot(group, facet), { index, cause: 'replaced', operation });
+      const slot = facetSlot(group, facet);
+      laterLooks.set(
+        slot,
+        withNearerLook(laterLooks.get(slot) ?? [], {
+          withheld: facet.withheld ?? 0,
+          staleness: { index, cause: 'replaced', operation },
+        }),
+      );
     }
     for (const key of observation.moved) {
       movedOrEndedBy.set(thingSlot(group, key), { index, cause: 'moved', operation });

@@ -167,6 +167,31 @@ function snapshotOutput(pageId: string, ref?: string, continueRef?: string): Out
   };
 }
 
+/** A text read from the start of a page `pageChars` long, bounded at `chars`. */
+function boundedReadOutput(pageId: string, chars: number, pageChars: number): Output {
+  const shown = Math.min(chars, pageChars);
+  return {
+    ...readTextOutput(pageId, 0, proseOf(shown), shown < pageChars ? shown : undefined),
+    withheld: pageChars - shown,
+  };
+}
+
+/** A whole-page snapshot that left `leftOut` elements out of its census. */
+function boundedSnapshotOutput(pageId: string, chars: number, leftOut: number): Output {
+  return {
+    pageId,
+    url: PAGE_URL,
+    title: 'Pull requests',
+    snapshot: outlineOf(chars),
+    ...(leftOut > 0 ? { snapshotCensus: { link: leftOut - 1, heading: 1 } } : {}),
+    receipt: {
+      lines: Math.round(chars / 40),
+      cut: leftOut > 0,
+      ...(leftOut > 0 ? { continueRef: 'e900' } : {}),
+    },
+  };
+}
+
 function handoffOutput(pageId: string, previousPageId?: string): Output {
   return {
     outcome: 'completed',
@@ -484,6 +509,108 @@ describe('renderToolObservations — reduced facet by facet', () => {
   });
 });
 
+const READ_REPLACED =
+  "A later read (what text, offset 0) of pg_1 replaced this result's; " +
+  'browser.page.read returns the current one.';
+const SNAPSHOT_REPLACED =
+  "A later snapshot of pg_1 replaced this result's; browser.page.snapshot returns the current one.";
+
+describe('renderToolObservations — a later look replaces one of the same part only when it covers it', () => {
+  const PAGE_CHARS = 40_000;
+  const read = (base: string, chars: number) =>
+    call(base, READ, boundedReadOutput('pg_1', chars, PAGE_CHARS));
+  const snapshot = (base: string, chars: number, leftOut: number) =>
+    call(base, SNAPSHOT, boundedSnapshotOutput('pg_1', chars, leftOut));
+
+  it('keeps a larger read in full, text past the smaller bound and all, after a smaller one', () => {
+    const messages = [...read('r1', 32_000), ...read('r2', 8_000)];
+    const rendered = renderToolObservations(messages);
+    expect(forms(messages)).toEqual(['full', 'full']);
+    expect(JSON.parse(summaryOf(rendered[1]!)!)).toMatchObject({
+      text: proseOf(32_000),
+      withheld: 8_000,
+      nextOffset: 32_000,
+    });
+  });
+
+  it('reduces a smaller read once a larger one follows', () => {
+    const messages = [...read('r1', 8_000), ...read('r2', 32_000)];
+    expect(forms(messages)).toEqual([READ_REPLACED, 'full']);
+  });
+
+  it('reduces the earlier of two reads that withheld the same', () => {
+    const messages = [...read('r1', 8_000), ...read('r2', 8_000)];
+    expect(forms(messages)).toEqual([READ_REPLACED, 'full']);
+  });
+
+  it('reduces a cut read once a later one returned all of the part', () => {
+    const messages = [...read('r1', 32_000), ...read('r2', PAGE_CHARS)];
+    expect(forms(messages)).toEqual([READ_REPLACED, 'full']);
+  });
+
+  it('keeps a larger snapshot in full, as the page’s snapshot and its outline, after a smaller one', () => {
+    const messages = [...snapshot('s1', 30_000, 40), ...snapshot('s2', 8_000, 300)];
+    const rendered = renderToolObservations(messages);
+    expect(forms(messages)).toEqual(['full', 'full']);
+    expect(JSON.parse(summaryOf(rendered[1]!)!)).toMatchObject({ snapshot: outlineOf(30_000) });
+  });
+
+  it('reduces a smaller snapshot once a larger one follows', () => {
+    const messages = [...snapshot('s1', 8_000, 300), ...snapshot('s2', 30_000, 40)];
+    const rendered = renderToolObservations(messages);
+    expect(forms(messages)).toEqual([SNAPSHOT_REPLACED, 'full']);
+    expect(summaryOf(rendered[1]!)!.split('\n').slice(0, 2)).toEqual([
+      SNAPSHOT_REPLACED,
+      OUTLINE_REPLACED('pg_1'),
+    ]);
+  });
+
+  it('reduces the earlier of two snapshots whose census counts the same', () => {
+    const messages = [...snapshot('s1', 8_000, 300), ...snapshot('s2', 8_000, 300)];
+    expect(forms(messages)).toEqual([SNAPSHOT_REPLACED, 'full']);
+  });
+
+  it('reduces a larger look by the first later one that covers it, past a smaller one between', () => {
+    const messages = [
+      ...read('r1', 32_000),
+      ...read('r2', 8_000),
+      ...read('r3', 16_000),
+      ...read('r4', 32_000),
+    ];
+    const rendered = renderToolObservations(messages);
+    expect(forms(messages)).toEqual([READ_REPLACED, READ_REPLACED, READ_REPLACED, 'full']);
+    for (const i of [1, 3, 5]) {
+      expect(summaryOf(rendered[i]!)!).not.toContain('"text":');
+    }
+  });
+
+  it('changes each result once, at the turn a look that covers it arrives', () => {
+    const messages = [
+      ...read('r1', 32_000),
+      ...snapshot('s1', 30_000, 40),
+      ...read('r2', 8_000),
+      ...snapshot('s2', 8_000, 300),
+      ...read('r3', 8_000),
+      ...snapshot('s3', 8_000, 300),
+      ...read('r4', 32_000),
+      ...snapshot('s4', 30_000, 40),
+    ];
+    const formsAt = (n: number) => forms(messages.slice(0, n));
+    const changedAt = new Map<number, number>();
+    let previous = formsAt(2);
+    for (let n = 4; n <= messages.length; n += 2) {
+      const now = formsAt(n);
+      for (const [i, form] of previous.entries()) {
+        if (now[i] === form) continue;
+        expect(changedAt.has(i), `result ${String(i)}`).toBe(false);
+        changedAt.set(i, n / 2 - 1);
+      }
+      previous = now;
+    }
+    expect(Object.fromEntries(changedAt)).toEqual({ 0: 6, 1: 7, 2: 4, 3: 5, 4: 6, 5: 7 });
+  });
+});
+
 /** A long run of every kind of browser call on two pages, from a fixed seed. */
 function mixedRun(calls: number): AiMessageV1[] {
   let seed = 20_261_003;
@@ -501,7 +628,8 @@ function mixedRun(calls: number): AiMessageV1[] {
     if (kind === 2) messages.push(...act(base, page, t, true));
     if (kind === 3) {
       const offset = next(3) * 800;
-      messages.push(...call(base, READ, readTextOutput(page, offset, proseOf(800), offset + 800)));
+      const read = readTextOutput(page, offset, proseOf(800), offset + 800);
+      messages.push(...call(base, READ, { ...read, withheld: [2_000, 5_000][next(2)] }));
     }
     if (kind === 4) {
       messages.push(
@@ -510,7 +638,8 @@ function mixedRun(calls: number): AiMessageV1[] {
     }
     if (kind === 5 || kind === 6) {
       const ref = ['e40', 'e90', undefined][next(3)];
-      messages.push(...call(base, SNAPSHOT, snapshotOutput(page, ref)));
+      const cut = next(2) === 0;
+      messages.push(...call(base, SNAPSHOT, snapshotOutput(page, ref, cut ? 'e120' : undefined)));
     }
     if (kind === 7) messages.push(...call(base, HANDOFF, handoffOutput(page)));
     if (kind === 8 && next(4) === 0) {

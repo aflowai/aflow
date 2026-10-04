@@ -242,8 +242,10 @@ export const BrowserProfileListOutputSchema = z.object({
  * A snapshot scoped to an element is replaced only by a later snapshot of the
  * same element; one continued from `continueRef` is another part, not a
  * replacement. A whole-page snapshot is the empty scope, and also the page's
- * outline. `maxChars` is not a part key: a larger snapshot of the same part
- * holds what the smaller one did, so it takes the same slot.
+ * outline. `maxChars` is not a part key: a later snapshot of the same part
+ * replaces this one only when its census counts no more elements left out, so
+ * a smaller one leaves this one, and what it holds past the smaller bound, in
+ * full.
  */
 export const BROWSER_PAGE_SNAPSHOT_OBSERVATION: OperationObservation = {
   group: BROWSER_PAGE_OBSERVATION_GROUP,
@@ -253,11 +255,13 @@ export const BROWSER_PAGE_SNAPSHOT_OBSERVATION: OperationObservation = {
       fields: ['snapshot', 'snapshotCensus'],
       keyPath: 'pageId',
       partKeyPaths: ['receipt.ref'],
+      withheldAt: 'snapshotCensus',
       currentStateOperation: BROWSER_PAGE_SNAPSHOT_OPERATION_ID,
     },
     {
       ...BROWSER_PAGE_OUTLINE_FACET,
       fields: ['snapshot', 'snapshotCensus'],
+      withheldAt: 'snapshotCensus',
       onlyWhenAbsent: 'receipt.ref',
     },
   ],
@@ -268,8 +272,9 @@ export const BROWSER_PAGE_SNAPSHOT_OBSERVATION: OperationObservation = {
  * `nextOffset` is another part of it, and a read filtered by `contains` shows
  * lines another filter does not: a later read replaces this one only when it
  * reads the same kind at the same offset through the same filter. `maxChars`
- * is not a part key: a larger read of the same part holds what the smaller one
- * did, so it takes the same slot.
+ * is not a part key: a later read of the same part replaces this one only when
+ * it `withheld` no more, so a smaller one leaves this one, and what it holds
+ * past the smaller bound, in full.
  */
 export const BROWSER_PAGE_READ_OBSERVATION: OperationObservation = {
   group: BROWSER_PAGE_OBSERVATION_GROUP,
@@ -279,6 +284,7 @@ export const BROWSER_PAGE_READ_OBSERVATION: OperationObservation = {
       fields: ['text', 'console', 'network'],
       keyPath: 'pageId',
       partKeyPaths: ['what', 'offset', 'contains'],
+      withheldAt: 'withheld',
       currentStateOperation: BROWSER_PAGE_READ_OPERATION_ID,
     },
   ],

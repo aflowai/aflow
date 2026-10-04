@@ -604,6 +604,7 @@ describe('applyStepSucceeded — observations in a tool result (Plan 320 D9)', (
           key: 'pg_1',
           part: [],
           fields: ['outline', 'outlineCensus'],
+          withheld: 40,
           currentStateOperation: 'browser.page.snapshot',
         },
       ],

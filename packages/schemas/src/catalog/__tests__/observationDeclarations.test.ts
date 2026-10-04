@@ -101,6 +101,7 @@ describe('browser page observation declarations', () => {
           facet.keyPath,
           ...(facet.partKeyPaths ?? []),
           ...(facet.onlyWhenAbsent !== undefined ? [facet.onlyWhenAbsent] : []),
+          ...(facet.withheldAt !== undefined ? [facet.withheldAt] : []),
         ]),
         ...(d.moves !== undefined ? [d.moves.keyPath, d.moves.whenTrueAt] : []),
         ...(d.ends ?? []),
@@ -117,6 +118,21 @@ describe('browser page observation declarations', () => {
         expect(getOperation(facet.currentStateOperation), d.operationId).toBeDefined();
       }
     }
+  });
+
+  it('says where every facet’s result counts what it left out at its bound', () => {
+    const withheldAt = declared().flatMap((d) =>
+      (d.facets ?? []).map((facet) => [d.operationId, facet.facet, facet.withheldAt]),
+    );
+    expect(withheldAt).toEqual([
+      ['browser.page.open', 'outline', 'outlineCensus'],
+      ['browser.page.navigate', 'outline', 'outlineCensus'],
+      ['browser.page.act', 'outline', 'outlineCensus'],
+      ['browser.page.snapshot', 'snapshot', 'snapshotCensus'],
+      ['browser.page.snapshot', 'outline', 'snapshotCensus'],
+      ['browser.page.read', 'read', 'withheld'],
+      ['browser.page.handoff', 'outline', 'outlineCensus'],
+    ]);
   });
 
   it('gives one facet of a group the same part keys and current-state operation everywhere', () => {
@@ -180,6 +196,32 @@ describe('toolResultObservationOf', () => {
       summarize,
     )!;
     expect(console.facets[0]!.part.map((p) => p.value)).toEqual(['console', '', '']);
+  });
+
+  it('stamps what a look left out: a read’s withheld, a census added up, nothing when not cut', () => {
+    const withheldOf = (declaration: OperationObservation, output: unknown) =>
+      toolResultObservationOf(declaration, output, summarize)!.facets.map((f) => f.withheld);
+    const cutText = { pageId: 'pg_1', what: 'text', contains: '', text: 'a', offset: 0 };
+    expect(withheldOf(read, { ...cutText, withheld: 24_000, nextOffset: 8_000 })).toEqual([24_000]);
+    expect(withheldOf(read, { ...cutText, withheld: 0 })).toEqual([0]);
+    const whole = { pageId: 'pg_1', snapshot: '- main', receipt: { lines: 1, cut: true } };
+    expect(withheldOf(snapshot, { ...whole, snapshotCensus: { link: 30, heading: 4 } })).toEqual([
+      34, 34,
+    ]);
+    expect(withheldOf(snapshot, { ...whole, receipt: { lines: 1, cut: false } })).toEqual([0, 0]);
+    const open = getOperation('browser.page.open')!.observation!;
+    expect(
+      withheldOf(open, { pageId: 'pg_1', outline: '-', outlineCensus: { button: 2 } }),
+    ).toEqual([2]);
+  });
+
+  it('stamps no withheld for a facet that does not say where it is', () => {
+    const declaration: OperationObservation = {
+      group: 'thing',
+      facets: [{ facet: 'a', fields: ['x'], keyPath: 'id', currentStateOperation: 'op' }],
+    };
+    const stamp = toolResultObservationOf(declaration, { id: 't', x: 1 }, summarize)!;
+    expect(stamp.facets[0]).not.toHaveProperty('withheld');
   });
 
   it('keeps a field another facet still holds, and stores one receipt per set that can go', () => {
