@@ -157,6 +157,21 @@ describe('resolveActionCenterActorContext', () => {
     expect(ctx.actorIsTenantAdmin).toBe(false);
   });
 
+  it('carries whether the caller is an interactive user, and nothing when it was not told', async () => {
+    const { db } = setup({ ownerRows: [{ ownerId: USER_ID }] });
+    const signedIn = await resolveActionCenterActorContext(db, TENANT_ID, SPACE_ID, {
+      userId: USER_ID,
+      isTenantAdmin: false,
+      isInteractiveUser: true,
+    });
+    expect(signedIn.actorIsInteractiveUser).toBe(true);
+    const unsaid = await resolveActionCenterActorContext(db, TENANT_ID, SPACE_ID, {
+      userId: USER_ID,
+      isTenantAdmin: false,
+    });
+    expect(unsaid).not.toHaveProperty('actorIsInteractiveUser');
+  });
+
   it('returns admin under dev bypass (NODE_ENV != production + authMethod = dev_bypass)', async () => {
     process.env['NODE_ENV'] = 'development';
     const { db } = setup({ ownerRows: [{ ownerId: 'someone-else' }], memberCount: 2 });

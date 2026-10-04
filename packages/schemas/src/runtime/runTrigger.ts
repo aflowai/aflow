@@ -1,9 +1,9 @@
 /**
- * What started a run, and whether that was a person.
+ * What started a run, and which of those surfaces only a person uses.
  *
- * A child run — a delegate, a workflow task — is started by its parent, so
- * what it carries is its root's trigger: a Runner a conversation delegated to
- * answers as the conversation does.
+ * The trigger names the surface a run came in through and never changes. It
+ * does not say whether anyone is present for the run's work now: that is the
+ * session's `activatedByPerson`, a fact of what last set it running.
  */
 import { z } from 'zod';
 
@@ -18,7 +18,7 @@ export const RunTriggerSchema = z.enum([
 ]);
 export type RunTrigger = z.infer<typeof RunTriggerSchema>;
 
-const STARTED_BY_A_PERSON: Readonly<Record<RunTrigger, boolean>> = {
+const ONLY_A_PERSON_USES: Readonly<Record<RunTrigger, boolean>> = {
   chat: true,
   voice: true,
   api: false,
@@ -30,9 +30,10 @@ const STARTED_BY_A_PERSON: Readonly<Record<RunTrigger, boolean>> = {
 };
 
 /**
- * Whether a person started the root of this run. A run whose root trigger is
- * unknown was not, as far as anything downstream can tell.
+ * Whether a run started through this surface was started by a person. The API
+ * takes these triggers only from a request authenticated as an interactive
+ * user, so a start carrying one is a person's.
  */
-export function isAttendedRun(rootTrigger: RunTrigger | undefined): boolean {
-  return rootTrigger !== undefined && STARTED_BY_A_PERSON[rootTrigger];
+export function isPersonTrigger(trigger: RunTrigger | undefined): boolean {
+  return trigger !== undefined && ONLY_A_PERSON_USES[trigger];
 }

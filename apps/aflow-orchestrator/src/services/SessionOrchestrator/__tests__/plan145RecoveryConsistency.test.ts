@@ -86,6 +86,7 @@ describe('Plan 145 recovery-stream invariants', () => {
         delegationWaitMode: 'until_pause',
         pauseType: 'subflow_waiting',
         waitingForChildSessionIds: ['child-1'],
+        activatedByPerson: true,
       });
       await setSessionState(redis, initial);
 
@@ -99,6 +100,7 @@ describe('Plan 145 recovery-stream invariants', () => {
       expect(after?.delegationWaitMode).toBeUndefined();
       expect(after?.pauseType).toBeUndefined();
       expect(after?.waitingForChildSessionIds).toEqual([]);
+      expect(after?.activatedByPerson).toBe(false);
 
       // Recovery stream: one run.status_changed envelope with the patch
       // and the cleared-field list. `waitingForChildSessionIds` is on the
@@ -112,6 +114,7 @@ describe('Plan 145 recovery-stream invariants', () => {
       expect(ev.data['runStatePatch']).toEqual({
         status: 'RUNNING',
         waitingForChildSessionIds: [],
+        activatedByPerson: false,
       });
       const cleared = ev.data['clearedRunStateFields'] as string[];
       expect(cleared).toContain('delegationPauseSource');

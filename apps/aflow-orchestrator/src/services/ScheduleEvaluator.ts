@@ -755,6 +755,7 @@ export class ScheduleEvaluator {
           creatorTenantRole: item.creatorTenantRole,
           creatorSpaceRole: item.creatorSpaceRole,
         }),
+        activatedByPerson: false,
       });
     } catch (err) {
       // Released so the retry can claim, which is safe only because the run id
@@ -822,6 +823,9 @@ export class ScheduleEvaluator {
         traceId: `sched-resume-${item.scheduleId.slice(0, 8)}` as TraceId,
         idempotencyKey: item.idempotencyKey as IdempotencyKey,
         requestedAtMs: Date.now(),
+        // Whoever started the conversation is not here for what the schedule
+        // wakes, and an agent can schedule its own resume.
+        activatedByPerson: false,
       });
     } catch (err) {
       await releaseControlDispatchIdempotency(

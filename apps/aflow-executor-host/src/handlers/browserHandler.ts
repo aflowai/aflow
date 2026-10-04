@@ -6,6 +6,7 @@ import type { ExecutorContext, StepHandler, StepResult } from '@aflow/executor-r
 import {
   failureWithError,
   internalError,
+  pausedWithRequest,
   successWithData,
   validationError,
 } from '@aflow/executor-runtime';
@@ -43,9 +44,11 @@ import {
   type BrowserPageSnapshotOutputSchema,
   BrowserProfileListInputSchema,
   type BrowserProfileListOutputSchema,
+  WriteApprovalRequestPayloadSchema,
 } from '@aflow/schemas';
 import type { z } from 'zod';
 
+import { type ApprovalStore, BrowserApprovalRequired } from '../browser/actionApproval.js';
 import type { BrowserDriver } from '../browser/driver.js';
 import type { PageView, RunScope } from '../browser/driverTypes.js';
 import { BrowserDriverError, type BrowserFailureKind } from '../browser/errors.js';
@@ -66,7 +69,8 @@ const FAILURE: Record<BrowserFailureKind, { code: string; classification: ErrorC
   appliance_origin: { code: 'BROWSER_ORIGIN_REFUSED', classification: 'permission' },
   origin_denied: { code: 'BROWSER_ORIGIN_DENIED', classification: 'permission' },
   posture_refused: { code: 'BROWSER_POSTURE_REFUSED', classification: 'permission' },
-  ask_unavailable: { code: 'BROWSER_ASK_NOT_AVAILABLE', classification: 'permission' },
+  approval_denied: { code: 'BROWSER_ACTION_DENIED', classification: 'permission' },
+  ask_unanswerable: { code: 'BROWSER_ASK_UNANSWERABLE', classification: 'permission' },
   stale_ref: { code: 'BROWSER_REF_STALE', classification: 'validation' },
   credential_field: { code: 'BROWSER_CREDENTIAL_FIELD', classification: 'permission' },
   field_unchecked: { code: 'BROWSER_FIELD_UNCHECKED', classification: 'validation' },
@@ -117,6 +121,12 @@ export interface BrowserCall extends RunScope {
   readonly sessionId?: string;
   /** Keeps a screenshot, in the form a StepImage's reference names. */
   storeScreenshot(image: { data: string; mimeType: string }): Promise<PayloadRef>;
+  /**
+   * Where an action that asks finds its approval. A step has it; a harness's
+   * relayed call does not, because nothing can pause a harness's turn for the
+   * operator, so its action that would ask is refused instead.
+   */
+  readonly approvals?: ApprovalStore;
 }
 
 function scopeOf(scope: RunScope): RunScope {
@@ -124,17 +134,21 @@ function scopeOf(scope: RunScope): RunScope {
     tenantId: scope.tenantId,
     runId: scope.runId,
     ...(scope.spaceId !== undefined ? { spaceId: scope.spaceId } : {}),
-    ...(scope.rootTrigger !== undefined ? { rootTrigger: scope.rootTrigger } : {}),
+    ...(scope.activatedByPerson !== undefined
+      ? { activatedByPerson: scope.activatedByPerson }
+      : {}),
   };
 }
 
-/** A step's run as its job describes it: what started the run is the orchestrator's stamp. */
+/** A step's run as its job describes it: whether a person set it going is the orchestrator's stamp. */
 export function jobScopeOf(ctx: ExecutorContext): RunScope {
   return {
     tenantId: ctx.tenantId,
     runId: ctx.runId,
     ...(ctx.spaceId !== undefined ? { spaceId: ctx.spaceId } : {}),
-    ...(ctx.job.rootTrigger !== undefined ? { rootTrigger: ctx.job.rootTrigger } : {}),
+    ...(ctx.job.activatedByPerson !== undefined
+      ? { activatedByPerson: ctx.job.activatedByPerson }
+      : {}),
   };
 }
 
@@ -143,13 +157,14 @@ export function jobScopeOf(ctx: ExecutorContext): RunScope {
  * executor-host keeps pages in memory, so a job reclaimed from a dead executor
  * finds its page gone; what reaches a live page twice is a later attempt.
  */
-function callOf(ctx: ExecutorContext): BrowserCall {
+function callOf(ctx: ExecutorContext, approvals: ApprovalStore): BrowserCall {
   return {
     ...jobScopeOf(ctx),
     redelivered: ctx.attempt > 1,
     stepExecutionId: ctx.stepExecutionId,
     ...(ctx.job.sessionId !== undefined ? { sessionId: ctx.job.sessionId } : {}),
     storeScreenshot: async (image) => await ctx.writePayload('screenshot', image),
+    approvals,
   };
 }
 
@@ -275,6 +290,15 @@ const act = route(BrowserPageActInputSchema, async (call, driver, input) => {
     action: engineAction(input),
     redelivered: call.redelivered,
     ...bound(input.maxChars),
+    ...(call.approvals !== undefined
+      ? {
+          approvals: {
+            store: call.approvals,
+            storeScreenshot: async (image: { data: string; mimeType: string }) =>
+              await call.storeScreenshot(image),
+          },
+        }
+      : {}),
   });
   const output: Output<typeof BrowserPageActOutputSchema> = {
     outcome: result.outcome,
@@ -446,7 +470,9 @@ export type BrowserOperationOutcome =
 /**
  * One browser operation, from its raw input to its output or its refusal. The
  * step handler and the harness relay both call this and nothing beneath it, so
- * a rule, a bound or a refusal cannot differ between them.
+ * a rule, a bound or a refusal cannot differ between them. A call carrying
+ * `approvals` may instead throw `BrowserApprovalRequired`, which the step
+ * handler turns into its approval pause.
  */
 export async function performBrowserOperation(
   driver: BrowserDriver,
@@ -466,6 +492,7 @@ export async function performBrowserOperation(
   try {
     return { ok: true, output: await route.run(call, driver, parsed.data) };
   } catch (error) {
+    if (error instanceof BrowserApprovalRequired) throw error;
     if (error instanceof BrowserDriverError) return { ok: false, error: browserFailure(error) };
     return {
       ok: false,
@@ -488,7 +515,31 @@ function noSpace(): AflowError {
   };
 }
 
-export function createBrowserHandler(driver: BrowserDriver): StepHandler {
+/**
+ * The approval pause, once its request is one the orchestrator and the Action
+ * Center will read as an approval: a request they refuse parks the run on a
+ * card that never appears, so the step fails instead.
+ */
+async function approvalPause(
+  ctx: ExecutorContext,
+  asked: BrowserApprovalRequired,
+): Promise<StepResult> {
+  const parsed = WriteApprovalRequestPayloadSchema.safeParse(asked.request);
+  if (!parsed.success) {
+    return await failureWithError(
+      ctx,
+      internalError(
+        `This ${asked.request.action} waits for the operator, but its approval request does not ` +
+          `parse as WriteApprovalRequestPayloadSchema, so nothing was asked and nothing was ` +
+          `done: ${parsed.error.message}`,
+        { retryable: false },
+      ),
+    );
+  }
+  return await pausedWithRequest(ctx, parsed.data);
+}
+
+export function createBrowserHandler(driver: BrowserDriver, approvals: ApprovalStore): StepHandler {
   return {
     stepType: 'browser',
     // A hand-off waits on a person for as long as the profile allows; every
@@ -509,7 +560,21 @@ export function createBrowserHandler(driver: BrowserDriver): StepHandler {
       // Action Center to be shown in.
       if (ctx.spaceId === undefined) return await failureWithError(ctx, noSpace());
       const raw = await ctx.readPayload(ctx.job.inputRef);
-      const outcome = await performBrowserOperation(driver, ctx.operationId, raw, callOf(ctx));
+      let outcome: BrowserOperationOutcome;
+      try {
+        outcome = await performBrowserOperation(
+          driver,
+          ctx.operationId,
+          raw,
+          callOf(ctx, approvals),
+        );
+      } catch (error) {
+        // The write approval's own pause: the orchestrator parks the run, the
+        // Action Center shows the card, and only the operator's resolve mints
+        // the grant the dispatch after it reads.
+        if (error instanceof BrowserApprovalRequired) return await approvalPause(ctx, error);
+        throw error;
+      }
       return outcome.ok
         ? await successWithData(ctx, outcome.output)
         : await failureWithError(ctx, outcome.error);

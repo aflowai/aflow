@@ -216,14 +216,15 @@ export const BrowserProfileListOutputSchema = z.object({
       unattended: z
         .boolean()
         .describe(
-          'Whether runs nobody started — by a schedule, a webhook, the API, an MCP client or an ' +
-            'eval, or delegated from one — may use it.',
+          'Whether runs nobody is present for may use it: one a schedule, a webhook, the API, an ' +
+            'MCP client, an eval, a timer, a sub-agent finishing or an agent last set going, ' +
+            'rather than a person’s message or answer in the Action Center.',
         ),
       openToThisRun: z
         .boolean()
         .describe(
-          '`false` when this run is one nobody started and the profile takes none: every ' +
-            'operation on it is refused for the whole of this run.',
+          '`false` when nobody is present for this run now and the profile takes no such run: ' +
+            'every operation on it is refused until a person next sets the run going.',
         ),
       running: z.boolean().describe('Whether the profile’s browser is running now.'),
       sites: z

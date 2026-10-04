@@ -318,6 +318,10 @@ export async function handleDelegateInline(args: InlineHandlerArgs): Promise<voi
       }
     }
 
+    // A child is attended while its parent is, as the parent is now — not as it
+    // was at its own start, and never as the delegation's input says.
+    const activatedByPerson = parentState?.activatedByPerson === true;
+
     // 2) Write QUEUED hot state for child session
     const queuedState: SessionHotState = {
       sessionId: childSessionId,
@@ -336,7 +340,7 @@ export async function handleDelegateInline(args: InlineHandlerArgs): Promise<voi
       ...(parentState?.createdBy ? { createdBy: parentState.createdBy } : {}),
       // Propagate actorContext so child run has it for nested subflows
       ...(parentState?.actorContextJson ? { actorContextJson: parentState.actorContextJson } : {}),
-      ...(parentState?.rootTrigger ? { rootTrigger: parentState.rootTrigger } : {}),
+      activatedByPerson,
       // Subflow linkage: store parent info so the orchestrator can resume
       ...(waitForCompletion
         ? {
@@ -397,6 +401,7 @@ export async function handleDelegateInline(args: InlineHandlerArgs): Promise<voi
       ...(spaceId ? { spaceId } : {}),
       ...(parentState?.createdBy ? { createdBy: parentState.createdBy } : {}),
       ...(parentActorContext ? { actorContext: parentActorContext } : {}),
+      activatedByPerson,
     });
 
     if (waitForCompletion) {

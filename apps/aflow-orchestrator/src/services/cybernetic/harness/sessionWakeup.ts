@@ -232,6 +232,7 @@ export async function wakeSessionForRunWakeups(
     traceId: (state.traceId !== undefined && state.traceId.length > 0
       ? state.traceId
       : wakeKey) as TraceId,
+    activatedByPerson: false,
   };
 
   const claims = await resumeClaimsForStep(deps.db, { tenantId, sessionId, stepExecutionId });

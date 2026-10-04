@@ -68,6 +68,7 @@ export const aguiRoutes: FastifyPluginAsync = async (app) => {
           target: aguiAgentIdToTarget(agentId),
           spaceId: space.spaceId,
           trigger: 'api',
+          activatedByPerson: false,
           ...(input ? { input } : {}),
           ...(version ? { agentVersion: version } : {}),
         },

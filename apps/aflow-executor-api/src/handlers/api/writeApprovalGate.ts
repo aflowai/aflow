@@ -5,7 +5,7 @@ import {
   effectiveWriteRiskTier,
   requiresWriteApproval,
   type SpaceWriteApprovalPolicy,
-  type WriteApprovalRequestPayload,
+  type ApiWriteApprovalRequestPayload,
 } from '@aflow/schemas';
 import type { ExecutorContext } from '@aflow/executor-runtime';
 import type { ResolvedCall } from './types.js';
@@ -17,9 +17,9 @@ import type { ResolvedCall } from './types.js';
  * `ApiOAuthConsentRequired` → `pausedWithRequest` path.
  */
 export class ApiWriteApprovalRequired extends Error {
-  readonly request: WriteApprovalRequestPayload;
+  readonly request: ApiWriteApprovalRequestPayload;
 
-  constructor(request: WriteApprovalRequestPayload) {
+  constructor(request: ApiWriteApprovalRequestPayload) {
     super(`Write approval required for ${request.method} ${request.apiId}/${request.endpointId}`);
     this.name = 'ApiWriteApprovalRequired';
     this.request = request;
@@ -146,8 +146,9 @@ export async function enforceWriteApprovalGate(
 
   const preview = bodyPreview(resolved.body);
   const label = endpoint.description?.slice(0, 500);
-  const request: WriteApprovalRequestPayload = {
+  const request: ApiWriteApprovalRequestPayload = {
     kind: 'write_approval',
+    target: 'api',
     apiId: resolved.apiId ?? endpoint.endpointId,
     endpointId: endpoint.endpointId,
     endpointName: endpoint.name,

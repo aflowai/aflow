@@ -34,6 +34,7 @@ import { createBrowserHandler } from '../handlers/browserHandler.js';
 import { loadInstallationId } from '../installationId.js';
 import { type HandoffWait, waitInWindow, type WaitForOperator } from '../browser/operatorWindow.js';
 import { harness, type Harness, profile, refusal, RUN_A } from './fixtures/fakeBrowser.js';
+import { memoryApprovals } from './fixtures/approvals.js';
 
 const LOGIN = 'https://accounts.example.com/login';
 const STEP = 'step-a';
@@ -212,7 +213,7 @@ describe('a hand-off that cannot be put in the Action Center', () => {
       },
     } as unknown as ExecutorContext;
 
-    const result = await createBrowserHandler(h.driver).execute(ctx);
+    const result = await createBrowserHandler(h.driver, memoryApprovals()).execute(ctx);
 
     expect(result.status).toBe('FAILED');
     expect(written).toMatchObject({

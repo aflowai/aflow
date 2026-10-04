@@ -875,6 +875,7 @@ export async function triggerCoachReview(params: CoachTriggerParams): Promise<st
       trigger: 'api',
       actorContext,
       createdBy: credentialOwnerId,
+      activatedByPerson: false,
     });
 
     // 6. Emit entity event with trigger source

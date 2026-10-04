@@ -8,6 +8,7 @@
  * Mirrors the server's `ActionCenterItem` shape without pulling in
  * `@aflow/schemas` (keeps the web bundle light).
  */
+import type { WriteApprovalExtension } from '@aflow/schemas';
 
 /**
  * Runtime mirror of the server's `ActionCenterItemKindSchema` enum. The web
@@ -164,19 +165,14 @@ export interface OAuthConsentExtension {
   authorizationUrlHint?: string;
 }
 
-export interface WriteApprovalExtension {
-  kind: 'write_approval';
-  apiId: string;
-  endpointId: string;
-  endpointName?: string;
-  operationLabel?: string;
-  method: string;
-  urlHost: string;
-  writeRiskTier: 'read' | 'low' | 'medium' | 'high';
-  bodyPreview?: string;
-  initiatedBy?: string;
-}
-
+// Derived rather than mirrored: the approval payload is a union whose browser
+// variant carries the action's own vocabulary, and a type import costs the
+// bundle nothing.
+export type {
+  ApiWriteApprovalExtension,
+  BrowserWriteApprovalExtension,
+  WriteApprovalExtension,
+} from '@aflow/schemas';
 export type ActionCenterItemExtension =
   CoachProposalExtension | OAuthConsentExtension | WriteApprovalExtension;
 

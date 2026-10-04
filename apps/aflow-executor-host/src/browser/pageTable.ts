@@ -8,8 +8,7 @@
  */
 import { randomBytes } from 'node:crypto';
 
-import type { RunTrigger } from '@aflow/schemas';
-
+import type { ApprovalStore } from './actionApproval.js';
 import { BrowserDriverError } from './errors.js';
 import { type PageObservations, redactUrl } from './observations.js';
 import type { EnginePage, PageSnapshot } from './types.js';
@@ -19,16 +18,30 @@ export interface PageOwner {
   readonly runId: string;
 }
 
+/**
+ * An action on a page parked for the operator's answer. The idle sweep holds
+ * the page until the answer is on record or the request no longer stands: the
+ * page is in the request hash, so an approval reaching a closed page would
+ * find nothing to act on.
+ */
+export interface PendingAsk {
+  readonly owner: PageOwner;
+  readonly store: Pick<ApprovalStore, 'grant'>;
+  readonly standsUntil: number;
+  /** When the decision already on record for the request was made; an answer is a newer one. */
+  readonly decidedBefore: string | undefined;
+}
+
 export interface HeldPage {
   readonly pageId: string;
   readonly ownerKey: string;
   readonly profileId: string;
   /**
-   * The opening run's space and root trigger: the page stays open only while
-   * its profile serves both.
+   * The run's space, and whether a person set it going as of its latest call
+   * on the page: the page stays open only while its profile serves both.
    */
   readonly spaceId: string | undefined;
-  readonly rootTrigger: RunTrigger | undefined;
+  activatedByPerson: boolean;
   readonly page: EnginePage;
   readonly observations: PageObservations;
   /** The address the open asked for, as a URL spells it. */
@@ -44,6 +57,8 @@ export interface HeldPage {
   lastUsedAt: number;
   /** The newest snapshot taken of the page: its references are the ones that resolve. */
   lastSnapshot?: PageSnapshot;
+  /** Asks parked on this page, by request hash. */
+  readonly pendingAsks: Map<string, PendingAsk>;
 }
 
 /**
@@ -122,7 +137,7 @@ export class PageTable {
   private readonly gone = new Map<string, Map<string, GonePage>>();
 
   add(
-    owner: PageOwner & { readonly spaceId?: string; readonly rootTrigger?: RunTrigger },
+    owner: PageOwner & { readonly spaceId?: string; readonly activatedByPerson?: boolean },
     profileId: string,
     requestedUrl: string,
     page: EnginePage,
@@ -137,7 +152,7 @@ export class PageTable {
       ownerKey: key,
       profileId,
       spaceId: owner.spaceId,
-      rootTrigger: owner.rootTrigger,
+      activatedByPerson: owner.activatedByPerson === true,
       requestedUrl,
       askedUrl: requestedUrl,
       page,
@@ -145,6 +160,7 @@ export class PageTable {
       lastUrl: '',
       lastTitle: '',
       lastUsedAt: now,
+      pendingAsks: new Map(),
     };
     pageAddress(entry);
     pages.set(entry.pageId, entry);

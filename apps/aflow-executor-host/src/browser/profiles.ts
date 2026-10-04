@@ -11,8 +11,6 @@ import {
   type BrowserProfile,
   BrowserProfileSchema,
   DEFAULT_BROWSER_PROFILE_ID,
-  isAttendedRun,
-  type RunTrigger,
 } from '@aflow/schemas';
 
 import { describePolicyIssues } from '../policyIssues.js';
@@ -65,24 +63,25 @@ export function profileOpenToSpace(profile: BrowserProfile, spaceId: string | un
   return spaceId !== undefined && profile.spaces.includes(spaceId);
 }
 
-/** What a profile asks of the run using it: the space it is in, and what started its root. */
+/** What a profile asks of the run using it: the space it is in, and whether a person set it going. */
 export interface ProfileUser {
   readonly spaceId?: string | undefined;
-  readonly rootTrigger?: RunTrigger | undefined;
+  readonly activatedByPerson?: boolean | undefined;
 }
 
-/** Whether the run may use the profile as far as what started it goes. */
-export function profileOpenToRunStart(
+/** Whether the run may use the profile as far as who set it going goes. */
+export function profileOpenToActivation(
   profile: BrowserProfile,
-  rootTrigger: RunTrigger | undefined,
+  activatedByPerson: boolean | undefined,
 ): boolean {
-  return profile.unattended || isAttendedRun(rootTrigger);
+  return profile.unattended || activatedByPerson === true;
 }
 
-/** Whether the run may use the profile at all: its space, and what started it. */
+/** Whether the run may use the profile at all: its space, and who set it going. */
 export function profileServesRun(profile: BrowserProfile, run: ProfileUser): boolean {
   return (
-    profileOpenToSpace(profile, run.spaceId) && profileOpenToRunStart(profile, run.rootTrigger)
+    profileOpenToSpace(profile, run.spaceId) &&
+    profileOpenToActivation(profile, run.activatedByPerson)
   );
 }
 
@@ -109,7 +108,7 @@ export function chromeExecutable(policy: BrowserPolicy): string {
 
 /**
  * The profile a run asked for, refused when the run's space may not use it or
- * nobody started the run and the profile takes no such run — unless the
+ * nobody is present for the run and the profile takes no such run — unless the
  * operator is the one asking, as the sign-in sitting does.
  */
 export function resolveProfile(
@@ -149,16 +148,15 @@ export function resolveProfile(
         `use: ${listedIds(open)}. Which spaces a profile serves is set on the machine.`,
     );
   }
-  if (!profileOpenToRunStart(profile, user.rootTrigger)) {
-    const startedBy =
-      user.rootTrigger === undefined
-        ? 'nothing recorded what started it'
-        : `it goes back to \`${user.rootTrigger}\`, not to a person in a conversation or a voice session`;
+  if (!profileOpenToActivation(profile, user.activatedByPerson)) {
     throw new BrowserDriverError(
       'profile_closed_to_unattended',
-      `Browser profile \`${profileId}\` is closed to runs nobody started, and this run is one: ` +
-        `${startedBy}. Nothing was done, and no call on this profile is let in for the rest of ` +
-        'the run. The operator opens the profile to such runs on the machine: ' +
+      `Browser profile \`${profileId}\` is closed to runs nobody is present for, and this ` +
+        'run is one now: what last set it going — its start or its latest resume — was not a ' +
+        'person in a conversation or a voice session, but a schedule, a webhook, the API, an ' +
+        'MCP client, an eval, a timer, a sub-agent finishing or an agent. Nothing was done, and ' +
+        'no call on this profile is let in until a person next sets the run going. The ' +
+        'operator opens the profile to such runs on the machine: ' +
         `\`aflow browser unattended ${profileId} allow\`.`,
       { profileId },
     );

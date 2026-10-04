@@ -550,12 +550,12 @@ export const StepJobMessageSchema = z
     callerModel: z.string().max(128).optional(),
 
     /**
-     * What started the root of this step's run, read from the run's state when
-     * the step is scheduled — never from the step's input, which the agent
-     * writes. Absent when nothing recorded one, which `isAttendedRun` reads as
-     * nobody.
+     * Whether a person set this step's run going in its latest activation —
+     * its start, resume or retry — read from the run's state when the step is
+     * scheduled, never from the step's input, which the agent writes. Absent
+     * reads as nobody.
      */
-    rootTrigger: RunTriggerSchema.optional(),
+    activatedByPerson: z.boolean().optional(),
 
     /**
      * Where this step sits in the sequence its agent decided on. Present only
@@ -731,11 +731,11 @@ export const TimerItemSchema = z
     spaceId: z.string().uuid().optional(),
 
     /**
-     * A workflow task's root trigger, for the job this timer dispatches: a task
-     * has no session state to read it from when the timer fires. A session's
-     * timer reads its session instead.
+     * A workflow task's `activatedByPerson`, for the job this timer
+     * dispatches: a task has no session state to read it from when the timer
+     * fires. A session's timer reads its session instead.
      */
-    rootTrigger: RunTriggerSchema.optional(),
+    activatedByPerson: z.boolean().optional(),
 
     /**
      * What an `executor_wait` timer dispatches, whole, since when it has
@@ -852,6 +852,12 @@ export const StartRunCommandSchema = z.object({
   spaceId: z.string().uuid().optional(),
   /** How this run was triggered — surfaces in agent FlowRunContext */
   trigger: RunTriggerSchema.optional(),
+  /**
+   * Whether a person sets the run going with this command: decided where the
+   * command is made, from how its request was authenticated, never from what
+   * the request says. The session's jobs carry it until the next activation.
+   */
+  activatedByPerson: z.boolean().default(false),
   /** Whether the user is interacting via voice — mutable, can change on resume */
   voiceMode: z.boolean().optional(),
   clientMessageId: ClientMessageIdSchema.optional(),
@@ -878,6 +884,12 @@ export const ResumeRunCommandSchema = z.object({
   /** Whether the user is interacting via voice — mutable, can change per-turn */
   voiceMode: z.boolean().optional(),
   clientMessageId: ClientMessageIdSchema.optional(),
+  /**
+   * Whether a person sets the run going with this command: decided where the
+   * command is made, from how its request was authenticated, never from what
+   * the request says. The session's jobs carry it until the next activation.
+   */
+  activatedByPerson: z.boolean().default(false),
 });
 
 export const CancelRunCommandSchema = z.object({
@@ -913,6 +925,12 @@ export const RetryRunCommandSchema = z.object({
   idempotencyKey: IdempotencyKeySchema,
   requestedAtMs: z.number().int().positive(),
   actorContext: ActorContextSchema.optional(),
+  /**
+   * Whether a person sets the run going with this command: decided where the
+   * command is made, from how its request was authenticated, never from what
+   * the request says. The session's jobs carry it until the next activation.
+   */
+  activatedByPerson: z.boolean().default(false),
 });
 
 export const ControlMessageSchema = z.discriminatedUnion('type', [

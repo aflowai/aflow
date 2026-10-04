@@ -36,6 +36,7 @@ import type {
   TenantId,
 } from '@aflow/schemas';
 import type { DirectRoomMessageInput, ResumeSessionRequest } from './sessions.js';
+import { isInteractiveActor } from '../utils/interactiveUser.js';
 
 export interface AppletEffectsRelayDeps {
   db: PostgresJsDatabase;
@@ -251,6 +252,7 @@ async function deliverWaking(
       input: {},
       idempotencyKey: `appletwake:${receipt.actionId}`,
       ...(actorContext !== undefined ? { actorContext } : {}),
+      activatedByPerson: isInteractiveActor(actorContext),
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

@@ -5,8 +5,8 @@
  * A profile gone from the policy has its browser stopped, and the pages in it
  * go with it; one still starting is stopped as soon as it has started. A
  * profile still there takes its new rules at once, and the pages of runs it
- * no longer serves — another space, or a run nobody started once it takes
- * none — are closed. Neither waits for the idle limit:
+ * no longer serves — another space, or a run nobody is present for once it
+ * takes none — are closed. Neither waits for the idle limit:
  * until then such a page would go on serving a run that may no longer use the
  * profile, under rules the operator has since removed.
  */

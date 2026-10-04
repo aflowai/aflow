@@ -1,8 +1,9 @@
 /**
- * A delegated session is queued holding its parent's root trigger, so a Runner
- * a person's conversation delegated to counts as attended and the same one a
- * schedule reached does not. The delegation's input is the agent's to write
- * and names nothing that counts.
+ * A delegated session starts as its parent is at the moment it delegates: a
+ * Runner a person's conversation delegated to while they were there is
+ * attended, and the same conversation woken by a schedule delegates an
+ * unattended one, however a person started it. The delegation's input is the
+ * agent's to write and counts for nothing.
  */
 import type { SessionHotState } from '@aflow/redis';
 import type {
@@ -46,7 +47,7 @@ vi.mock('./helpers.js', () => ({
 
 const { handleDelegateInline } = await import('./delegate.js');
 
-const TENANT = 'tenant-delegate-root' as TenantId;
+const TENANT = 'tenant-delegate-activation' as TenantId;
 const PARENT = '00000000-0000-0000-0000-0000000000d1' as SessionId;
 const SPACE = '00000000-0000-0000-0000-0000000000d2';
 
@@ -61,12 +62,12 @@ const stepDef = {
   onFailure: { next: [] },
 } as unknown as StepDefinition;
 
-/** What the parent's agent asks for, a trigger of its choosing among it. */
+/** What the parent's agent asks for, a person's presence of its choosing among it. */
 const delegation = {
   target: { kind: 'platform-role', systemRole: 'web-researcher' },
   input: 'look this up',
   wait: false,
-  rootTrigger: 'chat',
+  activatedByPerson: true,
   trigger: 'chat',
 };
 
@@ -106,22 +107,24 @@ beforeEach(() => {
   mockAddStepResult.mockReset().mockResolvedValue(undefined);
 });
 
-describe('a delegated session’s root trigger', () => {
-  it('is a person’s conversation when the parent’s root is one', async () => {
-    const { queued, started } = await delegateFrom({ trigger: 'chat', rootTrigger: 'chat' });
-    expect(queued.rootTrigger).toBe('chat');
+describe('a delegated session’s activatedByPerson', () => {
+  it('is attended while the parent is attended now', async () => {
+    const { queued, started } = await delegateFrom({ trigger: 'chat', activatedByPerson: true });
+    expect(queued.activatedByPerson).toBe(true);
+    expect(started['activatedByPerson']).toBe(true);
     expect(started).not.toHaveProperty('trigger');
   });
 
-  it('is the schedule when a schedule started the parent’s root, whatever the input says', async () => {
-    const { queued, started } = await delegateFrom({ rootTrigger: 'schedule' });
-    expect(queued.rootTrigger).toBe('schedule');
+  it('is unattended when the parent a person started was last woken by a schedule, whatever the input says', async () => {
+    const { queued, started } = await delegateFrom({ trigger: 'chat', activatedByPerson: false });
+    expect(queued.activatedByPerson).toBe(false);
+    expect(started['activatedByPerson']).toBe(false);
     expect(queued).not.toHaveProperty('trigger');
-    expect(started).not.toHaveProperty('trigger');
   });
 
-  it('is absent when the parent holds none', async () => {
-    const { queued } = await delegateFrom({ trigger: 'chat' });
-    expect(queued).not.toHaveProperty('rootTrigger');
+  it('is unattended when the parent holds none', async () => {
+    const { queued, started } = await delegateFrom({ trigger: 'chat' });
+    expect(queued.activatedByPerson).toBe(false);
+    expect(started['activatedByPerson']).toBe(false);
   });
 });

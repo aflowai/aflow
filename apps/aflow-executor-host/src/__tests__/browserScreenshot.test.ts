@@ -23,6 +23,7 @@ import { describe, expect, it } from 'vitest';
 import { screenshotDescription } from '../browser/screenshot.js';
 import { createBrowserHandler } from '../handlers/browserHandler.js';
 import { harness, RUN_A, type Harness } from './fixtures/fakeBrowser.js';
+import { memoryApprovals } from './fixtures/approvals.js';
 
 const PAGE = 'https://example.com/report';
 const STEP = 'step-shot';
@@ -64,7 +65,7 @@ async function run(
       return ref;
     },
   } as unknown as ExecutorContext;
-  return { result: await createBrowserHandler(h.driver).execute(ctx), written };
+  return { result: await createBrowserHandler(h.driver, memoryApprovals()).execute(ctx), written };
 }
 
 async function opened(sizes: { pngBytes?: number; jpegBytes?: number } = {}) {

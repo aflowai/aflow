@@ -45,6 +45,12 @@ export interface ActionCenterScope {
 export interface ActionCenterContext extends ActionCenterScope, ActionCenterReader {
   /** Auth method from the caller's token — audit attribution only. */
   actorAuthMethod?: string;
+  /**
+   * Whether the request resolving was authenticated as an interactive user
+   * (`isInteractiveUser`): a resolve that resumes a run counts as a person
+   * setting it going only then. Absent reads as not.
+   */
+  actorIsInteractiveUser?: boolean;
 }
 
 /**

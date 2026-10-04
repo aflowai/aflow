@@ -1,7 +1,8 @@
 /**
- * What started a run's root reaches its executor on every job, read from the
- * session's state as the step is scheduled. The step's input is the agent's to
- * write, so a trigger named there changes nothing.
+ * Whether a person set the run going in its latest activation reaches its
+ * executor on every job, read from the session's state as the step is
+ * scheduled. The step's input is the agent's to write, so a claim made there
+ * changes nothing.
  */
 import type { PayloadStore } from '@aflow/payload-store';
 import type { SessionHotState } from '@aflow/redis';
@@ -49,7 +50,7 @@ vi.mock('../relayWorkflowTaskActivity.js', () => ({
 const { createScheduleStep } = await import('../scheduleStep.js');
 type Bindings = Parameters<typeof createScheduleStep>[0];
 
-const TENANT = 'tenant-root-trigger' as TenantId;
+const TENANT = 'tenant-activation' as TenantId;
 const RUN = '00000000-0000-0000-0000-0000000000b1' as SessionId;
 const SPACE = '00000000-0000-0000-0000-0000000000b2';
 const STEP = 'browser_open_1' as StepId;
@@ -113,9 +114,9 @@ function scheduleStep() {
   return { schedule: createScheduleStep(bindings), applyResult };
 }
 
-/** A step input naming a trigger of its own, as an agent could write one. */
+/** A step input claiming a person, as an agent could write one. */
 const CLAIMING_INPUT = `inline:${Buffer.from(
-  JSON.stringify({ url: 'https://example.com', rootTrigger: 'chat', trigger: 'chat' }),
+  JSON.stringify({ url: 'https://example.com', activatedByPerson: true, trigger: 'chat' }),
 ).toString('base64')}`;
 
 function session(state: Partial<SessionHotState>): void {
@@ -139,19 +140,19 @@ beforeEach(() => {
   mockGetRunAccessGrant.mockResolvedValue(grant());
 });
 
-describe('a step job’s root trigger', () => {
+describe('a step job’s activatedByPerson', () => {
   it('is the session’s, whatever the step input claims', async () => {
-    session({ trigger: 'schedule', rootTrigger: 'schedule' });
-    expect((await scheduledJob())['rootTrigger']).toBe('schedule');
+    session({ trigger: 'chat', activatedByPerson: false });
+    expect((await scheduledJob())['activatedByPerson']).toBe(false);
   });
 
-  it('is the root’s for a session started by another, not the session’s own', async () => {
-    session({ rootTrigger: 'chat' });
-    expect((await scheduledJob())['rootTrigger']).toBe('chat');
+  it('is the latest activation’s, not the trigger the session was born with', async () => {
+    session({ trigger: 'schedule', activatedByPerson: true });
+    expect((await scheduledJob())['activatedByPerson']).toBe(true);
   });
 
-  it('is absent when the session holds none, even with a trigger of its own', async () => {
+  it('is absent when the session holds none, even with a trigger of a person’s', async () => {
     session({ trigger: 'chat' });
-    expect(await scheduledJob()).not.toHaveProperty('rootTrigger');
+    expect(await scheduledJob()).not.toHaveProperty('activatedByPerson');
   });
 });

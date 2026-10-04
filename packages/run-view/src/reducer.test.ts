@@ -2793,6 +2793,7 @@ describe('Plan 192 Phase 2 — blockedOn lifecycle', () => {
     // that the run is parked rather than hung.
     const blockedOn = {
       kind: 'needs_write_approval' as const,
+      target: 'api' as const,
       stepExecutionId: STEP_EXEC_ID,
       apiId: 'etoro-trading',
       endpointId: 'createOrder',
@@ -2816,6 +2817,33 @@ describe('Plan 192 Phase 2 — blockedOn lifecycle', () => {
     expect(next.status).toBe('PAUSED');
     expect(next.blockedOn).toEqual(blockedOn);
     expect(next.requiredInput?.prompt).toBeUndefined();
+  });
+
+  it('a browser action waiting on the operator reaches state as blockedOn too', () => {
+    const blockedOn = {
+      kind: 'needs_write_approval' as const,
+      target: 'browser' as const,
+      stepExecutionId: STEP_EXEC_ID,
+      profileId: 'default',
+      pageOrigin: 'https://shop.example.com',
+      action: 'click',
+      elementRole: 'button',
+      elementName: 'Pay now',
+      requestHash: 'def456',
+    };
+    const next = apply(
+      initialRunViewState,
+      makeEvent('SessionStarted', {}),
+      makeEvent(
+        'SessionPaused',
+        {},
+        {
+          stepExecutionId: STEP_EXEC_ID,
+          metadata: { pauseReason: 'input_required', pauseType: 'approval', blockedOn },
+        },
+      ),
+    );
+    expect(next.blockedOn).toEqual(blockedOn);
   });
 
   it('HYDRATE_SNAPSHOT carries blockedOn', () => {

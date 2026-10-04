@@ -189,7 +189,7 @@ describe('edits to the policy file', () => {
     });
   });
 
-  it('close a profile to runs nobody started and open it again, as the list and the executor read it', async () => {
+  it('close a profile to runs nobody is present for and open it again, as the list and the executor read it', async () => {
     await writePolicy({ browsers: [{ id: 'default' }, { id: 'work', posture: 'read-only' }] });
     const printed: string[] = [];
 
@@ -202,8 +202,9 @@ describe('edits to the policy file', () => {
       { id: 'work', posture: 'read-only', unattended: false },
     ]);
     expect(printed[0]).toBe(
-      'Profile `work` is closed to runs nobody started: only a run a person started in a ' +
-        'conversation or by voice, or one delegated from it, may use it.',
+      'Profile `work` is closed to runs nobody is present for: only a run a person last set ' +
+        'going — a message in a conversation or by voice, an answer in the Action Center — or ' +
+        'one delegated from it then, may use it.',
     );
     expect((await loadHostPolicy(policyPath, () => CHROME)).browsers.get('work')?.unattended).toBe(
       false,
@@ -212,7 +213,7 @@ describe('edits to the policy file', () => {
     await runBrowserCommand({ kind: 'list' }, deps(listed, testClock()));
     expect(listed).toContain(
       'work — read-only, window hidden, idle after 30 minutes, open to every space, closed to ' +
-        'runs nobody started',
+        'runs nobody is present for',
     );
 
     printed.length = 0;
@@ -225,7 +226,7 @@ describe('edits to the policy file', () => {
       posture: 'read-only',
       unattended: true,
     });
-    expect(printed[0]).toBe('Profile `work` is open to runs nobody started.');
+    expect(printed[0]).toBe('Profile `work` is open to runs nobody is present for.');
   });
 
   it('refuse what the schema refuses, leaving the file as it was', async () => {
@@ -385,12 +386,34 @@ describe('asking the running executor', () => {
     const printed: string[] = [];
     await runBrowserCommand({ kind: 'list' }, deps(printed, testClock()));
     expect(printed).toEqual([
-      'work — autonomous, window hidden, idle after 30 minutes, open to every space, and to runs nobody started',
+      'work — autonomous, window hidden, idle after 30 minutes, open to every space, and to runs nobody is present for',
       '    deny *.example.com',
       `    directory: ${join(dir, 'browsers', 'work')}`,
       '    stopped',
       '\nNo browser executor is running on this machine, so no profile’s browser is.',
     ]);
+  });
+
+  it('sets and lists asking — the posture and the rule — saying what each does', async () => {
+    await writePolicy({ browsers: [{ id: 'work' }] });
+    const clock = testClock();
+    await runBrowserCommand(
+      { kind: 'posture', profileId: 'work', posture: 'ask-to-act' },
+      deps([], clock),
+    );
+    await runBrowserCommand(
+      { kind: 'rule', profileId: 'work', origin: 'https://bank.example.org', effect: 'ask' },
+      deps([], clock),
+    );
+    const printed: string[] = [];
+    await runBrowserCommand({ kind: 'list' }, deps(printed, clock));
+    expect(printed.slice(0, 3)).toEqual([
+      'work — ask-to-act, window hidden, idle after 30 minutes, open to every space, and to ' +
+        'runs nobody is present for',
+      '    every action waits for your approval in the Action Center',
+      '    ask https://bank.example.org — pages there open and are read; every action waits for your approval',
+    ]);
+    expect(printed.join('\n')).not.toContain('not available');
   });
 
   it('refuses a request too old to act on, answering it and logging why', async () => {

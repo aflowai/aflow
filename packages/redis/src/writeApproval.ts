@@ -2,6 +2,7 @@ import type { Redis } from 'ioredis';
 import {
   type HostApprovedPush,
   stableHash,
+  WRITE_APPROVAL_GRANT_TTL_SECONDS,
   WriteApprovalGrantSchema,
   type WriteApprovalGrant,
 } from '@aflow/schemas';
@@ -18,9 +19,8 @@ import {
  * bound to the exact call (requestHash) within the run regardless. No
  * non-authenticated resume (a scheduled `{}` wake, an agent-driven resume) can
  * mint this, so a resume that is not an explicit human decision cannot approve.
- * TTL-bounded: an unconsumed grant simply expires.
+ * TTL-bounded (`WRITE_APPROVAL_GRANT_TTL_SECONDS`): an unconsumed grant simply expires.
  */
-const WRITE_APPROVAL_GRANT_TTL_SECONDS = 3600;
 
 export function writeApprovalGrantKey(
   tenantId: string,

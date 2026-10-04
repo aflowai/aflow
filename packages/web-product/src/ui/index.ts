@@ -157,6 +157,8 @@ export type {
   ActionCenterItemOrigin,
   CoachProposalExtension,
   OAuthConsentExtension,
+  ApiWriteApprovalExtension,
+  BrowserWriteApprovalExtension,
   WriteApprovalExtension,
 } from './hooks/use-action-center-types.js';
 export { useActionCenter } from './hooks/use-action-center.js';

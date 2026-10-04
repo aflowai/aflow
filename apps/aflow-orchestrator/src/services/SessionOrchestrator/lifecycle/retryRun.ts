@@ -194,6 +194,7 @@ export function createRetryRun(bindings: SessionOrchestratorBindings) {
       retryCount: newRetryCount,
       lastUpdatedAt: now,
       interruptRequested: false,
+      activatedByPerson: params.activatedByPerson,
     });
 
     // A retry re-enters RUNNING, so the run takes its capacity back. Failing

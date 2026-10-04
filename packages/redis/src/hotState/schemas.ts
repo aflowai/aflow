@@ -126,12 +126,17 @@ export const SessionHotStateSchema = z.object({
   // How this session was triggered (immutable after creation)
   trigger: RunTriggerSchema.optional(),
   /**
-   * What started the root of this session's run: its own trigger when it is
-   * the root, its parent's or its workflow anchor's root trigger when it was
-   * started by one. Immutable after creation, and stamped on every job the
-   * session schedules.
+   * Whether a person set this session going in its latest activation: true
+   * only when its start, or its latest resume or retry, came from an
+   * interactive user's request at the API — a message, an operator's resolve.
+   * Every other activation — a schedule, a webhook, a timer, a child run
+   * finishing, an agent's resume — writes false, and so does the queued start
+   * of a child run whose parent is not attended at that moment. The
+   * orchestrator writes it in the same write that starts or resumes the
+   * session, and stamps it on every job the session schedules. Absent reads as
+   * nobody.
    */
-  rootTrigger: RunTriggerSchema.optional(),
+  activatedByPerson: z.boolean().optional(),
   // Whether the user is currently interacting via voice (mutable — toggled on start/resume)
   // Stored as string 'true'/'false' in Redis, deserialized to boolean by deserializeFromHash
   voiceMode: z.boolean().optional(),

@@ -208,6 +208,7 @@ async function handleSendMessage(
       target,
       input: { message: inputText },
       spaceId,
+      activatedByPerson: false,
     },
     baseUrl,
   );
@@ -363,6 +364,7 @@ async function handleSendStreamingMessage(
       target,
       input: { message: inputText },
       spaceId,
+      activatedByPerson: false,
     },
     baseUrl,
   );

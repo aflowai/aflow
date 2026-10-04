@@ -12,8 +12,16 @@ import {
   BROWSER_OUTLINE_MAX_CHARS,
   BROWSER_READ_DEFAULT_CHARS,
   type BrowserProfile,
+  grantAnswersAsk,
 } from '@aflow/schemas';
 
+import {
+  askStandsUntil,
+  BrowserApprovalRequired,
+  browserCallKey,
+  clearAction,
+  forfeitApproval,
+} from './actionApproval.js';
 import { type LocalAddressClassifier, machineAddresses } from './addresses.js';
 import type { ChromeLauncher } from './chromeProcess.js';
 import { CREDENTIAL_FIELD_KEYS, entersValue, MODIFIERS } from './credentialFields.js';
@@ -36,7 +44,7 @@ import {
   type BrowserPolicy,
   chromeExecutable,
   listedIds,
-  profileOpenToRunStart,
+  profileOpenToActivation,
   profileOpenToSpace,
   profileServesRun,
   resolveProfile,
@@ -80,7 +88,7 @@ import {
   type HeldPage,
   type PageOwner,
 } from './pageTable.js';
-import { assertActionAllowed, assertNavigationAllowed } from './rules.js';
+import { askUnanswerable, assertNavigationAllowed, gateAction, scriptAsks } from './rules.js';
 import { screenshotWithinCeiling, type ScreenshotRequest } from './screenshot.js';
 import { readWhenQuiet, realClock, type SettleClock } from './settle.js';
 import {
@@ -358,8 +366,9 @@ export class BrowserDriver {
     { held, running, profile }: PageInUse,
   ): Promise<ActionResult> {
     // Where the page is now, not where the agent believes it is.
-    const pageUrl = urlOrNothing(held.page.url()) ?? new URL('about:blank');
-    assertActionAllowed(profile, pageUrl);
+    const pageHref = held.page.url();
+    const pageUrl = urlOrNothing(pageHref) ?? new URL('about:blank');
+    gateAction(profile, pageUrl);
     if (request.redelivered) {
       return {
         outcome: 'uncertain_outcome',
@@ -367,11 +376,19 @@ export class BrowserDriver {
       };
     }
 
+    const callKey = browserCallKey(held.pageId, request.ref, request.action);
+    // A reference that no longer resolves spends any approval the call was
+    // parked on: the operator approved an element that is not there to act on.
+    const stale = async (): Promise<BrowserDriverError> => {
+      if (request.approvals !== undefined) {
+        await forfeitApproval(request.approvals, request, callKey);
+      }
+      return await this.staleRef(held, running, request.ref);
+    };
+
     const snapshot = held.lastSnapshot;
-    const element = snapshot !== undefined ? describeRef(snapshot.text, request.ref) : undefined;
-    if (snapshot === undefined || element === undefined) {
-      throw await this.staleRef(held, running, request.ref);
-    }
+    let element = snapshot !== undefined ? describeRef(snapshot.text, request.ref) : undefined;
+    if (snapshot === undefined || element === undefined) throw await stale();
     if (entersValue(request.action) && snapshot.maskedRefs.has(request.ref)) {
       throw this.credentialRefusal(request.ref, element.name);
     }
@@ -381,7 +398,7 @@ export class BrowserDriver {
     try {
       frameUrl = await held.page.frameUrl(request.ref);
     } catch (error) {
-      if (error instanceof EngineRefNotFound) throw await this.staleRef(held, running, request.ref);
+      if (error instanceof EngineRefNotFound) throw await stale();
       throw new BrowserDriverError(
         'action_failed',
         `Which frame \`${request.ref}\` belongs to could not be read, so it was not acted on: ` +
@@ -389,7 +406,63 @@ export class BrowserDriver {
         { ref: request.ref },
       );
     }
-    assertActionAllowed(profile, pageUrl, urlOrNothing(frameUrl) ?? new URL('about:blank'));
+    const frame = urlOrNothing(frameUrl) ?? new URL('about:blank');
+    const gate = gateAction(profile, pageUrl, frame);
+    if (gate.verdict === 'ask') {
+      if (request.approvals === undefined) throw askUnanswerable(profile, frame.origin);
+      // The operator judges the element as the page holds it now, and the
+      // dispatch after an approval reads it again: a page that changed in
+      // between hashes differently and is not acted on.
+      const now = await this.readNow(held);
+      const current = describeRef(now.snapshot.text, request.ref);
+      if (current === undefined) throw await stale();
+      if (entersValue(request.action) && now.snapshot.maskedRefs.has(request.ref)) {
+        throw this.credentialRefusal(request.ref, current.name);
+      }
+      element = current;
+      const approvals = request.approvals;
+      const standsUntil = askStandsUntil(this.now());
+      const cleared = await clearAction(
+        approvals,
+        request,
+        callKey,
+        {
+          profileId: profile.id,
+          pageId: held.pageId,
+          pageUrl: pageHref,
+          frameUrl,
+          pageOrigin: frame.origin,
+          pagePath: frame.pathname,
+          pageTitle: now.title,
+          ref: request.ref,
+          element: current,
+          action: request.action,
+          credentialField: now.snapshot.maskedRefs.has(request.ref),
+          askedBy: gate.askedBy,
+        },
+        standsUntil,
+        async () => await this.approvalScreenshot(held),
+      ).catch((error: unknown) => {
+        if (error instanceof BrowserApprovalRequired) {
+          held.pendingAsks.set(error.request.requestHash, {
+            owner: { tenantId: request.tenantId, runId: request.runId },
+            store: approvals.store,
+            standsUntil,
+            decidedBefore: error.request.decidedBefore,
+          });
+        }
+        throw error;
+      });
+      if (cleared === 'superseded') {
+        throw this.staleRefError(
+          held,
+          request.ref,
+          (await this.observe(held, running).catch(() => undefined))?.outline.text,
+          'The operator approved this action on the page as it stood when it was asked for, and ' +
+            'the page has changed since, so it was not performed and the approval is spent. ',
+        );
+      }
+    }
 
     const before = this.lastSeen(held);
     const startedAt = this.now();
@@ -572,7 +645,7 @@ export class BrowserDriver {
           posture: profile.posture,
           window: profile.window,
           unattended: profile.unattended,
-          openToThisRun: profileOpenToRunStart(profile, scope.rootTrigger),
+          openToThisRun: profileOpenToActivation(profile, scope.activatedByPerson),
         };
         const running = this.browsers.get(profile.id);
         if (running === undefined) {
@@ -626,7 +699,10 @@ export class BrowserDriver {
           { pageId, profileId: profile.id },
         );
       }
-      assertActionAllowed(profile, urlOrNothing(held.page.url()) ?? new URL('about:blank'));
+      const pageUrl = urlOrNothing(held.page.url()) ?? new URL('about:blank');
+      if (gateAction(profile, pageUrl).verdict === 'ask') {
+        throw scriptAsks(profile, pageUrl.origin);
+      }
       let value: unknown;
       try {
         value = await withinDeadline(held.page.evaluate(expression), EVALUATE_TIMEOUT_MS);
@@ -708,7 +784,8 @@ export class BrowserDriver {
    * Close pages nothing has touched for their profile's idle limit, then stop
    * browsers that have had no page for as long — at most `limit` of the two
    * together, the rest left for the next sweep. A profile with an operation in
-   * flight, or its window shown, is passed over.
+   * flight, or its window shown, is passed over, and so is a page with an ask
+   * waiting on the operator, which keeps its browser running too.
    */
   async sweepIdle(limit: number): Promise<IdleSweep> {
     const now = this.now();
@@ -717,6 +794,9 @@ export class BrowserDriver {
       if (closedPages >= limit) break;
       const running = this.browsers.get(held.profileId);
       if (running === undefined || this.browsers.busy(held.profileId)) continue;
+      if (now - held.lastUsedAt < running.state.profile.idleMinutes * MINUTE_MS) continue;
+      if (await this.heldForAnswer(held, now)) continue;
+      // An answer the sweep has just found counts as use.
       if (now - held.lastUsedAt < running.state.profile.idleMinutes * MINUTE_MS) continue;
       this.pages.forget(held);
       await closeWithinDeadline(held.page);
@@ -734,6 +814,27 @@ export class BrowserDriver {
       stoppedProfiles += 1;
     }
     return { closedPages, stoppedProfiles };
+  }
+
+  /**
+   * Whether an ask parked on the page still waits for the operator. An ask
+   * that lapsed unanswered is dropped; one answered since the last sweep is
+   * dropped too, and the page counts as used now, so the dispatch the answer
+   * brings finds it open.
+   */
+  private async heldForAnswer(held: HeldPage, now: number): Promise<boolean> {
+    for (const [requestHash, ask] of held.pendingAsks) {
+      if (now >= ask.standsUntil) {
+        held.pendingAsks.delete(requestHash);
+        continue;
+      }
+      const grant = await ask.store.grant(ask.owner, requestHash).catch(() => null);
+      if (grantAnswersAsk(grant, ask.decidedBefore)) {
+        held.pendingAsks.delete(requestHash);
+        held.lastUsedAt = Math.max(held.lastUsedAt, now);
+      }
+    }
+    return held.pendingAsks.size > 0;
   }
 
   /**
@@ -786,6 +887,7 @@ export class BrowserDriver {
     try {
       const policy = await this.deps.loadPolicy();
       const profile = this.profileFor(policy, held.profileId, scope);
+      held.activatedByPerson = scope.activatedByPerson === true;
       const running = this.runningFor(held);
       this.touch(held, running);
       return await operation({ held, running, profile });
@@ -892,10 +994,15 @@ export class BrowserDriver {
     };
   }
 
-  private staleRefError(held: HeldPage, ref: string, outline?: string): BrowserDriverError {
+  private staleRefError(
+    held: HeldPage,
+    ref: string,
+    outline?: string,
+    why = '',
+  ): BrowserDriverError {
     return new BrowserDriverError(
       'stale_ref',
-      `Reference \`${ref}\` does not resolve on page \`${held.pageId}\` as it is now ` +
+      `${why}Reference \`${ref}\` does not resolve on page \`${held.pageId}\` as it is now ` +
         `(${held.lastUrl}). References come from the newest outline or snapshot of the page; the ` +
         'current outline is in this error’s details — act on its references.',
       {
@@ -916,6 +1023,18 @@ export class BrowserDriver {
       .then((view) => view.outline.text)
       .catch(() => undefined);
     return this.staleRefError(held, ref, outline);
+  }
+
+  /** The page as the operator is asked about it, password fields masked; nothing when it cannot be taken. */
+  private async approvalScreenshot(
+    held: HeldPage,
+  ): Promise<{ data: string; mimeType: string } | undefined> {
+    const taken = await screenshotWithinCeiling(held.page, { fullPage: false }).catch(
+      () => undefined,
+    );
+    return taken === undefined
+      ? undefined
+      : { data: taken.bytes.toString('base64'), mimeType: taken.contentType };
   }
 
   private credentialRefusal(ref: string, name: string | undefined): BrowserDriverError {

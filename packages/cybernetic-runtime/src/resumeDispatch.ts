@@ -129,6 +129,8 @@ export interface DispatchResumeRequest {
   actorContext?: ActorContext;
   voiceMode?: boolean;
   clientMessageId?: string;
+  /** Decided by whoever dispatches: only a request authenticated as an interactive user is a person. */
+  activatedByPerson: boolean;
 }
 
 /**
@@ -166,6 +168,7 @@ export async function dispatchResume(
     ...(request.actorContext ? { actorContext: request.actorContext } : {}),
     ...(request.voiceMode !== undefined ? { voiceMode: request.voiceMode } : {}),
     ...(request.clientMessageId ? { clientMessageId: request.clientMessageId } : {}),
+    activatedByPerson: request.activatedByPerson,
   });
   return claim;
 }

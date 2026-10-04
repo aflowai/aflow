@@ -130,7 +130,9 @@ export const BrowserOriginRuleSchema = z.object({
     .describe(
       'What navigating to or acting on a page at this origin does, over the posture. `deny` ' +
         'also refuses every connection to its host, so no redirect, subresource or script ' +
-        'reaches it. Where several rules match, the most restrictive one holds.',
+        'reaches it. `ask` is `ask-to-act` for that origin alone: pages there open and are ' +
+        'read, and every action on one waits for the operator’s approval. ' +
+        'Where several rules match, the most restrictive one holds.',
     ),
 });
 export type BrowserOriginRule = z.infer<typeof BrowserOriginRuleSchema>;
@@ -175,9 +177,11 @@ export const BrowserProfileSchema = z.object({
     .boolean()
     .default(true)
     .describe(
-      'Whether a run nobody started may use it — one a schedule, a webhook, the API, an MCP ' +
-        'client or an eval started, and every run delegated from one. `false` keeps it to runs ' +
-        'that a conversation or voice session someone started leads back to.',
+      'Whether a run nobody is present for may use it — one a schedule, a webhook, the API, ' +
+        'an MCP client, an eval, a timer, a sub-agent finishing or an agent last started or ' +
+        'resumed. `false` keeps it to runs a person last set going — a message in a ' +
+        'conversation or by voice, an answer in the Action Center — and runs delegated from ' +
+        'one while it was.',
     ),
   idleMinutes: z
     .number()

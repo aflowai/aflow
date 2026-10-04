@@ -1,19 +1,12 @@
 /**
- * A workflow a conversation started with workflow.run.start runs its tasks as
- * that conversation's: each Runner session is queued holding the anchor's root
- * trigger, and each operation task's job carries it — through a timer too,
- * which has no session to read it from. The same skill started by a schedule
- * carries the schedule.
+ * A workflow a conversation started with workflow.run.start runs each task as
+ * the conversation is when the task is dispatched: each Runner session is
+ * queued holding the anchor's activatedByPerson, and each operation task's job
+ * carries it — through a timer too, which has no session to read it from. The
+ * same conversation last woken by a schedule dispatches unattended tasks.
  */
 import type { SessionHotState } from '@aflow/redis';
-import type {
-  PayloadRef,
-  RunTrigger,
-  SessionId,
-  TenantId,
-  TimerItem,
-  TraceId,
-} from '@aflow/schemas';
+import type { PayloadRef, SessionId, TenantId, TimerItem, TraceId } from '@aflow/schemas';
 import { SNOOZE_OPERATION_ID } from '@aflow/schemas';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -69,7 +62,7 @@ function anchor(state: Partial<SessionHotState> | null): void {
   );
 }
 
-async function runnerRootTrigger(): Promise<RunTrigger | undefined> {
+async function runnerActivation(): Promise<boolean | undefined> {
   await spawnRunnerSession(deps, {
     tenantId: TENANT,
     spaceId: SPACE,
@@ -83,10 +76,10 @@ async function runnerRootTrigger(): Promise<RunTrigger | undefined> {
   const queued = mockSetSessionState.mock.calls[0]?.[1] as SessionHotState;
   expect(queued.sessionId).toBe(WORKER);
   expect(mockAddControlMessage.mock.calls[0]?.[1]).not.toHaveProperty('trigger');
-  return queued.rootTrigger;
+  return queued.activatedByPerson;
 }
 
-async function operationJobRootTrigger(operationId: string): Promise<RunTrigger | undefined> {
+async function operationJobActivation(operationId: string): Promise<boolean | undefined> {
   const authority = await resolveWorkflowTaskAuthority(
     deps.redis,
     deps.db,
@@ -107,11 +100,11 @@ async function operationJobRootTrigger(operationId: string): Promise<RunTrigger 
     traceId: 'trace-w' as TraceId,
     spaceId: SPACE,
     snoozeDelayMs: 0,
-    ...(authority.rootTrigger !== undefined ? { rootTrigger: authority.rootTrigger } : {}),
+    activatedByPerson: authority.activatedByPerson,
   });
   const job = mockAddStepJob.mock.calls[0]?.[1] as Record<string, unknown>;
   expect(job['operationId']).toBe(operationId);
-  return job['rootTrigger'] as RunTrigger | undefined;
+  return job['activatedByPerson'] as boolean | undefined;
 }
 
 beforeEach(() => {
@@ -122,40 +115,35 @@ beforeEach(() => {
   mockScheduleShardTimer.mockReset().mockResolvedValue(undefined);
 });
 
-describe('a workflow run started from a conversation', () => {
-  it('queues its Runner as the conversation’s', async () => {
-    anchor({ trigger: 'chat', rootTrigger: 'chat' });
-    expect(await runnerRootTrigger()).toBe('chat');
+describe('a workflow run started from a conversation a person is in', () => {
+  it('queues its Runner attended', async () => {
+    anchor({ trigger: 'chat', activatedByPerson: true });
+    expect(await runnerActivation()).toBe(true);
   });
 
-  it('stamps its operation tasks’ jobs as the conversation’s', async () => {
-    anchor({ trigger: 'voice', rootTrigger: 'voice' });
-    expect(await operationJobRootTrigger('browser.page.open')).toBe('voice');
-  });
-
-  it('keeps a conversation that was itself delegated to as its root’s', async () => {
-    anchor({ rootTrigger: 'chat' });
-    expect(await runnerRootTrigger()).toBe('chat');
+  it('stamps its operation tasks’ jobs attended', async () => {
+    anchor({ trigger: 'voice', activatedByPerson: true });
+    expect(await operationJobActivation('browser.page.open')).toBe(true);
   });
 });
 
-describe('the same workflow started by a schedule', () => {
-  it('queues its Runner as the schedule’s', async () => {
-    anchor({ trigger: 'schedule', rootTrigger: 'schedule' });
-    expect(await runnerRootTrigger()).toBe('schedule');
+describe('the same conversation last woken by a schedule', () => {
+  it('queues its Runner unattended, though a person started the conversation', async () => {
+    anchor({ trigger: 'chat', activatedByPerson: false });
+    expect(await runnerActivation()).toBe(false);
   });
 
-  it('stamps its operation tasks’ jobs as the schedule’s', async () => {
-    anchor({ trigger: 'schedule', rootTrigger: 'schedule' });
-    expect(await operationJobRootTrigger('browser.page.open')).toBe('schedule');
+  it('stamps its operation tasks’ jobs unattended', async () => {
+    anchor({ trigger: 'chat', activatedByPerson: false });
+    expect(await operationJobActivation('browser.page.open')).toBe(false);
   });
 });
 
 describe('an anchor whose state is gone', () => {
-  it('gives its tasks no root trigger, which reads as nobody', async () => {
+  it('gives its tasks no person', async () => {
     anchor(null);
-    expect(await runnerRootTrigger()).toBeUndefined();
-    expect(await operationJobRootTrigger('browser.page.open')).toBeUndefined();
+    expect(await runnerActivation()).toBe(false);
+    expect(await operationJobActivation('browser.page.open')).toBe(false);
   });
 });
 
@@ -180,14 +168,15 @@ describe('a workflow task’s timer', () => {
     dispatchAttemptToken: 'poll-1',
   };
 
-  it('dispatches its job with the root trigger the timer was armed with', () => {
+  it('dispatches its job with what the timer was armed with', () => {
     expect(
-      buildWorkflowTimerStepJob({ ...timer, rootTrigger: 'chat' }, execution, 2).rootTrigger,
-    ).toBe('chat');
-    expect(buildWorkflowTimerStepJob(timer, execution, 2)).not.toHaveProperty('rootTrigger');
+      buildWorkflowTimerStepJob({ ...timer, activatedByPerson: true }, execution, 2)
+        .activatedByPerson,
+    ).toBe(true);
+    expect(buildWorkflowTimerStepJob(timer, execution, 2)).not.toHaveProperty('activatedByPerson');
   });
 
-  it('is armed with the root trigger by a snoozed task', async () => {
+  it('is armed with it by a snoozed task', async () => {
     await dispatchClaimedOperationTask(deps, {
       tenantId: TENANT,
       runId: RUN_ID,
@@ -200,8 +189,8 @@ describe('a workflow task’s timer', () => {
       traceId: 'trace-w' as TraceId,
       spaceId: SPACE,
       snoozeDelayMs: 1_000,
-      rootTrigger: 'chat',
+      activatedByPerson: true,
     });
-    expect(mockScheduleShardTimer.mock.calls[0]?.[1]).toMatchObject({ rootTrigger: 'chat' });
+    expect(mockScheduleShardTimer.mock.calls[0]?.[1]).toMatchObject({ activatedByPerson: true });
   });
 });

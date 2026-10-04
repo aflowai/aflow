@@ -114,6 +114,7 @@ export async function handleResumeInline(args: InlineHandlerArgs): Promise<void>
       traceId: context.traceId,
       idempotencyKey: `resume:${context.runId}:${stepExecutionId}` as IdempotencyKey,
       requestedAtMs: Date.now(),
+      activatedByPerson: false,
     });
 
     await abortDelegationLifecycle(redis, context.tenantId, childSessionId);

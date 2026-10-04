@@ -135,7 +135,7 @@ export async function spawnRunnerSession(
     ...(authority.credentialOwnerId ? { createdBy: authority.credentialOwnerId } : {}),
     ...(authority.actorContextJson ? { actorContextJson: authority.actorContextJson } : {}),
     ...(authority.grantJson !== undefined ? { grantJson: authority.grantJson } : {}),
-    ...(authority.rootTrigger !== undefined ? { rootTrigger: authority.rootTrigger } : {}),
+    activatedByPerson: authority.activatedByPerson,
     ...(helmsmanState?.spaceContextJson
       ? {
           spaceContextJson: helmsmanState.spaceContextJson,
@@ -244,6 +244,7 @@ export async function spawnRunnerSession(
     spaceId,
     ...(authority.credentialOwnerId ? { createdBy: authority.credentialOwnerId } : {}),
     ...(actorContext ? { actorContext } : {}),
+    activatedByPerson: authority.activatedByPerson,
   });
 }
 

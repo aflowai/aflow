@@ -14,6 +14,7 @@ import {
   ClientMessageIdSchema,
   SimulationRunInputSchema,
   SessionMetadataSchema,
+  isPersonTrigger,
   type SessionId,
   type StepExecutionId,
   type SessionAgentTarget,
@@ -22,6 +23,7 @@ import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { buildInlineAgentDefinition, createSessionService } from '../services/sessions.js';
 import { buildSessionSnapshot } from '../services/buildSessionSnapshot.js';
 import { buildActorContext } from '../utils/actorContext.js';
+import { isInteractiveUser, refusedStartMode, StartModeSchema } from '../utils/interactiveUser.js';
 import { classifyRunServiceError } from '../lib/errors.js';
 import { assertSessionSpaceAccess } from '../lib/sessionSpaceAccess.js';
 import { registerMcpElicitationRoutes } from './mcp-elicitations.js';
@@ -107,7 +109,7 @@ const StartSessionRequestSchema = z
      */
     input: z.unknown().optional(),
     inputRef: z.string().optional(),
-    mode: z.enum(['chat', 'api', 'mcp', 'voice']).optional(),
+    mode: StartModeSchema.optional(),
     context: z
       .object({
         spaceId: z.string().optional(),
@@ -352,6 +354,9 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
       const idempotencyKey = request.headers['idempotency-key'];
       const body = request.body;
       const waitParam = request.query.wait;
+      const mode = body.mode ?? 'api';
+      const modeRefusal = refusedStartMode(mode, isInteractiveUser(request.authUser));
+      if (modeRefusal) return reply.status(400).send({ error: 'BadRequest', message: modeRefusal });
 
       try {
         const baseUrl = resolveApiBaseUrl();
@@ -472,8 +477,9 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
             spaceId: space.spaceId,
             createdBy:
               (request.headers['x-on-behalf-of'] as string | undefined) ?? request.authUser?.userId,
-            trigger: body.mode ?? 'api',
-            ...(body.mode === 'voice' ? { voiceMode: true } : {}),
+            trigger: mode,
+            activatedByPerson: isPersonTrigger(mode),
+            ...(mode === 'voice' ? { voiceMode: true } : {}),
             ...(actorContext ? { actorContext } : {}),
             ...(body.clientMessageId ? { clientMessageId: body.clientMessageId } : {}),
             ...(body.simulationRunInput ? { simulationRunInput: body.simulationRunInput } : {}),
@@ -1037,6 +1043,7 @@ Event-level pages: \`GET /sessions/:id/events?limit=<n>&before=<cursor>\`.`,
           ...(actorContext ? { actorContext } : {}),
           ...(body.voiceMode !== undefined ? { voiceMode: body.voiceMode } : {}),
           ...(body.clientMessageId ? { clientMessageId: body.clientMessageId } : {}),
+          activatedByPerson: isInteractiveUser(request.authUser),
         });
 
         request.log.debug({ sessionId, stepExecutionId: body.stepExecutionId }, 'Session resumed');
@@ -1123,6 +1130,7 @@ Event-level pages: \`GET /sessions/:id/events?limit=<n>&before=<cursor>\`.`,
             : {}),
           idempotencyKey,
           ...(actorContext ? { actorContext } : {}),
+          activatedByPerson: isInteractiveUser(request.authUser),
         });
 
         request.log.info(

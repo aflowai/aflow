@@ -9,7 +9,6 @@ import { getSessionState, scheduleShardTimer } from '@aflow/redis';
 import { POLL_RESERVED_OUTPUT_KEY } from '@aflow/schemas';
 import type {
   OperationId,
-  RunTrigger,
   SessionId,
   StepExecutionId,
   StepId,
@@ -272,12 +271,12 @@ export async function applyPollGate(
   // originating Helmsman session (mirrors dispatchTask). Hot state may have
   // expired on long runs; the timer then dispatches without it.
   let credentialOwnerId: string | undefined;
-  let rootTrigger: RunTrigger | undefined;
+  let activatedByPerson = false;
   if (run.sessionId) {
     try {
       const helmsmanState = await getSessionState(deps.redis, tenantIdStr, run.sessionId);
       credentialOwnerId = helmsmanState?.createdBy;
-      rootTrigger = helmsmanState?.rootTrigger;
+      activatedByPerson = helmsmanState?.activatedByPerson === true;
     } catch {
       credentialOwnerId = undefined;
     }
@@ -299,7 +298,7 @@ export async function applyPollGate(
       dueAtMs: Date.now() + poll.intervalMs,
       spaceId: run.spaceId,
       ...(credentialOwnerId !== undefined ? { credentialOwnerId } : {}),
-      ...(rootTrigger !== undefined ? { rootTrigger } : {}),
+      activatedByPerson,
     });
   } catch (err) {
     // Timer arm failed AFTER the CAS — the re-armed completion_pending row

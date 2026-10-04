@@ -93,7 +93,7 @@ export function withUnattended(
   const unattended = requested === 'allow' ? true : requested === 'refuse' ? false : undefined;
   if (unattended === undefined) {
     throw new PolicyEditError(
-      `'${requested}' says nothing about runs nobody started. Choose allow or refuse.`,
+      `'${requested}' says nothing about runs nobody is present for. Choose allow or refuse.`,
     );
   }
   return editProfile(policy, implied, profileId, (entry) => ({ ...entry, unattended }));

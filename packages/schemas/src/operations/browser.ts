@@ -14,6 +14,7 @@ import { z } from 'zod';
 import type { OperationRegistration } from '../catalog/operationCatalog.js';
 import { buildOperationId } from '../catalog/operationId.js';
 import type { ObservedFacet, OperationObservation } from '../runtime/toolObservation.js';
+import { writeApprovalLifetimeWords } from '../runtime/writeApprovalLifetime.js';
 import { BrowserProfileIdSchema, DEFAULT_BROWSER_PROFILE_ID } from './browserProfile.js';
 
 export const BROWSER_PAGE_OPEN_OPERATION_ID = buildOperationId('browser', 'page', 'open');
@@ -374,10 +375,10 @@ export const BrowserPageActionRegistrations: OperationRegistration[] = [
           'at — open that address again.',
         'A profile that keeps sign-ins does not reach services on this machine (localhost, its ' +
           'own addresses), whatever address names them.',
-        'A profile may be closed to runs nobody started — by a schedule, a webhook, the API, an ' +
-          'MCP client or an eval, or delegated from one. Such a run is refused ' +
-          '`BROWSER_PROFILE_CLOSED_TO_UNATTENDED` on it, and the refusal is final for the run: ' +
-          'browser.profile.list shows it as `openToThisRun: false`.',
+        'A profile may be closed to runs nobody is present for — last set going by a schedule, ' +
+          'a webhook, the API, an MCP client, an eval, a timer, a sub-agent finishing or an ' +
+          'agent. Such a run is refused `BROWSER_PROFILE_CLOSED_TO_UNATTENDED` until a person ' +
+          'next sends it a message or answers it; browser.profile.list shows `openToThisRun: false`.',
         UNTRUSTED_CONTENT,
       ],
       minimalExampleInput: { url: 'https://example.com' },
@@ -451,6 +452,12 @@ export const BrowserPageActionRegistrations: OperationRegistration[] = [
           'acting again.',
         '`type` replaces the field’s contents; the receipt records the field and how many ' +
           'characters, never the text.',
+        'On a profile whose posture is `ask-to-act`, or on a page an `ask` rule names, this call ' +
+          'waits for the operator to approve it in the Action Center and then runs once. A ' +
+          `denial holds on that page for as long as the request stands, ${writeApprovalLifetimeWords()} ` +
+          'from the decision: the same call there is refused with the operator’s reason rather ' +
+          'than asked again. If the page changed while the operator decided, the action is not ' +
+          'performed and fails with the current outline.',
         POLICY_REFUSALS,
         UNTRUSTED_CONTENT,
       ],

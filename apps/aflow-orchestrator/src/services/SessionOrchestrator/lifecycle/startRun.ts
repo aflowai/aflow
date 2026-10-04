@@ -49,7 +49,6 @@ import {
 import { dispatchInlineOp } from '../handlers/dispatchInlineOp.js';
 import { routeSessionPauseToSubscribers } from '../handlers/pausedSessionRouting.js';
 import { buildRunCreatedRecoveryEvents } from '../helpers/recoveryEmitter.js';
-import { rootTriggerAtStart } from '../helpers/rootTrigger.js';
 
 import { createBuildAgentFlowContextDetails } from '../helpers/agentFlowContext.js';
 import { createRelayWorkflowTaskActivity } from '../scheduling/relayWorkflowTaskActivity.js';
@@ -77,8 +76,6 @@ export function createStartRun(bindings: SessionOrchestratorBindings) {
     }
 
     const checkExistingMs = Date.now() - startTime;
-
-    const rootTrigger = rootTriggerAtStart(existingRun, params.trigger);
 
     const stepExecutionId = generateStepExecutionId();
     const runTarget = params.target;
@@ -210,7 +207,7 @@ export function createStartRun(bindings: SessionOrchestratorBindings) {
           ...(existingRun?.workflowExecution
             ? { workflowExecution: existingRun.workflowExecution }
             : {}),
-          ...(rootTrigger ? { rootTrigger } : {}),
+          activatedByPerson: params.activatedByPerson,
         },
       );
       manifestService?.trackRun({ runId, tenantId: params.tenantId, status: 'PAUSED' });
@@ -406,7 +403,7 @@ export function createStartRun(bindings: SessionOrchestratorBindings) {
       ...(startUserMessage ? { lastMessageSeq: 1, lastActivityAt: now } : {}),
       ...(params.spaceId ? { spaceId: params.spaceId } : {}),
       ...(params.trigger ? { trigger: params.trigger } : {}),
-      ...(rootTrigger ? { rootTrigger } : {}),
+      activatedByPerson: params.activatedByPerson,
       ...(params.voiceMode ? { voiceMode: true } : {}),
       ...(params.actorContext ? { actorContextJson: JSON.stringify(params.actorContext) } : {}),
       ...(runGrant ? { grantJson: serializeRunAccessGrant(runGrant) } : {}),
@@ -635,7 +632,7 @@ export function createStartRun(bindings: SessionOrchestratorBindings) {
           scheduledAtMs: now,
           credentialOwnerId: params.createdBy,
           spaceId: params.spaceId,
-          ...(rootTrigger ? { rootTrigger } : {}),
+          activatedByPerson: params.activatedByPerson,
         });
         if (dispatched.kind === 'waiting') {
           getOrchestratorLogger().info(
