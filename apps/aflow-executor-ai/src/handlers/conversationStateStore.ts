@@ -563,10 +563,11 @@ export class ConversationStateStore {
     }
 
     // Earlier observations of a key are reduced here, at assembly, and never in
-    // stored history. A result changes form exactly once — on the first turn a
-    // later result observes or ends its key — and is byte-identical on every
-    // turn after, so the provider's prefix cache breaks once at that message
-    // and the messages before it are untouched. Nothing in the reduced form may
+    // stored history. A result changes form at most once per facet — on the
+    // first turn a later result observes the same facet and part of its page,
+    // or moves or ends the page — and is byte-identical on every turn between
+    // and after, so the provider's prefix cache breaks only at that message and
+    // the messages before it are untouched. Nothing in the reduced form may
     // vary turn to turn: no count of later results, no time.
     const historyMessages = renderToolObservations(hydratedMessages);
     for (const msg of historyMessages) {

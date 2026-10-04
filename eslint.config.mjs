@@ -46,6 +46,8 @@ export default [
             // Copied into a harness run's scratch and run there, so it is plain
             // JavaScript outside every TypeScript project.
             'apps/aflow-executor-host/src/browser/harnessRelay.mjs',
+            // Run with `node` whether the executor runs compiled or from source.
+            'apps/aflow-executor-host/src/openSandboxLauncher.mjs',
           ],
           // Cap must exceed total allowDefaultProject matches or ESLint fails (see tail-run-events.ts).
           maximumDefaultProjectFileMatchCount_THIS_WILL_SLOW_DOWN_LINTING: 96,
@@ -138,6 +140,7 @@ export default [
       'packages/*/scripts/**',
       'apps/*/scripts/**',
       'apps/aflow-executor-host/src/browser/harnessRelay.mjs',
+      'apps/aflow-executor-host/src/openSandboxLauncher.mjs',
     ],
     rules: {
       '@typescript-eslint/no-explicit-any': 'off',

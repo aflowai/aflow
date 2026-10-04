@@ -205,11 +205,10 @@ describe('browser.page.act', () => {
   });
 
   it('refuses a password field the engine finds at typing time, though the outline did not mark it', async () => {
+    const snapshot = '- textbox "Password" [ref=e5]';
     const h = harness({
       world: {
-        sites: new Map([
-          ['https://example.com/', { snapshot: '- textbox "Password" [ref=e5]', masked: [] }],
-        ]),
+        sites: new Map([['https://example.com/', { snapshot, fields: { e5: { type: 'text' } } }]]),
       },
     });
     const { pageId } = await h.driver.open({
@@ -218,6 +217,8 @@ describe('browser.page.act', () => {
       profileId: 'default',
       url: 'https://example.com/',
     });
+    // The page turns the field into a password field after the outline was read.
+    h.world.sites.set('https://example.com/', { snapshot, fields: { e5: { type: 'password' } } });
     const refused = await refusal(
       h.driver.act(act(pageId, 'e5', { kind: 'type', text: 'hunter2', submit: false })),
     );

@@ -34,6 +34,7 @@ afterEach(async () => {
 describe('the live stream', () => {
   it.skipIf(!sandboxAvailable() || confined.skip)(
     confined.title('carries standard output and keeps standard error as diagnostics'),
+    { tags: ['listener'], timeout: 120_000 },
     async () => {
       const deltas: string[] = [];
       const result = await runSandboxed({
@@ -69,11 +70,11 @@ describe('the live stream', () => {
       expect(result.stderr).toContain('the-diagnostics');
       expect(result.stderr).toContain('[SandboxDebug]');
     },
-    120_000,
   );
 
   it.skipIf(!sandboxAvailable() || confined.skip)(
     confined.title('reports output on either stream, and streams standard error only when asked'),
+    { tags: ['listener'], timeout: 120_000 },
     async () => {
       const deltas: string[] = [];
       let outputs = 0;
@@ -112,13 +113,13 @@ describe('the live stream', () => {
 
       expect(await run(true)).toContain('the-progress-report');
     },
-    120_000,
   );
 
   it.skipIf(!sandboxAvailable() || confined.skip)(
     confined.title(
       'keeps streaming past the stored-output budget, and says the stored copy is short',
     ),
+    { tags: ['listener'], timeout: 180_000 },
     async () => {
       // The budget bounds the payload, not the feed. Enforced on the live path
       // it silenced a working harness at the cap: the deltas are parsed as they
@@ -157,6 +158,5 @@ describe('the live stream', () => {
       expect(result.stdout.length).toBeLessThanOrEqual(OUTPUT_CAP_BYTES);
       expect(result.truncated).toBe(true);
     },
-    180_000,
   );
 });

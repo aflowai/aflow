@@ -21,6 +21,7 @@ import {
   HOST_COMMIT_RANGE_PATTERN,
   type HostCommitScanOutputSchema,
   type HostPushApproval,
+  type HostSandboxPosture,
   type WriteApprovalGrant,
 } from '@aflow/schemas';
 import type { z } from 'zod';
@@ -141,6 +142,12 @@ export interface PushUnderScan {
   readonly approvalFor: (requestHash: string) => Promise<WriteApprovalGrant | null>;
 }
 
+/** What a push that cleared the gate records with it. */
+export interface PushClearance {
+  /** The sandbox posture its checks ran under; absent where the folder declares none. */
+  readonly checkedUnder?: HostSandboxPosture;
+}
+
 function scanAgain(pushBase: string): string {
   return (
     `Nothing was pushed. Scan the range the push sends — from where \`origin/${pushBase}\` ` +
@@ -155,7 +162,8 @@ function scanAgain(pushBase: string): string {
  * commit the push names; a push of a commit whose folder declares checks that
  * did not pass on it here, against that base; or, where that scan did not clear
  * it or the folder's push approval is `always`, a push the operator has not
- * approved in this run.
+ * approved in this run. A push that clears it records the posture its checks
+ * ran under.
  *
  * Under `unless-unreviewed` a cleared range goes out with no grant: whether a
  * review cleared it is the publication skill's to establish, and nothing this
@@ -164,7 +172,7 @@ function scanAgain(pushBase: string): string {
 export async function requireScannedPush(
   push: PushUnderScan,
   now: number = Date.now(),
-): Promise<void> {
+): Promise<PushClearance> {
   const { bindingId, pushBase } = push;
   if (pushBase === undefined) {
     throw new ScanReceiptError(
@@ -223,14 +231,18 @@ export async function requireScannedPush(
       'other_range',
     );
   }
-  requireCheckedPush({ bindingId, sha: receipt.sha, base: measured, ...push.checks }, now);
+  const checkedUnder = requireCheckedPush(
+    { bindingId, sha: receipt.sha, base: measured, ...push.checks },
+    now,
+  );
+  const clearance: PushClearance = checkedUnder === undefined ? {} : { checkedUnder };
 
   const asksAlways = push.pushApproval === 'always';
-  if (receipt.outcome === 'clean' && !asksAlways) return;
+  if (receipt.outcome === 'clean' && !asksAlways) return clearance;
 
   const requestHash = hostPushRequestHash({ bindingId, refspec, receipt: push.receipt });
   const grant = await push.approvalFor(requestHash);
-  if (grant?.decision === 'approved' && grant.requestHash === requestHash) return;
+  if (grant?.decision === 'approved' && grant.requestHash === requestHash) return clearance;
   const reasons = [
     ...(asksAlways ? [`The push approval of \`${bindingId}\` is \`always\``] : []),
     ...(receipt.outcome === 'unscanned'

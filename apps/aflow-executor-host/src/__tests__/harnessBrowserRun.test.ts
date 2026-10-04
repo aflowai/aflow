@@ -137,9 +137,14 @@ interface Ran {
   readonly status: string;
   readonly written: Record<string, unknown>;
   readonly activity: HarnessActivityLine[];
+  readonly chromeLaunches: number;
 }
 
-async function runHarness(input: Record<string, unknown>, runId: string): Promise<Ran> {
+async function runHarness(
+  input: Record<string, unknown>,
+  runId: string,
+  space: { spaceId?: string } = { spaceId: 'space-test' },
+): Promise<Ran> {
   const h = harness({ browsers: [profile({ id: 'default' })] });
   h.world.localHosts.add('localhost');
   const written: Record<string, unknown> = {};
@@ -150,7 +155,7 @@ async function runHarness(input: Record<string, unknown>, runId: string): Promis
   }).execute({
     operationId: 'host.harness.run',
     tenantId: 't1',
-    spaceId: 'space-test',
+    ...space,
     runId,
     stepExecutionId: `se-${runId}`,
     job: { inputRef: 'inline:x' },
@@ -169,7 +174,7 @@ async function runHarness(input: Record<string, unknown>, runId: string): Promis
       return Promise.resolve(`inline:${kind}`);
     },
   } as never);
-  return { status: outcome.status, written, activity };
+  return { status: outcome.status, written, activity, chromeLaunches: h.launches.length };
 }
 
 /** The policy the spawn compiles, with this run's scratch directory written as one name. */
@@ -267,6 +272,19 @@ describe('a harness run with a browser', () => {
     expect(error.classification).toBe('validation');
     expect(error.message).toContain('`mcpArgs`');
     expect(error.message).toContain('aflow harness browser bare');
+    expect(handed).toHaveLength(0);
+  }, 60_000);
+
+  it('is refused for a job carrying no space, as a browser step is, before any browser opens', async () => {
+    handed.length = 0;
+    const ran = await runHarness(
+      { harness: 'browsing', browser: { profile: 'ephemeral' } },
+      'run-spaceless',
+      {},
+    );
+    expect(ran.status).toBe('FAILED');
+    expect((ran.written['error'] as { message: string }).message).toContain('names no workspace');
+    expect(ran.chromeLaunches).toBe(0);
     expect(handed).toHaveLength(0);
   }, 60_000);
 });

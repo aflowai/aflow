@@ -16,6 +16,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Redis from 'ioredis';
 import type { Redis as RedisType } from 'ioredis';
+import { stackRedis } from '../../../../scripts/stackRedis.mjs';
 import { StreamKeys, type SessionId, type StepExecutionId, type TenantId } from '@aflow/schemas';
 import {
   setSessionState,
@@ -44,28 +45,7 @@ import {
  */
 const TEST_DB = 14;
 
-async function redisReachable(): Promise<boolean> {
-  const probe = new Redis({
-    host: '127.0.0.1',
-    port: 6379,
-    db: TEST_DB,
-    lazyConnect: true,
-    connectTimeout: 500,
-    maxRetriesPerRequest: 1,
-    retryStrategy: () => null,
-  });
-  try {
-    await probe.connect();
-    await probe.ping();
-    return true;
-  } catch {
-    return false;
-  } finally {
-    probe.disconnect();
-  }
-}
-
-const AVAILABLE = await redisReachable();
+const STACK_REDIS = await stackRedis(TEST_DB);
 
 const TENANT = 'tenant-projection-arming' as TenantId;
 const RUN = '00000000-0000-0000-0000-0000000000a1' as SessionId;
@@ -106,7 +86,7 @@ function makeEvent(eventType: SessionEvent['eventType'] = 'StepSucceeded'): Sess
   return { eventId: crypto.randomUUID(), eventType, timestamp: Date.now(), sessionId: RUN };
 }
 
-describe.skipIf(!AVAILABLE)('projection arming', () => {
+describe.skipIf(!STACK_REDIS.available)('projection arming', () => {
   let redis: RedisType;
 
   async function reset(): Promise<void> {
@@ -121,7 +101,7 @@ describe.skipIf(!AVAILABLE)('projection arming', () => {
   }
 
   beforeEach(async () => {
-    redis = new Redis({ host: '127.0.0.1', port: 6379, db: TEST_DB, maxRetriesPerRequest: 1 });
+    redis = new Redis(STACK_REDIS.url, { maxRetriesPerRequest: 1 });
     await reset();
   });
 

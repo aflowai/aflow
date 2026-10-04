@@ -15,6 +15,7 @@ built and where its gaps are logged; the gaps that still bind are listed at the 
 | Connected folder | binding `hb_aflow` = `~/localhd/aflow`, branch prefix `aflow/`                              |
 | Push posture     | `unless-unreviewed`: a clean scan plus a child review `approve` pushes without asking       |
 | Folder checks    | `node scripts/verify-commit.mjs`, declared on `hb_aflow`; run by every publication first    |
+| Sandbox posture  | `open`, the default: commissions and checks run sandboxed, network open (below)             |
 | Commission       | the catalog's Commission Change, on `host.harness.run`, model `claude-opus-5-5`             |
 | Review           | the catalog's Local Code Review, over `origin/<base>..<sha>`                                |
 | Publication      | the catalog's Local Publish, by `patchRef`, onto `aflow/<branch>`                           |
@@ -57,7 +58,7 @@ another stream's runs.
    `node scripts/verify-commit.mjs` (`aflow harness checks hb_aflow -- node
 scripts/verify-commit.mjs`), and Local Publish runs it after the commit and before the
    scan, the review and the push, in a detached checkout of the commit with the folder's
-   dependencies linked, under the coding agent's sandbox, whose loopback is its own on Linux and closed on macOS, where a test that serves itself on loopback fails. The script reads what changed from
+   dependencies linked, under the folder's sandbox posture (below). The script reads what changed from
    `AFLOW_CHECK_BASE...AFLOW_CHECK_SHA` and runs, one line per step and stopping at the
    first failure: the two CI guards; a build of every package the touched workspaces
    or the workspaces reading a touched package reference or import, since a checkout builds
@@ -66,8 +67,18 @@ scripts/verify-commit.mjs`), and Local Publish runs it after the commit and befo
    summary, with every test of the touched workspaces and of each workspace that reads a
    touched package whose imports reach a touched file, so a contract change meets its
    consumers before the push — such a package built first, such an application's build
-   reported skipped by name — the catalog guards when `platform-artifacts` is touched and never a `*.pg.test.ts`; ESLint,
-   errors only, on touched sources; and Prettier on every touched file. A failure fails
+   reported skipped by name — the catalog guards when `platform-artifacts` is touched and never a `*.pg.test.ts`;
+   for a touched file outside every workspace, which no test imports, the repository-shape
+   guards under `packages/schemas/src/edition`, reported as run for that file by name, or
+   in a repository without that directory one line saying it has none to run;
+   on macOS, where the sandbox gives a test no loopback, less the tests tagged `listener`,
+   each named as skipped with one line saying CI runs them, their count carried in the
+   check's receipt; ESLint,
+   errors only, on touched sources; and Prettier on every touched file. A test running a
+   touched file by path imports nothing from it, so every `.mjs` or `.ts` test of those
+   workspaces whose source names a touched file's repository path, whole
+   (`scripts/verify-commit.mjs`, not `verify-commit`), in a string literal runs too, counted
+   and named in the same line as the tests imports reach. A failure fails
    the publication with the end of what it printed and nothing pushed: read it on the
    `check-commit` task, and commission the fix onto the branch. The pull request's CI
    remains the proof. By hand, from a checkout, it measures `HEAD` against `origin/main`.
@@ -76,6 +87,32 @@ scripts/verify-commit.mjs`), and Local Publish runs it after the commit and befo
 
 Approvals are held until the verdict is in; an approval given early pushes a commit the
 review may still send back.
+
+## What a commission runs under
+
+A commission, a review and the folder's checks run inside the machine's sandbox under the
+folder's sandbox posture (Plan 315 D19), which `host.binding.inspect` shows. The posture is
+what the network is. `open`, the default, is the sandbox the operator's own coding tool runs
+under with every domain allowed — Claude Code's: every host but this machine, so the agent's
+own search and fetch, Corepack, `yarn` and the registry work. `confined` is the
+workspace-write default of the other — Codex CLI's: the network off, a coding agent reaching
+only the hosts it was allowed (`aflow harness allow`) and the checks none. Loopback to the
+machine is never a job's under either: no list of ports could keep the stack's Redis, its MCP
+server or the admin tools `yarn infra:tools` publishes out of reach, so none is kept. A job's
+loopback is its own on Linux and absent on macOS, so a test that serves itself passes under
+the check on Linux and cannot listen on macOS, where the check leaves it out (above). Under
+both, each job writes a temporary directory of its own, where a shell records its working
+directory after every command, and not the system's `/tmp`, where other jobs' checkouts
+live; it writes its checkout and nothing of the folder or its `.git`, and cannot read or
+write `~/.aflow/`, where the policy every gate reads, the pairing credential and the stack's
+Redis password live. A
+change to `.mcp.json` is made by hand, because the sandbox refuses the coding agent writes to
+agent-configuration files in its checkout (F104). The executor's boot log
+says whether a shell command and `yarn --version` work under `open` on this machine, and
+whether a listener on the machine's loopback stays out of reach.
+Choose on the machine with `aflow harness sandbox <folder> open|confined`; `hb_aflow` chose
+none, so it takes the default, `open`. A push takes a check receipt only from checks run under the
+folder's posture as it pushes, so a commit checked before the posture changed is checked again.
 
 ## Sharing the machine
 

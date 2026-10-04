@@ -14,6 +14,8 @@ import type { GenerateTextRequest, TextStreamChunk } from '../types.js';
  * models default to one. Since every agent turn streams with tools, that made
  * Chat Completions structurally the wrong endpoint for this adapter, and a unit
  * test over the param mapping could not see it. This test watches the wire.
+ *
+ * @module-tag listener
  */
 
 interface Capture {

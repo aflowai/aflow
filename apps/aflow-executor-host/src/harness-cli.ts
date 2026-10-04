@@ -30,6 +30,7 @@ import { resolveHostPolicyPath } from './hostDir.js';
 import { serializePolicy, writePolicyAtomically } from './policyFile.js';
 import { checksChangeFromArgs, describeChecks, withChecks } from './folderChecks.js';
 import { describePushApproval, withPushApproval } from './pushApproval.js';
+import { describeFolderSandbox, sandboxVerb } from './sandboxPosture.js';
 
 const POLICY_PATH = resolveHostPolicyPath();
 const HOST_DIR = dirname(POLICY_PATH);
@@ -60,6 +61,8 @@ function usage(): never {
       '  harness checks <folder> --timeout-minutes <n>\n' +
       '                                     How long those checks may run.\n' +
       '  harness checks <folder> --clear    Run none.\n' +
+      '  harness sandbox <folder> <open|confined>\n' +
+      '                                     What network its coding agents and checks have.\n' +
       '  harness remove <id>                Stop allowing it.\n' +
       '  harness mcp <id> <command...>      Allow an MCP server to run here.\n' +
       '  harness mcp-remove <id>            Stop allowing it.\n' +
@@ -74,8 +77,8 @@ function usage(): never {
       'Options for `mcp`:\n' +
       '  --binding <id>        The connected folder it runs in. Required.\n' +
       '  --read <path,path>    Paths outside that folder it needs to read — where it is installed.\n\n' +
-      'A harness starts with no egress. Run it once, see which hosts it was refused,\n' +
-      'and allow the ones the work needs.',
+      'In a confined folder a harness starts with no egress. Run it once, see which hosts\n' +
+      'it was refused, and allow the ones the work needs.',
   );
   process.exit(1);
 }
@@ -222,6 +225,14 @@ async function list(): Promise<void> {
           (branchPolicy.pushApproval === undefined ? ', the default' : '') +
           `; ${describeChecks(branchPolicy)}`,
       );
+    }
+  }
+
+  const running = policy.bindings.filter((b) => b.allowsExecution);
+  if (running.length > 0) {
+    console.log('\nFolders that run commands:');
+    for (const binding of running) {
+      console.log(`  ${binding.id} — ${describeFolderSandbox(binding)}`);
     }
   }
 
@@ -450,6 +461,12 @@ async function setChecks(bindingId: string, args: readonly string[]): Promise<vo
   }
 }
 
+async function setSandbox(bindingId: string, args: readonly string[]): Promise<void> {
+  const { policy, said } = sandboxVerb(await loadPolicy(), bindingId, args);
+  await savePolicy(policy);
+  console.log(said);
+}
+
 async function remove(id: string): Promise<void> {
   const policy = await loadPolicy();
   if (!policy.harnesses.some((h) => h.id === id)) {
@@ -537,6 +554,10 @@ async function main(): Promise<void> {
   if (command === 'checks') {
     if (rest.length === 0) usage();
     await setChecks(id, rest);
+    return;
+  }
+  if (command === 'sandbox') {
+    await setSandbox(id, rest);
     return;
   }
   if (command === 'allow') {

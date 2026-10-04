@@ -30,6 +30,7 @@ import {
   TIMER_MAX_CLAIMS,
   type SessionHotState,
 } from '@aflow/redis';
+import { stackRedis } from '../../../../../../../scripts/stackRedis.mjs';
 import { createMemoryPayloadStore } from '@aflow/payload-store';
 import { createSessionOrchestrator } from '../../index.js';
 import type { ShardManager } from '../../../ShardManager.js';
@@ -43,21 +44,8 @@ const TENANT = 'd1d10000-0000-4000-8000-000000000922' as TenantId;
 let handle: { sql: postgres.Sql; close: () => Promise<void> } | undefined;
 let redis: RedisType;
 
-async function substrateReady(): Promise<boolean> {
-  if (!DATABASE_URL) return false;
-  const probe = new Redis({ host: '127.0.0.1', port: 6379, db: REDIS_DB, lazyConnect: true });
-  try {
-    await probe.connect();
-    await probe.ping();
-    return true;
-  } catch {
-    return false;
-  } finally {
-    probe.disconnect();
-  }
-}
-
-const READY = await substrateReady();
+const STACK_REDIS = await stackRedis(REDIS_DB);
+const READY = Boolean(DATABASE_URL) && STACK_REDIS.available;
 
 describe.skipIf(!READY)('poisoned-timer disposition through applyResult', () => {
   const payloadStore = createMemoryPayloadStore();
@@ -73,7 +61,7 @@ describe.skipIf(!READY)('poisoned-timer disposition through applyResult', () => 
 
   beforeAll(async () => {
     handle = createDatabase(DATABASE_URL!);
-    redis = new Redis({ host: '127.0.0.1', port: 6379, db: REDIS_DB });
+    redis = new Redis(STACK_REDIS.url);
   });
 
   afterAll(async () => {

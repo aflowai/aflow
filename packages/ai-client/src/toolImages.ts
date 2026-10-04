@@ -30,9 +30,10 @@ export const MAX_TOOL_IMAGE_BYTES_PER_IMAGE = 4 * 1024 * 1024;
 /**
  * How many of the most recent runs of tool results keep their images. A run
  * is the tool messages answering one assistant turn; older runs keep only the
- * description.
+ * description. More than one, because an agent often takes another step —
+ * closing the page, say — before it describes what it saw.
  */
-export const TOOL_RESULT_RUNS_KEEPING_IMAGES = 1;
+export const TOOL_RESULT_RUNS_KEEPING_IMAGES = 3;
 
 type Reduction =
   | { kind: 'no_vision' }
@@ -59,7 +60,10 @@ function reductionReason(reduction: Reduction): string {
     case 'no_vision':
       return 'this model does not take images';
     case 'earlier_result':
-      return 'images are shown only from the most recent tool results';
+      return (
+        `it is older than the last ${String(TOOL_RESULT_RUNS_KEEPING_IMAGES)} rounds of tool results; ` +
+        'take the screenshot again to see it'
+      );
     case 'over_ceiling':
       return (
         `this turn's image limit (${String(MAX_TOOL_IMAGES_PER_TURN)} images, ` +

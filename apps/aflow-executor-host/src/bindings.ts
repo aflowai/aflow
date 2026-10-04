@@ -23,6 +23,7 @@ import {
   type BrowserProfile,
   HOST_HARNESS_CONCURRENCY_DEFAULT,
   HostBindingBranchPolicySchema,
+  HostSandboxPostureSchema,
 } from '@aflow/schemas';
 
 import { type ChromeDiscovery, discoverChrome } from './browser/chromeDiscovery.js';
@@ -60,6 +61,12 @@ export const HostBindingSchema = z.object({
    * setting that turns it off.
    */
   branchPolicy: HostBindingBranchPolicySchema.optional(),
+  /**
+   * What a coding agent and the checks run under here, written only when the
+   * operator chose it: absent, `HOST_SANDBOX_POSTURE_DEFAULT` is read each
+   * time, so a change of default reaches a folder that never chose.
+   */
+  sandbox: HostSandboxPostureSchema.optional(),
   /** Present for a binding the operator connected as a single file rather than a folder. */
   singleFile: z.boolean().default(false),
   /**
@@ -779,9 +786,9 @@ export async function resolveWithin(
 /**
  * The workspace a job came from must be the one the folder was connected for.
  * Checked on the machine, because the appliance is the half that can be
- * compromised into asking for someone else's binding.
+ * compromised into asking for someone else's binding. Returns the space it checked.
  */
-export function requireSpace(binding: HostBinding, spaceId: string | undefined): void {
+export function requireSpace(binding: HostBinding, spaceId: string | undefined): string {
   if (binding.spaceId === undefined) {
     throw new HostBindingError(
       `Binding \`${binding.id}\` does not record which workspace it was connected for, so it ` +
@@ -803,6 +810,7 @@ export function requireSpace(binding: HostBinding, spaceId: string | undefined):
       'wrong_space',
     );
   }
+  return spaceId;
 }
 
 /**

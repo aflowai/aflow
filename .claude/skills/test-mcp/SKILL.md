@@ -15,7 +15,7 @@ Before testing, verify the local stack is running:
 1. **Stack**: `yarn start` (Postgres, Redis, server, orchestrator, executors, web)
 2. **Or engine only**: `yarn dev:core` (server + orchestrator + mock executor)
 3. **MCP server**: served by `yarn start` on port 3100 (`yarn dev:mcp` beside `yarn dev:core`)
-4. **Auth**: `mcp.local.json` in the project root holds its API key — `yarn mcp:setup` writes it; `auth_status` reports `api_key`
+4. **Auth**: `mcp.local.json` in the project root holds its API key and the session token a client presents for it — `yarn mcp:setup` writes both and prints the line that sets `AFLOW_MCP_LOCAL_TOKEN`, which `.mcp.json` sends; a session without it is refused with a `401`. `auth_status` reports `api_key`
 
 Quick health check:
 

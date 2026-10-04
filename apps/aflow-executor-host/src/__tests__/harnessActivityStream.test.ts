@@ -157,6 +157,7 @@ describe.runIf(sandboxReadiness().ready)('a harness step that prints an event st
 
   it.skipIf(confined.skip)(
     confined.title('emits the feed as activity, and nothing as the agent speaking'),
+    { tags: ['listener'], timeout: 120_000 },
     async () => {
       const { deltas, output, status } = await run('streaming');
       expect(status).toBe('SUCCEEDED');
@@ -188,11 +189,11 @@ describe.runIf(sandboxReadiness().ready)('a harness step that prints an event st
       expect(String(output['stdout'])).not.toContain('tool_use');
       expect(String(output['stdout'])).not.toContain('"type"');
     },
-    120_000,
   );
 
   it.skipIf(confined.skip)(
     confined.title('keeps the whole feed once, under its own kind, and names it on the result'),
+    { tags: ['listener'], timeout: 120_000 },
     async () => {
       const { output, stored } = await run('streaming');
 
@@ -216,11 +217,11 @@ describe.runIf(sandboxReadiness().ready)('a harness step that prints an event st
       ]);
       expect(JSON.stringify(lines)).not.toContain('tool_use');
     },
-    120_000,
   );
 
   it.skipIf(confined.skip)(
     confined.title('reads a harness that only talks as narration, never as the agent message'),
+    { tags: ['listener'], timeout: 120_000 },
     async () => {
       const { deltas, output, stored, status } = await run('talking');
       expect(status).toBe('SUCCEEDED');
@@ -239,6 +240,5 @@ describe.runIf(sandboxReadiness().ready)('a harness step that prints an event st
       expect(stored.some((s) => s.kind === 'activity')).toBe(true);
       expect(typeof output['activityRef']).toBe('string');
     },
-    120_000,
   );
 });

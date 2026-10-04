@@ -160,13 +160,36 @@ const PairingResponseSchema = z.object({
  * Where the host reaches Redis. Inside the appliance it is `redis:6379`, which
  * resolves nowhere on the operator's machine — the published loopback port is
  * the address that means anything there.
+ *
+ * Without its credentials: the development stack names its own `REDIS_URL`
+ * here, which carries the password every service authenticates with, and the
+ * machine is handed the host identity's alone.
  */
-function hostReachableRedisUrl(): string {
+function hostReachableRedisUrl(): string | undefined {
   const configured = process.env['PHOENIX_HOST_REDIS_URL']?.trim();
-  if (configured !== undefined && configured !== '') return configured;
+  if (configured !== undefined && configured !== '') {
+    let url: URL;
+    try {
+      url = new URL(configured);
+    } catch {
+      return undefined;
+    }
+    if (url.protocol !== 'redis:' && url.protocol !== 'rediss:') return undefined;
+    url.username = '';
+    url.password = '';
+    return url.toString();
+  }
   const port = process.env['AFLOW_REDIS_PORT']?.trim() ?? '6380';
   return `redis://127.0.0.1:${port}`;
 }
+
+/** Never echoes the value: the development stack's carries its Redis password. */
+const MALFORMED_HOST_REDIS_URL = {
+  error: 'HostPairingUnavailable',
+  message:
+    'PHOENIX_HOST_REDIS_URL is not a redis:// or rediss:// URL, so the machine would be ' +
+    'handed an address it cannot reach. Correct it and restart the server. Nothing was paired.',
+} as const;
 
 function safeJson(raw: string): unknown {
   try {
@@ -238,6 +261,10 @@ export const hostPairingRoutes: FastifyPluginAsync = async (fastify) => {
             'started before the host lane existed needs one more boot to have it.',
         });
       }
+      const redisUrl = hostReachableRedisUrl();
+      if (redisUrl === undefined) {
+        return await reply.status(503).send(MALFORMED_HOST_REDIS_URL);
+      }
 
       // The credential this hands out has to exist on the Redis this instance is
       // actually using. On the appliance the `aclfile` created it at Redis start,
@@ -272,7 +299,7 @@ export const hostPairingRoutes: FastifyPluginAsync = async (fastify) => {
       )) as HostBindingRow[];
 
       return await reply.send({
-        redisUrl: hostReachableRedisUrl(),
+        redisUrl,
         redisUsername: 'hostexec',
         redisPassword,
         bindings: rows.map(bindingForMachine),
@@ -430,6 +457,11 @@ export const hostPairingRoutes: FastifyPluginAsync = async (fastify) => {
             'started before the host lane existed needs one more boot to have it.',
         });
       }
+      // Before the code is redeemed: a refusal after it would spend the code.
+      const redisUrl = hostReachableRedisUrl();
+      if (redisUrl === undefined) {
+        return await reply.status(503).send(MALFORMED_HOST_REDIS_URL);
+      }
 
       // The same invariant the authenticated binding route enforces. A server is
       // a program, so a folder offering one without the execution grant
@@ -518,7 +550,7 @@ export const hostPairingRoutes: FastifyPluginAsync = async (fastify) => {
       )) as HostBindingRow[];
 
       return await reply.send({
-        redisUrl: hostReachableRedisUrl(),
+        redisUrl,
         redisUsername: 'hostexec',
         redisPassword,
         spaceId: grant.spaceId,

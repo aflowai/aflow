@@ -8,36 +8,23 @@
  * reads denials filtered to that name: the log is server-wide too, and a
  * sibling suite's refusals are not this one's evidence.
  */
-import { Redis } from 'ioredis';
+import type { Redis } from 'ioredis';
 
 import { renderRedisAcl } from '../redisAcl.js';
 
 export const HOST_TEST_PASSWORD = 'h'.repeat(48);
 
+/** The same Redis and database, authenticating as another identity. */
+export function stackRedisUrlAs(url: string, username: string, password: string): string {
+  const parsed = new URL(url);
+  parsed.username = encodeURIComponent(username);
+  parsed.password = encodeURIComponent(password);
+  return parsed.toString();
+}
+
 /** A name no live identity answers to, and no two test processes share. */
 export function hostTestUser(suite: string): string {
   return `hostexec-test-${suite}-${String(process.pid)}`;
-}
-
-export async function redisReachable(db: number): Promise<boolean> {
-  const probe = new Redis({
-    host: '127.0.0.1',
-    port: 6379,
-    db,
-    lazyConnect: true,
-    connectTimeout: 500,
-    maxRetriesPerRequest: 1,
-    retryStrategy: () => null,
-  });
-  try {
-    await probe.connect();
-    await probe.ping();
-    await probe.quit();
-    return true;
-  } catch {
-    probe.disconnect();
-    return false;
-  }
 }
 
 /**
@@ -58,8 +45,9 @@ export async function applyHostGrant(
   await admin.call('ACL', 'SETUSER', username, ...rewriteRules(line.split(' ').slice(2)));
 }
 
-export function hostGrantUrl(username: string, db: number): string {
-  return `redis://${username}:${HOST_TEST_PASSWORD}@127.0.0.1:6379/${String(db)}`;
+/** The stack's Redis and the suite's database, as the identity holding the grant. */
+export function hostGrantUrl(stackUrl: string, username: string): string {
+  return stackRedisUrlAs(stackUrl, username, HOST_TEST_PASSWORD);
 }
 
 /**

@@ -51,6 +51,7 @@ import {
   shardFor,
   type BlockingRedisConnection,
 } from '@aflow/redis';
+import { stackRedis } from '../../../../scripts/stackRedis.mjs';
 import { createRedisPayloadStore } from '@aflow/payload-store';
 import {
   DEFAULT_EXECUTOR_CONFIG,
@@ -72,7 +73,6 @@ import {
   hostGrantDenials,
   hostGrantUrl,
   hostTestUser,
-  redisReachable,
 } from './__fixtures__/hostGrantRedis.js';
 
 /** A database of this file's own, and every key in it deleted by name. */
@@ -127,7 +127,8 @@ const SESSION_CHANNEL = StreamKeys.pubsubChannel(TENANT_ID, SESSION_ID);
 
 // Resolved at module scope: `describe.skipIf` is evaluated at collection, before
 // any `beforeAll` has run.
-const AVAILABLE = (await redisReachable(TEST_DB)) && sandboxReadiness().ready;
+const STACK_REDIS = await stackRedis(TEST_DB);
+const AVAILABLE = STACK_REDIS.available && sandboxReadiness().ready;
 
 let admin: Redis | null = null;
 let host: Redis | null = null;
@@ -210,7 +211,7 @@ async function activityLines(): Promise<string[]> {
 
 beforeAll(async () => {
   if (!AVAILABLE) return;
-  admin = new Redis({ host: '127.0.0.1', port: 6379, db: TEST_DB });
+  admin = new Redis(STACK_REDIS.url);
   await applyHostGrant(admin, TEST_USER);
   await admin.del(...KEYS_THIS_FILE_WRITES);
 
@@ -276,7 +277,7 @@ afterAll(async () => {
 
 describe.skipIf(!AVAILABLE)('a workflow-dispatched host step feeding a watching session', () => {
   it('streams its feed and indexes the wake, with nothing refused', async () => {
-    const url = hostGrantUrl(TEST_USER, TEST_DB);
+    const url = hostGrantUrl(STACK_REDIS.url, TEST_USER);
     host = new Redis(url);
     hostBlocking = new Redis(url) as BlockingRedisConnection;
     const payloadStore = createRedisPayloadStore(host);
@@ -404,7 +405,7 @@ describe.skipIf(!AVAILABLE)('a workflow-dispatched host step feeding a watching 
       channel: 'activity',
     });
 
-    const subscriber = new Redis({ host: '127.0.0.1', port: 6379, db: TEST_DB });
+    const subscriber = new Redis(STACK_REDIS.url);
     const received: string[] = [];
     subscriber.on('message', (_channel, message: string) => {
       received.push(message);

@@ -19,6 +19,32 @@ import {
 } from '@aflow/server-runtime/bootstrap';
 import { closeRedisConnection, getRedisConnection } from '@aflow/redis';
 
+/**
+ * A Redis started without an ACL file — the development Redis — holds the host
+ * identity in memory only, so a Redis restart removes it. This full start is
+ * the one start path that sets the host password, and it sets it whether or
+ * not the identity exists: it has just read the durable value from
+ * `instance.env`, and applying it is what corrects a live password that drifted
+ * from it. The server restarting in place (`start.ts`) holds whatever its
+ * supervisor captured, which after a revocation is the revoked credential, so
+ * it asserts the grant and never the password.
+ */
+async function applyHostIdentity(values: Record<string, string | undefined>): Promise<void> {
+  const hostPassword = values['PHOENIX_HOST_REDIS_PASSWORD']?.trim();
+  if (hostPassword === undefined || hostPassword === '') return;
+  try {
+    await applyHostIdentityToRunningServer(getRedisConnection(), {
+      defaultPassword: values['REDIS_PASSWORD'] ?? '',
+      hostPassword,
+    });
+    console.log('[bootstrap] applied the host identity to the running Redis');
+  } catch (error) {
+    console.warn(
+      `[bootstrap] could not apply the host identity to the running Redis: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
 async function main(): Promise<void> {
   // Where the appliance keeps its own identity. Absent, this is a developer
   // running the command by hand and supplying it through the environment.
@@ -28,8 +54,10 @@ async function main(): Promise<void> {
   // resolved first would take the defaults and provision a second tenant
   // beside the one a restored database already holds.
   const instanceDir = process.env['PHOENIX_INSTANCE_DIR']?.trim();
+  let instanceValues: Record<string, string | undefined> = process.env;
   if (instanceDir !== undefined && instanceDir !== '') {
     const config = await ensureInstanceConfig(instanceDir);
+    instanceValues = config.values;
     if (config.generated.length > 0) {
       console.log(`[bootstrap] generated ${config.generated.join(', ')} in ${config.path}`);
       console.log('[bootstrap] back this file up with the database — it unwraps every credential');
@@ -93,23 +121,7 @@ async function main(): Promise<void> {
         `[bootstrap] the running Redis refused the ACL reload and keeps its previous grants: ${aclOutcome.reason}`,
       );
     }
-    // A server that takes no ACL file holds the host identity in memory alone,
-    // so whatever removed it since the last boot stays removed until the next
-    // pairing. The instance owns that identity; boot asserts it.
-    const hostPassword = process.env['PHOENIX_HOST_REDIS_PASSWORD']?.trim();
-    if (aclOutcome.outcome === 'skipped' && hostPassword !== undefined && hostPassword !== '') {
-      try {
-        await applyHostIdentityToRunningServer(getRedisConnection(), {
-          defaultPassword: process.env['REDIS_PASSWORD'] ?? '',
-          hostPassword,
-        });
-        console.log('[bootstrap] asserted the host identity on the running Redis');
-      } catch (error) {
-        console.warn(
-          `[bootstrap] could not assert the host identity: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
-    }
+    if (aclOutcome.outcome === 'skipped') await applyHostIdentity(instanceValues);
   } finally {
     await close();
     // The ACL reload above opens the shared connection, and a one-shot command

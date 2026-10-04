@@ -3,12 +3,14 @@
  *
  * The checkout is prepared as a commission's is — detached at the commit, the
  * folder's installed dependencies linked so nothing is installed — and the
- * command runs there under the sandbox a coding agent runs in: egress closed,
- * the checkout writable and the folder itself not. What it printed is kept in
- * the order it came, and from both ends where there is too much of it:
- * its start says what ran, and a failing check says why last.
+ * command runs there as a coding agent does, under the sandbox and the folder's
+ * posture: the checkout writable and the folder itself not, and the network
+ * the posture opens — every host but this machine under `open`, none under
+ * `confined`, and the machine's loopback under neither. What it
+ * printed is kept in the order it came, and from both ends where there is too
+ * much of it: its start says what ran, and a failing check says why last.
  */
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -17,14 +19,17 @@ import {
   HOST_CHECK_OUTPUT_TAIL_BYTES,
   HOST_CHECK_TAIL_BYTES,
   type HostCommitCheckOutputSchema,
+  type HostSandboxPosture,
 } from '@aflow/schemas';
-import type { z } from 'zod';
+import { z } from 'zod';
 
 import type { HostBinding } from './bindings.js';
 import { SHORT_SHA_LENGTH } from './checkReceipt.js';
 import { createChatterStripper } from './egressRefusals.js';
 import { formatMinutes } from './folderChecks.js';
-import { runSandboxed, type SandboxedRunResult } from './sandboxedRun.js';
+import { runUnderFolderPosture } from './folderRun.js';
+import type { SandboxedRunResult } from './sandboxedRun.js';
+import { sandboxPostureOf } from './sandboxPosture.js';
 import { NO_REPLACE_OBJECTS_ENV, prepareWorktree, removeWorktree } from './worktree.js';
 
 type HostCommitCheckOutput = z.infer<typeof HostCommitCheckOutputSchema>;
@@ -141,10 +146,44 @@ export function checkTail(output: string): string {
   return newline === -1 || newline === tail.length - 1 ? tail : tail.slice(newline + 1);
 }
 
+/**
+ * Where a check may say what its exit status cannot: a file in its scratch,
+ * named to it in this variable, which the check writes as JSON and the lane
+ * reads once it has ended.
+ */
+export const CHECK_REPORT_ENV = 'AFLOW_CHECK_REPORT';
+const CHECK_REPORT_FILE = 'check-report.json';
+
+const CheckReportSchema = z.object({
+  skippedListenerTests: z.number().int().nonnegative(),
+});
+
+/** What the check wrote to its report, or nothing where it wrote none a reader can take. */
+async function readCheckReport(
+  path: string,
+): Promise<z.infer<typeof CheckReportSchema> | undefined> {
+  let text: string;
+  try {
+    text = await readFile(path, 'utf8');
+  } catch {
+    return undefined;
+  }
+  try {
+    const parsed = CheckReportSchema.safeParse(JSON.parse(text));
+    return parsed.success ? parsed.data : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export interface FolderCheckRun {
   readonly result: SandboxedRunResult;
+  /** The sandbox posture the checks ran under. */
+  readonly sandbox: HostSandboxPosture;
   /** Standard output and error together: the start and the end of them, the cut marked, where there was more. */
   readonly output: string;
+  /** Tests that listen on a port of their own the check skipped, where its report says. */
+  readonly skippedListenerTests?: number;
 }
 
 export interface FolderCheckInput {
@@ -164,6 +203,7 @@ export interface FolderCheckInput {
 
 export async function runFolderChecks(input: FolderCheckInput): Promise<FolderCheckRun> {
   const scratch = await mkdtemp(join(tmpdir(), CHECK_SCRATCH_PREFIX));
+  const reportPath = join(scratch, CHECK_REPORT_FILE);
   let worktreePath: string | undefined;
   try {
     const worktree = await prepareWorktree(input.binding.root, scratch, 'check', {
@@ -177,7 +217,7 @@ export async function runFolderChecks(input: FolderCheckInput): Promise<FolderCh
       kept.push(text);
       input.onDelta?.(text);
     };
-    const result = await runSandboxed({
+    const result = await runUnderFolderPosture({
       binding: input.binding,
       argv: [...input.argv],
       cwd: worktree.path,
@@ -185,16 +225,15 @@ export async function runFolderChecks(input: FolderCheckInput): Promise<FolderCh
       trustedEnv: {
         AFLOW_CHECK_SHA: input.sha,
         AFLOW_CHECK_BASE: input.base,
+        [CHECK_REPORT_ENV]: reportPath,
         // A script reading the range reads the commits a push sends, never
         // what a `refs/replace/` ref shows in their place.
         ...NO_REPLACE_OBJECTS_ENV,
       },
       timeoutMs: input.timeoutMs,
       scratchDir: scratch,
-      // No egress, and no loopback but the sandbox's own: this runs code a
-      // coding agent wrote, and the machine's loopback holds the stack's
-      // services. Egress is where a check could carry the folder off the
-      // machine, or pass because something outside answered for it.
+      // No host named: a check in a `confined` folder reaches none, and one
+      // in an `open` folder reaches every host without being told.
       widening: {
         authPaths: [],
         allowedDomains: [],
@@ -215,7 +254,13 @@ export async function runFolderChecks(input: FolderCheckInput): Promise<FolderCh
       ...(input.onOutput !== undefined ? { onOutput: input.onOutput } : {}),
     });
     take(visible.flush());
-    return { result, output: kept.text() };
+    const report = await readCheckReport(reportPath);
+    return {
+      result,
+      output: kept.text(),
+      sandbox: sandboxPostureOf(input.binding),
+      ...(report !== undefined ? { skippedListenerTests: report.skippedListenerTests } : {}),
+    };
   } finally {
     if (worktreePath !== undefined) await removeWorktree(input.binding.root, worktreePath);
     await rm(scratch, { recursive: true, force: true });
@@ -285,6 +330,10 @@ export function checkOutcome(params: {
     outputRef: params.outputRef,
     tail,
     summary,
+    sandbox: params.run.sandbox,
+    ...(params.run.skippedListenerTests !== undefined
+      ? { skippedListenerTests: params.run.skippedListenerTests }
+      : {}),
     ...(passed ? { clearedSha: params.sha } : {}),
   };
 }

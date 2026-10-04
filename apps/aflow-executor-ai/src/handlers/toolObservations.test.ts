@@ -107,11 +107,18 @@ function actOutput(
   };
 }
 
-function readTextOutput(pageId: string, offset: number, text: string, nextOffset?: number): Output {
+function readTextOutput(
+  pageId: string,
+  offset: number,
+  text: string,
+  nextOffset?: number,
+  contains = '',
+): Output {
   return {
     pageId,
     url: PAGE_URL,
     what: 'text',
+    contains,
     text,
     offset,
     withheld: nextOffset === undefined ? 0 : 5_000,
@@ -119,12 +126,13 @@ function readTextOutput(pageId: string, offset: number, text: string, nextOffset
   };
 }
 
-function readEntriesOutput(pageId: string, what: 'console' | 'network'): Output {
+function readEntriesOutput(pageId: string, what: 'console' | 'network', contains = ''): Output {
   const at = '2026-10-03T10:00:00.000Z';
   return {
     pageId,
     url: PAGE_URL,
     what,
+    contains,
     ...(what === 'console'
       ? { console: [{ level: 'error', text: 'Failed to load resource', at }] }
       : {
@@ -312,6 +320,24 @@ describe('renderToolObservations — reduced facet by facet', () => {
     ]);
   });
 
+  it('keeps two reads filtered for different things in full, and reduces one filtered again alike', () => {
+    const messages = [
+      ...call('r1', READ, readEntriesOutput('pg_1', 'console', 'error')),
+      ...call('r2', READ, readEntriesOutput('pg_1', 'console', 'warning')),
+      ...call('r3', READ, readTextOutput('pg_1', 0, proseOf(800), undefined, 'retry')),
+      ...call('r4', READ, readTextOutput('pg_1', 0, proseOf(800))),
+      ...call('r5', READ, readEntriesOutput('pg_1', 'console', 'error')),
+    ];
+    expect(forms(messages)).toEqual([
+      "A later read (what console, contains error) of pg_1 replaced this result's; " +
+        'browser.page.read returns the current one.',
+      'full',
+      'full',
+      'full',
+      'full',
+    ]);
+  });
+
   it('keeps a read after an action that stayed at the address, and reduces the earlier outline', () => {
     const messages = [
       ...call('o1', OPEN, openOutput('pg_1')),
@@ -343,6 +369,7 @@ describe('renderToolObservations — reduced facet by facet', () => {
       pageId: 'pg_1',
       url: PAGE_URL,
       what: 'text',
+      contains: '',
       offset: 0,
       withheld: 0,
     });

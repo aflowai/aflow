@@ -24,7 +24,10 @@ function sign(kind: ReceiptKind, body: string): Buffer {
   return createHmac('sha256', RECEIPT_KEY).update(`${kind}\n${body}`).digest();
 }
 
-export function signReceipt(kind: ReceiptKind, fields: ReadonlyArray<string | number>): string {
+export function signReceipt(
+  kind: ReceiptKind,
+  fields: ReadonlyArray<string | number | null>,
+): string {
   const body = Buffer.from(JSON.stringify(fields)).toString('base64url');
   return `${body}.${sign(kind, body).toString('base64url')}`;
 }

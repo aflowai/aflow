@@ -65,6 +65,7 @@ describe('declaring where tools live', () => {
 
   it.skipIf(!sandboxAvailable() || confined.skip)(
     confined.title('actually runs a command installed under home once it is named'),
+    { tags: ['listener'], timeout: 60_000 },
     async () => {
       const exe = join(toolDir, 'mycli');
       const common = {
@@ -87,7 +88,6 @@ describe('declaring where tools live', () => {
       expect(named.exitCode).toBe(0);
       expect(named.stdout).toContain('mycli ran');
     },
-    60_000,
   );
 });
 

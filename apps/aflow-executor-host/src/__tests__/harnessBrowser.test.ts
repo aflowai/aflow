@@ -41,6 +41,7 @@ import {
   HARNESS_BROWSER_DIR,
   type HarnessBrowser,
   MAX_CALLS_IN_FLIGHT_PER_TURN,
+  MAX_CALLS_WAITING_PER_TURN,
   MAX_REQUEST_LINE_BYTES,
   openHarnessBrowser,
   relayToolDefinitions,
@@ -346,6 +347,53 @@ describe('what one turn may ask of the executor', () => {
     const answers = await Promise.all(calls);
     expect(answers.map((answer) => answer.isError)).toEqual(Array(sent).fill(undefined));
     expect(h.pages).toHaveLength(sent);
+  });
+
+  it(`keeps ${String(MAX_CALLS_WAITING_PER_TURN)} calls waiting, and answers one past that at once without keeping it`, async () => {
+    const h = world();
+    const { browser } = await openBrowser(h, 'default');
+    let release = (): void => undefined;
+    h.world.navigationHeld = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const turn = await browser.openTurn();
+    const [, , requestPath = '', responsePath = ''] = turn.relayArgs;
+    const end = relayEnd(requestPath, responsePath);
+    cleanup.push(() => {
+      end.close();
+      return Promise.resolve();
+    });
+    const kept = MAX_CALLS_IN_FLIGHT_PER_TURN + MAX_CALLS_WAITING_PER_TURN;
+    const sent = kept + 5;
+    for (let id = 1; id <= sent; id += 1) {
+      end.send({ id, tool: 'open', arguments: { url: `https://app${String(id)}.example/` } });
+    }
+
+    const turnedAway = await Promise.all(
+      Array.from(
+        { length: sent - kept },
+        async (_, index) => await end.next((message) => message['id'] === kept + 1 + index),
+      ),
+    );
+    for (const answer of turnedAway) {
+      const result = answer['result'] as CallResult;
+      expect(result.isError).toBe(true);
+      expect(body(result)).toMatchObject({ error: { code: 'BROWSER_TOO_MANY_CALLS' } });
+    }
+    expect(h.pages).toHaveLength(MAX_CALLS_IN_FLIGHT_PER_TURN);
+
+    release();
+    const answered = await Promise.all(
+      Array.from(
+        { length: kept },
+        async (_, index) => await end.next((message) => message['id'] === index + 1),
+      ),
+    );
+    expect(answered.map((answer) => (answer['result'] as CallResult).isError)).toEqual(
+      Array(kept).fill(undefined),
+    );
+    expect(h.pages).toHaveLength(kept);
+    expect(browser.records()).toHaveLength(kept);
   });
 
   it('closes the turn’s pipes on a request line past the cap, says why, and leaves the next turn working', async () => {

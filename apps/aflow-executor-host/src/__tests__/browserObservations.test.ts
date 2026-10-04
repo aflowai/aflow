@@ -102,7 +102,11 @@ describe('a full snapshot', () => {
       { length: 4_000 },
       (_, i) => `- link "Item ${String(i)}" [ref=e${String(i)}]`,
     );
-    const cut = boundSnapshot({ text: lines.join('\n'), maskedRefs: new Set() });
+    const cut = boundSnapshot({
+      text: lines.join('\n'),
+      maskedRefs: new Set(),
+      holdsCredentialField: false,
+    });
     expect(encodedLength(cut?.text ?? '')).toBeLessThanOrEqual(BROWSER_SNAPSHOT_DEFAULT_CHARS);
     expect(cut?.census?.['link']).toBe(4_000 - (cut?.lines ?? 0));
     expect(cut?.text.split('\n').at(-1)).toMatch(

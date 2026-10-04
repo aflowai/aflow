@@ -21,6 +21,11 @@ export interface Session {
    * Dev-only defaults from AFLOW_MCP_LOCAL_AUTH_JSON (never set in production).
    */
   mcpLocalDefaults?: { defaultSpaceId?: string } | undefined;
+  /**
+   * The digest of the session token that gave this session the owner's key;
+   * every later request on it presents that token again.
+   */
+  sessionTokenDigest?: Buffer | undefined;
 }
 
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours

@@ -166,20 +166,20 @@ describe('toolResultObservationOf', () => {
     ]);
   });
 
-  it('keys a text read by kind and offset, and a console read by kind', () => {
+  it('keys a text read by kind, offset and filter, and a console read by kind and filter', () => {
     const text = toolResultObservationOf(
       read,
-      { pageId: 'pg_1', what: 'text', text: 'abc', offset: 8000, withheld: 0 },
+      { pageId: 'pg_1', what: 'text', contains: 'retry', text: 'abc', offset: 8000, withheld: 0 },
       summarize,
     )!;
-    expect(text.facets[0]!.part.map((p) => p.value)).toEqual(['text', '8000']);
+    expect(text.facets[0]!.part.map((p) => p.value)).toEqual(['text', '8000', 'retry']);
     expect(text.facets[0]!.fields).toEqual(['text']);
     const console = toolResultObservationOf(
       read,
-      { pageId: 'pg_1', what: 'console', console: [], withheld: 0 },
+      { pageId: 'pg_1', what: 'console', contains: '', console: [], withheld: 0 },
       summarize,
     )!;
-    expect(console.facets[0]!.part.map((p) => p.value)).toEqual(['console', '']);
+    expect(console.facets[0]!.part.map((p) => p.value)).toEqual(['console', '', '']);
   });
 
   it('keeps a field another facet still holds, and stores one receipt per set that can go', () => {

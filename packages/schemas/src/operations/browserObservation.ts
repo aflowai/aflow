@@ -136,6 +136,9 @@ export const BrowserPageReadOutputSchema = z.object({
   pageId: BrowserPageIdSchema,
   url: z.string(),
   what: z.enum(BROWSER_READ_KINDS),
+  contains: z
+    .string()
+    .describe('The `contains` this read was filtered by, the empty string when none was.'),
   text: z.string().optional().describe('For `text`.'),
   offset: z
     .number()
@@ -239,7 +242,8 @@ export const BrowserProfileListOutputSchema = z.object({
  * A snapshot scoped to an element is replaced only by a later snapshot of the
  * same element; one continued from `continueRef` is another part, not a
  * replacement. A whole-page snapshot is the empty scope, and also the page's
- * outline.
+ * outline. `maxChars` is not a part key: a larger snapshot of the same part
+ * holds what the smaller one did, so it takes the same slot.
  */
 export const BROWSER_PAGE_SNAPSHOT_OBSERVATION: OperationObservation = {
   group: BROWSER_PAGE_OBSERVATION_GROUP,
@@ -260,9 +264,12 @@ export const BROWSER_PAGE_SNAPSHOT_OBSERVATION: OperationObservation = {
 };
 
 /**
- * Text, console and network are different reads of a page, and text read on
- * from `nextOffset` is another part of it: a later read replaces this one only
- * when it reads the same kind at the same offset.
+ * Text, console and network are different reads of a page, text read on from
+ * `nextOffset` is another part of it, and a read filtered by `contains` shows
+ * lines another filter does not: a later read replaces this one only when it
+ * reads the same kind at the same offset through the same filter. `maxChars`
+ * is not a part key: a larger read of the same part holds what the smaller one
+ * did, so it takes the same slot.
  */
 export const BROWSER_PAGE_READ_OBSERVATION: OperationObservation = {
   group: BROWSER_PAGE_OBSERVATION_GROUP,
@@ -271,7 +278,7 @@ export const BROWSER_PAGE_READ_OBSERVATION: OperationObservation = {
       facet: 'read',
       fields: ['text', 'console', 'network'],
       keyPath: 'pageId',
-      partKeyPaths: ['what', 'offset'],
+      partKeyPaths: ['what', 'offset', 'contains'],
       currentStateOperation: BROWSER_PAGE_READ_OPERATION_ID,
     },
   ],

@@ -13,6 +13,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Redis from 'ioredis';
 import type { Redis as RedisType } from 'ioredis';
+import { stackRedis } from '../../../../scripts/stackRedis.mjs';
 import { StreamKeys } from '@aflow/schemas';
 import {
   acquireAvailableShards,
@@ -37,28 +38,7 @@ import {
  */
 const TEST_DB = 15;
 
-async function redisReachable(): Promise<boolean> {
-  const probe = new Redis({
-    host: '127.0.0.1',
-    port: 6379,
-    db: TEST_DB,
-    lazyConnect: true,
-    connectTimeout: 500,
-    maxRetriesPerRequest: 1,
-    retryStrategy: () => null,
-  });
-  try {
-    await probe.connect();
-    await probe.ping();
-    return true;
-  } catch {
-    return false;
-  } finally {
-    probe.disconnect();
-  }
-}
-
-const AVAILABLE = await redisReachable();
+const STACK_REDIS = await stackRedis(TEST_DB);
 
 const A = 'instance-A-liveness-test';
 const B = 'instance-B-liveness-test';
@@ -66,11 +46,11 @@ const C = 'instance-C-liveness-test';
 const SHARD = 91;
 const OTHER_SHARD = 92;
 
-describe.skipIf(!AVAILABLE)('shard ownership and instance liveness', () => {
+describe.skipIf(!STACK_REDIS.available)('shard ownership and instance liveness', () => {
   let redis: RedisType;
 
   beforeEach(async () => {
-    redis = new Redis({ host: '127.0.0.1', port: 6379, db: TEST_DB, maxRetriesPerRequest: 1 });
+    redis = new Redis(STACK_REDIS.url, { maxRetriesPerRequest: 1 });
     await redis.hdel(StreamKeys.shardRegistryKey, `shard:${SHARD}`, `shard:${OTHER_SHARD}`);
     await redis.zrem(StreamKeys.orchestratorLivenessKey, A, B, C);
   });

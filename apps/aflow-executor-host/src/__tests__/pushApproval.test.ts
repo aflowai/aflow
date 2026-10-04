@@ -19,6 +19,7 @@ import {
   HOST_CHECKS_TIMEOUT_DEFAULT_MS,
   HOST_HARNESS_CONCURRENCY_DEFAULT,
   HOST_PUSH_APPROVAL_DEFAULT,
+  HOST_SANDBOX_POSTURE_DEFAULT,
   HostBindingInspectOutputSchema,
   resolveBranchPolicy,
 } from '@aflow/schemas';
@@ -76,7 +77,12 @@ describe('the posture a folder holds', () => {
     const policy = await loadHostPolicy(policyPath);
     expect(policy.bindings.get('hb_app')?.branchPolicy).toEqual({ branchPrefix: 'aflow/' });
     expect(publishingFolders(policy.bindings)).toEqual([
-      { id: 'hb_app', spaceId: 'space-a', pushApproval: HOST_PUSH_APPROVAL_DEFAULT },
+      {
+        id: 'hb_app',
+        spaceId: 'space-a',
+        pushApproval: HOST_PUSH_APPROVAL_DEFAULT,
+        sandbox: HOST_SANDBOX_POSTURE_DEFAULT,
+      },
     ]);
   });
 
@@ -217,7 +223,7 @@ describe('changing it later', () => {
 });
 
 describe('what the machine publishes', () => {
-  it('names each pushing folder with its workspace and posture, and nothing else', async () => {
+  it('names each pushing folder with its workspace and postures, and nothing else', async () => {
     const base = await mkdtemp(join(tmpdir(), 'push-postures-'));
     const policyPath = join(base, 'host-policy.json');
     await writeFile(
@@ -228,6 +234,7 @@ describe('what the machine publishes', () => {
           {
             ...PUSHING,
             branchPolicy: { branchPrefix: 'aflow/', pushApproval: 'unless-unreviewed' },
+            sandbox: 'confined',
           },
           FILES_ONLY,
           { ...PUSHING, id: 'hb_unowned', spaceId: undefined },
@@ -236,7 +243,12 @@ describe('what the machine publishes', () => {
     );
     const policy = await loadHostPolicy(policyPath);
     expect(publishingFolders(policy.bindings)).toEqual([
-      { id: 'hb_app', spaceId: 'space-a', pushApproval: 'unless-unreviewed' },
+      {
+        id: 'hb_app',
+        spaceId: 'space-a',
+        pushApproval: 'unless-unreviewed',
+        sandbox: 'confined',
+      },
     ]);
   });
 });
@@ -303,6 +315,7 @@ describe('host.binding.inspect', () => {
         pushApproval: 'never',
         checksTimeoutMs: HOST_CHECKS_TIMEOUT_DEFAULT_MS,
       },
+      sandbox: HOST_SANDBOX_POSTURE_DEFAULT,
       maxConcurrentHarnessRuns: HOST_HARNESS_CONCURRENCY_DEFAULT,
     });
   });
@@ -320,6 +333,7 @@ describe('host.binding.inspect', () => {
         pushApproval: HOST_PUSH_APPROVAL_DEFAULT,
         checksTimeoutMs: HOST_CHECKS_TIMEOUT_DEFAULT_MS,
       },
+      sandbox: HOST_SANDBOX_POSTURE_DEFAULT,
       maxConcurrentHarnessRuns: HOST_HARNESS_CONCURRENCY_DEFAULT,
     });
   });

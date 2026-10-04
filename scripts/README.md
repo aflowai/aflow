@@ -143,7 +143,7 @@ System prompts are stored as versioned `.md` files in `seeds/prompts/` and injec
 yarn infra:up         # Start Postgres (5433) + Redis (6379)
 yarn infra:down       # Stop infrastructure
 yarn infra:reset      # Wipe data and reinitialize (runs init-db.sql)
-yarn infra:tools      # Start with pgAdmin (8080) + Redis Commander (8081)
+yarn infra:tools      # Start with pgAdmin (8080) + Redis Commander (8081); Redis password as login
 ```
 
 Database is initialized by `scripts/init-db.sql` on container creation.

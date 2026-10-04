@@ -108,6 +108,25 @@ describe('classifyStepCompletionPath — SCHEDULED', () => {
     expect(r.hasCompletionPath).toBe(false);
   });
 
+  it('claimed and waiting for its slot, long past every pickup grace → completion path', async () => {
+    const r = await classifyStepCompletionPath(
+      deps({ alive: true, deadlineAtMs: null }, false),
+      step({ status: 'SCHEDULED', scheduledAt: NOW - STEP_SCHEDULED_STALL_GRACE_MS * 20 }),
+      NOW,
+    );
+    expect(r.hasCompletionPath).toBe(true);
+    expect(r.executorOwnsStep).toBe(true);
+  });
+
+  it('a lapsed claim falls back to the pickup grace', async () => {
+    const r = await classifyStepCompletionPath(
+      deps({ alive: false, deadlineAtMs: null }, true),
+      step({ status: 'SCHEDULED', scheduledAt: NOW - (STEP_SCHEDULED_STALL_GRACE_MS + 1) }),
+      NOW,
+    );
+    expect(r.hasCompletionPath).toBe(false);
+  });
+
   it('SNOOZE inside its window → completion path even with no executor and past the base grace', async () => {
     const r = await classifyStepCompletionPath(
       deps({ alive: false, deadlineAtMs: null }, false),

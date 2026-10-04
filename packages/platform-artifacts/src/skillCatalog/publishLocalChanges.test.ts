@@ -10,6 +10,7 @@ import {
   HOST_CHECKS_TIMEOUT_DEFAULT_MS,
   HOST_HARNESS_CONCURRENCY_DEFAULT,
   HOST_PUSH_APPROVAL_DEFAULT,
+  HOST_SANDBOX_POSTURE_DEFAULT,
   HostApprovedPushSchema,
   HostBindingInspectOutputSchema,
   HostProcessExecInputSchema,
@@ -877,6 +878,7 @@ function rawOutput(
     case 'read-push-approval':
       return HostBindingInspectOutputSchema.parse({
         id: 'hb_app',
+        sandbox: HOST_SANDBOX_POSTURE_DEFAULT,
         maxConcurrentHarnessRuns: HOST_HARNESS_CONCURRENCY_DEFAULT,
         ...(scenario.pushApproval === 'no-prefix'
           ? {}

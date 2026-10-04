@@ -12,7 +12,7 @@ import { promisify } from 'node:util';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { buildBaseEnv, workloadHome } from '../baseEnv.js';
+import { buildBaseEnv, createWorkloadDirs } from '../baseEnv.js';
 import {
   installRefGuard,
   noRefGuardMessage,
@@ -66,7 +66,7 @@ beforeEach(async () => {
   await operatorGit('commit', '-m', 'initial');
   await operatorGit('branch', 'other');
   checkout = (await prepareWorktree(repo, scratch, 'work', { dependencies: 'none' })).path;
-  await mkdir(workloadHome(scratch), { recursive: true });
+  await createWorkloadDirs(scratch);
   // What the harness process is given: the confined base environment, the
   // same global- and system-config withholding the lane's own git uses, and
   // the guard on top.
