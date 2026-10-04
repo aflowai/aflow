@@ -10,6 +10,7 @@ import {
   abortDelegationLifecycle,
 } from '@aflow/redis';
 import type { InlineHandlerArgs } from './types.js';
+import { attendedAsActingRun } from './actingRun.js';
 
 export async function handleResumeInline(args: InlineHandlerArgs): Promise<void> {
   const {
@@ -103,6 +104,7 @@ export async function handleResumeInline(args: InlineHandlerArgs): Promise<void>
 
     // Send resume control message to child with the follow-up message
     const resumeInputRef = `inline:${Buffer.from(JSON.stringify({ prompt: message })).toString('base64')}`;
+    const actingRun = await getSessionState(redis, context.tenantId, context.runId);
 
     await addControlMessage(redis, {
       messageVersion: 1,
@@ -114,7 +116,7 @@ export async function handleResumeInline(args: InlineHandlerArgs): Promise<void>
       traceId: context.traceId,
       idempotencyKey: `resume:${context.runId}:${stepExecutionId}` as IdempotencyKey,
       requestedAtMs: Date.now(),
-      activatedByPerson: false,
+      activatedByPerson: attendedAsActingRun(actingRun),
     });
 
     await abortDelegationLifecycle(redis, context.tenantId, childSessionId);

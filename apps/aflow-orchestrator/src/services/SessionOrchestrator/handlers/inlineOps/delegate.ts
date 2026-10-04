@@ -20,6 +20,7 @@ import {
 import { loadSpaceDirectives } from '@aflow/cybernetic-runtime';
 import { scheduleShardTimer } from '@aflow/redis';
 import { encodeInlineOpOutputRef } from './helpers.js';
+import { attendedAsActingRun } from './actingRun.js';
 import {
   addStepResult,
   addControlMessage,
@@ -318,9 +319,7 @@ export async function handleDelegateInline(args: InlineHandlerArgs): Promise<voi
       }
     }
 
-    // A child is attended while its parent is, as the parent is now — not as it
-    // was at its own start, and never as the delegation's input says.
-    const activatedByPerson = parentState?.activatedByPerson === true;
+    const activatedByPerson = attendedAsActingRun(parentState);
 
     // 2) Write QUEUED hot state for child session
     const queuedState: SessionHotState = {

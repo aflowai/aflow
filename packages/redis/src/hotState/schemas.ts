@@ -126,18 +126,16 @@ export const SessionHotStateSchema = z.object({
   // How this session was triggered (immutable after creation)
   trigger: RunTriggerSchema.optional(),
   /**
-   * Whether a person set this session going in its latest activation: true
-   * only when its start, or its latest resume or retry, came from an
-   * interactive user's request at the API — a message, an operator's resolve —
-   * whatever surface the request names. Every activation nobody asked for — a
-   * schedule, a webhook, a timer, an API or MCP client's start or resume, an
-   * agent's resume of a session that was not waiting on that agent's work —
-   * writes false, and so does the queued start of a child run whose parent is
-   * not attended at that moment. Waiting on its own delegated work is one
-   * activation: the child returning leaves this as the wait found it. The
-   * orchestrator writes it in the same write that starts or resumes the
-   * session, and stamps it on every job the session schedules. Absent reads as
-   * nobody.
+   * Whether this session is attended as of its latest activation. When a run
+   * sets another run going — delegating to it, starting it as a workflow task,
+   * resuming or answering it, re-parenting it — the target is attended exactly
+   * as the acting run is at that moment. When a person's authenticated request
+   * sets a run going, it is attended. When nothing with a person behind it
+   * does — a schedule, a webhook, a timer, a sweep, an API or MCP credential —
+   * it is not. A child returning to the parent that waited on it changes
+   * nothing in the parent. The orchestrator writes it in the same write that
+   * starts or resumes the session and stamps it on every job the session
+   * schedules; absent reads as nobody.
    */
   activatedByPerson: z.boolean().optional(),
   // Whether the user is currently interacting via voice (mutable — toggled on start/resume)

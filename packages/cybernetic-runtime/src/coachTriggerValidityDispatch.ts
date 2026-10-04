@@ -125,6 +125,7 @@ export async function maybeTriggerValidityRepairReview(
       totalRuns,
       ...(directives ? { directives } : {}),
       validity: { diagnostics, openRepairProposal, pendingRepairActivation },
+      activatedByPerson: false,
       db,
       redis,
       ...(params.payloadStore ? { payloadStore: params.payloadStore } : {}),

@@ -1,11 +1,9 @@
 /**
- * A profile with `unattended: false` takes only runs a person last set going —
- * a message in a conversation or by voice, an answer in the Action Center, the
- * same run once a sub-agent it waited on returns, or a run delegated from one
- * while it was — and refuses every other before it opens or reuses a page.
- * Whether a person did is the `activatedByPerson` each job carries, which
- * changes as the run is resumed; a job without it is nobody's. A profile left
- * at the default takes every run, as it always has.
+ * A profile with `unattended: false` takes only attended runs and refuses every
+ * other before it opens or reuses a page. Whether a run is attended is the
+ * `activatedByPerson` each job carries, which the orchestrator decides and
+ * which changes as the run is set going again; a job without it is nobody's. A
+ * profile left at the default takes every run, as it always has.
  */
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -97,6 +95,18 @@ describe('a profile closed to runs nobody is present for', () => {
     const afterSubAgent = { ...RUN_A, activatedByPerson: true };
     expect((await h.driver.readPage(afterSubAgent, pageId, { what: 'text' })).what).toBe('text');
     expect(await open(h, afterSubAgent)).toMatch(/^pg_/);
+  });
+
+  it('lets in a sub-agent its parent answered while a person was present, and not one answered while nobody was', async () => {
+    const h = machine();
+    // The orchestrator stamps the answered child's jobs as its parent was then.
+    const answeredWhileAttended = { ...RUN_B, activatedByPerson: true };
+    expect(await open(h, answeredWhileAttended)).toMatch(/^pg_/);
+
+    const answeredWhileUnattended = { ...RUN_A, activatedByPerson: false };
+    expect((await refusal(open(h, answeredWhileUnattended))).kind).toBe(
+      'profile_closed_to_unattended',
+    );
   });
 
   it('closes a page on a policy change by its run’s latest call, not by how it opened', async () => {

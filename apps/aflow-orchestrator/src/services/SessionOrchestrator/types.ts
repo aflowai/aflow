@@ -109,7 +109,7 @@ export interface SessionOrchestrator {
     spaceId?: string;
     /** How this run was triggered */
     trigger?: RunTrigger;
-    /** Whether a person sets the run going with this command — see `SessionHotState.activatedByPerson`. */
+    /** Whether the run is attended from this command on — see `SessionHotState.activatedByPerson`. */
     activatedByPerson: boolean;
     /** Whether the user is interacting via voice */
     voiceMode?: boolean;
@@ -146,7 +146,7 @@ export interface SessionOrchestrator {
     /** Whether the user is interacting via voice (mutable per-turn) */
     voiceMode?: boolean;
     clientMessageId?: string;
-    /** Whether a person sets the run going with this command — see `SessionHotState.activatedByPerson`. */
+    /** Whether the run is attended from this command on — see `SessionHotState.activatedByPerson`. */
     activatedByPerson: boolean;
     idempotencyKey: IdempotencyKey;
   }): Promise<{ status: SessionStatus }>;
@@ -173,7 +173,7 @@ export interface SessionOrchestrator {
     inputRef?: PayloadRef;
     traceId: TraceId;
     actorContext?: ActorContext;
-    /** Whether a person sets the run going with this command — see `SessionHotState.activatedByPerson`. */
+    /** Whether the run is attended from this command on — see `SessionHotState.activatedByPerson`. */
     activatedByPerson: boolean;
     idempotencyKey: IdempotencyKey;
   }): Promise<{ status: SessionStatus }>;

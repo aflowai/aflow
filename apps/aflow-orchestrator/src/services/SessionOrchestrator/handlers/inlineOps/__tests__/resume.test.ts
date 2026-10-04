@@ -87,6 +87,7 @@ function makeArgs(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockGetSessionState.mockReset();
 });
 
 describe('handleResumeInline — parentStepExecutionId update on same-session resume', () => {
@@ -268,5 +269,48 @@ describe('handleResumeInline — Plan 131 lifecycle hygiene on resume', () => {
     expect(abortOrder).toBeDefined();
     expect(addOrder).toBeDefined();
     expect(abortOrder! < addOrder!).toBe(true);
+  });
+});
+
+describe('handleResumeInline — the child is attended as its parent is when it answers', () => {
+  const pausedChild = {
+    sessionId: DRIVER_RUN,
+    parentSessionId: HELMSMAN_RUN,
+    parentStepExecutionId: 'run-proc-orig',
+    status: 'PAUSED',
+    currentStepExecutionId: 'driver-step-1',
+    // As it was when the parent delegated, which the answer does not consult.
+    activatedByPerson: false,
+  };
+
+  async function parentAnswers(parent: { activatedByPerson?: boolean } | null) {
+    mockGetSessionState.mockImplementation((_redis: unknown, _tenant: unknown, id: string) =>
+      Promise.resolve(id === DRIVER_RUN ? pausedChild : id === HELMSMAN_RUN ? parent : null),
+    );
+    const { handleResumeInline } = await import('../resume.js');
+    await handleResumeInline(makeArgs());
+    return mockAddControlMessage.mock.calls.at(-1)?.[1] as Record<string, unknown>;
+  }
+
+  it('resumes the child attended when a person is present for the parent now', async () => {
+    expect(await parentAnswers({ activatedByPerson: true })).toMatchObject({
+      type: 'resume_run',
+      runId: DRIVER_RUN,
+      activatedByPerson: true,
+    });
+  });
+
+  it('resumes the child unattended when nobody is present for the parent now', async () => {
+    expect(await parentAnswers({ activatedByPerson: false })).toMatchObject({
+      type: 'resume_run',
+      activatedByPerson: false,
+    });
+  });
+
+  it("resumes the child unattended when the parent's state has aged out", async () => {
+    expect(await parentAnswers(null)).toMatchObject({
+      type: 'resume_run',
+      activatedByPerson: false,
+    });
   });
 });

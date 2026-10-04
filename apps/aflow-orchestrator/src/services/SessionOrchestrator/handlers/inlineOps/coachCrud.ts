@@ -6,6 +6,7 @@ import {
   workflowDocPath,
 } from '@aflow/database';
 import { isPlatformWorkflowSlug } from '@aflow/platform-artifacts';
+import { getSessionState } from '@aflow/redis';
 import type {
   DirectiveLearningPolicy,
   Workflow,
@@ -36,6 +37,7 @@ import type {
 import type { InlineHandlerArgs } from './types.js';
 import { emitStepSuccess, emitStepError } from './helpers.js';
 import { requireSpaceId } from './spaceScope.js';
+import { attendedAsActingRun } from './actingRun.js';
 import { handleResolveCandidate } from './coachResolveCandidate.js';
 import { handleConsolidateLearnings } from './coachConsolidateLearnings.js';
 import { handleWithdrawProposal, parseStagedChange } from './coachWithdrawProposal.js';
@@ -1171,6 +1173,9 @@ async function handleReviewRetrigger(
     db,
     redis: args.redis,
     payloadStore: args.payloadStore,
+    activatedByPerson: attendedAsActingRun(
+      await getSessionState(args.redis, tenantIdStr, args.context.runId),
+    ),
     force: true,
   });
 
@@ -1346,6 +1351,9 @@ async function handleReviewRequest(
     db,
     redis: args.redis,
     payloadStore: args.payloadStore,
+    activatedByPerson: attendedAsActingRun(
+      await getSessionState(args.redis, tenantIdStr, args.context.runId),
+    ),
     freshDispatch: true,
     reviewContextOverrides: {
       triggerKind,
@@ -1447,6 +1455,9 @@ async function handleCampaignSynthesisRequest(
     workflowSlug: campaign.workflowSlug,
     campaignId,
     reason: campaign.endedReason ?? 'explicit',
+    activatedByPerson: attendedAsActingRun(
+      await getSessionState(args.redis, tenantIdStr, args.context.runId),
+    ),
     requestedBy: input.requestedByKind === 'helmsman' ? 'helmsman' : 'operator',
     rationale: input.rationale,
     freshDispatch: true,

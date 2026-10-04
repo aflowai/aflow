@@ -5,7 +5,8 @@
  * schedules says so; the person's next message, or an operator's answer in
  * the Action Center, makes it attended again. A child run returning to the
  * parent that waited on it is not a new activation but the rest of the one
- * that delegated, so the parent stays as attended as it was. Hot state lives
+ * that delegated, so the parent stays as attended as it was; a paused child
+ * its parent answers is attended as the parent is then. Hot state lives
  * in a Redis the whole chain reads and writes, so each step sees what the one
  * before it stored.
  */
@@ -51,8 +52,11 @@ vi.mock('@aflow/redis', async (importOriginal) => ({
     control.sent.push(message);
     return Promise.resolve('1-0');
   },
-  // The child list is kept by a script this Redis cannot run; one child, now done.
+  // The child list and the delegation lifecycle are kept by scripts this Redis
+  // cannot run; one child, now done.
   removeWaitingChild: () => Promise.resolve(0),
+  addWaitingChild: () => Promise.resolve(undefined),
+  abortDelegationLifecycle: () => Promise.resolve(undefined),
 }));
 
 vi.mock('../helpers/fetchAgentDef.js', () => ({
@@ -73,6 +77,7 @@ const { createStartRun } = await import('../lifecycle/startRun.js');
 const { createResumeRun } = await import('../lifecycle/resumeRun.js');
 const { createScheduleStep } = await import('../scheduling/scheduleStep.js');
 const { resumeParentOnChildComplete } = await import('../handlers/resumeParentOnChildComplete.js');
+const { handleResumeInline } = await import('../handlers/inlineOps/resume.js');
 const { ScheduleEvaluator } = await import('../../ScheduleEvaluator.js');
 
 const TENANT = 'a0000000-0000-4000-8000-0000000000f1' as TenantId;
@@ -409,5 +414,91 @@ describe('a parent woken by the child it delegated to and waited on', () => {
 
     expect((await getSessionState(redis, TENANT, RUN))?.activatedByPerson).toBe(false);
     expect(lastJob()['activatedByPerson']).toBe(false);
+  });
+});
+
+describe('a sub-agent its parent answers while it is paused', () => {
+  const PARENT = '00000000-0000-4000-8000-0000000000f8' as SessionId;
+
+  async function parentNamed(activatedByPerson: boolean): Promise<void> {
+    await setSessionState(redis, {
+      sessionId: PARENT,
+      tenantId: TENANT,
+      target: { kind: 'platform-role', systemRole: 'helmsman' as SystemRole },
+      agentVersion: '1',
+      status: 'RUNNING',
+      createdAt: Date.now(),
+      lastUpdatedAt: Date.now(),
+      spaceId: SPACE,
+      trigger: 'chat',
+      activatedByPerson,
+    });
+  }
+
+  /**
+   * The parent delegates while it is `atDelegation`, the child pauses on its
+   * question, and the parent answers it with `agent.control.resume` while it is
+   * `atAnswer`. Returns the browser job the child schedules next.
+   */
+  async function answeredChildSchedules(
+    atDelegation: boolean,
+    atAnswer: boolean,
+  ): Promise<Record<string, unknown>> {
+    await parentNamed(atDelegation);
+    await lifecycle.startRun({
+      tenantId: TENANT,
+      runId: RUN,
+      target: { kind: 'platform-role', systemRole: 'browsing-agent' as SystemRole },
+      agentVersion: '1',
+      inputRef: EMPTY,
+      traceId: 'trace-child' as TraceId,
+      idempotencyKey: 'start-child' as IdempotencyKey,
+      spaceId: SPACE,
+      activatedByPerson: atDelegation,
+    });
+    await pauseOnCurrentStep();
+    await updateSessionState(redis, TENANT, PARENT, { activatedByPerson: atAnswer });
+
+    await handleResumeInline({
+      redis,
+      payloadStore,
+      context: { tenantId: TENANT, runId: PARENT, traceId: 'trace-parent', agentDefinition },
+      stepDef: {
+        stepId: 'resume',
+        stepType: 'agent',
+        operation: 'agent.control.resume',
+        config: {},
+        tags: [],
+        onSuccess: { next: [] },
+        onFailure: { next: [] },
+      },
+      stepExecutionId: '00000000-0000-4000-8000-0000000000f9' as StepExecutionId,
+      idempotencyKey: 'resume-child' as IdempotencyKey,
+      resolvedInputRef: `inline:${Buffer.from(JSON.stringify({ childSessionId: RUN, message: 'go on' })).toString('base64')}`,
+      attempt: 1,
+      scheduledAtMs: Date.now(),
+    } as unknown as Parameters<typeof handleResumeInline>[0]);
+
+    const scheduledBefore = jobs.added.length;
+    await deliverResume(control.sent.at(-1));
+    expect(jobs.added.length).toBeGreaterThan(scheduledBefore);
+    expect(lastJob()).toMatchObject({
+      sessionId: RUN,
+      operationId: BROWSER_PAGE_OPEN_OPERATION_ID,
+    });
+    return lastJob();
+  }
+
+  it('is attended when a person is present for the parent as it answers, though nobody was when it delegated', async () => {
+    const job = await answeredChildSchedules(false, true);
+    expect((await getSessionState(redis, TENANT, RUN))?.activatedByPerson).toBe(true);
+    // What a closed profile admits: the executor reads this stamp and nothing else.
+    expect(job['activatedByPerson']).toBe(true);
+  });
+
+  it('is unattended when nobody is present for the parent as it answers, though a person was when it delegated', async () => {
+    const job = await answeredChildSchedules(true, false);
+    expect((await getSessionState(redis, TENANT, RUN))?.activatedByPerson).toBe(false);
+    expect(job['activatedByPerson']).toBe(false);
   });
 });

@@ -16,6 +16,8 @@ vi.mock('@aflow/redis', async () => {
   return {
     ...actual,
     addStepResult: (...args: unknown[]) => mockAddStepResult(...args),
+    // The run asking for the review, which a person is present for.
+    getSessionState: () => Promise.resolve({ activatedByPerson: true }),
   };
 });
 
@@ -134,6 +136,7 @@ describe('learner.review.request — campaignId synthesis routing', () => {
       workflowSlug: SLUG,
       campaignId: CAMPAIGN_ID,
       reason: 'goal_met',
+      activatedByPerson: true,
       freshDispatch: true,
       requestedBy: 'operator',
       rationale: 'Re-run the synthesis after the exit-contract fix.',

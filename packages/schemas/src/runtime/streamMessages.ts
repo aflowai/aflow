@@ -550,10 +550,9 @@ export const StepJobMessageSchema = z
     callerModel: z.string().max(128).optional(),
 
     /**
-     * Whether a person set this step's run going in its latest activation —
-     * its start, resume or retry — read from the run's state when the step is
-     * scheduled, never from the step's input, which the agent writes. Absent
-     * reads as nobody.
+     * Whether this step's run is attended — its session's `activatedByPerson`,
+     * read when the step is scheduled, never from the step's input, which the
+     * agent writes. Absent reads as nobody.
      */
     activatedByPerson: z.boolean().optional(),
 
@@ -853,10 +852,9 @@ export const StartRunCommandSchema = z.object({
   /** How this run was triggered — surfaces in agent FlowRunContext */
   trigger: RunTriggerSchema.optional(),
   /**
-   * Whether a person sets the run going with this command: decided where the
-   * command is made, from how its request was authenticated, never from what
-   * the request says — `trigger` names the surface and decides nothing here.
-   * The session's jobs carry it until the next activation.
+   * Whether the run is attended from this command on — the session's
+   * `activatedByPerson`, decided where the command is made and never from what
+   * it carries as input. `trigger` names the surface and decides nothing here.
    */
   activatedByPerson: z.boolean().default(false),
   /** Whether the user is interacting via voice — mutable, can change on resume */
@@ -886,9 +884,9 @@ export const ResumeRunCommandSchema = z.object({
   voiceMode: z.boolean().optional(),
   clientMessageId: ClientMessageIdSchema.optional(),
   /**
-   * Whether a person sets the run going with this command: decided where the
-   * command is made, from how its request was authenticated, never from what
-   * the request says. The session's jobs carry it until the next activation.
+   * Whether the run is attended from this command on — the session's
+   * `activatedByPerson`, decided where the command is made and never from what
+   * it carries as input.
    */
   activatedByPerson: z.boolean().default(false),
 });
@@ -927,9 +925,9 @@ export const RetryRunCommandSchema = z.object({
   requestedAtMs: z.number().int().positive(),
   actorContext: ActorContextSchema.optional(),
   /**
-   * Whether a person sets the run going with this command: decided where the
-   * command is made, from how its request was authenticated, never from what
-   * the request says. The session's jobs carry it until the next activation.
+   * Whether the run is attended from this command on — the session's
+   * `activatedByPerson`, decided where the command is made and never from what
+   * it carries as input.
    */
   activatedByPerson: z.boolean().default(false),
 });

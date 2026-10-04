@@ -152,11 +152,10 @@ export function resolveProfile(
     throw new BrowserDriverError(
       'profile_closed_to_unattended',
       `Browser profile \`${profileId}\` is closed to runs nobody is present for, and this ` +
-        'run is one now: what last set it going — its start or its latest resume — was not a ' +
-        'person in a conversation or a voice session, but a schedule, a webhook, the API, an ' +
-        'MCP client, an eval, a timer or an agent. Nothing was done, and ' +
-        'no call on this profile is let in until a person next sets the run going. The ' +
-        'operator opens the profile to such runs on the machine: ' +
+        'run is one now: what last set it going was neither a person’s request nor a run a ' +
+        'person was present for. Nothing was done, and no call on this profile is let in ' +
+        'until a person next sets the run going, directly or through a run they are present ' +
+        'for. The operator opens the profile to such runs on the machine: ' +
         `\`aflow browser unattended ${profileId} allow\`.`,
       { profileId },
     );

@@ -5,7 +5,7 @@ import {
   type WorkflowTaskRow,
   type WorkflowRunDetail,
 } from '@aflow/cybernetic-runtime';
-import { getSessionState, scheduleShardTimer } from '@aflow/redis';
+import { getSessionState, scheduleShardTimer, type SessionHotState } from '@aflow/redis';
 import { POLL_RESERVED_OUTPUT_KEY } from '@aflow/schemas';
 import type {
   OperationId,
@@ -19,6 +19,7 @@ import type {
   WorkflowTaskPoll,
 } from '@aflow/schemas';
 import { getOrchestratorLogger } from '../../../lib/orchestratorLogger.js';
+import { attendedAsActingRun } from '../../SessionOrchestrator/handlers/inlineOps/actingRun.js';
 import { DISPATCH_PENDING_INTERVAL_MS } from './operationTaskDispatch.js';
 import type { HarnessDeps, WorkflowExecutionRef, WorkflowTaskOutcome } from './types.js';
 
@@ -271,12 +272,11 @@ export async function applyPollGate(
   // originating Helmsman session (mirrors dispatchTask). Hot state may have
   // expired on long runs; the timer then dispatches without it.
   let credentialOwnerId: string | undefined;
-  let activatedByPerson = false;
+  let helmsmanState: SessionHotState | null = null;
   if (run.sessionId) {
     try {
-      const helmsmanState = await getSessionState(deps.redis, tenantIdStr, run.sessionId);
+      helmsmanState = await getSessionState(deps.redis, tenantIdStr, run.sessionId);
       credentialOwnerId = helmsmanState?.createdBy;
-      activatedByPerson = helmsmanState?.activatedByPerson === true;
     } catch {
       credentialOwnerId = undefined;
     }
@@ -298,7 +298,7 @@ export async function applyPollGate(
       dueAtMs: Date.now() + poll.intervalMs,
       spaceId: run.spaceId,
       ...(credentialOwnerId !== undefined ? { credentialOwnerId } : {}),
-      activatedByPerson,
+      activatedByPerson: attendedAsActingRun(helmsmanState),
     });
   } catch (err) {
     // Timer arm failed AFTER the CAS — the re-armed completion_pending row

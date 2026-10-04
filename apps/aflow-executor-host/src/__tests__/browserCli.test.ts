@@ -202,9 +202,8 @@ describe('edits to the policy file', () => {
       { id: 'work', posture: 'read-only', unattended: false },
     ]);
     expect(printed[0]).toBe(
-      'Profile `work` is closed to runs nobody is present for: only a run a person last set ' +
-        'going — a message in a conversation or by voice, an answer in the Action Center — or ' +
-        'one delegated from it then, may use it.',
+      'Profile `work` is closed to runs nobody is present for: only a run a person’s request ' +
+        'last set going, or a run attended at that moment did, may use it.',
     );
     expect((await loadHostPolicy(policyPath, () => CHROME)).browsers.get('work')?.unattended).toBe(
       false,

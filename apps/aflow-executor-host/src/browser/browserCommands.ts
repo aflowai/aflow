@@ -59,14 +59,12 @@ export const BROWSER_USAGE =
   '  browser posture <profile> <posture>       autonomous; ask-to-act, where every action\n' +
   '                                            waits for your approval in the Action Center;\n' +
   '                                            or read-only.\n' +
-  '  browser unattended <profile> allow|refuse Whether runs nobody is present for may use it:\n' +
-  '                                            one a schedule, a webhook, the API, an MCP\n' +
-  '                                            client, an eval, a timer or an agent last set\n' +
-  '                                            going. A run a person last set going — a\n' +
-  '                                            message in a conversation or by voice, an\n' +
-  '                                            answer in the Action Center — may either way,\n' +
-  '                                            still when a sub-agent it waited on returns to\n' +
-  '                                            it, as may a run delegated from it then.\n' +
+  '  browser unattended <profile> allow|refuse Whether runs nobody is present for may use it.\n' +
+  '                                            A run is attended when a person’s request last\n' +
+  '                                            set it going, or a run attended at that moment\n' +
+  '                                            did; one a schedule, a webhook, a timer or an\n' +
+  '                                            API or MCP client set going is not. An\n' +
+  '                                            attended run may use the profile either way.\n' +
   '  browser rule <profile> <origin> <effect>  allow, ask or deny pages at an origin, such as\n' +
   '                                            https://mail.example.com or *.example.com.\n' +
   '                                            ask: pages there open and are read, and every\n' +
@@ -336,8 +334,8 @@ export async function runBrowserCommand(
         command.choice === 'allow'
           ? `Profile \`${command.profileId}\` is open to runs nobody is present for.`
           : `Profile \`${command.profileId}\` is closed to runs nobody is present for: only a ` +
-              'run a person last set going — a message in a conversation or by voice, an answer ' +
-              'in the Action Center — or one delegated from it then, may use it.',
+              'run a person’s request last set going, or a run attended at that moment did, ' +
+              'may use it.',
       );
       return;
     case 'rule':
