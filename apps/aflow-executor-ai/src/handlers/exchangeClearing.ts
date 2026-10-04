@@ -235,16 +235,20 @@ export interface ExchangeClearingEstimate {
   netSavings: number;
 }
 
-/** Estimated token effect of clearing an exchange (atoms removed vs note added). */
+/**
+ * Estimated token effect of clearing an exchange: its atoms as the model is
+ * sent them (`sentById`) removed, the note added.
+ */
 export function estimateExchangeClearingTokens(
   ex: Exchange,
   hydratedById: Map<string, AiMessageAtomV1>,
+  sentById: Map<string, AiMessageAtomV1>,
   noteOptions: ClearNoteOptions,
 ): ExchangeClearingEstimate {
   let removedTokens = 0;
   for (const ref of ex.atomRefs) {
-    const full = hydratedById.get(ref.atomId);
-    if (full) removedTokens += estimateMessageTokens(full.message);
+    const sent = sentById.get(ref.atomId);
+    if (sent) removedTokens += estimateMessageTokens(sent.message);
   }
   const noteTokens = estimateStringTokens(buildClearedExchangeNote(ex, hydratedById, noteOptions));
   return { removedTokens, noteTokens, netSavings: removedTokens - noteTokens };
@@ -254,9 +258,10 @@ export function estimateExchangeClearingTokens(
 export function estimateExchangeNetTokenSavings(
   ex: Exchange,
   hydratedById: Map<string, AiMessageAtomV1>,
+  sentById: Map<string, AiMessageAtomV1>,
   noteOptions: ClearNoteOptions,
 ): number {
-  return estimateExchangeClearingTokens(ex, hydratedById, noteOptions).netSavings;
+  return estimateExchangeClearingTokens(ex, hydratedById, sentById, noteOptions).netSavings;
 }
 
 /** Bounded snippet of a tool call's arguments — enough to answer "what did we ask?". */

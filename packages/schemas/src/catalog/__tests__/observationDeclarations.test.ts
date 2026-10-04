@@ -101,7 +101,7 @@ describe('browser page observation declarations', () => {
           facet.keyPath,
           ...(facet.partKeyPaths ?? []),
           ...(facet.onlyWhenAbsent !== undefined ? [facet.onlyWhenAbsent] : []),
-          ...(facet.withheldAt !== undefined ? [facet.withheldAt] : []),
+          ...(facet.expires === 'on_covering_look' ? [facet.withheldAt] : []),
         ]),
         ...(d.moves !== undefined ? [d.moves.keyPath, d.moves.whenTrueAt] : []),
         ...(d.ends ?? []),
@@ -120,26 +120,35 @@ describe('browser page observation declarations', () => {
     }
   });
 
-  it('says where every facet’s result counts what it left out at its bound', () => {
-    const withheldAt = declared().flatMap((d) =>
-      (d.facets ?? []).map((facet) => [d.operationId, facet.facet, facet.withheldAt]),
+  it('lets a later look replace an outline or a snapshot, and a read only when it covers it', () => {
+    const expiry = declared().flatMap((d) =>
+      (d.facets ?? []).map((facet) => [
+        d.operationId,
+        facet.facet,
+        facet.expires,
+        ...(facet.expires === 'on_covering_look' ? [facet.withheldAt] : []),
+      ]),
     );
-    expect(withheldAt).toEqual([
-      ['browser.page.open', 'outline', 'outlineCensus'],
-      ['browser.page.navigate', 'outline', 'outlineCensus'],
-      ['browser.page.act', 'outline', 'outlineCensus'],
-      ['browser.page.snapshot', 'snapshot', 'snapshotCensus'],
-      ['browser.page.snapshot', 'outline', 'snapshotCensus'],
-      ['browser.page.read', 'read', 'withheld'],
-      ['browser.page.handoff', 'outline', 'outlineCensus'],
+    expect(expiry).toEqual([
+      ['browser.page.open', 'outline', 'on_any_later_look'],
+      ['browser.page.navigate', 'outline', 'on_any_later_look'],
+      ['browser.page.act', 'outline', 'on_any_later_look'],
+      ['browser.page.snapshot', 'snapshot', 'on_any_later_look'],
+      ['browser.page.snapshot', 'outline', 'on_any_later_look'],
+      ['browser.page.read', 'read', 'on_covering_look', 'withheld'],
+      ['browser.page.handoff', 'outline', 'on_any_later_look'],
     ]);
   });
 
-  it('gives one facet of a group the same part keys and current-state operation everywhere', () => {
+  it('gives one facet of a group the same part keys, expiry and current-state operation everywhere', () => {
     const seen = new Map<string, string>();
     for (const d of declared()) {
       for (const facet of d.facets ?? []) {
-        const shape = JSON.stringify([facet.partKeyPaths ?? [], facet.currentStateOperation]);
+        const shape = JSON.stringify([
+          facet.partKeyPaths ?? [],
+          facet.expires,
+          facet.currentStateOperation,
+        ]);
         const id = `${d.group} ${facet.facet}`;
         expect(seen.get(id) ?? shape, `${d.operationId} ${id}`).toBe(shape);
         seen.set(id, shape);
@@ -149,6 +158,11 @@ describe('browser page observation declarations', () => {
 });
 
 const summarize = (shown: unknown) => JSON.stringify(shown);
+const anyLaterLook = {
+  keyPath: 'id',
+  expires: 'on_any_later_look',
+  currentStateOperation: 'op',
+} as const;
 const snapshot = getOperation('browser.page.snapshot')!.observation!;
 const read = getOperation('browser.page.read')!.observation!;
 
@@ -198,38 +212,55 @@ describe('toolResultObservationOf', () => {
     expect(console.facets[0]!.part.map((p) => p.value)).toEqual(['console', '', '']);
   });
 
-  it('stamps what a look left out: a read’s withheld, a census added up, nothing when not cut', () => {
-    const withheldOf = (declaration: OperationObservation, output: unknown) =>
-      toolResultObservationOf(declaration, output, summarize)!.facets.map((f) => f.withheld);
+  it('stamps what a read left out, its withheld, and no count on an outline or a snapshot', () => {
+    const stampOf = (declaration: OperationObservation, output: unknown) =>
+      toolResultObservationOf(declaration, output, summarize)!.facets.map((f) =>
+        f.expires === 'on_covering_look' ? [f.expires, f.withheld] : [f.expires],
+      );
     const cutText = { pageId: 'pg_1', what: 'text', contains: '', text: 'a', offset: 0 };
-    expect(withheldOf(read, { ...cutText, withheld: 24_000, nextOffset: 8_000 })).toEqual([24_000]);
-    expect(withheldOf(read, { ...cutText, withheld: 0 })).toEqual([0]);
-    const whole = { pageId: 'pg_1', snapshot: '- main', receipt: { lines: 1, cut: true } };
-    expect(withheldOf(snapshot, { ...whole, snapshotCensus: { link: 30, heading: 4 } })).toEqual([
-      34, 34,
+    expect(stampOf(read, { ...cutText, withheld: 24_000, nextOffset: 8_000 })).toEqual([
+      ['on_covering_look', 24_000],
     ]);
-    expect(withheldOf(snapshot, { ...whole, receipt: { lines: 1, cut: false } })).toEqual([0, 0]);
+    expect(stampOf(read, { ...cutText, withheld: 0 })).toEqual([['on_covering_look', 0]]);
+    const whole = { pageId: 'pg_1', snapshot: '- main', receipt: { lines: 1, cut: true } };
+    expect(stampOf(snapshot, { ...whole, snapshotCensus: { link: 30, heading: 4 } })).toEqual([
+      ['on_any_later_look'],
+      ['on_any_later_look'],
+    ]);
     const open = getOperation('browser.page.open')!.observation!;
-    expect(
-      withheldOf(open, { pageId: 'pg_1', outline: '-', outlineCensus: { button: 2 } }),
-    ).toEqual([2]);
+    expect(stampOf(open, { pageId: 'pg_1', outline: '-', outlineCensus: { button: 2 } })).toEqual([
+      ['on_any_later_look'],
+    ]);
   });
 
-  it('stamps no withheld for a facet that does not say where it is', () => {
+  it('adds up counts by kind where a covering facet says it left something out', () => {
     const declaration: OperationObservation = {
       group: 'thing',
-      facets: [{ facet: 'a', fields: ['x'], keyPath: 'id', currentStateOperation: 'op' }],
+      facets: [
+        {
+          facet: 'a',
+          fields: ['x'],
+          keyPath: 'id',
+          expires: 'on_covering_look',
+          withheldAt: 'census',
+          currentStateOperation: 'op',
+        },
+      ],
     };
-    const stamp = toolResultObservationOf(declaration, { id: 't', x: 1 }, summarize)!;
-    expect(stamp.facets[0]).not.toHaveProperty('withheld');
+    const withheld = (output: unknown) =>
+      toolResultObservationOf(declaration, output, summarize)!.facets[0];
+    expect(withheld({ id: 't', x: 1, census: { link: 30, heading: 4 } })).toMatchObject({
+      withheld: 34,
+    });
+    expect(withheld({ id: 't', x: 1 })).toMatchObject({ withheld: 0 });
   });
 
   it('keeps a field another facet still holds, and stores one receipt per set that can go', () => {
     const declaration: OperationObservation = {
       group: 'thing',
       facets: [
-        { facet: 'a', fields: ['x', 'y'], keyPath: 'id', currentStateOperation: 'op' },
-        { facet: 'b', fields: ['y', 'z'], keyPath: 'id', currentStateOperation: 'op' },
+        { ...anyLaterLook, facet: 'a', fields: ['x', 'y'] },
+        { ...anyLaterLook, facet: 'b', fields: ['y', 'z'] },
       ],
     };
     const stamp = toolResultObservationOf(declaration, { id: 't', x: 1, y: 2, z: 3 }, summarize)!;
@@ -251,6 +282,7 @@ describe('OperationObservationSchema', () => {
     facet: 'outline',
     fields: ['outline'],
     keyPath: 'pageId',
+    expires: 'on_any_later_look',
     currentStateOperation: 'op',
   };
 
@@ -269,6 +301,29 @@ describe('OperationObservationSchema', () => {
       }).success,
     ).toBe(false);
     expect(OperationObservationSchema.safeParse({ group: 'g', ends: ['a.b'] }).success).toBe(true);
+  });
+
+  it('refuses a facet that does not say when it expires, and a covering one without its count', () => {
+    const { expires: _expires, ...undeclared } = facet;
+    expect(OperationObservationSchema.safeParse({ group: 'g', facets: [undeclared] }).success).toBe(
+      false,
+    );
+    const covering = { ...facet, expires: 'on_covering_look' };
+    expect(OperationObservationSchema.safeParse({ group: 'g', facets: [covering] }).success).toBe(
+      false,
+    );
+    expect(
+      OperationObservationSchema.safeParse({
+        group: 'g',
+        facets: [{ ...covering, withheldAt: 'withheld' }],
+      }).success,
+    ).toBe(true);
+    expect(
+      OperationObservationSchema.safeParse({
+        group: 'g',
+        facets: [{ ...facet, withheldAt: 'withheld' }],
+      }).success,
+    ).toBe(false);
   });
 
   it('refuses more facets than it stores receipts for', () => {

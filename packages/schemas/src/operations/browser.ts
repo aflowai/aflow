@@ -24,14 +24,15 @@ export const BROWSER_PAGE_ACT_OPERATION_ID = buildOperationId('browser', 'page',
 export const BROWSER_PAGE_OBSERVATION_GROUP = 'browser.page';
 
 /**
- * The page's outline. A later outline replaces it, and so does a whole-page
- * snapshot, when its census counts no more elements left out than this one's.
+ * The page's outline. Any later outline replaces it, and so does a whole-page
+ * snapshot, however much either left out: its references stop resolving once
+ * a later look exists.
  */
 export const BROWSER_PAGE_OUTLINE_FACET: ObservedFacet = {
   facet: 'outline',
   fields: ['outline', 'outlineCensus'],
   keyPath: 'pageId',
-  withheldAt: 'outlineCensus',
+  expires: 'on_any_later_look',
   currentStateOperation: buildOperationId('browser', 'page', 'snapshot'),
 };
 

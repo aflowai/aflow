@@ -4,8 +4,9 @@
  * An operation whose result is a look at one thing — a page — declares the
  * facets of that thing its result holds: which output fields, where the key of
  * the thing is, the further keys that tell one part of a facet from another,
- * where it says how much of that part it left out, and the operation that
- * returns the facet as it is now. The agent turn reduces a result only in the
+ * whether what it holds expires at any later look or only at one that covers
+ * it, and the operation that returns the facet as it is now. The agent turn
+ * reduces a result only in the
  * facets a later result replaced, and in every facet once the thing moved on
  * or ended.
  */
@@ -39,37 +40,60 @@ const FacetNameSchema = z
  */
 const MAX_FACETS_PER_DECLARATION = 4;
 
-const ObservedFacetSchema = z
-  .object({
-    facet: FacetNameSchema,
-    fields: z
-      .array(OutputFieldNameSchema)
-      .min(1)
-      .refine((fields) => new Set(fields).size === fields.length, 'Each field once.')
-      .describe('The output fields holding this facet: what a later look at it replaces.'),
-    keyPath: OutputKeyPathSchema.describe('Where the key of the observed thing is.'),
-    partKeyPaths: z
-      .array(OutputKeyPathSchema)
-      .min(1)
-      .optional()
-      .describe(
-        'Further keys that tell one part of the facet from another. A later look replaces this ' +
-          'one only when every part key matches; a key absent from the output is the empty part.',
+const observedFacetShape = {
+  facet: FacetNameSchema,
+  fields: z
+    .array(OutputFieldNameSchema)
+    .min(1)
+    .refine((fields) => new Set(fields).size === fields.length, 'Each field once.')
+    .describe('The output fields holding this facet: what a later look at it replaces.'),
+  keyPath: OutputKeyPathSchema.describe('Where the key of the observed thing is.'),
+  partKeyPaths: z
+    .array(OutputKeyPathSchema)
+    .min(1)
+    .optional()
+    .describe(
+      'Further keys that tell one part of the facet from another. A later look replaces this ' +
+        'one only when every part key matches; a key absent from the output is the empty part.',
+    ),
+  onlyWhenAbsent: OutputKeyPathSchema.optional().describe(
+    'The result holds this facet only when its output has nothing at this path.',
+  ),
+  currentStateOperation: z
+    .string()
+    .min(1)
+    .describe('The operation that returns this facet as it is now, named in a reduced result.'),
+};
+
+const ObservedFacetSchema = z.discriminatedUnion('expires', [
+  z
+    .object({
+      ...observedFacetShape,
+      expires: z
+        .literal('on_any_later_look')
+        .describe(
+          'What the facet holds is good only until the thing is looked at again — as a ' +
+            "page's element references resolve only in the newest look at it — so any later " +
+            'look at the same part replaces it, however much either left out.',
+        ),
+    })
+    .strict(),
+  z
+    .object({
+      ...observedFacetShape,
+      expires: z
+        .literal('on_covering_look')
+        .describe(
+          'What the facet holds stays true after a later look, so a later look at the same ' +
+            'part replaces it only when it left out no more of the part than this one did.',
+        ),
+      withheldAt: OutputKeyPathSchema.describe(
+        'Where the result says how much of this part it left out at its bound: a count, or ' +
+          'counts by kind, which are added up; nothing there is nothing left out.',
       ),
-    withheldAt: OutputKeyPathSchema.optional().describe(
-      'Where the result says how much of this part it left out at its bound: a count, or ' +
-        'counts by kind, which are added up; nothing there is nothing left out. A later look ' +
-        'replaces this one only when it left out no more. Undeclared, any later look replaces it.',
-    ),
-    onlyWhenAbsent: OutputKeyPathSchema.optional().describe(
-      'The result holds this facet only when its output has nothing at this path.',
-    ),
-    currentStateOperation: z
-      .string()
-      .min(1)
-      .describe('The operation that returns this facet as it is now, named in a reduced result.'),
-  })
-  .strict();
+    })
+    .strict(),
+]);
 export type ObservedFacet = z.infer<typeof ObservedFacetSchema>;
 
 /**
@@ -100,6 +124,15 @@ export type OperationObservation = z.infer<typeof OperationObservationSchema>;
 
 const ObservationKeySchema = z.string().min(1);
 
+const stampedFacetShape = {
+  facet: FacetNameSchema,
+  key: ObservationKeySchema,
+  part: z.array(z.object({ path: z.string(), value: z.string() })),
+  /** The declared fields the output has. */
+  fields: z.array(z.string()),
+  currentStateOperation: z.string().min(1),
+};
+
 /**
  * Stamped on a tool-result envelope by the orchestrator from the declaration
  * and the step's output. Never shown to the model: assembly removes it, and
@@ -108,16 +141,15 @@ const ObservationKeySchema = z.string().min(1);
 export const ToolResultObservationSchema = z.object({
   group: ObservationGroupSchema,
   facets: z.array(
-    z.object({
-      facet: FacetNameSchema,
-      key: ObservationKeySchema,
-      part: z.array(z.object({ path: z.string(), value: z.string() })),
-      /** The declared fields the output has. */
-      fields: z.array(z.string()),
-      /** What the result left out of the part, read at the declared `withheldAt`. */
-      withheld: z.number().nonnegative().optional(),
-      currentStateOperation: z.string().min(1),
-    }),
+    z.discriminatedUnion('expires', [
+      z.object({ ...stampedFacetShape, expires: z.literal('on_any_later_look') }),
+      z.object({
+        ...stampedFacetShape,
+        expires: z.literal('on_covering_look'),
+        /** What the result left out of the part, read at the declared `withheldAt`. */
+        withheld: z.number().nonnegative(),
+      }),
+    ]),
   ),
   /** The result summarised without each set of fields a later result can make stale. */
   receipts: z.array(z.object({ without: z.array(z.string()).min(1), text: z.string() })),
@@ -202,7 +234,7 @@ export function toolResultObservationOf(
     if (facet.onlyWhenAbsent !== undefined && valueAt(output, facet.onlyWhenAbsent) !== undefined) {
       continue;
     }
-    facets.push({
+    const stamped = {
       facet: facet.facet,
       key,
       part: (facet.partKeyPaths ?? []).map((path) => ({
@@ -210,9 +242,13 @@ export function toolResultObservationOf(
         value: observationKeyOf(output, path) ?? '',
       })),
       fields: facet.fields.filter((field) => valueAt(output, field) !== undefined),
-      ...(facet.withheldAt !== undefined ? { withheld: withheldAt(output, facet.withheldAt) } : {}),
       currentStateOperation: facet.currentStateOperation,
-    });
+    };
+    facets.push(
+      facet.expires === 'on_covering_look'
+        ? { ...stamped, expires: facet.expires, withheld: withheldAt(output, facet.withheldAt) }
+        : { ...stamped, expires: facet.expires },
+    );
   }
   const movedKey =
     declaration.moves !== undefined && valueAt(output, declaration.moves.whenTrueAt) === true

@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { PayloadStore } from '@aflow/payload-store';
 import {
+  BROWSER_OUTLINE_DEFAULT_CHARS,
+  BROWSER_OUTLINE_MAX_CHARS,
   MEMORY_READ_OPERATION_ID,
   estimateMessageTokens,
   getOperation,
@@ -16,7 +18,8 @@ import {
 import { aiMessageToChatMessage } from './ai/handlers/agentMessageConversion.js';
 import { ConversationStateStore } from './conversationStateStore.js';
 import { RETENTION_POLICY } from './retentionPolicy.js';
-import { renderToolObservations } from './toolObservations.js';
+import { estimateExchangeClearingTokens } from './exchangeClearing.js';
+import { atomsAsSent, renderToolObservations } from './toolObservations.js';
 
 type Output = Record<string, unknown>;
 
@@ -515,7 +518,7 @@ const READ_REPLACED =
 const SNAPSHOT_REPLACED =
   "A later snapshot of pg_1 replaced this result's; browser.page.snapshot returns the current one.";
 
-describe('renderToolObservations — a later look replaces one of the same part only when it covers it', () => {
+describe('renderToolObservations — a later read replaces one of the same part only when it covers it; an outline or a snapshot, any later look', () => {
   const PAGE_CHARS = 40_000;
   const read = (base: string, chars: number) =>
     call(base, READ, boundedReadOutput('pg_1', chars, PAGE_CHARS));
@@ -548,11 +551,46 @@ describe('renderToolObservations — a later look replaces one of the same part 
     expect(forms(messages)).toEqual([READ_REPLACED, 'full']);
   });
 
-  it('keeps a larger snapshot in full, as the page’s snapshot and its outline, after a smaller one', () => {
+  it('reduces a larger snapshot, as the page’s snapshot and its outline, once a smaller one follows', () => {
     const messages = [...snapshot('s1', 30_000, 40), ...snapshot('s2', 8_000, 300)];
     const rendered = renderToolObservations(messages);
-    expect(forms(messages)).toEqual(['full', 'full']);
-    expect(JSON.parse(summaryOf(rendered[1]!)!)).toMatchObject({ snapshot: outlineOf(30_000) });
+    expect(forms(messages)).toEqual([SNAPSHOT_REPLACED, 'full']);
+    expect(summaryOf(rendered[1]!)!.split('\n').slice(0, 2)).toEqual([
+      SNAPSHOT_REPLACED,
+      OUTLINE_REPLACED('pg_1'),
+    ]);
+  });
+
+  it('reduces a scoped snapshot once a smaller snapshot of the same scope follows', () => {
+    const scoped = (base: string, chars: number, leftOut: number) => {
+      const output = boundedSnapshotOutput('pg_1', chars, leftOut);
+      return call(base, SNAPSHOT, {
+        ...output,
+        receipt: { ...(output['receipt'] as Output), ref: 'e40' },
+      });
+    };
+    const messages = [...scoped('s1', 30_000, 40), ...scoped('s2', 8_000, 300)];
+    expect(forms(messages)).toEqual([
+      "A later snapshot (ref e40) of pg_1 replaced this result's; " +
+        'browser.page.snapshot returns the current one.',
+      'full',
+    ]);
+  });
+
+  it('reduces an open’s 32,000-character outline once a default-bound action follows', () => {
+    const open = {
+      ...openOutput('pg_1'),
+      outline: outlineOf(BROWSER_OUTLINE_MAX_CHARS),
+      receipt: { ...(openOutput('pg_1')['receipt'] as Output), outlineCut: false },
+    };
+    const acted = actOutput('pg_1', 1, { outline: outlineOf(BROWSER_OUTLINE_DEFAULT_CHARS) });
+    const messages = [
+      ...call('o1', OPEN, open),
+      ...call('a1', ACT, { ...acted, outlineCensus: { link: 400, button: 120 } }),
+    ];
+    const rendered = renderToolObservations(messages);
+    expect(forms(messages)).toEqual([OUTLINE_REPLACED('pg_1'), 'full']);
+    expect(summaryOf(rendered[1]!)!).not.toContain(outlineOf(BROWSER_OUTLINE_MAX_CHARS));
   });
 
   it('reduces a smaller snapshot once a larger one follows', () => {
@@ -584,7 +622,7 @@ describe('renderToolObservations — a later look replaces one of the same part 
     }
   });
 
-  it('changes each result once, at the turn a look that covers it arrives', () => {
+  it('changes each result once, at the turn a look that replaces it arrives', () => {
     const messages = [
       ...read('r1', 32_000),
       ...snapshot('s1', 30_000, 40),
@@ -607,7 +645,7 @@ describe('renderToolObservations — a later look replaces one of the same part 
       }
       previous = now;
     }
-    expect(Object.fromEntries(changedAt)).toEqual({ 0: 6, 1: 7, 2: 4, 3: 5, 4: 6, 5: 7 });
+    expect(Object.fromEntries(changedAt)).toEqual({ 0: 6, 1: 3, 2: 4, 3: 5, 4: 6, 5: 7 });
   });
 });
 
@@ -815,11 +853,14 @@ describe('ConversationStateStore.assembleRequest — observations', () => {
     expect(request.tokenBreakdown.history).toBeLessThan(estimate(stored));
   });
 
-  it('still clears a reduced observation under pressure, and the newest stays in full', async () => {
+  it('clears under pressure by what is sent: a full observation, not a receipt worth less than its note', async () => {
     const turns = [opener];
     for (const t of [1, 2, 3, 4, 5, 6, 7, 18]) {
       turns.push({ turn: t, messages: act(`ob${String(t).padStart(2, '0')}`, 'pg_1', t) });
     }
+    const outline = outlineOf(BROWSER_OUTLINE_DEFAULT_CHARS);
+    turns.push({ turn: 8, messages: call('ob08', ACT, actOutput('pg_2', 8, { outline })) });
+    turns.sort((a, b) => a.turn - b.turn);
     const { store } = await assemble(turns, 20);
     const result = await store.clearUnderPressure({
       pressureTokens: 9_500,
@@ -827,11 +868,55 @@ describe('ConversationStateStore.assembleRequest — observations', () => {
       availableReadOpId: MEMORY_READ_OPERATION_ID,
     });
 
-    expect(store.getState().clearing?.clearedExchanges).toContain('ob01');
-    expect(result?.clearedExchangeCount).toBeGreaterThan(0);
+    expect(result?.clearedExchangeCount).toBe(1);
+    expect(store.getState().clearing?.clearedExchanges).toEqual(['ob08']);
     const ids = new Set(store.getState().history.atoms.map((a) => a.atomId));
-    expect(ids.has('atom-1-1')).toBe(false);
+    expect(ids.has('atom-8-1')).toBe(false);
+    expect(ids.has('atom-1-1')).toBe(true);
     expect(ids.has('atom-18-1')).toBe(true);
+  });
+
+  it('estimates clearing a reduced observation by its receipt, not by what is stored', async () => {
+    const outline = outlineOf(BROWSER_OUTLINE_DEFAULT_CHARS);
+    const turns = [
+      opener,
+      { turn: 1, messages: call('a1', ACT, actOutput('pg_1', 1, { outline })) },
+      { turn: 2, messages: call('a2', ACT, actOutput('pg_1', 2, { outline })) },
+    ];
+    const atoms = atomsOf(turns);
+    const { store } = await assemble(turns, 9);
+    const byId = (list: AiMessageAtomV1[]) => new Map(list.map((a) => [a.atomId, a]));
+    const hydratedById = byId(atoms);
+    const sentById = byId(atomsAsSent(atoms));
+    const atomRefs = store.getState().history.atoms.filter((a) => a.turnNumber === 1);
+    const exchange = {
+      key: 'a1',
+      atomRefs,
+      turns: new Set([1]),
+      hasToolResult: true,
+      assistantAtom: hydratedById.get('atom-1-0')!,
+    };
+    const noteOptions = { availableReadOpId: MEMORY_READ_OPERATION_ID };
+
+    const estimate = estimateExchangeClearingTokens(exchange, hydratedById, sentById, noteOptions);
+    const receipt = sentById.get('atom-1-1')!.message;
+    expect(summaryOf(receipt)!.split('\n')[0]).toBe(OUTLINE_REPLACED('pg_1'));
+    expect(estimate.removedTokens).toBe(
+      estimateMessageTokens(hydratedById.get('atom-1-0')!.message) + estimateMessageTokens(receipt),
+    );
+    expect(estimate.removedTokens).toBeLessThan(
+      estimateMessageTokens(hydratedById.get('atom-1-0')!.message) +
+        estimateMessageTokens(hydratedById.get('atom-1-1')!.message) -
+        outline.length / 4,
+    );
+
+    const forced = await store.forceClearExcess({
+      excessAtoms: 0,
+      excessTokens: 1,
+      availableReadOpId: MEMORY_READ_OPERATION_ID,
+    });
+    expect(store.getState().clearing?.clearedExchanges).toEqual(['a1']);
+    expect(forced?.estimatedTokensFreed).toBe(Math.max(0, estimate.netSavings));
   });
 });
 

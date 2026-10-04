@@ -242,10 +242,9 @@ export const BrowserProfileListOutputSchema = z.object({
  * A snapshot scoped to an element is replaced only by a later snapshot of the
  * same element; one continued from `continueRef` is another part, not a
  * replacement. A whole-page snapshot is the empty scope, and also the page's
- * outline. `maxChars` is not a part key: a later snapshot of the same part
- * replaces this one only when its census counts no more elements left out, so
- * a smaller one leaves this one, and what it holds past the smaller bound, in
- * full.
+ * outline. `maxChars` is not a part key: its references resolve only in the
+ * newest look at the page, so any later snapshot of the same part replaces
+ * it, however much either left out.
  */
 export const BROWSER_PAGE_SNAPSHOT_OBSERVATION: OperationObservation = {
   group: BROWSER_PAGE_OBSERVATION_GROUP,
@@ -255,13 +254,12 @@ export const BROWSER_PAGE_SNAPSHOT_OBSERVATION: OperationObservation = {
       fields: ['snapshot', 'snapshotCensus'],
       keyPath: 'pageId',
       partKeyPaths: ['receipt.ref'],
-      withheldAt: 'snapshotCensus',
+      expires: 'on_any_later_look',
       currentStateOperation: BROWSER_PAGE_SNAPSHOT_OPERATION_ID,
     },
     {
       ...BROWSER_PAGE_OUTLINE_FACET,
       fields: ['snapshot', 'snapshotCensus'],
-      withheldAt: 'snapshotCensus',
       onlyWhenAbsent: 'receipt.ref',
     },
   ],
@@ -272,9 +270,10 @@ export const BROWSER_PAGE_SNAPSHOT_OBSERVATION: OperationObservation = {
  * `nextOffset` is another part of it, and a read filtered by `contains` shows
  * lines another filter does not: a later read replaces this one only when it
  * reads the same kind at the same offset through the same filter. `maxChars`
- * is not a part key: a later read of the same part replaces this one only when
- * it `withheld` no more, so a smaller one leaves this one, and what it holds
- * past the smaller bound, in full.
+ * is not a part key, and what a read holds carries nothing that expires: a
+ * later read of the same part replaces this one only when it `withheld` no
+ * more, so a smaller one leaves this one, and what it holds past the smaller
+ * bound, in full.
  */
 export const BROWSER_PAGE_READ_OBSERVATION: OperationObservation = {
   group: BROWSER_PAGE_OBSERVATION_GROUP,
@@ -284,6 +283,7 @@ export const BROWSER_PAGE_READ_OBSERVATION: OperationObservation = {
       fields: ['text', 'console', 'network'],
       keyPath: 'pageId',
       partKeyPaths: ['what', 'offset', 'contains'],
+      expires: 'on_covering_look',
       withheldAt: 'withheld',
       currentStateOperation: BROWSER_PAGE_READ_OPERATION_ID,
     },

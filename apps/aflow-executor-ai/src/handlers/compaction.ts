@@ -21,7 +21,7 @@ import {
 } from './exchangeClearing.js';
 import { estimateStringTokens } from './tokenEstimate.js';
 import { RETENTION_POLICY, computePinnedAtomIds } from './retentionPolicy.js';
-import { renderToolObservations } from './toolObservations.js';
+import { atomsAsSent } from './toolObservations.js';
 
 // ============================================================================
 // Types
@@ -435,8 +435,7 @@ export async function triggerCompaction(
   // The summarizer reads, and the saving is measured against, history as
   // assembleRequest sends it: observations reduced and stamps removed. The
   // archive keeps the atoms as stored.
-  const shown = renderToolObservations(hydratedAtoms.map((a) => a.message));
-  const shownAtoms = hydratedAtoms.map((atom, i) => ({ ...atom, message: shown[i]! }));
+  const shownAtoms = atomsAsSent(hydratedAtoms);
 
   // 2. Identify compaction range
   const pinnedAtomIds = new Set<string>();

@@ -80,7 +80,7 @@ import {
   detectResurrections,
 } from './exchangeClearing.js';
 import { estimateStringTokens, estimateMessageTokens } from './tokenEstimate.js';
-import { renderToolObservations } from './toolObservations.js';
+import { atomsAsSent } from './toolObservations.js';
 import {
   ConversationHistoryHydrationError,
   type HistoryIntegrityIssue,
@@ -471,7 +471,7 @@ export class ConversationStateStore {
 
     // Hydrate committed atoms from payload store.
     // Atoms are stored in batches (one batch per turn) — deduplicate ref loads.
-    const hydratedMessages: AiMessageV1[] = [];
+    const historyMessages: AiMessageV1[] = [];
     const distinctRefs = [...new Set(committedAtoms.map((a) => a.ref))];
     const loadedBatches = new Map<string, AiMessageAtomV1[]>();
 
@@ -549,30 +549,26 @@ export class ConversationStateStore {
       ? retainReasoningForRequest(this.lastHydratedAtoms, continuity)
       : undefined;
 
-    for (const atom of this.lastHydratedAtoms) {
+    // Earlier observations of a key are reduced here, at assembly, and never in
+    // stored history. A result changes form at most once per facet — on the
+    // first turn a later result replaces that facet and part of its page, or
+    // moves or ends the page — and is byte-identical on every turn between
+    // and after, so the provider's prefix cache breaks only at that message and
+    // the messages before it are untouched. Nothing in the reduced form may
+    // vary turn to turn: no count of later results, no time.
+    for (const atom of atomsAsSent(this.lastHydratedAtoms)) {
       if (
         retention &&
         atom.message.providerReasoning !== undefined &&
         !retention.keptAtomIds.has(atom.atomId)
       ) {
         const { providerReasoning: _dropped, ...stripped } = atom.message;
-        hydratedMessages.push(stripped);
+        historyMessages.push(stripped);
       } else {
-        hydratedMessages.push(atom.message);
+        historyMessages.push(atom.message);
       }
     }
-
-    // Earlier observations of a key are reduced here, at assembly, and never in
-    // stored history. A result changes form at most once per facet — on the
-    // first turn a later result observes the same facet and part of its page,
-    // or moves or ends the page — and is byte-identical on every turn between
-    // and after, so the provider's prefix cache breaks only at that message and
-    // the messages before it are untouched. Nothing in the reduced form may
-    // vary turn to turn: no count of later results, no time.
-    const historyMessages = renderToolObservations(hydratedMessages);
-    for (const msg of historyMessages) {
-      messages.push(msg);
-    }
+    messages.push(...historyMessages);
 
     // Ephemeral active-memory pair (never committed as atoms): inserted before
     // the most recent user message so it is never first-non-system on resumed
@@ -805,6 +801,7 @@ export class ConversationStateStore {
     const noteOptions: ClearNoteOptions = { availableReadOpId };
     const currentTurn = this.state.turnNumber; // already incremented by storeTurn()
     const hydratedById = this.hydratedAtomsById();
+    const sentById = this.sentAtomsById();
     const exchanges = this.groupExchanges(hydratedById);
 
     // §4.6: re-execution/re-fetch of cleared content marks the new exchange
@@ -845,6 +842,7 @@ export class ConversationStateStore {
       const { noteTokens, netSavings } = estimateExchangeClearingTokens(
         ex,
         hydratedById,
+        sentById,
         noteOptions,
       );
       if (netSavings <= RETENTION_POLICY.minClearNetSavings(noteTokens)) continue;
@@ -920,6 +918,7 @@ export class ConversationStateStore {
 
     const noteOptions: ClearNoteOptions = { availableReadOpId: target.availableReadOpId };
     const hydratedById = this.hydratedAtomsById();
+    const sentById = this.sentAtomsById();
     const exchanges = this.groupExchanges(hydratedById);
     const alreadyClearedExchanges = new Set<string>(this.state.clearing?.clearedExchanges ?? []);
     const pinned = this.pinnedAtomIds();
@@ -948,7 +947,7 @@ export class ConversationStateStore {
       if (atomsDone && tokensDone) break;
       selected.push(ex);
       atomsFreed += ex.atomRefs.length - 1; // one note replaces the whole exchange
-      tokensFreed += estimateExchangeNetTokenSavings(ex, hydratedById, noteOptions);
+      tokensFreed += estimateExchangeNetTokenSavings(ex, hydratedById, sentById, noteOptions);
     }
 
     if (selected.length === 0) return undefined;
@@ -975,11 +974,12 @@ export class ConversationStateStore {
    * needed to read assistant toolCalls + result envelopes for grouping/summaries.
    */
   private hydratedAtomsById(): Map<string, AiMessageAtomV1> {
-    const byId = new Map<string, AiMessageAtomV1>();
-    for (const ha of this.lastHydratedAtoms ?? []) {
-      byId.set(ha.atomId, ha);
-    }
-    return byId;
+    return new Map((this.lastHydratedAtoms ?? []).map((atom) => [atom.atomId, atom]));
+  }
+
+  /** The same atoms as the model is sent them — what clearing one frees. */
+  private sentAtomsById(): Map<string, AiMessageAtomV1> {
+    return new Map(atomsAsSent(this.lastHydratedAtoms ?? []).map((atom) => [atom.atomId, atom]));
   }
 
   /** The turn currently being executed — its atoms are pinned (§4.1). */

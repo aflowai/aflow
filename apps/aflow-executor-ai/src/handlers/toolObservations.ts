@@ -2,6 +2,7 @@ import {
   ToolResultObservationSchema,
   staleFieldsOf,
   type AiContentPart,
+  type AiMessageAtomV1,
   type AiMessageV1,
   type AiToolResultEnvelopeV1,
   type StampedFacet,
@@ -29,14 +30,13 @@ interface LaterLook {
 }
 
 /**
- * The first later look that covers an earlier one leaving out `withheld`: one
- * that left out no more. A look that declares nothing left out covers any.
+ * The first later look that replaced `facet`: the nearest one when what the
+ * facet holds expires at any later look, else the nearest that left out no
+ * more of the part than it did.
  */
-function firstCovering(
-  looks: readonly LaterLook[],
-  withheld: number | undefined,
-): Staleness | undefined {
-  return looks.find((look) => withheld === undefined || look.withheld <= withheld)?.staleness;
+function firstReplacing(looks: readonly LaterLook[], facet: StampedFacet): Staleness | undefined {
+  if (facet.expires === 'on_any_later_look') return looks[0]?.staleness;
+  return looks.find((look) => look.withheld <= facet.withheld)?.staleness;
 }
 
 /**
@@ -121,9 +121,10 @@ function earlier(a: Staleness | undefined, b: Staleness | undefined): Staleness 
 /**
  * The messages as the model is shown them. A stamped tool result is reduced
  * only in the facets a later result replaced — the same facet of the same
- * thing, with the same part keys, leaving out no more of that part than this
- * result did — and in every facet once a later result
- * moved its thing to another address or ended it. A reduced result is its
+ * thing, with the same part keys, and for a facet whose content expires only
+ * when covered, leaving out no more of that part than this result did — and
+ * in every facet once a later result moved its thing to another address or
+ * ended it. A reduced result is its
  * receipt for the fields it no longer shows, under one line per stale facet
  * naming what made it stale. The stamp itself is never shown.
  *
@@ -159,7 +160,7 @@ export function renderToolObservations(messages: readonly AiMessageV1[]): AiMess
     const stale = new Map<number, Staleness>();
     for (const [i, facet] of facets.entries()) {
       const first = earlier(
-        firstCovering(laterLooks.get(facetSlot(group, facet)) ?? [], facet.withheld),
+        firstReplacing(laterLooks.get(facetSlot(group, facet)) ?? [], facet),
         movedOrEndedBy.get(thingSlot(group, facet.key)),
       );
       if (first !== undefined) stale.set(i, first);
@@ -190,7 +191,7 @@ export function renderToolObservations(messages: readonly AiMessageV1[]): AiMess
       laterLooks.set(
         slot,
         withNearerLook(laterLooks.get(slot) ?? [], {
-          withheld: facet.withheld ?? 0,
+          withheld: facet.expires === 'on_covering_look' ? facet.withheld : 0,
           staleness: { index, cause: 'replaced', operation },
         }),
       );
@@ -203,4 +204,15 @@ export function renderToolObservations(messages: readonly AiMessageV1[]): AiMess
     }
   }
   return rendered;
+}
+
+/**
+ * The atoms as the model is sent them, each message rendered by
+ * `renderToolObservations` over the whole list. Assembly, compaction and
+ * clearing all measure history through this, so none of them counts what a
+ * reduced result no longer shows.
+ */
+export function atomsAsSent(atoms: readonly AiMessageAtomV1[]): AiMessageAtomV1[] {
+  const sent = renderToolObservations(atoms.map((atom) => atom.message));
+  return atoms.map((atom, i) => ({ ...atom, message: sent[i]! }));
 }
