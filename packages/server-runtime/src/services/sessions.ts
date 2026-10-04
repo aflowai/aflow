@@ -74,6 +74,7 @@ import {
 import { recordAdmissionReject } from '@aflow/observability';
 import { dispatchResume, loadParkedStepWaitersForSession } from '@aflow/cybernetic-runtime';
 import { createSessionTailService } from './sessionTail.js';
+import { scanStepStatuses, STEP_STATUS_PAGE_SIZE } from './sessionDebugSteps.js';
 
 // ============================================================================
 // Types
@@ -225,7 +226,7 @@ export interface SessionDetails {
   outputRef?: string | undefined;
   /** User-facing error summary (always included if run failed) */
   error?: UserFacingErrorSummary | undefined;
-  /** Full error reference (role-gated, only for debugging) */
+  /** The stored error the session failed with, resolved through `GET /v1/payloads`. */
   errorRef?: string | undefined;
   stepCount: number;
   currentStepId?: string | undefined;
@@ -434,11 +435,21 @@ export interface DelegationTreeEntry {
 
 export interface SessionDebugView {
   session: SessionDetails;
+  /** The newest events, oldest first. */
   recentEvents: SessionEvent[];
   runtimeState?: Record<string, unknown> | undefined;
   agent?: Record<string, AgentDebugInfo> | undefined;
   currentStep?: CurrentStepDebugInfo | undefined;
   dynamicSteps?: DynamicStepDebugInfo[] | undefined;
+  /**
+   * How the dynamic steps' statuses were read: events walked back from the
+   * newest, and whether that placed every step or reached the start of the
+   * history. A step left without a status after a complete walk has no record
+   * left to read it from.
+   */
+  stepEvents?: { read: number; complete: boolean } | undefined;
+  /** Whether the session's hot state could be read; `expired` once Redis has let it go. */
+  hotState?: 'present' | 'expired' | 'corrupt' | undefined;
   delegationTree?: DelegationTreeEntry[] | undefined;
   /**
    * Parent session ID when this session is a child subflow.
@@ -1376,6 +1387,7 @@ function createRealSessionService(ctx: AppContext): SessionService {
               : undefined,
             inputRef: redisState.inputRef ?? undefined,
             outputRef: redisState.finalOutputRef ?? undefined,
+            errorRef: redisState.errorRef ?? undefined,
             stepCount: 0,
             currentStepId: redisState.currentStepId ?? undefined,
             requiredInput,
@@ -1411,6 +1423,7 @@ function createRealSessionService(ctx: AppContext): SessionService {
         completedAt: run.endedAt?.toISOString(),
         inputRef: run.requestedInputRef ?? undefined,
         outputRef: run.finalOutputRef ?? undefined,
+        errorRef: run.errorRef ?? undefined,
         stepCount: 0, // Would need step count query
         currentStepId: run.startStepId ?? undefined,
         requiredInput:
@@ -1559,26 +1572,25 @@ function createRealSessionService(ctx: AppContext): SessionService {
       const session = await this.getSessionById(tenantId, sessionId);
       if (!session) return null;
 
-      // `getSessionEvents(undefined, ...)` always returns `kind: 'events'`
-      // — reconcile is only possible with a cursor the service can't
-      // resolve. Without a cursor there is nothing to seek past.
-      const result = await this.getSessionEvents(
+      const newestPage = await this.getSessionEventsBefore(
         tenantId,
         sessionId,
         undefined,
         options?.eventsLimit ?? 200,
       );
-      const events = result.kind === 'events' ? result.events : [];
+      const events = newestPage.kind === 'events' ? newestPage.events : [];
 
       const warnings: string[] = [];
       let runtimeState: Record<string, unknown> | undefined;
       const agent: Record<string, AgentDebugInfo> = {};
       let requestedInputRef: string | undefined;
       let hotState: SessionHotState | undefined;
+      let hotStateView: SessionDebugView['hotState'];
 
       // Extract runtime state and agent info from Redis if available
       if (redis) {
         const result = await getSessionStateSafe(redis, tenantId, sessionId);
+        hotStateView = result.ok ? 'present' : result.kind === 'corrupt' ? 'corrupt' : 'expired';
         if (result.ok) {
           const state = result.state;
           hotState = state;
@@ -1694,106 +1706,55 @@ function createRealSessionService(ctx: AppContext): SessionService {
 
       // ── Priority E: Dynamic steps list (enriched with status from events) ──
       let dynamicSteps: DynamicStepDebugInfo[] | undefined;
+      let stepEvents: SessionDebugView['stepEvents'];
+      let parsedDynamicSteps: unknown[] | undefined;
       if (hotState?.dynamicSteps) {
         try {
-          const parsed = JSON.parse(hotState.dynamicSteps) as unknown[];
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            // Build a per-stepId index of the latest status-bearing event
-            const stepStatusMap = new Map<
-              string,
-              {
-                status: string;
-                stepExecutionId?: string;
-                errorMessage?: string;
-                durationMs?: number;
-              }
-            >();
-            for (const evt of events) {
-              const sid = evt.data?.stepId;
-              if (!sid) continue;
-              const et = evt.eventType;
-              const seId = evt.stepExecutionId; // string | undefined
-              if (et === 'StepScheduled') {
-                // Only set if we haven't seen a later terminal event
-                if (!stepStatusMap.has(sid)) {
-                  const entry: { status: string; stepExecutionId?: string } = {
-                    status: 'SCHEDULED',
-                  };
-                  if (seId) entry.stepExecutionId = seId;
-                  stepStatusMap.set(sid, entry);
-                }
-              } else if (et === 'StepStarted') {
-                const prev = stepStatusMap.get(sid);
-                if (!prev || prev.status === 'SCHEDULED') {
-                  const entry: { status: string; stepExecutionId?: string } = { status: 'RUNNING' };
-                  if (seId) entry.stepExecutionId = seId;
-                  stepStatusMap.set(sid, entry);
-                }
-              } else if (et === 'StepSucceeded') {
-                const scheduledEvt = events.find(
-                  (e) => e.eventType === 'StepScheduled' && e.data?.stepId === sid,
-                );
-                const scheduledTs = scheduledEvt ? new Date(scheduledEvt.timestamp).getTime() : 0;
-                const succeededTs = new Date(evt.timestamp).getTime();
-                const entry: { status: string; stepExecutionId?: string; durationMs?: number } = {
-                  status: 'SUCCEEDED',
-                };
-                if (seId) entry.stepExecutionId = seId;
-                if (scheduledTs > 0) entry.durationMs = succeededTs - scheduledTs;
-                stepStatusMap.set(sid, entry);
-              } else if (et === 'StepFailed') {
-                const scheduledEvt = events.find(
-                  (e) => e.eventType === 'StepScheduled' && e.data?.stepId === sid,
-                );
-                const scheduledTs = scheduledEvt ? new Date(scheduledEvt.timestamp).getTime() : 0;
-                const failedTs = new Date(evt.timestamp).getTime();
-                const errMsg =
-                  (evt.metadata?.['errorMessage'] as string | undefined) ??
-                  (evt.data?.['errorMessage'] as string | undefined);
-                const entry: {
-                  status: string;
-                  stepExecutionId?: string;
-                  errorMessage?: string;
-                  durationMs?: number;
-                } = {
-                  status: 'FAILED',
-                };
-                if (seId) entry.stepExecutionId = seId;
-                if (errMsg) entry.errorMessage = errMsg;
-                if (scheduledTs > 0) entry.durationMs = failedTs - scheduledTs;
-                stepStatusMap.set(sid, entry);
-              } else if (et === 'StepPaused') {
-                const entry: { status: string; stepExecutionId?: string } = { status: 'PAUSED' };
-                if (seId) entry.stepExecutionId = seId;
-                stepStatusMap.set(sid, entry);
-              }
-            }
-
-            const toStr = (v: unknown) =>
-              typeof v === 'object' && v !== null
-                ? JSON.stringify(v)
-                : String((v ?? '') as string | number | boolean);
-            dynamicSteps = parsed.map((s) => {
-              const entry = s as Record<string, unknown>;
-              const stepId = toStr(entry['stepId'] ?? '');
-              const info = stepStatusMap.get(stepId);
-              const base: DynamicStepDebugInfo = {
-                stepId,
-                stepType: toStr(entry['stepType'] ?? ''),
-                operation: toStr(entry['operation'] ?? ''),
-              };
-              if (info) {
-                base.status = info.status;
-                if (info.stepExecutionId) base.stepExecutionId = info.stepExecutionId;
-                if (info.errorMessage) base.error = { message: info.errorMessage };
-                if (info.durationMs !== undefined) base.durationMs = info.durationMs;
-              }
-              return base;
-            });
-          }
+          const parsed = JSON.parse(hotState.dynamicSteps) as unknown;
+          if (Array.isArray(parsed) && parsed.length > 0) parsedDynamicSteps = parsed;
         } catch {
           /* ignore parse errors */
         }
+      }
+      if (parsedDynamicSteps) {
+        const toStr = (v: unknown) =>
+          typeof v === 'object' && v !== null
+            ? JSON.stringify(v)
+            : String((v ?? '') as string | number | boolean);
+        const defs = parsedDynamicSteps.map((s) => s as Record<string, unknown>);
+        const scan = await scanStepStatuses(
+          new Set(defs.map((d) => toStr(d['stepId'] ?? ''))),
+          newestPage.kind === 'events' ? newestPage : { events: [], hasOlder: false },
+          async (cursor) => {
+            const older = await this.getSessionEventsBefore(
+              tenantId,
+              sessionId,
+              cursor,
+              STEP_STATUS_PAGE_SIZE,
+            );
+            return older.kind === 'events' ? older : undefined;
+          },
+        );
+        stepEvents = {
+          read: scan.eventsRead,
+          complete: newestPage.kind === 'events' && scan.complete,
+        };
+        dynamicSteps = defs.map((entry) => {
+          const stepId = toStr(entry['stepId'] ?? '');
+          const info = scan.steps.get(stepId);
+          const base: DynamicStepDebugInfo = {
+            stepId,
+            stepType: toStr(entry['stepType'] ?? ''),
+            operation: toStr(entry['operation'] ?? ''),
+          };
+          if (info) {
+            base.status = info.status;
+            if (info.stepExecutionId) base.stepExecutionId = info.stepExecutionId;
+            if (info.errorMessage) base.error = { message: info.errorMessage };
+            if (info.durationMs !== undefined) base.durationMs = info.durationMs;
+          }
+          return base;
+        });
       }
 
       let delegationTree: DelegationTreeEntry[] | undefined;
@@ -1845,6 +1806,8 @@ function createRealSessionService(ctx: AppContext): SessionService {
         agent: Object.keys(agent).length > 0 ? agent : undefined,
         currentStep,
         dynamicSteps,
+        ...(stepEvents ? { stepEvents } : {}),
+        ...(hotStateView ? { hotState: hotStateView } : {}),
         delegationTree,
         ...(hotState?.parentSessionId ? { parentSessionId: hotState.parentSessionId } : {}),
         refs: {

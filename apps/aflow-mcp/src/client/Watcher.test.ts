@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 
 import { Watcher, type WatchHttpClient } from './Watcher.js';
+import { decodeSessionCursor, seenSteps } from './sessionCursor.js';
 import type { Session } from '../auth/SessionStore.js';
 import type { SessionDebugResponse, SessionRunStatusView } from './sessionViews.js';
 
@@ -243,12 +244,9 @@ describe('watchSession', () => {
     expect(degraded.status).toBe('WAITING_ON_CHILD');
     expect(degraded.new_steps).toEqual([]);
 
-    const cursor = JSON.parse(Buffer.from(degraded.cursor, 'base64').toString('utf-8')) as {
-      status: string;
-      steps: Record<string, string>;
-    };
-    expect(cursor.status).toBe('WAITING_ON_CHILD');
-    expect(cursor.steps).toEqual({ 'step-1': 'SUCCEEDED' });
+    const cursor = decodeSessionCursor(degraded.cursor);
+    expect(cursor?.status).toBe('WAITING_ON_CHILD');
+    expect(cursor?.seen).toEqual(seenSteps([{ step_id: 'step-1', status: 'SUCCEEDED' }]));
   });
 
   it('a degraded-read cursor does not re-trigger the same transition but still delivers step diffs', async () => {

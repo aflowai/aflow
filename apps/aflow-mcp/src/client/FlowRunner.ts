@@ -12,16 +12,20 @@
 
 import type { ApiClient } from './ApiClient.js';
 import type { Session } from '../auth/SessionStore.js';
-import type { SessionRunStatusView as RunStatus } from './sessionViews.js';
+import { resolvePayloadRef, type PayloadResolveMode } from './payloads.js';
+import { resolveSessionFailure, type SessionFailure } from './sessionFailure.js';
+import {
+  buildStepSummaries,
+  type SessionDebugResponse,
+  type SessionRunStatusView as RunStatus,
+  type StepSummary,
+} from './sessionViews.js';
 import { MAX_WATCH_TIMEOUT_SECONDS, type ToolContinuation } from './Watcher.js';
 import { log } from '../util/logger.js';
 
 // ---------------------------------------------------------------------------
 // Public request/result types
 // ---------------------------------------------------------------------------
-
-/** How the SessionRunner resolves non-inline payload refs in the result. */
-export type PayloadResolveMode = 'eager' | 'lazy';
 
 /** Start a new session — one of systemRole, agentSlug, agentConfig, or operationId required. */
 export interface SessionRunRequest {
@@ -56,24 +60,15 @@ export interface SessionRunRequest {
   resolvePayloads?: PayloadResolveMode | undefined;
 }
 
-export interface StepTrace {
-  step_id: string;
-  step_execution_id?: string;
-  operation?: string;
-  name?: string;
-  status: string;
-  output_summary?: string | undefined;
-  error?: string | undefined;
-  duration_ms?: number | undefined;
-}
-
 export interface SessionRunResult {
   sessionId: string;
   status: 'SUCCEEDED' | 'FAILED' | 'CANCELLED' | 'PAUSED' | 'RUNNING';
   output?: unknown;
   error?: string | undefined;
+  /** Why it failed, read from the stored error, when the session ended FAILED. */
+  failure?: SessionFailure | undefined;
   durationMs: number;
-  steps?: StepTrace[] | undefined;
+  steps?: StepSummary[] | undefined;
   /** If PAUSED — info needed to resume. */
   requiredInput?:
     | {
@@ -108,50 +103,14 @@ interface StartSessionResponse {
   error?: { code: string; message: string };
 }
 
-interface DebugStepEntry {
-  stepExecutionId?: string | undefined;
-  stepId?: string | undefined;
-  operation?: string | undefined;
-  name?: string | undefined;
-  status?: string | undefined;
-  error?: { message?: string } | undefined;
-  output?: unknown;
-  outputRef?: string | undefined;
-  durationMs?: number | undefined;
-  parentStepExecutionId?: string | undefined;
-}
-
-interface SessionDebugView {
-  session: {
-    sessionId: string;
-    status: string;
-    agentId?: string | undefined;
-    durationMs?: number | undefined;
-    outputRef?: string | undefined;
-    errorRef?: string | undefined;
-  };
-  recentEvents?:
-    | Array<{
-        eventType?: string | undefined;
-        data?:
-          | {
-              errorRef?: string | undefined;
-              payloadRef?: string | undefined;
-              [key: string]: unknown;
-            }
-          | undefined;
-        metadata?: Record<string, unknown> | undefined;
-      }>
-    | undefined;
-  currentStep?: DebugStepEntry | undefined;
-  dynamicSteps?: DebugStepEntry[] | undefined;
+type SessionDebugView = SessionDebugResponse & {
   runtimeState?:
     | {
         variables?: Record<string, { ref?: string; summary?: string }> | undefined;
       }
     | undefined;
   tokenUsage?: { prompt: number; completion: number; total: number } | undefined;
-}
+};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -159,7 +118,6 @@ interface SessionDebugView {
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MCP_RUNNER_FLOW_ID = 'mcp-runner';
-const OUTPUT_SUMMARY_MAX = 2000;
 
 // ---------------------------------------------------------------------------
 // SessionRunner
@@ -428,37 +386,23 @@ export class SessionRunner {
       };
     }
 
-    if (status === 'FAILED') {
-      result.error = run.error?.message ?? run.error?.title;
-      // Errors always resolve eagerly — they're small and critical
-      if (!result.error && run.errorRef) {
-        const decoded = await this.resolvePayloadRef(session, run.errorRef, sq, 'eager');
-        if (decoded && typeof decoded === 'object') {
-          const errObj = decoded as Record<string, unknown>;
-          const msg = errObj['message'];
-          const code = errObj['code'];
-          result.error =
-            (typeof msg === 'string' ? msg : undefined) ??
-            (typeof code === 'string' ? code : undefined);
-        }
-      }
-    }
-
     // Resolve output from the session's outputRef
     if (run.outputRef) {
-      result.output = await this.resolvePayloadRef(session, run.outputRef, sq, resolveMode);
+      result.output = await resolvePayloadRef(
+        this.client,
+        session,
+        run.outputRef,
+        spaceId,
+        resolveMode,
+      );
     }
 
-    // Fetch debug view for step traces and richer error info
+    // Fetch debug view for step traces and the failure
     let debugAgentId: string | undefined;
+    let debug: SessionDebugView | undefined;
     try {
-      const debug = await this.client.get<SessionDebugView>(
-        session,
-        `/v1/sessions/${runId}/debug?${sq}`,
-      );
-      const target = (
-        debug.session as { target?: { kind: string; systemRole?: string; agentId?: string } }
-      ).target;
+      debug = await this.client.get<SessionDebugView>(session, `/v1/sessions/${runId}/debug?${sq}`);
+      const target = debug.session.target;
       if (target?.kind === 'platform-role') debugAgentId = target.systemRole;
       else if (target?.kind === 'custom-agent') debugAgentId = target.agentId;
 
@@ -466,10 +410,11 @@ export class SessionRunner {
 
       // If we didn't get output from session status, try the debug view
       if (result.output === undefined && debug.session.outputRef) {
-        result.output = await this.resolvePayloadRef(
+        result.output = await resolvePayloadRef(
+          this.client,
           session,
           debug.session.outputRef,
-          sq,
+          spaceId,
           resolveMode,
         );
       }
@@ -478,68 +423,36 @@ export class SessionRunner {
       if (result.output === undefined && debug.runtimeState?.variables) {
         const resultVar = debug.runtimeState.variables['result'];
         if (resultVar?.ref) {
-          result.output = await this.resolvePayloadRef(session, resultVar.ref, sq, resolveMode);
+          result.output = await resolvePayloadRef(
+            this.client,
+            session,
+            resultVar.ref,
+            spaceId,
+            resolveMode,
+          );
         }
       }
 
-      // Step traces from dynamicSteps (agent.control.run_step creates dynamic steps)
-      const steps = debug.dynamicSteps;
-      if (steps && steps.length > 0) {
-        result.steps = steps.map((s) => this.mapDebugStep(s));
-      }
-
-      // If error is still unknown, extract from failed steps in the debug trace
-      if (status === 'FAILED' && !result.error && steps) {
-        const failedStep = steps.find((s) => s.status === 'FAILED' || s.status === 'failed');
-        if (failedStep?.error?.message) {
-          result.error = failedStep.error.message;
-        }
-      }
-
-      // Try currentStep errorRef
-      if (status === 'FAILED' && !result.error && debug.currentStep?.error?.message) {
-        result.error = debug.currentStep.error.message;
-      }
-
-      // Error refs always resolve eagerly
-      if (status === 'FAILED' && !result.error && debug.recentEvents) {
-        for (const evt of [...debug.recentEvents].reverse()) {
-          if (evt.eventType === 'FlowRunFailed' || evt.eventType === 'StepFailed') {
-            const errorRef = evt.data?.errorRef;
-            if (errorRef) {
-              const decoded = await this.resolvePayloadRef(session, errorRef, sq, 'eager');
-              if (decoded && typeof decoded === 'object') {
-                const errObj = decoded as Record<string, unknown>;
-                const msg =
-                  (errObj['message'] as string | undefined) ??
-                  (errObj['title'] as string | undefined) ??
-                  (errObj['error'] as string | undefined);
-                if (msg) {
-                  result.error = msg;
-                  break;
-                }
-              }
-            }
-          }
-        }
-      }
-
-      // Try the session's errorRef from debug view
-      if (status === 'FAILED' && !result.error && debug.session.errorRef) {
-        const decoded = await this.resolvePayloadRef(session, debug.session.errorRef, sq, 'eager');
-        if (decoded && typeof decoded === 'object') {
-          const errObj = decoded as Record<string, unknown>;
-          result.error =
-            (errObj['message'] as string | undefined) ?? (errObj['title'] as string | undefined);
-        }
-      }
+      const steps = buildStepSummaries(debug);
+      if (steps.length > 0) result.steps = steps;
     } catch (err) {
       log('debug', 'session_debug_fetch_failed', { sessionId: runId, error: String(err) });
     }
 
-    // Final fallback
-    if (status === 'FAILED' && !result.error) {
-      result.error = 'Session failed — check the session detail in the web UI for diagnostics.';
+    if (status === 'FAILED') {
+      result.failure = await resolveSessionFailure(
+        this.client,
+        session,
+        spaceId,
+        debug ?? {
+          session: {
+            sessionId: runId,
+            status,
+            ...(run.errorRef !== undefined ? { errorRef: run.errorRef } : {}),
+          },
+        },
+      );
+      result.error = result.failure.message;
     }
 
     // Enrich failed sessions with expected agent input variables when failure was quick
@@ -554,79 +467,11 @@ export class SessionRunner {
     return result;
   }
 
-  private mapDebugStep(s: DebugStepEntry): StepTrace {
-    const trace: StepTrace = {
-      step_id: s.stepId ?? 'unknown',
-      status: s.status ?? 'unknown',
-    };
-
-    if (s.stepExecutionId) trace.step_execution_id = s.stepExecutionId;
-    if (s.operation) trace.operation = s.operation;
-    if (s.name) trace.name = s.name;
-    if (s.durationMs !== undefined) trace.duration_ms = s.durationMs;
-
-    if (s.error?.message) {
-      trace.error = s.error.message;
-    }
-
-    if (s.output !== undefined) {
-      trace.output_summary = this.summarize(s.output);
-    }
-
-    return trace;
-  }
-
-  // ---- Payload resolution -------------------------------------------------
-
-  /**
-   * Resolve a PayloadRef to its decoded value.
-   *
-   * - inline:base64 → decode locally (no API call)
-   * - gs:// / redis:// in eager mode → call GET /v1/payloads?ref= to fetch
-   * - gs:// / redis:// in lazy mode → return a handle object
-   *
-   * Errors are never resolved lazily — always eager (error messages are small
-   * and critical for the agent to understand failures).
-   */
-  private async resolvePayloadRef(
-    session: Session,
-    ref: string,
-    sq: string,
-    mode: PayloadResolveMode,
-  ): Promise<unknown> {
-    if (ref.startsWith('inline:')) {
-      try {
-        const b64 = ref.slice(7);
-        const json = Buffer.from(b64, 'base64').toString('utf-8');
-        return JSON.parse(json) as unknown;
-      } catch (err) {
-        log('warn', 'payload_decode_error', { ref: ref.slice(0, 50), error: String(err) });
-        return undefined;
-      }
-    }
-
-    if (mode === 'lazy') {
-      return { _ref: ref, _hint: 'Call fetch_payload with this ref to get the content.' };
-    }
-
-    try {
-      const data = await this.client.get<unknown>(
-        session,
-        `/v1/payloads?ref=${encodeURIComponent(ref)}&${sq}`,
-      );
-      return data;
-    } catch (err) {
-      log('warn', 'payload_fetch_error', { ref: ref.slice(0, 80), error: String(err) });
-      return { _ref: ref, _hint: 'Payload fetch failed. Call fetch_payload to retry.' };
-    }
-  }
-
   /**
    * Resolve a payload ref via the API. Used by the fetch_payload MCP tool.
    */
   async fetchPayload(session: Session, ref: string, spaceId: string): Promise<unknown> {
-    const sq = `spaceId=${encodeURIComponent(spaceId)}`;
-    return this.resolvePayloadRef(session, ref, sq, 'eager');
+    return resolvePayloadRef(this.client, session, ref, spaceId, 'eager');
   }
 
   // ---- Agent input discovery -----------------------------------------------
@@ -674,12 +519,6 @@ export class SessionRunner {
 
   private isTerminal(status: string): boolean {
     return ['SUCCEEDED', 'FAILED', 'CANCELLED', 'PAUSED'].includes(status.toUpperCase());
-  }
-
-  private summarize(value: unknown): string {
-    const json = JSON.stringify(value);
-    if (json.length <= OUTPUT_SUMMARY_MAX) return json;
-    return json.slice(0, OUTPUT_SUMMARY_MAX) + '…[truncated]';
   }
 
   private sleep(ms: number): Promise<void> {

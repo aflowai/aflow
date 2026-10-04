@@ -1,8 +1,5 @@
 /**
- * inspect_session tool — fetch a structured debug summary for any session.
- *
- * Calls GET /v1/sessions/:id/debug and formats the response into a
- * concise, agent-friendly summary with step traces, errors, and token usage.
+ * inspect_session tool — a session's state, bounded, from GET /v1/sessions/:id/debug.
  */
 
 import { z } from 'zod';
@@ -12,49 +9,57 @@ import type { ApiClient } from '../client/ApiClient.js';
 import type { AuthManager } from '../auth/AuthManager.js';
 import type { Session } from '../auth/SessionStore.js';
 import { type SpaceGate, SpaceRequiredError } from '../middleware/spaceGate.js';
-import { buildStepSummaries, type SessionDebugResponse } from '../client/sessionViews.js';
+import {
+  CONTROL_STEP_OPERATION,
+  DEFAULT_INSPECT_LAST_N_STEPS,
+  inspectSession,
+} from '../client/sessionInspection.js';
 import { successResponse, errorResponse } from '../util/envelope.js';
 import { log } from '../util/logger.js';
 
 type SessionResolver = () => Session;
 
 const InspectSessionInputSchema = z.object({
-  session_id: z.string().describe('The session ID to inspect.'),
+  session_id: z.string().min(1).describe('The session ID to inspect.'),
   space_id: z
     .string()
     .min(1)
     .describe('Space ID the session belongs to (required). Call space_list to discover spaces.'),
+  last_n_steps: z
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .describe(
+      `How many of the newest matching steps to return (default ${String(DEFAULT_INSPECT_LAST_N_STEPS)}). ` +
+        'The census names the number that returns every matching step; 0 returns none, for status alone.',
+    ),
+  cursor: z
+    .string()
+    .optional()
+    .describe(
+      'Opaque cursor from a prior inspect_session or watch_session response. Pass it back to ' +
+        'return only steps that are new, or whose status changed, since then.',
+    ),
+  status: z
+    .array(z.string().min(1))
+    .optional()
+    .describe(
+      "Only steps in these states, e.g. ['FAILED'] or ['RUNNING','PAUSED']. States: SCHEDULED, " +
+        'RUNNING, SUCCEEDED, FAILED, PAUSED; NOT_READ and HOT_STATE_EXPIRED where a status cannot be read.',
+    ),
+  operation: z
+    .array(z.string().min(1))
+    .optional()
+    .describe("Only steps of these operation ids, e.g. ['browser.page.open']."),
+  include_control_steps: z
+    .boolean()
+    .optional()
+    .describe(
+      `Include the ${CONTROL_STEP_OPERATION} wrappers (default false). Each wraps a tool step ` +
+        'listed on its own and carries nothing of its own.',
+    ),
 });
-
-// ---------------------------------------------------------------------------
-// Compute token usage from events if not in debug view
-// ---------------------------------------------------------------------------
-
-function extractTokenUsage(
-  debug: SessionDebugResponse,
-): { prompt: number; completion: number; total: number } | undefined {
-  // Check runtimeState for token accumulators
-  if (debug.recentEvents) {
-    let prompt = 0;
-    let completion = 0;
-    for (const evt of debug.recentEvents) {
-      const meta = evt.metadata;
-      if (!meta) continue;
-      const p = meta['promptTokens'] as number | undefined;
-      const c = meta['completionTokens'] as number | undefined;
-      if (typeof p === 'number') prompt += p;
-      if (typeof c === 'number') completion += c;
-    }
-    if (prompt > 0 || completion > 0) {
-      return { prompt, completion, total: prompt + completion };
-    }
-  }
-  return undefined;
-}
-
-// ---------------------------------------------------------------------------
-// Registration
-// ---------------------------------------------------------------------------
 
 export function registerInspectRunTool(
   server: McpServer,
@@ -68,9 +73,11 @@ export function registerInspectRunTool(
     {
       title: 'inspect_session',
       description:
-        'Inspect a session for debugging. Returns a structured summary with step traces, ' +
-        'errors, token usage, and runtime state. Use this to troubleshoot failed sessions ' +
-        'without needing the web UI.',
+        "A session's status and target, its newest steps, the agent's latest reply or the " +
+        'question it is paused on, and — when it FAILED — the failing step with its stored error ' +
+        '(code, message, classification, provider details). Steps left out are counted by status ' +
+        'in `census`, with the parameter that returns them. Pass the returned `cursor` back to ' +
+        'see only what is new.',
       // DO NOT use full schema: MCP SDK Zod v3/v4 compat → TS2589 + OOM. Use .shape as any.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment
       inputSchema: InspectSessionInputSchema.shape as any,
@@ -102,56 +109,16 @@ export function registerInspectRunTool(
           session_id: input.session_id,
         });
 
-        const sq = `spaceId=${encodeURIComponent(spaceId)}`;
-        const debug = await apiClient.get<SessionDebugResponse>(
-          session,
-          `/v1/sessions/${input.session_id}/debug?${sq}`,
-        );
-
-        const steps = buildStepSummaries(debug);
-        const tokenUsage = extractTokenUsage(debug);
-
-        const summary: Record<string, unknown> = {
-          session_id: debug.session.sessionId,
-          status: debug.session.status,
-        };
-
-        if (debug.session.target) summary['target'] = debug.session.target;
-        if (debug.session.durationMs !== undefined)
-          summary['duration_ms'] = debug.session.durationMs;
-        if (steps.length > 0) summary['steps'] = steps;
-        if (tokenUsage) summary['token_usage'] = tokenUsage;
-
-        // Include agent decisions if present
-        if (debug.agent) {
-          const agentSummary: Record<string, unknown> = {};
-          for (const [stepId, info] of Object.entries(debug.agent)) {
-            if (info.lastDecision) {
-              agentSummary[stepId] = info.lastDecision;
-            }
-          }
-          if (Object.keys(agentSummary).length > 0) {
-            summary['agent_decisions'] = agentSummary;
-          }
-        }
-
-        if (debug.warnings && debug.warnings.length > 0) {
-          summary['warnings'] = debug.warnings;
-        }
-
-        // Include error refs for reference (even if not resolved)
-        if (debug.refs?.['errorRef']) {
-          summary['error_ref'] = debug.refs['errorRef'];
-        }
+        const result = await inspectSession(apiClient, session, { ...input, space_id: spaceId });
 
         log('info', 'tool_complete', {
           tool: 'inspect_session',
           session: session.id,
           session_id: input.session_id,
-          status: debug.session.status,
+          status: result.status,
         });
 
-        return successResponse(summary);
+        return successResponse(result);
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         log('error', 'tool_error', {

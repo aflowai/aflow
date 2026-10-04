@@ -196,6 +196,7 @@ export function registerRunFlowTool(
 
         if (result.output !== undefined) response['output'] = result.output;
         if (result.error) response['error'] = result.error;
+        if (result.failure) response['failure'] = result.failure;
         if (result.steps) response['steps'] = result.steps;
         if (result.tokenUsage) response['token_usage'] = result.tokenUsage;
         if (result.timedOutWaiting) response['timed_out_waiting'] = true;
