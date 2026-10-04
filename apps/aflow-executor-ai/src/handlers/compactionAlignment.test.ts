@@ -284,7 +284,7 @@ describe('triggerCompaction — §4.8 alignment across a double compaction', () 
     // Tier 2: clear the three exchanges to in-position notes with pointers.
     const cleared = await store.clearUnderPressure({
       pressureTokens: 9_500,
-      effectiveBudget: 10_000,
+      workingBudget: 10_000,
       availableReadOpId: MEMORY_READ_OPERATION_ID,
     });
     expect(cleared?.clearedExchangeCount).toBe(3);
@@ -343,7 +343,7 @@ describe('triggerCompaction — §4.8 alignment across a double compaction', () 
     // Tier 2 after compaction never touches the pinned restore.
     const afterClear = await store.clearUnderPressure({
       pressureTokens: 9_900,
-      effectiveBudget: 10_000,
+      workingBudget: 10_000,
       availableReadOpId: MEMORY_READ_OPERATION_ID,
     });
     expect(afterClear?.clearedExchangeCount ?? 0).toBe(0);

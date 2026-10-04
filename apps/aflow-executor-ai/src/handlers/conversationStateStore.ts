@@ -790,13 +790,13 @@ export class ConversationStateStore {
   async clearUnderPressure(input: {
     /** Provider-reported promptTokens (ground truth) or the assembly estimate. */
     pressureTokens: number;
-    effectiveBudget: number;
+    workingBudget: number;
     /** §4.9 honest degrade — the read op on this turn's tool surface, if any. */
     availableReadOpId: string | undefined;
   }): Promise<ClearUnderPressureResult | undefined> {
-    const { pressureTokens, effectiveBudget, availableReadOpId } = input;
-    if (effectiveBudget <= 0 || this.state.history.atoms.length === 0) return undefined;
-    if (pressureTokens / effectiveBudget <= RETENTION_POLICY.clearHighWater) return undefined;
+    const { pressureTokens, workingBudget, availableReadOpId } = input;
+    if (workingBudget <= 0 || this.state.history.atoms.length === 0) return undefined;
+    if (pressureTokens / workingBudget <= RETENTION_POLICY.clearHighWater) return undefined;
 
     const noteOptions: ClearNoteOptions = { availableReadOpId };
     const currentTurn = this.state.turnNumber; // already incremented by storeTurn()
@@ -869,7 +869,7 @@ export class ConversationStateStore {
 
     // Greedy pass with a savings ledger: pressure is recomputed after every
     // selection; stop at the low watermark (hysteresis), never below.
-    const targetTokens = RETENTION_POLICY.clearLowWater * effectiveBudget;
+    const targetTokens = RETENTION_POLICY.clearLowWater * workingBudget;
     const selected: Exchange[] = [];
     let remainingTokens = pressureTokens;
     for (const candidate of candidates) {

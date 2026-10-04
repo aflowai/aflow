@@ -7,13 +7,16 @@ import type {
   TenantId,
   SessionId,
   StepExecutionId,
+  TokenEstimate,
 } from '@aflow/schemas';
 import { textMessage, toolResultMessage, MEMORY_READ_OPERATION_ID } from '@aflow/schemas';
 import { createMemoryPayloadStore, type PayloadStore } from '@aflow/payload-store';
 import type { ExecutorContext } from '@aflow/executor-runtime';
 import type { AIClient } from '@aflow/ai-client';
+import { resolveMemoryPath, type PathResolveContext } from '@aflow/memory-paths';
 import { ConversationStateStore } from './conversationStateStore.js';
-import { RETENTION_POLICY } from './retentionPolicy.js';
+import { extractNoteReadPointers } from './exchangeClearing.js';
+import { RETENTION_POLICY, turnBudgets } from './retentionPolicy.js';
 import type { HandlerDeps } from './ai/handlers/types.js';
 import type { AgentTurnInput } from './ai/schema.js';
 import { handleAgentTurn } from './ai/handlers/agentTurn.js';
@@ -89,6 +92,7 @@ function resultAtom(
     operationId?: string;
     summaryChars?: number;
     failed?: boolean;
+    outputPath?: string;
   },
 ): AiMessageAtomV1 {
   const envelope: AiToolResultEnvelopeV1 = {
@@ -101,6 +105,7 @@ function resultAtom(
       ? { error: { error: 'unavailable', message: 'boom', retry: false } }
       : {
           outputRef: `output.${base}_${String(i)}/data`,
+          ...(opts.outputPath ? { outputPath: opts.outputPath } : {}),
           summary: 'r'.repeat(opts.summaryChars ?? 200),
         }),
   };
@@ -185,7 +190,7 @@ describe('clearUnderPressure — low pressure (§4.2 corollary)', () => {
 
     const result = await store.clearUnderPressure({
       pressureTokens: 2_000, // 0.2 utilization — every exchange is fully aged, yet nothing clears
-      effectiveBudget: 10_000,
+      workingBudget: 10_000,
       availableReadOpId: MEMORY_READ_OPERATION_ID,
     });
 
@@ -269,12 +274,12 @@ describe('clearUnderPressure — greedy class-ranked clearing (§4.3)', () => {
 
   it('clears exactly to clearLowWater in class order — non-idempotent and failed survive idempotent', async () => {
     const { store } = await makeStoreAndAssemble(classOrderAtoms(), 20);
-    const effectiveBudget = 10_000;
+    const workingBudget = 10_000;
     const pressureTokens = 9_500;
 
     const result = await store.clearUnderPressure({
       pressureTokens,
-      effectiveBudget,
+      workingBudget,
       availableReadOpId: MEMORY_READ_OPERATION_ID,
     });
     expect(result).toBeDefined();
@@ -297,7 +302,7 @@ describe('clearUnderPressure — greedy class-ranked clearing (§4.3)', () => {
 
     // Hysteresis: the estimated post-clearing pressure is at/below the low watermark.
     expect(pressureTokens - result!.estimatedTokensFreed).toBeLessThanOrEqual(
-      RETENTION_POLICY.clearLowWater * effectiveBudget,
+      RETENTION_POLICY.clearLowWater * workingBudget,
     );
   });
 
@@ -319,7 +324,7 @@ describe('clearUnderPressure — greedy class-ranked clearing (§4.3)', () => {
 
     const result = await store.clearUnderPressure({
       pressureTokens: 9_500,
-      effectiveBudget: 10_000,
+      workingBudget: 10_000,
       availableReadOpId: MEMORY_READ_OPERATION_ID,
     });
 
@@ -410,7 +415,7 @@ async function seedConversation(
   });
 }
 
-// effectiveBudget for the 200k fallback window: 200000 − 4096 − 10000 = 185904.
+// Working budget for the 200k fallback window: 200000 − 4096 − 10000 = 185904.
 // compactHighWater bar: 130_132.8 tokens.
 function compactionScenarioAtoms(): AiMessageAtomV1[] {
   const atoms: AiMessageAtomV1[] = [userAtom(0)];
@@ -433,7 +438,11 @@ function compactionScenarioAtoms(): AiMessageAtomV1[] {
   return atoms;
 }
 
-async function runTurn(promptTokens: number, availableTools: AgentToolSpec[] = []) {
+async function runTurn(
+  promptTokens: number,
+  availableTools: AgentToolSpec[] = [],
+  contextWindowOverride?: number,
+) {
   const mem = createMemoryPayloadStore();
   const stateRef = await seedConversation(mem, compactionScenarioAtoms(), 20);
   const writes: Array<{ kind: string; data: unknown }> = [];
@@ -450,11 +459,17 @@ async function runTurn(promptTokens: number, availableTools: AgentToolSpec[] = [
 
   const result = await handleAgentTurn(
     ctx,
-    baseAgentInput({ conversationStateRef: stateRef, turnNumber: 20, availableTools }),
+    baseAgentInput({
+      conversationStateRef: stateRef,
+      turnNumber: 20,
+      availableTools,
+      ...(contextWindowOverride !== undefined ? { contextWindowOverride } : {}),
+    }),
     deps,
   );
   expect(result.status).toBe('SUCCEEDED');
   const output = writes.find((w) => w.kind === 'output')?.data as {
+    tokenEstimate?: TokenEstimate;
     contextEngineering?: {
       clearing?: { clearedExchanges: number };
       compaction?: { compactionNumber: number };
@@ -518,5 +533,318 @@ describe('finishAgentTurn — §4.9 degrade counter', () => {
       'agent_turn_note_readop_missing',
       expect.anything(),
     );
+  });
+});
+
+// ============================================================================
+// Two budgets — the working budget sizes clearing and compaction, the hard
+// budget bounds the forced pass
+// ============================================================================
+
+const SMALL_WINDOW = 32_768;
+const REFERENCE_WINDOW = 200_000;
+const LARGE_WINDOW = 1_000_000;
+
+function triggerPoints(modelWindow: number | undefined) {
+  const { workingBudget } = turnBudgets(modelWindow);
+  return {
+    clearStart: RETENTION_POLICY.clearHighWater * workingBudget,
+    clearTarget: RETENTION_POLICY.clearLowWater * workingBudget,
+    compactStart: RETENTION_POLICY.compactHighWater * workingBudget,
+  };
+}
+
+function expectPoints(
+  actual: ReturnType<typeof triggerPoints>,
+  expected: ReturnType<typeof triggerPoints>,
+) {
+  expect(actual.clearStart).toBeCloseTo(expected.clearStart, 6);
+  expect(actual.clearTarget).toBeCloseTo(expected.clearTarget, 6);
+  expect(actual.compactStart).toBeCloseTo(expected.compactStart, 6);
+}
+
+const exchangeBase = (turn: number) => `wb${String(turn).padStart(2, '0')}`;
+
+/** One aged idempotent exchange per turn from turn 1, each readable at its run-output path. */
+function agedExchanges(count: number): AiMessageAtomV1[] {
+  const atoms: AiMessageAtomV1[] = [userAtom(0)];
+  for (let t = 1; t <= count; t++) {
+    const base = exchangeBase(t);
+    atoms.push(assistantToolAtom(t, base, ['memory.store.query']));
+    atoms.push(
+      resultAtom(t, base, 0, {
+        toolName: 'memory.store.query',
+        operationId: 'memory.store.query',
+        summaryChars: 8_000,
+        outputPath: `/run/outputs/${base}_0`,
+      }),
+    );
+  }
+  return atoms;
+}
+
+/** A store whose writes read back, so history is assembled again after a clearing. */
+function keepingStore(
+  atoms: AiMessageAtomV1[],
+  turnNumber: number,
+  payloads = new Map<string, unknown>(),
+) {
+  payloads.set('batch:1', atoms);
+  const storeFn = vi.fn(({ data }: { data: unknown }) => {
+    const ref = `ref:${String(payloads.size)}`;
+    payloads.set(ref, data);
+    return Promise.resolve(ref);
+  });
+  const payloadStore = {
+    retrieve: vi.fn((ref: string) =>
+      payloads.has(ref)
+        ? Promise.resolve(payloads.get(ref))
+        : Promise.reject(new Error(`not found: ${ref}`)),
+    ),
+    store: storeFn,
+  } as unknown as PayloadStore;
+  const store = new ConversationStateStore(
+    { ...baseConfig, payloadStore },
+    makeState(atoms, turnNumber),
+  );
+  return { store, storeFn, payloads };
+}
+
+const contextNotesIn = (messages: Array<{ role: string; parts: unknown[] }>): string =>
+  messages
+    .filter((m) => m.role === 'user')
+    .flatMap((m) => m.parts as Array<{ kind: string; text?: string }>)
+    .filter((p) => p.kind === 'text' && p.text?.startsWith('[Context note') === true)
+    .map((p) => p.text)
+    .join('\n');
+
+describe('turnBudgets — the hard budget and the working budget', () => {
+  it('leaves a 32k model, a 200k model and one with no reported window where they were', () => {
+    expect(turnBudgets(SMALL_WINDOW)).toEqual({
+      modelWindow: SMALL_WINDOW,
+      reservedForCompletion: 4096,
+      hardBudget: 27_033,
+      workingBudget: 27_033,
+    });
+    for (const window of [REFERENCE_WINDOW, undefined]) {
+      expect(turnBudgets(window)).toEqual({
+        modelWindow: REFERENCE_WINDOW,
+        reservedForCompletion: 4096,
+        hardBudget: 185_904,
+        workingBudget: 185_904,
+      });
+    }
+    expectPoints(triggerPoints(SMALL_WINDOW), {
+      clearStart: 14_868.15,
+      clearTarget: 10_813.2,
+      compactStart: 18_923.1,
+    });
+    expectPoints(triggerPoints(REFERENCE_WINDOW), {
+      clearStart: 102_247.2,
+      clearTarget: 74_361.6,
+      compactStart: 130_132.8,
+    });
+  });
+
+  it('keeps a 1M model’s hard budget at its window and its trigger points at a 200k model’s', () => {
+    expect(turnBudgets(LARGE_WINDOW)).toEqual({
+      modelWindow: LARGE_WINDOW,
+      reservedForCompletion: 4096,
+      hardBudget: 945_904,
+      workingBudget: 185_904,
+    });
+    expectPoints(triggerPoints(LARGE_WINDOW), triggerPoints(REFERENCE_WINDOW));
+  });
+});
+
+describe('clearUnderPressure — against the working budget, at every window', () => {
+  it.each([SMALL_WINDOW, REFERENCE_WINDOW, LARGE_WINDOW])(
+    'at a %i-token window sends the same bytes turn over turn at the trigger, and clears one token above it',
+    async (window) => {
+      const { workingBudget } = turnBudgets(window);
+      const atTrigger = Math.floor(RETENTION_POLICY.clearHighWater * workingBudget);
+      const input = { workingBudget, availableReadOpId: MEMORY_READ_OPERATION_ID };
+
+      const turnN = keepingStore(agedExchanges(29), 40);
+      const requestN = await turnN.store.assembleRequest('sys', []);
+      expect(
+        await turnN.store.clearUnderPressure({ ...input, pressureTokens: atTrigger }),
+      ).toBeUndefined();
+      expect(turnN.storeFn).not.toHaveBeenCalled();
+
+      const turnN1 = keepingStore(agedExchanges(30), 41);
+      const requestN1 = await turnN1.store.assembleRequest('sys', []);
+      expect(
+        await turnN1.store.clearUnderPressure({ ...input, pressureTokens: atTrigger }),
+      ).toBeUndefined();
+      expect(turnN1.storeFn).not.toHaveBeenCalled();
+      expect(
+        requestN1.messages.slice(0, requestN.messages.length).map((m) => JSON.stringify(m)),
+      ).toEqual(requestN.messages.map((m) => JSON.stringify(m)));
+
+      const cleared = await turnN1.store.clearUnderPressure({
+        ...input,
+        pressureTokens: atTrigger + 1,
+      });
+      expect(cleared?.clearedExchangeCount).toBeGreaterThan(0);
+    },
+  );
+
+  it('clears a 1M model above the working trigger, which its hard budget would not reach, and settles at the working target', async () => {
+    const { hardBudget, workingBudget } = turnBudgets(LARGE_WINDOW);
+    const pressureTokens = 110_000;
+    expect(pressureTokens / hardBudget).toBeLessThan(RETENTION_POLICY.clearHighWater);
+
+    const { store } = keepingStore(agedExchanges(30), 40);
+    await store.assembleRequest('sys', []);
+    const cleared = await store.clearUnderPressure({
+      pressureTokens,
+      workingBudget,
+      availableReadOpId: MEMORY_READ_OPERATION_ID,
+    });
+
+    const clearedCount = cleared!.clearedExchangeCount;
+    const remaining = pressureTokens - cleared!.estimatedTokensFreed;
+    const target = RETENTION_POLICY.clearLowWater * workingBudget;
+    expect(clearedCount).toBeLessThan(30);
+    expect(remaining).toBeLessThanOrEqual(target);
+    expect(remaining).toBeGreaterThan(target - cleared!.estimatedTokensFreed / clearedCount);
+  });
+
+  it.each([SMALL_WINDOW, REFERENCE_WINDOW, LARGE_WINDOW])(
+    'at a %i-token window never clears the three newest turns or the pinned opener',
+    async (window) => {
+      const { hardBudget, workingBudget } = turnBudgets(window);
+      const { store } = keepingStore(agedExchanges(19), 20);
+      await store.assembleRequest('sys', []);
+      await store.clearUnderPressure({
+        pressureTokens: 10 * hardBudget,
+        workingBudget,
+        availableReadOpId: MEMORY_READ_OPERATION_ID,
+      });
+
+      const cleared = store.getState().clearing?.clearedExchanges ?? [];
+      expect(cleared).toContain(exchangeBase(16));
+      const ids = new Set(store.getState().history.atoms.map((a) => a.atomId));
+      expect(ids.has('user-0')).toBe(true);
+      for (const turn of [17, 18, 19]) {
+        expect(cleared).not.toContain(exchangeBase(turn));
+        expect(ids.has(`asst-${exchangeBase(turn)}`)).toBe(true);
+        expect(ids.has(`res-${exchangeBase(turn)}-0`)).toBe(true);
+      }
+    },
+  );
+
+  it('leaves a note on a 1M model naming the read and its path, and the path returns the original result', async () => {
+    const { workingBudget } = turnBudgets(LARGE_WINDOW);
+    const payloads = new Map<string, unknown>();
+    const index: Record<
+      string,
+      { ref: string; stepId: string; operation: string; fields: string[] }
+    > = {};
+    for (let t = 1; t <= 30; t++) {
+      const toolCallId = `${exchangeBase(t)}_0`;
+      payloads.set(`output:${toolCallId}`, { data: { toolCallId, rows: [t, t * 2, t * 3] } });
+      index[toolCallId] = {
+        ref: `output:${toolCallId}`,
+        stepId: toolCallId,
+        operation: 'memory.store.query',
+        fields: ['data'],
+      };
+    }
+    const { store } = keepingStore(agedExchanges(30), 40, payloads);
+    await store.assembleRequest('sys', []);
+    await store.clearUnderPressure({
+      pressureTokens: 110_000,
+      workingBudget,
+      availableReadOpId: MEMORY_READ_OPERATION_ID,
+    });
+    const notes = contextNotesIn((await store.assembleRequest('sys', [])).messages);
+
+    const cleared = store.getState().clearing?.clearedExchanges ?? [];
+    expect(cleared.length).toBeGreaterThan(0);
+    const pointers = extractNoteReadPointers(notes);
+    expect(pointers.map((p) => p.path)).toEqual(cleared.map((key) => `/run/outputs/${key}_0/data`));
+    expect(notes).toContain(
+      `read: ${MEMORY_READ_OPERATION_ID} { path: '/run/outputs/${cleared[0]!}_0/data', view: 'outline' }`,
+    );
+
+    const resolveCtx: PathResolveContext = {
+      tenantId: baseConfig.tenantId,
+      runId: baseConfig.runId,
+      spaceId: 'space-1',
+      payloadStore: { retrieve: (ref: string) => Promise.resolve(payloads.get(ref)) },
+      memoryDocReader: { getByPath: () => Promise.resolve(null) },
+      toolOutputIndexReader: { readToolOutputIndex: () => Promise.resolve(index) },
+    };
+    for (const [i, pointer] of pointers.entries()) {
+      const read = await resolveMemoryPath(pointer.path, resolveCtx);
+      const original = payloads.get(`output:${cleared[i]!}_0`) as { data: unknown };
+      expect(JSON.parse(read.content)).toEqual(original.data);
+    }
+  });
+});
+
+describe('finishAgentTurn — a 1M model clears and compacts at a 200k model’s points', () => {
+  it('reports both budgets and clears nothing below the working trigger', async () => {
+    const { output } = await runTurn(100_000, [], LARGE_WINDOW);
+
+    expect(output.contextEngineering).toBeUndefined();
+    expect(output.tokenEstimate).toMatchObject({
+      modelWindow: LARGE_WINDOW,
+      effectiveBudget: 945_904,
+      workingBudget: 185_904,
+    });
+    const total = output.tokenEstimate!.total;
+    expect(output.tokenEstimate!.utilization).toBeCloseTo(total / 945_904, 3);
+    expect(output.tokenEstimate!.workingUtilization).toBeCloseTo(total / 185_904, 3);
+  });
+
+  it('clears above the trigger and names the working budget it cleared against', async () => {
+    const { output, client, ctx } = await runTurn(134_000, [], LARGE_WINDOW);
+
+    expect(output.contextEngineering?.clearing?.clearedExchanges).toBe(3);
+    expect(output.contextEngineering?.compaction).toBeUndefined();
+    expect(
+      (client as unknown as { generateText: ReturnType<typeof vi.fn> }).generateText,
+    ).not.toHaveBeenCalled();
+    expect(ctx.log.info).toHaveBeenCalledWith(
+      'agent_turn_history_cleared',
+      expect.objectContaining({ pressureTokens: 134_000, workingBudget: 185_904 }),
+    );
+  });
+
+  it('compacts once post-clearing pressure exceeds compactHighWater of the working budget', async () => {
+    const { output } = await runTurn(140_000, [], LARGE_WINDOW);
+
+    expect(output.contextEngineering?.clearing?.clearedExchanges).toBe(3);
+    expect(output.contextEngineering?.compaction).toBeDefined();
+  });
+
+  it('clears a 1M model at 300k prompt tokens by pressure, never by force', async () => {
+    const forced = vi.spyOn(ConversationStateStore.prototype, 'forceClearExcess');
+    try {
+      const { output, ctx } = await runTurn(300_000, [], LARGE_WINDOW);
+
+      expect(output.contextEngineering?.clearing?.clearedExchanges).toBe(3);
+      expect(ctx.log.info).toHaveBeenCalledWith(
+        'agent_turn_history_cleared',
+        expect.objectContaining({ workingBudget: 185_904 }),
+      );
+      expect(forced).not.toHaveBeenCalled();
+      expect(ctx.log.info).not.toHaveBeenCalledWith(
+        'agent_turn_forced_clearing',
+        expect.anything(),
+      );
+      expect(ctx.log.warn).not.toHaveBeenCalledWith(
+        'agent_turn_structural_bound_unrelieved',
+        expect.anything(),
+      );
+
+      await runTurn(300_000, [], REFERENCE_WINDOW);
+      expect(forced).toHaveBeenCalledWith(expect.objectContaining({ excessAtoms: 0 }));
+    } finally {
+      forced.mockRestore();
+    }
   });
 });

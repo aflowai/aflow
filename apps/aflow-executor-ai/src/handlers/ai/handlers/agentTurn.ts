@@ -26,7 +26,7 @@ import type { AgentModelExecutionResult } from './agentTurnModel.js';
 import { executeAgentModel } from './agentTurnModel.js';
 import { prepareAgentRequest } from './agentTurnRequest.js';
 import { triggerCompaction } from '../../compaction.js';
-import { RETENTION_POLICY } from '../../retentionPolicy.js';
+import { RETENTION_POLICY, turnBudgets } from '../../retentionPolicy.js';
 import {
   supportsToolLoopContinuity,
   type ReasoningContinuityMode,
@@ -523,6 +523,10 @@ export function fallbackPressureTokens(
   return breakdown ? breakdown.system + breakdown.context + breakdown.history : 0;
 }
 
+function budgetUtilization(tokens: number, budget: number): number {
+  return budget > 0 ? Math.round((tokens / budget) * 1000) / 1000 : 0;
+}
+
 async function finishAgentTurn(
   ctx: ExecutorContext,
   params: AgentTurnInput,
@@ -568,10 +572,8 @@ async function finishAgentTurn(
     continuity?.providerReasoning,
   );
 
-  const modelWindow = modelContextWindow && modelContextWindow > 0 ? modelContextWindow : 200_000;
-  const reservedForCompletion = 4096;
-  const safetyMargin = Math.ceil(modelWindow * 0.05);
-  const effectiveBudget = modelWindow - reservedForCompletion - safetyMargin;
+  const { modelWindow, reservedForCompletion, hardBudget, workingBudget } =
+    turnBudgets(modelContextWindow);
 
   const pressureTokens =
     responseUsage.promptTokens > 0
@@ -640,7 +642,7 @@ async function finishAgentTurn(
     try {
       const clearResult = await store.clearUnderPressure({
         pressureTokens,
-        effectiveBudget,
+        workingBudget,
         availableReadOpId,
       });
       if (clearResult) {
@@ -661,7 +663,7 @@ async function finishAgentTurn(
           atomsSummarized: clearResult.atomsSummarized,
           pressureTokens,
           estimatedTokensFreed,
-          effectiveBudget,
+          workingBudget,
           agent_turn_cleared_reexecution: clearResult.reexecutions,
           agent_turn_cleared_refetch: clearResult.refetches,
         });
@@ -676,8 +678,8 @@ async function finishAgentTurn(
 
     let remainingPressureTokens = Math.max(0, pressureTokens - estimatedTokensFreed);
     if (
-      effectiveBudget > 0 &&
-      remainingPressureTokens / effectiveBudget > RETENTION_POLICY.compactHighWater
+      workingBudget > 0 &&
+      remainingPressureTokens / workingBudget > RETENTION_POLICY.compactHighWater
     ) {
       try {
         const compactResult = await runCompaction();
@@ -696,6 +698,7 @@ async function finishAgentTurn(
             turnNumber: params.turnNumber,
             compactionNumber: compactResult.compactionNumber,
             tokensSaved: compactResult.tokensSaved,
+            workingBudget,
           });
         }
       } catch (compactErr) {
@@ -708,7 +711,7 @@ async function finishAgentTurn(
     }
 
     const atomExcess = store.structuralAtomExcess();
-    const tokenExcess = remainingPressureTokens - effectiveBudget;
+    const tokenExcess = remainingPressureTokens - hardBudget;
     if (atomExcess > 0 || tokenExcess > 0) {
       try {
         const forced = await store.forceClearExcess({
@@ -735,11 +738,12 @@ async function finishAgentTurn(
             clearedExchanges: forced.clearedExchangeCount,
             atomsSummarized: forced.atomsSummarized,
             estimatedTokensFreed: forced.estimatedTokensFreed,
+            effectiveBudget: hardBudget,
           });
         }
 
         const remainingAtomExcess = store.structuralAtomExcess();
-        const remainingTokenExcess = remainingPressureTokens - effectiveBudget;
+        const remainingTokenExcess = remainingPressureTokens - hardBudget;
         if (remainingAtomExcess > 0 || remainingTokenExcess > 0) {
           // Text-heavy histories have no clearable exchanges — compaction owns
           // the unpinned middle (§4.7 step 2).
@@ -759,11 +763,12 @@ async function finishAgentTurn(
               turnNumber: params.turnNumber,
               compactionNumber: compactResult.compactionNumber,
               tokensSaved: compactResult.tokensSaved,
+              effectiveBudget: hardBudget,
             });
           }
           // §4.3: pressure is recomputed after every mutation — the unrelieved
           // signal judges the POST-compaction numbers.
-          const unrelievedTokenExcess = remainingPressureTokens - effectiveBudget;
+          const unrelievedTokenExcess = remainingPressureTokens - hardBudget;
           if (store.structuralAtomExcess() > 0 || unrelievedTokenExcess > 0) {
             ctx.log.warn('agent_turn_structural_bound_unrelieved', {
               tenantId: ctx.job.tenantId,
@@ -828,11 +833,10 @@ async function finishAgentTurn(
           total: tokenBreakdown.total,
           modelWindow,
           reservedForCompletion,
-          effectiveBudget,
-          utilization:
-            effectiveBudget > 0
-              ? Math.round((tokenBreakdown.total / effectiveBudget) * 1000) / 1000
-              : 0,
+          effectiveBudget: hardBudget,
+          utilization: budgetUtilization(tokenBreakdown.total, hardBudget),
+          workingBudget,
+          workingUtilization: budgetUtilization(tokenBreakdown.total, workingBudget),
         },
       }
     : {};
@@ -846,11 +850,10 @@ async function finishAgentTurn(
       tools: tokenBreakdown.tools,
       total: tokenBreakdown.total,
       modelWindow,
-      effectiveBudget,
-      utilization:
-        effectiveBudget > 0
-          ? Math.round((tokenBreakdown.total / effectiveBudget) * 1000) / 1000
-          : 0,
+      effectiveBudget: hardBudget,
+      utilization: budgetUtilization(tokenBreakdown.total, hardBudget),
+      workingBudget,
+      workingUtilization: budgetUtilization(tokenBreakdown.total, workingBudget),
     });
   }
 

@@ -189,7 +189,7 @@ describe('conversation state is stored without a TTL', () => {
     await clearing.assembleRequest('sys', []);
     const cleared = await clearing.clearUnderPressure({
       pressureTokens: 9_000,
-      effectiveBudget: 10_000,
+      workingBudget: 10_000,
       availableReadOpId: MEMORY_READ_OPERATION_ID,
     });
     expect(cleared).toBeDefined();
