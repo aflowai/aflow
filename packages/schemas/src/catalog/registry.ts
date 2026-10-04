@@ -44,6 +44,7 @@ import { StoreListingOperationRegistrations } from '../operations/store.js';
 import { AppletOperationRegistrations } from '../applet/operations.js';
 import { EvalOperationRegistrations } from '../operations/evalOps.js';
 import { EvalBatchOperationRegistrations } from '../operations/evalBatchOps.js';
+import { PlanOperationRegistrations } from '../operations/plan/registrations.js';
 
 // ============================================================================
 // Aggregate all registrations
@@ -82,6 +83,7 @@ const ALL_REGISTRATIONS: OperationRegistration[] = [
   ...AppletOperationRegistrations,
   ...EvalOperationRegistrations,
   ...EvalBatchOperationRegistrations,
+  ...PlanOperationRegistrations,
 ];
 
 // ============================================================================
@@ -364,6 +366,15 @@ const EVAL_AUTHORING_OPERATIONS: ReadonlySet<string> = new Set(['eval.case.propo
 export function isEvalPlaneOperation(operationId: string): boolean {
   if (EVAL_AUTHORING_OPERATIONS.has(operationId)) return false;
   return operationId === 'eval' || operationId.startsWith('eval.');
+}
+
+/**
+ * Plan 322 D3 — a run may serve a plan node and may never rewrite the plan it
+ * serves. Fail-closed on the prefix: any `plan.*` id, including one added
+ * later, is the Helmsman's alone.
+ */
+export function isPlanOperation(operationId: string): boolean {
+  return operationId === 'plan' || operationId.startsWith('plan.');
 }
 
 // ============================================================================

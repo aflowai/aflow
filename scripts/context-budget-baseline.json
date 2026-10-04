@@ -7,15 +7,15 @@
   },
   "components": {
     "tools.helmsman.resolvedOps": {
-      "tokens": 24,
+      "tokens": 28,
       "group": "tools"
     },
     "tools.helmsman.native_fc": {
-      "tokens": 7855,
+      "tokens": 8902,
       "group": "tools"
     },
     "tools.helmsman.generate_json": {
-      "tokens": 7717,
+      "tokens": 8779,
       "group": "tools"
     },
     "tools.coach.resolvedOps": {
@@ -23,11 +23,11 @@
       "group": "tools"
     },
     "tools.coach.native_fc": {
-      "tokens": 23746,
+      "tokens": 23994,
       "group": "tools"
     },
     "tools.coach.generate_json": {
-      "tokens": 23294,
+      "tokens": 23542,
       "group": "tools"
     },
     "helmsmanPrompt.cognitiveFrame": {
@@ -35,7 +35,7 @@
       "group": "helmsmanPrompt"
     },
     "helmsmanPrompt.registerMapping": {
-      "tokens": 4250,
+      "tokens": 4218,
       "group": "helmsmanPrompt"
     },
     "helmsmanPrompt.operatingModel": {
@@ -87,15 +87,15 @@
       "group": "spaceContextGuidance"
     },
     "worstCase.pinnedSurface": {
-      "tokens": 30626,
+      "tokens": 29726,
       "group": "worstCase"
     }
   },
   "totals": {
-    "tools": 62649,
-    "helmsmanPrompt": 6625,
+    "tools": 65258,
+    "helmsmanPrompt": 6593,
     "runnerPrompt": 2235,
     "spaceContextGuidance": 1104,
-    "worstCase": 30626
+    "worstCase": 29726
   }
 }

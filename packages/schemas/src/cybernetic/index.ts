@@ -38,6 +38,7 @@ export * from './coachLearning.js';
 export * from './activeLearning.js';
 export * from './campaign.js';
 export * from './campaignRef.js';
+export * from './plan.js';
 export * from './coachBreadth.js';
 export * from './schemaDerivedOpHints.js';
 export * from './artifactInspectPaths.js';

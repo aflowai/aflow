@@ -40,6 +40,12 @@ describe('isInlineOperation', () => {
     expect(registered.filter((id) => !isInlineOperation(id))).toEqual([]);
   });
 
+  it('routes every registered plan.* op (Plan 322)', () => {
+    const registered = [...getAllOperations().keys()].filter((id) => id.startsWith('plan.'));
+    expect(registered.length).toBeGreaterThan(0);
+    expect(registered.filter((id) => !isInlineOperation(id))).toEqual([]);
+  });
+
   it('does not match unrelated operation prefixes', () => {
     expect(isInlineOperation('ai.agent.turn')).toBe(false);
     expect(isInlineOperation('memory.store.put')).toBe(false);
