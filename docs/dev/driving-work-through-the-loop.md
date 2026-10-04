@@ -145,7 +145,7 @@ folder's posture as it pushes, so a commit checked before the posture changed is
 
 ## Watching
 
-- Session state: `docker exec phoenix-redis redis-cli HMGET
+- Session state: `docker exec aflow-redis redis-cli -a "$(grep AFLOW_DEV_REDIS_PASSWORD ~/.aflow/stack.env | cut -d= -f2)" --no-auth-warning HMGET
 aflow:session:<tenant>:<sessionId>:state status waitingOnWorkflowRunId` — `PAUSED` with
   no run id is Helmsman free for the next message.
 - Runs: `workflow_runs.run_id` (not `id`) in the tenant schema, and `workflow_run_tasks`
