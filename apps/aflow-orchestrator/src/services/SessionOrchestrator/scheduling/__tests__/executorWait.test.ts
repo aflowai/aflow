@@ -24,8 +24,13 @@ const fake = vi.hoisted(() => ({
   sessionStatus: 'RUNNING',
   results: [] as StepResultMessage[],
   enqueueAttempts: 0,
+  /** Thrown by the next enqueue in place of its outcome, then cleared. */
+  enqueueError: undefined as Error | undefined,
   /** The environment the lane breaker reads. */
   laneEnv: {} as Record<string, string | undefined>,
+  /** Sessions the step-stall index has due. */
+  stallCandidates: [] as Array<{ tenantId: string; sessionId: string; dueAtMs: number }>,
+  currentStepExecutionId: '',
 }));
 
 vi.mock('@aflow/redis', async (importOriginal) => {
@@ -35,6 +40,9 @@ vi.mock('@aflow/redis', async (importOriginal) => {
     ...actual,
     addStepJob: vi.fn((_redis: unknown, job: StepJobMessage) => {
       fake.enqueueAttempts += 1;
+      const thrown = fake.enqueueError;
+      fake.enqueueError = undefined;
+      if (thrown !== undefined) return Promise.reject(thrown);
       const laneRefusal = codeLaneBreakerRefusal(job.stepType, undefined, fake.laneEnv);
       if (laneRefusal !== undefined) return Promise.reject(laneRefusal);
       if (!fake.heartbeats.has(job.stepType)) {
@@ -87,8 +95,26 @@ vi.mock('@aflow/redis', async (importOriginal) => {
     getStepState: vi.fn((_redis: unknown, _tenantId: string, id: string) =>
       Promise.resolve(fake.steps.get(id) ?? null),
     ),
+    getShardTimer: vi.fn((_redis: unknown, identity: Parameters<typeof actual.timerId>[0]) =>
+      Promise.resolve(fake.timers.get(actual.timerId(identity)) ?? null),
+    ),
+    getStepInFlight: vi.fn(() => Promise.resolve({ alive: false, deadlineAtMs: null })),
+    hasAvailableExecutor: vi.fn((_redis: unknown, stepType: string) =>
+      Promise.resolve(fake.heartbeats.has(stepType)),
+    ),
+    peekDueStepStallCandidates: vi.fn(() => Promise.resolve(fake.stallCandidates)),
+    refreshStepStallCandidate: vi.fn(() => Promise.resolve()),
+    dropStepStallCandidate: vi.fn(() => Promise.resolve()),
     getSessionState: vi.fn(() =>
-      Promise.resolve({ status: fake.sessionStatus, createdBy: OWNER, spaceId: SPACE_ID }),
+      Promise.resolve({
+        sessionId: SESSION,
+        tenantId: TENANT,
+        status: fake.sessionStatus,
+        currentStepExecutionId: fake.currentStepExecutionId,
+        traceId: 'trace-run',
+        createdBy: OWNER,
+        spaceId: SPACE_ID,
+      }),
     ),
     isSessionCorrupt: vi.fn(() => Promise.resolve(false)),
     updateSessionState: vi.fn(() => Promise.resolve()),
@@ -102,7 +128,11 @@ import {
   EXECUTOR_WAIT_LONGEST_LOOK_MS,
   EXECUTOR_WAIT_LOOKS,
   STEP_SCHEDULED_DEAD_EXECUTOR_GRACE_MS,
+  claimDueShardTimers,
   executorWaitGapMs,
+  getShardTimer,
+  getStepInFlight,
+  hasAvailableExecutor,
   stepStallEarliestReapAtMs,
   timerId,
   updateSessionState,
@@ -113,12 +143,14 @@ import {
   CODE_LANE_ENABLED_ENV,
   StepJobMessageSchema,
   TimerItemSchema,
+  codeLaneBreakerRefusal,
   toAgentToolError,
 } from '@aflow/schemas';
 
 import { dispatchClaimedOperationTask } from '../../../cybernetic/harness/operationTaskDispatch.js';
 import type { SessionOrchestratorBindings } from '../../lifecycle/context.js';
-import { dispatchOrWaitOnExecutor } from '../executorWait.js';
+import { dispatchOrWaitOnExecutor, lookAgainForExecutor } from '../executorWait.js';
+import { createRecoverOrphanedSessions } from '../recovery.js';
 import { classifyStepCompletionPath } from '../stepCompletionPath.js';
 import { createProcessDueTimers } from '../timers.js';
 
@@ -192,6 +224,10 @@ function makeBindings(applyResult = vi.fn()): SessionOrchestratorBindings {
 
 const redis = {} as never;
 
+function completionPathDeps() {
+  return { redis, getStepInFlight, hasAvailableExecutor, getShardTimer };
+}
+
 function nextDueMs(): number {
   return Math.min(...[...fake.timers.values()].map((timer) => timer.dueAtMs));
 }
@@ -220,7 +256,10 @@ beforeEach(() => {
   fake.results.length = 0;
   fake.sessionStatus = 'RUNNING';
   fake.enqueueAttempts = 0;
+  fake.enqueueError = undefined;
   fake.laneEnv = {};
+  fake.stallCandidates = [];
+  fake.currentStepExecutionId = stepExecutionId(1);
   vi.mocked(updateSessionState).mockClear();
 });
 
@@ -472,33 +511,204 @@ describe('a step whose executor is missing', () => {
     }
   });
 
-  it('is not reaped by the stall watchdog before its next look, and is once that is overdue', async () => {
+  it('is its own completion path for as long as its timer lives, however long that is', async () => {
     const job = sessionJob();
     scheduledStep(job);
     await dispatchOrWaitOnExecutor(redis, job);
     const step = fake.steps.get(job.stepExecutionId) as unknown as StepHotState;
-    const deps = {
-      redis,
-      getStepInFlight: () => Promise.resolve({ alive: false, deadlineAtMs: null }),
-      hasAvailableExecutor: () => Promise.resolve(false),
-    };
 
-    const beforeNextLook = await classifyStepCompletionPath(
-      deps,
-      step,
-      START_MS + EXECUTOR_WAIT_LONGEST_LOOK_MS,
-    );
-    const lookOverdue = await classifyStepCompletionPath(
-      deps,
-      step,
-      START_MS + EXECUTOR_WAIT_LONGEST_LOOK_MS + STEP_SCHEDULED_DEAD_EXECUTOR_GRACE_MS,
-    );
-
-    expect(beforeNextLook.hasCompletionPath).toBe(true);
-    expect(lookOverdue.hasCompletionPath).toBe(false);
+    for (const at of [START_MS + EXECUTOR_WAIT_LONGEST_LOOK_MS, START_MS + NIGHT_MS]) {
+      const path = await classifyStepCompletionPath(completionPathDeps(), step, at);
+      expect(path).toMatchObject({ hasCompletionPath: true, executorWait: 'armed' });
+    }
+    // The stall index still looks at it no later than a look's gap past due.
     expect(stepStallEarliestReapAtMs(step, START_MS)).toBe(
       START_MS + STEP_SCHEDULED_DEAD_EXECUTOR_GRACE_MS + EXECUTOR_WAIT_LONGEST_LOOK_MS,
     );
+  });
+
+  it('stays marked waiting through a look whose enqueue fails another way, and is dispatched on its redelivery', async () => {
+    const job = sessionJob();
+    scheduledStep(job);
+    await dispatchOrWaitOnExecutor(redis, job);
+    const applyResult = vi.fn();
+    const processDueTimers = createProcessDueTimers(makeBindings(applyResult));
+    fake.heartbeats.add('host');
+    const streamDown = new Error('Connection is closed.');
+    fake.enqueueError = streamDown;
+
+    await nextLook(processDueTimers);
+
+    // Thrown as itself, not read as a missing executor: the handler leaves the
+    // lease for redelivery and its poison budget, as for any timer it fails.
+    expect(applyResult).not.toHaveBeenCalled();
+    expect(fake.stream).toHaveLength(0);
+    expect(fake.timers.size).toBe(1);
+    expect(fake.steps.get(job.stepExecutionId)).toMatchObject({
+      status: 'SCHEDULED',
+      executorWaitSince: START_MS,
+    });
+
+    await processDueTimers();
+
+    expect(fake.stream).toHaveLength(1);
+    expect(fake.stream[0]?.stepExecutionId).toBe(job.stepExecutionId);
+    expect(fake.timers.size).toBe(0);
+    expect(fake.steps.get(job.stepExecutionId)?.['executorWaitSince']).toBeUndefined();
+    expect(applyResult).not.toHaveBeenCalled();
+  });
+
+  it('throws an enqueue failure other than a missing executor as it was thrown', async () => {
+    const job = sessionJob();
+    scheduledStep(job);
+    await dispatchOrWaitOnExecutor(redis, job);
+    const streamDown = new Error('Connection is closed.');
+    fake.enqueueError = streamDown;
+
+    await expect(
+      lookAgainForExecutor(redis, job, { sinceMs: START_MS, looks: 0, dueAtMs: Date.now() }),
+    ).rejects.toBe(streamDown);
+    expect(fake.steps.get(job.stepExecutionId)?.['executorWaitSince']).toBe(START_MS);
+  });
+});
+
+describe('a waiting step across a restart of the orchestrator or a sleep of the machine', () => {
+  const AGENT_JOB_STEP = 2;
+
+  function agentJob(): StepJobMessage {
+    return StepJobMessageSchema.parse({
+      ...sessionJob(AGENT_JOB_STEP),
+      stepType: 'agent',
+      operationId: 'ai.agent.turn',
+    });
+  }
+
+  /** Parks `job` and leaves the machine asleep for a night with the step current. */
+  async function parkAndSleep(job: StepJobMessage): Promise<void> {
+    scheduledStep(job);
+    await dispatchOrWaitOnExecutor(redis, job);
+    fake.currentStepExecutionId = job.stepExecutionId;
+    vi.setSystemTime(START_MS + NIGHT_MS);
+    fake.stallCandidates = [{ tenantId: TENANT, sessionId: SESSION, dueAtMs: START_MS }];
+  }
+
+  function watchdogBindings(applyResult: ReturnType<typeof vi.fn>): SessionOrchestratorBindings {
+    const bindings = makeBindings(applyResult);
+    return { ...bindings, stallWatchdog: { lastStepStallScanMs: 0 } };
+  }
+
+  /** A tick on which another instance's claim took the wake, so only the watchdog runs. */
+  function wakeTickClaimsNothing(): void {
+    vi.mocked(claimDueShardTimers).mockResolvedValueOnce({
+      timers: [],
+      poisoned: [],
+      malformedPoisoned: [],
+      oldestDueAgeMs: 0,
+      leaseUntilMs: Date.now(),
+      legacyClaimed: 0,
+    });
+  }
+
+  it.each([
+    ['a tool step', () => sessionJob()],
+    ['an agent turn', agentJob],
+  ])('leaves %s to its wait at boot-time orphan recovery and in the watchdog', async (_, job) => {
+    const parked = job();
+    await parkAndSleep(parked);
+    const applyResult = vi.fn();
+    const bindings = watchdogBindings(applyResult);
+
+    const recovered = await createRecoverOrphanedSessions(bindings)();
+    wakeTickClaimsNothing();
+    await createProcessDueTimers(bindings)();
+
+    expect(recovered).toEqual({ paused: 0, failed: 0, rearmed: 0 });
+    expect(applyResult).not.toHaveBeenCalled();
+    expect(bindings.forceCompleteInFlightStep).not.toHaveBeenCalled();
+    expect(fake.steps.get(parked.stepExecutionId)).toMatchObject({
+      status: 'SCHEDULED',
+      executorWaitSince: START_MS,
+    });
+    expect([...fake.timers.values()][0]?.executorWait?.looks).toBe(0);
+
+    fake.heartbeats.add(parked.stepType);
+    await createProcessDueTimers(makeBindings(applyResult))();
+
+    expect(fake.stream.map((queued) => queued.stepExecutionId)).toEqual([parked.stepExecutionId]);
+    expect(applyResult).not.toHaveBeenCalled();
+  });
+
+  it('arms the wait again at orphan recovery when its timer is gone, rather than failing it', async () => {
+    const job = sessionJob();
+    await parkAndSleep(job);
+    fake.timers.clear();
+    const applyResult = vi.fn();
+
+    const recovered = await createRecoverOrphanedSessions(watchdogBindings(applyResult))();
+
+    expect(recovered).toEqual({ paused: 0, failed: 0, rearmed: 1 });
+    expect(applyResult).not.toHaveBeenCalled();
+    const [rearmed] = [...fake.timers.values()];
+    expect(rearmed).toMatchObject({
+      reason: 'executor_wait',
+      sessionId: SESSION,
+      stepExecutionId: job.stepExecutionId,
+      attempt: 1,
+      dueAtMs: START_MS + NIGHT_MS,
+      executorWait: { sinceMs: START_MS, looks: 0 },
+    });
+    const { callerModel: _notOnTheStep, ...rebuilt } = job;
+    expect(rearmed?.executorWait?.job).toEqual({
+      ...rebuilt,
+      traceId: 'trace-run',
+      scheduledAtMs: START_MS + NIGHT_MS,
+    });
+
+    fake.heartbeats.add('host');
+    await createProcessDueTimers(makeBindings(applyResult))();
+
+    expect(fake.stream.map((queued) => queued.stepExecutionId)).toEqual([job.stepExecutionId]);
+  });
+
+  it('arms the wait again in the watchdog when its timer is gone', async () => {
+    const job = sessionJob();
+    await parkAndSleep(job);
+    fake.timers.clear();
+    const applyResult = vi.fn();
+    wakeTickClaimsNothing();
+
+    await createProcessDueTimers(watchdogBindings(applyResult))();
+
+    expect(applyResult).not.toHaveBeenCalled();
+    expect([...fake.timers.values()][0]?.executorWait).toMatchObject({
+      sinceMs: START_MS,
+      looks: 0,
+    });
+  });
+
+  it('fails as before once its looks are spent', async () => {
+    const job = sessionJob();
+    await parkAndSleep(job);
+    const [timer] = [...fake.timers.values()];
+    fake.timers.set(
+      timerId(timer!),
+      TimerItemSchema.parse({
+        ...timer,
+        executorWait: { ...timer!.executorWait, looks: EXECUTOR_WAIT_LOOKS },
+      }),
+    );
+    const applyResult = vi.fn();
+
+    const recovered = await createRecoverOrphanedSessions(watchdogBindings(applyResult))();
+
+    expect(recovered).toEqual({ paused: 0, failed: 1, rearmed: 0 });
+    const [abandoned] = failuresIn(applyResult);
+    expect(abandoned?.stepExecutionId).toBe(job.stepExecutionId);
+    expect(abandoned?.error).toMatchObject({
+      code: 'STEP_ABANDONED',
+      classification: 'transient',
+      retryable: true,
+    });
   });
 });
 
@@ -552,6 +762,50 @@ describe('a workflow operation task whose executor is missing', () => {
     expect(fake.stream[0]?.sessionId).toBeUndefined();
     expect(fake.timers.size).toBe(0);
     expect(fake.results).toHaveLength(0);
+  });
+
+  it('fails with the refusal of a lane breaker opened while it waited', async () => {
+    fake.laneEnv = { [CODE_LANE_ENABLED_ENV]: 'true' };
+    await dispatchClaimedOperationTask(
+      { redis, payloadStore: {} as never },
+      {
+        tenantId: TENANT as never,
+        runId: RUN_ID,
+        taskId: 'commission',
+        attempt: 1,
+        dispatchAttemptToken: token,
+        operationId: 'code.agent.run',
+        workerSessionId: stepExecutionId(9),
+        inputRef: 'inline:e30=',
+        traceId: 'trace-task' as never,
+        spaceId: SPACE_ID,
+        snoozeDelayMs: 0,
+        credentialOwnerId: OWNER,
+      },
+    );
+    expect([...fake.timers.values()][0]?.reason).toBe('executor_wait');
+    fake.laneEnv = {};
+    const refusal = codeLaneBreakerRefusal('code', undefined, fake.laneEnv);
+
+    await nextLook(createProcessDueTimers(makeBindings()));
+
+    // The result consumer records a FAILED result's message as the task's
+    // failure reason — the refusal's own message, as a refusal at the claim
+    // records it through postClaimFailure.
+    expect(fake.results).toHaveLength(1);
+    expect(fake.results[0]).toMatchObject({
+      status: 'FAILED',
+      workflowExecution,
+      idempotencyKey: token,
+      error: {
+        code: CODE_LANE_DISABLED_CODE,
+        message: refusal?.message,
+        classification: 'permission',
+        retryable: false,
+      },
+    });
+    expect(fake.stream).toHaveLength(0);
+    expect(fake.timers.size).toBe(0);
   });
 
   it('is answered once its looks are spent with the FAILED result its executor would have sent', async () => {

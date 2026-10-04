@@ -108,6 +108,7 @@ export { ensureShardStreamGroups } from './streams/shardGroups.js';
 
 export {
   scheduleShardTimer,
+  getShardTimer,
   claimDueShardTimers,
   ackShardTimer,
   ackShardTimerById,
@@ -121,6 +122,7 @@ export {
   TIMER_LEASE_MS,
   TIMER_MAX_CLAIMS,
   type ClaimedTimers,
+  type TimerIdentity,
 } from './streams/shardTimers.js';
 
 export {

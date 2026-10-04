@@ -17,13 +17,15 @@ import {
   getSessionState,
   getStepState,
   getStepInFlight,
+  getShardTimer,
   hasAvailableExecutor,
   updateSessionState,
 } from '@aflow/redis';
 import { backgroundTaskControlPlane } from '@aflow/schemas';
 import { getOrchestratorLogger, logOrchestratorError } from '../../../lib/orchestratorLogger.js';
 import type { SessionOrchestratorBindings } from '../lifecycle/context.js';
-import { isRescuableOrphan } from './rescuableOrphan.js';
+import { classifyStepCompletionPath } from './stepCompletionPath.js';
+import { rearmExecutorWait } from './executorWait.js';
 
 // Resolved per run rather than at module load, so the process's installed
 // control plane — operator overrides included — is the one consulted.
@@ -34,18 +36,23 @@ export function createRecoverOrphanedSessions(bindings: SessionOrchestratorBindi
   const { deps, applyResult, forceCompleteInFlightStep } = bindings;
   const { redis, shardManager } = deps;
 
-  return async function recoverOrphanedSessions(): Promise<{ paused: number; failed: number }> {
+  return async function recoverOrphanedSessions(): Promise<{
+    paused: number;
+    failed: number;
+    rearmed: number;
+  }> {
     const log = getOrchestratorLogger().child({ component: 'orphan-recovery' });
     const now = Date.now();
     let paused = 0;
     let failed = 0;
+    let rearmed = 0;
 
     try {
       // Shard recovery has already rewritten hot state for every run this
       // instance owns, so a step that survived the restart in flight is armed
       // by that write and appears here the moment its lower bound passes.
       const runtime = orphanRecoveryRuntime();
-      if (runtime.mode !== 'enabled') return { paused, failed };
+      if (runtime.mode !== 'enabled') return { paused, failed, rearmed };
       const candidates = await peekDueStepStallCandidates(redis, runtime.maxBatch, now);
       log.debug(`Scanning ${String(candidates.length)} due step candidates for orphans`);
 
@@ -68,12 +75,19 @@ export function createRecoverOrphanedSessions(bindings: SessionOrchestratorBindi
           continue;
         }
 
-        const rescuable = await isRescuableOrphan(
-          { redis, getStepState, getStepInFlight, hasAvailableExecutor, shardManager },
-          state,
-          { stepState, now },
+        const path = await classifyStepCompletionPath(
+          { redis, getStepInFlight, hasAvailableExecutor, getShardTimer },
+          stepState,
+          now,
         );
-        if (!rescuable) {
+        if (path.executorWait === 'timer_lost') {
+          await rearmExecutorWait(redis, stepState, state, now);
+          rearmed++;
+          log.info(
+            `Re-armed the executor wait of step ${stepState.stepId} (${stepState.stepType}) in run ${runId}: its timer was gone`,
+          );
+        }
+        if (path.hasCompletionPath) {
           await refreshStepStallCandidate(
             redis,
             tenantId,
@@ -158,10 +172,12 @@ export function createRecoverOrphanedSessions(bindings: SessionOrchestratorBindi
       });
     }
 
-    if (paused > 0 || failed > 0) {
-      log.info(`Orphan recovery complete: ${String(paused)} paused, ${String(failed)} failed`);
+    if (paused > 0 || failed > 0 || rearmed > 0) {
+      log.info(
+        `Orphan recovery complete: ${String(paused)} paused, ${String(failed)} failed, ${String(rearmed)} waits re-armed`,
+      );
     }
 
-    return { paused, failed };
+    return { paused, failed, rearmed };
   };
 }

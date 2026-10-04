@@ -25,6 +25,7 @@ import {
   getStepState,
   getStepInFlight,
   hasAvailableExecutor,
+  getShardTimer,
   casUpdateSessionRuntimeState,
   migrateLegacyShardTimers,
   reconcileActiveRuns,
@@ -417,6 +418,7 @@ async function main(): Promise<void> {
         getStepState,
         getStepInFlight,
         hasAvailableExecutor,
+        getShardTimer,
         casUpdateSessionRuntimeState,
         shardManager,
         logger,
@@ -578,12 +580,15 @@ async function main(): Promise<void> {
   // but BEFORE consumers start processing new messages. Orphaned sessions are those
   // left RUNNING with dead executors after a restart — their results are irrecoverably
   // lost (e.g., LLM API responded while we were down). Agent sessions get PAUSED
-  // (resumable), non-agent steps get synthetic FAILED (retryable).
+  // (resumable), non-agent steps get synthetic FAILED (retryable). A step
+  // waiting on its executor is neither: its wait is left to its timer, and
+  // armed again where the timer is gone.
   const orphanRecovery = await executionService.recoverOrphanedSessions();
-  if (orphanRecovery.paused > 0 || orphanRecovery.failed > 0) {
+  if (orphanRecovery.paused > 0 || orphanRecovery.failed > 0 || orphanRecovery.rearmed > 0) {
     logger.info('Orphan recovery complete', {
       paused: String(orphanRecovery.paused),
       failed: String(orphanRecovery.failed),
+      rearmed: String(orphanRecovery.rearmed),
     });
   }
 

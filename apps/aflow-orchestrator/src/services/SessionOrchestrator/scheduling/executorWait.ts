@@ -22,7 +22,21 @@
  * the budget's end fails at its own time, its looks after it was dispatched.
  */
 import type { Redis } from 'ioredis';
-import type { AflowError, StepJobMessage, StepResultMessage, TimerItem } from '@aflow/schemas';
+import type {
+  AflowError,
+  IdempotencyKey,
+  OperationId,
+  SessionId,
+  StepExecutionId,
+  StepId,
+  StepJobMessage,
+  StepResultMessage,
+  StepType,
+  TenantId,
+  TimerItem,
+  TraceId,
+} from '@aflow/schemas';
+import type { SessionHotState, StepHotState } from '@aflow/redis';
 import {
   addStepJob,
   EXECUTOR_WAIT_LONGEST_LOOK_MS,
@@ -71,7 +85,10 @@ export async function dispatchOrWaitOnExecutor(
 
 /**
  * Look again for the executor of a parked job: enqueue it, park it until the
- * next look, or give up once its looks are spent.
+ * next look, or give up once its looks are spent. The step stays marked
+ * waiting until its job is in its stream, so an enqueue that throws anything
+ * but a missing executor leaves the timer's redelivery still this wait's to
+ * dispatch.
  */
 export async function lookAgainForExecutor(
   redis: Redis,
@@ -81,20 +98,17 @@ export async function lookAgainForExecutor(
 ): Promise<ExecutorDispatch> {
   const { sessionId } = job;
   if (sessionId !== undefined) {
-    // Before the enqueue rather than after: once the job is in its stream the
-    // executor owns the step's status, and a write after it could put a step
-    // it has started back to SCHEDULED. A step that gives up below keeps no
-    // mark of the wait, and one still waiting is marked again.
+    // The status is written before the enqueue rather than after: once the
+    // job is in its stream the executor owns it, and a write after could put
+    // a step it has started back to SCHEDULED.
     await updateStepState(redis, job.tenantId, job.stepExecutionId, {
       sessionId,
       status: 'SCHEDULED',
       scheduledAt: nowMs,
-      executorWaitSince: undefined,
     });
   }
   try {
     await addStepJob(redis, job);
-    return { kind: 'enqueued' };
   } catch (error) {
     if (!(error instanceof NoExecutorAvailableError)) throw error;
     const { sinceMs } = wait;
@@ -103,10 +117,61 @@ export async function lookAgainForExecutor(
     }
     const looks = wait.looks + 1;
     if (looks >= EXECUTOR_WAIT_LOOKS) {
+      // Unmarked before the failure is applied, so a step whose failure never
+      // lands is left to the stall watchdog rather than re-armed as a wait.
+      await endExecutorWait(redis, job);
       return { kind: 'gave_up', failure: executorWaitFailure(error, sinceMs, nowMs) };
     }
     return await park(redis, job, sinceMs, looks, nowMs + executorWaitGapMs(looks));
   }
+  await endExecutorWait(redis, job);
+  return { kind: 'enqueued' };
+}
+
+/**
+ * Arm the wait again for a step still marked waiting whose timer is gone, so
+ * it is looked for now rather than failed. The looks the lost timer had taken
+ * went with it, so the wait starts its budget again from its marker. The job is
+ * rebuilt from the step and its run as a retry rebuilds it: the caller's
+ * model, which the step does not record, goes without.
+ */
+export async function rearmExecutorWait(
+  redis: Redis,
+  step: StepHotState,
+  run: SessionHotState,
+  nowMs: number = Date.now(),
+): Promise<void> {
+  const sinceMs = step.executorWaitSince;
+  if (sinceMs === undefined) return;
+  const sessionId = step.sessionId as SessionId;
+  const stepExecutionId = step.stepExecutionId as StepExecutionId;
+  const job: StepJobMessage = {
+    messageVersion: 1,
+    tenantId: step.tenantId as TenantId,
+    sessionId,
+    stepExecutionId,
+    parentStepExecutionId: (step.parentStepExecutionId ?? null) as StepExecutionId | null,
+    stepId: step.stepId as StepId,
+    stepType: step.stepType as StepType,
+    operationId: step.operationId as OperationId,
+    attempt: step.attempt,
+    idempotencyKey: `${sessionId}:${stepExecutionId}:${String(step.attempt)}` as IdempotencyKey,
+    inputRef: step.inputRef,
+    traceId: (step.traceId ?? run.traceId ?? crypto.randomUUID()) as TraceId,
+    scheduledAtMs: nowMs,
+    ...(run.createdBy !== undefined ? { credentialOwnerId: run.createdBy } : {}),
+    ...(run.spaceId !== undefined ? { spaceId: run.spaceId } : {}),
+  };
+  await scheduleShardTimer(redis, executorWaitTimer(job, sinceMs, 0, nowMs));
+}
+
+/** Patched without a status, which the executor owns once the job is in its stream. */
+async function endExecutorWait(redis: Redis, job: StepJobMessage): Promise<void> {
+  if (job.sessionId === undefined) return;
+  await updateStepState(redis, job.tenantId, job.stepExecutionId, {
+    sessionId: job.sessionId,
+    executorWaitSince: undefined,
+  });
 }
 
 async function park(

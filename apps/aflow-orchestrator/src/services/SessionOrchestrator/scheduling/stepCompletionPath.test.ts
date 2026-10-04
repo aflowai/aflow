@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { Redis } from 'ioredis';
 import type { StepHotState } from '@aflow/redis';
-import { SNOOZE_OPERATION_ID, getSnoozeMaxMs } from '@aflow/schemas';
+import { SNOOZE_OPERATION_ID, getSnoozeMaxMs, type TimerItem } from '@aflow/schemas';
 import {
   classifyStepCompletionPath,
   type StepInFlightStatus,
@@ -12,6 +12,7 @@ import {
   STEP_STARTED_DEAD_EXECUTOR_GRACE_MS,
   STEP_SCHEDULED_STALL_GRACE_MS,
   STEP_SCHEDULED_DEAD_EXECUTOR_GRACE_MS,
+  EXECUTOR_WAIT_LOOKS,
 } from '@aflow/redis';
 
 const NOW = 1_000_000_000_000;
@@ -22,6 +23,7 @@ function deps(inflight: StepInFlightStatus, executorAvailable: boolean): StepCom
     redis,
     getStepInFlight: vi.fn().mockResolvedValue(inflight),
     hasAvailableExecutor: vi.fn().mockResolvedValue(executorAvailable),
+    getShardTimer: vi.fn().mockResolvedValue(null),
   };
 }
 
@@ -151,5 +153,72 @@ describe('classifyStepCompletionPath — SCHEDULED', () => {
       NOW,
     );
     expect(r.hasCompletionPath).toBe(false);
+  });
+});
+
+describe('classifyStepCompletionPath — waiting on its executor', () => {
+  const SINCE = NOW - 8 * 60 * 60_000;
+  const parked = step({ status: 'SCHEDULED', scheduledAt: SINCE, executorWaitSince: SINCE });
+
+  function waitTimer(sinceMs: number, looks: number): TimerItem {
+    return { reason: 'executor_wait', executorWait: { sinceMs, looks } } as unknown as TimerItem;
+  }
+
+  function waiting(timer: TimerItem | null): StepCompletionPathDeps {
+    return {
+      ...deps({ alive: false, deadlineAtMs: null }, false),
+      getShardTimer: vi.fn().mockResolvedValue(timer),
+    };
+  }
+
+  it('is a completion path while its timer lives, however long ago it was scheduled', async () => {
+    const r = await classifyStepCompletionPath(waiting(waitTimer(SINCE, 3)), parked, NOW);
+    expect(r).toMatchObject({ hasCompletionPath: true, executorWait: 'armed' });
+  });
+
+  it('is recognised by its live timer alone', async () => {
+    const { executorWaitSince: _unmarked, ...unmarked } = parked;
+    const r = await classifyStepCompletionPath(waiting(waitTimer(SINCE, 3)), unmarked, NOW);
+    expect(r).toMatchObject({ hasCompletionPath: true, executorWait: 'armed' });
+  });
+
+  it('keeps its path when its timer is gone, for the caller to arm again', async () => {
+    const r = await classifyStepCompletionPath(waiting(null), parked, NOW);
+    expect(r).toMatchObject({ hasCompletionPath: true, executorWait: 'timer_lost' });
+  });
+
+  it('counts a timer from a wait the marker no longer names as gone', async () => {
+    const r = await classifyStepCompletionPath(waiting(waitTimer(SINCE - 1, 3)), parked, NOW);
+    expect(r.executorWait).toBe('timer_lost');
+  });
+
+  it('ages out like any pickup once its looks are spent', async () => {
+    const r = await classifyStepCompletionPath(
+      waiting(waitTimer(SINCE, EXECUTOR_WAIT_LOOKS)),
+      parked,
+      NOW,
+    );
+    expect(r).toMatchObject({ hasCompletionPath: false, executorWait: null });
+  });
+
+  it("reads the timer of the step's own attempt", async () => {
+    const d = waiting(null);
+    await classifyStepCompletionPath(d, { ...parked, attempt: 2 }, NOW);
+    expect(d.getShardTimer).toHaveBeenCalledWith(redis, {
+      sessionId: parked.sessionId,
+      stepExecutionId: parked.stepExecutionId,
+      reason: 'executor_wait',
+      attempt: 2,
+    });
+  });
+
+  it('is never read for a step an executor holds', async () => {
+    const d = {
+      ...deps({ alive: true, deadlineAtMs: null }, false),
+      getShardTimer: vi.fn().mockResolvedValue(waitTimer(SINCE, 3)),
+    };
+    const r = await classifyStepCompletionPath(d, { ...parked, status: 'STARTED' }, NOW);
+    expect(r.executorWait).toBeNull();
+    expect(d.getShardTimer).not.toHaveBeenCalled();
   });
 });

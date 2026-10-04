@@ -10,7 +10,7 @@ import {
 import type { StepType } from '@aflow/schemas';
 import type { ShardManager } from '../../ShardManager.js';
 import { isRescuableOrphan } from './rescuableOrphan.js';
-import type { StepInFlightStatus } from './stepCompletionPath.js';
+import type { StepCompletionPathDeps, StepInFlightStatus } from './stepCompletionPath.js';
 
 /**
  * Bounded grace for a CANCELLING session before its barrier is dropped, measured
@@ -39,6 +39,7 @@ export interface SweepStaleBarriersDeps {
   ) => Promise<StepHotState | null>;
   getStepInFlight: (redis: Redis, stepExecutionId: string) => Promise<StepInFlightStatus>;
   hasAvailableExecutor: (redis: Redis, stepType: StepType) => Promise<boolean>;
+  getShardTimer: StepCompletionPathDeps['getShardTimer'];
   /** Ceiling on candidates examined per cycle. */
   maxBatch?: number;
   /** Aborted when the cycle runs past its budget; checked between candidates. */
@@ -255,6 +256,7 @@ async function rescuable(
       getStepState: deps.getStepState,
       getStepInFlight: deps.getStepInFlight,
       hasAvailableExecutor: deps.hasAvailableExecutor,
+      getShardTimer: deps.getShardTimer,
       shardManager: deps.shardManager,
     },
     state,

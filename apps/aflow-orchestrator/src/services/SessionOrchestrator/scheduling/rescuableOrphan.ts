@@ -2,7 +2,11 @@ import type { Redis } from 'ioredis';
 import type { SessionHotState, StepHotState } from '@aflow/redis';
 import type { StepType } from '@aflow/schemas';
 import type { ShardManager } from '../../ShardManager.js';
-import { classifyStepCompletionPath, type StepInFlightStatus } from './stepCompletionPath.js';
+import {
+  classifyStepCompletionPath,
+  type StepCompletionPathDeps,
+  type StepInFlightStatus,
+} from './stepCompletionPath.js';
 
 export interface RescuableOrphanDeps {
   redis: Redis;
@@ -13,6 +17,7 @@ export interface RescuableOrphanDeps {
   ) => Promise<StepHotState | null>;
   getStepInFlight: (redis: Redis, stepExecutionId: string) => Promise<StepInFlightStatus>;
   hasAvailableExecutor: (redis: Redis, stepType: StepType) => Promise<boolean>;
+  getShardTimer: StepCompletionPathDeps['getShardTimer'];
   /** When present, the session must be owned by this shard to be rescuable. */
   shardManager: ShardManager | undefined;
 }
@@ -25,12 +30,13 @@ export interface IsRescuableOrphanOpts {
 }
 
 /**
- * §0 rescuable-orphan predicate, shared by orphan recovery (`recovery.ts`) and
- * the parallel-barrier sweep so they cannot drift. A session is a rescuable
+ * §0 rescuable-orphan predicate for the parallel-barrier sweep, over the same
+ * `classifyStepCompletionPath` that orphan recovery and the stall watchdog
+ * read, so the three cannot drift. A session is a rescuable
  * orphan ONLY when **no authoritative completion path exists** for its current
  * step: it is RUNNING, the current step is still STARTED/SCHEDULED, and
  * `classifyStepCompletionPath` finds no live executor in-flight, no scheduled
- * pickup grace, and no snooze/timer window. Elapsed wall-clock age is never, by
+ * pickup grace, no snooze window and no executor wait. Elapsed wall-clock age is never, by
  * itself, evidence of failure — a long `snooze` or a live in-flight executor
  * call is healthy and must not be recovered.
  */
@@ -55,6 +61,7 @@ export async function isRescuableOrphan(
       redis: deps.redis,
       getStepInFlight: deps.getStepInFlight,
       hasAvailableExecutor: deps.hasAvailableExecutor,
+      getShardTimer: deps.getShardTimer,
     },
     stepState,
     opts?.now ?? Date.now(),

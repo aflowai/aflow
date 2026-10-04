@@ -20,6 +20,7 @@ import {
   addControlMessage,
   hasAvailableExecutor,
   getStepInFlight,
+  getShardTimer,
   clearStepInFlight,
   peekDueStepStallCandidates,
   refreshStepStallCandidate,
@@ -48,6 +49,7 @@ import {
   dispatchOrWaitOnExecutor,
   failedDispatchResult,
   lookAgainForExecutor,
+  rearmExecutorWait,
   type ExecutorDispatch,
 } from './executorWait.js';
 
@@ -751,6 +753,7 @@ export function createProcessDueTimers(bindings: SessionOrchestratorBindings) {
             endedAt: undefined,
             errorRef: undefined,
             outputRef: undefined,
+            executorWaitSince: undefined,
           });
 
           const job: StepJobMessage = {
@@ -926,15 +929,22 @@ export function createProcessDueTimers(bindings: SessionOrchestratorBindings) {
           // The single shared completion-path authority (also used by orphan
           // recovery and the parallel-barrier sweep) — a STARTED step with a
           // live in-flight key within its deadline+backstop, a SCHEDULED step
-          // with a live one or inside its pickup grace, or any step inside the
-          // snooze window still has a completion path. Never reap on elapsed
-          // time alone.
-          const { hasCompletionPath, isStarted, executorOwnsStep, stepDeadlineAtMs } =
+          // with a live one or inside its pickup grace, any step inside the
+          // snooze window, or a step waiting on its executor still has a
+          // completion path. Never reap on elapsed time alone.
+          const { hasCompletionPath, isStarted, executorOwnsStep, stepDeadlineAtMs, executorWait } =
             await classifyStepCompletionPath(
-              { redis, getStepInFlight, hasAvailableExecutor },
+              { redis, getStepInFlight, hasAvailableExecutor, getShardTimer },
               stepState,
               now,
             );
+          if (executorWait === 'timer_lost') {
+            await rearmExecutorWait(redis, stepState, state, now);
+            getOrchestratorLogger().warn(
+              `[watchdog] Re-armed the executor wait of step ${stepState.stepId} (${stepState.stepType}): its timer was gone`,
+              { tenantId, runId, stepExecutionId: stepState.stepExecutionId },
+            );
+          }
           if (hasCompletionPath) {
             await refreshStepStallCandidate(
               redis,

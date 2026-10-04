@@ -178,5 +178,5 @@ export interface SessionOrchestrator {
    * Scans all RUNNING sessions in Redis and pauses those with dead executors.
    * Should be called once at startup, after shard recovery is complete.
    */
-  recoverOrphanedSessions(): Promise<{ paused: number; failed: number }>;
+  recoverOrphanedSessions(): Promise<{ paused: number; failed: number; rearmed: number }>;
 }

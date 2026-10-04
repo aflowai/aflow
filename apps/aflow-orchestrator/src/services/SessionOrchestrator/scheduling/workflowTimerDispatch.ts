@@ -7,6 +7,7 @@ import type {
   TimerItem,
   WorkflowExecutionRef,
 } from '@aflow/schemas';
+import { CodeLaneDisabledError } from '@aflow/schemas';
 import { addStepResult } from '@aflow/redis';
 import { isInlineOperation } from '../helpers/inlineOperations.js';
 import { dispatchInlineOp } from '../handlers/dispatchInlineOp.js';
@@ -16,6 +17,7 @@ import {
   dispatchOrWaitOnExecutor,
   failedDispatchResult,
   lookAgainForExecutor,
+  type ExecutorDispatch,
 } from './executorWait.js';
 
 /**
@@ -24,7 +26,8 @@ import {
  * completion_pending sweeper. A missing executor is neither: the task waits
  * for it on an `executor_wait` timer, and one that spent its looks is
  * answered with the FAILED result its executor would have sent, so the task's
- * own retry policy reads the outage as transient.
+ * own retry policy reads the outage as transient. A lane breaker that opened
+ * while it waited is answered the same way, with its refusal.
  */
 export async function processWorkflowCorrelatedTimer(
   redis: Redis,
@@ -85,12 +88,18 @@ export async function processWorkflowCorrelatedTimer(
     }
     const { job: waitingJob, sinceMs, looks } = timer.executorWait;
     const job = { ...waitingJob, scheduledAtMs: now };
-    const dispatched = await lookAgainForExecutor(
-      redis,
-      job,
-      { sinceMs, looks, dueAtMs: timer.dueAtMs },
-      now,
-    );
+    let dispatched: ExecutorDispatch;
+    try {
+      dispatched = await lookAgainForExecutor(
+        redis,
+        job,
+        { sinceMs, looks, dueAtMs: timer.dueAtMs },
+        now,
+      );
+    } catch (error) {
+      if (!(error instanceof CodeLaneDisabledError)) throw error;
+      dispatched = { kind: 'gave_up', failure: error.toAflowError() };
+    }
     if (dispatched.kind === 'gave_up') {
       await addStepResult(redis, failedDispatchResult(job, dispatched.failure, now));
     }
