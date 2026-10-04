@@ -34,7 +34,7 @@ The earlier plans in this area (88, 99, 215, 234, 299) were design exercises; pa
 
 ### 3.1 Records
 
-`plan_nodes` (per space): `id`, `space_id`, `parent_id`, `kind`, `title`, `goal`, `criteria`, `status`, `outcome`, `note`, `revision`, `position`, `created_by`, `created_at`, `updated_at`, `closed_at`. In P1, `plan_node_links`: `node_id`, `space_id`, `kind` (`run | session | pull_request | document | finding | campaign`), `ref`, `label`, `created_at`; and `workflow_runs.plan_node_id`. Zod in `packages/schemas/src/cybernetic/plan.ts`; the length caps on `goal`, `criteria`, `outcome` and `note` are storage ceilings in the thousands, since they hold model-authored prose a person reads. The rule that a node is done against its criteria lives in the schema: `update` with `status: done` requires `outcome`, the statement of how the criteria were met, and is refused without it.
+`plan_nodes` (per space): `id`, `space_id`, `parent_id`, `kind`, `title`, `goal`, `criteria`, `status`, `outcome`, `note`, `revision`, `position`, `created_by`, `created_at`, `updated_at`, `closed_at`. In P1, `plan_node_links`: `node_id`, `space_id`, `kind` (`run | session | pull_request | document | finding | campaign`), `ref`, `label`, `created_at`; and `workflow_runs.plan_node_id`. Zod in a `plan.ts` beside `campaign.ts` under `packages/schemas/src/cybernetic/`; the length caps on `goal`, `criteria`, `outcome` and `note` are storage ceilings in the thousands, since they hold model-authored prose a person reads. The rule that a node is done against its criteria lives in the schema: `update` with `status: done` requires `outcome`, the statement of how the criteria were met, and is refused without it.
 
 ### 3.2 Operations
 
@@ -55,7 +55,7 @@ The attention block renders, for each active root: `[execute] 315 · Local first
 ## 4. What it affects
 
 - `packages/database` — migration 218: `plan_nodes`; the capability group on the system profiles (`tenant.ts`), the stale `plan.read` / `plan.write` groups removed; `plan_nodes` in `DIRECT_SPACE_ID_TABLES` (`spaceCascade.ts`) with its sentinel in the cascade test. P1: `plan_node_links` (deleted through the same list by its own `space_id`, with a second sentinel) and `workflow_runs.plan_node_id`.
-- `packages/schemas` — `plan` in `StepTypeSchema` (`artifact/operationDefinition.ts`), `cybernetic/plan.ts`, `operations/plan/`, the registry; P1: `runStart.ts` (`planNodeId`).
+- `packages/schemas` — `plan` in `StepTypeSchema` (`artifact/operationDefinition.ts`), the `cybernetic/plan.ts` schema, `operations/plan/`, the registry; P1: `runStart.ts` (`planNodeId`).
 - `packages/cybernetic-runtime` — `plan/` engine, `attentionBuilder.ts` section and render branch, the attention generation bumped on every plan write, `isPlanOperation` and `validateSkillPlanSeparation` beside their eval-plane siblings.
 - `apps/aflow-orchestrator` — `inlineOperations.ts` prefix, `dispatchInlineOp.ts` route, `handlers/inlineOps/plan/`.
 - `packages/platform-artifacts` — `cyberneticAgents.ts` core operations; a guard test beside `helmsmanEvalPlanePreset.test.ts` that probes the separation rule with a skill referencing `plan.node.update`.
