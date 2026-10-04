@@ -336,6 +336,7 @@ export async function handleDelegateInline(args: InlineHandlerArgs): Promise<voi
       ...(parentState?.createdBy ? { createdBy: parentState.createdBy } : {}),
       // Propagate actorContext so child run has it for nested subflows
       ...(parentState?.actorContextJson ? { actorContextJson: parentState.actorContextJson } : {}),
+      ...(parentState?.rootTrigger ? { rootTrigger: parentState.rootTrigger } : {}),
       // Subflow linkage: store parent info so the orchestrator can resume
       ...(waitForCompletion
         ? {

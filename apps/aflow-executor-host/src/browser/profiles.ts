@@ -11,6 +11,8 @@ import {
   type BrowserProfile,
   BrowserProfileSchema,
   DEFAULT_BROWSER_PROFILE_ID,
+  isAttendedRun,
+  type RunTrigger,
 } from '@aflow/schemas';
 
 import { describePolicyIssues } from '../policyIssues.js';
@@ -63,6 +65,27 @@ export function profileOpenToSpace(profile: BrowserProfile, spaceId: string | un
   return spaceId !== undefined && profile.spaces.includes(spaceId);
 }
 
+/** What a profile asks of the run using it: the space it is in, and what started its root. */
+export interface ProfileUser {
+  readonly spaceId?: string | undefined;
+  readonly rootTrigger?: RunTrigger | undefined;
+}
+
+/** Whether the run may use the profile as far as what started it goes. */
+export function profileOpenToRunStart(
+  profile: BrowserProfile,
+  rootTrigger: RunTrigger | undefined,
+): boolean {
+  return profile.unattended || isAttendedRun(rootTrigger);
+}
+
+/** Whether the run may use the profile at all: its space, and what started it. */
+export function profileServesRun(profile: BrowserProfile, run: ProfileUser): boolean {
+  return (
+    profileOpenToSpace(profile, run.spaceId) && profileOpenToRunStart(profile, run.rootTrigger)
+  );
+}
+
 /** What a profile is looked up in: the profiles in effect, those disabled, and the browser found. */
 export interface BrowserPolicy {
   readonly browsers: ReadonlyMap<string, BrowserProfile>;
@@ -85,14 +108,14 @@ export function chromeExecutable(policy: BrowserPolicy): string {
 }
 
 /**
- * The profile a run asked for, refused when the run's space may not use it —
- * unless the machine itself is asking, as the operator's sign-in does.
+ * The profile a run asked for, refused when the run's space may not use it or
+ * nobody started the run and the profile takes no such run — unless the
+ * operator is the one asking, as the sign-in sitting does.
  */
 export function resolveProfile(
   policy: BrowserPolicy,
   profileId: string,
-  spaceId: string | undefined,
-  onMachine = false,
+  user: ProfileUser | 'operator',
 ): BrowserProfile {
   const profile = policy.browsers.get(profileId);
   if (profile === undefined) {
@@ -115,14 +138,29 @@ export function resolveProfile(
         'cannot add one.',
     );
   }
-  if (!onMachine && !profileOpenToSpace(profile, spaceId)) {
+  if (user === 'operator') return profile;
+  if (!profileOpenToSpace(profile, user.spaceId)) {
     const open = [...policy.browsers.values()]
-      .filter((candidate) => profileOpenToSpace(candidate, spaceId))
+      .filter((candidate) => profileOpenToSpace(candidate, user.spaceId))
       .map((candidate) => candidate.id);
     throw new BrowserDriverError(
       'profile_not_for_space',
       `Browser profile \`${profileId}\` is not open to this space. Profiles this space may ` +
         `use: ${listedIds(open)}. Which spaces a profile serves is set on the machine.`,
+    );
+  }
+  if (!profileOpenToRunStart(profile, user.rootTrigger)) {
+    const startedBy =
+      user.rootTrigger === undefined
+        ? 'nothing recorded what started it'
+        : `it goes back to \`${user.rootTrigger}\`, not to a person in a conversation or a voice session`;
+    throw new BrowserDriverError(
+      'profile_closed_to_unattended',
+      `Browser profile \`${profileId}\` is closed to runs nobody started, and this run is one: ` +
+        `${startedBy}. Nothing was done, and no call on this profile is let in for the rest of ` +
+        'the run. The operator opens the profile to such runs on the machine: ' +
+        `\`aflow browser unattended ${profileId} allow\`.`,
+      { profileId },
     );
   }
   return profile;

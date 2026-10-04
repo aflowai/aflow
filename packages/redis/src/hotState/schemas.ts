@@ -10,6 +10,7 @@ import {
   SessionAgentTargetSchema,
   McpCredentialBlockSchema,
   StepJobMessageSchema,
+  RunTriggerSchema,
 } from '@aflow/schemas';
 
 /** Default TTL for hot state (24 hours) */
@@ -123,7 +124,14 @@ export const SessionHotStateSchema = z.object({
   lastMessageSeq: z.number().int().nonnegative().optional(),
 
   // How this session was triggered (immutable after creation)
-  trigger: z.enum(['chat', 'api', 'eval', 'mcp', 'schedule', 'voice', 'webhook']).optional(),
+  trigger: RunTriggerSchema.optional(),
+  /**
+   * What started the root of this session's run: its own trigger when it is
+   * the root, its parent's or its workflow anchor's root trigger when it was
+   * started by one. Immutable after creation, and stamped on every job the
+   * session schedules.
+   */
+  rootTrigger: RunTriggerSchema.optional(),
   // Whether the user is currently interacting via voice (mutable — toggled on start/resume)
   // Stored as string 'true'/'false' in Redis, deserialized to boolean by deserializeFromHash
   voiceMode: z.boolean().optional(),

@@ -178,7 +178,7 @@ describe('a policy with one profile the schema refuses', () => {
     bindings: [{ id: 'hb', root: '', mode: 'read', spaceId: 's' }],
     browsers: [
       { id: 'work', spaces: 'all' },
-      { id: 'kiosk', unattended: false },
+      { id: 'kiosk', posture: 'careful' },
     ],
   };
 
@@ -234,7 +234,7 @@ describe('a policy with one profile the schema refuses', () => {
     );
     expect(refused.kind).toBe('profile_invalid');
     expect(refused.message).toContain('`kiosk`');
-    expect(refused.message).toContain('unattended: `unattended: false` is not enforced yet');
+    expect(refused.message).toContain('posture: Invalid enum value');
     expect(h.launches).toHaveLength(1);
   });
 
@@ -300,7 +300,7 @@ describe('a run with no space', () => {
     const h = harness({ browsers: [pinned] });
     const { spaceId: _spaceId, ...spaceless } = RUN_A;
 
-    expect(await h.driver.listProfiles(undefined)).toEqual([]);
+    expect(await h.driver.listProfiles(spaceless)).toEqual([]);
     const refused = await refusal(
       h.driver.open({
         ...spaceless,

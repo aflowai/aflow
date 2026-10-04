@@ -213,6 +213,18 @@ export const BrowserProfileListOutputSchema = z.object({
       profileId: BrowserProfileIdSchema,
       posture: BrowserPostureSchema,
       window: z.enum(['hidden', 'visible']),
+      unattended: z
+        .boolean()
+        .describe(
+          'Whether runs nobody started — by a schedule, a webhook, the API, an MCP client or an ' +
+            'eval, or delegated from one — may use it.',
+        ),
+      openToThisRun: z
+        .boolean()
+        .describe(
+          '`false` when this run is one nobody started and the profile takes none: every ' +
+            'operation on it is refused for the whole of this run.',
+        ),
       running: z.boolean().describe('Whether the profile’s browser is running now.'),
       sites: z
         .array(z.string())

@@ -10,6 +10,7 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { loadHostPolicy } from '../bindings.js';
 import {
   type BrowserCliDeps,
   parseBrowserArgs,
@@ -86,6 +87,11 @@ describe('the arguments', () => {
       profileId: 'work',
       posture: 'read-only',
     });
+    expect(parseBrowserArgs(['unattended', 'work', 'refuse'])).toEqual({
+      kind: 'unattended',
+      profileId: 'work',
+      choice: 'refuse',
+    });
     expect(parseBrowserArgs(['rule', 'work', '*.example.com', 'deny'])).toEqual({
       kind: 'rule',
       profileId: 'work',
@@ -107,6 +113,8 @@ describe('the arguments', () => {
       ['sign-in', 'a', 'b'],
       ['sign-in', '--profile'],
       ['posture', 'work'],
+      ['unattended', 'work'],
+      ['unattended', 'work', 'refuse', 'now'],
       ['rule', 'work', '*.example.com'],
       ['rule', 'work', '*.example.com', 'deny', '--remove'],
       ['rule', 'work', '*.example.com', 'deny', '--force'],
@@ -181,12 +189,53 @@ describe('edits to the policy file', () => {
     });
   });
 
+  it('close a profile to runs nobody started and open it again, as the list and the executor read it', async () => {
+    await writePolicy({ browsers: [{ id: 'default' }, { id: 'work', posture: 'read-only' }] });
+    const printed: string[] = [];
+
+    await runBrowserCommand(
+      { kind: 'unattended', profileId: 'work', choice: 'refuse' },
+      deps(printed, clock),
+    );
+    expect((await readPolicy()).browsers).toEqual([
+      { id: 'default' },
+      { id: 'work', posture: 'read-only', unattended: false },
+    ]);
+    expect(printed[0]).toBe(
+      'Profile `work` is closed to runs nobody started: only a run a person started in a ' +
+        'conversation or by voice, or one delegated from it, may use it.',
+    );
+    expect((await loadHostPolicy(policyPath, () => CHROME)).browsers.get('work')?.unattended).toBe(
+      false,
+    );
+    const listed: string[] = [];
+    await runBrowserCommand({ kind: 'list' }, deps(listed, testClock()));
+    expect(listed).toContain(
+      'work — read-only, window hidden, idle after 30 minutes, open to every space, closed to ' +
+        'runs nobody started',
+    );
+
+    printed.length = 0;
+    await runBrowserCommand(
+      { kind: 'unattended', profileId: 'work', choice: 'allow' },
+      deps(printed, clock),
+    );
+    expect((await readPolicy()).browsers?.[1]).toEqual({
+      id: 'work',
+      posture: 'read-only',
+      unattended: true,
+    });
+    expect(printed[0]).toBe('Profile `work` is open to runs nobody started.');
+  });
+
   it('refuse what the schema refuses, leaving the file as it was', async () => {
     await writePolicy({ browsers: [{ id: 'default' }] });
     const before = await readFile(policyPath, 'utf8');
     for (const [command, said] of [
       [{ kind: 'posture', profileId: 'default', posture: 'careful' }, 'is not a posture'],
       [{ kind: 'posture', profileId: 'nope', posture: 'read-only' }, 'no browser profile'],
+      [{ kind: 'unattended', profileId: 'default', choice: 'no' }, 'Choose allow or refuse'],
+      [{ kind: 'unattended', profileId: 'nope', choice: 'refuse' }, 'no browser profile'],
       [
         { kind: 'rule', profileId: 'default', origin: 'mail.example.com', effect: 'deny' },
         '*.example.com',
@@ -336,7 +385,7 @@ describe('asking the running executor', () => {
     const printed: string[] = [];
     await runBrowserCommand({ kind: 'list' }, deps(printed, testClock()));
     expect(printed).toEqual([
-      'work — autonomous, window hidden, idle after 30 minutes, open to every space',
+      'work — autonomous, window hidden, idle after 30 minutes, open to every space, and to runs nobody started',
       '    deny *.example.com',
       `    directory: ${join(dir, 'browsers', 'work')}`,
       '    stopped',

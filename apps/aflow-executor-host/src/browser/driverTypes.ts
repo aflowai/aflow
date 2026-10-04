@@ -2,7 +2,12 @@
  * What the browser driver is asked and what it answers, apart from how it
  * does it: the step handler builds outputs from these and nothing else.
  */
-import type { BrowserHandoffOutcome, BrowserHandoffReason, BrowserProfile } from '@aflow/schemas';
+import type {
+  BrowserHandoffOutcome,
+  BrowserHandoffReason,
+  BrowserProfile,
+  RunTrigger,
+} from '@aflow/schemas';
 
 import type { ConsoleEntry, NetworkEntry } from './observations.js';
 import type { BoundedSnapshot, Outline } from './outline.js';
@@ -12,6 +17,8 @@ import type { EngineAction, EngineNavigation } from './types.js';
 
 export interface RunScope extends PageOwner {
   readonly spaceId?: string;
+  /** What started the root of the run, as its job carries it; absent reads as nobody. */
+  readonly rootTrigger?: RunTrigger;
 }
 
 export interface OpenRequest extends RunScope {
@@ -119,6 +126,9 @@ export interface ListedProfile {
   readonly profileId: string;
   readonly posture: BrowserProfile['posture'];
   readonly window: BrowserProfile['window'];
+  readonly unattended: boolean;
+  /** False when nobody started the run asking and the profile takes no such run. */
+  readonly openToThisRun: boolean;
   readonly running: boolean;
   readonly sites?: string[];
   readonly sitesUnknown?: 'not_started' | 'stopped';

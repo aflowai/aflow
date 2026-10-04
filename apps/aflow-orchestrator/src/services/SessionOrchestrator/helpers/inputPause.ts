@@ -225,7 +225,10 @@ export async function pauseForMissingVariables(
   spaceId?: string,
   clientMessageId?: string,
   linkageCarryover?: Partial<
-    Pick<SessionHotState, 'parentSessionId' | 'parentStepExecutionId' | 'workflowExecution'>
+    Pick<
+      SessionHotState,
+      'parentSessionId' | 'parentStepExecutionId' | 'workflowExecution' | 'rootTrigger'
+    >
   >,
 ): Promise<{ runId: SessionId; status: SessionStatus; requestedInputRef: string }> {
   getOrchestratorLogger().debug(

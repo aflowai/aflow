@@ -30,6 +30,7 @@ import type {
   SessionBlockedOn,
   SimulationRunInput,
   SessionMetadata,
+  RunTrigger,
 } from '@aflow/schemas';
 import type { PayloadStore } from '@aflow/payload-store';
 import {
@@ -90,8 +91,6 @@ export type SessionStatus =
   | 'CANCELLED'
   | 'CANCELLING'
   | 'STALLED';
-
-export type RunTrigger = 'chat' | 'api' | 'eval' | 'mcp' | 'schedule' | 'voice' | 'webhook';
 
 export interface StartSessionRequest {
   tenantId: TenantId;

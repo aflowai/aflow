@@ -1,6 +1,7 @@
 import type { Redis } from 'ioredis';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { SessionHotState } from '@aflow/redis';
+import type { RunTrigger } from '@aflow/schemas';
 import { getRunAccessGrant, serializeRunAccessGrant } from '@aflow/redis';
 import { getOrchestratorLogger } from '../../../lib/orchestratorLogger.js';
 import { readDurableSessionCreatedBy } from './helpers.js';
@@ -23,6 +24,12 @@ export interface WorkflowTaskAuthority {
    * write posture.
    */
   grantJson?: string;
+  /**
+   * What started the anchor's root. Read from hot state only, so an anchor
+   * whose state has aged out yields none and the task counts as one nobody
+   * started: the fact fails closed.
+   */
+  rootTrigger?: RunTrigger;
 }
 
 export async function resolveWorkflowTaskAuthority(
@@ -56,5 +63,6 @@ export async function resolveWorkflowTaskAuthority(
     ...(credentialOwnerId !== undefined ? { credentialOwnerId } : {}),
     ...(anchorState?.actorContextJson ? { actorContextJson: anchorState.actorContextJson } : {}),
     ...(grantJson !== undefined ? { grantJson } : {}),
+    ...(anchorState?.rootTrigger !== undefined ? { rootTrigger: anchorState.rootTrigger } : {}),
   };
 }

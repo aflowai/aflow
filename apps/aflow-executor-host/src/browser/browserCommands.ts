@@ -27,6 +27,7 @@ import {
   withoutRule,
   withPosture,
   withRule,
+  withUnattended,
 } from './policyEdit.js';
 import { effectiveBrowserProfiles } from './profiles.js';
 import type { ProfileHolder } from './profileLock.js';
@@ -36,6 +37,7 @@ export type BrowserCommand =
   | { readonly kind: 'list' }
   | { readonly kind: 'sign_in'; readonly profileId: string }
   | { readonly kind: 'posture'; readonly profileId: string; readonly posture: string }
+  | { readonly kind: 'unattended'; readonly profileId: string; readonly choice: string }
   | {
       readonly kind: 'rule';
       readonly profileId: string;
@@ -51,6 +53,10 @@ export const BROWSER_USAGE =
   '                                            in to what the agent should reach; close it\n' +
   '                                            when done. The `default` profile unless named.\n' +
   '  browser posture <profile> <posture>       autonomous, ask-to-act or read-only.\n' +
+  '  browser unattended <profile> allow|refuse Whether runs nobody started — a schedule, a\n' +
+  '                                            webhook, the API, an MCP client, an eval —\n' +
+  '                                            may use it. A run a person started in a\n' +
+  '                                            conversation or by voice may either way.\n' +
   '  browser rule <profile> <origin> <effect>  allow, ask or deny pages at an origin, such as\n' +
   '                                            https://mail.example.com or *.example.com.\n' +
   '  browser rule <profile> <origin> --remove  Drop that rule.';
@@ -76,6 +82,11 @@ export function parseBrowserArgs(args: readonly string[]): BrowserCommand | unde
       const [profileId, posture, extra] = rest;
       if (profileId === undefined || posture === undefined || extra !== undefined) return undefined;
       return { kind: 'posture', profileId, posture };
+    }
+    case 'unattended': {
+      const [profileId, choice, extra] = rest;
+      if (profileId === undefined || choice === undefined || extra !== undefined) return undefined;
+      return { kind: 'unattended', profileId, choice };
     }
     case 'rule': {
       const removing = rest.includes('--remove');
@@ -196,9 +207,12 @@ async function list(deps: BrowserCliDeps): Promise<void> {
   }
   for (const profile of policy.browsers.values()) {
     const spaces = profile.spaces === 'all' ? 'every space' : `spaces ${profile.spaces.join(', ')}`;
+    const unattended = profile.unattended
+      ? 'and to runs nobody started'
+      : 'closed to runs nobody started';
     deps.print(
       `${profile.id} — ${profile.posture}, window ${profile.window}, idle after ` +
-        `${String(profile.idleMinutes)} minutes, open to ${spaces}`,
+        `${String(profile.idleMinutes)} minutes, open to ${spaces}, ${unattended}`,
     );
     for (const rule of profile.rules) deps.print(`    ${rule.effect} ${rule.origin}`);
     deps.print(`    directory: ${profileDirectory(deps.hostDir, profile.id)}`);
@@ -290,6 +304,16 @@ export async function runBrowserCommand(
         deps,
         (policy, implied) => withPosture(policy, implied, command.profileId, command.posture),
         `Profile \`${command.profileId}\` is now ${command.posture}.`,
+      );
+      return;
+    case 'unattended':
+      await edit(
+        deps,
+        (policy, implied) => withUnattended(policy, implied, command.profileId, command.choice),
+        command.choice === 'allow'
+          ? `Profile \`${command.profileId}\` is open to runs nobody started.`
+          : `Profile \`${command.profileId}\` is closed to runs nobody started: only a run a ` +
+              'person started in a conversation or by voice, or one delegated from it, may use it.',
       );
       return;
     case 'rule':

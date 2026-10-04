@@ -4,15 +4,16 @@
  *
  * A profile gone from the policy has its browser stopped, and the pages in it
  * go with it; one still starting is stopped as soon as it has started. A
- * profile still there takes its new rules at once, and the pages of runs in
- * spaces it no longer serves are closed. Neither waits for the idle limit:
+ * profile still there takes its new rules at once, and the pages of runs it
+ * no longer serves — another space, or a run nobody started once it takes
+ * none — are closed. Neither waits for the idle limit:
  * until then such a page would go on serving a run that may no longer use the
  * profile, under rules the operator has since removed.
  */
 import type { BrowserProfile } from '@aflow/schemas';
 
 import { closeWithinDeadline, type PageTable } from './pageTable.js';
-import { profileOpenToSpace } from './profiles.js';
+import { profileServesRun } from './profiles.js';
 
 export interface PolicyChangeTarget {
   readonly pages: PageTable;
@@ -37,7 +38,7 @@ export async function applyPolicyChange(
       .filter(
         (held) =>
           held.profileId === profileId &&
-          (profile === undefined || !profileOpenToSpace(profile, held.spaceId)),
+          (profile === undefined || !profileServesRun(profile, held)),
       );
     // Forgotten before anything is awaited, so no operation reaches them meanwhile.
     for (const held of revoked) target.pages.forget(held);

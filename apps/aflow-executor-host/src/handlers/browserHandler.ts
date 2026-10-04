@@ -59,6 +59,10 @@ const FAILURE: Record<BrowserFailureKind, { code: string; classification: ErrorC
   unknown_profile: { code: 'BROWSER_PROFILE_UNKNOWN', classification: 'permission' },
   profile_invalid: { code: 'BROWSER_PROFILE_INVALID', classification: 'configuration' },
   profile_not_for_space: { code: 'BROWSER_PROFILE_NOT_FOR_SPACE', classification: 'permission' },
+  profile_closed_to_unattended: {
+    code: 'BROWSER_PROFILE_CLOSED_TO_UNATTENDED',
+    classification: 'permission',
+  },
   appliance_origin: { code: 'BROWSER_ORIGIN_REFUSED', classification: 'permission' },
   origin_denied: { code: 'BROWSER_ORIGIN_DENIED', classification: 'permission' },
   posture_refused: { code: 'BROWSER_POSTURE_REFUSED', classification: 'permission' },
@@ -115,11 +119,22 @@ export interface BrowserCall extends RunScope {
   storeScreenshot(image: { data: string; mimeType: string }): Promise<PayloadRef>;
 }
 
-function scopeOf(scope: RunScope | ExecutorContext): RunScope {
+function scopeOf(scope: RunScope): RunScope {
   return {
     tenantId: scope.tenantId,
     runId: scope.runId,
     ...(scope.spaceId !== undefined ? { spaceId: scope.spaceId } : {}),
+    ...(scope.rootTrigger !== undefined ? { rootTrigger: scope.rootTrigger } : {}),
+  };
+}
+
+/** A step's run as its job describes it: what started the run is the orchestrator's stamp. */
+export function jobScopeOf(ctx: ExecutorContext): RunScope {
+  return {
+    tenantId: ctx.tenantId,
+    runId: ctx.runId,
+    ...(ctx.spaceId !== undefined ? { spaceId: ctx.spaceId } : {}),
+    ...(ctx.job.rootTrigger !== undefined ? { rootTrigger: ctx.job.rootTrigger } : {}),
   };
 }
 
@@ -130,7 +145,7 @@ function scopeOf(scope: RunScope | ExecutorContext): RunScope {
  */
 function callOf(ctx: ExecutorContext): BrowserCall {
   return {
-    ...scopeOf(ctx),
+    ...jobScopeOf(ctx),
     redelivered: ctx.attempt > 1,
     stepExecutionId: ctx.stepExecutionId,
     ...(ctx.job.sessionId !== undefined ? { sessionId: ctx.job.sessionId } : {}),
@@ -350,7 +365,7 @@ const close = route(BrowserPageCloseInputSchema, async (call, driver, { pageId }
 
 const listProfiles = route(BrowserProfileListInputSchema, async (call, driver) => {
   const output: Output<typeof BrowserProfileListOutputSchema> = {
-    profiles: (await driver.listProfiles(call.spaceId)).map((profile) => ({
+    profiles: (await driver.listProfiles(scopeOf(call))).map((profile) => ({
       ...profile,
       ...(profile.sites !== undefined ? { sites: [...profile.sites] } : {}),
     })),
@@ -485,7 +500,7 @@ export function createBrowserHandler(driver: BrowserDriver): StepHandler {
         await ctx.readPayload(ctx.job.inputRef),
       );
       if (!parsed.success) return undefined;
-      const waitMs = await driver.handoffWaitLimitMs(scopeOf(ctx), parsed.data.pageId);
+      const waitMs = await driver.handoffWaitLimitMs(jobScopeOf(ctx), parsed.data.pageId);
       return waitMs === undefined ? undefined : waitMs + BROWSER_HANDOFF_OUTER_MARGIN_MS;
     },
     async execute(ctx: ExecutorContext): Promise<StepResult> {

@@ -668,7 +668,7 @@ describe('the idle task', () => {
     expect(h.stops).toHaveLength(1);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(h.proxies[0]?.stopped).toBe(true);
-    expect((await h.driver.listProfiles('space-1'))[0]).toMatchObject({
+    expect((await h.driver.listProfiles(RUN_A))[0]).toMatchObject({
       running: false,
       sitesUnknown: 'stopped',
     });
@@ -817,11 +817,13 @@ describe('browser.profile.list', () => {
     const h = harness({
       browsers: [profile(), profile({ id: 'work', spaces: ['space-2'], posture: 'read-only' })],
     });
-    expect(await h.driver.listProfiles('space-1')).toEqual([
+    expect(await h.driver.listProfiles(RUN_A)).toEqual([
       {
         profileId: 'default',
         posture: 'autonomous',
         window: 'hidden',
+        unattended: true,
+        openToThisRun: true,
         running: false,
         sitesUnknown: 'not_started',
       },
@@ -834,16 +836,23 @@ describe('browser.profile.list', () => {
       profileId: 'default',
       url: 'https://example.com/',
     });
-    expect(await h.driver.listProfiles('space-1')).toEqual([
+    expect(await h.driver.listProfiles(RUN_A)).toEqual([
       {
         profileId: 'default',
         posture: 'autonomous',
         window: 'hidden',
+        unattended: true,
+        openToThisRun: true,
         running: true,
         sites: ['accounts.example.com', 'mail.example.com'],
       },
     ]);
-    expect((await h.driver.listProfiles('space-2')).map((p) => [p.profileId, p.running])).toEqual([
+    expect(
+      (await h.driver.listProfiles({ ...RUN_A, spaceId: 'space-2' })).map((p) => [
+        p.profileId,
+        p.running,
+      ]),
+    ).toEqual([
       ['default', true],
       ['work', false],
     ]);

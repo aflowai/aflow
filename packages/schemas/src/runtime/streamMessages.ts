@@ -14,6 +14,7 @@ import {
   MessageVersionSchema,
 } from './ids.js';
 import { SessionAgentTargetSchema } from './agentTarget.js';
+import { RunTriggerSchema } from './runTrigger.js';
 import { StepTypeSchema, type StepType } from '../artifact/operationDefinition.js';
 import { PayloadRefSchema } from './payloadRef.js';
 import { StepExecutionTerminalStatusSchema, StepUsageBreakdownSchema } from './events.js';
@@ -549,6 +550,14 @@ export const StepJobMessageSchema = z
     callerModel: z.string().max(128).optional(),
 
     /**
+     * What started the root of this step's run, read from the run's state when
+     * the step is scheduled — never from the step's input, which the agent
+     * writes. Absent when nothing recorded one, which `isAttendedRun` reads as
+     * nobody.
+     */
+    rootTrigger: RunTriggerSchema.optional(),
+
+    /**
      * Where this step sits in the sequence its agent decided on. Present only
      * for tool steps lowered from an agent turn; a workflow operation task has
      * no turn to be indexed within, and anything reading this must fall back
@@ -722,6 +731,13 @@ export const TimerItemSchema = z
     spaceId: z.string().uuid().optional(),
 
     /**
+     * A workflow task's root trigger, for the job this timer dispatches: a task
+     * has no session state to read it from when the timer fires. A session's
+     * timer reads its session instead.
+     */
+    rootTrigger: RunTriggerSchema.optional(),
+
+    /**
      * What an `executor_wait` timer dispatches, whole, since when it has
      * waited, and how many of its looks it has taken. The job is carried
      * rather than rebuilt from the fields above because a dispatch carries
@@ -835,7 +851,7 @@ export const StartRunCommandSchema = z.object({
   /** Space that this run belongs to (immutable after creation) */
   spaceId: z.string().uuid().optional(),
   /** How this run was triggered — surfaces in agent FlowRunContext */
-  trigger: z.enum(['chat', 'api', 'eval', 'mcp', 'schedule', 'voice', 'webhook']).optional(),
+  trigger: RunTriggerSchema.optional(),
   /** Whether the user is interacting via voice — mutable, can change on resume */
   voiceMode: z.boolean().optional(),
   clientMessageId: ClientMessageIdSchema.optional(),

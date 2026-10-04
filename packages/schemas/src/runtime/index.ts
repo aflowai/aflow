@@ -18,6 +18,7 @@ export * from './errorMessageDisplay.js';
 export * from './eventEnvelope.js';
 export * from './events.js';
 export * from './apiEvents.js';
+export * from './runTrigger.js';
 export * from './streamMessages.js';
 export * from './harnessActivity.js';
 export * from './runtimeState.js';

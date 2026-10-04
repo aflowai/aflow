@@ -713,6 +713,7 @@ export function createScheduleStep(bindings: SessionOrchestratorBindings) {
           credentialOwnerId: runState?.createdBy,
           spaceId: context.spaceId ?? runState?.spaceId,
           ...(callerModel !== undefined ? { callerModel } : {}),
+          ...(runState?.rootTrigger !== undefined ? { rootTrigger: runState.rootTrigger } : {}),
           // Stamped at dispatch, where the generation's calls are known as a
           // set. An executor answering one of them can only see the peers that
           // have already committed, so anything it counted for itself would be

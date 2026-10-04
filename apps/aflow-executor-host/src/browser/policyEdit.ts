@@ -83,6 +83,22 @@ export function withPosture(
   return editProfile(policy, implied, profileId, (entry) => ({ ...entry, posture: posture.data }));
 }
 
+/** `allow` or `refuse`, as `aflow browser unattended` takes it, into the profile's `unattended`. */
+export function withUnattended(
+  policy: RawPolicy,
+  implied: readonly BrowserProfile[],
+  profileId: string,
+  requested: string,
+): RawPolicy {
+  const unattended = requested === 'allow' ? true : requested === 'refuse' ? false : undefined;
+  if (unattended === undefined) {
+    throw new PolicyEditError(
+      `'${requested}' says nothing about runs nobody started. Choose allow or refuse.`,
+    );
+  }
+  return editProfile(policy, implied, profileId, (entry) => ({ ...entry, unattended }));
+}
+
 function rulesOf(entry: Entry): BrowserOriginRule[] {
   return Array.isArray(entry['rules']) ? (entry['rules'] as BrowserOriginRule[]) : [];
 }

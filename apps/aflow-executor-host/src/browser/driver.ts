@@ -36,7 +36,9 @@ import {
   type BrowserPolicy,
   chromeExecutable,
   listedIds,
+  profileOpenToRunStart,
   profileOpenToSpace,
+  profileServesRun,
   resolveProfile,
 } from './profiles.js';
 import {
@@ -520,8 +522,8 @@ export class BrowserDriver {
   }
 
   /**
-   * The run's open pages in profiles its space may still use. A page in one it
-   * may not is refused by every operation but close, so it is not offered.
+   * The run's open pages in profiles it may still use. A page in one it may
+   * not is refused by every operation but close, so it is not offered.
    * Listing touches none of them.
    */
   async list(scope: RunScope): Promise<ListedPage[]> {
@@ -529,7 +531,7 @@ export class BrowserDriver {
     const pages = this.pages.list(scope).filter((held) => {
       if (this.ephemeral.has(held.profileId)) return true;
       const profile = policy.browsers.get(held.profileId);
-      return profile !== undefined && profileOpenToSpace(profile, scope.spaceId);
+      return profile !== undefined && profileServesRun(profile, scope);
     });
     return await Promise.all(
       pages.map(async (held) => ({
@@ -553,15 +555,25 @@ export class BrowserDriver {
     return 'closed';
   }
 
-  /** The profiles a space may use. Never starts a browser to answer. */
-  async listProfiles(spaceId: string | undefined): Promise<ListedProfile[]> {
+  /**
+   * The profiles the run's space may use, those closed to this run among them
+   * and marked so: a run told nothing of a profile it cannot use would go
+   * looking for one. Never starts a browser to answer.
+   */
+  async listProfiles(scope: RunScope): Promise<ListedProfile[]> {
     const policy = await this.deps.loadPolicy();
     const open = [...policy.browsers.values()].filter((profile) =>
-      profileOpenToSpace(profile, spaceId),
+      profileOpenToSpace(profile, scope.spaceId),
     );
     return await Promise.all(
       open.map(async (profile): Promise<ListedProfile> => {
-        const base = { profileId: profile.id, posture: profile.posture, window: profile.window };
+        const base = {
+          profileId: profile.id,
+          posture: profile.posture,
+          window: profile.window,
+          unattended: profile.unattended,
+          openToThisRun: profileOpenToRunStart(profile, scope.rootTrigger),
+        };
         const running = this.browsers.get(profile.id);
         if (running === undefined) {
           return {
@@ -977,9 +989,7 @@ export class BrowserDriver {
 
   /** A run's own ephemeral profile, or the machine's profile as the run's space may use it. */
   private profileFor(policy: BrowserPolicy, profileId: string, scope: RunScope): BrowserProfile {
-    return (
-      this.ephemeral.resolve(profileId, scope) ?? resolveProfile(policy, profileId, scope.spaceId)
-    );
+    return this.ephemeral.resolve(profileId, scope) ?? resolveProfile(policy, profileId, scope);
   }
 
   /** The policy, with the generation it is current for. */

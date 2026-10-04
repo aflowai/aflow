@@ -8,6 +8,8 @@
  */
 import { randomBytes } from 'node:crypto';
 
+import type { RunTrigger } from '@aflow/schemas';
+
 import { BrowserDriverError } from './errors.js';
 import { type PageObservations, redactUrl } from './observations.js';
 import type { EnginePage, PageSnapshot } from './types.js';
@@ -21,8 +23,12 @@ export interface HeldPage {
   readonly pageId: string;
   readonly ownerKey: string;
   readonly profileId: string;
-  /** The opening run's space: the page stays open only while its profile serves it. */
+  /**
+   * The opening run's space and root trigger: the page stays open only while
+   * its profile serves both.
+   */
   readonly spaceId: string | undefined;
+  readonly rootTrigger: RunTrigger | undefined;
   readonly page: EnginePage;
   readonly observations: PageObservations;
   /** The address the open asked for, as a URL spells it. */
@@ -116,7 +122,7 @@ export class PageTable {
   private readonly gone = new Map<string, Map<string, GonePage>>();
 
   add(
-    owner: PageOwner & { readonly spaceId?: string },
+    owner: PageOwner & { readonly spaceId?: string; readonly rootTrigger?: RunTrigger },
     profileId: string,
     requestedUrl: string,
     page: EnginePage,
@@ -131,6 +137,7 @@ export class PageTable {
       ownerKey: key,
       profileId,
       spaceId: owner.spaceId,
+      rootTrigger: owner.rootTrigger,
       requestedUrl,
       askedUrl: requestedUrl,
       page,

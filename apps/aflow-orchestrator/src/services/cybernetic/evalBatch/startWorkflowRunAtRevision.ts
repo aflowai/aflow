@@ -273,6 +273,7 @@ export async function startWorkflowRunAtRevision(
       endedAt: now.getTime(),
       spaceId: runSpaceId,
       trigger: 'eval',
+      rootTrigger: 'eval',
       grantJson: serializeRunAccessGrant(trialGrant),
       createdBy: params.credentialOwnerId,
       lastUpdatedAt: now.getTime(),

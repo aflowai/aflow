@@ -14,6 +14,7 @@ import type {
   SessionAgentTarget,
   SimulationRunInput,
   StepImage,
+  RunTrigger,
 } from '@aflow/schemas';
 
 // ============================================================================
@@ -107,7 +108,7 @@ export interface SessionOrchestrator {
     /** Space this run belongs to (immutable) */
     spaceId?: string;
     /** How this run was triggered */
-    trigger?: 'chat' | 'api' | 'eval' | 'mcp' | 'schedule' | 'voice' | 'webhook';
+    trigger?: RunTrigger;
     /** Whether the user is interacting via voice */
     voiceMode?: boolean;
     actorContext?: ActorContext;

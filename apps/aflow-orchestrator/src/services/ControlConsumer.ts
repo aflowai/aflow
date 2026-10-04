@@ -47,6 +47,7 @@ import {
 import { classifyOrchestratorError } from '../lib/errorClassifier.js';
 import { getOrchestratorLogger } from '../lib/orchestratorLogger.js';
 import { getClearedDelegationStatePatch } from './SessionOrchestrator/helpers/delegationState.js';
+import { rootTriggerAtStart } from './SessionOrchestrator/helpers/rootTrigger.js';
 import {
   enqueuePendingAndReconcile,
   isDelegationUpsertFailure,
@@ -330,6 +331,10 @@ export function createControlConsumer(
         (message.type === 'start_run' ? message.createdBy : undefined) ?? existingState?.createdBy;
       const trigger =
         (message.type === 'start_run' ? message.trigger : undefined) ?? existingState?.trigger;
+      const rootTrigger = rootTriggerAtStart(
+        existingState,
+        message.type === 'start_run' ? message.trigger : undefined,
+      );
 
       // Encode classified (safe) error message — not the raw internal one
       const safeErrorPayload = JSON.stringify({
@@ -353,6 +358,7 @@ export function createControlConsumer(
         ...(spaceId ? { spaceId } : {}),
         ...(createdBy ? { createdBy } : {}),
         ...(trigger ? { trigger } : {}),
+        ...(rootTrigger ? { rootTrigger } : {}),
         // Preserve step tracking fields (critical for retryRun to know which step to retry)
         ...(existingState?.currentStepId ? { currentStepId: existingState.currentStepId } : {}),
         ...(existingState?.currentStepExecutionId

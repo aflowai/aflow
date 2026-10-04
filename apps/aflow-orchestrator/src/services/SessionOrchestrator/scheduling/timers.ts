@@ -771,6 +771,9 @@ export function createProcessDueTimers(bindings: SessionOrchestratorBindings) {
             scheduledAtMs: Date.now(),
             credentialOwnerId: timerRunState?.createdBy,
             spaceId: timerRunState?.spaceId,
+            ...(timerRunState?.rootTrigger !== undefined
+              ? { rootTrigger: timerRunState.rootTrigger }
+              : {}),
           };
           await dispatchOrWaitOnExecutor(redis, job);
         } catch (error) {

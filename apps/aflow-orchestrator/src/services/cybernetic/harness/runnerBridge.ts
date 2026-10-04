@@ -135,6 +135,7 @@ export async function spawnRunnerSession(
     ...(authority.credentialOwnerId ? { createdBy: authority.credentialOwnerId } : {}),
     ...(authority.actorContextJson ? { actorContextJson: authority.actorContextJson } : {}),
     ...(authority.grantJson !== undefined ? { grantJson: authority.grantJson } : {}),
+    ...(authority.rootTrigger !== undefined ? { rootTrigger: authority.rootTrigger } : {}),
     ...(helmsmanState?.spaceContextJson
       ? {
           spaceContextJson: helmsmanState.spaceContextJson,

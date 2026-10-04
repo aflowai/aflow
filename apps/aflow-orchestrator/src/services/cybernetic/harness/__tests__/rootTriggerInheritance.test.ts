@@ -1,0 +1,207 @@
+/**
+ * A workflow a conversation started with workflow.run.start runs its tasks as
+ * that conversation's: each Runner session is queued holding the anchor's root
+ * trigger, and each operation task's job carries it — through a timer too,
+ * which has no session to read it from. The same skill started by a schedule
+ * carries the schedule.
+ */
+import type { SessionHotState } from '@aflow/redis';
+import type {
+  PayloadRef,
+  RunTrigger,
+  SessionId,
+  TenantId,
+  TimerItem,
+  TraceId,
+} from '@aflow/schemas';
+import { SNOOZE_OPERATION_ID } from '@aflow/schemas';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const mockGetSessionState = vi.fn();
+const mockSetSessionState = vi.fn();
+const mockAddControlMessage = vi.fn();
+const mockAddStepJob = vi.fn();
+const mockScheduleShardTimer = vi.fn();
+
+vi.mock('@aflow/redis', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  getSessionState: (...args: unknown[]) => mockGetSessionState(...args),
+  setSessionState: (...args: unknown[]) => mockSetSessionState(...args),
+  addControlMessage: (...args: unknown[]) => mockAddControlMessage(...args),
+  addStepJob: (...args: unknown[]) => mockAddStepJob(...args),
+  scheduleShardTimer: (...args: unknown[]) => mockScheduleShardTimer(...args),
+  appendSessionEvent: vi.fn(async () => undefined),
+  markSessionDirty: vi.fn(async () => undefined),
+}));
+
+vi.mock('@aflow/database', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  withTenantSchema: vi.fn(async () => []),
+}));
+
+vi.mock('../helpers.js', () => ({
+  readDurableSessionCreatedBy: vi.fn(async () => undefined),
+}));
+
+vi.mock('../dispatch.js', () => ({ onWorkflowTaskComplete: vi.fn() }));
+vi.mock('../validateRunnerOutputContract.js', () => ({
+  validateRunnerOutputContractAtHarness: vi.fn(),
+}));
+
+const { spawnRunnerSession } = await import('../runnerBridge.js');
+const { resolveWorkflowTaskAuthority } = await import('../taskAuthority.js');
+const { dispatchClaimedOperationTask } = await import('../operationTaskDispatch.js');
+const { buildWorkflowTimerStepJob } =
+  await import('../../../SessionOrchestrator/scheduling/workflowTimerJob.js');
+
+const TENANT = 'a0000000-0000-0000-0000-0000000000e1' as TenantId;
+const SPACE = '00000000-0000-0000-0000-0000000000e2';
+const ANCHOR = '00000000-0000-0000-0000-0000000000e3' as SessionId;
+const WORKER = '00000000-0000-0000-0000-0000000000e4' as SessionId;
+const RUN_ID = '00000000-0000-0000-0000-0000000000e5';
+const INPUT = `inline:${Buffer.from('{}').toString('base64')}` as PayloadRef;
+
+const deps = { redis: {} as never, db: {} as never, payloadStore: {} as never };
+
+function anchor(state: Partial<SessionHotState> | null): void {
+  mockGetSessionState.mockResolvedValue(
+    state === null ? null : { sessionId: ANCHOR, status: 'RUNNING', spaceId: SPACE, ...state },
+  );
+}
+
+async function runnerRootTrigger(): Promise<RunTrigger | undefined> {
+  await spawnRunnerSession(deps, {
+    tenantId: TENANT,
+    spaceId: SPACE,
+    workerSessionId: WORKER,
+    helmsmanSessionId: ANCHOR,
+    workflowExecution: { runId: RUN_ID, taskId: 'research', attempt: 1 },
+    inputRef: INPUT,
+    agentDefinitionRef: 'cybernetic-runner',
+    traceId: 'trace-w' as TraceId,
+  } as never);
+  const queued = mockSetSessionState.mock.calls[0]?.[1] as SessionHotState;
+  expect(queued.sessionId).toBe(WORKER);
+  expect(mockAddControlMessage.mock.calls[0]?.[1]).not.toHaveProperty('trigger');
+  return queued.rootTrigger;
+}
+
+async function operationJobRootTrigger(operationId: string): Promise<RunTrigger | undefined> {
+  const authority = await resolveWorkflowTaskAuthority(
+    deps.redis,
+    deps.db,
+    TENANT,
+    ANCHOR,
+    await mockGetSessionState(),
+    WORKER,
+  );
+  await dispatchClaimedOperationTask(deps, {
+    tenantId: TENANT,
+    runId: RUN_ID,
+    taskId: 'read-inbox',
+    attempt: 1,
+    dispatchAttemptToken: `dispatch:${RUN_ID}:read-inbox:1`,
+    operationId,
+    workerSessionId: WORKER,
+    inputRef: INPUT,
+    traceId: 'trace-w' as TraceId,
+    spaceId: SPACE,
+    snoozeDelayMs: 0,
+    ...(authority.rootTrigger !== undefined ? { rootTrigger: authority.rootTrigger } : {}),
+  });
+  const job = mockAddStepJob.mock.calls[0]?.[1] as Record<string, unknown>;
+  expect(job['operationId']).toBe(operationId);
+  return job['rootTrigger'] as RunTrigger | undefined;
+}
+
+beforeEach(() => {
+  mockGetSessionState.mockReset();
+  mockSetSessionState.mockReset().mockResolvedValue(undefined);
+  mockAddControlMessage.mockReset().mockResolvedValue(undefined);
+  mockAddStepJob.mockReset().mockResolvedValue('1-0');
+  mockScheduleShardTimer.mockReset().mockResolvedValue(undefined);
+});
+
+describe('a workflow run started from a conversation', () => {
+  it('queues its Runner as the conversation’s', async () => {
+    anchor({ trigger: 'chat', rootTrigger: 'chat' });
+    expect(await runnerRootTrigger()).toBe('chat');
+  });
+
+  it('stamps its operation tasks’ jobs as the conversation’s', async () => {
+    anchor({ trigger: 'voice', rootTrigger: 'voice' });
+    expect(await operationJobRootTrigger('browser.page.open')).toBe('voice');
+  });
+
+  it('keeps a conversation that was itself delegated to as its root’s', async () => {
+    anchor({ rootTrigger: 'chat' });
+    expect(await runnerRootTrigger()).toBe('chat');
+  });
+});
+
+describe('the same workflow started by a schedule', () => {
+  it('queues its Runner as the schedule’s', async () => {
+    anchor({ trigger: 'schedule', rootTrigger: 'schedule' });
+    expect(await runnerRootTrigger()).toBe('schedule');
+  });
+
+  it('stamps its operation tasks’ jobs as the schedule’s', async () => {
+    anchor({ trigger: 'schedule', rootTrigger: 'schedule' });
+    expect(await operationJobRootTrigger('browser.page.open')).toBe('schedule');
+  });
+});
+
+describe('an anchor whose state is gone', () => {
+  it('gives its tasks no root trigger, which reads as nobody', async () => {
+    anchor(null);
+    expect(await runnerRootTrigger()).toBeUndefined();
+    expect(await operationJobRootTrigger('browser.page.open')).toBeUndefined();
+  });
+});
+
+describe('a workflow task’s timer', () => {
+  const timer = {
+    tenantId: TENANT,
+    stepExecutionId: WORKER,
+    stepId: 'read-inbox',
+    operationId: 'browser.page.read',
+    stepType: 'browser',
+    reason: 'delayed_start',
+    attempt: 1,
+    inputRef: INPUT,
+    traceId: 'trace-w',
+    dueAtMs: 1,
+    spaceId: SPACE,
+  } as unknown as TimerItem;
+  const execution = {
+    runId: RUN_ID,
+    taskId: 'read-inbox',
+    attempt: 1,
+    dispatchAttemptToken: 'poll-1',
+  };
+
+  it('dispatches its job with the root trigger the timer was armed with', () => {
+    expect(
+      buildWorkflowTimerStepJob({ ...timer, rootTrigger: 'chat' }, execution, 2).rootTrigger,
+    ).toBe('chat');
+    expect(buildWorkflowTimerStepJob(timer, execution, 2)).not.toHaveProperty('rootTrigger');
+  });
+
+  it('is armed with the root trigger by a snoozed task', async () => {
+    await dispatchClaimedOperationTask(deps, {
+      tenantId: TENANT,
+      runId: RUN_ID,
+      taskId: 'wait',
+      attempt: 1,
+      dispatchAttemptToken: 'snooze-1',
+      operationId: SNOOZE_OPERATION_ID,
+      workerSessionId: WORKER,
+      inputRef: INPUT,
+      traceId: 'trace-w' as TraceId,
+      spaceId: SPACE,
+      snoozeDelayMs: 1_000,
+      rootTrigger: 'chat',
+    });
+    expect(mockScheduleShardTimer.mock.calls[0]?.[1]).toMatchObject({ rootTrigger: 'chat' });
+  });
+});
