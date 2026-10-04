@@ -268,3 +268,15 @@ export function testsReaching({ repository, files, candidates, textAtBase, packa
   }
   return [...new Set(candidates)].filter((file) => reaches.has(body(file)));
 }
+
+/**
+ * The repository-shape guards a change answers to. They read the repository's
+ * own files — `.mcp.json`, a root dot-file, a workflow under `.github` — which
+ * no import reaches, so `testsReaching` never selects them; every one of them
+ * runs when a touched file lies outside every workspace, and `outside` names
+ * the files that called them.
+ */
+export function repositoryShapeGuards({ files, workspaceDirs, guards }) {
+  const outside = files.filter((file) => !workspaceDirs.has(file.split('/').slice(0, 2).join('/')));
+  return { outside, guards: outside.length === 0 ? [] : [...guards] };
+}

@@ -8,7 +8,7 @@ import path from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { testsReaching } from './test-selection.mjs';
+import { repositoryShapeGuards, testsReaching } from './test-selection.mjs';
 
 const INDEX = [
   'export * from "./a.js";',
@@ -112,5 +112,33 @@ describe('the tests a change reaches', () => {
 
   it('selects a touched test itself', () => {
     expect(reaching(['apps/app/src/takesB.test.ts'])).toEqual(['apps/app/src/takesB.test.ts']);
+  });
+});
+
+describe('the repository-shape guards a change answers to', () => {
+  const SHAPE_GUARDS = ['packages/schemas/src/edition/mcpRegistration.test.ts'];
+  const shapeGuards = (files) =>
+    repositoryShapeGuards({
+      files,
+      workspaceDirs: new Set(['apps/app', 'packages/p']),
+      guards: SHAPE_GUARDS,
+    });
+
+  it('runs them for a root file no import reaches, naming it', () => {
+    expect(shapeGuards(['.mcp.json', 'packages/p/src/a.ts'])).toEqual({
+      outside: ['.mcp.json'],
+      guards: SHAPE_GUARDS,
+    });
+  });
+
+  it('runs them for a file under a top-level folder that is no workspace', () => {
+    expect(shapeGuards(['.github/workflows/ci.yml']).guards).toEqual(SHAPE_GUARDS);
+  });
+
+  it('runs none for a change inside the workspaces alone', () => {
+    expect(shapeGuards(['packages/p/src/a.ts', 'apps/app/src/helper.ts'])).toEqual({
+      outside: [],
+      guards: [],
+    });
   });
 });

@@ -68,6 +68,8 @@ scripts/verify-commit.mjs`), and Local Publish runs it after the commit and befo
    touched package whose imports reach a touched file, so a contract change meets its
    consumers before the push — such a package built first, such an application's build
    reported skipped by name — the catalog guards when `platform-artifacts` is touched and never a `*.pg.test.ts`;
+   for a touched file outside every workspace, which no test imports, the repository-shape
+   guards under `packages/schemas/src/edition`, reported as run for that file by name;
    on macOS, where the sandbox gives a test no loopback, less the tests tagged `listener`,
    each named as skipped with one line saying CI runs them, their count carried in the
    check's receipt; ESLint,
