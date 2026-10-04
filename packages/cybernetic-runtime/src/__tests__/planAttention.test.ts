@@ -2,7 +2,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import Redis from 'ioredis-mock';
 import type { Redis as RedisType } from 'ioredis';
 import { configureLogging } from '@aflow/observability';
-import type { PlanNodeCreateInput } from '@aflow/schemas';
+import { PLAN_TREE_DEPTH_LIMIT, type PlanNodeCreateInput } from '@aflow/schemas';
 import { InMemoryPlanNodeStore } from './planStoreFake.js';
 
 const fakeStore = { current: new InMemoryPlanNodeStore() };
@@ -182,6 +182,27 @@ describe('the plan section of the attention block', () => {
     expect(tree?.total).toBe(PLAN_ATTENTION_NODE_LIMIT + extra);
     expect(await turnAttention()).toContain(
       `   ... and ${String(extra)} more — use \`plan.node.list\``,
+    );
+  });
+
+  it('says there are more than it counted when the walk stopped at a bound', async () => {
+    // No create or move leaves a node this deep; the walk stops at the depth bound regardless.
+    let parent = fakeStore.current.seed(SPACE, { title: 'level 0' });
+    for (let depth = 1; depth <= PLAN_TREE_DEPTH_LIMIT + 1; depth++) {
+      parent = fakeStore.current.seed(SPACE, {
+        parentId: parent.nodeId,
+        title: `level ${String(depth)}`,
+      });
+    }
+
+    const tree = await loadActivePlanTree(fakeStore.current, SPACE);
+    expect(tree).toMatchObject({
+      total: PLAN_TREE_DEPTH_LIMIT + 1,
+      truncated: { bound: 'depth', value: PLAN_TREE_DEPTH_LIMIT },
+    });
+    const counted = PLAN_TREE_DEPTH_LIMIT + 1 - PLAN_ATTENTION_NODE_LIMIT;
+    expect(await turnAttention()).toContain(
+      `   ... and more than ${String(counted)} more — use \`plan.node.list\``,
     );
   });
 });

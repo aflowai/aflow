@@ -115,6 +115,28 @@ describe('plan.node.update', () => {
     });
   });
 
+  it('surfaces an update that changes nothing as a non-retryable validation error carrying the node', async () => {
+    mockUpdatePlanNode.mockResolvedValue({
+      ok: false,
+      code: 'PLAN_NODE_UNCHANGED',
+      message: 'Plan node already stands as this update would leave it, so nothing was written.',
+      details: { node: NODE },
+    });
+
+    await handlePlanNodeInline(
+      makeArgs('plan.node.update', { nodeId: NODE_ID, expectedRevision: 2, note: NODE.note }),
+    );
+
+    const msg = emitted();
+    expect(msg['status']).toBe('FAILED');
+    expect(msg['error']).toMatchObject({
+      code: 'PLAN_NODE_UNCHANGED',
+      classification: 'validation',
+      retryable: false,
+      details: { node: { revision: NODE.revision } },
+    });
+  });
+
   it('surfaces an unknown node as a validation error', async () => {
     mockUpdatePlanNode.mockResolvedValue({
       ok: false,

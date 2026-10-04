@@ -46,6 +46,10 @@ export const PlanNodeStaleErrorDetailsSchema = z
   .strict();
 export type PlanNodeStaleErrorDetails = z.infer<typeof PlanNodeStaleErrorDetailsSchema>;
 
+/** `error.details` for `PLAN_NODE_UNCHANGED`: the node, already as the update would leave it. */
+export const PlanNodeUnchangedErrorDetailsSchema = z.object({ node: PlanNodeSchema }).strict();
+export type PlanNodeUnchangedErrorDetails = z.infer<typeof PlanNodeUnchangedErrorDetailsSchema>;
+
 // ============================================================================
 // plan.node.get / plan.node.list
 // ============================================================================

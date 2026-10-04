@@ -835,7 +835,9 @@ export function renderAttentionContext(attention: HelmsmanAttentionContext): str
     }
     const more = attention.activePlan.total - attention.activePlan.nodes.length;
     if (more > 0) {
-      lines.push(`   ... and ${String(more)} more — use \`plan.node.list\``);
+      const count =
+        attention.activePlan.truncated !== undefined ? `more than ${String(more)}` : String(more);
+      lines.push(`   ... and ${count} more — use \`plan.node.list\``);
     }
     lines.push('');
   }

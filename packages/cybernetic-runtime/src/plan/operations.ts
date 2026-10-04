@@ -19,6 +19,8 @@ import {
   type PlanNodeListInput,
   type PlanNodeListOutput,
   type PlanNodeStaleErrorDetails,
+  type PlanNodeStatus,
+  type PlanNodeUnchangedErrorDetails,
   type PlanNodeUpdateInput,
 } from '@aflow/schemas';
 import { bumpAttentionGeneration } from '../attentionCache.js';
@@ -32,7 +34,12 @@ export const PLAN_TREE_WALK_BOUNDS: PlanTreeWalkBounds = {
 };
 
 export type PlanOpErrorCode =
-  'PLAN_NODE_NOT_FOUND' | 'PLAN_NODE_STALE' | 'PLAN_NODE_CYCLE' | 'PLAN_NODE_TOO_DEEP';
+  | 'PLAN_NODE_NOT_FOUND'
+  | 'PLAN_NODE_STALE'
+  | 'PLAN_NODE_CYCLE'
+  | 'PLAN_NODE_TOO_DEEP'
+  | 'PLAN_NODE_OPEN_HAS_NO_OUTCOME'
+  | 'PLAN_NODE_UNCHANGED';
 
 export interface PlanOpError {
   ok: false;
@@ -73,6 +80,32 @@ function stale(current: PlanNode, expectedRevision: number): PlanOpError {
       `Plan node "${current.title}" is at revision ${String(current.revision)}; this update was decided against revision ` +
       `${String(expectedRevision)}, so nothing was written. Its current state is in error.details.node — reconcile ` +
       `with it and update against revision ${String(current.revision)}.`,
+    details: details as unknown as Record<string, unknown>,
+  };
+}
+
+function openHasNoOutcome(current: PlanNode, status: PlanNodeStatus): PlanOpError {
+  const stands =
+    status === current.status ? `is ${status}` : `would be ${status} after this update`;
+  return {
+    ok: false,
+    code: 'PLAN_NODE_OPEN_HAS_NO_OUTCOME',
+    message:
+      `Plan node "${current.title}" ${stands}, and an open node has no outcome, so nothing was written. ` +
+      'Pass `outcome` in the update that sets status "done" or "dropped", or put what you found in the note.',
+    details: { nodeId: current.nodeId, status },
+  };
+}
+
+function unchanged(current: PlanNode): PlanOpError {
+  const details: PlanNodeUnchangedErrorDetails = { node: current };
+  return {
+    ok: false,
+    code: 'PLAN_NODE_UNCHANGED',
+    message:
+      `Plan node "${current.title}" already stands as this update would leave it, so nothing was written ` +
+      `and it stays at revision ${String(current.revision)}. Its current state is in error.details.node; ` +
+      'an update names at least one field whose value differs from it.',
     details: details as unknown as Record<string, unknown>,
   };
 }
@@ -138,6 +171,26 @@ function reopenedNote(
   return rest === null ? kept : `${kept}\n${rest}`;
 }
 
+/** A patch column against the node's: absent is null, and a time compares as its ISO string. */
+function sameColumn(patched: unknown, held: unknown): boolean {
+  const stored = (value: unknown) =>
+    value instanceof Date ? value.toISOString() : (value ?? null);
+  return stored(patched) === stored(held);
+}
+
+function changesNothing(
+  current: PlanNode,
+  patch: PlanNodePatch,
+  parentId: string | null | undefined,
+): boolean {
+  return (
+    (parentId === undefined || parentId === current.parentId) &&
+    Object.entries(patch).every(([column, value]) =>
+      sameColumn(value, current[column as keyof PlanNodePatch]),
+    )
+  );
+}
+
 async function written<T>(ctx: PlanWriteContext, value: T): Promise<T> {
   await bumpAttentionGeneration(ctx.redis, ctx.tenantId, ctx.spaceId);
   return value;
@@ -181,6 +234,12 @@ export async function updatePlanNode(
   const current = await ctx.store.find(ctx.spaceId, input.nodeId);
   if (!current) return notFound(input.nodeId);
   if (current.revision !== input.expectedRevision) return stale(current, input.expectedRevision);
+  // The refusals below judge `current`, and the write lands only on its
+  // revision: a node changed since this read is refused as stale instead.
+  const status = input.status ?? current.status;
+  if (input.outcome !== undefined && !isClosedPlanNodeStatus(status)) {
+    return openHasNoOutcome(current, status);
+  }
 
   const patch: PlanNodePatch = {};
   if (input.title !== undefined) patch.title = input.title;
@@ -202,6 +261,7 @@ export async function updatePlanNode(
   }
 
   const parentId = input.parentId;
+  if (changesNothing(current, patch, parentId)) return unchanged(current);
   let node: PlanNode | null;
   if (parentId !== undefined && parentId !== current.parentId) {
     const move = await ctx.store.moveAtRevision(

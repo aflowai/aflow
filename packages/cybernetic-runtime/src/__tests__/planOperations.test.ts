@@ -9,6 +9,7 @@ import {
   type PlanNode,
   type PlanNodeCreateInput,
   type PlanNodeStaleErrorDetails,
+  type PlanNodeUnchangedErrorDetails,
 } from '@aflow/schemas';
 import {
   createPlanNode,
@@ -409,6 +410,186 @@ describe('updatePlanNode — reopening a closed node', () => {
     });
     expect(dropped).toMatchObject({ ok: true, node: { outcome: OUTCOME } });
     expect(dropped.ok && dropped.node).not.toHaveProperty('note');
+  });
+});
+
+describe('updatePlanNode — only a closed node has an outcome', () => {
+  const OUTCOME = 'Two clean machines reached a serving space.';
+
+  it('refuses an outcome alone on an open node, by name, and writes nothing', async () => {
+    const node = await created();
+    const refused = await updatePlanNode(session('session-a'), {
+      nodeId: node.nodeId,
+      expectedRevision: 1,
+      outcome: OUTCOME,
+    });
+
+    expect(refused).toMatchObject({
+      ok: false,
+      code: 'PLAN_NODE_OPEN_HAS_NO_OUTCOME',
+      details: { nodeId: node.nodeId, status: 'active' },
+    });
+    expect(!refused.ok && refused.message).toContain(
+      `Plan node "${node.title}" is active, and an open node has no outcome, so nothing was written.`,
+    );
+    expect(store.nodes.get(node.nodeId)).toMatchObject({ revision: 1 });
+    expect(store.nodes.get(node.nodeId)).not.toHaveProperty('outcome');
+  });
+
+  it('refuses an outcome beside a reopening status the request schema never saw', async () => {
+    const node = await created();
+    const done = await updatePlanNode(session('session-a'), {
+      nodeId: node.nodeId,
+      expectedRevision: 1,
+      status: 'done',
+      outcome: OUTCOME,
+    });
+    if (!done.ok) throw new Error(done.message);
+
+    const refused = await updatePlanNode(session('session-a'), {
+      nodeId: node.nodeId,
+      expectedRevision: done.node.revision,
+      status: 'waiting',
+      outcome: 'A second outcome.',
+    });
+    expect(refused).toMatchObject({ ok: false, code: 'PLAN_NODE_OPEN_HAS_NO_OUTCOME' });
+    expect(!refused.ok && refused.message).toContain('would be waiting after this update');
+    expect(store.nodes.get(node.nodeId)).toMatchObject({ status: 'done', outcome: OUTCOME });
+  });
+
+  it('refuses as stale an outcome decided on a closed node that reopens before the write', async () => {
+    const node = await created();
+    const done = await updatePlanNode(session('session-a'), {
+      nodeId: node.nodeId,
+      expectedRevision: 1,
+      status: 'done',
+      outcome: OUTCOME,
+    });
+    if (!done.ok) throw new Error(done.message);
+
+    const realFind = store.find;
+    let interleaved = false;
+    store.find = async (spaceId, nodeId) => {
+      const read = await realFind(spaceId, nodeId);
+      if (!interleaved) {
+        interleaved = true;
+        await store.updateAtRevision(spaceId, nodeId, done.node.revision, {
+          status: 'active',
+          outcome: null,
+          closedAt: null,
+        });
+      }
+      return read;
+    };
+
+    const result = await updatePlanNode(session('session-a'), {
+      nodeId: node.nodeId,
+      expectedRevision: done.node.revision,
+      outcome: 'Met on a third machine as well.',
+    });
+
+    expect(result).toMatchObject({ ok: false, code: 'PLAN_NODE_STALE' });
+    expect(store.nodes.get(node.nodeId)).toMatchObject({ status: 'active' });
+    expect(store.nodes.get(node.nodeId)).not.toHaveProperty('outcome');
+  });
+
+  it('rewrites the outcome of a node that stays closed', async () => {
+    const node = await created();
+    const done = await updatePlanNode(session('session-a'), {
+      nodeId: node.nodeId,
+      expectedRevision: 1,
+      status: 'done',
+      outcome: OUTCOME,
+    });
+    if (!done.ok) throw new Error(done.message);
+
+    const rewritten = await updatePlanNode(session('session-a'), {
+      nodeId: node.nodeId,
+      expectedRevision: done.node.revision,
+      outcome: 'Met on a third machine as well.',
+    });
+    expect(rewritten).toMatchObject({
+      ok: true,
+      node: { status: 'done', outcome: 'Met on a third machine as well.', revision: 3 },
+    });
+  });
+});
+
+describe('updatePlanNode — an update that changes nothing is refused', () => {
+  it('refuses every update whose fields equal the node’s, with the node, and bumps nothing', async () => {
+    const parent = await created({ title: 'parent' });
+    const node = await created({ parentId: parent.nodeId, title: 'child', note: 'next: F114' });
+    const noOps = [
+      { note: 'next: F114' },
+      { title: 'child', criteria: node.criteria },
+      { status: 'active' as const },
+      { parentId: parent.nodeId, position: node.position },
+    ];
+
+    for (const fields of noOps) {
+      const read = await getAttentionCache(redis, TENANT, SPACE);
+      await setAttentionCache(redis, TENANT, SPACE, '{"cached":true}', read.generation);
+
+      const refused = await updatePlanNode(session('session-a'), {
+        nodeId: node.nodeId,
+        expectedRevision: node.revision,
+        ...fields,
+      });
+
+      expect(refused, JSON.stringify(fields)).toMatchObject({
+        ok: false,
+        code: 'PLAN_NODE_UNCHANGED',
+        details: { node: { nodeId: node.nodeId, revision: node.revision } },
+      });
+      if (refused.ok) return;
+      const details = refused.details as unknown as PlanNodeUnchangedErrorDetails;
+      expect(details.node).toEqual(store.nodes.get(node.nodeId));
+      expect(refused.message).toContain(
+        `already stands as this update would leave it, so nothing was written and it stays at revision ${String(node.revision)}`,
+      );
+      expect((await getAttentionCache(redis, TENANT, SPACE)).value).toBe('{"cached":true}');
+    }
+    expect(store.nodes.get(node.nodeId)).toMatchObject({ revision: node.revision });
+  });
+
+  it('refuses clearing a note the node does not have, and the same outcome on a closed node', async () => {
+    const node = await created();
+    const clear = await updatePlanNode(session('session-a'), {
+      nodeId: node.nodeId,
+      expectedRevision: 1,
+      note: '',
+    });
+    expect(clear).toMatchObject({ ok: false, code: 'PLAN_NODE_UNCHANGED' });
+
+    const done = await updatePlanNode(session('session-a'), {
+      nodeId: node.nodeId,
+      expectedRevision: 1,
+      status: 'done',
+      outcome: 'Met.',
+    });
+    if (!done.ok) throw new Error(done.message);
+    const again = await updatePlanNode(session('session-a'), {
+      nodeId: node.nodeId,
+      expectedRevision: done.node.revision,
+      status: 'done',
+      outcome: 'Met.',
+    });
+    expect(again).toMatchObject({ ok: false, code: 'PLAN_NODE_UNCHANGED' });
+    expect(store.nodes.get(node.nodeId)).toMatchObject({
+      revision: done.node.revision,
+      closedAt: done.node.closedAt,
+    });
+  });
+
+  it('writes an update that changes any one field, beside others that do not', async () => {
+    const node = await created({ note: 'next: F114' });
+    const result = await updatePlanNode(session('session-a'), {
+      nodeId: node.nodeId,
+      expectedRevision: 1,
+      note: 'next: F114',
+      title: 'Renamed',
+    });
+    expect(result).toMatchObject({ ok: true, node: { title: 'Renamed', revision: 2 } });
   });
 });
 

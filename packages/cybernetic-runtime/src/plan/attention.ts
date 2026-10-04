@@ -1,4 +1,9 @@
-import { OPEN_PLAN_NODE_STATUSES, type PlanNodeKind, type PlanNodeStatus } from '@aflow/schemas';
+import {
+  OPEN_PLAN_NODE_STATUSES,
+  type PlanNodeKind,
+  type PlanNodeListTruncation,
+  type PlanNodeStatus,
+} from '@aflow/schemas';
 import { PLAN_TREE_WALK_BOUNDS } from './operations.js';
 import type { PlanNodeStore } from './store.js';
 import { orderPlanTree } from './tree.js';
@@ -19,8 +24,10 @@ export interface PlanAttentionNode {
 export interface PlanAttention {
   /** Roots first, each followed by its open descendants, siblings by position. */
   nodes: PlanAttentionNode[];
-  /** Every open node reachable from an open root, shown or not. */
+  /** Every open node the walk read from the open roots, shown or not. */
   total: number;
+  /** The bound that stopped the walk: open nodes past `total` exist, uncounted. */
+  truncated?: PlanNodeListTruncation;
 }
 
 /**
@@ -48,5 +55,6 @@ export async function loadActivePlanTree(
       depth,
     })),
     total: tree.length,
+    ...(open.truncated !== undefined ? { truncated: open.truncated } : {}),
   };
 }
