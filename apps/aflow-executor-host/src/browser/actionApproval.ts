@@ -24,7 +24,6 @@ import {
   type BrowserApprovalAskedBy,
   type BrowserApprovalValueSummary,
   type BrowserWriteApprovalRequestPayload,
-  browserApprovalShownPath,
   type PayloadRef,
   stableHash,
   stableStringify,
@@ -74,7 +73,7 @@ export interface ActionAsk {
   readonly pageId: string;
   /** The top page's address as the engine gives it, query and fragment included: hashed, never shown. */
   readonly pageUrl: string;
-  /** The address of the frame the element belongs to, as given: hashed, never shown whole. */
+  /** The address of the frame the element belongs to, as given: hashed, never shown. */
   readonly frameUrl: string;
   /** The origin of that frame. */
   readonly pageOrigin: string;
@@ -251,7 +250,6 @@ export async function clearAction(
     target: 'browser',
     profileId: ask.profileId,
     pageOrigin: ask.pageOrigin,
-    shownPath: browserApprovalShownPath(ask.frameUrl),
     pageTitle: ask.pageTitle.slice(0, 500),
     action: ask.action.kind satisfies BrowserAction,
     element: {

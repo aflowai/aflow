@@ -670,7 +670,6 @@ function browserApprovalShown(req: BrowserWriteApprovalRequestPayload): WriteApp
       target: 'browser',
       profileId: req.profileId,
       pageOrigin: req.pageOrigin,
-      shownPath: req.shownPath,
       pageTitle: req.pageTitle,
       action: req.action,
       element: { ...req.element },

@@ -61,7 +61,6 @@ const BROWSER_REQUEST = {
   target: 'browser',
   profileId: 'default',
   pageOrigin: 'https://shop.example.com',
-  shownPath: '/checkout',
   pageTitle: 'Checkout',
   action: 'click',
   element: { ref: 'e6', role: 'button', name: 'Pay now' },

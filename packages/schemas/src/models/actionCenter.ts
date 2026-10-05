@@ -437,7 +437,6 @@ export const BrowserWriteApprovalExtensionSchema = z.object({
   target: z.literal('browser'),
   profileId: z.string(),
   pageOrigin: z.string(),
-  shownPath: BrowserWriteApprovalRequestPayloadSchema.shape.shownPath,
   pageTitle: z.string(),
   action: BrowserWriteApprovalRequestPayloadSchema.shape.action,
   element: BrowserWriteApprovalRequestPayloadSchema.shape.element,
@@ -445,7 +444,7 @@ export const BrowserWriteApprovalExtensionSchema = z.object({
   askedBy: BrowserApprovalAskedBySchema,
   screenshotRef: z.string().optional(),
   standsUntil: BrowserWriteApprovalRequestPayloadSchema.shape.standsUntil,
-  /** Present when this exact action was approved then and performed once, and is asked for again. */
+  /** Present when an approval of this exact action, given then, has been used and it is asked for again. */
   decidedBefore: BrowserWriteApprovalRequestPayloadSchema.shape.decidedBefore,
 });
 export type BrowserWriteApprovalExtension = z.infer<typeof BrowserWriteApprovalExtensionSchema>;

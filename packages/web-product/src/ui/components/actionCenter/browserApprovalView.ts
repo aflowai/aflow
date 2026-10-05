@@ -5,12 +5,10 @@ import type { BrowserWriteApprovalExtension } from '../../hooks/use-action-cente
 export interface BrowserApprovalView {
   /** The site, by host. */
   readonly site: string;
-  /** Where on the site, as `browserApprovalShownPath` bounds it. */
-  readonly path: string;
   readonly pageTitle: string;
   /** "Click button “Pay now”." */
   readonly doing: string;
-  /** "This action was approved at … and performed once. It is being asked for again." */
+  /** "This action was approved at …. That approval has been used, and it is being asked for again." */
   readonly askedAgain?: string;
   /** What would be entered, when anything would. */
   readonly value?: { readonly label: string; readonly text?: string };
@@ -66,14 +64,13 @@ export function browserApprovalView(extension: BrowserWriteApprovalExtension): B
   const value = valueOf(extension);
   return {
     site: siteOf(extension.pageOrigin),
-    path: extension.shownPath,
     pageTitle: extension.pageTitle,
     doing: `${phrase.charAt(0).toUpperCase()}${phrase.slice(1)}.`,
     ...(extension.decidedBefore !== undefined
       ? {
           askedAgain:
-            `This action was approved at ${when(extension.decidedBefore)} and performed once. ` +
-            'It is being asked for again.',
+            `This action was approved at ${when(extension.decidedBefore)}. ` +
+            'That approval has been used, and it is being asked for again.',
         }
       : {}),
     ...(value !== undefined ? { value } : {}),
