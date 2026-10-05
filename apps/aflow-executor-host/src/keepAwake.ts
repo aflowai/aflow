@@ -3,10 +3,11 @@
  *
  * The machine is usually a laptop, and an operating system that sees no input
  * puts it to sleep whatever is running: a coding agent mid-run stops, its run is
- * lost, and every conversation waiting on it dies with it. So while a step is
- * running the executor holds a sleep assertion — a child `caffeinate` on macOS,
- * `systemd-inhibit` on Linux — taken when the first step starts and released
- * when the last one settles, and nothing is held while the machine is idle.
+ * lost, and every conversation waiting on it dies with it. So while a long step
+ * is running the executor holds a sleep assertion — a child `caffeinate` on
+ * macOS, `systemd-inhibit` on Linux — taken when the first one starts and
+ * released when the last one settles. A step that ends in well under any sleep
+ * timer takes none: holding for it would only spawn and kill a process.
  *
  * Whether to hold is the operator's, a machine-wide field of the policy file
  * beside the harnesses it protects: `on-ac` (the default), `always` or `never`.
@@ -22,7 +23,7 @@ import {
   type HostKeepAwakeMode,
   HostKeepAwakeModeSchema,
 } from '@aflow/schemas';
-import type { WorkListener } from '@aflow/executor-runtime';
+import type { RunningStep, WorkListener } from '@aflow/executor-runtime';
 
 import type { HostPolicySchema } from './bindings.js';
 import { forgetSpawn, recordSpawn } from './orphans.js';
@@ -30,6 +31,25 @@ import { forgetSpawn, recordSpawn } from './orphans.js';
 type HostPolicy = z.infer<typeof HostPolicySchema>;
 
 export const CLEAR_KEEP_AWAKE = '--clear';
+
+/** A step whose declared timeout exceeds this may outlast a sleep timer, so it holds. */
+export const LONG_STEP_TIMEOUT_MS = 60_000;
+
+/**
+ * Kinds that hold whatever timeout they declare: a check's deadline is the
+ * folder's and may be unset, and a harness run is the work the hold exists for.
+ */
+const LONG_RUNNING_OPERATIONS: ReadonlySet<string> = new Set([
+  'host.harness.run',
+  'host.commit.check',
+]);
+
+function isLongRunningStep(step: RunningStep): boolean {
+  return (
+    LONG_RUNNING_OPERATIONS.has(step.operationId) ||
+    (step.declaredTimeoutMs !== undefined && step.declaredTimeoutMs > LONG_STEP_TIMEOUT_MS)
+  );
+}
 
 /** The policy with the operator's mode, or with none for `--clear`. */
 export function withKeepAwake(policy: HostPolicy, requested: string): HostPolicy {
@@ -182,9 +202,9 @@ export interface KeepAwakeLog {
 }
 
 export interface KeepAwake {
-  /** Hold while any step of this runtime runs, under the name given. */
-  follow(name: string, runtime: { onWork(listener: WorkListener): () => void }): void;
-  /** A changed policy: the hold is taken again under the new mode, if work is running. */
+  /** Hold while any long step of this runtime runs. */
+  follow(runtime: { onWork(listener: WorkListener): () => void }): void;
+  /** A changed policy: the hold is taken again under the new mode, if a long step is running. */
   setMode(mode: HostKeepAwakeMode): void;
   /** Release whatever is held and hold nothing more. Synchronous, for an exit handler. */
   stop(): void;
@@ -210,8 +230,8 @@ export function createKeepAwake(options: KeepAwakeOptions): KeepAwake {
   let mode = options.mode;
   let stopped = false;
   let held: SleepAssertion | undefined;
-  /** What is running, by the runtime it runs in: the first step each started with. */
-  const working = new Map<string, string>();
+  /** The long steps running, by step execution: each one's kind. */
+  const longSteps = new Map<string, string>();
   const unfollow: Array<() => void> = [];
 
   const release = (reason: string): void => {
@@ -222,9 +242,9 @@ export function createKeepAwake(options: KeepAwakeOptions): KeepAwake {
   };
 
   const reconcile = (): void => {
-    const [why] = working.values();
+    const [why] = longSteps.values();
     if (stopped || why === undefined) {
-      release(stopped ? 'the executor is stopping' : 'no work is running');
+      release(stopped ? 'the executor is stopping' : 'no long step is running');
       return;
     }
     if (held !== undefined) return;
@@ -239,23 +259,23 @@ export function createKeepAwake(options: KeepAwakeOptions): KeepAwake {
       });
     });
     held = assertion;
-    options.log.info('Holding this machine awake while it has work', {
+    options.log.info(`Holding this machine awake for ${why}`, {
       mode,
       command: command.command,
-      why,
     });
   };
 
   return {
-    follow(name, runtime) {
+    follow(runtime) {
       unfollow.push(
         runtime.onWork({
-          busy: (firstStep) => {
-            working.set(name, firstStep);
+          started: (step) => {
+            if (!isLongRunningStep(step)) return;
+            longSteps.set(step.stepExecutionId, step.operationId);
             reconcile();
           },
-          idle: () => {
-            working.delete(name);
+          settled: (step) => {
+            if (!longSteps.delete(step.stepExecutionId)) return;
             reconcile();
           },
         }),

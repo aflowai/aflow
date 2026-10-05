@@ -67,6 +67,7 @@ function makeHost(execute: (ctx: ExecutorContext) => Promise<StepResult>) {
     claimingStopped: new AbortController().signal,
     stopped: new AbortController().signal,
     stepStarted: vi.fn(),
+    stepRunning: vi.fn(),
   } as never;
 }
 

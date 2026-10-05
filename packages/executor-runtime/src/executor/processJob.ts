@@ -27,7 +27,7 @@ import type {
   StepResult,
 } from '../types.js';
 import type { ConcurrencyLimiter } from '../concurrency.js';
-import { withTimeout } from '../timeout.js';
+import { type TimeoutSpec, withTimeout } from '../timeout.js';
 import { admitOperation } from './operationAdmission.js';
 import { createAflowError, toAflowError } from './errors.js';
 import { createJobLogger } from './logger.js';
@@ -63,6 +63,19 @@ export interface InFlightStep {
    * until its own is known, which a progress-aware timeout then keeps current.
    */
   deadlineRef?: { current: number };
+  /** Set once the step runs under its declared timeout, as its work listeners were told. */
+  running?: RunningStep;
+}
+
+/** A step running under the timeout it declared, as a runtime's work listeners see it. */
+export interface RunningStep {
+  stepExecutionId: string;
+  operationId: string;
+  /**
+   * The ceiling its handler or its step definition set; undefined where it set
+   * none and runs on the lane's default.
+   */
+  declaredTimeoutMs: number | undefined;
 }
 
 export interface ProcessJobHost {
@@ -79,6 +92,12 @@ export interface ProcessJobHost {
   readonly stopped: AbortSignal;
   /** A claimed step has started: it is past any wait for a slot and will run. */
   stepStarted(): void;
+  /** A started step's timeout is known and its handler is about to run. */
+  stepRunning(messageId: string, step: RunningStep): void;
+}
+
+function timeoutCeilingMs(spec: TimeoutSpec): number {
+  return typeof spec === 'number' ? spec : spec.maxMs;
 }
 
 /** How a step under an operation limit leaves its wait for a slot. */
@@ -440,13 +459,11 @@ export async function processJob(
           return undefined;
         })
       : undefined;
-    const timeoutSpec =
-      handlerTimeout ??
-      ctx.stepDefinition?.timeout?.executionTimeoutMs ??
-      host.config.defaultTimeoutMs;
+    const declaredTimeout = handlerTimeout ?? ctx.stepDefinition?.timeout?.executionTimeoutMs;
+    const timeoutSpec = declaredTimeout ?? host.config.defaultTimeoutMs;
     // Log/telemetry label and the heartbeat's initial deadline both use the
     // ceiling; a progress-aware spec slides the live deadline via deadlineRef.
-    const timeoutMs = typeof timeoutSpec === 'number' ? timeoutSpec : timeoutSpec.maxMs;
+    const timeoutMs = timeoutCeilingMs(timeoutSpec);
 
     // Cancellation check, deliberately AFTER the controller is registered: from
     // then on the abort Pub/Sub can reach this job, so anything published earlier
@@ -468,6 +485,13 @@ export async function processJob(
       await acknowledgeJob(host.deps, job.stepType, messageId);
       return;
     }
+
+    host.stepRunning(messageId, {
+      stepExecutionId: job.stepExecutionId,
+      operationId: job.operationId,
+      declaredTimeoutMs:
+        declaredTimeout === undefined ? undefined : timeoutCeilingMs(declaredTimeout),
+    });
 
     jobLog.debug('Step attempt started', {
       operationId: job.operationId,

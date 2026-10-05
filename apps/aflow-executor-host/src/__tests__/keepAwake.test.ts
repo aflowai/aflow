@@ -1,7 +1,9 @@
 /**
- * Contract: the host executor holds its machine awake while it has work
- * (Plan 315 D21). The hold is taken when the first step starts and released
- * when the last one settles — not between two that overlap — under the mode in
+ * Contract: the host executor holds its machine awake while it has long work
+ * (Plan 315 D21). The hold is taken when the first long step starts — a harness
+ * run, a check, or any step declaring a timeout past a minute — and released
+ * when the last one settles, not between two that overlap; a short step takes
+ * none and does not end one a long step holds. It runs under the mode in
  * the machine's policy, `on-ac` unless the operator chose another, and `never`
  * starts nothing. The spawner is a fake here: no test holds this machine awake.
  */
@@ -14,7 +16,7 @@ import { promisify } from 'node:util';
 
 import { describe, expect, it } from 'vitest';
 
-import type { WorkListener } from '@aflow/executor-runtime';
+import type { RunningStep, WorkListener } from '@aflow/executor-runtime';
 import {
   HOST_KEEP_AWAKE_DEFAULT,
   HostBindingInspectOutputSchema,
@@ -29,6 +31,7 @@ import {
   describeKeepAwake,
   describePolicyKeepAwake,
   linuxOnMainsPower,
+  LONG_STEP_TIMEOUT_MS,
   type SleepAssertionSpawner,
   withKeepAwake,
 } from '../keepAwake.js';
@@ -39,8 +42,26 @@ const run = promisify(execFile);
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 const HARNESS_CLI = join(REPO_ROOT, 'apps/aflow-executor-host/src/harness-cli.ts');
 const OWN_PID = 4242;
-const HARNESS_STEP = 'host.harness.run step-1';
-const BROWSER_STEP = 'browser.page.open step-2';
+const HARNESS_STEP: RunningStep = {
+  stepExecutionId: 'step-1',
+  operationId: 'host.harness.run',
+  declaredTimeoutMs: undefined,
+};
+const BROWSER_STEP: RunningStep = {
+  stepExecutionId: 'step-2',
+  operationId: 'browser.page.handoff',
+  declaredTimeoutMs: LONG_STEP_TIMEOUT_MS + 1,
+};
+const SCAN_STEP: RunningStep = {
+  stepExecutionId: 'step-3',
+  operationId: 'host.commit.scan',
+  declaredTimeoutMs: undefined,
+};
+const INSPECT_STEP: RunningStep = {
+  stepExecutionId: 'step-4',
+  operationId: 'host.binding.inspect',
+  declaredTimeoutMs: LONG_STEP_TIMEOUT_MS,
+};
 
 const FOLDER = {
   id: 'hb_app',
@@ -61,11 +82,11 @@ function fakeRuntime() {
         listeners.delete(listener);
       };
     },
-    busy(firstStep: string) {
-      for (const listener of listeners) listener.busy(firstStep);
+    start(step: RunningStep) {
+      for (const listener of listeners) listener.started(step);
     },
-    idle() {
-      for (const listener of listeners) listener.idle();
+    settle(step: RunningStep) {
+      for (const listener of listeners) listener.settled(step);
     },
   };
 }
@@ -109,17 +130,18 @@ function keepAwakeOn(
   const host = fakeRuntime();
   const browser = fakeRuntime();
   const warnings: string[] = [];
+  const infos: string[] = [];
   const keepAwake = createKeepAwake({
     mode,
     platform,
     ownPid: OWN_PID,
     onMainsPower,
     spawn: spawner.spawn,
-    log: { info: () => undefined, warn: (message) => warnings.push(message) },
+    log: { info: (message) => infos.push(message), warn: (message) => warnings.push(message) },
   });
-  keepAwake.follow('host', host);
-  keepAwake.follow('browser', browser);
-  return { keepAwake, spawner, host, browser, warnings };
+  keepAwake.follow(host);
+  keepAwake.follow(browser);
+  return { keepAwake, spawner, host, browser, warnings, infos };
 }
 
 describe('keep awake — when the hold is taken and released', () => {
@@ -127,11 +149,11 @@ describe('keep awake — when the hold is taken and released', () => {
     const { keepAwake, spawner, host } = keepAwakeOn('darwin', 'on-ac');
     expect(spawner.spawned).toHaveLength(0);
 
-    host.busy(HARNESS_STEP);
+    host.start(HARNESS_STEP);
     expect(keepAwake.holding()).toBe(true);
     expect(spawner.held()).toHaveLength(1);
 
-    host.idle();
+    host.settle(HARNESS_STEP);
     expect(keepAwake.holding()).toBe(false);
     expect(spawner.held()).toHaveLength(0);
   });
@@ -139,22 +161,54 @@ describe('keep awake — when the hold is taken and released', () => {
   it('holds once across two overlapping steps, and not between them', () => {
     const { spawner, host, browser } = keepAwakeOn('darwin', 'on-ac');
 
-    host.busy(HARNESS_STEP);
-    browser.busy(BROWSER_STEP);
-    host.idle();
+    host.start(HARNESS_STEP);
+    browser.start(BROWSER_STEP);
+    host.settle(HARNESS_STEP);
     expect(spawner.spawned).toHaveLength(1);
     expect(spawner.held()).toHaveLength(1);
 
-    browser.idle();
+    browser.settle(BROWSER_STEP);
     expect(spawner.held()).toHaveLength(0);
     expect(spawner.spawned).toHaveLength(1);
   });
 
+  it('spawns nothing for a short step, and holds for a long one across an overlapping short one', () => {
+    const { keepAwake, spawner, host, infos } = keepAwakeOn('darwin', 'on-ac');
+
+    host.start(SCAN_STEP);
+    host.start(INSPECT_STEP);
+    host.settle(SCAN_STEP);
+    host.settle(INSPECT_STEP);
+    expect(spawner.spawned).toHaveLength(0);
+    expect(infos).toEqual([]);
+
+    host.start(HARNESS_STEP);
+    host.start(SCAN_STEP);
+    host.settle(SCAN_STEP);
+    expect(keepAwake.holding()).toBe(true);
+    expect(spawner.spawned).toHaveLength(1);
+    expect(infos).toEqual([`Holding this machine awake for ${HARNESS_STEP.operationId}`]);
+
+    host.settle(HARNESS_STEP);
+    expect(keepAwake.holding()).toBe(false);
+    expect(spawner.spawned).toHaveLength(1);
+  });
+
+  it('holds for a check and for any step declaring a timeout past a minute', () => {
+    const check = keepAwakeOn('darwin', 'on-ac');
+    check.host.start({ ...SCAN_STEP, operationId: 'host.commit.check' });
+    const declared = keepAwakeOn('darwin', 'on-ac');
+    declared.browser.start(BROWSER_STEP);
+
+    expect(check.spawner.held()).toHaveLength(1);
+    expect(declared.spawner.held()).toHaveLength(1);
+  });
+
   it('takes a fresh hold for work that starts after the machine went idle', () => {
     const { spawner, host } = keepAwakeOn('darwin', 'on-ac');
-    host.busy(HARNESS_STEP);
-    host.idle();
-    host.busy(HARNESS_STEP);
+    host.start(HARNESS_STEP);
+    host.settle(HARNESS_STEP);
+    host.start(HARNESS_STEP);
 
     expect(spawner.spawned).toHaveLength(2);
     expect(spawner.held()).toHaveLength(1);
@@ -163,7 +217,7 @@ describe('keep awake — when the hold is taken and released', () => {
   it('spawns nothing under never', () => {
     for (const platform of ['darwin', 'linux'] as const) {
       const { keepAwake, spawner, host } = keepAwakeOn(platform, 'never');
-      host.busy(HARNESS_STEP);
+      host.start(HARNESS_STEP);
       expect(keepAwake.holding()).toBe(false);
       expect(spawner.spawned).toHaveLength(0);
     }
@@ -171,10 +225,10 @@ describe('keep awake — when the hold is taken and released', () => {
 
   it('releases on stop, and holds nothing for work that starts after', () => {
     const { keepAwake, spawner, host, browser } = keepAwakeOn('darwin', 'always');
-    host.busy(HARNESS_STEP);
+    host.start(HARNESS_STEP);
 
     keepAwake.stop();
-    browser.busy(BROWSER_STEP);
+    browser.start(BROWSER_STEP);
 
     expect(spawner.held()).toHaveLength(0);
     expect(spawner.spawned).toHaveLength(1);
@@ -182,7 +236,7 @@ describe('keep awake — when the hold is taken and released', () => {
 
   it('takes the hold again under a changed mode, and drops it for never', () => {
     const { keepAwake, spawner, host } = keepAwakeOn('darwin', 'on-ac');
-    host.busy(HARNESS_STEP);
+    host.start(HARNESS_STEP);
 
     keepAwake.setMode('always');
     expect(spawner.held().map((s) => s.args)).toEqual([['-i', '-s', '-w', String(OWN_PID)]]);
@@ -193,7 +247,7 @@ describe('keep awake — when the hold is taken and released', () => {
 
   it('says so when the hold ends on its own, and takes a new one for the next work', () => {
     const { keepAwake, spawner, host, warnings } = keepAwakeOn('darwin', 'on-ac');
-    host.busy(HARNESS_STEP);
+    host.start(HARNESS_STEP);
     spawner.spawned[0]?.end('spawn caffeinate ENOENT');
 
     expect(keepAwake.holding()).toBe(false);
@@ -201,8 +255,8 @@ describe('keep awake — when the hold is taken and released', () => {
       'The hold on sleep ended on its own; this machine may sleep mid-run',
     ]);
 
-    host.idle();
-    host.busy(HARNESS_STEP);
+    host.settle(HARNESS_STEP);
+    host.start(HARNESS_STEP);
     expect(spawner.held()).toHaveLength(1);
   });
 });
@@ -210,9 +264,9 @@ describe('keep awake — when the hold is taken and released', () => {
 describe('keep awake — what holds the machine', () => {
   it('runs caffeinate -s on macOS under on-ac, and -i -s under always, tied to this executor', () => {
     const onAc = keepAwakeOn('darwin', 'on-ac');
-    onAc.host.busy(HARNESS_STEP);
+    onAc.host.start(HARNESS_STEP);
     const always = keepAwakeOn('darwin', 'always');
-    always.host.busy(HARNESS_STEP);
+    always.host.start(HARNESS_STEP);
 
     expect(onAc.spawner.spawned.map(({ command, args }) => ({ command, args }))).toEqual([
       { command: 'caffeinate', args: ['-s', '-w', String(OWN_PID)] },
@@ -224,21 +278,27 @@ describe('keep awake — what holds the machine', () => {
 
   it('runs systemd-inhibit on Linux, saying which work it holds the machine for', () => {
     const { spawner, host } = keepAwakeOn('linux', 'always', () => false);
-    host.busy(HARNESS_STEP);
+    host.start(HARNESS_STEP);
 
     expect(spawner.spawned.map(({ command, args }) => ({ command, args }))).toEqual([
       {
         command: 'systemd-inhibit',
-        args: ['--what=sleep:idle', '--who=aflow', `--why=${HARNESS_STEP}`, 'sleep', 'infinity'],
+        args: [
+          '--what=sleep:idle',
+          '--who=aflow',
+          `--why=${HARNESS_STEP.operationId}`,
+          'sleep',
+          'infinity',
+        ],
       },
     ]);
   });
 
   it('holds a Linux machine under on-ac only while it is on mains power', () => {
     const onBattery = keepAwakeOn('linux', 'on-ac', () => false);
-    onBattery.host.busy(HARNESS_STEP);
+    onBattery.host.start(HARNESS_STEP);
     const onMains = keepAwakeOn('linux', 'on-ac', () => true);
-    onMains.host.busy(HARNESS_STEP);
+    onMains.host.start(HARNESS_STEP);
 
     expect(onBattery.spawner.spawned).toHaveLength(0);
     expect(onMains.spawner.spawned).toHaveLength(1);
@@ -265,7 +325,7 @@ describe('keep awake — what holds the machine', () => {
 
   it('holds nothing where it knows no way to', () => {
     const { spawner, host } = keepAwakeOn('win32', 'always');
-    host.busy(HARNESS_STEP);
+    host.start(HARNESS_STEP);
     expect(spawner.spawned).toHaveLength(0);
   });
 });

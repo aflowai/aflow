@@ -232,8 +232,8 @@ async function main(): Promise<void> {
     .then((policy) => policy.keepAwake)
     .catch(() => HOST_KEEP_AWAKE_DEFAULT);
   const keepAwake = createKeepAwake({ mode: keepAwakeMode, log });
-  keepAwake.follow(STEP_TYPE, runtime);
-  keepAwake.follow(BROWSER_STEP_TYPE, browserRuntime);
+  keepAwake.follow(runtime);
+  keepAwake.follow(browserRuntime);
   log.info(`This machine ${describeKeepAwake(keepAwakeMode)}`);
 
   // Loaded here rather than at the top so that nothing importing this module
