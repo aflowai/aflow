@@ -127,21 +127,23 @@ function renderPlanNodeLine(node: PlanAttentionNode): string {
  * does not show, and everything placed under another root as one count. That
  * count carries no ids and no call to act — another conversation's review or
  * pause is not this one's to answer. Work placed nowhere is the caller's.
+ *
+ * Every active run is in `work`; of the pending items, only the ones this
+ * conversation is shown are — the rest arrive counted in `items`.
  */
 export function renderPlanWithWork(
   plan: PlanAttention | undefined,
   work: readonly PlanWorkLine[],
   conversationRootIds: ReadonlySet<string>,
+  items: { ownUnshown: number; others: number },
 ): string[] {
   const own = new Map<string, PlanWorkLine[]>();
   let otherRuns = 0;
-  let otherItems = 0;
   for (const entry of work) {
     if (entry.plan === undefined) continue;
     if (conversationRootIds.has(entry.plan.rootId)) {
       own.set(entry.plan.nodeId, [...(own.get(entry.plan.nodeId) ?? []), entry]);
     } else if (entry.kind === 'run') otherRuns++;
-    else otherItems++;
   }
 
   const lines: string[] = [];
@@ -166,9 +168,14 @@ export function renderPlanWithWork(
       for (const entry of entries) lines.push(`- ${entry.line} [nodeId: ${nodeId}]`);
     }
   }
-  if (otherRuns + otherItems > 0) {
+  if (items.ownUnshown > 0) {
     lines.push(
-      `other work in this space, not this conversation's: ${String(otherRuns)} runs, ${String(otherItems)} items`,
+      `   ... and ${String(items.ownUnshown)} more of this conversation's attention items — use \`workflow.run.list_attention\``,
+    );
+  }
+  if (otherRuns + items.others > 0) {
+    lines.push(
+      `other work in this space, not this conversation's: ${String(otherRuns)} runs, ${String(items.others)} items`,
     );
   }
   if (lines.length > 0) lines.push('');

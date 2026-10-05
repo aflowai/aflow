@@ -128,7 +128,7 @@ vi.mock('@aflow/cybernetic-runtime', async () => ({
   markWaiterNotified: (...args: unknown[]) => mockMarkWaiterNotified(...args),
   rehydrateParkedStep: (...args: unknown[]) => mockRehydrateParkedStep(...args),
   addWaiter: (...args: unknown[]) => mockAddWaiter(...args),
-  addAttentionItem: (...args: unknown[]) => mockAddAttentionItem(...args),
+  addAttentionItemInTransaction: (...args: unknown[]) => mockAddAttentionItem(...args),
   blockDescendantTasks: (...args: unknown[]) => mockBlockDescendantTasks(...args),
   cancelNonTerminalTasksForRun: (...args: unknown[]) => mockCancelNonTerminalTasksForRun(...args),
   listCompletionPendingForRun: (...args: unknown[]) => mockListCompletionPendingForRun(...args),
@@ -3412,7 +3412,7 @@ describe('cancelRun — Plan 132v2 §Phase 4 (4.5c replay-safe)', () => {
     // EXACTLY ONE attention insert — the canonical row written inside
     // completeRun's TX. The previous design wrote a second row.
     expect(mockAddAttentionItem).toHaveBeenCalledOnce();
-    // addAttentionItem signature: (db, tenantId, args, tx?) → args at [2].
+    // addAttentionItemInTransaction signature: (tx, tenantId, args) → args at [2].
     const attArgs = mockAddAttentionItem.mock.calls[0]?.[2] as {
       kind: string;
       payload: Record<string, unknown>;

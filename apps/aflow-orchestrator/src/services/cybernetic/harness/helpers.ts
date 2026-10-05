@@ -5,7 +5,7 @@ import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
   loadRunById,
   emitWorkflowProgress,
-  addAttentionItem,
+  addAttentionItemInTransaction,
   computeReadyTasksWithWhen,
   loadTaskOutputs,
   collectOutputReferencedTaskIds,
@@ -391,31 +391,26 @@ export async function buildTaskOutputContext(
 }
 
 /**
- * Append an attention_items row using the trusted tenantId. Wrapper
- * around the ledger helper; ensures spaceId / userId are derived from
- * the run row consistently.
+ * Append an attention_items row, using the trusted tenantId, inside the run
+ * transition's transaction; spaceId / userId are derived from the run row
+ * consistently. The transition's `emitRunUpdated`, once the transaction has
+ * committed, bumps the space's attention generation.
  */
 export async function writeAttentionItem(
-  db: PostgresJsDatabase,
+  tx: PostgresJsDatabase,
   tenantId: TenantId,
   run: WorkflowRunDetail,
   kind: AttentionItemKind,
   payload: Record<string, unknown>,
-  tx?: PostgresJsDatabase,
 ): Promise<void> {
-  await addAttentionItem(
-    db,
-    tenantId as string,
-    {
-      spaceId: run.spaceId,
-      kind,
-      relatedRunId: run.runId,
-      relatedResource: `workflow_run:${run.runId}`,
-      payload,
-      priority: 0,
-    },
-    tx,
-  );
+  await addAttentionItemInTransaction(tx, tenantId as string, {
+    spaceId: run.spaceId,
+    kind,
+    relatedRunId: run.runId,
+    relatedResource: `workflow_run:${run.runId}`,
+    payload,
+    priority: 0,
+  });
 }
 
 /**

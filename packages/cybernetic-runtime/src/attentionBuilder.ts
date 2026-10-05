@@ -5,7 +5,6 @@ import type {
   AppletAttention,
   AppletInstanceStatus,
   AppletStateVersion,
-  AttentionItemKind,
   TenantId,
   SkillDiagnostic,
 } from '@aflow/schemas';
@@ -25,7 +24,11 @@ import {
   cachedOrRecomputeValidity,
   renderSkillDiagnostics,
 } from './skillValidity/skillValidity.js';
-import { listActiveRunsWithLiveness, listPendingRunAttention } from './ledger.js';
+import {
+  listActiveRunsWithLiveness,
+  readPendingRunAttention,
+  type PendingRunAttention,
+} from './ledger.js';
 import { getAttentionCache, setAttentionCache } from './attentionCache.js';
 import { cyberneticHookSafe } from './hookSafe.js';
 import { deriveRunLivenessFromCounts } from './scheduling/runLiveness.js';
@@ -38,6 +41,13 @@ import {
   type PlanWorkLine,
 } from './plan/attention.js';
 import { createPlanNodeStore } from './plan/store.js';
+import {
+  ATTENTION_ITEM_SURFACE_LIMIT,
+  pendingAttentionFor,
+  summarizePendingAttention,
+  type PendingAttention,
+  type PendingAttentionItemSummary,
+} from './pendingAttention.js';
 
 // ============================================================================
 // Types
@@ -54,18 +64,6 @@ export interface ActiveWorkflowRunSummary {
   /** The plan node the run serves (Plan 322 D5), and that node's root. */
   plan?: PlanPlacement;
 }
-
-export interface PendingAttentionItemSummary {
-  itemId: string;
-  kind: AttentionItemKind;
-  runId?: string;
-  slug?: string;
-  /** Where the item's run sits in the plan. */
-  plan?: PlanPlacement;
-}
-
-/** The pending attention items the block carries, newest first; `workflow.run.list_attention` reads them all. */
-const ATTENTION_ITEM_SURFACE_LIMIT = 10;
 
 /** Who reads the block: the plan roots its conversation has taken up (`loadConversationPlanRoots`). */
 export interface AttentionConversation {
@@ -158,7 +156,7 @@ export interface HelmsmanAttentionContext {
   /** The space's open plan tree (Plan 322 D4) — read before anything else. */
   activePlan?: PlanAttention;
   activeWorkflowRuns: ActiveWorkflowRunSummary[];
-  pendingAttentionItems?: PendingAttentionItemSummary[];
+  pendingAttention?: PendingAttention;
   /** Active applet instances, last action first, capped; ended/archived never appear. */
   activeApplets?: ActiveAppletSummary[];
   /** Uncapped active count — drives the overflow pointer at `ui.applet.list`. */
@@ -720,7 +718,7 @@ export async function buildHelmsmanAttention(params: {
     const [
       activePlan,
       runRows,
-      itemRows,
+      pendingItems,
       activeAppletScan,
       proposalCounts,
       pendingAnomalies,
@@ -738,14 +736,14 @@ export async function buildHelmsmanAttention(params: {
         return undefined;
       }),
       queryActiveWorkflowRuns(db, tenantId, spaceId),
-      listPendingRunAttention(db, tenantId, spaceId, ATTENTION_ITEM_SURFACE_LIMIT).catch(
-        (err: unknown) => {
+      readPendingRunAttention(db, tenantId, spaceId, ATTENTION_ITEM_SURFACE_LIMIT).catch(
+        (err: unknown): PendingRunAttention => {
           getCyberneticLogger().warn('helmsmanAttention: attention-item-load failed', {
             error: err instanceof Error ? err.message : String(err),
             tenantId,
             spaceId,
           });
-          return [];
+          return { items: [], counts: [] };
         },
       ),
       // One corrupt state snapshot throws inside listInstances; the applet
@@ -778,7 +776,7 @@ export async function buildHelmsmanAttention(params: {
 
     const placements = await placeInPlan(planStore, spaceId, [
       ...runRows.map((run) => run.planNodeId),
-      ...itemRows.map((item) => item.planNodeId),
+      ...pendingItems.counts.map((count) => count.planNodeId),
     ]);
     const placed = (nodeId: string | null | undefined) => {
       const plan = nodeId != null ? placements.get(nodeId) : undefined;
@@ -787,13 +785,7 @@ export async function buildHelmsmanAttention(params: {
     const activeWorkflowRuns: ActiveWorkflowRunSummary[] = runRows.map(
       ({ planNodeId, ...run }) => ({ ...run, ...placed(planNodeId) }),
     );
-    const pendingAttentionItems: PendingAttentionItemSummary[] = itemRows.map((item) => ({
-      itemId: item.itemId,
-      kind: item.kind,
-      ...(item.runId !== null ? { runId: item.runId } : {}),
-      ...(item.workflowSlug !== null ? { slug: item.workflowSlug } : {}),
-      ...placed(item.planNodeId),
-    }));
+    const pendingAttention = summarizePendingAttention(pendingItems, placements);
 
     const skills: SkillAttentionEntry[] = resolvedSkills
       .filter((s) => {
@@ -809,7 +801,7 @@ export async function buildHelmsmanAttention(params: {
     const result: HelmsmanAttentionContext = {
       ...(activePlan !== undefined ? { activePlan } : {}),
       activeWorkflowRuns,
-      ...(pendingAttentionItems.length > 0 ? { pendingAttentionItems } : {}),
+      ...(pendingAttention !== undefined ? { pendingAttention } : {}),
       ...(activeAppletScan.applets.length > 0
         ? { activeApplets: activeAppletScan.applets, activeAppletsTotal: activeAppletScan.total }
         : {}),
@@ -889,16 +881,17 @@ export function renderAttentionContext(
   conversation: AttentionConversation,
 ): string {
   const runs = attention.activeWorkflowRuns;
-  const items = attention.pendingAttentionItems ?? [];
+  const ownRoots = new Set(conversation.planRootIds);
+  const items = pendingAttentionFor(attention.pendingAttention, ownRoots);
   const work: PlanWorkLine[] = [
     ...runs.map((run) => ({ kind: 'run' as const, line: renderRunLine(run), plan: run.plan })),
-    ...items.map((item) => ({
+    ...items.own.map((item) => ({
       kind: 'item' as const,
       line: renderAttentionItemLine(item),
       plan: item.plan,
     })),
   ].map(({ plan, ...entry }) => (plan !== undefined ? { ...entry, plan } : entry));
-  const lines = renderPlanWithWork(attention.activePlan, work, new Set(conversation.planRootIds));
+  const lines = renderPlanWithWork(attention.activePlan, work, ownRoots, items);
 
   const freeRuns = runs.filter((run) => run.plan === undefined);
   if (freeRuns.length > 0) {
@@ -912,13 +905,17 @@ export function renderAttentionContext(
     lines.push('No active workflow runs.');
   }
 
-  const freeItems = items.filter((item) => item.plan === undefined);
-  if (freeItems.length > 0) {
+  if (items.unplaced.length > 0) {
     lines.push('');
     lines.push(
-      `${freeItems.length < items.length ? 'Attention items outside the plan' : 'Attention items'}, newest first — \`workflow.run.list_attention\` reads them all:`,
+      `${items.placedAny ? 'Attention items outside the plan' : 'Attention items'}, newest first — \`workflow.run.list_attention\` reads them all:`,
     );
-    for (const item of freeItems) lines.push(`- ${renderAttentionItemLine(item)}`);
+    for (const item of items.unplaced) lines.push(`- ${renderAttentionItemLine(item)}`);
+    if (items.unplacedUnshown > 0) {
+      lines.push(
+        `   ... and ${String(items.unplacedUnshown)} more — use \`workflow.run.list_attention\``,
+      );
+    }
   }
 
   // Active applet instances (§4.13 tier 2) — same shape as workflow runs:

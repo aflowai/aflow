@@ -1,5 +1,6 @@
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { eq, and, desc, sql } from 'drizzle-orm';
+import { eq, and, desc, lte, sql } from 'drizzle-orm';
+import type { Redis } from 'ioredis';
 import type { TenantId } from '@aflow/schemas';
 import {
   createTenantContext,
@@ -9,51 +10,67 @@ import {
 } from '@aflow/database';
 import type { AttentionItemRow } from '@aflow/database';
 import type { AddAttentionItemInput, AttentionItemKind } from '@aflow/schemas';
+import { bumpAttentionGeneration } from '../attentionCache.js';
+
 /**
- * Append an attention item. Designed to run inside a larger transaction
- * — pass the transactional `tx` handle from the caller (a Drizzle
- * `PostgresJsDatabase`-typed transaction handle returned by
- * `withTenantSchema`'s callback) to commit the attention insert atomically
- * with the row-state update that triggered it (terminal/pause/cancel).
- * When called outside a transaction (no `tx`), the helper opens its own
- * `withTenantSchema` block.
- *
  * `tenantId` is the trusted source — it goes into the row regardless of
  * what's in `args`. The schema-level `AddAttentionItemInput` deliberately
  * omits a `tenantId` field to remove the mismatch class.
  */
-export async function addAttentionItem(
-  db: PostgresJsDatabase,
+async function insertAttentionItem(
+  handle: PostgresJsDatabase,
   tenantId: string,
   args: AddAttentionItemInput,
-  tx?: PostgresJsDatabase,
 ): Promise<string> {
-  const insertRow = async (handle: PostgresJsDatabase): Promise<string> => {
-    const rows = await handle
-      .insert(attentionItems)
-      .values({
-        tenantId,
-        userId: args.userId ?? null,
-        spaceId: args.spaceId ?? null,
-        kind: args.kind,
-        relatedRunId: args.relatedRunId ?? null,
-        relatedResource: args.relatedResource ?? null,
-        payload: args.payload,
-        priority: args.priority,
-      })
-      .returning({ id: attentionItems.id });
-    const id = rows[0]?.id;
-    if (!id) {
-      throw new Error('addAttentionItem: insert returned no row');
-    }
-    return id;
-  };
-
-  if (tx) {
-    return insertRow(tx);
+  const rows = await handle
+    .insert(attentionItems)
+    .values({
+      tenantId,
+      userId: args.userId ?? null,
+      spaceId: args.spaceId ?? null,
+      kind: args.kind,
+      relatedRunId: args.relatedRunId ?? null,
+      relatedResource: args.relatedResource ?? null,
+      payload: args.payload,
+      priority: args.priority,
+    })
+    .returning({ id: attentionItems.id });
+  const id = rows[0]?.id;
+  if (!id) {
+    throw new Error('addAttentionItem: insert returned no row');
   }
+  return id;
+}
+
+/**
+ * Append an attention item and, once it has committed, bump its space's
+ * attention generation, so the next Helmsman turn's block carries it.
+ */
+export async function addAttentionItem(
+  db: PostgresJsDatabase,
+  redis: Redis,
+  tenantId: string,
+  args: AddAttentionItemInput,
+): Promise<string> {
   const tenantCtx = createTenantContext(tenantId as TenantId);
-  return withTenantSchema(db, tenantCtx, insertRow);
+  const id = await withTenantSchema(db, tenantCtx, (tx) => insertAttentionItem(tx, tenantId, args));
+  if (args.spaceId) await bumpAttentionGeneration(redis, tenantId, args.spaceId);
+  return id;
+}
+
+/**
+ * Append an attention item inside the caller's transaction, so it commits
+ * atomically with the run transition that raised it (terminal/pause/cancel).
+ * The generation is not bumped here: a bump before the commit lets a
+ * concurrent build cache the space without the item under the new
+ * generation. The transition's `emitRunUpdated`, after the commit, bumps it.
+ */
+export function addAttentionItemInTransaction(
+  tx: PostgresJsDatabase,
+  tenantId: string,
+  args: AddAttentionItemInput,
+): Promise<string> {
+  return insertAttentionItem(tx, tenantId, args);
 }
 
 /**
@@ -94,16 +111,33 @@ export interface PendingRunAttentionItem {
   createdAt: Date;
 }
 
-/** The space's newest pending attention items, each with the slug and plan node of its run. */
-export async function listPendingRunAttention(
+/** A space's pending attention items as the attention block reads them. */
+export interface PendingRunAttention {
+  /**
+   * Newest first: the newest `perNodeLimit` items about runs serving each plan
+   * node, and as many about runs serving none — so the newest `perNodeLimit`
+   * of any set of nodes, a plan root's subtree among them, are all here.
+   */
+  items: PendingRunAttentionItem[];
+  /** Every pending item, counted by the plan node its run serves; `null` for none. */
+  counts: Array<{ planNodeId: string | null; count: number }>;
+}
+
+/** The space's pending attention items by the plan node of their run, each with its run's slug. */
+export async function readPendingRunAttention(
   db: PostgresJsDatabase,
   tenantId: string,
   spaceId: string,
-  limit: number,
-): Promise<PendingRunAttentionItem[]> {
+  perNodeLimit: number,
+): Promise<PendingRunAttention> {
   const tenantCtx = createTenantContext(tenantId as TenantId);
   return withTenantSchema(db, tenantCtx, async (tx) => {
-    const rows = await tx
+    const pending = and(
+      sql`${attentionItems.consumedAt} IS NULL`,
+      eq(attentionItems.tenantId, tenantId),
+      eq(attentionItems.spaceId, spaceId),
+    );
+    const ranked = tx
       .select({
         itemId: attentionItems.id,
         kind: attentionItems.kind,
@@ -111,36 +145,57 @@ export async function listPendingRunAttention(
         workflowSlug: workflowRuns.workflowSlug,
         planNodeId: workflowRuns.planNodeId,
         createdAt: attentionItems.createdAt,
+        rank: sql<number>`row_number() over (partition by ${workflowRuns.planNodeId} order by ${attentionItems.createdAt} desc, ${attentionItems.id} desc)`.as(
+          'rank',
+        ),
       })
       .from(attentionItems)
       .leftJoin(workflowRuns, eq(workflowRuns.runId, attentionItems.relatedRunId))
-      .where(
-        and(
-          sql`${attentionItems.consumedAt} IS NULL`,
-          eq(attentionItems.tenantId, tenantId),
-          eq(attentionItems.spaceId, spaceId),
-        ),
-      )
-      .orderBy(desc(attentionItems.createdAt))
-      .limit(limit);
-    return rows.map((row) => ({ ...row, kind: row.kind as AttentionItemKind }));
+      .where(pending)
+      .as('ranked');
+    const rows = await tx
+      .select({
+        itemId: ranked.itemId,
+        kind: ranked.kind,
+        runId: ranked.runId,
+        workflowSlug: ranked.workflowSlug,
+        planNodeId: ranked.planNodeId,
+        createdAt: ranked.createdAt,
+      })
+      .from(ranked)
+      .where(lte(ranked.rank, perNodeLimit))
+      .orderBy(desc(ranked.createdAt), desc(ranked.itemId));
+    const counts = await tx
+      .select({ planNodeId: workflowRuns.planNodeId, count: sql<number>`count(*)::int` })
+      .from(attentionItems)
+      .leftJoin(workflowRuns, eq(workflowRuns.runId, attentionItems.relatedRunId))
+      .where(pending)
+      .groupBy(workflowRuns.planNodeId);
+    return {
+      items: rows.map((row) => ({ ...row, kind: row.kind as AttentionItemKind })),
+      counts,
+    };
   });
 }
 
 /**
- * Mark an attention item consumed. The Helmsman session that surfaced
- * the item to the user calls this so future queries skip it.
+ * Mark an attention item consumed and, once that has committed, bump its
+ * space's attention generation, so the next Helmsman turn's block drops it.
  */
 export async function markAttentionConsumed(
   db: PostgresJsDatabase,
+  redis: Redis,
   tenantId: string,
   args: { id: string; consumedBySession: string },
 ): Promise<void> {
   const tenantCtx = createTenantContext(tenantId as TenantId);
-  await withTenantSchema(db, tenantCtx, async (tx) => {
-    await tx
+  const consumed = await withTenantSchema(db, tenantCtx, (tx) =>
+    tx
       .update(attentionItems)
       .set({ consumedAt: new Date(), consumedBySession: args.consumedBySession })
-      .where(and(eq(attentionItems.id, args.id), sql`consumed_at IS NULL`));
-  });
+      .where(and(eq(attentionItems.id, args.id), sql`consumed_at IS NULL`))
+      .returning({ spaceId: attentionItems.spaceId }),
+  );
+  const spaceId = consumed[0]?.spaceId;
+  if (spaceId) await bumpAttentionGeneration(redis, tenantId, spaceId);
 }

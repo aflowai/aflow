@@ -52,7 +52,7 @@ vi.mock('@aflow/cybernetic-runtime', () => ({
   emitRunUpdated: vi.fn().mockResolvedValue(undefined),
   storeWorkflowResumeContract: (...args: unknown[]) => mockStoreResumeContract(...args),
   pauseRun: (...args: unknown[]) => mockPauseRun(...args),
-  addAttentionItem: vi.fn().mockResolvedValue(undefined),
+  addAttentionItemInTransaction: vi.fn().mockResolvedValue(undefined),
   createPlanNodeStore: () => ({ find: (...args: unknown[]) => mockFindPlanNode(...args) }),
   loadRunById: (...args: unknown[]) => mockLoadRunById(...args),
 }));

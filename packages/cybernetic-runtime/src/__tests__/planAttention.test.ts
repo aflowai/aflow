@@ -4,7 +4,7 @@ import type { Redis as RedisType } from 'ioredis';
 import { configureLogging } from '@aflow/observability';
 import { PLAN_TREE_DEPTH_LIMIT, type PlanNodeCreateInput } from '@aflow/schemas';
 import type { ActiveRunWithTaskCounts } from '../ledger/types.js';
-import type { PendingRunAttentionItem } from '../ledger/attention.js';
+import type { PendingRunAttention, PendingRunAttentionItem } from '../ledger/attention.js';
 import { InMemoryPlanNodeStore } from './planStoreFake.js';
 
 const fakeStore = { current: new InMemoryPlanNodeStore() };
@@ -35,10 +35,28 @@ vi.mock('../ledger/queries.js', async () => {
       ]),
   };
 });
+/** What `readPendingRunAttention`'s queries return: each node's newest, and every item counted by node. */
+function readPendingFromLedger(perNodeLimit: number): PendingRunAttention {
+  const newestFirst = [...fakeLedger.items].sort(
+    (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
+  );
+  const counts = new Map<string | null, number>();
+  const items = newestFirst.filter((item) => {
+    const seen = counts.get(item.planNodeId) ?? 0;
+    counts.set(item.planNodeId, seen + 1);
+    return seen < perNodeLimit;
+  });
+  return { items, counts: [...counts].map(([planNodeId, count]) => ({ planNodeId, count })) };
+}
+
 vi.mock('../ledger/attention.js', async () => {
   const actual =
     await vi.importActual<typeof import('../ledger/attention.js')>('../ledger/attention.js');
-  return { ...actual, listPendingRunAttention: () => Promise.resolve(fakeLedger.items) };
+  return {
+    ...actual,
+    readPendingRunAttention: (_db: unknown, _t: string, _s: string, perNodeLimit: number) =>
+      Promise.resolve(readPendingFromLedger(perNodeLimit)),
+  };
 });
 vi.mock('../skill.js', async () => {
   const actual = await vi.importActual<typeof import('../skill.js')>('../skill.js');
@@ -57,6 +75,7 @@ vi.mock('@aflow/database', async () => {
 });
 
 const { buildHelmsmanAttention, renderAttentionContext } = await import('../attentionBuilder.js');
+const { ATTENTION_ITEM_SURFACE_LIMIT } = await import('../pendingAttention.js');
 const { createPlanNode, updatePlanNode } = await import('../plan/operations.js');
 const { loadActivePlanTree, loadConversationPlanRoots, PLAN_ATTENTION_NODE_LIMIT } =
   await import('../plan/attention.js');
@@ -359,6 +378,74 @@ describe('work under the plan — one answer to "what now" (Plan 322 P1)', () =>
       '    - attention: workflow_run_completed — review-local-changes [itemId: item-theirs-review, runId: run-theirs-review]',
     ]);
     expect(lines).toContain("other work in this space, not this conversation's: 1 runs, 0 items");
+  });
+
+  /** `count` pending items about runs serving `planNodeId`, the first the newest, all from `from` back. */
+  function pendingItems(
+    prefix: string,
+    count: number,
+    planNodeId: string,
+    from: Date,
+  ): PendingRunAttentionItem[] {
+    return Array.from({ length: count }, (_, i) => ({
+      itemId: `${prefix}-${String(i)}`,
+      kind: 'workflow_run_paused' as const,
+      runId: `run-${prefix}-${String(i)}`,
+      workflowSlug: 'review-local-changes',
+      planNodeId,
+      createdAt: new Date(from.getTime() - i * 60_000),
+    }));
+  }
+
+  it('shows every one of its own items however many newer ones other streams hold, and counts those exactly', async () => {
+    const { finding, theirSlice } = await twoStreams();
+    const ownCount = 3;
+    const foreignCount = ATTENTION_ITEM_SURFACE_LIMIT + 7;
+    fakeLedger.items.push(
+      ...pendingItems('ours', ownCount, finding.nodeId, new Date('2026-10-05T07:00:00.000Z')),
+      ...pendingItems(
+        'theirs',
+        foreignCount,
+        theirSlice.nodeId,
+        new Date('2026-10-05T12:00:00.000Z'),
+      ),
+    );
+
+    const text = await turnAttention(STREAM_315);
+    for (let i = 0; i < ownCount; i++) {
+      expect(text).toContain(`[itemId: ours-${String(i)}, runId: run-ours-${String(i)}]`);
+    }
+    expect(text).not.toContain('theirs-');
+    expect(text).not.toContain("more of this conversation's attention items");
+    // The fixture's own review of their slice is one more of theirs.
+    expect(text).toMatch(
+      new RegExp(
+        `^other work in this space, not this conversation's: 1 runs, ${String(foreignCount + 1)} items$`,
+        'm',
+      ),
+    );
+  });
+
+  it('shows its newest items up to the limit, and says how many more and where they are', async () => {
+    const { finding } = await twoStreams();
+    const extra = 4;
+    fakeLedger.items.push(
+      ...pendingItems(
+        'ours',
+        ATTENTION_ITEM_SURFACE_LIMIT + extra,
+        finding.nodeId,
+        new Date('2026-10-05T12:00:00.000Z'),
+      ),
+    );
+
+    const lines = (await turnAttention(STREAM_315)).split('\n');
+    const shown = lines.filter((l) => l.includes('[itemId: ours-'));
+    expect(shown).toHaveLength(ATTENTION_ITEM_SURFACE_LIMIT);
+    expect(shown.at(-1)).toContain(`[itemId: ours-${String(ATTENTION_ITEM_SURFACE_LIMIT - 1)},`);
+    expect(lines).toContain(
+      `   ... and ${String(extra)} more of this conversation's attention items — use \`workflow.run.list_attention\``,
+    );
+    expect(lines).toContain("other work in this space, not this conversation's: 1 runs, 1 items");
   });
 
   it('lists its own work on a node the tree does not show, with that node’s id', async () => {
