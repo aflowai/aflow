@@ -55,6 +55,24 @@ const COMMIT = {
   pushRefspec: `${HEAD}:refs/heads/aflow/x`,
 };
 
+/** A commit an earlier publication made on `aflow/x` and never pushed. */
+const STRANDED = 'd'.repeat(40);
+
+/** The branch's head as `host.file.patch` reports it when published as it stands. */
+const AS_IT_STANDS = {
+  branch: 'aflow/x',
+  sha: STRANDED,
+  message: 'The change\n\nWhat it does.',
+  body: 'What it does.',
+  baseSha: HEAD,
+  appended: false,
+  asItStands: true,
+  range: `${HEAD}..${STRANDED}`,
+  pushRange: `${ORIGIN_BASE}..${STRANDED}`,
+  pushBaseSha: ORIGIN_BASE,
+  pushRefspec: `${STRANDED}:refs/heads/aflow/x`,
+};
+
 function taskOrThrow(taskId: string) {
   const task = taskById.get(taskId);
   if (!task) throw new Error(`task "${taskId}" must exist`);
@@ -670,15 +688,8 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       .map((d) => d.detail);
     expect(unreachable).toEqual([]);
     const required = (wf.runInputs ?? []).filter((i) => i.required).map((i) => i.id);
-    expect(required).toEqual([
-      'bindingId',
-      'branch',
-      'commitMessage',
-      'title',
-      'owner',
-      'repo',
-      'base',
-    ]);
+    // The commit message is a change's: a branch published as it stands keeps its head's.
+    expect(required).toEqual(['bindingId', 'branch', 'title', 'owner', 'repo', 'base']);
   });
 
   it('references no eval-plane operation', () => {
@@ -848,8 +859,14 @@ interface Scenario {
    * what refuses it.
    */
   declineAs?: 'skip' | 'answer';
-  /** Whether `origin`'s base is no longer where the scanned range starts, which fails the push. */
-  baseMoved?: boolean;
+  /**
+   * Whether `origin`'s base moved on from where the scanned range starts: the
+   * push then scans the range it sends and goes ahead where the commit still
+   * merges into the moved base cleanly, and is refused where it conflicts.
+   */
+  baseMoved?: 'cleanly' | 'conflicting';
+  /** A publication of the branch as it stands: no change, its head as `baseSha`. */
+  asItStands?: boolean;
   /** The receipt the approval records, where not the one its preview resolves to. */
   approvalOf?: string;
   /** The base of the pull request the branch already has open when the push lands, where it has one. */
@@ -860,6 +877,8 @@ interface Outcome {
   asked: boolean;
   pushed: boolean;
   ran: string[];
+  /** What each task that ran was handed, its template resolved. */
+  inputs: Map<string, Record<string, unknown>>;
   /** The run's state as its tasks' promoted outputs make it. */
   state: Record<string, unknown>;
 }
@@ -875,6 +894,15 @@ function rawOutput(
 ): Record<string, unknown> {
   switch (taskId) {
     case 'commit':
+      if (scenario.asItStands === true) {
+        return HostFilePatchOutputSchema.parse({
+          state: 'applied',
+          filesChanged: 0,
+          files: [],
+          conflicts: [],
+          commit: AS_IT_STANDS,
+        });
+      }
       return scenario.committed === false
         ? { state: 'conflict', filesChanged: 0, files: [], conflicts: ['a.ts'] }
         : {
@@ -956,10 +984,20 @@ const RUN_INPUTS: Readonly<Record<string, unknown>> = {
   base: 'main',
 };
 
+/** A publication of the branch as it stands: its head named, and no change, merge or message. */
+const AS_IT_STANDS_INPUTS: Readonly<Record<string, unknown>> = {
+  ...RUN_INPUTS,
+  baseSha: STRANDED,
+  title: 'The change',
+  owner: 'aflowai',
+  repo: 'aflow',
+};
+
 /** What a task's run-input and `task_output` bindings resolve to, absent ones left out. */
 function boundOutputs(
   bindings: WorkflowTask['inputBindings'],
   outputs: ReadonlyMap<string, Record<string, unknown>>,
+  runInputs: Readonly<Record<string, unknown>> = RUN_INPUTS,
 ): Record<string, unknown> {
   const bound: Record<string, unknown> = {};
   for (const [name, binding] of Object.entries(bindings ?? {})) {
@@ -967,7 +1005,7 @@ function boundOutputs(
       binding.kind === 'task_output'
         ? readOutput(outputs, binding.taskId, binding.path)
         : binding.kind === 'run_input'
-          ? RUN_INPUTS[binding.path]
+          ? runInputs[binding.path]
           : undefined;
     if (value !== undefined) bound[name] = value;
   }
@@ -994,10 +1032,12 @@ function receiptAccepted(
   push: WorkflowTask,
   outputs: ReadonlyMap<string, Record<string, unknown>>,
   grants: ReadonlySet<string>,
+  runInputs: Readonly<Record<string, unknown>>,
 ): boolean {
   const { bindingId, refspec, base, receipt, checkReceipt } = boundOutputs(
     push.inputBindings,
     outputs,
+    runInputs,
   );
   if (typeof receipt !== 'string' || typeof base !== 'string') return false;
   const checksDeclared = outputs.get('check-commit')?.['skipped'] !== true;
@@ -1024,6 +1064,8 @@ function publish(scenario: Scenario): Outcome {
   const outputs = new Map<string, Record<string, unknown>>();
   const grants = new Set<string>();
   const ran: string[] = [];
+  const inputs = new Map<string, Record<string, unknown>>();
+  const runInputs = scenario.asItStands === true ? AS_IT_STANDS_INPUTS : RUN_INPUTS;
   let asked = false;
 
   for (let round = 0; round < tasks.length + 1; round += 1) {
@@ -1042,7 +1084,7 @@ function publish(scenario: Scenario): Outcome {
       ran.push(task.taskId);
       if (
         task.taskId === 'push' &&
-        (scenario.baseMoved === true || !receiptAccepted(task, outputs, grants))
+        (scenario.baseMoved === 'conflicting' || !receiptAccepted(task, outputs, grants, runInputs))
       ) {
         statuses.set(task.taskId, 'failed');
         continue;
@@ -1066,7 +1108,7 @@ function publish(scenario: Scenario): Outcome {
         } else {
           // As the operator's resolve records an approval: with the call its
           // preview resolved to, and the grant for the push that call names.
-          const input = boundOutputs(task.actionPreview?.inputBindings, outputs);
+          const input = boundOutputs(task.actionPreview?.inputBindings, outputs, runInputs);
           if (scenario.approvalOf !== undefined) input['receipt'] = scenario.approvalOf;
           outputs.set(task.taskId, {
             decision: 'approved',
@@ -1081,9 +1123,10 @@ function publish(scenario: Scenario): Outcome {
             ? {}
             : substituteTemplateBinds(
                 task.inputTemplate,
-                boundOutputs(task.inputBindings, outputs),
+                boundOutputs(task.inputBindings, outputs, runInputs),
                 new Set(Object.keys(task.inputBindings ?? {})),
               );
+        inputs.set(task.taskId, input);
         const raw = rawOutput(task.taskId, scenario, input);
         if (task.outputProjection !== undefined) {
           const projected = projectTaskOutput(task.outputProjection, raw, null);
@@ -1112,7 +1155,7 @@ function publish(scenario: Scenario): Outcome {
       output,
     })),
   );
-  return { asked, pushed: statuses.get('push') === 'succeeded', ran, state };
+  return { asked, pushed: statuses.get('push') === 'succeeded', ran, inputs, state };
 }
 
 describe('Publish Local Changes — the folder decides whether the push asks', () => {
@@ -1279,7 +1322,7 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
       decision: 'approved',
       committed: false,
     });
-    expect(outcome).toEqual({ asked: false, pushed: false, ran: ['commit'], state: {} });
+    expect(outcome).toMatchObject({ asked: false, pushed: false, ran: ['commit'], state: {} });
   });
 
   it('pushes nothing from a folder that declares no push at all', () => {
@@ -1688,12 +1731,25 @@ describe("Publish Local Changes — the push checks origin's base and URL in its
   });
 
   for (const pushApproval of ['always', 'never', 'unless-unreviewed'] as const) {
-    it(`${pushApproval}: a base that moved since the scan pushes nothing and opens no pull request`, () => {
+    it(`${pushApproval}: a base that moved on since the scan is scanned again by the push, which goes ahead`, () => {
       const outcome = publish({
         pushApproval,
         review: 'approve',
         decision: 'approved',
-        baseMoved: true,
+        baseMoved: 'cleanly',
+      });
+      expect(outcome.ran.slice(-3)).toEqual(['push', 'find-pr', 'open-pr']);
+      expect(outcome.pushed).toBe(true);
+      // One more scan, in the push's own step: no second scan task, and no round.
+      expect(outcome.ran.filter((id) => id === 'scan-commit')).toHaveLength(1);
+    });
+
+    it(`${pushApproval}: a moved base the commit conflicts with pushes nothing and opens no pull request`, () => {
+      const outcome = publish({
+        pushApproval,
+        review: 'approve',
+        decision: 'approved',
+        baseMoved: 'conflicting',
       });
       expect(outcome.ran).toContain('push');
       expect(outcome.pushed).toBe(false);
@@ -1701,18 +1757,87 @@ describe("Publish Local Changes — the push checks origin's base and URL in its
     });
   }
 
-  it('says on failure that nothing was pushed, why, and that the publication runs again', () => {
+  it('says on failure that nothing was pushed, why, and names the remedy for each refusal', () => {
     const failure = taskOrThrow('push').failureInstruction ?? '';
-    expect(failure).toContain(
-      "`origin`'s base branch is somewhere other than where the receipt's range starts",
-    );
-    expect(failure).toContain('no approval of this push is on record');
+    expect(failure).toContain('Nothing was pushed, and the commit is still on its branch');
+    // A move the commit conflicts with: the merge round, by name.
+    expect(failure).toContain('no longer merges cleanly');
+    expect(failure).toContain('the remedy is the merge round');
+    expect(failure).toContain('`mergeFrom: origin/<base>`');
+    // Every other refusal leaves the commit to be published as it stands, never stranded.
     expect(failure).toContain('pushes somewhere other than where it fetches from');
-    expect(failure).toContain('nothing was pushed');
-    expect(failure).toContain('run the publication again on a fresh branch');
+    expect(failure).toContain('publish this branch as it stands');
+    expect(failure).toContain('no approval of this push is on record');
+    expect(failure).not.toContain('fresh branch');
     expect(PUBLISH_LOCAL_CHANGES.description).toContain(
-      "Where the push refused because `origin`'s base moved since the run measured it, either way, or `origin` pushes elsewhere than it fetches, nothing was pushed",
+      'A refused push leaves the commit on its branch: report its message and the remedy the run names.',
     );
+  });
+});
+
+describe('Publish Local Changes — a branch is published as it stands', () => {
+  it('takes no change: neither patch input, no merge and no commit message', () => {
+    const runInput = (id: string) => (wf.runInputs ?? []).find((i) => i.id === id);
+    for (const id of ['patchRef', 'patch', 'mergeFrom', 'commitMessage']) {
+      expect(runInput(id)?.required, id).toBe(false);
+    }
+    expect(runInput('patchRef')?.description).toContain(
+      'Omit both, `mergeFrom` and `commitMessage` to publish `branch` as it stands',
+    );
+    expect(PUBLISH_LOCAL_CHANGES.description).toContain('**A branch as it stands**');
+  });
+
+  it('runs check, scan, review and push on the branch head, with no patch input', () => {
+    const outcome = publish({
+      pushApproval: 'unless-unreviewed',
+      review: 'approve',
+      decision: 'approved',
+      asItStands: true,
+    });
+    expect(outcome.ran).toEqual([
+      'commit',
+      'check-commit',
+      'read-repository',
+      'scan-commit',
+      'read-push-approval',
+      'review-commit',
+      'push',
+      'find-pr',
+      'open-pr',
+    ]);
+    expect(outcome.pushed).toBe(true);
+    expect(outcome.asked).toBe(false);
+
+    // The commit is asked for the head as it stands, and the operation takes it so.
+    const commit = outcome.inputs.get('commit') ?? {};
+    expect(commit).not.toHaveProperty('patchRef');
+    expect(commit).not.toHaveProperty('patch');
+    expect(commit['commit']).toEqual({ branch: 'aflow/x', baseSha: STRANDED, pushBase: 'main' });
+    expect(HostFilePatchInputSchema.safeParse(commit).success).toBe(true);
+
+    // Everything after it reads that head, measured against where `origin`'s base is.
+    expect(outcome.inputs.get('check-commit')).toMatchObject({ sha: STRANDED, base: ORIGIN_BASE });
+    expect(outcome.inputs.get('scan-commit')).toMatchObject({
+      range: `${ORIGIN_BASE}..${STRANDED}`,
+    });
+    expect(outcome.inputs.get('review-commit')).toMatchObject({
+      inputs: { range: `${ORIGIN_BASE}..${STRANDED}` },
+    });
+    expect((outcome.inputs.get('push')?.['command'] as string[] | undefined)?.at(-1)).toBe(
+      `${STRANDED}:refs/heads/aflow/x`,
+    );
+    // Without a summary the pull request's body is the head's own message after its subject.
+    const opened = outcome.inputs.get('open-pr')?.['params'] as { body: { body?: string } };
+    expect(opened.body.body).toBe('What it does.');
+  });
+
+  it('is refused at the commit with a message, but no change, as two readings of one request', () => {
+    const asked = HostFilePatchInputSchema.safeParse({
+      bindingId: 'folder-1',
+      commit: { branch: 'aflow/x', baseSha: STRANDED, message: 'm', pushBase: 'main' },
+    });
+    expect(asked.success).toBe(false);
+    expect(asked.error?.issues[0]?.message).toContain('a branch as it stands');
   });
 });
 

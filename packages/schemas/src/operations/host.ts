@@ -277,7 +277,7 @@ export const HostScanReceiptSchema = z
   .describe(
     'The `receipt` `host.commit.scan` returned, verbatim. Issued by the executor on the ' +
       'machine that scanned, for one folder and one range — its base and its last commit — ' +
-      'and read only by that executor until it restarts.',
+      'and evidence to that executor alone, for a day: a push it cannot clear rescans.',
   );
 
 /**
@@ -435,22 +435,22 @@ export const HostProcessExecInputSchema = z.object({
     'Required with every push and belongs to no other command: the branch on `origin` the ' +
       'push is measured against — the `pushBase` the commit was made with, by its name ' +
       'alone. In the same step, just before git is spawned, `origin/<pushBase>` is fetched ' +
-      'and read, and the push is refused unless it goes to the URL `origin` fetches from and ' +
-      'its receipt is for the range from exactly that commit to the one it sends.',
+      'and read, and the push is refused unless it goes to the URL `origin` fetches from.',
   ),
   scan: z
     .object({
       receipt: HostScanReceiptSchema.describe(
         'The `receipt` `host.commit.scan` returned for the range this push sends: from where ' +
-          '`origin/<pushBase>` is to the source of its one refspec.',
+          '`origin/<pushBase>` was when it was scanned to the source of its one refspec.',
       ),
     })
     .optional()
     .describe(
       'Required with every push and belongs to no other command: a push is refused unless ' +
-        'it sends, from this folder, the range a scan by this executor found no secret in, ' +
-        'and — where that scan did not clear it — unless the operator approved this push in ' +
-        'this run.',
+        'it sends, from this folder, a range found free of secrets — by the scan the receipt ' +
+        'is for, or by its own where `origin` moved on (refused naming the merge round where ' +
+        'the move conflicts) or the executor restarted since — and, where that range was not ' +
+        'cleared, unless the operator approved this push, with this receipt, in this run.',
     ),
   check: z
     .object({
@@ -458,16 +458,16 @@ export const HostProcessExecInputSchema = z.object({
         .optional()
         .describe(
           'The `receipt` `host.commit.check` returned for the source of the push’s one refspec, ' +
-            'measured against where `origin/<pushBase>` is. Null or absent where the folder ' +
-            'declares no checks, and the check issued none.',
+            'measured against where `origin/<pushBase>` is or a commit under it. Null or absent ' +
+            'where the folder declares no checks, and the check issued none.',
         ),
     })
     .optional()
     .describe(
       'Belongs to a push alone. A push from a folder that declares checks is refused unless ' +
         'they passed, on this executor, on exactly the commit it sends, against the base it ' +
-        'measures, as the folder declares them, under the sandbox posture it declares, when it ' +
-        'pushes. A folder that declares none ' +
+        'measures or one `origin` has since moved past, as the folder declares them, under the ' +
+        'sandbox posture it declares, when it pushes. A folder that declares none ' +
         'needs no receipt, and a push from it that carries one is refused.',
     ),
 });
@@ -518,6 +518,10 @@ export const HostProcessExecOutputSchema = z.object({
   checkedUnder: HostSandboxPostureSchema.optional().describe(
     "The sandbox posture the folder's checks ran under, as the push's check receipt says, " +
       'recorded with the push. Present only on a push from a folder that declares checks.',
+  ),
+  rescanned: HostCommitRangeSchema.optional().describe(
+    'The range the push scanned itself, where `origin` moved on since its receipt or the ' +
+      'executor restarted since issuing it.',
   ),
   boundaryNote: z
     .string()
@@ -631,7 +635,8 @@ export const HostFilePatchInputSchema = z
           .string()
           .min(1)
           .max(20_000)
-          .describe('Commit message, verbatim. The first line is the subject, as git reads it.'),
+          .optional()
+          .describe('Commit message, verbatim; the first line is the subject, as git reads it.'),
         baseSha: HostCommitShaSchema.optional().describe(
           'The commit the patch was made against, as the commission reported it in `baseSha` — ' +
             'a sha, never a branch or tag name, for a commit the folder has (a commission ' +
@@ -672,22 +677,33 @@ export const HostFilePatchInputSchema = z
           "The operator's checkout, index and current branch are untouched: the patch is " +
           'applied in a checkout the executor makes for itself — at HEAD for a new branch, at ' +
           "the branch's head for an existing one — committed there, and the branch ref is " +
-          'created or advanced by that one commit. That commit is what a publication pushes.',
+          'created or advanced by that one commit. That commit is what a publication pushes. ' +
+          'With no diff, `mergeFrom` or `message`, the existing branch is published as it ' +
+          'stands: nothing is made, and its head, named by `baseSha`, is the commit.',
       ),
   })
   .superRefine((input, ctx) => {
-    if (
-      input.patch === undefined &&
-      input.patchRef === undefined &&
-      input.commit?.mergeFrom === undefined
-    ) {
+    const noDiff = input.patch === undefined && input.patchRef === undefined;
+    const { mergeFrom, message, baseSha } = input.commit ?? {};
+    const asItStands =
+      noDiff && input.commit !== undefined && !mergeFrom && !message && baseSha !== undefined;
+    if (noDiff && mergeFrom === undefined && !asItStands) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['patchRef'],
         message:
           'Name the diff to apply: `patchRef` for the change a commission reported, or ' +
           '`patch` for a diff handed over as text. Only a publication with ' +
-          '`commit.mergeFrom` goes without one, the merge being its whole change.',
+          '`commit.mergeFrom` goes without one, the merge being its whole change — or one ' +
+          'of a branch as it stands, with `commit.baseSha` naming its head and no ' +
+          '`commit.message`, since the head carries its own.',
+      });
+    }
+    if (input.commit !== undefined && message === undefined && !asItStands) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['commit', 'message'],
+        message: '`commit.message` is the commit’s message, and every commit this makes needs one.',
       });
     }
     if (input.patch !== undefined && input.patchRef !== undefined) {
@@ -709,7 +725,7 @@ export const HostFilePatchOutputSchema = z.object({
         'mode it means the tree WAS written and the files named in `conflicts` carry ' +
         'markers — check `filesChanged` rather than assuming nothing happened. With ' +
         '`commit` a conflict leaves no commit and no branch, and the folder untouched in ' +
-        'either mode.',
+        'either mode. A branch published as it stands is `applied` with nothing written.',
     ),
   filesChanged: z
     .number()
@@ -747,6 +763,10 @@ export const HostFilePatchOutputSchema = z.object({
       appended: z
         .boolean()
         .describe('True when the branch existed and the commit was appended to it.'),
+      asItStands: z
+        .literal(true)
+        .optional()
+        .describe('Nothing was made: `sha` is the head the branch had, `baseSha` its parent.'),
       merged: z
         .string()
         .optional()
@@ -781,8 +801,8 @@ export const HostFilePatchOutputSchema = z.object({
     })
     .optional()
     .describe(
-      'Present only when `commit` was asked for and the diff applied. A conflict leaves no ' +
-        'commit and no branch created or moved.',
+      'Present only when `commit` was asked for and the diff applied, or the branch was ' +
+        'published as it stands. A conflict leaves no commit and no branch created or moved.',
     ),
 });
 

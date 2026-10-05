@@ -131,6 +131,34 @@ export async function reachMergeSource(root: string, sha: string, head: string):
 }
 
 /**
+ * The paths a merge of `sha` into `base` would leave conflicted, made in the
+ * object store alone — no checkout, no ref and no index is touched. Empty
+ * where the two merge cleanly.
+ */
+export async function mergeConflictPaths(
+  root: string,
+  base: string,
+  sha: string,
+): Promise<string[]> {
+  const args = [...MERGE_PINS, 'merge-tree', '--write-tree', '--name-only', '-z', '--no-messages'];
+  let listing: string;
+  try {
+    listing = await git(root, [...args, base, sha], APPLY_OUTPUT_CAP_BYTES);
+  } catch (error) {
+    // 1 is merge-tree's "conflicts", with the listing still on standard output.
+    if (typeof error !== 'object' || error === null || !('code' in error) || error.code !== 1) {
+      throw new WorktreeError(
+        `Whether \`${sha}\` merges into \`${base}\` could not be read: ${firstLine(error)}`,
+        'git_failed',
+      );
+    }
+    listing = 'stdout' in error && typeof error.stdout === 'string' ? error.stdout : '';
+  }
+  // The first entry is the merged tree; the conflicted paths follow it.
+  return [...new Set(listing.split('\0').slice(1))].filter((path) => path !== '');
+}
+
+/**
  * The `-c` arguments a commission's merge is committed under: the operator's
  * commit identity, the one the publication's commit carries.
  */

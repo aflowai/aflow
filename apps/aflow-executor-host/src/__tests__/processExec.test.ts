@@ -1045,21 +1045,15 @@ describe('a push sends only a range this executor scanned', () => {
 
   it('refuses every push it cannot tie to a scan, naming why, with nothing pushed', async () => {
     const valid = receipt();
-    const forged = `${valid.slice(0, valid.indexOf('.'))}.${'A'.repeat(43)}`;
     const other = 'f'.repeat(40);
     const cases: ReadonlyArray<readonly [string, Parameters<typeof push>[0], string]> = [
       ['no push base', { receipt: valid, pushBase: null }, 'This push names no `pushBase`'],
       ['no receipt', {}, 'carries no scan receipt'],
-      ['forged', { receipt: forged }, 'did not issue since it last started'],
+      ['unreadable', { receipt: 'not-a.receipt' }, 'a scan receipt that names no folder and range'],
       [
         'another folder',
         { receipt: receipt('clean', { bindingId: 'hb_other' }) },
         'a scan of `hb_other`, and pushes from `hb_push`',
-      ],
-      [
-        'stale',
-        { receipt: receipt('clean', { now: Date.now() - RECEIPT_TTL_MS - 1 }) },
-        'more than a day ago',
       ],
       [
         'another commit',
@@ -1083,6 +1077,52 @@ describe('a push sends only a range this executor scanned', () => {
     expect(await remoteBranches()).toBe('');
   }, 60_000);
 
+  it('scans the range itself for a receipt it cannot read as its own or that is past its day, and pushes', async () => {
+    const valid = receipt();
+    const cases = [
+      ['signed-elsewhere', `${valid.slice(0, valid.indexOf('.'))}.${'A'.repeat(43)}`],
+      ['past-its-day', receipt('clean', { now: Date.now() - RECEIPT_TTL_MS - 1 })],
+    ] as const;
+    for (const [branch, carried] of cases) {
+      const outcome = await push({
+        receipt: carried,
+        refspecs: [`${tip}:refs/heads/aflow/${branch}`],
+      });
+      expect(outcome.status, branch).toBe('SUCCEEDED');
+      expect(outcome.captured.output?.['rescanned'], branch).toBe(`${base}..${tip}`);
+      expect(await remoteBranches(), branch).toContain(`aflow/${branch}`);
+    }
+  }, 60_000);
+
+  it("asks for the operator's grant for the receipt it carried, where it scanned the range itself", async () => {
+    const carried = receipt('clean', {
+      bindingId: 'hb_always',
+      now: Date.now() - RECEIPT_TTL_MS - 1,
+    });
+    const refspec = `${tip}:refs/heads/aflow/rescanned-on-grant`;
+    expectRefused(
+      await push({ bindingId: 'hb_always', receipt: carried, refspecs: [refspec] }),
+      'no grant',
+      'The push approval of `hb_always` is `always`',
+    );
+    const hash = hostPushRequestHash({ bindingId: 'hb_always', refspec, receipt: carried });
+    const approved = await push({
+      bindingId: 'hb_always',
+      receipt: carried,
+      refspecs: [refspec],
+      approvals: pushApprovalsHolding(
+        new Map([
+          [
+            `${TENANT}:${RUN}:${hash}`,
+            { requestHash: hash, decision: 'approved' as const, approvedBy: 'operator-1' },
+          ],
+        ]),
+      ),
+    });
+    expect(approved.status).toBe('SUCCEEDED');
+    expect(approved.captured.output?.['rescanned']).toBe(`${base}..${tip}`);
+  }, 60_000);
+
   it('refuses a receipt for any range but the one from where origin is, naming both', async () => {
     for (const [name, from] of [
       ['<tip>..<tip>', tip],
@@ -1095,7 +1135,7 @@ describe('a push sends only a range this executor scanned', () => {
           `receipt is for a scan of \`${from}..${tip}\``,
       );
     }
-    expect(await remoteBranches()).toBe('');
+    expect(await remoteBranches()).not.toContain('aflow/x');
 
     const whole = await push({ receipt: receipt('clean') });
     expect(whole.status).toBe('SUCCEEDED');
