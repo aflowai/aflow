@@ -876,6 +876,16 @@ describe('the idle sweep and work in flight', () => {
 });
 
 describe('browser.profile.list', () => {
+  it('says which loopback ports each profile is opened to, leaving out any this stack serves on', async () => {
+    const h = harness({
+      browsers: [profile({ localPorts: [5173, 3001, 8000] }), profile({ id: 'work' })],
+    });
+    expect((await h.driver.listProfiles(RUN_A)).map((p) => [p.profileId, p.localPorts])).toEqual([
+      ['default', [5173, 8000]],
+      ['work', []],
+    ]);
+  });
+
   it('never starts a browser to answer, and names sites only while one runs', async () => {
     const h = harness({
       browsers: [profile(), profile({ id: 'work', spaces: ['space-2'], posture: 'read-only' })],
@@ -887,6 +897,7 @@ describe('browser.profile.list', () => {
         window: 'hidden',
         unattended: true,
         openToThisRun: true,
+        localPorts: [],
         running: false,
         sitesUnknown: 'not_started',
       },
@@ -906,6 +917,7 @@ describe('browser.profile.list', () => {
         window: 'hidden',
         unattended: true,
         openToThisRun: true,
+        localPorts: [],
         running: true,
         sites: ['accounts.example.com', 'mail.example.com'],
       },

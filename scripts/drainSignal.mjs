@@ -1,10 +1,12 @@
 /**
- * The signals `scripts/watch-and-drain.mjs` sends the service it supervises.
+ * The signals `scripts/watch-service.mjs --drain` sends the service it
+ * supervises.
  *
  * A restart is the one stop that may wait: the watcher sends `DRAIN_SIGNAL`
  * and starts the service again once it has exited, never killing it. SIGTERM
  * and SIGINT mean "stop now" to the host executor, because every other
- * supervisor that sends them — the dev runner, `tsx watch`, launchd — kills
+ * supervisor that sends them — the dev runner, a watcher restarting a service
+ * that does not drain, launchd — kills
  * after a short grace, and work left running past a kill holds its credential
  * and its checkout with nothing to end it.
  *

@@ -8,6 +8,7 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { stackOwnPorts } from '@aflow/lib';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { loadHostPolicy } from '../bindings.js';
@@ -74,6 +75,7 @@ function deps(
     clock,
     ownDriver,
     profileHolder,
+    stackPorts: stackOwnPorts({}),
   };
 }
 
@@ -103,6 +105,16 @@ describe('the arguments', () => {
       profileId: 'work',
       origin: '*.example.com',
     });
+    expect(parseBrowserArgs(['local-port', 'work', '5173'])).toEqual({
+      kind: 'local_port',
+      profileId: 'work',
+      port: '5173',
+    });
+    expect(parseBrowserArgs(['local-port', 'work', '5173', '--remove'])).toEqual({
+      kind: 'local_port_remove',
+      profileId: 'work',
+      port: '5173',
+    });
   });
 
   it('name nothing when they are incomplete, extra or unknown', () => {
@@ -118,6 +130,9 @@ describe('the arguments', () => {
       ['rule', 'work', '*.example.com'],
       ['rule', 'work', '*.example.com', 'deny', '--remove'],
       ['rule', 'work', '*.example.com', 'deny', '--force'],
+      ['local-port', 'work'],
+      ['local-port', 'work', '5173', '8000'],
+      ['local-port', 'work', '5173', '--force'],
     ]) {
       expect(parseBrowserArgs(args), args.join(' ')).toBeUndefined();
     }
@@ -246,6 +261,65 @@ describe('edits to the policy file', () => {
       await expect(runBrowserCommand(command, deps([], clock)), said).rejects.toThrow(said);
     }
     expect(await readFile(policyPath, 'utf8')).toBe(before);
+  });
+});
+
+describe('a profile’s local ports', () => {
+  it('are opened and closed on the machine, saying what each reaches, and listed', async () => {
+    await writePolicy({ browsers: [{ id: 'work' }] });
+    const clock = testClock();
+    const printed: string[] = [];
+    await runBrowserCommand(
+      { kind: 'local_port', profileId: 'work', port: '5173' },
+      deps(printed, clock),
+    );
+    expect(printed[0]).toBe(
+      'Profile `work` loads port 5173 on loopback — localhost, 127.0.0.1, [::1] — and on no ' +
+        'other address of this machine.',
+    );
+    await runBrowserCommand(
+      { kind: 'local_port', profileId: 'work', port: '8000' },
+      deps([], clock),
+    );
+    await runBrowserCommand(
+      { kind: 'local_port_remove', profileId: 'work', port: '8000' },
+      deps([], clock),
+    );
+    expect((await readPolicy()).browsers).toEqual([{ id: 'work', localPorts: [5173] }]);
+    const listed: string[] = [];
+    await runBrowserCommand({ kind: 'list' }, deps(listed, clock));
+    expect(listed).toContain('    loads port 5173 on loopback');
+  });
+
+  it('refuse a port this stack serves on, saying why, and write nothing', async () => {
+    await writePolicy({ browsers: [{ id: 'work' }] });
+    const before = await readFile(policyPath, 'utf8');
+    await expect(
+      runBrowserCommand(
+        { kind: 'local_port', profileId: 'work', port: '3001' },
+        deps([], testClock()),
+      ),
+    ).rejects.toThrow(
+      "Port 3001 is this stack's own — the web application, by default — and a page from it " +
+        "could approve the agent's requests, so no browser profile is opened to it.",
+    );
+    expect(await readFile(policyPath, 'utf8')).toBe(before);
+  });
+
+  it('show a stack port written into the file by hand as refused, and let it be closed', async () => {
+    await writePolicy({ browsers: [{ id: 'work', localPorts: [3001] }] });
+    const clock = testClock();
+    const listed: string[] = [];
+    await runBrowserCommand({ kind: 'list' }, deps(listed, clock));
+    expect(listed).toContain(
+      "    port 3001 is listed and refused: port 3001 is this stack's own — the web " +
+        "application, by default — and a page from it could approve the agent's requests",
+    );
+    await runBrowserCommand(
+      { kind: 'local_port_remove', profileId: 'work', port: '3001' },
+      deps([], clock),
+    );
+    expect((await readPolicy()).browsers).toEqual([{ id: 'work', localPorts: [] }]);
   });
 });
 

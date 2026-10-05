@@ -82,6 +82,6 @@ Evaluation runs through one substrate: the post-run hook calls `runEvaluation` (
 
 ## Testing Changes
 
-The orchestrator uses `tsx watch` and auto-restarts on file changes.
+The orchestrator runs under `scripts/watch-service.mjs`, which restarts it on file changes and when it crashes.
 However, changes to compiled packages (`packages/*`) require `yarn build` first.
 Check for duplicate orchestrator processes (`ps aux | grep orchestrator`).

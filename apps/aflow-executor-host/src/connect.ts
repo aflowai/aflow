@@ -29,7 +29,7 @@ import {
   resolveBranchPrefix,
   toolDirectoriesOnPath,
 } from './interview.js';
-import { serializePolicy, writePolicyAtomically } from './policyFile.js';
+import { editPolicy } from './policyFile.js';
 import { describeChecks, keptChecks } from './folderChecks.js';
 import { chosenPushApproval, describePushApproval, PUSH_SCAN_NOTE } from './pushApproval.js';
 import { describeFolderSandbox, keptSandboxPosture } from './sandboxPosture.js';
@@ -276,6 +276,7 @@ async function main(): Promise<void> {
     });
     const checks = keptChecks(currentBranchPolicy, branchPrefix);
 
+    const addedToolPaths: string[] = [];
     // Home is denied as a region, so a CLI installed under it is unreachable
     // until the operator says otherwise. That used to mean editing a key they
     // had not heard of, in a file they had never opened. Their own tools,
@@ -300,7 +301,7 @@ async function main(): Promise<void> {
             true,
           )
         ) {
-          policy.toolPaths = [...policy.toolPaths, ...fresh.map((t) => t.directory)];
+          addedToolPaths.push(...fresh.map((t) => t.directory));
         }
         prompter.say('');
       }
@@ -438,8 +439,14 @@ async function main(): Promise<void> {
       singleFile: info.isFile(),
       spaceId: material.spaceId,
     };
-    policy.bindings = [...policy.bindings.filter((b) => b.id !== recorded), binding];
-    await writePolicyAtomically(POLICY_PATH, serializePolicy(policy));
+    // Applied to the file as it is now, not as it was read before the prompts
+    // and the redemption: a change made meanwhile by another writer stands.
+    const written = await editPolicy(POLICY_PATH, (current) => {
+      const latest = HostPolicySchema.parse(current ?? { version: 1, bindings: [] });
+      latest.toolPaths = [...new Set([...latest.toolPaths, ...addedToolPaths])];
+      latest.bindings = [...latest.bindings.filter((b) => b.id !== recorded), binding];
+      return latest;
+    });
 
     // The credential arrives with the same call, so one command leaves the
     // machine able to do the work rather than merely permitted to.
@@ -450,7 +457,7 @@ async function main(): Promise<void> {
     await writeFile(envPath, `REDIS_URL='${url.toString()}'\n`, { mode: 0o600 });
     await chmod(envPath, 0o600);
 
-    reportDisagreement(prompter, policy.bindings, material, recorded);
+    reportDisagreement(prompter, written.bindings, material, recorded);
 
     prompter.say(`Connected ${root} to ${material.spaceSlug} as \`${recorded}\`.`);
     if (recorded !== id) {

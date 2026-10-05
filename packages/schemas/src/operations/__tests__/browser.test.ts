@@ -310,6 +310,7 @@ describe('browser.page.read and browser.profile.list', () => {
             window: 'hidden',
             unattended: true,
             openToThisRun: true,
+            localPorts: [],
             running: false,
             sitesUnknown: 'not_started',
           },
@@ -337,7 +338,19 @@ describe('BrowserProfileSchema', () => {
       unattended: true,
       idleMinutes: 30,
       handoffMinutes: 15,
+      localPorts: [],
     });
+  });
+
+  it('opens no local port unless the operator names one, and takes only port numbers', () => {
+    expect(BrowserProfileSchema.parse({ id: 'work', localPorts: [5173, 8000] }).localPorts).toEqual(
+      [5173, 8000],
+    );
+    for (const port of [0, 65_536, 51.73, '5173']) {
+      expect(BrowserProfileSchema.safeParse({ id: 'work', localPorts: [port] }).success).toBe(
+        false,
+      );
+    }
   });
 
   it('takes a list of spaces, origin rules and an idle limit', () => {
@@ -448,8 +461,11 @@ function declaredNames(schema: unknown, into: Set<string> = new Set()): Set<stri
   return into;
 }
 
+/** What a person sets on a profile, by the names an input schema would carry them under. */
+const SETTINGS = ['posture', 'unattended', 'an origin rule', 'localPorts'];
+
 describe('a browser profile’s settings (Plan 320 D5)', () => {
-  it('are changed by no operation: none takes a posture, an unattended choice or an origin rule', () => {
+  it('are changed by no operation: none takes a posture, an unattended choice, an origin rule or local ports', () => {
     const reaching: string[] = [];
     for (const op of getAllOperations().values()) {
       const names = declaredNames([
@@ -458,7 +474,7 @@ describe('a browser profile’s settings (Plan 320 D5)', () => {
           ? [toJsonSchemaSync(op.stepConfigZod, { draft: 'draft-2020-12' })]
           : []),
       ]);
-      for (const setting of ['posture', 'unattended', 'an origin rule']) {
+      for (const setting of SETTINGS) {
         if (names.has(setting)) reaching.push(`${op.operationId}: ${setting}`);
       }
     }
@@ -467,6 +483,6 @@ describe('a browser profile’s settings (Plan 320 D5)', () => {
     const profile = declaredNames(
       toJsonSchemaSync(BrowserProfileSchema, { draft: 'draft-2020-12' }),
     );
-    expect(['posture', 'unattended', 'an origin rule'].filter((s) => !profile.has(s))).toEqual([]);
+    expect(SETTINGS.filter((s) => !profile.has(s))).toEqual([]);
   });
 });

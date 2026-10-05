@@ -16,7 +16,11 @@ import {
   BrowserOutlineCensusSchema,
   BrowserPageIdSchema,
 } from './browser.js';
-import { BrowserPostureSchema, BrowserProfileIdSchema } from './browserProfile.js';
+import {
+  BrowserLocalPortSchema,
+  BrowserPostureSchema,
+  BrowserProfileIdSchema,
+} from './browserProfile.js';
 
 export const BROWSER_PAGE_SNAPSHOT_OPERATION_ID = buildOperationId('browser', 'page', 'snapshot');
 export const BROWSER_PAGE_READ_OPERATION_ID = buildOperationId('browser', 'page', 'read');
@@ -227,6 +231,13 @@ export const BrowserProfileListOutputSchema = z.object({
           '`false` when nobody is present for this run now and the profile takes no such run: ' +
             'every operation on it is refused until a person next sets the run going, directly ' +
             'or through a run they are present for.',
+        ),
+      localPorts: z
+        .array(BrowserLocalPortSchema)
+        .describe(
+          'Loopback ports on this machine the operator opened to the profile: a page at ' +
+            'localhost, 127.0.0.1 or [::1] on one of them loads, and on any other port it is ' +
+            'refused. Empty: nothing on this machine loads in it.',
         ),
       running: z.boolean().describe('Whether the profile’s browser is running now.'),
       sites: z
@@ -443,8 +454,9 @@ export const BrowserObservationRegistrations: OperationRegistration[] = [
       'The browser profiles this space may use, and which sites each holds a session for.',
     semanticDescription:
       'The browser profiles this space may use: each one’s posture, whether it has a window, ' +
-      'whether its browser is running, and the sites it holds a session for — host names only, ' +
-      'never a cookie value. Says whether a task’s site is reachable signed in before work starts.',
+      'whether its browser is running, the sites it holds a session for — host names only, ' +
+      'never a cookie value — and the loopback ports on this machine the operator opened to it. ' +
+      'Says whether a task’s site, or a dev server here, is reachable before work starts.',
     tags: ['browser', 'web', 'profile', 'local'],
     idempotency: 'idempotent',
     mutates: false,
@@ -459,6 +471,8 @@ export const BrowserObservationRegistrations: OperationRegistration[] = [
         'Sites are known only while a profile’s browser runs; `sitesUnknown` says why they are ' +
           'absent. Opening a page starts the browser.',
         'A site listed holds cookies, which is usually a session but not proof of one.',
+        'A page on this machine — localhost, 127.0.0.1, [::1] — loads only on a port in the ' +
+          'profile’s `localPorts`; the operator opens one on the machine, never a run.',
         'Profiles are declared on the operator’s machine; a run cannot add or change one.',
       ],
       minimalExampleInput: {},

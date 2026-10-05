@@ -91,6 +91,7 @@ const PROFILE = {
   unattended: false,
   idleMinutes: 30,
   handoffMinutes: 15,
+  localPorts: [5173],
 };
 
 /** The machine's executor as the channel sees it: what it was asked, and what it answers. */
@@ -141,6 +142,18 @@ const CONTROLS = [
     url: '/host/browsers/work/rules',
     payload: { hostname: 'laptop', origin: '*.example.org' },
     setting: { kind: 'rule_remove', origin: '*.example.org' },
+  },
+  {
+    method: 'PUT',
+    url: '/host/browsers/work/local-ports',
+    payload: { hostname: 'laptop', port: '5173' },
+    setting: { kind: 'local_port', port: '5173' },
+  },
+  {
+    method: 'DELETE',
+    url: '/host/browsers/work/local-ports',
+    payload: { hostname: 'laptop', port: '5173' },
+    setting: { kind: 'local_port_remove', port: '5173' },
   },
 ] as const;
 
@@ -205,6 +218,22 @@ describe('changing a browser profile’s settings from the machine page', () => 
     });
     expect(response.statusCode).toBe(422);
     expect(response.json()).toEqual({ error: 'BrowserSettingRefused', message: refusal });
+  });
+
+  it('refuses to open a port this stack serves on, saying why, and relays nothing', async () => {
+    const app = await buildApp(PERSON);
+    for (const port of ['3000', '3001', '3100', '6379', '5433', '8080']) {
+      const response = await app.inject({
+        method: 'PUT',
+        url: '/host/browsers/work/local-ports',
+        payload: { hostname: 'laptop', port },
+      });
+      expect(response.statusCode, port).toBe(422);
+      const { message } = response.json<{ message: string }>();
+      expect(message, port).toContain(`Port ${port} is this stack's own`);
+      expect(message, port).toContain("could approve the agent's requests");
+    }
+    expect(mocks.publish).not.toHaveBeenCalled();
   });
 
   it('says so when the machine is not running, or nothing on it is listening', async () => {

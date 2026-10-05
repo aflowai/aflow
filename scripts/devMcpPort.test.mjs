@@ -6,11 +6,13 @@ const WORKTREE = '/home/dev/src/aflow-worktrees/topic';
 
 /**
  * `ps ax -o pid=,command=` in the shapes a `yarn dev:mcp` leaves: the runner,
- * and the node process under `tsx watch` that actually listens.
+ * the service watcher, and the node process under it that actually listens,
+ * which the watcher starts on its entry's absolute path.
  */
 const PS = [
   `  501 node scripts/dev.mjs --profile mcp`,
-  `  512 node --require ${WORKTREE}/node_modules/tsx/dist/preflight.cjs --import file://${WORKTREE}/node_modules/tsx/dist/loader.mjs apps/aflow-mcp/src/index.ts`,
+  `  508 node scripts/watch-service.mjs apps/aflow-mcp/src/index.ts apps/aflow-mcp packages`,
+  `  512 /usr/local/bin/node --conditions=ts-source --import tsx ${WORKTREE}/apps/aflow-mcp/src/index.ts`,
   '  700 /Applications/Other.app/Contents/MacOS/other --port 3100',
 ].join('\n');
 

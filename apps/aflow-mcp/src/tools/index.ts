@@ -3,7 +3,7 @@
  *
  * Up to 10 tools (fetch_payload hidden in eager mode). Every space-scoped tool takes
  * an explicit space_id — there is no session default and no set_space:
- *   1. auth_status     — whoami
+ *   1. auth_status     — whoami, and whether an orchestrator is consuming
  *   2. space_list      — list accessible spaces (direct API)
  *   3. catalog         — two-phase operation discovery (via mcp-runner agent)
  *   4. run_operation   — run any operation by ID (via mcp-runner agent)
@@ -56,7 +56,7 @@ export interface ToolDeps {
 }
 
 export function registerAllTools(server: McpServer, deps: ToolDeps): void {
-  registerAuthTools(server, deps.authManager, deps.getSession);
+  registerAuthTools(server, deps.authManager, deps.apiClient, deps.getSession);
 
   registerSpaceTools(server, deps.apiClient, deps.authManager, deps.getSession);
 

@@ -49,13 +49,23 @@ export function refusalError(profile: BrowserProfile, refusal: ProxyRefusal): Br
   );
 }
 
-/** The refusal of the host a page landed on — Chrome shows a plain-http refusal as a page. */
+function portOf(url: URL): number {
+  return url.port !== '' ? Number(url.port) : url.protocol === 'https:' ? 443 : 80;
+}
+
+/**
+ * The refusal of the host and port a page landed on — Chrome shows a
+ * plain-http refusal as a page. The port too: a page on a local port opened
+ * to the profile is not refused by its own request to another port refused.
+ */
 export function landedRefusal(
   proxy: EgressProxy,
   landed: URL,
   since: number,
 ): ProxyRefusal | undefined {
-  return proxy.refusalsSince(since).find((refusal) => refusal.host === hostOf(landed));
+  return proxy
+    .refusalsSince(since)
+    .find((refusal) => refusal.host === hostOf(landed) && refusal.port === portOf(landed));
 }
 
 export function navigationFailure(

@@ -53,7 +53,7 @@ curl -s http://localhost:3100/health | head -1       # MCP server
 
 ### After MCP server changes
 
-1. **Important**: After changes to `apps/aflow-mcp/`, the MCP server auto-restarts via `tsx watch`
+1. **Important**: After changes to `apps/aflow-mcp/`, the MCP server auto-restarts via `scripts/watch-service.mjs`
 2. **Session reset required**: The user must close and resume the Claude Code session for the coding agent to pick up updated tool schemas
 3. **Re-test**: Run `mcp__aflow-local__auth_status` to confirm reconnection, then test your changes
 

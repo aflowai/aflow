@@ -1,4 +1,6 @@
-const DEFAULT_PORT = '3000';
+import { DEFAULT_API_PORT } from '@aflow/lib';
+
+const DEFAULT_PORT = String(DEFAULT_API_PORT);
 
 /**
  * The single form of a configured origin, or `null` when the value is not an

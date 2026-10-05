@@ -58,6 +58,7 @@ describe('a policy file written before browsers', () => {
         unattended: true,
         idleMinutes: 30,
         handoffMinutes: 15,
+        localPorts: [],
       },
     ]);
     // Computed on load, never written back.

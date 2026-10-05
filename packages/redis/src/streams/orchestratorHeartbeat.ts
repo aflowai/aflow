@@ -114,3 +114,65 @@ export async function listLiveOrchestrators(redis: Redis): Promise<string[]> {
   const members = await redis.eval(LIVE_INSTANCES_LUA, 1, StreamKeys.orchestratorLivenessKey);
   return Array.isArray(members) ? (members as string[]) : [];
 }
+
+export interface OrchestratorHealth {
+  /** Whether any orchestrator holds a live lease: nothing else consumes the control, result and timer streams. */
+  alive: boolean;
+  /** The freshest heartbeat any instance wrote, live or lapsed. */
+  lastHeartbeat: string | null;
+  heartbeatAgeMs: number | null;
+}
+
+/**
+ * The freshest lease is read whether or not it is live: when none is, nothing
+ * prunes the set, so the one left behind is the last orchestrator seen.
+ */
+const ORCHESTRATOR_HEALTH_LUA = `
+${NOW_MS_LUA}
+local live = redis.call('ZCOUNT', KEYS[1], nowMs, '+inf')
+local freshest = redis.call('ZREVRANGE', KEYS[1], 0, 0, 'WITHSCORES')
+return { live, freshest[2] or '', tostring(nowMs) }
+`;
+
+/** What one read of the liveness index says, on Redis' clock. */
+export function orchestratorHealthFrom(reading: {
+  live: number;
+  freshestLeaseExpiresAtMs: number | null;
+  nowMs: number;
+}): OrchestratorHealth {
+  if (reading.freshestLeaseExpiresAtMs === null) {
+    return { alive: reading.live > 0, lastHeartbeat: null, heartbeatAgeMs: null };
+  }
+  const lastBeatMs = reading.freshestLeaseExpiresAtMs - INSTANCE_LEASE_TTL_MS;
+  return {
+    alive: reading.live > 0,
+    lastHeartbeat: new Date(lastBeatMs).toISOString(),
+    heartbeatAgeMs: Math.max(0, reading.nowMs - lastBeatMs),
+  };
+}
+
+/** Whether an orchestrator is alive, and when the last one beat. One round trip. */
+export async function getOrchestratorHealth(redis: Redis): Promise<OrchestratorHealth> {
+  const reply = await redis.eval(ORCHESTRATOR_HEALTH_LUA, 1, StreamKeys.orchestratorLivenessKey);
+  const values: unknown[] = Array.isArray(reply) ? reply : [];
+  const [live, freshestScore, nowMs] = values;
+  const expiresAt = freshestScore === '' ? Number.NaN : Number(freshestScore);
+  return orchestratorHealthFrom({
+    live: Number(live ?? 0),
+    freshestLeaseExpiresAtMs: Number.isFinite(expiresAt) ? expiresAt : null,
+    nowMs: Number(nowMs),
+  });
+}
+
+/**
+ * What every surface says while no orchestrator is alive. Messages, results
+ * and cancellations are all accepted while it is gone, so without this the
+ * only sign of it is work that never moves.
+ */
+export const ORCHESTRATOR_ABSENT_NOTICE =
+  'No orchestrator is running: messages, step results and cancellations wait until one starts.';
+
+/** The notice for `health`, or null while an orchestrator is alive. */
+export function orchestratorAbsentNotice(health: Pick<OrchestratorHealth, 'alive'>): string | null {
+  return health.alive ? null : ORCHESTRATOR_ABSENT_NOTICE;
+}

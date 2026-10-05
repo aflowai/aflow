@@ -10,7 +10,7 @@
   },
   "scripts": {
     "build": "npx tsc && cp src/browser/harnessRelay.mjs dist/browser/harnessRelay.mjs && cp src/openSandboxLauncher.mjs dist/openSandboxLauncher.mjs",
-    "dev": "NODE_OPTIONS='--conditions=ts-source' npx tsx watch src/index.ts",
+    "dev": "node ../../scripts/watch-service.mjs --drain src/index.ts src ../../packages",
     "start": "node dist/index.js",
     "lint": "eslint src",
     "typecheck": "tsc --noEmit",

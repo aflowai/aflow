@@ -9,9 +9,10 @@
  * checked, and the connection goes to the address that was checked — never to
  * the name, which could resolve differently a moment later.
  *
- * No profile reaches this machine. An ephemeral profile's proxy also admits
- * nothing beyond its harness's reach, with the loopback ports declared for
- * that harness as the one exception to both.
+ * No profile reaches this machine but on loopback, on a port the operator
+ * opened for it that this stack does not serve on. An ephemeral profile's
+ * proxy also admits nothing beyond its harness's reach, with the loopback
+ * ports declared for that harness as the one exception to both.
  *
  * One per running profile, bound to loopback on a port the system picks, and
  * stopped with the profile's browser.
@@ -34,7 +35,8 @@ import {
   type LocalAddressClassifier,
   machineAddresses,
 } from './addresses.js';
-import { declaredLoopback, harnessMayReach, type HarnessReach } from './harnessReach.js';
+import { harnessMayReach, type HarnessReach } from './harnessReach.js';
+import { loopbackOnPort, type ProfileLocalPorts, stackPortReason } from './localPorts.js';
 
 /**
  * `local`: this machine's own address. `rule`: an origin rule the operator
@@ -60,6 +62,8 @@ export interface EgressPolicy {
   readonly refuseHost?: (host: string) => string | undefined;
   /** An ephemeral profile's: its harness's reach. Absent for a profile the machine declares. */
   readonly reach?: HarnessReach;
+  /** A profile the machine declares: the loopback ports the operator opened for it. */
+  readonly localPorts?: ProfileLocalPorts;
 }
 
 export interface EgressProxyOptions extends EgressPolicy {
@@ -93,10 +97,14 @@ export function decideByName(
 ): EgressDecision | undefined {
   const ruled = policy.refuseHost?.(host);
   if (ruled !== undefined) return { verdict: 'refuse', kind: 'rule', reason: ruled };
-  const { reach } = policy;
+  const { reach, localPorts } = policy;
   if (reach !== undefined) {
-    const loopback = declaredLoopback(host, port, reach, classifier);
+    const loopback = loopbackOnPort(host, port, reach.localPorts, classifier);
     if (loopback !== undefined) return { verdict: 'connect', addresses: loopback };
+  }
+  if (localPorts !== undefined) {
+    const loopback = loopbackOnPort(host, port, localPorts.opened(), classifier);
+    if (loopback !== undefined) return admitOpenedPort(port, loopback, localPorts);
   }
   if (isLocalName(host)) {
     return { verdict: 'refuse', kind: 'local', reason: `${host} names this machine` };
@@ -118,6 +126,17 @@ export function decideByName(
   return literal ? { verdict: 'connect', addresses: [host] } : undefined;
 }
 
+/** A loopback destination on a port opened to the profile, unless this stack serves on it. */
+function admitOpenedPort(
+  port: number,
+  addresses: readonly [string, ...string[]],
+  localPorts: ProfileLocalPorts,
+): EgressDecision {
+  const stack = stackPortReason(port, localPorts.stackOwn);
+  if (stack !== undefined) return { verdict: 'refuse', kind: 'local', reason: stack };
+  return { verdict: 'connect', addresses };
+}
+
 /** The decision on a name `decideByName` left open, from every address it resolved to. */
 export function decideResolved(
   host: string,
@@ -125,15 +144,17 @@ export function decideResolved(
   classifier: LocalAddressClassifier,
 ): EgressDecision {
   // Every address, not the first: a name answering with a public address and
-  // a loopback one is a name that can reach this machine.
+  // a loopback one is a name that can reach this machine. One answering with
+  // loopback alone is refused on an opened port too: a public name rebound to
+  // 127.0.0.1 would read the operator's dev server as its own origin.
   for (const { address } of addresses) {
     const kind = classifier.classify(address);
     if (kind === undefined) continue;
     return { verdict: 'refuse', kind: 'local', reason: localAddressReason(host, address, kind) };
   }
-  const first = addresses[0];
+  const first = addresses[0]?.address;
   if (first === undefined) return { verdict: 'unreachable', reason: `${host} did not resolve` };
-  return { verdict: 'connect', addresses: [first.address] };
+  return { verdict: 'connect', addresses: [first] };
 }
 
 /** Whether, and where, a connection to `rawHost:port` goes. */
@@ -198,7 +219,9 @@ function proxyRefusalText(refusal: ProxyRefusal, ephemeral: boolean): string {
     (ephemeral
       ? 'An ephemeral profile reaches only what its harness may reach, and on this machine only ' +
         'the loopback ports the operator declared for that harness.'
-      : "A profile that keeps sign-ins does not reach services on this machine, or origins the operator's rules deny.")
+      : 'A profile that keeps sign-ins reaches this machine only on loopback, on a port the ' +
+        "operator opened for it that this stack does not serve on, and no origin the operator's " +
+        'rules deny.')
   );
 }
 

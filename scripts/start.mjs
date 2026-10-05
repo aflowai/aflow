@@ -6,7 +6,8 @@
  * provisions the instance and starts the edition's services — this adds only the
  * preconditions it assumes and cannot recover from, each of which otherwise
  * surfaces minutes later as an error naming something other than the cause —
- * and, once the stack is healthy, the MCP server's key when it has none.
+ * and, once the stack is healthy, the MCP server's key when it has none, and a
+ * line whenever no orchestrator is consuming.
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -16,6 +17,12 @@ import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 
 import { apiUrlOf, authFileOf, envNamingAuthFile } from './mcp-local-setup.mjs';
+import {
+  INITIAL_ORCHESTRATOR_WATCH,
+  ORCHESTRATOR_POLL_MS,
+  nextOrchestratorReport,
+  readOrchestratorHealth,
+} from './orchestratorHealth.mjs';
 import {
   composeProjectOf,
   credentialReadiness,
@@ -35,6 +42,9 @@ import { probeRedis } from './stackRedis.mjs';
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const say = (message) => {
   console.log(`\x1b[36m[start]\x1b[0m ${message}`);
+};
+const warn = (message) => {
+  console.warn(`\x1b[33m[start]\x1b[0m ${message}`);
 };
 const fail = (message, remedy) => {
   console.error(`\x1b[31m[start]\x1b[0m ${message}`);
@@ -195,12 +205,15 @@ dev.on('exit', (code, signal) => {
   }, 100);
 });
 
-// ── Once the stack is healthy: the MCP server's key ───────────────────────────
-// Allowed to fail: the stack is no less up without it, and the line says how to
-// finish by hand.
+// ── Once the stack is healthy: the MCP server's key, and the orchestrator ─────
+// The key is allowed to fail: the stack is no less up without it, and the line
+// says how to finish by hand. The orchestrator is watched for as long as the
+// stack runs (`orchestratorHealth.mjs`).
 const BY_HAND = 'run `yarn mcp:setup` once the stack is up to give the MCP server its key';
 // A first run migrates and provisions before the API listens.
 const HEALTHY_WITHIN_MS = 10 * 60_000;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function apiHealthy(api) {
   try {
@@ -211,17 +224,23 @@ async function apiHealthy(api) {
   }
 }
 
-async function setUpMcpWhenHealthy(api) {
+/** Whether the API became healthy before the deadline, and the stack is still up. */
+async function whenApiHealthy(api) {
   const deadline = Date.now() + HEALTHY_WITHIN_MS;
   while (!(await apiHealthy(api))) {
-    if (stopping) return;
+    if (stopping) return false;
     if (Date.now() > deadline) {
-      say(`the API at ${api} was not healthy in time; ${BY_HAND}`);
-      return;
+      say(
+        `the API at ${api} was not healthy in time` + (mcpCredentialMissing ? `; ${BY_HAND}` : ''),
+      );
+      return false;
     }
-    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    await sleep(3_000);
   }
-  if (stopping) return;
+  return !stopping;
+}
+
+function setUpMcp() {
   say('the stack is healthy; giving the MCP server its key (yarn mcp:setup)');
   // No stdin: a question asked here would sit among the stack's log lines.
   const setup = spawn('yarn', ['mcp:setup'], {
@@ -236,4 +255,20 @@ async function setUpMcpWhenHealthy(api) {
   });
 }
 
-if (mcpCredentialMissing) void setUpMcpWhenHealthy(apiUrlOf(envValues));
+async function watchOrchestrator(api) {
+  let watch = INITIAL_ORCHESTRATOR_WATCH;
+  while (!stopping) {
+    const report = nextOrchestratorReport(watch, await readOrchestratorHealth(api));
+    watch = report.watch;
+    if (report.line?.level === 'warn') warn(report.line.text);
+    else if (report.line !== undefined) say(report.line.text);
+    await sleep(ORCHESTRATOR_POLL_MS);
+  }
+}
+
+const api = apiUrlOf(envValues);
+void whenApiHealthy(api).then(async (healthy) => {
+  if (!healthy) return;
+  if (mcpCredentialMissing) setUpMcp();
+  await watchOrchestrator(api);
+});
