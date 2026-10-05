@@ -1,0 +1,54 @@
+name: Bug report
+description: Something Aflow did that it should not have, or did not do that it should have
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A suspected vulnerability is reported privately — see [SECURITY.md](https://github.com/aflowai/aflow/blob/main/SECURITY.md). A public issue is disclosure.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you saw, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: The smallest sequence that shows it. A run that failed is easiest to trace from its session id.
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How Aflow is running
+      options:
+        - Release bundle (published image)
+        - Built from the repository (docker-compose.local.yml)
+        - Development stack (yarn start)
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: The release tag, or the output of `git rev-parse --short HEAD`.
+      placeholder: appliance-v0.3.1
+    validations:
+      required: true
+  - type: input
+    id: host
+    attributes:
+      label: Host
+      description: Operating system and container runtime, with versions.
+      placeholder: macOS 15.4, Docker Desktop 4.40
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: The relevant lines from `docker compose logs` or the terminal, with credentials removed.
+      render: text
