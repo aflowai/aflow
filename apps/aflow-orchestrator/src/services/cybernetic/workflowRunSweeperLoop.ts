@@ -29,12 +29,15 @@ import {
 } from './WorkflowRunHarness.js';
 import { backfillMissingEvaluationEnvelopes } from './evaluationEnvelopeBackfill.js';
 import { getOrchestratorLogger, logOrchestratorError } from '../../lib/orchestratorLogger.js';
+import type { WakeHold } from '../wakeHold.js';
 
 const TASK_ID = 'orchestrator.workflow_run_reconcile';
 
 export interface WorkflowRunSweeperDeps {
   sqlClient: postgres.Sql;
   harnessDeps: HarnessDeps;
+  /** An operation task is escalated on its in-flight record, which a sleep lapses. */
+  wakeHold: WakeHold;
 }
 
 export interface WorkflowRunSweeperConfig {
@@ -102,6 +105,7 @@ export function createWorkflowRunSweeper(
       },
     },
     async (ctx): Promise<BackgroundTaskCycleResult> => {
+      if (deps.wakeHold.remainingMs() > 0) return { candidates: 0 };
       // The lease outlives at most one cycle, so a claimant killed mid-batch
       // hands its tenants back within the budget it was allowed to hold them.
       const claimToken = randomUUID();

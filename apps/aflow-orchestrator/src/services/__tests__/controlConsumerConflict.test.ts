@@ -96,6 +96,7 @@ async function runConsumerOnce(resumeRun: () => Promise<unknown>) {
         fencingToken: () => 1,
         revokeShard: vi.fn(),
       } as never,
+      wakeHold: { remainingMs: () => 0 },
     },
     { consumerName: 'test-consumer', batchSize: 4, blockMs: 0 },
   );

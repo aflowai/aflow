@@ -28,11 +28,18 @@ export interface HarnessSession {
    * differs by path: a chat session is one id across every turn, so a
    * conversation continues the way a person expects; a workflow carries its own
    * run id across its tasks. An agent working inside a per-attempt worker
-   * session gets a fresh id each attempt and so cannot continue across one —
-   * which is the right answer, because a retried attempt inheriting the last
-   * one's half-finished checkout is not a resumption.
+   * session gets a fresh id each attempt and so cannot name a session across
+   * one. A retry of the harness run itself is the exception, and is found by
+   * `logicalExecutionId` rather than named.
    */
   readonly ownerRunId: string;
+  /**
+   * The work this session was started for, as the executor runtime names it
+   * across every attempt at it. A retry of that work continues this
+   * conversation in this checkout rather than starting the brief again: an
+   * interrupted run has spent its turns on what the checkout now holds.
+   */
+  readonly logicalExecutionId: string;
   readonly bindingId: string;
   /**
    * The repository this session's worktree belongs to. Held here because
@@ -108,6 +115,19 @@ export function ownedSession(sessionRef: string, ownerRunId: string): HarnessSes
   const session = sessions.get(sessionRef);
   if (session === undefined) return undefined;
   return session.ownerRunId === ownerRunId ? session : undefined;
+}
+
+/** The session an earlier attempt at the same work left, for a retry of it to continue. */
+export function sessionForRetry(
+  ownerRunId: string,
+  logicalExecutionId: string,
+): HarnessSession | undefined {
+  for (const session of sessions.values()) {
+    if (session.ownerRunId === ownerRunId && session.logicalExecutionId === logicalExecutionId) {
+      return session;
+    }
+  }
+  return undefined;
 }
 
 export function touchSession(session: HarnessSession): void {

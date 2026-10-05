@@ -10,9 +10,12 @@ import {
 } from '@aflow/schemas';
 import { recordBackgroundTaskDisabled } from '@aflow/observability';
 import {
+  createWakeDetector,
   ensureConsumerGroup,
   registerExecutorHeartbeat,
+  registerStepInFlight,
   unregisterExecutorHeartbeat,
+  type WakeDetector,
 } from '@aflow/redis';
 import type { StepHandler, ExecutorConfig, ExecutorDependencies } from '../types.js';
 import { ConcurrencyLimiter } from '../concurrency.js';
@@ -53,6 +56,7 @@ export class ExecutorRuntime implements JobLoopHost {
   private lifetime = new AbortController();
   private running = false;
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+  private wake: WakeDetector | null = null;
   private idleWaiters: Array<() => void> = [];
   private inFlightWaiters: Array<() => void> = [];
   private readonly workListeners = new Set<WorkListener>();
@@ -151,16 +155,9 @@ export class ExecutorRuntime implements JobLoopHost {
 
     const heartbeatRuntime = this.controlPlane.resolve('executor.heartbeat');
     if (heartbeatRuntime.mode === 'enabled') {
+      this.wake = createWakeDetector();
       this.heartbeatInterval = setInterval(() => {
-        registerExecutorHeartbeat(
-          this.deps.redis,
-          this.config.stepType,
-          this.config.consumerName,
-        ).catch((err: unknown) => {
-          this.log.warn('Failed to refresh heartbeat', {
-            error: err instanceof Error ? err.message : String(err),
-          });
-        });
+        this.beat();
       }, heartbeatRuntime.intervalMs ?? HEARTBEAT_INTERVAL_MS);
     }
 
@@ -197,6 +194,48 @@ export class ExecutorRuntime implements JobLoopHost {
     // the awaits above, and a drain that has begun claims nothing more.
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- stopRequested can change during the awaits above
     if (!this.stopRequested) this.consuming = consumeLoop(this);
+  }
+
+  private beat(): void {
+    const sleptMs = this.wake?.observe() ?? 0;
+    registerExecutorHeartbeat(
+      this.deps.redis,
+      this.config.stepType,
+      this.config.consumerName,
+    ).catch((err: unknown) => {
+      this.log.warn('Failed to refresh heartbeat', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+    if (sleptMs > 0) this.refreshAfterSleep(sleptMs);
+  }
+
+  /**
+   * Every step's in-flight record lapsed in the sleep with the executor's own
+   * heartbeat, and a step refreshes its own only every thirty seconds; the
+   * orchestrator holds its readers for two ticks after it wakes
+   * (`EXECUTOR_WAKE_HOLD_MS`), so the records are written here, at the first.
+   * The timer that ends a started step did not advance in the sleep either, so
+   * the deadline it published moves later by the sleep's length.
+   */
+  private refreshAfterSleep(sleptMs: number): void {
+    for (const step of this.inFlightSteps.values()) {
+      if (step.deadlineRef !== undefined) step.deadlineRef.current += sleptMs;
+      registerStepInFlight(
+        this.deps.redis,
+        step.stepExecutionId,
+        step.deadlineRef?.current ?? null,
+      ).catch((err: unknown) => {
+        this.log.warn('Failed to refresh a step in-flight heartbeat on waking', {
+          stepExecutionId: step.stepExecutionId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
+    this.log.info('Woke from sleep; refreshed the heartbeat and every step in flight', {
+      sleptMs,
+      steps: this.inFlightSteps.size,
+    });
   }
 
   /**

@@ -96,6 +96,7 @@ import {
   nextSessionRef,
   ownedSession,
   recordSession,
+  sessionForRetry,
   type HarnessSession,
 } from '../harnessSessions.js';
 import { createChatterStripper } from '../egressRefusals.js';
@@ -287,6 +288,18 @@ export function retryInstruction(
     );
   }
   return `${task}${resultInstruction(schema)}\n\nAn earlier attempt failed: ${problem}.`;
+}
+
+/**
+ * The task for a retry of a run, added to the conversation the earlier attempt
+ * left. The whole task again, since that attempt may have been ended before
+ * the harness kept any of it; its work is the checkout.
+ */
+export function continuedAttemptTask(task: string): string {
+  return (
+    'An earlier attempt at this task ended before it was done. This checkout holds what it ' +
+    `changed: continue from there rather than starting over.\n\n${task}`
+  );
 }
 
 export function validateResultText(text: string, validate: ResultValidator): HarnessResultCheck {
@@ -608,23 +621,41 @@ async function runHarness(
       resuming = true;
     }
 
-    const conversationId = session?.conversationId ?? newConversationId();
     const canContinue = supportsContinuation(profile);
+    // A retry continues the conversation an earlier attempt at the same work
+    // left, in the checkout as that attempt left it. Its base and its merge
+    // were made there already; making them again would discard its work.
+    let continuesAttempt = false;
+    if (input.continueFrom === undefined && ctx.attempt > 1 && canContinue) {
+      const earlier = sessionForRetry(ctx.runId, ctx.logicalExecutionId);
+      if (
+        earlier?.bindingId === binding.id &&
+        earlier.harnessId === profile.id &&
+        claimSession(earlier)
+      ) {
+        session = earlier;
+        claimed = earlier;
+        resuming = true;
+        continuesAttempt = true;
+      }
+    }
 
+    const conversationId = session?.conversationId ?? newConversationId();
+
+    const namedRef = continuesAttempt ? undefined : input.base;
+    const mergeFrom = continuesAttempt ? undefined : input.mergeFrom;
     // Resolved before any checkout is touched, so an unknown ref is refused
     // with the session's checkout still intact.
-    if (input.base !== undefined) await fetchRemoteBase(binding.root, input.base);
+    if (namedRef !== undefined) await fetchRemoteBase(binding.root, namedRef);
     const namedBase =
-      input.base === undefined ? undefined : await resolveCommit(binding.root, input.base);
+      namedRef === undefined ? undefined : await resolveCommit(binding.root, namedRef);
     const mergeIdentity =
-      input.mergeFrom === undefined ? undefined : await mergeIdentityArgs(binding.root);
+      mergeFrom === undefined ? undefined : await mergeIdentityArgs(binding.root);
     const mergeSource =
-      input.mergeFrom === undefined
-        ? undefined
-        : await fetchMergeSource(binding.root, input.mergeFrom);
+      mergeFrom === undefined ? undefined : await fetchMergeSource(binding.root, mergeFrom);
     // A turn that names none keeps the checkout its session's base made, and so
     // is judged against that base as well.
-    const base = input.base ?? session?.base;
+    const base = namedRef ?? session?.base;
 
     let worktree: { path: string; baseSha: string };
     if (session !== undefined && namedBase === undefined) {
@@ -818,12 +849,40 @@ async function runHarness(
       }
     };
 
-    const task = composeHarnessTask(
+    // Recorded before the first turn rather than after the last, so an attempt
+    // ended part-way leaves its conversation and its checkout for a retry.
+    if (canContinue && session === undefined) {
+      session = {
+        busy: true,
+        id: nextSessionRef(),
+        ownerRunId: ctx.runId,
+        logicalExecutionId: ctx.logicalExecutionId,
+        bindingId: binding.id,
+        bindingRoot: binding.root,
+        harnessId: profile.id,
+        worktreePath: worktree.path,
+        scratchDir,
+        configDir: configDir ?? join(scratchDir, 'harness-config'),
+        conversationId,
+        baseSha: worktree.baseSha,
+        ...(base !== undefined ? { base } : {}),
+        ...(merge !== undefined ? { merge } : {}),
+        createdAt: Date.now(),
+        lastUsedAt: Date.now(),
+      };
+      recordSession(session);
+      claimed = session;
+      // Kept for the next turn; expiry or withdrawal is what removes it.
+      keepScratch = true;
+    }
+
+    const brief = composeHarnessTask(
       input.task,
       input.inputs,
       await hasRepositoryRules(worktree.path),
       keptCheckout ? undefined : merge,
     );
+    const task = continuesAttempt ? continuedAttemptTask(brief) : brief;
     let result: SandboxedRunResult;
     let check: HarnessResultCheck | undefined;
     if (expected === undefined) {
@@ -931,31 +990,7 @@ async function runHarness(
     // starting point, so its distance from it says nothing about the run.
     const headMoved = base === undefined && (await currentHead(binding.root)) !== worktree.baseSha;
 
-    let sessionRef = session?.id;
-    if (canContinue) {
-      if (session === undefined) {
-        sessionRef = nextSessionRef();
-        recordSession({
-          busy: false,
-          id: sessionRef,
-          ownerRunId: ctx.runId,
-          bindingId: binding.id,
-          bindingRoot: binding.root,
-          harnessId: profile.id,
-          worktreePath: worktree.path,
-          scratchDir: scratch,
-          configDir: configDir ?? join(scratch, 'harness-config'),
-          conversationId,
-          baseSha: worktree.baseSha,
-          ...(base !== undefined ? { base } : {}),
-          ...(merge !== undefined ? { merge } : {}),
-          createdAt: Date.now(),
-          lastUsedAt: Date.now(),
-        });
-      }
-      // Kept for the next turn; expiry or withdrawal is what removes it.
-      keepScratch = true;
-    }
+    const sessionRef = session?.id;
 
     // The feed was live while the run was; kept once, by reference, so the run
     // view has it after the live buffer is gone. Its own kind, because the

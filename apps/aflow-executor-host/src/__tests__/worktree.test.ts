@@ -414,6 +414,7 @@ describe('checkouts a restart left behind', () => {
     recordSession({
       id: 'hs_live',
       ownerRunId: 'run-live',
+      logicalExecutionId: 'step:hs_live',
       bindingId: 'hb',
       bindingRoot: repo,
       harnessId: 'edits',

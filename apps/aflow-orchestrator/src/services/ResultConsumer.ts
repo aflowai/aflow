@@ -19,6 +19,7 @@ import {
 } from '@aflow/redis';
 import type { SessionOrchestrator } from './SessionOrchestrator/index.js';
 import type { ShardManager } from './ShardManager.js';
+import type { WakeHold } from './wakeHold.js';
 import { isSlowBlockingRead } from '@aflow/lib';
 import { buildAflowContext } from '@aflow/observability';
 import { errorContextFromUnknown, type StepResultMessage, type TenantId } from '@aflow/schemas';
@@ -62,6 +63,7 @@ export interface ResultConsumerDeps {
   /** Shard manager — reads from owned shard streams only */
   shardManager: ShardManager;
   harnessDeps: HarnessDeps;
+  wakeHold: WakeHold;
 }
 
 /**
@@ -72,7 +74,7 @@ export function createResultConsumer(
   config: ResultConsumerConfig,
 ): ResultConsumer {
   const log = getOrchestratorLogger().child({ component: 'result-consumer' });
-  const { blockingRedis, redis, executionService, shardManager, harnessDeps } = deps;
+  const { blockingRedis, redis, executionService, shardManager, harnessDeps, wakeHold } = deps;
   const {
     consumerName,
     batchSize = 50,
@@ -136,6 +138,12 @@ export function createResultConsumer(
   async function processResults(): Promise<void> {
     while (!stopRequested) {
       try {
+        const heldMs = wakeHold.remainingMs();
+        if (heldMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, Math.min(heldMs, 1000)));
+          continue;
+        }
+
         // Backpressure: if at capacity, wait briefly before reading more
         if (inFlight >= maxConcurrent) {
           await new Promise((resolve) => setTimeout(resolve, 50));
@@ -431,7 +439,7 @@ export function createResultConsumer(
   // ── Timer processing ───────────────────────────────────────────────────
 
   async function processTimers(): Promise<void> {
-    if (stopRequested) return;
+    if (stopRequested || wakeHold.remainingMs() > 0) return;
 
     // Tracked so shutdown can wait for it. A tick abandoned mid-flight leaves
     // timers claimed but unacknowledged, and 60s later the lease expires and

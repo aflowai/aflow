@@ -13,6 +13,7 @@ const { redisMock } = vi.hoisted(() => ({
     ensureConsumerGroup: vi.fn().mockResolvedValue(undefined),
     registerExecutorHeartbeat: vi.fn().mockResolvedValue(undefined),
     unregisterExecutorHeartbeat: vi.fn().mockResolvedValue(undefined),
+    createWakeDetector: () => ({ observe: () => 0 }),
     readStepJobs: vi.fn(),
     listPendingStepJobs: vi.fn().mockResolvedValue([]),
     claimPendingStepJobsByIds: vi.fn().mockResolvedValue([]),

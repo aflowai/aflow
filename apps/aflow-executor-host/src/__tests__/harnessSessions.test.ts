@@ -30,6 +30,7 @@ function makeSession(overrides: Partial<HarnessSession> = {}): HarnessSession {
   return {
     id,
     ownerRunId: 'run-a',
+    logicalExecutionId: `step:${id}`,
     bindingId: 'hb',
     harnessId: 'claude',
     worktreePath: `/tmp/${id}/work`,

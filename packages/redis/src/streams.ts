@@ -30,6 +30,13 @@ export {
   executorWaitClockJumped,
   executorWaitHasLooksLeft,
 } from './streams/executorWait.js';
+export {
+  WAKE_MIN_SLEEP_MS,
+  EXECUTOR_WAKE_HOLD_MS,
+  createWakeDetector,
+  type WakeClock,
+  type WakeDetector,
+} from './streams/executorWake.js';
 
 export {
   registerOrchestratorHeartbeat,

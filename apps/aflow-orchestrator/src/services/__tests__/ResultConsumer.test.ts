@@ -124,6 +124,7 @@ function buildDeps(overrides: {
       redis: {} as never,
       payloadStore: {} as never,
     },
+    wakeHold: { remainingMs: () => 0 },
   };
 
   return { deps, executionService, ackCalls, applyResult };
@@ -442,5 +443,36 @@ describe('ResultConsumer', () => {
     // And acked exactly once
     const p1Acks = ackIds.filter((id) => id === 'P1');
     expect(p1Acks).toHaveLength(1);
+  });
+
+  // ── Waking from sleep (Plan 315 D21) ────────────────────────────────────
+
+  it('reads no result and runs no timer while held after a wake, then resumes', async () => {
+    const queue = createResultQueue();
+    mockRead = vi.fn(queue.read);
+    const reads = mockRead as ReturnType<typeof vi.fn>;
+    const applied: string[] = [];
+    const { deps, executionService } = buildDeps({ readFn: queue.read });
+    deps.executionService.applyResult = async ({ messageId }: { messageId: string }) => {
+      applied.push(messageId);
+      await Promise.resolve();
+    };
+    let heldMs = 15_000;
+    deps.wakeHold = { remainingMs: () => heldMs };
+
+    const consumer = createResultConsumer(deps, { ...baseConfig, timerIntervalMs: 10 });
+    consumer.start();
+    queue.feed(makeResult('W1', 'run-W'));
+    await delay(60);
+
+    expect(reads).not.toHaveBeenCalled();
+    expect(applied).toEqual([]);
+    expect(executionService.processDueTimers).not.toHaveBeenCalled();
+
+    heldMs = 0;
+    await vi.waitFor(() => expect(applied).toEqual(['W1']), { timeout: 3_000 });
+    await vi.waitFor(() => expect(executionService.processDueTimers).toHaveBeenCalled());
+    queue.seal();
+    await consumer.stop();
   });
 });

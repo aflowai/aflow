@@ -32,6 +32,7 @@ import {
   repairDueShardIndex,
   carryOverLegacyDirtySessions,
   carryOverWaitingParents,
+  EXECUTOR_WAKE_HOLD_MS,
   SHARD_COUNT,
 } from '@aflow/redis';
 import { resolvePayloadStore } from '@aflow/payload-store';
@@ -47,6 +48,7 @@ import { errorContextFromUnknown, processEditionDescriptor } from '@aflow/schema
 import { createSessionOrchestrator } from './services/SessionOrchestrator/index.js';
 import { createControlConsumer } from './services/ControlConsumer.js';
 import { createResultConsumer } from './services/ResultConsumer.js';
+import { createWakeHold } from './services/wakeHold.js';
 import { createProjectionWorker } from './services/ProjectionWorker.js';
 import { createManifestService } from './services/ManifestService.js';
 import { createSnapshotService } from './services/SnapshotService.js';
@@ -258,6 +260,15 @@ async function main(): Promise<void> {
   // This prevents blocking reads from delaying other Redis operations
   const harnessDeps = { db, redis, payloadStore };
 
+  const wakeHold = createWakeHold({
+    onWake: (sleptMs) => {
+      logger.info('Woke from sleep; holding every reader of executor liveness until they beat', {
+        sleptMs,
+        holdMs: EXECUTOR_WAKE_HOLD_MS,
+      });
+    },
+  });
+
   // The interval inside the result consumer executes orchestrator.timer_dispatch,
   // so that task's runtime config — not this one's — drives it.
   const timerDispatchRuntime = controlPlane.resolve('orchestrator.timer_dispatch');
@@ -278,6 +289,7 @@ async function main(): Promise<void> {
       executionService,
       shardManager,
       harnessDeps,
+      wakeHold,
     },
     {
       consumerName: CONSUMER_NAME,
@@ -299,6 +311,7 @@ async function main(): Promise<void> {
       redis,
       executionService,
       shardManager,
+      wakeHold,
     },
     {
       consumerName: CONSUMER_NAME,
@@ -411,7 +424,7 @@ async function main(): Promise<void> {
       logger,
     },
     async (ctx) => {
-      if (ctx.mode === 'observe') return {};
+      if (ctx.mode === 'observe' || wakeHold.remainingMs() > 0) return {};
       const { candidates, processed } = await sweepStaleBarriers({
         redis,
         getSessionState,
@@ -477,7 +490,7 @@ async function main(): Promise<void> {
   const sessionMetadata = createSessionMetadataTask({ redis, db, logger });
   sessionMetadata.start();
 
-  const workflowRunSweeper = createWorkflowRunSweeper({ sqlClient, harnessDeps });
+  const workflowRunSweeper = createWorkflowRunSweeper({ sqlClient, harnessDeps, wakeHold });
   workflowRunSweeper.start();
 
   const evalBatchWorker = createEvalBatchWorker(
