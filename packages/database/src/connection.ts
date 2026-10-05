@@ -12,6 +12,7 @@ import {
   fleetBasisNote,
 } from './poolHeadroom.js';
 import { serverMaxConnectionsFromEnv } from './connectionBudget.js';
+import { createReplaceablePool } from './replaceablePool.js';
 
 // ============================================================================
 // Configuration
@@ -124,9 +125,6 @@ let _sql: postgres.Sql | null = null;
 let _db: PostgresJsDatabase | null = null;
 
 /**
- * Get or create the database connection pool.
- */
-/**
  * Server notices, minus the ones idempotent DDL raises for what it skipped.
  *
  * The client prints every notice by default, and `IF NOT EXISTS` / `IF EXISTS`
@@ -141,6 +139,27 @@ function logServerNotice(notice: postgres.Notice): void {
   console.warn(`[db] ${notice['severity'] ?? 'NOTICE'}: ${message}`);
 }
 
+/**
+ * One client for `cfg`, replaceable once a transaction loses its connection
+ * (`replaceablePool.ts`). Both constructors build through it.
+ */
+function openClient(cfg: DatabaseConfig, poolMax: number): postgres.Sql {
+  return createReplaceablePool(() =>
+    postgres(cfg.connectionString, {
+      max: poolMax,
+      idle_timeout: cfg.idleTimeout ?? 30,
+      connect_timeout: cfg.connectTimeout ?? 10,
+      prepare: true,
+      ...(cfg.ssl !== undefined ? { ssl: cfg.ssl } : {}),
+      connection: { application_name: applicationName() },
+      onnotice: logServerNotice,
+    }),
+  ).sql;
+}
+
+/**
+ * Get or create the database connection pool.
+ */
 export function getConnection(config?: DatabaseConfig): postgres.Sql {
   if (_sql) {
     return _sql;
@@ -148,28 +167,7 @@ export function getConnection(config?: DatabaseConfig): postgres.Sql {
 
   const cfg = config ?? getDatabaseConfig();
   const poolMax = cfg.maxConnections ?? resolvePoolMax();
-
-  // Build options object conditionally to handle strictOptionalPropertyTypes
-  if (cfg.ssl !== undefined) {
-    _sql = postgres(cfg.connectionString, {
-      max: poolMax,
-      idle_timeout: cfg.idleTimeout ?? 30,
-      connect_timeout: cfg.connectTimeout ?? 10,
-      prepare: true,
-      ssl: cfg.ssl,
-      connection: { application_name: applicationName() },
-      onnotice: logServerNotice,
-    });
-  } else {
-    _sql = postgres(cfg.connectionString, {
-      max: poolMax,
-      idle_timeout: cfg.idleTimeout ?? 30,
-      connect_timeout: cfg.connectTimeout ?? 10,
-      prepare: true,
-      connection: { application_name: applicationName() },
-      onnotice: logServerNotice,
-    });
-  }
+  _sql = openClient(cfg, poolMax);
 
   void reportPoolHeadroom(_sql, poolMax);
 
@@ -287,29 +285,7 @@ export function createDatabase(config: DatabaseConfig): {
   close: () => Promise<void>;
 } {
   const poolMax = config.maxConnections ?? resolvePoolMax();
-
-  // Build postgres client conditionally to handle strictOptionalPropertyTypes
-  let sqlClient: postgres.Sql;
-  if (config.ssl !== undefined) {
-    sqlClient = postgres(config.connectionString, {
-      max: poolMax,
-      idle_timeout: config.idleTimeout ?? 30,
-      connect_timeout: config.connectTimeout ?? 10,
-      prepare: true,
-      ssl: config.ssl,
-      connection: { application_name: applicationName() },
-      onnotice: logServerNotice,
-    });
-  } else {
-    sqlClient = postgres(config.connectionString, {
-      max: poolMax,
-      idle_timeout: config.idleTimeout ?? 30,
-      connect_timeout: config.connectTimeout ?? 10,
-      prepare: true,
-      connection: { application_name: applicationName() },
-      onnotice: logServerNotice,
-    });
-  }
+  const sqlClient = openClient(config, poolMax);
 
   const db = drizzle(sqlClient);
 

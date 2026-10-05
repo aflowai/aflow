@@ -18,6 +18,12 @@
       "types": "./dist/connectionBudget.d.ts",
       "import": "./dist/connectionBudget.js",
       "require": "./dist/connectionBudget.cjs"
+    },
+    "./testing": {
+      "ts-source": "./src/testing/index.ts",
+      "types": "./dist/testing/index.d.ts",
+      "import": "./dist/testing/index.js",
+      "require": "./dist/testing/index.cjs"
     }
   },
   "files": [

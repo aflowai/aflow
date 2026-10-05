@@ -11,6 +11,7 @@ import {
   connectionNoticeAction,
   connectionNoticeLabel,
   phaseOnConnected,
+  statusLine,
   type ConnectionNoticePhase,
 } from './use-connection-notice.js';
 
@@ -66,5 +67,29 @@ describe('what each phase says', () => {
       const label = connectionNoticeLabel(phase) ?? '';
       expect(/\byou\b|\byour\b/i.test(label)).toBe(false);
     }
+  });
+});
+
+describe('the status line, with no orchestrator consuming', () => {
+  const absent =
+    'No orchestrator is running: messages, step results and cancellations wait until one starts.';
+
+  it('says so over a live channel, where it would otherwise say nothing', () => {
+    expect(statusLine('live', undefined)).toBeUndefined();
+    expect(statusLine('live', absent)).toEqual({ label: absent, tone: 'warning' });
+  });
+
+  it('says so over a reconnect, which only reports a gap already being filled', () => {
+    expect(statusLine('caught-up', absent)).toEqual({ label: absent, tone: 'warning' });
+    expect(statusLine('caught-up', undefined)).toEqual({
+      label: 'Reconnected — catching up',
+      tone: 'quiet',
+    });
+  });
+
+  // While the channel is down, the API that reads the orchestrator's lease is
+  // not being reached either, so its last answer is not news.
+  it('gives way to a dropped channel', () => {
+    expect(statusLine('reconnecting', absent)).toEqual({ label: 'Reconnecting…', tone: 'warning' });
   });
 });

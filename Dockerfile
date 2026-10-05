@@ -71,7 +71,7 @@ RUN yarn install --immutable --mode=skip-build
 COPY tsconfig.base.json ./
 COPY packages/ packages/
 COPY apps/ apps/
-COPY scripts/prod-launcher.mjs scripts/release.mjs scripts/postinstall.mjs scripts/rewrap-credentials.mjs scripts/
+COPY scripts/prod-launcher.mjs scripts/serviceRestart.mjs scripts/release.mjs scripts/postinstall.mjs scripts/rewrap-credentials.mjs scripts/
 
 # Build all packages and apps (topological order)
 # Inlined into the client bundle and into the CSP `connect-src` at build time,
@@ -220,6 +220,7 @@ COPY --from=builder /app/packages/database/src/migrations packages/database/src/
 
 # Copy production scripts (launcher + release migrations)
 COPY --from=builder /app/scripts/prod-launcher.mjs scripts/
+COPY --from=builder /app/scripts/serviceRestart.mjs scripts/
 COPY --from=builder /app/scripts/release.mjs scripts/
 # Ships so a key migration can run where the database is reachable — Cloud SQL
 # is private-IP, so this cannot be driven from a workstation.

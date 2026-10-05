@@ -125,6 +125,7 @@ function segments(command) {
 }
 
 const LOADER = join(REPO, 'scripts', 'with-stack-env.mjs');
+const SERVICE_WATCHER = join(REPO, 'scripts', 'watch-service.mjs');
 const ROOT_MANIFEST = 'package.json';
 
 const manifests = [
@@ -153,13 +154,14 @@ function isBuilt(path) {
 
 /**
  * Where in `tokens` a repository entry point is run, and its path. A tsx entry
- * is the first argument after `tsx` naming a file that exists, so option values
- * and watch globs are passed over. A built one is `node`'s first argument when
- * it lies in a `dist` directory, which need not exist before a build.
+ * is the first argument naming a file that exists after `tsx` or after the
+ * service watcher, which runs its entry under tsx, so option values and watch
+ * globs are passed over. A built one is `node`'s first argument when it lies in
+ * a `dist` directory, which need not exist before a build.
  */
 function runOf(tokens, dir, { built }) {
   for (const [at, token] of tokens.entries()) {
-    if (token === 'tsx') {
+    if (token === 'tsx' || resolve(dir, token) === SERVICE_WATCHER) {
       const path = tokens
         .slice(at + 1)
         .map((argument) => resolve(dir, argument))
@@ -256,6 +258,11 @@ describe('every entry point', () => {
       ({ entry }) => entry === join('apps', 'server', 'src', 'bootstrapLocal.ts'),
     );
     expect(server?.loaded).toBe(true);
+    expect(entryPoints).toContainEqual({
+      script: 'package.json: orchestrator:dev',
+      entry: join('apps', 'aflow-orchestrator', 'src', 'index.ts'),
+      loaded: true,
+    });
     expect(
       segments(
         `NODE_OPTIONS='--conditions=ts-source' node scripts/with-stack-env.mjs tsx watch --include 'packages/*/src/**/*.ts' a.ts && npx tsx b.ts`,

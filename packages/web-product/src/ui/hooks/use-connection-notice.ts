@@ -35,6 +35,32 @@ export function connectionNoticeLabel(phase: ConnectionNoticePhase): string | un
   return undefined;
 }
 
+export interface StatusLine {
+  label: string;
+  tone: 'warning' | 'quiet';
+}
+
+/**
+ * The one line beside the composer: the channel's phase, or that no
+ * orchestrator is consuming.
+ *
+ * A dropped channel comes first, because while it is down the API that reads
+ * the orchestrator's lease is not being reached either. Otherwise a missing
+ * orchestrator outranks a reconnect: a message sent now is accepted and waits,
+ * and this line is the only place that says so.
+ */
+export function statusLine(
+  phase: ConnectionNoticePhase,
+  orchestratorNotice: string | undefined,
+): StatusLine | undefined {
+  if (phase !== 'reconnecting' && orchestratorNotice !== undefined) {
+    return { label: orchestratorNotice, tone: 'warning' };
+  }
+  const channel = connectionNoticeLabel(phase);
+  if (channel === undefined) return undefined;
+  return { label: channel, tone: phase === 'reconnecting' ? 'warning' : 'quiet' };
+}
+
 /** What the notice does about the channel as the broker reports it. */
 export type ConnectionNoticeAction = 'report-live' | 'report-on-connected' | 'time-the-drop';
 

@@ -36,6 +36,7 @@ import {
   instanceCeilingDrift,
   POOLED_FLEET,
 } from '@aflow/database/connection-budget';
+import { restartAfterExit } from './serviceRestart.mjs';
 
 // ---------------------------------------------------------------------------
 // Service registry: the services a profile may name. All apps are pre-built via
@@ -182,13 +183,9 @@ function databasePoolSizes(profileName) {
 
 // Track spawned processes for cleanup
 const processes = new Map();
-const restartDelays = new Map(); // serviceName → current delay in ms
+const restartDelays = new Map(); // serviceName → the delay its next restart waits
 const startTimes = new Map(); // serviceName → Date.now() at spawn
 let shuttingDown = false;
-
-const MIN_RESTART_DELAY = 2000;
-const MAX_RESTART_DELAY = 30000;
-const STABLE_UPTIME_MS = 60000; // reset backoff after 60s of stable uptime
 
 // ---------------------------------------------------------------------------
 // Spawn a service as a child process with prefixed log output
@@ -219,26 +216,22 @@ function spawnService(serviceName, command, extraEnv = {}) {
 
     if (shuttingDown) return; // expected during shutdown
 
-    if (code !== null && code !== 0) {
-      const uptime = Date.now() - (startTimes.get(serviceName) || 0);
-
-      // Reset backoff if the service was stable for a while
-      if (uptime >= STABLE_UPTIME_MS) {
-        restartDelays.delete(serviceName);
-      }
-
-      const currentDelay = restartDelays.get(serviceName) || MIN_RESTART_DELAY;
-      const nextDelay = Math.min(currentDelay * 2, MAX_RESTART_DELAY);
-      restartDelays.set(serviceName, nextDelay);
-
+    const uptime = Date.now() - (startTimes.get(serviceName) || 0);
+    const decision = restartAfterExit({
+      code,
+      uptimeMs: uptime,
+      backoffMs: restartDelays.get(serviceName),
+    });
+    if (decision.restart) {
+      restartDelays.set(serviceName, decision.nextBackoffMs);
       console.error(
-        `[launcher] ${serviceName} exited with code ${code} (uptime ${Math.round(uptime / 1000)}s) — restarting in ${currentDelay / 1000}s`,
+        `[launcher] ${serviceName} exited with code ${code} (uptime ${Math.round(uptime / 1000)}s) — restarting in ${decision.delayMs / 1000}s`,
       );
       setTimeout(() => {
         if (!shuttingDown) {
           spawnService(serviceName, command, extraEnv);
         }
-      }, currentDelay);
+      }, decision.delayMs);
     } else if (signal) {
       console.log(`[launcher] ${serviceName} killed by ${signal}`);
     } else {

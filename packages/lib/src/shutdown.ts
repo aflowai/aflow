@@ -63,13 +63,13 @@ function latestDeadline(work: readonly InFlightWork[]): number | undefined {
  *
  * `shutdownOnce` is what SIGTERM and SIGINT ask for, and it ends every workload
  * at once. Whatever sends those may follow with SIGKILL after a short grace —
- * the dev runner after ten seconds, `tsx watch` after five, launchd after its
- * default — and SIGKILL skips every exit handler and reaches no process in a
- * group of its own. Work left running then is unaddressed: a harness holding
- * its provider credential, a checkout on disk.
+ * the dev runner after ten seconds, a watcher restarting the service after
+ * five, launchd after its default — and SIGKILL skips every exit handler and
+ * reaches no process in a group of its own. Work left running then is
+ * unaddressed: a harness holding its provider credential, a checkout on disk.
  *
  * `drainOnce` is what SIGUSR2 asks for, sent only by a supervisor that has
- * promised to wait for the exit without a kill — `scripts/watch-and-drain.mjs`.
+ * promised to wait for the exit without a kill — `scripts/watch-service.mjs --drain`.
  * It stops claiming, lets what is in flight run to its own deadline, then shuts
  * down. A second drain request, or a `shutdownOnce` during the drain, stops now.
  */
@@ -182,7 +182,7 @@ export function createShutdownController(
 /**
  * A signal no supervisor that kills sends: only one that waits for the exit
  * asks for a drain, so SIGTERM and SIGINT can stay a stop. Kept in JSON because
- * the watcher that sends it, `scripts/watch-and-drain.mjs`, runs under plain
+ * the watcher that sends it, `scripts/watch-service.mjs`, runs under plain
  * Node and reads it from there.
  */
 export const DRAIN_SIGNAL = drainSignal.signal;

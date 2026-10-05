@@ -249,7 +249,7 @@ The workspace, credentials, payloads and history survive: they live in named
 volumes, not in the image.
 
 For anything more than a one-off, `yarn start` runs this same edition from
-source under `tsx watch` — see below.
+source under a watcher that restarts each service on an edit — see below.
 
 After a rebuild, `./scripts/appliance-smoke.sh` confirms the stack still
 composes what this edition declares.
@@ -294,7 +294,7 @@ yarn executor:host
 First check that you want to. This runs compiled containers, so the third row of
 the rebuild table below costs an image build per iteration — worth it when the
 appliance _artifact_ is the subject, wasted on anything else. Everything else
-belongs in `yarn start`, which runs from source under `tsx watch`. CLAUDE.md
+belongs in `yarn start`, which runs from source and restarts on an edit. CLAUDE.md
 carries the table under **Which stack for which change**.
 
 Two commands. The first brings up the API and worker on ports that do not
@@ -565,7 +565,7 @@ Don't, yet. `PHOENIX_BIND=any` requires `PHOENIX_REQUIRE_TLS=true` and a TLS ter
 yarn dev:local
 ```
 
-The same edition under `tsx watch`, which is what an edit costs six seconds
+The same edition from source, restarted on an edit, so an edit costs six seconds
 instead of six minutes. It starts the datastores if they are not already
 listening, applies migrations, provisions the instance into `~/.aflow/dev-local/`,
 and runs the services this edition composes — the coding lane and voice are not

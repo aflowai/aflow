@@ -15,6 +15,7 @@ import process from 'node:process';
 
 import { listenersOn, mcpPortHeldMessage, readProcessTable } from './devMcpPort.mjs';
 import { findRunningStack, profileConflicts, stackConflictMessage } from './devStackLock.mjs';
+import { restartAfterExit } from './serviceRestart.mjs';
 import { pairedHostEnvPath } from './stackCredentials.mjs';
 import { loadStackEnv } from './stackEnv.mjs';
 
@@ -22,7 +23,8 @@ import { loadStackEnv } from './stackEnv.mjs';
 let devRunnerShuttingDown = false;
 
 // Service registry: maps service names to yarn commands + optional env overrides.
-// All app services use `tsx watch` for automatic restart on file changes.
+// Every TypeScript service runs under `scripts/watch-service.mjs`, which starts
+// it again on a change to its sources and when it crashes.
 /**
  * Which composition root the dev server runs. `dev:local` sets the edition, so
  * both stacks come off this one table; a checkout carrying no hosted root has
@@ -57,13 +59,11 @@ const SERVICE_REGISTRY = {
   // ambient REDIS_URL wins over the paired one and points it at another
   // instance. Unpaired, owned by the launch-agent service, or with a daemon
   // already running, it is dropped from the profile with a hint rather than
-  // duplicated or crash-looped. Restarted on a change by a watcher that asks
-  // it to drain what is in flight and waits for it to exit, because `tsx watch`
-  // kills five seconds after its signal. Stopping the stack still stops it now.
-  'executor-host': {
-    cmd: 'node scripts/watch-and-drain.mjs apps/aflow-executor-host/src/index.ts apps/aflow-executor-host packages',
-    dotenv: false,
-  },
+  // duplicated or crash-looped. Its watcher restarts it on a change by asking
+  // it to drain what is in flight and waiting for it to exit, where every other
+  // service is killed five seconds after its signal. Stopping the stack still
+  // stops it now.
+  'executor-host': { cmd: 'yarn executor:host', dotenv: false },
   voice: { cmd: 'yarn voice:dev' },
   web: { cmd: 'yarn web:dev', ports: [3001] },
   // The local edition's own application, on the port the hosted one uses in its
@@ -318,6 +318,7 @@ function spawnService(serviceName, command, env) {
     console.error(`[${serviceName}] ${line}`);
   });
 
+  const startedAt = Date.now();
   child.on('exit', (code, signal) => {
     if (code !== null && code !== 0) {
       console.error(`[${serviceName}] Process exited with code ${code}`);
@@ -328,11 +329,38 @@ function spawnService(serviceName, command, env) {
     // while a grandchild (e.g. node on :3000) is still alive.
     if (!devRunnerShuttingDown) {
       processes.delete(serviceName);
+      restartIfCrashed(serviceName, command, env, { code, uptimeMs: Date.now() - startedAt });
     }
   });
 
   processes.set(serviceName, child);
   return child;
+}
+
+/** The delay each service's next restart waits, and the restarts waiting now. */
+const restartBackoff = new Map();
+const pendingRestarts = new Map();
+
+/**
+ * Starts a service whose process crashed, by the appliance launcher's rule
+ * (`serviceRestart.mjs`). A TypeScript service's watcher restarts the service
+ * itself; this is for a process above it — the watcher, a web application —
+ * exiting, which otherwise left that service down for as long as the stack ran.
+ */
+function restartIfCrashed(serviceName, command, env, exit) {
+  const decision = restartAfterExit({ ...exit, backoffMs: restartBackoff.get(serviceName) });
+  if (!decision.restart) return;
+  restartBackoff.set(serviceName, decision.nextBackoffMs);
+  console.error(
+    `[dev-runner] ${serviceName} exited with code ${String(exit.code)}; starting it again in ${String(decision.delayMs / 1000)}s.`,
+  );
+  pendingRestarts.set(
+    serviceName,
+    setTimeout(() => {
+      pendingRestarts.delete(serviceName);
+      if (!devRunnerShuttingDown) spawnService(serviceName, command, env);
+    }, decision.delayMs),
+  );
 }
 
 /** Set when the profile wanted `executor-host` and yielded to a foreground one already running. */
@@ -393,7 +421,7 @@ async function portTaken(port) {
 /**
  * Refuses a profile whose ports something already listens on. The usual holder
  * is the previous runner, still stopping: its teardown sweeps these ports, so it
- * would kill this stack's server and web, and `tsx watch` would then keep the
+ * would kill this stack's server and web, and their watchers would then keep the
  * dead server's parent alive — a stack that looks up while nothing listens.
  */
 async function refuseTakenPorts(services) {
@@ -605,8 +633,8 @@ function killListenersOnOwnedPorts(ports) {
  * Setup signal handlers for clean shutdown.
  *
  * Strategy: send SIGTERM to the direct child only (the shell/yarn wrapper).
- * This lets tsx watch propagate the signal to the app naturally, so it can
- * run its own graceful shutdown without interference.
+ * This lets each service's watcher pass the signal to the app, so it can run
+ * its own graceful shutdown without interference.
  *
  * After the grace period, SIGKILL the entire process GROUP to ensure no
  * orphan tsx/node processes linger.
@@ -626,6 +654,7 @@ function setupSignalHandlers() {
     shuttingDown = true;
     devRunnerShuttingDown = true;
     if (hostExecutorRecheck !== null) clearTimeout(hostExecutorRecheck);
+    for (const restart of pendingRestarts.values()) clearTimeout(restart);
 
     console.log(
       `\n[dev-runner] Received ${signal}, shutting down (${GRACE_PERIOD_MS / 1000}s grace)...`,
@@ -635,7 +664,7 @@ function setupSignalHandlers() {
     for (const [name, child] of processes.entries()) {
       if (isStillRunning(child)) {
         console.log(`[dev-runner] Stopping ${name}...`);
-        // SIGTERM to direct child only — let tsx watch forward it cleanly
+        // SIGTERM to direct child only — let the service's watcher forward it cleanly
         try {
           child.kill('SIGTERM');
         } catch {

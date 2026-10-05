@@ -16,7 +16,9 @@ KILLED=0
 # No `-E`: `pkill` takes an extended regular expression already, and passing it
 # is an illegal option that exits 2 — which this `if` with a discarded stderr
 # would have swallowed, leaving the respawning supervisors this exists to stop.
-for pattern in 'scripts/dev-local\.ts' 'scripts/dev\.mjs --profile (all|local|core|api|ui|engine|mock)'; do
+# Each service's watcher (`scripts/watch-service.mjs`) is a supervisor too: it
+# restarts a crashed service. The MCP server's is spared with the MCP server.
+for pattern in 'scripts/dev-local\.ts' 'scripts/dev\.mjs --profile (all|local|core|api|ui|engine|mock)' 'watch-service\.mjs (--drain )?apps/(server|aflow-orchestrator|aflow-executor-[a-z]+)/'; do
   if pkill -9 -f "$pattern" 2>/dev/null; then
     echo "  killed supervisor matching ${pattern}"
   fi
