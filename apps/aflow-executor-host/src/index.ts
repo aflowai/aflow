@@ -82,6 +82,7 @@ import { killAllProcesses, killProcessesForBinding, reapWithdrawn } from './sand
 import { observeRuntimes } from './runtimes.js';
 import { publishingFolders } from './pushApproval.js';
 import { startUnderSignals } from './startUnderSignals.js';
+import { createStartupTimings } from './startupTimings.js';
 import { type BackgroundTaskLogger, createBackgroundTaskRunner } from '@aflow/lib';
 
 const log = createServiceLogger('host-executor');
@@ -140,6 +141,8 @@ export async function waitForRedisCredential(
 }
 
 async function main(): Promise<void> {
+  const timings = createStartupTimings();
+  timings.step('load');
   const hostname = process.env['HOSTNAME'] ?? `host-executor-${String(process.pid)}`;
   const policyPath = resolveHostPolicyPath();
 
@@ -158,6 +161,7 @@ async function main(): Promise<void> {
   }
 
   await waitForRedisCredential(getExecutorRedisConfig(), log);
+  timings.step('credential');
   const redis = getRedisConnection(getExecutorRedisConfig());
 
   // No in-memory fallback: a payload store that forgets is indistinguishable
@@ -221,6 +225,7 @@ async function main(): Promise<void> {
       scratchDirs: orphaned.scratchDirs,
     });
   }
+  timings.step('cleanup');
 
   // A policy that cannot be read yet runs no harness at all, so the default
   // stands until the watch below reads one.
@@ -561,6 +566,8 @@ async function main(): Promise<void> {
     },
   ]);
   if (!started) return;
+  timings.step('runtimes');
+  log.info('Host executor ready', timings.ready());
 
   inventoryTask.start();
   browserIdleSweep.start();

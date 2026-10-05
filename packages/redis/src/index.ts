@@ -55,6 +55,11 @@ export {
   executorWaitGapMs,
   executorWaitClockJumped,
   executorWaitHasLooksLeft,
+  WAKE_MIN_SLEEP_MS,
+  EXECUTOR_WAKE_HOLD_MS,
+  createWakeDetector,
+  type WakeClock,
+  type WakeDetector,
   // Stream hygiene
   type StreamCleanupResult,
   cleanupStaleConsumers,

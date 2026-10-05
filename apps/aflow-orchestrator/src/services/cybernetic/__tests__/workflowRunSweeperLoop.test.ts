@@ -46,11 +46,14 @@ const CLEAN_STALE = {
 const CLEAN_ORPHAN = { scanned: 0, recovered: 0, failed: 0, skipped: 0, errors: 0 };
 const CLEAN_BACKFILL = { scanned: 0, crashWindowWrites: 0, historicalPlainWrites: 0, errors: 0 };
 
+const NOT_HELD = { remainingMs: () => 0 };
+
 function sweeper(
   overrides: { maxBatch?: number; maxCycleMs?: number } = {},
+  wakeHold = NOT_HELD,
 ): ReturnType<typeof createWorkflowRunSweeper> {
   return createWorkflowRunSweeper(
-    { sqlClient: {} as never, harnessDeps: {} as never },
+    { sqlClient: {} as never, harnessDeps: {} as never, wakeHold },
     { maxBatch: 10, ...overrides },
   );
 }
@@ -64,6 +67,18 @@ describe('workflow-run sweeper cycle', () => {
     reconcileStaleRunForTenant.mockResolvedValue(CLEAN_STALE);
     reconcileOrphanedRunsForTenant.mockResolvedValue(CLEAN_ORPHAN);
     backfillMissingEvaluationEnvelopes.mockResolvedValue(CLEAN_BACKFILL);
+  });
+
+  it('claims no tenant while the process is held after waking', async () => {
+    claimDueWorkflowRunTenants.mockResolvedValue([{ tenantId: 'tenant-a', armedSeq: '3' }]);
+
+    const result = await sweeper({}, { remainingMs: () => 12_000 }).runOnce();
+
+    // An operation task is escalated on its executor's in-flight record, which
+    // lapsed in the sleep and is refreshed at the executor's first tick awake.
+    expect(result).toEqual({ candidates: 0 });
+    expect(claimDueWorkflowRunTenants).not.toHaveBeenCalled();
+    expect(reconcileStaleRunForTenant).not.toHaveBeenCalled();
   });
 
   it('touches no tenant when nothing is due', async () => {
@@ -137,7 +152,7 @@ describe('workflow-run sweeper cycle', () => {
     claimDueWorkflowRunTenants.mockResolvedValue([{ tenantId: 'tenant-a', armedSeq: '1' }]);
 
     const result = await createWorkflowRunSweeper(
-      { sqlClient: {} as never, harnessDeps: {} as never },
+      { sqlClient: {} as never, harnessDeps: {} as never, wakeHold: NOT_HELD },
       { maxBatch: 10, mode: 'observe' },
     ).runOnce();
 

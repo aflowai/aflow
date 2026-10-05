@@ -53,6 +53,7 @@ import {
 } from './SessionOrchestrator/handlers/enqueueDelegationCompletion.js';
 import type { SessionOrchestrator } from './SessionOrchestrator/index.js';
 import type { ShardManager } from './ShardManager.js';
+import type { WakeHold } from './wakeHold.js';
 
 export interface ControlConsumerConfig {
   consumerName: string;
@@ -67,6 +68,7 @@ export interface ControlConsumerDeps {
   executionService: SessionOrchestrator;
   /** Shard manager — reads from owned shard streams only */
   shardManager: ShardManager;
+  wakeHold: WakeHold;
 }
 
 export interface ControlConsumer {
@@ -80,7 +82,7 @@ export function createControlConsumer(
   config: ControlConsumerConfig,
 ): ControlConsumer {
   const log = getOrchestratorLogger().child({ component: 'control-consumer' });
-  const { blockingRedis, redis, executionService, shardManager } = deps;
+  const { blockingRedis, redis, executionService, shardManager, wakeHold } = deps;
   const { consumerName, batchSize = 10, blockMs = 100 } = config;
 
   let running = false;
@@ -515,6 +517,12 @@ export function createControlConsumer(
   async function processLoop(): Promise<void> {
     while (!stopRequested) {
       try {
+        const heldMs = wakeHold.remainingMs();
+        if (heldMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, Math.min(heldMs, 1000)));
+          continue;
+        }
+
         const ownedShards = shardManager.ownedShards();
         const controlStreams = shardManager.controlStreams();
         if (ownedShards.length === 0) {
