@@ -381,7 +381,7 @@ async function enrichRun(
   repo: ReturnType<typeof createMemoryDocRepository>,
   tenantId: string,
   spaceId: string,
-  raw: Awaited<ReturnType<typeof listActiveRunsWithLiveness>>[number],
+  raw: ActiveRunWithTaskCounts,
   slugToSkill: Map<string, SkillSummary>,
 ): Promise<ActiveSurfaceRun | null> {
   const detail = await loadRunById(db, tenantId, spaceId, raw.runId);
@@ -521,7 +521,7 @@ async function enrichTerminalRun(
 }
 
 function deriveRunLifecycle(
-  raw: Awaited<ReturnType<typeof listActiveRunsWithLiveness>>[number],
+  raw: ActiveRunWithTaskCounts,
   hotState: SessionHotState | null,
   partialSignalRead: boolean,
 ): { lifecycle: ActiveSurfaceRunLifecycle; reasonCode?: ActiveSurfaceLifecycleReasonCode } {

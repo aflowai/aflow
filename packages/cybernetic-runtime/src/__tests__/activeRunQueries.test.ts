@@ -23,15 +23,21 @@ const LIMIT = 10;
  * A real drizzle instance over a fake postgres-js client: each statement is
  * rendered for real and answered with `rows`, and nothing reaches a database.
  */
-function fakeDb(rows: unknown[]): { db: PostgresJsDatabase; queries: string[] } {
+function fakeDb(rows: unknown[]): {
+  db: PostgresJsDatabase;
+  queries: string[];
+  parameters: unknown[][];
+} {
   const queries: string[] = [];
+  const parameters: unknown[][] = [];
   const client: object = Object.assign(
     () => {
       throw new Error('tagged-template query is not expected');
     },
     {
-      unsafe: (query: string) => {
+      unsafe: (query: string, params: unknown[] = []) => {
         queries.push(query);
+        parameters.push(params);
         const answer = query.includes('search_path') ? [] : rows;
         return Object.assign(Promise.resolve(answer), { values: () => Promise.resolve(answer) });
       },
@@ -39,7 +45,7 @@ function fakeDb(rows: unknown[]): { db: PostgresJsDatabase; queries: string[] } 
       options: { parsers: {}, serializers: {} },
     },
   );
-  return { db: drizzle(client as unknown as postgres.Sql), queries };
+  return { db: drizzle(client as unknown as postgres.Sql), queries, parameters };
 }
 
 /** A row that answers every column and records which ones were read. */
@@ -167,5 +173,30 @@ describe('listActiveRunsWithLiveness', () => {
 
     expect(without).not.toHaveProperty('planNodeId');
     expect(withNode).toMatchObject({ runId: 'run-2', planNodeId: PLAN_NODE_ID });
+  });
+
+  it('asks whether the session that drove each run is a Helmsman conversation that has not ended', async () => {
+    const { db, queries, parameters } = fakeDb([
+      { run_id: 'run-live', driven_by_live_conversation: true },
+      { run_id: 'run-operator', driven_by_live_conversation: false },
+    ]);
+
+    const [live, operator] = await listActiveRunsWithLiveness(db, TENANT_ID, SPACE_ID, {
+      limit: LIMIT,
+    });
+
+    const index = queries.findIndex((query) => query.includes('FROM workflow_runs'));
+    expect(queries[index]).toContain('LEFT JOIN sessions s ON s.session_id = r.session_id');
+    expect(parameters[index]).toEqual(
+      expect.arrayContaining([
+        'platform-role',
+        'cybernetic-helmsman',
+        'SUCCEEDED',
+        'FAILED',
+        'CANCELLED',
+      ]),
+    );
+    expect(live).toMatchObject({ runId: 'run-live', drivenByLiveConversation: true });
+    expect(operator).toMatchObject({ runId: 'run-operator', drivenByLiveConversation: false });
   });
 });

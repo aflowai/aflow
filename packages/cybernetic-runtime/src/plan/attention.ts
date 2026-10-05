@@ -122,15 +122,24 @@ function renderPlanNodeLine(node: PlanAttentionNode): string {
 }
 
 /**
+ * The one line that counts the work in the space that is not this
+ * conversation's. It carries no ids and no call to act — another
+ * conversation's review or pause is not this one's to answer — but names where
+ * the counted work is read, so the count is never a dead end.
+ */
+export function renderOtherWorkLine(runs: number, items: number): string {
+  return `other work in this space, not this conversation's: ${String(runs)} runs, ${String(items)} items — \`workflow.run.list_attention\` lists the items, \`workflow.run.detail\` reads a run whose id the operator gives`;
+}
+
+/**
  * The plan section of the attention block: the open tree with this
  * conversation's work under the node it serves, its work on nodes the tree
  * does not show, and every run placed under another root, every run serving
- * no node that another conversation drove, and every item that is another
- * conversation's as one count. That count carries no ids and no
- * call to act — another conversation's review or pause is not this one's to
- * answer. Work placed nowhere that is this conversation's is the caller's.
+ * no node that another live conversation drove, and every item that is
+ * another conversation's as one count (`renderOtherWorkLine`). Work placed
+ * nowhere that the caller shows is the caller's to list.
  *
- * Every active run placed in the plan is in `work`, and the other
+ * Every active run placed in the plan is in `work`, and the other live
  * conversations' runs serving no node arrive counted in `otherUnplacedRuns`;
  * of the pending items, only the ones this conversation is shown are — the
  * rest arrive counted in `items`.
@@ -178,11 +187,7 @@ export function renderPlanWithWork(
       `   ... and ${String(items.ownUnshown)} more of this conversation's attention items — use \`workflow.run.list_attention\``,
     );
   }
-  if (otherRuns + items.others > 0) {
-    lines.push(
-      `other work in this space, not this conversation's: ${String(otherRuns)} runs, ${String(items.others)} items`,
-    );
-  }
+  if (otherRuns + items.others > 0) lines.push(renderOtherWorkLine(otherRuns, items.others));
   if (lines.length > 0) lines.push('');
   return lines;
 }

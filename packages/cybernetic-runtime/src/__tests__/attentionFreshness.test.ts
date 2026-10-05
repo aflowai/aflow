@@ -11,7 +11,7 @@ import type { Redis as RedisType } from 'ioredis';
 import { drizzle, type PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type postgres from 'postgres';
 import { configureLogging } from '@aflow/observability';
-import type { ActiveRunWithTaskCounts } from '../ledger/types.js';
+import type { ActiveSpaceRun } from '../ledger/types.js';
 import { InMemoryPlanNodeStore } from './planStoreFake.js';
 
 const TENANT = 'a0000000-0000-4000-8000-000000000741';
@@ -42,7 +42,7 @@ interface AttentionRow {
 const table = {
   items: [] as AttentionRow[],
   runs: new Map<string, RunRow>(),
-  active: [] as ActiveRunWithTaskCounts[],
+  active: [] as ActiveSpaceRun[],
 };
 
 function newestFirst(rows: AttentionRow[]): AttentionRow[] {
@@ -200,6 +200,7 @@ const {
 } = await import('../ledger/attention.js');
 const { emitRunUpdated } = await import('../runEvents.js');
 const { createPlanNode } = await import('../plan/operations.js');
+const { renderOtherWorkLine } = await import('../plan/attention.js');
 
 const DB = fakeDb();
 let redis: RedisType;
@@ -309,6 +310,7 @@ describe('the cached attention block reads the attention items as they stand', (
         spaceId: SPACE,
         workflowSlug: 'commission-change',
         sessionId: SESSION,
+        drivenByLiveConversation: true,
         status: 'running',
         startedAt: new Date('2026-10-05T08:00:00.000Z'),
         schedulerCursorAt: null,
@@ -360,7 +362,7 @@ describe('an attention item is a wake-up, read once', () => {
 
     const others = await turn(OTHER_SESSION, 'succeeds');
     expect(others).not.toContain(itemId);
-    expect(others).toContain("other work in this space, not this conversation's: 0 runs, 1 items");
+    expect(others).toContain(renderOtherWorkLine(0, 1));
     expect(row(itemId)).toMatchObject({ consumedAt: null, consumedBySession: null });
 
     const own = await turn(SESSION, 'succeeds');
@@ -380,7 +382,7 @@ describe('an attention item is a wake-up, read once', () => {
     for (const sessionId of [SESSION, OTHER_SESSION]) {
       const block = await turn(sessionId, 'succeeds');
       expect(block).not.toContain(itemId);
-      expect(block).toContain("other work in this space, not this conversation's: 0 runs, 1 items");
+      expect(block).toContain(renderOtherWorkLine(0, 1));
     }
     expect(row(itemId).consumedAt).toBeNull();
   });

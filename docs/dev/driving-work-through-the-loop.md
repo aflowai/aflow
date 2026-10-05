@@ -41,9 +41,14 @@ and each links itself to the node as it ends, the publication with the pull requ
 opened. The block is the conversation's: its own runs and their attention items sit under
 their nodes, and the work of every other stream in the space is one line —
 `other work in this space, not this conversation's: N runs, M items` — with nothing to act
-on. A conversation that has started nothing for the plan sees every run in it on that line
-until it starts one; `plan.node.get` on its node is where it finds its stream's work in
-flight. When the round ends, `plan.node.update` records where the node now stands in
+on, naming `workflow.run.list_attention` for those items and `workflow.run.detail` for a
+run whose id the operator gives. The runs on that line are another live Helmsman
+conversation's, placed in the plan or not, and every run under a root this conversation has
+not taken up. A run in no plan that no live conversation owns — the operator's, started from
+the web UI or through `run_operation`, or one whose conversation has ended — is listed in
+full after the tree for every conversation. A conversation that has started nothing for the
+plan sees every run in it on that line until it starts one; `plan.node.get` on its node is
+where it finds its stream's work in flight. When the round ends, `plan.node.update` records where the node now stands in
 its note, against the revision the conversation read: a node another conversation wrote
 meanwhile is refused with its current state rather than overwritten, and a node is marked
 `done` only with the outcome that met its criteria.

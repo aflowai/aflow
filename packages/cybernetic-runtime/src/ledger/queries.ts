@@ -1,6 +1,6 @@
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq, and, asc, desc, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
-import type { TenantId } from '@aflow/schemas';
+import type { AgentSystemRole, SessionAgentTarget, SessionStatus, TenantId } from '@aflow/schemas';
 import {
   createTenantContext,
   withTenantSchema,
@@ -15,6 +15,7 @@ import type {
   WorkflowTaskRow,
   RunStats,
   ActiveRunWithTaskCounts,
+  ActiveSpaceRun,
 } from './types.js';
 
 export type {
@@ -23,6 +24,7 @@ export type {
   WorkflowTaskRow,
   RunStats,
   ActiveRunWithTaskCounts,
+  ActiveSpaceRun,
 };
 
 // ============================================================================
@@ -554,19 +556,25 @@ export async function countProductionRuns(
 // Bounded attention helper (104d Phase 1a)
 // ============================================================================
 
+const CONVERSATION_TARGET_KIND: SessionAgentTarget['kind'] = 'platform-role';
+const CONVERSATION_SYSTEM_ROLE: AgentSystemRole = 'cybernetic-helmsman';
+const ENDED_SESSION_STATUSES: readonly SessionStatus[] = ['SUCCEEDED', 'FAILED', 'CANCELLED'];
+
 /**
  * List active runs with aggregated task-status counts in a single query.
  *
  * Replaces the N+1 pattern of `listActiveRuns()` + per-run `loadRunById()`.
  * The JOIN aggregates task statuses so `deriveRunLivenessFromCounts()` can
- * be called without any additional queries.
+ * be called without any additional queries. Each run says whether the
+ * session that drove it is a Helmsman conversation that has not ended — the
+ * conversation that owns it; a run without one is the operator's.
  */
 export async function listActiveRunsWithLiveness(
   db: PostgresJsDatabase,
   tenantId: string,
   spaceId: string,
   opts: { limit: number },
-): Promise<ActiveRunWithTaskCounts[]> {
+): Promise<ActiveSpaceRun[]> {
   const tenantCtx = createTenantContext(tenantId as TenantId);
   return withTenantSchema(db, tenantCtx, async (tx) => {
     const rows = await tx.execute(sql`
@@ -579,6 +587,15 @@ export async function listActiveRunsWithLiveness(
         r.started_at,
         r.scheduler_cursor_at,
         r.plan_node_id,
+        COALESCE(
+          s.target_kind = ${CONVERSATION_TARGET_KIND}
+            AND s.target_system_role = ${CONVERSATION_SYSTEM_ROLE}
+            AND s.status NOT IN (${sql.join(
+              ENDED_SESSION_STATUSES.map((status) => sql`${status}`),
+              sql`, `,
+            )}),
+          false
+        ) AS driven_by_live_conversation,
         COALESCE(t.total_tasks, 0)::int AS total_tasks,
         COALESCE(t.succeeded_tasks, 0)::int AS succeeded_tasks,
         COALESCE(t.live_tasks, 0)::int AS live_tasks,
@@ -595,6 +612,7 @@ export async function listActiveRunsWithLiveness(
         FROM workflow_run_tasks wrt
         WHERE wrt.run_id = r.run_id
       ) t ON true
+      LEFT JOIN sessions s ON s.session_id = r.session_id
       WHERE r.space_id = ${spaceId}
         AND r.status IN ('running', 'paused')
         AND r.eval_batch_id IS NULL
@@ -618,6 +636,7 @@ export async function listActiveRunsWithLiveness(
       scheduledTasks: row['scheduled_tasks'] as number,
       pausedTasks: row['paused_tasks'] as number,
       ...(typeof row['plan_node_id'] === 'string' ? { planNodeId: row['plan_node_id'] } : {}),
+      drivenByLiveConversation: row['driven_by_live_conversation'] === true,
     }));
   });
 }
