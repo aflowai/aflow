@@ -13,12 +13,17 @@
  * than degrading to a URL that cannot possibly be right.
  */
 
-const ENV_KEYS = ['WEB_BASE_URL', 'APP_URL', 'NEXT_PUBLIC_BASE_URL', 'APP_BASE_URL'] as const;
+export const WEB_BASE_URL_ENV_KEYS = [
+  'WEB_BASE_URL',
+  'APP_URL',
+  'NEXT_PUBLIC_BASE_URL',
+  'APP_BASE_URL',
+] as const;
 
 const DEV_FALLBACK = 'http://localhost:3001';
 
 function firstConfigured(env: NodeJS.ProcessEnv): string | undefined {
-  for (const key of ENV_KEYS) {
+  for (const key of WEB_BASE_URL_ENV_KEYS) {
     const value = env[key]?.trim();
     if (value) return value;
   }
@@ -41,7 +46,7 @@ export function resolveWebBaseUrl(env: NodeJS.ProcessEnv = process.env): string 
 
   if (env['NODE_ENV'] === 'production') {
     throw new Error(
-      `No public web origin configured. Set ${ENV_KEYS[0]} — it is used for links in agent prompts, emails, and tool output.`,
+      `No public web origin configured. Set ${WEB_BASE_URL_ENV_KEYS[0]} — it is used for links in agent prompts, emails, and tool output.`,
     );
   }
 

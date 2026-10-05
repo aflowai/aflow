@@ -120,6 +120,7 @@ describe('host inventories', () => {
         rules: [],
         unattended: true,
         idleMinutes: 30,
+        localPorts: [],
         running: true,
         windowOpen: false,
         sites: ['accounts.example.com', 'mail.example.com'],
@@ -132,6 +133,7 @@ describe('host inventories', () => {
         rules: [{ origin: '*.example.com', effect: 'deny' }],
         unattended: false,
         idleMinutes: 5,
+        localPorts: [{ port: 3001, refused: "port 3001 is this stack's own" }, { port: 5173 }],
         running: false,
         windowOpen: false,
       },
@@ -148,6 +150,7 @@ describe('host inventories', () => {
       [
         'id',
         'idleMinutes',
+        'localPorts',
         'posture',
         'rules',
         'running',
@@ -158,6 +161,30 @@ describe('host inventories', () => {
         'windowOpen',
       ].sort(),
     );
+  });
+
+  it('reads a browser published without local ports as opened to none', async () => {
+    const now = Date.now();
+    const published = {
+      id: 'default',
+      posture: 'autonomous',
+      window: 'hidden',
+      spaces: 'all',
+      rules: [],
+      unattended: true,
+      idleMinutes: 30,
+      running: false,
+      windowOpen: false,
+    };
+    const redis = fakeRedis(
+      { [now - 1_000]: 'laptop' },
+      {
+        [hostInventoryKey('laptop')]: JSON.stringify(
+          inventory('laptop', [], [], [published] as unknown as HostInventory['browsers']),
+        ),
+      },
+    );
+    expect((await readLiveHostInventories(redis, now))[0]?.browsers[0]?.localPorts).toEqual([]);
   });
 
   it('reads a request from the workspace only when it names this machine', () => {

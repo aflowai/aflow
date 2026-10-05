@@ -54,7 +54,8 @@ import { startHandoffBoard } from './browser/handoffBoard.js';
 import { createBrowserIdleSweep } from './browser/idleSweep.js';
 import { followBrowserRequests } from './browser/requestPoll.js';
 import { isBrowserRequestFile, serveBrowserRequests } from './browser/windowRequests.js';
-import { answerBrowserSetting } from './browser/workspaceSettings.js';
+import { executorStackPorts } from './browser/localPorts.js';
+import { browserSettingsInTurn } from './browser/workspaceSettings.js';
 import { createBrowserHandler } from './handlers/browserHandler.js';
 import { redisApprovalStore } from './browser/approvalStore.js';
 import { removeWorktree } from './worktree.js';
@@ -247,13 +248,16 @@ async function main(): Promise<void> {
   // Loaded here rather than at the top so that nothing importing this module
   // for its helpers pulls in the browser automation library.
   const { createPlaywrightEngine } = await import('./browser/engine.js');
+  const stackPorts = executorStackPorts();
   const browserDriver = new BrowserDriver({
     engine: createPlaywrightEngine(),
     launcher: createChromeLauncher(),
     hostDir: dirname(policyPath),
     loadPolicy: async () => await loadHostPolicy(policyPath),
+    stackPorts,
     handoffs,
   });
+  const applyBrowserSetting = browserSettingsInTurn(policyPath, discoverChrome, stackPorts);
 
   runtime.registerHandler(
     createHostHandler(
@@ -317,7 +321,7 @@ async function main(): Promise<void> {
     const browsers = await browserDriver
       .machineProfiles()
       .then((profiles) =>
-        profiles.map(({ profile, running, windowShown, sites }) => ({
+        profiles.map(({ profile, localPorts, running, windowShown, sites }) => ({
           id: profile.id,
           posture: profile.posture,
           window: profile.window,
@@ -325,6 +329,7 @@ async function main(): Promise<void> {
           rules: profile.rules,
           unattended: profile.unattended,
           idleMinutes: profile.idleMinutes,
+          localPorts: [...localPorts],
           running,
           windowOpen: windowShown,
           ...(sites !== undefined ? { sites } : {}),
@@ -597,7 +602,7 @@ async function main(): Promise<void> {
     const request = readHostBrowserRequest(raw, hostname);
     if (request === undefined) return;
     if (request.kind === 'setting') {
-      void answerBrowserSetting(request, policyPath, discoverChrome)
+      void applyBrowserSetting(request)
         .then(async (answer) => {
           log.info('Applied a browser setting asked for from the workspace', {
             profileId: request.profileId,

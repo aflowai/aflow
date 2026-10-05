@@ -1,7 +1,8 @@
 /**
  * What a run is told when an address is refused because of where it is.
  *
- * A profile that keeps sign-ins does not reach services on this machine: the
+ * A profile that keeps sign-ins reaches this machine only on the loopback
+ * ports the operator opened for it, and never on one this stack serves on: the
  * local edition's web application presents the instance secret to whoever
  * reaches its port, so a page loaded from it is the owner's Action Center and
  * an agent able to drive it could approve its own requests. An ephemeral
@@ -23,7 +24,8 @@ export function localDestinationRefusal(profileId: string, reason: string, when:
   const which = isEphemeralBrowserProfileId(profileId)
     ? 'reaches services on this machine only on the loopback ports the operator declared for ' +
       'its harness'
-    : 'keeps sign-ins, so it does not reach services on this machine';
+    : 'keeps sign-ins, so it reaches this machine only on the loopback ports the operator ' +
+      'opened for it';
   return `Browser profile \`${profileId}\` ${which}: ${reason}. ${outcome(when)}`;
 }
 

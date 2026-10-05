@@ -17,6 +17,7 @@ import { randomBytes } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 
 import { createTenantContext, withTenantSchema, hostBindings, spaces } from '@aflow/database';
+import { APPLIANCE_REDIS_PORT } from '@aflow/lib';
 import {
   getRedisConnection,
   hostBrowserRequestChannel,
@@ -180,7 +181,7 @@ function hostReachableRedisUrl(): string | undefined {
     url.password = '';
     return url.toString();
   }
-  const port = process.env['AFLOW_REDIS_PORT']?.trim() ?? '6380';
+  const port = process.env['AFLOW_REDIS_PORT']?.trim() ?? String(APPLIANCE_REDIS_PORT);
   return `redis://127.0.0.1:${port}`;
 }
 

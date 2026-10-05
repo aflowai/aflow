@@ -171,6 +171,14 @@ export const BrowserWindowSizeSchema = z.object({
 });
 export type BrowserWindowSize = z.infer<typeof BrowserWindowSizeSchema>;
 
+export const BrowserLocalPortSchema = z.number().int().min(1).max(65_535);
+
+/** What `localPorts` opens, as the machine's command and the machine page both say it. */
+export const BROWSER_LOCAL_PORTS_LINE =
+  'Loopback ports on this machine its pages may load from — a dev server, say — at localhost, ' +
+  '127.0.0.1 or [::1]. Every other port and address of this machine stays refused, and so do ' +
+  'the ports this stack serves on, whatever this list says.';
+
 export const BrowserProfileSchema = z.object({
   id: DeclaredBrowserProfileIdSchema,
   spaces: z
@@ -214,5 +222,24 @@ export const BrowserProfileSchema = z.object({
       'How long a hand-off waits for the operator in the window before the run goes on without ' +
         'them.',
     ),
+  localPorts: z.array(BrowserLocalPortSchema).default([]).describe(BROWSER_LOCAL_PORTS_LINE),
 });
 export type BrowserProfile = z.infer<typeof BrowserProfileSchema>;
+
+/**
+ * Why a port is never opened to a profile: this stack serves on it. `owner`
+ * says whose it is and how that is known, such as "the web application, by
+ * default".
+ */
+export function browserStackPortReason(port: number, owner: string): string {
+  return (
+    `port ${String(port)} is this stack's own — ${owner} — and a page from it could approve ` +
+    "the agent's requests"
+  );
+}
+
+/** The refusal of a request to open such a port to a profile. */
+export function browserStackPortRefusal(port: number, owner: string): string {
+  const reason = browserStackPortReason(port, owner);
+  return `${reason.charAt(0).toUpperCase()}${reason.slice(1)}, so no browser profile is opened to it.`;
+}

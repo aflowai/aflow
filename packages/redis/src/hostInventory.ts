@@ -9,6 +9,7 @@
 import { z } from 'zod';
 
 import {
+  BrowserLocalPortSchema,
   BrowserProfileIdSchema,
   BrowserProfileSchema,
   type HostPublishedChecks,
@@ -67,7 +68,7 @@ export interface HostWithdrawalNotice {
 /**
  * The operator asking, from the workspace, for what `aflow browser` does on
  * the machine: a profile's window to sign in, or a change to its posture,
- * `unattended` choice or origin rules. Published only by the operator routes,
+ * `unattended` choice, origin rules or the loopback ports it is opened to. Published only by the operator routes,
  * which take a person's authenticated request — no operation dispatches it, so
  * no agent can — and acted on only by the executor of the machine it names.
  *
@@ -96,6 +97,8 @@ export const HostBrowserSettingSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('unattended'), choice: SettingWordSchema }),
   z.object({ kind: z.literal('rule'), origin: SettingWordSchema, effect: SettingWordSchema }),
   z.object({ kind: z.literal('rule_remove'), origin: SettingWordSchema }),
+  z.object({ kind: z.literal('local_port'), port: SettingWordSchema }),
+  z.object({ kind: z.literal('local_port_remove'), port: SettingWordSchema }),
 ]);
 export type HostBrowserSetting = z.infer<typeof HostBrowserSettingSchema>;
 
@@ -136,6 +139,17 @@ export const HostBrowserSettingAnswerSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('refused'), message: z.string() }),
 ]);
 export type HostBrowserSettingAnswer = z.infer<typeof HostBrowserSettingAnswerSchema>;
+
+/**
+ * A loopback port a profile's policy lists, every one of them: open, or
+ * `refused` with why when this stack serves on it, so a port written into the
+ * file by hand is shown on the machine page and can be removed there.
+ */
+export const HostInventoryLocalPortSchema = z.object({
+  port: BrowserLocalPortSchema,
+  refused: z.string().optional(),
+});
+export type HostInventoryLocalPort = z.infer<typeof HostInventoryLocalPortSchema>;
 
 /**
  * What a machine publishes about itself.
@@ -195,6 +209,7 @@ export const HostInventorySchema = z.object({
       unattended: true,
       idleMinutes: true,
     }).extend({
+      localPorts: z.array(HostInventoryLocalPortSchema).default([]),
       running: z.boolean(),
       windowOpen: z.boolean(),
       sites: z.array(z.string()).optional(),

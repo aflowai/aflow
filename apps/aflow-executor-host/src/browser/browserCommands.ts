@@ -5,13 +5,15 @@
  * Listing and signing in go through the running executor when there is one,
  * because the Chrome a profile's directory allows is the executor's; with none
  * running, this command starts the profile's browser itself through the same
- * driver, launch flags and egress proxy. Posture, `unattended` and origin rules
- * are edits to the policy file, which a running executor follows as it follows
- * any edit; the machine page's edits go through the same writer, in the executor.
+ * driver, launch flags and egress proxy. Posture, `unattended`, origin rules
+ * and the loopback ports a profile is opened to are edits to the policy file,
+ * which a running executor follows as it follows any edit; the machine page's
+ * edits go through the same writer, in the executor.
  */
 import { readFile } from 'node:fs/promises';
 
 import {
+  BROWSER_LOCAL_PORTS_LINE,
   BROWSER_POSTURE_LINES,
   BROWSER_UNATTENDED_LINE,
   type BrowserOriginRule,
@@ -21,17 +23,20 @@ import {
 } from '@aflow/schemas';
 
 import { HostPolicySchema, loadHostPolicy } from '../bindings.js';
-import { serializePolicy, writePolicyAtomically } from '../policyFile.js';
+import { editPolicy } from '../policyFile.js';
 import { describePolicyIssues } from '../policyIssues.js';
 import type { ChromeDiscovery } from './chromeDiscovery.js';
 import { profileDirectory } from './chromeProcess.js';
 import type { BrowserDriver } from './driver.js';
 import { errorText } from './errors.js';
+import { executorStackPorts, listedLocalPorts, type StackOwnPorts } from './localPorts.js';
 import { SIGN_IN_SITTING_MAX_MS } from './operatorWindow.js';
 import {
   declaredBrowsers,
   PolicyEditError,
   type RawPolicy,
+  withLocalPort,
+  withoutLocalPort,
   withoutRule,
   withPosture,
   withRule,
@@ -52,7 +57,9 @@ export type BrowserCommand =
       readonly origin: string;
       readonly effect: string;
     }
-  | { readonly kind: 'rule_remove'; readonly profileId: string; readonly origin: string };
+  | { readonly kind: 'rule_remove'; readonly profileId: string; readonly origin: string }
+  | { readonly kind: 'local_port'; readonly profileId: string; readonly port: string }
+  | { readonly kind: 'local_port_remove'; readonly profileId: string; readonly port: string };
 
 const USAGE_INDENT = 44;
 const USAGE_WIDTH = 92;
@@ -97,6 +104,8 @@ export const BROWSER_USAGE = [
       'ask: pages there open and are read, and every action on one waits for your approval.',
   ),
   usageEntry('browser rule <profile> <origin> --remove', 'Drop that rule.'),
+  usageEntry('browser local-port <profile> <port>', BROWSER_LOCAL_PORTS_LINE),
+  usageEntry('browser local-port <profile> <port> --remove', 'Close that port to it again.'),
 ].join('\n');
 
 const RULE_GLOSS: Readonly<Record<BrowserOriginRule['effect'], string>> = {
@@ -143,6 +152,16 @@ export function parseBrowserArgs(args: readonly string[]): BrowserCommand | unde
       }
       return effect === undefined ? undefined : { kind: 'rule', profileId, origin, effect };
     }
+    case 'local-port': {
+      const removing = rest.includes('--remove');
+      const words = rest.filter((word) => word !== '--remove');
+      if (words.some((word) => word.startsWith('--'))) return undefined;
+      const [profileId, port, extra] = words;
+      if (profileId === undefined || port === undefined || extra !== undefined) return undefined;
+      return removing
+        ? { kind: 'local_port_remove', profileId, port }
+        : { kind: 'local_port', profileId, port };
+    }
     default:
       return undefined;
   }
@@ -158,6 +177,8 @@ export interface BrowserCliDeps {
   readonly ownDriver: () => Promise<BrowserDriver>;
   /** The live Chrome holding a profile's directory, if one does. */
   readonly profileHolder: (profileId: string) => Promise<ProfileHolder | undefined>;
+  /** Tests fix it; otherwise the ports this command's environment and the defaults name. */
+  readonly stackPorts?: StackOwnPorts;
 }
 
 export class BrowserCliError extends Error {
@@ -168,13 +189,15 @@ export class BrowserCliError extends Error {
 }
 
 async function readPolicy(policyPath: string): Promise<RawPolicy> {
-  let raw: string;
-  try {
-    raw = await readFile(policyPath, 'utf8');
-  } catch {
+  const raw = await readFile(policyPath, 'utf8').catch(() => undefined);
+  return validPolicy(policyPath, raw === undefined ? undefined : (JSON.parse(raw) as unknown));
+}
+
+/** The policy file's JSON as it stands, refused when it is missing or not a valid policy. */
+function validPolicy(policyPath: string, json: unknown): RawPolicy {
+  if (json === undefined) {
     throw new BrowserCliError(`No host policy at ${policyPath}. Pair this machine first.`);
   }
-  const json = JSON.parse(raw) as unknown;
   const parsed = HostPolicySchema.safeParse(json);
   if (!parsed.success) {
     throw new BrowserCliError(
@@ -185,14 +208,15 @@ async function readPolicy(policyPath: string): Promise<RawPolicy> {
   return json as RawPolicy;
 }
 
-/** A change to one profile's posture, `unattended` choice or origin rules. */
+/** A change to one profile's posture, `unattended` choice, origin rules or local ports. */
 export type BrowserSettingCommand = Extract<
   BrowserCommand,
-  { kind: 'posture' | 'unattended' | 'rule' | 'rule_remove' }
+  { kind: 'posture' | 'unattended' | 'rule' | 'rule_remove' | 'local_port' | 'local_port_remove' }
 >;
 
 function settingEdit(
   command: BrowserSettingCommand,
+  stackOwn: StackOwnPorts,
 ): (policy: RawPolicy, implied: readonly BrowserProfile[]) => RawPolicy {
   switch (command.kind) {
     case 'posture':
@@ -205,6 +229,12 @@ function settingEdit(
         withRule(policy, implied, command.profileId, command.origin, command.effect);
     case 'rule_remove':
       return (policy, implied) => withoutRule(policy, implied, command.profileId, command.origin);
+    case 'local_port':
+      return (policy, implied) =>
+        withLocalPort(policy, implied, command.profileId, command.port, stackOwn);
+    case 'local_port_remove':
+      return (policy, implied) =>
+        withoutLocalPort(policy, implied, command.profileId, command.port);
   }
 }
 
@@ -218,24 +248,32 @@ export interface BrowserSettingChanged {
 /**
  * The one writer of a profile's settings, for `aflow browser` and for the
  * operator's request from the machine page alike, so the two validate and
- * write the same way. A running executor follows the file as it follows any
- * edit.
+ * write the same way. Holds the policy file's lock from reading it to writing
+ * it, so a change made meanwhile by the other is never written over. A
+ * running executor follows the file as it follows any edit.
  */
 export async function changeBrowserSetting(
   policyPath: string,
   findChrome: () => ChromeDiscovery,
   command: BrowserSettingCommand,
+  stackOwn: StackOwnPorts,
 ): Promise<BrowserSettingChanged> {
-  const policy = await readPolicy(policyPath);
-  const implied = [...effectiveBrowserProfiles(undefined, findChrome()).values()];
-  let next: RawPolicy;
-  try {
-    next = settingEdit(command)(policy, implied);
-  } catch (error) {
-    if (error instanceof PolicyEditError) throw new BrowserCliError(error.message);
-    throw error;
-  }
-  await writePolicyAtomically(policyPath, serializePolicy(next));
+  let impliedWrittenOut: string[] | undefined;
+  const next = await editPolicy(policyPath, (current) => {
+    const policy = validPolicy(policyPath, current);
+    const implied = [...effectiveBrowserProfiles(undefined, findChrome()).values()];
+    if (policy.browsers === undefined) {
+      impliedWrittenOut = declaredBrowsers(policy, implied).map((entry) =>
+        String((entry as { id?: unknown }).id),
+      );
+    }
+    try {
+      return settingEdit(command, stackOwn)(policy, implied);
+    } catch (error) {
+      if (error instanceof PolicyEditError) throw new BrowserCliError(error.message);
+      throw error;
+    }
+  });
   const profile = parseBrowserProfiles(next.browsers ?? []).profiles.find(
     (declared) => declared.id === command.profileId,
   );
@@ -245,16 +283,7 @@ export async function changeBrowserSetting(
         'the policy file says why.',
     );
   }
-  return {
-    profile,
-    ...(policy.browsers === undefined
-      ? {
-          impliedWrittenOut: declaredBrowsers(policy, implied).map((entry) =>
-            String((entry as { id?: unknown }).id),
-          ),
-        }
-      : {}),
-  };
+  return { profile, ...(impliedWrittenOut !== undefined ? { impliedWrittenOut } : {}) };
 }
 
 async function edit(
@@ -262,7 +291,12 @@ async function edit(
   command: BrowserSettingCommand,
   said: string,
 ): Promise<void> {
-  const changed = await changeBrowserSetting(deps.policyPath, deps.findChrome, command);
+  const changed = await changeBrowserSetting(
+    deps.policyPath,
+    deps.findChrome,
+    command,
+    deps.stackPorts ?? executorStackPorts(),
+  );
   if (changed.impliedWrittenOut !== undefined) {
     deps.print(
       'This machine’s policy declared no browser profiles, so the implied one was written out ' +
@@ -280,6 +314,7 @@ function sitesLine(sites: readonly string[]): string {
 }
 
 async function list(deps: BrowserCliDeps): Promise<void> {
+  const stackOwn = deps.stackPorts ?? executorStackPorts();
   const raw = await readPolicy(deps.policyPath);
   const policy = await loadHostPolicy(deps.policyPath, deps.findChrome);
   const asked = await askExecutor(
@@ -319,6 +354,13 @@ async function list(deps: BrowserCliDeps): Promise<void> {
     }
     for (const rule of profile.rules) {
       deps.print(`    ${rule.effect} ${rule.origin}${RULE_GLOSS[rule.effect]}`);
+    }
+    for (const { port, refused } of listedLocalPorts(profile, stackOwn)) {
+      deps.print(
+        refused === undefined
+          ? `    loads port ${String(port)} on loopback`
+          : `    port ${String(port)} is listed and refused: ${refused}`,
+      );
     }
     deps.print(`    directory: ${profileDirectory(deps.hostDir, profile.id)}`);
     const now = running.get(profile.id);
@@ -430,6 +472,21 @@ export async function runBrowserCommand(
         deps,
         command,
         `Profile \`${command.profileId}\` no longer has a rule for ${command.origin}.`,
+      );
+      return;
+    case 'local_port':
+      await edit(
+        deps,
+        command,
+        `Profile \`${command.profileId}\` loads port ${command.port.trim()} on loopback — ` +
+          'localhost, 127.0.0.1, [::1] — and on no other address of this machine.',
+      );
+      return;
+    case 'local_port_remove':
+      await edit(
+        deps,
+        command,
+        `Profile \`${command.profileId}\` no longer loads port ${command.port.trim()}.`,
       );
       return;
   }

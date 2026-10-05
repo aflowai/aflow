@@ -127,6 +127,8 @@ export interface ListedProfile {
   readonly unattended: boolean;
   /** False when nobody is present for the run asking and the profile takes no such run. */
   readonly openToThisRun: boolean;
+  /** Loopback ports opened to it, less any this stack serves on. */
+  readonly localPorts: number[];
   readonly running: boolean;
   readonly sites?: string[];
   readonly sitesUnknown?: 'not_started' | 'stopped';
@@ -142,6 +144,8 @@ export interface ReadRequest {
 /** A profile as the machine sees it, whichever spaces it serves. */
 export interface MachineProfile {
   readonly profile: BrowserProfile;
+  /** Every port the profile lists, each refused one with why. */
+  readonly localPorts: ReadonlyArray<{ readonly port: number; readonly refused?: string }>;
   readonly running: boolean;
   /** Whether the operator has its window now. */
   readonly windowShown: boolean;

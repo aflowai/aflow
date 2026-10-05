@@ -8,15 +8,19 @@
  * and an edit that silently took the default away would leave the machine with
  * no browser.
  */
+import { describeStackPortOwner } from '@aflow/lib';
 import {
   type BrowserOriginRule,
   BrowserOriginRuleSchema,
   BrowserPostureSchema,
   type BrowserProfile,
+  browserStackPortRefusal,
   parseBrowserOriginPattern,
 } from '@aflow/schemas';
 
+import { parseLocalPorts } from '../browserLocalPorts.js';
 import { describePolicyIssues } from '../policyIssues.js';
+import type { StackOwnPorts } from './localPorts.js';
 import { parseBrowserProfiles } from './profiles.js';
 
 /** The policy file as JSON, with the one field these edits touch. */
@@ -138,5 +142,63 @@ export function withoutRule(
       );
     }
     return { ...entry, rules: rules.filter((existing) => existing.origin !== origin) };
+  });
+}
+
+/** A port as `aflow browser local-port` takes it, as `aflow harness browser-ports` takes one. */
+function parsePort(requested: string): number {
+  const parsed = parseLocalPorts([requested.trim()]);
+  if (!parsed.ok || parsed.ports[0] === undefined) {
+    throw new PolicyEditError(`'${requested}' is not a port: give a whole number from 1 to 65535.`);
+  }
+  return parsed.ports[0];
+}
+
+function localPortsOf(entry: Entry): number[] {
+  return Array.isArray(entry['localPorts']) ? (entry['localPorts'] as number[]) : [];
+}
+
+/**
+ * Opens a loopback port to the profile, refused when this stack serves on it:
+ * the egress proxy would refuse it at every connection anyway, and the
+ * operator is owed the reason now rather than a page that never loads.
+ */
+export function withLocalPort(
+  policy: RawPolicy,
+  implied: readonly BrowserProfile[],
+  profileId: string,
+  requested: string,
+  stackOwn: StackOwnPorts,
+): RawPolicy {
+  const port = parsePort(requested);
+  const owner = stackOwn.get(port);
+  if (owner !== undefined) {
+    throw new PolicyEditError(browserStackPortRefusal(port, describeStackPortOwner(owner)));
+  }
+  return editProfile(policy, implied, profileId, (entry) => {
+    const ports = localPortsOf(entry);
+    return {
+      ...entry,
+      localPorts: ports.includes(port) ? ports : [...ports, port].sort((a, b) => a - b),
+    };
+  });
+}
+
+export function withoutLocalPort(
+  policy: RawPolicy,
+  implied: readonly BrowserProfile[],
+  profileId: string,
+  requested: string,
+): RawPolicy {
+  const port = parsePort(requested);
+  return editProfile(policy, implied, profileId, (entry) => {
+    const ports = localPortsOf(entry);
+    if (!ports.includes(port)) {
+      throw new PolicyEditError(
+        `'${profileId}' is not opened to port ${String(port)}. Its local ports: ` +
+          `${ports.length > 0 ? ports.join(', ') : 'none'}.`,
+      );
+    }
+    return { ...entry, localPorts: ports.filter((held) => held !== port) };
   });
 }
