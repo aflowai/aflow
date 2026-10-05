@@ -27,10 +27,10 @@
     "@aflow/redis": "workspace:*",
     "@aflow/schemas": "workspace:*",
     "ajv": "^8.20.0",
-    "fast-xml-parser": "5.11.1"
+    "fast-xml-parser": "5.11.2"
   },
   "devDependencies": {
-    "@types/node": "^22.20.4",
+    "@types/node": "^22.20.5",
     "tsx": "^4.23.15",
     "typescript": "^5.8.3",
     "vitest": "^4.1.11"
