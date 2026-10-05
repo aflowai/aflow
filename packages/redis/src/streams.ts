@@ -45,6 +45,11 @@ export {
   isInstanceAlive,
   listLiveOrchestrators,
   INSTANCE_LEASE_TTL_MS,
+  type OrchestratorHealth,
+  getOrchestratorHealth,
+  orchestratorHealthFrom,
+  orchestratorAbsentNotice,
+  ORCHESTRATOR_ABSENT_NOTICE,
 } from './streams/orchestratorHeartbeat.js';
 
 export {

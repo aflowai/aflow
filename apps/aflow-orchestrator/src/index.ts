@@ -75,6 +75,7 @@ import { createRedisConnection, getExecutorRedisConfig } from '@aflow/redis';
 import { sweepStaleBarriers } from './services/SessionOrchestrator/scheduling/barrierSweep.js';
 import { createBackgroundTaskRunner } from '@aflow/lib';
 import { installBackgroundTaskControlPlane } from '@aflow/schemas';
+import { createUncaughtExceptionHandler } from './lib/uncaughtException.js';
 
 // Identity for this process: its Redis consumer name, and now also its entry in
 // the liveness index. Both require it to be unique per *process*, not per
@@ -85,6 +86,9 @@ import { installBackgroundTaskControlPlane } from '@aflow/schemas';
 const CONSUMER_NAME =
   process.env['ORCHESTRATOR_CONSUMER_NAME'] ??
   `orchestrator-${process.env['K_REVISION'] ?? String(process.pid)}-${randomUUID().slice(0, 8)}`;
+
+/** How long an exit waits for the crash reporter to send what it holds. */
+const CRASH_REPORT_FLUSH_MS = 2000;
 
 async function main(): Promise<void> {
   // Initialize observability (tracing, metrics, logging)
@@ -102,6 +106,17 @@ async function main(): Promise<void> {
 
   const logger = createLogger({ service: 'aflow-orchestrator' });
   logger.info('Starting Aflow Orchestrator...', { consumerName: CONSUMER_NAME });
+
+  process.on(
+    'uncaughtException',
+    createUncaughtExceptionHandler({
+      logger,
+      consumerName: CONSUMER_NAME,
+      exit: () => {
+        void flushCrashReporting(CRASH_REPORT_FLUSH_MS).finally(() => process.exit(1));
+      },
+    }),
+  );
 
   // Resolved before anything consumes a stream, and left to throw: the turn
   // assembler and catalog discovery compose their surfaces from this, so an
@@ -572,7 +587,7 @@ async function main(): Promise<void> {
       ]);
       await closeRedisConnection();
       await shutdownObservability();
-      await flushCrashReporting(2000);
+      await flushCrashReporting(CRASH_REPORT_FLUSH_MS);
       logger.info('Shutdown complete');
       process.exit(0);
     } catch (error) {

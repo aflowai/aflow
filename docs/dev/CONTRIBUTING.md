@@ -197,7 +197,7 @@ The plan doc is `docs/plans/aflow/completed/160-url-state-and-agent-driven-navig
 
 ## Orchestrator Changes
 
-All app services (server, orchestrator, executors) now use `tsx watch` and auto-restart on file changes. However, **changes to compiled packages** (`packages/*`) still require `yarn build` — the watcher only observes direct source files, not compiled `dist/` outputs.
+All app services (server, orchestrator, executors) run under `scripts/watch-service.mjs`, which restarts them on file changes and when they crash. However, **changes to compiled packages** (`packages/*`) still require `yarn build` — the watcher only observes direct source files, not compiled `dist/` outputs.
 
 If you suspect a stale process, check for duplicates:
 

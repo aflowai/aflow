@@ -19,6 +19,13 @@ export {
   closeConnection,
   createDatabase,
 } from './connection.js';
+export {
+  type PoolBuilder,
+  type ReplaceablePool,
+  createReplaceablePool,
+  isAbruptCloseWrite,
+  replacePoolsThatLostAConnection,
+} from './replaceablePool.js';
 
 // Tenant management
 export {

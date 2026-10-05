@@ -6,7 +6,7 @@
   "main": "./dist/index.js",
   "scripts": {
     "build": "npx tsc",
-    "dev": "NODE_OPTIONS='--conditions=ts-source' node ../../scripts/with-stack-env.mjs tsx watch src/index.ts",
+    "dev": "NODE_OPTIONS='--conditions=ts-source' node ../../scripts/with-stack-env.mjs node ../../scripts/watch-service.mjs src/index.ts src ../../packages",
     "start": "node dist/index.js",
     "lint": "eslint src",
     "typecheck": "tsc --noEmit"

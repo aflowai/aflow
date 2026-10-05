@@ -5,7 +5,7 @@ import {
   type ErrorClassification,
   type StepType,
 } from '@aflow/schemas';
-import { INSTANCE_LEASE_TTL_MS, listLiveOrchestrators } from './orchestratorHeartbeat.js';
+import { getOrchestratorHealth, type OrchestratorHealth } from './orchestratorHeartbeat.js';
 // ============================================================================
 // Engine Health (combined liveness check for UI/API)
 // ============================================================================
@@ -17,11 +17,7 @@ export interface QueueStats {
 }
 
 export interface EngineHealthStatus {
-  orchestrator: {
-    alive: boolean;
-    lastHeartbeat: string | null;
-    heartbeatAgeMs: number | null;
-  };
+  orchestrator: OrchestratorHealth;
   executors: Record<
     string,
     {
@@ -39,24 +35,7 @@ export interface EngineHealthStatus {
 export async function getEngineHealth(redis: Redis): Promise<EngineHealthStatus> {
   const now = Date.now();
 
-  // Fleet liveness, rather than a single shared key that one instance's
-  // shutdown could clear. The reported age is the freshest instance's, since the
-  // question is whether the fleet is healthy — the member list is score-ascending,
-  // so that is the last one.
-  const liveInstances = await listLiveOrchestrators(redis);
-  const orchAlive = liveInstances.length > 0;
-  let orchTs: string | null = null;
-  let orchAgeMs: number | null = null;
-  const freshest = liveInstances[liveInstances.length - 1];
-  if (freshest !== undefined) {
-    const score = await redis.zscore(StreamKeys.orchestratorLivenessKey, freshest);
-    const expiresAt = score !== null ? Number(score) : null;
-    if (expiresAt !== null && Number.isFinite(expiresAt)) {
-      const lastBeat = expiresAt - INSTANCE_LEASE_TTL_MS;
-      orchTs = new Date(lastBeat).toISOString();
-      orchAgeMs = Math.max(0, now - lastBeat);
-    }
-  }
+  const orchestrator = await getOrchestratorHealth(redis);
 
   // Executor heartbeats (scan for all executor heartbeat keys)
   // Key format: aflow:executor-heartbeat:<stepType>:<consumerName>
@@ -135,11 +114,7 @@ export async function getEngineHealth(redis: Redis): Promise<EngineHealthStatus>
   }
 
   return {
-    orchestrator: {
-      alive: orchAlive,
-      lastHeartbeat: orchTs,
-      heartbeatAgeMs: orchAgeMs,
-    },
+    orchestrator,
     executors,
     queues,
   };

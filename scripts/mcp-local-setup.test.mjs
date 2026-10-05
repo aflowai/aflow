@@ -311,9 +311,9 @@ describe('the environment it reads', () => {
 describe('the line on who reads the key', () => {
   const HERE = '/home/dev/src/aflow';
   const THERE = '/home/dev/src/aflow-worktrees/topic';
-  /** The node process under `tsx watch` that `yarn mcp:dev` leaves listening. */
+  /** The node process under its watcher that `yarn mcp:dev` leaves listening. */
   const serverFrom = (checkout) =>
-    `node --require ${checkout}/node_modules/tsx/dist/preflight.cjs apps/aflow-mcp/src/index.ts`;
+    `/usr/local/bin/node --conditions=ts-source --import tsx ${checkout}/apps/aflow-mcp/src/index.ts`;
   const lineFor = (listeners, ps) =>
     foreignHolderMessage({
       port: 3100,

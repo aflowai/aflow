@@ -352,6 +352,11 @@ export const OWNERSHIP_MANIFEST: readonly OwnershipRule[] = [
     owner: 'core',
     why: 'Resolves PHOENIX_PROFILE in both the appliance and production.',
   },
+  {
+    path: 'scripts/serviceRestart.mjs',
+    owner: 'core',
+    why: 'The launcher imports its restart rule.',
+  },
   { path: 'scripts/postinstall.mjs', owner: 'core' },
   {
     path: 'scripts/core-cut.mjs',

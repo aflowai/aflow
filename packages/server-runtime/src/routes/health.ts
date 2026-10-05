@@ -5,7 +5,13 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import { getEngineHealth, getRedisConnection, pingRedis } from '@aflow/redis';
+import {
+  getEngineHealth,
+  getOrchestratorHealth,
+  getRedisConnection,
+  orchestratorAbsentNotice,
+  pingRedis,
+} from '@aflow/redis';
 import { getConnection } from '@aflow/database';
 
 const HealthResponseSchema = z.object({
@@ -128,13 +134,18 @@ export const healthRoutes: FastifyPluginAsync = async (fastify) => {
     },
   );
 
+  const OrchestratorHealthSchema = z.object({
+    alive: z.boolean(),
+    lastHeartbeat: z.string().nullable(),
+    heartbeatAgeMs: z.number().nullable(),
+  });
+  const OrchestratorHealthResponseSchema = OrchestratorHealthSchema.extend({
+    notice: z.string().nullable(),
+  });
+
   // Engine health check (orchestrator + executor heartbeats + queue stats)
   const EngineHealthResponseSchema = z.object({
-    orchestrator: z.object({
-      alive: z.boolean(),
-      lastHeartbeat: z.string().nullable(),
-      heartbeatAgeMs: z.number().nullable(),
-    }),
+    orchestrator: OrchestratorHealthSchema,
     executors: z.record(
       z.string(),
       z.object({
@@ -184,6 +195,40 @@ export const healthRoutes: FastifyPluginAsync = async (fastify) => {
 
       const health = await getEngineHealth(context.redis);
       reply.send(health);
+    },
+  );
+
+  // One round trip, so the web app, the MCP server and `yarn start` can ask it
+  // as often as they need without the executor scan the engine check makes.
+  app.get(
+    '/v1/health/orchestrator',
+    {
+      config: {
+        authzExempt: {
+          reason:
+            'Unauthenticated liveness probe — read before sign-in and by `yarn start`, which holds no credential.',
+        },
+      },
+      schema: {
+        tags: ['Health'],
+        summary: 'Orchestrator health check',
+        description:
+          'Whether any orchestrator is alive to consume the control, result and timer streams, when the last one beat, and the notice every surface shows while none is.',
+        response: {
+          200: OrchestratorHealthResponseSchema,
+          503: z.object({ error: z.string() }),
+        },
+      },
+    },
+    async (_request, reply) => {
+      const { redis } = fastify.appContext;
+      if (!redis) {
+        reply.status(503).send({ error: 'Redis not connected' });
+        return;
+      }
+
+      const health = await getOrchestratorHealth(redis);
+      reply.send({ ...health, notice: orchestratorAbsentNotice(health) });
     },
   );
 };
