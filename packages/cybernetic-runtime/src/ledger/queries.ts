@@ -564,7 +564,7 @@ export async function countProductionRuns(
  * The JOIN aggregates task statuses so `deriveRunLivenessFromCounts()` can
  * be called without any additional queries. Each run says whether the
  * session that drove it is a Helmsman conversation that still owns it
- * (`drivenByLiveConversationSql`); a run without one is everyone's.
+ * (`drivenByLiveConversationSql`); a run no session drove is everyone's.
  */
 export async function listActiveRunsWithLiveness(
   db: PostgresJsDatabase,
@@ -584,7 +584,7 @@ export async function listActiveRunsWithLiveness(
         r.started_at,
         r.scheduler_cursor_at,
         r.plan_node_id,
-        ${drivenByLiveConversationSql()} AS driven_by_live_conversation,
+        ${drivenByLiveConversationSql(sql`r.session_id`)} AS driven_by_live_conversation,
         COALESCE(t.total_tasks, 0)::int AS total_tasks,
         COALESCE(t.succeeded_tasks, 0)::int AS succeeded_tasks,
         COALESCE(t.live_tasks, 0)::int AS live_tasks,

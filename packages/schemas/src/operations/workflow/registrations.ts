@@ -570,6 +570,7 @@ export function createWorkflowOperationRegistrations(
         pitfalls: [
           "An item is read once: the turn whose attention block shows it consumes it, and a run's next pause or its end consumes its earlier pause. Pass `includeConsumed: true` to read those again.",
           "An item marked `own: false` is another conversation's to act on. Report it if the operator asks; do not resume, approve or focus its run.",
+          'A page can come back short with `hasMore: true` and `truncated` set: the read stopped at its bound before filling it. Pass the returned `cursor` to read on; `hasMore` alone does not mean the page is full.',
         ],
         minimalExampleInput: {},
       },

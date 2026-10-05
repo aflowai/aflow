@@ -1,11 +1,12 @@
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { eq, and, desc, inArray, lte, sql } from 'drizzle-orm';
+import { eq, and, desc, inArray, lte, sql, type SQL } from 'drizzle-orm';
 import type { Redis } from 'ioredis';
 import type { TenantId } from '@aflow/schemas';
 import {
   createTenantContext,
   withTenantSchema,
   attentionItems,
+  planNodes,
   sessions,
   workflowRuns,
 } from '@aflow/database';
@@ -104,10 +105,37 @@ export interface AttentionItemWithRun {
 }
 
 /**
+ * The items a reader may own, narrowed in the query: those about runs under
+ * the plan nodes named, and those about runs placed in no plan of the space
+ * that the reader drove or no live conversation owns. Never narrower than
+ * `isReadersWork`, which still decides each row.
+ */
+export interface AttentionOwnerFilter {
+  /** The reading session. */
+  sessionId: string;
+  /**
+   * Every node under the plan roots the reader has taken up. Absent where the
+   * walk under them stopped at a bound, and then every placed item passes.
+   */
+  planNodeIds?: readonly string[];
+}
+
+function ownerCondition(owner: AttentionOwnerFilter): SQL {
+  const placed = sql`exists (select 1 from ${planNodes} where ${planNodes.id} = ${workflowRuns.planNodeId} and ${planNodes.spaceId} = ${attentionItems.spaceId})`;
+  const placedOwned =
+    owner.planNodeIds !== undefined
+      ? inArray(workflowRuns.planNodeId, [...owner.planNodeIds])
+      : placed;
+  const unplacedOwned = sql`(not ${placed} and (not ${drivenByLiveConversationSql(workflowRuns.sessionId)} or ${eq(workflowRuns.sessionId, owner.sessionId)}))`;
+  return sql`(${placedOwned} or ${unplacedOwned})`;
+}
+
+/**
  * A tenant's attention items, newest first, each with its run's placement and
- * driver: pending only unless `includeConsumed`, and only those after
- * `afterItemId` in that order when given. Helmsman reads them via
- * `workflow.run.list_attention`, which decides whose each one is.
+ * driver: pending only unless `includeConsumed`, only those after
+ * `afterItemId` in that order when given, and only those `owner` may own when
+ * given. Helmsman reads them via `workflow.run.list_attention`, which decides
+ * whose each one is.
  */
 export async function listAttentionItems(
   db: PostgresJsDatabase,
@@ -119,6 +147,7 @@ export async function listAttentionItems(
     includeConsumed?: boolean;
     limit?: number;
     afterItemId?: string;
+    owner?: AttentionOwnerFilter;
   },
 ): Promise<AttentionItemWithRun[]> {
   const tenantCtx = createTenantContext(tenantId as TenantId);
@@ -129,6 +158,7 @@ export async function listAttentionItems(
     if (opts.spaceId) conditions.push(eq(attentionItems.spaceId, opts.spaceId));
     if (opts.userId) conditions.push(eq(attentionItems.userId, opts.userId));
     if (opts.kind) conditions.push(eq(attentionItems.kind, opts.kind));
+    if (opts.owner !== undefined) conditions.push(ownerCondition(opts.owner));
     // Read back from the row, not from a Date: a JS Date keeps milliseconds and
     // created_at keeps microseconds, so a cursor rebuilt from one skips rows.
     if (opts.afterItemId !== undefined) {
@@ -141,7 +171,7 @@ export async function listAttentionItems(
         item: attentionItems,
         planNodeId: workflowRuns.planNodeId,
         sessionId: workflowRuns.sessionId,
-        drivenByLiveConversation: drivenByLiveConversationSql(),
+        drivenByLiveConversation: drivenByLiveConversationSql(workflowRuns.sessionId),
       })
       .from(attentionItems)
       .leftJoin(workflowRuns, eq(workflowRuns.runId, attentionItems.relatedRunId))
@@ -202,7 +232,7 @@ export async function readPendingRunAttention(
       eq(attentionItems.tenantId, tenantId),
       eq(attentionItems.spaceId, spaceId),
     );
-    const drivenByLiveConversation = drivenByLiveConversationSql();
+    const drivenByLiveConversation = drivenByLiveConversationSql(workflowRuns.sessionId);
     // A placed item is every conversation's on its root, so it is grouped by
     // node alone; an unplaced one by the live conversation that owns it, and
     // those no conversation owns together.
@@ -258,6 +288,7 @@ export async function readPendingRunAttention(
       .groupBy(
         workflowRuns.planNodeId,
         workflowRuns.sessionId,
+        sessions.sessionId,
         sessions.targetKind,
         sessions.targetSystemRole,
         sessions.status,

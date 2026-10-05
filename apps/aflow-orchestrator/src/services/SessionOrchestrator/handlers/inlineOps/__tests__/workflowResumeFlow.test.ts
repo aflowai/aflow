@@ -1462,6 +1462,27 @@ function makeBindCapabilityWorkflow(opts?: { withInputContract?: boolean }) {
   };
 }
 
+describe('workflow.run.resume — a run no longer paused', () => {
+  it('points at workflow.run.detail for the run named, which reads it whoever drove it', async () => {
+    mockLoadRunById.mockResolvedValueOnce(makePausedRun({ status: 'completed' }));
+
+    await handleWorkflowCrudInline(
+      makeArgs({ runId: RUN_ID, pauseVersion: 1, resolution: { mode: 'acknowledge' } }),
+    );
+
+    const failedCall = mockAddStepResult.mock.calls.find(
+      (c) => (c[1] as { status: string }).status === 'FAILED',
+    );
+    const errorRef = (failedCall![1] as { errorRef: string }).errorRef;
+    const error = JSON.parse(
+      Buffer.from(errorRef.slice('inline:'.length), 'base64').toString('utf8'),
+    ) as { code: string; message: string };
+    expect(error.code).toBe('RUN_NOT_PAUSED');
+    expect(error.message).toContain(`workflow.run.detail(runId=${RUN_ID})`);
+    expect(error.message).not.toContain('list_attention');
+  });
+});
+
 describe('workflow.run.resume — Plan 141 §4.2 provide_input mode', () => {
   beforeEach(() => {
     // Default: signal_blocked contract without `allowedResumeModes` — the

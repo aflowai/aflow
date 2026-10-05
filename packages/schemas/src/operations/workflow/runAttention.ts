@@ -16,6 +16,11 @@ export const WorkflowRunListAttentionInputSchema = z.object({
     .optional(),
   /** Page size. Default 25, max 100. */
   limit: z.number().int().min(1).max(100).default(25),
+  cursor: z
+    .string()
+    .uuid()
+    .optional()
+    .describe('The `cursor` of the previous page: lists the items after it.'),
   scope: z
     .enum(['conversation', 'space'])
     .default('conversation')
@@ -51,8 +56,27 @@ export const WorkflowRunListAttentionItemSchema = z.object({
 });
 export type WorkflowRunListAttentionItem = z.infer<typeof WorkflowRunListAttentionItemSchema>;
 
+export const WorkflowRunListAttentionTruncationSchema = z
+  .object({
+    bound: z.literal('rows_examined'),
+    value: z.number().int().min(1),
+  })
+  .strict();
+export type WorkflowRunListAttentionTruncation = z.infer<
+  typeof WorkflowRunListAttentionTruncationSchema
+>;
+
 export const WorkflowRunListAttentionOutputSchema = z.object({
   items: z.array(WorkflowRunListAttentionItemSchema),
   hasMore: z.boolean(),
+  cursor: z
+    .string()
+    .uuid()
+    .optional()
+    .describe('Present while `hasMore`: pass it as `cursor` to list the next page.'),
+  truncated: WorkflowRunListAttentionTruncationSchema.optional().describe(
+    "Absent when the page was filled or every item was read. Otherwise the read stopped after examining `value` of the space's items before it found a page of this conversation's: " +
+      '`items` holds those it found, and more may follow `cursor`.',
+  ),
 });
 export type WorkflowRunListAttentionOutput = z.infer<typeof WorkflowRunListAttentionOutputSchema>;

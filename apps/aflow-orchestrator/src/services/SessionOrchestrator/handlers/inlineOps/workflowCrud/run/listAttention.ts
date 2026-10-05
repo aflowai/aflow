@@ -21,6 +21,7 @@ export async function handleWorkflowRunListAttention(
     ...(input.kind ? { kind: input.kind } : {}),
     includeConsumed: input.includeConsumed,
     limit: input.limit,
+    ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
   });
 
   const items: WorkflowRunListAttentionOutput['items'] = listed.items.map(({ item, own }) => {
@@ -42,7 +43,12 @@ export async function handleWorkflowRunListAttention(
     };
   });
 
-  const output: WorkflowRunListAttentionOutput = { items, hasMore: listed.hasMore };
+  const output: WorkflowRunListAttentionOutput = {
+    items,
+    hasMore: listed.hasMore,
+    ...(listed.cursor !== undefined ? { cursor: listed.cursor } : {}),
+    ...(listed.truncated !== undefined ? { truncated: listed.truncated } : {}),
+  };
 
   await emitStepSuccess(args, output as unknown as Record<string, unknown>, startTime);
 }

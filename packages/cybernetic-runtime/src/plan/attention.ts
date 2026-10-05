@@ -105,6 +105,24 @@ export async function loadConversationPlanRoots(params: {
   return [...new Set(roots.values())];
 }
 
+/**
+ * Every node under `rootIds`, whatever its status, or `undefined` when a walk
+ * under one of them stopped at a bound and the nodes past it are unread.
+ */
+export async function loadPlanSubtreeNodeIds(
+  store: PlanNodeStore,
+  spaceId: string,
+  rootIds: Iterable<string>,
+): Promise<string[] | undefined> {
+  const nodeIds: string[] = [];
+  for (const rootId of rootIds) {
+    const walk = await store.walk(spaceId, { rootId, ...PLAN_TREE_WALK_BOUNDS });
+    if (walk.truncated !== undefined) return undefined;
+    nodeIds.push(...walk.nodes.map((node) => node.nodeId));
+  }
+  return nodeIds;
+}
+
 /** A line of work the attention block places under its node: an active run or a pending attention item. */
 export interface PlanWorkLine {
   /** The line as it reads, without indent or bullet. */

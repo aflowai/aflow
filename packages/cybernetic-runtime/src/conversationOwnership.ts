@@ -1,4 +1,5 @@
 import { sql, type SQL } from 'drizzle-orm';
+import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import { sessions } from '@aflow/database';
 import type { AgentSystemRole, SessionAgentTarget, SessionStatus } from '@aflow/schemas';
 
@@ -25,19 +26,28 @@ export function endsConversationOwnership(
 }
 
 /**
- * Whether the `sessions` row joined to a run is a Helmsman conversation that
- * still owns it; false where no row joins.
+ * Whether the run whose `session_id` is `runSessionId`, with the `sessions`
+ * row it names joined, is held by a Helmsman conversation that still owns it.
+ * A run no session drove is no conversation's. A run whose session has no row
+ * yet is held: the projection writes that row after the run starts, and the
+ * run-start bump caches the block before it lands, so reading the absent row
+ * as everyone's would show another conversation's run in full until the
+ * run's next transition.
  */
-export function drivenByLiveConversationSql(): SQL<boolean> {
-  return sql<boolean>`coalesce(
-    ${sessions.targetKind} = ${CONVERSATION_TARGET_KIND}
-      and ${sessions.targetSystemRole} = ${CONVERSATION_SYSTEM_ROLE}
-      and ${sessions.status} not in (${sql.join(
-        CONVERSATION_ENDED_STATUSES.map((status) => sql`${status}`),
-        sql`, `,
-      )}),
-    false
-  )`;
+export function drivenByLiveConversationSql(runSessionId: SQL | AnyPgColumn): SQL<boolean> {
+  return sql<boolean>`case
+    when ${runSessionId} is null then false
+    when ${sessions.sessionId} is null then true
+    else coalesce(
+      ${sessions.targetKind} = ${CONVERSATION_TARGET_KIND}
+        and ${sessions.targetSystemRole} = ${CONVERSATION_SYSTEM_ROLE}
+        and ${sessions.status} not in (${sql.join(
+          CONVERSATION_ENDED_STATUSES.map((status) => sql`${status}`),
+          sql`, `,
+        )}),
+      false
+    )
+  end`;
 }
 
 /** Who reads the space's work: a session, and the plan roots its conversation has taken up. */
@@ -51,7 +61,10 @@ export interface OwnedWork {
   plan?: { rootId: string };
   /** The session that drove the run. */
   sessionId?: string;
-  /** `sessionId` names a Helmsman conversation that still owns the run. */
+  /**
+   * `sessionId` names a Helmsman conversation that still owns the run, or a
+   * session not yet projected (`drivenByLiveConversationSql`).
+   */
   drivenByLiveConversation: boolean;
 }
 

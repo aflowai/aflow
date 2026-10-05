@@ -596,7 +596,11 @@ describe('workflow.run.list_attention lists by the ownership the block reads', (
     }
 
     expect(pages).toEqual([
-      { items: [{ item: expect.objectContaining({ id: operator }), own: true }], hasMore: true },
+      {
+        items: [{ item: expect.objectContaining({ id: operator }), own: true }],
+        hasMore: true,
+        cursor: operator,
+      },
       {
         items: [{ item: expect.objectContaining({ id: operatorEarlier }), own: true }],
         hasMore: false,

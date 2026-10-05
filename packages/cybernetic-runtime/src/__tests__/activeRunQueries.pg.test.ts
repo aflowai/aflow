@@ -22,8 +22,15 @@ import {
   listAttentionItems,
   readPendingRunAttention,
 } from '../ledger/attention.js';
+import { listAttentionForConversation } from '../attentionList.js';
+import { isReadersWork } from '../conversationOwnership.js';
 import { listActiveRunsWithLiveness } from '../ledger/queries.js';
 import { recordRunStart } from '../ledger/runs.js';
+import {
+  pendingAttentionFor,
+  renderedAttentionItemIds,
+  summarizePendingAttention,
+} from '../pendingAttention.js';
 
 const DATABASE_URL = process.env['DATABASE_URL'];
 const TENANT_ID = 'a0000000-0000-0000-0000-000000000001' as TenantId;
@@ -112,6 +119,7 @@ describeDb('listActiveRunsWithLiveness — a run carries its plan node (real DB)
         status: 'RUNNING',
         owns: false,
       },
+      { name: 'a session the projection has not written yet', unprojected: true, owns: true },
     ] as const;
     const sessionIds: string[] = [];
 
@@ -131,7 +139,7 @@ describeDb('listActiveRunsWithLiveness — a run carries its plan node (real DB)
       const startedAt = new Date();
       const driven = [];
       for (const driver of [...DRIVERS, { name: 'no session', owns: false }]) {
-        const sessionId = 'target' in driver ? randomUUID() : undefined;
+        const sessionId = 'target' in driver || 'unprojected' in driver ? randomUUID() : undefined;
         if (sessionId !== undefined && 'target' in driver) {
           sessionIds.push(sessionId);
           await withTenantSchema(handle.db, createTenantContext(TENANT_ID), (tx) =>
@@ -208,6 +216,83 @@ describeDb('listActiveRunsWithLiveness — a run carries its plan node (real DB)
       expect(
         pending.items.filter((item) => item.runId !== null && runIds.has(item.runId)),
       ).toHaveLength(driven.length);
+    });
+
+    it('counts a run whose driving session has no row yet to every other conversation, and lists it to none', async () => {
+      const driven = await runsByDriver();
+      const unprojected = driven.find((driver) => 'unprojected' in driver);
+      const driver = unprojected?.sessionId;
+      if (unprojected === undefined || driver == null) throw new Error('no unprojected driver');
+      const stranger = { sessionId: randomUUID(), planRootIds: new Set<string>() };
+
+      const run = (
+        await listActiveRunsWithLiveness(handle.db, TENANT_ID, SPACE_ID, { limit: LIMIT * 4 })
+      ).find(({ runId }) => runId === unprojected.runId);
+      expect(run).toMatchObject({ sessionId: driver, drivenByLiveConversation: true });
+      expect(isReadersWork({ sessionId: driver, drivenByLiveConversation: true }, stranger)).toBe(
+        false,
+      );
+
+      const pending = summarizePendingAttention(
+        await readPendingRunAttention(handle.db, TENANT_ID, SPACE_ID, LIMIT),
+        new Map(),
+      );
+      const itemId = pending?.items.find(({ runId }) => runId === unprojected.runId)?.itemId;
+      expect(itemId).toBeDefined();
+      const toStranger = pendingAttentionFor(pending, stranger);
+      expect(renderedAttentionItemIds(toStranger)).not.toContain(itemId);
+      expect(
+        pending?.totals.find((total) => total.sessionId === driver && total.plan === undefined),
+      ).toMatchObject({ drivenByLiveConversation: true, total: 1 });
+      expect(toStranger.others).toBeGreaterThanOrEqual(1);
+      expect(
+        renderedAttentionItemIds(
+          pendingAttentionFor(pending, { sessionId: driver, planRootIds: new Set() }),
+        ),
+      ).toContain(itemId);
+
+      const listed = (scope: 'conversation' | 'space') =>
+        listAttentionForConversation({
+          db: handle.db,
+          tenantId: TENANT_ID,
+          spaceId: SPACE_ID,
+          sessionId: stranger.sessionId,
+          scope,
+          includeConsumed: false,
+          limit: LIMIT * 10,
+        });
+      expect((await listed('conversation')).items.map(({ item }) => item.id)).not.toContain(itemId);
+      expect((await listed('space')).items.find(({ item }) => item.id === itemId)).toMatchObject({
+        own: false,
+      });
+    });
+
+    it('narrows the operation’s read to the rows its reader owns, as `isReadersWork` decides them', async () => {
+      const driven = await runsByDriver();
+      const reader = driven.find(({ name }) => name === 'a running conversation')?.sessionId;
+      if (reader == null) throw new Error('no running conversation');
+      const whole = await listAttentionItems(handle.db, TENANT_ID, {
+        spaceId: SPACE_ID,
+        limit: LIMIT * 10,
+      });
+
+      const narrowed = await listAttentionItems(handle.db, TENANT_ID, {
+        spaceId: SPACE_ID,
+        limit: LIMIT * 10,
+        owner: { sessionId: reader, planNodeIds: [] },
+      });
+
+      const owned = whole.filter((row) =>
+        isReadersWork(
+          {
+            ...(row.sessionId !== null ? { sessionId: row.sessionId } : {}),
+            drivenByLiveConversation: row.drivenByLiveConversation,
+          },
+          { sessionId: reader, planRootIds: new Set() },
+        ),
+      );
+      expect(narrowed.map(({ item }) => item.id)).toEqual(owned.map(({ item }) => item.id));
+      expect(owned.length).toBeLessThan(whole.length);
     });
 
     it('pages the operation’s read one item at a time in the order it lists them whole', async () => {

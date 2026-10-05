@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { PgDialect } from 'drizzle-orm/pg-core';
+import { workflowRuns } from '@aflow/database';
 import type { SessionAgentTarget, SessionStatus } from '@aflow/schemas';
 import {
   drivenByLiveConversationSql,
@@ -36,8 +37,17 @@ describe('a conversation owns its runs until it succeeds or is cancelled', () =>
   });
 
   it('is decided in Postgres by the same statuses', () => {
-    const { params } = new PgDialect().sqlToQuery(drivenByLiveConversationSql());
+    const { params } = new PgDialect().sqlToQuery(
+      drivenByLiveConversationSql(workflowRuns.sessionId),
+    );
     expect(params).toEqual(['platform-role', 'cybernetic-helmsman', 'SUCCEEDED', 'CANCELLED']);
+  });
+
+  it('holds a run whose session has no row yet, and no run no session drove', () => {
+    const { sql } = new PgDialect().sqlToQuery(drivenByLiveConversationSql(workflowRuns.sessionId));
+    expect(sql.replace(/\s+/g, ' ')).toContain(
+      'when "workflow_runs"."session_id" is null then false when "sessions"."session_id" is null then true',
+    );
   });
 
   it('is not a session that is not a Helmsman conversation', () => {

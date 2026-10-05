@@ -536,10 +536,12 @@ describe('workflow.run.list_attention — Plan 132v2 §Phase 4', () => {
     ]);
   });
 
-  it('forwards the kind filter and reports whether there are more', async () => {
+  it('forwards the kind filter and the cursor, and reports whether there are more and where they start', async () => {
+    const cursor = '00000000-0000-0000-0000-000000000abb';
     mockListAttentionForConversation.mockResolvedValueOnce({
       items: [{ item: makeAttentionRow(), own: true }],
       hasMore: true,
+      cursor: '00000000-0000-0000-0000-000000000abc',
     });
 
     await handleWorkflowCrudInline(
@@ -548,14 +550,45 @@ describe('workflow.run.list_attention — Plan 132v2 §Phase 4', () => {
         limit: 1,
         scope: 'conversation',
         kind: 'workflow_run_paused',
+        cursor,
       }),
     );
 
     expect(mockListAttentionForConversation.mock.calls[0]?.[0]).toMatchObject({
       kind: 'workflow_run_paused',
       limit: 1,
+      cursor,
     });
-    expect(listedOutput().hasMore).toBe(true);
+    expect(listedOutput()).toMatchObject({
+      hasMore: true,
+      cursor: '00000000-0000-0000-0000-000000000abc',
+    });
+    expect(listedOutput()).not.toHaveProperty('truncated');
+  });
+
+  it('says when the read stopped at its bound short of a page', async () => {
+    const truncated = { bound: 'rows_examined', value: 500 };
+    mockListAttentionForConversation.mockResolvedValueOnce({
+      items: [],
+      hasMore: true,
+      cursor: '00000000-0000-0000-0000-000000000abd',
+      truncated,
+    });
+
+    await handleWorkflowCrudInline(
+      makeArgs('workflow.run.list_attention', {
+        includeConsumed: true,
+        limit: 25,
+        scope: 'conversation',
+      }),
+    );
+
+    expect(listedOutput()).toEqual({
+      items: [],
+      hasMore: true,
+      cursor: '00000000-0000-0000-0000-000000000abd',
+      truncated,
+    });
   });
 
   it('returns a consumed item, with when it was consumed, when asked for consumed ones', async () => {
