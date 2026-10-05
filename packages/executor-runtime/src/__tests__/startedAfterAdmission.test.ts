@@ -101,6 +101,7 @@ describe('processJob — a step marked started once admitted to its slot', () =>
       claimingStopped: new AbortController().signal,
       stopped: new AbortController().signal,
       stepStarted,
+      stepRunning: vi.fn(),
     } as never;
   }
 

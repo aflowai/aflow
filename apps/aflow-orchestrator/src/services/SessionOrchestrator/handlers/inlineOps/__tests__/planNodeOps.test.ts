@@ -1,5 +1,5 @@
 /**
- * plan.node.* inline ops (Plan 322 P0) — thin adapters over the plan engine:
+ * plan.node.* inline ops (Plan 322) — thin adapters over the plan engine:
  * input parsed with its refinement, the engine's refusals surfaced as
  * validation errors carrying their details, the writing session recorded.
  */
@@ -26,6 +26,7 @@ const mockCreatePlanNode = vi.fn();
 const mockUpdatePlanNode = vi.fn();
 const mockGetPlanNode = vi.fn();
 const mockListPlanNodes = vi.fn();
+const mockLinkPlanNode = vi.fn();
 const STORE = { kind: 'store' };
 vi.mock('@aflow/cybernetic-runtime', () => ({
   createPlanNodeStore: () => STORE,
@@ -33,6 +34,7 @@ vi.mock('@aflow/cybernetic-runtime', () => ({
   updatePlanNode: (...a: unknown[]) => mockUpdatePlanNode(...a),
   getPlanNode: (...a: unknown[]) => mockGetPlanNode(...a),
   listPlanNodes: (...a: unknown[]) => mockListPlanNodes(...a),
+  linkPlanNode: (...a: unknown[]) => mockLinkPlanNode(...a),
 }));
 vi.mock('@aflow/database', () => ({ getDatabase: () => ({}) }));
 const mockReadDurableSessionCreatedBy = vi.fn();
@@ -65,6 +67,13 @@ const NODE = {
   updatedAt: '2026-10-04T09:05:00.000Z',
 };
 
+const LINK = {
+  nodeId: NODE_ID,
+  kind: 'pull_request',
+  ref: 'https://github.com/aflowai/aflow/pull/80',
+  createdAt: '2026-10-05T09:00:00.000Z',
+};
+
 const REFUSAL_DETAILS = {
   nodeId: NODE.nodeId,
   revision: NODE.revision,
@@ -92,6 +101,12 @@ function makeArgs(operation: string, input: unknown): InlineHandlerArgs {
 
 function emitted(): Record<string, unknown> {
   return mockAddStepResult.mock.calls[0]![1] as Record<string, unknown>;
+}
+
+/** A small output travels inline on the step result, base64 after `inline:`. */
+function emittedOutput(): unknown {
+  const ref = emitted()['outputRef'] as string;
+  return JSON.parse(Buffer.from(ref.slice('inline:'.length), 'base64').toString('utf8'));
 }
 
 beforeEach(() => {
@@ -217,11 +232,21 @@ describe('plan.node.create / get / list', () => {
     expect(mockCreatePlanNode.mock.calls[0]![0]).toMatchObject({ createdBy: OPERATOR });
   });
 
-  it('opens a node with its children', async () => {
-    mockGetPlanNode.mockResolvedValue({ ok: true, node: NODE, children: [], childrenTotal: 0 });
+  it('opens a node with its children, links and runs in flight', async () => {
+    mockGetPlanNode.mockResolvedValue({
+      ok: true,
+      node: NODE,
+      children: [],
+      childrenTotal: 0,
+      links: [LINK],
+      linksTotal: 1,
+      runs: [],
+      runsTotal: 0,
+    });
     await handlePlanNodeInline(makeArgs('plan.node.get', { nodeId: NODE_ID }));
     expect(mockGetPlanNode).toHaveBeenCalledWith({ store: STORE, spaceId: SPACE }, NODE_ID);
     expect(emitted()['status']).toBe('SUCCEEDED');
+    expect(emittedOutput()).toMatchObject({ links: [LINK], linksTotal: 1, runsTotal: 0 });
   });
 
   it('lists with the schema’s defaults applied', async () => {
@@ -240,5 +265,46 @@ describe('plan.node.create / get / list', () => {
       code: 'PLAN_OPERATION_FAILED',
       classification: 'internal',
     });
+  });
+});
+
+describe('plan.node.link', () => {
+  it('links through the engine in this space', async () => {
+    mockLinkPlanNode.mockResolvedValue({ ok: true, link: LINK });
+    await handlePlanNodeInline(
+      makeArgs('plan.node.link', { nodeId: NODE_ID, kind: 'pull_request', ref: LINK.ref }),
+    );
+    expect(mockLinkPlanNode).toHaveBeenCalledWith(
+      { store: STORE, spaceId: SPACE, redis: { kind: 'redis' }, tenantId: TENANT },
+      { nodeId: NODE_ID, kind: 'pull_request', ref: LINK.ref },
+    );
+    expect(emitted()['status']).toBe('SUCCEEDED');
+    expect(emittedOutput()).toEqual({ link: LINK });
+  });
+
+  it('surfaces a node that does not exist as a validation error naming it', async () => {
+    mockLinkPlanNode.mockResolvedValue({
+      ok: false,
+      code: 'PLAN_NODE_NOT_FOUND',
+      message: 'No plan node in this space.',
+      details: { nodeId: NODE_ID },
+    });
+    await handlePlanNodeInline(
+      makeArgs('plan.node.link', { nodeId: NODE_ID, kind: 'finding', ref: 'F114' }),
+    );
+    expect(emitted()['error']).toMatchObject({
+      code: 'PLAN_NODE_NOT_FOUND',
+      classification: 'validation',
+      retryable: false,
+      details: { nodeId: NODE_ID },
+    });
+  });
+
+  it('refuses a pull request that is not a URL before the engine is reached', async () => {
+    await handlePlanNodeInline(
+      makeArgs('plan.node.link', { nodeId: NODE_ID, kind: 'pull_request', ref: '#80' }),
+    );
+    expect(mockLinkPlanNode).not.toHaveBeenCalled();
+    expect(emitted()['error']).toMatchObject({ code: 'PLAN_NODE_INVALID_INPUT' });
   });
 });

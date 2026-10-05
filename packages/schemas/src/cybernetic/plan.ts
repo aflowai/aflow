@@ -39,7 +39,15 @@ export const PLAN_NODE_POSITION_MAX = 2_147_483_647;
 export const PLAN_NODE_TITLE_MAX_CHARS = 500;
 export const PLAN_NODE_PROSE_MAX_CHARS = 8000;
 
-const PlanNodeTitleSchema = z.string().trim().min(1).max(PLAN_NODE_TITLE_MAX_CHARS);
+export const PLAN_NODE_TITLE_ONE_LINE_MESSAGE =
+  'A title is one line: the attention block shows each node on a line of its own. Put the rest in the goal or the note.';
+
+const PlanNodeTitleSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(PLAN_NODE_TITLE_MAX_CHARS)
+  .regex(/^[^\r\n]*$/, { message: PLAN_NODE_TITLE_ONE_LINE_MESSAGE });
 const PlanNodeProseSchema = z.string().trim().min(1).max(PLAN_NODE_PROSE_MAX_CHARS);
 const PlanNodeNoteSchema = z
   .string()
@@ -177,3 +185,88 @@ export const PlanNodeUpdateSchema = z
     }
   });
 export type PlanNodeUpdate = z.infer<typeof PlanNodeUpdateSchema>;
+
+// ============================================================================
+// Links (Plan 322 P1) — what did or holds a node's work
+// ============================================================================
+
+export const PlanNodeLinkKindSchema = z.enum([
+  'run',
+  'session',
+  'pull_request',
+  'document',
+  'finding',
+  'campaign',
+]);
+export type PlanNodeLinkKind = z.infer<typeof PlanNodeLinkKindSchema>;
+
+/** Storage ceilings: a ref is an id, a URL or a path; a label is a line a person reads. */
+export const PLAN_NODE_LINK_REF_MAX_CHARS = 2000;
+export const PLAN_NODE_LINK_LABEL_MAX_CHARS = 500;
+
+/** The kinds whose ref is a platform id. */
+const UUID_REF_KINDS: readonly PlanNodeLinkKind[] = ['run', 'session', 'campaign'];
+
+/**
+ * The promoted run output a run names its pull request by. A run serving a
+ * node that ends holding it links the pull request to the node.
+ */
+export const RUN_PULL_REQUEST_URL_OUTPUT = 'prUrl';
+
+export const PlanNodeLinkCreateSchema = z
+  .object({
+    nodeId: z.string().uuid(),
+    kind: PlanNodeLinkKindSchema,
+    ref: z
+      .string()
+      .trim()
+      .min(1)
+      .max(PLAN_NODE_LINK_REF_MAX_CHARS)
+      .describe(
+        'What the link points at: the id of a run, session or campaign; the URL of a pull request; ' +
+          'a memory path or URL for a document; the finding’s own name for a finding.',
+      ),
+    label: z.string().trim().min(1).max(PLAN_NODE_LINK_LABEL_MAX_CHARS).optional(),
+  })
+  .strict()
+  .superRefine((link, ctx) => {
+    if (UUID_REF_KINDS.includes(link.kind) && !z.string().uuid().safeParse(link.ref).success) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['ref'],
+        message: `A ${link.kind} link's ref is the ${link.kind}'s id, a UUID.`,
+      });
+    }
+    if (link.kind === 'pull_request' && !/^https?:\/\/\S+$/.test(link.ref)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['ref'],
+        message: 'A pull_request link’s ref is the pull request’s URL, as a person opens it.',
+      });
+    }
+  });
+export type PlanNodeLinkCreate = z.infer<typeof PlanNodeLinkCreateSchema>;
+
+export const PlanNodeLinkSchema = z
+  .object({
+    nodeId: z.string().uuid(),
+    kind: PlanNodeLinkKindSchema,
+    ref: z.string(),
+    label: z.string().optional(),
+    createdAt: z.string().datetime(),
+  })
+  .strict();
+export type PlanNodeLink = z.infer<typeof PlanNodeLinkSchema>;
+
+/** A run in flight for a node or one under it, as `plan.node.get` shows it. */
+export const PlanNodeRunSchema = z
+  .object({
+    runId: z.string(),
+    slug: z.string(),
+    status: z.enum(['running', 'paused']),
+    /** The node the run serves: the one opened, or one under it. */
+    nodeId: z.string().uuid(),
+    startedAt: z.string().datetime(),
+  })
+  .strict();
+export type PlanNodeRun = z.infer<typeof PlanNodeRunSchema>;

@@ -10,6 +10,7 @@ import {
   spaces,
   campaigns,
   planNodes,
+  planNodeLinks,
   coachCandidateLearnings,
   coachLearnings,
   repoBindings,
@@ -52,6 +53,7 @@ describeDb(
     async function cleanup(): Promise<void> {
       await withTenantSchema(db, tenantCtx, async (tx) => {
         await tx.delete(campaigns).where(eq(campaigns.spaceId, SPACE_ID));
+        await tx.delete(planNodeLinks).where(eq(planNodeLinks.spaceId, SPACE_ID));
         await tx.delete(planNodes).where(eq(planNodes.spaceId, SPACE_ID));
         await tx
           .delete(coachCandidateLearnings)
@@ -77,7 +79,7 @@ describeDb(
       const rows = await sql<{ ok: boolean }[]>`
         SELECT EXISTS (
           SELECT 1 FROM information_schema.tables
-          WHERE table_schema = ${TENANT_SCHEMA} AND table_name = 'plan_nodes'
+          WHERE table_schema = ${TENANT_SCHEMA} AND table_name = 'plan_node_links'
         ) AS ok`;
       schemaReady = rows[0]?.ok === true;
       if (!schemaReady) return;
@@ -102,12 +104,21 @@ describeDb(
           scoreMetricKey: 'score',
           direction: 'maximize',
         });
-        await tx.insert(planNodes).values({
+        const [node] = await tx
+          .insert(planNodes)
+          .values({
+            spaceId: SPACE_ID,
+            kind: 'execute',
+            title: 'Sentinel node',
+            goal: 'sentinel goal',
+            criteria: 'sentinel criteria',
+          })
+          .returning({ id: planNodes.id });
+        await tx.insert(planNodeLinks).values({
+          nodeId: node!.id,
           spaceId: SPACE_ID,
-          kind: 'execute',
-          title: 'Sentinel node',
-          goal: 'sentinel goal',
-          criteria: 'sentinel criteria',
+          kind: 'pull_request',
+          ref: 'https://example.invalid/sentinel/pull/1',
         });
         await tx.insert(coachCandidateLearnings).values({
           spaceId: SPACE_ID,
@@ -248,6 +259,7 @@ describeDb(
       const preview = await previewCascadeForSpace(sql, TENANT_SCHEMA, SPACE_ID);
       const newTables = [
         'campaigns',
+        'plan_node_links',
         'plan_nodes',
         'coach_candidate_learnings',
         'coach_learnings',

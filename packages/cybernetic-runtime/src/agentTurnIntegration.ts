@@ -19,7 +19,8 @@ import type { TenantId } from '@aflow/schemas';
 
 import { appendEntityEvent } from '@aflow/redis';
 import { assembleHelmsmanPrompt, type HelmsmanCapabilities } from './helmsmanPrompt.js';
-import { buildHelmsmanAttention, renderAttentionContext } from './attentionBuilder.js';
+import { readAttentionForTurn } from './attentionTurn.js';
+import { loadConversationPlanRoots } from './plan/attention.js';
 import { getCyberneticLogger } from './logger.js';
 import { emitPhaseIfChanged } from './interactionPhase.js';
 
@@ -36,6 +37,11 @@ export interface CyberneticTurnOverrides {
     content: string;
     cacheHint: 'volatile';
   };
+  /**
+   * The attention items the block shows. The block is never written to
+   * history, so they are consumed only once the turn that read them succeeds.
+   */
+  attentionItemIds: string[];
   /**
    * Ephemeral [anchor:user, memory:assistant] pair for the Helmsman turn.
    * Only ever set on this Helmsman-only path — Runner/Coach sessions never
@@ -143,6 +149,8 @@ export function resolveActiveMemoryInjection(
 export async function buildCyberneticTurnOverrides(params: {
   tenantId: string;
   spaceId: string;
+  /** The Helmsman conversation the turn is in: the attention block is rendered for it. */
+  sessionId: string;
   spaceName: string;
   directives: EntityDirectives;
   db: PostgresJsDatabase;
@@ -204,14 +212,27 @@ export async function buildCyberneticTurnOverrides(params: {
     ...(params.capabilities ? { capabilities: params.capabilities } : {}),
   });
 
-  // Build attention context (volatile, per-turn)
-  const attention = await buildHelmsmanAttention({
+  // Read per turn, not cached with the block: it is this conversation's, and
+  // the block is the space's.
+  const planRootIds = await loadConversationPlanRoots({
+    db,
     tenantId,
     spaceId,
+    sessionId: params.sessionId,
+  }).catch((err: unknown) => {
+    logger.warn(
+      "buildCyberneticTurnOverrides: the conversation's plan roots could not be read; every run in the plan reads as another's: " +
+        (err instanceof Error ? err.message : String(err)),
+    );
+    return [];
+  });
+  const attention = await readAttentionForTurn({
+    tenantId,
+    spaceId,
+    conversation: { sessionId: params.sessionId, planRootIds },
     db,
     redis,
   });
-  const attentionText = renderAttentionContext(attention);
 
   let activeMemory: ActiveMemoryInjection | undefined;
   try {
@@ -229,9 +250,10 @@ export async function buildCyberneticTurnOverrides(params: {
     systemPrompt,
     attentionContextBlock: {
       key: 'HelmsmanAttention',
-      content: attentionText,
+      content: attention.text,
       cacheHint: 'volatile' as const,
     },
+    attentionItemIds: attention.itemIds,
     ...(activeMemory ? { activeMemory } : {}),
   };
 }

@@ -1,10 +1,12 @@
 /**
- * Contract: a runtime says it is busy when its first step starts and idle when
- * its last running step settles — once each for steps that overlap, so a
- * listener holding something for the work (the host executor's hold on sleep)
- * neither drops it between them nor takes it twice.
+ * Contract: a runtime tells its listeners of each step it runs, once its
+ * handler is about to run and again when it settles, naming the step and its
+ * operation, so a listener holding something for the work (the host executor's
+ * hold on sleep) can follow overlapping steps one by one.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { buildOperationId } from '@aflow/schemas';
 
 const { redisMock } = vi.hoisted(() => ({
   redisMock: {
@@ -46,9 +48,10 @@ import { ExecutorRuntime } from '../executor/ExecutorRuntime.js';
 import { DEFAULT_EXECUTOR_CONFIG } from '../types.js';
 
 const READ_BLOCK_MS = 5;
-const OPERATION = 'host.harness.run';
+const HARNESS_RUN = buildOperationId('host', 'harness', 'run');
+const PROCESS_EXEC = buildOperationId('host', 'process', 'exec');
 
-function job(stepExecutionId: string) {
+function job(stepExecutionId: string, operationId: string) {
   return {
     tenantId: 't1',
     stepExecutionId,
@@ -56,7 +59,7 @@ function job(stepExecutionId: string) {
     stepId: stepExecutionId,
     sessionId: 'session-1',
     attempt: 1,
-    operationId: OPERATION,
+    operationId,
     inputRef: 'inline:e30=',
   };
 }
@@ -76,8 +79,8 @@ describe('ExecutorRuntime — following its work', () => {
     heard = [];
     redisMock.readStepJobs
       .mockResolvedValueOnce([
-        { id: 'msg-1', job: job('step-1') },
-        { id: 'msg-2', job: job('step-2') },
+        { id: 'msg-1', job: job('step-1', HARNESS_RUN) },
+        { id: 'msg-2', job: job('step-2', PROCESS_EXEC) },
       ])
       .mockImplementation(
         () => new Promise((resolve) => setTimeout(() => resolve([]), READ_BLOCK_MS)),
@@ -96,8 +99,8 @@ describe('ExecutorRuntime — following its work', () => {
       { redis: {}, redisBlocking: {}, payloadStore: {} } as never,
     );
     runtime.onWork({
-      busy: (firstStep) => heard.push(`busy ${firstStep}`),
-      idle: () => heard.push('idle'),
+      started: (step) => heard.push(`started ${step.stepExecutionId} ${step.operationId}`),
+      settled: (step) => heard.push(`settled ${step.stepExecutionId}`),
     });
     runtime.registerHandler({
       stepType: 'host',
@@ -116,24 +119,24 @@ describe('ExecutorRuntime — following its work', () => {
     await runtime.stop();
   });
 
-  it('is busy once for two overlapping steps, named by the first, and idle once when both end', async () => {
+  it('announces each overlapping step with its operation, and each as it settles', async () => {
     expect(finish.size).toBe(2);
-    expect(heard).toEqual([`busy ${OPERATION} step-1`]);
-
-    finish.get('step-1')?.();
-    await settle();
-    expect(heard).toEqual([`busy ${OPERATION} step-1`]);
+    expect(heard).toEqual([`started step-1 ${HARNESS_RUN}`, `started step-2 ${PROCESS_EXEC}`]);
 
     finish.get('step-2')?.();
     await settle();
-    expect(heard).toEqual([`busy ${OPERATION} step-1`, 'idle']);
+    expect(heard.slice(2)).toEqual(['settled step-2']);
+
+    finish.get('step-1')?.();
+    await settle();
+    expect(heard.slice(2)).toEqual(['settled step-2', 'settled step-1']);
   });
 
   it('stops telling a listener that stopped following', async () => {
     const later: string[] = [];
     const stop = runtime.onWork({
-      busy: () => later.push('busy'),
-      idle: () => later.push('idle'),
+      started: () => later.push('started'),
+      settled: () => later.push('settled'),
     });
     stop();
 
@@ -141,6 +144,6 @@ describe('ExecutorRuntime — following its work', () => {
     await settle();
 
     expect(later).toEqual([]);
-    expect(heard).toContain('idle');
+    expect(heard).toContain('settled step-1');
   });
 });

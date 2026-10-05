@@ -4,6 +4,8 @@ import {
   PlanNodeCreateOutputSchema,
   PlanNodeGetInputSchema,
   PlanNodeGetOutputSchema,
+  PlanNodeLinkInputSchema,
+  PlanNodeLinkOutputSchema,
   PlanNodeListInputSchema,
   PlanNodeListOutputSchema,
   PlanNodeUpdateInputSchema,
@@ -88,15 +90,16 @@ export const PlanOperationRegistrations: OperationRegistration[] = [
     name: 'Get Plan Node',
     actionLabel: 'Opening the plan node…',
     semanticDescription:
-      'Open a plan node: goal, criteria, status, note, outcome and revision, with its children in order.',
+      'Open a plan node: goal, criteria, status, note, outcome and revision, with its children in order, what is linked to it, and the runs in flight for it and the nodes under it.',
     tags: ['plan', 'node', 'read'],
     idempotency: 'idempotent',
     mutates: false,
     usage: {
-      oneLine: 'Open a plan node with its goal, criteria, note and children.',
+      oneLine:
+        'Open a plan node with its goal, criteria, note, children, links and runs in flight.',
       whenToUse: [
         'Before briefing a round of work on a node — the attention block shows only its title and the note’s first line',
-        'A stream continues in a new conversation: open the node it names',
+        'A stream continues in a new conversation: open the node it names — its runs in flight are the work under way for it',
       ],
       whenNotToUse: [
         'Finding a node — the attention block lists the open tree; plan.node.list filters it',
@@ -131,5 +134,37 @@ export const PlanOperationRegistrations: OperationRegistration[] = [
     accessMode: 'read',
     inputZod: PlanNodeListInputSchema,
     outputZod: PlanNodeListOutputSchema,
+  },
+  {
+    stepType: 'plan',
+    group: 'node',
+    verb: 'link',
+    name: 'Link to Plan Node',
+    actionLabel: 'Linking to the plan…',
+    semanticDescription:
+      'Record on a plan node a typed reference to what did or holds its work: a run, a session, a pull request, a document, a finding or a campaign. A run started with the node’s planNodeId links itself, and its pull request, when it ends.',
+    tags: ['plan', 'node', 'link'],
+    idempotency: 'non_idempotent',
+    mutates: true,
+    usage: {
+      oneLine: 'Link a run, session, pull request, document, finding or campaign to a plan node.',
+      whenToUse: [
+        'Work for a node was done outside a run started with its planNodeId — a pull request opened by hand, a document written, a finding named',
+      ],
+      whenNotToUse: [
+        'A run started with planNodeId — it links itself and its pull request when it ends',
+      ],
+      pitfalls: [
+        'A record is linked to a node once; linking it again is refused, and plan.node.get lists what is linked',
+      ],
+      minimalExampleInput: {
+        nodeId: EXAMPLE_NODE_ID,
+        kind: 'pull_request',
+        ref: 'https://github.com/aflowai/aflow/pull/80',
+      },
+    },
+    accessMode: 'write',
+    inputZod: PlanNodeLinkInputSchema,
+    outputZod: PlanNodeLinkOutputSchema,
   },
 ];

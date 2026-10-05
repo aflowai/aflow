@@ -72,6 +72,7 @@ describe('processJob — a step given back while it waits for a slot', () => {
       claimingStopped: claiming.signal,
       stopped: lifetime.signal,
       stepStarted: vi.fn(),
+      stepRunning: vi.fn(),
     } as never;
   }
 

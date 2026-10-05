@@ -9,10 +9,13 @@ import {
   PLAN_NODE_OPEN_HAS_NO_OUTCOME_MESSAGE,
   PLAN_NODE_POSITION_MAX,
   PLAN_NODE_PROSE_MAX_CHARS,
+  PLAN_NODE_TITLE_ONE_LINE_MESSAGE,
   PLAN_NODE_UPDATE_EMPTY_MESSAGE,
   PlanNodeCreateInputSchema,
+  PlanNodeLinkInputSchema,
   PlanNodeListInputSchema,
   PlanNodeUpdateInputSchema,
+  WorkflowRunStartInputSchema,
 } from '../../index.js';
 
 const NODE_ID = '7b0c4b52-58a4-4c39-9a51-0d3f3c0b8a11';
@@ -22,10 +25,11 @@ const PLAN_OPERATIONS = {
   update: 'write',
   get: 'read',
   list: 'read',
+  link: 'write',
 } as const;
 
-describe('plan.node operations (Plan 322 P0)', () => {
-  it('registers exactly the four P0 operations, read or write as the verb says', () => {
+describe('plan.node operations (Plan 322)', () => {
+  it('registers exactly the four P0 operations and P1’s link, read or write as the verb says', () => {
     const registered = [...getOperationsByStepType('plan').keys()].sort();
     expect(registered).toEqual(
       Object.keys(PLAN_OPERATIONS)
@@ -137,6 +141,76 @@ describe('PlanNodeUpdateInputSchema', () => {
     expect(PlanNodeUpdateInputSchema.safeParse({ nodeId: NODE_ID, note: 'next' }).success).toBe(
       false,
     );
+  });
+});
+
+describe('plan node title', () => {
+  const base = { kind: 'execute', goal: 'g', criteria: 'c' };
+
+  it('is one line, because the attention block renders one line per node', () => {
+    for (const title of ['315 · Local first-run\nergonomics', 'carriage\rreturn']) {
+      for (const result of [
+        PlanNodeCreateInputSchema.safeParse({ ...base, title }),
+        PlanNodeUpdateInputSchema.safeParse({ nodeId: NODE_ID, expectedRevision: 1, title }),
+      ]) {
+        expect(result.error?.issues).toEqual([
+          expect.objectContaining({ path: ['title'], message: PLAN_NODE_TITLE_ONE_LINE_MESSAGE }),
+        ]);
+      }
+    }
+  });
+
+  it('takes a line break at either end as the whitespace it trims', () => {
+    expect(PlanNodeCreateInputSchema.parse({ ...base, title: '\n315 · ergonomics\n' }).title).toBe(
+      '315 · ergonomics',
+    );
+  });
+});
+
+describe('PlanNodeLinkInputSchema', () => {
+  const RUN_ID = '0b7c1d2e-3f40-4a51-8b62-7c83d94ea5f6';
+
+  it('takes each kind’s ref in its own form', () => {
+    for (const link of [
+      { kind: 'run', ref: RUN_ID },
+      { kind: 'session', ref: RUN_ID },
+      { kind: 'campaign', ref: RUN_ID },
+      { kind: 'pull_request', ref: 'https://github.com/aflowai/aflow/pull/80' },
+      { kind: 'document', ref: '/plans/322.md' },
+      { kind: 'finding', ref: 'F114', label: 'Findings out of the plan file' },
+    ]) {
+      expect(
+        PlanNodeLinkInputSchema.safeParse({ nodeId: NODE_ID, ...link }).success,
+        link.kind,
+      ).toBe(true);
+    }
+  });
+
+  it('refuses an id that is not one, and a pull request that is not a URL, naming the form', () => {
+    const notAnId = PlanNodeLinkInputSchema.safeParse({ nodeId: NODE_ID, kind: 'run', ref: '80' });
+    expect(notAnId.error?.issues).toEqual([
+      expect.objectContaining({ path: ['ref'], message: expect.stringContaining('a UUID') }),
+    ]);
+    const notAUrl = PlanNodeLinkInputSchema.safeParse({
+      nodeId: NODE_ID,
+      kind: 'pull_request',
+      ref: '#80',
+    });
+    expect(notAUrl.error?.issues).toEqual([
+      expect.objectContaining({ path: ['ref'], message: expect.stringContaining('URL') }),
+    ]);
+  });
+});
+
+describe('workflow.run.start planNodeId', () => {
+  it('takes the node a run serves, and nothing that is not a node id', () => {
+    expect(
+      WorkflowRunStartInputSchema.parse({ slug: 'commission-change', planNodeId: NODE_ID }),
+    ).toMatchObject({ planNodeId: NODE_ID });
+    expect(
+      WorkflowRunStartInputSchema.safeParse({ slug: 'commission-change', planNodeId: '315' })
+        .success,
+    ).toBe(false);
   });
 });
 

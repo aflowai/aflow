@@ -3,10 +3,12 @@
  *
  * The machine is usually a laptop, and an operating system that sees no input
  * puts it to sleep whatever is running: a coding agent mid-run stops, its run is
- * lost, and every conversation waiting on it dies with it. So while a step is
- * running the executor holds a sleep assertion — a child `caffeinate` on macOS,
- * `systemd-inhibit` on Linux — taken when the first step starts and released
- * when the last one settles, and nothing is held while the machine is idle.
+ * lost, and every conversation waiting on it dies with it. So while it has work
+ * the executor holds a sleep assertion — a child `caffeinate` on macOS,
+ * `systemd-inhibit` on Linux — taken when any step starts and released a grace
+ * period after the last one settles. A long step is held throughout, and a
+ * burst of short ones is held once rather than spawning and killing a process
+ * for each.
  *
  * Whether to hold is the operator's, a machine-wide field of the policy file
  * beside the harnesses it protects: `on-ac` (the default), `always` or `never`.
@@ -30,6 +32,13 @@ import { forgetSpawn, recordSpawn } from './orphans.js';
 type HostPolicy = z.infer<typeof HostPolicySchema>;
 
 export const CLEAR_KEEP_AWAKE = '--clear';
+
+/** How long the hold outlasts the last step to settle, for the next one to reuse. */
+export const KEEP_AWAKE_GRACE_MS = 30_000;
+
+function stepsWord(count: number): string {
+  return `${String(count)} ${count === 1 ? 'step' : 'steps'}`;
+}
 
 /** The policy with the operator's mode, or with none for `--clear`. */
 export function withKeepAwake(policy: HostPolicy, requested: string): HostPolicy {
@@ -182,9 +191,9 @@ export interface KeepAwakeLog {
 }
 
 export interface KeepAwake {
-  /** Hold while any step of this runtime runs, under the name given. */
-  follow(name: string, runtime: { onWork(listener: WorkListener): () => void }): void;
-  /** A changed policy: the hold is taken again under the new mode, if work is running. */
+  /** Hold while any step of this runtime runs, and for the grace after. */
+  follow(runtime: { onWork(listener: WorkListener): () => void }): void;
+  /** A changed policy: the hold is taken again under the new mode, if there is work. */
   setMode(mode: HostKeepAwakeMode): void;
   /** Release whatever is held and hold nothing more. Synchronous, for an exit handler. */
   stop(): void;
@@ -210,25 +219,31 @@ export function createKeepAwake(options: KeepAwakeOptions): KeepAwake {
   let mode = options.mode;
   let stopped = false;
   let held: SleepAssertion | undefined;
-  /** What is running, by the runtime it runs in: the first step each started with. */
-  const working = new Map<string, string>();
+  /** The steps the current hold has covered, those running when it was taken included. */
+  let covered = 0;
+  /** The steps running, by step execution: each one's operation. */
+  const running = new Map<string, string>();
+  /**
+   * The operation of the step that began this stretch of work, which lasts
+   * until the grace after its last step runs out.
+   */
+  let workBegunBy: string | undefined;
+  let grace: ReturnType<typeof setTimeout> | undefined;
   const unfollow: Array<() => void> = [];
 
   const release = (reason: string): void => {
     if (held === undefined) return;
     held.release();
     held = undefined;
-    options.log.info(`Released the hold on sleep: ${reason}`);
+    options.log.info(`Released the hold on sleep, which covered ${stepsWord(covered)}: ${reason}`, {
+      steps: covered,
+    });
+    covered = 0;
   };
 
-  const reconcile = (): void => {
-    const [why] = working.values();
-    if (stopped || why === undefined) {
-      release(stopped ? 'the executor is stopping' : 'no work is running');
-      return;
-    }
-    if (held !== undefined) return;
-    const command = sleepAssertionCommand(mode, why, machine);
+  const take = (): void => {
+    if (stopped || held !== undefined || workBegunBy === undefined) return;
+    const command = sleepAssertionCommand(mode, workBegunBy, machine);
     if (command === undefined) return;
     const assertion = spawnAssertion(command.command, command.args, (reason) => {
       if (held !== assertion) return;
@@ -236,27 +251,49 @@ export function createKeepAwake(options: KeepAwakeOptions): KeepAwake {
       options.log.warn('The hold on sleep ended on its own; this machine may sleep mid-run', {
         command: command.command,
         reason,
+        steps: covered,
       });
+      covered = 0;
     });
     held = assertion;
-    options.log.info('Holding this machine awake while it has work', {
+    covered = running.size;
+    options.log.info(`Holding this machine awake while it has work, begun by ${workBegunBy}`, {
       mode,
       command: command.command,
-      why,
     });
   };
 
+  const cancelGrace = (): void => {
+    if (grace === undefined) return;
+    clearTimeout(grace);
+    grace = undefined;
+  };
+
+  const startGrace = (): void => {
+    cancelGrace();
+    grace = setTimeout(() => {
+      grace = undefined;
+      workBegunBy = undefined;
+      release(`no step has run for ${String(KEEP_AWAKE_GRACE_MS / 1000)} seconds`);
+    }, KEEP_AWAKE_GRACE_MS);
+    grace.unref();
+  };
+
   return {
-    follow(name, runtime) {
+    follow(runtime) {
       unfollow.push(
         runtime.onWork({
-          busy: (firstStep) => {
-            working.set(name, firstStep);
-            reconcile();
+          started: (step) => {
+            if (stopped) return;
+            cancelGrace();
+            running.set(step.stepExecutionId, step.operationId);
+            workBegunBy ??= step.operationId;
+            if (held === undefined) take();
+            else covered += 1;
           },
-          idle: () => {
-            working.delete(name);
-            reconcile();
+          settled: (step) => {
+            if (!running.delete(step.stepExecutionId)) return;
+            if (running.size === 0 && !stopped) startGrace();
           },
         }),
       );
@@ -265,11 +302,12 @@ export function createKeepAwake(options: KeepAwakeOptions): KeepAwake {
       if (next === mode) return;
       mode = next;
       release(`the mode is now ${next}`);
-      reconcile();
+      take();
     },
     stop() {
       stopped = true;
       for (const end of unfollow.splice(0)) end();
+      cancelGrace();
       release('the executor is stopping');
     },
     holding: () => held !== undefined,

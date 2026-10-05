@@ -28,6 +28,7 @@ import {
   isEvalPlaneOperation,
   MAX_PARENT_INPUTS_SERIALIZED_BYTES,
   PAUSE_INSTRUCTION_MAX_CHARS,
+  RUN_PULL_REQUEST_URL_OUTPUT,
   substituteTemplateBinds,
 } from '@aflow/schemas';
 import { PUBLISH_LOCAL_CHANGES } from './publishLocalChanges.js';
@@ -574,6 +575,19 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       'createPullRequest',
     ]);
     expect(wf.output?.primary).toBe('prUrl');
+  });
+
+  it('promotes its pull request under the output a run serving a plan node is linked by', () => {
+    // The harness links the pull request to the node from this output when the
+    // run ends (Plan 322 D5); a rename here would end those links silently.
+    expect(wf.stateVariables.map((v) => v.variableId)).toContain(RUN_PULL_REQUEST_URL_OUTPUT);
+    const promoters = wf.tasks.filter((task) =>
+      task.promoteOutputs?.some((p) => 'toState' in p && p.toState === RUN_PULL_REQUEST_URL_OUTPUT),
+    );
+    expect(promoters.map((task) => task.taskId).sort()).toEqual(['find-pr', 'open-pr']);
+    expect(
+      wf.stateVariables.find((v) => v.variableId === RUN_PULL_REQUEST_URL_OUTPUT)?.sensitive,
+    ).toBe(false);
   });
 
   it("asks GitHub for the branch's open pull request by `owner:branch` and the base", () => {

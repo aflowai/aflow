@@ -1,5 +1,5 @@
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { eq, and, asc, desc, inArray, isNull, sql } from 'drizzle-orm';
+import { eq, and, asc, desc, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import type { TenantId } from '@aflow/schemas';
 import {
   createTenantContext,
@@ -51,6 +51,7 @@ function toSummary(row: WorkflowRunRow): WorkflowRunSummary {
     learningCount: Array.isArray(row.learningsJson) ? row.learningsJson.length : 0,
     score: row.score,
     evalBatchId: row.evalBatchId,
+    ...(row.planNodeId !== null ? { planNodeId: row.planNodeId } : {}),
   };
 }
 
@@ -577,6 +578,7 @@ export async function listActiveRunsWithLiveness(
         r.status,
         r.started_at,
         r.scheduler_cursor_at,
+        r.plan_node_id,
         COALESCE(t.total_tasks, 0)::int AS total_tasks,
         COALESCE(t.succeeded_tasks, 0)::int AS succeeded_tasks,
         COALESCE(t.live_tasks, 0)::int AS live_tasks,
@@ -615,7 +617,35 @@ export async function listActiveRunsWithLiveness(
       liveTasks: row['live_tasks'] as number,
       scheduledTasks: row['scheduled_tasks'] as number,
       pausedTasks: row['paused_tasks'] as number,
+      ...(typeof row['plan_node_id'] === 'string' ? { planNodeId: row['plan_node_id'] } : {}),
     }));
+  });
+}
+
+/**
+ * Every plan node the runs a session drove serve, ended or not: the plan a
+ * conversation has taken up. A run a run started is driven by the session
+ * that drove its parent, so it counts here too.
+ */
+export async function listPlanNodeIdsDrivenBySession(
+  db: PostgresJsDatabase,
+  tenantId: string,
+  spaceId: string,
+  sessionId: string,
+): Promise<string[]> {
+  const tenantCtx = createTenantContext(tenantId as TenantId);
+  return withTenantSchema(db, tenantCtx, async (tx) => {
+    const rows = await tx
+      .selectDistinct({ planNodeId: workflowRuns.planNodeId })
+      .from(workflowRuns)
+      .where(
+        and(
+          eq(workflowRuns.spaceId, spaceId),
+          eq(workflowRuns.sessionId, sessionId),
+          isNotNull(workflowRuns.planNodeId),
+        ),
+      );
+    return rows.flatMap((row) => (row.planNodeId !== null ? [row.planNodeId] : []));
   });
 }
 

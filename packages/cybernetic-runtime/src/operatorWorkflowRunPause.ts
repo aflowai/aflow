@@ -127,7 +127,7 @@ export async function executeOperatorWorkflowRunPause(
 
   // 4. Run-level attention item (no taskId).
   try {
-    await addAttentionItem(deps.db, tenantIdStr, {
+    await addAttentionItem(deps.db, deps.redis, tenantIdStr, {
       kind: 'workflow_run_paused',
       spaceId: args.spaceId,
       relatedRunId: runId,
@@ -355,7 +355,7 @@ async function interruptRestartPause(
 
   // 5. Run-level attention + live run-update (same as soft-quiesce).
   try {
-    await addAttentionItem(deps.db, tenantIdStr, {
+    await addAttentionItem(deps.db, deps.redis, tenantIdStr, {
       kind: 'workflow_run_paused',
       spaceId: args.spaceId,
       relatedRunId: runId,

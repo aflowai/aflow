@@ -28,6 +28,7 @@ import {
   writeAttentionItem,
 } from './helpers.js';
 import { notifyWaiters } from './waiters.js';
+import { linkEndedRunToPlanNode } from './planLinks.js';
 import type { HarnessDeps } from './types.js';
 
 export async function pauseRunForTask(
@@ -149,18 +150,11 @@ export async function pauseRunOnly(
       tx,
     );
     if (run) {
-      await writeAttentionItem(
-        deps.db,
-        tenantId,
-        run,
-        'workflow_run_paused',
-        {
-          taskId,
-          attempt,
-          ...(contractRef !== undefined ? { contractRef } : {}),
-        },
-        tx,
-      );
+      await writeAttentionItem(tx, tenantId, run, 'workflow_run_paused', {
+        taskId,
+        attempt,
+        ...(contractRef !== undefined ? { contractRef } : {}),
+      });
     }
     return tookVersion;
   });
@@ -318,14 +312,10 @@ export async function completeRun(
       tx,
     );
     if (!landed) return false;
-    await writeAttentionItem(
-      deps.db,
-      tenantId,
-      run,
-      attentionKind,
-      { terminalStatus, ...(attentionPayloadExtras ?? {}) },
-      tx,
-    );
+    await writeAttentionItem(tx, tenantId, run, attentionKind, {
+      terminalStatus,
+      ...(attentionPayloadExtras ?? {}),
+    });
     return true;
   });
 
@@ -372,6 +362,14 @@ export async function completeRun(
   } catch (err) {
     log.warn(
       `[completeRun] post-run hooks failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
+  try {
+    await linkEndedRunToPlanNode(deps, tenantIdStr, run, terminalStatus);
+  } catch (err) {
+    log.warn(
+      `[completeRun] linking the run to plan node ${run.planNodeId ?? '(none)'} failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
     );
   }
 

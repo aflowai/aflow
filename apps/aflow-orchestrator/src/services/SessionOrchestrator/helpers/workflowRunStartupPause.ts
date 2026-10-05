@@ -1,7 +1,8 @@
 import { createTenantContext, withTenantSchema } from '@aflow/database';
 import {
-  addAttentionItem,
+  addAttentionItemInTransaction,
   buildResumeContract,
+  emitRunUpdated,
   pauseRun,
   storeWorkflowResumeContract,
 } from '@aflow/cybernetic-runtime';
@@ -16,10 +17,12 @@ import { wakeParkedStepWithFailure } from '../handlers/inlineOps/workflowCrud/ru
 
 export interface PauseWorkflowRunAtStartupArgs {
   db: PostgresJsDatabase;
+  redis: Redis;
   payloadStore: PayloadStore;
   tenantId: TenantId;
   spaceId: string;
   runId: string;
+  slug: string;
   contract: WorkflowResumeContract;
 }
 
@@ -49,27 +52,29 @@ export async function pauseWorkflowRunAtStartup(
       { reason: args.contract.pauseCause, payloadRef: contractRef },
       tx,
     );
-    await addAttentionItem(
-      args.db,
-      tenantIdStr,
-      {
-        spaceId: args.spaceId,
-        kind: 'workflow_run_paused',
-        relatedRunId: args.runId,
-        relatedResource: `workflow_run:${args.runId}`,
-        payload: {
-          pauseCause: args.contract.pauseCause,
-          contractRef,
-        },
-        priority: 0,
+    await addAttentionItemInTransaction(tx, tenantIdStr, {
+      spaceId: args.spaceId,
+      kind: 'workflow_run_paused',
+      relatedRunId: args.runId,
+      relatedResource: `workflow_run:${args.runId}`,
+      payload: {
+        pauseCause: args.contract.pauseCause,
+        contractRef,
       },
-      tx,
-    );
+      priority: 0,
+    });
     return tookVersion;
   });
   if (pauseVersion === null) {
     throw new Error(`run ${args.runId} is no longer running; it cannot be paused for preflight`);
   }
+  await emitRunUpdated(args.redis, {
+    tenantId: tenantIdStr,
+    spaceId: args.spaceId,
+    runId: args.runId,
+    workflowSlug: args.slug,
+    status: 'paused',
+  });
 
   return { contractRef, pauseVersion };
 }
@@ -99,10 +104,12 @@ export async function handoffStartupPreflightPause(
   try {
     const { contractRef, pauseVersion } = await pauseWorkflowRunAtStartup({
       db: handoff.db,
+      redis: handoff.redis,
       payloadStore: handoff.payloadStore,
       tenantId: handoff.tenantId,
       spaceId: handoff.spaceId,
       runId: handoff.runId,
+      slug: handoff.slug,
       contract: handoff.contract,
     });
     await parkInlineStepForWorkflowWait(handoff.args, {
@@ -164,10 +171,12 @@ export async function pauseStartupPreflightUnparked(
   try {
     const { contractRef, pauseVersion } = await pauseWorkflowRunAtStartup({
       db: handoff.db,
+      redis: handoff.redis,
       payloadStore: handoff.payloadStore,
       tenantId: handoff.tenantId,
       spaceId: handoff.spaceId,
       runId: handoff.runId,
+      slug: handoff.slug,
       contract: handoff.contract,
     });
     const { notifyWaiters } = await import('../../cybernetic/harness/waiters.js');

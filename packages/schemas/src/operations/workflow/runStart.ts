@@ -28,6 +28,13 @@ const workflowRunStartFields = {
     ),
   campaignId: z.string().uuid().optional(),
   campaignConfig: CampaignConfigRecordSchema.optional(),
+  planNodeId: z
+    .string()
+    .uuid()
+    .optional()
+    .describe(
+      'The plan node this run serves. The run shows under that node in the attention block of every conversation working under the same plan root, and in any other conversation’s only as one of a count of other work in the space. The runs it starts serve the same node, and when it ends it links itself — and the pull request it opened — to the node. Absent, a run started by another run serves that run’s node.',
+    ),
   instructions: TaskTargetedInstructionsSchema.optional(),
   inputs: ParentInputsRecordSchema.optional(),
   wait: z

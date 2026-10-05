@@ -726,6 +726,15 @@ async function resolveTurnTimestamp(tenantId: string, runId: string): Promise<st
 }
 
 /**
+ * What assembling an agent turn's input leaves for the turn's step state to
+ * carry: the attention items its attention block shows, consumed only once
+ * the turn succeeds.
+ */
+export interface AgentTurnStepRecord {
+  attentionItemIds?: string[];
+}
+
+/**
  * Build a full AgentTurnInput payload for scheduling an agent turn step.
  *
  * State-variable-first architecture:
@@ -751,6 +760,7 @@ export async function buildAgentTurnInput(
   delegationContextJson?: string,
   finalOutputSchemaOverrideJson?: string,
   grant?: RunAccessGrant | null,
+  stepRecord?: AgentTurnStepRecord,
 ): Promise<string> {
   // Build rawInput from state variables so ${input.*} refs resolve (e.g. ${input.step_types}).
   // Input-role state variables are stored during flow start with the same variable IDs.
@@ -1405,6 +1415,7 @@ export async function buildAgentTurnInput(
       cyberneticOverrides = await buildCyberneticTurnOverrides({
         tenantId: tenantId,
         spaceId: flowContextDetails.space.id,
+        sessionId: runId,
         spaceName: flowContextDetails.space.name ?? 'Unknown',
         directives: spaceDirectives as EntityDirectives,
         db: flowContextDetails.cyberneticHandles.db as PostgresJsDatabase,
@@ -1424,6 +1435,9 @@ export async function buildAgentTurnInput(
 
   if (cyberneticOverrides) {
     finalContextBlocks.push(cyberneticOverrides.attentionContextBlock);
+    if (stepRecord && cyberneticOverrides.attentionItemIds.length > 0) {
+      stepRecord.attentionItemIds = cyberneticOverrides.attentionItemIds;
+    }
   }
 
   // Spliced here rather than with the other blocks because the projection

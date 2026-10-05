@@ -51,6 +51,7 @@ import { routeSessionPauseToSubscribers } from '../handlers/pausedSessionRouting
 import { buildRunCreatedRecoveryEvents } from '../helpers/recoveryEmitter.js';
 
 import { createBuildAgentFlowContextDetails } from '../helpers/agentFlowContext.js';
+import type { AgentTurnStepRecord } from '../helpers/agentTurn.js';
 import { createRelayWorkflowTaskActivity } from '../scheduling/relayWorkflowTaskActivity.js';
 import { extractStepDetail } from '../scheduling/stepDetail.js';
 
@@ -356,6 +357,7 @@ export function createStartRun(bindings: SessionOrchestratorBindings) {
     const runGrant =
       compiledGrant ?? (existingRun?.grantJson ? parseRunAccessGrant(existingRun.grantJson) : null);
 
+    const agentTurnRecord: AgentTurnStepRecord = {};
     const resolvedInputRef = await resolveStepInput(
       payloadStore,
       stepDef,
@@ -372,6 +374,7 @@ export function createStartRun(bindings: SessionOrchestratorBindings) {
       existingRun?.delegationContextJson,
       existingRun?.finalOutputSchemaOverrideJson,
       runGrant,
+      agentTurnRecord,
     );
 
     // Extract user message for the FlowRunStarted event: prefer the first text-type
@@ -504,6 +507,9 @@ export function createStartRun(bindings: SessionOrchestratorBindings) {
       inputRef: resolvedInputRef,
       idempotencyKey,
       traceId: params.traceId,
+      ...(agentTurnRecord.attentionItemIds
+        ? { attentionItemIds: agentTurnRecord.attentionItemIds }
+        : {}),
     };
 
     const startEvent: SessionEvent = {

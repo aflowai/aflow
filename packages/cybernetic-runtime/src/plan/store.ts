@@ -1,16 +1,25 @@
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { and, asc, eq, inArray, isNull, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, sql, type SQL } from 'drizzle-orm';
 import {
   PLAN_NODE_POSITION_MAX,
   PLAN_TREE_DEPTH_LIMIT,
   type PlanNode,
   type PlanNodeKind,
+  type PlanNodeLink,
+  type PlanNodeLinkKind,
+  type PlanNodeRun,
   type PlanNodeStatus,
   type PlanNodeSummary,
   type TenantId,
 } from '@aflow/schemas';
-import { createTenantContext, planNodes, withTenantSchema } from '@aflow/database';
-import type { PlanNodeRow } from '@aflow/database';
+import {
+  createTenantContext,
+  planNodeLinks,
+  planNodes,
+  withTenantSchema,
+  workflowRuns,
+} from '@aflow/database';
+import type { PlanNodeLinkRow, PlanNodeRow } from '@aflow/database';
 import {
   checkPlacement,
   PLAN_SIBLING_ORDER,
@@ -21,6 +30,9 @@ import {
   type PlanTreeWalk,
   type PlanTreeWalkBounds,
 } from './tree.js';
+
+/** What a run in flight is: `plan.node.get` lists runs in these statuses. */
+export const PLAN_NODE_RUN_STATUSES: ReadonlyArray<PlanNodeRun['status']> = ['running', 'paused'];
 
 /** How much of the note's first line a summary carries. */
 export const PLAN_NOTE_HEAD_MAX_CHARS = 200;
@@ -64,9 +76,26 @@ export type PlanNodeMove =
 export interface PlanTreeWalkOptions extends PlanTreeWalkBounds {
   /** Walk from this node rather than from the roots. */
   rootId?: string;
-  /** Walk through only these statuses: a node of another, and all below it, is not read. */
+  /**
+   * Walk through only these statuses: a node of another, and all below it, is
+   * not read. `rootId` is read whatever its status — it is where the caller
+   * chose to look, not a node the walk came upon.
+   */
   statuses?: readonly PlanNodeStatus[];
 }
+
+export interface NewPlanNodeLink {
+  nodeId: string;
+  kind: PlanNodeLinkKind;
+  ref: string;
+  label: string | null;
+}
+
+export type PlanNodeLinkInsert =
+  | { outcome: 'inserted'; link: PlanNodeLink }
+  /** The node already holds a link of this kind to this ref; `link` is that one. */
+  | { outcome: 'exists'; link: PlanNodeLink }
+  | { outcome: 'node_not_found' };
 
 /**
  * Every read and write of `plan_nodes`, scoped to one space. The engine in
@@ -113,6 +142,22 @@ export interface PlanNodeStore {
     limit: number,
   ): Promise<{ children: PlanNodeSummary[]; total: number }>;
   walk(spaceId: string, opts: PlanTreeWalkOptions): Promise<PlanTreeWalk>;
+  /** Each node's parent (null for a root); a node not in the space is absent. */
+  parentsOf(spaceId: string, nodeIds: readonly string[]): Promise<Map<string, string | null>>;
+  /** Writes the link unless its node is not in the space or already holds it. */
+  insertLink(spaceId: string, link: NewPlanNodeLink): Promise<PlanNodeLinkInsert>;
+  /** Newest first. */
+  listLinks(
+    spaceId: string,
+    nodeId: string,
+    limit: number,
+  ): Promise<{ links: PlanNodeLink[]; total: number }>;
+  /** The running and paused runs serving any of `nodeIds`, newest first; eval trials never. */
+  listRunsServing(
+    spaceId: string,
+    nodeIds: readonly string[],
+    limit: number,
+  ): Promise<{ runs: PlanNodeRun[]; total: number }>;
 }
 
 /**
@@ -160,6 +205,16 @@ export function rowToPlanNode(row: PlanNodeRow): PlanNode {
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     ...(row.closedAt != null ? { closedAt: row.closedAt.toISOString() } : {}),
+  };
+}
+
+export function rowToPlanNodeLink(row: PlanNodeLinkRow): PlanNodeLink {
+  return {
+    nodeId: row.nodeId,
+    kind: row.kind as PlanNodeLinkKind,
+    ref: row.ref,
+    ...(row.label != null ? { label: row.label } : {}),
+    createdAt: row.createdAt.toISOString(),
   };
 }
 
@@ -220,14 +275,15 @@ const siblingOrder = (): SQL[] => {
   return PLAN_SIBLING_ORDER.map((key) => asc(columns[key]));
 };
 
-function levelIs(level: PlanTreeLevel): SQL {
+function levelIs(level: PlanTreeLevel, statuses: readonly PlanNodeStatus[] | undefined): SQL {
+  const ofStatus = statuses !== undefined ? inArray(planNodes.status, [...statuses]) : undefined;
   switch (level.kind) {
     case 'roots':
-      return isNull(planNodes.parentId);
+      return and(isNull(planNodes.parentId), ofStatus)!;
     case 'node':
       return eq(planNodes.id, level.nodeId);
     case 'children':
-      return inArray(planNodes.parentId, [...level.parentIds]);
+      return and(inArray(planNodes.parentId, [...level.parentIds]), ofStatus)!;
   }
 }
 
@@ -397,15 +453,7 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
             const rows = await tx
               .select(summaryColumns())
               .from(planNodes)
-              .where(
-                and(
-                  eq(planNodes.spaceId, spaceId),
-                  levelIs(level),
-                  opts.statuses !== undefined
-                    ? inArray(planNodes.status, [...opts.statuses])
-                    : undefined,
-                ),
-              )
+              .where(and(eq(planNodes.spaceId, spaceId), levelIs(level, opts.statuses)))
               .orderBy(...siblingOrder())
               .limit(limit);
             return rows.map(summaryRowToSummary);
@@ -414,5 +462,97 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
           opts,
         ),
       ),
+
+    parentsOf: (spaceId, nodeIds) =>
+      inTenant(async (tx) => {
+        if (nodeIds.length === 0) return new Map<string, string | null>();
+        const rows = await tx
+          .select({ id: planNodes.id, parentId: planNodes.parentId })
+          .from(planNodes)
+          .where(and(eq(planNodes.spaceId, spaceId), inArray(planNodes.id, [...nodeIds])));
+        return new Map(rows.map((row) => [row.id, row.parentId]));
+      }),
+
+    insertLink: (spaceId, link) =>
+      inTenant(async (tx): Promise<PlanNodeLinkInsert> => {
+        const [node] = await tx
+          .select({ id: planNodes.id })
+          .from(planNodes)
+          .where(and(eq(planNodes.spaceId, spaceId), eq(planNodes.id, link.nodeId)))
+          .limit(1);
+        if (!node) return { outcome: 'node_not_found' };
+        const [inserted] = await tx
+          .insert(planNodeLinks)
+          .values({ spaceId, ...link })
+          .onConflictDoNothing()
+          .returning();
+        if (inserted) return { outcome: 'inserted', link: rowToPlanNodeLink(inserted) };
+        const [held] = await tx
+          .select()
+          .from(planNodeLinks)
+          .where(
+            and(
+              eq(planNodeLinks.nodeId, link.nodeId),
+              eq(planNodeLinks.kind, link.kind),
+              eq(planNodeLinks.ref, link.ref),
+            ),
+          )
+          .limit(1);
+        if (!held) throw new Error('plan_node_links conflicted on a link it does not hold');
+        return { outcome: 'exists', link: rowToPlanNodeLink(held) };
+      }),
+
+    listLinks: (spaceId, nodeId, limit) =>
+      inTenant(async (tx) => {
+        const where = and(eq(planNodeLinks.spaceId, spaceId), eq(planNodeLinks.nodeId, nodeId));
+        const rows = await tx
+          .select()
+          .from(planNodeLinks)
+          .where(where)
+          .orderBy(desc(planNodeLinks.createdAt))
+          .limit(limit);
+        const [count] = await tx
+          .select({ total: sql<number>`count(*)::int` })
+          .from(planNodeLinks)
+          .where(where);
+        return { links: rows.map(rowToPlanNodeLink), total: count?.total ?? 0 };
+      }),
+
+    listRunsServing: (spaceId, nodeIds, limit) =>
+      inTenant(async (tx) => {
+        if (nodeIds.length === 0) return { runs: [], total: 0 };
+        const where = and(
+          eq(workflowRuns.spaceId, spaceId),
+          inArray(workflowRuns.planNodeId, [...nodeIds]),
+          inArray(workflowRuns.status, [...PLAN_NODE_RUN_STATUSES]),
+          isNull(workflowRuns.evalBatchId),
+        );
+        const rows = await tx
+          .select({
+            runId: workflowRuns.runId,
+            slug: workflowRuns.workflowSlug,
+            status: workflowRuns.status,
+            nodeId: workflowRuns.planNodeId,
+            startedAt: workflowRuns.startedAt,
+          })
+          .from(workflowRuns)
+          .where(where)
+          .orderBy(desc(workflowRuns.startedAt))
+          .limit(limit);
+        const [count] = await tx
+          .select({ total: sql<number>`count(*)::int` })
+          .from(workflowRuns)
+          .where(where);
+        return {
+          runs: rows.map((row) => ({
+            runId: row.runId,
+            slug: row.slug,
+            status: row.status as PlanNodeRun['status'],
+            nodeId: row.nodeId!,
+            startedAt: row.startedAt.toISOString(),
+          })),
+          total: count?.total ?? 0,
+        };
+      }),
   };
 }

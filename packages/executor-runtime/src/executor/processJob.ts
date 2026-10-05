@@ -63,6 +63,14 @@ export interface InFlightStep {
    * until its own is known, which a progress-aware timeout then keeps current.
    */
   deadlineRef?: { current: number };
+  /** Set once its handler is about to run, as its work listeners were told. */
+  running?: RunningStep;
+}
+
+/** A step whose handler runs, as a runtime's work listeners see it. */
+export interface RunningStep {
+  stepExecutionId: string;
+  operationId: string;
 }
 
 export interface ProcessJobHost {
@@ -79,6 +87,8 @@ export interface ProcessJobHost {
   readonly stopped: AbortSignal;
   /** A claimed step has started: it is past any wait for a slot and will run. */
   stepStarted(): void;
+  /** A started step's handler is about to run. */
+  stepRunning(messageId: string, step: RunningStep): void;
 }
 
 /** How a step under an operation limit leaves its wait for a slot. */
@@ -468,6 +478,11 @@ export async function processJob(
       await acknowledgeJob(host.deps, job.stepType, messageId);
       return;
     }
+
+    host.stepRunning(messageId, {
+      stepExecutionId: job.stepExecutionId,
+      operationId: job.operationId,
+    });
 
     jobLog.debug('Step attempt started', {
       operationId: job.operationId,

@@ -1,8 +1,10 @@
 /**
  * Contract: the host executor holds its machine awake while it has work
- * (Plan 315 D21). The hold is taken when the first step starts and released
- * when the last one settles — not between two that overlap — under the mode in
- * the machine's policy, `on-ac` unless the operator chose another, and `never`
+ * (Plan 315 D21). The hold is taken when any step of either runtime starts and
+ * released `KEEP_AWAKE_GRACE_MS` after the last one settles, so a burst of
+ * short steps holds once and a long step holds throughout; the line logged on
+ * release says how many steps the hold covered. It runs under the mode in the
+ * machine's policy, `on-ac` unless the operator chose another, and `never`
  * starts nothing. The spawner is a fake here: no test holds this machine awake.
  */
 import { execFile } from 'node:child_process';
@@ -12,22 +14,26 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { WorkListener } from '@aflow/executor-runtime';
+import type { RunningStep, WorkListener } from '@aflow/executor-runtime';
 import {
+  BROWSER_PAGE_OPEN_OPERATION_ID,
+  buildOperationId,
   HOST_KEEP_AWAKE_DEFAULT,
   HostBindingInspectOutputSchema,
   type HostKeepAwakeMode,
 } from '@aflow/schemas';
 
 import { HostPolicySchema, loadHostPolicy } from '../bindings.js';
+import { HARNESS_RUN_OPERATION } from '../handlers/harnessHandlers.js';
 import { createHostHandler } from '../handlers/hostHandler.js';
 import {
   CLEAR_KEEP_AWAKE,
   createKeepAwake,
   describeKeepAwake,
   describePolicyKeepAwake,
+  KEEP_AWAKE_GRACE_MS,
   linuxOnMainsPower,
   type SleepAssertionSpawner,
   withKeepAwake,
@@ -39,8 +45,20 @@ const run = promisify(execFile);
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 const HARNESS_CLI = join(REPO_ROOT, 'apps/aflow-executor-host/src/harness-cli.ts');
 const OWN_PID = 4242;
-const HARNESS_STEP = 'host.harness.run step-1';
-const BROWSER_STEP = 'browser.page.open step-2';
+const PROCESS_EXEC_OPERATION = buildOperationId('host', 'process', 'exec');
+const HARNESS_STEP: RunningStep = { stepExecutionId: 'step-1', operationId: HARNESS_RUN_OPERATION };
+const BROWSER_STEP: RunningStep = {
+  stepExecutionId: 'step-2',
+  operationId: BROWSER_PAGE_OPEN_OPERATION_ID,
+};
+const LONG_STEP_MS = 60 * 60 * 1000;
+const BURST_LENGTH = 5;
+const BURST_GAP_MS = 200;
+
+/** A foreground command, a `git status` or the like, the nth of a burst. */
+function execStep(n: number): RunningStep {
+  return { stepExecutionId: `exec-${String(n)}`, operationId: PROCESS_EXEC_OPERATION };
+}
 
 const FOLDER = {
   id: 'hb_app',
@@ -61,11 +79,11 @@ function fakeRuntime() {
         listeners.delete(listener);
       };
     },
-    busy(firstStep: string) {
-      for (const listener of listeners) listener.busy(firstStep);
+    start(step: RunningStep) {
+      for (const listener of listeners) listener.started(step);
     },
-    idle() {
-      for (const listener of listeners) listener.idle();
+    settle(step: RunningStep) {
+      for (const listener of listeners) listener.settled(step);
     },
   };
 }
@@ -109,52 +127,114 @@ function keepAwakeOn(
   const host = fakeRuntime();
   const browser = fakeRuntime();
   const warnings: string[] = [];
+  const infos: string[] = [];
   const keepAwake = createKeepAwake({
     mode,
     platform,
     ownPid: OWN_PID,
     onMainsPower,
     spawn: spawner.spawn,
-    log: { info: () => undefined, warn: (message) => warnings.push(message) },
+    log: { info: (message) => infos.push(message), warn: (message) => warnings.push(message) },
   });
-  keepAwake.follow('host', host);
-  keepAwake.follow('browser', browser);
-  return { keepAwake, spawner, host, browser, warnings };
+  keepAwake.follow(host);
+  keepAwake.follow(browser);
+  return { keepAwake, spawner, host, browser, warnings, infos };
 }
 
+const releasedAfterGrace = (steps: string): string =>
+  `Released the hold on sleep, which covered ${steps}: ` +
+  `no step has run for ${String(KEEP_AWAKE_GRACE_MS / 1000)} seconds`;
+
 describe('keep awake — when the hold is taken and released', () => {
-  it('takes the hold when the first step starts and releases it when the last settles', () => {
-    const { keepAwake, spawner, host } = keepAwakeOn('darwin', 'on-ac');
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('takes the hold when a step starts and releases it the grace after it settles', () => {
+    const { keepAwake, spawner, host, infos } = keepAwakeOn('darwin', 'on-ac');
     expect(spawner.spawned).toHaveLength(0);
 
-    host.busy(HARNESS_STEP);
+    host.start(HARNESS_STEP);
     expect(keepAwake.holding()).toBe(true);
     expect(spawner.held()).toHaveLength(1);
 
-    host.idle();
+    host.settle(HARNESS_STEP);
+    vi.advanceTimersByTime(KEEP_AWAKE_GRACE_MS - 1);
+    expect(keepAwake.holding()).toBe(true);
+
+    vi.advanceTimersByTime(1);
     expect(keepAwake.holding()).toBe(false);
     expect(spawner.held()).toHaveLength(0);
+    expect(infos).toEqual([
+      `Holding this machine awake while it has work, begun by ${HARNESS_RUN_OPERATION}`,
+      releasedAfterGrace('1 step'),
+    ]);
   });
 
-  it('holds once across two overlapping steps, and not between them', () => {
-    const { spawner, host, browser } = keepAwakeOn('darwin', 'on-ac');
+  it('holds once for a burst of short steps, and releases once the grace after the last', () => {
+    const { keepAwake, spawner, host, infos } = keepAwakeOn('darwin', 'on-ac');
 
-    host.busy(HARNESS_STEP);
-    browser.busy(BROWSER_STEP);
-    host.idle();
+    for (let n = 0; n < BURST_LENGTH; n += 1) {
+      host.start(execStep(n));
+      host.settle(execStep(n));
+      vi.advanceTimersByTime(BURST_GAP_MS);
+    }
     expect(spawner.spawned).toHaveLength(1);
+    expect(keepAwake.holding()).toBe(true);
+
+    vi.advanceTimersByTime(KEEP_AWAKE_GRACE_MS - BURST_GAP_MS);
+    expect(spawner.spawned).toHaveLength(1);
+    expect(spawner.held()).toHaveLength(0);
+    expect(infos.filter((line) => line.startsWith('Released'))).toEqual([
+      releasedAfterGrace(`${String(BURST_LENGTH)} steps`),
+    ]);
+  });
+
+  it('keeps the hold throughout a long step, across short ones that come and go', () => {
+    const { keepAwake, spawner, host, infos } = keepAwakeOn('darwin', 'on-ac');
+
+    host.start(HARNESS_STEP);
+    host.start(execStep(0));
+    host.settle(execStep(0));
+    vi.advanceTimersByTime(LONG_STEP_MS);
+    expect(keepAwake.holding()).toBe(true);
+    expect(spawner.spawned).toHaveLength(1);
+
+    host.settle(HARNESS_STEP);
+    vi.advanceTimersByTime(KEEP_AWAKE_GRACE_MS);
+    expect(keepAwake.holding()).toBe(false);
+    expect(spawner.spawned).toHaveLength(1);
+    expect(infos.at(-1)).toBe(releasedAfterGrace('2 steps'));
+  });
+
+  it('holds once across the two runtimes, for a browser step as for a host one', () => {
+    const { spawner, host, browser, infos } = keepAwakeOn('darwin', 'on-ac');
+
+    browser.start(BROWSER_STEP);
+    host.start(HARNESS_STEP);
+    browser.settle(BROWSER_STEP);
+    vi.advanceTimersByTime(KEEP_AWAKE_GRACE_MS);
     expect(spawner.held()).toHaveLength(1);
 
-    browser.idle();
+    host.settle(HARNESS_STEP);
+    vi.advanceTimersByTime(KEEP_AWAKE_GRACE_MS);
     expect(spawner.held()).toHaveLength(0);
     expect(spawner.spawned).toHaveLength(1);
+    expect(infos[0]).toBe(
+      `Holding this machine awake while it has work, begun by ${BROWSER_PAGE_OPEN_OPERATION_ID}`,
+    );
   });
 
-  it('takes a fresh hold for work that starts after the machine went idle', () => {
+  it('takes a fresh hold for work that starts once the grace has run out', () => {
     const { spawner, host } = keepAwakeOn('darwin', 'on-ac');
-    host.busy(HARNESS_STEP);
-    host.idle();
-    host.busy(HARNESS_STEP);
+    host.start(HARNESS_STEP);
+    host.settle(HARNESS_STEP);
+    vi.advanceTimersByTime(KEEP_AWAKE_GRACE_MS);
+    host.start(HARNESS_STEP);
 
     expect(spawner.spawned).toHaveLength(2);
     expect(spawner.held()).toHaveLength(1);
@@ -163,26 +243,40 @@ describe('keep awake — when the hold is taken and released', () => {
   it('spawns nothing under never', () => {
     for (const platform of ['darwin', 'linux'] as const) {
       const { keepAwake, spawner, host } = keepAwakeOn(platform, 'never');
-      host.busy(HARNESS_STEP);
+      host.start(HARNESS_STEP);
       expect(keepAwake.holding()).toBe(false);
       expect(spawner.spawned).toHaveLength(0);
     }
   });
 
   it('releases on stop, and holds nothing for work that starts after', () => {
-    const { keepAwake, spawner, host, browser } = keepAwakeOn('darwin', 'always');
-    host.busy(HARNESS_STEP);
+    const { keepAwake, spawner, host } = keepAwakeOn('darwin', 'always');
+    host.start(HARNESS_STEP);
 
     keepAwake.stop();
-    browser.busy(BROWSER_STEP);
+    host.start(execStep(0));
 
     expect(spawner.held()).toHaveLength(0);
     expect(spawner.spawned).toHaveLength(1);
   });
 
+  it('releases on stop during the grace, and takes nothing when the grace would have run out', () => {
+    const { keepAwake, spawner, host, infos } = keepAwakeOn('darwin', 'on-ac');
+    host.start(HARNESS_STEP);
+    host.settle(HARNESS_STEP);
+
+    keepAwake.stop();
+    vi.advanceTimersByTime(KEEP_AWAKE_GRACE_MS);
+
+    expect(spawner.held()).toHaveLength(0);
+    expect(infos.at(-1)).toBe(
+      'Released the hold on sleep, which covered 1 step: the executor is stopping',
+    );
+  });
+
   it('takes the hold again under a changed mode, and drops it for never', () => {
     const { keepAwake, spawner, host } = keepAwakeOn('darwin', 'on-ac');
-    host.busy(HARNESS_STEP);
+    host.start(HARNESS_STEP);
 
     keepAwake.setMode('always');
     expect(spawner.held().map((s) => s.args)).toEqual([['-i', '-s', '-w', String(OWN_PID)]]);
@@ -193,7 +287,7 @@ describe('keep awake — when the hold is taken and released', () => {
 
   it('says so when the hold ends on its own, and takes a new one for the next work', () => {
     const { keepAwake, spawner, host, warnings } = keepAwakeOn('darwin', 'on-ac');
-    host.busy(HARNESS_STEP);
+    host.start(HARNESS_STEP);
     spawner.spawned[0]?.end('spawn caffeinate ENOENT');
 
     expect(keepAwake.holding()).toBe(false);
@@ -201,8 +295,8 @@ describe('keep awake — when the hold is taken and released', () => {
       'The hold on sleep ended on its own; this machine may sleep mid-run',
     ]);
 
-    host.idle();
-    host.busy(HARNESS_STEP);
+    host.settle(HARNESS_STEP);
+    host.start(HARNESS_STEP);
     expect(spawner.held()).toHaveLength(1);
   });
 });
@@ -210,9 +304,9 @@ describe('keep awake — when the hold is taken and released', () => {
 describe('keep awake — what holds the machine', () => {
   it('runs caffeinate -s on macOS under on-ac, and -i -s under always, tied to this executor', () => {
     const onAc = keepAwakeOn('darwin', 'on-ac');
-    onAc.host.busy(HARNESS_STEP);
+    onAc.host.start(HARNESS_STEP);
     const always = keepAwakeOn('darwin', 'always');
-    always.host.busy(HARNESS_STEP);
+    always.host.start(HARNESS_STEP);
 
     expect(onAc.spawner.spawned.map(({ command, args }) => ({ command, args }))).toEqual([
       { command: 'caffeinate', args: ['-s', '-w', String(OWN_PID)] },
@@ -224,21 +318,27 @@ describe('keep awake — what holds the machine', () => {
 
   it('runs systemd-inhibit on Linux, saying which work it holds the machine for', () => {
     const { spawner, host } = keepAwakeOn('linux', 'always', () => false);
-    host.busy(HARNESS_STEP);
+    host.start(HARNESS_STEP);
 
     expect(spawner.spawned.map(({ command, args }) => ({ command, args }))).toEqual([
       {
         command: 'systemd-inhibit',
-        args: ['--what=sleep:idle', '--who=aflow', `--why=${HARNESS_STEP}`, 'sleep', 'infinity'],
+        args: [
+          '--what=sleep:idle',
+          '--who=aflow',
+          `--why=${HARNESS_STEP.operationId}`,
+          'sleep',
+          'infinity',
+        ],
       },
     ]);
   });
 
   it('holds a Linux machine under on-ac only while it is on mains power', () => {
     const onBattery = keepAwakeOn('linux', 'on-ac', () => false);
-    onBattery.host.busy(HARNESS_STEP);
+    onBattery.host.start(HARNESS_STEP);
     const onMains = keepAwakeOn('linux', 'on-ac', () => true);
-    onMains.host.busy(HARNESS_STEP);
+    onMains.host.start(HARNESS_STEP);
 
     expect(onBattery.spawner.spawned).toHaveLength(0);
     expect(onMains.spawner.spawned).toHaveLength(1);
@@ -265,7 +365,7 @@ describe('keep awake — what holds the machine', () => {
 
   it('holds nothing where it knows no way to', () => {
     const { spawner, host } = keepAwakeOn('win32', 'always');
-    host.busy(HARNESS_STEP);
+    host.start(HARNESS_STEP);
     expect(spawner.spawned).toHaveLength(0);
   });
 });
