@@ -553,7 +553,7 @@ export function createWorkflowOperationRegistrations(
       semanticDescription:
         'List pending attention items written by the workflow harness on terminal/pause/cancel events. ' +
         'Used by Helmsman to surface paused or completed runs that need follow-up. Filterable by kind; ' +
-        'pending-only by default.',
+        'pending-only by default, and `includeConsumed` adds the consumed ones, each with its `consumedAt`.',
       tags: ['workflow', 'run', 'attention', 'observe'],
       idempotency: 'idempotent',
       mutates: false,
@@ -564,7 +564,9 @@ export function createWorkflowOperationRegistrations(
           'Reporting recent completions / failures to the user',
         ],
         whenNotToUse: ['Subscribing to live run events — this is poll-only'],
-        pitfalls: ['Items remain pending until consumed; mark consumed once surfaced.'],
+        pitfalls: [
+          "An item is read once: the turn whose attention block shows it consumes it, and a run's next pause or its end consumes its earlier pause. Pass `includeConsumed: true` to read those again.",
+        ],
         minimalExampleInput: {},
       },
       accessMode: 'read',

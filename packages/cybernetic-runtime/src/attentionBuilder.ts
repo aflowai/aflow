@@ -908,7 +908,7 @@ export function renderAttentionContext(
   if (items.unplaced.length > 0) {
     lines.push('');
     lines.push(
-      `${items.placedAny ? 'Attention items outside the plan' : 'Attention items'}, newest first — \`workflow.run.list_attention\` reads them all:`,
+      `${items.placedAny ? 'Attention items outside the plan' : 'Attention items'}, newest first, each shown once — \`workflow.run.list_attention\` with \`includeConsumed\` reads them again:`,
     );
     for (const item of items.unplaced) lines.push(`- ${renderAttentionItemLine(item)}`);
     if (items.unplacedUnshown > 0) {

@@ -5,7 +5,7 @@ import type { InlineHandlerArgs } from '../types.js';
 // ── DB / runtime mocks ────────────────────────────────────────────────────
 const mockLoadRunById = vi.fn();
 const mockLoadPendingWaiters = vi.fn();
-const mockListPendingAttention = vi.fn();
+const mockListAttentionItems = vi.fn();
 const mockSurfaceWorkflowResumeContract = vi.fn();
 const mockCancelNonTerminalTasksForRun = vi.fn();
 const mockListCompletionPendingForRun = vi.fn();
@@ -104,7 +104,7 @@ async function mockBuildWorkflowRunDetail(
 vi.mock('@aflow/cybernetic-runtime', () => ({
   loadRunById: (...args: unknown[]) => mockLoadRunById(...args),
   loadPendingWaiters: (...args: unknown[]) => mockLoadPendingWaiters(...args),
-  listPendingAttention: (...args: unknown[]) => mockListPendingAttention(...args),
+  listAttentionItems: (...args: unknown[]) => mockListAttentionItems(...args),
   deriveSuggestedNextCallForPausedRun: () => Promise.resolve(null),
   surfaceWorkflowResumeContract: (...args: unknown[]) => mockSurfaceWorkflowResumeContract(...args),
   buildWorkflowRunDetail: (...args: Parameters<typeof mockBuildWorkflowRunDetail>) =>
@@ -471,7 +471,7 @@ describe('workflow.run.list_attention — Plan 132v2 §Phase 4', () => {
   }
 
   it('returns mapped items with hasMore=false when below limit', async () => {
-    mockListPendingAttention.mockResolvedValueOnce([
+    mockListAttentionItems.mockResolvedValueOnce([
       makeAttentionRow({ id: 'aaa', kind: 'workflow_run_paused' }),
       makeAttentionRow({ id: 'bbb', kind: 'workflow_run_failed' }),
     ]);
@@ -480,8 +480,8 @@ describe('workflow.run.list_attention — Plan 132v2 §Phase 4', () => {
       makeArgs('workflow.run.list_attention', { includeConsumed: false, limit: 25 }),
     );
 
-    expect(mockListPendingAttention).toHaveBeenCalledOnce();
-    const callArgs = mockListPendingAttention.mock.calls[0]?.[2] as {
+    expect(mockListAttentionItems).toHaveBeenCalledOnce();
+    const callArgs = mockListAttentionItems.mock.calls[0]?.[2] as {
       kind?: string;
       limit: number;
     };
@@ -513,7 +513,7 @@ describe('workflow.run.list_attention — Plan 132v2 §Phase 4', () => {
 
   it('forwards kind filter and reports hasMore=true when at cap', async () => {
     // 25 rows = limit cap → hasMore=true.
-    mockListPendingAttention.mockResolvedValueOnce(
+    mockListAttentionItems.mockResolvedValueOnce(
       Array.from({ length: 25 }, (_, i) =>
         makeAttentionRow({ id: `id-${String(i)}`, kind: 'workflow_run_paused' }),
       ),
@@ -527,7 +527,7 @@ describe('workflow.run.list_attention — Plan 132v2 §Phase 4', () => {
       }),
     );
 
-    const callArgs = mockListPendingAttention.mock.calls[0]?.[2] as { kind?: string };
+    const callArgs = mockListAttentionItems.mock.calls[0]?.[2] as { kind?: string };
     expect(callArgs.kind).toBe('workflow_run_paused');
 
     const result = mockAddStepResult.mock.calls[0]![1] as { outputRef: string };
@@ -537,18 +537,25 @@ describe('workflow.run.list_attention — Plan 132v2 §Phase 4', () => {
     expect(output.hasMore).toBe(true);
   });
 
-  it('rejects includeConsumed=true as NOT_IMPLEMENTED until the surfacing UI lands', async () => {
+  it('returns a consumed item, with when it was consumed, when asked for consumed ones', async () => {
+    mockListAttentionItems.mockResolvedValueOnce([
+      makeAttentionRow({ id: 'ccc', consumedAt: new Date('2026-05-08T10:06:00Z') }),
+    ]);
+
     await handleWorkflowCrudInline(
       makeArgs('workflow.run.list_attention', { includeConsumed: true, limit: 25 }),
     );
 
-    const result = mockAddStepResult.mock.calls[0]![1] as {
-      status: string;
-      error: { code: string };
-    };
-    expect(result.status).toBe('FAILED');
-    expect(result.error.code).toBe('NOT_IMPLEMENTED');
-    expect(mockListPendingAttention).not.toHaveBeenCalled();
+    const callArgs = mockListAttentionItems.mock.calls[0]?.[2] as { includeConsumed?: boolean };
+    expect(callArgs.includeConsumed).toBe(true);
+    const result = mockAddStepResult.mock.calls[0]![1] as { status: string; outputRef: string };
+    expect(result.status).toBe('SUCCEEDED');
+    const output = JSON.parse(
+      Buffer.from(result.outputRef.slice('inline:'.length), 'base64').toString('utf8'),
+    ) as { items: Array<Record<string, unknown>> };
+    expect(output.items).toEqual([
+      expect.objectContaining({ id: 'ccc', consumedAt: '2026-05-08T10:06:00.000Z' }),
+    ]);
   });
 });
 

@@ -22,7 +22,7 @@ vi.mock('@aflow/cybernetic-runtime', async () => {
     ...actual,
     loadRunById: vi.fn(),
     loadPendingWaiters: vi.fn(),
-    listPendingAttention: vi.fn(),
+    listAttentionItems: vi.fn(),
     surfaceWorkflowResumeContract: vi.fn(),
     cancelNonTerminalTasksForRun: vi.fn(),
     listCompletionPendingForRun: vi.fn(),

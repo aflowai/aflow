@@ -1,5 +1,5 @@
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { eq, and, desc, lte, sql } from 'drizzle-orm';
+import { eq, and, desc, inArray, lte, sql } from 'drizzle-orm';
 import type { Redis } from 'ioredis';
 import type { TenantId } from '@aflow/schemas';
 import {
@@ -16,12 +16,29 @@ import { bumpAttentionGeneration } from '../attentionCache.js';
  * `tenantId` is the trusted source — it goes into the row regardless of
  * what's in `args`. The schema-level `AddAttentionItemInput` deliberately
  * omits a `tenantId` field to remove the mismatch class.
+ *
+ * A run's next item supersedes its pause: whether it pauses again after a
+ * resume or ends, its earlier pending `workflow_run_paused` items are
+ * consumed with the write, so no pause outlives the run's next transition.
  */
 async function insertAttentionItem(
   handle: PostgresJsDatabase,
   tenantId: string,
   args: AddAttentionItemInput,
 ): Promise<string> {
+  if (args.relatedRunId !== undefined) {
+    await handle
+      .update(attentionItems)
+      .set({ consumedAt: new Date() })
+      .where(
+        and(
+          eq(attentionItems.tenantId, tenantId),
+          eq(attentionItems.relatedRunId, args.relatedRunId),
+          eq(attentionItems.kind, 'workflow_run_paused' satisfies AttentionItemKind),
+          sql`${attentionItems.consumedAt} IS NULL`,
+        ),
+      );
+  }
   const rows = await handle
     .insert(attentionItems)
     .values({
@@ -74,19 +91,25 @@ export function addAttentionItemInTransaction(
 }
 
 /**
- * Read pending attention items for a tenant/user. Helmsman polls via
- * `workflow.run.list_attention`; future surfaces inject at session start
- * or agent.turn boundaries.
+ * A tenant's attention items, newest first: pending only unless
+ * `includeConsumed`. Helmsman reads them via `workflow.run.list_attention`.
  */
-export async function listPendingAttention(
+export async function listAttentionItems(
   db: PostgresJsDatabase,
   tenantId: string,
-  opts: { spaceId?: string; userId?: string; kind?: AttentionItemKind; limit?: number },
+  opts: {
+    spaceId?: string;
+    userId?: string;
+    kind?: AttentionItemKind;
+    includeConsumed?: boolean;
+    limit?: number;
+  },
 ): Promise<AttentionItemRow[]> {
   const tenantCtx = createTenantContext(tenantId as TenantId);
   const limit = opts.limit ?? 25;
   return withTenantSchema(db, tenantCtx, async (tx) => {
-    const conditions = [sql`consumed_at IS NULL`, eq(attentionItems.tenantId, tenantId)];
+    const conditions = [eq(attentionItems.tenantId, tenantId)];
+    if (opts.includeConsumed !== true) conditions.push(sql`consumed_at IS NULL`);
     if (opts.spaceId) conditions.push(eq(attentionItems.spaceId, opts.spaceId));
     if (opts.userId) conditions.push(eq(attentionItems.userId, opts.userId));
     if (opts.kind) conditions.push(eq(attentionItems.kind, opts.kind));
@@ -179,23 +202,32 @@ export async function readPendingRunAttention(
 }
 
 /**
- * Mark an attention item consumed and, once that has committed, bump its
- * space's attention generation, so the next Helmsman turn's block drops it.
+ * Mark attention items consumed by the session that read them and, once that
+ * has committed, bump each one's space's attention generation, so the next
+ * Helmsman turn's block drops them. An item already consumed keeps its first
+ * reader.
  */
 export async function markAttentionConsumed(
   db: PostgresJsDatabase,
   redis: Redis,
   tenantId: string,
-  args: { id: string; consumedBySession: string },
+  args: { ids: readonly string[]; consumedBySession: string },
 ): Promise<void> {
+  if (args.ids.length === 0) return;
   const tenantCtx = createTenantContext(tenantId as TenantId);
   const consumed = await withTenantSchema(db, tenantCtx, (tx) =>
     tx
       .update(attentionItems)
       .set({ consumedAt: new Date(), consumedBySession: args.consumedBySession })
-      .where(and(eq(attentionItems.id, args.id), sql`consumed_at IS NULL`))
+      .where(
+        and(
+          eq(attentionItems.tenantId, tenantId),
+          inArray(attentionItems.id, [...args.ids]),
+          sql`consumed_at IS NULL`,
+        ),
+      )
       .returning({ spaceId: attentionItems.spaceId }),
   );
-  const spaceId = consumed[0]?.spaceId;
-  if (spaceId) await bumpAttentionGeneration(redis, tenantId, spaceId);
+  const spaceIds = new Set(consumed.flatMap(({ spaceId }) => (spaceId !== null ? [spaceId] : [])));
+  for (const spaceId of spaceIds) await bumpAttentionGeneration(redis, tenantId, spaceId);
 }

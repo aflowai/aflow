@@ -14,7 +14,7 @@ export interface PendingAttentionItemSummary {
 /**
  * The pending attention items the block shows of a conversation's own, and
  * of those whose run serves no plan node, newest first;
- * `workflow.run.list_attention` reads them all.
+ * `workflow.run.list_attention` reads every pending one.
  */
 export const ATTENTION_ITEM_SURFACE_LIMIT = 10;
 

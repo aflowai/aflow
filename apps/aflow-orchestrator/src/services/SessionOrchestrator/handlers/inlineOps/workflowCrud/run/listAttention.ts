@@ -1,7 +1,7 @@
 import { getDatabase } from '@aflow/database';
 import type { WorkflowRunListAttentionInput, WorkflowRunListAttentionOutput } from '@aflow/schemas';
 import type { InlineHandlerArgs } from '../../types.js';
-import { emitStepSuccess, emitStepError } from '../../helpers.js';
+import { emitStepSuccess } from '../../helpers.js';
 import { requireSpaceId } from '../../spaceScope.js';
 
 export async function handleWorkflowRunListAttention(
@@ -13,28 +13,14 @@ export async function handleWorkflowRunListAttention(
   const db = getDatabase();
   const tenantIdStr = args.context.tenantId as string;
 
-  // includeConsumed=true is reserved for future surfacing UIs; v2 ships
-  // pending-only via the existing `listPendingAttention`. When a caller
-  // explicitly opts in, surface the validation error rather than silently
-  // returning pending items.
-  if (input.includeConsumed) {
-    await emitStepError(
-      args,
-      'NOT_IMPLEMENTED',
-      'workflow.run.list_attention does not yet support includeConsumed=true.',
-      startTime,
-      'validation',
-    );
-    return;
-  }
-
-  const { listPendingAttention } = await import('@aflow/cybernetic-runtime');
+  const { listAttentionItems } = await import('@aflow/cybernetic-runtime');
   // `limit` is schema-defaulted (25); the compaction win here is dropping the bulky
   // inline `contractRef` per item below, not the page size.
   const limit = input.limit;
-  const rows = await listPendingAttention(db, tenantIdStr, {
+  const rows = await listAttentionItems(db, tenantIdStr, {
     spaceId,
     ...(input.kind ? { kind: input.kind } : {}),
+    includeConsumed: input.includeConsumed,
     limit,
   });
 
