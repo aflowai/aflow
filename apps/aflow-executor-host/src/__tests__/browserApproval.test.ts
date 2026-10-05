@@ -10,6 +10,7 @@ import type { ExecutorContext, StepResult } from '@aflow/executor-runtime';
 import {
   type AflowError,
   BROWSER_APPROVAL_EXCERPT_MAX_UNITS,
+  BROWSER_APPROVAL_HIDDEN_SEGMENT,
   type BrowserProfile,
   type BrowserWriteApprovalRequestPayload,
   WRITE_APPROVAL_GRANT_TTL_SECONDS,
@@ -223,7 +224,7 @@ describe('an action on a profile that asks', () => {
       frames: { e6: 'https://shop.example.com/widgets/order-1' },
     });
     const request = asked(await dispatch(h, approvals, 'browser.page.act', pay(pageId)));
-    expect(request.pagePath).toBe('/widgets/order-1');
+    expect(request.shownPath).toBe('/widgets/order-1');
     h.world.sites.set(SHOP, {
       title: 'Checkout',
       snapshot: FORM,
@@ -236,6 +237,30 @@ describe('an action on a profile that asks', () => {
     );
     expect(h.pages[0]?.actions).toEqual([]);
     expect(approvals.spent.size).toBe(1);
+  });
+
+  it('shows the frame’s address bounded, and keeps the whole of it in the hash', async () => {
+    const { h, approvals, pageId } = await shopFor(profile({ posture: 'ask-to-act' }));
+    const orderId = 'c0ffee42'.repeat(4);
+    const frameAt = (url: string) =>
+      h.world.sites.set(SHOP, { title: 'Checkout', snapshot: FORM, frames: { e6: url } });
+
+    frameAt(`${SHOP}orders/${orderId}/pay?step=2#total`);
+    const ran = await dispatch(h, approvals, 'browser.page.act', pay(pageId));
+    const request = asked(ran);
+    expect(request.shownPath).toBe(`/orders/${BROWSER_APPROVAL_HIDDEN_SEGMENT}/pay`);
+    expect(JSON.stringify(ran.writes)).not.toContain(orderId);
+
+    frameAt(`${SHOP}orders/${'c0ffee43'.repeat(4)}/pay?step=2#total`);
+    const other = asked(await dispatch(h, approvals, 'browser.page.act', pay(pageId)));
+    expect(other.shownPath).toBe(request.shownPath);
+    expect(other.requestHash).not.toBe(request.requestHash);
+
+    const content = '<p>order notes</p>';
+    frameAt(`data:text/html,${encodeURIComponent(content)}`);
+    const inline = await dispatch(h, approvals, 'browser.page.act', pay(pageId));
+    expect(asked(inline).shownPath).toBe('data:');
+    expect(JSON.stringify(inline.writes)).not.toContain(encodeURIComponent(content));
   });
 
   it('does not act when the element is gone, and spends the approval', async () => {
@@ -380,7 +405,7 @@ describe('an approval bound to the address the operator saw', () => {
     const request = asked(ran);
     expect(request).toMatchObject({
       pageOrigin: 'https://shop.example.com',
-      pagePath: '/records/1',
+      shownPath: '/records/1',
     });
     const written = JSON.stringify(ran.writes);
     expect(written).not.toContain('tab=details');
@@ -495,7 +520,7 @@ describe('an approval request the schema refuses', () => {
       target: 'browser',
       profileId: 'default',
       pageOrigin: 'https://shop.example.com',
-      pagePath: '/',
+      shownPath: '/',
       pageTitle: 'Checkout',
       action: 'type',
       element: { ref: 'e3', role: 'textbox', name: 'Note' },
@@ -577,7 +602,6 @@ describe('the request hash', () => {
     pageUrl: 'https://shop.example.com/orders/1?tab=items#note',
     frameUrl: 'https://shop.example.com/orders/1?tab=items#note',
     pageOrigin: 'https://shop.example.com',
-    pagePath: '/orders/1',
     pageTitle: 'Checkout',
     ref: 'e3',
     element: { role: 'textbox', name: 'Note' },

@@ -5,11 +5,13 @@ import type { BrowserWriteApprovalExtension } from '../../hooks/use-action-cente
 export interface BrowserApprovalView {
   /** The site, by host. */
   readonly site: string;
-  /** Where on the site: the path of the element's frame, without its query or fragment. */
+  /** Where on the site, as `browserApprovalShownPath` bounds it. */
   readonly path: string;
   readonly pageTitle: string;
   /** "Click button “Pay now”." */
   readonly doing: string;
+  /** "This action was approved at … and performed once. It is being asked for again." */
+  readonly askedAgain?: string;
   /** What would be entered, when anything would. */
   readonly value?: { readonly label: string; readonly text?: string };
   readonly askedBy: string;
@@ -23,6 +25,10 @@ function siteOf(origin: string): string {
   } catch {
     return origin;
   }
+}
+
+function when(instant: string): string {
+  return new Date(instant).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 }
 
 function characters(count: number): string {
@@ -60,21 +66,22 @@ export function browserApprovalView(extension: BrowserWriteApprovalExtension): B
   const value = valueOf(extension);
   return {
     site: siteOf(extension.pageOrigin),
-    path: extension.pagePath,
+    path: extension.shownPath,
     pageTitle: extension.pageTitle,
     doing: `${phrase.charAt(0).toUpperCase()}${phrase.slice(1)}.`,
+    ...(extension.decidedBefore !== undefined
+      ? {
+          askedAgain:
+            `This action was approved at ${when(extension.decidedBefore)} and performed once. ` +
+            'It is being asked for again.',
+        }
+      : {}),
     ...(value !== undefined ? { value } : {}),
     askedBy:
       extension.askedBy.kind === 'rule'
         ? `Asked because the rule ${extension.askedBy.rule} on browser profile ${extension.profileId} asks before actions there.`
         : `Asked because browser profile ${extension.profileId} asks before every action.`,
-    standsUntil: `This request stands until ${new Date(extension.standsUntil).toLocaleString(
-      undefined,
-      {
-        dateStyle: 'medium',
-        timeStyle: 'short',
-      },
-    )}. Unanswered by then, it lapses and the agent's page may be closed.`,
+    standsUntil: `This request stands until ${when(extension.standsUntil)}. Unanswered by then, it lapses and the agent's page may be closed.`,
   };
 }
 

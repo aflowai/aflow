@@ -8,6 +8,11 @@
  * it is read from the request's credential; a literal `false` is right only
  * where nothing with a person behind it acts, and a literal `true` nowhere.
  * A site this list does not name fails until it is added with its reason.
+ *
+ * A resume may leave the fact out, and then the session keeps it as it was —
+ * which is right only for a resume that knows nothing of who is present. The
+ * type cannot make the others say it, so every resume that states no value is
+ * named here too, with its reason.
  */
 import { access, readdir, readFile } from 'node:fs/promises';
 import { dirname, join, parse } from 'node:path';
@@ -195,12 +200,6 @@ const ACTIVATION_WRITERS: readonly Writer[] = [
     why: 'A webhook starts a run.',
   },
   {
-    file: `${S}/services/oauthConsentResume.ts`,
-    write: 'activatedByPerson: false',
-    acts: 'nothing',
-    why: 'A provider’s OAuth redirect resumes the run; it is not a request authenticated as the person.',
-  },
-  {
     file: `${O}/cybernetic/evalBatch/startWorkflowRunAtRevision.ts`,
     write: 'activatedByPerson: false',
     acts: 'nothing',
@@ -339,6 +338,27 @@ const ACTIVATION_WRITERS: readonly Writer[] = [
   },
 ];
 
+interface UnstatedResume {
+  readonly file: string;
+  /** The call that resumes: `resumeSession`, `resumeRun`, `dispatchResume`, or `addControlMessage` sending `resume_run`. */
+  readonly call: string;
+  readonly times?: number;
+  readonly why: string;
+}
+
+const RESUMES_STATING_NOTHING: readonly UnstatedResume[] = [
+  {
+    file: `${S}/services/oauthConsentResume.ts`,
+    call: 'resumeSession',
+    why: 'Finishing an OAuth consent resumes the session through the provider’s redirect, which is authenticated as nobody; the session stays as attended as it was.',
+  },
+  {
+    file: `${S}/routes/applets.ts`,
+    call: 'resumeSession',
+    why: 'Hands on the applet relay’s request unchanged; the relay states the value.',
+  },
+];
+
 /** Drops comments so a write described in prose is not read as one. */
 function stripComments(source: string): string {
   return source
@@ -394,6 +414,42 @@ function writesIn(source: string): string[] {
   return writes;
 }
 
+/** The argument list of the call whose `(` is at `open`, without its parentheses. */
+function argumentsAt(source: string, open: number): string {
+  let depth = 0;
+  for (let i = open; i < source.length; i++) {
+    const ch = source[i];
+    if (ch === '(' || ch === '[' || ch === '{') depth++;
+    else if (ch === ')' || ch === ']' || ch === '}') {
+      depth--;
+      if (depth === 0) return source.slice(open + 1, i);
+    }
+  }
+  return source.slice(open + 1);
+}
+
+const RESUME_CALL =
+  /(?<!function\s+)(?:\.(resumeSession|resumeRun)|\b(dispatchResume|addControlMessage))\(/g;
+
+/** Every resume in one source that does not state `activatedByPerson`, by the call it goes through. */
+function unstatedResumesIn(source: string): string[] {
+  const code = stripComments(source);
+  const unstated: string[] = [];
+  for (const match of code.matchAll(RESUME_CALL)) {
+    const call = match[1] ?? match[2] ?? '';
+    const args = argumentsAt(code, match.index + match[0].length - 1);
+    if (call === 'addControlMessage' && !/type:\s*'resume_run'/.test(args)) continue;
+    // A request built just above and passed by name is read where it is built.
+    const passed = /(?:^|,)\s*([A-Za-z_$][\w$]*)\s*,?\s*$/.exec(args)?.[1];
+    const built = passed
+      ? new RegExp(`\\bconst\\s+${passed}\\s*(?::[^=]+)?=\\s*\\{`).exec(code)
+      : null;
+    const request = built ? argumentsAt(code, built.index + built[0].length - 1) : args;
+    if (!/(?<![\w$'"`])activatedByPerson\b/.test(request)) unstated.push(call);
+  }
+  return unstated;
+}
+
 async function sourcesUnder(dir: string): Promise<string[]> {
   const out: string[] = [];
   for (const entry of await readdir(dir, { withFileTypes: true })) {
@@ -430,6 +486,20 @@ async function writesInTrees(): Promise<Map<string, number>> {
   return found;
 }
 
+async function unstatedResumesInTrees(): Promise<Map<string, number>> {
+  const found = new Map<string, number>();
+  for (const root of SEARCH_ROOTS) {
+    for (const file of await sourcesUnder(join(repoRoot, root))) {
+      const relative = file.slice(repoRoot.length + 1);
+      for (const call of unstatedResumesIn(await readFile(file, 'utf-8'))) {
+        const key = `${relative} | ${call}`;
+        found.set(key, (found.get(key) ?? 0) + 1);
+      }
+    }
+  }
+  return found;
+}
+
 const keyOf = (writer: Writer): string => `${writer.file} | ${writer.write}`;
 
 describe('activatedByPerson writers', () => {
@@ -445,6 +515,35 @@ describe('activatedByPerson writers', () => {
         'credential) or nothing (`false`) — and add it to ACTIVATION_WRITERS with its reason.',
     ).toEqual([]);
     expect(gone, 'A listed write no longer exists; drop it from ACTIVATION_WRITERS.').toEqual([]);
+  });
+
+  it('names every resume that states no value, as many times as it does', async () => {
+    const found = await unstatedResumesInTrees();
+    const listed = new Map(
+      RESUMES_STATING_NOTHING.map((r) => [`${r.file} | ${r.call}`, r.times ?? 1]),
+    );
+    const unlisted = [...found].filter(([key, n]) => listed.get(key) !== n);
+    const gone = [...listed].filter(([key]) => !found.has(key));
+    expect(
+      unlisted.map(([key, n]) => `${key} (×${String(n)})`),
+      'A resume that states no activatedByPerson, so the session keeps whatever it was. ' +
+        'State who acts there, or — only where the resume knows nothing of who is present — ' +
+        'add it to RESUMES_STATING_NOTHING with its reason.',
+    ).toEqual([]);
+    expect(gone, 'A listed resume now states a value or is gone; drop it.').toEqual([]);
+  });
+
+  it('finds the resumes it guards', () => {
+    expect(
+      unstatedResumesIn(
+        "await addControlMessage(redis, { type: 'resume_run', runId });\n" +
+          "await addControlMessage(redis, { type: 'cancel_run', runId });\n" +
+          'const resume = { runId, activatedByPerson: false };\n' +
+          'await dispatchResume(db, redis, resume);\n' +
+          'await deps.sessionService.resumeSession({ sessionId });\n' +
+          'export async function dispatchResume(db, redis, request) {}\n',
+      ),
+    ).toEqual(['addControlMessage', 'resumeSession']);
   });
 
   it('writes a literal only where nothing acts, and `true` nowhere', () => {

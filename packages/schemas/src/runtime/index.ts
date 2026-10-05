@@ -28,6 +28,7 @@ export * from './agentTurn.js';
 export * from './agentPolicies.js';
 export * from './integrationToolSpecs.js';
 export * from './requestedInput.js';
+export * from './browserApprovalPath.js';
 export * from './writeApprovalLifetime.js';
 export * from './subagentHandoff.js';
 export * from './mcpCredentialFailure.js';

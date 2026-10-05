@@ -183,6 +183,12 @@ function BrowserActionDetail({
 
       <Text size="sm">{view.doing}</Text>
 
+      {view.askedAgain !== undefined && (
+        <Text size="sm" weight="medium">
+          {view.askedAgain}
+        </Text>
+      )}
+
       {view.value && (
         <Column gap="xs">
           <Text size="sm" weight="medium">

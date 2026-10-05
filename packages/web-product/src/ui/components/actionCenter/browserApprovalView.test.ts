@@ -39,7 +39,7 @@ const EXTENSION: BrowserWriteApprovalExtension = {
   target: 'browser',
   profileId: 'default',
   pageOrigin: 'https://shop.example.com',
-  pagePath: '/orders/4417/checkout',
+  shownPath: '/orders/4417/checkout',
   pageTitle: 'Checkout',
   action: 'type',
   element: { ref: 'e3', role: 'textbox', name: 'Note' },
@@ -121,6 +121,28 @@ describe('the approval card for a browser action', () => {
         value: { kind: 'options', length: 40, excerpt: 'Red, Green', truncated: true },
       }).value?.label,
     ).toBe('40 options — the start of the list:');
+  });
+
+  it('says an action asked for again was approved before and performed once', () => {
+    const decidedBefore = '2026-10-04T12:00:01.000Z';
+    const again: BrowserWriteApprovalExtension = {
+      ...EXTENSION,
+      action: 'click',
+      element: { ref: 'e6', role: 'button', name: 'Pay now' },
+      decidedBefore,
+    };
+    const shownAt = new Date(decidedBefore).toLocaleString(undefined, {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+    });
+    const said =
+      `This action was approved at ${shownAt} and performed once. ` +
+      'It is being asked for again.';
+    expect(browserApprovalView(again).askedAgain).toBe(said);
+    expect(render(again)).toContain(said);
+
+    expect(browserApprovalView(EXTENSION).askedAgain).toBeUndefined();
+    expect(render(EXTENSION)).not.toContain('asked for again');
   });
 
   it('says until when the request stands', () => {

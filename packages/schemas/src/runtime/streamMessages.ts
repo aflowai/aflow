@@ -886,9 +886,11 @@ export const ResumeRunCommandSchema = z.object({
   /**
    * Whether the run is attended from this command on — the session's
    * `activatedByPerson`, decided where the command is made and never from what
-   * it carries as input.
+   * it carries as input. Absent leaves the session's value as it is: a resume
+   * that knows nothing of who is present (an OAuth provider's redirect) neither
+   * attends the conversation nor leaves it unattended.
    */
-  activatedByPerson: z.boolean().default(false),
+  activatedByPerson: z.boolean().optional(),
 });
 
 export const CancelRunCommandSchema = z.object({

@@ -20,11 +20,11 @@ import { createHash } from 'node:crypto';
 
 import {
   BROWSER_APPROVAL_EXCERPT_MAX_UNITS,
-  BROWSER_APPROVAL_PATH_MAX_UNITS,
   type BrowserAction,
   type BrowserApprovalAskedBy,
   type BrowserApprovalValueSummary,
   type BrowserWriteApprovalRequestPayload,
+  browserApprovalShownPath,
   type PayloadRef,
   stableHash,
   stableStringify,
@@ -78,8 +78,6 @@ export interface ActionAsk {
   readonly frameUrl: string;
   /** The origin of that frame. */
   readonly pageOrigin: string;
-  /** That frame's path, which the approver is shown beside its origin. */
-  readonly pagePath: string;
   readonly pageTitle: string;
   readonly ref: string;
   readonly element: { readonly role: string; readonly name?: string };
@@ -253,7 +251,7 @@ export async function clearAction(
     target: 'browser',
     profileId: ask.profileId,
     pageOrigin: ask.pageOrigin,
-    pagePath: ask.pagePath.slice(0, BROWSER_APPROVAL_PATH_MAX_UNITS),
+    shownPath: browserApprovalShownPath(ask.frameUrl),
     pageTitle: ask.pageTitle.slice(0, 500),
     action: ask.action.kind satisfies BrowserAction,
     element: {
