@@ -46,6 +46,7 @@ import {
   findUnpinnedGithubApiTasks,
   emitRunUpdated,
   resolveEffectiveConcurrencyPolicy,
+  createPlanNodeStore,
 } from '@aflow/cybernetic-runtime';
 import { getOrchestratorLogger } from '../../../../../../lib/orchestratorLogger.js';
 import type { InlineHandlerArgs } from '../../types.js';
@@ -117,6 +118,28 @@ export async function handleWorkflowRunStart(
       'validation',
       false,
       { depth: runDepth, maxDepth: MAX_WORKFLOW_RUN_DEPTH },
+    );
+    return;
+  }
+
+  // A run started by a task serves the node its parent serves unless it names
+  // one, so a publication's review shows under the publication's node.
+  const planNodeId = input.planNodeId ?? parentRun?.planNodeId;
+  if (
+    input.planNodeId !== undefined &&
+    !(await createPlanNodeStore(db, args.context.tenantId as string).find(
+      spaceId,
+      input.planNodeId,
+    ))
+  ) {
+    await emitStepError(
+      args,
+      'PLAN_NODE_NOT_FOUND',
+      `No plan node "${input.planNodeId}" in this space for "${slug}" to serve. The attention block lists the open plan; plan.node.list finds the rest. Nothing was started.`,
+      startTime,
+      'validation',
+      false,
+      { planNodeId: input.planNodeId },
     );
     return;
   }
@@ -710,6 +733,7 @@ export async function handleWorkflowRunStart(
     startedAt: now,
     initiatedByUserId,
     ...(campaignId !== undefined ? { campaignId } : {}),
+    ...(planNodeId !== undefined ? { planNodeId } : {}),
     ...(effectiveConcurrencyPolicy !== undefined ? { effectiveConcurrencyPolicy } : {}),
     ...(Object.keys(initialMetadata).length > 0 ? { metadata: initialMetadata } : {}),
     ...(input.simulationRunInput ? { simulationRunInput: input.simulationRunInput } : {}),

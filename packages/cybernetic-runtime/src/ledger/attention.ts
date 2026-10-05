@@ -1,7 +1,12 @@
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq, and, desc, sql } from 'drizzle-orm';
 import type { TenantId } from '@aflow/schemas';
-import { createTenantContext, withTenantSchema, attentionItems } from '@aflow/database';
+import {
+  createTenantContext,
+  withTenantSchema,
+  attentionItems,
+  workflowRuns,
+} from '@aflow/database';
 import type { AttentionItemRow } from '@aflow/database';
 import type { AddAttentionItemInput, AttentionItemKind } from '@aflow/schemas';
 /**
@@ -74,6 +79,51 @@ export async function listPendingAttention(
       .where(and(...conditions))
       .orderBy(desc(attentionItems.createdAt))
       .limit(limit);
+  });
+}
+
+/** A pending attention item with the run it is about, as the attention block groups it. */
+export interface PendingRunAttentionItem {
+  itemId: string;
+  kind: AttentionItemKind;
+  runId: string | null;
+  /** The run's workflow, when the item names a run that is still recorded. */
+  workflowSlug: string | null;
+  /** The plan node that run serves (Plan 322 D5). */
+  planNodeId: string | null;
+  createdAt: Date;
+}
+
+/** The space's newest pending attention items, each with the slug and plan node of its run. */
+export async function listPendingRunAttention(
+  db: PostgresJsDatabase,
+  tenantId: string,
+  spaceId: string,
+  limit: number,
+): Promise<PendingRunAttentionItem[]> {
+  const tenantCtx = createTenantContext(tenantId as TenantId);
+  return withTenantSchema(db, tenantCtx, async (tx) => {
+    const rows = await tx
+      .select({
+        itemId: attentionItems.id,
+        kind: attentionItems.kind,
+        runId: attentionItems.relatedRunId,
+        workflowSlug: workflowRuns.workflowSlug,
+        planNodeId: workflowRuns.planNodeId,
+        createdAt: attentionItems.createdAt,
+      })
+      .from(attentionItems)
+      .leftJoin(workflowRuns, eq(workflowRuns.runId, attentionItems.relatedRunId))
+      .where(
+        and(
+          sql`${attentionItems.consumedAt} IS NULL`,
+          eq(attentionItems.tenantId, tenantId),
+          eq(attentionItems.spaceId, spaceId),
+        ),
+      )
+      .orderBy(desc(attentionItems.createdAt))
+      .limit(limit);
+    return rows.map((row) => ({ ...row, kind: row.kind as AttentionItemKind }));
   });
 }
 

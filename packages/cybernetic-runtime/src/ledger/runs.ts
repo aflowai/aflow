@@ -15,6 +15,8 @@ export interface RecordRunStartParams {
   /** 104d Phase 3: user who initiated this run. NULL for system/platform runs. */
   initiatedByUserId?: string | undefined;
   campaignId?: string | undefined;
+  /** The plan node the run serves (Plan 322 D5). */
+  planNodeId?: string | undefined;
   /** Plan 269 D5 — set ONLY by the eval-batch launcher; marks a frozen trial. */
   evalBatchId?: string | undefined;
   /**
@@ -98,6 +100,7 @@ export async function recordRunStart(
       schedulerCursorDeadline: new Date(params.startedAt.getTime() + DEFAULT_STALLED_AFTER_MS),
       ...(params.initiatedByUserId ? { initiatedByUserId: params.initiatedByUserId } : {}),
       ...(params.campaignId ? { campaignId: params.campaignId } : {}),
+      ...(params.planNodeId ? { planNodeId: params.planNodeId } : {}),
       ...(params.evalBatchId ? { evalBatchId: params.evalBatchId } : {}),
       ...(params.simulationRunInput ? { simulationRunInputJson: params.simulationRunInput } : {}),
       ...(params.agentVersionPins ? { agentVersionPins: params.agentVersionPins } : {}),

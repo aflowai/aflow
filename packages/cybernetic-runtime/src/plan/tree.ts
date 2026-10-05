@@ -132,6 +132,34 @@ export async function checkPlacement(
     : { outcome: 'clear' };
 }
 
+/** Each node's parent (null for a root); a node that is not there is absent. */
+export type ReadPlanParents = (nodeIds: readonly string[]) => Promise<Map<string, string | null>>;
+
+/**
+ * The root each of `nodeIds` sits under (a root is its own), read a level at a
+ * time for all of them at once, at most `maxDepth` levels up. A node that is
+ * not there, or whose walk passes the bound, is left out.
+ */
+export async function findPlanRoots(
+  nodeIds: readonly string[],
+  readParents: ReadPlanParents,
+  maxDepth: number,
+): Promise<Map<string, string>> {
+  const roots = new Map<string, string>();
+  let climbing = new Map([...new Set(nodeIds)].map((id) => [id, id]));
+  for (let depth = 0; depth <= maxDepth && climbing.size > 0; depth++) {
+    const parents = await readParents([...new Set(climbing.values())]);
+    const next = new Map<string, string>();
+    for (const [origin, at] of climbing) {
+      const parent = parents.get(at);
+      if (parent === null) roots.set(origin, at);
+      else if (parent !== undefined) next.set(origin, parent);
+    }
+    climbing = next;
+  }
+  return roots;
+}
+
 // ============================================================================
 // Reading order
 // ============================================================================

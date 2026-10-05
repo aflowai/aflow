@@ -9,7 +9,9 @@ import type { Redis } from 'ioredis';
 import {
   isClosedPlanNodeStatus,
   PLAN_NODE_CHILDREN_LIMIT,
+  PLAN_NODE_LINKS_LIMIT,
   PLAN_NODE_LIST_DEFAULT_LIMIT,
+  PLAN_NODE_RUNS_LIMIT,
   PLAN_NODE_PROSE_MAX_CHARS,
   PLAN_NODE_UPDATE_FIELDS,
   PLAN_TREE_DEPTH_LIMIT,
@@ -18,6 +20,8 @@ import {
   type PlanNode,
   type PlanNodeCreateInput,
   type PlanNodeGetOutput,
+  type PlanNodeLink,
+  type PlanNodeLinkInput,
   type PlanNodeListInput,
   type PlanNodeListOutput,
   type PlanNodeRefusalDetails,
@@ -25,7 +29,7 @@ import {
   type PlanNodeUpdateInput,
 } from '@aflow/schemas';
 import { bumpAttentionGeneration } from '../attentionCache.js';
-import { orderPlanTree, type PlanTreeWalkBounds } from './tree.js';
+import { findPlanRoots, orderPlanTree, type PlanTreeWalkBounds } from './tree.js';
 import type { PlanNodePatch, PlanNodeStore, PlanPlacementRefusal } from './store.js';
 
 /** How far any read of a space's plan walks the tree. */
@@ -41,7 +45,8 @@ export type PlanOpErrorCode =
   | 'PLAN_NODE_TOO_DEEP'
   | 'PLAN_NODE_OPEN_HAS_NO_OUTCOME'
   | 'PLAN_NODE_UNCHANGED'
-  | 'PLAN_NODE_NOTE_TOO_LONG';
+  | 'PLAN_NODE_NOTE_TOO_LONG'
+  | 'PLAN_NODE_LINK_EXISTS';
 
 export interface PlanOpError {
   ok: false;
@@ -340,12 +345,27 @@ export async function getPlanNode(
 ): Promise<PlanOpResult<PlanNodeGetOutput>> {
   const node = await ctx.store.find(ctx.spaceId, nodeId);
   if (!node) return notFound(nodeId);
-  const { children, total } = await ctx.store.listChildren(
-    ctx.spaceId,
-    nodeId,
-    PLAN_NODE_CHILDREN_LIMIT,
-  );
-  return { ok: true, node, children, childrenTotal: total };
+  // Every status: a run in flight for a node closed under it is still in flight.
+  const subtree = await ctx.store.walk(ctx.spaceId, { rootId: nodeId, ...PLAN_TREE_WALK_BOUNDS });
+  const [children, links, runs] = await Promise.all([
+    ctx.store.listChildren(ctx.spaceId, nodeId, PLAN_NODE_CHILDREN_LIMIT),
+    ctx.store.listLinks(ctx.spaceId, nodeId, PLAN_NODE_LINKS_LIMIT),
+    ctx.store.listRunsServing(
+      ctx.spaceId,
+      subtree.nodes.map((n) => n.nodeId),
+      PLAN_NODE_RUNS_LIMIT,
+    ),
+  ]);
+  return {
+    ok: true,
+    node,
+    children: children.children,
+    childrenTotal: children.total,
+    links: links.links,
+    linksTotal: links.total,
+    runs: runs.runs,
+    runsTotal: runs.total,
+  };
 }
 
 export async function listPlanNodes(
@@ -360,7 +380,9 @@ export async function listPlanNodes(
     return notFound(start.rootId, 'root');
   }
   // A list of open nodes walks through open nodes only, so the walk's node
-  // ceiling counts what the caller is shown rather than closed history.
+  // ceiling counts what the caller is shown rather than closed history. A
+  // named root is read whatever its status, so a closed one lists the open
+  // work under it, and is itself listed only if its status was asked for.
   const openOnly = [...statuses].every((status) => !isClosedPlanNodeStatus(status));
   const walk = await ctx.store.walk(ctx.spaceId, {
     ...start,
@@ -380,4 +402,84 @@ export async function listPlanNodes(
     nodes: matching.slice(0, limit),
     ...(truncated !== undefined ? { truncated } : {}),
   };
+}
+
+// ============================================================================
+// plan.node.link — and the links a run serving a node leaves when it ends
+// ============================================================================
+
+export async function linkPlanNode(
+  ctx: PlanWriteContext,
+  input: PlanNodeLinkInput,
+): Promise<PlanOpResult<{ link: PlanNodeLink }>> {
+  const inserted = await ctx.store.insertLink(ctx.spaceId, {
+    nodeId: input.nodeId,
+    kind: input.kind,
+    ref: input.ref,
+    label: input.label ?? null,
+  });
+  switch (inserted.outcome) {
+    case 'node_not_found':
+      return notFound(input.nodeId);
+    case 'exists':
+      return {
+        ok: false,
+        code: 'PLAN_NODE_LINK_EXISTS',
+        message:
+          `Plan node "${input.nodeId}" already links ${input.kind} "${input.ref}", so nothing was written. ` +
+          'A record is linked to a node once; plan.node.get lists what is linked.',
+        details: { ...inserted.link },
+      };
+    case 'inserted':
+      return written(ctx, { ok: true as const, link: inserted.link });
+  }
+}
+
+export interface EndedPlanRun {
+  nodeId: string;
+  runId: string;
+  slug: string;
+  status: 'completed' | 'failed' | 'cancelled';
+  /** The pull request the run opened or found open, as its promoted output names it. */
+  pullRequestUrl?: string;
+}
+
+/**
+ * Link a run serving a node to that node as it ends, and the pull request it
+ * holds. Either already linked — a run ends once, and a branch appended to
+ * keeps its pull request — is left as it stands; a node that is gone takes
+ * nothing.
+ */
+export async function linkEndedRun(ctx: PlanWriteContext, run: EndedPlanRun): Promise<void> {
+  const links = [
+    { kind: 'run' as const, ref: run.runId, label: `${run.slug} ${run.status}` },
+    ...(run.pullRequestUrl !== undefined
+      ? [
+          {
+            kind: 'pull_request' as const,
+            ref: run.pullRequestUrl,
+            label: `from ${run.slug} run ${run.runId}`,
+          },
+        ]
+      : []),
+  ];
+  let wrote = false;
+  for (const link of links) {
+    const inserted = await ctx.store.insertLink(ctx.spaceId, { nodeId: run.nodeId, ...link });
+    if (inserted.outcome === 'node_not_found') return;
+    wrote ||= inserted.outcome === 'inserted';
+  }
+  if (wrote) await bumpAttentionGeneration(ctx.redis, ctx.tenantId, ctx.spaceId);
+}
+
+/** The root each node sits under, a root being its own; a node not in the space is absent. */
+export function findPlanRootsOf(
+  ctx: PlanReadContext,
+  nodeIds: readonly string[],
+): Promise<Map<string, string>> {
+  return findPlanRoots(
+    nodeIds,
+    (ids) => ctx.store.parentsOf(ctx.spaceId, ids),
+    PLAN_TREE_DEPTH_LIMIT,
+  );
 }

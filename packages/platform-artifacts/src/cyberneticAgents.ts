@@ -703,6 +703,7 @@ function buildCyberneticHelmsman(): CapabilityFlowDefinition {
               'plan.node.update',
               'plan.node.get',
               'plan.node.list',
+              'plan.node.link',
               // Memory working set (query/get/put/patch; delete/mkdir/run_output
               // are rare or redundant → discoverable).
               'memory.store.query',

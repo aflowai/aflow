@@ -28,6 +28,7 @@ import {
   writeAttentionItem,
 } from './helpers.js';
 import { notifyWaiters } from './waiters.js';
+import { linkEndedRunToPlanNode } from './planLinks.js';
 import type { HarnessDeps } from './types.js';
 
 export async function pauseRunForTask(
@@ -372,6 +373,14 @@ export async function completeRun(
   } catch (err) {
     log.warn(
       `[completeRun] post-run hooks failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
+  try {
+    await linkEndedRunToPlanNode(deps, tenantIdStr, run, terminalStatus);
+  } catch (err) {
+    log.warn(
+      `[completeRun] linking the run to plan node ${run.planNodeId ?? '(none)'} failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
     );
   }
 

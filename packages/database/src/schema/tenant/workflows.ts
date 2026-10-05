@@ -52,6 +52,12 @@ export const workflowRuns = pgTable('workflow_runs', {
   scoreProvenance: jsonb('score_provenance'),
   campaignId: uuid('campaign_id'),
   /**
+   * The plan node this run serves (Plan 322 D5), named at start or carried
+   * from the run that started it. No foreign key, as with `campaign_id`: the
+   * run's record stands whatever becomes of the plan.
+   */
+  planNodeId: uuid('plan_node_id'),
+  /**
    * Plan 269 D5 — frozen-mode marker. Set ONLY by the eval-batch launcher;
    * NULL for every production run. When set: learnings injection resolves to
    * the case fixture only, Coach/candidate/score post-run hooks are off,

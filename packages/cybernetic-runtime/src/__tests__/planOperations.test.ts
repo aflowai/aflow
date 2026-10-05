@@ -14,6 +14,8 @@ import {
 import {
   createPlanNode,
   getPlanNode,
+  linkEndedRun,
+  linkPlanNode,
   listPlanNodes,
   updatePlanNode,
   type PlanWriteContext,
@@ -875,5 +877,167 @@ describe('getPlanNode / listPlanNodes', () => {
       { rootId: '5e1d0000-0000-4000-8000-00000000dead' },
     );
     expect(result).toMatchObject({ ok: false, code: 'PLAN_NODE_NOT_FOUND' });
+  });
+
+  it('lists the open work under a closed root, whose own status filters nothing below it', async () => {
+    const root = await created({ title: '315 · Local first-run ergonomics' });
+    const open = await created({ parentId: root.nodeId, title: 'F114 findings out of the file' });
+    await created({ parentId: open.nodeId, title: 'F114.a' });
+    const shut = await created({ parentId: root.nodeId, title: 'F113 closed' });
+    await updatePlanNode(session('session-a'), {
+      nodeId: shut.nodeId,
+      expectedRevision: 1,
+      status: 'done',
+      outcome: 'Met.',
+    });
+    await updatePlanNode(session('session-a'), {
+      nodeId: root.nodeId,
+      expectedRevision: 1,
+      status: 'done',
+      outcome: 'The stream’s criteria are met; its findings stay open.',
+    });
+
+    const listed = await listPlanNodes({ store, spaceId: SPACE }, { rootId: root.nodeId });
+    expect(listed.ok && listed.nodes.map((n) => n.title)).toEqual([
+      'F114 findings out of the file',
+      'F114.a',
+    ]);
+
+    const withRoot = await listPlanNodes(
+      { store, spaceId: SPACE },
+      { rootId: root.nodeId, status: ['active', 'done'] },
+    );
+    expect(withRoot.ok && withRoot.nodes.map((n) => n.title)).toEqual([
+      '315 · Local first-run ergonomics',
+      'F114 findings out of the file',
+      'F114.a',
+      'F113 closed',
+    ]);
+  });
+});
+
+describe('plan.node.link and what get shows of a node’s work (Plan 322 P1)', () => {
+  const RUN = '0b7c1d2e-3f40-4a51-8b62-7c83d94ea5f6';
+  const PR = 'https://github.com/aflowai/aflow/pull/80';
+
+  it('links a record to a node once, and get lists the links newest first', async () => {
+    const node = await created();
+    const first = await linkPlanNode(session('session-a'), {
+      nodeId: node.nodeId,
+      kind: 'finding',
+      ref: 'F114',
+      label: 'Findings out of the plan file',
+    });
+    expect(first).toMatchObject({ ok: true, link: { kind: 'finding', ref: 'F114' } });
+    await linkPlanNode(session('session-a'), {
+      nodeId: node.nodeId,
+      kind: 'pull_request',
+      ref: PR,
+    });
+
+    const again = await linkPlanNode(session('session-b'), {
+      nodeId: node.nodeId,
+      kind: 'finding',
+      ref: 'F114',
+    });
+    expect(again).toMatchObject({
+      ok: false,
+      code: 'PLAN_NODE_LINK_EXISTS',
+      details: { nodeId: node.nodeId, kind: 'finding', ref: 'F114' },
+    });
+
+    const got = await getPlanNode({ store, spaceId: SPACE }, node.nodeId);
+    expect(got).toMatchObject({ ok: true, linksTotal: 2 });
+    expect(got.ok && got.links.map((l) => l.kind)).toEqual(['pull_request', 'finding']);
+  });
+
+  it('refuses a node that does not exist, or lives in another space', async () => {
+    const elsewhere = store.seed(OTHER_SPACE, { title: 'Another space’s node' });
+    for (const nodeId of ['5e1d0000-0000-4000-8000-00000000dead', elsewhere.nodeId]) {
+      const result = await linkPlanNode(session('session-a'), { nodeId, kind: 'run', ref: RUN });
+      expect(result).toMatchObject({ ok: false, code: 'PLAN_NODE_NOT_FOUND', details: { nodeId } });
+    }
+    expect(store.links).toHaveLength(0);
+  });
+
+  it('a link bumps the attention generation; a refused one does not', async () => {
+    const node = await created();
+    const before = (await getAttentionCache(redis, TENANT, SPACE)).generation;
+    await linkPlanNode(session('session-a'), { nodeId: node.nodeId, kind: 'finding', ref: 'F1' });
+    const after = (await getAttentionCache(redis, TENANT, SPACE)).generation;
+    expect(after).not.toBe(before);
+    await linkPlanNode(session('session-a'), { nodeId: node.nodeId, kind: 'finding', ref: 'F1' });
+    expect((await getAttentionCache(redis, TENANT, SPACE)).generation).toBe(after);
+  });
+
+  it('get lists the runs in flight for the node and every node under it, closed or not', async () => {
+    const root = await created();
+    const child = await created({ parentId: root.nodeId, title: 'F114' });
+    const done = await created({ parentId: child.nodeId, title: 'F114.a' });
+    await updatePlanNode(session('session-a'), {
+      nodeId: done.nodeId,
+      expectedRevision: 1,
+      status: 'done',
+      outcome: 'Met.',
+    });
+    const other = await created({ title: '320 · Browser' });
+    const run = (runId: string, nodeId: string, status: string, startedAt: string) => ({
+      runId,
+      slug: 'publish-local-changes',
+      status,
+      nodeId,
+      spaceId: SPACE,
+      startedAt,
+    });
+    store.runs.push(
+      run('run-on-root', root.nodeId, 'running', '2026-10-05T08:00:00.000Z'),
+      run('run-on-closed-child', done.nodeId, 'paused', '2026-10-05T09:00:00.000Z'),
+      run('run-ended', child.nodeId, 'completed', '2026-10-05T10:00:00.000Z'),
+      run('run-elsewhere', other.nodeId, 'paused', '2026-10-05T11:00:00.000Z'),
+    );
+
+    const got = await getPlanNode({ store, spaceId: SPACE }, root.nodeId);
+    expect(got).toMatchObject({ ok: true, runsTotal: 2 });
+    expect(got.ok && got.runs.map((r) => [r.runId, r.nodeId])).toEqual([
+      ['run-on-closed-child', done.nodeId],
+      ['run-on-root', root.nodeId],
+    ]);
+  });
+});
+
+describe('linkEndedRun — a run serving a node links itself and its pull request as it ends', () => {
+  const PR = 'https://github.com/aflowai/aflow/pull/81';
+
+  it('links the run with how it ended, and the pull request it holds, once each', async () => {
+    const node = await created();
+    const ended = {
+      nodeId: node.nodeId,
+      runId: '0b7c1d2e-3f40-4a51-8b62-7c83d94ea5f6',
+      slug: 'publish-local-changes',
+      status: 'completed' as const,
+      pullRequestUrl: PR,
+    };
+    await linkEndedRun(session('harness'), ended);
+    // A second publication appended onto the same branch holds the same pull request.
+    await linkEndedRun(session('harness'), {
+      ...ended,
+      runId: '1c8d2e3f-4051-4b62-9c73-8d94ea05b6a7',
+    });
+
+    expect(store.links.map((l) => [l.kind, l.ref, l.label])).toEqual([
+      ['run', ended.runId, 'publish-local-changes completed'],
+      ['pull_request', PR, `from publish-local-changes run ${ended.runId}`],
+      ['run', '1c8d2e3f-4051-4b62-9c73-8d94ea05b6a7', 'publish-local-changes completed'],
+    ]);
+  });
+
+  it('leaves a node that is gone untouched', async () => {
+    await linkEndedRun(session('harness'), {
+      nodeId: '5e1d0000-0000-4000-8000-00000000dead',
+      runId: '0b7c1d2e-3f40-4a51-8b62-7c83d94ea5f6',
+      slug: 'commission-change',
+      status: 'failed',
+    });
+    expect(store.links).toHaveLength(0);
   });
 });

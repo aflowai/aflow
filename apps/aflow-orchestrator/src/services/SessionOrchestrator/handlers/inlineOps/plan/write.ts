@@ -1,10 +1,17 @@
 import {
   PlanNodeCreateInputSchema,
+  PlanNodeLinkInputSchema,
   PlanNodeUpdateInputSchema,
   type PlanNodeCreateOutput,
+  type PlanNodeLinkOutput,
   type PlanNodeUpdateOutput,
 } from '@aflow/schemas';
-import { createPlanNode, updatePlanNode, type PlanWriteContext } from '@aflow/cybernetic-runtime';
+import {
+  createPlanNode,
+  linkPlanNode,
+  updatePlanNode,
+  type PlanWriteContext,
+} from '@aflow/cybernetic-runtime';
 import { getDatabase } from '@aflow/database';
 import { getSessionStateSafe } from '@aflow/redis';
 import { readDurableSessionCreatedBy } from '../../../../cybernetic/harness/helpers.js';
@@ -61,5 +68,20 @@ export async function handlePlanNodeUpdate(
     return;
   }
   const output: PlanNodeUpdateOutput = { node: result.node };
+  await emitStepSuccess(args, output as unknown as Record<string, unknown>, startTime);
+}
+
+export async function handlePlanNodeLink(
+  args: InlineHandlerArgs,
+  startTime: number,
+): Promise<void> {
+  const input = await parsePlanInput(args, PlanNodeLinkInputSchema, startTime);
+  if (!input) return;
+  const result = await linkPlanNode(planWriteContext(args), input);
+  if (!result.ok) {
+    await emitPlanError(args, result, startTime);
+    return;
+  }
+  const output: PlanNodeLinkOutput = { link: result.link };
   await emitStepSuccess(args, output as unknown as Record<string, unknown>, startTime);
 }

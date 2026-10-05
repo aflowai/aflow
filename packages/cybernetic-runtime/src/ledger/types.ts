@@ -23,6 +23,8 @@ export interface WorkflowRunSummary {
   score: number | null;
   /** Frozen-mode marker (Plan 269 D5) — NULL for every production run. */
   evalBatchId: string | null;
+  /** The plan node the run serves (Plan 322 D5). */
+  planNodeId?: string;
 }
 
 /** Full run detail including task rows. */
@@ -87,4 +89,6 @@ export interface ActiveRunWithTaskCounts {
   liveTasks: number;
   scheduledTasks: number;
   pausedTasks: number;
+  /** The plan node the run serves (Plan 322 D5). */
+  planNodeId?: string;
 }

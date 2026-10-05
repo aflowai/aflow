@@ -108,7 +108,7 @@ describe('deriveActiveAppletSummaries', () => {
     const summaries = deriveActiveAppletSummaries(items, new Map());
     expect(summaries).toHaveLength(8);
 
-    const text = renderAttentionContext(contextWith(summaries, 10));
+    const text = renderAttentionContext(contextWith(summaries, 10), { planRootIds: [] });
     expect(text).toContain('Active applets:');
     expect(text).toContain('... and 2 more — use `ui.applet.list`');
   });
@@ -122,7 +122,7 @@ describe('deriveActiveAppletSummaries', () => {
     expect(summaries).toHaveLength(1);
     expect(summaries[0]!.appletKey).toBe('live-game');
 
-    const text = renderAttentionContext(contextWith(summaries, 1));
+    const text = renderAttentionContext(contextWith(summaries, 1), { planRootIds: [] });
     expect(text).not.toContain(ended.instance.instanceId);
     expect(text).not.toContain(archived.instance.instanceId);
     expect(text).toContain(active.instance.instanceId);
@@ -141,7 +141,7 @@ describe('deriveActiveAppletSummaries', () => {
       waitingOn: 'Sara',
     });
 
-    const text = renderAttentionContext(contextWith(summaries, 1));
+    const text = renderAttentionContext(contextWith(summaries, 1), { planRootIds: [] });
     expect(text).toContain('- chess "Karim vs Sara" (active, midgame)');
     expect(text).toContain(`[instanceId: ${item.instance.instanceId}]`);
     // waitingOn, version, and time-ago change every action (time-ago every
@@ -164,7 +164,7 @@ describe('deriveActiveAppletSummaries', () => {
     const summaries = deriveActiveAppletSummaries([item], new Map());
     expect(summaries[0]!.attention).toBeUndefined();
 
-    const text = renderAttentionContext(contextWith(summaries, 1));
+    const text = renderAttentionContext(contextWith(summaries, 1), { planRootIds: [] });
     expect(text).toContain('- work-board (active) — read with `ui.applet.get`');
     expect(text).not.toContain('ignored without a projection');
   });
@@ -177,7 +177,7 @@ describe('deriveActiveAppletSummaries', () => {
     expect(summaries[0]!.lastAction!.actorDisplay).toBe(KARIM_ID);
     expect(summaries[1]!.lastAction).toBeUndefined();
 
-    const text = renderAttentionContext(contextWith(summaries, 2));
+    const text = renderAttentionContext(contextWith(summaries, 2), { planRootIds: [] });
     expect(text).toContain('- fresh-board (active) — read with `ui.applet.get`');
   });
 });

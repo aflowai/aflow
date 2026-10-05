@@ -20,6 +20,7 @@ import type { TenantId } from '@aflow/schemas';
 import { appendEntityEvent } from '@aflow/redis';
 import { assembleHelmsmanPrompt, type HelmsmanCapabilities } from './helmsmanPrompt.js';
 import { buildHelmsmanAttention, renderAttentionContext } from './attentionBuilder.js';
+import { loadConversationPlanRoots } from './plan/attention.js';
 import { getCyberneticLogger } from './logger.js';
 import { emitPhaseIfChanged } from './interactionPhase.js';
 
@@ -143,6 +144,8 @@ export function resolveActiveMemoryInjection(
 export async function buildCyberneticTurnOverrides(params: {
   tenantId: string;
   spaceId: string;
+  /** The Helmsman conversation the turn is in: the attention block is rendered for it. */
+  sessionId: string;
   spaceName: string;
   directives: EntityDirectives;
   db: PostgresJsDatabase;
@@ -211,7 +214,21 @@ export async function buildCyberneticTurnOverrides(params: {
     db,
     redis,
   });
-  const attentionText = renderAttentionContext(attention);
+  // Read per turn, not cached with the block: it is this conversation's, and
+  // the block is the space's.
+  const planRootIds = await loadConversationPlanRoots({
+    db,
+    tenantId,
+    spaceId,
+    sessionId: params.sessionId,
+  }).catch((err: unknown) => {
+    logger.warn(
+      "buildCyberneticTurnOverrides: the conversation's plan roots could not be read; every run in the plan reads as another's: " +
+        (err instanceof Error ? err.message : String(err)),
+    );
+    return [];
+  });
+  const attentionText = renderAttentionContext(attention, { planRootIds });
 
   let activeMemory: ActiveMemoryInjection | undefined;
   try {

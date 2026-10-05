@@ -3,9 +3,12 @@ import {
   PLAN_NODE_POSITION_MAX,
   PLAN_TREE_DEPTH_LIMIT,
   type PlanNode,
+  type PlanNodeLink,
+  type PlanNodeRun,
   type PlanNodeSummary,
 } from '@aflow/schemas';
 import {
+  PLAN_NODE_RUN_STATUSES,
   planNoteHead,
   type PlanNodeInsert,
   type PlanNodeMove,
@@ -28,6 +31,9 @@ import {
  */
 export class InMemoryPlanNodeStore implements PlanNodeStore {
   readonly nodes = new Map<string, PlanNode>();
+  readonly links: PlanNodeLink[] = [];
+  /** Runs as `workflow_runs` holds them, for the reads that join a node to its runs. */
+  readonly runs: Array<Omit<PlanNodeRun, 'status'> & { spaceId: string; status: string }> = [];
   private clock = Date.parse('2026-10-04T09:00:00.000Z');
   private placements: Promise<unknown> = Promise.resolve();
 
@@ -233,12 +239,14 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
           return node.parentId !== null && level.parentIds.includes(node.parentId);
       }
     };
+    const ofStatus = (node: PlanNode, level: PlanTreeLevel): boolean =>
+      level.kind === 'node' || statuses === undefined || statuses.includes(node.status);
     return walkPlanTree(
       (level, limit) =>
         Promise.resolve(
           this.inSpace(spaceId)
             .filter((n) => inLevel(n, level))
-            .filter((n) => statuses === undefined || statuses.includes(n.status))
+            .filter((n) => ofStatus(n, level))
             .map((n) => this.summary(n))
             .sort(bySiblingOrder)
             .slice(0, limit),
@@ -246,5 +254,52 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
       opts.rootId !== undefined ? { rootId: opts.rootId } : {},
       opts,
     );
+  };
+
+  parentsOf: PlanNodeStore['parentsOf'] = (spaceId, nodeIds) =>
+    Promise.resolve(
+      new Map(
+        this.inSpace(spaceId)
+          .filter((n) => nodeIds.includes(n.nodeId))
+          .map((n) => [n.nodeId, n.parentId]),
+      ),
+    );
+
+  insertLink: PlanNodeStore['insertLink'] = (spaceId, link) => {
+    const node = this.nodes.get(link.nodeId);
+    if (!node || node.spaceId !== spaceId) return Promise.resolve({ outcome: 'node_not_found' });
+    const held = this.links.find(
+      (l) => l.nodeId === link.nodeId && l.kind === link.kind && l.ref === link.ref,
+    );
+    if (held) return Promise.resolve({ outcome: 'exists', link: structuredClone(held) });
+    const inserted: PlanNodeLink = {
+      nodeId: link.nodeId,
+      kind: link.kind,
+      ref: link.ref,
+      ...(link.label !== null ? { label: link.label } : {}),
+      createdAt: this.tick(),
+    };
+    this.links.push(inserted);
+    return Promise.resolve({ outcome: 'inserted', link: structuredClone(inserted) });
+  };
+
+  listLinks: PlanNodeStore['listLinks'] = (spaceId, nodeId, limit) => {
+    const links = this.links
+      .filter((l) => l.nodeId === nodeId && this.nodes.get(l.nodeId)?.spaceId === spaceId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return Promise.resolve({ links: links.slice(0, limit), total: links.length });
+  };
+
+  listRunsServing: PlanNodeStore['listRunsServing'] = (spaceId, nodeIds, limit) => {
+    const runs = this.runs
+      .filter(
+        (r) =>
+          r.spaceId === spaceId &&
+          nodeIds.includes(r.nodeId) &&
+          (PLAN_NODE_RUN_STATUSES as readonly string[]).includes(r.status),
+      )
+      .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
+      .map(({ spaceId: _spaceId, ...run }) => run as PlanNodeRun);
+    return Promise.resolve({ runs: runs.slice(0, limit), total: runs.length });
   };
 }

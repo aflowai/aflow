@@ -1405,6 +1405,7 @@ export async function buildAgentTurnInput(
       cyberneticOverrides = await buildCyberneticTurnOverrides({
         tenantId: tenantId,
         spaceId: flowContextDetails.space.id,
+        sessionId: runId,
         spaceName: flowContextDetails.space.name ?? 'Unknown',
         directives: spaceDirectives as EntityDirectives,
         db: flowContextDetails.cyberneticHandles.db as PostgresJsDatabase,

@@ -43,6 +43,8 @@ const DIRECT_SPACE_ID_TABLES = [
   'entity_event_log',
   'tenant_audit_log',
   'campaigns',
+  // Before plan_nodes, whose delete would take these with it uncounted.
+  'plan_node_links',
   'plan_nodes',
   'coach_candidate_learnings',
   'coach_learnings',

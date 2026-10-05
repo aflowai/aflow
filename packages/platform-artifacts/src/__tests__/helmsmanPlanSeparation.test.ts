@@ -1,6 +1,7 @@
 /**
- * Plan 322 D3 — the plan is the Helmsman's: its four P0 operations are pinned
- * on the Helmsman's every-turn surface, and no skill may reach any of them. The
+ * Plan 322 D3 — the plan is the Helmsman's: its operations, P0's four and P1's
+ * link, are pinned on the Helmsman's every-turn surface, and no skill may reach
+ * any of them. The
  * rule is a skill-validity rule, and this probes it with a violation, so the
  * test fails the moment the rule admits one.
  */
@@ -16,7 +17,7 @@ import { CYBERNETIC_AGENTS } from '../cyberneticAgents.js';
 import { ALL_PLATFORM_WORKFLOWS } from '../skillBundles.js';
 import { SKILL_CATALOG } from '../skillCatalog.js';
 
-const PLAN_OPS = ['create', 'update', 'get', 'list'].map((verb) =>
+const PLAN_OPS = ['create', 'update', 'get', 'list', 'link'].map((verb) =>
   buildOperationId('plan', 'node', verb),
 );
 
@@ -47,7 +48,7 @@ function skillWithRunnerTools(tools: string[]): WorkflowTask[] {
 }
 
 describe('the plan is the Helmsman’s, never a Runner’s (Plan 322 D3)', () => {
-  it('pins exactly the four plan operations on the Helmsman, each a callable agent tool', () => {
+  it('pins exactly the plan operations on the Helmsman, each a callable agent tool', () => {
     const helmsman = catalogOf('cybernetic-helmsman');
     expect(helmsman.coreOperations.filter(isPlanOperation).sort()).toEqual([...PLAN_OPS].sort());
     for (const id of PLAN_OPS) {

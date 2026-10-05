@@ -175,4 +175,10 @@ describe('Commission Change — a brief to the machine’s coding agent', () => 
     ]);
     expect(operations.filter((op) => isEvalPlaneOperation(op))).toEqual([]);
   });
+
+  it('is started for its plan node by the start’s planNodeId, never by a run input of its own', () => {
+    expect(COMMISSION_CHANGE.description).toContain('started with `planNodeId`, beside its inputs');
+    expect(COMMISSION_CHANGE.description).toContain('plan.node.get');
+    expect(wf.runInputs?.map((input) => input.id)).not.toContain('planNodeId');
+  });
 });

@@ -3,6 +3,9 @@ import { buildOperationId } from '../../catalog/operationId.js';
 import {
   OPEN_PLAN_NODE_STATUSES,
   PlanNodeCreateSchema,
+  PlanNodeLinkCreateSchema,
+  PlanNodeLinkSchema,
+  PlanNodeRunSchema,
   PlanNodeSchema,
   PlanNodeStatusSchema,
   PlanNodeSummarySchema,
@@ -14,11 +17,16 @@ export const PLAN_NODE_CREATE_OPERATION_ID = buildOperationId('plan', 'node', 'c
 export const PLAN_NODE_UPDATE_OPERATION_ID = buildOperationId('plan', 'node', 'update');
 export const PLAN_NODE_GET_OPERATION_ID = buildOperationId('plan', 'node', 'get');
 export const PLAN_NODE_LIST_OPERATION_ID = buildOperationId('plan', 'node', 'list');
+export const PLAN_NODE_LINK_OPERATION_ID = buildOperationId('plan', 'node', 'link');
 
 export const PLAN_NODE_LIST_DEFAULT_LIMIT = 50;
 export const PLAN_NODE_LIST_MAX_LIMIT = 200;
 /** Children `plan.node.get` returns; `plan.node.list` with `rootId` reaches the rest. */
 export const PLAN_NODE_CHILDREN_LIMIT = 100;
+/** Links `plan.node.get` returns, newest first. */
+export const PLAN_NODE_LINKS_LIMIT = 100;
+/** Runs in flight `plan.node.get` returns for a node and those under it, newest first. */
+export const PLAN_NODE_RUNS_LIMIT = 50;
 /** The most nodes one walk of the tree reads, whatever `limit` then returns of them. */
 export const PLAN_TREE_WALK_NODE_LIMIT = 2000;
 
@@ -68,6 +76,15 @@ export const PlanNodeGetOutputSchema = z.object({
   /** Ordered by position, at most `PLAN_NODE_CHILDREN_LIMIT`. */
   children: z.array(PlanNodeSummarySchema),
   childrenTotal: z.number().int().min(0),
+  /** Newest first, at most `PLAN_NODE_LINKS_LIMIT`. */
+  links: z.array(PlanNodeLinkSchema),
+  linksTotal: z.number().int().min(0),
+  runs: z
+    .array(PlanNodeRunSchema)
+    .describe(
+      'The runs in flight for this node and every node under it, newest first — the work this stream has under way.',
+    ),
+  runsTotal: z.number().int().min(0),
 });
 export type PlanNodeGetOutput = z.infer<typeof PlanNodeGetOutputSchema>;
 
@@ -78,9 +95,15 @@ export const PlanNodeListInputSchema = z
       .min(1)
       .default([...OPEN_PLAN_NODE_STATUSES])
       .describe(
-        'Defaults to the open statuses. Open statuses alone read through open nodes only, so a node under a closed one is listed by naming that closed status too.',
+        'Defaults to the open statuses. Open statuses alone read through open nodes only, so a node under a closed one is listed by naming that closed status too — except under `rootId`, whose own status filters nothing below it.',
       ),
-    rootId: z.string().uuid().optional().describe('Only this node and those under it.'),
+    rootId: z
+      .string()
+      .uuid()
+      .optional()
+      .describe(
+        'Only this node and those under it. A closed root still lists the open work under it, and is itself listed only when its status is named.',
+      ),
     limit: z
       .number()
       .int()
@@ -114,3 +137,13 @@ export const PlanNodeListOutputSchema = z.object({
   ),
 });
 export type PlanNodeListOutput = z.infer<typeof PlanNodeListOutputSchema>;
+
+// ============================================================================
+// plan.node.link
+// ============================================================================
+
+export const PlanNodeLinkInputSchema = PlanNodeLinkCreateSchema;
+export type PlanNodeLinkInput = z.infer<typeof PlanNodeLinkInputSchema>;
+
+export const PlanNodeLinkOutputSchema = z.object({ link: PlanNodeLinkSchema });
+export type PlanNodeLinkOutput = z.infer<typeof PlanNodeLinkOutputSchema>;

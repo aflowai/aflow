@@ -5,6 +5,7 @@ import {
   integer,
   timestamp,
   index,
+  primaryKey,
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 
@@ -50,3 +51,30 @@ export const planNodes = pgTable(
 
 export type PlanNodeRow = typeof planNodes.$inferSelect;
 export type NewPlanNodeRow = typeof planNodes.$inferInsert;
+
+/**
+ * A typed reference from a plan node to the record that did or holds its work
+ * (Plan 322 P1): a run, a session, a pull request, a document, a finding or a
+ * campaign. Keyed by what it points at, so one record is linked to a node once.
+ */
+export const planNodeLinks = pgTable(
+  'plan_node_links',
+  {
+    nodeId: uuid('node_id')
+      .notNull()
+      .references(() => planNodes.id, { onDelete: 'cascade' }),
+    spaceId: uuid('space_id').notNull(),
+    /** PlanNodeLinkKind */
+    kind: text('kind').notNull(),
+    ref: text('ref').notNull(),
+    label: text('label'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.nodeId, table.kind, table.ref] }),
+    index('plan_node_links_space_node_idx').on(table.spaceId, table.nodeId),
+  ],
+);
+
+export type PlanNodeLinkRow = typeof planNodeLinks.$inferSelect;
+export type NewPlanNodeLinkRow = typeof planNodeLinks.$inferInsert;

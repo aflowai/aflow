@@ -31,16 +31,27 @@ another stream's runs.
 
 A round starts from the stream's node in the space's plan (Plan 322). Every Helmsman turn
 reads the open plan tree at the head of its attention block, so a new conversation told only
-which stream to continue opens that node with `plan.node.get` and briefs the commission from
-the node's goal and criteria, plus what the operator adds — the brief no longer restates where
-the work stands. When the round ends, `plan.node.update` records where the node now stands in
+which stream to continue reads that node first, with `plan.node.get` — its goal and criteria,
+what is linked to it, and the runs in flight for it and the nodes under it — and briefs the
+commission from the node's goal and criteria, plus what the operator adds; the brief no
+longer restates where the work stands. The round names its node: the commission is started
+with `planNodeId` beside its inputs, and so is its publication. A run started that way shows
+under its node in the attention block, the review a publication starts serves the same node,
+and each links itself to the node as it ends, the publication with the pull request it
+opened. The block is the conversation's: its own runs and their attention items sit under
+their nodes, and the work of every other stream in the space is one line —
+`other work in this space, not this conversation's: N runs, M items` — with nothing to act
+on. A conversation that has started nothing for the plan sees every run in it on that line
+until it starts one; `plan.node.get` on its node is where it finds its stream's work in
+flight. When the round ends, `plan.node.update` records where the node now stands in
 its note, against the revision the conversation read: a node another conversation wrote
 meanwhile is refused with its current state rather than overwritten, and a node is marked
 `done` only with the outcome that met its criteria.
 
 1. **Brief Helmsman**, one message, numbered. Part 1 is the commission: a run of the
-   catalog's Commission Change started with `wait: 'none'`, so the conversation stays free
-   and the commission's end wakes it with `patchRef`, `baseSha`, `merge` and `sessionRef`.
+   catalog's Commission Change started with `wait: 'none'` and the node's `planNodeId`, so
+   the conversation stays free and the commission's end wakes it with `patchRef`,
+   `baseSha`, `merge` and `sessionRef`.
    Its inputs are the binding, the model, `base` (`origin/main` for new work, the branch's
    name for a fix appended to an open pull request, with `mergeFrom: origin/main` where
    `main` has moved past it), and `task`: the findings or the slice to build, each with
@@ -58,7 +69,8 @@ meanwhile is refused with its current state rather than overwritten, and a node 
    `.aflow/` but the result file, and the agent starts or stops no process. Part 2 is the
    publication, started once the commission's end has woken the conversation: by
    `patchRef`, `baseSha` the commission's, `mergeFrom` its `merge.from` where it merged, `base: main`, the branch, owner
-   and repository, the title, started with `wait: 'none'`, and the run id reported back.
+   and repository, the title, started with `wait: 'none'` and the same `planNodeId`, and the
+   run id reported back.
    For a branch that already has a pull request, name its number for the 422.
 2. **Read the review**: `workflow.run.detail` on the child review run gives the verdict and
    every finding with file and line. `approve` means the publication pushed on its own;
