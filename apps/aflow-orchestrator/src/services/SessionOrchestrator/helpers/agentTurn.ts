@@ -76,8 +76,8 @@ import {
   type CyberneticTurnOverrides,
 } from '@aflow/cybernetic-runtime';
 import {
-  isEvalPlaneOperation,
   isOperationComposed,
+  isRunnerExcludedOperation,
   processEditionDescriptor,
   resolveRoleModel,
   resolveRoleReasoning,
@@ -775,6 +775,8 @@ export async function buildAgentTurnInput(
   // When a cybernetic workflow task declares context.tools, those tool IDs
   // flow via the delegation input as runner_tools → state variable. Here we
   // merge them into the effective coreOperations so the Runner can call them.
+  // The delegation refuses an excluded op on this channel; dropping it here
+  // too keeps it off a Runner whose state was written some other way.
   const runnerToolsVar = runtimeState.variables['runner_tools'] as
     { ref?: { kind: string; value?: unknown } } | undefined;
   if (
@@ -782,7 +784,9 @@ export async function buildAgentTurnInput(
     Array.isArray(runnerToolsVar.ref.value) &&
     runnerToolsVar.ref.value.length > 0
   ) {
-    const extraTools = runnerToolsVar.ref.value.filter((t): t is string => typeof t === 'string');
+    const extraTools = runnerToolsVar.ref.value.filter(
+      (t): t is string => typeof t === 'string' && !isRunnerExcludedOperation(t),
+    );
     if (extraTools.length > 0) {
       const existingOps = catalogConfig?.coreOperations ?? [];
       const merged = [...new Set([...existingOps, ...extraTools])];
@@ -816,14 +820,15 @@ export async function buildAgentTurnInput(
     // Tier 2 of the task grant: ops the task may promote at runtime. They stay
     // off the default surface; declaring any makes catalog.tool.promote
     // available and bounds it (via the discovery scope) to exactly this set.
-    // Plan 269 D7 — a task grant can never confer eval-plane authority: these
-    // ops feed the discovery scope's allowedOperationIds, which authorizes
-    // promotion, so an eval.* entry here would put the ruler on the subject's
-    // tool surface. Skill validity rejects the authored form; this closes the
-    // caller-supplied one.
+    // Plan 269 D7 and Plan 322 D3 — a task grant can never confer the ruler or
+    // the plan: these ops feed the discovery scope's allowedOperationIds,
+    // which authorizes promotion, so an eval.* or plan.* entry here would put
+    // it on the Runner's tool surface. Skill validity rejects the authored
+    // form; this closes the caller-supplied one.
     if (Array.isArray(grants.promotable?.operations)) {
       const ops = grants.promotable.operations.filter(
-        (op): op is string => typeof op === 'string' && op.length > 0 && !isEvalPlaneOperation(op),
+        (op): op is string =>
+          typeof op === 'string' && op.length > 0 && !isRunnerExcludedOperation(op),
       );
       if (ops.length > 0) {
         promotableOps = ops;

@@ -40,6 +40,7 @@ export const StepTypeSchema = z.enum([
   'store',
   'host', // 298: the operator's own machine, through the paired native executor
   'browser',
+  'plan',
 ]);
 
 export type StepType = z.infer<typeof StepTypeSchema>;

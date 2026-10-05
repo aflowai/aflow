@@ -28,6 +28,12 @@ import { listActiveRunsWithLiveness } from './ledger.js';
 import { getAttentionCache, setAttentionCache } from './attentionCache.js';
 import { cyberneticHookSafe } from './hookSafe.js';
 import { deriveRunLivenessFromCounts } from './scheduling/runLiveness.js';
+import {
+  loadActivePlanTree,
+  type PlanAttention,
+  type PlanAttentionNode,
+} from './plan/attention.js';
+import { createPlanNodeStore } from './plan/store.js';
 
 // ============================================================================
 // Types
@@ -126,6 +132,8 @@ export interface DegradedSkillEntry {
 }
 
 export interface HelmsmanAttentionContext {
+  /** The space's open plan tree (Plan 322 D4) — read before anything else. */
+  activePlan?: PlanAttention;
   activeWorkflowRuns: ActiveWorkflowRunSummary[];
   /** Active applet instances, last action first, capped; ended/archived never appear. */
   activeApplets?: ActiveAppletSummary[];
@@ -684,6 +692,7 @@ export async function buildHelmsmanAttention(params: {
   try {
     // Run all queries in parallel for performance
     const [
+      activePlan,
       activeWorkflowRuns,
       activeAppletScan,
       proposalCounts,
@@ -693,6 +702,14 @@ export async function buildHelmsmanAttention(params: {
       pendingAnomalyDetails,
       resolvedSkills,
     ] = await Promise.all([
+      loadActivePlanTree(createPlanNodeStore(db, tenantId), spaceId).catch((err: unknown) => {
+        getCyberneticLogger().warn('helmsmanAttention: plan-load failed', {
+          error: err instanceof Error ? err.message : String(err),
+          tenantId,
+          spaceId,
+        });
+        return undefined;
+      }),
       queryActiveWorkflowRuns(db, tenantId, spaceId),
       // One corrupt state snapshot throws inside listInstances; the applet
       // section degrades to empty rather than blanking the whole context.
@@ -734,6 +751,7 @@ export async function buildHelmsmanAttention(params: {
       }));
 
     const result: HelmsmanAttentionContext = {
+      ...(activePlan !== undefined ? { activePlan } : {}),
       activeWorkflowRuns,
       ...(activeAppletScan.applets.length > 0
         ? { activeApplets: activeAppletScan.applets, activeAppletsTotal: activeAppletScan.total }
@@ -795,12 +813,34 @@ function renderActiveAppletLine(applet: ActiveAppletSummary): string {
   return `- ${applet.appletKey}${title} (${paren}) — read with \`ui.applet.get\` ${id}`;
 }
 
+const PLAN_INDENT = '  ';
+
+/** `[execute] 315 · Local first-run ergonomics — active — next: F114 … [nodeId: …]` (Plan 322 §3.3). */
+function renderPlanNodeLine(node: PlanAttentionNode): string {
+  const note = node.noteHead !== undefined ? ` — ${node.noteHead}` : '';
+  return `${PLAN_INDENT.repeat(node.depth)}[${node.kind}] ${node.title} — ${node.status}${note} [nodeId: ${node.nodeId}]`;
+}
+
 /**
  * Render the attention context as a human-readable text block
  * suitable for injection into the Helmsman's agent turn context.
  */
 export function renderAttentionContext(attention: HelmsmanAttentionContext): string {
   const lines: string[] = [];
+
+  if (attention.activePlan && attention.activePlan.nodes.length > 0) {
+    lines.push('Active plan — open a node with `plan.node.get`:');
+    for (const node of attention.activePlan.nodes) {
+      lines.push(renderPlanNodeLine(node));
+    }
+    const more = attention.activePlan.total - attention.activePlan.nodes.length;
+    if (more > 0) {
+      const count =
+        attention.activePlan.truncated !== undefined ? `more than ${String(more)}` : String(more);
+      lines.push(`   ... and ${count} more — use \`plan.node.list\``);
+    }
+    lines.push('');
+  }
 
   // Active workflow runs
   if (attention.activeWorkflowRuns.length > 0) {

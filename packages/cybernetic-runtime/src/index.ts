@@ -163,6 +163,7 @@ export * from './campaignConfig.js';
 export * from './repoConnection.js';
 export * from './campaignViews.js';
 export * from './campaignOperations.js';
+export * from './plan/index.js';
 export * from './skillAuthoringSnapshot.js';
 export * from './skillSurfacePatch.js';
 export * from './candidateLearnings.js';

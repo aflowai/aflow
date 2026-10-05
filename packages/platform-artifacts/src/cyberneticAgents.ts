@@ -698,6 +698,11 @@ function buildCyberneticHelmsman(): CapabilityFlowDefinition {
             //    CRUD) — occasional setup, not every-turn; discoverable, and
             //    hinted next to the SpaceContext integrations inventory.
             coreOperations: [
+              // The space's plan (Plan 322): a round of work starts from its node.
+              'plan.node.create',
+              'plan.node.update',
+              'plan.node.get',
+              'plan.node.list',
               // Memory working set (query/get/put/patch; delete/mkdir/run_output
               // are rare or redundant → discoverable).
               'memory.store.query',

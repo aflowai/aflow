@@ -43,6 +43,7 @@ const DIRECT_SPACE_ID_TABLES = [
   'entity_event_log',
   'tenant_audit_log',
   'campaigns',
+  'plan_nodes',
   'coach_candidate_learnings',
   'coach_learnings',
   'repo_bindings',

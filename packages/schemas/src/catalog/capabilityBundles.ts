@@ -74,6 +74,13 @@ export const CAPABILITY_BUNDLES: readonly CapabilityBundle[] = [
     capabilityGroupIds: ['memory.store:write', 'memory.context:write'],
   },
   {
+    id: 'plan',
+    label: 'Plan',
+    hint: 'Keep the space’s plan: what is being worked on, what it is for, and when it is done.',
+    tier: 'loaded',
+    capabilityGroupIds: ['plan.node'],
+  },
+  {
     id: 'run_skills',
     label: 'Run skills',
     hint: 'Activate skills and campaigns.',
