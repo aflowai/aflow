@@ -373,8 +373,9 @@ export const BrowserPageActionRegistrations: OperationRegistration[] = [
         '`pageId` belongs to the run that opened it, and is gone after the browser executor ' +
           'restarts: an operation on it then fails with `page_gone` and the address it was last ' +
           'at — open that address again.',
-        'A profile that keeps sign-ins does not reach services on this machine (localhost, its ' +
-          'own addresses), whatever address names them.',
+        'A local address — localhost, 127.0.0.1, [::1] — works only on a port the operator ' +
+          'opened for the profile, which browser.profile.list shows as `localPorts`; every other ' +
+          'port and address of this machine is refused, whatever name reaches it.',
         'A profile may be closed to runs nobody is present for. A run is attended when a ' +
           'person’s request last set it going, or a run attended at that moment did; one a ' +
           'schedule, a webhook, a timer or an API or MCP client set going is not, and a ' +

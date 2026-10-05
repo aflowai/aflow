@@ -37,6 +37,7 @@ import { boundEntries, boundText, PageObservations } from './observations.js';
 import { type HandoffBoard, NO_BOARD } from './handoffBoard.js';
 import { OperatorWindows, type WaitForOperator, waitInWindow } from './operatorWindow.js';
 import type { HarnessReach } from './harnessReach.js';
+import { executorStackPorts, openLocalPorts, type StackOwnPorts } from './localPorts.js';
 import { localDestinationRefusal, reachRefusal } from './origins.js';
 import { applyPolicyChange } from './policyChange.js';
 import { ProfileBrowsers, type RunningProfile } from './profileBrowsers.js';
@@ -118,6 +119,8 @@ export interface BrowserDriverDeps {
   readonly startProxy?: StartEgressProxy;
   /** Tests fix it; otherwise this machine's addresses, read as each decision is made. */
   readonly classifier?: LocalAddressClassifier;
+  /** Tests fix it; otherwise the ports this executor's environment and the defaults name. */
+  readonly stackPorts?: StackOwnPorts;
   readonly now?: () => number;
   /** Waits between reads of a settling page and of the operator's window; tests advance a clock. */
   readonly sleep?: (ms: number) => Promise<void>;
@@ -152,9 +155,11 @@ export class BrowserDriver {
   private generation = 0;
   private readonly now: () => number;
   private readonly clock: SettleClock;
+  private readonly stackPorts: StackOwnPorts;
 
   constructor(private readonly deps: BrowserDriverDeps) {
     this.now = deps.now ?? Date.now;
+    this.stackPorts = deps.stackPorts ?? executorStackPorts();
     this.clock = { now: this.now, sleep: deps.sleep ?? realClock.sleep };
     this.browsers = new ProfileBrowsers({
       engine: deps.engine,
@@ -162,6 +167,7 @@ export class BrowserDriver {
       hostDir: deps.hostDir,
       startProxy: deps.startProxy ?? startEgressProxy,
       classifier: deps.classifier ?? machineAddresses,
+      stackPorts: this.stackPorts,
       pages: this.pages,
       now: this.now,
       ephemeral: (profileId) => this.ephemeral.launch(profileId),
@@ -645,6 +651,7 @@ export class BrowserDriver {
           window: profile.window,
           unattended: profile.unattended,
           openToThisRun: profileOpenToActivation(profile, scope.activatedByPerson),
+          localPorts: openLocalPorts(profile, this.stackPorts),
         };
         const running = this.browsers.get(profile.id);
         if (running === undefined) {
@@ -1071,7 +1078,9 @@ export class BrowserDriver {
     const decision = decideByName(
       egressHost(url.hostname),
       port,
-      reach !== undefined ? { reach } : {},
+      reach !== undefined
+        ? { reach }
+        : { localPorts: { opened: () => profile.localPorts, stackOwn: this.stackPorts } },
       this.deps.classifier ?? machineAddresses,
     );
     if (decision?.verdict !== 'refuse') return;

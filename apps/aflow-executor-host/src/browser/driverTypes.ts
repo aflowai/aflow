@@ -127,6 +127,8 @@ export interface ListedProfile {
   readonly unattended: boolean;
   /** False when nobody is present for the run asking and the profile takes no such run. */
   readonly openToThisRun: boolean;
+  /** Loopback ports opened to it, less any this stack serves on. */
+  readonly localPorts: number[];
   readonly running: boolean;
   readonly sites?: string[];
   readonly sitesUnknown?: 'not_started' | 'stopped';

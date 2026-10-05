@@ -374,7 +374,7 @@ describe('appliance compose web origin', () => {
   /** Read from the resolver rather than restated, so renaming a key fails here. */
   const acceptedKeys = [
     ...readFileSync(join(REPO_ROOT, 'packages/lib/src/webBaseUrl.ts'), 'utf8').matchAll(
-      /const ENV_KEYS = \[([^\]]+)\]/g,
+      /const WEB_BASE_URL_ENV_KEYS = \[([^\]]+)\]/g,
     ),
   ]
     .flatMap((match) => [...(match[1] ?? '').matchAll(/'([A-Z_]+)'/g)])

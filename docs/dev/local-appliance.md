@@ -513,6 +513,33 @@ yarn workspace @aflow/aflow-executor-host browser rule default https://mail.exam
 Either is a person's change: the application's routes refuse an API key, a
 service principal or an MCP session, and no operation an agent can call changes them.
 
+A declared profile reaches nothing on this machine until a port is opened to it.
+Open the port a dev server listens on, and Helmsman and Runners using the profile
+can load it at `localhost`, `127.0.0.1` or `[::1]` — or at a name that resolves
+only to loopback — on that port alone; every other port, and every other address
+of this machine (its LAN address, link-local, `0.0.0.0`), stays refused. The same
+list is under **This Computer → Browser**, and `browser.profile.list` tells the
+agent which ports are open:
+
+```bash
+yarn workspace @aflow/aflow-executor-host browser local-port default 5173
+yarn workspace @aflow/aflow-executor-host browser local-port default 5173 --remove
+```
+
+A page there is an origin like any other: the profile's posture and origin rules
+hold for `http://localhost:5173` as they do for any site. A port this stack serves
+on is refused, by the command, the application and the profile's proxy alike,
+even when written into the policy file by hand: the API (3000), the web
+application (3001, or 3002 run on its own), the MCP server (3100), Redis (6379,
+the appliance's 6380), Postgres (5433), pgAdmin (8080) and Redis Commander (8081),
+and wherever the environment of the process deciding moves one of them
+(`PORT`, `WEB_BASE_URL`, `MCP_PORT`, `REDIS_URL`, `DATABASE_URL`, the `AFLOW_*_PORT`
+the appliance publishes on). A page from any of them could approve the agent's own
+requests. The executor cannot see a port another process was moved to in its own
+environment — the dev stack's `.env` is not the executor's — so a service moved
+off its default is refused by the application, which reads the server's
+environment, and by the executor only where its own environment names it too.
+
 The throwaway profile reaches no more than the harness itself: the hosts allowed
 with `harness allow`, and on this machine only the ports declared for it, on
 loopback (`localhost`, `127.0.0.1`, `[::1]`) and never on a LAN address:
@@ -522,10 +549,11 @@ yarn workspace @aflow/aflow-executor-host harness browser-ports claude 5173
 yarn workspace @aflow/aflow-executor-host harness browser-ports claude --clear
 ```
 
-Declaring the appliance's own API or web port (3000 and 3001 by default) lets the
-harness's browser load the web app, which presents the instance secret to whoever
-loads it, so the harness could approve its own requests. The command warns before
-it writes such a port.
+Declaring one of this stack's own ports for a harness (the API's 3000 and the web
+application's 3001 by default, and the rest listed above) lets the harness's
+browser load it — the web app presents the instance secret to whoever loads it, so
+the harness could approve its own requests. The command warns before it writes
+such a port.
 
 A harness run needs `allowsExecution` on the binding, like any command, and the
 **Coding agents on this computer** capability, which no profile carries by

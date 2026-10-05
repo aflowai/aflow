@@ -9,6 +9,7 @@ import { AflowErrorSchema } from '@aflow/schemas';
 import { describe, expect, it } from 'vitest';
 
 import { INTERFACE_ADDRESSES_TTL_MS } from '../browser/addresses.js';
+import type { BrowserDriver } from '../browser/driver.js';
 import { BrowserDriverError } from '../browser/errors.js';
 import { browserFailure } from '../handlers/browserHandler.js';
 import { harness, profile, refusal, RUN_A, RUN_B } from './fixtures/fakeBrowser.js';
@@ -192,10 +193,17 @@ describe('a profile that keeps sign-ins and this machine', () => {
       );
       expect(refused.kind).toBe('appliance_origin');
       expect(refused.message).toContain('keeps sign-ins');
-      expect(refused.message).toContain('does not reach services on this machine');
+      expect(refused.message).toContain(
+        'reaches this machine only on the loopback ports the operator opened for it',
+      );
       expect(launches).toHaveLength(0);
     });
   }
+
+  it('lists no local port for a profile that names none', async () => {
+    const { driver } = harness();
+    expect((await driver.listProfiles(RUN_A)).map((listed) => listed.localPorts)).toEqual([[]]);
+  });
 
   it('refuses an address the machine gained after its browser started, once the TTL has passed', async () => {
     const { driver, interfaces, clock } = harness();
@@ -269,6 +277,95 @@ describe('a profile that keeps sign-ins and this machine', () => {
     );
     expect(refused.kind).toBe('appliance_origin');
     expect((await driver.list(RUN_A)).map((page) => page.pageId)).toEqual([opened.pageId]);
+  });
+});
+
+describe('a profile the operator opened local ports to', () => {
+  const open = (driver: BrowserDriver, url: string): Promise<unknown> =>
+    driver.open({ ...RUN_A, redelivered: false, profileId: 'default', url });
+
+  it('opens a page on loopback on a port in its list, by every loopback spelling', async () => {
+    const { driver, launches } = harness({ browsers: [profile({ localPorts: [5173] })] });
+    for (const url of [
+      'http://localhost:5173/',
+      'http://127.0.0.1:5173/',
+      'http://[::1]:5173/',
+      'http://app.localhost:5173/',
+    ]) {
+      await expect(open(driver, url), url).resolves.toMatchObject({ url });
+    }
+    expect(launches).toHaveLength(1);
+  });
+
+  it('refuses a port not in the list, and every other address of this machine on the one that is', async () => {
+    const { driver, interfaces } = harness({ browsers: [profile({ localPorts: [5173] })] });
+    interfaces.push('192.0.2.10');
+    for (const url of [
+      'http://localhost:5174/',
+      'http://127.0.0.1:3000/',
+      'http://192.0.2.10:5173/',
+      'http://0.0.0.0:5173/',
+      'http://169.254.169.254:5173/',
+      'http://[fe80::1]:5173/',
+    ]) {
+      const refused = await refusal(open(driver, url));
+      expect(refused.kind, url).toBe('appliance_origin');
+      expect(refused.message, url).toContain('only on the loopback ports the operator opened');
+    }
+  });
+
+  it('opens a name that resolves to loopback on a port in the list, and refuses it on another', async () => {
+    const { driver, proxies } = harness({
+      browsers: [profile({ localPorts: [5173] })],
+      world: { localHosts: new Set(['dev.example.test']) },
+    });
+    await expect(open(driver, 'http://dev.example.test:5173/')).resolves.toMatchObject({
+      url: 'http://dev.example.test:5173/',
+    });
+    const refused = await refusal(open(driver, 'http://dev.example.test:5174/'));
+    expect(refused.kind).toBe('appliance_origin');
+    expect(refused.message).toContain('resolves to 127.0.0.1');
+    expect(proxies[0]?.refusals.map((r) => `${r.host}:${String(r.port)}`)).toEqual([
+      'dev.example.test:5174',
+    ]);
+  });
+
+  it('refuses every port this stack serves on, though the policy file lists it, and lists only what is open', async () => {
+    const stack = [3000, 3001, 3002, 3100, 5433, 6379, 6380, 8080, 8081];
+    const { driver, clock } = harness({
+      browsers: [profile({ localPorts: [...stack, 5173] })],
+      world: { localHosts: new Set(['dev.example.test']) },
+    });
+    for (const port of stack) {
+      for (const host of ['localhost', '127.0.0.1', 'dev.example.test']) {
+        const url = `http://${host}:${String(port)}/`;
+        clock.now += 1_000;
+        const refused = await refusal(open(driver, url));
+        expect(refused.kind, url).toBe('appliance_origin');
+        expect(refused.message, url).toContain(`port ${String(port)} is this stack's own`);
+        expect(refused.message, url).toContain("could approve the agent's requests");
+      }
+    }
+    expect((await driver.listProfiles(RUN_A)).map((listed) => listed.localPorts)).toEqual([[5173]]);
+  });
+
+  it('holds a local origin to the same rules as any other: a deny names its host', async () => {
+    const { driver } = harness({
+      browsers: [
+        profile({
+          localPorts: [5173, 8000],
+          rules: [{ origin: 'http://localhost:5173', effect: 'deny' }],
+        }),
+      ],
+    });
+    for (const url of ['http://localhost:5173/', 'http://localhost:8000/']) {
+      const refused = await refusal(open(driver, url));
+      expect(refused.kind, url).toBe('origin_denied');
+      expect(refused.message, url).toContain('http://localhost:5173');
+    }
+    await expect(open(driver, 'http://127.0.0.1:8000/')).resolves.toMatchObject({
+      url: 'http://127.0.0.1:8000/',
+    });
   });
 });
 

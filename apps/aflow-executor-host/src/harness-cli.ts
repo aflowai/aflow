@@ -17,7 +17,7 @@ import { dirname, resolve } from 'node:path';
 import { resolveBranchPolicy } from '@aflow/schemas';
 
 import { HostPolicySchema } from './bindings.js';
-import { appliancePortWarning, parseLocalPorts } from './browserLocalPorts.js';
+import { stackPortWarning, parseLocalPorts } from './browserLocalPorts.js';
 import { LocalMcpServerSchema } from './localMcpServers.js';
 import { describeHarnessConcurrency, withHarnessConcurrency } from './harnessConcurrency.js';
 import { describePolicyKeepAwake, withKeepAwake } from './keepAwake.js';
@@ -433,7 +433,7 @@ async function setBrowserLocalPorts(id: string, given: readonly string[]): Promi
     console.error(`'${parsed.word}' is not a port: give whole numbers from 1 to 65535.`);
     process.exit(1);
   }
-  const warning = appliancePortWarning(id, parsed.ports, process.env);
+  const warning = stackPortWarning(id, parsed.ports, process.env);
   if (warning !== undefined) console.warn(warning);
   profile.browserLocalPorts = [...new Set([...profile.browserLocalPorts, ...parsed.ports])];
   await savePolicy(policy);

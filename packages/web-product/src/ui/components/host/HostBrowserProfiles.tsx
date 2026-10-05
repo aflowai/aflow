@@ -16,6 +16,7 @@ import {
   Text,
 } from '@aflow/design-system';
 import {
+  BROWSER_LOCAL_PORTS_LINE,
   BROWSER_POSTURE_LINES,
   BROWSER_UNATTENDED_LINE,
   type BrowserOriginRule,
@@ -34,6 +35,7 @@ export interface HostBrowserProfile {
   rules: BrowserOriginRule[];
   unattended: boolean;
   idleMinutes: number;
+  localPorts: number[];
   running: boolean;
   windowOpen: boolean;
   sites?: string[];
@@ -59,12 +61,12 @@ const WINDOW_OPEN_WAIT_MS = 60_000;
 interface SettingChange {
   readonly hostname: string;
   readonly profileId: string;
-  readonly field: 'posture' | 'unattended' | 'rules';
+  readonly field: 'posture' | 'unattended' | 'rules' | 'local-ports';
   readonly value: Readonly<Record<string, string>>;
 }
 
 /**
- * Posture, `unattended` and origin rules, changed where they are shown. Each
+ * Posture, `unattended`, origin rules and local ports, changed where they are shown. Each
  * change is a person's request the machine's executor writes into its policy
  * file, as `aflow browser` does; the profile shown after is the inventory the
  * machine republished, so the page shows what is in force. Loosening and
@@ -80,6 +82,7 @@ export function BrowserProfileSettings({
   const [refusal, setRefusal] = useState<string | null>(null);
   const [origin, setOrigin] = useState('');
   const [effect, setEffect] = useState<BrowserOriginRule['effect']>('deny');
+  const [port, setPort] = useState('');
 
   const settled = {
     invalidate: [HOST_STATUS_KEY],
@@ -98,7 +101,7 @@ export function BrowserProfileSettings({
     ...settled,
   });
   const remove = useApiMutation<SettingChange>({
-    path: ({ profileId }) => `/host/browsers/${profileId}/rules`,
+    path: ({ profileId, field }) => `/host/browsers/${profileId}/${field}`,
     method: 'DELETE',
     ...settled,
   });
@@ -208,6 +211,64 @@ export function BrowserProfileSettings({
             Add rule
           </Button>
         </Row>
+      </Column>
+      <Column gap="xs">
+        {profile.localPorts.map((open) => (
+          <Row key={open} gap="sm" align="center">
+            <Text variant="mono" size="sm">
+              localhost:{open}
+            </Text>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={busy}
+              onClick={() => {
+                remove.mutate({
+                  hostname,
+                  profileId: profile.id,
+                  field: 'local-ports',
+                  value: { port: String(open) },
+                });
+              }}
+            >
+              Remove
+            </Button>
+          </Row>
+        ))}
+        <Row gap="sm" align="center">
+          <Input
+            aria-label="Local port"
+            inputMode="numeric"
+            placeholder="5173"
+            value={port}
+            onChange={(event) => {
+              setPort(event.target.value);
+            }}
+          />
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={busy || port.trim() === ''}
+            onClick={() => {
+              set.mutate(
+                {
+                  hostname,
+                  profileId: profile.id,
+                  field: 'local-ports',
+                  value: { port: port.trim() },
+                },
+                {
+                  onSuccess: () => {
+                    setPort('');
+                  },
+                },
+              );
+            }}
+          >
+            Open port
+          </Button>
+        </Row>
+        <HelperText>{BROWSER_LOCAL_PORTS_LINE}</HelperText>
       </Column>
       {refusal !== null && <HelperText>{refusal}</HelperText>}
     </Column>

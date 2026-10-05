@@ -14,6 +14,7 @@ import type { LocalAddressClassifier } from './addresses.js';
 import type { ChromeLauncher, LaunchedChrome } from './chromeProcess.js';
 import type { EgressProxy, StartEgressProxy } from './egressProxy.js';
 import type { HarnessReach } from './harnessReach.js';
+import type { StackOwnPorts } from './localPorts.js';
 import { BrowserDriverError, errorText } from './errors.js';
 import type { PageTable } from './pageTable.js';
 import { ruleRefusingHost } from './rules.js';
@@ -60,6 +61,8 @@ export interface ProfileBrowsersDeps {
   readonly hostDir: string;
   readonly startProxy: StartEgressProxy;
   readonly classifier: LocalAddressClassifier;
+  /** The ports this stack serves on, which no profile's proxy admits whatever it declares. */
+  readonly stackPorts: StackOwnPorts;
   readonly pages: PageTable;
   readonly now: () => number;
   /**
@@ -237,7 +240,14 @@ export class ProfileBrowsers {
       refuseHost: (host) => ruleRefusingHost(state.profile, host),
       classifier: this.deps.classifier,
       now: this.deps.now,
-      ...(ephemeral !== undefined ? { reach: ephemeral.reach } : {}),
+      ...(ephemeral !== undefined
+        ? { reach: ephemeral.reach }
+        : {
+            localPorts: {
+              opened: () => state.profile.localPorts,
+              stackOwn: this.deps.stackPorts,
+            },
+          }),
     });
     let chrome: LaunchedChrome;
     try {

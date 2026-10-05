@@ -6,6 +6,7 @@ export * from './envMs.js';
 export * from './jsonPatch.js';
 export * from './restrictedJsonpath.js';
 export * from './webBaseUrl.js';
+export * from './stackPorts.js';
 export * from './performanceLogging.js';
 export * from './backgroundTask/runner.js';
 export * from './leasedWork/consumer.js';

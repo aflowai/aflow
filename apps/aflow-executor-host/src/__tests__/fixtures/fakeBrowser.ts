@@ -8,6 +8,7 @@
  * refused https host fails as Chrome's does; a refused plain-http one lands on
  * the proxy's 403 page, as Chrome shows it.
  */
+import { stackOwnPorts } from '@aflow/lib';
 import { BrowserProfileSchema, type BrowserProfile } from '@aflow/schemas';
 
 import { createLocalAddressClassifier } from '../../browser/addresses.js';
@@ -180,7 +181,8 @@ export class FakePage implements EnginePage {
     const parsed = new URL(url);
     // A browser fetches nothing for a `data:` address, so its proxy is never asked.
     if (parsed.protocol === 'data:') return undefined;
-    return this.proxy().check(parsed.hostname.replace(/^\[(.*)\]$/, '$1'), parsed.port);
+    const port = parsed.port !== '' || parsed.protocol !== 'http:' ? parsed.port : '80';
+    return this.proxy().check(parsed.hostname.replace(/^\[(.*)\]$/, '$1'), port);
   }
 
   /** The page moving through its own history, as a script routing a single-page application does. */
@@ -347,7 +349,9 @@ export class FakeProxy implements EgressProxy {
       decideByName(host, numericPort, this.options, classifier) ??
       decideResolved(
         host,
+        numericPort,
         [{ address: this.world.localHosts.has(host) ? '127.0.0.1' : FAKE_PUBLIC_ADDRESS }],
+        this.options,
         classifier,
       );
     if (decision.verdict !== 'refuse') return undefined;
@@ -524,6 +528,8 @@ export function harness(
     // The real ranges, with the interfaces the test sets rather than this
     // machine's, so the answer does not depend on where the test runs.
     classifier: createLocalAddressClassifier({ readInterfaces: () => interfaces, now }),
+    // The defaults alone, so the answer does not depend on the environment the test runs in.
+    stackPorts: stackOwnPorts({}),
     now,
     sleep: async (ms) => {
       clock.now += ms;

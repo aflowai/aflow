@@ -2,8 +2,8 @@
  * @vitest-environment jsdom
  */
 /**
- * A profile's settings on the machine page: posture, `unattended` and the
- * origin rules shown from the machine's inventory, and the request each
+ * A profile's settings on the machine page: posture, `unattended`, the
+ * origin rules and the local ports shown from the machine's inventory, and the request each
  * control makes — rendered through the section itself, with the design
  * system's primitives as plain elements and the query hooks recorded.
  */
@@ -64,7 +64,8 @@ vi.mock('../../hooks/useApiQuery.js', async () => {
 });
 
 const { HostBrowserProfiles, HOST_STATUS_KEY } = await import('./HostBrowserProfiles.js');
-const { BROWSER_POSTURE_LINES, BROWSER_UNATTENDED_LINE } = await import('@aflow/schemas');
+const { BROWSER_LOCAL_PORTS_LINE, BROWSER_POSTURE_LINES, BROWSER_UNATTENDED_LINE } =
+  await import('@aflow/schemas');
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -76,6 +77,7 @@ const WORK = {
   rules: [{ origin: 'https://mail.example.com', effect: 'deny' }],
   unattended: false,
   idleMinutes: 30,
+  localPorts: [5173],
   running: false,
   windowOpen: false,
 };
@@ -191,6 +193,55 @@ describe('a browser profile’s settings on the machine page', () => {
         HOST_STATUS_KEY,
       ]);
     }
+  });
+
+  it('open a local port and close one, on their route, showing the ports in force', async () => {
+    expect(container.textContent).toContain('localhost:5173');
+    expect(container.textContent).toContain(BROWSER_LOCAL_PORTS_LINE);
+
+    const port = container.querySelector<HTMLInputElement>('input[aria-label="Local port"]');
+    if (port === null) throw new Error('no port form');
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(
+        port,
+        ' 8000 ',
+      );
+      port.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      button('Open port').click();
+    });
+    expect(lastRequest('PUT')).toEqual({
+      input: {
+        hostname: 'laptop',
+        profileId: 'work',
+        field: 'local-ports',
+        value: { port: '8000' },
+      },
+      path: '/host/browsers/work/local-ports',
+      body: { hostname: 'laptop', port: '8000' },
+    });
+
+    const removes = [...container.querySelectorAll('button')].filter(
+      (b) => b.textContent === 'Remove',
+    );
+    await act(async () => {
+      removes.at(-1)?.click();
+    });
+    expect(lastRequest('DELETE')).toMatchObject({
+      path: '/host/browsers/work/local-ports',
+      body: { hostname: 'laptop', port: '5173' },
+    });
+  });
+
+  it('show why a port this stack serves on was refused', async () => {
+    const refusal =
+      "Port 3001 is this stack's own — the web application, by default — and a page from it " +
+      "could approve the agent's requests, so no browser profile is opened to it.";
+    await act(async () => {
+      (recorded.options.get('PUT') as MutationOptions).onError?.(new Error(refusal), undefined);
+    });
+    expect(container.textContent).toContain(refusal);
   });
 
   it('ask nothing for the posture already in force', async () => {

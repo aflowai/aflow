@@ -1,6 +1,6 @@
 /**
- * A browser profile's posture, `unattended` choice and origin rules, changed
- * from the machine page (Plan 320 D5).
+ * A browser profile's posture, `unattended` choice, origin rules and the
+ * loopback ports it is opened to, changed from the machine page (Plan 320 D5).
  *
  * The guarantee is that nothing an agent can reach loosens its own limits, so
  * these take a person's authenticated request and nothing else: an API key, a
@@ -24,7 +24,12 @@ import {
   HostBrowserSettingAnswerSchema,
   readHostInventory,
 } from '@aflow/redis';
-import { BrowserProfileIdSchema, BrowserProfileSchema } from '@aflow/schemas';
+import { describeStackPortOwner, stackOwnPorts } from '@aflow/lib';
+import {
+  BrowserProfileIdSchema,
+  BrowserProfileSchema,
+  browserStackPortRefusal,
+} from '@aflow/schemas';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -116,6 +121,17 @@ async function relay(
   }
 }
 
+/** Why a port asked for is never opened to a profile, when this process can tell. */
+function stackPortRefusal(requested: string): string | undefined {
+  const text = requested.trim();
+  if (!/^\d{1,5}$/.test(text)) return undefined;
+  const port = Number(text);
+  const owner = stackOwnPorts(process.env).get(port);
+  return owner === undefined
+    ? undefined
+    : browserStackPortRefusal(port, describeStackPortOwner(owner));
+}
+
 async function change(
   request: FastifyRequest,
   reply: FastifyReply,
@@ -125,6 +141,13 @@ async function change(
 ): Promise<FastifyReply> {
   if (!isInteractiveUser(request.authUser)) {
     return await reply.status(403).send(NOT_A_PERSON);
+  }
+  // The machine refuses the ports its own environment names; this process
+  // knows where it and the services configured beside it listen, which the
+  // machine may not.
+  const stackPort = setting.kind === 'local_port' ? stackPortRefusal(setting.port) : undefined;
+  if (stackPort !== undefined) {
+    return await reply.status(422).send({ error: 'BrowserSettingRefused', message: stackPort });
   }
   if ((await readHostInventory(getRedisConnection(), hostname)) === undefined) {
     return await reply.status(404).send({
@@ -248,6 +271,48 @@ export const hostBrowserSettingsRoutes: FastifyPluginAsync = async (fastify) => 
       await change(request, reply, request.body.hostname, request.params.profileId, {
         kind: 'rule_remove',
         origin: request.body.origin,
+      }),
+  );
+
+  app.put(
+    '/browsers/:profileId/local-ports',
+    {
+      config,
+      schema: {
+        tags: ['Host'],
+        summary: 'Open a loopback port on the paired machine to a browser profile',
+        description:
+          'A person’s request only, as `aflow browser local-port`. A port this stack serves on ' +
+          'is refused, here and by the machine.',
+        params: Params,
+        body: z.object({ hostname: Hostname, port: z.string().max(16) }),
+        response: RESPONSES,
+      },
+    },
+    async (request, reply) =>
+      await change(request, reply, request.body.hostname, request.params.profileId, {
+        kind: 'local_port',
+        port: request.body.port,
+      }),
+  );
+
+  app.delete(
+    '/browsers/:profileId/local-ports',
+    {
+      config,
+      schema: {
+        tags: ['Host'],
+        summary: 'Close a loopback port to a browser profile again',
+        description: 'A person’s request only, as `aflow browser local-port … --remove`.',
+        params: Params,
+        body: z.object({ hostname: Hostname, port: z.string().max(16) }),
+        response: RESPONSES,
+      },
+    },
+    async (request, reply) =>
+      await change(request, reply, request.body.hostname, request.params.profileId, {
+        kind: 'local_port_remove',
+        port: request.body.port,
       }),
   );
 };

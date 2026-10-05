@@ -67,7 +67,7 @@ export interface HostWithdrawalNotice {
 /**
  * The operator asking, from the workspace, for what `aflow browser` does on
  * the machine: a profile's window to sign in, or a change to its posture,
- * `unattended` choice or origin rules. Published only by the operator routes,
+ * `unattended` choice, origin rules or the loopback ports it is opened to. Published only by the operator routes,
  * which take a person's authenticated request — no operation dispatches it, so
  * no agent can — and acted on only by the executor of the machine it names.
  *
@@ -96,6 +96,8 @@ export const HostBrowserSettingSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('unattended'), choice: SettingWordSchema }),
   z.object({ kind: z.literal('rule'), origin: SettingWordSchema, effect: SettingWordSchema }),
   z.object({ kind: z.literal('rule_remove'), origin: SettingWordSchema }),
+  z.object({ kind: z.literal('local_port'), port: SettingWordSchema }),
+  z.object({ kind: z.literal('local_port_remove'), port: SettingWordSchema }),
 ]);
 export type HostBrowserSetting = z.infer<typeof HostBrowserSettingSchema>;
 
@@ -194,6 +196,7 @@ export const HostInventorySchema = z.object({
       rules: true,
       unattended: true,
       idleMinutes: true,
+      localPorts: true,
     }).extend({
       running: z.boolean(),
       windowOpen: z.boolean(),
