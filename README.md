@@ -1,15 +1,18 @@
 # Aflow
 
-**Your AI agents — and your coding agents — as workflows you can see, schedule and
-approve, on your own machine.**
+**An always-on agent runtime for your own machine. Skills and workflows run AI
+agents and coding agents such as Claude Code on a schedule, on a trigger or from a
+conversation.**
 
-Aflow runs agents that call your APIs, run code in sandboxes, keep memory, and
-pause for your approval. It can also hand work to the coding agent you already
-use — Claude Code or OpenCode, with Codex next — as one step among the rest. Every
-model decision and every tool call is a step you can inspect.
+Aflow keeps agents working while nobody is at the keyboard. An agent calls your
+APIs, uses a browser on your machine, runs code in sandboxes, keeps memory, and
+pauses for your approval. It hands work to the coding agent you already use —
+Claude Code or OpenCode, with Codex next — as one step among the rest. Every model
+decision and every tool call is a step you can inspect.
 
 This repository is the **local edition**: one owner, on infrastructure you control.
-No account, no licence server, and nothing phones home.
+No account, no licence server, and nothing phones home. Background work continues
+for as long as Aflow and the computer are running.
 
 > **Status:** active development. Interfaces and schemas change without deprecation
 > shims.
@@ -85,6 +88,11 @@ Setting up a harness is in the operator guide under
 
 ## What it does
 
+- **Always on.** Cron schedules, webhooks, and runs that start when another
+  finishes keep work going between conversations.
+- **A browser of its own.** An agent opens pages in Chrome on the paired machine,
+  signed in to the sites you choose, and each profile sets whether it acts or asks
+  first.
 - **Agents that delegate.** Agents choose their tools, hand work to sub-agents,
   and pick up where they left off — on OpenAI, Anthropic, Google or OpenRouter,
   with the cost of every step.
@@ -101,8 +109,6 @@ Setting up a harness is in the operator guide under
   risky API write waits until you approve the exact request that will be sent.
 - **Interfaces agents build.** Generated views and stateful applets, validated
   before they render.
-- **Scheduled and triggered.** Cron schedules, webhooks, and runs that start when
-  another finishes.
 
 Roughly 180 operations across 20+ step types. Browse them under **Catalog** in the
 app, or run `yarn catalog:export`.
