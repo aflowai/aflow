@@ -133,6 +133,7 @@ export function createPausedStepSource(deps: PausedStepSourceDeps): ActionCenter
           sessionId: row.sessionId as SessionId,
           stepExecutionId: stepExecutionId as StepExecutionId,
           input: resumeInput,
+          activatedByPerson: ctx.actorIsInteractiveUser === true,
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

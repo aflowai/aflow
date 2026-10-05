@@ -207,6 +207,7 @@ export function createStartRun(bindings: SessionOrchestratorBindings) {
           ...(existingRun?.workflowExecution
             ? { workflowExecution: existingRun.workflowExecution }
             : {}),
+          activatedByPerson: params.activatedByPerson,
         },
       );
       manifestService?.trackRun({ runId, tenantId: params.tenantId, status: 'PAUSED' });
@@ -402,6 +403,7 @@ export function createStartRun(bindings: SessionOrchestratorBindings) {
       ...(startUserMessage ? { lastMessageSeq: 1, lastActivityAt: now } : {}),
       ...(params.spaceId ? { spaceId: params.spaceId } : {}),
       ...(params.trigger ? { trigger: params.trigger } : {}),
+      activatedByPerson: params.activatedByPerson,
       ...(params.voiceMode ? { voiceMode: true } : {}),
       ...(params.actorContext ? { actorContextJson: JSON.stringify(params.actorContext) } : {}),
       ...(runGrant ? { grantJson: serializeRunAccessGrant(runGrant) } : {}),
@@ -630,6 +632,7 @@ export function createStartRun(bindings: SessionOrchestratorBindings) {
           scheduledAtMs: now,
           credentialOwnerId: params.createdBy,
           spaceId: params.spaceId,
+          activatedByPerson: params.activatedByPerson,
         });
         if (dispatched.kind === 'waiting') {
           getOrchestratorLogger().info(

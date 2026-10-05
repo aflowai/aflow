@@ -3,8 +3,10 @@ import type { WorkflowTask } from '@aflow/schemas';
 import {
   EVAL_PLANE_TASK_ERROR,
   OP_TASK_ONLY_AGENT_TOOL_ERROR,
+  PLAN_TASK_ERROR,
   validateAgentOpTaskOnlyTools,
   validateSkillEvalPlaneSeparation,
+  validateSkillPlanSeparation,
 } from '../scheduling/opTaskOnlyValidator.js';
 import { ensureCurrentSkillValidity } from '../skillValidity/skillValidity.js';
 import * as schemas from '@aflow/schemas';
@@ -163,5 +165,67 @@ describe('validateSkillEvalPlaneSeparation (Plan 269 D7 — the subject must not
     expect(validity.diagnostics.some((d) => d.code === 'skill_references_eval_plane_op')).toBe(
       true,
     );
+  });
+});
+
+describe('validateSkillPlanSeparation (Plan 322 D3 — a run never rewrites the plan it serves)', () => {
+  function opTask(operation: string): WorkflowTask {
+    return {
+      taskId: 'record',
+      name: 'Record',
+      type: 'operation',
+      goal: 'Record',
+      dependsOn: [],
+      operation,
+    } as unknown as WorkflowTask;
+  }
+
+  function grantTask(capabilities: Record<string, unknown>): WorkflowTask {
+    return {
+      taskId: 'runner',
+      name: 'Runner',
+      type: 'agent',
+      goal: 'Run',
+      dependsOn: [],
+      context: { strategy: 'static', capabilities },
+    } as unknown as WorkflowTask;
+  }
+
+  it('refuses a Runner tool surface that references plan.node.update', () => {
+    expect(validateSkillPlanSeparation([agentTask(['plan.node.update'])])).toBe(
+      PLAN_TASK_ERROR.replace('{opId}', 'plan.node.update'),
+    );
+  });
+
+  it('refuses reads too, and an operation id not registered yet (fail closed)', () => {
+    expect(validateSkillPlanSeparation([opTask('plan.node.get')])).toBe(
+      PLAN_TASK_ERROR.replace('{opId}', 'plan.node.get'),
+    );
+    expect(validateSkillPlanSeparation([opTask('plan.node.link')])).toBe(
+      PLAN_TASK_ERROR.replace('{opId}', 'plan.node.link'),
+    );
+  });
+
+  it('refuses a capability grant and the promotable ceiling', () => {
+    expect(validateSkillPlanSeparation([grantTask({ operations: ['plan.node.create'] })])).toBe(
+      PLAN_TASK_ERROR.replace('{opId}', 'plan.node.create'),
+    );
+    expect(
+      validateSkillPlanSeparation([
+        grantTask({ operations: [], promotable: { operations: ['plan.node.list'] } }),
+      ]),
+    ).toBe(PLAN_TASK_ERROR.replace('{opId}', 'plan.node.list'));
+  });
+
+  it('passes surfaces with no plan operation', () => {
+    expect(
+      validateSkillPlanSeparation([agentTask(['memory.store.get', 'workflow.ledger.get'])]),
+    ).toBeNull();
+  });
+
+  it('is enforced on the read-side validity recompute — the run-start gate', () => {
+    const validity = ensureCurrentSkillValidity({ tasks: [agentTask(['plan.node.update'])] });
+    expect(validity.status).toBe('invalid');
+    expect(validity.diagnostics.some((d) => d.code === 'skill_references_plan_op')).toBe(true);
   });
 });

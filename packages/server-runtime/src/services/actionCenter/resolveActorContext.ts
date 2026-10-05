@@ -22,6 +22,8 @@ export interface ActionCenterActor {
    *  Set from `authUser.authMethod` on REST and from the connection
    *  token's auth method on WS. */
   authMethod?: string;
+  /** From `isInteractiveUser` on REST; the WS subscription resolves nothing and leaves it out. */
+  isInteractiveUser?: boolean;
 }
 
 export async function resolveActionCenterActorContext(
@@ -36,6 +38,9 @@ export async function resolveActionCenterActorContext(
     actorUserId: actor.userId,
     actorIsTenantAdmin: actor.isTenantAdmin,
     ...(actor.authMethod !== undefined ? { actorAuthMethod: actor.authMethod } : {}),
+    ...(actor.isInteractiveUser !== undefined
+      ? { actorIsInteractiveUser: actor.isInteractiveUser }
+      : {}),
   };
 
   // 1. Space attributes — lives in the per-tenant schema. Feeds the owner

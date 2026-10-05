@@ -25,6 +25,7 @@ import {
 } from '@aflow/redis';
 import type { SessionService } from '../services/sessions.js';
 import { buildActorContext } from '../utils/actorContext.js';
+import { isInteractiveActor } from '../utils/interactiveUser.js';
 import { classifyRunServiceError, ForbiddenError } from '../lib/errors.js';
 import { assertSessionSpaceAccess } from '../lib/sessionSpaceAccess.js';
 import { recordSpeechJoin } from '../lib/sessionMembership.js';
@@ -329,6 +330,7 @@ async function wakeAgent(
     input: {},
     idempotencyKey: `wake:${eventId}`,
     actorContext,
+    activatedByPerson: isInteractiveActor(actorContext),
   });
   return true;
 }

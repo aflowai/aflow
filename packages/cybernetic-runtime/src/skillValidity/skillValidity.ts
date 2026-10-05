@@ -31,6 +31,7 @@ import { bindingStaticSchema } from '../scheduling/bindingStaticSchema.js';
 import {
   validateAgentOpTaskOnlyTools,
   validateSkillEvalPlaneSeparation,
+  validateSkillPlanSeparation,
 } from '../scheduling/opTaskOnlyValidator.js';
 import { CONTAINS_RESERVED_FIELDS } from '../evalRunnerCriterion.js';
 
@@ -196,6 +197,17 @@ export function materializeAndValidateSkillConfig(
       dimension: 'ref',
       severity: 'error',
       detail: evalPlaneError,
+    });
+  }
+
+  // Same gate, same both sides: a run may serve a plan node, never rewrite the plan (Plan 322 D3).
+  const planError = validateSkillPlanSeparation(materializedTasks);
+  if (planError) {
+    diagnostics.push({
+      code: 'skill_references_plan_op',
+      dimension: 'ref',
+      severity: 'error',
+      detail: planError,
     });
   }
 

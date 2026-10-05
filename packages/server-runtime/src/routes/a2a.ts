@@ -19,6 +19,7 @@ import {
 } from '@aflow/schemas';
 import { createSessionService, type SessionService } from '../services/sessions.js';
 import { resolveApiBaseUrl } from '../lib/apiBaseUrl.js';
+import { isInteractiveUser } from '../utils/interactiveUser.js';
 
 async function a2aAgentIdToTarget(
   db: PostgresJsDatabase,
@@ -100,6 +101,7 @@ export const a2aRoutes: FastifyPluginAsync = async (app) => {
               tenant.tenantId,
               space.spaceId,
               rpc.params as A2ASendMessageParams | undefined,
+              isInteractiveUser(request.authUser),
             );
             break;
 
@@ -172,6 +174,7 @@ async function handleSendMessage(
   tenantId: TenantId,
   spaceId: string,
   params: A2ASendMessageParams | undefined,
+  activatedByPerson: boolean,
 ): Promise<unknown> {
   if (!params?.message) {
     throw Object.assign(new Error('Missing message parameter'), A2A_ERRORS.INVALID_PARAMS);
@@ -208,6 +211,7 @@ async function handleSendMessage(
       target,
       input: { message: inputText },
       spaceId,
+      activatedByPerson,
     },
     baseUrl,
   );
@@ -363,6 +367,7 @@ async function handleSendStreamingMessage(
       target,
       input: { message: inputText },
       spaceId,
+      activatedByPerson: isInteractiveUser(request.authUser),
     },
     baseUrl,
   );

@@ -63,6 +63,28 @@ export function profileOpenToSpace(profile: BrowserProfile, spaceId: string | un
   return spaceId !== undefined && profile.spaces.includes(spaceId);
 }
 
+/** What a profile asks of the run using it: the space it is in, and whether a person set it going. */
+export interface ProfileUser {
+  readonly spaceId?: string | undefined;
+  readonly activatedByPerson?: boolean | undefined;
+}
+
+/** Whether the run may use the profile as far as who set it going goes. */
+export function profileOpenToActivation(
+  profile: BrowserProfile,
+  activatedByPerson: boolean | undefined,
+): boolean {
+  return profile.unattended || activatedByPerson === true;
+}
+
+/** Whether the run may use the profile at all: its space, and who set it going. */
+export function profileServesRun(profile: BrowserProfile, run: ProfileUser): boolean {
+  return (
+    profileOpenToSpace(profile, run.spaceId) &&
+    profileOpenToActivation(profile, run.activatedByPerson)
+  );
+}
+
 /** What a profile is looked up in: the profiles in effect, those disabled, and the browser found. */
 export interface BrowserPolicy {
   readonly browsers: ReadonlyMap<string, BrowserProfile>;
@@ -85,14 +107,14 @@ export function chromeExecutable(policy: BrowserPolicy): string {
 }
 
 /**
- * The profile a run asked for, refused when the run's space may not use it —
- * unless the machine itself is asking, as the operator's sign-in does.
+ * The profile a run asked for, refused when the run's space may not use it or
+ * nobody is present for the run and the profile takes no such run — unless the
+ * operator is the one asking, as the sign-in sitting does.
  */
 export function resolveProfile(
   policy: BrowserPolicy,
   profileId: string,
-  spaceId: string | undefined,
-  onMachine = false,
+  user: ProfileUser | 'operator',
 ): BrowserProfile {
   const profile = policy.browsers.get(profileId);
   if (profile === undefined) {
@@ -115,14 +137,27 @@ export function resolveProfile(
         'cannot add one.',
     );
   }
-  if (!onMachine && !profileOpenToSpace(profile, spaceId)) {
+  if (user === 'operator') return profile;
+  if (!profileOpenToSpace(profile, user.spaceId)) {
     const open = [...policy.browsers.values()]
-      .filter((candidate) => profileOpenToSpace(candidate, spaceId))
+      .filter((candidate) => profileOpenToSpace(candidate, user.spaceId))
       .map((candidate) => candidate.id);
     throw new BrowserDriverError(
       'profile_not_for_space',
       `Browser profile \`${profileId}\` is not open to this space. Profiles this space may ` +
         `use: ${listedIds(open)}. Which spaces a profile serves is set on the machine.`,
+    );
+  }
+  if (!profileOpenToActivation(profile, user.activatedByPerson)) {
+    throw new BrowserDriverError(
+      'profile_closed_to_unattended',
+      `Browser profile \`${profileId}\` is closed to runs nobody is present for, and this ` +
+        'run is one now: what last set it going was neither a person’s request nor a run a ' +
+        'person was present for. Nothing was done, and no call on this profile is let in ' +
+        'until a person next sets the run going, directly or through a run they are present ' +
+        'for. The operator opens the profile to such runs on the machine: ' +
+        `\`aflow browser unattended ${profileId} allow\`.`,
+      { profileId },
     );
   }
   return profile;

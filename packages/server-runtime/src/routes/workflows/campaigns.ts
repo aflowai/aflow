@@ -36,6 +36,7 @@ import {
   getDb,
   ErrorSchema,
 } from './shared.js';
+import { isInteractiveUser } from '../../utils/interactiveUser.js';
 
 /** A failed campaign operation, with the structured `details` carried through. */
 const CampaignOpErrorSchema = z.object({
@@ -236,6 +237,7 @@ export function registerWorkflowCampaignRoutes(fastify: FastifyInstance): void {
           workflowSlug: slug,
           campaignId,
           reason: request.body.reason,
+          activatedByPerson: isInteractiveUser(request.authUser),
         }).catch(() => {});
       }
       return reply.send({ campaign: result.campaign });

@@ -375,6 +375,13 @@ export const BrowserPageActionRegistrations: OperationRegistration[] = [
           'at — open that address again.',
         'A profile that keeps sign-ins does not reach services on this machine (localhost, its ' +
           'own addresses), whatever address names them.',
+        'A profile may be closed to runs nobody is present for. A run is attended when a ' +
+          'person’s request last set it going, or a run attended at that moment did; one a ' +
+          'schedule, a webhook, a timer or an API or MCP client set going is not, and a ' +
+          'sub-agent returning to the run that waited on it changes nothing. A run nobody is ' +
+          'present for is refused `BROWSER_PROFILE_CLOSED_TO_UNATTENDED` until a person next ' +
+          'sets it going, directly or through a run they are present for; browser.profile.list ' +
+          'shows `openToThisRun: false`.',
         UNTRUSTED_CONTENT,
       ],
       minimalExampleInput: { url: 'https://example.com' },

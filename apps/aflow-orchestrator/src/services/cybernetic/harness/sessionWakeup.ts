@@ -35,6 +35,7 @@ import type {
   TraceId,
   WorkflowRunWakeupEventMetadata,
 } from '@aflow/schemas';
+import { attendedAsActingRun } from '../../SessionOrchestrator/handlers/inlineOps/actingRun.js';
 import { hasUnreadRunWakeups } from '../../SessionOrchestrator/helpers/runWakeups.js';
 import { logOrchestratorError } from '../../../lib/orchestratorLogger.js';
 import type { HarnessDeps } from './types.js';
@@ -232,6 +233,9 @@ export async function wakeSessionForRunWakeups(
     traceId: (state.traceId !== undefined && state.traceId.length > 0
       ? state.traceId
       : wakeKey) as TraceId,
+    // What wakes it is a run it started, which acts as the session that
+    // anchors it is now — this one, or the anchor it took its own from.
+    activatedByPerson: attendedAsActingRun(state),
   };
 
   const claims = await resumeClaimsForStep(deps.db, { tenantId, sessionId, stepExecutionId });

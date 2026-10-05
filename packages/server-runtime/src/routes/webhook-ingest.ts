@@ -366,6 +366,7 @@ export const webhookIngestRoutes: FastifyPluginAsync = (fastify) => {
           spaceId: endpoint.spaceId,
           createdBy: endpoint.creatorUserId ?? undefined,
           trigger: 'webhook',
+          activatedByPerson: false,
           actorContext,
         },
         baseUrl,

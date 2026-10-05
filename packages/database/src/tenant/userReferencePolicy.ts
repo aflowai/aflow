@@ -87,6 +87,7 @@ export const USER_REFERENCE_POLICY: Readonly<Record<string, UserReferencePolicy>
   'action_center_items_projection.resolved_by': { kind: 'provenance' },
   'tenant_audit_log.actor_id': { kind: 'provenance' },
   'spaces.created_by': { kind: 'provenance' },
+  'plan_nodes.created_by': { kind: 'provenance' },
   'applet_instances.created_by': { kind: 'provenance' },
   // The receipt belongs to the instance's shared history; who acted is
   // provenance on it, not scope.

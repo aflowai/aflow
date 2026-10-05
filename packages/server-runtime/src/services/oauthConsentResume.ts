@@ -191,6 +191,8 @@ export async function resumeSessionsForCompletedConsent(
         sessionId: row.sessionId as SessionId,
         stepExecutionId: row.currentStepExecutionId as StepExecutionId,
         input: { consentCompleted: true, completedAt: new Date().toISOString() },
+        // The provider's redirect is not a request authenticated as the person.
+        activatedByPerson: false,
       });
       resumedSessionIds.push(row.sessionId);
     } catch {

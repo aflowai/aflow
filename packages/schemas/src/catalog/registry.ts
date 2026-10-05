@@ -44,6 +44,7 @@ import { StoreListingOperationRegistrations } from '../operations/store.js';
 import { AppletOperationRegistrations } from '../applet/operations.js';
 import { EvalOperationRegistrations } from '../operations/evalOps.js';
 import { EvalBatchOperationRegistrations } from '../operations/evalBatchOps.js';
+import { PlanOperationRegistrations } from '../operations/plan/registrations.js';
 
 // ============================================================================
 // Aggregate all registrations
@@ -82,6 +83,7 @@ const ALL_REGISTRATIONS: OperationRegistration[] = [
   ...AppletOperationRegistrations,
   ...EvalOperationRegistrations,
   ...EvalBatchOperationRegistrations,
+  ...PlanOperationRegistrations,
 ];
 
 // ============================================================================
@@ -364,6 +366,26 @@ const EVAL_AUTHORING_OPERATIONS: ReadonlySet<string> = new Set(['eval.case.propo
 export function isEvalPlaneOperation(operationId: string): boolean {
   if (EVAL_AUTHORING_OPERATIONS.has(operationId)) return false;
   return operationId === 'eval' || operationId.startsWith('eval.');
+}
+
+/**
+ * Plan 322 D3 — a run may serve a plan node and may never rewrite the plan it
+ * serves. Fail-closed on the prefix: any `plan.*` id, including one added
+ * later, is the Helmsman's alone.
+ */
+export function isPlanOperation(operationId: string): boolean {
+  return operationId === 'plan' || operationId.startsWith('plan.');
+}
+
+/**
+ * Operations that never reach a Runner, through any channel: a delegation's
+ * `runner_tools`, a capability grant's direct or promotable tier, or the
+ * surface a Runner's turn is handed. Every Runner exclusion asks this rather
+ * than one plane's own predicate, so a plane added here is excluded from all
+ * of them at once.
+ */
+export function isRunnerExcludedOperation(operationId: string): boolean {
+  return isEvalPlaneOperation(operationId) || isPlanOperation(operationId);
 }
 
 // ============================================================================

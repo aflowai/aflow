@@ -121,7 +121,7 @@ import {
 import { PUBLICATION_SCRATCH_PREFIX } from '../branchCommit.js';
 import { CHECK_SCRATCH_PREFIX } from '../commitCheck.js';
 import { installRefGuard, noRefGuardMessage, refGuardReadiness } from '../refGuard.js';
-import { browserFailure } from './browserHandler.js';
+import { browserFailure, jobScopeOf } from './browserHandler.js';
 
 /**
  * Where a task that declared an output schema leaves its answer. It is inside
@@ -712,7 +712,7 @@ async function runHarness(
       const tenantId = ctx.tenantId;
       browser = await openHarnessBrowser({
         driver: browserService.driver,
-        scope: { tenantId, runId: ctx.runId, spaceId },
+        scope: { ...jobScopeOf(ctx), spaceId },
         profile: input.browser.profile,
         reach: { allowedDomains: profile.allowedDomains, localPorts: profile.browserLocalPorts },
         scratchDir,

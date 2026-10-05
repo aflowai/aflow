@@ -14,6 +14,7 @@ import type {
   SessionAgentTarget,
   SimulationRunInput,
   StepImage,
+  RunTrigger,
 } from '@aflow/schemas';
 
 // ============================================================================
@@ -107,7 +108,9 @@ export interface SessionOrchestrator {
     /** Space this run belongs to (immutable) */
     spaceId?: string;
     /** How this run was triggered */
-    trigger?: 'chat' | 'api' | 'eval' | 'mcp' | 'schedule' | 'voice' | 'webhook';
+    trigger?: RunTrigger;
+    /** Whether the run is attended from this command on — see `SessionHotState.activatedByPerson`. */
+    activatedByPerson: boolean;
     /** Whether the user is interacting via voice */
     voiceMode?: boolean;
     actorContext?: ActorContext;
@@ -143,6 +146,8 @@ export interface SessionOrchestrator {
     /** Whether the user is interacting via voice (mutable per-turn) */
     voiceMode?: boolean;
     clientMessageId?: string;
+    /** Whether the run is attended from this command on — see `SessionHotState.activatedByPerson`. */
+    activatedByPerson: boolean;
     idempotencyKey: IdempotencyKey;
   }): Promise<{ status: SessionStatus }>;
 
@@ -168,6 +173,8 @@ export interface SessionOrchestrator {
     inputRef?: PayloadRef;
     traceId: TraceId;
     actorContext?: ActorContext;
+    /** Whether the run is attended from this command on — see `SessionHotState.activatedByPerson`. */
+    activatedByPerson: boolean;
     idempotencyKey: IdempotencyKey;
   }): Promise<{ status: SessionStatus }>;
 

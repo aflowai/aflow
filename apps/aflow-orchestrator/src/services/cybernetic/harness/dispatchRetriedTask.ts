@@ -157,6 +157,7 @@ export async function dispatchRetriedTask(
         spaceId: run.spaceId,
         snoozeDelayMs,
         ...(credentialOwnerId !== undefined ? { credentialOwnerId } : {}),
+        activatedByPerson: taskAuthority.activatedByPerson,
       });
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);

@@ -29,6 +29,15 @@ another stream's runs.
 
 ## A round
 
+A round starts from the stream's node in the space's plan (Plan 322). Every Helmsman turn
+reads the open plan tree at the head of its attention block, so a new conversation told only
+which stream to continue opens that node with `plan.node.get` and briefs the commission from
+the node's goal and criteria, plus what the operator adds — the brief no longer restates where
+the work stands. When the round ends, `plan.node.update` records where the node now stands in
+its note, against the revision the conversation read: a node another conversation wrote
+meanwhile is refused with its current state rather than overwritten, and a node is marked
+`done` only with the outcome that met its criteria.
+
 1. **Brief Helmsman**, one message, numbered. Part 1 is the commission: a run of the
    catalog's Commission Change started with `wait: 'none'`, so the conversation stays free
    and the commission's end wakes it with `patchRef`, `baseSha`, `merge` and `sessionRef`.

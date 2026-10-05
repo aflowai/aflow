@@ -3,6 +3,7 @@ export type BrowserFailureKind =
   | 'unknown_profile'
   | 'profile_invalid'
   | 'profile_not_for_space'
+  | 'profile_closed_to_unattended'
   | 'appliance_origin'
   | 'origin_denied'
   | 'posture_refused'

@@ -77,6 +77,9 @@ export async function enterChildWait(
 // Leave child-wait → RUNNING (child completed or returned control)
 // ============================================================================
 
+// Ending a wait on the parent's own delegated work continues the activation
+// that delegated it, so `activatedByPerson` is left as the wait found it.
+
 export async function leaveChildWaitToRunning(
   redis: Redis,
   tenantId: string,
@@ -95,7 +98,10 @@ export async function leaveChildWaitToRunning(
           // (`getClearedDelegationStatePatch()` returns the same), so replay
           // ends with an empty array rather than a missing field — keeping
           // recovery replay byte-equivalent to live hot state.
-          runStatePatch: { status: 'RUNNING', waitingForChildSessionIds: [] },
+          runStatePatch: {
+            status: 'RUNNING',
+            waitingForChildSessionIds: [],
+          },
           clearedRunStateFields: LEAVE_CHILD_WAIT_CLEARED_FIELDS,
         },
       )
@@ -129,8 +135,14 @@ export async function leaveChildInputToWaiting(
   redis: Redis,
   tenantId: string,
   sessionId: string,
-  opts?: { fromStatus?: string },
+  opts?: {
+    fromStatus?: string;
+    /** Present when a resume relays an answer to the child: whether a person gave it. */
+    activatedByPerson?: boolean;
+  },
 ): Promise<void> {
+  const activation =
+    opts?.activatedByPerson !== undefined ? { activatedByPerson: opts.activatedByPerson } : {};
   const recoveryEvents = opts?.fromStatus
     ? await buildRunStatusChangedRecoveryEvent(
         redis,
@@ -143,6 +155,7 @@ export async function leaveChildInputToWaiting(
             status: 'WAITING_ON_CHILD',
             delegationPauseSource: 'child_running',
             pauseType: 'subflow_waiting',
+            ...activation,
           },
           clearedRunStateFields: LEAVE_CHILD_INPUT_CLEARED_FIELDS,
         },
@@ -157,6 +170,7 @@ export async function leaveChildInputToWaiting(
       status: 'WAITING_ON_CHILD',
       delegationPauseSource: 'child_running',
       pauseType: 'subflow_waiting',
+      ...activation,
       // Clear child-input fields — the child is running again
       requestedInputRef: undefined,
       pauseReason: undefined,

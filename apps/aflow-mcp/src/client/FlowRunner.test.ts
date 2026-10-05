@@ -137,3 +137,29 @@ describe('SessionRunner failure', () => {
     expect(result.error).toBe('The agent input is missing `prompt`.');
   });
 });
+
+describe('SessionRunner start', () => {
+  it('starts its run as the MCP client it is, never as a person in a conversation', async () => {
+    const posted: Array<{ path: string; body: unknown }> = [];
+    const api = {
+      get: <T>(): Promise<T> =>
+        Promise.resolve({ sessionId: SESSION_ID, status: 'SUCCEEDED' } as unknown as T),
+      post: <T>(_session: Session, path: string, body?: unknown): Promise<T> => {
+        posted.push({ path, body });
+        return Promise.resolve({ sessionId: SESSION_ID, status: 'RUNNING', eventsUrl: '' } as T);
+      },
+    } as unknown as ApiClient;
+
+    await new SessionRunner(api).run(SESSION, {
+      spaceId: SPACE_ID,
+      operationId: 'memory.store.query',
+      timeoutMs: 0,
+    });
+
+    expect(posted[0]?.path).toBe(`/v1/sessions?spaceId=${SPACE_ID}`);
+    expect(posted[0]?.body).toMatchObject({
+      mode: 'mcp',
+      target: { kind: 'platform-role', systemRole: 'mcp-runner' },
+    });
+  });
+});

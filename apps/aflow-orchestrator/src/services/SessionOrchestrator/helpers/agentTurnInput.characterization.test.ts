@@ -421,6 +421,23 @@ describe('buildAgentTurnInput — tool surface assembly', () => {
     }
   });
 
+  it('keeps the plan and the ruler off a Runner whatever its state grants', async () => {
+    const catalog: CatalogConfig = { coreOperations: ['memory.store.get'] } as CatalogConfig;
+    const turn = await renderTurn({
+      config: { catalog },
+      variables: {
+        runner_tools: inline(['memory.store.put', 'plan.node.update', 'eval.dataset.get']),
+        runner_capability_grants: inline({
+          promotable: { operations: ['plan.node.create', 'eval.dataset.list'] },
+        }),
+      },
+    });
+    expect(toolIds(turn)).toContain('memory.store.put');
+    for (const excluded of ['plan.node.update', 'eval.dataset.get', 'catalog.tool.promote']) {
+      expect(toolIds(turn)).not.toContain(excluded);
+    }
+  });
+
   it('exposes catalog.tool.promote once a task grants promotable operations', async () => {
     const withoutGrant = await renderTurn();
     const withGrant = await renderTurn({

@@ -33,5 +33,8 @@ export function buildWorkflowTimerStepJob(
       ? { credentialOwnerId: timer.credentialOwnerId }
       : {}),
     ...(timer.spaceId !== undefined ? { spaceId: timer.spaceId } : {}),
+    ...(timer.activatedByPerson !== undefined
+      ? { activatedByPerson: timer.activatedByPerson }
+      : {}),
   };
 }

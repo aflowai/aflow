@@ -15,6 +15,7 @@ export function isInlineOperation(operationId: string): boolean {
     operationId.startsWith('integration.registry.') ||
     operationId.startsWith('integration.simulation.') ||
     operationId.startsWith('store.listing.') ||
+    operationId.startsWith('plan.') ||
     operationId === 'eval.dataset.get' ||
     operationId === 'eval.dataset.list' ||
     operationId === 'eval.case.promote' ||

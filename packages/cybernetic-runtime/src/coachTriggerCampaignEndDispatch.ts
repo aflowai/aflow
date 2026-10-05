@@ -17,6 +17,8 @@ export interface TriggerCampaignEndReviewParams {
   totalRuns: number;
   campaignId: string;
   reason: CampaignEndedReason;
+  /** Whether the review session is attended — `SessionHotState.activatedByPerson`, decided by whoever ended the campaign. */
+  activatedByPerson: boolean;
   directives?: EntityDirectives;
   db: PostgresJsDatabase;
   redis: Redis;
@@ -48,6 +50,7 @@ export async function triggerCampaignEndReview(
     runId: params.runId,
     totalRuns: params.totalRuns,
     campaignId: params.campaignId,
+    activatedByPerson: params.activatedByPerson,
     ...(params.directives ? { directives: params.directives } : {}),
     db: params.db,
     redis: params.redis,
@@ -70,6 +73,8 @@ export interface MaybeTriggerCampaignEndReviewParams {
   workflowSlug: string;
   campaignId: string;
   reason: CampaignEndedReason;
+  /** As `TriggerCampaignEndReviewParams.activatedByPerson`. */
+  activatedByPerson: boolean;
   requestedBy?: string;
   rationale?: string;
   freshDispatch?: boolean;
@@ -111,6 +116,7 @@ export async function maybeTriggerCampaignEndReview(
       totalRuns: stats.totalRuns,
       campaignId,
       reason,
+      activatedByPerson: params.activatedByPerson,
       ...(directives?.success ? { directives: directives.data } : {}),
       db,
       redis,

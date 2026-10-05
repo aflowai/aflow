@@ -13,13 +13,14 @@ import {
   ADHOC_CAPSULE_KIND,
   ADHOC_ALWAYS_GRANTABLE,
   ADHOC_NEVER_GRANTABLE,
-  isEvalPlaneOperation,
+  isRunnerExcludedOperation,
   resolveRoleModel,
   resolveRoleReasoning,
 } from '@aflow/schemas';
 import { loadSpaceDirectives } from '@aflow/cybernetic-runtime';
 import { scheduleShardTimer } from '@aflow/redis';
 import { encodeInlineOpOutputRef } from './helpers.js';
+import { attendedAsActingRun } from './actingRun.js';
 import {
   addStepResult,
   addControlMessage,
@@ -41,11 +42,12 @@ import type { InlineHandlerArgs } from './types.js';
 import { requireSpaceId } from './spaceScope.js';
 
 /**
- * Every eval-plane operation a delegation config would put in reach of the
- * Runner: the runner_tools surface plus the capability grant's direct and
- * promotable operation tiers. Exported for unit tests.
+ * Every operation a delegation config would put in reach of the Runner that
+ * no Runner may hold (`isRunnerExcludedOperation`): the runner_tools surface
+ * plus the capability grant's direct and promotable operation tiers.
+ * Exported for unit tests.
  */
-export function collectEvalPlaneGrants(subflowConfig: Record<string, unknown>): string[] {
+export function collectRunnerExcludedGrants(subflowConfig: Record<string, unknown>): string[] {
   const granted = new Set<string>();
   const runnerTools = subflowConfig['runner_tools'];
   if (Array.isArray(runnerTools)) {
@@ -61,7 +63,7 @@ export function collectEvalPlaneGrants(subflowConfig: Record<string, unknown>): 
       if (typeof op === 'string') granted.add(op);
     }
   }
-  return [...granted].filter(isEvalPlaneOperation);
+  return [...granted].filter(isRunnerExcludedOperation);
 }
 
 /**
@@ -277,17 +279,19 @@ export async function handleDelegateInline(args: InlineHandlerArgs): Promise<voi
       );
     }
 
-    // Plan 269 D7 — the subject must not see the ruler: no delegated Runner,
-    // capsule or otherwise, may be granted an eval.* tool. The grant rides two
-    // channels — runner_tools (the default surface) and the capability grant's
+    // Plan 269 D7 and Plan 322 D3 — no delegated Runner, capsule or otherwise,
+    // may hold the ruler or the plan. The grant rides two channels —
+    // runner_tools (the default surface) and the capability grant's
     // operations/promotable tiers (promotable ops become live tools via
     // catalog.tool.promote) — so all of them are scanned.
     if (subflowConfig) {
-      const evalPlane = collectEvalPlaneGrants(subflowConfig);
-      if (evalPlane.length > 0) {
+      const excluded = collectRunnerExcludedGrants(subflowConfig);
+      if (excluded.length > 0) {
         throw new Error(
-          `Runners can never be granted eval-plane operations — golden datasets grade skill runs, ` +
-            `and the subject under measurement must not see the ruler: [${evalPlane.join(', ')}].`,
+          `Runners can never be granted [${excluded.join(', ')}], so this delegation was not started. ` +
+            `eval.* grades skill runs, and the subject under measurement must not see the ruler; ` +
+            `plan.* is the Helmsman's, and a run serves a plan node without rewriting the plan. ` +
+            `Delegate again without them.`,
         );
       }
     }
@@ -318,6 +322,8 @@ export async function handleDelegateInline(args: InlineHandlerArgs): Promise<voi
       }
     }
 
+    const activatedByPerson = attendedAsActingRun(parentState);
+
     // 2) Write QUEUED hot state for child session
     const queuedState: SessionHotState = {
       sessionId: childSessionId,
@@ -336,6 +342,7 @@ export async function handleDelegateInline(args: InlineHandlerArgs): Promise<voi
       ...(parentState?.createdBy ? { createdBy: parentState.createdBy } : {}),
       // Propagate actorContext so child run has it for nested subflows
       ...(parentState?.actorContextJson ? { actorContextJson: parentState.actorContextJson } : {}),
+      activatedByPerson,
       // Subflow linkage: store parent info so the orchestrator can resume
       ...(waitForCompletion
         ? {
@@ -396,6 +403,7 @@ export async function handleDelegateInline(args: InlineHandlerArgs): Promise<voi
       ...(spaceId ? { spaceId } : {}),
       ...(parentState?.createdBy ? { createdBy: parentState.createdBy } : {}),
       ...(parentActorContext ? { actorContext: parentActorContext } : {}),
+      activatedByPerson,
     });
 
     if (waitForCompletion) {

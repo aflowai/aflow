@@ -9,6 +9,7 @@ export * from './storeInstalls.js';
 export * from './spaces.js';
 export * from './workflows.js';
 export * from './campaigns.js';
+export * from './planNodes.js';
 export * from './audit.js';
 export * from './evalGolden.js';
 export * from './evalBatches.js';

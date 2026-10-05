@@ -1,4 +1,5 @@
 import { getDatabase } from '@aflow/database';
+import { getSessionState } from '@aflow/redis';
 import type { WorkflowCampaignEndInput, WorkflowCampaignEndOutput } from '@aflow/schemas';
 import {
   endCampaignInSpace,
@@ -8,6 +9,7 @@ import {
 import type { InlineHandlerArgs } from '../../types.js';
 import { emitStepSuccess, emitStepError } from '../../helpers.js';
 import { requireSpaceId } from '../../spaceScope.js';
+import { attendedAsActingRun } from '../../actingRun.js';
 
 /** Idempotent: ending an already-ended campaign returns it unchanged. */
 export async function handleWorkflowCampaignEnd(
@@ -43,6 +45,9 @@ export async function handleWorkflowCampaignEnd(
         workflowSlug: result.campaign.workflowSlug,
         campaignId: input.campaignId,
         reason,
+        activatedByPerson: attendedAsActingRun(
+          await getSessionState(args.redis, tenantIdStr, args.context.runId),
+        ),
       });
     } catch (err) {
       getCyberneticLogger().warn(

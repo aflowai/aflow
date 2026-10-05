@@ -307,6 +307,8 @@ describe('browser.page.read and browser.profile.list', () => {
             profileId: 'default',
             posture: 'autonomous',
             window: 'hidden',
+            unattended: true,
+            openToThisRun: true,
             running: false,
             sitesUnknown: 'not_started',
           },
@@ -356,11 +358,8 @@ describe('BrowserProfileSchema', () => {
     expect(BrowserProfileSchema.safeParse({ id: 'w', idleMinutes: 0 }).success).toBe(false);
   });
 
-  it('refuses `unattended: false`, saying it is not enforced yet', () => {
-    const parsed = BrowserProfileSchema.safeParse({ id: 'work', unattended: false });
-    expect(parsed.success).toBe(false);
-    expect(parsed.error?.issues[0]?.path).toEqual(['unattended']);
-    expect(parsed.error?.issues[0]?.message).toContain('`unattended: false` is not enforced yet');
+  it('takes `unattended: false`', () => {
+    expect(BrowserProfileSchema.parse({ id: 'work', unattended: false }).unattended).toBe(false);
   });
 
   it('refuses an id that is not a plain directory name', () => {

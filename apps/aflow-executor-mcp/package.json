@@ -22,10 +22,10 @@
     "@aflow/payload-store": "workspace:*",
     "@aflow/redis": "workspace:*",
     "@aflow/schemas": "workspace:*",
-    "@modelcontextprotocol/sdk": "^1.30.1"
+    "@modelcontextprotocol/sdk": "^1.31.0"
   },
   "devDependencies": {
-    "@types/node": "^22.20.4",
+    "@types/node": "^22.20.5",
     "tsx": "^4.23.15",
     "typescript": "^5.8.3",
     "vitest": "^4.1.11"

@@ -1,5 +1,5 @@
 import type { WorkflowTask } from '@aflow/schemas';
-import { getOperation, isEvalPlaneOperation } from '@aflow/schemas';
+import { getOperation, isEvalPlaneOperation, isPlanOperation } from '@aflow/schemas';
 
 /** Teaching error template — `{toolId}` is replaced at validation time. */
 export const OP_TASK_ONLY_AGENT_TOOL_ERROR =
@@ -64,6 +64,31 @@ export function validateSkillEvalPlaneSeparation(tasks: readonly WorkflowTask[])
     for (const toolId of collectAgentTaskToolIds(task)) {
       if (isEvalPlaneOperation(toolId)) {
         return EVAL_PLANE_TASK_ERROR.replace('{opId}', toolId);
+      }
+    }
+  }
+  return null;
+}
+
+/** Teaching error template — `{opId}` is replaced at validation time. */
+export const PLAN_TASK_ERROR =
+  'Operation {opId} writes or reads the space’s plan, which is the Helmsman’s alone — a run may serve a plan ' +
+  'node and may never rewrite the plan it serves, so a skill task can never reference a plan.* operation. ' +
+  'Remove the reference; what a run needs from its node arrives in its inputs.';
+
+/**
+ * Plan 322 D3 — no skill task, agent tool surface or operation task, may
+ * reference a `plan.*` operation. Returns a teaching error for the first
+ * violation, or `null` when the workflow passes.
+ */
+export function validateSkillPlanSeparation(tasks: readonly WorkflowTask[]): string | null {
+  for (const task of tasks) {
+    if (typeof task.operation === 'string' && isPlanOperation(task.operation)) {
+      return PLAN_TASK_ERROR.replace('{opId}', task.operation);
+    }
+    for (const toolId of collectAgentTaskToolIds(task)) {
+      if (isPlanOperation(toolId)) {
+        return PLAN_TASK_ERROR.replace('{opId}', toolId);
       }
     }
   }

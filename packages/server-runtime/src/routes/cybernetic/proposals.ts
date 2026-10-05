@@ -12,6 +12,7 @@ import {
 } from '@aflow/database';
 import type { StagedChange, EntityDirectives, Workflow, SkillManifest } from '@aflow/schemas';
 import { PostInstallTaskSchema } from '@aflow/schemas';
+import { isInteractiveUser } from '../../utils/interactiveUser.js';
 import {
   buildProposalOpDiffs,
   resolveSkillForWorkflow,
@@ -520,6 +521,7 @@ export const proposalRoutes: FastifyPluginAsync = async (fastify) => {
         runId: sourceRunId,
         totalRuns: stats.totalRuns,
         ...(parsedDirectives ? { directives: parsedDirectives } : {}),
+        activatedByPerson: isInteractiveUser(request.authUser),
         db,
         redis: redisInstance,
         ...(fastify.appContext.payloadStore

@@ -13,6 +13,8 @@ import type { EngineAction, EngineNavigation } from './types.js';
 
 export interface RunScope extends PageOwner {
   readonly spaceId?: string;
+  /** Whether a person set the run going in its latest activation, as its job carries it; absent reads as nobody. */
+  readonly activatedByPerson?: boolean;
 }
 
 export interface OpenRequest extends RunScope {
@@ -122,6 +124,9 @@ export interface ListedProfile {
   readonly profileId: string;
   readonly posture: BrowserProfile['posture'];
   readonly window: BrowserProfile['window'];
+  readonly unattended: boolean;
+  /** False when nobody is present for the run asking and the profile takes no such run. */
+  readonly openToThisRun: boolean;
   readonly running: boolean;
   readonly sites?: string[];
   readonly sitesUnknown?: 'not_started' | 'stopped';

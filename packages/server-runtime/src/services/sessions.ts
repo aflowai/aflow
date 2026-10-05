@@ -30,6 +30,7 @@ import type {
   SessionBlockedOn,
   SimulationRunInput,
   SessionMetadata,
+  RunTrigger,
 } from '@aflow/schemas';
 import type { PayloadStore } from '@aflow/payload-store';
 import {
@@ -91,8 +92,6 @@ export type SessionStatus =
   | 'CANCELLING'
   | 'STALLED';
 
-export type RunTrigger = 'chat' | 'api' | 'eval' | 'mcp' | 'schedule' | 'voice' | 'webhook';
-
 export interface StartSessionRequest {
   tenantId: TenantId;
   target: SessionAgentTarget;
@@ -113,6 +112,13 @@ export interface StartSessionRequest {
   createdBy?: string | undefined;
   spaceId?: string | undefined;
   trigger?: RunTrigger | undefined;
+  /**
+   * Whether a person sets the run going with this request: true only for a
+   * request authenticated as an interactive user (`isInteractiveUser`), whatever
+   * surface `trigger` names, and never from anything the request says. The
+   * run's jobs carry it until its next start, resume or retry.
+   */
+  activatedByPerson: boolean;
   /** Whether the user is interacting via voice (set when mode='voice') */
   voiceMode?: boolean | undefined;
   actorContext?: ActorContext | undefined;
@@ -167,6 +173,13 @@ export interface ResumeSessionRequest {
   /** Whether the user is interacting via voice (mutable per-turn) */
   voiceMode?: boolean | undefined;
   clientMessageId?: string | undefined;
+  /**
+   * Whether a person sets the run going with this request: true only for a
+   * request authenticated as an interactive user (`isInteractiveUser`), never
+   * from anything the request says. The run's jobs carry it until its next
+   * start, resume or retry.
+   */
+  activatedByPerson: boolean;
 }
 
 export interface ResumeSessionResponse {
@@ -184,6 +197,13 @@ export interface RetrySessionRequest {
   idempotencyKey?: string | undefined;
   traceId?: string | undefined;
   actorContext?: ActorContext | undefined;
+  /**
+   * Whether a person sets the run going with this request: true only for a
+   * request authenticated as an interactive user (`isInteractiveUser`), never
+   * from anything the request says. The run's jobs carry it until its next
+   * start, resume or retry.
+   */
+  activatedByPerson: boolean;
 }
 
 export interface RetrySessionResponse {
@@ -1010,6 +1030,7 @@ function createRealSessionService(ctx: AppContext): SessionService {
           requestedAtMs: now,
           ...(request.spaceId ? { spaceId: request.spaceId } : {}),
           ...(request.trigger ? { trigger: request.trigger } : {}),
+          activatedByPerson: request.activatedByPerson,
           ...(request.voiceMode ? { voiceMode: true } : {}),
           ...(request.actorContext ? { actorContext: request.actorContext } : {}),
           ...(request.clientMessageId ? { clientMessageId: request.clientMessageId } : {}),
@@ -1127,6 +1148,7 @@ function createRealSessionService(ctx: AppContext): SessionService {
         ...(request.actorContext ? { actorContext: request.actorContext } : {}),
         ...(request.voiceMode !== undefined ? { voiceMode: request.voiceMode } : {}),
         ...(request.clientMessageId ? { clientMessageId: request.clientMessageId } : {}),
+        activatedByPerson: request.activatedByPerson,
       });
 
       // When the resume is rerouted to a child (child_input), the orchestrator
@@ -1202,6 +1224,7 @@ function createRealSessionService(ctx: AppContext): SessionService {
           idempotencyKey: idempotencyKey as IdempotencyKey,
           requestedAtMs: Date.now(),
           ...(request.actorContext ? { actorContext: request.actorContext } : {}),
+          activatedByPerson: request.activatedByPerson,
         });
       }
 

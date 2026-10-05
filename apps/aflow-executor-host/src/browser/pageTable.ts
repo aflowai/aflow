@@ -36,8 +36,12 @@ export interface HeldPage {
   readonly pageId: string;
   readonly ownerKey: string;
   readonly profileId: string;
-  /** The opening run's space: the page stays open only while its profile serves it. */
+  /**
+   * The run's space, and whether a person set it going as of its latest call
+   * on the page: the page stays open only while its profile serves both.
+   */
   readonly spaceId: string | undefined;
+  activatedByPerson: boolean;
   readonly page: EnginePage;
   readonly observations: PageObservations;
   /** The address the open asked for, as a URL spells it. */
@@ -133,7 +137,7 @@ export class PageTable {
   private readonly gone = new Map<string, Map<string, GonePage>>();
 
   add(
-    owner: PageOwner & { readonly spaceId?: string },
+    owner: PageOwner & { readonly spaceId?: string; readonly activatedByPerson?: boolean },
     profileId: string,
     requestedUrl: string,
     page: EnginePage,
@@ -148,6 +152,7 @@ export class PageTable {
       ownerKey: key,
       profileId,
       spaceId: owner.spaceId,
+      activatedByPerson: owner.activatedByPerson === true,
       requestedUrl,
       askedUrl: requestedUrl,
       page,
