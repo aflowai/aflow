@@ -23,9 +23,9 @@ import { claimPendingMessages, consumeLoop, type JobLoopHost } from './jobLoop.j
 import type { InFlightStep, RunningStep } from './processJob.js';
 
 /**
- * Told of each step this runtime runs: once it is running under the timeout it
- * declared, and again when it settles. A claimed step still waiting for its
- * slot, or one that ends before its timeout is known, is never announced.
+ * Told of each step this runtime runs: once its handler is about to run, and
+ * again when it settles. A claimed step still waiting for its slot, or one
+ * dropped before its handler runs, is never announced.
  */
 export interface WorkListener {
   started(step: RunningStep): void;

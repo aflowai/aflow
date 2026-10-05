@@ -1,11 +1,12 @@
 /**
- * Contract: a runtime tells its listeners of each step it runs, once it is
- * running under the timeout it declared and again when it settles, so a
- * listener holding something for long work (the host executor's hold on sleep)
- * can tell a harness run from a sub-second read. A step that declared no
- * timeout of its own is announced without one, never with the lane's default.
+ * Contract: a runtime tells its listeners of each step it runs, once its
+ * handler is about to run and again when it settles, naming the step and its
+ * operation, so a listener holding something for the work (the host executor's
+ * hold on sleep) can follow overlapping steps one by one.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { buildOperationId } from '@aflow/schemas';
 
 const { redisMock } = vi.hoisted(() => ({
   redisMock: {
@@ -47,9 +48,8 @@ import { ExecutorRuntime } from '../executor/ExecutorRuntime.js';
 import { DEFAULT_EXECUTOR_CONFIG } from '../types.js';
 
 const READ_BLOCK_MS = 5;
-const LONG_OPERATION = 'host.harness.run';
-const SHORT_OPERATION = 'host.commit.scan';
-const DECLARED = { idleMs: 60_000, maxMs: 3_600_000 };
+const HARNESS_RUN = buildOperationId('host', 'harness', 'run');
+const PROCESS_EXEC = buildOperationId('host', 'process', 'exec');
 
 function job(stepExecutionId: string, operationId: string) {
   return {
@@ -79,8 +79,8 @@ describe('ExecutorRuntime — following its work', () => {
     heard = [];
     redisMock.readStepJobs
       .mockResolvedValueOnce([
-        { id: 'msg-1', job: job('step-1', LONG_OPERATION) },
-        { id: 'msg-2', job: job('step-2', SHORT_OPERATION) },
+        { id: 'msg-1', job: job('step-1', HARNESS_RUN) },
+        { id: 'msg-2', job: job('step-2', PROCESS_EXEC) },
       ])
       .mockImplementation(
         () => new Promise((resolve) => setTimeout(() => resolve([]), READ_BLOCK_MS)),
@@ -99,14 +99,11 @@ describe('ExecutorRuntime — following its work', () => {
       { redis: {}, redisBlocking: {}, payloadStore: {} } as never,
     );
     runtime.onWork({
-      started: (step) =>
-        heard.push(`started ${step.stepExecutionId} ${String(step.declaredTimeoutMs)}`),
+      started: (step) => heard.push(`started ${step.stepExecutionId} ${step.operationId}`),
       settled: (step) => heard.push(`settled ${step.stepExecutionId}`),
     });
     runtime.registerHandler({
       stepType: 'host',
-      resolveTimeoutMs: (ctx) =>
-        Promise.resolve(ctx.job.operationId === LONG_OPERATION ? DECLARED : undefined),
       execute: async (ctx) => {
         await new Promise<void>((resolve) => finish.set(ctx.job.stepExecutionId, resolve));
         return { status: 'SUCCEEDED', outputRef: 'inline:e30=' } as never;
@@ -122,9 +119,9 @@ describe('ExecutorRuntime — following its work', () => {
     await runtime.stop();
   });
 
-  it('announces each overlapping step with its declared ceiling, and each as it settles', async () => {
+  it('announces each overlapping step with its operation, and each as it settles', async () => {
     expect(finish.size).toBe(2);
-    expect(heard).toEqual([`started step-1 ${String(DECLARED.maxMs)}`, 'started step-2 undefined']);
+    expect(heard).toEqual([`started step-1 ${HARNESS_RUN}`, `started step-2 ${PROCESS_EXEC}`]);
 
     finish.get('step-2')?.();
     await settle();

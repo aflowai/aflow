@@ -31,6 +31,7 @@ import {
   internalError,
 } from '@aflow/executor-runtime';
 import {
+  buildOperationId,
   HOST_HARNESS_MAX_TURNS_DEFAULT,
   HostHarnessRunInputSchema,
   MAX_INLINE_PAYLOAD_BYTES,
@@ -1059,7 +1060,7 @@ async function runHarness(
   }
 }
 
-export const HARNESS_RUN_OPERATION = 'host.harness.run';
+export const HARNESS_RUN_OPERATION = buildOperationId('host', 'harness', 'run');
 
 export function createHostHarnessHandler(
   policyPath: string,

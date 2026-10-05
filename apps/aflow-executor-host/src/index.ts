@@ -233,6 +233,7 @@ async function main(): Promise<void> {
     .catch(() => HOST_KEEP_AWAKE_DEFAULT);
   const keepAwake = createKeepAwake({ mode: keepAwakeMode, log });
   keepAwake.follow(runtime);
+  keepAwake.follow(browserRuntime);
   log.info(`This machine ${describeKeepAwake(keepAwakeMode)}`);
 
   // Loaded here rather than at the top so that nothing importing this module
