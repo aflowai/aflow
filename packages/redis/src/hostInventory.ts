@@ -65,38 +65,77 @@ export interface HostWithdrawalNotice {
 }
 
 /**
- * The operator asking, from the workspace, for a profile's window to sign in:
- * the same sitting `aflow browser sign-in` holds on the machine. Published only
- * by the authenticated operator route — no operation dispatches it, so no agent
- * can — and acted on only by the executor of the machine it names.
+ * The operator asking, from the workspace, for what `aflow browser` does on
+ * the machine: a profile's window to sign in, or a change to its posture,
+ * `unattended` choice or origin rules. Published only by the operator routes,
+ * which take a person's authenticated request — no operation dispatches it, so
+ * no agent can — and acted on only by the executor of the machine it names.
  *
  * One channel per machine, named as its inventory is, so the count of
  * receivers a publish returns is whether that machine's executor heard it.
  * On a channel every executor shared, another machine being up answered for a
  * target that was down, and the operator was told a window was coming.
  */
-export function hostBrowserSignInChannel(hostname: string): string {
-  return `aflow:pubsub:host-browser-sign-in:${hostname}`;
+export function hostBrowserRequestChannel(hostname: string): string {
+  return `aflow:pubsub:host-browser:${hostname}`;
 }
 
-export const HostBrowserSignInRequestSchema = z.object({
-  hostname: z.string().min(1),
-  profileId: BrowserProfileIdSchema,
-});
-export type HostBrowserSignInRequest = z.infer<typeof HostBrowserSignInRequestSchema>;
+/**
+ * Where the executor answers one setting change, named by the request. The
+ * values are strings as the command takes them: the executor validates them
+ * with the command's own writer, and its refusal is the answer.
+ */
+export function hostBrowserAnswerChannel(answerId: string): string {
+  return `aflow:pubsub:host-browser-answer:${answerId}`;
+}
 
-/** The profile a sign-in request asks for, when it is well formed and names `hostname`. */
-export function readHostBrowserSignInRequest(raw: string, hostname: string): string | undefined {
+const SettingWordSchema = z.string().max(2048);
+
+export const HostBrowserSettingSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('posture'), posture: SettingWordSchema }),
+  z.object({ kind: z.literal('unattended'), choice: SettingWordSchema }),
+  z.object({ kind: z.literal('rule'), origin: SettingWordSchema, effect: SettingWordSchema }),
+  z.object({ kind: z.literal('rule_remove'), origin: SettingWordSchema }),
+]);
+export type HostBrowserSetting = z.infer<typeof HostBrowserSettingSchema>;
+
+export const HostBrowserRequestSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('sign_in'),
+    hostname: z.string().min(1),
+    profileId: BrowserProfileIdSchema,
+  }),
+  z.object({
+    kind: z.literal('setting'),
+    hostname: z.string().min(1),
+    profileId: BrowserProfileIdSchema,
+    answerId: z.string().regex(/^[A-Za-z0-9_-]{16,64}$/),
+    setting: HostBrowserSettingSchema,
+  }),
+]);
+export type HostBrowserRequest = z.infer<typeof HostBrowserRequestSchema>;
+
+/** The request, when it is well formed and names `hostname`. */
+export function readHostBrowserRequest(
+  raw: string,
+  hostname: string,
+): HostBrowserRequest | undefined {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
     return undefined;
   }
-  const request = HostBrowserSignInRequestSchema.safeParse(parsed);
+  const request = HostBrowserRequestSchema.safeParse(parsed);
   if (!request.success || request.data.hostname !== hostname) return undefined;
-  return request.data.profileId;
+  return request.data;
 }
+
+export const HostBrowserSettingAnswerSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('changed'), profile: BrowserProfileSchema }),
+  z.object({ kind: z.literal('refused'), message: z.string() }),
+]);
+export type HostBrowserSettingAnswer = z.infer<typeof HostBrowserSettingAnswerSchema>;
 
 /**
  * What a machine publishes about itself.
@@ -153,6 +192,7 @@ export const HostInventorySchema = z.object({
       window: true,
       spaces: true,
       rules: true,
+      unattended: true,
       idleMinutes: true,
     }).extend({
       running: z.boolean(),
@@ -193,6 +233,20 @@ export function publishingFoldersForSpace(
     }
   }
   return folders;
+}
+
+/** One machine's inventory, when it is publishing one that reads. */
+export async function readHostInventory(
+  redis: Pick<HostInventoryReader, 'get'>,
+  hostname: string,
+): Promise<HostInventory | undefined> {
+  const raw = await redis.get(hostInventoryKey(hostname));
+  if (raw === null) return undefined;
+  try {
+    return HostInventorySchema.safeParse(JSON.parse(raw)).data;
+  } catch {
+    return undefined;
+  }
 }
 
 /** The reads this needs, so a caller can hand it any client or a fake. */

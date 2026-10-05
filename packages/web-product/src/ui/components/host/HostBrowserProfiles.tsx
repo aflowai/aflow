@@ -6,22 +6,33 @@ import {
   Button,
   Card,
   CardBody,
+  Checkbox,
   Column,
   Heading,
   HelperText,
+  Input,
   Row,
+  Select,
   Text,
 } from '@aflow/design-system';
-import type { BrowserOriginRule, BrowserPosture } from '@aflow/schemas';
+import {
+  BROWSER_POSTURE_LINES,
+  BROWSER_UNATTENDED_LINE,
+  type BrowserOriginRule,
+  BrowserOriginRuleSchema,
+  type BrowserPosture,
+  BrowserPostureSchema,
+} from '@aflow/schemas';
 import { useSpace } from '../providers.js';
 import { useApiMutation, useApiQuery } from '../../hooks/useApiQuery.js';
 
-interface HostBrowserProfile {
+export interface HostBrowserProfile {
   id: string;
   posture: BrowserPosture;
   window: 'hidden' | 'visible';
   spaces: 'all' | string[];
   rules: BrowserOriginRule[];
+  unattended: boolean;
   idleMinutes: number;
   running: boolean;
   windowOpen: boolean;
@@ -45,13 +56,163 @@ const WINDOW_WATCH_MS = 3_000;
 /** How long an asked-for window may take to open before the page says it did not. */
 const WINDOW_OPEN_WAIT_MS = 60_000;
 
-const CLI = 'yarn workspace @aflow/aflow-executor-host browser';
+interface SettingChange {
+  readonly hostname: string;
+  readonly profileId: string;
+  readonly field: 'posture' | 'unattended' | 'rules';
+  readonly value: Readonly<Record<string, string>>;
+}
 
-const POSTURE_LINE: Record<BrowserPosture, string> = {
-  autonomous: 'Navigates, reads and acts without asking.',
-  'ask-to-act': 'Navigates and reads; every action waits for your approval in the Action Center.',
-  'read-only': 'Navigates and reads; every action is refused.',
-};
+/**
+ * Posture, `unattended` and origin rules, changed where they are shown. Each
+ * change is a person's request the machine's executor writes into its policy
+ * file, as `aflow browser` does; the profile shown after is the inventory the
+ * machine republished, so the page shows what is in force. Loosening and
+ * tightening are alike: both need a person, and neither asks twice.
+ */
+export function BrowserProfileSettings({
+  hostname,
+  profile,
+}: {
+  readonly hostname: string;
+  readonly profile: HostBrowserProfile;
+}) {
+  const [refusal, setRefusal] = useState<string | null>(null);
+  const [origin, setOrigin] = useState('');
+  const [effect, setEffect] = useState<BrowserOriginRule['effect']>('deny');
+
+  const settled = {
+    invalidate: [HOST_STATUS_KEY],
+    serialize: ({ hostname: machine, value }: SettingChange) =>
+      JSON.stringify({ hostname: machine, ...value }),
+    onSuccess: () => {
+      setRefusal(null);
+    },
+    onError: (error: Error) => {
+      setRefusal(error.message);
+    },
+  };
+  const set = useApiMutation<SettingChange>({
+    path: ({ profileId, field }) => `/host/browsers/${profileId}/${field}`,
+    method: 'PUT',
+    ...settled,
+  });
+  const remove = useApiMutation<SettingChange>({
+    path: ({ profileId }) => `/host/browsers/${profileId}/rules`,
+    method: 'DELETE',
+    ...settled,
+  });
+  const busy = set.isPending || remove.isPending;
+  const change = (field: SettingChange['field'], value: Record<string, string>): void => {
+    set.mutate({ hostname, profileId: profile.id, field, value });
+  };
+
+  return (
+    <Column gap="sm">
+      <Column gap="xs">
+        {BrowserPostureSchema.options.map((posture) => (
+          <Row key={posture} gap="sm" align="center">
+            <Button
+              size="sm"
+              variant={profile.posture === posture ? 'primary' : 'secondary'}
+              aria-pressed={profile.posture === posture}
+              disabled={busy}
+              onClick={() => {
+                if (profile.posture !== posture) change('posture', { posture });
+              }}
+            >
+              {posture}
+            </Button>
+            <Text variant="muted" size="sm">
+              {BROWSER_POSTURE_LINES[posture]}
+            </Text>
+          </Row>
+        ))}
+      </Column>
+      <Column gap="xs">
+        <Checkbox
+          checked={profile.unattended}
+          disabled={busy}
+          label="Open to runs nobody is present for"
+          onChange={(event) => {
+            change('unattended', { choice: event.target.checked ? 'allow' : 'refuse' });
+          }}
+        />
+        <HelperText>{BROWSER_UNATTENDED_LINE}</HelperText>
+      </Column>
+      <Column gap="xs">
+        {profile.rules.map((rule) => (
+          <Row key={rule.origin} gap="sm" align="center">
+            <Text variant="mono" size="sm">
+              {rule.effect} {rule.origin}
+            </Text>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={busy}
+              onClick={() => {
+                remove.mutate({
+                  hostname,
+                  profileId: profile.id,
+                  field: 'rules',
+                  value: { origin: rule.origin },
+                });
+              }}
+            >
+              Remove
+            </Button>
+          </Row>
+        ))}
+        <Row gap="sm" align="center">
+          <Input
+            aria-label="Origin"
+            placeholder="https://mail.example.com or *.example.com"
+            value={origin}
+            onChange={(event) => {
+              setOrigin(event.target.value);
+            }}
+          />
+          <Select
+            aria-label="Effect"
+            value={effect}
+            onChange={(event) => {
+              setEffect(event.target.value as BrowserOriginRule['effect']);
+            }}
+          >
+            {BrowserOriginRuleSchema.shape.effect.options.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </Select>
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={busy || origin.trim() === ''}
+            onClick={() => {
+              set.mutate(
+                {
+                  hostname,
+                  profileId: profile.id,
+                  field: 'rules',
+                  value: { origin: origin.trim(), effect },
+                },
+                {
+                  onSuccess: () => {
+                    setOrigin('');
+                  },
+                },
+              );
+            }}
+          >
+            Add rule
+          </Button>
+        </Row>
+      </Column>
+      {refusal !== null && <HelperText>{refusal}</HelperText>}
+    </Column>
+  );
+}
 
 interface Asked {
   readonly hostname: string;
@@ -63,7 +224,8 @@ interface Asked {
 /**
  * The paired machine's browser profiles. Shown only on the local edition's
  * machine page, inside its edition gate: a profile lives on a paired machine,
- * which the hosted deployment cannot have.
+ * which the hosted deployment cannot have, and its settings are written by
+ * that machine's executor, so no edition without one can change them.
  */
 export function HostBrowserProfiles() {
   const { spaces } = useSpace();
@@ -184,22 +346,12 @@ export function HostBrowserProfiles() {
                         </Button>
                       </Row>
                       <Text variant="muted" size="sm">
-                        {POSTURE_LINE[profile.posture]} Stops after {profile.idleMinutes} minutes
-                        unused. Open to{' '}
+                        Stops after {profile.idleMinutes} minutes unused. Open to{' '}
                         {profile.spaces === 'all'
                           ? 'every space'
                           : profile.spaces.map(spaceName).join(', ')}
                         .
                       </Text>
-                      {profile.rules.length > 0 && (
-                        <Column gap="xs">
-                          {profile.rules.map((rule) => (
-                            <Text key={rule.origin} variant="mono" size="sm">
-                              {rule.effect} {rule.origin}
-                            </Text>
-                          ))}
-                        </Column>
-                      )}
                       {profile.windowOpen ? (
                         <Text size="sm">
                           The window is open on {machine.hostname}. Sign in to every site the agent
@@ -224,17 +376,7 @@ export function HostBrowserProfiles() {
                           Which sites hold a session shows while its browser runs.
                         </Text>
                       )}
-                      <HelperText>
-                        Posture and rules change on the machine only:{' '}
-                        <Text variant="mono" size="sm">
-                          {CLI} posture {profile.id} &lt;autonomous|ask-to-act|read-only&gt;
-                        </Text>{' '}
-                        and{' '}
-                        <Text variant="mono" size="sm">
-                          {CLI} rule {profile.id} &lt;origin&gt; &lt;allow|ask|deny&gt;
-                        </Text>
-                        .
-                      </HelperText>
+                      <BrowserProfileSettings hostname={machine.hostname} profile={profile} />
                     </Column>
                   </CardBody>
                 </Card>

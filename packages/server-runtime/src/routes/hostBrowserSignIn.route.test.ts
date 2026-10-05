@@ -23,7 +23,7 @@ vi.mock('@aflow/redis', async (importOriginal) => {
   return { ...actual, getRedisConnection: () => ({ get: mocks.get, publish: mocks.publish }) };
 });
 
-const { hostBrowserSignInChannel, hostInventoryKey } = await import('@aflow/redis');
+const { hostBrowserRequestChannel, hostInventoryKey } = await import('@aflow/redis');
 const { hostPairingRoutes } = await import('./hostPairing.js');
 
 async function buildApp(): Promise<FastifyInstance> {
@@ -82,13 +82,13 @@ beforeEach(() => {
 });
 
 describe('asking a machine for a sign-in window', () => {
-  it('publishes the machine and the profile on that machine’s sign-in channel', async () => {
+  it('publishes the machine and the profile on that machine’s request channel', async () => {
     const app = await buildApp();
     const response = await signIn(app, 'default');
     expect(response.statusCode).toBe(202);
     expect(mocks.publish).toHaveBeenCalledWith(
-      hostBrowserSignInChannel('laptop'),
-      JSON.stringify({ hostname: 'laptop', profileId: 'default' }),
+      hostBrowserRequestChannel('laptop'),
+      JSON.stringify({ kind: 'sign_in', hostname: 'laptop', profileId: 'default' }),
     );
   });
 
@@ -104,7 +104,7 @@ describe('asking a machine for a sign-in window', () => {
             : null,
       ),
     );
-    const listening = new Set([hostBrowserSignInChannel('desktop')]);
+    const listening = new Set([hostBrowserRequestChannel('desktop')]);
     mocks.publish.mockImplementation((channel) => Promise.resolve(listening.has(channel) ? 1 : 0));
     const app = await buildApp();
 
@@ -156,16 +156,17 @@ function sources(dir: string): string[] {
   });
 }
 
-describe('the sign-in channel', () => {
-  it('is published by the operator route alone and heard by the host executor alone', () => {
+describe('the browser request channel', () => {
+  it('is published by the operator routes alone and heard by the host executor alone', () => {
     const naming = ['apps', 'packages']
       .flatMap((root) => sources(join(REPO, root)))
-      .filter((file) => readFileSync(file, 'utf8').includes('hostBrowserSignInChannel'))
+      .filter((file) => readFileSync(file, 'utf8').includes('hostBrowserRequestChannel'))
       .map((file) => relative(REPO, file))
       .sort();
     expect(naming).toEqual([
       'apps/aflow-executor-host/src/index.ts',
       'packages/redis/src/hostInventory.ts',
+      'packages/server-runtime/src/routes/hostBrowserSettings.ts',
       'packages/server-runtime/src/routes/hostPairing.ts',
     ]);
   });

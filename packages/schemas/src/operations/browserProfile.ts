@@ -2,9 +2,10 @@
  * A browser profile, as the machine that holds it declares it.
  *
  * Read by the host executor from its own policy file and relayed in the host
- * inventory. A workspace addresses a profile by id and can introduce none,
- * move none and change none: every field here is the operator's, written on
- * the machine.
+ * inventory. A workspace addresses a profile by id and can introduce none and
+ * move none: every field here is the operator's, written by the machine's
+ * executor alone — from the machine's command, or from a person's request on
+ * the machine page, and never from an operation (Plan 320 D5).
  */
 import { z } from 'zod';
 
@@ -49,6 +50,19 @@ export const BrowserPostureSchema = z
       '`read-only`: interaction is refused.',
   );
 export type BrowserPosture = z.infer<typeof BrowserPostureSchema>;
+
+/** What each posture does, as the machine's command and the machine page both say it. */
+export const BROWSER_POSTURE_LINES: Readonly<Record<BrowserPosture, string>> = {
+  autonomous: 'Navigates, reads and acts without asking.',
+  'ask-to-act': 'Navigates and reads; every action waits for your approval in the Action Center.',
+  'read-only': 'Navigates and reads; every action is refused.',
+};
+
+/** What `unattended` decides, as the machine's command and the machine page both say it. */
+export const BROWSER_UNATTENDED_LINE =
+  'Whether runs nobody is present for may use it. A run is attended when a person’s request ' +
+  'last set it going, or a run attended at that moment did; one a schedule, a webhook, a timer ' +
+  'or an API or MCP client set going is not. An attended run may use the profile either way.';
 
 /**
  * What an origin rule names: one origin exactly, or a host and every name
