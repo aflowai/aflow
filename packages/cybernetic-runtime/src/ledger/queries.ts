@@ -9,12 +9,14 @@ import {
   workflowRunTasks,
 } from '@aflow/database';
 import type { WorkflowRunRow, WorkflowRunTaskRow } from '@aflow/database';
+import { drivenByLiveConversationSql } from '../conversationOwnership.js';
 import type {
   WorkflowRunDetail,
   WorkflowRunSummary,
   WorkflowTaskRow,
   RunStats,
   ActiveRunWithTaskCounts,
+  ActiveSpaceRun,
 } from './types.js';
 
 export type {
@@ -23,6 +25,7 @@ export type {
   WorkflowTaskRow,
   RunStats,
   ActiveRunWithTaskCounts,
+  ActiveSpaceRun,
 };
 
 // ============================================================================
@@ -559,14 +562,16 @@ export async function countProductionRuns(
  *
  * Replaces the N+1 pattern of `listActiveRuns()` + per-run `loadRunById()`.
  * The JOIN aggregates task statuses so `deriveRunLivenessFromCounts()` can
- * be called without any additional queries.
+ * be called without any additional queries. Each run says whether the
+ * session that drove it is a Helmsman conversation that still owns it
+ * (`drivenByLiveConversationSql`); a run no session drove is everyone's.
  */
 export async function listActiveRunsWithLiveness(
   db: PostgresJsDatabase,
   tenantId: string,
   spaceId: string,
   opts: { limit: number },
-): Promise<ActiveRunWithTaskCounts[]> {
+): Promise<ActiveSpaceRun[]> {
   const tenantCtx = createTenantContext(tenantId as TenantId);
   return withTenantSchema(db, tenantCtx, async (tx) => {
     const rows = await tx.execute(sql`
@@ -579,6 +584,7 @@ export async function listActiveRunsWithLiveness(
         r.started_at,
         r.scheduler_cursor_at,
         r.plan_node_id,
+        ${drivenByLiveConversationSql(sql`r.session_id`)} AS driven_by_live_conversation,
         COALESCE(t.total_tasks, 0)::int AS total_tasks,
         COALESCE(t.succeeded_tasks, 0)::int AS succeeded_tasks,
         COALESCE(t.live_tasks, 0)::int AS live_tasks,
@@ -595,6 +601,7 @@ export async function listActiveRunsWithLiveness(
         FROM workflow_run_tasks wrt
         WHERE wrt.run_id = r.run_id
       ) t ON true
+      LEFT JOIN sessions ON sessions.session_id = r.session_id
       WHERE r.space_id = ${spaceId}
         AND r.status IN ('running', 'paused')
         AND r.eval_batch_id IS NULL
@@ -618,6 +625,7 @@ export async function listActiveRunsWithLiveness(
       scheduledTasks: row['scheduled_tasks'] as number,
       pausedTasks: row['paused_tasks'] as number,
       ...(typeof row['plan_node_id'] === 'string' ? { planNodeId: row['plan_node_id'] } : {}),
+      drivenByLiveConversation: row['driven_by_live_conversation'] === true,
     }));
   });
 }

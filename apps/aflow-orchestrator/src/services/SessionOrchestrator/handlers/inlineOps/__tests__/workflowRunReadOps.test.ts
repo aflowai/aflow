@@ -5,7 +5,7 @@ import type { InlineHandlerArgs } from '../types.js';
 // ── DB / runtime mocks ────────────────────────────────────────────────────
 const mockLoadRunById = vi.fn();
 const mockLoadPendingWaiters = vi.fn();
-const mockListAttentionItems = vi.fn();
+const mockListAttentionForConversation = vi.fn();
 const mockSurfaceWorkflowResumeContract = vi.fn();
 const mockCancelNonTerminalTasksForRun = vi.fn();
 const mockListCompletionPendingForRun = vi.fn();
@@ -104,7 +104,7 @@ async function mockBuildWorkflowRunDetail(
 vi.mock('@aflow/cybernetic-runtime', () => ({
   loadRunById: (...args: unknown[]) => mockLoadRunById(...args),
   loadPendingWaiters: (...args: unknown[]) => mockLoadPendingWaiters(...args),
-  listAttentionItems: (...args: unknown[]) => mockListAttentionItems(...args),
+  listAttentionForConversation: (...args: unknown[]) => mockListAttentionForConversation(...args),
   deriveSuggestedNextCallForPausedRun: () => Promise.resolve(null),
   surfaceWorkflowResumeContract: (...args: unknown[]) => mockSurfaceWorkflowResumeContract(...args),
   buildWorkflowRunDetail: (...args: Parameters<typeof mockBuildWorkflowRunDetail>) =>
@@ -470,90 +470,150 @@ describe('workflow.run.list_attention — Plan 132v2 §Phase 4', () => {
     };
   }
 
-  it('returns mapped items with hasMore=false when below limit', async () => {
-    mockListAttentionItems.mockResolvedValueOnce([
-      makeAttentionRow({ id: 'aaa', kind: 'workflow_run_paused' }),
-      makeAttentionRow({ id: 'bbb', kind: 'workflow_run_failed' }),
-    ]);
-
-    await handleWorkflowCrudInline(
-      makeArgs('workflow.run.list_attention', { includeConsumed: false, limit: 25 }),
-    );
-
-    expect(mockListAttentionItems).toHaveBeenCalledOnce();
-    const callArgs = mockListAttentionItems.mock.calls[0]?.[2] as {
-      kind?: string;
-      limit: number;
-    };
-    expect(callArgs.limit).toBe(25);
-    expect(callArgs.kind).toBeUndefined();
-
+  function listedOutput(): { items: Array<Record<string, unknown>>; hasMore: boolean } {
     const result = mockAddStepResult.mock.calls[0]![1] as { status: string; outputRef: string };
     expect(result.status).toBe('SUCCEEDED');
-    const output = JSON.parse(
+    return JSON.parse(
       Buffer.from(result.outputRef.slice('inline:'.length), 'base64').toString('utf8'),
-    ) as { items: unknown[]; hasMore: boolean };
-    expect(output.items.length).toBe(2);
-    // Cap was 25, returned 2 → hasMore=false.
-    expect(output.hasMore).toBe(false);
+    ) as { items: Array<Record<string, unknown>>; hasMore: boolean };
+  }
 
-    const first = output.items[0] as Record<string, unknown>;
-    expect(first).toMatchObject({
-      id: 'aaa',
-      kind: 'workflow_run_paused',
-      relatedRunId: RUN_ID,
-      payload: { taskId: 'task-a' },
-      priority: 0,
-      createdAt: '2026-05-08T10:05:00.000Z',
-    });
-    // The bulky inline contractRef is dropped from the list payload (the run id
-    // points at it; the contract comes from run.detail when acting on the pause).
-    expect((first.payload as Record<string, unknown>).contractRef).toBeUndefined();
-  });
-
-  it('forwards kind filter and reports hasMore=true when at cap', async () => {
-    // 25 rows = limit cap → hasMore=true.
-    mockListAttentionItems.mockResolvedValueOnce(
-      Array.from({ length: 25 }, (_, i) =>
-        makeAttentionRow({ id: `id-${String(i)}`, kind: 'workflow_run_paused' }),
-      ),
-    );
+  it('lists as the calling conversation, its own items only unless the space is asked for', async () => {
+    mockListAttentionForConversation.mockResolvedValueOnce({ items: [], hasMore: false });
 
     await handleWorkflowCrudInline(
       makeArgs('workflow.run.list_attention', {
         includeConsumed: false,
         limit: 25,
-        kind: 'workflow_run_paused',
+        scope: 'conversation',
       }),
     );
 
-    const callArgs = mockListAttentionItems.mock.calls[0]?.[2] as { kind?: string };
-    expect(callArgs.kind).toBe('workflow_run_paused');
+    expect(mockListAttentionForConversation).toHaveBeenCalledOnce();
+    expect(mockListAttentionForConversation.mock.calls[0]?.[0]).toMatchObject({
+      tenantId: TENANT,
+      spaceId: SPACE,
+      sessionId: SESSION_RUN_ID,
+      scope: 'conversation',
+      includeConsumed: false,
+      limit: 25,
+    });
+    expect(mockListAttentionForConversation.mock.calls[0]?.[0]).not.toHaveProperty('kind');
+  });
 
-    const result = mockAddStepResult.mock.calls[0]![1] as { outputRef: string };
-    const output = JSON.parse(
-      Buffer.from(result.outputRef.slice('inline:'.length), 'base64').toString('utf8'),
-    ) as { hasMore: boolean };
-    expect(output.hasMore).toBe(true);
+  it("marks each item with whether it is the caller's, and drops the inline pause contract", async () => {
+    mockListAttentionForConversation.mockResolvedValueOnce({
+      items: [
+        { item: makeAttentionRow({ id: 'aaa' }), own: true },
+        { item: makeAttentionRow({ id: 'bbb', kind: 'workflow_run_failed' }), own: false },
+      ],
+      hasMore: false,
+    });
+
+    await handleWorkflowCrudInline(
+      makeArgs('workflow.run.list_attention', {
+        includeConsumed: false,
+        limit: 25,
+        scope: 'space',
+      }),
+    );
+
+    expect(mockListAttentionForConversation.mock.calls[0]?.[0]).toMatchObject({ scope: 'space' });
+    const output = listedOutput();
+    expect(output.hasMore).toBe(false);
+    expect(output.items).toEqual([
+      {
+        id: 'aaa',
+        kind: 'workflow_run_paused',
+        relatedRunId: RUN_ID,
+        relatedResource: `workflow_run:${RUN_ID}`,
+        payload: { taskId: 'task-a' },
+        priority: 0,
+        createdAt: '2026-05-08T10:05:00.000Z',
+        own: true,
+      },
+      expect.objectContaining({ id: 'bbb', kind: 'workflow_run_failed', own: false }),
+    ]);
+  });
+
+  it('forwards the kind filter and the cursor, and reports whether there are more and where they start', async () => {
+    const cursor = '00000000-0000-0000-0000-000000000abb';
+    mockListAttentionForConversation.mockResolvedValueOnce({
+      items: [{ item: makeAttentionRow(), own: true }],
+      hasMore: true,
+      cursor: '00000000-0000-0000-0000-000000000abc',
+    });
+
+    await handleWorkflowCrudInline(
+      makeArgs('workflow.run.list_attention', {
+        includeConsumed: false,
+        limit: 1,
+        scope: 'conversation',
+        kind: 'workflow_run_paused',
+        cursor,
+      }),
+    );
+
+    expect(mockListAttentionForConversation.mock.calls[0]?.[0]).toMatchObject({
+      kind: 'workflow_run_paused',
+      limit: 1,
+      cursor,
+    });
+    expect(listedOutput()).toMatchObject({
+      hasMore: true,
+      cursor: '00000000-0000-0000-0000-000000000abc',
+    });
+    expect(listedOutput()).not.toHaveProperty('truncated');
+  });
+
+  it('says when the read stopped at its bound short of a page', async () => {
+    const truncated = { bound: 'rows_examined', value: 500 };
+    mockListAttentionForConversation.mockResolvedValueOnce({
+      items: [],
+      hasMore: true,
+      cursor: '00000000-0000-0000-0000-000000000abd',
+      truncated,
+    });
+
+    await handleWorkflowCrudInline(
+      makeArgs('workflow.run.list_attention', {
+        includeConsumed: true,
+        limit: 25,
+        scope: 'conversation',
+      }),
+    );
+
+    expect(listedOutput()).toEqual({
+      items: [],
+      hasMore: true,
+      cursor: '00000000-0000-0000-0000-000000000abd',
+      truncated,
+    });
   });
 
   it('returns a consumed item, with when it was consumed, when asked for consumed ones', async () => {
-    mockListAttentionItems.mockResolvedValueOnce([
-      makeAttentionRow({ id: 'ccc', consumedAt: new Date('2026-05-08T10:06:00Z') }),
-    ]);
+    mockListAttentionForConversation.mockResolvedValueOnce({
+      items: [
+        {
+          item: makeAttentionRow({ id: 'ccc', consumedAt: new Date('2026-05-08T10:06:00Z') }),
+          own: true,
+        },
+      ],
+      hasMore: false,
+    });
 
     await handleWorkflowCrudInline(
-      makeArgs('workflow.run.list_attention', { includeConsumed: true, limit: 25 }),
+      makeArgs('workflow.run.list_attention', {
+        includeConsumed: true,
+        limit: 25,
+        scope: 'conversation',
+      }),
     );
 
-    const callArgs = mockListAttentionItems.mock.calls[0]?.[2] as { includeConsumed?: boolean };
-    expect(callArgs.includeConsumed).toBe(true);
-    const result = mockAddStepResult.mock.calls[0]![1] as { status: string; outputRef: string };
-    expect(result.status).toBe('SUCCEEDED');
-    const output = JSON.parse(
-      Buffer.from(result.outputRef.slice('inline:'.length), 'base64').toString('utf8'),
-    ) as { items: Array<Record<string, unknown>> };
-    expect(output.items).toEqual([
+    expect(mockListAttentionForConversation.mock.calls[0]?.[0]).toMatchObject({
+      includeConsumed: true,
+    });
+    expect(listedOutput().items).toEqual([
       expect.objectContaining({ id: 'ccc', consumedAt: '2026-05-08T10:06:00.000Z' }),
     ]);
   });

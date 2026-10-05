@@ -63,6 +63,8 @@ describe('renderAttentionContext — surfaced items carry ids (Plan 233)', () =>
             liveness: 'executing',
             startedAt: '2026-07-03T11:00:00.000Z',
             tasksSummary: '2/5 tasks',
+            sessionId: COLD.sessionId,
+            drivenByLiveConversation: true,
           },
         ],
       },

@@ -92,3 +92,9 @@ export interface ActiveRunWithTaskCounts {
   /** The plan node the run serves (Plan 322 D5). */
   planNodeId?: string;
 }
+
+/** An active run in a space, and whether a conversation still owns it. */
+export interface ActiveSpaceRun extends ActiveRunWithTaskCounts {
+  /** Its `sessionId` names a Helmsman conversation that still owns it (`isReadersWork`). */
+  drivenByLiveConversation: boolean;
+}

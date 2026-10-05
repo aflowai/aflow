@@ -10,41 +10,44 @@ export async function handleWorkflowRunListAttention(
   startTime: number,
 ): Promise<void> {
   const spaceId = requireSpaceId(args.context);
-  const db = getDatabase();
-  const tenantIdStr = args.context.tenantId as string;
 
-  const { listAttentionItems } = await import('@aflow/cybernetic-runtime');
-  // `limit` is schema-defaulted (25); the compaction win here is dropping the bulky
-  // inline `contractRef` per item below, not the page size.
-  const limit = input.limit;
-  const rows = await listAttentionItems(db, tenantIdStr, {
+  const { listAttentionForConversation } = await import('@aflow/cybernetic-runtime');
+  const listed = await listAttentionForConversation({
+    db: getDatabase(),
+    tenantId: args.context.tenantId as string,
     spaceId,
+    sessionId: args.context.runId,
+    scope: input.scope,
     ...(input.kind ? { kind: input.kind } : {}),
     includeConsumed: input.includeConsumed,
-    limit,
+    limit: input.limit,
+    ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
   });
 
-  const items: WorkflowRunListAttentionOutput['items'] = rows.map((row) => {
+  const items: WorkflowRunListAttentionOutput['items'] = listed.items.map(({ item, own }) => {
     // Drop `contractRef` from the list payload — for a paused item it inlines the
     // whole base64 pause contract (the bulk of the response), and a list only needs
     // to point at WHICH run needs attention. The contract comes from run.detail
     // (or the contractRef on the row) when the caller acts on a specific pause.
-    const { contractRef: _contractRef, ...payloadRest } = row.payload as Record<string, unknown>;
+    const { contractRef: _contractRef, ...payloadRest } = item.payload as Record<string, unknown>;
     return {
-      id: row.id,
-      kind: row.kind as WorkflowRunListAttentionOutput['items'][number]['kind'],
-      ...(row.relatedRunId ? { relatedRunId: row.relatedRunId } : {}),
-      ...(row.relatedResource ? { relatedResource: row.relatedResource } : {}),
+      id: item.id,
+      kind: item.kind as WorkflowRunListAttentionOutput['items'][number]['kind'],
+      ...(item.relatedRunId ? { relatedRunId: item.relatedRunId } : {}),
+      ...(item.relatedResource ? { relatedResource: item.relatedResource } : {}),
       payload: payloadRest,
-      priority: row.priority,
-      createdAt: row.createdAt.toISOString(),
-      ...(row.consumedAt ? { consumedAt: row.consumedAt.toISOString() } : {}),
+      priority: item.priority,
+      createdAt: item.createdAt.toISOString(),
+      ...(item.consumedAt ? { consumedAt: item.consumedAt.toISOString() } : {}),
+      own,
     };
   });
 
   const output: WorkflowRunListAttentionOutput = {
     items,
-    hasMore: rows.length === limit,
+    hasMore: listed.hasMore,
+    ...(listed.cursor !== undefined ? { cursor: listed.cursor } : {}),
+    ...(listed.truncated !== undefined ? { truncated: listed.truncated } : {}),
   };
 
   await emitStepSuccess(args, output as unknown as Record<string, unknown>, startTime);

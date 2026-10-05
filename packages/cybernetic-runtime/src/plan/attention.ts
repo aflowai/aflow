@@ -105,12 +105,29 @@ export async function loadConversationPlanRoots(params: {
   return [...new Set(roots.values())];
 }
 
-/** A line of work the attention block places: an active run or a pending attention item. */
+/**
+ * Every node under `rootIds`, whatever its status, or `undefined` when a walk
+ * under one of them stopped at a bound and the nodes past it are unread.
+ */
+export async function loadPlanSubtreeNodeIds(
+  store: PlanNodeStore,
+  spaceId: string,
+  rootIds: Iterable<string>,
+): Promise<string[] | undefined> {
+  const nodeIds: string[] = [];
+  for (const rootId of rootIds) {
+    const walk = await store.walk(spaceId, { rootId, ...PLAN_TREE_WALK_BOUNDS });
+    if (walk.truncated !== undefined) return undefined;
+    nodeIds.push(...walk.nodes.map((node) => node.nodeId));
+  }
+  return nodeIds;
+}
+
+/** A line of work the attention block places under its node: an active run or a pending attention item. */
 export interface PlanWorkLine {
-  kind: 'run' | 'item';
   /** The line as it reads, without indent or bullet. */
   line: string;
-  plan?: PlanPlacement;
+  plan: PlanPlacement;
 }
 
 const PLAN_INDENT = '  ';
@@ -122,29 +139,39 @@ function renderPlanNodeLine(node: PlanAttentionNode): string {
 }
 
 /**
+ * The one line that counts the work in the space that is not this
+ * conversation's. It carries no ids and names no call: another conversation's
+ * review or pause is that conversation's to answer, and naming a way to read
+ * it invites this one to act on it.
+ */
+export function renderOtherWorkLine(runs: number, items: number): string {
+  return `other work in this space, another conversation's to act on: ${String(runs)} runs, ${String(items)} items`;
+}
+
+/** What the block counts rather than lists. */
+export interface PlanWorkCounts {
+  /** This conversation's pending items past those it is shown. */
+  ownUnshownItems: number;
+  /** Runs and items that are not this conversation's (`isReadersWork`). */
+  otherRuns: number;
+  otherItems: number;
+}
+
+/**
  * The plan section of the attention block: the open tree with this
  * conversation's work under the node it serves, its work on nodes the tree
- * does not show, and every run placed under another root and every item that
- * is another conversation's as one count. That count carries no ids and no
- * call to act — another conversation's review or pause is not this one's to
- * answer. Work placed nowhere that is this conversation's is the caller's.
- *
- * Every active run is in `work`; of the pending items, only the ones this
- * conversation is shown are — the rest arrive counted in `items`.
+ * does not show, and every run and item that is not its own as one count
+ * (`renderOtherWorkLine`). `work` is the conversation's own work placed in the
+ * plan; its own work placed nowhere is the caller's to list.
  */
 export function renderPlanWithWork(
   plan: PlanAttention | undefined,
   work: readonly PlanWorkLine[],
-  conversationRootIds: ReadonlySet<string>,
-  items: { ownUnshown: number; others: number },
+  counts: PlanWorkCounts,
 ): string[] {
   const own = new Map<string, PlanWorkLine[]>();
-  let otherRuns = 0;
   for (const entry of work) {
-    if (entry.plan === undefined) continue;
-    if (conversationRootIds.has(entry.plan.rootId)) {
-      own.set(entry.plan.nodeId, [...(own.get(entry.plan.nodeId) ?? []), entry]);
-    } else if (entry.kind === 'run') otherRuns++;
+    own.set(entry.plan.nodeId, [...(own.get(entry.plan.nodeId) ?? []), entry]);
   }
 
   const lines: string[] = [];
@@ -169,15 +196,13 @@ export function renderPlanWithWork(
       for (const entry of entries) lines.push(`- ${entry.line} [nodeId: ${nodeId}]`);
     }
   }
-  if (items.ownUnshown > 0) {
+  if (counts.ownUnshownItems > 0) {
     lines.push(
-      `   ... and ${String(items.ownUnshown)} more of this conversation's attention items — use \`workflow.run.list_attention\``,
+      `   ... and ${String(counts.ownUnshownItems)} more of this conversation's attention items — use \`workflow.run.list_attention\``,
     );
   }
-  if (otherRuns + items.others > 0) {
-    lines.push(
-      `other work in this space, not this conversation's: ${String(otherRuns)} runs, ${String(items.others)} items`,
-    );
+  if (counts.otherRuns + counts.otherItems > 0) {
+    lines.push(renderOtherWorkLine(counts.otherRuns, counts.otherItems));
   }
   if (lines.length > 0) lines.push('');
   return lines;

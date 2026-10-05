@@ -41,6 +41,7 @@ import {
   type PlanWorkLine,
 } from './plan/attention.js';
 import { createPlanNodeStore } from './plan/store.js';
+import { isReadersWork } from './conversationOwnership.js';
 import {
   ATTENTION_ITEM_SURFACE_LIMIT,
   pendingAttentionFor,
@@ -63,6 +64,10 @@ export interface ActiveWorkflowRunSummary {
   tasksSummary: string;
   /** The plan node the run serves (Plan 322 D5), and that node's root. */
   plan?: PlanPlacement;
+  /** The conversation that drove the run (`workflow_runs.session_id`). */
+  sessionId?: string;
+  /** `sessionId` names a Helmsman conversation that still owns the run; otherwise it is everyone's. */
+  drivenByLiveConversation: boolean;
 }
 
 /** Who reads the block: its session, and the plan roots its conversation has taken up (`loadConversationPlanRoots`). */
@@ -270,6 +275,8 @@ async function queryActiveWorkflowRuns(
         run.totalTasks > 0
           ? `${String(run.succeededTasks)}/${String(run.totalTasks)} tasks complete`
           : 'in progress',
+      ...(run.sessionId !== null ? { sessionId: run.sessionId } : {}),
+      drivenByLiveConversation: run.drivenByLiveConversation,
       ...(run.planNodeId !== undefined ? { planNodeId: run.planNodeId } : {}),
     };
   });
@@ -291,6 +298,16 @@ const ACTIVE_APPLET_SURFACE_LIMIT = 8;
  * no operation lists them. Hiding rows past a cap would lose those run ids for
  * good rather than deferring them. It can cap when an active-run listing op
  * exists.
+ *
+ * What a block leaves out it counts, and only where the id is readable
+ * elsewhere: a run under a plan root the conversation has not taken up, which
+ * `plan.node.get` on its node lists, and a run serving no node that another
+ * live conversation owns, which that conversation's block lists and
+ * `workflow.run.detail` reads by the id the operator gives. A run serving no
+ * node that no live conversation owns — started from the web UI, through
+ * `run_operation`, or by a conversation that has since ended — has no other
+ * place to be found, so every conversation lists it, with its items
+ * (`isReadersWork`).
  */
 
 function appletActorDisplay(actor: AppletActor, labels: ReadonlyMap<string, string>): string {
@@ -882,29 +899,34 @@ export function renderAttentionContext(
   conversation: AttentionConversation,
 ): string {
   const runs = attention.activeWorkflowRuns;
-  const ownRoots = new Set(conversation.planRootIds);
-  const items = pendingAttentionFor(attention.pendingAttention, {
+  const reader = {
     sessionId: conversation.sessionId,
-    planRootIds: ownRoots,
-  });
+    planRootIds: new Set(conversation.planRootIds),
+  };
+  const items = pendingAttentionFor(attention.pendingAttention, reader);
+  const ownRuns = runs.filter((run) => isReadersWork(run, reader));
   const work: PlanWorkLine[] = [
-    ...runs.map((run) => ({ kind: 'run' as const, line: renderRunLine(run), plan: run.plan })),
-    ...items.own.map((item) => ({
-      kind: 'item' as const,
-      line: renderAttentionItemLine(item),
-      plan: item.plan,
-    })),
-  ].map(({ plan, ...entry }) => (plan !== undefined ? { ...entry, plan } : entry));
-  const lines = renderPlanWithWork(attention.activePlan, work, ownRoots, items);
+    ...ownRuns.flatMap(({ plan, ...run }) =>
+      plan !== undefined ? [{ line: renderRunLine(run), plan }] : [],
+    ),
+    ...items.own.flatMap(({ plan, ...item }) =>
+      plan !== undefined ? [{ line: renderAttentionItemLine(item), plan }] : [],
+    ),
+  ];
+  const lines = renderPlanWithWork(attention.activePlan, work, {
+    ownUnshownItems: items.ownUnshown,
+    otherRuns: runs.length - ownRuns.length,
+    otherItems: items.others,
+  });
 
-  const freeRuns = runs.filter((run) => run.plan === undefined);
-  if (freeRuns.length > 0) {
+  const shownUnplacedRuns = ownRuns.filter((run) => run.plan === undefined);
+  if (shownUnplacedRuns.length > 0) {
     lines.push(
-      freeRuns.length < runs.length
+      runs.some((run) => run.plan !== undefined)
         ? 'Active workflow runs outside the plan:'
         : 'Active workflow runs:',
     );
-    for (const run of freeRuns) lines.push(`- ${renderRunLine(run)}`);
+    for (const run of shownUnplacedRuns) lines.push(`- ${renderRunLine(run)}`);
   } else if (runs.length === 0) {
     lines.push('No active workflow runs.');
   }

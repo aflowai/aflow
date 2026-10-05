@@ -73,15 +73,15 @@ async function formatPausedRunsHint(
   }
 }
 
-const RESUME_CAS_ERROR_HTTP_HINT: Record<ResumeCasErrorCode, string> = {
-  RUN_NOT_PAUSED:
+const RESUME_CAS_ERROR_HTTP_HINT: Record<ResumeCasErrorCode, (runId: string) => string> = {
+  RUN_NOT_PAUSED: (runId) =>
     'The run is not paused — already resumed, completed, or cancelled. If you just issued an ' +
     'approve/resume, your action most likely ALREADY LANDED (the run advanced past the pause) — ' +
-    "this is NOT your action failing. Verify the run's true state with workflow.run.list_attention " +
-    '/ workflow.run.detail before retrying.',
-  STALE_PAUSE_VERSION:
+    `this is NOT your action failing. Verify the run's true state with workflow.run.detail(runId=${runId}) ` +
+    'before retrying.',
+  STALE_PAUSE_VERSION: () =>
     'pauseVersion does not match the live row — the run was re-paused or resumed since the contract was surfaced. Re-fetch the surfaced contract and retry.',
-  RESUME_IN_PROGRESS:
+  RESUME_IN_PROGRESS: () =>
     'Another resumer holds the lease — wait for it to expire or for the row to update, then retry.',
 };
 
@@ -193,7 +193,7 @@ export async function handleWorkflowRunResume(
       args,
       'RUN_NOT_PAUSED',
       `Run ${run.runId} is "${run.status}" (liveness: ${livenessResult.liveness}). ` +
-        RESUME_CAS_ERROR_HTTP_HINT.RUN_NOT_PAUSED +
+        RESUME_CAS_ERROR_HTTP_HINT.RUN_NOT_PAUSED(run.runId) +
         pausedHint,
       startTime,
       'validation',
@@ -351,7 +351,7 @@ export async function handleWorkflowRunResume(
     await emitStepError(
       args,
       casCode,
-      RESUME_CAS_ERROR_HTTP_HINT[casCode] + extra,
+      RESUME_CAS_ERROR_HTTP_HINT[casCode](run.runId) + extra,
       startTime,
       'validation',
     );
