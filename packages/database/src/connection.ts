@@ -140,11 +140,11 @@ function logServerNotice(notice: postgres.Notice): void {
 }
 
 /**
- * One client for `cfg`, replaceable once its connections are lost
+ * One client for `cfg`, replaceable once a transaction loses its connection
  * (`replaceablePool.ts`). Both constructors build through it.
  */
 function openClient(cfg: DatabaseConfig, poolMax: number): postgres.Sql {
-  return createReplaceablePool((onclose) =>
+  return createReplaceablePool(() =>
     postgres(cfg.connectionString, {
       max: poolMax,
       idle_timeout: cfg.idleTimeout ?? 30,
@@ -153,7 +153,6 @@ function openClient(cfg: DatabaseConfig, poolMax: number): postgres.Sql {
       ...(cfg.ssl !== undefined ? { ssl: cfg.ssl } : {}),
       connection: { application_name: applicationName() },
       onnotice: logServerNotice,
-      onclose,
     }),
   ).sql;
 }

@@ -8,58 +8,18 @@
  * whatever they throw to the handler `index.ts` installs on the process, which
  * is the path the throw takes there.
  */
-import postgres from 'postgres';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createReplaceablePool, type ReplaceablePool } from '@aflow/database';
+import {
+  deliverImmediateThrowsTo,
+  fakeClient,
+  fakePostgres,
+  severedTransaction,
+  type FakePostgres,
+} from '@aflow/database/testing';
 
 import { createUncaughtExceptionHandler } from '../uncaughtException.js';
-import { fakePostgres, type FakePostgres } from './fakePostgres.js';
-
-/** Short, so a connection that never comes back fails the test quickly rather than hanging it. */
-const CONNECT_TIMEOUT_SECONDS = 1;
-
-function client(server: FakePostgres, onclose: (connectionId: number) => void): postgres.Sql {
-  // `socket` is how postgres.js takes a connection it did not open; its types omit it.
-  const options = {
-    max: 1,
-    fetch_types: false,
-    connect_timeout: CONNECT_TIMEOUT_SECONDS,
-    onclose,
-    socket: server.socket,
-  } as postgres.Options<Record<string, postgres.PostgresType>>;
-  return postgres(options);
-}
-
-/** Routes whatever a deferred callback throws to `onThrow`, as the process would. */
-function deliverImmediateThrowsTo(onThrow: (error: unknown) => void): void {
-  const realSetImmediate = globalThis.setImmediate;
-  vi.spyOn(globalThis, 'setImmediate').mockImplementation(((
-    callback: (...args: unknown[]) => void,
-    ...args: unknown[]
-  ) =>
-    realSetImmediate(() => {
-      try {
-        callback(...args);
-      } catch (error) {
-        onThrow(error);
-      }
-    })) as typeof setImmediate);
-}
-
-/** A transaction whose write the database drops. */
-async function severedTransaction(sql: postgres.Sql, server: FakePostgres): Promise<unknown> {
-  server.severOn(/^insert/i);
-  return sql
-    .begin(async (tx) => {
-      await tx`select 1`;
-      await tx`insert into step_results values (1)`;
-    })
-    .then(
-      () => undefined,
-      (error: unknown) => error,
-    );
-}
 
 const logger = { warn: vi.fn(), error: vi.fn() };
 const exit = vi.fn();
@@ -67,6 +27,7 @@ const handle = createUncaughtExceptionHandler({ logger, consumerName: 'orchestra
 
 let server: FakePostgres;
 let pool: ReplaceablePool | undefined;
+let restoreImmediates: (() => void) | undefined;
 
 beforeEach(() => {
   server = fakePostgres();
@@ -76,15 +37,16 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  vi.restoreAllMocks();
+  restoreImmediates?.();
+  restoreImmediates = undefined;
   await pool?.sql.end({ timeout: 0 });
   pool = undefined;
 });
 
 describe('a connection the database drops under a write', () => {
   it('leaves the orchestrator running, and its next query on a fresh connection', async () => {
-    deliverImmediateThrowsTo(handle);
-    pool = createReplaceablePool((onclose) => client(server, onclose));
+    restoreImmediates = deliverImmediateThrowsTo(handle);
+    pool = createReplaceablePool(() => fakeClient(server));
     const { sql } = pool;
     await sql`select 1`;
 
@@ -110,8 +72,8 @@ describe('a connection the database drops under a write', () => {
   // fails, and the replacement is no longer needed.
   it('wedges the client’s own connection when nothing replaces it', async () => {
     const thrown: unknown[] = [];
-    deliverImmediateThrowsTo((error) => thrown.push(error));
-    const sql = client(server, () => undefined);
+    restoreImmediates = deliverImmediateThrowsTo((error) => thrown.push(error));
+    const sql = fakeClient(server);
     try {
       await sql`select 1`;
       await severedTransaction(sql, server);
@@ -128,7 +90,7 @@ describe('a connection the database drops under a write', () => {
 
 describe('any other uncaught exception', () => {
   it('ends the orchestrator, as before, and replaces nothing', () => {
-    pool = createReplaceablePool((onclose) => client(server, onclose));
+    pool = createReplaceablePool(() => fakeClient(server));
 
     handle(new TypeError("Cannot read properties of undefined (reading 'shardId')"));
 

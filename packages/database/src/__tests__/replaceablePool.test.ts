@@ -1,8 +1,9 @@
 /**
  * A client whose connection was written to after its close cannot be repaired
  * from outside, so recovery exchanges it for a new one underneath everything
- * that holds it. These pin the exchange; the orchestrator's
- * `uncaughtException.test.ts` severs a real client mid-transaction against it.
+ * that holds it. Stubs pin the routing; what the client does with its own
+ * connections is pinned against a real postgres.js client over an in-memory
+ * backend, since a stub only does what the test says the client does.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type postgres from 'postgres';
@@ -11,22 +12,32 @@ import {
   createReplaceablePool,
   isAbruptCloseWrite,
   replacePoolsThatLostAConnection,
+  type PoolBuilder,
   type ReplaceablePool,
 } from '../replaceablePool.js';
+import {
+  deliverImmediateThrowsTo,
+  fakeClient,
+  fakePostgres,
+  severedTransaction,
+  type FakePostgres,
+} from '../testing/index.js';
+
+/** Far longer than any fixed grace a replaced client's work could be given. */
+const LONG_QUERY_MS = 60_000;
+
+/** Short enough that the client closes its connection while the test waits. */
+const CLIENT_CLOSE_SECONDS = 0.01;
 
 interface StubClient {
   sql: postgres.Sql;
   end: ReturnType<typeof vi.fn>;
-  closeConnection: () => void;
 }
 
 /** A client that answers every call with its own name, and records how it was ended. */
-function stubBuilder(): {
-  build: Parameters<typeof createReplaceablePool>[0];
-  built: StubClient[];
-} {
+function stubBuilder(): { build: PoolBuilder; built: StubClient[] } {
   const built: StubClient[] = [];
-  const build = (onclose: (connectionId: number) => void): postgres.Sql => {
+  const build = (): postgres.Sql => {
     const name = `client-${String(built.length + 1)}`;
     const end = vi.fn(async () => undefined);
     const sql = Object.assign(() => name, {
@@ -34,27 +45,48 @@ function stubBuilder(): {
       end,
       unsafe: () => name,
     }) as unknown as postgres.Sql;
-    built.push({
-      sql,
-      end,
-      closeConnection: () => {
-        onclose(1);
-      },
-    });
+    built.push({ sql, end });
     return sql;
   };
   return { build, built };
 }
 
+/** Real clients over `server`, counting how many have been built. */
+function realBuilder(
+  server: FakePostgres,
+  options?: Parameters<typeof fakeClient>[1],
+): { build: PoolBuilder; readonly built: number } {
+  let built = 0;
+  return {
+    build: () => {
+      built += 1;
+      return fakeClient(server, options);
+    },
+    get built() {
+      return built;
+    },
+  };
+}
+
 const opened: ReplaceablePool[] = [];
-function open(build: Parameters<typeof createReplaceablePool>[0]): ReplaceablePool {
+function open(build: PoolBuilder): ReplaceablePool {
   const pool = createReplaceablePool(build);
   opened.push(pool);
   return pool;
 }
 
+const thrown: unknown[] = [];
+let restoreImmediates: (() => void) | undefined;
+function collectImmediateThrows(): void {
+  restoreImmediates = deliverImmediateThrowsTo((error) => thrown.push(error));
+}
+
 afterEach(async () => {
-  await Promise.all(opened.splice(0).map((pool) => pool.sql.end()));
+  vi.useRealTimers();
+  restoreImmediates?.();
+  restoreImmediates = undefined;
+  thrown.length = 0;
+  await Promise.all(opened.splice(0).map((pool) => pool.sql.end({ timeout: 0 })));
 });
 
 describe('a replaceable pool', () => {
@@ -72,7 +104,7 @@ describe('a replaceable pool', () => {
     expect(heldUnsafe()).toBe('client-1');
   });
 
-  it('carries the type handlers installed on the client it replaces, and drains that client', () => {
+  it('carries the type handlers installed on the client it replaces', () => {
     const { build, built } = stubBuilder();
     const pool = open(build);
     const handler = (value: unknown) => value;
@@ -83,46 +115,129 @@ describe('a replaceable pool', () => {
 
     expect(built[1]?.sql.options.parsers[1184]).toBe(handler);
     expect(built[1]?.sql.options.serializers[3802]).toBe(handler);
-    expect(built[0]?.end).toHaveBeenCalledWith({ timeout: expect.any(Number) as number });
+  });
+
+  it('lets a query the replaced client is running finish however long it takes, and gives new work to the new client meanwhile', async () => {
+    const server = fakePostgres();
+    const pool = open(realBuilder(server).build);
+    await pool.sql`select 1`;
+    const slow = server.holdOn(/pg_sleep/);
+    const running = pool.sql`select pg_sleep(60)`.then(
+      (rows) => rows.command,
+      (error: unknown) => error,
+    );
+    await vi.waitFor(() => {
+      expect(slow.received).toBe(true);
+    });
+
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    pool.replace();
+    await vi.advanceTimersByTimeAsync(LONG_QUERY_MS);
+    vi.useRealTimers();
+
+    expect((await pool.sql`select 1`).command).toBe('SELECT');
+    expect(server.connections).toBe(2);
+    expect(server.terminations).toBe(0);
+
+    slow.release();
+
+    expect(await running).toBe('SELECT');
+    await vi.waitFor(() => {
+      expect(server.terminations).toBe(1);
+    });
   });
 });
 
 describe('recovery', () => {
-  it('replaces only the pools whose current client has lost a connection', () => {
-    const lost = stubBuilder();
-    const intact = stubBuilder();
-    open(lost.build);
-    open(intact.build);
+  it.each(['idle_timeout', 'max_lifetime'] as const)(
+    'does not replace a pool whose client closed a connection at its %s',
+    async (option) => {
+      const server = fakePostgres();
+      const clients = realBuilder(server, { [option]: CLIENT_CLOSE_SECONDS });
+      const pool = open(clients.build);
+      await pool.sql`select 1`;
 
-    lost.built[0]?.closeConnection();
+      await vi.waitFor(() => {
+        expect(server.terminations).toBe(1);
+      });
+
+      expect(pool.lostConnectionUnderTransaction).toBe(false);
+      expect(replacePoolsThatLostAConnection()).toBe(0);
+      expect(clients.built).toBe(1);
+    },
+  );
+
+  it('replaces only the pools whose current client lost a connection under a transaction, not one whose connection closed idle', async () => {
+    collectImmediateThrows();
+    const lostServer = fakePostgres();
+    const idleServer = fakePostgres();
+    const lost = realBuilder(lostServer);
+    const idle = realBuilder(idleServer, { idle_timeout: CLIENT_CLOSE_SECONDS });
+    const lostPool = open(lost.build);
+    const idlePool = open(idle.build);
+    await idlePool.sql`select 1`;
+    await vi.waitFor(() => {
+      expect(idleServer.terminations).toBe(1);
+    });
+
+    await severedTransaction(lostPool.sql, lostServer);
+    await vi.waitFor(() => {
+      expect(thrown.filter(isAbruptCloseWrite)).toHaveLength(1);
+    });
 
     expect(replacePoolsThatLostAConnection()).toBe(1);
-    expect(lost.built).toHaveLength(2);
-    expect(intact.built).toHaveLength(1);
+    expect(lost.built).toBe(2);
+    expect(idle.built).toBe(1);
   });
 
-  it('does not count a close from a client already retired against its replacement', () => {
-    const { build, built } = stubBuilder();
-    const pool = open(build);
-    built[0]?.closeConnection();
+  it('does not count a transaction lost on a client already retired against its replacement', async () => {
+    collectImmediateThrows();
+    const server = fakePostgres();
+    const pool = open(realBuilder(server).build);
+    let resume = (): void => undefined;
+    const resumed = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    let started = false;
+    server.severOn(/^insert/i);
+    const transaction = pool.sql
+      .begin(async (tx) => {
+        await tx`select 1`;
+        started = true;
+        await resumed;
+        await tx`insert into step_results values (1)`;
+      })
+      .catch((error: unknown) => error);
+    await vi.waitFor(() => {
+      expect(started).toBe(true);
+    });
+
     pool.replace();
+    resume();
 
-    built[0]?.closeConnection();
-
-    expect(pool.hasClosedConnection).toBe(false);
+    expect(await transaction).toMatchObject({ code: 'CONNECTION_CLOSED' });
+    await vi.waitFor(() => {
+      expect(thrown.filter(isAbruptCloseWrite)).toHaveLength(1);
+    });
+    expect(pool.lostConnectionUnderTransaction).toBe(false);
     expect(replacePoolsThatLostAConnection()).toBe(0);
   });
 
   it('leaves alone a pool that has been ended', async () => {
-    const { build, built } = stubBuilder();
-    const pool = createReplaceablePool(build);
-    built[0]?.closeConnection();
+    collectImmediateThrows();
+    const server = fakePostgres();
+    const clients = realBuilder(server);
+    const pool = createReplaceablePool(clients.build);
+    await severedTransaction(pool.sql, server);
+    await vi.waitFor(() => {
+      expect(thrown.filter(isAbruptCloseWrite)).toHaveLength(1);
+    });
+    expect(pool.lostConnectionUnderTransaction).toBe(true);
 
-    await pool.sql.end();
+    await pool.sql.end({ timeout: 0 });
 
-    expect(built[0]?.end).toHaveBeenCalledTimes(1);
     expect(replacePoolsThatLostAConnection()).toBe(0);
-    expect(built).toHaveLength(1);
+    expect(clients.built).toBe(1);
   });
 });
 

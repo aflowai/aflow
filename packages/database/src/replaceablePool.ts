@@ -16,23 +16,22 @@
  */
 import type postgres from 'postgres';
 
-/** Builds one client, calling `onclose` whenever one of its connections closes. */
-export type PoolBuilder = (onclose: (connectionId: number) => void) => postgres.Sql;
+/** Builds one client. */
+export type PoolBuilder = () => postgres.Sql;
 
 export interface ReplaceablePool {
   /** Stable across replacements; this is what callers hold. */
   readonly sql: postgres.Sql;
   /**
-   * Whether a connection of the current client has closed since it was built.
-   * A client none of whose connections has closed cannot hold one written to
-   * after its close, so it is never the one a recovery replaces.
+   * Whether a transaction on the current client has lost its connection —
+   * the only way a client comes to write to a closed socket, since the
+   * transaction's next statement, COMMIT or ROLLBACK goes to the connection it
+   * reserved. A close the client makes itself (`idle_timeout`, `max_lifetime`,
+   * `end`) waits until no transaction holds the connection, so it never sets this.
    */
-  readonly hasClosedConnection: boolean;
+  readonly lostConnectionUnderTransaction: boolean;
   replace(): void;
 }
-
-/** How long a replaced client's queries in flight get before its connections are destroyed. */
-const RETIRED_CLIENT_GRACE_SECONDS = 5;
 
 const livePools = new Set<ReplaceablePool>();
 
@@ -46,26 +45,32 @@ function carryTypeHandlers(from: postgres.Sql, to: postgres.Sql): void {
   Object.assign(to.options.serializers, from.options.serializers);
 }
 
+/** postgres.js rejects a transaction with this when its connection closes under it. */
+function isConnectionClosed(error: unknown): boolean {
+  return error instanceof Error && (error as { code?: unknown }).code === 'CONNECTION_CLOSED';
+}
+
 export function createReplaceablePool(build: PoolBuilder): ReplaceablePool {
-  let generation = 0;
-  let closedConnection = false;
+  let current = build();
+  let lostConnection = false;
   let ended = false;
-
-  const open = (): postgres.Sql => {
-    generation += 1;
-    const built = generation;
-    closedConnection = false;
-    return build(() => {
-      if (built === generation) closedConnection = true;
-    });
-  };
-
-  let current = open();
 
   const end = async (options?: { timeout?: number | undefined }): Promise<void> => {
     ended = true;
     livePools.delete(pool);
     await current.end(options);
+  };
+
+  const beginOn = (client: postgres.Sql): postgres.Sql['begin'] => {
+    const begin = client.begin.bind(client) as (...args: unknown[]) => Promise<unknown>;
+    return (async (...args: unknown[]): Promise<unknown> => {
+      try {
+        return await begin(...args);
+      } catch (error) {
+        if (client === current && isConnectionClosed(error)) lostConnection = true;
+        throw error;
+      }
+    }) as postgres.Sql['begin'];
   };
 
   // The target only lends the proxy a callable shape; every read and call goes
@@ -74,23 +79,29 @@ export function createReplaceablePool(build: PoolBuilder): ReplaceablePool {
   const sql = new Proxy(target, {
     apply: (_target, thisArg, args: unknown[]): unknown =>
       Reflect.apply(current, thisArg, args) as unknown,
-    get: (_target, property): unknown =>
-      property === 'end' ? end : (Reflect.get(current, property) as unknown),
+    get: (_target, property): unknown => {
+      if (property === 'end') return end;
+      if (property === 'begin') return beginOn(current);
+      return Reflect.get(current, property) as unknown;
+    },
     has: (_target, property) => Reflect.has(current, property),
     set: (_target, property, value) => Reflect.set(current, property, value),
   });
 
   const pool: ReplaceablePool = {
     sql,
-    get hasClosedConnection() {
-      return closedConnection;
+    get lostConnectionUnderTransaction() {
+      return lostConnection;
     },
     replace() {
       if (ended) return;
       const retired = current;
-      current = open();
+      current = build();
+      lostConnection = false;
       carryTypeHandlers(retired, current);
-      retired.end({ timeout: RETIRED_CLIENT_GRACE_SECONDS }).catch(() => undefined);
+      // Without a timeout, postgres.js closes each connection once its query or
+      // transaction finishes; with one, it destroys whatever is still running.
+      retired.end().catch(() => undefined);
     },
   };
   livePools.add(pool);
@@ -110,14 +121,15 @@ export function isAbruptCloseWrite(error: unknown): boolean {
 }
 
 /**
- * Replaces every client in this process that has lost a connection — the
- * only ones the write can have come from — and returns how many it replaced.
- * A stale write from a client already retired finds nothing to replace.
+ * Replaces every client in this process that has lost a connection under a
+ * transaction — the only ones the write can have come from — and returns how
+ * many it replaced. A stale write from a client already retired finds nothing
+ * to replace.
  */
 export function replacePoolsThatLostAConnection(): number {
   let replaced = 0;
   for (const pool of livePools) {
-    if (!pool.hasClosedConnection) continue;
+    if (!pool.lostConnectionUnderTransaction) continue;
     pool.replace();
     replaced += 1;
   }
