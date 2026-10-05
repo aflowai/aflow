@@ -118,9 +118,6 @@ export type ApiWriteApprovalRequestPayload = z.infer<typeof ApiWriteApprovalRequ
 /** Room for an excerpt in UTF-16 units, the length a string's `length` counts. */
 export const BROWSER_APPROVAL_EXCERPT_MAX_UNITS = 8000;
 
-/** Room for the path the approver is shown, in UTF-16 units: a `data:` address's path is its whole content. */
-export const BROWSER_APPROVAL_PATH_MAX_UNITS = 2000;
-
 /**
  * What a browser action would enter, as the approver sees it. The value itself
  * appears only as a bounded excerpt, and never for a field that takes a
@@ -150,10 +147,12 @@ export const BrowserWriteApprovalRequestPayloadSchema = z.object({
   kind: z.literal('write_approval'),
   target: z.literal('browser'),
   profileId: z.string(),
-  /** The origin of the frame the element belongs to, read from the page as the action gate reads it. */
+  /**
+   * The origin of the frame the element belongs to, read from the page as the
+   * action gate reads it. Origin only, as the API variant carries the host
+   * only: a path can carry a credential. The full address is in the hash.
+   */
   pageOrigin: z.string(),
-  /** That frame's path, shown beside its origin. Its query and fragment are in the hash, never here. */
-  pagePath: z.string().max(BROWSER_APPROVAL_PATH_MAX_UNITS),
   pageTitle: z.string().max(500),
   action: z.enum(BROWSER_ACTIONS),
   element: z.object({

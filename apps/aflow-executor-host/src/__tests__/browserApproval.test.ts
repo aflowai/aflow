@@ -223,7 +223,6 @@ describe('an action on a profile that asks', () => {
       frames: { e6: 'https://shop.example.com/widgets/order-1' },
     });
     const request = asked(await dispatch(h, approvals, 'browser.page.act', pay(pageId)));
-    expect(request.pagePath).toBe('/widgets/order-1');
     h.world.sites.set(SHOP, {
       title: 'Checkout',
       snapshot: FORM,
@@ -236,6 +235,24 @@ describe('an action on a profile that asks', () => {
     );
     expect(h.pages[0]?.actions).toEqual([]);
     expect(approvals.spent.size).toBe(1);
+  });
+
+  it('shows nothing of the frame’s path, and binds the approval to all of it', async () => {
+    const { h, approvals, pageId } = await shopFor(profile({ posture: 'ask-to-act' }));
+    const frameAt = (path: string) =>
+      h.world.sites.set(SHOP, { title: 'Checkout', snapshot: FORM, frames: { e6: SHOP + path } });
+
+    frameAt('orders/order-1/pay');
+    const ran = await dispatch(h, approvals, 'browser.page.act', pay(pageId));
+    const first = asked(ran);
+    expect(JSON.stringify(ran.writes)).not.toContain('order-1');
+
+    frameAt('orders/order-2/pay');
+    const second = asked(await dispatch(h, approvals, 'browser.page.act', pay(pageId)));
+    expect(second.requestHash).not.toBe(first.requestHash);
+    // Each ask captures its own screenshot, so only its reference differs.
+    const shown = ({ requestHash: _hash, screenshotRef: _image, ...rest }: typeof first) => rest;
+    expect(shown(second)).toEqual(shown(first));
   });
 
   it('does not act when the element is gone, and spends the approval', async () => {
@@ -374,15 +391,12 @@ describe('an approval bound to the address the operator saw', () => {
 
   const remove = (pageId: string) => ({ pageId, ref: 'e6', action: 'click' });
 
-  it('shows the path beside the site, and neither the query nor the fragment', async () => {
+  it('shows the site, and neither the path, the query nor the fragment', async () => {
     const { h, approvals, pageId } = await recordPage();
     const ran = await dispatch(h, approvals, 'browser.page.act', remove(pageId));
-    const request = asked(ran);
-    expect(request).toMatchObject({
-      pageOrigin: 'https://shop.example.com',
-      pagePath: '/records/1',
-    });
+    expect(asked(ran).pageOrigin).toBe('https://shop.example.com');
     const written = JSON.stringify(ran.writes);
+    expect(written).not.toContain('records/1');
     expect(written).not.toContain('tab=details');
     expect(written).not.toContain('#notes');
   });
@@ -495,7 +509,6 @@ describe('an approval request the schema refuses', () => {
       target: 'browser',
       profileId: 'default',
       pageOrigin: 'https://shop.example.com',
-      pagePath: '/',
       pageTitle: 'Checkout',
       action: 'type',
       element: { ref: 'e3', role: 'textbox', name: 'Note' },
@@ -577,7 +590,6 @@ describe('the request hash', () => {
     pageUrl: 'https://shop.example.com/orders/1?tab=items#note',
     frameUrl: 'https://shop.example.com/orders/1?tab=items#note',
     pageOrigin: 'https://shop.example.com',
-    pagePath: '/orders/1',
     pageTitle: 'Checkout',
     ref: 'e3',
     element: { role: 'textbox', name: 'Note' },

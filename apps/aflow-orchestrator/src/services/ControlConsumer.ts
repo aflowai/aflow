@@ -128,7 +128,9 @@ export function createControlConsumer(
           ...(message.actorContext ? { actorContext: message.actorContext } : {}),
           ...(message.voiceMode !== undefined ? { voiceMode: message.voiceMode } : {}),
           ...(message.clientMessageId ? { clientMessageId: message.clientMessageId } : {}),
-          activatedByPerson: message.activatedByPerson,
+          ...(message.activatedByPerson !== undefined
+            ? { activatedByPerson: message.activatedByPerson }
+            : {}),
           idempotencyKey: message.idempotencyKey,
         });
         return;

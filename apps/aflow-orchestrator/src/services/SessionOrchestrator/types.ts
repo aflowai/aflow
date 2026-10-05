@@ -146,8 +146,11 @@ export interface SessionOrchestrator {
     /** Whether the user is interacting via voice (mutable per-turn) */
     voiceMode?: boolean;
     clientMessageId?: string;
-    /** Whether the run is attended from this command on — see `SessionHotState.activatedByPerson`. */
-    activatedByPerson: boolean;
+    /**
+     * Whether the run is attended from this command on — see
+     * `SessionHotState.activatedByPerson`. Absent leaves the session's value as it is.
+     */
+    activatedByPerson?: boolean;
     idempotencyKey: IdempotencyKey;
   }): Promise<{ status: SessionStatus }>;
 

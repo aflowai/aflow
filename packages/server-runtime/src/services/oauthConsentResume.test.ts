@@ -191,6 +191,24 @@ describe('resumeSessionsForCompletedConsent', () => {
     });
   });
 
+  it('states nothing about who is present, so the session stays as attended as it was', async () => {
+    const { deps, resumeSpy } = makeDeps({
+      rows: [
+        {
+          sessionId: 'sess-1',
+          currentStepExecutionId: 'step-1',
+          requestedInputRef: consentPayloadRef(),
+          createdBy: 'user-alice',
+        },
+      ],
+      hotStateBySession: { 'sess-1': null },
+    });
+
+    await resumeSessionsForCompletedConsent(deps, consent());
+
+    expect(resumeSpy.mock.calls[0]![0]).not.toHaveProperty('activatedByPerson');
+  });
+
   it('skips a user-scope consent for a session owned by a different user', async () => {
     const { deps, resumeSpy } = makeDeps({
       rows: [

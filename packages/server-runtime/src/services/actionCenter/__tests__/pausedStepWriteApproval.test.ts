@@ -52,7 +52,6 @@ const BROWSER_REQUEST: BrowserWriteApprovalRequestPayload = {
   target: 'browser',
   profileId: 'default',
   pageOrigin: 'https://shop.example.com',
-  pagePath: '/checkout',
   pageTitle: 'Checkout',
   action: 'type',
   element: { ref: 'e3', role: 'textbox', name: 'Note' },
@@ -158,7 +157,6 @@ describe('pausedStepSource — a browser action waiting on the operator', () => 
       target: 'browser',
       profileId: 'default',
       pageOrigin: 'https://shop.example.com',
-      pagePath: '/checkout',
       pageTitle: 'Checkout',
       action: 'type',
       element: { ref: 'e3', role: 'textbox', name: 'Note' },
@@ -172,6 +170,7 @@ describe('pausedStepSource — a browser action waiting on the operator', () => 
       askedBy: { kind: 'posture' },
       screenshotRef: 'inline:shot',
       standsUntil: '2026-10-04T13:00:00.000Z',
+      decidedBefore: '2026-10-04T12:00:01.000Z',
     });
     expect(item.title).toBe(
       'Approve in the browser: type 17 characters into textbox “Note” and press Enter on shop.example.com',
@@ -182,6 +181,15 @@ describe('pausedStepSource — a browser action waiting on the operator', () => 
     expect(() =>
       ActionCenterItemSchema.parse({ ...item, allowedActions: [], audience: 'anyone' }),
     ).not.toThrow();
+  });
+
+  it('carries when an action asked for again was approved before, and nothing for a first ask', async () => {
+    const again = (await createPausedStepSource(makeDeps(BROWSER_REQUEST)).listOpen(ctx()))[0]!;
+    expect(again.extension).toMatchObject({ decidedBefore: '2026-10-04T12:00:01.000Z' });
+
+    const { decidedBefore: _first, ...firstAsk } = BROWSER_REQUEST;
+    const first = (await createPausedStepSource(makeDeps(firstAsk)).listOpen(ctx()))[0]!;
+    expect(first.extension).not.toHaveProperty('decidedBefore');
   });
 
   it('still builds the API variant as before', async () => {

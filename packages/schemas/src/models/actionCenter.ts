@@ -429,15 +429,14 @@ export type ApiWriteApprovalExtension = z.infer<typeof ApiWriteApprovalExtension
 /**
  * The same card for an action in the agent's browser (Plan 320 D7): the site
  * and page, what will be done to which element, what would be entered — a
- * credential field by its length alone — the page as it stood, and until when
- * the request stands.
+ * credential field by its length alone — the page as it stood, until when
+ * the request stands, and when the same action was approved before.
  */
 export const BrowserWriteApprovalExtensionSchema = z.object({
   kind: z.literal('write_approval'),
   target: z.literal('browser'),
   profileId: z.string(),
   pageOrigin: z.string(),
-  pagePath: BrowserWriteApprovalRequestPayloadSchema.shape.pagePath,
   pageTitle: z.string(),
   action: BrowserWriteApprovalRequestPayloadSchema.shape.action,
   element: BrowserWriteApprovalRequestPayloadSchema.shape.element,
@@ -445,6 +444,8 @@ export const BrowserWriteApprovalExtensionSchema = z.object({
   askedBy: BrowserApprovalAskedBySchema,
   screenshotRef: z.string().optional(),
   standsUntil: BrowserWriteApprovalRequestPayloadSchema.shape.standsUntil,
+  /** Present when an approval of this exact action, given then, has been used and it is asked for again. */
+  decidedBefore: BrowserWriteApprovalRequestPayloadSchema.shape.decidedBefore,
 });
 export type BrowserWriteApprovalExtension = z.infer<typeof BrowserWriteApprovalExtensionSchema>;
 

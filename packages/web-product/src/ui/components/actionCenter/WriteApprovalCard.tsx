@@ -175,13 +175,18 @@ function BrowserActionDetail({
     <>
       <Row gap="sm" align="center" wrap>
         <Badge variant="neutral">{view.site}</Badge>
-        <Text size="sm">{view.path}</Text>
         <Text size="sm" variant="muted">
           {view.pageTitle}
         </Text>
       </Row>
 
       <Text size="sm">{view.doing}</Text>
+
+      {view.askedAgain !== undefined && (
+        <Text size="sm" weight="medium">
+          {view.askedAgain}
+        </Text>
+      )}
 
       {view.value && (
         <Column gap="xs">

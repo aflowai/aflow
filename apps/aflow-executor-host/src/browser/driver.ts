@@ -432,7 +432,6 @@ export class BrowserDriver {
           pageUrl: pageHref,
           frameUrl,
           pageOrigin: frame.origin,
-          pagePath: frame.pathname,
           pageTitle: now.title,
           ref: request.ref,
           element: current,

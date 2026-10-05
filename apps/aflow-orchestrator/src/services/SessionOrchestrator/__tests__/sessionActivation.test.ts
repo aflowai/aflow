@@ -6,7 +6,9 @@
  * the Action Center, makes it attended again. A child run returning to the
  * parent that waited on it is not a new activation but the rest of the one
  * that delegated, so the parent stays as attended as it was; a paused child
- * its parent answers is attended as the parent is then. Hot state lives
+ * its parent answers is attended as the parent is then. A resume that knows
+ * nothing of who is present — finishing an OAuth consent — leaves the
+ * session as it was. Hot state lives
  * in a Redis the whole chain reads and writes, so each step sees what the one
  * before it stored.
  */
@@ -175,7 +177,9 @@ async function deliverResume(message: unknown): Promise<void> {
     inputRef: parsed.inputRef,
     traceId: parsed.traceId,
     idempotencyKey: parsed.idempotencyKey,
-    activatedByPerson: parsed.activatedByPerson,
+    ...(parsed.activatedByPerson !== undefined
+      ? { activatedByPerson: parsed.activatedByPerson }
+      : {}),
   });
 }
 
@@ -309,12 +313,46 @@ describe('a conversation a person starts, then a schedule resumes', () => {
     expect((await getSessionState(redis, TENANT, RUN))?.activatedByPerson).toBe(true);
     expect(lastJob()['activatedByPerson']).toBe(true);
   });
+});
 
-  it('stays unattended through a resume nobody marked', async () => {
-    await chatStart();
+describe('a session resumed by finishing the OAuth consent it paused on', () => {
+  /** The resume the consent callback sends: it states nothing about who is present. */
+  async function consentCompletes(): Promise<void> {
     const paused = await pauseOnCurrentStep();
-    const { activatedByPerson: _omitted, ...unmarked } = resumeCommand(paused, true);
-    await deliverResume(unmarked);
+    const { activatedByPerson: _unstated, ...consentResume } = resumeCommand(paused, true);
+    await deliverResume(consentResume);
+  }
+
+  it('stays attended when a person was attending it', async () => {
+    await chatStart();
+    await consentCompletes();
+
+    expect((await getSessionState(redis, TENANT, RUN))?.activatedByPerson).toBe(true);
+    expect(lastJob()['activatedByPerson']).toBe(true);
+  });
+
+  it('stays unattended when nobody was', async () => {
+    await chatStart();
+    await pauseOnCurrentStep();
+    await deliverResume(await scheduleFiresResume());
+    expect(lastJob()['activatedByPerson']).toBe(false);
+
+    await consentCompletes();
+
+    expect((await getSessionState(redis, TENANT, RUN))?.activatedByPerson).toBe(false);
+    expect(lastJob()['activatedByPerson']).toBe(false);
+  });
+
+  it('is still made unattended by a schedule-fired resume afterwards', async () => {
+    await chatStart();
+    await consentCompletes();
+    await pauseOnCurrentStep();
+
+    const fired = await scheduleFiresResume();
+    expect(fired).toMatchObject({ activatedByPerson: false });
+    await deliverResume(fired);
+
+    expect((await getSessionState(redis, TENANT, RUN))?.activatedByPerson).toBe(false);
     expect(lastJob()['activatedByPerson']).toBe(false);
   });
 });

@@ -177,9 +177,10 @@ export interface ResumeSessionRequest {
    * Whether a person sets the run going with this request: true only for a
    * request authenticated as an interactive user (`isInteractiveUser`), never
    * from anything the request says. The run's jobs carry it until its next
-   * start, resume or retry.
+   * start, resume or retry. Absent leaves the session's value as it is, for a
+   * resume that knows nothing of who is present.
    */
-  activatedByPerson: boolean;
+  activatedByPerson?: boolean;
 }
 
 export interface ResumeSessionResponse {
@@ -1148,7 +1149,9 @@ function createRealSessionService(ctx: AppContext): SessionService {
         ...(request.actorContext ? { actorContext: request.actorContext } : {}),
         ...(request.voiceMode !== undefined ? { voiceMode: request.voiceMode } : {}),
         ...(request.clientMessageId ? { clientMessageId: request.clientMessageId } : {}),
-        activatedByPerson: request.activatedByPerson,
+        ...(request.activatedByPerson !== undefined
+          ? { activatedByPerson: request.activatedByPerson }
+          : {}),
       });
 
       // When the resume is rerouted to a child (child_input), the orchestrator

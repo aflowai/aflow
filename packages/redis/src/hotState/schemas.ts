@@ -133,7 +133,8 @@ export const SessionHotStateSchema = z.object({
    * sets a run going, it is attended. When nothing with a person behind it
    * does — a schedule, a webhook, a timer, a sweep, an API or MCP credential —
    * it is not. A child returning to the parent that waited on it changes
-   * nothing in the parent. The orchestrator writes it in the same write that
+   * nothing in the parent, and neither does a resume that knows nothing of
+   * who is present (finishing an OAuth consent). The orchestrator writes it in the same write that
    * starts or resumes the session and stamps it on every job the session
    * schedules; absent reads as nobody.
    */

@@ -53,15 +53,20 @@ describe('activatedByPerson', () => {
       inputRef: 'inline:e30=',
       trigger: 'chat',
     },
-    {
-      type: 'resume_run',
-      stepExecutionId: '00000000-0000-0000-0000-0000000000a3',
-      inputRef: 'inline:e30=',
-    },
     { type: 'retry_run' },
   ])('reads a $type command that does not say as nobody', (command) => {
     const parsed = ControlMessageSchema.parse({ ...common, ...command });
     expect(parsed).toMatchObject({ activatedByPerson: false });
+  });
+
+  it('reads a resume_run command that does not say as leaving the session as it is', () => {
+    const parsed = ControlMessageSchema.parse({
+      ...common,
+      type: 'resume_run',
+      stepExecutionId: '00000000-0000-0000-0000-0000000000a3',
+      inputRef: 'inline:e30=',
+    });
+    expect(parsed).not.toHaveProperty('activatedByPerson');
   });
 
   it('is a boolean on the step job, absent when nothing recorded it', () => {

@@ -114,7 +114,9 @@ export function createResumeRun(bindings: SessionOrchestratorBindings) {
       // 1. Canonical leave-child-input → back to WAITING_ON_CHILD.
       await leaveChildInputToWaiting(redis, params.tenantId, params.runId, {
         fromStatus: runState.status,
-        activatedByPerson: params.activatedByPerson,
+        ...(params.activatedByPerson !== undefined
+          ? { activatedByPerson: params.activatedByPerson }
+          : {}),
       });
 
       // 2. Emit status event on parent (UI sees transition to WAITING_ON_CHILD)
@@ -138,7 +140,9 @@ export function createResumeRun(bindings: SessionOrchestratorBindings) {
         idempotencyKey: `child-resume:${params.idempotencyKey}` as IdempotencyKey,
         requestedAtMs: Date.now(),
         ...(params.clientMessageId ? { clientMessageId: params.clientMessageId } : {}),
-        activatedByPerson: params.activatedByPerson,
+        ...(params.activatedByPerson !== undefined
+          ? { activatedByPerson: params.activatedByPerson }
+          : {}),
       });
 
       getOrchestratorLogger().debug(
@@ -266,7 +270,9 @@ export function createResumeRun(bindings: SessionOrchestratorBindings) {
       // Clear interrupt-related fields on resume (use empty strings / false —
       // undefined is skipped by serializeForHash and leaves stale values in Redis)
       interruptRequested: false,
-      activatedByPerson: params.activatedByPerson,
+      ...(params.activatedByPerson !== undefined
+        ? { activatedByPerson: params.activatedByPerson }
+        : {}),
       // Update voiceMode on every resume — allows toggling mid-conversation
       ...(params.voiceMode !== undefined ? { voiceMode: params.voiceMode } : {}),
     };
