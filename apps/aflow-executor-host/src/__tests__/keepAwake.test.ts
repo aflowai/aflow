@@ -1,8 +1,8 @@
 /**
  * Contract: the host executor holds its machine awake while it has long work
  * (Plan 315 D21). The hold is taken when the first long step starts — a harness
- * run, a check, or any step declaring a timeout past a minute — and released
- * when the last one settles, not between two that overlap; a short step takes
+ * run or a check, by kind and whatever timeout any step declares — and released
+ * when the last one settles, not between two that overlap; any other step takes
  * none and does not end one a long step holds. It runs under the mode in
  * the machine's policy, `on-ac` unless the operator chose another, and `never`
  * starts nothing. The spawner is a fake here: no test holds this machine awake.
@@ -16,7 +16,7 @@ import { promisify } from 'node:util';
 
 import { describe, expect, it } from 'vitest';
 
-import type { RunningStep, WorkListener } from '@aflow/executor-runtime';
+import type { ExecutorContext, RunningStep, WorkListener } from '@aflow/executor-runtime';
 import {
   HOST_KEEP_AWAKE_DEFAULT,
   HostBindingInspectOutputSchema,
@@ -25,13 +25,13 @@ import {
 
 import { HostPolicySchema, loadHostPolicy } from '../bindings.js';
 import { createHostHandler } from '../handlers/hostHandler.js';
+import { resolveHostTimeout } from '../handlers/hostTimeout.js';
 import {
   CLEAR_KEEP_AWAKE,
   createKeepAwake,
   describeKeepAwake,
   describePolicyKeepAwake,
   linuxOnMainsPower,
-  LONG_STEP_TIMEOUT_MS,
   type SleepAssertionSpawner,
   withKeepAwake,
 } from '../keepAwake.js';
@@ -47,21 +47,35 @@ const HARNESS_STEP: RunningStep = {
   operationId: 'host.harness.run',
   declaredTimeoutMs: undefined,
 };
-const BROWSER_STEP: RunningStep = {
+const CHECK_STEP: RunningStep = {
   stepExecutionId: 'step-2',
-  operationId: 'browser.page.handoff',
-  declaredTimeoutMs: LONG_STEP_TIMEOUT_MS + 1,
+  operationId: 'host.commit.check',
+  declaredTimeoutMs: undefined,
 };
 const SCAN_STEP: RunningStep = {
   stepExecutionId: 'step-3',
   operationId: 'host.commit.scan',
   declaredTimeoutMs: undefined,
 };
-const INSPECT_STEP: RunningStep = {
-  stepExecutionId: 'step-4',
-  operationId: 'host.binding.inspect',
-  declaredTimeoutMs: LONG_STEP_TIMEOUT_MS,
-};
+const NO_POLICY = join(tmpdir(), 'aflow-keep-awake-no-policy', 'host-policy.json');
+
+/** A foreground `git status`, announced with the ceiling the host lane declares for it. */
+async function gitStatusStep(): Promise<RunningStep> {
+  const operationId = 'host.process.exec';
+  const spec = await resolveHostTimeout(
+    {
+      operationId,
+      job: { inputRef: 'inline:x' },
+      readPayload: () => Promise.resolve({ bindingId: 'hb_app', command: ['git', 'status'] }),
+    } as unknown as ExecutorContext,
+    NO_POLICY,
+  );
+  return {
+    stepExecutionId: 'step-4',
+    operationId,
+    declaredTimeoutMs: typeof spec === 'number' ? spec : spec?.maxMs,
+  };
+}
 
 const FOLDER = {
   id: 'hb_app',
@@ -128,7 +142,6 @@ function keepAwakeOn(
 ) {
   const spawner = fakeSpawner();
   const host = fakeRuntime();
-  const browser = fakeRuntime();
   const warnings: string[] = [];
   const infos: string[] = [];
   const keepAwake = createKeepAwake({
@@ -140,8 +153,7 @@ function keepAwakeOn(
     log: { info: (message) => infos.push(message), warn: (message) => warnings.push(message) },
   });
   keepAwake.follow(host);
-  keepAwake.follow(browser);
-  return { keepAwake, spawner, host, browser, warnings, infos };
+  return { keepAwake, spawner, host, warnings, infos };
 }
 
 describe('keep awake — when the hold is taken and released', () => {
@@ -159,28 +171,33 @@ describe('keep awake — when the hold is taken and released', () => {
   });
 
   it('holds once across two overlapping steps, and not between them', () => {
-    const { spawner, host, browser } = keepAwakeOn('darwin', 'on-ac');
+    const { spawner, host } = keepAwakeOn('darwin', 'on-ac');
 
     host.start(HARNESS_STEP);
-    browser.start(BROWSER_STEP);
+    host.start(CHECK_STEP);
     host.settle(HARNESS_STEP);
     expect(spawner.spawned).toHaveLength(1);
     expect(spawner.held()).toHaveLength(1);
 
-    browser.settle(BROWSER_STEP);
+    host.settle(CHECK_STEP);
     expect(spawner.held()).toHaveLength(0);
     expect(spawner.spawned).toHaveLength(1);
   });
 
-  it('spawns nothing for a short step, and holds for a long one across an overlapping short one', () => {
-    const { keepAwake, spawner, host, infos } = keepAwakeOn('darwin', 'on-ac');
+  it('spawns nothing for a command on its default timeout, though that ceiling is minutes', async () => {
+    const { spawner, host, infos } = keepAwakeOn('darwin', 'on-ac');
+    const gitStatus = await gitStatusStep();
+    expect(gitStatus.declaredTimeoutMs).toBeDefined();
 
-    host.start(SCAN_STEP);
-    host.start(INSPECT_STEP);
-    host.settle(SCAN_STEP);
-    host.settle(INSPECT_STEP);
+    host.start(gitStatus);
+    host.settle(gitStatus);
+
     expect(spawner.spawned).toHaveLength(0);
     expect(infos).toEqual([]);
+  });
+
+  it('holds for a long step across an overlapping short one', () => {
+    const { keepAwake, spawner, host, infos } = keepAwakeOn('darwin', 'on-ac');
 
     host.start(HARNESS_STEP);
     host.start(SCAN_STEP);
@@ -194,14 +211,12 @@ describe('keep awake — when the hold is taken and released', () => {
     expect(spawner.spawned).toHaveLength(1);
   });
 
-  it('holds for a check and for any step declaring a timeout past a minute', () => {
-    const check = keepAwakeOn('darwin', 'on-ac');
-    check.host.start({ ...SCAN_STEP, operationId: 'host.commit.check' });
-    const declared = keepAwakeOn('darwin', 'on-ac');
-    declared.browser.start(BROWSER_STEP);
+  it('holds for a check on its own, which declares no timeout where its folder sets none', () => {
+    const { spawner, host, infos } = keepAwakeOn('darwin', 'on-ac');
+    host.start(CHECK_STEP);
 
-    expect(check.spawner.held()).toHaveLength(1);
-    expect(declared.spawner.held()).toHaveLength(1);
+    expect(spawner.held()).toHaveLength(1);
+    expect(infos).toEqual([`Holding this machine awake for ${CHECK_STEP.operationId}`]);
   });
 
   it('takes a fresh hold for work that starts after the machine went idle', () => {
@@ -224,11 +239,11 @@ describe('keep awake — when the hold is taken and released', () => {
   });
 
   it('releases on stop, and holds nothing for work that starts after', () => {
-    const { keepAwake, spawner, host, browser } = keepAwakeOn('darwin', 'always');
+    const { keepAwake, spawner, host } = keepAwakeOn('darwin', 'always');
     host.start(HARNESS_STEP);
 
     keepAwake.stop();
-    browser.start(BROWSER_STEP);
+    host.start(CHECK_STEP);
 
     expect(spawner.held()).toHaveLength(0);
     expect(spawner.spawned).toHaveLength(1);

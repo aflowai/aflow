@@ -3,11 +3,12 @@
  *
  * The machine is usually a laptop, and an operating system that sees no input
  * puts it to sleep whatever is running: a coding agent mid-run stops, its run is
- * lost, and every conversation waiting on it dies with it. So while a long step
- * is running the executor holds a sleep assertion — a child `caffeinate` on
- * macOS, `systemd-inhibit` on Linux — taken when the first one starts and
- * released when the last one settles. A step that ends in well under any sleep
- * timer takes none: holding for it would only spawn and kill a process.
+ * lost, and every conversation waiting on it dies with it. So while a harness
+ * run or a check is running the executor holds a sleep assertion — a child
+ * `caffeinate` on macOS, `systemd-inhibit` on Linux — taken when the first one
+ * starts and released when the last one settles. Any other step takes none: it
+ * ends in well under a sleep timer, and holding for it would only spawn and
+ * kill a process.
  *
  * Whether to hold is the operator's, a machine-wide field of the policy file
  * beside the harnesses it protects: `on-ac` (the default), `always` or `never`.
@@ -32,12 +33,11 @@ type HostPolicy = z.infer<typeof HostPolicySchema>;
 
 export const CLEAR_KEEP_AWAKE = '--clear';
 
-/** A step whose declared timeout exceeds this may outlast a sleep timer, so it holds. */
-export const LONG_STEP_TIMEOUT_MS = 60_000;
-
 /**
- * Kinds that hold whatever timeout they declare: a check's deadline is the
- * folder's and may be unset, and a harness run is the work the hold exists for.
+ * The kinds of step that hold, chosen by kind and not by the timeout a step
+ * declares: a ceiling says how long a step may run, not how long it does. Every
+ * foreground `host.process.exec` declares five minutes by default, a
+ * `git status` among them.
  */
 const LONG_RUNNING_OPERATIONS: ReadonlySet<string> = new Set([
   'host.harness.run',
@@ -45,10 +45,7 @@ const LONG_RUNNING_OPERATIONS: ReadonlySet<string> = new Set([
 ]);
 
 function isLongRunningStep(step: RunningStep): boolean {
-  return (
-    LONG_RUNNING_OPERATIONS.has(step.operationId) ||
-    (step.declaredTimeoutMs !== undefined && step.declaredTimeoutMs > LONG_STEP_TIMEOUT_MS)
-  );
+  return LONG_RUNNING_OPERATIONS.has(step.operationId);
 }
 
 /** The policy with the operator's mode, or with none for `--clear`. */

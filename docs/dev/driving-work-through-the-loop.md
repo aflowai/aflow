@@ -158,8 +158,7 @@ folder's posture as it pushes, so a commit checked before the posture changed is
   two coding agents at once unless `aflow harness concurrency <n>` says otherwise, and a
   review is a coding agent too; a commission or review past that waits for one to end,
   and its time counts from when it starts, so nothing needs holding back by hand.
-- **Sleep** (Plan 315 D21). While a long step runs — a harness run, a check, or any step
-  whose timeout exceeds a minute — the host executor holds the machine awake on power (`aflow harness keep-awake on-ac|never|always`), and work dispatched while
+- **Sleep** (Plan 315 D21). While a harness run or a check runs, the host executor holds the machine awake on power (`aflow harness keep-awake on-ac|never|always`), and work dispatched while
   an executor is asleep or restarting waits up to ten minutes for it rather than failing.
 - **Branch names carry the stream** (`aflow/320-…`, `aflow/publish-…`), and migration
   numbers are taken from `origin/main` at commission time, never from a branch.
