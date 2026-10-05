@@ -53,6 +53,7 @@ import { dispatchInlineOp } from '../handlers/dispatchInlineOp.js';
 import { buildStepScheduledRecoveryEvent } from '../helpers/recoveryEmitter.js';
 
 import { createBuildAgentFlowContextDetails } from '../helpers/agentFlowContext.js';
+import type { AgentTurnStepRecord } from '../helpers/agentTurn.js';
 import { createRelayWorkflowTaskActivity } from './relayWorkflowTaskActivity.js';
 import { extractStepDetail } from './stepDetail.js';
 
@@ -445,6 +446,7 @@ export function createScheduleStep(bindings: SessionOrchestratorBindings) {
     }
     let resolvedInputRef: string;
     let inputValidationError: Error | null = null;
+    const agentTurnRecord: AgentTurnStepRecord = {};
     try {
       resolvedInputRef = await resolveStepInput(
         payloadStore,
@@ -462,6 +464,7 @@ export function createScheduleStep(bindings: SessionOrchestratorBindings) {
         runState?.delegationContextJson,
         runState?.finalOutputSchemaOverrideJson,
         grant,
+        agentTurnRecord,
       );
     } catch (err) {
       inputValidationError = err instanceof Error ? err : new Error(String(err));
@@ -531,6 +534,9 @@ export function createScheduleStep(bindings: SessionOrchestratorBindings) {
       idempotencyKey,
       traceId: context.traceId,
       parentStepExecutionId: params.parentStepExecutionId,
+      ...(agentTurnRecord.attentionItemIds
+        ? { attentionItemIds: agentTurnRecord.attentionItemIds }
+        : {}),
     };
 
     const runUpdates: Partial<SessionHotState> = {

@@ -288,6 +288,13 @@ export const StepHotStateSchema = z.object({
     })
     .optional(),
 
+  /**
+   * The attention items an agent turn's attention block shows. The block is
+   * never written to history, so they are consumed by the session only when
+   * this turn succeeds; a turn that fails or is retried shows them again.
+   */
+  attentionItemIds: z.array(z.string()).optional(),
+
   // Sync tracking
 });
 

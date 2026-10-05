@@ -124,9 +124,10 @@ function renderPlanNodeLine(node: PlanAttentionNode): string {
 /**
  * The plan section of the attention block: the open tree with this
  * conversation's work under the node it serves, its work on nodes the tree
- * does not show, and everything placed under another root as one count. That
- * count carries no ids and no call to act — another conversation's review or
- * pause is not this one's to answer. Work placed nowhere is the caller's.
+ * does not show, and every run placed under another root and every item that
+ * is another conversation's as one count. That count carries no ids and no
+ * call to act — another conversation's review or pause is not this one's to
+ * answer. Work placed nowhere that is this conversation's is the caller's.
  *
  * Every active run is in `work`; of the pending items, only the ones this
  * conversation is shown are — the rest arrive counted in `items`.

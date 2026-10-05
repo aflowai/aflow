@@ -13,7 +13,7 @@ const RUN_ID = 'run-9c1f0a2b';
 const ANOMALY_ID = 'anomaly-4d2e';
 
 /** A conversation that has taken up no part of the plan. */
-const COLD = { planRootIds: [] };
+const COLD = { sessionId: 'c01d0000-0000-4000-8000-000000000233', planRootIds: [] };
 
 function baseContext(): HelmsmanAttentionContext {
   return {

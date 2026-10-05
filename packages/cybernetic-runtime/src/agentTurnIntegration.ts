@@ -38,6 +38,11 @@ export interface CyberneticTurnOverrides {
     cacheHint: 'volatile';
   };
   /**
+   * The attention items the block shows. The block is never written to
+   * history, so they are consumed only once the turn that read them succeeds.
+   */
+  attentionItemIds: string[];
+  /**
    * Ephemeral [anchor:user, memory:assistant] pair for the Helmsman turn.
    * Only ever set on this Helmsman-only path — Runner/Coach sessions never
    * receive it. Absent when the space is not personal or nothing is active.
@@ -221,11 +226,10 @@ export async function buildCyberneticTurnOverrides(params: {
     );
     return [];
   });
-  const attentionText = await readAttentionForTurn({
+  const attention = await readAttentionForTurn({
     tenantId,
     spaceId,
-    sessionId: params.sessionId,
-    conversation: { planRootIds },
+    conversation: { sessionId: params.sessionId, planRootIds },
     db,
     redis,
   });
@@ -246,9 +250,10 @@ export async function buildCyberneticTurnOverrides(params: {
     systemPrompt,
     attentionContextBlock: {
       key: 'HelmsmanAttention',
-      content: attentionText,
+      content: attention.text,
       cacheHint: 'volatile' as const,
     },
+    attentionItemIds: attention.itemIds,
     ...(activeMemory ? { activeMemory } : {}),
   };
 }

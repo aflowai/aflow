@@ -17,6 +17,7 @@ import {
   type McpCredentialBlock,
 } from '@aflow/schemas';
 import { isDraftRepair } from '@aflow/schemas';
+import { consumeAttentionReadByTurn } from '@aflow/cybernetic-runtime';
 import {
   scheduleShardTimer,
   markSessionDirty,
@@ -1067,6 +1068,18 @@ export function createApplyResult(bindings: SessionOrchestratorBindings) {
           currentRuntimeState,
           now,
         );
+      }
+
+      // Before the decision is applied, so a turn it schedules next no longer
+      // shows what this one answered.
+      if (stepState.attentionItemIds !== undefined) {
+        await consumeAttentionReadByTurn({
+          tenantId: result.tenantId,
+          sessionId,
+          itemIds: stepState.attentionItemIds,
+          db,
+          redis,
+        });
       }
 
       if (stepDef?.operation === 'ai.agent.turn' && result.outputRef) {

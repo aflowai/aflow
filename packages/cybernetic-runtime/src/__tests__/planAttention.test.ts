@@ -35,18 +35,31 @@ vi.mock('../ledger/queries.js', async () => {
       ]),
   };
 });
-/** What `readPendingRunAttention`'s queries return: each node's newest, and every item counted by node. */
+/**
+ * What `readPendingRunAttention`'s queries return: each node's newest, and
+ * each driving session's newest serving none, and every item counted by node
+ * and session.
+ */
 function readPendingFromLedger(perNodeLimit: number): PendingRunAttention {
   const newestFirst = [...fakeLedger.items].sort(
     (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
   );
-  const counts = new Map<string | null, number>();
+  const ranks = new Map<string, number>();
   const items = newestFirst.filter((item) => {
-    const seen = counts.get(item.planNodeId) ?? 0;
-    counts.set(item.planNodeId, seen + 1);
+    const partition = JSON.stringify([
+      item.planNodeId,
+      item.planNodeId === null ? item.sessionId : null,
+    ]);
+    const seen = ranks.get(partition) ?? 0;
+    ranks.set(partition, seen + 1);
     return seen < perNodeLimit;
   });
-  return { items, counts: [...counts].map(([planNodeId, count]) => ({ planNodeId, count })) };
+  const counts = new Map<string, PendingRunAttention['counts'][number]>();
+  for (const { planNodeId, sessionId } of newestFirst) {
+    const key = JSON.stringify([planNodeId, sessionId]);
+    counts.set(key, { planNodeId, sessionId, count: (counts.get(key)?.count ?? 0) + 1 });
+  }
+  return { items, counts: [...counts.values()] };
 }
 
 vi.mock('../ledger/attention.js', async () => {
@@ -119,7 +132,7 @@ async function turnAttention(sessionId = COLD_SESSION): Promise<string> {
   });
   return renderAttentionContext(
     await buildHelmsmanAttention({ tenantId: TENANT, spaceId: SPACE, db: DB, redis }),
-    { planRootIds },
+    { sessionId, planRootIds },
   );
 }
 
@@ -313,6 +326,7 @@ describe('work under the plan — one answer to "what now" (Plan 322 P1)', () =>
         runId: 'run-theirs-review',
         workflowSlug: 'review-local-changes',
         planNodeId: theirSlice.nodeId,
+        sessionId: STREAM_320,
         createdAt: new Date('2026-10-05T09:00:00.000Z'),
       },
       {
@@ -321,6 +335,7 @@ describe('work under the plan — one answer to "what now" (Plan 322 P1)', () =>
         runId: 'run-free-earlier',
         workflowSlug: 'ticker-market-digest',
         planNodeId: null,
+        sessionId: STREAM_315,
         createdAt: new Date('2026-10-05T08:30:00.000Z'),
       },
     ];
@@ -358,13 +373,14 @@ describe('work under the plan — one answer to "what now" (Plan 322 P1)', () =>
     );
   });
 
-  it('gives a conversation that has started nothing every run in the plan as another’s', async () => {
+  it('gives a conversation that has started nothing every run in the plan, and every item, as another’s', async () => {
     await twoStreams();
 
     const text = await turnAttention(COLD_SESSION);
     expect(text).not.toContain('run-ours-commission');
     expect(text).not.toContain('run-theirs-publication');
-    expect(text).toMatch(/^other work in this space, not this conversation's: 2 runs, 1 items$/m);
+    expect(text).not.toContain('item-free');
+    expect(text).toMatch(/^other work in this space, not this conversation's: 2 runs, 2 items$/m);
     expect(text).toContain('[runId: run-free]');
   });
 
@@ -377,14 +393,16 @@ describe('work under the plan — one answer to "what now" (Plan 322 P1)', () =>
       '    - publish-local-changes (paused, liveness: waiting_for_input): 6/10 tasks complete [runId: run-theirs-publication]',
       '    - attention: workflow_run_completed — review-local-changes [itemId: item-theirs-review, runId: run-theirs-review]',
     ]);
-    expect(lines).toContain("other work in this space, not this conversation's: 1 runs, 0 items");
+    expect(lines.join('\n')).not.toContain('item-free');
+    expect(lines).toContain("other work in this space, not this conversation's: 1 runs, 1 items");
   });
 
-  /** `count` pending items about runs serving `planNodeId`, the first the newest, all from `from` back. */
+  /** `count` pending items about runs `sessionId` drove serving `planNodeId`, the first the newest, all from `from` back. */
   function pendingItems(
     prefix: string,
     count: number,
     planNodeId: string,
+    sessionId: string,
     from: Date,
   ): PendingRunAttentionItem[] {
     return Array.from({ length: count }, (_, i) => ({
@@ -393,6 +411,7 @@ describe('work under the plan — one answer to "what now" (Plan 322 P1)', () =>
       runId: `run-${prefix}-${String(i)}`,
       workflowSlug: 'review-local-changes',
       planNodeId,
+      sessionId,
       createdAt: new Date(from.getTime() - i * 60_000),
     }));
   }
@@ -402,11 +421,18 @@ describe('work under the plan — one answer to "what now" (Plan 322 P1)', () =>
     const ownCount = 3;
     const foreignCount = ATTENTION_ITEM_SURFACE_LIMIT + 7;
     fakeLedger.items.push(
-      ...pendingItems('ours', ownCount, finding.nodeId, new Date('2026-10-05T07:00:00.000Z')),
+      ...pendingItems(
+        'ours',
+        ownCount,
+        finding.nodeId,
+        STREAM_315,
+        new Date('2026-10-05T07:00:00.000Z'),
+      ),
       ...pendingItems(
         'theirs',
         foreignCount,
         theirSlice.nodeId,
+        STREAM_320,
         new Date('2026-10-05T12:00:00.000Z'),
       ),
     );
@@ -434,6 +460,7 @@ describe('work under the plan — one answer to "what now" (Plan 322 P1)', () =>
         'ours',
         ATTENTION_ITEM_SURFACE_LIMIT + extra,
         finding.nodeId,
+        STREAM_315,
         new Date('2026-10-05T12:00:00.000Z'),
       ),
     );

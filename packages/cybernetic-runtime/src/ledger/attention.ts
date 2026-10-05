@@ -131,6 +131,8 @@ export interface PendingRunAttentionItem {
   workflowSlug: string | null;
   /** The plan node that run serves (Plan 322 D5). */
   planNodeId: string | null;
+  /** The conversation that drove that run (`workflow_runs.session_id`). */
+  sessionId: string | null;
   createdAt: Date;
 }
 
@@ -138,12 +140,13 @@ export interface PendingRunAttentionItem {
 export interface PendingRunAttention {
   /**
    * Newest first: the newest `perNodeLimit` items about runs serving each plan
-   * node, and as many about runs serving none — so the newest `perNodeLimit`
-   * of any set of nodes, a plan root's subtree among them, are all here.
+   * node, and as many of each conversation's about runs serving none — so the
+   * newest `perNodeLimit` of any set of nodes, a plan root's subtree among
+   * them, and of any one conversation's unplaced items are all here.
    */
   items: PendingRunAttentionItem[];
-  /** Every pending item, counted by the plan node its run serves; `null` for none. */
-  counts: Array<{ planNodeId: string | null; count: number }>;
+  /** Every pending item, counted by the plan node its run serves and the conversation that drove it; `null` for none. */
+  counts: Array<{ planNodeId: string | null; sessionId: string | null; count: number }>;
 }
 
 /** The space's pending attention items by the plan node of their run, each with its run's slug. */
@@ -160,6 +163,11 @@ export async function readPendingRunAttention(
       eq(attentionItems.tenantId, tenantId),
       eq(attentionItems.spaceId, spaceId),
     );
+    // A placed item is every conversation's on its root, so it is grouped by
+    // node alone; an unplaced one is its driving conversation's only.
+    const unplacedSession = sql<
+      string | null
+    >`case when ${workflowRuns.planNodeId} is null then ${workflowRuns.sessionId} end`;
     const ranked = tx
       .select({
         itemId: attentionItems.id,
@@ -167,8 +175,9 @@ export async function readPendingRunAttention(
         runId: attentionItems.relatedRunId,
         workflowSlug: workflowRuns.workflowSlug,
         planNodeId: workflowRuns.planNodeId,
+        sessionId: workflowRuns.sessionId,
         createdAt: attentionItems.createdAt,
-        rank: sql<number>`row_number() over (partition by ${workflowRuns.planNodeId} order by ${attentionItems.createdAt} desc, ${attentionItems.id} desc)`.as(
+        rank: sql<number>`row_number() over (partition by ${workflowRuns.planNodeId}, ${unplacedSession} order by ${attentionItems.createdAt} desc, ${attentionItems.id} desc)`.as(
           'rank',
         ),
       })
@@ -183,17 +192,22 @@ export async function readPendingRunAttention(
         runId: ranked.runId,
         workflowSlug: ranked.workflowSlug,
         planNodeId: ranked.planNodeId,
+        sessionId: ranked.sessionId,
         createdAt: ranked.createdAt,
       })
       .from(ranked)
       .where(lte(ranked.rank, perNodeLimit))
       .orderBy(desc(ranked.createdAt), desc(ranked.itemId));
     const counts = await tx
-      .select({ planNodeId: workflowRuns.planNodeId, count: sql<number>`count(*)::int` })
+      .select({
+        planNodeId: workflowRuns.planNodeId,
+        sessionId: workflowRuns.sessionId,
+        count: sql<number>`count(*)::int`,
+      })
       .from(attentionItems)
       .leftJoin(workflowRuns, eq(workflowRuns.runId, attentionItems.relatedRunId))
       .where(pending)
-      .groupBy(workflowRuns.planNodeId);
+      .groupBy(workflowRuns.planNodeId, workflowRuns.sessionId);
     return {
       items: rows.map((row) => ({ ...row, kind: row.kind as AttentionItemKind })),
       counts,

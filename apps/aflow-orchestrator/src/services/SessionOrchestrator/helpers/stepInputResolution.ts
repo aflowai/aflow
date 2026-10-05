@@ -23,7 +23,7 @@ import { collectBoundInputKeys, resolveConfigRecursive } from './configResolutio
 import { isHistoryEnabled } from './aiHistory.js';
 import { buildAgentTurnInput } from './agentTurn.js';
 import { encodeTaskInput } from '../../../lib/encodeTaskInput.js';
-import type { AgentFlowContextDetails } from './agentTurn.js';
+import type { AgentFlowContextDetails, AgentTurnStepRecord } from './agentTurn.js';
 
 const opInputJsonSchemaCache = new Map<string, JsonSchema>();
 
@@ -66,6 +66,8 @@ export async function resolveStepInput(
   delegationContextJson?: string,
   finalOutputSchemaOverrideJson?: string,
   grant?: RunAccessGrant | null,
+  /** Filled by an agent turn with what its step state carries. */
+  agentTurnRecord?: AgentTurnStepRecord,
 ): Promise<string> {
   // Read the raw input payload
   let rawInput: Record<string, unknown> = {};
@@ -98,6 +100,7 @@ export async function resolveStepInput(
       delegationContextJson,
       finalOutputSchemaOverrideJson,
       grant,
+      agentTurnRecord,
     );
   }
 

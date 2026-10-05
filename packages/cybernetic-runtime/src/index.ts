@@ -9,6 +9,7 @@ export { getCyberneticLogger, logCyberneticError } from './logger.js';
 export * from './helmsmanPrompt.js';
 export * from './attentionBuilder.js';
 export * from './pendingAttention.js';
+export { consumeAttentionReadByTurn } from './attentionTurn.js';
 export * from './ratificationHelpers.js';
 export * from './metricsAggregator.js';
 export * from './retentionManager.js';

@@ -65,8 +65,9 @@ export interface ActiveWorkflowRunSummary {
   plan?: PlanPlacement;
 }
 
-/** Who reads the block: the plan roots its conversation has taken up (`loadConversationPlanRoots`). */
+/** Who reads the block: its session, and the plan roots its conversation has taken up (`loadConversationPlanRoots`). */
 export interface AttentionConversation {
+  sessionId: string;
   planRootIds: readonly string[];
 }
 
@@ -882,7 +883,10 @@ export function renderAttentionContext(
 ): string {
   const runs = attention.activeWorkflowRuns;
   const ownRoots = new Set(conversation.planRootIds);
-  const items = pendingAttentionFor(attention.pendingAttention, ownRoots);
+  const items = pendingAttentionFor(attention.pendingAttention, {
+    sessionId: conversation.sessionId,
+    planRootIds: ownRoots,
+  });
   const work: PlanWorkLine[] = [
     ...runs.map((run) => ({ kind: 'run' as const, line: renderRunLine(run), plan: run.plan })),
     ...items.own.map((item) => ({
