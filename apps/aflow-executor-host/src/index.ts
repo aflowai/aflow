@@ -32,7 +32,8 @@ import {
   HOST_INVENTORY_REFRESH_MS,
   HOST_INVENTORY_TTL_SECONDS,
   HOST_MACHINES_KEY,
-  hostBrowserSignInChannel,
+  hostBrowserAnswerChannel,
+  hostBrowserRequestChannel,
   HOST_WITHDRAWAL_CHANNEL,
   hostInventoryKey,
   type HostInventory,
@@ -40,11 +41,12 @@ import {
   type HostInventoryFolders,
   type HostWithdrawalNotice,
   quitRedisWithTimeout,
-  readHostBrowserSignInRequest,
+  readHostBrowserRequest,
 } from '@aflow/redis';
 import { HOST_HARNESS_CONCURRENCY_DEFAULT, HOST_KEEP_AWAKE_DEFAULT } from '@aflow/schemas';
 
 import { executionPermitted, loadHostPolicy } from './bindings.js';
+import { discoverChrome } from './browser/chromeDiscovery.js';
 import { createChromeLauncher } from './browser/chromeProcess.js';
 import { BrowserDriver } from './browser/driver.js';
 import type { SignInResult } from './browser/driverTypes.js';
@@ -52,6 +54,7 @@ import { startHandoffBoard } from './browser/handoffBoard.js';
 import { createBrowserIdleSweep } from './browser/idleSweep.js';
 import { followBrowserRequests } from './browser/requestPoll.js';
 import { isBrowserRequestFile, serveBrowserRequests } from './browser/windowRequests.js';
+import { answerBrowserSetting } from './browser/workspaceSettings.js';
 import { createBrowserHandler } from './handlers/browserHandler.js';
 import { redisApprovalStore } from './browser/approvalStore.js';
 import { removeWorktree } from './worktree.js';
@@ -315,6 +318,7 @@ async function main(): Promise<void> {
           window: profile.window,
           spaces: profile.spaces,
           rules: profile.rules,
+          unattended: profile.unattended,
           idleMinutes: profile.idleMinutes,
           running,
           windowOpen: windowShown,
@@ -574,16 +578,38 @@ async function main(): Promise<void> {
       error,
     });
   });
-  // The operator asking from the workspace for a profile's sign-in window. It
-  // opens a window on this machine and widens nothing: the sitting is the one
-  // `aflow browser sign-in` holds, on a profile this machine declares.
-  const signInChannel = hostBrowserSignInChannel(hostname);
-  await hostChannels.subscribe(signInChannel).catch((error: unknown) => {
-    log.warn('Could not subscribe to sign-in requests from the workspace', { error });
+  // The operator asking from the workspace for what `aflow browser` does here:
+  // a profile's sign-in window — the sitting the command holds — or a change to
+  // its settings, written by the command's own writer. Only the operator
+  // routes publish here, on a person's authenticated request.
+  const requestChannel = hostBrowserRequestChannel(hostname);
+  await hostChannels.subscribe(requestChannel).catch((error: unknown) => {
+    log.warn('Could not subscribe to browser requests from the workspace', { error });
   });
-  const signInAskedFromWorkspace = (raw: string): void => {
-    const profileId = readHostBrowserSignInRequest(raw, hostname);
-    if (profileId === undefined) return;
+  const askedFromWorkspace = (raw: string): void => {
+    const request = readHostBrowserRequest(raw, hostname);
+    if (request === undefined) return;
+    if (request.kind === 'setting') {
+      void answerBrowserSetting(request, policyPath, discoverChrome)
+        .then(async (answer) => {
+          log.info('Applied a browser setting asked for from the workspace', {
+            profileId: request.profileId,
+            setting: request.setting.kind,
+            outcome: answer.kind,
+          });
+          // Before the answer, so the page reading the inventory after it sees the change.
+          if (answer.kind === 'changed') await inventoryTask.runOnce().catch(() => undefined);
+          await redis.publish(hostBrowserAnswerChannel(request.answerId), JSON.stringify(answer));
+        })
+        .catch((error: unknown) => {
+          log.warn('Could not answer a browser setting asked for from the workspace', {
+            profileId: request.profileId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      return;
+    }
+    const { profileId } = request;
     signInSitting(profileId, 'workspace')
       .then((result) => {
         log.info('The operator closed the sign-in window', {
@@ -600,8 +626,8 @@ async function main(): Promise<void> {
       });
   };
   hostChannels.on('message', (channel: string, raw: string) => {
-    if (channel === signInChannel) {
-      signInAskedFromWorkspace(raw);
+    if (channel === requestChannel) {
+      askedFromWorkspace(raw);
       return;
     }
     if (channel !== HOST_WITHDRAWAL_CHANNEL) return;

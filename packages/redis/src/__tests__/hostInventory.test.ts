@@ -12,7 +12,7 @@ import {
   HOST_MACHINES_KEY,
   hostInventoryKey,
   publishingFoldersForSpace,
-  readHostBrowserSignInRequest,
+  readHostBrowserRequest,
   readLiveHostInventories,
   type HostInventory,
 } from '../hostInventory.js';
@@ -118,6 +118,7 @@ describe('host inventories', () => {
         window: 'hidden',
         spaces: 'all',
         rules: [],
+        unattended: true,
         idleMinutes: 30,
         running: true,
         windowOpen: false,
@@ -129,6 +130,7 @@ describe('host inventories', () => {
         window: 'visible',
         spaces: ['space-a'],
         rules: [{ origin: '*.example.com', effect: 'deny' }],
+        unattended: false,
         idleMinutes: 5,
         running: false,
         windowOpen: false,
@@ -151,22 +153,34 @@ describe('host inventories', () => {
         'running',
         'sites',
         'spaces',
+        'unattended',
         'window',
         'windowOpen',
       ].sort(),
     );
   });
 
-  it('reads a sign-in asked for from the workspace only when it names this machine', () => {
-    const asked = JSON.stringify({ hostname: 'laptop', profileId: 'work' });
-    expect(readHostBrowserSignInRequest(asked, 'laptop')).toBe('work');
-    expect(readHostBrowserSignInRequest(asked, 'desktop')).toBeUndefined();
+  it('reads a request from the workspace only when it names this machine', () => {
+    const signIn = { kind: 'sign_in', hostname: 'laptop', profileId: 'work' };
+    expect(readHostBrowserRequest(JSON.stringify(signIn), 'laptop')).toEqual(signIn);
+    expect(readHostBrowserRequest(JSON.stringify(signIn), 'desktop')).toBeUndefined();
+    const setting = {
+      kind: 'setting',
+      hostname: 'laptop',
+      profileId: 'work',
+      answerId: 'a'.repeat(24),
+      setting: { kind: 'rule', origin: 'not an origin', effect: 'ask' },
+    };
+    // The values are the executor's to judge, so a bad origin still arrives.
+    expect(readHostBrowserRequest(JSON.stringify(setting), 'laptop')).toEqual(setting);
     for (const raw of [
       'not json',
-      JSON.stringify({ hostname: 'laptop' }),
-      JSON.stringify({ hostname: 'laptop', profileId: '../escape' }),
+      JSON.stringify({ hostname: 'laptop', profileId: 'work' }),
+      JSON.stringify({ ...signIn, profileId: '../escape' }),
+      JSON.stringify({ ...setting, answerId: 'short' }),
+      JSON.stringify({ ...setting, setting: { kind: 'spaces', spaces: 'all' } }),
     ]) {
-      expect(readHostBrowserSignInRequest(raw, 'laptop'), raw).toBeUndefined();
+      expect(readHostBrowserRequest(raw, 'laptop'), raw).toBeUndefined();
     }
   });
 

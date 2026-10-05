@@ -500,6 +500,19 @@ yarn workspace @aflow/aflow-executor-host harness browser claude --clear
 
 A harness without `mcpArgs` refuses a task asking for a browser, and says so.
 
+A declared profile's posture, whether runs nobody is present for may use it, and
+its origin rules are set under **This Computer → Browser** in the application, or
+here with the command, which writes the same policy file the same way:
+
+```bash
+yarn workspace @aflow/aflow-executor-host browser posture default ask-to-act
+yarn workspace @aflow/aflow-executor-host browser unattended default refuse
+yarn workspace @aflow/aflow-executor-host browser rule default https://mail.example.com deny
+```
+
+Either is a person's change: the application's routes refuse an API key, a
+service principal or an MCP session, and no operation an agent can call changes them.
+
 The throwaway profile reaches no more than the harness itself: the hosts allowed
 with `harness allow`, and on this machine only the ports declared for it, on
 loopback (`localhost`, `127.0.0.1`, `[::1]`) and never on a LAN address:

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { bundleForOperation } from '../../catalog/capabilityBundles.js';
 import { getAllOperations, getOperation } from '../../catalog/registry.js';
 import { getStepTypeDescription } from '../../catalog/stepTypeDescriptions.js';
+import { toJsonSchemaSync } from '../../utils/jsonSchema.js';
 import {
   BROWSER_PAGE_ACT_OPERATION_ID,
   BROWSER_PAGE_NAVIGATE_OPERATION_ID,
@@ -428,5 +429,44 @@ describe('origin patterns', () => {
     for (const url of ['https://notexample.com/', 'https://example.com.evil.net/']) {
       expect(browserOriginPatternMatchesUrl(wild, new URL(url)), url).toBe(false);
     }
+  });
+});
+
+/** Every property name an input schema declares, at any depth, and whether one object pairs an origin with an effect. */
+function declaredNames(schema: unknown, into: Set<string> = new Set()): Set<string> {
+  if (Array.isArray(schema)) {
+    for (const item of schema) declaredNames(item, into);
+  } else if (typeof schema === 'object' && schema !== null) {
+    const properties = (schema as { properties?: unknown }).properties;
+    if (typeof properties === 'object' && properties !== null) {
+      const names = Object.keys(properties);
+      for (const name of names) into.add(name);
+      if (names.includes('origin') && names.includes('effect')) into.add('an origin rule');
+    }
+    for (const value of Object.values(schema)) declaredNames(value, into);
+  }
+  return into;
+}
+
+describe('a browser profile’s settings (Plan 320 D5)', () => {
+  it('are changed by no operation: none takes a posture, an unattended choice or an origin rule', () => {
+    const reaching: string[] = [];
+    for (const op of getAllOperations().values()) {
+      const names = declaredNames([
+        toJsonSchemaSync(op.inputZod, { draft: 'draft-2020-12' }),
+        ...(op.stepConfigZod
+          ? [toJsonSchemaSync(op.stepConfigZod, { draft: 'draft-2020-12' })]
+          : []),
+      ]);
+      for (const setting of ['posture', 'unattended', 'an origin rule']) {
+        if (names.has(setting)) reaching.push(`${op.operationId}: ${setting}`);
+      }
+    }
+    expect(reaching).toEqual([]);
+    // The reading sees them where they are: in the profile itself.
+    const profile = declaredNames(
+      toJsonSchemaSync(BrowserProfileSchema, { draft: 'draft-2020-12' }),
+    );
+    expect(['posture', 'unattended', 'an origin rule'].filter((s) => !profile.has(s))).toEqual([]);
   });
 });

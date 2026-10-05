@@ -20,6 +20,7 @@ import { oauthCallbackRoutes } from '../routes/oauth-callback.js';
 import { cimdRoutes } from '../routes/cimd.js';
 import { usersRoutes } from '../routes/users.js';
 import { hostBindingRoutes } from '../routes/hostBindings.js';
+import { hostBrowserSettingsRoutes } from '../routes/hostBrowserSettings.js';
 import { hostPairingRoutes } from '../routes/hostPairing.js';
 import { spaceCrudRoutes } from '../routes/spaceCrudRoutes.js';
 import { spacePolicyRoutes } from '../routes/spacePolicyRoutes.js';
@@ -122,6 +123,10 @@ function v1Surfaces({ actionCenterAggregator }: V1SurfaceDeps): ServerSurface[] 
       // pair, and the hosted product composes it without ever having a caller.
       name: 'host-pairing',
       register: (s) => s.register(hostPairingRoutes, { prefix: '/host' }),
+    },
+    {
+      name: 'host-browser-settings',
+      register: (s) => s.register(hostBrowserSettingsRoutes, { prefix: '/host' }),
     },
     {
       name: 'host-bindings',

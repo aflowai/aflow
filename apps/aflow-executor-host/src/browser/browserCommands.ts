@@ -5,13 +5,17 @@
  * Listing and signing in go through the running executor when there is one,
  * because the Chrome a profile's directory allows is the executor's; with none
  * running, this command starts the profile's browser itself through the same
- * driver, launch flags and egress proxy. Posture and origin rules are edits to
- * the policy file, which a running executor follows as it follows any edit.
+ * driver, launch flags and egress proxy. Posture, `unattended` and origin rules
+ * are edits to the policy file, which a running executor follows as it follows
+ * any edit; the machine page's edits go through the same writer, in the executor.
  */
 import { readFile } from 'node:fs/promises';
 
 import {
+  BROWSER_POSTURE_LINES,
+  BROWSER_UNATTENDED_LINE,
   type BrowserOriginRule,
+  BrowserPostureSchema,
   type BrowserProfile,
   DEFAULT_BROWSER_PROFILE_ID,
 } from '@aflow/schemas';
@@ -33,7 +37,7 @@ import {
   withRule,
   withUnattended,
 } from './policyEdit.js';
-import { effectiveBrowserProfiles } from './profiles.js';
+import { effectiveBrowserProfiles, parseBrowserProfiles } from './profiles.js';
 import type { ProfileHolder } from './profileLock.js';
 import { askExecutor, EXECUTOR_CLAIM_TIMEOUT_MS, type RequestClock } from './windowRequests.js';
 
@@ -50,26 +54,50 @@ export type BrowserCommand =
     }
   | { readonly kind: 'rule_remove'; readonly profileId: string; readonly origin: string };
 
-export const BROWSER_USAGE =
-  'Usage:\n' +
-  '  browser list                              The profiles, and what each one holds.\n' +
-  '  browser sign-in [profile]                 Open the profile’s browser in a window to sign\n' +
-  '                                            in to what the agent should reach; close it\n' +
-  '                                            when done. The `default` profile unless named.\n' +
-  '  browser posture <profile> <posture>       autonomous; ask-to-act, where every action\n' +
-  '                                            waits for your approval in the Action Center;\n' +
-  '                                            or read-only.\n' +
-  '  browser unattended <profile> allow|refuse Whether runs nobody is present for may use it.\n' +
-  '                                            A run is attended when a person’s request last\n' +
-  '                                            set it going, or a run attended at that moment\n' +
-  '                                            did; one a schedule, a webhook, a timer or an\n' +
-  '                                            API or MCP client set going is not. An\n' +
-  '                                            attended run may use the profile either way.\n' +
-  '  browser rule <profile> <origin> <effect>  allow, ask or deny pages at an origin, such as\n' +
-  '                                            https://mail.example.com or *.example.com.\n' +
-  '                                            ask: pages there open and are read, and every\n' +
-  '                                            action on one waits for your approval.\n' +
-  '  browser rule <profile> <origin> --remove  Drop that rule.';
+const USAGE_INDENT = 44;
+const USAGE_WIDTH = 92;
+
+/** A usage entry, its explanation wrapped beside the synopsis. */
+function usageEntry(synopsis: string, explanation: string): string {
+  const lines: string[] = [];
+  let line = '';
+  for (const word of explanation.split(' ')) {
+    if (line !== '' && USAGE_INDENT + line.length + 1 + word.length > USAGE_WIDTH) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = line === '' ? word : `${line} ${word}`;
+    }
+  }
+  lines.push(line);
+  const pad = ' '.repeat(USAGE_INDENT);
+  return lines
+    .map((text, index) => (index === 0 ? `  ${synopsis}`.padEnd(USAGE_INDENT) : pad) + text)
+    .join('\n');
+}
+
+export const BROWSER_USAGE = [
+  'Usage:',
+  usageEntry('browser list', 'The profiles, and what each one holds.'),
+  usageEntry(
+    'browser sign-in [profile]',
+    'Open the profile’s browser in a window to sign in to what the agent should reach; close ' +
+      'it when done. The `default` profile unless named.',
+  ),
+  usageEntry(
+    'browser posture <profile> <posture>',
+    BrowserPostureSchema.options
+      .map((posture) => `${posture}: ${BROWSER_POSTURE_LINES[posture]}`)
+      .join(' '),
+  ),
+  usageEntry('browser unattended <profile> allow|refuse', BROWSER_UNATTENDED_LINE),
+  usageEntry(
+    'browser rule <profile> <origin> <effect>',
+    'allow, ask or deny pages at an origin, such as https://mail.example.com or *.example.com. ' +
+      'ask: pages there open and are read, and every action on one waits for your approval.',
+  ),
+  usageEntry('browser rule <profile> <origin> --remove', 'Drop that rule.'),
+].join('\n');
 
 const RULE_GLOSS: Readonly<Record<BrowserOriginRule['effect'], string>> = {
   allow: '',
@@ -157,32 +185,88 @@ async function readPolicy(policyPath: string): Promise<RawPolicy> {
   return json as RawPolicy;
 }
 
-function impliedProfiles(deps: BrowserCliDeps): BrowserProfile[] {
-  return [...effectiveBrowserProfiles(undefined, deps.findChrome()).values()];
+/** A change to one profile's posture, `unattended` choice or origin rules. */
+export type BrowserSettingCommand = Extract<
+  BrowserCommand,
+  { kind: 'posture' | 'unattended' | 'rule' | 'rule_remove' }
+>;
+
+function settingEdit(
+  command: BrowserSettingCommand,
+): (policy: RawPolicy, implied: readonly BrowserProfile[]) => RawPolicy {
+  switch (command.kind) {
+    case 'posture':
+      return (policy, implied) => withPosture(policy, implied, command.profileId, command.posture);
+    case 'unattended':
+      return (policy, implied) =>
+        withUnattended(policy, implied, command.profileId, command.choice);
+    case 'rule':
+      return (policy, implied) =>
+        withRule(policy, implied, command.profileId, command.origin, command.effect);
+    case 'rule_remove':
+      return (policy, implied) => withoutRule(policy, implied, command.profileId, command.origin);
+  }
 }
 
-async function edit(
-  deps: BrowserCliDeps,
-  change: (policy: RawPolicy, implied: readonly BrowserProfile[]) => RawPolicy,
-  said: string,
-): Promise<void> {
-  const policy = await readPolicy(deps.policyPath);
-  const implied = impliedProfiles(deps);
+export interface BrowserSettingChanged {
+  /** The profile as the policy file now declares it. */
+  readonly profile: BrowserProfile;
+  /** The implied profiles written out before the change, when the file declared none. */
+  readonly impliedWrittenOut?: readonly string[];
+}
+
+/**
+ * The one writer of a profile's settings, for `aflow browser` and for the
+ * operator's request from the machine page alike, so the two validate and
+ * write the same way. A running executor follows the file as it follows any
+ * edit.
+ */
+export async function changeBrowserSetting(
+  policyPath: string,
+  findChrome: () => ChromeDiscovery,
+  command: BrowserSettingCommand,
+): Promise<BrowserSettingChanged> {
+  const policy = await readPolicy(policyPath);
+  const implied = [...effectiveBrowserProfiles(undefined, findChrome()).values()];
   let next: RawPolicy;
   try {
-    next = change(policy, implied);
+    next = settingEdit(command)(policy, implied);
   } catch (error) {
     if (error instanceof PolicyEditError) throw new BrowserCliError(error.message);
     throw error;
   }
-  await writePolicyAtomically(deps.policyPath, serializePolicy(next));
-  if (policy.browsers === undefined) {
-    const ids = declaredBrowsers(policy, implied).map((entry) =>
-      String((entry as { id?: unknown }).id),
+  await writePolicyAtomically(policyPath, serializePolicy(next));
+  const profile = parseBrowserProfiles(next.browsers ?? []).profiles.find(
+    (declared) => declared.id === command.profileId,
+  );
+  if (profile === undefined) {
+    throw new BrowserCliError(
+      `Profile \`${command.profileId}\` was written but does not read back as valid; ` +
+        'the policy file says why.',
     );
+  }
+  return {
+    profile,
+    ...(policy.browsers === undefined
+      ? {
+          impliedWrittenOut: declaredBrowsers(policy, implied).map((entry) =>
+            String((entry as { id?: unknown }).id),
+          ),
+        }
+      : {}),
+  };
+}
+
+async function edit(
+  deps: BrowserCliDeps,
+  command: BrowserSettingCommand,
+  said: string,
+): Promise<void> {
+  const changed = await changeBrowserSetting(deps.policyPath, deps.findChrome, command);
+  if (changed.impliedWrittenOut !== undefined) {
     deps.print(
       'This machine’s policy declared no browser profiles, so the implied one was written out ' +
-        `before the change: ${ids.join(', ')}.`,
+        `before the change: ${changed.impliedWrittenOut.join(', ')}.`,
     );
   }
   deps.print(said);
@@ -321,16 +405,12 @@ export async function runBrowserCommand(
       await signIn(deps, command.profileId);
       return;
     case 'posture':
-      await edit(
-        deps,
-        (policy, implied) => withPosture(policy, implied, command.profileId, command.posture),
-        `Profile \`${command.profileId}\` is now ${command.posture}.`,
-      );
+      await edit(deps, command, `Profile \`${command.profileId}\` is now ${command.posture}.`);
       return;
     case 'unattended':
       await edit(
         deps,
-        (policy, implied) => withUnattended(policy, implied, command.profileId, command.choice),
+        command,
         command.choice === 'allow'
           ? `Profile \`${command.profileId}\` is open to runs nobody is present for.`
           : `Profile \`${command.profileId}\` is closed to runs nobody is present for: only a ` +
@@ -341,15 +421,14 @@ export async function runBrowserCommand(
     case 'rule':
       await edit(
         deps,
-        (policy, implied) =>
-          withRule(policy, implied, command.profileId, command.origin, command.effect),
+        command,
         `Profile \`${command.profileId}\`: ${command.effect} ${command.origin}.`,
       );
       return;
     case 'rule_remove':
       await edit(
         deps,
-        (policy, implied) => withoutRule(policy, implied, command.profileId, command.origin),
+        command,
         `Profile \`${command.profileId}\` no longer has a rule for ${command.origin}.`,
       );
       return;

@@ -19,13 +19,14 @@ import { eq } from 'drizzle-orm';
 import { createTenantContext, withTenantSchema, hostBindings, spaces } from '@aflow/database';
 import {
   getRedisConnection,
-  hostBrowserSignInChannel,
+  hostBrowserRequestChannel,
   HOST_INVENTORY_TTL_MS,
-  type HostBrowserSignInRequest,
+  type HostBrowserRequest,
   HOST_MACHINES_KEY,
   type HostInventory,
   hostInventoryKey,
   HostInventorySchema,
+  readHostInventory,
 } from '@aflow/redis';
 
 import { applyHostIdentityToRunningServer } from '../bootstrap/redisAcl.js';
@@ -190,14 +191,6 @@ const MALFORMED_HOST_REDIS_URL = {
     'PHOENIX_HOST_REDIS_URL is not a redis:// or rediss:// URL, so the machine would be ' +
     'handed an address it cannot reach. Correct it and restart the server. Nothing was paired.',
 } as const;
-
-function safeJson(raw: string): unknown {
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return undefined;
-  }
-}
 
 export const hostPairingRoutes: FastifyPluginAsync = async (fastify) => {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
@@ -654,9 +647,7 @@ export const hostPairingRoutes: FastifyPluginAsync = async (fastify) => {
       const { profileId } = request.params;
       const { hostname } = request.body;
       const redis = getRedisConnection();
-      const raw = await redis.get(hostInventoryKey(hostname));
-      const inventory =
-        raw === null ? undefined : HostInventorySchema.safeParse(safeJson(raw)).data;
+      const inventory = await readHostInventory(redis, hostname);
       if (inventory === undefined) {
         return await reply.status(404).send({
           error: 'HostNotRunning',
@@ -676,9 +667,9 @@ export const hostPairingRoutes: FastifyPluginAsync = async (fastify) => {
           message: `Profile \`${profileId}\`'s window is already open on ${hostname}.`,
         });
       }
-      const asked: HostBrowserSignInRequest = { hostname, profileId };
+      const asked: HostBrowserRequest = { kind: 'sign_in', hostname, profileId };
       const receivers = await redis.publish(
-        hostBrowserSignInChannel(hostname),
+        hostBrowserRequestChannel(hostname),
         JSON.stringify(asked),
       );
       if (receivers === 0) {
