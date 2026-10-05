@@ -166,7 +166,7 @@ export class OperatorWindows {
     const { pages, browsers, clock } = this.host;
     const held = pages.get(request, request.pageId);
     const policy = await this.host.loadPolicy();
-    const profile = resolveProfile(policy, held.profileId, request.spaceId);
+    const profile = resolveProfile(policy, held.profileId, request);
     const executable = chromeExecutable(policy);
     // The page's own address, not the one shown to the run: the operator needs
     // the page exactly as it is, and it never leaves the machine.
@@ -277,7 +277,7 @@ export class OperatorWindows {
     const { browsers, clock } = this.host;
     const maxMs = options.maxMs ?? SIGN_IN_SITTING_MAX_MS;
     const policy = await this.host.loadPolicy();
-    const profile = resolveProfile(policy, profileId, undefined, true);
+    const profile = resolveProfile(policy, profileId, 'operator');
     const executable = chromeExecutable(policy);
     const shown = await browsers.showWindow(profile, executable);
     options.onShown?.();

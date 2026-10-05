@@ -106,6 +106,7 @@ export function createControlConsumer(
           ...(message.createdBy ? { createdBy: message.createdBy } : {}),
           ...(message.spaceId ? { spaceId: message.spaceId } : {}),
           ...(message.trigger ? { trigger: message.trigger } : {}),
+          activatedByPerson: message.activatedByPerson,
           ...(message.voiceMode ? { voiceMode: true } : {}),
           ...(message.actorContext ? { actorContext: message.actorContext } : {}),
           ...(message.clientMessageId ? { clientMessageId: message.clientMessageId } : {}),
@@ -127,6 +128,7 @@ export function createControlConsumer(
           ...(message.actorContext ? { actorContext: message.actorContext } : {}),
           ...(message.voiceMode !== undefined ? { voiceMode: message.voiceMode } : {}),
           ...(message.clientMessageId ? { clientMessageId: message.clientMessageId } : {}),
+          activatedByPerson: message.activatedByPerson,
           idempotencyKey: message.idempotencyKey,
         });
         return;
@@ -156,6 +158,7 @@ export function createControlConsumer(
           ...(message.inputRef ? { inputRef: message.inputRef } : {}),
           traceId: message.traceId,
           ...(message.actorContext ? { actorContext: message.actorContext } : {}),
+          activatedByPerson: message.activatedByPerson,
           idempotencyKey: message.idempotencyKey,
         });
         return;
@@ -330,6 +333,8 @@ export function createControlConsumer(
         (message.type === 'start_run' ? message.createdBy : undefined) ?? existingState?.createdBy;
       const trigger =
         (message.type === 'start_run' ? message.trigger : undefined) ?? existingState?.trigger;
+      const activatedByPerson =
+        message.type === 'start_run' ? message.activatedByPerson : existingState?.activatedByPerson;
 
       // Encode classified (safe) error message — not the raw internal one
       const safeErrorPayload = JSON.stringify({
@@ -353,6 +358,7 @@ export function createControlConsumer(
         ...(spaceId ? { spaceId } : {}),
         ...(createdBy ? { createdBy } : {}),
         ...(trigger ? { trigger } : {}),
+        ...(activatedByPerson !== undefined ? { activatedByPerson } : {}),
         // Preserve step tracking fields (critical for retryRun to know which step to retry)
         ...(existingState?.currentStepId ? { currentStepId: existingState.currentStepId } : {}),
         ...(existingState?.currentStepExecutionId

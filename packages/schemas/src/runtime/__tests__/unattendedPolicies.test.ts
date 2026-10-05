@@ -11,7 +11,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { isPauseForInputAllowed, resolveAgentPolicies } from '../agentTurn.js';
-import { isUnattendedTrigger, resolveAgentPoliciesFromConfig } from '../agentPolicies.js';
+import { startsWithNobodyWaiting, resolveAgentPoliciesFromConfig } from '../agentPolicies.js';
 
 describe('an assistant with somebody there', () => {
   it('keeps the conversation open, which is its job', () => {
@@ -105,10 +105,10 @@ describe('every site that resolves a running step', () => {
   });
 
   it('treats a webhook like a schedule, since neither has anyone waiting', () => {
-    expect(isUnattendedTrigger('webhook')).toBe(true);
-    expect(isUnattendedTrigger('schedule')).toBe(true);
-    expect(isUnattendedTrigger('chat')).toBe(false);
-    expect(isUnattendedTrigger(undefined)).toBe(false);
+    expect(startsWithNobodyWaiting('webhook')).toBe(true);
+    expect(startsWithNobodyWaiting('schedule')).toBe(true);
+    expect(startsWithNobodyWaiting('chat')).toBe(false);
+    expect(startsWithNobodyWaiting(undefined)).toBe(false);
   });
 
   it('keeps a delegate override winning over the stored role', () => {

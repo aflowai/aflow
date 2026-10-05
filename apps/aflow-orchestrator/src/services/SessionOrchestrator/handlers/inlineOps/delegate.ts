@@ -20,6 +20,7 @@ import {
 import { loadSpaceDirectives } from '@aflow/cybernetic-runtime';
 import { scheduleShardTimer } from '@aflow/redis';
 import { encodeInlineOpOutputRef } from './helpers.js';
+import { attendedAsActingRun } from './actingRun.js';
 import {
   addStepResult,
   addControlMessage,
@@ -318,6 +319,8 @@ export async function handleDelegateInline(args: InlineHandlerArgs): Promise<voi
       }
     }
 
+    const activatedByPerson = attendedAsActingRun(parentState);
+
     // 2) Write QUEUED hot state for child session
     const queuedState: SessionHotState = {
       sessionId: childSessionId,
@@ -336,6 +339,7 @@ export async function handleDelegateInline(args: InlineHandlerArgs): Promise<voi
       ...(parentState?.createdBy ? { createdBy: parentState.createdBy } : {}),
       // Propagate actorContext so child run has it for nested subflows
       ...(parentState?.actorContextJson ? { actorContextJson: parentState.actorContextJson } : {}),
+      activatedByPerson,
       // Subflow linkage: store parent info so the orchestrator can resume
       ...(waitForCompletion
         ? {
@@ -396,6 +400,7 @@ export async function handleDelegateInline(args: InlineHandlerArgs): Promise<voi
       ...(spaceId ? { spaceId } : {}),
       ...(parentState?.createdBy ? { createdBy: parentState.createdBy } : {}),
       ...(parentActorContext ? { actorContext: parentActorContext } : {}),
+      activatedByPerson,
     });
 
     if (waitForCompletion) {

@@ -218,6 +218,7 @@ export async function dispatchTask(deps: HarnessDeps, args: DispatchTaskArgs): P
         ...(taskAuthority.credentialOwnerId !== undefined
           ? { credentialOwnerId: taskAuthority.credentialOwnerId }
           : {}),
+        activatedByPerson: taskAuthority.activatedByPerson,
       });
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);

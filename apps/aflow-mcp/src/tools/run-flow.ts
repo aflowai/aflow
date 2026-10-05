@@ -172,7 +172,7 @@ export function registerRunFlowTool(
           conversationId: input.conversation_id,
           input: mergedInput,
           timeoutMs,
-          mode: isResume ? 'chat' : 'mcp',
+          mode: 'mcp',
           resolvePayloads: payloadMode === 'eager' ? 'eager' : 'lazy',
         });
 

@@ -16,6 +16,8 @@ vi.mock('@aflow/redis', async () => {
   return {
     ...actual,
     addStepResult: (...args: unknown[]) => mockAddStepResult(...args),
+    // The run asking for the review, which a person is present for.
+    getSessionState: () => Promise.resolve({ activatedByPerson: true }),
   };
 });
 
@@ -125,6 +127,7 @@ describe('learner.review.request — run-scoped dispatch', () => {
       spaceId: SPACE,
       workflowSlug: SLUG,
       runId: RUN_ID,
+      activatedByPerson: true,
       freshDispatch: true,
       reviewContextOverrides: expect.objectContaining({
         triggerKind: 'operator_requested_review',

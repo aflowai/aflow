@@ -173,21 +173,14 @@ export const BrowserProfileSchema = z.object({
     'The browser’s size in pixels, headless or windowed: pages lay out for it and a ' +
       'screenshot of the visible page is taken at it.',
   ),
-  // A job does not yet carry whether a person started its run, so a profile
-  // closed to unattended runs would be one this machine cannot keep closed.
   unattended: z
     .boolean()
     .default(true)
-    .refine((value) => value, {
-      message:
-        '`unattended: false` is not enforced yet: this machine cannot tell a run someone ' +
-        'started by hand from a scheduled or triggered one, so a profile cannot promise to ' +
-        'refuse the second. Remove the setting; every run that may use the profile may use it ' +
-        'unattended.',
-    })
     .describe(
-      'Whether a run nobody started by hand — a schedule, a trigger — may use it. Only `true` ' +
-        'is accepted until that is enforced.',
+      'Whether a run nobody is present for may use it. `false` keeps it to attended runs: one ' +
+        'a person’s request last set going, or a run attended at that moment did — not one a ' +
+        'schedule, a webhook, a timer or an API or MCP client set going. A sub-agent returning ' +
+        'to the run that waited on it changes nothing.',
     ),
   idleMinutes: z
     .number()

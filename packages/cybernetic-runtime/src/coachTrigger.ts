@@ -110,6 +110,8 @@ export interface CoachTriggerParams {
   campaignId?: string;
   validity?: ValidityCoachTriggerInput;
   reflections?: RunnerReflection[];
+  /** Whether the review session is attended — `SessionHotState.activatedByPerson`, decided by the caller. */
+  activatedByPerson: boolean;
   db: PostgresJsDatabase;
   redis: Redis;
   payloadStore?: PayloadStore;
@@ -875,6 +877,7 @@ export async function triggerCoachReview(params: CoachTriggerParams): Promise<st
       trigger: 'api',
       actorContext,
       createdBy: credentialOwnerId,
+      activatedByPerson: params.activatedByPerson,
     });
 
     // 6. Emit entity event with trigger source

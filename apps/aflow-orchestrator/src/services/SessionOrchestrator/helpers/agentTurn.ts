@@ -12,6 +12,7 @@ import type {
   RoomSpeaker,
   TenantId,
   RunAccessGrant,
+  RunTrigger,
   WorkflowRunWakeupEntry,
 } from '@aflow/schemas';
 import {
@@ -89,7 +90,6 @@ function formatDelegationFieldForPrompt(value: unknown): string {
   return JSON.stringify(value);
 }
 
-export type RunTrigger = 'chat' | 'api' | 'eval' | 'mcp' | 'schedule' | 'voice' | 'webhook';
 type AgentContextProfile = 'minimal' | 'default' | 'detailed' | 'debug';
 
 export interface FlowScheduleSummary {

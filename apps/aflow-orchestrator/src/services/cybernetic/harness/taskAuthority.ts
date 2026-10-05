@@ -3,6 +3,7 @@ import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { SessionHotState } from '@aflow/redis';
 import { getRunAccessGrant, serializeRunAccessGrant } from '@aflow/redis';
 import { getOrchestratorLogger } from '../../../lib/orchestratorLogger.js';
+import { attendedAsActingRun } from '../../SessionOrchestrator/handlers/inlineOps/actingRun.js';
 import { readDurableSessionCreatedBy } from './helpers.js';
 
 /**
@@ -23,6 +24,8 @@ export interface WorkflowTaskAuthority {
    * write posture.
    */
   grantJson?: string;
+  /** The anchor acts for every task it dispatches, so this is the anchor's as it is now. */
+  activatedByPerson: boolean;
 }
 
 export async function resolveWorkflowTaskAuthority(
@@ -56,5 +59,6 @@ export async function resolveWorkflowTaskAuthority(
     ...(credentialOwnerId !== undefined ? { credentialOwnerId } : {}),
     ...(anchorState?.actorContextJson ? { actorContextJson: anchorState.actorContextJson } : {}),
     ...(grantJson !== undefined ? { grantJson } : {}),
+    activatedByPerson: attendedAsActingRun(anchorState),
   };
 }

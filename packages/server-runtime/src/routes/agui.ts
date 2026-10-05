@@ -19,6 +19,7 @@ function aguiAgentIdToTarget(agentId: string): SessionAgentTarget {
 }
 import { createSessionService } from '../services/sessions.js';
 import { resolveApiBaseUrl } from '../lib/apiBaseUrl.js';
+import { isInteractiveUser } from '../utils/interactiveUser.js';
 import type { PubSubSubscription } from '../services/pubsub.js';
 
 // ============================================================================
@@ -68,6 +69,7 @@ export const aguiRoutes: FastifyPluginAsync = async (app) => {
           target: aguiAgentIdToTarget(agentId),
           spaceId: space.spaceId,
           trigger: 'api',
+          activatedByPerson: isInteractiveUser(request.authUser),
           ...(input ? { input } : {}),
           ...(version ? { agentVersion: version } : {}),
         },

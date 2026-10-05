@@ -81,6 +81,8 @@ export interface DispatchClaimedOperationTaskArgs {
   /** Clamped snooze delay resolved pre-claim; 0 for non-snooze operations. */
   snoozeDelayMs: number;
   credentialOwnerId?: string;
+  /** The workflow anchor's, from `resolveWorkflowTaskAuthority`. */
+  activatedByPerson: boolean;
 }
 
 /**
@@ -108,6 +110,7 @@ export async function dispatchClaimedOperationTask(
     spaceId,
     snoozeDelayMs,
     credentialOwnerId,
+    activatedByPerson,
   } = args;
   const stepType = operationId.split('.')[0] as StepType;
   const workflowExecution = { runId, taskId, attempt, dispatchAttemptToken };
@@ -127,6 +130,7 @@ export async function dispatchClaimedOperationTask(
       dueAtMs: Date.now() + snoozeDelayMs,
       ...(credentialOwnerId !== undefined ? { credentialOwnerId } : {}),
       spaceId,
+      activatedByPerson,
     });
     return 'snooze_timer';
   }
@@ -201,6 +205,7 @@ export async function dispatchClaimedOperationTask(
     scheduledAtMs: Date.now(),
     ...(credentialOwnerId !== undefined ? { credentialOwnerId } : {}),
     spaceId,
+    activatedByPerson,
   });
   return dispatched.kind === 'waiting' ? 'executor_wait' : 'enqueued';
 }

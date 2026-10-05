@@ -42,8 +42,11 @@ export interface SessionRunRequest {
   conversationId?: string | undefined;
   /** Max wait time in ms (default 120 000). */
   timeoutMs?: number | undefined;
-  /** Run mode sent to the API (default "mcp"). */
-  mode?: 'chat' | 'api' | 'mcp' | undefined;
+  /**
+   * Run mode sent to the API (default "mcp"). The API refuses `chat` and
+   * `voice` from an API key, and this server holds one.
+   */
+  mode?: 'api' | 'mcp' | undefined;
   /**
    * What this run pins its simulated worlds to — persona, baseline, seed,
    * caller disclosure and generation model, each keyed by simulation.

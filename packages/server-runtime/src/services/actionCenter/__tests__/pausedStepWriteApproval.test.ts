@@ -215,3 +215,23 @@ describe('pausedStepSource — a browser action waiting on the operator', () => 
     });
   });
 });
+
+describe('pausedStepSource — who the resolve that resumes the run is', () => {
+  it('resumes the run as set going by a person when the operator signed in to resolve it', async () => {
+    const source = createPausedStepSource(makeDeps(BROWSER_REQUEST));
+    const item = (await source.listOpen(ctx()))[0]!;
+    await source.resolve({ ...ctx(), actorIsInteractiveUser: true }, item, { kind: 'approve' });
+    expect(resumeSession.mock.calls[0]?.[0]).toMatchObject({ activatedByPerson: true });
+  });
+
+  it('resumes it as nobody’s when the resolve came from anything else', async () => {
+    const source = createPausedStepSource(makeDeps(BROWSER_REQUEST));
+    const item = (await source.listOpen(ctx()))[0]!;
+    await source.resolve({ ...ctx(), actorIsInteractiveUser: false }, item, { kind: 'approve' });
+    await source.resolve(ctx(), item, { kind: 'approve' });
+    expect(resumeSession.mock.calls.map(([request]) => request)).toMatchObject([
+      { activatedByPerson: false },
+      { activatedByPerson: false },
+    ]);
+  });
+});
