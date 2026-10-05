@@ -16,6 +16,15 @@ export const WorkflowRunListAttentionInputSchema = z.object({
     .optional(),
   /** Page size. Default 25, max 100. */
   limit: z.number().int().min(1).max(100).default(25),
+  scope: z
+    .enum(['conversation', 'space'])
+    .default('conversation')
+    .describe(
+      "'conversation' (the default) lists only this conversation's items: those about runs it drove, " +
+        'runs under the plan roots it has taken up, and runs no conversation owns. ' +
+        "'space' adds every other conversation's, marked `own: false` — another conversation's to act on, " +
+        'not this one: read them to report, never to resume, approve or focus.',
+    ),
 });
 export type WorkflowRunListAttentionInput = z.infer<typeof WorkflowRunListAttentionInputSchema>;
 
@@ -33,12 +42,12 @@ export const WorkflowRunListAttentionItemSchema = z.object({
   priority: z.number().int(),
   createdAt: z.string().datetime(),
   consumedAt: z.string().datetime().optional(),
-  suggestedNextCall: z
-    .object({
-      op: z.literal('human.action_center.focus'),
-      args: z.object({ itemId: z.string() }),
-    })
-    .optional(),
+  own: z
+    .boolean()
+    .describe(
+      "Whether the item is this conversation's to act on. `false` only under `scope: 'space'`: " +
+        "the item is another conversation's.",
+    ),
 });
 export type WorkflowRunListAttentionItem = z.infer<typeof WorkflowRunListAttentionItemSchema>;
 

@@ -51,7 +51,7 @@ Campaign-contracted skills (one entry point — still just workflow.run.start): 
 
 To inspect a run: workflow.run.detail({ runId }) returns live status, task rows, active waiters, and the resume contract for paused runs (with a freshly-injected pauseVersion). Use this for cross-session pickup — when a Helmsman in another session started a run you need to continue or report on.
 
-To surface runs needing follow-up: workflow.run.list_attention() returns pending attention items (paused / completed / failed / cancelled events) scoped to this space.
+To surface runs needing follow-up: workflow.run.list_attention() returns this conversation's pending attention items (paused / completed / failed / cancelled events).
 
 To request a review: use the "run-coach" tool. Supply rationale (what to inspect and why) and at least one of runId / skillSlug / taskId; focusAreas and evidenceTier are optional.
 

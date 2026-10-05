@@ -175,7 +175,7 @@ describe('listActiveRunsWithLiveness', () => {
     expect(withNode).toMatchObject({ runId: 'run-2', planNodeId: PLAN_NODE_ID });
   });
 
-  it('asks whether the session that drove each run is a Helmsman conversation that has not ended', async () => {
+  it('asks whether the session that drove each run is a Helmsman conversation that still owns it', async () => {
     const { db, queries, parameters } = fakeDb([
       { run_id: 'run-live', driven_by_live_conversation: true },
       { run_id: 'run-operator', driven_by_live_conversation: false },
@@ -186,16 +186,12 @@ describe('listActiveRunsWithLiveness', () => {
     });
 
     const index = queries.findIndex((query) => query.includes('FROM workflow_runs'));
-    expect(queries[index]).toContain('LEFT JOIN sessions s ON s.session_id = r.session_id');
+    expect(queries[index]).toContain('LEFT JOIN sessions ON sessions.session_id = r.session_id');
     expect(parameters[index]).toEqual(
-      expect.arrayContaining([
-        'platform-role',
-        'cybernetic-helmsman',
-        'SUCCEEDED',
-        'FAILED',
-        'CANCELLED',
-      ]),
+      expect.arrayContaining(['platform-role', 'cybernetic-helmsman', 'SUCCEEDED', 'CANCELLED']),
     );
+    // A failed conversation can be retried, so it keeps its runs.
+    expect(parameters[index]).not.toContain('FAILED');
     expect(live).toMatchObject({ runId: 'run-live', drivenByLiveConversation: true });
     expect(operator).toMatchObject({ runId: 'run-operator', drivenByLiveConversation: false });
   });

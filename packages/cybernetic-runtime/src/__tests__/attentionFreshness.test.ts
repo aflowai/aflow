@@ -26,6 +26,8 @@ interface RunRow {
   workflowSlug: string;
   planNodeId: string | null;
   sessionId: string | null;
+  /** `sessionId` is a Helmsman conversation that still owns the run. */
+  drivenByLiveConversation: boolean;
 }
 
 interface AttentionRow {
@@ -45,10 +47,12 @@ const table = {
   active: [] as ActiveSpaceRun[],
 };
 
+/** Newest first, a later write first among those written in the same millisecond. */
 function newestFirst(rows: AttentionRow[]): AttentionRow[] {
+  const written = (row: AttentionRow) => table.items.indexOf(row);
   return rows
     .filter((row) => row.spaceId === SPACE)
-    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || written(b) - written(a));
 }
 
 function pendingNewestFirst(): AttentionRow[] {
@@ -99,10 +103,22 @@ function answer(query: string, params: readonly unknown[]): unknown[][] {
     );
     return [];
   }
+  const runOf = (row: AttentionRow) => {
+    const run = row.relatedRunId !== null ? table.runs.get(row.relatedRunId) : undefined;
+    return [
+      run?.planNodeId ?? null,
+      run?.sessionId ?? null,
+      run?.drivenByLiveConversation ?? false,
+    ] as const;
+  };
   if (query.startsWith('select') && query.includes(' limit ') && !query.includes('row_number()')) {
-    const rows = query.includes('consumed_at IS NULL')
+    const all = query.includes('consumed_at IS NULL')
       ? pendingNewestFirst()
       : newestFirst(table.items);
+    const after = /where id = (\$\d+)\)/.exec(query)?.[1];
+    const start = after !== undefined ? all.findIndex((row) => row.id === param(after)) + 1 : 0;
+    const limit = /limit (\$\d+)/.exec(query)?.[1];
+    const rows = all.slice(start, start + Number(limit !== undefined ? param(limit) : all.length));
     return rows.map((row) => [
       row.id,
       TENANT,
@@ -116,6 +132,7 @@ function answer(query: string, params: readonly unknown[]): unknown[][] {
       row.createdAt.toISOString(),
       row.consumedAt?.toISOString() ?? null,
       row.consumedBySession,
+      ...runOf(row),
     ]);
   }
   if (query.includes('row_number()')) {
@@ -126,19 +143,17 @@ function answer(query: string, params: readonly unknown[]): unknown[][] {
         row.kind,
         row.relatedRunId,
         run?.workflowSlug ?? null,
-        run?.planNodeId ?? null,
-        run?.sessionId ?? null,
+        ...runOf(row),
         row.createdAt.toISOString(),
       ];
     });
   }
   if (query.includes('from "attention_items"') && query.includes('group by')) {
-    const counts = new Map<string, [string | null, string | null, number]>();
+    const counts = new Map<string, [string | null, string | null, boolean, number]>();
     for (const row of pendingNewestFirst()) {
-      const run = row.relatedRunId !== null ? table.runs.get(row.relatedRunId) : undefined;
-      const group = [run?.planNodeId ?? null, run?.sessionId ?? null] as const;
+      const group = runOf(row);
       const key = JSON.stringify(group);
-      counts.set(key, [...group, (counts.get(key)?.[2] ?? 0) + 1]);
+      counts.set(key, [...group, (counts.get(key)?.[3] ?? 0) + 1]);
     }
     return [...counts.values()];
   }
@@ -192,12 +207,9 @@ vi.mock('@aflow/database', async () => {
 
 const { buildHelmsmanAttention, renderAttentionContext } = await import('../attentionBuilder.js');
 const { readAttentionForTurn, consumeAttentionReadByTurn } = await import('../attentionTurn.js');
-const {
-  addAttentionItem,
-  addAttentionItemInTransaction,
-  listAttentionItems,
-  markAttentionConsumed,
-} = await import('../ledger/attention.js');
+const { addAttentionItem, addAttentionItemInTransaction, markAttentionConsumed } =
+  await import('../ledger/attention.js');
+const { listAttentionForConversation } = await import('../attentionList.js');
 const { emitRunUpdated } = await import('../runEvents.js');
 const { createPlanNode } = await import('../plan/operations.js');
 const { renderOtherWorkLine } = await import('../plan/attention.js');
@@ -265,7 +277,15 @@ beforeAll(() => {
 beforeEach(async () => {
   table.items = [];
   table.runs = new Map([
-    ['run-review', { workflowSlug: 'review-local-changes', planNodeId: null, sessionId: SESSION }],
+    [
+      'run-review',
+      {
+        workflowSlug: 'review-local-changes',
+        planNodeId: null,
+        sessionId: SESSION,
+        drivenByLiveConversation: true,
+      },
+    ],
   ]);
   table.active = [];
   planStore.current = new InMemoryPlanNodeStore();
@@ -367,25 +387,32 @@ describe('an attention item is a wake-up, read once', () => {
 
     const own = await turn(SESSION, 'succeeds');
     expect(own).toContain(`[itemId: ${itemId}, runId: run-review]`);
-    expect(own).not.toContain("not this conversation's");
+    expect(own).not.toContain("another conversation's");
     expect(row(itemId)).toMatchObject({ consumedBySession: SESSION, consumedAt: expect.any(Date) });
   });
 
-  it('is nobody’s when no conversation drove its run: counted for every conversation, consumed by none', async () => {
-    table.runs.set('run-scheduled', {
-      workflowSlug: 'ticker-market-digest',
-      planNodeId: null,
-      sessionId: null,
-    });
-    const itemId = await addAttentionItem(DB, redis, TENANT, pausedItem('run-scheduled'));
+  it.each([
+    ['no conversation drove', null],
+    ['a conversation that has ended drove', OTHER_SESSION],
+  ])(
+    'is everyone’s when %s its run: shown to whichever conversation reads first, which consumes it',
+    async (_driver, sessionId) => {
+      table.runs.set('run-scheduled', {
+        workflowSlug: 'ticker-market-digest',
+        planNodeId: null,
+        sessionId,
+        drivenByLiveConversation: false,
+      });
+      const itemId = await addAttentionItem(DB, redis, TENANT, pausedItem('run-scheduled'));
 
-    for (const sessionId of [SESSION, OTHER_SESSION]) {
-      const block = await turn(sessionId, 'succeeds');
-      expect(block).not.toContain(itemId);
-      expect(block).toContain(renderOtherWorkLine(0, 1));
-    }
-    expect(row(itemId).consumedAt).toBeNull();
-  });
+      const first = await turn(SESSION, 'succeeds');
+      expect(first).toContain(`[itemId: ${itemId}, runId: run-scheduled]`);
+      expect(first).not.toContain(renderOtherWorkLine(0, 1));
+      expect(row(itemId)).toMatchObject({ consumedBySession: SESSION });
+
+      expect(await turn(OTHER_SESSION, 'succeeds')).not.toContain(itemId);
+    },
+  );
 
   it("consumes a resumed run's pause when the run's terminal item is written", async () => {
     const transition = {
@@ -434,36 +461,146 @@ describe('an attention item is a wake-up, read once', () => {
       workflowSlug: 'commission-change',
       planNodeId: rootId,
       sessionId: owner,
+      drivenByLiveConversation: true,
     });
     table.runs.set('run-publish', {
       workflowSlug: 'local-publish',
       planNodeId: rootId,
       sessionId: owner,
+      drivenByLiveConversation: true,
     });
 
     const readId = await addAttentionItem(DB, redis, TENANT, pausedItem('run-commission'));
     await addAttentionItem(DB, redis, TENANT, pausedItem('run-publish'));
-    expect(await turnAttention()).toContain("not this conversation's: 0 runs, 2 items");
+    expect(await turnAttention()).toContain(renderOtherWorkLine(0, 2));
 
     await markAttentionConsumed(DB, redis, TENANT, { ids: [readId], consumedBySession: owner });
-    expect(await turnAttention()).toContain("not this conversation's: 0 runs, 1 items");
+    expect(await turnAttention()).toContain(renderOtherWorkLine(0, 1));
 
     await turn(owner, 'succeeds', [rootId]);
-    expect(await turnAttention()).not.toContain("not this conversation's");
+    expect(await turnAttention()).not.toContain("another conversation's");
   });
 
   it('is listed again by workflow.run.list_attention when consumed ones are asked for', async () => {
     const itemId = await addAttentionItem(DB, redis, TENANT, pausedItem('run-review'));
     await turn(SESSION, 'succeeds');
 
-    expect(await listAttentionItems(DB, TENANT, { spaceId: SPACE })).toEqual([]);
-    const listed = await listAttentionItems(DB, TENANT, { spaceId: SPACE, includeConsumed: true });
-    expect(listed).toEqual([
-      expect.objectContaining({
-        id: itemId,
-        consumedAt: expect.any(Date),
-        consumedBySession: SESSION,
-      }),
+    expect(await listAttention(SESSION)).toEqual({ items: [], hasMore: false });
+    const listed = await listAttention(SESSION, { includeConsumed: true });
+    expect(listed.items).toEqual([
+      {
+        item: expect.objectContaining({
+          id: itemId,
+          consumedAt: expect.any(Date),
+          consumedBySession: SESSION,
+        }),
+        own: true,
+      },
+    ]);
+  });
+});
+
+/** `workflow.run.list_attention` as `sessionId`'s conversation calls it. */
+function listAttention(
+  sessionId: string,
+  opts: { scope?: 'conversation' | 'space'; includeConsumed?: boolean; limit?: number } = {},
+) {
+  return listAttentionForConversation({
+    db: DB,
+    tenantId: TENANT,
+    spaceId: SPACE,
+    sessionId,
+    scope: opts.scope ?? 'conversation',
+    includeConsumed: opts.includeConsumed ?? false,
+    limit: opts.limit ?? 25,
+  });
+}
+
+describe('workflow.run.list_attention lists by the ownership the block reads', () => {
+  /** A conversation that has driven nothing. */
+  const COLD_SESSION = 'c01d0000-0000-4000-8000-000000000743';
+
+  /** `SESSION`'s paused review, a live conversation's; and an operator's run, paused. */
+  async function liveAndOperatorItems() {
+    table.runs.set('run-operator', {
+      workflowSlug: 'ticker-market-digest',
+      planNodeId: null,
+      sessionId: null,
+      drivenByLiveConversation: false,
+    });
+    const live = await addAttentionItem(DB, redis, TENANT, pausedItem('run-review'));
+    const operator = await addAttentionItem(DB, redis, TENANT, pausedItem('run-operator'));
+    return { live, operator };
+  }
+
+  it("returns a cold conversation none of another live conversation's items by default", async () => {
+    const { live, operator } = await liveAndOperatorItems();
+
+    const listed = await listAttention(COLD_SESSION);
+
+    expect(listed.items.map(({ item }) => item.id)).not.toContain(live);
+    expect(listed.items).toEqual([{ item: expect.objectContaining({ id: operator }), own: true }]);
+  });
+
+  it("lists another conversation's items only when the space is asked for, each marked as not the caller's", async () => {
+    const { live, operator } = await liveAndOperatorItems();
+
+    const listed = await listAttention(COLD_SESSION, { scope: 'space' });
+
+    expect(listed.items).toEqual(
+      expect.arrayContaining([
+        { item: expect.objectContaining({ id: live }), own: false },
+        { item: expect.objectContaining({ id: operator }), own: true },
+      ]),
+    );
+    expect(listed.items).toHaveLength(2);
+  });
+
+  it('gives the conversation that drove a run its items, the same ones its block shows it', async () => {
+    const { live, operator } = await liveAndOperatorItems();
+
+    const listed = await listAttention(SESSION);
+    const shown = await readAttentionForTurn({
+      tenantId: TENANT,
+      spaceId: SPACE,
+      conversation: { sessionId: SESSION, planRootIds: [] },
+      db: DB,
+      redis,
+    });
+
+    expect(listed.items.map(({ item }) => item.id).sort()).toEqual([live, operator].sort());
+    expect(shown.itemIds.sort()).toEqual([live, operator].sort());
+  });
+
+  it("fills a page with the caller's own items past another's, and says when there are more", async () => {
+    table.runs.set('run-operator-earlier', {
+      workflowSlug: 'ticker-market-digest',
+      planNodeId: null,
+      sessionId: null,
+      drivenByLiveConversation: false,
+    });
+    const operatorEarlier = await addAttentionItem(
+      DB,
+      redis,
+      TENANT,
+      pausedItem('run-operator-earlier'),
+    );
+    const { operator } = await liveAndOperatorItems();
+    const pages = [];
+    for (let page = 0; page < 2; page++) {
+      pages.push(await listAttention(COLD_SESSION, { limit: 1 }));
+      await markAttentionConsumed(DB, redis, TENANT, {
+        ids: pages.flatMap(({ items }) => items.map(({ item }) => item.id)),
+        consumedBySession: COLD_SESSION,
+      });
+    }
+
+    expect(pages).toEqual([
+      { items: [{ item: expect.objectContaining({ id: operator }), own: true }], hasMore: true },
+      {
+        items: [{ item: expect.objectContaining({ id: operatorEarlier }), own: true }],
+        hasMore: false,
+      },
     ]);
   });
 });

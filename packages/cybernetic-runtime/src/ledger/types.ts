@@ -95,6 +95,6 @@ export interface ActiveRunWithTaskCounts {
 
 /** An active run in a space, and whether a conversation still owns it. */
 export interface ActiveSpaceRun extends ActiveRunWithTaskCounts {
-  /** Its `sessionId` names a Helmsman conversation that has not ended. */
+  /** Its `sessionId` names a Helmsman conversation that still owns it (`isReadersWork`). */
   drivenByLiveConversation: boolean;
 }

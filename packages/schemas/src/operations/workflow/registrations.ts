@@ -551,14 +551,17 @@ export function createWorkflowOperationRegistrations(
       name: 'List Workflow Run Attention',
       actionLabel: 'Listing pending attention items…',
       semanticDescription:
-        'List pending attention items written by the workflow harness on terminal/pause/cancel events. ' +
-        'Used by Helmsman to surface paused or completed runs that need follow-up. Filterable by kind; ' +
-        'pending-only by default, and `includeConsumed` adds the consumed ones, each with its `consumedAt`.',
+        'List the attention items written by the workflow harness on terminal/pause/cancel events that ' +
+        "are this conversation's: about runs it drove, runs under the plan roots it has taken up, and " +
+        "runs no conversation owns — the same items its attention block shows it. `scope: 'space'` adds " +
+        "every other conversation's, each marked `own: false`. Filterable by kind; pending-only by " +
+        'default, and `includeConsumed` adds the consumed ones, each with its `consumedAt`.',
       tags: ['workflow', 'run', 'attention', 'observe'],
       idempotency: 'idempotent',
       mutates: false,
       usage: {
-        oneLine: 'List attention items for workflow runs (paused/completed/failed/cancelled).',
+        oneLine:
+          "List this conversation's attention items for workflow runs (paused/completed/failed/cancelled).",
         whenToUse: [
           'Surfacing paused runs that may need user follow-up',
           'Reporting recent completions / failures to the user',
@@ -566,6 +569,7 @@ export function createWorkflowOperationRegistrations(
         whenNotToUse: ['Subscribing to live run events — this is poll-only'],
         pitfalls: [
           "An item is read once: the turn whose attention block shows it consumes it, and a run's next pause or its end consumes its earlier pause. Pass `includeConsumed: true` to read those again.",
+          "An item marked `own: false` is another conversation's to act on. Report it if the operator asks; do not resume, approve or focus its run.",
         ],
         minimalExampleInput: {},
       },

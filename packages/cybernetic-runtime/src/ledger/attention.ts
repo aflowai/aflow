@@ -6,11 +6,13 @@ import {
   createTenantContext,
   withTenantSchema,
   attentionItems,
+  sessions,
   workflowRuns,
 } from '@aflow/database';
 import type { AttentionItemRow } from '@aflow/database';
 import type { AddAttentionItemInput, AttentionItemKind } from '@aflow/schemas';
 import { bumpAttentionGeneration } from '../attentionCache.js';
+import { drivenByLiveConversationSql } from '../conversationOwnership.js';
 
 /**
  * `tenantId` is the trusted source — it goes into the row regardless of
@@ -90,9 +92,22 @@ export function addAttentionItemInTransaction(
   return insertAttentionItem(tx, tenantId, args);
 }
 
+/** An attention item with what its run's ownership is read from (`isReadersWork`). */
+export interface AttentionItemWithRun {
+  item: AttentionItemRow;
+  /** The plan node the item's run serves. */
+  planNodeId: string | null;
+  /** The session that drove the item's run. */
+  sessionId: string | null;
+  /** That session is a Helmsman conversation that still owns the run. */
+  drivenByLiveConversation: boolean;
+}
+
 /**
- * A tenant's attention items, newest first: pending only unless
- * `includeConsumed`. Helmsman reads them via `workflow.run.list_attention`.
+ * A tenant's attention items, newest first, each with its run's placement and
+ * driver: pending only unless `includeConsumed`, and only those after
+ * `afterItemId` in that order when given. Helmsman reads them via
+ * `workflow.run.list_attention`, which decides whose each one is.
  */
 export async function listAttentionItems(
   db: PostgresJsDatabase,
@@ -103,8 +118,9 @@ export async function listAttentionItems(
     kind?: AttentionItemKind;
     includeConsumed?: boolean;
     limit?: number;
+    afterItemId?: string;
   },
-): Promise<AttentionItemRow[]> {
+): Promise<AttentionItemWithRun[]> {
   const tenantCtx = createTenantContext(tenantId as TenantId);
   const limit = opts.limit ?? 25;
   return withTenantSchema(db, tenantCtx, async (tx) => {
@@ -113,11 +129,25 @@ export async function listAttentionItems(
     if (opts.spaceId) conditions.push(eq(attentionItems.spaceId, opts.spaceId));
     if (opts.userId) conditions.push(eq(attentionItems.userId, opts.userId));
     if (opts.kind) conditions.push(eq(attentionItems.kind, opts.kind));
+    // Read back from the row, not from a Date: a JS Date keeps milliseconds and
+    // created_at keeps microseconds, so a cursor rebuilt from one skips rows.
+    if (opts.afterItemId !== undefined) {
+      conditions.push(
+        sql`(${attentionItems.createdAt}, ${attentionItems.id}) < (select created_at, id from attention_items where id = ${opts.afterItemId})`,
+      );
+    }
     return await tx
-      .select()
+      .select({
+        item: attentionItems,
+        planNodeId: workflowRuns.planNodeId,
+        sessionId: workflowRuns.sessionId,
+        drivenByLiveConversation: drivenByLiveConversationSql(),
+      })
       .from(attentionItems)
+      .leftJoin(workflowRuns, eq(workflowRuns.runId, attentionItems.relatedRunId))
+      .leftJoin(sessions, eq(sessions.sessionId, workflowRuns.sessionId))
       .where(and(...conditions))
-      .orderBy(desc(attentionItems.createdAt))
+      .orderBy(desc(attentionItems.createdAt), desc(attentionItems.id))
       .limit(limit);
   });
 }
@@ -133,6 +163,8 @@ export interface PendingRunAttentionItem {
   planNodeId: string | null;
   /** The conversation that drove that run (`workflow_runs.session_id`). */
   sessionId: string | null;
+  /** That conversation still owns the run (`drivenByLiveConversationSql`). */
+  drivenByLiveConversation: boolean;
   createdAt: Date;
 }
 
@@ -140,13 +172,20 @@ export interface PendingRunAttentionItem {
 export interface PendingRunAttention {
   /**
    * Newest first: the newest `perNodeLimit` items about runs serving each plan
-   * node, and as many of each conversation's about runs serving none — so the
+   * node, as many of each live conversation's about runs serving none, and as
+   * many of those about runs serving none that no conversation owns — so the
    * newest `perNodeLimit` of any set of nodes, a plan root's subtree among
-   * them, and of any one conversation's unplaced items are all here.
+   * them, of any one conversation's unplaced items, and of everyone's are all
+   * here.
    */
   items: PendingRunAttentionItem[];
-  /** Every pending item, counted by the plan node its run serves and the conversation that drove it; `null` for none. */
-  counts: Array<{ planNodeId: string | null; sessionId: string | null; count: number }>;
+  /** Every pending item, counted by the plan node its run serves and the session that drove it; `null` for none. */
+  counts: Array<{
+    planNodeId: string | null;
+    sessionId: string | null;
+    drivenByLiveConversation: boolean;
+    count: number;
+  }>;
 }
 
 /** The space's pending attention items by the plan node of their run, each with its run's slug. */
@@ -163,11 +202,13 @@ export async function readPendingRunAttention(
       eq(attentionItems.tenantId, tenantId),
       eq(attentionItems.spaceId, spaceId),
     );
+    const drivenByLiveConversation = drivenByLiveConversationSql();
     // A placed item is every conversation's on its root, so it is grouped by
-    // node alone; an unplaced one is its driving conversation's only.
-    const unplacedSession = sql<
+    // node alone; an unplaced one by the live conversation that owns it, and
+    // those no conversation owns together.
+    const unplacedOwner = sql<
       string | null
-    >`case when ${workflowRuns.planNodeId} is null then ${workflowRuns.sessionId} end`;
+    >`case when ${workflowRuns.planNodeId} is null and ${drivenByLiveConversation} then ${workflowRuns.sessionId} end`;
     const ranked = tx
       .select({
         itemId: attentionItems.id,
@@ -176,13 +217,15 @@ export async function readPendingRunAttention(
         workflowSlug: workflowRuns.workflowSlug,
         planNodeId: workflowRuns.planNodeId,
         sessionId: workflowRuns.sessionId,
+        drivenByLiveConversation: drivenByLiveConversation.as('driven_by_live_conversation'),
         createdAt: attentionItems.createdAt,
-        rank: sql<number>`row_number() over (partition by ${workflowRuns.planNodeId}, ${unplacedSession} order by ${attentionItems.createdAt} desc, ${attentionItems.id} desc)`.as(
+        rank: sql<number>`row_number() over (partition by ${workflowRuns.planNodeId}, ${unplacedOwner} order by ${attentionItems.createdAt} desc, ${attentionItems.id} desc)`.as(
           'rank',
         ),
       })
       .from(attentionItems)
       .leftJoin(workflowRuns, eq(workflowRuns.runId, attentionItems.relatedRunId))
+      .leftJoin(sessions, eq(sessions.sessionId, workflowRuns.sessionId))
       .where(pending)
       .as('ranked');
     const rows = await tx
@@ -193,6 +236,7 @@ export async function readPendingRunAttention(
         workflowSlug: ranked.workflowSlug,
         planNodeId: ranked.planNodeId,
         sessionId: ranked.sessionId,
+        drivenByLiveConversation: ranked.drivenByLiveConversation,
         createdAt: ranked.createdAt,
       })
       .from(ranked)
@@ -202,12 +246,22 @@ export async function readPendingRunAttention(
       .select({
         planNodeId: workflowRuns.planNodeId,
         sessionId: workflowRuns.sessionId,
+        drivenByLiveConversation,
         count: sql<number>`count(*)::int`,
       })
       .from(attentionItems)
       .leftJoin(workflowRuns, eq(workflowRuns.runId, attentionItems.relatedRunId))
+      .leftJoin(sessions, eq(sessions.sessionId, workflowRuns.sessionId))
       .where(pending)
-      .groupBy(workflowRuns.planNodeId, workflowRuns.sessionId);
+      // By the columns the ownership reads, not by its expression: Postgres
+      // takes each rendering's parameters as a different expression.
+      .groupBy(
+        workflowRuns.planNodeId,
+        workflowRuns.sessionId,
+        sessions.targetKind,
+        sessions.targetSystemRole,
+        sessions.status,
+      );
     return {
       items: rows.map((row) => ({ ...row, kind: row.kind as AttentionItemKind })),
       counts,

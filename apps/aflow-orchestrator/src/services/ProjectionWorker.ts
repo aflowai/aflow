@@ -21,6 +21,7 @@ import {
   type SessionEvent,
 } from '@aflow/redis';
 import { createLeasedWorkConsumer, type LeasedWorkResult } from '@aflow/lib';
+import { bumpAttentionGeneration, endsConversationOwnership } from '@aflow/cybernetic-runtime';
 import {
   createTenantContext,
   withTenantSchema,
@@ -464,6 +465,12 @@ export function createProjectionWorker(
         tenantId,
         spaceId: runState.spaceId,
       });
+      // The attention block reads whose a run is from this row, so a
+      // conversation's end is a transition of every run it drove, and the
+      // space's cached block is rebuilt for it as for a run's own.
+      if (endsConversationOwnership(runState.target, runState.status)) {
+        await bumpAttentionGeneration(redis, tenantId, runState.spaceId);
+      }
     }
 
     // After the upsert, because the mark it claims lives on the row that upsert

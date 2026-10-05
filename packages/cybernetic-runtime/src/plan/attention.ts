@@ -105,12 +105,11 @@ export async function loadConversationPlanRoots(params: {
   return [...new Set(roots.values())];
 }
 
-/** A line of work the attention block places: an active run or a pending attention item. */
+/** A line of work the attention block places under its node: an active run or a pending attention item. */
 export interface PlanWorkLine {
-  kind: 'run' | 'item';
   /** The line as it reads, without indent or bullet. */
   line: string;
-  plan?: PlanPlacement;
+  plan: PlanPlacement;
 }
 
 const PLAN_INDENT = '  ';
@@ -123,41 +122,38 @@ function renderPlanNodeLine(node: PlanAttentionNode): string {
 
 /**
  * The one line that counts the work in the space that is not this
- * conversation's. It carries no ids and no call to act — another
- * conversation's review or pause is not this one's to answer — but names where
- * the counted work is read, so the count is never a dead end.
+ * conversation's. It carries no ids and names no call: another conversation's
+ * review or pause is that conversation's to answer, and naming a way to read
+ * it invites this one to act on it.
  */
 export function renderOtherWorkLine(runs: number, items: number): string {
-  return `other work in this space, not this conversation's: ${String(runs)} runs, ${String(items)} items — \`workflow.run.list_attention\` lists the items, \`workflow.run.detail\` reads a run whose id the operator gives`;
+  return `other work in this space, another conversation's to act on: ${String(runs)} runs, ${String(items)} items`;
+}
+
+/** What the block counts rather than lists. */
+export interface PlanWorkCounts {
+  /** This conversation's pending items past those it is shown. */
+  ownUnshownItems: number;
+  /** Runs and items that are not this conversation's (`isReadersWork`). */
+  otherRuns: number;
+  otherItems: number;
 }
 
 /**
  * The plan section of the attention block: the open tree with this
  * conversation's work under the node it serves, its work on nodes the tree
- * does not show, and every run placed under another root, every run serving
- * no node that another live conversation drove, and every item that is
- * another conversation's as one count (`renderOtherWorkLine`). Work placed
- * nowhere that the caller shows is the caller's to list.
- *
- * Every active run placed in the plan is in `work`, and the other live
- * conversations' runs serving no node arrive counted in `otherUnplacedRuns`;
- * of the pending items, only the ones this conversation is shown are — the
- * rest arrive counted in `items`.
+ * does not show, and every run and item that is not its own as one count
+ * (`renderOtherWorkLine`). `work` is the conversation's own work placed in the
+ * plan; its own work placed nowhere is the caller's to list.
  */
 export function renderPlanWithWork(
   plan: PlanAttention | undefined,
   work: readonly PlanWorkLine[],
-  conversationRootIds: ReadonlySet<string>,
-  items: { ownUnshown: number; others: number },
-  otherUnplacedRuns: number,
+  counts: PlanWorkCounts,
 ): string[] {
   const own = new Map<string, PlanWorkLine[]>();
-  let otherRuns = otherUnplacedRuns;
   for (const entry of work) {
-    if (entry.plan === undefined) continue;
-    if (conversationRootIds.has(entry.plan.rootId)) {
-      own.set(entry.plan.nodeId, [...(own.get(entry.plan.nodeId) ?? []), entry]);
-    } else if (entry.kind === 'run') otherRuns++;
+    own.set(entry.plan.nodeId, [...(own.get(entry.plan.nodeId) ?? []), entry]);
   }
 
   const lines: string[] = [];
@@ -182,12 +178,14 @@ export function renderPlanWithWork(
       for (const entry of entries) lines.push(`- ${entry.line} [nodeId: ${nodeId}]`);
     }
   }
-  if (items.ownUnshown > 0) {
+  if (counts.ownUnshownItems > 0) {
     lines.push(
-      `   ... and ${String(items.ownUnshown)} more of this conversation's attention items — use \`workflow.run.list_attention\``,
+      `   ... and ${String(counts.ownUnshownItems)} more of this conversation's attention items — use \`workflow.run.list_attention\``,
     );
   }
-  if (otherRuns + items.others > 0) lines.push(renderOtherWorkLine(otherRuns, items.others));
+  if (counts.otherRuns + counts.otherItems > 0) {
+    lines.push(renderOtherWorkLine(counts.otherRuns, counts.otherItems));
+  }
   if (lines.length > 0) lines.push('');
   return lines;
 }

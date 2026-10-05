@@ -1,14 +1,13 @@
 import type { AttentionItemKind } from '@aflow/schemas';
+import { isReadersWork, type AttentionReader, type OwnedWork } from './conversationOwnership.js';
 import type { PendingRunAttention } from './ledger.js';
 import type { PlanPlacement } from './plan/attention.js';
 
-export interface PendingAttentionItemSummary {
+export interface PendingAttentionItemSummary extends OwnedWork {
   itemId: string;
   kind: AttentionItemKind;
   runId?: string;
   slug?: string;
-  /** The conversation that drove the item's run. */
-  sessionId?: string;
   /** Where the item's run sits in the plan. */
   plan?: PlanPlacement;
 }
@@ -16,93 +15,88 @@ export interface PendingAttentionItemSummary {
 /**
  * The pending attention items the block shows a conversation of its own
  * under the plan, and of its own whose run serves no plan node, newest
- * first; `workflow.run.list_attention` reads every pending one.
+ * first; `workflow.run.list_attention` reads every one of its own.
  */
 export const ATTENTION_ITEM_SURFACE_LIMIT = 10;
 
+/** Pending items counted by where their run sits and who drove it. */
+export interface PendingAttentionTotal extends OwnedWork {
+  plan?: PlanPlacement;
+  total: number;
+}
+
 /**
  * The space's pending attention items, held for every conversation the
- * cached block renders for: each plan root's newest and each conversation's
- * newest placed in no plan, so whichever conversation reads the block, its
+ * cached block renders for: each plan root's newest, each live
+ * conversation's newest placed in no plan, and the newest placed in no plan
+ * that no conversation owns, so whichever conversation reads the block, its
  * own newest are here, and every exact count, so the rest are counted rather
  * than sampled.
  */
 export interface PendingAttention {
   /**
-   * Newest first: up to `ATTENTION_ITEM_SURFACE_LIMIT` per plan root, and as
-   * many per conversation of those placed in no plan.
+   * Newest first: up to `ATTENTION_ITEM_SURFACE_LIMIT` per plan root, as many
+   * per live conversation of those placed in no plan, and as many of those no
+   * conversation owns.
    */
   items: PendingAttentionItemSummary[];
-  totalsByRoot: Array<{ rootId: string; total: number }>;
-  /**
-   * Pending items whose run serves no node in the plan, by the conversation
-   * that drove the run; `null` for those no conversation drove.
-   */
-  unplacedTotals: Array<{ sessionId: string | null; total: number }>;
+  totals: PendingAttentionTotal[];
 }
+
+const EVERYONES = 'everyone';
 
 /**
  * The pending items by the plan root their run serves, or the conversation
- * that drove a run serving none, each one's newest kept and every one counted.
+ * that owns a run serving none, or everyone, each one's newest kept and every
+ * one counted.
  */
 export function summarizePendingAttention(
   pending: PendingRunAttention,
   placements: ReadonlyMap<string, PlanPlacement>,
 ): PendingAttention | undefined {
-  const placementOf = (nodeId: string | null) =>
-    nodeId !== null ? placements.get(nodeId) : undefined;
+  const placed = (nodeId: string | null) => {
+    const plan = nodeId !== null ? placements.get(nodeId) : undefined;
+    return plan !== undefined ? { plan } : {};
+  };
+  const driver = (sessionId: string | null) => (sessionId !== null ? { sessionId } : {});
 
-  const totals = new Map<string, number>();
-  const unplacedTotals = new Map<string | null, number>();
-  for (const { planNodeId, sessionId, count } of pending.counts) {
-    const rootId = placementOf(planNodeId)?.rootId;
-    if (rootId === undefined) {
-      unplacedTotals.set(sessionId, (unplacedTotals.get(sessionId) ?? 0) + count);
-    } else {
-      totals.set(rootId, (totals.get(rootId) ?? 0) + count);
-    }
-  }
-  if (unplacedTotals.size === 0 && totals.size === 0) return undefined;
+  const totals: PendingAttentionTotal[] = pending.counts.map((count) => ({
+    ...placed(count.planNodeId),
+    ...driver(count.sessionId),
+    drivenByLiveConversation: count.drivenByLiveConversation,
+    total: count.count,
+  }));
+  if (totals.length === 0) return undefined;
 
-  const shownByRoot = new Map<string, number>();
-  const shownBySession = new Map<string, number>();
+  const kept = new Map<string, number>();
   const items: PendingAttentionItemSummary[] = [];
   for (const item of pending.items) {
-    const plan = placementOf(item.planNodeId);
-    const shown = plan !== undefined ? shownByRoot : shownBySession;
-    const key = plan !== undefined ? plan.rootId : item.sessionId;
-    // An unplaced item no conversation drove is nobody's to read; it is only counted.
-    if (key === null) continue;
-    const kept = shown.get(key) ?? 0;
-    if (kept >= ATTENTION_ITEM_SURFACE_LIMIT) continue;
-    shown.set(key, kept + 1);
-    items.push({
+    const summary: PendingAttentionItemSummary = {
       itemId: item.itemId,
       kind: item.kind,
       ...(item.runId !== null ? { runId: item.runId } : {}),
       ...(item.workflowSlug !== null ? { slug: item.workflowSlug } : {}),
-      ...(item.sessionId !== null ? { sessionId: item.sessionId } : {}),
-      ...(plan !== undefined ? { plan } : {}),
-    });
+      ...driver(item.sessionId),
+      drivenByLiveConversation: item.drivenByLiveConversation,
+      ...placed(item.planNodeId),
+    };
+    const group =
+      summary.plan !== undefined
+        ? `root:${summary.plan.rootId}`
+        : summary.drivenByLiveConversation
+          ? `session:${String(summary.sessionId)}`
+          : EVERYONES;
+    const count = kept.get(group) ?? 0;
+    if (count >= ATTENTION_ITEM_SURFACE_LIMIT) continue;
+    kept.set(group, count + 1);
+    items.push(summary);
   }
-  return {
-    items,
-    totalsByRoot: [...totals].map(([rootId, total]) => ({ rootId, total })),
-    unplacedTotals: [...unplacedTotals].map(([sessionId, total]) => ({ sessionId, total })),
-  };
-}
-
-/** Who reads the block: its session, and the plan roots its conversation has taken up. */
-export interface AttentionReader {
-  sessionId: string;
-  planRootIds: ReadonlySet<string>;
+  return { items, totals };
 }
 
 /**
- * The pending items as one conversation reads them. An item is its own when
- * the conversation drove the item's run or, for a run placed in the plan, has
- * taken up the same root; it reads only its own, and every other one is
- * counted in `others`.
+ * The pending items as one conversation reads them: its own are those
+ * `isReadersWork` gives it, and every other one is counted in `others`.
  */
 export interface ConversationAttentionItems {
   /** Its own newest, under the plan roots it has taken up. */
@@ -121,23 +115,18 @@ export function pendingAttentionFor(
   pending: PendingAttention | undefined,
   reader: AttentionReader,
 ): ConversationAttentionItems {
-  const items = pending?.items ?? [];
-  const own = items
-    .filter((item) => item.plan !== undefined && reader.planRootIds.has(item.plan.rootId))
-    .slice(0, ATTENTION_ITEM_SURFACE_LIMIT);
-  const unplaced = items
-    .filter((item) => item.plan === undefined && item.sessionId === reader.sessionId)
+  const mine = (pending?.items ?? []).filter((item) => isReadersWork(item, reader));
+  const own = mine.filter((item) => item.plan !== undefined).slice(0, ATTENTION_ITEM_SURFACE_LIMIT);
+  const unplaced = mine
+    .filter((item) => item.plan === undefined)
     .slice(0, ATTENTION_ITEM_SURFACE_LIMIT);
   let ownTotal = 0;
   let unplacedTotal = 0;
   let others = 0;
-  for (const { rootId, total } of pending?.totalsByRoot ?? []) {
-    if (reader.planRootIds.has(rootId)) ownTotal += total;
-    else others += total;
-  }
-  for (const { sessionId, total } of pending?.unplacedTotals ?? []) {
-    if (sessionId === reader.sessionId) unplacedTotal += total;
-    else others += total;
+  for (const count of pending?.totals ?? []) {
+    if (!isReadersWork(count, reader)) others += count.total;
+    else if (count.plan !== undefined) ownTotal += count.total;
+    else unplacedTotal += count.total;
   }
   return {
     own,
@@ -145,7 +134,7 @@ export function pendingAttentionFor(
     others,
     unplaced,
     unplacedUnshown: unplacedTotal - unplaced.length,
-    placedAny: (pending?.totalsByRoot.length ?? 0) > 0,
+    placedAny: (pending?.totals ?? []).some((count) => count.plan !== undefined),
   };
 }
 

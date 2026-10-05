@@ -36,9 +36,9 @@ vi.mock('../ledger/queries.js', async () => {
   };
 });
 /**
- * What `readPendingRunAttention`'s queries return: each node's newest, and
- * each driving session's newest serving none, and every item counted by node
- * and session.
+ * What `readPendingRunAttention`'s queries return: each node's newest, each
+ * owning conversation's newest serving none, the newest serving none that no
+ * conversation owns, and every item counted by node and driver.
  */
 function readPendingFromLedger(perNodeLimit: number): PendingRunAttention {
   const newestFirst = [...fakeLedger.items].sort(
@@ -48,16 +48,21 @@ function readPendingFromLedger(perNodeLimit: number): PendingRunAttention {
   const items = newestFirst.filter((item) => {
     const partition = JSON.stringify([
       item.planNodeId,
-      item.planNodeId === null ? item.sessionId : null,
+      item.planNodeId === null && item.drivenByLiveConversation ? item.sessionId : null,
     ]);
     const seen = ranks.get(partition) ?? 0;
     ranks.set(partition, seen + 1);
     return seen < perNodeLimit;
   });
   const counts = new Map<string, PendingRunAttention['counts'][number]>();
-  for (const { planNodeId, sessionId } of newestFirst) {
-    const key = JSON.stringify([planNodeId, sessionId]);
-    counts.set(key, { planNodeId, sessionId, count: (counts.get(key)?.count ?? 0) + 1 });
+  for (const { planNodeId, sessionId, drivenByLiveConversation } of newestFirst) {
+    const key = JSON.stringify([planNodeId, sessionId, drivenByLiveConversation]);
+    counts.set(key, {
+      planNodeId,
+      sessionId,
+      drivenByLiveConversation,
+      count: (counts.get(key)?.count ?? 0) + 1,
+    });
   }
   return { items, counts: [...counts.values()] };
 }
@@ -310,7 +315,7 @@ describe('the plan section of the attention block', () => {
 describe('work under the plan — one answer to "what now" (Plan 322 P1)', () => {
   const STREAM_315 = 'a3150000-0000-4000-8000-000000000315';
   const STREAM_320 = 'a3200000-0000-4000-8000-000000000320';
-  const OTHER_LINE = /^other work in this space, not this conversation's: /m;
+  const OTHER_LINE = /^other work in this space, another conversation's to act on: /m;
 
   /** Two streams in one space, each with a run under a node, and the review the other stream is waiting on. */
   async function twoStreams() {
@@ -334,6 +339,7 @@ describe('work under the plan — one answer to "what now" (Plan 322 P1)', () =>
         workflowSlug: 'review-local-changes',
         planNodeId: theirSlice.nodeId,
         sessionId: STREAM_320,
+        drivenByLiveConversation: true,
         createdAt: new Date('2026-10-05T09:00:00.000Z'),
       },
       {
@@ -343,6 +349,7 @@ describe('work under the plan — one answer to "what now" (Plan 322 P1)', () =>
         workflowSlug: 'ticker-market-digest',
         planNodeId: null,
         sessionId: STREAM_315,
+        drivenByLiveConversation: true,
         createdAt: new Date('2026-10-05T08:30:00.000Z'),
       },
     ];
@@ -365,12 +372,14 @@ describe('work under the plan — one answer to "what now" (Plan 322 P1)', () =>
     expect(lines).toContain(renderOtherWorkLine(1, 1));
   });
 
-  it('names where the counted work is read, so the count is never a dead end', async () => {
+  it('says the counted work is another conversation’s, and names no call to read or act on it', async () => {
     await twoStreams();
 
-    expect(await turnAttention(COLD_SESSION)).toContain(
-      "other work in this space, not this conversation's: 3 runs, 2 items — `workflow.run.list_attention` lists the items, `workflow.run.detail` reads a run whose id the operator gives",
+    const line = (await turnAttention(COLD_SESSION)).split('\n').find((l) => OTHER_LINE.test(l));
+    expect(line).toBe(
+      "other work in this space, another conversation's to act on: 3 runs, 2 items",
     );
+    expect(line).not.toMatch(/`/);
   });
 
   it('renders free-floating runs and items in their own short lists after the tree', async () => {
@@ -412,6 +421,7 @@ describe('work under the plan — one answer to "what now" (Plan 322 P1)', () =>
           workflowSlug: 'publish-local-changes',
           planNodeId: null,
           sessionId: STREAM_320,
+          drivenByLiveConversation: true,
           createdAt: new Date('2026-10-05T09:00:00.000Z'),
         },
       ];
@@ -460,6 +470,40 @@ describe('work under the plan — one answer to "what now" (Plan 322 P1)', () =>
       }
     });
 
+    it('carries its items with it: everyone’s run’s items read in full to every conversation, and none is counted', async () => {
+      const ENDED_STREAM = 'e0de0000-0000-4000-8000-000000000322';
+      const ownerless = (itemId: string, runId: string, sessionId: string | null) => ({
+        itemId,
+        kind: 'workflow_run_paused' as const,
+        runId,
+        workflowSlug: 'ticker-market-digest',
+        planNodeId: null,
+        sessionId,
+        drivenByLiveConversation: false,
+        createdAt: new Date('2026-10-05T09:00:00.000Z'),
+      });
+      fakeLedger.runs = [
+        activeRun('run-digest', 'ticker-market-digest', null, undefined, 'operator'),
+        activeRun('run-ended', 'ticker-market-digest', ENDED_STREAM, undefined, 'operator'),
+      ];
+      fakeLedger.items = [
+        ownerless('item-operator', 'run-digest', null),
+        ownerless('item-ended', 'run-ended', ENDED_STREAM),
+      ];
+
+      for (const conversation of [COLD_SESSION, STREAM_320]) {
+        const lines = (await turnAttention(conversation)).split('\n');
+        expect(lines).toContain(FULL_LINE);
+        expect(lines).toContain(
+          '- attention: workflow_run_paused — ticker-market-digest [itemId: item-operator, runId: run-digest]',
+        );
+        expect(lines).toContain(
+          '- attention: workflow_run_paused — ticker-market-digest [itemId: item-ended, runId: run-ended]',
+        );
+        expect(lines.join('\n')).not.toMatch(OTHER_LINE);
+      }
+    });
+
     it('reads in full, with its paused item, to the conversation that drove it', async () => {
       unplacedPausedPublication();
 
@@ -505,6 +549,7 @@ describe('work under the plan — one answer to "what now" (Plan 322 P1)', () =>
       workflowSlug: 'review-local-changes',
       planNodeId,
       sessionId,
+      drivenByLiveConversation: true,
       createdAt: new Date(from.getTime() - i * 60_000),
     }));
   }
