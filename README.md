@@ -20,26 +20,35 @@ No account, no licence server, and nothing phones home.
 
 You need **Docker**. Nothing else.
 
+Download `aflow-appliance-<version>.tgz` from the
+[latest release](https://github.com/aflowai/aflow/releases/latest), then:
+
 ```bash
-git clone https://github.com/aflowai/aflow.git && cd aflow
-docker compose -f docker-compose.local.yml up -d --build
+mkdir aflow && tar -xzf aflow-appliance-*.tgz -C aflow && cd aflow
+docker compose up -d
 open http://127.0.0.1:3001
 ```
 
-Or skip the build: the [latest release](https://github.com/aflowai/aflow/releases/latest)
-has a Compose bundle that pulls the published image — unpack it and run
-`docker compose up -d` in its folder.
+That pulls the published image, about 4 GB, and builds nothing. The bundle's own
+README carries upgrade, rollback and backup.
+
+To build the image from source instead:
+
+```bash
+git clone https://github.com/aflowai/aflow.git && cd aflow
+docker compose -f docker-compose.local.yml up -d --build
+```
 
 There is no login — reaching the web app on loopback identifies you as the owner.
 First run walks you through connecting a model provider; the key is stored
 encrypted per workspace, not in a file.
 
-|                    |                                                                                  |
-| ------------------ | -------------------------------------------------------------------------------- |
-| **Supported**      | macOS with Docker Desktop. Linux is expected to work, not yet qualified          |
-| **Disk**           | ~20 GB for the first build                                                       |
-| **Lifecycle**      | `yarn local:up` · `local:down` · `local:logs` · `local:backup` · `local:restore` |
-| **Check it works** | `./scripts/appliance-smoke.sh` — needs only Docker                               |
+|                    |                                                                                                |
+| ------------------ | ---------------------------------------------------------------------------------------------- |
+| **Supported**      | macOS with Docker Desktop. Linux is expected to work, not yet qualified                        |
+| **Disk**           | ~4 GB for the published image; ~20 GB to build it from source                                  |
+| **Lifecycle**      | From a clone: `yarn local:up` · `local:down` · `local:logs` · `local:backup` · `local:restore` |
+| **Check it works** | `./scripts/appliance-smoke.sh` — needs only Docker                                             |
 
 [`docs/dev/local-appliance.md`](docs/dev/local-appliance.md) is the operator guide:
 secrets, backup and restore, upgrades, and sandboxed code execution.

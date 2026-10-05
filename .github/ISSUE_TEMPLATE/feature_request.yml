@@ -1,0 +1,27 @@
+name: Feature request
+description: Something Aflow cannot do yet, or a connector, skill or operation it lacks
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        An idea that is still taking shape fits better in [Discussions](https://github.com/aflowai/aflow/discussions/categories/ideas). A change to behaviour, a schema or the architecture is built from a numbered plan — [`docs/plans/README.md`](https://github.com/aflowai/aflow/blob/main/docs/plans/README.md) — and this issue is where to agree it needs one.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you are trying to do
+      description: The task or workflow, and where Aflow stops you today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would solve it
+      description: The behaviour you would like. A sketch is enough.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you do instead
+      description: Any workaround in use now, and what it costs.
