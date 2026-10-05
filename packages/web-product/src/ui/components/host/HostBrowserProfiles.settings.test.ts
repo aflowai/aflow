@@ -77,7 +77,7 @@ const WORK = {
   rules: [{ origin: 'https://mail.example.com', effect: 'deny' }],
   unattended: false,
   idleMinutes: 30,
-  localPorts: [5173],
+  localPorts: [{ port: 5173 }],
   running: false,
   windowOpen: false,
 };
@@ -231,6 +231,40 @@ describe('a browser profile’s settings on the machine page', () => {
     expect(lastRequest('DELETE')).toMatchObject({
       path: '/host/browsers/work/local-ports',
       body: { hostname: 'laptop', port: '5173' },
+    });
+  });
+
+  it('show a port this stack serves on that the file lists as refused, with why, and remove it', async () => {
+    const reason =
+      "port 3001 is this stack's own — the web application, by default — and a page from it " +
+      "could approve the agent's requests";
+    recorded.status = {
+      paired: true,
+      machines: [
+        {
+          hostname: 'laptop',
+          observedAt: new Date().toISOString(),
+          browsers: [{ ...WORK, localPorts: [{ port: 3001, refused: reason }, { port: 5173 }] }],
+        },
+      ],
+    };
+    await act(async () => {
+      root.render(createElement(HostBrowserProfiles));
+    });
+    expect(container.textContent).toContain('localhost:3001');
+    expect(container.textContent).toContain(`Listed and refused: ${reason}`);
+    expect(container.textContent?.match(/Listed and refused/g)).toHaveLength(1);
+
+    const removes = [...container.querySelectorAll('button')].filter(
+      (b) => b.textContent === 'Remove',
+    );
+    expect(removes).toHaveLength(WORK.rules.length + 2);
+    await act(async () => {
+      removes.at(-2)?.click();
+    });
+    expect(lastRequest('DELETE')).toMatchObject({
+      path: '/host/browsers/work/local-ports',
+      body: { hostname: 'laptop', port: '3001' },
     });
   });
 

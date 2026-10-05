@@ -35,7 +35,8 @@ export interface HostBrowserProfile {
   rules: BrowserOriginRule[];
   unattended: boolean;
   idleMinutes: number;
-  localPorts: number[];
+  /** Every port the policy lists; `refused` says why one this stack serves on stays closed. */
+  localPorts: Array<{ port: number; refused?: string }>;
   running: boolean;
   windowOpen: boolean;
   sites?: string[];
@@ -213,11 +214,12 @@ export function BrowserProfileSettings({
         </Row>
       </Column>
       <Column gap="xs">
-        {profile.localPorts.map((open) => (
-          <Row key={open} gap="sm" align="center">
+        {profile.localPorts.map(({ port: listed, refused }) => (
+          <Row key={listed} gap="sm" align="center">
             <Text variant="mono" size="sm">
-              localhost:{open}
+              localhost:{listed}
             </Text>
+            {refused !== undefined && <HelperText>Listed and refused: {refused}</HelperText>}
             <Button
               size="sm"
               variant="ghost"
@@ -227,7 +229,7 @@ export function BrowserProfileSettings({
                   hostname,
                   profileId: profile.id,
                   field: 'local-ports',
-                  value: { port: String(open) },
+                  value: { port: String(listed) },
                 });
               }}
             >

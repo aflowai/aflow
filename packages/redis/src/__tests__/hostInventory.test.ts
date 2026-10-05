@@ -133,7 +133,7 @@ describe('host inventories', () => {
         rules: [{ origin: '*.example.com', effect: 'deny' }],
         unattended: false,
         idleMinutes: 5,
-        localPorts: [5173],
+        localPorts: [{ port: 3001, refused: "port 3001 is this stack's own" }, { port: 5173 }],
         running: false,
         windowOpen: false,
       },

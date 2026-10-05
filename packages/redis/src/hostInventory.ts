@@ -9,6 +9,7 @@
 import { z } from 'zod';
 
 import {
+  BrowserLocalPortSchema,
   BrowserProfileIdSchema,
   BrowserProfileSchema,
   type HostPublishedChecks,
@@ -140,6 +141,17 @@ export const HostBrowserSettingAnswerSchema = z.discriminatedUnion('kind', [
 export type HostBrowserSettingAnswer = z.infer<typeof HostBrowserSettingAnswerSchema>;
 
 /**
+ * A loopback port a profile's policy lists, every one of them: open, or
+ * `refused` with why when this stack serves on it, so a port written into the
+ * file by hand is shown on the machine page and can be removed there.
+ */
+export const HostInventoryLocalPortSchema = z.object({
+  port: BrowserLocalPortSchema,
+  refused: z.string().optional(),
+});
+export type HostInventoryLocalPort = z.infer<typeof HostInventoryLocalPortSchema>;
+
+/**
  * What a machine publishes about itself.
  *
  * Both halves are observed rather than declared: the runtimes by probing the
@@ -196,8 +208,8 @@ export const HostInventorySchema = z.object({
       rules: true,
       unattended: true,
       idleMinutes: true,
-      localPorts: true,
     }).extend({
+      localPorts: z.array(HostInventoryLocalPortSchema).default([]),
       running: z.boolean(),
       windowOpen: z.boolean(),
       sites: z.array(z.string()).optional(),

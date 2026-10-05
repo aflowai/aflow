@@ -515,9 +515,9 @@ service principal or an MCP session, and no operation an agent can call changes 
 
 A declared profile reaches nothing on this machine until a port is opened to it.
 Open the port a dev server listens on, and Helmsman and Runners using the profile
-can load it at `localhost`, `127.0.0.1` or `[::1]` — or at a name that resolves
-only to loopback — on that port alone; every other port, and every other address
-of this machine (its LAN address, link-local, `0.0.0.0`), stays refused. The same
+can load it at `localhost`, `127.0.0.1` or `[::1]` on that port alone; every other
+port, every other address of this machine (its LAN address, link-local,
+`0.0.0.0`), and any other name that resolves to loopback stay refused. The same
 list is under **This Computer → Browser**, and `browser.profile.list` tells the
 agent which ports are open:
 
@@ -534,9 +534,12 @@ application (3001, or 3002 run on its own), the MCP server (3100), Redis (6379,
 the appliance's 6380), Postgres (5433), pgAdmin (8080) and Redis Commander (8081),
 and wherever the environment of the process deciding moves one of them
 (`PORT`, `WEB_BASE_URL`, `MCP_PORT`, `REDIS_URL`, `DATABASE_URL`, the `AFLOW_*_PORT`
-the appliance publishes on). A page from any of them could approve the agent's own
-requests. The executor cannot see a port another process was moved to in its own
-environment — the dev stack's `.env` is not the executor's — so a service moved
+the appliance publishes on; a URL counts only when it names `localhost` or a
+loopback address). A page from any of them could approve the agent's own
+requests. One written into the file by hand is shown as listed and refused, with
+that reason, by `browser list` and under **This Computer → Browser**, where it can
+be removed; `browser.profile.list` shows the agent only the open ones. The
+executor cannot see a port another process was moved to in its own environment — the dev stack's `.env` is not the executor's — so a service moved
 off its default is refused by the application, which reads the server's
 environment, and by the executor only where its own environment names it too.
 

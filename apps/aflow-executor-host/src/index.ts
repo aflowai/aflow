@@ -54,7 +54,7 @@ import { startHandoffBoard } from './browser/handoffBoard.js';
 import { createBrowserIdleSweep } from './browser/idleSweep.js';
 import { followBrowserRequests } from './browser/requestPoll.js';
 import { isBrowserRequestFile, serveBrowserRequests } from './browser/windowRequests.js';
-import { executorStackPorts, openLocalPorts } from './browser/localPorts.js';
+import { executorStackPorts } from './browser/localPorts.js';
 import { browserSettingsInTurn } from './browser/workspaceSettings.js';
 import { createBrowserHandler } from './handlers/browserHandler.js';
 import { redisApprovalStore } from './browser/approvalStore.js';
@@ -321,7 +321,7 @@ async function main(): Promise<void> {
     const browsers = await browserDriver
       .machineProfiles()
       .then((profiles) =>
-        profiles.map(({ profile, running, windowShown, sites }) => ({
+        profiles.map(({ profile, localPorts, running, windowShown, sites }) => ({
           id: profile.id,
           posture: profile.posture,
           window: profile.window,
@@ -329,7 +329,7 @@ async function main(): Promise<void> {
           rules: profile.rules,
           unattended: profile.unattended,
           idleMinutes: profile.idleMinutes,
-          localPorts: openLocalPorts(profile, stackPorts),
+          localPorts: [...localPorts],
           running,
           windowOpen: windowShown,
           ...(sites !== undefined ? { sites } : {}),

@@ -349,9 +349,7 @@ export class FakeProxy implements EgressProxy {
       decideByName(host, numericPort, this.options, classifier) ??
       decideResolved(
         host,
-        numericPort,
         [{ address: this.world.localHosts.has(host) ? '127.0.0.1' : FAKE_PUBLIC_ADDRESS }],
-        this.options,
         classifier,
       );
     if (decision.verdict !== 'refuse') return undefined;

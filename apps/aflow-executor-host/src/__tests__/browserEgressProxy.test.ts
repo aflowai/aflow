@@ -756,9 +756,13 @@ describe('what a declared profile’s proxy decides on this machine', () => {
     }
   });
 
-  it('admits loopback on an opened port, by name, literal and resolved address, and nothing else here', async () => {
+  it('admits loopback on an opened port by localhost name and loopback literal, and nothing else here', async () => {
     const local = opened([DECLARED]);
     expect(await decide('localhost', DECLARED, local)).toEqual({
+      verdict: 'connect',
+      addresses: ['127.0.0.1', '::1'],
+    });
+    expect(await decide('dev.localhost', DECLARED, local)).toEqual({
       verdict: 'connect',
       addresses: ['127.0.0.1', '::1'],
     });
@@ -770,15 +774,9 @@ describe('what a declared profile’s proxy decides on this machine', () => {
       verdict: 'connect',
       addresses: ['::1'],
     });
-    expect(await decide('rebound.example.net', DECLARED, local)).toEqual({
-      verdict: 'connect',
-      addresses: ['127.0.0.1'],
-    });
-    expect(await decide('both.example.net', DECLARED, local)).toEqual({
-      verdict: 'connect',
-      addresses: ['127.0.0.1', '::1'],
-    });
     for (const host of [
+      'rebound.example.net',
+      'both.example.net',
       PLANTED_INTERFACE,
       'lan.example.net',
       'split.example.net',
@@ -800,11 +798,34 @@ describe('what a declared profile’s proxy decides on this machine', () => {
     }
   });
 
+  it('refuses a public name resolving to loopback on an opened port, though it resolved publicly before', async () => {
+    const local = opened([DECLARED]);
+    const answers = [[PUBLIC], ['127.0.0.1'], ['::1']];
+    const rebinding = (): Promise<EgressDecision> =>
+      decideEgress(
+        'rebound.example.net',
+        DECLARED,
+        { localPorts: local },
+        {
+          classifier,
+          lookup: () => Promise.resolve((answers.shift() ?? []).map((address) => ({ address }))),
+        },
+      );
+    expect(await rebinding()).toEqual({ verdict: 'connect', addresses: [PUBLIC] });
+    for (const address of ['127.0.0.1', '::1']) {
+      const decision = await rebinding();
+      expect(decision, address).toMatchObject({ verdict: 'refuse', kind: 'local' });
+      expect(decision.verdict === 'refuse' ? decision.reason : '', address).toContain(
+        `resolves to ${address}`,
+      );
+    }
+  });
+
   it('refuses every port this stack serves on, though the list opens it, saying whose it is', async () => {
     const everyStackPort = [...STACK.keys()];
     const local = opened(everyStackPort);
     for (const port of everyStackPort) {
-      for (const host of ['localhost', '127.0.0.1', '[::1]', 'rebound.example.net']) {
+      for (const host of ['localhost', '127.0.0.1', '[::1]']) {
         const decision = await decide(host, port, local);
         expect(decision, `${host}:${String(port)}`).toMatchObject({
           verdict: 'refuse',
@@ -891,11 +912,11 @@ describe.skipIf(onLoopback.skip)(
     );
     const lan = someInterface?.includes(':') === true ? `[${someInterface}]` : someInterface;
 
-    it('reaches it on its declared port at loopback and a name resolving there, and not on the LAN address nor another port', async () => {
+    it('reaches it on its declared port at loopback, and not at a name resolving there, the LAN address nor another port', async () => {
       reached.length = 0;
       const proxy = await proxyFor(opened([targetPort]));
       const port = String(targetPort);
-      for (const host of ['127.0.0.1', 'localhost', 'rebound.example.net']) {
+      for (const host of ['127.0.0.1', 'localhost']) {
         const plain = await exchange(proxy.port, get(`http://${host}:${port}/`, `${host}:${port}`));
         expect(plain, host).toMatch(/^HTTP\/1\.1 200/);
         expect(plain, host).toContain('the dev server');
@@ -907,10 +928,14 @@ describe.skipIf(onLoopback.skip)(
         expect(tunnel, host).toMatch(/^HTTP\/1\.1 200 Connection Established/);
         expect(tunnel, host).toContain('the dev server');
       }
-      expect(reached).toHaveLength(6);
+      expect(reached).toHaveLength(4);
 
       reached.length = 0;
-      for (const host of [PLANTED_INTERFACE, ...(lan !== undefined ? [lan] : [])]) {
+      for (const host of [
+        'rebound.example.net',
+        PLANTED_INTERFACE,
+        ...(lan !== undefined ? [lan] : []),
+      ]) {
         const plain = await exchange(proxy.port, get(`http://${host}:${port}/`, `${host}:${port}`));
         expect(plain, host).toMatch(/^HTTP\/1\.1 403/);
         const tunnel = await exchange(proxy.port, connectTo(`${host}:${port}`));
@@ -930,7 +955,7 @@ describe.skipIf(onLoopback.skip)(
         opened([targetPort], new Map([[targetPort, { service: 'web', from: 'default' }]])),
       );
       const port = String(targetPort);
-      for (const host of ['127.0.0.1', 'localhost', 'rebound.example.net']) {
+      for (const host of ['127.0.0.1', 'localhost']) {
         const plain = await exchange(proxy.port, get(`http://${host}:${port}/`, `${host}:${port}`));
         expect(plain, host).toMatch(/^HTTP\/1\.1 403/);
         expect(plain, host).toContain(`port ${port} is this stack's own`);

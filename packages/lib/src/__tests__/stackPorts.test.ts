@@ -153,6 +153,35 @@ describe('the ports this stack serves on', () => {
     }
   });
 
+  it('take a port from a URL only when it names this machine by a localhost name or a loopback literal', () => {
+    const defaults = stackOwnPorts({}).size;
+    for (const value of [
+      'https://aflow.example.com',
+      'http://aflow.example.com',
+      'http://aflow.example.com:4005',
+      'http://192.0.2.10:4005',
+      'http://[2001:db8::1]:4005',
+      'http://localhost.example.com:4005',
+    ]) {
+      const known = stackOwnPorts({ API_BASE_URL: value });
+      expect(known.size, value).toBe(defaults);
+      expect(known.has(4005) || known.has(80) || known.has(443), value).toBe(false);
+    }
+    for (const [value, port] of [
+      ['http://localhost', 80],
+      ['https://app.localhost', 443],
+      ['http://LOCALHOST.:4005', 4005],
+      ['http://127.0.0.2:4006', 4006],
+      ['http://[::1]:4007', 4007],
+      ['http://[::ffff:127.0.0.1]:4008', 4008],
+    ] as const) {
+      expect(stackOwnPorts({ API_BASE_URL: value }).get(port), value).toEqual({
+        service: 'api',
+        from: 'API_BASE_URL',
+      });
+    }
+  });
+
   it('say whose a port is and where that came from', () => {
     expect(describeStackPortOwner({ service: 'web', from: 'default' })).toBe(
       'the web application, by default',

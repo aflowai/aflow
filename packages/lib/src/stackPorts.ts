@@ -53,7 +53,7 @@ export const REDIS_COMMANDER_PORT = 8081;
 
 interface PortSource {
   readonly service: StackService;
-  /** A variable holding a port, or one holding a URL whose port is the service's. */
+  /** A variable holding a port, or one holding a URL whose port is the service's when it names this machine. */
   readonly holds: 'port' | 'url';
   readonly key: string;
 }
@@ -111,7 +111,21 @@ function portOf(value: string, holds: PortSource['holds']): number | undefined {
   } catch {
     return undefined;
   }
+  if (!namesLoopback(url.hostname)) return undefined;
   return url.port !== '' ? Number(url.port) : SCHEME_PORTS[url.protocol];
+}
+
+/**
+ * A localhost name or a loopback literal, as `URL` normalizes a hostname: a
+ * URL naming another host says nothing of the ports served here.
+ */
+function namesLoopback(hostname: string): boolean {
+  const host = hostname.replace(/\.$/, '');
+  if (host === 'localhost' || host.endsWith('.localhost')) return true;
+  return (
+    /^127\.\d+\.\d+\.\d+$/.test(host) ||
+    /^\[(?:::1|::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4})\]$/.test(host)
+  );
 }
 
 export interface StackPortOwner {

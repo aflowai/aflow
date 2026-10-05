@@ -60,6 +60,17 @@ export function stackPortReason(port: number, stackOwn: StackOwnPorts): string |
     : browserStackPortReason(port, describeStackPortOwner(owner));
 }
 
+/** Every port a profile lists, each with why it is refused when this stack serves on it. */
+export function listedLocalPorts(
+  profile: Pick<BrowserProfile, 'localPorts'>,
+  stackOwn: StackOwnPorts,
+): Array<{ port: number; refused?: string }> {
+  return profile.localPorts.map((port) => {
+    const refused = stackPortReason(port, stackOwn);
+    return refused === undefined ? { port } : { port, refused };
+  });
+}
+
 /** The ports a profile is opened to in fact: those it lists that are not this stack's. */
 export function openLocalPorts(
   profile: Pick<BrowserProfile, 'localPorts'>,

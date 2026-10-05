@@ -23,13 +23,13 @@ import {
 } from '@aflow/schemas';
 
 import { HostPolicySchema, loadHostPolicy } from '../bindings.js';
-import { serializePolicy, withPolicyLock, writePolicyAtomically } from '../policyFile.js';
+import { editPolicy } from '../policyFile.js';
 import { describePolicyIssues } from '../policyIssues.js';
 import type { ChromeDiscovery } from './chromeDiscovery.js';
 import { profileDirectory } from './chromeProcess.js';
 import type { BrowserDriver } from './driver.js';
 import { errorText } from './errors.js';
-import { executorStackPorts, type StackOwnPorts, stackPortReason } from './localPorts.js';
+import { executorStackPorts, listedLocalPorts, type StackOwnPorts } from './localPorts.js';
 import { SIGN_IN_SITTING_MAX_MS } from './operatorWindow.js';
 import {
   declaredBrowsers,
@@ -189,13 +189,15 @@ export class BrowserCliError extends Error {
 }
 
 async function readPolicy(policyPath: string): Promise<RawPolicy> {
-  let raw: string;
-  try {
-    raw = await readFile(policyPath, 'utf8');
-  } catch {
+  const raw = await readFile(policyPath, 'utf8').catch(() => undefined);
+  return validPolicy(policyPath, raw === undefined ? undefined : (JSON.parse(raw) as unknown));
+}
+
+/** The policy file's JSON as it stands, refused when it is missing or not a valid policy. */
+function validPolicy(policyPath: string, json: unknown): RawPolicy {
+  if (json === undefined) {
     throw new BrowserCliError(`No host policy at ${policyPath}. Pair this machine first.`);
   }
-  const json = JSON.parse(raw) as unknown;
   const parsed = HostPolicySchema.safeParse(json);
   if (!parsed.success) {
     throw new BrowserCliError(
@@ -256,37 +258,32 @@ export async function changeBrowserSetting(
   command: BrowserSettingCommand,
   stackOwn: StackOwnPorts,
 ): Promise<BrowserSettingChanged> {
-  return await withPolicyLock(policyPath, async () => {
-    const policy = await readPolicy(policyPath);
+  let impliedWrittenOut: string[] | undefined;
+  const next = await editPolicy(policyPath, (current) => {
+    const policy = validPolicy(policyPath, current);
     const implied = [...effectiveBrowserProfiles(undefined, findChrome()).values()];
-    let next: RawPolicy;
+    if (policy.browsers === undefined) {
+      impliedWrittenOut = declaredBrowsers(policy, implied).map((entry) =>
+        String((entry as { id?: unknown }).id),
+      );
+    }
     try {
-      next = settingEdit(command, stackOwn)(policy, implied);
+      return settingEdit(command, stackOwn)(policy, implied);
     } catch (error) {
       if (error instanceof PolicyEditError) throw new BrowserCliError(error.message);
       throw error;
     }
-    await writePolicyAtomically(policyPath, serializePolicy(next));
-    const profile = parseBrowserProfiles(next.browsers ?? []).profiles.find(
-      (declared) => declared.id === command.profileId,
-    );
-    if (profile === undefined) {
-      throw new BrowserCliError(
-        `Profile \`${command.profileId}\` was written but does not read back as valid; ` +
-          'the policy file says why.',
-      );
-    }
-    return {
-      profile,
-      ...(policy.browsers === undefined
-        ? {
-            impliedWrittenOut: declaredBrowsers(policy, implied).map((entry) =>
-              String((entry as { id?: unknown }).id),
-            ),
-          }
-        : {}),
-    };
   });
+  const profile = parseBrowserProfiles(next.browsers ?? []).profiles.find(
+    (declared) => declared.id === command.profileId,
+  );
+  if (profile === undefined) {
+    throw new BrowserCliError(
+      `Profile \`${command.profileId}\` was written but does not read back as valid; ` +
+        'the policy file says why.',
+    );
+  }
+  return { profile, ...(impliedWrittenOut !== undefined ? { impliedWrittenOut } : {}) };
 }
 
 async function edit(
@@ -358,8 +355,7 @@ async function list(deps: BrowserCliDeps): Promise<void> {
     for (const rule of profile.rules) {
       deps.print(`    ${rule.effect} ${rule.origin}${RULE_GLOSS[rule.effect]}`);
     }
-    for (const port of profile.localPorts) {
-      const refused = stackPortReason(port, stackOwn);
+    for (const { port, refused } of listedLocalPorts(profile, stackOwn)) {
       deps.print(
         refused === undefined
           ? `    loads port ${String(port)} on loopback`

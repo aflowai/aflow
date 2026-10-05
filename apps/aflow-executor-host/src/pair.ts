@@ -16,7 +16,7 @@ import { dirname, join } from 'node:path';
 
 import { HostPolicySchema } from './bindings.js';
 import { resolveHostPolicyPath } from './hostDir.js';
-import { serializePolicy, writePolicyAtomically } from './policyFile.js';
+import { editPolicy } from './policyFile.js';
 
 const POLICY_PATH = resolveHostPolicyPath();
 const HOST_DIR = dirname(POLICY_PATH);
@@ -109,12 +109,11 @@ async function main(): Promise<void> {
 
   // An existing policy is left alone: re-pairing after a password rotation
   // must not silently drop the folders the operator already connected.
-  const existing = await readFile(POLICY_PATH, 'utf8').catch(() => null);
-  if (existing === null) {
-    await writePolicyAtomically(POLICY_PATH, serializePolicy({ version: 1, bindings: [] }));
-  } else {
-    HostPolicySchema.parse(JSON.parse(existing));
-  }
+  await editPolicy(POLICY_PATH, (existing) => {
+    if (existing === undefined) return { version: 1, bindings: [] };
+    HostPolicySchema.parse(existing);
+    return undefined;
+  });
 
   console.log(`Paired. Credential in ${envPath}, bindings in ${POLICY_PATH}.`);
 

@@ -28,7 +28,7 @@ import {
   type HarnessProfile,
 } from './harnessProfiles.js';
 import { resolveHostPolicyPath } from './hostDir.js';
-import { serializePolicy, writePolicyAtomically } from './policyFile.js';
+import { editPolicy } from './policyFile.js';
 import { checksChangeFromArgs, describeChecks, withChecks } from './folderChecks.js';
 import { describePushApproval, withPushApproval } from './pushApproval.js';
 import { describeFolderSandbox, sandboxVerb } from './sandboxPosture.js';
@@ -93,16 +93,21 @@ function arg(name: string): string | undefined {
   return index === -1 ? undefined : process.argv[index + 1];
 }
 
-async function loadPolicy(): Promise<ReturnType<typeof HostPolicySchema.parse>> {
-  const raw = await readFile(POLICY_PATH, 'utf8').catch(
-    () => '{"version":1,"bindings":[],"harnesses":[]}',
-  );
+type Policy = ReturnType<typeof HostPolicySchema.parse>;
+
+const EMPTY_POLICY = { version: 1, bindings: [], harnesses: [] };
+
+async function loadPolicy(): Promise<Policy> {
+  const raw = await readFile(POLICY_PATH, 'utf8').catch(() => JSON.stringify(EMPTY_POLICY));
   return HostPolicySchema.parse(JSON.parse(raw));
 }
 
-async function savePolicy(policy: ReturnType<typeof HostPolicySchema.parse>): Promise<void> {
+/** Reads, changes and writes the policy under its lock; `change` returns the policy to write. */
+async function changePolicy(change: (policy: Policy) => Policy): Promise<Policy> {
   await mkdir(HOST_DIR, { recursive: true, mode: 0o700 });
-  await writePolicyAtomically(POLICY_PATH, serializePolicy(policy));
+  return await editPolicy(POLICY_PATH, (current) =>
+    change(HostPolicySchema.parse(current ?? EMPTY_POLICY)),
+  );
 }
 
 function describe(profile: HarnessProfile): string {
@@ -133,16 +138,16 @@ function refuseUnplaceableModel(profile: HarnessProfile, model: string): void {
 }
 
 async function setToolPaths(paths: string[]): Promise<void> {
-  const policy = await loadPolicy();
-  if (paths.includes('--clear')) {
-    policy.toolPaths = [];
-    await savePolicy(policy);
+  const clear = paths.includes('--clear');
+  const resolved = paths.map((p) => resolve(p));
+  const policy = await changePolicy((policy) => {
+    policy.toolPaths = clear ? [] : [...new Set([...policy.toolPaths, ...resolved])];
+    return policy;
+  });
+  if (clear) {
     console.log('Commands can no longer read anything outside their binding.');
     return;
   }
-  const resolved = paths.map((p) => resolve(p));
-  policy.toolPaths = [...new Set([...policy.toolPaths, ...resolved])];
-  await savePolicy(policy);
   console.log('Commands may now also read:');
   for (const p of policy.toolPaths) console.log(`  ${p}`);
   console.log(
@@ -174,9 +179,10 @@ async function addMcpServer(id: string, command: string[]): Promise<void> {
     authPaths: readPaths,
   });
 
-  const policy = await loadPolicy();
-  policy.mcpServers = [...policy.mcpServers.filter((m) => m.id !== id), server];
-  await savePolicy(policy);
+  await changePolicy((policy) => {
+    policy.mcpServers = [...policy.mcpServers.filter((m) => m.id !== id), server];
+    return policy;
+  });
 
   console.log(`This machine will run \`${id}\` as: ${executable} ${args.join(' ')}`);
   console.log(`  It runs inside \`${server.bindingId}\` and reaches nothing outside it.`);
@@ -193,13 +199,14 @@ async function addMcpServer(id: string, command: string[]): Promise<void> {
 }
 
 async function removeMcpServer(id: string): Promise<void> {
-  const policy = await loadPolicy();
-  if (!policy.mcpServers.some((m) => m.id === id)) {
-    console.error(`'${id}' is not configured here.`);
-    process.exit(1);
-  }
-  policy.mcpServers = policy.mcpServers.filter((m) => m.id !== id);
-  await savePolicy(policy);
+  await changePolicy((policy) => {
+    if (!policy.mcpServers.some((m) => m.id === id)) {
+      console.error(`'${id}' is not configured here.`);
+      process.exit(1);
+    }
+    policy.mcpServers = policy.mcpServers.filter((m) => m.id !== id);
+    return policy;
+  });
   console.log(`\`${id}\` will no longer run here.`);
 }
 
@@ -306,31 +313,32 @@ async function add(id: string): Promise<void> {
     ...(model !== undefined ? { model } : {}),
   });
 
-  const policy = await loadPolicy();
-  const existing = policy.harnesses.find((h) => h.id === id);
-  // Egress, a credential source and a model survive a re-add. Each was
-  // configured deliberately — egress host by host, a credential once and
-  // carefully — and silently dropping one changes a working harness with no
-  // message.
-  if (existing) {
-    profile.allowedDomains = existing.allowedDomains;
-    profile.browserLocalPorts = existing.browserLocalPorts;
-    if (profile.credential === undefined && existing.credential !== undefined) {
-      profile.credential = existing.credential;
-    }
-    if (profile.mcpArgs.length === 0) profile.mcpArgs = existing.mcpArgs;
-    if (model === undefined && existing.model !== undefined) {
-      if (profile.modelArgs.length > 0) profile.model = existing.model;
-      else {
-        console.log(
-          `'${id}' now takes no model argument, so its model '${existing.model}' was dropped.`,
-        );
+  if (model !== undefined) refuseUnplaceableModel(profile, model);
+  await changePolicy((policy) => {
+    const existing = policy.harnesses.find((h) => h.id === id);
+    // Egress, a credential source and a model survive a re-add. Each was
+    // configured deliberately — egress host by host, a credential once and
+    // carefully — and silently dropping one changes a working harness with no
+    // message.
+    if (existing) {
+      profile.allowedDomains = existing.allowedDomains;
+      profile.browserLocalPorts = existing.browserLocalPorts;
+      if (profile.credential === undefined && existing.credential !== undefined) {
+        profile.credential = existing.credential;
+      }
+      if (profile.mcpArgs.length === 0) profile.mcpArgs = existing.mcpArgs;
+      if (model === undefined && existing.model !== undefined) {
+        if (profile.modelArgs.length > 0) profile.model = existing.model;
+        else {
+          console.log(
+            `'${id}' now takes no model argument, so its model '${existing.model}' was dropped.`,
+          );
+        }
       }
     }
-  }
-  if (model !== undefined) refuseUnplaceableModel(profile, model);
-  policy.harnesses = [...policy.harnesses.filter((h) => h.id !== id), profile];
-  await savePolicy(policy);
+    policy.harnesses = [...policy.harnesses.filter((h) => h.id !== id), profile];
+    return policy;
+  });
 
   console.log(`Configured \`${id}\`.`);
   console.log(describe(profile));
@@ -342,55 +350,56 @@ async function add(id: string): Promise<void> {
   }
 }
 
-async function allow(id: string, hosts: string[]): Promise<void> {
-  const policy = await loadPolicy();
+/** The configured harness `id`, or the command ends saying it is not one. */
+function configuredHarness(policy: Policy, id: string): HarnessProfile {
   const profile = policy.harnesses.find((h) => h.id === id);
   if (!profile) {
     console.error(`'${id}' is not configured here. Add it first: aflow harness add ${id}`);
     process.exit(1);
   }
-  profile.allowedDomains = [...new Set([...profile.allowedDomains, ...hosts])];
-  await savePolicy(policy);
-  console.log(`\`${id}\` now reaches ${profile.allowedDomains.join(', ')}.`);
+  return profile;
+}
+
+async function allow(id: string, hosts: string[]): Promise<void> {
+  const policy = await changePolicy((policy) => {
+    const profile = configuredHarness(policy, id);
+    profile.allowedDomains = [...new Set([...profile.allowedDomains, ...hosts])];
+    return policy;
+  });
+  console.log(`\`${id}\` now reaches ${configuredHarness(policy, id).allowedDomains.join(', ')}.`);
 }
 
 async function setModel(id: string, model: string): Promise<void> {
-  const policy = await loadPolicy();
-  const profile = policy.harnesses.find((h) => h.id === id);
-  if (!profile) {
-    console.error(`'${id}' is not configured here. Add it first: aflow harness add ${id}`);
-    process.exit(1);
-  }
   if (model === '--clear') {
-    delete profile.model;
-    await savePolicy(policy);
+    await changePolicy((policy) => {
+      delete configuredHarness(policy, id).model;
+      return policy;
+    });
     console.log(`\`${id}\` now runs its own default model when a task names none.`);
     return;
   }
-  const parsed = HarnessProfileSchema.safeParse({ ...profile, model });
-  if (!parsed.success) {
-    const problems = parsed.error.issues
-      .map((issue) => `${issue.path.join('.')}: ${issue.message}`)
-      .join('; ');
-    console.error(`'${model}' cannot be saved as the model for '${id}': ${problems}`);
-    process.exit(1);
-  }
-  refuseUnplaceableModel(parsed.data, model);
-  policy.harnesses = policy.harnesses.map((h) => (h.id === id ? parsed.data : h));
-  await savePolicy(policy);
+  await changePolicy((policy) => {
+    const parsed = HarnessProfileSchema.safeParse({ ...configuredHarness(policy, id), model });
+    if (!parsed.success) {
+      const problems = parsed.error.issues
+        .map((issue) => `${issue.path.join('.')}: ${issue.message}`)
+        .join('; ');
+      console.error(`'${model}' cannot be saved as the model for '${id}': ${problems}`);
+      process.exit(1);
+    }
+    refuseUnplaceableModel(parsed.data, model);
+    policy.harnesses = policy.harnesses.map((h) => (h.id === id ? parsed.data : h));
+    return policy;
+  });
   console.log(`\`${id}\` now runs ${model} when a task names none.`);
 }
 
 async function setMcpArgs(id: string, given: readonly string[]): Promise<void> {
-  const policy = await loadPolicy();
-  const profile = policy.harnesses.find((h) => h.id === id);
-  if (!profile) {
-    console.error(`'${id}' is not configured here. Add it first: aflow harness add ${id}`);
-    process.exit(1);
-  }
   if (given.length === 1 && given[0] === '--clear') {
-    profile.mcpArgs = [];
-    await savePolicy(policy);
+    await changePolicy((policy) => {
+      configuredHarness(policy, id).mcpArgs = [];
+      return policy;
+    });
     console.log(`\`${id}\` is handed no browser; a run asking for one is refused.`);
     return;
   }
@@ -410,21 +419,19 @@ async function setMcpArgs(id: string, given: readonly string[]): Promise<void> {
     );
     process.exit(1);
   }
-  profile.mcpArgs = mcpArgs;
-  await savePolicy(policy);
+  await changePolicy((policy) => {
+    configuredHarness(policy, id).mcpArgs = mcpArgs;
+    return policy;
+  });
   console.log(`\`${id}\` is handed a browser as: ${mcpArgs.join(' ')}`);
 }
 
 async function setBrowserLocalPorts(id: string, given: readonly string[]): Promise<void> {
-  const policy = await loadPolicy();
-  const profile = policy.harnesses.find((h) => h.id === id);
-  if (!profile) {
-    console.error(`'${id}' is not configured here. Add it first: aflow harness add ${id}`);
-    process.exit(1);
-  }
   if (given.length === 1 && given[0] === '--clear') {
-    profile.browserLocalPorts = [];
-    await savePolicy(policy);
+    await changePolicy((policy) => {
+      configuredHarness(policy, id).browserLocalPorts = [];
+      return policy;
+    });
     console.log(`\`${id}\`'s ephemeral browser now loads nothing on this machine.`);
     return;
   }
@@ -433,31 +440,32 @@ async function setBrowserLocalPorts(id: string, given: readonly string[]): Promi
     console.error(`'${parsed.word}' is not a port: give whole numbers from 1 to 65535.`);
     process.exit(1);
   }
+  const policy = await changePolicy((policy) => {
+    const profile = configuredHarness(policy, id);
+    profile.browserLocalPorts = [...new Set([...profile.browserLocalPorts, ...parsed.ports])];
+    return policy;
+  });
   const warning = stackPortWarning(id, parsed.ports, process.env);
   if (warning !== undefined) console.warn(warning);
-  profile.browserLocalPorts = [...new Set([...profile.browserLocalPorts, ...parsed.ports])];
-  await savePolicy(policy);
+  const ports = configuredHarness(policy, id).browserLocalPorts;
   console.log(
-    `\`${id}\`'s ephemeral browser now loads ports ${profile.browserLocalPorts.join(', ')} ` +
+    `\`${id}\`'s ephemeral browser now loads ports ${ports.join(', ')} ` +
       'on loopback — localhost, 127.0.0.1, [::1] — and on no other address of this machine.',
   );
 }
 
 async function setHarnessConcurrency(requested: string): Promise<void> {
-  const updated = withHarnessConcurrency(await loadPolicy(), requested);
-  await savePolicy(updated);
+  const updated = await changePolicy((policy) => withHarnessConcurrency(policy, requested));
   console.log(`This machine now ${describeHarnessConcurrency(updated)}.`);
 }
 
 async function setKeepAwake(requested: string): Promise<void> {
-  const updated = withKeepAwake(await loadPolicy(), requested);
-  await savePolicy(updated);
+  const updated = await changePolicy((policy) => withKeepAwake(policy, requested));
   console.log(`This machine now ${describePolicyKeepAwake(updated)}.`);
 }
 
 async function setPushApproval(bindingId: string, requested: string): Promise<void> {
-  const updated = withPushApproval(await loadPolicy(), bindingId, requested);
-  await savePolicy(updated);
+  const updated = await changePolicy((policy) => withPushApproval(policy, bindingId, requested));
   const posture = updated.bindings.find((b) => b.id === bindingId)?.branchPolicy?.pushApproval;
   if (posture !== undefined) {
     console.log(`A publication from \`${bindingId}\` now ${describePushApproval(posture)}.`);
@@ -465,8 +473,8 @@ async function setPushApproval(bindingId: string, requested: string): Promise<vo
 }
 
 async function setChecks(bindingId: string, args: readonly string[]): Promise<void> {
-  const updated = withChecks(await loadPolicy(), bindingId, checksChangeFromArgs(args));
-  await savePolicy(updated);
+  const change = checksChangeFromArgs(args);
+  const updated = await changePolicy((policy) => withChecks(policy, bindingId, change));
   const branchPolicy = updated.bindings.find((b) => b.id === bindingId)?.branchPolicy;
   if (branchPolicy !== undefined) {
     console.log(`A publication from \`${bindingId}\` now ${describeChecks(branchPolicy)}.`);
@@ -474,19 +482,24 @@ async function setChecks(bindingId: string, args: readonly string[]): Promise<vo
 }
 
 async function setSandbox(bindingId: string, args: readonly string[]): Promise<void> {
-  const { policy, said } = sandboxVerb(await loadPolicy(), bindingId, args);
-  await savePolicy(policy);
+  let said = '';
+  await changePolicy((current) => {
+    const changed = sandboxVerb(current, bindingId, args);
+    said = changed.said;
+    return changed.policy;
+  });
   console.log(said);
 }
 
 async function remove(id: string): Promise<void> {
-  const policy = await loadPolicy();
-  if (!policy.harnesses.some((h) => h.id === id)) {
-    console.error(`'${id}' is not configured here.`);
-    process.exit(1);
-  }
-  policy.harnesses = policy.harnesses.filter((h) => h.id !== id);
-  await savePolicy(policy);
+  await changePolicy((policy) => {
+    if (!policy.harnesses.some((h) => h.id === id)) {
+      console.error(`'${id}' is not configured here.`);
+      process.exit(1);
+    }
+    policy.harnesses = policy.harnesses.filter((h) => h.id !== id);
+    return policy;
+  });
   console.log(`\`${id}\` will no longer run here.`);
 }
 

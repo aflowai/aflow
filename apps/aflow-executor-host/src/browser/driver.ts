@@ -37,7 +37,12 @@ import { boundEntries, boundText, PageObservations } from './observations.js';
 import { type HandoffBoard, NO_BOARD } from './handoffBoard.js';
 import { OperatorWindows, type WaitForOperator, waitInWindow } from './operatorWindow.js';
 import type { HarnessReach } from './harnessReach.js';
-import { executorStackPorts, openLocalPorts, type StackOwnPorts } from './localPorts.js';
+import {
+  executorStackPorts,
+  listedLocalPorts,
+  openLocalPorts,
+  type StackOwnPorts,
+} from './localPorts.js';
 import { localDestinationRefusal, reachRefusal } from './origins.js';
 import { applyPolicyChange } from './policyChange.js';
 import { ProfileBrowsers, type RunningProfile } from './profileBrowsers.js';
@@ -682,10 +687,17 @@ export class BrowserDriver {
     return await Promise.all(
       [...policy.browsers.values()].map(async (profile): Promise<MachineProfile> => {
         const windowShown = this.browsers.isShown(profile.id);
+        const localPorts = listedLocalPorts(profile, this.stackPorts);
         const running = this.browsers.get(profile.id);
-        if (running === undefined) return { profile, running: false, windowShown };
+        if (running === undefined) return { profile, localPorts, running: false, windowShown };
         const sites = await running.browser.cookieSites().catch(() => undefined);
-        return { profile, running: true, windowShown, ...(sites !== undefined ? { sites } : {}) };
+        return {
+          profile,
+          localPorts,
+          running: true,
+          windowShown,
+          ...(sites !== undefined ? { sites } : {}),
+        };
       }),
     );
   }

@@ -144,6 +144,8 @@ export interface ReadRequest {
 /** A profile as the machine sees it, whichever spaces it serves. */
 export interface MachineProfile {
   readonly profile: BrowserProfile;
+  /** Every port the profile lists, each refused one with why. */
+  readonly localPorts: ReadonlyArray<{ readonly port: number; readonly refused?: string }>;
   readonly running: boolean;
   /** Whether the operator has its window now. */
   readonly windowShown: boolean;

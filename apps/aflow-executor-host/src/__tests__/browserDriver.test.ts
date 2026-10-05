@@ -314,18 +314,18 @@ describe('a profile the operator opened local ports to', () => {
     }
   });
 
-  it('opens a name that resolves to loopback on a port in the list, and refuses it on another', async () => {
+  it('refuses a name that resolves to loopback on a port in the list as on any other', async () => {
     const { driver, proxies } = harness({
       browsers: [profile({ localPorts: [5173] })],
       world: { localHosts: new Set(['dev.example.test']) },
     });
-    await expect(open(driver, 'http://dev.example.test:5173/')).resolves.toMatchObject({
-      url: 'http://dev.example.test:5173/',
-    });
-    const refused = await refusal(open(driver, 'http://dev.example.test:5174/'));
-    expect(refused.kind).toBe('appliance_origin');
-    expect(refused.message).toContain('resolves to 127.0.0.1');
+    for (const url of ['http://dev.example.test:5173/', 'http://dev.example.test:5174/']) {
+      const refused = await refusal(open(driver, url));
+      expect(refused.kind, url).toBe('appliance_origin');
+      expect(refused.message, url).toContain('resolves to 127.0.0.1');
+    }
     expect(proxies[0]?.refusals.map((r) => `${r.host}:${String(r.port)}`)).toEqual([
+      'dev.example.test:5173',
       'dev.example.test:5174',
     ]);
   });
@@ -334,10 +334,9 @@ describe('a profile the operator opened local ports to', () => {
     const stack = [3000, 3001, 3002, 3100, 5433, 6379, 6380, 8080, 8081];
     const { driver, clock } = harness({
       browsers: [profile({ localPorts: [...stack, 5173] })],
-      world: { localHosts: new Set(['dev.example.test']) },
     });
     for (const port of stack) {
-      for (const host of ['localhost', '127.0.0.1', 'dev.example.test']) {
+      for (const host of ['localhost', '127.0.0.1']) {
         const url = `http://${host}:${String(port)}/`;
         clock.now += 1_000;
         const refused = await refusal(open(driver, url));
@@ -346,6 +345,21 @@ describe('a profile the operator opened local ports to', () => {
         expect(refused.message, url).toContain("could approve the agent's requests");
       }
     }
+    expect((await driver.listProfiles(RUN_A)).map((listed) => listed.localPorts)).toEqual([[5173]]);
+  });
+
+  it('gives the machine page every listed port, the stack’s own marked refused, and the agent only the open ones', async () => {
+    const { driver } = harness({ browsers: [profile({ localPorts: [3001, 5173] })] });
+    const [machine] = await driver.machineProfiles();
+    expect(machine?.localPorts).toEqual([
+      {
+        port: 3001,
+        refused:
+          "port 3001 is this stack's own — the web application, by default — and a page from " +
+          "it could approve the agent's requests",
+      },
+      { port: 5173 },
+    ]);
     expect((await driver.listProfiles(RUN_A)).map((listed) => listed.localPorts)).toEqual([[5173]]);
   });
 

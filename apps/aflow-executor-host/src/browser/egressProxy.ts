@@ -140,30 +140,19 @@ function admitOpenedPort(
 /** The decision on a name `decideByName` left open, from every address it resolved to. */
 export function decideResolved(
   host: string,
-  port: number,
   addresses: readonly ResolvedAddress[],
-  policy: EgressPolicy,
   classifier: LocalAddressClassifier,
 ): EgressDecision {
-  // A name whose every address is loopback is a local page like any other on
-  // a port opened to the profile. One answering with anything else as well is
-  // refused below, as a name that can reach this machine.
-  const [first, ...rest] = addresses.map(({ address }) => address);
-  if (
-    policy.localPorts !== undefined &&
-    first !== undefined &&
-    policy.localPorts.opened().includes(port) &&
-    [first, ...rest].every((address) => classifier.classify(address) === 'loopback')
-  ) {
-    return admitOpenedPort(port, [first, ...rest], policy.localPorts);
-  }
   // Every address, not the first: a name answering with a public address and
-  // a loopback one is a name that can reach this machine.
+  // a loopback one is a name that can reach this machine. One answering with
+  // loopback alone is refused on an opened port too: a public name rebound to
+  // 127.0.0.1 would read the operator's dev server as its own origin.
   for (const { address } of addresses) {
     const kind = classifier.classify(address);
     if (kind === undefined) continue;
     return { verdict: 'refuse', kind: 'local', reason: localAddressReason(host, address, kind) };
   }
+  const first = addresses[0]?.address;
   if (first === undefined) return { verdict: 'unreachable', reason: `${host} did not resolve` };
   return { verdict: 'connect', addresses: [first] };
 }
@@ -190,7 +179,7 @@ export async function decideEgress(
       reason: `${host} did not resolve: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
-  return decideResolved(host, port, addresses, policy, deps.classifier);
+  return decideResolved(host, addresses, deps.classifier);
 }
 
 export interface EgressProxy {
