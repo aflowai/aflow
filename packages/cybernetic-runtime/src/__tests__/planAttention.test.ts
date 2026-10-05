@@ -317,7 +317,7 @@ describe('work under the plan — one answer to "what now" (Plan 322 P1)', () =>
     fakeLedger.runs = [
       activeRun('run-ours-commission', 'commission-change', STREAM_315, finding.nodeId),
       activeRun('run-theirs-publication', 'publish-local-changes', STREAM_320, theirSlice.nodeId),
-      activeRun('run-free', 'ticker-market-digest', STREAM_320),
+      activeRun('run-free', 'ticker-market-digest', STREAM_315),
     ];
     fakeLedger.items = [
       {
@@ -373,15 +373,60 @@ describe('work under the plan — one answer to "what now" (Plan 322 P1)', () =>
     );
   });
 
-  it('gives a conversation that has started nothing every run in the plan, and every item, as another’s', async () => {
+  it('gives a conversation that has started nothing every run, in the plan or not, and every item, as another’s', async () => {
     await twoStreams();
 
     const text = await turnAttention(COLD_SESSION);
     expect(text).not.toContain('run-ours-commission');
     expect(text).not.toContain('run-theirs-publication');
+    expect(text).not.toContain('run-free');
     expect(text).not.toContain('item-free');
-    expect(text).toMatch(/^other work in this space, not this conversation's: 2 runs, 2 items$/m);
-    expect(text).toContain('[runId: run-free]');
+    expect(text).not.toContain('Active workflow runs');
+    expect(text).toMatch(/^other work in this space, not this conversation's: 3 runs, 2 items$/m);
+  });
+
+  describe('a run serving no node is the conversation’s that drove it', () => {
+    /** Another stream's publication, paused on its approval and placed in no plan, with the item its pause raised. */
+    function unplacedPausedPublication() {
+      fakeLedger.runs = [activeRun('run-publication', 'publish-local-changes', STREAM_320)];
+      fakeLedger.items = [
+        {
+          itemId: 'item-publication-paused',
+          kind: 'workflow_run_paused',
+          runId: 'run-publication',
+          workflowSlug: 'publish-local-changes',
+          planNodeId: null,
+          sessionId: STREAM_320,
+          createdAt: new Date('2026-10-05T09:00:00.000Z'),
+        },
+      ];
+    }
+
+    it('reads to a cold conversation as the count alone — no slug, no run id, no status', async () => {
+      unplacedPausedPublication();
+
+      const text = await turnAttention(COLD_SESSION);
+      expect(text).not.toContain('publish-local-changes');
+      expect(text).not.toContain('run-publication');
+      expect(text).not.toContain('item-publication-paused');
+      expect(text).not.toContain('paused');
+      expect(text).not.toContain('No active workflow runs.');
+      expect(text).toMatch(/^other work in this space, not this conversation's: 1 runs, 1 items$/m);
+    });
+
+    it('reads in full, with its paused item, to the conversation that drove it', async () => {
+      unplacedPausedPublication();
+
+      const lines = (await turnAttention(STREAM_320)).split('\n');
+      expect(lines).toContain('Active workflow runs:');
+      expect(lines).toContain(
+        '- publish-local-changes (paused, liveness: waiting_for_input): 6/10 tasks complete [runId: run-publication]',
+      );
+      expect(lines).toContain(
+        '- attention: workflow_run_paused — publish-local-changes [itemId: item-publication-paused, runId: run-publication]',
+      );
+      expect(lines.join('\n')).not.toMatch(OTHER_LINE);
+    });
   });
 
   it('is the other stream’s view of the same space, the other way round', async () => {
@@ -393,8 +438,10 @@ describe('work under the plan — one answer to "what now" (Plan 322 P1)', () =>
       '    - publish-local-changes (paused, liveness: waiting_for_input): 6/10 tasks complete [runId: run-theirs-publication]',
       '    - attention: workflow_run_completed — review-local-changes [itemId: item-theirs-review, runId: run-theirs-review]',
     ]);
-    expect(lines.join('\n')).not.toContain('item-free');
-    expect(lines).toContain("other work in this space, not this conversation's: 1 runs, 1 items");
+    const text = lines.join('\n');
+    expect(text).not.toContain('item-free');
+    expect(text).not.toContain('run-free');
+    expect(lines).toContain("other work in this space, not this conversation's: 2 runs, 1 items");
   });
 
   /** `count` pending items about runs `sessionId` drove serving `planNodeId`, the first the newest, all from `from` back. */

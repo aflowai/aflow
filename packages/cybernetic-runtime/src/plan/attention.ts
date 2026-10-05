@@ -124,22 +124,26 @@ function renderPlanNodeLine(node: PlanAttentionNode): string {
 /**
  * The plan section of the attention block: the open tree with this
  * conversation's work under the node it serves, its work on nodes the tree
- * does not show, and every run placed under another root and every item that
- * is another conversation's as one count. That count carries no ids and no
+ * does not show, and every run placed under another root, every run serving
+ * no node that another conversation drove, and every item that is another
+ * conversation's as one count. That count carries no ids and no
  * call to act — another conversation's review or pause is not this one's to
  * answer. Work placed nowhere that is this conversation's is the caller's.
  *
- * Every active run is in `work`; of the pending items, only the ones this
- * conversation is shown are — the rest arrive counted in `items`.
+ * Every active run placed in the plan is in `work`, and the other
+ * conversations' runs serving no node arrive counted in `otherUnplacedRuns`;
+ * of the pending items, only the ones this conversation is shown are — the
+ * rest arrive counted in `items`.
  */
 export function renderPlanWithWork(
   plan: PlanAttention | undefined,
   work: readonly PlanWorkLine[],
   conversationRootIds: ReadonlySet<string>,
   items: { ownUnshown: number; others: number },
+  otherUnplacedRuns: number,
 ): string[] {
   const own = new Map<string, PlanWorkLine[]>();
-  let otherRuns = 0;
+  let otherRuns = otherUnplacedRuns;
   for (const entry of work) {
     if (entry.plan === undefined) continue;
     if (conversationRootIds.has(entry.plan.rootId)) {

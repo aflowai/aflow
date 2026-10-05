@@ -63,6 +63,8 @@ export interface ActiveWorkflowRunSummary {
   tasksSummary: string;
   /** The plan node the run serves (Plan 322 D5), and that node's root. */
   plan?: PlanPlacement;
+  /** The conversation that drove the run (`workflow_runs.session_id`). */
+  sessionId?: string;
 }
 
 /** Who reads the block: its session, and the plan roots its conversation has taken up (`loadConversationPlanRoots`). */
@@ -270,6 +272,7 @@ async function queryActiveWorkflowRuns(
         run.totalTasks > 0
           ? `${String(run.succeededTasks)}/${String(run.totalTasks)} tasks complete`
           : 'in progress',
+      ...(run.sessionId !== null ? { sessionId: run.sessionId } : {}),
       ...(run.planNodeId !== undefined ? { planNodeId: run.planNodeId } : {}),
     };
   });
@@ -895,16 +898,24 @@ export function renderAttentionContext(
       plan: item.plan,
     })),
   ].map(({ plan, ...entry }) => (plan !== undefined ? { ...entry, plan } : entry));
-  const lines = renderPlanWithWork(attention.activePlan, work, ownRoots, items);
+  // A run serving no node is the conversation's that drove it, as its attention items are.
+  const unplacedRuns = runs.filter((run) => run.plan === undefined);
+  const ownUnplacedRuns = unplacedRuns.filter((run) => run.sessionId === conversation.sessionId);
+  const lines = renderPlanWithWork(
+    attention.activePlan,
+    work,
+    ownRoots,
+    items,
+    unplacedRuns.length - ownUnplacedRuns.length,
+  );
 
-  const freeRuns = runs.filter((run) => run.plan === undefined);
-  if (freeRuns.length > 0) {
+  if (ownUnplacedRuns.length > 0) {
     lines.push(
-      freeRuns.length < runs.length
+      runs.some((run) => run.plan !== undefined)
         ? 'Active workflow runs outside the plan:'
         : 'Active workflow runs:',
     );
-    for (const run of freeRuns) lines.push(`- ${renderRunLine(run)}`);
+    for (const run of ownUnplacedRuns) lines.push(`- ${renderRunLine(run)}`);
   } else if (runs.length === 0) {
     lines.push('No active workflow runs.');
   }
