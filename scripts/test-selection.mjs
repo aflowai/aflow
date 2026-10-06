@@ -15,6 +15,9 @@ const SOURCE_CONDITION = 'ts-source';
 const NAMING_TEST_SOURCE = /\.(?:mjs|ts)$/;
 /** A character that continues a path, so a match beside one is part of a longer path. */
 const PATH_CHARACTER = /[\w./-]/;
+/** What the tree-wide guards walk: every TypeScript file of a workspace that is no test. */
+const PRODUCTION_SOURCE = /\.tsx?$/;
+const NOT_PRODUCTION_SOURCE = /\.(?:test|spec)\.tsx?$|\.d\.ts$/;
 
 /**
  * What one module does with the modules it imports, read from its syntax: the
@@ -322,4 +325,31 @@ export function testsNaming({ repository, files, candidates }) {
 export function repositoryShapeGuards({ files, workspaceDirs, guards }) {
   const outside = files.filter((file) => !workspaceDirs.has(file.split('/').slice(0, 2).join('/')));
   return { outside, guards: outside.length === 0 ? [] : [...guards] };
+}
+
+/**
+ * The guards over every production source. They walk the whole tree for what
+ * no one file shows — a declared count of background work, a durable payload
+ * stored without `persist` — so no import of a touched file reaches them. They
+ * are the tests among `candidates` whose imports reach `walker`, the module
+ * that lists the files they read, and every one of them runs when a touched
+ * TypeScript file inside a workspace is no test; `production` names the files
+ * that called them.
+ */
+export function treeWideGuards({ repository, files, workspaceDirs, walker, candidates }) {
+  const production = files.filter(
+    (file) =>
+      workspaceDirs.has(file.split('/').slice(0, 2).join('/')) &&
+      PRODUCTION_SOURCE.test(file) &&
+      !NOT_PRODUCTION_SOURCE.test(file),
+  );
+  if (production.length === 0) return { production, guards: [] };
+  const guards = testsReaching({
+    repository,
+    files: [walker],
+    candidates,
+    textAtBase: () => undefined,
+    packageDirOf: () => undefined,
+  });
+  return { production, guards };
 }

@@ -3,13 +3,20 @@
  * name through every re-export or naming a touched file by its path, and none
  * that cannot.
  */
+import { readdirSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { repositoryShapeGuards, testsNaming, testsReaching } from './test-selection.mjs';
+import {
+  repositoryShapeGuards,
+  testsNaming,
+  testsReaching,
+  treeWideGuards,
+} from './test-selection.mjs';
 
 const INDEX = [
   'export * from "./a.js";',
@@ -169,5 +176,39 @@ describe('the repository-shape guards a change answers to', () => {
       outside: [],
       guards: [],
     });
+  });
+});
+
+describe('the guards over every production source', () => {
+  const checkout = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+  const GUARD_DIR = 'packages/schemas/src/__tests__';
+  const treeGuards = (files) =>
+    treeWideGuards({
+      repository: checkout,
+      files,
+      workspaceDirs: new Set(['apps/aflow-executor-host', 'packages/schemas']),
+      walker: `${GUARD_DIR}/backgroundWorkScanner.ts`,
+      candidates: readdirSync(path.join(checkout, GUARD_DIR))
+        .filter((file) => file.endsWith('.test.ts'))
+        .map((file) => `${GUARD_DIR}/${file}`),
+    });
+
+  it('runs the background-work guard for a touched application source no import of it reaches', () => {
+    const selected = treeGuards(['apps/aflow-executor-host/src/scanReceipt.ts']);
+    expect(selected.production).toEqual(['apps/aflow-executor-host/src/scanReceipt.ts']);
+    expect(selected.guards).toContain(`${GUARD_DIR}/backgroundWork.test.ts`);
+    expect(selected.guards).toContain(`${GUARD_DIR}/durablePayloadPersist.test.ts`);
+    expect(selected.guards).not.toContain(`${GUARD_DIR}/schemas.test.ts`);
+  });
+
+  it('runs none for a test, a declaration or a file outside every workspace', () => {
+    expect(
+      treeGuards([
+        'apps/aflow-executor-host/src/__tests__/processExec.test.ts',
+        'packages/schemas/src/env.d.ts',
+        'apps/aflow-executor-host/README.md',
+        'scripts/verify-commit.mjs',
+      ]),
+    ).toEqual({ production: [], guards: [] });
   });
 });

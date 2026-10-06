@@ -161,7 +161,7 @@ export interface PushHistory {
   /** The paths a merge of `sha` into `base` would leave conflicted. */
   readonly conflicts: (base: string, sha: string) => Promise<string[]>;
   /** A scan of `range` for secrets, as `host.commit.scan` reads one. */
-  readonly scan: (range: string) => Promise<HostCommitScanOutput>;
+  readonly scanSecrets: (range: string) => Promise<HostCommitScanOutput>;
 }
 
 /** What a push that cleared the gate records with it. */
@@ -245,7 +245,7 @@ async function rangeToPush(
       );
     }
   }
-  const scan = await history.scan(range);
+  const scan = await history.scanSecrets(range);
   if (scan.unflaggedRange === undefined) {
     throw new ScanReceiptError(
       `The push scanned \`${range}\`, the range it sends, and found what looks like a ` +

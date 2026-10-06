@@ -195,7 +195,7 @@ async function execProcess(
           holds: (commit, ancestor) =>
             isAncestor(binding.root, ancestor, commit).catch(() => false),
           conflicts: (base, sha) => mergeConflictPaths(binding.root, base, sha),
-          scan: (range) => scanCommitRange(binding.root, range),
+          scanSecrets: (range) => scanCommitRange(binding.root, range),
         },
         approvalFor: (requestHash) => approvals(ctx.tenantId, ctx.runId, requestHash),
       });
