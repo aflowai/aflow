@@ -11,9 +11,10 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { PayloadAccessError } from '@aflow/executor-runtime';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PUSH_REQUIRED_OPTIONS } from '../bindings.js';
+import { createHostCommitCheckHandler } from '../handlers/checkHandlers.js';
 import { createHostCommitHandler } from '../handlers/commitHandlers.js';
 import { createHostPatchHandler } from '../handlers/patchHandlers.js';
 import { createHostProcessHandler } from '../handlers/processHandlers.js';
@@ -775,10 +776,13 @@ describe('measuring what a push of the commit would add', () => {
   }, 30_000);
 
   /** Move `origin`'s `main` on from another clone, as a colleague's push does; its new sha. */
-  async function pushedElsewhere(): Promise<string> {
+  async function pushedElsewhere(
+    file = 'c.txt',
+    contents = 'pushed by someone else\n',
+  ): Promise<string> {
     const elsewhere = join(base, 'elsewhere');
     await run('git', ['clone', '-q', origin, elsewhere]);
-    await writeFile(join(elsewhere, 'c.txt'), 'pushed by someone else\n');
+    await writeFile(join(elsewhere, file), contents);
     await git(elsewhere, 'add', '-A');
     await git(
       elsewhere,
@@ -946,7 +950,19 @@ describe('measuring what a push of the commit would add', () => {
         ) as object),
         operationId: 'host.process.exec',
       } as never);
-      return { result, message: result.error?.message ?? '' };
+      return { result, message: result.error?.message ?? '', output: captured.output };
+    }
+
+    /**
+     * A clean receipt for `range` from an executor that has restarted since:
+     * signed with a key drawn by another load of the module, as the process
+     * before the restart drew its own.
+     */
+    async function receiptFromBeforeARestart(range: string): Promise<string> {
+      const [from = '', sha = ''] = range.split('..');
+      vi.resetModules();
+      const before = await import('../scanReceipt.js');
+      return before.issueScanReceipt({ bindingId: 'hb_push', base: from, sha, outcome: 'clean' });
     }
 
     /** What `host.commit.scan` returns of `range` in the pushing folder. */
@@ -1000,15 +1016,127 @@ describe('measuring what a push of the commit would add', () => {
       expect(await pushedBranch()).toBe(sha);
     }, 30_000);
 
-    it('fails when origin moved the base forward, since the receipt is for another range', async () => {
-      const { range, from, sha } = await measured();
+    it('scans the range from where origin moved the base to, and pushes on that scan', async () => {
+      const { range, sha } = await measured();
+      const receipt = await scanned(range);
       const now = await pushedElsewhere();
-      const { result, message } = await push(range);
-      expect(result.status).toBe('FAILED');
-      expect(message).toContain(
-        `\`origin/main\` is at \`${now}\`, so this push sends \`${now}..${sha}\`, and its ` +
-          `receipt is for a scan of \`${from}..${sha}\``,
+      const { result, output } = await push(range, 'origin', receipt);
+      expect(result.status).toBe('SUCCEEDED');
+      expect(output?.['rescanned']).toBe(`${now}..${sha}`);
+      expect(await pushedBranch()).toBe(sha);
+    }, 30_000);
+
+    it('pushes on its own scan where the executor restarted since the receipt was issued', async () => {
+      const { range, sha } = await measured();
+      const stale = await receiptFromBeforeARestart(range);
+      const { result, output } = await push(range, 'origin', stale);
+      expect(result.status).toBe('SUCCEEDED');
+      expect(output?.['rescanned']).toBe(range);
+      expect(await pushedBranch()).toBe(sha);
+    }, 30_000);
+
+    it('replaces a receipt from before a restart and a moved base with one scan', async () => {
+      const { range, sha } = await measured();
+      const stale = await receiptFromBeforeARestart(range);
+      const now = await pushedElsewhere();
+      const { result, output } = await push(range, 'origin', stale);
+      expect(result.status).toBe('SUCCEEDED');
+      expect(output?.['rescanned']).toBe(`${now}..${sha}`);
+      expect(await pushedBranch()).toBe(sha);
+    }, 30_000);
+
+    it('clears nothing with a receipt it cannot read: its own scan finds what is there', async () => {
+      await writeFile(
+        join(root, 'deploy.ts'),
+        `const t = '${'ghp_' + 'A1b2C3d4E5'.repeat(4).slice(0, 36)}';\n`,
       );
+      await git(root, 'add', '-A');
+      await git(root, 'commit', '-q', '-m', 'a token');
+      const { range } = await measured();
+      const { result, message } = await push(
+        range,
+        'origin',
+        await receiptFromBeforeARestart(range),
+      );
+      expect(result.status).toBe('FAILED');
+      expect(message).toContain(`The push scanned \`${range}\``);
+      expect(message).toContain('deploy.ts');
+      expect(message).toContain('github-token');
+      expect(message).toContain('Nothing was pushed');
+      expect(await pushedBranch()).toBeUndefined();
+    }, 30_000);
+
+    /** `host.file.patch` asked to publish `branch` as it stands, at `head`: no diff, no message. */
+    async function asItStands(head: string, branch = 'aflow/x') {
+      const captured: Captured = {};
+      const result = await createHostPatchHandler(policyPath).execute(
+        contextFor(
+          { bindingId: 'hb_push', commit: { branch, baseSha: head, pushBase: 'main' } },
+          captured,
+        ),
+      );
+      return { result, output: captured.output, message: result.error?.message ?? '' };
+    }
+
+    it('publishes a branch as it stands: its head is checked, scanned and pushed, with no patch', async () => {
+      const { sha } = await measured();
+      const pushedBase = (await git(origin, 'rev-parse', 'main')).trim();
+
+      const { result, output } = await asItStands(sha);
+      expect(result.status).toBe('SUCCEEDED');
+      expect(output).toMatchObject({ state: 'applied', filesChanged: 0, files: [] });
+      const commit = output?.['commit'] as Record<string, unknown>;
+      expect(commit).toMatchObject({
+        branch: 'aflow/x',
+        sha,
+        message: 'the fix',
+        asItStands: true,
+        appended: false,
+        pushBaseSha: pushedBase,
+        pushRange: `${pushedBase}..${sha}`,
+        pushRefspec: `${sha}:refs/heads/aflow/x`,
+      });
+      // Nothing was made: the branch is where it was.
+      expect((await git(root, 'rev-parse', 'aflow/x')).trim()).toBe(sha);
+
+      const checkedOutput: Captured = {};
+      const checked = await createHostCommitCheckHandler(policyPath).execute({
+        ...(contextFor({ bindingId: 'hb_push', sha, base: pushedBase }, checkedOutput) as object),
+        operationId: 'host.commit.check',
+      } as never);
+      expect(checked.status).toBe('SUCCEEDED');
+      expect(checkedOutput.output?.['clearedSha']).toBe(sha);
+
+      const range = String(commit['pushRange']);
+      const pushed = await push(range, 'origin', await scanned(range));
+      expect(pushed.result.status).toBe('SUCCEEDED');
+      expect(await pushedBranch()).toBe(sha);
+    }, 30_000);
+
+    it('refuses to publish as it stands a branch that is missing or has moved, making nothing', async () => {
+      const { sha } = await measured();
+      const missing = await asItStands(sha, 'aflow/none');
+      expect(missing.result.status).toBe('FAILED');
+      expect(missing.message).toContain('no branch `aflow/none` to publish as it stands');
+
+      const parent = (await git(root, 'rev-parse', `${sha}^`)).trim();
+      const moved = await asItStands(parent);
+      expect(moved.result.status).toBe('FAILED');
+      expect(moved.message).toContain(`\`aflow/x\` is at \`${sha}\`, not \`${parent}\``);
+      expect((await git(root, 'rev-parse', 'aflow/x')).trim()).toBe(sha);
+    }, 30_000);
+
+    it('names the merge round where the moved base conflicts with the commit, with nothing pushed', async () => {
+      const { range, from, sha } = await measured();
+      const receipt = await scanned(range);
+      const now = await pushedElsewhere('a.txt', 'one\nCHANGED ELSEWHERE\nthree\n');
+      const { result, message } = await push(range, 'origin', receipt);
+      expect(result.status).toBe('FAILED');
+      expect(message).toContain(`\`origin/main\` moved from \`${from}\` to \`${now}\``);
+      expect(message).toContain(`\`${sha}\` no longer merges into it cleanly: \`a.txt\` conflict`);
+      expect(message).toContain('The remedy is the merge round');
+      expect(message).toContain('`mergeFrom: origin/main`');
+      expect(message).toContain('Nothing was pushed');
       expect(await pushedBranch()).toBeUndefined();
     }, 30_000);
 
@@ -1039,8 +1167,12 @@ describe('measuring what a push of the commit would add', () => {
       const tree = (await git(root, 'rev-parse', `${before}^{tree}`)).trim();
       const standIn = (await git(root, 'commit-tree', tree, '-p', unpushed, '-m', 'x')).trim();
       await git(root, 'replace', before, standIn);
-      // The planted ref bites git as the operator runs it.
-      await git(root, 'merge-base', '--is-ancestor', unpushed, before);
+      // The planted ref bites git as the operator runs it — without the
+      // variable a publication's check, like this lane, runs under.
+      const { GIT_NO_REPLACE_OBJECTS: _withheld, ...operatorEnv } = process.env;
+      await run('git', ['-C', root, 'merge-base', '--is-ancestor', unpushed, before], {
+        env: operatorEnv,
+      });
 
       const { result, message } = await push(range);
       expect(result.status).toBe('FAILED');

@@ -11,8 +11,9 @@
  * whose imports reach a touched file or whose source names one by its path, in
  * the touched workspaces and every workspace that reads a touched package —
  * such a package built first, such an application's build named as skipped —
- * and the repository-shape guards for a touched file outside every workspace,
- * where the repository has them, on half the machine's cores, on
+ * the repository-shape guards for a touched file outside every workspace and
+ * the guards over every production source for a touched one, where the
+ * repository has them, on half the machine's cores, on
  * macOS less the tests tagged `listener`, each named as skipped and their count
  * written where `AFLOW_CHECK_REPORT` says (`listener-tests.mjs`), ESLint
  * (errors only) on touched sources and Prettier on every touched file. One
@@ -42,7 +43,12 @@ import {
   skippedListenerTests,
   WITHOUT_LISTENER_TESTS,
 } from './listener-tests.mjs';
-import { repositoryShapeGuards, testsNaming, testsReaching } from './test-selection.mjs';
+import {
+  repositoryShapeGuards,
+  testsNaming,
+  testsReaching,
+  treeWideGuards,
+} from './test-selection.mjs';
 
 const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const binDir = path.join(repoRoot, 'node_modules', '.bin');
@@ -72,6 +78,14 @@ const CATALOG_GUARD_FILE =
  * outside every workspace. A repository without this directory has none.
  */
 const REPOSITORY_SHAPE_GUARD_DIR = 'packages/schemas/src/edition';
+
+/**
+ * The guards over every production source, which run for a touched one: the
+ * tests here that read the files `TREE_WALKER` lists. A repository without
+ * that module has none.
+ */
+const TREE_GUARD_DIR = 'packages/schemas/src/__tests__';
+const TREE_WALKER = `${TREE_GUARD_DIR}/backgroundWorkScanner.ts`;
 
 function fail(label, startedAt, text) {
   console.log(`FAIL ${label} (${elapsed(startedAt)})`);
@@ -314,6 +328,25 @@ if (shapeGuards.outside.length > 0) {
       ` for the files outside every workspace: ${shapeGuards.outside.join(', ')}`,
   );
 }
+const treeGuardDir = path.join(repoRoot, TREE_GUARD_DIR);
+const treeGuards = existsSync(path.join(repoRoot, TREE_WALKER))
+  ? treeWideGuards({
+      repository: repoRoot,
+      files: touched,
+      workspaceDirs: new Set(workspaces.byDir.keys()),
+      walker: TREE_WALKER,
+      candidates: readdirSync(treeGuardDir)
+        .map((file) => `${TREE_GUARD_DIR}/${file}`)
+        .filter((file) => TEST_FILE.test(file) && !DATABASE_TEST_FILE.test(file)),
+    })
+  : { production: [], guards: [] };
+if (treeGuards.guards.length > 0) {
+  console.log(
+    `${String(treeGuards.guards.length)} guards over every production source run for ` +
+      `${String(treeGuards.production.length)} touched: ${treeGuards.guards.join(', ')}`,
+  );
+}
+const treeGuardWorkspace = workspaces.byDir.get(TREE_GUARD_DIR.split('/').slice(0, 2).join('/'));
 
 // tsx as a loader rather than its CLI: the CLI opens a socket to talk to its
 // child, and the sandbox a check runs in refuses to listen on one.
@@ -345,7 +378,8 @@ for (const workspace of touchedWorkspaces) {
   for (const read of workspace.reads) need(read);
   if (workspace.dir.startsWith('packages/')) need(workspace.name);
 }
-for (const workspace of testedDependents) {
+const guardWorkspaces = treeGuards.guards.length > 0 ? [treeGuardWorkspace] : [];
+for (const workspace of [...testedDependents, ...guardWorkspaces]) {
   for (const read of workspace.reads) need(read);
   need(workspace.name);
 }
@@ -393,6 +427,7 @@ const tests = [
     ...present.filter((file) => TEST_FILE.test(file)),
     ...catalogGuards,
     ...shapeGuards.guards,
+    ...treeGuards.guards,
     ...reaching,
   ]),
 ].filter((file) => !DATABASE_TEST_FILE.test(file));
