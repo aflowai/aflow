@@ -139,7 +139,7 @@
     "postcss": "8.5.25",
     "uuid": "14.0.0",
     "form-data@npm:^4.0.5": "4.0.6",
-    "sharp": "0.35.4",
+    "sharp": "0.35.5",
     "@fastify/static": "10.1.2",
     "@hono/node-server@npm:^1.19.9": "2.0.12",
     "ajv@npm:^6.12.4": "6.15.0",
