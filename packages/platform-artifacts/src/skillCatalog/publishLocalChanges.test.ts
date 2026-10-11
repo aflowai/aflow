@@ -122,10 +122,11 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(validity.status).toBe('valid');
   });
 
-  it('is ten tasks — commit, check, scan, what decides the approval, approve, push, find or open the pull request', () => {
+  it('is eleven tasks — commit, check and its one rerun, scan, what decides the approval, approve, push, find or open the pull request', () => {
     expect(wf.tasks.map((t) => t.taskId)).toEqual([
       'commit',
       'check-commit',
+      'recheck-commit',
       'scan-commit',
       'read-repository',
       'read-push-approval',
@@ -142,6 +143,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       'operation',
       'operation',
       'operation',
+      'operation',
       'human',
       'operation',
       'operation',
@@ -151,16 +153,18 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       [],
       ['commit'],
       ['commit', 'check-commit'],
+      ['commit', 'check-commit', 'recheck-commit'],
       ['commit'],
       ['commit', 'scan-commit'],
       ['read-push-approval', 'scan-commit'],
       ['read-repository', 'scan-commit', 'review-commit'],
-      ['approve-push', 'scan-commit', 'check-commit'],
+      ['approve-push', 'scan-commit', 'check-commit', 'recheck-commit'],
       ['push'],
       ['find-pr'],
     ]);
     expect(taskOrThrow('commit').operation).toBe('host.file.patch');
     expect(taskOrThrow('check-commit').operation).toBe('host.commit.check');
+    expect(taskOrThrow('recheck-commit').operation).toBe('host.commit.check');
     expect(taskOrThrow('scan-commit').operation).toBe('host.commit.scan');
     expect(taskOrThrow('read-repository').operation).toBe('api.http.call');
     expect(taskOrThrow('read-push-approval').operation).toBe('host.binding.inspect');
@@ -472,6 +476,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       base: { kind: 'run_input', path: 'base' },
       receipt: { kind: 'task_output', taskId: 'scan-commit', path: 'receipt' },
       checkReceipt: { kind: 'task_output', taskId: 'check-commit', path: 'receipt' },
+      recheckReceipt: { kind: 'task_output', taskId: 'recheck-commit', path: 'receipt' },
     });
     const [pushCommand, ...rest] = materializedCommands();
     expect(rest).toEqual([]);
@@ -780,7 +785,12 @@ function scanResult(scan: Scan): Record<string, unknown> {
   }
 }
 
-type Check = 'passed' | 'failed' | 'timed-out' | 'skipped';
+/**
+ * How the folder's checks end: `timed-out` stopped at the folder's own time,
+ * `test-timeouts` exiting on their own with nothing failed but tests that ran
+ * out of theirs.
+ */
+type Check = 'passed' | 'failed' | 'timed-out' | 'test-timeouts' | 'skipped';
 
 const CHECK_ARGV = ['node', 'scripts/verify-commit.mjs'];
 
@@ -789,6 +799,9 @@ const CHECK_RECEIPT = {
   passed: 'check-receipt-passed',
   failed: 'check-receipt-failed',
 } as const;
+/** The test a check under load names as having run out of its time. */
+const TIMED_OUT_TEST =
+  'apps/aflow-executor-api/src/handlers/api/saveResponse.test.ts › a saveTo download allows a body above the inline default';
 const CHECK_TAIL =
   'ok   large-files guard (2.0 s)\nFAIL tsc apps/aflow-executor-host/tsconfig.json (41.3 s)\n';
 
@@ -804,6 +817,7 @@ function checkResult(check: Check): Record<string, unknown> {
         tail: '',
         summary: '`hb_app` declares no checks, so none ran.',
         clearedSha: HEAD,
+        clearedOrRetriableSha: HEAD,
       });
     case 'passed':
       return HostCommitCheckOutputSchema.parse({
@@ -815,6 +829,7 @@ function checkResult(check: Check): Record<string, unknown> {
         tail: 'ok   prettier (3 files) (1.2 s)\n',
         summary: '`node scripts/verify-commit.mjs` passed.',
         clearedSha: HEAD,
+        clearedOrRetriableSha: HEAD,
         receipt: CHECK_RECEIPT.passed,
       });
     case 'failed':
@@ -826,6 +841,20 @@ function checkResult(check: Check): Record<string, unknown> {
         outputRef: 'payload:check-output',
         tail: CHECK_TAIL,
         summary: `\`node scripts/verify-commit.mjs\` exited 1: the check failed. The last of what it printed:\n${CHECK_TAIL}`,
+        receipt: CHECK_RECEIPT.failed,
+      });
+    case 'test-timeouts':
+      return HostCommitCheckOutputSchema.parse({
+        passed: false,
+        checks: CHECK_ARGV,
+        exitCode: 1,
+        durationMs: 570_000,
+        outputRef: 'payload:check-output',
+        tail: CHECK_TAIL,
+        summary:
+          '`node scripts/verify-commit.mjs` exited 1, and nothing failed but 1 test running out of time.',
+        testTimeouts: [TIMED_OUT_TEST],
+        clearedOrRetriableSha: HEAD,
         receipt: CHECK_RECEIPT.failed,
       });
     case 'timed-out':
@@ -851,6 +880,8 @@ interface Scenario {
   committed?: boolean;
   /** How the folder's checks ended on the commit; absent is passed. */
   check?: Check;
+  /** How their second run ends, where the first lost only to time; absent is passed. */
+  recheck?: Check;
   /** What the scan of the commit found; absent is clean. */
   scan?: Scan;
   /**
@@ -881,6 +912,9 @@ interface Outcome {
   inputs: Map<string, Record<string, unknown>>;
   /** The run's state as its tasks' promoted outputs make it. */
   state: Record<string, unknown>;
+  /** How each task ended, and what each that succeeded recorded. */
+  statuses: Map<string, string>;
+  outputs: Map<string, Record<string, unknown>>;
 }
 
 /**
@@ -914,6 +948,8 @@ function rawOutput(
           };
     case 'check-commit':
       return checkResult(scenario.check ?? 'passed');
+    case 'recheck-commit':
+      return checkResult(scenario.recheck ?? 'passed');
     case 'scan-commit':
       return scanResult(scenario.scan ?? 'clean');
     case 'read-repository':
@@ -1034,14 +1070,17 @@ function receiptAccepted(
   grants: ReadonlySet<string>,
   runInputs: Readonly<Record<string, unknown>>,
 ): boolean {
-  const { bindingId, refspec, base, receipt, checkReceipt } = boundOutputs(
-    push.inputBindings,
-    outputs,
-    runInputs,
-  );
+  const bound = boundOutputs(push.inputBindings, outputs, runInputs);
+  const { bindingId, refspec, base, receipt } = bound;
   if (typeof receipt !== 'string' || typeof base !== 'string') return false;
   const checksDeclared = outputs.get('check-commit')?.['skipped'] !== true;
-  const carried = checkReceipt ?? undefined;
+  // The check receipt as the push's own template carries it.
+  const sent = substituteTemplateBinds(
+    push.inputTemplate ?? {},
+    bound,
+    new Set(Object.keys(push.inputBindings ?? {})),
+  );
+  const carried = (sent['check'] as { receipt?: unknown } | undefined)?.receipt ?? undefined;
   if (carried !== (checksDeclared ? CHECK_RECEIPT.passed : undefined)) return false;
   if (outputs.get('scan-commit')?.['clean'] === true) return true;
   const key = grantKey({ bindingId, refspec, receipt });
@@ -1155,7 +1194,15 @@ function publish(scenario: Scenario): Outcome {
       output,
     })),
   );
-  return { asked, pushed: statuses.get('push') === 'succeeded', ran, inputs, state };
+  return {
+    asked,
+    pushed: statuses.get('push') === 'succeeded',
+    ran,
+    inputs,
+    state,
+    statuses,
+    outputs,
+  };
 }
 
 describe('Publish Local Changes — the folder decides whether the push asks', () => {
@@ -1882,20 +1929,118 @@ describe("Publish Local Changes — the folder's checks run before anything leav
   });
 
   it('fails at the check, rather than pausing on a resolution that could clear it', () => {
-    const check = taskOrThrow('check-commit');
-    expect(check.maxAttempts).toBe(1);
-    expect(check.outputContract).toBeUndefined();
-    expect(check.optional).not.toBe(true);
+    for (const taskId of ['check-commit', 'recheck-commit']) {
+      const check = taskOrThrow(taskId);
+      expect(check.maxAttempts, taskId).toBe(1);
+      expect(check.outputContract, taskId).toBeUndefined();
+      expect(check.optional, taskId).not.toBe(true);
+    }
+    const projects = (taskId: string, ending: Check): boolean =>
+      projectTaskOutput(taskOrThrow(taskId).outputProjection ?? {}, checkResult(ending), null).ok;
     for (const ending of ['failed', 'timed-out'] as const) {
-      expect(projectTaskOutput(check.outputProjection ?? {}, checkResult(ending), null).ok).toBe(
-        false,
-      );
+      expect(projects('check-commit', ending), ending).toBe(false);
     }
-    for (const ending of ['passed', 'skipped'] as const) {
-      expect(projectTaskOutput(check.outputProjection ?? {}, checkResult(ending), null).ok).toBe(
-        true,
-      );
+    for (const ending of ['passed', 'skipped', 'test-timeouts'] as const) {
+      expect(projects('check-commit', ending), ending).toBe(true);
     }
+    // The second run is the last: tests running out of time fail it as anything else does.
+    for (const ending of ['failed', 'timed-out', 'test-timeouts'] as const) {
+      expect(projects('recheck-commit', ending), ending).toBe(false);
+    }
+    expect(projects('recheck-commit', 'passed')).toBe(true);
+  });
+
+  describe('a run of the checks lost only to tests running out of time', () => {
+    const LATER = [
+      'scan-commit',
+      'read-push-approval',
+      'review-commit',
+      'approve-push',
+      'push',
+      'find-pr',
+      'open-pr',
+    ];
+    const checkRuns = (ran: readonly string[]) =>
+      ran.filter((taskId) => taskOrThrow(taskId).operation === 'host.commit.check');
+
+    it('is run once more by the publication itself, which then goes on and pushes on the second run’s receipt', () => {
+      const outcome = publish({
+        pushApproval: 'never',
+        review: 'approve',
+        decision: 'approved',
+        check: 'test-timeouts',
+      });
+      expect(checkRuns(outcome.ran)).toEqual(['check-commit', 'recheck-commit']);
+      expect(outcome.ran.indexOf('scan-commit')).toBeGreaterThan(
+        outcome.ran.indexOf('recheck-commit'),
+      );
+      expect(outcome.inputs.get('recheck-commit')).toEqual(outcome.inputs.get('check-commit'));
+      expect(outcome.inputs.get('recheck-commit')).toEqual({
+        bindingId: 'folder-1',
+        sha: HEAD,
+        base: ORIGIN_BASE,
+      });
+      expect(outcome.pushed).toBe(true);
+      expect(outcome.inputs.get('push')?.['check']).toEqual({ receipt: CHECK_RECEIPT.passed });
+    });
+
+    it('is recorded on the run: the first check names the tests and did not pass, the second is its own task', () => {
+      const outcome = publish({
+        pushApproval: 'never',
+        review: 'approve',
+        decision: 'approved',
+        check: 'test-timeouts',
+      });
+      expect(outcome.statuses.get('check-commit')).toBe('succeeded');
+      expect(outcome.outputs.get('check-commit')).toMatchObject({
+        passed: false,
+        testTimeouts: [TIMED_OUT_TEST],
+        receipt: CHECK_RECEIPT.failed,
+      });
+      expect(outcome.statuses.get('recheck-commit')).toBe('succeeded');
+      expect(outcome.outputs.get('recheck-commit')).toMatchObject({
+        passed: true,
+        clearedSha: HEAD,
+        receipt: CHECK_RECEIPT.passed,
+      });
+      expect(taskOrThrow('recheck-commit').name).toBe(
+        "Run the folder's checks again, after tests ran out of time",
+      );
+    });
+
+    for (const recheck of ['test-timeouts', 'failed', 'timed-out'] as const) {
+      it(`is run exactly once: a second run that ${recheck === 'test-timeouts' ? 'loses to time again' : recheck === 'failed' ? 'fails' : 'runs out of the folder’s time'} fails the publication with nothing later run`, () => {
+        const outcome = publish({
+          pushApproval: 'never',
+          review: 'approve',
+          decision: 'approved',
+          check: 'test-timeouts',
+          recheck,
+        });
+        expect(checkRuns(outcome.ran)).toEqual(['check-commit', 'recheck-commit']);
+        expect(outcome.statuses.get('recheck-commit')).toBe('failed');
+        for (const later of LATER) expect(outcome.ran, later).not.toContain(later);
+        expect(outcome.pushed).toBe(false);
+      });
+    }
+
+    for (const check of ['passed', 'skipped', 'failed', 'timed-out'] as const) {
+      it(`is not what a run that ${check === 'timed-out' ? 'ran out of the folder’s time' : check} is: no second run`, () => {
+        const outcome = publish({
+          pushApproval: 'never',
+          review: 'approve',
+          decision: 'approved',
+          check,
+        });
+        expect(checkRuns(outcome.ran)).toEqual(['check-commit']);
+      });
+    }
+
+    it('says on the second run’s failure that it was the second', () => {
+      const failure = taskOrThrow('recheck-commit').failureInstruction ?? '';
+      expect(failure).toContain('Nothing was scanned, reviewed or pushed');
+      expect(failure).toContain('this second run failed as well');
+    });
   });
 
   for (const pushApproval of postures) {

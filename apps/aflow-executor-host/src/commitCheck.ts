@@ -10,7 +10,7 @@
  * printed is kept in the order it came, and from both ends where there is too
  * much of it: its start says what ran, and a failing check says why last.
  */
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -18,6 +18,7 @@ import {
   HOST_CHECK_OUTPUT_HEAD_BYTES,
   HOST_CHECK_OUTPUT_TAIL_BYTES,
   HOST_CHECK_TAIL_BYTES,
+  HOST_CHECK_TEST_TIMEOUTS_MAX,
   type HostCommitCheckOutputSchema,
   type HostSandboxPosture,
 } from '@aflow/schemas';
@@ -154,8 +155,23 @@ export function checkTail(output: string): string {
 export const CHECK_REPORT_ENV = 'AFLOW_CHECK_REPORT';
 const CHECK_REPORT_FILE = 'check-report.json';
 
+/**
+ * Where a check may keep what it builds from one checkout to the next, named
+ * to it in this variable: a directory in the folder's repository directory,
+ * the one place of the folder a check may write. Every checkout of the folder
+ * is added from that repository, so a check of any commit finds it.
+ */
+export const CHECK_BUILD_CACHE_ENV = 'AFLOW_CHECK_BUILD_CACHE';
+const CHECK_BUILD_CACHE_PATH = ['aflow', 'check-builds'] as const;
+
+/** The build cache of the folder whose repository directory is `gitDir`. */
+export function checkBuildCacheDir(gitDir: string): string {
+  return join(gitDir, ...CHECK_BUILD_CACHE_PATH);
+}
+
 const CheckReportSchema = z.object({
   skippedListenerTests: z.number().int().nonnegative(),
+  testTimeouts: z.array(z.string()).optional(),
 });
 
 /** What the check wrote to its report, or nothing where it wrote none a reader can take. */
@@ -184,6 +200,8 @@ export interface FolderCheckRun {
   readonly output: string;
   /** Tests that listen on a port of their own the check skipped, where its report says. */
   readonly skippedListenerTests?: number;
+  /** The tests that ran out of their time, where its report says they alone failed it. */
+  readonly testTimeouts?: readonly string[];
 }
 
 export interface FolderCheckInput {
@@ -193,6 +211,8 @@ export interface FolderCheckInput {
   /** Full shas, already resolved in the folder. */
   readonly sha: string;
   readonly base: string;
+  /** The folder's build cache (`checkBuildCacheDir`), the one path outside the checkout it may write. */
+  readonly buildCacheDir: string;
   readonly toolPaths: readonly string[];
   readonly ownerRunId: string;
   readonly signal: AbortSignal;
@@ -210,6 +230,7 @@ export async function runFolderChecks(input: FolderCheckInput): Promise<FolderCh
       at: input.sha,
     });
     worktreePath = worktree.path;
+    await mkdir(input.buildCacheDir, { recursive: true });
     const kept = createHeadTailBuffer(HOST_CHECK_OUTPUT_HEAD_BYTES, HOST_CHECK_OUTPUT_TAIL_BYTES);
     const visible = createChatterStripper();
     const take = (text: string): void => {
@@ -226,6 +247,7 @@ export async function runFolderChecks(input: FolderCheckInput): Promise<FolderCh
         AFLOW_CHECK_SHA: input.sha,
         AFLOW_CHECK_BASE: input.base,
         [CHECK_REPORT_ENV]: reportPath,
+        [CHECK_BUILD_CACHE_ENV]: input.buildCacheDir,
         // A script reading the range reads the commits a push sends, never
         // what a `refs/replace/` ref shows in their place.
         ...NO_REPLACE_OBJECTS_ENV,
@@ -238,6 +260,7 @@ export async function runFolderChecks(input: FolderCheckInput): Promise<FolderCh
         authPaths: [],
         allowedDomains: [],
         writableRoot: worktree.path,
+        writePaths: [input.buildCacheDir],
         withholdBindingWrite: true,
       },
       toolPaths: input.toolPaths,
@@ -260,6 +283,9 @@ export async function runFolderChecks(input: FolderCheckInput): Promise<FolderCh
       output: kept.text(),
       sandbox: sandboxPostureOf(input.binding),
       ...(report !== undefined ? { skippedListenerTests: report.skippedListenerTests } : {}),
+      ...(report?.testTimeouts !== undefined && report.testTimeouts.length > 0
+        ? { testTimeouts: report.testTimeouts }
+        : {}),
     };
   } finally {
     if (worktreePath !== undefined) await removeWorktree(input.binding.root, worktreePath);
@@ -284,6 +310,7 @@ export function skippedCheck(bindingId: string, sha: string): HostCommitCheckOut
       'was not checked on this machine. The operator declares them on the machine holding ' +
       `the folder: \`aflow harness checks ${bindingId} -- <program> [args...]\`.`,
     clearedSha: sha,
+    clearedOrRetriableSha: sha,
   };
 }
 
@@ -298,6 +325,10 @@ export function checkOutcome(params: {
 }): HostCommitCheckOutput {
   const { result } = params.run;
   const passed = !result.timedOut && result.exitCode === 0;
+  // Only a run that exited on its own can say what failed it; one stopped at
+  // the folder's time or by a signal ended before it could.
+  const testTimeouts =
+    !passed && !result.timedOut && result.exitCode !== null ? (params.run.testTimeouts ?? []) : [];
   const tail = checkTail(params.run.output);
   const command = `\`${params.argv.join(' ')}\``;
   const short = params.sha.slice(0, SHORT_SHA_LENGTH);
@@ -314,6 +345,15 @@ export function checkOutcome(params: {
       `${formatMinutes(params.timeoutMs)}, ran out, and was stopped: the check failed. Where ` +
       'the checks are slow rather than stuck, give them longer on the machine holding the ' +
       `folder: \`aflow harness checks ${params.bindingId} --timeout-minutes <n>\`.${printed}`;
+  } else if (testTimeouts.length > 0) {
+    const named = testTimeouts.slice(0, HOST_CHECK_TEST_TIMEOUTS_MAX).join('; ');
+    const more = testTimeouts.length - HOST_CHECK_TEST_TIMEOUTS_MAX;
+    summary =
+      `${command} exited ${String(result.exitCode)} on ${short} after ${seconds(result.durationMs)}, ` +
+      `and nothing failed but ${String(testTimeouts.length)} test${testTimeouts.length === 1 ? '' : 's'} ` +
+      `running out of time: ${named}${more > 0 ? `; and ${String(more)} more` : ''}. A machine under ` +
+      'load does this to a passing commit, which is why a publication runs the checks once more ' +
+      `after a first run that ends so.${printed}`;
   } else {
     const ending =
       result.exitCode === null
@@ -334,6 +374,10 @@ export function checkOutcome(params: {
     ...(params.run.skippedListenerTests !== undefined
       ? { skippedListenerTests: params.run.skippedListenerTests }
       : {}),
+    ...(testTimeouts.length > 0
+      ? { testTimeouts: testTimeouts.slice(0, HOST_CHECK_TEST_TIMEOUTS_MAX) }
+      : {}),
     ...(passed ? { clearedSha: params.sha } : {}),
+    ...(passed || testTimeouts.length > 0 ? { clearedOrRetriableSha: params.sha } : {}),
   };
 }

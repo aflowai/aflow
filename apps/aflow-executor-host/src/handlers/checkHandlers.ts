@@ -30,10 +30,10 @@ import {
   requireWritable,
 } from '../bindings.js';
 import { issueCheckReceipt } from '../checkReceipt.js';
-import { checkOutcome, runFolderChecks, skippedCheck } from '../commitCheck.js';
+import { checkBuildCacheDir, checkOutcome, runFolderChecks, skippedCheck } from '../commitCheck.js';
 import { checksOf } from '../folderChecks.js';
 import { noSandboxMessage, reapWithdrawn, sandboxReadiness } from '../sandboxedRun.js';
-import { isGitRepository, resolveCommit, WorktreeError } from '../worktree.js';
+import { commonGitDir, isGitRepository, resolveCommit, WorktreeError } from '../worktree.js';
 
 async function check(ctx: ExecutorContext, policyPath: string): Promise<StepResult> {
   const parsed = HostCommitCheckInputSchema.safeParse(await ctx.readPayload(ctx.job.inputRef));
@@ -73,6 +73,7 @@ async function check(ctx: ExecutorContext, policyPath: string): Promise<StepResu
     timeoutMs,
     sha,
     base,
+    buildCacheDir: checkBuildCacheDir(await commonGitDir(binding.root)),
     toolPaths: policy.toolPaths,
     ownerRunId: ctx.runId,
     signal: ctx.signal,

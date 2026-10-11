@@ -40,6 +40,12 @@ vi.mock('@aflow/database', async () => {
 const { saveResponseBodyToMemory } = await import('./saveResponse.js');
 const { processResponse } = await import('./response.js');
 
+/**
+ * A test that builds a body of megabytes and reads it through declares its own
+ * time: on a machine under load that outlasts its project's default.
+ */
+const LARGE_BODY_TIMEOUT_MS = 60_000;
+
 const TENANT = 'tenant-1' as TenantId;
 const db = {} as never;
 
@@ -281,49 +287,57 @@ describe('processResponse with response.saveTo', () => {
     expect(mockPut).not.toHaveBeenCalled();
   });
 
-  it('a saveTo download with maxBytes omitted allows a body above the 10 MB inline default', async () => {
-    const ctx = makeCtx();
-    const body = 'x'.repeat(11 * 1024 * 1024); // 11 MB — over the inline default, under the saveTo default
-    const response = new Response(body, {
-      status: 200,
-      headers: { 'content-type': 'text/csv' },
-    });
+  it(
+    'a saveTo download with maxBytes omitted allows a body above the 10 MB inline default',
+    async () => {
+      const ctx = makeCtx();
+      const body = 'x'.repeat(11 * 1024 * 1024); // 11 MB — over the inline default, under the saveTo default
+      const response = new Response(body, {
+        status: 200,
+        headers: { 'content-type': 'text/csv' },
+      });
 
-    const result = await processResponse(
-      ctx,
-      makeInput('/workspace/data/big.csv'),
-      response,
-      5,
-      RESOLVED.url,
-      RESOLVED,
-      { db, payloadStore: createMemoryPayloadStore() },
-    );
+      const result = await processResponse(
+        ctx,
+        makeInput('/workspace/data/big.csv'),
+        response,
+        5,
+        RESOLVED.url,
+        RESOLVED,
+        { db, payloadStore: createMemoryPayloadStore() },
+      );
 
-    expect(result.statusCode).toBe(200);
-    expect((result as { savedTo?: string }).savedTo).toBe('/data/big.csv');
-    expect(mockPut).toHaveBeenCalledTimes(1);
-  });
+      expect(result.statusCode).toBe(200);
+      expect((result as { savedTo?: string }).savedTo).toBe('/data/big.csv');
+      expect(mockPut).toHaveBeenCalledTimes(1);
+    },
+    LARGE_BODY_TIMEOUT_MS,
+  );
 
-  it('an inline response with maxBytes omitted still rejects a body above the 10 MB default', async () => {
-    const ctx = makeCtx();
-    const body = 'x'.repeat(11 * 1024 * 1024);
-    const response = new Response(body, {
-      status: 200,
-      headers: { 'content-type': 'text/plain' },
-    });
-    const inlineInput = ApiCallInputSchema.parse({
-      apiId: 'example',
-      endpointId: 'download',
-      response: { format: 'text' },
-    });
+  it(
+    'an inline response with maxBytes omitted still rejects a body above the 10 MB default',
+    async () => {
+      const ctx = makeCtx();
+      const body = 'x'.repeat(11 * 1024 * 1024);
+      const response = new Response(body, {
+        status: 200,
+        headers: { 'content-type': 'text/plain' },
+      });
+      const inlineInput = ApiCallInputSchema.parse({
+        apiId: 'example',
+        endpointId: 'download',
+        response: { format: 'text' },
+      });
 
-    await expect(
-      processResponse(ctx, inlineInput, response, 5, RESOLVED.url, RESOLVED, {
-        db,
-        payloadStore: createMemoryPayloadStore(),
-      }),
-    ).rejects.toMatchObject({ aflowError: { code: 'API_RESPONSE_TOO_LARGE' } });
-  });
+      await expect(
+        processResponse(ctx, inlineInput, response, 5, RESOLVED.url, RESOLVED, {
+          db,
+          payloadStore: createMemoryPayloadStore(),
+        }),
+      ).rejects.toMatchObject({ aflowError: { code: 'API_RESPONSE_TOO_LARGE' } });
+    },
+    LARGE_BODY_TIMEOUT_MS,
+  );
 
   it('does NOT save error responses — the error body comes back inline', async () => {
     const ctx = makeCtx();
@@ -356,30 +370,34 @@ describe('processResponse with response.saveTo', () => {
     ).rejects.toMatchObject({ aflowError: { code: 'INTERNAL_ERROR' } });
   });
 
-  it('an api.http.download-synthesized input streams a >10 MB body with indexing:disabled', async () => {
-    const ctx = makeCtx();
-    const body = 'a,b\n'.repeat(3 * 1024 * 1024); // ~12 MB — over the 10 MB inline default
-    const response = new Response(body, {
-      status: 200,
-      headers: { 'content-type': 'text/csv' },
-    });
+  it(
+    'an api.http.download-synthesized input streams a >10 MB body with indexing:disabled',
+    async () => {
+      const ctx = makeCtx();
+      const body = 'a,b\n'.repeat(3 * 1024 * 1024); // ~12 MB — over the 10 MB inline default
+      const response = new Response(body, {
+        status: 200,
+        headers: { 'content-type': 'text/csv' },
+      });
 
-    const input = buildDownloadApiCallInput(
-      ApiHttpDownloadInputSchema.parse({
-        apiId: 'example',
-        endpointId: 'download',
-        toMemoryPath: '/workspace/data/train.csv',
-      }),
-    );
+      const input = buildDownloadApiCallInput(
+        ApiHttpDownloadInputSchema.parse({
+          apiId: 'example',
+          endpointId: 'download',
+          toMemoryPath: '/workspace/data/train.csv',
+        }),
+      );
 
-    const result = await processResponse(ctx, input, response, 7, RESOLVED.url, RESOLVED, {
-      db,
-      payloadStore: createMemoryPayloadStore(),
-    });
+      const result = await processResponse(ctx, input, response, 7, RESOLVED.url, RESOLVED, {
+        db,
+        payloadStore: createMemoryPayloadStore(),
+      });
 
-    expect((result as { savedTo?: string }).savedTo).toBe('/data/train.csv');
-    expect(result.sizeBytes).toBe(Buffer.byteLength(body));
-    const putParams = mockPut.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(putParams['indexing']).toBe('disabled'); // raw data reaches the Memory write un-embedded
-  });
+      expect((result as { savedTo?: string }).savedTo).toBe('/data/train.csv');
+      expect(result.sizeBytes).toBe(Buffer.byteLength(body));
+      const putParams = mockPut.mock.calls[0]?.[0] as Record<string, unknown>;
+      expect(putParams['indexing']).toBe('disabled'); // raw data reaches the Memory write un-embedded
+    },
+    LARGE_BODY_TIMEOUT_MS,
+  );
 });

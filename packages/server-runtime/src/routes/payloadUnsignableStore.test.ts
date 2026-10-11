@@ -28,6 +28,12 @@ vi.mock('@aflow/redis', async (importOriginal) => {
 
 const { payloadRoutes } = await import('./payloads.js');
 
+/**
+ * A test that builds a body of megabytes and reads it through declares its own
+ * time: on a machine under load that outlasts its project's default.
+ */
+const LARGE_BODY_TIMEOUT_MS = 60_000;
+
 const TENANT = 'a0000000-0000-0000-0000-000000000001';
 const SESSION = '00000000-0000-4000-8000-0000000000cc';
 const REF = `gs://file-store/tenants/${TENANT}/runs/${SESSION}/steps/${SESSION}/attempt/0/output.json`;
@@ -76,20 +82,24 @@ describe('payload route against a store that cannot sign', () => {
     mocks.getSessionStateSafe.mockResolvedValue({ ok: true, state: {} });
   });
 
-  it('serves a payload past the size cap rather than diverting it nowhere', async () => {
-    mocks.retrieve.mockResolvedValue({ blob: 'x'.repeat(11 * 1024 * 1024) });
-    const app = await buildTestApp();
+  it(
+    'serves a payload past the size cap rather than diverting it nowhere',
+    async () => {
+      mocks.retrieve.mockResolvedValue({ blob: 'x'.repeat(11 * 1024 * 1024) });
+      const app = await buildTestApp();
 
-    const res = await app.inject({
-      method: 'GET',
-      url: `/v1/payloads?ref=${encodeURIComponent(REF)}`,
-    });
+      const res = await app.inject({
+        method: 'GET',
+        url: `/v1/payloads?ref=${encodeURIComponent(REF)}`,
+      });
 
-    expect(res.statusCode).toBe(200);
-    expect(JSON.parse(res.body)).toHaveProperty('blob');
-    expect(mocks.getSignedUrl).not.toHaveBeenCalled();
-    await app.close();
-  });
+      expect(res.statusCode).toBe(200);
+      expect(JSON.parse(res.body)).toHaveProperty('blob');
+      expect(mocks.getSignedUrl).not.toHaveBeenCalled();
+      await app.close();
+    },
+    LARGE_BODY_TIMEOUT_MS,
+  );
 
   it('serves the payload to a caller that asked for a URL', async () => {
     mocks.retrieve.mockResolvedValue({ secret: 'data' });

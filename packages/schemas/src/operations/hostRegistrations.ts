@@ -1,14 +1,12 @@
 /**
  * The host lane's operations as the catalog registers them. Their schemas are in
- * `host.ts`.
+ * `host.ts`, and the folder checks' in `hostCommitCheck.ts`.
  */
 import type { OperationRegistration } from '../catalog/operationCatalog.js';
 import {
   HOST_HARNESS_CONCURRENCY_DEFAULT,
   HostBindingInspectInputSchema,
   HostBindingInspectOutputSchema,
-  HostCommitCheckInputSchema,
-  HostCommitCheckOutputSchema,
   HostCommitScanInputSchema,
   HostCommitScanOutputSchema,
   HostFileGetInputSchema,
@@ -34,6 +32,7 @@ import {
   HostProcessStopInputSchema,
   HostProcessStopOutputSchema,
 } from './host.js';
+import { HostCommitCheckInputSchema, HostCommitCheckOutputSchema } from './hostCommitCheck.js';
 
 export const HostOperationRegistrations: OperationRegistration[] = [
   {

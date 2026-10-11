@@ -230,14 +230,14 @@ const LOCAL_CODE_REVIEW_BUNDLE: SkillBundleInput = {
 
 const LOCAL_PUBLISH_BUNDLE: SkillBundleInput = {
   bundleId: 'local-publish' as SkillBundleId,
-  version: 19,
+  version: 20,
   name: 'Local Publish',
   tagline:
     'Commit a patch onto a branch of a connected repository, clear the push, and open the pull request.',
   description: `Installs **Publish Local Changes** — the step after a commission: a patch becomes a commit on a branch of a repository connected as a folder — a new one, or the branch a fix was commissioned from, and then, once the push is cleared, a pushed branch and an open pull request.
 
 **What it installs**:
-- The **Publish Local Changes** skill — the patch is committed in a detached worktree, so the working tree is untouched: a fresh branch starts at the commission's base, and the branch a fix was commissioned from is appended to at its head; the checks the folder declares run in a checkout of the commit, and a failure stops the run with nothing scanned or pushed — the push itself is refused without the receipt of their passing on that commit; everything the push would add — the commit and any of the folder's own commits under it that \`origin\` does not have yet — is scanned for secrets, with the commits' headers and messages and the pull request's title and summary, and a finding stops the run with nothing pushed; the run then waits for the operator's approval — unless the folder's push approval says it need not ask — and only after that is that commit pushed to its branch on \`origin\` — refused, with nothing pushed, where \`origin\`'s base no longer holds what the run measured or \`origin\` pushes elsewhere than it fetches — and the pull request opened, or the one the branch already has reported.
+- The **Publish Local Changes** skill — the patch is committed in a detached worktree, so the working tree is untouched: a fresh branch starts at the commission's base, and the branch a fix was commissioned from is appended to at its head; the checks the folder declares run in a checkout of the commit, and a failure stops the run with nothing scanned or pushed — save one where only tests ran out of their time, which a loaded machine causes and the run checks once more — the push itself is refused without the receipt of their passing on that commit; everything the push would add — the commit and any of the folder's own commits under it that \`origin\` does not have yet — is scanned for secrets, with the commits' headers and messages and the pull request's title and summary, and a finding stops the run with nothing pushed; the run then waits for the operator's approval — unless the folder's push approval says it need not ask — and only after that is that commit pushed to its branch on \`origin\` — refused, with nothing pushed, where \`origin\`'s base no longer holds what the run measured or \`origin\` pushes elsewhere than it fetches — and the pull request opened, or the one the branch already has reported.
 
 **After install**: connect the repository as a folder allowing pushes under a branch prefix, and bind the GitHub connector for the space. Then hand the skill a commission's \`patchRef\`, a branch name under that prefix and a title. To have a publication run the repository's own checks first, declare them on the machine: \`aflow harness checks <folder> -- <program> [args...]\`, run from the repository root. A folder that declares none runs none, and the pull request's checks remain the proof.
 
@@ -256,7 +256,7 @@ const LOCAL_PUBLISH_BUNDLE: SkillBundleInput = {
   helmsmanHints: [
     'A folder connected without a publish prefix can be committed to but not pushed from — the push is refused where it runs. Ask for the folder to be reconnected allowing pushes under a prefix before starting a publication.',
     "Whether the run waits at the approval is the folder's push approval, shown in the machine block. Under `unless-unreviewed`, the default, the run reviews everything its push would add before it gets there, so no review needs starting alongside it. A file the scan could not read or a line marked `aflow-scan: allow` makes it ask under every posture.",
-    "The folder's checks, where it declares them — `checks` in the machine block — run on the commit before anything else, so no build or test needs running beside a publication. A failed check fails the run with the end of what it printed, and nothing has left the machine.",
+    "The folder's checks, where it declares them — `checks` in the machine block — run on the commit before anything else, so no build or test needs running beside a publication. A failed check fails the run with the end of what it printed, and nothing has left the machine; one that failed only on tests running out of time is run once more by the publication itself first, so it needs no retry from the conversation.",
     "A commission's change is published by its `patchRef`, never its `patch` text: that copy is cut short on a large change, and a run's inputs are capped at 32 KB together. `patch` is for a small diff the operator hands over.",
   ],
 };

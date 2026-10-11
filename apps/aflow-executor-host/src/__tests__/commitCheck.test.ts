@@ -14,7 +14,7 @@
 import { execFile, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { createServer, type AddressInfo } from 'node:net';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -97,8 +97,14 @@ vi.mock('../sandboxedRun.js', async (importOriginal) => {
 
 const { createHostHandler } = await import('../handlers/hostHandler.js');
 const { noPushApprovals } = await import('./fixtures/pushApprovals.js');
-const { CHECK_REPORT_ENV, checkTail, createHeadTailBuffer, createTailBuffer, utf8Suffix } =
-  await import('../commitCheck.js');
+const {
+  CHECK_BUILD_CACHE_ENV,
+  CHECK_REPORT_ENV,
+  checkTail,
+  createHeadTailBuffer,
+  createTailBuffer,
+  utf8Suffix,
+} = await import('../commitCheck.js');
 const { requireCheckedPush } = await import('../checkReceipt.js');
 const actualSandbox =
   await vi.importActual<typeof import('../sandboxedRun.js')>('../sandboxedRun.js');
@@ -249,6 +255,11 @@ async function check(world: Fixture, input: Record<string, unknown> = {}) {
   return { result, captured };
 }
 
+/** Where the folder's checks keep their builds: in its repository directory, which every checkout shares. */
+async function buildCache(repo: string): Promise<string> {
+  return join(await realpath(join(repo, '.git')), 'aflow', 'check-builds');
+}
+
 async function checkouts(repo: string): Promise<string> {
   return await git(repo, 'worktree', 'list', '--porcelain');
 }
@@ -292,17 +303,21 @@ describe('host.commit.check — a passing check', () => {
     await check(world);
     const input = handed[0];
     expect(input?.argv).toEqual(REPORTING);
+    const cache = await buildCache(world.repo);
     expect(input?.widening).toEqual({
       authPaths: [],
       allowedDomains: [],
       writableRoot: input?.cwd,
+      writePaths: [cache],
       withholdBindingWrite: true,
     });
     expect(input?.trustedEnv).toMatchObject({
       AFLOW_CHECK_SHA: world.sha,
       AFLOW_CHECK_BASE: world.base,
+      [CHECK_BUILD_CACHE_ENV]: cache,
       GIT_NO_REPLACE_OBJECTS: '1',
     });
+    expect(existsSync(cache)).toBe(true);
   });
 
   it('removes the checkout and its scratch afterwards, and leaves the folder where it was', async () => {
@@ -559,6 +574,61 @@ describe('host.commit.check — the receipt it leaves for the push', () => {
   });
 });
 
+describe('host.commit.check — a run lost only to tests running out of time', () => {
+  const TIMED_OUT = ['apps/x/src/a.test.ts › waits', 'apps/x/src/b.test.ts › waits too'];
+
+  /** A check that reports `testTimeouts` and ends as `exit` says. */
+  function reportingTimeouts(exit: string): string[] {
+    return nodeCheck(
+      `${reportScript(JSON.stringify({ skippedListenerTests: 0, testTimeouts: TIMED_OUT }))}\n${exit}`,
+    );
+  }
+
+  it('names the tests and the commit a publication runs the checks on again, and clears nothing', async () => {
+    const world = await fixture({
+      branchPrefix: 'aflow/',
+      checks: reportingTimeouts("console.log('FAIL tests'); process.exit(1);"),
+    });
+    const output = HostCommitCheckOutputSchema.parse((await check(world)).captured.output);
+    expect(output.passed).toBe(false);
+    expect(output.clearedSha).toBeUndefined();
+    expect(output.testTimeouts).toEqual(TIMED_OUT);
+    expect(output.clearedOrRetriableSha).toBe(world.sha);
+    expect(output.summary).toContain('nothing failed but 2 tests running out of time');
+    expect(output.summary).toContain(TIMED_OUT.join('; '));
+    expect(output.summary).toContain('a publication runs the checks once more');
+    expect(output.receipt).toBeDefined();
+  });
+
+  it('is not claimed for checks that passed, or that the folder’s time stopped', async () => {
+    const passing = await fixture({
+      branchPrefix: 'aflow/',
+      checks: reportingTimeouts('process.exit(0);'),
+    });
+    const passed = HostCommitCheckOutputSchema.parse((await check(passing)).captured.output);
+    expect(passed.testTimeouts).toBeUndefined();
+    expect(passed.clearedOrRetriableSha).toBe(passing.sha);
+    expect(passed.clearedSha).toBe(passing.sha);
+
+    const stopped = await fixture({
+      branchPrefix: 'aflow/',
+      checks: reportingTimeouts('setTimeout(() => {}, 60_000);'),
+      checksTimeoutMs: 60_000,
+    });
+    const timedOut = HostCommitCheckOutputSchema.parse((await check(stopped)).captured.output);
+    expect(timedOut).toMatchObject({ passed: false, timedOut: true });
+    expect(timedOut.testTimeouts).toBeUndefined();
+    expect(timedOut.clearedOrRetriableSha).toBeUndefined();
+  });
+
+  it('is not claimed where the checks reported none', async () => {
+    const world = await fixture({ branchPrefix: 'aflow/', checks: FAILING });
+    const output = HostCommitCheckOutputSchema.parse((await check(world)).captured.output);
+    expect(output.testTimeouts).toBeUndefined();
+    expect(output.clearedOrRetriableSha).toBeUndefined();
+  });
+});
+
 describe("host.commit.check — the folder's sandbox posture", () => {
   function compiled(input: SandboxedRunInput): ReturnType<typeof compileSandboxPolicy> {
     return compileSandboxPolicy(input.binding, {
@@ -567,7 +637,7 @@ describe("host.commit.check — the folder's sandbox posture", () => {
     });
   }
 
-  it('runs an `open` folder’s checks in the sandbox under the open launcher, writing only the checkout and the scratch its temporary directory is in', async () => {
+  it('runs an `open` folder’s checks in the sandbox under the open launcher, writing only the checkout, the scratch its temporary directory is in and the folder’s build cache', async () => {
     const world = await fixture({ branchPrefix: 'aflow/', checks: REPORTING }, { sandbox: 'open' });
     const { result } = await check(world);
     expect(result.status).toBe('SUCCEEDED');
@@ -579,7 +649,11 @@ describe("host.commit.check — the folder's sandbox posture", () => {
     const policy = compiled(input);
     expect(policy.network).toEqual({ allowedDomains: [], deniedDomains: [] });
     expect(JSON.stringify(policy)).not.toContain('allowLocalBinding');
-    expect(policy.filesystem.allowWrite).toEqual([input.scratchDir, input.cwd]);
+    expect(policy.filesystem.allowWrite).toEqual([
+      input.scratchDir,
+      input.cwd,
+      await buildCache(world.repo),
+    ]);
   });
 
   it('takes the default, `open`, for a folder that chose none', async () => {
@@ -614,7 +688,11 @@ describe("host.commit.check — the folder's sandbox posture", () => {
     const policy = compiled(input);
     expect(policy.network).toEqual({ allowedDomains: [], deniedDomains: [] });
     expect(JSON.stringify(policy)).not.toContain('allowLocalBinding');
-    expect(policy.filesystem.allowWrite).toEqual([input.scratchDir, input.cwd]);
+    expect(policy.filesystem.allowWrite).toEqual([
+      input.scratchDir,
+      input.cwd,
+      await buildCache(world.repo),
+    ]);
   });
 });
 

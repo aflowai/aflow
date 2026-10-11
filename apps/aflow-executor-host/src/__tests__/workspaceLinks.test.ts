@@ -16,7 +16,9 @@
  * first — found through the project reference alone, built in the checkout,
  * and never in the folder, whose declarations are an older commit's. The same
  * commit touches a root file in a repository holding no repository-shape
- * guards, which the check says in one line and passes.
+ * guards, which the check says in one line and passes. A later commit that
+ * leaves the package alone links its build from the folder's build cache,
+ * kept by the first check in the repository directory, and builds nothing.
  *
  * The check runs under a stand-in for the sandbox, as the handler suites do: a
  * nested sandbox cannot start under one, and the boundary is held by the
@@ -27,6 +29,7 @@ import { existsSync } from 'node:fs';
 import {
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   readlink,
   realpath,
@@ -95,8 +98,16 @@ const { noPushApprovals } = await import('./fixtures/pushApprovals.js');
 const { prepareWorktree, removeWorktree } = await import('../worktree.js');
 
 const SCRIPTS = fileURLToPath(new URL('../../../../scripts/', import.meta.url));
-/** The check, the module it selects tests with and the one it counts listener tests with. */
-const CHECK_SCRIPTS = ['verify-commit.mjs', 'test-selection.mjs', 'listener-tests.mjs'];
+/** The check and every module it runs with. */
+const CHECK_SCRIPTS = [
+  'verify-commit.mjs',
+  'test-selection.mjs',
+  'listener-tests.mjs',
+  'check-steps.mjs',
+  'check-tests.mjs',
+  'check-test-reporter.mjs',
+  'build-cache.mjs',
+];
 const CHECKS = [process.execPath, 'scripts/verify-commit.mjs'];
 const COMPILER_OPTIONS = { strict: true, module: 'nodenext', types: [] };
 /** A file the checked commit touches outside every workspace. */
@@ -132,6 +143,8 @@ let repo: string;
 let store: string;
 let base: string;
 let sha: string;
+/** A later commit touching the app alone, so the package it reads is unchanged. */
+let later: string;
 let policyPath: string;
 
 beforeAll(async () => {
@@ -214,6 +227,13 @@ beforeAll(async () => {
   await git(repo, 'add', '-A');
   await git(repo, 'commit', '-q', '-m', 'the app whispers');
   sha = (await git(repo, 'rev-parse', 'HEAD')).trim();
+  await writeFile(
+    join(repo, 'apps', 'app', 'src', 'main.ts'),
+    'import { value } from "@acme/a";\n\nexport const quiet: string = value.toLowerCase();\n',
+  );
+  await git(repo, 'add', '-A');
+  await git(repo, 'commit', '-q', '-m', 'the app is quiet');
+  later = (await git(repo, 'rev-parse', 'HEAD')).trim();
   await git(repo, 'checkout', '-q', '--detach', installedAt);
 
   // The folder as its install leaves it: the package's declarations built at
@@ -296,38 +316,79 @@ describe('a workspace package in the isolated checkout', () => {
   });
 });
 
-describe('this repository’s check, at a commit reading a workspace package it leaves alone', () => {
-  it('builds the package’s declarations in the checkout, then passes', async () => {
-    let output: unknown;
-    const result = await createHostHandler(policyPath, noPushApprovals).execute({
-      operationId: 'host.commit.check',
-      spaceId: 'space-a',
-      runId: 'run-a',
-      stepExecutionId: 'step-1',
-      tenantId: 'tenant-a',
-      job: { inputRef: 'inline:x' },
-      signal: new AbortController().signal,
-      log: { error: () => undefined, warn: () => undefined, info: () => undefined },
-      readPayload: () => Promise.resolve({ bindingId: 'hb_app', sha, base }),
-      emitLiveDelta: () => Promise.resolve(),
-      writePayload: (kind: string, data: unknown) => {
-        if (kind === 'output' || kind === 'error') output = data;
-        return Promise.resolve(`inline:${kind}`);
-      },
-    } as never);
+/** Long enough to build and type-check the fixture on a loaded machine. */
+const CHECK_TEST_TIMEOUT_MS = 60_000;
 
-    expect(result.status).toBe('SUCCEEDED');
-    const answer = HostCommitCheckOutputSchema.parse(output);
-    expect(answer).toMatchObject({ passed: true, exitCode: 0, clearedSha: sha });
-    expect(answer.tail).toContain('ok   build @acme/a');
-    expect(answer.tail).toContain('ok   tsc apps/app/tsconfig.json');
-    expect(answer.tail).toContain(
-      'no repository-shape guards (packages/schemas/src/edition) in this repository to run ' +
-        `for the files outside every workspace: ${ROOT_FILE}`,
-    );
-    expect(await readFile(join(repo, 'packages', 'a', 'dist', 'index.d.ts'), 'utf8')).toBe(
-      'export declare const value: number;\n',
-    );
-    expect(existsSync(join(repo, 'packages', 'a', 'tsconfig.tsbuildinfo'))).toBe(false);
-  }, 60_000);
+/** The folder's check of `checked` against `against`: its answer and its live output. */
+async function runCheck(checked: string, against: string) {
+  let output: unknown;
+  const live: string[] = [];
+  const result = await createHostHandler(policyPath, noPushApprovals).execute({
+    operationId: 'host.commit.check',
+    spaceId: 'space-a',
+    runId: 'run-a',
+    stepExecutionId: 'step-1',
+    tenantId: 'tenant-a',
+    job: { inputRef: 'inline:x' },
+    signal: new AbortController().signal,
+    log: { error: () => undefined, warn: () => undefined, info: () => undefined },
+    readPayload: () => Promise.resolve({ bindingId: 'hb_app', sha: checked, base: against }),
+    emitLiveDelta: (_channel: string, text: string) => {
+      live.push(text);
+      return Promise.resolve();
+    },
+    writePayload: (kind: string, data: unknown) => {
+      if (kind === 'output' || kind === 'error') output = data;
+      return Promise.resolve(`inline:${kind}`);
+    },
+  } as never);
+  expect(result.status).toBe('SUCCEEDED');
+  return { answer: HostCommitCheckOutputSchema.parse(output), live: live.join('') };
+}
+
+describe('this repository’s check, at a commit reading a workspace package it leaves alone', () => {
+  it(
+    'builds the package’s declarations in the checkout, naming the build as it starts, then passes',
+    async () => {
+      const { answer, live } = await runCheck(sha, base);
+      expect(answer).toMatchObject({ passed: true, exitCode: 0, clearedSha: sha });
+      expect(answer.tail).toContain('ok   build @acme/a');
+      expect(answer.tail).toContain('ok   tsc apps/app/tsconfig.json');
+      expect(answer.tail).toContain(
+        'no repository-shape guards (packages/schemas/src/edition) in this repository to run ' +
+          `for the files outside every workspace: ${ROOT_FILE}`,
+      );
+      expect(live.indexOf('building @acme/a\n')).toBeGreaterThan(-1);
+      expect(live.indexOf('building @acme/a\n')).toBeLessThan(live.indexOf('ok   build @acme/a'));
+      expect(live.indexOf('type-checking apps/app/tsconfig.json\n')).toBeLessThan(
+        live.indexOf('ok   tsc apps/app/tsconfig.json'),
+      );
+      expect(await readFile(join(repo, 'packages', 'a', 'dist', 'index.d.ts'), 'utf8')).toBe(
+        'export declare const value: number;\n',
+      );
+      expect(existsSync(join(repo, 'packages', 'a', 'tsconfig.tsbuildinfo'))).toBe(false);
+    },
+    CHECK_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'links the package from the build cache in a later checkout where it is unchanged, building nothing',
+    async () => {
+      const cache = join(await realpath(join(repo, '.git')), 'aflow', 'check-builds');
+      const kept = await readdir(cache);
+      expect(kept).toHaveLength(1);
+
+      const { answer, live } = await runCheck(later, sha);
+      expect(answer).toMatchObject({ passed: true, exitCode: 0, clearedSha: later });
+      expect(answer.tail).toContain('ok   build @acme/a: unchanged, linked from the build cache');
+      expect(live).not.toContain('building @acme/a');
+      expect(answer.tail).toContain('ok   tsc apps/app/tsconfig.json');
+      expect(await readdir(cache)).toEqual(kept);
+      // The folder's own build is still its own, at its own commit.
+      expect(await readFile(join(repo, 'packages', 'a', 'dist', 'index.d.ts'), 'utf8')).toBe(
+        'export declare const value: number;\n',
+      );
+    },
+    CHECK_TEST_TIMEOUT_MS,
+  );
 });
