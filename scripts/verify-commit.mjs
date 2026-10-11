@@ -30,10 +30,7 @@
  * dependencies linked, nothing built and egress closed. So it calls the
  * installed tools directly — Yarn, through Corepack, would fetch itself into an
  * empty home — and builds what postinstall builds after an install, since a
- * checkout holds none of it. A package the executor copied in from a build it
- * kept, over the graph this commit reads, is not built again; the report says
- * what was built and what each package is built after, so the executor can
- * keep those builds once the check has exited (`build-cache.mjs`).
+ * checkout holds none of it.
  */
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -44,14 +41,6 @@ import { fileURLToPath } from 'node:url';
 
 import ts from 'typescript';
 
-import {
-  CHECK_KEPT_BUILDS_ENV,
-  filesWritten,
-  readKeptBuilds,
-  removeKeptBuild,
-  sameGraph,
-  snapshotFiles,
-} from './build-cache.mjs';
 import { failStep, runStep, STEP_OUTPUT_LIMIT_BYTES } from './check-steps.mjs';
 import {
   CHECK_TEST_RESULTS_ENV,
@@ -407,31 +396,12 @@ const place = (name) => {
 for (const name of [...needed].sort()) place(name);
 
 // The executor names this file to a check it runs, signs the count of skipped
-// listener tests into the check's receipt, reads the tests that ran out of
-// time on a run they alone failed, and keeps the builds it lists once the
-// check has exited; run by hand, nothing names it.
+// listener tests into the check's receipt, and reads the tests that ran out of
+// time on a run they alone failed; run by hand, nothing names it.
 const checkReport = process.env['AFLOW_CHECK_REPORT'] || undefined;
-// Every package the check reads, with the directories it is built after — the
-// graph the executor keys a build over — and, for one built here, what its
-// build wrote.
-const reportedBuilds = new Map(
-  ordered.map((workspace) => [
-    workspace.dir,
-    {
-      dir: workspace.dir,
-      after: workspace.builtAfter
-        .map((name) => workspaces.byName.get(name)?.dir)
-        .filter((dir) => dir !== undefined)
-        .sort(),
-    },
-  ]),
-);
 const writeCheckReport = (report) => {
-  if (checkReport !== undefined) {
-    writeFileSync(checkReport, JSON.stringify({ ...report, builds: [...reportedBuilds.values()] }));
-  }
+  if (checkReport !== undefined) writeFileSync(checkReport, JSON.stringify(report));
 };
-const keptBuilds = readKeptBuilds(process.env[CHECK_KEPT_BUILDS_ENV]);
 for (const workspace of ordered) {
   if (workspace.build === undefined) continue;
   if (!workspace.dir.startsWith('packages/')) {
@@ -439,19 +409,6 @@ for (const workspace of ordered) {
     continue;
   }
   const packageDir = path.join(repoRoot, workspace.dir);
-  const kept = keptBuilds.get(workspace.dir);
-  if (kept !== undefined) {
-    if (sameGraph(kept.graph, workspace.dir, (dir) => reportedBuilds.get(dir)?.after)) {
-      console.log(`ok   build ${workspace.name}: unchanged, kept from an earlier check`);
-      continue;
-    }
-    removeKeptBuild(packageDir, kept.files);
-    console.log(
-      `note the build kept for ${workspace.name} was keyed over other packages than this ` +
-        'commit builds it after, so it is built here',
-    );
-  }
-  const before = checkReport === undefined ? undefined : snapshotFiles(packageDir);
   await run(
     `build ${workspace.name}`,
     `building ${workspace.name}`,
@@ -466,12 +423,7 @@ for (const workspace of ordered) {
       },
     },
   );
-  if (before !== undefined) {
-    reportedBuilds.get(workspace.dir).files = filesWritten(packageDir, before);
-    writeCheckReport({ skippedListenerTests: 0 });
-  }
 }
-writeCheckReport({ skippedListenerTests: 0 });
 
 const touchedNames = new Set(touchedWorkspaces.map((w) => w.name));
 for (const config of touchedWorkspaces.flatMap((workspace) => workspace.configs)) {

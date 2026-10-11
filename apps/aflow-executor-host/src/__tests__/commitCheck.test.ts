@@ -14,9 +14,9 @@
 import { execFile, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { createServer, type AddressInfo } from 'node:net';
-import { mkdtemp, realpath, writeFile } from 'node:fs/promises';
+import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -99,7 +99,6 @@ const { createHostHandler } = await import('../handlers/hostHandler.js');
 const { noPushApprovals } = await import('./fixtures/pushApprovals.js');
 const { CHECK_REPORT_ENV, checkTail, createHeadTailBuffer, createTailBuffer, utf8Suffix } =
   await import('../commitCheck.js');
-const { CHECK_KEPT_BUILDS_ENV, checkBuildCacheDir } = await import('../checkBuildCache.js');
 const { requireCheckedPush } = await import('../checkReceipt.js');
 const actualSandbox =
   await vi.importActual<typeof import('../sandboxedRun.js')>('../sandboxedRun.js');
@@ -250,11 +249,6 @@ async function check(world: Fixture, input: Record<string, unknown> = {}) {
   return { result, captured };
 }
 
-/** Where the executor keeps the folder's check builds: in the host directory, beside the policy. */
-async function buildCache(world: Fixture): Promise<string> {
-  return checkBuildCacheDir(dirname(world.policyPath), await realpath(join(world.repo, '.git')));
-}
-
 async function checkouts(repo: string): Promise<string> {
   return await git(repo, 'worktree', 'list', '--porcelain');
 }
@@ -307,30 +301,8 @@ describe('host.commit.check — a passing check', () => {
     expect(input?.trustedEnv).toMatchObject({
       AFLOW_CHECK_SHA: world.sha,
       AFLOW_CHECK_BASE: world.base,
-      [CHECK_KEPT_BUILDS_ENV]: join(input?.scratchDir ?? '', 'kept-builds.json'),
       GIT_NO_REPLACE_OBJECTS: '1',
     });
-    expect(JSON.stringify(input?.trustedEnv)).not.toContain(await buildCache(world));
-  });
-
-  it('gives the check no way to write the build cache, which the host directory holds', async () => {
-    await check(world);
-    const input = handed[0];
-    if (input === undefined) throw new Error('the check was not handed to the sandbox');
-    const hostDir = dirname(world.policyPath);
-    const cache = await buildCache(world);
-    expect(cache.startsWith(`${hostDir}/`)).toBe(true);
-    const policy = compileSandboxPolicy(input.binding, {
-      scratchDir: input.scratchDir,
-      hostDir,
-      ...(input.widening !== undefined ? { widening: input.widening } : {}),
-    });
-    const reaches = (granted: string): boolean =>
-      cache === granted || cache.startsWith(`${granted}/`) || granted.startsWith(`${cache}/`);
-    expect(policy.filesystem.allowWrite.filter(reaches)).toEqual([]);
-    expect(policy.filesystem.allowRead.filter(reaches)).toEqual([]);
-    expect(policy.filesystem.denyWrite).toContain(hostDir);
-    expect(policy.filesystem.denyRead).toContain(hostDir);
   });
 
   it('removes the checkout and its scratch afterwards, and leaves the folder where it was', async () => {

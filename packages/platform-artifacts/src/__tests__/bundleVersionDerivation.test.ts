@@ -1,11 +1,14 @@
 /**
  * A bundle's published version is derived from its revision and the versions
  * of the skills it carries, so a skill that moves moves every bundle carrying
- * it, with nothing else edited.
+ * it, with nothing else edited — down as well as up, which the snapshot guard
+ * refuses until the bundle's revision is raised.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const raised = vi.hoisted(() => ({ catalogId: undefined as string | undefined }));
+import { bundlesBelowSnapshot, committedStoreCatalogHashes } from './bundleVersionFloor.js';
+
+const moved = vi.hoisted(() => ({ catalogId: undefined as string | undefined, by: 0 }));
 
 vi.mock('../skillCatalog.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../skillCatalog.js')>();
@@ -13,12 +16,17 @@ vi.mock('../skillCatalog.js', async (importOriginal) => {
     ...actual,
     getSkillCatalogEntry: (catalogId: string) => {
       const skill = actual.getSkillCatalogEntry(catalogId);
-      return skill !== null && catalogId === raised.catalogId
-        ? { ...skill, version: skill.version + 1 }
+      return skill !== null && catalogId === moved.catalogId
+        ? { ...skill, version: skill.version + moved.by }
         : skill;
     },
   };
 });
+
+function raise(catalogId: string): void {
+  moved.catalogId = catalogId;
+  moved.by = 1;
+}
 
 async function publishedVersions(): Promise<Map<string, number>> {
   vi.resetModules();
@@ -27,13 +35,14 @@ async function publishedVersions(): Promise<Map<string, number>> {
 }
 
 beforeEach(() => {
-  raised.catalogId = undefined;
+  moved.catalogId = undefined;
+  moved.by = 0;
 });
 
 describe('a bundle’s published version', () => {
   it('moves with a skill it carries, and only in the bundles carrying it', async () => {
     const before = await publishedVersions();
-    raised.catalogId = 'publish-local-changes';
+    raise('publish-local-changes');
     const after = await publishedVersions();
 
     expect(after.get('local-publish')).toBe((before.get('local-publish') ?? 0) + 1);
@@ -44,10 +53,59 @@ describe('a bundle’s published version', () => {
 
   it('moves by one for each skill raised in a bundle carrying several', async () => {
     const before = await publishedVersions();
-    raised.catalogId = 'review-pull-request';
+    raise('review-pull-request');
     const after = await publishedVersions();
 
     expect(after.get('coding-pr-loop')).toBe((before.get('coding-pr-loop') ?? 0) + 1);
+  });
+
+  it('falls with a skill it carries lowered, below the version on record, which the guard names', async () => {
+    const committed = committedStoreCatalogHashes();
+    expect(bundlesBelowSnapshot(await publishedVersions(), committed)).toEqual([]);
+    moved.catalogId = 'publish-local-changes';
+    moved.by = -1;
+    const after = await publishedVersions();
+
+    const recorded = committed['local-publish']?.version ?? Number.NaN;
+    expect(bundlesBelowSnapshot(after, committed)).toEqual([
+      { bundleId: 'local-publish', version: recorded - 1, recorded },
+    ]);
+  });
+
+  it('falls when it stops carrying a skill, and clears the guard only once its revision passes the fall', async () => {
+    vi.resetModules();
+    const { SKILL_BUNDLE_CATALOG, publishedBundleVersion } =
+      await import('../skillBundleCatalog.js');
+    const { getSkillCatalogEntry } = await import('../skillCatalog.js');
+    const committed = committedStoreCatalogHashes();
+    const bundle = SKILL_BUNDLE_CATALOG.find(({ bundleId }) => bundleId === 'coding-pr-loop');
+    const [dropped, ...kept] = bundle?.skillCatalogIds ?? [];
+    if (bundle === undefined || dropped === undefined) throw new Error('no bundle carrying skills');
+    const revision =
+      bundle.version -
+      publishedBundleVersion({ ...bundle, revision: 0, skillCatalogIds: bundle.skillCatalogIds });
+    const droppedVersion = getSkillCatalogEntry(dropped)?.version ?? Number.NaN;
+    const versionWithout = (raisedBy: number): Map<string, number> =>
+      new Map([
+        [
+          bundle.bundleId,
+          publishedBundleVersion({
+            bundleId: bundle.bundleId,
+            revision: revision + raisedBy,
+            skillCatalogIds: kept,
+          }),
+        ],
+      ]);
+
+    expect(bundlesBelowSnapshot(versionWithout(0), committed)).toEqual([
+      {
+        bundleId: 'coding-pr-loop',
+        version: bundle.version - droppedVersion,
+        recorded: bundle.version,
+      },
+    ]);
+    expect(bundlesBelowSnapshot(versionWithout(droppedVersion + 1), committed)).toEqual([]);
+    expect(versionWithout(droppedVersion + 1).get('coding-pr-loop')).toBe(bundle.version + 1);
   });
 
   it('is the revision plus the version of every skill carried, and has none for a skill the catalog lacks', async () => {

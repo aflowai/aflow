@@ -92,13 +92,8 @@ scripts/verify-commit.mjs`), and Local Publish runs it after the commit and befo
    (`building @aflow/schemas`) and ended in one line, stopping at the
    first failure: the two CI guards; a build of every package the touched workspaces
    or the workspaces reading a touched package reference or import, since a checkout builds
-   nothing — a package whose files, root files, earlier packages and build tooling hash as
-   an earlier check built them is not built again: the executor keeps each check's builds
-   after the check has exited, in the host directory where no check can write, and copies
-   one whose recorded digests still hold into the next checkout (`checkBuildCache.ts`,
-   `scripts/build-cache.mjs`); `tsc -p` per touched workspace (and `web-product`'s
-   `src/ui`); the touched tests
-   through the test runner on half the machine's cores, each test given 30 s unless it
+   nothing, every time — no build outlives the check that made it; `tsc -p` per touched
+   workspace (and `web-product`'s `src/ui`); the touched tests through the test runner on half the machine's cores, each test given 30 s unless it
    declares its own time (`scripts/check-tests.mjs`), reporting only failures and the
    summary, with every test of the touched workspaces and of each workspace that reads a
    touched package whose imports reach a touched file, so a contract change meets its

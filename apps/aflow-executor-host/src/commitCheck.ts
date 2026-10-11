@@ -10,7 +10,7 @@
  * printed is kept in the order it came, and from both ends where there is too
  * much of it: its start says what ran, and a failing check says why last.
  */
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -25,16 +25,6 @@ import {
 import { z } from 'zod';
 
 import type { HostBinding } from './bindings.js';
-import {
-  buildTooling,
-  CHECK_KEPT_BUILDS_ENV,
-  type CheckBuild,
-  CheckBuildsSchema,
-  keepCheckBuilds,
-  type KeptBuild,
-  pruneCheckBuilds,
-  restoreKeptBuilds,
-} from './checkBuildCache.js';
 import { SHORT_SHA_LENGTH } from './checkReceipt.js';
 import { createChatterStripper } from './egressRefusals.js';
 import { formatMinutes } from './folderChecks.js';
@@ -165,26 +155,15 @@ export function checkTail(output: string): string {
 export const CHECK_REPORT_ENV = 'AFLOW_CHECK_REPORT';
 const CHECK_REPORT_FILE = 'check-report.json';
 
-const CHECK_KEPT_BUILDS_FILE = 'kept-builds.json';
-
 const CheckReportSchema = z.object({
   skippedListenerTests: z.number().int().nonnegative(),
   testTimeouts: z.array(z.string()).optional(),
-  builds: z.unknown().optional(),
 });
 
-interface CheckReport {
-  readonly skippedListenerTests: number;
-  readonly testTimeouts?: readonly string[];
-  readonly builds: readonly CheckBuild[];
-}
-
-/**
- * What the check wrote to its report, or nothing where it wrote none a reader
- * can take. Builds it names in a shape this does not read are kept by nobody,
- * and leave the rest of the report standing.
- */
-async function readCheckReport(path: string): Promise<CheckReport | undefined> {
+/** What the check wrote to its report, or nothing where it wrote none a reader can take. */
+async function readCheckReport(
+  path: string,
+): Promise<z.infer<typeof CheckReportSchema> | undefined> {
   let text: string;
   try {
     text = await readFile(path, 'utf8');
@@ -193,38 +172,10 @@ async function readCheckReport(path: string): Promise<CheckReport | undefined> {
   }
   try {
     const parsed = CheckReportSchema.safeParse(JSON.parse(text));
-    if (!parsed.success) return undefined;
-    const builds = CheckBuildsSchema.safeParse(parsed.data.builds ?? []);
-    return {
-      skippedListenerTests: parsed.data.skippedListenerTests,
-      ...(parsed.data.testTimeouts !== undefined ? { testTimeouts: parsed.data.testTimeouts } : {}),
-      builds: builds.success ? builds.data : [],
-    };
+    return parsed.success ? parsed.data : undefined;
   } catch {
     return undefined;
   }
-}
-
-/**
- * The builds kept for this folder copied into the checkout, and listed where
- * the check is told to read them. The cache never fails a check: where it
- * cannot be read, the check builds everything.
- */
-async function handKeptBuilds(params: {
-  readonly cacheDir: string;
-  readonly root: string;
-  readonly sha: string;
-  readonly checkout: string;
-  readonly tooling: string | undefined;
-  readonly listPath: string;
-}): Promise<void> {
-  let kept: KeptBuild[];
-  try {
-    kept = await restoreKeptBuilds(params);
-  } catch {
-    kept = [];
-  }
-  await writeFile(params.listPath, JSON.stringify(kept));
 }
 
 export interface FolderCheckRun {
@@ -246,12 +197,6 @@ export interface FolderCheckInput {
   /** Full shas, already resolved in the folder. */
   readonly sha: string;
   readonly base: string;
-  /**
-   * The folder's build cache (`checkBuildCacheDir`), in the host directory:
-   * this executor reads and writes it outside the sandbox, and the check is
-   * given no way to it.
-   */
-  readonly buildCacheDir: string;
   readonly toolPaths: readonly string[];
   readonly ownerRunId: string;
   readonly signal: AbortSignal;
@@ -263,24 +208,12 @@ export interface FolderCheckInput {
 export async function runFolderChecks(input: FolderCheckInput): Promise<FolderCheckRun> {
   const scratch = await mkdtemp(join(tmpdir(), CHECK_SCRATCH_PREFIX));
   const reportPath = join(scratch, CHECK_REPORT_FILE);
-  const keptBuildsPath = join(scratch, CHECK_KEPT_BUILDS_FILE);
   let worktreePath: string | undefined;
   try {
     const worktree = await prepareWorktree(input.binding.root, scratch, 'check', {
       at: input.sha,
     });
     worktreePath = worktree.path;
-    const tooling = await buildTooling(input.binding.root, input.argv[0], worktree.path).catch(
-      () => undefined,
-    );
-    const cache = {
-      cacheDir: input.buildCacheDir,
-      root: input.binding.root,
-      sha: input.sha,
-      checkout: worktree.path,
-      tooling,
-    };
-    await handKeptBuilds({ ...cache, listPath: keptBuildsPath });
     const kept = createHeadTailBuffer(HOST_CHECK_OUTPUT_HEAD_BYTES, HOST_CHECK_OUTPUT_TAIL_BYTES);
     const visible = createChatterStripper();
     const take = (text: string): void => {
@@ -297,7 +230,6 @@ export async function runFolderChecks(input: FolderCheckInput): Promise<FolderCh
         AFLOW_CHECK_SHA: input.sha,
         AFLOW_CHECK_BASE: input.base,
         [CHECK_REPORT_ENV]: reportPath,
-        [CHECK_KEPT_BUILDS_ENV]: keptBuildsPath,
         // A script reading the range reads the commits a push sends, never
         // what a `refs/replace/` ref shows in their place.
         ...NO_REPLACE_OBJECTS_ENV,
@@ -327,14 +259,6 @@ export async function runFolderChecks(input: FolderCheckInput): Promise<FolderCh
     });
     take(visible.flush());
     const report = await readCheckReport(reportPath);
-    // The sandbox has exited: what it built is read from the checkout here,
-    // by this executor, and kept where no check can reach.
-    try {
-      await keepCheckBuilds({ ...cache, builds: report?.builds ?? [] });
-      await pruneCheckBuilds(input.buildCacheDir);
-    } catch {
-      // A build not kept is built again by the next check.
-    }
     return {
       result,
       output: kept.text(),
