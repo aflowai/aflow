@@ -32,6 +32,15 @@ export function signReceipt(
   return `${body}.${sign(kind, body).toString('base64url')}`;
 }
 
+function fieldsOf(body: string): unknown[] | undefined {
+  try {
+    const fields: unknown = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+    return Array.isArray(fields) ? (fields as unknown[]) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** The fields a token carries, or nothing unless this process signed it as `kind`. */
 export function readSignedReceipt(kind: ReceiptKind, token: string): unknown[] | undefined {
   const [body, mac, extra] = token.split('.');
@@ -39,8 +48,18 @@ export function readSignedReceipt(kind: ReceiptKind, token: string): unknown[] |
   const expected = sign(kind, body);
   const given = Buffer.from(mac, 'base64url');
   if (given.length !== expected.length || !timingSafeEqual(given, expected)) return undefined;
-  const fields: unknown = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
-  return Array.isArray(fields) ? (fields as unknown[]) : undefined;
+  return fieldsOf(body);
+}
+
+/**
+ * The fields a token claims, whoever signed it — a receipt issued before this
+ * process started reads the same as a forged one. Never evidence of anything:
+ * only ever a reason to refuse, or to read the range again.
+ */
+export function readClaimedReceipt(token: string): unknown[] | undefined {
+  const [body, mac, extra] = token.split('.');
+  if (body === undefined || mac === undefined || extra !== undefined) return undefined;
+  return fieldsOf(body);
 }
 
 /** Whether a receipt issued at `issuedAt` is past its day, or dated after now. */

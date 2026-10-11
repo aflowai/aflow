@@ -36,6 +36,8 @@ import {
   HostProcessStopInputSchema,
 } from '@aflow/schemas';
 
+import { mergeConflictPaths } from '../baseMerge.js';
+import { scanCommitRange } from '../commitScan.js';
 import { createChatterStripper } from '../egressRefusals.js';
 import { EnvPolicyError } from '../envPolicy.js';
 import { explainFailedStart } from '../executableHint.js';
@@ -44,7 +46,7 @@ import { pushApprovalOf } from '../pushApproval.js';
 import { measurePushBase } from '../pushBase.js';
 import { sandboxPostureOf } from '../sandboxPosture.js';
 import { type PushApprovalReader, type PushClearance, requireScannedPush } from '../scanReceipt.js';
-import { WorktreeError } from '../worktree.js';
+import { isAncestor, WorktreeError } from '../worktree.js';
 import {
   type HostBinding,
   HostBindingError,
@@ -188,7 +190,13 @@ async function execProcess(
           receipt: input.check?.receipt ?? undefined,
           posture: sandboxPostureOf(binding),
         },
-        measureBase: (pushBase) => measurePushBase(binding.root, push.remote, pushBase),
+        history: {
+          measureBase: (pushBase) => measurePushBase(binding.root, push.remote, pushBase),
+          holds: (commit, ancestor) =>
+            isAncestor(binding.root, ancestor, commit).catch(() => false),
+          conflicts: (base, sha) => mergeConflictPaths(binding.root, base, sha),
+          scanSecrets: (range) => scanCommitRange(binding.root, range),
+        },
         approvalFor: (requestHash) => approvals(ctx.tenantId, ctx.runId, requestHash),
       });
     }
@@ -286,6 +294,7 @@ async function execProcess(
       truncated: result.truncated,
       ...(note !== undefined ? { boundaryNote: note } : {}),
       ...(clearance?.checkedUnder !== undefined ? { checkedUnder: clearance.checkedUnder } : {}),
+      ...(clearance?.rescanned !== undefined ? { rescanned: clearance.rescanned } : {}),
     });
   } catch (error) {
     return await failure(ctx, error);

@@ -419,13 +419,18 @@ describe('host.commit.check — the receipt it leaves for the push', () => {
     return Buffer.from(receipt.split('.')[0] ?? '', 'base64url').toString('utf8');
   }
 
+  /** The push's base is the one the checks ran against, so no other base is asked about. */
+  const sameBase = { baseHolds: () => Promise.resolve(false) };
+
   it('says the checks passed on exactly this commit, against this base, as declared', async () => {
     const world = await fixture({ branchPrefix: 'aflow/', checks: REPORTING });
     const { captured } = await check(world);
     const { receipt } = HostCommitCheckOutputSchema.parse(captured.output);
     expect(receipt).toBeDefined();
-    const pushed = { bindingId: 'hb_app', sha: world.sha, base: world.base, receipt };
-    expect(() => requireCheckedPush({ ...pushed, argv: REPORTING, posture: 'open' })).not.toThrow();
+    const pushed = { bindingId: 'hb_app', sha: world.sha, base: world.base, receipt, ...sameBase };
+    await expect(requireCheckedPush({ ...pushed, argv: REPORTING, posture: 'open' })).resolves.toBe(
+      'open',
+    );
   });
 
   it('says so where they failed, and a push takes it for nothing', async () => {
@@ -433,7 +438,7 @@ describe('host.commit.check — the receipt it leaves for the push', () => {
     const { captured } = await check(world);
     const { receipt } = HostCommitCheckOutputSchema.parse(captured.output);
     expect(receipt).toBeDefined();
-    expect(() =>
+    await expect(
       requireCheckedPush({
         bindingId: 'hb_app',
         sha: world.sha,
@@ -441,8 +446,9 @@ describe('host.commit.check — the receipt it leaves for the push', () => {
         argv: FAILING,
         receipt,
         posture: 'open',
+        ...sameBase,
       }),
-    ).toThrow(expect.objectContaining({ refusal: 'check_failed' }));
+    ).rejects.toThrow(expect.objectContaining({ refusal: 'check_failed' }));
   });
 
   it.each(['open', 'confined'] as const)(
@@ -454,15 +460,15 @@ describe('host.commit.check — the receipt it leaves for the push', () => {
       expect(handed.map((input) => input.posture)).toEqual([sandbox]);
       expect(output.sandbox).toBe(sandbox);
       expect(JSON.parse(receiptBody(output.receipt ?? '')) as unknown[]).toContain(sandbox);
-      const pushed = { bindingId: 'hb_app', sha: world.sha, base: world.base };
-      expect(
+      const pushed = { bindingId: 'hb_app', sha: world.sha, base: world.base, ...sameBase };
+      await expect(
         requireCheckedPush({
           ...pushed,
           argv: REPORTING,
           receipt: output.receipt,
           posture: sandbox,
         }),
-      ).toBe(sandbox);
+      ).resolves.toBe(sandbox);
     },
   );
 
@@ -485,11 +491,12 @@ describe('host.commit.check — the receipt it leaves for the push', () => {
         argv: REPORTING,
         receipt,
         posture: now,
+        ...sameBase,
       };
-      expect(() => requireCheckedPush(push)).toThrow(
+      await expect(requireCheckedPush(push)).rejects.toThrow(
         expect.objectContaining({ refusal: 'check_other_posture' }),
       );
-      expect(() => requireCheckedPush(push)).toThrow(
+      await expect(requireCheckedPush(push)).rejects.toThrow(
         `\`hb_app\` runs its checks \`${now}\`, and its check receipt is for checks run \`${ranUnder}\``,
       );
     },
@@ -528,7 +535,7 @@ describe('host.commit.check — the receipt it leaves for the push', () => {
     expect(output.skippedListenerTests).toBe(10);
     const fields = JSON.parse(receiptBody(output.receipt ?? '')) as unknown[];
     expect(fields.slice(5, 7)).toEqual(['open', 10]);
-    expect(() =>
+    await expect(
       requireCheckedPush({
         bindingId: 'hb_app',
         sha: world.sha,
@@ -536,8 +543,9 @@ describe('host.commit.check — the receipt it leaves for the push', () => {
         argv: reportingSkipped(10),
         receipt: output.receipt,
         posture: 'open',
+        ...sameBase,
       }),
-    ).not.toThrow();
+    ).resolves.toBe('open');
   });
 
   it('records no count where the checks reported none, or reported one it cannot read', async () => {

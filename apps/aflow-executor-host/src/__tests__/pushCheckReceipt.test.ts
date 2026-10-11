@@ -20,7 +20,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import type { HostSandboxPosture } from '@aflow/schemas';
 
 import { PUSH_REQUIRED_OPTIONS } from '../bindings.js';
-import { type CheckOutcome, issueCheckReceipt } from '../checkReceipt.js';
+import { type CheckOutcome, issueCheckReceipt, SHORT_SHA_LENGTH } from '../checkReceipt.js';
 import { createHostProcessHandler } from '../handlers/processHandlers.js';
 import { RECEIPT_TTL_MS } from '../receiptSigning.js';
 import { issueScanReceipt } from '../scanReceipt.js';
@@ -309,5 +309,27 @@ describe('a push carries the receipt of the folder’s checks passing', () => {
       ),
       '`hb_unchecked` declares no checks, so a push from it needs no check receipt',
     );
+  }, 60_000);
+
+  it('holds a receipt for checks run against a base `origin` has since moved past, and no other', async () => {
+    // `origin/main` moves on after the checks ran: the push now sends fewer of
+    // the commit's ancestors than they were measured over.
+    const moved = await git('commit-tree', `${base}^{tree}`, '-p', base, '-m', 'merged elsewhere');
+    await git('push', '-q', 'origin', `${moved}:refs/heads/main`);
+    try {
+      const { status, captured } = await push('moved-on', { receipt: checkReceipt() });
+      expect(status).toBe('SUCCEEDED');
+      expect(captured.output?.['rescanned']).toBe(`${moved}..${tip}`);
+      expect(await onOrigin('moved-on')).toBe(true);
+
+      await expectRefused(
+        'unheld-base',
+        push('unheld-base', { receipt: checkReceipt({ base: tip }) }),
+        `its check receipt is for checks run on ${tip.slice(0, SHORT_SHA_LENGTH)} against ` +
+          `\`${tip}\`, which \`${moved}\` does not hold`,
+      );
+    } finally {
+      await git('push', '-q', '--force', 'origin', `${base}:refs/heads/main`);
+    }
   }, 60_000);
 });

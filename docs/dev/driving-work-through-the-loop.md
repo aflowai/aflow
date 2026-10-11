@@ -162,6 +162,13 @@ folder's posture as it pushes, so a commit checked before the posture changed is
   on the stack asks the stream that runs it; that stream merges, runs `yarn db:migrate`
   when a migration arrived, rebuilds the `dist`s the web app reads, and updates the
   installed bundles through the Store when a catalog version moved.
+- **A publication outlives a moved `main` and a restart** (Plan 315 F113, F117). Where
+  `origin/main` moved on, or the host executor restarted, between a publication's scan and
+  its push, the push scans the range it sends itself and goes ahead; where the move
+  conflicts with the commit, it is refused naming the merge round. Checks do not survive a
+  restart, so `hb_aflow`'s push after one is refused for its check receipt. A refused push
+  leaves its reviewed commit on the branch, and Local Publish publishes it as it stands:
+  the branch, its head as `baseSha`, and no patch, `mergeFrom` or `commitMessage`.
 - **Commissions can overlap**; each runs in its own detached checkout. The machine runs
   two coding agents at once unless `aflow harness concurrency <n>` says otherwise, and a
   review is a coding agent too; a commission or review past that waits for one to end,

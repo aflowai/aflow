@@ -74,6 +74,8 @@ export interface PatchCommit {
   readonly baseSha: string;
   /** True when the branch existed and the commit was appended to it. */
   readonly appended: boolean;
+  /** Present where nothing was made: the branch is published at the head it already had. */
+  readonly asItStands?: true;
   /** The commit merged in, as its full sha, when the commit is the merge of it with the patch on top. */
   readonly merged?: string;
   /** `<baseSha>..<sha>`: this commit, and what it merged in where it is a merge. */
@@ -192,6 +194,11 @@ async function mergeSource(
     );
   }
   return await reachMergeSource(root, mergeFrom, target.at);
+}
+
+async function recordedMessage(root: string, sha: string): Promise<string> {
+  const message = await git(root, ['show', '-s', '--format=%B', sha], APPLY_OUTPUT_CAP_BYTES);
+  return message.replace(/\n+$/, '');
 }
 
 function messageBody(message: string): string | undefined {
@@ -319,9 +326,7 @@ export async function commitPatchOnBranch(
     const sha = (await git(worktree.path, ['rev-parse', 'HEAD'])).trim();
     // Read back rather than echoed: git's cleanup trims what it was handed, and
     // the approval shows the commit as it will be pushed.
-    const recorded = (
-      await git(worktree.path, ['show', '-s', '--format=%B', sha], APPLY_OUTPUT_CAP_BYTES)
-    ).replace(/\n+$/, '');
+    const recorded = await recordedMessage(worktree.path, sha);
     const body = messageBody(recorded);
     try {
       // Compare-and-swap on the old head: a branch that moved between the check
@@ -359,4 +364,62 @@ export async function commitPatchOnBranch(
     if (worktree !== undefined) await removeWorktree(root, worktree.path);
     await rm(scratch, { recursive: true, force: true });
   }
+}
+
+/**
+ * An existing branch, published as it stands: its head reported as the
+ * commit a publication checks, scans, reviews and pushes, with nothing made
+ * and no ref moved. A commit the publication machinery already made — whose
+ * push was refused, or never ran — is published this way rather than
+ * stranded. The head must be the commit `baseSha` names, so a branch that moved
+ * since the caller read it is not published in its place.
+ */
+export async function branchAsItStands(
+  root: string,
+  branch: string,
+  baseSha: string | undefined,
+  pushBaseSha: string | undefined,
+): Promise<PatchCommit> {
+  if (baseSha === undefined) {
+    throw new WorktreeError(
+      `\`${branch}\` is published as it stands only with \`baseSha\` naming the head to publish.`,
+      'unknown_ref',
+    );
+  }
+  if (!(await branchExists(root, branch))) {
+    throw new WorktreeError(
+      `The repository has no branch \`${branch}\` to publish as it stands. A change is ` +
+        'published as its `patchRef` or `patch`, with a commit message, onto a branch of its own.',
+      'unknown_ref',
+    );
+  }
+  const head = await resolveCommit(root, `refs/heads/${branch}`);
+  if ((await resolveSha(root, baseSha)) !== head) {
+    throw new WorktreeError(
+      `\`${branch}\` is at \`${head}\`, not \`${baseSha}\`: it moved since that commit was ` +
+        `named. Read what \`${branch}\` holds now before publishing it as it stands.`,
+      'stale_base',
+    );
+  }
+  const parent = await resolveCommit(root, `${head}^1`).catch(() => undefined);
+  if (parent === undefined) {
+    throw new WorktreeError(
+      `\`${branch}\` is a single commit with no parent, so there is no range to publish.`,
+      'unknown_ref',
+    );
+  }
+  const message = await recordedMessage(root, head);
+  const body = messageBody(message);
+  return {
+    branch,
+    sha: head,
+    message,
+    ...(body !== undefined ? { body } : {}),
+    baseSha: parent,
+    appended: false,
+    asItStands: true,
+    range: `${parent}..${head}`,
+    ...(pushBaseSha !== undefined ? { pushRange: `${pushBaseSha}..${head}`, pushBaseSha } : {}),
+    pushRefspec: `${head}:refs/heads/${branch}`,
+  };
 }

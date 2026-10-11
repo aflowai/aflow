@@ -38,7 +38,7 @@ import {
   resolveWithin,
 } from '../bindings.js';
 import { resolvePushBase } from '../pushBase.js';
-import { commitPatchOnBranch } from '../branchCommit.js';
+import { branchAsItStands, commitPatchOnBranch } from '../branchCommit.js';
 import {
   applyPatch,
   DIFF_CEILING_BYTES,
@@ -127,6 +127,26 @@ async function applyHostPatch(ctx: ExecutorContext, policyPath: string): Promise
       );
     }
 
+    // The input schema admits a commit with no message only for a branch
+    // published as it stands.
+    if (input.commit !== undefined && input.commit.message === undefined) {
+      const commit = await branchAsItStands(
+        binding.root,
+        input.commit.branch,
+        input.commit.baseSha,
+        input.commit.pushBase === undefined
+          ? undefined
+          : await resolvePushBase(binding.root, input.commit.pushBase),
+      );
+      return await successWithData(ctx, {
+        state: 'applied',
+        filesChanged: 0,
+        files: [],
+        conflicts: [],
+        commit,
+      });
+    }
+
     const diff = await diffOf(ctx, input);
     if (typeof diff !== 'string') return await failureWithError(ctx, diff);
 
@@ -146,7 +166,7 @@ async function applyHostPatch(ctx: ExecutorContext, policyPath: string): Promise
       await resolveWithin(binding, file, false);
     }
 
-    if (input.commit !== undefined) {
+    if (input.commit?.message !== undefined) {
       // Measured before anything is made, so a base that cannot be read
       // leaves no commit and no branch behind.
       const pushBaseSha =

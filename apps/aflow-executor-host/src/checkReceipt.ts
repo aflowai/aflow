@@ -145,21 +145,28 @@ export interface PushUnderCheck {
 /**
  * Refuse a push from a folder that declares checks unless it carries the
  * receipt of those checks passing here on exactly the commit it sends, against
- * the base the push measured, under the posture the folder declares as it
- * pushes — and a push from one that declares none that carries a receipt
- * anyway, since nothing the folder asks for can be what it attests to. Answers the posture the checks ran under, which the push records,
- * or nothing where the folder declares none.
+ * the base the push measured or one under it, under the posture the folder
+ * declares as it pushes — and a push from one that declares none that carries
+ * a receipt anyway, since nothing the folder asks for can be what it attests
+ * to. Answers the posture the checks ran under, which the push records, or
+ * nothing where the folder declares none.
+ *
+ * A base `origin` has moved past since the checks ran still holds: the push
+ * then sends fewer of the commit's ancestors than the checks were measured
+ * over, and the commit they ran on is the one it sends.
  */
-export function requireCheckedPush(
+export async function requireCheckedPush(
   push: PushUnderCheck & {
     readonly bindingId: string;
     /** The source of the push's one refspec, as a full sha. */
     readonly sha: string;
     /** Where `origin/<pushBase>` is now, as a full sha. */
     readonly base: string;
+    /** Whether `base` is the commit `origin/<pushBase>` is at now, or one under it. */
+    readonly baseHolds: (base: string) => Promise<boolean>;
   },
   now: number = Date.now(),
-): HostSandboxPosture | undefined {
+): Promise<HostSandboxPosture | undefined> {
   const { bindingId, argv } = push;
   if (argv === undefined) {
     if (push.receipt === undefined) return undefined;
@@ -210,10 +217,11 @@ export function requireCheckedPush(
       'check_other_commit',
     );
   }
-  if (receipt.base !== push.base.toLowerCase()) {
+  if (receipt.base !== push.base.toLowerCase() && !(await push.baseHolds(receipt.base))) {
     throw new CheckReceiptError(
       `This push is measured against \`${push.base}\`, and its check receipt is for checks run ` +
-        `on ${short} against \`${receipt.base}\`. ${checkAgain}`,
+        `on ${short} against \`${receipt.base}\`, which \`${push.base}\` does not hold. ` +
+        checkAgain,
       'check_other_base',
     );
   }
