@@ -8,6 +8,8 @@
  * commands, since a check runs the repository's own code. Checks that ran
  * answer with a receipt, passed or failed, that a push of the commit carries.
  */
+import { dirname } from 'node:path';
+
 import type { ExecutorContext, StepResult } from '@aflow/executor-runtime';
 import {
   failureWithError,
@@ -30,7 +32,8 @@ import {
   requireWritable,
 } from '../bindings.js';
 import { issueCheckReceipt } from '../checkReceipt.js';
-import { checkBuildCacheDir, checkOutcome, runFolderChecks, skippedCheck } from '../commitCheck.js';
+import { checkBuildCacheDir } from '../checkBuildCache.js';
+import { checkOutcome, runFolderChecks, skippedCheck } from '../commitCheck.js';
 import { checksOf } from '../folderChecks.js';
 import { noSandboxMessage, reapWithdrawn, sandboxReadiness } from '../sandboxedRun.js';
 import { commonGitDir, isGitRepository, resolveCommit, WorktreeError } from '../worktree.js';
@@ -73,7 +76,7 @@ async function check(ctx: ExecutorContext, policyPath: string): Promise<StepResu
     timeoutMs,
     sha,
     base,
-    buildCacheDir: checkBuildCacheDir(await commonGitDir(binding.root)),
+    buildCacheDir: checkBuildCacheDir(dirname(policyPath), await commonGitDir(binding.root)),
     toolPaths: policy.toolPaths,
     ownerRunId: ctx.runId,
     signal: ctx.signal,

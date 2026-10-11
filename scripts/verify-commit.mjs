@@ -30,10 +30,10 @@
  * dependencies linked, nothing built and egress closed. So it calls the
  * installed tools directly — Yarn, through Corepack, would fetch itself into an
  * empty home — and builds what postinstall builds after an install, since a
- * checkout holds none of it. Where `AFLOW_CHECK_BUILD_CACHE` names a
- * directory, as the executor does for every check of a folder, a package
- * unchanged since a check built it is linked from there instead
- * (`build-cache.mjs`).
+ * checkout holds none of it. A package the executor copied in from a build it
+ * kept, over the graph this commit reads, is not built again; the report says
+ * what was built and what each package is built after, so the executor can
+ * keep those builds once the check has exited (`build-cache.mjs`).
  */
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -45,17 +45,14 @@ import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 
 import {
-  buildCacheKeys,
-  CHECK_BUILD_CACHE_ENV,
-  CHECK_BUILD_CACHE_MAX_AGE_MS,
+  CHECK_KEPT_BUILDS_ENV,
   filesWritten,
-  keepBuild,
-  linkKeptBuild,
-  pruneBuildCache,
+  readKeptBuilds,
+  removeKeptBuild,
+  sameGraph,
   snapshotFiles,
-  treesFromListing,
 } from './build-cache.mjs';
-import { elapsed, failStep, runStep, STEP_OUTPUT_LIMIT_BYTES } from './check-steps.mjs';
+import { failStep, runStep, STEP_OUTPUT_LIMIT_BYTES } from './check-steps.mjs';
 import {
   CHECK_TEST_RESULTS_ENV,
   checkTestOptions,
@@ -409,24 +406,32 @@ const place = (name) => {
 };
 for (const name of [...needed].sort()) place(name);
 
-// A package's build is kept under the hash of what it reads (`build-cache.mjs`),
-// read from the commit as git hashes it — so the cache serves only a checkout
-// at that commit, as every check is, and is left unset by hand, where the
-// working tree may differ from it.
-const cacheDir = process.env[CHECK_BUILD_CACHE_ENV] || undefined;
-const cacheKeys =
-  cacheDir === undefined
-    ? new Map()
-    : buildCacheKeys({
-        rootFiles: git(['ls-tree', '-z', sha])
-          .split('\0')
-          .filter((entry) => entry.includes(' blob '))
-          .join('\0'),
-        trees: treesFromListing(
-          git(['ls-tree', '-d', '-z', sha, '--', ...[...workspaces.byDir.keys()].sort()]),
-        ),
-        workspaces: [...workspaces.byName.values()],
-      });
+// The executor names this file to a check it runs, signs the count of skipped
+// listener tests into the check's receipt, reads the tests that ran out of
+// time on a run they alone failed, and keeps the builds it lists once the
+// check has exited; run by hand, nothing names it.
+const checkReport = process.env['AFLOW_CHECK_REPORT'] || undefined;
+// Every package the check reads, with the directories it is built after — the
+// graph the executor keys a build over — and, for one built here, what its
+// build wrote.
+const reportedBuilds = new Map(
+  ordered.map((workspace) => [
+    workspace.dir,
+    {
+      dir: workspace.dir,
+      after: workspace.builtAfter
+        .map((name) => workspaces.byName.get(name)?.dir)
+        .filter((dir) => dir !== undefined)
+        .sort(),
+    },
+  ]),
+);
+const writeCheckReport = (report) => {
+  if (checkReport !== undefined) {
+    writeFileSync(checkReport, JSON.stringify({ ...report, builds: [...reportedBuilds.values()] }));
+  }
+};
+const keptBuilds = readKeptBuilds(process.env[CHECK_KEPT_BUILDS_ENV]);
 for (const workspace of ordered) {
   if (workspace.build === undefined) continue;
   if (!workspace.dir.startsWith('packages/')) {
@@ -434,15 +439,19 @@ for (const workspace of ordered) {
     continue;
   }
   const packageDir = path.join(repoRoot, workspace.dir);
-  const key = cacheKeys.get(workspace.name);
-  const linkedAt = Date.now();
-  if (key !== undefined && linkKeptBuild(cacheDir, key, packageDir)) {
+  const kept = keptBuilds.get(workspace.dir);
+  if (kept !== undefined) {
+    if (sameGraph(kept.graph, workspace.dir, (dir) => reportedBuilds.get(dir)?.after)) {
+      console.log(`ok   build ${workspace.name}: unchanged, kept from an earlier check`);
+      continue;
+    }
+    removeKeptBuild(packageDir, kept.files);
     console.log(
-      `ok   build ${workspace.name}: unchanged, linked from the build cache (${elapsed(linkedAt)})`,
+      `note the build kept for ${workspace.name} was keyed over other packages than this ` +
+        'commit builds it after, so it is built here',
     );
-    continue;
   }
-  const before = key === undefined ? undefined : snapshotFiles(packageDir);
+  const before = checkReport === undefined ? undefined : snapshotFiles(packageDir);
   await run(
     `build ${workspace.name}`,
     `building ${workspace.name}`,
@@ -458,13 +467,11 @@ for (const workspace of ordered) {
     },
   );
   if (before !== undefined) {
-    const refusal = keepBuild(cacheDir, key, packageDir, filesWritten(packageDir, before));
-    if (refusal !== undefined) {
-      console.log(`note the build cache could not keep ${workspace.name}: ${refusal}`);
-    }
+    reportedBuilds.get(workspace.dir).files = filesWritten(packageDir, before);
+    writeCheckReport({ skippedListenerTests: 0 });
   }
 }
-if (cacheDir !== undefined) pruneBuildCache(cacheDir, CHECK_BUILD_CACHE_MAX_AGE_MS);
+writeCheckReport({ skippedListenerTests: 0 });
 
 const touchedNames = new Set(touchedWorkspaces.map((w) => w.name));
 for (const config of touchedWorkspaces.flatMap((workspace) => workspace.configs)) {
@@ -485,15 +492,6 @@ const tests = [
     ...reaching,
   ]),
 ].filter((file) => !DATABASE_TEST_FILE.test(file));
-// The executor names this file to a check it runs, signs the count of skipped
-// listener tests into the check's receipt, and reads the tests that ran out of
-// time on a run they alone failed; run by hand, nothing names it.
-const writeCheckReport = (report) => {
-  const checkReport = process.env['AFLOW_CHECK_REPORT'];
-  if (checkReport !== undefined && checkReport !== '') {
-    writeFileSync(checkReport, JSON.stringify(report));
-  }
-};
 const readJson = (file) => {
   try {
     return JSON.parse(readFileSync(file, 'utf8'));

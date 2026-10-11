@@ -17,8 +17,9 @@
  * and never in the folder, whose declarations are an older commit's. The same
  * commit touches a root file in a repository holding no repository-shape
  * guards, which the check says in one line and passes. A later commit that
- * leaves the package alone links its build from the folder's build cache,
- * kept by the first check in the repository directory, and builds nothing.
+ * leaves the package alone is handed a copy of the build the first check made,
+ * kept by the executor in the host directory once that check had exited, and
+ * builds nothing.
  *
  * The check runs under a stand-in for the sandbox, as the handler suites do: a
  * nested sandbox cannot start under one, and the boundary is held by the
@@ -96,6 +97,7 @@ vi.mock('../sandboxedRun.js', async (importOriginal) => {
 const { createHostHandler } = await import('../handlers/hostHandler.js');
 const { noPushApprovals } = await import('./fixtures/pushApprovals.js');
 const { prepareWorktree, removeWorktree } = await import('../worktree.js');
+const { checkBuildCacheDir } = await import('../checkBuildCache.js');
 
 const SCRIPTS = fileURLToPath(new URL('../../../../scripts/', import.meta.url));
 /** The check and every module it runs with. */
@@ -265,6 +267,8 @@ beforeAll(async () => {
   await symlink(join(store, 'left-pad'), join(repo, 'node_modules', 'left-pad'));
   await mkdir(join(repo, 'node_modules', '.store', 'right-pad'), { recursive: true });
   await symlink(join('.store', 'right-pad'), join(repo, 'node_modules', 'right-pad'));
+  // What the package manager records of what it installed, which keys the build tooling.
+  await writeFile(join(repo, 'node_modules', '.yarn-state.yml'), '# installed\n');
 
   policyPath = join(dir, 'host-policy.json');
   await writeFile(
@@ -372,18 +376,19 @@ describe('this repository’s check, at a commit reading a workspace package it 
   );
 
   it(
-    'links the package from the build cache in a later checkout where it is unchanged, building nothing',
+    'hands a later checkout where the package is unchanged a copy of its build, building nothing',
     async () => {
-      const cache = join(await realpath(join(repo, '.git')), 'aflow', 'check-builds');
-      const kept = await readdir(cache);
+      const cache = checkBuildCacheDir(dirname(policyPath), await realpath(join(repo, '.git')));
+      const kept = await readdir(join(cache, 'entries'));
       expect(kept).toHaveLength(1);
+      expect(existsSync(join(await realpath(join(repo, '.git')), 'aflow'))).toBe(false);
 
       const { answer, live } = await runCheck(later, sha);
       expect(answer).toMatchObject({ passed: true, exitCode: 0, clearedSha: later });
-      expect(answer.tail).toContain('ok   build @acme/a: unchanged, linked from the build cache');
+      expect(answer.tail).toContain('ok   build @acme/a: unchanged, kept from an earlier check');
       expect(live).not.toContain('building @acme/a');
       expect(answer.tail).toContain('ok   tsc apps/app/tsconfig.json');
-      expect(await readdir(cache)).toEqual(kept);
+      expect(await readdir(join(cache, 'entries'))).toEqual(kept);
       // The folder's own build is still its own, at its own commit.
       expect(await readFile(join(repo, 'packages', 'a', 'dist', 'index.d.ts'), 'utf8')).toBe(
         'export declare const value: number;\n',

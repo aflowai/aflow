@@ -1,8 +1,10 @@
-import type { SkillBundleId, SkillBundleInput } from '@aflow/schemas';
+import type { SkillBundleId } from '@aflow/schemas';
 
-export const TEST_TWO_SKILL_BUNDLE: SkillBundleInput = {
+import type { AuthoredSkillBundle } from '../skillBundleCatalog.js';
+
+export const TEST_TWO_SKILL_BUNDLE: AuthoredSkillBundle = {
   bundleId: 'test-two-skill-bundle' as SkillBundleId,
-  version: 1,
+  revision: -1,
   name: 'Test Two-Skill Bundle',
   tagline: 'Hidden test fixture for install-op unit tests.',
   description:
@@ -18,9 +20,9 @@ export const TEST_TWO_SKILL_BUNDLE: SkillBundleInput = {
  * Exercises the `setupSkillCatalogId` schema-refinement path
  * (must appear in skillCatalogIds).
  */
-export const TEST_SETUP_BUNDLE: SkillBundleInput = {
+export const TEST_SETUP_BUNDLE: AuthoredSkillBundle = {
   bundleId: 'test-setup-bundle' as SkillBundleId,
-  version: 1,
+  revision: 0,
   name: 'Test Setup Bundle',
   tagline: 'Hidden test fixture validating the setup-skill slot.',
   description:

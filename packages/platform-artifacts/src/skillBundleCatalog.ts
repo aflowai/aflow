@@ -15,15 +15,45 @@ import { EVAL_SUITE_DESIGN } from './skillBundleCatalog/evalSuiteDesign.js';
 import { KAGGLE_API_DEFINITION } from './skillBundleCatalog/kaggleApiDefinitions.js';
 import { GITHUB_API_DEFINITION } from './skillBundleCatalog/githubApiDefinitions.js';
 
+/**
+ * A bundle as authored: `revision` in place of the version the Store
+ * publishes, which `publishedBundleVersion` derives. The Store offers an
+ * update when a bundle's version passes the one a space installed and reads
+ * no skill's version for that, so a skill raised under a bundle that stayed
+ * was never offered; derived, a skill that moves moves its bundle. `revision`
+ * is raised for a change to the bundle itself, and for a skill it stops
+ * carrying, whose version then leaves the sum. It is negative where a bundle
+ * was released below the sum of its skills' versions, so that the version it
+ * publishes continues from the one it had.
+ */
+export type AuthoredSkillBundle = Omit<SkillBundleInput, 'version'> & {
+  readonly revision: number;
+};
+
+/** A bundle's published version: its revision plus the version of every skill it carries. */
+export function publishedBundleVersion(
+  bundle: Pick<AuthoredSkillBundle, 'bundleId' | 'revision' | 'skillCatalogIds'>,
+): number {
+  return bundle.skillCatalogIds.reduce((version, catalogId) => {
+    const skill = getSkillCatalogEntry(catalogId);
+    if (skill === null) {
+      throw new Error(
+        `Bundle "${bundle.bundleId}" carries "${catalogId}", which is no skill in the catalog, so it has no version to publish.`,
+      );
+    }
+    return version + skill.version;
+  }, bundle.revision);
+}
+
 // ============================================================================
 // kaggle-competition — Kaggle competition optimizer
 // ============================================================================
 
 const KAGGLE_API_TOKEN_CREDENTIAL_KEY = 'kaggle-api-token';
 
-const KAGGLE_COMPETITION_BUNDLE: SkillBundleInput = {
+const KAGGLE_COMPETITION_BUNDLE: AuthoredSkillBundle = {
   bundleId: 'kaggle-competition' as SkillBundleId,
-  version: 6,
+  revision: 2,
   name: 'Kaggle Competition',
   tagline: 'Iterate toward a target leaderboard score on a Kaggle competition.',
   description: `Wires up the **Kaggle REST API** and the **Kaggle Competition Optimizer** skill — an iterative loop that prepares a competition, proposes a strategy informed by prior runs, implements it in a sandbox, submits (approval-gated), polls the leaderboard, and records structured learnings for the next iteration.
@@ -138,9 +168,9 @@ const KAGGLE_COMPETITION_BUNDLE: SkillBundleInput = {
 // coding-pr-loop — the implement ↔ review coding loop
 // ============================================================================
 
-const CODING_PR_LOOP_BUNDLE: SkillBundleInput = {
+const CODING_PR_LOOP_BUNDLE: AuthoredSkillBundle = {
   bundleId: 'coding-pr-loop' as SkillBundleId,
-  version: 3,
+  revision: -2,
   name: 'Coding PR Loop',
   tagline: 'Open, review, and iterate pull requests on your repo with a coding agent.',
   description: `Wires up the **GitHub REST API** and the three coding skills that drive the **implement ↔ review loop**: open a PR from a request, adversarially review it, and revise it on the same branch toward passing.
@@ -176,9 +206,9 @@ Then run a coding skill: ask to open a PR for a change → review it → fix →
 // local-commission — have the machine's coding agent make a change
 // ============================================================================
 
-const LOCAL_COMMISSION_BUNDLE: SkillBundleInput = {
+const LOCAL_COMMISSION_BUNDLE: AuthoredSkillBundle = {
   bundleId: 'local-commission' as SkillBundleId,
-  version: 3,
+  revision: 0,
   name: 'Local Commission',
   tagline: "Have the machine's own coding agent make a change in a connected repository.",
   description: `Installs **Commission Change** — a brief handed to the coding agent already installed on the machine, carried out in an isolated checkout of a repository connected as a folder, with the change returned as a stored patch.
@@ -202,9 +232,9 @@ const LOCAL_COMMISSION_BUNDLE: SkillBundleInput = {
 // local-code-review — review committed changes in a connected repository
 // ============================================================================
 
-const LOCAL_CODE_REVIEW_BUNDLE: SkillBundleInput = {
+const LOCAL_CODE_REVIEW_BUNDLE: AuthoredSkillBundle = {
   bundleId: 'local-code-review' as SkillBundleId,
-  version: 7,
+  revision: 0,
   name: 'Local Code Review',
   tagline: 'Review committed changes in a connected repository with the installed coding agent.',
   description: `Installs **Review Local Changes** — a read-only review of a revision range in a repository connected as a folder, carried out by the coding agent already installed on that machine.
@@ -228,9 +258,9 @@ const LOCAL_CODE_REVIEW_BUNDLE: SkillBundleInput = {
 // local-publish — publish a patch to a branch and a pull request
 // ============================================================================
 
-const LOCAL_PUBLISH_BUNDLE: SkillBundleInput = {
+const LOCAL_PUBLISH_BUNDLE: AuthoredSkillBundle = {
   bundleId: 'local-publish' as SkillBundleId,
-  version: 20,
+  revision: -3,
   name: 'Local Publish',
   tagline:
     'Commit a patch onto a branch of a connected repository, clear the push, and open the pull request.',
@@ -274,7 +304,7 @@ const LOCAL_PUBLISH_BUNDLE: SkillBundleInput = {
  * Use `SKILL_BUNDLE_CATALOG` (the validated, frozen export) elsewhere
  * — never iterate this raw array directly outside this module.
  */
-const RAW_BUNDLES: readonly SkillBundleInput[] = [
+const RAW_BUNDLES: readonly AuthoredSkillBundle[] = [
   TEST_TWO_SKILL_BUNDLE,
   TEST_SETUP_BUNDLE,
   ALPACA_THESIS_TRADING,
@@ -296,7 +326,11 @@ const RAW_BUNDLES: readonly SkillBundleInput[] = [
  * test fixtures only.
  */
 export const SKILL_BUNDLE_CATALOG: readonly SkillBundle[] = RAW_BUNDLES.map((entry) => {
-  const result = SkillBundleSchema.safeParse(entry);
+  const { revision: _revision, ...authored } = entry;
+  const result = SkillBundleSchema.safeParse({
+    ...authored,
+    version: publishedBundleVersion(entry),
+  });
   if (!result.success) {
     throw new Error(
       `Invalid bundle "${entry.bundleId}" in catalog: ${result.error.issues

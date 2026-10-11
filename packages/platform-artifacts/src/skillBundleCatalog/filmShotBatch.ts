@@ -1,4 +1,6 @@
-import type { SkillBundleId, SkillBundleInput } from '@aflow/schemas';
+import type { SkillBundleId } from '@aflow/schemas';
+
+import type { AuthoredSkillBundle } from '../skillBundleCatalog.js';
 
 /**
  * The bundle ships the two skills and nothing else. There is no connector to
@@ -6,9 +8,9 @@ import type { SkillBundleId, SkillBundleInput } from '@aflow/schemas';
  * operations and the credential the space already holds for them, so a binding
  * here would be a second way to reach the same route.
  */
-export const FILM_SHOT_BATCH: SkillBundleInput = {
+export const FILM_SHOT_BATCH: AuthoredSkillBundle = {
   bundleId: 'film-production' as SkillBundleId,
-  version: 6,
+  revision: -4,
   name: 'Film Production',
   tagline:
     'From an idea to a film — author the world from the operator’s brief, then render the shots that owe work.',

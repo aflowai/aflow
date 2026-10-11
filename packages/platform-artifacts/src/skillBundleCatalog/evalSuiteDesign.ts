@@ -1,13 +1,15 @@
-import type { SkillBundleId, SkillBundleInput } from '@aflow/schemas';
+import type { SkillBundleId } from '@aflow/schemas';
+
+import type { AuthoredSkillBundle } from '../skillBundleCatalog.js';
 
 /**
  * The bundle ships one skill and wires nothing. Its inputs — a skill and a
  * simulation — already exist in the space before the suite is worth drafting,
  * and an API binding here would name a world the target skill does not call.
  */
-export const EVAL_SUITE_DESIGN: SkillBundleInput = {
+export const EVAL_SUITE_DESIGN: AuthoredSkillBundle = {
   bundleId: 'eval-authoring' as SkillBundleId,
-  version: 16,
+  revision: 0,
   name: 'Eval Suite Design',
   tagline: 'Scaffold the golden eval suite for a skill, grounded in its simulated world.',
   description: `Installs the **Eval Suite Design** skill — point it at a skill and the simulation it runs against, and it drafts the cases that would catch that skill regressing.
