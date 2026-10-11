@@ -119,7 +119,7 @@
   },
   "packageManager": "yarn@4.12.0",
   "resolutions": {
-    "fast-jwt": "^6.2.4",
+    "fast-jwt": "6.3.4",
     "fast-uri": "3.1.7",
     "minimatch@npm:^9.0.4": "9.0.9",
     "minimatch@npm:^9.0.5": "9.0.9",
@@ -139,7 +139,7 @@
     "postcss": "8.5.25",
     "uuid": "14.0.0",
     "form-data@npm:^4.0.5": "4.0.6",
-    "sharp": "0.35.4",
+    "sharp": "0.35.5",
     "@fastify/static": "10.1.2",
     "@hono/node-server@npm:^1.19.9": "2.0.12",
     "ajv@npm:^6.12.4": "6.15.0",
@@ -154,7 +154,10 @@
     "esbuild@npm:^0.27.5": "0.28.1",
     "esbuild@npm:~0.18.20": "0.28.1",
     "@types/node": "22.20.5",
-    "js-yaml@npm:^4.1.1": "4.3.2"
+    "js-yaml@npm:^4.1.1": "4.3.2",
+    "proxy-addr@npm:^2.0.7": "2.0.8",
+    "seroval@npm:~1.5.4": "1.6.8",
+    "source-map-js@npm:^1.2.1": "1.2.2"
   },
   "dependencies": {
     "croner": "^10.0.1"
