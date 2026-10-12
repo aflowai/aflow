@@ -46,7 +46,7 @@
     "@aflow/platform-artifacts": "workspace:*",
     "@aflow/schemas": "workspace:*",
     "@google-cloud/kms": "^5.7.0",
-    "drizzle-orm": "^0.45.3",
+    "drizzle-orm": "^0.45.4",
     "postgres": "^3.4.9"
   },
   "devDependencies": {

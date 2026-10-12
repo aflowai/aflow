@@ -22,7 +22,7 @@
     "dotenv": "^16.4.5"
   },
   "devDependencies": {
-    "pino-pretty": "^13.0.0",
+    "pino-pretty": "^13.2.0",
     "tsup": "^8.5.1",
     "typescript": "^5.8.3",
     "vitest": "^4.1.11"
