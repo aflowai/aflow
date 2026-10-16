@@ -186,6 +186,13 @@ Which local models are _recommended_ for which role follows from the usefulness 
 
 - **Coverage:** an issue that cannot be stated with a cause and a remedy is not shipped as an issue. A vague warning teaches nothing, to a person or a model.
 
+**D17 — A local model's silent stretches are said in the chat.** Before its first token, a request on a local model can be silent for minutes: the model loading (25–56 s on the measured machine, more for a larger one) and then reading the prompt, which Ollama streams nothing during. A spinner reading _Working…_ through that looks like a stalled chat.
+
+- **What is known:** only the transitions. Whether a request will load the model is read from `/api/ps` before it is sent: the model is not loaded, or the llama.cpp runner holds it at another window, which reloads it. The MLX runner ignores the window and never reloads for one. Prefill progress is not reported by the runtime, so no percentage or time estimate is shown.
+- **The adapter loads first.** A load otherwise happens inside the request's own prefill, where nothing tells the two apart. So when the request would load, the adapter loads the model explicitly, at the window the request uses, and then sends the request. That makes the end of the load observable at no extra cost, since the load would have happened anyway. A load that fails is left for the request to report in its own words.
+- **The signal:** `AIRequestOptions.onRuntimePhase` reports `loading_model`, then `reading_prompt`. The Ollama adapter calls it; hosted adapters never do. The status read is made only for a caller that listens.
+- **The channel:** the agent turn writes each phase as one line on the step's `status` live-delta channel (_Loading Gemma 4 26B (this computer) into memory…_, _Reading the conversation…_), and each phase slides the step's idle window. The chat's activity row shows the last line in place of _Working…_ until the first `thinking` or `text` delta replaces it with _Thinking…_ or _Writing…_. Nothing is written to the transcript. _Rejected:_ reusing the `activity` channel. Its lines fold into a harness feed, and the chat pins a harness card for any step with an unsettled feed.
+
 ## 4. The initial lineup
 
 The figures below come from model cards and the Ollama library, read when this plan was written. None of them are measured: P0 replaces each of them with a number from the probe, and an entry ships only after its probe passes. "Fits" assumes Q4 weights and leaves room for the stack, the operating system and a browser.
@@ -351,6 +358,7 @@ _Built and tested:_ all of the above. The probe measures Gemma 4 26B at 16.15 GB
 - the one-model-for-every-role preset as the default for a local space, and the cost of mixing models;
 - an onboarding path for "use a model on this computer", for an operator with no cloud key;
 - cost shown as local;
+- the model loading and the prompt being read, said in the chat while a turn waits on them (D17);
 - machine memory and free disk in the host inventory;
 - edition gating;
 - _optional:_ the approved one-time install on a paired Mac (D2).

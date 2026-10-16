@@ -14,6 +14,8 @@ import { applyActivityDelta } from './harnessActivity.js';
  * Only the channels that carry what a step is *saying* are here. A channel
  * that carries what it is *doing* — `activity` — belongs under the step, not
  * in the conversation, so it has no message and folds into its own state.
+ * `status` has no message either: it is the label of the step's spinner,
+ * which the client reads from the frame with `latestStatusLine`.
  */
 const CHANNEL_MESSAGE: Partial<
   Record<LiveDeltaChannel, { idPrefix: string; semanticType: string }>
@@ -57,4 +59,18 @@ export function applyLiveDelta(state: RunViewState, action: LiveDeltaAction): Ru
   return channel === 'text'
     ? { ...state, messages, streamingStepExecutionId: stepExecutionId }
     : { ...state, messages };
+}
+
+/**
+ * The status a `status` frame leaves the step in: its last whole line. A frame
+ * carrying no whole line — a chunk cut mid-line — says nothing new, and the
+ * status before it stands.
+ */
+export function latestStatusLine(delta: string): string | undefined {
+  const lines = delta.split('\n').slice(0, -1);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]?.trim();
+    if (line) return line;
+  }
+  return undefined;
 }

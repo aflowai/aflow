@@ -10,6 +10,7 @@ import type { AgentTurnInput } from '../schema.js';
 import type { HandlerDeps } from './types.js';
 import { chatMessageToAiMessage } from './agentMessageConversion.js';
 import { toolImageResolver } from './mediaSourceRef.js';
+import { reportRuntimePhases } from './runtimePhaseStatus.js';
 import {
   buildFunctionDeclarations,
   mapToolCallsToDecision,
@@ -438,6 +439,7 @@ async function streamAndCollect(
     attempt: ctx.job.attempt,
     signal: ctx.signal,
     onStreamProgress: ctx.reportProgress,
+    onRuntimePhase: reportRuntimePhases(ctx, client.getModel(p.model)?.displayName ?? p.model),
     maxRetries: 0, // Agent turns are interactive — let orchestrator handle retries with user feedback
   });
 
@@ -741,6 +743,7 @@ async function runGenerateJsonPath(
     attempt: ctx.job.attempt,
     signal: ctx.signal,
     onStreamProgress: ctx.reportProgress,
+    onRuntimePhase: reportRuntimePhases(ctx, modelDef?.displayName ?? model),
     maxRetries: 0,
   });
 

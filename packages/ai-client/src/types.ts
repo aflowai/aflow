@@ -286,6 +286,13 @@ export interface ModelReasoningProfile {
 /**
  * Common options for all AI requests.
  */
+/**
+ * A request's silent stretches on a local runtime, in order. `loading_model`
+ * is reported only when the request would load the model; `reading_prompt`
+ * follows it on every request, and the first streamed token ends it.
+ */
+export type RuntimePhase = { phase: 'loading_model' } | { phase: 'reading_prompt' };
+
 export interface AIRequestOptions {
   /** Model identifier (e.g., "gpt-4o", "claude-3-5-sonnet") */
   model: string;
@@ -315,6 +322,13 @@ export interface AIRequestOptions {
    * are indistinguishable and both die at the flat wall clock.
    */
   onStreamProgress?: (() => void) | undefined;
+
+  /**
+   * Called as a request on a model on this computer passes through the silent
+   * stretches before its first token: the model loading, then the prompt being
+   * read. Adapters for hosted models never call it.
+   */
+  onRuntimePhase?: ((phase: RuntimePhase) => void) | undefined;
 
   /** Per-request max retries override (SDK-level). Defaults to provider config. */
   maxRetries?: number | undefined;

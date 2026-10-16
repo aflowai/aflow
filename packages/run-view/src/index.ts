@@ -6,6 +6,7 @@ export {
   type LiveDeltaAction,
   type HarnessActivityState,
   unsettledHarnessSteps,
+  latestStatusLine,
 } from './reducer.js';
 
 export {

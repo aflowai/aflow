@@ -25,6 +25,7 @@ export type {
   ReasoningConfig,
   ToolDefinition,
   AIRequestOptions,
+  RuntimePhase,
   GenerateTextRequest,
   GenerateJsonRequest,
   GenerateEmbeddingRequest,
@@ -196,6 +197,8 @@ export {
 } from './localModelFit.js';
 export {
   localRuntimeClient,
+  sameLocalTag,
+  servesWithoutLoading,
   type LocalRuntimeClient,
   type LoadedLocalModel,
 } from './providers/ollamaRuntime.js';

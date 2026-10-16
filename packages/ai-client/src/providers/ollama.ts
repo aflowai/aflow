@@ -29,6 +29,7 @@ import { AIClientError, buildStreamTruncationError } from '../errors.js';
 import { moveToolImagesToUserMessages, toolResultText } from './toolResultContent.js';
 import { parseJsonResponse } from './jsonResponseParse.js';
 import { MIN_ANSWER_TOKENS, sizePrompt, type PromptSizing } from './ollamaPromptSize.js';
+import { localRuntimeClient, servesWithoutLoading } from './ollamaRuntime.js';
 
 interface Fit {
   sizing: PromptSizing;
@@ -262,6 +263,7 @@ export function createOllamaAdapter(config: ProviderConfig): AIProviderAdapter {
   // §9 G1). Learned from the runtime's own answer rather than written down, so
   // a runner that gains structured output is used the moment it does.
   const refusesFormat = new Set<string>();
+  const runtime = localRuntimeClient(config);
 
   function windowFor(request: AIRequestOptions): number {
     return request.contextWindow ?? config.contextTokens ?? OLLAMA_DEFAULT_CONTEXT_TOKENS;
@@ -330,6 +332,37 @@ export function createOllamaAdapter(config: ProviderConfig): AIProviderAdapter {
   }
 
   /**
+   * A load otherwise happens inside the request's own prefill, where nothing
+   * tells it apart from reading the prompt. Loading first, at the window the
+   * request uses so it does not load again, is what lets a caller say which
+   * silent stretch it is in. Asked only by a caller that listens, since it
+   * costs a status read. A load that fails is left for the request itself to
+   * report, in the words it would have used anyway.
+   */
+  async function reportPhases(request: GenerateTextRequest | GenerateJsonRequest): Promise<void> {
+    const report = request.onRuntimePhase;
+    if (!report) return;
+    const window = windowFor(request);
+    const loaded = await runtime.loaded();
+    if (loaded !== null && !servesWithoutLoading(loaded, request.model, window)) {
+      report({ phase: 'loading_model' });
+      try {
+        await runtime.warm(request.model, window, request.signal);
+      } catch (error) {
+        if (request.signal?.aborted) {
+          throw normalizeOllamaError(error, {
+            baseUrl,
+            model: request.model,
+            signal: request.signal,
+          });
+        }
+      }
+      request.onStreamProgress?.();
+    }
+    report({ phase: 'reading_prompt' });
+  }
+
+  /**
    * Plan 323 D5: a request is sent only once it is known to fit. A prompt
    * whose conservative size fits is sent as is; any other is counted exactly
    * by a one-token evaluation, whose prefix the real request then reads from
@@ -340,6 +373,7 @@ export function createOllamaAdapter(config: ProviderConfig): AIProviderAdapter {
     messages: OllamaMessage[],
     tools: OllamaTool[] | undefined,
   ): Promise<Fit> {
+    await reportPhases(request);
     const window = windowFor(request);
     const requested = request.maxTokens ?? MIN_ANSWER_TOKENS;
     const sizing = sizePrompt(messages, tools);

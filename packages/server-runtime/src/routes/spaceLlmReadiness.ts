@@ -21,11 +21,12 @@ import {
   inferProviderForModelRef,
   isVerifiableProvider,
   localModelFit,
+  sameLocalTag,
+  type LoadedLocalModel,
   type ModelDefinition,
 } from '@aflow/ai-client';
 import type { Redis } from '@aflow/redis';
 import { resolveSpaceLocalRuntime, type ResolvedLocalRuntime } from '../lib/localRuntime.js';
-import type { LoadedLocalModel } from '@aflow/ai-client';
 import {
   DEFAULT_CYBERNETIC_MODEL,
   resolveRoleModel,
@@ -85,7 +86,7 @@ function localFitFor(
     window: contextWindowForModel(model, runtime.config),
   });
   const tag = model.providerModelId ?? model.id;
-  const held = loaded?.find((m) => m.tag === tag || m.tag === `${tag}:latest`);
+  const held = loaded?.find((m) => sameLocalTag(m.tag, tag));
   return {
     status: fit.status,
     window: fit.window,
