@@ -185,11 +185,17 @@ describe('what the push gate tells the agent it refuses', () => {
     }
   });
 
+  it('says "Nothing was pushed." as a whole sentence in every refusal', async () => {
+    for (const [expected, pushed] of REFUSED) {
+      const message = (await refusalOf(pushed))?.message ?? '';
+      expect(message, expected).toMatch(/(^|[.:] )Nothing was pushed\.( |$)/);
+    }
+  });
+
   it('sends a push its receipts do not cover to publish the branch again as it stands', async () => {
     for (const [expected, pushed] of REFUSED) {
       if (!PUBLISH_AGAIN.includes(expected)) continue;
       const message = (await refusalOf(pushed))?.message ?? '';
-      expect(message, expected).toContain('Nothing was pushed.');
       expect(message, expected).toContain(`Publish \`${BRANCH}\` again as it stands`);
     }
   });
@@ -197,10 +203,16 @@ describe('what the push gate tells the agent it refuses', () => {
   it('sends a commit whose checks failed to commission the fix and publish again', async () => {
     const refused = await refusalOf(withCheck({ receipt: checkReceipt({ outcome: 'failed' }) }));
     expect(refused?.refusal).toBe('check_failed');
-    expect(refused?.message).toContain('Nothing was pushed');
+    expect(refused?.message).toContain('a commit is pushed only once they pass on it.');
     expect(refused?.message).toContain(`Commission the fix onto \`${BRANCH}\` and publish again`);
     expect(refused?.message).not.toContain('again once they pass');
     expect(refused?.message).not.toContain('as it stands');
+  });
+
+  it('predicts nothing about whether a commit whose checks failed will pass', async () => {
+    const refused = await refusalOf(withCheck({ receipt: checkReceipt({ outcome: 'failed' }) }));
+    expect(refused?.message).not.toMatch(/\bwill\b/);
+    expect(refused?.message).not.toContain('start passing');
   });
 
   it('clears the push every one of these departs from', async () => {

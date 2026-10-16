@@ -575,17 +575,18 @@ async function runHarness(
       if (session === undefined) {
         // The same answer a session that never existed would get: naming a
         // session as another run's confirms it exists. This run's own session
-        // that idled out or was lost to a restart reaches this branch too, so
-        // the rule states every case and guesses at none for this ref.
+        // that idled out, was lost to a restart or went with its folder's grant
+        // reaches this branch too, so the rule states how a kept session ends
+        // and guesses at none of those for this ref.
         return await failureWithError(
           ctx,
           validationError(
             `No session \`${input.continueFrom}\` is held for this run. A kept session is owned ` +
               'by the run that made it, and every commission is a new run, so `continueFrom` ' +
               'can name only a session this same run made; a session made by any other run is ' +
-              'refused as one that does not exist. A session this run made is no longer held ' +
-              'once it has been idle for an hour, or once this executor has restarted since it ' +
-              'was made.',
+              'refused as one that does not exist. A kept session ends once it has been idle ' +
+              'for an hour, once this executor has restarted since it was made, or once the ' +
+              'grant of its connected folder is withdrawn.',
           ),
         );
       }

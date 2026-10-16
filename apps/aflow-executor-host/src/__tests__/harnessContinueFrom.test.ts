@@ -2,11 +2,13 @@
  * Contract: a commission naming a session it cannot continue is told the rule
  * that decides which sessions it can — a kept session is owned by the run that
  * made it, and every commission is a new run — and nothing about the session it
- * named. That rule is complete: a session this run made is no longer held once
- * it has been idle for an hour or the executor has restarted since, and such a
- * session reaches the same refusal as another run's. Another run's session,
- * this run's idled-out one and one that never existed all get one answer, so
- * the refusal confirms nothing and guesses at no reason for the ref it names.
+ * named. It also says the ways a kept session ends — once it has been idle for
+ * an hour, once the executor has restarted since it was made, or once the grant
+ * of its connected folder is withdrawn — because a session this run made and
+ * lost one of those ways reaches the same refusal as another run's. Another
+ * run's session, this run's idled-out one and one that never existed all get
+ * one answer, so the refusal confirms nothing and guesses at no reason for the
+ * ref it names.
  */
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -127,16 +129,20 @@ describe('a commission that names a session it cannot continue', () => {
     expect(message).toContain('a session made by any other run is refused');
   });
 
-  it("is told that this run's own session is no longer held after an idle hour", async () => {
+  it('is told that a kept session ends after an idle hour', async () => {
     const { message } = await commission(OTHER_RUNS);
     expect(SESSION_IDLE_TTL_MS).toBe(60 * 60 * 1000);
-    expect(message).toContain('A session this run made is no longer held');
-    expect(message).toContain('once it has been idle for an hour');
+    expect(message).toContain('A kept session ends once it has been idle for an hour');
   });
 
-  it("is told that a restart of the executor since lets go of this run's own session", async () => {
+  it('is told that a kept session ends when the executor restarts', async () => {
     const { message } = await commission(OTHER_RUNS);
     expect(message).toContain('once this executor has restarted since it was made');
+  });
+
+  it("is told that a kept session ends when its folder's grant is withdrawn", async () => {
+    const { message } = await commission(OTHER_RUNS);
+    expect(message).toContain('or once the grant of its connected folder is withdrawn.');
   });
 
   it('makes no guess about why the ref it named in particular is not held', async () => {

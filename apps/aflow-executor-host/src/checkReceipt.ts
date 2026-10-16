@@ -247,7 +247,7 @@ export async function requireCheckedPush(
   if (receipt.outcome !== 'passed') {
     throw new CheckReceiptError(
       `The checks of \`${bindingId}\`, ${command}, failed on ${short}, and a commit is pushed ` +
-        `only once they pass on it. Nothing was pushed. That commit will not start passing. ` +
+        `only once they pass on it. Nothing was pushed. ` +
         `Commission the fix onto \`${push.branch}\` and publish again — the publication runs ` +
         'the checks on what it sends.',
       'check_failed',
