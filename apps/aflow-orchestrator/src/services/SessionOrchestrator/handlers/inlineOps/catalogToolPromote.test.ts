@@ -49,6 +49,25 @@ describe('checkPlatformOpScope', () => {
   });
 });
 
+describe('checkPlatformOpScope — a refused substrate call names the path that works', () => {
+  const scope: DiscoveryScope = {
+    allowedStepTypes: [],
+    allowedOperationIds: ['api.binding.test'],
+  };
+
+  it.each(['api.http.call', 'mcp.tool.call'])('%s', (opId) => {
+    const reason = checkPlatformOpScope(opId, scope);
+    expect(reason).toMatch(/out_of_scope/);
+    expect(reason).toContain('catalog.tool.promote');
+  });
+
+  it('adds nothing to an operation that declares no alternative', () => {
+    expect(checkPlatformOpScope('memory.store.put', scope)).toBe(
+      'out_of_scope: "memory.store.put" is not in this agent\'s promotable operations',
+    );
+  });
+});
+
 describe('checkPlatformOpScope — op-level scope (Plan 233 promotable tier)', () => {
   it('allows exactly the listed operations and nothing else', () => {
     const scope: DiscoveryScope = {

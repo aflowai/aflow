@@ -484,8 +484,6 @@ export async function checkWorkflowCredentialsPreflight(
 // User-facing message rendering
 // ============================================================================
 
-const INTEGRATIONS_URL_HINT = '/integrations';
-
 export function renderPreflightFailureMessage(
   workflowSlug: string,
   result: WorkflowCredentialsPreflightResult,
@@ -516,7 +514,7 @@ export function renderPreflightFailureMessage(
         return `${m.apiId} (binding=${m.bindingId})${keyHint}`;
       })
       .join('; ');
-    lines.push(`- Needs credentials at ${INTEGRATIONS_URL_HINT}: ${detail}`);
+    lines.push(`- Needs credentials on the Integrations page: ${detail}`);
   }
   if (bindingNotFound.length > 0) {
     lines.push(

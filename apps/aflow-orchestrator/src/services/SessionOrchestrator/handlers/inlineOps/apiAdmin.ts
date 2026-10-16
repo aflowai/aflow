@@ -6,6 +6,7 @@ import {
   resolveBaseUrl,
   ApiDefinitionSchema,
   BindingFulfillmentSchema,
+  buildIntegrationToolId,
   extractCredentialKeys,
 } from '@aflow/schemas';
 import type { ApiEndpoint, BindingFulfillment } from '@aflow/schemas';
@@ -793,6 +794,18 @@ export async function handleApiAdminOpInline(args: InlineHandlerArgs): Promise<v
           status: 'ok' as const,
           checks,
           resolvedUrl,
+          ...(binding.enabled === 1
+            ? {
+                suggestedPromoteCall: {
+                  operation: 'catalog.tool.promote' as const,
+                  input: {
+                    toolIds: endpoints.map((e) =>
+                      buildIntegrationToolId('api', binding.bindingId, e.endpointId),
+                    ),
+                  },
+                },
+              }
+            : {}),
         };
         break;
       }

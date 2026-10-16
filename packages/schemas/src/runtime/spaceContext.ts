@@ -437,6 +437,9 @@ export const SpaceContextNavigationSchema = z.object({
     skill: z.string(),
     session: z.string(),
     memory: z.string(),
+    /** The space's integrations page — every API and MCP server, and where credentials are entered. */
+    integrations: z.string(),
+    /** The same page opened on one binding's configuration. */
     integration: z.string(),
     chat: z.string(),
     /** A live applet instance's board/page — where the rendered view lives. */
@@ -491,7 +494,8 @@ export function buildSpaceContextNavigation(
       skill: `${prefix}/skills/{skillSlug}`,
       session: `${prefix}/sessions/{sessionId}`,
       memory: `${prefix}/memory/{path}`,
-      integration: `${prefix}/integrations/{bindingId}`,
+      integrations: `${prefix}/integrations`,
+      integration: `${prefix}/integrations?configure={bindingId}`,
       chat: `${prefix}/chat/{agentSlug}`,
       applet: `${prefix}/applets/{instanceId}`,
       store: `${prefix}/store`,

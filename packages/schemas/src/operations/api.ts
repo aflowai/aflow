@@ -498,6 +498,8 @@ export const ApiOperationRegistrations: OperationRegistration[] = [
     },
     accessMode: 'write',
     riskModifiers: ['external_side_effect'],
+    agentAlternative:
+      "Call the endpoint as its own tool instead: catalog.tool.search finds the bound API's endpoints, catalog.tool.promote adds them, then call each by its callName.",
     inputZod: ApiCallInputSchema,
     outputZod: ApiCallOutputSchema,
   },
@@ -624,13 +626,8 @@ export const ApiOperationRegistrations: OperationRegistration[] = [
           condition: 'when_available',
         },
         {
-          operationId: 'api.definition.list',
-          note: 'List all registered API definitions',
-          condition: 'when_available',
-        },
-        {
           operationId: 'catalog.tool.search',
-          note: 'Search for API endpoints to use',
+          note: "Once bound, search for this API's endpoints to promote and call them as tools",
           condition: 'always',
         },
       ],
@@ -735,17 +732,17 @@ export const ApiOperationRegistrations: OperationRegistration[] = [
     semanticDescription:
       'Discover which APIs are registered and available to call. ' +
       'Returns API names, endpoints, parameter schemas, and tags — no secrets or credentials. ' +
-      'Always check this first to see what integrations exist (e.g., GitHub, Stripe, internal APIs) before calling api.http.call.',
+      'Always check this first to see what integrations exist (e.g., GitHub, Stripe, internal APIs) before calling their endpoints.',
     tags: ['catalog', 'api', 'agent', 'discovery'],
     idempotency: 'idempotent',
     mutates: false,
     usage: {
       oneLine:
         'Discover registered API integrations and their endpoints. ' +
-        'Use before api.http.call to find what APIs are available.',
+        'Use to find what APIs are available before calling their endpoints.',
       whenToUse: [
         'Finding out what APIs/integrations are available (e.g., error APIs, payment APIs, etc.)',
-        'Discovering endpoint details before making api.http.call',
+        'Discovering endpoint details before calling an endpoint',
       ],
       whenNotToUse: ['Fetching a single API by ID — use api.definition.get'],
       minimalExampleInput: {},
@@ -862,13 +859,8 @@ export const ApiOperationRegistrations: OperationRegistration[] = [
           condition: 'when_available',
         },
         {
-          operationId: 'api.http.call',
-          note: 'Call an endpoint from the bound API',
-          condition: 'when_available',
-        },
-        {
           operationId: 'catalog.tool.search',
-          note: "Search for this API's endpoints to call them as tools",
+          note: "Search for this API's endpoints to promote and call them as tools",
           condition: 'always',
         },
       ],
@@ -971,10 +963,12 @@ export const ApiOperationRegistrations: OperationRegistration[] = [
       oneLine:
         'Test that an API binding is correctly configured — checks definition, credentials, and egress policy without making a real call.',
       whenToUse: [
-        'Verifying a newly created binding before making api.http.call',
+        'Verifying a newly created binding before calling its endpoints',
         'Debugging why an API call fails with credential or egress errors',
       ],
-      whenNotToUse: ['Actually calling the API — use api.http.call'],
+      whenNotToUse: [
+        'Actually calling the API — promote its endpoints (suggestedPromoteCall) and call them by name',
+      ],
       pitfalls: [
         'Does not make a real HTTP request — only validates configuration',
         'Credential check verifies the key exists but does not validate the token value',

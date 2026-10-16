@@ -458,7 +458,7 @@ describe('renderPreflightFailureMessage', () => {
     expect(message).toContain('Cannot run "titanic-submitter"');
     expect(message).toContain('Placeholder bindings');
     expect(message).toContain('kaggle');
-    expect(message).toContain('Needs credentials at /integrations');
+    expect(message).toContain('Needs credentials on the Integrations page');
     expect(message).toContain('stripe_secret');
     expect(message).toContain('Granted by');
     expect(message).toContain('fetch-titanic');
