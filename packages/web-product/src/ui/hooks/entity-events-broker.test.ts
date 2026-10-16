@@ -20,6 +20,7 @@ import {
 
 interface CapturedSubscription {
   topic: Record<string, unknown>;
+  onSubscribed?: (cursor: string) => void;
   onEvent?: (raw: unknown, cursor: string) => void;
   onError?: (code: string, message: string) => void;
 }
@@ -37,12 +38,14 @@ vi.mock('../lib/realtimeClient.js', () => ({
     subscribe: (
       topic: Record<string, unknown>,
       handlers: {
+        onSubscribed?: (cursor: string) => void;
         onEvent?: (raw: unknown, cursor: string) => void;
         onError?: (code: string, message: string) => void;
       },
     ) => {
       captured.push({
         topic,
+        ...(handlers.onSubscribed ? { onSubscribed: handlers.onSubscribed } : {}),
         ...(handlers.onEvent ? { onEvent: handlers.onEvent } : {}),
         ...(handlers.onError ? { onError: handlers.onError } : {}),
       });
@@ -159,6 +162,46 @@ describe('resume — a retry that was refused while blocked', () => {
       blocked = false;
       resume();
       expect(captured, 'the stream stayed dead after the session recovered').toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('reconnect — where the next subscription resumes', () => {
+  const ACKNOWLEDGED_TAIL = '1700000000000-0';
+  const DELIVERED_EVENT = '1700000000005-0';
+
+  function reconnectAfterTransportLoss(): Record<string, unknown> | undefined {
+    captured.at(-1)?.onError?.('stream_error', 'transport lost');
+    vi.runOnlyPendingTimers();
+    return captured.at(-1)?.topic;
+  }
+
+  it('resumes from the acknowledged cursor when no event has arrived', () => {
+    vi.useFakeTimers();
+    try {
+      acquire('space-A', live);
+      expect(captured[0]?.topic).not.toHaveProperty('cursor');
+
+      captured[0]?.onSubscribed?.(ACKNOWLEDGED_TAIL);
+      const topic = reconnectAfterTransportLoss();
+
+      expect(captured).toHaveLength(2);
+      expect(topic?.['cursor']).toBe(ACKNOWLEDGED_TAIL);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('resumes from the last delivered event once one has arrived', () => {
+    vi.useFakeTimers();
+    try {
+      acquire('space-A', live);
+      captured[0]?.onSubscribed?.(ACKNOWLEDGED_TAIL);
+      captured[0]?.onEvent?.({ eventId: 'evt-1' }, DELIVERED_EVENT);
+
+      expect(reconnectAfterTransportLoss()?.['cursor']).toBe(DELIVERED_EVENT);
     } finally {
       vi.useRealTimers();
     }

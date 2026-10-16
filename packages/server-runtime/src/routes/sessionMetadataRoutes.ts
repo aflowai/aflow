@@ -25,6 +25,7 @@ import {
   SessionMetadataDetailSchema,
   normalizeSessionLabel,
   type SessionId,
+  type SessionMetadata,
   type TenantId,
 } from '@aflow/schemas';
 import { BadRequestError, ForbiddenError } from '../lib/errors.js';
@@ -36,6 +37,23 @@ import {
 } from '../services/sessionMetadataProjection.js';
 
 const MetadataResponseSchema = z.object({ metadata: SessionMetadataDetailSchema });
+
+/**
+ * What a window open on the space holds of a conversation's name. A rename to
+ * the same text still moves the revision, and a window left holding the old
+ * one meets a 409 on its next rename.
+ */
+const DESCRIBED_FIELDS = [
+  'title',
+  'summary',
+  'revision',
+  'titleSource',
+  'editedByUserId',
+] as const satisfies ReadonlyArray<keyof SessionMetadata>;
+
+function describedChanged(before: SessionMetadata, after: SessionMetadata): boolean {
+  return DESCRIBED_FIELDS.some((field) => before[field] !== after[field]);
+}
 
 async function resolveRenameSpaceId(
   app: FastifyInstance,
@@ -192,14 +210,14 @@ export function registerSessionMetadataRoutes(fastify: FastifyInstance): void {
       }
 
       // Everyone in the space sees this room's name, so the space hears about
-      // it — not just the client that sent the rename — when the name it reads
-      // has changed. Best-effort for the same reason the background job's is:
-      // a name that arrives on the next refetch is late, not wrong.
-      const renamed =
+      // it — not just the client that sent the rename — whenever what it holds
+      // of the name changed. Best-effort for the same reason the background
+      // job's is: a name that arrives on the next refetch is late, not wrong.
+      const described =
         before === null ||
-        projectSessionMetadata(before).title !== projectSessionMetadata(stored).title;
+        describedChanged(projectSessionMetadata(before), projectSessionMetadata(stored));
       const redis = fastify.appContext.redis;
-      const spaceId = renamed
+      const spaceId = described
         ? await resolveRenameSpaceId(fastify, tenant.tenantId, sessionId)
         : null;
       if (redis && spaceId) {

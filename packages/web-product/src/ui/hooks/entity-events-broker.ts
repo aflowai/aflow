@@ -42,7 +42,10 @@ interface BrokerEntry {
   wsStatusUnsub: (() => void) | null;
   status: ConnectionStatus;
   events: EntityEventEnvelope[];
-  /** Last Redis stream id from the gateway `event.cursor` (not `event.eventId`). */
+  /**
+   * Last Redis stream id from the gateway — the `subscribed` cursor, then each
+   * `event.cursor` (never `event.eventId`).
+   */
   lastStreamCursor: string | null;
   refCount: number;
   shouldReconnect: boolean;
@@ -185,6 +188,12 @@ function connect(entry: BrokerEntry): void {
       ...(entry.lastStreamCursor !== null ? { cursor: entry.lastStreamCursor } : {}),
     },
     {
+      // A cursorless subscription is answered with the tail it starts from. A
+      // reconnect before any event arrives must name it, or what was appended
+      // between the two subscriptions is skipped.
+      onSubscribed: (streamCursor) => {
+        entry.lastStreamCursor = streamCursor;
+      },
       onEvent: (raw, streamCursor) => {
         const ev = raw as EntityEventEnvelope | null;
         if (!ev || typeof ev !== 'object' || typeof ev.eventId !== 'string') return;
