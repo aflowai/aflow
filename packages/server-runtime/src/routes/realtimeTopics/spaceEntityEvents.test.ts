@@ -28,6 +28,8 @@ const { appendEntityEvent, ENTITY_EVENTS_PUBSUB_CHANNEL } = await import('@aflow
 
 const TENANT_ID = '00000000-0000-0000-0000-000000000001' as TenantId;
 const SPACE_ID = '00000000-0000-0000-0000-0000000000a1';
+/** A cursor before every entry, for cases about draining what is already there. */
+const FROM_START = '0';
 
 function makeEvent(summary: string): EntityEventEnvelope {
   return {
@@ -106,12 +108,44 @@ describe('space.entity_events tail', () => {
     vi.useRealTimers();
   });
 
-  it('delivers the backlog present at subscribe time', async () => {
+  it('starts a subscription naming no cursor at the live tail', async () => {
+    for (let i = 0; i < 100; i++) await append(`backlog${String(i)}`);
+
+    const sink = makeSink();
+    const result = await subscribeTopic(sink.emit);
+    if (result.kind !== 'accepted') throw new Error('expected accepted');
+    expect(result.cursor).toBe('100-0');
+    void result.start?.();
+    await converge();
+    expect(sink.summaries()).toEqual([]);
+
+    await append('live');
+    await converge();
+
+    expect(sink.summaries()).toEqual(['live']);
+    await result.cleanup();
+  });
+
+  it('starts a subscription naming no cursor on an empty stream from its first event', async () => {
+    const sink = makeSink();
+    const result = await subscribeTopic(sink.emit);
+    if (result.kind !== 'accepted') throw new Error('expected accepted');
+    void result.start?.();
+    await converge();
+
+    await append('first');
+    await converge();
+
+    expect(sink.summaries()).toEqual(['first']);
+    await result.cleanup();
+  });
+
+  it('delivers the backlog after the cursor present at subscribe time', async () => {
     await append('e1');
     await append('e2');
 
     const sink = makeSink();
-    const result = await subscribeTopic(sink.emit);
+    const result = await subscribeTopic(sink.emit, FROM_START);
     if (result.kind !== 'accepted') throw new Error('expected accepted');
     void result.start?.();
     await converge();
@@ -138,7 +172,7 @@ describe('space.entity_events tail', () => {
     void result.start?.();
     await converge();
 
-    expect(sink.summaries()).toEqual(['before', 'during_subscribe']);
+    expect(sink.summaries()).toEqual(['during_subscribe']);
     await result.cleanup();
   });
 
@@ -146,7 +180,7 @@ describe('space.entity_events tail', () => {
     await append('e1');
 
     const sink = makeSink();
-    const result = await subscribeTopic(sink.emit);
+    const result = await subscribeTopic(sink.emit, FROM_START);
     if (result.kind !== 'accepted') throw new Error('expected accepted');
     void result.start?.();
     await converge();
@@ -180,7 +214,7 @@ describe('space.entity_events tail', () => {
     for (let i = 0; i < 620; i++) await append(`e${String(i)}`);
 
     const sink = makeSink();
-    const result = await subscribeTopic(sink.emit);
+    const result = await subscribeTopic(sink.emit, FROM_START);
     if (result.kind !== 'accepted') throw new Error('expected accepted');
     void result.start?.();
     await converge();
@@ -194,7 +228,7 @@ describe('space.entity_events tail', () => {
     await append('e1');
 
     const sink = makeSink();
-    const result = await subscribeTopic(sink.emit);
+    const result = await subscribeTopic(sink.emit, FROM_START);
     if (result.kind !== 'accepted') throw new Error('expected accepted');
     void result.start?.();
     await converge();
@@ -218,30 +252,25 @@ describe('space.entity_events tail', () => {
   it('resumes after the caller-supplied cursor without replaying it', async () => {
     await append('e1');
     await append('e2');
-
-    const first = makeSink();
-    const warm = await subscribeTopic(first.emit);
-    if (warm.kind !== 'accepted') throw new Error('expected accepted');
-    void warm.start?.();
-    await converge();
-    await warm.cleanup();
+    await append('e3');
 
     // The gateway hands back the last cursor the client acknowledged.
     const resumeCursor = '1-0';
     const sink = makeSink();
     const result = await subscribeTopic(sink.emit, resumeCursor);
     if (result.kind !== 'accepted') throw new Error('expected accepted');
+    expect(result.cursor).toBe(resumeCursor);
     void result.start?.();
     await converge();
 
-    expect(sink.summaries()).toEqual(['e2']);
+    expect(sink.summaries()).toEqual(['e2', 'e3']);
     await result.cleanup();
   });
 
   it('stops reading once the subscription is cleaned up', async () => {
     await append('e1');
     const sink = makeSink();
-    const result = await subscribeTopic(sink.emit);
+    const result = await subscribeTopic(sink.emit, FROM_START);
     if (result.kind !== 'accepted') throw new Error('expected accepted');
     void result.start?.();
     await converge();

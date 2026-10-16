@@ -501,6 +501,7 @@ export {
   appendEntityEvent,
   readEntityEvents,
   readEntityEventStreamEntries,
+  readEntityEventStreamTail,
   type EntityStreamEntry,
 } from './entityEvents.js';
 

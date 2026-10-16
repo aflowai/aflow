@@ -237,7 +237,9 @@ async function nameOneConversation(
   // gets a usable label within the debounce whether or not a model ever
   // answers — and if one never can, this is the label it keeps.
   const fallback = deriveFallbackSessionTitle(evidence.openingRequest);
+  let describedTitle = stored.title;
   if (fallback && stored.title === null) {
+    describedTitle = fallback;
     await applyGeneratedSessionMetadata(db, candidate.tenantId, candidate.sessionId, {
       title: fallback,
       titleState: 'fallback',
@@ -321,13 +323,14 @@ async function nameOneConversation(
   if (!(await sessionMetadataLeaseHeld(redis, candidate))) return 'deferred';
 
   const titleState = nextSessionTitleState(evidence.exchanges.length);
+  const title = work.title && generated.proposal.title ? generated.proposal.title : undefined;
+  const summary =
+    work.summary && generated.proposal.summary ? generated.proposal.summary : undefined;
   const applied = await applyGeneratedSessionMetadata(db, candidate.tenantId, candidate.sessionId, {
-    ...(work.title && generated.proposal.title
-      ? { title: generated.proposal.title, titleState }
-      : {}),
-    ...(work.summary && generated.proposal.summary
+    ...(title !== undefined ? { title, titleState } : {}),
+    ...(summary !== undefined
       ? {
-          summary: generated.proposal.summary,
+          summary,
           summaryCoverage: evidence.complete ? ('full' as const) : ('partial' as const),
         }
       : {}),
@@ -355,7 +358,13 @@ async function nameOneConversation(
     candidate.evidenceRevision,
     SESSION_METADATA_DEBOUNCE_MS,
   );
-  if (applied) await publishMetadataChanged(deps, stored.spaceId!, candidate);
+  // Every pass rewrites the provenance, but the space hears only about a name
+  // or summary it has not already been told: each event is a refetch of the
+  // conversation list in every window open on the space.
+  const described =
+    (title !== undefined && title !== describedTitle) ||
+    (summary !== undefined && summary !== stored.summary);
+  if (applied && described) await publishMetadataChanged(deps, stored.spaceId!, candidate);
   return 'done';
 }
 

@@ -30,6 +30,7 @@ import {
 import { BadRequestError, ForbiddenError } from '../lib/errors.js';
 import { assertSessionSpaceAccess, resolveSessionSpaceId } from '../lib/sessionSpaceAccess.js';
 import {
+  projectSessionMetadata,
   projectSessionMetadataDetail,
   UNPROJECTED_SESSION_METADATA,
 } from '../services/sessionMetadataProjection.js';
@@ -157,6 +158,7 @@ export function registerSessionMetadataRoutes(fastify: FastifyInstance): void {
         );
       }
 
+      const before = await readSessionMetadata(db, tenant.tenantId, sessionId);
       const result = await setManualSessionTitle(db, tenant.tenantId, sessionId, {
         title,
         editedByUserId: userId,
@@ -190,11 +192,16 @@ export function registerSessionMetadataRoutes(fastify: FastifyInstance): void {
       }
 
       // Everyone in the space sees this room's name, so the space hears about
-      // it — not just the client that sent the rename. Best-effort for the
-      // same reason the background job's is: a name that arrives on the next
-      // refetch is late, not wrong.
+      // it — not just the client that sent the rename — when the name it reads
+      // has changed. Best-effort for the same reason the background job's is:
+      // a name that arrives on the next refetch is late, not wrong.
+      const renamed =
+        before === null ||
+        projectSessionMetadata(before).title !== projectSessionMetadata(stored).title;
       const redis = fastify.appContext.redis;
-      const spaceId = await resolveRenameSpaceId(fastify, tenant.tenantId, sessionId);
+      const spaceId = renamed
+        ? await resolveRenameSpaceId(fastify, tenant.tenantId, sessionId)
+        : null;
       if (redis && spaceId) {
         try {
           await appendEntityEvent(redis, {

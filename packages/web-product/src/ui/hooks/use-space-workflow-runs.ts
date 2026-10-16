@@ -1,8 +1,9 @@
 'use client';
 
-import { useQueryClient, type QueryKey } from '@tanstack/react-query';
+import type { QueryKey } from '@tanstack/react-query';
 
 import { useApiQuery } from './useApiQuery.js';
+import { useCoalescedInvalidation } from './use-coalesced-invalidation.js';
 import { useSpaceEntityEventListener } from './use-space-entity-events.js';
 
 /** Mirrors the server `WorkflowRunSummarySchema` (Plan 228 §5.1). */
@@ -50,14 +51,15 @@ export interface UseSpaceWorkflowRunsResult {
  * history lazily on expand.
  *
  * Event-driven, not polled: the orchestrator emits `entity.run.updated` on run
- * create / pause / terminal transitions, and this hook invalidates on it.
+ * create / pause / terminal transitions, and this hook invalidates on it —
+ * once per burst, not once per event.
  */
 export function useSpaceWorkflowRuns(
   spaceId: string | null,
   opts?: { limit?: number },
 ): UseSpaceWorkflowRunsResult {
   const limit = opts?.limit ?? 50;
-  const queryClient = useQueryClient();
+  const invalidate = useCoalescedInvalidation();
 
   const query = useApiQuery<SpaceWorkflowRunsPayload>({
     key: spaceId ? spaceWorkflowRunsKey(spaceId) : ['space', '__none__', 'workflow-runs', 'active'],
@@ -68,10 +70,10 @@ export function useSpaceWorkflowRuns(
   });
 
   // Invalidate on a run-lifecycle entity event (create / pause / resume /
-  // terminal — see emitRunUpdated) or a runner/procedure task event. Per-event,
-  // so a run transition can't be shadowed by a later unrelated event arriving
-  // in the same render pass. The event's slug also refreshes that skill's
-  // lazily-loaded run history, which has no live channel of its own.
+  // terminal — see emitRunUpdated) or a runner/procedure task event. Read per
+  // event, so a run transition can't be shadowed by a later unrelated event
+  // arriving in the same render pass. The event's slug also refreshes that
+  // skill's lazily-loaded run history, which has no live channel of its own.
   useSpaceEntityEventListener(spaceId, (event) => {
     if (!spaceId) return;
     const type = event.eventType;
@@ -82,11 +84,9 @@ export function useSpaceWorkflowRuns(
     ) {
       return;
     }
-    void queryClient.invalidateQueries({ queryKey: spaceWorkflowRunsKey(spaceId) });
+    invalidate(spaceWorkflowRunsKey(spaceId));
     if (typeof event.workflowSlug === 'string' && event.workflowSlug.length > 0) {
-      void queryClient.invalidateQueries({
-        queryKey: ['space', spaceId, 'workflow', event.workflowSlug, 'runs'],
-      });
+      invalidate(['space', spaceId, 'workflow', event.workflowSlug, 'runs']);
     }
   });
 

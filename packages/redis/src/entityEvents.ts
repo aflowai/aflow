@@ -221,6 +221,20 @@ export async function readEntityEvents(
   return { events, lastId };
 }
 
+/**
+ * The stream id of the space's newest entity event, as a cursor that reads
+ * only what is appended after it. An empty stream answers `'0'`, which every
+ * later entry follows.
+ */
+export async function readEntityEventStreamTail(
+  redis: Redis,
+  params: { tenantId: string; spaceId: string },
+): Promise<string> {
+  const streamKey = ENTITY_EVENTS_STREAM_KEY(params.tenantId, params.spaceId);
+  const [newest] = await redis.xrevrange(streamKey, '+', '-', 'COUNT', 1);
+  return newest?.[0] ?? '0';
+}
+
 /** One entry from the entity event stream with its Redis stream ID (for SSE resume). */
 export interface EntityStreamEntry {
   streamId: string;
