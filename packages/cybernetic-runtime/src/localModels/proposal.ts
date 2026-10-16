@@ -1,9 +1,10 @@
 /**
  * The approval request for a change Helmsman proposes to the runtime (Plan 323
  * D10). Built from one diagnosis, when the change is asked for and again when
- * an approved change is about to run: the hash covers the impact, so an
- * approval acts only on the impact its card showed, and a change whose impact
- * moved since asks again.
+ * an approved change is about to run: the hash covers what the change ends —
+ * the requests in flight, the asking conversation's model — so an approval
+ * acts only on the impact its card showed, and a change whose impact moved
+ * since asks again.
  */
 import { eq } from 'drizzle-orm';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
@@ -116,6 +117,14 @@ export function localRuntimeChangeRequest(input: {
     ...(model ? { modelName: model.displayName } : {}),
     runtimeUrl: diagnostics.runtime.baseUrl,
     impact,
-    requestHash: stableHash({ operationId: input.operationId, change, impact }),
+    // The figures in the notes move by the second — free disk, a loaded
+    // model's growing cache — so they inform the card and stay out of the
+    // hash, or an approved change would never find the request it approved.
+    requestHash: stableHash({
+      operationId: input.operationId,
+      change,
+      inFlightRequests: impact.inFlightRequests,
+      ownConversationReloads: impact.ownConversationReloads,
+    }),
   };
 }

@@ -428,12 +428,11 @@ _Built:_
 - **Runners and skills:** `isLocalModelOperation` is in `isRunnerExcludedOperation`, and a skill referencing one is invalid (`skill_references_local_model_op`).
 - **The change's input** is `LocalRuntimeChangeSchema`: `pull`, `delete`, `warm`, `unload`, `set_context`. A role's model is not among them, because it is the space's setting written through the space update. Helmsman says so rather than proposing it.
 - **The approval:** a third approval target, `local_model`, carried through the payload, `blockedOn`, the Action Center extension and card, and the chat's waiting notice.
-- **The request** is built from a fresh diagnosis each time the step runs (`localRuntimeChangeRequest`). Its hash covers the change and its impact:
+- **The request** is built from a fresh diagnosis each time the step runs (`localRuntimeChangeRequest`). Its hash covers the change and what it ends:
   - the requests in flight on the runtime that an unload or delete ends (`countRuntimeRequests`, the admission leases held now);
-  - whether the asking conversation's model is the one changed;
-  - the change's figures (download size against free disk, memory at the window, what an unload frees).
+  - whether the asking conversation's model is the one changed.
 
-  An approved change whose impact moved since its card was shown therefore finds no grant for its new hash and parks again with the new impact.
+  An approved change whose impact moved since its card was shown therefore finds no grant for its new hash and parks again with the new impact. The change's figures (download size against free disk, memory at the window, what an unload frees) are on the card and stay out of the hash: they move by the second, and in the hash an approved change would never find the request it approved.
 
 - **Spending the approval:** an approval lets one change through. It is spent with `spendWriteApprovalGrant`, now the one spend for every target. Its key family, `aflow:approval-spent:`, sits outside the grant family the host executor may only read, and the host's ACL may write it. The same request asked again names the spent decision (`decidedBefore`), and the orchestrator honours that for every target but the API one.
 - **On the asking conversation:** a turn does not hold the runtime while its tool runs, so unloading the model Helmsman runs on ends no turn. Its card says the conversation's next turn loads the model again, and names any other requests the change ends.
