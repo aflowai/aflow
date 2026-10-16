@@ -584,6 +584,19 @@ async function mirrorInstallation(
 }
 
 /**
+ * The installations from a repository's top level down to the folder at
+ * `prefix` in it, the folder's own excluded, as paths from the top level.
+ */
+function installationsAbove(prefix: string): string[] {
+  const above = prefix === '' ? [] : prefix.split(sep);
+  const installations: string[] = [];
+  for (let depth = 0; depth < above.length; depth += 1) {
+    installations.push(join(...above.slice(0, depth), DEPENDENCY_DIR));
+  }
+  return installations;
+}
+
+/**
  * Point the checkout at the operator's installed dependencies.
  *
  * Links rather than copies: an installation is gigabytes and is identical to
@@ -606,11 +619,7 @@ async function linkDependencies(top: string, checkout: Checkout): Promise<void> 
   }
   const context: MirrorContext = { rootReal, worktreePath: checkout.path };
   const prefix = relativePath(checkout.path, checkout.workDir);
-  const above = prefix === '' ? [] : prefix.split(sep);
-  const installations: string[] = [];
-  for (let depth = 0; depth < above.length; depth += 1) {
-    installations.push(join(...above.slice(0, depth), DEPENDENCY_DIR));
-  }
+  const installations = installationsAbove(prefix);
   for (const relative of await dependencyDirs(join(top, prefix))) {
     installations.push(join(prefix, relative));
   }
@@ -713,6 +722,30 @@ export async function isGitRepository(root: string): Promise<boolean> {
  */
 export async function folderPrefix(root: string): Promise<string> {
   return (await git(root, ['rev-parse', '--show-prefix'])).trim().replace(/\/$/, '');
+}
+
+/**
+ * What a run in a checkout of the folder at `root` reads outside that folder,
+ * for the sandbox to grant read of (`SandboxWidening.borrowedReads`).
+ *
+ * Nothing for a repository's top level, whose object store and installations
+ * are inside the folder. For a folder inside a repository: the repository's
+ * object store, which the clone owns no object of and borrows every one from
+ * (`clonePrivately`), and each installation on the way up to the top level
+ * that exists, which the clone's mirrored links lead into (`linkDependencies`).
+ * Read from the folder, never from the checkout, which the run writes.
+ */
+export async function borrowedReads(root: string): Promise<string[]> {
+  const prefix = await folderPrefix(root);
+  if (prefix === '') return [];
+  const top = (await git(root, ['rev-parse', '--show-toplevel'])).trim();
+  const objects = await gitPath(root, 'objects');
+  const reads = [await realpath(objects).catch(() => objects)];
+  for (const relative of installationsAbove(prefix)) {
+    const installation = join(top, relative);
+    if ((await lstat(installation).catch(() => undefined)) !== undefined) reads.push(installation);
+  }
+  return reads;
 }
 
 export interface PrepareWorktreeOptions {
@@ -1112,47 +1145,6 @@ export async function removeWorktree(worktreePath: string): Promise<void> {
   const gitDir = checkoutGitDir(worktreePath);
   if (await isRealDirectory(gitDir)) {
     await rm(gitDir, { recursive: true, force: true }).catch(() => {});
-  }
-}
-
-export interface LinkedWorktree {
-  readonly path: string;
-  /** No branch is checked out in it. */
-  readonly detached: boolean;
-}
-
-/**
- * Every checkout added to the repository, without its main one.
- *
- * Read from git rather than from disk: a checkout whose directory is gone is
- * still registered, and the registration is what the operator sees.
- */
-export async function linkedWorktrees(root: string): Promise<LinkedWorktree[]> {
-  const listing = await git(root, ['worktree', 'list', '--porcelain'], APPLY_OUTPUT_CAP_BYTES);
-  return listing
-    .split(/\n\n+/)
-    .map((block) => block.split('\n'))
-    .filter((lines) => lines[0]?.startsWith('worktree ') === true)
-    .map((lines) => ({
-      path: (lines[0] ?? '').slice('worktree '.length),
-      detached: lines.includes('detached'),
-    }))
-    .slice(1);
-}
-
-/**
- * Take a checkout added to the repository at `root` off it, files and
- * registration both. A path that is a link is refused: git added a directory
- * there, so a link in its place was put there since, and is not walked.
- */
-export async function removeLinkedWorktree(root: string, worktreePath: string): Promise<boolean> {
-  const info = await lstat(worktreePath).catch(() => undefined);
-  if (info !== undefined && !info.isDirectory()) return false;
-  try {
-    await git(root, ['worktree', 'remove', '--force', worktreePath]);
-    return true;
-  } catch {
-    return false;
   }
 }
 

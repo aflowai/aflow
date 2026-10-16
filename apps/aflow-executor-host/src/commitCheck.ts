@@ -31,7 +31,13 @@ import { formatMinutes } from './folderChecks.js';
 import { runUnderFolderPosture } from './folderRun.js';
 import type { SandboxedRunResult } from './sandboxedRun.js';
 import { sandboxPostureOf } from './sandboxPosture.js';
-import { NO_REPLACE_OBJECTS_ENV, prepareWorktree, removeWorktree } from './worktree.js';
+import { checkoutWidening } from './sandboxPolicy.js';
+import {
+  borrowedReads,
+  NO_REPLACE_OBJECTS_ENV,
+  prepareWorktree,
+  removeWorktree,
+} from './worktree.js';
 
 type HostCommitCheckOutput = z.infer<typeof HostCommitCheckOutputSchema>;
 
@@ -242,9 +248,7 @@ export async function runFolderChecks(input: FolderCheckInput): Promise<FolderCh
       widening: {
         authPaths: [],
         allowedDomains: [],
-        writableRoot: worktree.workDir,
-        gitDir: worktree.gitDir,
-        withholdBindingWrite: true,
+        ...checkoutWidening(worktree, await borrowedReads(input.binding.root)),
       },
       toolPaths: input.toolPaths,
       idPrefix: 'hc',

@@ -16,6 +16,7 @@ import {
   type BaseMerge,
 } from './baseMerge.js';
 import { makeScratch } from './executorScratch.js';
+import { noPublicationGitMessage, publicationGitReadiness } from './gitReadiness.js';
 import {
   APPLY_OUTPUT_CAP_BYTES,
   applyPatch,
@@ -274,6 +275,12 @@ export async function commitPatchOnBranch(
   } = {},
 ): Promise<PatchCommitOutcome> {
   const { pushBaseSha } = options;
+  // `fetchFromClone` below is what needs the floor; asked first, so a git
+  // without the flag is refused before a clone and a commit are made for nothing.
+  const gitReadiness = await publicationGitReadiness();
+  if (!gitReadiness.ready) {
+    throw new WorktreeError(noPublicationGitMessage(gitReadiness.missing), 'git_failed');
+  }
   const target = await commitTarget(root, branch, options.baseSha);
   const mergeFrom = await mergeSource(root, branch, target, options.mergeFrom);
 

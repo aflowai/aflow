@@ -298,6 +298,8 @@ describe('host.commit.check — a passing check', () => {
       allowedDomains: [],
       writableRoot: input?.cwd,
       gitDir: checkoutGitDir(input?.cwd ?? ''),
+      // A repository's top level borrows nothing from outside the folder.
+      borrowedReads: [],
       withholdBindingWrite: true,
     });
     expect(input?.trustedEnv).toMatchObject({

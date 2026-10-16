@@ -1,17 +1,18 @@
 /**
- * The git a commission needs on this machine.
+ * The git a publication needs on this machine.
  *
- * A commission's change reaches the folder by the executor's git fetching the
- * commit it made from its clone with `--no-write-fetch-head` (`branchCommit.ts`),
- * so the FETCH_HEAD another fetch is about to read is never overwritten. Git
- * 2.29 is the first release with that flag; below it the publication of every
- * commission fails, so the commission is refused before it runs.
+ * A publication's commit reaches the folder by the executor's git fetching it
+ * from the clone it was made in with `--no-write-fetch-head`
+ * (`commitPatchOnBranch`), so the FETCH_HEAD another fetch is about to read is
+ * never overwritten. Git 2.29 is the first release with that flag; below it the
+ * fetch fails, so the publication is refused before it makes anything. Nothing
+ * else the lane runs needs the flag, so nothing else is refused for it.
  */
 import { gitVersionText } from './worktree.js';
 
 const GIT_VERSION_TIMEOUT_MS = 10_000;
 
-export const COMMISSION_MIN_GIT_VERSION = { major: 2, minor: 29 } as const;
+export const PUBLICATION_MIN_GIT_VERSION = { major: 2, minor: 29 } as const;
 
 export interface GitVersion {
   readonly major: number;
@@ -31,14 +32,14 @@ export function parseGitVersion(text: string): GitVersion | undefined {
 }
 
 export function fetchesWithoutFetchHead(version: GitVersion): boolean {
-  const floor = COMMISSION_MIN_GIT_VERSION;
+  const floor = PUBLICATION_MIN_GIT_VERSION;
   return (
     version.major > floor.major || (version.major === floor.major && version.minor >= floor.minor)
   );
 }
 
-export function commissionGitMissing(versionText: string | undefined): string[] {
-  const needed = `${String(COMMISSION_MIN_GIT_VERSION.major)}.${String(COMMISSION_MIN_GIT_VERSION.minor)}`;
+export function publicationGitMissing(versionText: string | undefined): string[] {
+  const needed = `${String(PUBLICATION_MIN_GIT_VERSION.major)}.${String(PUBLICATION_MIN_GIT_VERSION.minor)}`;
   if (versionText === undefined) {
     return [`git ${needed} or later — this machine's git did not report a version`];
   }
@@ -50,20 +51,20 @@ export function commissionGitMissing(versionText: string | undefined): string[] 
   const found = `${String(version.major)}.${String(version.minor)}.${String(version.patch)}`;
   return [
     `git ${needed} or later — this machine has ${found}, whose \`git fetch\` has no ` +
-      '`--no-write-fetch-head`, so the commit a commission makes could not be brought into the folder',
+      '`--no-write-fetch-head`, so a commit made in a clone could not be brought into the folder',
   ];
 }
 
 /** The git the executor runs on its own `PATH`, which is the one that publishes. */
-export async function commissionGitReadiness(): Promise<{ ready: boolean; missing: string[] }> {
-  const missing = commissionGitMissing(await gitVersionText(GIT_VERSION_TIMEOUT_MS));
+export async function publicationGitReadiness(): Promise<{ ready: boolean; missing: string[] }> {
+  const missing = publicationGitMissing(await gitVersionText(GIT_VERSION_TIMEOUT_MS));
   return { ready: missing.length === 0, missing };
 }
 
-export function noCommissionGitMessage(missing: readonly string[]): string {
+export function noPublicationGitMessage(missing: readonly string[]): string {
   return (
-    "This machine's git cannot bring a commission's commit into the folder, so a commission " +
-    'cannot run here.' +
+    "This machine's git cannot bring a commit made in a clone into the folder, so nothing " +
+    'can be published here.' +
     (missing.length > 0 ? ` Missing: ${missing.join('; ')}.` : '')
   );
 }
