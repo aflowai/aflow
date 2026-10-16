@@ -431,7 +431,14 @@ describe('host.commit.check — the receipt it leaves for the push', () => {
     const { captured } = await check(world);
     const { receipt } = HostCommitCheckOutputSchema.parse(captured.output);
     expect(receipt).toBeDefined();
-    const pushed = { bindingId: 'hb_app', sha: world.sha, base: world.base, receipt, ...sameBase };
+    const pushed = {
+      bindingId: 'hb_app',
+      branch: 'aflow/x',
+      sha: world.sha,
+      base: world.base,
+      receipt,
+      ...sameBase,
+    };
     await expect(requireCheckedPush({ ...pushed, argv: REPORTING, posture: 'open' })).resolves.toBe(
       'open',
     );
@@ -445,6 +452,7 @@ describe('host.commit.check — the receipt it leaves for the push', () => {
     await expect(
       requireCheckedPush({
         bindingId: 'hb_app',
+        branch: 'aflow/x',
         sha: world.sha,
         base: world.base,
         argv: FAILING,
@@ -464,7 +472,13 @@ describe('host.commit.check — the receipt it leaves for the push', () => {
       expect(handed.map((input) => input.posture)).toEqual([sandbox]);
       expect(output.sandbox).toBe(sandbox);
       expect(JSON.parse(receiptBody(output.receipt ?? '')) as unknown[]).toContain(sandbox);
-      const pushed = { bindingId: 'hb_app', sha: world.sha, base: world.base, ...sameBase };
+      const pushed = {
+        bindingId: 'hb_app',
+        branch: 'aflow/x',
+        sha: world.sha,
+        base: world.base,
+        ...sameBase,
+      };
       await expect(
         requireCheckedPush({
           ...pushed,
@@ -490,6 +504,7 @@ describe('host.commit.check — the receipt it leaves for the push', () => {
       const { receipt } = HostCommitCheckOutputSchema.parse(captured.output);
       const push = {
         bindingId: 'hb_app',
+        branch: 'aflow/x',
         sha: world.sha,
         base: world.base,
         argv: REPORTING,
@@ -542,6 +557,7 @@ describe('host.commit.check — the receipt it leaves for the push', () => {
     await expect(
       requireCheckedPush({
         bindingId: 'hb_app',
+        branch: 'aflow/x',
         sha: world.sha,
         base: world.base,
         argv: reportingSkipped(10),

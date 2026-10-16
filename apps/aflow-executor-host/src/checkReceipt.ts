@@ -158,6 +158,8 @@ export interface PushUnderCheck {
 export async function requireCheckedPush(
   push: PushUnderCheck & {
     readonly bindingId: string;
+    /** The branch the push publishes, as a person names it. */
+    readonly branch: string;
     /** The source of the push's one refspec, as a full sha. */
     readonly sha: string;
     /** Where `origin/<pushBase>` is now, as a full sha. */
@@ -178,9 +180,12 @@ export async function requireCheckedPush(
   }
   const command = `\`${argv.join(' ')}\``;
   const short = push.sha.slice(0, SHORT_SHA_LENGTH);
+  // The check is the publication's to run and the agent reading this is
+  // refused its promotion, so the remedy is the publication, which checks what
+  // it sends.
   const checkAgain =
-    `Nothing was pushed. Run the folder's checks on \`${push.sha}\` against \`${push.base}\` ` +
-    'with `host.commit.check`, and push with the receipt it returns once they pass.';
+    `Nothing was pushed. Publish \`${push.branch}\` again as it stands, so the folder's ` +
+    `checks run on \`${push.sha}\` against \`${push.base}\`.`;
   if (push.receipt === undefined) {
     throw new CheckReceiptError(
       `\`${bindingId}\` declares checks, ${command}, and this push carries no check receipt, ` +
@@ -242,7 +247,9 @@ export async function requireCheckedPush(
   if (receipt.outcome !== 'passed') {
     throw new CheckReceiptError(
       `The checks of \`${bindingId}\`, ${command}, failed on ${short}, and a commit is pushed ` +
-        `only once they pass on it. ${checkAgain}`,
+        `only once they pass on it. Nothing was pushed. ` +
+        `Commission the fix onto \`${push.branch}\` and publish again — the publication runs ` +
+        'the checks on what it sends.',
       'check_failed',
     );
   }

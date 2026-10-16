@@ -181,17 +181,29 @@ interface ScannedRange {
   readonly rescanned: boolean;
 }
 
-function scanAgain(pushBase: string): string {
+/**
+ * The remedy for a push its receipt does not cover. The scan is the
+ * publication's to run and the agent reading this is refused its promotion, so
+ * the remedy is the publication, which scans what it sends.
+ */
+function scanAgain(pushBase: string, refspecs: readonly string[]): string {
   return (
-    `Nothing was pushed. Scan the range the push sends — from where \`origin/${pushBase}\` ` +
-    'is now to the commit it pushes — with `host.commit.scan`, and push with the receipt it ' +
-    'returns.'
+    `Nothing was pushed. Publish ${publishedBranch(refspecs)} again as it stands, so what it ` +
+    `sends is scanned from where \`origin/${pushBase}\` is now.`
   );
 }
 
 /** The branch a refspec's destination names, as a person names it. */
 function destinationBranch(refspec: string): string {
   return refspec.slice(refspec.indexOf(':') + 1).replace(/^refs\/heads\//, '');
+}
+
+/** The branch a push publishes, named where it sends one. */
+function publishedBranch(refspecs: readonly string[]): string {
+  const [refspec, ...more] = refspecs;
+  return refspec !== undefined && more.length === 0
+    ? `\`${destinationBranch(refspec)}\``
+    : 'the branch';
 }
 
 /**
@@ -292,7 +304,7 @@ export async function requireScannedPush(
   if (receipt === undefined) {
     throw new ScanReceiptError(
       'This push carries no scan receipt, so nothing says what it sends was read for secrets. ' +
-        scanAgain(pushBase),
+        scanAgain(pushBase, push.refspecs),
       'no_receipt',
     );
   }
@@ -301,7 +313,7 @@ export async function requireScannedPush(
   if (claimed === undefined) {
     throw new ScanReceiptError(
       'This push carries a scan receipt that names no folder and range, so nothing says it ' +
-        `sends what a scan read. ${scanAgain(pushBase)}`,
+        `sends what a scan read. ${scanAgain(pushBase, push.refspecs)}`,
       'not_issued_here',
     );
   }
@@ -309,7 +321,7 @@ export async function requireScannedPush(
   if (claimed.bindingId !== bindingId) {
     throw new ScanReceiptError(
       `This push carries the receipt for a scan of \`${claimed.bindingId}\`, and pushes from ` +
-        `\`${bindingId}\`. ${scanAgain(pushBase)}`,
+        `\`${bindingId}\`. ${scanAgain(pushBase, push.refspecs)}`,
       'other_folder',
     );
   }
@@ -319,7 +331,7 @@ export async function requireScannedPush(
     throw new ScanReceiptError(
       `This push sends ${push.sources.map((s) => `\`${s}\``).join(', ')}, and its receipt is ` +
         `for a scan of ${scanned}: a push sends the one commit its scan ended at, named by ` +
-        `that commit's sha as the source of its one refspec. ${scanAgain(pushBase)}`,
+        `that commit's sha as the source of its one refspec. ${scanAgain(pushBase, push.refspecs)}`,
       'other_range',
     );
   }
@@ -333,6 +345,7 @@ export async function requireScannedPush(
   const checkedUnder = await requireCheckedPush(
     {
       bindingId,
+      branch: destinationBranch(refspec),
       sha: claimed.sha,
       base: sent.base,
       baseHolds: (base) => push.history.holds(sent.base, base),
