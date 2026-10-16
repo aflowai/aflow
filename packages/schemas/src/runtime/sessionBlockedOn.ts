@@ -14,7 +14,7 @@ export const OAuthConsentReasonSchema = z.enum(['never_connected', 'expired']);
 export type OAuthConsentReason = z.infer<typeof OAuthConsentReasonSchema>;
 
 /**
- * A step parked on an operator's approval. The two variants mirror the
+ * A step parked on an operator's approval. The variants mirror the
  * approval payload's (`target`), so a surface says what is waiting without
  * reading the payload.
  */
@@ -44,6 +44,16 @@ const NeedsWriteApprovalSchema = z.discriminatedUnion('target', [
     elementRole: z.string(),
     elementName: z.string().optional(),
     /** Binds the pending decision to the exact action. */
+    requestHash: z.string(),
+  }),
+  z.object({
+    kind: z.literal('needs_write_approval'),
+    target: z.literal('local_model'),
+    /** The paused step awaiting a human approval of a change to the model runtime. */
+    stepExecutionId: z.string(),
+    action: z.string(),
+    modelName: z.string().optional(),
+    /** Binds the pending decision to the exact change and its impact. */
     requestHash: z.string(),
   }),
 ]);

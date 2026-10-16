@@ -6,8 +6,10 @@ import type {
   ActionCenterItem,
   ApiWriteApprovalExtension,
   BrowserWriteApprovalExtension,
+  LocalModelWriteApprovalExtension,
   WriteApprovalExtension,
 } from '../../hooks/use-action-center-types.js';
+import { localModelChangePhrase } from '@aflow/schemas';
 import type { ActionCenterResolution } from '../../hooks/use-action-center.js';
 import { useApiQuery } from '../../hooks/useApiQuery.js';
 import { decodeInlinePayload, isInlinePayloadRef } from '../../lib/fetch-payload.js';
@@ -76,14 +78,18 @@ export function WriteApprovalCard({
                 {TIER_BADGE[extension.writeRiskTier].label}
               </Badge>
             ) : (
-              <Badge variant="neutral">browser</Badge>
+              <Badge variant="neutral">
+                {extension.target === 'browser' ? 'browser' : 'this computer'}
+              </Badge>
             )}
           </Row>
 
           {extension.target === 'api' ? (
             <ApiCallDetail extension={extension} />
-          ) : (
+          ) : extension.target === 'browser' ? (
             <BrowserActionDetail extension={extension} />
+          ) : (
+            <LocalModelChangeDetail extension={extension} />
           )}
 
           {errorMessage && (
@@ -206,6 +212,37 @@ function BrowserActionDetail({
       </Text>
 
       {extension.screenshotRef && <PageScreenshot payloadRef={extension.screenshotRef} />}
+    </>
+  );
+}
+
+function LocalModelChangeDetail({
+  extension,
+}: {
+  extension: LocalModelWriteApprovalExtension;
+}): ReactElement {
+  const { impact } = extension;
+  return (
+    <>
+      <Text size="sm">
+        {localModelChangePhrase(extension)} on {extension.runtimeUrl}
+      </Text>
+      {impact.notes.map((note) => (
+        <Text key={note} size="sm" variant="muted">
+          {note}
+        </Text>
+      ))}
+      {impact.inFlightRequests > 0 && (
+        <Text size="sm" weight="medium">
+          Ends the {impact.inFlightRequests} model request
+          {impact.inFlightRequests === 1 ? '' : 's'} running on it now.
+        </Text>
+      )}
+      {impact.ownConversationReloads && (
+        <Text size="sm" variant="muted">
+          This conversation runs on it, so its next turn loads it again — up to a minute.
+        </Text>
+      )}
     </>
   );
 }

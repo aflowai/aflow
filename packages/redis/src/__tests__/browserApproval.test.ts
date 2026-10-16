@@ -2,14 +2,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import Redis from 'ioredis-mock';
 import type { Redis as RedisType } from 'ioredis';
 
+import { browserAskKey, readBrowserAsk, rememberBrowserAsk } from '../browserApproval.js';
 import {
-  browserApprovalSpentKey,
-  browserAskKey,
-  readBrowserAsk,
-  rememberBrowserAsk,
-  spendBrowserApproval,
-} from '../browserApproval.js';
-import { setWriteApprovalGrant, writeApprovalGrantKey } from '../writeApproval.js';
+  setWriteApprovalGrant,
+  spendWriteApprovalGrant,
+  writeApprovalGrantKey,
+  writeApprovalSpentKey,
+} from '../writeApproval.js';
 
 const TENANT = '00000000-0000-0000-0000-000000000001';
 const RUN = 'run-1';
@@ -28,12 +27,12 @@ afterEach(() => {
 describe('a browser approval', () => {
   it('is spent once, and a later approval of the same request is a new one to spend', async () => {
     const first = { requestHash: 'h1', decidedAt: '2026-10-04T12:00:00.000Z' };
-    expect(await spendBrowserApproval(redis, TENANT, RUN, first)).toBe(true);
-    expect(await spendBrowserApproval(redis, TENANT, RUN, first)).toBe(false);
+    expect(await spendWriteApprovalGrant(redis, TENANT, RUN, first)).toBe(true);
+    expect(await spendWriteApprovalGrant(redis, TENANT, RUN, first)).toBe(false);
 
     const second = { ...first, decidedAt: '2026-10-04T12:05:00.000Z' };
-    expect(await spendBrowserApproval(redis, TENANT, RUN, second)).toBe(true);
-    expect(await spendBrowserApproval(redis, 'other-tenant', RUN, first)).toBe(true);
+    expect(await spendWriteApprovalGrant(redis, TENANT, RUN, second)).toBe(true);
+    expect(await spendWriteApprovalGrant(redis, 'other-tenant', RUN, first)).toBe(true);
   });
 
   it('outlives the grant it marks', async () => {
@@ -42,13 +41,13 @@ describe('a browser approval', () => {
       decision: 'approved',
       decidedAt: '2026-10-04T12:00:00.000Z',
     });
-    await spendBrowserApproval(redis, TENANT, RUN, {
+    await spendWriteApprovalGrant(redis, TENANT, RUN, {
       requestHash: 'h1',
       decidedAt: '2026-10-04T12:00:00.000Z',
     });
     const grantTtl = await redis.ttl(writeApprovalGrantKey(TENANT, RUN, 'h1'));
     const spentTtl = await redis.ttl(
-      browserApprovalSpentKey(TENANT, RUN, {
+      writeApprovalSpentKey(TENANT, RUN, {
         requestHash: 'h1',
         decidedAt: '2026-10-04T12:00:00.000Z',
       }),
@@ -65,10 +64,10 @@ describe('a browser approval', () => {
   it('keeps its records outside the grant family the host identity may only read', () => {
     for (const key of [
       browserAskKey(TENANT, RUN, 'call-1'),
-      browserApprovalSpentKey(TENANT, RUN, { requestHash: 'h1' }),
+      writeApprovalSpentKey(TENANT, RUN, { requestHash: 'h1' }),
     ]) {
-      expect(key.startsWith('aflow:browser-ask:')).toBe(true);
+      expect(key.startsWith('aflow:write-approval:')).toBe(false);
     }
-    expect(writeApprovalGrantKey(TENANT, RUN, 'h1').startsWith('aflow:browser-ask:')).toBe(false);
+    expect(writeApprovalGrantKey(TENANT, RUN, 'h1').startsWith('aflow:write-approval:')).toBe(true);
   });
 });

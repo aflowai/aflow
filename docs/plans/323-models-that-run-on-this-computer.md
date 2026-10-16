@@ -419,6 +419,27 @@ _Proof:_
 - a card for unloading the model the asking session runs on names that session among the runs it would end;
 - an approved unload whose affected runs changed after approval parks again with the new impact.
 
+_Built:_
+
+- **Operations:** `model.runtime.status` (read) and `model.runtime.change` (write), in a `model` step type whose lane is composed only in the local edition (`isStepTypeComposed`). A hosted Helmsman's catalog does not carry them, in the same way it lacks `host.*` and `browser.*`.
+- **Where they run:** inline in the orchestrator, reaching the runtime through the same `@aflow/cybernetic-runtime` `localModels` code as the operator's routes.
+- **Capabilities:** the group is `model.runtime`, its bundle is `local_models` (on demand), and migration 220 grants it to the system profiles (read and write to every authoring profile, read to Read Only).
+- **Helmsman's surface:** both operations are discoverable, and the status read is pinned on the local edition.
+- **Runners and skills:** `isLocalModelOperation` is in `isRunnerExcludedOperation`, and a skill referencing one is invalid (`skill_references_local_model_op`).
+- **The change's input** is `LocalRuntimeChangeSchema`: `pull`, `delete`, `warm`, `unload`, `set_context`. A role's model is not among them, because it is the space's setting written through the space update. Helmsman says so rather than proposing it.
+- **The approval:** a third approval target, `local_model`, carried through the payload, `blockedOn`, the Action Center extension and card, and the chat's waiting notice.
+- **The request** is built from a fresh diagnosis each time the step runs (`localRuntimeChangeRequest`). Its hash covers the change and its impact:
+  - the requests in flight on the runtime that an unload or delete ends (`countRuntimeRequests`, the admission leases held now);
+  - whether the asking conversation's model is the one changed;
+  - the change's figures (download size against free disk, memory at the window, what an unload frees).
+
+  An approved change whose impact moved since its card was shown therefore finds no grant for its new hash and parks again with the new impact.
+
+- **Spending the approval:** an approval lets one change through. It is spent with `spendWriteApprovalGrant`, now the one spend for every target. Its key family, `aflow:approval-spent:`, sits outside the grant family the host executor may only read, and the host's ACL may write it. The same request asked again names the spent decision (`decidedBefore`), and the orchestrator honours that for every target but the API one.
+- **On the asking conversation:** a turn does not hold the runtime while its tool runs, so unloading the model Helmsman runs on ends no turn. Its card says the conversation's next turn loads the model again, and names any other requests the change ends.
+
+_Not built:_ issue codes and remedies on local-model tool errors. A local model failing an agent's own turn fails that turn, not a tool call it could read, so this waits for an operation that calls a local model as a tool.
+
 ### P4 — The appliance (D11)
 
 **Build:**

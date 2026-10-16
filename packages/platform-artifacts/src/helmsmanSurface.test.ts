@@ -35,7 +35,7 @@ const APPLIANCE: ComposedLanes = {
 };
 
 describe('composeHelmsmanSurface', () => {
-  it('returns the registry default unchanged for a hosted edition composing every lane', () => {
+  it('returns the registry default for a hosted edition composing every lane, less the models on this computer', () => {
     const authored = registryDefaults();
     const composed = composeHelmsmanSurface(authored, {
       ...HOSTED,
@@ -44,7 +44,9 @@ describe('composeHelmsmanSurface', () => {
     });
 
     expect(composed.coreOperations).toEqual([...authored.coreOperations]);
-    expect(composed.promotableOperations).toEqual([...HELMSMAN_DISCOVERY_PRESET]);
+    expect(composed.promotableOperations).toEqual(
+      HELMSMAN_DISCOVERY_PRESET.filter((op) => !op.startsWith('model.')),
+    );
   });
 
   it('drops only the machine operations from the hosted ceiling while no machine is paired', () => {
@@ -54,7 +56,7 @@ describe('composeHelmsmanSurface', () => {
     expect(composed.coreOperations).toEqual([...authored.coreOperations]);
     expect(composed.promotableOperations).toEqual(
       authored.promotableOperations.filter(
-        (op) => !op.startsWith('host.') && !op.startsWith('browser.'),
+        (op) => !op.startsWith('host.') && !op.startsWith('browser.') && !op.startsWith('model.'),
       ),
     );
     expect(authored.promotableOperations.some((op) => op.startsWith('host.'))).toBe(true);
@@ -72,7 +74,7 @@ describe('composeHelmsmanSurface', () => {
     expect(authored.promotableOperations.some((op) => op.startsWith('code.'))).toBe(true);
   });
 
-  it('pins the machine reads, the harness and opening a page on the local edition', () => {
+  it('pins the machine reads, the harness, opening a page and the model runtime’s status on the local edition', () => {
     const authored = registryDefaults();
     const composed = composeHelmsmanSurface(authored, APPLIANCE);
 
@@ -84,14 +86,15 @@ describe('composeHelmsmanSurface', () => {
       'host.file.list',
       'host.file.get',
       'browser.page.open',
+      'model.runtime.status',
     ]);
     expect(removed).toEqual([
       'workflow.campaign.list',
       'workflow.campaign.get',
       'ui.surface.visualize',
     ]);
-    // The three reads and the harness are paid for; opening a page is not.
-    expect(composed.coreOperations.length).toBe(authored.coreOperations.length + 1);
+    // The three reads and the harness are paid for; opening a page and the runtime's status are not.
+    expect(composed.coreOperations.length).toBe(authored.coreOperations.length + 2);
   });
 
   it('keeps every other browser operation promotable on the local edition, as one bundle', () => {
@@ -139,7 +142,13 @@ describe('composeHelmsmanSurface', () => {
     const uncomposed = authored.promotableOperations.filter((op) => op.startsWith('code.'));
     expect(uncomposed.length).toBeGreaterThan(0);
     expect(removed.sort()).toEqual(
-      [...uncomposed, 'host.harness.run', 'host.file.list', 'host.file.get'].sort(),
+      [
+        ...uncomposed,
+        'host.harness.run',
+        'host.file.list',
+        'host.file.get',
+        'model.runtime.status',
+      ].sort(),
     );
     expect(added).toEqual([
       'workflow.campaign.list',

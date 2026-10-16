@@ -8,6 +8,12 @@ import {
   type AgentModelProviderId,
 } from '@aflow/schemas';
 import { CreateSpaceForm, type CreateSpaceResult } from './create-space-form.js';
+import {
+  PROVIDER_FALLBACK_META,
+  providerDisplayName,
+  type ProviderFieldMeta,
+} from './onboarding-providers.js';
+import { ModelCard } from './onboarding-model-card.js';
 import { useApi, useSpace } from './providers.js';
 import { useChatModelOptions } from '../hooks/useChatModelOptions.js';
 import { useApiMutation } from '../hooks/useApiQuery.js';
@@ -386,90 +392,6 @@ function StepNameWorkspace({
 // Step 3 — Model
 // =============================================================================
 
-function ModelCard({
-  label,
-  via,
-  tagline,
-  recommended,
-  selected,
-  onSelect,
-}: {
-  label: string;
-  via: string;
-  tagline: string;
-  recommended?: boolean | undefined;
-  selected: boolean;
-  onSelect: () => void;
-}) {
-  return (
-    <div
-      role="radio"
-      aria-checked={selected}
-      tabIndex={0}
-      onClick={onSelect}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          onSelect();
-        }
-      }}
-      style={{
-        padding: 'var(--space-3) var(--space-4)',
-        borderRadius: 'var(--radius-md)',
-        border: '2px solid',
-        borderColor: selected ? 'var(--color-interactive-default)' : 'var(--color-border-subtle)',
-        background: selected ? 'var(--color-surface-1)' : 'transparent',
-        cursor: 'pointer',
-        transition: 'border-color 150ms, background 150ms',
-      }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 'var(--space-2)',
-          flexWrap: 'wrap',
-          marginBottom: 'var(--space-1)',
-        }}
-      >
-        <span style={{ fontWeight: 600, fontSize: 'var(--font-size-sm)' }}>{label}</span>
-        <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)' }}>
-          via {via}
-        </span>
-        {recommended && (
-          <Badge variant="accent" style={{ fontSize: 'var(--font-size-xs)' }}>
-            Recommended
-          </Badge>
-        )}
-      </div>
-      <div
-        style={{
-          fontSize: 'var(--font-size-xs)',
-          color: 'var(--color-text-secondary)',
-          lineHeight: 1.5,
-        }}
-      >
-        {tagline}
-      </div>
-    </div>
-  );
-}
-
-function providerDisplayName(providerId: AgentModelProviderId): string {
-  switch (providerId) {
-    case 'anthropic':
-      return 'Anthropic';
-    case 'google':
-      return 'Google';
-    case 'openai':
-      return 'OpenAI';
-    case 'fireworks':
-      return 'Fireworks AI';
-    case 'xai':
-      return 'xAI';
-  }
-}
-
 export interface ModelSelection {
   defaultRef: string;
   roleOverrides: Partial<Record<AgentRole, string>>;
@@ -811,46 +733,6 @@ function StepModel({
 // =============================================================================
 // Step 4 — Connect provider key(s)
 // =============================================================================
-
-interface ProviderFieldMeta {
-  displayName: string;
-  placeholder: string;
-  helpText: string;
-  docsUrl: string | null;
-}
-
-const PROVIDER_FALLBACK_META: Record<AgentModelProviderId, ProviderFieldMeta> = {
-  anthropic: {
-    displayName: 'Anthropic',
-    placeholder: 'sk-ant-...',
-    helpText: 'Your Anthropic API key.',
-    docsUrl: 'https://console.anthropic.com/settings/keys',
-  },
-  google: {
-    displayName: 'Google',
-    placeholder: 'AIza...',
-    helpText: 'Your Google AI Studio API key.',
-    docsUrl: 'https://aistudio.google.com/app/apikey',
-  },
-  openai: {
-    displayName: 'OpenAI',
-    placeholder: 'sk-...',
-    helpText: 'Your OpenAI API key.',
-    docsUrl: 'https://platform.openai.com/api-keys',
-  },
-  fireworks: {
-    displayName: 'Fireworks AI',
-    placeholder: 'fw_...',
-    helpText: 'Your Fireworks API key.',
-    docsUrl: 'https://fireworks.ai/account/api-keys',
-  },
-  xai: {
-    displayName: 'xAI',
-    placeholder: 'xai-...',
-    helpText: 'Your xAI API key.',
-    docsUrl: 'https://console.x.ai',
-  },
-};
 
 type ProviderConnectState =
   | { phase: 'idle' }

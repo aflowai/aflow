@@ -291,3 +291,49 @@ describe('the blocked-on cause of an approval pause', () => {
     });
   });
 });
+
+const LOCAL_MODEL_REQUEST = {
+  kind: 'write_approval',
+  target: 'local_model',
+  change: { action: 'unload', model: 'ollama-gemma4-26b' },
+  modelName: 'Gemma 4 26B (this computer)',
+  runtimeUrl: 'http://127.0.0.1:11434',
+  impact: { inFlightRequests: 1, ownConversationReloads: true, notes: [] },
+  requestHash: 'local-hash-1',
+};
+
+describe('a change to the model runtime on this computer', () => {
+  it('parks on the change it asks for', async () => {
+    expect(
+      await resolveWriteApprovalBlockedOn(payloadStore, ref(LOCAL_MODEL_REQUEST), 'step-1'),
+    ).toEqual({
+      kind: 'needs_write_approval',
+      target: 'local_model',
+      stepExecutionId: 'step-1',
+      action: 'unload',
+      modelName: 'Gemma 4 26B (this computer)',
+      requestHash: 'local-hash-1',
+    });
+  });
+
+  it('is answered only by a decision made after it was asked again, as a browser action is', async () => {
+    const spent = grants([
+      { requestHash: 'local-hash-1', decision: 'approved', decidedAt: SPENT_AT },
+    ]);
+    expect(await decide({ ...LOCAL_MODEL_REQUEST, decidedBefore: SPENT_AT }, spent)).toEqual({
+      decision: 'undecided',
+    });
+    expect(await decide(LOCAL_MODEL_REQUEST, spent)).toEqual({ decision: 'approved' });
+  });
+
+  it('fails on a denial with the operator’s reason, as final', async () => {
+    const resumed = await decide(
+      LOCAL_MODEL_REQUEST,
+      grants([{ requestHash: 'local-hash-1', decision: 'denied', reason: 'A run is going.' }]),
+    );
+    if (resumed?.decision !== 'denied') throw new Error('expected a denial');
+    expect(resumed.error.message).toContain('unload Gemma 4 26B (this computer)');
+    expect(resumed.error.message).toContain('A run is going.');
+    expect(toAgentToolError(resumed.error).retry).toBe(false);
+  });
+});

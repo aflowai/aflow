@@ -171,6 +171,7 @@ export interface OAuthConsentExtension {
 export type {
   ApiWriteApprovalExtension,
   BrowserWriteApprovalExtension,
+  LocalModelWriteApprovalExtension,
   WriteApprovalExtension,
 } from '@aflow/schemas';
 export type ActionCenterItemExtension =

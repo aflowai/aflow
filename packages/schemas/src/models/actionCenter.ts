@@ -7,6 +7,7 @@ import {
   BrowserApprovalAskedBySchema,
   BrowserApprovalValueSummarySchema,
   BrowserWriteApprovalRequestPayloadSchema,
+  LocalModelWriteApprovalRequestPayloadSchema,
 } from '../runtime/requestedInput.js';
 
 // ============================================================================
@@ -449,9 +450,23 @@ export const BrowserWriteApprovalExtensionSchema = z.object({
 });
 export type BrowserWriteApprovalExtension = z.infer<typeof BrowserWriteApprovalExtensionSchema>;
 
+/** The same card for a change to the model runtime on this computer (Plan 323 D10). */
+export const LocalModelWriteApprovalExtensionSchema = z.object({
+  kind: z.literal('write_approval'),
+  target: z.literal('local_model'),
+  change: LocalModelWriteApprovalRequestPayloadSchema.shape.change,
+  modelName: z.string().optional(),
+  runtimeUrl: z.string(),
+  impact: LocalModelWriteApprovalRequestPayloadSchema.shape.impact,
+});
+export type LocalModelWriteApprovalExtension = z.infer<
+  typeof LocalModelWriteApprovalExtensionSchema
+>;
+
 export const WriteApprovalExtensionSchema = z.discriminatedUnion('target', [
   ApiWriteApprovalExtensionSchema,
   BrowserWriteApprovalExtensionSchema,
+  LocalModelWriteApprovalExtensionSchema,
 ]);
 export type WriteApprovalExtension = z.infer<typeof WriteApprovalExtensionSchema>;
 

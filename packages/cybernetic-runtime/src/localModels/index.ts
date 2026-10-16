@@ -11,3 +11,4 @@ export {
   type LocalModelActionContext,
   type LocalModelActionOutcome,
 } from './actions.js';
+export { localRuntimeChangeRequest, readSpaceModelDefaults } from './proposal.js';

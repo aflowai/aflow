@@ -104,6 +104,7 @@ async function buildApp(db: unknown): Promise<FastifyInstance> {
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
   (app as unknown as { appContext: unknown }).appContext = { db };
+  app.decorate('edition', { edition: 'enterprise' } as never);
   app.decorate('authenticate', async (request: FastifyRequest): Promise<void> => {
     (request as unknown as { authUser: unknown }).authUser = { userId: USER_ID };
   });

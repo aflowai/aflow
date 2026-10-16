@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import Redis from 'ioredis-mock';
 import type { Redis as RedisType } from 'ioredis';
-import { acquireRuntimeLease, RuntimeLeaseAbortedError } from '../localRuntimeAdmission.js';
+import {
+  acquireRuntimeLease,
+  countRuntimeRequests,
+  RuntimeLeaseAbortedError,
+} from '../localRuntimeAdmission.js';
 
 const RUNTIME = 'this-machine:11434';
 let redis: RedisType;
@@ -120,5 +124,17 @@ describe('acquireRuntimeLease', () => {
     expect(otherRuntime).not.toBeNull();
     await a?.release();
     await otherRuntime?.release();
+  });
+});
+
+describe('countRuntimeRequests', () => {
+  it('counts the leases held now, and not a waiter', async () => {
+    const held = await take('a', { limit: 1 });
+    const waiting = take('b', { wait: true, limit: 1, signal: AbortSignal.timeout(200) }).catch(
+      () => undefined,
+    );
+    expect(await countRuntimeRequests(redis, RUNTIME)).toBe(1);
+    await held.release();
+    await waiting;
   });
 });

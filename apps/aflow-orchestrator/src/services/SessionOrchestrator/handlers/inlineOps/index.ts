@@ -14,6 +14,7 @@ export { handleScheduleSnoozeInline } from './scheduleSnooze.js';
 export { handleWebhookCrudInline } from './webhookCrud.js';
 export { handleWorkflowCrudInline } from './workflowCrud/index.js';
 export { handlePlanNodeInline } from './plan/index.js';
+export { handleModelRuntimeInline } from './model/index.js';
 export { handleCoachCrudInline } from './coachCrud.js';
 export { handleProposalCrudInline } from './proposalCrud.js';
 export { handleCatalogAgentInline } from './catalogAgent.js';

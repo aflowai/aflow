@@ -5,8 +5,20 @@ import type { SessionBlockedOn } from '@aflow/schemas';
 
 type WriteApprovalBlock = Extract<SessionBlockedOn, { kind: 'needs_write_approval' }>;
 
+const LOCAL_MODEL_VERB: Record<string, string> = {
+  pull: 'download',
+  delete: 'delete',
+  warm: 'load',
+  unload: 'unload',
+  set_context: 'change the window of',
+};
+
 function waitingOn(block: WriteApprovalBlock): string {
   if (block.target === 'api') return `${block.method} ${block.endpointId} on ${block.urlHost}`;
+  if (block.target === 'local_model') {
+    const verb = LOCAL_MODEL_VERB[block.action] ?? block.action;
+    return `${verb} ${block.modelName ?? 'the models'} on this computer`;
+  }
   const element =
     block.elementName !== undefined
       ? `${block.elementRole} “${block.elementName}”`

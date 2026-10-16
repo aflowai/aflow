@@ -13,41 +13,61 @@ export type LocalModelRole = z.infer<typeof LocalModelRoleSchema>;
 
 const model = z.string().min(1).describe('The catalog id of a model on this computer.');
 
+const pull = z
+  .object({ action: z.literal('pull'), model })
+  .describe('Download a model to this computer.');
+const remove = z
+  .object({ action: z.literal('delete'), model })
+  .describe('Delete a downloaded model from this computer, freeing its disk.');
+const warm = z
+  .object({ action: z.literal('warm'), model })
+  .describe('Load a model now, at the window its requests use.');
+const unload = z
+  .object({ action: z.literal('unload'), model })
+  .describe(
+    'Unload a model, freeing its memory and every conversation it holds. Runs using it reload it on their next turn.',
+  );
+const setContext = z
+  .object({
+    action: z.literal('set_context'),
+    contextTokens: z
+      .number()
+      .int()
+      .positive()
+      .nullable()
+      .describe('The window every request gets, or null for the largest that fits the machine.'),
+  })
+  .describe("Set the context window on the space's Ollama connection.");
+const useForEveryRole = z
+  .object({ action: z.literal('use_for_every_role'), model })
+  .describe('Assign one model to every role, so the runtime never switches models between them.');
+
+/**
+ * The changes to the runtime itself, which Helmsman may propose for approval.
+ * A role's model is not among them: it is the space's setting, written where
+ * every role is set at once.
+ */
+export const LocalRuntimeChangeSchema = z.discriminatedUnion('action', [
+  pull,
+  remove,
+  warm,
+  unload,
+  setContext,
+]);
+export type LocalRuntimeChange = z.infer<typeof LocalRuntimeChangeSchema>;
+
 /**
  * Every change the platform can make to a space's local runtime. An issue's
  * remedy names one with its arguments filled in; the operator runs it from the
- * issue's card, and Helmsman proposes it for approval.
+ * issue's card, and Helmsman proposes the runtime changes for approval.
  */
 export const LocalModelActionSchema = z.discriminatedUnion('action', [
-  z.object({ action: z.literal('pull'), model }).describe('Download a model to this computer.'),
-  z
-    .object({ action: z.literal('delete'), model })
-    .describe('Delete a downloaded model from this computer, freeing its disk.'),
-  z
-    .object({ action: z.literal('warm'), model })
-    .describe('Load a model now, at the window its requests use.'),
-  z
-    .object({ action: z.literal('unload'), model })
-    .describe(
-      'Unload a model, freeing its memory and every conversation it holds. Runs using it reload it on their next turn.',
-    ),
-  z
-    .object({
-      action: z.literal('set_context'),
-      contextTokens: z
-        .number()
-        .int()
-        .positive()
-        .nullable()
-        .describe('The window every request gets, or null for the largest that fits the machine.'),
-    })
-    .describe("Set the context window on the space's Ollama connection."),
-  z
-    .object({
-      action: z.literal('use_for_every_role'),
-      model,
-    })
-    .describe('Assign one model to every role, so the runtime never switches models between them.'),
+  pull,
+  remove,
+  warm,
+  unload,
+  setContext,
+  useForEveryRole,
 ]);
 export type LocalModelAction = z.infer<typeof LocalModelActionSchema>;
 

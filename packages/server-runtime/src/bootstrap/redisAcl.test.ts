@@ -10,7 +10,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  browserApprovalSpentKey,
+  writeApprovalSpentKey,
   browserAskKey,
   browserHandoffKey,
   browserHandoffSpaceIndexKey,
@@ -49,14 +49,16 @@ describe('redis acl', () => {
   });
 
   it('writes the records beside a browser approval, which sit outside the grant family', () => {
-    const askKeys = [
-      browserAskKey('t', 'run-1', 'call'),
-      browserApprovalSpentKey('t', 'run-1', { requestHash: 'h', decidedAt: 'now' }),
-    ];
     const rules = hostLine.split(' ');
     expect(rules.filter((rule) => rule.includes('browser-ask'))).toEqual(['~aflow:browser-ask:*']);
-    for (const key of askKeys) {
-      expect(key.startsWith('aflow:browser-ask:')).toBe(true);
+    expect(rules.filter((rule) => rule.includes('approval-spent'))).toEqual([
+      '~aflow:approval-spent:*',
+    ]);
+    const ask = browserAskKey('t', 'run-1', 'call');
+    const spent = writeApprovalSpentKey('t', 'run-1', { requestHash: 'h', decidedAt: 'now' });
+    expect(ask.startsWith('aflow:browser-ask:')).toBe(true);
+    expect(spent.startsWith('aflow:approval-spent:')).toBe(true);
+    for (const key of [ask, spent]) {
       expect(key.startsWith('aflow:write-approval:')).toBe(false);
     }
   });

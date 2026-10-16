@@ -310,14 +310,10 @@ export {
   setWriteApprovalGrant,
   getWriteApprovalGrant,
   hostPushRequestHash,
+  spendWriteApprovalGrant,
+  writeApprovalSpentKey,
 } from './writeApproval.js';
-export {
-  browserAskKey,
-  browserApprovalSpentKey,
-  rememberBrowserAsk,
-  readBrowserAsk,
-  spendBrowserApproval,
-} from './browserApproval.js';
+export { browserAskKey, rememberBrowserAsk, readBrowserAsk } from './browserApproval.js';
 
 // Memory embedding operations
 export {
@@ -532,6 +528,7 @@ export * from './browserHandoff.js';
 export * from './sessionResidue.js';
 export {
   acquireRuntimeLease,
+  countRuntimeRequests,
   runtimeAdmission,
   RuntimeLeaseAbortedError,
   RUNTIME_LEASE_TTL_MS,

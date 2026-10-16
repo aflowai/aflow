@@ -10,25 +10,19 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import { eq } from 'drizzle-orm';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from '@aflow/redis';
-import { createTenantContext, spaces, withTenantSchema } from '@aflow/database';
 import {
   applyLocalModelAction,
   cancelLocalModelPull,
   diagnoseSpaceLocalRuntime,
   localRoleModels,
+  readSpaceModelDefaults,
   resolveSpaceLocalRuntime,
   type LocalModelActionOutcome,
   type SpaceLocalRuntime,
 } from '@aflow/cybernetic-runtime';
-import {
-  LocalModelActionSchema,
-  LocalRuntimeDiagnosticsSchema,
-  type DirectiveModelDefaults,
-  type TenantId,
-} from '@aflow/schemas';
+import { LocalModelActionSchema, LocalRuntimeDiagnosticsSchema } from '@aflow/schemas';
 
 const ErrorSchema = z.object({ error: z.string(), message: z.string() });
 
@@ -51,24 +45,6 @@ const spaceAuthz = (action: 'read' | 'admin') => ({
     resourceIdParam: 'spaceId',
   },
 });
-
-export async function readModelDefaults(
-  db: PostgresJsDatabase,
-  tenantId: string,
-  spaceId: string,
-): Promise<DirectiveModelDefaults | undefined> {
-  const [row] = (await withTenantSchema(
-    db,
-    createTenantContext(tenantId as TenantId),
-    async (tx: unknown) =>
-      (tx as PostgresJsDatabase)
-        .select({ directives: spaces.directives })
-        .from(spaces)
-        .where(eq(spaces.id, spaceId))
-        .limit(1),
-  )) as Array<{ directives: { modelDefaults?: DirectiveModelDefaults } | null }>;
-  return row?.directives?.modelDefaults;
-}
 
 export const localModelRoutes: FastifyPluginAsync = async (fastify) => {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
@@ -130,7 +106,7 @@ export const localModelRoutes: FastifyPluginAsync = async (fastify) => {
       if (!resolved) return reply;
       if (!resolved.runtime) return reply.send({ diagnostics: null });
       const roles = localRoleModels(
-        await readModelDefaults(db(), resolved.tenantId, request.params.spaceId),
+        await readSpaceModelDefaults(db(), resolved.tenantId, request.params.spaceId),
       );
       return reply.send({
         diagnostics: await diagnoseSpaceLocalRuntime({
