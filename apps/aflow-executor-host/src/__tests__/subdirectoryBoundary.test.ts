@@ -6,7 +6,9 @@
  * such a folder owns no object — it borrows every one from the repository's
  * store, at `<top>/.git/objects` — and its mirrored top-level installation
  * leads into `<top>/node_modules`. Both are outside the folder and under home,
- * so the run reads them only because the sandbox is told to.
+ * so the run reads them only because the sandbox is told to. A linked worktree
+ * is a top level whose store is the main repository's, outside it, and is told
+ * the same.
  */
 import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
@@ -150,6 +152,41 @@ describe('a folder connected inside a repository under a denied home', () => {
       } finally {
         await removeWorktree(wt.path);
       }
+    },
+  );
+});
+
+describe('a linked worktree connected under a denied home', () => {
+  // A top level whose object store is the main repository's, outside it.
+  let linked: string;
+
+  beforeEach(async () => {
+    linked = join(home, 'worktrees', 'mono');
+    await git(top, 'worktree', 'add', '-q', '--detach', linked);
+  });
+
+  it('borrows the main repository’s object store', async () => {
+    expect(await borrowedReads(linked)).toEqual([join(top, '.git', 'objects')]);
+  });
+
+  it.skipIf(!sandboxAvailable() || confined.skip)(
+    confined.title('reads its history inside the run'),
+    { tags: ['listener'], timeout: 120_000 },
+    async () => {
+      const sha = await git(linked, 'rev-parse', 'HEAD');
+      const checked = await runFolderChecks({
+        binding: bindingOf(linked),
+        argv: ['/bin/sh', '-c', 'git log -1 --format=%s'],
+        timeoutMs: 60_000,
+        sha,
+        base: sha,
+        toolPaths: [],
+        ownerRunId: 'probe',
+        signal: new AbortController().signal,
+      });
+
+      expect(checked.output).toContain('the base commit');
+      expect(checked.result.exitCode).toBe(0);
     },
   );
 });

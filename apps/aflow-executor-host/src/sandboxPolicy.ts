@@ -131,8 +131,8 @@ export interface SandboxWidening {
   readonly gitDir?: string;
   /**
    * What the writable root reads outside the binding's root and never writes:
-   * for a folder inside a repository, the repository's object store and the
-   * installations above the folder (`borrowedReads`, `worktree.ts`).
+   * the repository's object store and its installations, each where it lies
+   * outside the folder (`borrowedReads`, `worktree.ts`).
    */
   readonly borrowedReads?: readonly string[];
   /**
@@ -150,8 +150,8 @@ export interface SandboxWidening {
  *
  * Reads are denied under home and open elsewhere, so what is enumerated under
  * "reads" is what is re-allowed inside home; the clone, kept in the executor's
- * scratch outside home, is readable whole either way. For a folder that is a
- * repository's top level, the run may:
+ * scratch outside home, is readable whole either way. For a folder that holds
+ * its repository's object store and installations, the run may:
  *
  * - read the folder; its agent scratch; the folder's place in the clone; the
  *   clone's git directory; the toolchains (`toolchainReadPaths`), the machine's
@@ -165,12 +165,14 @@ export interface SandboxWidening {
  *   is handed over), the clone's git directory, or `.git/config` at any depth
  *   under the folder and the writable root.
  *
- * For a folder inside a repository the same, and it may also read, never
- * write, what the clone borrows from outside the folder (`borrowedReads`,
- * `worktree.ts`): the repository's object store, which holds every object the
- * clone has, and each installation above the folder up to the top level, where
- * the clone's mirrored dependencies lead. Without them, inside the run the
- * clone's git cannot read HEAD's tree and a hoisted dependency does not resolve.
+ * For any other folder the same, and it may also read, never write, what the
+ * clone borrows from outside the folder (`borrowedReads`, `worktree.ts`): the
+ * repository's object store, which holds every object the clone has, wherever
+ * it lies outside the folder — a folder inside a repository, a linked
+ * worktree, a submodule, a separate git directory — and each installation in
+ * the repository outside the folder, where the clone's mirrored dependencies
+ * lead. Without them, inside the run the clone's git cannot read HEAD's tree
+ * and a dependency installed outside the folder does not resolve.
  */
 export function checkoutWidening(
   checkout: { readonly workDir: string; readonly gitDir: string },

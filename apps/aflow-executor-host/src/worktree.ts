@@ -584,19 +584,6 @@ async function mirrorInstallation(
 }
 
 /**
- * The installations from a repository's top level down to the folder at
- * `prefix` in it, the folder's own excluded, as paths from the top level.
- */
-function installationsAbove(prefix: string): string[] {
-  const above = prefix === '' ? [] : prefix.split(sep);
-  const installations: string[] = [];
-  for (let depth = 0; depth < above.length; depth += 1) {
-    installations.push(join(...above.slice(0, depth), DEPENDENCY_DIR));
-  }
-  return installations;
-}
-
-/**
  * Point the checkout at the operator's installed dependencies.
  *
  * Links rather than copies: an installation is gigabytes and is identical to
@@ -605,10 +592,11 @@ function installationsAbove(prefix: string): string[] {
  * lands on the folder's own directory, which the harness's policy withholds. So
  * a harness can run the tests and cannot corrupt what the operator installed.
  *
- * For a folder inside a repository, every installation on the way from the
- * folder up to the top level is linked too, at the same place in the clone:
- * resolution walks up from the folder, and a workspace hoists most of what a
- * package needs into the top level's installation.
+ * Every installation in the repository is linked, at the same place in the
+ * clone, whichever folder of it is connected: resolution walks up from the
+ * folder into the top level's installation, where a workspace hoists most of
+ * what a package needs, and a workspace link leads into a sibling package,
+ * whose own installation holds what was not hoisted.
  */
 async function linkDependencies(top: string, checkout: Checkout): Promise<void> {
   let rootReal: string;
@@ -618,12 +606,7 @@ async function linkDependencies(top: string, checkout: Checkout): Promise<void> 
     rootReal = top;
   }
   const context: MirrorContext = { rootReal, worktreePath: checkout.path };
-  const prefix = relativePath(checkout.path, checkout.workDir);
-  const installations = installationsAbove(prefix);
-  for (const relative of await dependencyDirs(join(top, prefix))) {
-    installations.push(join(prefix, relative));
-  }
-  for (const relative of installations) {
+  for (const relative of await dependencyDirs(top)) {
     const destination = join(checkout.path, relative);
     try {
       // Only where the checkout has the same place to put it, and has nothing
@@ -728,22 +711,27 @@ export async function folderPrefix(root: string): Promise<string> {
  * What a run in a checkout of the folder at `root` reads outside that folder,
  * for the sandbox to grant read of (`SandboxWidening.borrowedReads`).
  *
- * Nothing for a repository's top level, whose object store and installations
- * are inside the folder. For a folder inside a repository: the repository's
- * object store, which the clone owns no object of and borrows every one from
- * (`clonePrivately`), and each installation on the way up to the top level
- * that exists, which the clone's mirrored links lead into (`linkDependencies`).
- * Read from the folder, never from the checkout, which the run writes.
+ * Decided by where each lies, never by where the folder is in its repository.
+ * The repository's object store, which the clone owns no object of and borrows
+ * every one from (`clonePrivately`), resolved, whenever it lies outside the
+ * folder: for a folder inside a repository, and for a top level whose store is
+ * elsewhere too — a linked worktree, a submodule, a separate git directory.
+ * And each installation in the repository outside the folder, which the
+ * clone's mirrored links lead into (`linkDependencies`). Read from the folder,
+ * never from the checkout, which the run writes.
  */
 export async function borrowedReads(root: string): Promise<string[]> {
-  const prefix = await folderPrefix(root);
-  if (prefix === '') return [];
-  const top = (await git(root, ['rev-parse', '--show-toplevel'])).trim();
+  const rootReal = await realpath(root).catch(() => root);
+  const outsideRoot = (path: string): boolean =>
+    path !== rootReal && !path.startsWith(rootReal + sep);
+  const reads: string[] = [];
   const objects = await gitPath(root, 'objects');
-  const reads = [await realpath(objects).catch(() => objects)];
-  for (const relative of installationsAbove(prefix)) {
+  const objectsReal = await realpath(objects).catch(() => objects);
+  if (outsideRoot(objectsReal)) reads.push(objectsReal);
+  const top = (await git(root, ['rev-parse', '--show-toplevel'])).trim();
+  for (const relative of await dependencyDirs(top)) {
     const installation = join(top, relative);
-    if ((await lstat(installation).catch(() => undefined)) !== undefined) reads.push(installation);
+    if (outsideRoot(installation)) reads.push(installation);
   }
   return reads;
 }

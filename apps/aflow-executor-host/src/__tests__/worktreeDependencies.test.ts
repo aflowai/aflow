@@ -18,6 +18,7 @@ import {
   symlink,
   writeFile,
 } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -139,6 +140,35 @@ describe('dependencies in the isolated checkout', () => {
     await removeWorktree(wt.path);
     expect((await lstat(join(repo, 'node_modules', '@acme', 'a'))).isSymbolicLink()).toBe(true);
     expect(await readdir(join(folder, 'node_modules'))).toEqual(['marker.txt']);
+  });
+
+  it('resolves a sibling package’s own dependency inside the clone, for a folder connected as a package', async () => {
+    // What the sibling did not hoist is in its own installation, which the
+    // workspace link from the folder leads into.
+    const sibling = join(repo, 'packages', 'b');
+    await mkdir(sibling, { recursive: true });
+    await writeFile(join(sibling, 'package.json'), '{"name":"@acme/b","main":"index.js"}\n');
+    await writeFile(join(sibling, 'index.js'), 'module.exports = require("only-b");\n');
+    await git(repo, 'add', '-A');
+    await git(repo, 'commit', '-m', 'sibling');
+    await mkdir(join(sibling, 'node_modules', 'only-b'), { recursive: true });
+    await writeFile(join(sibling, 'node_modules', 'only-b', 'index.js'), 'module.exports = 1;\n');
+    await symlink(join('..', '..', 'packages', 'b'), join(repo, 'node_modules', '@acme', 'b'));
+
+    const wt = await prepareWorktree(join(repo, 'packages', 'a'), scratch, 'work');
+    const worktreeReal = await realpath(wt.path);
+    const repoReal = await realpath(repo);
+
+    const fromFolder = createRequire(join(wt.workDir, 'index.js'));
+    const siblingEntry = fromFolder.resolve('@acme/b');
+    expect(siblingEntry).toBe(join(worktreeReal, 'packages', 'b', 'index.js'));
+    expect(await realpath(createRequire(siblingEntry).resolve('only-b'))).toBe(
+      join(repoReal, 'packages', 'b', 'node_modules', 'only-b', 'index.js'),
+    );
+    expect(await collectChanges(wt)).toEqual({ patch: '', filesChanged: 0, overCeiling: false });
+
+    await removeWorktree(wt.path);
+    expect(await readdir(join(sibling, 'node_modules'))).toEqual(['only-b']);
   });
 
   it('shows a workspace package as committed, not as the operator is editing it', async () => {
