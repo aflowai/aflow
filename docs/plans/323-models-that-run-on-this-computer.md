@@ -1,6 +1,6 @@
 # Plan 323 — Models that run on this computer
 
-**Status:** 🔨 P0 met on one machine (§9): every gate answered on an Apple M3 with 24 GB and Ollama 0.40.5, and the decisions they served revised. P1 built and unit-tested, and its adapter run against the live runtime; its exit, a Helmsman conversation through the web UI on the dev stack, has not been run. P0 and P1 together are the first complete slice: one model on one machine.
+**Status:** 🔨 P0 met on one machine (§9). P1 merged, and its main exit met on the dev stack: Helmsman on Gemma 4 26B held a tool-using conversation through the web UI on the 24 GB machine, slowly, because the model spilled past the GPU working set (§9 G6). P3a built and tested: each model's window is sized from the machine it runs on, never below what the platform's agents need, and readiness says how it fits. P0, P1 and P3a together are the first complete slice.
 
 **Supersedes for the local edition:** Tier 0 of archive plan 98 (open-weight inference). Plan 98 put a platform-managed `selfhosted` provider behind Ollama's OpenAI-compatible `/v1` endpoint. This plan uses Ollama's native API instead (D3) and makes the runtime the operator's own (D2). Plan 98's hosted tiers (Cloud Run GPU, GKE/vLLM) are untouched; the OpenAI-compatible adapter in P6 is the piece they would share.
 
@@ -63,18 +63,14 @@ Using one should look like using any other model. You choose it in the same pick
 - **Callers outside a step** take the same lease through the client: `createByokAiClientFactory(db, admission)` wraps a client for an Ollama model so every request holds a lease while it runs. Session titles pass `wait: false` and decline when the runtime is busy, since the conversation is due again on the next cycle; post-run judging waits. The eval-batch engine, the UI and API executors' generation and the memory embedder are not yet admitted, and are P5's coverage list.
 - **The idle clock:** every AI operation on a local model runs under an idle window of `AI_LOCAL_MODEL_IDLE_TIMEOUT_MS` (15 min) and the agent turn's ceiling, in place of the flat 120 s or the 300 s stream idle window. Prefill is a silent stretch on every local request, and at 250 tokens a second a 75K-token prompt outlasts the cloud window (§9 G5). _Rejected:_ a per-connection first-token timeout. The timeout is chosen before any credential is read, so a connection field would be a setting nothing reads.
 
-**D8 — Fit is an estimate until the model is loaded, and both are labelled as what they are.**
+**D8 — The window is sized from the machine, and fit is an estimate until the model is loaded.**
 
-- **The estimate:** computed from:
-  - the catalog footprint, `local: { weightsBytes, kvBytesPerToken, measuredUnder: { contextTokens, parallel, kvCacheType, runtimeVersion } }`, written by the probe. `/api/ps` cannot measure `kvBytesPerToken` on the MLX runner: it reports the same size and a 4,096-token context whatever `num_ctx` asks for, because that runner grows its cache with the prompt (§9 G5). The probe measures it from the runner process's resident memory before and after a long prompt;
-  - the host inventory, which gains `machine: { totalMemoryBytes, availableMemoryBytes, gpuMemoryLimitBytes, chip }`. On macOS the GPU limit is Metal's `recommendedMaxWorkingSetSize`, about 74% of RAM on the measured machine (19.07 GB of 24), which no `sysctl` reports. The host executor reads it through Metal. On Linux it is VRAM per device;
-  - the models already resident (`/api/ps`);
-  - the connection's `max_parallel`. Parallel requests multiply the KV cache, which grows with context × parallel.
-- **The headroom:** the estimate keeps headroom for the stack, the operating system and a browser, and reports the conditions it assumes.
-- **The four answers:** _fits_, _tight_, _does not fit_, or _unknown_. The answer is _unknown_ when the inputs are missing: an unpaired machine, a KV cache type the footprint was not measured with, or a build that differs from the one measured (D9).
-- **Verified state:** once the model is loaded, `/api/ps` reports its actual size and its GPU/CPU split, and the host executor reads the runner process's memory as it grows. That is shown as verified and replaces the estimate. Free memory and swap are part of it: on the measured machine a 16 GB model left about 80 MB free and 6.6 GB in swap with the stack's databases running, which is _tight_ however the model's own numbers read.
-- **A trial load is an action:** on an unpaired machine, the operator starts a trial load explicitly ("load to check"). Reading diagnostics never loads a model.
-- **What over-sizing does:** a model that does not fit may load partly on CPU and run slowly, or fail to load, or press the whole machine into swap. Fit informs and never blocks a choice the operator makes.
+- **What a model costs** (§9 G6): its weights, plus a constant cost per context token for the KV cache — 16.18 GB and about 118 KB a token for Gemma 4 26B at the `q8_0` cache type. On the MLX runner the cache grows with the prompts the model has actually read, keeps more than one conversation's, and is freed only when the model unloads, so a loaded model's cost climbs to its whole window and stays there. Fit is therefore computed for the full window × `max_parallel`, never for the prompt in hand.
+- **What the machine allows:** on Apple silicon, Metal's working set (`recommendedMaxWorkingSetSize`, 19.07 GB of 24 on the measured machine), less the runtime's own reserve. Past it the model does not fail: it spills, and prefill fell from about 240 to 130 tokens a second as swap grew. On a machine with discrete GPUs it is VRAM per device. The host executor reads the figure once through Metal, caches it, and publishes it in its inventory as `machine: { totalMemoryBytes, gpuWorkingSetBytes }`; no `sysctl` reports it and Ollama's API does not expose it.
+- **The default window is the largest that fits, and never less than the agents need.** A connection that sets no `context_tokens` gets, per model, the largest window in 4,096-token steps whose footprint stays inside the GPU working set, capped by the model's catalog window, and never below 32K: Helmsman's first prompt is about 18K tokens of instructions and tool definitions before any conversation, so a smaller window refuses it outright, and slow is better than refused. A 64 GB machine gets Gemma 4 26B's full 256K; the 24 GB Mac fits only 16K, so it gets 32K and is told the model will spill. Without a footprint or a machine figure the window is 32K. An operator who sets `context_tokens` gets exactly that, fitting or not: fit informs, it never overrides a configured choice. A smaller Helmsman prompt for local models — fewer tools on the surface — is what would let a 24 GB machine run at full speed, and is outside this plan's phases until measured.
+- **The answers:** _fits_, _tight_ (inside the GPU working set, but the model plus the memory the operating system, the stack and a browser take — about 8 GB measured — exceeds the machine's memory, so it will swap), _does not fit_ (even the smallest useful window spills), or _unknown_ (no footprint, no machine figure, or a build the footprint was not measured on).
+- **Verified state:** once loaded, `/api/ps` reports the model's actual size as its cache grows; that replaces the estimate. A loaded size above the GPU working set is a diagnostic (D15) with two remedies: a smaller window, or unloading the model to free the conversations it is holding.
+- **A trial load is an action:** reading diagnostics never loads a model.
 
 **D9 — Local models are curated catalog entries, measured by a local conformance probe.**
 
@@ -118,7 +114,8 @@ Which local models are _recommended_ for which role follows from the usefulness 
 
 - **No specialized agent.** The work is reading one record and proposing one of its remedies, and Helmsman with these operations does both. A separate system agent would be a second surface whose guidance could drift from the UI's.
 - **Runner holds none of these operations.** They are Helmsman's alone, like the eval plane. A skill's run does not reconfigure the machine it runs on.
-- **One GPU, several roles.** Helmsman, clerk, judge, titles and embeddings all compete for one runtime, and each model switch costs a load. The default for a local space is therefore a preset that assigns one chat model to every role (plus the embedding model). Mixing models per role is the operator's choice, and the models page shows its cost: total resident memory, and the load time per switch. On the measured machine a switch from a 9B to a 26B model took 49 s, and the MLX runner's first prompt after a load took 25–56 s whatever its length (§9 G5), so a switch in the middle of a run is a pause the operator can see. Only the model a role is about to use is warmed. `keep_alive` comes from the connection, default 30 min.
+- **One GPU, several roles.** Helmsman, clerk, judge, titles and embeddings all compete for one runtime, and each model switch costs a load. The default for a local space is therefore a preset that assigns one chat model to every role (plus the embedding model). Mixing models per role is the operator's choice, and the models page shows its cost: total resident memory, and the load time per switch. On the measured machine a switch from a 9B to a 26B model took 49 s, and the MLX runner's first prompt after a load took 25–56 s whatever its length (§9 G5), so a switch in the middle of a run is a pause the operator can see. `keep_alive` comes from the connection, default 30 min.
+- **Warming is the operator's, not a side effect.** Beside each role on a model on this computer, the operator sees whether it is loaded and how large, and has **Load now** (at the window its requests will use, so the first request does not reload it) and **Unload**. _Rejected:_ loading on assignment. Picking a model is not a request to take 16 GB of the machine at that moment, and on a small machine an unasked load is the starvation it would be meant to prevent.
 - **Lifecycle actions are durable.**
   - **Pull:** one pull per runtime and tag, observed and not duplicated. A second request joins the first; the runtime already joins two pulls of one tag, reporting the same progress to both (§9 G3).
   - **Disk space:** a pull is refused before it starts when the host inventory's free disk cannot hold the download.
@@ -164,7 +161,7 @@ Which local models are _recommended_ for which role follows from the usefulness 
 
 - **The adapter:** an `openai-compatible` adapter on chat completions, built from the Fireworks adapter (the OpenAI adapter's Responses API is not what local servers serve). It reaches vLLM, SGLang, llama-server and LM Studio, and through vLLM a GPU box serving many requests at once.
 - **Pools:** several connections to the same catalog model form a pool, chosen by least in-flight against each one's `max_parallel`.
-- **A runtime on the network:** it needs an operator-admitted origin and a token, because an Ollama port has no authentication of its own.
+- **A runtime on the network:** it needs an operator-admitted origin (`CREDENTIAL_EXTRA_BASE_URL_ORIGINS`) and a token, because an Ollama port has no authentication of its own. Its connection states that machine's GPU memory (`gpu_memory_gb`), so each model's window is sized for the machine it runs on; this machine's inventory is never applied to a runtime elsewhere, and without the figure its windows are the 32K default. Admission is keyed by its host, so a runtime on the network is one capacity however many connections name it.
 
 **D15 — One diagnostics record says what is wrong and what fixes it, and every surface reads it.**
 
@@ -308,7 +305,7 @@ _Exit:_
 - three concurrent sessions on it run one at a time and finish with no timeout;
 - a prompt near the window survives its prefill.
 
-_Built and tested:_ everything in the list above, with unit tests for each proof below, and the adapter run against Ollama 0.40.5 on the 24 GB machine: plain text, two parallel native tool calls, streaming with thinking, JSON through the tool fallback after the MLX runner's 501, and a refusal before sending of a prompt the llama.cpp runner would have cut. `yarn models:verify-local` reports the `gemma4:26b` entry as matching its build. _Not yet run:_ the exit itself, which needs the dev stack started from this branch.
+_Built and tested:_ everything in the list above, with unit tests for each proof below, and the adapter run against Ollama 0.40.5 on the 24 GB machine: plain text, two parallel native tool calls, streaming with thinking, JSON through the tool fallback after the MLX runner's 501, and a refusal before sending of a prompt the llama.cpp runner would have cut. `yarn models:verify-local` reports the `gemma4:26b` entry as matching its build. _Run on the dev stack_ (§9, P1 on the dev stack): Helmsman on Gemma 4 26B held a tool-using conversation through the web UI. _Not yet run:_ three concurrent sessions, and a prompt near the window.
 
 _Proof:_
 
@@ -323,6 +320,24 @@ _Proof:_
 Each lineup entry (§4) is qualified on its own: both probe tiers, the build identity, the fit footprint and the role recommendations. It lands as its own small catalog change and can run in parallel with every later phase. An entry that fails is recorded as not recommended, with its result, and blocks nothing.
 
 _Exit for each entry:_ its usefulness results, repeated runs included, are in the entry, and its recommended roles follow from them.
+
+### P3a — The window fits the machine (D8)
+
+**Build:**
+
+- the footprint in the catalog entry, `local.footprint: { weightsBytes, kvBytesPerToken }`, measured by `models:verify-local` from two prompt sizes and checked for drift — the per-token cost scales with the runtime's KV cache type, which its API does not report, so a changed cache type shows as drift rather than being recorded;
+- `machine: { totalMemoryBytes, gpuWorkingSetBytes }` in the host inventory, the GPU figure read once through Metal and cached;
+- `localModelFit` in `@aflow/ai-client`: the answer, the largest fitting window, and the bytes at the window in use;
+- the default window: `context_tokens` left unset means the largest fitting window, per model, with 32K when the inputs are missing;
+- the fit and the window in use on the connection's readiness, with what the runtime holds now: the model's loaded size beside the GPU working set, so a model spilling because it holds every conversation's cache says so;
+- **Load now** and **Unload** beside the role, through operator-only routes refused outside the local edition;
+- `gpu_memory_gb` on the connection for a runtime on another machine.
+
+_Exit:_ on the 24 GB machine, a connection with no window set runs Gemma 4 26B at 32K and reports that it spills, naming the 16K it fits; the same connection on a machine with 64 GB or more reports _fits_ at the model's full window.
+
+_Proof:_ a footprint and machine for which the full window does not fit yield a smaller window; a configured window is never replaced; a missing machine figure yields _unknown_ and 32K.
+
+_Built and tested:_ all of the above. The probe measures Gemma 4 26B at 16.15 GB and 120,469 bytes a token, inside its entry's tolerances; the host's Metal probe reads 19.07 GB on the 24 GB machine and caches it; the fit there is 16K, below the agents' 32K, so the automatic window is 32K and readiness names the spill. Load and unload were run against Ollama on the 24 GB machine: the model loaded at a 32K window and unloading freed it at once. _Not yet run:_ the dev stack with this branch, where the host executor publishes the machine and readiness shows the note and the actions.
 
 ### P3 — The operator's surface (D8, D10, D13, D15)
 
@@ -487,6 +502,26 @@ The built-in retrieval set scored 1.0 recall in every configuration, so it separ
 | Decode                                | 25 tokens/s   | 20 tokens/s     |
 
 Metal's working-set limit is 19.07 GB. With `gemma4:26b` loaded and the stack's Postgres and Redis running, free memory was about 80 MB and swap held 6.6 GB. At 253 tokens a second, a prompt of about 75,000 tokens takes longer to read than the 300 s stream idle window allows (D7).
+
+### G6 — Footprint and caching under real prompts
+
+Measured after P1 with prompts long enough to fill the cache, `gemma4:26b` at a 32K window, the KV cache at `q8_0`:
+
+| Prompt tokens           | Size reported by `/api/ps` | Request time |
+| ----------------------- | -------------------------- | ------------ |
+| 96                      | 16.18 GB                   | 78 s, cold   |
+| 2,906                   | 16.66 GB                   | 12 s         |
+| 12,106                  | 17.77 GB                   | 50 s         |
+| 25,306                  | 19.15 GB                   | 190 s        |
+| then a different 14,834 | 19.97 GB                   | 298 s        |
+
+The cost per token is steady at about 118 KB. The size does not fall back for a shorter prompt, and grows again for a different one: the runner keeps more than one conversation's cache until the model unloads. The P1 live session reached 22.7 GB at a 32K window. Past Metal's 19.07 GB working set prefill fell from about 240 to 130 tokens a second and swap grew by 2.5 GB. The runner process's own resident memory stays near 40 MB; the model's memory is what `/api/ps` reports.
+
+The prefix cache keeps checkpoints at 8,192-token steps and at the end of each prompt. An identical prompt is read back whole (`cached=13140` of 13,144, 1.9 s), and so is a prompt counted with one token and then sent (4.3 s + 4.7 s). A prompt that extends the previous one, as an agent's next turn does, diverges just before the previous end checkpoint, where the request's closing turn tokens were, and falls back to the 8,192 checkpoint: 4,958 of 13,150 tokens read again, 92 s under memory pressure. Every agent turn on the MLX runner past 8K tokens pays for that. The llama.cpp runner read an extended prompt from its cache in P0; whether a GGUF build of the same model is the faster one for agent loops on Apple silicon is a P2 question.
+
+### P1 on the dev stack
+
+Helmsman on `gemma-local` at the 32K default, on the 24 GB machine with the dev stack and a browser running: the first turn, model load included, took 6 m 42 s; the turns after it 15–56 s each at 17.7–19.9K prompt tokens. Helmsman answered from `catalog.tool.search` and `catalog.tool.list` correctly, and recovered on its own from one rejected call (`stepTypes: ['platform']`, not a step type). The model held 22.7 GB, past the working set, which accounts for the pace.
 
 ### Call sites outside role resolution
 

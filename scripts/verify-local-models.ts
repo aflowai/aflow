@@ -18,13 +18,24 @@
 import {
   createDefaultModelCatalog,
   type LocalModelBuild,
+  type LocalModelFootprint,
   type ModelDefinition,
 } from '@aflow/ai-client';
 import { OLLAMA_DEFAULT_BASE_URL } from '@aflow/schemas';
 
 const BASE = (process.env['OLLAMA_URL'] ?? OLLAMA_DEFAULT_BASE_URL).replace(/\/+$/, '');
 /** Bumped whenever a probe below changes what it measures. */
-const PROBE_VERSION = 1;
+const PROBE_VERSION = 2;
+/** Weights are read off the runtime's own report, so they repeat to within a rounding. */
+const WEIGHTS_TOLERANCE = 0.02;
+/**
+ * The cache is allocated in blocks, so the per-token slope between two prompt
+ * sizes moves a few percent from run to run (§9 G6). A change past this is a
+ * different cache type or runner, not noise.
+ */
+const KV_TOLERANCE = 0.15;
+/** Long enough that the slope between them is the cache and not its first block. */
+const FOOTPRINT_PROMPTS = [300, 1200];
 
 const WEATHER_TOOL = {
   type: 'function',
@@ -41,6 +52,7 @@ const WEATHER_TOOL = {
 
 interface Measured {
   build: LocalModelBuild;
+  footprint: LocalModelFootprint | null;
   capabilities: {
     vision: boolean;
     functionCalling: boolean;
@@ -110,6 +122,48 @@ async function streamedToolCall(tag: string): Promise<boolean> {
   });
 }
 
+async function loadedSize(tag: string): Promise<number | null> {
+  const ps = (await (await fetch(`${BASE}/api/ps`)).json()) as {
+    models: Array<{ name: string; size: number }>;
+  };
+  return ps.models.find((m) => m.name === tag || m.name === `${tag}:latest`)?.size ?? null;
+}
+
+/**
+ * Weights from the loaded size before any context, and the per-token cost as
+ * the slope between two prompt sizes: the runtime reports a loaded model's
+ * size as its cache grows, and the cache grows with what it has read.
+ */
+async function measureFootprint(tag: string): Promise<LocalModelFootprint | null> {
+  await post('/api/generate', { model: tag, keep_alive: 0 });
+  const ask = async (items: number) =>
+    chat(tag, {
+      options: { num_ctx: 32_768, num_predict: 1, temperature: 0 },
+      messages: [
+        {
+          role: 'user',
+          content: `${Array.from({ length: items }, (_, i) => `Item ${i} is a blue marble.`).join(' ')} Say ok.`,
+        },
+      ],
+    });
+  await ask(1);
+  const weights = await loadedSize(tag);
+  const points: Array<{ tokens: number; size: number }> = [];
+  for (const items of FOOTPRINT_PROMPTS) {
+    const res = await ask(items);
+    const size = await loadedSize(tag);
+    const tokens = res.json['prompt_eval_count'];
+    if (size === null || typeof tokens !== 'number') return null;
+    points.push({ tokens, size });
+  }
+  const [a, b] = points;
+  if (weights === null || !a || !b || b.tokens <= a.tokens) return null;
+  return {
+    weightsBytes: weights,
+    kvBytesPerToken: Math.round((b.size - a.size) / (b.tokens - a.tokens)),
+  };
+}
+
 async function measure(tag: string): Promise<Measured | null> {
   const tags = (await (await fetch(`${BASE}/api/tags`)).json()) as {
     models: Array<{ name: string; digest: string; remote_host?: string }>;
@@ -161,6 +215,7 @@ async function measure(tag: string): Promise<Measured | null> {
       probeVersion: PROBE_VERSION,
       measuredAt: new Date().toISOString().slice(0, 10),
     },
+    footprint: await measureFootprint(tag),
     capabilities: {
       vision: caps.has('vision'),
       functionCalling: toolCalls(single.json).some((c) => c.function?.name === 'get_weather'),
@@ -205,6 +260,34 @@ function drift(entry: ModelDefinition, m: Measured): string[] {
   expect('local.quantization', entry.local?.quantization, m.build.quantization);
   expect('local.runtimeVersion', entry.local?.runtimeVersion, m.build.runtimeVersion);
   expect('local.probeVersion', entry.local?.probeVersion, m.build.probeVersion);
+  const near = (
+    label: string,
+    catalog: number | undefined,
+    measured: number | undefined,
+    tolerance: number,
+  ) => {
+    if (
+      catalog === undefined ||
+      measured === undefined ||
+      Math.abs(measured - catalog) > catalog * tolerance
+    ) {
+      found.push(
+        `${label}: catalog ${String(catalog)}, measured ${String(measured)} (±${tolerance * 100}%)`,
+      );
+    }
+  };
+  near(
+    'local.footprint.weightsBytes',
+    entry.local?.footprint?.weightsBytes,
+    m.footprint?.weightsBytes,
+    WEIGHTS_TOLERANCE,
+  );
+  near(
+    'local.footprint.kvBytesPerToken',
+    entry.local?.footprint?.kvBytesPerToken,
+    m.footprint?.kvBytesPerToken,
+    KV_TOLERANCE,
+  );
   return found;
 }
 
@@ -216,6 +299,8 @@ async function main(): Promise<void> {
   let failed = false;
   for (const tag of tags) {
     const measured = await measure(tag);
+    // Unloaded after, so the probe leaves the machine's memory as it found it.
+    if (measured) await post('/api/generate', { model: tag, keep_alive: 0 });
     if (!measured) {
       console.log(`SKIPPED ${tag}: not installed (ollama pull ${tag})`);
       continue;

@@ -10,8 +10,7 @@
  * printed is kept in the order it came, and from both ends where there is too
  * much of it: its start says what ran, and a failing check says why last.
  */
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
@@ -27,6 +26,7 @@ import { z } from 'zod';
 import type { HostBinding } from './bindings.js';
 import { SHORT_SHA_LENGTH } from './checkReceipt.js';
 import { createChatterStripper } from './egressRefusals.js';
+import { makeScratch } from './executorScratch.js';
 import { formatMinutes } from './folderChecks.js';
 import { runUnderFolderPosture } from './folderRun.js';
 import type { SandboxedRunResult } from './sandboxedRun.js';
@@ -206,7 +206,7 @@ export interface FolderCheckInput {
 }
 
 export async function runFolderChecks(input: FolderCheckInput): Promise<FolderCheckRun> {
-  const scratch = await mkdtemp(join(tmpdir(), CHECK_SCRATCH_PREFIX));
+  const scratch = await makeScratch(CHECK_SCRATCH_PREFIX);
   const reportPath = join(scratch, CHECK_REPORT_FILE);
   let worktreePath: string | undefined;
   try {
@@ -224,7 +224,7 @@ export async function runFolderChecks(input: FolderCheckInput): Promise<FolderCh
     const result = await runUnderFolderPosture({
       binding: input.binding,
       argv: [...input.argv],
-      cwd: worktree.path,
+      cwd: worktree.workDir,
       env: {},
       trustedEnv: {
         AFLOW_CHECK_SHA: input.sha,
@@ -241,7 +241,7 @@ export async function runFolderChecks(input: FolderCheckInput): Promise<FolderCh
       widening: {
         authPaths: [],
         allowedDomains: [],
-        writableRoot: worktree.path,
+        writableRoot: worktree.workDir,
         gitDir: worktree.gitDir,
         withholdBindingWrite: true,
       },

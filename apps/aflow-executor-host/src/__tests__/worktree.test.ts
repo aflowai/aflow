@@ -14,6 +14,7 @@ import {
   recordSession,
 } from '../harnessSessions.js';
 import { PUBLICATION_SCRATCH_PREFIX } from '../branchCommit.js';
+import { makeScratch } from '../executorScratch.js';
 import { openOrphanJournal, reapOrphans, recordSpawn } from '../orphans.js';
 import {
   checkApplies,
@@ -193,6 +194,42 @@ describe('worktree per run', () => {
     await removeWorktree(wt.path);
     expect(await exists(wt.path)).toBe(false);
     expect(await git(repo, 'worktree', 'list', '--porcelain')).toBe(listed);
+  });
+
+  it('gives a folder connected inside a repository a checkout that works where the folder is', async () => {
+    // A package of a monorepo: a repository to `rev-parse`, and no top level
+    // `git clone` would take.
+    const folder = join(repo, 'packages', 'app');
+    await mkdir(folder, { recursive: true });
+    await writeFile(join(folder, 'index.ts'), 'export const app = 1;\n');
+    await git(repo, 'add', '-A');
+    await git(repo, 'commit', '-m', 'a package');
+    expect(await isGitRepository(folder)).toBe(true);
+
+    const wt = await prepareWorktree(folder, scratch, 'work');
+    try {
+      expect(wt.workDir).toBe(join(wt.path, 'packages', 'app'));
+      expect(wt.baseSha).toBe((await git(repo, 'rev-parse', 'HEAD')).trim());
+      expect(await readFile(join(wt.workDir, 'index.ts'), 'utf8')).toBe('export const app = 1;\n');
+
+      // The run's work is the folder's: an edit beside it in the repository and
+      // the run's own files are not part of the change.
+      await writeFile(join(wt.workDir, 'index.ts'), 'export const app = 2;\n');
+      await writeFile(join(wt.workDir, 'added.ts'), 'export const added = true;\n');
+      await mkdir(join(wt.workDir, '.aflow'), { recursive: true });
+      await writeFile(join(wt.workDir, '.aflow', 'result.json'), '{}\n');
+      await writeFile(join(wt.path, 'app.txt'), 'outside the folder\n');
+      const changes = await collectChanges(wt);
+      expect(changes.filesChanged).toBe(2);
+      expect(changes.patch).toContain('packages/app/index.ts');
+      expect(changes.patch).toContain('packages/app/added.ts');
+      expect(changes.patch).not.toContain('app.txt');
+      expect(changes.patch).not.toContain('result.json');
+      expect(await checkApplies(folder, changes.patch)).toEqual({ state: 'clean' });
+    } finally {
+      await removeWorktree(wt.path);
+    }
+    expect(await exists(wt.path)).toBe(false);
   });
 });
 
@@ -412,12 +449,12 @@ describe('checkouts a restart left behind', () => {
   });
 
   it('removes what no session owns under the temp root, and nothing of the operator', async () => {
-    const orphanScratch = await mkdtemp(join(tempRoot, HARNESS_SCRATCH_PREFIX));
+    const orphanScratch = await makeScratch(HARNESS_SCRATCH_PREFIX, tempRoot);
     await prepareWorktree(repo, orphanScratch, 'work');
-    const orphanPublication = await mkdtemp(join(tempRoot, PUBLICATION_SCRATCH_PREFIX));
+    const orphanPublication = await makeScratch(PUBLICATION_SCRATCH_PREFIX, tempRoot);
     await prepareWorktree(repo, orphanPublication, 'commit', { dependencies: 'none' });
-    const stray = await mkdtemp(join(tempRoot, HARNESS_SCRATCH_PREFIX));
-    const liveScratch = await mkdtemp(join(tempRoot, HARNESS_SCRATCH_PREFIX));
+    const stray = await makeScratch(HARNESS_SCRATCH_PREFIX, tempRoot);
+    const liveScratch = await makeScratch(HARNESS_SCRATCH_PREFIX, tempRoot);
     const live = await prepareWorktree(repo, liveScratch, 'work');
     recordSession({
       id: 'hs_live',
@@ -435,8 +472,9 @@ describe('checkouts a restart left behind', () => {
       busy: false,
     });
     // The operator's own checkouts in the same temp root, in directories named
-    // the way this executor names its scratch: one added to the folder on a
-    // branch with work in progress, and a clone of their own on a branch.
+    // the way this executor names its scratch but never marked by it: one added
+    // to the folder on a branch with work in progress, and a clone of their own
+    // on a branch.
     const operatorsScratch = await mkdtemp(join(tempRoot, HARNESS_SCRATCH_PREFIX));
     const onBranch = join(operatorsScratch, 'mine');
     await git(repo, 'worktree', 'add', '-b', 'operator/review', onBranch);
@@ -468,6 +506,30 @@ describe('checkouts a restart left behind', () => {
     await removeWorktree(live.path);
     await git(repo, 'worktree', 'remove', '--force', onBranch);
     await removeWorktree(detached.path);
+  });
+
+  it('removes its own scratch whatever shape the checkouts in it were left in', async () => {
+    const scratchDir = await makeScratch(HARNESS_SCRATCH_PREFIX, tempRoot);
+    // A run killed between the gitfile and the detached checkout: the mirror's
+    // HEAD still names a branch, and the working tree holds only the gitfile.
+    const halfMade = join(scratchDir, 'work');
+    const halfMadeGitDir = join(scratchDir, 'git-work');
+    await git(repo, 'clone', '-q', '--mirror', '--shared', '--', repo, halfMadeGitDir);
+    await mkdir(halfMade);
+    await writeFile(join(halfMade, '.git'), `gitdir: ${halfMadeGitDir}\n`);
+    expect(await readFile(join(halfMadeGitDir, 'HEAD'), 'utf8')).toMatch(/^ref: /);
+    // And a worktree an earlier executor added to the folder, whose git
+    // directory is the folder's rather than one beside it.
+    const stale = join(scratchDir, 'earlier');
+    await git(repo, 'worktree', 'add', '--detach', stale);
+    const refs = await git(repo, 'for-each-ref');
+
+    expect(await removeOrphanedCheckouts(tempRoot)).toEqual({ checkouts: 2, scratchDirs: 1 });
+
+    expect(await exists(scratchDir)).toBe(false);
+    expect(await git(repo, 'for-each-ref')).toBe(refs);
+    await git(repo, 'worktree', 'prune');
+    expect(await git(repo, 'worktree', 'list', '--porcelain')).not.toContain(stale);
   });
 
   it("is what a crashed run's journal entry removes too, leaving nothing in the folder", async () => {

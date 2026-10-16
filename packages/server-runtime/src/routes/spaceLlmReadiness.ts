@@ -16,10 +16,16 @@ import {
   providerCredentials,
 } from '@aflow/database';
 import {
+  contextWindowForModel,
   createDefaultModelCatalog,
   inferProviderForModelRef,
   isVerifiableProvider,
+  localModelFit,
+  type ModelDefinition,
 } from '@aflow/ai-client';
+import type { Redis } from '@aflow/redis';
+import { resolveSpaceLocalRuntime, type ResolvedLocalRuntime } from '../lib/localRuntime.js';
+import type { LoadedLocalModel } from '@aflow/ai-client';
 import {
   DEFAULT_CYBERNETIC_MODEL,
   resolveRoleModel,
@@ -44,7 +50,52 @@ const RoleReadinessSchema = z.object({
    * check that has not run — one can never be satisfied and the other can.
    */
   verified: z.boolean().nullable(),
+  /**
+   * For a model on this computer: the window its requests get and whether the
+   * model fits the machine at it (Plan 323 D8). Informs and never counts
+   * against `ready` — a model that spills still answers, slowly.
+   */
+  localFit: z
+    .object({
+      status: z.enum(['fits', 'tight', 'does_not_fit', 'unknown']),
+      window: z.number().int(),
+      largestFittingWindow: z.number().int().nullable(),
+      bytesAtWindow: z.number().nullable(),
+      gpuWorkingSetBytes: z.number().nullable(),
+      /** Whether the runtime answered when asked what it holds. */
+      runtimeReachable: z.boolean(),
+      /** The model's size as loaded now — its weights and every conversation's cache — or null when not loaded. */
+      loadedBytes: z.number().nullable(),
+    })
+    .nullable(),
 });
+
+function localFitFor(
+  model: ModelDefinition | undefined,
+  runtime: ResolvedLocalRuntime | null,
+  loaded: LoadedLocalModel[] | null,
+): z.infer<typeof RoleReadinessSchema>['localFit'] {
+  if (!model?.local || !runtime) return null;
+  const parallel = runtime.config.parallel ?? 1;
+  const fit = localModelFit({
+    footprint: model.local.footprint,
+    machine: runtime.config.machine,
+    catalogWindow: model.contextWindow,
+    parallel,
+    window: contextWindowForModel(model, runtime.config),
+  });
+  const tag = model.providerModelId ?? model.id;
+  const held = loaded?.find((m) => m.tag === tag || m.tag === `${tag}:latest`);
+  return {
+    status: fit.status,
+    window: fit.window,
+    largestFittingWindow: fit.largestFittingWindow ?? null,
+    bytesAtWindow: fit.bytesAtWindow ?? null,
+    gpuWorkingSetBytes: runtime.config.machine?.gpuWorkingSetBytes ?? null,
+    runtimeReachable: loaded !== null,
+    loadedBytes: held?.sizeBytes ?? null,
+  };
+}
 
 /**
  * What the Clerk resolves to, and whether anything does.
@@ -221,6 +272,17 @@ export const spaceLlmReadinessRoutes: FastifyPluginAsync = async (fastify) => {
       const errored = new Map<string, { roles: string[]; lastErrorCode: string | null }>();
       let ready = true;
 
+      const runtime = roleRefs.some((r) => r.providerId === 'ollama')
+        ? await resolveSpaceLocalRuntime({
+            db,
+            redis: fastify.appContext.redis as Redis | undefined,
+            tenantId: tenant.tenantId as string,
+            userId: authUser.userId as string,
+            spaceId,
+          })
+        : null;
+      const loaded = runtime ? await runtime.client.loaded() : null;
+
       for (const { role, ref, modelId, providerId, unknownModel } of roleRefs) {
         const preview = providerId ? previews.get(providerId) : undefined;
         const resolved = preview?.resolved ?? false;
@@ -237,6 +299,7 @@ export const spaceLlmReadinessRoutes: FastifyPluginAsync = async (fastify) => {
           providerId,
           resolved,
           resolvedScope: preview?.resolvedScope ?? null,
+          localFit: localFitFor(modelId ? catalog.getModel(modelId) : undefined, runtime, loaded),
           status,
           verified,
         };

@@ -5,6 +5,8 @@ export const OLLAMA_DEFAULT_BASE_URL = 'http://127.0.0.1:11434';
 export const OLLAMA_DEFAULT_CONTEXT_TOKENS = 32_768;
 
 const THIS_MACHINE_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', 'host.docker.internal']);
+/** The host every name for this machine's loopback folds into. */
+export const THIS_MACHINE_RUNTIME_HOST = 'this-machine';
 
 /**
  * The runtime a base URL reaches, as one id however it is spelled (Plan 323
@@ -15,7 +17,7 @@ const THIS_MACHINE_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', 'host.doc
 export function localRuntimeId(baseUrl: string | undefined): string {
   const url = new URL(baseUrl || OLLAMA_DEFAULT_BASE_URL);
   const port = url.port || (url.protocol === 'https:' ? '443' : '80');
-  const host = THIS_MACHINE_HOSTS.has(url.hostname) ? 'this-machine' : url.hostname;
+  const host = THIS_MACHINE_HOSTS.has(url.hostname) ? THIS_MACHINE_RUNTIME_HOST : url.hostname;
   return `${host}:${port}`;
 }
 
@@ -181,9 +183,9 @@ export const PROVIDER_REGISTRY: readonly ProviderDefinition[] = [
         label: 'Context window (tokens)',
         type: 'number',
         required: false,
-        defaultValue: String(OLLAMA_DEFAULT_CONTEXT_TOKENS),
+        placeholder: 'Automatic',
         helpText:
-          'The largest prompt and answer a request may use. A larger window holds longer conversations and costs memory.',
+          'Leave empty for the largest window this computer fits, per model. A larger window holds longer conversations and costs memory; a window set here is used as set.',
       },
       {
         fieldId: 'max_parallel',
@@ -193,6 +195,15 @@ export const PROVIDER_REGISTRY: readonly ProviderDefinition[] = [
         defaultValue: '1',
         helpText:
           'How many requests this computer serves at the same time. Match OLLAMA_NUM_PARALLEL; each one needs its own context memory.',
+      },
+      {
+        fieldId: 'gpu_memory_gb',
+        label: 'GPU memory (GB)',
+        type: 'number',
+        required: false,
+        placeholder: 'Read from this computer',
+        helpText:
+          'For Ollama on another machine: the GPU memory it has, so each model gets the largest window that fits there. Leave empty for Ollama on this computer, which is read directly.',
       },
       {
         fieldId: 'keep_alive',

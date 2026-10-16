@@ -1,6 +1,8 @@
 /**
  * AIClient - Unified interface for AI operations.
  */
+import { OLLAMA_DEFAULT_CONTEXT_TOKENS } from '@aflow/schemas';
+import { localModelFit } from './localModelFit.js';
 import type {
   GenerateTextRequest,
   GenerateTextResponse,
@@ -290,9 +292,9 @@ export function createAIClient(config: AIClientConfig): AIClient {
         maxOutputTokens: model.maxOutputTokens,
         fromCatalog: true,
         vision: model.capabilities.vision,
-        contextWindow: effectiveContextWindow(
-          model.contextWindow,
-          config.providers[explicitProvider ?? model.provider]?.contextTokens,
+        contextWindow: contextWindowForModel(
+          model,
+          config.providers[explicitProvider ?? model.provider],
         ),
       };
     }
@@ -756,9 +758,26 @@ export function createAIClient(config: AIClientConfig): AIClient {
   };
 }
 
-function effectiveContextWindow(
-  catalogWindow: number,
-  connectionWindow: number | undefined,
+/**
+ * The window a request for this model gets. A window the connection sets is
+ * the operator's choice and is used as set, within the model's own. A model on
+ * the operator's machine with no window set gets the largest that fits the
+ * machine (Plan 323 D8), or a conservative default when fit cannot be known.
+ */
+export function contextWindowForModel(
+  model: ModelDefinition,
+  connection: ProviderConfig | undefined,
 ): number {
-  return connectionWindow === undefined ? catalogWindow : Math.min(catalogWindow, connectionWindow);
+  if (connection?.contextTokens !== undefined)
+    return Math.min(model.contextWindow, connection.contextTokens);
+  if (!model.local) return model.contextWindow;
+  const fit = localModelFit({
+    footprint: model.local.footprint,
+    machine: connection?.machine,
+    catalogWindow: model.contextWindow,
+    parallel: connection?.parallel ?? 1,
+  });
+  return fit.status === 'unknown'
+    ? Math.min(model.contextWindow, OLLAMA_DEFAULT_CONTEXT_TOKENS)
+    : fit.window;
 }

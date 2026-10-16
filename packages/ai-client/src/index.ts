@@ -56,6 +56,7 @@ export type {
   ModelPricing,
   ModelDefinition,
   LocalModelBuild,
+  LocalModelFootprint,
   ModelTraits,
   UsageRecord,
   AIErrorCode,
@@ -88,7 +89,7 @@ export {
 
 // Client
 export type { AIClient, AIClientConfig } from './client.js';
-export { createAIClient } from './client.js';
+export { createAIClient, contextWindowForModel } from './client.js';
 
 // Adapter interface
 export type { AIProviderAdapter } from './adapter.js';
@@ -182,3 +183,19 @@ export { resolveDecisionAnswers } from './decision.js';
 
 // Plan 323: the answer floor prompt budgeting and a local runtime's sizing share
 export { MIN_ANSWER_TOKENS } from './providers/ollamaPromptSize.js';
+export {
+  localModelFit,
+  footprintBytes,
+  WINDOW_STEP_TOKENS,
+  MIN_USEFUL_WINDOW_TOKENS,
+  RUNTIME_GPU_RESERVE_BYTES,
+  SYSTEM_RESERVE_BYTES,
+  type LocalMachine,
+  type LocalModelFit,
+  type LocalModelFitStatus,
+} from './localModelFit.js';
+export {
+  localRuntimeClient,
+  type LocalRuntimeClient,
+  type LoadedLocalModel,
+} from './providers/ollamaRuntime.js';

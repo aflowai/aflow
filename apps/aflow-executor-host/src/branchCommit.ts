@@ -6,8 +6,7 @@
  * base, or one commit appended to the branch the diff was made on — on its
  * head, or on the merge of its base into it that the commission made.
  */
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
@@ -16,6 +15,7 @@ import {
   undecidedConflicts,
   type BaseMerge,
 } from './baseMerge.js';
+import { makeScratch } from './executorScratch.js';
 import {
   APPLY_OUTPUT_CAP_BYTES,
   applyPatch,
@@ -277,7 +277,7 @@ export async function commitPatchOnBranch(
   const target = await commitTarget(root, branch, options.baseSha);
   const mergeFrom = await mergeSource(root, branch, target, options.mergeFrom);
 
-  const scratch = await mkdtemp(join(tmpdir(), PUBLICATION_SCRATCH_PREFIX));
+  const scratch = await makeScratch(PUBLICATION_SCRATCH_PREFIX);
   let worktree: PreparedWorktree | undefined;
   try {
     worktree = await prepareWorktree(root, scratch, 'commit', {

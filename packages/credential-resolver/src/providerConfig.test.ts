@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  localMachineFor,
   localRuntimeSettings,
   missingRequiredSecrets,
   providerConfigFromCredential,
@@ -20,11 +21,12 @@ const resolved = (
 
 describe('providerConfigFromCredential', () => {
   it('reaches the runtime the registry describes when the connection sets nothing', () => {
+    // No window: the client sizes one from the machine, per model.
     expect(providerConfigFromCredential('ollama', resolved({}))).toEqual({
       apiKey: '',
       baseUrl: 'http://127.0.0.1:11434',
-      contextTokens: 32_768,
       keepAlive: '30m',
+      parallel: 1,
     });
   });
 
@@ -68,5 +70,37 @@ describe('localRuntimeSettings', () => {
   it('admits one request at a time unless the connection says otherwise', () => {
     expect(localRuntimeSettings('ollama', resolved({}))).toEqual({ maxParallel: 1 });
     expect(localRuntimeSettings('ollama', resolved({}, { max_parallel: '2' })).maxParallel).toBe(2);
+  });
+});
+
+describe('localMachineFor', () => {
+  const THIS_MAC = { totalMemoryBytes: 24e9, gpuWorkingSetBytes: 19e9, unifiedMemory: true };
+
+  it('describes a runtime on this machine by this machine', () => {
+    expect(localMachineFor({ config: {}, inventoryMachine: THIS_MAC })).toEqual(THIS_MAC);
+    expect(
+      localMachineFor({
+        config: { base_url: 'http://host.docker.internal:11434' },
+        inventoryMachine: THIS_MAC,
+      }),
+    ).toEqual(THIS_MAC);
+  });
+
+  it('never describes a runtime on another machine by this one', () => {
+    expect(
+      localMachineFor({
+        config: { base_url: 'http://gpu-box.lan:11434' },
+        inventoryMachine: THIS_MAC,
+      }),
+    ).toBeUndefined();
+  });
+
+  it('takes the GPU memory the connection states, over what this machine reads', () => {
+    expect(
+      localMachineFor({
+        config: { base_url: 'http://gpu-box.lan:11434', gpu_memory_gb: '96' },
+        inventoryMachine: THIS_MAC,
+      }),
+    ).toEqual({ totalMemoryBytes: 96e9, gpuWorkingSetBytes: 96e9, unifiedMemory: false });
   });
 });

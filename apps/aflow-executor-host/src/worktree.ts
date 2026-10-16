@@ -202,9 +202,18 @@ export async function gitVersionText(timeoutMs: number): Promise<string | undefi
  * the repository for a git run outside the sandbox.
  */
 export interface Checkout {
+  /** The clone's working tree, where every git this lane runs in it starts. */
   readonly path: string;
   readonly gitDir: string;
+  /**
+   * Where the connected folder is in the clone, and so where a run works: `path`
+   * for a folder that is a repository's top level, the same subdirectory of it
+   * for a folder inside one.
+   */
+  readonly workDir: string;
 }
+
+const CHECKOUT_GIT_DIR_PREFIX = 'git-';
 
 /**
  * Where a checkout's git directory lives: beside it in the run's scratch, so
@@ -212,12 +221,26 @@ export interface Checkout {
  * name (`SandboxWidening.gitDir`) since the scratch around it is writable.
  */
 export function checkoutGitDir(worktreePath: string): string {
-  return join(dirname(worktreePath), `git-${basename(worktreePath)}`);
+  return join(dirname(worktreePath), `${CHECKOUT_GIT_DIR_PREFIX}${basename(worktreePath)}`);
 }
 
-/** The checkout at `worktreePath`, with the git directory this lane made for it. */
-export function checkoutAt(worktreePath: string): Checkout {
-  return { path: worktreePath, gitDir: checkoutGitDir(worktreePath) };
+/** The checkout whose git directory `path` would be, if it is named as one. */
+export function checkoutOfGitDir(path: string): string | undefined {
+  const name = basename(path);
+  if (!name.startsWith(CHECKOUT_GIT_DIR_PREFIX)) return undefined;
+  return join(dirname(path), name.slice(CHECKOUT_GIT_DIR_PREFIX.length));
+}
+
+/**
+ * The checkout at `worktreePath`, with the git directory this lane made for it,
+ * of a folder at `prefix` (`folderPrefix`) in its repository.
+ */
+export function checkoutAt(worktreePath: string, prefix = ''): Checkout {
+  return {
+    path: worktreePath,
+    gitDir: checkoutGitDir(worktreePath),
+    workDir: prefix === '' ? worktreePath : join(worktreePath, prefix),
+  };
 }
 
 /** Where git runs: a folder by its path, a checkout by its own git directory. */
@@ -615,8 +638,6 @@ async function unlinkDependencies(worktreePath: string): Promise<void> {
 }
 
 export interface PreparedWorktree extends Checkout {
-  /** Absolute path the harness runs in. */
-  readonly path: string;
   /** Commit the run started from, so the diff has a stated base. */
   readonly baseSha: string;
 }
@@ -627,6 +648,14 @@ export async function isGitRepository(root: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * Where a folder is in its repository, as a relative path with no trailing
+ * slash: empty for the top level, `packages/app` for a package of a monorepo.
+ */
+export async function folderPrefix(root: string): Promise<string> {
+  return (await git(root, ['rev-parse', '--show-prefix'])).trim().replace(/\/$/, '');
 }
 
 export interface PrepareWorktreeOptions {
@@ -862,9 +891,11 @@ export async function prepareWorktree(
     }
   }
 
-  const checkout = checkoutAt(join(scratchDir, runKey));
+  let checkout = checkoutAt(join(scratchDir, runKey));
   try {
-    await clonePrivately(root, checkout, baseSha);
+    const top = (await git(root, ['rev-parse', '--show-toplevel'])).trim();
+    checkout = checkoutAt(checkout.path, await folderPrefix(root));
+    await clonePrivately(top, checkout, baseSha);
   } catch (error) {
     await rm(checkout.path, { recursive: true, force: true }).catch(() => {});
     await rm(checkout.gitDir, { recursive: true, force: true }).catch(() => {});
@@ -873,12 +904,19 @@ export async function prepareWorktree(
       'git_failed',
     );
   }
-  if ((options.dependencies ?? 'linked') === 'linked') await linkDependencies(root, checkout.path);
+  if ((options.dependencies ?? 'linked') === 'linked') {
+    await linkDependencies(root, checkout.workDir);
+  }
   return { ...checkout, baseSha };
 }
 
 /**
- * A clone of the folder at `path`, detached at `baseSha`, whose refs are its own.
+ * A clone at `path` of the repository whose top level is `top`, detached at
+ * `baseSha`, whose refs are its own.
+ *
+ * Cloned from the top level because `git clone` takes nothing else, while a
+ * connected folder may be any directory of a working tree; a run then works in
+ * the folder's place in the clone (`workDir`).
  *
  * `--mirror` copies every ref as the folder names it, so `main`, `origin/main`
  * and a tag read in the clone as they read in the folder when it was made — a
@@ -895,13 +933,15 @@ export async function prepareWorktree(
  * git refuses alongside `--mirror` since a mirror is bare. `--force` checks out
  * over the index the bare clone never had.
  */
-async function clonePrivately(root: string, checkout: Checkout, baseSha: string): Promise<void> {
-  await git(root, ['clone', '--quiet', '--mirror', '--shared', '--', root, checkout.gitDir]);
+async function clonePrivately(top: string, checkout: Checkout, baseSha: string): Promise<void> {
+  await git(top, ['clone', '--quiet', '--mirror', '--shared', '--', top, checkout.gitDir]);
   await git(checkout.gitDir, ['config', 'core.bare', 'false']);
   await git(checkout.gitDir, ['config', '--remove-section', 'remote.origin']);
   await mkdir(checkout.path, { recursive: true });
   await writeFile(join(checkout.path, '.git'), `gitdir: ${checkout.gitDir}\n`, 'utf8');
   await git(checkout, ['checkout', '--quiet', '--force', '--detach', baseSha]);
+  // A folder that tracks nothing at this commit is not in what was checked out.
+  await mkdir(checkout.workDir, { recursive: true });
 }
 
 export interface WorktreeChanges {
@@ -928,7 +968,11 @@ export const RUN_SCRATCH_DIR = '.aflow';
  * files would be the most misleading possible answer.
  */
 export async function collectChanges(checkout: Checkout): Promise<WorktreeChanges> {
-  const worktreePath = checkout.path;
+  // Only the connected folder's part of the clone is the run's work, and git
+  // runs at the clone's top, so every path below is anchored there.
+  const within = relativePath(checkout.path, checkout.workDir).split(sep).join('/');
+  const anchor = within === '' ? '' : `${within}/`;
+  const scope = within === '' ? '.' : `:(top,literal)${within}`;
   // The mirrored installations are this lane's own doing, not the harness's
   // work, and git sees a directory of untracked symlinks that `add -A` would
   // stage. They cannot be removed instead: a session keeps its checkout across
@@ -937,15 +981,15 @@ export async function collectChanges(checkout: Checkout): Promise<WorktreeChange
   // pathspecs: a repository that already ignores `node_modules` makes a
   // pathspec naming it an error, while an ignore rule for an ignored path is
   // simply redundant.
-  const mirrors = await dependencyDirs(worktreePath);
+  const mirrors = await dependencyDirs(checkout.workDir);
   const excludes = join(tmpdir(), `aflow-collect-${String(process.pid)}-${randomUUID()}`);
   await writeFile(
     excludes,
-    [...mirrors, `${RUN_SCRATCH_DIR}/`].map((relative) => `/${relative}\n`).join(''),
+    [...mirrors, `${RUN_SCRATCH_DIR}/`].map((relative) => `/${anchor}${relative}\n`).join(''),
     'utf8',
   );
   try {
-    await git(checkout, ['-c', `core.excludesFile=${excludes}`, 'add', '-A', '--', '.']);
+    await git(checkout, ['-c', `core.excludesFile=${excludes}`, 'add', '-A', '--', scope]);
   } catch (error) {
     throw new WorktreeError(
       `Could not read what the harness changed: ${error instanceof Error ? error.message.split('\n')[0] : 'git failed'}`,
@@ -957,7 +1001,7 @@ export async function collectChanges(checkout: Checkout): Promise<WorktreeChange
   // The ignore rule keeps an untracked scratch file out of the index, but a
   // repository that tracks something under the directory still has its edits
   // staged, so the diff leaves the directory out by pathspec as well.
-  const pathspec = ['--', '.', `:(exclude,top)${RUN_SCRATCH_DIR}`];
+  const pathspec = ['--', scope, `:(exclude,top,literal)${anchor}${RUN_SCRATCH_DIR}`];
   const nameOnly = await git(checkout, ['diff', '--cached', '--name-only', ...pathspec]);
   const filesChanged = nameOnly.split('\n').filter((line) => line.length > 0).length;
   if (filesChanged === 0) {

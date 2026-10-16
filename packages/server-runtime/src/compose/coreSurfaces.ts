@@ -27,6 +27,7 @@ import { spacePolicyRoutes } from '../routes/spacePolicyRoutes.js';
 import { spaceLifecycleRoutes } from '../routes/spaceLifecycleRoutes.js';
 import { activeMemoryRoutes } from '../routes/activeMemory.js';
 import { spaceLlmReadinessRoutes } from '../routes/spaceLlmReadiness.js';
+import { localModelRoutes } from '../routes/localModels.js';
 import { spaceConnectionsRoutes } from '../routes/spaceConnections.js';
 import { cascadesRoutes } from '../routes/cascades.js';
 import { workflowsRoutes } from '../routes/workflows/index.js';
@@ -151,6 +152,10 @@ function v1Surfaces({ actionCenterAggregator }: V1SurfaceDeps): ServerSurface[] 
     {
       name: 'space-llm-readiness',
       register: (s) => s.register(spaceLlmReadinessRoutes, { prefix: '/spaces' }),
+    },
+    {
+      name: 'local-models',
+      register: (s) => s.register(localModelRoutes, { prefix: '/spaces' }),
     },
     {
       name: 'space-connections',

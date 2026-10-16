@@ -10,6 +10,7 @@ import {
   inferProviderForModelRef,
   type AIClient,
   type GenerateTextResponse,
+  type LocalMachine,
 } from '@aflow/ai-client';
 import { localRuntimeId } from '@aflow/schemas';
 import { CredentialResolver } from './resolver.js';
@@ -134,12 +135,20 @@ function admitted(
   };
 }
 
+/** What a factory needs to reach a runtime on the operator's machine as the AI executor does. */
+export interface LocalRuntimeOptions {
+  /** A lease on the runtime for each request (Plan 323 D7). */
+  admission?: RuntimeAdmission | undefined;
+  /** The machine it runs on, which sizes each model's window (D8). */
+  machine?: (() => Promise<LocalMachine | undefined>) | undefined;
+}
+
 export class ByokAiClientFactory {
   private cache = new Map<string, { client: AIClient; expiresAt: number }>();
 
   constructor(
     private resolver: CredentialResolver,
-    private admission?: RuntimeAdmission,
+    private local: LocalRuntimeOptions = {},
   ) {}
 
   /** Whether `model`'s provider resolves a credential in this context. */
@@ -175,22 +184,25 @@ export class ByokAiClientFactory {
       throw new ByokCredentialError(credentialMissingMessage(providerId), providerId);
     }
 
-    const cacheKey = `${resolved.credentialId}:${resolved.updatedAt}`;
+    const machine =
+      providerId === 'ollama' ? await this.local.machine?.().catch(() => undefined) : undefined;
+    const cacheKey = `${resolved.credentialId}:${resolved.updatedAt}:${machine?.gpuWorkingSetBytes ?? '-'}`;
     const hit = this.cache.get(cacheKey);
     if (hit && hit.expiresAt > Date.now()) return { client: hit.client, providerId };
 
-    const providerConfig = providerConfigFromCredential(providerId, resolved);
+    const providerConfig = providerConfigFromCredential(providerId, resolved, { machine });
     const plain = createAIClient({
       providers: { [providerId]: providerConfig },
       defaultProvider: providerId as 'openai',
     });
+    const admission = this.local.admission;
     const client =
-      providerId === 'ollama' && this.admission
+      providerId === 'ollama' && admission
         ? admitted(
             plain,
             localRuntimeId(providerConfig.baseUrl),
             localRuntimeSettings(providerId, resolved).maxParallel,
-            this.admission,
+            admission,
           )
         : plain;
     this.cache.set(cacheKey, { client, expiresAt: Date.now() + CLIENT_CACHE_TTL_MS });
@@ -200,10 +212,10 @@ export class ByokAiClientFactory {
 
 export function createByokAiClientFactory(
   db: PostgresJsDatabase,
-  admission?: RuntimeAdmission,
+  local: LocalRuntimeOptions = {},
 ): ByokAiClientFactory {
   return new ByokAiClientFactory(
     new CredentialResolver({ loader: createProviderCredentialDbLoader(db) }),
-    admission,
+    local,
   );
 }
