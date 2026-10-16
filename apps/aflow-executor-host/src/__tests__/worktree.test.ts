@@ -1,5 +1,15 @@
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -488,9 +498,9 @@ describe('checkouts a restart left behind', () => {
     const refs = await git(repo, 'for-each-ref');
     const listed = await git(repo, 'worktree', 'list', '--porcelain');
 
-    const outcome = await removeOrphanedCheckouts(tempRoot);
+    const outcome = await removeOrphanedCheckouts([repo], tempRoot);
 
-    expect(outcome).toEqual({ checkouts: 2, scratchDirs: 3 });
+    expect(outcome).toEqual({ checkouts: 2, worktrees: 0, scratchDirs: 3 });
     expect(await exists(orphanScratch)).toBe(false);
     expect(await exists(orphanPublication)).toBe(false);
     expect(await exists(stray)).toBe(false);
@@ -524,12 +534,79 @@ describe('checkouts a restart left behind', () => {
     await git(repo, 'worktree', 'add', '--detach', stale);
     const refs = await git(repo, 'for-each-ref');
 
-    expect(await removeOrphanedCheckouts(tempRoot)).toEqual({ checkouts: 2, scratchDirs: 1 });
+    const staleReal = await realpath(stale);
+
+    expect(await removeOrphanedCheckouts([repo], tempRoot)).toEqual({
+      checkouts: 1,
+      worktrees: 1,
+      scratchDirs: 1,
+    });
 
     expect(await exists(scratchDir)).toBe(false);
     expect(await git(repo, 'for-each-ref')).toBe(refs);
-    await git(repo, 'worktree', 'prune');
-    expect(await git(repo, 'worktree', 'list', '--porcelain')).not.toContain(stale);
+    expect(await git(repo, 'worktree', 'list', '--porcelain')).not.toContain(staleReal);
+  });
+
+  it('takes off the folder a checkout the executor before the clone added, and no other', async () => {
+    // Where and how that executor added one: detached, in a scratch named as
+    // this executor names its own, which it never marked.
+    const earlierScratch = await mkdtemp(join(tempRoot, HARNESS_SCRATCH_PREFIX));
+    const earlier = join(earlierScratch, 'work');
+    await git(repo, 'worktree', 'add', '--detach', earlier);
+    await writeFile(join(earlier, 'app.txt'), 'a dead run left this\n');
+    const earlierReal = await realpath(earlier);
+    // The operator's own: detached too, outside any scratch name of this executor.
+    const operators = await mkdtemp(join(tempRoot, 'aflow-review-'));
+    const mine = join(operators, 'mine');
+    await git(repo, 'worktree', 'add', '--detach', mine);
+    await writeFile(join(mine, 'app.txt'), 'my review notes\n');
+    const refs = await git(repo, 'for-each-ref');
+
+    expect(await removeOrphanedCheckouts([repo], tempRoot)).toEqual({
+      checkouts: 0,
+      worktrees: 1,
+      scratchDirs: 0,
+    });
+
+    const listed = await git(repo, 'worktree', 'list', '--porcelain');
+    expect(listed).not.toContain(earlierReal);
+    expect(await exists(earlier)).toBe(false);
+    expect(listed).toContain(await realpath(mine));
+    expect(await readFile(join(mine, 'app.txt'), 'utf8')).toBe('my review notes\n');
+    expect(await git(repo, 'for-each-ref')).toBe(refs);
+
+    await git(repo, 'worktree', 'remove', '--force', mine);
+  });
+
+  it('refuses a link planted in its scratch, and leaves what the link leads to', async () => {
+    // The operator's project, with a workspace installation: a link to a
+    // downloaded package and one to a scoped package.
+    const project = await mkdtemp(join(tempRoot, 'project-'));
+    await mkdir(join(project, '.git'));
+    await mkdir(join(project, 'vendor', 'left-pad'), { recursive: true });
+    await mkdir(join(project, 'node_modules', '@acme'), { recursive: true });
+    await symlink(join(project, 'vendor', 'left-pad'), join(project, 'node_modules', 'left-pad'));
+    await symlink(join(project, 'vendor'), join(project, 'node_modules', '@acme', 'vendor'));
+    // What an agent writing the scratch can plant: a checkout that is a link to
+    // it, and a git directory named for one that is a link too.
+    const scratchDir = await makeScratch(HARNESS_SCRATCH_PREFIX, tempRoot);
+    await symlink(project, join(scratchDir, 'work'));
+    await symlink(project, join(scratchDir, 'git-other'));
+
+    await removeWorktree(join(scratchDir, 'work'));
+    expect(await removeOrphanedCheckouts([], tempRoot)).toEqual({
+      checkouts: 0,
+      worktrees: 0,
+      scratchDirs: 1,
+    });
+
+    expect(await exists(scratchDir)).toBe(false);
+    expect((await lstat(join(project, 'node_modules', 'left-pad'))).isSymbolicLink()).toBe(true);
+    expect((await lstat(join(project, 'node_modules', '@acme', 'vendor'))).isSymbolicLink()).toBe(
+      true,
+    );
+    expect(await exists(join(project, '.git'))).toBe(true);
+    expect(await exists(join(project, 'vendor', 'left-pad'))).toBe(true);
   });
 
   it("is what a crashed run's journal entry removes too, leaving nothing in the folder", async () => {
@@ -547,6 +624,10 @@ describe('checkouts a restart left behind', () => {
   });
 
   it('reports nothing when nothing was left behind', async () => {
-    expect(await removeOrphanedCheckouts(tempRoot)).toEqual({ checkouts: 0, scratchDirs: 0 });
+    expect(await removeOrphanedCheckouts([repo], tempRoot)).toEqual({
+      checkouts: 0,
+      worktrees: 0,
+      scratchDirs: 0,
+    });
   });
 });

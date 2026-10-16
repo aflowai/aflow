@@ -110,6 +110,37 @@ describe('dependencies in the isolated checkout', () => {
     await removeWorktree(wt.path);
   });
 
+  it('carries the top level installation too, for a folder connected as a package', async () => {
+    // Resolution from inside the package walks up to the repository's top
+    // level, where a workspace hoists what the package needs.
+    const folder = join(repo, 'packages', 'a');
+    const wt = await prepareWorktree(folder, scratch, 'work');
+    const worktreeReal = await realpath(wt.path);
+    const repoReal = await realpath(repo);
+
+    for (const installation of [join(wt.path, 'node_modules'), join(wt.workDir, 'node_modules')]) {
+      const mirrored = await lstat(installation);
+      expect(mirrored.isDirectory()).toBe(true);
+      expect(mirrored.isSymbolicLink()).toBe(false);
+    }
+    expect(await readFile(join(wt.workDir, 'node_modules', 'marker.txt'), 'utf8')).toBe(
+      'package dep\n',
+    );
+    expect(await realpath(join(wt.path, 'node_modules', 'left-pad'))).toBe(
+      join(repoReal, 'node_modules', 'left-pad'),
+    );
+    // A workspace package resolves into the clone, the folder's own included,
+    // not into what the operator has open.
+    expect(await realpath(join(wt.path, 'node_modules', '@acme', 'a'))).toBe(
+      join(worktreeReal, 'packages', 'a'),
+    );
+    expect(await collectChanges(wt)).toEqual({ patch: '', filesChanged: 0, overCeiling: false });
+
+    await removeWorktree(wt.path);
+    expect((await lstat(join(repo, 'node_modules', '@acme', 'a'))).isSymbolicLink()).toBe(true);
+    expect(await readdir(join(folder, 'node_modules'))).toEqual(['marker.txt']);
+  });
+
   it('shows a workspace package as committed, not as the operator is editing it', async () => {
     // The promise the isolated checkout makes. Resolved through one link to the
     // installation, this read returned the operator's uncommitted line.

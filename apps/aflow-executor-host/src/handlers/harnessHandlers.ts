@@ -16,9 +16,9 @@
  * agent runs moves only those (Plan 315 F56). Nothing is committed, and the
  * clone is removed once its changes have been collected.
  */
-import { lstat, mkdir, readdir, readFile, rm, stat } from 'node:fs/promises';
+import { lstat, mkdir, readdir, readFile, realpath, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, join, sep } from 'node:path';
 
 import AjvModule from 'ajv';
 import type { z } from 'zod';
@@ -112,8 +112,11 @@ import {
   fetchRemoteBase,
   folderPrefix,
   INLINE_DIFF_CAP_BYTES,
+  isRealDirectory,
+  linkedWorktrees,
   NO_REPLACE_OBJECTS_ENV,
   prepareWorktree,
+  removeLinkedWorktree,
   removeWorktree,
   resolveCommit,
   RUN_SCRATCH_DIR,
@@ -1119,6 +1122,8 @@ export function createHostHarnessHandler(
 export interface OrphanedCheckouts {
   /** Clones removed from the scratch directories below. */
   readonly checkouts: number;
+  /** Checkouts an earlier executor added to a connected folder, taken off it. */
+  readonly worktrees: number;
   /** Scratch directories removed from the temp root. */
   readonly scratchDirs: number;
 }
@@ -1129,31 +1134,57 @@ export interface OrphanedCheckouts {
  * Sessions live in this executor's memory, so a restart forgets every one of
  * them while their scratch, and the clone in it, stays in the temp root with
  * nothing left that would ever expire it. Run at boot, before any job, when
- * every checkout this lane made is one of those.
+ * every checkout this lane made is one of those. Exactly two things are swept:
  *
- * Only a directory under the temp root named the way this executor names its
- * own scratch and carrying the marker it leaves in one (`makeScratch`) is
- * taken, and then whole: whatever a run left in it is the executor's, whether a
- * clone killed before its checkout was detached or a worktree an earlier
- * executor added to a folder, so what decides is the directory and never the
- * shape of a checkout in it. A directory without the marker is left, whatever
- * it holds. A clone registers nothing in the folder it was made from, and git
- * prunes the registration a removed worktree leaves, so removing the directory
- * is the whole of removing either.
+ * - Each checkout `git worktree list` reports for a folder in `roots` that is
+ *   detached and lies in a directory under the temp root named the way this
+ *   executor names its scratch and owned by no session — where, and how, the
+ *   executor before the private clone added one. It is taken off with
+ *   `git worktree remove --force`, files and registration. The directory
+ *   around it carries no marker and is left. A checkout with a branch in it,
+ *   or anywhere else, is the operator's.
+ * - Each directory under the temp root named that way, owned by no session and
+ *   carrying the marker `makeScratch` leaves, whole: whatever a run left in it
+ *   is the executor's, whether a clone killed before its checkout was detached
+ *   or a worktree added to a folder, so what decides is the directory and never
+ *   the shape of a checkout in it. A directory without the marker is left,
+ *   whatever it holds. Inside one, only a real directory is treated as a
+ *   checkout; a link is removed with the scratch and nothing it leads to is
+ *   walked.
  */
 export async function removeOrphanedCheckouts(
+  roots: readonly string[],
   tempRoot: string = tmpdir(),
 ): Promise<OrphanedCheckouts> {
   const owned = new Set(allSessions().map((session) => basename(session.scratchDir)));
   const unowned = (name: string): boolean =>
     CHECKOUT_SCRATCH_PREFIXES.some((prefix) => name.startsWith(prefix)) && !owned.has(name);
+  // git records a checkout by its resolved path, and the temp root is commonly
+  // reached through a link (`/var` on macOS), so both spellings are asked.
+  const tempRoots = new Set([tempRoot, await realpath(tempRoot).catch(() => tempRoot)]);
+  const underUnownedScratch = (path: string): boolean => {
+    for (const under of tempRoots) {
+      if (!path.startsWith(under + sep)) continue;
+      const inside = path.slice(under.length + 1).split(sep);
+      return inside.length > 1 && unowned(inside[0] ?? '');
+    }
+    return false;
+  };
+
+  let worktrees = 0;
+  for (const root of new Set(roots)) {
+    for (const worktree of await linkedWorktrees(root).catch(() => [])) {
+      if (!worktree.detached || !underUnownedScratch(worktree.path)) continue;
+      if (await removeLinkedWorktree(root, worktree.path)) worktrees += 1;
+    }
+  }
 
   let checkouts = 0;
   let scratchDirs = 0;
   for (const name of await readdir(tempRoot).catch(() => [] as string[])) {
     if (!unowned(name)) continue;
     const scratchDir = join(tempRoot, name);
-    if (!(await isMarkedScratch(scratchDir))) continue;
+    if (!(await isRealDirectory(scratchDir)) || !(await isMarkedScratch(scratchDir))) continue;
     for (const checkout of await checkoutsIn(scratchDir)) {
       await removeWorktree(checkout);
       checkouts += 1;
@@ -1161,23 +1192,29 @@ export async function removeOrphanedCheckouts(
     await discardScratch({ scratchDir });
     scratchDirs += 1;
   }
-  return { checkouts, scratchDirs };
+  return { checkouts, worktrees, scratchDirs };
 }
 
 /**
  * The checkouts in a scratch directory, made whole or in part: a directory
  * holding a `.git` of any kind, and one whose git directory alone was made.
+ * Only a real directory counts, as the entry and as the checkout it names: an
+ * agent writes this scratch, and a link it planted would lead the removal into
+ * whatever the link points at.
  */
 async function checkoutsIn(scratchDir: string): Promise<string[]> {
   const found = new Set<string>();
   for (const entry of await readdir(scratchDir).catch(() => [] as string[])) {
     const path = join(scratchDir, entry);
+    if (!(await isRealDirectory(path))) continue;
     if ((await lstat(join(path, '.git')).catch(() => undefined)) !== undefined) {
       found.add(path);
       continue;
     }
     const checkout = checkoutOfGitDir(path);
-    if (checkout !== undefined) found.add(checkout);
+    if (checkout === undefined) continue;
+    const info = await lstat(checkout).catch(() => undefined);
+    if (info === undefined || info.isDirectory()) found.add(checkout);
   }
   return [...found];
 }

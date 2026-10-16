@@ -473,8 +473,13 @@ async function dependencyDirs(base: string): Promise<string[]> {
 }
 
 interface MirrorContext {
-  /** The connected folder, resolved, so containment is decided on real paths. */
+  /**
+   * The repository's top level, resolved, so containment is decided on real
+   * paths: a workspace link from a connected package may lead to a sibling
+   * package, which the clone carries as much as the folder itself.
+   */
   readonly rootReal: string;
+  /** The clone's top level, where a path inside the repository lands. */
   readonly worktreePath: string;
 }
 
@@ -559,17 +564,31 @@ async function mirrorInstallation(
  * sandbox grants writes to the worktree by path, and a write through a link
  * lands on the folder's own directory, which the harness's policy withholds. So
  * a harness can run the tests and cannot corrupt what the operator installed.
+ *
+ * For a folder inside a repository, every installation on the way from the
+ * folder up to the top level is linked too, at the same place in the clone:
+ * resolution walks up from the folder, and a workspace hoists most of what a
+ * package needs into the top level's installation.
  */
-async function linkDependencies(root: string, worktreePath: string): Promise<void> {
+async function linkDependencies(top: string, checkout: Checkout): Promise<void> {
   let rootReal: string;
   try {
-    rootReal = await realpath(root);
+    rootReal = await realpath(top);
   } catch {
-    rootReal = root;
+    rootReal = top;
   }
-  const context: MirrorContext = { rootReal, worktreePath };
-  for (const relative of await dependencyDirs(root)) {
-    const destination = join(worktreePath, relative);
+  const context: MirrorContext = { rootReal, worktreePath: checkout.path };
+  const prefix = relativePath(checkout.path, checkout.workDir);
+  const above = prefix === '' ? [] : prefix.split(sep);
+  const installations: string[] = [];
+  for (let depth = 0; depth < above.length; depth += 1) {
+    installations.push(join(...above.slice(0, depth), DEPENDENCY_DIR));
+  }
+  for (const relative of await dependencyDirs(join(top, prefix))) {
+    installations.push(join(prefix, relative));
+  }
+  for (const relative of installations) {
+    const destination = join(checkout.path, relative);
     try {
       // Only where the checkout has the same place to put it, and has nothing
       // there already — a tracked directory of that name is the repository's.
@@ -583,7 +602,7 @@ async function linkDependencies(root: string, worktreePath: string): Promise<voi
     } catch {
       // Absent, which is the case this fills.
     }
-    await mirrorInstallation(join(root, relative), destination, context, true);
+    await mirrorInstallation(join(top, relative), destination, context, true);
   }
 }
 
@@ -631,7 +650,18 @@ async function removeMirror(directory: string): Promise<void> {
   await rmdir(directory).catch(() => {});
 }
 
+/** Whether `path` is itself a directory, never one a link leads to. */
+export async function isRealDirectory(path: string): Promise<boolean> {
+  return (await lstat(path).catch(() => undefined))?.isDirectory() === true;
+}
+
+/**
+ * Take the mirrors out of the checkout at `worktreePath`, and out of nothing
+ * else: a checkout path that is a link is not walked, since what it leads to is
+ * someone's real `node_modules` and its links are their installation.
+ */
 async function unlinkDependencies(worktreePath: string): Promise<void> {
+  if (!(await isRealDirectory(worktreePath))) return;
   for (const relative of await dependencyDirs(worktreePath)) {
     await removeMirror(join(worktreePath, relative));
   }
@@ -892,8 +922,9 @@ export async function prepareWorktree(
   }
 
   let checkout = checkoutAt(join(scratchDir, runKey));
+  let top: string;
   try {
-    const top = (await git(root, ['rev-parse', '--show-toplevel'])).trim();
+    top = (await git(root, ['rev-parse', '--show-toplevel'])).trim();
     checkout = checkoutAt(checkout.path, await folderPrefix(root));
     await clonePrivately(top, checkout, baseSha);
   } catch (error) {
@@ -905,7 +936,7 @@ export async function prepareWorktree(
     );
   }
   if ((options.dependencies ?? 'linked') === 'linked') {
-    await linkDependencies(root, checkout.workDir);
+    await linkDependencies(top, checkout);
   }
   return { ...checkout, baseSha };
 }
@@ -1037,11 +1068,61 @@ export async function collectChanges(checkout: Checkout): Promise<WorktreeChange
  * checkout and its git directory are the whole of it. Failure here is never
  * allowed to fail the run — the work is already collected, and a leftover
  * directory is a housekeeping problem rather than a reason to discard a result.
+ *
+ * Each of the two is removed only as a real directory: a link standing in
+ * either place is not this lane's checkout, and is left for whoever discards
+ * the scratch around it, which takes the link and nothing it leads to.
  */
 export async function removeWorktree(worktreePath: string): Promise<void> {
-  await unlinkDependencies(worktreePath);
-  await rm(worktreePath, { recursive: true, force: true }).catch(() => {});
-  await rm(checkoutGitDir(worktreePath), { recursive: true, force: true }).catch(() => {});
+  if (await isRealDirectory(worktreePath)) {
+    await unlinkDependencies(worktreePath);
+    await rm(worktreePath, { recursive: true, force: true }).catch(() => {});
+  }
+  const gitDir = checkoutGitDir(worktreePath);
+  if (await isRealDirectory(gitDir)) {
+    await rm(gitDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+export interface LinkedWorktree {
+  readonly path: string;
+  /** No branch is checked out in it. */
+  readonly detached: boolean;
+}
+
+/**
+ * Every checkout added to the repository, without its main one.
+ *
+ * Read from git rather than from disk: a checkout whose directory is gone is
+ * still registered, and the registration is what the operator sees.
+ */
+export async function linkedWorktrees(root: string): Promise<LinkedWorktree[]> {
+  const listing = await git(root, ['worktree', 'list', '--porcelain'], APPLY_OUTPUT_CAP_BYTES);
+  return listing
+    .split(/\n\n+/)
+    .map((block) => block.split('\n'))
+    .filter((lines) => lines[0]?.startsWith('worktree ') === true)
+    .map((lines) => ({
+      path: (lines[0] ?? '').slice('worktree '.length),
+      detached: lines.includes('detached'),
+    }))
+    .slice(1);
+}
+
+/**
+ * Take a checkout added to the repository at `root` off it, files and
+ * registration both. A path that is a link is refused: git added a directory
+ * there, so a link in its place was put there since, and is not walked.
+ */
+export async function removeLinkedWorktree(root: string, worktreePath: string): Promise<boolean> {
+  const info = await lstat(worktreePath).catch(() => undefined);
+  if (info !== undefined && !info.isDirectory()) return false;
+  try {
+    await git(root, ['worktree', 'remove', '--force', worktreePath]);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

@@ -213,11 +213,16 @@ async function main(): Promise<void> {
   });
 
   // Checkouts too: every session died with the previous executor, so the clones
-  // they held on disk have nothing left that would ever expire them.
-  const orphaned = await removeOrphanedCheckouts();
-  if (orphaned.checkouts > 0 || orphaned.scratchDirs > 0) {
+  // they held on disk, and any checkout an earlier executor added to a folder,
+  // have nothing left that would ever expire them.
+  const bound = await loadHostPolicy(policyPath)
+    .then((policy) => [...policy.bindings.values()].map((binding) => binding.root))
+    .catch(() => [] as string[]);
+  const orphaned = await removeOrphanedCheckouts(bound);
+  if (orphaned.checkouts > 0 || orphaned.worktrees > 0 || orphaned.scratchDirs > 0) {
     log.info('Removed checkouts left behind by a previous run of this executor', {
       checkouts: orphaned.checkouts,
+      worktrees: orphaned.worktrees,
       scratchDirs: orphaned.scratchDirs,
     });
   }
