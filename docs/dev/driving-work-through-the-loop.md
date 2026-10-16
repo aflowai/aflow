@@ -77,8 +77,14 @@ meanwhile is refused with its current state rather than overwritten, and a node 
    `.aflow/` but the result file, and the agent starts or stops no process. Part 2 is the
    publication, started once the commission's end has woken the conversation: by
    `patchRef`, `baseSha` the commission's, `mergeFrom` its `merge.from` where it merged, `base: main`, the branch, owner
-   and repository, the title, started with `wait: 'none'` and the same `planNodeId`, and the
-   run id reported back.
+   and repository, the findings of the review rounds before it as `findings` — each as the
+   review named it, marked `closed` or `open` — and what the commissions reported they left
+   undone or could not verify as `gaps`, started with `wait: 'none'` and the same
+   `planNodeId`, and the run id reported back. The pull request's title and body are
+   composed from the branch as a whole: the slice's title, the subject of its first commit,
+   and a body of every commit's message, those findings with the publication's own review,
+   the check's results and the gaps; a fix appended to the branch rewrites the body. A
+   `title` or `summary` is passed only to say it in the operator's own words.
    For a branch that already has a pull request, name its number for the 422.
 2. **Read the review**: `workflow.run.detail` on the child review run gives the verdict and
    every finding with file and line. `approve` means the publication pushed on its own;
@@ -202,8 +208,6 @@ aflow:session:<tenant>:<sessionId>:state status waitingOnWorkflowRunId` — `PAU
   twice; the watch above is the way to read it.
 - **F59** — a publication a newer one supersedes keeps its approval live; cancel it by
   hand before the next round, and say so in the brief.
-- **F62** — a publication with no summary opens a pull request with an empty body; give a
-  summary in the brief.
 - **F65** — a publication appended onto a branch with a pull request pushes and then fails
   on the 422; the push is done and the failure is the step after it.
 - **F66** — nothing merges `origin/main` into an appended branch; a branch `main` moved

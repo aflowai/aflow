@@ -13,7 +13,11 @@ import {
   successWithData,
   validationError,
 } from '@aflow/executor-runtime';
-import { HostCommitScanInputSchema } from '@aflow/schemas';
+import {
+  type HostCommitDescribeOutput,
+  HostCommitDescribeInputSchema,
+  HostCommitScanInputSchema,
+} from '@aflow/schemas';
 
 import {
   HostBindingError,
@@ -22,7 +26,8 @@ import {
   requireDirectory,
   requireSpace,
 } from '../bindings.js';
-import { scanCommitRange } from '../commitScan.js';
+import { scanCommitRange, scanTexts } from '../commitScan.js';
+import { composePullRequest, readRangeCommits } from '../pullRequestText.js';
 import { receiptForScan } from '../scanReceipt.js';
 import { isGitRepository, WorktreeError } from '../worktree.js';
 
@@ -55,11 +60,43 @@ async function scan(ctx: ExecutorContext, policyPath: string): Promise<StepResul
   return await successWithData(ctx, receipt === undefined ? output : { ...output, receipt });
 }
 
+/**
+ * The pull request the range goes out as. Its text is composed after the scan
+ * read the range, from what the review and the checks returned as well, so it
+ * is read again here: nothing leaves unread.
+ */
+async function describe(ctx: ExecutorContext, policyPath: string): Promise<StepResult> {
+  const parsed = HostCommitDescribeInputSchema.safeParse(await ctx.readPayload(ctx.job.inputRef));
+  if (!parsed.success) {
+    return await failureWithError(ctx, validationError(parsed.error.message));
+  }
+  const root = await repositoryRoot(ctx, policyPath, parsed.data.bindingId);
+  const commits = await readRangeCommits(root, parsed.data.range);
+  const { title, body } = composePullRequest(parsed.data, commits);
+  const scanned = scanTexts({ 'pull request title': title, 'pull request body': body });
+  if (!scanned.clean) {
+    return await failureWithError(
+      ctx,
+      validationError(
+        `${scanned.summary} A pull request's text goes out as it stands, so none of it was ` +
+          'used: a line marked allowed is refused here too, since a pull request carries no fixture.',
+      ),
+    );
+  }
+  const output: HostCommitDescribeOutput = {
+    title,
+    body,
+    commits: commits.map(({ sha, subject }) => ({ sha, subject })),
+  };
+  return await successWithData(ctx, output);
+}
+
 const OPERATIONS: Record<
   string,
   (ctx: ExecutorContext, policyPath: string) => Promise<StepResult>
 > = {
   'host.commit.scan': scan,
+  'host.commit.describe': describe,
 };
 
 async function execute(ctx: ExecutorContext, policyPath: string): Promise<StepResult> {

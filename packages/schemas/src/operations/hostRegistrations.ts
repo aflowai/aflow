@@ -33,6 +33,10 @@ import {
   HostProcessStopOutputSchema,
 } from './host.js';
 import { HostCommitCheckInputSchema, HostCommitCheckOutputSchema } from './hostCommitCheck.js';
+import {
+  HostCommitDescribeInputSchema,
+  HostCommitDescribeOutputSchema,
+} from './hostCommitDescribe.js';
 
 export const HostOperationRegistrations: OperationRegistration[] = [
   {
@@ -579,5 +583,46 @@ export const HostOperationRegistrations: OperationRegistration[] = [
     },
     inputZod: HostCommitCheckInputSchema,
     outputZod: HostCommitCheckOutputSchema,
+  },
+  {
+    stepType: 'host',
+    group: 'commit',
+    verb: 'describe',
+    name: 'Compose a Pull Request from Its Commits',
+    actionLabel: 'Composing the pull request from the branch…',
+    groupDisplayName: 'Commits on this computer',
+    groupDescription: 'Read the commits of a repository the operator connected, on their machine.',
+    semanticDescription:
+      'Compose the title and body of the pull request a range of commits goes out as: the ' +
+      "subject of the range's first commit as the title, and as the body what the range " +
+      "changes — every commit's message, oldest first — the review findings it closed and " +
+      "left open, the folder's checks as verification, and the gaps its commissions " +
+      'recorded. The text is read for secrets under the rules the commits are, and refused ' +
+      'on a match. Reads the repository’s objects only; nothing is written.',
+    tags: ['host', 'git', 'pull-request', 'local'],
+    idempotency: 'idempotent',
+    accessMode: 'read',
+    // A publication composes its own pull request from what its tasks returned;
+    // an agent has nothing to add that the publication does not already pass.
+    agentTool: false,
+    usage: {
+      oneLine: 'Compose the pull request a range of commits goes out as, from those commits.',
+      minimalExampleInput: {
+        bindingId: 'hb_project',
+        range: `${'a'.repeat(40)}..${'c'.repeat(40)}`,
+      },
+      whenToUse: [
+        'A skill about to open or update the pull request for a branch, describing the branch as a whole',
+      ],
+      whenNotToUse: ['Reviewing the range — that is the Local Code Review skill'],
+      pitfalls: [
+        "The range is the push's, from `origin`'s base branch, so an appended push is described with every commit the branch carries, not only the round that appended it.",
+        'A `title` or `summary` given is used as it stands: a summary is the whole body, and nothing is composed beside it.',
+        "A body longer than GitHub takes is cut in the account of the commits, never in the findings, the verification or the gaps, and says where the rest is: every commit's message is on the branch.",
+        'A line of the title or body that looks like a secret refuses the whole text, by where it is, line and rule — marked allowed or not, since a pull request carries no fixture.',
+      ],
+    },
+    inputZod: HostCommitDescribeInputSchema,
+    outputZod: HostCommitDescribeOutputSchema,
   },
 ];

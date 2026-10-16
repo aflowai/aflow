@@ -57,7 +57,7 @@ export const SCAN_MAX_DIFF_BYTES = 64 * 1024 * 1024;
 export const SCAN_TIMEOUT_MS = 120_000;
 
 /** The commit a sha names, refused unless the commit's own sha begins with it. */
-async function resolveRangeEnd(root: string, sha: string): Promise<string> {
+export async function resolveRangeEnd(root: string, sha: string): Promise<string> {
   const commit = await resolveCommit(root, sha).catch(() => undefined);
   // git reads a short hex string as a ref name before a sha, and peels a tag
   // to the commit it tags; only a prefix of the commit's own sha names it.
@@ -540,6 +540,10 @@ function beyondNote(listing: Listing<unknown>): string {
   return listing.beyond > 0 ? `, and ${String(listing.beyond)} more` : '';
 }
 
+function namesOf(textNames: readonly string[]): string {
+  return textNames.map((name) => `\`${name}\``).join(', ');
+}
+
 function summarize(
   tally: ScanTally,
   commits: number,
@@ -550,7 +554,12 @@ function summarize(
   const read =
     textNames.length === 0
       ? `the lines ${scope} add and their headers and messages`
-      : `the lines ${scope} add, their headers and messages, and ${textNames.map((name) => `\`${name}\``).join(', ')}`;
+      : `the lines ${scope} add, their headers and messages, and ${namesOf(textNames)}`;
+  return describeTally(tally, read);
+}
+
+/** What a tally found in `read`, which names everything that was read. */
+function describeTally(tally: ScanTally, read: string): string {
   const { findings, allowed, unscanned } = tally;
   const sentences: string[] = [];
   if (findings.total > 0) {
@@ -580,6 +589,25 @@ function summarize(
   return sentences.join(' ');
 }
 
+function emptyTally(): ScanTally {
+  return { findings: new Listing(), allowed: new Listing(), unscanned: new Listing() };
+}
+
+/**
+ * Read texts alone under the same rules — text composed after the range was
+ * scanned, which leaves the machine all the same. `clean` as a range's is:
+ * nothing found, nothing marked allowed, everything read whole.
+ */
+export function scanTexts(texts: Readonly<Record<string, string>>): {
+  clean: boolean;
+  summary: string;
+} {
+  const tally = emptyTally();
+  readTexts(texts, tally);
+  const clean = tally.findings.total + tally.allowed.total + tally.unscanned.total === 0;
+  return { clean, summary: describeTally(tally, namesOf(Object.keys(texts))) };
+}
+
 /**
  * Scan the lines `<baseSha>..<sha>` adds, the headers and messages of its
  * commits, and each text that leaves with them. Refused, not cleared, when
@@ -598,11 +626,7 @@ export async function scanCommitRange(
   const head = await resolveRangeEnd(root, ends[2]);
   const resolved = `${base}..${head}`;
 
-  const tally: ScanTally = {
-    findings: new Listing(),
-    allowed: new Listing(),
-    unscanned: new Listing(),
-  };
+  const tally = emptyTally();
   await readAddedLines(root, base, head, tally);
   await readCommitObjects(root, base, head, tally);
   readTexts(texts, tally);
