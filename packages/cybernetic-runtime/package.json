@@ -38,6 +38,7 @@
   "dependencies": {
     "@aflow/ai-client": "workspace:*",
     "@aflow/applet-runtime": "workspace:*",
+    "@aflow/credential-resolver": "workspace:*",
     "@aflow/database": "workspace:*",
     "@aflow/integration-simulator": "workspace:*",
     "@aflow/lib": "workspace:*",

@@ -13,6 +13,7 @@
   "references": [
     { "path": "../ai-client" },
     { "path": "../applet-runtime" },
+    { "path": "../credential-resolver" },
     { "path": "../database" },
     { "path": "../integration-simulator" },
     { "path": "../lib" },

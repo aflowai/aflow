@@ -1,48 +1,158 @@
 /**
- * The operator's actions on the space's models on this computer: load one
- * before it is first needed, or unload one to give the machine its memory
- * back (Plan 323 D10). Operator-only REST, never an operation: no agent loads
- * gigabytes or evicts the model a run is on.
+ * The space's models on this computer (Plan 323 D10, D15): the diagnosis every
+ * surface reads, and the operator's actions on the runtime — download, delete,
+ * load, unload, and the window its requests get. Operator REST: Helmsman
+ * reaches the same actions only through an approved card.
  *
  * Registered in every edition and refused outside the local one, where no
  * model runs on the operator's machine.
  */
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
+import { eq } from 'drizzle-orm';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { contextWindowForModel, createDefaultModelCatalog } from '@aflow/ai-client';
 import type { Redis } from '@aflow/redis';
-import { resolveSpaceLocalRuntime } from '../lib/localRuntime.js';
+import { createTenantContext, spaces, withTenantSchema } from '@aflow/database';
+import {
+  applyLocalModelAction,
+  cancelLocalModelPull,
+  diagnoseSpaceLocalRuntime,
+  localRoleModels,
+  resolveSpaceLocalRuntime,
+  type LocalModelActionOutcome,
+  type SpaceLocalRuntime,
+} from '@aflow/cybernetic-runtime';
+import {
+  LocalModelActionSchema,
+  LocalRuntimeDiagnosticsSchema,
+  type DirectiveModelDefaults,
+  type TenantId,
+} from '@aflow/schemas';
 
 const ErrorSchema = z.object({ error: z.string(), message: z.string() });
 
+const OUTCOME_STATUS: Record<
+  Extract<LocalModelActionOutcome, { ok: false }>['reason'],
+  400 | 409 | 502
+> = {
+  not_local: 400,
+  not_here: 400,
+  no_disk: 409,
+  runtime: 502,
+};
+
+const spaceAuthz = (action: 'read' | 'admin') => ({
+  authz: {
+    resource: 'space' as const,
+    action,
+    spaceIdFrom: 'param' as const,
+    resourceIdFrom: 'param' as const,
+    resourceIdParam: 'spaceId',
+  },
+});
+
+export async function readModelDefaults(
+  db: PostgresJsDatabase,
+  tenantId: string,
+  spaceId: string,
+): Promise<DirectiveModelDefaults | undefined> {
+  const [row] = (await withTenantSchema(
+    db,
+    createTenantContext(tenantId as TenantId),
+    async (tx: unknown) =>
+      (tx as PostgresJsDatabase)
+        .select({ directives: spaces.directives })
+        .from(spaces)
+        .where(eq(spaces.id, spaceId))
+        .limit(1),
+  )) as Array<{ directives: { modelDefaults?: DirectiveModelDefaults } | null }>;
+  return row?.directives?.modelDefaults;
+}
+
 export const localModelRoutes: FastifyPluginAsync = async (fastify) => {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
+  const db = (): PostgresJsDatabase => fastify.appContext.db as PostgresJsDatabase;
+  const redis = (): Redis | undefined => fastify.appContext.redis as Redis | undefined;
 
-  app.post(
-    '/:spaceId/local-models/:action',
+  /** Null once it has answered the request itself: outside the local edition, or with no connection. */
+  async function runtimeFor(
+    request: Pick<FastifyRequest, 'requireTenant' | 'requireSpace' | 'authUser'>,
+    spaceId: string,
+    reply: FastifyReply,
+    { requireConnection }: { requireConnection: boolean },
+  ): Promise<{ runtime: SpaceLocalRuntime | null; tenantId: string } | null> {
+    if (fastify.edition.edition !== 'community-local') {
+      await reply.status(404).send({
+        error: 'NotFound',
+        message:
+          'Models on this computer belong to the local edition, which runs on the machine they run on.',
+      });
+      return null;
+    }
+    const tenant = await request.requireTenant();
+    await request.requireSpace();
+    const runtime = await resolveSpaceLocalRuntime({
+      db: db(),
+      redis: redis(),
+      tenantId: tenant.tenantId as string,
+      userId: request.authUser?.userId as string,
+      spaceId,
+    });
+    if (!runtime && requireConnection) {
+      await reply.status(409).send({
+        error: 'NoConnection',
+        message: 'This space has no Ollama connection. Add one under Settings → Credentials.',
+      });
+      return null;
+    }
+    return { runtime, tenantId: tenant.tenantId as string };
+  }
+
+  app.get(
+    '/:spaceId/local-models',
     {
-      config: {
-        authz: {
-          resource: 'space',
-          action: 'admin',
-          spaceIdFrom: 'param',
-          resourceIdFrom: 'param',
-          resourceIdParam: 'spaceId',
-        },
-      },
+      config: spaceAuthz('read'),
       schema: {
         tags: ['Spaces'],
-        summary: 'Load or unload a model on this computer',
-        params: z.object({ spaceId: z.string().uuid(), action: z.enum(['warm', 'unload']) }),
-        body: z.object({ model: z.string().min(1) }),
+        summary: "Diagnose the space's models on this computer",
+        params: z.object({ spaceId: z.string().uuid() }),
         response: {
-          200: z.object({
-            model: z.string(),
-            action: z.enum(['warm', 'unload']),
-            window: z.number().nullable(),
-          }),
+          200: z.object({ diagnostics: LocalRuntimeDiagnosticsSchema.nullable() }),
+          404: ErrorSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const resolved = await runtimeFor(request, request.params.spaceId, reply, {
+        requireConnection: false,
+      });
+      if (!resolved) return reply;
+      if (!resolved.runtime) return reply.send({ diagnostics: null });
+      const roles = localRoleModels(
+        await readModelDefaults(db(), resolved.tenantId, request.params.spaceId),
+      );
+      return reply.send({
+        diagnostics: await diagnoseSpaceLocalRuntime({
+          runtime: resolved.runtime,
+          redis: redis(),
+          roles,
+        }),
+      });
+    },
+  );
+
+  app.post(
+    '/:spaceId/local-models/actions',
+    {
+      config: spaceAuthz('admin'),
+      schema: {
+        tags: ['Spaces'],
+        summary: "Change the space's models on this computer",
+        params: z.object({ spaceId: z.string().uuid() }),
+        body: LocalModelActionSchema,
+        response: {
+          200: z.object({ message: z.string() }),
           400: ErrorSchema,
           404: ErrorSchema,
           409: ErrorSchema,
@@ -51,50 +161,52 @@ export const localModelRoutes: FastifyPluginAsync = async (fastify) => {
       },
     },
     async (request, reply) => {
-      if (fastify.edition.edition !== 'community-local') {
-        return reply.status(404).send({
-          error: 'NotFound',
-          message:
-            'Models on this computer belong to the local edition, which runs on the machine they run on.',
-        });
-      }
-      const tenant = await request.requireTenant();
-      await request.requireSpace();
-      const { spaceId, action } = request.params;
-      const model = createDefaultModelCatalog().getModel(request.body.model);
-      if (model?.provider !== 'ollama') {
-        return reply.status(400).send({
-          error: 'NotLocal',
-          message: `${request.body.model} is not a model on this computer.`,
-        });
-      }
-      const runtime = await resolveSpaceLocalRuntime({
-        db: fastify.appContext.db as PostgresJsDatabase,
-        redis: fastify.appContext.redis as Redis | undefined,
-        tenantId: tenant.tenantId as string,
-        userId: request.authUser?.userId as string,
-        spaceId,
+      const resolved = await runtimeFor(request, request.params.spaceId, reply, {
+        requireConnection: true,
       });
-      if (!runtime) {
-        return reply.status(409).send({
-          error: 'NoConnection',
-          message: 'This space has no Ollama connection. Add one under Settings → Credentials.',
-        });
-      }
-      const tag = model.providerModelId ?? model.id;
-      const window = action === 'warm' ? contextWindowForModel(model, runtime.config) : null;
-      try {
-        if (window !== null) await runtime.client.warm(tag, window);
-        else await runtime.client.unload(tag);
-      } catch (error) {
-        return reply.status(502).send({
-          error: 'RuntimeError',
-          message: `Ollama did not ${action === 'warm' ? 'load' : 'unload'} ${tag}: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        });
-      }
-      return reply.send({ model: model.id, action, window });
+      if (!resolved?.runtime) return reply;
+      const outcome = await applyLocalModelAction(
+        {
+          db: db(),
+          redis: redis(),
+          tenantId: resolved.tenantId,
+          runtime: resolved.runtime,
+          log: request.log,
+        },
+        request.body,
+      );
+      if (outcome.ok) return reply.send({ message: outcome.message });
+      return reply
+        .status(OUTCOME_STATUS[outcome.reason])
+        .send({ error: outcome.reason, message: outcome.message });
+    },
+  );
+
+  app.delete(
+    '/:spaceId/local-models/pulls/:model',
+    {
+      config: spaceAuthz('admin'),
+      schema: {
+        tags: ['Spaces'],
+        summary: 'Stop a download to this computer',
+        params: z.object({ spaceId: z.string().uuid(), model: z.string().min(1) }),
+        response: {
+          200: z.object({ stopped: z.boolean() }),
+          404: ErrorSchema,
+          409: ErrorSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const resolved = await runtimeFor(request, request.params.spaceId, reply, {
+        requireConnection: true,
+      });
+      if (!resolved?.runtime) return reply;
+      const store = redis();
+      const stopped = store
+        ? await cancelLocalModelPull(store, resolved.runtime, request.params.model)
+        : false;
+      return reply.send({ stopped });
     },
   );
 };

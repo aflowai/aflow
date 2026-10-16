@@ -3,6 +3,7 @@
 import { Button, Row, Text } from '@aflow/design-system';
 import { useApiMutation } from '../../hooks/useApiQuery.js';
 import { llmReadinessQueryKey, type LocalFit } from '../../hooks/useSpaceLlmReadiness.js';
+import { localModelsQueryKey } from '../../hooks/useLocalModels.js';
 import { describeLocalFit } from './ModelDefaultsEditor.js';
 
 const gb = (bytes: number): string => `${(bytes / 1e9).toFixed(1)} GB`;
@@ -24,10 +25,10 @@ export function LocalModelStatus({
   fit: LocalFit;
 }) {
   const action = useApiMutation<{ action: 'warm' | 'unload' }>({
-    path: ({ action: which }) => `/spaces/${spaceId}/local-models/${which}`,
-    serialize: () => JSON.stringify({ model }),
+    path: () => `/spaces/${spaceId}/local-models/actions`,
+    serialize: ({ action: which }) => JSON.stringify({ action: which, model }),
     spaceId,
-    invalidate: [llmReadinessQueryKey(spaceId)],
+    invalidate: [llmReadinessQueryKey(spaceId), localModelsQueryKey(spaceId)],
   });
   const spilling =
     fit.loadedBytes !== null &&

@@ -67,6 +67,7 @@ export function diagnoseLocalRuntime(input: {
     });
     return {
       model: model.id,
+      ref: model.aliases?.[0] ?? model.id,
       tag,
       displayName: model.displayName,
       installed: installed !== undefined,

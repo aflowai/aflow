@@ -540,3 +540,12 @@ export {
   type RuntimeLease,
   type AcquireRuntimeLeaseInput,
 } from './localRuntimeAdmission.js';
+export {
+  claimLocalPull,
+  recordLocalPullProgress,
+  requestLocalPullCancel,
+  endLocalPull,
+  readLocalPulls,
+  LOCAL_PULL_LEASE_MS,
+  LOCAL_PULL_ENDED_TTL_MS,
+} from './localModelPulls.js';

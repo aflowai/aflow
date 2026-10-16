@@ -109,6 +109,8 @@ export type LocalModelPull = z.infer<typeof LocalModelPullSchema>;
 
 export const LocalModelDiagnosisSchema = z.object({
   model,
+  /** What a role assignment stores for this model: its alias where it has one, since an id names one version. */
+  ref: z.string(),
   tag: z.string(),
   displayName: z.string(),
   installed: z.boolean(),
