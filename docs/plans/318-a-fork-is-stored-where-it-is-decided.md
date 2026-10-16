@@ -1,6 +1,6 @@
 # Plan 318 — A fork is stored where it is decided: routes on the source task
 
-**Status:** 🌱 design · **Builds on:** Plan 316 (the decision step), Plan 317 (agents propose, operators approve)
+**Status:** 🔨 P1–P4 built; the live compose and patch runs open · **Builds on:** Plan 316 (the decision step), Plan 317 (agents propose, operators approve)
 
 ## 1. Problem
 
@@ -48,19 +48,19 @@ Stored workflows gain an optional `routes` field. No existing workflow changes s
 
 ### P1 — Routes in the model
 
-`routes` on the workflow task; derivation in `materializeSkillTasks`; the D4 checks; the route-check registry with the decision operation's checks moved into it. Exit: a hand-written workflow with routes runs the right branch for each output, and each D4 violation is refused with a diagnostic naming the route.
+**Delivered:** `routes` on the workflow task; the derivation (`deriveRouteGuards`, in `@aflow/schemas` so materialization and the designer share it) applied in both materialize paths; the D4 checks in `validateRoutes`; the route-check registry with the decision operation's checks. Exit: a hand-written workflow with routes runs the right branch for each output, and each D4 violation is refused with a diagnostic naming the route.
 
 ### P2 — Compose-skill lowers to routes
 
-The `decision` draft task becomes an operation task with `routes`; compose-skill's draft schema and its one line of guidance describe routes rather than guards. Exit: the live triage request from Plan 316 produces a skill whose stored form has routes on the decision and no guards on the responders, and runs every branch as before.
+**Delivered:** the `decision` draft task lowers to an operation task with `routes` (one per distinct condition), its targets carrying only the dependency; agent, operation and human draft tasks accept `routes`, described on the draft schema; the assembler carries them. **Open:** the live run of the exit below. Exit: the live triage request from Plan 316 produces a skill whose stored form has routes on the decision and no guards on the responders, and runs every branch as before.
 
 ### P3 — Editing a route
 
-Typed staged ops for route add, remove and replace; proposal text that reads as a route; the refusal for removing a still-enabled task. Exit: asking Helmsman to "send refund requests to a new refund handler" produces one proposal that adds the task and the route, in at most two attempts.
+**Delivered:** one typed staged op, `update_task_routes` (the complete new list — any patch under `/tasks/{i}/routes` lowers to it), authoring-only so the Coach union stays as it was; the proposal card shows routes added and removed as `when … → enable …`; ratification re-validates, so removing a still-enabled task is refused naming the route; `workflow.manage.patch` usage names the add-a-branch shape. **Open:** the live Helmsman run of the exit below. Exit: asking Helmsman to "send refund requests to a new refund handler" produces one proposal that adds the task and the route, in at most two attempts.
 
 ### P4 — The designer
 
-Route edges and the routed-target inspector. Exit: the triage skill shows its fork as one source with labelled edges.
+**Delivered:** the designer draws edges from the derived guards, so each route is a labelled conditional edge from its source, while the node keeps the stored task; the inspector shows a source's routes and a routed target's "Enabled by". Exit: the triage skill shows its fork as one source with labelled edges.
 
 ## 5. How it is proven
 

@@ -7,6 +7,7 @@ export * from './taskContract.js';
 export * from './taskHuman.js';
 export * from './taskTemplate.js';
 export * from './task.js';
+export * from './routes.js';
 export * from './definition.js';
 export * from './runResult.js';
 export * from './learning.js';

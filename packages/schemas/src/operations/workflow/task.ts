@@ -181,12 +181,6 @@ export const WorkflowTaskRouteSchema = z
   .strict();
 export type WorkflowTaskRoute = z.infer<typeof WorkflowTaskRouteSchema>;
 
-/** A route as an operator reads it: `when <condition> → enable <tasks>`. */
-export function describeRoute(route: WorkflowTaskRoute): string {
-  const joiner = predicateCombinator(route.when) === 'anyOf' ? ' or ' : ' and ';
-  return `when ${predicateExpressions(route.when).join(joiner)} → enable ${route.enable.join(', ')}`;
-}
-
 export const WorkflowTaskPollSchema = z
   .object({
     /**

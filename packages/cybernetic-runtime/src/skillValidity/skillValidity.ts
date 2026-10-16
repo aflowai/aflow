@@ -1,4 +1,5 @@
 import {
+  deriveRouteGuards,
   CAMPAIGN_GOAL_DIRECTIONS,
   getOperation,
   isCampaignRef,
@@ -27,7 +28,7 @@ import {
 import { validateWorkflowGraph, type GraphValidationError } from '../scheduling/graphValidation.js';
 import { entryRunInputSlots } from '../parentTaskInputs.js';
 import { deriveOpBoundProducerShapes } from '../scheduling/deriveOpBoundShapes.js';
-import { deriveRouteGuards, validateRoutes } from '../scheduling/routes.js';
+import { validateRoutes } from '../scheduling/routes.js';
 import { bindingStaticSchema } from '../scheduling/bindingStaticSchema.js';
 import {
   validateAgentOpTaskOnlyTools,

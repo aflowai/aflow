@@ -161,3 +161,36 @@ describe('branch fans — decision reads at the producer', () => {
     expect(producer.branchSubjects).toEqual(['decision']);
   });
 });
+
+describe('routes — one source, labelled edges to each task it enables', () => {
+  const routed = makeWorkflow([
+    {
+      taskId: 'triage',
+      operation: 'ai.decision.decide',
+      routes: [
+        { when: { expression: "output.answers.team.value == 'billing'" }, enable: ['billing'] },
+        { when: { expression: "output.answers.team.value == 'technical'" }, enable: ['technical'] },
+      ],
+    },
+    { taskId: 'billing', agent: 'r' },
+    { taskId: 'technical', agent: 'r' },
+  ]);
+  const graph = buildSkillGraph(routed);
+
+  it('draws each route as a conditional edge from the source', () => {
+    const billing = graph.edges.find((e) => e.id === 'triage->billing');
+    expect(billing?.data).toEqual({ conditional: true });
+    expect(billing?.label).toContain("'billing'");
+    expect(graph.edges.find((e) => e.id === 'triage->technical')?.label).toContain("'technical'");
+  });
+
+  it('does not treat a routed task as an entry', () => {
+    expect(graph.edges.some((e) => e.target === 'billing' && e.source !== 'triage')).toBe(false);
+  });
+
+  it('keeps the stored task on the node, with no guard written into it', () => {
+    const data = graph.nodes.find((n) => n.id === 'billing')?.data as TaskNodeData;
+    expect(data.task.when).toBeUndefined();
+    expect(data.when?.clauses).toEqual(["triage.output.answers.team.value == 'billing'"]);
+  });
+});
