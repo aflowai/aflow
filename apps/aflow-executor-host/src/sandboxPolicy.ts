@@ -121,12 +121,69 @@ export interface SandboxWidening {
    */
   readonly writableRoot?: string;
   /**
+   * The writable root's git directory, kept outside it in the job's scratch.
+   * Read, so the job's own git works, and never written: its config is what
+   * the executor's git reads when it stages and judges the job's work, outside
+   * this boundary. The scratch holding both is not the job's to write — it is
+   * handed a directory of its own inside it (`makeAgentScratch`) — and the
+   * denial holds whatever a caller hands as `scratchDir`.
+   */
+  readonly gitDir?: string;
+  /**
+   * What the writable root reads outside the binding's root and never writes:
+   * the repository's object store and its installations, each where it lies
+   * outside the folder (`borrowedReads`, `worktree.ts`).
+   */
+  readonly borrowedReads?: readonly string[];
+  /**
    * Withhold the binding's own write grant even when it has one. A coding
    * harness works in its worktree and never needs the connected folder, so a
    * repository connected as writable — which git requires, to record the
    * worktree — does not thereby become writable by the harness.
    */
   readonly withholdBindingWrite?: boolean;
+}
+
+/**
+ * The boundary of a run in a private clone of the folder — a commission's and a
+ * folder check's alike, which is why both take their widening here.
+ *
+ * Reads are denied under home and open elsewhere, so what is enumerated under
+ * "reads" is what is re-allowed inside home; the clone, kept in the executor's
+ * scratch outside home, is readable whole either way. For a folder that holds
+ * its repository's object store and installations, the run may:
+ *
+ * - read the folder; its agent scratch; the folder's place in the clone; the
+ *   clone's git directory; the toolchains (`toolchainReadPaths`), the machine's
+ *   tool paths and the harness profile's auth and write paths;
+ * - write its agent scratch, the folder's place in the clone, and the profile's
+ *   write paths;
+ * - neither read nor write home otherwise, the host directory, cargo's
+ *   credential files, or `.git/hooks` at any depth under the folder and the
+ *   writable root;
+ * - not write the folder, the scratch around the clone (only `agent/` inside it
+ *   is handed over), the clone's git directory, or `.git/config` at any depth
+ *   under the folder and the writable root.
+ *
+ * For any other folder the same, and it may also read, never write, what the
+ * clone borrows from outside the folder (`borrowedReads`, `worktree.ts`): the
+ * repository's object store, which holds every object the clone has, wherever
+ * it lies outside the folder — a folder inside a repository, a linked
+ * worktree, a submodule, a separate git directory — and each installation in
+ * the repository outside the folder, where the clone's mirrored dependencies
+ * lead. Without them, inside the run the clone's git cannot read HEAD's tree
+ * and a dependency installed outside the folder does not resolve.
+ */
+export function checkoutWidening(
+  checkout: { readonly workDir: string; readonly gitDir: string },
+  borrowed: readonly string[],
+): Pick<SandboxWidening, 'writableRoot' | 'gitDir' | 'borrowedReads' | 'withholdBindingWrite'> {
+  return {
+    writableRoot: checkout.workDir,
+    gitDir: checkout.gitDir,
+    borrowedReads: [...borrowed],
+    withholdBindingWrite: true,
+  };
 }
 
 /**
@@ -177,6 +234,7 @@ export function compileSandboxPolicy(
   const scratch = options.scratchDir ? [options.scratchDir] : [];
   const widening = options.widening;
   const writableRoot = widening?.writableRoot ? [widening.writableRoot] : [];
+  const gitDir = widening?.gitDir ? [widening.gitDir] : [];
   // The host directory holds the policy every gate reads — push approval, the
   // checks, the posture itself — and pairing's credential. Nothing a job is
   // granted reaches into it, under either posture, whatever a profile or the
@@ -205,6 +263,8 @@ export function compileSandboxPolicy(
         binding.root,
         ...scratch,
         ...writableRoot,
+        ...gitDir,
+        ...(widening?.borrowedReads ?? []),
         ...toolchainReadPaths(home),
         ...(options.toolPaths ?? []),
         ...(widening?.authPaths ?? []),
@@ -241,6 +301,7 @@ export function compileSandboxPolicy(
         ...writableRoot.flatMap((r) => repositoryExecutableSurfaces(r)),
         ...repositoryConfigUnder(binding.root),
         ...writableRoot.flatMap((r) => repositoryConfigUnder(r)),
+        ...gitDir,
       ],
     },
   };

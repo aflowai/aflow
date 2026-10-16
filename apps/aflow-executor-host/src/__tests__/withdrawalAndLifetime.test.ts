@@ -30,7 +30,6 @@ function makeSession(overrides: Partial<HarnessSession> = {}): HarnessSession {
     ownerRunId: 'run-a',
     logicalExecutionId: `step:${id}`,
     bindingId: 'hb',
-    bindingRoot: '/repo',
     harnessId: 'claude',
     worktreePath: `/tmp/${id}/work`,
     scratchDir: `/tmp/${id}`,
@@ -73,16 +72,6 @@ describe('a turn in progress is not swept away underneath itself', () => {
     releaseSession(session);
     expect(claimSession(session)).toBe(true);
     releaseSession(session);
-    forgetSession(session.id);
-  });
-
-  it('carries the repository its worktree belongs to', () => {
-    // Cleanup happens on whichever run notices a session is stale, and that run
-    // may be in a different binding — removing a worktree against the wrong
-    // repository leaves a permanent stale entry in that one instead.
-    const session = makeSession({ bindingRoot: '/repos/theirs' });
-    recordSession(session);
-    expect(ownedSession(session.id, 'run-a')?.bindingRoot).toBe('/repos/theirs');
     forgetSession(session.id);
   });
 });

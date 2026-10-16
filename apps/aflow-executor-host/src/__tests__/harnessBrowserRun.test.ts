@@ -9,9 +9,10 @@
  * for a run with a browser and one without, and compared.
  */
 import { execFile } from 'node:child_process';
+import { realpathSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 
 import {
@@ -177,6 +178,18 @@ async function runHarness(
   return { status: outcome.status, written, activity, chromeLaunches: h.launches.length };
 }
 
+/**
+ * `text` with this run's scratch written as one name: the directory around the
+ * one the sandbox is handed, which holds the checkout, in both of its spellings
+ * — the checkout's path is the resolved one. Resolved first, since the other
+ * is a suffix of it where the temp root is reached through a link.
+ */
+function scratchNamed(text: string, input: SandboxedRunInput): string {
+  const run = dirname(input.scratchDir);
+  const resolved = run.replace(tmpdir(), realpathSync(tmpdir()));
+  return [resolved, run].reduce((named, spelling) => named.split(spelling).join('<scratch>'), text);
+}
+
 /** The policy the spawn compiles, with this run's scratch directory written as one name. */
 function compiledPolicy(input: SandboxedRunInput): string {
   const policy = compileSandboxPolicy(input.binding, {
@@ -184,7 +197,7 @@ function compiledPolicy(input: SandboxedRunInput): string {
     ...(input.widening !== undefined ? { widening: input.widening } : {}),
     ...(input.toolPaths !== undefined ? { toolPaths: input.toolPaths } : {}),
   });
-  return JSON.stringify(policy).split(input.scratchDir).join('<scratch>');
+  return scratchNamed(JSON.stringify(policy), input);
 }
 
 describe('a harness run with a browser', () => {
@@ -212,15 +225,16 @@ describe('a harness run with a browser', () => {
 
     // Everything else it was handed is the same too; only the command line gained the configuration.
     const rest = (input: SandboxedRunInput): string =>
-      JSON.stringify({
-        env: input.env,
-        trustedEnv: input.trustedEnv,
-        widening: input.widening,
-        toolPaths: input.toolPaths,
-        inheritEnv: input.inheritEnv,
-      })
-        .split(input.scratchDir)
-        .join('<scratch>');
+      scratchNamed(
+        JSON.stringify({
+          env: input.env,
+          trustedEnv: input.trustedEnv,
+          widening: input.widening,
+          toolPaths: input.toolPaths,
+          inheritEnv: input.inheritEnv,
+        }),
+        input,
+      );
     expect(rest(browsing)).toBe(rest(plain));
     const at = browsing.argv.indexOf('--mcp-config');
     const config = browsing.argv[at + 1] ?? '';

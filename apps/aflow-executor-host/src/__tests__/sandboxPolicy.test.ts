@@ -5,11 +5,17 @@
  * The adapter's own schema validates the shape, so its version bump surfaces
  * here rather than at the first sandboxed command.
  */
+import { join } from 'node:path';
+
 import { SandboxRuntimeConfigSchema } from '@anthropic-ai/sandbox-runtime';
 import { describe, expect, it } from 'vitest';
 
 import type { HostBinding } from '../bindings.js';
-import { FORBIDDEN_SANDBOX_OPTIONS, compileSandboxPolicy } from '../sandboxPolicy.js';
+import {
+  FORBIDDEN_SANDBOX_OPTIONS,
+  checkoutWidening,
+  compileSandboxPolicy,
+} from '../sandboxPolicy.js';
 
 const HOME = '/Users/probe';
 const binding: HostBinding = {
@@ -53,6 +59,25 @@ describe('what a repository exposes to a confined command', () => {
     const policy = compile();
     expect(policy.filesystem.denyWrite).toContain('/Users/probe/projects/demo/**/.git/hooks');
     expect(policy.filesystem.denyWrite).toContain('/Users/probe/projects/demo/**/.git/config');
+  });
+
+  it("reads a checkout's git directory in the writable scratch and never writes it", () => {
+    // Its config is what the executor's own git reads when it stages the run.
+    const gitDir = '/tmp/aflow-host/git-work';
+    const policy = compileSandboxPolicy(binding, {
+      home: HOME,
+      scratchDir: '/tmp/aflow-host',
+      widening: {
+        authPaths: [],
+        allowedDomains: [],
+        writableRoot: '/tmp/aflow-host/work',
+        gitDir,
+        withholdBindingWrite: true,
+      },
+    });
+    expect(policy.filesystem.allowRead).toContain(gitDir);
+    expect(policy.filesystem.allowWrite).toContain('/tmp/aflow-host');
+    expect(policy.filesystem.denyWrite).toContain(gitDir);
   });
 
   it('still refuses a read-only binding any write at all', () => {
@@ -106,5 +131,85 @@ describe('sandbox policy compilation', () => {
   it('produces a policy the adapter itself accepts', () => {
     // Guards against the adapter's schema moving under a pinned beta.
     expect(() => SandboxRuntimeConfigSchema.parse(compile())).not.toThrow();
+  });
+});
+
+describe('the boundary of a run in a checkout, whole', () => {
+  // Every path either policy names, stated once, so a path gained or lost on
+  // either side of the boundary fails here rather than being found in a run.
+  const HOST_DIR = join(HOME, '.aflow');
+  const SCRATCH = '/tmp/aflow-harness-x';
+  const AGENT = join(SCRATCH, 'agent');
+  const CLONE = join(SCRATCH, 'work');
+  const GIT_DIR = join(SCRATCH, 'git-work');
+  const TOOLCHAINS = ['.nvm', '.pyenv', '.rustup', '.cargo'].map((dir) => join(HOME, dir));
+  const CARGO_CREDENTIALS = [
+    join(HOME, '.cargo', 'credentials.toml'),
+    join(HOME, '.cargo', 'credentials'),
+  ];
+  const hooks = (root: string): string[] => [
+    join(root, '.git', 'hooks'),
+    join(root, '**', '.git', 'hooks'),
+  ];
+  const config = (root: string): string[] => [
+    join(root, '.git', 'config'),
+    join(root, '**', '.git', 'config'),
+  ];
+
+  function boundaryOf(root: string, workDir: string, borrowed: readonly string[]) {
+    return compileSandboxPolicy(
+      { ...binding, root },
+      {
+        home: HOME,
+        hostDir: HOST_DIR,
+        scratchDir: AGENT,
+        widening: {
+          authPaths: [],
+          allowedDomains: [],
+          ...checkoutWidening({ workDir, gitDir: GIT_DIR }, borrowed),
+        },
+      },
+    ).filesystem;
+  }
+
+  it("for a repository's top level: the folder, the run's own and the clone's", () => {
+    const root = join(HOME, 'projects', 'demo');
+    expect(boundaryOf(root, CLONE, [])).toEqual({
+      denyRead: [HOME, HOST_DIR, ...CARGO_CREDENTIALS, ...hooks(root), ...hooks(CLONE)],
+      allowRead: [root, AGENT, CLONE, GIT_DIR, ...TOOLCHAINS],
+      allowWrite: [AGENT, CLONE],
+      denyWrite: [
+        HOST_DIR,
+        ...hooks(root),
+        ...hooks(CLONE),
+        ...config(root),
+        ...config(CLONE),
+        GIT_DIR,
+      ],
+    });
+  });
+
+  it('for a folder inside a repository: the same, and what the clone borrows, read only', () => {
+    const top = join(HOME, 'projects', 'mono');
+    const root = join(top, 'packages', 'app');
+    const workDir = join(CLONE, 'packages', 'app');
+    const borrowed = [
+      join(top, '.git', 'objects'),
+      join(top, 'node_modules'),
+      join(top, 'packages', 'node_modules'),
+    ];
+    expect(boundaryOf(root, workDir, borrowed)).toEqual({
+      denyRead: [HOME, HOST_DIR, ...CARGO_CREDENTIALS, ...hooks(root), ...hooks(workDir)],
+      allowRead: [root, AGENT, workDir, GIT_DIR, ...borrowed, ...TOOLCHAINS],
+      allowWrite: [AGENT, workDir],
+      denyWrite: [
+        HOST_DIR,
+        ...hooks(root),
+        ...hooks(workDir),
+        ...config(root),
+        ...config(workDir),
+        GIT_DIR,
+      ],
+    });
   });
 });

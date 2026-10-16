@@ -104,7 +104,7 @@ beforeEach(async () => {
 afterEach(async () => {
   for (const session of allSessions()) {
     forgetSession(session.id);
-    await removeWorktree(session.bindingRoot, session.worktreePath).catch(() => {});
+    await removeWorktree(session.worktreePath).catch(() => {});
     await discardScratch(session);
   }
   await rm(base, { recursive: true, force: true });

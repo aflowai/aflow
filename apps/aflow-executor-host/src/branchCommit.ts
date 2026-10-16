@@ -1,12 +1,12 @@
 /**
- * A diff landed as a commit on a branch, in a checkout of the executor's own.
+ * A diff landed as a commit on a branch, made in a clone of the executor's own
+ * and fetched from it into the folder.
  *
  * The publication half of the host lane: a new branch at the commission's
  * base, or one commit appended to the branch the diff was made on — on its
  * head, or on the merge of its base into it that the commission made.
  */
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
@@ -15,6 +15,8 @@ import {
   undecidedConflicts,
   type BaseMerge,
 } from './baseMerge.js';
+import { makeScratch } from './executorScratch.js';
+import { noPublicationGitMessage, publicationGitReadiness } from './gitReadiness.js';
 import {
   APPLY_OUTPUT_CAP_BYTES,
   applyPatch,
@@ -27,6 +29,7 @@ import {
   resolveCommit,
   WorktreeError,
   type ApplyOutcome,
+  type Checkout,
   type PreparedWorktree,
 } from './worktree.js';
 
@@ -196,7 +199,7 @@ async function mergeSource(
   return await reachMergeSource(root, mergeFrom, target.at);
 }
 
-async function recordedMessage(root: string, sha: string): Promise<string> {
+async function recordedMessage(root: string | Checkout, sha: string): Promise<string> {
   const message = await git(root, ['show', '-s', '--format=%B', sha], APPLY_OUTPUT_CAP_BYTES);
   return message.replace(/\n+$/, '');
 }
@@ -208,8 +211,12 @@ export function messageBody(message: string): string | undefined {
   return body === '' ? undefined : body;
 }
 
-async function commitStaged(checkout: string, messagePath: string, amend: boolean): Promise<void> {
-  const identity = await commitIdentityArgs(checkout);
+async function commitStaged(
+  checkout: Checkout,
+  identity: readonly string[],
+  messagePath: string,
+  amend: boolean,
+): Promise<void> {
   try {
     await git(
       checkout,
@@ -242,14 +249,16 @@ async function commitStaged(checkout: string, messagePath: string, amend: boolea
  * the merge of that commit into its head, made as the commission made it, with
  * the patch folded in, or the merge alone for an empty patch — so the diff
  * lands on the tree it was made against. The
- * apply happens in a checkout made for this call alone, so the operator's
+ * apply happens in a private clone made for this call alone, so the operator's
  * working tree, index and current branch are never a party to it — they are a
- * second writer this lane does not get to interrupt. What remains afterwards is
- * one ref, created or advanced by one commit, which is the thing a publication
- * can push and the thing an operator can reset if they disagree.
+ * second writer this lane does not get to interrupt. The commit is then fetched
+ * from the clone into the folder and the branch set to it: the one write to the
+ * folder's refs the loop makes, made by the executor's git. What remains
+ * afterwards is one ref, created or advanced by one commit, which is the thing a
+ * publication can push and the thing an operator can reset if they disagree.
  *
- * The identity is the operator's own, resolved from the repository's config and
- * then from their global one. Inventing an author for a commit that will carry
+ * The identity is the operator's own, resolved from the folder's config — the
+ * clone's holds none — and then from their global one. Inventing an author for a commit that will carry
  * the operator's name is not this lane's to do, so a folder where neither names
  * one is refused rather than signed.
  */
@@ -266,10 +275,16 @@ export async function commitPatchOnBranch(
   } = {},
 ): Promise<PatchCommitOutcome> {
   const { pushBaseSha } = options;
+  // `fetchFromClone` below is what needs the floor; asked first, so a git
+  // without the flag is refused before a clone and a commit are made for nothing.
+  const gitReadiness = await publicationGitReadiness();
+  if (!gitReadiness.ready) {
+    throw new WorktreeError(noPublicationGitMessage(gitReadiness.missing), 'git_failed');
+  }
   const target = await commitTarget(root, branch, options.baseSha);
   const mergeFrom = await mergeSource(root, branch, target, options.mergeFrom);
 
-  const scratch = await mkdtemp(join(tmpdir(), PUBLICATION_SCRATCH_PREFIX));
+  const scratch = await makeScratch(PUBLICATION_SCRATCH_PREFIX);
   let worktree: PreparedWorktree | undefined;
   try {
     worktree = await prepareWorktree(root, scratch, 'commit', {
@@ -278,22 +293,18 @@ export async function commitPatchOnBranch(
     });
     let merge: BaseMerge | undefined;
     if (mergeFrom !== undefined) {
-      merge = await mergeIntoCheckout(
-        worktree.path,
-        mergeFrom,
-        await commitIdentityArgs(worktree.path),
-      );
+      merge = await mergeIntoCheckout(worktree, mergeFrom, await commitIdentityArgs(root));
     }
 
     const apply: ApplyOutcome =
       merge !== undefined && patch.trim() === ''
         ? { state: 'applied', conflicts: [] }
-        : await applyPatch(worktree.path, patch, mode);
+        : await applyPatch(worktree, patch, mode);
     if (apply.state === 'conflict')
       return { apply: merge === undefined ? apply : filesNamedIn(apply) };
 
-    await git(worktree.path, ['add', '-A', '--', '.'], APPLY_OUTPUT_CAP_BYTES);
-    const staged = (await git(worktree.path, ['diff', '--cached', '--name-only', '-z']))
+    await git(worktree, ['add', '-A', '--', '.'], APPLY_OUTPUT_CAP_BYTES);
+    const staged = (await git(worktree, ['diff', '--cached', '--name-only', '-z']))
       .split('\0')
       .filter((path) => path !== '');
     // With a merge the merge commit is itself the change, so a patch that adds
@@ -306,7 +317,7 @@ export async function commitPatchOnBranch(
       );
     }
     if (merge !== undefined) {
-      const undecided = await undecidedConflicts(worktree.path, merge.conflicts);
+      const undecided = await undecidedConflicts(worktree, merge.conflicts);
       if (undecided.length > 0) {
         const named = undecided.map(({ path, kind }) => `\`${path}\` (${kind} conflict)`);
         throw new WorktreeError(
@@ -321,18 +332,19 @@ export async function commitPatchOnBranch(
 
     const messagePath = join(scratch, 'commit-message');
     await writeFile(messagePath, message, 'utf8');
-    await commitStaged(worktree.path, messagePath, merge !== undefined);
+    await commitStaged(worktree, await commitIdentityArgs(root), messagePath, merge !== undefined);
 
-    const sha = (await git(worktree.path, ['rev-parse', 'HEAD'])).trim();
+    const sha = (await git(worktree, ['rev-parse', 'HEAD'])).trim();
     // Read back rather than echoed: git's cleanup trims what it was handed, and
     // the approval shows the commit as it will be pushed.
-    const recorded = await recordedMessage(worktree.path, sha);
+    const recorded = await recordedMessage(worktree, sha);
     const body = messageBody(recorded);
+    await fetchFromClone(root, worktree, sha);
     try {
       // Compare-and-swap on the old head: a branch that moved between the check
       // above and this line is refused here rather than overwritten.
       await git(
-        worktree.path,
+        root,
         target.appended
           ? ['update-ref', '--end-of-options', `refs/heads/${branch}`, sha, worktree.baseSha]
           : ['branch', '--end-of-options', branch, sha],
@@ -361,8 +373,35 @@ export async function commitPatchOnBranch(
       },
     };
   } finally {
-    if (worktree !== undefined) await removeWorktree(root, worktree.path);
+    if (worktree !== undefined) await removeWorktree(worktree.path);
     await rm(scratch, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Bring the commit made in the clone into the folder's object store, and only
+ * that: no destination ref and no FETCH_HEAD, so the branch is then set by a
+ * compare-and-swap on its old head rather than by fetch's fast-forward rule,
+ * and the FETCH_HEAD another fetch is about to read is never overwritten.
+ */
+async function fetchFromClone(root: string, clone: Checkout, sha: string): Promise<void> {
+  try {
+    await git(root, [
+      'fetch',
+      '--quiet',
+      '--no-tags',
+      '--no-write-fetch-head',
+      '--end-of-options',
+      clone.gitDir,
+      sha,
+    ]);
+  } catch (error) {
+    throw new WorktreeError(
+      `The commit was made but could not be brought into the folder: ${
+        error instanceof Error ? (error.message.split('\n')[0] ?? 'git failed') : 'git failed'
+      }`,
+      'git_failed',
+    );
   }
 }
 

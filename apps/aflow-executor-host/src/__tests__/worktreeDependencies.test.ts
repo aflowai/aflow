@@ -18,6 +18,7 @@ import {
   symlink,
   writeFile,
 } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -92,7 +93,7 @@ describe('dependencies in the isolated checkout', () => {
       await readFile(join(wt.path, 'packages', 'a', 'node_modules', 'marker.txt'), 'utf8'),
     ).toBe('package dep\n');
 
-    await removeWorktree(repo, wt.path);
+    await removeWorktree(wt.path);
   });
 
   it('resolves a workspace package to the checkout and a real dependency to the folder', async () => {
@@ -107,7 +108,94 @@ describe('dependencies in the isolated checkout', () => {
       join(repoReal, 'node_modules', 'left-pad'),
     );
 
-    await removeWorktree(repo, wt.path);
+    await removeWorktree(wt.path);
+  });
+
+  it('carries the top level installation too, for a folder connected as a package', async () => {
+    // Resolution from inside the package walks up to the repository's top
+    // level, where a workspace hoists what the package needs.
+    const folder = join(repo, 'packages', 'a');
+    const wt = await prepareWorktree(folder, scratch, 'work');
+    const worktreeReal = await realpath(wt.path);
+    const repoReal = await realpath(repo);
+
+    for (const installation of [join(wt.path, 'node_modules'), join(wt.workDir, 'node_modules')]) {
+      const mirrored = await lstat(installation);
+      expect(mirrored.isDirectory()).toBe(true);
+      expect(mirrored.isSymbolicLink()).toBe(false);
+    }
+    expect(await readFile(join(wt.workDir, 'node_modules', 'marker.txt'), 'utf8')).toBe(
+      'package dep\n',
+    );
+    expect(await realpath(join(wt.path, 'node_modules', 'left-pad'))).toBe(
+      join(repoReal, 'node_modules', 'left-pad'),
+    );
+    // A workspace package resolves into the clone, the folder's own included,
+    // not into what the operator has open.
+    expect(await realpath(join(wt.path, 'node_modules', '@acme', 'a'))).toBe(
+      join(worktreeReal, 'packages', 'a'),
+    );
+    expect(await collectChanges(wt)).toEqual({ patch: '', filesChanged: 0, overCeiling: false });
+
+    await removeWorktree(wt.path);
+    expect((await lstat(join(repo, 'node_modules', '@acme', 'a'))).isSymbolicLink()).toBe(true);
+    expect(await readdir(join(folder, 'node_modules'))).toEqual(['marker.txt']);
+  });
+
+  it('resolves a sibling package’s own dependency inside the clone, for a folder connected as a package', async () => {
+    // What the sibling did not hoist is in its own installation, which the
+    // workspace link from the folder leads into.
+    const sibling = join(repo, 'packages', 'b');
+    await mkdir(sibling, { recursive: true });
+    await writeFile(join(sibling, 'package.json'), '{"name":"@acme/b","main":"index.js"}\n');
+    await writeFile(join(sibling, 'index.js'), 'module.exports = require("only-b");\n');
+    await git(repo, 'add', '-A');
+    await git(repo, 'commit', '-m', 'sibling');
+    await mkdir(join(sibling, 'node_modules', 'only-b'), { recursive: true });
+    await writeFile(join(sibling, 'node_modules', 'only-b', 'index.js'), 'module.exports = 1;\n');
+    await symlink(join('..', '..', 'packages', 'b'), join(repo, 'node_modules', '@acme', 'b'));
+
+    const wt = await prepareWorktree(join(repo, 'packages', 'a'), scratch, 'work');
+    const worktreeReal = await realpath(wt.path);
+    const repoReal = await realpath(repo);
+
+    const fromFolder = createRequire(join(wt.workDir, 'index.js'));
+    const siblingEntry = fromFolder.resolve('@acme/b');
+    expect(siblingEntry).toBe(join(worktreeReal, 'packages', 'b', 'index.js'));
+    expect(await realpath(createRequire(siblingEntry).resolve('only-b'))).toBe(
+      join(repoReal, 'packages', 'b', 'node_modules', 'only-b', 'index.js'),
+    );
+    expect(await collectChanges(wt)).toEqual({ patch: '', filesChanged: 0, overCeiling: false });
+
+    await removeWorktree(wt.path);
+    expect(await readdir(join(sibling, 'node_modules'))).toEqual(['only-b']);
+  });
+
+  it('resolves the folder’s own dependency inside the clone, for a folder three levels down', async () => {
+    // Below the depth the scan from the top level reaches: the walk up from
+    // the folder is what finds its installation.
+    const folder = join(repo, 'packages', 'group', 'pkg');
+    await mkdir(folder, { recursive: true });
+    await writeFile(join(folder, 'index.js'), 'module.exports = require("only-pkg");\n');
+    await git(repo, 'add', '-A');
+    await git(repo, 'commit', '-m', 'nested package');
+    await mkdir(join(folder, 'node_modules', 'only-pkg'), { recursive: true });
+    await writeFile(join(folder, 'node_modules', 'only-pkg', 'index.js'), 'module.exports = 1;\n');
+
+    const wt = await prepareWorktree(folder, scratch, 'work');
+    const repoReal = await realpath(repo);
+
+    const fromFolder = createRequire(join(wt.workDir, 'index.js'));
+    expect(await realpath(fromFolder.resolve('only-pkg'))).toBe(
+      join(repoReal, 'packages', 'group', 'pkg', 'node_modules', 'only-pkg', 'index.js'),
+    );
+    expect(await realpath(fromFolder.resolve('left-pad'))).toBe(
+      join(repoReal, 'node_modules', 'left-pad', 'index.js'),
+    );
+    expect(await collectChanges(wt)).toEqual({ patch: '', filesChanged: 0, overCeiling: false });
+
+    await removeWorktree(wt.path);
+    expect(await readdir(join(folder, 'node_modules'))).toEqual(['only-pkg']);
   });
 
   it('shows a workspace package as committed, not as the operator is editing it', async () => {
@@ -120,7 +208,7 @@ describe('dependencies in the isolated checkout', () => {
       'package\n',
     );
 
-    await removeWorktree(repo, wt.path);
+    await removeWorktree(wt.path);
   });
 
   it('carries an installation the folder keeps somewhere else', async () => {
@@ -143,12 +231,12 @@ describe('dependencies in the isolated checkout', () => {
       expect(await realpath(join(wt.path, 'node_modules', '@acme', 'a'))).toBe(
         join(await realpath(wt.path), 'packages', 'a'),
       );
-      expect(await collectChanges(wt.path)).toEqual({
+      expect(await collectChanges(wt)).toEqual({
         patch: '',
         filesChanged: 0,
         overCeiling: false,
       });
-      await removeWorktree(repo, wt.path);
+      await removeWorktree(wt.path);
       expect(await readdir(elsewhere)).toEqual(expect.arrayContaining(['@acme', 'left-pad']));
       expect(await readFile(join(elsewhere, 'left-pad', 'index.js'), 'utf8')).toBe('stored dep\n');
     } finally {
@@ -158,26 +246,26 @@ describe('dependencies in the isolated checkout', () => {
 
   it('reports nothing changed, because a link is this lane doing rather than the harness', async () => {
     const wt = await prepareWorktree(repo, scratch, 'work');
-    const changes = await collectChanges(wt.path);
+    const changes = await collectChanges(wt);
     expect(changes).toEqual({ patch: '', filesChanged: 0, overCeiling: false });
     // Not merely absent from the diff: absent from what git was asked to stage.
     expect(await git(wt.path, 'diff', '--cached', '--name-only')).toBe('');
-    await removeWorktree(repo, wt.path);
+    await removeWorktree(wt.path);
   });
 
   it('still reports the work the harness did, beside the links', async () => {
     const wt = await prepareWorktree(repo, scratch, 'work');
     await writeFile(join(wt.path, 'app.txt'), 'harness rewrote this\n');
-    const changes = await collectChanges(wt.path);
+    const changes = await collectChanges(wt);
     expect(changes.filesChanged).toBe(1);
     expect(changes.patch).toContain('harness rewrote this');
     expect(changes.patch).not.toContain('node_modules');
-    await removeWorktree(repo, wt.path);
+    await removeWorktree(wt.path);
   });
 
   it('takes the mirror away and leaves what the operator installed and wrote', async () => {
     const wt = await prepareWorktree(repo, scratch, 'work');
-    await removeWorktree(repo, wt.path);
+    await removeWorktree(wt.path);
 
     expect(await readFile(join(repo, 'node_modules', 'left-pad', 'index.js'), 'utf8')).toBe(
       'root dep\n',
@@ -195,12 +283,12 @@ describe('dependencies in the isolated checkout', () => {
 
     const wt = await prepareWorktree(repo, scratch, 'work');
     await expect(lstat(join(wt.path, 'node_modules'))).rejects.toThrow();
-    expect(await collectChanges(wt.path)).toEqual({
+    expect(await collectChanges(wt)).toEqual({
       patch: '',
       filesChanged: 0,
       overCeiling: false,
     });
-    await removeWorktree(repo, wt.path);
+    await removeWorktree(wt.path);
   });
 
   it.skipIf(!sandboxAvailable() || confined.skip)(
@@ -249,7 +337,7 @@ describe('dependencies in the isolated checkout', () => {
         'root dep\n',
       );
 
-      await removeWorktree(repo, wt.path);
+      await removeWorktree(wt.path);
     },
   );
 });

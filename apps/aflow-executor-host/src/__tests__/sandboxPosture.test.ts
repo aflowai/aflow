@@ -15,11 +15,11 @@
  * can confine one.
  */
 import { execFile } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { type AddressInfo, createServer } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -30,6 +30,7 @@ import {
   type HostSandboxPosture,
 } from '@aflow/schemas';
 
+import { AGENT_SCRATCH_DIR } from '../executorScratch.js';
 import type { SandboxedRunInput, SandboxedRunResult } from '../sandboxedRun.js';
 import { CONFINEMENT_LISTENERS, requires } from './fixtures/capabilities.js';
 
@@ -82,6 +83,7 @@ const {
 const actual = await vi.importActual<typeof import('../sandboxedRun.js')>('../sandboxedRun.js');
 const { compileSandboxPolicy, FORBIDDEN_SANDBOX_OPTIONS } = await import('../sandboxPolicy.js');
 const { workloadTemp } = await import('../baseEnv.js');
+const { checkoutGitDir } = await import('../worktree.js');
 const { MACHINE_LOOPBACK_REACH, runOpenPostureSelfTest } =
   await import('../openPostureSelfTest.js');
 
@@ -283,18 +285,32 @@ describe('a harness run under the folder’s posture', () => {
     expect(sandboxed).toHaveLength(1);
     const input = sandboxed[0];
     expect(input?.posture).toBe('open');
-    expect(input?.cwd.startsWith(tmpdir())).toBe(true);
+    expect(input?.cwd.startsWith(realpathSync(tmpdir()))).toBe(true);
     expect(input?.cwd).not.toBe(repo);
+    // The scratch it may write is one of its own, beside the checkout and its
+    // git directory: the directory holding those two is not handed to it.
+    const scratch = input?.scratchDir ?? '';
+    expect(basename(dirname(scratch))).toBe(basename(dirname(input?.cwd ?? '')));
+    expect(basename(scratch)).toBe(AGENT_SCRATCH_DIR);
+    // What a crash leaves is the scratch holding the checkout, so the journal
+    // takes the clone with its run rather than only the agent's part of it.
+    expect(input?.journalScratchDir).toBe(dirname(scratch));
+    expect(basename(dirname(input?.cwd ?? ''))).toBe(basename(input?.journalScratchDir ?? ''));
     expect(input?.env).toEqual({});
     expect(input?.trustedEnv).toMatchObject({
       SRT_DEBUG: '1',
       AGENT_TOKEN: 'agent-credential',
       AGENT_CONFIG_DIR: expect.stringContaining('harness-config'),
       GIT_NO_REPLACE_OBJECTS: '1',
-      GIT_CONFIG_KEY_0: 'core.hooksPath',
     });
+    // No hook is handed to the agent's git: the checkout's git directory is
+    // beside it, readable and never written.
+    expect(
+      Object.keys(input?.trustedEnv ?? {}).filter((key) => key.startsWith('GIT_CONFIG')),
+    ).toEqual([]);
     expect(input?.widening).toMatchObject({
       writableRoot: input?.cwd,
+      gitDir: checkoutGitDir(input?.cwd ?? ''),
       withholdBindingWrite: true,
     });
   });
@@ -311,7 +327,6 @@ describe('a harness run under the folder’s posture', () => {
       SRT_DEBUG: '1',
       AGENT_TOKEN: 'agent-credential',
       GIT_NO_REPLACE_OBJECTS: '1',
-      GIT_CONFIG_KEY_0: 'core.hooksPath',
     });
   });
 

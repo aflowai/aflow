@@ -198,7 +198,7 @@ beforeEach(async () => {
 afterEach(async () => {
   for (const session of allSessions()) {
     forgetSession(session.id);
-    await removeWorktree(session.bindingRoot, session.worktreePath).catch(() => {});
+    await removeWorktree(session.worktreePath).catch(() => {});
     await discardScratch(session);
   }
   await rm(base, { recursive: true, force: true });
@@ -415,16 +415,16 @@ describe('a commission refuses a merge no turn could finish', () => {
     });
     try {
       const refused = await mergeIntoCheckout(
-        checkout.path,
+        checkout,
         mainHead,
-        await commitIdentityArgs(checkout.path),
+        await commitIdentityArgs(project),
       ).catch((error: unknown) => error);
       expect(refused).toBeInstanceOf(WorktreeError);
       expect((refused as InstanceType<typeof WorktreeError>).kind).toBe('binary_conflict');
       expect(await head(checkout.path, 'HEAD')).toBe(branchHead);
       expect((await git(checkout.path, 'status', '--porcelain')).trim()).toBe('');
     } finally {
-      await removeWorktree(project, checkout.path);
+      await removeWorktree(checkout.path);
       await rm(scratch, { recursive: true, force: true });
     }
   }, 60_000);
@@ -532,10 +532,10 @@ async function mergedTree(at: string, from: string): Promise<string> {
   const scratch = await mkdtemp(join(tmpdir(), 'aflow-merge-tree-'));
   const checkout = await prepareWorktree(project, scratch, 'merge', { dependencies: 'none', at });
   try {
-    await mergeIntoCheckout(checkout.path, from, await commitIdentityArgs(checkout.path));
+    await mergeIntoCheckout(checkout, from, await commitIdentityArgs(project));
     return await head(checkout.path, 'HEAD^{tree}');
   } finally {
-    await removeWorktree(project, checkout.path);
+    await removeWorktree(checkout.path);
     await rm(scratch, { recursive: true, force: true });
   }
 }
@@ -877,15 +877,15 @@ describe('the same two parents merge to the same tree', () => {
       });
       try {
         const merge = await mergeIntoCheckout(
-          checkout.path,
+          checkout,
           mainHead,
-          await commitIdentityArgs(checkout.path),
+          await commitIdentityArgs(project),
         );
         expect(merge?.conflicts).toEqual([{ path: 'a.txt', kind: 'content' }]);
         expect(await readFile(join(checkout.path, 'a.txt'), 'utf8')).toMatch(/^<<<<<<< HEAD$/m);
         trees.push(await head(checkout.path, 'HEAD^{tree}'));
       } finally {
-        await removeWorktree(project, checkout.path);
+        await removeWorktree(checkout.path);
         await rm(scratch, { recursive: true, force: true });
       }
     }
@@ -921,14 +921,14 @@ describe('the same two parents merge to the same tree', () => {
       });
       try {
         const merge = await mergeIntoCheckout(
-          checkout.path,
+          checkout,
           mainHead,
-          await commitIdentityArgs(checkout.path),
+          await commitIdentityArgs(project),
         );
         expect(merge?.conflicts).toEqual([]);
         trees.push(await head(checkout.path, 'HEAD^{tree}'));
       } finally {
-        await removeWorktree(project, checkout.path);
+        await removeWorktree(checkout.path);
         await rm(scratch, { recursive: true, force: true });
       }
     }

@@ -209,7 +209,6 @@ describe('the wire contract', () => {
       truncated: false,
       applies: 'empty',
       headMoved: false,
-      refChanges: [],
       blockedDomains: [],
     });
     expect(output.result).toEqual({ verdict: 'sound' });
@@ -232,43 +231,9 @@ describe('the wire contract', () => {
         truncated: false,
         applies: 'empty',
         headMoved: false,
-        refChanges: [],
         blockedDomains: [],
       }),
     ).toThrow();
-  });
-
-  it('reports what changed among the local branches and tags, and requires the field', () => {
-    const output = {
-      runId: 'hr_1',
-      harness: { id: 'claude' },
-      continued: false,
-      baseSha: 'abc',
-      filesChanged: 0,
-      patchTruncated: false,
-      exitCode: 0,
-      timedOut: false,
-      durationMs: 10,
-      truncated: false,
-      applies: 'empty',
-      headMoved: false,
-      blockedDomains: [],
-    };
-    const refChanges = [
-      { ref: 'refs/heads/mine', change: 'created', to: 'def' },
-      { ref: 'refs/heads/old', change: 'deleted', from: 'abc' },
-      { ref: 'refs/tags/v1', change: 'moved', from: 'abc', to: 'def' },
-    ];
-    expect(HostHarnessRunOutputSchema.parse({ ...output, refChanges }).refChanges).toEqual(
-      refChanges,
-    );
-    expect(HostHarnessRunOutputSchema.safeParse(output).success).toBe(false);
-    expect(
-      HostHarnessRunOutputSchema.safeParse({
-        ...output,
-        refChanges: [{ ref: 'refs/heads/x', change: 'renamed' }],
-      }).success,
-    ).toBe(false);
   });
 });
 
@@ -407,9 +372,10 @@ describe.runIf(sandboxReadiness().ready)('a commission starts from a named ref',
   let repo: string;
   let feature: string;
   let other: string;
-  let operatorDone: string;
   const vcs = async (...args: string[]): Promise<string> =>
     (await promisify(execFile)('git', args, { cwd: repo })).stdout.trim();
+  const folderRefs = async (): Promise<string> =>
+    await vcs('for-each-ref', '--format=%(refname) %(objectname)');
 
   beforeAll(async () => {
     const base = await mkdtemp(join(tmpdir(), 'host-harness-base-'));
@@ -428,17 +394,10 @@ describe.runIf(sandboxReadiness().ready)('a commission starts from a named ref',
     await writeFile(join(repo, 'README.md'), '# project, moved on\n', 'utf8');
     await vcs('commit', '-am', 'main moves on');
 
-    // Inside the connected folder, which a harness may read: the harness waits
-    // on it, so the operator's branch is made while the run is in flight.
-    operatorDone = join(repo, '.operator-done');
     const harness = (id: string, script: string): Record<string, unknown> => ({
       id,
       executable: '/bin/sh',
       args: ['-c', script],
-      // The shared refs live under the repository's `.git`, which a harness
-      // cannot write unless its profile opens it. Opened here so only the hook
-      // stands between the harness and the operator's branches.
-      writePaths: [join(repo, '.git')],
     });
     policyPath = join(base, 'host-policy.json');
     await writeFile(
@@ -463,16 +422,26 @@ describe.runIf(sandboxReadiness().ready)('a commission starts from a named ref',
             sessionArgs: ['{session}'],
             resumeArgs: ['{session}'],
           },
-          harness('deletes', 'printf changed > touched.txt; git branch -D other'),
+          // Every way around a hook the run's git used to be given, and none is
+          // given now: a hooks path of its own, a branch deleted and moved, and
+          // pushes into the folder's path, then a record of where it all landed.
           harness(
-            'opts-out',
-            'printf changed > touched.txt; git -c core.hooksPath=/dev/null branch -D other',
-          ),
-          harness('pushes', 'printf changed > touched.txt; git push -q . HEAD:refs/heads/pushed'),
-          harness(
-            'waits',
-            'printf changed > touched.txt; i=0; ' +
-              `while [ ! -e '${operatorDone}' ] && [ $i -lt 600 ]; do sleep 0.1; i=$((i+1)); done`,
+            'goes-around',
+            [
+              'printf changed > touched.txt',
+              'git branch -D other',
+              'git -c core.hooksPath=/dev/null update-ref refs/heads/main HEAD',
+              'git -c core.hooksPath=/dev/null tag planted',
+              'git push -q . HEAD:refs/heads/pushed',
+              `git push -q '${repo}' HEAD:refs/heads/pushed-into-folder`,
+              `git push -q -f '${repo}' HEAD:refs/heads/main`,
+              `git -c core.hooksPath=/dev/null push -q '${repo}' :refs/heads/feat/reviewed`,
+              '{ git rev-parse --absolute-git-dir; ' +
+                'echo "config-env=${GIT_CONFIG_COUNT:-none}"; ' +
+                'git config --local --get core.hooksPath || echo no-hooks-path; ' +
+                'git remote | wc -l | tr -d " "; ' +
+                "git for-each-ref --format='%(refname)' refs/heads/ refs/tags/; } > clone.txt",
+            ].join('; '),
           ),
         ],
       }),
@@ -569,101 +538,78 @@ describe.runIf(sandboxReadiness().ready)('a commission starts from a named ref',
   }, 120_000);
 
   it.skipIf(confined.skip)(
-    confined.title("stops the agent's own git from deleting a branch, and the run still succeeds"),
-    { tags: ['listener'], timeout: 120_000 },
+    confined.title(
+      "leaves every ref of the folder as it was whatever git the run uses, and its publication lands exactly the run's commit",
+    ),
+    { tags: ['listener'], timeout: 180_000 },
     async () => {
-      await vcs('branch', '-f', 'other', other);
-      const { outcome, written } = await runWith({ harness: 'deletes' });
+      const before = await folderRefs();
+      const { outcome, written } = await runWith({
+        harness: 'goes-around',
+        base: 'feat/reviewed',
+      });
       expect(outcome.status).toBe('SUCCEEDED');
       const output = written['output'] as Record<string, unknown>;
+      expect(await folderRefs()).toBe(before);
       expect(await vcs('rev-parse', 'other')).toBe(other);
-      expect(output['refChanges']).toEqual([]);
-      expect(String(output['stderr'])).toContain(
-        'Refused `refs/heads/other`: a commission may not move branches or tags',
-      );
-      expect(String(output['patch'])).toContain('touched.txt');
-    },
-  );
+      expect(await vcs('rev-parse', 'feat/reviewed')).toBe(feature);
+      expect(output).not.toHaveProperty('refChanges');
 
-  it.skipIf(confined.skip)(
-    confined.title(
-      'reports a branch moved by a git call that names its own hooks path, which the guard does not stop',
-    ),
-    { tags: ['listener'], timeout: 120_000 },
-    async () => {
-      await vcs('branch', '-f', 'other', other);
+      // Where the run's git landed: the clone's git directory beside the
+      // checkout in the run's scratch, given no hooks path and no config through
+      // the environment, naming no remote — and written by none of it, so its
+      // refs are the folder's as the clone copied them.
+      const patch = String(output['patch']);
+      expect(patch).toContain('+changed');
+      const gitDir = /^\+(\/.*)$/m.exec(patch.slice(patch.indexOf('+++ b/clone.txt')))?.[1];
+      expect(gitDir).toMatch(/\/git-work$/);
+      expect(gitDir).not.toBe(join(repo, '.git'));
+      expect(patch).toContain('+config-env=none\n');
+      expect(patch).toContain('+no-hooks-path\n');
+      expect(patch).toContain('+0\n');
+      expect(patch).toContain('+refs/heads/other\n');
+      expect(patch).not.toContain('+refs/heads/pushed\n');
+      expect(patch).not.toContain('+refs/tags/planted\n');
+
+      const published: Record<string, unknown> = {};
+      const publication = await createHostPatchHandler(policyPath).execute({
+        operationId: 'host.file.patch',
+        spaceId: 'space-test',
+        runId: 'run-base',
+        job: { inputRef: 'inline:publication' },
+        signal: new AbortController().signal,
+        log: { error: () => undefined, warn: () => undefined, info: () => undefined },
+        readPayload: () =>
+          Promise.resolve({
+            bindingId: 'hb',
+            patch,
+            commit: {
+              branch: 'aflow/around',
+              message: 'What the run changed',
+              baseSha: output['baseSha'],
+            },
+          }),
+        emitLiveDelta: () => Promise.resolve(),
+        writePayload: (kind: string, data: unknown) => {
+          published[kind] = data;
+          return Promise.resolve(`inline:${kind}`);
+        },
+      } as never);
       try {
-        const { outcome, written } = await runWith({ harness: 'opts-out' });
-        expect(outcome.status).toBe('SUCCEEDED');
-        const output = written['output'] as Record<string, unknown>;
-        expect(output['refChanges']).toEqual([
-          { ref: 'refs/heads/other', change: 'deleted', from: other },
-        ]);
+        expect(publication.status).toBe('SUCCEEDED');
+        const commit = (published['output'] as { commit: { sha: string } }).commit;
+        expect(await vcs('rev-parse', 'refs/heads/aflow/around')).toBe(commit.sha);
+        expect(await vcs('rev-parse', `${commit.sha}^`)).toBe(feature);
+        expect(await vcs('show', `${commit.sha}:touched.txt`)).toBe('changed');
+        // The one write to the folder's refs is the branch the publication names.
+        expect(await folderRefs()).toBe(
+          [...before.split('\n'), `refs/heads/aflow/around ${commit.sha}`]
+            .sort((a, b) => (a < b ? -1 : 1))
+            .join('\n'),
+        );
       } finally {
-        await vcs('branch', '-f', 'other', other);
+        await vcs('branch', '-D', 'aflow/around').catch(() => undefined);
       }
-    },
-  );
-
-  it.skipIf(confined.skip)(
-    confined.title(
-      'reports a branch made by a local push from the checkout, which the guard does not stop',
-    ),
-    { tags: ['listener'], timeout: 120_000 },
-    async () => {
-      try {
-        const { outcome, written } = await runWith({ harness: 'pushes' });
-        expect(outcome.status).toBe('SUCCEEDED');
-        const output = written['output'] as Record<string, unknown>;
-        expect(output['refChanges']).toEqual([
-          { ref: 'refs/heads/pushed', change: 'created', to: output['baseSha'] },
-        ]);
-      } finally {
-        await vcs('branch', '-D', 'pushed').catch(() => undefined);
-      }
-    },
-  );
-
-  it.skipIf(confined.skip)(
-    confined.title(
-      'reports a branch the operator made while the run was in flight, and refuses nothing',
-    ),
-    { tags: ['listener'], timeout: 120_000 },
-    async () => {
-      await rm(operatorDone, { force: true });
-      const running = runWith({ harness: 'waits' });
-      // The harness has started once its edit is in its checkout, which is after
-      // the refs were first read.
-      let started = false;
-      for (let i = 0; i < 600 && !started; i += 1) {
-        const listing = await vcs('worktree', 'list', '--porcelain');
-        const checkouts = listing
-          .split('\n')
-          .filter((line) => line.startsWith('worktree '))
-          .map((line) => line.slice('worktree '.length));
-        for (const path of checkouts) {
-          if (
-            await stat(join(path, 'touched.txt')).then(
-              () => true,
-              () => false,
-            )
-          )
-            started = true;
-        }
-        if (!started) await new Promise((resolve) => setTimeout(resolve, 100));
-      }
-      expect(started).toBe(true);
-      await vcs('branch', 'operator-work');
-      const made = await vcs('rev-parse', 'operator-work');
-      await writeFile(operatorDone, '', 'utf8');
-
-      const { outcome, written } = await running;
-      expect(outcome.status).toBe('SUCCEEDED');
-      const output = written['output'] as Record<string, unknown>;
-      expect(output['refChanges']).toEqual([
-        { ref: 'refs/heads/operator-work', change: 'created', to: made },
-      ]);
-      expect(String(output['patch'])).toContain('touched.txt');
     },
   );
 

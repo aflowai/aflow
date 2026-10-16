@@ -212,18 +212,12 @@ async function main(): Promise<void> {
     log,
   });
 
-  // Checkouts too: every session died with the previous executor, so what they
-  // held on disk and in the operator's repositories has nothing left that would
-  // ever expire it.
-  const bound = await loadHostPolicy(policyPath)
-    .then((policy) => [...policy.bindings.values()].map((binding) => binding.root))
-    .catch(() => undefined);
-  const orphaned = await removeOrphanedCheckouts(bound);
-  const checkouts = [...orphaned.removed.values()].reduce((sum, count) => sum + count, 0);
-  if (checkouts > 0 || orphaned.scratchDirs > 0) {
+  // Checkouts too: every session died with the previous executor, so the clones
+  // they held on disk have nothing left that would ever expire them.
+  const orphaned = await removeOrphanedCheckouts();
+  if (orphaned.checkouts > 0 || orphaned.scratchDirs > 0) {
     log.info('Removed checkouts left behind by a previous run of this executor', {
-      checkouts,
-      folders: [...orphaned.removed.keys()],
+      checkouts: orphaned.checkouts,
       scratchDirs: orphaned.scratchDirs,
     });
   }
@@ -451,9 +445,7 @@ async function main(): Promise<void> {
             // another harness request or a shutdown.
             const dropped = withdrawnSessions(permitted.bindings);
             for (const session of dropped) {
-              await removeWorktree(session.bindingRoot, session.worktreePath).catch(
-                () => undefined,
-              );
+              await removeWorktree(session.worktreePath).catch(() => undefined);
               await discardScratch(session);
             }
             if (killed.length > 0 || dropped.length > 0) {
@@ -660,7 +652,7 @@ async function main(): Promise<void> {
       const killed = killProcessesForBinding(notice.hostBindingId);
       const dropped = dropSessionsForBinding(notice.hostBindingId);
       for (const session of dropped) {
-        await removeWorktree(session.bindingRoot, session.worktreePath).catch(() => undefined);
+        await removeWorktree(session.worktreePath).catch(() => undefined);
         await discardScratch(session);
       }
       if (killed.length > 0 || dropped.length > 0) {

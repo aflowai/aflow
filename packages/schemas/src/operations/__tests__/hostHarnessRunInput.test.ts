@@ -200,7 +200,6 @@ describe('a fix to a branch its base moved past names the merge at both layers',
       truncated: false,
       applies: 'clean',
       headMoved: false,
-      refChanges: [],
       blockedDomains: [],
     };
     const merge = {
@@ -292,7 +291,6 @@ describe("a commission's diff travels by reference", () => {
       truncated: false,
       applies: 'clean',
       headMoved: false,
-      refChanges: [],
       blockedDomains: [],
     };
     expect(HostHarnessRunOutputSchema.parse(run).patchRef).toBe(ref);

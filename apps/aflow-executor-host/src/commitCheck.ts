@@ -10,8 +10,7 @@
  * printed is kept in the order it came, and from both ends where there is too
  * much of it: its start says what ran, and a failing check says why last.
  */
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
@@ -27,11 +26,18 @@ import { z } from 'zod';
 import type { HostBinding } from './bindings.js';
 import { SHORT_SHA_LENGTH } from './checkReceipt.js';
 import { createChatterStripper } from './egressRefusals.js';
+import { makeAgentScratch, makeScratch } from './executorScratch.js';
 import { formatMinutes } from './folderChecks.js';
 import { runUnderFolderPosture } from './folderRun.js';
 import type { SandboxedRunResult } from './sandboxedRun.js';
 import { sandboxPostureOf } from './sandboxPosture.js';
-import { NO_REPLACE_OBJECTS_ENV, prepareWorktree, removeWorktree } from './worktree.js';
+import { checkoutWidening } from './sandboxPolicy.js';
+import {
+  borrowedReads,
+  NO_REPLACE_OBJECTS_ENV,
+  prepareWorktree,
+  removeWorktree,
+} from './worktree.js';
 
 type HostCommitCheckOutput = z.infer<typeof HostCommitCheckOutputSchema>;
 
@@ -206,8 +212,9 @@ export interface FolderCheckInput {
 }
 
 export async function runFolderChecks(input: FolderCheckInput): Promise<FolderCheckRun> {
-  const scratch = await mkdtemp(join(tmpdir(), CHECK_SCRATCH_PREFIX));
-  const reportPath = join(scratch, CHECK_REPORT_FILE);
+  const scratch = await makeScratch(CHECK_SCRATCH_PREFIX);
+  const agentScratch = await makeAgentScratch(scratch);
+  const reportPath = join(agentScratch, CHECK_REPORT_FILE);
   let worktreePath: string | undefined;
   try {
     const worktree = await prepareWorktree(input.binding.root, scratch, 'check', {
@@ -224,7 +231,7 @@ export async function runFolderChecks(input: FolderCheckInput): Promise<FolderCh
     const result = await runUnderFolderPosture({
       binding: input.binding,
       argv: [...input.argv],
-      cwd: worktree.path,
+      cwd: worktree.workDir,
       env: {},
       trustedEnv: {
         AFLOW_CHECK_SHA: input.sha,
@@ -235,14 +242,14 @@ export async function runFolderChecks(input: FolderCheckInput): Promise<FolderCh
         ...NO_REPLACE_OBJECTS_ENV,
       },
       timeoutMs: input.timeoutMs,
-      scratchDir: scratch,
+      scratchDir: agentScratch,
+      journalScratchDir: scratch,
       // No host named: a check in a `confined` folder reaches none, and one
       // in an `open` folder reaches every host without being told.
       widening: {
         authPaths: [],
         allowedDomains: [],
-        writableRoot: worktree.path,
-        withholdBindingWrite: true,
+        ...checkoutWidening(worktree, await borrowedReads(input.binding.root)),
       },
       toolPaths: input.toolPaths,
       idPrefix: 'hc',
@@ -269,7 +276,7 @@ export async function runFolderChecks(input: FolderCheckInput): Promise<FolderCh
         : {}),
     };
   } finally {
-    if (worktreePath !== undefined) await removeWorktree(input.binding.root, worktreePath);
+    if (worktreePath !== undefined) await removeWorktree(worktreePath);
     await rm(scratch, { recursive: true, force: true });
   }
 }

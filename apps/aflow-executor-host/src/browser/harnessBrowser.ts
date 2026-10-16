@@ -23,7 +23,7 @@
  */
 import { execFile } from 'node:child_process';
 import { constants, openSync } from 'node:fs';
-import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, rm, writeFile } from 'node:fs/promises';
 import { Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -51,6 +51,7 @@ import {
   toJsonSchemaSync,
 } from '@aflow/schemas';
 import { z } from 'zod';
+import { makeScratch } from '../executorScratch.js';
 import {
   browserFailure,
   type BrowserCall,
@@ -286,8 +287,9 @@ export async function openHarnessBrowser(options: HarnessBrowserOptions): Promis
   let profileId: string;
   let ephemeralDir: string | undefined;
   if (ephemeral) {
-    ephemeralDir = await mkdtemp(
-      join(options.ephemeralRoot ?? tmpdir(), EPHEMERAL_PROFILE_SCRATCH_PREFIX),
+    ephemeralDir = await makeScratch(
+      EPHEMERAL_PROFILE_SCRATCH_PREFIX,
+      options.ephemeralRoot ?? tmpdir(),
     );
     profileId = driver.startEphemeral(scope, ephemeralDir, options.reach);
   } else {

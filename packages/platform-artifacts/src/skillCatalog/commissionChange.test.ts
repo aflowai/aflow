@@ -138,7 +138,6 @@ describe('Commission Change — a brief to the machine’s coding agent', () => 
       'filesChanged',
       'sessionRef',
       'continued',
-      'refChanges',
     ];
     expect(promoted).toEqual(expected);
     expect((wf.stateVariables ?? []).map((v) => v.variableId)).toEqual(expected);

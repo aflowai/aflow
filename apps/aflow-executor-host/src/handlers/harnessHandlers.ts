@@ -9,15 +9,16 @@
  * the boundary blocks. Its profile — in the machine's own policy file — is what
  * opens exactly those and nothing else.
  *
- * The run happens in a detached worktree, never the operator's checkout. That
- * is what lets a run start while they have uncommitted work, and what makes the
- * result a diff to review rather than an edit already made. Nothing is
- * committed, the agent's ordinary git is refused a branch or tag move
- * (`refGuard.ts` names the calls that are not), and the worktree is removed once its changes have been collected.
+ * The run happens in a private clone of the folder, detached at its base, never
+ * the operator's checkout. That is what lets a run start while they have
+ * uncommitted work, and what makes the result a diff to review rather than an
+ * edit already made. The clone's refs are nobody else's, so whatever git the
+ * agent runs moves only those (Plan 315 F56). Nothing is committed, and the
+ * clone is removed once its changes have been collected.
  */
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat } from 'node:fs/promises';
+import { lstat, mkdir, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, join, sep } from 'node:path';
+import { basename, join } from 'node:path';
 
 import AjvModule from 'ajv';
 import type { z } from 'zod';
@@ -102,27 +103,30 @@ import {
 import { createChatterStripper } from '../egressRefusals.js';
 import { createHarnessEventReader } from '../harnessEvents.js';
 import {
-  changedRefs,
+  borrowedReads,
   checkApplies,
+  checkoutAt,
+  checkoutOfGitDir,
   collectChanges,
   currentHead,
   DIFF_CEILING_BYTES,
   fetchRemoteBase,
+  folderPrefix,
   INLINE_DIFF_CAP_BYTES,
-  linkedWorktrees,
+  isRealDirectory,
   NO_REPLACE_OBJECTS_ENV,
   prepareWorktree,
   removeWorktree,
   resolveCommit,
   RUN_SCRATCH_DIR,
-  snapshotRefs,
   utf8Prefix,
   WorktreeError,
-  type LinkedWorktree,
+  type PreparedWorktree,
 } from '../worktree.js';
 import { PUBLICATION_SCRATCH_PREFIX } from '../branchCommit.js';
 import { CHECK_SCRATCH_PREFIX } from '../commitCheck.js';
-import { installRefGuard, noRefGuardMessage, refGuardReadiness } from '../refGuard.js';
+import { isMarkedScratch, makeAgentScratch, makeScratch } from '../executorScratch.js';
+import { checkoutWidening } from '../sandboxPolicy.js';
 import { browserFailure, jobScopeOf } from './browserHandler.js';
 
 /**
@@ -496,7 +500,6 @@ async function runHarness(
 
   let scratch: string | undefined;
   let worktreePath: string | undefined;
-  let bindingRoot: string | undefined;
   let credential: string | undefined;
   let claimed: HarnessSession | undefined;
   let browser: HarnessBrowser | undefined;
@@ -531,9 +534,9 @@ async function runHarness(
     // A harness edits files and runs commands. It needs the grant that had to
     // be typed, not the one a folder gets by being connected.
     requireExecution(binding);
-    // Creating a worktree records it under the repository's own `.git`, so the
-    // binding has to permit writes even though the harness never uses that
-    // permission — its policy withholds it below.
+    // A base or a merge source that names a remote is fetched into the
+    // repository's own `.git`, so the binding has to permit writes even though
+    // the harness never uses that permission — its policy withholds it below.
     requireWritable(binding);
     const selection = selectHarness(policy.harnesses, input.harness);
     if (selection.kind === 'ambiguous') {
@@ -552,22 +555,16 @@ async function runHarness(
         );
       }
     }
-    bindingRoot = binding.root;
-
     const readiness = sandboxReadiness();
     if (!readiness.ready) {
       return await failureWithError(ctx, permissionError(noSandboxMessage(readiness.missing)));
-    }
-    const refGuard = await refGuardReadiness();
-    if (!refGuard.ready) {
-      return await failureWithError(ctx, permissionError(noRefGuardMessage(refGuard.missing)));
     }
 
     // An abandoned session holds a checkout on disk, so expiry is collected
     // here rather than on a timer — the work is bounded by what is expired, and
     // arrives with a run that is already doing filesystem work.
     for (const stale of expiredSessions(Date.now())) {
-      await removeWorktree(stale.bindingRoot, stale.worktreePath).catch(() => {});
+      await removeWorktree(stale.worktreePath).catch(() => {});
       await discardScratch(stale);
     }
 
@@ -657,10 +654,13 @@ async function runHarness(
     // is judged against that base as well.
     const base = namedRef ?? session?.base;
 
-    let worktree: { path: string; baseSha: string };
+    let worktree: PreparedWorktree;
     if (session !== undefined && namedBase === undefined) {
       scratch = session.scratchDir;
-      worktree = { path: session.worktreePath, baseSha: session.baseSha };
+      worktree = {
+        ...checkoutAt(session.worktreePath, await folderPrefix(binding.root)),
+        baseSha: session.baseSha,
+      };
       keepScratch = true;
     } else if (session !== undefined && namedBase !== undefined) {
       // The conversation continues in a fresh checkout at the named base: the
@@ -668,7 +668,7 @@ async function runHarness(
       // starting point.
       scratch = session.scratchDir;
       keepScratch = true;
-      await removeWorktree(session.bindingRoot, session.worktreePath);
+      await removeWorktree(session.worktreePath);
       try {
         worktree = await prepareWorktree(binding.root, scratch, 'work', { at: namedBase });
       } catch (error) {
@@ -687,7 +687,7 @@ async function runHarness(
       session = moved;
       claimed = moved;
     } else {
-      scratch = await mkdtemp(join(tmpdir(), HARNESS_SCRATCH_PREFIX));
+      scratch = await makeScratch(HARNESS_SCRATCH_PREFIX);
       worktree = await prepareWorktree(
         binding.root,
         scratch,
@@ -696,11 +696,12 @@ async function runHarness(
       );
     }
     worktreePath = worktree.path;
+    const borrowed = await borrowedReads(binding.root);
 
     const keptCheckout = session !== undefined && namedBase === undefined;
     let merge: BaseMerge | undefined = keptCheckout ? session?.merge : undefined;
     if (mergeSource !== undefined && mergeIdentity !== undefined) {
-      merge = await mergeIntoCheckout(worktree.path, mergeSource, mergeIdentity);
+      merge = await mergeIntoCheckout(worktree, mergeSource, mergeIdentity);
       if (merge !== undefined && session !== undefined) {
         session = { ...session, merge };
         recordSession(session);
@@ -708,22 +709,23 @@ async function runHarness(
       }
     }
 
-    const refsBefore = await snapshotRefs(binding.root);
-
     // Fetched before the run and held only for its duration.
     credential = await fetchCredential(profile);
+
+    // Everything the harness writes outside its checkout goes here, and the
+    // sandbox is granted this rather than the scratch holding the checkout.
+    const agentScratch = await makeAgentScratch(scratch);
 
     // A configuration directory of the run's own, so a harness that keeps state
     // has somewhere to keep it that is not the operator's home. A session keeps
     // the same one across turns, which is where the conversation lives.
     let configDir: string | undefined;
     if (profile.configDirEnv !== undefined) {
-      configDir = session?.configDir ?? join(scratch, 'harness-config');
+      configDir = session?.configDir ?? join(agentScratch, 'harness-config');
       await mkdir(configDir, { recursive: true });
     }
 
     const scratchDir = scratch;
-    const refGuardEnv = await installRefGuard(scratchDir, binding.root);
     // What the harness said, as opposed to what it printed. Set per turn, so
     // the last turn's answer is the one that comes back — the same rule the
     // run result itself follows.
@@ -747,7 +749,7 @@ async function runHarness(
         scope: { ...jobScopeOf(ctx), spaceId },
         profile: input.browser.profile,
         reach: { allowedDomains: profile.allowedDomains, localPorts: profile.browserLocalPorts },
-        scratchDir,
+        scratchDir: agentScratch,
         stepExecutionId: ctx.stepExecutionId,
         storeScreenshot: async (image) => await browserService.storeScreenshot(tenantId, image),
         onActivity,
@@ -785,13 +787,12 @@ async function runHarness(
             continued,
             browserTurn?.mcpConfigPath,
           ),
-          cwd: worktree.path,
+          cwd: worktree.workDir,
           // The sandbox's proxy names the host it refused only when asked to, and
           // that name is the whole diagnosis for a harness that reached nothing.
           env: {},
           trustedEnv: {
             SRT_DEBUG: '1',
-            ...refGuardEnv,
             // Commissions see the stored objects too, as the checkout they run
             // in does: a review reads the range with its own git, and the
             // verdict that can stand in for the operator's approval has to be
@@ -807,13 +808,13 @@ async function runHarness(
               : {}),
           },
           timeoutMs: input.timeoutMs,
-          scratchDir,
+          scratchDir: agentScratch,
+          journalScratchDir: scratchDir,
           widening: {
             authPaths: profile.authPaths,
             writePaths: profile.writePaths,
             allowedDomains: profile.allowedDomains,
-            writableRoot: worktree.path,
-            withholdBindingWrite: true,
+            ...checkoutWidening(worktree, borrowed),
           },
           idPrefix: 'hr',
           ownerRunId: ctx.runId,
@@ -858,11 +859,10 @@ async function runHarness(
         ownerRunId: ctx.runId,
         logicalExecutionId: ctx.logicalExecutionId,
         bindingId: binding.id,
-        bindingRoot: binding.root,
         harnessId: profile.id,
         worktreePath: worktree.path,
         scratchDir,
-        configDir: configDir ?? join(scratchDir, 'harness-config'),
+        configDir: configDir ?? join(agentScratch, 'harness-config'),
         conversationId,
         baseSha: worktree.baseSha,
         ...(base !== undefined ? { base } : {}),
@@ -879,7 +879,7 @@ async function runHarness(
     const brief = composeHarnessTask(
       input.task,
       input.inputs,
-      await hasRepositoryRules(worktree.path),
+      await hasRepositoryRules(worktree.workDir),
       keptCheckout ? undefined : merge,
     );
     const task = continuesAttempt ? continuedAttemptTask(brief) : brief;
@@ -889,7 +889,7 @@ async function runHarness(
       result = await runTurn(task, resuming, conversationId);
     } else {
       const { schema, validate } = expected;
-      const resultPath = join(worktree.path, RESULT_RELATIVE_PATH);
+      const resultPath = join(worktree.workDir, RESULT_RELATIVE_PATH);
       // A session's checkout still holds the answer to its last turn, and a
       // stale one reads exactly like a fresh one.
       await rm(resultPath, { force: true });
@@ -935,7 +935,7 @@ async function runHarness(
     };
     let collectFailure: string | undefined;
     try {
-      changes = await collectChanges(worktree.path);
+      changes = await collectChanges(worktree);
     } catch (error) {
       collectFailure = error instanceof Error ? error.message : String(error);
     }
@@ -969,13 +969,12 @@ async function runHarness(
         : [collectFailure, refusalNote].filter(Boolean).join(' '),
       credential,
     );
-    const refChanges = changedRefs(refsBefore, await snapshotRefs(binding.root));
-    // Asked of the binding, not the worktree: the question is whether what the
+    // Asked of the binding, not the clone: the question is whether what the
     // harness produced can still be taken into the repository the operator has.
     // A named base is where a publication would append the diff, so the tree
-    // that answers is that ref's head as it stands now, not the folder's working
-    // tree. A base ref gone since the run started is refused below as a ref
-    // change, and the commit the checkout started at stands in until then.
+    // that answers is that ref's head in the folder as it stands now, not the
+    // folder's working tree; a base ref gone since the run started leaves the
+    // commit the checkout started at to stand in.
     // A merged checkout is judged against its merge, which is where the
     // publication applies the diff once it has made that merge again; a branch
     // that moved since is the publication's `stale_base`, not this answer's.
@@ -985,7 +984,15 @@ async function runHarness(
         : base === undefined
           ? undefined
           : await resolveCommit(binding.root, base).catch(() => worktree.baseSha);
-    const applies = await checkApplies(binding.root, changes.patch, judgedAt);
+    // A commit is judged through an index of its own, in the clone: the merge
+    // commit exists only there, and the clone reads every object the folder has.
+    // Reached through the git directory this lane made, never the checkout's
+    // `.git`, which the harness could have pointed at a repository of its own.
+    const applies = await checkApplies(
+      judgedAt === undefined ? binding.root : worktree,
+      changes.patch,
+      judgedAt,
+    );
     // A named base is judged against itself; the folder's HEAD was never the
     // starting point, so its distance from it says nothing about the run.
     const headMoved = base === undefined && (await currentHead(binding.root)) !== worktree.baseSha;
@@ -1029,7 +1036,6 @@ async function runHarness(
       applies: applies.state,
       ...(applies.state === 'conflict' ? { applyConflict: applies.detail } : {}),
       headMoved,
-      refChanges,
       exitCode: result.exitCode,
       timedOut: result.timedOut,
       durationMs: result.durationMs,
@@ -1087,9 +1093,7 @@ async function runHarness(
     await browser?.close();
     if (claimed !== undefined) releaseSession(claimed);
     if (!keepScratch) {
-      if (worktreePath !== undefined && bindingRoot !== undefined) {
-        await removeWorktree(bindingRoot, worktreePath);
-      }
+      if (worktreePath !== undefined) await removeWorktree(worktreePath);
       if (scratch !== undefined) await rm(scratch, { recursive: true, force: true });
     }
   }
@@ -1112,8 +1116,8 @@ export function createHostHarnessHandler(
 }
 
 export interface OrphanedCheckouts {
-  /** Checkouts taken off each connected folder, by the folder's root. */
-  readonly removed: ReadonlyMap<string, number>;
+  /** Clones removed from the scratch directories below. */
+  readonly checkouts: number;
   /** Scratch directories removed from the temp root. */
   readonly scratchDirs: number;
 }
@@ -1122,91 +1126,71 @@ export interface OrphanedCheckouts {
  * Take away the checkouts no session owns.
  *
  * Sessions live in this executor's memory, so a restart forgets every one of
- * them while their checkouts stay registered in the operator's repository and
- * their scratch stays in the temp root, with nothing left that would ever
- * expire them. Run at boot, before any job, when every checkout this lane made
- * is one of those.
+ * them while their scratch, and the clone in it, stays in the temp root with
+ * nothing left that would ever expire it. Run at boot, before any job, when
+ * every checkout this lane made is one of those.
  *
- * Only a detached checkout under the temp root, in a directory named the way
- * this executor names its own, is taken: a checkout with a branch in it, or
- * anywhere else, is the operator's.
- *
- * `roots` undefined means the connected folders could not be read, and then
- * nothing is taken. A scratch directory holds a checkout registered in one of
- * those folders, and removing it first leaves that registration behind in the
- * operator's repository as a stale entry.
+ * What is swept is marked scratch and nothing else: each directory under the
+ * temp root named the way this executor names its scratch, owned by no session
+ * and carrying the marker `makeScratch` leaves, whole. Whatever a run left in
+ * it is the executor's, a clone killed before its checkout was detached
+ * included, so what decides is the directory and never the shape of a checkout
+ * in it. A directory without the marker is left, whatever it holds, and no
+ * connected folder is read or written. Inside one, only a real directory is
+ * treated as a checkout; a link is removed with the scratch and nothing it
+ * leads to is walked.
  */
 export async function removeOrphanedCheckouts(
-  roots: readonly string[] | undefined,
   tempRoot: string = tmpdir(),
 ): Promise<OrphanedCheckouts> {
-  if (roots === undefined) return { removed: new Map(), scratchDirs: 0 };
-
   const owned = new Set(allSessions().map((session) => basename(session.scratchDir)));
   const unowned = (name: string): boolean =>
     CHECKOUT_SCRATCH_PREFIXES.some((prefix) => name.startsWith(prefix)) && !owned.has(name);
-  // git records a checkout by its resolved path, and the temp root is commonly
-  // reached through a link (`/var` on macOS), so both spellings are asked.
-  const tempRoots = new Set([tempRoot, await realpath(tempRoot).catch(() => tempRoot)]);
-  const underUnownedScratch = (path: string): boolean => {
-    for (const under of tempRoots) {
-      if (!path.startsWith(under + sep)) continue;
-      return unowned(path.slice(under.length + 1).split(sep)[0] ?? '');
-    }
-    return false;
-  };
 
-  const removed = new Map<string, number>();
-  for (const root of new Set(roots)) {
-    let checkouts: LinkedWorktree[];
-    let rootReal: string;
-    try {
-      checkouts = await linkedWorktrees(root);
-      rootReal = await realpath(root);
-    } catch {
-      // Not a repository, or not there: nothing of this lane's is registered.
-      continue;
-    }
-    for (const checkout of checkouts) {
-      // A folder connected from inside a checkout lists itself among them.
-      if (checkout.path === rootReal || !checkout.detached) continue;
-      if (!underUnownedScratch(checkout.path)) continue;
-      await removeWorktree(root, checkout.path);
-      removed.set(root, (removed.get(root) ?? 0) + 1);
-    }
-  }
-
+  let checkouts = 0;
   let scratchDirs = 0;
   for (const name of await readdir(tempRoot).catch(() => [] as string[])) {
     if (!unowned(name)) continue;
     const scratchDir = join(tempRoot, name);
-    // A checkout still in it is registered in a repository the loop above did
-    // not take it from, and is left for that repository to account for.
-    if (await holdsCheckout(scratchDir)) continue;
+    if (!(await isRealDirectory(scratchDir)) || !(await isMarkedScratch(scratchDir))) continue;
+    for (const checkout of await checkoutsIn(scratchDir)) {
+      await removeWorktree(checkout);
+      checkouts += 1;
+    }
     await discardScratch({ scratchDir });
     scratchDirs += 1;
   }
-  return { removed, scratchDirs };
+  return { checkouts, scratchDirs };
 }
 
-async function holdsCheckout(scratchDir: string): Promise<boolean> {
+/**
+ * The checkouts in a scratch directory, made whole or in part: a directory
+ * holding a `.git` of any kind, and one whose git directory alone was made.
+ * Only a real directory counts, as the entry and as the checkout it names: the
+ * sweep decides nothing by a scratch's shape, and a link standing in a
+ * checkout's place would lead the removal into whatever the link points at.
+ */
+async function checkoutsIn(scratchDir: string): Promise<string[]> {
+  const found = new Set<string>();
   for (const entry of await readdir(scratchDir).catch(() => [] as string[])) {
-    if (
-      await stat(join(scratchDir, entry, '.git')).then(
-        () => true,
-        () => false,
-      )
-    ) {
-      return true;
+    const path = join(scratchDir, entry);
+    if (!(await isRealDirectory(path))) continue;
+    if ((await lstat(join(path, '.git')).catch(() => undefined)) !== undefined) {
+      found.add(path);
+      continue;
     }
+    const checkout = checkoutOfGitDir(path);
+    if (checkout === undefined) continue;
+    const info = await lstat(checkout).catch(() => undefined);
+    if (info === undefined || info.isDirectory()) found.add(checkout);
   }
-  return false;
+  return [...found];
 }
 
 /**
  * Drop every session under a binding, removing what they left on disk. Used
- * when the binding is gone, so `removeWorktree` has no repository to prune
- * against and the directory itself is what gets taken away.
+ * when the binding is gone; the scratch holds the session's clone, so taking
+ * the directory away takes the checkout with it.
  */
 async function discardSessionsForBinding(bindingId: string): Promise<void> {
   for (const session of sessionsForBinding(bindingId)) {
