@@ -11,6 +11,16 @@ export interface RoleReadiness {
   status: 'active' | 'error' | null;
   /** `null` where the provider offers no live check. */
   verified: boolean | null;
+  /** For a model on this computer, the window its requests get and how it fits the machine. */
+  localFit: LocalFit | null;
+}
+
+export interface LocalFit {
+  status: 'fits' | 'tight' | 'does_not_fit' | 'unknown';
+  window: number;
+  largestFittingWindow: number | null;
+  bytesAtWindow: number | null;
+  gpuWorkingSetBytes: number | null;
 }
 
 /**
@@ -56,6 +66,22 @@ export function llmReadinessQueryKey(spaceId: string): readonly unknown[] {
  * Standing LLM readiness for a space, recomputed server-side at read for the
  * calling user (user-scoped credentials participate in resolution).
  */
+/**
+ * A role's local fit, as long as the model being edited is the one readiness
+ * measured: readiness describes the saved assignment, and a note about the
+ * model a draft has just replaced would describe the wrong one.
+ */
+export function localFitForDraft(
+  readiness: SpaceLlmReadiness | null | undefined,
+  modelDefaults: { default?: string | undefined } & Record<string, string | undefined>,
+): (role: string) => LocalFit | null {
+  return (role) => {
+    const measured = readiness?.roles[role];
+    const editing = modelDefaults[role] ?? modelDefaults.default;
+    return measured && measured.model === editing ? measured.localFit : null;
+  };
+}
+
 export function useSpaceLlmReadiness(spaceId: string | null): {
   readiness: SpaceLlmReadiness | null;
   isLoading: boolean;

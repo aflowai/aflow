@@ -3,7 +3,7 @@
  * shared by every process that builds an AI client from a credential, so the
  * executor and the API server cannot disagree about where a request goes.
  */
-import type { ProviderConfig } from '@aflow/ai-client';
+import type { LocalMachine, ProviderConfig } from '@aflow/ai-client';
 import { getProviderDefinition, getRequiredSecretFieldIds } from '@aflow/schemas';
 import type { ResolvedProvider } from './types.js';
 
@@ -31,6 +31,7 @@ function positiveInteger(value: string | undefined): number | undefined {
 export function providerConfigFromCredential(
   providerId: string,
   resolved: ResolvedProvider,
+  local: { machine?: LocalMachine | undefined } = {},
 ): ProviderConfig {
   // Always set, empty when the credential carries none: an SDK handed no key
   // reads the platform's own from the environment, and a space's request must
@@ -46,6 +47,9 @@ export function providerConfigFromCredential(
   if (contextTokens !== undefined) config.contextTokens = contextTokens;
   const keepAlive = configValue(providerId, resolved, 'keep_alive');
   if (keepAlive) config.keepAlive = keepAlive;
+  const parallel = positiveInteger(configValue(providerId, resolved, 'max_parallel'));
+  if (parallel !== undefined) config.parallel = parallel;
+  if (local.machine) config.machine = local.machine;
   return config;
 }
 

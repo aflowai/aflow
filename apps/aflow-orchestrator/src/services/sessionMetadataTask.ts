@@ -20,6 +20,7 @@ import {
   settleSessionMetadata,
   sessionMetadataLeaseHeld,
   appendEntityEvent,
+  readLocalMachine,
   runtimeAdmission,
   type SessionMetadataCandidate,
 } from '@aflow/redis';
@@ -100,10 +101,10 @@ export function createSessionMetadataTask(deps: SessionMetadataTaskDeps): Backgr
 
       // A title is not worth queueing behind an agent turn on this computer's
       // runtime; a busy one fails this conversation's cycle, and it is due again.
-      byokFactory ??= createByokAiClientFactory(
-        deps.db,
-        runtimeAdmission(deps.redis, { wait: false }),
-      );
+      byokFactory ??= createByokAiClientFactory(deps.db, {
+        admission: runtimeAdmission(deps.redis, { wait: false }),
+        machine: () => readLocalMachine(deps.redis),
+      });
 
       let processed = 0;
       let failed = 0;

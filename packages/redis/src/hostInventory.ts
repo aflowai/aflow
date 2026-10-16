@@ -161,9 +161,22 @@ export type HostInventoryLocalPort = z.infer<typeof HostInventoryLocalPortSchema
  * more: what an id runs is the machine's business, and naming an executable in
  * shared state would make it look addressable.
  */
+/**
+ * What this machine offers a model runtime on it (Plan 323 D8): its memory,
+ * and the GPU working set, which no `sysctl` reports and the runtime's API
+ * does not expose. Absent until the machine has read it.
+ */
+export const HostMachineSchema = z.object({
+  totalMemoryBytes: z.number().int().positive(),
+  gpuWorkingSetBytes: z.number().int().positive().optional(),
+  unifiedMemory: z.boolean(),
+});
+export type HostMachine = z.infer<typeof HostMachineSchema>;
+
 export const HostInventorySchema = z.object({
   hostname: z.string(),
   observedAt: z.string(),
+  machine: HostMachineSchema.optional(),
   runtimes: z.array(z.object({ name: z.string(), version: z.string() })),
   harnesses: z.array(z.object({ id: z.string(), label: z.string().optional() })),
   /**
@@ -299,4 +312,18 @@ export async function readLiveHostInventories(
     if (inventory.success) inventories.push(inventory.data);
   }
   return inventories;
+}
+
+/**
+ * The machine a model runtime on the appliance's own host runs on, as the
+ * paired machine publishes it. The local edition has one host; a second
+ * publisher would be a second machine, and only the first answers.
+ */
+export async function readLocalMachine(
+  redis: HostInventoryReader,
+): Promise<HostMachine | undefined> {
+  for (const inventory of await readLiveHostInventories(redis)) {
+    if (inventory.machine) return inventory.machine;
+  }
+  return undefined;
 }

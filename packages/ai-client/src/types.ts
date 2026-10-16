@@ -2,6 +2,7 @@
  * Core types for the AI client layer.
  */
 import { z } from 'zod';
+import type { LocalMachine } from './localModelFit.js';
 import { StepImageSchema } from '@aflow/schemas';
 import type {
   TenantId,
@@ -790,6 +791,13 @@ export interface ProviderConfig {
   contextTokens?: number | undefined;
   /** How long a local runtime keeps a model loaded after a request, in its own notation. */
   keepAlive?: string | undefined;
+  /**
+   * The machine a local runtime runs on, when it is known. A connection that
+   * sets no `contextTokens` gets, per model, the largest window that fits it.
+   */
+  machine?: LocalMachine | undefined;
+  /** How many requests at once a local runtime serves; each holds a window's cache. */
+  parallel?: number | undefined;
 }
 
 // ============================================================================
@@ -968,6 +976,18 @@ export interface ModelDefinition {
   local?: LocalModelBuild;
 }
 
+/** What a local model costs in memory, as `yarn models:verify-local` measured it. */
+export interface LocalModelFootprint {
+  /** The loaded size before any context. */
+  weightsBytes: number;
+  /**
+   * The KV cache's cost per context token. It scales with the runtime's cache
+   * type (`OLLAMA_KV_CACHE_TYPE`), which the API does not report, so the probe
+   * measures it rather than reading it, and a change shows as drift.
+   */
+  kvBytesPerToken: number;
+}
+
 /** The build of a local model that `yarn models:verify-local` measured. */
 export interface LocalModelBuild {
   /** The tag the runtime serves it under. */
@@ -980,6 +1000,7 @@ export interface LocalModelBuild {
   runtimeVersion: string;
   probeVersion: number;
   measuredAt: string;
+  footprint?: LocalModelFootprint;
 }
 
 // ============================================================================

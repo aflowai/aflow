@@ -20,11 +20,12 @@ const resolved = (
 
 describe('providerConfigFromCredential', () => {
   it('reaches the runtime the registry describes when the connection sets nothing', () => {
+    // No window: the client sizes one from the machine, per model.
     expect(providerConfigFromCredential('ollama', resolved({}))).toEqual({
       apiKey: '',
       baseUrl: 'http://127.0.0.1:11434',
-      contextTokens: 32_768,
       keepAlive: '30m',
+      parallel: 1,
     });
   });
 

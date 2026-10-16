@@ -16,6 +16,7 @@ export {
   LocalRuntimeBusyError,
   type ByokClientContext,
   type RuntimeAdmission,
+  type LocalRuntimeOptions,
 } from './byokAiClient.js';
 export {
   providerConfigFromCredential,

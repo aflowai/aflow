@@ -18,7 +18,7 @@ import type {
   DirectiveReasoningEffort,
 } from '@aflow/schemas';
 import type { ModelOption } from '../../hooks/useChatModelOptions.js';
-import type { ClerkReadiness } from '../../hooks/useSpaceLlmReadiness.js';
+import type { ClerkReadiness, LocalFit } from '../../hooks/useSpaceLlmReadiness.js';
 
 export type ModelRole = 'default' | 'helmsman' | 'runner' | 'coach' | 'judge' | 'clerk';
 
@@ -127,6 +127,36 @@ interface ModelDefaultsEditorProps {
   missingProviderForRef?: (ref: string) => string | null;
   /** Opens key entry for a provider surfaced by `missingProviderForRef`. */
   onConnectProvider?: (providerId: string) => void;
+  /** For a role on a model on this computer, its window and how it fits the machine. */
+  localFitForRole?: (role: ModelRole) => LocalFit | null;
+}
+
+const gb = (bytes: number): string => `${(bytes / 1e9).toFixed(1)} GB`;
+/** The window the platform's agents need (`MIN_USEFUL_WINDOW_TOKENS` in @aflow/ai-client). */
+const AGENT_WINDOW_TOKENS = 32_768;
+const tokens = (n: number): string => `${Math.round(n / 1024)}K`;
+
+/** What a role on a model on this computer should expect, in the operator's terms. */
+export function describeLocalFit(fit: LocalFit): string {
+  const gpu = fit.gpuWorkingSetBytes;
+  switch (fit.status) {
+    case 'fits':
+      return `Runs on this computer with a ${tokens(fit.window)} window.`;
+    case 'tight':
+      return `${tokens(fit.window)} window, ${gb(fit.bytesAtWindow ?? 0)} of this computer's ${gb(gpu ?? 0)} of GPU memory — expect it to slow down while other apps need memory.`;
+    case 'does_not_fit':
+      return `Needs ${gb(fit.bytesAtWindow ?? 0)} at a ${tokens(fit.window)} window, more than this computer's ${gb(gpu ?? 0)} of GPU memory, so it will spill and run slowly.${
+        fit.largestFittingWindow
+          ? ` This computer fits a ${tokens(fit.largestFittingWindow)} window${
+              fit.largestFittingWindow < AGENT_WINDOW_TOKENS
+                ? ', smaller than the platform’s agents need; a machine with more memory, or a smaller model, runs them at full speed.'
+                : '.'
+            }`
+          : ''
+      }`;
+    case 'unknown':
+      return `${tokens(fit.window)} window — this computer's GPU memory has not been read yet, so the window is not sized to it.`;
+  }
 }
 
 /**
@@ -151,6 +181,7 @@ export function ModelDefaultsEditor({
   disabled = false,
   missingProviderForRef,
   onConnectProvider,
+  localFitForRole,
 }: ModelDefaultsEditorProps) {
   if (loading) {
     return <Text variant="muted">Loading models…</Text>;
@@ -226,6 +257,22 @@ export function ModelDefaultsEditor({
             Needs key — connect
           </button>
         )}
+        {(() => {
+          const fit = localFitForRole?.(role);
+          return fit ? (
+            <Text
+              size="xs"
+              variant="muted"
+              style={{
+                display: 'block',
+                marginTop: 'var(--space-1)',
+                ...(fit.status === 'does_not_fit' ? { color: 'var(--color-status-warning)' } : {}),
+              }}
+            >
+              {describeLocalFit(fit)}
+            </Text>
+          ) : null;
+        })()}
       </>
     );
   };

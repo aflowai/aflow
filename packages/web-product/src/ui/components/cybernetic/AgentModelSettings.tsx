@@ -8,7 +8,7 @@ import {
   type EntityDirectives,
 } from '@aflow/schemas';
 import { useChatModelOptions } from '../../hooks/useChatModelOptions.js';
-import { useSpaceLlmReadiness } from '../../hooks/useSpaceLlmReadiness.js';
+import { localFitForDraft, useSpaceLlmReadiness } from '../../hooks/useSpaceLlmReadiness.js';
 import { useAgentDirectives } from '../../hooks/useAgentDirectives.js';
 import { ConnectProviderDialog } from '../credentials/ConnectProviderDialog.js';
 import {
@@ -109,6 +109,7 @@ export function AgentModelSettings({
               return unready ? provider : null;
             }}
             onConnectProvider={setConnectProvider}
+            localFitForRole={localFitForDraft(readiness, directives.modelDefaults)}
           />
         )}
       </AgentSettingsPopover>

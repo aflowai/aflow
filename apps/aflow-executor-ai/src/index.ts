@@ -40,6 +40,7 @@ import { createServiceLogger } from '@aflow/executor-runtime';
 import { AiHandler } from './handlers/ai/index.js';
 import {
   initCredentialResolver,
+  initLocalMachineSource,
   getCredentialResolver,
   invalidateAllCredentialCaches,
 } from './handlers/ai/aiClient.js';
@@ -140,6 +141,7 @@ async function main(): Promise<void> {
   if (shouldRunStepExecutor) {
     const db = database.db;
 
+    initLocalMachineSource(redis);
     initCredentialResolver(async (tenantId, providerId) => {
       const tenantContext = createTenantContext(tenantId as TenantId);
       try {

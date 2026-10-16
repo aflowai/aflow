@@ -181,9 +181,9 @@ export const PROVIDER_REGISTRY: readonly ProviderDefinition[] = [
         label: 'Context window (tokens)',
         type: 'number',
         required: false,
-        defaultValue: String(OLLAMA_DEFAULT_CONTEXT_TOKENS),
+        placeholder: 'Automatic',
         helpText:
-          'The largest prompt and answer a request may use. A larger window holds longer conversations and costs memory.',
+          'Leave empty for the largest window this computer fits, per model. A larger window holds longer conversations and costs memory; a window set here is used as set.',
       },
       {
         fieldId: 'max_parallel',
