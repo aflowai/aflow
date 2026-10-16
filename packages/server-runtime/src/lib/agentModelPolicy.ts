@@ -15,6 +15,7 @@ import {
   CLERK_SPACE_DEFAULT,
   DEFAULT_CYBERNETIC_MODEL,
   effectiveAgentModelRefs,
+  type EditionId,
 } from '@aflow/schemas';
 
 /** The catalog id behind a ref, or undefined when it names no model. */
@@ -22,9 +23,23 @@ export function canonicalModelId(ref: string): string | undefined {
   return createDefaultModelCatalog().getModel(ref)?.id;
 }
 
-/** Catalog ids a space may assign, given whatever the tenant stored. */
-export function allowedModelIds(stored: readonly string[] | null | undefined): Set<string> {
+/**
+ * Catalog ids a space may assign, given whatever the tenant stored.
+ *
+ * In the local edition a tenant following the platform recommendation may also
+ * assign the catalog's models on this computer (Plan 323 D18): nothing is
+ * billed for them and the machine is the operator's own, so holding them back
+ * until a tenant names its own set would leave an operator with no cloud key
+ * nothing to run. A tenant that named its set is held to it, as everywhere.
+ */
+export function allowedModelIds(
+  stored: readonly string[] | null | undefined,
+  edition: EditionId,
+): Set<string> {
   const ids = new Set<string>();
+  if (!(stored && stored.length > 0) && edition === 'community-local') {
+    for (const model of createDefaultModelCatalog().listModels('ollama')) ids.add(model.id);
+  }
   for (const ref of effectiveAgentModelRefs(stored)) {
     const id = canonicalModelId(ref);
     // An unresolvable stored ref is dropped rather than compared literally: it

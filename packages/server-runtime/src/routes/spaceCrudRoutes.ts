@@ -125,7 +125,11 @@ export const spaceCrudRoutes: FastifyPluginAsync = async (fastify) => {
       let resolvedDirectives: z.infer<typeof EntityDirectivesSchema> =
         directives ?? defaultSpaceDirectives();
 
-      const allowedModels = await allowedAgentModelRefs(db, tenantCtx.tenantId);
+      const allowedModels = await allowedAgentModelRefs(
+        db,
+        tenantCtx.tenantId,
+        fastify.edition.edition,
+      );
       if (resolvedDirectives) {
         resolvedDirectives = withTenantDefaultModels(
           resolvedDirectives,
@@ -855,7 +859,11 @@ export const spaceCrudRoutes: FastifyPluginAsync = async (fastify) => {
       }
 
       if (request.body.directives) {
-        const allowedModels = await allowedAgentModelRefs(db, tenantCtx.tenantId);
+        const allowedModels = await allowedAgentModelRefs(
+          db,
+          tenantCtx.tenantId,
+          fastify.edition.edition,
+        );
         const offListModels = offListAgentModelRefs(request.body.directives, allowedModels);
         if (offListModels.length > 0) {
           // Editors send the full modelDefaults object, so re-sending an

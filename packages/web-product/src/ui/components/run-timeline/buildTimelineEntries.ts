@@ -5,8 +5,18 @@ import { ev } from './eventAccessor';
 import type { RunSummary } from './RunSummaryBar';
 import type { StepGroup, TimelineEntry } from './types';
 
-/** Aggregated run-level summary computed from all step groups */
+/** The provider a model on this computer is served by. */
+const LOCAL_PROVIDER = 'ollama';
 
+/** The steps that called a model, and every one of them called one on this computer. */
+function ranLocally(entries: TimelineEntry[]): boolean {
+  const providers = entries.flatMap((e) =>
+    e.kind === 'step' && e.group.costInfo?.provider ? [e.group.costInfo.provider] : [],
+  );
+  return providers.length > 0 && providers.every((p) => p === LOCAL_PROVIDER);
+}
+
+/** Aggregated run-level summary computed from all step groups */
 export function computeRunSummary(entries: TimelineEntry[]): RunSummary {
   const summary: RunSummary = {
     totalSteps: 0,
@@ -19,6 +29,7 @@ export function computeRunSummary(entries: TimelineEntry[]): RunSummary {
     totalCostUsd: 0,
     models: new Set(),
     totalCacheReadTokens: 0,
+    ranLocally: ranLocally(entries),
   };
 
   // Check for server-side usageSummary from a terminal event

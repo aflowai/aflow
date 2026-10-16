@@ -216,11 +216,15 @@ export function StepGroupCard({ group }: { group: StepGroup }) {
                   ` (${formatNumber(group.costInfo.promptTokens ?? 0)} ctx)`}
               </Text>
             )}
-            {group.costInfo.totalCostUsd != null && group.costInfo.totalCostUsd > 0 && (
+            {group.costInfo.totalCostUsd != null && group.costInfo.totalCostUsd > 0 ? (
               <Text variant="muted" size="xs" style={{ fontSize: '10px' }}>
                 {formatCostUsd(group.costInfo.totalCostUsd)}
               </Text>
-            )}
+            ) : group.costInfo.provider === 'ollama' && (group.costInfo.totalTokens ?? 0) > 0 ? (
+              <Text variant="muted" size="xs" style={{ fontSize: '10px' }}>
+                local
+              </Text>
+            ) : null}
             {(group.costInfo.cacheReadTokens ?? 0) > 0 &&
               (group.costInfo.promptTokens ?? 0) > 0 && (
                 <Text

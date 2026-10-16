@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import type { SessionEvent } from '@aflow/web-product/ui';
 
-import { buildTimelineEntries, stepGroupKey } from './buildTimelineEntries';
+import { buildTimelineEntries, computeRunSummary, stepGroupKey } from './buildTimelineEntries';
 import { stepStatusLabel } from './displayHelpers';
-import type { StepGroup } from './types';
+import type { StepGroup, TimelineEntry } from './types';
 
 let seq = 0;
 
@@ -133,5 +133,22 @@ describe('a step waiting for its executor', () => {
 
     expect(parked?.status).toBe('waiting_on_executor');
     expect(parked?.stepType).toBe('host');
+  });
+});
+
+describe('a run on a model on this computer', () => {
+  const step = (provider: string, totalCostUsd: number): TimelineEntry =>
+    ({
+      kind: 'step',
+      group: { status: 'succeeded', costInfo: { provider, totalTokens: 100, totalCostUsd } },
+    }) as unknown as TimelineEntry;
+
+  it('ran locally when every model call did', () => {
+    expect(computeRunSummary([step('ollama', 0), step('ollama', 0)]).ranLocally).toBe(true);
+  });
+
+  it('did not when any call went to a hosted model', () => {
+    expect(computeRunSummary([step('ollama', 0), step('anthropic', 0.02)]).ranLocally).toBe(false);
+    expect(computeRunSummary([]).ranLocally).toBe(false);
   });
 });

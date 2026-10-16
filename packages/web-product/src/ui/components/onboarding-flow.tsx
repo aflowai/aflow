@@ -387,11 +387,17 @@ function StepNameWorkspace({
 // =============================================================================
 
 function ModelCard({
-  model,
+  label,
+  via,
+  tagline,
+  recommended,
   selected,
   onSelect,
 }: {
-  model: RecommendedAgentModel;
+  label: string;
+  via: string;
+  tagline: string;
+  recommended?: boolean | undefined;
   selected: boolean;
   onSelect: () => void;
 }) {
@@ -426,11 +432,11 @@ function ModelCard({
           marginBottom: 'var(--space-1)',
         }}
       >
-        <span style={{ fontWeight: 600, fontSize: 'var(--font-size-sm)' }}>{model.label}</span>
+        <span style={{ fontWeight: 600, fontSize: 'var(--font-size-sm)' }}>{label}</span>
         <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)' }}>
-          via {providerDisplayName(model.credentialProviderId)}
+          via {via}
         </span>
-        {model.recommended && (
+        {recommended && (
           <Badge variant="accent" style={{ fontSize: 'var(--font-size-xs)' }}>
             Recommended
           </Badge>
@@ -443,7 +449,7 @@ function ModelCard({
           lineHeight: 1.5,
         }}
       >
-        {model.tagline}
+        {tagline}
       </div>
     </div>
   );
@@ -534,6 +540,12 @@ function StepModel({
       (m) => allowed.has(m.modelId) || (m.alias !== undefined && allowed.has(m.alias)),
     );
   }, [modelOptions]);
+  // Offered only where the tenant may assign them, which outside the local
+  // edition is never: there is no computer of the operator's behind a hosted one.
+  const onThisComputer = useMemo(
+    () => modelOptions.filter((o) => o.provider === 'ollama' && o.allowed),
+    [modelOptions],
+  );
   const defaultEntry = offered.find((m) => m.recommended) ?? offered[0];
   // The policy has not loaded on first render, so the selection is seeded once
   // it arrives rather than by the state initializer, which would freeze a
@@ -572,6 +584,28 @@ function StepModel({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  /**
+   * A model on this computer needs a connection and no key: one is added at
+   * Ollama's own address unless one already resolves for this workspace, which
+   * may name another and must not be replaced.
+   */
+  const connectThisComputer = async (spaceId: string): Promise<string | null> => {
+    const scoped = { ...headers(), 'X-Space-ID': spaceId };
+    const readiness = await authFetch(`/api/spaces/${spaceId}/llm-readiness`, { headers: scoped });
+    const roles = readiness.ok
+      ? ((await readiness.json()) as { roles: Record<string, { resolved: boolean }> }).roles
+      : {};
+    if (roles['default']?.resolved) return null;
+    const put = await authFetch('/api/credentials/ollama', {
+      method: 'PUT',
+      headers: scoped,
+      body: JSON.stringify({ scope: 'user', secrets: {} }),
+    });
+    if (put.ok) return null;
+    const body = (await put.json().catch(() => null)) as { error?: string } | null;
+    return body?.error ?? `Could not connect to Ollama on this computer (${put.status}).`;
+  };
+
   const handleContinue = async () => {
     // Nothing to save when no model was offered or chosen: the space keeps
     // whatever creation assigned it, which the server already held to the
@@ -588,11 +622,15 @@ function StepModel({
         version: 1,
         responsibility: 'General-purpose workspace.',
       };
+      const local = onThisComputer.some((m) => m.ref === defaultRef);
       const modelDefaults: Record<string, string> = { default: defaultRef };
       for (const role of AGENT_ROLES) {
         const override = roleOverrides[role];
         if (override && override !== defaultRef) modelDefaults[role] = override;
       }
+      // One GPU serves every role, and each switch between models is a load,
+      // so the Clerk — the one role that does not inherit — follows too.
+      if (local) modelDefaults['clerk'] = 'space_default';
       // No active space exists during onboarding, so headers() carries no
       // X-Space-ID — the PATCH handler's requireSpace() needs it explicitly.
       const res = await authFetch(`/api/spaces/${space.id}`, {
@@ -605,6 +643,14 @@ function StepModel({
         setError(body?.message ?? `Could not save the model choice (${res.status})`);
         setSaving(false);
         return;
+      }
+      if (local) {
+        const problem = await connectThisComputer(space.id);
+        if (problem) {
+          setError(problem);
+          setSaving(false);
+          return;
+        }
       }
       onDone(selection);
     } catch {
@@ -642,22 +688,39 @@ function StepModel({
               Could not load the available models ({modelOptionsError}). Continue — your workspace
               keeps the model it was created with, and you can change it in settings.
             </StepLede>
-          ) : offered.length === 0 ? (
+          ) : offered.length === 0 && onThisComputer.length === 0 ? (
             <StepLede>
               Your administrator has chosen a custom set of models. Continue — your workspace keeps
               the model it was created with, and you can change it in settings.
             </StepLede>
           ) : (
-            offered.map((model) => (
-              <ModelCard
-                key={model.modelId}
-                model={model}
-                selected={defaultRef === modelRef(model)}
-                onSelect={() => {
-                  setDefaultRef(modelRef(model));
-                }}
-              />
-            ))
+            <>
+              {offered.map((model) => (
+                <ModelCard
+                  key={model.modelId}
+                  label={model.label}
+                  via={providerDisplayName(model.credentialProviderId)}
+                  tagline={model.tagline}
+                  recommended={model.recommended}
+                  selected={defaultRef === modelRef(model)}
+                  onSelect={() => {
+                    setDefaultRef(modelRef(model));
+                  }}
+                />
+              ))}
+              {onThisComputer.map((model) => (
+                <ModelCard
+                  key={model.id}
+                  label={model.displayName}
+                  via="Ollama, on this computer"
+                  tagline="Runs on this machine: nothing leaves it, no key, nothing billed. Slower than a hosted model on most computers — This Computer downloads it and says how well it fits."
+                  selected={defaultRef === model.ref}
+                  onSelect={() => {
+                    setDefaultRef(model.ref);
+                  }}
+                />
+              ))}
+            </>
           )}
         </div>
       </FadeSlide>
@@ -1442,6 +1505,12 @@ export function OnboardingFlow({ resumeFor }: { resumeFor?: CreateSpaceResult })
             initial={selection}
             onDone={(sel) => {
               setSelection(sel);
+              // A model on this computer has no key to connect.
+              if (sel.defaultRef !== '' && providersForSelection(sel).length === 0) {
+                setKeysConnected(true);
+                setStep('ready');
+                return;
+              }
               setStep('connect');
             }}
           />

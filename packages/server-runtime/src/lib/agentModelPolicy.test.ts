@@ -20,36 +20,40 @@ describe('canonical comparison', () => {
   it('admits a directive alias against an allowlist stored as ids', () => {
     // The gate's original bug: default directives hold `glm-pro`, the Settings
     // page saves catalog ids, and comparing the strings refused the same model.
-    const allowed = allowedModelIds([GLM_ID]);
+    const allowed = allowedModelIds([GLM_ID], 'enterprise');
     expect(isModelIdAllowed('glm-pro', allowed)).toBe(true);
     expect(isModelIdAllowed(GLM_ID, allowed)).toBe(true);
   });
 
   it('admits an id against an allowlist stored as an alias', () => {
-    const allowed = allowedModelIds(['luna']);
+    const allowed = allowedModelIds(['luna'], 'enterprise');
     expect(isModelIdAllowed('gpt-6-luna', allowed)).toBe(true);
   });
 
   it('still refuses a model the tenant did not enable', () => {
-    expect(isModelIdAllowed('claude-sonnet-5-5', allowedModelIds(['luna']))).toBe(false);
+    expect(isModelIdAllowed('claude-sonnet-5-5', allowedModelIds(['luna'], 'enterprise'))).toBe(
+      false,
+    );
   });
 
   it('refuses a ref that names no model', () => {
-    expect(isModelIdAllowed('not-a-model', allowedModelIds(['luna']))).toBe(false);
+    expect(isModelIdAllowed('not-a-model', allowedModelIds(['luna'], 'enterprise'))).toBe(false);
   });
 
   it('falls back to the platform recommendations when the tenant never chose', () => {
-    expect(isModelIdAllowed('claude-sonnet-5-5', allowedModelIds(null))).toBe(true);
+    expect(isModelIdAllowed('claude-sonnet-5-5', allowedModelIds(null, 'enterprise'))).toBe(true);
   });
 });
 
 describe('tenantDefaultModelId', () => {
   it('keeps the platform default when the tenant allows it', () => {
-    expect(tenantDefaultModelId(allowedModelIds([GLM_ID, 'gpt-6-luna']))).toBe(GLM_ID);
+    expect(tenantDefaultModelId(allowedModelIds([GLM_ID, 'gpt-6-luna'], 'enterprise'))).toBe(
+      GLM_ID,
+    );
   });
 
   it('picks one the tenant does allow when the platform default is excluded', () => {
-    expect(tenantDefaultModelId(allowedModelIds(['gpt-6-luna']))).toBe('gpt-6-luna');
+    expect(tenantDefaultModelId(allowedModelIds(['gpt-6-luna'], 'enterprise'))).toBe('gpt-6-luna');
   });
 });
 
@@ -60,7 +64,7 @@ describe('withTenantDefaultModels', () => {
     // Space creation carries `glm-pro` from a Zod default even when the caller
     // never named a model; without this every create would 400 for a tenant
     // that excludes GLM.
-    const allowed = allowedModelIds(['gemini-3.8-flash']);
+    const allowed = allowedModelIds(['gemini-3.8-flash'], 'enterprise');
     const out = withTenantDefaultModels({ modelDefaults: { default: 'glm-pro' } }, allowed, NONE);
     expect(out.modelDefaults?.['default']).toBe('gemini-3.8-flash');
   });
@@ -68,7 +72,7 @@ describe('withTenantDefaultModels', () => {
   it('leaves an explicitly requested model alone, even the platform default', () => {
     // Substituting here would hand the caller a space running a model they did
     // not choose; the gate refuses the request instead.
-    const allowed = allowedModelIds(['gemini-3.8-flash']);
+    const allowed = allowedModelIds(['gemini-3.8-flash'], 'enterprise');
     const out = withTenantDefaultModels(
       { modelDefaults: { default: 'glm-pro' } },
       allowed,
@@ -78,7 +82,7 @@ describe('withTenantDefaultModels', () => {
   });
 
   it('leaves a deliberately chosen other model alone for the gate to refuse', () => {
-    const allowed = allowedModelIds(['gemini-3.8-flash']);
+    const allowed = allowedModelIds(['gemini-3.8-flash'], 'enterprise');
     const out = withTenantDefaultModels(
       { modelDefaults: { default: 'claude-sonnet-5-5' } },
       allowed,
@@ -88,13 +92,13 @@ describe('withTenantDefaultModels', () => {
   });
 
   it('leaves an allowed default untouched', () => {
-    const allowed = allowedModelIds([GLM_ID]);
+    const allowed = allowedModelIds([GLM_ID], 'enterprise');
     const out = withTenantDefaultModels({ modelDefaults: { default: 'glm-pro' } }, allowed, NONE);
     expect(out.modelDefaults?.['default']).toBe('glm-pro');
   });
 
   it('rehomes only the roles the caller left unnamed', () => {
-    const allowed = allowedModelIds(['gpt-6-luna']);
+    const allowed = allowedModelIds(['gpt-6-luna'], 'enterprise');
     const out = withTenantDefaultModels(
       { modelDefaults: { default: 'glm-pro', runner: 'glm-pro', coach: 'gpt-6-luna' } },
       allowed,
@@ -109,7 +113,7 @@ describe('withTenantDefaultModels', () => {
 });
 
 describe('the Clerk against the same gate', () => {
-  const recommended = { ids: allowedModelIds(null), explicit: false };
+  const recommended = { ids: allowedModelIds(null, 'enterprise'), explicit: false };
 
   it('lets every value its picker can produce be saved', () => {
     // Each of these was refused before the gate learned the role: the two
@@ -122,7 +126,7 @@ describe('the Clerk against the same gate', () => {
   });
 
   it('still holds the Clerk to a tenant that named its own set', () => {
-    const strict = { ids: allowedModelIds(['sonnet']), explicit: true };
+    const strict = { ids: allowedModelIds(['sonnet'], 'enterprise'), explicit: true };
     expect(offListAgentModelRefs({ modelDefaults: { clerk: 'glm-flash' } }, strict)).toEqual([
       'glm-flash',
     ]);
@@ -141,7 +145,7 @@ describe('the Clerk against the same gate', () => {
   it('leaves a Clerk mode alone when filling tenant defaults', () => {
     // The filler runs before the gate. Reading `auto` as an unassignable ref
     // replaces the operator's "pick one for me" with a pinned foreground model.
-    const allowed = allowedModelIds([GLM_ID]);
+    const allowed = allowedModelIds([GLM_ID], 'enterprise');
     const filled = withTenantDefaultModels(
       { modelDefaults: { clerk: 'auto', helmsman: 'some-retired-model' } },
       allowed,
@@ -151,5 +155,18 @@ describe('the Clerk against the same gate', () => {
       clerk: 'auto',
       helmsman: tenantDefaultModelId(allowed),
     });
+  });
+});
+
+describe('models on this computer', () => {
+  it('may be assigned in the local edition by a tenant following the recommendation', () => {
+    expect(isModelIdAllowed('gemma-local', allowedModelIds(null, 'community-local'))).toBe(true);
+  });
+
+  it('are held to a tenant that named its own set, and absent from the hosted edition', () => {
+    expect(isModelIdAllowed('gemma-local', allowedModelIds(['sonnet'], 'community-local'))).toBe(
+      false,
+    );
+    expect(isModelIdAllowed('gemma-local', allowedModelIds(null, 'enterprise'))).toBe(false);
   });
 });
