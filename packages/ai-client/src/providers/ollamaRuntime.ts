@@ -122,6 +122,7 @@ export function localRuntimeClient(
       if (!res.ok || !res.body) throw new Error(`Ollama ${res.status}: ${await res.text()}`);
       const decoder = new TextDecoder();
       let buffer = '';
+      let last = '';
       const reader = res.body.getReader();
       for (;;) {
         const { done, value } = await reader.read();
@@ -139,12 +140,18 @@ export function localRuntimeClient(
             error?: string;
           };
           if (chunk.error) throw new Error(chunk.error);
+          last = chunk.status ?? last;
           onProgress({
             status: chunk.status ?? '',
             completedBytes: chunk.completed ?? 0,
             totalBytes: chunk.total ?? null,
           });
         }
+      }
+      // A stream the runtime closed early — a restart mid-pull — ends without
+      // its `success` line, and installed nothing.
+      if (last !== 'success') {
+        throw new Error(`the download stopped before it finished (last: ${last || 'nothing'})`);
       }
     },
     async remove(tag) {

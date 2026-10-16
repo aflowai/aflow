@@ -71,6 +71,16 @@ describe('localRuntimeClient', () => {
 });
 
 describe('downloads', () => {
+  it('fails a pull whose stream ends without the runtime saying it succeeded', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(`${JSON.stringify({ status: 'pulling 48eb98ec' })}\n`)),
+    );
+    await expect(
+      localRuntimeClient({}).pull('gemma4:26b', () => undefined, new AbortController().signal),
+    ).rejects.toThrow('stopped before it finished');
+  });
+
   it('reports a pull line by line as the runtime streams it, and fails on an error line', async () => {
     const lines = [
       { status: 'pulling manifest' },

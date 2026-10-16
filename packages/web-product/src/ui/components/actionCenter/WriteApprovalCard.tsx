@@ -234,8 +234,8 @@ function LocalModelChangeDetail({
       ))}
       {impact.inFlightRequests > 0 && (
         <Text size="sm" weight="medium">
-          Ends the {impact.inFlightRequests} model request
-          {impact.inFlightRequests === 1 ? '' : 's'} running on it now.
+          {impact.inFlightRequests} model request{impact.inFlightRequests === 1 ? ' is' : 's are'}{' '}
+          running on this computer now; those on this model end.
         </Text>
       )}
       {impact.ownConversationReloads && (

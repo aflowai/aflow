@@ -61,10 +61,19 @@ describe('a proposed change to the model runtime', () => {
     });
   });
 
-  it('asks again when its impact has moved since the card was shown', () => {
-    expect(unload(0).requestHash).toBe(unload(0).requestHash);
-    expect(unload(1).requestHash).not.toBe(unload(0).requestHash);
-    // A figure that moves by the second informs the card and asks nothing again.
+  it('asks again when what it reaches has moved since the card was shown', () => {
+    const elsewhere = localRuntimeChangeRequest({
+      operationId: 'model.runtime.change',
+      change: { action: 'unload', model: GEMMA },
+      diagnostics: diagnostics(22.7e9),
+      inFlightRequests: 0,
+      askingModel: undefined,
+    });
+    expect(elsewhere.requestHash).not.toBe(unload(0).requestHash);
+  });
+
+  it('keeps one request across figures that move by the second', () => {
+    expect(unload(1).requestHash).toBe(unload(0).requestHash);
     expect(unload(0, 18e9).requestHash).toBe(unload(0).requestHash);
   });
 

@@ -13,8 +13,12 @@ import type { Redis } from 'ioredis';
 import type { LocalModelPull } from '@aflow/schemas';
 
 const KEY_PREFIX = 'aflow:local-pull';
-/** Progress arrives several times a second while bytes flow; a minute of silence is a pull nobody holds. */
-export const LOCAL_PULL_LEASE_MS = 60_000;
+/**
+ * Progress arrives several times a second while bytes flow, but the runtime
+ * says nothing while it checks a large layer's digest, which takes minutes on
+ * a slow disk. Ten minutes of silence is a pull nobody holds.
+ */
+export const LOCAL_PULL_LEASE_MS = 600_000;
 /** How long a stopped or failed pull stays readable. */
 export const LOCAL_PULL_ENDED_TTL_MS = 600_000;
 
@@ -79,7 +83,10 @@ export async function recordLocalPullProgress(
   const key = pullKey(runtimeId, tag);
   const results = await redis
     .multi()
+    // The status rides every write, so a record that lapsed under a pull
+    // still running is rebuilt whole rather than as one nothing can read.
     .hset(key, {
+      status: 'downloading',
       completedBytes: String(progress.completedBytes),
       totalBytes: progress.totalBytes === null ? '' : String(progress.totalBytes),
       detail: progress.detail,

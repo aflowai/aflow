@@ -225,9 +225,9 @@ export function browserApprovalActionPhrase(
  * D10). What the card shows is what the change costs: the requests in flight
  * that an unload or delete ends, whether this conversation's own next turn
  * loads the model again, and the change's own figures (a download's size and
- * the disk it leaves, the memory a window takes). The change and what it ends
- * are in the hash, so an approval acts only on the impact it showed: changed
- * impact asks again. The figures move by the second and stay out of it.
+ * the disk it leaves, the memory a window takes). The change and whether it
+ * reloads the asking conversation are in the hash, so an approval acts only on
+ * the change it showed; the figures move by the second and stay out of it.
  */
 export const LocalModelWriteApprovalRequestPayloadSchema = z.object({
   kind: z.literal('write_approval'),
@@ -237,7 +237,7 @@ export const LocalModelWriteApprovalRequestPayloadSchema = z.object({
   modelName: z.string().optional(),
   runtimeUrl: z.string(),
   impact: z.object({
-    /** Requests running on the runtime now, which an unload or delete ends. */
+    /** Requests running on the runtime now, on any model; an unload or delete ends those on its model. */
     inFlightRequests: z.number().int().nonnegative(),
     /** The asking conversation runs on this model, so its next turn loads it again. */
     ownConversationReloads: z.boolean(),

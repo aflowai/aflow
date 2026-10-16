@@ -17,6 +17,7 @@ import {
   MODEL_RUNTIME_CHANGE_OPERATION_ID,
   localModelChangePhrase,
   type LocalModelWriteApprovalRequestPayload,
+  type ResolverPolicy,
   browserApprovalActionPhrase,
   derivePauseToken,
   WriteApprovalRequestPayloadSchema,
@@ -614,6 +615,7 @@ function buildWriteApprovalItem(
     requestedBy: { kind: 'agent' as const, label: 'Agent', sessionId: row.sessionId },
     priority: shown.priority,
     relatesTo: shown.relatesTo,
+    ...(shown.resolverPolicy ? { resolverPolicy: shown.resolverPolicy } : {}),
     resolverAuthority: { kind: 'space' },
     status: row.status === 'PAUSED' ? 'open' : 'resolved',
   };
@@ -626,6 +628,7 @@ interface WriteApprovalShown {
   readonly operationId: string;
   readonly priority: 'normal' | 'high';
   readonly relatesTo: RelatesToEntry[];
+  readonly resolverPolicy?: ResolverPolicy;
 }
 
 function apiWriteApprovalShown(req: ApiWriteApprovalRequestPayload): WriteApprovalShown {
@@ -697,7 +700,7 @@ function localModelApprovalShown(req: LocalModelWriteApprovalRequestPayload): Wr
   const doing = localModelChangePhrase(req);
   const ends =
     req.impact.inFlightRequests > 0
-      ? ` It ends the ${String(req.impact.inFlightRequests)} model request${req.impact.inFlightRequests === 1 ? '' : 's'} running on it now.`
+      ? ` ${String(req.impact.inFlightRequests)} model request${req.impact.inFlightRequests === 1 ? ' is' : 's are'} running on this computer now; those on this model end.`
       : '';
   const own = req.impact.ownConversationReloads
     ? ' This conversation runs on it, so its next turn loads it again.'
@@ -718,6 +721,9 @@ function localModelApprovalShown(req: LocalModelWriteApprovalRequestPayload): Wr
     operationId: MODEL_RUNTIME_CHANGE_OPERATION_ID,
     priority: req.impact.inFlightRequests > 0 ? 'high' : 'normal',
     relatesTo: [],
+    // The operator's own routes for these changes are space-admin only; an
+    // approval is the same change, so it answers to the same role.
+    resolverPolicy: { minResolvers: 1, requireAll: false, candidateResolvers: ['admin'] },
   };
 }
 
