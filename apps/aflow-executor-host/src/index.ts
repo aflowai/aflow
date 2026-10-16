@@ -81,6 +81,7 @@ import { loadPairedEnv } from './pairedEnv.js';
 import { followPolicy, watchPolicy } from './policyWatch.js';
 import { killAllProcesses, killProcessesForBinding, reapWithdrawn } from './sandboxedRun.js';
 import { observeRuntimes } from './runtimes.js';
+import { createMachineReader } from './machine.js';
 import { publishingFolders } from './pushApproval.js';
 import { startUnderSignals } from './startUnderSignals.js';
 import { createStartupTimings } from './startupTimings.js';
@@ -288,6 +289,10 @@ async function main(): Promise<void> {
   let lastFolders: HostInventoryFolders = [];
   let lastMaxConcurrentHarnessRuns = HOST_HARNESS_CONCURRENCY_DEFAULT;
   let lastBrowsers: HostInventoryBrowsers = [];
+  const machine = createMachineReader({ hostDir: dirname(policyPath) });
+  // Read in the background: the probe compiles a Swift program, and the
+  // inventory goes out without the GPU figure until it is in.
+  void machine.start();
 
   // Published with a lifetime rather than stored: an inventory that outlives the
   // executor describes a machine nobody is listening on, and inviting a run
@@ -340,6 +345,7 @@ async function main(): Promise<void> {
     const inventory: HostInventory = {
       hostname,
       observedAt: new Date().toISOString(),
+      machine: machine.current(),
       runtimes,
       harnesses,
       maxConcurrentHarnessRuns,

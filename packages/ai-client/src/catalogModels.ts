@@ -91,8 +91,10 @@ export const builtInModels: ModelDefinition[] = [
       runner: 'mlx',
       quantization: 'nvfp4',
       runtimeVersion: '0.40.5',
-      probeVersion: 1,
+      probeVersion: 2,
       measuredAt: '2026-10-16',
+      // Measured at OLLAMA_KV_CACHE_TYPE=q8_0 (§9 G6).
+      footprint: { weightsBytes: 16_180_670_828, kvBytesPerToken: 120_000 },
     },
   },
 

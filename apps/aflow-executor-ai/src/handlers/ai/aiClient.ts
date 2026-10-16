@@ -7,6 +7,7 @@ import {
 } from '@aflow/ai-client';
 import type { ExecutorContext } from '@aflow/executor-runtime';
 import { localRuntimeId, type AflowError } from '@aflow/schemas';
+import { readLocalMachine, type HostMachine, type Redis } from '@aflow/redis';
 import {
   CredentialResolver,
   credentialMissingMessage,
@@ -132,6 +133,25 @@ let credentialResolver: CredentialResolver | null = null;
 /**
  * Initialize the credential resolver. Call once at executor startup.
  */
+// The machine a local runtime runs on, from the paired machine's inventory.
+// Read at most this often: it changes when the machine does.
+const LOCAL_MACHINE_TTL_MS = 60_000;
+let machineSource: Redis | null = null;
+let machineReading: { value: HostMachine | undefined; expiresAt: number } | null = null;
+
+/** Where the machine a local runtime runs on is read from (Plan 323 D8). */
+export function initLocalMachineSource(redis: Redis): void {
+  machineSource = redis;
+}
+
+async function localMachine(): Promise<HostMachine | undefined> {
+  if (!machineSource) return undefined;
+  if (machineReading && machineReading.expiresAt > Date.now()) return machineReading.value;
+  const value = await readLocalMachine(machineSource).catch(() => undefined);
+  machineReading = { value, expiresAt: Date.now() + LOCAL_MACHINE_TTL_MS };
+  return value;
+}
+
 export function initCredentialResolver(loader: CredentialLoader): void {
   credentialResolver = new CredentialResolver({ loader });
 }
@@ -301,15 +321,21 @@ export async function getAIClientForContext(
 
   // 4. Check client cache (keyed by credentialId + updatedAt for rotation safety)
   // When a credential is rotated in-place, updatedAt changes → cache miss → new client
-  const cacheKey = `${resolved.credentialId}:${resolved.updatedAt}`;
+
+  // 5. Build single-provider AIClient
+  // The machine is part of the key: a GPU figure that arrives after the first
+  // client was built changes the window that client would size.
+  const machine = aiProvider === 'ollama' ? await localMachine() : undefined;
+  const cacheKey = `${resolved.credentialId}:${resolved.updatedAt}:${machine?.gpuWorkingSetBytes ?? '-'}`;
   const cached = CLIENT_CACHE.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
     return cached.client;
   }
 
-  // 5. Build single-provider AIClient
   const client = createAIClient({
-    providers: { [aiProvider]: providerConfigFromCredential(credentialProviderId, resolved) },
+    providers: {
+      [aiProvider]: providerConfigFromCredential(credentialProviderId, resolved, { machine }),
+    },
     defaultProvider: aiProvider,
   });
 

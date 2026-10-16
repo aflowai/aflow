@@ -53,7 +53,8 @@ import {
   withHelmsmanOperations,
 } from '../components/cybernetic/HelmsmanDiscoveryEditor.js';
 import { spaceRoute } from '../lib/space-routes.js';
-import { useSpaceLlmReadiness } from '../hooks/useSpaceLlmReadiness.js';
+import { localFitForDraft, useSpaceLlmReadiness } from '../hooks/useSpaceLlmReadiness.js';
+import { LocalModelStatus } from '../components/cybernetic/LocalModelStatus.js';
 
 // ============================================================================
 // Constants
@@ -940,6 +941,10 @@ function ModelDefaultsSection({
       onReasoningChange={onReasoningChange}
       variant="page"
       labelStyle={formLabelStyle}
+      renderLocalStatus={(role) => {
+        const local = localFitForDraft(readiness, draft.modelDefaults)(role);
+        return local ? <LocalModelStatus spaceId={spaceId} {...local} /> : null;
+      }}
     />
   );
 }

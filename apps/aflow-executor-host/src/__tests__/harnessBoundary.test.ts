@@ -198,7 +198,9 @@ describe('one spawn path', () => {
     // pair, which Node has no call for; it runs nothing else. keepAwake.ts
     // starts the `caffeinate` or `systemd-inhibit` that holds the machine awake
     // while a step runs, a system call by another name that reads and runs no
-    // workload.
+    // workload. machine.ts asks Metal (through `swift`) or `nvidia-smi` how much
+    // GPU memory a model runtime on this machine has, once, and runs nothing it
+    // was handed.
     // Named rather than matched, so a new unconfined spawn is argued for here.
     expect(importers).toEqual([
       'browser/harnessBrowser.ts',
@@ -206,6 +208,7 @@ describe('one spawn path', () => {
       'folderPicker.ts',
       'harnessDiscovery.ts',
       'keepAwake.ts',
+      'machine.ts',
       'orphans.ts',
       'runtimes.ts',
       'sandboxedRun.ts',
