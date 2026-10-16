@@ -5,14 +5,15 @@
  * asks for a receipt again sends its reader to the publication, which scans and
  * checks what it sends, and names neither operation.
  *
- * Every refusal code of both receipts is reached here, so a refusal added
- * later is held to the same wording or fails the census.
+ * Every refusal code of both receipts is reached here, and the census it is
+ * measured against is a Record over both unions (`fixtures/pushRefusals.ts`),
+ * so a refusal added later is held to the same wording or fails the type-check.
  */
 import { describe, expect, it } from 'vitest';
 
 import type { HostSandboxPosture } from '@aflow/schemas';
 
-import { type CheckOutcome, type CheckReceiptRefusal, issueCheckReceipt } from '../checkReceipt.js';
+import { type CheckOutcome, issueCheckReceipt } from '../checkReceipt.js';
 import { RECEIPT_TTL_MS } from '../receiptSigning.js';
 import {
   issueScanReceipt,
@@ -20,8 +21,9 @@ import {
   type PushUnderScan,
   requireScannedPush,
   type ScanOutcome,
-  type ScanReceiptRefusal,
 } from '../scanReceipt.js';
+
+import { EVERY_REFUSAL, type Refusal } from './fixtures/pushRefusals.js';
 
 const BASE = 'a'.repeat(40);
 const TIP = 'b'.repeat(40);
@@ -100,8 +102,6 @@ function withCheck(check: Partial<PushUnderScan['checks']>): PushUnderScan {
   return push({ checks: { argv: CHECKS, receipt: checkReceipt(), posture: 'open', ...check } });
 }
 
-type Refusal = ScanReceiptRefusal | CheckReceiptRefusal;
-
 const REFUSED: ReadonlyArray<readonly [Refusal, PushUnderScan]> = [
   ['no_base', push({ pushBase: undefined })],
   ['no_receipt', push({ receipt: undefined })],
@@ -136,27 +136,6 @@ const REFUSED: ReadonlyArray<readonly [Refusal, PushUnderScan]> = [
   ['check_other_checks', withCheck({ receipt: checkReceipt({ argv: ['npm', 'run', 'x'] }) })],
   ['check_other_posture', withCheck({ posture: 'confined' })],
   ['check_failed', withCheck({ receipt: checkReceipt({ outcome: 'failed' }) })],
-];
-
-const EVERY_REFUSAL: readonly Refusal[] = [
-  'no_base',
-  'no_receipt',
-  'not_issued_here',
-  'other_folder',
-  'other_range',
-  'base_conflicts',
-  'secret_found',
-  'unapproved',
-  'checks_undeclared',
-  'no_check_receipt',
-  'check_not_issued_here',
-  'check_other_folder',
-  'check_stale',
-  'check_other_commit',
-  'check_other_base',
-  'check_other_checks',
-  'check_other_posture',
-  'check_failed',
 ];
 
 /** The refusals whose remedy is a receipt the push does not have, and so the publication. */
@@ -215,9 +194,12 @@ describe('what the push gate tells the agent it refuses', () => {
     }
   });
 
-  it('sends a commit whose checks failed to publish again once they pass, not as it stands', async () => {
+  it('sends a commit whose checks failed to commission the fix and publish again', async () => {
     const refused = await refusalOf(withCheck({ receipt: checkReceipt({ outcome: 'failed' }) }));
-    expect(refused?.message).toContain(`Publish \`${BRANCH}\` again once they pass on it`);
+    expect(refused?.refusal).toBe('check_failed');
+    expect(refused?.message).toContain('Nothing was pushed');
+    expect(refused?.message).toContain(`Commission the fix onto \`${BRANCH}\` and publish again`);
+    expect(refused?.message).not.toContain('again once they pass');
     expect(refused?.message).not.toContain('as it stands');
   });
 
