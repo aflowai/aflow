@@ -214,10 +214,10 @@ export async function handleAgentTurn(
   try {
     const client = await getAIClientForContext(ctx, model);
     const modelDef = client.getModel(model);
-    const nativeFCProviders = new Set(['google', 'anthropic', 'openai', 'fireworks', 'xai']);
-    const useNativeFC =
-      nativeFCProviders.has(modelDef?.provider ?? '') &&
-      modelDef?.capabilities.functionCalling === true;
+    // A capability, measured per model, rather than a list of providers: a
+    // provider list has no way to say that one local build calls tools and the
+    // next does not (Plan 323 D6).
+    const useNativeFC = modelDef?.capabilities.functionCalling === true;
 
     // Provider-native reasoning continuity (Plan 259). Resolve + capability-gate
     // BEFORE any network I/O — an unsupported authored mode fails loud, never
@@ -455,7 +455,7 @@ export async function handleAgentTurn(
       modelResult.toolCallSignatures,
       attemptSummary.length > 0 ? attemptSummary : undefined,
       prepared.tokenBreakdown,
-      params.contextWindowOverride ?? modelDef?.contextWindow,
+      params.contextWindowOverride ?? client.contextWindowFor(model) ?? modelDef?.contextWindow,
       continuityInfo,
       prepared.toolSurface,
     );
@@ -599,11 +599,9 @@ async function finishAgentTurn(
   // §4.8: this function is the single compaction trigger authority — it calls
   // triggerCompaction only when the post-clearing ledger (or the Tier-4
   // ladder) demands it; the module itself has no gate.
+  const compactionModel = params.compactionModel ?? RETENTION_POLICY.compactionSummaryModel;
   const runCompaction = async () => {
-    const compactionClient = await getAIClientForContext(
-      ctx,
-      RETENTION_POLICY.compactionSummaryModel,
-    );
+    const compactionClient = await getAIClientForContext(ctx, compactionModel);
 
     // Filter hydrated atoms to only those still in the conversation state —
     // clearing may have removed atoms since assembly time.
@@ -620,6 +618,7 @@ async function finishAgentTurn(
         stepExecutionId: ctx.job.stepExecutionId,
         attempt: ctx.job.attempt,
         availableReadOpId,
+        summaryModel: compactionModel,
       },
       currentState,
       currentAtoms,
@@ -692,7 +691,7 @@ async function finishAgentTurn(
           compactionSummary = {
             compactionNumber: compactResult.compactionNumber,
             tokensSaved: compactResult.tokensSaved,
-            summaryModel: RETENTION_POLICY.compactionSummaryModel,
+            summaryModel: compactionModel,
           };
           ctx.log.info('agent_turn_compaction', {
             turnNumber: params.turnNumber,
@@ -757,7 +756,7 @@ async function finishAgentTurn(
             compactionSummary = {
               compactionNumber: compactResult.compactionNumber,
               tokensSaved: (compactionSummary?.tokensSaved ?? 0) + compactResult.tokensSaved,
-              summaryModel: RETENTION_POLICY.compactionSummaryModel,
+              summaryModel: compactionModel,
             };
             ctx.log.info('agent_turn_forced_compaction', {
               turnNumber: params.turnNumber,

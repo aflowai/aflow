@@ -16,6 +16,8 @@ export type {
   ExecutorDependencies,
   ResolvedInput,
   SlotController,
+  StepAdmission,
+  StepAdmissionWaiting,
 } from './types.js';
 
 export {

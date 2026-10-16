@@ -1,6 +1,6 @@
 # Plan 323 — Models that run on this computer
 
-**Status:** 🔨 P0 met on one machine (§9): every gate answered on an Apple M3 with 24 GB and Ollama 0.40.5, and the decisions they served revised. P1 is next. P0 and P1 together are the first complete slice: one model on one machine.
+**Status:** 🔨 P0 met on one machine (§9): every gate answered on an Apple M3 with 24 GB and Ollama 0.40.5, and the decisions they served revised. P1 built and unit-tested, and its adapter run against the live runtime; its exit, a Helmsman conversation through the web UI on the dev stack, has not been run. P0 and P1 together are the first complete slice: one model on one machine.
 
 **Supersedes for the local edition:** Tier 0 of archive plan 98 (open-weight inference). Plan 98 put a platform-managed `selfhosted` provider behind Ollama's OpenAI-compatible `/v1` endpoint. This plan uses Ollama's native API instead (D3) and makes the runtime the operator's own (D2). Plan 98's hosted tiers (Cloud Run GPU, GKE/vLLM) are untouched; the OpenAI-compatible adapter in P6 is the piece they would share.
 
@@ -31,7 +31,7 @@ Using one should look like using any other model. You choose it in the same pick
 
 **D2 — Aflow does not ship or supervise the runtime.** The operator installs Ollama, and its own app or service keeps it running. Aflow detects it, says how to install it when it is absent, and drives it over its API: list, pull, delete, load, unload. On a paired Mac, the UI may also offer a one-time install through the host lane (`brew install ollama`) after the operator approves it. This is a command run once, not supervision. _Rejected:_ bundling the runtime in the image. On macOS it would run without the GPU. _Rejected:_ the host executor supervising a model server. That is a second process supervisor beside launchd, systemd and the runtime's own, for something the runtime already does. The exception is the Linux appliance (D11).
 
-**D3 — The Ollama adapter speaks the native `/api/chat` and `/api/embed`, not `/v1`.** Through `/v1` you cannot set the context length, cannot pass `tool_choice`, and get no `think` control. The context length is the decisive one (D5). The adapter implements `generateText`, `generateTextStream`, `generateJson` (`format` = the JSON schema) and `generateEmbedding`. It maps the catalog's reasoning ladder onto `think`, whose accepted values the runtime publishes per model in `/api/show` (`thinking.values`: `[false, true]` for Gemma 4 and Qwen3.5, `low | medium | high` for gpt-oss). It reads `thinking` from responses for the run view. It does not replay it: the runtime's chat templates drop `thinking` from history, so a replayed reasoning trace costs no tokens and reaches no model (§9 G1). It collects a streamed turn's `content` and `tool_calls` and sends them back together with the tool results, which is how the runtime expects a turn to be returned.
+**D3 — The Ollama adapter speaks the native `/api/chat` and `/api/embed`, not `/v1`.** Through `/v1` you cannot set the context length, cannot pass `tool_choice`, and get no `think` control. The context length is the decisive one (D5). The adapter implements `generateText`, `generateTextStream`, `generateJson` (`format` = the JSON schema) and `generateEmbedding`. It maps the catalog's reasoning ladder onto `think`, whose accepted values the runtime publishes per model in `/api/show` (`thinking.values`: `[false, true]` for Gemma 4 and Qwen3.5, `low | medium | high` for gpt-oss). It reads `thinking` from responses for the run view. It does not replay it: the runtime's chat templates drop `thinking` from history, so a replayed reasoning trace costs no tokens and reaches no model (§9 G1). It collects a streamed turn's `content` and `tool_calls` and sends them back together with the tool results, which is how the runtime expects a turn to be returned. **Structured output follows the runner.** The MLX runner refuses `format` outright, a JSON schema and `"json"` alike, with a 501 `structured output is unavailable`, while the llama.cpp runner honours both (§9 G1). So `generateJson` sends `format` first and, once a model's runner has refused it, carries the schema as a tool whose arguments are the response, as the Anthropic adapter does. The refusal is remembered per model by the adapter, learned from the runtime's own answer rather than written into the catalog, so a runner that gains structured output is used as soon as it does.
 
 **D4 — A local runtime is a connection in the credential registry. Its provider id is `ollama`, and `local` is removed.** The credential is a URL, `base_url`, which defaults to `http://127.0.0.1:11434`. It has an optional token for a runtime behind a proxy and no required secret. Which secret a provider requires becomes registry data, not `api_key` hard-coded in the executor. Reusing the registry gives the connection the user → space → tenant resolution, the settings screens, the validation probe (`GET /api/version` plus `/api/tags`) and readiness, all unchanged. `base_url` origins are restricted with the existing `allowedOrigins` mechanism to loopback and `host.docker.internal`. A runtime on another machine is admitted only through `CREDENTIAL_EXTRA_BASE_URL_ORIGINS` (P6). _Rejected:_ an environment variable naming the runtime. It would bypass readiness and the UI, and it is exactly the "configured somewhere else" state that shows green and fails at run time.
 
@@ -40,16 +40,18 @@ Using one should look like using any other model. You choose it in the same pick
 - **The window:** the connection carries `context_tokens`: chosen by the operator, offered from the fit estimate (D8), and never above the model's catalog `contextWindow`. The adapter sends it as `options.num_ctx` on every request. Prompt budgeting reads the effective window, `min(catalog, connection)`, rather than the catalog's.
 - **The characters-over-four estimate cannot size a local prompt.** Measured against the runtime's own counts (§9 G1), English and German run at about 4.8 characters a token, code at 3.5–4.0, JSON at 2.8 and Chinese at 1.6. A tool result in JSON is undercounted by 40% and Chinese text by 2.5×. Eight tool schemas cost 570–890 tokens.
 - **`prompt_eval_count` is exact.** On both runners it is the whole prompt's token count, cached prefix included: prefix caching shows in the time taken, never in the count. When the llama.cpp runner truncates, it reports the truncated count.
-- **The sizing method** (P0's gate, met by the measurements in §9 G1):
-  1. **Exact baseline.** Each response's `prompt_eval_count + eval_count` is the exact size of the conversation it ends. The next request is that baseline plus what was added since.
-  2. **Conservative delta.** What was added is sized at the lowest measured ratio, 1.5 characters a token, so no script or format is undercounted. Images are sized at their measured per-image cost, which P1 measures at the sizes the platform sends.
-  3. **Exact count when the estimate is not enough.** A request with no baseline (the first turn), or one whose conservative size does not fit, is counted exactly by a one-token evaluation of the prompt before it is sent. The real request reuses the evaluated prefix from the runtime's cache: in §9 G1 a 6,422-token prompt counted this way was read back in 0.07 s.
-  4. **Refusal.** A request whose exact size, plus the output reserve (`maxTokens`, reasoning included), exceeds the window fails before it is sent, as `context_exceeded`, naming the size, the window and the remedy (D15).
-  5. **Backstop.** A response whose `prompt_eval_count` is below the request's lower bound (its characters over the highest measured ratio, 5) was truncated by the runtime. It fails as `context_exceeded`, and what it streamed is discarded.
+- **The sizing method** (P0's gate, met by the measurements in §9 G1; `packages/ai-client/src/providers/ollamaPromptSize.ts`):
+  1. **Conservative size.** The prompt, tool schemas and tool calls are sized at the lowest measured ratio, 1.5 characters a token, so no script or format is undercounted. A prompt that fits at that size with its answer is sent as is.
+  2. **Exact count when the estimate is not enough.** Any other prompt, and every prompt carrying an image, is counted exactly by a one-token evaluation before it is sent. The real request reuses the evaluated prefix from the runtime's cache, so the count costs a round trip and no second prefill: in §9 G1 a 6,422-token prompt counted this way was read back in 0.07 s. Images are always counted, because characters cannot size one: a 1280×800 image is 524 tokens on Gemma 4 and 1,002 on Qwen3.5, and a model that sizes images by resolution costs more for a larger one.
+  3. **The answer gets what the window leaves.** A counted prompt is sent with `num_predict` set to the smaller of the requested `maxTokens` and what the window has left, so prompt and answer together never pass it.
+  4. **Refusal.** A prompt that leaves less than `MIN_ANSWER_TOKENS` (4,096, the same reserve prompt budgeting holds back) fails before it is sent, as `context_length` with provider code `context_exceeded`, naming the size, the window and the remedy (D15). A count the runtime cut while counting is reported as _at least_ the prompt's lower bound.
+  5. **Backstop.** A response whose `prompt_eval_count` is below the prompt's lower bound was truncated by the runtime. It fails with a message that says so, and its answer is discarded. The lower bound divides by the highest measured ratio, 5, and counts a run of one character (indentation, padding, a rule of dashes) once, since such a run can be one token however long it is.
 
-- **Streamed text is provisional:** what an agent turn streams is not the turn's result until the final chunk arrives and the response validates. A turn that fails validation is shown as discarded, not as an answer. P1 defines how the run view marks it.
+  _Not built:_ a baseline carried from the previous response. With prefix caching the exact count is close to free, and a carried baseline would be a second source of truth for a number the runtime gives directly.
 
-**D6 — Native tool calling is chosen by measured capability, not by a provider list.** `nativeFCProviders` is deleted. An agent turn uses native function calling when the catalog entry says `functionCalling: true`, and that flag is written for local entries by the conformance probe (D9). The same probe writes `structuredOutputs`, `forcedToolChoice` and the reasoning ladder. The `generateJson` fallback streams for every provider, so a long local generation keeps the idle clock alive.
+- **Streamed text is provisional:** what an agent turn streams is not the turn's result until the final chunk arrives and the response validates. A turn the backstop rejects fails, so nothing it streamed is committed as an answer. How the run view marks the text it already showed is P3's.
+
+**D6 — Native tool calling is chosen by measured capability, not by a provider list.** `nativeFCProviders` is deleted. An agent turn uses native function calling when the catalog entry says `functionCalling: true`, and that flag is written for local entries by the conformance probe (D9). The same probe writes `structuredOutputs`, `forcedToolChoice` and the reasoning ladder. This also moves the three OpenRouter models, all declaring `functionCalling: true`, onto native tool calls; their route already accepts tool definitions in the streaming path, which `models:verify-reasoning` exercises. The `generateJson` fallback is reached only by a model without measured tool calling, and making it stream is P2's, with the first such model.
 
 **D7 — A runtime has a concurrency limit, and waiting for it is not idleness.**
 
@@ -57,13 +59,9 @@ Using one should look like using any other model. You choose it in the same pick
   - **Runtime identity:** each local connection resolves to a `runtimeId`, the normalized base URL with every name for this machine's loopback (`localhost`, `127.0.0.1`, `::1`, `host.docker.internal`) folded into one.
   - **Admission:** a Redis-leased semaphore in `@aflow/redis` keyed by `runtimeId`, sized by `max_parallel` (default 1, the runtime's own default). Every caller goes through it.
   - **Leases:** each lease has an expiry that its holder heartbeats. A worker that dies frees its lease when the lease expires, with no sweep. A cancelled step leaves the queue and releases what it holds.
-- **Waiting gives back the executor's slot.** Inside the AI executor, admission goes through `admitOperation` (`packages/executor-runtime/src/executor/operationAdmission.ts`). It already releases the executor-wide slot while a step waits, heartbeats the in-flight record, and starts the timeout only on admission, so queued local work never holds up cloud work.
-- **Callers that cannot wait:** a call such as titling a session declines and retries later rather than queueing behind an agent turn for minutes.
-- **Tests:** two credentials naming one runtime, a cancellation while queued, a worker killed while holding a lease, and a cloud call that is not held up by a local queue.
-- **The idle clock:** a job waiting for admission heartbeats, and its idle window starts when its request is sent. Time in the queue never counts.
-- **Prefill:** prefill is a silent stretch on every local request. A local connection therefore carries `first_token_timeout_ms` (default 15 min), which replaces the stream idle window until the first token. After that the ordinary idle window applies.
-- **Non-agent ops:** the flat 120 s timeout becomes the same idle-plus-ceiling pair agent turns already use, for every AI op on a local connection.
-- **SDK timeout:** the client's request timeout follows the step's budget instead of the SDK default.
+- **A step waits before it starts, by the rules of an operation slot.** The executor runtime gains an optional `StepHandler.admit`: the handler names what the step must hold from its own input, after the context is built and before the step is marked started. While it waits the step stays SCHEDULED, gives back its executor slot, and keeps its in-flight record alive; a cancel ends the wait; an executor that stops claiming gives the step back to its stream; and a step that waited is checked again for supersession and cancellation once admitted. Its timeout starts only after admission, so queued local work is never charged to the work and never holds up cloud work. The AI handler's `admit` takes the runtime lease when the step's model is served by Ollama, and asks nothing otherwise. _Rejected:_ `admitOperation` as it stands. Its limiter is keyed by operation id and is in-process, while the runtime a step needs is known only from its model and credential, and its capacity is shared across processes.
+- **Callers outside a step** take the same lease through the client: `createByokAiClientFactory(db, admission)` wraps a client for an Ollama model so every request holds a lease while it runs. Session titles pass `wait: false` and decline when the runtime is busy, since the conversation is due again on the next cycle; post-run judging waits. The eval-batch engine, the UI and API executors' generation and the memory embedder are not yet admitted, and are P5's coverage list.
+- **The idle clock:** every AI operation on a local model runs under an idle window of `AI_LOCAL_MODEL_IDLE_TIMEOUT_MS` (15 min) and the agent turn's ceiling, in place of the flat 120 s or the 300 s stream idle window. Prefill is a silent stretch on every local request, and at 250 tokens a second a 75K-token prompt outlasts the cloud window (§9 G5). _Rejected:_ a per-connection first-token timeout. The timeout is chosen before any credential is read, so a connection field would be a setting nothing reads.
 
 **D8 — Fit is an estimate until the model is loaded, and both are labelled as what they are.**
 
@@ -222,7 +220,7 @@ Not in the lineup: **Muse Spark Open**, which needs hundreds of gigabytes of mem
   - `diagnoseLocalRuntime`.
 - `packages/schemas`:
   - the credential registry entry `ollama`, with `base_url`, an optional token and the per-provider required secrets;
-  - the connection config fields (`context_tokens`, `max_parallel`, `first_token_timeout_ms`, `keep_alive`);
+  - the connection config fields (`context_tokens`, `max_parallel`, `keep_alive`);
   - `HostInventory.machine`, including free disk;
   - `LocalRuntimeDiagnostics` and its issue codes;
   - the local-model status and acting operations, the `local_model` target in the approval payload union (`requestedInput.ts`, `sessionBlockedOn.ts` and `actionCenter.ts`, beside `browser`), a new capability group with its tenant migration for the system profiles, and the Helmsman preset entries (Runner excluded);
@@ -236,7 +234,8 @@ Not in the lineup: **Muse Spark Open**, which needs hundreds of gigabytes of mem
   - provisional streamed text until the response validates;
   - local timeouts;
   - a streaming `generateJson` fallback.
-- `packages/redis`: the leased semaphore keyed by `runtimeId`, used by every caller.
+- `packages/redis`: the leased semaphore keyed by `runtimeId`, and `runtimeAdmission` for callers outside a step.
+- `packages/executor-runtime`: `StepHandler.admit`, waited on before a step starts.
 - `packages/server-runtime`:
   - readiness for `ollama`, with no `providerId = null` special case;
   - model-lifecycle routes (local edition only);
@@ -296,9 +295,8 @@ _Exit:_
 - native tool calling decided by capability;
 - the effective context window with overflow prevention;
 - streamed text that stays provisional until the response validates;
-- runtime admission (`runtimeId`, leased semaphore, `admitOperation`, cancellation);
-- the first-token window and idle-plus-ceiling timeouts;
-- the streaming JSON fallback;
+- runtime admission (`runtimeId`, the leased semaphore, `StepHandler.admit`, cancellation, the client wrapper for titles and judging);
+- the local idle window and idle-plus-ceiling timeouts for every AI operation on a local model;
 - compaction's summary model and the clerk's `auto` choice resolved through the space's roles, so a space whose only provider is the local runtime can compact a long conversation and title a session (§9, call sites 2 and 11);
 - readiness.
 
@@ -310,10 +308,12 @@ _Exit:_
 - three concurrent sessions on it run one at a time and finish with no timeout;
 - a prompt near the window survives its prefill.
 
+_Built and tested:_ everything in the list above, with unit tests for each proof below, and the adapter run against Ollama 0.40.5 on the 24 GB machine: plain text, two parallel native tool calls, streaming with thinking, JSON through the tool fallback after the MLX runner's 501, and a refusal before sending of a prompt the llama.cpp runner would have cut. `yarn models:verify-local` reports the `gemma4:26b` entry as matching its build. _Not yet run:_ the exit itself, which needs the dev stack started from this branch.
+
 _Proof:_
 
 - **Overflow:** a prompt the sizing method cannot rule safe is refused before it is sent, as `context_exceeded`.
-- **Tool calling:** a model the probe marks `functionCalling: false` takes the JSON path.
+- **Tool calling:** native tool calling follows `capabilities.functionCalling`, not the provider.
 - **Readiness:** a connection with no runtime listening is red in readiness, not green.
 - **Admission:** two credentials naming one runtime share one admission. A step cancelled while queued leaves the queue. A worker killed while holding a lease frees it when the lease expires. A cloud call is not held up by a local queue.
 - **Prefill:** a runtime that takes longer than the old 300 s idle window to send its first byte does not fail the turn.

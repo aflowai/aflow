@@ -146,6 +146,7 @@ describe('supportsToolLoopContinuity', () => {
     expect(supportsToolLoopContinuity('openrouter', true)).toBe(false);
     expect(supportsToolLoopContinuity('google', true)).toBe(false);
     expect(supportsToolLoopContinuity(undefined, true)).toBe(false);
-    expect(supportsToolLoopContinuity('local', true)).toBe(false);
+    // Ollama's chat templates drop replayed thinking, so there is nothing to continue.
+    expect(supportsToolLoopContinuity('ollama', true)).toBe(false);
   });
 });

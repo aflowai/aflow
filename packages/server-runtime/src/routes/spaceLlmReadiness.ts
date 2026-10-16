@@ -189,7 +189,7 @@ export const spaceLlmReadinessRoutes: FastifyPluginAsync = async (fastify) => {
             : resolveRoleModel(defaults, role);
         const model = catalog.getModel(ref);
         const inferred = model ? model.provider : inferProviderForModelRef(ref);
-        const providerId: string | null = inferred === 'local' ? null : inferred;
+        const providerId: string | null = inferred;
         // A ref the catalog does not carry names no model this space can run:
         // assigning a role is gated on a live catalog entry, so the only way to
         // hold one is for the model to have left the lineup since. Inferring a

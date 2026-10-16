@@ -23,6 +23,7 @@ import type {
   ExecutorDependencies,
   ExecutorLogger,
   SlotController,
+  StepAdmission,
   StepHandler,
   StepResult,
 } from '../types.js';
@@ -183,6 +184,67 @@ async function admitLimitedStep(admission: {
   return after;
 }
 
+/**
+ * Wait for what the handler says this step needs before it starts (a lease
+ * on a model runtime), by the same rules as an operation slot: the step stays
+ * SCHEDULED and gives back its executor slot while it waits, the wait ends
+ * when the step is cancelled or the executor stops claiming, and a step that
+ * waited is checked again once admitted.
+ */
+async function admitHandlerStep(admission: {
+  host: ProcessJobHost;
+  job: StepJobMessage;
+  jobLog: ExecutorLogger;
+  ctx: ExecutorContext;
+  admit: NonNullable<StepHandler['admit']>;
+  slotController: SlotController;
+  externalAbort: AbortSignal;
+}): Promise<
+  | { outcome: 'admitted'; lease: StepAdmission | undefined }
+  | { outcome: Exclude<Admission, 'admitted'> }
+> {
+  const { host, job, jobLog, ctx, admit, slotController, externalAbort } = admission;
+  const refusal = (): Exclude<Admission, 'admitted'> | undefined => {
+    if (externalAbort.aborted) return 'cancelled';
+    if (host.claimingStopped.aborted) return 'released';
+    return undefined;
+  };
+
+  // Set from inside the admission's callback, so held where the flow analysis sees it change.
+  const wait = { happened: false };
+  let lease: StepAdmission | undefined;
+  try {
+    lease = await admit(ctx, {
+      signal: AbortSignal.any([externalAbort, host.claimingStopped]),
+      waiting: (detail) => {
+        jobLog.info('Waiting for admission', { operationId: job.operationId, ...detail });
+        slotController.release();
+        wait.happened = true;
+      },
+      stillWaiting: () => {
+        void refreshInFlight(host, job, jobLog);
+      },
+    });
+  } catch (error) {
+    const ended = refusal();
+    if (ended !== undefined) return { outcome: ended };
+    throw error;
+  } finally {
+    if (wait.happened) await slotController.acquire();
+  }
+
+  let after = refusal();
+  if (after === undefined && wait.happened) {
+    if (await isSuperseded(host, job, jobLog)) after = 'superseded';
+    else if (await wasStepCancelled(host.deps.redis, job.stepExecutionId, job.attempt)) {
+      after = 'cancelled';
+    }
+  }
+  if (after === undefined) return { outcome: 'admitted', lease };
+  await lease?.release().catch(() => undefined);
+  return { outcome: after };
+}
+
 /** Ends a claimed step that never started, without emitting a result for it. */
 async function setAsideUnstarted(
   host: ProcessJobHost,
@@ -338,6 +400,7 @@ export async function processJob(
     simulatedFulfillment = report;
   };
   let admittedBy: ConcurrencyLimiter | undefined;
+  let stepAdmission: StepAdmission | undefined;
   const externalAbort = new AbortController();
 
   try {
@@ -395,15 +458,6 @@ export async function processJob(
       admittedBy = operationLimiter;
     }
 
-    // Started from here on: a drain counts this step and waits for it, and its
-    // run shows it running, timed from now rather than from its claim.
-    startTime = Date.now();
-    if (inFlight !== undefined) {
-      inFlight.deadlineRef = { current: startTime + host.config.defaultTimeoutMs };
-    }
-    host.stepStarted();
-    await markStarted(host, job, jobLog);
-
     const handler = host.handlers.get(job.stepType);
     if (!handler) {
       jobLog.error(`No handler for step type: ${job.stepType}`);
@@ -423,6 +477,32 @@ export async function processJob(
     }
 
     const ctx = await buildExecutionContext(host.deps, job, jobLog, slotController);
+
+    if (handler.admit) {
+      const admission = await admitHandlerStep({
+        host,
+        job,
+        jobLog,
+        ctx,
+        admit: handler.admit.bind(handler),
+        slotController,
+        externalAbort: externalAbort.signal,
+      });
+      if (admission.outcome !== 'admitted') {
+        await setAsideUnstarted(host, job, messageId, jobLog, admission.outcome);
+        return;
+      }
+      stepAdmission = admission.lease;
+    }
+
+    // Started from here on: a drain counts this step and waits for it, and its
+    // run shows it running, timed from now rather than from its claim.
+    startTime = Date.now();
+    if (inFlight !== undefined) {
+      inFlight.deadlineRef = { current: startTime + host.config.defaultTimeoutMs };
+    }
+    host.stepStarted();
+    await markStarted(host, job, jobLog);
 
     if (handler.validate) {
       const validationError = await handler.validate(ctx);
@@ -596,6 +676,7 @@ export async function processJob(
     await acknowledgeJob(host.deps, job.stepType, messageId);
   } finally {
     admittedBy?.release();
+    await stepAdmission?.release().catch(() => undefined);
     if (host.abortControllers.get(job.stepExecutionId) === externalAbort) {
       host.abortControllers.delete(job.stepExecutionId);
     }

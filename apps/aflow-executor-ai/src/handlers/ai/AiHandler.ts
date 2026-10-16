@@ -4,6 +4,8 @@ import type {
   ExecutorContext,
   TimeoutSpec,
   StepResult,
+  StepAdmission,
+  StepAdmissionWaiting,
 } from '@aflow/executor-runtime';
 import { failureWithError, validationError, internalError } from '@aflow/executor-runtime';
 import {
@@ -29,10 +31,11 @@ import { AIClientError } from '@aflow/ai-client';
 import { positiveMsEnv } from '@aflow/lib';
 import type { ErrorObject } from 'ajv';
 import type { PayloadStore } from '@aflow/payload-store';
-import type { Redis } from '@aflow/redis';
+import { acquireRuntimeLease, type Redis } from '@aflow/redis';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { createAsyncJobRepository, createTenantContext } from '@aflow/database';
-import { AISetupError, checkBudgetMock } from './aiClient.js';
+import { AISetupError, checkBudgetMock, resolveLocalRuntime } from './aiClient.js';
+import { inferProviderForModelRef } from '@aflow/ai-client';
 import { ajv } from './ajv.js';
 import {
   AiGenerateInputSchema,
@@ -83,27 +86,103 @@ type OperationHandler = (ctx: ExecutorContext, input: unknown) => Promise<StepRe
 // the 20-minute ceiling is what bounds a genuinely stuck turn.
 const AGENT_TURN_STREAM_IDLE_MS = positiveMsEnv('AI_STREAM_IDLE_TIMEOUT_MS', 300_000);
 const AGENT_TURN_MAX_MS = positiveMsEnv('AI_AGENT_TURN_MAX_TIMEOUT_MS', 1_200_000);
+/**
+ * A model on the operator's machine reads its whole prompt before it writes
+ * anything, and nothing streams meanwhile: at 250 tokens a second a 75K-token
+ * prompt outlasts the cloud idle window (Plan 323 §9 G5). Its window is the
+ * prefill a long prompt takes on a laptop.
+ */
+const LOCAL_MODEL_IDLE_MS = positiveMsEnv('AI_LOCAL_MODEL_IDLE_TIMEOUT_MS', 900_000);
+
+/** Attempts whose input admission read and whose handler has not yet run; bounded by the executor's concurrency. */
+const MAX_CACHED_INPUTS = 64;
+
+function stepModel(input: unknown): string | undefined {
+  const model = (input as { model?: unknown } | null)?.model;
+  return typeof model === 'string' && model.length > 0 ? model : undefined;
+}
+
+function attemptKey(ctx: ExecutorContext): string {
+  return `${ctx.job.stepExecutionId}:${ctx.job.attempt}`;
+}
 
 export class AiHandler implements StepHandler {
   readonly stepType = 'ai';
 
-  resolveTimeoutMs(ctx: ExecutorContext): Promise<TimeoutSpec | undefined> {
+  async resolveTimeoutMs(ctx: ExecutorContext): Promise<TimeoutSpec | undefined> {
     // An explicit step-definition timeout wins in both directions and stays a
     // flat wall clock (an operator who set a number meant a number); this only
     // replaces the executor-wide flat default.
     if (ctx.stepDefinition?.timeout?.executionTimeoutMs !== undefined) {
-      return Promise.resolve(undefined);
+      return undefined;
+    }
+    const model = stepModel(await this.stepInput(ctx));
+    if (model !== undefined && inferProviderForModelRef(model) === 'ollama') {
+      return { idleMs: LOCAL_MODEL_IDLE_MS, maxMs: AGENT_TURN_MAX_MS };
     }
     if (ctx.operationId === 'ai.agent.turn') {
-      return Promise.resolve({ idleMs: AGENT_TURN_STREAM_IDLE_MS, maxMs: AGENT_TURN_MAX_MS });
+      return { idleMs: AGENT_TURN_STREAM_IDLE_MS, maxMs: AGENT_TURN_MAX_MS };
     }
     // A render outlasts the executor-wide default, and the step that dies
     // waiting was still billed for it.
     if (ASYNC_JOB_LIFECYCLE_OPERATIONS.has(ctx.operationId)) {
-      return Promise.resolve(resolveVideoBudget().stepBudgetMs);
+      return resolveVideoBudget().stepBudgetMs;
     }
-    return Promise.resolve(undefined);
+    return undefined;
   }
+
+  /**
+   * A step whose model runs on the operator's machine waits for that runtime
+   * to have room (Plan 323 D7) — before its timeout starts, and without its
+   * executor slot.
+   */
+  async admit(
+    ctx: ExecutorContext,
+    waiting: StepAdmissionWaiting,
+  ): Promise<StepAdmission | undefined> {
+    if (!this.redis) return undefined;
+    const model = stepModel(await this.stepInput(ctx));
+    if (model === undefined) return undefined;
+    const runtime = await resolveLocalRuntime(ctx, model);
+    if (!runtime) return undefined;
+    const lease = await acquireRuntimeLease({
+      redis: this.redis,
+      runtimeId: runtime.runtimeId,
+      limit: runtime.maxParallel,
+      holderId: attemptKey(ctx),
+      wait: true,
+      signal: waiting.signal,
+      onWaiting: () => {
+        waiting.waiting({ runtimeId: runtime.runtimeId, limit: runtime.maxParallel, model });
+      },
+      onStillWaiting: waiting.stillWaiting,
+    });
+    return lease ?? undefined;
+  }
+
+  /**
+   * The step's input, read once per attempt: admission and the timeout read
+   * its model before the handler runs, and an agent turn's input is large.
+   */
+  private stepInput(ctx: ExecutorContext): Promise<unknown> {
+    const key = attemptKey(ctx);
+    let input = this.inputs.get(key);
+    if (!input) {
+      input = ctx.readPayload(ctx.job.inputRef);
+      this.inputs.set(key, input);
+      // An attempt that never reaches `execute` (cancelled while it waited)
+      // must not hold its input for the life of the process.
+      if (this.inputs.size > MAX_CACHED_INPUTS) {
+        const oldest = this.inputs.keys().next().value;
+        if (oldest !== undefined) this.inputs.delete(oldest);
+      }
+    }
+    return input;
+  }
+
+  private readonly inputs = new Map<string, Promise<unknown>>();
+
+  private readonly redis: Redis | undefined;
 
   private readonly payloadStore: PayloadStore;
 
@@ -117,6 +196,7 @@ export class AiHandler implements StepHandler {
 
   constructor(deps: { payloadStore: PayloadStore; db?: PostgresJsDatabase; redis?: Redis }) {
     this.payloadStore = deps.payloadStore;
+    this.redis = deps.redis;
 
     const db = deps.db;
     const depsForHandlers: HandlerDeps = {
@@ -327,7 +407,8 @@ export class AiHandler implements StepHandler {
 
   async execute(ctx: ExecutorContext): Promise<StepResult> {
     const operationId = ctx.operationId;
-    const input = await ctx.readPayload(ctx.job.inputRef);
+    const input = await this.stepInput(ctx);
+    this.inputs.delete(attemptKey(ctx));
     const typedInput = input as Record<string, unknown>;
 
     const budgetResult = checkBudgetMock({

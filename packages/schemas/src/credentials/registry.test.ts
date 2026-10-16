@@ -8,6 +8,9 @@ import {
   getSecretFieldIds,
   getConfigFieldIds,
   getRequiredFieldIds,
+  getProvidersForEdition,
+  getRequiredSecretFieldIds,
+  localRuntimeId,
 } from './registry.js';
 import { ProviderDefinitionSchema, ProviderIdSchema } from './provider.js';
 
@@ -53,11 +56,12 @@ describe('Provider Registry', () => {
 
   it('getProvidersByCategory filters correctly', () => {
     const llmProviders = getProvidersByCategory('llm');
-    expect(llmProviders).toHaveLength(6);
+    expect(llmProviders).toHaveLength(7);
     expect(llmProviders.map((p) => p.providerId).sort()).toEqual([
       'anthropic',
       'fireworks',
       'google',
+      'ollama',
       'openai',
       'openrouter',
       'xai',
@@ -119,5 +123,30 @@ describe('Provider Registry', () => {
         fieldIds.length,
       );
     }
+  });
+
+  it('offers a runtime on the operator machine only in the local edition', () => {
+    const local = getProvidersForEdition('community-local').map((p) => p.providerId);
+    const hosted = getProvidersForEdition('enterprise').map((p) => p.providerId);
+    expect(local).toContain('ollama');
+    expect(hosted).not.toContain('ollama');
+    expect(hosted).toContain('openai');
+  });
+
+  it('reads the secrets a credential must carry from the registry', () => {
+    expect(getRequiredSecretFieldIds('openai')).toEqual(['api_key']);
+    expect(getRequiredSecretFieldIds('ollama')).toEqual([]);
+  });
+
+  it('names one runtime however its URL spells this machine', () => {
+    const names = [
+      undefined,
+      'http://127.0.0.1:11434',
+      'http://localhost:11434/',
+      'http://[::1]:11434',
+      'http://host.docker.internal:11434',
+    ];
+    expect(new Set(names.map(localRuntimeId))).toEqual(new Set(['this-machine:11434']));
+    expect(localRuntimeId('http://gpu-box:11434')).toBe('gpu-box:11434');
   });
 });

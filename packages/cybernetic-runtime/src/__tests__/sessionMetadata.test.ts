@@ -24,6 +24,22 @@ describe('resolveClerkModel', () => {
     expect(resolved.modelId).toContain('glm-5p3-flash');
   });
 
+  it('takes a free space default itself, since the reason to avoid it is the bill', () => {
+    const resolved = resolveClerkModel({ default: 'gemma-local' }, null);
+    expect(resolved).toMatchObject({
+      resolved: true,
+      modelRef: 'gemma-local',
+      modelId: 'ollama-gemma4-26b',
+      providerId: 'ollama',
+      mode: 'auto',
+    });
+  });
+
+  it('does not take a free default the tenant has not permitted', () => {
+    const resolved = resolveClerkModel({ default: 'gemma-local' }, ['sonnet']);
+    expect(resolved.resolved).toBe(false);
+  });
+
   it('moves with the space default when its provider changes', () => {
     const anthropic = resolveClerkModel({ default: 'sonnet' }, null);
     expect(anthropic.resolved && anthropic.providerId).toBe('anthropic');

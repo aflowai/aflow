@@ -9,7 +9,7 @@ Production background discovery must be event- or candidate-driven. A task may n
 work by scanning the Redis keyspace, reading a whole dirty set, or enumerating tenant schemas;
 idle cost may not grow with logical shards, tenants, stored keys, or connected subscribers.
 
-**46 registered tasks** across 8 services.
+**47 registered tasks** across 8 services.
 2 task(s) still carry a residual poll — a periodic datastore read that
 exists only because an event or candidate path is incomplete.
 
@@ -28,6 +28,7 @@ Datastore operations per minute with zero due work, grouped by what each scope m
 
 | Task | Service | Criticality | Trigger | Scope | Cadence | Idle ops/min | Disable |
 | ---- | ------- | ----------- | ------- | ----- | ------- | -----------: | ------- |
+| `ai.local_runtime_lease_renewal` | shared-runtime | correctness | active-resource | per_instance | 10s | 0 | never |
 | `executor.compute.session_reaper` | executor-compute | feature | active-resource | per_instance | 1m | 0 | safe |
 | `executor.heartbeat` | shared-runtime | correctness | heartbeat | per_instance | 10s | 6 | never |
 | `executor.job_consumer` | shared-runtime | correctness | blocking | per_instance | event-driven | 60 | never |
@@ -76,6 +77,32 @@ Datastore operations per minute with zero due work, grouped by what each scope m
 | `server.space_entity_events` | server | feature | event | active_subscription | event-driven | 0 | safe |
 
 ## Tasks
+
+### `ai.local_runtime_lease_renewal`
+
+**Purpose.** Renew the lease each in-flight request holds on a model runtime on the operator machine, for as long as the request runs.
+
+**Invariant.** A runtime on the operator machine serves no more requests at once than its connection admits, and a holder that died frees its place.
+
+**Recovery.** An unrenewed lease lapses after its TTL and the next waiter takes the place.
+
+| Field | Value |
+| ----- | ----- |
+| Service | shared-runtime |
+| Owner domain | model-execution |
+| Criticality | correctness |
+| Trigger | active-resource |
+| Execution scope | per_instance |
+| Substrate | redis-lease |
+| Base cadence | 10s |
+| Max batch | 1 |
+| Max cycle | 5000 ms |
+| Idle datastore ops/min | 0 |
+| Hot-path producer budget | 0 added RTT — Scoped to one request holding a lease; no timer exists at idle. |
+| Feature gate | — |
+| Disable policy | never |
+| Residual poll | — |
+| Source | `packages/redis/src/localRuntimeAdmission.ts` |
 
 ### `executor.compute.session_reaper`
 

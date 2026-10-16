@@ -344,6 +344,13 @@ export interface AIRequestOptions {
    * effect on models without `capabilities.reasoning`.
    */
   reasoning?: ReasoningConfig | undefined;
+
+  /**
+   * The context window this request may use, set by the client from the
+   * catalog and the connection. An adapter whose runtime sizes its window per
+   * request (a local runtime) sends it; the rest ignore it.
+   */
+  contextWindow?: number | undefined;
 }
 
 /**
@@ -760,7 +767,7 @@ export const AIProviderSchema = z.enum([
   'xai',
   'runware',
   'typesafe',
-  'local',
+  'ollama',
 ]);
 export type AIProvider = z.infer<typeof AIProviderSchema>;
 
@@ -775,6 +782,14 @@ export interface ProviderConfig {
   defaultModel?: string | undefined;
   maxRetries?: number | undefined;
   timeoutMs?: number | undefined;
+  /**
+   * The context window this connection serves, for a runtime whose window is a
+   * property of the machine rather than the model. The client sends each
+   * request the smaller of this and the model's catalog window.
+   */
+  contextTokens?: number | undefined;
+  /** How long a local runtime keeps a model loaded after a request, in its own notation. */
+  keepAlive?: string | undefined;
 }
 
 // ============================================================================
@@ -945,6 +960,26 @@ export interface ModelDefinition {
    * is a text-generation control that no image or embedding path reads.
    */
   reasoning?: ModelReasoningProfile;
+  /**
+   * For a model served by a runtime on the operator's machine: the build its
+   * capabilities were measured on (Plan 323 D9). A runtime serving another
+   * digest serves a model these flags were not measured for.
+   */
+  local?: LocalModelBuild;
+}
+
+/** The build of a local model that `yarn models:verify-local` measured. */
+export interface LocalModelBuild {
+  /** The tag the runtime serves it under. */
+  runtimeTag: string;
+  /** The runtime's content digest for that tag. */
+  digest: string;
+  /** Which runner served it (`mlx`, `llamacpp`), and so which features it has. */
+  runner: string;
+  quantization: string;
+  runtimeVersion: string;
+  probeVersion: number;
+  measuredAt: string;
 }
 
 // ============================================================================

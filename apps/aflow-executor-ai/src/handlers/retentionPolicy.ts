@@ -1,9 +1,14 @@
+import { MIN_ANSWER_TOKENS } from '@aflow/ai-client';
 import { MAX_ATOMS_STRUCTURAL } from '@aflow/schemas';
 
 /** Assumed when the model catalog reports no context window for the turn's model. */
 export const DEFAULT_MODEL_WINDOW_TOKENS = 200_000;
-/** Held back from the prompt for the model's answer. */
-export const COMPLETION_RESERVE_TOKENS = 4096;
+/**
+ * Held back from the prompt for the model's answer. The same floor a local
+ * runtime refuses a prompt below, so a prompt this budget admits is never
+ * refused there.
+ */
+export const COMPLETION_RESERVE_TOKENS = MIN_ANSWER_TOKENS;
 /** Share of the window held back because prompt tokens are estimated before the call, not counted. */
 export const SAFETY_MARGIN_FRACTION = 0.05;
 /** The window whose hard budget caps the working budget, so a model of this window or smaller keeps the trigger points it always had. */

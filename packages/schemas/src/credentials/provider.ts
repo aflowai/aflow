@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { EditionIdSchema, type EditionId } from '../edition/descriptor.js';
 
 // ---------------------------------------------------------------------------
 // Provider taxonomy
@@ -63,6 +64,7 @@ export const ProviderIdSchema = z.enum([
   'openrouter',
   'fireworks',
   'xai',
+  'ollama',
   'zai',
   'runware',
   'typesafe',
@@ -147,8 +149,20 @@ export const ProviderDefinitionSchema = z.object({
   iconName: z.string(),
   docsUrl: z.string().url().optional(),
   fields: z.array(CredentialFieldSchema),
+  /**
+   * The editions that offer this provider; absent means every edition. A
+   * runtime on the operator's own machine is reachable only where the platform
+   * runs on that machine — in the hosted edition the same loopback URL names
+   * the platform's own host.
+   */
+  editions: z.array(EditionIdSchema).optional(),
 });
 export type ProviderDefinition = z.infer<typeof ProviderDefinitionSchema>;
+
+/** Whether `edition` offers `provider`. */
+export function isProviderInEdition(provider: ProviderDefinition, edition: EditionId): boolean {
+  return provider.editions === undefined || provider.editions.includes(edition);
+}
 
 // ---------------------------------------------------------------------------
 // Credential metadata (API response — values NEVER included)

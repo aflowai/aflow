@@ -55,6 +55,7 @@ export type {
   ModelCapabilities,
   ModelPricing,
   ModelDefinition,
+  LocalModelBuild,
   ModelTraits,
   UsageRecord,
   AIErrorCode,
@@ -178,3 +179,6 @@ export { createRunwareAdapter, runwareTaskUuid } from './providers/runware.js';
 
 // Decisions
 export { resolveDecisionAnswers } from './decision.js';
+
+// Plan 323: the answer floor prompt budgeting and a local runtime's sizing share
+export { MIN_ANSWER_TOKENS } from './providers/ollamaPromptSize.js';

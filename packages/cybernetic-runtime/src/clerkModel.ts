@@ -22,7 +22,17 @@ import {
   type ClerkResolutionMode,
   type DirectiveModelDefaults,
 } from '@aflow/schemas';
-import { createDefaultModelCatalog, inferProviderForModelRef } from '@aflow/ai-client';
+import {
+  createDefaultModelCatalog,
+  inferProviderForModelRef,
+  type ModelPricing,
+} from '@aflow/ai-client';
+
+function isFree(pricing: ModelPricing): boolean {
+  return (
+    pricing.promptPer1M === 0 && pricing.completionPer1M === 0 && pricing.scheduled === undefined
+  );
+}
 
 export type ClerkModelResolution =
   | {
@@ -67,7 +77,7 @@ export function resolveClerkModel(
     const spaceDefault = defaults?.default ?? DEFAULT_CYBERNETIC_MODEL;
     const provider =
       catalog.getModel(spaceDefault)?.provider ?? inferProviderForModelRef(spaceDefault);
-    if (!provider || provider === 'local') {
+    if (!provider) {
       return { resolved: false, mode: 'auto', reason: 'no_candidate_for_provider' };
     }
     // Compared as catalog ids, never as the strings either side happens to
@@ -83,6 +93,26 @@ export function resolveClerkModel(
             .filter((id): id is string => id !== undefined),
         )
       : null;
+
+    // The reason not to fall back is the bill, and a model that bills nothing
+    // — one on the operator's own machine — has none. Taking the default there
+    // also keeps a single GPU on the model it already has loaded.
+    const defaultModel = catalog.getModel(spaceDefault);
+    if (
+      defaultModel &&
+      !defaultModel.deprecated &&
+      defaultModel.capabilities.chat &&
+      isFree(defaultModel.pricing) &&
+      (!permittedIds || permittedIds.has(defaultModel.id))
+    ) {
+      return {
+        resolved: true,
+        modelRef: spaceDefault,
+        modelId: defaultModel.id,
+        providerId: defaultModel.provider,
+        mode: 'auto',
+      };
+    }
 
     let liveCandidates = 0;
     for (const ref of clerkCandidateRefs(provider)) {

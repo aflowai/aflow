@@ -26,11 +26,19 @@ export const PROVIDER_LABELS: Record<string, string> = {
   xai: 'xAI',
   fireworks: 'Fireworks',
   openrouter: 'OpenRouter',
-  local: 'Local',
+  ollama: 'This computer (Ollama)',
 };
 
 /** Providers in the order the groups read; anything unlisted follows, alphabetically. */
-const PROVIDER_ORDER = ['anthropic', 'openai', 'xai', 'google', 'fireworks', 'openrouter', 'local'];
+const PROVIDER_ORDER = [
+  'anthropic',
+  'openai',
+  'xai',
+  'google',
+  'fireworks',
+  'openrouter',
+  'ollama',
+];
 
 function providerRank(provider: string): number {
   const at = PROVIDER_ORDER.indexOf(provider);

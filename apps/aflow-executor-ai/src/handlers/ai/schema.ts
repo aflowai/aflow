@@ -206,6 +206,8 @@ export const AgentTurnInputSchema = z.object({
   turnTimestamp: z.string().optional(),
   lastTurnCompletedAtMs: z.number().optional(),
   contextWindowOverride: z.number().int().positive().optional(),
+  /** The model compaction summarizes with, resolved from the space's Clerk. */
+  compactionModel: z.string().optional(),
   summaryTemplate: z
     .object({
       sections: z

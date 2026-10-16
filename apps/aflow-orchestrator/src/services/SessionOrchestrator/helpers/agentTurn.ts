@@ -73,6 +73,8 @@ import {
   resolveSpaceContextRole,
   isCyberneticCoach,
   buildCyberneticTurnOverrides,
+  loadTenantAgentModelAllowlist,
+  resolveClerkModel,
   type CyberneticTurnOverrides,
 } from '@aflow/cybernetic-runtime';
 import {
@@ -1475,6 +1477,19 @@ export async function buildAgentTurnInput(
     }
   }
 
+  // Summarizing a conversation is the Clerk's work, so compaction takes the
+  // Clerk's model: in a space whose only provider is this computer, a fixed
+  // cloud summarizer would fail the first long conversation.
+  let compactionModel: string | undefined;
+  if (spaceDirectives && flowContextDetails?.cyberneticHandles?.db) {
+    const allowlist = await loadTenantAgentModelAllowlist(
+      flowContextDetails.cyberneticHandles.db as PostgresJsDatabase,
+      tenantId,
+    ).catch(() => null);
+    const clerk = resolveClerkModel((spaceDirectives as EntityDirectives).modelDefaults, allowlist);
+    if (clerk.resolved) compactionModel = clerk.modelRef;
+  }
+
   // Resolve optional finalOutputSchema and completionPrompt from config.
   let finalOutputSchema: Record<string, unknown> | undefined;
   if (finalOutputSchemaOverrideJson) {
@@ -1566,6 +1581,7 @@ export async function buildAgentTurnInput(
     ...(rc['contextWindowOverride']
       ? { contextWindowOverride: Number(rc['contextWindowOverride']) }
       : {}),
+    ...(compactionModel !== undefined ? { compactionModel } : {}),
     ...(rc['summaryTemplate'] && typeof rc['summaryTemplate'] === 'object'
       ? { summaryTemplate: rc['summaryTemplate'] }
       : {}),

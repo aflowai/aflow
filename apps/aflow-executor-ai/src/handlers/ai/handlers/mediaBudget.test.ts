@@ -88,6 +88,8 @@ function operationsDrivingTheVideoJobRunner(): Set<string> {
 function ctx(operationId: string, executionTimeoutMs?: number): ExecutorContext {
   return {
     operationId,
+    job: { stepExecutionId: `step-${operationId}`, attempt: 1, inputRef: 'inline:e30=' },
+    readPayload: () => Promise.resolve({}),
     stepDefinition:
       executionTimeoutMs !== undefined ? { timeout: { executionTimeoutMs } } : undefined,
   } as unknown as ExecutorContext;

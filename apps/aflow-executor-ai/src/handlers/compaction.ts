@@ -36,6 +36,8 @@ export interface CompactionConfig {
   attempt: number;
   /** The read op on this turn's tool surface (§4.9) — teaches the restore-atom pointers. */
   availableReadOpId?: string | undefined;
+  /** The model that writes the summary; the retention policy's when absent. */
+  summaryModel?: string | undefined;
 }
 
 export interface CompactionResult {
@@ -487,7 +489,7 @@ export async function triggerCompaction(
   const template: SummaryTemplate = SummaryTemplateSchema.parse(summaryTemplate ?? {});
 
   // 6. Call summarizer LLM
-  const summaryModel = RETENTION_POLICY.compactionSummaryModel;
+  const summaryModel = config.summaryModel ?? RETENTION_POLICY.compactionSummaryModel;
   const summaryMaxTokens = template.maxTokens;
 
   const prompt = previousSummary

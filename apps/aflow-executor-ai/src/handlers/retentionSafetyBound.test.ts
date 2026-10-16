@@ -412,6 +412,8 @@ function makeCtx(writes: Array<{ kind: string; data: unknown }>): ExecutorContex
 
 function mockClient(): AIClient {
   return {
+    contextWindowFor: () => undefined,
+
     getModel: (m: string) => ({
       id: m,
       provider: 'openai',

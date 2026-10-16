@@ -65,6 +65,7 @@ vi.mock('@aflow/database', () => ({
 
 const mockAppendEntityEvent = vi.fn();
 vi.mock('@aflow/redis', () => ({
+  runtimeAdmission: () => async () => ({ release: async () => undefined }),
   appendEntityEvent: (...args: unknown[]) => mockAppendEntityEvent(...args),
 }));
 
