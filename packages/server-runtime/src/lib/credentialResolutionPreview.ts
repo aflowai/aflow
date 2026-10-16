@@ -17,8 +17,6 @@ export interface CredentialResolutionPreview {
    */
   verifiedAt: Date | null;
   lastErrorCode: string | null;
-  /** The resolved credential's non-secret settings (a local runtime's window and parallelism). */
-  config: Record<string, string> | null;
   availableScopes: Array<{ scope: CredentialScope; scopeId: string; status: 'active' | 'error' }>;
 }
 
@@ -30,7 +28,6 @@ export function emptyResolutionPreview(providerId: string): CredentialResolution
     status: null,
     verifiedAt: null,
     lastErrorCode: null,
-    config: null,
     availableScopes: [],
   };
 }
@@ -102,19 +99,9 @@ export async function previewCredentialResolution(
         preview.status = (match.status ?? 'active') as 'active' | 'error';
         preview.verifiedAt = match.lastValidatedAt ?? null;
         preview.lastErrorCode = match.lastErrorCode ?? null;
-        preview.config = stringConfig(match.configJson);
         break;
       }
     }
   }
   return previews;
-}
-
-function stringConfig(config: unknown): Record<string, string> {
-  if (config === null || typeof config !== 'object') return {};
-  return Object.fromEntries(
-    Object.entries(config as Record<string, unknown>).filter(
-      (entry): entry is [string, string] => typeof entry[1] === 'string',
-    ),
-  );
 }

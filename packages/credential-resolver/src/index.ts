@@ -22,4 +22,5 @@ export {
   providerConfigFromCredential,
   missingRequiredSecrets,
   localRuntimeSettings,
+  localMachineFor,
 } from './providerConfig.js';

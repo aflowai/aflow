@@ -9,6 +9,7 @@ import {
 } from '@aflow/schemas';
 import { useChatModelOptions } from '../../hooks/useChatModelOptions.js';
 import { localFitForDraft, useSpaceLlmReadiness } from '../../hooks/useSpaceLlmReadiness.js';
+import { LocalModelStatus } from './LocalModelStatus.js';
 import { useAgentDirectives } from '../../hooks/useAgentDirectives.js';
 import { ConnectProviderDialog } from '../credentials/ConnectProviderDialog.js';
 import {
@@ -109,7 +110,10 @@ export function AgentModelSettings({
               return unready ? provider : null;
             }}
             onConnectProvider={setConnectProvider}
-            localFitForRole={localFitForDraft(readiness, directives.modelDefaults)}
+            renderLocalStatus={(role) => {
+              const local = localFitForDraft(readiness, directives.modelDefaults)(role);
+              return local ? <LocalModelStatus spaceId={spaceId} {...local} /> : null;
+            }}
           />
         )}
       </AgentSettingsPopover>

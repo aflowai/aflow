@@ -114,7 +114,8 @@ Which local models are _recommended_ for which role follows from the usefulness 
 
 - **No specialized agent.** The work is reading one record and proposing one of its remedies, and Helmsman with these operations does both. A separate system agent would be a second surface whose guidance could drift from the UI's.
 - **Runner holds none of these operations.** They are Helmsman's alone, like the eval plane. A skill's run does not reconfigure the machine it runs on.
-- **One GPU, several roles.** Helmsman, clerk, judge, titles and embeddings all compete for one runtime, and each model switch costs a load. The default for a local space is therefore a preset that assigns one chat model to every role (plus the embedding model). Mixing models per role is the operator's choice, and the models page shows its cost: total resident memory, and the load time per switch. On the measured machine a switch from a 9B to a 26B model took 49 s, and the MLX runner's first prompt after a load took 25–56 s whatever its length (§9 G5), so a switch in the middle of a run is a pause the operator can see. Only the model a role is about to use is warmed. `keep_alive` comes from the connection, default 30 min.
+- **One GPU, several roles.** Helmsman, clerk, judge, titles and embeddings all compete for one runtime, and each model switch costs a load. The default for a local space is therefore a preset that assigns one chat model to every role (plus the embedding model). Mixing models per role is the operator's choice, and the models page shows its cost: total resident memory, and the load time per switch. On the measured machine a switch from a 9B to a 26B model took 49 s, and the MLX runner's first prompt after a load took 25–56 s whatever its length (§9 G5), so a switch in the middle of a run is a pause the operator can see. `keep_alive` comes from the connection, default 30 min.
+- **Warming is the operator's, not a side effect.** Beside each role on a model on this computer, the operator sees whether it is loaded and how large, and has **Load now** (at the window its requests will use, so the first request does not reload it) and **Unload**. _Rejected:_ loading on assignment. Picking a model is not a request to take 16 GB of the machine at that moment, and on a small machine an unasked load is the starvation it would be meant to prevent.
 - **Lifecycle actions are durable.**
   - **Pull:** one pull per runtime and tag, observed and not duplicated. A second request joins the first; the runtime already joins two pulls of one tag, reporting the same progress to both (§9 G3).
   - **Disk space:** a pull is refused before it starts when the host inventory's free disk cannot hold the download.
@@ -160,7 +161,7 @@ Which local models are _recommended_ for which role follows from the usefulness 
 
 - **The adapter:** an `openai-compatible` adapter on chat completions, built from the Fireworks adapter (the OpenAI adapter's Responses API is not what local servers serve). It reaches vLLM, SGLang, llama-server and LM Studio, and through vLLM a GPU box serving many requests at once.
 - **Pools:** several connections to the same catalog model form a pool, chosen by least in-flight against each one's `max_parallel`.
-- **A runtime on the network:** it needs an operator-admitted origin and a token, because an Ollama port has no authentication of its own.
+- **A runtime on the network:** it needs an operator-admitted origin (`CREDENTIAL_EXTRA_BASE_URL_ORIGINS`) and a token, because an Ollama port has no authentication of its own. Its connection states that machine's GPU memory (`gpu_memory_gb`), so each model's window is sized for the machine it runs on; this machine's inventory is never applied to a runtime elsewhere, and without the figure its windows are the 32K default. Admission is keyed by its host, so a runtime on the network is one capacity however many connections name it.
 
 **D15 — One diagnostics record says what is wrong and what fixes it, and every surface reads it.**
 
@@ -328,13 +329,15 @@ _Exit for each entry:_ its usefulness results, repeated runs included, are in th
 - `machine: { totalMemoryBytes, gpuWorkingSetBytes }` in the host inventory, the GPU figure read once through Metal and cached;
 - `localModelFit` in `@aflow/ai-client`: the answer, the largest fitting window, and the bytes at the window in use;
 - the default window: `context_tokens` left unset means the largest fitting window, per model, with 32K when the inputs are missing;
-- the fit and the window in use on the connection's readiness.
+- the fit and the window in use on the connection's readiness, with what the runtime holds now: the model's loaded size beside the GPU working set, so a model spilling because it holds every conversation's cache says so;
+- **Load now** and **Unload** beside the role, through operator-only routes refused outside the local edition;
+- `gpu_memory_gb` on the connection for a runtime on another machine.
 
 _Exit:_ on the 24 GB machine, a connection with no window set runs Gemma 4 26B at 32K and reports that it spills, naming the 16K it fits; the same connection on a machine with 64 GB or more reports _fits_ at the model's full window.
 
 _Proof:_ a footprint and machine for which the full window does not fit yield a smaller window; a configured window is never replaced; a missing machine figure yields _unknown_ and 32K.
 
-_Built and tested:_ all of the above. The probe measures Gemma 4 26B at 16.15 GB and 120,469 bytes a token, inside its entry's tolerances; the host's Metal probe reads 19.07 GB on the 24 GB machine and caches it; the fit there is 16K, below the agents' 32K, so the automatic window is 32K and readiness names the spill. _Not yet run:_ the dev stack with this branch, where the host executor publishes the machine and readiness shows the note.
+_Built and tested:_ all of the above. The probe measures Gemma 4 26B at 16.15 GB and 120,469 bytes a token, inside its entry's tolerances; the host's Metal probe reads 19.07 GB on the 24 GB machine and caches it; the fit there is 16K, below the agents' 32K, so the automatic window is 32K and readiness names the spill. Load and unload were run against Ollama on the 24 GB machine: the model loaded at a 32K window and unloading freed it at once. _Not yet run:_ the dev stack with this branch, where the host executor publishes the machine and readiness shows the note and the actions.
 
 ### P3 — The operator's surface (D8, D10, D13, D15)
 

@@ -21,6 +21,10 @@ export interface LocalFit {
   largestFittingWindow: number | null;
   bytesAtWindow: number | null;
   gpuWorkingSetBytes: number | null;
+  /** Whether the runtime answered when asked what it holds. */
+  runtimeReachable: boolean;
+  /** The model's size as loaded now, or null when it is not loaded. */
+  loadedBytes: number | null;
 }
 
 /**
@@ -74,11 +78,13 @@ export function llmReadinessQueryKey(spaceId: string): readonly unknown[] {
 export function localFitForDraft(
   readiness: SpaceLlmReadiness | null | undefined,
   modelDefaults: { default?: string | undefined } & Record<string, string | undefined>,
-): (role: string) => LocalFit | null {
+): (role: string) => { model: string; fit: LocalFit } | null {
   return (role) => {
     const measured = readiness?.roles[role];
     const editing = modelDefaults[role] ?? modelDefaults.default;
-    return measured && measured.model === editing ? measured.localFit : null;
+    return measured?.localFit && measured.model === editing
+      ? { model: measured.model, fit: measured.localFit }
+      : null;
   };
 }
 

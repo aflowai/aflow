@@ -194,3 +194,8 @@ export {
   type LocalModelFit,
   type LocalModelFitStatus,
 } from './localModelFit.js';
+export {
+  localRuntimeClient,
+  type LocalRuntimeClient,
+  type LoadedLocalModel,
+} from './providers/ollamaRuntime.js';

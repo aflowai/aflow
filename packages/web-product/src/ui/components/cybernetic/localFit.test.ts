@@ -8,6 +8,8 @@ const TIGHT = {
   largestFittingWindow: 16_384,
   bytesAtWindow: 18_146_750_828,
   gpuWorkingSetBytes: 19_069_665_280,
+  runtimeReachable: true,
+  loadedBytes: null,
 };
 
 describe('describeLocalFit', () => {
@@ -35,7 +37,10 @@ describe('localFitForDraft', () => {
   } as unknown as SpaceLlmReadiness;
 
   it('describes the model readiness measured', () => {
-    expect(localFitForDraft(readiness, { default: 'gemma-local' })('default')).toEqual(TIGHT);
+    expect(localFitForDraft(readiness, { default: 'gemma-local' })('default')).toEqual({
+      model: 'gemma-local',
+      fit: TIGHT,
+    });
   });
 
   it('says nothing about a model the draft has just replaced', () => {

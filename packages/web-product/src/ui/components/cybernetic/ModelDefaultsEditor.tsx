@@ -1,6 +1,6 @@
 'use client';
 
-import type { CSSProperties } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import {
   Checkbox,
   Column,
@@ -127,8 +127,8 @@ interface ModelDefaultsEditorProps {
   missingProviderForRef?: (ref: string) => string | null;
   /** Opens key entry for a provider surfaced by `missingProviderForRef`. */
   onConnectProvider?: (providerId: string) => void;
-  /** For a role on a model on this computer, its window and how it fits the machine. */
-  localFitForRole?: (role: ModelRole) => LocalFit | null;
+  /** For a role on a model on this computer: its window, how it fits, and what it holds now. */
+  renderLocalStatus?: (role: ModelRole) => ReactNode;
 }
 
 const gb = (bytes: number): string => `${(bytes / 1e9).toFixed(1)} GB`;
@@ -181,7 +181,7 @@ export function ModelDefaultsEditor({
   disabled = false,
   missingProviderForRef,
   onConnectProvider,
-  localFitForRole,
+  renderLocalStatus,
 }: ModelDefaultsEditorProps) {
   if (loading) {
     return <Text variant="muted">Loading models…</Text>;
@@ -257,22 +257,7 @@ export function ModelDefaultsEditor({
             Needs key — connect
           </button>
         )}
-        {(() => {
-          const fit = localFitForRole?.(role);
-          return fit ? (
-            <Text
-              size="xs"
-              variant="muted"
-              style={{
-                display: 'block',
-                marginTop: 'var(--space-1)',
-                ...(fit.status === 'does_not_fit' ? { color: 'var(--color-status-warning)' } : {}),
-              }}
-            >
-              {describeLocalFit(fit)}
-            </Text>
-          ) : null;
-        })()}
+        {renderLocalStatus?.(role)}
       </>
     );
   };

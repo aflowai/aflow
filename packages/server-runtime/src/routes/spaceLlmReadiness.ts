@@ -23,7 +23,9 @@ import {
   localModelFit,
   type ModelDefinition,
 } from '@aflow/ai-client';
-import { readLocalMachine, type HostMachine, type Redis } from '@aflow/redis';
+import type { Redis } from '@aflow/redis';
+import { resolveSpaceLocalRuntime, type ResolvedLocalRuntime } from '../lib/localRuntime.js';
+import type { LoadedLocalModel } from '@aflow/ai-client';
 import {
   DEFAULT_CYBERNETIC_MODEL,
   resolveRoleModel,
@@ -60,41 +62,38 @@ const RoleReadinessSchema = z.object({
       largestFittingWindow: z.number().int().nullable(),
       bytesAtWindow: z.number().nullable(),
       gpuWorkingSetBytes: z.number().nullable(),
+      /** Whether the runtime answered when asked what it holds. */
+      runtimeReachable: z.boolean(),
+      /** The model's size as loaded now — its weights and every conversation's cache — or null when not loaded. */
+      loadedBytes: z.number().nullable(),
     })
     .nullable(),
 });
 
-function positiveInteger(value: string | undefined): number | undefined {
-  const parsed = Number(value);
-  return value !== undefined && Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
-}
-
 function localFitFor(
   model: ModelDefinition | undefined,
-  config: Record<string, string> | null,
-  machine: HostMachine | undefined,
+  runtime: ResolvedLocalRuntime | null,
+  loaded: LoadedLocalModel[] | null,
 ): z.infer<typeof RoleReadinessSchema>['localFit'] {
-  if (!model?.local) return null;
-  const contextTokens = positiveInteger(config?.['context_tokens']);
-  const parallel = positiveInteger(config?.['max_parallel']) ?? 1;
-  const window = contextWindowForModel(model, {
-    ...(contextTokens !== undefined ? { contextTokens } : {}),
-    parallel,
-    machine,
-  });
+  if (!model?.local || !runtime) return null;
+  const parallel = runtime.config.parallel ?? 1;
   const fit = localModelFit({
     footprint: model.local.footprint,
-    machine,
+    machine: runtime.config.machine,
     catalogWindow: model.contextWindow,
     parallel,
-    window,
+    window: contextWindowForModel(model, runtime.config),
   });
+  const tag = model.providerModelId ?? model.id;
+  const held = loaded?.find((m) => m.tag === tag || m.tag === `${tag}:latest`);
   return {
     status: fit.status,
     window: fit.window,
     largestFittingWindow: fit.largestFittingWindow ?? null,
     bytesAtWindow: fit.bytesAtWindow ?? null,
-    gpuWorkingSetBytes: machine?.gpuWorkingSetBytes ?? null,
+    gpuWorkingSetBytes: runtime.config.machine?.gpuWorkingSetBytes ?? null,
+    runtimeReachable: loaded !== null,
+    loadedBytes: held?.sizeBytes ?? null,
   };
 }
 
@@ -273,11 +272,16 @@ export const spaceLlmReadinessRoutes: FastifyPluginAsync = async (fastify) => {
       const errored = new Map<string, { roles: string[]; lastErrorCode: string | null }>();
       let ready = true;
 
-      const redis = fastify.appContext.redis as Redis | undefined;
-      const machine =
-        redis && roleRefs.some((r) => r.providerId === 'ollama')
-          ? await readLocalMachine(redis).catch(() => undefined)
-          : undefined;
+      const runtime = roleRefs.some((r) => r.providerId === 'ollama')
+        ? await resolveSpaceLocalRuntime({
+            db,
+            redis: fastify.appContext.redis as Redis | undefined,
+            tenantId: tenant.tenantId as string,
+            userId: authUser.userId as string,
+            spaceId,
+          })
+        : null;
+      const loaded = runtime ? await runtime.client.loaded() : null;
 
       for (const { role, ref, modelId, providerId, unknownModel } of roleRefs) {
         const preview = providerId ? previews.get(providerId) : undefined;
@@ -295,11 +299,7 @@ export const spaceLlmReadinessRoutes: FastifyPluginAsync = async (fastify) => {
           providerId,
           resolved,
           resolvedScope: preview?.resolvedScope ?? null,
-          localFit: localFitFor(
-            modelId ? catalog.getModel(modelId) : undefined,
-            preview?.config ?? null,
-            machine,
-          ),
+          localFit: localFitFor(modelId ? catalog.getModel(modelId) : undefined, runtime, loaded),
           status,
           verified,
         };
