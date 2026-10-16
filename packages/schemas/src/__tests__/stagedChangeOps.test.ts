@@ -248,7 +248,7 @@ describe('Plan 113 — staged change ops', () => {
 
 describe('Plan 301 — the Coach union is narrower than the storable one', () => {
   /** Ops only an authoring skill proposes, never a Coach. */
-  const AUTHORING_ONLY_OPS = ['eval_case_draft'];
+  const AUTHORING_ONLY_OPS = ['eval_case_draft', 'update_task_routes'];
 
   function opKinds(schema: unknown): string[] {
     let node: unknown = schema;

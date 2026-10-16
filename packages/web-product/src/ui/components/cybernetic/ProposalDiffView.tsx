@@ -10,7 +10,7 @@
  * bundle overview (task list, eval summary, activation hints).
  */
 import { Badge, Card, CardBody, Column, Row, Text } from '@aflow/design-system';
-import { ListingRequirementsSchema } from '@aflow/schemas';
+import { ListingRequirementsSchema, WorkflowTaskRouteSchema, describeRoute } from '@aflow/schemas';
 import { listingRequirementRows } from '../../lib/listing-requirements.js';
 import { SkillComposePreview } from './SkillComposePreview.js';
 
@@ -170,6 +170,25 @@ function renderOp(op: Op): React.ReactNode {
 
     case 'remove_task':
       return <KV label="Remove task" value={str(op['taskId'])} />;
+
+    case 'update_task_routes': {
+      const parsed = WorkflowTaskRouteSchema.array().safeParse(op['routes']);
+      const routes = parsed.success ? parsed.data : [];
+      return (
+        <Column gap="xs">
+          <KV label="Task" value={str(op['taskId'])} />
+          {routes.length === 0 ? (
+            <Text size="xs">No routes</Text>
+          ) : (
+            routes.map((route, i) => (
+              <Text key={String(i)} size="xs" style={{ fontFamily: 'monospace' }}>
+                {describeRoute(route)}
+              </Text>
+            ))
+          )}
+        </Column>
+      );
+    }
 
     case 'reorder_tasks': {
       const ids = op['taskIds'];
@@ -501,6 +520,7 @@ const OP_LABELS: Record<string, string> = {
   update_task_context_spec: 'Update context spec',
   add_task: 'Add task',
   remove_task: 'Remove task',
+  update_task_routes: 'Update routes',
   reorder_tasks: 'Reorder tasks',
   update_outcome_threshold: 'Update outcome',
   update_activation_hint: 'Update activation',

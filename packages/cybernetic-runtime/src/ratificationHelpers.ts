@@ -14,6 +14,7 @@ const HARD_FLOOR_OPS: ReadonlySet<string> = new Set([
   'remove_task',
   'reorder_tasks',
   'update_task_dependencies',
+  'update_task_routes',
   'update_outcome_threshold',
 ]);
 

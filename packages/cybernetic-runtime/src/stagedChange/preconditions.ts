@@ -66,6 +66,8 @@ export function computeOpTargetDescriptor(
       return { kind: 'task.context', taskId: op.taskId };
     case 'update_task_dependencies':
       return { kind: 'task.dependencies', taskId: op.taskId };
+    case 'update_task_routes':
+      return { kind: 'task.routes', taskId: op.taskId };
     case 'replace_task':
       return { kind: 'task.whole', taskId: op.taskId };
     case 'promote_context_strategy':
@@ -198,6 +200,11 @@ export function readTargetHash(
       const task = artifacts.workflow?.tasks.find((t) => t.taskId === descriptor.taskId);
       if (!task) return { hash: null, present: false };
       return { hash: hashCanonical(task.dependsOn ?? []), present: true };
+    }
+    case 'task.routes': {
+      const task = artifacts.workflow?.tasks.find((t) => t.taskId === descriptor.taskId);
+      if (!task) return { hash: null, present: false };
+      return { hash: hashCanonical(task.routes ?? []), present: true };
     }
     case 'task.whole': {
       const task = artifacts.workflow?.tasks.find((t) => t.taskId === descriptor.taskId);
