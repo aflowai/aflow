@@ -120,7 +120,7 @@ export function createFakeRedisBus(): FakeRedisBus {
       _to: string,
       _countKeyword: string,
       count: number,
-    ): Promise<[string, string[]][]> {
+    ): Promise<Array<[string, string[]]>> {
       xrangeCalls += 1;
       // Snapshot before the gate: a gated read models a slow *reply*, so it
       // must not see writes that landed after the command was issued.
@@ -137,8 +137,21 @@ export function createFakeRedisBus(): FakeRedisBus {
       }
       return page;
     },
+    async xrevrange(
+      key: string,
+      _end: string,
+      _start: string,
+      _countKeyword: string,
+      count: number,
+    ): Promise<Array<[string, string[]]>> {
+      return (streams.get(key) ?? [])
+        .slice()
+        .reverse()
+        .slice(0, count)
+        .map((e) => [e.id, e.fields] as [string, string[]]);
+    },
     multi() {
-      const queued: { name: string; run: () => unknown }[] = [];
+      const queued: Array<{ name: string; run: () => unknown }> = [];
       const chain = {
         xadd(key: string, ...args: string[]) {
           queued.push({ name: 'xadd', run: () => doXadd(key, args) });
@@ -152,7 +165,7 @@ export function createFakeRedisBus(): FakeRedisBus {
           queued.push({ name: 'publish', run: () => doPublish(channel, raw) });
           return chain;
         },
-        async exec(): Promise<[Error | null, unknown][]> {
+        async exec(): Promise<Array<[Error | null, unknown]>> {
           execGroups.push(queued.map((q) => q.name));
           return queued.map((q) => [null, q.run()] as [Error | null, unknown]);
         },

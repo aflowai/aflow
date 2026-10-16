@@ -3,6 +3,7 @@
 import { useQueryClient } from '@tanstack/react-query';
 
 import { useApiMutation, useApiQuery } from './useApiQuery.js';
+import { useCoalescedInvalidation } from './use-coalesced-invalidation.js';
 import { useSpaceEntityEventListener } from './use-space-entity-events.js';
 import type { SessionMetadata } from '../lib/types.js';
 
@@ -14,13 +15,14 @@ export { UNTITLED_CONVERSATION, conversationTitle } from '../lib/conversation-ti
  * Listens on the space channel rather than the open session's own stream: the
  * conversation being named is usually not the one anyone has open, and a row
  * in a list nobody subscribed to would otherwise stay stale until the next
- * refetch. One subscription for the whole list, through the refcounted broker.
+ * refetch. One subscription for the whole list, through the refcounted broker,
+ * and one refetch for a burst of names.
  */
 export function useSessionMetadataRefresh(spaceId: string | null): void {
-  const queryClient = useQueryClient();
+  const invalidate = useCoalescedInvalidation();
   useSpaceEntityEventListener(spaceId, (event) => {
     if (!spaceId || event.eventType !== 'entity.session.described') return;
-    void queryClient.invalidateQueries({ queryKey: ['space', spaceId, 'sessions'] });
+    invalidate(['space', spaceId, 'sessions']);
   });
 }
 

@@ -3,6 +3,7 @@ import type { Redis } from 'ioredis';
 import {
   ENTITY_EVENTS_PUBSUB_CHANNEL,
   readEntityEventStreamEntries,
+  readEntityEventStreamTail,
   createSubscriberConnection,
   getRedisConfig,
 } from '@aflow/redis';
@@ -53,7 +54,14 @@ export function createSpaceEntityEventsTopicHandler(
         }
       }
 
-      let cursor = ctx.topic.cursor && ctx.topic.cursor.length > 0 ? ctx.topic.cursor : '0';
+      // A subscriber naming no cursor has nothing to catch up on, and every
+      // listener treats a delivered event as news. Read before the SUBSCRIBE,
+      // so anything appended while it is in flight still follows the cursor
+      // and reaches the first drain.
+      let cursor =
+        ctx.topic.cursor && ctx.topic.cursor.length > 0
+          ? ctx.topic.cursor
+          : await readEntityEventStreamTail(redis, { tenantId, spaceId });
       let cancelled = false;
       let draining = false;
       let drainRequested = false;

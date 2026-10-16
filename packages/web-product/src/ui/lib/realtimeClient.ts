@@ -21,6 +21,8 @@ export type { LiveDeltaFrame };
 // ============================================================================
 
 export interface TopicListener {
+  /** The server acknowledged the subscription and will resume from `cursor`. */
+  onSubscribed?: (cursor: string) => void;
   onEvent?: (event: unknown, cursor: string) => void;
   /** Preview of the step in flight. Deliberately handed no cursor to advance. */
   onLiveDelta?: (frame: LiveDeltaFrame) => void;
@@ -179,6 +181,7 @@ class RealtimeClient {
             cursor: resumeCursor,
           };
           this.activeSubscriptions.set(subscriptionId, active);
+          if (serverCursor !== undefined) listener.onSubscribed?.(serverCursor);
         },
         reject: (err) => {
           if (cancelled) return;
@@ -395,8 +398,11 @@ class RealtimeClient {
             // Migrate the subscription record.
             this.activeSubscriptions.delete(sub.subscriptionId);
             sub.subscriptionId = newId;
-            if (serverCursor !== undefined) sub.cursor = serverCursor;
             this.activeSubscriptions.set(newId, sub);
+            if (serverCursor !== undefined) {
+              sub.cursor = serverCursor;
+              sub.listener.onSubscribed?.(serverCursor);
+            }
           },
           reject: (err) => {
             if (sub.cancelled) return;
