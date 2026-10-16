@@ -1,5 +1,7 @@
+import { createDefaultModelCatalog } from '@aflow/ai-client';
 import {
   CAMPAIGN_GOAL_DIRECTIONS,
+  DECISION_OPERATION_ID,
   getOperation,
   isCampaignRef,
   stableHash,
@@ -187,6 +189,7 @@ export function materializeAndValidateSkillConfig(
   }
 
   appendEntryInputCoverageDiagnostics(materializedTasks, diagnostics);
+  appendDecisionModelDiagnostics(materializedTasks, diagnostics);
   appendRunInputReachabilityDiagnostics(materializedTasks, input.runInputs, diagnostics);
 
   // Always-on (write AND read-side recompute, so the run-start gate holds):
@@ -799,6 +802,58 @@ function appendRunInputReachabilityDiagnostics(
         `Declare inputContract.bindings['${slot.id}'] = { kind: 'run_input', bindAs: '${slot.id}', ` +
         `path: '${slot.id}', schema } on '${entry.taskId}' — including when a later task reads it.`,
     });
+  }
+}
+
+/**
+ * What a decision step asks of the model it names. Only a step that names its
+ * model is checked here: an unnamed one resolves per space, which a
+ * space-independent verdict cannot see, and fails at the step instead.
+ */
+function appendDecisionModelDiagnostics(tasks: WorkflowTask[], out: SkillDiagnostic[]): void {
+  for (const task of tasks) {
+    if (task.operation !== DECISION_OPERATION_ID) continue;
+    const template = task.inputTemplate ?? task.inputs ?? {};
+    const ref = template['model'];
+    if (typeof ref !== 'string') continue;
+    const profile = createDefaultModelCatalog().getModel(ref)?.decision;
+    if (!profile) continue;
+
+    if (template['images'] !== undefined && !profile.imageContext) {
+      out.push({
+        code: 'decision_model_reads_no_images',
+        dimension: 'op_input',
+        severity: 'error',
+        taskId: task.taskId,
+        field: 'images',
+        operationId: DECISION_OPERATION_ID,
+        detail: `Decision step '${task.taskId}' sends images to ${ref}, which reads none, so every run fails at the step.`,
+        fixHint:
+          'Name a decision model that reads images, or remove model and let the space choose one.',
+      });
+    }
+
+    const questions = template['questions'];
+    const thresholded =
+      questions !== null && typeof questions === 'object'
+        ? Object.entries(questions as Record<string, { minConfidence?: unknown }>)
+            .filter(([, q]) => typeof q.minConfidence === 'number')
+            .map(([name]) => name)
+        : [];
+    if (profile.confidence !== 'calibrated' && thresholded.length > 0) {
+      out.push({
+        code: 'decision_confidence_self_reported',
+        dimension: 'op_input',
+        severity: 'advisory',
+        taskId: task.taskId,
+        field: 'questions',
+        operationId: DECISION_OPERATION_ID,
+        detail:
+          `Decision step '${task.taskId}' sets minConfidence on [${thresholded.join(', ')}], but ${ref} reports its own confidence rather than a calibrated one, ` +
+          'so the threshold is a guess until it is measured against labelled examples.',
+        fixHint: 'Measure the threshold with an eval batch, or use a calibrated decision model.',
+      });
+    }
   }
 }
 

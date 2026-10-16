@@ -228,6 +228,29 @@ export function resolveProviderForModel(model: string): AIProvider {
 // ---------------------------------------------------------------------------
 
 /**
+ * Whether the space this step runs in holds a usable key for a provider. A
+ * read for choosing between models, so it answers rather than throws.
+ */
+export async function hasProviderCredential(
+  ctx: ExecutorContext,
+  aiProvider: AIProvider,
+): Promise<boolean> {
+  const credentialProviderId = AI_TO_CREDENTIAL_PROVIDER[aiProvider];
+  const { tenantId, credentialOwnerId, spaceId } = ctx.job;
+  if (!credentialResolver || !credentialProviderId || !credentialOwnerId || !spaceId) return false;
+  try {
+    const resolved = await credentialResolver.resolve(credentialProviderId, {
+      tenantId,
+      credentialOwnerId,
+      spaceId,
+    });
+    return Boolean(resolved?.secrets['api_key']);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Get an AIClient configured with credentials for the model's provider.
  *
  * Resolution:

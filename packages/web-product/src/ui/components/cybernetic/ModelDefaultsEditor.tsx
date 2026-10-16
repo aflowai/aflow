@@ -20,10 +20,14 @@ import type {
 import type { ModelOption } from '../../hooks/useChatModelOptions.js';
 import type { ClerkReadiness, LocalFit } from '../../hooks/useSpaceLlmReadiness.js';
 
-export type ModelRole = 'default' | 'helmsman' | 'runner' | 'coach' | 'judge' | 'clerk';
+export type ModelRole =
+  'default' | 'helmsman' | 'runner' | 'coach' | 'judge' | 'clerk' | 'decision';
+
+/** The roles that take a reasoning effort. A decision model writes no text and takes none. */
+export type ReasoningRole = Exclude<ModelRole, 'decision'>;
 
 /** The roles that answer to the space default. Clerk resolves its own. */
-type InheritingRole = Exclude<ModelRole, 'default' | 'clerk'>;
+type InheritingRole = Exclude<ModelRole, 'default' | 'clerk' | 'decision'>;
 
 const EFFORT_LABELS: Record<DirectiveReasoningEffort, string> = {
   off: 'Off (suppress reasoning)',
@@ -90,7 +94,7 @@ export function applyModelRoleChange(
 
 export function applyReasoningRoleChange(
   defaults: DirectiveReasoningDefaults | undefined,
-  role: ModelRole,
+  role: ReasoningRole,
   value: DirectiveReasoningEffort | undefined,
 ): DirectiveReasoningDefaults {
   const next = { ...(defaults ?? {}) };
@@ -105,6 +109,8 @@ interface ModelDefaultsEditorProps {
   modelOptions: ModelOption[];
   /** What the Clerk may be assigned explicitly. Falls back to `modelOptions`. */
   clerkModelOptions?: ModelOption[];
+  /** Decision models for the decision-step row. Omit to hide the row. */
+  decisionModelOptions?: ModelOption[];
   /** What the Clerk currently resolves to, for the `Auto` row's subtitle. */
   clerkReadiness?: ClerkReadiness | null;
   /** Whether this space summarizes its conversations. Omit to hide the control. */
@@ -113,7 +119,7 @@ interface ModelDefaultsEditorProps {
   loading: boolean;
   error: string | null;
   onModelChange: (role: ModelRole, value: string | undefined) => void;
-  onReasoningChange: (role: ModelRole, value: DirectiveReasoningEffort | undefined) => void;
+  onReasoningChange: (role: ReasoningRole, value: DirectiveReasoningEffort | undefined) => void;
   /**
    * `page` — every role expanded with full helper text (the settings tab).
    * `compact` — the space default is always visible; per-role overrides tuck
@@ -169,6 +175,7 @@ export function ModelDefaultsEditor({
   reasoningDefaults,
   modelOptions,
   clerkModelOptions,
+  decisionModelOptions,
   clerkReadiness,
   conversationSummaries,
   onConversationSummariesChange,
@@ -267,7 +274,7 @@ export function ModelDefaultsEditor({
   // reasoning control offers none at all. Offering a rung outside this set
   // would not fail the run: the client clamps it to a supported one. It would
   // just quietly run at an effort the operator never chose.
-  const supportedEffortsFor = (role: ModelRole): DirectiveReasoningEffort[] => {
+  const supportedEffortsFor = (role: ReasoningRole): DirectiveReasoningEffort[] => {
     const ref = modelDefaults[role] ?? modelDefaults.default;
     const model = modelOptions.find(
       (o) => o.id === ref || o.aliases.includes(ref) || o.retiredRefs.includes(ref),
@@ -275,7 +282,7 @@ export function ModelDefaultsEditor({
     return model?.reasoningEfforts ?? [];
   };
 
-  const renderReasoningSelect = (role: ModelRole) => {
+  const renderReasoningSelect = (role: ReasoningRole) => {
     const supported = supportedEffortsFor(role);
     const selected = reasoningDefaults?.[role];
     // Unset means the catalog's default for every role except the Clerk,
@@ -321,7 +328,7 @@ export function ModelDefaultsEditor({
     );
   };
 
-  const renderRoleRow = (role: ModelRole, isOverride: boolean) => (
+  const renderRoleRow = (role: ReasoningRole, isOverride: boolean) => (
     <Row gap="2" align="start" style={{ flexWrap: 'wrap' }}>
       <div style={{ flex: '2 1 200px', minWidth: 0 }}>{renderModelSelect(role, isOverride)}</div>
       <div style={{ flex: '1 1 140px', minWidth: 0 }}>{renderReasoningSelect(role)}</div>
@@ -428,6 +435,39 @@ export function ModelDefaultsEditor({
     </Field>
   );
 
+  const decisionStored = modelDefaults.decision;
+  const decisionRow =
+    decisionModelOptions === undefined ? null : (
+      <Field>
+        <Label style={labelStyle}>Decisions</Label>
+        <Select
+          value={
+            decisionStored === undefined
+              ? ''
+              : (decisionModelOptions.find(
+                  (o) => o.id === decisionStored || o.aliases.includes(decisionStored),
+                )?.ref ?? decisionStored)
+          }
+          disabled={disabled}
+          onChange={(e) => {
+            onModelChange('decision', e.target.value || undefined);
+          }}
+        >
+          <option value="">Auto · first decision model with a key</option>
+          {decisionModelOptions.map((opt) => (
+            <option key={opt.id} value={opt.ref}>
+              {opt.displayName}
+              {opt.aliases.length > 0 ? ` (${opt.aliases[0]})` : ''}
+            </option>
+          ))}
+        </Select>
+        <HelperText>
+          Decision steps in skills: routing, triage and gating with typed answers. Never the chat
+          model.
+        </HelperText>
+      </Field>
+    );
+
   if (compact) {
     return (
       <Column gap="sm">
@@ -469,6 +509,7 @@ export function ModelDefaultsEditor({
         </Field>
       ))}
       {clerkRow}
+      {decisionRow}
     </>
   );
 }

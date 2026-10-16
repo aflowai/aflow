@@ -69,4 +69,11 @@ describe('resolveDecisionAnswers', () => {
       resolve({ urgent: { type: 'score', score: 1, confidence: 1, probabilities: {} } }),
     ).toThrow(/yes_no question and got a score answer/);
   });
+
+  it('passes a refusal on as never decided, whatever the question type', () => {
+    expect(resolve({ team: { type: 'refusal' } })['team']).toEqual({
+      type: 'refusal',
+      decided: false,
+    });
+  });
 });

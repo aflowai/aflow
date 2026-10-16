@@ -5,6 +5,10 @@
 import { z } from 'zod';
 import { TokenUsageSchema } from './aiUsage.js';
 import { DECISION_MODELS, enumWithCustom } from './enums.js';
+import { MediaSourceRefSchema } from './mediaSourceRef.js';
+
+/** The most images one decision may read, the provider limit across a request. */
+export const DECISION_MAX_IMAGES = 128;
 
 /**
  * What a decision model reads: text, a JSON object or a JSON array. The same
@@ -124,9 +128,19 @@ export const AiDecideInputSchema = z.object({
   state: DecisionEntrySchema.describe(
     'What the questions are about: text, a JSON object or a JSON array. Content in the state can steer the answers, so a decision about untrusted input is never the only gate on something that matters.',
   ),
+  images: z
+    .array(MediaSourceRefSchema)
+    .min(1)
+    .max(DECISION_MAX_IMAGES)
+    .describe(
+      'Images the questions are also about — screenshots, photos, documents — read with the state. Only a decision model that reads images takes them; a step that sends images to one that does not is refused.',
+    )
+    .optional(),
   questions: DecisionQuestionsSchema,
   model: enumWithCustom(DECISION_MODELS)
-    .describe('Decision model to use. The platform default when absent.')
+    .describe(
+      "Decision model to use. Absent, the space's decision model, or the first decision model whose provider the space holds a key for.",
+    )
     .optional(),
 });
 export type AiDecideInput = z.infer<typeof AiDecideInputSchema>;
@@ -167,16 +181,31 @@ export const DecisionYesNoAnswerSchema = z.object({
   decided: decidedSchema,
 });
 
+export const DecisionRefusalAnswerSchema = z.object({
+  type: z.literal('refusal'),
+  decided: z
+    .literal(false)
+    .describe(
+      'The model declined this question; it is never decided. A route on decided == false takes it.',
+    ),
+});
+
 export const DecisionAnswerSchema = z.discriminatedUnion('type', [
   DecisionChoiceAnswerSchema,
   DecisionScoreAnswerSchema,
   DecisionYesNoAnswerSchema,
+  DecisionRefusalAnswerSchema,
 ]);
 export type DecisionAnswer = z.infer<typeof DecisionAnswerSchema>;
 
 export const AiDecideOutputSchema = z.object({
   answers: z.record(z.string(), DecisionAnswerSchema).describe('Question name → answer.'),
   model: z.string(),
+  calibration: z
+    .enum(['calibrated', 'self_reported'])
+    .describe(
+      "Whether this model's confidence tracks how often it is right. Self-reported confidence makes a minConfidence threshold a guess until it is measured against labelled examples.",
+    ),
   usage: TokenUsageSchema,
   latencyMs: z.number().int().nonnegative(),
 });

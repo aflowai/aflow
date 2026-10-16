@@ -17,7 +17,7 @@ import {
   applyModelRoleChange,
   applyReasoningRoleChange,
 } from './ModelDefaultsEditor.js';
-import type { ModelRole } from './ModelDefaultsEditor.js';
+import type { ModelRole, ReasoningRole } from './ModelDefaultsEditor.js';
 import { AgentSettingsPopover, type AgentSettingsVariant } from './AgentSettingsPopover.js';
 
 /**
@@ -59,7 +59,7 @@ export function AgentModelSettings({
   );
 
   const onReasoningChange = useCallback(
-    (role: ModelRole, value: DirectiveReasoningEffort | undefined) => {
+    (role: ReasoningRole, value: DirectiveReasoningEffort | undefined) => {
       edit((d): EntityDirectives => ({
         ...d,
         reasoningDefaults: applyReasoningRoleChange(d.reasoningDefaults, role, value),

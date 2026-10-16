@@ -51,7 +51,7 @@ export const PROVIDER_CATEGORY_DESCRIPTIONS: Record<ProviderCategory, string> = 
     'Optional. Backend for the coding lane (z.ai subscription or Anthropic key). Only needed by coding skills.',
   media: 'Optional. Dedicated image and video generation routes.',
   decision:
-    'Optional. Decision models that route, gate and score inside workflows with calibrated confidence.',
+    'Optional. Decision models that route, gate and score inside workflows. An OpenAI key under Agent Models also serves OpenAI’s decision model.',
   search: 'Optional. Web search and page fetch for skills that use them.',
   voice: 'Optional. Speech-to-text and text-to-speech for voice sessions.',
   email: 'Optional. Outbound email notifications.',
