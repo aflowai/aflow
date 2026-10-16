@@ -1,4 +1,9 @@
-import type { SessionId, TenantId } from '@aflow/schemas';
+import {
+  LiveDeltaTaskStepSchema,
+  type LiveDeltaTaskStep,
+  type SessionId,
+  type TenantId,
+} from '@aflow/schemas';
 import type { PubSubSubscriber, PubSubNotification } from './pubsub.js';
 
 /**
@@ -18,8 +23,24 @@ import type { PubSubSubscriber, PubSubNotification } from './pubsub.js';
  * the subscriber wakes its sessions on reconnect — so a timer that re-read the
  * stream twice a second per subscription would be paying, forever and per
  * connection, for a gap that no longer exists.
+ *
+ * A live-delta wake from a workflow run also names the task steps it is about
+ * (`taskSteps`), accumulated across coalesced wakes like `durable` is, because
+ * a reader that subscribed after a task started has no other way to learn its
+ * step. Absent when no wake named any.
  */
-export type WakeupSignal = 'abort' | { durable: boolean };
+export type WakeupSignal = 'abort' | { durable: boolean; taskSteps?: LiveDeltaTaskStep[] };
+
+/** The steps a notification names, keeping each one the schema accepts. */
+export function taskStepsOf(notification: PubSubNotification): LiveDeltaTaskStep[] {
+  if (notification.type !== 'event' || !Array.isArray(notification.taskSteps)) return [];
+  const steps: LiveDeltaTaskStep[] = [];
+  for (const entry of notification.taskSteps as unknown[]) {
+    const parsed = LiveDeltaTaskStepSchema.safeParse(entry);
+    if (parsed.success) steps.push(parsed.data);
+  }
+  return steps;
+}
 
 export interface SessionWakeup {
   /** Resolves on the next wakeup, or `'abort'` once the caller's signal fires. */
@@ -55,10 +76,13 @@ export async function subscribeSessionWakeup(opts: {
   // durable event coalesced behind a burst of live flushes is never missed.
   let wakeupPending = false;
   let durablePending = false;
+  // Keyed by step, so a burst of flushes from one task names it once.
+  const taskStepsPending = new Map<string, LiveDeltaTaskStep>();
   let resolveWakeup: (() => void) | null = null;
-  const wakeup = (durable: boolean) => {
+  const wakeup = (durable: boolean, taskSteps: readonly LiveDeltaTaskStep[] = []) => {
     wakeupPending = true;
     if (durable) durablePending = true;
+    for (const step of taskSteps) taskStepsPending.set(step.stepExecutionId, step);
     const r = resolveWakeup;
     resolveWakeup = null;
     if (r) r();
@@ -69,7 +93,13 @@ export async function subscribeSessionWakeup(opts: {
         wakeupPending = false;
         const durable = durablePending;
         durablePending = false;
-        resolve({ durable });
+        if (taskStepsPending.size === 0) {
+          resolve({ durable });
+          return;
+        }
+        const taskSteps = [...taskStepsPending.values()];
+        taskStepsPending.clear();
+        resolve({ durable, taskSteps });
       };
       if (wakeupPending) {
         drain();
@@ -103,7 +133,7 @@ export async function subscribeSessionWakeup(opts: {
   if (pubsubSubscriber) {
     try {
       subscription = await pubsubSubscriber.subscribeToRun(tenantId, sessionId, (notification) => {
-        wakeup(isDurableNotification(notification));
+        wakeup(isDurableNotification(notification), taskStepsOf(notification));
       });
     } catch (err) {
       unsubscribeReconnect?.();

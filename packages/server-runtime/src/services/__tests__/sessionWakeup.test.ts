@@ -93,6 +93,40 @@ describe('session wakeup', () => {
     controller.abort();
   });
 
+  it('hands over the task steps a run wake names, gathered across coalesced wakes', async () => {
+    const { subscriber, publish } = fakeSubscriber();
+    const controller = new AbortController();
+    const wakeup = await subscribeSessionWakeup({
+      pubsubSubscriber: subscriber,
+      tenantId: TENANT,
+      sessionId: SESSION,
+      signal: controller.signal,
+    });
+
+    const step = (id: string) => ({ runId: 'run-1', taskId: `task-${id}`, stepExecutionId: id });
+    publish({
+      type: 'event',
+      runId: SESSION,
+      eventType: 'LiveDelta:activity',
+      taskSteps: [step('a')],
+    } as PubSubNotification);
+    publish({
+      type: 'event',
+      runId: SESSION,
+      eventType: 'LiveDelta:activity',
+      // A malformed entry is dropped; the well-formed ones still arrive.
+      taskSteps: [step('a'), step('b'), { runId: 'run-1' }],
+    } as PubSubNotification);
+
+    expect(await wakeup.next()).toEqual({ durable: false, taskSteps: [step('a'), step('b')] });
+
+    publish({ type: 'event', runId: SESSION, eventType: 'LiveDelta:text' } as PubSubNotification);
+    expect(await wakeup.next()).toEqual({ durable: false });
+
+    await wakeup.close();
+    controller.abort();
+  });
+
   it('treats a durable event notification as a durable wake', async () => {
     const { subscriber, publish } = fakeSubscriber();
     const controller = new AbortController();

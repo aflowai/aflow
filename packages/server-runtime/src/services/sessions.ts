@@ -14,8 +14,10 @@ import {
   AgentDefinitionSchema,
   MAX_INLINE_DEFINITION_BYTES,
   projectTargetColumns,
+  SessionStatusSchema,
   StreamKeys,
 } from '@aflow/schemas';
+import type { Redis } from 'ioredis';
 import type {
   TenantId,
   SessionId,
@@ -811,6 +813,38 @@ function createMockSessionService(): SessionService {
 // Helpers
 // ============================================================================
 
+/**
+ * Each listed session's status as its hot state holds it, in one round trip.
+ *
+ * One field per session, read raw: a listing must never be the reader that
+ * quarantines a live session's hash over a parse it does not need. A session
+ * whose hash has gone — rested past its TTL, or flushed — is absent, and its
+ * projected row is the truth for it.
+ */
+export async function readHotSessionStatuses(
+  redis: Pick<Redis, 'pipeline'>,
+  tenantId: string,
+  sessionIds: readonly string[],
+): Promise<Map<string, SessionStatus>> {
+  const statuses = new Map<string, SessionStatus>();
+  if (sessionIds.length === 0) return statuses;
+  const pipeline = redis.pipeline();
+  for (const sessionId of sessionIds) {
+    pipeline.hget(StreamKeys.sessionStateKey(tenantId, sessionId), 'status');
+  }
+  let results: Array<[Error | null, unknown]> | null;
+  try {
+    results = await pipeline.exec();
+  } catch {
+    return statuses;
+  }
+  sessionIds.forEach((sessionId, i) => {
+    const parsed = SessionStatusSchema.safeParse(results?.[i]?.[1]);
+    if (parsed.success) statuses.set(sessionId, parsed.data);
+  });
+  return statuses;
+}
+
 async function hydrateRequestedInput(
   store: PayloadStore,
   ref: string,
@@ -1519,8 +1553,17 @@ function createRealSessionService(ctx: AppContext): SessionService {
         runs = filtered;
       }
 
+      const listed = runs.slice(0, query.limit);
+      const hotStatuses = redis
+        ? await readHotSessionStatuses(
+            redis,
+            query.tenantId,
+            listed.map((run) => run.sessionId),
+          )
+        : new Map<string, SessionStatus>();
+
       return {
-        sessions: runs.slice(0, query.limit).map((run) => ({
+        sessions: listed.map((run) => ({
           sessionId: run.sessionId as SessionId,
           target: projectTargetColumns({
             targetKind: run.targetKind,
@@ -1529,7 +1572,10 @@ function createRealSessionService(ctx: AppContext): SessionService {
             targetInlineDefRef: run.targetInlineDefRef,
           }),
           agentVersion: run.agentVersion,
-          status: run.status as SessionStatus,
+          // The hot state where it is still held: the row is its projection, a
+          // cycle behind, and a list that says whether a conversation is mid-turn
+          // should not be the one surface that is late to it.
+          status: hotStatuses.get(run.sessionId) ?? (run.status as SessionStatus),
           createdAt: run.startedAt.toISOString(),
           // The execution clock, which the projection advances on every step.
           // What a conversation list sorts on is `lastActivityAt`.

@@ -261,10 +261,13 @@ export async function aggregateMetricsBucket(
 
       // `entity.session.described` is a description OF activity, not activity:
       // counting it would make a space look busier the more the Clerk ran.
+      // `entity.session.status` likewise: the turn it reports is counted where
+      // the turn is.
       case 'entity.task.dispatched':
       case 'entity.task.completed':
       case 'entity.run.updated':
       case 'entity.session.described':
+      case 'entity.session.status':
         break;
 
       case 'entity.mode.transition': {

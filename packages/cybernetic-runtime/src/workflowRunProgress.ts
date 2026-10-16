@@ -10,6 +10,7 @@ import {
   type WorkflowTaskSurfaceUpdatePayload,
   type WorkflowRunTaskStatus,
   type LiveDeltaChannel,
+  type LiveDeltaTaskStep,
 } from '@aflow/schemas';
 import type { PayloadStore } from '@aflow/payload-store';
 import { appendSessionEvent, publishLiveDeltaWake, type SessionEvent } from '@aflow/redis';
@@ -145,11 +146,18 @@ export async function emitWorkflowProgress(
  * delta is a value superseded by its step's terminal event, and appending one
  * per flush would spend the session event stream's bounded capacity on text
  * that is never replayed. A step a workflow dispatched has no session of its
- * own, so this is the only way its buffer reaches a reader.
+ * own, so this is the only way its buffer reaches a reader — and the wake names
+ * the steps it is about, so a reader that joined after the task started still
+ * finds them.
  */
 export async function publishWorkflowLiveDeltaWake(
   deps: EmitWorkflowProgressDeps,
-  args: { tenantId: string; runId: string; channel: LiveDeltaChannel },
+  args: {
+    tenantId: string;
+    runId: string;
+    channel: LiveDeltaChannel;
+    taskSteps: readonly LiveDeltaTaskStep[];
+  },
 ): Promise<void> {
   const [waiters, originatingSessionId] = await Promise.all([
     loadPendingWaiters(deps.db, args.tenantId, args.runId),
@@ -157,7 +165,7 @@ export async function publishWorkflowLiveDeltaWake(
   ]);
   const targets = new Set(waiters.map((w) => w.waiterSessionId));
   if (originatingSessionId) targets.add(originatingSessionId);
-  await publishLiveDeltaWake(deps.redis, args.tenantId, [...targets], args.channel);
+  await publishLiveDeltaWake(deps.redis, args.tenantId, [...targets], args.channel, args.taskSteps);
 }
 
 /**

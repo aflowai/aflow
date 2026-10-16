@@ -5,6 +5,7 @@ import {
   type ApiSessionEvent,
   type LiveDeltaChannel,
   type LiveDeltaFrame,
+  type LiveDeltaTaskStep,
   type SessionId,
   type TenantId,
 } from '@aflow/schemas';
@@ -30,7 +31,9 @@ import { readLiveDeltaFrom } from '@aflow/redis';
  * run dispatched to an operation belongs to no session at all, so the session
  * parked on the run is the only reader its buffer has; the run records that
  * step in the task row's `workerSessionId`, which arrives here on the same
- * `WorkflowTaskUpdate` events the surface is built from.
+ * `WorkflowTaskUpdate` events the surface is built from — or, for a reader
+ * that subscribed after that update went out, on the run's live-delta wake,
+ * which names the steps it is about (`track`).
  */
 
 export type { LiveDeltaFrame };
@@ -70,6 +73,12 @@ function offsetKey(stepExecutionId: string, channel: LiveDeltaChannel): string {
 export interface LiveDeltaReader {
   /** Feed every drained durable event so the reader tracks step lifecycle. */
   observe(event: ApiSessionEvent): void;
+  /**
+   * Follow the run task steps a live-delta wake named. A step whose task this
+   * reader already saw end stays ended: a wake can arrive after the terminal
+   * update, and reading its buffer again would re-send a finished feed.
+   */
+  track(taskSteps: readonly LiveDeltaTaskStep[]): void;
   /** Read whatever the in-flight step has buffered since the last call. */
   read(signal: AbortSignal): Promise<LiveDeltaFrame[]>;
 }
@@ -91,6 +100,22 @@ export function createLiveDeltaReader(
     for (const channel of LIVE_CHANNELS) offsets.delete(offsetKey(stepExecutionId, channel));
   };
 
+  const markTerminated = (stepExecutionId: string): void => {
+    terminated.add(stepExecutionId);
+    if (terminated.size > TERMINATED_WINDOW) {
+      const oldest = terminated.values().next().value;
+      if (oldest !== undefined) terminated.delete(oldest);
+    }
+  };
+
+  const follow = (key: string, step: string): void => {
+    const held = taskSteps.get(key);
+    if (held !== undefined && held !== step) forget(held);
+    if (taskSteps.has(key) || taskSteps.size < MAX_TRACKED_TASK_STEPS) {
+      taskSteps.set(key, step);
+    }
+  };
+
   return {
     observe(event: ApiSessionEvent): void {
       const taskUpdate = event.data.workflowTaskUpdate;
@@ -105,14 +130,16 @@ export function createLiveDeltaReader(
           taskUpdate.taskType !== 'agent' &&
           taskUpdate.taskType !== 'human' &&
           !TERMINAL_TASK_STATUSES.has(taskUpdate.status);
-        if (held !== undefined && held !== step) forget(held);
         if (streams && step !== undefined) {
-          if (taskSteps.has(key) || taskSteps.size < MAX_TRACKED_TASK_STEPS) {
-            taskSteps.set(key, step);
-          }
+          terminated.delete(step);
+          follow(key, step);
         } else {
           taskSteps.delete(key);
           if (held !== undefined) forget(held);
+          if (TERMINAL_TASK_STATUSES.has(taskUpdate.status)) {
+            if (step !== undefined) markTerminated(step);
+            if (held !== undefined) markTerminated(held);
+          }
         }
         return;
       }
@@ -124,10 +151,13 @@ export function createLiveDeltaReader(
       // in `readLiveDeltaFrom` handles the buffer's DEL-and-reappend. Marking it
       // terminated here would drop the retried attempt's stream entirely.
       if (event.eventType === 'StepFailed' && event.metadata?.['willRetry'] === true) return;
-      terminated.add(stepExecutionId);
-      if (terminated.size > TERMINATED_WINDOW) {
-        const oldest = terminated.values().next().value;
-        if (oldest !== undefined) terminated.delete(oldest);
+      markTerminated(stepExecutionId);
+    },
+
+    track(named: readonly LiveDeltaTaskStep[]): void {
+      for (const { runId, taskId, stepExecutionId } of named) {
+        if (terminated.has(stepExecutionId)) continue;
+        follow(`${runId}\u0000${taskId}`, stepExecutionId);
       }
     },
 

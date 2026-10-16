@@ -41,6 +41,24 @@ export const LiveDeltaChannelSchema = z.enum(['text', 'thinking', 'activity']);
 export type LiveDeltaChannel = z.infer<typeof LiveDeltaChannelSchema>;
 
 /**
+ * The step a workflow run's wake is about, carried on the wake itself.
+ *
+ * A step a run dispatched belongs to no session, so a watcher learns which
+ * buffer to read from the run's `WorkflowTaskUpdate`. A watcher that subscribed
+ * after that update — a run view opened mid-task, which tails from the
+ * session's latest position — never sees it, and would read nothing for the
+ * whole of the task. Naming the step on the wake lets it start from the next
+ * flush. Identifiers only: the audience is resolved server-side from the run's
+ * watchers, and the bytes stay in the buffer.
+ */
+export const LiveDeltaTaskStepSchema = z.object({
+  runId: z.string().min(1),
+  taskId: z.string().min(1),
+  stepExecutionId: z.string().min(1),
+});
+export type LiveDeltaTaskStep = z.infer<typeof LiveDeltaTaskStepSchema>;
+
+/**
  * Redis stream key patterns.
  */
 export const StreamKeys = {

@@ -97,6 +97,13 @@ export const EntityEventTypeSchema = z.enum([
   // conversation list refreshes without every row holding a subscription of
   // its own. Payload carries { sessionId }; it is never an unread message.
   'entity.session.described',
+
+  // A conversation's session moved between statuses — a turn began, rested on
+  // the operator, or ended — and the move is now durable. Space-level for the
+  // same reason as `described`: the conversation list says which conversations
+  // are live without a subscription per row. Payload carries { sessionId,
+  // status }; it is a description of activity, not activity.
+  'entity.session.status',
 ]);
 
 export type EntityEventType = z.infer<typeof EntityEventTypeSchema>;

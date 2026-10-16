@@ -215,9 +215,10 @@ describe('EntityEventEnvelopeSchema', () => {
     expect(result.traceId).toBe('abc123def456');
   });
 
-  it('accepts all 50 event types (includes 102h + 104b + 104c + 104e + 104g + 111 + 163 + 170 + 183a/183b follow-up events, and the conversation descriptor)', () => {
+  it('accepts all 51 event types (includes 102h + 104b + 104c + 104e + 104g + 111 + 163 + 170 + 183a/183b follow-up events, the conversation descriptor and its status)', () => {
     const types = EntityEventTypeSchema.options;
-    expect(types.length).toBe(50);
+    expect(types.length).toBe(51);
+    expect(types).toContain('entity.session.status');
     expect(types).toContain('entity.schedule.armed');
     expect(types).toContain('entity.coach.withdrawn');
     expect(types).toContain('entity.eval.completed');

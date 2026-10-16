@@ -21,6 +21,11 @@ export interface RunEventNotification {
   eventId: string;
   eventType: string;
   timestamp: string;
+  /**
+   * The run task steps a live-delta wake is about. Parsed as JSON and never
+   * typed by that alone: a reader validates it against `LiveDeltaTaskStepSchema`.
+   */
+  taskSteps?: unknown;
 }
 
 export interface RunStatusNotification {

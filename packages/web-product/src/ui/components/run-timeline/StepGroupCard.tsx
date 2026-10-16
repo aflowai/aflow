@@ -9,8 +9,7 @@ import { useApi } from '../providers.js';
 
 import {
   HARNESS_RUN_OPERATION,
-  HarnessActivityCard,
-  useHarnessActivityLines,
+  HarnessStepCard,
   useHarnessName,
   useHarnessResult,
 } from '../harness-activity-card.js';
@@ -260,19 +259,18 @@ const HARNESS_RUNNING_STATUSES = new Set([
 ]);
 
 function HarnessStepActivity({ group }: { group: StepGroup }) {
-  const lines = useHarnessActivityLines(group.stepExecutionId);
   const running = HARNESS_RUNNING_STATUSES.has(group.status);
   const result = useHarnessResult(running ? undefined : group.outputRef);
   const harness = useHarnessName(group.inputRef);
 
   return (
     <div style={{ padding: '0 var(--space-3) var(--space-3)' }}>
-      <HarnessActivityCard
-        lines={lines}
+      <HarnessStepCard
+        stepExecutionId={group.stepExecutionId}
         running={running}
         result={result}
         harness={harness}
-        stepExecutionId={group.stepExecutionId}
+        startedAt={group.startedAt}
       />
     </div>
   );
