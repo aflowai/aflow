@@ -292,6 +292,10 @@ describe('a harness run under the folder’s posture', () => {
     const scratch = input?.scratchDir ?? '';
     expect(basename(dirname(scratch))).toBe(basename(dirname(input?.cwd ?? '')));
     expect(basename(scratch)).toBe(AGENT_SCRATCH_DIR);
+    // What a crash leaves is the scratch holding the checkout, so the journal
+    // takes the clone with its run rather than only the agent's part of it.
+    expect(input?.journalScratchDir).toBe(dirname(scratch));
+    expect(basename(dirname(input?.cwd ?? ''))).toBe(basename(input?.journalScratchDir ?? ''));
     expect(input?.env).toEqual({});
     expect(input?.trustedEnv).toMatchObject({
       SRT_DEBUG: '1',

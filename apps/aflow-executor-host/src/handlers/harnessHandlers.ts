@@ -809,6 +809,7 @@ async function runHarness(
           },
           timeoutMs: input.timeoutMs,
           scratchDir: agentScratch,
+          journalScratchDir: scratchDir,
           widening: {
             authPaths: profile.authPaths,
             writePaths: profile.writePaths,

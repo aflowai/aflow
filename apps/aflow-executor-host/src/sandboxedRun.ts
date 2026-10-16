@@ -408,6 +408,14 @@ export interface SandboxedRunInput extends SupervisedRun {
   readonly trustedEnv?: Record<string, string>;
   /** Where the compiled policy is written — outside the binding, always. */
   readonly scratchDir: string;
+  /**
+   * What the orphan journal removes if this executor dies during the run, where
+   * that is more than `scratchDir`: the scratch holding the run's checkout, of
+   * which `scratchDir` is the part the sandbox writes (`makeAgentScratch`). Only
+   * journalled — a run that ends removes `scratchDir` alone, and its caller
+   * still collects the checkout.
+   */
+  readonly journalScratchDir?: string;
   readonly widening?: SandboxWidening;
   /** Extra names the machine's own policy permits a workload to inherit. */
   readonly inheritEnv?: readonly string[];
@@ -439,6 +447,8 @@ interface SupervisedSpawn extends SupervisedRun {
    * that nothing hands the orphan sweep a path it must not delete.
    */
   readonly scratchDir?: string;
+  /** Journalled in place of `scratchDir` (`SandboxedRunInput.journalScratchDir`). */
+  readonly journalScratchDir?: string;
   /**
    * Where the wrapper around a confined command records the workload's own
    * status. Absent for the one command that runs unconfined: it has no launcher
@@ -704,7 +714,7 @@ async function superviseSpawn(input: SupervisedSpawn): Promise<SandboxedRunResul
   // Written down before anything else, so a crash between here and the next
   // line still leaves the group findable at the next startup.
   if (child.pid !== undefined && input.scratchDir !== undefined) {
-    recordSpawn(child.pid, input.scratchDir);
+    recordSpawn(child.pid, input.journalScratchDir ?? input.scratchDir);
   }
 
   if (input.closeStdin === true) child.stdin.end();

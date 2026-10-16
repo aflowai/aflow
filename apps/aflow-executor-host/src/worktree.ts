@@ -499,6 +499,28 @@ async function dependencyDirs(base: string): Promise<string[]> {
   return found;
 }
 
+/**
+ * The installations of the repository at `top` that a checkout of its folder at
+ * `prefix` carries, as paths from the top level: the union of every one the
+ * scan from the top level reaches and every one on the walk from the folder up
+ * to the top level, the folder's own included. The scan stops at
+ * `DEPENDENCY_SCAN_DEPTH`; the walk does not, so a folder three directories
+ * down or more still has its own installation and each above it.
+ */
+async function repositoryInstallations(top: string, prefix: string): Promise<string[]> {
+  const installations = new Set(await dependencyDirs(top));
+  const steps = prefix === '' ? [] : prefix.split(sep);
+  for (let depth = steps.length; depth >= 0; depth -= 1) {
+    const relative = join(...steps.slice(0, depth), DEPENDENCY_DIR);
+    if (installations.has(relative)) continue;
+    const info = await lstat(join(top, relative)).catch(() => undefined);
+    if (info?.isDirectory() === true || info?.isSymbolicLink() === true) {
+      installations.add(relative);
+    }
+  }
+  return [...installations];
+}
+
 interface MirrorContext {
   /**
    * The repository's top level, resolved, so containment is decided on real
@@ -592,11 +614,13 @@ async function mirrorInstallation(
  * lands on the folder's own directory, which the harness's policy withholds. So
  * a harness can run the tests and cannot corrupt what the operator installed.
  *
- * Every installation in the repository is linked, at the same place in the
- * clone, whichever folder of it is connected: resolution walks up from the
- * folder into the top level's installation, where a workspace hoists most of
- * what a package needs, and a workspace link leads into a sibling package,
- * whose own installation holds what was not hoisted.
+ * Every installation `repositoryInstallations` names is linked, at the same
+ * place in the clone, whichever folder of the repository is connected and
+ * however deep it lies: the folder's own and each on its way up to the top
+ * level, since resolution walks up from the folder into the top level's
+ * installation, where a workspace hoists most of what a package needs; and
+ * every other the scan from the top level reaches, since a workspace link leads
+ * into a sibling package, whose own installation holds what was not hoisted.
  */
 async function linkDependencies(top: string, checkout: Checkout): Promise<void> {
   let rootReal: string;
@@ -606,7 +630,8 @@ async function linkDependencies(top: string, checkout: Checkout): Promise<void> 
     rootReal = top;
   }
   const context: MirrorContext = { rootReal, worktreePath: checkout.path };
-  for (const relative of await dependencyDirs(top)) {
+  const prefix = relativePath(checkout.path, checkout.workDir);
+  for (const relative of await repositoryInstallations(top, prefix)) {
     const destination = join(checkout.path, relative);
     try {
       // Only where the checkout has the same place to put it, and has nothing
@@ -716,9 +741,10 @@ export async function folderPrefix(root: string): Promise<string> {
  * every one from (`clonePrivately`), resolved, whenever it lies outside the
  * folder: for a folder inside a repository, and for a top level whose store is
  * elsewhere too — a linked worktree, a submodule, a separate git directory.
- * And each installation in the repository outside the folder, which the
- * clone's mirrored links lead into (`linkDependencies`). Read from the folder,
- * never from the checkout, which the run writes.
+ * And each installation outside the folder of the same set the clone's
+ * mirrored links lead into (`repositoryInstallations`, `linkDependencies`), so
+ * those on the folder's way up are readable however deep the folder lies. Read
+ * from the folder, never from the checkout, which the run writes.
  */
 export async function borrowedReads(root: string): Promise<string[]> {
   const rootReal = await realpath(root).catch(() => root);
@@ -729,7 +755,7 @@ export async function borrowedReads(root: string): Promise<string[]> {
   const objectsReal = await realpath(objects).catch(() => objects);
   if (outsideRoot(objectsReal)) reads.push(objectsReal);
   const top = (await git(root, ['rev-parse', '--show-toplevel'])).trim();
-  for (const relative of await dependencyDirs(top)) {
+  for (const relative of await repositoryInstallations(top, await folderPrefix(root))) {
     const installation = join(top, relative);
     if (outsideRoot(installation)) reads.push(installation);
   }

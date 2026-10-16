@@ -16,6 +16,7 @@ import { promisify } from 'node:util';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { HostBindingSchema } from '../bindings.js';
 import { removeOrphanedCheckouts } from '../handlers/harnessHandlers.js';
 import {
   allSessions,
@@ -24,10 +25,12 @@ import {
   recordSession,
 } from '../harnessSessions.js';
 import { PUBLICATION_SCRATCH_PREFIX } from '../branchCommit.js';
-import { makeScratch } from '../executorScratch.js';
-import { openOrphanJournal, reapOrphans, recordSpawn } from '../orphans.js';
+import { makeAgentScratch, makeScratch } from '../executorScratch.js';
+import { openOrphanJournal, readJournal, reapOrphans, recordSpawn } from '../orphans.js';
+import { runSandboxed, sandboxAvailable } from '../sandboxedRun.js';
 import {
   checkApplies,
+  checkoutGitDir,
   collectChanges,
   fetchRemoteBase,
   isGitRepository,
@@ -36,6 +39,9 @@ import {
   resolveCommit,
   WorktreeError,
 } from '../worktree.js';
+import { CONFINEMENT_LISTENERS, requires } from './fixtures/capabilities.js';
+
+const confined = requires(...CONFINEMENT_LISTENERS);
 
 const run = promisify(execFile);
 
@@ -578,6 +584,53 @@ describe('checkouts a restart left behind', () => {
     expect(await git(repo, 'worktree', 'list', '--porcelain')).toBe(listed);
     expect((await git(repo, 'worktree', 'list', '--porcelain')).includes('prunable')).toBe(false);
   });
+
+  it.skipIf(!sandboxAvailable() || confined.skip)(
+    confined.title(
+      "journals a run handed `agent/` with the scratch holding its clone, so a crash's clone goes with it",
+    ),
+    { tags: ['listener'], timeout: 120_000 },
+    async () => {
+      const journal = openOrphanJournal(join(tempRoot, 'host'));
+      const runScratch = await makeScratch(HARNESS_SCRATCH_PREFIX, tempRoot);
+      const wt = await prepareWorktree(repo, runScratch, 'work');
+      const agentScratch = await makeAgentScratch(runScratch);
+      await runSandboxed({
+        binding: HostBindingSchema.parse({
+          id: 'hb',
+          root: repo,
+          mode: 'readwrite',
+          allowsExecution: true,
+        }),
+        argv: ['/bin/sh', '-c', 'sleep 60'],
+        cwd: wt.path,
+        env: {},
+        timeoutMs: 60_000,
+        scratchDir: agentScratch,
+        journalScratchDir: runScratch,
+        widening: {
+          authPaths: [],
+          allowedDomains: [],
+          writableRoot: wt.path,
+          withholdBindingWrite: true,
+        },
+        idPrefix: 'jr',
+        ownerRunId: 'crashed',
+        detach: true,
+        signal: new AbortController().signal,
+        onDelta: () => undefined,
+      });
+
+      // The executor dies here: what the next boot reads is the journal.
+      expect(readJournal(journal).map((record) => record.scratchDir)).toEqual([runScratch]);
+      expect(reapOrphans(journal)).toBe(1);
+
+      expect(await exists(runScratch)).toBe(false);
+      expect(await exists(wt.path)).toBe(false);
+      expect(await exists(checkoutGitDir(wt.path))).toBe(false);
+      expect(await git(repo, 'status', '--porcelain')).toBe('');
+    },
+  );
 
   it('reports nothing when nothing was left behind', async () => {
     expect(await removeOrphanedCheckouts(tempRoot)).toEqual({ checkouts: 0, scratchDirs: 0 });

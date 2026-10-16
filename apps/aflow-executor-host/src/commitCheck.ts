@@ -243,6 +243,7 @@ export async function runFolderChecks(input: FolderCheckInput): Promise<FolderCh
       },
       timeoutMs: input.timeoutMs,
       scratchDir: agentScratch,
+      journalScratchDir: scratch,
       // No host named: a check in a `confined` folder reaches none, and one
       // in an `open` folder reaches every host without being told.
       widening: {

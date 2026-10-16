@@ -102,6 +102,17 @@ describe('a folder connected inside a repository under a denied home', () => {
     expect(await borrowedReads(top)).toEqual([]);
   });
 
+  it('borrows each installation on the way up from a folder below the scan’s depth', async () => {
+    const deep = join(top, 'packages', 'group', 'pkg', 'lib');
+    await mkdir(deep, { recursive: true });
+    await mkdir(join(top, 'packages', 'group', 'pkg', 'node_modules'), { recursive: true });
+    expect(await borrowedReads(deep)).toEqual([
+      join(top, '.git', 'objects'),
+      join(top, 'node_modules'),
+      join(top, 'packages', 'group', 'pkg', 'node_modules'),
+    ]);
+  });
+
   it.skipIf(!sandboxAvailable() || confined.skip)(
     confined.title('reads its history and resolves a hoisted package inside the run'),
     { tags: ['listener'], timeout: 120_000 },

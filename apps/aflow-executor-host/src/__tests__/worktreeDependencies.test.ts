@@ -171,6 +171,33 @@ describe('dependencies in the isolated checkout', () => {
     expect(await readdir(join(sibling, 'node_modules'))).toEqual(['only-b']);
   });
 
+  it('resolves the folder’s own dependency inside the clone, for a folder three levels down', async () => {
+    // Below the depth the scan from the top level reaches: the walk up from
+    // the folder is what finds its installation.
+    const folder = join(repo, 'packages', 'group', 'pkg');
+    await mkdir(folder, { recursive: true });
+    await writeFile(join(folder, 'index.js'), 'module.exports = require("only-pkg");\n');
+    await git(repo, 'add', '-A');
+    await git(repo, 'commit', '-m', 'nested package');
+    await mkdir(join(folder, 'node_modules', 'only-pkg'), { recursive: true });
+    await writeFile(join(folder, 'node_modules', 'only-pkg', 'index.js'), 'module.exports = 1;\n');
+
+    const wt = await prepareWorktree(folder, scratch, 'work');
+    const repoReal = await realpath(repo);
+
+    const fromFolder = createRequire(join(wt.workDir, 'index.js'));
+    expect(await realpath(fromFolder.resolve('only-pkg'))).toBe(
+      join(repoReal, 'packages', 'group', 'pkg', 'node_modules', 'only-pkg', 'index.js'),
+    );
+    expect(await realpath(fromFolder.resolve('left-pad'))).toBe(
+      join(repoReal, 'node_modules', 'left-pad', 'index.js'),
+    );
+    expect(await collectChanges(wt)).toEqual({ patch: '', filesChanged: 0, overCeiling: false });
+
+    await removeWorktree(wt.path);
+    expect(await readdir(join(folder, 'node_modules'))).toEqual(['only-pkg']);
+  });
+
   it('shows a workspace package as committed, not as the operator is editing it', async () => {
     // The promise the isolated checkout makes. Resolved through one link to the
     // installation, this read returned the operator's uncommitted line.
