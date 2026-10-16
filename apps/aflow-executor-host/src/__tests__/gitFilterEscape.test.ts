@@ -20,7 +20,7 @@ import { promisify } from 'node:util';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { collectChanges, prepareWorktree, removeWorktree } from '../worktree.js';
+import { checkApplies, collectChanges, prepareWorktree, removeWorktree } from '../worktree.js';
 
 const run = promisify(execFile);
 
@@ -88,11 +88,48 @@ describe('a filter the repository selects', () => {
 
     const worktree = await prepareWorktree(repo, scratch, 'run-filter');
     await writeFile(join(worktree.path, 'b.txt'), 'added by the harness\n');
-    await collectChanges(worktree.path);
+    await collectChanges(worktree);
     await removeWorktree(worktree.path);
 
     // `worktree add` checked out every file and `git add -A` staged them. If
     // the filter had been reachable it would have run several times over.
     expect(existsSync(evidence)).toBe(false);
+  }, 30_000);
+
+  it("does not run when the checkout's .git is rewritten to a repository defining it", async () => {
+    // Committing the fixture under the operator's config ran theirs already.
+    await rm(evidence, { force: true });
+
+    // What a confined agent can leave (checkoutGitDir.test.ts plants it from
+    // inside the sandbox): a repository of its own defining a filter, a git
+    // directory whose `commondir` names it, the checkout's gitfile pointed
+    // there, and `.gitattributes` selecting the filter.
+    const worktree = await prepareWorktree(repo, scratch, 'run-gitfile');
+    const agent = join(base, 'agent');
+    const moved = join(base, 'moved');
+    await git(base, 'init', '-q', agent);
+    await git(agent, 'config', 'filter.agent.clean', join(base, 'evil-filter.sh'));
+    await mkdir(moved, { recursive: true });
+    await writeFile(join(moved, 'HEAD'), 'ref: refs/heads/main\n');
+    await writeFile(join(moved, 'commondir'), `${join(agent, '.git')}\n`);
+    await writeFile(join(worktree.path, '.git'), `gitdir: ${moved}\n`);
+    await writeFile(join(worktree.path, '.gitattributes'), '* filter=agent\n');
+    await writeFile(join(worktree.path, 'b.txt'), 'added by the harness\n');
+
+    const changes = await collectChanges(worktree);
+    // Against the clone's own index: through the agent's, whose index is empty,
+    // a.txt would read as an addition too.
+    expect(changes.filesChanged).toBe(2);
+    expect(changes.patch).not.toContain('b/a.txt');
+    expect((await checkApplies(worktree, changes.patch, worktree.baseSha)).state).toBe('clean');
+    expect(existsSync(evidence)).toBe(false);
+
+    // The plant is real: git resolving the checkout through its `.git`, with
+    // no global or system config, runs it.
+    await run('git', ['-C', worktree.path, '-c', 'core.hooksPath=/dev/null', 'add', '-A'], {
+      env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' },
+    });
+    expect(existsSync(evidence)).toBe(true);
+    await removeWorktree(worktree.path);
   }, 30_000);
 });

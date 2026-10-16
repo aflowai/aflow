@@ -24,7 +24,7 @@ const MINUTES = 60_000;
 
 const COMMISSION_CHANGE: SkillCatalogEntry = {
   catalogId: 'commission-change',
-  version: 3,
+  version: 4,
   name: 'Commission Change',
   tagline:
     "Have the machine's own coding agent make a change in a connected repository, and get the change back as a patch.",

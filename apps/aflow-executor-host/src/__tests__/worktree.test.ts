@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -84,8 +84,8 @@ describe('worktree per run', () => {
     await writeFile(join(a.path, 'app.txt'), 'from A\n');
     await writeFile(join(b.path, 'app.txt'), 'from B\n');
 
-    const changesA = await collectChanges(a.path);
-    const changesB = await collectChanges(b.path);
+    const changesA = await collectChanges(a);
+    const changesB = await collectChanges(b);
     expect(changesA.patch).toContain('from A');
     expect(changesA.patch).not.toContain('from B');
     expect(changesB.patch).toContain('from B');
@@ -98,7 +98,7 @@ describe('worktree per run', () => {
     const wt = await prepareWorktree(repo, scratch, 'work');
     await writeFile(join(wt.path, 'brand-new.ts'), 'export const x = 1;\n');
 
-    const changes = await collectChanges(wt.path);
+    const changes = await collectChanges(wt);
     expect(changes.filesChanged).toBe(1);
     expect(changes.patch).toContain('brand-new.ts');
     expect(changes.patch).toContain('export const x = 1;');
@@ -123,7 +123,7 @@ describe('worktree per run', () => {
     ]) {
       expect(wt.baseSha).toBe(stored);
       expect(await readFile(join(wt.path, 'app.txt'), 'utf8')).toBe('stored\n');
-      expect((await collectChanges(wt.path)).filesChanged).toBe(0);
+      expect((await collectChanges(wt)).filesChanged).toBe(0);
       await removeWorktree(wt.path);
     }
   });
@@ -134,7 +134,7 @@ describe('worktree per run', () => {
     await writeFile(join(wt.path, '.aflow', 'change.patch'), 'a copy of the work\n');
     await writeFile(join(wt.path, 'app.txt'), 'edited\n');
 
-    const changes = await collectChanges(wt.path);
+    const changes = await collectChanges(wt);
     expect(changes.filesChanged).toBe(1);
     expect(changes.patch).toContain('app.txt');
     expect(changes.patch).not.toContain('.aflow');
@@ -150,14 +150,14 @@ describe('worktree per run', () => {
     const wt = await prepareWorktree(repo, scratch, 'work');
     await writeFile(join(wt.path, '.aflow', 'notes.md'), 'rewritten by the agent\n');
 
-    const changes = await collectChanges(wt.path);
+    const changes = await collectChanges(wt);
     expect(changes).toEqual({ patch: '', filesChanged: 0, overCeiling: false });
     await removeWorktree(wt.path);
   });
 
   it('reports no change as no change, not as an empty diff of something', async () => {
     const wt = await prepareWorktree(repo, scratch, 'work');
-    const changes = await collectChanges(wt.path);
+    const changes = await collectChanges(wt);
     expect(changes).toEqual({ patch: '', filesChanged: 0, overCeiling: false });
     await removeWorktree(wt.path);
   });
@@ -167,7 +167,7 @@ describe('worktree per run', () => {
     // from the worktree regardless of how the process ended.
     const wt = await prepareWorktree(repo, scratch, 'work');
     await writeFile(join(wt.path, 'app.txt'), 'half-finished\n');
-    const changes = await collectChanges(wt.path);
+    const changes = await collectChanges(wt);
     expect(changes.filesChanged).toBe(1);
     await removeWorktree(wt.path);
   });
@@ -314,17 +314,20 @@ describe("a run's checkout is a clone whose refs are its own", () => {
   it('reads every ref as the folder names it, borrows its objects, and names it as no remote', async () => {
     const wt = await prepareWorktree(repo, scratch, 'work', { dependencies: 'none' });
     expect(await refsOf(wt.path)).toBe(await refsOf(repo));
+    // Its git directory sits beside it, and the checkout holds only a gitfile.
+    expect(wt.gitDir).toBe(join(scratch, 'git-work'));
+    expect(await readFile(join(wt.path, '.git'), 'utf8')).toBe(`gitdir: ${wt.gitDir}\n`);
     expect((await git(wt.path, 'rev-parse', '--absolute-git-dir')).trim()).toBe(
-      (await git(wt.path, 'rev-parse', '--show-toplevel')).trim() + '/.git',
+      await realpath(wt.gitDir),
     );
-    expect((await git(wt.path, 'rev-parse', '--git-common-dir')).trim()).toBe('.git');
-    expect(
-      await readFile(join(wt.path, '.git', 'objects', 'info', 'alternates'), 'utf8'),
-    ).toContain(join(basename(repo), '.git', 'objects'));
+    expect(await readFile(join(wt.gitDir, 'objects', 'info', 'alternates'), 'utf8')).toContain(
+      join(basename(repo), '.git', 'objects'),
+    );
     expect((await git(wt.path, 'remote')).trim()).toBe('');
     expect((await git(wt.path, 'rev-parse', 'HEAD')).trim()).toBe(wt.baseSha);
-    expect(await readFile(join(wt.path, '.git', 'HEAD'), 'utf8')).toBe(`${wt.baseSha}\n`);
+    expect(await readFile(join(wt.gitDir, 'HEAD'), 'utf8')).toBe(`${wt.baseSha}\n`);
     await removeWorktree(wt.path);
+    await expect(stat(wt.gitDir)).rejects.toThrow();
   });
 
   it("moves only the clone's refs, whatever git the run uses, with no hook anywhere", async () => {
@@ -383,7 +386,7 @@ describe('whether a diff made from a named base applies', () => {
     const at = await resolveCommit(repo, 'feat/fix');
     const wt = await prepareWorktree(repo, scratch, 'work', { at });
     await writeFile(join(wt.path, 'app.txt'), 'fixed on the branch\n');
-    const { patch } = await collectChanges(wt.path);
+    const { patch } = await collectChanges(wt);
     await removeWorktree(wt.path);
 
     expect((await checkApplies(repo, patch)).state).toBe('conflict');

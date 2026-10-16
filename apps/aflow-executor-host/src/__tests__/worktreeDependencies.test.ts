@@ -143,7 +143,7 @@ describe('dependencies in the isolated checkout', () => {
       expect(await realpath(join(wt.path, 'node_modules', '@acme', 'a'))).toBe(
         join(await realpath(wt.path), 'packages', 'a'),
       );
-      expect(await collectChanges(wt.path)).toEqual({
+      expect(await collectChanges(wt)).toEqual({
         patch: '',
         filesChanged: 0,
         overCeiling: false,
@@ -158,7 +158,7 @@ describe('dependencies in the isolated checkout', () => {
 
   it('reports nothing changed, because a link is this lane doing rather than the harness', async () => {
     const wt = await prepareWorktree(repo, scratch, 'work');
-    const changes = await collectChanges(wt.path);
+    const changes = await collectChanges(wt);
     expect(changes).toEqual({ patch: '', filesChanged: 0, overCeiling: false });
     // Not merely absent from the diff: absent from what git was asked to stage.
     expect(await git(wt.path, 'diff', '--cached', '--name-only')).toBe('');
@@ -168,7 +168,7 @@ describe('dependencies in the isolated checkout', () => {
   it('still reports the work the harness did, beside the links', async () => {
     const wt = await prepareWorktree(repo, scratch, 'work');
     await writeFile(join(wt.path, 'app.txt'), 'harness rewrote this\n');
-    const changes = await collectChanges(wt.path);
+    const changes = await collectChanges(wt);
     expect(changes.filesChanged).toBe(1);
     expect(changes.patch).toContain('harness rewrote this');
     expect(changes.patch).not.toContain('node_modules');
@@ -195,7 +195,7 @@ describe('dependencies in the isolated checkout', () => {
 
     const wt = await prepareWorktree(repo, scratch, 'work');
     await expect(lstat(join(wt.path, 'node_modules'))).rejects.toThrow();
-    expect(await collectChanges(wt.path)).toEqual({
+    expect(await collectChanges(wt)).toEqual({
       patch: '',
       filesChanged: 0,
       overCeiling: false,

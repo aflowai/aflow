@@ -104,6 +104,7 @@ import { createChatterStripper } from '../egressRefusals.js';
 import { createHarnessEventReader } from '../harnessEvents.js';
 import {
   checkApplies,
+  checkoutAt,
   collectChanges,
   currentHead,
   DIFF_CEILING_BYTES,
@@ -116,9 +117,11 @@ import {
   RUN_SCRATCH_DIR,
   utf8Prefix,
   WorktreeError,
+  type PreparedWorktree,
 } from '../worktree.js';
 import { PUBLICATION_SCRATCH_PREFIX } from '../branchCommit.js';
 import { CHECK_SCRATCH_PREFIX } from '../commitCheck.js';
+import { commissionGitReadiness, noCommissionGitMessage } from '../gitReadiness.js';
 import { browserFailure, jobScopeOf } from './browserHandler.js';
 
 /**
@@ -551,6 +554,13 @@ async function runHarness(
     if (!readiness.ready) {
       return await failureWithError(ctx, permissionError(noSandboxMessage(readiness.missing)));
     }
+    const gitReadiness = await commissionGitReadiness();
+    if (!gitReadiness.ready) {
+      return await failureWithError(
+        ctx,
+        permissionError(noCommissionGitMessage(gitReadiness.missing)),
+      );
+    }
 
     // An abandoned session holds a checkout on disk, so expiry is collected
     // here rather than on a timer — the work is bounded by what is expired, and
@@ -646,10 +656,10 @@ async function runHarness(
     // is judged against that base as well.
     const base = namedRef ?? session?.base;
 
-    let worktree: { path: string; baseSha: string };
+    let worktree: PreparedWorktree;
     if (session !== undefined && namedBase === undefined) {
       scratch = session.scratchDir;
-      worktree = { path: session.worktreePath, baseSha: session.baseSha };
+      worktree = { ...checkoutAt(session.worktreePath), baseSha: session.baseSha };
       keepScratch = true;
     } else if (session !== undefined && namedBase !== undefined) {
       // The conversation continues in a fresh checkout at the named base: the
@@ -689,7 +699,7 @@ async function runHarness(
     const keptCheckout = session !== undefined && namedBase === undefined;
     let merge: BaseMerge | undefined = keptCheckout ? session?.merge : undefined;
     if (mergeSource !== undefined && mergeIdentity !== undefined) {
-      merge = await mergeIntoCheckout(worktree.path, mergeSource, mergeIdentity);
+      merge = await mergeIntoCheckout(worktree, mergeSource, mergeIdentity);
       if (merge !== undefined && session !== undefined) {
         session = { ...session, merge };
         recordSession(session);
@@ -798,6 +808,7 @@ async function runHarness(
             writePaths: profile.writePaths,
             allowedDomains: profile.allowedDomains,
             writableRoot: worktree.path,
+            gitDir: worktree.gitDir,
             withholdBindingWrite: true,
           },
           idPrefix: 'hr',
@@ -919,7 +930,7 @@ async function runHarness(
     };
     let collectFailure: string | undefined;
     try {
-      changes = await collectChanges(worktree.path);
+      changes = await collectChanges(worktree);
     } catch (error) {
       collectFailure = error instanceof Error ? error.message : String(error);
     }
@@ -970,8 +981,10 @@ async function runHarness(
           : await resolveCommit(binding.root, base).catch(() => worktree.baseSha);
     // A commit is judged through an index of its own, in the clone: the merge
     // commit exists only there, and the clone reads every object the folder has.
+    // Reached through the git directory this lane made, never the checkout's
+    // `.git`, which the harness could have pointed at a repository of its own.
     const applies = await checkApplies(
-      judgedAt === undefined ? binding.root : worktree.path,
+      judgedAt === undefined ? binding.root : worktree,
       changes.patch,
       judgedAt,
     );
@@ -1143,17 +1156,21 @@ export async function removeOrphanedCheckouts(
   return { checkouts, scratchDirs };
 }
 
-/** The checkouts in a scratch directory, or nothing when one of them is not this lane's. */
+/**
+ * The checkouts in a scratch directory, or nothing when one of them is not this
+ * lane's: one is a working tree whose `.git` is a file, beside the git directory
+ * this lane names for it, detached.
+ */
 async function clonesIn(scratchDir: string): Promise<string[] | undefined> {
   const found: string[] = [];
   for (const entry of await readdir(scratchDir).catch(() => [] as string[])) {
-    const checkout = join(scratchDir, entry);
-    const gitDir = await stat(join(checkout, '.git')).catch(() => undefined);
-    if (gitDir === undefined) continue;
-    if (!gitDir.isDirectory()) return undefined;
-    const head = await readFile(join(checkout, '.git', 'HEAD'), 'utf8').catch(() => 'ref:');
+    const checkout = checkoutAt(join(scratchDir, entry));
+    const gitfile = await stat(join(checkout.path, '.git')).catch(() => undefined);
+    if (gitfile === undefined) continue;
+    if (!gitfile.isFile()) return undefined;
+    const head = await readFile(join(checkout.gitDir, 'HEAD'), 'utf8').catch(() => 'ref:');
     if (head.startsWith('ref:')) return undefined;
-    found.push(checkout);
+    found.push(checkout.path);
   }
   return found;
 }

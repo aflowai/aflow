@@ -55,6 +55,25 @@ describe('what a repository exposes to a confined command', () => {
     expect(policy.filesystem.denyWrite).toContain('/Users/probe/projects/demo/**/.git/config');
   });
 
+  it("reads a checkout's git directory in the writable scratch and never writes it", () => {
+    // Its config is what the executor's own git reads when it stages the run.
+    const gitDir = '/tmp/aflow-host/git-work';
+    const policy = compileSandboxPolicy(binding, {
+      home: HOME,
+      scratchDir: '/tmp/aflow-host',
+      widening: {
+        authPaths: [],
+        allowedDomains: [],
+        writableRoot: '/tmp/aflow-host/work',
+        gitDir,
+        withholdBindingWrite: true,
+      },
+    });
+    expect(policy.filesystem.allowRead).toContain(gitDir);
+    expect(policy.filesystem.allowWrite).toContain('/tmp/aflow-host');
+    expect(policy.filesystem.denyWrite).toContain(gitDir);
+  });
+
   it('still refuses a read-only binding any write at all', () => {
     expect(compile({ mode: 'read' }).filesystem.allowWrite).not.toContain(binding.root);
   });

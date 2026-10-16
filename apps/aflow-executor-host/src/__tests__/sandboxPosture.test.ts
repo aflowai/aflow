@@ -82,6 +82,7 @@ const {
 const actual = await vi.importActual<typeof import('../sandboxedRun.js')>('../sandboxedRun.js');
 const { compileSandboxPolicy, FORBIDDEN_SANDBOX_OPTIONS } = await import('../sandboxPolicy.js');
 const { workloadTemp } = await import('../baseEnv.js');
+const { checkoutGitDir } = await import('../worktree.js');
 const { MACHINE_LOOPBACK_REACH, runOpenPostureSelfTest } =
   await import('../openPostureSelfTest.js');
 
@@ -292,12 +293,14 @@ describe('a harness run under the folder’s posture', () => {
       AGENT_CONFIG_DIR: expect.stringContaining('harness-config'),
       GIT_NO_REPLACE_OBJECTS: '1',
     });
-    // No hook is handed to the agent's git: its checkout's refs are its own.
+    // No hook is handed to the agent's git: the checkout's git directory is
+    // beside it, readable and never written.
     expect(
       Object.keys(input?.trustedEnv ?? {}).filter((key) => key.startsWith('GIT_CONFIG')),
     ).toEqual([]);
     expect(input?.widening).toMatchObject({
       writableRoot: input?.cwd,
+      gitDir: checkoutGitDir(input?.cwd ?? ''),
       withholdBindingWrite: true,
     });
   });

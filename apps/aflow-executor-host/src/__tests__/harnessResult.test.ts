@@ -555,20 +555,21 @@ describe.runIf(sandboxReadiness().ready)('a commission starts from a named ref',
       expect(await vcs('rev-parse', 'feat/reviewed')).toBe(feature);
       expect(output).not.toHaveProperty('refChanges');
 
-      // Where the run's git landed: a repository of its own under the run's
-      // scratch, given no hooks path and no config through the environment,
-      // naming no remote, whose own refs took every move.
+      // Where the run's git landed: the clone's git directory beside the
+      // checkout in the run's scratch, given no hooks path and no config through
+      // the environment, naming no remote — and written by none of it, so its
+      // refs are the folder's as the clone copied them.
       const patch = String(output['patch']);
       expect(patch).toContain('+changed');
       const gitDir = /^\+(\/.*)$/m.exec(patch.slice(patch.indexOf('+++ b/clone.txt')))?.[1];
-      expect(gitDir).toMatch(/\/work\/\.git$/);
+      expect(gitDir).toMatch(/\/git-work$/);
       expect(gitDir).not.toBe(join(repo, '.git'));
       expect(patch).toContain('+config-env=none\n');
       expect(patch).toContain('+no-hooks-path\n');
       expect(patch).toContain('+0\n');
-      expect(patch).toContain('+refs/heads/pushed\n');
-      expect(patch).toContain('+refs/tags/planted\n');
-      expect(patch).not.toContain('+refs/heads/other\n');
+      expect(patch).toContain('+refs/heads/other\n');
+      expect(patch).not.toContain('+refs/heads/pushed\n');
+      expect(patch).not.toContain('+refs/tags/planted\n');
 
       const published: Record<string, unknown> = {};
       const publication = await createHostPatchHandler(policyPath).execute({

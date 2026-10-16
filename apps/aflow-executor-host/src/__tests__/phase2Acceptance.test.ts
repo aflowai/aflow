@@ -76,7 +76,7 @@ describe('Phase 2 acceptance', () => {
         writeFile(join(a.path, 'a.txt'), 'A rewrote this\n'),
         writeFile(join(b.path, 'b.txt'), 'B rewrote this\n'),
       ]);
-      const [ca, cb] = await Promise.all([collectChanges(a.path), collectChanges(b.path)]);
+      const [ca, cb] = await Promise.all([collectChanges(a), collectChanges(b)]);
 
       expect(ca.patch).toContain('A rewrote this');
       expect(ca.patch).not.toContain('B rewrote this');
@@ -97,7 +97,7 @@ describe('Phase 2 acceptance', () => {
       await writeFile(join(repo, 'a.txt'), 'MY EDIT\n');
       const wt = await prepareWorktree(repo, scratch, 'run');
       await writeFile(join(wt.path, 'a.txt'), 'harness edit\n');
-      await collectChanges(wt.path);
+      await collectChanges(wt);
       await removeWorktree(wt.path);
       expect(await readFile(join(repo, 'a.txt'), 'utf8')).toBe('MY EDIT\n');
     },
@@ -115,7 +115,7 @@ describe('Phase 2 acceptance', () => {
 
       await removeWorktree(a.path);
 
-      const cb = await collectChanges(b.path);
+      const cb = await collectChanges(b);
       expect(cb.patch).toContain('B kept working');
       expect(await exists(a.path)).toBe(false);
       expect(await exists(join(b.path, 'a.txt'))).toBe(true);
@@ -130,7 +130,7 @@ describe('Phase 2 acceptance', () => {
       // "collect partial work"
       const wt = await prepareWorktree(repo, scratch, 'run');
       await writeFile(join(wt.path, 'a.txt'), 'one\nEDITED\nthree\n');
-      const changes = await collectChanges(wt.path);
+      const changes = await collectChanges(wt);
       expect(changes.filesChanged).toBe(1);
       expect(changes.patch).toContain('EDITED');
       await removeWorktree(wt.path);
@@ -144,7 +144,7 @@ describe('Phase 2 acceptance', () => {
       // "detect an apply conflict"
       const wt = await prepareWorktree(repo, scratch, 'run');
       await writeFile(join(wt.path, 'a.txt'), 'one\nHARNESS\nthree\n');
-      const changes = await collectChanges(wt.path);
+      const changes = await collectChanges(wt);
 
       // The operator moves the same lines while the run was going.
       await writeFile(join(repo, 'a.txt'), 'one\nOPERATOR\nthree\n');
@@ -165,7 +165,7 @@ describe('Phase 2 acceptance', () => {
       // A moved HEAD is not a conflict; only overlapping edits are.
       const wt = await prepareWorktree(repo, scratch, 'run');
       await writeFile(join(wt.path, 'a.txt'), 'one\nHARNESS\nthree\n');
-      const changes = await collectChanges(wt.path);
+      const changes = await collectChanges(wt);
 
       await writeFile(join(repo, 'b.txt'), 'operator touched another file\n');
       await git(repo, 'commit', '-am', 'unrelated edit');

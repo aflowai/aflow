@@ -29,6 +29,7 @@ import {
 
 import type { SandboxedRunInput, SandboxedRunResult } from '../sandboxedRun.js';
 import { compileSandboxPolicy } from '../sandboxPolicy.js';
+import { checkoutGitDir } from '../worktree.js';
 import { CONFINEMENT_LISTENERS, requires } from './fixtures/capabilities.js';
 
 const confined = requires(...CONFINEMENT_LISTENERS);
@@ -296,6 +297,7 @@ describe('host.commit.check — a passing check', () => {
       authPaths: [],
       allowedDomains: [],
       writableRoot: input?.cwd,
+      gitDir: checkoutGitDir(input?.cwd ?? ''),
       withholdBindingWrite: true,
     });
     expect(input?.trustedEnv).toMatchObject({

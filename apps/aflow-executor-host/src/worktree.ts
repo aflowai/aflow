@@ -11,12 +11,14 @@
  * The checkout is a private clone of the folder, detached at the binding's
  * current HEAD or at the commit a caller named (Plan 315 F56). It borrows the
  * folder's objects and copies its refs, and shares neither its refs nor its
- * config: whatever git a run starts in it — `update-ref`, `branch -D`, a
- * hooks-path override, a push to `.` — moves the clone's refs and nobody
- * else's. Nothing is pushed; deciding what becomes of the diff is a separate
- * act, and the most a decision reaches from here is a branch of its own or one
- * commit appended to the branch the diff was made on, which the executor's own
- * git fetches from its clone into the folder (`branchCommit.ts`).
+ * config. Its git directory sits beside the checkout where the sandbox cannot
+ * write, so whatever git a run starts in it — `update-ref`, `branch -D`, a
+ * hooks-path override, a push to `.` or to the folder — moves no ref at all,
+ * the clone's or the folder's. Nothing is pushed; deciding what becomes of the
+ * diff is a separate act, and the most a decision reaches from here is a branch
+ * of its own or one commit appended to the branch the diff was made on, which
+ * the executor's own git fetches from its clone into the folder
+ * (`branchCommit.ts`).
  *
  * It carries only what the repository tracks, so the operator's installed
  * dependencies are linked into it: without them a harness asked to run the
@@ -38,7 +40,14 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, relative as relativePath, resolve as resolvePath, sep } from 'node:path';
+import {
+  basename,
+  dirname,
+  join,
+  relative as relativePath,
+  resolve as resolvePath,
+  sep,
+} from 'node:path';
 import { promisify } from 'node:util';
 
 const run = promisify(execFile);
@@ -124,8 +133,13 @@ export class WorktreeError extends Error {
  * Naming filters to disable does not work: the set is whatever the operator has
  * configured. Removing where they are defined does. System config is already
  * off; global is pointed at nothing; what remains is the repository's own
- * `.git/config` — a run's clone starts with one that defines none — which this
- * lane refuses to let anything write.
+ * config. A run's clone starts with one that defines none, in a git directory
+ * kept beside the checkout rather than in it (`checkoutGitDir`), which the
+ * sandbox reads and never writes. The checkout holds only a gitfile naming
+ * that directory, and the coding agent can rewrite the gitfile, or put a
+ * `.git` directory of its own with a `commondir` in its place — which moves
+ * nothing but the agent's own git. So the executor's git never resolves a
+ * checkout through what it holds: it names the directory itself (`Checkout`).
  */
 const GIT_SAFETY_ARGS = [
   '-c',
@@ -171,13 +185,54 @@ function gitEnv(globalConfig: 'withheld' | 'read' = 'withheld'): Record<string, 
   return env;
 }
 
+/** What `git --version` on the executor's own PATH says, or nothing when git is absent. */
+export async function gitVersionText(timeoutMs: number): Promise<string | undefined> {
+  try {
+    const { stdout } = await run('git', ['--version'], { timeout: timeoutMs, env: gitEnv() });
+    return stdout;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A run's checkout as the executor's git reaches it: the working tree, and the
+ * git directory this lane made for it, named outright. The `.git` in the
+ * working tree is the coding agent's to rewrite, so it is never what resolves
+ * the repository for a git run outside the sandbox.
+ */
+export interface Checkout {
+  readonly path: string;
+  readonly gitDir: string;
+}
+
+/**
+ * Where a checkout's git directory lives: beside it in the run's scratch, so
+ * outside the root the sandbox grants writes to, and denied to the sandbox by
+ * name (`SandboxWidening.gitDir`) since the scratch around it is writable.
+ */
+export function checkoutGitDir(worktreePath: string): string {
+  return join(dirname(worktreePath), `git-${basename(worktreePath)}`);
+}
+
+/** The checkout at `worktreePath`, with the git directory this lane made for it. */
+export function checkoutAt(worktreePath: string): Checkout {
+  return { path: worktreePath, gitDir: checkoutGitDir(worktreePath) };
+}
+
+/** Where git runs: a folder by its path, a checkout by its own git directory. */
+function gitLocation(at: string | Checkout): string[] {
+  if (typeof at === 'string') return ['-C', at];
+  return ['-C', at.path, `--git-dir=${at.gitDir}`, `--work-tree=${at.path}`];
+}
+
 export async function git(
-  cwd: string,
+  cwd: string | Checkout,
   args: string[],
   maxBuffer = 1024 * 1024,
   env: Record<string, string> = {},
 ): Promise<string> {
-  const { stdout } = await run('git', ['-C', cwd, ...GIT_SAFETY_ARGS, ...args], {
+  const { stdout } = await run('git', [...gitLocation(cwd), ...GIT_SAFETY_ARGS, ...args], {
     timeout: GIT_TIMEOUT_MS,
     maxBuffer,
     env: { ...gitEnv(), ...env },
@@ -559,7 +614,7 @@ async function unlinkDependencies(worktreePath: string): Promise<void> {
   }
 }
 
-export interface PreparedWorktree {
+export interface PreparedWorktree extends Checkout {
   /** Absolute path the harness runs in. */
   readonly path: string;
   /** Commit the run started from, so the diff has a stated base. */
@@ -759,7 +814,7 @@ export async function remotePushUrls(root: string, remote: string): Promise<stri
 
 /** Whether `ancestor` is `descendant` or a commit under it. */
 export async function isAncestor(
-  root: string,
+  root: string | Checkout,
   ancestor: string,
   descendant: string,
 ): Promise<boolean> {
@@ -807,18 +862,19 @@ export async function prepareWorktree(
     }
   }
 
-  const path = join(scratchDir, runKey);
+  const checkout = checkoutAt(join(scratchDir, runKey));
   try {
-    await clonePrivately(root, path, baseSha);
+    await clonePrivately(root, checkout, baseSha);
   } catch (error) {
-    await rm(path, { recursive: true, force: true }).catch(() => {});
+    await rm(checkout.path, { recursive: true, force: true }).catch(() => {});
+    await rm(checkout.gitDir, { recursive: true, force: true }).catch(() => {});
     throw new WorktreeError(
       `Could not create a checkout for this run: ${error instanceof Error ? error.message : String(error)}`,
       'git_failed',
     );
   }
-  if ((options.dependencies ?? 'linked') === 'linked') await linkDependencies(root, path);
-  return { path, baseSha };
+  if ((options.dependencies ?? 'linked') === 'linked') await linkDependencies(root, checkout.path);
+  return { ...checkout, baseSha };
 }
 
 /**
@@ -833,16 +889,19 @@ export async function prepareWorktree(
  * mirror's remote is removed so no `git push` or `git fetch` in the clone names
  * the folder by default.
  *
- * Mirrored as a bare repository into `<path>/.git` and then given a working
- * tree, because `--mirror` is bare-only; `--force` checks out over the index
- * the bare clone never had.
+ * Mirrored as a bare repository into the checkout's git directory, beside the
+ * checkout rather than in it, and then given a working tree whose `.git` is a
+ * gitfile naming that directory — what `clone --separate-git-dir` makes, which
+ * git refuses alongside `--mirror` since a mirror is bare. `--force` checks out
+ * over the index the bare clone never had.
  */
-async function clonePrivately(root: string, path: string, baseSha: string): Promise<void> {
-  const gitDir = join(path, '.git');
-  await git(root, ['clone', '--quiet', '--mirror', '--shared', '--', root, gitDir]);
-  await git(gitDir, ['config', 'core.bare', 'false']);
-  await git(gitDir, ['config', '--remove-section', 'remote.origin']);
-  await git(path, ['checkout', '--quiet', '--force', '--detach', baseSha]);
+async function clonePrivately(root: string, checkout: Checkout, baseSha: string): Promise<void> {
+  await git(root, ['clone', '--quiet', '--mirror', '--shared', '--', root, checkout.gitDir]);
+  await git(checkout.gitDir, ['config', 'core.bare', 'false']);
+  await git(checkout.gitDir, ['config', '--remove-section', 'remote.origin']);
+  await mkdir(checkout.path, { recursive: true });
+  await writeFile(join(checkout.path, '.git'), `gitdir: ${checkout.gitDir}\n`, 'utf8');
+  await git(checkout, ['checkout', '--quiet', '--force', '--detach', baseSha]);
 }
 
 export interface WorktreeChanges {
@@ -868,7 +927,8 @@ export const RUN_SCRATCH_DIR = '.aflow';
  * that adds a file has changed the tree, and a diff that silently omitted new
  * files would be the most misleading possible answer.
  */
-export async function collectChanges(worktreePath: string): Promise<WorktreeChanges> {
+export async function collectChanges(checkout: Checkout): Promise<WorktreeChanges> {
+  const worktreePath = checkout.path;
   // The mirrored installations are this lane's own doing, not the harness's
   // work, and git sees a directory of untracked symlinks that `add -A` would
   // stage. They cannot be removed instead: a session keeps its checkout across
@@ -885,7 +945,7 @@ export async function collectChanges(worktreePath: string): Promise<WorktreeChan
     'utf8',
   );
   try {
-    await git(worktreePath, ['-c', `core.excludesFile=${excludes}`, 'add', '-A', '--', '.']);
+    await git(checkout, ['-c', `core.excludesFile=${excludes}`, 'add', '-A', '--', '.']);
   } catch (error) {
     throw new WorktreeError(
       `Could not read what the harness changed: ${error instanceof Error ? error.message.split('\n')[0] : 'git failed'}`,
@@ -898,7 +958,7 @@ export async function collectChanges(worktreePath: string): Promise<WorktreeChan
   // repository that tracks something under the directory still has its edits
   // staged, so the diff leaves the directory out by pathspec as well.
   const pathspec = ['--', '.', `:(exclude,top)${RUN_SCRATCH_DIR}`];
-  const nameOnly = await git(worktreePath, ['diff', '--cached', '--name-only', ...pathspec]);
+  const nameOnly = await git(checkout, ['diff', '--cached', '--name-only', ...pathspec]);
   const filesChanged = nameOnly.split('\n').filter((line) => line.length > 0).length;
   if (filesChanged === 0) {
     return { patch: '', filesChanged: 0, overCeiling: false };
@@ -910,7 +970,7 @@ export async function collectChanges(worktreePath: string): Promise<WorktreeChan
     // operator's own git config names and git runs here — outside the sandbox
     // the harness was confined to. The diff is wanted verbatim in any case.
     const patch = await git(
-      worktreePath,
+      checkout,
       ['diff', '--cached', '--no-textconv', '--no-ext-diff', ...pathspec],
       DIFF_CEILING_BYTES,
     );
@@ -930,13 +990,14 @@ export async function collectChanges(worktreePath: string): Promise<WorktreeChan
 
 /**
  * Remove the run's clone. Nothing of it is registered in the folder, so the
- * directory is the whole of it. Failure here is never allowed to fail the run —
- * the work is already collected, and a leftover directory is a housekeeping
- * problem rather than a reason to discard a result.
+ * checkout and its git directory are the whole of it. Failure here is never
+ * allowed to fail the run — the work is already collected, and a leftover
+ * directory is a housekeeping problem rather than a reason to discard a result.
  */
 export async function removeWorktree(worktreePath: string): Promise<void> {
   await unlinkDependencies(worktreePath);
   await rm(worktreePath, { recursive: true, force: true }).catch(() => {});
+  await rm(checkoutGitDir(worktreePath), { recursive: true, force: true }).catch(() => {});
 }
 
 /**
@@ -958,7 +1019,7 @@ export type ApplyCheck =
   | { readonly state: 'empty' };
 
 export async function checkApplies(
-  root: string,
+  root: string | Checkout,
   patch: string,
   against?: string,
 ): Promise<ApplyCheck> {
@@ -1080,7 +1141,7 @@ export interface ApplyOutcome {
  * files it could not settle are named rather than left to be discovered.
  */
 export async function applyPatch(
-  root: string,
+  root: string | Checkout,
   patch: string,
   mode: 'clean' | 'merge',
 ): Promise<ApplyOutcome> {

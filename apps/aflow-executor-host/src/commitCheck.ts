@@ -242,6 +242,7 @@ export async function runFolderChecks(input: FolderCheckInput): Promise<FolderCh
         authPaths: [],
         allowedDomains: [],
         writableRoot: worktree.path,
+        gitDir: worktree.gitDir,
         withholdBindingWrite: true,
       },
       toolPaths: input.toolPaths,

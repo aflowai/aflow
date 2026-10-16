@@ -28,6 +28,7 @@ import {
   resolveCommit,
   WorktreeError,
   type ApplyOutcome,
+  type Checkout,
   type PreparedWorktree,
 } from './worktree.js';
 
@@ -197,7 +198,7 @@ async function mergeSource(
   return await reachMergeSource(root, mergeFrom, target.at);
 }
 
-async function recordedMessage(root: string, sha: string): Promise<string> {
+async function recordedMessage(root: string | Checkout, sha: string): Promise<string> {
   const message = await git(root, ['show', '-s', '--format=%B', sha], APPLY_OUTPUT_CAP_BYTES);
   return message.replace(/\n+$/, '');
 }
@@ -210,7 +211,7 @@ export function messageBody(message: string): string | undefined {
 }
 
 async function commitStaged(
-  checkout: string,
+  checkout: Checkout,
   identity: readonly string[],
   messagePath: string,
   amend: boolean,
@@ -285,18 +286,18 @@ export async function commitPatchOnBranch(
     });
     let merge: BaseMerge | undefined;
     if (mergeFrom !== undefined) {
-      merge = await mergeIntoCheckout(worktree.path, mergeFrom, await commitIdentityArgs(root));
+      merge = await mergeIntoCheckout(worktree, mergeFrom, await commitIdentityArgs(root));
     }
 
     const apply: ApplyOutcome =
       merge !== undefined && patch.trim() === ''
         ? { state: 'applied', conflicts: [] }
-        : await applyPatch(worktree.path, patch, mode);
+        : await applyPatch(worktree, patch, mode);
     if (apply.state === 'conflict')
       return { apply: merge === undefined ? apply : filesNamedIn(apply) };
 
-    await git(worktree.path, ['add', '-A', '--', '.'], APPLY_OUTPUT_CAP_BYTES);
-    const staged = (await git(worktree.path, ['diff', '--cached', '--name-only', '-z']))
+    await git(worktree, ['add', '-A', '--', '.'], APPLY_OUTPUT_CAP_BYTES);
+    const staged = (await git(worktree, ['diff', '--cached', '--name-only', '-z']))
       .split('\0')
       .filter((path) => path !== '');
     // With a merge the merge commit is itself the change, so a patch that adds
@@ -309,7 +310,7 @@ export async function commitPatchOnBranch(
       );
     }
     if (merge !== undefined) {
-      const undecided = await undecidedConflicts(worktree.path, merge.conflicts);
+      const undecided = await undecidedConflicts(worktree, merge.conflicts);
       if (undecided.length > 0) {
         const named = undecided.map(({ path, kind }) => `\`${path}\` (${kind} conflict)`);
         throw new WorktreeError(
@@ -324,19 +325,14 @@ export async function commitPatchOnBranch(
 
     const messagePath = join(scratch, 'commit-message');
     await writeFile(messagePath, message, 'utf8');
-    await commitStaged(
-      worktree.path,
-      await commitIdentityArgs(root),
-      messagePath,
-      merge !== undefined,
-    );
+    await commitStaged(worktree, await commitIdentityArgs(root), messagePath, merge !== undefined);
 
-    const sha = (await git(worktree.path, ['rev-parse', 'HEAD'])).trim();
+    const sha = (await git(worktree, ['rev-parse', 'HEAD'])).trim();
     // Read back rather than echoed: git's cleanup trims what it was handed, and
     // the approval shows the commit as it will be pushed.
-    const recorded = await recordedMessage(worktree.path, sha);
+    const recorded = await recordedMessage(worktree, sha);
     const body = messageBody(recorded);
-    await fetchFromClone(root, worktree.path, sha);
+    await fetchFromClone(root, worktree, sha);
     try {
       // Compare-and-swap on the old head: a branch that moved between the check
       // above and this line is refused here rather than overwritten.
@@ -381,7 +377,7 @@ export async function commitPatchOnBranch(
  * compare-and-swap on its old head rather than by fetch's fast-forward rule,
  * and the FETCH_HEAD another fetch is about to read is never overwritten.
  */
-async function fetchFromClone(root: string, clone: string, sha: string): Promise<void> {
+async function fetchFromClone(root: string, clone: Checkout, sha: string): Promise<void> {
   try {
     await git(root, [
       'fetch',
@@ -389,7 +385,7 @@ async function fetchFromClone(root: string, clone: string, sha: string): Promise
       '--no-tags',
       '--no-write-fetch-head',
       '--end-of-options',
-      clone,
+      clone.gitDir,
       sha,
     ]);
   } catch (error) {

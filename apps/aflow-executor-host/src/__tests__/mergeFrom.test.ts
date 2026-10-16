@@ -415,7 +415,7 @@ describe('a commission refuses a merge no turn could finish', () => {
     });
     try {
       const refused = await mergeIntoCheckout(
-        checkout.path,
+        checkout,
         mainHead,
         await commitIdentityArgs(project),
       ).catch((error: unknown) => error);
@@ -532,7 +532,7 @@ async function mergedTree(at: string, from: string): Promise<string> {
   const scratch = await mkdtemp(join(tmpdir(), 'aflow-merge-tree-'));
   const checkout = await prepareWorktree(project, scratch, 'merge', { dependencies: 'none', at });
   try {
-    await mergeIntoCheckout(checkout.path, from, await commitIdentityArgs(project));
+    await mergeIntoCheckout(checkout, from, await commitIdentityArgs(project));
     return await head(checkout.path, 'HEAD^{tree}');
   } finally {
     await removeWorktree(checkout.path);
@@ -877,7 +877,7 @@ describe('the same two parents merge to the same tree', () => {
       });
       try {
         const merge = await mergeIntoCheckout(
-          checkout.path,
+          checkout,
           mainHead,
           await commitIdentityArgs(project),
         );
@@ -921,7 +921,7 @@ describe('the same two parents merge to the same tree', () => {
       });
       try {
         const merge = await mergeIntoCheckout(
-          checkout.path,
+          checkout,
           mainHead,
           await commitIdentityArgs(project),
         );

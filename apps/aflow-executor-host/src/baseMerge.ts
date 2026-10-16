@@ -21,6 +21,7 @@ import {
   isPlainRefName,
   remoteNames,
   WorktreeError,
+  type Checkout,
 } from './worktree.js';
 
 /**
@@ -176,7 +177,7 @@ export async function mergeIdentityArgs(root: string): Promise<string[]> {
  * Every unmerged path with the stages git left for it: 1 the common ancestor's
  * version, 2 the checkout's, 3 the merged commit's.
  */
-async function unmergedStages(checkout: string): Promise<Map<string, Set<number>>> {
+async function unmergedStages(checkout: Checkout): Promise<Map<string, Set<number>>> {
   const listing = await git(checkout, ['ls-files', '-u', '-z'], APPLY_OUTPUT_CAP_BYTES);
   const stages = new Map<string, Set<number>>();
   for (const record of listing.split('\0')) {
@@ -212,7 +213,10 @@ function conflictsOf(stages: ReadonlyMap<string, ReadonlySet<number>>): MergeCon
  * its text to resolve. A path one side deleted is not asked: whatever its
  * bytes, resolving it is keeping or deleting it.
  */
-async function binaryConflicts(checkout: string, conflicts: readonly string[]): Promise<string[]> {
+async function binaryConflicts(
+  checkout: Checkout,
+  conflicts: readonly string[],
+): Promise<string[]> {
   const binary = new Set<string>();
   // Between the two sides, since the conflicted working tree's own diff says nothing.
   const numstat = await git(
@@ -259,7 +263,7 @@ async function binaryConflicts(checkout: string, conflicts: readonly string[]): 
  * hold is refused, since no turn could resolve it.
  */
 export async function mergeIntoCheckout(
-  checkout: string,
+  checkout: Checkout,
   from: string,
   identity: readonly string[],
 ): Promise<BaseMerge | undefined> {
@@ -333,7 +337,7 @@ export async function mergeIntoCheckout(
  * in one is refused before it is committed, by `mergeIntoCheckout`.
  */
 async function filesWithConflictMarkers(
-  checkout: string,
+  checkout: Checkout,
   paths: readonly string[],
 ): Promise<string[]> {
   if (paths.length === 0) return [];
@@ -379,7 +383,7 @@ async function filesWithConflictMarkers(
  * so accepts the deletion, and one that brings it back keeps the file.
  */
 export async function undecidedConflicts(
-  checkout: string,
+  checkout: Checkout,
   conflicts: readonly MergeConflict[],
 ): Promise<MergeConflict[]> {
   const markable = conflicts.filter(({ kind }) => kind === 'content' || kind === 'add-add');

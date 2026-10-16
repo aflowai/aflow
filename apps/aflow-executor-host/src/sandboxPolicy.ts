@@ -121,6 +121,13 @@ export interface SandboxWidening {
    */
   readonly writableRoot?: string;
   /**
+   * The writable root's git directory, kept outside it in the job's scratch.
+   * Read, so the job's own git works, and never written: its config is what
+   * the executor's git reads when it stages and judges the job's work, outside
+   * this boundary, and the scratch around it is writable.
+   */
+  readonly gitDir?: string;
+  /**
    * Withhold the binding's own write grant even when it has one. A coding
    * harness works in its worktree and never needs the connected folder, so a
    * repository connected as writable — which git requires, to record the
@@ -177,6 +184,7 @@ export function compileSandboxPolicy(
   const scratch = options.scratchDir ? [options.scratchDir] : [];
   const widening = options.widening;
   const writableRoot = widening?.writableRoot ? [widening.writableRoot] : [];
+  const gitDir = widening?.gitDir ? [widening.gitDir] : [];
   // The host directory holds the policy every gate reads — push approval, the
   // checks, the posture itself — and pairing's credential. Nothing a job is
   // granted reaches into it, under either posture, whatever a profile or the
@@ -205,6 +213,7 @@ export function compileSandboxPolicy(
         binding.root,
         ...scratch,
         ...writableRoot,
+        ...gitDir,
         ...toolchainReadPaths(home),
         ...(options.toolPaths ?? []),
         ...(widening?.authPaths ?? []),
@@ -241,6 +250,7 @@ export function compileSandboxPolicy(
         ...writableRoot.flatMap((r) => repositoryExecutableSurfaces(r)),
         ...repositoryConfigUnder(binding.root),
         ...writableRoot.flatMap((r) => repositoryConfigUnder(r)),
+        ...gitDir,
       ],
     },
   };
