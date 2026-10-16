@@ -23,13 +23,18 @@ import {
   type WorkflowTask,
   WorkflowRunStartInputSchema,
   WorkflowRunWakeupEnvelopeSchema,
+  HostCommitDescribeInputSchema,
+  HostCommitDescribeOutputSchema,
   HostFilePatchInputSchema,
   HostFilePatchOutputSchema,
   isEvalPlaneOperation,
   MAX_PARENT_INPUTS_SERIALIZED_BYTES,
   PAUSE_INSTRUCTION_MAX_CHARS,
+  PullRequestFindingsSchema,
+  PullRequestGapsSchema,
   RUN_PULL_REQUEST_URL_OUTPUT,
   substituteTemplateBinds,
+  toJsonSchemaSync,
 } from '@aflow/schemas';
 import { PUBLISH_LOCAL_CHANGES } from './publishLocalChanges.js';
 import { REVIEW_LOCAL_CHANGES } from './reviewLocalChanges.js';
@@ -79,6 +84,12 @@ function taskOrThrow(taskId: string) {
   return task;
 }
 
+function runInputOrThrow(id: string) {
+  const input = (wf.runInputs ?? []).find((i) => i.id === id);
+  if (!input) throw new Error(`run input "${id}" must exist`);
+  return input;
+}
+
 /** Every command argv any task hands to a shell, after substitution. */
 function materializedCommands(): string[][] {
   const commands: string[][] = [];
@@ -122,7 +133,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(validity.status).toBe('valid');
   });
 
-  it('is eleven tasks — commit, check and its one rerun, scan, what decides the approval, approve, push, find or open the pull request', () => {
+  it('is thirteen tasks — commit, check and its one rerun, scan, what decides the approval, the pull request composed, approve, push, find and rewrite or open the pull request', () => {
     expect(wf.tasks.map((t) => t.taskId)).toEqual([
       'commit',
       'check-commit',
@@ -131,9 +142,11 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       'read-repository',
       'read-push-approval',
       'review-commit',
+      'describe-pr',
       'approve-push',
       'push',
       'find-pr',
+      'update-pr',
       'open-pr',
     ]);
     expect(wf.tasks.map((t) => t.type)).toEqual([
@@ -144,7 +157,9 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       'operation',
       'operation',
       'operation',
+      'operation',
       'human',
+      'operation',
       'operation',
       'operation',
       'operation',
@@ -157,11 +172,15 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       ['commit'],
       ['commit', 'scan-commit'],
       ['read-push-approval', 'scan-commit'],
+      ['commit', 'check-commit', 'recheck-commit', 'scan-commit', 'review-commit'],
       ['read-repository', 'scan-commit', 'review-commit'],
-      ['approve-push', 'scan-commit', 'check-commit', 'recheck-commit'],
+      ['approve-push', 'scan-commit', 'check-commit', 'recheck-commit', 'describe-pr'],
       ['push'],
-      ['find-pr'],
+      ['find-pr', 'describe-pr'],
+      ['find-pr', 'describe-pr'],
     ]);
+    expect(taskOrThrow('describe-pr').operation).toBe('host.commit.describe');
+    expect(taskOrThrow('update-pr').operation).toBe('api.http.call');
     expect(taskOrThrow('commit').operation).toBe('host.file.patch');
     expect(taskOrThrow('check-commit').operation).toBe('host.commit.check');
     expect(taskOrThrow('recheck-commit').operation).toBe('host.commit.check');
@@ -573,7 +592,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
           title: { $bind: 'title' },
           head: { $bind: 'branch' },
           base: { $bind: 'base' },
-          body: { $firstOf: [{ $bind: 'summary' }, { $bind: 'messageBody' }] },
+          body: { $bind: 'body' },
           draft: false,
         },
       },
@@ -584,9 +603,11 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     // — it would throw at dispatch on every run. The space's GitHub binding
     // resolves the call instead, which is what the capability hint asks the
     // operator to create.
-    for (const task of [findPr, openPr]) {
+    for (const task of [findPr, openPr, taskOrThrow('update-pr')]) {
       const kinds = Object.values(task.inputBindings ?? {}).map((b) => b.kind);
       expect(kinds, task.taskId).not.toContain('connection_binding');
+    }
+    for (const task of [findPr, openPr]) {
       expect(task.promoteOutputs?.map((p) => ('toState' in p ? p.toState : ''))).toEqual([
         'prUrl',
         'prNumber',
@@ -596,6 +617,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       'getRepository',
       'listPullRequests',
       'createPullRequest',
+      'updatePullRequest',
     ]);
     expect(wf.output?.primary).toBe('prUrl');
   });
@@ -642,43 +664,38 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(findPr.failureInstruction).toContain('The push went through');
   });
 
-  it("opens the pull request with the summary as its body, or the commit message's body without one", () => {
-    const openPr = taskOrThrow('open-pr');
-    const template = openPr.inputTemplate;
-    if (template === undefined) throw new Error('open-pr must carry a template');
-    expect(openPr.inputBindings?.['messageBody']).toEqual({
+  it('opens and rewrites the pull request only with the text composed from the whole range', () => {
+    const describe = taskOrThrow('describe-pr');
+    expect(describe.inputBindings?.['range']).toEqual({
       kind: 'task_output',
       taskId: 'commit',
-      path: 'commit.body',
+      path: 'commit.pushRange',
     });
-    const declared = new Set(Object.keys(openPr.inputBindings ?? {}));
-    const inputs = { owner: 'aflowai', repo: 'aflow', branch: 'aflow/x', base: 'main', title: 'T' };
-    const bodyOf = (resolved: Record<string, unknown>) =>
-      (
-        substituteTemplateBinds(template, { ...inputs, ...resolved }, declared)['params'] as {
-          body: Record<string, unknown>;
-        }
-      ).body;
-
-    // The commission's own account, as the commit task reports it.
-    const commit = HostFilePatchOutputSchema.parse({
-      state: 'applied',
-      filesChanged: 1,
-      files: ['a.ts'],
-      conflicts: [],
-      commit: { ...COMMIT, message: 'The change\n\nWhy it was made.', body: 'Why it was made.' },
-    }).commit;
-    const outputs = new Map([['commit', commit === undefined ? {} : { commit }]]);
-    const messageBody = readOutput(outputs, 'commit', 'commit.body');
-    expect(messageBody).toBe('Why it was made.');
-
-    expect(bodyOf({ messageBody })['body']).toBe('Why it was made.');
-    expect(bodyOf({ summary: 'The summary.', messageBody })['body']).toBe('The summary.');
-    // A one-line message and no summary: no body at all, never an empty one.
-    expect(bodyOf({})).not.toHaveProperty('body');
-    expect(PUBLISH_LOCAL_CHANGES.description).toContain(
-      "omitted, the pull request's body is the commit message after its first line — the commission's own account of the change",
-    );
+    const composed = { kind: 'task_output', taskId: 'describe-pr' };
+    expect(taskOrThrow('open-pr').inputBindings).toMatchObject({
+      title: { ...composed, path: 'title' },
+      body: { ...composed, path: 'body' },
+    });
+    expect(taskOrThrow('update-pr').inputBindings).toMatchObject({
+      body: { ...composed, path: 'body' },
+      prNumber: { kind: 'task_output', taskId: 'find-pr', path: 'prNumber' },
+    });
+    // What a brief passes reaches GitHub only through the composition, which
+    // reads it for secrets with the rest — the title of an existing pull
+    // request apart, rewritten only where a person passed one.
+    const briefInputs = new Set(['summary', 'findings', 'gaps']);
+    for (const taskId of ['find-pr', 'update-pr', 'open-pr']) {
+      const fromBrief = Object.values(taskOrThrow(taskId).inputBindings ?? {}).filter(
+        (b) => b.kind === 'run_input' && briefInputs.has(b.path),
+      );
+      expect(fromBrief, taskId).toEqual([]);
+    }
+    expect(taskOrThrow('update-pr').inputBindings?.['title']).toEqual({
+      kind: 'run_input',
+      path: 'title',
+    });
+    expect(runInputOrThrow('title').required).toBe(false);
+    expect(runInputOrThrow('summary').required).toBe(false);
   });
 
   it('can be passed every run input it declares', () => {
@@ -694,7 +711,8 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(unreachable).toEqual([]);
     const required = (wf.runInputs ?? []).filter((i) => i.required).map((i) => i.id);
     // The commit message is a change's: a branch published as it stands keeps its head's.
-    expect(required).toEqual(['bindingId', 'branch', 'title', 'owner', 'repo', 'base']);
+    // The pull request's title is the slice's unless a person gives their own.
+    expect(required).toEqual(['bindingId', 'branch', 'owner', 'repo', 'base']);
   });
 
   it('references no eval-plane operation', () => {
@@ -902,6 +920,12 @@ interface Scenario {
   approvalOf?: string;
   /** The base of the pull request the branch already has open when the push lands, where it has one. */
   existingPrInto?: string;
+  /** The commit as `host.file.patch` reports it, where not `COMMIT`. */
+  commit?: Record<string, unknown>;
+  /** Run inputs beside the ones every publication is started with. */
+  inputs?: Record<string, unknown>;
+  /** The composed text holds what looks like a secret, so the composition is refused. */
+  describeRefused?: boolean;
 }
 
 interface Outcome {
@@ -915,6 +939,23 @@ interface Outcome {
   /** How each task ended, and what each that succeeded recorded. */
   statuses: Map<string, string>;
   outputs: Map<string, Record<string, unknown>>;
+}
+
+/** The subject of the branch's first commit: the slice's title. */
+const SLICE_TITLE = 'The slice';
+
+/**
+ * What `host.commit.describe` returns, standing in for the composition the
+ * host executor's own tests prove: the title given or the slice's, and a body
+ * naming the range it was composed from, so a test can tell whose it is.
+ */
+function describedPullRequest(input: Record<string, unknown>): Record<string, unknown> {
+  const { title, summary, range } = input;
+  return HostCommitDescribeOutputSchema.parse({
+    title: typeof title === 'string' ? title : SLICE_TITLE,
+    body: typeof summary === 'string' ? summary : `Composed from \`${String(range)}\`.`,
+    commits: [{ sha: HEAD, subject: SLICE_TITLE }],
+  });
 }
 
 /**
@@ -944,7 +985,7 @@ function rawOutput(
             filesChanged: 1,
             files: ['a.ts'],
             conflicts: [],
-            commit: COMMIT,
+            commit: scenario.commit ?? COMMIT,
           };
     case 'check-commit':
       return checkResult(scenario.check ?? 'passed');
@@ -985,6 +1026,15 @@ function rawOutput(
       return {
         statusCode: 200,
         data: open ? [{ number: 5, html_url: 'https://github.com/aflowai/aflow/pull/5' }] : [],
+      };
+    }
+    case 'describe-pr':
+      return scenario.describeRefused === true ? {} : describedPullRequest(input);
+    case 'update-pr': {
+      const { pull_number: number } = input['params'] as { pull_number?: unknown };
+      return {
+        statusCode: 200,
+        data: { number, html_url: `https://github.com/aflowai/aflow/pull/${String(number)}` },
       };
     }
     case 'open-pr':
@@ -1104,7 +1154,10 @@ function publish(scenario: Scenario): Outcome {
   const grants = new Set<string>();
   const ran: string[] = [];
   const inputs = new Map<string, Record<string, unknown>>();
-  const runInputs = scenario.asItStands === true ? AS_IT_STANDS_INPUTS : RUN_INPUTS;
+  const runInputs = {
+    ...(scenario.asItStands === true ? AS_IT_STANDS_INPUTS : RUN_INPUTS),
+    ...scenario.inputs,
+  };
   let asked = false;
 
   for (let round = 0; round < tasks.length + 1; round += 1) {
@@ -1334,13 +1387,18 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
       const projected = projectTaskOutput(review.outputProjection, reviewEnding(outcome), null);
       expect(projected).toEqual({
         ok: true,
-        value: { verdict: null, outcome, reviewRunId: 'review-run' },
+        value: { verdict: null, reviewSummary: null, outcome, reviewRunId: 'review-run' },
       });
     }
     const approved = projectTaskOutput(review.outputProjection, reviewEnding('approve'), null);
     expect(approved).toEqual({
       ok: true,
-      value: { verdict: 'approve', outcome: 'completed', reviewRunId: 'review-run' },
+      value: {
+        verdict: 'approve',
+        reviewSummary: 'Read.',
+        outcome: 'completed',
+        reviewRunId: 'review-run',
+      },
     });
   });
 
@@ -1848,6 +1906,7 @@ describe('Publish Local Changes — a branch is published as it stands', () => {
       'scan-commit',
       'read-push-approval',
       'review-commit',
+      'describe-pr',
       'push',
       'find-pr',
       'open-pr',
@@ -1873,9 +1932,9 @@ describe('Publish Local Changes — a branch is published as it stands', () => {
     expect((outcome.inputs.get('push')?.['command'] as string[] | undefined)?.at(-1)).toBe(
       `${STRANDED}:refs/heads/aflow/x`,
     );
-    // Without a summary the pull request's body is the head's own message after its subject.
-    const opened = outcome.inputs.get('open-pr')?.['params'] as { body: { body?: string } };
-    expect(opened.body.body).toBe('What it does.');
+    expect(outcome.inputs.get('describe-pr')).toMatchObject({
+      range: `${ORIGIN_BASE}..${STRANDED}`,
+    });
   });
 
   it('is refused at the commit with a message, but no change, as two readings of one request', () => {
@@ -2154,5 +2213,171 @@ describe("Publish Local Changes — the folder's checks run before anything leav
       });
       expect(outcome.pushed, check).toBe(true);
     }
+  });
+});
+
+describe('Publish Local Changes — the pull request describes the branch as a whole', () => {
+  const GITHUB_INPUTS = { owner: 'aflowai', repo: 'aflow' };
+  const FINDINGS = [
+    {
+      severity: 'major',
+      file: 'src/cache.ts',
+      line: 40,
+      claim: 'The cache is never invalidated.',
+      state: 'closed',
+    },
+    { severity: 'nit', file: 'src/cache.ts', claim: 'A name says what it was.', state: 'open' },
+  ] as const;
+  const GAPS = ['The cold path was not measured under load.'];
+
+  /** What the composition was handed, read as `host.commit.describe` reads it. */
+  function describedWith(outcome: Outcome) {
+    return HostCommitDescribeInputSchema.parse(outcome.inputs.get('describe-pr'));
+  }
+
+  it("is handed the push's whole range, this run's review and checks, and the findings and gaps the brief passed", () => {
+    const outcome = publish({
+      pushApproval: 'unless-unreviewed',
+      review: 'approve',
+      decision: 'approved',
+      inputs: { ...GITHUB_INPUTS, findings: FINDINGS, gaps: GAPS },
+    });
+    expect(outcome.pushed).toBe(true);
+    const described = describedWith(outcome);
+    expect(described.range).toBe(COMMIT.pushRange);
+    expect(described.findings).toEqual(FINDINGS);
+    expect(described.gaps).toEqual(GAPS);
+    expect(described.review).toEqual({
+      verdict: 'approve',
+      outcome: 'completed',
+      reviewSummary: 'Read.',
+    });
+    expect(described.check).toMatchObject({
+      passed: true,
+      summary: '`node scripts/verify-commit.mjs` passed.',
+      tail: 'ok   prettier (3 files) (1.2 s)\n',
+    });
+    expect(described.recheck).toBeUndefined();
+    // Neither a title nor a summary: both are the composition's.
+    expect(described.title).toBeUndefined();
+    expect(described.summary).toBeUndefined();
+
+    expect(outcome.ran).toContain('open-pr');
+    expect(outcome.inputs.get('open-pr')?.['params']).toMatchObject({
+      body: { title: SLICE_TITLE, body: `Composed from \`${COMMIT.pushRange}\`.` },
+    });
+  });
+
+  it('carries both runs of the checks where the first lost only to time, and no review where none finished', () => {
+    const outcome = publish({
+      pushApproval: 'never',
+      review: 'approve',
+      decision: 'approved',
+      check: 'test-timeouts',
+    });
+    const described = describedWith(outcome);
+    expect(described.check?.passed).toBe(false);
+    expect(described.recheck).toMatchObject({ passed: true });
+    // Under `never` no review runs, and the composition is told none did.
+    expect(described.review).toBeUndefined();
+
+    const failed = describedWith(
+      publish({ pushApproval: 'unless-unreviewed', review: 'failed', decision: 'approved' }),
+    );
+    expect(failed.review).toEqual({ verdict: null, outcome: 'failed', reviewSummary: null });
+  });
+
+  it("passes a person's own title and summary to the composition, where they stand", () => {
+    const outcome = publish({
+      pushApproval: 'never',
+      review: 'approve',
+      decision: 'approved',
+      inputs: { ...GITHUB_INPUTS, title: 'Their title', summary: 'Their words.' },
+    });
+    expect(outcome.inputs.get('open-pr')?.['params']).toMatchObject({
+      body: { title: 'Their title', body: 'Their words.' },
+    });
+  });
+
+  it("rewrites an existing pull request's body on an appended push, rather than leaving the first publication's", () => {
+    const previousHead = 'b'.repeat(40);
+    const appended = {
+      ...COMMIT,
+      message: 'Fix the finding',
+      baseSha: previousHead,
+      appended: true,
+      range: `${previousHead}..${HEAD}`,
+    };
+    const outcome = publish({
+      pushApproval: 'never',
+      review: 'approve',
+      decision: 'approved',
+      existingPrInto: 'main',
+      commit: appended,
+      inputs: GITHUB_INPUTS,
+    });
+    expect(outcome.pushed).toBe(true);
+    expect(outcome.ran).toContain('update-pr');
+    expect(outcome.ran).not.toContain('open-pr');
+    // The whole branch from `origin`'s base, not the round that appended.
+    expect(describedWith(outcome).range).toBe(`${ORIGIN_BASE}..${HEAD}`);
+    expect(outcome.inputs.get('update-pr')).toEqual({
+      apiId: 'github',
+      endpointId: 'updatePullRequest',
+      params: {
+        owner: 'aflowai',
+        repo: 'aflow',
+        pull_number: 5,
+        // No title passed: one edited on GitHub since stays.
+        body: { body: `Composed from \`${ORIGIN_BASE}..${HEAD}\`.` },
+      },
+      response: { format: 'json' },
+    });
+    expect(outcome.statuses.get('update-pr')).toBe('succeeded');
+    expect(outcome.state).toEqual({
+      prUrl: 'https://github.com/aflowai/aflow/pull/5',
+      prNumber: 5,
+    });
+
+    const titled = publish({
+      pushApproval: 'never',
+      review: 'approve',
+      decision: 'approved',
+      existingPrInto: 'main',
+      commit: appended,
+      inputs: { ...GITHUB_INPUTS, title: 'Their title' },
+    });
+    expect(titled.inputs.get('update-pr')?.['params']).toMatchObject({
+      body: { title: 'Their title', body: `Composed from \`${ORIGIN_BASE}..${HEAD}\`.` },
+    });
+  });
+
+  it('opens a fresh pull request with no rewrite beside it', () => {
+    const outcome = publish({ pushApproval: 'never', review: 'approve', decision: 'approved' });
+    expect(outcome.ran).toContain('open-pr');
+    expect(outcome.statuses.get('update-pr')).toBe('skipped');
+  });
+
+  it('pushes nothing where the composed text cannot go out', () => {
+    for (const pushApproval of ['always', 'never', 'unless-unreviewed'] as const) {
+      const outcome = publish({
+        pushApproval,
+        review: 'approve',
+        decision: 'approved',
+        describeRefused: true,
+      });
+      expect(outcome.statuses.get('describe-pr'), pushApproval).toBe('failed');
+      expect(outcome.pushed, pushApproval).toBe(false);
+      expect(outcome.ran, pushApproval).not.toContain('find-pr');
+    }
+    expect(taskOrThrow('describe-pr').failureInstruction).toContain('nothing was pushed');
+    expect(taskOrThrow('update-pr').failureInstruction).toContain('The push went through');
+  });
+
+  it("derives the findings and gaps it takes from the composition's own schemas", () => {
+    expect(runInputOrThrow('findings').schema).toEqual({
+      ...toJsonSchemaSync(PullRequestFindingsSchema),
+    });
+    expect(runInputOrThrow('gaps').schema).toEqual({ ...toJsonSchemaSync(PullRequestGapsSchema) });
   });
 });

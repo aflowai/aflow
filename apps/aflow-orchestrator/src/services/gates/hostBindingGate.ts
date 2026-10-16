@@ -37,6 +37,7 @@ const BINDING_INPUT_OPERATIONS = new Set([
   'host.binding.inspect',
   'host.commit.scan',
   'host.commit.check',
+  'host.commit.describe',
 ]);
 
 export interface HostBindingGateResult {

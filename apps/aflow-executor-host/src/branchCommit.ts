@@ -201,7 +201,7 @@ async function recordedMessage(root: string, sha: string): Promise<string> {
   return message.replace(/\n+$/, '');
 }
 
-function messageBody(message: string): string | undefined {
+export function messageBody(message: string): string | undefined {
   const subjectEnd = message.indexOf('\n');
   if (subjectEnd === -1) return undefined;
   const body = message.slice(subjectEnd + 1).replace(/^\n+/, '');

@@ -2,8 +2,12 @@ import {
   HOST_PUSH_APPROVAL_DEFAULT,
   type HostPushApproval,
   MAX_PARENT_INPUTS_SERIALIZED_BYTES,
+  PULL_REQUEST_TITLE_MAX_CHARS,
+  PullRequestFindingsSchema,
+  PullRequestGapsSchema,
   STORED_PAYLOAD_REF_PATTERN,
   type SkillCatalogEntry,
+  toJsonSchemaSync,
 } from '@aflow/schemas';
 import { REVIEW_LOCAL_CHANGES } from './reviewLocalChanges.js';
 
@@ -129,6 +133,14 @@ const MERGE_FROM_SCHEMA = {
     'The sha the commission reported in `merge.from`, as it reported it — not a branch or tag name.',
 };
 
+const TITLE_SCHEMA = { type: 'string', minLength: 1, maxLength: PULL_REQUEST_TITLE_MAX_CHARS };
+
+const SUMMARY_SCHEMA = { type: 'string', minLength: 1, maxLength: 20_000 };
+
+/** Derived from the schemas `host.commit.describe` reads them with, so the two cannot drift. */
+const FINDINGS_SCHEMA = { ...toJsonSchemaSync(PullRequestFindingsSchema) };
+const GAPS_SCHEMA = { ...toJsonSchemaSync(PullRequestGapsSchema) };
+
 const CHECK_FAILED =
   "The folder's checks failed on this run's commit: their account is above, with the end of what they printed, and the whole of it is stored with this failure. Nothing was scanned, reviewed or pushed, and the commit is still on its branch in the folder. Commission the fix onto this branch — nothing of it has left the machine — and publish again. Where they ran out of the folder's time rather than failed, the folder's `checksTimeoutMs` is the operator's to raise on the machine.";
 
@@ -161,7 +173,7 @@ const CHECK_INPUT_TEMPLATE = {
 
 const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'publish-local-changes',
-  version: 23,
+  version: 24,
   name: 'Publish Local Changes',
   tagline:
     'Commit a patch onto a branch of a connected repository, then push it and open the pull request — asking the operator first unless the folder says otherwise.',
@@ -169,7 +181,9 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
 
 **Not for a folder whose machine block shows no publish prefix**: its push is refused. Say so, ask for the folder to be reconnected with one, and stop rather than commit what cannot be published.
 
-**What it needs**: the connected folder; the change — for a commission's work, the \`patchRef\` its result reports, passed as \`patchRef\`, or for a diff the operator hands over, that text as \`patch\`, one or the other — or neither, for a branch as it stands; a branch name under the folder's publish prefix; the commit message; a title for the pull request; the repository owner and name, from the folder's \`origin\` remote; and the base branch the pull request targets. A summary is optional and becomes the pull request's body; omitted, the pull request's body is the commit message after its first line — the commission's own account of the change. Ask for what is missing; never invent it.
+**What it needs**: the connected folder; the change — for a commission's work, the \`patchRef\` its result reports, passed as \`patchRef\`, or for a diff the operator hands over, that text as \`patch\`, one or the other — or neither, for a branch as it stands; a branch name under the folder's publish prefix; the commit message; the repository owner and name, from the folder's \`origin\` remote; and the base branch the pull request targets. Ask for what is missing; never invent it.
+
+**The pull request is composed from the whole branch** and rewritten on each push; pass earlier reviews' \`findings\` and the commissions' \`gaps\`, and \`title\` or \`summary\` only for a person's own words.
 
 **Never pass a commission's \`patch\` text.** It is a copy for reading, cut short on a large change, and the run's inputs are capped at ${String(RUN_INPUTS_KB)} KB together. \`patchRef\` names the whole diff at any size.
 
@@ -187,8 +201,13 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
     {
       apiId: 'github',
       description:
-        'GitHub REST API — read the repository before the push, then find the open pull request for the pushed branch, or open one where there is none.',
-      requiredEndpoints: ['getRepository', 'listPullRequests', 'createPullRequest'],
+        'GitHub REST API — read the repository before the push, then find the open pull request for the pushed branch and rewrite its description, or open one where there is none.',
+      requiredEndpoints: [
+        'getRepository',
+        'listPullRequests',
+        'createPullRequest',
+        'updatePullRequest',
+      ],
       authKind: 'bearer',
       setupNote:
         'Bind the GitHub connector for the space (a fine-grained personal access token or a GitHub App installation token with repository and pull-request access) before the first run. Sent as Authorization: Bearer.',
@@ -259,24 +278,37 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           // Absent only for a branch published as it stands, whose head
           // carries its own; the commit refuses any other change without one.
           required: false,
-          // Its own input rather than the title and the summary joined here:
-          // with no summary, the body it carries is the pull request's.
           description:
-            "The commit message, required with every change: the title, then a blank line and what the change does and why — the summary where one is given, otherwise the commission's own account of the change. Where no summary is given, the pull request's body is this message after its first line. Left out for a branch published as it stands, whose head keeps its own.",
+            "The commit message, required with every change: a subject line saying what this round changes, then a blank line and what it does and why — the commission's own account of the change. The pull request's body carries it beside every other commit's on the branch, and the subject of a new branch's first commit is the pull request's title. Left out for a branch published as it stands, whose head keeps its own.",
           schema: { type: 'string', minLength: 1, maxLength: 20_000 },
         },
         {
           id: 'title',
-          required: true,
-          description: 'The title of the pull request.',
-          schema: { type: 'string', minLength: 1, maxLength: 500 },
+          required: false,
+          description:
+            "A title for the pull request, only where a person wants to say it themselves. Omitted, the title is the slice's: the subject of the branch's first commit.",
+          schema: TITLE_SCHEMA,
         },
         {
           id: 'summary',
           required: false,
           description:
-            "What the change does and why, for whoever reviews it. Becomes the body of the pull request. Omit it and the pull request's body is the commit message after its first line.",
-          schema: { type: 'string', minLength: 1, maxLength: 20_000 },
+            "A body for the pull request, only where a person wants to say it themselves: it stands as the whole body, and nothing is composed beside it. Omitted, the body is composed from the branch — every commit's message, the review's findings, the checks and the known gaps.",
+          schema: SUMMARY_SCHEMA,
+        },
+        {
+          id: 'findings',
+          required: false,
+          description:
+            "The findings of the review rounds before this publication — each Local Code Review whose findings a commission on this branch was briefed to fix — as the review named them, each marked `closed` where a commit fixed it or `open` where it was left. This run's own review is added as it returns. Omit it where no review ran before.",
+          schema: FINDINGS_SCHEMA,
+        },
+        {
+          id: 'gaps',
+          required: false,
+          description:
+            "What the branch's commissions reported they left undone or could not verify, one item each, in their words. Omitted, the pull request says none were recorded.",
+          schema: GAPS_SCHEMA,
         },
         {
           id: 'owner',
@@ -369,13 +401,25 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
                 kind: 'run_input' as const,
                 bindAs: 'title',
                 path: 'title',
-                schema: { type: 'string', minLength: 1, maxLength: 500 },
+                schema: TITLE_SCHEMA,
               },
               summary: {
                 kind: 'run_input' as const,
                 bindAs: 'summary',
                 path: 'summary',
-                schema: { type: 'string', minLength: 1, maxLength: 20_000 },
+                schema: SUMMARY_SCHEMA,
+              },
+              findings: {
+                kind: 'run_input' as const,
+                bindAs: 'findings',
+                path: 'findings',
+                schema: FINDINGS_SCHEMA,
+              },
+              gaps: {
+                kind: 'run_input' as const,
+                bindAs: 'gaps',
+                path: 'gaps',
+                schema: GAPS_SCHEMA,
               },
               owner: {
                 kind: 'run_input' as const,
@@ -454,6 +498,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             skipped: { path: 'skipped', onMissing: 'null' as const },
             testTimeouts: { path: 'testTimeouts', onMissing: 'null' as const },
             summary: { path: 'summary', onMissing: 'error' as const },
+            tail: { path: 'tail', onMissing: 'null' as const },
             // Null where the folder declares no checks: the push needs none then.
             receipt: { path: 'receipt', onMissing: 'null' as const },
           },
@@ -484,6 +529,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             clearedSha: { path: 'clearedSha', onMissing: 'error' as const },
             passed: { path: 'passed', onMissing: 'error' as const },
             summary: { path: 'summary', onMissing: 'error' as const },
+            tail: { path: 'tail', onMissing: 'null' as const },
             receipt: { path: 'receipt', onMissing: 'error' as const },
           },
         },
@@ -679,19 +725,25 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           // output, so its verdict reads null and the approval is asked for.
           outputProjection: {
             verdict: { path: 'result.output.verdict', onMissing: 'null' as const },
+            reviewSummary: { path: 'result.output.reviewSummary', onMissing: 'null' as const },
             outcome: { path: 'outcome', onMissing: 'error' as const },
             reviewRunId: { path: 'runId', onMissing: 'error' as const },
           },
           outputContract: {
             schema: {
               type: 'object',
-              required: ['verdict', 'outcome', 'reviewRunId'],
+              required: ['verdict', 'reviewSummary', 'outcome', 'reviewRunId'],
               additionalProperties: false,
               properties: {
                 verdict: {
                   type: ['string', 'null'],
                   description:
                     'What the review of this commit returned: approve, request_changes or comment; null when it did not complete.',
+                },
+                reviewSummary: {
+                  type: ['string', 'null'],
+                  description:
+                    "The review's own account — every finding by severity and `file:line`, and the checks it ran — which the pull request carries; null when it did not complete.",
                 },
                 outcome: {
                   type: 'string',
@@ -701,6 +753,60 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
                 reviewRunId: { type: 'string', minLength: 1 },
               },
             },
+          },
+        },
+
+        {
+          taskId: 'describe-pr',
+          name: 'Compose the pull request from the branch',
+          goal: "Compose the pull request's title and body from everything the push sends — the subject of the branch's first commit as the title, and as the body every commit's message oldest first, the review findings closed and left open, the folder's checks as verification, and the gaps the commissions recorded — and read that text for secrets, before anything is pushed. A title or summary a person passed stands as it is.",
+          failureInstruction:
+            "The pull request composed from the branch holds what looks like a secret, named above by where it is in the title or the body, line and rule — never by its value — and nothing was pushed: the commit is still on its branch in the folder. Where the line came from `findings` or `gaps`, or from a title or summary passed in, publish this branch as it stands without it. Where it came from the review's summary or the end of what the checks printed, that text is the review's or the checks' own: take the secret out of the code or the environment they read, rotate it if it was real, and publish again. Where it came from a commit's message — a line marked allowed, which the scan let the operator read — that commit has to be rewritten before the branch is published.",
+          type: 'operation' as const,
+          operation: 'host.commit.describe',
+          dependsOn: ['commit', 'check-commit', 'recheck-commit', 'scan-commit', 'review-commit'],
+          when: {
+            expression: "tasks.commit.output.state == 'applied'",
+            onMissingRef: 'skip' as const,
+          },
+          retryability: 'safe' as const,
+          maxAttempts: 1,
+          // Whole outputs, each absent where its task did not run: a review
+          // that failed or was never started is reported as none finishing.
+          inputBindings: {
+            bindingId: { kind: 'run_input' as const, path: 'bindingId' },
+            range: { kind: 'task_output' as const, taskId: 'commit', path: 'commit.pushRange' },
+            title: { kind: 'run_input' as const, path: 'title' },
+            summary: { kind: 'run_input' as const, path: 'summary' },
+            findings: { kind: 'run_input' as const, path: 'findings' },
+            gaps: { kind: 'run_input' as const, path: 'gaps' },
+            review: { kind: 'task_output' as const, taskId: 'review-commit' },
+            check: { kind: 'task_output' as const, taskId: 'check-commit' },
+            recheck: { kind: 'task_output' as const, taskId: 'recheck-commit' },
+          },
+          context: {
+            strategy: 'scoped' as const,
+            contextPolicy: 'auto-optimize' as const,
+            learnings: 'none' as const,
+            capabilities: {
+              operations: ['host.commit.describe'],
+              integrations: [],
+            },
+          },
+          inputTemplate: {
+            bindingId: { $bind: 'bindingId' },
+            range: { $bind: 'range' },
+            title: { $bind: 'title' },
+            summary: { $bind: 'summary' },
+            findings: { $bind: 'findings' },
+            review: { $bind: 'review' },
+            check: { $bind: 'check' },
+            recheck: { $bind: 'recheck' },
+            gaps: { $bind: 'gaps' },
+          },
+          outputProjection: {
+            title: { path: 'title', onMissing: 'error' as const },
+            body: { path: 'body', onMissing: 'error' as const },
           },
         },
 
@@ -791,8 +897,15 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           operation: 'host.process.exec',
           // The scan and the check as well as the approval: under `never` over a cleared
           // range the approval is skipped, and a skip clears a dependency
-          // where a failure does not.
-          dependsOn: ['approve-push', 'scan-commit', 'check-commit', 'recheck-commit'],
+          // where a failure does not. The pull request's text as well, so
+          // text that cannot go out stops the run before the branch has.
+          dependsOn: [
+            'approve-push',
+            'scan-commit',
+            'check-commit',
+            'recheck-commit',
+            'describe-pr',
+          ],
           when: PUSH_CLEARED,
           retryability: 'unsafe' as const,
           maxAttempts: 1,
@@ -841,7 +954,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
         {
           taskId: 'find-pr',
           name: 'Find the open pull request for the branch',
-          goal: "Ask GitHub, through the REST API, for the open pull request from the pushed branch into the base branch — a branch appended to may already have one, and GitHub refuses a second. That pull request now carries the push, and it is the run's result.",
+          goal: "Ask GitHub, through the REST API, for the open pull request from the pushed branch into the base branch — a branch appended to may already have one, and GitHub refuses a second. That pull request now carries the push, its description is rewritten to match, and it is the run's result.",
           failureInstruction:
             "The push went through — the commit is on its branch on `origin` — but GitHub could not be asked whether the branch already has an open pull request, so none was opened. Find the branch's pull request on GitHub, or open one for it there.",
           type: 'operation' as const,
@@ -909,12 +1022,65 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
         },
 
         {
-          taskId: 'open-pr',
-          name: 'Open the pull request',
-          goal: 'Open a pull request from the pushed branch into the base branch through the GitHub REST API, where the branch has none open.',
+          taskId: 'update-pr',
+          name: "Rewrite the pull request's description",
+          goal: "Rewrite the body of the branch's open pull request through the GitHub REST API — and its title, where one was passed — to the text composed from the branch as it now stands, so an appended push does not leave an earlier publication's description on it.",
+          failureInstruction:
+            "The push went through and the branch's pull request carries it, but GitHub did not take its new description, so it still describes the branch as an earlier publication left it. Rewrite it on GitHub, or publish this branch as it stands to compose it again.",
           type: 'operation' as const,
           operation: 'api.http.call',
-          dependsOn: ['find-pr'],
+          dependsOn: ['find-pr', 'describe-pr'],
+          when: {
+            expression: 'tasks.find-pr.output.prNumber != null',
+            onMissingRef: 'skip' as const,
+          },
+          // The same text sent twice leaves the same pull request.
+          retryability: 'safe' as const,
+          maxAttempts: 2,
+          // The title only where a person passed one: a title edited on
+          // GitHub since is theirs, and the slice's would overwrite it.
+          inputBindings: {
+            owner: { kind: 'run_input' as const, path: 'owner' },
+            repo: { kind: 'run_input' as const, path: 'repo' },
+            prNumber: { kind: 'task_output' as const, taskId: 'find-pr', path: 'prNumber' },
+            title: { kind: 'run_input' as const, path: 'title' },
+            body: { kind: 'task_output' as const, taskId: 'describe-pr', path: 'body' },
+          },
+          context: {
+            strategy: 'scoped' as const,
+            contextPolicy: 'auto-optimize' as const,
+            learnings: 'none' as const,
+            capabilities: {
+              operations: ['api.http.call'],
+              integrations: [],
+            },
+          },
+          inputTemplate: {
+            apiId: 'github',
+            endpointId: 'updatePullRequest',
+            params: {
+              owner: { $bind: 'owner' },
+              repo: { $bind: 'repo' },
+              pull_number: { $bind: 'prNumber' },
+              body: {
+                title: { $bind: 'title' },
+                body: { $bind: 'body' },
+              },
+            },
+            response: { format: 'json' },
+          },
+          outputProjection: {
+            prNumber: { path: 'data.number', onMissing: 'error' as const },
+          },
+        },
+
+        {
+          taskId: 'open-pr',
+          name: 'Open the pull request',
+          goal: 'Open a pull request from the pushed branch into the base branch through the GitHub REST API, where the branch has none open, with the title and body composed from the branch.',
+          type: 'operation' as const,
+          operation: 'api.http.call',
+          dependsOn: ['find-pr', 'describe-pr'],
           when: {
             expression: 'tasks.find-pr.output.prNumber == null',
             onMissingRef: 'skip' as const,
@@ -926,11 +1092,8 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             repo: { kind: 'run_input' as const, path: 'repo' },
             branch: { kind: 'run_input' as const, path: 'branch' },
             base: { kind: 'run_input' as const, path: 'base' },
-            title: { kind: 'run_input' as const, path: 'title' },
-            summary: { kind: 'run_input' as const, path: 'summary' },
-            // Read from the commit, whose message the scan read, so a body
-            // taken from it has been scanned as the summary would have been.
-            messageBody: { kind: 'task_output' as const, taskId: 'commit', path: 'commit.body' },
+            title: { kind: 'task_output' as const, taskId: 'describe-pr', path: 'title' },
+            body: { kind: 'task_output' as const, taskId: 'describe-pr', path: 'body' },
           },
           context: {
             strategy: 'scoped' as const,
@@ -951,7 +1114,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
                 title: { $bind: 'title' },
                 head: { $bind: 'branch' },
                 base: { $bind: 'base' },
-                body: { $firstOf: [{ $bind: 'summary' }, { $bind: 'messageBody' }] },
+                body: { $bind: 'body' },
                 draft: false,
               },
             },
@@ -1043,7 +1206,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
       priority: 50,
     },
     rationale:
-      "Eleven tasks, the approval between local and published halves: the commit lands in a detached worktree; a decline costs nothing. host.commit.check runs the folder's checks on it: a failure fails the run, bar test timeouts alone: those rerun once. host.commit.scan reads all a push would add (from a fetched origin/<base>), commit headers, messages, PR text: a finding fails the run; an unread file or an allowed line asks, unreviewed, whatever the posture. Over a cleared range the posture, and under unless-unreviewed a Local Code Review, decide whether to ask; asked, it obeys. The push argv is pinned bar the refspec: no force, tag or submodule. The executor re-measures origin/<base> as git runs, rescanning where it moved or a restart voids the receipt; declared checks need a passed receipt; an uncleared range (under always, any) goes only on this run's grant. No change pushes the head as is. The repo is read via the space's GitHub binding first; an open PR is reported, not duplicated.",
+      "Thirteen tasks, the approval between local and published halves: the commit lands in a detached worktree. host.commit.check runs the folder's checks on it: a failure fails the run, bar test timeouts alone: those rerun once. host.commit.scan reads all a push would add (from a fetched origin/<base>), commit headers, messages, PR text: a finding fails the run; an unread file or an allowed line asks, unreviewed. Over a cleared range the posture, and under unless-unreviewed a Local Code Review, decide whether to ask; asked, it obeys. The push argv is pinned bar the refspec: no force, tag or submodule. The executor re-measures origin/<base> as git runs, rescanning where it moved or a restart voids the receipt; declared checks need a passed receipt; an uncleared range goes only on this run's grant. host.commit.describe composes the PR from the whole range, reviews, checks and gaps, scanned, before the push; an open PR gets it by PATCH, not a twin.",
   },
 };
 

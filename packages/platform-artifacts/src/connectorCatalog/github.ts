@@ -26,11 +26,11 @@ const pullNumberParam = {
 
 export const GITHUB_CONNECTOR: ConnectorCatalogEntry = {
   catalogId: 'github',
-  version: 3,
+  version: 4,
   name: 'GitHub',
   tagline: 'Open pull requests, poll CI checks, read reviews, merge, and close PRs.',
   description:
-    'GitHub REST API. Create and read pull requests, poll commit check-runs for CI status, ' +
+    'GitHub REST API. Create, read and rewrite pull requests, poll commit check-runs for CI status, ' +
     'read pull-request reviews and review comments, post status/handoff comments, merge a ' +
     'pull request, and close one. Authenticated with a GitHub token sent as a bearer token.',
   tags: ['developer-tools', 'version-control', 'pull-requests', 'ci', 'github'],
@@ -100,6 +100,42 @@ export const GITHUB_CONNECTOR: ConnectorCatalogEntry = {
                 draft: {
                   type: 'boolean',
                   description: 'Whether to open the pull request as a draft.',
+                },
+              },
+              additionalProperties: false,
+            },
+          },
+        ],
+        tags: ['pull-requests'],
+      },
+      {
+        endpointId: 'updatePullRequest',
+        name: 'Update pull request',
+        description:
+          "Rewrite an open pull request's title or body — its description, where the branch " +
+          'it carries has changed since it was written.',
+        method: 'PATCH',
+        writeRiskTier: 'low',
+        pathTemplate: '/repos/{owner}/{repo}/pulls/{pull_number}',
+        params: [
+          ownerParam,
+          repoParam,
+          pullNumberParam,
+          {
+            name: 'body',
+            location: 'body',
+            required: true,
+            description: 'The text to write. A field left out is left as it is.',
+            schema: {
+              type: 'object',
+              properties: {
+                title: {
+                  type: 'string',
+                  description: 'The new title of the pull request.',
+                },
+                body: {
+                  type: 'string',
+                  description: 'The new contents of the pull request (Markdown).',
                 },
               },
               additionalProperties: false,
