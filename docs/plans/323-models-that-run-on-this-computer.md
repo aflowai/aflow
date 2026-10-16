@@ -1,6 +1,6 @@
 # Plan 323 — Models that run on this computer
 
-**Status:** 📋 Planned. Nothing is built. P0 is a set of feasibility gates and changes no product code; P0 and P1 together are the first complete slice: one model on one machine.
+**Status:** 🔨 P0 met on one machine (§9): every gate answered on an Apple M3 with 24 GB and Ollama 0.40.5, and the decisions they served revised. P1 is next. P0 and P1 together are the first complete slice: one model on one machine.
 
 **Supersedes for the local edition:** Tier 0 of archive plan 98 (open-weight inference). Plan 98 put a platform-managed `selfhosted` provider behind Ollama's OpenAI-compatible `/v1` endpoint. This plan uses Ollama's native API instead (D3) and makes the runtime the operator's own (D2). Plan 98's hosted tiers (Cloud Run GPU, GKE/vLLM) are untouched; the OpenAI-compatible adapter in P6 is the piece they would share.
 
@@ -31,21 +31,21 @@ Using one should look like using any other model. You choose it in the same pick
 
 **D2 — Aflow does not ship or supervise the runtime.** The operator installs Ollama, and its own app or service keeps it running. Aflow detects it, says how to install it when it is absent, and drives it over its API: list, pull, delete, load, unload. On a paired Mac, the UI may also offer a one-time install through the host lane (`brew install ollama`) after the operator approves it. This is a command run once, not supervision. _Rejected:_ bundling the runtime in the image. On macOS it would run without the GPU. _Rejected:_ the host executor supervising a model server. That is a second process supervisor beside launchd, systemd and the runtime's own, for something the runtime already does. The exception is the Linux appliance (D11).
 
-**D3 — The Ollama adapter speaks the native `/api/chat` and `/api/embed`, not `/v1`.** Through `/v1` you cannot set the context length, cannot pass `tool_choice`, and get no `think` control. The context length is the decisive one (D5). The adapter implements `generateText`, `generateTextStream`, `generateJson` (`format` = the JSON schema) and `generateEmbedding`. It maps the catalog's reasoning ladder onto `think`. It reads `thinking` from responses and replays it for continuity as the Fireworks adapter does with `reasoning_content`. It collects a streamed turn's `thinking`, `content` and `tool_calls` and sends them back together with the tool results, which is how the runtime expects a turn to be returned.
+**D3 — The Ollama adapter speaks the native `/api/chat` and `/api/embed`, not `/v1`.** Through `/v1` you cannot set the context length, cannot pass `tool_choice`, and get no `think` control. The context length is the decisive one (D5). The adapter implements `generateText`, `generateTextStream`, `generateJson` (`format` = the JSON schema) and `generateEmbedding`. It maps the catalog's reasoning ladder onto `think`, whose accepted values the runtime publishes per model in `/api/show` (`thinking.values`: `[false, true]` for Gemma 4 and Qwen3.5, `low | medium | high` for gpt-oss). It reads `thinking` from responses for the run view. It does not replay it: the runtime's chat templates drop `thinking` from history, so a replayed reasoning trace costs no tokens and reaches no model (§9 G1). It collects a streamed turn's `content` and `tool_calls` and sends them back together with the tool results, which is how the runtime expects a turn to be returned.
 
 **D4 — A local runtime is a connection in the credential registry. Its provider id is `ollama`, and `local` is removed.** The credential is a URL, `base_url`, which defaults to `http://127.0.0.1:11434`. It has an optional token for a runtime behind a proxy and no required secret. Which secret a provider requires becomes registry data, not `api_key` hard-coded in the executor. Reusing the registry gives the connection the user → space → tenant resolution, the settings screens, the validation probe (`GET /api/version` plus `/api/tags`) and readiness, all unchanged. `base_url` origins are restricted with the existing `allowedOrigins` mechanism to loopback and `host.docker.internal`. A runtime on another machine is admitted only through `CREDENTIAL_EXTRA_BASE_URL_ORIGINS` (P6). _Rejected:_ an environment variable naming the runtime. It would bypass readiness and the UI, and it is exactly the "configured somewhere else" state that shows green and fails at run time.
 
-**D5 — The context window a request gets is the machine's answer, sent on every request, and a prompt that might not fit is never sent.** Ollama's default context is sized by available memory and can be as small as 4K. Its documentation does not say what happens to a prompt longer than the window. If it is cut, the agent loses its instructions and carries on.
+**D5 — The context window a request gets is the machine's answer, sent on every request, and a prompt that might not fit is never sent.** Ollama's default context is sized by available memory and can be as small as 4K. What an over-long prompt does depends on the runner (§9 G1): the llama.cpp runner silently cuts it from the front to about half the window, dropping the system message, and the MLX runner does not enforce `num_ctx` at all and grows its cache with the prompt. The first loses the agent's instructions; the second spends memory the fit estimate did not count.
 
 - **The window:** the connection carries `context_tokens`: chosen by the operator, offered from the fit estimate (D8), and never above the model's catalog `contextWindow`. The adapter sends it as `options.num_ctx` on every request. Prompt budgeting reads the effective window, `min(catalog, connection)`, rather than the catalog's.
-- **Why counting after the fact is not enough:** a guarantee cannot rest on comparing `prompt_eval_count` with the prompt's size. Aflow's size is a characters-over-four estimate (`history.ts`), which knows nothing of the runtime's tokenizer, chat template, tool schemas or image tokens. And with prefix caching, `prompt_eval_count` counts only the tokens evaluated afresh, so it is smaller than the prompt even when nothing was cut.
-- **Prevention comes first:** a request is sent only when its prompt, plus the output reserve (`maxTokens`, reasoning included), plus a measured safety margin, fits the window.
-- **Which method is a P0 gate:** P0 establishes how the prompt is sized and how an overflow is caught, and P1 does not start until one method holds. The candidates, in order of preference:
-  1. a runtime that refuses an overflow, if the current release does or can be configured to;
-  2. an exact count from the runtime's own tokenizer and template;
-  3. a conservative estimator whose ratio is calibrated per model.
-
-  Whichever is chosen must be correct on multilingual text, tool-heavy turns, reasoning history and images. A request the chosen method cannot rule safe fails before it is sent, as `context_exceeded`, naming the estimate, the window and the remedy (D15).
+- **The characters-over-four estimate cannot size a local prompt.** Measured against the runtime's own counts (§9 G1), English and German run at about 4.8 characters a token, code at 3.5–4.0, JSON at 2.8 and Chinese at 1.6. A tool result in JSON is undercounted by 40% and Chinese text by 2.5×. Eight tool schemas cost 570–890 tokens.
+- **`prompt_eval_count` is exact.** On both runners it is the whole prompt's token count, cached prefix included: prefix caching shows in the time taken, never in the count. When the llama.cpp runner truncates, it reports the truncated count.
+- **The sizing method** (P0's gate, met by the measurements in §9 G1):
+  1. **Exact baseline.** Each response's `prompt_eval_count + eval_count` is the exact size of the conversation it ends. The next request is that baseline plus what was added since.
+  2. **Conservative delta.** What was added is sized at the lowest measured ratio, 1.5 characters a token, so no script or format is undercounted. Images are sized at their measured per-image cost, which P1 measures at the sizes the platform sends.
+  3. **Exact count when the estimate is not enough.** A request with no baseline (the first turn), or one whose conservative size does not fit, is counted exactly by a one-token evaluation of the prompt before it is sent. The real request reuses the evaluated prefix from the runtime's cache: in §9 G1 a 6,422-token prompt counted this way was read back in 0.07 s.
+  4. **Refusal.** A request whose exact size, plus the output reserve (`maxTokens`, reasoning included), exceeds the window fails before it is sent, as `context_exceeded`, naming the size, the window and the remedy (D15).
+  5. **Backstop.** A response whose `prompt_eval_count` is below the request's lower bound (its characters over the highest measured ratio, 5) was truncated by the runtime. It fails as `context_exceeded`, and what it streamed is discarded.
 
 - **Streamed text is provisional:** what an agent turn streams is not the turn's result until the final chunk arrives and the response validates. A turn that fails validation is shown as discarded, not as an answer. P1 defines how the run view marks it.
 
@@ -68,13 +68,13 @@ Using one should look like using any other model. You choose it in the same pick
 **D8 — Fit is an estimate until the model is loaded, and both are labelled as what they are.**
 
 - **The estimate:** computed from:
-  - the catalog footprint, `local: { weightsBytes, kvBytesPerToken, measuredUnder: { contextTokens, parallel, kvCacheType, runtimeVersion } }`, written by the probe;
-  - the host inventory, which gains `machine: { totalMemoryBytes, availableMemoryBytes, gpuMemoryLimitBytes, chip }`. On macOS the GPU limit is the wired-memory cap, which is below total RAM. On Linux it is VRAM per device;
+  - the catalog footprint, `local: { weightsBytes, kvBytesPerToken, measuredUnder: { contextTokens, parallel, kvCacheType, runtimeVersion } }`, written by the probe. `/api/ps` cannot measure `kvBytesPerToken` on the MLX runner: it reports the same size and a 4,096-token context whatever `num_ctx` asks for, because that runner grows its cache with the prompt (§9 G5). The probe measures it from the runner process's resident memory before and after a long prompt;
+  - the host inventory, which gains `machine: { totalMemoryBytes, availableMemoryBytes, gpuMemoryLimitBytes, chip }`. On macOS the GPU limit is Metal's `recommendedMaxWorkingSetSize`, about 74% of RAM on the measured machine (19.07 GB of 24), which no `sysctl` reports. The host executor reads it through Metal. On Linux it is VRAM per device;
   - the models already resident (`/api/ps`);
   - the connection's `max_parallel`. Parallel requests multiply the KV cache, which grows with context × parallel.
 - **The headroom:** the estimate keeps headroom for the stack, the operating system and a browser, and reports the conditions it assumes.
 - **The four answers:** _fits_, _tight_, _does not fit_, or _unknown_. The answer is _unknown_ when the inputs are missing: an unpaired machine, a KV cache type the footprint was not measured with, or a build that differs from the one measured (D9).
-- **Verified state:** once the model is loaded, `/api/ps` reports its actual size, its context and its GPU/CPU split. That is shown as verified and replaces the estimate.
+- **Verified state:** once the model is loaded, `/api/ps` reports its actual size and its GPU/CPU split, and the host executor reads the runner process's memory as it grows. That is shown as verified and replaces the estimate. Free memory and swap are part of it: on the measured machine a 16 GB model left about 80 MB free and 6.6 GB in swap with the stack's databases running, which is _tight_ however the model's own numbers read.
 - **A trial load is an action:** on an unpaired machine, the operator starts a trial load explicitly ("load to check"). Reading diagnostics never loads a model.
 - **What over-sizing does:** a model that does not fit may load partly on CPU and run slowly, or fail to load, or press the whole machine into swap. Fit informs and never blocks a choice the operator makes.
 
@@ -120,11 +120,11 @@ Which local models are _recommended_ for which role follows from the usefulness 
 
 - **No specialized agent.** The work is reading one record and proposing one of its remedies, and Helmsman with these operations does both. A separate system agent would be a second surface whose guidance could drift from the UI's.
 - **Runner holds none of these operations.** They are Helmsman's alone, like the eval plane. A skill's run does not reconfigure the machine it runs on.
-- **One GPU, several roles.** Helmsman, clerk, judge, titles and embeddings all compete for one runtime, and each model switch costs a load. The default for a local space is therefore a preset that assigns one chat model to every role (plus the embedding model). Mixing models per role is the operator's choice, and the models page shows its cost: total resident memory, and the load time per switch as P0 measures it. Only the model a role is about to use is warmed. `keep_alive` comes from the connection, default 30 min.
+- **One GPU, several roles.** Helmsman, clerk, judge, titles and embeddings all compete for one runtime, and each model switch costs a load. The default for a local space is therefore a preset that assigns one chat model to every role (plus the embedding model). Mixing models per role is the operator's choice, and the models page shows its cost: total resident memory, and the load time per switch. On the measured machine a switch from a 9B to a 26B model took 49 s, and the MLX runner's first prompt after a load took 25–56 s whatever its length (§9 G5), so a switch in the middle of a run is a pause the operator can see. Only the model a role is about to use is warmed. `keep_alive` comes from the connection, default 30 min.
 - **Lifecycle actions are durable.**
-  - **Pull:** one pull per runtime and tag, observed and not duplicated. A second request joins the first.
+  - **Pull:** one pull per runtime and tag, observed and not duplicated. A second request joins the first; the runtime already joins two pulls of one tag, reporting the same progress to both (§9 G3).
   - **Disk space:** a pull is refused before it starts when the host inventory's free disk cannot hold the download.
-  - **Cancel and resume:** a pull can be cancelled. Whether an interrupted pull resumes is the runtime's behaviour, which P0 verifies. The UI says which one happens.
+  - **Cancel and resume:** a pull is cancelled by closing its request, which installs nothing. The next pull of the tag resumes from what was already downloaded (§9 G3), and the UI says so.
   - **Stale approvals:** an approved action re-checks its impact when it executes. When the set of runs it would end, or the space it needs, has changed since the card was shown, it parks again with the new impact rather than acting on the old one.
 - **Edition gating:** the provider, the routes, the operations and the "On this computer" surface exist only in the local edition. The UI gates on `useEdition().id === 'community-local'`, the server on the edition descriptor. A hosted tenant pointing a URL at loopback would be reaching the platform's own machine.
 
@@ -141,8 +141,8 @@ Which local models are _recommended_ for which role follows from the usefulness 
 - **Coverage:** every model call the platform makes on a space's behalf follows that space's choice. That includes session titles, the clerk, the judge, eval batches and memory embedding. P0 lists every call site that resolves a model outside role resolution.
 - **What counts as local:** a call is local only when both of these hold:
   - **The endpoint is this machine:** the connection's `runtimeId` (D7) is this machine's loopback or the appliance's `ollama` service. A runtime on the network (D14) is not local, even on the operator's own LAN.
-  - **The model runs on the runtime:** Ollama can forward a request to its own cloud models. A model the runtime marks as remote, or a cloud-suffixed tag, is not local.
-- **The runtime's cloud setting:** diagnostics report whether cloud features are disabled (`OLLAMA_NO_CLOUD=1` or `disable_ollama_cloud` in `~/.ollama/server.json`), when the runtime exposes it. The remedy is the setting itself. The Linux appliance's `ollama` service sets it.
+  - **The model runs on the runtime:** Ollama can forward a request to its own cloud models. A model `/api/tags` lists with a `remote_host` is not local. `/api/show` carries no such marker (§9 G2), so the test reads the listing.
+- **The runtime's cloud setting:** diagnostics report whether cloud features are disabled (`OLLAMA_NO_CLOUD=1` or `disable_ollama_cloud` in `~/.ollama/server.json`), read from `GET /api/status` (`{ cloud: { disabled, source } }`, §9 G2). The remedy is the setting itself. The Linux appliance's `ollama` service sets it.
 - **Discovered models (P6)** are classified by the same two tests.
 - **Refusal:** under `local_only`, a non-local model is refused at resolution with a `permission` error naming the role and the model. It is not silently swapped.
 - **Embeddings:** under `local_only` they need a local embedding model (D16).
@@ -154,7 +154,7 @@ Which local models are _recommended_ for which role follows from the usefulness 
 - **Changing the model** creates a new identity and a rebuild. The rebuild is a registered, candidate-driven background task. Search keeps using the old identity until the rebuild has covered the scope, then switches, and the old vectors are dropped. A search never runs against a partially rebuilt index.
 - **Jobs in flight:** a queued embedding job carries its identity and is discarded if the identity changed while it waited.
 - **No silent truncation:** the adapter always sends `truncate: false` to `/api/embed` (the runtime defaults to `true`). An input over the window fails, and the chunker splits by the model's window.
-- **Dimensions:** local models emit 768 or 1024 (or 1536 through the `dimensions` option, for models trained to be truncated). Which of the two becomes the stored form is settled in P0 (§8). Either way, the identity rule above holds.
+- **Dimensions:** the first local embedding model is one whose native size is at least 1,536, served at 1,536 through `dimensions`, so P5 needs no new vector column. Qwen3-Embedding 4B (2,560 native) does this; EmbeddingGemma (768 native) refuses it (§9 G4). A model below 1,536 needs its own column and is left until one is wanted. Either way, the identity rule above holds.
 
 **D13 — Usage is recorded as for any model, and cost shows "local", not "$0.000".**
 
@@ -291,7 +291,7 @@ _Exit:_
 
 - the Ollama adapter;
 - the `ollama` connection, set up through the existing credentials screens;
-- one curated catalog entry, for the model P0 ran;
+- one curated catalog entry, `gemma4:26b`, the model P0 measured on the 24 GB machine;
 - `models:verify-local` with its compatibility tier and build identity;
 - native tool calling decided by capability;
 - the effective context window with overflow prevention;
@@ -299,6 +299,7 @@ _Exit:_
 - runtime admission (`runtimeId`, leased semaphore, `admitOperation`, cancellation);
 - the first-token window and idle-plus-ceiling timeouts;
 - the streaming JSON fallback;
+- compaction's summary model and the clerk's `auto` choice resolved through the space's roles, so a space whose only provider is the local runtime can compact a long conversation and title a session (§9, call sites 2 and 11);
 - readiness.
 
 The dev stack only.
@@ -432,7 +433,74 @@ Each is a test in the phase that introduces it. The P1, P3, P3b and P5 exits are
 
 ## 8. Open questions
 
-- **Embedding dimensions.** Several local embedding models are Matryoshka-trained and can emit 1536 dimensions through `dimensions`, which would avoid a migration. G4 measures what that costs in retrieval quality. Identity (D16) is required either way.
+- **Retrieval at reduced dimensions.** G4 showed that 1,536-dimension output is available, not what it costs: its twenty-pair set scores every configuration perfectly. P5 measures recall at 1,536 against native size on a real memory corpus before the first local embedding model is recommended.
+- **Image tokens.** G1 measured an 8×8 image at 11 tokens (llama.cpp) and 66 (MLX). P1 measures the image sizes the platform actually sends before images are sized by the method in D5.
 - **Discovered models earlier?** If the curated lineup turns out too narrow for testing, the P6 overlay could move up to P3. It costs a table and an on-demand probe run.
 - **Runtime decision models.** The current Ollama release lists models that return choices with probabilities. Whether they could back `ai.decision.decide` (plan 316) locally is a question for after P1.
 - **Windows.** Ollama runs there and the dev stack's host-side executors would reach it, but nobody has measured it.
+
+## 9. P0 results
+
+Measured on an Apple M3 with 24 GB of unified memory against Ollama 0.40.5, running as a Homebrew service with `OLLAMA_KV_CACHE_TYPE=q8_0`, flash attention on and default parallelism. Raw output: [`323-p0/apple-m3-24gb.json`](323-p0/apple-m3-24gb.json), produced by `yarn models:local-gates <gate>`. Models: `gemma4:26b` (MLX, NVFP4), `qwen3.5:9b` (MLX, NVFP4), `qwen3.5:4b-q4_K_M` (llama.cpp, Q4_K_M). On Apple Silicon this release serves a model through MLX unless its tag names a GGUF quantisation.
+
+### G1 — Overflow
+
+|                                                            | llama.cpp runner                                                                | MLX runner                               |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------- | ---------------------------------------- |
+| 6.4K-token prompt, `num_ctx` 4096                          | cut from the front to 2,050 tokens, system message lost, answer wrong, no error | all 6,437 tokens evaluated, answer right |
+| `/api/ps` context after a 16K request                      | 16,384                                                                          | 4,096                                    |
+| `prompt_eval_count` on a cached repeat                     | full count (6,437), prompt read in 0.06 s                                       | full count (6,437), 0.08 s               |
+| Characters per token: English, German, code, JSON, Chinese | 4.8, 4.8, 4.0, 2.9, 1.7                                                         | 4.8, 4.8, 3.5, 2.8, 1.6                  |
+| Eight tool schemas                                         | 889 tokens                                                                      | 573 tokens                               |
+| An 8×8 image                                               | 11 tokens                                                                       | 66 tokens                                |
+| 1,800 characters of replayed `thinking`                    | 0 tokens                                                                        | 0 tokens                                 |
+
+A one-token evaluation counts a prompt exactly and leaves it cached: the request after it read 6,422 tokens in 0.07 s. `num_predict: 0` is not that: it means no limit. There is no tokenize endpoint. The chat template `/api/show` returns is `{{ .Prompt }}` on both runners, because the runner applies the model's own template, so a template fingerprint (D9) is taken from the model's digest and parameters rather than from that field.
+
+### G2 — Locality
+
+`GET /api/status` returns `{"cloud":{"disabled":false,"source":"none"}}`. A cloud model, once pulled, is a 307-byte manifest that `/api/tags` lists with `remote_host: "https://ollama.com"` and `remote_model`. `/api/show` for it has no remote field, and describes a cloud tag even before it is pulled.
+
+### G3 — Lifecycle
+
+Closing a pull's request cancels it and installs nothing. The next pull resumes from the bytes already downloaded. Two concurrent pulls of one tag both succeed with identical progress. A tag that does not exist fails at once with `pull model manifest: file does not exist`. A full disk was not exercised.
+
+### G4 — Embeddings
+
+|                                    | EmbeddingGemma                            | Qwen3-Embedding 4B                        |
+| ---------------------------------- | ----------------------------------------- | ----------------------------------------- |
+| Native dimensions                  | 768                                       | 2,560                                     |
+| `dimensions: 1536`                 | refused: exceeds embedding length         | 1,536                                     |
+| Over-long input, `truncate: false` | refused: input exceeds the context length | refused: input exceeds the context length |
+| Over-long input, default           | cut silently to 2,048 tokens of ~39,000   | cut silently to 4,095 tokens              |
+
+The built-in retrieval set scored 1.0 recall in every configuration, so it separates nothing: what reduced dimensions cost is still open (§8).
+
+### G5 — The machine
+
+|                                       | `qwen3.5:9b`  | `gemma4:26b`    |
+| ------------------------------------- | ------------- | --------------- |
+| Resident size, all on the GPU         | 7.8 GB        | 16.2 GB         |
+| Cold load: weights, then first prompt | 3.9 s + 0.9 s | 10.8 s + 24.7 s |
+| Switch from the other model           | —             | 48.8 s          |
+| Prefill, 12K-token prompt             | 157 tokens/s  | 253 tokens/s    |
+| Decode                                | 25 tokens/s   | 20 tokens/s     |
+
+Metal's working-set limit is 19.07 GB. With `gemma4:26b` loaded and the stack's Postgres and Redis running, free memory was about 80 MB and swap held 6.6 GB. At 253 tokens a second, a prompt of about 75,000 tokens takes longer to read than the 300 s stream idle window allows (D7).
+
+### Call sites outside role resolution
+
+Every production model call was inventoried. The ones a `local_only` space (D12) would miss today:
+
+| #     | Call                                                                                                                      | Process                      | How the model is chosen                                                                                                               | Credentials                   |
+| ----- | ------------------------------------------------------------------------------------------------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
+| 1     | Agent turn, for an agent that is not a platform role, or a delegated Runner or Coach given `runner_model` / `coach_model` | AI executor                  | the agent's own config or the caller's argument, else `haiku`                                                                         | space's                       |
+| 2     | Compaction summary                                                                                                        | AI executor                  | constant `RETENTION_POLICY.compactionSummaryModel` (`flash-lite`)                                                                     | space's                       |
+| 3–7   | `ai.*` text, JSON, stream, decide, embed, image and video operations                                                      | AI executor                  | step input, else a constant per operation (`haiku`, `jev`, `text-embedding-3-small`, `flash-image`, `veo`)                            | space's                       |
+| 8–9   | UI surface and applet generation, and their repair                                                                        | UI executor                  | step input, the calling agent's model, `UI_GEN_MODEL`, a constant, then the first entry of `TEXT_MODELS` with a resolvable credential | space's                       |
+| 10    | API-simulation answers                                                                                                    | API executor                 | the simulation's model, the caller's, `SIMULATION_GEN_MODEL`, a constant, then the same sweep                                         | space's                       |
+| 11    | Session titles and metadata (clerk)                                                                                       | orchestrator                 | the clerk role; `auto` picks a catalog candidate on the default's provider and refuses a `local` one                                  | space's                       |
+| 12–14 | Post-run judge, eval-batch judge, re-judge                                                                                | orchestrator, API server     | a criterion's `model` wins over the judge role                                                                                        | space's                       |
+| 15–17 | Memory document, memory query and memory entry embedding                                                                  | memory executor, AI executor | `memory_embed_config`, else `text-embedding-3-small`                                                                                  | **platform environment keys** |
+
+Rows 1–14 use the space's credentials, so a space holding only a local connection fails on them rather than leaking; a space or tenant that also holds a cloud key routes them to the cloud. Rows 15–17 never consult the space: its memory text goes to whichever provider the platform's environment keys name. Row 2 and row 11 are moved into P1, because a local-only Helmsman needs both. The rest are P5's coverage list.

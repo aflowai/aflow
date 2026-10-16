@@ -1,0 +1,349 @@
+{
+  "machine": "Apple M3, 24 GB unified memory (MacBook Air), macOS 26.3",
+  "runtime": "Ollama 0.40.5, Homebrew service: OLLAMA_KV_CACHE_TYPE=q8_0, OLLAMA_FLASH_ATTENTION=1, default parallelism",
+  "gates": {
+    "g1": {
+      "gate": "overflow",
+      "runtime": {
+        "url": "http://127.0.0.1:11434",
+        "version": "0.40.5"
+      },
+      "measuredAt": "2026-10-16T12:29:40.176Z",
+      "result": {
+        "qwen3.5:4b-q4_K_M": {
+          "runner": "llamacpp",
+          "format": "gguf",
+          "quantization": "Q4_K_M",
+          "digest": "d8b0f5e9760cd1682034f292d7ef72ec46f432149be0df7574bf2d6e92e38c04",
+          "overflow": {
+            "small": {
+              "promptEvalCount": 47,
+              "evalCount": 7,
+              "doneReason": "stop",
+              "content": "PELICAN-42",
+              "toolCalls": null,
+              "loadS": 1.34,
+              "promptS": 0.26,
+              "evalS": 0.23,
+              "wallS": 1.83
+            },
+            "overWindow": {
+              "promptEvalCount": 2050,
+              "evalCount": 40,
+              "doneReason": "length",
+              "content": "Based on the pattern provided in your text, here is the analysis:\n\n1.  **Observation**: Every item listed from 447 to 649 is described as \"a",
+              "toolCalls": null,
+              "loadS": 0,
+              "promptS": 6.37,
+              "evalS": 1.67,
+              "wallS": 8.06,
+              "recalledSecret": false
+            },
+            "fitsWindow": {
+              "promptEvalCount": 6437,
+              "evalCount": 7,
+              "doneReason": "stop",
+              "content": "PELICAN-42",
+              "toolCalls": null,
+              "loadS": 1.6,
+              "promptS": 21.21,
+              "evalS": 0.24,
+              "wallS": 23.07,
+              "recalledSecret": true
+            },
+            "repeatedPrefix": {
+              "promptEvalCount": 6437,
+              "evalCount": 7,
+              "doneReason": "stop",
+              "content": "PELICAN-42",
+              "toolCalls": null,
+              "loadS": 0,
+              "promptS": 0.06,
+              "evalS": 0.24,
+              "wallS": 0.32
+            },
+            "truncatedSilently": true
+          },
+          "charsPerToken": {
+            "english": {
+              "chars": 5160,
+              "tokens": 1079,
+              "charsPerToken": 4.78
+            },
+            "german": {
+              "chars": 5560,
+              "tokens": 1159,
+              "charsPerToken": 4.8
+            },
+            "chinese": {
+              "chars": 1520,
+              "tokens": 919,
+              "charsPerToken": 1.65
+            },
+            "code": {
+              "chars": 4825,
+              "tokens": 1198,
+              "charsPerToken": 4.03
+            },
+            "json": {
+              "chars": 4121,
+              "tokens": 1421,
+              "charsPerToken": 2.9
+            }
+          },
+          "overheadTokens": {
+            "eightTools": 889,
+            "oneTinyImage": 11,
+            "replayedThinking": 0,
+            "replayedThinkingChars": 1800
+          }
+        },
+        "gemma4:26b": {
+          "runner": "mlx",
+          "format": "safetensors",
+          "quantization": "nvfp4",
+          "digest": "48eb98ec778c163d87f69d735fcdd79e345063af9af4685613fd018ae5debf5e",
+          "overflow": {
+            "small": {
+              "promptEvalCount": 47,
+              "evalCount": 5,
+              "doneReason": "stop",
+              "content": "PELICAN-42",
+              "toolCalls": null,
+              "loadS": 20.58,
+              "promptS": 55.86,
+              "evalS": 0.23,
+              "wallS": 76.78
+            },
+            "overWindow": {
+              "promptEvalCount": 6437,
+              "evalCount": 5,
+              "doneReason": "stop",
+              "content": "PELICAN-42",
+              "toolCalls": null,
+              "loadS": 0.02,
+              "promptS": 30.35,
+              "evalS": 0.5,
+              "wallS": 31,
+              "recalledSecret": true
+            },
+            "fitsWindow": {
+              "promptEvalCount": 6437,
+              "evalCount": 5,
+              "doneReason": "stop",
+              "content": "PELICAN-42",
+              "toolCalls": null,
+              "loadS": 0.05,
+              "promptS": 0.11,
+              "evalS": 0.35,
+              "wallS": 0.69,
+              "recalledSecret": true
+            },
+            "repeatedPrefix": {
+              "promptEvalCount": 6437,
+              "evalCount": 5,
+              "doneReason": "stop",
+              "content": "PELICAN-42",
+              "toolCalls": null,
+              "loadS": 0,
+              "promptS": 0.08,
+              "evalS": 0.37,
+              "wallS": 0.47
+            },
+            "truncatedSilently": false
+          },
+          "charsPerToken": {
+            "english": {
+              "chars": 5160,
+              "tokens": 1079,
+              "charsPerToken": 4.78
+            },
+            "german": {
+              "chars": 5560,
+              "tokens": 1159,
+              "charsPerToken": 4.8
+            },
+            "chinese": {
+              "chars": 1520,
+              "tokens": 959,
+              "charsPerToken": 1.58
+            },
+            "code": {
+              "chars": 4825,
+              "tokens": 1398,
+              "charsPerToken": 3.45
+            },
+            "json": {
+              "chars": 4121,
+              "tokens": 1480,
+              "charsPerToken": 2.78
+            }
+          },
+          "overheadTokens": {
+            "eightTools": 573,
+            "oneTinyImage": 66,
+            "replayedThinking": 0,
+            "replayedThinkingChars": 1800
+          }
+        }
+      }
+    },
+    "g2": {
+      "gate": "locality",
+      "runtime": {
+        "url": "http://127.0.0.1:11434",
+        "version": "0.40.5"
+      },
+      "measuredAt": "2026-10-16T12:29:30.776Z",
+      "result": {
+        "status": {
+          "cloud": {
+            "disabled": false,
+            "source": "none"
+          }
+        },
+        "remoteModels": [],
+        "localModels": ["qwen3.5:4b-q4_K_M", "qwen3.5:9b", "gemma4:26b"]
+      }
+    },
+    "g3": {
+      "gate": "lifecycle",
+      "runtime": {
+        "url": "http://127.0.0.1:11434",
+        "version": "0.40.5"
+      },
+      "measuredAt": "2026-10-16T12:47:23.963Z",
+      "result": {
+        "tag": "qwen3.5:0.8b-q8_0",
+        "cancelMidPull": {
+          "finished": false,
+          "error": "AbortError: This operation was aborted",
+          "cancelledAtBytes": 22021561,
+          "installedAfterCancel": false
+        },
+        "resumedAndConcurrent": {
+          "wallS": 15,
+          "first": {
+            "events": 229,
+            "lastStatus": "success",
+            "firstCompleted": 26064741
+          },
+          "second": {
+            "events": 225,
+            "lastStatus": "success",
+            "firstCompleted": 26064741
+          },
+          "resumedFromPartial": true
+        },
+        "missingTag": "Error: pull aflow-gate/does-not-exist:latest: pull model manifest: file does not exist",
+        "diskSpaceRefusal": "not exercised: needs a full disk; P3 checks free space before pulling"
+      }
+    },
+    "g4": {
+      "gate": "embeddings",
+      "runtime": {
+        "url": "http://127.0.0.1:11434",
+        "version": "0.40.5"
+      },
+      "measuredAt": "2026-10-16T12:33:44.044Z",
+      "result": {
+        "embeddinggemma": {
+          "nativeDims": 768,
+          "requested1536": "400 {\"error\":\"dimensions 1536 exceeds embedding length 768\"}",
+          "overWindow": {
+            "truncateFalse": "400 {\"error\":\"the input length exceeds the context length\"}",
+            "default": "accepted silently (2048 tokens of ~39000)"
+          },
+          "recallAt1": {
+            "native": 1
+          },
+          "retrievalSet": "20 pairs \u2014 indicative only"
+        },
+        "qwen3-embedding:4b": {
+          "nativeDims": 2560,
+          "requested1536": 1536,
+          "overWindow": {
+            "truncateFalse": "400 {\"error\":\"the input length exceeds the context length\"}",
+            "default": "accepted silently (4095 tokens of ~39000)"
+          },
+          "recallAt1": {
+            "native": 1,
+            "at1536": 1,
+            "at768": 1
+          },
+          "retrievalSet": "20 pairs \u2014 indicative only"
+        }
+      }
+    },
+    "g5": {
+      "gate": "machine",
+      "runtime": {
+        "url": "http://127.0.0.1:11434",
+        "version": "0.40.5"
+      },
+      "measuredAt": "2026-10-16T12:35:38.157Z",
+      "result": {
+        "host": {
+          "platform": "darwin",
+          "arch": "arm64",
+          "cpu": "Apple M3",
+          "totalMemoryBytes": 25769803776,
+          "freeMemoryBytes": 81182720
+        },
+        "gpuWorkingSetBytes": 19069665280,
+        "serverConditions": "KV cache type, flash attention and parallelism are server environment, not visible over the API; record them beside the result",
+        "models": {
+          "qwen3.5:9b": {
+            "coldLoad": {
+              "wallS": 5.1,
+              "loadS": 3.93,
+              "firstPromptS": 0.85
+            },
+            "footprint": {
+              "ctx4096": {
+                "size": 7787985608,
+                "sizeVram": 7787985608,
+                "contextLength": 4096
+              },
+              "ctx32768": {
+                "size": 7787985608,
+                "sizeVram": 7787985608,
+                "contextLength": 4096
+              }
+            },
+            "prefillTokensPerS": 157,
+            "prefillTokens": 12105,
+            "decodeTokensPerS": 25,
+            "switchFromPrevious": null
+          },
+          "gemma4:26b": {
+            "coldLoad": {
+              "wallS": 35.7,
+              "loadS": 10.77,
+              "firstPromptS": 24.66
+            },
+            "footprint": {
+              "ctx4096": {
+                "size": 16203594076,
+                "sizeVram": 16203594076,
+                "contextLength": 4096
+              },
+              "ctx32768": {
+                "size": 16203594076,
+                "sizeVram": 16203594076,
+                "contextLength": 4096
+              }
+            },
+            "prefillTokensPerS": 253,
+            "prefillTokens": 12106,
+            "decodeTokensPerS": 20,
+            "switchFromPrevious": {
+              "from": "qwen3.5:9b",
+              "wallS": 48.8
+            }
+          }
+        }
+      }
+    }
+  }
+}
