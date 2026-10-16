@@ -6,6 +6,7 @@ import {
   WorkflowTaskOutputProjectionSchema,
 } from '../operations/workflow.js';
 import { analyzeInputTemplate, TEMPLATE_BIND_KEY } from '../operations/workflow/taskTemplate.js';
+import { WorkflowTaskRouteSchema } from '../operations/workflow/task.js';
 import {
   DecisionTaskFieldsSchema,
   DraftWhenSchema,
@@ -455,6 +456,15 @@ export const AgentTaskKindSchema = z.enum([
 ]);
 export type AgentTaskKind = z.infer<typeof AgentTaskKindSchema>;
 
+const DraftRoutesSchema = z
+  .array(WorkflowTaskRouteSchema)
+  .min(1)
+  .max(50)
+  .optional()
+  .describe(
+    "Where this task's outcome sends the run: each route's when compares this task's own output (output.<path> <op> <literal>, single or anyOf/allOf) and enables the listed tasks when it holds. An enabled task runs only through its routes — it declares no when of its own, and is enabled by one task's routes. To fork on a judgement, use a decision task; its routes are written for you.",
+  );
+
 const AgentTaskSchema = z.object({
   type: z.literal('agent'),
   taskId: z.string().min(1).max(64),
@@ -467,6 +477,7 @@ const AgentTaskSchema = z.object({
   goal: z.string().min(1).max(4000),
   dependsOn: z.array(z.string().max(64)).default([]),
   when: DraftWhenSchema.optional(),
+  routes: DraftRoutesSchema,
   produces: z.array(TaskOutputProductionSchema).default([]),
   consumes: z.array(TaskInputConsumptionSchema).default([]),
   context: z
@@ -496,6 +507,7 @@ const OperationTaskSchema = z.object({
     ),
   dependsOn: z.array(z.string().max(64)).default([]),
   when: DraftWhenSchema.optional(),
+  routes: DraftRoutesSchema,
   produces: z.array(TaskOutputProductionSchema).default([]),
   consumes: z.array(TaskInputConsumptionSchema).default([]),
   /**
@@ -549,6 +561,7 @@ const HumanTaskSchema = z.object({
   failureMode: z.enum(['isolate', 'cancel_siblings']).default('isolate'),
   dependsOn: z.array(z.string().max(64)).default([]),
   when: DraftWhenSchema.optional(),
+  routes: DraftRoutesSchema,
   produces: z.array(TaskOutputProductionSchema).default([]),
 });
 

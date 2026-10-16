@@ -63,7 +63,7 @@ function messages(tasks: unknown[]): string[] {
 }
 
 describe('a decision task in a compose draft', () => {
-  it('expands into the operation it runs and the guards its routes imply', () => {
+  it('expands into the operation it runs, carrying its routes', () => {
     const result = draft([read, triage(), ...downstream]);
     expect(result.success).toBe(true);
     if (!result.success) return;
@@ -77,24 +77,34 @@ describe('a decision task in a compose draft', () => {
         questions: { team: { type: 'choice' }, urgent: { type: 'yes_no' } },
       },
       consumes: [{ taskId: 'read', outputKey: 'ticket', bindAs: 'ticket' }],
+      routes: [
+        {
+          when: {
+            allOf: [
+              "output.answers.team.value == 'billing'",
+              'output.answers.team.decided == true',
+            ],
+          },
+          enable: ['billing'],
+        },
+        {
+          when: {
+            allOf: [
+              "output.answers.team.value == 'technical'",
+              'output.answers.team.decided == true',
+            ],
+          },
+          enable: ['technical'],
+        },
+        // A question with no minConfidence is always decided, so its route is one comparison.
+        { when: { expression: 'output.answers.urgent.value == true' }, enable: ['page'] },
+        { when: { expression: 'output.answers.team.decided == false' }, enable: ['escalate'] },
+      ],
     });
-    expect(byId.get('billing')).toMatchObject({
-      when: {
-        allOf: [
-          "tasks.triage.output.answers.team.value == 'billing'",
-          'tasks.triage.output.answers.team.decided == true',
-        ],
-      },
-      dependsOn: ['triage'],
-    });
-    // A question with no minConfidence is always decided, so its route is one comparison.
-    expect(byId.get('page')).toMatchObject({
-      when: 'tasks.triage.output.answers.urgent.value == true',
-    });
-    expect(byId.get('escalate')).toMatchObject({
-      when: 'tasks.triage.output.answers.team.decided == false',
-      dependsOn: ['triage'],
-    });
+    for (const target of ['billing', 'technical', 'page', 'escalate']) {
+      expect(byId.get(target)).toMatchObject({ dependsOn: ['triage'] });
+      expect(byId.get(target)).not.toHaveProperty('when');
+    }
     expect(result.data.tasks.some((t) => (t as { type: string }).type === 'decision')).toBe(false);
   });
 
@@ -110,8 +120,8 @@ describe('a decision task in a compose draft', () => {
     ]);
     expect(result.success).toBe(true);
     if (!result.success) return;
-    expect(result.data.tasks.find((t) => t.taskId === 'page')).toMatchObject({
-      when: 'tasks.triage.output.answers.severity.value >= 1.5',
+    expect(result.data.tasks.find((t) => t.taskId === 'triage')).toMatchObject({
+      routes: [{ when: { expression: 'output.answers.severity.value >= 1.5' }, enable: ['page'] }],
     });
   });
 
@@ -170,13 +180,13 @@ describe('a decision task in a compose draft', () => {
     ]);
     expect(result.success).toBe(true);
     if (!result.success) return;
-    expect(result.data.tasks.find((t) => t.taskId === 'escalate')).toMatchObject({
+    const routes = (result.data.tasks.find((t) => t.taskId === 'triage') as { routes?: unknown })
+      .routes;
+    expect(routes).toContainEqual({
       when: {
-        anyOf: [
-          "tasks.triage.output.answers.team.value == 'ambiguous'",
-          'tasks.triage.output.answers.team.decided == false',
-        ],
+        anyOf: ["output.answers.team.value == 'ambiguous'", 'output.answers.team.decided == false'],
       },
+      enable: ['escalate'],
     });
   });
 

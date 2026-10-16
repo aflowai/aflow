@@ -441,6 +441,7 @@ function lowerTask(task: TaskGraphDraftTask, opts: LowerOpts): WorkflowTask {
       ...(inputContract ? { inputContract } : {}),
       ...(produces ? { produces } : {}),
       ...(task.when ? { when: lowerWhen(task.when) } : {}),
+      ...(task.routes ? { routes: task.routes } : {}),
       ...(context ? { context } : {}),
       ...(outputContract ? { outputContract } : {}),
     };
@@ -466,6 +467,7 @@ function lowerTask(task: TaskGraphDraftTask, opts: LowerOpts): WorkflowTask {
       ...(task.retryability !== undefined ? { retryability: task.retryability } : {}),
       ...(task.maxAttempts !== undefined ? { maxAttempts: task.maxAttempts } : {}),
       ...(task.when ? { when: lowerWhen(task.when) } : {}),
+      ...(task.routes ? { routes: task.routes } : {}),
       ...(outputContract ? { outputContract } : {}),
     };
   }
@@ -487,6 +489,7 @@ function lowerTask(task: TaskGraphDraftTask, opts: LowerOpts): WorkflowTask {
     ...(dependsOn.length > 0 ? { dependsOn } : {}),
     ...(produces ? { produces } : {}),
     ...(task.when ? { when: lowerWhen(task.when) } : {}),
+    ...(task.routes ? { routes: task.routes } : {}),
     ...(outputContract ? { outputContract } : {}),
   };
 }

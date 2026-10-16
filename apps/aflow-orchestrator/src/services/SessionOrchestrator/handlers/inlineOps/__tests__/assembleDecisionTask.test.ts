@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { WorkflowAssemblyInputSchema } from '@aflow/schemas';
-import { materializeAndValidateSkillConfig } from '@aflow/cybernetic-runtime';
+import {
+  materializeAndValidateSkillConfig,
+  materializeSkillTasks,
+} from '@aflow/cybernetic-runtime';
 import { assembleWorkflow } from '../assembleWorkflow.js';
 
 const agent = (taskId: string, extra: Record<string, unknown> = {}) => ({
@@ -89,8 +92,34 @@ describe('assembling a draft with a decision task', () => {
     });
   });
 
-  it('guards each routed task with its route and the fallback with the abstention', () => {
+  it('stores the fork on the decision, and its targets carry no guard of their own', () => {
     const byId = new Map(assemble().workflow.tasks.map((t) => [t.taskId, t]));
+    expect(byId.get('triage')?.routes).toEqual([
+      {
+        when: {
+          allOf: ["output.answers.team.value == 'billing'", 'output.answers.team.decided == true'],
+        },
+        enable: ['billing'],
+      },
+      {
+        when: {
+          allOf: [
+            "output.answers.team.value == 'technical'",
+            'output.answers.team.decided == true',
+          ],
+        },
+        enable: ['technical'],
+      },
+      { when: { expression: 'output.answers.team.decided == false' }, enable: ['escalate'] },
+    ]);
+    expect(byId.get('billing')?.when).toBeUndefined();
+    expect(byId.get('escalate')?.dependsOn).toEqual(['triage']);
+  });
+
+  it('guards each routed task with its route and the fallback with the abstention once materialized', () => {
+    const byId = new Map(
+      materializeSkillTasks(assemble().workflow.tasks).map((t) => [t.taskId, t]),
+    );
     expect(byId.get('billing')?.when).toEqual({
       allOf: [
         "tasks.triage.output.answers.team.value == 'billing'",
@@ -102,7 +131,6 @@ describe('assembling a draft with a decision task', () => {
       expression: 'tasks.triage.output.answers.team.decided == false',
       onMissingRef: 'skip',
     });
-    expect(byId.get('escalate')?.dependsOn).toEqual(['triage']);
   });
 
   it('reads a run input directly, declaring it on the workflow', () => {
