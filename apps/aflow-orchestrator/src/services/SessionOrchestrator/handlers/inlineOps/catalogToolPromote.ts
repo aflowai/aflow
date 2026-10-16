@@ -633,12 +633,13 @@ export function checkPlatformOpScope(
   // exactly the declared operations. A present-but-EMPTY list (`[]`) is the
   // operator turning discovery off: it denies everything and must NOT fall
   // through to allowedStepTypes.
+  const alternative = op.agentAlternative ? ` — ${op.agentAlternative}` : '';
   if (scope.allowedOperationIds) {
     if (!scope.allowedOperationIds.includes(opId)) {
-      return `out_of_scope: "${opId}" is not in this agent's promotable operations`;
+      return `out_of_scope: "${opId}" is not in this agent's promotable operations${alternative}`;
     }
   } else if (!scope.allowedStepTypes.includes(op.stepType)) {
-    return `out_of_scope: step type "${op.stepType}" not in discovery scope`;
+    return `out_of_scope: step type "${op.stepType}" not in discovery scope${alternative}`;
   }
   if (scope.excludeOperationIds?.includes(opId)) {
     return `excluded_by_scope: "${opId}"`;

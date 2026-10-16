@@ -427,6 +427,8 @@ export const McpOperationRegistrations: OperationRegistration[] = [
     },
     accessMode: 'write',
     riskModifiers: ['external_side_effect'],
+    agentAlternative:
+      "Call the tool directly instead: catalog.tool.search finds the bound server's tools, catalog.tool.promote adds them, then call each by its callName.",
     inputZod: McpToolCallInputSchema,
     outputZod: McpToolCallOutputSchema,
   },

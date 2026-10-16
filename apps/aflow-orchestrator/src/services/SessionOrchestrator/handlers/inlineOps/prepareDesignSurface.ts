@@ -458,7 +458,7 @@ async function emitBlockedPause(
   }
   if (credentialsMissing.length > 0) {
     lines.push(
-      `- Needs credentials (definition is registered; add credentials at /integrations to activate the binding): ${credentialsMissing.map((m) => `${m.kind}:${m.identifier}`).join(', ')}`,
+      `- Needs credentials (definition is registered; add credentials on the Integrations page to activate the binding): ${credentialsMissing.map((m) => `${m.kind}:${m.identifier}`).join(', ')}`,
     );
   }
   if (policy.length > 0) {

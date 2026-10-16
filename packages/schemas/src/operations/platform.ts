@@ -616,6 +616,16 @@ export const PlatformApiBindingTestOutputSchema = z.object({
   }),
   resolvedUrl: z.string().optional().describe('The fully resolved URL (for verification)'),
   error: z.string().optional().describe('Description of the first check that failed'),
+  suggestedPromoteCall: z
+    .object({
+      operation: z.literal('catalog.tool.promote'),
+      input: z.object({ toolIds: z.array(z.string()) }),
+    })
+    .optional()
+    .describe(
+      "Present when every check passed: the binding's endpoints as promotable tools. No HTTP " +
+        'request was made — promote these and call one by name to exercise the API for real.',
+    ),
 });
 export type PlatformApiBindingTestOutput = z.infer<typeof PlatformApiBindingTestOutputSchema>;
 

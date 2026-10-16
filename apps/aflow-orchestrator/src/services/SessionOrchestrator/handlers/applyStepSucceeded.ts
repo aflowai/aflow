@@ -58,6 +58,12 @@ import {
 import { buildToolResultSummaryWithMeta, type ToolSummaryMeta } from '../helpers/outputSummary.js';
 import { toolResultObservation } from '../helpers/toolResultObservation.js';
 import {
+  DISCOVERY_SCOPE_VAR,
+  TOOL_SURFACE_VAR,
+  type DiscoveryScope,
+} from '../helpers/agentTurn.js';
+import { checkPlatformOpScope } from './inlineOps/catalogToolPromote.js';
+import {
   isHistoryEnabled,
   loadOrCreateConversation,
   storeConversation,
@@ -538,18 +544,27 @@ export async function applyStepSucceeded(params: ApplyStepSucceededParams): Prom
       }
       const followUp = opDescriptor?.usage.followUp;
       if (followUp && followUp.length > 0) {
+        // A next step the agent would be refused is worse than none: it reads
+        // as the platform's own recommendation. Reachable means on this turn's
+        // surface or promotable under its discovery scope; a run carrying
+        // neither is not an agent turn and keeps every follow-up.
+        const surface = readInlineVar<string[]>(
+          updatedState,
+          `${TOOL_SURFACE_VAR}.${nextStepId}`,
+          [],
+        );
+        const scope = readInlineVar<DiscoveryScope | null>(updatedState, DISCOVERY_SCOPE_VAR, null);
+        const reachable = (opId: string): boolean =>
+          surface.includes(opId) ||
+          (scope ? checkPlatformOpScope(opId, scope) === null : surface.length === 0);
         const steps: Array<{ action: string; note: string }> = [];
         for (const f of followUp) {
           if (steps.length >= 3) break;
           if (f.condition === 'always') {
             steps.push({ action: f.operationId, note: f.note });
           } else {
-            // 'when_available' — check the operation exists and is agent-facing.
-            // We don't have the agent's actual tool surface here, so this is a
-            // best-effort filter. Privileged/scoped ops may still appear. The
-            // note should guide the agent to discover via catalog if needed.
             const targetOp = getOperation(f.operationId);
-            if (targetOp && targetOp.agentTool && !targetOp.internal) {
+            if (targetOp && targetOp.agentTool && !targetOp.internal && reachable(f.operationId)) {
               steps.push({
                 action: f.operationId,
                 note:
