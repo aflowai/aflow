@@ -4,12 +4,17 @@
  * A harness step, while it works and once it is done.
  *
  * A harness runs for minutes and says nothing until the end, so the wait is
- * the whole of the experience: what it is reading, what it tried, how the call
- * came back. This is that wait, under the step rather than inside the agent's
- * message — an executor's view of its own work is not the run speaking.
+ * the whole of the experience. What a person watching needs from it is proof
+ * of life: what the agent says it is doing, or the last thing it wrote, and how
+ * long ago it last did anything; then the files it is changing. The tool calls
+ * are the record of how, folded behind a disclosure — a scroll of invocations
+ * cannot be read in real time. This is that wait, under the step rather than
+ * inside the agent's message — an executor's view of its own work is not the
+ * run speaking.
  *
- * One component, two places: the step row in the timeline and the task row in
- * a run. Both show the same thing, because they are the same thing.
+ * One component, every place: the chat, the step row in the timeline and the
+ * task row in a run all mount `HarnessStepCard`. They show the same thing,
+ * because they are the same thing.
  *
  * Nothing vanishes when the step ends. The answer takes the top and the feed
  * folds to its counts under it, so a reader who arrives late reads what came of
@@ -33,6 +38,7 @@ import { Badge, Icon, Spinner, Text } from '@aflow/design-system';
 import { fetchPayload } from '../lib/fetch-payload.js';
 import { harnessCardTitle, readHarnessId, readResultHarness } from '../lib/harness-title.js';
 import { useApi } from './providers.js';
+import { useNowTicker } from './workflow-run-surface/useNowTicker.js';
 import {
   HostHarnessBody,
   HostHarnessHeader,
@@ -92,40 +98,59 @@ export function HarnessActivityProvider({
   );
 }
 
-export function useHarnessActivityLines(
+/** One step's feed as the surface's provider holds it, when it holds one. */
+export function useHarnessActivityFeed(
   stepExecutionId: string | undefined,
-): HarnessActivityLine[] {
+): HarnessActivityState | undefined {
   const { feeds } = useContext(HarnessActivityContext);
-  if (stepExecutionId === undefined) return NO_LINES;
-  return feeds[stepExecutionId]?.lines ?? NO_LINES;
+  return stepExecutionId === undefined ? undefined : feeds[stepExecutionId];
 }
 
-/** Every feed this surface holds — for a row that reads many at once. */
 /**
  * The card for one step, reading that step's feed from the surface's provider.
- * The chat renders it while the step runs and again on the step's result, so
- * the feed a person watched is the one folded above the result.
+ *
+ * The only way a surface mounts the card: the chat renders it while the step
+ * runs and again on the step's result, the run timeline under a step row, and a
+ * run's view under its task — so a commission watched from its run reads the
+ * same card as a call watched from the chat, from the same feed.
  */
 export function HarnessStepCard({
   stepExecutionId,
   running,
   result,
+  harness,
+  startedAt,
 }: {
   stepExecutionId: string | undefined;
   running: boolean;
   result?: HostHarnessResult | undefined;
+  harness?: string | undefined;
+  /** When the step started, where the surface knows it — the elapsed clock. */
+  startedAt?: string | number | undefined;
 }): ReactNode {
-  const lines = useHarnessActivityLines(stepExecutionId);
+  const feed = useHarnessActivityFeed(stepExecutionId);
+  const startedAtMs =
+    typeof startedAt === 'number'
+      ? startedAt
+      : startedAt === undefined
+        ? Number.NaN
+        : Date.parse(startedAt);
   return (
     <HarnessActivityCard
-      lines={lines}
+      lines={feed?.lines ?? NO_LINES}
       running={running}
       result={result}
+      harness={harness}
       stepExecutionId={stepExecutionId}
+      {...(feed !== undefined && feed.lastActivityAtMs > 0
+        ? { lastActivityAtMs: feed.lastActivityAtMs }
+        : {})}
+      {...(Number.isNaN(startedAtMs) ? {} : { startedAtMs })}
     />
   );
 }
 
+/** Every feed this surface holds — for a row that reads many at once. */
 export function useHarnessActivityFeeds(): Record<string, HarnessActivityState> {
   return useContext(HarnessActivityContext).feeds;
 }
@@ -225,8 +250,95 @@ export function lineNeedsExpansion(line: HarnessActivityLine): boolean {
   return line.text.includes('\n') || line.text.length > ROW_FITS_CHARS;
 }
 
-export function liveSummaryLabel(counts: ActivityCounts): string {
-  const parts = [formatDuration(counts.elapsedMs)];
+/**
+ * The line the card leads with: the last thing the agent said — what it says it
+ * is doing, or what it wrote in plain text — or, before it has said anything,
+ * the last fact the run reported about itself.
+ *
+ * A tool call never leads. A scroll of invocations is the record of the work,
+ * not an account of it, and is what a person watching cannot read in real time.
+ */
+export function leadLine(lines: readonly HarnessActivityLine[]): HarnessActivityLine | undefined {
+  let status: HarnessActivityLine | undefined;
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i];
+    if (line === undefined) continue;
+    if (line.kind === 'intent' || line.kind === 'thought') return line;
+    if (line.kind === 'status' && status === undefined) status = line;
+  }
+  return status;
+}
+
+/** The files the run has changed, the most recently touched first. */
+export function changedFiles(lines: readonly HarnessActivityLine[]): string[] {
+  const seen = new Set<string>();
+  const files: string[] = [];
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i];
+    if (line?.kind !== 'tool' || line.changes === undefined || seen.has(line.changes)) continue;
+    seen.add(line.changes);
+    files.push(line.changes);
+  }
+  return files;
+}
+
+/** The last call the run made — what the folded tool lines say they end on. */
+export function lastToolLine(
+  lines: readonly HarnessActivityLine[],
+): Extract<HarnessActivityLine, { kind: 'tool' }> | undefined {
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i];
+    if (line?.kind === 'tool') return line;
+  }
+  return undefined;
+}
+
+/**
+ * How a call's result is marked.
+ *
+ * A command's exit status is not yet one a reader can trust (Plan 315 F84):
+ * inside a commission a command that succeeded can still exit non-zero on a
+ * sandbox refusal, so every check the agent ran would read as a failure. Until
+ * the lane makes that status true, a command's result is shown without a
+ * verdict. Every other tool's error is its own report, and is shown as one.
+ */
+export function resultMark(
+  line: Extract<HarnessActivityLine, { kind: 'tool_result' }>,
+): 'ok' | 'failed' | 'unjudged' {
+  if (line.command === true) return 'unjudged';
+  return line.ok ? 'ok' : 'failed';
+}
+
+/**
+ * How long the run has been going, as of `nowMs`.
+ *
+ * From the step's start where the surface knows it. Otherwise from the feed:
+ * the last line's offset, plus the wall-clock time since that line arrived — so
+ * a run that has been quiet for a minute does not read as a minute younger.
+ */
+export function runElapsedMs(opts: {
+  counts: ActivityCounts;
+  nowMs: number;
+  startedAtMs?: number | undefined;
+  lastActivityAtMs?: number | undefined;
+}): number {
+  if (opts.startedAtMs !== undefined) return Math.max(0, opts.nowMs - opts.startedAtMs);
+  if (opts.lastActivityAtMs === undefined) return opts.counts.elapsedMs;
+  return opts.counts.elapsedMs + Math.max(0, opts.nowMs - opts.lastActivityAtMs);
+}
+
+/** The time since the harness last wrote anything — the card's proof of life. */
+export function sinceActivityLabel(nowMs: number, lastActivityAtMs: number): string {
+  const ms = Math.max(0, nowMs - lastActivityAtMs);
+  if (ms < 2_000) return 'active now';
+  return `last active ${formatDuration(ms)} ago`;
+}
+
+export function liveSummaryLabel(
+  counts: ActivityCounts,
+  elapsedMs: number = counts.elapsedMs,
+): string {
+  const parts = [formatDuration(elapsedMs)];
   if (counts.turns > 0) parts.push(`${String(counts.turns)} turn${counts.turns === 1 ? '' : 's'}`);
   if (counts.toolCalls > 0) {
     parts.push(`${String(counts.toolCalls)} tool call${counts.toolCalls === 1 ? '' : 's'}`);
@@ -385,7 +497,7 @@ function ActivityLineRow({
   expanded: boolean;
   onToggle: () => void;
 }): ReactNode {
-  if (line.kind === 'thought') {
+  if (line.kind === 'thought' || line.kind === 'intent') {
     return <div className="harness-feed__line harness-feed__line--thought">{line.text}</div>;
   }
   if (line.kind === 'status') {
@@ -394,16 +506,17 @@ function ActivityLineRow({
 
   const { tool, detail } = splitToolLine(line);
   const rowClass = `harness-feed__row${line.kind === 'tool_result' ? ' harness-feed__row--result' : ''}`;
+  const mark = line.kind === 'tool_result' ? resultMark(line) : null;
   const body = (
     <>
-      {line.kind === 'tool_result' ? (
+      {mark === 'ok' || mark === 'failed' ? (
         <Icon
-          name={line.ok ? 'check' : 'warning-circle'}
+          name={mark === 'ok' ? 'check' : 'warning-circle'}
           size="xs"
-          color={line.ok ? 'var(--color-status-succeeded)' : 'var(--color-status-failed)'}
+          color={mark === 'ok' ? 'var(--color-status-succeeded)' : 'var(--color-status-failed)'}
         />
       ) : (
-        <span aria-hidden>›</span>
+        <span aria-hidden>{mark === 'unjudged' ? '↳' : '›'}</span>
       )}
       <span className={`harness-feed__text${expanded ? ' harness-feed__text--open' : ''}`}>
         <span className="harness-feed__tool">{tool}</span>
@@ -490,9 +603,47 @@ export interface HarnessActivityCardProps {
   folder?: string | undefined;
   /** Whose feed this is — the handle an expanded row is addressed against. */
   stepExecutionId?: string | undefined;
+  /** When the harness last wrote anything, by this tab's clock. Live feeds only. */
+  lastActivityAtMs?: number | undefined;
+  /** When the step started, where the surface knows it. */
+  startedAtMs?: number | undefined;
 }
 
 const NO_EXPANDED_LINES: ReadonlySet<number> = new Set<number>();
+
+/** At most this many changed files are named before the rest are counted. */
+const FILES_SHOWN = 6;
+
+function ChangedFilesLine({ files }: { files: string[] }): ReactNode {
+  const shown = files.slice(0, FILES_SHOWN);
+  const more = files.length - shown.length;
+  return (
+    <div className="harness-activity__files">
+      <Text variant="muted" size="xs">
+        {`Changing ${String(files.length)} file${files.length === 1 ? '' : 's'}`}
+      </Text>
+      <ul className="harness-activity__file-list">
+        {shown.map((file) => (
+          <li key={file} className="harness-activity__file" title={file}>
+            {file}
+          </li>
+        ))}
+        {more > 0 && <li className="harness-activity__file-more">{`+${String(more)} more`}</li>}
+      </ul>
+    </div>
+  );
+}
+
+/** The folded tool lines say how many there are and the call they end on. */
+export function toolDisclosureLabel(lines: readonly HarnessActivityLine[]): string {
+  const counts = activityCounts([...lines]);
+  const head =
+    counts.toolCalls > 0
+      ? `${String(counts.toolCalls)} tool call${counts.toolCalls === 1 ? '' : 's'}`
+      : `${String(counts.events)} event${counts.events === 1 ? '' : 's'}`;
+  const last = lastToolLine(lines);
+  return last === undefined ? head : `${head} · last: ${last.text}`;
+}
 
 export function HarnessActivityCard({
   lines,
@@ -502,23 +653,34 @@ export function HarnessActivityCard({
   harness,
   folder,
   stepExecutionId,
+  lastActivityAtMs,
+  startedAtMs,
 }: HarnessActivityCardProps): ReactNode {
   // Open while it runs, folded once it is done: a running step is the only
   // thing on screen worth watching, and a finished one has a result to read.
   const [openOverride, setOpenOverride] = useState<boolean | null>(null);
   const open = openOverride ?? running;
+  // The tool lines stay folded whether or not the run is: the lead line and
+  // the files are what a person watching reads, and the calls are for the one
+  // who goes looking.
+  const [toolsOpen, setToolsOpen] = useState(false);
 
   const storedRef = activityRef ?? result?.activityRef;
   const stored = useStoredFeed(storedRef, open && lines.length === 0);
   const shown = lines.length > 0 ? lines : stored.lines;
   const counts = activityCounts(shown);
   const live = useHarnessFeedsLive();
+  const nowMs = useNowTicker(running);
+  const lead = leadLine(shown);
+  const files = changedFiles(shown);
+  const elapsedMs = runElapsedMs({ counts, nowMs, startedAtMs, lastActivityAtMs });
 
   const [expandedLines, setExpandedLines] = useState<ReadonlySet<number>>(NO_EXPANDED_LINES);
   // A row is remembered by its position in one step's feed, so another step's
   // feed would open rows nobody asked for.
   useEffect(() => {
     setExpandedLines(NO_EXPANDED_LINES);
+    setToolsOpen(false);
   }, [stepExecutionId]);
   const toggleLine = useCallback((index: number) => {
     setExpandedLines((current) => {
@@ -562,19 +724,53 @@ export function HarnessActivityCard({
           </>
         )}
         <Text variant="muted" size="xs">
-          {running ? liveSummaryLabel(counts) : foldHeaderText(counts, storedRef !== undefined)}
+          {running
+            ? liveSummaryLabel(counts, elapsedMs)
+            : foldHeaderText(counts, storedRef !== undefined)}
         </Text>
       </button>
 
       {open && (
         <div className="harness-activity__body">
           {shown.length > 0 ? (
-            <ActivityFeed
-              lines={shown}
-              live={running}
-              expandedLines={expandedLines}
-              onToggleLine={toggleLine}
-            />
+            <>
+              {(lead !== undefined || (running && lastActivityAtMs !== undefined)) && (
+                <div className="harness-activity__lead" data-lead-kind={lead?.kind}>
+                  {lead !== undefined && (
+                    <div
+                      className={`harness-activity__lead-text${lead.kind === 'status' ? ' harness-activity__lead-text--status' : ''}`}
+                    >
+                      {lead.text}
+                    </div>
+                  )}
+                  {running && lastActivityAtMs !== undefined && (
+                    <Text variant="muted" size="xs">
+                      {sinceActivityLabel(nowMs, lastActivityAtMs)}
+                    </Text>
+                  )}
+                </div>
+              )}
+              {files.length > 0 && <ChangedFilesLine files={files} />}
+              <button
+                type="button"
+                className="harness-activity__tools"
+                aria-expanded={toolsOpen}
+                onClick={() => {
+                  setToolsOpen(!toolsOpen);
+                }}
+              >
+                <Icon name={toolsOpen ? 'caret-down' : 'caret-right'} size="xs" />
+                <span className="harness-activity__tools-label">{toolDisclosureLabel(shown)}</span>
+              </button>
+              {toolsOpen && (
+                <ActivityFeed
+                  lines={shown}
+                  live={running}
+                  expandedLines={expandedLines}
+                  onToggleLine={toggleLine}
+                />
+              )}
+            </>
           ) : stored.loading ? (
             <Spinner size="sm" />
           ) : (

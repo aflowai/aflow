@@ -415,7 +415,12 @@ describe.skipIf(!AVAILABLE)('a workflow-dispatched host step feeding a watching 
     try {
       await publishWorkflowLiveDeltaWake(
         { db: watchedBy(SESSION_ID), redis: requireAdmin() },
-        { tenantId: TENANT_ID, runId: RUN_ID, channel: 'activity' },
+        {
+          tenantId: TENANT_ID,
+          runId: RUN_ID,
+          channel: 'activity',
+          taskSteps: [{ runId: RUN_ID, taskId: TASK_ID, stepExecutionId: STEP_EXECUTION_ID }],
+        },
       );
       await until(
         'the wake to arrive on the session channel',
@@ -430,11 +435,23 @@ describe.skipIf(!AVAILABLE)('a workflow-dispatched host step feeding a watching 
     // `LiveDelta:` prefix is what keeps a 150ms flush from driving the durable
     // drain.
     expect(received).toHaveLength(1);
+    // And the step it is about, which is all a run view opened after the task
+    // started has to go on.
     expect(JSON.parse(received[0] ?? '{}')).toMatchObject({
       type: 'event',
       runId: SESSION_ID,
       eventType: 'LiveDelta:activity',
+      taskSteps: [{ runId: RUN_ID, taskId: TASK_ID, stepExecutionId: STEP_EXECUTION_ID }],
     });
+  }, 30_000);
+
+  it('reads the buffer for a run task step it learned from the wake alone', async () => {
+    const reader = createLiveDeltaReader(requireAdmin(), TENANT_ID, SESSION_ID);
+    reader.track([{ runId: RUN_ID, taskId: TASK_ID, stepExecutionId: STEP_EXECUTION_ID }]);
+
+    const frames = await reader.read(new AbortController().signal);
+    expect(frames).toHaveLength(1);
+    expect(frames[0]?.delta).toBe(await bufferedFeed());
   }, 30_000);
 
   it('reads the buffer for a run task step it learned from a task update', async () => {

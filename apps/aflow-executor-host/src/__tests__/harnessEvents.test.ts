@@ -241,3 +241,94 @@ describe('what a tool call reads as', () => {
     });
   });
 });
+
+/**
+ * Proof of life: what the agent says it is doing, the files it changes, and
+ * which results are a command's exit status — read off the fields of each call,
+ * so a renamed tool costs nothing.
+ */
+describe('what a watcher reads first', () => {
+  function readCalls(
+    calls: Array<{ id: string; name: string; input: unknown }>,
+    results: Array<{ id: string; isError: boolean }> = [],
+  ): HarnessActivityLine[] {
+    const lines: HarnessActivityLine[] = [];
+    const reader = createHarnessEventReader('claude-stream-json', (l) => lines.push(l), 0);
+    for (const call of calls) {
+      reader.push(
+        `${JSON.stringify({
+          type: 'assistant',
+          message: { content: [{ type: 'tool_use', ...call }] },
+        })}\n`,
+      );
+    }
+    for (const result of results) {
+      reader.push(
+        `${JSON.stringify({
+          type: 'user',
+          message: {
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: result.id,
+                content: 'out',
+                is_error: result.isError,
+              },
+            ],
+          },
+        })}\n`,
+      );
+    }
+    return lines;
+  }
+
+  it('names the file a call changes, and not one it only reads', () => {
+    const lines = readCalls([
+      { id: 'a', name: 'Edit', input: { file_path: 'src/a.ts', old_string: 'x', new_string: 'y' } },
+      { id: 'b', name: 'Write', input: { file_path: 'src/b.ts', content: 'z' } },
+      { id: 'c', name: 'Read', input: { file_path: 'src/c.ts' } },
+      { id: 'd', name: 'Grep', input: { pattern: 'parse', path: 'src' } },
+    ]);
+    expect(lines.map((l) => (l.kind === 'tool' ? (l.changes ?? null) : 'other'))).toEqual([
+      'src/a.ts',
+      'src/b.ts',
+      null,
+      null,
+    ]);
+  });
+
+  it('says what the agent marked in progress, once per change of plan', () => {
+    const plan = (active: string) => ({
+      todos: [
+        { content: 'Read the parser', status: 'completed', activeForm: 'Reading the parser' },
+        { content: active, status: 'in_progress', activeForm: `${active}…` },
+      ],
+    });
+    const lines = readCalls([
+      { id: 'a', name: 'TodoWrite', input: plan('Run the tests') },
+      { id: 'b', name: 'TodoWrite', input: plan('Run the tests') },
+      { id: 'c', name: 'TodoWrite', input: plan('Fix the guard') },
+    ]);
+    expect(lines.filter((l) => l.kind === 'intent').map((l) => l.text)).toEqual([
+      'Run the tests…',
+      'Fix the guard…',
+    ]);
+  });
+
+  it("marks a command's result as one, so its exit status can be judged apart", () => {
+    const lines = readCalls(
+      [
+        { id: 'a', name: 'Bash', input: { command: 'yarn test' } },
+        { id: 'b', name: 'Read', input: { file_path: 'missing.ts' } },
+      ],
+      [
+        { id: 'a', isError: true },
+        { id: 'b', isError: true },
+      ],
+    );
+    const results = lines.filter((l) => l.kind === 'tool_result');
+    expect(results[0]).toMatchObject({ tool: 'Bash', ok: false, command: true });
+    expect(results[1]).toMatchObject({ tool: 'Read', ok: false });
+    expect(results[1]).not.toHaveProperty('command');
+  });
+});

@@ -9,19 +9,26 @@ import type { SessionMetadata } from '../lib/types.js';
 
 export { UNTITLED_CONVERSATION, conversationTitle } from '../lib/conversation-title.js';
 
+/** The space signals that change what a conversation list shows. */
+const SESSION_LIST_SIGNALS: ReadonlySet<string> = new Set([
+  'entity.session.described',
+  'entity.session.status',
+]);
+
 /**
- * Refresh conversation names when the background job finishes one.
+ * Refresh the conversation list when a conversation is named, or when its turn
+ * begins or rests.
  *
  * Listens on the space channel rather than the open session's own stream: the
- * conversation being named is usually not the one anyone has open, and a row
+ * conversation that changed is usually not the one anyone has open, and a row
  * in a list nobody subscribed to would otherwise stay stale until the next
  * refetch. One subscription for the whole list, through the refcounted broker,
- * and one refetch for a burst of names.
+ * and one refetch for a burst of signals.
  */
-export function useSessionMetadataRefresh(spaceId: string | null): void {
+export function useSessionListRefresh(spaceId: string | null): void {
   const invalidate = useCoalescedInvalidation();
   useSpaceEntityEventListener(spaceId, (event) => {
-    if (!spaceId || event.eventType !== 'entity.session.described') return;
+    if (!spaceId || !SESSION_LIST_SIGNALS.has(event.eventType)) return;
     invalidate(['space', spaceId, 'sessions']);
   });
 }

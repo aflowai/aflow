@@ -83,6 +83,50 @@ export function summarizeToolUse(name: string, input: unknown): string {
   return name;
 }
 
+/**
+ * The file a call changes, when it changes one.
+ *
+ * Fields again, not names: a call that names a path and carries what to put
+ * there is a change, whatever the harness calls the tool. A call naming a path
+ * alone is a read.
+ */
+const PATH_FIELDS = ['file_path', 'notebook_path', 'path'] as const;
+const CONTENT_FIELDS = ['content', 'new_string', 'edits', 'new_source'] as const;
+
+export function changedFileOf(input: unknown): string | undefined {
+  if (!isRecord(input)) return undefined;
+  if (!CONTENT_FIELDS.some((field) => input[field] !== undefined)) return undefined;
+  for (const field of PATH_FIELDS) {
+    const value = input[field];
+    if (typeof value === 'string' && value.trim() !== '') return clip(value, SUMMARY_MAX);
+  }
+  return undefined;
+}
+
+/** A call that hands the shell a command line. */
+export function isCommandCall(input: unknown): boolean {
+  return isRecord(input) && typeof input['command'] === 'string';
+}
+
+/**
+ * What the agent says it is doing: the item of its plan it marked in progress.
+ *
+ * A harness that keeps a plan rewrites the whole of it on every change, so the
+ * call carries every item and the one in progress is the news. Its present-tense
+ * wording is preferred where the harness writes one.
+ */
+export function intentOf(input: unknown): string | undefined {
+  if (!isRecord(input) || !Array.isArray(input['todos'])) return undefined;
+  for (const item of input['todos']) {
+    if (!isRecord(item) || item['status'] !== 'in_progress') continue;
+    for (const field of ['activeForm', 'content'] as const) {
+      const value = item[field];
+      if (typeof value === 'string' && value.trim() !== '') return clip(value, SUMMARY_MAX);
+    }
+  }
+  return undefined;
+}
+
 /** A tool result arrives as a string or as content blocks; both read as text. */
 function textOfContent(content: unknown): string {
   if (typeof content === 'string') return content;
@@ -125,8 +169,10 @@ export function createHarnessEventReader(
   const passedThrough: string[] = [];
   // A tool result names the call it answers, not the tool that made it, so the
   // name is carried across from the call. Without it a feed says a result came
-  // back and never which of five in-flight calls it belongs to.
-  const toolNames = new Map<string, string>();
+  // back and never which of five in-flight calls it belongs to. Whether the
+  // call ran a command travels with it for the same reason.
+  const toolCalls = new Map<string, { name: string; command: boolean }>();
+  let lastIntent = '';
 
   const at = (): number => Math.max(0, Date.now() - startedAt);
 
@@ -152,14 +198,24 @@ export function createHarnessEventReader(
       }
       if (block['type'] === 'tool_use' && typeof block['name'] === 'string') {
         const name = block['name'];
+        const input = block['input'];
         const id = block['id'];
-        if (typeof id === 'string') toolNames.set(id, name);
+        if (typeof id === 'string') toolCalls.set(id, { name, command: isCommandCall(input) });
+        const changes = changedFileOf(input);
         onLine({
           kind: 'tool',
           at: at(),
           tool: name,
-          text: summarizeToolUse(name, block['input']),
+          text: summarizeToolUse(name, input),
+          ...(changes !== undefined ? { changes } : {}),
         });
+        // A plan rewritten without moving on says nothing new, and repeating
+        // the same intent would date it as fresh news.
+        const intent = intentOf(input);
+        if (intent !== undefined && intent !== lastIntent) {
+          lastIntent = intent;
+          onLine({ kind: 'intent', at: at(), text: intent });
+        }
       }
     }
   };
@@ -170,13 +226,14 @@ export function createHarnessEventReader(
     for (const block of content) {
       if (!isRecord(block) || block['type'] !== 'tool_result') continue;
       const id = block['tool_use_id'];
-      const tool = (typeof id === 'string' ? toolNames.get(id) : undefined) ?? 'tool';
+      const call = typeof id === 'string' ? toolCalls.get(id) : undefined;
       onLine({
         kind: 'tool_result',
         at: at(),
-        tool,
+        tool: call?.name ?? 'tool',
         ok: block['is_error'] !== true,
         text: summarizeToolResult(block['content']),
+        ...(call?.command === true ? { command: true } : {}),
       });
     }
   };

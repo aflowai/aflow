@@ -764,6 +764,9 @@ export function createSessionTailService(deps: SessionTailDeps): SessionTailServ
         const signalKind = await wakeupSource.next();
         if (signalKind === 'abort' || signal.aborted) return;
         if (signalKind.durable) yield* drainDurable();
+        // After the drain, so a terminal update in the same burst is observed
+        // before a wake that still names its step.
+        if (signalKind.taskSteps) liveReader?.track(signalKind.taskSteps);
         yield* readLive();
       }
     } finally {

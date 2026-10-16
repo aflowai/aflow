@@ -290,6 +290,47 @@ describe("the reader follows a run's task steps too", () => {
     expect(await r.read(signal)).toEqual([]);
   });
 
+  it('follows a step the wake names, for a reader that joined after the task started', async () => {
+    // A run view opened mid-task tails from the session's latest position, so
+    // the `running` update is behind it. The wake is the only thing it hears.
+    const { redis, r } = watching();
+    redis.append(WORKER_STEP, 'activity', 'streamed before the view opened\n');
+    r.track([{ runId: RUN, taskId: 'review', stepExecutionId: WORKER_STEP }]);
+
+    expect(await r.read(signal)).toEqual([
+      {
+        stepExecutionId: WORKER_STEP,
+        channel: 'activity',
+        offset: 0,
+        delta: 'streamed before the view opened\n',
+      },
+    ]);
+
+    redis.append(WORKER_STEP, 'activity', 'and since\n');
+    r.track([{ runId: RUN, taskId: 'review', stepExecutionId: WORKER_STEP }]);
+    expect(await r.read(signal)).toEqual([
+      {
+        stepExecutionId: WORKER_STEP,
+        channel: 'activity',
+        offset: 'streamed before the view opened\n'.length,
+        delta: 'and since\n',
+      },
+    ]);
+  });
+
+  it('ignores a late wake for a step whose task it saw end', async () => {
+    const { redis, r } = watching();
+    r.track([{ runId: RUN, taskId: 'review', stepExecutionId: WORKER_STEP }]);
+    redis.append(WORKER_STEP, 'activity', 'line\n');
+    expect(await r.read(signal)).toHaveLength(1);
+
+    r.observe(
+      taskEvent({ status: 'succeeded', taskType: 'operation', workerSessionId: WORKER_STEP }),
+    );
+    r.track([{ runId: RUN, taskId: 'review', stepExecutionId: WORKER_STEP }]);
+    expect(await r.read(signal)).toEqual([]);
+  });
+
   it('leaves an agent task alone — its worker session is a session, not a step', async () => {
     const { redis, r } = watching();
     r.observe(taskEvent({ status: 'running', taskType: 'agent', workerSessionId: WORKER_STEP }));

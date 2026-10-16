@@ -11,14 +11,21 @@ import type { HarnessActivityLine } from '@aflow/schemas';
 
 import {
   activityCounts,
+  changedFiles,
   emptyFeedLine,
   foldHeaderText,
   isPinnedToBottom,
+  lastToolLine,
+  leadLine,
   leadingSection,
   lineNeedsExpansion,
   liveSummaryLabel,
   parseActivityFeed,
+  resultMark,
+  runElapsedMs,
+  sinceActivityLabel,
   splitToolLine,
+  toolDisclosureLabel,
 } from './harness-activity-card.js';
 import { harnessCardTitle, readHarnessId, readResultHarness } from '../lib/harness-title.js';
 
@@ -76,6 +83,100 @@ describe('what a feed says about itself', () => {
 
   it('says plainly when a finished run recorded nothing', () => {
     expect(foldHeaderText(activityCounts([]), false)).toBe('no activity recorded');
+  });
+});
+
+/**
+ * Proof of life. A person watching a commission reads what the agent says it is
+ * doing, how long since it did anything, and the files it is changing — the
+ * calls are folded behind them.
+ */
+describe('what the card leads with', () => {
+  it('leads with the last thing the agent said, never a tool call', () => {
+    expect(leadLine(FEED)).toEqual({
+      kind: 'thought',
+      at: 61_500,
+      text: 'The empty case throws. Adding the guard.',
+    });
+    const working: HarnessActivityLine[] = [
+      ...FEED,
+      { kind: 'intent', at: 62_000, text: 'Running the parser tests' },
+      { kind: 'tool', at: 62_100, tool: 'Bash', text: 'Bash yarn test:file parser.test.ts' },
+    ];
+    expect(leadLine(working)).toMatchObject({ kind: 'intent', text: 'Running the parser tests' });
+  });
+
+  it('falls back to the last fact the run reported before the agent has spoken', () => {
+    const lines: HarnessActivityLine[] = [
+      { kind: 'status', at: 0, text: 'Model claude-opus-5-5' },
+      { kind: 'tool', at: 300, tool: 'Read', text: 'Read src/parser.ts' },
+    ];
+    expect(leadLine(lines)).toMatchObject({ kind: 'status', text: 'Model claude-opus-5-5' });
+  });
+
+  it('has no lead line for a feed of calls alone', () => {
+    expect(leadLine([{ kind: 'tool', at: 1, tool: 'Read', text: 'Read a.ts' }])).toBeUndefined();
+  });
+
+  it('lists the files changed once each, the most recent first', () => {
+    const lines: HarnessActivityLine[] = [
+      { kind: 'tool', at: 1, tool: 'Edit', text: 'Edit a.ts', changes: 'a.ts' },
+      { kind: 'tool', at: 2, tool: 'Read', text: 'Read c.ts' },
+      { kind: 'tool', at: 3, tool: 'Write', text: 'Write b.ts', changes: 'b.ts' },
+      { kind: 'tool', at: 4, tool: 'Edit', text: 'Edit a.ts', changes: 'a.ts' },
+    ];
+    expect(changedFiles(lines)).toEqual(['a.ts', 'b.ts']);
+    expect(changedFiles(FEED)).toEqual([]);
+  });
+
+  it('names the folded calls by their count and the one they end on', () => {
+    expect(lastToolLine(FEED)?.text).toBe('Bash yarn test:file parser.test.ts');
+    expect(toolDisclosureLabel(FEED)).toBe(
+      '2 tool calls · last: Bash yarn test:file parser.test.ts',
+    );
+    expect(toolDisclosureLabel(FEED.slice(0, 2))).toBe('2 events');
+  });
+
+  it('reads the time since the harness last wrote anything', () => {
+    expect(sinceActivityLabel(10_000, 9_500)).toBe('active now');
+    expect(sinceActivityLabel(100_000, 88_000)).toBe('last active 12.0s ago');
+  });
+
+  it('counts a run from its start, not from a feed that has not reported', () => {
+    // The F95 symptom: a run thirty minutes in reading `0ms` because its feed
+    // was empty. The step's own start is the clock wherever it is known.
+    const empty = activityCounts([]);
+    expect(runElapsedMs({ counts: empty, nowMs: 1_800_000, startedAtMs: 0 })).toBe(1_800_000);
+    expect(liveSummaryLabel(empty, 1_800_000)).toBe('30.0m');
+  });
+
+  it('keeps counting through a quiet spell where only the feed tells the time', () => {
+    const counts = activityCounts(FEED);
+    expect(runElapsedMs({ counts, nowMs: 50_000, lastActivityAtMs: 20_000 })).toBe(91_500);
+    expect(runElapsedMs({ counts, nowMs: 50_000 })).toBe(61_500);
+  });
+});
+
+/**
+ * A command's exit status is not yet true inside a commission (Plan 315 F84):
+ * a command that succeeded can still exit non-zero on a sandbox refusal. The
+ * card shows no verdict for a command until the lane makes it true.
+ */
+describe("how a call's result is marked", () => {
+  it("shows no verdict for a command's exit, either way", () => {
+    expect(
+      resultMark({ kind: 'tool_result', at: 1, tool: 'Bash', ok: false, command: true, text: '' }),
+    ).toBe('unjudged');
+    expect(
+      resultMark({ kind: 'tool_result', at: 1, tool: 'Bash', ok: true, command: true, text: '' }),
+    ).toBe('unjudged');
+  });
+
+  it("shows another tool's error, which is its own report", () => {
+    expect(resultMark({ kind: 'tool_result', at: 1, tool: 'Read', ok: false, text: '' })).toBe(
+      'failed',
+    );
+    expect(resultMark({ kind: 'tool_result', at: 1, tool: 'Read', ok: true, text: '' })).toBe('ok');
   });
 });
 

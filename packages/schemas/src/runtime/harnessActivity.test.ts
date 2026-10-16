@@ -37,6 +37,31 @@ describe('an activity line', () => {
     expect(result).toMatchObject({ kind: 'tool_result', ok: false });
   });
 
+  it('carries what the agent says it is doing, the file a call changes, and a command', () => {
+    expect(
+      HarnessActivityLineSchema.parse({ kind: 'intent', at: 5, text: 'Running the tests' }),
+    ).toEqual({ kind: 'intent', at: 5, text: 'Running the tests' });
+    expect(
+      HarnessActivityLineSchema.parse({
+        kind: 'tool',
+        at: 6,
+        tool: 'Edit',
+        text: 'Edit src/parser.ts',
+        changes: 'src/parser.ts',
+      }),
+    ).toMatchObject({ changes: 'src/parser.ts' });
+    expect(
+      HarnessActivityLineSchema.parse({
+        kind: 'tool_result',
+        at: 7,
+        tool: 'Bash',
+        ok: false,
+        command: true,
+        text: 'exit 1',
+      }),
+    ).toMatchObject({ command: true, ok: false });
+  });
+
   it('refuses a tool line with no tool, and a result with no verdict', () => {
     expect(
       HarnessActivityLineSchema.safeParse({ kind: 'tool', at: 1, text: 'something happened' })

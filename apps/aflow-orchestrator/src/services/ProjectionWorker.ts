@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { Redis } from 'ioredis';
 import type postgres from 'postgres';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
@@ -16,6 +17,7 @@ import {
   compareStreamIds,
   deleteRecoveryData,
   publishActionCenterWake,
+  appendEntityEvent,
   type ProjectionCandidate,
   type SessionHotState,
   type SessionEvent,
@@ -144,6 +146,17 @@ const EVICT_IMMEDIATELY = 1;
 const EVENT_FLUSH_PAGE = 1000;
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Whether a persisted event moved the session between statuses — a turn
+ * beginning, resting, resuming or ending. Every such event is a `Session*`
+ * lifecycle event; step and run events move nothing a conversation list shows.
+ */
+export function movesSessionStatus(
+  event: Pick<SessionEvent, 'eventType'> | null | undefined,
+): boolean {
+  return event?.eventType.startsWith('Session') === true;
+}
 
 function isUuid(value: string): boolean {
   return UUID_RE.test(value);
@@ -278,7 +291,7 @@ export function createProjectionWorker(
     tx: PostgresJsDatabase,
     tenantId: string,
     runId: string,
-  ): Promise<{ evictedGap: boolean }> {
+  ): Promise<{ evictedGap: boolean; statusMoved: boolean }> {
     const [row] = await tx
       .select({ cursor: sessions.lastFlushedEventStreamId, status: sessions.status })
       .from(sessions)
@@ -297,6 +310,7 @@ export function createProjectionWorker(
     let cursor = initialCursor;
     const now = new Date();
     let evictedGap = false;
+    let statusMoved = false;
 
     for (;;) {
       const { entries, lastId, oldestId } = await readDurableEventEntries(
@@ -340,6 +354,7 @@ export function createProjectionWorker(
         }
       }
       if (entries.length > 0) {
+        if (!statusMoved) statusMoved = entries.some((entry) => movesSessionStatus(entry.event));
         await tx
           .insert(eventLog)
           .values(
@@ -359,7 +374,46 @@ export function createProjectionWorker(
         .set({ lastFlushedEventStreamId: cursor })
         .where(eq(sessions.sessionId, runId));
     }
-    return { evictedGap };
+    return { evictedGap, statusMoved };
+  }
+
+  /**
+   * Tell the space a conversation's status moved, once the move is durable.
+   *
+   * Driven by the lifecycle events this projection just persisted rather than
+   * by the projection itself, which runs on every step: a turn of forty tool
+   * calls is two signals — it began, it rested — not forty. Top-level sessions
+   * only, because those are the conversations a list shows; a child's turn is
+   * its parent's. Best-effort: the list refetches on its own staleness.
+   */
+  async function publishSessionStatus(
+    tenantId: string,
+    runId: string,
+    runState: SessionHotState,
+  ): Promise<void> {
+    if (!runState.spaceId || runState.parentSessionId) return;
+    try {
+      await appendEntityEvent(redis, {
+        tenantId,
+        spaceId: runState.spaceId,
+        event: {
+          eventId: randomUUID(),
+          eventType: 'entity.session.status',
+          spaceId: runState.spaceId,
+          tenantId,
+          timestamp: Date.now(),
+          causedBySessionId: runId,
+          payload: { sessionId: runId, status: runState.status },
+          summary: `Conversation ${runState.status.toLowerCase()}`,
+        },
+      });
+    } catch (err) {
+      log.warn(`[ProjectionWorker] session status signal failed for run ${runId}`, {
+        tenantId,
+        runId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   // ── Full flush (terminal runs) ──────────────────────────────────────────
@@ -378,7 +432,7 @@ export function createProjectionWorker(
     // all, and the loss is silent until someone tries.
     const hotStateSnapshot = await buildHotStateSnapshot(redis, tenantId, runState);
     let fenceWon = false;
-    await withTenantSchema(db, tenantContext, async (tx) => {
+    const statusMoved = await withTenantSchema(db, tenantContext, async (tx) => {
       const upserted = await tx
         .insert(sessions)
         .values({
@@ -438,7 +492,8 @@ export function createProjectionWorker(
         })
         .returning({ sessionId: sessions.sessionId });
       fenceWon = upserted.length > 0;
-      if (fenceWon) await flushDurableEvents(tx, tenantId, runId);
+      if (!fenceWon) return false;
+      return (await flushDurableEvents(tx, tenantId, runId)).statusMoved;
     });
 
     if (!fenceWon) {
@@ -472,6 +527,7 @@ export function createProjectionWorker(
         await bumpAttentionGeneration(redis, tenantId, runState.spaceId);
       }
     }
+    if (statusMoved) await publishSessionStatus(tenantId, runId, runState);
 
     // After the upsert, because the mark it claims lives on the row that upsert
     // writes; not swallowed, because a throw here leaves the candidate
@@ -617,9 +673,10 @@ export function createProjectionWorker(
     // from the status upsert, so a failing insert leaves the status row
     // current — the throw still withholds the acknowledgement, which is what
     // re-drives the events.
-    await withTenantSchema(db, tenantContext, async (tx) => {
-      await flushDurableEvents(tx, tenantId, runId);
-    });
+    const { statusMoved } = await withTenantSchema(db, tenantContext, (tx) =>
+      flushDurableEvents(tx, tenantId, runId),
+    );
+    if (statusMoved) await publishSessionStatus(tenantId, runId, runState);
 
     // The candidate is acknowledged by the caller; a later mutation re-arms it.
     // Leaving it armed instead would re-upsert every running session every

@@ -7,6 +7,7 @@ import { ParticipantBadge } from '../room/ParticipantBadge.js';
 import { conversationTitle } from '../../lib/conversation-title.js';
 import type { Session } from '../../lib/types.js';
 import { formatAgo } from './WorkbenchRunRow.js';
+import { isLive, type ConversationLiveState } from './conversationLiveState.js';
 
 export interface ConversationPresence {
   userId: string;
@@ -31,6 +32,47 @@ export interface WorkbenchConversationRowProps {
    * that can only fail — the chat header hides them on the same test.
    */
   canEdit: boolean;
+  /** Whether the agent is mid-turn, and the runs it started that are still going. */
+  live?: ConversationLiveState | undefined;
+}
+
+/** At most this many runs are named on a row before the rest are counted. */
+const RUNS_SHOWN = 2;
+
+/**
+ * What is live in a conversation, on a line of its own: the agent's turn, then
+ * each run it is waiting on with the phase that run is at. Absent when nothing
+ * is — a resting conversation is the ordinary state and says nothing.
+ */
+export function ConversationLiveLine({ live }: { live: ConversationLiveState }) {
+  if (!isLive(live)) return null;
+  const shown = live.runs.slice(0, RUNS_SHOWN);
+  const more = live.runs.length - shown.length;
+  return (
+    <Row
+      gap="xs"
+      align="center"
+      wrap
+      data-testid="conversation-live"
+      style={{ marginTop: 2, minWidth: 0 }}
+    >
+      {live.inTurn ? <Badge variant="running">Working</Badge> : null}
+      {shown.map((run) => (
+        <Badge
+          key={run.runId}
+          variant={run.status === 'paused' ? 'paused' : 'running'}
+          title={`${run.name} — ${run.phase}`}
+        >
+          {`${run.name} · ${run.phase}`}
+        </Badge>
+      ))}
+      {more > 0 ? (
+        <Text size="xs" color="muted">
+          {`+${String(more)} more`}
+        </Text>
+      ) : null}
+    </Row>
+  );
 }
 
 /**
@@ -59,6 +101,7 @@ export function WorkbenchConversationRow({
   onRename,
   onRegenerate,
   canEdit,
+  live,
 }: WorkbenchConversationRowProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
@@ -189,6 +232,9 @@ export function WorkbenchConversationRow({
             {formatAgo(activeAt)}
           </Text>
         </Row>
+        {/* Whether it is live comes before what it is about: it is the reason
+              to open this conversation now rather than later. */}
+        {live ? <ConversationLiveLine live={live} /> : null}
         {/* Absent, not blank, when there is no synopsis: an unnamed row
               collapses to one line rather than reserving space for nothing. */}
         {summary ? (

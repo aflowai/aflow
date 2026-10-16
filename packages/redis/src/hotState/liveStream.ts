@@ -1,5 +1,10 @@
 import type { Redis } from 'ioredis';
-import { LiveDeltaChannelSchema, StreamKeys, type LiveDeltaChannel } from '@aflow/schemas';
+import {
+  LiveDeltaChannelSchema,
+  StreamKeys,
+  type LiveDeltaChannel,
+  type LiveDeltaTaskStep,
+} from '@aflow/schemas';
 import { HOT_STATE_TTL_SECONDS } from './schemas.js';
 import { sessionWakePayload } from './events.js';
 
@@ -88,22 +93,25 @@ export async function appendLiveDelta(
 /**
  * Wake the watchers of a step whose own job named no session.
  *
- * Same payload on the same channel as the append's own wake, so a reader cannot
- * tell the two apart — which is the point: the live plane keeps one shape, and
- * only who resolves the audience differs. A signal, never content.
+ * Same payload on the same channel as the append's own wake, plus the steps it
+ * is about: a session's own step is named by its hot state, but a run's task
+ * step is named only by the run, and a reader that subscribed after the task
+ * started has no other way to learn it. A signal, never content — identifiers
+ * of buffers whose audience this caller already resolved.
  */
 export async function publishLiveDeltaWake(
   redis: Redis,
   tenantId: string,
   sessionIds: readonly string[],
   channel: LiveStreamChannel,
+  taskSteps: readonly LiveDeltaTaskStep[] = [],
 ): Promise<void> {
   if (sessionIds.length === 0) return;
   const pipeline = redis.pipeline();
   for (const sessionId of sessionIds) {
     pipeline.publish(
       StreamKeys.pubsubChannel(tenantId, sessionId),
-      sessionWakePayload(sessionId, `LiveDelta:${channel}`),
+      sessionWakePayload(sessionId, `LiveDelta:${channel}`, taskSteps),
     );
   }
   await pipeline.exec();

@@ -5,7 +5,8 @@ import { useQueryClient } from '@tanstack/react-query';
 import { runViewReducer, initialRunViewState } from '@aflow/run-view';
 import type { SessionEvent } from '../../lib/types.js';
 import { useApiQuery } from '../../hooks/useApiQuery.js';
-import { useSessionEventListener } from '../../hooks/use-session-events.js';
+import { useSessionEventListener, useSessionLiveDeltas } from '../../hooks/use-session-events.js';
+import { HarnessActivityProvider } from '../harness-activity-card.js';
 import { WorkflowRunSurface } from './WorkflowRunSurface.js';
 import { useWorkflowRunUsageRefresh } from './useWorkflowRunUsageRefresh.js';
 import { useWorkflowRunPauseRefresh } from './useWorkflowRunPauseRefresh.js';
@@ -62,6 +63,23 @@ export function WorkflowRunSurfaceContainer({ runId, spaceId }: WorkflowRunSurfa
     replayHistory: true,
   });
 
+  // 4. The live frames of the same session — a harness task's activity feed
+  //    among them, since the server reads a run's task steps for every session
+  //    watching the run. Folded by the same reducer the chat uses and handed to
+  //    the surface through the same provider, so a commission's task row shows
+  //    the card a direct call shows in the chat rather than a feed that never
+  //    reports. Passive, behind the cursor-bearing acquire above.
+  useSessionLiveDeltas(data ? originatingSessionId : null, (frame) => {
+    dispatch({
+      type: 'LIVE_DELTA',
+      stepExecutionId: frame.stepExecutionId,
+      channel: frame.channel,
+      offset: frame.offset,
+      delta: frame.delta,
+      timestamp: new Date().toISOString(),
+    });
+  });
+
   const runState = reducerState.workflowRuns[runId];
 
   const queryClient = useQueryClient();
@@ -89,18 +107,25 @@ export function WorkflowRunSurfaceContainer({ runId, spaceId }: WorkflowRunSurfa
   }
 
   return (
-    <WorkflowRunSurface
-      runId={runId}
-      // While the snapshot loads, `runState` is undefined → the surface shows
-      // its own loading skeleton.
-      state={runState}
-      spaceId={spaceId}
-      selfHydrate={false}
-      // Hydration is owned by this container; the surface never self-hydrates.
-      onHydrate={() => undefined}
-      // Only surface a connection state when we actually have a session to
-      // tail; a run with no originating session is a static snapshot.
-      {...(originatingSessionId ? { sseConnected: isConnected } : {})}
-    />
+    // A run with no session to tail has no live channel to be down, so its
+    // stored feeds read as they are rather than as a dropped connection.
+    <HarnessActivityProvider
+      feeds={reducerState.harnessActivity}
+      live={originatingSessionId ? isConnected : true}
+    >
+      <WorkflowRunSurface
+        runId={runId}
+        // While the snapshot loads, `runState` is undefined → the surface shows
+        // its own loading skeleton.
+        state={runState}
+        spaceId={spaceId}
+        selfHydrate={false}
+        // Hydration is owned by this container; the surface never self-hydrates.
+        onHydrate={() => undefined}
+        // Only surface a connection state when we actually have a session to
+        // tail; a run with no originating session is a static snapshot.
+        {...(originatingSessionId ? { sseConnected: isConnected } : {})}
+      />
+    </HarnessActivityProvider>
   );
 }

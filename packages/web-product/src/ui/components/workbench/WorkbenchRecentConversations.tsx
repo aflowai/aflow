@@ -7,21 +7,25 @@ import { Column, Row, Spinner, Text } from '@aflow/design-system';
 
 import { useApiQuery } from '../../hooks/useApiQuery.js';
 import { formatUnread, useRoomActivity } from '../../hooks/use-room-activity.js';
-import { useSessionMetadataRefresh, useSessionRename } from '../../hooks/use-session-metadata.js';
+import { useSessionListRefresh, useSessionRename } from '../../hooks/use-session-metadata.js';
 import { useSpacePeople } from '../../hooks/use-space-people.js';
 import { useCurrentUser } from '../user-avatar.js';
 import { useSpace } from '../providers.js';
 import { spaceRoute } from '../../lib/space-routes.js';
 import type { Session } from '../../lib/types.js';
+import type { SpaceWorkflowRunSummary } from '../../hooks/use-space-workflow-runs.js';
 import { WorkbenchConversationRow } from './WorkbenchConversationRow.js';
+import { conversationLiveState, runsByConversation } from './conversationLiveState.js';
 import { WorkbenchSection } from './WorkbenchSection.js';
 
 /**
  * Recent conversations (Plan 228 §3.4): **Helmsman only**. Runner sessions are
  * reflected in Skill runs (and never start on their own), so listing them here
  * would double-count. A Helmsman chat doesn't "end", so idle/paused is the
- * normal resting state and labeling it would be noise. The exception is
- * failure: a FAILED session is rare and actionable, so it gets a badge.
+ * normal resting state and labeling it would be noise. The exceptions are the
+ * states someone would otherwise open the conversation to find out: failure,
+ * which is rare and actionable, and being live — the Helmsman mid-turn, or a
+ * commission or publication it started still running, with that run's phase.
  * Clicking resumes in place.
  *
  * Rows lead with the conversation's name and its synopsis. Recency alone
@@ -51,14 +55,26 @@ interface InvitationItem {
 /** How many of the shared list this section shows. */
 const RECENT_CONVERSATIONS_SHOWN = 8;
 
+const NO_RUNS: SpaceWorkflowRunSummary[] = [];
+const NO_NAMES: ReadonlyMap<string, string> = new Map();
+
 export function WorkbenchRecentConversations({
   spaceId,
   spaceSlug,
   onRevealChat,
+  activeRuns = NO_RUNS,
+  workflowNames = NO_NAMES,
 }: {
   spaceId: string;
   spaceSlug: string;
   onRevealChat?: () => void;
+  /**
+   * The space's running and paused runs — the Workbench's own feed, handed down
+   * rather than asked for again, so a row's runs cost no request of their own.
+   */
+  activeRuns?: readonly SpaceWorkflowRunSummary[];
+  /** Skill names by slug, for naming a conversation's runs. */
+  workflowNames?: ReadonlyMap<string, string>;
 }) {
   const router = useRouter();
   const personFor = useSpacePeople(spaceId);
@@ -98,9 +114,14 @@ export function WorkbenchRecentConversations({
 
   const activity = useRoomActivity(spaceId, sessionIds);
   const { rename, regenerate } = useSessionRename(spaceId);
-  // A conversation finishing its name is usually not the one anyone has open,
-  // so the refresh rides the space channel rather than a per-row subscription.
-  useSessionMetadataRefresh(spaceId);
+  // A conversation finishing its name, or starting and ending a turn, is
+  // usually not the one anyone has open, so the refresh rides the space channel
+  // rather than a per-row subscription.
+  useSessionListRefresh(spaceId);
+  const runsFor = useMemo(
+    () => runsByConversation(activeRuns, workflowNames),
+    [activeRuns, workflowNames],
+  );
 
   const sessions = useMemo(() => {
     const list = query.data?.sessions ?? [];
@@ -220,6 +241,7 @@ export function WorkbenchRecentConversations({
                 .filter((p) => p.userId !== currentUser?.userId)}
               personFor={personFor}
               canEdit={canEdit}
+              live={conversationLiveState(s, runsFor)}
               // Awareness, not attention: this says the room moved without
               // you, and stays quieter than the approval and mention cards
               // that ask you to act.

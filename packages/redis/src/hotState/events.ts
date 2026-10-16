@@ -1,5 +1,5 @@
 import type { Redis } from 'ioredis';
-import { StreamKeys } from '@aflow/schemas';
+import { StreamKeys, type LiveDeltaTaskStep } from '@aflow/schemas';
 import { compareStreamIds } from '../streams/streamId.js';
 import type { SessionEvent } from './schemas.js';
 import { HOT_STATE_TTL_SECONDS, SessionEventSchema } from './schemas.js';
@@ -10,9 +10,23 @@ import { sessionCandidateMember } from './candidateMember.js';
 // Pub/Sub Notification (best-effort wakeup for SSE)
 // ============================================================================
 
-/** The wake payload, shared by the atomic append path and the standalone one. */
-export function sessionWakePayload(runId: string, eventType: string): string {
-  return JSON.stringify({ type: 'event', runId, eventType, ts: Date.now() });
+/**
+ * The wake payload, shared by the atomic append path and the standalone one.
+ * `taskSteps` names the run task steps a live-delta wake is about; see
+ * `LiveDeltaTaskStepSchema`.
+ */
+export function sessionWakePayload(
+  runId: string,
+  eventType: string,
+  taskSteps: readonly LiveDeltaTaskStep[] = [],
+): string {
+  return JSON.stringify({
+    type: 'event',
+    runId,
+    eventType,
+    ts: Date.now(),
+    ...(taskSteps.length > 0 ? { taskSteps } : {}),
+  });
 }
 
 // ============================================================================

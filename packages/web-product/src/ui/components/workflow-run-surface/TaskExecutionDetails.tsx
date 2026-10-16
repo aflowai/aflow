@@ -10,8 +10,7 @@ import { Pill } from './WorkflowRunSurfaceParts.js';
 import { CodingTranscriptView } from './CodingTranscriptView.js';
 import {
   HARNESS_RUN_OPERATION,
-  HarnessActivityCard,
-  useHarnessActivityLines,
+  HarnessStepCard,
   useHarnessName,
   useHarnessResult,
 } from '../harness-activity-card.js';
@@ -256,25 +255,25 @@ const HARNESS_RUNNING_STATUSES = new Set(['scheduled', 'running']);
 /**
  * The harness card for a task in a run.
  *
- * The same card the chat timeline shows under a step, keyed by the step the run
- * recorded for the task; the stored feed on the result takes over once the run
- * has written it.
+ * The same card the chat shows for a direct call, keyed by the step the run
+ * recorded for the task and fed from that step's activity stream — which the
+ * surface's provider folds wherever the run is shown (`WorkflowRunSurfaceContainer`
+ * outside the chat). The stored feed on the result takes over once the run has
+ * written it.
  */
-function HarnessTaskActivity({ task }: { task: WorkflowSurfaceTaskState }) {
+export function HarnessTaskActivity({ task }: { task: WorkflowSurfaceTaskState }) {
   const running = HARNESS_RUNNING_STATUSES.has(task.status);
-  const stepExecutionId = harnessFeedStepId(task);
-  const lines = useHarnessActivityLines(stepExecutionId);
   const result = useHarnessResult(running ? undefined : task.outputRef);
   const harness = useHarnessName(task.inputRef);
 
   return (
     <div style={{ marginTop: 'var(--space-1)' }}>
-      <HarnessActivityCard
-        lines={lines}
+      <HarnessStepCard
+        stepExecutionId={harnessFeedStepId(task)}
         running={running}
         result={result}
         harness={harness}
-        stepExecutionId={stepExecutionId}
+        startedAt={task.startedAt}
       />
     </div>
   );

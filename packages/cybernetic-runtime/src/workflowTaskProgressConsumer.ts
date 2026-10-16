@@ -6,6 +6,7 @@ import {
   StreamKeys,
   WORKFLOW_TASK_LIVE_DELTA_EVENT_TYPE,
   type LiveDeltaChannel,
+  type LiveDeltaTaskStep,
   type WorkflowTaskSurfaceUpdatePayload,
   type WorkflowTaskActivityPayload,
   type StepExecutionId,
@@ -230,8 +231,18 @@ async function runOneIteration(args: {
   let totalEmitted = 0;
   // Coalesced per run and channel. A wake is a signal and the reader answers it
   // by reading the whole buffer, so a burst of appended lines needs exactly one
-  // — and the fan-out it skips is two indexed queries apiece.
-  const wakes = new Map<string, { tenantId: string; runId: string; channel: LiveDeltaChannel }>();
+  // — and the fan-out it skips is two indexed queries apiece. The steps it
+  // covers are kept, every one: a run's tasks can stream side by side, and the
+  // wake is how a watcher that joined late learns which buffers to read.
+  const wakes = new Map<
+    string,
+    {
+      tenantId: string;
+      runId: string;
+      channel: LiveDeltaChannel;
+      taskSteps: Map<string, LiveDeltaTaskStep>;
+    }
+  >();
   for (const [streamKey, entries] of result as Array<[string, Array<[string, string[]]>]>) {
     for (const [eventId, fieldPairs] of entries) {
       const fields = parseFieldPairs(fieldPairs);
@@ -239,11 +250,19 @@ async function runOneIteration(args: {
       const wake = decodeLiveDeltaWake(fields);
       if (wake) {
         if (tenantId) {
-          wakes.set(`${tenantId}\u0000${wake.runId}\u0000${wake.channel}`, {
+          const key = `${tenantId}\u0000${wake.runId}\u0000${wake.channel}`;
+          const held = wakes.get(key) ?? {
             tenantId,
             runId: wake.runId,
             channel: wake.channel,
+            taskSteps: new Map<string, LiveDeltaTaskStep>(),
+          };
+          held.taskSteps.set(wake.stepExecutionId, {
+            runId: wake.runId,
+            taskId: wake.taskId,
+            stepExecutionId: wake.stepExecutionId,
           });
+          wakes.set(key, held);
           totalEmitted += 1;
         }
         cursors.set(streamKey, eventId);
@@ -279,7 +298,12 @@ async function runOneIteration(args: {
     }
   }
   for (const wake of wakes.values()) {
-    await publishWorkflowLiveDeltaWake(deps, wake).catch((err: unknown) => {
+    await publishWorkflowLiveDeltaWake(deps, {
+      tenantId: wake.tenantId,
+      runId: wake.runId,
+      channel: wake.channel,
+      taskSteps: [...wake.taskSteps.values()],
+    }).catch((err: unknown) => {
       console.warn(
         `[workflowTaskProgressConsumer] live-delta wake failed runId=${wake.runId}: ${err instanceof Error ? err.message : String(err)}`,
       );

@@ -45,7 +45,7 @@ vi.mock('./useApiQuery.js', () => ({
 
 const { ENTITY_EVENT_REFETCH_WINDOW_MS } = await import('./use-coalesced-invalidation.js');
 const { useSpaceWorkflowRuns, spaceWorkflowRunsKey } = await import('./use-space-workflow-runs.js');
-const { useSessionMetadataRefresh } = await import('./use-session-metadata.js');
+const { useSessionListRefresh } = await import('./use-session-metadata.js');
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -54,7 +54,7 @@ const BURST = 100;
 
 function Workbench(): null {
   useSpaceWorkflowRuns(SPACE_ID);
-  useSessionMetadataRefresh(SPACE_ID);
+  useSessionListRefresh(SPACE_ID);
   return null;
 }
 
@@ -130,6 +130,20 @@ describe('refreshing on the space channel', () => {
 
     expect(invalidationsOf(['space', SPACE_ID, 'sessions'])).toBe(1);
     expect(invalidationsOf(spaceWorkflowRunsKey(SPACE_ID))).toBe(0);
+  });
+
+  it('refetches the conversation list when a turn begins or rests, once for the burst', async () => {
+    deliver([
+      event('entity.session.status', { payload: { sessionId: 's1', status: 'RUNNING' } }),
+      event('entity.session.status', { payload: { sessionId: 's2', status: 'PAUSED' } }),
+      event('entity.session.described'),
+    ]);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ENTITY_EVENT_REFETCH_WINDOW_MS);
+    });
+
+    expect(invalidationsOf(['space', SPACE_ID, 'sessions'])).toBe(1);
   });
 
   it('still refreshes each skill a burst touched, once each', async () => {

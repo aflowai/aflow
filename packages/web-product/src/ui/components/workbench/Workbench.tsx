@@ -82,6 +82,14 @@ export function Workbench({
     [skillsQuery.data],
   );
 
+  // Every workflow's name, the platform's own included: a conversation's
+  // commission or publication is a run of a system workflow, which the skill
+  // list above leaves out.
+  const workflowNames = useMemo(
+    () => new Map((skillsQuery.data?.workflows ?? []).map((w) => [w.slug, w.name] as const)),
+    [skillsQuery.data],
+  );
+
   // What each paused run is waiting on, said as a person. Derived from the
   // open items rather than the run row, so the label and the card that
   // resolves it can never disagree about who is being asked.
@@ -145,6 +153,8 @@ export function Workbench({
       <WorkbenchRecentConversations
         spaceId={spaceId}
         spaceSlug={spaceSlug}
+        activeRuns={runsState.runs}
+        workflowNames={workflowNames}
         {...(onRevealChat ? { onRevealChat } : {})}
       />
     </Column>
