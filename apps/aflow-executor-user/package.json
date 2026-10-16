@@ -23,7 +23,7 @@
     "@aflow/schemas": "workspace:*",
     "html-to-text": "^9.0.5",
     "marked": "^17.0.6",
-    "nodemailer": "^10.0.13",
+    "nodemailer": "^10.0.16",
     "sanitize-html": "^2.18.0"
   },
   "devDependencies": {
