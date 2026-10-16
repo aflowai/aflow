@@ -6,7 +6,7 @@
  */
 
 import { execSync, spawn, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync, writeSync } from 'node:fs';
+import { existsSync, readFileSync, writeSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,6 +18,7 @@ import { findRunningStack, profileConflicts, stackConflictMessage } from './devS
 import { restartAfterExit } from './serviceRestart.mjs';
 import { pairedHostEnvPath } from './stackCredentials.mjs';
 import { loadStackEnv } from './stackEnv.mjs';
+import { isNextApplication, readWorkspaces, selectDistRebuilds } from './webDists.mjs';
 
 /** When true, child exit must not remove entries until shutdown finishes (see shutdown + port sweep). */
 let devRunnerShuttingDown = false;
@@ -94,42 +95,96 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
  * the output of nine other processes.
  */
 function whyUnavailable(name) {
-  const cmd = SERVICE_REGISTRY[name]?.cmd;
-  if (cmd === undefined) return 'no such service';
+  if (SERVICE_REGISTRY[name] === undefined) return 'no such service';
+  const { missingScript, workspace } = serviceWorkspace(name);
+  if (missingScript !== undefined) return `this edition has no \`yarn ${missingScript}\` script`;
+  if (workspace !== undefined && !WORKSPACES.has(workspace)) {
+    return `this edition does not carry ${workspace}`;
+  }
+  return null;
+}
 
-  // A service command is either a root script or a direct workspace command, and a
-  // root script is itself usually a workspace command — so the workspace has to be
-  // checked through that indirection, not only on the text here. `yarn web:dev`
-  // survives the cut while `@aflow/web` does not, which is exactly that case.
+/**
+ * The workspace a service runs, where it runs one.
+ *
+ * A service command is either a root script or a direct workspace command, and a
+ * root script is itself usually a workspace command — so the workspace has to be
+ * found through that indirection, not only on the text here. `yarn web:dev`
+ * survives the cut while `@aflow/web` does not, which is exactly that case.
+ */
+function serviceWorkspace(name) {
+  const cmd = SERVICE_REGISTRY[name].cmd;
   const bare = cmd.replace(/^(?:[A-Z_]+=\S+\s+)+/, '');
   const rootScript = /^yarn ([a-z][a-z0-9:_-]*)\b/.exec(bare);
   let resolved = cmd;
   if (rootScript !== null && rootScript[1] !== 'workspace') {
     const script = ROOT_SCRIPTS[rootScript[1]];
-    if (script === undefined) return `this edition has no \`yarn ${rootScript[1]}\` script`;
+    if (script === undefined) return { missingScript: rootScript[1] };
     resolved = script;
   }
-
-  const workspace = /yarn workspace (@aflow\/[a-z0-9-]+)/.exec(resolved);
-  if (workspace !== null && !WORKSPACES.has(workspace[1])) {
-    return `this edition does not carry ${workspace[1]}`;
-  }
-  return null;
+  return { workspace: /yarn workspace (@aflow\/[a-z0-9-]+)/.exec(resolved)?.[1] };
 }
 
 const ROOT_SCRIPTS = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf-8')).scripts;
 
-const WORKSPACES = new Set(
-  ['apps', 'packages'].flatMap((group) => {
-    const base = join(REPO_ROOT, group);
-    if (!existsSync(base)) return [];
-    return readdirSync(base)
-      .map((name) => join(base, name, 'package.json'))
-      .filter((file) => existsSync(file))
-      .map((file) => JSON.parse(readFileSync(file, 'utf-8')).name)
-      .filter((name) => typeof name === 'string');
-  }),
-);
+const WORKSPACES = readWorkspaces(REPO_ROOT);
+
+/** A failed build's output is printed whole; this only bounds a runaway one. */
+const BUILD_OUTPUT_LIMIT_BYTES = 64 * 1024 * 1024;
+
+/**
+ * Brings every package a Next application in this start reads from `dist` up to
+ * its source before anything serves it (see `webDists.mjs`). A package already
+ * current is not rebuilt; a package this start runs a watcher for is left to
+ * that watcher.
+ *
+ * A build that fails does not stop the start: the Node services read source and
+ * run regardless, so the failure is reported with what it costs the web app.
+ */
+function rebuildStaleWebDists(services) {
+  const started = services
+    .map((name) => serviceWorkspace(name).workspace)
+    .filter((name) => name !== undefined);
+  const consumers = started.filter((name) => isNextApplication(WORKSPACES.get(name)));
+  if (consumers.length === 0) return;
+
+  const { rebuild, watchedStale } = selectDistRebuilds({
+    workspaces: WORKSPACES,
+    consumers,
+    watched: started,
+  });
+  const readers = consumers.join(' and ');
+  for (const { name, reason } of watchedStale) {
+    console.log(`[dev-runner] ${name}: ${reason}; its watcher rebuilds it as the stack starts.`);
+  }
+  if (rebuild.length === 0) return;
+
+  console.log(
+    `[dev-runner] Stale dist/ in ${String(rebuild.length)} package(s) that ${readers} reads from ` +
+      `dist/, where every other service reads src/ — rebuilding ${rebuild.map(({ name }) => name).join(', ')} ` +
+      'before it starts.',
+  );
+  for (const { name, reason } of rebuild) {
+    const startedAt = Date.now();
+    const result = spawnSync('yarn', ['workspace', name, 'build'], {
+      cwd: REPO_ROOT,
+      encoding: 'utf-8',
+      maxBuffer: BUILD_OUTPUT_LIMIT_BYTES,
+    });
+    if (result.status === 0) {
+      const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
+      console.log(`[dev-runner]   ${name} rebuilt (${reason}; ${seconds}s)`);
+      continue;
+    }
+    console.error(
+      `[dev-runner]   ${name} did not build, so ${readers} reads it as it was last built and ` +
+        `fails on anything added since. Fix the build and run \`yarn workspace ${name} build\`.`,
+    );
+    process.stderr.write(
+      `${result.stdout ?? ''}${result.stderr ?? ''}${result.error?.message ?? ''}\n`,
+    );
+  }
+}
 
 /**
  * What `yarn dev` means, decided by which applications are here rather than by a
@@ -784,13 +839,7 @@ async function main() {
   services = await yieldHeldMcpPort(services);
   await refuseTakenPorts(services);
 
-  // Check for stale packages (advisory)
-  try {
-    const { execSync } = await import('node:child_process');
-    execSync('node scripts/check-package-staleness.mjs', { stdio: 'inherit' });
-  } catch {
-    // Non-fatal — continue starting services
-  }
+  rebuildStaleWebDists(services);
 
   // Load environment
   const env = loadEnv(options.env);
