@@ -605,6 +605,8 @@ describe('handleAgentTurn (integration seams)', () => {
     };
 
     vi.mocked(getAIClientForContext).mockResolvedValue({
+      contextWindowFor: () => undefined,
+
       getModel: () => ({
         id: model,
         provider,
@@ -638,6 +640,8 @@ describe('handleAgentTurn (integration seams)', () => {
     };
 
     vi.mocked(getAIClientForContext).mockResolvedValue({
+      contextWindowFor: () => undefined,
+
       getModel: () => ({
         id: model,
         provider,
@@ -672,6 +676,8 @@ describe('handleAgentTurn (integration seams)', () => {
 
     let call = 0;
     vi.mocked(getAIClientForContext).mockResolvedValue({
+      contextWindowFor: () => undefined,
+
       getModel: () => ({
         id: model,
         provider,
@@ -719,6 +725,8 @@ describe('handleAgentTurn (integration seams)', () => {
 
     let call = 0;
     vi.mocked(getAIClientForContext).mockResolvedValue({
+      contextWindowFor: () => undefined,
+
       getModel: () => ({
         id: model,
         provider,
@@ -787,6 +795,8 @@ describe('handleAgentTurn (integration seams)', () => {
       usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
     });
     vi.mocked(getAIClientForContext).mockResolvedValue({
+      contextWindowFor: () => undefined,
+
       getModel: () => ({
         id: model,
         provider,
@@ -834,6 +844,8 @@ describe('handleAgentTurn (integration seams)', () => {
     }
 
     vi.mocked(getAIClientForContext).mockResolvedValue({
+      contextWindowFor: () => undefined,
+
       getModel: () => ({
         id: 'claude-3-test',
         provider: 'anthropic',
@@ -889,6 +901,8 @@ describe('handleAgentTurn (integration seams)', () => {
     const generateJson = vi.fn();
 
     vi.mocked(getAIClientForContext).mockResolvedValue({
+      contextWindowFor: () => undefined,
+
       getModel: () => ({
         id: 'gpt-6.1-sol',
         provider: 'openai',
@@ -938,6 +952,8 @@ describe('handleAgentTurn (integration seams)', () => {
     const generateJson = vi.fn();
 
     vi.mocked(getAIClientForContext).mockResolvedValue({
+      contextWindowFor: () => undefined,
+
       getModel: () => ({
         id: 'grok-4.7',
         provider: 'xai',
@@ -1002,6 +1018,8 @@ describe('handleAgentTurn (integration seams)', () => {
     const generateJson = vi.fn();
 
     vi.mocked(getAIClientForContext).mockResolvedValue({
+      contextWindowFor: () => undefined,
+
       getModel: () => ({
         id: 'gpt-6.1-sol',
         provider: 'openai',

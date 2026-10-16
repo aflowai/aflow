@@ -11,7 +11,11 @@ import {
   retiredRefsFor,
   type ModelDefinition,
 } from '@aflow/ai-client';
-import { isRecommendedAgentModelRef } from '@aflow/schemas';
+import {
+  getProviderDefinition,
+  isProviderInEdition,
+  isRecommendedAgentModelRef,
+} from '@aflow/schemas';
 import {
   getOperationCatalog,
   getAllOperations,
@@ -492,8 +496,14 @@ export const catalogRoutes: FastifyPluginAsync = async (fastify) => {
         }) as z.infer<typeof ModelSchema>;
       };
 
-      // Get models, optionally filtered by provider
-      let catalogModels = catalog.listModels(provider);
+      // Get models, optionally filtered by provider. A model whose provider
+      // this edition does not offer is not listed: a model on the operator's
+      // own machine cannot be reached from the hosted service.
+      const edition = fastify.edition.edition;
+      let catalogModels = catalog.listModels(provider).filter((m) => {
+        const definition = getProviderDefinition(m.provider);
+        return definition === undefined || isProviderInEdition(definition, edition);
+      });
 
       // Filter by capability if specified
       if (capability) {

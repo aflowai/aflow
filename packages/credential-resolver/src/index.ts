@@ -13,5 +13,12 @@ export {
   ByokCredentialError,
   createByokAiClientFactory,
   byokProviderForModelRef,
+  LocalRuntimeBusyError,
   type ByokClientContext,
+  type RuntimeAdmission,
 } from './byokAiClient.js';
+export {
+  providerConfigFromCredential,
+  missingRequiredSecrets,
+  localRuntimeSettings,
+} from './providerConfig.js';

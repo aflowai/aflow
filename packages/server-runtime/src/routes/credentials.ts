@@ -22,8 +22,9 @@ import {
   CredentialMetaSchema,
   CredentialStatusSchema,
   ProviderDefinitionSchema,
-  getAllProviders,
+  getProvidersForEdition,
   getProviderDefinition,
+  isProviderInEdition,
   isAllowedFieldOrigin,
   getSecretFieldIds,
   getConfigFieldIds,
@@ -186,7 +187,7 @@ export const credentialRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       await request.requireTenant();
-      reply.send({ providers: [...getAllProviders()] });
+      reply.send({ providers: getProvidersForEdition(fastify.edition.edition) });
     },
   );
 
@@ -210,7 +211,7 @@ export const credentialRoutes: FastifyPluginAsync = async (fastify) => {
       await request.requireTenant();
       const { providerId } = request.params;
       const def = getProviderDefinition(providerId);
-      if (!def) {
+      if (!def || !isProviderInEdition(def, fastify.edition.edition)) {
         reply.status(404).send({ error: `Provider not found: ${providerId}` });
         return;
       }
@@ -369,7 +370,7 @@ export const credentialRoutes: FastifyPluginAsync = async (fastify) => {
 
       // Validate provider exists
       const def = getProviderDefinition(providerId);
-      if (!def) {
+      if (!def || !isProviderInEdition(def, fastify.edition.edition)) {
         reply.status(400).send({ error: `Unknown provider: ${providerId}` });
         return;
       }
@@ -510,7 +511,7 @@ export const credentialRoutes: FastifyPluginAsync = async (fastify) => {
 
       // Validate provider exists
       const def = getProviderDefinition(providerId);
-      if (!def) {
+      if (!def || !isProviderInEdition(def, fastify.edition.edition)) {
         reply.status(400).send({ error: `Unknown provider: ${providerId}` });
         return;
       }

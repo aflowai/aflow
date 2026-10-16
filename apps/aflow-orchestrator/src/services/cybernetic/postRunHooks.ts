@@ -41,7 +41,7 @@ import { createTenantContext, withTenantSchema, spaces } from '@aflow/database';
 import { createByokAiClientFactory } from '@aflow/credential-resolver';
 import { eq } from 'drizzle-orm';
 import { EntityDirectivesSchema } from '@aflow/schemas';
-import { appendEntityEvent } from '@aflow/redis';
+import { appendEntityEvent, runtimeAdmission } from '@aflow/redis';
 import type { PayloadStore } from '@aflow/payload-store';
 import { randomUUID } from 'node:crypto';
 
@@ -149,7 +149,7 @@ export async function fireCyberneticPostRunHooksStandalone(
 
     // Step 1: Run eval — unconditional when a suite exists; the outcome is
     // recorded on the run as a typed evaluation envelope either way.
-    const byokFactory = createByokAiClientFactory(db);
+    const byokFactory = createByokAiClientFactory(db, runtimeAdmission(redis, { wait: true }));
     let evalOutcome: EvalRunOutcome;
     try {
       evalOutcome = await runEvaluation({

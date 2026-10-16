@@ -530,3 +530,13 @@ export {
 export * from './hostInventory.js';
 export * from './browserHandoff.js';
 export * from './sessionResidue.js';
+export {
+  acquireRuntimeLease,
+  runtimeAdmission,
+  RuntimeLeaseAbortedError,
+  RUNTIME_LEASE_TTL_MS,
+  RUNTIME_LEASE_RENEW_MS,
+  RUNTIME_LEASE_POLL_MS,
+  type RuntimeLease,
+  type AcquireRuntimeLeaseInput,
+} from './localRuntimeAdmission.js';

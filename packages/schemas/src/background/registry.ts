@@ -1169,6 +1169,30 @@ const DEFINITIONS: readonly BackgroundTaskDefinitionInput[] = [
     ],
   },
   {
+    id: 'ai.local_runtime_lease_renewal',
+    service: 'shared-runtime',
+    ownerDomain: 'model-execution',
+    purpose:
+      'Renew the lease each in-flight request holds on a model runtime on the operator machine, for as long as the request runs.',
+    invariant:
+      'A runtime on the operator machine serves no more requests at once than its connection admits, and a holder that died frees its place.',
+    criticality: 'correctness',
+    trigger: 'active-resource',
+    scope: 'per_instance',
+    substrate: 'redis-lease',
+    baseCadenceMs: 10_000,
+    maxBatch: 1,
+    maxCycleMs: 5_000,
+    idleOperationBudgetPerMinute: 0,
+    hotPathProducerBudget: {
+      maxAdditionalNetworkRoundTrips: 0,
+      description: 'Scoped to one request holding a lease; no timer exists at idle.',
+    },
+    disablePolicy: 'never',
+    recovery: 'An unrenewed lease lapses after its TTL and the next waiter takes the place.',
+    sites: [{ path: 'packages/redis/src/localRuntimeAdmission.ts', discovery: ['setInterval'] }],
+  },
+  {
     id: 'executor.compute.session_reaper',
     service: 'executor-compute',
     ownerDomain: 'compute',

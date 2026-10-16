@@ -2,15 +2,17 @@ import {
   createAIClient,
   inferProviderForModelRef,
   type AIClient,
-  type ProviderConfig,
   type BudgetCheckResult,
   type AIProvider,
 } from '@aflow/ai-client';
 import type { ExecutorContext } from '@aflow/executor-runtime';
-import type { AflowError } from '@aflow/schemas';
+import { localRuntimeId, type AflowError } from '@aflow/schemas';
 import {
   CredentialResolver,
   credentialMissingMessage,
+  localRuntimeSettings,
+  missingRequiredSecrets,
+  providerConfigFromCredential,
   type CredentialContext,
   type CredentialLoader,
 } from '@aflow/credential-resolver';
@@ -27,6 +29,7 @@ const AI_TO_CREDENTIAL_PROVIDER: Record<string, string> = {
   xai: 'xai',
   runware: 'runware',
   typesafe: 'typesafe',
+  ollama: 'ollama',
 };
 
 // ---------------------------------------------------------------------------
@@ -284,10 +287,10 @@ export async function getAIClientForContext(
     );
   }
 
-  const apiKey = resolved.secrets['api_key'];
-  if (!apiKey) {
+  const missingSecrets = missingRequiredSecrets(credentialProviderId, resolved);
+  if (missingSecrets.length > 0) {
     throw new AISetupError(
-      `Credential for ${credentialProviderId} exists but has no api_key. ` +
+      `Credential for ${credentialProviderId} exists but has no ${missingSecrets.join(', ')}. ` +
         'Update your credentials in Settings → Credentials.',
       'AI_PROVIDER_API_KEY_MISSING',
       'configuration',
@@ -305,16 +308,10 @@ export async function getAIClientForContext(
   }
 
   // 5. Build single-provider AIClient
-  const providerConfig: ProviderConfig = { apiKey };
-  if (aiProvider === 'openai' && resolved.config['org_id']) {
-    providerConfig.organization = resolved.config['org_id'];
-  }
-
-  const providers: Partial<Record<AIProvider, ProviderConfig>> = {
-    [aiProvider]: providerConfig,
-  };
-
-  const client = createAIClient({ providers, defaultProvider: aiProvider });
+  const client = createAIClient({
+    providers: { [aiProvider]: providerConfigFromCredential(credentialProviderId, resolved) },
+    defaultProvider: aiProvider,
+  });
 
   CLIENT_CACHE.set(cacheKey, {
     client,
@@ -322,4 +319,27 @@ export async function getAIClientForContext(
   });
 
   return client;
+}
+
+/**
+ * The runtime on the operator's machine a model is served by, and how many
+ * requests it takes at once, or null for a model served anywhere else.
+ * A local model with no connection resolves to null too: the request then
+ * fails on the missing credential, which says what to do.
+ */
+export async function resolveLocalRuntime(
+  ctx: ExecutorContext,
+  model: string,
+): Promise<{ runtimeId: string; maxParallel: number } | null> {
+  if (inferProviderForModelRef(model) !== 'ollama') return null;
+  const { tenantId, credentialOwnerId, spaceId } = ctx.job;
+  if (!credentialResolver || !credentialOwnerId || !spaceId) return null;
+  const resolved = await credentialResolver
+    .resolve('ollama', { tenantId, credentialOwnerId, spaceId })
+    .catch(() => null);
+  if (!resolved) return null;
+  return {
+    runtimeId: localRuntimeId(providerConfigFromCredential('ollama', resolved).baseUrl),
+    maxParallel: localRuntimeSettings('ollama', resolved).maxParallel,
+  };
 }

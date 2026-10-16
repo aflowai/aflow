@@ -57,6 +57,46 @@ const embeddingCapabilities: ModelCapabilities = {
 
 export const builtInModels: ModelDefinition[] = [
   // ============================================================================
+  // Models on this computer (Ollama, local edition) — Plan 323
+  //
+  // Capabilities are the conformance probe's (`yarn models:verify-local`), for
+  // the build in `local`. Free: nothing is billed for inference on the
+  // operator's own machine.
+  // ============================================================================
+  {
+    id: 'ollama-gemma4-26b',
+    provider: 'ollama',
+    providerModelId: 'gemma4:26b',
+    displayName: 'Gemma 4 26B (this computer)',
+    description:
+      "Google's Gemma 4 26B mixture-of-experts, 3.8B active, served by Ollama on this computer. Vision, native tool calls, on/off thinking. Apache 2.0.",
+    contextWindow: 262_144,
+    maxOutputTokens: 8192,
+    capabilities: {
+      ...defaultCapabilities,
+      vision: true,
+      reasoning: true,
+      // The MLX runner refuses `format`; JSON rides a tool call instead.
+      structuredOutputs: false,
+      // The runtime has no tool_choice.
+      forcedToolChoice: false,
+    },
+    pricing: { promptPer1M: 0, completionPer1M: 0, currency: 'USD' },
+    traits: { speed: 2, cost: 1, intelligence: 3, outputType: 'text' },
+    aliases: ['gemma-local'],
+    reasoning: { supported: ['off', 'high'] },
+    local: {
+      runtimeTag: 'gemma4:26b',
+      digest: '48eb98ec778c163d87f69d735fcdd79e345063af9af4685613fd018ae5debf5e',
+      runner: 'mlx',
+      quantization: 'nvfp4',
+      runtimeVersion: '0.40.5',
+      probeVersion: 1,
+      measuredAt: '2026-10-16',
+    },
+  },
+
+  // ============================================================================
   // OpenAI Text Models
   //
   // Rates below are the tier for prompts up to 272k input tokens; a longer

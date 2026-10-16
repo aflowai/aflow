@@ -225,6 +225,19 @@ export interface ExecutorContext {
   readonly slotController?: SlotController;
 }
 
+export interface StepAdmission {
+  release(): Promise<void>;
+}
+
+export interface StepAdmissionWaiting {
+  /** Ends the wait: the step was cancelled or the executor is stopping. */
+  readonly signal: AbortSignal;
+  /** Call once, when the step first has to wait; gives back the executor slot. */
+  readonly waiting: (detail: Record<string, unknown>) => void;
+  /** Call while waiting, so the step is not taken for a stalled one. */
+  readonly stillWaiting: () => void;
+}
+
 export interface SlotController {
   /** Release the slot if currently held. Idempotent. */
   release(): void;
@@ -327,6 +340,18 @@ export interface StepHandler {
    * the step definition's timeout, then the executor's flat default.
    */
   resolveTimeoutMs?(ctx: ExecutorContext): Promise<TimeoutSpec | undefined>;
+
+  /**
+   * Optional: wait for something this step must hold to run that only its
+   * input names — a lease on a model runtime the step's model is served by.
+   *
+   * Runs after the context is built and before the timeout starts, so the wait
+   * is never charged to the work. While it waits the step gives back its
+   * executor slot, so steps that need nothing of the kind are not held up
+   * behind it. The admission returned is released when the attempt ends,
+   * whatever its outcome. Undefined means the step needs nothing.
+   */
+  admit?(ctx: ExecutorContext, waiting: StepAdmissionWaiting): Promise<StepAdmission | undefined>;
 
   /**
    * Optional: Initialize handler (called once on startup).

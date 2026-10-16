@@ -22,9 +22,12 @@ interface ProviderDef {
   providerId: string;
   displayName: string;
   docsUrl?: string;
+  description?: string;
   fields: Array<{
     fieldId: string;
     type: string;
+    required?: boolean;
+    defaultValue?: string;
     placeholder?: string;
     helpText?: string;
   }>;
@@ -66,6 +69,14 @@ export function ConnectProviderDialog({
   });
   const def = providersQuery.data?.providers.find((p) => p.providerId === providerId);
   const keyField = def?.fields.find((f) => f.fieldId === 'api_key');
+  // A provider that needs no secret — a runtime on this computer — connects
+  // with its registry defaults, so the operator has nothing to type.
+  const needsKey = def?.fields.some((f) => f.type === 'secret' && f.required === true) ?? true;
+  const defaults = Object.fromEntries(
+    (def?.fields ?? [])
+      .filter((f) => f.type !== 'secret' && f.defaultValue !== undefined)
+      .map((f) => [f.fieldId, f.defaultValue!]),
+  );
 
   const close = () => {
     setKey('');
@@ -76,7 +87,7 @@ export function ConnectProviderDialog({
   };
 
   const save = async () => {
-    if (!providerId || !key.trim()) return;
+    if (!providerId || (needsKey && !key.trim())) return;
     setSaving(true);
     setError(null);
     const scope = spaceOnly ? 'space' : 'user';
@@ -85,7 +96,11 @@ export function ConnectProviderDialog({
       const putRes = await authFetch(`/api/credentials/${providerId}`, {
         method: 'PUT',
         headers: scopedHeaders,
-        body: JSON.stringify({ scope, secrets: { api_key: key.trim() } }),
+        body: JSON.stringify(
+          needsKey
+            ? { scope, secrets: { api_key: key.trim() } }
+            : { scope, secrets: {}, config: defaults },
+        ),
       });
       if (!putRes.ok) {
         const body = (await putRes.json().catch(() => null)) as { error?: string } | null;
@@ -135,22 +150,29 @@ export function ConnectProviderDialog({
             variant="primary"
             size="sm"
             loading={saving}
-            disabled={!key.trim()}
+            disabled={needsKey && !key.trim()}
             onClick={() => {
               void save();
             }}
           >
-            Save & test
+            {needsKey ? 'Save & test' : 'Connect & test'}
           </Button>
         </Row>
       }
     >
       <Column gap="md">
-        <Badge variant="info">
-          {spaceOnly
-            ? 'Workspace key — only used by this workspace'
-            : 'Personal key — used across all your workspaces'}
-        </Badge>
+        {needsKey ? (
+          <Badge variant="info">
+            {spaceOnly
+              ? 'Workspace key — only used by this workspace'
+              : 'Personal key — used across all your workspaces'}
+          </Badge>
+        ) : (
+          <Text size="sm">
+            {def?.description}
+            {defaults['base_url'] ? ` It is reached at ${defaults['base_url']}.` : ''}
+          </Text>
+        )}
         {def?.docsUrl && (
           <Text size="xs" variant="muted">
             <a
@@ -163,22 +185,24 @@ export function ConnectProviderDialog({
             </a>
           </Text>
         )}
-        <Field>
-          <Label>API key</Label>
-          <Input
-            type="password"
-            placeholder={keyField?.placeholder ?? ''}
-            value={key}
-            onChange={(e) => {
-              setKey((e.target as HTMLInputElement).value);
-            }}
-          />
-          {keyField?.helpText && (
-            <Text size="xs" variant="muted">
-              {keyField.helpText}
-            </Text>
-          )}
-        </Field>
+        {needsKey && (
+          <Field>
+            <Label>API key</Label>
+            <Input
+              type="password"
+              placeholder={keyField?.placeholder ?? ''}
+              value={key}
+              onChange={(e) => {
+                setKey((e.target as HTMLInputElement).value);
+              }}
+            />
+            {keyField?.helpText && (
+              <Text size="xs" variant="muted">
+                {keyField.helpText}
+              </Text>
+            )}
+          </Field>
+        )}
         {error && (
           <Text size="sm" role="alert" style={{ color: 'var(--color-status-failed)' }}>
             {error}
@@ -194,7 +218,9 @@ export function ConnectProviderDialog({
           <span style={{ color: 'var(--color-text-muted)' }}>Store for this workspace only</span>
         </Checkbox>
         <Text size="xs" variant="muted">
-          Stored encrypted. Model usage is billed to your provider account.
+          {needsKey
+            ? 'Stored encrypted. Model usage is billed to your provider account.'
+            : 'Change the address, context window or parallelism under Settings → Credentials.'}
         </Text>
       </Column>
     </Dialog>

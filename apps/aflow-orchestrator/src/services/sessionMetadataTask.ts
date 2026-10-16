@@ -20,6 +20,7 @@ import {
   settleSessionMetadata,
   sessionMetadataLeaseHeld,
   appendEntityEvent,
+  runtimeAdmission,
   type SessionMetadataCandidate,
 } from '@aflow/redis';
 import {
@@ -97,7 +98,12 @@ export function createSessionMetadataTask(deps: SessionMetadataTaskDeps): Backgr
       const claimed = await claimSessionMetadataCandidates(deps.redis, ctx.maxBatch);
       if (claimed.length === 0) return { candidates: 0 };
 
-      byokFactory ??= createByokAiClientFactory(deps.db);
+      // A title is not worth queueing behind an agent turn on this computer's
+      // runtime; a busy one fails this conversation's cycle, and it is due again.
+      byokFactory ??= createByokAiClientFactory(
+        deps.db,
+        runtimeAdmission(deps.redis, { wait: false }),
+      );
 
       let processed = 0;
       let failed = 0;

@@ -9,11 +9,13 @@ import {
   createAIClient,
   inferProviderForModelRef,
   type AIClient,
-  type ProviderConfig,
+  type GenerateTextResponse,
 } from '@aflow/ai-client';
+import { localRuntimeId } from '@aflow/schemas';
 import { CredentialResolver } from './resolver.js';
 import { createProviderCredentialDbLoader } from './dbLoader.js';
 import { credentialMissingMessage } from './errors.js';
+import { localRuntimeSettings, providerConfigFromCredential } from './providerConfig.js';
 
 const CLIENT_CACHE_TTL_MS = 300_000;
 
@@ -25,6 +27,7 @@ const BYOK_PROVIDERS = new Set([
   'fireworks',
   'xai',
   'typesafe',
+  'ollama',
 ]);
 
 /**
@@ -61,10 +64,83 @@ export class ByokCredentialError extends Error {
   }
 }
 
+/**
+ * Takes a lease on a model runtime on the operator's machine (Plan 323 D7),
+ * or answers null when the runtime is busy and the caller does not wait.
+ */
+export type RuntimeAdmission = (
+  runtimeId: string,
+  limit: number,
+) => Promise<{ release(): Promise<void> } | null>;
+
+export class LocalRuntimeBusyError extends Error {
+  constructor(readonly runtimeId: string) {
+    super(`The model runtime on this computer (${runtimeId}) is busy; try again once it is free.`);
+    this.name = 'LocalRuntimeBusyError';
+  }
+}
+
+/** A client whose every request to the runtime holds a lease on it for as long as it runs. */
+function admitted(
+  client: AIClient,
+  runtimeId: string,
+  limit: number,
+  admission: RuntimeAdmission,
+): AIClient {
+  const take = async () => {
+    const lease = await admission(runtimeId, limit);
+    if (!lease) throw new LocalRuntimeBusyError(runtimeId);
+    return lease;
+  };
+  const holding =
+    <A extends unknown[], R>(call: (...args: A) => Promise<R>) =>
+    async (...args: A): Promise<R> => {
+      const lease = await take();
+      try {
+        return await call(...args);
+      } finally {
+        await lease.release();
+      }
+    };
+  return {
+    ...client,
+    generateText: holding(client.generateText.bind(client)),
+    generateJson: holding(client.generateJson.bind(client)) as AIClient['generateJson'],
+    generateEmbedding: holding(client.generateEmbedding.bind(client)),
+    decide: holding(client.decide.bind(client)),
+    generateTextStream(request) {
+      let resolveResponse!: (value: GenerateTextResponse) => void;
+      let rejectResponse!: (error: unknown) => void;
+      const response = new Promise<GenerateTextResponse>((resolve, reject) => {
+        resolveResponse = resolve;
+        rejectResponse = reject;
+      });
+      const stream = (async function* () {
+        const lease = await take().catch((error: unknown) => {
+          rejectResponse(error);
+          throw error;
+        });
+        try {
+          const inner = client.generateTextStream(request);
+          inner.response.then(resolveResponse, rejectResponse);
+          yield* inner.stream;
+          await inner.response;
+        } finally {
+          await lease.release();
+        }
+      })();
+      return { stream, response };
+    },
+  };
+}
+
 export class ByokAiClientFactory {
   private cache = new Map<string, { client: AIClient; expiresAt: number }>();
 
-  constructor(private resolver: CredentialResolver) {}
+  constructor(
+    private resolver: CredentialResolver,
+    private admission?: RuntimeAdmission,
+  ) {}
 
   /** Whether `model`'s provider resolves a credential in this context. */
   async canResolveModel(model: string, ctx: ByokClientContext): Promise<boolean> {
@@ -103,21 +179,31 @@ export class ByokAiClientFactory {
     const hit = this.cache.get(cacheKey);
     if (hit && hit.expiresAt > Date.now()) return { client: hit.client, providerId };
 
-    const providerConfig: ProviderConfig = { apiKey: resolved.secrets['api_key'] ?? '' };
-    if (providerId === 'openai' && resolved.config['org_id']) {
-      providerConfig.organization = resolved.config['org_id'];
-    }
-    const client = createAIClient({
+    const providerConfig = providerConfigFromCredential(providerId, resolved);
+    const plain = createAIClient({
       providers: { [providerId]: providerConfig },
       defaultProvider: providerId as 'openai',
     });
+    const client =
+      providerId === 'ollama' && this.admission
+        ? admitted(
+            plain,
+            localRuntimeId(providerConfig.baseUrl),
+            localRuntimeSettings(providerId, resolved).maxParallel,
+            this.admission,
+          )
+        : plain;
     this.cache.set(cacheKey, { client, expiresAt: Date.now() + CLIENT_CACHE_TTL_MS });
     return { client, providerId };
   }
 }
 
-export function createByokAiClientFactory(db: PostgresJsDatabase): ByokAiClientFactory {
+export function createByokAiClientFactory(
+  db: PostgresJsDatabase,
+  admission?: RuntimeAdmission,
+): ByokAiClientFactory {
   return new ByokAiClientFactory(
     new CredentialResolver({ loader: createProviderCredentialDbLoader(db) }),
+    admission,
   );
 }

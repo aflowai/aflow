@@ -140,6 +140,14 @@ export interface AIClient {
    * to ensure the actual provider model ID is sent, not the alias.
    */
   resolveModelId(modelKey: string, explicitProvider?: AIProvider): string;
+
+  /**
+   * The context window a request for this model gets: the catalog's, narrowed
+   * by the connection's when the connection sets one. What prompt budgeting
+   * and compaction must size against — a local runtime's window is the
+   * machine's, and can be a tenth of what the model supports.
+   */
+  contextWindowFor(modelKey: string): number | undefined;
 }
 
 // ============================================================================
@@ -215,13 +223,11 @@ export function createAIClient(config: AIClientConfig): AIClient {
         adapter = createTypeSafeAdapter(providerConfig);
         break;
       }
-      case 'local':
-        throw new AIClientError(
-          `Provider ${provider} is not yet supported`,
-          'invalid_request',
-          provider,
-          false,
-        );
+      case 'ollama': {
+        const { createOllamaAdapter } = await import('./providers/ollama.js');
+        adapter = createOllamaAdapter(providerConfig);
+        break;
+      }
     }
 
     adapters.set(provider, adapter);
@@ -252,6 +258,8 @@ export function createAIClient(config: AIClientConfig): AIClient {
     maxOutputTokens?: number | undefined;
     /** True once the catalog has been consulted, whether or not it had an entry. */
     fromCatalog?: boolean;
+    /** The window this request may use: the catalog's, narrowed by the connection's. */
+    contextWindow?: number | undefined;
     /**
      * Whether the model is shown tool images. Catalog data only: a model
      * outside the catalog gets each image's description instead.
@@ -282,21 +290,21 @@ export function createAIClient(config: AIClientConfig): AIClient {
         maxOutputTokens: model.maxOutputTokens,
         fromCatalog: true,
         vision: model.capabilities.vision,
+        contextWindow: effectiveContextWindow(
+          model.contextWindow,
+          config.providers[explicitProvider ?? model.provider]?.contextTokens,
+        ),
       };
     }
 
     // Model not in catalog - use key as-is with explicit or default provider
-    if (explicitProvider) {
+    const fallbackProvider = explicitProvider ?? config.defaultProvider;
+    if (fallbackProvider) {
+      const connectionWindow = config.providers[fallbackProvider]?.contextTokens;
       return {
-        provider: explicitProvider,
+        provider: fallbackProvider,
         providerModelId: modelKey,
-      };
-    }
-
-    if (config.defaultProvider) {
-      return {
-        provider: config.defaultProvider,
-        providerModelId: modelKey,
+        ...(connectionWindow !== undefined ? { contextWindow: connectionWindow } : {}),
       };
     }
 
@@ -374,6 +382,7 @@ export function createAIClient(config: AIClientConfig): AIClient {
       ...(messages ? { messages } : {}),
       model: resolved.providerModelId,
       ...(maxTokens !== undefined ? { maxTokens } : {}),
+      ...(resolved.contextWindow !== undefined ? { contextWindow: resolved.contextWindow } : {}),
       ...(resolvedReasoning.reasoning !== undefined
         ? { reasoning: resolvedReasoning.reasoning }
         : {}),
@@ -739,5 +748,17 @@ export function createAIClient(config: AIClientConfig): AIClient {
       const resolved = resolveModel(modelKey, explicitProvider);
       return resolved.providerModelId;
     },
+
+    contextWindowFor(modelKey: string): number | undefined {
+      if (!catalog.getModel(modelKey) && !config.defaultProvider) return undefined;
+      return resolveModel(modelKey).contextWindow;
+    },
   };
+}
+
+function effectiveContextWindow(
+  catalogWindow: number,
+  connectionWindow: number | undefined,
+): number {
+  return connectionWindow === undefined ? catalogWindow : Math.min(catalogWindow, connectionWindow);
 }

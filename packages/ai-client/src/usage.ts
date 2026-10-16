@@ -23,7 +23,7 @@ export const UsageRecordSchema = z.object({
   /** Attempt number */
   attempt: z.number().int().positive(),
   /** Provider used */
-  provider: z.enum(['openai', 'anthropic', 'google', 'openrouter', 'fireworks', 'xai', 'local']),
+  provider: z.enum(['openai', 'anthropic', 'google', 'openrouter', 'fireworks', 'xai', 'ollama']),
   /** Model used */
   model: z.string(),
   /** Token usage */

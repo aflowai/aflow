@@ -2,6 +2,7 @@
  * On-demand provider key verification — a cheap authenticated read per
  * provider (models list / key info), never a token-spending generation.
  */
+import { OLLAMA_DEFAULT_BASE_URL } from '@aflow/schemas';
 
 export const VERIFIABLE_PROVIDERS = [
   'openai',
@@ -11,6 +12,7 @@ export const VERIFIABLE_PROVIDERS = [
   'openrouter',
   'xai',
   'typesafe',
+  'ollama',
 ] as const;
 export type VerifiableProvider = (typeof VERIFIABLE_PROVIDERS)[number];
 
@@ -31,6 +33,12 @@ interface Probe {
     secrets: Record<string, string>,
     config: Record<string, string>,
   ) => Record<string, string>;
+  /** What to tell the operator when the probe gets no answer at all. */
+  unreachable?: (config: Record<string, string>) => string;
+}
+
+function ollamaBase(config: Record<string, string>): string {
+  return (config['base_url'] || OLLAMA_DEFAULT_BASE_URL).replace(/\/+$/, '');
 }
 
 const PROBES: Record<VerifiableProvider, Probe> = {
@@ -69,6 +77,12 @@ const PROBES: Record<VerifiableProvider, Probe> = {
     url: () => 'https://api.typesafe.ai/v1/models',
     headers: (secrets) => ({ Authorization: `Bearer ${secrets['api_key'] ?? ''}` }),
   },
+  ollama: {
+    url: (_secrets, config) => `${ollamaBase(config)}/api/version`,
+    headers: (secrets) => (secrets['token'] ? { Authorization: `Bearer ${secrets['token']}` } : {}),
+    unreachable: (config) =>
+      `Ollama is not answering at ${ollamaBase(config)}. Start it on this computer (brew services start ollama, or open the Ollama app).`,
+  },
 };
 
 export async function verifyProviderKey(
@@ -105,7 +119,7 @@ export async function verifyProviderKey(
       supported: true,
       ok: false,
       errorCode: err instanceof Error && err.name === 'AbortError' ? 'timeout' : 'network_error',
-      message: 'Could not reach the provider to verify the key.',
+      message: probe.unreachable?.(config) ?? 'Could not reach the provider to verify the key.',
     };
   } finally {
     clearTimeout(timer);

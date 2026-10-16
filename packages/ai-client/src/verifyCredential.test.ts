@@ -20,6 +20,39 @@ describe('verifyProviderKey', () => {
     }
   });
 
+  it('asks a local runtime for its version at the configured URL, with no key', async () => {
+    const seen: Array<{ url: string; headers: Record<string, string> }> = [];
+    const spyFetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+      seen.push({ url: String(url), headers: (init?.headers ?? {}) as Record<string, string> });
+      return { ok: true, status: 200 };
+    }) as unknown as typeof fetch;
+
+    expect(await verifyProviderKey('ollama', {}, {}, spyFetch)).toEqual({
+      supported: true,
+      ok: true,
+    });
+    await verifyProviderKey(
+      'ollama',
+      { token: 't' },
+      { base_url: 'http://host.docker.internal:11434/' },
+      spyFetch,
+    );
+
+    expect(seen[0]).toEqual({ url: 'http://127.0.0.1:11434/api/version', headers: {} });
+    expect(seen[1]).toEqual({
+      url: 'http://host.docker.internal:11434/api/version',
+      headers: { Authorization: 'Bearer t' },
+    });
+  });
+
+  it('tells the operator to start a local runtime that is not answering', async () => {
+    const outcome = await verifyProviderKey('ollama', {}, {}, failingFetch);
+    expect(outcome).toMatchObject({ supported: true, ok: false, errorCode: 'network_error' });
+    expect(outcome.supported && !outcome.ok && outcome.message).toContain(
+      'Start it on this computer',
+    );
+  });
+
   it('returns ok on a 200 probe', async () => {
     const outcome = await verifyProviderKey('openai', { api_key: 'sk-x' }, {}, okFetch);
     expect(outcome).toEqual({ supported: true, ok: true });

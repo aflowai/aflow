@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@aflow/redis', () => ({
+  runtimeAdmission: () => async () => ({ release: async () => undefined }),
   claimSessionMetadataCandidates: async () => [
     {
       tenantId: '00000000-0000-0000-0000-000000000001',

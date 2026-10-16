@@ -1,4 +1,23 @@
-import type { ProviderDefinition, ProviderId } from './provider.js';
+import type { EditionId } from '../edition/descriptor.js';
+import { isProviderInEdition, type ProviderDefinition, type ProviderId } from './provider.js';
+
+export const OLLAMA_DEFAULT_BASE_URL = 'http://127.0.0.1:11434';
+export const OLLAMA_DEFAULT_CONTEXT_TOKENS = 32_768;
+
+const THIS_MACHINE_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', 'host.docker.internal']);
+
+/**
+ * The runtime a base URL reaches, as one id however it is spelled (Plan 323
+ * D7). The host's loopback goes by several names — and a container reaches
+ * it as `host.docker.internal` — so two connections that differ only in the
+ * name still share one runtime's capacity.
+ */
+export function localRuntimeId(baseUrl: string | undefined): string {
+  const url = new URL(baseUrl || OLLAMA_DEFAULT_BASE_URL);
+  const port = url.port || (url.protocol === 'https:' ? '443' : '80');
+  const host = THIS_MACHINE_HOSTS.has(url.hostname) ? 'this-machine' : url.hostname;
+  return `${host}:${port}`;
+}
 
 // ---------------------------------------------------------------------------
 // Registry entries
@@ -120,6 +139,69 @@ export const PROVIDER_REGISTRY: readonly ProviderDefinition[] = [
         required: true,
         placeholder: 'xai-...',
         helpText: 'Your xAI API key from console.x.ai',
+      },
+    ],
+  },
+  {
+    providerId: 'ollama',
+    category: 'llm',
+    displayName: 'Ollama',
+    description:
+      'Models running on this computer through Ollama. Nothing leaves the machine for inference, and nothing is billed.',
+    iconName: 'Desktop',
+    docsUrl: 'https://docs.ollama.com',
+    editions: ['community-local'],
+    fields: [
+      {
+        fieldId: 'base_url',
+        label: 'Ollama URL',
+        type: 'url',
+        required: false,
+        defaultValue: OLLAMA_DEFAULT_BASE_URL,
+        // Loopback under every name it goes by, and the host as a container
+        // reaches it. A runtime on another machine is an operator's decision
+        // (CREDENTIAL_EXTRA_BASE_URL_ORIGINS), never a tenant's.
+        allowedOrigins: [
+          'http://127.0.0.1:11434',
+          'http://localhost:11434',
+          'http://[::1]:11434',
+          'http://host.docker.internal:11434',
+        ],
+        helpText: 'Where Ollama listens. The default is Ollama on this computer.',
+      },
+      {
+        fieldId: 'token',
+        label: 'Token',
+        type: 'secret',
+        required: false,
+        helpText: 'Only for an Ollama behind a proxy that asks for a bearer token.',
+      },
+      {
+        fieldId: 'context_tokens',
+        label: 'Context window (tokens)',
+        type: 'number',
+        required: false,
+        defaultValue: String(OLLAMA_DEFAULT_CONTEXT_TOKENS),
+        helpText:
+          'The largest prompt and answer a request may use. A larger window holds longer conversations and costs memory.',
+      },
+      {
+        fieldId: 'max_parallel',
+        label: 'Requests at once',
+        type: 'number',
+        required: false,
+        defaultValue: '1',
+        helpText:
+          'How many requests this computer serves at the same time. Match OLLAMA_NUM_PARALLEL; each one needs its own context memory.',
+      },
+      {
+        fieldId: 'keep_alive',
+        label: 'Keep loaded for',
+        type: 'text',
+        required: false,
+        defaultValue: '30m',
+        helpText:
+          'How long a model stays in memory after its last request, as Ollama reads it (30m, 2h, -1 for always).',
       },
     ],
   },
@@ -358,6 +440,21 @@ export function getProviderDefinition(providerId: string): ProviderDefinition | 
 /** Get all provider definitions. */
 export function getAllProviders(): readonly ProviderDefinition[] {
   return PROVIDER_REGISTRY;
+}
+
+/** The providers an edition offers. */
+export function getProvidersForEdition(edition: EditionId): ProviderDefinition[] {
+  return PROVIDER_REGISTRY.filter((p) => isProviderInEdition(p, edition));
+}
+
+/**
+ * Secret fields a credential must carry to be usable. A provider whose only
+ * secret is optional (a local runtime's proxy token) is usable with none.
+ */
+export function getRequiredSecretFieldIds(providerId: string): string[] {
+  const provider = registryMap.get(providerId);
+  if (!provider) return [];
+  return provider.fields.filter((f) => f.type === 'secret' && f.required).map((f) => f.fieldId);
 }
 
 /** Get provider definitions filtered by category. */
