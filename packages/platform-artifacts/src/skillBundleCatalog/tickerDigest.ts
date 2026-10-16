@@ -1,4 +1,6 @@
-import type { SkillBundleId, SkillBundleInput } from '@aflow/schemas';
+import type { SkillBundleId } from '@aflow/schemas';
+
+import type { AuthoredSkillBundle } from '../skillBundleCatalog.js';
 import { POLYGON_CONNECTOR } from '../connectorCatalog/polygon.js';
 import { NEWSAPI_CONNECTOR } from '../connectorCatalog/newsapi.js';
 import { bundledApiDefinitionFromConnector } from './connectorApiDefinitions.js';
@@ -7,9 +9,9 @@ import { TICKER_DIGEST_CARD_SEED } from './tickerDigestArtifactSeed.js';
 const POLYGON_API_KEY_CREDENTIAL = 'polygon-api-key';
 const NEWSAPI_KEY_CREDENTIAL = 'newsapi-api-key';
 
-export const TICKER_DIGEST: SkillBundleInput = {
+export const TICKER_DIGEST: AuthoredSkillBundle = {
   bundleId: 'ticker-digest' as SkillBundleId,
-  version: 4,
+  revision: 2,
   name: 'Ticker Digest',
   tagline: 'One-ticker market digest: price trend, sourced news, watch items, inline card.',
   description: `Wires up the **Polygon.io** and **NewsAPI** integrations and the **Ticker Market Digest** skill — ask for a digest of any ticker and get an inline card: price summary and ~30-day trend from fetched daily bars, up to 12 news items merged from Polygon's ticker feed and a NewsAPI keyword search (every item carrying its real article URL), concrete watch items, and a short prose brief quoting the numbers.

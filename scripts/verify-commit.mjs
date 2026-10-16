@@ -13,12 +13,16 @@
  * such a package built first, such an application's build named as skipped —
  * the repository-shape guards for a touched file outside every workspace and
  * the guards over every production source for a touched one, where the
- * repository has them, on half the machine's cores, on
+ * repository has them, on half the machine's cores, each test given the time
+ * `check-tests.mjs` sizes for a loaded machine unless it declares its own, on
  * macOS less the tests tagged `listener`, each named as skipped and their count
  * written where `AFLOW_CHECK_REPORT` says (`listener-tests.mjs`), ESLint
- * (errors only) on touched sources and Prettier on every touched file. One
- * line per step, the tests reporting only their failures and summary, and the
- * first failure ends the run with that step's output.
+ * (errors only) on touched sources and Prettier on every touched file. Each
+ * step names what it is doing as it starts and ends in one line, the tests
+ * reporting only their failures and summary, and the first failure ends the
+ * run with that step's output. A test run that failed only because tests ran
+ * out of their time names them, and the report says which they were, so a
+ * publication can run the checks once more.
  *
  * Run by hand from a checkout, it measures `HEAD` against `origin/main`.
  *
@@ -37,6 +41,13 @@ import { fileURLToPath } from 'node:url';
 
 import ts from 'typescript';
 
+import { failStep, runStep, STEP_OUTPUT_LIMIT_BYTES } from './check-steps.mjs';
+import {
+  CHECK_TEST_RESULTS_ENV,
+  checkTestOptions,
+  testsTimedOutAlone,
+  timedOutLines,
+} from './check-tests.mjs';
 import {
   listenerSkipLines,
   listenersRefused,
@@ -55,9 +66,6 @@ const binDir = path.join(repoRoot, 'node_modules', '.bin');
 
 const base = process.env['AFLOW_CHECK_BASE'] ?? 'origin/main';
 const sha = process.env['AFLOW_CHECK_SHA'] ?? 'HEAD';
-
-/** What one step may print before it is cut off: a type-check of a broken workspace fits. */
-const STEP_OUTPUT_LIMIT_BYTES = 64 * 1024 * 1024;
 
 const TEST_FILE = /\.(?:test|spec)\.[cm]?[jt]sx?$/;
 /** Suites that drop and recreate schemas in the database they are pointed at. */
@@ -87,16 +95,6 @@ const REPOSITORY_SHAPE_GUARD_DIR = 'packages/schemas/src/edition';
 const TREE_GUARD_DIR = 'packages/schemas/src/__tests__';
 const TREE_WALKER = `${TREE_GUARD_DIR}/backgroundWorkScanner.ts`;
 
-function fail(label, startedAt, text) {
-  console.log(`FAIL ${label} (${elapsed(startedAt)})`);
-  if (text.trim() !== '') process.stdout.write(text.endsWith('\n') ? text : `${text}\n`);
-  process.exit(1);
-}
-
-function elapsed(startedAt) {
-  return `${((Date.now() - startedAt) / 1000).toFixed(1)} s`;
-}
-
 /**
  * The environment each step runs in. The executor sets `GIT_NO_REPLACE_OBJECTS`
  * so a check reads the commits a push sends; this script honours that where it
@@ -109,19 +107,19 @@ function stepEnv(extra = {}) {
   return env;
 }
 
-function run(label, command, args, options = {}) {
-  const startedAt = Date.now();
-  const result = spawnSync(command, args, {
+/** Run one step, `activity` naming it as it starts; a failure ends the run unless `onFailure` says more first. */
+async function run(label, activity, command, args, options = {}) {
+  const step = await runStep({
+    label,
+    activity,
+    command,
+    args,
     cwd: options.cwd ?? repoRoot,
     env: stepEnv(options.env),
-    encoding: 'utf8',
-    maxBuffer: STEP_OUTPUT_LIMIT_BYTES,
-    stdio: ['ignore', 'pipe', 'pipe'],
   });
-  const printed = `${result.stdout ?? ''}${result.stderr ?? ''}`;
-  if (result.error !== undefined) fail(label, startedAt, `${printed}${result.error.message}\n`);
-  if (result.status !== 0) fail(label, startedAt, printed);
-  console.log(`ok   ${label} (${elapsed(startedAt)})`);
+  if (step.passed) return;
+  options.onFailure?.();
+  await failStep(label, step.startedAt, step.printed);
 }
 
 function bin(name) {
@@ -351,9 +349,13 @@ const treeGuardWorkspace = workspaces.byDir.get(TREE_GUARD_DIR.split('/').slice(
 // tsx as a loader rather than its CLI: the CLI opens a socket to talk to its
 // child, and the sandbox a check runs in refuses to listen on one.
 for (const guard of ['large-files', 'context-budget']) {
-  run(`${guard} guard`, process.execPath, ['--import', 'tsx', `scripts/${guard}/cli.ts`, 'check'], {
-    env: { NODE_OPTIONS: '--conditions=ts-source' },
-  });
+  await run(
+    `${guard} guard`,
+    `running the ${guard} guard`,
+    process.execPath,
+    ['--import', 'tsx', `scripts/${guard}/cli.ts`, 'check'],
+    { env: { NODE_OPTIONS: '--conditions=ts-source' } },
+  );
 }
 
 // A type-check reads every other package from its compiled declarations, and a
@@ -392,29 +394,40 @@ const place = (name) => {
   ordered.push(workspaces.byName.get(name));
 };
 for (const name of [...needed].sort()) place(name);
+
+// The executor names this file to a check it runs, signs the count of skipped
+// listener tests into the check's receipt, and reads the tests that ran out of
+// time on a run they alone failed; run by hand, nothing names it.
+const checkReport = process.env['AFLOW_CHECK_REPORT'] || undefined;
+const writeCheckReport = (report) => {
+  if (checkReport !== undefined) writeFileSync(checkReport, JSON.stringify(report));
+};
 for (const workspace of ordered) {
   if (workspace.build === undefined) continue;
   if (!workspace.dir.startsWith('packages/')) {
     console.log(`skip build ${workspace.name}: an application builds in its deploy pipeline`);
     continue;
   }
-  run(`build ${workspace.name}`, 'sh', ['-c', workspace.build], {
-    cwd: path.join(repoRoot, workspace.dir),
-    env: {
-      PATH: [
-        path.join(repoRoot, workspace.dir, 'node_modules', '.bin'),
-        binDir,
-        process.env['PATH'],
-      ]
-        .filter(Boolean)
-        .join(path.delimiter),
+  const packageDir = path.join(repoRoot, workspace.dir);
+  await run(
+    `build ${workspace.name}`,
+    `building ${workspace.name}`,
+    'sh',
+    ['-c', workspace.build],
+    {
+      cwd: packageDir,
+      env: {
+        PATH: [path.join(packageDir, 'node_modules', '.bin'), binDir, process.env['PATH']]
+          .filter(Boolean)
+          .join(path.delimiter),
+      },
     },
-  });
+  );
 }
 
 const touchedNames = new Set(touchedWorkspaces.map((w) => w.name));
 for (const config of touchedWorkspaces.flatMap((workspace) => workspace.configs)) {
-  run(`tsc ${config}`, bin('tsc'), ['-p', config, '--noEmit']);
+  await run(`tsc ${config}`, `type-checking ${config}`, bin('tsc'), ['-p', config, '--noEmit']);
 }
 
 const catalogGuards = touchedNames.has('@aflow/platform-artifacts')
@@ -431,6 +444,13 @@ const tests = [
     ...reaching,
   ]),
 ].filter((file) => !DATABASE_TEST_FILE.test(file));
+const readJson = (file) => {
+  try {
+    return JSON.parse(readFileSync(file, 'utf8'));
+  } catch {
+    return undefined;
+  }
+};
 let skippedListeners = [];
 if (tests.length === 0) {
   console.log('ok   tests: none reach the touched files');
@@ -442,52 +462,66 @@ if (tests.length === 0) {
   // when every core is taken. Where no test can listen, the ones that must are
   // left out, and a JSON report beside the summary says which they were.
   const workers = Math.max(1, Math.floor(availableParallelism() / 2));
-  const jsonReport = listenersRefused()
-    ? path.join(mkdtempSync(path.join(tmpdir(), 'verify-commit-')), 'tests.json')
-    : undefined;
-  run(
+  const reports = mkdtempSync(path.join(tmpdir(), 'verify-commit-'));
+  const testResults = path.join(reports, 'results.json');
+  const jsonReport = listenersRefused() ? path.join(reports, 'tests.json') : undefined;
+  await run(
     `tests (${String(tests.length)} files, ${String(workers)} workers)`,
+    `running ${String(tests.length)} test files on ${String(workers)} workers`,
     process.execPath,
     [
       'scripts/test-runner.mjs',
       'file',
       ...tests.sort(),
-      '--reporter=minimal',
+      ...checkTestOptions(),
       ...(jsonReport === undefined
         ? []
         : [...WITHOUT_LISTENER_TESTS, '--reporter=json', `--outputFile.json=${jsonReport}`]),
     ],
-    { env: { PHOENIX_TEST_WORKERS: String(workers) } },
+    {
+      env: { PHOENIX_TEST_WORKERS: String(workers), [CHECK_TEST_RESULTS_ENV]: testResults },
+      onFailure: () => {
+        const summary = readJson(testResults);
+        const timedOut = summary === undefined ? [] : testsTimedOutAlone(summary);
+        if (timedOut.length > 0) for (const line of timedOutLines(timedOut)) console.log(line);
+        // A run that failed may have ended before its JSON report was written.
+        const listenerReport = jsonReport === undefined ? undefined : readJson(jsonReport);
+        writeCheckReport({
+          skippedListenerTests:
+            listenerReport === undefined
+              ? 0
+              : skippedListenerTests(listenerReport, repoRoot).length,
+          ...(timedOut.length > 0 ? { testTimeouts: timedOut } : {}),
+        });
+      },
+    },
   );
   if (jsonReport !== undefined) {
     skippedListeners = skippedListenerTests(JSON.parse(readFileSync(jsonReport, 'utf8')), repoRoot);
     for (const line of listenerSkipLines(skippedListeners)) console.log(line);
   }
 }
-// The executor names this file to a check it runs, and signs the count into
-// the check's receipt; run by hand, nothing names it.
-const checkReport = process.env['AFLOW_CHECK_REPORT'];
-if (checkReport !== undefined && checkReport !== '') {
-  writeFileSync(checkReport, JSON.stringify({ skippedListenerTests: skippedListeners.length }));
-}
+writeCheckReport({ skippedListenerTests: skippedListeners.length });
 
 const sources = present.filter((file) => LINTED_SOURCE.test(file));
 if (sources.length === 0) {
   console.log('ok   eslint: no sources touched');
 } else {
-  run(`eslint (${String(sources.length)} files, errors only)`, bin('eslint'), [
-    '--quiet',
-    '--no-warn-ignored',
-    ...sources,
-  ]);
+  await run(
+    `eslint (${String(sources.length)} files, errors only)`,
+    `linting ${String(sources.length)} files`,
+    bin('eslint'),
+    ['--quiet', '--no-warn-ignored', ...sources],
+  );
 }
 
 if (present.length === 0) {
   console.log('ok   prettier: no files touched');
 } else {
-  run(`prettier (${String(present.length)} files)`, bin('prettier'), [
-    '--check',
-    '--ignore-unknown',
-    ...present,
-  ]);
+  await run(
+    `prettier (${String(present.length)} files)`,
+    `checking the format of ${String(present.length)} files`,
+    bin('prettier'),
+    ['--check', '--ignore-unknown', ...present],
+  );
 }

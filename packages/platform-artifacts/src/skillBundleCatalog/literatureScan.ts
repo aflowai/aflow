@@ -1,4 +1,6 @@
-import type { SkillBundleId, SkillBundleInput } from '@aflow/schemas';
+import type { SkillBundleId } from '@aflow/schemas';
+
+import type { AuthoredSkillBundle } from '../skillBundleCatalog.js';
 import { ARXIV_CONNECTOR } from '../connectorCatalog/arxiv.js';
 import { SEMANTIC_SCHOLAR_CONNECTOR } from '../connectorCatalog/semanticscholar.js';
 import { PUBMED_CONNECTOR } from '../connectorCatalog/pubmed.js';
@@ -7,9 +9,9 @@ import { LITERATURE_SCAN_CARD_SEED } from './literatureScanArtifactSeed.js';
 
 const SEMANTIC_SCHOLAR_KEY_CREDENTIAL = 'semantic-scholar-api-key';
 
-export const LITERATURE_SCAN: SkillBundleInput = {
+export const LITERATURE_SCAN: AuthoredSkillBundle = {
   bundleId: 'literature-scan' as SkillBundleId,
-  version: 6,
+  revision: 2,
   name: 'Literature Scan',
   tagline:
     'Survey the academic literature on a topic: search arXiv, Semantic Scholar and PubMed, sourced scan, inline card. One free key.',

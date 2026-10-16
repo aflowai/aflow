@@ -18,6 +18,7 @@ import {
   HOST_CHECK_OUTPUT_HEAD_BYTES,
   HOST_CHECK_OUTPUT_TAIL_BYTES,
   HOST_CHECK_TAIL_BYTES,
+  HOST_CHECK_TEST_TIMEOUTS_MAX,
   type HostCommitCheckOutputSchema,
   type HostSandboxPosture,
 } from '@aflow/schemas';
@@ -156,6 +157,7 @@ const CHECK_REPORT_FILE = 'check-report.json';
 
 const CheckReportSchema = z.object({
   skippedListenerTests: z.number().int().nonnegative(),
+  testTimeouts: z.array(z.string()).optional(),
 });
 
 /** What the check wrote to its report, or nothing where it wrote none a reader can take. */
@@ -184,6 +186,8 @@ export interface FolderCheckRun {
   readonly output: string;
   /** Tests that listen on a port of their own the check skipped, where its report says. */
   readonly skippedListenerTests?: number;
+  /** The tests that ran out of their time, where its report says they alone failed it. */
+  readonly testTimeouts?: readonly string[];
 }
 
 export interface FolderCheckInput {
@@ -260,6 +264,9 @@ export async function runFolderChecks(input: FolderCheckInput): Promise<FolderCh
       output: kept.text(),
       sandbox: sandboxPostureOf(input.binding),
       ...(report !== undefined ? { skippedListenerTests: report.skippedListenerTests } : {}),
+      ...(report?.testTimeouts !== undefined && report.testTimeouts.length > 0
+        ? { testTimeouts: report.testTimeouts }
+        : {}),
     };
   } finally {
     if (worktreePath !== undefined) await removeWorktree(input.binding.root, worktreePath);
@@ -284,6 +291,7 @@ export function skippedCheck(bindingId: string, sha: string): HostCommitCheckOut
       'was not checked on this machine. The operator declares them on the machine holding ' +
       `the folder: \`aflow harness checks ${bindingId} -- <program> [args...]\`.`,
     clearedSha: sha,
+    clearedOrRetriableSha: sha,
   };
 }
 
@@ -298,6 +306,10 @@ export function checkOutcome(params: {
 }): HostCommitCheckOutput {
   const { result } = params.run;
   const passed = !result.timedOut && result.exitCode === 0;
+  // Only a run that exited on its own can say what failed it; one stopped at
+  // the folder's time or by a signal ended before it could.
+  const testTimeouts =
+    !passed && !result.timedOut && result.exitCode !== null ? (params.run.testTimeouts ?? []) : [];
   const tail = checkTail(params.run.output);
   const command = `\`${params.argv.join(' ')}\``;
   const short = params.sha.slice(0, SHORT_SHA_LENGTH);
@@ -314,6 +326,15 @@ export function checkOutcome(params: {
       `${formatMinutes(params.timeoutMs)}, ran out, and was stopped: the check failed. Where ` +
       'the checks are slow rather than stuck, give them longer on the machine holding the ' +
       `folder: \`aflow harness checks ${params.bindingId} --timeout-minutes <n>\`.${printed}`;
+  } else if (testTimeouts.length > 0) {
+    const named = testTimeouts.slice(0, HOST_CHECK_TEST_TIMEOUTS_MAX).join('; ');
+    const more = testTimeouts.length - HOST_CHECK_TEST_TIMEOUTS_MAX;
+    summary =
+      `${command} exited ${String(result.exitCode)} on ${short} after ${seconds(result.durationMs)}, ` +
+      `and nothing failed but ${String(testTimeouts.length)} test${testTimeouts.length === 1 ? '' : 's'} ` +
+      `running out of time: ${named}${more > 0 ? `; and ${String(more)} more` : ''}. A machine under ` +
+      'load does this to a passing commit, which is why a publication runs the checks once more ' +
+      `after a first run that ends so.${printed}`;
   } else {
     const ending =
       result.exitCode === null
@@ -334,6 +355,10 @@ export function checkOutcome(params: {
     ...(params.run.skippedListenerTests !== undefined
       ? { skippedListenerTests: params.run.skippedListenerTests }
       : {}),
+    ...(testTimeouts.length > 0
+      ? { testTimeouts: testTimeouts.slice(0, HOST_CHECK_TEST_TIMEOUTS_MAX) }
+      : {}),
     ...(passed ? { clearedSha: params.sha } : {}),
+    ...(passed || testTimeouts.length > 0 ? { clearedOrRetriableSha: params.sha } : {}),
   };
 }

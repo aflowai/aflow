@@ -129,9 +129,39 @@ const MERGE_FROM_SCHEMA = {
     'The sha the commission reported in `merge.from`, as it reported it — not a branch or tag name.',
 };
 
+const CHECK_FAILED =
+  "The folder's checks failed on this run's commit: their account is above, with the end of what they printed, and the whole of it is stored with this failure. Nothing was scanned, reviewed or pushed, and the commit is still on its branch in the folder. Commission the fix onto this branch — nothing of it has left the machine — and publish again. Where they ran out of the folder's time rather than failed, the folder's `checksTimeoutMs` is the operator's to raise on the machine.";
+
+/** Both runs of the checks take the same commit, measured against the same base. */
+const CHECK_INPUT_BINDINGS = {
+  bindingId: { kind: 'run_input' as const, path: 'bindingId' },
+  sha: { kind: 'task_output' as const, taskId: 'commit', path: 'commit.sha' },
+  pushBaseSha: {
+    kind: 'task_output' as const,
+    taskId: 'commit',
+    path: 'commit.pushBaseSha',
+  },
+};
+
+const CHECK_CONTEXT = {
+  strategy: 'scoped' as const,
+  contextPolicy: 'auto-optimize' as const,
+  learnings: 'none' as const,
+  capabilities: {
+    operations: ['host.commit.check'],
+    integrations: [],
+  },
+};
+
+const CHECK_INPUT_TEMPLATE = {
+  bindingId: { $bind: 'bindingId' },
+  sha: { $bind: 'sha' },
+  base: { $bind: 'pushBaseSha' },
+};
+
 const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'publish-local-changes',
-  version: 22,
+  version: 23,
   name: 'Publish Local Changes',
   tagline:
     'Commit a patch onto a branch of a connected repository, then push it and open the pull request — asking the operator first unless the folder says otherwise.',
@@ -398,8 +428,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           taskId: 'check-commit',
           name: "Run the folder's checks on the commit",
           goal: "Run the checks the connected folder declares — the operator's own command, from the repository root — in a detached checkout of this run's commit, measured against where `origin`'s base branch stands, before anything is scanned, reviewed or pushed. A folder that declares none runs none, and the result says so.",
-          failureInstruction:
-            "The folder's checks failed on this run's commit: their account is above, with the end of what they printed, and the whole of it is stored with this failure. Nothing was scanned, reviewed or pushed, and the commit is still on its branch in the folder. Commission the fix onto this branch — nothing of it has left the machine — and publish again. Where they ran out of time rather than failed, the folder's `checksTimeoutMs` is the operator's to raise on the machine.",
+          failureInstruction: CHECK_FAILED,
           type: 'operation' as const,
           operation: 'host.commit.check',
           dependsOn: ['commit'],
@@ -407,42 +436,55 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             expression: "tasks.commit.output.state == 'applied'",
             onMissingRef: 'skip' as const,
           },
-          // `clearedSha` exists only where the checks passed or none are
-          // declared, so a failure fails the projection; with one attempt and
-          // no output contract that fails the run here, the check's own
-          // summary — which carries the tail — leading the message.
+          // `clearedOrRetriableSha` exists only where the checks passed, none
+          // are declared, or tests running out of time alone failed them, so
+          // any other failure fails the projection; with one attempt and no
+          // output contract that fails the run here, the check's own summary
+          // — which carries the tail — leading the message. A run lost to
+          // time alone succeeds with `passed: false` and its `testTimeouts`,
+          // which is the record `recheck-commit` runs on.
           retryability: 'safe' as const,
           maxAttempts: 1,
-          inputBindings: {
-            bindingId: { kind: 'run_input' as const, path: 'bindingId' },
-            sha: { kind: 'task_output' as const, taskId: 'commit', path: 'commit.sha' },
-            pushBaseSha: {
-              kind: 'task_output' as const,
-              taskId: 'commit',
-              path: 'commit.pushBaseSha',
-            },
-          },
-          context: {
-            strategy: 'scoped' as const,
-            contextPolicy: 'auto-optimize' as const,
-            learnings: 'none' as const,
-            capabilities: {
-              operations: ['host.commit.check'],
-              integrations: [],
-            },
-          },
-          inputTemplate: {
-            bindingId: { $bind: 'bindingId' },
-            sha: { $bind: 'sha' },
-            base: { $bind: 'pushBaseSha' },
-          },
+          inputBindings: CHECK_INPUT_BINDINGS,
+          context: CHECK_CONTEXT,
+          inputTemplate: CHECK_INPUT_TEMPLATE,
           outputProjection: {
-            clearedSha: { path: 'clearedSha', onMissing: 'error' as const },
+            clearedOrRetriableSha: { path: 'clearedOrRetriableSha', onMissing: 'error' as const },
             passed: { path: 'passed', onMissing: 'error' as const },
             skipped: { path: 'skipped', onMissing: 'null' as const },
+            testTimeouts: { path: 'testTimeouts', onMissing: 'null' as const },
             summary: { path: 'summary', onMissing: 'error' as const },
             // Null where the folder declares no checks: the push needs none then.
             receipt: { path: 'receipt', onMissing: 'null' as const },
+          },
+        },
+
+        {
+          taskId: 'recheck-commit',
+          name: "Run the folder's checks again, after tests ran out of time",
+          goal: "Run the folder's checks once more on this run's commit, where their first run failed only because tests ran out of their time — `testTimeouts` on the first run names them — which a machine under load does to a passing commit. This run's result is the one the push carries; a failure here fails the publication.",
+          failureInstruction: `${CHECK_FAILED} Their first run failed only because tests ran out of their time, and this second run failed as well.`,
+          type: 'operation' as const,
+          operation: 'host.commit.check',
+          dependsOn: ['commit', 'check-commit'],
+          // The first run succeeds without passing only where tests running
+          // out of time alone failed it.
+          when: {
+            expression: 'tasks.check-commit.output.passed == false',
+            onMissingRef: 'skip' as const,
+          },
+          // Its own task rather than a second attempt of the first, which a
+          // failed projection does not get: one more run, recorded as one.
+          retryability: 'safe' as const,
+          maxAttempts: 1,
+          inputBindings: CHECK_INPUT_BINDINGS,
+          context: CHECK_CONTEXT,
+          inputTemplate: CHECK_INPUT_TEMPLATE,
+          outputProjection: {
+            clearedSha: { path: 'clearedSha', onMissing: 'error' as const },
+            passed: { path: 'passed', onMissing: 'error' as const },
+            summary: { path: 'summary', onMissing: 'error' as const },
+            receipt: { path: 'receipt', onMissing: 'error' as const },
           },
         },
 
@@ -454,8 +496,9 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             "What the push would carry holds what looks like a secret, named above by file, line and rule — or by `<sha> (headers)` or `<sha> (message)` for a commit's headers or message, `pull request title` or `pull request summary` for those — never by its value. The branch stayed on the machine and nothing was pushed. Take the secret out and rotate it if it was real. Where it is in this run's change or its commit's headers or message, commission the change again and publish it on a fresh branch: this branch still holds the commit with the secret, and anything appended to it would push that commit too. Where it is only in the title or the summary, publish again on a fresh branch without it. Where it is in a commit of the folder's own that `origin` does not have yet, or in that commit's headers or message, that commit has to be rewritten before anything built on it is pushed.",
           type: 'operation' as const,
           operation: 'host.commit.scan',
-          // After the checks: a commit they failed goes no further.
-          dependsOn: ['commit', 'check-commit'],
+          // After the checks, and their second run where there is one: a
+          // commit they failed goes no further.
+          dependsOn: ['commit', 'check-commit', 'recheck-commit'],
           when: {
             expression: "tasks.commit.output.state == 'applied'",
             onMissingRef: 'skip' as const,
@@ -749,7 +792,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           // The scan and the check as well as the approval: under `never` over a cleared
           // range the approval is skipped, and a skip clears a dependency
           // where a failure does not.
-          dependsOn: ['approve-push', 'scan-commit', 'check-commit'],
+          dependsOn: ['approve-push', 'scan-commit', 'check-commit', 'recheck-commit'],
           when: PUSH_CLEARED,
           retryability: 'unsafe' as const,
           maxAttempts: 1,
@@ -761,6 +804,12 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             checkReceipt: {
               kind: 'task_output' as const,
               taskId: 'check-commit',
+              path: 'receipt',
+            },
+            // Absent where the first run passed and no second one ran.
+            recheckReceipt: {
+              kind: 'task_output' as const,
+              taskId: 'recheck-commit',
               path: 'receipt',
             },
           },
@@ -778,7 +827,9 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             command: PUSH_COMMAND,
             pushBase: { $bind: 'base' },
             scan: { receipt: { $bind: 'receipt' } },
-            check: { receipt: { $bind: 'checkReceipt' } },
+            check: {
+              receipt: { $firstOf: [{ $bind: 'recheckReceipt' }, { $bind: 'checkReceipt' }] },
+            },
             cwd: '.',
             timeoutMs: 600_000,
           },
@@ -992,7 +1043,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
       priority: 50,
     },
     rationale:
-      "Ten tasks, the approval between local and published halves: the commit lands in a detached worktree; a decline costs nothing. host.commit.check runs the folder's checks on it: a failure fails the run. host.commit.scan reads all a push would add (from a fetched origin/<base>), commit headers, messages, PR text: a finding fails the run; an unread file or an allowed line asks, unreviewed, whatever the posture. Over a cleared range the posture, and under unless-unreviewed a Local Code Review, decide whether to ask; asked, it obeys. The push argv is pinned bar the refspec: no force, tag or submodule. The executor re-measures origin/<base> as git runs, rescanning where it moved or a restart voids the receipt; declared checks need a passed receipt; an uncleared range (under always, any) goes only on this run's grant. No change pushes the head as is. The repo is read via the space's GitHub binding first; an open PR is reported, not duplicated. The folder is a run input until folder roles land.",
+      "Eleven tasks, the approval between local and published halves: the commit lands in a detached worktree; a decline costs nothing. host.commit.check runs the folder's checks on it: a failure fails the run, bar test timeouts alone: those rerun once. host.commit.scan reads all a push would add (from a fetched origin/<base>), commit headers, messages, PR text: a finding fails the run; an unread file or an allowed line asks, unreviewed, whatever the posture. Over a cleared range the posture, and under unless-unreviewed a Local Code Review, decide whether to ask; asked, it obeys. The push argv is pinned bar the refspec: no force, tag or submodule. The executor re-measures origin/<base> as git runs, rescanning where it moved or a restart voids the receipt; declared checks need a passed receipt; an uncleared range (under always, any) goes only on this run's grant. No change pushes the head as is. The repo is read via the space's GitHub binding first; an open PR is reported, not duplicated.",
   },
 };
 

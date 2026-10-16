@@ -559,6 +559,61 @@ describe('host.commit.check — the receipt it leaves for the push', () => {
   });
 });
 
+describe('host.commit.check — a run lost only to tests running out of time', () => {
+  const TIMED_OUT = ['apps/x/src/a.test.ts › waits', 'apps/x/src/b.test.ts › waits too'];
+
+  /** A check that reports `testTimeouts` and ends as `exit` says. */
+  function reportingTimeouts(exit: string): string[] {
+    return nodeCheck(
+      `${reportScript(JSON.stringify({ skippedListenerTests: 0, testTimeouts: TIMED_OUT }))}\n${exit}`,
+    );
+  }
+
+  it('names the tests and the commit a publication runs the checks on again, and clears nothing', async () => {
+    const world = await fixture({
+      branchPrefix: 'aflow/',
+      checks: reportingTimeouts("console.log('FAIL tests'); process.exit(1);"),
+    });
+    const output = HostCommitCheckOutputSchema.parse((await check(world)).captured.output);
+    expect(output.passed).toBe(false);
+    expect(output.clearedSha).toBeUndefined();
+    expect(output.testTimeouts).toEqual(TIMED_OUT);
+    expect(output.clearedOrRetriableSha).toBe(world.sha);
+    expect(output.summary).toContain('nothing failed but 2 tests running out of time');
+    expect(output.summary).toContain(TIMED_OUT.join('; '));
+    expect(output.summary).toContain('a publication runs the checks once more');
+    expect(output.receipt).toBeDefined();
+  });
+
+  it('is not claimed for checks that passed, or that the folder’s time stopped', async () => {
+    const passing = await fixture({
+      branchPrefix: 'aflow/',
+      checks: reportingTimeouts('process.exit(0);'),
+    });
+    const passed = HostCommitCheckOutputSchema.parse((await check(passing)).captured.output);
+    expect(passed.testTimeouts).toBeUndefined();
+    expect(passed.clearedOrRetriableSha).toBe(passing.sha);
+    expect(passed.clearedSha).toBe(passing.sha);
+
+    const stopped = await fixture({
+      branchPrefix: 'aflow/',
+      checks: reportingTimeouts('setTimeout(() => {}, 60_000);'),
+      checksTimeoutMs: 60_000,
+    });
+    const timedOut = HostCommitCheckOutputSchema.parse((await check(stopped)).captured.output);
+    expect(timedOut).toMatchObject({ passed: false, timedOut: true });
+    expect(timedOut.testTimeouts).toBeUndefined();
+    expect(timedOut.clearedOrRetriableSha).toBeUndefined();
+  });
+
+  it('is not claimed where the checks reported none', async () => {
+    const world = await fixture({ branchPrefix: 'aflow/', checks: FAILING });
+    const output = HostCommitCheckOutputSchema.parse((await check(world)).captured.output);
+    expect(output.testTimeouts).toBeUndefined();
+    expect(output.clearedOrRetriableSha).toBeUndefined();
+  });
+});
+
 describe("host.commit.check — the folder's sandbox posture", () => {
   function compiled(input: SandboxedRunInput): ReturnType<typeof compileSandboxPolicy> {
     return compileSandboxPolicy(input.binding, {

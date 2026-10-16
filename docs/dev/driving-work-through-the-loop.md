@@ -88,11 +88,13 @@ meanwhile is refused with its current state rather than overwritten, and a node 
 scripts/verify-commit.mjs`), and Local Publish runs it after the commit and before the
    scan, the review and the push, in a detached checkout of the commit with the folder's
    dependencies linked, under the folder's sandbox posture (below). The script reads what changed from
-   `AFLOW_CHECK_BASE...AFLOW_CHECK_SHA` and runs, one line per step and stopping at the
+   `AFLOW_CHECK_BASE...AFLOW_CHECK_SHA` and runs, each step named as it starts
+   (`building @aflow/schemas`) and ended in one line, stopping at the
    first failure: the two CI guards; a build of every package the touched workspaces
    or the workspaces reading a touched package reference or import, since a checkout builds
-   nothing; `tsc -p` per touched workspace (and `web-product`'s `src/ui`); the touched tests
-   through the test runner on half the machine's cores, reporting only failures and the
+   nothing, every time — no build outlives the check that made it; `tsc -p` per touched
+   workspace (and `web-product`'s `src/ui`); the touched tests through the test runner on half the machine's cores, each test given 30 s unless it
+   declares its own time (`scripts/check-tests.mjs`), reporting only failures and the
    summary, with every test of the touched workspaces and of each workspace that reads a
    touched package whose imports reach a touched file, so a contract change meets its
    consumers before the push — such a package built first, such an application's build
@@ -109,7 +111,10 @@ scripts/verify-commit.mjs`), and Local Publish runs it after the commit and befo
    (`scripts/verify-commit.mjs`, not `verify-commit`), in a string literal runs too, counted
    and named in the same line as the tests imports reach. A failure fails
    the publication with the end of what it printed and nothing pushed: read it on the
-   `check-commit` task, and commission the fix onto the branch. The pull request's CI
+   `check-commit` task, and commission the fix onto the branch. A run whose only failures
+   were tests running out of their time names them in `testTimeouts`, and the publication
+   runs the checks once more itself as `recheck-commit`; no retry from the conversation is
+   needed, and a failure there is read on that task. The pull request's CI
    remains the proof. By hand, from a checkout, it measures `HEAD` against `origin/main`.
 4. **The operator merges.** A merge lands on the dev stack only when the stream that runs it
    merges `origin/main` into `live` (below).

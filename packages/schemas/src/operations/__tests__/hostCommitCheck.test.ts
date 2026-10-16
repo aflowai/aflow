@@ -2,18 +2,21 @@ import { describe, expect, it } from 'vitest';
 
 import { getOperation } from '../../catalog/registry.js';
 import {
-  HOST_CHECK_OUTPUT_TAIL_BYTES,
-  HOST_CHECK_TAIL_BYTES,
   HOST_CHECKS_MAX_ARGS,
   HOST_CHECKS_TIMEOUT_DEFAULT_MS,
   HOST_CHECKS_TIMEOUT_MAX_MS,
   HOST_CHECKS_TIMEOUT_MIN_MS,
   HostBindingBranchPolicySchema,
-  HostCommitCheckInputSchema,
-  HostCommitCheckOutputSchema,
   HostFilePatchOutputSchema,
   resolveBranchPolicy,
 } from '../host.js';
+import {
+  HOST_CHECK_OUTPUT_TAIL_BYTES,
+  HOST_CHECK_TAIL_BYTES,
+  HOST_CHECK_TEST_TIMEOUTS_MAX,
+  HostCommitCheckInputSchema,
+  HostCommitCheckOutputSchema,
+} from '../hostCommitCheck.js';
 
 const SHA = 'c'.repeat(40);
 const BASE = 'a'.repeat(40);
@@ -84,6 +87,26 @@ describe('what host.commit.check answers', () => {
       summary: 'failed',
     });
     expect(failed.clearedSha).toBeUndefined();
+  });
+
+  it('names the tests that ran out of time, up to its cap, beside the commit a second run takes', () => {
+    const lost = {
+      passed: false,
+      exitCode: 1,
+      durationMs: 1,
+      tail: 'FAIL\n',
+      summary: 'failed on time',
+      clearedOrRetriableSha: SHA,
+    };
+    const names = Array.from({ length: HOST_CHECK_TEST_TIMEOUTS_MAX }, (_, i) => `t${String(i)}`);
+    expect(HostCommitCheckOutputSchema.parse({ ...lost, testTimeouts: names })).toMatchObject({
+      testTimeouts: names,
+      clearedOrRetriableSha: SHA,
+    });
+    expect(
+      HostCommitCheckOutputSchema.safeParse({ ...lost, testTimeouts: [...names, 'one more'] })
+        .success,
+    ).toBe(false);
   });
 
   it('keeps far more output than it returns inline', () => {

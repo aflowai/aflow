@@ -95,8 +95,15 @@ const { noPushApprovals } = await import('./fixtures/pushApprovals.js');
 const { prepareWorktree, removeWorktree } = await import('../worktree.js');
 
 const SCRIPTS = fileURLToPath(new URL('../../../../scripts/', import.meta.url));
-/** The check, the module it selects tests with and the one it counts listener tests with. */
-const CHECK_SCRIPTS = ['verify-commit.mjs', 'test-selection.mjs', 'listener-tests.mjs'];
+/** The check and every module it runs with. */
+const CHECK_SCRIPTS = [
+  'verify-commit.mjs',
+  'test-selection.mjs',
+  'listener-tests.mjs',
+  'check-steps.mjs',
+  'check-tests.mjs',
+  'check-test-reporter.mjs',
+];
 const CHECKS = [process.execPath, 'scripts/verify-commit.mjs'];
 const COMPILER_OPTIONS = { strict: true, module: 'nodenext', types: [] };
 /** A file the checked commit touches outside every workspace. */
@@ -296,38 +303,58 @@ describe('a workspace package in the isolated checkout', () => {
   });
 });
 
-describe('this repository’s check, at a commit reading a workspace package it leaves alone', () => {
-  it('builds the package’s declarations in the checkout, then passes', async () => {
-    let output: unknown;
-    const result = await createHostHandler(policyPath, noPushApprovals).execute({
-      operationId: 'host.commit.check',
-      spaceId: 'space-a',
-      runId: 'run-a',
-      stepExecutionId: 'step-1',
-      tenantId: 'tenant-a',
-      job: { inputRef: 'inline:x' },
-      signal: new AbortController().signal,
-      log: { error: () => undefined, warn: () => undefined, info: () => undefined },
-      readPayload: () => Promise.resolve({ bindingId: 'hb_app', sha, base }),
-      emitLiveDelta: () => Promise.resolve(),
-      writePayload: (kind: string, data: unknown) => {
-        if (kind === 'output' || kind === 'error') output = data;
-        return Promise.resolve(`inline:${kind}`);
-      },
-    } as never);
+/** Long enough to build and type-check the fixture on a loaded machine. */
+const CHECK_TEST_TIMEOUT_MS = 60_000;
 
-    expect(result.status).toBe('SUCCEEDED');
-    const answer = HostCommitCheckOutputSchema.parse(output);
-    expect(answer).toMatchObject({ passed: true, exitCode: 0, clearedSha: sha });
-    expect(answer.tail).toContain('ok   build @acme/a');
-    expect(answer.tail).toContain('ok   tsc apps/app/tsconfig.json');
-    expect(answer.tail).toContain(
-      'no repository-shape guards (packages/schemas/src/edition) in this repository to run ' +
-        `for the files outside every workspace: ${ROOT_FILE}`,
-    );
-    expect(await readFile(join(repo, 'packages', 'a', 'dist', 'index.d.ts'), 'utf8')).toBe(
-      'export declare const value: number;\n',
-    );
-    expect(existsSync(join(repo, 'packages', 'a', 'tsconfig.tsbuildinfo'))).toBe(false);
-  }, 60_000);
+/** The folder's check of `checked` against `against`: its answer and its live output. */
+async function runCheck(checked: string, against: string) {
+  let output: unknown;
+  const live: string[] = [];
+  const result = await createHostHandler(policyPath, noPushApprovals).execute({
+    operationId: 'host.commit.check',
+    spaceId: 'space-a',
+    runId: 'run-a',
+    stepExecutionId: 'step-1',
+    tenantId: 'tenant-a',
+    job: { inputRef: 'inline:x' },
+    signal: new AbortController().signal,
+    log: { error: () => undefined, warn: () => undefined, info: () => undefined },
+    readPayload: () => Promise.resolve({ bindingId: 'hb_app', sha: checked, base: against }),
+    emitLiveDelta: (_channel: string, text: string) => {
+      live.push(text);
+      return Promise.resolve();
+    },
+    writePayload: (kind: string, data: unknown) => {
+      if (kind === 'output' || kind === 'error') output = data;
+      return Promise.resolve(`inline:${kind}`);
+    },
+  } as never);
+  expect(result.status).toBe('SUCCEEDED');
+  return { answer: HostCommitCheckOutputSchema.parse(output), live: live.join('') };
+}
+
+describe('this repository’s check, at a commit reading a workspace package it leaves alone', () => {
+  it(
+    'builds the package’s declarations in the checkout, naming the build as it starts, then passes',
+    async () => {
+      const { answer, live } = await runCheck(sha, base);
+      expect(answer).toMatchObject({ passed: true, exitCode: 0, clearedSha: sha });
+      expect(answer.tail).toContain('ok   build @acme/a');
+      expect(answer.tail).toContain('ok   tsc apps/app/tsconfig.json');
+      expect(answer.tail).toContain(
+        'no repository-shape guards (packages/schemas/src/edition) in this repository to run ' +
+          `for the files outside every workspace: ${ROOT_FILE}`,
+      );
+      expect(live.indexOf('building @acme/a\n')).toBeGreaterThan(-1);
+      expect(live.indexOf('building @acme/a\n')).toBeLessThan(live.indexOf('ok   build @acme/a'));
+      expect(live.indexOf('type-checking apps/app/tsconfig.json\n')).toBeLessThan(
+        live.indexOf('ok   tsc apps/app/tsconfig.json'),
+      );
+      expect(await readFile(join(repo, 'packages', 'a', 'dist', 'index.d.ts'), 'utf8')).toBe(
+        'export declare const value: number;\n',
+      );
+      expect(existsSync(join(repo, 'packages', 'a', 'tsconfig.tsbuildinfo'))).toBe(false);
+    },
+    CHECK_TEST_TIMEOUT_MS,
+  );
 });

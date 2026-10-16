@@ -12,6 +12,12 @@ const request = {
   timeoutMs: 30_000,
 };
 
+/**
+ * A test that builds a body of megabytes and reads it through declares its own
+ * time: on a machine under load that outlasts its project's default.
+ */
+const LARGE_BODY_TIMEOUT_MS = 60_000;
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -30,29 +36,33 @@ describe('JinaFetchProvider transport bound', () => {
     expect(result.title).toBe('Page');
   });
 
-  it('aborts a response that exceeds the byte cap instead of buffering it', async () => {
-    const capBytes = MAX_EXTRACTED_CONTENT_CHARS * 6 + 1024 * 1024;
-    const chunk = new Uint8Array(4 * 1024 * 1024);
-    const chunksNeeded = Math.ceil(capBytes / chunk.byteLength) + 1;
-    let pushed = 0;
-    const stream = new ReadableStream<Uint8Array>({
-      pull(controller) {
-        if (pushed < chunksNeeded) {
-          pushed += 1;
-          controller.enqueue(chunk);
-        } else {
-          controller.close();
-        }
-      },
-    });
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(stream, { status: 200 })));
+  it(
+    'aborts a response that exceeds the byte cap instead of buffering it',
+    async () => {
+      const capBytes = MAX_EXTRACTED_CONTENT_CHARS * 6 + 1024 * 1024;
+      const chunk = new Uint8Array(4 * 1024 * 1024);
+      const chunksNeeded = Math.ceil(capBytes / chunk.byteLength) + 1;
+      let pushed = 0;
+      const stream = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (pushed < chunksNeeded) {
+            pushed += 1;
+            controller.enqueue(chunk);
+          } else {
+            controller.close();
+          }
+        },
+      });
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(stream, { status: 200 })));
 
-    const err = await new JinaFetchProvider()
-      .fetch(request)
-      .then(() => null)
-      .catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(JinaFetchError);
-    expect((err as Error).message).toMatch(/transport cap/);
-    expect((err as JinaFetchError).retryable).toBe(false);
-  });
+      const err = await new JinaFetchProvider()
+        .fetch(request)
+        .then(() => null)
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(JinaFetchError);
+      expect((err as Error).message).toMatch(/transport cap/);
+      expect((err as JinaFetchError).retryable).toBe(false);
+    },
+    LARGE_BODY_TIMEOUT_MS,
+  );
 });

@@ -1,4 +1,6 @@
-import type { SkillBundleId, SkillBundleInput } from '@aflow/schemas';
+import type { SkillBundleId } from '@aflow/schemas';
+
+import type { AuthoredSkillBundle } from '../skillBundleCatalog.js';
 import { BRAVE_CONNECTOR } from '../connectorCatalog/brave.js';
 import { FIRECRAWL_CONNECTOR } from '../connectorCatalog/firecrawl.js';
 import { bundledApiDefinitionFromConnector } from './connectorApiDefinitions.js';
@@ -7,9 +9,9 @@ import { WEB_RESEARCH_BRIEF_CARD_SEED } from './webResearchBriefArtifactSeed.js'
 const BRAVE_TOKEN_CREDENTIAL = 'brave-subscription-token';
 const FIRECRAWL_KEY_CREDENTIAL = 'firecrawl-api-key';
 
-export const WEB_RESEARCH_BRIEF: SkillBundleInput = {
+export const WEB_RESEARCH_BRIEF: AuthoredSkillBundle = {
   bundleId: 'web-research' as SkillBundleId,
-  version: 2,
+  revision: 1,
   name: 'Web Research Brief',
   tagline:
     'Research any question on the open web: search, read sources, sourced brief, inline card.',
