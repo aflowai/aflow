@@ -1,0 +1,438 @@
+# Plan 323 — Models that run on this computer
+
+**Status:** 📋 Planned. Nothing is built. P0 is a set of feasibility gates and changes no product code; P0 and P1 together are the first complete slice: one model on one machine.
+
+**Supersedes for the local edition:** Tier 0 of archive plan 98 (open-weight inference). Plan 98 put a platform-managed `selfhosted` provider behind Ollama's OpenAI-compatible `/v1` endpoint. This plan uses Ollama's native API instead (D3) and makes the runtime the operator's own (D2). Plan 98's hosted tiers (Cloud Run GPU, GKE/vLLM) are untouched; the OpenAI-compatible adapter in P6 is the piece they would share.
+
+## 1. Problem
+
+An operator of the local edition cannot point an agent at a model running on their own machine. Every model call leaves the computer, and one without a cloud key cannot run Aflow at all. The pieces that exist are stubs:
+
+- **`local` is a provider in name only.** It is in `AIProviderSchema` (`packages/ai-client/src/types.ts`), the usage enum and the UI labels (`modelGroups.ts`). `createAIClient` throws `Provider local is not yet supported` for it (`packages/ai-client/src/client.ts`), and the executor maps no credential to it.
+- **Readiness reports it as ready.** `spaceLlmReadiness.ts` maps a `local` provider to `providerId = null` and skips it. A role assigned to a local model would show green and then fail on its first turn.
+- **A credential must carry an `api_key`.** `getAIClientForContext` (`apps/aflow-executor-ai/src/handlers/ai/aiClient.ts`) refuses a credential without one and forwards nothing else, `baseUrl` included. `ProviderConfig.baseUrl` exists and six adapters honour it; nothing sets it.
+- **Native tool calling is a hard-coded list of five providers** (`agentTurn.ts`: google, anthropic, openai, fireworks, xai). Any other model takes the `generateJson` fallback. That path is non-streaming, sends the whole decision schema, and allows one repair round. It is the path a weaker model is least likely to survive.
+- **The catalog is static code**, and assigning a model to a role requires a live catalog chat entry (`agentModelPolicy.ts`). Nothing installed on a machine can appear in it.
+- **Timeouts assume a datacenter.** A non-agent AI op has a flat 120 s. An agent turn dies after 300 s with no streamed byte (`AI_STREAM_IDLE_TIMEOUT_MS`). The AI executor runs 20 concurrent jobs with no per-provider limit. A 27B dense model on a laptop prefills a 60K-token prompt in minutes, emits nothing while it does, and serves one request at a time.
+- **Embeddings are fixed at 1536/3072 dimensions** (`EMBEDDING_COLUMNS`, migrations 006 and 148), and memory embedding reads platform environment keys rather than the space's credentials (`aflow-executor-memory/src/embedder.ts`). Local embedding models emit 768, 1024 or 4096.
+- **The appliance cannot reach the host.** `docker-compose.local.yml` declares no `extra_hosts`. On macOS, Docker cannot use the Apple GPU, so a model server has to run natively on the host, outside every container.
+
+## 2. What is the same and what is not
+
+Using one should look like using any other model. You choose it in the same picker, assign it to the same roles, and it runs the same operations, records the same usage, and passes the same readiness check. Three things differ, and pretending otherwise is what would make it fail:
+
+1. **Capacity belongs to the machine, not the model.** The context window that fits, how many requests run at once, and whether the model loads at all depend on memory and GPU, and they change when the operator closes a browser. A cloud model's catalog entry describes the model. A local one also needs the machine's answer.
+2. **Capability varies by model, runtime, quantisation and template, and it has to be measured.** "Supports tools" on a model card says little about whether a Q4 build under a given chat template survives a 40-turn agent loop. The catalog rule that capabilities are measured, not researched, binds harder here than anywhere.
+3. **The model's lifecycle is the operator's.** It has to be downloaded (gigabytes), loaded (seconds to a minute), and kept warm. None of that happens with a cloud key.
+
+## 3. Decisions
+
+**D1 — Ollama is the runtime the local edition supports first. An OpenAI-compatible server is the second, for scale (P6).** Ollama installs in one step on macOS, Linux and Windows. It runs MLX on Apple Silicon, manages and pulls models over HTTP, supports native tool calling with streamed tool calls, schema-constrained output (`format`) and a `think` control, and has a library that tags the models this plan targets. _Rejected:_ llama-server as the first runtime. It needs the operator to pick GGUF files and chat templates by hand, and it has no pull or list. _Rejected:_ LM Studio first. It is a good desktop app, but its headless daemon and API are less settled. Both work through the P6 adapter.
+
+**D2 — Aflow does not ship or supervise the runtime.** The operator installs Ollama, and its own app or service keeps it running. Aflow detects it, says how to install it when it is absent, and drives it over its API: list, pull, delete, load, unload. On a paired Mac, the UI may also offer a one-time install through the host lane (`brew install ollama`) after the operator approves it. This is a command run once, not supervision. _Rejected:_ bundling the runtime in the image. On macOS it would run without the GPU. _Rejected:_ the host executor supervising a model server. That is a second process supervisor beside launchd, systemd and the runtime's own, for something the runtime already does. The exception is the Linux appliance (D11).
+
+**D3 — The Ollama adapter speaks the native `/api/chat` and `/api/embed`, not `/v1`.** Through `/v1` you cannot set the context length, cannot pass `tool_choice`, and get no `think` control. The context length is the decisive one (D5). The adapter implements `generateText`, `generateTextStream`, `generateJson` (`format` = the JSON schema) and `generateEmbedding`. It maps the catalog's reasoning ladder onto `think`. It reads `thinking` from responses and replays it for continuity as the Fireworks adapter does with `reasoning_content`. It collects a streamed turn's `thinking`, `content` and `tool_calls` and sends them back together with the tool results, which is how the runtime expects a turn to be returned.
+
+**D4 — A local runtime is a connection in the credential registry. Its provider id is `ollama`, and `local` is removed.** The credential is a URL, `base_url`, which defaults to `http://127.0.0.1:11434`. It has an optional token for a runtime behind a proxy and no required secret. Which secret a provider requires becomes registry data, not `api_key` hard-coded in the executor. Reusing the registry gives the connection the user → space → tenant resolution, the settings screens, the validation probe (`GET /api/version` plus `/api/tags`) and readiness, all unchanged. `base_url` origins are restricted with the existing `allowedOrigins` mechanism to loopback and `host.docker.internal`. A runtime on another machine is admitted only through `CREDENTIAL_EXTRA_BASE_URL_ORIGINS` (P6). _Rejected:_ an environment variable naming the runtime. It would bypass readiness and the UI, and it is exactly the "configured somewhere else" state that shows green and fails at run time.
+
+**D5 — The context window a request gets is the machine's answer, sent on every request, and a prompt that might not fit is never sent.** Ollama's default context is sized by available memory and can be as small as 4K. Its documentation does not say what happens to a prompt longer than the window. If it is cut, the agent loses its instructions and carries on.
+
+- **The window:** the connection carries `context_tokens`: chosen by the operator, offered from the fit estimate (D8), and never above the model's catalog `contextWindow`. The adapter sends it as `options.num_ctx` on every request. Prompt budgeting reads the effective window, `min(catalog, connection)`, rather than the catalog's.
+- **Why counting after the fact is not enough:** a guarantee cannot rest on comparing `prompt_eval_count` with the prompt's size. Aflow's size is a characters-over-four estimate (`history.ts`), which knows nothing of the runtime's tokenizer, chat template, tool schemas or image tokens. And with prefix caching, `prompt_eval_count` counts only the tokens evaluated afresh, so it is smaller than the prompt even when nothing was cut.
+- **Prevention comes first:** a request is sent only when its prompt, plus the output reserve (`maxTokens`, reasoning included), plus a measured safety margin, fits the window.
+- **Which method is a P0 gate:** P0 establishes how the prompt is sized and how an overflow is caught, and P1 does not start until one method holds. The candidates, in order of preference:
+  1. a runtime that refuses an overflow, if the current release does or can be configured to;
+  2. an exact count from the runtime's own tokenizer and template;
+  3. a conservative estimator whose ratio is calibrated per model.
+
+  Whichever is chosen must be correct on multilingual text, tool-heavy turns, reasoning history and images. A request the chosen method cannot rule safe fails before it is sent, as `context_exceeded`, naming the estimate, the window and the remedy (D15).
+
+- **Streamed text is provisional:** what an agent turn streams is not the turn's result until the final chunk arrives and the response validates. A turn that fails validation is shown as discarded, not as an answer. P1 defines how the run view marks it.
+
+**D6 — Native tool calling is chosen by measured capability, not by a provider list.** `nativeFCProviders` is deleted. An agent turn uses native function calling when the catalog entry says `functionCalling: true`, and that flag is written for local entries by the conformance probe (D9). The same probe writes `structuredOutputs`, `forcedToolChoice` and the reasoning ladder. The `generateJson` fallback streams for every provider, so a long local generation keeps the idle clock alive.
+
+**D7 — A runtime has a concurrency limit, and waiting for it is not idleness.**
+
+- **The limit belongs to the runtime, not to a credential or a process.** Two credentials can name the same Ollama, and model calls come from the AI executor, the API server (session titles, eval batches, post-run hooks) and the memory embedder.
+  - **Runtime identity:** each local connection resolves to a `runtimeId`, the normalized base URL with every name for this machine's loopback (`localhost`, `127.0.0.1`, `::1`, `host.docker.internal`) folded into one.
+  - **Admission:** a Redis-leased semaphore in `@aflow/redis` keyed by `runtimeId`, sized by `max_parallel` (default 1, the runtime's own default). Every caller goes through it.
+  - **Leases:** each lease has an expiry that its holder heartbeats. A worker that dies frees its lease when the lease expires, with no sweep. A cancelled step leaves the queue and releases what it holds.
+- **Waiting gives back the executor's slot.** Inside the AI executor, admission goes through `admitOperation` (`packages/executor-runtime/src/executor/operationAdmission.ts`). It already releases the executor-wide slot while a step waits, heartbeats the in-flight record, and starts the timeout only on admission, so queued local work never holds up cloud work.
+- **Callers that cannot wait:** a call such as titling a session declines and retries later rather than queueing behind an agent turn for minutes.
+- **Tests:** two credentials naming one runtime, a cancellation while queued, a worker killed while holding a lease, and a cloud call that is not held up by a local queue.
+- **The idle clock:** a job waiting for admission heartbeats, and its idle window starts when its request is sent. Time in the queue never counts.
+- **Prefill:** prefill is a silent stretch on every local request. A local connection therefore carries `first_token_timeout_ms` (default 15 min), which replaces the stream idle window until the first token. After that the ordinary idle window applies.
+- **Non-agent ops:** the flat 120 s timeout becomes the same idle-plus-ceiling pair agent turns already use, for every AI op on a local connection.
+- **SDK timeout:** the client's request timeout follows the step's budget instead of the SDK default.
+
+**D8 — Fit is an estimate until the model is loaded, and both are labelled as what they are.**
+
+- **The estimate:** computed from:
+  - the catalog footprint, `local: { weightsBytes, kvBytesPerToken, measuredUnder: { contextTokens, parallel, kvCacheType, runtimeVersion } }`, written by the probe;
+  - the host inventory, which gains `machine: { totalMemoryBytes, availableMemoryBytes, gpuMemoryLimitBytes, chip }`. On macOS the GPU limit is the wired-memory cap, which is below total RAM. On Linux it is VRAM per device;
+  - the models already resident (`/api/ps`);
+  - the connection's `max_parallel`. Parallel requests multiply the KV cache, which grows with context × parallel.
+- **The headroom:** the estimate keeps headroom for the stack, the operating system and a browser, and reports the conditions it assumes.
+- **The four answers:** _fits_, _tight_, _does not fit_, or _unknown_. The answer is _unknown_ when the inputs are missing: an unpaired machine, a KV cache type the footprint was not measured with, or a build that differs from the one measured (D9).
+- **Verified state:** once the model is loaded, `/api/ps` reports its actual size, its context and its GPU/CPU split. That is shown as verified and replaces the estimate.
+- **A trial load is an action:** on an unpaired machine, the operator starts a trial load explicitly ("load to check"). Reading diagnostics never loads a model.
+- **What over-sizing does:** a model that does not fit may load partly on CPU and run slowly, or fail to load, or press the whole machine into swap. Fit informs and never blocks a choice the operator makes.
+
+**D9 — Local models are curated catalog entries, measured by a local conformance probe.**
+
+- **The entries:** each is an ordinary `ModelDefinition` with `provider: 'ollama'`, a stable id, `providerModelId` set to the runtime tag, zero pricing and an alias per tier. The id and alias rules hold as for any model: an id is never reclaimed, and a model leaving the lineup goes to `retiredModels`.
+- **The probe:** `yarn models:verify-local <tag>` runs against the operator's runtime in two tiers.
+  - **Compatibility** sets the capability flags:
+    - single and parallel tool calls against real operation schemas;
+    - schema-constrained JSON against the agent decision schema;
+    - streamed tool-call assembly;
+    - the reasoning ladder, as `models:verify-reasoning` does;
+    - memory at two context sizes.
+  - **Usefulness** sets the role recommendations, repeated so variance shows:
+    - representative tasks per role, each judged on whether the task succeeded;
+    - recovery after a tool error;
+    - a conversation long enough to be compacted;
+    - total latency, model load and switch included.
+
+    Looping is measured by the platform's own guards (the repeated-decision detector and the failure counters), not by a blanket rule that no call may repeat, because re-reading a file after changing it is legitimate.
+- **What the probe is tied to:** a result holds for the build it measured. Each result records:
+  - the model digest and quantisation (from `/api/tags` and `/api/show`);
+  - the runtime version;
+  - a fingerprint of the chat template and parameters;
+  - the probe version.
+
+  The curated entry carries that identity. When the runtime serves a different digest, template or runtime minor version, or the probe version moves on, diagnostics (D15) report the model as _unverified for this build_ with a remedy to re-run the probe. A stable Aflow model id never silently inherits a different build's flags. Unverified does not block assignment. It withdraws the recommendation and keeps the conservative path: no native tools until measured.
+
+- **What it writes:** the capability flags, footprint and build identity that go into `catalogModels.ts`. It exits non-zero on drift.
+
+Which local models are _recommended_ for which role follows from the usefulness tier. Whether a tenant _may_ assign one stays the tenant's choice (`agent_model_allowlist`). _Rejected:_ registering whatever is installed as a catalog entry at run time. `registerModel` mutates a process-wide singleton shared by every tenant, and an entry nobody measured would carry flags nobody checked. Discovered models are P6, as a tenant-scoped overlay with its own measurement.
+
+**D10 — Setup and lifecycle are complete in the UI. Helmsman reads the runtime's state and asks before changing it.**
+
+- **The UI needs no model.** Every setup and lifecycle action can be done from the UI with no working model behind it: connect, pull with progress, delete, warm, unload, and set context and parallelism. These are REST routes the server proxies to the space's connection. This is the floor, not a convenience. When the only model is local and it is not working yet, Helmsman cannot help, because Helmsman runs on that model.
+- **Helmsman reads.** It holds one read operation, the runtime's status, which returns the diagnostics record (D15). It explains a problem in conversation from that record, not from knowledge of Ollama.
+- **Helmsman acts only through approval.** The acting operations are pull, delete, switch the model a role uses, and change the context or `keep_alive`. Each one parks on the write-approval pause and its Action Center card, as a browser action does (plan 320 D7): a `local_model` target is added to the approval payload union, and the grant is minted only at the authenticated resolve boundary. None of them is ever pre-authorized. What each card shows:
+  - for a pull: the download size and the model's fit;
+  - for an unload or a switch: the live runs that use the model, the asking session's own run included, since an agent evicting the model it runs on ends its own turn;
+  - for a context change: the memory it costs.
+
+  A denial fails the step with a non-retryable `permission` error carrying the operator's reason.
+
+- **No specialized agent.** The work is reading one record and proposing one of its remedies, and Helmsman with these operations does both. A separate system agent would be a second surface whose guidance could drift from the UI's.
+- **Runner holds none of these operations.** They are Helmsman's alone, like the eval plane. A skill's run does not reconfigure the machine it runs on.
+- **One GPU, several roles.** Helmsman, clerk, judge, titles and embeddings all compete for one runtime, and each model switch costs a load. The default for a local space is therefore a preset that assigns one chat model to every role (plus the embedding model). Mixing models per role is the operator's choice, and the models page shows its cost: total resident memory, and the load time per switch as P0 measures it. Only the model a role is about to use is warmed. `keep_alive` comes from the connection, default 30 min.
+- **Lifecycle actions are durable.**
+  - **Pull:** one pull per runtime and tag, observed and not duplicated. A second request joins the first.
+  - **Disk space:** a pull is refused before it starts when the host inventory's free disk cannot hold the download.
+  - **Cancel and resume:** a pull can be cancelled. Whether an interrupted pull resumes is the runtime's behaviour, which P0 verifies. The UI says which one happens.
+  - **Stale approvals:** an approved action re-checks its impact when it executes. When the set of runs it would end, or the space it needs, has changed since the card was shown, it parks again with the new impact rather than acting on the old one.
+- **Edition gating:** the provider, the routes, the operations and the "On this computer" surface exist only in the local edition. The UI gates on `useEdition().id === 'community-local'`, the server on the edition descriptor. A hosted tenant pointing a URL at loopback would be reaching the platform's own machine.
+
+**D11 — Packaging follows the GPU.**
+
+- **Dev stack:** executors run on the host and reach `127.0.0.1`.
+- **macOS appliance:** the worker and API reach the host's Ollama at `host.docker.internal`, which compose maps explicitly (`extra_hosts: host.docker.internal:host-gateway`) so the same file holds on Linux.
+- **Linux appliance:** the bridge cannot reach a host server bound to loopback, and binding Ollama to `0.0.0.0` publishes an unauthenticated model server to the network. So a compose profile `local-models` runs `ollama/ollama` with the NVIDIA runtime on the `backend` network. It publishes no port and keeps a named volume for weights. Its connection URL is `http://ollama:11434`, admitted by the registry only in that profile.
+- **`yarn start`:** prints the runtime's state beside each service's credential state (absent / running vX / models installed), and changes nothing.
+
+**D12 — A space can keep model inference on this machine, and the promise is exactly that.**
+
+- **The promise:** the policy is `spaces.model_locality` (`any` | `local_only`), and its UI wording is _"model inference stays on this machine"_. It does not cover tools that reach the network by design (web search, API calls, MCP servers, the browser). Those are governed by their own policies, and the setting says so beside the toggle.
+- **Coverage:** every model call the platform makes on a space's behalf follows that space's choice. That includes session titles, the clerk, the judge, eval batches and memory embedding. P0 lists every call site that resolves a model outside role resolution.
+- **What counts as local:** a call is local only when both of these hold:
+  - **The endpoint is this machine:** the connection's `runtimeId` (D7) is this machine's loopback or the appliance's `ollama` service. A runtime on the network (D14) is not local, even on the operator's own LAN.
+  - **The model runs on the runtime:** Ollama can forward a request to its own cloud models. A model the runtime marks as remote, or a cloud-suffixed tag, is not local.
+- **The runtime's cloud setting:** diagnostics report whether cloud features are disabled (`OLLAMA_NO_CLOUD=1` or `disable_ollama_cloud` in `~/.ollama/server.json`), when the runtime exposes it. The remedy is the setting itself. The Linux appliance's `ollama` service sets it.
+- **Discovered models (P6)** are classified by the same two tests.
+- **Refusal:** under `local_only`, a non-local model is refused at resolution with a `permission` error naming the role and the model. It is not silently swapped.
+- **Embeddings:** under `local_only` they need a local embedding model (D16).
+
+**D16 — An embedding carries the identity of the model that made it, and search never mixes identities.**
+
+- **The identity:** every stored vector carries an embedding identity: model id, build digest and dimensions. Two models that both emit 1536 dimensions produce vectors in unrelated spaces, so the dimension column is not the identity. Rows already record `embedding_model`, but `searchVector` (`memoryDocs.ts`) chooses only a column and filters on the column being non-null, never on the model.
+- **Search:** a query is embedded with the identity active for its scope and matches only vectors of that identity.
+- **Changing the model** creates a new identity and a rebuild. The rebuild is a registered, candidate-driven background task. Search keeps using the old identity until the rebuild has covered the scope, then switches, and the old vectors are dropped. A search never runs against a partially rebuilt index.
+- **Jobs in flight:** a queued embedding job carries its identity and is discarded if the identity changed while it waited.
+- **No silent truncation:** the adapter always sends `truncate: false` to `/api/embed` (the runtime defaults to `true`). An input over the window fails, and the chunker splits by the model's window.
+- **Dimensions:** local models emit 768 or 1024 (or 1536 through the `dimensions` option, for models trained to be truncated). Which of the two becomes the stored form is settled in P0 (§8). Either way, the identity rule above holds.
+
+**D13 — Usage is recorded as for any model, and cost shows "local", not "$0.000".**
+
+- Tokens, latency, time to first token and tokens per second are recorded per call.
+- The tokens-per-second figure is what tells an operator their model is partly on CPU.
+- The usage provider is the runtime, so a mixed space can see how much ran where.
+
+**D14 — Scale is more runtimes, not a bigger one (P6).**
+
+- **The adapter:** an `openai-compatible` adapter on chat completions, built from the Fireworks adapter (the OpenAI adapter's Responses API is not what local servers serve). It reaches vLLM, SGLang, llama-server and LM Studio, and through vLLM a GPU box serving many requests at once.
+- **Pools:** several connections to the same catalog model form a pool, chosen by least in-flight against each one's `max_parallel`.
+- **A runtime on the network:** it needs an operator-admitted origin and a token, because an Ollama port has no authentication of its own.
+
+**D15 — One diagnostics record says what is wrong and what fixes it, and every surface reads it.**
+
+- **The record:** `LocalRuntimeDiagnostics`, a Zod schema in `@aflow/schemas`. It is computed per connection by one function, `diagnoseLocalRuntime`, in `@aflow/ai-client`, from:
+  - the runtime's `/api/version`, `/api/tags` and `/api/ps`;
+  - the connection's config;
+  - the catalog footprint (D8);
+  - the host inventory;
+  - recent usage (D13).
+- **What it carries:**
+  - runtime state;
+  - installed models and the one loaded, with its context and GPU/CPU split;
+  - recent tokens per second;
+  - `issues[]`. Each issue carries a stable `code`, a `severity`, a `cause` with the numbers in it (for example _61,204 tokens sent, 32,768-token window_), and a `remedy`. The remedy is an acting operation with its arguments already filled in (the smallest context that fits, the model that fits), or, where nothing in Aflow can fix the problem, an instruction for the operator (_start Ollama_, _close other apps_).
+- **Who reads it:**
+  - **Readiness** derives red and amber from `issues` rather than repeating the checks.
+  - **The UI** shows each issue as a card whose button runs the remedy.
+  - **Helmsman** gets the same record from the status operation and can propose the remedy as written.
+  - **Run-time errors** on a local model (`context_exceeded`, a runtime that is not running, a model that is not installed) carry the same issue `code` and `remedy` in their tool error, so an agent whose call failed reads the fix on its next turn.
+
+  _Rejected:_ separate checks per surface. Readiness, the models page and the agent would each describe the same fault in their own words, and drift apart.
+
+- **Coverage:** an issue that cannot be stated with a cause and a remedy is not shipped as an issue. A vague warning teaches nothing, to a person or a model.
+
+## 4. The initial lineup
+
+The figures below come from model cards and the Ollama library, read when this plan was written. None of them are measured: P0 replaces each of them with a number from the probe, and an entry ships only after its probe passes. "Fits" assumes Q4 weights and leaves room for the stack, the operating system and a browser.
+
+| Entry (tier alias)                | Runtime tag                           | Shape                           | Weights  | Context (model) | Why it is in                                                          |
+| --------------------------------- | ------------------------------------- | ------------------------------- | -------- | --------------- | --------------------------------------------------------------------- |
+| Qwen3.8 27B                       | `qwen3.8:27b`                         | dense, hybrid attention, vision | ~18 GB   | 256K            | Strongest agentic and coding results in the size class; effort ladder |
+| Qwen3.6 35B-A3B                   | `qwen3.6:35b`                         | MoE, 3B active, vision          | ~24 GB   | 256K            | Fast for its quality: 3B active; coding-tuned                         |
+| Gemma 4 26B MoE                   | `gemma4:26b`                          | MoE, 3.8B active, vision        | ~17 GB   | 256K            | Native function calling; fastest of the capable tier                  |
+| Gemma 4 31B                       | `gemma4:31b`                          | dense, vision                   | ~20 GB   | 256K            | Gemma's quality ceiling at desktop size                               |
+| Muse Glimmer 30B                  | `muse-glimmer:30b`                    | dense, vision                   | ~18 GB   | 128K            | Meta's agent-tuned open model: tool use, long tasks, recovery         |
+| gpt-oss 20B                       | `gpt-oss:20b`                         | MoE, MXFP4                      | ~14 GB   | 128K            | Smallest model with a usable tool-calling record; 16 GB machines      |
+| Qwen3.5 9B                        | `qwen3.5:9b`                          | dense                           | ~7 GB    | 256K            | Clerk, judge and title roles; machines under 16 GB                    |
+| gpt-oss 120B / Nemotron 3.5 Super | `gpt-oss:120b` / `nemotron-3.5-super` | MoE                             | 65–90 GB | 128K / 1M       | The 128 GB tier                                                       |
+| Qwen3 Embedding / EmbeddingGemma  | `qwen3-embedding` / `embeddinggemma`  | embedding                       | small    | —               | Local memory (P5)                                                     |
+
+Not in the lineup: **Muse Spark Open**, which needs hundreds of gigabytes of memory, and Muse Spark, which is served by API only.
+
+## 5. Affected packages and contracts
+
+- `packages/ai-client`:
+  - `providers/ollama.ts` (new), and `providers/openaiCompatible.ts` in P6;
+  - `AIProviderSchema`: `local` replaced by `ollama`, plus `openai-compatible` in P6;
+  - `ModelDefinition.local`, with its footprint, measurement conditions and build identity;
+  - local entries in `catalogModels.ts`;
+  - `verifyCredential` for the new providers;
+  - effective-context budgeting and the overflow-sizing method P0 chooses;
+  - `truncate: false` on every embedding request;
+  - `diagnoseLocalRuntime`.
+- `packages/schemas`:
+  - the credential registry entry `ollama`, with `base_url`, an optional token and the per-provider required secrets;
+  - the connection config fields (`context_tokens`, `max_parallel`, `first_token_timeout_ms`, `keep_alive`);
+  - `HostInventory.machine`, including free disk;
+  - `LocalRuntimeDiagnostics` and its issue codes;
+  - the local-model status and acting operations, the `local_model` target in the approval payload union (`requestedInput.ts`, `sessionBlockedOn.ts` and `actionCenter.ts`, beside `browser`), a new capability group with its tenant migration for the system profiles, and the Helmsman preset entries (Runner excluded);
+  - `spaces.model_locality`;
+  - `AGENT_MODEL_PROVIDER_IDS`.
+- `apps/aflow-executor-ai`:
+  - required secrets read from the registry;
+  - `baseUrl` and connection config forwarded to the adapter;
+  - `nativeFCProviders` removed;
+  - runtime admission through `admitOperation`;
+  - provisional streamed text until the response validates;
+  - local timeouts;
+  - a streaming `generateJson` fallback.
+- `packages/redis`: the leased semaphore keyed by `runtimeId`, used by every caller.
+- `packages/server-runtime`:
+  - readiness for `ollama`, with no `providerId = null` special case;
+  - model-lifecycle routes (local edition only);
+  - catalog responses carrying fit;
+  - `ByokAiClientFactory`, which gains the provider and goes through runtime admission.
+- `apps/aflow-executor-host`: machine memory and free disk in the inventory.
+- `apps/aflow-executor-memory`, `packages/database` (P5):
+  - embedding through the space's credentials;
+  - embedding identity on stored vectors, identity-filtered `searchVector`, and identity on queued jobs;
+  - the rebuild task, registered in `packages/schemas/src/background/registry.ts`;
+  - if G4 rules out 1536-dimension output, a migration adding the native-size columns with HNSW indexes, and `EMBEDDING_COLUMNS`.
+- `packages/web-product`:
+  - the models page's "On this computer" section;
+  - the connection dialog;
+  - the onboarding path;
+  - cost shown as "local";
+  - the locality policy in space settings.
+- Packaging and scripts:
+  - `docker-compose.local.yml`: `extra_hosts` and the `local-models` profile;
+  - `scripts/start.mjs`: the runtime status line;
+  - `yarn models:verify-local` and the P0 gate scripts.
+
+## 6. Phases
+
+The first complete slice is one model on one machine, P0 and P1. Every other lineup entry is qualified separately (P2) and blocks nothing.
+
+### P0 — Feasibility gates (no product code)
+
+Run on one machine, the 24 GB Apple Silicon one, with one model that fits it. Each gate is answered by a script committed beside the probe, so its answer can be reproduced:
+
+- **G1, overflow (D5):** does the current runtime truncate or refuse a prompt over `num_ctx`, and what does it keep? How does prefix caching change `prompt_eval_count`? Which sizing method holds on multilingual text, tool-heavy turns, reasoning history and images, and with what margin?
+- **G2, locality (D12):** can a client see whether a runtime's cloud features are disabled, and does it mark a model as remote?
+- **G3, lifecycle (D10):** what happens to a pull that is interrupted, cancelled, or run twice at once, and what does a pull with no disk space left return?
+- **G4, embeddings (D16):** does `dimensions` on `/api/embed` produce usable 1536-dimension vectors from a local model, and at what retrieval cost against its native size?
+- **G5, the machine (D8, D10):**
+  - memory at two context sizes and two `max_parallel` values;
+  - the GPU wired-memory cap;
+  - prefill and decode tokens per second;
+  - model load and switch time.
+
+**Inventory** every place a model is resolved outside role resolution.
+
+_Exit:_
+
+- every gate answered, and D5's sizing method chosen;
+- the call-site inventory attached to this plan;
+- a gate that fails changes the decision it serves before P1 starts.
+
+### P1 — One local model runs an agent (D3–D7, D9 compatibility tier, D15 for these faults)
+
+**Build:**
+
+- the Ollama adapter;
+- the `ollama` connection, set up through the existing credentials screens;
+- one curated catalog entry, for the model P0 ran;
+- `models:verify-local` with its compatibility tier and build identity;
+- native tool calling decided by capability;
+- the effective context window with overflow prevention;
+- streamed text that stays provisional until the response validates;
+- runtime admission (`runtimeId`, leased semaphore, `admitOperation`, cancellation);
+- the first-token window and idle-plus-ceiling timeouts;
+- the streaming JSON fallback;
+- readiness.
+
+The dev stack only.
+
+_Exit:_
+
+- Helmsman on that model completes a tool-using conversation through the web UI, with the role assigned in the ordinary picker;
+- three concurrent sessions on it run one at a time and finish with no timeout;
+- a prompt near the window survives its prefill.
+
+_Proof:_
+
+- **Overflow:** a prompt the sizing method cannot rule safe is refused before it is sent, as `context_exceeded`.
+- **Tool calling:** a model the probe marks `functionCalling: false` takes the JSON path.
+- **Readiness:** a connection with no runtime listening is red in readiness, not green.
+- **Admission:** two credentials naming one runtime share one admission. A step cancelled while queued leaves the queue. A worker killed while holding a lease frees it when the lease expires. A cloud call is not held up by a local queue.
+- **Prefill:** a runtime that takes longer than the old 300 s idle window to send its first byte does not fail the turn.
+
+### P2 — Qualifying the lineup (D9, one pull request per model)
+
+Each lineup entry (§4) is qualified on its own: both probe tiers, the build identity, the fit footprint and the role recommendations. It lands as its own small catalog change and can run in parallel with every later phase. An entry that fails is recorded as not recommended, with its result, and blocks nothing.
+
+_Exit for each entry:_ its usefulness results, repeated runs included, are in the entry, and its recommended roles follow from them.
+
+### P3 — The operator's surface (D8, D10, D13, D15)
+
+**Build:**
+
+- runtime detection;
+- `diagnoseLocalRuntime`, with readiness derived from its issues;
+- **On this computer**, listing installed and lineup models with estimated or verified fit, and each issue as a card whose button runs its remedy;
+- the explicit trial load for an unpaired machine;
+- pull with progress, cancel, delete, warm and unload, with the durability rules of D10: one pull per tag, a disk-space check, and the runtime's resume behaviour as P0 found it;
+- the one-model-for-every-role preset as the default for a local space, and the cost of mixing models;
+- an onboarding path for "use a model on this computer", for an operator with no cloud key;
+- cost shown as local;
+- machine memory and free disk in the host inventory;
+- edition gating;
+- _optional:_ the approved one-time install on a paired Mac (D2).
+
+_Exit:_ on a machine with Ollama and no models, an operator goes from first run to a working Helmsman conversation without a terminal.
+
+_Proof:_
+
+- the surface is absent in a hosted build (`apps/web` route and nav);
+- a model loaded with a context too large to fit on the GPU raises an issue whose remedy, run from its card, leaves it entirely on the GPU;
+- a second pull of a tag that is already downloading joins the first;
+- a pull larger than the free disk is refused before it starts;
+- reading diagnostics on an unpaired machine loads nothing.
+
+### P3b — Helmsman reads and asks (D10, D15)
+
+**Build:**
+
+- the status operation;
+- the acting operations parked on the write-approval pause, with the `local_model` approval target and its card;
+- the re-check of impact when an approved action executes;
+- the capability group and its migration;
+- the Helmsman preset;
+- issue codes and remedies on local-model tool errors.
+
+_Exit:_ in a live conversation, the operator asks Helmsman why responses are slow, and Helmsman names the cause from the record (for example, the model is partly on CPU at a context of 128K) and posts one card with the fitting context. Once the operator approves, the next status shows the model entirely on the GPU.
+
+_Proof:_
+
+- a Runner's grant cannot reach any of these operations;
+- an acting call without approval does not run, and after a denial it fails with the operator's reason;
+- a card for unloading the model the asking session runs on names that session among the runs it would end;
+- an approved unload whose affected runs changed after approval parks again with the new impact.
+
+### P4 — The appliance (D11)
+
+**Build:**
+
+- `extra_hosts`;
+- the `local-models` profile with NVIDIA and `OLLAMA_NO_CLOUD=1`;
+- the `yarn start` status line;
+- operator documentation.
+
+_Exit:_ a Helmsman conversation on a local model through the macOS appliance against the host's Ollama, and through the Linux appliance against the profile's container. Both are release-tested on a real appliance.
+
+### P5 — Model inference stays on this machine (D12, D16)
+
+**Build:**
+
+- every inventoried call site following the space's choice;
+- `model_locality`, with its two tests (endpoint and execution location) and the runtime's cloud setting in diagnostics;
+- embedding identity on stored vectors, identity-filtered search, the rebuild task, and identity on queued jobs;
+- `truncate: false`;
+- memory embedding through the space's credentials;
+- the stored dimension form G4 chose.
+
+_Exit:_ a `local_only` space runs a skill end to end, memory write and search included.
+
+_Proof:_
+
+- **Refusal, with the internet available:**
+  - assigning a cloud model to any role is refused, naming the role;
+  - a remote or cloud-suffixed tag on the local runtime is refused;
+  - no platform-internal call in the inventory reaches a cloud model. Every outbound model call during the run is captured, and none goes to a cloud provider.
+- **Offline:** the same run repeated with the internet cut off still completes. That proves the space works offline, which is a separate claim from refusal.
+- **Embedding identity:** after the space's embedding model changes, search returns only old-identity results until the rebuild covers the scope, then only new ones, and never a mix.
+
+### P6 — Scale and variety (D14)
+
+**Build:**
+
+- the OpenAI-compatible adapter, probed against vLLM and llama-server;
+- runtimes on the network behind an admitted origin and token, never counted as local (D12);
+- connection pools, admitted per `runtimeId`;
+- discovered models: any installed tag offered as a tenant-scoped catalog overlay, persisted with its own probe result and build identity, assignable once measured.
+
+_Exit:_ two runtimes serve one model as a pool and split a batch of eval runs. A tag outside the lineup is pulled, measured from the UI and assigned.
+
+## 7. How it is proven
+
+The cases that would fail if this were wrong:
+
+- **Overflow:** a prompt that might exceed the connection's window is refused before it is sent. The model never answers with its instructions cut off.
+- **Readiness:** readiness is red when the runtime is down.
+- **Admission:** one runtime admits `max_parallel` requests across every caller and credential, a queued request is not killed for waiting, and local queueing never holds up cloud work.
+- **Prefill:** a long prefill is not killed for silence.
+- **Measured capability:** a model without measured tool calling is not sent native tools, and a build that differs from the measured one is reported as unverified.
+- **Locality:** a `local_only` space cannot reach a cloud model through any role, platform-internal call or remote tag, tested with the internet available.
+- **Embedding identity:** search never mixes vectors from two embedding identities.
+- **Edition:** none of it exists in a hosted build.
+- **Approval:** no agent changes the runtime without an approved card, an approval acts only on the impact it showed, and Runner cannot ask.
+- **One diagnosis:** readiness, the models page and Helmsman report the same issue code for the same fault, because each reads `diagnoseLocalRuntime`.
+
+Each is a test in the phase that introduces it. The P1, P3, P3b and P5 exits are live runs on the dev stack, driven through the UI or `aflow-local`.
+
+## 8. Open questions
+
+- **Embedding dimensions.** Several local embedding models are Matryoshka-trained and can emit 1536 dimensions through `dimensions`, which would avoid a migration. G4 measures what that costs in retrieval quality. Identity (D16) is required either way.
+- **Discovered models earlier?** If the curated lineup turns out too narrow for testing, the P6 overlay could move up to P3. It costs a table and an on-demand probe run.
+- **Runtime decision models.** The current Ollama release lists models that return choices with probabilities. Whether they could back `ai.decision.decide` (plan 316) locally is a question for after P1.
+- **Windows.** Ollama runs there and the dev stack's host-side executors would reach it, but nobody has measured it.
