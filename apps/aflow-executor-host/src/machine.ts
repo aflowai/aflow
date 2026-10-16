@@ -12,7 +12,7 @@
  * says it does not know rather than guessing.
  */
 import { execFile } from 'node:child_process';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, statfs, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import { join } from 'node:path';
 import type { HostMachine } from '@aflow/redis';
@@ -62,9 +62,30 @@ async function readGpuWorkingSet(platform: string, run: RunCommand): Promise<num
   return mib.length > 0 ? Math.max(...mib) * 1024 ** 2 : undefined;
 }
 
+/**
+ * Where Ollama keeps its downloads: `OLLAMA_MODELS` when the executor's
+ * environment names it, the runtime's default otherwise. A runtime started
+ * by a service manager with another `OLLAMA_MODELS` keeps its downloads on a
+ * disk this cannot see, which only an operator who moved them has.
+ */
+function defaultModelStore(): string {
+  return process.env['OLLAMA_MODELS'] ?? join(os.homedir(), '.ollama', 'models');
+}
+
+export type ReadFreeDisk = (path: string) => Promise<number | undefined>;
+
+const readFreeDisk: ReadFreeDisk = async (path) => {
+  // The store may not exist before the first pull; its disk is the home's.
+  for (const candidate of [path, os.homedir()]) {
+    const stats = await statfs(candidate).catch(() => undefined);
+    if (stats) return stats.bavail * stats.bsize;
+  }
+  return undefined;
+};
+
 export interface MachineReader {
   /** The machine as read so far; the GPU figure arrives once the probe has run. */
-  current(): HostMachine;
+  current(): Promise<HostMachine>;
   /** Reads the GPU figure, from the cache when it still describes this machine. */
   start(): Promise<void>;
 }
@@ -76,19 +97,26 @@ export function createMachineReader(options: {
   totalMemoryBytes?: number;
   osRelease?: string;
   run?: RunCommand;
+  modelStore?: string;
+  freeDisk?: ReadFreeDisk;
 }): MachineReader {
   const platform = options.platform ?? process.platform;
   const totalMemoryBytes = options.totalMemoryBytes ?? os.totalmem();
   const osRelease = options.osRelease ?? os.release();
   const run = options.run ?? runCommand;
   const cachePath = join(options.hostDir, CACHE_FILE);
+  const modelStore = options.modelStore ?? defaultModelStore();
+  const freeDisk = options.freeDisk ?? readFreeDisk;
   const machine: HostMachine = {
     totalMemoryBytes,
     unifiedMemory: platform === 'darwin' && (options.arch ?? process.arch) === 'arm64',
   };
 
   return {
-    current: () => ({ ...machine }),
+    async current() {
+      const freeDiskBytes = await freeDisk(modelStore).catch(() => undefined);
+      return { ...machine, ...(freeDiskBytes !== undefined ? { freeDiskBytes } : {}) };
+    },
     async start() {
       const cached = await readFile(cachePath, 'utf8')
         .then((text) => JSON.parse(text) as CachedReading)

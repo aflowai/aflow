@@ -1015,6 +1015,8 @@ export interface LocalModelBuild {
   probeVersion: number;
   measuredAt: string;
   footprint?: LocalModelFootprint;
+  /** What the runtime downloads for the tag, so a pull too large for the disk is refused before it starts. */
+  downloadBytes?: number;
 }
 
 // ============================================================================

@@ -36,6 +36,7 @@ describe('localRuntimeClient', () => {
         contextLength: 32_768,
         expiresAt: 'x',
         runner: null,
+        gpuBytes: null,
       },
     ]);
   });
@@ -69,6 +70,55 @@ describe('localRuntimeClient', () => {
   });
 });
 
+describe('downloads', () => {
+  it('reports a pull line by line as the runtime streams it, and fails on an error line', async () => {
+    const lines = [
+      { status: 'pulling manifest' },
+      { status: 'pulling 48eb98ec', completed: 1_000, total: 16_000 },
+      { error: 'max retries exceeded' },
+    ];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(lines.map((l) => JSON.stringify(l)).join('\n') + '\n')),
+    );
+    const progress: unknown[] = [];
+
+    await expect(
+      localRuntimeClient({}).pull(
+        'gemma4:26b',
+        (p) => progress.push(p),
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow('max retries exceeded');
+    expect(progress).toEqual([
+      { status: 'pulling manifest', completedBytes: 0, totalBytes: null },
+      { status: 'pulling 48eb98ec', completedBytes: 1_000, totalBytes: 16_000 },
+    ]);
+  });
+
+  it('lists what is downloaded, marking a model the runtime forwards to its cloud', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              models: [
+                { name: 'gemma4:26b', size: 16, digest: 'abc' },
+                { name: 'gpt-oss:120b-cloud', size: 1, digest: 'def', remote_host: 'ollama.com' },
+              ],
+            }),
+          ),
+      ),
+    );
+
+    expect(await localRuntimeClient({}).installed()).toEqual([
+      { tag: 'gemma4:26b', sizeBytes: 16, digest: 'abc', remoteHost: null },
+      { tag: 'gpt-oss:120b-cloud', sizeBytes: 1, digest: 'def', remoteHost: 'ollama.com' },
+    ]);
+  });
+});
+
 describe('servesWithoutLoading', () => {
   const held = (runner: string, contextLength: number): LoadedLocalModel => ({
     tag: 'qwen3.5:9b',
@@ -76,6 +126,7 @@ describe('servesWithoutLoading', () => {
     contextLength,
     expiresAt: null,
     runner,
+    gpuBytes: null,
   });
 
   it('is false when the model is not loaded', () => {

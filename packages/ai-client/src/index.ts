@@ -195,10 +195,13 @@ export {
   type LocalModelFit,
   type LocalModelFitStatus,
 } from './localModelFit.js';
+export { diagnoseLocalRuntime, type LocalRuntimeObservation } from './localRuntimeDiagnostics.js';
 export {
   localRuntimeClient,
   sameLocalTag,
   servesWithoutLoading,
+  type InstalledLocalModel,
+  type LocalPullProgress,
   type LocalRuntimeClient,
   type LoadedLocalModel,
 } from './providers/ollamaRuntime.js';
