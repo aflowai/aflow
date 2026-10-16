@@ -15,11 +15,11 @@
  * can confine one.
  */
 import { execFile } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { type AddressInfo, createServer } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -30,6 +30,7 @@ import {
   type HostSandboxPosture,
 } from '@aflow/schemas';
 
+import { AGENT_SCRATCH_DIR } from '../executorScratch.js';
 import type { SandboxedRunInput, SandboxedRunResult } from '../sandboxedRun.js';
 import { CONFINEMENT_LISTENERS, requires } from './fixtures/capabilities.js';
 
@@ -284,8 +285,13 @@ describe('a harness run under the folder’s posture', () => {
     expect(sandboxed).toHaveLength(1);
     const input = sandboxed[0];
     expect(input?.posture).toBe('open');
-    expect(input?.cwd.startsWith(tmpdir())).toBe(true);
+    expect(input?.cwd.startsWith(realpathSync(tmpdir()))).toBe(true);
     expect(input?.cwd).not.toBe(repo);
+    // The scratch it may write is one of its own, beside the checkout and its
+    // git directory: the directory holding those two is not handed to it.
+    const scratch = input?.scratchDir ?? '';
+    expect(basename(dirname(scratch))).toBe(basename(dirname(input?.cwd ?? '')));
+    expect(basename(scratch)).toBe(AGENT_SCRATCH_DIR);
     expect(input?.env).toEqual({});
     expect(input?.trustedEnv).toMatchObject({
       SRT_DEBUG: '1',

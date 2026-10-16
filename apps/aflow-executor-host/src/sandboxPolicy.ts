@@ -124,7 +124,9 @@ export interface SandboxWidening {
    * The writable root's git directory, kept outside it in the job's scratch.
    * Read, so the job's own git works, and never written: its config is what
    * the executor's git reads when it stages and judges the job's work, outside
-   * this boundary, and the scratch around it is writable.
+   * this boundary. The scratch holding both is not the job's to write — it is
+   * handed a directory of its own inside it (`makeAgentScratch`) — and the
+   * denial holds whatever a caller hands as `scratchDir`.
    */
   readonly gitDir?: string;
   /**

@@ -26,7 +26,7 @@ import { z } from 'zod';
 import type { HostBinding } from './bindings.js';
 import { SHORT_SHA_LENGTH } from './checkReceipt.js';
 import { createChatterStripper } from './egressRefusals.js';
-import { makeScratch } from './executorScratch.js';
+import { makeAgentScratch, makeScratch } from './executorScratch.js';
 import { formatMinutes } from './folderChecks.js';
 import { runUnderFolderPosture } from './folderRun.js';
 import type { SandboxedRunResult } from './sandboxedRun.js';
@@ -207,7 +207,8 @@ export interface FolderCheckInput {
 
 export async function runFolderChecks(input: FolderCheckInput): Promise<FolderCheckRun> {
   const scratch = await makeScratch(CHECK_SCRATCH_PREFIX);
-  const reportPath = join(scratch, CHECK_REPORT_FILE);
+  const agentScratch = await makeAgentScratch(scratch);
+  const reportPath = join(agentScratch, CHECK_REPORT_FILE);
   let worktreePath: string | undefined;
   try {
     const worktree = await prepareWorktree(input.binding.root, scratch, 'check', {
@@ -235,7 +236,7 @@ export async function runFolderChecks(input: FolderCheckInput): Promise<FolderCh
         ...NO_REPLACE_OBJECTS_ENV,
       },
       timeoutMs: input.timeoutMs,
-      scratchDir: scratch,
+      scratchDir: agentScratch,
       // No host named: a check in a `confined` folder reaches none, and one
       // in an `open` folder reaches every host without being told.
       widening: {

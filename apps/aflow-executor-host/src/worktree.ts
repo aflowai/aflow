@@ -100,7 +100,8 @@ export class WorktreeError extends Error {
       | 'push_target_differs'
       | 'fetch_failed'
       | 'unresolved_conflict'
-      | 'binary_conflict',
+      | 'binary_conflict'
+      | 'checkout_replaced',
   ) {
     super(message);
     this.name = 'WorktreeError';
@@ -217,8 +218,9 @@ const CHECKOUT_GIT_DIR_PREFIX = 'git-';
 
 /**
  * Where a checkout's git directory lives: beside it in the run's scratch, so
- * outside the root the sandbox grants writes to, and denied to the sandbox by
- * name (`SandboxWidening.gitDir`) since the scratch around it is writable.
+ * outside the root the sandbox grants writes to, in a directory the sandbox is
+ * not granted (`makeAgentScratch`), and denied to it by name besides
+ * (`SandboxWidening.gitDir`).
  */
 export function checkoutGitDir(worktreePath: string): string {
   return join(dirname(worktreePath), `${CHECKOUT_GIT_DIR_PREFIX}${basename(worktreePath)}`);
@@ -243,9 +245,34 @@ export function checkoutAt(worktreePath: string, prefix = ''): Checkout {
   };
 }
 
+/**
+ * Refuse a checkout that is no longer the directory `prepareWorktree` made.
+ *
+ * The executor's git names `--work-tree` outright, and git takes a link there
+ * as readily as a directory: a checkout or folder replaced by a link to
+ * `~/.ssh` would have staging read that directory into the diff and a merge
+ * write into it, as the operator. So both must be real directories whose
+ * resolved path is the one recorded, which `prepareWorktree` makes resolved —
+ * a link in the place of either, or of any directory above them, fails it.
+ */
+async function assertCheckoutInPlace(checkout: Checkout): Promise<void> {
+  for (const path of new Set([checkout.path, checkout.workDir])) {
+    const resolved = (await isRealDirectory(path))
+      ? await realpath(path).catch(() => undefined)
+      : undefined;
+    if (resolved !== path) {
+      throw new WorktreeError(
+        `The run's checkout at ${path} is no longer the directory made for it, so git was not run in it.`,
+        'checkout_replaced',
+      );
+    }
+  }
+}
+
 /** Where git runs: a folder by its path, a checkout by its own git directory. */
-function gitLocation(at: string | Checkout): string[] {
+async function gitLocation(at: string | Checkout): Promise<string[]> {
   if (typeof at === 'string') return ['-C', at];
+  await assertCheckoutInPlace(at);
   return ['-C', at.path, `--git-dir=${at.gitDir}`, `--work-tree=${at.path}`];
 }
 
@@ -255,7 +282,7 @@ export async function git(
   maxBuffer = 1024 * 1024,
   env: Record<string, string> = {},
 ): Promise<string> {
-  const { stdout } = await run('git', [...gitLocation(cwd), ...GIT_SAFETY_ARGS, ...args], {
+  const { stdout } = await run('git', [...(await gitLocation(cwd)), ...GIT_SAFETY_ARGS, ...args], {
     timeout: GIT_TIMEOUT_MS,
     maxBuffer,
     env: { ...gitEnv(), ...env },
@@ -921,7 +948,10 @@ export async function prepareWorktree(
     }
   }
 
-  let checkout = checkoutAt(join(scratchDir, runKey));
+  // Recorded resolved, which is what every git in it checks it against
+  // (`assertCheckoutInPlace`).
+  await mkdir(scratchDir, { recursive: true });
+  let checkout = checkoutAt(join(await realpath(scratchDir), runKey));
   let top: string;
   try {
     top = (await git(root, ['rev-parse', '--show-toplevel'])).trim();
@@ -970,7 +1000,8 @@ async function clonePrivately(top: string, checkout: Checkout, baseSha: string):
   await git(checkout.gitDir, ['config', '--remove-section', 'remote.origin']);
   await mkdir(checkout.path, { recursive: true });
   await writeFile(join(checkout.path, '.git'), `gitdir: ${checkout.gitDir}\n`, 'utf8');
-  await git(checkout, ['checkout', '--quiet', '--force', '--detach', baseSha]);
+  // At the top alone: the folder's place in the clone exists only once checked out.
+  await git(checkoutAt(checkout.path), ['checkout', '--quiet', '--force', '--detach', baseSha]);
   // A folder that tracks nothing at this commit is not in what was checked out.
   await mkdir(checkout.workDir, { recursive: true });
 }

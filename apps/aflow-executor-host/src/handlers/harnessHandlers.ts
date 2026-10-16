@@ -126,7 +126,7 @@ import {
 } from '../worktree.js';
 import { PUBLICATION_SCRATCH_PREFIX } from '../branchCommit.js';
 import { CHECK_SCRATCH_PREFIX } from '../commitCheck.js';
-import { isMarkedScratch, makeScratch } from '../executorScratch.js';
+import { isMarkedScratch, makeAgentScratch, makeScratch } from '../executorScratch.js';
 import { commissionGitReadiness, noCommissionGitMessage } from '../gitReadiness.js';
 import { browserFailure, jobScopeOf } from './browserHandler.js';
 
@@ -719,12 +719,16 @@ async function runHarness(
     // Fetched before the run and held only for its duration.
     credential = await fetchCredential(profile);
 
+    // Everything the harness writes outside its checkout goes here, and the
+    // sandbox is granted this rather than the scratch holding the checkout.
+    const agentScratch = await makeAgentScratch(scratch);
+
     // A configuration directory of the run's own, so a harness that keeps state
     // has somewhere to keep it that is not the operator's home. A session keeps
     // the same one across turns, which is where the conversation lives.
     let configDir: string | undefined;
     if (profile.configDirEnv !== undefined) {
-      configDir = session?.configDir ?? join(scratch, 'harness-config');
+      configDir = session?.configDir ?? join(agentScratch, 'harness-config');
       await mkdir(configDir, { recursive: true });
     }
 
@@ -752,7 +756,7 @@ async function runHarness(
         scope: { ...jobScopeOf(ctx), spaceId },
         profile: input.browser.profile,
         reach: { allowedDomains: profile.allowedDomains, localPorts: profile.browserLocalPorts },
-        scratchDir,
+        scratchDir: agentScratch,
         stepExecutionId: ctx.stepExecutionId,
         storeScreenshot: async (image) => await browserService.storeScreenshot(tenantId, image),
         onActivity,
@@ -811,7 +815,7 @@ async function runHarness(
               : {}),
           },
           timeoutMs: input.timeoutMs,
-          scratchDir,
+          scratchDir: agentScratch,
           widening: {
             authPaths: profile.authPaths,
             writePaths: profile.writePaths,
@@ -866,7 +870,7 @@ async function runHarness(
         harnessId: profile.id,
         worktreePath: worktree.path,
         scratchDir,
-        configDir: configDir ?? join(scratchDir, 'harness-config'),
+        configDir: configDir ?? join(agentScratch, 'harness-config'),
         conversationId,
         baseSha: worktree.baseSha,
         ...(base !== undefined ? { base } : {}),
@@ -1198,9 +1202,9 @@ export async function removeOrphanedCheckouts(
 /**
  * The checkouts in a scratch directory, made whole or in part: a directory
  * holding a `.git` of any kind, and one whose git directory alone was made.
- * Only a real directory counts, as the entry and as the checkout it names: an
- * agent writes this scratch, and a link it planted would lead the removal into
- * whatever the link points at.
+ * Only a real directory counts, as the entry and as the checkout it names: the
+ * sweep decides nothing by a scratch's shape, and a link standing in a
+ * checkout's place would lead the removal into whatever the link points at.
  */
 async function checkoutsIn(scratchDir: string): Promise<string[]> {
   const found = new Set<string>();

@@ -362,7 +362,7 @@ describe("a run's checkout is a clone whose refs are its own", () => {
     const wt = await prepareWorktree(repo, scratch, 'work', { dependencies: 'none' });
     expect(await refsOf(wt.path)).toBe(await refsOf(repo));
     // Its git directory sits beside it, and the checkout holds only a gitfile.
-    expect(wt.gitDir).toBe(join(scratch, 'git-work'));
+    expect(wt.gitDir).toBe(join(await realpath(scratch), 'git-work'));
     expect(await readFile(join(wt.path, '.git'), 'utf8')).toBe(`gitdir: ${wt.gitDir}\n`);
     expect((await git(wt.path, 'rev-parse', '--absolute-git-dir')).trim()).toBe(
       await realpath(wt.gitDir),
