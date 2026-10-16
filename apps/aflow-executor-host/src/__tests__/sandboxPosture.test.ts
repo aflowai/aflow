@@ -291,8 +291,11 @@ describe('a harness run under the folder’s posture', () => {
       AGENT_TOKEN: 'agent-credential',
       AGENT_CONFIG_DIR: expect.stringContaining('harness-config'),
       GIT_NO_REPLACE_OBJECTS: '1',
-      GIT_CONFIG_KEY_0: 'core.hooksPath',
     });
+    // No hook is handed to the agent's git: its checkout's refs are its own.
+    expect(
+      Object.keys(input?.trustedEnv ?? {}).filter((key) => key.startsWith('GIT_CONFIG')),
+    ).toEqual([]);
     expect(input?.widening).toMatchObject({
       writableRoot: input?.cwd,
       withholdBindingWrite: true,
@@ -311,7 +314,6 @@ describe('a harness run under the folder’s posture', () => {
       SRT_DEBUG: '1',
       AGENT_TOKEN: 'agent-credential',
       GIT_NO_REPLACE_OBJECTS: '1',
-      GIT_CONFIG_KEY_0: 'core.hooksPath',
     });
   });
 

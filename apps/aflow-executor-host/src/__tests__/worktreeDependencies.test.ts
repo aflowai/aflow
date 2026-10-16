@@ -92,7 +92,7 @@ describe('dependencies in the isolated checkout', () => {
       await readFile(join(wt.path, 'packages', 'a', 'node_modules', 'marker.txt'), 'utf8'),
     ).toBe('package dep\n');
 
-    await removeWorktree(repo, wt.path);
+    await removeWorktree(wt.path);
   });
 
   it('resolves a workspace package to the checkout and a real dependency to the folder', async () => {
@@ -107,7 +107,7 @@ describe('dependencies in the isolated checkout', () => {
       join(repoReal, 'node_modules', 'left-pad'),
     );
 
-    await removeWorktree(repo, wt.path);
+    await removeWorktree(wt.path);
   });
 
   it('shows a workspace package as committed, not as the operator is editing it', async () => {
@@ -120,7 +120,7 @@ describe('dependencies in the isolated checkout', () => {
       'package\n',
     );
 
-    await removeWorktree(repo, wt.path);
+    await removeWorktree(wt.path);
   });
 
   it('carries an installation the folder keeps somewhere else', async () => {
@@ -148,7 +148,7 @@ describe('dependencies in the isolated checkout', () => {
         filesChanged: 0,
         overCeiling: false,
       });
-      await removeWorktree(repo, wt.path);
+      await removeWorktree(wt.path);
       expect(await readdir(elsewhere)).toEqual(expect.arrayContaining(['@acme', 'left-pad']));
       expect(await readFile(join(elsewhere, 'left-pad', 'index.js'), 'utf8')).toBe('stored dep\n');
     } finally {
@@ -162,7 +162,7 @@ describe('dependencies in the isolated checkout', () => {
     expect(changes).toEqual({ patch: '', filesChanged: 0, overCeiling: false });
     // Not merely absent from the diff: absent from what git was asked to stage.
     expect(await git(wt.path, 'diff', '--cached', '--name-only')).toBe('');
-    await removeWorktree(repo, wt.path);
+    await removeWorktree(wt.path);
   });
 
   it('still reports the work the harness did, beside the links', async () => {
@@ -172,12 +172,12 @@ describe('dependencies in the isolated checkout', () => {
     expect(changes.filesChanged).toBe(1);
     expect(changes.patch).toContain('harness rewrote this');
     expect(changes.patch).not.toContain('node_modules');
-    await removeWorktree(repo, wt.path);
+    await removeWorktree(wt.path);
   });
 
   it('takes the mirror away and leaves what the operator installed and wrote', async () => {
     const wt = await prepareWorktree(repo, scratch, 'work');
-    await removeWorktree(repo, wt.path);
+    await removeWorktree(wt.path);
 
     expect(await readFile(join(repo, 'node_modules', 'left-pad', 'index.js'), 'utf8')).toBe(
       'root dep\n',
@@ -200,7 +200,7 @@ describe('dependencies in the isolated checkout', () => {
       filesChanged: 0,
       overCeiling: false,
     });
-    await removeWorktree(repo, wt.path);
+    await removeWorktree(wt.path);
   });
 
   it.skipIf(!sandboxAvailable() || confined.skip)(
@@ -249,7 +249,7 @@ describe('dependencies in the isolated checkout', () => {
         'root dep\n',
       );
 
-      await removeWorktree(repo, wt.path);
+      await removeWorktree(wt.path);
     },
   );
 });

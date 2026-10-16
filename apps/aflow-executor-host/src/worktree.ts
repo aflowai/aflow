@@ -8,11 +8,15 @@
  * result a shape worth reviewing — a diff against the commit the run started
  * from, rather than a mutation already applied to the working copy.
  *
- * The worktree is detached at the binding's current HEAD, or at the commit a
- * caller named. Nothing is pushed, and the agent's ordinary git is refused a
- * branch or tag move (`refGuard.ts`); deciding what becomes of the diff is a separate act, and the
- * most a decision reaches from here is a branch of its own or one commit
- * appended to the branch the diff was made on.
+ * The checkout is a private clone of the folder, detached at the binding's
+ * current HEAD or at the commit a caller named (Plan 315 F56). It borrows the
+ * folder's objects and copies its refs, and shares neither its refs nor its
+ * config: whatever git a run starts in it — `update-ref`, `branch -D`, a
+ * hooks-path override, a push to `.` — moves the clone's refs and nobody
+ * else's. Nothing is pushed; deciding what becomes of the diff is a separate
+ * act, and the most a decision reaches from here is a branch of its own or one
+ * commit appended to the branch the diff was made on, which the executor's own
+ * git fetches from its clone into the folder (`branchCommit.ts`).
  *
  * It carries only what the repository tracks, so the operator's installed
  * dependencies are linked into it: without them a harness asked to run the
@@ -34,14 +38,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import {
-  dirname,
-  isAbsolute,
-  join,
-  relative as relativePath,
-  resolve as resolvePath,
-  sep,
-} from 'node:path';
+import { dirname, join, relative as relativePath, resolve as resolvePath, sep } from 'node:path';
 import { promisify } from 'node:util';
 
 const run = promisify(execFile);
@@ -105,9 +102,9 @@ export class WorktreeError extends Error {
  * What git is allowed to be, when this lane runs it.
  *
  * These commands run OUTSIDE the sandbox — they have to, since they create the
- * worktree the sandbox is then compiled around. That makes them the one place
+ * checkout the sandbox is then compiled around. That makes them the one place
  * repository-controlled behaviour could execute with the executor's own
- * authority: `worktree add` performs a checkout, which runs `post-checkout` and
+ * authority: making the checkout performs one, which runs `post-checkout` and
  * `filter.*.smudge`, and `git add` runs clean filters. Inheriting this
  * process's environment handed those the pairing credential and the Redis URL.
  *
@@ -120,14 +117,15 @@ export class WorktreeError extends Error {
  * hooks and `protocol.ext.allow` stops transport helpers, but neither touches
  * `filter.<name>.smudge`, `.clean` or `.process` — and those are programs git
  * runs too. A filter is *selected* by `.gitattributes`, which lives in the
- * working tree and which a harness may write, and *defined* in config. Checking
- * a worktree out and staging with `git add -A` both apply them, here, outside
+ * working tree and which a harness may write, and *defined* in config. Making
+ * a checkout and staging with `git add -A` both apply them, here, outside
  * the sandbox, with the operator's PATH.
  *
  * Naming filters to disable does not work: the set is whatever the operator has
  * configured. Removing where they are defined does. System config is already
  * off; global is pointed at nothing; what remains is the repository's own
- * `.git/config`, which this lane refuses to let anything write.
+ * `.git/config` — a run's clone starts with one that defines none — which this
+ * lane refuses to let anything write.
  */
 const GIT_SAFETY_ARGS = [
   '-c',
@@ -171,16 +169,6 @@ function gitEnv(globalConfig: 'withheld' | 'read' = 'withheld'): Record<string, 
     if (configured !== undefined) env['GIT_CONFIG_GLOBAL'] = configured;
   }
   return env;
-}
-
-/** What `git --version` on the executor's own PATH says, or nothing when git is absent. */
-export async function gitVersionText(timeoutMs: number): Promise<string | undefined> {
-  try {
-    const { stdout } = await run('git', ['--version'], { timeout: timeoutMs, env: gitEnv() });
-    return stdout;
-  } catch {
-    return undefined;
-  }
 }
 
 export async function git(
@@ -351,7 +339,7 @@ export async function countCommits(root: string, base: string, head: string): Pr
 /**
  * The directory a checkout inherits rather than fetches again.
  *
- * A worktree is created at a commit, so it carries what the repository tracks
+ * A checkout is created at a commit, so it carries what the repository tracks
  * and nothing else — and installed dependencies are, correctly, not tracked. A
  * harness asked to run the tests or the typecheck therefore reaches for the
  * package registry, which the boundary denies, and reports a network failure
@@ -584,16 +572,6 @@ export async function isGitRepository(root: string): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-/**
- * The folder's repository directory, shared by every worktree added to it, with
- * symbolic links resolved — the one path that names this repository whichever
- * of its checkouts a git runs in.
- */
-export async function commonGitDir(root: string): Promise<string> {
-  const reported = (await git(root, ['rev-parse', '--git-common-dir'])).trim();
-  return await realpath(isAbsolute(reported) ? reported : join(root, reported));
 }
 
 export interface PrepareWorktreeOptions {
@@ -831,15 +809,40 @@ export async function prepareWorktree(
 
   const path = join(scratchDir, runKey);
   try {
-    await git(root, ['worktree', 'add', '--detach', path, baseSha]);
+    await clonePrivately(root, path, baseSha);
   } catch (error) {
+    await rm(path, { recursive: true, force: true }).catch(() => {});
     throw new WorktreeError(
-      `Could not create a worktree for this run: ${error instanceof Error ? error.message : String(error)}`,
+      `Could not create a checkout for this run: ${error instanceof Error ? error.message : String(error)}`,
       'git_failed',
     );
   }
   if ((options.dependencies ?? 'linked') === 'linked') await linkDependencies(root, path);
   return { path, baseSha };
+}
+
+/**
+ * A clone of the folder at `path`, detached at `baseSha`, whose refs are its own.
+ *
+ * `--mirror` copies every ref as the folder names it, so `main`, `origin/main`
+ * and a tag read in the clone as they read in the folder when it was made — a
+ * review's range and a check's base resolve to the same commits. `--shared`
+ * borrows the folder's objects through `objects/info/alternates` rather than
+ * copying them, so the clone costs its refs and its files; borrowing objects is
+ * reading, and nothing written in the clone reaches the folder's store. The
+ * mirror's remote is removed so no `git push` or `git fetch` in the clone names
+ * the folder by default.
+ *
+ * Mirrored as a bare repository into `<path>/.git` and then given a working
+ * tree, because `--mirror` is bare-only; `--force` checks out over the index
+ * the bare clone never had.
+ */
+async function clonePrivately(root: string, path: string, baseSha: string): Promise<void> {
+  const gitDir = join(path, '.git');
+  await git(root, ['clone', '--quiet', '--mirror', '--shared', '--', root, gitDir]);
+  await git(gitDir, ['config', 'core.bare', 'false']);
+  await git(gitDir, ['config', '--remove-section', 'remote.origin']);
+  await git(path, ['checkout', '--quiet', '--force', '--detach', baseSha]);
 }
 
 export interface WorktreeChanges {
@@ -926,43 +929,14 @@ export async function collectChanges(worktreePath: string): Promise<WorktreeChan
 }
 
 /**
- * Remove the worktree. Failure here is never allowed to fail the run — the work
- * is already collected, and a leftover directory is a housekeeping problem
- * rather than a reason to discard a result.
+ * Remove the run's clone. Nothing of it is registered in the folder, so the
+ * directory is the whole of it. Failure here is never allowed to fail the run —
+ * the work is already collected, and a leftover directory is a housekeeping
+ * problem rather than a reason to discard a result.
  */
-export async function removeWorktree(root: string, worktreePath: string): Promise<void> {
+export async function removeWorktree(worktreePath: string): Promise<void> {
   await unlinkDependencies(worktreePath);
-  try {
-    await git(root, ['worktree', 'remove', '--force', worktreePath]);
-  } catch {
-    await rm(worktreePath, { recursive: true, force: true }).catch(() => {});
-    await git(root, ['worktree', 'prune']).catch(() => {});
-  }
-}
-
-export interface LinkedWorktree {
-  readonly path: string;
-  /** No branch is checked out in it, which is how every checkout this lane makes is added. */
-  readonly detached: boolean;
-}
-
-/**
- * Every checkout added to the repository, without its main one.
- *
- * Read from git rather than from disk: a checkout whose directory is gone is
- * still registered, and the registration is what the operator sees.
- */
-export async function linkedWorktrees(root: string): Promise<LinkedWorktree[]> {
-  const listing = await git(root, ['worktree', 'list', '--porcelain'], APPLY_OUTPUT_CAP_BYTES);
-  return listing
-    .split(/\n\n+/)
-    .map((block) => block.split('\n'))
-    .filter((lines) => lines[0]?.startsWith('worktree ') === true)
-    .map((lines) => ({
-      path: (lines[0] ?? '').slice('worktree '.length),
-      detached: lines.includes('detached'),
-    }))
-    .slice(1);
+  await rm(worktreePath, { recursive: true, force: true }).catch(() => {});
 }
 
 /**
@@ -1027,59 +1001,6 @@ export async function currentHead(root: string): Promise<string | undefined> {
   } catch {
     return undefined;
   }
-}
-
-/** Every ref the repository holds, by name, with the object it points at. */
-export type RefSnapshot = ReadonlyMap<string, string>;
-
-/**
- * The repository's local branches and tags, read before and after a run.
- *
- * Read from the connected folder, the listing holds the refs a worktree shares
- * with it and not the run's own detached HEAD. A difference between two
- * readings says a ref changed while the run was in flight, not who changed it:
- * the operator's own work in the folder moves them too. What stops the agent's
- * git is the hook in `refGuard.ts`; this is what the result reports.
- */
-export async function snapshotRefs(root: string): Promise<RefSnapshot> {
-  // A remote-tracking ref changes when a fetch runs — an editor's or a
-  // background one — and moves nothing the operator wrote; `refs/stash` is the
-  // operator's scratch.
-  const listing = await git(
-    root,
-    ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads/', 'refs/tags/'],
-    APPLY_OUTPUT_CAP_BYTES,
-  );
-  const refs = new Map<string, string>();
-  for (const line of listing.split('\n')) {
-    const space = line.lastIndexOf(' ');
-    if (space <= 0) continue;
-    refs.set(line.slice(0, space), line.slice(space + 1));
-  }
-  return refs;
-}
-
-export type RefChange =
-  | { readonly ref: string; readonly change: 'created'; readonly to: string }
-  | { readonly ref: string; readonly change: 'deleted'; readonly from: string }
-  | {
-      readonly ref: string;
-      readonly change: 'moved';
-      readonly from: string;
-      readonly to: string;
-    };
-
-export function changedRefs(before: RefSnapshot, after: RefSnapshot): RefChange[] {
-  const changes: RefChange[] = [];
-  for (const [ref, was] of before) {
-    const now = after.get(ref);
-    if (now === undefined) changes.push({ ref, change: 'deleted', from: was });
-    else if (now !== was) changes.push({ ref, change: 'moved', from: was, to: now });
-  }
-  for (const [ref, now] of after) {
-    if (!before.has(ref)) changes.push({ ref, change: 'created', to: now });
-  }
-  return changes.sort((a, b) => a.ref.localeCompare(b.ref));
 }
 
 /**

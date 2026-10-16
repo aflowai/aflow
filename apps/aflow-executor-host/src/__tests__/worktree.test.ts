@@ -14,8 +14,8 @@ import {
   recordSession,
 } from '../harnessSessions.js';
 import { PUBLICATION_SCRATCH_PREFIX } from '../branchCommit.js';
+import { openOrphanJournal, reapOrphans, recordSpawn } from '../orphans.js';
 import {
-  changedRefs,
   checkApplies,
   collectChanges,
   fetchRemoteBase,
@@ -23,7 +23,6 @@ import {
   prepareWorktree,
   removeWorktree,
   resolveCommit,
-  snapshotRefs,
   WorktreeError,
 } from '../worktree.js';
 
@@ -75,7 +74,7 @@ describe('worktree per run', () => {
     // The worktree started from the commit, not from the dirty state.
     expect(wt.baseSha).toBe((await git(repo, 'rev-parse', 'HEAD')).trim());
 
-    await removeWorktree(repo, wt.path);
+    await removeWorktree(wt.path);
     expect(await readFile(join(repo, 'app.txt'), 'utf8')).toBe('MY UNSAVED EDIT\n');
   });
 
@@ -91,8 +90,8 @@ describe('worktree per run', () => {
     expect(changesA.patch).not.toContain('from B');
     expect(changesB.patch).toContain('from B');
 
-    await removeWorktree(repo, a.path);
-    await removeWorktree(repo, b.path);
+    await removeWorktree(a.path);
+    await removeWorktree(b.path);
   });
 
   it('reports added files, which a plain diff would omit entirely', async () => {
@@ -103,7 +102,7 @@ describe('worktree per run', () => {
     expect(changes.filesChanged).toBe(1);
     expect(changes.patch).toContain('brand-new.ts');
     expect(changes.patch).toContain('export const x = 1;');
-    await removeWorktree(repo, wt.path);
+    await removeWorktree(wt.path);
   });
 
   it('checks out the commit as it is stored, never what a replace ref stands in for it', async () => {
@@ -125,7 +124,7 @@ describe('worktree per run', () => {
       expect(wt.baseSha).toBe(stored);
       expect(await readFile(join(wt.path, 'app.txt'), 'utf8')).toBe('stored\n');
       expect((await collectChanges(wt.path)).filesChanged).toBe(0);
-      await removeWorktree(repo, wt.path);
+      await removeWorktree(wt.path);
     }
   });
 
@@ -140,7 +139,7 @@ describe('worktree per run', () => {
     expect(changes.patch).toContain('app.txt');
     expect(changes.patch).not.toContain('.aflow');
     expect(changes.patch).not.toContain('a copy of the work');
-    await removeWorktree(repo, wt.path);
+    await removeWorktree(wt.path);
   });
 
   it('leaves out a tracked file under the scratch directory too', async () => {
@@ -153,14 +152,14 @@ describe('worktree per run', () => {
 
     const changes = await collectChanges(wt.path);
     expect(changes).toEqual({ patch: '', filesChanged: 0, overCeiling: false });
-    await removeWorktree(repo, wt.path);
+    await removeWorktree(wt.path);
   });
 
   it('reports no change as no change, not as an empty diff of something', async () => {
     const wt = await prepareWorktree(repo, scratch, 'work');
     const changes = await collectChanges(wt.path);
     expect(changes).toEqual({ patch: '', filesChanged: 0, overCeiling: false });
-    await removeWorktree(repo, wt.path);
+    await removeWorktree(wt.path);
   });
 
   it('collects work from a run that was stopped part-way', async () => {
@@ -170,7 +169,7 @@ describe('worktree per run', () => {
     await writeFile(join(wt.path, 'app.txt'), 'half-finished\n');
     const changes = await collectChanges(wt.path);
     expect(changes.filesChanged).toBe(1);
-    await removeWorktree(repo, wt.path);
+    await removeWorktree(wt.path);
   });
 
   it('refuses a folder that is not a repository, naming why', async () => {
@@ -187,11 +186,13 @@ describe('worktree per run', () => {
     await rm(unborn, { recursive: true, force: true });
   });
 
-  it('leaves no worktree registered after cleanup', async () => {
+  it('registers nothing in the folder, and leaves nothing once removed', async () => {
+    const listed = await git(repo, 'worktree', 'list', '--porcelain');
     const wt = await prepareWorktree(repo, scratch, 'work');
-    expect(await git(repo, 'worktree', 'list')).toContain(wt.path);
-    await removeWorktree(repo, wt.path);
-    expect(await git(repo, 'worktree', 'list')).not.toContain(wt.path);
+    expect(await git(repo, 'worktree', 'list', '--porcelain')).toBe(listed);
+    await removeWorktree(wt.path);
+    expect(await exists(wt.path)).toBe(false);
+    expect(await git(repo, 'worktree', 'list', '--porcelain')).toBe(listed);
   });
 });
 
@@ -207,7 +208,7 @@ describe('a run started from a named ref', () => {
     const wt = await prepareWorktree(repo, scratch, 'work', { at });
     expect(wt.baseSha).toBe(branchHead);
     expect(await readFile(join(wt.path, 'app.txt'), 'utf8')).toBe('committed\n');
-    await removeWorktree(repo, wt.path);
+    await removeWorktree(wt.path);
   });
 
   it('refuses a ref the folder does not have, naming it', async () => {
@@ -300,64 +301,72 @@ describe('a run started from a ref on a remote', () => {
   });
 });
 
-describe('the refs reported for a run', () => {
-  it('sees nothing when the run only committed in its own checkout', async () => {
-    const wt = await prepareWorktree(repo, scratch, 'work');
-    const before = await snapshotRefs(repo);
-    await writeFile(join(wt.path, 'app.txt'), 'committed in the checkout\n');
-    await git(wt.path, 'commit', '-am', 'detached commit');
-    expect(changedRefs(before, await snapshotRefs(repo))).toEqual([]);
-    await removeWorktree(repo, wt.path);
-  });
+describe("a run's checkout is a clone whose refs are its own", () => {
+  const refsOf = async (cwd: string): Promise<string> =>
+    await git(cwd, 'for-each-ref', '--format=%(refname) %(objectname)');
 
-  it('sees a branch deleted through the shared refs', async () => {
+  beforeEach(async () => {
     await git(repo, 'branch', 'other');
-    const other = (await git(repo, 'rev-parse', 'other')).trim();
-    const wt = await prepareWorktree(repo, scratch, 'work');
-    const before = await snapshotRefs(repo);
-    await git(wt.path, 'branch', '-D', 'other');
-
-    expect(changedRefs(before, await snapshotRefs(repo))).toEqual([
-      { ref: 'refs/heads/other', change: 'deleted', from: other },
-    ]);
-    await removeWorktree(repo, wt.path);
+    await git(repo, 'tag', 'v1');
+    await git(repo, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
   });
 
-  it('sees a ref moved and a ref created from inside the checkout', async () => {
-    const wt = await prepareWorktree(repo, scratch, 'work');
-    const before = await snapshotRefs(repo);
-    const main = before.get('refs/heads/main');
-    await writeFile(join(wt.path, 'app.txt'), 'rewritten\n');
-    await git(wt.path, 'commit', '-am', 'rewrite');
-    const rewritten = (await git(wt.path, 'rev-parse', 'HEAD')).trim();
-    await git(wt.path, 'update-ref', 'refs/heads/main', rewritten);
-    await git(wt.path, 'update-ref', 'refs/tags/planted', rewritten);
-
-    expect(changedRefs(before, await snapshotRefs(repo))).toEqual([
-      { ref: 'refs/heads/main', change: 'moved', from: main, to: rewritten },
-      { ref: 'refs/tags/planted', change: 'created', to: rewritten },
-    ]);
-    await removeWorktree(repo, wt.path);
+  it('reads every ref as the folder names it, borrows its objects, and names it as no remote', async () => {
+    const wt = await prepareWorktree(repo, scratch, 'work', { dependencies: 'none' });
+    expect(await refsOf(wt.path)).toBe(await refsOf(repo));
+    expect((await git(wt.path, 'rev-parse', '--absolute-git-dir')).trim()).toBe(
+      (await git(wt.path, 'rev-parse', '--show-toplevel')).trim() + '/.git',
+    );
+    expect((await git(wt.path, 'rev-parse', '--git-common-dir')).trim()).toBe('.git');
+    expect(
+      await readFile(join(wt.path, '.git', 'objects', 'info', 'alternates'), 'utf8'),
+    ).toContain(join(basename(repo), '.git', 'objects'));
+    expect((await git(wt.path, 'remote')).trim()).toBe('');
+    expect((await git(wt.path, 'rev-parse', 'HEAD')).trim()).toBe(wt.baseSha);
+    expect(await readFile(join(wt.path, '.git', 'HEAD'), 'utf8')).toBe(`${wt.baseSha}\n`);
+    await removeWorktree(wt.path);
   });
 
-  it('watches local branches and tags, and not what a fetch or a stash moves', async () => {
-    await git(repo, 'branch', 'other');
-    const wt = await prepareWorktree(repo, scratch, 'work');
-    const head = (await git(repo, 'rev-parse', 'HEAD')).trim();
-    const before = await snapshotRefs(repo);
-
-    await git(repo, 'update-ref', 'refs/remotes/origin/x', head);
-    await writeFile(join(repo, 'app.txt'), 'work in progress\n');
-    await git(repo, 'stash');
-    expect(changedRefs(before, await snapshotRefs(repo))).toEqual([]);
+  it("moves only the clone's refs, whatever git the run uses, with no hook anywhere", async () => {
+    const wt = await prepareWorktree(repo, scratch, 'work', { dependencies: 'none' });
+    const before = await refsOf(repo);
+    await writeFile(join(wt.path, 'app.txt'), 'committed in the clone\n');
+    await git(
+      wt.path,
+      '-c',
+      'user.name=Agent',
+      '-c',
+      'user.email=a@example.com',
+      'commit',
+      '-qam',
+      'w',
+    );
+    const made = (await git(wt.path, 'rev-parse', 'HEAD')).trim();
 
     await git(wt.path, 'branch', '-D', 'other');
-    await git(wt.path, 'tag', 'planted');
-    expect(changedRefs(before, await snapshotRefs(repo)).map((c) => [c.ref, c.change])).toEqual([
-      ['refs/heads/other', 'deleted'],
-      ['refs/tags/planted', 'created'],
-    ]);
-    await removeWorktree(repo, wt.path);
+    await git(wt.path, '-c', 'core.hooksPath=/dev/null', 'update-ref', 'refs/heads/main', made);
+    await git(wt.path, '-c', 'core.hooksPath=/dev/null', 'tag', '-f', 'v1', made);
+    await git(wt.path, 'update-ref', '-d', 'refs/remotes/origin/main');
+    await git(wt.path, 'push', '-q', '.', 'HEAD:refs/heads/pushed');
+
+    expect(await refsOf(repo)).toBe(before);
+    expect(await git(repo, 'cat-file', '-t', made).catch(() => 'absent')).toBe('absent');
+    const clone = await refsOf(wt.path);
+    expect(clone).not.toContain('refs/heads/other ');
+    expect(clone).toContain(`refs/heads/main ${made}`);
+    expect(clone).toContain(`refs/heads/pushed ${made}`);
+    expect(await exists(join(repo, '.git', 'hooks', 'reference-transaction'))).toBe(false);
+    expect(await exists(join(scratch, 'git-hooks'))).toBe(false);
+    await removeWorktree(wt.path);
+  });
+
+  it('reads a commit made in the folder after the clone, through the objects it borrows', async () => {
+    const wt = await prepareWorktree(repo, scratch, 'work', { dependencies: 'none' });
+    await writeFile(join(repo, 'app.txt'), 'later\n');
+    await git(repo, 'commit', '-qam', 'later');
+    const later = (await git(repo, 'rev-parse', 'HEAD')).trim();
+    expect(await git(wt.path, 'show', `${later}:app.txt`)).toBe('later\n');
+    await removeWorktree(wt.path);
   });
 });
 
@@ -375,7 +384,7 @@ describe('whether a diff made from a named base applies', () => {
     const wt = await prepareWorktree(repo, scratch, 'work', { at });
     await writeFile(join(wt.path, 'app.txt'), 'fixed on the branch\n');
     const { patch } = await collectChanges(wt.path);
-    await removeWorktree(repo, wt.path);
+    await removeWorktree(wt.path);
 
     expect((await checkApplies(repo, patch)).state).toBe('conflict');
     expect((await checkApplies(repo, patch, at)).state).toBe('clean');
@@ -404,10 +413,6 @@ describe('checkouts a restart left behind', () => {
     await prepareWorktree(repo, orphanScratch, 'work');
     const orphanPublication = await mkdtemp(join(tempRoot, PUBLICATION_SCRATCH_PREFIX));
     await prepareWorktree(repo, orphanPublication, 'commit', { dependencies: 'none' });
-    // A checkout whose directory is already gone is still registered.
-    const vanishedScratch = await mkdtemp(join(tempRoot, HARNESS_SCRATCH_PREFIX));
-    await prepareWorktree(repo, vanishedScratch, 'work');
-    await rm(vanishedScratch, { recursive: true, force: true });
     const stray = await mkdtemp(join(tempRoot, HARNESS_SCRATCH_PREFIX));
     const liveScratch = await mkdtemp(join(tempRoot, HARNESS_SCRATCH_PREFIX));
     const live = await prepareWorktree(repo, liveScratch, 'work');
@@ -416,7 +421,6 @@ describe('checkouts a restart left behind', () => {
       ownerRunId: 'run-live',
       logicalExecutionId: 'step:hs_live',
       bindingId: 'hb',
-      bindingRoot: repo,
       harnessId: 'edits',
       worktreePath: live.path,
       scratchDir: liveScratch,
@@ -427,80 +431,57 @@ describe('checkouts a restart left behind', () => {
       lastUsedAt: Date.now(),
       busy: false,
     });
-    // The operator's own checkouts in the same temp root: one on a branch with
-    // work in progress, in a directory named the way this executor names its
-    // scratch, and one detached, in a directory it never makes.
+    // The operator's own checkouts in the same temp root, in directories named
+    // the way this executor names its scratch: one added to the folder on a
+    // branch with work in progress, and a clone of their own on a branch.
     const operatorsScratch = await mkdtemp(join(tempRoot, HARNESS_SCRATCH_PREFIX));
     const onBranch = join(operatorsScratch, 'mine');
     await git(repo, 'worktree', 'add', '-b', 'operator/review', onBranch);
     await writeFile(join(onBranch, 'app.txt'), 'uncommitted review notes\n');
+    const operatorsClone = await mkdtemp(join(tempRoot, HARNESS_SCRATCH_PREFIX));
+    await git(operatorsClone, 'clone', '-q', repo, 'mine');
+    // And one of this lane's shape, in a directory it never makes.
     const operatorsDetached = await mkdtemp(join(tempRoot, 'aflow-review-'));
     const detached = await prepareWorktree(repo, operatorsDetached, 'mine');
     const unrelated = await mkdtemp(join(tempRoot, 'not-ours-'));
-
-    const outcome = await removeOrphanedCheckouts([repo, repo, scratch], tempRoot);
-
-    expect(outcome.removed).toEqual(new Map([[repo, 3]]));
-    expect(outcome.scratchDirs).toBe(3);
+    const refs = await git(repo, 'for-each-ref');
     const listed = await git(repo, 'worktree', 'list', '--porcelain');
-    // By directory name: git records a checkout under its resolved path.
-    expect(listed).not.toContain(basename(orphanScratch));
-    expect(listed).not.toContain(basename(orphanPublication));
-    expect(listed).not.toContain(basename(vanishedScratch));
-    expect(listed).toContain(basename(liveScratch));
-    expect(listed).toContain(basename(operatorsScratch));
-    expect(listed).toContain('branch refs/heads/operator/review');
-    expect(listed).toContain(basename(operatorsDetached));
+
+    const outcome = await removeOrphanedCheckouts(tempRoot);
+
+    expect(outcome).toEqual({ checkouts: 2, scratchDirs: 3 });
     expect(await exists(orphanScratch)).toBe(false);
     expect(await exists(orphanPublication)).toBe(false);
     expect(await exists(stray)).toBe(false);
     expect(await exists(live.path)).toBe(true);
     expect(await readFile(join(onBranch, 'app.txt'), 'utf8')).toBe('uncommitted review notes\n');
+    expect(await exists(join(operatorsClone, 'mine', 'app.txt'))).toBe(true);
     expect(await exists(detached.path)).toBe(true);
     expect(await exists(unrelated)).toBe(true);
+    // The folder was never a party to any of it.
+    expect(await git(repo, 'for-each-ref')).toBe(refs);
+    expect(await git(repo, 'worktree', 'list', '--porcelain')).toBe(listed);
 
-    await removeWorktree(repo, live.path);
-    await removeWorktree(repo, onBranch);
-    await removeWorktree(repo, detached.path);
+    await removeWorktree(live.path);
+    await git(repo, 'worktree', 'remove', '--force', onBranch);
+    await removeWorktree(detached.path);
   });
 
-  it('takes nothing when the connected folders could not be read', async () => {
+  it("is what a crashed run's journal entry removes too, leaving nothing in the folder", async () => {
+    const journal = openOrphanJournal(join(tempRoot, 'host'));
     const orphanScratch = await mkdtemp(join(tempRoot, HARNESS_SCRATCH_PREFIX));
-    const orphan = await prepareWorktree(repo, orphanScratch, 'work');
+    await prepareWorktree(repo, orphanScratch, 'work');
+    const listed = await git(repo, 'worktree', 'list', '--porcelain');
+    recordSpawn(999_999, orphanScratch);
 
-    const outcome = await removeOrphanedCheckouts(undefined, tempRoot);
+    reapOrphans(journal, () => undefined);
 
-    expect(outcome.removed.size).toBe(0);
-    expect(outcome.scratchDirs).toBe(0);
-    expect(await exists(orphan.path)).toBe(true);
-    expect(await git(repo, 'worktree', 'list', '--porcelain')).toContain(basename(orphanScratch));
-
-    await removeWorktree(repo, orphan.path);
-  });
-
-  it('leaves scratch whose checkout a folder it could not read still registers', async () => {
-    const elsewhere = await mkdtemp(join(tmpdir(), 'wt-unbound-'));
-    await git(elsewhere, 'init', '--initial-branch=main');
-    await git(elsewhere, 'config', 'user.email', 'test@example.com');
-    await git(elsewhere, 'config', 'user.name', 'Test');
-    await git(elsewhere, 'commit', '--allow-empty', '-m', 'initial');
-    const orphanScratch = await mkdtemp(join(tempRoot, HARNESS_SCRATCH_PREFIX));
-    const orphan = await prepareWorktree(elsewhere, orphanScratch, 'work', {
-      dependencies: 'none',
-    });
-
-    const outcome = await removeOrphanedCheckouts([repo], tempRoot);
-
-    expect(outcome.scratchDirs).toBe(0);
-    expect(await exists(orphan.path)).toBe(true);
-
-    await removeWorktree(elsewhere, orphan.path);
-    await rm(elsewhere, { recursive: true, force: true });
+    expect(await exists(orphanScratch)).toBe(false);
+    expect(await git(repo, 'worktree', 'list', '--porcelain')).toBe(listed);
+    expect((await git(repo, 'worktree', 'list', '--porcelain')).includes('prunable')).toBe(false);
   });
 
   it('reports nothing when nothing was left behind', async () => {
-    const outcome = await removeOrphanedCheckouts([repo], tempRoot);
-    expect(outcome.removed.size).toBe(0);
-    expect(outcome.scratchDirs).toBe(0);
+    expect(await removeOrphanedCheckouts(tempRoot)).toEqual({ checkouts: 0, scratchDirs: 0 });
   });
 });

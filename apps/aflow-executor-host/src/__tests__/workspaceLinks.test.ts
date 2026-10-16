@@ -284,7 +284,7 @@ describe('a workspace package in the isolated checkout', () => {
       expect(await readlink(link)).toBe(join('..', '..', 'packages', 'a'));
       expect(await realpath(link)).toBe(join(await realpath(wt.path), 'packages', 'a'));
     } finally {
-      await removeWorktree(repo, wt.path);
+      await removeWorktree(wt.path);
     }
   });
 
@@ -298,7 +298,7 @@ describe('a workspace package in the isolated checkout', () => {
         join(await realpath(repo), 'node_modules', '.store', 'right-pad'),
       );
     } finally {
-      await removeWorktree(repo, wt.path);
+      await removeWorktree(wt.path);
     }
   });
 });

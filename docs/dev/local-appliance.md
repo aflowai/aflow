@@ -419,10 +419,11 @@ names which are absent, because that list is the whole of the fix.
 
 A coding agent already installed on the machine — the operator's own, already
 signed in — can be handed a task against a connected repository. The run happens
-in a **worktree of its own**, detached at the repository's current commit, so
+in a **private clone of its own**, detached at the repository's current commit, so
 uncommitted work is untouched, two runs cannot collide, and the result is a diff
-to review rather than an edit already made. Nothing is committed, pushed or
-applied.
+to review rather than an edit already made. The clone's branches and tags are its
+own, so nothing the agent does with git moves the repository's. Nothing is
+committed, pushed or applied.
 
 ```bash
 # What is installed here, and what is allowed to run:

@@ -89,7 +89,7 @@ describe('a filter the repository selects', () => {
     const worktree = await prepareWorktree(repo, scratch, 'run-filter');
     await writeFile(join(worktree.path, 'b.txt'), 'added by the harness\n');
     await collectChanges(worktree.path);
-    await removeWorktree(repo, worktree.path);
+    await removeWorktree(worktree.path);
 
     // `worktree add` checked out every file and `git add -A` staged them. If
     // the filter had been reachable it would have run several times over.

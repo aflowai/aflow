@@ -1,5 +1,6 @@
 /**
- * A diff landed as a commit on a branch, in a checkout of the executor's own.
+ * A diff landed as a commit on a branch, made in a clone of the executor's own
+ * and fetched from it into the folder.
  *
  * The publication half of the host lane: a new branch at the commission's
  * base, or one commit appended to the branch the diff was made on — on its
@@ -208,8 +209,12 @@ export function messageBody(message: string): string | undefined {
   return body === '' ? undefined : body;
 }
 
-async function commitStaged(checkout: string, messagePath: string, amend: boolean): Promise<void> {
-  const identity = await commitIdentityArgs(checkout);
+async function commitStaged(
+  checkout: string,
+  identity: readonly string[],
+  messagePath: string,
+  amend: boolean,
+): Promise<void> {
   try {
     await git(
       checkout,
@@ -242,14 +247,16 @@ async function commitStaged(checkout: string, messagePath: string, amend: boolea
  * the merge of that commit into its head, made as the commission made it, with
  * the patch folded in, or the merge alone for an empty patch — so the diff
  * lands on the tree it was made against. The
- * apply happens in a checkout made for this call alone, so the operator's
+ * apply happens in a private clone made for this call alone, so the operator's
  * working tree, index and current branch are never a party to it — they are a
- * second writer this lane does not get to interrupt. What remains afterwards is
- * one ref, created or advanced by one commit, which is the thing a publication
- * can push and the thing an operator can reset if they disagree.
+ * second writer this lane does not get to interrupt. The commit is then fetched
+ * from the clone into the folder and the branch set to it: the one write to the
+ * folder's refs the loop makes, made by the executor's git. What remains
+ * afterwards is one ref, created or advanced by one commit, which is the thing a
+ * publication can push and the thing an operator can reset if they disagree.
  *
- * The identity is the operator's own, resolved from the repository's config and
- * then from their global one. Inventing an author for a commit that will carry
+ * The identity is the operator's own, resolved from the folder's config — the
+ * clone's holds none — and then from their global one. Inventing an author for a commit that will carry
  * the operator's name is not this lane's to do, so a folder where neither names
  * one is refused rather than signed.
  */
@@ -278,11 +285,7 @@ export async function commitPatchOnBranch(
     });
     let merge: BaseMerge | undefined;
     if (mergeFrom !== undefined) {
-      merge = await mergeIntoCheckout(
-        worktree.path,
-        mergeFrom,
-        await commitIdentityArgs(worktree.path),
-      );
+      merge = await mergeIntoCheckout(worktree.path, mergeFrom, await commitIdentityArgs(root));
     }
 
     const apply: ApplyOutcome =
@@ -321,18 +324,24 @@ export async function commitPatchOnBranch(
 
     const messagePath = join(scratch, 'commit-message');
     await writeFile(messagePath, message, 'utf8');
-    await commitStaged(worktree.path, messagePath, merge !== undefined);
+    await commitStaged(
+      worktree.path,
+      await commitIdentityArgs(root),
+      messagePath,
+      merge !== undefined,
+    );
 
     const sha = (await git(worktree.path, ['rev-parse', 'HEAD'])).trim();
     // Read back rather than echoed: git's cleanup trims what it was handed, and
     // the approval shows the commit as it will be pushed.
     const recorded = await recordedMessage(worktree.path, sha);
     const body = messageBody(recorded);
+    await fetchFromClone(root, worktree.path, sha);
     try {
       // Compare-and-swap on the old head: a branch that moved between the check
       // above and this line is refused here rather than overwritten.
       await git(
-        worktree.path,
+        root,
         target.appended
           ? ['update-ref', '--end-of-options', `refs/heads/${branch}`, sha, worktree.baseSha]
           : ['branch', '--end-of-options', branch, sha],
@@ -361,8 +370,35 @@ export async function commitPatchOnBranch(
       },
     };
   } finally {
-    if (worktree !== undefined) await removeWorktree(root, worktree.path);
+    if (worktree !== undefined) await removeWorktree(worktree.path);
     await rm(scratch, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Bring the commit made in the clone into the folder's object store, and only
+ * that: no destination ref and no FETCH_HEAD, so the branch is then set by a
+ * compare-and-swap on its old head rather than by fetch's fast-forward rule,
+ * and the FETCH_HEAD another fetch is about to read is never overwritten.
+ */
+async function fetchFromClone(root: string, clone: string, sha: string): Promise<void> {
+  try {
+    await git(root, [
+      'fetch',
+      '--quiet',
+      '--no-tags',
+      '--no-write-fetch-head',
+      '--end-of-options',
+      clone,
+      sha,
+    ]);
+  } catch (error) {
+    throw new WorktreeError(
+      `The commit was made but could not be brought into the folder: ${
+        error instanceof Error ? (error.message.split('\n')[0] ?? 'git failed') : 'git failed'
+      }`,
+      'git_failed',
+    );
   }
 }
 

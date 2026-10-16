@@ -369,6 +369,34 @@ describe('a conflicted merge says what it actually did', () => {
 });
 
 describe('landing a patch as a commit on a new branch', () => {
+  it('fetches the commit from its own clone into the folder, writing the named branch and no other ref', async () => {
+    const patch = await diffFor(async (d) => {
+      await writeFile(join(d, 'a.txt'), 'one\nEDITED\nthree\n');
+    });
+    await git(root, 'branch', 'other');
+    await git(root, 'tag', 'v1');
+    const refsBefore = await git(root, 'for-each-ref', '--format=%(refname) %(objectname)');
+
+    const captured: Captured = {};
+    const result = await createHostPatchHandler(policyPath).execute(
+      contextFor(
+        { bindingId: 'hb', patch, commit: { branch: 'aflow/x', message: 'the change' } },
+        captured,
+      ),
+    );
+
+    expect(result.status).toBe('SUCCEEDED');
+    const sha = (captured.output?.['commit'] as Record<string, string>)['sha'] ?? '';
+    expect((await git(root, 'cat-file', '-t', sha)).trim()).toBe('commit');
+    expect(await git(root, 'for-each-ref', '--format=%(refname) %(objectname)')).toBe(
+      [...refsBefore.trim().split('\n'), `refs/heads/aflow/x ${sha}`]
+        .sort((a, b) => (a < b ? -1 : 1))
+        .join('\n') + '\n',
+    );
+    // The fetch wrote no FETCH_HEAD another fetch of the folder's could be reading.
+    await expect(readFile(join(root, '.git', 'FETCH_HEAD'), 'utf8')).rejects.toThrow();
+  }, 30_000);
+
   it('leaves the operator checkout exactly as it was', async () => {
     // The whole reason this mode exists: the operator is a second writer, and
     // a publication must not need their working tree, index or branch.

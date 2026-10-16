@@ -1018,7 +1018,7 @@ export const HostHarnessRunOutputSchema = z.object({
   baseSha: z
     .string()
     .describe(
-      "Commit the isolated worktree started from — `base` resolved, or the folder's HEAD — " +
+      "Commit the run's private clone started from — `base` resolved, or the folder's HEAD — " +
         'before any merge. A publication that appends to a branch passes this as its ' +
         '`commit.baseSha`.',
     ),
@@ -1131,8 +1131,7 @@ export const HostHarnessRunOutputSchema = z.object({
         'tree. A run that took a while can be overtaken by the operator committing or editing ' +
         'the same lines. A run that merged is judged against its merge commit instead, which ' +
         'is where the publication applies the diff, so a branch that moved during the run is ' +
-        'not noticed here: the publication refuses it as `stale_base`, and `refChanges` ' +
-        'already reports a move in the folder.',
+        'not noticed here: the publication refuses it as `stale_base`.',
     ),
   applyConflict: z
     .string()
@@ -1144,21 +1143,6 @@ export const HostHarnessRunOutputSchema = z.object({
       "True when the folder's HEAD has moved off `baseSha` since the run started. A run " +
         'given a `base`, or continuing a session that was, is judged against that base, not ' +
         'the HEAD, and reports false.',
-    ),
-  refChanges: z
-    .array(
-      z.object({
-        ref: z.string(),
-        change: z.enum(['created', 'deleted', 'moved']),
-        from: z.string().optional().describe('What it pointed at before; absent when created.'),
-        to: z.string().optional().describe('What it points at now; absent when deleted.'),
-      }),
-    )
-    .describe(
-      'Every local branch and tag that moved while the run was in flight, whoever moved it: ' +
-        "the operator's own work in the folder shows here too. A hook refuses the commission's " +
-        'ordinary git in its checkout; a git call that names its own `core.hooksPath`, or ' +
-        'pushes locally into the folder, is not refused, and what it moved is recorded here.',
     ),
   blockedDomains: z
     .array(z.string())

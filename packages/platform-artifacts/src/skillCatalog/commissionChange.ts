@@ -38,7 +38,7 @@ const COMMISSION_CHANGE: SkillCatalogEntry = {
 
 **The checks a brief asks for are the folder's own** — its test runner on the touched tests, its type check, its linter, its formatter — run by the coding agent in the commission's checkout, with their output in the result the brief asks for. Nothing else runs them before publication, where the folder's declared checks run again on the commit.
 
-**With the result**: report what changed — \`filesChanged\`, whether the patch \`applies\` where it would be published, and any branch or tag in \`refChanges\`. To publish, start Publish Local Changes with the commission's \`patchRef\`, \`baseSha\` and, where it merged, \`merge.from\`, as they stand — never the \`patch\` text, a copy for reading that is cut short on a large change. To ask for more on the same work, start another commission with \`continueFrom\` set to its \`sessionRef\`.`,
+**With the result**: report what changed — \`filesChanged\` and whether the patch \`applies\` where it would be published. To publish, start Publish Local Changes with the commission's \`patchRef\`, \`baseSha\` and, where it merged, \`merge.from\`, as they stand — never the \`patch\` text, a copy for reading that is cut short on a large change. To ask for more on the same work, start another commission with \`continueFrom\` set to its \`sessionRef\`.`,
   tags: ['coding', 'commission', 'local', 'developer-tools'],
   bundle: {
     workflow: {
@@ -176,7 +176,6 @@ const COMMISSION_CHANGE: SkillCatalogEntry = {
             { kind: 'output_path' as const, path: 'filesChanged', toState: 'filesChanged' },
             { kind: 'output_path' as const, path: 'sessionRef', toState: 'sessionRef' },
             { kind: 'output_path' as const, path: 'continued', toState: 'continued' },
-            { kind: 'output_path' as const, path: 'refChanges', toState: 'refChanges' },
           ],
         },
       ],
@@ -242,20 +241,11 @@ const COMMISSION_CHANGE: SkillCatalogEntry = {
           sensitive: false,
           immutable: false,
         },
-        {
-          variableId: 'refChanges',
-          name: 'Ref changes',
-          description:
-            'Every local branch and tag of the folder that moved while the commission ran, whoever moved it.',
-          required: false,
-          sensitive: false,
-          immutable: false,
-        },
       ],
       output: {
         primary: 'patchRef',
         guidance:
-          'patchRef is the change. A publication takes patchRef, baseSha and merge.from as they stand — never the patch text — and a further turn on the same work takes sessionRef as continueFrom. Report filesChanged and applies; a conflict means the base moved under the change. refChanges names any branch or tag that moved in the folder while it ran.',
+          'patchRef is the change. A publication takes patchRef, baseSha and merge.from as they stand — never the patch text — and a further turn on the same work takes sessionRef as continueFrom. Report filesChanged and applies; a conflict means the base moved under the change.',
       },
       iteration: { auto: false, maxConsecutiveRuns: 1, stopOnOutcomesMet: true, cooldownMs: 0 },
     },

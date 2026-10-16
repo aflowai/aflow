@@ -41,17 +41,10 @@ export interface HarnessSession {
    */
   readonly logicalExecutionId: string;
   readonly bindingId: string;
-  /**
-   * The repository this session's worktree belongs to. Held here because
-   * cleanup happens on whatever run notices the session is stale, and that run
-   * may be working in a different binding — removing a worktree against the
-   * wrong repository leaves a permanent stale entry in that repository instead.
-   */
-  readonly bindingRoot: string;
   readonly harnessId: string;
-  /** The checkout the conversation has been reasoning about. */
+  /** The private clone the conversation has been reasoning about. */
   readonly worktreePath: string;
-  /** Scratch holding the worktree and the harness's state directory. */
+  /** Scratch holding the clone and the harness's state directory. */
   readonly scratchDir: string;
   readonly configDir: string;
   /** What the harness calls this conversation. Minted here, so it need not be parsed back out. */
@@ -184,8 +177,8 @@ export function forgetSession(sessionRef: string): void {
 /**
  * Sessions whose scratch should be removed: idle past the ttl, or every one of
  * them when a binding is withdrawn. Returned rather than deleted here, because
- * removing a worktree needs the repository it belongs to and this module does
- * not know about git.
+ * removing a checkout unlinks the installation mirrored into it first, and this
+ * module does not know about checkouts.
  */
 export function expiredSessions(now: number): HarnessSession[] {
   const expired = [...sessions.values()].filter(

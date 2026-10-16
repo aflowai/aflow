@@ -306,12 +306,10 @@ export const HostOperationRegistrations: OperationRegistration[] = [
       'Delegate a whole task over the files in a connected folder to a harness installed on ' +
       "the operator's machine — the same tool they use themselves, already authenticated, " +
       'with their toolchain around it. It executes any work over those files: analysis, ' +
-      'documents, data and code alike. The run happens in an isolated checkout at the ' +
-      'current commit, or at the branch or commit it names, so their uncommitted work is ' +
-      'untouched. A hook refuses ordinary git in that checkout when it would move the ' +
-      "repository's branches or tags; a git call that names its own `core.hooksPath`, or " +
-      'pushes locally into the folder, is not refused, and `refChanges` records every branch ' +
-      'or tag that moved during the run, whoever moved it. Given an `outputSchema` it ' +
+      'documents, data and code alike. The run happens in a private clone of the folder at ' +
+      'the current commit, or at the branch or commit it names, so their uncommitted work is ' +
+      "untouched. The clone's branches and tags are its own: whatever git the harness runs " +
+      "there moves none of the folder's. Given an `outputSchema` it " +
       'returns a validated `result`; where it changed files it returns a diff to review, ' +
       'committed, pushed and merged nowhere.',
     tags: ['host', 'harness', 'files', 'local'],

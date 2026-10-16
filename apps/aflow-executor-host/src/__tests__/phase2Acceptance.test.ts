@@ -3,7 +3,7 @@
  * Each test names the criterion it stands for.
  */
 import { execFile } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -26,6 +26,13 @@ let scratch: string;
 async function git(cwd: string, ...args: string[]): Promise<string> {
   const { stdout } = await run('git', ['-C', cwd, ...args]);
   return stdout;
+}
+
+async function exists(path: string): Promise<boolean> {
+  return await stat(path).then(
+    () => true,
+    () => false,
+  );
 }
 
 beforeEach(async () => {
@@ -77,8 +84,8 @@ describe('Phase 2 acceptance', () => {
       expect(cb.patch).not.toContain('A rewrote this');
       expect(a.baseSha).toBe(b.baseSha);
 
-      await removeWorktree(repo, a.path);
-      await removeWorktree(repo, b.path);
+      await removeWorktree(a.path);
+      await removeWorktree(b.path);
     },
     GIT_HEAVY_MS,
   );
@@ -91,7 +98,7 @@ describe('Phase 2 acceptance', () => {
       const wt = await prepareWorktree(repo, scratch, 'run');
       await writeFile(join(wt.path, 'a.txt'), 'harness edit\n');
       await collectChanges(wt.path);
-      await removeWorktree(repo, wt.path);
+      await removeWorktree(wt.path);
       expect(await readFile(join(repo, 'a.txt'), 'utf8')).toBe('MY EDIT\n');
     },
     GIT_HEAVY_MS,
@@ -106,13 +113,13 @@ describe('Phase 2 acceptance', () => {
       const b = await prepareWorktree(repo, scratch, 'run-b');
       await writeFile(join(b.path, 'a.txt'), 'B kept working\n');
 
-      await removeWorktree(repo, a.path);
+      await removeWorktree(a.path);
 
       const cb = await collectChanges(b.path);
       expect(cb.patch).toContain('B kept working');
-      expect(await git(repo, 'worktree', 'list')).not.toContain(a.path);
-      expect(await git(repo, 'worktree', 'list')).toContain(b.path);
-      await removeWorktree(repo, b.path);
+      expect(await exists(a.path)).toBe(false);
+      expect(await exists(join(b.path, 'a.txt'))).toBe(true);
+      await removeWorktree(b.path);
     },
     GIT_HEAVY_MS,
   );
@@ -126,7 +133,7 @@ describe('Phase 2 acceptance', () => {
       const changes = await collectChanges(wt.path);
       expect(changes.filesChanged).toBe(1);
       expect(changes.patch).toContain('EDITED');
-      await removeWorktree(repo, wt.path);
+      await removeWorktree(wt.path);
     },
     GIT_HEAVY_MS,
   );
@@ -147,7 +154,7 @@ describe('Phase 2 acceptance', () => {
       expect(applies.state).toBe('conflict');
       if (applies.state === 'conflict') expect(applies.detail).toContain('a.txt');
       expect(await currentHead(repo)).not.toBe(wt.baseSha);
-      await removeWorktree(repo, wt.path);
+      await removeWorktree(wt.path);
     },
     GIT_HEAVY_MS,
   );
@@ -165,7 +172,7 @@ describe('Phase 2 acceptance', () => {
 
       expect((await checkApplies(repo, changes.patch)).state).toBe('clean');
       expect(await currentHead(repo)).not.toBe(wt.baseSha);
-      await removeWorktree(repo, wt.path);
+      await removeWorktree(wt.path);
     },
     GIT_HEAVY_MS,
   );

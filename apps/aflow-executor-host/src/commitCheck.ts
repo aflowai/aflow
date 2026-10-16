@@ -269,7 +269,7 @@ export async function runFolderChecks(input: FolderCheckInput): Promise<FolderCh
         : {}),
     };
   } finally {
-    if (worktreePath !== undefined) await removeWorktree(input.binding.root, worktreePath);
+    if (worktreePath !== undefined) await removeWorktree(worktreePath);
     await rm(scratch, { recursive: true, force: true });
   }
 }
