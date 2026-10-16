@@ -161,6 +161,26 @@ export const WorkflowPollUntilSchema = z.union([
 ]);
 export type WorkflowPollUntil = z.infer<typeof WorkflowPollUntilSchema>;
 
+/**
+ * Where a task's outcome sends the run: when the task's own output matches
+ * `when` — read as `output.<path> <op> <literal>`, single or combined — the
+ * tasks in `enable` run. Their guards are derived from the route when the
+ * workflow is materialized; they declare no `when` of their own.
+ */
+export const WorkflowTaskRouteSchema = z
+  .object({
+    when: WorkflowPollUntilSchema.describe(
+      "Condition on this task's own output, e.g. { expression: \"output.answers.team.value == 'billing'\" }.",
+    ),
+    enable: z
+      .array(z.string().min(1).max(64))
+      .min(1)
+      .max(20)
+      .describe('The taskIds this route turns on. Each is enabled by routes of one task only.'),
+  })
+  .strict();
+export type WorkflowTaskRoute = z.infer<typeof WorkflowTaskRouteSchema>;
+
 export const WorkflowTaskPollSchema = z
   .object({
     /**
@@ -580,6 +600,8 @@ export const WorkflowTaskSchema = z
     model: z.string().min(1).max(64).optional(),
 
     when: WorkflowWhenSchema.optional(),
+
+    routes: z.array(WorkflowTaskRouteSchema).min(1).max(50).optional(),
 
     poll: WorkflowTaskPollSchema.optional(),
 

@@ -27,6 +27,7 @@ import {
 import { validateWorkflowGraph, type GraphValidationError } from '../scheduling/graphValidation.js';
 import { entryRunInputSlots } from '../parentTaskInputs.js';
 import { deriveOpBoundProducerShapes } from '../scheduling/deriveOpBoundShapes.js';
+import { deriveRouteGuards, validateRoutes } from '../scheduling/routes.js';
 import { bindingStaticSchema } from '../scheduling/bindingStaticSchema.js';
 import {
   validateAgentOpTaskOnlyTools,
@@ -154,14 +155,30 @@ export function materializeAndValidateSkillConfig(
   //    convert it into a blocking diagnostic so the verdict stays uniform.
   let materializedTasks: WorkflowTask[];
   try {
-    materializedTasks = deriveOpBoundProducerShapes(input.tasks);
+    materializedTasks = deriveRouteGuards(deriveOpBoundProducerShapes(input.tasks));
   } catch (err) {
-    materializedTasks = input.tasks;
+    materializedTasks = deriveRouteGuards(input.tasks);
     diagnostics.push({
       code: 'derivation_conflict',
       dimension: 'op_input',
       severity: 'error',
       detail: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  // Routes are read as stored: once their guards are derived, a target's own
+  // `when` and a derived one look alike.
+  const opByStoredTaskId = new Map(input.tasks.map((t) => [t.taskId, t.operation] as const));
+  try {
+    for (const err of validateRoutes(input.tasks)) {
+      diagnostics.push(graphErrorToDiagnostic(err, opByStoredTaskId));
+    }
+  } catch (err) {
+    diagnostics.push({
+      code: 'validation_error',
+      dimension: 'parse',
+      severity: 'error',
+      detail: `Route validation could not complete: ${err instanceof Error ? err.message : String(err)}`,
     });
   }
 
@@ -250,9 +267,9 @@ export function materializeAndValidateSkillConfig(
 export function materializeSkillTasks(tasks: WorkflowTask[]): WorkflowTask[] {
   if (!Array.isArray(tasks)) return tasks;
   try {
-    return deriveOpBoundProducerShapes(tasks);
+    return deriveRouteGuards(deriveOpBoundProducerShapes(tasks));
   } catch {
-    return tasks;
+    return deriveRouteGuards(tasks);
   }
 }
 
