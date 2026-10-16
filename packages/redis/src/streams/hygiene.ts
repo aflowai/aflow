@@ -76,8 +76,22 @@ export interface StreamCleanupResult {
   streamsChecked: number;
 }
 
+export interface ConsumerGroupRef {
+  stream: string;
+  group: string;
+}
+
+/** Every executor job stream and the group its executors read it through. */
+export function executorJobGroups(): ConsumerGroupRef[] {
+  return EXECUTOR_JOB_STEP_TYPES.map((stepType) => ({
+    stream: StreamKeys.jobStream(stepType),
+    group: ConsumerGroups.executor(stepType),
+  }));
+}
+
 /**
- * Remove stale consumers from all known consumer groups.
+ * Remove stale consumers from the given consumer groups — every executor job
+ * stream's unless told otherwise.
  * Call on orchestrator/executor startup to clean up consumers left behind by
  * processes that were killed without graceful shutdown.
  *
@@ -87,19 +101,13 @@ export interface StreamCleanupResult {
 export async function cleanupStaleConsumers(
   redis: Redis,
   maxIdleMs = 60_000,
+  groups: readonly ConsumerGroupRef[] = executorJobGroups(),
 ): Promise<StreamCleanupResult> {
   let consumersRemoved = 0;
   let streamsChecked = 0;
 
-  // Job stream groups
-  for (const stepType of EXECUTOR_JOB_STEP_TYPES) {
-    const n = await cleanupGroupConsumers(
-      redis,
-      StreamKeys.jobStream(stepType),
-      ConsumerGroups.executor(stepType),
-      maxIdleMs,
-    );
-    consumersRemoved += n;
+  for (const { stream, group } of groups) {
+    consumersRemoved += await cleanupGroupConsumers(redis, stream, group, maxIdleMs);
     streamsChecked++;
   }
 

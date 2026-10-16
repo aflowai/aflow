@@ -193,6 +193,8 @@ Which local models are _recommended_ for which role follows from the usefulness 
 - **The signal:** `AIRequestOptions.onRuntimePhase` reports `loading_model`, then `reading_prompt`. The Ollama adapter calls it; hosted adapters never do. The status read is made only for a caller that listens.
 - **The channel:** the agent turn writes each phase as one line on the step's `status` live-delta channel (_Loading Gemma 4 26B (this computer) into memory…_, _Reading the conversation…_), and each phase slides the step's idle window. The chat's activity row shows the last line in place of _Working…_ until the first `thinking` or `text` delta replaces it with _Thinking…_ or _Writing…_. Nothing is written to the transcript. _Rejected:_ reusing the `activity` channel. Its lines fold into a harness feed, and the chat pins a harness card for any step with an unsettled feed.
 
+**D18 — In the local edition, the catalog's models on this computer are assignable under the platform recommendation.** A tenant that names no allowlist follows the platform recommendation, which carries only hosted models, so a fresh local install with no cloud key had nothing it could assign. `allowedModelIds` takes the edition: in the local edition, a tenant following the recommendation may also assign every local catalog entry. Nothing is billed for them and the machine is the operator's own. A tenant that named its own set is held to it, as everywhere. They are assignable, not recommended: which local model is recommended for which role is still P2's usefulness tier.
+
 ## 4. The initial lineup
 
 The figures below come from model cards and the Ollama library, read when this plan was written. None of them are measured: P0 replaces each of them with a number from the probe, and an entry ships only after its probe passes. "Fits" assumes Q4 weights and leaves room for the stack, the operating system and a browser.
@@ -372,6 +374,30 @@ _Proof:_
 - a second pull of a tag that is already downloading joins the first;
 - a pull larger than the free disk is refused before it starts;
 - reading diagnostics on an unpaired machine loads nothing.
+
+_Built:_
+
+- **The record:** `LocalRuntimeDiagnostics` (`@aflow/schemas`) and `diagnoseLocalRuntime` (`@aflow/ai-client`), pure over one observation of `/api/version`, `/api/tags` and `/api/ps`. Its issue codes are `runtime_unreachable`, `model_not_installed`, `window_does_not_fit`, `window_tight`, `model_spilling`, `model_partly_on_cpu`, `build_unverified` and `mixed_local_models`.
+- **Remedies:** each is an action from `LocalModelActionSchema` (`pull`, `delete`, `warm`, `unload`, `set_context`, `use_for_every_role`) or an instruction.
+- **Shared core:** the runtime, the diagnosis and the actions live in `@aflow/cybernetic-runtime` `localModels/`, so the server's routes and Helmsman's operations reach the same code.
+- **Pulls:** a pull is one Redis record per runtime and tag. It is both the claim, which a second request joins, and the progress. Progress renews its lifetime, so a server that dies leaves nothing behind. A cancel is read on the same round trip, and a stopped or failed pull stays readable for ten minutes. The disk check reads the host inventory's `freeDiskBytes`, measured under `OLLAMA_MODELS` or `~/.ollama/models`, and holds 2 GiB of headroom.
+- **Readiness:** derives `localFit` and `localIssues` from the record. An `error` issue counts against `ready`, and the banner points at This Computer rather than the model picker.
+- **The page:** This Computer gains "Models on this computer":
+  - the runtime and the machine;
+  - each issue as a card whose button runs its remedy;
+  - per model: download with progress and stop, load, unload, use for every role, and delete with a confirmation naming the roles it leaves without a model.
+- **Edition gating:** the page renders none of it in the hosted edition, and the routes answer 404 there.
+- **"Use for every role":** writes the space's directives through the space update the agent settings already use. It sets the default and clears every role override, and puts the Clerk on `space_default`.
+- **Onboarding (D18):** offers the models on this computer beside the hosted ones. Choosing one puts every role on it, adds an Ollama connection unless one already resolves, and skips the key step.
+- **Cost:** a run whose every model call ran here reads _Cost: local_, and so does each such step.
+
+_Not built:_
+
+- the trial load for an unpaired machine, beyond **Load now**, which loads at the request window and whose loaded size `/api/ps` then reports;
+- recent tokens per second in the record;
+- the approved one-time install.
+
+The "use for every role" remedy is the operator's only, because a role's model is written through the space update, which no executor reaches. Helmsman proposes it as an instruction.
 
 ### P3b — Helmsman reads and asks (D10, D15)
 

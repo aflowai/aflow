@@ -288,6 +288,10 @@ const STACK_REDIS = await stackRedis(TEST_DB);
 const STREAM = 'aflow:jobs:retention-test';
 const GROUP = 'exec_retention_test';
 
+const HYGIENE_STREAM = `test:stream-retention:hygiene:${process.pid}`;
+const HYGIENE_GROUP = 'test-hygiene';
+const HYGIENE_GROUPS = [{ stream: HYGIENE_STREAM, group: HYGIENE_GROUP }];
+
 describe.skipIf(!STACK_REDIS.available)('retention against real Redis', () => {
   let redis: RedisType;
 
@@ -357,11 +361,12 @@ describe.skipIf(!STACK_REDIS.available)('retention against real Redis', () => {
   });
 
   it('never lets consumer hygiene delete a consumer that still holds pending entries', async () => {
-    // Must be a stream cleanupStaleConsumers actually visits: it walks keys built
-    // from EXECUTOR_JOB_STEP_TYPES, so a test-only stream name would make the
-    // zero-removal assertion pass even with the guard deleted.
-    const enumerated = StreamKeys.jobStream('eval');
-    const enumeratedGroup = ConsumerGroups.executor('eval');
+    // Hygiene is handed this stream to visit, so the zero-removal assertion
+    // exercises the pending guard rather than passing because the stream was
+    // never looked at. A stream of the test's own: the live stack's job streams
+    // share this Redis, and their idle consumers are not this test's to reap.
+    const enumerated = HYGIENE_STREAM;
+    const enumeratedGroup = HYGIENE_GROUP;
     await redis.del(enumerated);
     await redis.xgroup('CREATE', enumerated, enumeratedGroup, '0', 'MKSTREAM');
     try {
@@ -378,7 +383,7 @@ describe.skipIf(!STACK_REDIS.available)('retention against real Redis', () => {
       );
 
       // maxIdleMs 0 makes every consumer idle enough; only the pending guard is left.
-      const cleanup = await cleanupStaleConsumers(redis, 0);
+      const cleanup = await cleanupStaleConsumers(redis, 0, HYGIENE_GROUPS);
       expect(cleanup.streamsChecked).toBeGreaterThan(0);
       expect(cleanup.consumersRemoved).toBe(0);
 
@@ -392,8 +397,8 @@ describe.skipIf(!STACK_REDIS.available)('retention against real Redis', () => {
   });
 
   it('does let hygiene reap a consumer that holds nothing, leaving the stream trimmable', async () => {
-    const enumerated = StreamKeys.jobStream('eval');
-    const enumeratedGroup = ConsumerGroups.executor('eval');
+    const enumerated = HYGIENE_STREAM;
+    const enumeratedGroup = HYGIENE_GROUP;
     await redis.del(enumerated);
     await redis.xgroup('CREATE', enumerated, enumeratedGroup, '0', 'MKSTREAM');
     try {
@@ -414,7 +419,7 @@ describe.skipIf(!STACK_REDIS.available)('retention against real Redis', () => {
       // the same millisecond reports idle 0 — so a threshold of 0 reaps nothing on
       // a machine fast enough to get here inside one tick, and the test fails for
       // being quick. -1 is what "however briefly it has been idle" spells.
-      const cleanup = await cleanupStaleConsumers(redis, -1);
+      const cleanup = await cleanupStaleConsumers(redis, -1, HYGIENE_GROUPS);
       expect(cleanup.consumersRemoved).toBeGreaterThan(0);
 
       const result = await trimToAckedFrontier(redis, enumerated);
