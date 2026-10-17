@@ -434,22 +434,82 @@ describe('embeddings', () => {
 });
 
 describe('failures', () => {
-  it('names the URL when the runtime is not answering', async () => {
+  const failWith = (error: unknown) =>
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => {
-        throw new TypeError('fetch failed');
+        throw error;
       }),
     );
-    const adapter = createOllamaAdapter({ baseUrl: 'http://127.0.0.1:11434/' });
-
-    const error = await rejection(
-      adapter.generateText({ ...context, model: 'm', messages: [{ role: 'user', content: 'x' }] }),
+  const ask = (
+    adapter = createOllamaAdapter({ baseUrl: 'http://127.0.0.1:11434/' }),
+    signal?: AbortSignal,
+  ) =>
+    rejection(
+      adapter.generateText({
+        ...context,
+        model: 'm',
+        messages: [{ role: 'user', content: 'x' }],
+        ...(signal ? { signal } : {}),
+      }),
     );
+
+  it('names the URL when nothing answers there', async () => {
+    failWith(
+      new TypeError('fetch failed', {
+        cause: { code: 'ECONNREFUSED', message: 'connect ECONNREFUSED' },
+      }),
+    );
+
+    const error = await ask();
 
     expect(error.code).toBe('network_error');
     expect(error.retryable).toBe(true);
-    expect(error.message).toContain('http://127.0.0.1:11434');
+    expect(error.message).toContain('not reachable at http://127.0.0.1:11434');
+  });
+
+  it('reports a request that broke off by its cause, not as an unreachable runtime', async () => {
+    failWith(
+      new TypeError('fetch failed', {
+        cause: { code: 'ECONNRESET', message: 'other side closed' },
+      }),
+    );
+
+    const error = await ask();
+
+    expect(error.message).not.toContain('not reachable');
+    expect(error.message).toContain('other side closed (ECONNRESET)');
+  });
+
+  it('waits on the runtime with no transport limit of its own, so only the caller’s signal ends a long prompt', async () => {
+    const seen: RequestInit[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init: RequestInit) => {
+        seen.push(init);
+        return done({ content: 'ok' }, { prompt: 5, eval: 1 })();
+      }),
+    );
+
+    await createOllamaAdapter({}).generateText({
+      ...context,
+      model: 'm',
+      messages: [{ role: 'user', content: 'x' }],
+    });
+
+    expect((seen[0] as { dispatcher?: unknown }).dispatcher).toBeDefined();
+  });
+
+  it('does not retry a runtime that stayed silent through the idle window: a retry reads the prompt again', async () => {
+    const controller = new AbortController();
+    controller.abort({ marker: 'phoenix.executor.timeout', timeoutMs: 900_000, kind: 'idle' });
+    failWith(new DOMException('This operation was aborted', 'AbortError'));
+
+    const error = await ask(createOllamaAdapter({}), controller.signal);
+
+    expect(error.code).toBe('timeout');
+    expect(error.retryable).toBe(false);
+    expect(error.message).toContain('sent nothing for 15 minutes');
   });
 
   it('tells the operator how to download a model the runtime does not have', async () => {

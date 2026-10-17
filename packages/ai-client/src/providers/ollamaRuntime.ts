@@ -5,6 +5,7 @@
  */
 import { OLLAMA_DEFAULT_BASE_URL } from '@aflow/schemas';
 import type { ProviderConfig } from '../types.js';
+import { localRuntimeFetch } from './localRuntimeFetch.js';
 
 /** Readiness asks this on every read; a runtime slower than this to say what it holds is reported unreachable. */
 const STATUS_TIMEOUT_MS = 2_000;
@@ -76,7 +77,7 @@ export function localRuntimeClient(
     signal?: AbortSignal,
   ): Promise<void> => {
     const timeout = AbortSignal.timeout(timeoutMs);
-    const res = await fetch(`${base}/api/generate`, {
+    const res = await localRuntimeFetch(`${base}/api/generate`, {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
@@ -87,7 +88,7 @@ export function localRuntimeClient(
   };
   const read = async <T>(path: string): Promise<T | null> => {
     try {
-      const res = await fetch(`${base}${path}`, {
+      const res = await localRuntimeFetch(`${base}${path}`, {
         headers,
         signal: AbortSignal.timeout(STATUS_TIMEOUT_MS),
       });
@@ -113,7 +114,7 @@ export function localRuntimeClient(
       }));
     },
     async pull(tag, onProgress, signal) {
-      const res = await fetch(`${base}/api/pull`, {
+      const res = await localRuntimeFetch(`${base}/api/pull`, {
         method: 'POST',
         headers,
         body: JSON.stringify({ model: tag, stream: true }),
@@ -155,7 +156,7 @@ export function localRuntimeClient(
       }
     },
     async remove(tag) {
-      const res = await fetch(`${base}/api/delete`, {
+      const res = await localRuntimeFetch(`${base}/api/delete`, {
         method: 'DELETE',
         headers,
         body: JSON.stringify({ model: tag }),
