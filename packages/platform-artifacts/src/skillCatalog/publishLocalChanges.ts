@@ -10,14 +10,8 @@ import {
   toJsonSchemaSync,
 } from '@aflow/schemas';
 import {
-  AFTER_CHECK,
-  CHECK_FAILED,
-  CHECKS_FAILED_TASK,
-  DECIDE_AFTER_CHECK_TASK,
   DECIDE_AFTER_REVIEW_TASK,
-  FIX_CHECKS_TASK,
   FIX_FINDINGS_TASK,
-  REPUBLISH_AFTER_CHECKS_TASK,
   REPUBLISH_AFTER_FINDINGS_TASK,
 } from './publishLocalChangesRounds.js';
 import { REVIEW_LOCAL_CHANGES } from './reviewLocalChanges.js';
@@ -74,7 +68,7 @@ const REVIEW_SKILL = {
 
 /**
  * Where the push may follow the checks: they passed on the first run, or on
- * the second the decision after a failed first run asked for. Read by every
+ * the second, where the first lost only tests to their time. Read by every
  * task that only runs on a commit the checks cleared.
  */
 const CHECKS_CLEARED = {
@@ -162,6 +156,18 @@ const SUMMARY_SCHEMA = { type: 'string', minLength: 1, maxLength: 20_000 };
 const FINDINGS_SCHEMA = { ...toJsonSchemaSync(PullRequestFindingsSchema) };
 const GAPS_SCHEMA = { ...toJsonSchemaSync(PullRequestGapsSchema) };
 
+const CHECK_FAILED =
+  "The folder's checks failed on this run's commit: their account is above, with the end of what they printed, and the whole of it is stored with this failure. Nothing was scanned, reviewed or pushed, and the commit is still on its branch in the folder. Commission the fix onto this branch — nothing of it has left the machine — and publish again. Where they ran out of the folder's time rather than failed, the folder's `checksTimeoutMs` is the operator's to raise on the machine.";
+
+/**
+ * The stop on a first run of the checks that did not pass for any reason but
+ * tests running out of their time. What they printed may name a fault in the
+ * change or one in the machine they ran on, and nothing here has told the
+ * two apart, so it says which happened and leaves the remedy to that account.
+ */
+const CHECKS_STOPPED =
+  "The folder's checks did not pass on this run's commit, and the publication stops on that: their account is the reason above, with the end of what they printed. Nothing was scanned, reviewed or pushed, and the commit is still on its branch in the folder. What they printed says what failed — the change, or the machine the checks ran on, such as a missing tool or a service they reach — and so what puts it right. Where they ran out of the folder's time, its `checksTimeoutMs` is the operator's to raise on the machine.";
+
 /** Both runs of the checks take the same commit, measured against the same base. */
 const CHECK_INPUT_BINDINGS = {
   bindingId: { kind: 'run_input' as const, path: 'bindingId' },
@@ -191,7 +197,7 @@ const CHECK_INPUT_TEMPLATE = {
 
 const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'publish-local-changes',
-  version: 27,
+  version: 28,
   name: 'Publish Local Changes',
   tagline:
     'Commit a patch onto a branch of a connected repository, then push it and open the pull request — asking the operator first unless the folder says otherwise.',
@@ -207,13 +213,13 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
 
 **When it asks before pushing**: the folder's push approval, \`pushApproval\` in the machine block, decides. \`always\` asks before every push; \`never\` pushes without asking. \`unless-unreviewed\`: the run has Local Code Review read everything the push would add and pushes without asking only when it returns \`approve\` — otherwise, a review that did not finish or start included, it waits for the operator. The review is the catalog's as installed; an edited copy is refused, and the run asks. A folder that names no posture is \`${HOST_PUSH_APPROVAL_DEFAULT}\`, the default. Whatever the posture, the run scans every line the push would add, the headers and message of every commit it carries, and the pull request's title and summary for secrets before any of this, and a finding stops it with nothing pushed — which is what lets a review stand in for the operator. Only a range the scan cleared can go without asking: where a file was not read whole, or a line that looks like a secret ends in an \`aflow-scan: allow\` comment, no review runs and the run waits for the operator whatever the posture, \`never\` included. The comment never clears a line — whoever wrote the change could have written it; it turns a stop into a question. Once the run asks, the operator's answer decides: a declined push pushes nothing, whatever the posture.
 
-**Its checks first**: the folder's \`checks\`, shown in the machine block, run in a checkout of the commit before the scan, and nothing is scanned, reviewed or pushed until they pass; the push needs their passing receipt. A folder that declares none runs none. The pull request's own checks remain the proof. Test timeouts alone rerun; another failure is decided on — a rerun, a fix commissioned and republished, or a stop, as an unsure decision is. Review findings may take a fix round after the push. No decision clears or holds a push.
+**Its checks first**: the folder's \`checks\`, shown in the machine block, run in a checkout of the commit before the scan, and nothing is scanned, reviewed or pushed until they pass; the push needs their passing receipt. A folder that declares none runs none. The pull request's own checks remain the proof. Test timeouts alone rerun once; any other failure stops the run with the end of what they printed. A review's findings may take a fix round after the push. No decision clears or holds a push.
 
 **On an existing branch**: a fix commissioned from a branch (\`base: <branch>\`) is published onto it by naming it as \`branch\` and passing the commission's \`baseSha\` as \`baseSha\`; a branch is reused only that way, and a fresh change takes a fresh branch. A fix to a branch \`main\` has moved past is commissioned with \`mergeFrom: origin/<base>\` as well and published with the sha the commission reported in \`merge.from\` as \`mergeFrom\`: the branch then carries one merge commit holding the fix. A commission that reported a \`merge\` and no \`patchRef\` changed nothing beyond the merge: it is published with \`mergeFrom\` and neither \`patchRef\` nor \`patch\`.
 
 **A branch as it stands**: a commit already made whose push did not land is published with \`branch\`, its head as \`baseSha\`, and no \`patchRef\`, \`patch\`, \`mergeFrom\` or \`commitMessage\`: nothing is committed, and the head is checked, scanned, reviewed and pushed.
 
-**With the result**: report the pull request link, and whether the push was approved by the operator or cleared by the folder's push approval — and, where the run reviewed its commit, the verdict. A branch that already has an open pull request into the base gets no second one: the run reports that one. Where approval was declined, report that nothing was pushed and the commit stays on the machine to publish later. Where the checks failed, nothing left the machine: report the end of what they printed. A fix published again reports that run's pull request. Where the scan found what looks like a secret, the run failed with nothing pushed: report the files, commit headers and messages, title or summary, lines and rules it names — never ask for or repeat the value — and say the secret has to come out and the change go again on a fresh branch, this one holding that commit. A refused push leaves the commit on its branch: report its message and the remedy the run names. Where the push failed, git's own message says why.`,
+**With the result**: report the pull request link, and whether the push was approved by the operator or cleared by the folder's push approval — and, where the run reviewed its commit, the verdict. A branch that already has an open pull request into the base gets no second one: the run reports that one. Where approval was declined, report that nothing was pushed and the commit stays on the machine to publish later. Where the checks failed, nothing left the machine: report the end of what they printed. A fix round reports its fix's pull request, or this run's where the fix changed nothing. Where the scan found what looks like a secret, the run failed with nothing pushed: report the files, commit headers and messages, title or summary, lines and rules it names — never ask for or repeat the value — and say the secret has to come out and the change go again on a fresh branch, this one holding that commit. A refused push leaves the commit on its branch: report its message and the remedy the run names. Where the push failed, git's own message says why.`,
   tags: ['coding', 'publish', 'git', 'local', 'developer-tools'],
   capabilityHints: [
     {
@@ -499,20 +505,18 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             onMissingRef: 'skip' as const,
           },
           // A run that did not pass succeeds with `passed: false` and its
-          // account, which is what `decide-after-check` reads to choose what
-          // follows; nothing after the checks runs unless they cleared.
+          // account: `recheck-commit` runs the checks again where only tests
+          // ran out of their time, and `checks-failed` stops the run on
+          // anything else. Nothing after the checks runs unless they cleared.
           retryability: 'safe' as const,
           maxAttempts: 1,
           inputBindings: CHECK_INPUT_BINDINGS,
           context: CHECK_CONTEXT,
           inputTemplate: CHECK_INPUT_TEMPLATE,
           outputProjection: {
-            clearedOrRetriableSha: { path: 'clearedOrRetriableSha', onMissing: 'null' as const },
             passed: { path: 'passed', onMissing: 'error' as const },
             skipped: { path: 'skipped', onMissing: 'null' as const },
-            timedOut: { path: 'timedOut', onMissing: 'null' as const },
             testTimeouts: { path: 'testTimeouts', onMissing: 'null' as const },
-            failingGuard: { path: 'failingGuard', onMissing: 'null' as const },
             summary: { path: 'summary', onMissing: 'error' as const },
             tail: { path: 'tail', onMissing: 'null' as const },
             // Null where the folder declares no checks: the push needs none then.
@@ -520,25 +524,51 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           },
         },
 
-        DECIDE_AFTER_CHECK_TASK,
-
-        CHECKS_FAILED_TASK,
+        {
+          taskId: 'checks-failed',
+          name: 'Stop on the failed checks',
+          goal: "Fail the publication with the checks' own account where their first run did not pass for any reason but tests running out of their time, so whoever started it is woken with what they printed.",
+          failureInstruction: CHECKS_STOPPED,
+          type: 'operation' as const,
+          operation: 'workflow.run.fail',
+          dependsOn: ['check-commit'],
+          when: {
+            allOf: [
+              'tasks.check-commit.output.passed == false',
+              'tasks.check-commit.output.testTimeouts == null',
+            ],
+            onMissingRef: 'skip' as const,
+          },
+          retryability: 'safe' as const,
+          maxAttempts: 1,
+          inputBindings: {
+            summary: { kind: 'task_output' as const, taskId: 'check-commit', path: 'summary' },
+          },
+          context: {
+            strategy: 'scoped' as const,
+            contextPolicy: 'auto-optimize' as const,
+            learnings: 'none' as const,
+            capabilities: {
+              operations: ['workflow.run.fail'],
+              integrations: [],
+            },
+          },
+          inputTemplate: {
+            reason: { $bind: 'summary' },
+          },
+        },
 
         {
           taskId: 'recheck-commit',
-          name: "Run the folder's checks again, after they ran out of time",
-          goal: "Run the folder's checks once more on this run's commit, where nothing failed on their first run but tests running out of their time — `testTimeouts` names them — or the decision after it found nothing failed but time: which a machine under load does to a passing commit. This run's result is the one the push carries; a failure here fails the publication.",
-          failureInstruction: `${CHECK_FAILED} Their first run failed only on time, and this second run failed as well.`,
+          name: "Run the folder's checks again, after tests ran out of time",
+          goal: "Run the folder's checks once more on this run's commit, where nothing failed on their first run but tests running out of their time — `testTimeouts` names them — which a machine under load does to a passing commit. This run's result is the one the push carries; a failure here fails the publication.",
+          failureInstruction: `${CHECK_FAILED} They were run a second time because tests ran out of their time on the first, and this second run failed as well.`,
           type: 'operation' as const,
           operation: 'host.commit.check',
-          dependsOn: ['commit', 'check-commit', 'decide-after-check'],
-          // `testTimeouts` is present only where nothing else failed: today's
-          // rule, kept whether or not the space has a decision model.
+          dependsOn: ['commit', 'check-commit'],
+          // `testTimeouts` is present only where nothing else failed.
           when: {
-            anyOf: [
-              'tasks.check-commit.output.testTimeouts != null',
-              `${AFTER_CHECK}.nextStep == 'recheck_on_timeout'`,
-            ],
+            expression: 'tasks.check-commit.output.testTimeouts != null',
             onMissingRef: 'skip' as const,
           },
           // Its own task rather than a second attempt of the first, which a
@@ -1164,10 +1194,6 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           ],
         },
 
-        FIX_CHECKS_TASK,
-
-        REPUBLISH_AFTER_CHECKS_TASK,
-
         FIX_FINDINGS_TASK,
 
         REPUBLISH_AFTER_FINDINGS_TASK,
@@ -1177,7 +1203,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           variableId: 'prUrl',
           name: 'Pull request link',
           description:
-            "The branch's pull request — the one this run opened, or the one already open for the branch — as a person opens it.",
+            "The branch's pull request — the one this run opened, the one already open for the branch, or the one the publication of a fix this run commissioned reports — as a person opens it.",
           required: false,
           sensitive: false,
           immutable: false,
@@ -1205,7 +1231,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
       output: {
         primary: 'prUrl',
         guidance:
-          "The run carries prUrl and prNumber once the branch has its pull request — opened, already open, or the one a fix it commissioned was published to — and reporting the link is the result; afterReview is its decision on the review's findings, null where it was unsure. Absent prUrl, the branch stayed on the machine to publish later — unless the run failed at the checks, whose failure names what to fix, or at the scan, where the commit holds what looks like a secret.",
+          "The run carries prUrl and prNumber once the branch has its pull request — opened, already open, or the one a fix it commissioned was published to — and reporting the link is the result; afterReview is its decision on the review's findings, null where it was unsure. Absent prUrl, the branch stayed on the machine to publish later — unless the run failed at the checks, whose account says what failed, or at the scan, where the commit holds what looks like a secret.",
       },
       iteration: { auto: false, maxConsecutiveRuns: 1, stopOnOutcomesMet: true, cooldownMs: 0 },
     },
@@ -1246,7 +1272,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
       priority: 50,
     },
     rationale:
-      "Twenty tasks, the approval between local and published halves. The commit lands in a detached worktree; host.commit.check runs the folder's checks. A check lost to test timeouts alone reruns; any other failure goes to ai.decision.decide: a recheck, a fix commissioned from the checks' summary and republished, or workflow.run.fail with that summary, which is also what abstaining does. host.commit.scan reads all a push adds: a finding fails the run, an unread file or allowed line asks. Over a cleared range the posture, and under unless-unreviewed a Local Code Review, decide whether to ask. Over its findings a choice may commission a fix once this push went, and republish it; abstaining does not. No decision gates the push. The push argv is pinned bar the refspec; the executor re-measures origin/<base>, needs a passed check receipt, and sends an uncleared range only on this run's grant. host.commit.describe composes the PR before the push; an open PR is PATCHed.",
+      "Seventeen tasks, the approval between local and published halves. The commit lands in a detached worktree; host.commit.check runs the folder's checks. A check lost to test timeouts alone reruns; any other failure is workflow.run.fail with the checks' summary — no decision is asked there until its measurement has labelled cases. host.commit.scan reads all a push adds: a finding fails the run, an unread file or allowed line asks. Over a cleared range the posture, and under unless-unreviewed a Local Code Review, decide whether to ask. Over its findings a choice may commission a fix once this push went, and republish it where it changed something; abstaining does not. No decision gates the push. The push argv is pinned bar the refspec; the executor re-measures origin/<base>, needs a passed check receipt, and sends an uncleared range only on this run's grant. host.commit.describe composes the PR before the push; an open PR is PATCHed.",
   },
 };
 

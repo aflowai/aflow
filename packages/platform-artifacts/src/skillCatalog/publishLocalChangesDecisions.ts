@@ -2,17 +2,17 @@ import type { DecisionChoiceQuestionSchema } from '@aflow/schemas';
 import type { z } from 'zod';
 
 /**
- * The two judgements Publish Local Changes makes for itself — what follows a
- * failed check, and whether a review's findings are worth a fix round — as the
- * questions it asks a decision model. Defined once, here, so the measurement
+ * The judgements Publish Local Changes is measured on — what follows a failed
+ * check, and whether a review's findings are worth a fix round — as the
+ * questions a decision model is asked. Defined once, here, so the measurement
  * of decision quality on the loop's own history (`yarn decisions:measure-loop`,
  * Plan 316 §7) asks exactly what the skill asks.
  *
- * Each bar is where its decision abstains, and an abstention takes today's
- * path: after a failed check the run fails as a failed check always did, and
- * after a review it goes on through the approval with no fix round. Both are
- * Jev's measured bar (Plan 316 §7): after a review over 17 cases, after a
- * check over 2 — too few to say more than that it agreed.
+ * Only the question after a review is the skill's: an answer below its bar
+ * takes today's path, on through the approval with no fix round — Jev's bar,
+ * measured over 17 cases. The question after a failed check is asked by the
+ * measurement alone until it has labelled `operator_install_mismatch` cases
+ * (Plan 316 §7); a failed check fails the run.
  */
 export const AFTER_CHECK_MIN_CONFIDENCE = 0.8;
 export const AFTER_REVIEW_MIN_CONFIDENCE = 0.8;
@@ -60,12 +60,9 @@ export const AFTER_REVIEW_QUESTION = {
 } as const satisfies z.input<typeof DecisionChoiceQuestionSchema>;
 
 /**
- * The opening of each fix brief. What follows it is data the run already
- * holds — the checks' own account, the findings that passed — so no model
- * writes a brief and none can be argued with as one.
+ * The opening of the fix brief. What follows it is the review's own account,
+ * which the run already holds, so no model writes a brief and none can be
+ * argued with as one.
  */
-export const FIX_CHECKS_BRIEF_LEAD =
-  "The folder's declared checks failed on this commit. Their account follows, naming the step that failed where they named one, with the end of what they printed. Make them pass by fixing what they found in the change; change no check, guard or test to pass it, and leave the change otherwise as it is. Run the failing step again in this checkout before you finish, and report what you changed and what it printed.\n\n";
-
 export const FIX_FINDINGS_BRIEF_LEAD =
   "Local Code Review read this branch and returned the findings below, each with its severity and `file:line`, blockers first. Fix each that names a defect in the change's behaviour, with a test that would have caught it where one can; leave a preference or a claim the code does not bear out as it is, and say which and why. Change nothing else. Run the folder's own checks over what you touched before you finish, and report, finding by finding, what you changed or left.\n\nThe review, as it reported its findings:\n";
