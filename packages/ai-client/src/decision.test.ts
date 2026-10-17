@@ -47,6 +47,7 @@ describe('resolveDecisionAnswers', () => {
     expect(answers['urgent']).toEqual({
       type: 'yes_no',
       value: false,
+      decidedValue: false,
       probability: 0.15,
       confidence: 0.85,
       decided: true,
@@ -56,6 +57,22 @@ describe('resolveDecisionAnswers', () => {
       confidence: 0.7,
       decided: false,
     });
+  });
+
+  it('carries the value a route reads only where the answer cleared its bar, and null where it did not', () => {
+    const sure = resolve();
+    expect(sure['team']?.decidedValue).toBe('billing');
+    expect(sure['frustration']?.decidedValue).toBe(0.4);
+    // A false that cleared the bar is a decided false, never mistaken for none.
+    expect(sure['urgent']?.decidedValue).toBe(false);
+    const unsure = resolve({
+      team: { type: 'choice', choice: 'technical', confidence: 0.55, probabilities: {} },
+      frustration: { type: 'score', score: 0.4, confidence: 0.2, probabilities: {} },
+      urgent: { type: 'yes_no', probability: 0.3 },
+    });
+    expect(unsure['team']).toMatchObject({ value: 'technical', decidedValue: null });
+    expect(unsure['frustration']).toMatchObject({ value: 0.4, decidedValue: null });
+    expect(unsure['urgent']).toMatchObject({ value: false, decidedValue: null });
   });
 
   it('decides every answer to a question with no minConfidence', () => {

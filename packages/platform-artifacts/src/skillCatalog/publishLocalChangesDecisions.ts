@@ -1,4 +1,4 @@
-import type { DecisionChoiceQuestionSchema, DecisionYesNoQuestionSchema } from '@aflow/schemas';
+import type { DecisionChoiceQuestionSchema } from '@aflow/schemas';
 import type { z } from 'zod';
 
 /**
@@ -8,19 +8,14 @@ import type { z } from 'zod';
  * of decision quality on the loop's own history (`yarn decisions:measure-loop`,
  * Plan 316 §7) asks exactly what the skill asks.
  *
- * Each threshold is where its decision abstains, and an abstention is not the
- * same on every path:
- * - after a failed check, the run fails as a failed check always did;
- * - a finding judged below its bar is left out of a fix round's brief;
- * - after a review, the fix round is taken — fixing what was judged a defect
- *   costs a commission, and merging it unfixed costs more — so a high bar here
- *   means more fix rounds, not fewer.
- * They are provisional until Plan 316 §7's measurement has run on the loop's
- * own records; §7 says what it is waiting on.
+ * Each bar is where its decision abstains, and an abstention takes today's
+ * path: after a failed check the run fails as a failed check always did, and
+ * after a review it goes on through the approval with no fix round. Both are
+ * Jev's measured bar (Plan 316 §7): after a review over 17 cases, after a
+ * check over 2 — too few to say more than that it agreed.
  */
 export const AFTER_CHECK_MIN_CONFIDENCE = 0.8;
-export const FINDING_MIN_CONFIDENCE = 0.8;
-export const AFTER_REVIEW_MIN_CONFIDENCE = 0.9;
+export const AFTER_REVIEW_MIN_CONFIDENCE = 0.8;
 
 export const AFTER_CHECK_ROUTES = [
   'recheck_on_timeout',
@@ -51,18 +46,6 @@ export const AFTER_CHECK_QUESTION = {
   minConfidence: AFTER_CHECK_MIN_CONFIDENCE,
 } as const satisfies z.input<typeof DecisionChoiceQuestionSchema>;
 
-export const FINDING_QUESTION = {
-  type: 'yes_no',
-  instructions:
-    "The finding names a defect in the change's behaviour, established by evidence shown.",
-  criteria: {
-    true: 'The claim is about what the changed code does — a wrong result, a crash, a race, a leak, a hole, a broken contract or a test that does not test what it says — and the evidence quoted shows it in this change.',
-    false:
-      'The claim is a preference, a name, a style or a wording; or a defect the evidence does not show; or about code this change did not touch.',
-  },
-  minConfidence: FINDING_MIN_CONFIDENCE,
-} as const satisfies z.input<typeof DecisionYesNoQuestionSchema>;
-
 export const AFTER_REVIEW_QUESTION = {
   type: 'choice',
   instructions:
@@ -86,4 +69,4 @@ export const FIX_CHECKS_BRIEF_LEAD =
   "The folder's declared checks failed on this commit. Their account follows, naming the step that failed where they named one, with the end of what they printed. Make them pass by fixing what they found in the change; change no check, guard or test to pass it, and leave the change otherwise as it is. Run the failing step again in this checkout before you finish, and report what you changed and what it printed.\n\n";
 
 export const FIX_FINDINGS_BRIEF_LEAD =
-  "Local Code Review read this branch, and these of its findings name defects in the change's behaviour, each with the evidence for it. Fix each of them in the change, with a test that would have caught it where one can; change nothing else. Run the folder's own checks over what you touched before you finish, and report, finding by finding, what you changed.\n\nThe findings, as the review returned them:\n";
+  "Local Code Review read this branch and returned the findings below, each with its severity and `file:line`, blockers first. Fix each that names a defect in the change's behaviour, with a test that would have caught it where one can; leave a preference or a claim the code does not bear out as it is, and say which and why. Change nothing else. Run the folder's own checks over what you touched before you finish, and report, finding by finding, what you changed or left.\n\nThe review, as it reported its findings:\n";

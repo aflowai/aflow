@@ -56,7 +56,6 @@ export {
   AFTER_REVIEW_QUESTION,
   AFTER_REVIEW_QUESTION_NAME,
   AFTER_REVIEW_ROUTES,
-  FINDING_QUESTION,
 } from './skillCatalog/publishLocalChangesDecisions.js';
 
 export {

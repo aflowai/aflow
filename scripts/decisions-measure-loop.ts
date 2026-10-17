@@ -38,17 +38,21 @@ import {
   AFTER_CHECK_QUESTION_NAME,
   AFTER_REVIEW_QUESTION,
   AFTER_REVIEW_QUESTION_NAME,
-  FINDING_QUESTION,
 } from '@aflow/platform-artifacts';
+import { decodeInlinePayloadRef } from '@aflow/payload-store';
 import type { DecisionQuestion, SessionId, StepExecutionId, TenantId } from '@aflow/schemas';
 import {
   CI_REMEDY_QUESTION,
   CI_REMEDY_QUESTION_NAME,
+  FINDING_QUESTION,
+  RATE_LIMIT_ATTEMPTS,
   applyOperatorLabels,
   checkFailureCases,
   chooseMinConfidence,
   ciFailureCases,
+  isGhNotFound,
   renderReport,
+  retryDelayMs,
   reviewCases,
   score,
   sweep,
@@ -87,7 +91,7 @@ interface Result {
 
 const QUESTIONS: Record<Case['kind'], { name: string; question: DecisionQuestion }> = {
   after_check: { name: AFTER_CHECK_QUESTION_NAME, question: AFTER_CHECK_QUESTION },
-  finding: { name: 'defect', question: FINDING_QUESTION },
+  finding: { name: 'defect', question: FINDING_QUESTION as DecisionQuestion },
   after_review: { name: AFTER_REVIEW_QUESTION_NAME, question: AFTER_REVIEW_QUESTION },
   ci_remedy: { name: CI_REMEDY_QUESTION_NAME, question: CI_REMEDY_QUESTION as DecisionQuestion },
 };
@@ -110,19 +114,58 @@ function arg(name: string): string | undefined {
 
 const API_URL = process.env['API_URL'] ?? 'http://localhost:3000';
 
+class HttpError extends Error {
+  constructor(
+    readonly status: number,
+    path: string,
+  ) {
+    super(`HTTP ${String(status)} for ${path}`);
+  }
+}
+
+const sleep = (ms: number) =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+
 async function api(path: string): Promise<unknown> {
   const key = process.env['AFLOW_API_KEY'];
   if (key === undefined || key === '') {
     throw new Error('AFLOW_API_KEY is not set: collect reads the runs through the stack’s API.');
   }
-  const res = await fetch(`${API_URL}/v1${path}`, { headers: { Authorization: `Bearer ${key}` } });
-  if (!res.ok) throw new Error(`HTTP ${String(res.status)} for ${path}`);
-  return res.json();
+  for (let attempt = 0; ; attempt += 1) {
+    const res = await fetch(`${API_URL}/v1${path}`, {
+      headers: { Authorization: `Bearer ${key}` },
+    });
+    if (res.ok) return res.json();
+    // A collection reads hundreds of runs and payloads; the stack's read
+    // limit answers 429 well before that, and waiting is all it asks.
+    if (res.status === 429 && attempt + 1 < RATE_LIMIT_ATTEMPTS) {
+      await sleep(retryDelayMs(attempt, res.headers.get('retry-after')));
+      continue;
+    }
+    throw new HttpError(res.status, path);
+  }
 }
 
+/**
+ * A run's stored payload, or undefined where there is none to read: no ref,
+ * or one the store no longer holds, which leaves that case out. An inline ref
+ * carries its value, and is never sent: one the size of a payload is longer
+ * than any request line the stack takes.
+ */
 async function payload(ref: string | undefined): Promise<Record<string, unknown> | undefined> {
   if (ref === undefined) return undefined;
-  const body = (await api(`/payloads?ref=${encodeURIComponent(ref)}`)) as Record<string, unknown>;
+  if (ref.startsWith('inline:')) {
+    return decodeInlinePayloadRef(ref) as Record<string, unknown>;
+  }
+  let body: Record<string, unknown>;
+  try {
+    body = (await api(`/payloads?ref=${encodeURIComponent(ref)}`)) as Record<string, unknown>;
+  } catch (error) {
+    if (error instanceof HttpError && error.status === 404) return undefined;
+    throw error;
+  }
   if (typeof body['downloadUrl'] === 'string') {
     const res = await fetch(body['downloadUrl']);
     return (await res.json()) as Record<string, unknown>;
@@ -224,8 +267,12 @@ function gh(path: string, paginate = false): unknown {
   return JSON.parse(text);
 }
 
+/** A job's log as text: `gh` strips the escape sequences a log carries unless asked not to. */
 function ghText(path: string): string {
-  return execFileSync('gh', ['api', path], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
+  return execFileSync('gh', ['api', '--allow-escape-sequences', path], {
+    encoding: 'utf8',
+    maxBuffer: 256 * 1024 * 1024,
+  });
 }
 
 function ciPullRequest(repo: string, number: number) {
@@ -284,7 +331,13 @@ async function collect(): Promise<void> {
   ];
   for (let n = from ?? 91; n <= (to ?? 124); n += 1) {
     process.stdout.write(`PR #${String(n)}… `);
-    cases.push(...ciFailureCases(ciPullRequest(repo, n)));
+    try {
+      cases.push(...ciFailureCases(ciPullRequest(repo, n)));
+    } catch (error) {
+      // A number in the range can be an issue, not a pull request.
+      if (!isGhNotFound(error)) throw error;
+      process.stdout.write('(no pull request) ');
+    }
   }
   mkdirSync(OUT_DIR, { recursive: true });
   writeFileSync(join(OUT_DIR, 'cases.json'), JSON.stringify(cases, null, 2));

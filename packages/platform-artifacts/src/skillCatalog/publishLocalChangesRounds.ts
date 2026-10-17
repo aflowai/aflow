@@ -12,7 +12,6 @@ import {
   AFTER_CHECK_QUESTION_NAME,
   AFTER_REVIEW_QUESTION,
   AFTER_REVIEW_QUESTION_NAME,
-  FINDING_QUESTION,
   FIX_CHECKS_BRIEF_LEAD,
   FIX_FINDINGS_BRIEF_LEAD,
 } from './publishLocalChangesDecisions.js';
@@ -32,6 +31,9 @@ const PUBLISH_SKILL = {
 
 export const AFTER_CHECK = `tasks.decide-after-check.output`;
 const AFTER_REVIEW = `tasks.decide-after-review.output`;
+
+/** This run's push went: its exit code is there only where it ran. */
+const PUSH_WENT = 'tasks.push.output.exitCode == 0';
 
 /** A run started by a task, waited on, from the skill the Store installed. */
 const RUN_START_CONTEXT = {
@@ -115,8 +117,15 @@ export const DECIDE_AFTER_CHECK_TASK = {
   type: 'operation' as const,
   operation: 'ai.decision.decide',
   dependsOn: ['check-commit'],
+  // A run lost only to tests running out of their time is run again by rule,
+  // whatever model the space has or lacks: the checks reported nothing else
+  // failed, so there is nothing to decide, and a decision beside the rule
+  // could only send one failure down two routes.
   when: {
-    expression: 'tasks.check-commit.output.passed == false',
+    allOf: [
+      'tasks.check-commit.output.passed == false',
+      'tasks.check-commit.output.testTimeouts == null',
+    ],
     onMissingRef: 'skip' as const,
   },
   // A decision that cannot be made — no decision model bound to the
@@ -151,8 +160,14 @@ export const DECIDE_AFTER_CHECK_TASK = {
     },
     questions: { [AFTER_CHECK_QUESTION_NAME]: AFTER_CHECK_QUESTION },
   },
+  // `nextStep` is the route, null where the answer fell below the bar;
+  // `chosen` is what it would have chosen, kept for whoever reads the run.
   outputProjection: {
     nextStep: {
+      path: `answers.${AFTER_CHECK_QUESTION_NAME}.decidedValue`,
+      onMissing: 'error' as const,
+    },
+    chosen: {
       path: `answers.${AFTER_CHECK_QUESTION_NAME}.value`,
       onMissing: 'error' as const,
     },
@@ -202,68 +217,26 @@ export const CHECKS_FAILED_TASK = {
   },
 };
 
-export const DECIDE_FINDINGS_TASK = {
-  taskId: 'decide-findings',
-  name: "Judge each of the review's findings",
-  goal: "Ask of every finding this run's review returned, one at a time, whether it names a defect in the change's behaviour established by the evidence it shows — so a fix round is briefed with those alone, and never with a preference or a claim its evidence does not carry.",
+export const DECIDE_AFTER_REVIEW_TASK = {
+  taskId: 'decide-after-review',
+  name: 'Decide whether the findings are fixed before merging',
+  goal: "Read the review's findings and choose whether this branch takes a fix round before it merges, merges as it is with the findings recorded, or waits on the operator's word.",
   type: 'operation' as const,
   operation: 'ai.decision.decide',
   dependsOn: ['review-commit'],
-  // A review with no findings, or one that did not finish, has none to judge.
+  // A review with no findings, or one that did not finish, has none to weigh.
   when: {
     expression: 'tasks.review-commit.output.findings[0] != null',
     onMissingRef: 'skip' as const,
   },
-  // No decision is no fix round: the run goes on as a review's
-  // findings always left it, to whoever reads them.
+  // No decision is no fix round: the run goes on as a review's findings
+  // always left it, through the approval, to whoever reads them.
   optional: true,
   retryability: 'safe' as const,
   maxAttempts: 2,
   inputBindings: {
     verdict: { kind: 'task_output' as const, taskId: 'review-commit', path: 'verdict' },
-    reviewSummary: {
-      kind: 'task_output' as const,
-      taskId: 'review-commit',
-      path: 'reviewSummary',
-    },
     findings: { kind: 'task_output' as const, taskId: 'review-commit', path: 'findings' },
-  },
-  context: DECIDE_CONTEXT,
-  inputTemplate: {
-    state: {
-      verdict: { $bind: 'verdict' },
-      reviewSummary: { $bind: 'reviewSummary' },
-    },
-    each: {
-      items: { $bind: 'findings' },
-      question: FINDING_QUESTION,
-    },
-  },
-  outputProjection: {
-    selected: { path: 'each.selected', onMissing: 'error' as const },
-    selectedCount: { path: 'each.selectedCount', onMissing: 'error' as const },
-    undecidedCount: { path: 'each.undecidedCount', onMissing: 'error' as const },
-    selectedJson: { path: 'each.selectedJson', onMissing: 'error' as const },
-  },
-};
-
-export const DECIDE_AFTER_REVIEW_TASK = {
-  taskId: 'decide-after-review',
-  name: 'Decide whether the findings are fixed before merging',
-  goal: "Read the findings judged to name defects and choose whether this branch takes a fix round before it merges, merges as it is with the findings recorded, or waits on the operator's word.",
-  type: 'operation' as const,
-  operation: 'ai.decision.decide',
-  dependsOn: ['decide-findings'],
-  when: {
-    expression: 'tasks.decide-findings.output.selectedCount > 0',
-    onMissingRef: 'skip' as const,
-  },
-  optional: true,
-  retryability: 'safe' as const,
-  maxAttempts: 2,
-  inputBindings: {
-    verdict: { kind: 'task_output' as const, taskId: 'review-commit', path: 'verdict' },
-    findings: { kind: 'task_output' as const, taskId: 'decide-findings', path: 'selected' },
   },
   context: DECIDE_CONTEXT,
   inputTemplate: {
@@ -273,8 +246,14 @@ export const DECIDE_AFTER_REVIEW_TASK = {
     },
     questions: { [AFTER_REVIEW_QUESTION_NAME]: AFTER_REVIEW_QUESTION },
   },
+  // `afterReview` is the route, null where the answer fell below the bar;
+  // `chosen` is what it would have chosen.
   outputProjection: {
     afterReview: {
+      path: `answers.${AFTER_REVIEW_QUESTION_NAME}.decidedValue`,
+      onMissing: 'error' as const,
+    },
+    chosen: {
       path: `answers.${AFTER_REVIEW_QUESTION_NAME}.value`,
       onMissing: 'error' as const,
     },
@@ -300,7 +279,7 @@ export const FIX_CHECKS_TASK = {
   operation: 'workflow.run.start',
   dependsOn: ['commit', 'check-commit', 'decide-after-check'],
   when: {
-    allOf: [`${AFTER_CHECK}.nextStep == 'fix_commission'`, `${AFTER_CHECK}.decided == true`],
+    expression: `${AFTER_CHECK}.nextStep == 'fix_commission'`,
     onMissingRef: 'skip' as const,
   },
   // A second attempt starts a second commission.
@@ -328,19 +307,16 @@ export const FIX_CHECKS_TASK = {
 export const FIX_FINDINGS_TASK = {
   taskId: 'fix-findings',
   name: 'Commission the fix the findings call for',
-  goal: "Start a commission on this run's commit, briefed with the review's findings judged to name defects, as the review returned them, and wait for its change.",
+  goal: "Once this run's push has gone, start a commission on this run's commit, briefed with every finding of the review as the review reported it, and wait for its change.",
   failureInstruction:
-    "The commission briefed to fix the review's findings returned no change, or did not finish; its run says why. This run's commit went on as the folder's push approval says, and the findings are on the review. Read the commission's run, then commission the fix onto this branch and publish again — or, where its brief was refused for its length, brief it by hand from the findings.",
+    "The commission briefed to fix the review's findings returned no change, or did not finish; its run says why. This run's commit was pushed, and the findings are on the review. Read the commission's run, then commission the fix onto this branch and publish again — or, where its brief was refused for its length, brief it by hand from the findings.",
   type: 'operation' as const,
   operation: 'workflow.run.start',
-  dependsOn: ['commit', 'decide-findings', 'decide-after-review'],
-  // An undecided answer is the fix round: below the bar, fixing what
-  // was judged a defect costs a commission, and merging it costs more.
+  // After the approval and the push: no commission runs while the operator
+  // has yet to answer, and none on a push that was declined or never went.
+  dependsOn: ['commit', 'review-commit', 'decide-after-review', 'approve-push', 'push'],
   when: {
-    anyOf: [
-      `${AFTER_REVIEW}.afterReview == 'fix_before_merge'`,
-      `${AFTER_REVIEW}.decided == false`,
-    ],
+    allOf: [`${AFTER_REVIEW}.afterReview == 'fix_before_merge'`, PUSH_WENT],
     onMissingRef: 'skip' as const,
   },
   retryability: 'unsafe' as const,
@@ -348,10 +324,10 @@ export const FIX_FINDINGS_TASK = {
   inputBindings: {
     bindingId: { kind: 'run_input' as const, path: 'bindingId' },
     commitSha: { kind: 'task_output' as const, taskId: 'commit', path: 'commit.sha' },
-    selectedJson: {
+    reviewSummary: {
       kind: 'task_output' as const,
-      taskId: 'decide-findings',
-      path: 'selectedJson',
+      taskId: 'review-commit',
+      path: 'reviewSummary',
     },
   },
   context: RUN_START_CONTEXT,
@@ -360,7 +336,7 @@ export const FIX_FINDINGS_TASK = {
     catalogId: COMMISSION_SKILL.catalogId,
     inputs: {
       bindingId: { $bind: 'bindingId' },
-      task: { $concat: [FIX_FINDINGS_BRIEF_LEAD, { $bind: 'selectedJson' }] },
+      task: { $concat: [FIX_FINDINGS_BRIEF_LEAD, { $bind: 'reviewSummary' }] },
       base: { $bind: 'commitSha' },
     },
     wait: 'until_complete',
@@ -368,53 +344,82 @@ export const FIX_FINDINGS_TASK = {
   outputProjection: FIX_COMMISSION_PROJECTION,
 };
 
-export const REPUBLISH_FIX_TASK = {
-  taskId: 'republish-fix',
-  name: 'Publish the fix',
-  goal: "Publish the fix a commission of this run made onto this branch, as a publication of its own — committed, checked, scanned, reviewed and pushed under the folder's push approval as any publication is — once this run's push has gone or was never cleared to, never beside it; and report its pull request as this run's.",
-  failureInstruction:
-    "The publication of the fix did not push: it failed, was cancelled, stopped at its own approval, or its push was declined — how it ended is named above, and that run says why. This run's commit went as the folder's push approval said, and the fix is committed on the branch in the folder where that publication got so far. Read that run, put right what stopped it, and publish the branch as it stands.",
+const REPUBLISH_FAILED =
+  'The publication of the fix did not push: it failed, was cancelled, stopped at its own approval, or its push was declined — how it ended is named above, and that run says why. The fix is committed on the branch in the folder where that publication got so far. Read that run, put right what stopped it, and publish the branch as it stands.';
+
+export const REPUBLISH_AFTER_CHECKS_TASK = {
+  taskId: 'republish-after-checks',
+  name: 'Publish the fix the checks called for',
+  goal: "Publish the commission's fix onto this branch as a publication of its own — committed, checked, scanned, reviewed and pushed under the folder's push approval as any publication is — and report its pull request as this run's.",
+  failureInstruction: REPUBLISH_FAILED,
   type: 'operation' as const,
   operation: 'workflow.run.start',
-  // At most one fix round runs: the checks' only where they failed,
-  // the findings' only where they passed. After the push, since the fix
-  // is appended to this commit and two pushes of one branch must not
-  // race; a declined approval skips the push and everything after it,
-  // this included — the operator said no.
-  dependsOn: ['fix-checks', 'fix-findings', 'push'],
+  // Nothing of this run was scanned, reviewed or pushed — its checks failed —
+  // so the publication of the fix is the only one, and asks as any does.
+  dependsOn: ['fix-checks'],
   when: {
-    anyOf: [
-      'tasks.fix-checks.output.patchRef != null',
-      'tasks.fix-findings.output.patchRef != null',
-    ],
+    expression: 'tasks.fix-checks.output.patchRef != null',
     onMissingRef: 'skip' as const,
   },
   retryability: 'unsafe' as const,
   maxAttempts: 1,
   inputBindings: {
     ...REPUBLISH_PASSED_ON_BINDINGS,
-    checksPatchRef: {
-      kind: 'task_output' as const,
-      taskId: 'fix-checks',
-      path: 'patchRef',
-    },
-    checksBaseSha: { kind: 'task_output' as const, taskId: 'fix-checks', path: 'baseSha' },
-    checksRunId: {
+    patchRef: { kind: 'task_output' as const, taskId: 'fix-checks', path: 'patchRef' },
+    baseSha: { kind: 'task_output' as const, taskId: 'fix-checks', path: 'baseSha' },
+    commissionRunId: {
       kind: 'task_output' as const,
       taskId: 'fix-checks',
       path: 'commissionRunId',
     },
-    findingsPatchRef: {
-      kind: 'task_output' as const,
-      taskId: 'fix-findings',
-      path: 'patchRef',
+  },
+  context: RUN_START_CONTEXT,
+  inputTemplate: {
+    slug: PUBLISH_SKILL.slug,
+    catalogId: PUBLISH_SKILL.catalogId,
+    inputs: {
+      ...REPUBLISH_PASSED_ON_INPUTS,
+      patchRef: { $bind: 'patchRef' },
+      baseSha: { $bind: 'baseSha' },
+      commitMessage: {
+        $concat: [
+          "Make the folder's checks pass\n\nThe fix commission ",
+          { $bind: 'commissionRunId' },
+          " made from what the folder's checks printed when they failed on ",
+          { $bind: 'commitSha' },
+          '.',
+        ],
+      },
     },
-    findingsBaseSha: {
-      kind: 'task_output' as const,
-      taskId: 'fix-findings',
-      path: 'baseSha',
-    },
-    findingsRunId: {
+    wait: 'until_complete',
+  },
+  outputProjection: REPUBLISH_PROJECTION,
+  promoteOutputs: REPUBLISH_PROMOTES,
+};
+
+export const REPUBLISH_AFTER_FINDINGS_TASK = {
+  taskId: 'republish-after-findings',
+  name: 'Publish the fix the findings called for',
+  goal: "Publish the commission's fix onto this branch as a publication of its own, once this run's push has gone — never beside it, and never where it did not go — and report its pull request as this run's.",
+  failureInstruction: REPUBLISH_FAILED,
+  type: 'operation' as const,
+  operation: 'workflow.run.start',
+  // Its own gate on the push, beside the commission's: the fix is appended
+  // to this commit, so it may leave the machine only where this commit did.
+  // A decline — skipped as the harness records it, or recorded as an
+  // answer — leaves the push unrun, and this with it, whatever the posture.
+  dependsOn: ['fix-findings', 'approve-push', 'push'],
+  when: {
+    allOf: ['tasks.fix-findings.output.patchRef != null', PUSH_WENT],
+    onMissingRef: 'skip' as const,
+  },
+  retryability: 'unsafe' as const,
+  maxAttempts: 1,
+  inputBindings: {
+    ...REPUBLISH_PASSED_ON_BINDINGS,
+    patchRef: { kind: 'task_output' as const, taskId: 'fix-findings', path: 'patchRef' },
+    baseSha: { kind: 'task_output' as const, taskId: 'fix-findings', path: 'baseSha' },
+    commissionRunId: {
       kind: 'task_output' as const,
       taskId: 'fix-findings',
       path: 'commissionRunId',
@@ -426,28 +431,15 @@ export const REPUBLISH_FIX_TASK = {
     catalogId: PUBLISH_SKILL.catalogId,
     inputs: {
       ...REPUBLISH_PASSED_ON_INPUTS,
-      patchRef: { $firstOf: [{ $bind: 'checksPatchRef' }, { $bind: 'findingsPatchRef' }] },
-      baseSha: { $firstOf: [{ $bind: 'checksBaseSha' }, { $bind: 'findingsBaseSha' }] },
+      patchRef: { $bind: 'patchRef' },
+      baseSha: { $bind: 'baseSha' },
       commitMessage: {
-        $firstOf: [
-          {
-            $concat: [
-              "Make the folder's checks pass\n\nThe fix commission ",
-              { $bind: 'checksRunId' },
-              " made from what the folder's checks printed when they failed on ",
-              { $bind: 'commitSha' },
-              '.',
-            ],
-          },
-          {
-            $concat: [
-              "Fix the review's findings\n\nThe fix commission ",
-              { $bind: 'findingsRunId' },
-              ' made for the findings of the review of ',
-              { $bind: 'commitSha' },
-              ' judged to name defects in its behaviour.',
-            ],
-          },
+        $concat: [
+          "Fix the review's findings\n\nThe fix commission ",
+          { $bind: 'commissionRunId' },
+          ' made for the findings of the review of ',
+          { $bind: 'commitSha' },
+          '.',
         ],
       },
     },

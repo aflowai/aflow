@@ -9,11 +9,14 @@ import { describe, expect, it } from 'vitest';
 
 import {
   CI_LOG_EXCERPT_LINES,
+  RATE_LIMIT_ATTEMPTS,
   applyOperatorLabels,
   checkFailureCases,
   chooseMinConfidence,
   ciFailureCases,
+  isGhNotFound,
   renderReport,
+  retryDelayMs,
   reviewCases,
   score,
   sweep,
@@ -233,5 +236,32 @@ describe('scoring: agreement among what was decided, abstention apart, errors ap
     });
     expect(md).toContain('1 labelled of 2 (1 by the operator, 0 inferred from what followed)');
     expect(md).toContain('| jev-1.13.0 | 0.80 | 50.0% |');
+  });
+});
+
+describe("reading the records: the stack's rate limit is waited out, a missing pull request passed over", () => {
+  it('waits what the stack asks, in seconds, and otherwise doubles from a second — never past a minute', () => {
+    expect(retryDelayMs(0, '3')).toBe(3000);
+    expect([0, 1, 2, 3].map((attempt) => retryDelayMs(attempt, null))).toEqual([
+      1000, 2000, 4000, 8000,
+    ]);
+    // An HTTP date is not seconds: back off as though none was given.
+    expect(retryDelayMs(1, 'Wed, 21 Oct 2026 07:28:00 GMT')).toBe(2000);
+    expect(retryDelayMs(20, null)).toBe(60_000);
+    expect(retryDelayMs(0, '600')).toBe(60_000);
+    expect(RATE_LIMIT_ATTEMPTS).toBeGreaterThan(1);
+  });
+
+  it('passes over a number gh answers 404 for, and no other failure', () => {
+    expect(isGhNotFound({ stderr: 'gh: Not Found (HTTP 404)', message: 'Command failed' })).toBe(
+      true,
+    );
+    expect(
+      isGhNotFound(
+        new Error('Command failed: gh api repos/a/b/pulls/99\ngh: Not Found (HTTP 404)'),
+      ),
+    ).toBe(true);
+    expect(isGhNotFound({ stderr: 'gh: Bad credentials (HTTP 401)' })).toBe(false);
+    expect(isGhNotFound(undefined)).toBe(false);
   });
 });

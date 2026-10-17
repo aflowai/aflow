@@ -43,33 +43,40 @@ export function resolveDecisionAnswers(
         if (question.type !== 'choice' || !Object.hasOwn(question.options, answer.choice)) {
           throw mismatch(`"${name}" chose "${answer.choice}", which is not one of its options`);
         }
+        const decided = clears(answer.confidence);
         resolved[name] = {
           type: 'choice',
           value: answer.choice,
+          decidedValue: decided ? answer.choice : null,
           confidence: answer.confidence,
           probabilities: answer.probabilities,
-          decided: clears(answer.confidence),
+          decided,
         };
         break;
       }
       case 'score': {
+        const decided = clears(answer.confidence);
         resolved[name] = {
           type: 'score',
           value: answer.score,
+          decidedValue: decided ? answer.score : null,
           confidence: answer.confidence,
           probabilities: answer.probabilities,
-          decided: clears(answer.confidence),
+          decided,
         };
         break;
       }
       case 'yes_no': {
         const confidence = Math.max(answer.probability, 1 - answer.probability);
+        const value = answer.probability >= 0.5;
+        const decided = clears(confidence);
         resolved[name] = {
           type: 'yes_no',
-          value: answer.probability >= 0.5,
+          value,
+          decidedValue: decided ? value : null,
           probability: answer.probability,
           confidence,
-          decided: clears(confidence),
+          decided,
         };
         break;
       }

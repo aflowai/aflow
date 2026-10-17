@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { MAX_INLINE_PAYLOAD_BYTES, parsePayloadRef, type PayloadRef } from '@aflow/schemas';
-import { createMemoryPayloadStore } from '../store.js';
+import {
+  createMemoryPayloadStore,
+  decodeInlinePayloadRef,
+  encodeInlinePayloadRef,
+} from '../store.js';
 
 /**
  * Every backend addresses an object through the one shared ref parser, so the
@@ -78,5 +82,14 @@ describe('an inline payload ref over the cap', () => {
       `inline:${Buffer.from(JSON.stringify({ a: 1 })).toString('base64')}` as PayloadRef;
     await expect(store.retrieve(small)).resolves.toEqual({ a: 1 });
     await expect(store.exists(small)).resolves.toBe(true);
+  });
+
+  it('decodes, without a store, what encoding wrote — and refuses what no store would read', () => {
+    const value = { summary: 'checks failed', tail: 'FAIL tsc' };
+    expect(decodeInlinePayloadRef(encodeInlinePayloadRef(value))).toEqual(value);
+    expect(() => decodeInlinePayloadRef(OVERSIZED)).toThrow(/invalid inline payload_ref/i);
+    expect(() => decodeInlinePayloadRef('inline:@@@not-base64@@@' as PayloadRef)).toThrow(
+      /invalid inline payload_ref/i,
+    );
   });
 });

@@ -201,9 +201,19 @@ const decidedSchema = z
 
 const probabilitiesSchema = z.record(z.string(), z.number().min(0).max(1));
 
+/**
+ * One comparison a route can read: `decidedValue == 'billing'` holds only
+ * for an answer that is billing and cleared the bar, which a predicate that
+ * can join comparisons only one level deep could otherwise say only as an
+ * `allOf` — and so never beside another condition in an `anyOf`.
+ */
+const decidedValueDescription =
+  'The value where the answer cleared the question’s minConfidence; null where it did not.';
+
 export const DecisionChoiceAnswerSchema = z.object({
   type: z.literal('choice'),
   value: z.string().describe('The chosen option label.'),
+  decidedValue: z.string().nullable().describe(decidedValueDescription),
   confidence: z.number().min(0).max(1),
   probabilities: probabilitiesSchema.describe('Option label → probability.'),
   decided: decidedSchema,
@@ -212,6 +222,7 @@ export const DecisionChoiceAnswerSchema = z.object({
 export const DecisionScoreAnswerSchema = z.object({
   type: z.literal('score'),
   value: z.number().describe('The expected level index, lowest level 0; may be fractional.'),
+  decidedValue: z.number().nullable().describe(decidedValueDescription),
   confidence: z.number().min(0).max(1),
   probabilities: probabilitiesSchema.describe('Level index → probability.'),
   decided: decidedSchema,
@@ -220,6 +231,7 @@ export const DecisionScoreAnswerSchema = z.object({
 export const DecisionYesNoAnswerSchema = z.object({
   type: z.literal('yes_no'),
   value: z.boolean().describe('True when the statement is more likely true than false.'),
+  decidedValue: z.boolean().nullable().describe(decidedValueDescription),
   probability: z.number().min(0).max(1).describe('Probability that the statement is true.'),
   confidence: z
     .number()

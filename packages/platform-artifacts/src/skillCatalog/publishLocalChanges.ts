@@ -16,10 +16,10 @@ import {
   CHECKS_FAILED_TASK,
   DECIDE_AFTER_CHECK_TASK,
   DECIDE_AFTER_REVIEW_TASK,
-  DECIDE_FINDINGS_TASK,
   FIX_CHECKS_TASK,
   FIX_FINDINGS_TASK,
-  REPUBLISH_FIX_TASK,
+  REPUBLISH_AFTER_CHECKS_TASK,
+  REPUBLISH_AFTER_FINDINGS_TASK,
 } from './publishLocalChangesRounds.js';
 import { REVIEW_LOCAL_CHANGES } from './reviewLocalChanges.js';
 
@@ -192,7 +192,7 @@ const CHECK_INPUT_TEMPLATE = {
 
 const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'publish-local-changes',
-  version: 25,
+  version: 26,
   name: 'Publish Local Changes',
   tagline:
     'Commit a patch onto a branch of a connected repository, then push it and open the pull request — asking the operator first unless the folder says otherwise.',
@@ -208,7 +208,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
 
 **When it asks before pushing**: the folder's push approval, \`pushApproval\` in the machine block, decides. \`always\` asks before every push; \`never\` pushes without asking. \`unless-unreviewed\`: the run has Local Code Review read everything the push would add and pushes without asking only when it returns \`approve\` — otherwise, a review that did not finish or start included, it waits for the operator. The review is the catalog's as installed; an edited copy is refused, and the run asks. A folder that names no posture is \`${HOST_PUSH_APPROVAL_DEFAULT}\`, the default. Whatever the posture, the run scans every line the push would add, the headers and message of every commit it carries, and the pull request's title and summary for secrets before any of this, and a finding stops it with nothing pushed — which is what lets a review stand in for the operator. Only a range the scan cleared can go without asking: where a file was not read whole, or a line that looks like a secret ends in an \`aflow-scan: allow\` comment, no review runs and the run waits for the operator whatever the posture, \`never\` included. The comment never clears a line — whoever wrote the change could have written it; it turns a stop into a question. Once the run asks, the operator's answer decides: a declined push pushes nothing, whatever the posture.
 
-**Its checks first**: the folder's \`checks\`, shown in the machine block, run in a checkout of the commit before the scan, and nothing is scanned, reviewed or pushed until they pass; the push needs their passing receipt. A folder that declares none runs none. The pull request's own checks remain the proof. A failure is decided on from what they printed — a rerun, a fix commissioned and published again, or a stop, as an unsure decision is. Review findings judged defects may take a fix round after the push. No decision clears or holds a push.
+**Its checks first**: the folder's \`checks\`, shown in the machine block, run in a checkout of the commit before the scan, and nothing is scanned, reviewed or pushed until they pass; the push needs their passing receipt. A folder that declares none runs none. The pull request's own checks remain the proof. Test timeouts alone rerun; another failure is decided on — a rerun, a fix commissioned and republished, or a stop, as an unsure decision is. Review findings may take a fix round after the push. No decision clears or holds a push.
 
 **On an existing branch**: a fix commissioned from a branch (\`base: <branch>\`) is published onto it by naming it as \`branch\` and passing the commission's \`baseSha\` as \`baseSha\`; a branch is reused only that way, and a fresh change takes a fresh branch. A fix to a branch \`main\` has moved past is commissioned with \`mergeFrom: origin/<base>\` as well and published with the sha the commission reported in \`merge.from\` as \`mergeFrom\`: the branch then carries one merge commit holding the fix. A commission that reported a \`merge\` and no \`patchRef\` changed nothing beyond the merge: it is published with \`mergeFrom\` and neither \`patchRef\` nor \`patch\`.
 
@@ -528,15 +528,17 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
         {
           taskId: 'recheck-commit',
           name: "Run the folder's checks again, after they ran out of time",
-          goal: "Run the folder's checks once more on this run's commit, where the decision after their first run found nothing failed but time — which a machine under load does to a passing commit. This run's result is the one the push carries; a failure here fails the publication.",
-          failureInstruction: `${CHECK_FAILED} Their first run was judged to have failed only on time, and this second run failed as well.`,
+          goal: "Run the folder's checks once more on this run's commit, where nothing failed on their first run but tests running out of their time — `testTimeouts` names them — or the decision after it found nothing failed but time: which a machine under load does to a passing commit. This run's result is the one the push carries; a failure here fails the publication.",
+          failureInstruction: `${CHECK_FAILED} Their first run failed only on time, and this second run failed as well.`,
           type: 'operation' as const,
           operation: 'host.commit.check',
           dependsOn: ['commit', 'check-commit', 'decide-after-check'],
+          // `testTimeouts` is present only where nothing else failed: today's
+          // rule, kept whether or not the space has a decision model.
           when: {
-            allOf: [
+            anyOf: [
+              'tasks.check-commit.output.testTimeouts != null',
               `${AFTER_CHECK}.nextStep == 'recheck_on_timeout'`,
-              `${AFTER_CHECK}.decided == true`,
             ],
             onMissingRef: 'skip' as const,
           },
@@ -768,7 +770,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
                   // The review returns at most this many, and a decision asks of at most as many.
                   maxItems: DECISION_MAX_EACH_ITEMS,
                   description:
-                    'Every finding as the review returned it — severity, file, line, claim, evidence, suggestion — which the decision on a fix round reads one at a time; null when the review did not complete.',
+                    'Every finding as the review returned it — severity, file, line, claim, evidence, suggestion — which the decision on a fix round reads; null when the review did not complete.',
                 },
                 outcome: {
                   type: 'string',
@@ -780,8 +782,6 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             },
           },
         },
-
-        DECIDE_FINDINGS_TASK,
 
         DECIDE_AFTER_REVIEW_TASK,
 
@@ -1169,9 +1169,11 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
 
         FIX_CHECKS_TASK,
 
+        REPUBLISH_AFTER_CHECKS_TASK,
+
         FIX_FINDINGS_TASK,
 
-        REPUBLISH_FIX_TASK,
+        REPUBLISH_AFTER_FINDINGS_TASK,
       ],
       stateVariables: [
         {
@@ -1247,7 +1249,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
       priority: 50,
     },
     rationale:
-      "Twenty tasks, the approval between local and published halves. The commit lands in a detached worktree; host.commit.check runs the folder's checks. A failed check goes to ai.decision.decide: a recheck, a fix commissioned from the checks' summary and republished, or workflow.run.fail with that summary, which is also what abstaining does. host.commit.scan reads all a push adds: a finding fails the run, an unread file or allowed line asks. Over a cleared range the posture, and under unless-unreviewed a Local Code Review, decide whether to ask. Its findings are judged one by one, and a choice over those passing commissions a fix and republishes after this push; abstaining fixes. No decision gates the push. The push argv is pinned bar the refspec; the executor re-measures origin/<base>, needs a passed check receipt, and sends an uncleared range only on this run's grant. host.commit.describe composes the PR before the push; an open PR is PATCHed.",
+      "Twenty tasks, the approval between local and published halves. The commit lands in a detached worktree; host.commit.check runs the folder's checks. A check lost to test timeouts alone reruns; any other failure goes to ai.decision.decide: a recheck, a fix commissioned from the checks' summary and republished, or workflow.run.fail with that summary, which is also what abstaining does. host.commit.scan reads all a push adds: a finding fails the run, an unread file or allowed line asks. Over a cleared range the posture, and under unless-unreviewed a Local Code Review, decide whether to ask. Over its findings a choice may commission a fix once this push went, and republish it; abstaining does not. No decision gates the push. The push argv is pinned bar the refspec; the executor re-measures origin/<base>, needs a passed check receipt, and sends an uncleared range only on this run's grant. host.commit.describe composes the PR before the push; an open PR is PATCHed.",
   },
 };
 

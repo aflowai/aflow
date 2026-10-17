@@ -89,13 +89,13 @@ meanwhile is refused with its current state rather than overwritten, and a node 
 2. **Read the review**: `workflow.run.detail` on the child review run gives the verdict and
    every finding with file and line. `approve` means the publication pushed on its own;
    anything else leaves it paused at `approve-push`, as before. Whether the findings take a
-   fix round is the publication's own decision (Plan 315 D22): `decide-findings` judges each
-   finding on whether it names a defect its evidence shows, `decide-after-review` chooses
-   among `fix_before_merge`, `publish_as_is` and `ask` over those that passed, and a fix
-   round — or an answer below the bar — commissions the fix with those findings as the
-   brief and publishes it onto the branch once this run's push has gone (`fix-findings`,
-   `republish-fix`). The run's `afterReview` says which; `ask` is the operator's to
-   answer, and a run with no decision model leaves the round to the conversation.
+   fix round is the publication's own decision (Plan 315 D22): `decide-after-review` chooses
+   among `fix_before_merge`, `publish_as_is` and `ask` over every finding, and only a
+   confident `fix_before_merge` commissions the fix — once the approval was answered and
+   this run's push went — with the review's summary as the brief, then publishes it onto
+   the branch (`fix-findings`, `republish-after-findings`). A decline holds both. The
+   run's `afterReview` says what was decided, null below the bar; `ask`, an unsure
+   answer, or no decision model leaves the round to the conversation, as before.
 3. **The publication runs the folder's checks.** `hb_aflow` declares
    `node scripts/verify-commit.mjs` (`aflow harness checks hb_aflow -- node
 scripts/verify-commit.mjs`), and Local Publish runs it after the commit and before the
@@ -124,10 +124,12 @@ scripts/verify-commit.mjs`), and Local Publish runs it after the commit and befo
    (`scripts/verify-commit.mjs`, not `verify-commit`), in a string literal runs too, counted
    and named in the same line as the tests imports reach. The script names the step
    that failed in its report, and the check's summary carries it. What follows a failure
-   is the publication's own decision (Plan 315 D22), read on `decide-after-check`: a
-   failure of time alone runs the checks once more as `recheck-commit`; a failure the
-   change caused is commissioned as `fix-checks`, briefed with the check's own summary, and
-   published onto the branch as `republish-fix`, whose pull request is the run's — and
+   is the publication's own decision (Plan 315 D22), read on `decide-after-check` — except
+   a run lost only to tests running out of their time, which `recheck-commit` runs again by
+   rule, with or without a decision model: a decided failure of time alone runs them once
+   more the same way; a failure the change caused is commissioned as `fix-checks`, briefed
+   with the check's own summary, and published onto the branch as
+   `republish-after-checks`, whose pull request is the run's — and
    whose not pushing, however it ended, fails the run at that task; and a
    machine that cannot run the checks as declared — or an answer below the bar, or no
    decision model — fails the publication at `checks-failed` with the end of what they

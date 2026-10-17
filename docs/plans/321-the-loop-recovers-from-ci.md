@@ -45,7 +45,7 @@ The four reads are tasks with typed outputs, and the deciding step receives them
 | `list-prs`       | `api.http.call` `listPullRequests`                                       | open pull requests, filtered to the prefix and the marker, minus `hands-off`           |
 | `read-pr`        | per pull request: `getPullRequest`, `listCheckRuns`, `listIssueComments` | head sha, checks, the handoff                                                          |
 | `read-in-flight` | `memory.store.get`, `workflow.run.list`                                  | the lease and the non-terminal runs, paused included, whose branch input is the branch |
-| `decide`         | a pure rule; `ai.generate_json` for a log excerpt only                   | `fix \| wait \| abandon \| leave`, with the reason                                     |
+| `decide`         | `when` rules only                                                        | `fix \| wait \| abandon \| leave`, with the reason; `fix` where no rule names another  |
 | `read-failure`   | `listWorkflowRunJobs`, `getJobLogs`                                      | failing jobs and bounded log excerpts, as a payload                                    |
 | `lease`          | `memory.store.put`                                                       | the lease, written before the commission                                               |
 | `fix`            | `host.harness.run`                                                       | `base: <branch>`, `mergeFrom: origin/<base>`, the assembled task                       |
@@ -54,7 +54,7 @@ The four reads are tasks with typed outputs, and the deciding step receives them
 | `release`        | `memory.store.delete`                                                    | the lease, on every terminal path                                                      |
 | `renew`          | `agent.schedule.create`                                                  | the next schedule when this one nears `maxFirings`                                     |
 
-`decide` is a rule. The four reads of D3 decide `fix`, `wait`, `abandon` and `leave` without a model; a model, `ai.generate_json`, is reached for only to read a log excerpt a rule cannot.
+`decide` is a rule. The four reads of D3 decide `fix`, `wait`, `abandon` and `leave` without a model, and a failure no rule names is `fix`: a commission briefed with the log excerpt, which reads what a rule cannot. No model chooses the remedy. Measured on this stream's own CI failures (Plan 316 §7), Jev, gpt-6-luna and claude-opus-5-5 each named the remedy actually taken — re-run, code fix, resolutions bump or merge round — for 1 of 5 (20%), so the remedy is not a decision task in P1; it is measured again once the labelled set holds enough failures to say more.
 
 ### 3.2 What is recorded
 
@@ -76,7 +76,7 @@ Every pass leaves the handoff current and one run in the ledger. A `fix` also le
 3. **The size of a failing job's log.** _Commands:_ `gh api repos/aflowai/aflow/actions/runs/37460214524/attempts/1/jobs` to name the failing jobs, then `gh api repos/aflowai/aflow/actions/jobs/<job_id>/logs` — GitHub's `GET /repos/{owner}/{repo}/actions/jobs/{job_id}/logs`, which answers with a redirect to a signed URL — for CI run 37460214524 on `aflowai/aflow` (PR #94's first run). _Answer:_ the Test job (112257622723) is 5,955 lines, 923,330 bytes; Vitest's "Failed Tests" block begins at line 5,676, so the last 280 lines carry the failure and its assertion. The Dependency audit job (112257622741) is 421 lines, 32,310 bytes; the advisories first appear at line 232 and the final attempt's block begins at line 387, so the last 35 lines carry every advisory once. An excerpt bounded at the last 300 lines, under 60 KB, carried the failure for both job kinds observed; a bound needs no endpoint binding to hold, and the D5 endpoints are P1's.
 4. **Whether the attention list can name a branch.** _Command:_ `workflow.run.list_attention` (pending and consumed items). _Answer:_ no. Items carry `id`, `kind`, `relatedRunId`, `relatedResource` (`workflow_run:<id>`), `payload.terminalStatus`, `priority`, `createdAt`, `consumedAt`, `own` — no branch, no PR, no repo field; learning what a run produced costs a follow-up run-detail read per item.
 
-**P1 — One pass, by hand.** The skill with `read-*`, `decide`, `handoff` and `release`, fired manually against a pull request with a planted failing test; `fix` and `publish` land it. _Exit:_ the planted failure is fixed and pushed within one pass without a hand; a second pass on the same check run is `wait`.
+**P1 — One pass, by hand.** The skill with `read-*`, `decide` (on `when` rules, a fix commission the default), `handoff` and `release`, fired manually against a pull request with a planted failing test; `fix` and `publish` land it. _Exit:_ the planted failure is fixed and pushed within one pass without a hand; a second pass on the same check run is `wait`.
 
 **P2 — Cold and concurrent.** The schedule, the lease, `hands-off`, the budget and `abandon`. _Exit:_ two firings overlapping on one pull request produce one fix; a branch with a paused publication is `wait`; a labelled pull request is untouched; the fourth failure on one pull request ends in a comment and an Action Center item.
 

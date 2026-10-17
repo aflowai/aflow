@@ -27,6 +27,42 @@ export const CI_REMEDY_QUESTION = {
   },
 };
 
+/**
+ * The per-finding judgement Publish Local Changes asked before its first
+ * measurement took it out (Plan 316 §7): no decider reached the target
+ * without abstaining on most findings. Kept here, where it is still measured.
+ */
+export const FINDING_QUESTION = {
+  type: 'yes_no',
+  instructions:
+    "The finding names a defect in the change's behaviour, established by evidence shown.",
+  criteria: {
+    true: 'The claim is about what the changed code does — a wrong result, a crash, a race, a leak, a hole, a broken contract or a test that does not test what it says — and the evidence quoted shows it in this change.',
+    false:
+      'The claim is a preference, a name, a style or a wording; or a defect the evidence does not show; or about code this change did not touch.',
+  },
+};
+
+/** How many times a read the stack rate-limited is tried before the collection stops. */
+export const RATE_LIMIT_ATTEMPTS = 6;
+const RATE_LIMIT_MAX_DELAY_MS = 60_000;
+
+/**
+ * How long to wait before trying a rate-limited read again: what the stack's
+ * `Retry-After` asks, where it asks in seconds, else doubling from a second.
+ */
+export function retryDelayMs(attempt, retryAfter) {
+  const asked = retryAfter === null || retryAfter === undefined ? Number.NaN : Number(retryAfter);
+  const ms = Number.isFinite(asked) && asked >= 0 ? asked * 1000 : 1000 * 2 ** attempt;
+  return Math.min(ms, RATE_LIMIT_MAX_DELAY_MS);
+}
+
+/** Whether `gh` failed because what it was asked for does not exist — a PR number with no pull request. */
+export function isGhNotFound(error) {
+  const text = `${String(error?.stderr ?? '')}\n${String(error?.message ?? '')}`;
+  return text.includes('HTTP 404');
+}
+
 /** How many lines of a failing job's log a case carries: Plan 321 §P0 measured 300 as enough. */
 export const CI_LOG_EXCERPT_LINES = 300;
 
