@@ -589,7 +589,7 @@ describe('host.commit.check — a run lost only to tests running out of time', (
     );
   }
 
-  it('names the tests and the commit a publication runs the checks on again, and clears nothing', async () => {
+  it('names the tests a publication runs the checks again for, and clears nothing', async () => {
     const world = await fixture({
       branchPrefix: 'aflow/',
       checks: reportingTimeouts("console.log('FAIL tests'); process.exit(1);"),
@@ -598,7 +598,6 @@ describe('host.commit.check — a run lost only to tests running out of time', (
     expect(output.passed).toBe(false);
     expect(output.clearedSha).toBeUndefined();
     expect(output.testTimeouts).toEqual(TIMED_OUT);
-    expect(output.clearedOrRetriableSha).toBe(world.sha);
     expect(output.summary).toContain('nothing failed but 2 tests running out of time');
     expect(output.summary).toContain(TIMED_OUT.join('; '));
     expect(output.summary).toContain('a publication runs the checks once more');
@@ -612,7 +611,6 @@ describe('host.commit.check — a run lost only to tests running out of time', (
     });
     const passed = HostCommitCheckOutputSchema.parse((await check(passing)).captured.output);
     expect(passed.testTimeouts).toBeUndefined();
-    expect(passed.clearedOrRetriableSha).toBe(passing.sha);
     expect(passed.clearedSha).toBe(passing.sha);
 
     const stopped = await fixture({
@@ -623,14 +621,12 @@ describe('host.commit.check — a run lost only to tests running out of time', (
     const timedOut = HostCommitCheckOutputSchema.parse((await check(stopped)).captured.output);
     expect(timedOut).toMatchObject({ passed: false, timedOut: true });
     expect(timedOut.testTimeouts).toBeUndefined();
-    expect(timedOut.clearedOrRetriableSha).toBeUndefined();
   });
 
   it('is not claimed where the checks reported none', async () => {
     const world = await fixture({ branchPrefix: 'aflow/', checks: FAILING });
     const output = HostCommitCheckOutputSchema.parse((await check(world)).captured.output);
     expect(output.testTimeouts).toBeUndefined();
-    expect(output.clearedOrRetriableSha).toBeUndefined();
   });
 });
 

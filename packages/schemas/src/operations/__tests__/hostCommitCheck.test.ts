@@ -89,19 +89,17 @@ describe('what host.commit.check answers', () => {
     expect(failed.clearedSha).toBeUndefined();
   });
 
-  it('names the tests that ran out of time, up to its cap, beside the commit a second run takes', () => {
+  it('names the tests that ran out of time, up to its cap', () => {
     const lost = {
       passed: false,
       exitCode: 1,
       durationMs: 1,
       tail: 'FAIL\n',
       summary: 'failed on time',
-      clearedOrRetriableSha: SHA,
     };
     const names = Array.from({ length: HOST_CHECK_TEST_TIMEOUTS_MAX }, (_, i) => `t${String(i)}`);
     expect(HostCommitCheckOutputSchema.parse({ ...lost, testTimeouts: names })).toMatchObject({
       testTimeouts: names,
-      clearedOrRetriableSha: SHA,
     });
     expect(
       HostCommitCheckOutputSchema.safeParse({ ...lost, testTimeouts: [...names, 'one more'] })

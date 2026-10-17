@@ -17,6 +17,13 @@ import type { z } from 'zod';
  * (Plan 316 §7); a failed check fails the run.
  */
 export const AFTER_CHECK_MIN_CONFIDENCE = 0.8;
+/**
+ * Measured on Jev alone. The step asks whichever decision model the space
+ * resolves, so another decider meets this bar unmeasured until the
+ * measurement asks it the same cases — the same agreement took the
+ * critique-then-verdict baselines to 0.90 and 0.70 — and the bar moves only
+ * on that.
+ */
 export const AFTER_REVIEW_MIN_CONFIDENCE = 0.8;
 
 export const AFTER_CHECK_ROUTES = [

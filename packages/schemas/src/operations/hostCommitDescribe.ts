@@ -4,6 +4,7 @@
  */
 import { z } from 'zod';
 
+import { MAX_PARENT_INPUTS_SERIALIZED_BYTES } from '../runtime/parentInstructions.js';
 import { HostBindingRef, HostCommitRangeSchema, HostCommitShaSchema } from './host.js';
 
 /** GitHub's own limit on a pull request's body; a longer one is refused with a 422. */
@@ -140,6 +141,85 @@ export const HostCommitDescribeInputSchema = z.object({
 });
 export type HostCommitDescribeInput = z.infer<typeof HostCommitDescribeInputSchema>;
 
+/**
+ * The share of a publication's run inputs the findings it hands on may take,
+ * serialised: a later publication of the branch takes them back as its
+ * `findings`, under the cap on its inputs together, and the other half is left
+ * to everything else it is started with — the change, the branch, the gaps.
+ */
+export const HANDED_ON_FINDINGS_MAX_BYTES = MAX_PARENT_INPUTS_SERIALIZED_BYTES / 2;
+
+/** The most findings a publication hands on: the most severe of them, in the review's order. */
+export const HANDED_ON_FINDINGS_MAX_COUNT = 12;
+
+/**
+ * The most one handed-on finding may come to, serialised: the share divided
+ * among the most findings there can be, less the array's brackets and the
+ * comma between each — so the list fits its share whatever its findings say.
+ */
+export const HANDED_ON_FINDING_MAX_BYTES =
+  Math.floor((HANDED_ON_FINDINGS_MAX_BYTES - 2) / HANDED_ON_FINDINGS_MAX_COUNT) - 1;
+
+const SEVERITY_RANK: Record<PullRequestFinding['severity'], number> = {
+  blocker: 0,
+  major: 1,
+  minor: 2,
+  nit: 3,
+};
+
+const TRUNCATED = '…';
+const utf8 = new TextEncoder();
+
+/** What `value` comes to as the run-input cap measures it: UTF-8 bytes of its JSON. */
+function serialisedBytes(value: unknown): number {
+  return utf8.encode(JSON.stringify(value)).length;
+}
+
+/** `text` cut to `length` code units, never through the middle of a surrogate pair. */
+function cut(text: string, length: number): string {
+  const kept = text.slice(0, length);
+  const last = kept.charCodeAt(kept.length - 1);
+  return last >= 0xd800 && last <= 0xdbff ? kept.slice(0, -1) : kept;
+}
+
+/**
+ * `finding` with `field` cut, marked with an ellipsis, as far as it must be for
+ * the finding to fit its bytes. Measured, not counted in characters: one
+ * character can serialise to six bytes, as an escaped control character does.
+ */
+function shortened(finding: PullRequestFinding, field: 'claim' | 'file'): PullRequestFinding {
+  let fits = 0;
+  let over = finding[field].length;
+  while (fits < over) {
+    const length = Math.ceil((fits + over) / 2);
+    const candidate = { ...finding, [field]: `${cut(finding[field], length)}${TRUNCATED}` };
+    if (serialisedBytes(candidate) <= HANDED_ON_FINDING_MAX_BYTES) fits = length;
+    else over = length - 1;
+  }
+  return { ...finding, [field]: `${cut(finding[field], fits)}${TRUNCATED}` };
+}
+
+/** `finding` as it is where it fits its bytes; its claim cut first, then its file, where not. */
+function fitted(finding: PullRequestFinding): PullRequestFinding {
+  if (serialisedBytes(finding) <= HANDED_ON_FINDING_MAX_BYTES) return finding;
+  const claimCut = shortened(finding, 'claim');
+  return serialisedBytes(claimCut) <= HANDED_ON_FINDING_MAX_BYTES
+    ? claimCut
+    : shortened(claimCut, 'file');
+}
+
+/**
+ * The findings a publication hands on, held within their share of a later
+ * publication's inputs: the most severe first, as many as the count allows,
+ * each cut to its bytes. The pull request's own text keeps every finding whole.
+ */
+function handedOn(findings: readonly PullRequestFinding[]): PullRequestFinding[] {
+  return [...findings]
+    .sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity])
+    .slice(0, HANDED_ON_FINDINGS_MAX_COUNT)
+    .map(fitted);
+}
+
 /** What a publication hands on of its review: the findings still open, and the decision on this round's. */
 export interface PullRequestReviewRecord {
   findings: PullRequestFinding[];
@@ -152,8 +232,9 @@ export interface PullRequestReviewRecord {
  * findings replace the earlier rounds' — it read the whole range, so it is
  * the latest word on every one of them, and nothing has fixed its findings
  * yet. Where no review finished, the open findings it was passed go on as
- * they are. Either way the list never outgrows one review's, so a later
- * publication taking it back as `findings` does not carry every round before.
+ * they are. Either way the list never outgrows one review's, and it is held
+ * within its share of a later publication's inputs (`handedOn`), so the
+ * publication taking it back as `findings` is never refused for its size.
  *
  * The decision on them is recorded exactly where this review returned
  * findings — the decision is asked only then — and an answer that is missing
@@ -162,12 +243,13 @@ export interface PullRequestReviewRecord {
 export function pullRequestReviewRecord(input: HostCommitDescribeInput): PullRequestReviewRecord {
   const reviewFindings = input.review?.findings;
   if (reviewFindings === null || reviewFindings === undefined) {
-    return { findings: (input.findings ?? []).filter((finding) => finding.state === 'open') };
+    return {
+      findings: handedOn((input.findings ?? []).filter((finding) => finding.state === 'open')),
+    };
   }
-  const findings: PullRequestFinding[] = reviewFindings.map((finding) => ({
-    ...finding,
-    state: 'open' as const,
-  }));
+  const findings = handedOn(
+    reviewFindings.map((finding) => ({ ...finding, state: 'open' as const })),
+  );
   if (findings.length === 0) return { findings };
   return { findings, afterReview: input.afterReview ?? AFTER_REVIEW_UNDECIDED };
 }
@@ -204,7 +286,9 @@ export const HostCommitDescribeOutputSchema = z.object({
     "The open findings of the latest review: this publication's own review's where it " +
       "finished, replacing the earlier rounds'; otherwise the open ones it was passed. What a " +
       'later publication of the branch takes as `findings`, with those its fix closed marked ' +
-      '`closed`.',
+      `\`closed\`. At most ${String(HANDED_ON_FINDINGS_MAX_COUNT)}, the most severe first, each cut ` +
+      `to fit, so the list stays within ${String(HANDED_ON_FINDINGS_MAX_BYTES)} bytes of that ` +
+      "publication's inputs; the pull request's text keeps every finding whole.",
   ),
   afterReview: AfterReviewSchema.optional().describe(
     "The decision on this publication's review findings, as the body records it; absent " +

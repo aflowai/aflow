@@ -132,15 +132,8 @@ export const HostCommitCheckOutputSchema = z.object({
     .describe(
       'The step the checks name as the one that failed — a guard, a type check, a test run — ' +
         'as they reported it in the file `AFLOW_CHECK_REPORT` names. Present only where the ' +
-        'checks did not pass and said which step it was; a fix is briefed with it.',
-    ),
-  clearedOrRetriableSha: z
-    .string()
-    .optional()
-    .describe(
-      'The commit as a full sha, present where the checks passed, the folder declares none, ' +
-        'or only `testTimeouts` failed them. A publication’s first run of the checks reads ' +
-        'this, so every other failure fails it and a run lost to load alone is run once more.',
+        'checks did not pass and said which step it was. The summary names it, so whoever reads ' +
+        'the failure knows which step to run again.',
     ),
   receipt: HostCheckReceiptSchema.optional().describe(
     'What a push of the commit must carry as `check.receipt`, present wherever the checks ran, ' +

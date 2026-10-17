@@ -305,7 +305,6 @@ export function skippedCheck(bindingId: string, sha: string): HostCommitCheckOut
       'was not checked on this machine. The operator declares them on the machine holding ' +
       `the folder: \`aflow harness checks ${bindingId} -- <program> [args...]\`.`,
     clearedSha: sha,
-    clearedOrRetriableSha: sha,
   };
 }
 
@@ -377,6 +376,5 @@ export function checkOutcome(params: {
       ? { failingGuard: params.run.failingGuard }
       : {}),
     ...(passed ? { clearedSha: params.sha } : {}),
-    ...(passed || testTimeouts.length > 0 ? { clearedOrRetriableSha: params.sha } : {}),
   };
 }

@@ -906,7 +906,6 @@ function checkResult(check: Check): Record<string, unknown> {
         tail: '',
         summary: '`hb_app` declares no checks, so none ran.',
         clearedSha: HEAD,
-        clearedOrRetriableSha: HEAD,
       });
     case 'passed':
       return HostCommitCheckOutputSchema.parse({
@@ -918,7 +917,6 @@ function checkResult(check: Check): Record<string, unknown> {
         tail: 'ok   prettier (3 files) (1.2 s)\n',
         summary: '`node scripts/verify-commit.mjs` passed.',
         clearedSha: HEAD,
-        clearedOrRetriableSha: HEAD,
         receipt: CHECK_RECEIPT.passed,
       });
     case 'failed':
@@ -943,7 +941,6 @@ function checkResult(check: Check): Record<string, unknown> {
         summary:
           '`node scripts/verify-commit.mjs` exited 1, and nothing failed but 1 test running out of time.',
         testTimeouts: [TIMED_OUT_TEST],
-        clearedOrRetriableSha: HEAD,
         receipt: CHECK_RECEIPT.failed,
       });
     case 'timed-out':
@@ -2596,7 +2593,7 @@ describe('Publish Local Changes — a failed check stops the run, and no decisio
     expect(failure).not.toBe(taskOrThrow('check-commit').failureInstruction);
   });
 
-  it('projects what the stop, the rerun, the push and the composition read — no field only a decision read, and no clearedOrRetriableSha', () => {
+  it('projects what the stop, the rerun, the push and the composition read, and nothing else', () => {
     expect(Object.keys(taskOrThrow('check-commit').outputProjection ?? {}).sort()).toEqual([
       'passed',
       'receipt',
@@ -2773,8 +2770,9 @@ describe("Publish Local Changes — the decision on a review's findings is recor
     const described = HostCommitDescribeInputSchema.parse(outcome.inputs.get('describe-pr'));
     expect(described.review?.findings?.map((f) => f.claim)).toEqual(FINDINGS.map((f) => f.claim));
     const record = outcome.outputs.get('describe-pr')?.['findings'];
+    // The most severe first, so a bounded list keeps what matters most.
     expect(PullRequestFindingsSchema.parse(record)).toEqual([
-      ...FINDINGS.map(({ severity, file, line, claim }) => ({
+      ...[RACE, LEAK, NAME].map(({ severity, file, line, claim }) => ({
         severity,
         file,
         ...(line === undefined ? {} : { line }),

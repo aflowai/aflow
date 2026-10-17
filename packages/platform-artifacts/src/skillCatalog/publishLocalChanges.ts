@@ -846,6 +846,10 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             },
             questions: { [AFTER_REVIEW_QUESTION_NAME]: AFTER_REVIEW_QUESTION },
           },
+          // No model is named: the space's decision model answers. The 0.80 bar
+          // was measured on Jev alone (Plan 316 §7), and holds for another
+          // decider only once that decider is measured on the same cases
+          // (`yarn decisions:measure-loop`); the bar moves only on such a measurement.
           // `afterReview` is the answer that cleared the bar, null where none
           // did; `chosen` is what it would have chosen, and with `confidence`
           // null where the model declined the question — a refusal is an

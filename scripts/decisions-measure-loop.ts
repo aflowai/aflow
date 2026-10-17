@@ -18,21 +18,23 @@
  * operator's own (`{ "<caseId>": "<label>" }`), which overrides an inference
  * and supplies what none could.
  *
- * `measure` asks every labelled case of three deciders, as the skill asks it:
- * Jev through the decision operation's client call, and a critique-then-verdict
- * JSON call on gpt-6-luna and on claude-opus-5-5, the agent baseline. Keys are
- * read from TYPESAFE_API_KEY, OPENAI_API_KEY and ANTHROPIC_API_KEY; a decider
- * without one is skipped and the report says so. It writes every answer to
- * `results.json` and the tables Plan 316 §7 carries to `report.md`: agreement
- * with the operator's decision, abstention at the bar chosen for each decider
- * (the lowest that reaches `--target` agreement), latency and cost per decision,
- * and Jev's whole sweep.
+ * `measure` asks every labelled case, as the skill asks it, of every decision
+ * model the catalog offers — each through the client call `ai.decision.decide`
+ * makes, so a decider a space can resolve the step to is measured on the same
+ * cases as the one its bar was set on — and of a critique-then-verdict JSON
+ * call on gpt-6-luna and on claude-opus-5-5, the agent baselines. Keys are read
+ * from TYPESAFE_API_KEY, OPENAI_API_KEY and ANTHROPIC_API_KEY; a decider without
+ * its provider's key is skipped and the report says so. It writes every answer
+ * to `results.json` and the tables Plan 316 §7 carries to `report.md`:
+ * agreement with the operator's decision, abstention at the bar chosen for each
+ * decider (the lowest that reaches `--target` agreement), latency and cost per
+ * decision, and every decision model's whole sweep.
  */
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
-import { createAIClient, type AIClient } from '@aflow/ai-client';
+import { createAIClient, createDefaultModelCatalog, type AIClient } from '@aflow/ai-client';
 import {
   AFTER_CHECK_QUESTION,
   AFTER_CHECK_QUESTION_NAME,
@@ -58,7 +60,21 @@ import {
   sweep,
 } from './loop-decision-set.mjs';
 
-const JEV = 'jev-1.13.0';
+/** The key each provider a decider runs on is read from. */
+const PROVIDER_KEYS: Readonly<Record<string, string>> = {
+  typesafe: 'TYPESAFE_API_KEY',
+  openai: 'OPENAI_API_KEY',
+  anthropic: 'ANTHROPIC_API_KEY',
+};
+
+/**
+ * Every decision model in the catalog, as the step's own resolution reads it:
+ * whichever of these a space resolves `ai.decision.decide` to is measured.
+ */
+const DECISION_MODELS = createDefaultModelCatalog()
+  .listModels()
+  .filter((m) => m.capabilities.decision === true && m.decision !== undefined);
+
 const LUNA = 'gpt-6-luna';
 const OPUS = 'claude-opus-5-5';
 const OUT_DIR = '.debug/decisions';
@@ -358,12 +374,12 @@ function stateOf(c: Case): unknown {
   return c.kind === 'after_check' ? { summary: c.state } : c.state;
 }
 
-async function askJev(client: AIClient, c: Case): Promise<Result> {
+async function askDecisionModel(client: AIClient, model: string, c: Case): Promise<Result> {
   const { name, question } = QUESTIONS[c.kind];
   const started = Date.now();
   const response = await client.decide({
     ...USAGE,
-    model: JEV,
+    model,
     state: stateOf(c) as string,
     questions: { [name]: withoutBar(question) },
   });
@@ -456,7 +472,11 @@ async function measure(): Promise<void> {
     },
   });
   const deciders: Array<{ name: string; key: string; ask: (c: Case) => Promise<Result> }> = [
-    { name: JEV, key: 'TYPESAFE_API_KEY', ask: (c) => askJev(client, c) },
+    ...DECISION_MODELS.map((m) => ({
+      name: m.id,
+      key: PROVIDER_KEYS[m.provider] ?? `a key for ${m.provider}`,
+      ask: (c: Case) => askDecisionModel(client, m.id, c),
+    })),
     {
       name: `${LUNA} (critique, then verdict)`,
       key: 'OPENAI_API_KEY',
@@ -492,15 +512,17 @@ async function measure(): Promise<void> {
   const generatedAt = new Date().toISOString();
   let report = renderReport({ generatedAt, kinds });
   report += `\nEach decider's bar is the lowest that reaches ${String(target * 100)}% agreement among what it decides; where none does, ${String(FALLBACK_BAR)}.\n`;
+  // A bar is read off a decision model's sweep, so each one measured prints its own.
+  const decisionModelIds = new Set(DECISION_MODELS.map((m) => m.id));
   for (const kind of kinds) {
-    const jev = kind.rows.find((r) => r.decider === JEV);
-    if (jev === undefined) continue;
-    report += `\n${JEV} sweep — ${kind.title}: ${jev.sweep
-      .map(
-        (s: { minConfidence: number; agreement: number | null; abstention: number | null }) =>
-          `${s.minConfidence.toFixed(2)} → ${s.agreement === null ? '—' : (s.agreement * 100).toFixed(1)}% / ${s.abstention === null ? '—' : (s.abstention * 100).toFixed(1)}% abstain`,
-      )
-      .join('; ')}\n`;
+    for (const row of kind.rows.filter((r) => decisionModelIds.has(r.decider))) {
+      report += `\n${row.decider} sweep — ${kind.title}: ${row.sweep
+        .map(
+          (s: { minConfidence: number; agreement: number | null; abstention: number | null }) =>
+            `${s.minConfidence.toFixed(2)} → ${s.agreement === null ? '—' : (s.agreement * 100).toFixed(1)}% / ${s.abstention === null ? '—' : (s.abstention * 100).toFixed(1)}% abstain`,
+        )
+        .join('; ')}\n`;
+    }
   }
   writeFileSync(
     join(OUT_DIR, 'results.json'),
