@@ -204,6 +204,20 @@ describe('a repository whose store borrows from others, connected under a denied
     expect(await borrowedReads(chained)).toEqual([objectsOf(shared), objectsOf(top)]);
   });
 
+  it('reads a quoted entry holding a character outside the BMP, written out or escaped', async () => {
+    // U+1D11E is two UTF-16 code units and four bytes of UTF-8; git writes it
+    // either as itself or as its bytes escaped in octal.
+    const clef = join(home, 'projects', 'clef-\u{1D11E}');
+    await run('git', ['clone', '-q', '--shared', top, clef]);
+    for (const quoted of [
+      objectsOf(clef),
+      objectsOf(clef).replace('\u{1D11E}', '\\360\\235\\204\\236'),
+    ]) {
+      await writeFile(join(objectsOf(chained), 'info', 'alternates'), `"${quoted}"\n`);
+      expect(await borrowedReads(chained)).toEqual([objectsOf(clef), objectsOf(top)]);
+    }
+  });
+
   it('is refused, naming the remedy, when its chain is deeper than a clone of it reads', async () => {
     // A clone of the folder reads five stores of alternates below the folder's
     // own; `shared` is one hop from `top`, and each level here adds one.

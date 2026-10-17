@@ -21,12 +21,15 @@ const C_ESCAPES: Readonly<Record<string, number>> = {
 function unquotedC(entry: string): string | undefined {
   const bytes: number[] = [];
   for (let i = 1; i < entry.length; i += 1) {
-    const char = entry.charAt(i);
+    // By code point: a character outside the BMP is two UTF-16 units, and
+    // either alone encodes as U+FFFD rather than the bytes git wrote.
+    const char = String.fromCodePoint(entry.codePointAt(i) ?? 0);
     if (char === '"') {
       return i === entry.length - 1 ? Buffer.from(bytes).toString('utf8') : undefined;
     }
     if (char !== '\\') {
       bytes.push(...Buffer.from(char, 'utf8'));
+      i += char.length - 1;
       continue;
     }
     const octal = /^[0-3][0-7]{2}/.exec(entry.slice(i + 1));
