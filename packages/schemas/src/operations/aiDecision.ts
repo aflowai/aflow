@@ -137,10 +137,10 @@ export function decisionEachQuestionName(index: number): string {
 export const DecisionEachSchema = z
   .object({
     items: z
-      .array(z.unknown())
+      .array(DecisionEntrySchema)
       .max(DECISION_MAX_EACH_ITEMS)
       .describe(
-        'The list the question is asked of, one item at a time — the findings of a review, the lines of an order. Each item is read beside the state. An empty list selects nothing, and with no named questions beside it nothing is asked.',
+        "The list the question is asked of, one item at a time — the findings of a review, the lines of an order — each text, a JSON object or a JSON array, as a question's instructions are, since it is read as part of them beside the state. An empty list selects nothing, and with no named questions beside it nothing is asked.",
       ),
     question: DecisionYesNoQuestionSchema.describe(
       'The yes_no asked of every item, stated about one item. Its minConfidence holds for each answer.',

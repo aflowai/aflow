@@ -19,6 +19,6 @@ export const WorkflowRunFailInputSchema = z.object({
 });
 export type WorkflowRunFailInput = z.infer<typeof WorkflowRunFailInputSchema>;
 
-/** Never produced: the step always fails, with  as its message. */
+/** Never produced: the step always fails, with `reason` as its message. */
 export const WorkflowRunFailOutputSchema = z.object({}).strict();
 export type WorkflowRunFailOutput = z.infer<typeof WorkflowRunFailOutputSchema>;

@@ -8,10 +8,15 @@ import type { z } from 'zod';
  * of decision quality on the loop's own history (`yarn decisions:measure-loop`,
  * Plan 316 §7) asks exactly what the skill asks.
  *
- * The thresholds are where each decision abstains and the run does what it did
- * before it decided anything. Plan 316 §7 records the measurement they are to
- * be read against; until it has run on the loop's records they are the plan's
- * provisional values, set high so an unsure answer falls to the old path.
+ * Each threshold is where its decision abstains, and an abstention is not the
+ * same on every path:
+ * - after a failed check, the run fails as a failed check always did;
+ * - a finding judged below its bar is left out of a fix round's brief;
+ * - after a review, the fix round is taken — fixing what was judged a defect
+ *   costs a commission, and merging it unfixed costs more — so a high bar here
+ *   means more fix rounds, not fewer.
+ * They are provisional until Plan 316 §7's measurement has run on the loop's
+ * own records; §7 says what it is waiting on.
  */
 export const AFTER_CHECK_MIN_CONFIDENCE = 0.8;
 export const FINDING_MIN_CONFIDENCE = 0.8;

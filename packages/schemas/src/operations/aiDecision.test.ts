@@ -73,6 +73,24 @@ describe('AiDecideInputSchema', () => {
     }
   });
 
+  it('refuses an item that cannot be read as instructions: a number, a boolean or null', () => {
+    const question = { type: 'yes_no', instructions: 'Defect' };
+    for (const item of [3, true, null]) {
+      const result = AiDecideInputSchema.safeParse({
+        state: 'x',
+        each: { items: [item], question },
+      });
+      expect(result.success, String(item)).toBe(false);
+    }
+    for (const item of ['a claim', { claim: 'a' }, ['a', 'b']]) {
+      const result = AiDecideInputSchema.safeParse({
+        state: 'x',
+        each: { items: [item], question },
+      });
+      expect(result.success, JSON.stringify(item)).toBe(true);
+    }
+  });
+
   it('takes an empty list, which a step reads only when the list it binds came back empty', () => {
     const each = { items: [], question: { type: 'yes_no', instructions: 'Defect' } };
     expect(AiDecideInputSchema.safeParse({ state: 'x', each }).success).toBe(true);

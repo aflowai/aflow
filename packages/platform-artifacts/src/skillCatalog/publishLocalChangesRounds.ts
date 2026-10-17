@@ -62,10 +62,21 @@ const FIX_COMMISSION_PROJECTION = {
   commissionRunId: { path: 'runId', onMissing: 'error' as const },
 };
 
-/** What the publication of a fix ends with, promoted as this run's pull request. */
+/**
+ * What the publication of a fix ends with, promoted as this run's pull request.
+ * Its pull request is in its output only where it completed and pushed: one
+ * that failed, was cancelled, stopped at its approval or was declined carries
+ * none, which fails this task — never a null promoted over the pull request
+ * this run opened — and the failure names how that run ended.
+ */
 const REPUBLISH_PROJECTION = {
-  prUrl: { path: 'result.output.prUrl', onMissing: 'null' as const },
-  prNumber: { path: 'result.output.prNumber', onMissing: 'null' as const },
+  prUrl: { path: 'result.output.prUrl', onMissing: 'error' as const },
+  // A number, not merely present: a null the run promoted is no pull request.
+  prNumber: {
+    path: 'result.output.prNumber',
+    parse: ['number' as const],
+    onMissing: 'error' as const,
+  },
   outcome: { path: 'outcome', onMissing: 'error' as const },
   republishRunId: { path: 'runId', onMissing: 'error' as const },
 };
@@ -361,6 +372,8 @@ export const REPUBLISH_FIX_TASK = {
   taskId: 'republish-fix',
   name: 'Publish the fix',
   goal: "Publish the fix a commission of this run made onto this branch, as a publication of its own — committed, checked, scanned, reviewed and pushed under the folder's push approval as any publication is — once this run's push has gone or was never cleared to, never beside it; and report its pull request as this run's.",
+  failureInstruction:
+    "The publication of the fix did not push: it failed, was cancelled, stopped at its own approval, or its push was declined — how it ended is named above, and that run says why. This run's commit went as the folder's push approval said, and the fix is committed on the branch in the folder where that publication got so far. Read that run, put right what stopped it, and publish the branch as it stands.",
   type: 'operation' as const,
   operation: 'workflow.run.start',
   // At most one fix round runs: the checks' only where they failed,

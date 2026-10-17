@@ -115,7 +115,13 @@ The `classifier` rails execute through the operation when a rail opts in. Exit: 
 
 ## 7. Measurement — the loop's own decisions
 
-**Status: built, not yet run.** No numbers are recorded here until it has run on the operator's stack. The checkout that built it had no running stack holding this stream's runs, no GitHub credential for the Actions logs of PRs #91–#124, and no TypeSafe or OpenAI key. The script's labelling, scoring and report are tested on planted records (`scripts/loop-decision-set.test.mjs`).
+**Status: built; run attempted 2026-10-17 in the fix round's checkout and refused at every source — no numbers recorded.** The script's labelling, scoring and report are tested on planted records (`scripts/loop-decision-set.test.mjs`). What the run needs and the checkout did not have, each as it refused:
+
+- **The stream's own runs** — publications and reviews live in the operator's stack, read through its API. No stack answered at `http://localhost:3000`, and `AFLOW_API_KEY` was not set: `collect` stops with "AFLOW_API_KEY is not set: collect reads the runs through the stack’s API", and with a key set, "fetch failed".
+- **The CI logs of PRs #91–#124** — GitHub serves Actions job logs only to a signed-in caller, and `gh` was not signed in: `gh api repos/aflowai/aflow/actions/jobs/<id>/logs` answers "To get started with GitHub CLI, please run: gh auth login".
+- **The three deciders** — `TYPESAFE_API_KEY` (Jev), `OPENAI_API_KEY` (gpt-6-luna) and `ANTHROPIC_API_KEY` (claude-opus-5-5) were all unset, so `measure` skips each, saying so.
+
+The shipped bars therefore stay the plan's provisional ones (below), not measured ones, and no decider has been compared with the target, so no step has been kept or taken out on its evidence. Run on the operator's stack, with those four credentials, before the bars are relied on.
 
 **What it measures.** The two choices Publish Local Changes now makes for itself (Plan 315 D22), plus the CI remedy choice Plan 321 makes by hand, against what was actually decided in this stream. Four questions, each the one the skill asks, imported from `publishLocalChangesDecisions.ts`, so the measurement measures what ships:
 
@@ -141,6 +147,6 @@ yarn decisions:measure-loop measure [--labels <operator-labels.json>] [--target 
 
 The tables in `.debug/decisions/report.md` go here, and the bars chosen for Jev replace the provisional `AFTER_CHECK_MIN_CONFIDENCE` (0.8), `FINDING_MIN_CONFIDENCE` (0.8) and `AFTER_REVIEW_MIN_CONFIDENCE` (0.9). Where Jev does not reach the target on a question at any bar, that question's decision step does not belong in Publish Local Changes, and it should be taken out again.
 
-| Question | Decider     | minConfidence | Agreement (decided) | Abstention | p50 ms | Cost per decision |
-| -------- | ----------- | ------------- | ------------------- | ---------- | ------ | ----------------- |
-| —        | not yet run | —             | —                   | —          | —      | —                 |
+| Question | Decider                                                   | minConfidence | Agreement (decided) | Abstention | p50 ms | Cost per decision |
+| -------- | --------------------------------------------------------- | ------------- | ------------------- | ---------- | ------ | ----------------- |
+| —        | not run: no stack, no `gh` login, no decider keys (above) | —             | —                   | —          | —      | —                 |

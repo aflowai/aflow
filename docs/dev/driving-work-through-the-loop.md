@@ -127,7 +127,8 @@ scripts/verify-commit.mjs`), and Local Publish runs it after the commit and befo
    is the publication's own decision (Plan 315 D22), read on `decide-after-check`: a
    failure of time alone runs the checks once more as `recheck-commit`; a failure the
    change caused is commissioned as `fix-checks`, briefed with the check's own summary, and
-   published onto the branch as `republish-fix`, whose pull request is the run's; and a
+   published onto the branch as `republish-fix`, whose pull request is the run's — and
+   whose not pushing, however it ended, fails the run at that task; and a
    machine that cannot run the checks as declared — or an answer below the bar, or no
    decision model — fails the publication at `checks-failed` with the end of what they
    printed and nothing pushed, which is the conversation's to take up. No retry from the

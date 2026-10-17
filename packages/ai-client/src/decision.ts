@@ -3,7 +3,6 @@ import {
   type DecisionAnswer,
   type DecisionEach,
   type DecisionEachOutput,
-  type DecisionEntry,
   type DecisionQuestions,
   type DecisionYesNoAnswer,
 } from '@aflow/schemas';
@@ -98,7 +97,7 @@ export function decisionRequestQuestions(input: {
       instructions: {
         ...(question.instructions !== undefined ? { claim: question.instructions } : {}),
         about: 'The item below, one of a list the state describes.',
-        item: item as DecisionEntry,
+        item,
       },
     };
   });

@@ -859,12 +859,16 @@ function judgedOutput(items: readonly unknown[], probabilities: readonly number[
 const FIX_PATCH_REF = 'payload:fix-patch';
 
 /** A run a task started and waited on, ending as `output` says, or failing. */
-function runEnding(runId: string, output: Record<string, unknown> | 'failed') {
+function runEnding(
+  runId: string,
+  output: Record<string, unknown> | 'failed' | 'cancelled' | 'paused',
+) {
+  const ended = typeof output === 'string';
   return WorkflowRunWakeupEnvelopeSchema.parse({
     runId,
-    outcome: output === 'failed' ? 'failed' : 'completed',
+    outcome: ended ? output : 'completed',
     waiterId: `waiter-${runId}`,
-    ...(output === 'failed' ? {} : { result: { output } }),
+    ...(ended ? {} : { result: { output } }),
   });
 }
 
@@ -1060,6 +1064,12 @@ interface Scenario {
   afterReview?: Choice<AfterReviewRoute>;
   /** How a fix round's commission ends: with a change, with none, or failed; absent is a change. */
   commission?: 'patch' | 'no-change' | 'failed';
+  /**
+   * How the publication of the fix ends: pushed with its pull request, its push
+   * declined (completed with none), stopped at its approval, or failed;
+   * absent is pushed.
+   */
+  republished?: 'pushed' | 'declined' | 'paused' | 'failed';
 }
 
 interface Outcome {
@@ -1176,8 +1186,13 @@ function rawOutput(
             ? { baseSha: HEAD }
             : { patchRef: FIX_PATCH_REF, baseSha: HEAD },
       );
-    case 'republish-fix':
-      return runEnding(`publication-${taskId}`, FIX_PR);
+    case 'republish-fix': {
+      const ending = scenario.republished ?? 'pushed';
+      return runEnding(
+        `publication-${taskId}`,
+        ending === 'pushed' ? FIX_PR : ending === 'declined' ? {} : ending,
+      );
+    }
     case 'push':
       return { exitCode: 0 };
     case 'find-pr': {
@@ -2701,6 +2716,15 @@ describe('Publish Local Changes — a failed check is decided on, not handed to 
     expect((brief['inputs'] as { task: string }).task).toBe(`${FIX_CHECKS_BRIEF_LEAD}${summary}`);
   });
 
+  for (const republished of ['declined', 'paused', 'failed'] as const) {
+    it(`fix_commission: a publication of the fix that ${republished === 'declined' ? 'had its push declined' : republished === 'paused' ? 'stopped at its approval' : 'failed'} fails this run, reporting no pull request`, () => {
+      const outcome = failedWith({ value: 'fix_commission', confidence: 0.95 }, { republished });
+      expect(outcome.statuses.get('republish-fix')).toBe('failed');
+      expect(outcome.state['prUrl']).toBeUndefined();
+      expect(outcome.state['prNumber']).toBeUndefined();
+    });
+  }
+
   for (const ending of ['no-change', 'failed'] as const) {
     it(`fix_commission: a commission that ${ending === 'failed' ? 'fails' : 'returns no change'} fails the publication, and nothing is published again`, () => {
       const outcome = failedWith(
@@ -2880,6 +2904,21 @@ describe("Publish Local Changes — a review's findings are judged one at a time
     );
     expect(outcome.state['prUrl']).toBe(FIX_PR.prUrl);
   });
+
+  for (const republished of ['declined', 'paused', 'failed'] as const) {
+    it(`fix_before_merge: a publication of the fix that ${republished === 'declined' ? 'had its push declined' : republished === 'paused' ? 'stopped at its approval' : 'failed'} fails this run, and the pull request this run opened stands`, () => {
+      const outcome = reviewedWith({
+        judged: [0.95, 0.1, 0.9],
+        afterReview: { value: 'fix_before_merge', confidence: 0.95 },
+        republished,
+      });
+      expect(outcome.pushed).toBe(true);
+      expect(outcome.statuses.get('republish-fix')).toBe('failed');
+      // Never a null over it: the pull request this run's own push opened.
+      expect(outcome.state['prUrl']).toBe('https://github.com/aflowai/aflow/pull/7');
+      expect(outcome.state['prNumber']).toBe(7);
+    });
+  }
 
   it('fix_before_merge: publishes nothing again where the operator declined this push', () => {
     const outcome = reviewedWith({
