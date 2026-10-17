@@ -612,10 +612,12 @@ async function runHarness(
         return await failureWithError(
           ctx,
           validationError(
-            `No session \`${input.continueFrom}\` is held for this run. A kept session is owned ` +
-              'by the conversation that started the run that made it, so `continueFrom` can ' +
-              'name a session made by any run that same conversation started; a run no ' +
-              'conversation started owns the sessions it makes itself. A session owned by any ' +
+            'A kept session is owned by the conversation that started the run that made it, ' +
+              `and no session \`${input.continueFrom}\` is held for the conversation that ` +
+              'started this run, or for this run where no conversation started it. ' +
+              '`continueFrom` can name a session made by any run that same conversation ' +
+              'started; a run no conversation started owns the sessions it makes itself. ' +
+              'A session owned by any ' +
               'other conversation or run is refused as one that does not exist. A kept session ' +
               'ends once it has been idle for an hour, once this executor has restarted since ' +
               "it was made, once a turn naming a new `base` has failed to prepare the session's " +

@@ -251,7 +251,7 @@ describe('a session kept for a run no conversation started', () => {
     });
 
     expect(otherRun.status).toBe('FAILED');
-    expect(otherRun.message).toContain(`No session \`${sessionRef}\` is held for this run.`);
+    expect(otherRun.message).toContain(`no session \`${sessionRef}\` is held for`);
     expect(ownTask.status).toBe('SUCCEEDED');
     expect(ownTask.output['continued']).toBe(true);
     expect(changedFiles(ownTask.output['patch']).sort()).toEqual(['half.txt', 'whole.txt']);

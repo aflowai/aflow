@@ -119,10 +119,11 @@ function gateArgs(over?: {
   row?: WorkflowTaskRow;
   def?: WorkflowTask | null;
   outputRef?: string;
+  run?: WorkflowRunDetail;
 }) {
   return {
     tenantId: TENANT,
-    run,
+    run: over?.run ?? run,
     taskRow: over?.row ?? taskRow(),
     taskDef: over?.def === undefined ? taskDef() : over.def,
     workflowExecution: {
@@ -308,6 +309,21 @@ describe('applyPollGate', () => {
     expect(timer.stepExecutionId).not.toBe('worker-1');
     expect(timer.inputRef).toBe('inline:e30=');
     expect(timer.operationId).toBe('mcp.tool.call');
+  });
+
+  it("arms the next cycle's timer with the conversation that started the run, and none for a run no conversation started", async () => {
+    const conversation = '77777777-7777-4777-9777-777777777777';
+    const { payloadStore } = makePayloadStore({ status: 'PENDING' });
+    const startedBy = (sessionId: string | null) =>
+      ({ ...run, sessionId, evalBatchId: null }) as unknown as WorkflowRunDetail;
+
+    await applyPollGate(deps(payloadStore), gateArgs({ run: startedBy(conversation) }));
+    await applyPollGate(deps(payloadStore), gateArgs({ run: startedBy(null) }));
+
+    const armed = (mockScheduleShardTimer.mock.calls as unknown[][]).map((call) => call[1]);
+    expect(armed).toHaveLength(2);
+    expect(armed[0]).toMatchObject({ startingConversationId: conversation });
+    expect(armed[1]).not.toHaveProperty('startingConversationId');
   });
 
   it('poll-cycle CAS miss → handled (duplicate), timer NOT armed', async () => {

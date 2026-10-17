@@ -133,12 +133,17 @@ async function commission(
 }
 
 describe('a commission that names a session it cannot continue', () => {
-  it('is told the ownership rule', async () => {
+  it('is told the ownership rule before anything else', async () => {
     const { status, message } = await commission(OTHER_CONVERSATIONS);
     expect(status).toBe('FAILED');
-    expect(message).toContain(
-      'A kept session is owned by the conversation that started the run that made it',
-    );
+    expect(
+      message.startsWith(
+        'A kept session is owned by the conversation that started the run that made it, and no ' +
+          `session \`${OTHER_CONVERSATIONS}\` is held for the conversation that started this run, ` +
+          'or for this run where no conversation started it. ',
+      ),
+    ).toBe(true);
+    expect(message).not.toContain('held for this run.');
     expect(message).toContain(
       '`continueFrom` can name a session made by any run that same conversation started',
     );
@@ -173,9 +178,6 @@ describe('a commission that names a session it cannot continue', () => {
   it('makes no guess about why the ref it named in particular is not held', async () => {
     const { message } = await commission(OTHER_CONVERSATIONS);
     expect(message).not.toMatch(/\b(may|might|probably|perhaps|likely)\b/i);
-    expect(message.startsWith(`No session \`${OTHER_CONVERSATIONS}\` is held for this run. `)).toBe(
-      true,
-    );
     expect(message.split(OTHER_CONVERSATIONS)).toHaveLength(2);
     expect(message).not.toContain('conversation-other');
     expect(message).not.toContain('run-other-conversation');
