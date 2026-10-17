@@ -92,7 +92,8 @@ meanwhile is refused with its current state rather than overwritten, and a node 
    fix round the publication decides and records, and never acts on (Plan 315 D22):
    `decide-after-review` chooses between `fix_before_merge` and `publish_as_is` over every
    finding, and the run's `afterReview` and its pull request record the answer — `undecided`
-   where none cleared the bar — with the findings, which the run carries as `findings`.
+   where none cleared the bar. The run carries the latest review's open findings as
+   `findings`: its own review's, which replace the earlier rounds', so the list never grows.
    The fix round is the conversation's: on `fix_before_merge`, once the publication has
    ended, commission the fix on the branch (`base: <branch>`) and publish the branch again,
    passing the run's `findings` with those the fix closed marked `closed`. A publication

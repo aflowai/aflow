@@ -43,7 +43,8 @@ export const PullRequestFindingsSchema = z
     'The findings of the review rounds before this publication — each Local Code Review ' +
       'whose findings a later commission on the branch was briefed to fix — as the reviews ' +
       "named them, each marked `closed` or `open`. The publication's own review, where one " +
-      'runs, is added as it returns.',
+      'finishes, is recorded by its summary, and its findings replace these in what the ' +
+      'publication hands on.',
   );
 
 /**
@@ -121,7 +122,7 @@ export const HostCommitDescribeInputSchema = z.object({
     .describe(
       "The publication's own review of the range, where one ran: its verdict — null where it " +
         'did not finish — how it ended, its summary, which names every finding it read, and ' +
-        'the findings themselves, which the pull request records as left open.',
+        'the findings themselves, which the publication hands on as the open ones.',
     ),
   afterReview: z
     .enum(AFTER_REVIEW_DECIDED)
@@ -139,27 +140,35 @@ export const HostCommitDescribeInputSchema = z.object({
 });
 export type HostCommitDescribeInput = z.infer<typeof HostCommitDescribeInputSchema>;
 
-/** What a pull request records of the review rounds: every finding, and the decision on this round's. */
+/** What a publication hands on of its review: the findings still open, and the decision on this round's. */
 export interface PullRequestReviewRecord {
   findings: PullRequestFinding[];
   afterReview?: AfterReview;
 }
 
 /**
- * The review record a publication's pull request carries: the earlier rounds'
- * findings as they were passed, then this review's own as left open, since
- * nothing on the branch has fixed them yet. The decision on them is recorded
- * exactly where this review returned findings — the decision is asked only
- * then — and an answer that is missing there, below the bar or never made,
- * is recorded as `undecided`.
+ * The review record a publication hands on: the open findings of the latest
+ * review of the branch. Where this publication's own review finished, its
+ * findings replace the earlier rounds' — it read the whole range, so it is
+ * the latest word on every one of them, and nothing has fixed its findings
+ * yet. Where no review finished, the open findings it was passed go on as
+ * they are. Either way the list never outgrows one review's, so a later
+ * publication taking it back as `findings` does not carry every round before.
+ *
+ * The decision on them is recorded exactly where this review returned
+ * findings — the decision is asked only then — and an answer that is missing
+ * there, below the bar or never made, is recorded as `undecided`.
  */
 export function pullRequestReviewRecord(input: HostCommitDescribeInput): PullRequestReviewRecord {
-  const reviewFindings = input.review?.findings ?? [];
-  const findings: PullRequestFinding[] = [
-    ...(input.findings ?? []),
-    ...reviewFindings.map((finding) => ({ ...finding, state: 'open' as const })),
-  ];
-  if (reviewFindings.length === 0) return { findings };
+  const reviewFindings = input.review?.findings;
+  if (reviewFindings === null || reviewFindings === undefined) {
+    return { findings: (input.findings ?? []).filter((finding) => finding.state === 'open') };
+  }
+  const findings: PullRequestFinding[] = reviewFindings.map((finding) => ({
+    ...finding,
+    state: 'open' as const,
+  }));
+  if (findings.length === 0) return { findings };
   return { findings, afterReview: input.afterReview ?? AFTER_REVIEW_UNDECIDED };
 }
 
@@ -192,9 +201,10 @@ export const HostCommitDescribeOutputSchema = z.object({
     .array(HostCommitDescribeCommitSchema.pick({ sha: true, subject: true }))
     .describe('Every commit of the range, oldest first.'),
   findings: PullRequestFindingsSchema.describe(
-    "Every finding the body records: the earlier rounds' as passed, and this publication's " +
-      'own review as left open. What a later publication of the branch takes as `findings`, ' +
-      'with those its fix closed marked `closed`.',
+    "The open findings of the latest review: this publication's own review's where it " +
+      "finished, replacing the earlier rounds'; otherwise the open ones it was passed. What a " +
+      'later publication of the branch takes as `findings`, with those its fix closed marked ' +
+      '`closed`.',
   ),
   afterReview: AfterReviewSchema.optional().describe(
     "The decision on this publication's review findings, as the body records it; absent " +

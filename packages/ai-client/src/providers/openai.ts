@@ -38,6 +38,7 @@ import type {
 import type { AIProviderAdapter } from '../adapter.js';
 import type { AsyncReplayGuarantee } from '@aflow/schemas';
 import { AIClientError, buildStreamTruncationError, normalizeOpenAIError } from '../errors.js';
+import { decideWithOpenAI } from './openaiDecisions.js';
 import { moveToolImagesToUserMessages, toolResultText } from './toolResultContent.js';
 import { refuseImageReferences } from './imageReferences.js';
 import { parseJsonResponse } from './jsonResponseParse.js';
@@ -470,6 +471,8 @@ export function createOpenAIAdapter(
 
   return {
     provider: 'openai',
+
+    decide: (request) => decideWithOpenAI(client, request),
 
     async generateText(request: GenerateTextRequest): Promise<GenerateTextResponse> {
       try {

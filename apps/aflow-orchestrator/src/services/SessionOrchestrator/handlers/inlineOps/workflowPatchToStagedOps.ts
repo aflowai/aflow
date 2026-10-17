@@ -1,6 +1,7 @@
 import type { Workflow, StagedChangeOp, SkillGoal, SkillCampaignContract } from '@aflow/schemas';
 import {
   WorkflowTaskSchema,
+  WorkflowTaskRouteSchema,
   TaskContextSpecSchema,
   WorkflowOutputDeclarationSchema,
   WorkflowStateVariableSchema,
@@ -126,6 +127,57 @@ function convertContextPatch(
           : String(err);
     return {
       unsupported: `${op.op} ${op.path} cannot be applied to task "${taskId}" context: ${detail}`,
+    };
+  }
+}
+
+/**
+ * Any edit under `/tasks/{i}/routes` — the whole list, one route, or one
+ * route's `enable` — is applied to the task's routes and staged as the
+ * complete new list, so the proposal reads as routes rather than a rewritten
+ * task. Removing the list, or its last route, stages an empty one.
+ */
+function convertRoutesPatch(
+  op: WorkflowPatchInput['operations'][number],
+  existing: Workflow,
+  index: number,
+  taskId: string,
+  segments: string[],
+): StagedChangeOp | { unsupported: string } {
+  const task = existing.tasks[index];
+  if (!task) {
+    return {
+      unsupported: `Task path "${op.path}" references task index ${String(index)}, which does not exist on the workflow.`,
+    };
+  }
+  if (op.op !== 'add' && op.op !== 'replace' && op.op !== 'remove') {
+    return {
+      unsupported: `Op shape "${op.op} ${op.path}" is not supported for routes. Use add/replace/remove under /tasks/{i}/routes.`,
+    };
+  }
+  const routesPath = `/${segments.slice(2).map(escapePointerSegment).join('/')}`;
+  try {
+    const patched = applyJsonPatch({ routes: task.routes ?? [] }, [
+      { ...op, path: routesPath },
+    ] as WorkflowPatchInput['operations']) as { routes?: unknown };
+    const parse = WorkflowTaskRouteSchema.array()
+      .max(50)
+      .safeParse(patched.routes ?? []);
+    if (!parse.success) {
+      return {
+        unsupported: `${op.op} ${op.path} would leave task "${taskId}" with invalid routes: ${parse.error.message}`,
+      };
+    }
+    return { op: 'update_task_routes', taskId, routes: parse.data } as StagedChangeOp;
+  } catch (err) {
+    const detail =
+      err instanceof JsonPatchError
+        ? `${err.message}${err.opPath ? ` (at ${err.opPath})` : ''}`
+        : err instanceof Error
+          ? err.message
+          : String(err);
+    return {
+      unsupported: `${op.op} ${op.path} cannot be applied to task "${taskId}" routes: ${detail}`,
     };
   }
 }
@@ -332,6 +384,10 @@ function convertOne(
       return convertContextPatch(op, existing, index, taskId, segments);
     }
 
+    if (segments[2] === 'routes') {
+      return convertRoutesPatch(op, existing, index, taskId, segments);
+    }
+
     // replace /tasks/{i}/dependsOn
     if (op.op === 'replace' && segments.length === 3 && segments[2] === 'dependsOn') {
       if (!Array.isArray(op.value) || !op.value.every((v): v is string => typeof v === 'string')) {
@@ -387,7 +443,7 @@ function convertOne(
   }
 
   return {
-    unsupported: `Op shape "${op.op} ${op.path}" is not yet supported for agent-initiated workflow patches. Supported shapes: task add/remove/replacements under /tasks, replace /outcomes/{i}/evaluator/target, add/replace/remove under /stateVariables or /output, and replace /iteration. Tasks may be addressed as /tasks/{taskId} or /tasks/{index}. Break a larger change into these shapes; each becomes part of one proposal.`,
+    unsupported: `Op shape "${op.op} ${op.path}" is not yet supported for agent-initiated workflow patches. Supported shapes: task add/remove/replacements under /tasks, routes under /tasks/{i}/routes, replace /outcomes/{i}/evaluator/target, add/replace/remove under /stateVariables or /output, and replace /iteration. Tasks may be addressed as /tasks/{taskId} or /tasks/{index}. Break a larger change into these shapes; each becomes part of one proposal.`,
   };
 }
 

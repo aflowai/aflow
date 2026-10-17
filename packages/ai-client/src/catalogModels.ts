@@ -299,6 +299,32 @@ export const builtInModels: ModelDefinition[] = [
     pricing: { promptPer1M: 0.042, completionPer1M: 0, currency: 'USD' },
     traits: { speed: 5, cost: 1, outputType: 'decision' },
     aliases: ['jev'],
+    decision: { imageContext: false, confidence: 'calibrated' },
+  },
+  {
+    id: 'gpt-6-luna-decisions',
+    provider: 'openai',
+    providerModelId: 'gpt-6-luna',
+    displayName: 'GPT-6 Luna Decisions',
+    description:
+      'OpenAI Decisions API — a choice, a rubric score or a predicate over text and images, with per-answer probabilities. Writes no text.',
+    contextWindow: 0,
+    maxOutputTokens: 0,
+    capabilities: {
+      chat: false,
+      completion: false,
+      embedding: false,
+      vision: true,
+      audio: false,
+      functionCalling: false,
+      jsonMode: false,
+      streaming: false,
+      decision: true,
+    },
+    pricing: { promptPer1M: 0.1, completionPer1M: 0, currency: 'USD' },
+    traits: { speed: 5, cost: 1, outputType: 'decision' },
+    aliases: ['luna-decisions'],
+    decision: { questionsPerCall: 200, imageContext: true, confidence: 'self_reported' },
   },
 
   // ============================================================================

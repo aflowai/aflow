@@ -196,7 +196,7 @@ const CHECK_INPUT_TEMPLATE = {
 
 const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'publish-local-changes',
-  version: 29,
+  version: 30,
   name: 'Publish Local Changes',
   tagline:
     'Commit a patch onto a branch of a connected repository, then push it and open the pull request — asking the operator first unless the folder says otherwise.',
@@ -847,7 +847,9 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             questions: { [AFTER_REVIEW_QUESTION_NAME]: AFTER_REVIEW_QUESTION },
           },
           // `afterReview` is the answer that cleared the bar, null where none
-          // did; `chosen` is what it would have chosen.
+          // did; `chosen` is what it would have chosen, and with `confidence`
+          // null where the model declined the question — a refusal is an
+          // answer, never decided, not a failed step.
           outputProjection: {
             afterReview: {
               path: `answers.${AFTER_REVIEW_QUESTION_NAME}.decidedValue`,
@@ -855,7 +857,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             },
             chosen: {
               path: `answers.${AFTER_REVIEW_QUESTION_NAME}.value`,
-              onMissing: 'error' as const,
+              onMissing: 'null' as const,
             },
             decided: {
               path: `answers.${AFTER_REVIEW_QUESTION_NAME}.decided`,
@@ -863,7 +865,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             },
             confidence: {
               path: `answers.${AFTER_REVIEW_QUESTION_NAME}.confidence`,
-              onMissing: 'error' as const,
+              onMissing: 'null' as const,
             },
           },
         },
@@ -1305,7 +1307,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           variableId: 'findings',
           name: 'Findings',
           description:
-            "Every finding the pull request records — the earlier rounds' as this run was given them, and its own review's as left open. A later publication of the branch takes them as its `findings`, with each its fix closed marked closed.",
+            "The open findings of the latest review: this run's own review's where it finished, replacing the earlier rounds'; otherwise the open ones it was given. A later publication of the branch takes them as its `findings`, with each its fix closed marked closed.",
           required: false,
           sensitive: false,
           immutable: false,

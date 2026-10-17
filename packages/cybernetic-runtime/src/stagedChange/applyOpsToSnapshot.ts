@@ -532,6 +532,17 @@ function applyWorkflowOp(workflow: Workflow, op: StagedChangeOp): void {
       break;
     }
 
+    case 'update_task_routes': {
+      const task = workflow.tasks.find((t) => t.taskId === op.taskId);
+      if (!task) throw new Error(`Task ${op.taskId} not found`);
+      if (op.routes.length > 0) {
+        task.routes = op.routes;
+      } else {
+        delete task.routes;
+      }
+      break;
+    }
+
     case 'update_outcome_threshold': {
       const outcome = workflow.outcomes.find((o) => o.id === op.outcomeId);
       if (!outcome) throw new Error(`Outcome ${op.outcomeId} not found`);
@@ -908,6 +919,7 @@ function deriveOpFailureCode(op: StagedChangeOp): string {
     case 'update_task_goal':
     case 'update_task_context_spec':
     case 'update_task_dependencies':
+    case 'update_task_routes':
     case 'replace_task':
     case 'remove_task':
     case 'reorder_tasks':

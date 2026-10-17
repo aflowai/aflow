@@ -128,7 +128,17 @@ Schema changes require a rebuild — other packages import compiled output. This
 
 ## Full check sequence
 
-**Option A — preflight script (recommended):** runs everything and prints a summary table:
+**Default — the scoped check:** commit, then
+
+```bash
+yarn verify              # what a publication runs: scoped build, type-check, tests, lint, format
+```
+
+It measures the commits on `HEAD` against `origin/main`, building only the packages the change
+reads and running only the tests it can reach. The repository-wide jobs below are CI's; run them
+locally only to prove something CI cannot show you sooner.
+
+**Option A — preflight script (full proof):** runs everything and prints a summary table:
 
 ```bash
 yarn preflight           # format + build + typecheck + test + lint

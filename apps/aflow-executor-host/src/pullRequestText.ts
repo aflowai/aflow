@@ -116,15 +116,21 @@ function findingLine(finding: PullRequestFinding): string {
 
 const AFTER_REVIEW_LINES: Record<AfterReview, string> = {
   fix_before_merge:
-    'Decided after the review: `fix_before_merge` — the findings left open are to be fixed on this branch before it merges.',
+    "Decided after the review: `fix_before_merge` — this review's findings are to be fixed on this branch before it merges.",
   publish_as_is:
-    'Decided after the review: `publish_as_is` — the findings left open can merge as they stand.',
+    "Decided after the review: `publish_as_is` — this review's findings can merge as they stand.",
   undecided:
-    "Decided after the review: `undecided` — no answer cleared the decision's bar, so the findings left open are the reader's to weigh.",
+    "Decided after the review: `undecided` — no answer cleared the decision's bar, so this review's findings are the reader's to weigh.",
 };
 
+/**
+ * The earlier rounds' findings are listed, closed and left open, since no
+ * text of this round names them. This round's review is told by its summary
+ * alone, which names every finding it read with its severity and `file:line`
+ * beside the checks it ran — listing those findings again would say each twice.
+ */
 function reviewSection(input: HostCommitDescribeInput, record: PullRequestReviewRecord): string {
-  const { findings } = record;
+  const findings = input.findings ?? [];
   const parts = ['## Review'];
   for (const [state, heading] of [
     ['closed', '### Closed'],

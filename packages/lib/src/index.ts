@@ -55,5 +55,5 @@ export const MODEL_SELECTIONS = {
     'grok',
   ] as const,
   embedding: ['text-embedding-3-small', 'text-embedding-3-large'] as const,
-  decision: ['jev'] as const,
+  decision: ['jev', 'luna-decisions'] as const,
 } as const;

@@ -156,6 +156,51 @@ export interface AIClient {
 // AIClient Implementation
 // ============================================================================
 
+function imageReadingDecisionModels(catalog: ModelCatalog): string[] {
+  return catalog
+    .listModels()
+    .filter((m) => m.decision?.imageContext === true)
+    .map((m) => m.aliases?.[0] ?? m.id);
+}
+
+type DecideCall = NonNullable<AIProviderAdapter['decide']>;
+
+/**
+ * Split a request whose questions exceed the model's per-call limit into
+ * parallel calls over the same state, and merge them back into one response.
+ * Questions are independent by contract, so the split changes no answer.
+ */
+export async function decideInBatches(
+  decide: DecideCall,
+  request: DecideRequest,
+  questionsPerCall: number | undefined,
+): Promise<Awaited<ReturnType<DecideCall>>> {
+  const entries = Object.entries(request.questions);
+  if (questionsPerCall === undefined || entries.length <= questionsPerCall) {
+    return await decide(request);
+  }
+  const batches: Array<typeof entries> = [];
+  for (let i = 0; i < entries.length; i += questionsPerCall) {
+    batches.push(entries.slice(i, i + questionsPerCall));
+  }
+  const responses = await Promise.all(
+    batches.map((batch) => decide({ ...request, questions: Object.fromEntries(batch) })),
+  );
+  const first = responses[0]!;
+  return {
+    ...first,
+    answers: Object.assign({}, ...responses.map((r) => r.answers)) as typeof first.answers,
+    usage: responses.reduce(
+      (sum, r) => ({
+        promptTokens: sum.promptTokens + r.usage.promptTokens,
+        completionTokens: sum.completionTokens + r.usage.completionTokens,
+        totalTokens: sum.totalTokens + r.usage.totalTokens,
+      }),
+      { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+    ),
+  };
+}
+
 /**
  * Create an AIClient instance.
  */
@@ -695,8 +740,21 @@ export function createAIClient(config: AIClientConfig): AIClient {
           false,
         );
       }
+      const profile = catalog.getModel(request.model)?.decision;
+      if ((request.images?.length ?? 0) > 0 && profile?.imageContext === false) {
+        throw new AIClientError(
+          `${request.model} reads no images. Use a decision model that does, such as ${imageReadingDecisionModels(catalog).join(', ') || 'none in this catalog'}.`,
+          'invalid_request',
+          resolved.provider,
+          false,
+        );
+      }
       const startTime = Date.now();
-      const response = await adapter.decide({ ...request, model: resolved.providerModelId });
+      const response = await decideInBatches(
+        adapter.decide.bind(adapter),
+        { ...request, model: resolved.providerModelId },
+        profile?.questionsPerCall,
+      );
 
       const model = catalog.getModel(request.model);
       const cost = model ? catalog.calculateCost(request.model, response.usage) : undefined;

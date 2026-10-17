@@ -315,10 +315,9 @@ describe('composePullRequest', () => {
       ...(afterReview !== undefined ? { afterReview } : {}),
     });
 
-  it("records the review's own findings as left open, after the earlier rounds', with only what the record reads", () => {
+  it("hands on the latest review's findings as the open ones, replacing the earlier rounds', with only what the record reads", () => {
     const composed = composePullRequest(reviewed('fix_before_merge'), commits);
     expect(composed.findings).toEqual([
-      ...FINDINGS,
       {
         severity: 'major',
         file: 'src/cache.ts',
@@ -327,13 +326,62 @@ describe('composePullRequest', () => {
         state: 'open',
       },
     ]);
-    expect(composed.body).toContain(
-      '- **major** `src/cache.ts:40` — The cache is never invalidated after a write.',
+    // Round after round, what goes on is one review's findings, never every round's.
+    const next = composePullRequest(
+      HostCommitDescribeInputSchema.parse({
+        bindingId: 'hb_app',
+        range,
+        findings: composed.findings,
+        review: {
+          verdict: 'request_changes',
+          outcome: 'completed',
+          reviewSummary: REVIEW_SUMMARY,
+          findings: [REVIEW_FINDING],
+        },
+      }),
+      commits,
     );
-    expect(composed.body.indexOf('### Left open')).toBeLessThan(
-      composed.body.indexOf('`src/cache.ts:40`'),
+    expect(next.findings).toHaveLength(1);
+  });
+
+  it("says each finding once: the earlier rounds' listed, this review's in its own summary", () => {
+    const summary = 'One major: src/cache.ts:40 — the cache is never invalidated after a write.';
+    const { body } = composePullRequest(
+      HostCommitDescribeInputSchema.parse({
+        bindingId: 'hb_app',
+        range,
+        findings: FINDINGS,
+        review: {
+          verdict: 'request_changes',
+          outcome: 'completed',
+          reviewSummary: summary,
+          findings: [REVIEW_FINDING],
+        },
+      }),
+      commits,
     );
-    expect(composed.body).not.toContain(REVIEW_FINDING.evidence);
+    for (const finding of FINDINGS) expect(body).toContain(finding.claim);
+    expect(body).toContain(summary);
+    expect(body).not.toContain('- **major** `src/cache.ts:40`');
+    expect(body).not.toContain(REVIEW_FINDING.evidence);
+  });
+
+  it('passes on the open findings it was given where no review of its own finished', () => {
+    for (const review of [
+      undefined,
+      { verdict: null, outcome: 'failed', reviewSummary: null, findings: null },
+    ]) {
+      const composed = composePullRequest(
+        HostCommitDescribeInputSchema.parse({
+          bindingId: 'hb_app',
+          range,
+          findings: FINDINGS,
+          ...(review !== undefined ? { review } : {}),
+        }),
+        commits,
+      );
+      expect(composed.findings).toEqual(FINDINGS.filter((f) => f.state === 'open'));
+    }
   });
 
   it('records the decision on those findings for each answer, and undecided where none cleared the bar or none was made', () => {

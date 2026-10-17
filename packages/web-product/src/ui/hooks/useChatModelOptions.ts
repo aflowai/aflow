@@ -58,6 +58,12 @@ export interface ModelOptionsState {
    * set, that set IS a ceiling and narrows these too.
    */
   clerkModelOptions: ModelOption[];
+  /**
+   * The decision models a space may run its decision steps on. Not narrowed by
+   * the agent allowlist: that list chooses chat models for the cybernetic
+   * roles, and no decision model is one.
+   */
+  decisionModelOptions: ModelOption[];
   modelOptionsLoading: boolean;
   modelOptionsError: string | null;
 }
@@ -90,6 +96,12 @@ export function useChatModelOptions(keepRefs: readonly string[] = []): ModelOpti
   const catalog = useApiQuery<{ models: CatalogModel[] }>({
     key: ['catalog', 'models', 'chat'],
     path: '/catalog/models?capability=chat',
+    staleTime: 300_000,
+  });
+
+  const decisionCatalog = useApiQuery<{ models: CatalogModel[] }>({
+    key: ['catalog', 'models', 'decision'],
+    path: '/catalog/models?capability=decision',
     staleTime: 300_000,
   });
 
@@ -173,10 +185,28 @@ export function useChatModelOptions(keepRefs: readonly string[] = []): ModelOpti
     return [...modelOptions, ...extra].sort((a, b) => a.displayName.localeCompare(b.displayName));
   }, [catalog.data, policy.data, modelOptions]);
 
+  const decisionModelOptions = useMemo<ModelOption[]>(
+    () =>
+      (decisionCatalog.data?.models ?? [])
+        .filter((m) => !m.deprecated)
+        .map((m) => ({
+          id: m.modelId,
+          ref: m.aliases?.[0] ?? m.modelId,
+          provider: m.provider,
+          displayName: m.displayName,
+          aliases: m.aliases ?? [],
+          retiredRefs: m.retiredRefs ?? [],
+          reasoningEfforts: [],
+          allowed: true,
+        })),
+    [decisionCatalog.data],
+  );
+
   const error = catalog.error ?? policy.error;
   return {
     modelOptions,
     clerkModelOptions,
+    decisionModelOptions,
     modelOptionsLoading: catalog.isLoading || policy.isLoading,
     modelOptionsError: error ? error.message : null,
   };

@@ -794,7 +794,8 @@ interface Finding {
  * `unavailable` — no decision model bound, a provider refusing — which fails
  * the decision step.
  */
-type Choice<Route extends string> = { value: Route; confidence: number } | 'unavailable';
+type Choice<Route extends string> =
+  { value: Route; confidence: number } | 'unavailable' | 'refused';
 
 /** A choice answered as `ai.decision.decide` returns it, decided by the question's own bar. */
 function choiceOutput(
@@ -1093,6 +1094,15 @@ function rawOutput(
       return reviewEnding(scenario.review, scenario.findings);
     case 'decide-after-review':
       if (scenario.afterReview === undefined || scenario.afterReview === 'unavailable') return {};
+      // A model that declines the question answers it as `ai.decision.decide` reports a refusal.
+      if (scenario.afterReview === 'refused') {
+        return {
+          answers: { after_review: { type: 'refusal', decidedValue: null, decided: false } },
+          model: 'luna-decisions',
+          usage: { promptTokens: 1, completionTokens: 0, totalTokens: 1 },
+          latencyMs: 40,
+        };
+      }
       return choiceOutput(
         'after_review',
         AFTER_REVIEW_QUESTION.minConfidence,
@@ -2672,6 +2682,13 @@ describe("Publish Local Changes — the decision on a review's findings is recor
     claim: 'The size is read twice.',
     state: 'closed',
   } as const;
+  /** An earlier round's finding the branch still leaves as the review found it. */
+  const EARLIER_OPEN = {
+    severity: 'nit',
+    file: 'src/cache.ts',
+    claim: 'The constant is named for the old default.',
+    state: 'open',
+  } as const;
   const FIX = { value: 'fix_before_merge', confidence: 0.95 } as const;
 
   /** Every answer the decision can give, or fail to, and what the run records for it. */
@@ -2684,6 +2701,7 @@ describe("Publish Local Changes — the decision on a review's findings is recor
       'undecided',
     ],
     ['no decision at all', 'unavailable', 'undecided'],
+    ['a refusal of the question', 'refused', 'undecided'],
   ];
 
   function reviewedWith(extra: Partial<Scenario>): Outcome {
@@ -2692,7 +2710,7 @@ describe("Publish Local Changes — the decision on a review's findings is recor
       review: 'request_changes',
       decision: 'approved',
       findings: FINDINGS,
-      inputs: { owner: 'aflowai', repo: 'aflow', findings: [EARLIER] },
+      inputs: { owner: 'aflowai', repo: 'aflow', findings: [EARLIER, EARLIER_OPEN] },
       ...extra,
     });
   }
@@ -2713,6 +2731,10 @@ describe("Publish Local Changes — the decision on a review's findings is recor
   for (const [label, answer, recorded] of ANSWERS) {
     it(`${label}: records afterReview as \`${recorded}\` on the run and in the pull request's record`, () => {
       const outcome = reviewedWith({ afterReview: answer });
+      // Only a decision that could not be made fails its step; a refusal is an answer.
+      expect(outcome.statuses.get('decide-after-review')).toBe(
+        answer === 'unavailable' ? 'failed' : 'succeeded',
+      );
       expect(outcome.state['afterReview']).toBe(recorded);
       expect(outcome.outputs.get('describe-pr')?.['afterReview']).toBe(recorded);
     });
@@ -2746,13 +2768,12 @@ describe("Publish Local Changes — the decision on a review's findings is recor
     );
   });
 
-  it("carries the review's findings into the pull request's record, after those the brief passed on", () => {
+  it("hands on this review's findings as the open ones, replacing the earlier rounds' — a round's list never grows", () => {
     const outcome = reviewedWith({ afterReview: FIX });
     const described = HostCommitDescribeInputSchema.parse(outcome.inputs.get('describe-pr'));
     expect(described.review?.findings?.map((f) => f.claim)).toEqual(FINDINGS.map((f) => f.claim));
     const record = outcome.outputs.get('describe-pr')?.['findings'];
     expect(PullRequestFindingsSchema.parse(record)).toEqual([
-      EARLIER,
       ...FINDINGS.map(({ severity, file, line, claim }) => ({
         severity,
         file,
@@ -2769,7 +2790,13 @@ describe("Publish Local Changes — the decision on a review's findings is recor
       const outcome = reviewedWith({ review, findings: review === 'approve' ? [] : FINDINGS });
       expect(outcome.ran, review).not.toContain('decide-after-review');
       expect(outcome.state['afterReview'], review).toBeNull();
-      expect(outcome.state['findings'], review).toEqual([EARLIER]);
+    }
+  });
+
+  it('hands on none where its review finished finding nothing, and the open ones it was given where none finished', () => {
+    expect(reviewedWith({ review: 'approve', findings: [] }).state['findings']).toEqual([]);
+    for (const review of ['failed', 'not-started'] as const) {
+      expect(reviewedWith({ review }).state['findings'], review).toEqual([EARLIER_OPEN]);
     }
   });
 

@@ -530,6 +530,8 @@ export interface GenerateEmbeddingResponse {
 export interface DecideRequest extends AIRequestOptions {
   state: DecisionEntry;
   questions: DecisionQuestions;
+  /** Images read with the state, already resolved to bytes. */
+  images?: Array<{ data: string; mimeType: string }> | undefined;
 }
 
 /**
@@ -550,7 +552,9 @@ export type ProviderDecisionAnswer =
       confidence: number;
       probabilities: Record<string, number>;
     }
-  | { type: 'yes_no'; probability: number };
+  | { type: 'yes_no'; probability: number }
+  /** The model declined this question; the others in the request still carry answers. */
+  | { type: 'refusal' };
 
 export interface DecideResponse {
   answers: Record<string, ProviderDecisionAnswer>;
@@ -938,6 +942,19 @@ export interface ModelTraits {
 }
 
 /**
+ * What a decision model can do, recorded from its live API rather than its
+ * documentation. Required on every model with the `decision` capability.
+ */
+export interface ModelDecisionProfile {
+  /** The most questions one request may carry; absent where the provider states no limit. */
+  questionsPerCall?: number;
+  /** Whether a decision may read images alongside its state. */
+  imageContext: boolean;
+  /** Whether stated confidence tracks how often the model is right. */
+  confidence: 'calibrated' | 'self_reported';
+}
+
+/**
  * Model definition in the catalog.
  */
 export interface ModelDefinition {
@@ -969,6 +986,8 @@ export interface ModelDefinition {
   defaultVideoDurationSeconds?: number;
   deprecated?: boolean;
   aliases?: string[];
+  /** Present exactly when `capabilities.decision` is. */
+  decision?: ModelDecisionProfile;
   /**
    * OpenRouter provider routing. When set, restricts which upstream providers
    * handle requests for this model (e.g. only Cerebras, only Groq).

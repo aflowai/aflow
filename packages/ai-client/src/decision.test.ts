@@ -90,6 +90,14 @@ describe('resolveDecisionAnswers', () => {
       resolve({ urgent: { type: 'score', score: 1, confidence: 1, probabilities: {} } }),
     ).toThrow(/yes_no question and got a score answer/);
   });
+
+  it("passes a refusal on as never decided, whatever the question type — its decidedValue null, as an unsure answer's is", () => {
+    expect(resolve({ team: { type: 'refusal' } })['team']).toEqual({
+      type: 'refusal',
+      decidedValue: null,
+      decided: false,
+    });
+  });
 });
 
 describe('a question asked of each item', () => {
@@ -130,7 +138,7 @@ describe('a question asked of each item', () => {
     });
     const { answers, each: out } = splitDecisionAnswers(input, resolved);
     expect(Object.keys(answers)).toEqual(['round']);
-    expect(out?.answers.map((a) => [a.value, a.decided])).toEqual([
+    expect(out?.answers.map((a) => [a.type === 'yes_no' ? a.value : null, a.decided])).toEqual([
       [true, true],
       [false, true],
       [true, false],
@@ -139,6 +147,21 @@ describe('a question asked of each item', () => {
     expect(out?.selectedCount).toBe(1);
     expect(out?.undecidedCount).toBe(1);
     expect(JSON.parse(out?.selectedJson ?? '')).toEqual([{ claim: 'leaks a handle' }]);
+  });
+
+  it('never selects an item the model declined, and counts it undecided', () => {
+    const input = { each: { ...each, items: [{ claim: 'declined' }, { claim: 'leaks' }] } };
+    const asked = decisionRequestQuestions(input);
+    const { each: out } = splitDecisionAnswers(
+      input,
+      resolveDecisionAnswers(asked, {
+        each_0: { type: 'refusal' },
+        each_1: { type: 'yes_no', probability: 0.99 },
+      }),
+    );
+    expect(out?.answers[0]).toEqual({ type: 'refusal', decidedValue: null, decided: false });
+    expect(out?.selected).toEqual([{ claim: 'leaks' }]);
+    expect(out?.undecidedCount).toBe(1);
   });
 
   it('reports none selected as an empty list in both forms', () => {

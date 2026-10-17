@@ -5,6 +5,10 @@
 import { z } from 'zod';
 import { TokenUsageSchema } from './aiUsage.js';
 import { DECISION_MODELS, enumWithCustom } from './enums.js';
+import { MediaSourceRefSchema } from './mediaSourceRef.js';
+
+/** The most images one decision may read, the provider limit across a request. */
+export const DECISION_MAX_IMAGES = 128;
 
 /**
  * What a decision model reads: text, a JSON object or a JSON array. The same
@@ -165,12 +169,22 @@ export const AiDecideInputSchema = z
     state: DecisionEntrySchema.describe(
       'What the questions are about: text, a JSON object or a JSON array. Content in the state can steer the answers, so a decision about untrusted input is never the only gate on something that matters.',
     ),
+    images: z
+      .array(MediaSourceRefSchema)
+      .min(1)
+      .max(DECISION_MAX_IMAGES)
+      .describe(
+        'Images the questions are also about — screenshots, photos, documents — read with the state. Only a decision model that reads images takes them; a step that sends images to one that does not is refused.',
+      )
+      .optional(),
     questions: DecisionQuestionsSchema.optional(),
     each: DecisionEachSchema.optional().describe(
       'One yes_no asked of every item of a list, for a list whose length is known only when the step runs. The items it holds true for, confidently, come back as `each.selected` — and as `each.selectedJson`, text a later step can hand on.',
     ),
     model: enumWithCustom(DECISION_MODELS)
-      .describe('Decision model to use. The platform default when absent.')
+      .describe(
+        "Decision model to use. Absent, the space's decision model, or the first decision model whose provider the space holds a key for.",
+      )
       .optional(),
   })
   .superRefine((input, ctx) => {
@@ -241,19 +255,39 @@ export const DecisionYesNoAnswerSchema = z.object({
   decided: decidedSchema,
 });
 
-export type DecisionYesNoAnswer = z.infer<typeof DecisionYesNoAnswerSchema>;
+export const DecisionRefusalAnswerSchema = z.object({
+  type: z.literal('refusal'),
+  decidedValue: z
+    .null()
+    .describe(`${decidedValueDescription} A refusal never clears it, so it is always null here.`),
+  decided: z
+    .literal(false)
+    .describe(
+      'The model declined this question; it is never decided. A route on decided == false takes it.',
+    ),
+});
 
 export const DecisionAnswerSchema = z.discriminatedUnion('type', [
   DecisionChoiceAnswerSchema,
   DecisionScoreAnswerSchema,
   DecisionYesNoAnswerSchema,
+  DecisionRefusalAnswerSchema,
 ]);
 export type DecisionAnswer = z.infer<typeof DecisionAnswerSchema>;
 
+/** An item's answer: the yes_no asked of it, or a refusal where the model declined that item. */
+export const DecisionEachAnswerSchema = z.discriminatedUnion('type', [
+  DecisionYesNoAnswerSchema,
+  DecisionRefusalAnswerSchema,
+]);
+export type DecisionEachAnswer = z.infer<typeof DecisionEachAnswerSchema>;
+
 export const DecisionEachOutputSchema = z.object({
   answers: z
-    .array(DecisionYesNoAnswerSchema)
-    .describe('The answer for each item, in the order the items were given.'),
+    .array(DecisionEachAnswerSchema)
+    .describe(
+      'The answer for each item, in the order the items were given. An item the model declined is a refusal, never decided, so never selected.',
+    ),
   selected: z
     .array(z.unknown())
     .describe('The items whose answer is true and decided, in their order.'),
@@ -262,7 +296,7 @@ export const DecisionEachOutputSchema = z.object({
     .number()
     .int()
     .nonnegative()
-    .describe('How many items were answered below the question’s minConfidence.'),
+    .describe('How many items were answered below the question’s minConfidence, or declined.'),
   selectedJson: z
     .string()
     .describe(
@@ -271,12 +305,24 @@ export const DecisionEachOutputSchema = z.object({
 });
 export type DecisionEachOutput = z.infer<typeof DecisionEachOutputSchema>;
 
+/** The model an answer reports where no model was asked anything. */
+export const DECISION_NO_MODEL = 'none';
+
 export const AiDecideOutputSchema = z.object({
   answers: z
     .record(z.string(), DecisionAnswerSchema)
     .describe('Question name → answer. Empty where only `each` was asked.'),
   each: DecisionEachOutputSchema.optional().describe('Present where `each` was asked.'),
-  model: z.string(),
+  model: z
+    .string()
+    .describe(
+      `The decision model that answered — or \`${DECISION_NO_MODEL}\` where nothing was asked of one, as for an \`each\` over an empty list with no named question beside it.`,
+    ),
+  calibration: z
+    .enum(['calibrated', 'self_reported'])
+    .describe(
+      "Whether this model's confidence tracks how often it is right. Self-reported confidence makes a minConfidence threshold a guess until it is measured against labelled examples.",
+    ),
   usage: TokenUsageSchema,
   latencyMs: z.number().int().nonnegative(),
 });

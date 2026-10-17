@@ -47,6 +47,7 @@ import {
   applyModelRoleChange,
   applyReasoningRoleChange,
   type ModelRole,
+  type ReasoningRole,
 } from '../components/cybernetic/ModelDefaultsEditor.js';
 import {
   HelmsmanDiscoveryEditor,
@@ -584,8 +585,13 @@ function StructuredEditor({
   const storedModelRefs = Object.values(draft.modelDefaults ?? {}).filter(
     (v): v is string => typeof v === 'string',
   );
-  const { modelOptions, clerkModelOptions, modelOptionsLoading, modelOptionsError } =
-    useChatModelOptions(storedModelRefs);
+  const {
+    modelOptions,
+    clerkModelOptions,
+    decisionModelOptions,
+    modelOptionsLoading,
+    modelOptionsError,
+  } = useChatModelOptions(storedModelRefs);
   return (
     <Column gap="md">
       {SECTION_ORDER.map((section) => (
@@ -594,6 +600,7 @@ function StructuredEditor({
             modelState: {
               modelOptions,
               clerkModelOptions,
+              decisionModelOptions,
               modelOptionsLoading,
               modelOptionsError,
             },
@@ -912,12 +919,18 @@ function ModelDefaultsSection({
   modelState: ModelOptionsState;
   spaceId: string;
 }) {
-  const { modelOptions, clerkModelOptions, modelOptionsLoading, modelOptionsError } = modelState;
+  const {
+    modelOptions,
+    clerkModelOptions,
+    decisionModelOptions,
+    modelOptionsLoading,
+    modelOptionsError,
+  } = modelState;
   const { readiness } = useSpaceLlmReadiness(spaceId);
   const onModelChange = (role: ModelRole, value: string | undefined) => {
     onChange((d) => ({ ...d, modelDefaults: applyModelRoleChange(d.modelDefaults, role, value) }));
   };
-  const onReasoningChange = (role: ModelRole, value: DirectiveReasoningEffort | undefined) => {
+  const onReasoningChange = (role: ReasoningRole, value: DirectiveReasoningEffort | undefined) => {
     onChange((d) => ({
       ...d,
       reasoningDefaults: applyReasoningRoleChange(d.reasoningDefaults, role, value),
@@ -930,6 +943,7 @@ function ModelDefaultsSection({
       reasoningDefaults={draft.reasoningDefaults}
       modelOptions={modelOptions}
       clerkModelOptions={clerkModelOptions}
+      decisionModelOptions={decisionModelOptions}
       clerkReadiness={readiness?.clerk ?? null}
       conversationSummaries={conversationSummariesEnabled(draft)}
       onConversationSummariesChange={(next) => {

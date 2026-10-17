@@ -16,6 +16,9 @@ import { CampaignFormDialog } from '../workflow/CampaignFormDialog.js';
 import {
   inferTaskType,
   workflowWhenView,
+  deriveRouteGuards,
+  describeRoute,
+  routeSourceOf,
   type Workflow,
   type WorkflowTask,
   type SkillDiagnostic,
@@ -1333,6 +1336,39 @@ function TaskInspector({
           </div>
         )}
       </Section>
+
+      {task.routes && (
+        <Section label="Routes">
+          <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {task.routes.map((route, i) => (
+              <Mono key={String(i)}>{describeRoute(route)}</Mono>
+            ))}
+          </span>
+        </Section>
+      )}
+
+      {(() => {
+        const source = routeSourceOf(workflow.tasks, task.taskId);
+        const guard = source
+          ? deriveRouteGuards(workflow.tasks).find((t) => t.taskId === task.taskId)?.when
+          : undefined;
+        if (!source || !guard) return null;
+        const view = workflowWhenView(guard);
+        return (
+          <Section label="Enabled by">
+            <KV
+              k={source}
+              v={
+                <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  {view.clauses.map((clause) => (
+                    <Mono key={clause}>{clause}</Mono>
+                  ))}
+                </span>
+              }
+            />
+          </Section>
+        );
+      })()}
 
       {task.when &&
         (() => {

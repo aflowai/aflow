@@ -5,6 +5,11 @@ import {
   type LoadedLocalModel,
 } from './ollamaRuntime.js';
 
+// The transport is undici's own fetch; these tests answer through the global one.
+vi.mock('./localRuntimeFetch.js', () => ({
+  localRuntimeFetch: (url: string, init?: RequestInit) => globalThis.fetch(url, init),
+}));
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });

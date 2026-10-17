@@ -162,6 +162,7 @@ yarn test:workspace @aflow/schemas  # One workspace through the shared config
 yarn test:file path/to/example.test.ts # One or more explicit test files
 
 # Quality / pre-PR
+yarn verify                # This branch's checks, scoped to what it changed — run before a PR
 yarn preflight             # Format, build, typecheck, test, lint — full check
 yarn preflight:no-test     # Same but skip tests (when infra is not running)
 /check                     # Claude Code skill: auto-fix format/lint, then build + typecheck + test
@@ -182,6 +183,13 @@ preflight; it intentionally waits behind any full run from a sibling worktree. N
 wait with a second broad Vitest process or workspace-level parallel test command. Never run
 `yarn test` or `yarn preflight` against a database a running stack uses — some suites drop and
 recreate schemas.
+
+**Before a pull request, run `yarn verify`** — the check a publication runs on this folder
+(`scripts/verify-commit.mjs`). It measures the commits on `HEAD` against `origin/main`, so commit
+first: it builds only the packages the change reads, type-checks the touched workspaces, runs the
+tests a change can reach, and lints and formats the touched files. The repository-wide build,
+lint and complete test run are CI's, on the pull request; `yarn preflight` is for proof, not a
+routine step.
 
 ### Which stack for which change
 

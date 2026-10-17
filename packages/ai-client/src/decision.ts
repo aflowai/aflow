@@ -2,9 +2,9 @@ import {
   decisionEachQuestionName,
   type DecisionAnswer,
   type DecisionEach,
+  type DecisionEachAnswer,
   type DecisionEachOutput,
   type DecisionQuestions,
-  type DecisionYesNoAnswer,
 } from '@aflow/schemas';
 import type { ProviderDecisionAnswer } from './types.js';
 import { AIClientError } from './errors.js';
@@ -21,6 +21,10 @@ import { AIClientError } from './errors.js';
  * An answer whose type differs from its question, or a choice outside the
  * options offered, is refused rather than passed on: a workflow routes on these
  * values, and a label nothing routes on would silently skip every branch.
+ *
+ * A question the model declined is passed on as a refusal that is never
+ * decided, its `decidedValue` null as an unsure answer's is, so the route a
+ * workflow keeps for uncertain answers takes it on the same one comparison.
  */
 export function resolveDecisionAnswers(
   questions: DecisionQuestions,
@@ -31,6 +35,10 @@ export function resolveDecisionAnswers(
     const answer = answers[name];
     if (answer === undefined) {
       throw mismatch(`no answer was returned for "${name}"`);
+    }
+    if (answer.type === 'refusal') {
+      resolved[name] = { type: 'refusal', decidedValue: null, decided: false };
+      continue;
     }
     if (answer.type !== question.type) {
       throw mismatch(`"${name}" asked a ${question.type} question and got a ${answer.type} answer`);
@@ -114,7 +122,8 @@ export function decisionRequestQuestions(input: {
 /**
  * The resolved answers split back into the named questions' and `each`'s:
  * an item is selected only where its answer is true and decided, so an item
- * the model was unsure of never passes as though it had been judged.
+ * the model was unsure of, or declined, never passes as though it had been
+ * judged.
  */
 export function splitDecisionAnswers(
   input: { questions?: DecisionQuestions | undefined; each?: DecisionEach | undefined },
@@ -126,16 +135,16 @@ export function splitDecisionAnswers(
     if (answer !== undefined) answers[name] = answer;
   }
   if (input.each === undefined) return { answers };
-  const eachAnswers: DecisionYesNoAnswer[] = input.each.items.map((_, index) => {
+  const eachAnswers: DecisionEachAnswer[] = input.each.items.map((_, index) => {
     const answer = resolved[decisionEachQuestionName(index)];
-    if (answer?.type !== 'yes_no') {
+    if (answer?.type !== 'yes_no' && answer?.type !== 'refusal') {
       throw mismatch(`no yes_no answer was returned for item ${String(index)}`);
     }
     return answer;
   });
   const selected = input.each.items.filter((_, index) => {
     const answer = eachAnswers[index];
-    return answer !== undefined && answer.value && answer.decided;
+    return answer?.type === 'yes_no' && answer.value && answer.decided;
   });
   return {
     answers,
