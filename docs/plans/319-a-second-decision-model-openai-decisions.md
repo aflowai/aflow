@@ -1,6 +1,6 @@
 # Plan 319 — A second decision model: OpenAI's Decisions API behind the same step
 
-**Status:** 🔨 P0–P3 built; the live probe and P4 open · **Builds on:** Plan 316 (`ai.decision.decide`)
+**Status:** 🔨 P0–P3 built and the profiles verified live; P4 open · **Builds on:** Plan 316 (`ai.decision.decide`)
 
 ## 1. Problem
 
@@ -46,7 +46,7 @@ Stored data: the optional `modelDefaults.decision`. A step whose output is read 
 
 ### P0 — The contract
 
-**Delivered** from the SDK's types and the guide (§2). **Open:** a run of `models:verify-decisions` with an OpenAI key in the environment, recording that the profile holds.
+**Delivered** from the SDK's types and the guide (§2), and confirmed by `models:verify-decisions` on 2026-10-17: `luna-decisions` answers all three question types in one call, accepts 200 questions and refuses 201, and reads an image with the state; `jev` answers all three types in one call.
 
 ### P1 — Behind the step
 
