@@ -25,6 +25,9 @@ yarn typecheck        # zero errors required
 yarn test             # all unit tests must pass
 ```
 
+Before a pull request, commit and run `yarn verify`: the scoped check a publication runs, which
+leaves the repository-wide build, lint and complete test run to CI.
+
 Across concurrent worktrees, use `test:file`, `test:workspace`, or `test:changed` for iteration.
 `yarn test` is the one complete proof and intentionally serializes with other full runs; never
 bypass a waiting lock with raw Vitest or workspace-level parallelism.
