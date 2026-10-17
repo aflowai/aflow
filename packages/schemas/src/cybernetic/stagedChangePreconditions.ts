@@ -16,6 +16,7 @@ export const TargetDescriptorSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('task.goal'), taskId: z.string() }).strict(),
   z.object({ kind: z.literal('task.context'), taskId: z.string() }).strict(),
   z.object({ kind: z.literal('task.dependencies'), taskId: z.string() }).strict(),
+  z.object({ kind: z.literal('task.routes'), taskId: z.string() }).strict(),
   z.object({ kind: z.literal('task.whole'), taskId: z.string() }).strict(),
   z.object({ kind: z.literal('task.absent'), taskId: z.string() }).strict(),
   z.object({ kind: z.literal('tasks.order') }).strict(),

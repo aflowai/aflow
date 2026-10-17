@@ -9,7 +9,14 @@
  * Pure; consumed by the proposal detail route and rendered by
  * `ProposalDiffView`.
  */
-import type { SkillManifest, StagedChange, Workflow, WorkflowTask } from '@aflow/schemas';
+import {
+  describeRoute,
+  type SkillManifest,
+  type StagedChange,
+  type Workflow,
+  type WorkflowTask,
+  type WorkflowTaskRoute,
+} from '@aflow/schemas';
 
 export interface ProposalOpDiffEntry {
   field: string;
@@ -40,6 +47,23 @@ function taskSummary(task: WorkflowTask | undefined): string {
     task.type ?? (task.operation ? 'operation' : task.pauseInstruction ? 'human' : 'agent');
   const target = task.operation ?? task.agent ?? '';
   return clip(`${task.taskId} (${family}${target ? `: ${target}` : ''}) — ${task.goal}`);
+}
+
+/** One entry per route added or removed; a route kept as it was is not a change. */
+function routeEntries(
+  before: readonly WorkflowTaskRoute[],
+  after: readonly WorkflowTaskRoute[],
+): ProposalOpDiffEntry[] {
+  const beforeText = before.map(describeRoute);
+  const afterText = after.map(describeRoute);
+  return [
+    ...beforeText
+      .filter((t) => !afterText.includes(t))
+      .map((t) => ({ field: 'route', before: clip(t) })),
+    ...afterText
+      .filter((t) => !beforeText.includes(t))
+      .map((t) => ({ field: 'route', after: clip(t) })),
+  ];
 }
 
 export function buildProposalOpDiffs(
@@ -111,6 +135,14 @@ export function buildProposalOpDiffs(
           ...(task !== undefined ? { before: clip(task.dependsOn ?? []) } : {}),
           after: clip(o['dependsOn']),
         });
+        break;
+      case 'update_task_routes':
+        entries.push(
+          ...routeEntries(
+            task?.routes ?? [],
+            (o['routes'] as WorkflowTaskRoute[] | undefined) ?? [],
+          ),
+        );
         break;
       case 'update_activation_hint':
         entries.push({

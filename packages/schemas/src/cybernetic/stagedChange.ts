@@ -12,6 +12,7 @@ import {
   WorkflowOutputDeclarationSchema,
   WorkflowStateVariableSchema,
   WorkflowTaskSchema,
+  WorkflowTaskRouteSchema,
   assertAuthoredTask,
   type AuthoredTaskLike,
 } from '../operations/workflow.js';
@@ -248,6 +249,19 @@ const UpdateTaskDependenciesOpSchema = z
      * promoted to a workflow source task.
      */
     source: z.boolean().optional(),
+  })
+  .strict();
+
+/**
+ * Set where a task's outcome sends the run. The full new list replaces the
+ * prior one; an empty list removes the task's routes. Only a patch stages it —
+ * a Coach rewrites a fork with `replace_task`.
+ */
+const UpdateTaskRoutesOpSchema = z
+  .object({
+    op: z.literal('update_task_routes'),
+    taskId: z.string(),
+    routes: z.array(WorkflowTaskRouteSchema).max(50),
   })
   .strict();
 
@@ -1100,7 +1114,11 @@ export const CoachProposableOpSchema = z
  * proposes.
  */
 export const StagedChangeOpSchema = z
-  .discriminatedUnion('op', [...COACH_PROPOSABLE_OP_SCHEMAS, EvalCaseDraftOpSchema])
+  .discriminatedUnion('op', [
+    ...COACH_PROPOSABLE_OP_SCHEMAS,
+    EvalCaseDraftOpSchema,
+    UpdateTaskRoutesOpSchema,
+  ])
   .superRefine(assertAuthoredTaskOp);
 
 export type StagedChangeOp = z.infer<typeof StagedChangeOpSchema>;

@@ -373,6 +373,7 @@ export async function applyCapabilityBindingOps(
       case 'update_task_goal':
       case 'update_task_context_spec':
       case 'update_task_dependencies':
+      case 'update_task_routes':
       case 'add_task':
       case 'replace_task':
       case 'remove_task':

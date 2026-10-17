@@ -1,3 +1,4 @@
+import type { RouteValidationErrorKind } from './routeErrorKinds.js';
 import {
   analyzeInputTemplate,
   describePredicate,
@@ -39,6 +40,7 @@ export interface GraphValidationError {
     | 'unsupported_when_expression'
     /** A `when` reads an output path the referenced task's output schema does not have. */
     | 'when_output_path_unknown'
+    | RouteValidationErrorKind
     | 'duplicate_task_id'
     | 'reserved_task_id'
     | 'binding_dangling_task_ref'

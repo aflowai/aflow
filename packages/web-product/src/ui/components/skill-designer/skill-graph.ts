@@ -1,5 +1,6 @@
 import { MarkerType, type Node, type Edge } from '@xyflow/react';
 import {
+  deriveRouteGuards,
   inferTaskType,
   predicateExpressions,
   workflowWhenView,
@@ -493,7 +494,10 @@ function applyBranchFans(
 
 export function buildSkillGraph(workflow: Workflow, opts?: BuildSkillGraphOptions): SkillGraph {
   const diagnostics = indexDiagnostics(opts?.validity);
-  const tasks = workflow.tasks;
+  // Edges and guards are drawn as the run sees them — a routed task carries the
+  // guard its source's routes imply — while the node keeps the stored task the
+  // inspector edits.
+  const tasks = deriveRouteGuards(workflow.tasks);
   const dependedOn = new Set<string>();
   for (const t of tasks) for (const d of t.dependsOn ?? []) dependedOn.add(d);
 
@@ -599,7 +603,7 @@ export function buildSkillGraph(workflow: Workflow, opts?: BuildSkillGraphOption
         agentStepCount: agentRef ? opts?.agentStepCounts?.get(agentRef) : undefined,
         isEntry,
         severity: severityFor(diagnostics.byTask.get(task.taskId)),
-        task,
+        task: workflow.tasks[index] ?? task,
       },
     });
 

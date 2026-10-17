@@ -16,6 +16,7 @@ import {
 } from '../operations/aiDecision.js';
 import { DECISION_MODELS, enumWithCustom } from '../operations/enums.js';
 import { TEMPLATE_BIND_KEY } from '../operations/workflow/taskTemplate.js';
+import type { WorkflowPollUntil, WorkflowTaskRoute } from '../operations/workflow/task.js';
 
 export const DECISION_OPERATION_ID = 'ai.decision.decide';
 
@@ -253,20 +254,21 @@ function literal(value: string | number | boolean): string {
   return value.includes("'") ? `"${value}"` : `'${value}'`;
 }
 
-function routeComparison(taskId: string, route: DecisionRoute): string {
-  const value = `tasks.${taskId}.output.answers.${route.question}.value`;
+/** A comparison on the decision's own output, as a route reads it. */
+function routeComparison(route: DecisionRoute): string {
+  const value = `output.answers.${route.question}.value`;
   if (route.equals !== undefined) return `${value} == ${literal(route.equals)}`;
   if (route.atLeast !== undefined) return `${value} >= ${String(route.atLeast)}`;
   return `${value} < ${String(route.below)}`;
 }
 
-function decided(taskId: string, question: string, outcome: boolean): string {
-  return `tasks.${taskId}.output.answers.${question}.decided == ${String(outcome)}`;
+function decided(question: string, outcome: boolean): string {
+  return `output.answers.${question}.decided == ${String(outcome)}`;
 }
 
-function combine(kind: 'anyOf' | 'allOf', expressions: string[]): DraftWhen {
+function combine(kind: 'anyOf' | 'allOf', expressions: string[]): WorkflowPollUntil {
   return expressions.length === 1
-    ? expressions[0]!
+    ? { expression: expressions[0]! }
     : kind === 'anyOf'
       ? { anyOf: expressions }
       : { allOf: expressions };
@@ -301,42 +303,55 @@ function claimsOf(task: DecisionTaskLike): Map<string, TargetClaim> {
  * be decided — unless the task is the fallback too, where "matches, or was not
  * decided" makes the confidence clause redundant and the guard a flat anyOf.
  */
-function guardFor(task: DecisionTaskLike, claim: TargetClaim): DraftWhen | null {
+function guardFor(task: DecisionTaskLike, claim: TargetClaim): WorkflowPollUntil | null {
   const isGuarded = (question: string) => task.questions[question]?.minConfidence !== undefined;
   const undecided = claim.undecided
     ? [...new Set(task.routes.map((r) => r.question).filter(isGuarded))].map((q) =>
-        decided(task.taskId, q, false),
+        decided(q, false),
       )
     : [];
   const needsConfidence = claim.routes.filter((r) => isGuarded(r.question) && !claim.undecided);
   if (needsConfidence.length > 0) {
     if (claim.routes.length > 1) return null;
     const route = claim.routes[0]!;
-    return combine('allOf', [
-      routeComparison(task.taskId, route),
-      decided(task.taskId, route.question, true),
-    ]);
+    return combine('allOf', [routeComparison(route), decided(route.question, true)]);
   }
-  const expressions = [...claim.routes.map((r) => routeComparison(task.taskId, r)), ...undecided];
+  const expressions = [...claim.routes.map((r) => routeComparison(r)), ...undecided];
   return expressions.length > 0 ? combine('anyOf', expressions) : null;
 }
 
 /**
- * Replace every decision task with the operation task it runs, and give each
- * task it routes to the guard that route implies. Idempotent: a draft with no
+ * The routes a decision stores: one per distinct condition, enabling every
+ * task that runs under it. A task's condition is the one `guardFor` gives, so
+ * deriving its guard from these routes reproduces it exactly.
+ */
+function routesOf(task: DecisionTaskLike): WorkflowTaskRoute[] {
+  const byCondition = new Map<string, WorkflowTaskRoute>();
+  for (const [target, claim] of claimsOf(task)) {
+    const when = guardFor(task, claim);
+    if (when === null) continue;
+    const key = JSON.stringify(when);
+    const existing = byCondition.get(key);
+    if (existing) existing.enable.push(target);
+    else byCondition.set(key, { when, enable: [target] });
+  }
+  return [...byCondition.values()];
+}
+
+/**
+ * Replace every decision task with the operation task it runs, carrying its
+ * routes; each task it enables depends on it, and its guard is derived from
+ * those routes when the workflow is materialized. Idempotent: a draft with no
  * decision tasks comes back unchanged.
  */
 export function expandDecisionTasks<Draft extends { tasks: DraftTaskLike[] }>(
   draft: Draft,
 ): Omit<Draft, 'tasks'> & { tasks: Array<Exclude<Draft['tasks'][number], { type: 'decision' }>> } {
   type Expanded = Exclude<Draft['tasks'][number], { type: 'decision' }>;
-  const guards = new Map<string, { when: DraftWhen; decisionId: string }>();
+  const enabledBy = new Map<string, string>();
   for (const task of draft.tasks) {
     if (!isDecisionTask(task)) continue;
-    for (const [target, claim] of claimsOf(task)) {
-      const when = guardFor(task, claim);
-      if (when !== null) guards.set(target, { when, decisionId: task.taskId });
-    }
+    for (const target of claimsOf(task).keys()) enabledBy.set(target, task.taskId);
   }
 
   const tasks = draft.tasks.map((task) => {
@@ -344,6 +359,7 @@ export function expandDecisionTasks<Draft extends { tasks: DraftTaskLike[] }>(
       const state = Object.fromEntries(
         task.consumes.map((c) => [c.bindAs, { [TEMPLATE_BIND_KEY]: c.bindAs }]),
       );
+      const routes = routesOf(task);
       return {
         type: 'operation',
         taskId: task.taskId,
@@ -356,17 +372,17 @@ export function expandDecisionTasks<Draft extends { tasks: DraftTaskLike[] }>(
         },
         dependsOn: task.dependsOn,
         ...(task.when !== undefined ? { when: task.when } : {}),
+        ...(routes.length > 0 ? { routes } : {}),
         produces: [],
         consumes: task.consumes,
         retryability: 'safe',
       } as unknown as Expanded;
     }
-    const guard = guards.get(task.taskId);
-    if (!guard) return task as Expanded;
+    const decisionId = enabledBy.get(task.taskId);
+    if (decisionId === undefined) return task as Expanded;
     return {
       ...task,
-      when: guard.when,
-      dependsOn: [...new Set([...task.dependsOn, guard.decisionId])],
+      dependsOn: [...new Set([...task.dependsOn, decisionId])],
     } as Expanded;
   });
 

@@ -235,6 +235,7 @@ export function createWorkflowOperationRegistrations(
           'Bumping budget.maxRuns when the agent hits the cap mid-optimization',
           'Renaming or retuning a single task without touching the rest',
           'Changing the skill goal (replace /goal) or a campaign field (/campaign/fields/{key})',
+          'Adding a branch to a fork: add the task, then add /tasks/{source}/routes/- with { when: "output.<path> == <literal>", enable: [<new task>] }',
         ],
         whenNotToUse: [
           'Initial creation — use workflow.manage.put',
@@ -245,6 +246,7 @@ export function createWorkflowOperationRegistrations(
           'Use expectedRevision to guard against concurrent writers',
           'A single patch may not mix metadata (budget/status) with definition (tasks/goal/campaign)',
           'Identity campaign fields are immutable — their schema cannot be reshaped, only relabeled',
+          'A task a route enables gets its guard and its dependency on the source from that route; give it no when of its own, and remove its route before removing it',
           'Operations that run only as workflow steps, such as ai.decision.decide, are found with catalog.tool.search workflowSteps: true; a when that reads tasks.<id>.output.<path> is refused when the producer does not emit that path',
         ],
         minimalExampleInput: {
