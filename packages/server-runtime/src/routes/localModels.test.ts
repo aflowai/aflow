@@ -21,6 +21,7 @@ vi.mock('@aflow/cybernetic-runtime', async (importOriginal) => {
             runtimeId: 'this-machine:11434',
             credential: { id: 'c', scope: 'user', scopeId: 'u' },
             hostMachine: undefined,
+            hostname: undefined,
           }
         : null,
   };

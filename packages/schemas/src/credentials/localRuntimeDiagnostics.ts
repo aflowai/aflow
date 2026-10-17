@@ -38,6 +38,9 @@ const setContext = z
       .describe('The window every request gets, or null for the largest that fits the machine.'),
   })
   .describe("Set the context window on the space's Ollama connection.");
+const startRuntime = z
+  .object({ action: z.literal('start_runtime') })
+  .describe('Start Ollama on this computer, through its paired executor.');
 const useForEveryRole = z
   .object({ action: z.literal('use_for_every_role'), model })
   .describe('Assign one model to every role, so the runtime never switches models between them.');
@@ -67,6 +70,7 @@ export const LocalModelActionSchema = z.discriminatedUnion('action', [
   warm,
   unload,
   setContext,
+  startRuntime,
   useForEveryRole,
 ]);
 export type LocalModelAction = z.infer<typeof LocalModelActionSchema>;

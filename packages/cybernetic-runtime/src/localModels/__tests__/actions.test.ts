@@ -45,6 +45,7 @@ function runtime(freeDiskBytes: number | undefined) {
       freeDiskBytes === undefined
         ? undefined
         : { totalMemoryBytes: 24 * GIB, unifiedMemory: true, freeDiskBytes },
+    hostname: undefined,
   };
   return {
     local,

@@ -70,7 +70,7 @@ export async function diagnoseSpaceLocalRuntime(input: {
     if (pull) pulls[model.id] = pull;
   }
   // This machine's free disk says nothing about a runtime on another one.
-  const onThisMachine = runtime.runtimeId.startsWith(`${THIS_MACHINE_RUNTIME_HOST}:`);
+  const onThisMachine = isOnThisMachine(runtime);
   return diagnoseLocalRuntime({
     observation: {
       baseUrl: runtime.config.baseUrl ?? OLLAMA_DEFAULT_BASE_URL,
@@ -83,5 +83,18 @@ export async function diagnoseSpaceLocalRuntime(input: {
     roles,
     freeDiskBytes: onThisMachine ? runtime.hostMachine?.freeDiskBytes : undefined,
     pulls,
+    startable: localRuntimeStartable(runtime),
   });
+}
+
+function isOnThisMachine(runtime: SpaceLocalRuntime): boolean {
+  return runtime.runtimeId.startsWith(`${THIS_MACHINE_RUNTIME_HOST}:`);
+}
+
+/**
+ * Whether the runtime can be started from the workspace: it is on this
+ * machine, and this machine's executor is paired to start it.
+ */
+export function localRuntimeStartable(runtime: SpaceLocalRuntime): boolean {
+  return isOnThisMachine(runtime) && runtime.hostname !== undefined;
 }

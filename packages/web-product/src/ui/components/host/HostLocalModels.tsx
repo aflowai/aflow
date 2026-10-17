@@ -79,6 +79,7 @@ export function HostLocalModels({ spaceId }: { spaceId: string }) {
       ) : (
         <>
           <RuntimeLine diagnostics={diagnostics} />
+          {act.error && <HelperText>{act.error.message}</HelperText>}
           {diagnostics.issues.map((issue) => (
             <Card key={`${issue.code}:${issue.model ?? ''}`}>
               <CardBody>
