@@ -14,6 +14,9 @@ import { AIClientError } from './errors.js';
  * An answer whose type differs from its question, or a choice outside the
  * options offered, is refused rather than passed on: a workflow routes on these
  * values, and a label nothing routes on would silently skip every branch.
+ *
+ * A question the model declined is passed on as a refusal that is never
+ * decided, so the route a workflow keeps for uncertain answers takes it.
  */
 export function resolveDecisionAnswers(
   questions: DecisionQuestions,
@@ -24,6 +27,10 @@ export function resolveDecisionAnswers(
     const answer = answers[name];
     if (answer === undefined) {
       throw mismatch(`no answer was returned for "${name}"`);
+    }
+    if (answer.type === 'refusal') {
+      resolved[name] = { type: 'refusal', decided: false };
+      continue;
     }
     if (answer.type !== question.type) {
       throw mismatch(`"${name}" asked a ${question.type} question and got a ${answer.type} answer`);

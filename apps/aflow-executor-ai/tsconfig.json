@@ -17,6 +17,9 @@
       "path": "../../packages/credential-resolver"
     },
     {
+      "path": "../../packages/cybernetic-runtime"
+    },
+    {
       "path": "../../packages/database"
     },
     {

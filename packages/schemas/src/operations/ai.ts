@@ -10,9 +10,10 @@ import {
   AgentStepConfigSchema,
 } from '../runtime/agentTurn.js';
 import { HistoryPolicySchema } from '../runtime/aiHistory.js';
-import { AiMediaOutputSchema, PinnedMemoryRefSchema } from '../media/asset.js';
+import { AiMediaOutputSchema } from '../media/asset.js';
 import type { OperationRegistration } from '../catalog/operationCatalog.js';
 import { TokenUsageSchema } from './aiUsage.js';
+import { MediaSourceRefSchema, SOURCE_REF_HINT } from './mediaSourceRef.js';
 import { AiDecideInputSchema, AiDecideOutputSchema } from './aiDecision.js';
 
 // Import enum constants and helper (defined in a separate file to avoid circular deps)
@@ -282,35 +283,7 @@ export type AiGenerateStreamOutput = z.infer<typeof AiGenerateStreamOutputSchema
 // Media source references
 // ============================================================================
 
-const SOURCE_REF_HINT =
-  'Pass the pinned memory reference a media step returns — an entry of its `assets`, carrying ' +
-  'path, version and contentHash — or a PayloadRef of stored bytes. For a document no render ' +
-  "just produced, read its pin with memory.store.get({ target: { path }, view: 'stat' }). A bare " +
-  'path is not a form here, and a version that no longer exists or a hash that disagrees fails ' +
-  'the step rather than rendering from whatever the path now holds.';
-
-/**
- * Where a media operation reads an input image from.
- *
- * The pinned form is exactly what every media operation returns, so an asset
- * out of one render is the input of the next without translation. A bare path
- * is deliberately not a form: the render's receipt states which version of
- * which document it read, and a path resolves to whatever it holds at the
- * moment of reading, which would make that statement unprovable.
- */
-export const MediaSourceRefSchema = z
-  .union([
-    PinnedMemoryRefSchema,
-    z
-      .string()
-      .min(1)
-      .describe(
-        'PayloadRef of stored image bytes — a platform handle a workflow step is wired to, which ' +
-          'an agent has no way to mint.',
-      ),
-  ])
-  .describe(SOURCE_REF_HINT);
-export type MediaSourceRef = z.infer<typeof MediaSourceRefSchema>;
+export { MediaSourceRefSchema, type MediaSourceRef } from './mediaSourceRef.js';
 
 // ============================================================================
 // ai.image.generate - Image Generation
@@ -645,6 +618,7 @@ export const AiOperationRegistrations: OperationRegistration[] = [
         'A workflow step that routes, triages, gates or scores on a judgement, with the questions fixed when the skill is authored',
         'Deciding whether an item needs a reasoning step at all: set minConfidence and send decided=false to an agent task',
         'The same questions asked of many items, where a reasoning model per item costs too much or takes too long',
+        'Judging images — a screenshot, a photo of damage, a scanned form — with the images field, on a decision model that reads them',
       ],
       whenNotToUse: [
         'Anything that must produce text, code or an explanation — use an agent task or ai.text.generate_json',
@@ -655,6 +629,7 @@ export const AiOperationRegistrations: OperationRegistration[] = [
         'Instructions are read literally: negations and scope apply exactly as written',
         'Content in the state can steer the answer, so a decision about untrusted input is never the only gate on a consequential action',
         'Each question is answered in isolation; one question cannot see another question’s answer',
+        'A model may decline a question: the answer comes back as a refusal, never decided, and the route kept for uncertain answers takes it',
       ],
       minimalExampleInput: {
         state: 'My card was charged twice for the same order.',

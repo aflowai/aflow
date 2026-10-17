@@ -70,6 +70,7 @@
     "models:local-gates": "NODE_OPTIONS='--conditions=ts-source' node scripts/with-stack-env.mjs tsx scripts/local-model-gates.ts",
     "models:verify-local": "NODE_OPTIONS='--conditions=ts-source' node scripts/with-stack-env.mjs tsx scripts/verify-local-models.ts",
     "models:verify-reasoning": "NODE_OPTIONS='--conditions=ts-source' node scripts/with-stack-env.mjs tsx scripts/verify-reasoning-profiles.ts",
+    "models:verify-decisions": "NODE_OPTIONS='--conditions=ts-source' node scripts/with-stack-env.mjs tsx scripts/verify-decision-profiles.ts",
     "orchestrator:dev": "NODE_OPTIONS='--conditions=ts-source' node scripts/with-stack-env.mjs node scripts/watch-service.mjs apps/aflow-orchestrator/src/index.ts apps/aflow-orchestrator packages",
     "packages:watch": "yarn workspaces foreach -A --include '@aflow/schemas' --include '@aflow/redis' --include '@aflow/database' --include '@aflow/executor-runtime' --include '@aflow/payload-store' --include '@aflow/ai-client' --include '@aflow/input-resolution' --include '@aflow/observability' --include '@aflow/lib' -p run dev",
     "postinstall": "node scripts/postinstall.mjs",

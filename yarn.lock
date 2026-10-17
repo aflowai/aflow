@@ -11,6 +11,7 @@ __metadata:
   dependencies:
     "@aflow/ai-client": "workspace:*"
     "@aflow/credential-resolver": "workspace:*"
+    "@aflow/cybernetic-runtime": "workspace:*"
     "@aflow/database": "workspace:*"
     "@aflow/executor-runtime": "workspace:*"
     "@aflow/lib": "workspace:*"

@@ -92,6 +92,12 @@ export const DirectiveModelDefaultsSchema = z.object({
   clerk: z
     .union([z.literal(CLERK_AUTO), z.literal(CLERK_SPACE_DEFAULT), z.string().min(1).max(64)])
     .optional(),
+  /**
+   * The model decision steps run on. Like the Clerk it does not inherit
+   * `default` — a chat model cannot answer a decision — so unset means the
+   * first decision model whose provider the space holds a key for.
+   */
+  decision: z.string().min(1).max(64).optional(),
 });
 
 export type DirectiveModelDefaults = z.infer<typeof DirectiveModelDefaultsSchema>;
