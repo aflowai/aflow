@@ -14,6 +14,6 @@ import { Agent } from 'undici';
 
 const NO_TRANSPORT_LIMIT = new Agent({ headersTimeout: 0, bodyTimeout: 0 });
 
-export function localRuntimeFetch(url: string, init: RequestInit): Promise<Response> {
+export function localRuntimeFetch(url: string, init: RequestInit = {}): Promise<Response> {
   return fetch(url, { ...init, dispatcher: NO_TRANSPORT_LIMIT } as RequestInit);
 }

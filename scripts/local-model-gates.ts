@@ -19,6 +19,7 @@
  * `lifecycle` and `embeddings` pull small models (about 1–3 GB) and delete
  * what they pulled. `machine` loads every model it is given, one at a time.
  */
+import { localRuntimeFetch } from '@aflow/ai-client';
 import { writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import os from 'node:os';
@@ -51,7 +52,7 @@ const describe = (e: unknown): string =>
 const seconds = (ns: unknown): number => (typeof ns === 'number' ? Math.round(ns / 1e7) / 100 : 0);
 
 async function api(path: string, body?: unknown, signal?: AbortSignal): Promise<Response> {
-  return fetch(`${BASE}${path}`, {
+  return localRuntimeFetch(`${BASE}${path}`, {
     method: body === undefined ? 'GET' : 'POST',
     headers: { 'content-type': 'application/json' },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -161,7 +162,7 @@ async function pull(
 }
 
 async function remove(model: string): Promise<void> {
-  const res = await fetch(`${BASE}/api/delete`, {
+  const res = await localRuntimeFetch(`${BASE}/api/delete`, {
     method: 'DELETE',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ model }),

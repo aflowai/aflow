@@ -98,6 +98,41 @@ export const builtInModels: ModelDefinition[] = [
       downloadBytes: 16_146_867_483,
     },
   },
+  {
+    id: 'ollama-qwen3.5-9b',
+    provider: 'ollama',
+    providerModelId: 'qwen3.5:9b',
+    displayName: 'Qwen3.5 9B (this computer)',
+    description:
+      "Alibaba's Qwen3.5 9B, dense, served by Ollama on this computer. Vision, native tool calls, on/off thinking; fits a 16 GB machine at the agents' window. Apache 2.0.",
+    contextWindow: 262_144,
+    maxOutputTokens: 8192,
+    capabilities: {
+      ...defaultCapabilities,
+      vision: true,
+      reasoning: true,
+      // The MLX runner refuses `format`; JSON rides a tool call instead.
+      structuredOutputs: false,
+      // The runtime has no tool_choice.
+      forcedToolChoice: false,
+    },
+    pricing: { promptPer1M: 0, completionPer1M: 0, currency: 'USD' },
+    traits: { speed: 2, cost: 1, intelligence: 2, outputType: 'text' },
+    aliases: ['qwen-local'],
+    reasoning: { supported: ['off', 'high'] },
+    local: {
+      runtimeTag: 'qwen3.5:9b',
+      digest: 'd63f830f28d515fefea546f213fca7a75e9dd5176ef51a6deabc952d1c99a911',
+      runner: 'mlx',
+      quantization: 'nvfp4',
+      runtimeVersion: '0.40.5',
+      probeVersion: 2,
+      measuredAt: '2026-10-17',
+      // Measured at OLLAMA_KV_CACHE_TYPE=q8_0 (§9 G6).
+      footprint: { weightsBytes: 7_735_695_816, kvBytesPerToken: 68_742 },
+      downloadBytes: 7_639_229_431,
+    },
+  },
 
   // ============================================================================
   // OpenAI Text Models

@@ -205,3 +205,4 @@ export {
   type LocalRuntimeClient,
   type LoadedLocalModel,
 } from './providers/ollamaRuntime.js';
+export { localRuntimeFetch } from './providers/localRuntimeFetch.js';
