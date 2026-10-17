@@ -55,3 +55,4 @@ export * from './store.js';
 export * from './evalOps.js';
 export * from './evalBatchOps.js';
 export * from './plan/index.js';
+export * from './model/index.js';

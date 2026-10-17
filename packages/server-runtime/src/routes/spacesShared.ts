@@ -19,6 +19,7 @@ import {
   DirectiveConnectionRefSchema,
   EntityDirectivesSchema,
   CLERK_MODEL_CANDIDATES,
+  type EditionId,
 } from '@aflow/schemas';
 import {
   allowedModelIds,
@@ -88,6 +89,7 @@ function roleAllowed(role: string, policy: AgentModelPolicy): ReadonlySet<string
 export async function allowedAgentModelRefs(
   db: PostgresJsDatabase,
   tenantId: string,
+  edition: EditionId,
 ): Promise<AgentModelPolicy> {
   const rows = await db
     .select({ allowlist: tenants.agentModelAllowlist })
@@ -96,7 +98,7 @@ export async function allowedAgentModelRefs(
     .limit(1);
   const stored = rows[0]?.allowlist;
   const explicit = Array.isArray(stored) && stored.length > 0;
-  return { ids: allowedModelIds(explicit ? (stored as string[]) : null), explicit };
+  return { ids: allowedModelIds(explicit ? (stored as string[]) : null, edition), explicit };
 }
 
 /**

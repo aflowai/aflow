@@ -265,6 +265,74 @@ describe('streaming', () => {
   });
 });
 
+describe('the silent stretches before the first token', () => {
+  const ps = (models: Array<Record<string, unknown>>) => () => json({ models });
+  const ask = (onRuntimePhase: (p: { phase: string }) => void) =>
+    createOllamaAdapter({}).generateText({
+      ...context,
+      model: 'gemma4:26b',
+      messages: [{ role: 'user', content: 'Hi' }],
+      onRuntimePhase,
+    });
+
+  it('loads a model that is not loaded at the window the request uses, and says so first', async () => {
+    const sent = runtime(
+      ps([]),
+      () => json({ done: true }),
+      done({ content: 'ok' }, { prompt: 12, eval: 1 }),
+    );
+    const phases: string[] = [];
+
+    await ask((p) => phases.push(p.phase));
+
+    expect(phases).toEqual(['loading_model', 'reading_prompt']);
+    expect(sent.map((s) => new URL(s.url).pathname)).toEqual([
+      '/api/ps',
+      '/api/generate',
+      '/api/chat',
+    ]);
+    expect((sent[1]?.body['options'] as Record<string, unknown>)['num_ctx']).toBe(
+      (sent[2]?.body['options'] as Record<string, unknown>)['num_ctx'],
+    );
+  });
+
+  it('reports only the reading of the prompt when the model is already loaded', async () => {
+    runtime(
+      ps([{ name: 'gemma4:26b', runner: 'mlx', context_length: 32_768 }]),
+      done({ content: 'ok' }, { prompt: 12, eval: 1 }),
+    );
+    const phases: string[] = [];
+
+    await ask((p) => phases.push(p.phase));
+
+    expect(phases).toEqual(['reading_prompt']);
+  });
+
+  it('leaves a failed load for the request to report in its own words', async () => {
+    runtime(
+      ps([]),
+      () => json({ error: 'model not found' }, 404),
+      () => json({ error: "model 'gemma4:26b' not found" }, 404),
+    );
+
+    const error = await rejection(ask(() => undefined));
+
+    expect(error.message).toContain('ollama pull');
+  });
+
+  it('asks the runtime nothing extra when no caller listens', async () => {
+    const sent = runtime(done({ content: 'ok' }, { prompt: 12, eval: 1 }));
+
+    await createOllamaAdapter({}).generateText({
+      ...context,
+      model: 'gemma4:26b',
+      messages: [{ role: 'user', content: 'Hi' }],
+    });
+
+    expect(sent.map((s) => new URL(s.url).pathname)).toEqual(['/api/chat']);
+  });
+});
+
 describe('structured output', () => {
   const schema = z.object({ answer: z.number() });
 

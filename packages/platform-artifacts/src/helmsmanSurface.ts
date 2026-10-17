@@ -23,20 +23,23 @@ export interface HelmsmanSurface {
 }
 
 /**
- * The machine reads, the harness and opening a page, pinned on the local
- * edition.
+ * The machine reads, the harness, opening a page and the model runtime's
+ * status, pinned on the local edition.
  *
  * Assessment is steering work and happens on most turns, and the harness is how
  * a task is commissioned once the assessment is done. Promoting either one by
  * hand is a round trip on every task that touches the operator's machine.
  * Opening a page is the browser's one every-turn cost; the operations that
- * act on a page promote together once one is open.
+ * act on a page promote together once one is open. The runtime's status is
+ * what answers "why is this slow" on a machine where the model Helmsman runs
+ * on is the likeliest cause, and it takes no input.
  */
 const LOCAL_PINNED_OPERATIONS: readonly string[] = [
   'host.harness.run',
   'host.file.list',
   'host.file.get',
   'browser.page.open',
+  'model.runtime.status',
 ];
 
 /**

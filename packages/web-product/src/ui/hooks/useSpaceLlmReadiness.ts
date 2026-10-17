@@ -1,5 +1,6 @@
 'use client';
 
+import type { LocalRuntimeIssue } from '@aflow/schemas';
 import { useApiQuery } from './useApiQuery.js';
 
 export interface RoleReadiness {
@@ -59,6 +60,8 @@ export interface SpaceLlmReadiness {
    * is whether setup has ever happened, not whether the workspace can run now.
    */
   hasConfiguredProvider: boolean;
+  /** What is wrong with the space's models on this computer; an `error` counts against `ready`. */
+  localIssues: LocalRuntimeIssue[];
 }
 
 /** Invalidate with this key after credential or model-defaults mutations. */

@@ -243,3 +243,26 @@ describe('pausedStepSource — who the resolve that resumes the run is', () => {
     ]);
   });
 });
+
+describe('pausedStepSource — a change to the model runtime on this computer', () => {
+  const LOCAL_MODEL_REQUEST = {
+    kind: 'write_approval',
+    target: 'local_model',
+    change: { action: 'unload', model: 'ollama-gemma4-26b' },
+    modelName: 'Gemma 4 26B (this computer)',
+    runtimeUrl: 'http://127.0.0.1:11434',
+    impact: { inFlightRequests: 0, ownConversationReloads: true, notes: ['Frees 22.7 GB.'] },
+    requestHash: 'local-hash-1',
+  };
+
+  it('answers to a space admin, the role the operator’s own routes for it require', async () => {
+    const [item] = await createPausedStepSource(makeDeps(LOCAL_MODEL_REQUEST)).listOpen(ctx());
+    expect(item).toMatchObject({
+      kind: 'write_approval',
+      title: 'Approve on this computer: unload Gemma 4 26B (this computer)',
+      resolverPolicy: { candidateResolvers: ['admin'] },
+      extension: { target: 'local_model', change: { action: 'unload' } },
+    });
+    expect(item!.summary).toContain('its next turn loads it again');
+  });
+});

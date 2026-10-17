@@ -45,6 +45,7 @@ import { AppletOperationRegistrations } from '../applet/operations.js';
 import { EvalOperationRegistrations } from '../operations/evalOps.js';
 import { EvalBatchOperationRegistrations } from '../operations/evalBatchOps.js';
 import { PlanOperationRegistrations } from '../operations/plan/registrations.js';
+import { ModelOperationRegistrations } from '../operations/model/registrations.js';
 
 // ============================================================================
 // Aggregate all registrations
@@ -84,6 +85,7 @@ const ALL_REGISTRATIONS: OperationRegistration[] = [
   ...EvalOperationRegistrations,
   ...EvalBatchOperationRegistrations,
   ...PlanOperationRegistrations,
+  ...ModelOperationRegistrations,
 ];
 
 // ============================================================================
@@ -378,6 +380,15 @@ export function isPlanOperation(operationId: string): boolean {
 }
 
 /**
+ * Plan 323 D10 — the model runtime on this computer is reconfigured by the
+ * operator, or by Helmsman with their approval, and never by a skill's run: a
+ * run does not reconfigure the machine it runs on.
+ */
+export function isLocalModelOperation(operationId: string): boolean {
+  return operationId === 'model' || operationId.startsWith('model.');
+}
+
+/**
  * Operations that never reach a Runner, through any channel: a delegation's
  * `runner_tools`, a capability grant's direct or promotable tier, or the
  * surface a Runner's turn is handed. Every Runner exclusion asks this rather
@@ -385,7 +396,11 @@ export function isPlanOperation(operationId: string): boolean {
  * of them at once.
  */
 export function isRunnerExcludedOperation(operationId: string): boolean {
-  return isEvalPlaneOperation(operationId) || isPlanOperation(operationId);
+  return (
+    isEvalPlaneOperation(operationId) ||
+    isPlanOperation(operationId) ||
+    isLocalModelOperation(operationId)
+  );
 }
 
 // ============================================================================

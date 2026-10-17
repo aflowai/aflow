@@ -32,6 +32,7 @@ import {
   validateAgentOpTaskOnlyTools,
   validateSkillEvalPlaneSeparation,
   validateSkillPlanSeparation,
+  validateSkillLocalModelSeparation,
 } from '../scheduling/opTaskOnlyValidator.js';
 import { CONTAINS_RESERVED_FIELDS } from '../evalRunnerCriterion.js';
 
@@ -208,6 +209,16 @@ export function materializeAndValidateSkillConfig(
       dimension: 'ref',
       severity: 'error',
       detail: planError,
+    });
+  }
+
+  const localModelError = validateSkillLocalModelSeparation(materializedTasks);
+  if (localModelError) {
+    diagnostics.push({
+      code: 'skill_references_local_model_op',
+      dimension: 'ref',
+      severity: 'error',
+      detail: localModelError,
     });
   }
 

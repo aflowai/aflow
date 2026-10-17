@@ -1,5 +1,10 @@
 import type { WorkflowTask } from '@aflow/schemas';
-import { getOperation, isEvalPlaneOperation, isPlanOperation } from '@aflow/schemas';
+import {
+  getOperation,
+  isEvalPlaneOperation,
+  isLocalModelOperation,
+  isPlanOperation,
+} from '@aflow/schemas';
 
 /** Teaching error template — `{toolId}` is replaced at validation time. */
 export const OP_TASK_ONLY_AGENT_TOOL_ERROR =
@@ -89,6 +94,29 @@ export function validateSkillPlanSeparation(tasks: readonly WorkflowTask[]): str
     for (const toolId of collectAgentTaskToolIds(task)) {
       if (isPlanOperation(toolId)) {
         return PLAN_TASK_ERROR.replace('{opId}', toolId);
+      }
+    }
+  }
+  return null;
+}
+
+/** Teaching error template — `{opId}` is replaced at validation time. */
+export const LOCAL_MODEL_TASK_ERROR =
+  'Operation {opId} reads or changes the model runtime on this computer, which only Helmsman reaches, and ' +
+  'only with the operator’s approval — a run does not reconfigure the machine it runs on. Remove the reference.';
+
+/**
+ * Plan 323 D10 — no skill task, agent tool surface or operation task may
+ * reference a `model.*` operation.
+ */
+export function validateSkillLocalModelSeparation(tasks: readonly WorkflowTask[]): string | null {
+  for (const task of tasks) {
+    if (typeof task.operation === 'string' && isLocalModelOperation(task.operation)) {
+      return LOCAL_MODEL_TASK_ERROR.replace('{opId}', task.operation);
+    }
+    for (const toolId of collectAgentTaskToolIds(task)) {
+      if (isLocalModelOperation(toolId)) {
+        return LOCAL_MODEL_TASK_ERROR.replace('{opId}', toolId);
       }
     }
   }

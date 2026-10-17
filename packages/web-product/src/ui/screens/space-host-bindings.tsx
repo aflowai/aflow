@@ -18,6 +18,7 @@ import { useSpace, useSpaceFromRoute } from '../components/providers.js';
 import { useEdition } from '../hooks/useEdition.js';
 import { useApiQuery, useApiMutation } from '../hooks/useApiQuery.js';
 import { HostBrowserProfiles } from '../components/host/HostBrowserProfiles.js';
+import { HostLocalModels } from '../components/host/HostLocalModels.js';
 
 interface HostBinding {
   hostBindingId: string;
@@ -123,8 +124,8 @@ export function SpaceHostBindingsPage() {
         <Column gap="xs">
           <Heading level={2}>This Computer</Heading>
           <Text variant="muted">
-            Folders on your machine that this workspace can reach, and the browser its agents use
-            there.
+            Folders on your machine that this workspace can reach, the browser its agents use there,
+            and the models that run on it.
           </Text>
         </Column>
 
@@ -248,6 +249,8 @@ export function SpaceHostBindingsPage() {
         </Column>
 
         <HostBrowserProfiles />
+
+        {spaceId.length > 0 && <HostLocalModels spaceId={spaceId} />}
       </Column>
     </PageContainer>
   );

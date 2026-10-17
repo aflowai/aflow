@@ -11,6 +11,7 @@ import type { LiveDeltaFrame } from './session-events-broker.js';
 import {
   runViewReducer,
   initialRunViewState,
+  latestStatusLine,
   type Message,
   type RunViewState,
   type RunViewAction,
@@ -28,6 +29,8 @@ export interface LiveStreamActivity {
   stepExecutionId: string;
   channel: LiveDeltaFrame['channel'];
   atMs: number;
+  /** What a `status` frame says the step is waiting on — a model loading, a prompt being read. */
+  status?: string;
 }
 
 interface UseRunReducerReturn {
@@ -465,6 +468,17 @@ export function useRunReducer(runId: string | null, flowName?: string): UseRunRe
       timestamp: new Date().toISOString(),
       ...(flowNameRef.current ? { senderName: flowNameRef.current } : {}),
     });
+    if (frame.channel === 'status') {
+      const status = latestStatusLine(frame.delta);
+      if (status === undefined) return;
+      setLiveActivity({
+        stepExecutionId: frame.stepExecutionId,
+        channel: frame.channel,
+        atMs: Date.now(),
+        status,
+      });
+      return;
+    }
     setLiveActivity({
       stepExecutionId: frame.stepExecutionId,
       channel: frame.channel,

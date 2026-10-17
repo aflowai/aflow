@@ -310,14 +310,10 @@ export {
   setWriteApprovalGrant,
   getWriteApprovalGrant,
   hostPushRequestHash,
+  spendWriteApprovalGrant,
+  writeApprovalSpentKey,
 } from './writeApproval.js';
-export {
-  browserAskKey,
-  browserApprovalSpentKey,
-  rememberBrowserAsk,
-  readBrowserAsk,
-  spendBrowserApproval,
-} from './browserApproval.js';
+export { browserAskKey, rememberBrowserAsk, readBrowserAsk } from './browserApproval.js';
 
 // Memory embedding operations
 export {
@@ -532,6 +528,7 @@ export * from './browserHandoff.js';
 export * from './sessionResidue.js';
 export {
   acquireRuntimeLease,
+  countRuntimeRequests,
   runtimeAdmission,
   RuntimeLeaseAbortedError,
   RUNTIME_LEASE_TTL_MS,
@@ -540,3 +537,12 @@ export {
   type RuntimeLease,
   type AcquireRuntimeLeaseInput,
 } from './localRuntimeAdmission.js';
+export {
+  claimLocalPull,
+  recordLocalPullProgress,
+  requestLocalPullCancel,
+  endLocalPull,
+  readLocalPulls,
+  LOCAL_PULL_LEASE_MS,
+  LOCAL_PULL_ENDED_TTL_MS,
+} from './localModelPulls.js';

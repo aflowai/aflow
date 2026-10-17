@@ -6,6 +6,7 @@
  * SessionHotState.requestedInputRef. The UI loads this to render input forms.
  */
 import { z } from 'zod';
+import { LocalRuntimeChangeSchema } from '../credentials/localRuntimeDiagnostics.js';
 import { BROWSER_ACTIONS } from '../operations/browser.js';
 import {
   OAuthConsentIntegrationKindSchema,
@@ -219,9 +220,62 @@ export function browserApprovalActionPhrase(
   }
 }
 
+/**
+ * A change Helmsman proposes to the model runtime on this computer (Plan 323
+ * D10). What the card shows is what the change costs: the requests in flight
+ * that an unload or delete ends, whether this conversation's own next turn
+ * loads the model again, and the change's own figures (a download's size and
+ * the disk it leaves, the memory a window takes). The change and whether it
+ * reloads the asking conversation are in the hash, so an approval acts only on
+ * the change it showed; the figures move by the second and stay out of it.
+ */
+export const LocalModelWriteApprovalRequestPayloadSchema = z.object({
+  kind: z.literal('write_approval'),
+  target: z.literal('local_model'),
+  change: LocalRuntimeChangeSchema,
+  /** The model the change names, as the operator knows it. */
+  modelName: z.string().optional(),
+  runtimeUrl: z.string(),
+  impact: z.object({
+    /** Requests running on the runtime now, on any model; an unload or delete ends those on its model. */
+    inFlightRequests: z.number().int().nonnegative(),
+    /** The asking conversation runs on this model, so its next turn loads it again. */
+    ownConversationReloads: z.boolean(),
+    notes: z.array(z.string()),
+  }),
+  decidedBefore: z.string().optional(),
+  requestHash: z.string(),
+});
+export type LocalModelWriteApprovalRequestPayload = z.infer<
+  typeof LocalModelWriteApprovalRequestPayloadSchema
+>;
+
+/** What a proposed runtime change does, as the card and the Action Center item say it. */
+export function localModelChangePhrase(
+  request: Pick<LocalModelWriteApprovalRequestPayload, 'change' | 'modelName'>,
+): string {
+  const { change } = request;
+  const name = request.modelName ?? ('model' in change ? change.model : '');
+  switch (change.action) {
+    case 'pull':
+      return `download ${name}`;
+    case 'delete':
+      return `delete ${name}`;
+    case 'warm':
+      return `load ${name}`;
+    case 'unload':
+      return `unload ${name}`;
+    case 'set_context':
+      return change.contextTokens === null
+        ? 'give requests the largest window that fits this computer'
+        : `give requests a ${String(change.contextTokens)}-token window`;
+  }
+}
+
 export const WriteApprovalRequestPayloadSchema = z.discriminatedUnion('target', [
   ApiWriteApprovalRequestPayloadSchema,
   BrowserWriteApprovalRequestPayloadSchema,
+  LocalModelWriteApprovalRequestPayloadSchema,
 ]);
 export type WriteApprovalRequestPayload = z.infer<typeof WriteApprovalRequestPayloadSchema>;
 

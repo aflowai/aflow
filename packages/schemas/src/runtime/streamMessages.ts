@@ -36,8 +36,13 @@ import { SimulatedFulfillmentReportSchema } from '../simulation/fulfillmentRepor
  * JSON-encoded `HarnessActivityLine` per newline-terminated delta. It is a
  * channel of its own because a reader that folded it into `text` would render
  * a harness's tool calls as the agent's own message.
+ *
+ * `status` carries what a step is waiting on before it produces anything — a
+ * model on this computer loading, or reading a long prompt, both silent for
+ * tens of seconds. One newline-terminated line per delta; the last whole line
+ * is the step's status, and the first `thinking` or `text` delta supersedes it.
  */
-export const LiveDeltaChannelSchema = z.enum(['text', 'thinking', 'activity']);
+export const LiveDeltaChannelSchema = z.enum(['text', 'thinking', 'activity', 'status']);
 export type LiveDeltaChannel = z.infer<typeof LiveDeltaChannelSchema>;
 
 /**

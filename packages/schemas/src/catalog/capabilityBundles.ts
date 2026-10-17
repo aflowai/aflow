@@ -226,6 +226,13 @@ export const CAPABILITY_BUNDLES: readonly CapabilityBundle[] = [
     capabilityGroupIds: ['browser.page', 'browser.profile'],
   },
   {
+    id: 'local_models',
+    label: 'Models on this computer',
+    hint: 'Read why the model on this computer is slow or not answering, and propose the fix for the operator to approve: download, delete, load, unload, or the window its requests get.',
+    tier: 'on_demand',
+    capabilityGroupIds: ['model.runtime'],
+  },
+  {
     id: 'http',
     label: 'Direct HTTP',
     hint: 'Call a bound endpoint raw. The connection is the normal path.',

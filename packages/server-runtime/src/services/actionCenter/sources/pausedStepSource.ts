@@ -14,6 +14,10 @@ import {
   type BrowserWriteApprovalRequestPayload,
   type WriteApprovalExtension,
   BROWSER_PAGE_ACT_OPERATION_ID,
+  MODEL_RUNTIME_CHANGE_OPERATION_ID,
+  localModelChangePhrase,
+  type LocalModelWriteApprovalRequestPayload,
+  type ResolverPolicy,
   browserApprovalActionPhrase,
   derivePauseToken,
   WriteApprovalRequestPayloadSchema,
@@ -580,7 +584,12 @@ function buildWriteApprovalItem(
   const parsed = WriteApprovalRequestPayloadSchema.safeParse(payload);
   if (!parsed.success) return null;
   const req = parsed.data;
-  const shown = req.target === 'browser' ? browserApprovalShown(req) : apiWriteApprovalShown(req);
+  const shown =
+    req.target === 'browser'
+      ? browserApprovalShown(req)
+      : req.target === 'local_model'
+        ? localModelApprovalShown(req)
+        : apiWriteApprovalShown(req);
 
   const origin: ActionCenterItemOrigin = {
     type: 'step',
@@ -606,6 +615,7 @@ function buildWriteApprovalItem(
     requestedBy: { kind: 'agent' as const, label: 'Agent', sessionId: row.sessionId },
     priority: shown.priority,
     relatesTo: shown.relatesTo,
+    ...(shown.resolverPolicy ? { resolverPolicy: shown.resolverPolicy } : {}),
     resolverAuthority: { kind: 'space' },
     status: row.status === 'PAUSED' ? 'open' : 'resolved',
   };
@@ -618,6 +628,7 @@ interface WriteApprovalShown {
   readonly operationId: string;
   readonly priority: 'normal' | 'high';
   readonly relatesTo: RelatesToEntry[];
+  readonly resolverPolicy?: ResolverPolicy;
 }
 
 function apiWriteApprovalShown(req: ApiWriteApprovalRequestPayload): WriteApprovalShown {
@@ -682,6 +693,37 @@ function browserApprovalShown(req: BrowserWriteApprovalRequestPayload): WriteApp
     operationId: BROWSER_PAGE_ACT_OPERATION_ID,
     priority: 'normal',
     relatesTo: [],
+  };
+}
+
+function localModelApprovalShown(req: LocalModelWriteApprovalRequestPayload): WriteApprovalShown {
+  const doing = localModelChangePhrase(req);
+  const ends =
+    req.impact.inFlightRequests > 0
+      ? ` ${String(req.impact.inFlightRequests)} model request${req.impact.inFlightRequests === 1 ? ' is' : 's are'} running on this computer now; those on this model end.`
+      : '';
+  const own = req.impact.ownConversationReloads
+    ? ' This conversation runs on it, so its next turn loads it again.'
+    : '';
+  return {
+    title: `Approve on this computer: ${doing}`,
+    summary:
+      `Helmsman wants to ${doing} on ${req.runtimeUrl}. ${req.impact.notes.join(' ')}${ends}${own} ` +
+      'Approve to let it do this once, or deny to stop it.',
+    extension: {
+      kind: 'write_approval',
+      target: 'local_model',
+      change: req.change,
+      ...(req.modelName !== undefined ? { modelName: req.modelName } : {}),
+      runtimeUrl: req.runtimeUrl,
+      impact: req.impact,
+    },
+    operationId: MODEL_RUNTIME_CHANGE_OPERATION_ID,
+    priority: req.impact.inFlightRequests > 0 ? 'high' : 'normal',
+    relatesTo: [],
+    // The operator's own routes for these changes are space-admin only; an
+    // approval is the same change, so it answers to the same role.
+    resolverPolicy: { minResolvers: 1, requireAll: false, candidateResolvers: ['admin'] },
   };
 }
 

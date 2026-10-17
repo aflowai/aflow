@@ -13,6 +13,11 @@ export interface RunSummary {
   totalCostUsd: number;
   models: Set<string>;
   totalCacheReadTokens: number;
+  /**
+   * Every model call ran on this computer (Plan 323 D13). Nothing was billed,
+   * which is a fact about where it ran rather than a price of zero.
+   */
+  ranLocally: boolean;
 }
 
 function formatDuration(ms: number): string {
@@ -89,7 +94,11 @@ export function RunSummaryBar({ summary }: { summary: RunSummary }) {
             detail={`${formatNumber(summary.totalPromptTokens)} in / ${formatNumber(summary.totalCompletionTokens)} out`}
           />
         ) : null}
-        {hasCost ? <SummaryPill label="Cost" value={formatCostUsd(summary.totalCostUsd)} /> : null}
+        {hasCost ? (
+          <SummaryPill label="Cost" value={formatCostUsd(summary.totalCostUsd)} />
+        ) : summary.ranLocally && hasTokens ? (
+          <SummaryPill label="Cost" value="local" />
+        ) : null}
         {summary.totalCacheReadTokens > 0 && summary.totalPromptTokens > 0 ? (
           <SummaryPill
             label="Cache"

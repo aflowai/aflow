@@ -315,7 +315,7 @@ export function useActivityBubble(
     }
 
     // The step in flight is producing output — "Thinking…" while it reasons,
-    // "Writing…" once it writes. The producer of this signal clears it the
+    // "Writing…" once it writes — or, before either, says what it waits on. The producer of this signal clears it the
     // moment a durable event supersedes it (the step ends, the run rests, or a
     // new step takes over), so its mere presence means it is current — no
     // wall-clock comparison, which would be at the mercy of client/server
@@ -331,7 +331,7 @@ export function useActivityBubble(
         operationId: isSameStep ? ctx.operationId : 'ai.agent.turn',
         stepType: isSameStep ? ctx.stepType : 'ai',
         ...(isSameStep && ctx.stepName ? { stepName: ctx.stepName } : {}),
-        label: liveDelta.channel === 'thinking' ? 'Thinking…' : 'Writing…',
+        label: liveDelta.status ?? (liveDelta.channel === 'thinking' ? 'Thinking…' : 'Writing…'),
         startedAtMs: liveDelta.atMs,
         ttlMs: ACTIVE_STEP_MAX_AGE_MS,
       };

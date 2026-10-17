@@ -3,6 +3,7 @@ import { getWriteApprovalGrant } from '@aflow/redis';
 import {
   type AflowError,
   grantAnswersAsk,
+  localModelChangePhrase,
   WriteApprovalRequestPayloadSchema,
   type WriteApprovalRequestPayload,
   type SessionBlockedOn,
@@ -13,7 +14,8 @@ import type { PayloadStore } from '@aflow/payload-store';
  * Best-effort read of an executor-supplied `write_approval` request payload from
  * a paused step's `requestedInputRef`. Returns `null` for any other paused-step
  * contract (the common path), so this only fires for an approval pause — an
- * API write (Plan 253) or a browser action (Plan 320 D7).
+ * API write (Plan 253), a browser action (Plan 320 D7) or a change to the
+ * model runtime on this computer (Plan 323 D10).
  */
 export async function readWriteApprovalRequest(
   payloadStore: PayloadStore,
@@ -54,6 +56,16 @@ export async function resolveWriteApprovalBlockedOn(
       action: request.action,
       elementRole: request.element.role,
       ...(request.element.name !== undefined ? { elementName: request.element.name } : {}),
+      requestHash: request.requestHash,
+    };
+  }
+  if (request.target === 'local_model') {
+    return {
+      kind: 'needs_write_approval',
+      target: 'local_model',
+      stepExecutionId,
+      action: request.change.action,
+      ...(request.modelName !== undefined ? { modelName: request.modelName } : {}),
       requestHash: request.requestHash,
     };
   }
@@ -105,7 +117,7 @@ export async function decideWriteApprovalResume(
     params.runId,
     request.requestHash,
   );
-  const decidedBefore = request.target === 'browser' ? request.decidedBefore : undefined;
+  const decidedBefore = request.target === 'api' ? undefined : request.decidedBefore;
   if (!grant || !grantAnswersAsk(grant, decidedBefore)) return { decision: 'undecided' };
   if (grant.decision === 'approved') return { decision: 'approved' };
   return { decision: 'denied', error: writeApprovalDenial(request, grant.reason) };
@@ -124,18 +136,22 @@ export function writeApprovalDenial(
 ): AflowError {
   const because = reason ? `. Operator's reason: "${reason}"` : '';
   const message =
-    request.target === 'browser'
-      ? `The operator denied this ${request.action} on ${request.pageOrigin} in the Action ` +
-        `Center${because}. It is not a system error, and the same action on the same element ` +
-        'with the same value is refused with this reason rather than asked again. Use the ' +
-        'reason to decide what to do: propose a different action, or tell the user it was ' +
-        'declined and ask how to proceed.'
-      : 'This write was denied by a human operator in the Action Center' +
-        because +
-        '. It is not a system error and will NOT succeed on retry — do not call this ' +
-        'endpoint again with the same request. Use the operator’s reason to decide what to ' +
-        'do: adjust and propose a different action, or tell the user it was declined and ask ' +
-        'how to proceed.';
+    request.target === 'local_model'
+      ? `The operator declined to ${localModelChangePhrase(request)} in the Action Center${because}. ` +
+        'It is not a system error, and asking for the same change again is refused with this ' +
+        'reason. Tell the user it was declined, and what the issue it would have fixed still costs.'
+      : request.target === 'browser'
+        ? `The operator denied this ${request.action} on ${request.pageOrigin} in the Action ` +
+          `Center${because}. It is not a system error, and the same action on the same element ` +
+          'with the same value is refused with this reason rather than asked again. Use the ' +
+          'reason to decide what to do: propose a different action, or tell the user it was ' +
+          'declined and ask how to proceed.'
+        : 'This write was denied by a human operator in the Action Center' +
+          because +
+          '. It is not a system error and will NOT succeed on retry — do not call this ' +
+          'endpoint again with the same request. Use the operator’s reason to decide what to ' +
+          'do: adjust and propose a different action, or tell the user it was declined and ask ' +
+          'how to proceed.';
   return {
     code: 'write_approval_denied',
     classification: 'permission',

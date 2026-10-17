@@ -170,6 +170,11 @@ export const HostMachineSchema = z.object({
   totalMemoryBytes: z.number().int().positive(),
   gpuWorkingSetBytes: z.number().int().positive().optional(),
   unifiedMemory: z.boolean(),
+  /**
+   * Free space on the disk that holds the model runtime's downloads, read at
+   * each publish, so a pull that cannot fit is refused before it starts.
+   */
+  freeDiskBytes: z.number().int().nonnegative().optional(),
 });
 export type HostMachine = z.infer<typeof HostMachineSchema>;
 

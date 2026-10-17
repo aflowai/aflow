@@ -81,7 +81,7 @@ export const tenantSettingsRoutes: FastifyPluginAsync = async (fastify) => {
       const raw = rows[0]?.allowlist;
       const stored = Array.isArray(raw) ? (raw as string[]) : null;
       reply.send({
-        modelIds: [...allowedModelIds(stored)],
+        modelIds: [...allowedModelIds(stored, fastify.edition.edition)],
         source: stored ? ('tenant' as const) : ('platform' as const),
       });
     },
@@ -151,7 +151,7 @@ export const tenantSettingsRoutes: FastifyPluginAsync = async (fastify) => {
       );
 
       return reply.send({
-        modelIds: [...allowedModelIds(canonical)],
+        modelIds: [...allowedModelIds(canonical, fastify.edition.edition)],
         source: canonical ? ('tenant' as const) : ('platform' as const),
       });
     },

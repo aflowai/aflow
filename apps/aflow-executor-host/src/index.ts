@@ -339,7 +339,7 @@ async function main(): Promise<void> {
     const inventory: HostInventory = {
       hostname,
       observedAt: new Date().toISOString(),
-      machine: machine.current(),
+      machine: await machine.current(),
       runtimes,
       harnesses,
       maxConcurrentHarnessRuns,

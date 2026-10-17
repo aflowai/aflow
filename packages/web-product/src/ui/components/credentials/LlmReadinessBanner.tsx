@@ -1,8 +1,11 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
+import Link from 'next/link';
 import { Button, Icon, Row, Text } from '@aflow/design-system';
-import { useSpaceLlmReadiness } from '../../hooks/useSpaceLlmReadiness.js';
+import { useSpaceLlmReadiness, type SpaceLlmReadiness } from '../../hooks/useSpaceLlmReadiness.js';
+import { useSpaceFromRoute } from '../providers.js';
+import { spaceRoute } from '../../lib/space-routes.js';
 
 const PROVIDER_LABELS: Record<string, string> = {
   anthropic: 'Anthropic',
@@ -23,6 +26,11 @@ function joinProviderNames(providerIds: string[]): string {
   return `${names.slice(0, -1).join(', ')}, and ${names.at(-1)}`;
 }
 
+/** Something no key or model choice fixes: the runtime on this computer, which its own page manages. */
+function localError(readiness: SpaceLlmReadiness) {
+  return readiness.localIssues.find((issue) => issue.severity === 'error') ?? null;
+}
+
 /**
  * Standing guidance above the composer: missing or rejected provider keys
  * render as a one-click fix, recomputed from live readiness — never a
@@ -36,10 +44,13 @@ export function LlmReadinessBanner({
   onReviewModels: () => void;
 }) {
   const { readiness } = useSpaceLlmReadiness(spaceId);
+  const routeSpace = useSpaceFromRoute();
   const autoOpenedSpace = useRef<string | null>(null);
 
   useEffect(() => {
     if (!readiness || readiness.ready || autoOpenedSpace.current === spaceId) return;
+    // The model picker cannot start Ollama or download a model.
+    if (localError(readiness) && readiness.missingProviders.length === 0) return;
     autoOpenedSpace.current = spaceId;
     onReviewModels();
   }, [onReviewModels, readiness, spaceId]);
@@ -49,7 +60,10 @@ export function LlmReadinessBanner({
   const missing = readiness.missingProviders;
   const errored = readiness.erroredProviders;
   const unknownModels = readiness.unknownModelRoles;
-  if (missing.length === 0 && errored.length === 0 && unknownModels.length === 0) return null;
+  const local = localError(readiness);
+  if (missing.length === 0 && errored.length === 0 && unknownModels.length === 0 && !local) {
+    return null;
+  }
 
   // Stated first: a model the catalog no longer carries cannot be fixed by any
   // key, so naming a credential alongside it would offer a remedy that does
@@ -69,6 +83,12 @@ export function LlmReadinessBanner({
   const providerKey = oneProvider ? `a ${names} key` : `keys for ${names}`;
   const modelAlternative = oneModel ? 'a model' : 'models';
   const providerAlternative = oneProvider ? 'another provider' : 'other providers';
+
+  const localOnly =
+    local !== null && missing.length === 0 && errored.length === 0 && !unknownMessage;
+  const localMessage = local
+    ? `${local.cause} ${local.remedy.kind === 'instruction' ? local.remedy.text : `${local.remedy.label} on This Computer.`}`
+    : null;
 
   return (
     <Row
@@ -90,14 +110,23 @@ export function LlmReadinessBanner({
         style={{ color: 'var(--color-status-attention, var(--color-text-muted))', flexShrink: 0 }}
       />
       <Text size="sm" style={{ flex: 1 }}>
-        {unknownMessage ??
+        {(localOnly ? localMessage : null) ??
+          unknownMessage ??
           (isMissing
             ? `To run agents, ${subject} requires ${providerKey}. Add ${oneProvider ? 'the key' : 'them'}, or choose ${modelAlternative} from ${providerAlternative}.`
             : `${oneProvider ? `The ${names} key used by ${subject} was rejected` : `The keys for ${names} used by ${subject} were rejected`}. Update ${oneProvider ? 'the key' : 'them'}, or choose ${modelAlternative} from ${providerAlternative}.`)}
       </Text>
-      <Button variant="secondary" size="sm" onClick={onReviewModels}>
-        Review models
-      </Button>
+      {localOnly ? (
+        <Link href={spaceRoute(routeSpace?.slug, '/computer')}>
+          <Button variant="secondary" size="sm">
+            Open This Computer
+          </Button>
+        </Link>
+      ) : (
+        <Button variant="secondary" size="sm" onClick={onReviewModels}>
+          Review models
+        </Button>
+      )}
     </Row>
   );
 }

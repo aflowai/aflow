@@ -32,6 +32,7 @@ import {
   handleWebhookCrudInline,
   handleWorkflowCrudInline,
   handlePlanNodeInline,
+  handleModelRuntimeInline,
   handleCoachCrudInline,
   handleProposalCrudInline,
   handleCatalogAgentInline,
@@ -485,6 +486,20 @@ export async function dispatchInlineOp(
     });
   } else if (stepDef.operation.startsWith('plan.')) {
     await handlePlanNodeInline({
+      redis,
+      payloadStore,
+      context,
+      stepDef,
+      stepExecutionId,
+      idempotencyKey,
+      resolvedInputRef,
+      attempt,
+      scheduledAtMs: now,
+      ...(parentStepExecutionId ? { parentStepExecutionId } : {}),
+      ...workflowExecutionFields,
+    });
+  } else if (stepDef.operation.startsWith('model.')) {
+    await handleModelRuntimeInline({
       redis,
       payloadStore,
       context,

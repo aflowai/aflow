@@ -7,7 +7,7 @@ describe('the live channels', () => {
   it('carries what a step is doing on a channel of its own', () => {
     // Folded into `text` these lines would render as the agent's own message.
     expect(LiveDeltaChannelSchema.options).toContain('activity');
-    expect(LiveDeltaChannelSchema.options).toEqual(['text', 'thinking', 'activity']);
+    expect(LiveDeltaChannelSchema.options).toEqual(['text', 'thinking', 'activity', 'status']);
   });
 });
 

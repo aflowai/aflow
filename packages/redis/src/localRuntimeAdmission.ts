@@ -154,6 +154,19 @@ async function release(redis: Redis, runtimeId: string, holderId: string): Promi
  * `wait` is set. Returns null only when `wait` is false and the runtime is
  * busy. A cancelled wait leaves the queue and throws `RuntimeLeaseAbortedError`.
  */
+/**
+ * The requests running on a runtime now: the holders whose lease has not
+ * lapsed. What a change that ends them — an unload, a delete — would end.
+ */
+export async function countRuntimeRequests(
+  redis: Redis,
+  runtimeId: string,
+  now: number = Date.now(),
+): Promise<number> {
+  const [holders] = runtimeKeys(runtimeId);
+  return await redis.zcount(holders, `(${String(now)}`, '+inf');
+}
+
 export async function acquireRuntimeLease(
   input: AcquireRuntimeLeaseInput,
 ): Promise<RuntimeLease | null> {

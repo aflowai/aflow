@@ -8,6 +8,12 @@ import {
   type AgentModelProviderId,
 } from '@aflow/schemas';
 import { CreateSpaceForm, type CreateSpaceResult } from './create-space-form.js';
+import {
+  PROVIDER_FALLBACK_META,
+  providerDisplayName,
+  type ProviderFieldMeta,
+} from './onboarding-providers.js';
+import { ModelCard } from './onboarding-model-card.js';
 import { useApi, useSpace } from './providers.js';
 import { useChatModelOptions } from '../hooks/useChatModelOptions.js';
 import { useApiMutation } from '../hooks/useApiQuery.js';
@@ -386,84 +392,6 @@ function StepNameWorkspace({
 // Step 3 — Model
 // =============================================================================
 
-function ModelCard({
-  model,
-  selected,
-  onSelect,
-}: {
-  model: RecommendedAgentModel;
-  selected: boolean;
-  onSelect: () => void;
-}) {
-  return (
-    <div
-      role="radio"
-      aria-checked={selected}
-      tabIndex={0}
-      onClick={onSelect}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          onSelect();
-        }
-      }}
-      style={{
-        padding: 'var(--space-3) var(--space-4)',
-        borderRadius: 'var(--radius-md)',
-        border: '2px solid',
-        borderColor: selected ? 'var(--color-interactive-default)' : 'var(--color-border-subtle)',
-        background: selected ? 'var(--color-surface-1)' : 'transparent',
-        cursor: 'pointer',
-        transition: 'border-color 150ms, background 150ms',
-      }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 'var(--space-2)',
-          flexWrap: 'wrap',
-          marginBottom: 'var(--space-1)',
-        }}
-      >
-        <span style={{ fontWeight: 600, fontSize: 'var(--font-size-sm)' }}>{model.label}</span>
-        <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)' }}>
-          via {providerDisplayName(model.credentialProviderId)}
-        </span>
-        {model.recommended && (
-          <Badge variant="accent" style={{ fontSize: 'var(--font-size-xs)' }}>
-            Recommended
-          </Badge>
-        )}
-      </div>
-      <div
-        style={{
-          fontSize: 'var(--font-size-xs)',
-          color: 'var(--color-text-secondary)',
-          lineHeight: 1.5,
-        }}
-      >
-        {model.tagline}
-      </div>
-    </div>
-  );
-}
-
-function providerDisplayName(providerId: AgentModelProviderId): string {
-  switch (providerId) {
-    case 'anthropic':
-      return 'Anthropic';
-    case 'google':
-      return 'Google';
-    case 'openai':
-      return 'OpenAI';
-    case 'fireworks':
-      return 'Fireworks AI';
-    case 'xai':
-      return 'xAI';
-  }
-}
-
 export interface ModelSelection {
   defaultRef: string;
   roleOverrides: Partial<Record<AgentRole, string>>;
@@ -534,6 +462,12 @@ function StepModel({
       (m) => allowed.has(m.modelId) || (m.alias !== undefined && allowed.has(m.alias)),
     );
   }, [modelOptions]);
+  // Offered only where the tenant may assign them, which outside the local
+  // edition is never: there is no computer of the operator's behind a hosted one.
+  const onThisComputer = useMemo(
+    () => modelOptions.filter((o) => o.provider === 'ollama' && o.allowed),
+    [modelOptions],
+  );
   const defaultEntry = offered.find((m) => m.recommended) ?? offered[0];
   // The policy has not loaded on first render, so the selection is seeded once
   // it arrives rather than by the state initializer, which would freeze a
@@ -572,6 +506,28 @@ function StepModel({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  /**
+   * A model on this computer needs a connection and no key: one is added at
+   * Ollama's own address unless one already resolves for this workspace, which
+   * may name another and must not be replaced.
+   */
+  const connectThisComputer = async (spaceId: string): Promise<string | null> => {
+    const scoped = { ...headers(), 'X-Space-ID': spaceId };
+    const readiness = await authFetch(`/api/spaces/${spaceId}/llm-readiness`, { headers: scoped });
+    const roles = readiness.ok
+      ? ((await readiness.json()) as { roles: Record<string, { resolved: boolean }> }).roles
+      : {};
+    if (roles['default']?.resolved) return null;
+    const put = await authFetch('/api/credentials/ollama', {
+      method: 'PUT',
+      headers: scoped,
+      body: JSON.stringify({ scope: 'user', secrets: {} }),
+    });
+    if (put.ok) return null;
+    const body = (await put.json().catch(() => null)) as { error?: string } | null;
+    return body?.error ?? `Could not connect to Ollama on this computer (${put.status}).`;
+  };
+
   const handleContinue = async () => {
     // Nothing to save when no model was offered or chosen: the space keeps
     // whatever creation assigned it, which the server already held to the
@@ -588,11 +544,15 @@ function StepModel({
         version: 1,
         responsibility: 'General-purpose workspace.',
       };
+      const local = onThisComputer.some((m) => m.ref === defaultRef);
       const modelDefaults: Record<string, string> = { default: defaultRef };
       for (const role of AGENT_ROLES) {
         const override = roleOverrides[role];
         if (override && override !== defaultRef) modelDefaults[role] = override;
       }
+      // One GPU serves every role, and each switch between models is a load,
+      // so the Clerk — the one role that does not inherit — follows too.
+      if (local) modelDefaults['clerk'] = 'space_default';
       // No active space exists during onboarding, so headers() carries no
       // X-Space-ID — the PATCH handler's requireSpace() needs it explicitly.
       const res = await authFetch(`/api/spaces/${space.id}`, {
@@ -605,6 +565,14 @@ function StepModel({
         setError(body?.message ?? `Could not save the model choice (${res.status})`);
         setSaving(false);
         return;
+      }
+      if (local) {
+        const problem = await connectThisComputer(space.id);
+        if (problem) {
+          setError(problem);
+          setSaving(false);
+          return;
+        }
       }
       onDone(selection);
     } catch {
@@ -642,22 +610,39 @@ function StepModel({
               Could not load the available models ({modelOptionsError}). Continue — your workspace
               keeps the model it was created with, and you can change it in settings.
             </StepLede>
-          ) : offered.length === 0 ? (
+          ) : offered.length === 0 && onThisComputer.length === 0 ? (
             <StepLede>
               Your administrator has chosen a custom set of models. Continue — your workspace keeps
               the model it was created with, and you can change it in settings.
             </StepLede>
           ) : (
-            offered.map((model) => (
-              <ModelCard
-                key={model.modelId}
-                model={model}
-                selected={defaultRef === modelRef(model)}
-                onSelect={() => {
-                  setDefaultRef(modelRef(model));
-                }}
-              />
-            ))
+            <>
+              {offered.map((model) => (
+                <ModelCard
+                  key={model.modelId}
+                  label={model.label}
+                  via={providerDisplayName(model.credentialProviderId)}
+                  tagline={model.tagline}
+                  recommended={model.recommended}
+                  selected={defaultRef === modelRef(model)}
+                  onSelect={() => {
+                    setDefaultRef(modelRef(model));
+                  }}
+                />
+              ))}
+              {onThisComputer.map((model) => (
+                <ModelCard
+                  key={model.id}
+                  label={model.displayName}
+                  via="Ollama, on this computer"
+                  tagline="Runs on this machine: nothing leaves it, no key, nothing billed. Slower than a hosted model on most computers — This Computer downloads it and says how well it fits."
+                  selected={defaultRef === model.ref}
+                  onSelect={() => {
+                    setDefaultRef(model.ref);
+                  }}
+                />
+              ))}
+            </>
           )}
         </div>
       </FadeSlide>
@@ -748,46 +733,6 @@ function StepModel({
 // =============================================================================
 // Step 4 — Connect provider key(s)
 // =============================================================================
-
-interface ProviderFieldMeta {
-  displayName: string;
-  placeholder: string;
-  helpText: string;
-  docsUrl: string | null;
-}
-
-const PROVIDER_FALLBACK_META: Record<AgentModelProviderId, ProviderFieldMeta> = {
-  anthropic: {
-    displayName: 'Anthropic',
-    placeholder: 'sk-ant-...',
-    helpText: 'Your Anthropic API key.',
-    docsUrl: 'https://console.anthropic.com/settings/keys',
-  },
-  google: {
-    displayName: 'Google',
-    placeholder: 'AIza...',
-    helpText: 'Your Google AI Studio API key.',
-    docsUrl: 'https://aistudio.google.com/app/apikey',
-  },
-  openai: {
-    displayName: 'OpenAI',
-    placeholder: 'sk-...',
-    helpText: 'Your OpenAI API key.',
-    docsUrl: 'https://platform.openai.com/api-keys',
-  },
-  fireworks: {
-    displayName: 'Fireworks AI',
-    placeholder: 'fw_...',
-    helpText: 'Your Fireworks API key.',
-    docsUrl: 'https://fireworks.ai/account/api-keys',
-  },
-  xai: {
-    displayName: 'xAI',
-    placeholder: 'xai-...',
-    helpText: 'Your xAI API key.',
-    docsUrl: 'https://console.x.ai',
-  },
-};
 
 type ProviderConnectState =
   | { phase: 'idle' }
@@ -1442,6 +1387,12 @@ export function OnboardingFlow({ resumeFor }: { resumeFor?: CreateSpaceResult })
             initial={selection}
             onDone={(sel) => {
               setSelection(sel);
+              // A model on this computer has no key to connect.
+              if (sel.defaultRef !== '' && providersForSelection(sel).length === 0) {
+                setKeysConnected(true);
+                setStep('ready');
+                return;
+              }
               setStep('connect');
             }}
           />

@@ -3,7 +3,7 @@ import {
   getWriteApprovalGrant,
   readBrowserAsk,
   rememberBrowserAsk,
-  spendBrowserApproval,
+  spendWriteApprovalGrant,
 } from '@aflow/redis';
 
 import type { ApprovalStore } from './actionApproval.js';
@@ -14,7 +14,7 @@ export function redisApprovalStore(redis: Redis): ApprovalStore {
     grant: async (scope, requestHash) =>
       await getWriteApprovalGrant(redis, scope.tenantId, scope.runId, requestHash),
     spend: async (scope, grant) =>
-      await spendBrowserApproval(redis, scope.tenantId, scope.runId, grant),
+      await spendWriteApprovalGrant(redis, scope.tenantId, scope.runId, grant),
     recall: async (scope, callKey) =>
       await readBrowserAsk(redis, scope.tenantId, scope.runId, callKey),
     remember: async (scope, callKey, requestHash) => {

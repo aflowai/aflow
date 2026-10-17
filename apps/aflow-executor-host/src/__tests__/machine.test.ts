@@ -21,16 +21,17 @@ describe('createMachineReader', () => {
       totalMemoryBytes: 24 * GIB,
       osRelease: '25.3.0',
       run,
+      freeDisk: async () => undefined,
     };
 
     const first = createMachineReader(options);
-    expect(first.current()).toEqual({ totalMemoryBytes: 24 * GIB, unifiedMemory: true });
+    expect(await first.current()).toEqual({ totalMemoryBytes: 24 * GIB, unifiedMemory: true });
     await first.start();
-    expect(first.current().gpuWorkingSetBytes).toBe(19_069_665_280);
+    expect((await first.current()).gpuWorkingSetBytes).toBe(19_069_665_280);
 
     const second = createMachineReader(options);
     await second.start();
-    expect(second.current().gpuWorkingSetBytes).toBe(19_069_665_280);
+    expect((await second.current()).gpuWorkingSetBytes).toBe(19_069_665_280);
     expect(run).toHaveBeenCalledTimes(1);
   });
 
@@ -64,9 +65,10 @@ describe('createMachineReader', () => {
       totalMemoryBytes: 64 * GIB,
       osRelease: '6.8',
       run: async () => '24576\n49152\n',
+      freeDisk: async () => undefined,
     });
     await nvidia.start();
-    expect(nvidia.current()).toEqual({
+    expect(await nvidia.current()).toEqual({
       totalMemoryBytes: 64 * GIB,
       unifiedMemory: false,
       gpuWorkingSetBytes: 49152 * 1024 ** 2,
@@ -81,8 +83,32 @@ describe('createMachineReader', () => {
       run: async () => {
         throw new Error('nvidia-smi: command not found');
       },
+      freeDisk: async () => undefined,
     });
     await none.start();
-    expect(none.current().gpuWorkingSetBytes).toBeUndefined();
+    expect((await none.current()).gpuWorkingSetBytes).toBeUndefined();
+  });
+
+  it('reads the free disk under the model store at every read, since downloads change it', async () => {
+    let free = 100 * GIB;
+    const paths: string[] = [];
+    const reader = createMachineReader({
+      hostDir: await hostDir(),
+      platform: 'linux',
+      arch: 'x64',
+      totalMemoryBytes: 16 * GIB,
+      osRelease: '6.8',
+      run: async () => '',
+      modelStore: '/models',
+      freeDisk: async (path) => {
+        paths.push(path);
+        return free;
+      },
+    });
+
+    expect((await reader.current()).freeDiskBytes).toBe(100 * GIB);
+    free = 84 * GIB;
+    expect((await reader.current()).freeDiskBytes).toBe(84 * GIB);
+    expect(paths).toEqual(['/models', '/models']);
   });
 });

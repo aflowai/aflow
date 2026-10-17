@@ -75,3 +75,39 @@ export async function getWriteApprovalGrant(
     return null;
   }
 }
+
+/**
+ * Outside the grant family (`aflow:write-approval:`), which the host executor
+ * may only read: spending one cannot approve anything, so the identity that
+ * performs the action may write it.
+ */
+export function writeApprovalSpentKey(
+  tenantId: string,
+  runId: string,
+  grant: Pick<WriteApprovalGrant, 'requestHash' | 'decidedAt'>,
+): string {
+  const decision = stableHash({ requestHash: grant.requestHash, decidedAt: grant.decidedAt ?? '' });
+  return `aflow:approval-spent:${tenantId}:${runId}:${decision}`;
+}
+
+/**
+ * Spends an approval that lets one action through — a browser action, a change
+ * to the model runtime. True for the one caller that spent it; false when it
+ * was spent already. Outlives the grant it marks, so a spent grant never reads
+ * as fresh again.
+ */
+export async function spendWriteApprovalGrant(
+  redis: Redis,
+  tenantId: string,
+  runId: string,
+  grant: Pick<WriteApprovalGrant, 'requestHash' | 'decidedAt'>,
+): Promise<boolean> {
+  const set = await redis.set(
+    writeApprovalSpentKey(tenantId, runId, grant),
+    '1',
+    'EX',
+    WRITE_APPROVAL_GRANT_TTL_SECONDS,
+    'NX',
+  );
+  return set === 'OK';
+}

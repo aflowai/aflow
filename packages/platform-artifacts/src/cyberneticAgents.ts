@@ -139,6 +139,11 @@ export const HELMSMAN_DISCOVERY_PRESET: readonly string[] = [
   'browser.page.screenshot',
   'browser.page.handoff',
   'browser.profile.list',
+  // The model runtime on this computer (local edition only, by its lane). The
+  // read is pinned there (`helmsmanSurface.ts`); a change is promoted when an
+  // issue names one, and runs only once the operator approves its card.
+  'model.runtime.status',
+  'model.runtime.change',
   'mcp.server.list',
   'mcp.server.get',
   'mcp.server.upsert',

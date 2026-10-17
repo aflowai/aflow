@@ -166,6 +166,7 @@ const HOST_KEY_PATTERNS = [
   // grant stays read-only above — so writing one can only make the executor
   // ask again or refuse.
   '~aflow:browser-ask:*',
+  '~aflow:approval-spent:*',
 ] as const;
 
 /**

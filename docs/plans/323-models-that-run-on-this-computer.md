@@ -186,6 +186,15 @@ Which local models are _recommended_ for which role follows from the usefulness 
 
 - **Coverage:** an issue that cannot be stated with a cause and a remedy is not shipped as an issue. A vague warning teaches nothing, to a person or a model.
 
+**D17 — A local model's silent stretches are said in the chat.** Before its first token, a request on a local model can be silent for minutes: the model loading (25–56 s on the measured machine, more for a larger one) and then reading the prompt, which Ollama streams nothing during. A spinner reading _Working…_ through that looks like a stalled chat.
+
+- **What is known:** only the transitions. Whether a request will load the model is read from `/api/ps` before it is sent: the model is not loaded, or the llama.cpp runner holds it at another window, which reloads it. The MLX runner ignores the window and never reloads for one. Prefill progress is not reported by the runtime, so no percentage or time estimate is shown.
+- **The adapter loads first.** A load otherwise happens inside the request's own prefill, where nothing tells the two apart. So when the request would load, the adapter loads the model explicitly, at the window the request uses, and then sends the request. That makes the end of the load observable at no extra cost, since the load would have happened anyway. A load that fails is left for the request to report in its own words.
+- **The signal:** `AIRequestOptions.onRuntimePhase` reports `loading_model`, then `reading_prompt`. The Ollama adapter calls it; hosted adapters never do. The status read is made only for a caller that listens.
+- **The channel:** the agent turn writes each phase as one line on the step's `status` live-delta channel (_Loading Gemma 4 26B (this computer) into memory…_, _Reading the conversation…_), and each phase slides the step's idle window. The chat's activity row shows the last line in place of _Working…_ until the first `thinking` or `text` delta replaces it with _Thinking…_ or _Writing…_. Nothing is written to the transcript. _Rejected:_ reusing the `activity` channel. Its lines fold into a harness feed, and the chat pins a harness card for any step with an unsettled feed.
+
+**D18 — In the local edition, the catalog's models on this computer are assignable under the platform recommendation.** A tenant that names no allowlist follows the platform recommendation, which carries only hosted models, so a fresh local install with no cloud key had nothing it could assign. `allowedModelIds` takes the edition: in the local edition, a tenant following the recommendation may also assign every local catalog entry. Nothing is billed for them and the machine is the operator's own. A tenant that named its own set is held to it, as everywhere. They are assignable, not recommended: which local model is recommended for which role is still P2's usefulness tier.
+
 ## 4. The initial lineup
 
 The figures below come from model cards and the Ollama library, read when this plan was written. None of them are measured: P0 replaces each of them with a number from the probe, and an entry ships only after its probe passes. "Fits" assumes Q4 weights and leaves room for the stack, the operating system and a browser.
@@ -351,6 +360,7 @@ _Built and tested:_ all of the above. The probe measures Gemma 4 26B at 16.15 GB
 - the one-model-for-every-role preset as the default for a local space, and the cost of mixing models;
 - an onboarding path for "use a model on this computer", for an operator with no cloud key;
 - cost shown as local;
+- the model loading and the prompt being read, said in the chat while a turn waits on them (D17);
 - machine memory and free disk in the host inventory;
 - edition gating;
 - _optional:_ the approved one-time install on a paired Mac (D2).
@@ -364,6 +374,30 @@ _Proof:_
 - a second pull of a tag that is already downloading joins the first;
 - a pull larger than the free disk is refused before it starts;
 - reading diagnostics on an unpaired machine loads nothing.
+
+_Built:_
+
+- **The record:** `LocalRuntimeDiagnostics` (`@aflow/schemas`) and `diagnoseLocalRuntime` (`@aflow/ai-client`), pure over one observation of `/api/version`, `/api/tags` and `/api/ps`. Its issue codes are `runtime_unreachable`, `model_not_installed`, `window_does_not_fit`, `window_tight`, `model_spilling`, `model_partly_on_cpu`, `build_unverified` and `mixed_local_models`.
+- **Remedies:** each is an action from `LocalModelActionSchema` (`pull`, `delete`, `warm`, `unload`, `set_context`, `use_for_every_role`) or an instruction.
+- **Shared core:** the runtime, the diagnosis and the actions live in `@aflow/cybernetic-runtime` `localModels/`, so the server's routes and Helmsman's operations reach the same code.
+- **Pulls:** a pull is one Redis record per runtime and tag. It is both the claim, which a second request joins, and the progress. Progress renews its lifetime, so a server that dies leaves nothing behind. A cancel is read on the same round trip, and a stopped or failed pull stays readable for ten minutes. The disk check reads the host inventory's `freeDiskBytes`, measured under `OLLAMA_MODELS` or `~/.ollama/models`, and holds 2 GiB of headroom.
+- **Readiness:** derives `localFit` and `localIssues` from the record. An `error` issue counts against `ready`, and the banner points at This Computer rather than the model picker.
+- **The page:** This Computer gains "Models on this computer":
+  - the runtime and the machine;
+  - each issue as a card whose button runs its remedy;
+  - per model: download with progress and stop, load, unload, use for every role, and delete with a confirmation naming the roles it leaves without a model.
+- **Edition gating:** the page renders none of it in the hosted edition, and the routes answer 404 there.
+- **"Use for every role":** writes the space's directives through the space update the agent settings already use. It sets the default and clears every role override, and puts the Clerk on `space_default`.
+- **Onboarding (D18):** offers the models on this computer beside the hosted ones. Choosing one puts every role on it, adds an Ollama connection unless one already resolves, and skips the key step.
+- **Cost:** a run whose every model call ran here reads _Cost: local_, and so does each such step.
+
+_Not built:_
+
+- the trial load for an unpaired machine, beyond **Load now**, which loads at the request window and whose loaded size `/api/ps` then reports;
+- recent tokens per second in the record;
+- the approved one-time install.
+
+The "use for every role" remedy is the operator's only, because a role's model is written through the space update, which no executor reaches. Helmsman proposes it as an instruction.
 
 ### P3b — Helmsman reads and asks (D10, D15)
 
@@ -384,6 +418,24 @@ _Proof:_
 - an acting call without approval does not run, and after a denial it fails with the operator's reason;
 - a card for unloading the model the asking session runs on names that session among the runs it would end;
 - an approved unload whose affected runs changed after approval parks again with the new impact.
+
+_Built:_
+
+- **Operations:** `model.runtime.status` (read) and `model.runtime.change` (write), in a `model` step type whose lane is composed only in the local edition (`isStepTypeComposed`). A hosted Helmsman's catalog does not carry them, in the same way it lacks `host.*` and `browser.*`.
+- **Where they run:** inline in the orchestrator, reaching the runtime through the same `@aflow/cybernetic-runtime` `localModels` code as the operator's routes.
+- **Capabilities:** the group is `model.runtime`, its bundle is `local_models` (on demand), and migration 220 grants it to the system profiles (read and write to every authoring profile, read to Read Only).
+- **Helmsman's surface:** both operations are discoverable, and the status read is pinned on the local edition.
+- **Runners and skills:** `isLocalModelOperation` is in `isRunnerExcludedOperation`, and a skill referencing one is invalid (`skill_references_local_model_op`).
+- **The change's input** is `LocalRuntimeChangeSchema`: `pull`, `delete`, `warm`, `unload`, `set_context`. A role's model is not among them, because it is the space's setting written through the space update. Helmsman says so rather than proposing it.
+- **The approval:** a third approval target, `local_model`, carried through the payload, `blockedOn`, the Action Center extension and card, and the chat's waiting notice.
+- **The request** is built from a fresh diagnosis each time the step runs (`localRuntimeChangeRequest`). Its hash covers the change and whether the asking conversation's model is the one changed, so an approved change whose reach moved since its card was shown parks again.
+- **What stays out of the hash** is on the card: the requests running on the runtime now (`countRuntimeRequests`, the admission leases held, on any model, since a lease does not record one), and the change's figures (download size against free disk, memory at the window, what an unload frees). They move by the second, and in the hash an approved change would rarely find the request it approved.
+- **Who approves:** the card answers to a space admin (`resolverPolicy: ['admin']`), the role the operator's own routes for these changes require.
+
+- **Spending the approval:** an approval lets one change through. It is spent with `spendWriteApprovalGrant`, now the one spend for every target. Its key family, `aflow:approval-spent:`, sits outside the grant family the host executor may only read, and the host's ACL may write it. The same request asked again names the spent decision (`decidedBefore`), and the orchestrator honours that for every target but the API one.
+- **On the asking conversation:** a turn does not hold the runtime while its tool runs, so unloading the model Helmsman runs on ends no turn. Its card says the conversation's next turn loads the model again, and names any other requests the change ends.
+
+_Not built:_ issue codes and remedies on local-model tool errors. A local model failing an agent's own turn fails that turn, not a tool call it could read, so this waits for an operation that calls a local model as a tool.
 
 ### P4 — The appliance (D11)
 
