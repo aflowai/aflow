@@ -43,8 +43,13 @@ export function AgentModelSettings({
   const storedModelRefs = Object.values(controller.directives?.modelDefaults ?? {}).filter(
     (v): v is string => typeof v === 'string',
   );
-  const { modelOptions, clerkModelOptions, modelOptionsLoading, modelOptionsError } =
-    useChatModelOptions(storedModelRefs);
+  const {
+    modelOptions,
+    clerkModelOptions,
+    decisionModelOptions,
+    modelOptionsLoading,
+    modelOptionsError,
+  } = useChatModelOptions(storedModelRefs);
   const { readiness } = useSpaceLlmReadiness(open ? spaceId : null);
   const [connectProvider, setConnectProvider] = useState<string | null>(null);
 
@@ -84,6 +89,7 @@ export function AgentModelSettings({
             reasoningDefaults={directives.reasoningDefaults}
             modelOptions={modelOptions}
             clerkModelOptions={clerkModelOptions}
+            decisionModelOptions={decisionModelOptions}
             clerkReadiness={readiness?.clerk ?? null}
             conversationSummaries={conversationSummariesEnabled(directives)}
             onConversationSummariesChange={(next) => {
