@@ -65,6 +65,8 @@ export const WORKFLOW_TASK_SAFE_INLINE_OPERATIONS: ReadonlySet<string> = new Set
   'workflow.learn',
   // Waits on the run it starts, no deeper than MAX_WORKFLOW_RUN_DEPTH; the waiter answers the task
   'workflow.run.start',
+  // Always fails its own task, with the reason it was handed
+  'workflow.run.fail',
   'agent.schedule.snooze',
 ]);
 

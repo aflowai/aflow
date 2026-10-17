@@ -1,6 +1,6 @@
 # Plan 316 — Workflows decide without a language model: a typed decision step
 
-**Status:** 🔨 P0–P4 built and proven live; P5 and draft-level editing open · **First backend:** TypeSafe AI's Jev (a "System One" decision model)
+**Status:** 🔨 P0–P4 built and proven live; P5 and draft-level editing open · **First backend:** TypeSafe AI's Jev (a "System One" decision model) · **First production consumer:** Publish Local Changes, which decides what follows a failed check and whether a review's findings take a fix round (Plan 315 D22); its bars wait on §7's measurement, which has not run yet
 
 ## 1. Problem
 
@@ -42,6 +42,7 @@ Input:
   - `{ type: 'choice', instructions?, options: Record<label, description | null>, minConfidence? }`, 2–255 options
   - `{ type: 'score', instructions?, levels: (description | null)[], minConfidence? }`, 2–10 levels, index 0 lowest
   - `{ type: 'yes_no', instructions?, criteria?: { true?, false? }, minConfidence? }`
+- `each` — optional `{ items, question }`: one `yes_no` asked of every item of a list (at most 50), for a list whose length is known only when the step runs — a review's findings. Each item travels in its own question's instructions beside the claim, all in the same single pass. `questions` may then be absent; one of the two is required. An empty list asks nothing and needs no model.
 - `model` — optional catalog reference; the catalog's default decision model when absent.
 
 Output:
@@ -50,6 +51,7 @@ Output:
   - choice: `{ type, value: label, confidence, probabilities: Record<label, number>, decided }`
   - score: `{ type, value: expected score, confidence, probabilities: Record<level, number>, decided }`
   - yes_no: `{ type, value: p ≥ 0.5, probability: p, confidence: max(p, 1 − p), decided }`
+- `each` — where asked: every item's `yes_no` answer in order, `selected` (the items answered true and decided), `selectedCount`, `undecidedCount`, and `selectedJson`, the selected items as text a later step can put in a brief.
 - `model`, `usage { inputTokens, outputTokens }`, `latencyMs`.
 
 For a `yes_no`, `confidence` is derived as the probability of the more likely outcome, so one threshold reads the same way on every question type.
@@ -110,3 +112,35 @@ The `classifier` rails execute through the operation when a rail opts in. Exit: 
 - A draft whose route names a label the question does not offer is refused with a diagnostic naming the label.
 - A fork reading `tasks.triage.output.answers.team.valeu` is refused at validation, not skipped at run time.
 - The operation never appears in an agent's tool list, and does appear in authoring search.
+
+## 7. Measurement — the loop's own decisions
+
+**Status: built, not yet run.** No numbers are recorded here until it has run on the operator's stack. The checkout that built it had no running stack holding this stream's runs, no GitHub credential for the Actions logs of PRs #91–#124, and no TypeSafe or OpenAI key. The script's labelling, scoring and report are tested on planted records (`scripts/loop-decision-set.test.mjs`).
+
+**What it measures.** The two choices Publish Local Changes now makes for itself (Plan 315 D22), plus the CI remedy choice Plan 321 makes by hand, against what was actually decided in this stream. Four questions, each the one the skill asks, imported from `publishLocalChangesDecisions.ts`, so the measurement measures what ships:
+
+- **After a failed check**: the check's account → what the next publication of the branch did. A change appended means `fix_commission`; the same head published as it stands means `recheck_on_timeout`.
+- **Each review finding**: the finding → whether a later publication carried it `closed` (a defect, fixed) or `open` (left — accepted or dismissed, which the records do not tell apart).
+- **After a review with findings**: the findings → `fix_before_merge` where a later change closed any of them, `publish_as_is` where they were carried on all open.
+- **A failing CI job of PRs #91–#124**: the last 300 lines of the job's log (Plan 321 §P0's bound) → `rerun` where another attempt of the same run followed on the same commit, `merge_round` for a merge commit next, `resolutions_bump` for a next commit touching only `package.json` and `yarn.lock` under `resolutions`, and `code_fix` otherwise.
+
+A case nothing followed is left unlabelled, not guessed. `operator_install_mismatch` and `ask` are never inferred; they come only from the operator's labels file, which overrides any inference. The report counts how many labels came from the operator and how many were inferred.
+
+**Deciders.** Jev through `AIClient.decide`, the call the decision operation makes. Then a critique-then-verdict `generate_json` call — a critique, a verdict among the same options and a stated probability that the verdict is right — on gpt-6-luna, and the same call on claude-opus-5-5 as the agent baseline. A language model's stated probability is not calibrated; it is reported as what it is.
+
+**Recorded per decider and question**: agreement with the operator's decision among the cases it decided; abstention at the bar chosen for it (the lowest bar in the 0.5–0.95 sweep at which agreement reaches the target, 90% by default); agreement over all cases with an abstention counted as not agreeing; errors apart from both; p50 and p95 latency; and cost per decision from the catalog's prices. Jev's whole sweep goes beside the table.
+
+**Why a script and not the eval plane's dataset (Plan 269).** A golden case there is a run's input and output, labelled by the operator against a skill's suite. These cases are decisions spread across runs and across GitHub — a check's account against the next publication's input, a log against the next commit — and none of them is a run of one skill. So it is a script, as Plan 323 P0 was.
+
+**Run it**, on the stack that holds the stream, with `AFLOW_API_KEY` set to an API key of the space's tenant and `gh` signed in:
+
+```
+yarn decisions:measure-loop collect --space <spaceId> --repo aflowai/aflow --prs 91-124
+yarn decisions:measure-loop measure [--labels <operator-labels.json>] [--target 0.9]
+```
+
+The tables in `.debug/decisions/report.md` go here, and the bars chosen for Jev replace the provisional `AFTER_CHECK_MIN_CONFIDENCE` (0.8), `FINDING_MIN_CONFIDENCE` (0.8) and `AFTER_REVIEW_MIN_CONFIDENCE` (0.9). Where Jev does not reach the target on a question at any bar, that question's decision step does not belong in Publish Local Changes, and it should be taken out again.
+
+| Question | Decider     | minConfidence | Agreement (decided) | Abstention | p50 ms | Cost per decision |
+| -------- | ----------- | ------------- | ------------------- | ---------- | ------ | ----------------- |
+| —        | not yet run | —             | —                   | —          | —      | —                 |

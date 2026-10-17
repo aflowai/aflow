@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { DecisionQuestions } from '@aflow/schemas';
-import { resolveDecisionAnswers } from './decision.js';
+import {
+  decisionRequestQuestions,
+  resolveDecisionAnswers,
+  splitDecisionAnswers,
+} from './decision.js';
 import { AIClientError } from './errors.js';
 
 const questions: DecisionQuestions = {
@@ -68,5 +72,66 @@ describe('resolveDecisionAnswers', () => {
     expect(() =>
       resolve({ urgent: { type: 'score', score: 1, confidence: 1, probabilities: {} } }),
     ).toThrow(/yes_no question and got a score answer/);
+  });
+});
+
+describe('a question asked of each item', () => {
+  const each = {
+    items: [{ claim: 'leaks a handle' }, { claim: 'a name could be better' }, { claim: 'unsure' }],
+    question: {
+      type: 'yes_no' as const,
+      instructions: 'Names a defect, established by evidence shown',
+      minConfidence: 0.8,
+    },
+  };
+  const named: DecisionQuestions = {
+    round: { type: 'choice', options: { fix: null, ship: null } },
+  };
+
+  it('asks it once per item, each item beside the claim, alongside the named questions', () => {
+    const asked = decisionRequestQuestions({ questions: named, each });
+    expect(Object.keys(asked)).toEqual(['round', 'each_0', 'each_1', 'each_2']);
+    expect(asked['each_1']).toEqual({
+      type: 'yes_no',
+      instructions: {
+        claim: 'Names a defect, established by evidence shown',
+        about: 'The item below, one of a list the state describes.',
+        item: { claim: 'a name could be better' },
+      },
+      minConfidence: 0.8,
+    });
+  });
+
+  it('selects only the items answered true and decided — never one the model was unsure of', () => {
+    const input = { questions: named, each };
+    const asked = decisionRequestQuestions(input);
+    const resolved = resolveDecisionAnswers(asked, {
+      round: { type: 'choice', choice: 'fix', confidence: 0.9, probabilities: {} },
+      each_0: { type: 'yes_no', probability: 0.95 },
+      each_1: { type: 'yes_no', probability: 0.05 },
+      each_2: { type: 'yes_no', probability: 0.7 },
+    });
+    const { answers, each: out } = splitDecisionAnswers(input, resolved);
+    expect(Object.keys(answers)).toEqual(['round']);
+    expect(out?.answers.map((a) => [a.value, a.decided])).toEqual([
+      [true, true],
+      [false, true],
+      [true, false],
+    ]);
+    expect(out?.selected).toEqual([{ claim: 'leaks a handle' }]);
+    expect(out?.selectedCount).toBe(1);
+    expect(out?.undecidedCount).toBe(1);
+    expect(JSON.parse(out?.selectedJson ?? '')).toEqual([{ claim: 'leaks a handle' }]);
+  });
+
+  it('reports none selected as an empty list in both forms', () => {
+    const input = { each: { ...each, items: [{ claim: 'x' }] } };
+    const asked = decisionRequestQuestions(input);
+    const { each: out } = splitDecisionAnswers(
+      input,
+      resolveDecisionAnswers(asked, { each_0: { type: 'yes_no', probability: 0.01 } }),
+    );
+    expect(out?.selected).toEqual([]);
+    expect(out?.selectedJson).toBe('[]');
   });
 });

@@ -37,6 +37,15 @@ import {
   toJsonSchemaSync,
 } from '@aflow/schemas';
 import { PUBLISH_LOCAL_CHANGES } from './publishLocalChanges.js';
+import {
+  AFTER_CHECK_QUESTION,
+  AFTER_REVIEW_QUESTION,
+  FINDING_QUESTION,
+  FIX_CHECKS_BRIEF_LEAD,
+  FIX_FINDINGS_BRIEF_LEAD,
+  type AfterCheckRoute,
+  type AfterReviewRoute,
+} from './publishLocalChangesDecisions.js';
 import { REVIEW_LOCAL_CHANGES } from './reviewLocalChanges.js';
 
 const wf = PUBLISH_LOCAL_CHANGES.bundle.workflow;
@@ -133,64 +142,76 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(validity.status).toBe('valid');
   });
 
-  it('is thirteen tasks — commit, check and its one rerun, scan, what decides the approval, the pull request composed, approve, push, find and rewrite or open the pull request', () => {
+  it('is twenty tasks — commit, check, what follows a failed check, scan, what decides the approval, the review and what follows its findings, the pull request composed, approve, push, the pull request found, rewritten or opened, and a fix round and its publication', () => {
     expect(wf.tasks.map((t) => t.taskId)).toEqual([
       'commit',
       'check-commit',
+      'decide-after-check',
+      'checks-failed',
       'recheck-commit',
       'scan-commit',
       'read-repository',
       'read-push-approval',
       'review-commit',
+      'decide-findings',
+      'decide-after-review',
       'describe-pr',
       'approve-push',
       'push',
       'find-pr',
       'update-pr',
       'open-pr',
+      'fix-checks',
+      'fix-findings',
+      'republish-fix',
     ]);
-    expect(wf.tasks.map((t) => t.type)).toEqual([
-      'operation',
-      'operation',
-      'operation',
-      'operation',
-      'operation',
-      'operation',
-      'operation',
-      'operation',
-      'human',
-      'operation',
-      'operation',
-      'operation',
-      'operation',
+    expect(wf.tasks.filter((t) => t.type !== 'operation').map((t) => t.taskId)).toEqual([
+      'approve-push',
     ]);
-    expect(wf.tasks.map((t) => t.dependsOn ?? [])).toEqual([
-      [],
-      ['commit'],
-      ['commit', 'check-commit'],
-      ['commit', 'check-commit', 'recheck-commit'],
-      ['commit'],
-      ['commit', 'scan-commit'],
-      ['read-push-approval', 'scan-commit'],
-      ['commit', 'check-commit', 'recheck-commit', 'scan-commit', 'review-commit'],
-      ['read-repository', 'scan-commit', 'review-commit'],
-      ['approve-push', 'scan-commit', 'check-commit', 'recheck-commit', 'describe-pr'],
-      ['push'],
-      ['find-pr', 'describe-pr'],
-      ['find-pr', 'describe-pr'],
-    ]);
-    expect(taskOrThrow('describe-pr').operation).toBe('host.commit.describe');
-    expect(taskOrThrow('update-pr').operation).toBe('api.http.call');
-    expect(taskOrThrow('commit').operation).toBe('host.file.patch');
-    expect(taskOrThrow('check-commit').operation).toBe('host.commit.check');
-    expect(taskOrThrow('recheck-commit').operation).toBe('host.commit.check');
-    expect(taskOrThrow('scan-commit').operation).toBe('host.commit.scan');
-    expect(taskOrThrow('read-repository').operation).toBe('api.http.call');
-    expect(taskOrThrow('read-push-approval').operation).toBe('host.binding.inspect');
-    expect(taskOrThrow('review-commit').operation).toBe('workflow.run.start');
-    expect(taskOrThrow('push').operation).toBe('host.process.exec');
-    expect(taskOrThrow('find-pr').operation).toBe('api.http.call');
-    expect(taskOrThrow('open-pr').operation).toBe('api.http.call');
+    expect(Object.fromEntries(wf.tasks.map((t) => [t.taskId, t.dependsOn ?? []]))).toEqual({
+      commit: [],
+      'check-commit': ['commit'],
+      'decide-after-check': ['check-commit'],
+      'checks-failed': ['check-commit', 'decide-after-check'],
+      'recheck-commit': ['commit', 'check-commit', 'decide-after-check'],
+      'scan-commit': ['commit', 'check-commit', 'recheck-commit'],
+      'read-repository': ['commit', 'check-commit', 'recheck-commit'],
+      'read-push-approval': ['commit', 'scan-commit'],
+      'review-commit': ['read-push-approval', 'scan-commit'],
+      'decide-findings': ['review-commit'],
+      'decide-after-review': ['decide-findings'],
+      'describe-pr': ['commit', 'check-commit', 'recheck-commit', 'scan-commit', 'review-commit'],
+      'approve-push': ['read-repository', 'scan-commit', 'review-commit'],
+      push: ['approve-push', 'scan-commit', 'check-commit', 'recheck-commit', 'describe-pr'],
+      'find-pr': ['push'],
+      'update-pr': ['find-pr', 'describe-pr'],
+      'open-pr': ['find-pr', 'describe-pr'],
+      'fix-checks': ['commit', 'check-commit', 'decide-after-check'],
+      'fix-findings': ['commit', 'decide-findings', 'decide-after-review'],
+      'republish-fix': ['fix-checks', 'fix-findings', 'push'],
+    });
+    expect(Object.fromEntries(wf.tasks.map((t) => [t.taskId, t.operation]))).toEqual({
+      commit: 'host.file.patch',
+      'check-commit': 'host.commit.check',
+      'decide-after-check': 'ai.decision.decide',
+      'checks-failed': 'workflow.run.fail',
+      'recheck-commit': 'host.commit.check',
+      'scan-commit': 'host.commit.scan',
+      'read-repository': 'api.http.call',
+      'read-push-approval': 'host.binding.inspect',
+      'review-commit': 'workflow.run.start',
+      'decide-findings': 'ai.decision.decide',
+      'decide-after-review': 'ai.decision.decide',
+      'describe-pr': 'host.commit.describe',
+      'approve-push': undefined,
+      push: 'host.process.exec',
+      'find-pr': 'api.http.call',
+      'update-pr': 'api.http.call',
+      'open-pr': 'api.http.call',
+      'fix-checks': 'workflow.run.start',
+      'fix-findings': 'workflow.run.start',
+      'republish-fix': 'workflow.run.start',
+    });
   });
 
   it('reads the repository on the same GitHub binding the pull request uses, before the approval', () => {
@@ -211,8 +232,12 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     });
     const kinds = Object.values(read.inputBindings ?? {}).map((b) => b.kind);
     expect(kinds).not.toContain('connection_binding');
+    // Only once the checks cleared the commit: a failed check reads nothing more.
     expect(read.when).toEqual({
-      expression: "tasks.commit.output.state == 'applied'",
+      anyOf: [
+        'tasks.check-commit.output.passed == true',
+        'tasks.recheck-commit.output.passed == true',
+      ],
       onMissingRef: 'skip',
     });
   });
@@ -629,7 +654,16 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     const promoters = wf.tasks.filter((task) =>
       task.promoteOutputs?.some((p) => 'toState' in p && p.toState === RUN_PULL_REQUEST_URL_OUTPUT),
     );
-    expect(promoters.map((task) => task.taskId).sort()).toEqual(['find-pr', 'open-pr']);
+    // A fix round's publication reports its pull request as this run's: the
+    // same branch, so the same pull request, and it comes later in the list
+    // so its value is the one the run keeps.
+    expect(promoters.map((task) => task.taskId).sort()).toEqual([
+      'find-pr',
+      'open-pr',
+      'republish-fix',
+    ]);
+    const order = wf.tasks.map((task) => task.taskId);
+    expect(order.indexOf('republish-fix')).toBeGreaterThan(order.indexOf('open-pr'));
     expect(
       wf.stateVariables.find((v) => v.variableId === RUN_PULL_REQUEST_URL_OUTPUT)?.sensitive,
     ).toBe(false);
@@ -739,15 +773,103 @@ type Decision = 'approved' | 'declined';
  * The review run's ending as the waiter delivers it to the task: the run's
  * promoted output only when it completed.
  */
-function reviewEnding(review: Exclude<Review, 'not-started'>): Record<string, unknown> {
+function reviewEnding(
+  review: Exclude<Review, 'not-started'>,
+  findings: readonly Finding[] = [],
+): Record<string, unknown> {
   const completed = review !== 'failed' && review !== 'cancelled' && review !== 'paused';
   return WorkflowRunWakeupEnvelopeSchema.parse({
     runId: 'review-run',
     outcome: completed ? 'completed' : review,
     waiterId: 'waiter-1',
-    ...(completed ? { result: { output: { verdict: review, reviewSummary: 'Read.' } } } : {}),
+    ...(completed
+      ? { result: { output: { verdict: review, reviewSummary: 'Read.', findings } } }
+      : {}),
   });
 }
+
+/** A finding as Local Code Review returns it. */
+interface Finding {
+  severity: 'blocker' | 'major' | 'minor' | 'nit';
+  file: string;
+  line?: number;
+  claim: string;
+  evidence: string;
+}
+
+/**
+ * What a decision model answers, scripted: a choice and its confidence, or
+ * `unavailable` — no decision model bound, a provider refusing — which fails
+ * the decision step.
+ */
+type Choice<Route extends string> = { value: Route; confidence: number } | 'unavailable';
+
+/** A choice answered as `ai.decision.decide` returns it, decided by the question's own bar. */
+function choiceOutput(
+  name: string,
+  minConfidence: number,
+  choice: { value: string; confidence: number },
+): Record<string, unknown> {
+  return {
+    answers: {
+      [name]: {
+        type: 'choice',
+        value: choice.value,
+        confidence: choice.confidence,
+        probabilities: { [choice.value]: choice.confidence },
+        decided: choice.confidence >= minConfidence,
+      },
+    },
+    model: 'jev-1.13.0',
+    usage: { promptTokens: 1, completionTokens: 0, totalTokens: 1 },
+    latencyMs: 40,
+  };
+}
+
+/** Each finding judged with the probability given for it, as `ai.decision.decide` returns `each`. */
+function judgedOutput(items: readonly unknown[], probabilities: readonly number[]) {
+  const answers = items.map((_, i) => {
+    const probability = probabilities[i] ?? 0;
+    const confidence = Math.max(probability, 1 - probability);
+    return {
+      type: 'yes_no' as const,
+      value: probability >= 0.5,
+      probability,
+      confidence,
+      decided: confidence >= FINDING_QUESTION.minConfidence,
+    };
+  });
+  const selected = items.filter((_, i) => answers[i]?.value === true && answers[i].decided);
+  return {
+    answers: {},
+    each: {
+      answers,
+      selected,
+      selectedCount: selected.length,
+      undecidedCount: answers.filter((a) => !a.decided).length,
+      selectedJson: JSON.stringify(selected, null, 2),
+    },
+    model: 'jev-1.13.0',
+    usage: { promptTokens: 1, completionTokens: 0, totalTokens: 1 },
+    latencyMs: 40,
+  };
+}
+
+/** The patch a fix round's commission returns, and the base it reports: this run's commit. */
+const FIX_PATCH_REF = 'payload:fix-patch';
+
+/** A run a task started and waited on, ending as `output` says, or failing. */
+function runEnding(runId: string, output: Record<string, unknown> | 'failed') {
+  return WorkflowRunWakeupEnvelopeSchema.parse({
+    runId,
+    outcome: output === 'failed' ? 'failed' : 'completed',
+    waiterId: `waiter-${runId}`,
+    ...(output === 'failed' ? {} : { result: { output } }),
+  });
+}
+
+/** The pull request the publication of a fix ends with. */
+const FIX_PR = { prUrl: 'https://github.com/aflowai/aflow/pull/9', prNumber: 9 };
 
 type Scan = 'clean' | 'finding' | 'unscanned' | 'allowed';
 
@@ -820,6 +942,8 @@ const CHECK_RECEIPT = {
 /** The test a check under load names as having run out of its time. */
 const TIMED_OUT_TEST =
   'apps/aflow-executor-api/src/handlers/api/saveResponse.test.ts › a saveTo download allows a body above the inline default';
+/** The decision after a run lost only to time, sure of it. */
+const RECHECK = { value: 'recheck_on_timeout', confidence: 0.95 } as const;
 const CHECK_TAIL =
   'ok   large-files guard (2.0 s)\nFAIL tsc apps/aflow-executor-host/tsconfig.json (41.3 s)\n';
 
@@ -926,6 +1050,16 @@ interface Scenario {
   inputs?: Record<string, unknown>;
   /** The composed text holds what looks like a secret, so the composition is refused. */
   describeRefused?: boolean;
+  /** What the decision after a failed check answers; absent is `unavailable`. */
+  afterCheck?: Choice<AfterCheckRoute>;
+  /** The findings a completed review returns; absent is none. */
+  findings?: readonly Finding[];
+  /** How likely each finding is judged to name a defect, in order; or `unavailable`. */
+  judged?: readonly number[] | 'unavailable';
+  /** What the decision on a fix round answers; absent is `unavailable`. */
+  afterReview?: Choice<AfterReviewRoute>;
+  /** How a fix round's commission ends: with a change, with none, or failed; absent is a change. */
+  commission?: 'patch' | 'no-change' | 'failed';
 }
 
 interface Outcome {
@@ -1014,7 +1148,36 @@ function rawOutput(
     case 'review-commit':
       if (scenario.review === 'not-started')
         throw new Error('a review that did not start has no output');
-      return reviewEnding(scenario.review);
+      return reviewEnding(scenario.review, scenario.findings);
+    case 'decide-after-check':
+      if (scenario.afterCheck === undefined || scenario.afterCheck === 'unavailable') return {};
+      return choiceOutput('next_step', AFTER_CHECK_QUESTION.minConfidence, scenario.afterCheck);
+    case 'decide-findings': {
+      const each = input['each'] as { items: unknown[] };
+      return judgedOutput(
+        each.items,
+        scenario.judged === 'unavailable' ? [] : (scenario.judged ?? []),
+      );
+    }
+    case 'decide-after-review':
+      if (scenario.afterReview === undefined || scenario.afterReview === 'unavailable') return {};
+      return choiceOutput(
+        'after_review',
+        AFTER_REVIEW_QUESTION.minConfidence,
+        scenario.afterReview,
+      );
+    case 'fix-checks':
+    case 'fix-findings':
+      return runEnding(
+        `commission-${taskId}`,
+        scenario.commission === 'failed'
+          ? 'failed'
+          : scenario.commission === 'no-change'
+            ? { baseSha: HEAD }
+            : { patchRef: FIX_PATCH_REF, baseSha: HEAD },
+      );
+    case 'republish-fix':
+      return runEnding(`publication-${taskId}`, FIX_PR);
     case 'push':
       return { exitCode: 0 };
     case 'find-pr': {
@@ -1186,6 +1349,18 @@ function publish(scenario: Scenario): Outcome {
         if (task.optional === true) failedOptional.add(task.taskId);
         continue;
       }
+      // A decision that could not be made fails its step, as the executor does.
+      if (
+        (task.taskId === 'decide-after-check' &&
+          (scenario.afterCheck ?? 'unavailable') === 'unavailable') ||
+        (task.taskId === 'decide-findings' && scenario.judged === 'unavailable') ||
+        (task.taskId === 'decide-after-review' &&
+          (scenario.afterReview ?? 'unavailable') === 'unavailable')
+      ) {
+        statuses.set(task.taskId, 'failed');
+        if (task.optional === true) failedOptional.add(task.taskId);
+        continue;
+      }
       if (task.taskId === 'approve-push') {
         asked = true;
         if (scenario.decision === 'declined' && scenario.declineAs !== 'answer') {
@@ -1219,6 +1394,11 @@ function publish(scenario: Scenario): Outcome {
                 new Set(Object.keys(task.inputBindings ?? {})),
               );
         inputs.set(task.taskId, input);
+        // `workflow.run.fail` fails its own task whatever it is handed.
+        if (task.operation === 'workflow.run.fail') {
+          statuses.set(task.taskId, 'failed');
+          continue;
+        }
         const raw = rawOutput(task.taskId, scenario, input);
         if (task.outputProjection !== undefined) {
           const projected = projectTaskOutput(task.outputProjection, raw, null);
@@ -1387,7 +1567,13 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
       const projected = projectTaskOutput(review.outputProjection, reviewEnding(outcome), null);
       expect(projected).toEqual({
         ok: true,
-        value: { verdict: null, reviewSummary: null, outcome, reviewRunId: 'review-run' },
+        value: {
+          verdict: null,
+          reviewSummary: null,
+          findings: null,
+          outcome,
+          reviewRunId: 'review-run',
+        },
       });
     }
     const approved = projectTaskOutput(review.outputProjection, reviewEnding('approve'), null);
@@ -1396,6 +1582,7 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
       value: {
         verdict: 'approve',
         reviewSummary: 'Read.',
+        findings: [],
         outcome: 'completed',
         reviewRunId: 'review-run',
       },
@@ -1566,8 +1753,12 @@ describe('Publish Local Changes — the commit is scanned for secrets before any
       range: `${ORIGIN_BASE}..${HEAD}`,
       texts: { 'pull request title': 'Fix it' },
     });
+    // A commit the checks did not clear is never scanned: nothing after them runs.
     expect(scan.when).toEqual({
-      expression: "tasks.commit.output.state == 'applied'",
+      anyOf: [
+        'tasks.check-commit.output.passed == true',
+        'tasks.recheck-commit.output.passed == true',
+      ],
       onMissingRef: 'skip',
     });
   });
@@ -1902,8 +2093,8 @@ describe('Publish Local Changes — a branch is published as it stands', () => {
     expect(outcome.ran).toEqual([
       'commit',
       'check-commit',
-      'read-repository',
       'scan-commit',
+      'read-repository',
       'read-push-approval',
       'review-commit',
       'describe-pr',
@@ -1987,7 +2178,7 @@ describe("Publish Local Changes — the folder's checks run before anything leav
     expect(outcome.pushed).toBe(true);
   });
 
-  it('fails at the check, rather than pausing on a resolution that could clear it', () => {
+  it('records every ending of the first run, so what follows a failure is decided — and fails at the second', () => {
     for (const taskId of ['check-commit', 'recheck-commit']) {
       const check = taskOrThrow(taskId);
       expect(check.maxAttempts, taskId).toBe(1);
@@ -1996,13 +2187,10 @@ describe("Publish Local Changes — the folder's checks run before anything leav
     }
     const projects = (taskId: string, ending: Check): boolean =>
       projectTaskOutput(taskOrThrow(taskId).outputProjection ?? {}, checkResult(ending), null).ok;
-    for (const ending of ['failed', 'timed-out'] as const) {
-      expect(projects('check-commit', ending), ending).toBe(false);
-    }
-    for (const ending of ['passed', 'skipped', 'test-timeouts'] as const) {
+    for (const ending of ['passed', 'skipped', 'failed', 'timed-out', 'test-timeouts'] as const) {
       expect(projects('check-commit', ending), ending).toBe(true);
     }
-    // The second run is the last: tests running out of time fail it as anything else does.
+    // The second run is the last: anything but passing fails it, and the run.
     for (const ending of ['failed', 'timed-out', 'test-timeouts'] as const) {
       expect(projects('recheck-commit', ending), ending).toBe(false);
     }
@@ -2028,6 +2216,7 @@ describe("Publish Local Changes — the folder's checks run before anything leav
         review: 'approve',
         decision: 'approved',
         check: 'test-timeouts',
+        afterCheck: RECHECK,
       });
       expect(checkRuns(outcome.ran)).toEqual(['check-commit', 'recheck-commit']);
       expect(outcome.ran.indexOf('scan-commit')).toBeGreaterThan(
@@ -2049,6 +2238,7 @@ describe("Publish Local Changes — the folder's checks run before anything leav
         review: 'approve',
         decision: 'approved',
         check: 'test-timeouts',
+        afterCheck: RECHECK,
       });
       expect(outcome.statuses.get('check-commit')).toBe('succeeded');
       expect(outcome.outputs.get('check-commit')).toMatchObject({
@@ -2063,7 +2253,7 @@ describe("Publish Local Changes — the folder's checks run before anything leav
         receipt: CHECK_RECEIPT.passed,
       });
       expect(taskOrThrow('recheck-commit').name).toBe(
-        "Run the folder's checks again, after tests ran out of time",
+        "Run the folder's checks again, after they ran out of time",
       );
     });
 
@@ -2074,6 +2264,7 @@ describe("Publish Local Changes — the folder's checks run before anything leav
           review: 'approve',
           decision: 'approved',
           check: 'test-timeouts',
+          afterCheck: RECHECK,
           recheck,
         });
         expect(checkRuns(outcome.ran)).toEqual(['check-commit', 'recheck-commit']);
@@ -2158,8 +2349,11 @@ describe("Publish Local Changes — the folder's checks run before anything leav
 
   it("says in its description that the folder's checks run first, and that the pull request's remain the proof", () => {
     expect(PUBLISH_LOCAL_CHANGES.description).toContain(
-      'run in a checkout of the commit before the scan, and a failure stops the run with nothing scanned, reviewed or pushed',
+      'run in a checkout of the commit before the scan, and nothing is scanned, reviewed or pushed until they pass',
     );
+    // What a failed check leads to is the run's own decision, and an unsure one stops it.
+    expect(PUBLISH_LOCAL_CHANGES.description).toContain('or a stop, as an unsure decision is.');
+    expect(PUBLISH_LOCAL_CHANGES.description).toContain('No decision clears or holds a push.');
     expect(PUBLISH_LOCAL_CHANGES.description).toContain('the push needs their passing receipt.');
     expect(PUBLISH_LOCAL_CHANGES.description).toContain('A folder that declares none runs none.');
     expect(PUBLISH_LOCAL_CHANGES.description).toContain(
@@ -2274,6 +2468,7 @@ describe('Publish Local Changes — the pull request describes the branch as a w
       review: 'approve',
       decision: 'approved',
       check: 'test-timeouts',
+      afterCheck: RECHECK,
     });
     const described = describedWith(outcome);
     expect(described.check?.passed).toBe(false);
@@ -2379,5 +2574,388 @@ describe('Publish Local Changes — the pull request describes the branch as a w
       ...toJsonSchemaSync(PullRequestFindingsSchema),
     });
     expect(runInputOrThrow('gaps').schema).toEqual({ ...toJsonSchemaSync(PullRequestGapsSchema) });
+  });
+});
+
+// ── What follows a failed check, decided by the skill ──────────────────────
+
+describe('Publish Local Changes — a failed check is decided on, not handed to a conversation', () => {
+  /** Everything that only runs on a commit the checks cleared. */
+  const CLEARED_ONLY = [
+    'scan-commit',
+    'read-repository',
+    'read-push-approval',
+    'review-commit',
+    'describe-pr',
+    'approve-push',
+    'push',
+    'find-pr',
+    'open-pr',
+  ];
+  const FIX_ROUND = ['fix-checks', 'republish-fix'];
+
+  function failedWith(afterCheck: Choice<AfterCheckRoute>, extra: Partial<Scenario> = {}): Outcome {
+    return publish({
+      pushApproval: 'never',
+      review: 'approve',
+      decision: 'approved',
+      check: 'failed',
+      afterCheck,
+      inputs: { owner: 'aflowai', repo: 'aflow' },
+      ...extra,
+    });
+  }
+
+  it("asks one choice of the three routes, over the checks' own account, and only when they did not pass", () => {
+    const decide = taskOrThrow('decide-after-check');
+    const questions = (decide.inputTemplate as { questions: Record<string, { options: object }> })
+      .questions;
+    expect(Object.keys(questions)).toEqual(['next_step']);
+    expect(Object.keys(questions['next_step']?.options ?? {})).toEqual([
+      'recheck_on_timeout',
+      'fix_commission',
+      'operator_install_mismatch',
+    ]);
+    expect(decide.when).toEqual({
+      expression: 'tasks.check-commit.output.passed == false',
+      onMissingRef: 'skip',
+    });
+    const outcome = failedWith({ value: 'fix_commission', confidence: 0.95 });
+    expect(outcome.inputs.get('decide-after-check')?.['state']).toEqual({
+      summary: checkResult('failed')['summary'],
+      tail: CHECK_TAIL,
+      failingGuard: null,
+      timedOut: null,
+      testTimeouts: null,
+    });
+    for (const check of ['passed', 'skipped'] as const) {
+      expect(failedWith(RECHECK, { check }).ran, check).not.toContain('decide-after-check');
+    }
+  });
+
+  it('recheck_on_timeout: runs the checks once more, and pushes only on that run passing', () => {
+    const passes = failedWith(RECHECK, { check: 'timed-out' });
+    expect(passes.ran).toContain('recheck-commit');
+    expect(passes.pushed).toBe(true);
+    expect(passes.inputs.get('push')?.['check']).toEqual({ receipt: CHECK_RECEIPT.passed });
+    for (const id of [...FIX_ROUND, 'checks-failed']) expect(passes.ran, id).not.toContain(id);
+
+    const failsAgain = failedWith(RECHECK, { check: 'timed-out', recheck: 'failed' });
+    expect(failsAgain.statuses.get('recheck-commit')).toBe('failed');
+    for (const id of CLEARED_ONLY) expect(failsAgain.ran, id).not.toContain(id);
+  });
+
+  it("fix_commission: commissions the fix on this commit, briefed from the checks' account alone, then publishes the branch again", () => {
+    const outcome = failedWith({ value: 'fix_commission', confidence: 0.95 });
+    expect(outcome.ran).toEqual(expect.arrayContaining(FIX_ROUND));
+    // Nothing of this commit leaves the machine from this run: the
+    // republication checks, scans, reviews and pushes it as any publication does.
+    for (const id of [...CLEARED_ONLY, 'recheck-commit', 'checks-failed']) {
+      expect(outcome.ran, id).not.toContain(id);
+    }
+    const commission = WorkflowRunStartInputSchema.parse(outcome.inputs.get('fix-checks'));
+    expect(commission).toMatchObject({
+      slug: 'commission-change',
+      catalogId: 'commission-change',
+      wait: 'until_complete',
+    });
+    // The brief is the fixed lead and the checks' own summary — which names
+    // the failing step and carries the tail — and nothing a model wrote.
+    expect(commission.inputs).toEqual({
+      bindingId: 'folder-1',
+      task: `${FIX_CHECKS_BRIEF_LEAD}${String(checkResult('failed')['summary'])}`,
+      base: HEAD,
+    });
+    expect(String(commission.inputs?.['task'])).toContain(CHECK_TAIL);
+
+    const republish = WorkflowRunStartInputSchema.parse(outcome.inputs.get('republish-fix'));
+    expect(republish).toMatchObject({
+      slug: 'publish-local-changes',
+      catalogId: 'publish-local-changes',
+      wait: 'until_complete',
+    });
+    // Appended to this branch at this commit, which is what the commission was made against.
+    expect(republish.inputs).toMatchObject({
+      bindingId: 'folder-1',
+      branch: 'aflow/x',
+      base: 'main',
+      owner: 'aflowai',
+      repo: 'aflow',
+      patchRef: FIX_PATCH_REF,
+      baseSha: HEAD,
+    });
+    // The commit names the round it came from: its commission's run and this commit.
+    expect(republish.inputs?.['commitMessage']).toBe(
+      `Make the folder's checks pass\n\nThe fix commission commission-fix-checks made from what the folder's checks printed when they failed on ${HEAD}.`,
+    );
+    expect(outcome.state['prUrl']).toBe(FIX_PR.prUrl);
+  });
+
+  it('names the failing step in the brief where the checks named one', () => {
+    const summary = 'node scripts/verify-commit.mjs exited 1: the check failed at `eslint`.';
+    const brief = substituteTemplateBinds(
+      taskOrThrow('fix-checks').inputTemplate ?? {},
+      { bindingId: 'folder-1', commitSha: HEAD, summary },
+      new Set(Object.keys(taskOrThrow('fix-checks').inputBindings ?? {})),
+    );
+    expect((brief['inputs'] as { task: string }).task).toBe(`${FIX_CHECKS_BRIEF_LEAD}${summary}`);
+  });
+
+  for (const ending of ['no-change', 'failed'] as const) {
+    it(`fix_commission: a commission that ${ending === 'failed' ? 'fails' : 'returns no change'} fails the publication, and nothing is published again`, () => {
+      const outcome = failedWith(
+        { value: 'fix_commission', confidence: 0.95 },
+        { commission: ending },
+      );
+      expect(outcome.statuses.get('fix-checks')).toBe('failed');
+      expect(outcome.ran).not.toContain('republish-fix');
+      expect(outcome.pushed).toBe(false);
+      expect(taskOrThrow('fix-checks').failureInstruction).toContain(
+        'Nothing was scanned, reviewed or pushed',
+      );
+    });
+  }
+
+  const STOPS: Array<[string, Choice<AfterCheckRoute>]> = [
+    ['operator_install_mismatch', { value: 'operator_install_mismatch', confidence: 0.95 }],
+    ['an undecided fix_commission', { value: 'fix_commission', confidence: 0.79 }],
+    ['an undecided recheck_on_timeout', { value: 'recheck_on_timeout', confidence: 0.5 }],
+    ['no decision at all', 'unavailable'],
+  ];
+  for (const [label, afterCheck] of STOPS) {
+    it(`${label}: fails the publication as a failed check always did, with the checks' account as the reason`, () => {
+      const outcome = failedWith(afterCheck);
+      expect(outcome.statuses.get('checks-failed')).toBe('failed');
+      expect(outcome.inputs.get('checks-failed')).toEqual({
+        reason: checkResult('failed')['summary'],
+      });
+      for (const id of [...CLEARED_ONLY, ...FIX_ROUND, 'recheck-commit']) {
+        expect(outcome.ran, id).not.toContain(id);
+      }
+      expect(outcome.pushed).toBe(false);
+      expect(outcome.state['prUrl']).toBeUndefined();
+    });
+  }
+
+  it('fails with the same instruction a failed check always carried', () => {
+    const stop = taskOrThrow('checks-failed');
+    expect(stop.failureInstruction).toBe(taskOrThrow('check-commit').failureInstruction);
+    expect(stop.optional).not.toBe(true);
+    // The decision is optional so that its own failure is a route, not the run's end.
+    expect(taskOrThrow('decide-after-check').optional).toBe(true);
+  });
+
+  it('abstains below the bar the question sets, whatever it chose', () => {
+    expect(AFTER_CHECK_QUESTION.minConfidence).toBeGreaterThanOrEqual(0.8);
+    const at = failedWith({
+      value: 'fix_commission',
+      confidence: AFTER_CHECK_QUESTION.minConfidence,
+    });
+    expect(at.ran).toContain('fix-checks');
+    const below = failedWith({
+      value: 'fix_commission',
+      confidence: AFTER_CHECK_QUESTION.minConfidence - 0.01,
+    });
+    expect(below.ran).not.toContain('fix-checks');
+    expect(below.ran).toContain('checks-failed');
+  });
+});
+
+// ── Whether a review's findings take a fix round, decided by the skill ─────
+
+describe("Publish Local Changes — a review's findings are judged one at a time, and a fix round decided", () => {
+  const LEAK: Finding = {
+    severity: 'major',
+    file: 'src/cache.ts',
+    line: 40,
+    claim: 'The cache is never invalidated after a write.',
+    evidence:
+      'put() writes the store and leaves the map entry; the test reads only before the write.',
+  };
+  const NAME: Finding = {
+    severity: 'nit',
+    file: 'src/cache.ts',
+    claim: 'The name says what it was.',
+    evidence: 'cacheOld',
+  };
+  const RACE: Finding = {
+    severity: 'blocker',
+    file: 'src/lock.ts',
+    line: 12,
+    claim: 'Two writers can both take the lock.',
+    evidence: 'The check and the set are two calls.',
+  };
+  const FINDINGS = [LEAK, NAME, RACE];
+
+  function reviewedWith(extra: Partial<Scenario>): Outcome {
+    return publish({
+      pushApproval: 'unless-unreviewed',
+      review: 'request_changes',
+      decision: 'approved',
+      findings: FINDINGS,
+      inputs: { owner: 'aflowai', repo: 'aflow' },
+      ...extra,
+    });
+  }
+
+  /** Whether the push and its approval went as they would with no decision at all. */
+  function gateAsBefore(outcome: Outcome, scenario: Partial<Scenario>): void {
+    const without = publish({
+      pushApproval: 'unless-unreviewed',
+      review: 'request_changes',
+      decision: 'approved',
+      inputs: { owner: 'aflowai', repo: 'aflow' },
+      ...scenario,
+      findings: [],
+    });
+    expect(outcome.asked).toBe(without.asked);
+    expect(outcome.pushed).toBe(without.pushed);
+  }
+
+  it('asks, of each finding, whether it names a defect established by the evidence shown', () => {
+    const outcome = reviewedWith({
+      judged: [0.95, 0.1, 0.9],
+      afterReview: { value: 'publish_as_is', confidence: 0.95 },
+    });
+    const asked = outcome.inputs.get('decide-findings') as {
+      each: { items: unknown[]; question: unknown };
+    };
+    expect(asked.each.items).toEqual(FINDINGS);
+    expect(asked.each.question).toEqual(FINDING_QUESTION);
+    expect(FINDING_QUESTION.instructions).toBe(
+      "The finding names a defect in the change's behaviour, established by evidence shown.",
+    );
+  });
+
+  it('decides on a fix round only over the findings that passed, and only where one did', () => {
+    const some = reviewedWith({
+      judged: [0.95, 0.1, 0.9],
+      afterReview: { value: 'publish_as_is', confidence: 0.95 },
+    });
+    expect(
+      (some.inputs.get('decide-after-review')?.['state'] as { findings: unknown }).findings,
+    ).toEqual([LEAK, RACE]);
+    // Dismissed, or judged with too little confidence to count: no round is weighed.
+    const none = reviewedWith({ judged: [0.05, 0.1, 0.6] });
+    expect(none.ran).toContain('decide-findings');
+    expect(none.ran).not.toContain('decide-after-review');
+    expect(none.ran).not.toContain('fix-findings');
+  });
+
+  it('fix_before_merge: briefs the commission with the findings that passed, in order, and nothing else', () => {
+    const outcome = reviewedWith({
+      judged: [0.95, 0.1, 0.9],
+      afterReview: { value: 'fix_before_merge', confidence: 0.95 },
+    });
+    const commission = WorkflowRunStartInputSchema.parse(outcome.inputs.get('fix-findings'));
+    expect(commission).toMatchObject({ slug: 'commission-change', catalogId: 'commission-change' });
+    expect(commission.inputs).toEqual({
+      bindingId: 'folder-1',
+      task: `${FIX_FINDINGS_BRIEF_LEAD}${JSON.stringify([LEAK, RACE], null, 2)}`,
+      base: HEAD,
+    });
+    expect(String(commission.inputs?.['task'])).not.toContain(NAME.claim);
+    gateAsBefore(outcome, {});
+  });
+
+  it("fix_before_merge: publishes the fix only after this run's push, appended at this commit", () => {
+    const outcome = reviewedWith({
+      judged: [0.95, 0.1, 0.9],
+      afterReview: { value: 'fix_before_merge', confidence: 0.95 },
+    });
+    expect(outcome.pushed).toBe(true);
+    expect(outcome.ran.indexOf('republish-fix')).toBeGreaterThan(outcome.ran.indexOf('push'));
+    const republish = WorkflowRunStartInputSchema.parse(outcome.inputs.get('republish-fix'));
+    expect(republish).toMatchObject({
+      slug: 'publish-local-changes',
+      catalogId: 'publish-local-changes',
+    });
+    expect(republish.inputs).toMatchObject({
+      branch: 'aflow/x',
+      patchRef: FIX_PATCH_REF,
+      baseSha: HEAD,
+    });
+    expect(String(republish.inputs?.['commitMessage'])).toMatch(
+      /^Fix the review's findings\n\nThe fix commission commission-fix-findings made /,
+    );
+    expect(outcome.state['prUrl']).toBe(FIX_PR.prUrl);
+  });
+
+  it('fix_before_merge: publishes nothing again where the operator declined this push', () => {
+    const outcome = reviewedWith({
+      decision: 'declined',
+      judged: [0.95, 0.1, 0.9],
+      afterReview: { value: 'fix_before_merge', confidence: 0.95 },
+    });
+    expect(outcome.pushed).toBe(false);
+    expect(outcome.ran).not.toContain('republish-fix');
+  });
+
+  it('undecided: takes the fix round, briefed with the same findings', () => {
+    const outcome = reviewedWith({
+      judged: [0.95, 0.1, 0.9],
+      afterReview: {
+        value: 'publish_as_is',
+        confidence: AFTER_REVIEW_QUESTION.minConfidence - 0.01,
+      },
+    });
+    expect(outcome.ran).toContain('fix-findings');
+    expect(
+      String((outcome.inputs.get('fix-findings')?.['inputs'] as { task: string }).task),
+    ).toContain(LEAK.claim);
+    gateAsBefore(outcome, {});
+  });
+
+  for (const value of ['publish_as_is', 'ask'] as const) {
+    it(`${value}: takes no fix round, records the decision, and leaves the push as it was`, () => {
+      const outcome = reviewedWith({
+        judged: [0.95, 0.1, 0.9],
+        afterReview: { value, confidence: 0.95 },
+      });
+      expect(outcome.ran).not.toContain('fix-findings');
+      expect(outcome.ran).not.toContain('republish-fix');
+      expect(outcome.state['afterReview']).toBe(value);
+      gateAsBefore(outcome, {});
+    });
+  }
+
+  it('sets its bar high: only a confident choice keeps a branch from its fix round', () => {
+    expect(AFTER_REVIEW_QUESTION.minConfidence).toBeGreaterThanOrEqual(0.9);
+  });
+
+  for (const [label, extra] of [
+    ['the findings cannot be judged', { judged: 'unavailable' }],
+    ['the round cannot be decided', { judged: [0.95, 0.1, 0.9], afterReview: 'unavailable' }],
+  ] as const) {
+    it(`no fix round where ${label}: the run goes on as before, the findings left to whoever reads them`, () => {
+      const outcome = reviewedWith(extra as Partial<Scenario>);
+      expect(outcome.ran).not.toContain('fix-findings');
+      gateAsBefore(outcome, {});
+    });
+  }
+
+  it('judges nothing where the review returned no findings or did not finish', () => {
+    for (const review of ['approve', 'failed', 'not-started'] as const) {
+      const outcome = reviewedWith({ review, findings: review === 'approve' ? [] : FINDINGS });
+      expect(outcome.ran, review).not.toContain('decide-findings');
+    }
+  });
+
+  it('leaves the push gate, the scan and the posture exactly as they were', () => {
+    // 316 D9: a decision reads text it can be steered by, so it is never a gate.
+    const push = taskOrThrow('push');
+    expect(push.when).toEqual({
+      anyOf: [
+        "tasks.approve-push.output.decision == 'approved'",
+        "tasks.read-push-approval.output.branchPolicy.pushApproval == 'never'",
+        "tasks.review-commit.output.verdict == 'approve'",
+      ],
+      onMissingRef: 'skip',
+    });
+    const reads = (task: WorkflowTask) =>
+      JSON.stringify([task.when, task.inputBindings, task.dependsOn]);
+    for (const gate of ['push', 'approve-push', 'read-push-approval', 'scan-commit']) {
+      expect(reads(taskOrThrow(gate) as WorkflowTask), gate).not.toMatch(/decide-|fix-|republish-/);
+    }
   });
 });

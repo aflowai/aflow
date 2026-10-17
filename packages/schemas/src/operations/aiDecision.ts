@@ -120,15 +120,77 @@ export const DecisionQuestionsSchema = z
   );
 export type DecisionQuestions = z.infer<typeof DecisionQuestionsSchema>;
 
-export const AiDecideInputSchema = z.object({
-  state: DecisionEntrySchema.describe(
-    'What the questions are about: text, a JSON object or a JSON array. Content in the state can steer the answers, so a decision about untrusted input is never the only gate on something that matters.',
-  ),
-  questions: DecisionQuestionsSchema,
-  model: enumWithCustom(DECISION_MODELS)
-    .describe('Decision model to use. The platform default when absent.')
-    .optional(),
-});
+/** The most items one `each` asks about: a review returns at most this many findings. */
+export const DECISION_MAX_EACH_ITEMS = 50;
+
+/**
+ * The name an `each` item's question travels under beside the named questions.
+ * A named question may not take it, so the two can never answer for each other.
+ */
+export const DECISION_EACH_QUESTION_PREFIX = 'each_';
+const EACH_QUESTION_NAME = /^each_\d+$/;
+
+export function decisionEachQuestionName(index: number): string {
+  return `${DECISION_EACH_QUESTION_PREFIX}${String(index)}`;
+}
+
+export const DecisionEachSchema = z
+  .object({
+    items: z
+      .array(z.unknown())
+      .max(DECISION_MAX_EACH_ITEMS)
+      .describe(
+        'The list the question is asked of, one item at a time — the findings of a review, the lines of an order. Each item is read beside the state. An empty list selects nothing, and with no named questions beside it nothing is asked.',
+      ),
+    question: DecisionYesNoQuestionSchema.describe(
+      'The yes_no asked of every item, stated about one item. Its minConfidence holds for each answer.',
+    ),
+  })
+  .superRefine((each, ctx) => {
+    const q = each.question;
+    if (q.instructions !== undefined || q.criteria?.true != null || q.criteria?.false != null) {
+      return;
+    }
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['question'],
+      message:
+        'A yes_no question states the claim it asks about: give instructions, or criteria for true or false.',
+    });
+  });
+export type DecisionEach = z.infer<typeof DecisionEachSchema>;
+
+export const AiDecideInputSchema = z
+  .object({
+    state: DecisionEntrySchema.describe(
+      'What the questions are about: text, a JSON object or a JSON array. Content in the state can steer the answers, so a decision about untrusted input is never the only gate on something that matters.',
+    ),
+    questions: DecisionQuestionsSchema.optional(),
+    each: DecisionEachSchema.optional().describe(
+      'One yes_no asked of every item of a list, for a list whose length is known only when the step runs. The items it holds true for, confidently, come back as `each.selected` — and as `each.selectedJson`, text a later step can hand on.',
+    ),
+    model: enumWithCustom(DECISION_MODELS)
+      .describe('Decision model to use. The platform default when absent.')
+      .optional(),
+  })
+  .superRefine((input, ctx) => {
+    if (input.questions === undefined && input.each === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['questions'],
+        message: 'Ask named questions, a question of each item, or both.',
+      });
+    }
+    if (input.each === undefined) return;
+    for (const name of Object.keys(input.questions ?? {})) {
+      if (!EACH_QUESTION_NAME.test(name)) continue;
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['questions', name],
+        message: `"${name}" is how an item of \`each\` is asked; name the question otherwise.`,
+      });
+    }
+  });
 export type AiDecideInput = z.infer<typeof AiDecideInputSchema>;
 
 const decidedSchema = z
@@ -167,6 +229,8 @@ export const DecisionYesNoAnswerSchema = z.object({
   decided: decidedSchema,
 });
 
+export type DecisionYesNoAnswer = z.infer<typeof DecisionYesNoAnswerSchema>;
+
 export const DecisionAnswerSchema = z.discriminatedUnion('type', [
   DecisionChoiceAnswerSchema,
   DecisionScoreAnswerSchema,
@@ -174,8 +238,32 @@ export const DecisionAnswerSchema = z.discriminatedUnion('type', [
 ]);
 export type DecisionAnswer = z.infer<typeof DecisionAnswerSchema>;
 
+export const DecisionEachOutputSchema = z.object({
+  answers: z
+    .array(DecisionYesNoAnswerSchema)
+    .describe('The answer for each item, in the order the items were given.'),
+  selected: z
+    .array(z.unknown())
+    .describe('The items whose answer is true and decided, in their order.'),
+  selectedCount: z.number().int().nonnegative(),
+  undecidedCount: z
+    .number()
+    .int()
+    .nonnegative()
+    .describe('How many items were answered below the question’s minConfidence.'),
+  selectedJson: z
+    .string()
+    .describe(
+      '`selected` as indented JSON, for a step that takes text — a brief, a message. `[]` where none was selected.',
+    ),
+});
+export type DecisionEachOutput = z.infer<typeof DecisionEachOutputSchema>;
+
 export const AiDecideOutputSchema = z.object({
-  answers: z.record(z.string(), DecisionAnswerSchema).describe('Question name → answer.'),
+  answers: z
+    .record(z.string(), DecisionAnswerSchema)
+    .describe('Question name → answer. Empty where only `each` was asked.'),
+  each: DecisionEachOutputSchema.optional().describe('Present where `each` was asked.'),
   model: z.string(),
   usage: TokenUsageSchema,
   latencyMs: z.number().int().nonnegative(),

@@ -911,3 +911,33 @@ describe('workflow.run.detail — one task’s output on request (Plan 313 gap 1
     expect(output.taskOutput).toBeUndefined();
   });
 });
+
+describe('workflow.run.fail — a skill stops its run on what decided it', () => {
+  type Failed = {
+    status: string;
+    error: { code: string; message: string; classification: string; retryable: boolean };
+  };
+
+  it('always fails its own task, non-retryable, with the reason it was handed as the message', async () => {
+    const reason =
+      'The checks failed at `tsc apps/x/tsconfig.json`. The last of what they printed: …';
+    await handleWorkflowCrudInline(makeArgs('workflow.run.fail', { reason }));
+
+    expect(mockAddStepResult).toHaveBeenCalledOnce();
+    const result = mockAddStepResult.mock.calls[0]![1] as Failed;
+    expect(result.status).toBe('FAILED');
+    expect(result.error.code).toBe('RUN_FAILED_BY_SKILL');
+    // Never the internal-error message: the reason is what the woken reader acts on.
+    expect(result.error.message).toBe(reason);
+    expect(result.error.classification).not.toBe('internal');
+    expect(result.error.retryable).toBe(false);
+  });
+
+  it('still fails, saying so, when it was handed no reason', async () => {
+    await handleWorkflowCrudInline(makeArgs('workflow.run.fail', {}));
+
+    const result = mockAddStepResult.mock.calls[0]![1] as Failed;
+    expect(result.status).toBe('FAILED');
+    expect(result.error.message).toContain('without a reason');
+  });
+});

@@ -634,6 +634,41 @@ describe('host.commit.check — a run lost only to tests running out of time', (
   });
 });
 
+describe('host.commit.check — the step the checks name as failing', () => {
+  /** A check whose report names `guard` as the failing step, and ends as `exit` says. */
+  function reportingGuard(guard: string, exit: string): string[] {
+    return nodeCheck(`${reportScript(JSON.stringify({ failingGuard: guard }))}\n${exit}`);
+  }
+
+  it('names the failing step on checks that failed, from a report that carries no listener count', async () => {
+    const world = await fixture({
+      branchPrefix: 'aflow/',
+      checks: reportingGuard('tsc apps/x/tsconfig.json', 'process.exit(2);'),
+    });
+    const output = HostCommitCheckOutputSchema.parse((await check(world)).captured.output);
+    expect(output.passed).toBe(false);
+    expect(output.failingGuard).toBe('tsc apps/x/tsconfig.json');
+    // The summary is what a fix is briefed with, so it names the step too.
+    expect(output.summary).toContain('the check failed at `tsc apps/x/tsconfig.json`.');
+    // Unknown, not zero: the run failed before the tests that would count them.
+    expect(output.skippedListenerTests).toBeUndefined();
+    expect(output.receipt).toBeDefined();
+  });
+
+  it('names none on checks that passed, whatever the report says, nor where the checks named none', async () => {
+    const passing = await fixture({
+      branchPrefix: 'aflow/',
+      checks: reportingGuard('tsc apps/x/tsconfig.json', 'process.exit(0);'),
+    });
+    const passed = HostCommitCheckOutputSchema.parse((await check(passing)).captured.output);
+    expect(passed.failingGuard).toBeUndefined();
+
+    const silent = await fixture({ branchPrefix: 'aflow/', checks: FAILING });
+    const failed = HostCommitCheckOutputSchema.parse((await check(silent)).captured.output);
+    expect(failed.failingGuard).toBeUndefined();
+  });
+});
+
 describe("host.commit.check — the folder's sandbox posture", () => {
   function compiled(input: SandboxedRunInput): ReturnType<typeof compileSandboxPolicy> {
     return compileSandboxPolicy(input.binding, {

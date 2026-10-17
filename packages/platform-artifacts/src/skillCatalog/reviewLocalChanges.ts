@@ -143,7 +143,7 @@ const BRIEF_MAX_TURNS = 8;
 
 const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'review-local-changes',
-  version: 7,
+  version: 8,
   name: 'Review Local Changes',
   tagline:
     "Review committed changes in a connected repository with the machine's own coding agent.",
@@ -257,6 +257,7 @@ const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
           promoteOutputs: [
             { kind: 'output_path' as const, path: 'result.verdict', toState: 'verdict' },
             { kind: 'output_path' as const, path: 'result.summary', toState: 'reviewSummary' },
+            { kind: 'output_path' as const, path: 'result.findings', toState: 'findings' },
           ],
         },
       ],
@@ -274,6 +275,15 @@ const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
           name: 'Review summary',
           description:
             'The review as a person reads it: what the range does, every finding with its severity and its file and line, blockers first, and the checks that ran with their outcome.',
+          required: false,
+          sensitive: false,
+          immutable: false,
+        },
+        {
+          variableId: 'findings',
+          name: 'Review findings',
+          description:
+            'Every finding as the review returned it — severity, file, line, claim, evidence and suggestion — for a run that acts on them one at a time, as a publication deciding on a fix round does.',
           required: false,
           sensitive: false,
           immutable: false,

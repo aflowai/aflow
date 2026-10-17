@@ -107,6 +107,18 @@ function stepEnv(extra = {}) {
   return env;
 }
 
+// The executor names this file to a check it runs, signs the count of skipped
+// listener tests into the check's receipt, reads the tests that ran out of
+// time on a run they alone failed, and names the step that failed to whatever
+// decides what follows; run by hand, nothing names it. Each write adds to what
+// an earlier one said, so a failing step's name keeps the counts beside it.
+const checkReport = process.env['AFLOW_CHECK_REPORT'] || undefined;
+let reported = {};
+const writeCheckReport = (report) => {
+  reported = { ...reported, ...report };
+  if (checkReport !== undefined) writeFileSync(checkReport, JSON.stringify(reported));
+};
+
 /** Run one step, `activity` naming it as it starts; a failure ends the run unless `onFailure` says more first. */
 async function run(label, activity, command, args, options = {}) {
   const step = await runStep({
@@ -119,6 +131,7 @@ async function run(label, activity, command, args, options = {}) {
   });
   if (step.passed) return;
   options.onFailure?.();
+  writeCheckReport({ failingGuard: label });
   await failStep(label, step.startedAt, step.printed);
 }
 
@@ -395,13 +408,6 @@ const place = (name) => {
 };
 for (const name of [...needed].sort()) place(name);
 
-// The executor names this file to a check it runs, signs the count of skipped
-// listener tests into the check's receipt, and reads the tests that ran out of
-// time on a run they alone failed; run by hand, nothing names it.
-const checkReport = process.env['AFLOW_CHECK_REPORT'] || undefined;
-const writeCheckReport = (report) => {
-  if (checkReport !== undefined) writeFileSync(checkReport, JSON.stringify(report));
-};
 for (const workspace of ordered) {
   if (workspace.build === undefined) continue;
   if (!workspace.dir.startsWith('packages/')) {
