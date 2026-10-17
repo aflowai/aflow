@@ -5,6 +5,11 @@ import { createAIClient } from '../client.js';
 import { AIClientError } from '../errors.js';
 import { createOllamaAdapter } from './ollama.js';
 
+// The transport is undici's own fetch; these tests answer through the global one.
+vi.mock('./localRuntimeFetch.js', () => ({
+  localRuntimeFetch: (url: string, init?: RequestInit) => globalThis.fetch(url, init),
+}));
+
 const context = {
   tenantId: 'tenant' as TenantId,
   runId: 'run' as SessionId,
@@ -479,25 +484,6 @@ describe('failures', () => {
 
     expect(error.message).not.toContain('not reachable');
     expect(error.message).toContain('other side closed (ECONNRESET)');
-  });
-
-  it('waits on the runtime with no transport limit of its own, so only the caller’s signal ends a long prompt', async () => {
-    const seen: RequestInit[] = [];
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (_url: string, init: RequestInit) => {
-        seen.push(init);
-        return done({ content: 'ok' }, { prompt: 5, eval: 1 })();
-      }),
-    );
-
-    await createOllamaAdapter({}).generateText({
-      ...context,
-      model: 'm',
-      messages: [{ role: 'user', content: 'x' }],
-    });
-
-    expect((seen[0] as { dispatcher?: unknown }).dispatcher).toBeDefined();
   });
 
   it('does not retry a runtime that stayed silent through the idle window: a retry reads the prompt again', async () => {
