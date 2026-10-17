@@ -34,6 +34,10 @@ import {
   HOST_MACHINES_KEY,
   hostBrowserAnswerChannel,
   hostBrowserRequestChannel,
+  hostRuntimeAnswerChannel,
+  hostRuntimeRequestChannel,
+  readHostRuntimeRequest,
+  type HostRuntimeAnswer,
   HOST_WITHDRAWAL_CHANNEL,
   hostInventoryKey,
   type HostInventory,
@@ -85,6 +89,7 @@ import { createMachineReader } from './machine.js';
 import { publishingFolders } from './pushApproval.js';
 import { startUnderSignals } from './startUnderSignals.js';
 import { createStartupTimings } from './startupTimings.js';
+import { startLocalRuntime } from './localRuntimeStart.js';
 import { type BackgroundTaskLogger, createBackgroundTaskRunner } from '@aflow/lib';
 
 const log = createServiceLogger('host-executor');
@@ -635,9 +640,41 @@ async function main(): Promise<void> {
         });
       });
   };
+  // The operator asking from the workspace for Ollama to start here. Two asks
+  // at once share one start, so a double click does not race two launches.
+  const runtimeChannel = hostRuntimeRequestChannel(hostname);
+  await hostChannels.subscribe(runtimeChannel).catch((error: unknown) => {
+    log.warn('Could not subscribe to model runtime requests from the workspace', { error });
+  });
+  let starting: Promise<HostRuntimeAnswer> | undefined;
+  const runtimeAsked = (raw: string): void => {
+    const request = readHostRuntimeRequest(raw, hostname);
+    if (request === undefined) return;
+    starting ??= startLocalRuntime(request.port).finally(() => {
+      starting = undefined;
+    });
+    void starting
+      .then(async (answer) => {
+        log.info('Asked from the workspace to start the model runtime', {
+          port: request.port,
+          outcome: answer.kind,
+          message: answer.message,
+        });
+        await redis.publish(hostRuntimeAnswerChannel(request.answerId), JSON.stringify(answer));
+      })
+      .catch((error: unknown) => {
+        log.warn('Could not answer a model runtime start asked for from the workspace', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+  };
   hostChannels.on('message', (channel: string, raw: string) => {
     if (channel === requestChannel) {
       askedFromWorkspace(raw);
+      return;
+    }
+    if (channel === runtimeChannel) {
+      runtimeAsked(raw);
       return;
     }
     if (channel !== HOST_WITHDRAWAL_CHANNEL) return;

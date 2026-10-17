@@ -90,6 +90,52 @@ export function hostBrowserAnswerChannel(answerId: string): string {
   return `aflow:pubsub:host-browser-answer:${answerId}`;
 }
 
+/**
+ * The operator asking, from the workspace, for the model runtime on this
+ * machine to start (Plan 323 D15). Published only by the operator's
+ * local-models route on a space admin's request, and acted on only by the
+ * executor of the machine it names, which starts the one program it knows
+ * and nothing the request could name.
+ */
+export function hostRuntimeRequestChannel(hostname: string): string {
+  return `aflow:pubsub:host-runtime:${hostname}`;
+}
+
+export function hostRuntimeAnswerChannel(answerId: string): string {
+  return `aflow:pubsub:host-runtime-answer:${answerId}`;
+}
+
+export const HostRuntimeRequestSchema = z.object({
+  kind: z.literal('start'),
+  hostname: z.string().min(1),
+  answerId: z.string().regex(/^[A-Za-z0-9_-]{16,64}$/),
+  /** The loopback port the space's connection names, which the runtime is waited for on. */
+  port: z.number().int().min(1).max(65_535),
+});
+export type HostRuntimeRequest = z.infer<typeof HostRuntimeRequestSchema>;
+
+export const HostRuntimeAnswerSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('started'), message: z.string() }),
+  z.object({ kind: z.literal('refused'), message: z.string() }),
+]);
+export type HostRuntimeAnswer = z.infer<typeof HostRuntimeAnswerSchema>;
+
+/** The request, when it is well formed and names `hostname`. */
+export function readHostRuntimeRequest(
+  raw: string,
+  hostname: string,
+): HostRuntimeRequest | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+  const request = HostRuntimeRequestSchema.safeParse(parsed);
+  if (!request.success || request.data.hostname !== hostname) return undefined;
+  return request.data;
+}
+
 const SettingWordSchema = z.string().max(2048);
 
 export const HostBrowserSettingSchema = z.discriminatedUnion('kind', [
@@ -327,8 +373,15 @@ export async function readLiveHostInventories(
 export async function readLocalMachine(
   redis: HostInventoryReader,
 ): Promise<HostMachine | undefined> {
+  return (await readLocalHost(redis))?.machine;
+}
+
+/** The same machine, with the name its executor listens under. */
+export async function readLocalHost(
+  redis: HostInventoryReader,
+): Promise<{ hostname: string; machine: HostMachine } | undefined> {
   for (const inventory of await readLiveHostInventories(redis)) {
-    if (inventory.machine) return inventory.machine;
+    if (inventory.machine) return { hostname: inventory.hostname, machine: inventory.machine };
   }
   return undefined;
 }

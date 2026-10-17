@@ -524,6 +524,7 @@ export {
 } from './computeBudget.js';
 
 export * from './hostInventory.js';
+export * from './hostRequests.js';
 export * from './browserHandoff.js';
 export * from './sessionResidue.js';
 export {

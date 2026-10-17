@@ -11,7 +11,7 @@ import {
   createProviderCredentialDbLoader,
   providerConfigFromCredential,
 } from '@aflow/credential-resolver';
-import { readLocalMachine, type HostMachine, type Redis } from '@aflow/redis';
+import { readLocalHost, type HostMachine, type Redis } from '@aflow/redis';
 import { localRuntimeId, type CredentialScope } from '@aflow/schemas';
 
 export interface SpaceLocalRuntime {
@@ -22,6 +22,8 @@ export interface SpaceLocalRuntime {
   credential: { id: string; scope: CredentialScope; scopeId: string };
   /** This machine as its host executor last published it; absent where none is paired. */
   hostMachine: HostMachine | undefined;
+  /** The name that executor listens under, for asking it to start the runtime. */
+  hostname: string | undefined;
 }
 
 export interface SpaceLocalRuntimeScope {
@@ -44,9 +46,8 @@ export async function resolveSpaceLocalRuntime(
     })
     .catch(() => null);
   if (!resolved) return null;
-  const hostMachine = scope.redis
-    ? await readLocalMachine(scope.redis).catch(() => undefined)
-    : undefined;
+  const host = scope.redis ? await readLocalHost(scope.redis).catch(() => undefined) : undefined;
+  const hostMachine = host?.machine;
   const config = providerConfigFromCredential('ollama', resolved, { machine: hostMachine });
   return {
     config,
@@ -54,5 +55,6 @@ export async function resolveSpaceLocalRuntime(
     runtimeId: localRuntimeId(config.baseUrl),
     credential: { id: resolved.credentialId, scope: resolved.scope, scopeId: resolved.scopeId },
     hostMachine,
+    hostname: host?.hostname,
   };
 }

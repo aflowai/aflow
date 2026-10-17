@@ -54,6 +54,21 @@ describe('diagnoseLocalRuntime', () => {
     expect(d.issues[0]!.remedy).toMatchObject({ kind: 'instruction' });
   });
 
+  it('offers to start the runtime where this machine’s executor can start it', () => {
+    const d = diagnoseLocalRuntime({
+      observation: observe({ version: null, installed: null, loaded: null }),
+      connection: { machine: M3_24GB },
+      models: [gemma],
+      roles: { default: gemma.id },
+      startable: true,
+    });
+    expect(d.issues[0]!.remedy).toEqual({
+      kind: 'action',
+      action: { action: 'start_runtime' },
+      label: 'Start Ollama',
+    });
+  });
+
   it('offers the download, with its size, for a role whose model is not downloaded', () => {
     const d = diagnose({ machine: M4_64GB }, { installed: [] });
     expect(d.issues).toEqual([

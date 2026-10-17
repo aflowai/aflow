@@ -10,17 +10,9 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
-const run = promisify(execFile);
+import { probeEnv } from './probeEnv.js';
 
-/** Enough to find and run a version command, and nothing this executor holds. */
-function probeEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const name of ['PATH', 'HOME', 'LANG', 'LC_ALL', 'TZ'] as const) {
-    const value = process.env[name];
-    if (value !== undefined) env[name] = value;
-  }
-  return env;
-}
+const run = promisify(execFile);
 
 /** Probed by asking for a version, which is the one flag they agree on. */
 const PROBES: ReadonlyArray<{ name: string; command: string; args: string[] }> = [

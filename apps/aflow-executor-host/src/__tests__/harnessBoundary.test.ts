@@ -200,7 +200,10 @@ describe('one spawn path', () => {
     // while a step runs, a system call by another name that reads and runs no
     // workload. machine.ts asks Metal (through `swift`) or `nvidia-smi` how much
     // GPU memory a model runtime on this machine has, once, and runs nothing it
-    // was handed.
+    // was handed. localRuntimeStart.ts starts the operator's own Ollama as it
+    // is installed — its service manager, its app, or its binary — when the
+    // operator asks from the workspace; the request names nothing to run, and
+    // a runtime confined to a job's sandbox could not serve the machine.
     // Named rather than matched, so a new unconfined spawn is argued for here.
     expect(importers).toEqual([
       'browser/harnessBrowser.ts',
@@ -208,6 +211,7 @@ describe('one spawn path', () => {
       'folderPicker.ts',
       'harnessDiscovery.ts',
       'keepAwake.ts',
+      'localRuntimeStart.ts',
       'machine.ts',
       'orphans.ts',
       'runtimes.ts',

@@ -12,10 +12,12 @@ import {
   endLocalPull,
   recordLocalPullProgress,
   requestLocalPullCancel,
+  type HostExchangeConnections,
   type Redis,
 } from '@aflow/redis';
 import { THIS_MACHINE_RUNTIME_HOST, type LocalModelAction, type TenantId } from '@aflow/schemas';
 import type { SpaceLocalRuntime } from './runtime.js';
+import { startSpaceLocalRuntime } from './start.js';
 
 /** Room a download leaves on the disk: the runtime writes a manifest and temporary parts beside the layers. */
 export const PULL_DISK_HEADROOM_BYTES = 2 * 1024 ** 3;
@@ -26,7 +28,7 @@ export type LocalModelActionOutcome =
   | { ok: true; message: string }
   | {
       ok: false;
-      reason: 'not_local' | 'no_disk' | 'runtime' | 'not_here';
+      reason: 'not_local' | 'no_disk' | 'runtime' | 'not_here' | 'host';
       message: string;
     };
 
@@ -38,6 +40,8 @@ export interface LocalModelActionContext {
   tenantId: string;
   runtime: SpaceLocalRuntime;
   log?: { warn(message: string, fields?: Record<string, unknown>): void };
+  /** How the operator's route asks this machine's executor; absent where nothing can. */
+  hostExchange?: HostExchangeConnections;
 }
 
 export async function applyLocalModelAction(
@@ -45,6 +49,8 @@ export async function applyLocalModelAction(
   action: LocalModelAction,
 ): Promise<LocalModelActionOutcome> {
   if (action.action === 'set_context') return setContext(ctx, action.contextTokens);
+  if (action.action === 'start_runtime')
+    return startSpaceLocalRuntime(ctx.runtime, ctx.hostExchange);
   if (action.action === 'use_for_every_role') {
     return {
       ok: false,

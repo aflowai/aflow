@@ -48,6 +48,8 @@ export function diagnoseLocalRuntime(input: {
   roles: Partial<Record<LocalModelRole, string>>;
   freeDiskBytes?: number | undefined;
   pulls?: Readonly<Record<string, LocalModelPull>> | undefined;
+  /** Whether this machine's paired executor can start the runtime, which only it can reach. */
+  startable?: boolean | undefined;
 }): LocalRuntimeDiagnostics {
   const { observation, connection } = input;
   const reachable = observation.version !== null;
@@ -120,7 +122,9 @@ export function diagnoseLocalRuntime(input: {
             code: 'runtime_unreachable',
             severity: 'error',
             cause: `Ollama is not answering at ${observation.baseUrl}.`,
-            remedy: { kind: 'instruction', text: START_OLLAMA },
+            remedy: input.startable
+              ? { kind: 'action', action: { action: 'start_runtime' }, label: 'Start Ollama' }
+              : { kind: 'instruction', text: START_OLLAMA },
           },
         ],
   };

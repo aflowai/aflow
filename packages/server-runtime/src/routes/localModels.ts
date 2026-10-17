@@ -23,17 +23,19 @@ import {
   type SpaceLocalRuntime,
 } from '@aflow/cybernetic-runtime';
 import { LocalModelActionSchema, LocalRuntimeDiagnosticsSchema } from '@aflow/schemas';
+import { hostExchangeConnections } from '../lib/hostExchange.js';
 
 const ErrorSchema = z.object({ error: z.string(), message: z.string() });
 
 const OUTCOME_STATUS: Record<
   Extract<LocalModelActionOutcome, { ok: false }>['reason'],
-  400 | 409 | 502
+  400 | 409 | 502 | 503
 > = {
   not_local: 400,
   not_here: 400,
   no_disk: 409,
   runtime: 502,
+  host: 503,
 };
 
 const spaceAuthz = (action: 'read' | 'admin') => ({
@@ -133,6 +135,7 @@ export const localModelRoutes: FastifyPluginAsync = async (fastify) => {
           404: ErrorSchema,
           409: ErrorSchema,
           502: ErrorSchema,
+          503: ErrorSchema,
         },
       },
     },
@@ -148,6 +151,7 @@ export const localModelRoutes: FastifyPluginAsync = async (fastify) => {
           tenantId: resolved.tenantId,
           runtime: resolved.runtime,
           log: request.log,
+          hostExchange: hostExchangeConnections('host-runtime-answer'),
         },
         request.body,
       );

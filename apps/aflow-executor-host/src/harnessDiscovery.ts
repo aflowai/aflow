@@ -17,19 +17,11 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
+import { probeEnv } from './probeEnv.js';
+
 import type { HarnessOutputFormat } from './harnessProfiles.js';
 
 const run = promisify(execFile);
-
-/** As in `runtimes.ts`: discovery runs operator-controlled programs. */
-function probeEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const name of ['PATH', 'HOME', 'LANG', 'LC_ALL', 'TZ'] as const) {
-    const value = process.env[name];
-    if (value !== undefined) env[name] = value;
-  }
-  return env;
-}
 
 const PROBE_TIMEOUT_MS = 5_000;
 

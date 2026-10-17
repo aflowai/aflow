@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { Button, Icon, Row, Text } from '@aflow/design-system';
 import { useSpaceLlmReadiness, type SpaceLlmReadiness } from '../../hooks/useSpaceLlmReadiness.js';
+import { useLocalModels } from '../../hooks/useLocalModels.js';
 import { useSpaceFromRoute } from '../providers.js';
 import { spaceRoute } from '../../lib/space-routes.js';
 
@@ -44,6 +45,7 @@ export function LlmReadinessBanner({
   onReviewModels: () => void;
 }) {
   const { readiness } = useSpaceLlmReadiness(spaceId);
+  const { act } = useLocalModels(spaceId, false);
   const routeSpace = useSpaceFromRoute();
   const autoOpenedSpace = useRef<string | null>(null);
 
@@ -86,8 +88,15 @@ export function LlmReadinessBanner({
 
   const localOnly =
     local !== null && missing.length === 0 && errored.length === 0 && !unknownMessage;
+  // A remedy the banner runs itself, where it needs nothing the page holds.
+  const startAction =
+    local?.remedy.kind === 'action' && local.remedy.action.action === 'start_runtime'
+      ? local.remedy
+      : null;
   const localMessage = local
-    ? `${local.cause} ${local.remedy.kind === 'instruction' ? local.remedy.text : `${local.remedy.label} on This Computer.`}`
+    ? startAction
+      ? `${local.cause}${act.error ? ` ${act.error.message}` : ''}`
+      : `${local.cause} ${local.remedy.kind === 'instruction' ? local.remedy.text : `${local.remedy.label} on This Computer.`}`
     : null;
 
   return (
@@ -116,7 +125,18 @@ export function LlmReadinessBanner({
             ? `To run agents, ${subject} requires ${providerKey}. Add ${oneProvider ? 'the key' : 'them'}, or choose ${modelAlternative} from ${providerAlternative}.`
             : `${oneProvider ? `The ${names} key used by ${subject} was rejected` : `The keys for ${names} used by ${subject} were rejected`}. Update ${oneProvider ? 'the key' : 'them'}, or choose ${modelAlternative} from ${providerAlternative}.`)}
       </Text>
-      {localOnly ? (
+      {localOnly && startAction ? (
+        <Button
+          variant="secondary"
+          size="sm"
+          loading={act.isPending}
+          onClick={() => {
+            act.mutate(startAction.action);
+          }}
+        >
+          {startAction.label}
+        </Button>
+      ) : localOnly ? (
         <Link href={spaceRoute(routeSpace?.slug, '/computer')}>
           <Button variant="secondary" size="sm">
             Open This Computer

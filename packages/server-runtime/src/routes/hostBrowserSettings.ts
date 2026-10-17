@@ -10,11 +10,8 @@
  * executor writes the policy file through the command's own writer and answers
  * with the profile as it now is, or with its refusal.
  */
-import { randomBytes } from 'node:crypto';
-
 import {
-  createSubscriberConnection,
-  getRedisConfig,
+  askHost,
   getRedisConnection,
   hostBrowserAnswerChannel,
   hostBrowserRequestChannel,
@@ -22,6 +19,8 @@ import {
   type HostBrowserSetting,
   type HostBrowserSettingAnswer,
   HostBrowserSettingAnswerSchema,
+  type HostExchange,
+  newHostAnswerId,
   readHostInventory,
 } from '@aflow/redis';
 import { describeStackPortOwner, stackOwnPorts } from '@aflow/lib';
@@ -35,6 +34,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
 import { isInteractiveUser } from '../utils/interactiveUser.js';
+import { hostExchangeConnections } from '../lib/hostExchange.js';
 
 /** Past the executor republishing its inventory, which it does before it answers. */
 export const SETTING_ANSWER_TIMEOUT_MS = 20_000;
@@ -61,64 +61,20 @@ const NOT_A_PERSON = {
 const Hostname = z.string().min(1).max(256);
 const Params = z.object({ profileId: BrowserProfileIdSchema });
 
-type Relayed =
-  | { readonly status: 'answered'; readonly answer: HostBrowserSettingAnswer }
-  | { readonly status: 'not_listening' }
-  | { readonly status: 'no_answer' };
-
 async function relay(
   hostname: string,
   profileId: string,
   setting: HostBrowserSetting,
-): Promise<Relayed> {
-  const answerId = randomBytes(18).toString('base64url');
-  const answers = createSubscriberConnection({
-    ...getRedisConfig(),
-    connectionName: 'host-browser-answer',
+): Promise<HostExchange<HostBrowserSettingAnswer>> {
+  const answerId = newHostAnswerId();
+  const request: HostBrowserRequest = { kind: 'setting', hostname, profileId, answerId, setting };
+  return await askHost(hostExchangeConnections('host-browser-answer'), {
+    requestChannel: hostBrowserRequestChannel(hostname),
+    answerChannel: hostBrowserAnswerChannel(answerId),
+    request,
+    parse: (value) => HostBrowserSettingAnswerSchema.safeParse(value).data,
+    timeoutMs: SETTING_ANSWER_TIMEOUT_MS,
   });
-  try {
-    const channel = hostBrowserAnswerChannel(answerId);
-    let timer: NodeJS.Timeout | undefined;
-    const answered = new Promise<HostBrowserSettingAnswer | undefined>((resolve) => {
-      answers.on('message', (from: string, raw: string) => {
-        if (from !== channel) return;
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(raw);
-        } catch {
-          return;
-        }
-        const answer = HostBrowserSettingAnswerSchema.safeParse(parsed);
-        if (answer.success) resolve(answer.data);
-      });
-      timer = setTimeout(() => {
-        resolve(undefined);
-      }, SETTING_ANSWER_TIMEOUT_MS);
-    });
-    // Subscribed before the request goes out, so an executor that answers at
-    // once is heard.
-    await answers.subscribe(channel);
-    const request: HostBrowserRequest = {
-      kind: 'setting',
-      hostname,
-      profileId,
-      answerId,
-      setting,
-    };
-    const receivers = await getRedisConnection().publish(
-      hostBrowserRequestChannel(hostname),
-      JSON.stringify(request),
-    );
-    if (receivers === 0) {
-      clearTimeout(timer);
-      return { status: 'not_listening' };
-    }
-    const answer = await answered;
-    clearTimeout(timer);
-    return answer === undefined ? { status: 'no_answer' } : { status: 'answered', answer };
-  } finally {
-    answers.disconnect();
-  }
 }
 
 /** Why a port asked for is never opened to a profile, when this process can tell. */
