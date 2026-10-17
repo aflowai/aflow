@@ -58,8 +58,10 @@ async function alternatesOf(store: string): Promise<string[]> {
  * Appends to `stores` each store `store` borrows from, resolved, following
  * `info/alternates` as git does: depth first, an entry relative to the store
  * naming it, a store missing or already named skipped. Stops at the first store
- * still borrowing `levels` levels below `store`, and resolves to it; resolves
- * to undefined once the whole chain is followed.
+ * `levels` levels below `store` that still borrows a store existing and not yet
+ * named, and resolves to it; resolves to undefined once the whole chain is
+ * followed. A store whose entries name only missing or already-named stores
+ * holds nothing a clone would miss, however deep it lies.
  */
 export async function appendAlternateStores(
   store: string,
@@ -67,12 +69,10 @@ export async function appendAlternateStores(
   stores: string[],
   level = 0,
 ): Promise<string | undefined> {
-  const entries = await alternatesOf(store);
-  if (entries.length === 0) return undefined;
-  if (level >= levels) return store;
-  for (const entry of entries) {
+  for (const entry of await alternatesOf(store)) {
     const resolved = await realpath(entry).catch(() => undefined);
     if (resolved === undefined || stores.includes(resolved)) continue;
+    if (level >= levels) return store;
     stores.push(resolved);
     const tooDeep = await appendAlternateStores(resolved, levels, stores, level + 1);
     if (tooDeep !== undefined) return tooDeep;

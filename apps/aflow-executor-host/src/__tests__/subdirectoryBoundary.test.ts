@@ -229,6 +229,30 @@ describe('a repository whose store borrows from others, connected under a denied
     );
   });
 
+  it('is not refused when its deepest level names only missing and already-collected stores', async () => {
+    // Only a store that exists and is new to those collected counts toward the
+    // depth: the rest hold nothing a clone of the folder would miss.
+    let below = shared;
+    const stores: string[] = [];
+    for (let level = 0; level < 4; level += 1) {
+      const next = join(home, 'projects', `level-${String(level)}`);
+      await run('git', ['clone', '-q', '--shared', below, next]);
+      stores.unshift(objectsOf(next));
+      below = next;
+    }
+    // `top` is five levels below `below`'s store, the deepest a clone reads.
+    await writeFile(
+      join(objectsOf(top), 'info', 'alternates'),
+      `${join(home, 'projects', 'missing', '.git', 'objects')}\n${objectsOf(shared)}\n` +
+        `${objectsOf(below)}\n`,
+    );
+    expect(await borrowedReads(below)).toEqual([
+      ...stores.slice(1),
+      objectsOf(shared),
+      objectsOf(top),
+    ]);
+  });
+
   it.skipIf(!sandboxAvailable() || confined.skip)(
     confined.title('reads its history inside the run'),
     { tags: ['listener'], timeout: 120_000 },
