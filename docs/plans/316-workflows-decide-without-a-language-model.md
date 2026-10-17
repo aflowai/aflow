@@ -1,6 +1,6 @@
 # Plan 316 — Workflows decide without a language model: a typed decision step
 
-**Status:** 🔨 P0–P4 built and proven live; P5 and draft-level editing open · **First backend:** TypeSafe AI's Jev (a "System One" decision model)
+**Status:** 🔨 P0–P4 built and proven live; P5 and draft-level editing open · **First backend:** TypeSafe AI's Jev (a "System One" decision model) · **First production consumer:** Publish Local Changes, which decides what follows a failed check and whether a review's findings take a fix round (Plan 315 D22), at Jev bars set from §7's measurement of the loop's own decisions
 
 ## 1. Problem
 
@@ -42,17 +42,19 @@ Input:
   - `{ type: 'choice', instructions?, options: Record<label, description | null>, minConfidence? }`, 2–255 options
   - `{ type: 'score', instructions?, levels: (description | null)[], minConfidence? }`, 2–10 levels, index 0 lowest
   - `{ type: 'yes_no', instructions?, criteria?: { true?, false? }, minConfidence? }`
+- `each` — optional `{ items, question }`: one `yes_no` asked of every item of a list (at most 50), for a list whose length is known only when the step runs — a review's findings. Each item travels in its own question's instructions beside the claim, all in the same single pass. `questions` may then be absent; one of the two is required. An empty list asks nothing and needs no model.
 - `model` — optional catalog reference; the catalog's default decision model when absent.
 
 Output:
 
 - `answers` — `Record<name, answer>`:
-  - choice: `{ type, value: label, confidence, probabilities: Record<label, number>, decided }`
-  - score: `{ type, value: expected score, confidence, probabilities: Record<level, number>, decided }`
-  - yes_no: `{ type, value: p ≥ 0.5, probability: p, confidence: max(p, 1 − p), decided }`
+  - choice: `{ type, value: label, decidedValue, confidence, probabilities: Record<label, number>, decided }`
+  - score: `{ type, value: expected score, decidedValue, confidence, probabilities: Record<level, number>, decided }`
+  - yes_no: `{ type, value: p ≥ 0.5, decidedValue, probability: p, confidence: max(p, 1 − p), decided }`
+- `each` — where asked: every item's `yes_no` answer in order, `selected` (the items answered true and decided), `selectedCount`, `undecidedCount`, and `selectedJson`, the selected items as text a later step can put in a brief.
 - `model`, `usage { inputTokens, outputTokens }`, `latencyMs`.
 
-For a `yes_no`, `confidence` is derived as the probability of the more likely outcome, so one threshold reads the same way on every question type.
+For a `yes_no`, `confidence` is derived as the probability of the more likely outcome, so one threshold reads the same way on every question type. `decidedValue` is `value` where the answer is `decided` and null where it is not, so a route reads one comparison — `decidedValue == 'billing'` — that can sit beside another condition in a single `anyOf`, which `value` and `decided` read apart cannot.
 
 Wire: `POST {base}/v1/systemone` with `Authorization: Bearer <key>`, body `{ state, questions, model }`, where the neutral names map onto the provider's (`options` → `criteria` for a choice, `levels` → `criteria` for a score, `yes_no` → `noul`). The response carries `model`, `answers` and `usage { input_tokens, output_tokens }`; the request id is in `x-typesafe-request-id`. `GET /v1/models` lists the account's models and serves as the credential probe.
 
@@ -110,3 +112,65 @@ The `classifier` rails execute through the operation when a rail opts in. Exit: 
 - A draft whose route names a label the question does not offer is refused with a diagnostic naming the label.
 - A fork reading `tasks.triage.output.answers.team.valeu` is refused at validation, not skipped at run time.
 - The operation never appears in an agent's tool list, and does appear in authoring search.
+
+## 7. Measurement — the loop's own decisions
+
+**Status: measured** on the operator's stack with all three deciders (the run recorded on plan node 0f442b9a). The results and what each changed in Publish Local Changes are under **Results**, below.
+
+**What it measures.** The choices Publish Local Changes makes for itself (Plan 315 D22), the per-finding judgement it was first built with, and the CI remedy choice Plan 321 makes by hand, against what was actually decided in this stream. Four questions:
+
+- **After a failed check**: the check's account → what the next publication of the branch did. A change appended means `fix_commission`; the same head published as it stands means `recheck_on_timeout`.
+- **Each review finding**: the finding → whether a later publication carried it `closed` (a defect, fixed) or `open` (left — accepted or dismissed, which the records do not tell apart).
+- **After a review with findings**: the findings → `fix_before_merge` where a later change closed any of them, `publish_as_is` where they were carried on all open.
+- **A failing CI job of PRs #91–#124**: the last 300 lines of the job's log (Plan 321 §P0's bound) → `rerun` where another attempt of the same run followed on the same commit, `merge_round` for a merge commit next, `resolutions_bump` for a next commit touching only `package.json` and `yarn.lock` under `resolutions`, and `code_fix` otherwise.
+
+A case nothing followed is left unlabelled, not guessed. `operator_install_mismatch` and `ask` are never inferred; they come only from the operator's labels file, which overrides any inference. The report counts how many labels came from the operator and how many were inferred.
+
+**Deciders.** Jev through `AIClient.decide`, the call the decision operation makes. Then a critique-then-verdict `generate_json` call — a critique, a verdict among the same options and a stated probability that the verdict is right — on gpt-6-luna, and the same call on claude-opus-5-5 as the agent baseline. A language model's stated probability is not calibrated; it is reported as what it is.
+
+**Recorded per decider and question**: agreement with the operator's decision among the cases it decided; abstention at the bar chosen for it (the lowest bar in the 0.5–0.95 sweep at which agreement reaches the target, 90% by default); agreement over all cases with an abstention counted as not agreeing; errors apart from both; p50 and p95 latency; and cost per decision from the catalog's prices. Jev's whole sweep goes beside the table.
+
+**Why a script and not the eval plane's dataset (Plan 269).** A golden case there is a run's input and output, labelled by the operator against a skill's suite. These cases are decisions spread across runs and across GitHub — a check's account against the next publication's input, a log against the next commit — and none of them is a run of one skill. So it is a script, as Plan 323 P0 was.
+
+**Run it**, on the stack that holds the stream, with `AFLOW_API_KEY` set to an API key of the space's tenant and `gh` signed in:
+
+```
+yarn decisions:measure-loop collect --space <spaceId> --repo aflowai/aflow --prs 91-124
+yarn decisions:measure-loop measure [--labels <operator-labels.json>] [--target 0.9]
+```
+
+### Results
+
+The target is 90% agreement among the cases a decider decides. Each row is the decider at the bar the script chose for it: the lowest in the sweep that reaches the target. _n_ is the labelled cases of that question. Where the operator's run recorded no bar for a decider, the cell says so rather than inferring one.
+
+| Question                                     | n   | Decider                          | minConfidence   | Agreement (decided) | Abstention   |
+| -------------------------------------------- | --- | -------------------------------- | --------------- | ------------------- | ------------ |
+| After a failed check                         | 2   | Jev                              | 0.50            | 100%                | 0%           |
+|                                              |     | gpt-6-luna (critique first)      | not recorded    | 100%                | 0%           |
+|                                              |     | claude-opus-5-5 (baseline)       | not recorded    | 100%                | 0%           |
+| Each review finding: a defect, by evidence   | 46  | Jev                              | 0.90            | 100%                | 69.6%        |
+|                                              |     | Jev, at 0.80                     | 0.80            | 89.3%               | 39.1%        |
+|                                              |     | gpt-6-luna (critique first)      | 0.80            | 69.6%               | 0%           |
+|                                              |     | claude-opus-5-5 (baseline)       | 0.90            | 100%                | 95.7%        |
+| After a review: fix before merge or not      | 17  | Jev                              | 0.80            | 100%                | 17.6%        |
+|                                              |     | Jev, at 0.50                     | 0.50            | 93.8%               | 5.9%         |
+|                                              |     | gpt-6-luna (critique first)      | 0.90            | 100%                | 29.4%        |
+|                                              |     | claude-opus-5-5 (baseline)       | 0.70            | 90%                 | 41.2%        |
+| A failing CI job of PRs #91–#124: its remedy | 5   | Jev, gpt-6-luna, claude-opus-5-5 | none reaches it | 20% each            | not recorded |
+
+Latency and cost per decision, each a range across the four questions:
+
+| Decider                     | p50 latency | Cost per decision      |
+| --------------------------- | ----------- | ---------------------- |
+| Jev                         | 237–875 ms  | $0.00003–$0.0008       |
+| gpt-6-luna (critique first) | 2.6–5.6 s   | about $0.00025–$0.0015 |
+| claude-opus-5-5 (baseline)  | 6.2–7.8 s   | $0.016–$0.083          |
+
+**What each result changed** (Plan 315 D22):
+
+- **Each review finding — taken out of Publish Local Changes.** No decider reaches the target without abstaining on most findings. Jev agrees on every finding it decides only by abstaining on 69.6% of them, and at 0.80 it falls to 89.3%. gpt-6-luna decides every finding and agrees on 69.6%. claude-opus-5-5 abstains on 95.7%. By this section's own rule the step does not belong in the skill, so the fix brief carries every finding of the review, as the review reported them. `each` stays on `ai.decision.decide` as an engine capability, with its tests.
+- **After a review — kept, Jev at 0.80.** Jev agrees on every case it decides there and abstains on 17.6%, at a few hundred milliseconds and a fraction of a cent per decision. claude-opus-5-5, the agent baseline, agrees on 90% while abstaining on 41.2%, at 6–8 seconds and two to three orders of magnitude the cost. An answer below 0.80 takes today's path: on through the approval, with no fix round.
+- **After a failed check — kept at 0.80, measured on two cases only.** All three deciders agree on both, and two cases cannot place a bar: Jev's chosen 0.50 is the bottom of the sweep. The step keeps 0.80, the bar the fix-or-not decision earned on seventeen cases, and is measured again as failed checks accumulate. A check lost only to tests running out of their time is not asked of it: it is run again by today's rule, with or without a decision model.
+- **CI remedy — not a decision task.** Every decider names the remedy actually taken — re-run, code fix, resolutions bump or merge round — for 20% of five failures. Plan 321 P1 decides on `when` rules, with a fix commission as the default for a failure no rule names, and the remedy is measured again once the set holds enough failures to say more.
+
+Jev's per-finding question is measured from `scripts/loop-decision-set.mjs`, where it now lives beside the CI remedy question, since no skill asks either. The two questions the skill does ask are imported from `publishLocalChangesDecisions.ts`.

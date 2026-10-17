@@ -40,6 +40,9 @@ export const HOST_CHECK_OUTPUT_TAIL_BYTES = 1024 * 1024;
  */
 export const HOST_CHECK_TEST_TIMEOUTS_MAX = 20;
 
+/** The longest step name a check's report may give as the one that failed. */
+export const HOST_CHECK_FAILING_GUARD_MAX_CHARS = 1000;
+
 export const HostCommitCheckInputSchema = z.object({
   bindingId: HostBindingRef,
   sha: HostCommitShaSchema.describe(
@@ -120,6 +123,16 @@ export const HostCommitCheckOutputSchema = z.object({
         'where the checks exited on their own and reported, in the file `AFLOW_CHECK_REPORT` ' +
         'names, that nothing else failed — what a machine under load does to a passing commit. ' +
         'At most `HOST_CHECK_TEST_TIMEOUTS_MAX`; the summary counts the rest.',
+    ),
+  failingGuard: z
+    .string()
+    .min(1)
+    .max(HOST_CHECK_FAILING_GUARD_MAX_CHARS)
+    .optional()
+    .describe(
+      'The step the checks name as the one that failed — a guard, a type check, a test run — ' +
+        'as they reported it in the file `AFLOW_CHECK_REPORT` names. Present only where the ' +
+        'checks did not pass and said which step it was; a fix is briefed with it.',
     ),
   clearedOrRetriableSha: z
     .string()

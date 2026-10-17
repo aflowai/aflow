@@ -334,7 +334,7 @@ describe('workflow.run.start from a workflow task', () => {
     mockLoadRunById.mockResolvedValue({
       runId: PARENT_RUN,
       sessionId: DRIVER,
-      metadata: { runDepth: 2 },
+      metadata: { runDepth: 3 },
     });
 
     await handleWorkflowCrudInline(makeTaskArgs('until_complete'));
@@ -346,9 +346,9 @@ describe('workflow.run.start from a workflow task', () => {
     >;
     expect(result.status).toBe('FAILED');
     expect(result.error?.code).toBe('WORKFLOW_RUN_DEPTH_EXCEEDED');
-    expect(result.error?.message).toContain('at depth 2');
-    expect(result.error?.message).toContain('at most 2 deep');
-    expect(result.error?.message).toContain('"lead-scoring" at depth 3');
+    expect(result.error?.message).toContain('at depth 3');
+    expect(result.error?.message).toContain('at most 3 deep');
+    expect(result.error?.message).toContain('"lead-scoring" at depth 4');
   });
 
   it('refuses a workflow that is not the catalog skill it was named as, with the reason', async () => {

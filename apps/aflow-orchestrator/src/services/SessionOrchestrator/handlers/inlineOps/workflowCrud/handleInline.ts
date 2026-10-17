@@ -18,6 +18,7 @@ import type {
   WorkflowCampaignEndInput,
   WorkflowCampaignRefreshInput,
 } from '@aflow/schemas';
+import { WorkflowRunFailInputSchema } from '@aflow/schemas';
 import { WorkflowArchivedError } from '@aflow/cybernetic-runtime';
 import { getOrchestratorLogger } from '../../../../../lib/orchestratorLogger.js';
 import type { InlineHandlerArgs } from '../types.js';
@@ -76,6 +77,21 @@ export async function handleWorkflowCrudInline(args: InlineHandlerArgs): Promise
       case 'workflow.run.cancel':
         await handleWorkflowRunCancel(args, input as unknown as WorkflowRunCancelInput, startTime);
         break;
+      case 'workflow.run.fail': {
+        // A skill's decision to stop: the reason is what the reader of the
+        // failure needs, so it is never replaced by the internal-error message.
+        const parsed = WorkflowRunFailInputSchema.safeParse(input);
+        await emitStepError(
+          args,
+          'RUN_FAILED_BY_SKILL',
+          parsed.success
+            ? parsed.data.reason
+            : 'The skill stopped the run here without a reason it could state.',
+          startTime,
+          'validation',
+        );
+        break;
+      }
       case 'workflow.run.detail':
         await handleWorkflowRunDetail(args, input as unknown as WorkflowRunDetailInput, startTime);
         break;

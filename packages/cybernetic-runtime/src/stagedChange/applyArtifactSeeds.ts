@@ -51,8 +51,8 @@ export interface ArtifactSeedsApplyResult {
 
 /**
  * Inline-encode raw text as a PayloadRef the executor's `loadBlob` (and
- * thus `PayloadStore.retrieve → parseInlineRef`) can read back as the
- * original string. Mirrors the shape `parseInlineRef` expects:
+ * thus `PayloadStore.retrieve → decodeInlinePayloadRef`) can read back as the
+ * original string. Mirrors the shape `decodeInlinePayloadRef` expects:
  * `inline:<base64(JSON.stringify(value))>` where the value is the raw
  * source string. `JSON.parse(JSON.stringify('foo')) === 'foo'`, so the
  * round-trip is lossless and the render path's existing inline branch

@@ -343,9 +343,10 @@ function assertCanonicalInlineRef(payloadRef: PayloadRef): void {
 }
 
 /**
- * Parse an inline payload reference and return the decoded data.
+ * The value an inline payload reference carries — the counterpart of
+ * `encodeInlinePayloadRef`, for a reader holding a ref and no store.
  */
-function parseInlineRef(payloadRef: PayloadRef): unknown {
+export function decodeInlinePayloadRef(payloadRef: PayloadRef): unknown {
   assertCanonicalInlineRef(payloadRef);
   const base64Data = payloadRef.slice('inline:'.length);
   const jsonStr = Buffer.from(base64Data, 'base64').toString('utf-8');
@@ -485,7 +486,7 @@ export function createPayloadStore(config: PayloadStoreConfig): PayloadStore {
     async retrieve(payloadRef) {
       // Handle inline refs
       if (isInlineRef(payloadRef)) {
-        return parseInlineRef(payloadRef);
+        return decodeInlinePayloadRef(payloadRef);
       }
 
       const path = objectPathForStore(payloadRef, config.bucketName);
@@ -678,7 +679,7 @@ export function createMemoryPayloadStore(): PayloadStore {
     async retrieve(payloadRef) {
       // Handle inline refs
       if (isInlineRef(payloadRef)) {
-        return parseInlineRef(payloadRef);
+        return decodeInlinePayloadRef(payloadRef);
       }
 
       const data = store.get(keyFor(payloadRef));
@@ -863,7 +864,7 @@ export function createFilePayloadStore(config: FilePayloadStoreConfig): PayloadS
 
     async retrieve(payloadRef) {
       if (isInlineRef(payloadRef)) {
-        return parseInlineRef(payloadRef);
+        return decodeInlinePayloadRef(payloadRef);
       }
       try {
         const raw = await readFile(fileStorePath(rootDir, payloadRef), 'utf-8');
@@ -1056,7 +1057,7 @@ export function createRedisPayloadStore(
     async retrieve(payloadRef) {
       // Handle inline refs
       if (isInlineRef(payloadRef)) {
-        return parseInlineRef(payloadRef);
+        return decodeInlinePayloadRef(payloadRef);
       }
 
       const key = buildRedisKey(keyPrefix, payloadRef);

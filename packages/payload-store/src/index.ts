@@ -23,6 +23,7 @@ export {
   getPayloadStoreConfig,
   contentAddressForJson,
   encodeInlinePayloadRef,
+  decodeInlinePayloadRef,
   createPayloadStore,
   createMemoryPayloadStore,
   createRedisPayloadStore,

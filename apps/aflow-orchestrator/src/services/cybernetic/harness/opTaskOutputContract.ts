@@ -5,7 +5,11 @@ import {
   storeWorkflowResumeContract,
   type WorkflowTaskRow,
 } from '@aflow/cybernetic-runtime';
-import { inferTaskType, POLL_RESERVED_OUTPUT_KEY } from '@aflow/schemas';
+import {
+  inferTaskType,
+  POLL_RESERVED_OUTPUT_KEY,
+  WorkflowRunWakeupEnvelopeSchema,
+} from '@aflow/schemas';
 import type { SessionId, StepExecutionId, TenantId, Workflow, WorkflowTask } from '@aflow/schemas';
 import { getOrchestratorLogger } from '../../../lib/orchestratorLogger.js';
 import {
@@ -41,6 +45,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  */
 function describeOpFailure(value: unknown): string | undefined {
   if (!isRecord(value)) return undefined;
+
+  // A task that started a run and waited on it succeeds however that run
+  // ended; what it ended as is the account a reader of the task's failure needs.
+  const wakeup = WorkflowRunWakeupEnvelopeSchema.safeParse(value);
+  if (wakeup.success) {
+    return `The run it started, ${wakeup.data.runId}, ended ${wakeup.data.outcome}`;
+  }
 
   const firstText = (candidate: unknown): string | undefined => {
     if (!isRecord(candidate)) return undefined;

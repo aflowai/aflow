@@ -1,4 +1,11 @@
-import type { DecisionAnswer, DecisionQuestions } from '@aflow/schemas';
+import {
+  decisionEachQuestionName,
+  type DecisionAnswer,
+  type DecisionEach,
+  type DecisionEachOutput,
+  type DecisionQuestions,
+  type DecisionYesNoAnswer,
+} from '@aflow/schemas';
 import type { ProviderDecisionAnswer } from './types.js';
 import { AIClientError } from './errors.js';
 
@@ -36,39 +43,110 @@ export function resolveDecisionAnswers(
         if (question.type !== 'choice' || !Object.hasOwn(question.options, answer.choice)) {
           throw mismatch(`"${name}" chose "${answer.choice}", which is not one of its options`);
         }
+        const decided = clears(answer.confidence);
         resolved[name] = {
           type: 'choice',
           value: answer.choice,
+          decidedValue: decided ? answer.choice : null,
           confidence: answer.confidence,
           probabilities: answer.probabilities,
-          decided: clears(answer.confidence),
+          decided,
         };
         break;
       }
       case 'score': {
+        const decided = clears(answer.confidence);
         resolved[name] = {
           type: 'score',
           value: answer.score,
+          decidedValue: decided ? answer.score : null,
           confidence: answer.confidence,
           probabilities: answer.probabilities,
-          decided: clears(answer.confidence),
+          decided,
         };
         break;
       }
       case 'yes_no': {
         const confidence = Math.max(answer.probability, 1 - answer.probability);
+        const value = answer.probability >= 0.5;
+        const decided = clears(confidence);
         resolved[name] = {
           type: 'yes_no',
-          value: answer.probability >= 0.5,
+          value,
+          decidedValue: decided ? value : null,
           probability: answer.probability,
           confidence,
-          decided: clears(confidence),
+          decided,
         };
         break;
       }
     }
   }
   return resolved;
+}
+
+/**
+ * Every question a request asks, as one record the provider answers in a
+ * single pass: the named questions, then `each`'s question once per item. An
+ * item travels inside its own question's instructions, beside the claim, so
+ * every answer is about exactly one item while the state stays shared.
+ */
+export function decisionRequestQuestions(input: {
+  questions?: DecisionQuestions | undefined;
+  each?: DecisionEach | undefined;
+}): DecisionQuestions {
+  const questions: DecisionQuestions = { ...(input.questions ?? {}) };
+  if (input.each === undefined) return questions;
+  const { question, items } = input.each;
+  items.forEach((item, index) => {
+    questions[decisionEachQuestionName(index)] = {
+      ...question,
+      instructions: {
+        ...(question.instructions !== undefined ? { claim: question.instructions } : {}),
+        about: 'The item below, one of a list the state describes.',
+        item,
+      },
+    };
+  });
+  return questions;
+}
+
+/**
+ * The resolved answers split back into the named questions' and `each`'s:
+ * an item is selected only where its answer is true and decided, so an item
+ * the model was unsure of never passes as though it had been judged.
+ */
+export function splitDecisionAnswers(
+  input: { questions?: DecisionQuestions | undefined; each?: DecisionEach | undefined },
+  resolved: Readonly<Record<string, DecisionAnswer>>,
+): { answers: Record<string, DecisionAnswer>; each?: DecisionEachOutput } {
+  const answers: Record<string, DecisionAnswer> = {};
+  for (const name of Object.keys(input.questions ?? {})) {
+    const answer = resolved[name];
+    if (answer !== undefined) answers[name] = answer;
+  }
+  if (input.each === undefined) return { answers };
+  const eachAnswers: DecisionYesNoAnswer[] = input.each.items.map((_, index) => {
+    const answer = resolved[decisionEachQuestionName(index)];
+    if (answer?.type !== 'yes_no') {
+      throw mismatch(`no yes_no answer was returned for item ${String(index)}`);
+    }
+    return answer;
+  });
+  const selected = input.each.items.filter((_, index) => {
+    const answer = eachAnswers[index];
+    return answer !== undefined && answer.value && answer.decided;
+  });
+  return {
+    answers,
+    each: {
+      answers: eachAnswers,
+      selected,
+      selectedCount: selected.length,
+      undecidedCount: eachAnswers.filter((answer) => !answer.decided).length,
+      selectedJson: JSON.stringify(selected, null, 2),
+    },
+  };
 }
 
 function mismatch(detail: string): AIClientError {

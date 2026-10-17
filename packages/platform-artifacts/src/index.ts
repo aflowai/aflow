@@ -48,6 +48,15 @@ export type { HelmsmanSurface } from './helmsmanSurface.js';
 export { PLATFORM_SKILL_BUNDLES, ALL_PLATFORM_WORKFLOWS } from './skillBundles.js';
 
 export { SKILL_CATALOG, getSkillCatalogEntry, listSkillCatalog } from './skillCatalog.js';
+// The questions Publish Local Changes asks, for the measurement that sets their bars
+export {
+  AFTER_CHECK_QUESTION,
+  AFTER_CHECK_QUESTION_NAME,
+  AFTER_CHECK_ROUTES,
+  AFTER_REVIEW_QUESTION,
+  AFTER_REVIEW_QUESTION_NAME,
+  AFTER_REVIEW_ROUTES,
+} from './skillCatalog/publishLocalChangesDecisions.js';
 
 export {
   CONNECTOR_CATALOG,

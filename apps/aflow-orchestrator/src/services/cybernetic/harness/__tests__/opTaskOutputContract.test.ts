@@ -384,6 +384,58 @@ describe('applyOpTaskOutputContract — projection', () => {
     expect(failed.failureReason).toContain('Nothing has been pushed');
   });
 
+  // Both publications of a fix — after the checks, after the findings — read
+  // the run they started the same way.
+  describe.each(['republish-after-checks', 'republish-after-findings'])(
+    "Local Publish's %s: it succeeds only where the publication it started pushed",
+    (taskId) => {
+      const republish = () =>
+        getSkillCatalogEntry('publish-local-changes')?.bundle.workflow.tasks.find(
+          (t) => t.taskId === taskId,
+        ) as WorkflowTask;
+      const ending = (outcome: string, output?: Record<string, unknown>) => ({
+        runId: 'fix-publication',
+        outcome,
+        waiterId: 'waiter-1',
+        ...(output !== undefined ? { result: { output } } : {}),
+      });
+
+      it('carries the pull request and the outcome of a publication that pushed', async () => {
+        const pr = { prUrl: 'https://github.com/aflowai/aflow/pull/9', prNumber: 9 };
+        const { deps, stored } = makeDeps({ [RAW_REF]: ending('completed', pr) });
+        const result = await run(deps, republish());
+        expect(result.kind).toBe('succeeded');
+        expect(stored.find((s) => s.kind === 'output')?.data).toEqual({
+          ...pr,
+          outcome: 'completed',
+          republishRunId: 'fix-publication',
+        });
+      });
+
+      // A null over the pull request this run opened, and a parent reported
+      // complete with none, is what each of these used to be.
+      for (const [label, raw] of [
+        ['failed', ending('failed')],
+        ['was cancelled', ending('cancelled')],
+        ['stopped at its approval', ending('paused')],
+        ['was declined, pushing nothing', ending('completed', { prUrl: null, prNumber: null })],
+        ['completed with no pull request', ending('completed', {})],
+      ] as const) {
+        it(`fails when that publication ${label}, naming how it ended`, async () => {
+          const { deps, stored } = makeDeps({ [RAW_REF]: raw });
+          const failed = await run(deps, republish());
+          expect(failed.kind).toBe('failed');
+          if (failed.kind !== 'failed') return;
+          expect(failed.failureReason).toContain(
+            `The run it started, fix-publication, ended ${raw.outcome}.`,
+          );
+          expect(failed.failureReason).toContain('The publication of the fix did not push');
+          expect(stored.find((s) => s.kind === 'output')).toBeUndefined();
+        });
+      }
+    },
+  );
+
   it('fails Local Publish at the scan on a finding, naming where and saying nothing left the machine', async () => {
     const scan = getSkillCatalogEntry('publish-local-changes')?.bundle.workflow.tasks.find(
       (t) => t.taskId === 'scan-commit',
