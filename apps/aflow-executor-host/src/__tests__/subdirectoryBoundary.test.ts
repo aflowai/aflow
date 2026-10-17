@@ -167,6 +167,129 @@ describe('a folder connected inside a repository under a denied home', () => {
   );
 });
 
+describe('a repository whose store borrows from others, connected under a denied home', () => {
+  // `chained` borrows from `shared`, which borrows from `top`, the only store
+  // holding the base commit.
+  let shared: string;
+  let chained: string;
+  const objectsOf = (repository: string): string => join(repository, '.git', 'objects');
+
+  beforeEach(async () => {
+    shared = join(home, 'projects', 'shared');
+    chained = join(home, 'projects', 'chained');
+    await run('git', ['clone', '-q', '--shared', top, shared]);
+    await run('git', ['clone', '-q', '--shared', shared, chained]);
+  });
+
+  it('borrows every store along its alternates, a package and a top level alike', async () => {
+    expect(await borrowedReads(join(chained, 'packages', 'app'))).toEqual([
+      objectsOf(chained),
+      objectsOf(shared),
+      objectsOf(top),
+    ]);
+    expect(await borrowedReads(chained)).toEqual([objectsOf(shared), objectsOf(top)]);
+  });
+
+  it('reads its alternates as git does: relative to the store, quoted, comments skipped', async () => {
+    await writeFile(
+      join(objectsOf(chained), 'info', 'alternates'),
+      `# borrowed\n\n"${join(home, 'projects', 'missing', '.git', 'objects')}"\n` +
+        `../../../shared/.git/objects\n${objectsOf(shared)}\n`,
+    );
+    expect(await borrowedReads(chained)).toEqual([objectsOf(shared), objectsOf(top)]);
+    await writeFile(
+      join(objectsOf(chained), 'info', 'alternates'),
+      `"${objectsOf(shared).replace('shared', 'sh\\141red')}"\n`,
+    );
+    expect(await borrowedReads(chained)).toEqual([objectsOf(shared), objectsOf(top)]);
+  });
+
+  it('reads a quoted entry holding a character outside the BMP, written out or escaped', async () => {
+    // U+1D11E is two UTF-16 code units and four bytes of UTF-8; git writes it
+    // either as itself or as its bytes escaped in octal.
+    const clef = join(home, 'projects', 'clef-\u{1D11E}');
+    await run('git', ['clone', '-q', '--shared', top, clef]);
+    for (const quoted of [
+      objectsOf(clef),
+      objectsOf(clef).replace('\u{1D11E}', '\\360\\235\\204\\236'),
+    ]) {
+      await writeFile(join(objectsOf(chained), 'info', 'alternates'), `"${quoted}"\n`);
+      expect(await borrowedReads(chained)).toEqual([objectsOf(clef), objectsOf(top)]);
+    }
+  });
+
+  it('is refused, naming the remedy, when its chain is deeper than a clone of it reads', async () => {
+    // A clone of the folder reads five stores of alternates below the folder's
+    // own; `shared` is one hop from `top`, and each level here adds one.
+    let below = shared;
+    const stores: string[] = [];
+    for (let level = 0; level < 4; level += 1) {
+      const next = join(home, 'projects', `level-${String(level)}`);
+      await run('git', ['clone', '-q', '--shared', below, next]);
+      stores.unshift(objectsOf(next));
+      below = next;
+    }
+    expect(await borrowedReads(below)).toEqual([
+      ...stores.slice(1),
+      objectsOf(shared),
+      objectsOf(top),
+    ]);
+    // Made by hand: git itself will not clone past the depth it reads.
+    const deeper = join(home, 'projects', 'level-4');
+    await run('git', ['init', '-q', deeper]);
+    await writeFile(join(objectsOf(deeper), 'info', 'alternates'), `${objectsOf(below)}\n`);
+    await expect(borrowedReads(deeper)).rejects.toThrow(
+      /more levels of `objects\/info\/alternates` than git follows from a clone of it.*`git repack -a -d`/,
+    );
+  });
+
+  it('is not refused when its deepest level names only missing and already-collected stores', async () => {
+    // Only a store that exists and is new to those collected counts toward the
+    // depth: the rest hold nothing a clone of the folder would miss.
+    let below = shared;
+    const stores: string[] = [];
+    for (let level = 0; level < 4; level += 1) {
+      const next = join(home, 'projects', `level-${String(level)}`);
+      await run('git', ['clone', '-q', '--shared', below, next]);
+      stores.unshift(objectsOf(next));
+      below = next;
+    }
+    // `top` is five levels below `below`'s store, the deepest a clone reads.
+    await writeFile(
+      join(objectsOf(top), 'info', 'alternates'),
+      `${join(home, 'projects', 'missing', '.git', 'objects')}\n${objectsOf(shared)}\n` +
+        `${objectsOf(below)}\n`,
+    );
+    expect(await borrowedReads(below)).toEqual([
+      ...stores.slice(1),
+      objectsOf(shared),
+      objectsOf(top),
+    ]);
+  });
+
+  it.skipIf(!sandboxAvailable() || confined.skip)(
+    confined.title('reads its history inside the run'),
+    { tags: ['listener'], timeout: 120_000 },
+    async () => {
+      const app = join(chained, 'packages', 'app');
+      const sha = await git(chained, 'rev-parse', 'HEAD');
+      const checked = await runFolderChecks({
+        binding: bindingOf(app),
+        argv: ['/bin/sh', '-c', 'git log -1 --format=%s'],
+        timeoutMs: 60_000,
+        sha,
+        base: sha,
+        toolPaths: [],
+        ownerRunId: 'probe',
+        signal: new AbortController().signal,
+      });
+
+      expect(checked.output).toContain('the base commit');
+      expect(checked.result.exitCode).toBe(0);
+    },
+  );
+});
+
 describe('a linked worktree connected under a denied home', () => {
   // A top level whose object store is the main repository's, outside it.
   let linked: string;

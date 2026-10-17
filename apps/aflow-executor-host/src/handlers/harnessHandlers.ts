@@ -18,7 +18,7 @@
  */
 import { lstat, mkdir, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, join, relative } from 'node:path';
 
 import AjvModule from 'ajv';
 import type { z } from 'zod';
@@ -121,6 +121,7 @@ import {
   RUN_SCRATCH_DIR,
   utf8Prefix,
   WorktreeError,
+  type Checkout,
   type PreparedWorktree,
 } from '../worktree.js';
 import { PUBLICATION_SCRATCH_PREFIX } from '../branchCommit.js';
@@ -174,6 +175,42 @@ export function compileResultValidator(schema: Record<string, unknown>): ResultV
 /** The file a repository states its own rules in. */
 const REPOSITORY_RULES_FILE = 'CLAUDE.md';
 
+/** A repository rules file in a checkout, as the harness is told of it. */
+export interface RepositoryRulesFile {
+  /** Its path from where the harness works, the folder's place in the clone. */
+  readonly path: string;
+  /** Where it is, in the words the brief uses. */
+  readonly where: string;
+}
+
+/**
+ * The rules files in the checkout: at the folder's place in the clone and, for a
+ * folder inside a repository, at the clone's top as well — a package is bound
+ * by its repository's rules, and a bare Claude Code discovers neither.
+ *
+ * Asked of the isolated checkout, never of the operator's folder: what the
+ * harness can read is what the checkout holds.
+ */
+export async function repositoryRulesFiles(
+  checkout: Pick<Checkout, 'path' | 'workDir'>,
+): Promise<RepositoryRulesFile[]> {
+  const places =
+    checkout.workDir === checkout.path
+      ? [{ dir: checkout.path, where: 'at the root of this checkout' }]
+      : [
+          { dir: checkout.workDir, where: 'in this folder' },
+          { dir: checkout.path, where: 'at the top level of the repository this folder is in' },
+        ];
+  const found: RepositoryRulesFile[] = [];
+  for (const { dir, where } of places) {
+    const file = join(dir, REPOSITORY_RULES_FILE);
+    if ((await stat(file).catch(() => undefined))?.isFile() === true) {
+      found.push({ path: relative(checkout.workDir, file), where });
+    }
+  }
+  return found;
+}
+
 /**
  * A harness starts the way its profile starts it, and a bare Claude Code skips
  * `CLAUDE.md` auto-discovery, so a repository's own rules reach the harness only
@@ -181,20 +218,12 @@ const REPOSITORY_RULES_FILE = 'CLAUDE.md';
  * skill: the file is a fact about the folder, and every task over that folder is
  * bound by it, whatever the task is.
  */
-export const REPOSITORY_RULES_SENTENCE =
-  `The repository's own instructions are in \`${REPOSITORY_RULES_FILE}\` at the root of this ` +
-  'checkout; read them first and treat them as binding for every change.';
-
-/**
- * Asked of the isolated checkout, never of the operator's folder: what the
- * harness can read is what the checkout holds.
- */
-export async function hasRepositoryRules(checkoutRoot: string): Promise<boolean> {
-  try {
-    return (await stat(join(checkoutRoot, REPOSITORY_RULES_FILE))).isFile();
-  } catch {
-    return false;
-  }
+export function repositoryRulesSentence(files: readonly RepositoryRulesFile[]): string {
+  const named = files.map(({ path, where }) => `\`${path}\` ${where}`).join(' and ');
+  return (
+    `The repository's own instructions are in ${named}; read them first and treat them as ` +
+    'binding for every change.'
+  );
 }
 
 /** The task with its structured inputs attached, so the prose can name them. */
@@ -252,11 +281,11 @@ export function mergeConflictSentence(merge: Pick<BaseMerge, 'from' | 'conflicts
 export function composeHarnessTask(
   task: string,
   inputs: Record<string, unknown> | undefined,
-  repositoryRules: boolean,
+  rulesFiles: readonly RepositoryRulesFile[],
   merge?: Pick<BaseMerge, 'from' | 'conflicts'>,
 ): string {
   return [
-    repositoryRules ? REPOSITORY_RULES_SENTENCE : undefined,
+    rulesFiles.length > 0 ? repositoryRulesSentence(rulesFiles) : undefined,
     merge !== undefined && merge.conflicts.length > 0 ? mergeConflictSentence(merge) : undefined,
     taskWithInputs(task, inputs),
   ]
@@ -575,9 +604,10 @@ async function runHarness(
       if (session === undefined) {
         // The same answer a session that never existed would get: naming a
         // session as another run's confirms it exists. This run's own session
-        // that idled out, was lost to a restart or went with its folder's grant
-        // reaches this branch too, so the rule states how a kept session ends
-        // and guesses at none of those for this ref.
+        // that idled out, was lost to a restart, lost its checkout to a failed
+        // re-preparation or went with its folder's grant reaches this branch
+        // too, so the rule states how a kept session ends and guesses at none of
+        // those for this ref.
         return await failureWithError(
           ctx,
           validationError(
@@ -585,8 +615,9 @@ async function runHarness(
               'by the run that made it, and every commission is a new run, so `continueFrom` ' +
               'can name only a session this same run made; a session made by any other run is ' +
               'refused as one that does not exist. A kept session ends once it has been idle ' +
-              'for an hour, once this executor has restarted since it was made, or once the ' +
-              'grant of its connected folder is withdrawn.',
+              'for an hour, once this executor has restarted since it was made, once a turn ' +
+              "naming a new `base` has failed to prepare the session's checkout again, or once " +
+              'the grant of its connected folder is withdrawn.',
           ),
         );
       }
@@ -657,6 +688,7 @@ async function runHarness(
       mergeFrom === undefined ? undefined : await mergeIdentityArgs(binding.root);
     const mergeSource =
       mergeFrom === undefined ? undefined : await fetchMergeSource(binding.root, mergeFrom);
+    const borrowed = await borrowedReads(binding.root);
     // A turn that names none keeps the checkout its session's base made, and so
     // is judged against that base as well.
     const base = namedRef ?? session?.base;
@@ -703,7 +735,6 @@ async function runHarness(
       );
     }
     worktreePath = worktree.path;
-    const borrowed = await borrowedReads(binding.root);
 
     const keptCheckout = session !== undefined && namedBase === undefined;
     let merge: BaseMerge | undefined = keptCheckout ? session?.merge : undefined;
@@ -886,7 +917,7 @@ async function runHarness(
     const brief = composeHarnessTask(
       input.task,
       input.inputs,
-      await hasRepositoryRules(worktree.workDir),
+      await repositoryRulesFiles(worktree),
       keptCheckout ? undefined : merge,
     );
     const task = continuesAttempt ? continuedAttemptTask(brief) : brief;

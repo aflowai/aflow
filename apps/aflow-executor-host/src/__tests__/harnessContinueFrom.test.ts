@@ -3,7 +3,8 @@
  * that decides which sessions it can — a kept session is owned by the run that
  * made it, and every commission is a new run — and nothing about the session it
  * named. It also says the ways a kept session ends — once it has been idle for
- * an hour, once the executor has restarted since it was made, or once the grant
+ * an hour, once the executor has restarted since it was made, once a turn
+ * naming a new base has failed to prepare its checkout again, or once the grant
  * of its connected folder is withdrawn — because a session this run made and
  * lost one of those ways reaches the same refusal as another run's. Another
  * run's session, this run's idled-out one and one that never existed all get
@@ -138,6 +139,13 @@ describe('a commission that names a session it cannot continue', () => {
   it('is told that a kept session ends when the executor restarts', async () => {
     const { message } = await commission(OTHER_RUNS);
     expect(message).toContain('once this executor has restarted since it was made');
+  });
+
+  it('is told that a kept session ends when its checkout cannot be prepared again', async () => {
+    const { message } = await commission(OTHER_RUNS);
+    expect(message).toContain(
+      "once a turn naming a new `base` has failed to prepare the session's checkout again",
+    );
   });
 
   it("is told that a kept session ends when its folder's grant is withdrawn", async () => {
