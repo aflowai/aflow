@@ -36,5 +36,8 @@ export function buildWorkflowTimerStepJob(
     ...(timer.activatedByPerson !== undefined
       ? { activatedByPerson: timer.activatedByPerson }
       : {}),
+    ...(timer.startingConversationId !== undefined
+      ? { startingConversationId: timer.startingConversationId }
+      : {}),
   };
 }

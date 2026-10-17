@@ -30,6 +30,7 @@ import {
   operationTaskClaimDueAt,
   describeOperationTaskDispatch,
   resolveOperationTaskSnoozeDelayMs,
+  startingConversationOf,
   type OperationTaskDispatchMode,
 } from './operationTaskDispatch.js';
 
@@ -201,6 +202,7 @@ export async function dispatchTask(deps: HarnessDeps, args: DispatchTaskArgs): P
     });
 
     const traceId = randomUUID() as TraceId;
+    const startingConversationId = startingConversationOf(run);
     let dispatchMode: OperationTaskDispatchMode;
     try {
       dispatchMode = await dispatchClaimedOperationTask(deps, {
@@ -219,6 +221,7 @@ export async function dispatchTask(deps: HarnessDeps, args: DispatchTaskArgs): P
           ? { credentialOwnerId: taskAuthority.credentialOwnerId }
           : {}),
         activatedByPerson: taskAuthority.activatedByPerson,
+        ...(startingConversationId !== undefined ? { startingConversationId } : {}),
       });
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);

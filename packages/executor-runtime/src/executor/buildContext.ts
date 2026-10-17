@@ -136,6 +136,9 @@ export async function buildExecutionContext(
     runId: executionRunId,
     stepExecutionId: job.stepExecutionId as StepExecutionId,
     logicalExecutionId: deriveLogicalExecutionId(job),
+    ...(job.startingConversationId !== undefined
+      ? { startingConversationId: job.startingConversationId }
+      : {}),
     attempt: job.attempt,
     idempotencyKey: job.idempotencyKey,
     traceId: job.traceId,

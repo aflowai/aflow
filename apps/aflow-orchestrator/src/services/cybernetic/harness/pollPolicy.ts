@@ -20,7 +20,7 @@ import type {
 } from '@aflow/schemas';
 import { getOrchestratorLogger } from '../../../lib/orchestratorLogger.js';
 import { attendedAsActingRun } from '../../SessionOrchestrator/handlers/inlineOps/actingRun.js';
-import { DISPATCH_PENDING_INTERVAL_MS } from './operationTaskDispatch.js';
+import { DISPATCH_PENDING_INTERVAL_MS, startingConversationOf } from './operationTaskDispatch.js';
 import type { HarnessDeps, WorkflowExecutionRef, WorkflowTaskOutcome } from './types.js';
 
 // ============================================================================
@@ -283,6 +283,7 @@ export async function applyPollGate(
   }
 
   const nextToken = `dispatch:${runId}:${taskId}:${String(attempt)}:poll:${String(nextCycle)}`;
+  const startingConversationId = startingConversationOf(run);
   try {
     await scheduleShardTimer(deps.redis, {
       tenantId,
@@ -299,6 +300,7 @@ export async function applyPollGate(
       spaceId: run.spaceId,
       ...(credentialOwnerId !== undefined ? { credentialOwnerId } : {}),
       activatedByPerson: attendedAsActingRun(helmsmanState),
+      ...(startingConversationId !== undefined ? { startingConversationId } : {}),
     });
   } catch (err) {
     // Timer arm failed AFTER the CAS — the re-armed completion_pending row

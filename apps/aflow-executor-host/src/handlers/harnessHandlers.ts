@@ -597,33 +597,37 @@ async function runHarness(
       await discardScratch(stale);
     }
 
+    const sessionOwner = ctx.startingConversationId ?? ctx.runId;
     let session: HarnessSession | undefined;
     let resuming = false;
     if (input.continueFrom !== undefined) {
-      session = ownedSession(input.continueFrom, ctx.runId);
+      session = ownedSession(input.continueFrom, sessionOwner);
       if (session === undefined) {
         // The same answer a session that never existed would get: naming a
-        // session as another run's confirms it exists. This run's own session
-        // that idled out, was lost to a restart, lost its checkout to a failed
-        // re-preparation or went with its folder's grant reaches this branch
-        // too, so the rule states how a kept session ends and guesses at none of
-        // those for this ref.
+        // session as another conversation's confirms it exists. This
+        // conversation's own session that idled out, was lost to a restart,
+        // lost its checkout to a failed re-preparation or went with its
+        // folder's grant reaches this branch too, so the rule states how a kept
+        // session ends and guesses at none of those for this ref.
         return await failureWithError(
           ctx,
           validationError(
-            `No session \`${input.continueFrom}\` is held for this run. A kept session is owned ` +
-              'by the run that made it, and every commission is a new run, so `continueFrom` ' +
-              'can name only a session this same run made; a session made by any other run is ' +
-              'refused as one that does not exist. A kept session ends once it has been idle ' +
-              'for an hour, once this executor has restarted since it was made, once a turn ' +
-              "naming a new `base` has failed to prepare the session's checkout again, or once " +
-              'the grant of its connected folder is withdrawn.',
+            'A kept session is owned by the conversation that started the run that made it, ' +
+              `and no session \`${input.continueFrom}\` is held for the conversation that ` +
+              'started this run, or for this run where no conversation started it. ' +
+              '`continueFrom` can name a session made by any run that same conversation ' +
+              'started; a run no conversation started owns the sessions it makes itself. ' +
+              'A session owned by any ' +
+              'other conversation or run is refused as one that does not exist. A kept session ' +
+              'ends once it has been idle for an hour, once this executor has restarted since ' +
+              "it was made, once a turn naming a new `base` has failed to prepare the session's " +
+              'checkout again, or once the grant of its connected folder is withdrawn.',
           ),
         );
       }
       if (session.bindingId !== binding.id) {
-        // Ownership by run alone let a run holding two bindings resume one
-        // session while naming the other: the sandbox would combine this
+        // Ownership alone would let a conversation holding two bindings resume
+        // one session while naming the other: the sandbox would combine this
         // binding's root with that session's worktree, and a permission change
         // on the session's own binding would not apply. Process handles are
         // scoped both ways; a session is a longer-lived handle and needs it more.
@@ -894,7 +898,8 @@ async function runHarness(
       session = {
         busy: true,
         id: nextSessionRef(),
-        ownerRunId: ctx.runId,
+        ownerId: sessionOwner,
+        runId: ctx.runId,
         logicalExecutionId: ctx.logicalExecutionId,
         bindingId: binding.id,
         harnessId: profile.id,

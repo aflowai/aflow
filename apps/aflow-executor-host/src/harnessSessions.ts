@@ -21,18 +21,28 @@ import type { BaseMerge } from './baseMerge.js';
 export interface HarnessSession {
   readonly id: string;
   /**
-   * The run that may continue it. Ownership works exactly as it does for a
-   * process handle.
+   * Who may continue it: the conversation that started the run that made it,
+   * as the orchestrator stamped it on the job, and the run itself where no
+   * conversation started one.
    *
-   * What that identifies decides whether continuation is usable at all, and it
-   * differs by path: a chat session is one id across every turn, so a
-   * conversation continues the way a person expects; a workflow carries its own
-   * run id across its tasks. An agent working inside a per-attempt worker
-   * session gets a fresh id each attempt and so cannot name a session across
-   * one. A retry of the harness run itself is the exception, and is found by
-   * `logicalExecutionId` rather than named.
+   * So every commission a conversation starts can continue a session another
+   * of them made, and no other conversation can. A workflow no conversation
+   * started still shares one across its own tasks. On a session's own step the
+   * run is that session: a chat is one id across every turn and so the
+   * conversation itself, while an agent working inside a per-attempt worker
+   * session gets a fresh id each attempt and cannot name a session across one.
+   *
+   * It is recorded once, when the session is made. A stalled run recovered from
+   * another conversation carries that conversation from then on, so the run's
+   * later sessions belong to the recovering conversation, while the sessions it
+   * made before the recovery still belong to the one that started it. That is
+   * the rule, not a gap: whoever recovers a run carries its work forward.
+   * Ownership decides `continueFrom` only; a retry of the run's own work does
+   * not consult it (`sessionForRetry`).
    */
-  readonly ownerRunId: string;
+  readonly ownerId: string;
+  /** The run that made it, which with `logicalExecutionId` names the work a retry continues. */
+  readonly runId: string;
   /**
    * The work this session was started for, as the executor runtime names it
    * across every attempt at it. A retry of that work continues this
@@ -104,19 +114,27 @@ export function recordSession(session: HarnessSession): void {
  * The one place ownership is decided, returning the session rather than a
  * boolean so a caller cannot hold one it did not prove it owns.
  */
-export function ownedSession(sessionRef: string, ownerRunId: string): HarnessSession | undefined {
+export function ownedSession(sessionRef: string, ownerId: string): HarnessSession | undefined {
   const session = sessions.get(sessionRef);
   if (session === undefined) return undefined;
-  return session.ownerRunId === ownerRunId ? session : undefined;
+  return session.ownerId === ownerId ? session : undefined;
 }
 
-/** The session an earlier attempt at the same work left, for a retry of it to continue. */
+/**
+ * The session an earlier attempt at the same work left, for a retry of it to
+ * continue. The run is matched because a workflow names its work by task id:
+ * every commission a conversation starts is the same `task:commission`, and a
+ * retry of one must not wake in another's checkout. The owner is not matched:
+ * a retry is the same run, so the run already says whose work it is, and a run
+ * recovered from another conversation carries that conversation on its later
+ * attempts while its earlier sessions keep the owner they were made under.
+ */
 export function sessionForRetry(
-  ownerRunId: string,
+  runId: string,
   logicalExecutionId: string,
 ): HarnessSession | undefined {
   for (const session of sessions.values()) {
-    if (session.ownerRunId === ownerRunId && session.logicalExecutionId === logicalExecutionId) {
+    if (session.runId === runId && session.logicalExecutionId === logicalExecutionId) {
       return session;
     }
   }

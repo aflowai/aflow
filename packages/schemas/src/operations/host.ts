@@ -941,8 +941,10 @@ const HostHarnessRunInputObjectSchema = z.object({
     .describe(
       'A `sessionRef` from an earlier run, to add a turn to that conversation instead of ' +
         'starting one. The earlier checkout and everything the harness remembers about it ' +
-        'are still there, so "now fix the test that broke" works as an instruction. Only ' +
-        'the run that started a session can continue it.',
+        'are still there, so "now fix the test that broke" works as an instruction. A ' +
+        'session is owned by the conversation that started the run that made it, so any ' +
+        'run that conversation starts can continue it; a run no conversation started owns ' +
+        'its sessions itself.',
     ),
   maxTurns: z
     .number()

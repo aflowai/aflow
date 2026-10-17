@@ -1,5 +1,5 @@
 /**
- * Contract: a conversation belongs to one run, and nothing it holds outlives
+ * Contract: a kept session belongs to one owner, and nothing it holds outlives
  * the grant that permitted it.
  */
 import { describe, expect, it } from 'vitest';
@@ -12,6 +12,7 @@ import {
   newConversationId,
   ownedSession,
   recordSession,
+  sessionForRetry,
   sessionsForBinding,
   SESSION_IDLE_TTL_MS,
   touchSession,
@@ -29,7 +30,8 @@ function makeSession(overrides: Partial<HarnessSession> = {}): HarnessSession {
   const id = overrides.id ?? nextSessionRef();
   return {
     id,
-    ownerRunId: 'run-a',
+    ownerId: 'conversation-a',
+    runId: 'run-a',
     logicalExecutionId: `step:${id}`,
     bindingId: 'hb',
     harnessId: 'claude',
@@ -44,35 +46,73 @@ function makeSession(overrides: Partial<HarnessSession> = {}): HarnessSession {
   };
 }
 
-describe('a conversation answers to one run', () => {
-  it('resolves for the run that started it', () => {
+describe('a kept session answers to one owner', () => {
+  it('resolves for its owner', () => {
     const session = makeSession();
     recordSession(session);
-    expect(ownedSession(session.id, 'run-a')?.id).toBe(session.id);
+    expect(ownedSession(session.id, 'conversation-a')?.id).toBe(session.id);
     forgetSession(session.id);
   });
 
-  it('is absent to another run, not refused', () => {
+  it('is absent to any other owner, not refused', () => {
     // Saying "that belongs to someone else" confirms the ref exists, and a ref
     // is the only thing that has to be guessed.
     const session = makeSession();
     recordSession(session);
-    expect(ownedSession(session.id, 'run-b')).toBeUndefined();
+    expect(ownedSession(session.id, 'conversation-b')).toBeUndefined();
     forgetSession(session.id);
   });
 
   it('is absent when it was never there', () => {
-    expect(ownedSession('hs_nothing', 'run-a')).toBeUndefined();
+    expect(ownedSession('hs_nothing', 'conversation-a')).toBeUndefined();
   });
 
-  it('is keyed on the run, so a second attempt at a step keeps its own session', () => {
-    // The executor derives `runId` from the job's session or workflow run, and
-    // `stepExecutionId` names an attempt. Keying on the attempt would disown a
-    // session on retry; keying on the run is what makes a conversation last.
-    const session = makeSession({ ownerRunId: 'run-a' });
+  it('is not owned by the run that made it when a conversation owns it', () => {
+    const session = makeSession();
     recordSession(session);
-    expect(ownedSession(session.id, 'run-a')).toBeDefined();
-    expect(ownedSession(session.id, 'step-1')).toBeUndefined();
+    expect(ownedSession(session.id, 'run-a')).toBeUndefined();
+    forgetSession(session.id);
+  });
+});
+
+describe('a retry finds the session of its own work in its own run', () => {
+  it('finds the session an earlier attempt at the same work in the same run made', () => {
+    const session = makeSession({ logicalExecutionId: 'task:commission' });
+    recordSession(session);
+    expect(sessionForRetry('run-a', 'task:commission')?.id).toBe(session.id);
+    forgetSession(session.id);
+  });
+
+  it("does not find another run's session though the conversation and the task are the same", () => {
+    // A workflow names its work by task id, so every commission a conversation
+    // starts is `task:commission`; a retry of one must start in its own checkout.
+    const session = makeSession({ logicalExecutionId: 'task:commission' });
+    recordSession(session);
+    expect(sessionForRetry('run-b', 'task:commission')).toBeUndefined();
+    forgetSession(session.id);
+  });
+
+  it('does not find the session of other work in the same run', () => {
+    const session = makeSession({ logicalExecutionId: 'task:commission' });
+    recordSession(session);
+    expect(sessionForRetry('run-a', 'task:another')).toBeUndefined();
+    forgetSession(session.id);
+  });
+
+  it("finds its run's session though another conversation has since recovered the run", () => {
+    // A stalled run recovered from conversation B carries B on its later
+    // attempts, but a retry of it is still the same run: the session that run
+    // made under conversation A, which started it, is the one it continues.
+    const session = makeSession({
+      ownerId: 'conversation-a',
+      logicalExecutionId: 'task:commission',
+    });
+    recordSession(session);
+    expect(sessionForRetry('run-a', 'task:commission')?.id).toBe(session.id);
+    // Ownership for `continueFrom` does not move with the recovery: the
+    // session made before it still belongs to the conversation that started the run.
+    expect(ownedSession(session.id, 'conversation-b')).toBeUndefined();
+    expect(ownedSession(session.id, 'conversation-a')?.id).toBe(session.id);
     forgetSession(session.id);
   });
 });
@@ -89,8 +129,8 @@ describe('a conversation does not outlive its usefulness', () => {
     expect(expired.map((s) => s.id)).not.toContain(fresh.id);
     // Gone from the registry, so a later continue finds nothing rather than a
     // reference to a checkout that has been cleaned up underneath it.
-    expect(ownedSession(stale.id, 'run-a')).toBeUndefined();
-    expect(ownedSession(fresh.id, 'run-a')).toBeDefined();
+    expect(ownedSession(stale.id, 'conversation-a')).toBeUndefined();
+    expect(ownedSession(fresh.id, 'conversation-a')).toBeDefined();
     forgetSession(fresh.id);
   });
 
@@ -173,16 +213,16 @@ describe('how a harness is told to continue is the harness own business', () => 
   });
 });
 
-describe('a session belongs to a folder as well as to a run', () => {
+describe('a session belongs to a folder as well as to an owner', () => {
   it('is not resumable while naming a different binding', () => {
     // A run holding two bindings could otherwise resume one session while
     // naming the other: the sandbox would combine this binding's root with that
     // session's worktree, and a permission change on the session's own binding
     // would not apply. Process handles are scoped both ways; a session is a
     // longer-lived handle and needs it more.
-    const session = makeSession({ bindingId: 'hb_a', ownerRunId: 'run-a' });
+    const session = makeSession({ bindingId: 'hb_a' });
     recordSession(session);
-    const resolved = ownedSession(session.id, 'run-a');
+    const resolved = ownedSession(session.id, 'conversation-a');
     expect(resolved).toBeDefined();
     expect(resolved?.bindingId).toBe('hb_a');
     // The handler refuses when this differs from the binding the call names;

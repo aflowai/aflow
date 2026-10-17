@@ -474,7 +474,8 @@ describe('checkouts a restart left behind', () => {
     const live = await prepareWorktree(repo, liveScratch, 'work');
     recordSession({
       id: 'hs_live',
-      ownerRunId: 'run-live',
+      ownerId: 'run-live',
+      runId: 'run-live',
       logicalExecutionId: 'step:hs_live',
       bindingId: 'hb',
       harnessId: 'edits',

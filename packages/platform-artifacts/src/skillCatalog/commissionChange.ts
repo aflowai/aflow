@@ -24,13 +24,13 @@ const MINUTES = 60_000;
 
 const COMMISSION_CHANGE: SkillCatalogEntry = {
   catalogId: 'commission-change',
-  version: 4,
+  version: 5,
   name: 'Commission Change',
   tagline:
     "Have the machine's own coding agent make a change in a connected repository, and get the change back as a patch.",
   description: `Fits a request to make a change in a repository on the operator's machine — "build this slice", "fix these findings", "now fix the test that broke". A commission hands a brief to the coding agent installed on that machine, which works in an isolated checkout of the connected folder and leaves the folder itself untouched; what it changed comes back as a stored patch. Nothing is committed, pushed or published: publishing the patch is Publish Local Changes, and reviewing it once published is Review Local Changes.
 
-**What it needs**: the connected folder and the brief — the task text, everything the coding agent needs and nothing it has to guess: the files and the lines where they are known, what is wrong and what right looks like, the tests to add, the checks to run and what its result reports. \`base\` is where the checkout starts: \`origin/main\` for new work, the branch's name for a fix appended to a branch with an open pull request. A fix to a branch \`main\` has moved past also takes \`mergeFrom: origin/<base>\`, so the checkout merges it first and the agent resolves what conflicts. A further turn on the same work takes \`continueFrom\`, the \`sessionRef\` the earlier run reported. \`harness\`, \`model\`, \`maxTurns\` and \`timeoutMs\` are optional. \`harness\` is needed only on a machine that offers more than one coding agent, which refuses a commission that names none and lists the ones it offers. The budgets are sized for a slice already — ${String(COMMISSION_TIMEOUT_DEFAULT_MS / MINUTES)} minutes, and ${String(HOST_HARNESS_MAX_TURNS_DEFAULT)} turns on a coding agent that takes a turn budget — and are named only to change them.
+**What it needs**: the connected folder and the brief — the task text, everything the coding agent needs and nothing it has to guess: the files and the lines where they are known, what is wrong and what right looks like, the tests to add, the checks to run and what its result reports. \`base\` is where the checkout starts: \`origin/main\` for new work, the branch's name for a fix appended to a branch with an open pull request. A fix to a branch \`main\` has moved past also takes \`mergeFrom: origin/<base>\`, so the checkout merges it first and the agent resolves what conflicts. A further turn on the same work takes \`continueFrom\`, the \`sessionRef\` the earlier run reported, from the conversation that started that run: a session belongs to that conversation, and a commission from any other is refused it. \`harness\`, \`model\`, \`maxTurns\` and \`timeoutMs\` are optional. \`harness\` is needed only on a machine that offers more than one coding agent, which refuses a commission that names none and lists the ones it offers. The budgets are sized for a slice already — ${String(COMMISSION_TIMEOUT_DEFAULT_MS / MINUTES)} minutes, and ${String(HOST_HARNESS_MAX_TURNS_DEFAULT)} turns on a coding agent that takes a turn budget — and are named only to change them.
 
 **Start it with \`wait: 'none'\`.** A commission runs for tens of minutes. Started that way it returns the run id at once, the conversation stays free, and the commission's end wakes it with the result. Several commissions may run at once on one machine, each in its own checkout. The machine runs only so many coding agents at once — ${String(HOST_HARNESS_CONCURRENCY_DEFAULT)} unless its operator chose another number — and a commission past that waits for one to end rather than being refused; its time counts from when it starts.
 
@@ -90,7 +90,7 @@ const COMMISSION_CHANGE: SkillCatalogEntry = {
           id: 'continueFrom',
           required: false,
           description:
-            'The `sessionRef` an earlier commission reported, to add a turn to that work rather than start afresh: its checkout and everything the coding agent remembers of it are still there. Only the run that started a session can continue it.',
+            'The `sessionRef` an earlier commission reported, to add a turn to that work rather than start afresh: its checkout and everything the coding agent remembers of it are still there. A session belongs to the conversation that started the commission that made it: any commission that conversation starts can continue it, and one started from another conversation cannot.',
           schema: { type: 'string', minLength: 1 },
         },
         {

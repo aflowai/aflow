@@ -111,6 +111,13 @@ export interface ExecutorContext {
    */
   readonly logicalExecutionId: string;
 
+  /**
+   * The conversation that started this workflow task's run, as the
+   * orchestrator stamped it on the job. Absent on a session's own steps and on
+   * a run no conversation started; a handler never infers it from `runId`.
+   */
+  readonly startingConversationId?: SessionId;
+
   /** Current attempt number */
   readonly attempt: number;
 
