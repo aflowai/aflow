@@ -10,6 +10,7 @@ import type {
 } from '@aflow/schemas';
 import { SNOOZE_OPERATION_ID, resolveSnoozeDelayMs } from '@aflow/schemas';
 import type { PayloadStore } from '@aflow/payload-store';
+import type { WorkflowRunSummary } from '@aflow/cybernetic-runtime';
 import { scheduleShardTimer } from '@aflow/redis';
 import { dispatchInlineOp } from '../../SessionOrchestrator/handlers/dispatchInlineOp.js';
 import { dispatchOrWaitOnExecutor } from '../../SessionOrchestrator/scheduling/executorWait.js';
@@ -83,6 +84,24 @@ export interface DispatchClaimedOperationTaskArgs {
   credentialOwnerId?: string;
   /** The workflow anchor's, from `resolveWorkflowTaskAuthority`. */
   activatedByPerson: boolean;
+  /** From `startingConversationOf`; absent when no conversation started the run. */
+  startingConversationId?: SessionId;
+}
+
+/**
+ * The conversation that started a workflow run, for its operation tasks' jobs
+ * to carry: the run's anchor session, which `workflow.run.start` records as the
+ * session that called it — or, for a run a task started, as the one that
+ * started the task's run. An eval trial's anchor is a session minted for that
+ * trial alone and is no conversation, so a trial carries none.
+ */
+export function startingConversationOf(
+  run: Pick<WorkflowRunSummary, 'sessionId' | 'evalBatchId'>,
+): SessionId | undefined {
+  if (run.evalBatchId !== null || run.sessionId === null || run.sessionId === '') {
+    return undefined;
+  }
+  return run.sessionId as SessionId;
 }
 
 /**
@@ -111,6 +130,7 @@ export async function dispatchClaimedOperationTask(
     snoozeDelayMs,
     credentialOwnerId,
     activatedByPerson,
+    startingConversationId,
   } = args;
   const stepType = operationId.split('.')[0] as StepType;
   const workflowExecution = { runId, taskId, attempt, dispatchAttemptToken };
@@ -131,6 +151,7 @@ export async function dispatchClaimedOperationTask(
       ...(credentialOwnerId !== undefined ? { credentialOwnerId } : {}),
       spaceId,
       activatedByPerson,
+      ...(startingConversationId !== undefined ? { startingConversationId } : {}),
     });
     return 'snooze_timer';
   }
@@ -206,6 +227,7 @@ export async function dispatchClaimedOperationTask(
     ...(credentialOwnerId !== undefined ? { credentialOwnerId } : {}),
     spaceId,
     activatedByPerson,
+    ...(startingConversationId !== undefined ? { startingConversationId } : {}),
   });
   return dispatched.kind === 'waiting' ? 'executor_wait' : 'enqueued';
 }

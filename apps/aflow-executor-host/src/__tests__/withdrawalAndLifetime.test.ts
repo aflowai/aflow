@@ -27,7 +27,8 @@ function makeSession(overrides: Partial<HarnessSession> = {}): HarnessSession {
   const id = overrides.id ?? nextSessionRef();
   return {
     id,
-    ownerRunId: 'run-a',
+    ownerId: 'run-a',
+    runId: 'run-a',
     logicalExecutionId: `step:${id}`,
     bindingId: 'hb',
     harnessId: 'claude',

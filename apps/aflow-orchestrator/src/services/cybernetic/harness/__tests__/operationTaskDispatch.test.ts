@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { TenantId, TraceId } from '@aflow/schemas';
+import type { SessionId, TenantId, TimerItem, TraceId } from '@aflow/schemas';
 
 const mockScheduleShardTimer = vi.fn();
 const mockAddStepJob = vi.fn();
@@ -20,7 +20,9 @@ import {
   dispatchClaimedOperationTask,
   operationTaskClaimDueAt,
   resolveOperationTaskSnoozeDelayMs,
+  startingConversationOf,
 } from '../operationTaskDispatch.js';
+import { buildWorkflowTimerStepJob } from '../../../SessionOrchestrator/scheduling/workflowTimerJob.js';
 
 const TENANT = 'a0000000-0000-0000-0000-000000000001' as TenantId;
 const RUN_ID = '22222222-2222-4222-9222-222222222222';
@@ -246,5 +248,74 @@ describe('dispatchClaimedOperationTask', () => {
     await dispatchClaimedOperationTask(deps, args);
     const job = mockAddStepJob.mock.calls[0]![1] as Record<string, unknown>;
     expect('credentialOwnerId' in job).toBe(false);
+  });
+});
+
+/**
+ * Who owns what a task keeps on the executor is the conversation that started
+ * the task's run, and the executor reads it from the job rather than working
+ * it out. A run no conversation started carries none, and the executor falls
+ * back to the run.
+ */
+describe('the conversation that started a run', () => {
+  const CONVERSATION = '77777777-7777-4777-9777-777777777777' as SessionId;
+
+  it("is the run's anchor session for a run a conversation started", () => {
+    expect(startingConversationOf({ sessionId: CONVERSATION, evalBatchId: null })).toBe(
+      CONVERSATION,
+    );
+  });
+
+  it('is none for a run with no anchor session, or an eval trial whose anchor was minted for it', () => {
+    expect(startingConversationOf({ sessionId: null, evalBatchId: null })).toBeUndefined();
+    expect(startingConversationOf({ sessionId: '', evalBatchId: null })).toBeUndefined();
+    expect(
+      startingConversationOf({ sessionId: CONVERSATION, evalBatchId: 'batch-1' }),
+    ).toBeUndefined();
+  });
+
+  it("rides the operation task's job, and the timer a delayed task is armed with", async () => {
+    await dispatchClaimedOperationTask(deps, {
+      ...baseArgs('host.harness.run'),
+      startingConversationId: CONVERSATION,
+    });
+    await dispatchClaimedOperationTask(deps, {
+      ...baseArgs(SNOOZE_OPERATION_ID, 5_000),
+      startingConversationId: CONVERSATION,
+    });
+    const job = mockAddStepJob.mock.calls[0]![1] as Record<string, unknown>;
+    expect(job['startingConversationId']).toBe(CONVERSATION);
+    expect(mockScheduleShardTimer.mock.calls[0]![1]).toMatchObject({
+      startingConversationId: CONVERSATION,
+    });
+  });
+
+  it('is absent from the job of a run no conversation started', async () => {
+    await dispatchClaimedOperationTask(deps, baseArgs('host.harness.run'));
+    const job = mockAddStepJob.mock.calls[0]![1] as Record<string, unknown>;
+    expect('startingConversationId' in job).toBe(false);
+  });
+
+  it('is carried by the job a workflow timer dispatches', () => {
+    const timer = {
+      tenantId: TENANT,
+      stepExecutionId: WORKER_SESSION_ID,
+      stepId: 'wait',
+      operationId: 'host.harness.run',
+      stepType: 'host',
+      reason: 'delayed_start',
+      attempt: 2,
+      inputRef: INPUT_REF,
+      traceId: TRACE_ID,
+      dueAtMs: 1,
+    } as unknown as TimerItem;
+    const execution = { runId: RUN_ID, taskId: 'wait', attempt: 2, dispatchAttemptToken: TOKEN };
+    expect(
+      buildWorkflowTimerStepJob({ ...timer, startingConversationId: CONVERSATION }, execution, 2)
+        .startingConversationId,
+    ).toBe(CONVERSATION);
+    expect(buildWorkflowTimerStepJob(timer, execution, 2)).not.toHaveProperty(
+      'startingConversationId',
+    );
   });
 });

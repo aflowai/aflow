@@ -580,6 +580,15 @@ export const StepJobMessageSchema = z
     activatedByPerson: z.boolean().optional(),
 
     /**
+     * The conversation that started this workflow task's run: the session whose
+     * `workflow.run.start` made the run, or made the run whose task started it.
+     * Stamped by the orchestrator from the run's record and never from the
+     * step's input. Absent on a session's own steps, whose session is
+     * `sessionId`, and on a run no conversation started.
+     */
+    startingConversationId: SessionIdSchema.optional(),
+
+    /**
      * Where this step sits in the sequence its agent decided on. Present only
      * for tool steps lowered from an agent turn; a workflow operation task has
      * no turn to be indexed within, and anything reading this must fall back
@@ -758,6 +767,9 @@ export const TimerItemSchema = z
      * fires. A session's timer reads its session instead.
      */
     activatedByPerson: z.boolean().optional(),
+
+    /** A workflow task's `startingConversationId`, for the job this timer dispatches. */
+    startingConversationId: SessionIdSchema.optional(),
 
     /**
      * What an `executor_wait` timer dispatches, whole, since when it has
