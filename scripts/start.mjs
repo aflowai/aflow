@@ -38,6 +38,7 @@ import {
   stackEnvPath,
 } from './stackEnv.mjs';
 import { probeRedis } from './stackRedis.mjs';
+import { installIsStale } from './installState.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const say = (message) => {
@@ -119,6 +120,18 @@ const readiness = credentialReadiness({
 say('credentials:');
 for (const line of readiness.lines) say(`  ${line}`);
 if (readiness.failure !== undefined) fail(readiness.failure.message, readiness.failure.remedy);
+
+// ── Installed dependencies ────────────────────────────────────────────────────
+// A merge that adds a dependency changes the lockfile and nothing else, and every
+// service then resolves whatever the old install left — another version of the
+// package, hoisted from elsewhere, which can fail only at its first call, as
+// something unrelated.
+if (installIsStale(REPO)) {
+  say('yarn.lock changed since the last install — installing');
+  if (spawnSync('yarn', ['install'], { cwd: REPO, stdio: 'inherit' }).status !== 0) {
+    fail('yarn install failed.');
+  }
+}
 
 // ── Build output the web application reads ────────────────────────────────────
 // Its bundler resolves the `import` condition, so it reads compiled packages even
