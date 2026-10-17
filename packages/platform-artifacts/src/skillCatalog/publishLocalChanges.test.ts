@@ -30,6 +30,7 @@ import {
   isEvalPlaneOperation,
   MAX_PARENT_INPUTS_SERIALIZED_BYTES,
   PAUSE_INSTRUCTION_MAX_CHARS,
+  HANDED_ON_FINDINGS_MAX_COUNT,
   PullRequestFindingsSchema,
   PullRequestGapsSchema,
   pullRequestReviewRecord,
@@ -2476,6 +2477,7 @@ describe('Publish Local Changes — the pull request describes the branch as a w
       prUrl: 'https://github.com/aflowai/aflow/pull/5',
       prNumber: 5,
       findings: [],
+      findingsLeftOut: null,
       afterReview: null,
     });
 
@@ -2591,6 +2593,27 @@ describe('Publish Local Changes — a failed check stops the run, and no decisio
     // A fault on the machine is not the change's, so no fix to the change is prescribed.
     expect(failure).not.toMatch(/[Cc]ommission/);
     expect(failure).not.toBe(taskOrThrow('check-commit').failureInstruction);
+  });
+
+  it('says, where the check step itself breaks, that the checks could not run — and prescribes no fix to the change', () => {
+    // A run of the checks that did not pass succeeds and stops at `checks-failed`, so the first
+    // run's own failure is only ever the step breaking: the executor, the checkout, the fetch.
+    for (const check of ['failed', 'timed-out', 'test-timeouts'] as const) {
+      expect(
+        projectTaskOutput(
+          taskOrThrow('check-commit').outputProjection ?? {},
+          checkResult(check),
+          null,
+        ).ok,
+        check,
+      ).toBe(true);
+    }
+    const failure = taskOrThrow('check-commit').failureInstruction ?? '';
+    expect(failure).toContain("The folder's checks could not be run on this run's commit");
+    expect(failure).toContain('Nothing was scanned, reviewed or pushed');
+    expect(failure).toContain('Nothing says the change is at fault');
+    expect(failure).not.toMatch(/[Cc]ommission/);
+    expect(failure).not.toContain('checks failed');
   });
 
   it('projects what the stop, the rerun, the push and the composition read, and nothing else', () => {
@@ -2789,6 +2812,27 @@ describe("Publish Local Changes — the decision on a review's findings is recor
       expect(outcome.ran, review).not.toContain('decide-after-review');
       expect(outcome.state['afterReview'], review).toBeNull();
     }
+  });
+
+  it('names its review run, whose findings a fix round is briefed from, every one whole', () => {
+    const outcome = reviewedWith({ afterReview: FIX });
+    expect(outcome.state['reviewRunId']).toBe('review-run');
+    expect(outcome.outputs.get('review-commit')?.['findings']).toEqual(FINDINGS);
+  });
+
+  it('says how many findings the bounded hand-on left out, and leaves it null where none', () => {
+    const many: Finding[] = Array.from({ length: HANDED_ON_FINDINGS_MAX_COUNT + 3 }, (_, i) => ({
+      severity: 'minor',
+      file: `src/f${String(i)}.ts`,
+      claim: `Finding ${String(i)}.`,
+      evidence: 'Shown.',
+    }));
+    const bounded = reviewedWith({ findings: many, afterReview: FIX });
+    expect(bounded.state['findings']).toHaveLength(HANDED_ON_FINDINGS_MAX_COUNT);
+    expect(bounded.state['findingsLeftOut']).toBe(3);
+    // The review run itself still holds every one of them.
+    expect(bounded.outputs.get('review-commit')?.['findings']).toHaveLength(many.length);
+    expect(reviewedWith({ afterReview: FIX }).state['findingsLeftOut']).toBeNull();
   });
 
   it('hands on none where its review finished finding nothing, and the open ones it was given where none finished', () => {

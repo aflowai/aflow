@@ -211,18 +211,26 @@ function fitted(finding: PullRequestFinding): PullRequestFinding {
 /**
  * The findings a publication hands on, held within their share of a later
  * publication's inputs: the most severe first, as many as the count allows,
- * each cut to its bytes. The pull request's own text keeps every finding whole.
+ * each cut to its bytes, and how many the count left out, where it left any.
+ * The pull request's own text keeps every finding whole, and the review run
+ * keeps every finding as it returned them, which is what a fix round reads.
  */
-function handedOn(findings: readonly PullRequestFinding[]): PullRequestFinding[] {
-  return [...findings]
+function handedOn(
+  findings: readonly PullRequestFinding[],
+): Pick<PullRequestReviewRecord, 'findings' | 'findingsLeftOut'> {
+  const kept = [...findings]
     .sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity])
     .slice(0, HANDED_ON_FINDINGS_MAX_COUNT)
     .map(fitted);
+  const leftOut = findings.length - kept.length;
+  return leftOut > 0 ? { findings: kept, findingsLeftOut: leftOut } : { findings: kept };
 }
 
 /** What a publication hands on of its review: the findings still open, and the decision on this round's. */
 export interface PullRequestReviewRecord {
   findings: PullRequestFinding[];
+  /** How many open findings the hand-on left out to stay within its share; absent where none. */
+  findingsLeftOut?: number;
   afterReview?: AfterReview;
 }
 
@@ -243,15 +251,13 @@ export interface PullRequestReviewRecord {
 export function pullRequestReviewRecord(input: HostCommitDescribeInput): PullRequestReviewRecord {
   const reviewFindings = input.review?.findings;
   if (reviewFindings === null || reviewFindings === undefined) {
-    return {
-      findings: handedOn((input.findings ?? []).filter((finding) => finding.state === 'open')),
-    };
+    return handedOn((input.findings ?? []).filter((finding) => finding.state === 'open'));
   }
-  const findings = handedOn(
+  const handed = handedOn(
     reviewFindings.map((finding) => ({ ...finding, state: 'open' as const })),
   );
-  if (findings.length === 0) return { findings };
-  return { findings, afterReview: input.afterReview ?? AFTER_REVIEW_UNDECIDED };
+  if (handed.findings.length === 0) return handed;
+  return { ...handed, afterReview: input.afterReview ?? AFTER_REVIEW_UNDECIDED };
 }
 
 export const HostCommitDescribeCommitSchema = z.object({
@@ -284,12 +290,23 @@ export const HostCommitDescribeOutputSchema = z.object({
     .describe('Every commit of the range, oldest first.'),
   findings: PullRequestFindingsSchema.describe(
     "The open findings of the latest review: this publication's own review's where it " +
-      "finished, replacing the earlier rounds'; otherwise the open ones it was passed. What a " +
-      'later publication of the branch takes as `findings`, with those its fix closed marked ' +
-      `\`closed\`. At most ${String(HANDED_ON_FINDINGS_MAX_COUNT)}, the most severe first, each cut ` +
-      `to fit, so the list stays within ${String(HANDED_ON_FINDINGS_MAX_BYTES)} bytes of that ` +
-      "publication's inputs; the pull request's text keeps every finding whole.",
+      "finished, replacing the earlier rounds'; otherwise the open ones it was passed. A later " +
+      'publication of the branch takes them as `findings`, with those its fix closed marked ' +
+      '`closed`, for its pull request to record. Never the brief of a fix round, which reads ' +
+      `every finding from the review run itself: at most ${String(HANDED_ON_FINDINGS_MAX_COUNT)}, ` +
+      `the most severe first, each cut to fit, so the list stays within ` +
+      `${String(HANDED_ON_FINDINGS_MAX_BYTES)} bytes of that publication's inputs.`,
   ),
+  findingsLeftOut: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe(
+      'How many open findings `findings` left out to stay within its share — the least severe ' +
+        'of them; absent where it left none out. The review run and the pull request keep ' +
+        'every one.',
+    ),
   afterReview: AfterReviewSchema.optional().describe(
     "The decision on this publication's review findings, as the body records it; absent " +
       'where the review returned none.',

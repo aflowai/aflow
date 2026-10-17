@@ -20,6 +20,7 @@ import {
   type HostCommitDescribeInput,
   HostCommitDescribeInputSchema,
   HostCommitDescribeOutputSchema,
+  HANDED_ON_FINDINGS_MAX_COUNT,
   PULL_REQUEST_BODY_MAX_CHARS,
 } from '@aflow/schemas';
 
@@ -241,6 +242,24 @@ describe('host.commit.describe', () => {
       { severity: 'minor', file: 'a.txt', line: 1, claim: 'Says what it was.', state: 'open' },
     ]);
     expect(output.afterReview).toBe('publish_as_is');
+    expect(output.findingsLeftOut).toBeUndefined();
+  });
+
+  it('says how many findings the bounded hand-on left out, where it left any', async () => {
+    const head = await commit('The slice', 'What the slice does.', 'a.txt');
+    const findings = Array.from({ length: HANDED_ON_FINDINGS_MAX_COUNT + 2 }, (_, index) => ({
+      severity: 'nit' as const,
+      file: `f${String(index)}.txt`,
+      claim: 'Says what it was.',
+      evidence: 'Its name.',
+    }));
+    const { captured } = await describeRange({
+      range: `${start}..${head}`,
+      review: { verdict: 'comment', outcome: 'completed', reviewSummary: 'Read.', findings },
+    });
+    const output = HostCommitDescribeOutputSchema.parse(captured.output);
+    expect(output.findings).toHaveLength(HANDED_ON_FINDINGS_MAX_COUNT);
+    expect(output.findingsLeftOut).toBe(2);
   });
 
   it('describes only the range it is given, from its base', async () => {

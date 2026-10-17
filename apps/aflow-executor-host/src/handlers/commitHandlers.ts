@@ -72,7 +72,10 @@ async function describe(ctx: ExecutorContext, policyPath: string): Promise<StepR
   }
   const root = await repositoryRoot(ctx, policyPath, parsed.data.bindingId);
   const commits = await readRangeCommits(root, parsed.data.range);
-  const { title, body, findings, afterReview } = composePullRequest(parsed.data, commits);
+  const { title, body, findings, findingsLeftOut, afterReview } = composePullRequest(
+    parsed.data,
+    commits,
+  );
   const scanned = scanTexts({ 'pull request title': title, 'pull request body': body });
   if (!scanned.clean) {
     return await failureWithError(
@@ -88,6 +91,7 @@ async function describe(ctx: ExecutorContext, policyPath: string): Promise<StepR
     body,
     commits: commits.map(({ sha, subject }) => ({ sha, subject })),
     findings,
+    ...(findingsLeftOut !== undefined ? { findingsLeftOut } : {}),
     ...(afterReview !== undefined ? { afterReview } : {}),
   };
   return await successWithData(ctx, output);

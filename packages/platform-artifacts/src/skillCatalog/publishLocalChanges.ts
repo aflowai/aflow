@@ -159,6 +159,15 @@ const CHECK_FAILED =
   "The folder's checks failed on this run's commit: their account is above, with the end of what they printed, and the whole of it is stored with this failure. Nothing was scanned, reviewed or pushed, and the commit is still on its branch in the folder. Commission the fix onto this branch — nothing of it has left the machine — and publish again. Where they ran out of the folder's time rather than failed, the folder's `checksTimeoutMs` is the operator's to raise on the machine.";
 
 /**
+ * The first run's own failure, which is never the checks failing — a run of
+ * them that did not pass succeeds, and `checks-failed` stops on it — but the
+ * step that runs them breaking before they reported. Nothing has said the
+ * change is at fault, so it prescribes no fix to it.
+ */
+const CHECKS_COULD_NOT_RUN =
+  "The folder's checks could not be run on this run's commit: the step that runs them stopped before they reported, and its own error is above — the executor, the checkout of the commit, or the fetch of `origin`'s base. Nothing was scanned, reviewed or pushed, and the commit is still on its branch in the folder. Nothing says the change is at fault: put right what the error names, on the machine or in the connected folder, then publish the branch as it stands.";
+
+/**
  * The stop on a first run of the checks that did not pass for any reason but
  * tests running out of their time. What they printed may name a fault in the
  * change or one in the machine they ran on, and nothing here has told the
@@ -196,7 +205,7 @@ const CHECK_INPUT_TEMPLATE = {
 
 const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'publish-local-changes',
-  version: 30,
+  version: 31,
   name: 'Publish Local Changes',
   tagline:
     'Commit a patch onto a branch of a connected repository, then push it and open the pull request — asking the operator first unless the folder says otherwise.',
@@ -218,7 +227,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
 
 **A branch as it stands**: a commit already made whose push did not land is published with \`branch\`, its head as \`baseSha\`, and no \`patchRef\`, \`patch\`, \`mergeFrom\` or \`commitMessage\`: nothing is committed, and the head is checked, scanned, reviewed and pushed.
 
-**With the result**: report the pull request link, and whether the push was approved by the operator or cleared by the folder's push approval — and, where the run reviewed its commit, the verdict. A branch that already has an open pull request into the base gets no second one: the run reports that one. Where approval was declined, report that nothing was pushed and the commit stays on the machine to publish later. Where the checks failed, nothing left the machine: report the end of what they printed. On \`afterReview\` \`fix_before_merge\`, commission the fix and publish again with \`findings\`. Where the scan found what looks like a secret, the run failed with nothing pushed: report the files, commit headers and messages, title or summary, lines and rules it names — never ask for or repeat the value — and say the secret has to come out and the change go again on a fresh branch, this one holding that commit. A refused push leaves the commit on its branch: report its message and the remedy the run names. Where the push failed, git's own message says why.`,
+**With the result**: report the pull request link, and whether the push was approved by the operator or cleared by the folder's push approval — and, where the run reviewed its commit, the verdict. A branch that already has an open pull request into the base gets no second one: the run reports that one. Where approval was declined, report that nothing was pushed and the commit stays on the machine to publish later. Where the checks failed, nothing left the machine: report the end of what they printed. On \`afterReview\` \`fix_before_merge\`, brief the fix from the review run; publish again with \`findings\`. Where the scan found what looks like a secret, the run failed with nothing pushed: report the files, commit headers and messages, title or summary, lines and rules it names — never ask for or repeat the value — and say the secret has to come out and the change go again on a fresh branch, this one holding that commit. A refused push leaves the commit on its branch: report its message and the remedy the run names. Where the push failed, git's own message says why.`,
   tags: ['coding', 'publish', 'git', 'local', 'developer-tools'],
   capabilityHints: [
     {
@@ -323,7 +332,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           id: 'findings',
           required: false,
           description:
-            "The findings of the review rounds before this publication — each Local Code Review whose findings a commission on this branch was briefed to fix — as the review named them, each marked `closed` where a commit fixed it or `open` where it was left. This run's own review is added as it returns. Omit it where no review ran before.",
+            "The findings of the review rounds before this publication — each Local Code Review whose findings a commission on this branch was briefed to fix — as the review named them, each marked `closed` where a commit fixed it or `open` where it was left: what this run's pull request records of the rounds before it. Where this run's own review finishes, its findings replace these in what the run hands on. Omit it where no review ran before.",
           schema: FINDINGS_SCHEMA,
         },
         {
@@ -495,7 +504,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           taskId: 'check-commit',
           name: "Run the folder's checks on the commit",
           goal: "Run the checks the connected folder declares — the operator's own command, from the repository root — in a detached checkout of this run's commit, measured against where `origin`'s base branch stands, before anything is scanned, reviewed or pushed. A folder that declares none runs none, and the result says so.",
-          failureInstruction: CHECK_FAILED,
+          failureInstruction: CHECKS_COULD_NOT_RUN,
           type: 'operation' as const,
           operation: 'host.commit.check',
           dependsOn: ['commit'],
@@ -776,6 +785,11 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             outcome: { path: 'outcome', onMissing: 'error' as const },
             reviewRunId: { path: 'runId', onMissing: 'error' as const },
           },
+          // The review run holds every finding whole, which is what a fix
+          // round is briefed from; the run names it so whoever starts one can read it.
+          promoteOutputs: [
+            { kind: 'output_path' as const, path: 'reviewRunId', toState: 'reviewRunId' },
+          ],
           outputContract: {
             schema: {
               type: 'object',
@@ -938,12 +952,15 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             title: { path: 'title', onMissing: 'error' as const },
             body: { path: 'body', onMissing: 'error' as const },
             findings: { path: 'findings', onMissing: 'error' as const },
+            // Absent where the hand-on left none out.
+            findingsLeftOut: { path: 'findingsLeftOut', onMissing: 'null' as const },
             // Absent where the review returned no findings, so none was decided.
             afterReview: { path: 'afterReview', onMissing: 'null' as const },
           },
           promoteOutputs: [
             { kind: 'output_path' as const, path: 'afterReview', toState: 'afterReview' },
             { kind: 'output_path' as const, path: 'findings', toState: 'findings' },
+            { kind: 'output_path' as const, path: 'findingsLeftOut', toState: 'findingsLeftOut' },
           ],
         },
 
@@ -1311,7 +1328,25 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           variableId: 'findings',
           name: 'Findings',
           description:
-            "The open findings of the latest review: this run's own review's where it finished, replacing the earlier rounds'; otherwise the open ones it was given. A later publication of the branch takes them as its `findings`, with each its fix closed marked closed.",
+            "The open findings of the latest review — this run's own review's where it finished, replacing the earlier rounds'; otherwise the open ones it was given — bounded to fit a later publication's inputs. That publication takes them as its `findings`, with each its fix closed marked closed, for its pull request to record. A fix round is briefed from the review run's own findings, never from these.",
+          required: false,
+          sensitive: false,
+          immutable: false,
+        },
+        {
+          variableId: 'findingsLeftOut',
+          name: 'Findings left out',
+          description:
+            'How many open findings `findings` left out to stay within its bound, the least severe of them; null where it left none out. The review run keeps every one.',
+          required: false,
+          sensitive: false,
+          immutable: false,
+        },
+        {
+          variableId: 'reviewRunId',
+          name: 'Review run',
+          description:
+            "The run of this publication's own review, where one started: its output holds every finding whole, with its evidence and suggestion — what a fix round is briefed from.",
           required: false,
           sensitive: false,
           immutable: false,
@@ -1320,7 +1355,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
       output: {
         primary: 'prUrl',
         guidance:
-          "The run carries prUrl and prNumber once the branch has its pull request — opened, or already open — and reporting the link is the result. afterReview records its decision on the review's findings: on fix_before_merge the conversation commissions the fix and publishes again with findings. Absent prUrl, the branch stayed on the machine to publish later — unless the run failed at the checks, whose account says what failed, or at the scan, where the commit holds what looks like a secret.",
+          "The run carries prUrl and prNumber once the branch has its pull request — opened, or already open — and reporting the link is the result. afterReview records its decision on the review's findings: on fix_before_merge, brief the fix from the reviewRunId run and publish again with findings. Absent prUrl, the branch stayed on the machine to publish later — unless the run failed at the checks, whose account says what failed, or at the scan, where the commit holds what looks like a secret.",
       },
       iteration: { auto: false, maxConsecutiveRuns: 1, stopOnOutcomesMet: true, cooldownMs: 0 },
     },

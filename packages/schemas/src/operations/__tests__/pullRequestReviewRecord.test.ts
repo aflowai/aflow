@@ -64,7 +64,7 @@ describe('the findings a publication hands on', () => {
   });
 
   it('fit their share from the largest review there can be, and the next publication takes them back', () => {
-    const { findings } = recordOf({
+    const { findings, findingsLeftOut } = recordOf({
       review: {
         verdict: 'request_changes',
         outcome: 'completed',
@@ -73,6 +73,8 @@ describe('the findings a publication hands on', () => {
       },
     });
     expect(findings).toHaveLength(HANDED_ON_FINDINGS_MAX_COUNT);
+    // What the bound dropped is counted, so no reader takes the list for the whole review.
+    expect(findingsLeftOut).toBe(REVIEW_MAX_FINDINGS - HANDED_ON_FINDINGS_MAX_COUNT);
     for (const finding of findings) {
       expect(PullRequestFindingSchema.parse(finding)).toEqual(finding);
       expect(bytes(finding)).toBeLessThanOrEqual(HANDED_ON_FINDING_MAX_BYTES);
@@ -103,9 +105,10 @@ describe('the findings a publication hands on', () => {
       claim: `Finding ${String(index)}.`,
       evidence: 'Shown.',
     }));
-    const { findings } = recordOf({
+    const { findings, findingsLeftOut } = recordOf({
       review: { verdict: 'request_changes', outcome: 'completed', findings: many },
     });
+    expect(findingsLeftOut).toBe(many.length - HANDED_ON_FINDINGS_MAX_COUNT);
     expect(findings.map((f) => f.file)).toEqual(
       [15, 16, 17, 18, 19, 0, 1, 2, 3, 4, 5, 6].map((i) => `src/f${String(i)}.ts`),
     );
@@ -120,9 +123,11 @@ describe('the findings a publication hands on', () => {
       evidence: 'x',
     };
     const long = { ...fits, file: 'src/b.ts', claim: '😀'.repeat(CLAIM_MAX_CHARS / 2) };
-    const { findings } = recordOf({
+    const { findings, findingsLeftOut } = recordOf({
       review: { verdict: 'request_changes', outcome: 'completed', findings: [fits, long] },
     });
+    // A claim cut to fit is no finding left out.
+    expect(findingsLeftOut).toBeUndefined();
     expect(findings[0]).toEqual({
       severity: 'major',
       file: 'src/a.ts',
