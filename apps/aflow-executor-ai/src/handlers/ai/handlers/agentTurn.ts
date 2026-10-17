@@ -472,7 +472,7 @@ export async function handleAgentTurn(
     // provider's fault — shortening the turn is the wrong medicine and wastes
     // a retry fighting a transient. Only a ceiling (or flat-clock) cut means
     // the turn itself was too large.
-    if (error instanceof AIClientError && error.code === 'timeout') {
+    if (error instanceof AIClientError && error.code === 'timeout' && error.retryable) {
       error.message += error.message.includes('stream stalled')
         ? ' The provider stopped sending chunks — this is transient; simply retry the same turn.'
         : ' The generation was cut mid-turn. On retry, keep this turn SHORT: brief reasoning,' +

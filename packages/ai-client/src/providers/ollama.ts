@@ -30,6 +30,7 @@ import { moveToolImagesToUserMessages, toolResultText } from './toolResultConten
 import { parseJsonResponse } from './jsonResponseParse.js';
 import { MIN_ANSWER_TOKENS, sizePrompt, type PromptSizing } from './ollamaPromptSize.js';
 import { localRuntimeClient, servesWithoutLoading } from './ollamaRuntime.js';
+import { localRuntimeFetch } from './localRuntimeFetch.js';
 
 interface Fit {
   sizing: PromptSizing;
@@ -183,13 +184,37 @@ function thinkFor(reasoning: AIRequestOptions['reasoning']): boolean | string | 
   return effort === 'off' ? false : effort;
 }
 
-function isPlatformTimeoutAbort(signal: AbortSignal | undefined): { timeoutMs: number } | null {
+function isPlatformTimeoutAbort(
+  signal: AbortSignal | undefined,
+): { timeoutMs: number; kind: string | undefined } | null {
   if (!signal?.aborted) return null;
-  const reason = signal.reason as { marker?: unknown; timeoutMs?: unknown } | undefined;
+  const reason = signal.reason as
+    { marker?: unknown; timeoutMs?: unknown; kind?: unknown } | undefined;
   if (reason?.marker === 'phoenix.executor.timeout' && typeof reason.timeoutMs === 'number') {
-    return { timeoutMs: reason.timeoutMs };
+    return {
+      timeoutMs: reason.timeoutMs,
+      kind: typeof reason.kind === 'string' ? reason.kind : undefined,
+    };
   }
   return null;
+}
+
+/** The causes that mean nothing answers at the URL, as opposed to a request that broke. */
+const UNREACHABLE_CODES = new Set([
+  'ECONNREFUSED',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'UND_ERR_CONNECT_TIMEOUT',
+]);
+
+function causeOf(error: unknown): { code: string | undefined; message: string | undefined } {
+  const cause = (error as { cause?: { code?: unknown; message?: unknown } } | null)?.cause;
+  return {
+    code: typeof cause?.code === 'string' ? cause.code : undefined,
+    message: typeof cause?.message === 'string' ? cause.message : undefined,
+  };
 }
 
 export function normalizeOllamaError(
@@ -197,12 +222,25 @@ export function normalizeOllamaError(
   ctx: { baseUrl: string; model?: string; signal?: AbortSignal | undefined },
 ): AIClientError {
   if (error instanceof AIClientError) return error;
+  const model = ctx.model ?? 'unknown';
   if (error instanceof Error && error.name === 'AbortError') {
     const platformTimeout = isPlatformTimeoutAbort(ctx.signal);
+    // A local runtime that stays silent through the whole idle window is
+    // still reading the prompt, and a retry reads it again from the start.
+    if (platformTimeout?.kind === 'idle') {
+      const minutes = Math.round(platformTimeout.timeoutMs / 60_000);
+      return new AIClientError(
+        `Ollama sent nothing for ${minutes} minutes (model=${model}). A model on this computer reads the whole prompt before it writes, and this one took longer than that; a smaller context window under This Computer, or a smaller model, reads it faster.`,
+        'timeout',
+        'ollama',
+        false,
+        { cause: error },
+      );
+    }
     return new AIClientError(
       platformTimeout
-        ? `Platform timeout exceeded after ${platformTimeout.timeoutMs}ms (provider=ollama model=${ctx.model ?? 'unknown'}).`
-        : `Ollama request aborted (model=${ctx.model ?? 'unknown'}).`,
+        ? `Platform timeout exceeded after ${platformTimeout.timeoutMs}ms (provider=ollama model=${model}).`
+        : `Ollama request aborted (model=${model}).`,
       'timeout',
       'ollama',
       true,
@@ -210,8 +248,20 @@ export function normalizeOllamaError(
     );
   }
   const message = error instanceof Error ? error.message : String(error);
+  const cause = causeOf(error);
+  if (cause.code !== undefined && UNREACHABLE_CODES.has(cause.code)) {
+    return new AIClientError(
+      `Ollama is not reachable at ${ctx.baseUrl}: ${cause.message ?? message}. Start Ollama on this computer, or correct its URL in Settings → Credentials.`,
+      'network_error',
+      'ollama',
+      true,
+      { cause: error },
+    );
+  }
   return new AIClientError(
-    `Ollama is not reachable at ${ctx.baseUrl}: ${message}. Start Ollama on this computer, or correct its URL in Settings → Credentials.`,
+    `The request to Ollama at ${ctx.baseUrl} broke off: ${cause.message ?? message}${
+      cause.code ? ` (${cause.code})` : ''
+    } (model=${model}).`,
     'network_error',
     'ollama',
     true,
@@ -306,7 +356,7 @@ export function createOllamaAdapter(config: ProviderConfig): AIProviderAdapter {
     body: unknown,
     signal: AbortSignal | undefined,
   ): Promise<Response> {
-    return fetch(`${baseUrl}${path}`, {
+    return localRuntimeFetch(`${baseUrl}${path}`, {
       method: 'POST',
       headers,
       body: JSON.stringify(body),

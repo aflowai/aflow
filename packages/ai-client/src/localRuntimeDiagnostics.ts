@@ -233,7 +233,7 @@ function issuesFor(
           m.fit.largestFittingWindow !== null &&
           m.fit.largestFittingWindow >= MIN_USEFUL_WINDOW_TOKENS
             ? `At a ${k(m.fit.window)} window ${m.displayName} takes ${gb(m.fit.bytesAtWindow ?? 0)}, past the ${gb(gpu ?? 0)} the GPU allows; it fits ${k(m.fit.largestFittingWindow)}.`
-            : `${m.displayName} takes ${gb(m.fit.bytesAtWindow ?? 0)} at the ${k(m.fit.window)} window the agents need, past the ${gb(gpu ?? 0)} this computer's GPU allows, so it spills and runs slowly.`,
+            : `${m.displayName} takes ${gb(m.fit.bytesAtWindow ?? 0)} at the ${k(m.fit.window)} window the agents need, past the ${gb(gpu ?? 0)} this computer's GPU allows, so it will spill and run slowly as its conversations fill the window.`,
         remedy:
           automaticWindow(m) ??
           (smaller
