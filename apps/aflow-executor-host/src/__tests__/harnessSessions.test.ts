@@ -79,7 +79,7 @@ describe('a retry finds the session of its own work in its own run', () => {
   it('finds the session an earlier attempt at the same work in the same run made', () => {
     const session = makeSession({ logicalExecutionId: 'task:commission' });
     recordSession(session);
-    expect(sessionForRetry('conversation-a', 'run-a', 'task:commission')?.id).toBe(session.id);
+    expect(sessionForRetry('run-a', 'task:commission')?.id).toBe(session.id);
     forgetSession(session.id);
   });
 
@@ -88,15 +88,31 @@ describe('a retry finds the session of its own work in its own run', () => {
     // starts is `task:commission`; a retry of one must start in its own checkout.
     const session = makeSession({ logicalExecutionId: 'task:commission' });
     recordSession(session);
-    expect(sessionForRetry('conversation-a', 'run-b', 'task:commission')).toBeUndefined();
+    expect(sessionForRetry('run-b', 'task:commission')).toBeUndefined();
     forgetSession(session.id);
   });
 
-  it("does not find another owner's or other work's session", () => {
+  it('does not find the session of other work in the same run', () => {
     const session = makeSession({ logicalExecutionId: 'task:commission' });
     recordSession(session);
-    expect(sessionForRetry('conversation-b', 'run-a', 'task:commission')).toBeUndefined();
-    expect(sessionForRetry('conversation-a', 'run-a', 'task:another')).toBeUndefined();
+    expect(sessionForRetry('run-a', 'task:another')).toBeUndefined();
+    forgetSession(session.id);
+  });
+
+  it("finds its run's session though another conversation has since recovered the run", () => {
+    // A stalled run recovered from conversation B carries B on its later
+    // attempts, but a retry of it is still the same run: the session that run
+    // made under conversation A, which started it, is the one it continues.
+    const session = makeSession({
+      ownerId: 'conversation-a',
+      logicalExecutionId: 'task:commission',
+    });
+    recordSession(session);
+    expect(sessionForRetry('run-a', 'task:commission')?.id).toBe(session.id);
+    // Ownership for `continueFrom` does not move with the recovery: the
+    // session made before it still belongs to the conversation that started the run.
+    expect(ownedSession(session.id, 'conversation-b')).toBeUndefined();
+    expect(ownedSession(session.id, 'conversation-a')?.id).toBe(session.id);
     forgetSession(session.id);
   });
 });

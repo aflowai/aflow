@@ -666,7 +666,7 @@ async function runHarness(
     // were made there already; making them again would discard its work.
     let continuesAttempt = false;
     if (input.continueFrom === undefined && ctx.attempt > 1 && canContinue) {
-      const earlier = sessionForRetry(sessionOwner, ctx.runId, ctx.logicalExecutionId);
+      const earlier = sessionForRetry(ctx.runId, ctx.logicalExecutionId);
       if (
         earlier?.bindingId === binding.id &&
         earlier.harnessId === profile.id &&

@@ -31,6 +31,14 @@ export interface HarnessSession {
    * run is that session: a chat is one id across every turn and so the
    * conversation itself, while an agent working inside a per-attempt worker
    * session gets a fresh id each attempt and cannot name a session across one.
+   *
+   * It is recorded once, when the session is made. A stalled run recovered from
+   * another conversation carries that conversation from then on, so the run's
+   * later sessions belong to the recovering conversation, while the sessions it
+   * made before the recovery still belong to the one that started it. That is
+   * the rule, not a gap: whoever recovers a run carries its work forward.
+   * Ownership decides `continueFrom` only; a retry of the run's own work does
+   * not consult it (`sessionForRetry`).
    */
   readonly ownerId: string;
   /** The run that made it, which with `logicalExecutionId` names the work a retry continues. */
@@ -114,21 +122,19 @@ export function ownedSession(sessionRef: string, ownerId: string): HarnessSessio
 
 /**
  * The session an earlier attempt at the same work left, for a retry of it to
- * continue. The run is matched as well as the owner because a workflow names
- * its work by task id: every commission a conversation starts is the same
- * `task:commission`, and a retry of one must not wake in another's checkout.
+ * continue. The run is matched because a workflow names its work by task id:
+ * every commission a conversation starts is the same `task:commission`, and a
+ * retry of one must not wake in another's checkout. The owner is not matched:
+ * a retry is the same run, so the run already says whose work it is, and a run
+ * recovered from another conversation carries that conversation on its later
+ * attempts while its earlier sessions keep the owner they were made under.
  */
 export function sessionForRetry(
-  ownerId: string,
   runId: string,
   logicalExecutionId: string,
 ): HarnessSession | undefined {
   for (const session of sessions.values()) {
-    if (
-      session.ownerId === ownerId &&
-      session.runId === runId &&
-      session.logicalExecutionId === logicalExecutionId
-    ) {
+    if (session.runId === runId && session.logicalExecutionId === logicalExecutionId) {
       return session;
     }
   }
