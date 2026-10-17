@@ -72,9 +72,8 @@ which is only worth rebuilding when the change is to the packaging itself.
 
 ```bash
 yarn format          # CI enforces format:check
-yarn typecheck
-yarn test:changed    # the full `yarn test` is slow; run it for proof
-yarn lint
+git commit           # yarn verify measures commits, not the working tree
+yarn verify          # build, type-check, tests and lint scoped to what the branch changed
 ```
 
 Then:

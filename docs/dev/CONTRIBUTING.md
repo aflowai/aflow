@@ -247,8 +247,10 @@ projects one bounded worker pool, applies one project configuration, and prevent
 sibling Git worktrees from competing for the same machine. Override its conservative
 worker budget only for a measured run with `PHOENIX_TEST_WORKERS=<n>`.
 
-`test:changed`, `test:workspace`, and `test:file` are feedback lanes. CI and preflight still run
-the complete `yarn test` proof.
+`test:changed`, `test:workspace`, and `test:file` are feedback lanes. Before a pull request,
+`yarn verify` runs the branch's committed changes through a scoped build, type-check, the tests
+they reach, and lint and format on touched files. CI and preflight still run the complete
+`yarn test` proof.
 
 **Multi-worktree rule:** if `yarn test` reports that another run owns the lock, leave it queued or
 keep working with a focused feedback command. Do not bypass the wait with raw Vitest, package test
