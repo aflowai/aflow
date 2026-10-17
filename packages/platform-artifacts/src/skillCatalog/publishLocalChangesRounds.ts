@@ -220,7 +220,7 @@ export const CHECKS_FAILED_TASK = {
 export const DECIDE_AFTER_REVIEW_TASK = {
   taskId: 'decide-after-review',
   name: 'Decide whether the findings are fixed before merging',
-  goal: "Read the review's findings and choose whether this branch takes a fix round before it merges, merges as it is with the findings recorded, or waits on the operator's word.",
+  goal: "Read the review's findings and choose whether this branch takes a fix round before it merges or merges as it is with the findings recorded. An answer too unsure to act on is neither, and leaves the findings to whoever reads them.",
   type: 'operation' as const,
   operation: 'ai.decision.decide',
   dependsOn: ['review-commit'],

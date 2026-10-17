@@ -43,6 +43,7 @@ import {
   FIX_CHECKS_BRIEF_LEAD,
   FIX_FINDINGS_BRIEF_LEAD,
   type AfterCheckRoute,
+  AFTER_REVIEW_ROUTES,
   type AfterReviewRoute,
 } from './publishLocalChangesDecisions.js';
 import { REVIEW_LOCAL_CHANGES } from './reviewLocalChanges.js';
@@ -2988,14 +2989,22 @@ describe("Publish Local Changes — whether a review's findings take a fix round
     gateAsBefore(outcome, {});
   });
 
-  for (const value of ['publish_as_is', 'ask'] as const) {
-    it(`${value}: takes no fix round, records the decision, and leaves the push as it was`, () => {
-      const outcome = reviewedWith({ afterReview: { value, confidence: 0.95 } });
-      for (const id of FIX_ROUND) expect(outcome.ran, id).not.toContain(id);
-      expect(outcome.state['afterReview']).toBe(value);
-      gateAsBefore(outcome, {});
-    });
-  }
+  it('publish_as_is: takes no fix round, records the decision, and leaves the push as it was', () => {
+    const outcome = reviewedWith({ afterReview: { value: 'publish_as_is', confidence: 0.95 } });
+    for (const id of FIX_ROUND) expect(outcome.ran, id).not.toContain(id);
+    expect(outcome.state['afterReview']).toBe('publish_as_is');
+    gateAsBefore(outcome, {});
+  });
+
+  it('offers only the two answers that route differently — unsure is the undecided path, not an option', () => {
+    // An option that routes as another does is one nothing reads: the schema
+    // carries the rule by not offering it.
+    expect(Object.keys(AFTER_REVIEW_QUESTION.options)).toEqual([
+      'fix_before_merge',
+      'publish_as_is',
+    ]);
+    expect(AFTER_REVIEW_ROUTES).toEqual(['fix_before_merge', 'publish_as_is']);
+  });
 
   it('no fix round where the round cannot be decided: the run goes on as before', () => {
     const outcome = reviewedWith({ afterReview: 'unavailable' });

@@ -101,7 +101,7 @@ const TITLES: Record<Case['kind'], string> = {
     'After a failed check (recheck_on_timeout / fix_commission / operator_install_mismatch)',
   finding:
     "Each review finding: names a defect in the change's behaviour, established by evidence shown",
-  after_review: 'After a review with findings (fix_before_merge / publish_as_is / ask)',
+  after_review: 'After a review with findings (fix_before_merge / publish_as_is)',
   ci_remedy: 'A failing CI job of PRs (rerun / code_fix / resolutions_bump / merge_round)',
 };
 

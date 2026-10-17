@@ -90,12 +90,12 @@ meanwhile is refused with its current state rather than overwritten, and a node 
    every finding with file and line. `approve` means the publication pushed on its own;
    anything else leaves it paused at `approve-push`, as before. Whether the findings take a
    fix round is the publication's own decision (Plan 315 D22): `decide-after-review` chooses
-   among `fix_before_merge`, `publish_as_is` and `ask` over every finding, and only a
+   between `fix_before_merge` and `publish_as_is` over every finding, and only a
    confident `fix_before_merge` commissions the fix — once the approval was answered and
    this run's push went — with the review's summary as the brief, then publishes it onto
    the branch (`fix-findings`, `republish-after-findings`). A decline holds both. The
-   run's `afterReview` says what was decided, null below the bar; `ask`, an unsure
-   answer, or no decision model leaves the round to the conversation, as before.
+   run's `afterReview` says what was decided, null below the bar; an unsure answer, or
+   no decision model, leaves the round to the conversation, as before.
 3. **The publication runs the folder's checks.** `hb_aflow` declares
    `node scripts/verify-commit.mjs` (`aflow harness checks hb_aflow -- node
 scripts/verify-commit.mjs`), and Local Publish runs it after the commit and before the

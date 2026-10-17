@@ -24,7 +24,7 @@ export const AFTER_CHECK_ROUTES = [
 ] as const;
 export type AfterCheckRoute = (typeof AFTER_CHECK_ROUTES)[number];
 
-export const AFTER_REVIEW_ROUTES = ['fix_before_merge', 'publish_as_is', 'ask'] as const;
+export const AFTER_REVIEW_ROUTES = ['fix_before_merge', 'publish_as_is'] as const;
 export type AfterReviewRoute = (typeof AFTER_REVIEW_ROUTES)[number];
 
 /** The question name each decision's answer is read under: `answers.<name>`. */
@@ -49,13 +49,12 @@ export const AFTER_CHECK_QUESTION = {
 export const AFTER_REVIEW_QUESTION = {
   type: 'choice',
   instructions:
-    'These are the findings of the review of a branch about to be published that name defects in its behaviour. Whether they are fixed on this branch before it merges.',
+    'These are the findings of the review of a branch about to be published. Whether they are fixed on this branch before it merges, or it merges as it stands with them recorded.',
   options: {
     fix_before_merge:
       'At least one of them should not merge as it is: a fix round on this branch is worth its cost before the branch merges.',
     publish_as_is:
       'They are narrow enough to merge as they stand and be fixed later, if at all; the pull request records them.',
-    ask: 'Whether to fix them first turns on something only the operator knows — scope, a deadline, what the change was for.',
   },
   minConfidence: AFTER_REVIEW_MIN_CONFIDENCE,
 } as const satisfies z.input<typeof DecisionChoiceQuestionSchema>;

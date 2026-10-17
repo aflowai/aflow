@@ -1,5 +1,4 @@
 import {
-  DECISION_MAX_EACH_ITEMS,
   HOST_PUSH_APPROVAL_DEFAULT,
   type HostPushApproval,
   MAX_PARENT_INPUTS_SERIALIZED_BYTES,
@@ -192,7 +191,7 @@ const CHECK_INPUT_TEMPLATE = {
 
 const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'publish-local-changes',
-  version: 26,
+  version: 27,
   name: 'Publish Local Changes',
   tagline:
     'Commit a patch onto a branch of a connected repository, then push it and open the pull request — asking the operator first unless the folder says otherwise.',
@@ -767,8 +766,6 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
                 findings: {
                   type: ['array', 'null'],
                   items: { type: 'object' },
-                  // The review returns at most this many, and a decision asks of at most as many.
-                  maxItems: DECISION_MAX_EACH_ITEMS,
                   description:
                     'Every finding as the review returned it — severity, file, line, claim, evidence, suggestion — which the decision on a fix round reads; null when the review did not complete.',
                 },
@@ -1199,7 +1196,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           variableId: 'afterReview',
           name: 'After the review',
           description:
-            "What the run decided about the review's findings judged to name defects: fix_before_merge, publish_as_is or ask — ask meaning the operator's word is wanted before the branch merges. Absent where no finding was judged a defect or no decision was made.",
+            "What the run decided about the review's findings: fix_before_merge or publish_as_is. Null where the answer fell below the bar, and absent where the review returned none or no decision could be made — either way the findings are the reader's to weigh.",
           required: false,
           sensitive: false,
           immutable: false,
@@ -1208,7 +1205,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
       output: {
         primary: 'prUrl',
         guidance:
-          "The run carries prUrl and prNumber once the branch has its pull request — opened, already open, or the one a fix it commissioned was published to — and reporting the link is the result; afterReview is its decision on the review's findings, ask wanting the operator's word. Absent prUrl, the branch stayed on the machine to publish later — unless the run failed at the checks, whose failure names what to fix, or at the scan, where the commit holds what looks like a secret.",
+          "The run carries prUrl and prNumber once the branch has its pull request — opened, already open, or the one a fix it commissioned was published to — and reporting the link is the result; afterReview is its decision on the review's findings, null where it was unsure. Absent prUrl, the branch stayed on the machine to publish later — unless the run failed at the checks, whose failure names what to fix, or at the scan, where the commit holds what looks like a secret.",
       },
       iteration: { auto: false, maxConsecutiveRuns: 1, stopOnOutcomesMet: true, cooldownMs: 0 },
     },

@@ -28,9 +28,9 @@ export const CI_REMEDY_QUESTION = {
 };
 
 /**
- * The per-finding judgement Publish Local Changes asked before its first
- * measurement took it out (Plan 316 §7): no decider reached the target
- * without abstaining on most findings. Kept here, where it is still measured.
+ * Whether one review finding names a defect in the change's behaviour that its
+ * evidence shows: asked of each finding, against whether a later publication
+ * closed it.
  */
 export const FINDING_QUESTION = {
   type: 'yes_no',
@@ -126,8 +126,8 @@ export function findingKey(finding) {
  * one, and an operator's label of `accepted` turns a left one back into a
  * defect. The round's label: a later publication that carried a change and
  * closed any of them is `fix_before_merge`; one that carried them all open is
- * `publish_as_is`; none carrying them leaves the round unlabelled — `ask` is
- * the operator's to give, as is `operator_install_mismatch` above.
+ * `publish_as_is`; none carrying them leaves the round unlabelled, for the
+ * operator's labels file to settle, as `operator_install_mismatch` is above.
  *
  * A review: `{ runId, startedAt, branch, findings: [{ file, line?, claim,
  * evidence, severity }] }`; a publication as above with `findings: [{ file,
