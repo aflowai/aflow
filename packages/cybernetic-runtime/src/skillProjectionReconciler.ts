@@ -21,6 +21,7 @@ import {
   SPACE_POLICY_OPERATION_PREFIXES,
   CODE_REPO_CAPABILITY_ID,
   CODE_MODEL_CAPABILITY_ID,
+  DECISION_MODEL_CAPABILITY_ID,
   LANE_CAPABILITY_PROVIDERS,
   laneCapabilityTokensForTask,
   subsumeLaneTokens,
@@ -29,6 +30,7 @@ import {
   foldMissingCapabilitiesForAbsentCodeLane,
   type CodeLane,
 } from '@aflow/schemas';
+import { createDefaultModelCatalog } from '@aflow/ai-client';
 import { appendEntityEvent } from '@aflow/redis';
 import {
   createTenantContext,
@@ -228,7 +230,11 @@ export async function loadAvailableCapabilities(ctx: {
       .where(and(eq(repoBindings.spaceId, ctx.spaceId), eq(repoBindings.status, 'ready')))
       .limit(1);
     const [spaceRow] = await tx
-      .select({ computePolicy: spaces.computePolicy, ownerId: spaces.ownerId })
+      .select({
+        computePolicy: spaces.computePolicy,
+        ownerId: spaces.ownerId,
+        directives: spaces.directives,
+      })
       .from(spaces)
       .where(eq(spaces.id, ctx.spaceId));
     // Lane credentials (`code_model`, `search_provider`): kind-level, so the
@@ -442,6 +448,16 @@ export async function loadAvailableCapabilities(ctx: {
   }
   for (const p of LANE_CAPABILITY_PROVIDERS[CODE_MODEL_CAPABILITY_ID] ?? []) {
     if (lanePresent.has(p)) available.add(`${CODE_MODEL_CAPABILITY_ID}:${p}`);
+  }
+  // An assigned decision model is the one every decision step runs on, so only
+  // its provider's key makes them runnable; a key for another decision
+  // provider would report ready and fail at the first step.
+  const assignedDecision = spaceRow?.directives?.modelDefaults.decision;
+  if (assignedDecision !== undefined) {
+    const provider = createDefaultModelCatalog().getModel(assignedDecision)?.provider;
+    if (provider === undefined || !lanePresent.has(provider)) {
+      available.delete(DECISION_MODEL_CAPABILITY_ID);
+    }
   }
 
   return { available, codeLane, withheldByProfile, withheldByCeiling, withheldByProfileAlone };
