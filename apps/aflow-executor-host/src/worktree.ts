@@ -32,6 +32,7 @@ import {
   mkdir,
   mkdtemp,
   readdir,
+  readFile,
   realpath,
   rm,
   rmdir,
@@ -101,7 +102,8 @@ export class WorktreeError extends Error {
       | 'fetch_failed'
       | 'unresolved_conflict'
       | 'binary_conflict'
-      | 'checkout_replaced',
+      | 'checkout_replaced'
+      | 'alternates_too_deep',
   ) {
     super(message);
     this.name = 'WorktreeError';
@@ -733,18 +735,110 @@ export async function folderPrefix(root: string): Promise<string> {
 }
 
 /**
+ * How many levels of `info/alternates` below the folder's own store a clone of
+ * it reads. Git reads alternates six levels down from the store it starts in
+ * and ignores any deeper, and the clone's own alternates, naming the folder's
+ * store, are the first of those six.
+ */
+const FOLDER_ALTERNATES_LEVELS = 5;
+
+const C_ESCAPES: Readonly<Record<string, number>> = {
+  a: 7,
+  b: 8,
+  t: 9,
+  n: 10,
+  v: 11,
+  f: 12,
+  r: 13,
+  '"': 34,
+  '\\': 92,
+};
+
+/** An entry in git's C-style quoting, unquoted; undefined when it is not one. */
+function unquotedC(entry: string): string | undefined {
+  const bytes: number[] = [];
+  for (let i = 1; i < entry.length; i += 1) {
+    const char = entry.charAt(i);
+    if (char === '"') {
+      return i === entry.length - 1 ? Buffer.from(bytes).toString('utf8') : undefined;
+    }
+    if (char !== '\\') {
+      bytes.push(...Buffer.from(char, 'utf8'));
+      continue;
+    }
+    const octal = /^[0-3][0-7]{2}/.exec(entry.slice(i + 1));
+    const escaped = C_ESCAPES[entry.charAt(i + 1)];
+    if (octal !== null) {
+      bytes.push(Number.parseInt(octal[0], 8));
+      i += 3;
+    } else if (escaped !== undefined) {
+      bytes.push(escaped);
+      i += 1;
+    } else {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+/** The stores `store`'s `info/alternates` names, as git reads them, unresolved. */
+async function alternatesOf(store: string): Promise<string[]> {
+  const text = await readFile(join(store, 'info', 'alternates'), 'utf8').catch(() => '');
+  return text
+    .split('\n')
+    .filter((entry) => entry !== '' && !entry.startsWith('#'))
+    .map((entry) => (entry.startsWith('"') ? (unquotedC(entry) ?? entry) : entry))
+    .map((entry) => resolvePath(store, entry));
+}
+
+/**
+ * Appends to `stores` each store `store` borrows from, resolved, following
+ * `info/alternates` as git does: depth first, an entry relative to the store
+ * naming it, a store missing or already named skipped. A chain deeper than a
+ * clone of the folder follows is refused, since a run's checkout would not
+ * reach the objects at its end.
+ */
+async function appendAlternateStores(
+  root: string,
+  store: string,
+  level: number,
+  stores: string[],
+): Promise<void> {
+  const entries = await alternatesOf(store);
+  if (entries.length === 0) return;
+  if (level >= FOLDER_ALTERNATES_LEVELS) {
+    throw new WorktreeError(
+      `The object store of ${root} borrows through more levels of \`objects/info/alternates\` ` +
+        "than git follows from a clone of it, so a run's checkout could not read every object " +
+        `the folder has; the level a clone stops at is ${store}. Copy the borrowed objects ` +
+        "into the folder's repository with `git repack -a -d`, remove its " +
+        '`objects/info/alternates`, and run again.',
+      'alternates_too_deep',
+    );
+  }
+  for (const entry of entries) {
+    const resolved = await realpath(entry).catch(() => undefined);
+    if (resolved === undefined || stores.includes(resolved)) continue;
+    stores.push(resolved);
+    await appendAlternateStores(root, resolved, level + 1, stores);
+  }
+}
+
+/**
  * What a run in a checkout of the folder at `root` reads outside that folder,
  * for the sandbox to grant read of (`SandboxWidening.borrowedReads`).
  *
  * Decided by where each lies, never by where the folder is in its repository.
  * The repository's object store, which the clone owns no object of and borrows
- * every one from (`clonePrivately`), resolved, whenever it lies outside the
- * folder: for a folder inside a repository, and for a top level whose store is
- * elsewhere too — a linked worktree, a submodule, a separate git directory.
- * And each installation outside the folder of the same set the clone's
- * mirrored links lead into (`repositoryInstallations`, `linkDependencies`), so
- * those on the folder's way up are readable however deep the folder lies. Read
- * from the folder, never from the checkout, which the run writes.
+ * every one from (`clonePrivately`), and each store it borrows from in turn
+ * (`appendAlternateStores`), resolved, whenever it lies outside the folder: for
+ * a folder inside a repository, and for a top level whose store is elsewhere
+ * too — a linked worktree, a submodule, a separate git directory, a clone made
+ * with `--shared` or `--reference`. And each installation outside the folder
+ * of the same set the clone's mirrored links lead into
+ * (`repositoryInstallations`, `linkDependencies`), so those on the folder's way
+ * up are readable however deep the folder lies. Read from the folder, never
+ * from the checkout, which the run writes.
  */
 export async function borrowedReads(root: string): Promise<string[]> {
   const rootReal = await realpath(root).catch(() => root);
@@ -753,7 +847,9 @@ export async function borrowedReads(root: string): Promise<string[]> {
   const reads: string[] = [];
   const objects = await gitPath(root, 'objects');
   const objectsReal = await realpath(objects).catch(() => objects);
-  if (outsideRoot(objectsReal)) reads.push(objectsReal);
+  const stores = [objectsReal];
+  await appendAlternateStores(root, objectsReal, 0, stores);
+  reads.push(...stores.filter(outsideRoot));
   const top = (await git(root, ['rev-parse', '--show-toplevel'])).trim();
   for (const relative of await repositoryInstallations(top, await folderPrefix(root))) {
     const installation = join(top, relative);

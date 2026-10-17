@@ -16,7 +16,7 @@ import {
   compileResultValidator,
   composeHarnessTask,
   createHostHarnessHandler,
-  hasRepositoryRules,
+  repositoryRulesFiles,
   readHarnessResult,
   resultInstruction,
   retryInstruction,
@@ -117,26 +117,44 @@ describe("the task carries the repository's own rules", () => {
     await rm(checkout, { recursive: true, force: true });
   });
 
-  it('names CLAUDE.md before the task when the checkout holds one', async () => {
+  it('names CLAUDE.md at the root of the checkout before the task when it holds one', async () => {
     await writeFile(join(checkout, 'CLAUDE.md'), '# Rules\n', 'utf8');
-    expect(await hasRepositoryRules(checkout)).toBe(true);
-    const text = composeHarnessTask('Review the range.', { range: 'main..HEAD' }, true);
-    expect(text.startsWith("The repository's own instructions are in `CLAUDE.md`")).toBe(true);
-    expect(text).toContain('treat them as binding');
+    const files = await repositoryRulesFiles({ path: checkout, workDir: checkout });
+    expect(files).toEqual([{ path: 'CLAUDE.md', where: 'at the root of this checkout' }]);
+    const text = composeHarnessTask('Review the range.', { range: 'main..HEAD' }, files);
+    expect(
+      text.startsWith(
+        "The repository's own instructions are in `CLAUDE.md` at the root of this checkout; " +
+          'read them first and treat them as binding for every change.',
+      ),
+    ).toBe(true);
     expect(text).toContain('Review the range.');
     expect(text).toContain('"range":"main..HEAD"');
   });
 
   it('says nothing about it when the checkout has none', async () => {
-    expect(await hasRepositoryRules(checkout)).toBe(false);
-    expect(composeHarnessTask('Review the range.', undefined, false)).toBe('Review the range.');
+    expect(await repositoryRulesFiles({ path: checkout, workDir: checkout })).toEqual([]);
+    expect(composeHarnessTask('Review the range.', undefined, [])).toBe('Review the range.');
   });
 
   it('asks the checkout rather than a directory of the same name', async () => {
     // A directory called CLAUDE.md is not a file the harness can read, and a
     // task telling it to read one would send it after nothing.
     await mkdir(join(checkout, 'CLAUDE.md'), { recursive: true });
-    expect(await hasRepositoryRules(checkout)).toBe(false);
+    expect(await repositoryRulesFiles({ path: checkout, workDir: checkout })).toEqual([]);
+  });
+
+  it("names the folder's own and its repository's, each where it is, for a folder inside one", async () => {
+    const workDir = join(checkout, 'packages', 'app');
+    await mkdir(workDir, { recursive: true });
+    await writeFile(join(checkout, 'CLAUDE.md'), '# Repository rules\n', 'utf8');
+    await writeFile(join(workDir, 'CLAUDE.md'), '# Package rules\n', 'utf8');
+    const files = await repositoryRulesFiles({ path: checkout, workDir });
+    expect(composeHarnessTask('Fix it.', undefined, files)).toBe(
+      "The repository's own instructions are in `CLAUDE.md` in this folder and " +
+        '`../../CLAUDE.md` at the top level of the repository this folder is in; read them ' +
+        'first and treat them as binding for every change.\n\nFix it.',
+    );
   });
 });
 
