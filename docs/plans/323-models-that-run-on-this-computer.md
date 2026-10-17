@@ -330,6 +330,8 @@ Each lineup entry (§4) is qualified on its own: both probe tiers, the build ide
 
 _Exit for each entry:_ its usefulness results, repeated runs included, are in the entry, and its recommended roles follow from them.
 
+_Entries so far:_ `ollama-qwen3.5-9b` (`qwen-local`) is in the catalog from its compatibility tier alone — native single, parallel and streamed tool calls, vision, `off`/`high` reasoning, no `format` on MLX, 7.7 GB of weights and about 69 KB of cache per token at `q8_0`, so about 10 GB at the agents' 32K window. Like every local entry it is assignable under D18 and recommended for no role; the usefulness tier, which is not built, decides that. Both entries' probes run through `localRuntimeFetch`: Gemma's took 8½ minutes, past the transport's own five.
+
 ### P3a — The window fits the machine (D8)
 
 **Build:**

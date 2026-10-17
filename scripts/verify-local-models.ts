@@ -17,6 +17,7 @@
  */
 import {
   createDefaultModelCatalog,
+  localRuntimeFetch,
   type LocalModelBuild,
   type LocalModelFootprint,
   type ModelDefinition,
@@ -69,7 +70,7 @@ async function post(
   path: string,
   body: unknown,
 ): Promise<{ status: number; json: Record<string, unknown> }> {
-  const res = await fetch(`${BASE}${path}`, {
+  const res = await localRuntimeFetch(`${BASE}${path}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
@@ -103,7 +104,7 @@ function toolCalls(
 }
 
 async function streamedToolCall(tag: string): Promise<boolean> {
-  const res = await fetch(`${BASE}/api/chat`, {
+  const res = await localRuntimeFetch(`${BASE}/api/chat`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -123,7 +124,7 @@ async function streamedToolCall(tag: string): Promise<boolean> {
 }
 
 async function loadedSize(tag: string): Promise<number | null> {
-  const ps = (await (await fetch(`${BASE}/api/ps`)).json()) as {
+  const ps = (await (await localRuntimeFetch(`${BASE}/api/ps`)).json()) as {
     models: Array<{ name: string; size: number }>;
   };
   return ps.models.find((m) => m.name === tag || m.name === `${tag}:latest`)?.size ?? null;
@@ -165,14 +166,16 @@ async function measureFootprint(tag: string): Promise<LocalModelFootprint | null
 }
 
 async function measure(tag: string): Promise<Measured | null> {
-  const tags = (await (await fetch(`${BASE}/api/tags`)).json()) as {
+  const tags = (await (await localRuntimeFetch(`${BASE}/api/tags`)).json()) as {
     models: Array<{ name: string; digest: string; remote_host?: string }>;
   };
   const installed = tags.models.find((m) => m.name === tag || m.name === `${tag}:latest`);
   if (!installed) return null;
   if (installed.remote_host)
     throw new Error(`${tag} is served by ${installed.remote_host}, not this computer`);
-  const version = (await (await fetch(`${BASE}/api/version`)).json()) as { version: string };
+  const version = (await (await localRuntimeFetch(`${BASE}/api/version`)).json()) as {
+    version: string;
+  };
   const show = (await post('/api/show', { model: tag })).json;
   const details = (show['details'] ?? {}) as Record<string, string>;
   const caps = new Set((show['capabilities'] as string[] | undefined) ?? []);
