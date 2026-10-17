@@ -42,6 +42,8 @@ interface SpaceFixture {
   codePolicyColumnMissing: boolean;
   readyRepos: number;
   laneProviders: string[];
+  /** `spaces.directives.modelDefaults.decision` — `undefined` = Auto. */
+  decisionModel: string | undefined;
   /** `undefined` = no assignment row (role default decides). */
   profileAllowedCapabilities: unknown;
   /** Applied to the assigned profile AND the role defaults. */
@@ -100,7 +102,16 @@ function rowsFor(table: unknown, cols: Record<string, unknown>): unknown[] {
       }
       return [{ codePolicy: fixture.codePolicy }];
     }
-    return [{ computePolicy: fixture.computePolicy, ownerId: null }];
+    return [
+      {
+        computePolicy: fixture.computePolicy,
+        ownerId: null,
+        directives:
+          fixture.decisionModel === undefined
+            ? null
+            : { modelDefaults: { decision: fixture.decisionModel } },
+      },
+    ];
   }
   return [];
 }
@@ -182,6 +193,7 @@ beforeEach(() => {
     codePolicyColumnMissing: false,
     readyRepos: 0,
     laneProviders: [],
+    decisionModel: undefined,
     profileAllowedCapabilities: undefined,
     profileDeniedCapabilities: [],
     profileAllowedRiskModifiers: SEEDED_RISK_MODIFIERS,
@@ -509,5 +521,31 @@ describe('applyCapabilityStatuses — code operations', () => {
     ];
     applyCapabilityStatuses(deps, [], new Map());
     expect(deps[0]!.status).toBe('ready');
+  });
+});
+
+describe('loadAvailableCapabilities — decision model', () => {
+  it('is unavailable with no key for any decision provider', async () => {
+    fixture.laneProviders = ['anthropic'];
+    expect(await load()).not.toContain('decision_model');
+  });
+
+  it('is available under Auto with a key for any decision provider', async () => {
+    fixture.laneProviders = ['openai'];
+    expect(await load()).toContain('decision_model');
+  });
+
+  it('requires the assigned decision model provider, not just any', async () => {
+    fixture.decisionModel = 'jev';
+    fixture.laneProviders = ['openai'];
+    expect(await load()).not.toContain('decision_model');
+    fixture.laneProviders = ['typesafe'];
+    expect(await load()).toContain('decision_model');
+  });
+
+  it('is unavailable when the assigned decision model is not in the catalog', async () => {
+    fixture.decisionModel = 'no-such-decider';
+    fixture.laneProviders = ['typesafe', 'openai'];
+    expect(await load()).not.toContain('decision_model');
   });
 });

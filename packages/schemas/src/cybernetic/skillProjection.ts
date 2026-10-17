@@ -67,14 +67,19 @@ export const CODE_REPO_CAPABILITY_ID = 'code_repo';
  * that exact provider (`code_model:zai`); an unpinned task accepts any
  * coding backend (`code_model`). Search gates only `search.web.search`
  * (Brave is hard-required by the handler; `search.web.fetch` runs keyless).
+ * A decision step needs a key for some decision model's provider; which one
+ * the space must hold depends on its decision assignment, so availability —
+ * not the token — carries that.
  */
 export const CODE_MODEL_CAPABILITY_ID = 'code_model';
 export const SEARCH_PROVIDER_CAPABILITY_ID = 'search_provider';
+export const DECISION_MODEL_CAPABILITY_ID = 'decision_model';
 
 /** Credential providerIds satisfying the generic (unpinned) lane token. */
 export const LANE_CAPABILITY_PROVIDERS: Record<string, readonly string[]> = {
   [CODE_MODEL_CAPABILITY_ID]: ['zai', 'anthropic', 'openai'],
   [SEARCH_PROVIDER_CAPABILITY_ID]: ['brave'],
+  [DECISION_MODEL_CAPABILITY_ID]: ['typesafe', 'openai'],
 };
 
 /** Lane tokens a task's operation (+ pinned backend) requires. */
@@ -94,6 +99,7 @@ export function laneCapabilityTokensForTask(task: {
     tokens.push(pinned ? `${CODE_MODEL_CAPABILITY_ID}:${pinned}` : CODE_MODEL_CAPABILITY_ID);
   }
   if (op === 'search.web.search') tokens.push(SEARCH_PROVIDER_CAPABILITY_ID);
+  if (op === 'ai.decision.decide') tokens.push(DECISION_MODEL_CAPABILITY_ID);
   return tokens;
 }
 
@@ -113,6 +119,7 @@ export function isLaneCapabilityToken(token: string): boolean {
   return (
     token === CODE_MODEL_CAPABILITY_ID ||
     token === SEARCH_PROVIDER_CAPABILITY_ID ||
+    token === DECISION_MODEL_CAPABILITY_ID ||
     token.startsWith(`${CODE_MODEL_CAPABILITY_ID}:`)
   );
 }
@@ -186,6 +193,14 @@ export function describeMissingCapability(token: string): string {
   }
   if (token === SEARCH_PROVIDER_CAPABILITY_ID) {
     return 'No search key (Brave) is connected; connect one under Settings → Credentials.';
+  }
+  if (token === DECISION_MODEL_CAPABILITY_ID) {
+    return (
+      'No decision model can run in this space: its decision steps need a key for the ' +
+      'assigned decision model, or under Auto for any of ' +
+      `${LANE_CAPABILITY_PROVIDERS[DECISION_MODEL_CAPABILITY_ID]?.join(', ') ?? ''}; ` +
+      'connect one under Settings → Credentials.'
+    );
   }
   return `${token} has no bound integration in this space; bind one under Integrations.`;
 }

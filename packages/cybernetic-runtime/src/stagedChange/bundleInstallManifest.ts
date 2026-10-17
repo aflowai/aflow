@@ -5,6 +5,7 @@ import {
   CODE_REPO_CAPABILITY_ID,
   SPACE_POLICY_OPERATION_PREFIXES,
   getPlatformOperationPrefixes,
+  DECISION_MODEL_CAPABILITY_ID,
   laneProvidersForToken,
 } from '@aflow/schemas';
 import type { CredentialSlot, McpAuthType, PostInstallTask, SkillBundle } from '@aflow/schemas';
@@ -409,7 +410,9 @@ async function generateUnmetCapabilityEntries(opts: {
       providerOptions: [...providers],
       description: token.startsWith('code_model')
         ? `Connect a coding-lane key (${providers.join(' or ')}) so the coding skills can run.`
-        : 'Connect a Brave Search key so search steps can run.',
+        : token === DECISION_MODEL_CAPABILITY_ID
+          ? `Connect a decision model key (${providers.join(' or ')}) so decision steps can run.`
+          : 'Connect a Brave Search key so search steps can run.',
       required: true,
     });
   }
