@@ -260,7 +260,7 @@ const LOCAL_CODE_REVIEW_BUNDLE: AuthoredSkillBundle = {
 
 const LOCAL_PUBLISH_BUNDLE: AuthoredSkillBundle = {
   bundleId: 'local-publish' as SkillBundleId,
-  revision: -2,
+  revision: -1,
   name: 'Local Publish',
   tagline:
     'Commit a patch onto a branch of a connected repository, clear the push, and open the pull request.',
@@ -269,7 +269,7 @@ const LOCAL_PUBLISH_BUNDLE: AuthoredSkillBundle = {
 **What it installs**:
 - The **Publish Local Changes** skill — the patch is committed in a detached worktree, so the working tree is untouched: a fresh branch starts at the commission's base, and the branch a fix was commissioned from is appended to at its head; the checks the folder declares run in a checkout of the commit, and a failure stops the run with nothing scanned or pushed — save one where only tests ran out of their time, which a loaded machine causes and the run checks once more — the push itself is refused without the receipt of their passing on that commit; everything the push would add — the commit and any of the folder's own commits under it that \`origin\` does not have yet — is scanned for secrets, with the commits' headers and messages and the pull request's title and summary, and a finding stops the run with nothing pushed; the run then waits for the operator's approval — unless the folder's push approval says it need not ask — and only after that is that commit pushed to its branch on \`origin\` — refused, with nothing pushed, where \`origin\`'s base no longer holds what the run measured or \`origin\` pushes elsewhere than it fetches — and the pull request opened, or the one the branch already has reported.
 
-**Its own fix round**: where a publication's review returns findings, the run decides whether they are fixed before the branch merges. When it decides they are, and only once its push has gone, it commissions the fix with **Commission Change** — briefed with the review's findings as reported — and publishes that fix onto the branch as a publication of its own, whose pull request it reports. A commission that changes nothing ends the round with the pull request as it stands. An answer too unsure to act on, or no decision model in the space, leaves the findings to whoever reads them. No decision clears or holds a push.
+**After a review with findings**: the run decides whether they are fixed before the branch merges and records the answer as \`afterReview\` — \`fix_before_merge\`, \`publish_as_is\`, or \`undecided\` where no answer cleared the bar — on the run and on the pull request, with the findings. It acts on none of it: a publication never starts a commission or another publication. When \`afterReview\` is \`fix_before_merge\`, the conversation — or the shepherd, once it runs — commissions the fix round on the branch and publishes again. No decision clears or holds a push.
 
 **After install**: connect the repository as a folder allowing pushes under a branch prefix, and bind the GitHub connector for the space. Then hand the skill a commission's \`patchRef\`, a branch name under that prefix and a title. To have a publication run the repository's own checks first, declare them on the machine: \`aflow harness checks <folder> -- <program> [args...]\`, run from the repository root. A folder that declares none runs none, and the pull request's checks remain the proof.
 
@@ -277,12 +277,8 @@ const LOCAL_PUBLISH_BUNDLE: AuthoredSkillBundle = {
   tags: ['coding', 'publish', 'git', 'local', 'developer-tools'],
   skillCatalogIds: ['publish-local-changes'],
   // A publication from an `unless-unreviewed` folder starts Review Local
-  // Changes on what its push would add, and a fix round over that review's
-  // findings starts Commission Change, so both skills have to be in the space.
-  prerequisiteBundleIds: [
-    'local-code-review' as SkillBundleId,
-    'local-commission' as SkillBundleId,
-  ],
+  // Changes on what its push would add, so that skill has to be in the space.
+  prerequisiteBundleIds: ['local-code-review' as SkillBundleId],
   // The GitHub definition ships so the pull-request call has an API to resolve
   // and the post-install manifest can surface its credential row; the
   // connection itself is the operator's, bound in Integrations.
@@ -293,7 +289,7 @@ const LOCAL_PUBLISH_BUNDLE: AuthoredSkillBundle = {
     'A folder connected without a publish prefix can be committed to but not pushed from — the push is refused where it runs. Ask for the folder to be reconnected allowing pushes under a prefix before starting a publication.',
     "Whether the run waits at the approval is the folder's push approval, shown in the machine block. Under `unless-unreviewed`, the default, the run reviews everything its push would add before it gets there, so no review needs starting alongside it. A file the scan could not read or a line marked `aflow-scan: allow` makes it ask under every posture.",
     "The folder's checks, where it declares them — `checks` in the machine block — run on the commit before anything else, so no build or test needs running beside a publication. A failed check fails the run with the end of what it printed, and nothing has left the machine; one that failed only on tests running out of time is run once more by the publication itself first, so it needs no retry from the conversation.",
-    "A publication runs its own fix round over its review's findings: `afterReview` says what it decided. `fix_before_merge` means it commissioned the fix after its push and published it onto the branch itself — read those runs (`fix-findings`, `republish-after-findings`) rather than commissioning a second fix beside them. `publish_as_is`, null or absent leaves the findings to the conversation.",
+    "A publication only records what it decided about its review's findings, as `afterReview`. On `fix_before_merge` the fix round is yours once the run has ended: commission the fix on the branch (`base: <branch>`), then publish it onto the branch again with the run's `findings`, marking those the fix closed. `publish_as_is` or `undecided` leaves them to the operator.",
     "A commission's change is published by its `patchRef`, never its `patch` text: that copy is cut short on a large change, and a run's inputs are capped at 32 KB together. `patch` is for a small diff the operator hands over.",
   ],
 };

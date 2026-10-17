@@ -88,15 +88,15 @@ meanwhile is refused with its current state rather than overwritten, and a node 
    For a branch that already has a pull request, name its number for the 422.
 2. **Read the review**: `workflow.run.detail` on the child review run gives the verdict and
    every finding with file and line. `approve` means the publication pushed on its own;
-   anything else leaves it paused at `approve-push`, as before. Whether the findings take a
-   fix round is the publication's own decision (Plan 315 D22): `decide-after-review` chooses
-   between `fix_before_merge` and `publish_as_is` over every finding, and only a
-   confident `fix_before_merge` commissions the fix — once the approval was answered and
-   this run's push went — with the review's summary as the brief, then publishes it onto
-   the branch (`fix-findings`, `republish-after-findings`). A decline holds both. A
-   commission that changes nothing ends the round, and the run completes with its own pull
-   request. The run's `afterReview` says what was decided, null below the bar; an unsure
-   answer, or no decision model, leaves the round to the conversation, as before.
+   anything else leaves it paused at `approve-push`, as before. Whether the findings want a
+   fix round the publication decides and records, and never acts on (Plan 315 D22):
+   `decide-after-review` chooses between `fix_before_merge` and `publish_as_is` over every
+   finding, and the run's `afterReview` and its pull request record the answer — `undecided`
+   where none cleared the bar — with the findings, which the run carries as `findings`.
+   The fix round is the conversation's: on `fix_before_merge`, once the publication has
+   ended, commission the fix on the branch (`base: <branch>`) and publish the branch again,
+   passing the run's `findings` with those the fix closed marked `closed`. A publication
+   never starts a commission or another publication.
 3. **The publication runs the folder's checks.** `hb_aflow` declares
    `node scripts/verify-commit.mjs` (`aflow harness checks hb_aflow -- node
 scripts/verify-commit.mjs`), and Local Publish runs it after the commit and before the
@@ -131,8 +131,7 @@ scripts/verify-commit.mjs`), and Local Publish runs it after the commit and befo
    and nothing pushed, which is the conversation's to take up: read whether the change or
    the machine failed, then commission the fix onto the branch or put the machine right.
    No decision is made on a failed check until its measurement has labelled cases (Plan 316
-   §7). Fix rounds over a review's findings stop after two: the run the second publishes is
-   too deep to start a commission of its own. The pull request's CI remains the proof. By
+   §7). The pull request's CI remains the proof. By
    hand, from a checkout, it measures `HEAD` against `origin/main`.
 4. **The operator merges.** A merge lands on the dev stack only when the stream that runs it
    merges `origin/main` into `live` (below).

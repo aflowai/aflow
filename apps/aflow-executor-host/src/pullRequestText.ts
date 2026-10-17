@@ -9,12 +9,15 @@
  * request needs each of it.
  */
 import {
+  type AfterReview,
   HOST_COMMIT_RANGE_PATTERN,
   type HostCommitDescribeCommit,
   type HostCommitDescribeInput,
   PULL_REQUEST_BODY_MAX_CHARS,
   type PullRequestCheckRun,
   type PullRequestFinding,
+  type PullRequestReviewRecord,
+  pullRequestReviewRecord,
 } from '@aflow/schemas';
 
 import { messageBody } from './branchCommit.js';
@@ -111,8 +114,17 @@ function findingLine(finding: PullRequestFinding): string {
   return `- **${finding.severity}** \`${where}\` — ${finding.claim}`;
 }
 
-function reviewSection(input: HostCommitDescribeInput): string {
-  const findings = input.findings ?? [];
+const AFTER_REVIEW_LINES: Record<AfterReview, string> = {
+  fix_before_merge:
+    'Decided after the review: `fix_before_merge` — the findings left open are to be fixed on this branch before it merges.',
+  publish_as_is:
+    'Decided after the review: `publish_as_is` — the findings left open can merge as they stand.',
+  undecided:
+    "Decided after the review: `undecided` — no answer cleared the decision's bar, so the findings left open are the reader's to weigh.",
+};
+
+function reviewSection(input: HostCommitDescribeInput, record: PullRequestReviewRecord): string {
+  const { findings } = record;
   const parts = ['## Review'];
   for (const [state, heading] of [
     ['closed', '### Closed'],
@@ -132,6 +144,7 @@ function reviewSection(input: HostCommitDescribeInput): string {
     parts.push(`The review of this range returned \`${review.verdict}\`.`);
     if (review.reviewSummary) parts.push(review.reviewSummary);
   }
+  if (record.afterReview !== undefined) parts.push(AFTER_REVIEW_LINES[record.afterReview]);
   return parts.join(SECTION_BREAK);
 }
 
@@ -182,12 +195,15 @@ function gapsSection(gaps: readonly string[] | undefined): string {
 export function composePullRequest(
   input: HostCommitDescribeInput,
   commits: readonly HostCommitDescribeCommit[],
-): { title: string; body: string } {
+): { title: string; body: string } & PullRequestReviewRecord {
   const title = input.title ?? commits[0]?.subject ?? '';
-  if (input.summary !== undefined) return { title, body: input.summary };
-  const rest = [reviewSection(input), verificationSection(input), gapsSection(input.gaps)].join(
-    SECTION_BREAK,
-  );
+  const record = pullRequestReviewRecord(input);
+  if (input.summary !== undefined) return { title, body: input.summary, ...record };
+  const rest = [
+    reviewSection(input, record),
+    verificationSection(input),
+    gapsSection(input.gaps),
+  ].join(SECTION_BREAK);
   const changes = fit(
     changesSection(commits),
     PULL_REQUEST_BODY_MAX_CHARS - rest.length - SECTION_BREAK.length,
@@ -196,5 +212,6 @@ export function composePullRequest(
   return {
     title,
     body: fit(`${changes}${SECTION_BREAK}${rest}`, PULL_REQUEST_BODY_MAX_CHARS, BODY_CUT_NOTE),
+    ...record,
   };
 }

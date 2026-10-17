@@ -10,11 +10,10 @@ import {
   toJsonSchemaSync,
 } from '@aflow/schemas';
 import {
-  DECIDE_AFTER_REVIEW_TASK,
-  FIX_FINDINGS_TASK,
-  REPUBLISH_AFTER_FINDINGS_TASK,
-} from './publishLocalChangesRounds.js';
-import { REVIEW_LOCAL_CHANGES } from './reviewLocalChanges.js';
+  AFTER_REVIEW_QUESTION,
+  AFTER_REVIEW_QUESTION_NAME,
+} from './publishLocalChangesDecisions.js';
+import { REVIEW_FINDING_SCHEMA, REVIEW_LOCAL_CHANGES } from './reviewLocalChanges.js';
 
 /**
  * The push argv, pinned by the skill rather than bound as a whole. Only the
@@ -197,7 +196,7 @@ const CHECK_INPUT_TEMPLATE = {
 
 const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'publish-local-changes',
-  version: 28,
+  version: 29,
   name: 'Publish Local Changes',
   tagline:
     'Commit a patch onto a branch of a connected repository, then push it and open the pull request — asking the operator first unless the folder says otherwise.',
@@ -213,13 +212,13 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
 
 **When it asks before pushing**: the folder's push approval, \`pushApproval\` in the machine block, decides. \`always\` asks before every push; \`never\` pushes without asking. \`unless-unreviewed\`: the run has Local Code Review read everything the push would add and pushes without asking only when it returns \`approve\` — otherwise, a review that did not finish or start included, it waits for the operator. The review is the catalog's as installed; an edited copy is refused, and the run asks. A folder that names no posture is \`${HOST_PUSH_APPROVAL_DEFAULT}\`, the default. Whatever the posture, the run scans every line the push would add, the headers and message of every commit it carries, and the pull request's title and summary for secrets before any of this, and a finding stops it with nothing pushed — which is what lets a review stand in for the operator. Only a range the scan cleared can go without asking: where a file was not read whole, or a line that looks like a secret ends in an \`aflow-scan: allow\` comment, no review runs and the run waits for the operator whatever the posture, \`never\` included. The comment never clears a line — whoever wrote the change could have written it; it turns a stop into a question. Once the run asks, the operator's answer decides: a declined push pushes nothing, whatever the posture.
 
-**Its checks first**: the folder's \`checks\`, shown in the machine block, run in a checkout of the commit before the scan, and nothing is scanned, reviewed or pushed until they pass; the push needs their passing receipt. A folder that declares none runs none. The pull request's own checks remain the proof. Test timeouts alone rerun once; any other failure stops the run with the end of what they printed. A review's findings may take a fix round after the push. No decision clears or holds a push.
+**Its checks first**: the folder's \`checks\`, shown in the machine block, run in a checkout of the commit before the scan, and nothing is scanned, reviewed or pushed until they pass; the push needs their passing receipt. A folder that declares none runs none. The pull request's own checks remain the proof. Test timeouts alone rerun once; any other failure stops the run with the end of what they printed. A decision on review findings is recorded, never acted on. No decision clears or holds a push.
 
 **On an existing branch**: a fix commissioned from a branch (\`base: <branch>\`) is published onto it by naming it as \`branch\` and passing the commission's \`baseSha\` as \`baseSha\`; a branch is reused only that way, and a fresh change takes a fresh branch. A fix to a branch \`main\` has moved past is commissioned with \`mergeFrom: origin/<base>\` as well and published with the sha the commission reported in \`merge.from\` as \`mergeFrom\`: the branch then carries one merge commit holding the fix. A commission that reported a \`merge\` and no \`patchRef\` changed nothing beyond the merge: it is published with \`mergeFrom\` and neither \`patchRef\` nor \`patch\`.
 
 **A branch as it stands**: a commit already made whose push did not land is published with \`branch\`, its head as \`baseSha\`, and no \`patchRef\`, \`patch\`, \`mergeFrom\` or \`commitMessage\`: nothing is committed, and the head is checked, scanned, reviewed and pushed.
 
-**With the result**: report the pull request link, and whether the push was approved by the operator or cleared by the folder's push approval — and, where the run reviewed its commit, the verdict. A branch that already has an open pull request into the base gets no second one: the run reports that one. Where approval was declined, report that nothing was pushed and the commit stays on the machine to publish later. Where the checks failed, nothing left the machine: report the end of what they printed. A fix round reports its fix's pull request, or this run's where the fix changed nothing. Where the scan found what looks like a secret, the run failed with nothing pushed: report the files, commit headers and messages, title or summary, lines and rules it names — never ask for or repeat the value — and say the secret has to come out and the change go again on a fresh branch, this one holding that commit. A refused push leaves the commit on its branch: report its message and the remedy the run names. Where the push failed, git's own message says why.`,
+**With the result**: report the pull request link, and whether the push was approved by the operator or cleared by the folder's push approval — and, where the run reviewed its commit, the verdict. A branch that already has an open pull request into the base gets no second one: the run reports that one. Where approval was declined, report that nothing was pushed and the commit stays on the machine to publish later. Where the checks failed, nothing left the machine: report the end of what they printed. On \`afterReview\` \`fix_before_merge\`, commission the fix and publish again with \`findings\`. Where the scan found what looks like a secret, the run failed with nothing pushed: report the files, commit headers and messages, title or summary, lines and rules it names — never ask for or repeat the value — and say the secret has to come out and the change go again on a fresh branch, this one holding that commit. A refused push leaves the commit on its branch: report its message and the remedy the run names. Where the push failed, git's own message says why.`,
   tags: ['coding', 'publish', 'git', 'local', 'developer-tools'],
   capabilityHints: [
     {
@@ -795,9 +794,9 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
                 },
                 findings: {
                   type: ['array', 'null'],
-                  items: { type: 'object' },
+                  items: REVIEW_FINDING_SCHEMA,
                   description:
-                    'Every finding as the review returned it — severity, file, line, claim, evidence, suggestion — which the decision on a fix round reads; null when the review did not complete.',
+                    'Every finding as the review returned it — severity, file, line, claim, evidence, suggestion — which the decision after the review weighs and the pull request records; null when the review did not complete.',
                 },
                 outcome: {
                   type: 'string',
@@ -810,7 +809,64 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           },
         },
 
-        DECIDE_AFTER_REVIEW_TASK,
+        {
+          taskId: 'decide-after-review',
+          name: 'Decide whether the findings are fixed before merging',
+          goal: "Read the review's findings and choose whether this branch takes a fix round before it merges or merges as it is, for the pull request to record. An answer too unsure to stand is recorded as undecided.",
+          type: 'operation' as const,
+          operation: 'ai.decision.decide',
+          dependsOn: ['review-commit'],
+          // A review with no findings, or one that did not finish, has none to weigh.
+          when: {
+            expression: 'tasks.review-commit.output.findings[0] != null',
+            onMissingRef: 'skip' as const,
+          },
+          // Only `describe-pr` reads the answer, to record it; a decision that
+          // could not be made is recorded as undecided, and the run goes on.
+          optional: true,
+          retryability: 'safe' as const,
+          maxAttempts: 2,
+          inputBindings: {
+            verdict: { kind: 'task_output' as const, taskId: 'review-commit', path: 'verdict' },
+            findings: { kind: 'task_output' as const, taskId: 'review-commit', path: 'findings' },
+          },
+          context: {
+            strategy: 'scoped' as const,
+            contextPolicy: 'auto-optimize' as const,
+            learnings: 'none' as const,
+            capabilities: {
+              operations: ['ai.decision.decide'],
+              integrations: [],
+            },
+          },
+          inputTemplate: {
+            state: {
+              verdict: { $bind: 'verdict' },
+              findings: { $bind: 'findings' },
+            },
+            questions: { [AFTER_REVIEW_QUESTION_NAME]: AFTER_REVIEW_QUESTION },
+          },
+          // `afterReview` is the answer that cleared the bar, null where none
+          // did; `chosen` is what it would have chosen.
+          outputProjection: {
+            afterReview: {
+              path: `answers.${AFTER_REVIEW_QUESTION_NAME}.decidedValue`,
+              onMissing: 'error' as const,
+            },
+            chosen: {
+              path: `answers.${AFTER_REVIEW_QUESTION_NAME}.value`,
+              onMissing: 'error' as const,
+            },
+            decided: {
+              path: `answers.${AFTER_REVIEW_QUESTION_NAME}.decided`,
+              onMissing: 'error' as const,
+            },
+            confidence: {
+              path: `answers.${AFTER_REVIEW_QUESTION_NAME}.confidence`,
+              onMissing: 'error' as const,
+            },
+          },
+        },
 
         {
           taskId: 'describe-pr',
@@ -820,13 +876,27 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             "The pull request composed from the branch holds what looks like a secret, named above by where it is in the title or the body, line and rule — never by its value — and nothing was pushed: the commit is still on its branch in the folder. Where the line came from `findings` or `gaps`, or from a title or summary passed in, publish this branch as it stands without it. Where it came from the review's summary or the end of what the checks printed, that text is the review's or the checks' own: take the secret out of the code or the environment they read, rotate it if it was real, and publish again. Where it came from a commit's message — a line marked allowed, which the scan let the operator read — that commit has to be rewritten before the branch is published.",
           type: 'operation' as const,
           operation: 'host.commit.describe',
-          dependsOn: ['commit', 'check-commit', 'recheck-commit', 'scan-commit', 'review-commit'],
+          dependsOn: [
+            'commit',
+            'check-commit',
+            'recheck-commit',
+            'scan-commit',
+            'review-commit',
+            'decide-after-review',
+          ],
           when: CHECKS_CLEARED,
           retryability: 'safe' as const,
           maxAttempts: 1,
           // Whole outputs, each absent where its task did not run: a review
-          // that failed or was never started is reported as none finishing.
+          // that failed or was never started is reported as none finishing,
+          // and its findings, and the decision on them, are what the pull
+          // request records of it.
           inputBindings: {
+            afterReview: {
+              kind: 'task_output' as const,
+              taskId: 'decide-after-review',
+              path: 'afterReview',
+            },
             bindingId: { kind: 'run_input' as const, path: 'bindingId' },
             range: { kind: 'task_output' as const, taskId: 'commit', path: 'commit.pushRange' },
             title: { kind: 'run_input' as const, path: 'title' },
@@ -856,11 +926,19 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             check: { $bind: 'check' },
             recheck: { $bind: 'recheck' },
             gaps: { $bind: 'gaps' },
+            afterReview: { $bind: 'afterReview' },
           },
           outputProjection: {
             title: { path: 'title', onMissing: 'error' as const },
             body: { path: 'body', onMissing: 'error' as const },
+            findings: { path: 'findings', onMissing: 'error' as const },
+            // Absent where the review returned no findings, so none was decided.
+            afterReview: { path: 'afterReview', onMissing: 'null' as const },
           },
+          promoteOutputs: [
+            { kind: 'output_path' as const, path: 'afterReview', toState: 'afterReview' },
+            { kind: 'output_path' as const, path: 'findings', toState: 'findings' },
+          ],
         },
 
         {
@@ -1193,17 +1271,13 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             { kind: 'output_path' as const, path: 'prNumber', toState: 'prNumber' },
           ],
         },
-
-        FIX_FINDINGS_TASK,
-
-        REPUBLISH_AFTER_FINDINGS_TASK,
       ],
       stateVariables: [
         {
           variableId: 'prUrl',
           name: 'Pull request link',
           description:
-            "The branch's pull request — the one this run opened, the one already open for the branch, or the one the publication of a fix this run commissioned reports — as a person opens it.",
+            "The branch's pull request — the one this run opened, or the one already open for the branch — as a person opens it.",
           required: false,
           sensitive: false,
           immutable: false,
@@ -1222,7 +1296,16 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           variableId: 'afterReview',
           name: 'After the review',
           description:
-            "What the run decided about the review's findings: fix_before_merge or publish_as_is. Null where the answer fell below the bar, and absent where the review returned none or no decision could be made — either way the findings are the reader's to weigh.",
+            "What the run decided about its review's findings, as the pull request records it: fix_before_merge, publish_as_is, or undecided where no answer cleared the bar or none could be made. Null where the review returned no findings, so none was decided. Nothing in the run acts on it: on fix_before_merge the fix round is the conversation's, or the shepherd's.",
+          required: false,
+          sensitive: false,
+          immutable: false,
+        },
+        {
+          variableId: 'findings',
+          name: 'Findings',
+          description:
+            "Every finding the pull request records — the earlier rounds' as this run was given them, and its own review's as left open. A later publication of the branch takes them as its `findings`, with each its fix closed marked closed.",
           required: false,
           sensitive: false,
           immutable: false,
@@ -1231,7 +1314,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
       output: {
         primary: 'prUrl',
         guidance:
-          "The run carries prUrl and prNumber once the branch has its pull request — opened, already open, or the one a fix it commissioned was published to — and reporting the link is the result; afterReview is its decision on the review's findings, null where it was unsure. Absent prUrl, the branch stayed on the machine to publish later — unless the run failed at the checks, whose account says what failed, or at the scan, where the commit holds what looks like a secret.",
+          "The run carries prUrl and prNumber once the branch has its pull request — opened, or already open — and reporting the link is the result. afterReview records its decision on the review's findings: on fix_before_merge the conversation commissions the fix and publishes again with findings. Absent prUrl, the branch stayed on the machine to publish later — unless the run failed at the checks, whose account says what failed, or at the scan, where the commit holds what looks like a secret.",
       },
       iteration: { auto: false, maxConsecutiveRuns: 1, stopOnOutcomesMet: true, cooldownMs: 0 },
     },
@@ -1272,7 +1355,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
       priority: 50,
     },
     rationale:
-      "Seventeen tasks, the approval between local and published halves. The commit lands in a detached worktree; host.commit.check runs the folder's checks. A check lost to test timeouts alone reruns; any other failure is workflow.run.fail with the checks' summary — no decision is asked there until its measurement has labelled cases. host.commit.scan reads all a push adds: a finding fails the run, an unread file or allowed line asks. Over a cleared range the posture, and under unless-unreviewed a Local Code Review, decide whether to ask. Over its findings a choice may commission a fix once this push went, and republish it where it changed something; abstaining does not. No decision gates the push. The push argv is pinned bar the refspec; the executor re-measures origin/<base>, needs a passed check receipt, and sends an uncleared range only on this run's grant. host.commit.describe composes the PR before the push; an open PR is PATCHed.",
+      "Fifteen tasks, the approval between local and published halves. The commit lands in a detached worktree; host.commit.check runs the folder's checks. A check lost to test timeouts alone reruns; any other failure is workflow.run.fail with the checks' summary — no decision is asked there until its measurement has labelled cases. host.commit.scan reads all a push adds: a finding fails the run, an unread file or allowed line asks. Over a cleared range the posture, and under unless-unreviewed a Local Code Review, decide whether to ask. Over its findings ai.decision.decide answers fix_before_merge or publish_as_is, which describe-pr records, undecided below the bar; no task acts on it, and no task starts a publication. No decision gates the push. The push argv is pinned bar the refspec; the executor re-measures origin/<base>, needs a passed check receipt, and sends an uncleared range only on this run's grant. host.commit.describe composes the PR before the push; an open PR is PATCHed.",
   },
 };
 

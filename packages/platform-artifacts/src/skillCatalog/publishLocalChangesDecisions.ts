@@ -1,4 +1,4 @@
-import type { DecisionChoiceQuestionSchema } from '@aflow/schemas';
+import { AFTER_REVIEW_DECIDED, type DecisionChoiceQuestionSchema } from '@aflow/schemas';
 import type { z } from 'zod';
 
 /**
@@ -8,9 +8,11 @@ import type { z } from 'zod';
  * of decision quality on the loop's own history (`yarn decisions:measure-loop`,
  * Plan 316 §7) asks exactly what the skill asks.
  *
- * Only the question after a review is the skill's: an answer below its bar
- * takes today's path, on through the approval with no fix round — Jev's bar,
- * measured over 17 cases. The question after a failed check is asked by the
+ * Only the question after a review is the skill's, and its answer is only
+ * recorded — on the pull request and as the run's `afterReview`, `undecided`
+ * below its bar, Jev's, measured over 17 cases — never acted on by the run:
+ * a fix round is the conversation's or the shepherd's. The question after a
+ * failed check is asked by the
  * measurement alone until it has labelled `operator_install_mismatch` cases
  * (Plan 316 §7); a failed check fails the run.
  */
@@ -24,7 +26,8 @@ export const AFTER_CHECK_ROUTES = [
 ] as const;
 export type AfterCheckRoute = (typeof AFTER_CHECK_ROUTES)[number];
 
-export const AFTER_REVIEW_ROUTES = ['fix_before_merge', 'publish_as_is'] as const;
+/** The answers the after-review question offers: the ones the pull request records as decided. */
+export const AFTER_REVIEW_ROUTES = AFTER_REVIEW_DECIDED;
 export type AfterReviewRoute = (typeof AFTER_REVIEW_ROUTES)[number];
 
 /** The question name each decision's answer is read under: `answers.<name>`. */
@@ -58,11 +61,3 @@ export const AFTER_REVIEW_QUESTION = {
   },
   minConfidence: AFTER_REVIEW_MIN_CONFIDENCE,
 } as const satisfies z.input<typeof DecisionChoiceQuestionSchema>;
-
-/**
- * The opening of the fix brief. What follows it is the review's own account,
- * which the run already holds, so no model writes a brief and none can be
- * argued with as one.
- */
-export const FIX_FINDINGS_BRIEF_LEAD =
-  "Local Code Review read this branch and returned the findings below, each with its severity and `file:line`, blockers first. Fix each that names a defect in the change's behaviour, with a test that would have caught it where one can; leave a preference or a claim the code does not bear out as it is, and say which and why. Change nothing else. Run the folder's own checks over what you touched before you finish, and report, finding by finding, what you changed or left.\n\nThe review, as it reported its findings:\n";

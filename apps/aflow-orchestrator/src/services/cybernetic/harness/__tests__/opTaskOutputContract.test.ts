@@ -384,93 +384,35 @@ describe('applyOpTaskOutputContract — projection', () => {
     expect(failed.failureReason).toContain('Nothing has been pushed');
   });
 
-  describe("Local Publish's fix-findings: a commission that changed nothing ends the round, one that did not finish fails it", () => {
-    const commission = () =>
-      getSkillCatalogEntry('publish-local-changes')?.bundle.workflow.tasks.find(
-        (t) => t.taskId === 'fix-findings',
-      ) as WorkflowTask;
-    const ending = (outcome: string, output?: Record<string, unknown>) => ({
-      runId: 'fix-commission',
-      outcome,
-      waiterId: 'waiter-1',
-      ...(output !== undefined ? { result: { output } } : {}),
-    });
-
-    it('succeeds with no patch where the commission completed with no change', async () => {
-      const base = 'c'.repeat(40);
-      const { deps, stored } = makeDeps({ [RAW_REF]: ending('completed', { baseSha: base }) });
-      const result = await run(deps, commission());
-      expect(result.kind).toBe('succeeded');
-      expect(stored.find((s) => s.kind === 'output')?.data).toEqual({
-        patchRef: null,
-        baseSha: base,
-        outcome: 'completed',
-        commissionRunId: 'fix-commission',
+  // A task that starts a run and waits on it succeeds however that run ended,
+  // so a projection that cannot resolve on its output fails the task naming
+  // how the run ended — the one account the run's own output cannot give.
+  for (const outcome of ['failed', 'cancelled', 'paused'] as const) {
+    it(`names how the run a task waited on ended where its projection cannot resolve: ${outcome}`, async () => {
+      const instruction = 'The run this task started did not finish; its run says why.';
+      const { deps } = makeDeps({
+        [RAW_REF]: { runId: 'child-run', outcome, waiterId: 'waiter-1' },
       });
+      const failed = await run(
+        deps,
+        opTaskDef({
+          outputProjection: {
+            result: { path: 'result.output.value', onMissing: 'error' as const },
+            outcome: { path: 'outcome', onMissing: 'error' as const },
+          },
+          failureInstruction: instruction,
+        }),
+      );
+      expect(failed.kind).toBe('failed');
+      if (failed.kind !== 'failed') return;
+      expect(
+        failed.failureReason?.startsWith(
+          `The run it started, child-run, ended ${outcome}. ${instruction} PROJECTION_FAILED: `,
+        ),
+        failed.failureReason,
+      ).toBe(true);
     });
-
-    for (const outcome of ['failed', 'cancelled', 'paused'] as const) {
-      it(`fails where the commission ${outcome === 'paused' ? 'stopped' : outcome}, naming how it ended`, async () => {
-        const { deps } = makeDeps({ [RAW_REF]: ending(outcome) });
-        const failed = await run(deps, commission());
-        expect(failed.kind).toBe('failed');
-        if (failed.kind !== 'failed') return;
-        expect(failed.failureReason).toContain(
-          `The run it started, fix-commission, ended ${outcome}.`,
-        );
-        expect(failed.failureReason).toContain(
-          "The commission briefed to fix the review's findings did not finish",
-        );
-      });
-    }
-  });
-
-  describe("Local Publish's republish-after-findings: it succeeds only where the publication it started pushed", () => {
-    const republish = () =>
-      getSkillCatalogEntry('publish-local-changes')?.bundle.workflow.tasks.find(
-        (t) => t.taskId === 'republish-after-findings',
-      ) as WorkflowTask;
-    const ending = (outcome: string, output?: Record<string, unknown>) => ({
-      runId: 'fix-publication',
-      outcome,
-      waiterId: 'waiter-1',
-      ...(output !== undefined ? { result: { output } } : {}),
-    });
-
-    it('carries the pull request and the outcome of a publication that pushed', async () => {
-      const pr = { prUrl: 'https://github.com/aflowai/aflow/pull/9', prNumber: 9 };
-      const { deps, stored } = makeDeps({ [RAW_REF]: ending('completed', pr) });
-      const result = await run(deps, republish());
-      expect(result.kind).toBe('succeeded');
-      expect(stored.find((s) => s.kind === 'output')?.data).toEqual({
-        ...pr,
-        outcome: 'completed',
-        republishRunId: 'fix-publication',
-      });
-    });
-
-    // A null over the pull request this run opened, and a parent reported
-    // complete with none, is what each of these used to be.
-    for (const [label, raw] of [
-      ['failed', ending('failed')],
-      ['was cancelled', ending('cancelled')],
-      ['stopped at its approval', ending('paused')],
-      ['was declined, pushing nothing', ending('completed', { prUrl: null, prNumber: null })],
-      ['completed with no pull request', ending('completed', {})],
-    ] as const) {
-      it(`fails when that publication ${label}, naming how it ended`, async () => {
-        const { deps, stored } = makeDeps({ [RAW_REF]: raw });
-        const failed = await run(deps, republish());
-        expect(failed.kind).toBe('failed');
-        if (failed.kind !== 'failed') return;
-        expect(failed.failureReason).toContain(
-          `The run it started, fix-publication, ended ${raw.outcome}.`,
-        );
-        expect(failed.failureReason).toContain('The publication of the fix did not push');
-        expect(stored.find((s) => s.kind === 'output')).toBeUndefined();
-      });
-    }
-  });
+  }
 
   it('fails Local Publish at the scan on a finding, naming where and saying nothing left the machine', async () => {
     const scan = getSkillCatalogEntry('publish-local-changes')?.bundle.workflow.tasks.find(

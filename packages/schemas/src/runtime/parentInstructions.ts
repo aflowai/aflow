@@ -118,13 +118,10 @@ export type WorkflowRunMetadata = z.infer<typeof WorkflowRunMetadataSchema>;
 /**
  * The deepest a chain of task-started runs may reach, counting the run at its
  * head as 1. A publication and the review it starts of its own commit are two;
- * a publication that decides on a fix round starts the commission and its own
- * republication at two, and that republication's review is the third. Without
- * a bound a workflow that starts itself would never stop; with this one fix
- * rounds stop after two, since the run the second one republishes is at three
- * and can start neither a review nor a commission of its own.
+ * nothing a task starts needs a third, and without a bound a workflow that
+ * starts itself would never stop.
  */
-export const MAX_WORKFLOW_RUN_DEPTH = 3;
+export const MAX_WORKFLOW_RUN_DEPTH = 2;
 
 export function workflowRunDepth(metadata: unknown): number {
   const parsed = WorkflowRunMetadataSchema.safeParse(metadata ?? {});

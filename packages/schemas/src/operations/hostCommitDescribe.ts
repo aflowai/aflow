@@ -46,6 +46,29 @@ export const PullRequestFindingsSchema = z
       'runs, is added as it returns.',
   );
 
+/**
+ * A finding as the publication's own review returned it. Only what the pull
+ * request records is read: the evidence and the suggestion stay on the
+ * review's run.
+ */
+const ReviewFindingSchema = PullRequestFindingSchema.omit({ state: true }).strip();
+
+/** The answers the decision after a review can clear its bar with. */
+export const AFTER_REVIEW_DECIDED = ['fix_before_merge', 'publish_as_is'] as const;
+
+/** What a publication records of that decision where it weighed findings and none cleared the bar. */
+export const AFTER_REVIEW_UNDECIDED = 'undecided';
+
+export const AfterReviewSchema = z
+  .enum([...AFTER_REVIEW_DECIDED, AFTER_REVIEW_UNDECIDED])
+  .describe(
+    "What the publication decided about its review's findings: `fix_before_merge`, a fix " +
+      'round on the branch before it merges; `publish_as_is`, they can merge as they stand; ' +
+      "`undecided`, no answer cleared the decision's bar, or none could be made. Recorded, never " +
+      'acted on by the publication: a fix round is the conversation’s, or the shepherd’s.',
+  );
+export type AfterReview = z.infer<typeof AfterReviewSchema>;
+
 export const PullRequestGapsSchema = z
   .array(z.string().min(1).max(8000))
   .describe(
@@ -92,11 +115,21 @@ export const HostCommitDescribeInputSchema = z.object({
       verdict: z.string().nullable(),
       outcome: z.string(),
       reviewSummary: z.string().nullable().optional(),
+      findings: z.array(ReviewFindingSchema).nullable().optional(),
     })
     .optional()
     .describe(
       "The publication's own review of the range, where one ran: its verdict — null where it " +
-        'did not finish — how it ended, and its summary, which names every finding it read.',
+        'did not finish — how it ended, its summary, which names every finding it read, and ' +
+        'the findings themselves, which the pull request records as left open.',
+    ),
+  afterReview: z
+    .enum(AFTER_REVIEW_DECIDED)
+    .nullable()
+    .optional()
+    .describe(
+      "The decision on the review's findings as it answered: null where the answer fell below " +
+        'its bar, absent where none was made.',
     ),
   check: CheckRunSchema.optional().describe("The folder's checks on the commit, as they ran."),
   recheck: CheckRunSchema.optional().describe(
@@ -105,6 +138,30 @@ export const HostCommitDescribeInputSchema = z.object({
   gaps: PullRequestGapsSchema.optional(),
 });
 export type HostCommitDescribeInput = z.infer<typeof HostCommitDescribeInputSchema>;
+
+/** What a pull request records of the review rounds: every finding, and the decision on this round's. */
+export interface PullRequestReviewRecord {
+  findings: PullRequestFinding[];
+  afterReview?: AfterReview;
+}
+
+/**
+ * The review record a publication's pull request carries: the earlier rounds'
+ * findings as they were passed, then this review's own as left open, since
+ * nothing on the branch has fixed them yet. The decision on them is recorded
+ * exactly where this review returned findings — the decision is asked only
+ * then — and an answer that is missing there, below the bar or never made,
+ * is recorded as `undecided`.
+ */
+export function pullRequestReviewRecord(input: HostCommitDescribeInput): PullRequestReviewRecord {
+  const reviewFindings = input.review?.findings ?? [];
+  const findings: PullRequestFinding[] = [
+    ...(input.findings ?? []),
+    ...reviewFindings.map((finding) => ({ ...finding, state: 'open' as const })),
+  ];
+  if (reviewFindings.length === 0) return { findings };
+  return { findings, afterReview: input.afterReview ?? AFTER_REVIEW_UNDECIDED };
+}
 
 export const HostCommitDescribeCommitSchema = z.object({
   sha: HostCommitShaSchema.describe('The commit, as its full sha.'),
@@ -134,5 +191,14 @@ export const HostCommitDescribeOutputSchema = z.object({
   commits: z
     .array(HostCommitDescribeCommitSchema.pick({ sha: true, subject: true }))
     .describe('Every commit of the range, oldest first.'),
+  findings: PullRequestFindingsSchema.describe(
+    "Every finding the body records: the earlier rounds' as passed, and this publication's " +
+      'own review as left open. What a later publication of the branch takes as `findings`, ' +
+      'with those its fix closed marked `closed`.',
+  ),
+  afterReview: AfterReviewSchema.optional().describe(
+    "The decision on this publication's review findings, as the body records it; absent " +
+      'where the review returned none.',
+  ),
 });
 export type HostCommitDescribeOutput = z.infer<typeof HostCommitDescribeOutputSchema>;
