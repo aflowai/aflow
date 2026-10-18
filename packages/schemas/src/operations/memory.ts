@@ -496,6 +496,14 @@ export const MemoryGetInputSchema = z.preprocess(
         message: 'Either id or path must be provided',
       }),
     ...memoryReadOptionsShape,
+    ifMissing: z
+      .enum(['fail', 'absent'])
+      .default('fail')
+      .describe(
+        'fail: no document at the target fails MEMORY_NOT_FOUND. absent: it succeeds as { found: false }, so a ' +
+          'read that found nothing is told apart from one that could not be read — which still fails. ' +
+          'Only the document being absent; a missing target.version or a hash mismatch fails either way.',
+      ),
   }),
 );
 export type MemoryGetInput = z.infer<typeof MemoryGetInputSchema>;
@@ -635,6 +643,25 @@ export const MemoryGetOutputSchema = z.object({
   backlinkTotal: z.number().int().nonnegative().optional(),
 });
 export type MemoryGetOutput = z.infer<typeof MemoryGetOutputSchema>;
+
+/**
+ * memory.store.get's output: the same read, and — only under
+ * `ifMissing: 'absent'` — `{ found: false }` with no `stat` where no document
+ * is there. Kept one object rather than a union so a binding's dotted path
+ * into it still resolves statically.
+ */
+export const MemoryStoreGetOutputSchema = MemoryGetOutputSchema.extend({
+  stat: MemoryDocStatSchema.optional().describe(
+    'The document read. Absent only where ifMissing: "absent" found no document (found: false).',
+  ),
+  found: z
+    .literal(false)
+    .optional()
+    .describe(
+      'false only where ifMissing: "absent" found no document at the target; absent on every read that found one.',
+    ),
+});
+export type MemoryStoreGetOutput = z.infer<typeof MemoryStoreGetOutputSchema>;
 
 // ============================================================================
 // memory.store.put — create / upsert
@@ -851,7 +878,7 @@ export const MemoryDeleteInputSchema = z.object({
     .string()
     .optional()
     .describe(
-      "The document's content hash as the caller last read or wrote it: the delete happens only while the document still holds exactly that, and fails MEMORY_HASH_MISMATCH where another writer has changed it since. Documents only.",
+      "The document's content hash as the caller last read or wrote it: the delete happens only while the document still holds exactly that, and fails MEMORY_HASH_MISMATCH where another writer has changed it since. Documents only: a directory holds no content hash, so a directory delete carrying one fails MEMORY_HASH_MISMATCH and leaves the directory.",
     ),
 });
 export type MemoryDeleteInput = z.infer<typeof MemoryDeleteInputSchema>;
@@ -1074,7 +1101,7 @@ export const MemoryOperationRegistrations: OperationRegistration[] = [
     },
     accessMode: 'read',
     inputZod: MemoryGetInputSchema,
-    outputZod: MemoryGetOutputSchema,
+    outputZod: MemoryStoreGetOutputSchema,
   },
   {
     stepType: 'memory',

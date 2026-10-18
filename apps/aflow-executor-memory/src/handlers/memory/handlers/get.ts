@@ -527,6 +527,12 @@ export async function handleGet(
     return await failureWithError(ctx, validationError(resolvedDraftRefusal));
   }
 
+  // Absent only where the space was searched: with no space nothing was read,
+  // and that is a failure, not an answer.
+  if (!doc && deps.spaceId && input.ifMissing === 'absent') {
+    return await successWithData(ctx, { found: false });
+  }
+
   if (!doc) {
     // Label the locator (path= / id=) so the message stays legible after
     // toAgentToolError → compactMessage strips UUIDs (an id lookup would

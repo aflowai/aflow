@@ -2,8 +2,9 @@
  * Contract: `memory.store.delete` with `expectedHash` deletes a document only
  * while it still holds exactly the content its caller read or wrote, and the
  * condition rides into the write itself; a document another writer changed
- * since is left as it is, and the step says so. Without it, a delete is as
- * it always was.
+ * since is left as it is, and the step says so. A directory holds no content
+ * hash, so a directory delete carrying one is refused and the directory left.
+ * Without it, a delete is as it always was.
  */
 import { describe, expect, it, vi } from 'vitest';
 import type { ExecutorContext } from '@aflow/executor-runtime';
@@ -95,5 +96,55 @@ describe('memory.store.delete — conditional on the content its caller held', (
     );
     expect(result.status).toBe('SUCCEEDED');
     expect(docs.softDelete).toHaveBeenCalledWith('doc-1', 'space-1');
+  });
+});
+
+describe('memory.store.delete — a directory holds no hash, so a condition on one never holds', () => {
+  const DIR = { id: 'dir-1', path: '/shepherd/aflowai/aflow/pulls', spaceId: 'space-1' };
+
+  function noDocs() {
+    return {
+      getByPath: vi.fn(async () => null),
+      getById: vi.fn(async () => null),
+      softDelete: vi.fn(async () => true),
+      deleteChunksForDoc: vi.fn(async () => undefined),
+    };
+  }
+
+  function dirs() {
+    return {
+      getDir: vi.fn(async () => DIR),
+      deleteDir: vi.fn(async () => true),
+    };
+  }
+
+  it.each([
+    ['a stale document hash', 'hash-of-the-old-holder'],
+    ['any hash at all', 'hash-of-the-new-holder'],
+  ])('refuses a directory delete conditioned on %s, and leaves the directory', async (_, hash) => {
+    const directories = dirs();
+    const result = await handleDelete(
+      ctx(),
+      noDocs() as never,
+      directories as never,
+      { target: { path: DIR.path }, recursive: true, expectedHash: hash },
+      {} as never,
+    );
+    expect(result.status).toBe('FAILED');
+    expect(result.error?.message).toMatch(/MEMORY_HASH_MISMATCH/);
+    expect(directories.deleteDir).not.toHaveBeenCalled();
+  });
+
+  it('deletes a directory unconditionally without one', async () => {
+    const directories = dirs();
+    const result = await handleDelete(
+      ctx(),
+      noDocs() as never,
+      directories as never,
+      { target: { path: DIR.path }, recursive: true },
+      {} as never,
+    );
+    expect(result.status).toBe('SUCCEEDED');
+    expect(directories.deleteDir).toHaveBeenCalledWith(DIR.path, 'space-1', true);
   });
 });

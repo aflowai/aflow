@@ -1581,16 +1581,20 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
     if (template === undefined) throw new Error('the review must carry a template');
     expect(review.inputBindings).toEqual({
       bindingId: { kind: 'run_input', path: 'bindingId' },
-      range: { kind: 'task_output', taskId: 'commit', path: 'commit.pushRange' },
+      from: { kind: 'task_output', taskId: 'commit', path: 'commit.pushBaseSha' },
       at: { kind: 'task_output', taskId: 'commit', path: 'commit.sha' },
     });
-    expect(review.inputBindings?.['range']).toEqual(
-      taskOrThrow('scan-commit').inputBindings?.['range'],
-    );
+    // The scan reads `pushRange`; the review is handed its two ends.
+    expect(taskOrThrow('scan-commit').inputBindings?.['range']).toEqual({
+      kind: 'task_output',
+      taskId: 'commit',
+      path: 'commit.pushRange',
+    });
+    expect(COMMIT.pushRange).toBe(`${COMMIT.pushBaseSha}..${COMMIT.sha}`);
     const declared = new Set(Object.keys(review.inputBindings ?? {}));
     const start = substituteTemplateBinds(
       template,
-      { bindingId: 'folder-1', range: COMMIT.pushRange, at: COMMIT.sha },
+      { bindingId: 'folder-1', from: COMMIT.pushBaseSha, at: COMMIT.sha },
       declared,
     );
     // Named by its catalog entry, so a space workflow merely holding the slug
@@ -1600,7 +1604,7 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
       catalogId: REVIEW_LOCAL_CHANGES.catalogId,
       inputs: {
         bindingId: 'folder-1',
-        range: `${ORIGIN_BASE}..${HEAD}`,
+        from: ORIGIN_BASE,
         at: HEAD,
         depth: 'standard',
       },
@@ -1610,8 +1614,8 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
     // never on the folder's HEAD, which is where the commission started: the
     // commit lands on a branch nothing has checked out, so a checkout at the
     // folder's HEAD reads every changed file as it was before the change.
-    const inputs = (start as { inputs: { range: string; at: string } }).inputs;
-    expect(inputs.range.split('..')[1]).toBe(inputs.at);
+    const inputs = (start as { inputs: { from: string; at: string } }).inputs;
+    expect(inputs.at).toBe(COMMIT.sha);
     expect(inputs.at).not.toBe(COMMIT.baseSha);
     // Two shas and no branch name: the range still names this commit after
     // the branch moves.
@@ -2058,7 +2062,7 @@ describe('Publish Local Changes — a branch is published as it stands', () => {
       range: `${ORIGIN_BASE}..${STRANDED}`,
     });
     expect(outcome.inputs.get('review-commit')).toMatchObject({
-      inputs: { range: `${ORIGIN_BASE}..${STRANDED}` },
+      inputs: { from: ORIGIN_BASE, at: STRANDED },
     });
     expect((outcome.inputs.get('push')?.['command'] as string[] | undefined)?.at(-1)).toBe(
       `${STRANDED}:refs/heads/aflow/x`,

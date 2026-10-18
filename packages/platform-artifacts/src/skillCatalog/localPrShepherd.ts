@@ -257,6 +257,15 @@ export const SHEPHERD_RULES: readonly WorkflowRunDecideRule[] = [
     decision: 'wait',
     reason: `The pull request is labelled \`${SHEPHERD_HANDS_OFF_LABEL}\`: a person is working on it, and the shepherd writes nothing on it until the label goes.`,
   },
+  // A pin read that finds none answers `found: false`; only one that failed
+  // leaves nothing. Deciding that as a first pass would drop the acted-on
+  // guard and restart the attempt count over a record that may exist.
+  {
+    when: { expression: 'state.pin == null' },
+    decision: 'wait',
+    reason:
+      "The pin naming this pull request's handoff could not be read from the space's memory, so its record may exist unread: what was acted on before, and how many attempts are spent, is unknown. Nothing is written until it reads.",
+  },
   {
     when: {
       anyOf: ['state.checks.statusCode != 200', 'state.handoff.statusCode != 200'],
@@ -918,21 +927,26 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
         {
           taskId: 'read-handoff-pin',
           name: 'Read which comment is the handoff',
-          goal: 'Read the handoff pinned for this pull request — the comment’s id and the login it was posted as — so the handoff is read by its id wherever it sits in a long conversation, and trusted only from that author.',
+          goal: 'Read the handoff pinned for this pull request — the comment’s id and the login it was posted as — so the handoff is read by its id wherever it sits in a long conversation, and trusted only from that author. A read that finds no pin is the first pass’s; a read that fails is not, since the pin may be there.',
           type: 'operation' as const,
           operation: 'memory.store.get',
           when: {
             allOf: [...OURS.allOf, 'tasks.read-pr.output.data.handsOff == false'],
             onMissingRef: SKIP,
           },
-          // No pin is the first pass's case, not a failure: the newest page of
-          // the conversation is read instead.
+          // No pin succeeds as `found: false`, so a failure here is a pin that
+          // could not be read, never its absence. It stays optional so the
+          // rules decide it — as wait — rather than the run failing.
           optional: true,
           retryability: 'safe' as const,
           maxAttempts: 1,
           inputBindings: { ...REPOSITORY, ...NUMBER },
           context: ctx('memory.store.get'),
-          inputTemplate: { target: { path: HANDOFF_PIN_PATH }, view: 'content' },
+          inputTemplate: {
+            target: { path: HANDOFF_PIN_PATH },
+            view: 'content',
+            ifMissing: 'absent',
+          },
         },
 
         {
@@ -972,13 +986,16 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
         {
           taskId: 'read-pr-handoff',
           name: 'Read the handoff',
-          goal: 'Where no pinned handoff was read, read the newest page of the pull request’s conversation for the handoff the pinned author left on it. With no pin there is no author to trust, and no record is taken: the pass decides as on a pull request with none.',
+          goal: 'Where no pinned handoff was read, read the newest page of the pull request’s conversation for the handoff the pinned author left on it. With no pin there is no author to trust, and no record is taken: the pass decides as on a pull request with none. Where the pin could not be read it is not read either, so no handoff is written over a record that may exist.',
           type: 'operation' as const,
           operation: 'api.http.call',
           when: {
             allOf: [
               ...OURS.allOf,
               'tasks.read-pr.output.data.handsOff == false',
+              // An unread pin leaves both handoff reads empty, which is what
+              // keeps the handoff writes, and the pin's rewrite, from running.
+              "tasks.read-handoff-pin.status == 'succeeded'",
               "tasks.read-pr-handoff-pinned.status != 'succeeded'",
             ],
             onMissingRef: SKIP,
@@ -1083,6 +1100,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
             candidates: out('list-prs'),
             pr: out('read-pr'),
             checks: out('read-pr-checks'),
+            pin: out('read-handoff-pin'),
             ...handoffBindings('handoff'),
             lease: out('read-in-flight-lease'),
             leaseOwner: out('read-lease-owner'),
@@ -1098,6 +1116,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
               candidates: bind('candidates'),
               pr: bind('pr'),
               checks: bind('checks'),
+              pin: bind('pin'),
               handoff: handoffValue('handoff'),
               lease: bind('lease'),
               leaseOwner: bind('leaseOwner'),

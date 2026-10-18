@@ -26,6 +26,7 @@ import {
   LoopPullRequestSchema,
   LoopPullRequestsSchema,
   MemoryDeleteInputSchema,
+  MemoryGetInputSchema,
   MemoryPutInputSchema,
   parseShepherdHandoff,
   SHEPHERD_LEASE_STALE_AFTER_MS,
@@ -40,7 +41,7 @@ import {
 } from '@aflow/schemas';
 import { getSkillBundleEntry } from '../skillBundleCatalog.js';
 import { COMMISSION_CHANGE } from './commissionChange.js';
-import { LOCAL_PR_SHEPHERD } from './localPrShepherd.js';
+import { LOCAL_PR_SHEPHERD, SHEPHERD_RULES } from './localPrShepherd.js';
 import { REMEDY_QUESTION, REMEDY_ROUTES, type Remedy } from './localPrShepherdDecisions.js';
 import { PUBLISH_LOCAL_CHANGES } from './publishLocalChanges.js';
 
@@ -105,6 +106,8 @@ interface Scenario {
   leaseTaken?: boolean;
   /** The handoff comment an earlier pass pinned: read by its id. `gone` where it was deleted. */
   pinned?: 'found' | 'gone';
+  /** The pin's read itself failed — the store threw or answered an error — whether or not a pin is there. */
+  pinRead?: 'fails';
   /** The pull request the pin was kept for, and the one its comment sits on. */
   pinFor?: number;
   pinnedCommentOn?: number;
@@ -196,15 +199,19 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
       return github(LoopPullRequestSchema.parse({ ...PULL_REQUEST, ...s.pullRequest }));
     case 'read-pr-checks':
       return github(CheckRunsSummarySchema.parse(s.checks ?? FAILING));
-    case 'read-handoff-pin':
-      // A memory read of a document that is not there fails its step; a pin
-      // is kept per pull request, so another pull request's is not there.
+    case 'read-handoff-pin': {
+      // The read asks to be told a missing pin apart from a failed read: one
+      // that is not there answers found: false. A pin is kept per pull
+      // request, so another pull request's is not there.
+      const read = MemoryGetInputSchema.parse(input);
+      if (s.pinRead === 'fails') return { ok: false };
       return s.pinned === undefined ||
-        !String(input['target'] && (input['target'] as { path: string }).path).endsWith(
-          `/pulls/${String(s.pinFor ?? 94)}.json`,
-        )
-        ? { ok: false }
+        !String(read.target.path).endsWith(`/pulls/${String(s.pinFor ?? 94)}.json`)
+        ? read.ifMissing === 'absent'
+          ? ok({ found: false })
+          : { ok: false }
         : ok({ stat: { path: 'pin' }, dataJson: { commentId: 9, author: LOOP_LOGIN } });
+    }
     case 'read-pr-handoff-pinned': {
       // Deleted, the comment answers 404 with GitHub's error, which shapes no record.
       if (s.pinned === 'gone') return github({ message: 'Not Found' }, 404);
@@ -738,6 +745,47 @@ describe('Local PR Shepherd — the handoff is the loop’s own, wherever it sit
         params: { per_page: 100, page: PULL_REQUEST.commentPages },
       });
     }
+  });
+});
+
+describe('Local PR Shepherd — a pin that could not be read is not no pin', () => {
+  const unreadReason = SHEPHERD_RULES.find(
+    (rule) => 'expression' in rule.when && rule.when.expression === 'state.pin == null',
+  )!.reason;
+  const WRITES = ['handoff', 'handoff-edit', 'remember-handoff'];
+
+  it.each([
+    ['a pin and a record of this very check run behind it', { pinned: 'found' as const }],
+    ['no pin there at all', {}],
+  ])(
+    'waits, saying the record may exist unread, where the pin read fails — %s — and acts on and writes nothing',
+    (_case, scenario) => {
+      const unread = pass({ ...scenario, pinRead: 'fails', handoff: readBack(pass()) });
+      expect(unread.statuses.get('read-handoff-pin')).toBe('failed');
+      expect(unread.decision).toBe('wait');
+      expect(unread.outputs.get('decide')?.['reason']).toBe(unreadReason);
+      for (const action of ACTIONS) expect(unread.ran).not.toContain(action);
+      // A handoff posted or pinned here would replace the record it could not read.
+      expect(unread.statuses.get('read-pr-handoff')).toBe('skipped');
+      for (const write of WRITES) expect(unread.ran).not.toContain(write);
+    },
+  );
+
+  it('waits where the budget is spent and the pin read fails — the count is not restarted', () => {
+    const spent = { ...readBack(pass()), attemptCount: 3, checkRunId: '554' };
+    const unread = pass({ pinned: 'found', pinRead: 'fails', handoff: spent });
+    expect(unread.decision).toBe('wait');
+    expect(unread.outputs.get('decide')?.['reason']).toBe(unreadReason);
+  });
+
+  it('decides as a first pass only where the read succeeded and found no pin', () => {
+    const first = pass();
+    expect(first.inputs.get('read-handoff-pin')).toMatchObject({ ifMissing: 'absent' });
+    expect(first.statuses.get('read-handoff-pin')).toBe('succeeded');
+    expect(first.outputs.get('read-handoff-pin')).toEqual({ found: false });
+    expect(first.decision).toBe('fix');
+    expect(first.handoff).toMatchObject({ attemptCount: 1 });
+    expect(first.ran).toContain('remember-handoff');
   });
 });
 

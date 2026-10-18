@@ -76,6 +76,16 @@ export async function handleDelete(
       if (subtreeRefusal !== null) {
         return await failureWithError(ctx, validationError(subtreeRefusal));
       }
+      // A directory holds no content hash, so no condition on one can hold:
+      // deleting anyway would drop the precondition the caller asked for.
+      if (input.expectedHash !== undefined) {
+        return await failureWithError(
+          ctx,
+          validationError(
+            `MEMORY_HASH_MISMATCH: ${dir.path} is a directory, which holds no content hash to match ${input.expectedHash}; it was left as it is. expectedHash conditions document deletes only.`,
+          ),
+        );
+      }
       const deleted = await dirRepo.deleteDir(dir.path, runSpaceId, input.recursive);
       return await successWithData(ctx, {
         id: dir.id,
