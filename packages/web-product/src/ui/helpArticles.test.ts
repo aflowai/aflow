@@ -1,6 +1,6 @@
 /**
  * Help articles name the screens they explain, and those screens must exist in
- * every edition the article claims to be true in (Plan 324 D6). Removing or
+ * every edition the article claims to be true in (Plan 325 D6). Removing or
  * moving a route fails here, naming the article that describes it.
  */
 import { allHelpArticles } from '@aflow/platform-artifacts';

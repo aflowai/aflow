@@ -1,4 +1,4 @@
-# Plan 324 — The product answers questions about itself
+# Plan 325 — The product answers questions about itself
 
 **Status:** 🔨 P0 built: the article schema, the catalog and its search, the anchor and vocabulary tests, and a first 31 articles across every theme from discovery pass 1. P1 built and tested without a live stack; its exit is proven on the live stack after merge. P2–P4 not started.
 

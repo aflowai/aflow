@@ -1,6 +1,6 @@
 /**
  * The help catalog is one source read by the help page, the Helmsman and the
- * screens (Plan 324), so its integrity is checked once, here: every article
+ * screens (Plan 325), so its integrity is checked once, here: every article
  * parses, ids are unique, related ids resolve, every theme has an answer, and
  * every anchored operation still exists.
  */

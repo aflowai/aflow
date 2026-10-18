@@ -1,5 +1,5 @@
 /**
- * Help articles (Plan 324): the platform's own answers, read from the
+ * Help articles (Plan 325): the platform's own answers, read from the
  * platform-artifact catalog and filtered to the articles true in this
  * process's edition. Needs no model provider — this is where an operator
  * without one finds out how to add one.

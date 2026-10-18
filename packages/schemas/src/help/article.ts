@@ -1,5 +1,5 @@
 /**
- * Help articles — what the platform says about itself (Plan 324).
+ * Help articles — what the platform says about itself (Plan 325).
  *
  * Articles are code-owned: the catalog lives in `@aflow/platform-artifacts`
  * and every reader (the help page, the Helmsman's `catalog.help.*`, links from
