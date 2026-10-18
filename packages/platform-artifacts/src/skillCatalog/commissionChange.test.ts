@@ -108,7 +108,7 @@ describe('Commission Change — a brief to the machine’s coding agent', () => 
     expect(HostHarnessRunInputSchema.safeParse(op).success).toBe(true);
     const harness = (wf.runInputs ?? []).find((i) => i.id === 'harness');
     expect(harness?.required).toBe(false);
-    expect(harness?.description).toContain('offering several refuses');
+    expect(harness?.description).toContain("the machine's default");
   });
 
   it('carries what the brief names to the operation as it stands', () => {
