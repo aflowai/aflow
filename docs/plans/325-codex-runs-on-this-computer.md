@@ -1,6 +1,6 @@
 # Plan 325 — Codex runs on this computer
 
-**Status:** 🔨 P0 measured (§6). P1 built; its exit met under `open` through the real handler and sandbox (§6 M8), `confined` not yet run. P2–P3 not started.
+**Status:** 🔨 P0 measured (§6). P1 built; its exit met under both postures through the real handler and sandbox (§6 M8, M9). P2–P3 not started.
 
 ## 1. Problem
 
@@ -118,7 +118,9 @@ Codex CLI 0.163.0-alpha.10.2, macOS, ChatGPT sign-in copied into a scratch `CODE
 - **M7 — Trust daemon.** Inside the sandbox, with the proxy variables set, Codex connects to the proxy for every request and every request fails about 60 ms later with `error sending request`; no TLS handshake is logged and the proxy records no refusal. `--enable respect_system_proxy` and a plain proxy username change nothing (the proxy checks only the token). `CODEX_CA_CERTIFICATE=/etc/ssl/cert.pem` makes the run complete (D9).
 - **M8 — P1 end to end, `open`.** Through `host.harness.run` and the lane's sandbox, on a throwaway repository, with the default set to a Claude Code that is not installed: the run falls back to Codex and says why; Codex reads `AGENTS.md`, follows it, writes a file, and the patch applies clean; the feed shows its commands and results live; a `continueFrom` turn resumes the thread Codex reported and answers from the first turn; `maxTurns` runs with `budget.applied: false`; `~/.codex/auth.json` is byte-identical afterwards.
 
-Still to measure in P1: the same run under `confined` (refusals name any host beyond `chatgpt.com` and `api.openai.com`), and the feature names of D7 against the tool list a run reports.
+- **M9 — P1 end to end, `confined`.** The same three runs, with the profile allowed `chatgpt.com` and `api.openai.com`, complete as under `open`. The one host refused is `ab.chatgpt.com`, on every run; each run reaches its result regardless and reports the refusal as a note. It is left refused: under `confined` fewer hosts reached is the point, and nothing the runs produced needed it. Whether `api.openai.com` is needed under a ChatGPT sign-in is not measured, since it was allowed.
+
+Still to measure: the feature names of D7 against the tool list a run reports.
 
 ## 7. Follow-ups outside this plan
 
