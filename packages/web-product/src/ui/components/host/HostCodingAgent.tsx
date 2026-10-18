@@ -142,10 +142,7 @@ export function HostCodingAgent({
               ))}
               {machine.harnesses.length === 0 && (
                 <Text variant="muted" size="sm">
-                  offers no coding agent — add one there with{' '}
-                  <Text variant="mono" size="sm">
-                    aflow harness add
-                  </Text>
+                  offers no coding agent yet — add one on that machine
                 </Text>
               )}
             </Row>
