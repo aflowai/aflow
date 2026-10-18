@@ -174,7 +174,10 @@ export function PlacementSelect<T extends string>({
         borderRadius: 'var(--radius-sm)',
         padding: '2px 4px',
         cursor: 'pointer',
-        width: '100%',
+        width: 'auto',
+        minWidth: '7rem',
+        maxWidth: '100%',
+        flexShrink: 0,
       }}
     >
       {options.map((o) => (

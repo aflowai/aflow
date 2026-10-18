@@ -133,7 +133,11 @@ export function CapabilityBundleEditor({
                   padding: 'var(--space-1) 0',
                 }}
               >
-                <Text size="xs" style={{ flex: 1, overflowWrap: 'anywhere' }}>
+                <Text
+                  as="span"
+                  size="xs"
+                  style={{ flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}
+                >
                   {operation.operationId} · {operation.tokens} tok
                 </Text>
                 <PlacementSelect
@@ -194,7 +198,7 @@ export function CapabilityBundleEditor({
         ) : (
           <details key={parent}>
             <summary>
-              <Text size="sm" weight="semibold">
+              <Text as="span" size="sm" weight="semibold">
                 {parent.replaceAll('_', ' ')} · {parentPlacement(children)}
               </Text>
             </summary>
