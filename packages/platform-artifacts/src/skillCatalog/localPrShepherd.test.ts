@@ -41,7 +41,8 @@ import {
 } from '@aflow/schemas';
 import { getSkillBundleEntry } from '../skillBundleCatalog.js';
 import { COMMISSION_CHANGE } from './commissionChange.js';
-import { LOCAL_PR_SHEPHERD, SHEPHERD_RULES } from './localPrShepherd.js';
+import { LOCAL_PR_SHEPHERD } from './localPrShepherd.js';
+import { SHEPHERD_RULES } from './localPrShepherdRules.js';
 import { REMEDY_QUESTION, REMEDY_ROUTES, type Remedy } from './localPrShepherdDecisions.js';
 import { PUBLISH_LOCAL_CHANGES } from './publishLocalChanges.js';
 
