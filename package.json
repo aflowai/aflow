@@ -25,6 +25,7 @@
     "db:migrate-tenants": "NODE_OPTIONS='--conditions=ts-source' node scripts/with-stack-env.mjs npx tsx scripts/migrate-tenants.ts",
     "db:seed": "NODE_OPTIONS='--conditions=ts-source' node scripts/with-stack-env.mjs tsx scripts/seed-flows.ts",
     "db:seed:cybernetic": "NODE_OPTIONS='--conditions=ts-source' node scripts/with-stack-env.mjs tsx scripts/dev/seed-cybernetic-space.ts",
+    "decisions:measure-loop": "NODE_OPTIONS='--conditions=ts-source' node scripts/with-stack-env.mjs tsx scripts/decisions-measure-loop.ts",
     "dev": "node scripts/dev.mjs",
     "start": "node scripts/start.mjs",
     "dev:core": "node scripts/dev.mjs --profile core",

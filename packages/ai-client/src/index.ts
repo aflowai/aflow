@@ -180,7 +180,11 @@ export type { FireworksConfig } from './providers/fireworks.js';
 export { createRunwareAdapter, runwareTaskUuid } from './providers/runware.js';
 
 // Decisions
-export { resolveDecisionAnswers } from './decision.js';
+export {
+  decisionRequestQuestions,
+  resolveDecisionAnswers,
+  splitDecisionAnswers,
+} from './decision.js';
 
 // Plan 323: the answer floor prompt budgeting and a local runtime's sizing share
 export { MIN_ANSWER_TOKENS } from './providers/ollamaPromptSize.js';

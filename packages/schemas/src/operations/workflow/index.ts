@@ -16,6 +16,7 @@ export * from './manage.js';
 export * from './runStart.js';
 export * from './runResume.js';
 export * from './runCancelOp.js';
+export * from './runFailOp.js';
 export * from './suggestedAction.js';
 export * from './runDetail.js';
 export * from './runAttention.js';
@@ -58,6 +59,7 @@ import {
 import { WorkflowRunStartInputSchema, WorkflowRunStartOutputSchema } from './runStart.js';
 import { WorkflowRunResumeInputSchema, WorkflowRunResumeOutputSchema } from './runResume.js';
 import { WorkflowRunCancelInputSchema, WorkflowRunCancelOutputSchema } from './runCancelOp.js';
+import { WorkflowRunFailInputSchema, WorkflowRunFailOutputSchema } from './runFailOp.js';
 import { WorkflowRunDetailInputSchema, WorkflowRunDetailOutputSchema } from './runDetail.js';
 import {
   WorkflowRunListAttentionInputSchema,
@@ -96,6 +98,8 @@ export const WorkflowOperationRegistrations = createWorkflowOperationRegistratio
   WorkflowRunResumeOutputSchema,
   WorkflowRunCancelInputSchema,
   WorkflowRunCancelOutputSchema,
+  WorkflowRunFailInputSchema,
+  WorkflowRunFailOutputSchema,
   WorkflowRunDetailInputSchema,
   WorkflowRunDetailOutputSchema,
   WorkflowRunListAttentionInputSchema,

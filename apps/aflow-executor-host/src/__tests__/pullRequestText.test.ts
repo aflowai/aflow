@@ -20,6 +20,7 @@ import {
   type HostCommitDescribeInput,
   HostCommitDescribeInputSchema,
   HostCommitDescribeOutputSchema,
+  HANDED_ON_FINDINGS_MAX_COUNT,
   PULL_REQUEST_BODY_MAX_CHARS,
 } from '@aflow/schemas';
 
@@ -217,6 +218,50 @@ describe('host.commit.describe', () => {
     );
   });
 
+  it("hands back the findings and the decision it recorded, so the run carries the pull request's record", async () => {
+    const head = await commit('The slice', 'What the slice does.', 'a.txt');
+    const finding = {
+      severity: 'minor',
+      file: 'a.txt',
+      line: 1,
+      claim: 'Says what it was.',
+      evidence: 'The first line.',
+    } as const;
+    const { captured } = await describeRange({
+      range: `${start}..${head}`,
+      review: {
+        verdict: 'comment',
+        outcome: 'completed',
+        reviewSummary: 'Read.',
+        findings: [finding],
+      },
+      afterReview: 'publish_as_is',
+    });
+    const output = HostCommitDescribeOutputSchema.parse(captured.output);
+    expect(output.findings).toEqual([
+      { severity: 'minor', file: 'a.txt', line: 1, claim: 'Says what it was.', state: 'open' },
+    ]);
+    expect(output.afterReview).toBe('publish_as_is');
+    expect(output.findingsLeftOut).toBeUndefined();
+  });
+
+  it('says how many findings the bounded hand-on left out, where it left any', async () => {
+    const head = await commit('The slice', 'What the slice does.', 'a.txt');
+    const findings = Array.from({ length: HANDED_ON_FINDINGS_MAX_COUNT + 2 }, (_, index) => ({
+      severity: 'nit' as const,
+      file: `f${String(index)}.txt`,
+      claim: 'Says what it was.',
+      evidence: 'Its name.',
+    }));
+    const { captured } = await describeRange({
+      range: `${start}..${head}`,
+      review: { verdict: 'comment', outcome: 'completed', reviewSummary: 'Read.', findings },
+    });
+    const output = HostCommitDescribeOutputSchema.parse(captured.output);
+    expect(output.findings).toHaveLength(HANDED_ON_FINDINGS_MAX_COUNT);
+    expect(output.findingsLeftOut).toBe(2);
+  });
+
   it('describes only the range it is given, from its base', async () => {
     const first = await commit('Earlier work', 'Already on the base.', 'a.txt');
     const head = await commit('The slice', 'What the slice does.', 'b.txt');
@@ -263,7 +308,131 @@ describe('composePullRequest', () => {
         { bindingId: 'hb_app', range, title: 'Their title', summary: 'Their words.' },
         commits,
       ),
-    ).toEqual({ title: 'Their title', body: 'Their words.' });
+    ).toEqual({ title: 'Their title', body: 'Their words.', findings: [] });
+  });
+
+  /** A finding as Local Code Review returns it, its evidence and suggestion beside what the record reads. */
+  const REVIEW_FINDING = {
+    severity: 'major',
+    file: 'src/cache.ts',
+    line: 40,
+    claim: 'The cache is never invalidated after a write.',
+    evidence: 'put() writes the store and leaves the map entry.',
+    suggestion: 'Delete the entry in put().',
+  } as const;
+  const reviewed = (afterReview?: 'fix_before_merge' | 'publish_as_is' | null) =>
+    HostCommitDescribeInputSchema.parse({
+      bindingId: 'hb_app',
+      range,
+      findings: FINDINGS,
+      review: {
+        verdict: 'request_changes',
+        outcome: 'completed',
+        reviewSummary: REVIEW_SUMMARY,
+        findings: [REVIEW_FINDING],
+      },
+      ...(afterReview !== undefined ? { afterReview } : {}),
+    });
+
+  it("hands on the latest review's findings as the open ones, replacing the earlier rounds', with only what the record reads", () => {
+    const composed = composePullRequest(reviewed('fix_before_merge'), commits);
+    expect(composed.findings).toEqual([
+      {
+        severity: 'major',
+        file: 'src/cache.ts',
+        line: 40,
+        claim: 'The cache is never invalidated after a write.',
+        state: 'open',
+      },
+    ]);
+    // Round after round, what goes on is one review's findings, never every round's.
+    const next = composePullRequest(
+      HostCommitDescribeInputSchema.parse({
+        bindingId: 'hb_app',
+        range,
+        findings: composed.findings,
+        review: {
+          verdict: 'request_changes',
+          outcome: 'completed',
+          reviewSummary: REVIEW_SUMMARY,
+          findings: [REVIEW_FINDING],
+        },
+      }),
+      commits,
+    );
+    expect(next.findings).toHaveLength(1);
+  });
+
+  it("says each finding once: the earlier rounds' listed, this review's in its own summary", () => {
+    const summary = 'One major: src/cache.ts:40 — the cache is never invalidated after a write.';
+    const { body } = composePullRequest(
+      HostCommitDescribeInputSchema.parse({
+        bindingId: 'hb_app',
+        range,
+        findings: FINDINGS,
+        review: {
+          verdict: 'request_changes',
+          outcome: 'completed',
+          reviewSummary: summary,
+          findings: [REVIEW_FINDING],
+        },
+      }),
+      commits,
+    );
+    for (const finding of FINDINGS) expect(body).toContain(finding.claim);
+    expect(body).toContain(summary);
+    expect(body).not.toContain('- **major** `src/cache.ts:40`');
+    expect(body).not.toContain(REVIEW_FINDING.evidence);
+  });
+
+  it('passes on the open findings it was given where no review of its own finished', () => {
+    for (const review of [
+      undefined,
+      { verdict: null, outcome: 'failed', reviewSummary: null, findings: null },
+    ]) {
+      const composed = composePullRequest(
+        HostCommitDescribeInputSchema.parse({
+          bindingId: 'hb_app',
+          range,
+          findings: FINDINGS,
+          ...(review !== undefined ? { review } : {}),
+        }),
+        commits,
+      );
+      expect(composed.findings).toEqual(FINDINGS.filter((f) => f.state === 'open'));
+    }
+  });
+
+  it('records the decision on those findings for each answer, and undecided where none cleared the bar or none was made', () => {
+    for (const [answer, recorded] of [
+      ['fix_before_merge', 'fix_before_merge'],
+      ['publish_as_is', 'publish_as_is'],
+      [null, 'undecided'],
+      [undefined, 'undecided'],
+    ] as const) {
+      const composed = composePullRequest(reviewed(answer), commits);
+      expect(composed.afterReview, String(answer)).toBe(recorded);
+      expect(composed.body, String(answer)).toContain(`Decided after the review: \`${recorded}\``);
+    }
+  });
+
+  it('records no decision where the review returned no findings, since none was asked', () => {
+    for (const review of [
+      { verdict: 'approve', outcome: 'completed', reviewSummary: 'Read.', findings: [] },
+      { verdict: null, outcome: 'failed', reviewSummary: null, findings: null },
+      undefined,
+    ]) {
+      const composed = composePullRequest(
+        HostCommitDescribeInputSchema.parse({
+          bindingId: 'hb_app',
+          range,
+          ...(review !== undefined ? { review } : {}),
+        }),
+        commits,
+      );
+      expect(composed.afterReview).toBeUndefined();
+      expect(composed.body).not.toContain('Decided after the review');
+    }
   });
 
   it('says where nothing was reviewed, no checks ran, or no gaps were recorded', () => {

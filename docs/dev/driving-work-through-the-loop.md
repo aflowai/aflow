@@ -88,7 +88,18 @@ meanwhile is refused with its current state rather than overwritten, and a node 
    For a branch that already has a pull request, name its number for the 422.
 2. **Read the review**: `workflow.run.detail` on the child review run gives the verdict and
    every finding with file and line. `approve` means the publication pushed on its own;
-   anything else leaves it paused at `approve-push`, and the next round is the fix.
+   anything else leaves it paused at `approve-push`, as before. Whether the findings want a
+   fix round the publication decides and records, and never acts on (Plan 315 D22):
+   `decide-after-review` chooses between `fix_before_merge` and `publish_as_is` over every
+   finding, and the run's `afterReview` and its pull request record the answer — `undecided`
+   where none cleared the bar. The fix round is the conversation's: on `fix_before_merge`,
+   once the publication has ended, commission the fix on the branch (`base: <branch>`),
+   briefed from every finding of the review run the publication names as `reviewRunId`,
+   whole, with its evidence. Then publish the branch again, passing the run's `findings`,
+   with those the fix closed marked `closed`. That list is for the pull request's record
+   only: the latest review's open findings, bounded to fit the next publication's inputs,
+   with `findingsLeftOut` counting what the bound left out. A publication never starts a
+   commission or another publication.
 3. **The publication runs the folder's checks.** `hb_aflow` declares
    `node scripts/verify-commit.mjs` (`aflow harness checks hb_aflow -- node
 scripts/verify-commit.mjs`), and Local Publish runs it after the commit and before the
@@ -115,13 +126,16 @@ scripts/verify-commit.mjs`), and Local Publish runs it after the commit and befo
    touched file by path imports nothing from it, so every `.mjs` or `.ts` test of those
    workspaces whose source names a touched file's repository path, whole
    (`scripts/verify-commit.mjs`, not `verify-commit`), in a string literal runs too, counted
-   and named in the same line as the tests imports reach. A failure fails
-   the publication with the end of what it printed and nothing pushed: read it on the
-   `check-commit` task, and commission the fix onto the branch. A run whose only failures
-   were tests running out of their time names them in `testTimeouts`, and the publication
-   runs the checks once more itself as `recheck-commit`; no retry from the conversation is
-   needed, and a failure there is read on that task. The pull request's CI
-   remains the proof. By hand, from a checkout, it measures `HEAD` against `origin/main`.
+   and named in the same line as the tests imports reach. The script names the step
+   that failed in its report, and the check's summary carries it. A run lost only to tests
+   running out of their time is run again by the publication itself as `recheck-commit`,
+   with no retry from the conversation, and a failure there is read on that task. Any other
+   failure fails the publication at `checks-failed` with the end of what the checks printed
+   and nothing pushed, which is the conversation's to take up: read whether the change or
+   the machine failed, then commission the fix onto the branch or put the machine right.
+   No decision is made on a failed check until its measurement has labelled cases (Plan 316
+   §7). The pull request's CI remains the proof. By
+   hand, from a checkout, it measures `HEAD` against `origin/main`.
 4. **The operator merges.** A merge lands on the dev stack only when the stream that runs it
    merges `origin/main` into `live` (below).
 

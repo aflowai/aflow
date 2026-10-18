@@ -96,7 +96,7 @@
     "contentHash": "5f9151872e93be3bb7ad3b154b9a539677892df0361ad01c2579f227a27b6856"
   },
   "local-code-review": {
-    "version": 7,
+    "version": 8,
     "contentHash": "cd6f27ade9b8f319bd43cafed7e48afffb8412148560638f5181fabb505f8815"
   },
   "local-commission": {
@@ -104,8 +104,8 @@
     "contentHash": "35998b7e73fb024809520f7738c4f169e18858a800d924baf195f43e6648a90a"
   },
   "local-publish": {
-    "version": 21,
-    "contentHash": "4c46d0e167830967d1be26f00f20b0bdb21d36bac7375d1933ba5ff2cc74ac24"
+    "version": 31,
+    "contentHash": "ba3f45cc0bfbaafa2c77caa4c6c09256feaa4eb3dde207cd5ceba98b70f4f4ab"
   },
   "newsapi": {
     "version": 1,

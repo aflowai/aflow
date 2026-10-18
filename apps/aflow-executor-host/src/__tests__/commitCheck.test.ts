@@ -589,7 +589,7 @@ describe('host.commit.check — a run lost only to tests running out of time', (
     );
   }
 
-  it('names the tests and the commit a publication runs the checks on again, and clears nothing', async () => {
+  it('names the tests a publication runs the checks again for, and clears nothing', async () => {
     const world = await fixture({
       branchPrefix: 'aflow/',
       checks: reportingTimeouts("console.log('FAIL tests'); process.exit(1);"),
@@ -598,7 +598,6 @@ describe('host.commit.check — a run lost only to tests running out of time', (
     expect(output.passed).toBe(false);
     expect(output.clearedSha).toBeUndefined();
     expect(output.testTimeouts).toEqual(TIMED_OUT);
-    expect(output.clearedOrRetriableSha).toBe(world.sha);
     expect(output.summary).toContain('nothing failed but 2 tests running out of time');
     expect(output.summary).toContain(TIMED_OUT.join('; '));
     expect(output.summary).toContain('a publication runs the checks once more');
@@ -612,7 +611,6 @@ describe('host.commit.check — a run lost only to tests running out of time', (
     });
     const passed = HostCommitCheckOutputSchema.parse((await check(passing)).captured.output);
     expect(passed.testTimeouts).toBeUndefined();
-    expect(passed.clearedOrRetriableSha).toBe(passing.sha);
     expect(passed.clearedSha).toBe(passing.sha);
 
     const stopped = await fixture({
@@ -623,14 +621,47 @@ describe('host.commit.check — a run lost only to tests running out of time', (
     const timedOut = HostCommitCheckOutputSchema.parse((await check(stopped)).captured.output);
     expect(timedOut).toMatchObject({ passed: false, timedOut: true });
     expect(timedOut.testTimeouts).toBeUndefined();
-    expect(timedOut.clearedOrRetriableSha).toBeUndefined();
   });
 
   it('is not claimed where the checks reported none', async () => {
     const world = await fixture({ branchPrefix: 'aflow/', checks: FAILING });
     const output = HostCommitCheckOutputSchema.parse((await check(world)).captured.output);
     expect(output.testTimeouts).toBeUndefined();
-    expect(output.clearedOrRetriableSha).toBeUndefined();
+  });
+});
+
+describe('host.commit.check — the step the checks name as failing', () => {
+  /** A check whose report names `guard` as the failing step, and ends as `exit` says. */
+  function reportingGuard(guard: string, exit: string): string[] {
+    return nodeCheck(`${reportScript(JSON.stringify({ failingGuard: guard }))}\n${exit}`);
+  }
+
+  it('names the failing step on checks that failed, from a report that carries no listener count', async () => {
+    const world = await fixture({
+      branchPrefix: 'aflow/',
+      checks: reportingGuard('tsc apps/x/tsconfig.json', 'process.exit(2);'),
+    });
+    const output = HostCommitCheckOutputSchema.parse((await check(world)).captured.output);
+    expect(output.passed).toBe(false);
+    expect(output.failingGuard).toBe('tsc apps/x/tsconfig.json');
+    // The summary is what a fix is briefed with, so it names the step too.
+    expect(output.summary).toContain('the check failed at `tsc apps/x/tsconfig.json`.');
+    // Unknown, not zero: the run failed before the tests that would count them.
+    expect(output.skippedListenerTests).toBeUndefined();
+    expect(output.receipt).toBeDefined();
+  });
+
+  it('names none on checks that passed, whatever the report says, nor where the checks named none', async () => {
+    const passing = await fixture({
+      branchPrefix: 'aflow/',
+      checks: reportingGuard('tsc apps/x/tsconfig.json', 'process.exit(0);'),
+    });
+    const passed = HostCommitCheckOutputSchema.parse((await check(passing)).captured.output);
+    expect(passed.failingGuard).toBeUndefined();
+
+    const silent = await fixture({ branchPrefix: 'aflow/', checks: FAILING });
+    const failed = HostCommitCheckOutputSchema.parse((await check(silent)).captured.output);
+    expect(failed.failingGuard).toBeUndefined();
   });
 });
 

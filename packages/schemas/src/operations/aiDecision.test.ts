@@ -49,6 +49,53 @@ describe('AiDecideInputSchema', () => {
     expect(parse({}).success).toBe(false);
   });
 
+  it('takes a question of each item alone, named questions alone, or both — never neither', () => {
+    const each = { items: [{ claim: 'a' }], question: { type: 'yes_no', instructions: 'Defect' } };
+    const named = { u: { type: 'yes_no', instructions: 'x' } };
+    expect(AiDecideInputSchema.safeParse({ state: 'x', each }).success).toBe(true);
+    expect(AiDecideInputSchema.safeParse({ state: 'x', each, questions: named }).success).toBe(
+      true,
+    );
+    expect(AiDecideInputSchema.safeParse({ state: 'x' }).success).toBe(false);
+  });
+
+  it('refuses a named question under the name an item is asked by, and an each that cannot be asked', () => {
+    const each = { items: [{ claim: 'a' }], question: { type: 'yes_no', instructions: 'Defect' } };
+    const clash = { each_0: { type: 'yes_no', instructions: 'x' } };
+    expect(AiDecideInputSchema.safeParse({ state: 'x', each, questions: clash }).success).toBe(
+      false,
+    );
+    for (const bad of [
+      { ...each, question: { type: 'yes_no' } },
+      { ...each, items: Array<unknown>(51).fill({}) },
+    ]) {
+      expect(AiDecideInputSchema.safeParse({ state: 'x', each: bad }).success).toBe(false);
+    }
+  });
+
+  it('refuses an item that cannot be read as instructions: a number, a boolean or null', () => {
+    const question = { type: 'yes_no', instructions: 'Defect' };
+    for (const item of [3, true, null]) {
+      const result = AiDecideInputSchema.safeParse({
+        state: 'x',
+        each: { items: [item], question },
+      });
+      expect(result.success, String(item)).toBe(false);
+    }
+    for (const item of ['a claim', { claim: 'a' }, ['a', 'b']]) {
+      const result = AiDecideInputSchema.safeParse({
+        state: 'x',
+        each: { items: [item], question },
+      });
+      expect(result.success, JSON.stringify(item)).toBe(true);
+    }
+  });
+
+  it('takes an empty list, which a step reads only when the list it binds came back empty', () => {
+    const each = { items: [], question: { type: 'yes_no', instructions: 'Defect' } };
+    expect(AiDecideInputSchema.safeParse({ state: 'x', each }).success).toBe(true);
+  });
+
   it('refuses a minConfidence outside 0..1', () => {
     expect(parse({ u: { type: 'yes_no', instructions: 'x', minConfidence: 1.5 } }).success).toBe(
       false,

@@ -17,6 +17,7 @@ import {
   HOST_CHECK_OUTPUT_HEAD_BYTES,
   HOST_CHECK_OUTPUT_TAIL_BYTES,
   HOST_CHECK_TAIL_BYTES,
+  HOST_CHECK_FAILING_GUARD_MAX_CHARS,
   HOST_CHECK_TEST_TIMEOUTS_MAX,
   type HostCommitCheckOutputSchema,
   type HostSandboxPosture,
@@ -162,8 +163,9 @@ export const CHECK_REPORT_ENV = 'AFLOW_CHECK_REPORT';
 const CHECK_REPORT_FILE = 'check-report.json';
 
 const CheckReportSchema = z.object({
-  skippedListenerTests: z.number().int().nonnegative(),
+  skippedListenerTests: z.number().int().nonnegative().optional(),
   testTimeouts: z.array(z.string()).optional(),
+  failingGuard: z.string().min(1).max(HOST_CHECK_FAILING_GUARD_MAX_CHARS).optional(),
 });
 
 /** What the check wrote to its report, or nothing where it wrote none a reader can take. */
@@ -194,6 +196,8 @@ export interface FolderCheckRun {
   readonly skippedListenerTests?: number;
   /** The tests that ran out of their time, where its report says they alone failed it. */
   readonly testTimeouts?: readonly string[];
+  /** The step the check names as the one that failed, where its report says. */
+  readonly failingGuard?: string;
 }
 
 export interface FolderCheckInput {
@@ -270,7 +274,10 @@ export async function runFolderChecks(input: FolderCheckInput): Promise<FolderCh
       result,
       output: kept.text(),
       sandbox: sandboxPostureOf(input.binding),
-      ...(report !== undefined ? { skippedListenerTests: report.skippedListenerTests } : {}),
+      ...(report?.skippedListenerTests !== undefined
+        ? { skippedListenerTests: report.skippedListenerTests }
+        : {}),
+      ...(report?.failingGuard !== undefined ? { failingGuard: report.failingGuard } : {}),
       ...(report?.testTimeouts !== undefined && report.testTimeouts.length > 0
         ? { testTimeouts: report.testTimeouts }
         : {}),
@@ -298,7 +305,6 @@ export function skippedCheck(bindingId: string, sha: string): HostCommitCheckOut
       'was not checked on this machine. The operator declares them on the machine holding ' +
       `the folder: \`aflow harness checks ${bindingId} -- <program> [args...]\`.`,
     clearedSha: sha,
-    clearedOrRetriableSha: sha,
   };
 }
 
@@ -347,7 +353,8 @@ export function checkOutcome(params: {
       result.exitCode === null
         ? `was ended by ${result.signal ?? 'a signal'}`
         : `exited ${String(result.exitCode)}`;
-    summary = `${command} ${ending} on ${short} after ${seconds(result.durationMs)}: the check failed.${printed}`;
+    const at = params.run.failingGuard !== undefined ? ` at \`${params.run.failingGuard}\`` : '';
+    summary = `${command} ${ending} on ${short} after ${seconds(result.durationMs)}: the check failed${at}.${printed}`;
   }
   return {
     passed,
@@ -365,7 +372,9 @@ export function checkOutcome(params: {
     ...(testTimeouts.length > 0
       ? { testTimeouts: testTimeouts.slice(0, HOST_CHECK_TEST_TIMEOUTS_MAX) }
       : {}),
+    ...(!passed && params.run.failingGuard !== undefined
+      ? { failingGuard: params.run.failingGuard }
+      : {}),
     ...(passed ? { clearedSha: params.sha } : {}),
-    ...(passed || testTimeouts.length > 0 ? { clearedOrRetriableSha: params.sha } : {}),
   };
 }

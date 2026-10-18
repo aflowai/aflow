@@ -30,13 +30,21 @@ import {
   isEvalPlaneOperation,
   MAX_PARENT_INPUTS_SERIALIZED_BYTES,
   PAUSE_INSTRUCTION_MAX_CHARS,
+  HANDED_ON_FINDINGS_MAX_COUNT,
   PullRequestFindingsSchema,
   PullRequestGapsSchema,
+  pullRequestReviewRecord,
   RUN_PULL_REQUEST_URL_OUTPUT,
   substituteTemplateBinds,
   toJsonSchemaSync,
 } from '@aflow/schemas';
 import { PUBLISH_LOCAL_CHANGES } from './publishLocalChanges.js';
+import {
+  AFTER_REVIEW_QUESTION,
+  AFTER_REVIEW_ROUTES,
+  type AfterReviewRoute,
+} from './publishLocalChangesDecisions.js';
+import { SKILL_CATALOG } from './index.js';
 import { REVIEW_LOCAL_CHANGES } from './reviewLocalChanges.js';
 
 const wf = PUBLISH_LOCAL_CHANGES.bundle.workflow;
@@ -133,15 +141,17 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(validity.status).toBe('valid');
   });
 
-  it('is thirteen tasks — commit, check and its one rerun, scan, what decides the approval, the pull request composed, approve, push, find and rewrite or open the pull request', () => {
+  it('is fifteen tasks — commit, check, the stop on a failed check, scan, what decides the approval, the review and the decision recorded on its findings, the pull request composed, approve, push, and the pull request found, rewritten or opened', () => {
     expect(wf.tasks.map((t) => t.taskId)).toEqual([
       'commit',
       'check-commit',
+      'checks-failed',
       'recheck-commit',
       'scan-commit',
       'read-repository',
       'read-push-approval',
       'review-commit',
+      'decide-after-review',
       'describe-pr',
       'approve-push',
       'push',
@@ -149,48 +159,50 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       'update-pr',
       'open-pr',
     ]);
-    expect(wf.tasks.map((t) => t.type)).toEqual([
-      'operation',
-      'operation',
-      'operation',
-      'operation',
-      'operation',
-      'operation',
-      'operation',
-      'operation',
-      'human',
-      'operation',
-      'operation',
-      'operation',
-      'operation',
+    expect(wf.tasks.filter((t) => t.type !== 'operation').map((t) => t.taskId)).toEqual([
+      'approve-push',
     ]);
-    expect(wf.tasks.map((t) => t.dependsOn ?? [])).toEqual([
-      [],
-      ['commit'],
-      ['commit', 'check-commit'],
-      ['commit', 'check-commit', 'recheck-commit'],
-      ['commit'],
-      ['commit', 'scan-commit'],
-      ['read-push-approval', 'scan-commit'],
-      ['commit', 'check-commit', 'recheck-commit', 'scan-commit', 'review-commit'],
-      ['read-repository', 'scan-commit', 'review-commit'],
-      ['approve-push', 'scan-commit', 'check-commit', 'recheck-commit', 'describe-pr'],
-      ['push'],
-      ['find-pr', 'describe-pr'],
-      ['find-pr', 'describe-pr'],
-    ]);
-    expect(taskOrThrow('describe-pr').operation).toBe('host.commit.describe');
-    expect(taskOrThrow('update-pr').operation).toBe('api.http.call');
-    expect(taskOrThrow('commit').operation).toBe('host.file.patch');
-    expect(taskOrThrow('check-commit').operation).toBe('host.commit.check');
-    expect(taskOrThrow('recheck-commit').operation).toBe('host.commit.check');
-    expect(taskOrThrow('scan-commit').operation).toBe('host.commit.scan');
-    expect(taskOrThrow('read-repository').operation).toBe('api.http.call');
-    expect(taskOrThrow('read-push-approval').operation).toBe('host.binding.inspect');
-    expect(taskOrThrow('review-commit').operation).toBe('workflow.run.start');
-    expect(taskOrThrow('push').operation).toBe('host.process.exec');
-    expect(taskOrThrow('find-pr').operation).toBe('api.http.call');
-    expect(taskOrThrow('open-pr').operation).toBe('api.http.call');
+    expect(Object.fromEntries(wf.tasks.map((t) => [t.taskId, t.dependsOn ?? []]))).toEqual({
+      commit: [],
+      'check-commit': ['commit'],
+      'checks-failed': ['check-commit'],
+      'recheck-commit': ['commit', 'check-commit'],
+      'scan-commit': ['commit', 'check-commit', 'recheck-commit'],
+      'read-repository': ['commit', 'check-commit', 'recheck-commit'],
+      'read-push-approval': ['commit', 'scan-commit'],
+      'review-commit': ['read-push-approval', 'scan-commit'],
+      'decide-after-review': ['review-commit'],
+      'describe-pr': [
+        'commit',
+        'check-commit',
+        'recheck-commit',
+        'scan-commit',
+        'review-commit',
+        'decide-after-review',
+      ],
+      'approve-push': ['read-repository', 'scan-commit', 'review-commit'],
+      push: ['approve-push', 'scan-commit', 'check-commit', 'recheck-commit', 'describe-pr'],
+      'find-pr': ['push'],
+      'update-pr': ['find-pr', 'describe-pr'],
+      'open-pr': ['find-pr', 'describe-pr'],
+    });
+    expect(Object.fromEntries(wf.tasks.map((t) => [t.taskId, t.operation]))).toEqual({
+      commit: 'host.file.patch',
+      'check-commit': 'host.commit.check',
+      'checks-failed': 'workflow.run.fail',
+      'recheck-commit': 'host.commit.check',
+      'scan-commit': 'host.commit.scan',
+      'read-repository': 'api.http.call',
+      'read-push-approval': 'host.binding.inspect',
+      'review-commit': 'workflow.run.start',
+      'decide-after-review': 'ai.decision.decide',
+      'describe-pr': 'host.commit.describe',
+      'approve-push': undefined,
+      push: 'host.process.exec',
+      'find-pr': 'api.http.call',
+      'update-pr': 'api.http.call',
+      'open-pr': 'api.http.call',
+    });
   });
 
   it('reads the repository on the same GitHub binding the pull request uses, before the approval', () => {
@@ -211,8 +223,12 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     });
     const kinds = Object.values(read.inputBindings ?? {}).map((b) => b.kind);
     expect(kinds).not.toContain('connection_binding');
+    // Only once the checks cleared the commit: a failed check reads nothing more.
     expect(read.when).toEqual({
-      expression: "tasks.commit.output.state == 'applied'",
+      anyOf: [
+        'tasks.check-commit.output.passed == true',
+        'tasks.recheck-commit.output.passed == true',
+      ],
       onMissingRef: 'skip',
     });
   });
@@ -739,14 +755,70 @@ type Decision = 'approved' | 'declined';
  * The review run's ending as the waiter delivers it to the task: the run's
  * promoted output only when it completed.
  */
-function reviewEnding(review: Exclude<Review, 'not-started'>): Record<string, unknown> {
+function reviewEnding(
+  review: Exclude<Review, 'not-started'>,
+  findings: readonly Finding[] = [],
+): Record<string, unknown> {
   const completed = review !== 'failed' && review !== 'cancelled' && review !== 'paused';
   return WorkflowRunWakeupEnvelopeSchema.parse({
     runId: 'review-run',
     outcome: completed ? 'completed' : review,
     waiterId: 'waiter-1',
-    ...(completed ? { result: { output: { verdict: review, reviewSummary: 'Read.' } } } : {}),
+    ...(completed
+      ? { result: { output: { verdict: review, reviewSummary: summaryOf(findings), findings } } }
+      : {}),
   });
+}
+
+/** The review's summary, which names every finding inline, as the review skill asks it to. */
+function summaryOf(findings: readonly Finding[]): string {
+  if (findings.length === 0) return 'Read.';
+  return findings
+    .map(
+      (f) =>
+        `${f.severity} ${f.file}${f.line === undefined ? '' : `:${String(f.line)}`} — ${f.claim}`,
+    )
+    .join('\n');
+}
+
+/** A finding as Local Code Review returns it. */
+interface Finding {
+  severity: 'blocker' | 'major' | 'minor' | 'nit';
+  file: string;
+  line?: number;
+  claim: string;
+  evidence: string;
+}
+
+/**
+ * What a decision model answers, scripted: a choice and its confidence, or
+ * `unavailable` — no decision model bound, a provider refusing — which fails
+ * the decision step.
+ */
+type Choice<Route extends string> =
+  { value: Route; confidence: number } | 'unavailable' | 'refused';
+
+/** A choice answered as `ai.decision.decide` returns it, decided by the question's own bar. */
+function choiceOutput(
+  name: string,
+  minConfidence: number,
+  choice: { value: string; confidence: number },
+): Record<string, unknown> {
+  return {
+    answers: {
+      [name]: {
+        type: 'choice',
+        value: choice.value,
+        decidedValue: choice.confidence >= minConfidence ? choice.value : null,
+        confidence: choice.confidence,
+        probabilities: { [choice.value]: choice.confidence },
+        decided: choice.confidence >= minConfidence,
+      },
+    },
+    model: 'jev-1.13.0',
+    usage: { promptTokens: 1, completionTokens: 0, totalTokens: 1 },
+    latencyMs: 40,
+  };
 }
 
 type Scan = 'clean' | 'finding' | 'unscanned' | 'allowed';
@@ -835,7 +907,6 @@ function checkResult(check: Check): Record<string, unknown> {
         tail: '',
         summary: '`hb_app` declares no checks, so none ran.',
         clearedSha: HEAD,
-        clearedOrRetriableSha: HEAD,
       });
     case 'passed':
       return HostCommitCheckOutputSchema.parse({
@@ -847,7 +918,6 @@ function checkResult(check: Check): Record<string, unknown> {
         tail: 'ok   prettier (3 files) (1.2 s)\n',
         summary: '`node scripts/verify-commit.mjs` passed.',
         clearedSha: HEAD,
-        clearedOrRetriableSha: HEAD,
         receipt: CHECK_RECEIPT.passed,
       });
     case 'failed':
@@ -872,7 +942,6 @@ function checkResult(check: Check): Record<string, unknown> {
         summary:
           '`node scripts/verify-commit.mjs` exited 1, and nothing failed but 1 test running out of time.',
         testTimeouts: [TIMED_OUT_TEST],
-        clearedOrRetriableSha: HEAD,
         receipt: CHECK_RECEIPT.failed,
       });
     case 'timed-out':
@@ -926,6 +995,10 @@ interface Scenario {
   inputs?: Record<string, unknown>;
   /** The composed text holds what looks like a secret, so the composition is refused. */
   describeRefused?: boolean;
+  /** The findings a completed review returns; absent is none. */
+  findings?: readonly Finding[];
+  /** What the decision on a fix round answers; absent is `unavailable`. */
+  afterReview?: Choice<AfterReviewRoute>;
 }
 
 interface Outcome {
@@ -946,8 +1019,9 @@ const SLICE_TITLE = 'The slice';
 
 /**
  * What `host.commit.describe` returns, standing in for the composition the
- * host executor's own tests prove: the title given or the slice's, and a body
- * naming the range it was composed from, so a test can tell whose it is.
+ * host executor's own tests prove: the title given or the slice's, a body
+ * naming the range it was composed from, so a test can tell whose it is, and
+ * the review record the executor computes, through the same function.
  */
 function describedPullRequest(input: Record<string, unknown>): Record<string, unknown> {
   const { title, summary, range } = input;
@@ -955,6 +1029,7 @@ function describedPullRequest(input: Record<string, unknown>): Record<string, un
     title: typeof title === 'string' ? title : SLICE_TITLE,
     body: typeof summary === 'string' ? summary : `Composed from \`${String(range)}\`.`,
     commits: [{ sha: HEAD, subject: SLICE_TITLE }],
+    ...pullRequestReviewRecord(HostCommitDescribeInputSchema.parse(input)),
   });
 }
 
@@ -1014,7 +1089,23 @@ function rawOutput(
     case 'review-commit':
       if (scenario.review === 'not-started')
         throw new Error('a review that did not start has no output');
-      return reviewEnding(scenario.review);
+      return reviewEnding(scenario.review, scenario.findings);
+    case 'decide-after-review':
+      if (scenario.afterReview === undefined || scenario.afterReview === 'unavailable') return {};
+      // A model that declines the question answers it as `ai.decision.decide` reports a refusal.
+      if (scenario.afterReview === 'refused') {
+        return {
+          answers: { after_review: { type: 'refusal', decidedValue: null, decided: false } },
+          model: 'luna-decisions',
+          usage: { promptTokens: 1, completionTokens: 0, totalTokens: 1 },
+          latencyMs: 40,
+        };
+      }
+      return choiceOutput(
+        'after_review',
+        AFTER_REVIEW_QUESTION.minConfidence,
+        scenario.afterReview,
+      );
     case 'push':
       return { exitCode: 0 };
     case 'find-pr': {
@@ -1186,6 +1277,15 @@ function publish(scenario: Scenario): Outcome {
         if (task.optional === true) failedOptional.add(task.taskId);
         continue;
       }
+      // A decision that could not be made fails its step, as the executor does.
+      if (
+        task.taskId === 'decide-after-review' &&
+        (scenario.afterReview ?? 'unavailable') === 'unavailable'
+      ) {
+        statuses.set(task.taskId, 'failed');
+        if (task.optional === true) failedOptional.add(task.taskId);
+        continue;
+      }
       if (task.taskId === 'approve-push') {
         asked = true;
         if (scenario.decision === 'declined' && scenario.declineAs !== 'answer') {
@@ -1219,6 +1319,11 @@ function publish(scenario: Scenario): Outcome {
                 new Set(Object.keys(task.inputBindings ?? {})),
               );
         inputs.set(task.taskId, input);
+        // `workflow.run.fail` fails its own task whatever it is handed.
+        if (task.operation === 'workflow.run.fail') {
+          statuses.set(task.taskId, 'failed');
+          continue;
+        }
         const raw = rawOutput(task.taskId, scenario, input);
         if (task.outputProjection !== undefined) {
           const projected = projectTaskOutput(task.outputProjection, raw, null);
@@ -1332,14 +1437,14 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
       expect(existing.pushed).toBe(true);
       expect(existing.ran).toContain('find-pr');
       expect(existing.ran).not.toContain('open-pr');
-      expect(existing.state).toEqual({
+      expect(existing.state).toMatchObject({
         prUrl: 'https://github.com/aflowai/aflow/pull/5',
         prNumber: 5,
       });
 
       const fresh = publish({ pushApproval, review: 'approve', decision: 'approved' });
       expect(fresh.ran.indexOf('find-pr')).toBeLessThan(fresh.ran.indexOf('open-pr'));
-      expect(fresh.state).toEqual({
+      expect(fresh.state).toMatchObject({
         prUrl: 'https://github.com/aflowai/aflow/pull/7',
         prNumber: 7,
       });
@@ -1352,7 +1457,7 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
         existingPrInto: 'release',
       });
       expect(elsewhere.ran).toContain('open-pr');
-      expect(elsewhere.state).toEqual({
+      expect(elsewhere.state).toMatchObject({
         prUrl: 'https://github.com/aflowai/aflow/pull/7',
         prNumber: 7,
       });
@@ -1387,7 +1492,13 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
       const projected = projectTaskOutput(review.outputProjection, reviewEnding(outcome), null);
       expect(projected).toEqual({
         ok: true,
-        value: { verdict: null, reviewSummary: null, outcome, reviewRunId: 'review-run' },
+        value: {
+          verdict: null,
+          reviewSummary: null,
+          findings: null,
+          outcome,
+          reviewRunId: 'review-run',
+        },
       });
     }
     const approved = projectTaskOutput(review.outputProjection, reviewEnding('approve'), null);
@@ -1396,6 +1507,7 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
       value: {
         verdict: 'approve',
         reviewSummary: 'Read.',
+        findings: [],
         outcome: 'completed',
         reviewRunId: 'review-run',
       },
@@ -1566,8 +1678,12 @@ describe('Publish Local Changes — the commit is scanned for secrets before any
       range: `${ORIGIN_BASE}..${HEAD}`,
       texts: { 'pull request title': 'Fix it' },
     });
+    // A commit the checks did not clear is never scanned: nothing after them runs.
     expect(scan.when).toEqual({
-      expression: "tasks.commit.output.state == 'applied'",
+      anyOf: [
+        'tasks.check-commit.output.passed == true',
+        'tasks.recheck-commit.output.passed == true',
+      ],
       onMissingRef: 'skip',
     });
   });
@@ -1902,8 +2018,8 @@ describe('Publish Local Changes — a branch is published as it stands', () => {
     expect(outcome.ran).toEqual([
       'commit',
       'check-commit',
-      'read-repository',
       'scan-commit',
+      'read-repository',
       'read-push-approval',
       'review-commit',
       'describe-pr',
@@ -1987,7 +2103,7 @@ describe("Publish Local Changes — the folder's checks run before anything leav
     expect(outcome.pushed).toBe(true);
   });
 
-  it('fails at the check, rather than pausing on a resolution that could clear it', () => {
+  it('records every ending of the first run, so the run itself chooses rerun or stop — and fails at the second', () => {
     for (const taskId of ['check-commit', 'recheck-commit']) {
       const check = taskOrThrow(taskId);
       expect(check.maxAttempts, taskId).toBe(1);
@@ -1996,13 +2112,10 @@ describe("Publish Local Changes — the folder's checks run before anything leav
     }
     const projects = (taskId: string, ending: Check): boolean =>
       projectTaskOutput(taskOrThrow(taskId).outputProjection ?? {}, checkResult(ending), null).ok;
-    for (const ending of ['failed', 'timed-out'] as const) {
-      expect(projects('check-commit', ending), ending).toBe(false);
-    }
-    for (const ending of ['passed', 'skipped', 'test-timeouts'] as const) {
+    for (const ending of ['passed', 'skipped', 'failed', 'timed-out', 'test-timeouts'] as const) {
       expect(projects('check-commit', ending), ending).toBe(true);
     }
-    // The second run is the last: tests running out of time fail it as anything else does.
+    // The second run is the last: anything but passing fails it, and the run.
     for (const ending of ['failed', 'timed-out', 'test-timeouts'] as const) {
       expect(projects('recheck-commit', ending), ending).toBe(false);
     }
@@ -2095,10 +2208,19 @@ describe("Publish Local Changes — the folder's checks run before anything leav
       });
     }
 
-    it('says on the second run’s failure that it was the second', () => {
+    it('says on the second run’s failure that it was the second, and why there was one — never that the first failed only on time', () => {
       const failure = taskOrThrow('recheck-commit').failureInstruction ?? '';
       expect(failure).toContain('Nothing was scanned, reviewed or pushed');
+      expect(failure).toContain('because tests ran out of their time on the first');
       expect(failure).toContain('this second run failed as well');
+      expect(failure).not.toMatch(/failed only/);
+    });
+
+    it('is the only route to a second run: no decision sends a run there', () => {
+      expect(taskOrThrow('recheck-commit').when).toEqual({
+        expression: 'tasks.check-commit.output.testTimeouts != null',
+        onMissingRef: 'skip',
+      });
     });
   });
 
@@ -2151,15 +2273,26 @@ describe("Publish Local Changes — the folder's checks run before anything leav
     const failed = checkResult('failed');
     expect(String(failed['summary'])).toContain(CHECK_TAIL);
     expect(failed['outputRef']).toBeDefined();
-    const failure = taskOrThrow('check-commit').failureInstruction ?? '';
+    const outcome = publish({
+      pushApproval: 'never',
+      review: 'approve',
+      decision: 'approved',
+      check: 'failed',
+    });
+    expect(outcome.inputs.get('checks-failed')).toEqual({ reason: failed['summary'] });
+    const failure = taskOrThrow('checks-failed').failureInstruction ?? '';
     expect(failure).toContain('Nothing was scanned, reviewed or pushed');
     expect(failure).toContain('`checksTimeoutMs`');
   });
 
   it("says in its description that the folder's checks run first, and that the pull request's remain the proof", () => {
     expect(PUBLISH_LOCAL_CHANGES.description).toContain(
-      'run in a checkout of the commit before the scan, and a failure stops the run with nothing scanned, reviewed or pushed',
+      'run in a checkout of the commit before the scan, and nothing is scanned, reviewed or pushed until they pass',
     );
+    expect(PUBLISH_LOCAL_CHANGES.description).toContain(
+      'any other failure stops the run with the end of what they printed.',
+    );
+    expect(PUBLISH_LOCAL_CHANGES.description).toContain('No decision clears or holds a push.');
     expect(PUBLISH_LOCAL_CHANGES.description).toContain('the push needs their passing receipt.');
     expect(PUBLISH_LOCAL_CHANGES.description).toContain('A folder that declares none runs none.');
     expect(PUBLISH_LOCAL_CHANGES.description).toContain(
@@ -2251,6 +2384,7 @@ describe('Publish Local Changes — the pull request describes the branch as a w
       verdict: 'approve',
       outcome: 'completed',
       reviewSummary: 'Read.',
+      findings: [],
     });
     expect(described.check).toMatchObject({
       passed: true,
@@ -2284,7 +2418,12 @@ describe('Publish Local Changes — the pull request describes the branch as a w
     const failed = describedWith(
       publish({ pushApproval: 'unless-unreviewed', review: 'failed', decision: 'approved' }),
     );
-    expect(failed.review).toEqual({ verdict: null, outcome: 'failed', reviewSummary: null });
+    expect(failed.review).toEqual({
+      verdict: null,
+      outcome: 'failed',
+      reviewSummary: null,
+      findings: null,
+    });
   });
 
   it("passes a person's own title and summary to the composition, where they stand", () => {
@@ -2337,6 +2476,9 @@ describe('Publish Local Changes — the pull request describes the branch as a w
     expect(outcome.state).toEqual({
       prUrl: 'https://github.com/aflowai/aflow/pull/5',
       prNumber: 5,
+      findings: [],
+      findingsLeftOut: null,
+      afterReview: null,
     });
 
     const titled = publish({
@@ -2379,5 +2521,362 @@ describe('Publish Local Changes — the pull request describes the branch as a w
       ...toJsonSchemaSync(PullRequestFindingsSchema),
     });
     expect(runInputOrThrow('gaps').schema).toEqual({ ...toJsonSchemaSync(PullRequestGapsSchema) });
+  });
+});
+
+// ── A failed check stops the run: no decision is asked of it ───────────────
+
+describe('Publish Local Changes — a failed check stops the run, and no decision is asked of it', () => {
+  /** Everything that only runs on a commit the checks cleared. */
+  const CLEARED_ONLY = [
+    'scan-commit',
+    'read-repository',
+    'read-push-approval',
+    'review-commit',
+    'describe-pr',
+    'approve-push',
+    'push',
+    'find-pr',
+    'open-pr',
+  ];
+
+  function checkedWith(check: Check, extra: Partial<Scenario> = {}): Outcome {
+    return publish({
+      pushApproval: 'never',
+      review: 'approve',
+      decision: 'approved',
+      check,
+      inputs: { owner: 'aflowai', repo: 'aflow' },
+      ...extra,
+    });
+  }
+
+  it('asks a decision model nothing over the checks: the only decision reads the review', () => {
+    const deciders = wf.tasks.filter((t) => t.operation === 'ai.decision.decide');
+    expect(deciders.map((t) => t.taskId)).toEqual(['decide-after-review']);
+    for (const task of wf.tasks) {
+      expect(JSON.stringify(task), task.taskId).not.toMatch(/decide-after-check|next_step/);
+    }
+  });
+
+  for (const check of ['failed', 'timed-out'] as const) {
+    it(`${check}: fails the publication at \`checks-failed\` with the checks' account as the reason, and nothing else runs`, () => {
+      const outcome = checkedWith(check);
+      expect(outcome.statuses.get('check-commit')).toBe('succeeded');
+      expect(outcome.statuses.get('checks-failed')).toBe('failed');
+      expect(outcome.inputs.get('checks-failed')).toEqual({
+        reason: checkResult(check)['summary'],
+      });
+      for (const id of [...CLEARED_ONLY, 'recheck-commit']) {
+        expect(outcome.ran, id).not.toContain(id);
+      }
+      expect(outcome.pushed).toBe(false);
+      expect(outcome.state['prUrl']).toBeUndefined();
+    });
+  }
+
+  for (const check of ['passed', 'skipped', 'test-timeouts'] as const) {
+    it(`${check}: does not stop the run`, () => {
+      const outcome = checkedWith(check);
+      expect(outcome.ran).not.toContain('checks-failed');
+      expect(outcome.pushed).toBe(true);
+    });
+  }
+
+  it('says the checks did not pass and what was left untouched, and steers to no remedy their account has not named', () => {
+    const stop = taskOrThrow('checks-failed');
+    expect(stop.optional).not.toBe(true);
+    const failure = stop.failureInstruction ?? '';
+    expect(failure).toContain("The folder's checks did not pass on this run's commit");
+    expect(failure).toContain('Nothing was scanned, reviewed or pushed');
+    expect(failure).toContain('the change, or the machine the checks ran on');
+    // A fault on the machine is not the change's, so no fix to the change is prescribed.
+    expect(failure).not.toMatch(/[Cc]ommission/);
+    expect(failure).not.toBe(taskOrThrow('check-commit').failureInstruction);
+  });
+
+  it('says, where the check step itself breaks, that the checks could not run — and prescribes no fix to the change', () => {
+    // A run of the checks that did not pass succeeds and stops at `checks-failed`, so the first
+    // run's own failure is only ever the step breaking: the executor, the checkout, the fetch.
+    for (const check of ['failed', 'timed-out', 'test-timeouts'] as const) {
+      expect(
+        projectTaskOutput(
+          taskOrThrow('check-commit').outputProjection ?? {},
+          checkResult(check),
+          null,
+        ).ok,
+        check,
+      ).toBe(true);
+    }
+    const failure = taskOrThrow('check-commit').failureInstruction ?? '';
+    expect(failure).toContain("The folder's checks could not be run on this run's commit");
+    expect(failure).toContain('Nothing was scanned, reviewed or pushed');
+    expect(failure).toContain('Nothing says the change is at fault');
+    expect(failure).not.toMatch(/[Cc]ommission/);
+    expect(failure).not.toContain('checks failed');
+  });
+
+  it('projects what the stop, the rerun, the push and the composition read, and nothing else', () => {
+    expect(Object.keys(taskOrThrow('check-commit').outputProjection ?? {}).sort()).toEqual([
+      'passed',
+      'receipt',
+      'skipped',
+      'summary',
+      'tail',
+      'testTimeouts',
+    ]);
+  });
+});
+
+// ── No publication starts a publication, or a commission ──────────────────
+
+describe('Publish Local Changes — no publication starts a publication', () => {
+  /** What a task starts as a run of its own, by the catalog entry it names. */
+  const startedBy = (task: WorkflowTask): string | undefined => {
+    if (task.operation !== 'workflow.run.start') return undefined;
+    const template = task.inputTemplate as { catalogId?: unknown; slug?: unknown } | undefined;
+    return String(template?.catalogId ?? template?.slug);
+  };
+
+  it('starts one run of its own, the review of its commit, and no other skill', () => {
+    const started = wf.tasks.flatMap((task) => {
+      const skill = startedBy(task as WorkflowTask);
+      return skill === undefined ? [] : [[task.taskId, skill]];
+    });
+    expect(started).toEqual([['review-commit', REVIEW_LOCAL_CHANGES.catalogId]]);
+  });
+
+  it('is started by no skill in the catalog, so no publication runs under another run', () => {
+    for (const skill of SKILL_CATALOG) {
+      for (const task of skill.bundle.workflow.tasks) {
+        const template = task.inputTemplate as { catalogId?: unknown; slug?: unknown } | undefined;
+        if (task.operation !== 'workflow.run.start') continue;
+        expect(
+          [template?.catalogId, template?.slug],
+          `${skill.catalogId} › ${task.taskId}`,
+        ).not.toContain(PUBLISH_LOCAL_CHANGES.catalogId);
+      }
+    }
+  });
+
+  it('commits once and pushes once: the fix round is the conversation’s, not a second commit or push of its own', () => {
+    for (const operation of ['host.file.patch', 'host.process.exec']) {
+      expect(
+        wf.tasks.filter((task) => task.operation === operation).map((task) => task.taskId),
+        operation,
+      ).toHaveLength(1);
+    }
+  });
+});
+
+// ── What the run decides about a review's findings, recorded and never acted on
+
+describe("Publish Local Changes — the decision on a review's findings is recorded, never acted on", () => {
+  const LEAK: Finding = {
+    severity: 'major',
+    file: 'src/cache.ts',
+    line: 40,
+    claim: 'The cache is never invalidated after a write.',
+    evidence:
+      'put() writes the store and leaves the map entry; the test reads only before the write.',
+  };
+  const NAME: Finding = {
+    severity: 'nit',
+    file: 'src/cache.ts',
+    claim: 'The name says what it was.',
+    evidence: 'cacheOld',
+  };
+  const RACE: Finding = {
+    severity: 'blocker',
+    file: 'src/lock.ts',
+    line: 12,
+    claim: 'Two writers can both take the lock.',
+    evidence: 'The check and the set are two calls.',
+  };
+  const FINDINGS = [LEAK, NAME, RACE];
+  /** An earlier round's finding the brief passed on, closed by a commit of the branch. */
+  const EARLIER = {
+    severity: 'minor',
+    file: 'src/cache.ts',
+    line: 12,
+    claim: 'The size is read twice.',
+    state: 'closed',
+  } as const;
+  /** An earlier round's finding the branch still leaves as the review found it. */
+  const EARLIER_OPEN = {
+    severity: 'nit',
+    file: 'src/cache.ts',
+    claim: 'The constant is named for the old default.',
+    state: 'open',
+  } as const;
+  const FIX = { value: 'fix_before_merge', confidence: 0.95 } as const;
+
+  /** Every answer the decision can give, or fail to, and what the run records for it. */
+  const ANSWERS: Array<[string, Choice<AfterReviewRoute>, string]> = [
+    ['fix_before_merge', FIX, 'fix_before_merge'],
+    ['publish_as_is', { value: 'publish_as_is', confidence: 0.95 }, 'publish_as_is'],
+    [
+      'an answer below the bar',
+      { value: 'fix_before_merge', confidence: AFTER_REVIEW_QUESTION.minConfidence - 0.01 },
+      'undecided',
+    ],
+    ['no decision at all', 'unavailable', 'undecided'],
+    ['a refusal of the question', 'refused', 'undecided'],
+  ];
+
+  function reviewedWith(extra: Partial<Scenario>): Outcome {
+    return publish({
+      pushApproval: 'unless-unreviewed',
+      review: 'request_changes',
+      decision: 'approved',
+      findings: FINDINGS,
+      inputs: { owner: 'aflowai', repo: 'aflow', findings: [EARLIER, EARLIER_OPEN] },
+      ...extra,
+    });
+  }
+
+  it('asks one choice over every finding the review returned, and judges none of them apart', () => {
+    const outcome = reviewedWith({ afterReview: FIX });
+    const asked = outcome.inputs.get('decide-after-review') as {
+      state: { findings: unknown };
+      questions: Record<string, unknown>;
+      each?: unknown;
+    };
+    expect(asked.state.findings).toEqual(FINDINGS);
+    expect(Object.keys(asked.questions)).toEqual(['after_review']);
+    expect(asked.each).toBeUndefined();
+    expect(AFTER_REVIEW_QUESTION.minConfidence).toBe(0.8);
+  });
+
+  for (const [label, answer, recorded] of ANSWERS) {
+    it(`${label}: records afterReview as \`${recorded}\` on the run and in the pull request's record`, () => {
+      const outcome = reviewedWith({ afterReview: answer });
+      // Only a decision that could not be made fails its step; a refusal is an answer.
+      expect(outcome.statuses.get('decide-after-review')).toBe(
+        answer === 'unavailable' ? 'failed' : 'succeeded',
+      );
+      expect(outcome.state['afterReview']).toBe(recorded);
+      expect(outcome.outputs.get('describe-pr')?.['afterReview']).toBe(recorded);
+    });
+  }
+
+  it('acts on no answer: every answer runs the same tasks, pushes the same way and opens the same pull request', () => {
+    const runs = ANSWERS.map(([, answer]) => reviewedWith({ afterReview: answer }));
+    const [first, ...rest] = runs;
+    for (const outcome of rest) {
+      expect(outcome.ran).toEqual(first?.ran);
+      expect(outcome.asked).toBe(first?.asked);
+      expect(outcome.pushed).toBe(first?.pushed);
+      expect(outcome.state['prUrl']).toBe(first?.state['prUrl']);
+    }
+    // And the same as a review with no findings at all, where nothing is decided.
+    const undecided = reviewedWith({ findings: [] });
+    expect(undecided.ran).toEqual(first?.ran.filter((id) => id !== 'decide-after-review'));
+    expect(undecided.pushed).toBe(first?.pushed);
+  });
+
+  it('is read by the pull request’s composition alone, and by no predicate', () => {
+    const readers = wf.tasks.filter((task) =>
+      JSON.stringify([task.when, task.inputBindings, task.actionPreview]).includes(
+        'decide-after-review',
+      ),
+    );
+    expect(readers.map((task) => task.taskId)).toEqual(['describe-pr']);
+    expect(JSON.stringify(taskOrThrow('describe-pr').when)).not.toContain('decide-after-review');
+    expect(wf.tasks.some((task) => JSON.stringify(task.when ?? null).includes('afterReview'))).toBe(
+      false,
+    );
+  });
+
+  it("hands on this review's findings as the open ones, replacing the earlier rounds' — a round's list never grows", () => {
+    const outcome = reviewedWith({ afterReview: FIX });
+    const described = HostCommitDescribeInputSchema.parse(outcome.inputs.get('describe-pr'));
+    expect(described.review?.findings?.map((f) => f.claim)).toEqual(FINDINGS.map((f) => f.claim));
+    const record = outcome.outputs.get('describe-pr')?.['findings'];
+    // The most severe first, so a bounded list keeps what matters most.
+    expect(PullRequestFindingsSchema.parse(record)).toEqual([
+      ...[RACE, LEAK, NAME].map(({ severity, file, line, claim }) => ({
+        severity,
+        file,
+        ...(line === undefined ? {} : { line }),
+        claim,
+        state: 'open',
+      })),
+    ]);
+    expect(outcome.state['findings']).toEqual(record);
+  });
+
+  it('records no decision where the review returned no findings or did not finish, since none was asked', () => {
+    for (const review of ['approve', 'failed', 'not-started'] as const) {
+      const outcome = reviewedWith({ review, findings: review === 'approve' ? [] : FINDINGS });
+      expect(outcome.ran, review).not.toContain('decide-after-review');
+      expect(outcome.state['afterReview'], review).toBeNull();
+    }
+  });
+
+  it('names its review run, whose findings a fix round is briefed from, every one whole', () => {
+    const outcome = reviewedWith({ afterReview: FIX });
+    expect(outcome.state['reviewRunId']).toBe('review-run');
+    expect(outcome.outputs.get('review-commit')?.['findings']).toEqual(FINDINGS);
+  });
+
+  it('says how many findings the bounded hand-on left out, and leaves it null where none', () => {
+    const many: Finding[] = Array.from({ length: HANDED_ON_FINDINGS_MAX_COUNT + 3 }, (_, i) => ({
+      severity: 'minor',
+      file: `src/f${String(i)}.ts`,
+      claim: `Finding ${String(i)}.`,
+      evidence: 'Shown.',
+    }));
+    const bounded = reviewedWith({ findings: many, afterReview: FIX });
+    expect(bounded.state['findings']).toHaveLength(HANDED_ON_FINDINGS_MAX_COUNT);
+    expect(bounded.state['findingsLeftOut']).toBe(3);
+    // The review run itself still holds every one of them.
+    expect(bounded.outputs.get('review-commit')?.['findings']).toHaveLength(many.length);
+    expect(reviewedWith({ afterReview: FIX }).state['findingsLeftOut']).toBeNull();
+  });
+
+  it('hands on none where its review finished finding nothing, and the open ones it was given where none finished', () => {
+    expect(reviewedWith({ review: 'approve', findings: [] }).state['findings']).toEqual([]);
+    for (const review of ['failed', 'not-started'] as const) {
+      expect(reviewedWith({ review }).state['findings'], review).toEqual([EARLIER_OPEN]);
+    }
+  });
+
+  it('offers only the two answers that route differently — unsure is the undecided record, not an option', () => {
+    expect(Object.keys(AFTER_REVIEW_QUESTION.options)).toEqual([
+      'fix_before_merge',
+      'publish_as_is',
+    ]);
+    expect(AFTER_REVIEW_ROUTES).toEqual(['fix_before_merge', 'publish_as_is']);
+  });
+
+  // A decline pushes nothing, whatever the posture and however it is recorded:
+  // skipped, as the harness does, or as the answer itself, which leaves the
+  // push to refuse on its own predicate.
+  for (const declineAs of ['skip', 'answer'] as const) {
+    it(`a decline recorded as ${declineAs === 'skip' ? 'a skip' : 'an answer'} pushes nothing, whatever the decision`, () => {
+      const outcome = reviewedWith({ decision: 'declined', declineAs, afterReview: FIX });
+      expect(outcome.asked).toBe(true);
+      expect(outcome.pushed).toBe(false);
+      expect(outcome.state['prUrl']).toBeUndefined();
+    });
+  }
+
+  it('leaves the push gate, the scan and the posture exactly as they were', () => {
+    // 316 D9: a decision reads text it can be steered by, so it is never a gate.
+    const push = taskOrThrow('push');
+    expect(push.when).toEqual({
+      anyOf: [
+        "tasks.approve-push.output.decision == 'approved'",
+        "tasks.read-push-approval.output.branchPolicy.pushApproval == 'never'",
+        "tasks.review-commit.output.verdict == 'approve'",
+      ],
+      onMissingRef: 'skip',
+    });
+    const reads = (task: WorkflowTask) =>
+      JSON.stringify([task.when, task.inputBindings, task.dependsOn]);
+    for (const gate of ['push', 'approve-push', 'read-push-approval', 'scan-commit']) {
+      expect(reads(taskOrThrow(gate) as WorkflowTask), gate).not.toMatch(/decide-/);
+    }
   });
 });

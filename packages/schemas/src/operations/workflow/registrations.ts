@@ -22,6 +22,10 @@ import type {
   WorkflowRunCancelOutputSchema as WorkflowRunCancelOutputSchemaT,
 } from './runCancelOp.js';
 import type {
+  WorkflowRunFailInputSchema as WorkflowRunFailInputSchemaT,
+  WorkflowRunFailOutputSchema as WorkflowRunFailOutputSchemaT,
+} from './runFailOp.js';
+import type {
   WorkflowRunDetailInputSchema as WorkflowRunDetailInputSchemaT,
   WorkflowRunDetailOutputSchema as WorkflowRunDetailOutputSchemaT,
 } from './runDetail.js';
@@ -71,6 +75,8 @@ interface WorkflowRegistrationSchemas {
   WorkflowRunResumeOutputSchema: typeof WorkflowRunResumeOutputSchemaT;
   WorkflowRunCancelInputSchema: typeof WorkflowRunCancelInputSchemaT;
   WorkflowRunCancelOutputSchema: typeof WorkflowRunCancelOutputSchemaT;
+  WorkflowRunFailInputSchema: typeof WorkflowRunFailInputSchemaT;
+  WorkflowRunFailOutputSchema: typeof WorkflowRunFailOutputSchemaT;
   WorkflowRunDetailInputSchema: typeof WorkflowRunDetailInputSchemaT;
   WorkflowRunDetailOutputSchema: typeof WorkflowRunDetailOutputSchemaT;
   WorkflowRunListAttentionInputSchema: typeof WorkflowRunListAttentionInputSchemaT;
@@ -113,6 +119,8 @@ export function createWorkflowOperationRegistrations(
     WorkflowRunResumeOutputSchema,
     WorkflowRunCancelInputSchema,
     WorkflowRunCancelOutputSchema,
+    WorkflowRunFailInputSchema,
+    WorkflowRunFailOutputSchema,
     WorkflowRunDetailInputSchema,
     WorkflowRunDetailOutputSchema,
     WorkflowRunListAttentionInputSchema,
@@ -507,6 +515,42 @@ export function createWorkflowOperationRegistrations(
       accessMode: 'write',
       inputZod: WorkflowRunCancelInputSchema,
       outputZod: WorkflowRunCancelOutputSchema,
+    },
+    {
+      stepType: 'workflow',
+      group: 'run',
+      verb: 'fail',
+      name: 'Fail Workflow Run',
+      agentTool: false,
+      actionLabel: 'Stopping the run\u2026',
+      semanticDescription:
+        'Fail the run this task belongs to, with a stated reason, where the skill decided that ' +
+        'what an earlier task returned ends it — the branch a decision takes when it cannot go ' +
+        'on, written once in the skill. The step always fails, non-retryable, with the reason as ' +
+        'its message and the task\u2019s failureInstruction beside it, so the run ends as one whose ' +
+        'task failed and wakes whoever started it.',
+      tags: ['workflow', 'run', 'fail'],
+      idempotency: 'idempotent',
+      mutates: false,
+      usage: {
+        oneLine: 'End the run as failed, with a reason bound from what decided it.',
+        whenToUse: [
+          'A decision task routed to a branch that cannot be recovered within the skill',
+          'A decision abstained, and the case is one a person or an agent outside the run must take',
+        ],
+        whenNotToUse: [
+          'An operation that fails on its own already fails the run — bind nothing to restate it',
+          'Stopping another run — use workflow.run.cancel',
+        ],
+        pitfalls: [
+          'Gate it with a when: unconditioned, it fails every run that reaches it',
+          'The reason is read by whoever is woken; bind it from the output that decided, not a fixed sentence',
+        ],
+        minimalExampleInput: { reason: 'The checks failed: tsc apps/x/tsconfig.json.' },
+      },
+      accessMode: 'read',
+      inputZod: WorkflowRunFailInputSchema,
+      outputZod: WorkflowRunFailOutputSchema,
     },
     {
       stepType: 'workflow',

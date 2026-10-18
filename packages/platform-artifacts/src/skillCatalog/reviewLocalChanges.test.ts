@@ -106,12 +106,14 @@ describe('Review Local Changes — the first harness inside a skill', () => {
     expect(REVIEW_LOCAL_CHANGES.description).toContain('not something to ask the coding agent for');
   });
 
-  it('promotes the verdict and the summary only — a promoted array reads as a preview', () => {
+  it('promotes the verdict, the summary a person reads, and the findings a publication decides on one at a time', () => {
     const promoted = (task?.promoteOutputs ?? []).map((p) => ('toState' in p ? p.toState : ''));
-    expect(promoted).toEqual(['verdict', 'reviewSummary']);
+    expect(promoted).toEqual(['verdict', 'reviewSummary', 'findings']);
     const declared = (wf.stateVariables ?? []).map((v) => v.variableId);
-    expect(declared).toEqual(['verdict', 'reviewSummary']);
+    expect(declared).toEqual(['verdict', 'reviewSummary', 'findings']);
     for (const id of promoted) expect(declared).toContain(id);
+    // The summary stays the review as it is reported; the findings are for a run to act on.
+    expect(wf.output?.primary).toBe('verdict');
   });
 
   it('makes the summary self-sufficient, in the schema and in the task prose', () => {

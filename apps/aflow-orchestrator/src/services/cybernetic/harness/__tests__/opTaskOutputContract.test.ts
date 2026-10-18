@@ -384,6 +384,36 @@ describe('applyOpTaskOutputContract — projection', () => {
     expect(failed.failureReason).toContain('Nothing has been pushed');
   });
 
+  // A task that starts a run and waits on it succeeds however that run ended,
+  // so a projection that cannot resolve on its output fails the task naming
+  // how the run ended — the one account the run's own output cannot give.
+  for (const outcome of ['failed', 'cancelled', 'paused'] as const) {
+    it(`names how the run a task waited on ended where its projection cannot resolve: ${outcome}`, async () => {
+      const instruction = 'The run this task started did not finish; its run says why.';
+      const { deps } = makeDeps({
+        [RAW_REF]: { runId: 'child-run', outcome, waiterId: 'waiter-1' },
+      });
+      const failed = await run(
+        deps,
+        opTaskDef({
+          outputProjection: {
+            result: { path: 'result.output.value', onMissing: 'error' as const },
+            outcome: { path: 'outcome', onMissing: 'error' as const },
+          },
+          failureInstruction: instruction,
+        }),
+      );
+      expect(failed.kind).toBe('failed');
+      if (failed.kind !== 'failed') return;
+      expect(
+        failed.failureReason?.startsWith(
+          `The run it started, child-run, ended ${outcome}. ${instruction} PROJECTION_FAILED: `,
+        ),
+        failed.failureReason,
+      ).toBe(true);
+    });
+  }
+
   it('fails Local Publish at the scan on a finding, naming where and saying nothing left the machine', async () => {
     const scan = getSkillCatalogEntry('publish-local-changes')?.bundle.workflow.tasks.find(
       (t) => t.taskId === 'scan-commit',

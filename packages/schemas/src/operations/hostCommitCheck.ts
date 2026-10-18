@@ -40,6 +40,9 @@ export const HOST_CHECK_OUTPUT_TAIL_BYTES = 1024 * 1024;
  */
 export const HOST_CHECK_TEST_TIMEOUTS_MAX = 20;
 
+/** The longest step name a check's report may give as the one that failed. */
+export const HOST_CHECK_FAILING_GUARD_MAX_CHARS = 1000;
+
 export const HostCommitCheckInputSchema = z.object({
   bindingId: HostBindingRef,
   sha: HostCommitShaSchema.describe(
@@ -121,13 +124,16 @@ export const HostCommitCheckOutputSchema = z.object({
         'names, that nothing else failed — what a machine under load does to a passing commit. ' +
         'At most `HOST_CHECK_TEST_TIMEOUTS_MAX`; the summary counts the rest.',
     ),
-  clearedOrRetriableSha: z
+  failingGuard: z
     .string()
+    .min(1)
+    .max(HOST_CHECK_FAILING_GUARD_MAX_CHARS)
     .optional()
     .describe(
-      'The commit as a full sha, present where the checks passed, the folder declares none, ' +
-        'or only `testTimeouts` failed them. A publication’s first run of the checks reads ' +
-        'this, so every other failure fails it and a run lost to load alone is run once more.',
+      'The step the checks name as the one that failed — a guard, a type check, a test run — ' +
+        'as they reported it in the file `AFLOW_CHECK_REPORT` names. Present only where the ' +
+        'checks did not pass and said which step it was. The summary names it, so whoever reads ' +
+        'the failure knows which step to run again.',
     ),
   receipt: HostCheckReceiptSchema.optional().describe(
     'What a push of the commit must carry as `check.receipt`, present wherever the checks ran, ' +

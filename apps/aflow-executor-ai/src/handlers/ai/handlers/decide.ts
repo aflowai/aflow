@@ -3,8 +3,18 @@
  */
 import type { ExecutorContext, StepResult } from '@aflow/executor-runtime';
 import { failureWithError, successWithData } from '@aflow/executor-runtime';
-import type { AiDecideInput, AiDecideOutput, TenantId, StepExecutionId } from '@aflow/schemas';
-import { resolveDecisionAnswers } from '@aflow/ai-client';
+import {
+  type AiDecideInput,
+  type AiDecideOutput,
+  DECISION_NO_MODEL,
+  type TenantId,
+  type StepExecutionId,
+} from '@aflow/schemas';
+import {
+  decisionRequestQuestions,
+  resolveDecisionAnswers,
+  splitDecisionAnswers,
+} from '@aflow/ai-client';
 import { getAIClientForContext } from '../aiClient.js';
 import { buildUsageBreakdown } from '../helpers.js';
 import { resolveDecisionModel } from './decisionModel.js';
@@ -18,6 +28,22 @@ export async function handleDecide(
   deps: HandlerDeps,
 ): Promise<StepResult> {
   try {
+    const questions = decisionRequestQuestions(params);
+    // Only an empty `each` asks nothing; the answer is known without a model,
+    // and so without the credential resolving one would need.
+    if (Object.keys(questions).length === 0) {
+      const { answers, each } = splitDecisionAnswers(params, {});
+      const output: AiDecideOutput = {
+        answers,
+        ...(each !== undefined ? { each } : {}),
+        model: params.model ?? DECISION_NO_MODEL,
+        calibration: 'self_reported',
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+        latencyMs: 0,
+      };
+      return await successWithData(ctx, output);
+    }
+
     const imageRefs = params.images ?? [];
     const model = await resolveDecisionModel(ctx, deps, {
       model: params.model,
@@ -45,7 +71,7 @@ export async function handleDecide(
     const response = await client.decide({
       model,
       state: params.state,
-      questions: params.questions,
+      questions,
       ...(images.length > 0 ? { images } : {}),
       tenantId: ctx.job.tenantId as TenantId,
       runId: ctx.runId,
@@ -53,8 +79,13 @@ export async function handleDecide(
       attempt: ctx.job.attempt,
     });
 
+    const { answers, each } = splitDecisionAnswers(
+      params,
+      resolveDecisionAnswers(questions, response.answers),
+    );
     const output: AiDecideOutput = {
-      answers: resolveDecisionAnswers(params.questions, response.answers),
+      answers,
+      ...(each !== undefined ? { each } : {}),
       model: response.model,
       calibration: client.getModel(model)?.decision?.confidence ?? 'self_reported',
       usage: response.usage,

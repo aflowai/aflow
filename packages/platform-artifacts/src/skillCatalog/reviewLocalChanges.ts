@@ -19,6 +19,51 @@ Write the summary as the deliverable: it names every finding inline — severity
 
 Edit no file, stage nothing and commit nothing. The result is the whole deliverable.`;
 
+/** A finding as the review returns it: what a publication waiting on it records, and argues from. */
+export const REVIEW_FINDING_SCHEMA = {
+  type: 'object',
+  required: ['severity', 'file', 'claim', 'evidence'],
+  additionalProperties: false,
+  properties: {
+    severity: {
+      type: 'string',
+      enum: ['blocker', 'major', 'minor', 'nit'],
+      description:
+        'blocker: must not ship. major: wrong or unsafe in a case that will occur. minor: a real defect with narrow effect. nit: a preference.',
+    },
+    file: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 1000,
+      description: 'Path relative to the repository root.',
+    },
+    line: {
+      type: 'integer',
+      minimum: 1,
+      description: 'Line the finding is about, where it is about one.',
+    },
+    claim: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 4000,
+      description: 'What is wrong, stated so it can be argued with.',
+    },
+    evidence: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 8000,
+      description:
+        'What in this checkout shows it — the code, the caller, the test that does not cover it.',
+    },
+    suggestion: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 8000,
+      description: 'What would settle it, where the review can say.',
+    },
+  },
+};
+
 const RESULT_SCHEMA = {
   type: 'object',
   required: ['verdict', 'summary', 'findings'],
@@ -41,49 +86,7 @@ const RESULT_SCHEMA = {
       type: 'array',
       maxItems: 50,
       description: 'Everything worth acting on, ordered by severity. Empty when nothing was found.',
-      items: {
-        type: 'object',
-        required: ['severity', 'file', 'claim', 'evidence'],
-        additionalProperties: false,
-        properties: {
-          severity: {
-            type: 'string',
-            enum: ['blocker', 'major', 'minor', 'nit'],
-            description:
-              'blocker: must not ship. major: wrong or unsafe in a case that will occur. minor: a real defect with narrow effect. nit: a preference.',
-          },
-          file: {
-            type: 'string',
-            minLength: 1,
-            maxLength: 1000,
-            description: 'Path relative to the repository root.',
-          },
-          line: {
-            type: 'integer',
-            minimum: 1,
-            description: 'Line the finding is about, where it is about one.',
-          },
-          claim: {
-            type: 'string',
-            minLength: 1,
-            maxLength: 4000,
-            description: 'What is wrong, stated so it can be argued with.',
-          },
-          evidence: {
-            type: 'string',
-            minLength: 1,
-            maxLength: 8000,
-            description:
-              'What in this checkout shows it — the code, the caller, the test that does not cover it.',
-          },
-          suggestion: {
-            type: 'string',
-            minLength: 1,
-            maxLength: 8000,
-            description: 'What would settle it, where the review can say.',
-          },
-        },
-      },
+      items: REVIEW_FINDING_SCHEMA,
     },
     checksRun: {
       type: 'array',
@@ -143,7 +146,7 @@ const BRIEF_MAX_TURNS = 8;
 
 const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'review-local-changes',
-  version: 7,
+  version: 8,
   name: 'Review Local Changes',
   tagline:
     "Review committed changes in a connected repository with the machine's own coding agent.",
@@ -257,6 +260,7 @@ const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
           promoteOutputs: [
             { kind: 'output_path' as const, path: 'result.verdict', toState: 'verdict' },
             { kind: 'output_path' as const, path: 'result.summary', toState: 'reviewSummary' },
+            { kind: 'output_path' as const, path: 'result.findings', toState: 'findings' },
           ],
         },
       ],
@@ -274,6 +278,15 @@ const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
           name: 'Review summary',
           description:
             'The review as a person reads it: what the range does, every finding with its severity and its file and line, blockers first, and the checks that ran with their outcome.',
+          required: false,
+          sensitive: false,
+          immutable: false,
+        },
+        {
+          variableId: 'findings',
+          name: 'Review findings',
+          description:
+            'Every finding as the review returned it — severity, file, line, claim, evidence and suggestion — for a run that acts on them one at a time, as a publication deciding on a fix round does.',
           required: false,
           sensitive: false,
           immutable: false,
