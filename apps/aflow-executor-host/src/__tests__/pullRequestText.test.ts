@@ -192,8 +192,10 @@ describe('host.commit.describe', () => {
     expect(messages).toEqual([...messages].sort((a, b) => a - b));
     expect(changes).toBeLessThan(messages[0] ?? -1);
 
-    // The review round's findings, closed and left open, and this range's review.
+    // This range's review, then — last — the review round's findings, closed and left open.
     const review = at('## Review');
+    const findings = at('## Findings');
+    expect(findings).toBeLessThan(at('### Closed'));
     expect(at('### Closed')).toBeLessThan(
       at('- **major** `scripts/verify-commit.mjs:412` — The old cache directory is left on disk.'),
     );
@@ -214,8 +216,8 @@ describe('host.commit.describe', () => {
     const gaps = at('## Known gaps');
     at(`- ${GAPS[0] ?? ''}`);
 
-    expect([changes, review, verification, gaps]).toEqual(
-      [changes, review, verification, gaps].sort((a, b) => a - b),
+    expect([changes, review, verification, gaps, findings]).toEqual(
+      [changes, review, verification, gaps, findings].sort((a, b) => a - b),
     );
   });
 
@@ -457,18 +459,20 @@ describe('composePullRequest', () => {
     }
   });
 
-  it('lists, whole, the findings a publish_as_is leaves open — and lists them for no other answer', () => {
+  it('lists the findings a publish_as_is leaves open — and lists them for no other answer', () => {
     const listed = '- **major** `src/cache.ts:40` — The cache is never invalidated after a write.';
     const asIs = composePullRequest(reviewed('publish_as_is'), commits).body;
     // A major among them: the push it is pushed with was the operator's to clear.
     expect(asIs).toContain(
-      "With a major among them, the push went out only on the operator's approval, and leaves these open:",
+      "With a major among them, the push went out only on the operator's approval, and leaves this review's findings open, listed under **Left open by `publish_as_is`**.",
     );
-    expect(asIs).toContain(listed);
+    expect(asIs).toContain(`### Left open by \`publish_as_is\`\n\n${listed}`);
     expect(asIs).not.toContain(REVIEW_FINDING.evidence);
     const minor = composePullRequest(reviewed('publish_as_is', MINOR_FINDING), commits);
     expect(minor.severest).toBe('minor');
-    expect(minor.body).toContain('The push went without asking, and leaves these open:');
+    expect(minor.body).toContain(
+      "The push went without asking, and leaves this review's findings open, listed under **Left open by `publish_as_is`**.",
+    );
     expect(minor.body).toContain('- **minor** `src/cache.ts:40`');
     for (const answer of ['fix_before_merge', null] as const) {
       expect(composePullRequest(reviewed(answer), commits).body, String(answer)).not.toContain(
@@ -521,6 +525,77 @@ describe('composePullRequest', () => {
       reason,
       overrode: 'fix_before_merge',
     });
+  });
+
+  it("carries a publish_as_is's decision, override record, checks and gaps whatever the length of its findings: the findings come after them, listed whole as far as GitHub's limit leaves room and the rest counted", () => {
+    const reason = 'A person labelled the pull request hands-off: they take the findings on.';
+    const many = Array.from({ length: 40 }, (_, index) => ({
+      ...MINOR_FINDING,
+      line: index + 1,
+      claim: `Finding ${String(index)}: ${'the cache is never invalidated after a write. '.repeat(80)}`,
+    }));
+    const check = {
+      passed: true,
+      summary: '`node scripts/verify-commit.mjs` passed.',
+      tail: CHECK_TAIL,
+    };
+    for (const summary of [undefined, 'Their own account of the change.']) {
+      const label = summary === undefined ? 'no summary' : 'a summary';
+      const { body, findings } = composePullRequest(
+        HostCommitDescribeInputSchema.parse({
+          bindingId: 'hb_app',
+          range,
+          review: {
+            verdict: 'comment',
+            outcome: 'completed',
+            reviewSummary: 'Read.',
+            findings: many,
+          },
+          afterReview: 'fix_before_merge',
+          override: { by: 'hands_off_label', reason },
+          check,
+          gaps: GAPS,
+          ...(summary !== undefined ? { summary } : {}),
+        }),
+        commits,
+      );
+      expect(
+        many.reduce((sum, f) => sum + f.claim.length, 0),
+        label,
+      ).toBeGreaterThan(PULL_REQUEST_BODY_MAX_CHARS);
+      expect(body.length, label).toBeLessThanOrEqual(PULL_REQUEST_BODY_MAX_CHARS);
+      expect(body.endsWith(LOCAL_PUBLISH_PULL_REQUEST_MARKER), label).toBe(true);
+      // Fitted by the findings' own cap, never by the cut that drops the end of the body.
+      expect(body, label).not.toContain('The description stops here');
+      if (summary !== undefined) expect(body.startsWith(`${summary}\n\n`), label).toBe(true);
+
+      const recorded = [
+        'Decided after the review: `publish_as_is`',
+        `The decision was \`fix_before_merge\`, set aside by the \`hands-off\` label: ${reason}`,
+        '## Verification',
+        check.summary,
+        "The pull request's own checks remain the proof.",
+        '## Known gaps',
+        `- ${GAPS[0] ?? ''}`,
+      ];
+      const listing = body.indexOf('## Findings');
+      expect(listing, label).toBeGreaterThan(0);
+      for (const text of recorded) {
+        const index = body.indexOf(text);
+        expect(index, `${label}: ${text}`).toBeGreaterThan(0);
+        expect(index, `${label}: ${text}`).toBeLessThan(listing);
+      }
+
+      // Each listed finding whole, in the review's order, and the rest counted.
+      const listed = many.filter((f) =>
+        body.includes(`- **minor** \`src/cache.ts:${String(f.line)}\` — ${f.claim}`),
+      );
+      expect(listed.length, label).toBeGreaterThan(0);
+      expect(listed, label).toEqual(many.slice(0, listed.length));
+      expect(body, label).toContain(`…and ${String(many.length - listed.length)} more`);
+      // The hand-on is its own bound, untouched by the body's.
+      expect(findings, label).toHaveLength(HANDED_ON_FINDINGS_MAX_COUNT);
+    }
   });
 
   it('records no decision where the review returned no findings, since none was asked', () => {

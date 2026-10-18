@@ -142,39 +142,33 @@ function overrideLine(override: AfterReviewOverrideRecord): string {
   return `The decision was \`${override.overrode}\`, set aside by ${OVERRIDE_BY[override.by]}: ${override.reason}`;
 }
 
+const AS_IS_LIST = 'Left open by `publish_as_is`';
+
 /**
  * How a `publish_as_is` cleared its push, as the gate decides it from the
  * same record: over a blocker or a major, or on the operator's word, it went
  * out only on the operator's approval — this text is pushed only after it.
  */
 function publishedAsIsClearance(record: PullRequestReviewRecord): string {
+  const leaves = `and leaves this review's findings open, listed under **${AS_IS_LIST}**.`;
   if (record.severest === 'blocker' || record.severest === 'major') {
-    return `With a ${record.severest} among them, the push went out only on the operator's approval, and leaves these open:`;
+    return `With a ${record.severest} among them, the push went out only on the operator's approval, ${leaves}`;
   }
   if (record.afterReviewOverride?.by === 'operator') {
-    return "The push went out on the operator's approval, the word that set the decision aside, and leaves these open:";
+    return `The push went out on the operator's approval, the word that set the decision aside, ${leaves}`;
   }
-  return 'The push went without asking, and leaves these open:';
+  return `The push went without asking, ${leaves}`;
 }
 
 /**
- * The earlier rounds' findings are listed, closed and left open, since no
- * text of this round names them. This round's review is told by its summary,
- * which names every finding it read with its severity and `file:line` beside
- * the checks it ran. Only a `publish_as_is` lists them again, whole: those
- * are the findings the merge leaves open, and the pull request is where a
- * reader finds what the decision let through, and how its push was cleared.
+ * This round's review is told by its summary, which names every finding it
+ * read with its severity and `file:line` beside the checks it ran, and then
+ * by what the publication recorded of it: the decision, how a `publish_as_is`
+ * was pushed, and an override. The findings themselves are listed last, in
+ * `findingsSection`, so no length of them can push this record out.
  */
 function reviewSection(input: HostCommitDescribeInput, record: PullRequestReviewRecord): string {
-  const findings = input.findings ?? [];
   const parts = ['## Review'];
-  for (const [state, heading] of [
-    ['closed', '### Closed'],
-    ['open', '### Left open'],
-  ] as const) {
-    const listed = findings.filter((finding) => finding.state === state);
-    if (listed.length > 0) parts.push(heading, listed.map(findingLine).join('\n'));
-  }
   const review = input.review;
   if (review === undefined) {
     parts.push('No review of this range finished before it was pushed.');
@@ -187,16 +181,74 @@ function reviewSection(input: HostCommitDescribeInput, record: PullRequestReview
     if (review.reviewSummary) parts.push(review.reviewSummary);
   }
   if (record.afterReview !== undefined) parts.push(AFTER_REVIEW_LINES[record.afterReview]);
-  if (record.afterReview === 'publish_as_is') {
-    parts.push(publishedAsIsClearance(record));
-    const leftOpen = (review?.findings ?? []).map((finding) =>
-      findingLine({ ...finding, state: 'open' }),
-    );
-    parts.push(leftOpen.join('\n'));
-  }
+  if (record.afterReview === 'publish_as_is') parts.push(publishedAsIsClearance(record));
   if (record.afterReviewOverride !== undefined) {
     parts.push(overrideLine(record.afterReviewOverride));
   }
+  return parts.join(SECTION_BREAK);
+}
+
+/** What closes a list of findings the body had no room to finish. */
+function moreFindings(count: number): string {
+  return `…and ${String(count)} more, past the room GitHub's limit leaves the list; the review's run holds every one.`;
+}
+
+/**
+ * The findings, under the record of what was decided about them: those a
+ * `publish_as_is` leaves open first — what the merge lets through — then the
+ * earlier rounds', closed and left open, since no text of this round names
+ * them. They are listed as far as `room` reaches, a whole line at a time, and
+ * the rest counted, so the list never runs past the limit into what the
+ * body must carry. Empty where there is none to list.
+ */
+function findingsSection(
+  input: HostCommitDescribeInput,
+  record: PullRequestReviewRecord,
+  room: number,
+): string {
+  const earlier = input.findings ?? [];
+  const groups: Array<[heading: string, lines: string[]]> = [
+    [
+      `### ${AS_IS_LIST}`,
+      record.afterReview === 'publish_as_is'
+        ? (input.review?.findings ?? []).map((finding) =>
+            findingLine({ ...finding, state: 'open' }),
+          )
+        : [],
+    ],
+    ['### Closed', earlier.filter((f) => f.state === 'closed').map(findingLine)],
+    ['### Left open', earlier.filter((f) => f.state === 'open').map(findingLine)],
+  ];
+  const total = groups.reduce((sum, [, lines]) => sum + lines.length, 0);
+  if (total === 0) return '';
+
+  const heading = '## Findings';
+  // Held back for the count of the rest, at the most it can say.
+  const reserve = SECTION_BREAK.length + moreFindings(total).length;
+  const parts = [heading];
+  let used = heading.length;
+  let listed = 0;
+  let full = false;
+  for (const [groupHeading, lines] of groups) {
+    const kept: string[] = [];
+    for (const line of lines) {
+      const cost =
+        (kept.length === 0
+          ? SECTION_BREAK.length + groupHeading.length + SECTION_BREAK.length
+          : 1) + line.length;
+      const reserved = listed + 1 < total ? reserve : 0;
+      if (used + cost + reserved > room) {
+        full = true;
+        break;
+      }
+      kept.push(line);
+      used += cost;
+      listed += 1;
+    }
+    if (kept.length > 0) parts.push(groupHeading, kept.join('\n'));
+    if (full) break;
+  }
+  if (listed < total) parts.push(moreFindings(total - listed));
   return parts.join(SECTION_BREAK);
 }
 
@@ -242,8 +294,10 @@ function gapsSection(gaps: readonly string[] | undefined): string {
  * the subject of the first commit, the round that started the branch. The
  * body is always composed, and a summary a person gave heads it, never
  * replaces it: what the publication records — the decision on the findings,
- * those it leaves open, an override — is under it whatever they wrote. Where
- * the body would pass GitHub's limit, the account of the commits gives way
+ * an override, the checks, the gaps, the findings it leaves open — is under
+ * it whatever they wrote. The findings come last and are listed only as far
+ * as the room the rest leaves them, the remainder counted; where the body
+ * would still pass GitHub's limit, the account of the commits gives way
  * first, then the summary: the rest is what a reader acts on, and the
  * commits are on the branch whole.
  */
@@ -253,11 +307,22 @@ export function composePullRequest(
 ): { title: string; body: string } & PullRequestReviewRecord {
   const title = input.title ?? commits[0]?.subject ?? '';
   const record = pullRequestReviewRecord(input);
-  const rest = [
+  const recorded = [
     reviewSection(input, record),
     verificationSection(input),
     gapsSection(input.gaps),
   ].join(SECTION_BREAK);
+  // The least a summary keeps: itself where shorter than the note cutting it, else the note.
+  const summaryLeast =
+    input.summary === undefined
+      ? 0
+      : Math.min(input.summary.length, SUMMARY_CUT_NOTE.length) + SECTION_BREAK.length;
+  const findings = findingsSection(
+    input,
+    record,
+    BODY_ROOM - recorded.length - 2 * SECTION_BREAK.length - CHANGES_LEAST.length - summaryLeast,
+  );
+  const rest = findings === '' ? recorded : `${recorded}${SECTION_BREAK}${findings}`;
   const summaryRoom = BODY_ROOM - rest.length - 2 * SECTION_BREAK.length - CHANGES_LEAST.length;
   const head =
     input.summary === undefined

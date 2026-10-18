@@ -1,10 +1,9 @@
 import {
-  SHEPHERD_HANDOFF_PINS,
   SHEPHERD_HANDS_OFF_LABEL,
-  SHEPHERD_LEASE_ROOT,
   SHEPHERD_RESPONSE_PRESETS,
   type WorkflowRunDecideRule,
 } from '@aflow/schemas';
+import { HANDOFF_PIN_PATH } from './localPrShepherdHandoff.js';
 import { SHEPHERD_BUDGET_SPENT } from './localPrShepherdRules.js';
 import { bind, ctx, github, out, runInput, SKIP } from './localPrShepherdWiring.js';
 
@@ -127,19 +126,6 @@ const claimed = (authority: string) => `tasks.claim-override.output.decision == 
 
 const REPOSITORY = { owner: runInput('owner'), repo: runInput('repo') };
 const NUMBER = { number: out('read-override-pr', 'data.pullRequests[0].number') };
-
-/** Where the shepherd pins a pull request's handoff, as it writes it. */
-const HANDOFF_PIN_PATH = {
-  $concat: [
-    `${SHEPHERD_LEASE_ROOT}/`,
-    bind('owner'),
-    '/',
-    bind('repo'),
-    `/${SHEPHERD_HANDOFF_PINS}/`,
-    { $text: [bind('number')] },
-    '.json',
-  ],
-};
 
 /**
  * The tasks that read and check an override, between the decision on the

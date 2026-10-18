@@ -53,6 +53,7 @@ import {
 } from './publishLocalChangesDecisions.js';
 import { SKILL_CATALOG } from './index.js';
 import { LOCAL_PR_SHEPHERD } from './localPrShepherd.js';
+import { HANDOFF_PIN_PATH } from './localPrShepherdHandoff.js';
 import { REVIEW_LOCAL_CHANGES } from './reviewLocalChanges.js';
 
 const wf = PUBLISH_LOCAL_CHANGES.bundle.workflow;
@@ -3211,6 +3212,26 @@ describe("Publish Local Changes — the push gate follows the decision on a revi
         }
       });
     }
+
+    it("reads the shepherd's pin at the one path the shepherd writes and reads it at: the same binding, not a copy of its spelling", () => {
+      const pathOf = (task: WorkflowTask | undefined): unknown => {
+        const template = task?.inputTemplate as
+          { path?: unknown; target?: { path?: unknown } } | undefined;
+        return template?.target?.path ?? template?.path;
+      };
+      const shepherdTasks = new Map(
+        LOCAL_PR_SHEPHERD.bundle.workflow.tasks.map((task) => [task.taskId, task]),
+      );
+      expect(pathOf(taskById.get('read-override-pin'))).toBe(HANDOFF_PIN_PATH);
+      expect(pathOf(shepherdTasks.get('remember-handoff'))).toBe(HANDOFF_PIN_PATH);
+      expect(pathOf(shepherdTasks.get('read-handoff-pin'))).toBe(HANDOFF_PIN_PATH);
+      // Bound from what the verification binds: the repository and the pull request's number.
+      expect(Object.keys(taskById.get('read-override-pin')?.inputBindings ?? {}).sort()).toEqual([
+        'number',
+        'owner',
+        'repo',
+      ]);
+    });
 
     it('verified, still asks over a blocker or a major: it sets the decision aside, not the severities', () => {
       const outcome = overridden(LABEL, { findings: FINDINGS, onGitHub: { handsOff: true } });

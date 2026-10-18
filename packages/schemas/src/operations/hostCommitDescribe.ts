@@ -275,7 +275,7 @@ function fitted(finding: PullRequestFinding): PullRequestFinding {
  * The findings a publication hands on, held within their share of a later
  * publication's inputs: the most severe first, as many as the count allows,
  * each cut to its bytes, and how many the count left out, where it left any.
- * The pull request's own text keeps every finding whole, and the review run
+ * The pull request's own text lists them whole as far as its limit leaves room, and the review run
  * keeps every finding as it returned them, which is what a fix round reads.
  */
 function handedOn(
@@ -375,8 +375,9 @@ export const HostCommitDescribeOutputSchema = z.object({
     .max(PULL_REQUEST_BODY_MAX_CHARS)
     .describe(
       "The pull request's body: the summary given, where one was, then what the branch " +
-        "changes — every commit's message, oldest first — the review's findings closed and left open, the " +
-        "checks' results as verification, and the gaps the commissions recorded. Read for " +
+        "changes — every commit's message, oldest first — the review and the decision on its " +
+        "findings, the checks' results as verification, the gaps the commissions recorded, and " +
+        'last the findings — closed and left open — as far as the limit leaves room. Read for ' +
         'secrets under the same rules as the commits before it is returned.',
     ),
   commits: z
