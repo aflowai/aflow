@@ -159,7 +159,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
       ],
       authKind: 'bearer',
       setupNote:
-        "Bind the GitHub connector for the space with a token that reads pull requests, checks and Actions and writes comments. A job's log is served from a signed URL on Azure blob storage: the binding allows redirects to `*.blob.core.windows.net` and `*.actions.githubusercontent.com`, and the token is not sent there.",
+        "Bind the GitHub connector for the space with a token that reads pull requests, checks and Actions and writes comments. A job's log is served from a signed URL on Azure blob storage, which `getJobLogs` follows without the token; the binding allows no host but api.github.com.",
     },
   ],
   bundle: {

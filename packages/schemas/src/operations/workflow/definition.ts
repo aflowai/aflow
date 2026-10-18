@@ -15,7 +15,7 @@ import { WorkflowTaskSchema } from './task.js';
  * The most tasks a stored workflow holds. A ceiling, not a design target: a
  * task is one operation, so a skill that reads five things, decides, and acts
  * one of four ways is twenty tasks before it records anything — the Local PR
- * Shepherd is twenty-three. What compose-skill drafts is bounded separately,
+ * Shepherd is twenty-nine. What compose-skill drafts is bounded separately,
  * by what a drafting turn can hold.
  */
 export const WORKFLOW_TASKS_MAX = 32;

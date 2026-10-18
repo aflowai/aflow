@@ -50,6 +50,19 @@ allowlist is enforced against the **resolved** host.
   Base URL, describe each), `bind-capability` in chat, or a curated catalog entry.
   The Connect dialog renders the template as a fill-in-the-blank Site URL.
 
+## Redirect hosts are an endpoint's, never a binding's
+
+A binding sends its credential to every host in its `egressPolicy.allowedHosts` on a
+direct-URL call, so every host a binding is created with — the definition's base host and
+its `suggestedEgressPolicy.additionalHosts` — can receive the token. A host an API only
+_redirects_ to (a signed download on a storage host anyone can create an account on) does not
+belong there. It is the endpoint's **`redirectHosts`**: the executor follows a redirect from
+that endpoint to one of them without the binding's credential, judges the hop against that list
+alone, and no other endpoint, no direct-URL call and no host-matched call reaches it. GitHub's
+`getJobLogs` is the worked example — its log is served from `*.blob.core.windows.net`, and a
+GitHub binding allows `api.github.com` and nothing else. The tenant allowlist judges an
+endpoint's redirect hosts like any other declared host.
+
 ## Installable connectors (catalog)
 
 The **head** connectors (JIRA, GitHub, …) ship as curated `ConnectorCatalogEntry`

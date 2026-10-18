@@ -709,7 +709,7 @@ export function createWorkflowOperationRegistrations(
         ],
         pitfalls: [
           'Rules are read in order and the first that holds wins: put the narrower rule first.',
-          'A path through a value the state does not hold reads as null, so write a rule that must not fire on a missing read as `!= <expected>`, not `== <unexpected>`.',
+          'A path through a value the state does not hold reads as null, and null `!=` any value holds — so a rule that must not fire on a missing read names the value it fires on with `==`, or, where only `!=` will do, checks the read is present first: `allOf: [<path> != null, <path> != <expected>]`.',
           'Ordering comparisons (`>`, `>=`, `<`, `<=`) hold only between numbers.',
         ],
         minimalExampleInput: {

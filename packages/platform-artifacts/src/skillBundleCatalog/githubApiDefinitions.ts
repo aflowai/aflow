@@ -50,6 +50,7 @@ export const GITHUB_API_DEFINITION: BundledApiDefinition = {
         ...(ep.responseTransformPresetId !== undefined
           ? { responseTransformPresetId: ep.responseTransformPresetId }
           : {}),
+        ...(ep.redirectHosts !== undefined ? { redirectHosts: ep.redirectHosts } : {}),
       };
     }),
   },

@@ -59,7 +59,7 @@ export const GITHUB_CONNECTOR: ConnectorCatalogEntry = {
     'Provide a GitHub token (a fine-grained personal access token or a GitHub App installation ' +
     'token) with repository, pull-request, checks and actions access. It is sent as ' +
     "Authorization: Bearer <token>, to api.github.com only: a job's log is served from a signed " +
-    'URL on another host, which the binding has to allow, and the token is not sent there.',
+    'URL on Azure blob storage, which is followed without the token.',
   credentialPrompts: [
     {
       authField: 'credentialKey',
@@ -76,14 +76,11 @@ export const GITHUB_CONNECTOR: ConnectorCatalogEntry = {
     version: '1',
     callMode: 'endpoint',
     defaultHeaders: { Accept: 'application/vnd.github+json' },
-    // `getJobLogs` answers with a redirect to a signed URL on Azure blob
-    // storage (older runs: actions.githubusercontent.com). The executor drops
-    // the token on any redirect off api.github.com.
-    suggestedEgressPolicy: {
-      allowedMethods: ['GET', 'POST', 'PUT', 'PATCH'],
-      allowCrossHostRedirects: true,
-      additionalHosts: ['*.blob.core.windows.net', '*.actions.githubusercontent.com'],
-    },
+    // No host beyond api.github.com: a binding sends its token to every host
+    // in its allowedHosts on a direct-URL call. The signed log URL
+    // `getJobLogs` redirects to is that endpoint's `redirectHosts`, which no
+    // binding ever carries.
+    suggestedEgressPolicy: { allowedMethods: ['GET', 'POST', 'PUT', 'PATCH'] },
     tags: ['developer-tools', 'github'],
     endpoints: [
       {
@@ -336,7 +333,7 @@ export const GITHUB_CONNECTOR: ConnectorCatalogEntry = {
         endpointId: 'getJobLogs',
         name: "Get a job's log",
         description:
-          "The end of a GitHub Actions job's log: its last 300 lines, fewer where those pass 60 KB — where a failing test's assertion and a dependency audit's advisories are. Returned as { excerpt, lines, totalLines, bytes, truncated }. GitHub redirects to a signed URL on another host, which the binding must allow.",
+          "The end of a GitHub Actions job's log: its last 300 lines, fewer where those pass 60 KB — where a failing test's assertion and a dependency audit's advisories are. Returned as { excerpt, lines, totalLines, bytes, truncated }. GitHub redirects to a signed URL on Azure blob storage, followed without the token.",
         method: 'GET',
         pathTemplate: '/repos/{owner}/{repo}/actions/jobs/{job_id}/logs',
         params: [
@@ -351,6 +348,8 @@ export const GITHUB_CONNECTOR: ConnectorCatalogEntry = {
           },
         ],
         responseTransformPresetId: JOB_LOG_TAIL_PRESET,
+        // Older runs' logs are served from actions.githubusercontent.com.
+        redirectHosts: ['*.blob.core.windows.net', '*.actions.githubusercontent.com'],
         tags: ['ci', 'actions'],
       },
       {

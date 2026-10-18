@@ -29,7 +29,7 @@
   },
   "coding-pr-loop": {
     "version": 5,
-    "contentHash": "4515606579112d5c2ebc645a5bbe28eec62879a1c9a57041c769289771b4bd73"
+    "contentHash": "f9686df69bd177f48306847751ec8f30c7efa8e3af507479929e150efa4b89a6"
   },
   "etoro-account": {
     "version": 1,
@@ -65,7 +65,7 @@
   },
   "github": {
     "version": 5,
-    "contentHash": "f7920bbd108de663b9e0a874488bb1fe6dbe081a37cbc56fc3f6b2e716aa9e26"
+    "contentHash": "e76bf5ebf83c59ce847a75463698c5cc7dfa61427b3770302e80555cfde6395d"
   },
   "gmail": {
     "version": 1,
@@ -105,11 +105,11 @@
   },
   "local-publish": {
     "version": 33,
-    "contentHash": "e486525cbbaa93253439789e81dc73ba6aac9b0624d1ba57e2dc80b1d85370e8"
+    "contentHash": "66ead1c80196f905abc6be25e7e1e2abd7b220103e32dfc9e66ac0baeec41d84"
   },
   "local-shepherd": {
     "version": 1,
-    "contentHash": "c47f4e15f7acd2a34e225a564ed48537ce031c99a54214ca2f3386d3f59a2e4f"
+    "contentHash": "f1f4fdc1d12ba39353a9f824f42bc5bc39fab2d82836b8c11752bc5651477af2"
   },
   "newsapi": {
     "version": 1,

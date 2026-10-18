@@ -212,6 +212,16 @@ export const ApiEndpointSchema = z.object({
         'response.transformPresetId on the call takes precedence. Declared-transform failures ' +
         'are fail-loud (API_RESPONSE_TRANSFORM_FAILED), never a silent raw-body fallback.',
     ),
+  redirectHosts: z
+    .array(z.string().max(256))
+    .max(20)
+    .optional()
+    .describe(
+      "Hosts this endpoint's response may redirect to (exact or `*.suffix`), followed " +
+        "without the binding's credential — e.g. a signed download URL on a storage host. " +
+        "They never join a binding's allowedHosts, so no direct-URL call, and no host-matched " +
+        "call, reaches them with the binding's credential.",
+    ),
   tags: z.array(z.string().max(64)).max(20).default([]),
   examples: z
     .array(

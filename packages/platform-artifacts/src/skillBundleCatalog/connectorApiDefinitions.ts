@@ -84,6 +84,7 @@ export function bundledApiDefinitionFromConnector(
       ...(ep.responseTransformPresetId !== undefined
         ? { responseTransformPresetId: ep.responseTransformPresetId }
         : {}),
+      ...(ep.redirectHosts !== undefined ? { redirectHosts: ep.redirectHosts } : {}),
       ...(ep.description !== undefined
         ? { summary: ep.description.slice(0, DRAFT_SUMMARY_MAX) }
         : {}),
