@@ -1,13 +1,13 @@
 import type { SkillCatalogEntry } from '@aflow/schemas';
 
-const REVIEW_TASK = `Review the changes in a revision range of this repository and report what is wrong with them. This checkout is an isolated copy of the connected folder at its last commit, so only committed work is visible here.
+const REVIEW_TASK = `Review the changes in a revision range of this repository and report what is wrong with them. This checkout is an isolated copy of the connected folder detached at the commit the range ends at — the commit this review judges — so every file on disk is that file as the range leaves it, and a check run here runs on the change. The range's base names only where the diff starts; it is never what is checked out. Only committed work is visible here.
 
 The review request arrives as the inputs of this task: \`range\` is the revision range to review, \`focus\` is the lens to weight when it is present, and \`depth\` is \`brief\`, \`standard\` or \`deep\` — absent means \`standard\`.
 
 How to review:
 
 - Read the range with git and establish what each commit set out to do before judging how it did it. For a range \`<base>..<sha>\`, the commits are \`git log <base>..<sha>\`, and what they change is the three-dot diff, \`git diff <base>...<sha>\`, taken from where the range's two ends meet: a branch its base has moved past reads as what it adds, and the base's own later changes do not read as the branch undoing them. \`git show\` reads one commit.
-- Read every changed file whole, then read what calls into it. A change is correct or incorrect in the context that uses it, and that context is in this checkout.
+- Read every changed file whole, then read what calls into it. A change is correct or incorrect in the context that uses it, and that context is in this checkout, as the range leaves it.
 - Look for correctness errors, regressions in behaviour the range did not set out to change, security and data-exposure problems, missing or misleading tests, and drift between a contract and its implementation — a schema, an interface, a documented promise.
 - Weight the lens in \`focus\` when one is given, and never let it narrow the search for blockers outside it.
 - At \`brief\`, read a handful of things — the log, the diff, the one or two files a finding would rest on — and answer from what they show: one paragraph of summary, the verdict \`comment\` unless something is plainly a blocker, and only findings the reading already grounds. The run is budgeted in turns, so answer with what you have rather than opening a read you cannot finish.
@@ -146,17 +146,17 @@ const BRIEF_MAX_TURNS = 8;
 
 const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'review-local-changes',
-  version: 8,
+  version: 9,
   name: 'Review Local Changes',
   tagline:
     "Review committed changes in a connected repository with the machine's own coding agent.",
   description: `Fits a request to review changes that already exist in a repository on the operator's machine — "review what I just did on this branch", "look over these commits before they go anywhere". It reads a range of commits and returns a verdict with findings, and it changes nothing. Reviewing an open pull request is a different skill (review-pull-request); making a change is not this skill at all.
 
-**What it needs**: the connected folder holding the repository, and the range to review. Ask for whichever is missing — a range reads as \`main..HEAD\`, \`HEAD~3..HEAD\`, or a single commit. The review lists a range's commits as given and reads its diff from where the two ends meet, \`main...HEAD\`, so a branch \`main\` has moved past reads as what it adds and not as undoing what \`main\` took since. A focus is optional and worth asking for when the request names a worry: security, an API surface, the blast radius of a refactor.
+**What it needs**: the connected folder holding the repository, the range to review, and \`at\`, the commit the range ends at. Ask for whichever is missing — a range reads as \`main..HEAD\`, \`HEAD~3..HEAD\`, or a single commit, and \`at\` is then \`HEAD\`, \`HEAD\`, or that commit. The review lists a range's commits as given and reads its diff from where the two ends meet, \`main...HEAD\`, so a branch \`main\` has moved past reads as what it adds and not as undoing what \`main\` took since. A focus is optional and worth asking for when the request names a worry: security, an API surface, the blast radius of a refactor.
 
 **Depth is a first-class choice, not something to ask the coding agent for in \`focus\`.** \`brief\` is the smoke test — a first look, a check that the mechanics work: a handful of tool calls, one paragraph, and a verdict of \`comment\` unless something is plainly a blocker. An operator asking for something quick, a glance or a sanity check means \`brief\`, and it is budgeted in coding-agent turns (\`maxTurns\`: ${String(BRIEF_MAX_TURNS)}) so that it stays brief. \`standard\` reads the range with the repository around it. \`deep\` also runs the project's own checks over the touched files, and costs the most.
 
-**Only committed work is reviewed.** The review runs over an isolated copy of the repository at its last commit, so anything still uncommitted in the working tree is invisible to it. When the request is about work in progress, say so and ask for it to be committed first — a branch is fine — then review the range those commits make.
+**The review stands on the commit it judges.** It runs over an isolated copy of the repository detached at \`at\`, so the files it reads whole and the checks it runs at \`deep\` are the change's own; the range's base names only where the diff starts. **Only committed work is reviewed**: anything still uncommitted in the working tree is invisible to it. When the request is about work in progress, say so and ask for it to be committed first — a branch is fine — then review the range those commits make.
 
 **With the result**: report the verdict and the summary. The summary is the review — it names every finding with its severity and its file and line, blockers first, and the checks that ran — so it needs nothing added to it. The evidence behind each finding and the fix it suggests stay on the run, to be opened when someone wants them. Nothing was changed, so a finding is a proposal until someone acts on it: offer to commission the fix as its own piece of work, and never edit the files while reporting. Run the review again once a fix lands as a new commit, over the range that includes it — a verdict covers the commits it read and nothing later.`,
   tags: ['coding', 'review', 'local', 'developer-tools'],
@@ -165,7 +165,7 @@ const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
       slug: 'review-local-changes',
       name: 'Review Local Changes',
       description:
-        "Review a revision range of a repository connected as a host folder: the operator's installed coding agent reads the range in an isolated checkout at the folder's last commit and returns a verdict with grounded findings. Read-only — one task, no write, no publication.",
+        "Review a revision range of a repository connected as a host folder: the operator's installed coding agent reads the range in an isolated checkout detached at the commit the range ends at and returns a verdict with grounded findings. Read-only — one task, no write, no publication.",
       goal: 'Return a structured verdict on a revision range — approve, request changes, or comment — with findings that name their file, line and evidence, and the outcome of the project’s own checks when the review ran them.',
       mode: 'process' as const,
       outcomes: [
@@ -190,7 +190,14 @@ const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
           id: 'range',
           required: true,
           description:
-            'The revision range or ref to review — "main..HEAD", "HEAD~3..HEAD", a commit sha. It must be committed: the review reads the folder at its last commit. A range `<base>..<sha>` is read as its commits, `<base>..<sha>`, and its diff from where the two ends meet, `<base>...<sha>`, so a branch its base has moved past reads as what it adds.',
+            'The revision range or ref to review — "main..HEAD", "HEAD~3..HEAD", a commit sha. It must be committed. A range `<base>..<sha>` is read as its commits, `<base>..<sha>`, and its diff from where the two ends meet, `<base>...<sha>`, so a branch its base has moved past reads as what it adds.',
+          schema: { type: 'string', minLength: 1, maxLength: 200 },
+        },
+        {
+          id: 'at',
+          required: true,
+          description:
+            'The commit the range ends at — the one the review judges, and where its checkout stands: "HEAD" for "main..HEAD", "feature" for "main..feature", the sha for a single commit or for `<base>..<sha>`. The range\'s base names only where the diff starts: checked out, it would have the review read every file, and run every check, as it was before the change.',
           schema: { type: 'string', minLength: 1, maxLength: 200 },
         },
         {
@@ -222,13 +229,14 @@ const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
         {
           taskId: 'review',
           name: 'Review the range',
-          goal: 'Run the harness installed on the operator’s machine over an isolated checkout of the connected repository, read the requested range with the whole repository around it, and return a verdict with grounded findings. Read-only: nothing is edited, staged or committed.',
+          goal: 'Run the harness installed on the operator’s machine over an isolated checkout of the connected repository detached at the range’s tip, read the requested range with the whole repository around it, and return a verdict with grounded findings. Read-only: nothing is edited, staged or committed.',
           type: 'operation' as const,
           operation: 'host.harness.run',
           retryability: 'safe' as const,
           inputBindings: {
             bindingId: { kind: 'run_input' as const, path: 'bindingId' },
             range: { kind: 'run_input' as const, path: 'range' },
+            at: { kind: 'run_input' as const, path: 'at' },
             focus: { kind: 'run_input' as const, path: 'focus' },
             depth: { kind: 'run_input' as const, path: 'depth' },
             maxTurns: { kind: 'run_input' as const, path: 'maxTurns' },
@@ -244,6 +252,7 @@ const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
           },
           inputTemplate: {
             bindingId: { $bind: 'bindingId' },
+            base: { $bind: 'at' },
             task: REVIEW_TASK,
             inputs: {
               range: { $bind: 'range' },
@@ -337,7 +346,7 @@ const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
       priority: 50,
     },
     rationale:
-      'One operation task on host.harness.run with an outputSchema of findings and a verdict: the skill description steers the Helmsman (when it fits, what to ask for, what to do with the result) and the task prose instructs the harness (how to review). Read-only by construction — a single task with no write, no push and no second step — so a fix is a separate commission rather than something this skill can slip in. The repository arrives as a run input until folder roles land, and the review reads the connected folder at its last commit, which is why the description says uncommitted work is invisible.',
+      "One operation task on host.harness.run with an outputSchema of findings and a verdict: the skill description steers the Helmsman (when it fits, what to ask for, what to do with the result) and the task prose instructs the harness (how to review). Read-only by construction — a single task with no write, no push and no second step — so a fix is a separate commission rather than something this skill can slip in. The repository arrives as a run input until folder roles land, and the review checkout holds the folder's commits alone, detached at the range's tip (`at`, passed as the harness `base`) so it reads and checks the change itself, which is why the description says uncommitted work is invisible.",
   },
 };
 

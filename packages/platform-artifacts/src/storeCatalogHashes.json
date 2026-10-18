@@ -96,15 +96,15 @@
     "contentHash": "5f9151872e93be3bb7ad3b154b9a539677892df0361ad01c2579f227a27b6856"
   },
   "local-code-review": {
-    "version": 8,
-    "contentHash": "cd6f27ade9b8f319bd43cafed7e48afffb8412148560638f5181fabb505f8815"
+    "version": 9,
+    "contentHash": "40c522523b46d0b00c9be79d07a41203374f742402df6be7c818ae74e0dfa1f2"
   },
   "local-commission": {
     "version": 5,
     "contentHash": "35998b7e73fb024809520f7738c4f169e18858a800d924baf195f43e6648a90a"
   },
   "local-publish": {
-    "version": 31,
+    "version": 32,
     "contentHash": "ba3f45cc0bfbaafa2c77caa4c6c09256feaa4eb3dde207cd5ceba98b70f4f4ab"
   },
   "newsapi": {

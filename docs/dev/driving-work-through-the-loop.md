@@ -17,7 +17,7 @@ built and where its gaps are logged; the gaps that still bind are listed at the 
 | Folder checks    | `node scripts/verify-commit.mjs`, declared on `hb_aflow`; run by every publication first    |
 | Sandbox posture  | `open`, the default: commissions and checks run sandboxed, network open (below)             |
 | Commission       | the catalog's Commission Change, on `host.harness.run`, model `claude-opus-5-5`             |
-| Review           | the catalog's Local Code Review, over `origin/<base>..<sha>`                                |
+| Review           | the catalog's Local Code Review, over `origin/<base>..<sha>`, checked out at `<sha>`        |
 | Publication      | the catalog's Local Publish, by `patchRef`, onto `aflow/<branch>`                           |
 | Pull requests    | opened through the space's GitHub binding; merged by the operator                           |
 | Dev stack        | one, from `~/localhd/aflow-worktrees/live`, branch `live` = `main` plus branches under test |

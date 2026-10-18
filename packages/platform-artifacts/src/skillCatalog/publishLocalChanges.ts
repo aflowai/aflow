@@ -205,7 +205,7 @@ const CHECK_INPUT_TEMPLATE = {
 
 const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'publish-local-changes',
-  version: 31,
+  version: 32,
   name: 'Publish Local Changes',
   tagline:
     'Commit a patch onto a branch of a connected repository, then push it and open the pull request — asking the operator first unless the folder says otherwise.',
@@ -756,6 +756,10 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           inputBindings: {
             bindingId: { kind: 'run_input' as const, path: 'bindingId' },
             range: { kind: 'task_output' as const, taskId: 'commit', path: 'commit.pushRange' },
+            // The range's tip, where the review's checkout stands. The folder's
+            // own HEAD is where the commission started — the range's base — since
+            // the commit lands on a branch nothing has checked out.
+            at: { kind: 'task_output' as const, taskId: 'commit', path: 'commit.sha' },
           },
           context: {
             strategy: 'scoped' as const,
@@ -772,6 +776,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             inputs: {
               bindingId: { $bind: 'bindingId' },
               range: { $bind: 'range' },
+              at: { $bind: 'at' },
               depth: 'standard',
             },
             wait: 'until_complete',
