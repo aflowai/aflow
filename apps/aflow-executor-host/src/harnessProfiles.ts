@@ -31,6 +31,9 @@ import { assertSafeEnv, EnvPolicyError } from './envPolicy.js';
 export const HarnessOutputFormatSchema = z.enum(['claude-stream-json', 'codex-jsonl', 'text']);
 export type HarnessOutputFormat = z.infer<typeof HarnessOutputFormatSchema>;
 
+export const HarnessMcpFormatSchema = z.enum(['claude-json', 'codex-toml']);
+export type HarnessMcpFormat = z.infer<typeof HarnessMcpFormatSchema>;
+
 export const HarnessProfileSchema = z.object({
   id: z.string().min(1).describe('How a run addresses this harness.'),
   /**
@@ -97,13 +100,19 @@ export const HarnessProfileSchema = z.object({
    */
   model: z.string().min(1).optional(),
   /**
-   * How this harness is handed an MCP configuration file, carrying
-   * `{mcpConfig}` where its path goes. A run asking for a browser gets it this
-   * way, as a server the executor answers; empty means the harness cannot be
-   * handed one, and such a run is refused rather than run without the browser
-   * it asked for.
+   * How this harness is handed an MCP server. A run asking for a browser gets
+   * it this way, as a server the executor answers; empty means the harness
+   * cannot be handed one, and such a run is refused rather than run without
+   * the browser it asked for. Carries the placeholder of `mcpFormat`.
    */
   mcpArgs: z.array(z.string()).default([]),
+  /**
+   * What `mcpArgs` hand over (Plan 325 D3). `claude-json`: the path of a JSON
+   * configuration file, at `{mcpConfig}`. `codex-toml`: one configuration
+   * override declaring the server inline, at `{mcpServers}` — for a harness
+   * that takes no configuration file.
+   */
+  mcpFormat: HarnessMcpFormatSchema.default('claude-json'),
   /**
    * An environment variable that should receive a fresh, writable configuration
    * directory for the run. A harness given one keeps its state there instead of
@@ -181,6 +190,37 @@ export const SESSION_PLACEHOLDER = '{session}';
 export const TURNS_PLACEHOLDER = '{turns}';
 export const MODEL_PLACEHOLDER = '{model}';
 export const MCP_CONFIG_PLACEHOLDER = '{mcpConfig}';
+export const MCP_SERVERS_PLACEHOLDER = '{mcpServers}';
+
+/** The placeholder a profile's `mcpArgs` carry, by its format. */
+export function mcpPlaceholder(profile: Pick<HarnessProfile, 'mcpFormat'>): string {
+  return profile.mcpFormat === 'codex-toml' ? MCP_SERVERS_PLACEHOLDER : MCP_CONFIG_PLACEHOLDER;
+}
+
+/** An MCP server a run hands its harness: the file naming it, and what that file says. */
+export interface HarnessMcpServer {
+  readonly name: string;
+  readonly command: string;
+  readonly args: readonly string[];
+  readonly configPath: string;
+}
+
+/**
+ * The server as one configuration override: `mcp_servers.<name>={...}`, its
+ * value an inline TOML table. Every string is written as a JSON string, whose
+ * escapes are TOML basic-string escapes, so a path holding a quote or a
+ * backslash stays one string.
+ */
+export function codexMcpOverride(server: HarnessMcpServer): string {
+  if (!/^[A-Za-z0-9_-]+$/.test(server.name)) {
+    throw new HarnessProfileError(
+      `MCP server name '${server.name}' cannot be a bare TOML key.`,
+      'malformed_profile',
+    );
+  }
+  const args = server.args.map((arg) => JSON.stringify(arg)).join(',');
+  return `mcp_servers.${server.name}={command=${JSON.stringify(server.command)},args=[${args}]}`;
+}
 
 export class HarnessProfileError extends Error {
   constructor(
@@ -290,10 +330,11 @@ export function assertTakesMcpConfig(profile: HarnessProfile): void {
   );
 }
 
-function buildMcpArgs(profile: HarnessProfile, mcpConfig: string | undefined): string[] {
-  if (mcpConfig === undefined) return [];
+function buildMcpArgs(profile: HarnessProfile, mcp: HarnessMcpServer | undefined): string[] {
+  if (mcp === undefined) return [];
   assertTakesMcpConfig(profile);
-  return fillTemplate(profile, profile.mcpArgs, 'mcpArgs', MCP_CONFIG_PLACEHOLDER, mcpConfig);
+  const value = profile.mcpFormat === 'codex-toml' ? codexMcpOverride(mcp) : mcp.configPath;
+  return fillTemplate(profile, profile.mcpArgs, 'mcpArgs', mcpPlaceholder(profile), value);
 }
 
 /**
@@ -306,7 +347,7 @@ export function buildHarnessArgv(
   sessionArgs: string[] = [],
   maxTurns?: number,
   model?: string,
-  mcpConfig?: string,
+  mcp?: HarnessMcpServer,
 ): string[] {
   // Filled before anything else so a profile that cannot take the task at all
   // says so, rather than reporting a dial the run could simply drop.
@@ -323,7 +364,7 @@ export function buildHarnessArgv(
     ...sessionArgs,
     ...buildTurnsArgs(profile, maxTurns),
     ...buildModelArgs(profile, model),
-    ...buildMcpArgs(profile, mcpConfig),
+    ...buildMcpArgs(profile, mcp),
     ...promptArgs,
   ];
 }

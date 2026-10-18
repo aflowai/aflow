@@ -8,7 +8,13 @@ import {
   HarnessProfileSchema,
   requireProfile,
   type HarnessProfile,
+  type HarnessMcpServer,
 } from '../harnessProfiles.js';
+
+/** A server as a browser turn hands it over, at a configuration path. */
+function mcpAt(configPath: string): HarnessMcpServer {
+  return { name: 'browser', command: '/usr/bin/node', args: ['relay.mjs'], configPath };
+}
 
 function profile(overrides: Partial<HarnessProfile> = {}): HarnessProfile {
   return HarnessProfileSchema.parse({
@@ -191,14 +197,21 @@ describe('harness profiles', () => {
       expect((error as Error).message).toContain('`mcpArgs`');
       expect((error as Error).message).toContain('aflow harness browser claude');
     }
-    expect(() => buildHarnessArgv(written, 'x', [], undefined, undefined, '/s/mcp.json')).toThrow(
-      /mcpArgs/,
-    );
+    expect(() =>
+      buildHarnessArgv(written, 'x', [], undefined, undefined, mcpAt('/s/mcp.json')),
+    ).toThrow(/mcpArgs/);
   });
 
   it('refuses an mcpArgs template with nowhere to put the path, or two places', () => {
     expect(() =>
-      buildHarnessArgv(profile({ mcpArgs: ['--mcp-config'] }), 'x', [], undefined, undefined, '/m'),
+      buildHarnessArgv(
+        profile({ mcpArgs: ['--mcp-config'] }),
+        'x',
+        [],
+        undefined,
+        undefined,
+        mcpAt('/m'),
+      ),
     ).toThrow(/exactly one \{mcpConfig\}/);
     expect(() =>
       buildHarnessArgv(
@@ -207,7 +220,7 @@ describe('harness profiles', () => {
         [],
         undefined,
         undefined,
-        '/m',
+        mcpAt('/m'),
       ),
     ).toThrow(/exactly one/);
   });

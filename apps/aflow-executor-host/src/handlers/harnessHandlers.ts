@@ -86,6 +86,7 @@ import {
   requireProfile,
   supportsContinuation,
   takesTurnBudget,
+  type HarnessMcpServer,
   type HarnessProfile,
 } from '../harnessProfiles.js';
 import {
@@ -522,7 +523,7 @@ export function harnessTurnArgv(
   task: string,
   conversation: string | undefined,
   continued: boolean,
-  mcpConfig?: string,
+  mcp?: HarnessMcpServer,
 ): string[] {
   return buildHarnessArgv(
     profile,
@@ -530,7 +531,7 @@ export function harnessTurnArgv(
     buildSessionArgs(profile, conversation, continued),
     effectiveMaxTurns(profile, input.maxTurns),
     input.model,
-    mcpConfig,
+    mcp,
   );
 }
 
@@ -895,7 +896,7 @@ async function runHarness(
                 task,
                 conversation,
                 continued && conversation !== undefined,
-                browserTurn?.mcpConfigPath,
+                browserTurn?.mcp,
               ),
               cwd: worktree.workDir,
               // The sandbox's proxy names the host it refused only when asked to, and

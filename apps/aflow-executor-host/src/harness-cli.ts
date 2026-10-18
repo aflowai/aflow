@@ -22,12 +22,8 @@ import { stackPortWarning, parseLocalPorts } from './browserLocalPorts.js';
 import { LocalMcpServerSchema } from './localMcpServers.js';
 import { describeHarnessConcurrency, withHarnessConcurrency } from './harnessConcurrency.js';
 import { describePolicyKeepAwake, withKeepAwake } from './keepAwake.js';
-import { discoverHarnesses, knownMcpArgs } from './harnessDiscovery.js';
-import {
-  HarnessProfileSchema,
-  MCP_CONFIG_PLACEHOLDER,
-  type HarnessProfile,
-} from './harnessProfiles.js';
+import { discoverHarnesses, knownMcp } from './harnessDiscovery.js';
+import { HarnessProfileSchema, mcpPlaceholder, type HarnessProfile } from './harnessProfiles.js';
 import { resolveHostPolicyPath } from './hostDir.js';
 import { editPolicy } from './policyFile.js';
 import { checksChangeFromArgs, describeChecks, withChecks } from './folderChecks.js';
@@ -298,6 +294,7 @@ async function add(id: string): Promise<void> {
           turnsArgs: discovered.suggested.turnsArgs,
           modelArgs: discovered.suggested.modelArgs,
           mcpArgs: discovered.suggested.mcpArgs,
+          mcpFormat: discovered.suggested.mcpFormat,
           sessionArgs: discovered.suggested.sessionArgs,
           resumeArgs: discovered.suggested.resumeArgs,
           authPaths: discovered.suggested.authPaths,
@@ -337,7 +334,10 @@ async function add(id: string): Promise<void> {
       if (profile.credential === undefined && existing.credential !== undefined) {
         profile.credential = existing.credential;
       }
-      if (profile.mcpArgs.length === 0) profile.mcpArgs = existing.mcpArgs;
+      if (profile.mcpArgs.length === 0) {
+        profile.mcpArgs = existing.mcpArgs;
+        profile.mcpFormat = existing.mcpFormat;
+      }
       if (model === undefined && existing.model !== undefined) {
         if (profile.modelArgs.length > 0) profile.model = existing.model;
         else {
@@ -429,24 +429,32 @@ async function setMcpArgs(id: string, given: readonly string[]): Promise<void> {
     console.log(`\`${id}\` is handed no browser; a run asking for one is refused.`);
     return;
   }
-  const mcpArgs = given.length > 0 ? [...given] : knownMcpArgs(id);
-  if (mcpArgs === undefined) {
+  const known = knownMcp(id);
+  const current = configuredHarness(await loadPolicy(), id);
+  // Given arguments keep the profile's format; measured ones bring their own.
+  const format = given.length > 0 ? current.mcpFormat : known?.format;
+  const mcpArgs = given.length > 0 ? [...given] : known?.args;
+  if (mcpArgs === undefined || format === undefined) {
     console.error(
-      `No MCP arguments were measured for '${id}'. Give them, with ${MCP_CONFIG_PLACEHOLDER} ` +
-        `where the configuration file's path goes:\n  aflow harness browser ${id} <arg>...`,
+      `No MCP arguments were measured for '${id}'. Give them, with ` +
+        `${mcpPlaceholder(current)} where the configuration file's path goes:\n` +
+        `  aflow harness browser ${id} <arg>...`,
     );
     process.exit(1);
   }
-  const slots = mcpArgs.filter((arg) => arg === MCP_CONFIG_PLACEHOLDER).length;
+  const placeholder = mcpPlaceholder({ mcpFormat: format });
+  const slots = mcpArgs.filter((arg) => arg === placeholder).length;
   if (slots !== 1) {
     console.error(
-      `The arguments must carry ${MCP_CONFIG_PLACEHOLDER} exactly once, where the ` +
-        `configuration file's path goes; these carry it ${String(slots)} times.`,
+      `The arguments must carry ${placeholder} exactly once; these carry it ` +
+        `${String(slots)} times.`,
     );
     process.exit(1);
   }
   await changePolicy((policy) => {
-    configuredHarness(policy, id).mcpArgs = mcpArgs;
+    const profile = configuredHarness(policy, id);
+    profile.mcpArgs = mcpArgs;
+    profile.mcpFormat = format;
     return policy;
   });
   console.log(`\`${id}\` is handed a browser as: ${mcpArgs.join(' ')}`);

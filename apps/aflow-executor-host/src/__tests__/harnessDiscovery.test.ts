@@ -4,13 +4,19 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { discoverHarnesses, knownMcpArgs, type DiscoveredHarness } from '../harnessDiscovery.js';
+import { discoverHarnesses, knownMcp, type DiscoveredHarness } from '../harnessDiscovery.js';
 import {
   buildHarnessArgv,
   buildSessionArgs,
   HarnessProfileError,
   HarnessProfileSchema,
+  type HarnessMcpServer,
 } from '../harnessProfiles.js';
+
+/** A server as a browser turn hands it over, at a configuration path. */
+function mcpAt(configPath: string): HarnessMcpServer {
+  return { name: 'browser', command: '/usr/bin/node', args: ['relay.mjs'], configPath };
+}
 
 // Discovery finds only what is installed, so a machine with no harness would
 // run these loops zero times and pass. This one is always there.
@@ -28,6 +34,7 @@ const FIXED_HARNESS: DiscoveredHarness = {
     turnsArgs: [],
     modelArgs: ['--model', '{model}'],
     mcpArgs: ['--mcp-config', '{mcpConfig}', '--strict-mcp-config'],
+    mcpFormat: 'claude-json',
     authPaths: [],
     writePaths: [],
     configSeed: [],
@@ -165,12 +172,17 @@ describe('harness discovery', () => {
     // Measured under the lane's flags: given `--mcp-config <file>`, the init
     // event reports the stdio server connected and the model calls its tools;
     // `--strict-mcp-config` leaves out every server the operator configured.
-    expect(knownMcpArgs('claude')).toEqual(['--mcp-config', '{mcpConfig}', '--strict-mcp-config']);
-    expect(knownMcpArgs('opencode')).toBeUndefined();
+    expect(knownMcp('claude')).toEqual({
+      args: ['--mcp-config', '{mcpConfig}', '--strict-mcp-config'],
+      format: 'claude-json',
+    });
+    expect(knownMcp('opencode')).toBeUndefined();
     for (const found of await withFixedHarness()) {
       if (found.suggested.output === 'claude-stream-json' || found === FIXED_HARNESS) {
-        expect(found.suggested.mcpArgs).toEqual(knownMcpArgs('claude'));
+        expect(found.suggested.mcpArgs).toEqual(knownMcp('claude')?.args);
       }
+      // An inline server is a different shape, asked of the Codex profile below.
+      if (found.suggested.mcpFormat !== 'claude-json') continue;
       const confirmed = HarnessProfileSchema.parse({
         id: found.id,
         executable: found.executable,
@@ -179,11 +191,18 @@ describe('harness discovery', () => {
       });
       if (confirmed.mcpArgs.length === 0) {
         expect(() =>
-          buildHarnessArgv(confirmed, 'the task', [], undefined, undefined, '/s/mcp.json'),
+          buildHarnessArgv(confirmed, 'the task', [], undefined, undefined, mcpAt('/s/mcp.json')),
         ).toThrow(HarnessProfileError);
         continue;
       }
-      const argv = buildHarnessArgv(confirmed, 'the task', [], undefined, undefined, '/s/mcp.json');
+      const argv = buildHarnessArgv(
+        confirmed,
+        'the task',
+        [],
+        undefined,
+        undefined,
+        mcpAt('/s/mcp.json'),
+      );
       expect(argv.slice(argv.indexOf('--mcp-config'), argv.indexOf('--mcp-config') + 3)).toEqual([
         '--mcp-config',
         '/s/mcp.json',
@@ -317,6 +336,23 @@ describe('the Codex profile', () => {
       expect(() => codexProfile(found)).not.toThrow();
     },
   );
+
+  it('hands it the browser as one inline server, since it takes no configuration file', async () => {
+    const profile = codexProfile(await discoverCodex());
+    const argv = buildHarnessArgv(profile, 'the task', [], undefined, undefined, {
+      name: 'browser',
+      command: '/opt/node "22"/bin/node',
+      args: ['/s/relay.mjs', 'C:\\pipes'],
+      configPath: '/s/mcp.json',
+    });
+    const at = argv.indexOf('-c');
+    expect(argv[at + 1]).toBe(
+      'mcp_servers.browser={command="/opt/node \\"22\\"/bin/node",args=["/s/relay.mjs","C:\\\\pipes"]}',
+    );
+    expect(argv).not.toContain('/s/mcp.json');
+    expect(at).toBeLessThan(argv.indexOf('the task'));
+    expect(knownMcp('codex')).toEqual({ args: ['-c', '{mcpServers}'], format: 'codex-toml' });
+  });
 
   it('lends the sign-in under the given home into a CODEX_HOME of the run', async () => {
     const found = await discoverCodex();

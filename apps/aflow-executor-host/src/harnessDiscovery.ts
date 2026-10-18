@@ -19,7 +19,7 @@ import { promisify } from 'node:util';
 
 import { probeEnv } from './probeEnv.js';
 
-import type { HarnessOutputFormat } from './harnessProfiles.js';
+import type { HarnessMcpFormat, HarnessOutputFormat } from './harnessProfiles.js';
 
 const run = promisify(execFile);
 
@@ -55,8 +55,10 @@ interface HarnessProbe {
   readonly turnsArgs: string[];
   /** How it is told which model to run. Empty when the CLI takes no such argument. */
   readonly modelArgs: string[];
-  /** How it is handed an MCP configuration file. Empty when it cannot be. */
+  /** How it is handed an MCP server. Empty when it cannot be. */
   readonly mcpArgs: string[];
+  /** What those arguments hand over: a configuration file, or the server inline. */
+  readonly mcpFormat: HarnessMcpFormat;
   /** Where it keeps the credential the operator already signed in with. */
   readonly authPaths: string[];
   /** Scratch outside the worktree it needs to write, relative to `/tmp`. */
@@ -138,6 +140,7 @@ const KNOWN: readonly HarnessProbe[] = [
     // tools. `--strict-mcp-config` keeps out every server the operator
     // configured for their own sessions, so the run reaches only the browser.
     mcpArgs: ['--mcp-config', '{mcpConfig}', '--strict-mcp-config'],
+    mcpFormat: 'claude-json',
     // Given a configuration directory of its own it reads nothing under home,
     // so nothing is carved out of the standing denial.
     authPaths: [],
@@ -197,7 +200,11 @@ const KNOWN: readonly HarnessProbe[] = [
     // No turn flag exists; a run is bounded by its timeout.
     turnsArgs: [],
     modelArgs: ['-m', '{model}'],
-    mcpArgs: [],
+    // It takes no configuration file. Measured: one `-c` declaring a stdio
+    // server inline connects it, and the model calls its tools (§6 M3). A
+    // fresh CODEX_HOME holds no other server, so nothing else is reached.
+    mcpArgs: ['-c', '{mcpServers}'],
+    mcpFormat: 'codex-toml',
     authPaths: [],
     writePaths: [],
     configDirEnv: 'CODEX_HOME',
@@ -228,6 +235,7 @@ const KNOWN: readonly HarnessProbe[] = [
     // refused by name, where a guessed flag would fail inside the harness.
     modelArgs: [],
     mcpArgs: [],
+    mcpFormat: 'claude-json',
     authPaths: ['.config/opencode', '.local/share/opencode'],
     writePaths: [],
     configSeed: [],
@@ -236,12 +244,16 @@ const KNOWN: readonly HarnessProbe[] = [
 ];
 
 /**
- * The MCP arguments measured for a harness this lane knows, for a profile
- * written before they were; nothing when none were measured for it.
+ * The MCP arguments measured for a harness this lane knows, with the format
+ * they carry, for a profile written before they were; nothing when none were
+ * measured for it.
  */
-export function knownMcpArgs(harnessId: string): string[] | undefined {
-  const args = KNOWN.find((probe) => probe.id === harnessId)?.mcpArgs;
-  return args === undefined || args.length === 0 ? undefined : [...args];
+export function knownMcp(
+  harnessId: string,
+): { readonly args: string[]; readonly format: HarnessMcpFormat } | undefined {
+  const probe = KNOWN.find((known) => known.id === harnessId);
+  if (probe === undefined || probe.mcpArgs.length === 0) return undefined;
+  return { args: [...probe.mcpArgs], format: probe.mcpFormat };
 }
 
 export interface DiscoveredHarness {
@@ -260,6 +272,7 @@ export interface DiscoveredHarness {
     readonly turnsArgs: string[];
     readonly modelArgs: string[];
     readonly mcpArgs: string[];
+    readonly mcpFormat: HarnessMcpFormat;
     readonly authPaths: string[];
     readonly writePaths: string[];
     readonly configDirEnv?: string;
@@ -315,6 +328,7 @@ export async function discoverHarnesses(home = homedir()): Promise<DiscoveredHar
           turnsArgs: [...probe.turnsArgs],
           modelArgs: [...probe.modelArgs],
           mcpArgs: [...probe.mcpArgs],
+          mcpFormat: probe.mcpFormat,
           authPaths: probe.authPaths.map((p) => join(home, p)),
           writePaths: [...probe.writePaths],
           ...(probe.configDirEnv !== undefined ? { configDirEnv: probe.configDirEnv } : {}),
