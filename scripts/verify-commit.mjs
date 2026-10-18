@@ -371,6 +371,12 @@ for (const guard of ['large-files', 'context-budget']) {
   );
 }
 
+await run('migration numbers', 'checking the numbers of added migrations', process.execPath, [
+  'scripts/check-migration-numbers.mjs',
+  '--base',
+  base,
+]);
+
 // A type-check reads every other package from its compiled declarations, and a
 // test from its compiled output. `yarn install` builds both through
 // postinstall; a checkout mirrors the installation and builds nothing. So
