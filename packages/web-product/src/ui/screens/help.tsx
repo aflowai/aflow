@@ -397,7 +397,13 @@ function HelpThemeView({
                   </Text>
                 </Row>
               </button>
-              <Text size="sm" variant="muted">
+              <Text
+                size="base"
+                style={{
+                  color: 'var(--color-text-secondary)',
+                  lineHeight: 'var(--font-line-height-relaxed)',
+                }}
+              >
                 {article.summary}
               </Text>
               {open && <HelpArticleBody articleId={article.id} onSelect={onSelect} />}
