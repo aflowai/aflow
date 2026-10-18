@@ -31,7 +31,6 @@ export {
   isTaskDraftPath,
   governedSubtreeRefusal,
   isGovernedEvalSuitePath,
-  isPlatformEvidencePath,
   isGeneratedMediaPath,
   GENERATED_MEDIA_PREFIX,
   type GovernedWriter,

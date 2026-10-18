@@ -105,12 +105,6 @@ function workflowDefinitionMutationMessage(path: string): string {
   );
 }
 
-const PLATFORM_EVIDENCE_PREFIX = '/coach/evidence/';
-
-export function isPlatformEvidencePath(path: string | null | undefined): path is string {
-  return canonicalOrNull(path)?.startsWith(PLATFORM_EVIDENCE_PREFIX) === true;
-}
-
 export function isTaskDraftPath(path: string | null | undefined): path is string {
   return canonicalOrNull(path)?.startsWith(TASK_DRAFT_PREFIX) === true;
 }
@@ -124,20 +118,7 @@ function taskDraftMutationMessage(path: string): string {
   );
 }
 
-function platformEvidenceMutationMessage(path: string): string {
-  return (
-    `Direct changes to ${path} are blocked. ` +
-    '`/coach/evidence/**` is platform-only — evidence documents are written by the api.http.call / mcp.tools.call executors when they perform real source calls. ' +
-    "If you need to certify real-source data, call the granted API tool and pass the response's `sourceEvidenceRef` through into your provenance block."
-  );
-}
-
-const GOVERNED_PREFIXES: readonly string[] = [
-  '/evals/',
-  PLATFORM_EVIDENCE_PREFIX,
-  GENERATED_MEDIA_PREFIX,
-  TASK_DRAFT_PREFIX,
-];
+const GOVERNED_PREFIXES: readonly string[] = ['/evals/', GENERATED_MEDIA_PREFIX, TASK_DRAFT_PREFIX];
 
 /**
  * Why a directory removal is refused, or null when it is not. Everything under
@@ -202,7 +183,6 @@ export function governedPathRefusal(
   const canonical = canonicalOrNull(path);
   if (canonical === null) return null;
   if (isGovernedEvalSuitePath(canonical)) return governedEvalSuiteMutationMessage(canonical);
-  if (isPlatformEvidencePath(canonical)) return platformEvidenceMutationMessage(canonical);
   if (isWorkflowDefinitionPath(canonical)) return workflowDefinitionMutationMessage(canonical);
   // Checked on the RESOLVED path, so a draft reached by document id is refused
   // too — the id route bypasses every path-shaped guard upstream.

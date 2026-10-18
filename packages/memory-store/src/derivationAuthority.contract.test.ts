@@ -176,10 +176,6 @@ const DOC_PUT_ALLOWLIST = new Map<string, string>([
     'structural json anomaly record, exact-path',
   ],
   [
-    'apps/aflow-executor-api/src/handlers/api/sourceEvidence.ts',
-    'structural json source evidence, exact-path',
-  ],
-  [
     'apps/aflow-orchestrator/src/services/SessionOrchestrator/handlers/inlineOps/storeListing.ts',
     'structural store listing json, exact-path',
   ],

@@ -26,13 +26,6 @@ describe('governedPathRefusal', () => {
     },
   );
 
-  it.each(['/coach/evidence/2026/source-1.json', '//coach/evidence/2026/source-1.json'])(
-    'refuses platform evidence however the caller spells its path: %s',
-    (path) => {
-      expect(governedPathRefusal(path)).toContain('platform-only');
-    },
-  );
-
   it('names the row the refusal is about, not the spelling that reached it', () => {
     expect(governedPathRefusal(`//media/${RUN}/take-1-0`)).toContain(`/media/${RUN}/take-1-0`);
   });
@@ -65,12 +58,11 @@ describe('governedSubtreeRefusal', () => {
     `/media/x/../${RUN}`,
     `/media/${RUN}/`,
     '/evals/skill-1',
-    '/coach/evidence/2026',
   ])('refuses a directory inside a governed prefix: %s', (path) => {
     expect(governedSubtreeRefusal(path)).toContain('the platform writes and owns');
   });
 
-  it.each(['/media', '/evals', '/coach', '/coach/evidence', '/'])(
+  it.each(['/media', '/evals', '/'])(
     'refuses a directory that holds a governed prefix: %s',
     (path) => {
       expect(governedSubtreeRefusal(path)).toContain('the platform writes and owns');
