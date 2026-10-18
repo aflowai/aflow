@@ -39,3 +39,7 @@ This skill covers the full lifecycle of adding or modifying an operation on the 
 - [executor.md](references/executor.md) — Handler pattern and ExecutorRuntime
 - [catalog.md](references/catalog.md) — Compact format rules for agent-facing output
 - [`docs/dev/integrations-and-capabilities.md`](../../../docs/dev/integrations-and-capabilities.md) — when the op crosses an API or MCP integration, read this first
+
+## Capability placement
+
+Use `buildCoreToolSpec` for both pinned and promoted operation schemas. Assign new agent-reachable operations to one capability bundle (exact-operation ownership takes precedence over group ownership). Changing an operation's default requires updating the authored Helmsman surface; a bundle tier alone is not the runtime default. Skill discovery is `catalog.skill.search`, not an unbounded injected list.

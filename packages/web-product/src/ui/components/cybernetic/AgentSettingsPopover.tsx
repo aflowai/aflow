@@ -110,7 +110,7 @@ export function AgentSettingsPopover({
             variant="muted"
             style={{ display: 'block', marginBottom: 'var(--space-2)' }}
           >
-            Applies to this agent across new sessions, not just this chat.
+            Applies to this space across chats.
           </Text>
 
           {loadState === 'loading' && <Text variant="muted">Loading…</Text>}

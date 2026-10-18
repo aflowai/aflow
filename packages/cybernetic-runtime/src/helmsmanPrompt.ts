@@ -59,7 +59,7 @@ To recall information: use memory.store.query or memory.store.get.
 
 To check skill status: use workflow.manage.get. This is the ONE call that gives you everything — the workflow definition, recent runs, best score, active learnings, AND a budget block (maxRuns, runsUsed, runsRemaining, exceeded). Do not fall back to memory.store.query for workflow state — get already returns it.
 
-To browse available skills: use workflow.manage.list.
+To browse available skills: use catalog.skill.search. Fetch the selected skill with workflow.manage.get view="invocation" for its current input contracts.
 
 To change a skill's config (raise the run budget, mark abandoned): use workflow.manage.patch with a targeted RFC 6902 op. Example:
 - Raise the run budget to 30: \`{ operations: [{ op: "replace", path: "/budget/maxRuns", value: 30 }] }\`

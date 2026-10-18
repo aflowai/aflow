@@ -561,6 +561,8 @@ function ToolSurfaceSection({ surface }: { surface: ToolSurface }) {
             <Text variant="muted" size="xs" style={{ fontSize: '9px', whiteSpace: 'nowrap' }}>
               {surface.scope.pinnedUsed}/{surface.scope.pinnedMax} pinned ·{' '}
               {surface.scope.virtualUsed}/{surface.scope.virtualMax} promoted
+              {surface.scope.schemaTokensMax !== undefined &&
+                ` · ~${String(surface.scope.schemaTokensUsed ?? 0)}/${String(surface.scope.schemaTokensMax)} schema tokens`}
             </Text>
           )}
         </Row>

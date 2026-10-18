@@ -7,15 +7,15 @@
   },
   "components": {
     "tools.helmsman.resolvedOps": {
-      "tokens": 28,
+      "tokens": 22,
       "group": "tools"
     },
     "tools.helmsman.native_fc": {
-      "tokens": 8902,
+      "tokens": 7021,
       "group": "tools"
     },
     "tools.helmsman.generate_json": {
-      "tokens": 8779,
+      "tokens": 6868,
       "group": "tools"
     },
     "tools.coach.resolvedOps": {
@@ -23,19 +23,47 @@
       "group": "tools"
     },
     "tools.coach.native_fc": {
-      "tokens": 23994,
+      "tokens": 24824,
       "group": "tools"
     },
     "tools.coach.generate_json": {
-      "tokens": 23542,
+      "tokens": 24372,
       "group": "tools"
+    },
+    "tools.helmsman.enterprise.native_fc": {
+      "tokens": 7021,
+      "group": "tools"
+    },
+    "tools.helmsman.enterprise.generate_json": {
+      "tokens": 6868,
+      "group": "tools"
+    },
+    "tools.helmsman.community-local.native_fc": {
+      "tokens": 9681,
+      "group": "tools"
+    },
+    "tools.helmsman.community-local.generate_json": {
+      "tokens": 9553,
+      "group": "tools"
+    },
+    "skills.library100.default": {
+      "tokens": 48,
+      "group": "skillAwareness"
+    },
+    "skills.library1000.default": {
+      "tokens": 48,
+      "group": "skillAwareness"
+    },
+    "skills.tenPinnedSummaries": {
+      "tokens": 669,
+      "group": "skillAwareness"
     },
     "helmsmanPrompt.cognitiveFrame": {
       "tokens": 621,
       "group": "helmsmanPrompt"
     },
     "helmsmanPrompt.registerMapping": {
-      "tokens": 4218,
+      "tokens": 4246,
       "group": "helmsmanPrompt"
     },
     "helmsmanPrompt.operatingModel": {
@@ -79,7 +107,7 @@
       "group": "spaceContextGuidance"
     },
     "spaceContextGuidance.skills": {
-      "tokens": 319,
+      "tokens": 60,
       "group": "spaceContextGuidance"
     },
     "spaceContextGuidance.compute": {
@@ -87,15 +115,16 @@
       "group": "spaceContextGuidance"
     },
     "worstCase.pinnedSurface": {
-      "tokens": 29726,
+      "tokens": 16224,
       "group": "worstCase"
     }
   },
   "totals": {
-    "tools": 65258,
-    "helmsmanPrompt": 6593,
+    "tools": 96243,
+    "skillAwareness": 765,
+    "helmsmanPrompt": 6621,
     "runnerPrompt": 2235,
-    "spaceContextGuidance": 1104,
-    "worstCase": 29726
+    "spaceContextGuidance": 845,
+    "worstCase": 16224
   }
 }

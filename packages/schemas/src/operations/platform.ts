@@ -5,6 +5,7 @@
  * These are typically admin-only and require elevated permissions.
  */
 import { z } from 'zod';
+import { SkillDiscoveryOperationRegistration } from './skillDiscovery.js';
 import { StepTypeSchema } from '../artifact/operationDefinition.js';
 import type { OperationRegistration } from '../catalog/operationCatalog.js';
 import { OperationIdSchema, SpaceSlugSchema } from '../runtime/ids.js';
@@ -1191,6 +1192,7 @@ export const PlatformOperationRegistrations: OperationRegistration[] = [
     inputZod: PlatformGetSchemaInputSchema,
     outputZod: PlatformGetSchemaOutputSchema,
   },
+  SkillDiscoveryOperationRegistration,
   {
     stepType: 'catalog',
     group: 'tool',

@@ -1,3 +1,4 @@
+import { enforceSkillSelection } from '../../skillDiscovery.js';
 import { randomUUID } from 'node:crypto';
 import {
   getDatabase,
@@ -76,6 +77,7 @@ export async function handleWorkflowRunStart(
   const spaceId = requireSpaceId(args.context);
   const { docRepo, dirRepo } = getRepos(args.context.tenantId);
   const slug = input.slug;
+  if (!(await enforceSkillSelection(args, slug, startTime))) return;
 
   // A workflow task has no conversation to hear a pause or a later event, so
   // the one wait it can take is the one that ends with the run.

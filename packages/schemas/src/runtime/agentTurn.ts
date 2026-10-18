@@ -334,15 +334,6 @@ export const AgentToolSpecSchema = z.object({
 });
 export type AgentToolSpec = z.infer<typeof AgentToolSpecSchema>;
 
-/** Pinned/virtual cap pressure (pinned = MAX_TOTAL_TOOLS, virtual = MAX_VIRTUAL_TOOLS). */
-export const ToolSurfaceScopeSchema = z.object({
-  pinnedUsed: z.number().int().nonnegative(),
-  pinnedMax: z.number().int().nonnegative(),
-  virtualUsed: z.number().int().nonnegative(),
-  virtualMax: z.number().int().nonnegative(),
-});
-export type ToolSurfaceScope = z.infer<typeof ToolSurfaceScopeSchema>;
-
 // ============================================================================
 // Agent Turn Input (sent to ai.agent.turn operation)
 // ============================================================================

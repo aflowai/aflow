@@ -1,3 +1,6 @@
+import { loadHelmsmanDiscovery } from '@aflow/cybernetic-runtime';
+import { skillPlacement } from '@aflow/schemas';
+import { enforceSkillSelection, isHelmsmanSkillCaller } from '../skillDiscovery.js';
 import { getDatabase } from '@aflow/database';
 import { resolveWorkflowForStart, listWorkflowsWithPlatform } from '@aflow/database';
 import type { WorkflowGetInput, WorkflowListInput } from '@aflow/schemas';
@@ -13,6 +16,7 @@ import {
   ensureCurrentSkillValidity,
   resolveSkillForWorkflow,
   deriveCampaignContractJsonSchema,
+  resolveCurrentSkillReadiness,
   selectActiveLearningSetForSkill,
 } from '@aflow/cybernetic-runtime';
 import type { InlineHandlerArgs } from '../types.js';
@@ -27,6 +31,7 @@ export async function handleWorkflowGet(
 ): Promise<void> {
   const spaceId = requireSpaceId(args.context);
   const slug = input.slug;
+  if (!(await enforceSkillSelection(args, slug, startTime))) return;
   const db = getDatabase();
 
   const workflow = await resolveWorkflowForStart(db, args.context.tenantId, spaceId, slug);
@@ -64,6 +69,37 @@ export async function handleWorkflowGet(
   );
   if (skill?.manifest.campaign !== undefined) {
     result['campaignContract'] = deriveCampaignContractJsonSchema(skill.manifest.campaign);
+  }
+
+  if (input.view === 'invocation') {
+    const readiness = await resolveCurrentSkillReadiness(
+      { db, tenantId: args.context.tenantId, spaceId },
+      workflow,
+      skill?.manifest.requiredCapabilities,
+      skill?.projection?.status,
+    );
+    await emitStepSuccess(
+      args,
+      {
+        view: 'invocation',
+        readiness,
+        workflow: {
+          slug: workflow.slug,
+          name: workflow.name,
+          description: workflow.description,
+          mode: workflow.mode,
+          status: workflow.status,
+          revision: workflow.revision,
+        },
+        contractValidity: result['contractValidity'],
+        ...(firstTaskInputContract ? { firstTaskInputContract } : {}),
+        ...(result['campaignContract'] ? { campaignContract: result['campaignContract'] } : {}),
+        guidance:
+          'workflow.run.start performs the authoritative approval, validity and binding checks. Use the input contracts above; no workflow graph or run history is required to invoke this skill.',
+      },
+      startTime,
+    );
+    return;
   }
 
   if (input.includeLedgerSummary) {
@@ -224,7 +260,12 @@ export async function handleWorkflowList(
 
   const workflows: Array<Record<string, unknown>> = [];
 
+  const placements = isHelmsmanSkillCaller(args.context)
+    ? (await loadHelmsmanDiscovery({ db, tenantId: args.context.tenantId, spaceId }))
+        .skillPlacements
+    : undefined;
   for (const workflow of merged) {
+    if (placements && skillPlacement(workflow.slug, placements) === 'off') continue;
     // Apply filters
     if (input.status) {
       if (workflow.status !== input.status) continue;

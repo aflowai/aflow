@@ -629,6 +629,7 @@ function ChatPageInner() {
           ? (variant) => (
               <>
                 <AgentModelSettings
+                  key={`models:${spaceId}`}
                   spaceId={spaceId}
                   open={openSettingsPanel === 'models'}
                   onOpenChange={(next) => {
@@ -637,6 +638,7 @@ function ChatPageInner() {
                   variant={variant}
                 />
                 <AgentToolSettings
+                  key={`tools:${spaceId}`}
                   spaceId={spaceId}
                   open={openSettingsPanel === 'tools'}
                   onOpenChange={(next) => {

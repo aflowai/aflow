@@ -1,5 +1,16 @@
-import { buildCoreToolSpec, estimateStringTokens, type AgentToolSpec } from '@aflow/schemas';
-import { CYBERNETIC_AGENTS, HELMSMAN_DISCOVERY_PRESET } from '@aflow/platform-artifacts';
+import {
+  buildCoreToolSpec,
+  estimateStringTokens,
+  estimateToolSchemaTokens,
+  MAX_CAPABILITY_SCHEMA_TOKENS,
+  skillAwarenessEntry,
+  type AgentToolSpec,
+} from '@aflow/schemas';
+import {
+  CYBERNETIC_AGENTS,
+  HELMSMAN_DISCOVERY_PRESET,
+  resolveHelmsmanCapabilities,
+} from '@aflow/platform-artifacts';
 import { assembleHelmsmanPromptSections } from '@aflow/cybernetic-runtime';
 import { buildToolSurface } from '../../apps/aflow-executor-ai/src/handlers/ai/handlers/agentToolSurface.js';
 import type { AgentTurnInput } from '../../apps/aflow-executor-ai/src/handlers/ai/schema.js';
@@ -157,6 +168,54 @@ export function buildScanReport(): BudgetReport {
     }
   }
 
+  for (const edition of ['enterprise', 'community-local'] as const) {
+    const resolved = resolveHelmsmanCapabilities({
+      edition,
+      codeLane: edition === 'enterprise' ? 'present' : 'absent',
+      hostLane: edition === 'community-local' ? 'present' : 'absent',
+      browserLane: edition === 'community-local' ? 'present' : 'absent',
+    });
+    const { specs } = resolveSpecs(resolved.coreOperations);
+    for (const mode of ['native_fc', 'generate_json'] as const) {
+      const priced = priceTools(specs, mode, agentShape('cybernetic-helmsman'));
+      push(`tools.helmsman.${edition}.${mode}`, 'tools', priced.tokens, priced.chars);
+    }
+  }
+  for (const count of [100, 1000]) {
+    const summary = JSON.stringify({
+      pinned: [],
+      total: count,
+      onDemandCount: count,
+      guidance:
+        'Find installed skills with catalog.skill.search; inspect the selected invocation contract before starting.',
+    });
+    push(
+      `skills.library${String(count)}.default`,
+      'skillAwareness',
+      estimateStringTokens(summary),
+      summary.length,
+    );
+  }
+  const pinnedSkills = JSON.stringify(
+    Array.from({ length: 10 }, (_, i) =>
+      skillAwarenessEntry({
+        slug: `skill-${String(i)}`,
+        name: `Skill ${String(i)}`,
+        description: 'A compact activation summary for the installed skill.',
+        mode: 'process',
+        status: 'approved',
+        origin: 'space',
+        revision: 1,
+      }),
+    ),
+  );
+  push(
+    'skills.tenPinnedSummaries',
+    'skillAwareness',
+    estimateStringTokens(pinnedSkills),
+    pinnedSkills.length,
+  );
+
   // -- Helmsman prompt, per section -----------------------------------------
   const sections = assembleHelmsmanPromptSections({
     spaceName: SCAN_SPACE_NAME,
@@ -229,9 +288,16 @@ export function buildScanReport(): BudgetReport {
   // `MAX_PINNED_TOOLS` is a count cap, so this row is what that count can cost
   // if an operator pins the most expensive things reachable.
   const helmsman = agentShape('cybernetic-helmsman');
+  let admittedTokens = 0;
   const presetPriced = resolveSpecs(HELMSMAN_DISCOVERY_PRESET)
     .specs.map((spec) => ({ spec, tokens: priceTools([spec], 'native_fc', helmsman).tokens }))
     .sort((a, b) => b.tokens - a.tokens)
+    .filter(({ spec }) => {
+      const tokens = estimateToolSchemaTokens(spec);
+      if (admittedTokens + tokens > MAX_CAPABILITY_SCHEMA_TOKENS) return false;
+      admittedTokens += tokens;
+      return true;
+    })
     .slice(0, MAX_PINNED_TOOLS);
   const worstCase = priceTools(
     presetPriced.map((p) => p.spec),

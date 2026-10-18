@@ -51,6 +51,14 @@ import {
  * large ceiling never floods the prompt.
  */
 export const HELMSMAN_DISCOVERY_PRESET: readonly string[] = [
+  'memory.store.put',
+  'memory.store.patch',
+  'memory.context.remember',
+  'memory.context.forget',
+  'workflow.campaign.list',
+  'workflow.campaign.get',
+  'ui.artifact.render',
+  'ui.surface.visualize',
   // skills / workflows — inspect + patch a skill directly, deep run history,
   // the list ops (context carries the active list), archive/purge preview.
   'workflow.manage.list',
@@ -695,7 +703,7 @@ function buildCyberneticHelmsman(): CapabilityFlowDefinition {
             // occasional is discoverable (HELMSMAN_DISCOVERY_PRESET). Notably
             // absent by design:
             //  - LIST ops the context already injects: workflow.manage.list
-            //    (SpaceContext.skills.active), proposal.list +
+            //    (catalog.skill.search), proposal.list +
             //    workflow.run.list_attention (the attention block's pending
             //    proposals + active runs) — Helmsman reads them from context
             //    and promotes the detail/action op when it drills in.
@@ -713,10 +721,6 @@ function buildCyberneticHelmsman(): CapabilityFlowDefinition {
               // are rare or redundant → discoverable).
               'memory.store.query',
               'memory.store.get',
-              'memory.store.put',
-              'memory.store.patch',
-              'memory.context.remember',
-              'memory.context.forget',
               'memory.context.list',
               // Run / route skills — the main job. `manage.get` fetches one
               // skill's detail; `manage.list`/`put`/`patch` are discoverable
@@ -726,20 +730,17 @@ function buildCyberneticHelmsman(): CapabilityFlowDefinition {
               'workflow.run.resume',
               'workflow.run.cancel',
               'workflow.run.detail',
-              'workflow.campaign.list',
-              'workflow.campaign.get',
               // Surface a proposal's detail (the pending list is in attention).
               'proposal.get',
               // HITL + operator-facing output.
               'human.chat.ask',
               'human.action_center.focus',
-              'ui.artifact.render',
-              'ui.surface.visualize',
               // Web lookup for operator answers (light schema).
               'search.web.search',
               'search.web.fetch',
               // The discovery mechanism itself.
               'catalog.tool.search',
+              'catalog.skill.search',
               'catalog.tool.list',
               'catalog.tool.promote',
             ],

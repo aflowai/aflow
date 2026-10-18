@@ -134,7 +134,7 @@ describe('platform-artifacts cybernetic ensemble — runtime source of truth', (
     expect(ops).not.toContain('proposal.dismiss');
   });
 
-  it('Helmsman coreOperations includes the two Plan 158 ad-hoc render ops', () => {
+  it('Helmsman can discover render operations without carrying their schemas by default', () => {
     const helmsman = CYBERNETIC_AGENTS.find((a) => a.flowId === 'cybernetic-helmsman');
     const steps = helmsman!.steps as Array<Record<string, unknown>>;
     const helmsmanTurn = steps.find((s) => s['stepId'] === 'agent');
@@ -142,8 +142,11 @@ describe('platform-artifacts cybernetic ensemble — runtime source of truth', (
     const catalog = config['catalog'] as Record<string, unknown>;
     const ops = catalog['coreOperations'] as unknown[];
 
-    expect(ops).toContain('ui.artifact.render');
-    expect(ops).toContain('ui.surface.visualize');
+    const discovery = catalog['discovery'] as { allowedOperationIds: string[] };
+    for (const id of ['ui.artifact.render', 'ui.surface.visualize']) {
+      expect(ops).not.toContain(id);
+      expect(discovery.allowedOperationIds).toContain(id);
+    }
     // Authoring stays out of Helmsman's core surface.
     expect(ops).not.toContain('ui.artifact.generate');
     expect(ops).not.toContain('ui.artifact.publish');

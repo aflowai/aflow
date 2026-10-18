@@ -77,6 +77,7 @@ export {
   shedableBundleIds,
   withGuaranteedReadOps,
   applyBundlePlacements,
+  resolveToolPlacement,
   validateBundlePlacements,
   effectivePlacement,
   defaultPlacement,
@@ -105,7 +106,7 @@ export {
   buildSummaryCatalog,
   buildCompactAwareness,
 } from './compactFormat.js';
-export { buildCoreToolSpec } from './coreToolSpec.js';
+export { buildCoreToolSpec, estimateToolSchemaTokens } from './coreToolSpec.js';
 export {
   searchCatalog,
   resetSearchIndex,

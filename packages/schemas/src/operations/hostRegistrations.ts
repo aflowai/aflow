@@ -156,6 +156,10 @@ export const HostOperationRegistrations: OperationRegistration[] = [
     outputZod: HostFilePatchOutputSchema,
     name: 'Apply a Patch on Host',
     actionLabel: 'Applying patch…',
+    agentCollapsedFields: {
+      commit:
+        'Optional commit metadata and publication settings. Read catalog.tool.list for host.file.patch before supplying this object.',
+    },
     semanticDescription:
       'Take a diff into a connected folder — the change a coding harness produced, once ' +
       'someone has decided to keep it. Applies whole or not at all: a diff that no longer ' +
@@ -302,6 +306,10 @@ export const HostOperationRegistrations: OperationRegistration[] = [
     groupDisplayName: 'Host harnesses',
     groupDescription:
       'Put an agent the operator already installed and signed in to work over a connected folder.',
+    agentCollapsedFields: {
+      browser:
+        'Optional browser setup. Read catalog.tool.list for host.harness.run before supplying this object.',
+    },
     semanticDescription:
       'Delegate a whole task over the files in a connected folder to a harness installed on ' +
       "the operator's machine — the same tool they use themselves, already authenticated, " +

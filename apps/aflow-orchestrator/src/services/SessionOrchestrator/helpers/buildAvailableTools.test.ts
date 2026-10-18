@@ -21,8 +21,9 @@ import {
   buildVirtualToolSpec,
   getOperation,
   bundlesForSurface,
-  capabilityGroupsForBundles,
   applyBundlePlacements,
+  estimateToolSchemaTokens,
+  MAX_CAPABILITY_SCHEMA_TOKENS,
 } from '@aflow/schemas';
 import { CYBERNETIC_AGENTS } from '@aflow/platform-artifacts';
 import { effectiveOperationIdForSpec } from './toolAccess.js';
@@ -163,6 +164,49 @@ describe('buildAvailableTools — MAX_VIRTUAL_TOOLS cap', () => {
     expect(mcpToolIds).not.toContain('mcp:srv/tool_2');
     // The newest should survive.
     expect(mcpToolIds).toContain(`mcp:srv/tool_${String(MAX_VIRTUAL_TOOLS + 2)}`);
+  });
+});
+
+describe('buildAvailableTools — Helmsman schema budget', () => {
+  function authoredAgent(flowId: string) {
+    const agent = CYBERNETIC_AGENTS.find((candidate) => candidate.flowId === flowId);
+    if (!agent) throw new Error(`Missing platform agent ${flowId}`);
+    const step = agent.steps.find((candidate) => candidate.operation === 'ai.agent.turn');
+    if (!step) throw new Error(`Missing agent turn in ${flowId}`);
+    const catalog = (step.config as { catalog: CatalogConfig }).catalog;
+    return { agent, stepId: step.stepId, catalog };
+  }
+
+  it('preserves Coach’s authored surface above the Helmsman schema budget', () => {
+    const { agent, stepId, catalog } = authoredAgent('cybernetic-coach');
+    const tools = buildAvailableTools(agent, stepId, catalog);
+    expect(tools.reduce((sum, tool) => sum + estimateToolSchemaTokens(tool), 0)).toBeGreaterThan(
+      MAX_CAPABILITY_SCHEMA_TOKENS,
+    );
+    const resolvedCore = catalog.coreOperations.filter((id) => getOperation(id)?.agentTool);
+    expect(tools.map((tool) => tool.toolId)).toEqual(expect.arrayContaining(resolvedCore));
+  });
+
+  it('leaves oversized promoted schemas unloaded for Helmsman', () => {
+    const { agent, stepId, catalog } = authoredAgent('cybernetic-helmsman');
+    const oversized = { ...makeMcpSpec('srv', 'large'), description: 'x'.repeat(80_000) };
+    const tools = buildAvailableTools(
+      agent,
+      stepId,
+      catalog,
+      {
+        [oversized.toolId]: { discoveredAtTurn: 1 },
+      },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      [oversized],
+    );
+    expect(tools.map((tool) => tool.toolId)).not.toContain(oversized.toolId);
+    expect(
+      tools.reduce((sum, tool) => sum + estimateToolSchemaTokens(tool), 0),
+    ).toBeLessThanOrEqual(MAX_CAPABILITY_SCHEMA_TOKENS);
   });
 });
 
@@ -775,21 +819,13 @@ describe('capability bundles — shedding revokes already-promoted tools', () =>
   });
 
   it('drops a promoted op whose bundle was shed mid-session', () => {
-    const kept = withPromotedToolsRevoked(
-      promoted(),
-      capabilityGroupsForBundles(['code']),
-      undefined,
-    );
+    const kept = withPromotedToolsRevoked(promoted(), new Set(['compute.sandbox.exec']), undefined);
     expect(kept).not.toHaveProperty('compute.sandbox.exec');
     expect(kept).toHaveProperty('memory.store.query');
   });
 
   it('keeps integration tools when no connection allowlist is set', () => {
-    const kept = withPromotedToolsRevoked(
-      promoted(),
-      capabilityGroupsForBundles(['code']),
-      undefined,
-    );
+    const kept = withPromotedToolsRevoked(promoted(), new Set(['compute.sandbox.exec']), undefined);
     expect(kept).toHaveProperty('api:github-default/create_issue');
     expect(kept).toHaveProperty('mcp:kaggle-default/search');
   });
@@ -875,7 +911,7 @@ describe('capability bundles — placement', () => {
     expect(placed.discoverableOperationIds).toContain('memory.store.query');
   });
 
-  it('removes a bundle set off from both tiers and names its groups', () => {
+  it('removes a bundle set off from both tiers and names its operations', () => {
     // Read and write are separate bundles, so switching reads off must leave
     // the write half exactly where it was.
     const placed = applyBundlePlacements(['memory.store.query'], ['memory.store.delete'], {
@@ -883,7 +919,7 @@ describe('capability bundles — placement', () => {
     });
     expect(placed.coreOperations).toEqual([]);
     expect(placed.discoverableOperationIds).toEqual(['memory.store.delete']);
-    expect(placed.offCapabilityGroups.has('memory.store:read')).toBe(true);
+    expect(placed.offOperationIds.has('memory.store.query')).toBe(true);
   });
 
   it('ignores any placement stored against a locked bundle', () => {

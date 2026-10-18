@@ -304,19 +304,24 @@ export const catalogRoutes: FastifyPluginAsync = async (fastify) => {
    * client estimate would drift from what actually goes on the wire, which is
    * the one number this control exists to show.
    */
-  app.get(
+  app.post(
     '/agents/:role/bundles',
     {
-      config: { public: true },
+      config: { authz: { resource: 'space', action: 'read' } },
       schema: {
         tags: ['Catalog'],
         summary: 'Capability bundles offered to a cybernetic role',
         description:
           'Bundles this role can reach, with the per-turn token cost of the tools each pins. Locked bundles cannot be shed.',
         params: z.object({ role: z.enum(['helmsman']) }),
+        querystring: z.object({ spaceId: z.string().uuid() }),
+        body: z.object({
+          helmsmanOperations: z.array(z.string().min(1).max(128)).max(300).optional(),
+        }),
         response: {
           200: z.object({
             role: z.literal('helmsman'),
+            outputReadFloorTokens: z.number(),
             bundles: z.array(
               z.object({
                 id: z.string(),
@@ -324,7 +329,15 @@ export const catalogRoutes: FastifyPluginAsync = async (fastify) => {
                 hint: z.string(),
                 tier: z.enum(['loaded', 'on_demand']),
                 lockedReason: z.string().optional(),
-                defaultPlacement: z.enum(['always_on', 'on_demand', 'off']),
+                defaultPlacement: z.enum(['always_on', 'on_demand', 'mixed']),
+                parentId: z.string().optional(),
+                operations: z.array(
+                  z.object({
+                    operationId: z.string(),
+                    tokens: z.number(),
+                    defaultPinned: z.boolean(),
+                  }),
+                ),
                 /** Per-turn cost if this bundle is always_on. */
                 alwaysOnTokens: z.number(),
                 operationCount: z.number(),
@@ -344,94 +357,19 @@ export const catalogRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const { role } = request.params as { role: 'helmsman' };
-      const { CYBERNETIC_AGENTS } = await import('@aflow/platform-artifacts');
-      const {
-        bundlesForSurface,
-        bundleForOperation,
-        getOperation,
-        toJsonSchemaSync,
-        pruneSchemaForAgent,
-        estimateStringTokens,
-        effectivePlacement,
-      } = await import('@aflow/schemas');
+      const { resolveHelmsmanCapabilities, estimateOperationTokens } =
+        await import('@aflow/platform-artifacts');
+      const { processEditionDescriptor, RUN_OUTPUT_READ_OPERATION_ID } =
+        await import('@aflow/schemas');
+      await request.requireTenant();
+      await request.requireSpace();
+      const { bundles } = resolveHelmsmanCapabilities(processEditionDescriptor(), request.body);
 
-      const helmsman = CYBERNETIC_AGENTS.find((a) => a.flowId === 'cybernetic-helmsman');
-      const catalog = (
-        helmsman?.steps.find((s) => s['operation'] === 'ai.agent.turn')?.['config'] as
-          | {
-              catalog?: {
-                coreOperations?: string[];
-                discovery?: { allowedOperationIds?: string[] };
-              };
-            }
-          | undefined
-      )?.catalog;
-      const coreOperations = catalog?.coreOperations ?? [];
-      const surface = [...coreOperations, ...(catalog?.discovery?.allowedOperationIds ?? [])];
-
-      const tokensByBundle = new Map<string, { tokens: number; count: number }>();
-      for (const opId of coreOperations) {
-        const op = getOperation(opId);
-        const bundle = bundleForOperation(opId);
-        if (!op || !bundle) continue;
-        const emitted = JSON.stringify({
-          name: opId,
-          description: op.semanticDescription,
-          input_schema: pruneSchemaForAgent(
-            toJsonSchemaSync(op.inputZod) as Record<string, unknown>,
-          ),
-        });
-        const prior = tokensByBundle.get(bundle.id) ?? { tokens: 0, count: 0 };
-        tokensByBundle.set(bundle.id, {
-          tokens: prior.tokens + estimateStringTokens(emitted),
-          count: prior.count + 1,
-        });
-      }
-
-      // What each bundle costs when pinned, measured rather than assumed: the
-      // panel has to quote the real per-turn figure for a placement the
-      // operator has not made yet.
-      const costOf = (ops: readonly string[]): number =>
-        ops.reduce((sum, opId) => {
-          const op = getOperation(opId);
-          if (!op) return sum;
-          return (
-            sum +
-            estimateStringTokens(
-              JSON.stringify({
-                name: opId,
-                description: op.semanticDescription,
-                input_schema: pruneSchemaForAgent(
-                  toJsonSchemaSync(op.inputZod) as Record<string, unknown>,
-                ),
-              }),
-            )
-          );
-        }, 0);
-
-      const bundles = bundlesForSurface(surface).map((b) => {
-        // Everything this bundle owns inside the agent's authored authority —
-        // which is exactly what `always_on` would pin, since placement never
-        // widens beyond the ceiling.
-        const owned = surface.filter((opId) => bundleForOperation(opId)?.id === b.id);
-        const authoredPinned = coreOperations.filter(
-          (opId) => bundleForOperation(opId)?.id === b.id,
-        );
-        return {
-          id: b.id,
-          label: b.label,
-          hint: b.hint,
-          tier: b.tier,
-          ...(b.locked ? { lockedReason: b.locked.reason } : {}),
-          defaultPlacement: effectivePlacement(b, undefined),
-          alwaysOnTokens: costOf(owned),
-          operationCount: owned.length,
-          authoredPinnedTokens: costOf(authoredPinned),
-          authoredPinnedCount: authoredPinned.length,
-        };
+      reply.send({
+        role,
+        bundles,
+        outputReadFloorTokens: estimateOperationTokens(RUN_OUTPUT_READ_OPERATION_ID),
       });
-
-      reply.send({ role, bundles });
     },
   );
 

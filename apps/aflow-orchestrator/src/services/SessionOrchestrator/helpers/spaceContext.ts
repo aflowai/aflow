@@ -1,22 +1,13 @@
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq, sql, and, isNull, inArray } from 'drizzle-orm';
-import type {
-  TenantId,
-  SkillDiagnostic,
-  ActivationStatus,
-  SkillValidity,
-  SpaceContextIndexNote,
-} from '@aflow/schemas';
+import type { TenantId, SpaceContextIndexNote } from '@aflow/schemas';
 import {
   SPACE_CONTEXT_LIMITS,
+  SpaceContextSchema,
+  INSTALLED_SKILLS_GUIDANCE,
   SPACE_CONTEXT_TTL_MS,
   SpaceComputePolicySchema,
-  SkillValiditySchema,
   buildSpaceContextNavigation,
-  codeLaneComposed,
-  computeSkillReadiness,
-  describeMissingCapability,
-  foldMissingCapabilitiesForAbsentCodeLane,
   type SpaceContext,
 } from '@aflow/schemas';
 import {
@@ -42,15 +33,7 @@ import {
   type PublishingFolder,
   getRedisConnection,
 } from '@aflow/redis';
-import {
-  deriveFirstTaskInputContract,
-  ensureWorkflowDocValidity,
-  cachedOrRecomputeValidity,
-  loadAvailableCapabilitySet,
-  deriveWorkflowLaneTokens,
-  deriveWorkflowPolicyPrefixes,
-} from '@aflow/cybernetic-runtime';
-import { PLATFORM_SKILL_BUNDLES } from '@aflow/platform-artifacts';
+import { buildInstalledSkillAwareness } from '@aflow/cybernetic-runtime';
 import { getOrchestratorLogger } from '../../../lib/orchestratorLogger.js';
 import { readIntegrations } from './integrationReader.js';
 import { buildSpaceContextAppletsSection } from './spaceContextApplets.js';
@@ -194,21 +177,7 @@ export function mergeHostHarnesses(
   return [...byId.values()].sort((a, b) => a.id.localeCompare(b.id));
 }
 
-export const SKILLS_GUIDANCE =
-  'A skill is the user-facing word for a workflow. To start a skill run use workflow.run.start ' +
-  'with the skill slug; workflow.manage.get fetches one skill’s full definition. ' +
-  'Authoring or editing a skill normally runs through the compose-skill skill (which stages a ' +
-  'change for operator ratification); to inspect or patch a skill DIRECTLY, or to read its deep ' +
-  'run history + learnings, promote the op you need via catalog.tool.promote — ' +
-  'workflow.manage.list (enumerate), workflow.manage.patch / put (edit), workflow.ledger.get ' +
-  '(history). ' +
-  'When the skill entry above carries `firstTaskInputContract`, read it (a JSON Schema) and ' +
-  'populate `workflow.run.start.inputs` keyed by the same field names — the orchestrator ' +
-  'validates the inputs and surfaces them to the Runner verbatim. When `firstTaskInputContract` ' +
-  'is absent, the skill has no typed input surface — pass guidance via `instructions` instead ' +
-  '(freeform string or per-task `{ taskId, text }[]`). ' +
-  'A skill in needsSetup carries a `setup` line per missing capability naming what is missing ' +
-  'and what closes it. Point the operator at that fix — do not attempt the run first.';
+export const SKILLS_GUIDANCE = INSTALLED_SKILLS_GUIDANCE;
 
 export const COMPUTE_GUIDANCE =
   'To execute code use compute.sandbox.exec (promote it via catalog.tool.promote if it is not ' +
@@ -227,237 +196,6 @@ export const COMPUTE_GUIDANCE =
 // ============================================================================
 // Pure helpers (extracted for unit testing)
 // ============================================================================
-
-type SkillMode = 'optimization' | 'process' | 'project';
-type SkillStatus = 'draft' | 'approved';
-
-export interface ActiveSkillEntry {
-  slug: string;
-  name: string;
-  description?: string;
-  mode: SkillMode;
-  status: SkillStatus;
-  progress: string;
-  bestResult?: string;
-  origin: 'platform' | 'space';
-  firstTaskInputContract?: Record<string, unknown>;
-}
-
-const isSkillMode = (m: string): m is SkillMode =>
-  m === 'optimization' || m === 'process' || m === 'project';
-
-/**
- * Convert PLATFORM_SKILL_BUNDLES → entry list. Stub workflows like
- * `helmsman-supervisory-sweep` are NOT included (those live in
- * `PLATFORM_SYSTEM_WORKFLOWS` and aren't user-callable yet).
- *
- * Returns [] for non-cybernetic spaces — platform skills only have meaning
- * inside the cybernetic agent loop.
- */
-export function buildPlatformSkillEntries(): ActiveSkillEntry[] {
-  const out: ActiveSkillEntry[] = [];
-  for (const bundle of PLATFORM_SKILL_BUNDLES) {
-    const wf = bundle.workflow;
-    if (wf.status !== 'approved' && wf.status !== 'draft') continue;
-    if (!isSkillMode(wf.mode)) continue;
-    const firstTaskInputContract = deriveFirstTaskInputContract({
-      slug: wf.slug,
-      tasks: wf.tasks as never,
-      runInputs: (wf as { runInputs?: unknown }).runInputs as never,
-    });
-    out.push({
-      slug: wf.slug,
-      name: wf.name,
-      ...(wf.description ? { description: wf.description } : {}),
-      mode: wf.mode,
-      status: wf.status,
-      progress: 'platform skill — always available',
-      origin: 'platform',
-      ...(firstTaskInputContract !== null ? { firstTaskInputContract } : {}),
-    });
-  }
-  return out;
-}
-
-export interface NeedsRepairSkillEntry {
-  slug: string;
-  name: string;
-  diagnostics: SkillDiagnostic[];
-}
-
-export interface NeedsSetupSkillEntry {
-  slug: string;
-  name: string;
-  activationStatus: 'needs_binding' | 'degraded';
-  missingCapabilities: string[];
-  setup?: string[];
-  missingEndpointIds?: string[];
-}
-
-export const NEEDS_REPAIR_SURFACE_LIMIT = 10;
-const NEEDS_REPAIR_DIAGNOSTIC_CAP = 10;
-export const NEEDS_SETUP_SURFACE_LIMIT = 10;
-const NEEDS_SETUP_CAPABILITY_CAP = 20;
-
-/**
- * Both the `/workflows/` doc scan and the `/skills/` projection scan fetch the
- * WHOLE bounded skill set, not a window sized to the surface caps. A windowed
- * scan is a single capped, unordered read — so N non-callable docs (broken,
- * unbound, dormant) could fill the window and hide callable skills behind it,
- * AND the two scans share no ordering, so a windowed projection scan could miss
- * the projection for a fetched workflow and default it to `active`. Fetching the
- * whole set sidesteps both: every skill is seen and routed, and the per-bucket
- * caps (below) decide only how many of each kind to surface.
- *
- * 200 is the platform's skill-scan bound (`listSkillsForSpace`) — spaces hold
- * tens of skills; a space beyond 200 skills truncates here exactly as it does
- * there. A guard test pins that this stays ≥ the combined surface caps.
- */
-export const SKILL_DOC_SCAN_LIMIT = 200;
-
-export function composeSkillsSection(
-  entries: ActiveSkillEntry[],
-  needsRepair: NeedsRepairSkillEntry[] = [],
-  needsSetup: NeedsSetupSkillEntry[] = [],
-):
-  | {
-      active: ActiveSkillEntry[];
-      needsSetup?: NeedsSetupSkillEntry[];
-      needsRepair?: NeedsRepairSkillEntry[];
-      total: number;
-      truncated?: boolean;
-      guidance: string;
-    }
-  | undefined {
-  if (entries.length === 0 && needsRepair.length === 0 && needsSetup.length === 0) return undefined;
-  const cap = SPACE_CONTEXT_LIMITS.skills;
-  const truncated = entries.length > cap;
-  const items = truncated ? entries.slice(0, cap) : entries;
-  const repair = needsRepair.slice(0, NEEDS_REPAIR_SURFACE_LIMIT);
-  const setup = needsSetup.slice(0, NEEDS_SETUP_SURFACE_LIMIT);
-  const setupGuidance =
-    setup.length > 0
-      ? ` ${String(setup.length)} skill(s) need setup (valid but a required integration is unbound) — not callable until the operator binds the missing capability.`
-      : '';
-  const repairGuidance =
-    repair.length > 0
-      ? ` ${String(repair.length)} skill(s) need repair (contract invalid) — not callable; the diagnostics name the break, and the fix is an in-place Coach patch.`
-      : '';
-  return {
-    active: items,
-    ...(setup.length > 0 ? { needsSetup: setup } : {}),
-    ...(repair.length > 0 ? { needsRepair: repair } : {}),
-    total: entries.length,
-    ...(truncated ? { truncated: true } : {}),
-    guidance:
-      (truncated
-        ? `${SKILLS_GUIDANCE} ${entries.length - cap} more skills not shown — promote workflow.manage.list to enumerate all.`
-        : `${SKILLS_GUIDANCE} These are all skills available in this space.`) +
-      setupGuidance +
-      repairGuidance,
-  };
-}
-
-/** The space-dependent capability-readiness axis read off a SkillProjection. */
-export interface SkillActivation {
-  activationStatus: ActivationStatus;
-  missingCapabilities: string[];
-  missingEndpointIds: string[];
-  contractValidity?: SkillValidity;
-  contractValidityHash?: string;
-}
-
-const ACTIVATION_STATUSES: ReadonlySet<string> = new Set<ActivationStatus>([
-  'active',
-  'needs_binding',
-  'degraded',
-  'dormant',
-  'archived',
-]);
-
-function collectMissingEndpointIds(capabilityDependencies: unknown): string[] {
-  if (!Array.isArray(capabilityDependencies)) return [];
-  const out: string[] = [];
-  for (const dep of capabilityDependencies) {
-    if (!dep || typeof dep !== 'object') continue;
-    const d = dep as { status?: unknown; missingEndpointIds?: unknown };
-    if (d.status !== 'missing_endpoint' || !Array.isArray(d.missingEndpointIds)) continue;
-    for (const id of d.missingEndpointIds) {
-      if (typeof id === 'string') out.push(id);
-    }
-  }
-  return out;
-}
-
-export function buildProjectionActivationMap(
-  rows: ReadonlyArray<{ path: string; inlineContent: string | null }>,
-): Map<string, SkillActivation> {
-  const map = new Map<string, SkillActivation>();
-  for (const row of rows) {
-    if (!row.inlineContent) continue;
-    const skillId = row.path.split('/')[2]; // ['', 'skills', '{skillId}', 'projection.json']
-    if (!skillId) continue;
-    try {
-      const doc = JSON.parse(row.inlineContent) as {
-        activationStatus?: unknown;
-        missingCapabilities?: unknown;
-        capabilityDependencies?: unknown;
-        contractValidity?: unknown;
-        contractValidityHash?: unknown;
-      };
-      const rawStatus = doc.activationStatus;
-      const activationStatus: ActivationStatus =
-        typeof rawStatus === 'string' && ACTIVATION_STATUSES.has(rawStatus)
-          ? (rawStatus as ActivationStatus)
-          : 'active';
-      const missingCapabilities = Array.isArray(doc.missingCapabilities)
-        ? doc.missingCapabilities.filter((c): c is string => typeof c === 'string')
-        : [];
-      const missingEndpointIds = collectMissingEndpointIds(doc.capabilityDependencies);
-      // Carry the cached verdict only when BOTH verdict and hash parse (a hashless verdict can't be trusted).
-      const parsedValidity = SkillValiditySchema.safeParse(doc.contractValidity);
-      const cacheable = parsedValidity.success && typeof doc.contractValidityHash === 'string';
-      map.set(skillId, {
-        activationStatus,
-        missingCapabilities,
-        missingEndpointIds,
-        ...(cacheable
-          ? {
-              contractValidity: parsedValidity.data,
-              contractValidityHash: doc.contractValidityHash as string,
-            }
-          : {}),
-      });
-    } catch {
-      // Skip malformed projection docs — the lookup falls back to 'active'.
-    }
-  }
-  return map;
-}
-
-/**
- * Recompute the binding-dependent activation axis at read time. The projection's
- * cached `activationStatus`/`missingCapabilities` are an advisory snapshot from
- * install/last-reconcile; the moment the operator binds a previously-missing
- * capability the cache is stale and a working skill is wrongly surfaced as
- * `needs_binding` in the context the Helmsman reads. Re-filter the cached missing
- * list against the live `available` capability set so a now-bound skill flips back
- * to callable. `available` is undefined when no projection claimed `needs_binding`
- * (nothing to recompute) — the cached values pass through verbatim.
- */
-export function recomputeActivation(
-  activation: SkillActivation | undefined,
-  available: Set<string> | undefined,
-): { activationStatus: ActivationStatus; missingCapabilities: string[] } {
-  const activationStatus = activation?.activationStatus ?? 'active';
-  const missingCapabilities = activation?.missingCapabilities ?? [];
-  if (available && activationStatus === 'needs_binding' && missingCapabilities.length > 0) {
-    const stillMissing = missingCapabilities.filter((c) => !available.has(c));
-    if (stillMissing.length === 0) return { activationStatus: 'active', missingCapabilities: [] };
-    return { activationStatus, missingCapabilities: stillMissing };
-  }
-  return { activationStatus, missingCapabilities };
-}
 
 /** The persisted `/index.md` projection: the derivation column + freshness. */
 export interface IndexNoteRow {
@@ -513,116 +251,78 @@ export async function buildSpaceContext(
 
     const result = await withTenantSchema(db, tenantContext, async (tx) => {
       // Run all queries in parallel within the same tenant schema context
-      const [
-        spaceRows,
-        rootDirRows,
-        docCountRows,
-        dirCountRows,
-        objectiveRows,
-        projectionRows,
-        indexNoteRows,
-      ] = await Promise.all([
-        // 1. Space details (slug, name, description, rules, compute policy)
-        tx
-          .select({
-            slug: spaces.slug,
-            name: spaces.name,
-            description: spaces.description,
-            rules: spaces.rules,
-            computePolicy: spaces.computePolicy,
-            directives: spaces.directives,
-          })
-          .from(spaces)
-          .where(eq(spaces.id, spaceId))
-          .limit(1),
+      const [spaceRows, rootDirRows, docCountRows, dirCountRows, indexNoteRows] = await Promise.all(
+        [
+          // 1. Space details (slug, name, description, rules, compute policy)
+          tx
+            .select({
+              slug: spaces.slug,
+              name: spaces.name,
+              description: spaces.description,
+              rules: spaces.rules,
+              computePolicy: spaces.computePolicy,
+              directives: spaces.directives,
+            })
+            .from(spaces)
+            .where(eq(spaces.id, spaceId))
+            .limit(1),
 
-        // 2. Top-level memory directories (children of root '/', not deleted, scoped to space)
-        // Root '/' always exists and is uninformative — show its children instead.
-        tx
-          .select({
-            path: memoryDirs.path,
-            name: memoryDirs.name,
-            description: memoryDirs.description,
-          })
-          .from(memoryDirs)
-          .where(
-            and(
-              eq(memoryDirs.spaceId, spaceId),
-              eq(memoryDirs.parentPath, '/'),
-              isNull(memoryDirs.deletedAt),
-            ),
-          )
-          .limit(SPACE_CONTEXT_LIMITS.memoryDirectories + 1), // +1 to detect truncation
+          // 2. Top-level memory directories (children of root '/', not deleted, scoped to space)
+          // Root '/' always exists and is uninformative — show its children instead.
+          tx
+            .select({
+              path: memoryDirs.path,
+              name: memoryDirs.name,
+              description: memoryDirs.description,
+            })
+            .from(memoryDirs)
+            .where(
+              and(
+                eq(memoryDirs.spaceId, spaceId),
+                eq(memoryDirs.parentPath, '/'),
+                isNull(memoryDirs.deletedAt),
+              ),
+            )
+            .limit(SPACE_CONTEXT_LIMITS.memoryDirectories + 1), // +1 to detect truncation
 
-        // 3. Total document count for the space
-        tx
-          .select({ count: sql<number>`count(*)::int` })
-          .from(memoryDocs)
-          .where(and(eq(memoryDocs.spaceId, spaceId), isNull(memoryDocs.deletedAt))),
+          // 3. Total document count for the space
+          tx
+            .select({ count: sql<number>`count(*)::int` })
+            .from(memoryDocs)
+            .where(and(eq(memoryDocs.spaceId, spaceId), isNull(memoryDocs.deletedAt))),
 
-        // 4. Total directory count for the space
-        tx
-          .select({ count: sql<number>`count(*)::int` })
-          .from(memoryDirs)
-          .where(and(eq(memoryDirs.spaceId, spaceId), isNull(memoryDirs.deletedAt))),
+          // 4. Total directory count for the space
+          tx
+            .select({ count: sql<number>`count(*)::int` })
+            .from(memoryDirs)
+            .where(and(eq(memoryDirs.spaceId, spaceId), isNull(memoryDirs.deletedAt))),
 
-        tx
-          .select({
-            path: memoryDocs.path,
-            inlineContent: memoryDocs.inlineContent,
-          })
-          .from(memoryDocs)
-          .where(
-            and(
-              eq(memoryDocs.spaceId, spaceId),
-              sql`${memoryDocs.path} LIKE '/workflows/%/workflow.json'`,
-              isNull(memoryDocs.deletedAt),
-            ),
-          )
-          .limit(SKILL_DOC_SCAN_LIMIT), // whole bounded skill set — never hide callable skills behind the cap
-
-        tx
-          .select({
-            path: memoryDocs.path,
-            inlineContent: memoryDocs.inlineContent,
-          })
-          .from(memoryDocs)
-          .where(
-            and(
-              eq(memoryDocs.spaceId, spaceId),
-              sql`${memoryDocs.path} LIKE '/skills/%/projection.json'`,
-              isNull(memoryDocs.deletedAt),
-            ),
-          )
-          .limit(SKILL_DOC_SCAN_LIMIT), // whole space — no shared ordering with the workflow scan
-
-        // The memory-map note's PROJECTION column only — never its body. The
-        // parsed, bounded, sanitized entries live in derivation.indexEntries
-        // (persisted at write). Reading content here would breach the
-        // injection boundary; reading the projection cannot.
-        tx
-          .select({
-            derivation: memoryDocs.derivation,
-            updatedAt: memoryDocs.updatedAt,
-          })
-          .from(memoryDocs)
-          .where(
-            and(
-              eq(memoryDocs.spaceId, spaceId),
-              eq(memoryDocs.path, INDEX_NOTE_PATH),
-              isNull(memoryDocs.deletedAt),
-            ),
-          )
-          .limit(1),
-      ]);
+          // The memory-map note's PROJECTION column only — never its body. The
+          // parsed, bounded, sanitized entries live in derivation.indexEntries
+          // (persisted at write). Reading content here would breach the
+          // injection boundary; reading the projection cannot.
+          tx
+            .select({
+              derivation: memoryDocs.derivation,
+              updatedAt: memoryDocs.updatedAt,
+            })
+            .from(memoryDocs)
+            .where(
+              and(
+                eq(memoryDocs.spaceId, spaceId),
+                eq(memoryDocs.path, INDEX_NOTE_PATH),
+                isNull(memoryDocs.deletedAt),
+              ),
+            )
+            .limit(1),
+        ],
+      );
 
       return {
         spaceRows,
         rootDirRows,
         docCountRows,
         dirCountRows,
-        workflowRows: objectiveRows,
-        projectionRows,
         indexNoteRows,
       };
     });
@@ -930,276 +630,12 @@ export async function buildSpaceContext(
       }
     }
 
-    const activeSkills: ActiveSkillEntry[] = buildPlatformSkillEntries();
-    const needsRepair: NeedsRepairSkillEntry[] = [];
-    const needsSetup: NeedsSetupSkillEntry[] = [];
-    const seenSlugs = new Set<string>(activeSkills.map((s) => s.slug));
-
-    const projectionActivation = buildProjectionActivationMap(result.projectionRows);
-
-    // Activation readiness is a space-dependent axis (which capabilities are bound)
-    // and the projection's cached `activationStatus` goes stale the moment the
-    // operator binds a capability after the skill was installed — leaving a
-    // working skill marked `needs_binding` in the context the Helmsman reads.
-    // Recompute that axis at read against the CURRENT bindings, just as the
-    // contract axis is recomputed above. Only load the (cheap) binding set when a
-    // projection actually claims `needs_binding`, so fully-bound spaces pay nothing.
-    const hasNeedsBindingProjection = [...projectionActivation.values()].some(
-      (a) => a.activationStatus === 'needs_binding' && a.missingCapabilities.length > 0,
-    );
-    let availableCapabilities = hasNeedsBindingProjection
-      ? await loadAvailableCapabilitySet({ db, tenantId, spaceId })
-      : undefined;
-    // Lane tokens are re-derived from the live workflow below (a stale 'active'
-    // projection predating lane gating carries none), so the capability set may
-    // be needed even when no projection claims needs_binding.
-    const ensureAvailableCapabilities = async (): Promise<Set<string>> => {
-      availableCapabilities ??= await loadAvailableCapabilitySet({ db, tenantId, spaceId });
-      return availableCapabilities;
-    };
-    // A cached projection can still carry the lane's key and repo tokens from a
-    // reconcile that ran where a coding lane existed; where none is composed,
-    // they fold into the one token that says so.
-    const codeLane = codeLaneComposed();
-
-    // Pass 2: space-local skills from memory docs (still keyed under /workflows/ on disk).
-    if (result.workflowRows.length > 0) {
-      interface WfData {
-        slug: string;
-        name: string;
-        description?: string;
-        mode: 'optimization' | 'process' | 'project';
-        status: string;
-        budget?: { maxRuns?: number };
-        tasks?: unknown;
-      }
-      interface LedgerData {
-        entries: Array<{
-          status: string;
-          evaluation?: { outcomeResults?: Array<{ value?: unknown }>; allMet?: boolean };
-        }>;
-      }
-
-      const activeWfData: WfData[] = [];
-      for (const row of result.workflowRows) {
-        if (!row.inlineContent) continue;
-        if (
-          activeSkills.length + activeWfData.length >= SPACE_CONTEXT_LIMITS.skills &&
-          needsRepair.length >= NEEDS_REPAIR_SURFACE_LIMIT &&
-          needsSetup.length >= NEEDS_SETUP_SURFACE_LIMIT
-        ) {
-          break; // all three surfaces full — nothing more to collect
-        }
-        try {
-          const wf = JSON.parse(row.inlineContent) as WfData;
-          if (wf.status !== 'draft' && wf.status !== 'approved') continue;
-          if (seenSlugs.has(wf.slug)) continue; // platform-first dedup
-          seenSlugs.add(wf.slug);
-
-          // Projection carries both axes: cached contract verdict (+ hash, Slice
-          // 5b) and capability activation. No projection ⇒ `active`.
-          const activation = projectionActivation.get(wf.slug);
-
-          // Contract axis — cached-or-recompute (cache used only while the config
-          // hash matches); an `invalid` skill goes to `needsRepair`, not callable.
-          const validity = cachedOrRecomputeValidity(wf, activation);
-          if (validity.status === 'invalid') {
-            if (needsRepair.length < NEEDS_REPAIR_SURFACE_LIMIT) {
-              needsRepair.push({
-                slug: wf.slug,
-                name: wf.name,
-                diagnostics: validity.diagnostics.slice(0, NEEDS_REPAIR_DIAGNOSTIC_CAP),
-              });
-            }
-            continue;
-          }
-
-          // Capability axis — recompute the binding-dependent status at read so a
-          // capability bound after install flips the skill back to callable instead
-          // of staying stuck on the projection's stale `needs_binding`.
-          const recomputed = recomputeActivation(activation, availableCapabilities);
-          let { activationStatus } = recomputed;
-          let { missingCapabilities } = recomputed;
-
-          // Lane + space-policy axes — always derived from the live tasks, never
-          // the cached projection, so skills installed before a gate existed gain
-          // the check at read.
-          const wfTasks = Array.isArray(wf.tasks)
-            ? (wf.tasks as Array<{
-                operation?: string;
-                inputTemplate?: unknown;
-                context?: unknown;
-              }>)
-            : [];
-          const gatedTokens = [
-            ...deriveWorkflowLaneTokens(wfTasks),
-            ...deriveWorkflowPolicyPrefixes(wfTasks),
-          ];
-          if (gatedTokens.length > 0 && activationStatus !== 'dormant') {
-            const caps = await ensureAvailableCapabilities();
-            const gatedMissing = gatedTokens.filter((t) => !caps.has(t));
-            if (gatedMissing.length > 0) {
-              activationStatus = 'needs_binding';
-              missingCapabilities = [...new Set([...missingCapabilities, ...gatedMissing])];
-            }
-          }
-          missingCapabilities = foldMissingCapabilitiesForAbsentCodeLane(
-            missingCapabilities,
-            codeLane,
-          );
-
-          const readiness = computeSkillReadiness({ contractValidity: validity, activationStatus });
-
-          // Valid-but-unbound: the operator binds a credential (`needsSetup`).
-          // Narrow on the activation status itself (not a cast) so this stays
-          // correct if `computeSkillReadiness`'s `needsSetup` ever broadens.
-          if (
-            readiness.needsSetup &&
-            (activationStatus === 'needs_binding' || activationStatus === 'degraded')
-          ) {
-            if (needsSetup.length < NEEDS_SETUP_SURFACE_LIMIT) {
-              const missingEndpointIds = (activation?.missingEndpointIds ?? []).slice(
-                0,
-                NEEDS_SETUP_CAPABILITY_CAP,
-              );
-              const surfacedCapabilities = missingCapabilities.slice(0, NEEDS_SETUP_CAPABILITY_CAP);
-              needsSetup.push({
-                slug: wf.slug,
-                name: wf.name,
-                activationStatus,
-                missingCapabilities: surfacedCapabilities,
-                ...(surfacedCapabilities.length > 0
-                  ? { setup: surfacedCapabilities.map(describeMissingCapability) }
-                  : {}),
-                // `degraded` (endpoint drift) carries which endpoints broke; the
-                // `missingCapabilities` list is empty in that sub-case.
-                ...(missingEndpointIds.length > 0 ? { missingEndpointIds } : {}),
-              });
-            }
-            continue;
-          }
-
-          // Callable now (`canRun`) → the offerable `active` list. A contract-valid
-          // but dormant/archived activation is neither canRun nor needsSetup — dropped.
-          if (
-            readiness.canRun &&
-            activeSkills.length + activeWfData.length < SPACE_CONTEXT_LIMITS.skills
-          ) {
-            activeWfData.push(wf);
-          }
-        } catch {
-          // Malformed doc (invalid JSON or a non-object body) — surface as
-          // `needsRepair` (the most basic parse-dimension diagnostic) rather than
-          // silently dropping, so a corrupt skill stays visible to the
-          // operator/Coach. The slug is recoverable from the path even when the
-          // body won't parse; route the raw content through `ensureWorkflowDocValidity`
-          // so the diagnostic shape matches every other surface. The `seenSlugs`
-          // guard means a doc that parsed (and was already routed) before a later
-          // throw is never double-surfaced here.
-          const slug = row.path.split('/')[2]; // /workflows/{slug}/workflow.json
-          if (slug && !seenSlugs.has(slug) && needsRepair.length < NEEDS_REPAIR_SURFACE_LIMIT) {
-            seenSlugs.add(slug);
-            needsRepair.push({
-              slug,
-              name: slug,
-              diagnostics: ensureWorkflowDocValidity(row.inlineContent).diagnostics.slice(
-                0,
-                NEEDS_REPAIR_DIAGNOSTIC_CAP,
-              ),
-            });
-          }
-        }
-      }
-
-      if (activeWfData.length > 0) {
-        const ledgerPaths = activeWfData.map((wf) => `/workflows/${wf.slug}/ledger.json`);
-        const ledgerRows = await withTenantSchema(db, tenantContext, async (tx) =>
-          Promise.all(
-            ledgerPaths.map((path) =>
-              tx
-                .select({ inlineContent: memoryDocs.inlineContent })
-                .from(memoryDocs)
-                .where(and(eq(memoryDocs.path, path), isNull(memoryDocs.deletedAt)))
-                .limit(1)
-                .then((rows) => rows[0]?.inlineContent ?? null),
-            ),
-          ),
-        );
-
-        for (let i = 0; i < activeWfData.length; i++) {
-          const wf = activeWfData[i]!;
-          // `activeWfData` holds only `canRun` skills (the split above routed
-          // contract-invalid ones to `needsRepair` and valid-but-unbound ones to
-          // `needsSetup`), so this loop just builds the `active` entries with
-          // progress/ledger detail.
-          const ledgerJson = ledgerRows[i];
-          let progress: string;
-          let bestResult: string | undefined;
-
-          if (wf.status === 'draft') {
-            progress = 'draft — not yet approved';
-          } else if (!ledgerJson) {
-            progress = 'approved — no runs yet';
-          } else {
-            try {
-              const ledger = JSON.parse(ledgerJson) as LedgerData;
-              const totalRuns = ledger.entries.length;
-              const runningCount = ledger.entries.filter((e) => e.status === 'running').length;
-              const maxRuns = wf.budget?.maxRuns;
-
-              if (runningCount > 0) {
-                progress = `running — iteration ${String(totalRuns)}${maxRuns ? ` of ${String(maxRuns)}` : ''}`;
-              } else {
-                progress = `${String(totalRuns)} run${totalRuns !== 1 ? 's' : ''} completed${maxRuns ? ` (max ${String(maxRuns)})` : ''}`;
-              }
-
-              for (const entry of ledger.entries) {
-                if (entry.evaluation?.outcomeResults) {
-                  for (const result of entry.evaluation.outcomeResults) {
-                    if (typeof result.value === 'number') {
-                      if (!bestResult || result.value > parseFloat(bestResult)) {
-                        bestResult = String(result.value);
-                      }
-                    }
-                  }
-                }
-              }
-            } catch {
-              progress = 'approved';
-            }
-          }
-
-          let firstTaskInputContract: Record<string, unknown> | null = null;
-          if (Array.isArray(wf.tasks)) {
-            try {
-              firstTaskInputContract = deriveFirstTaskInputContract({
-                slug: wf.slug,
-                tasks: wf.tasks as never,
-                runInputs: (wf as { runInputs?: unknown }).runInputs as never,
-              });
-            } catch {
-              firstTaskInputContract = null;
-            }
-          }
-          activeSkills.push({
-            slug: wf.slug,
-            name: wf.name,
-            ...(wf.description ? { description: wf.description } : {}),
-            mode: wf.mode,
-            status: wf.status as SkillStatus,
-            progress,
-            ...(bestResult ? { bestResult } : {}),
-            origin: 'space',
-            ...(firstTaskInputContract !== null ? { firstTaskInputContract } : {}),
-          });
-        }
-      }
-    }
-
-    const skillsSection = composeSkillsSection(activeSkills, needsRepair, needsSetup);
-    if (skillsSection) {
-      context.skills = skillsSection;
-    }
+    const skillPlacements = (
+      spaceRow.directives as {
+        capabilityDiscovery?: { skillPlacements?: Record<string, string> };
+      } | null
+    )?.capabilityDiscovery?.skillPlacements;
+    context.skills = await buildInstalledSkillAwareness({ db, tenantId, spaceId }, skillPlacements);
 
     const appletsSection = await buildSpaceContextAppletsSection(db, tenantId, spaceId);
     if (appletsSection) {
@@ -1253,7 +689,8 @@ export function readCachedSpaceContext(
   }
 
   try {
-    return JSON.parse(runState.spaceContextJson) as SpaceContext;
+    const parsed = SpaceContextSchema.safeParse(JSON.parse(runState.spaceContextJson));
+    return parsed.success ? parsed.data : undefined;
   } catch {
     return undefined;
   }
