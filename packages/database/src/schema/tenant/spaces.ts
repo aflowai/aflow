@@ -71,6 +71,9 @@ export const spaces = pgTable('spaces', {
   directives: jsonb('directives').$type<EntityDirectives | null>(),
 
   activeMemory: jsonb('active_memory').$type<ActiveMemoryRegister | null>(),
+
+  /** The model every memory vector in this space comes from (Plan 315 D12). */
+  memoryEmbeddingModel: text('memory_embedding_model'),
 });
 
 export type SpaceRow = typeof spaces.$inferSelect;

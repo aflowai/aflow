@@ -33,21 +33,14 @@ holding it, which is why an agent turn reads it from there and from nowhere
 else. Until one exists the workspace reports itself unready and no turn runs;
 first run leads to the provider setup that fixes it.
 
-`.env.local` beside the compose file is read, but for a different job: the
-memory embedder takes `OPENAI_API_KEY` from the environment to embed memory in
-the background. Only that one — the embedder requests the default embedding
-model, which is an OpenAI model, and the appliance has no surface for choosing
-another, so a key for any other provider reaches the embedder and embeds
-nothing.
-
-```
-# Background memory embedding only — agent turns use the credential entered in the UI.
-OPENAI_API_KEY=...
-```
-
-A key placed only in `.env.local` therefore leaves the workspace unready, and
-one entered only in the UI leaves memory unembedded. An instance that wants both
-supplies both.
+Memory is embedded with the same credentials. Each workspace has one embedding
+model, chosen in Settings → Memory from the models whose provider has a key in
+that workspace or the instance; until one is chosen, the first embedding pins a
+default that follows the chat provider. A personal key embeds in the
+workspaces its holder owns, which on the appliance is all of them. With no provider that offers
+embeddings — Anthropic offers none — memory is searched by keyword, and Settings
+→ Memory says so. A key in `.env.local` is never used for embedding on the
+appliance.
 
 ## Check it came up
 
@@ -109,7 +102,7 @@ Every service in the stack runs as the same user, so ownership separates none of
 
 `api` is the one reader of the whole file: it compares the instance secret, unwraps credentials, and resolves the instance's identity from the pinned ids. `bootstrap` is the one writer, and the only service that mounts any of these writable. The cuts are re-derived on every start and are not archived — a restored `instance_config` replaces them on the next boot, before the worker or the web process reads one.
 
-Model-provider keys are **not** in `instance.env`. The credential entered in the UI is in the database, encrypted with the key that is in the backup, so it restores with everything else; the embedder's `.env.local` copy is not, and the operator supplies that again on a new host.
+Model-provider keys are **not** in `instance.env`. The credential entered in the UI is in the database, encrypted with the key that is in the backup, so it restores with everything else.
 
 **Back that volume up with the database.** A database restored without its encryption key has credential rows nothing can read. Restoring both together works; supplying the original key through the environment on a fresh instance also works, and bootstrap will adopt it rather than generate past it.
 

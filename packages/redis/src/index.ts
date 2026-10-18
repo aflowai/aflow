@@ -315,17 +315,6 @@ export {
 } from './writeApproval.js';
 export { browserAskKey, rememberBrowserAsk, readBrowserAsk } from './browserApproval.js';
 
-// Memory embedding operations
-export {
-  MEMORY_EMBED_CONSUMER_GROUP,
-  ensureMemoryEmbedConsumerGroup,
-  publishMemoryEmbedJob,
-  readMemoryEmbedJobs,
-  ackMemoryEmbedJob,
-  claimPendingMemoryEmbedJobs,
-  publishMemoryEmbedJobToDlq,
-} from './memoryEmbed.js';
-
 // Memory v2 doc embedding operations
 export {
   MEMORY_DOC_EMBED_CONSUMER_GROUP,
@@ -512,6 +501,7 @@ export type { Redis } from 'ioredis';
 export {
   consumeEmbeddingBudget,
   estimateEmbeddingTokens,
+  estimateEmbeddingTokensFromChars,
   type EmbeddingBudgetLimits,
   type EmbeddingBudgetResult,
 } from './embeddingBudget.js';

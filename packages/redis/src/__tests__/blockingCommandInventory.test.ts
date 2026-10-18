@@ -27,10 +27,6 @@ const ALLOWLIST: ReadonlyArray<{ file: string; reason: string }> = [
     reason: 'Executor job-stream XREADGROUP — executors pass their dedicated redisBlocking',
   },
   {
-    file: 'packages/redis/src/memoryEmbed.ts',
-    reason: 'Memory embedder XREADGROUP helper — caller passes a BlockingRedisConnection',
-  },
-  {
     file: 'packages/redis/src/memoryDocEmbed.ts',
     reason: 'Memory v2 doc-embed XREADGROUP helper — caller passes a BlockingRedisConnection',
   },

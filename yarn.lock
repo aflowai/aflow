@@ -130,6 +130,7 @@ __metadata:
   resolution: "@aflow/aflow-executor-memory@workspace:apps/aflow-executor-memory"
   dependencies:
     "@aflow/ai-client": "workspace:*"
+    "@aflow/credential-resolver": "workspace:*"
     "@aflow/database": "workspace:*"
     "@aflow/executor-runtime": "workspace:*"
     "@aflow/lib": "workspace:*"

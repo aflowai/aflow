@@ -5,7 +5,6 @@ import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const ORCH_BOOT = resolve(here, '..', 'index.ts');
-const AI_EXECUTOR_BOOT = resolve(here, '..', '..', '..', 'aflow-executor-ai', 'src', 'index.ts');
 
 function read(path: string): string {
   return readFileSync(path, 'utf8');
@@ -81,38 +80,6 @@ describe('Plan 168 — orchestrator wiring', () => {
         boot,
       ),
       'workflowTaskProgressConsumer must receive workflowProgressBlockingRedis',
-    ).toBe(true);
-  });
-});
-
-describe('Plan 168 — AI executor MemoryEmbedder wiring', () => {
-  const boot = read(AI_EXECUTOR_BOOT);
-
-  it('mints a dedicated blocking connection for the memory embedder', () => {
-    // The MemoryEmbedder issues XREADGROUP BLOCK 5000 — sharing the main
-    // `redis` handle was the §1.2.2 bug.
-    expect(
-      /createBlockingRedisConnection\(\s*[`'"]ai-memory-embedder-/.test(boot),
-      'AI executor should mint a per-process ai-memory-embedder-<pid> blocking connection',
-    ).toBe(true);
-  });
-
-  it('constructs MemoryEmbedder with blockingRedis (not just redis)', () => {
-    // Grep the MemoryEmbedder construction site and confirm the
-    // blockingRedis field is wired.
-    const ctorMatch = /new\s+MemoryEmbedder\s*\(\s*\{([\s\S]*?)\}\s*\)/.exec(boot);
-    expect(ctorMatch, 'expected a `new MemoryEmbedder({...})` call site').not.toBeNull();
-    const ctorBody = ctorMatch![1] ?? '';
-    expect(
-      /\bblockingRedis\s*:/.test(ctorBody),
-      'MemoryEmbedder must be constructed with a `blockingRedis` dep',
-    ).toBe(true);
-  });
-
-  it('quits the memory embedder blocking connection during shutdown', () => {
-    expect(
-      /quitRedisWithTimeout\(memoryEmbedderBlockingRedis\)/.test(boot),
-      'AI executor shutdown should quit memoryEmbedderBlockingRedis',
     ).toBe(true);
   });
 });

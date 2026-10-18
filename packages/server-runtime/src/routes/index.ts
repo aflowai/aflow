@@ -10,3 +10,4 @@ export { ErrorSchema, MemberResponseSchema, getSpaceOwnerId } from './spacesShar
 export { spaceCrudRoutes } from './spaceCrudRoutes.js';
 export { spaceLifecycleRoutes } from './spaceLifecycleRoutes.js';
 export { spacePolicyRoutes } from './spacePolicyRoutes.js';
+export { spaceMemoryEmbeddingRoutes } from './spaceMemoryEmbedding.js';

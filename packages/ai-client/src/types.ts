@@ -989,6 +989,12 @@ export interface ModelDefinition {
   /** Present exactly when `capabilities.decision` is. */
   decision?: ModelDecisionProfile;
   /**
+   * The vector size requested on every call, present exactly when
+   * `capabilities.embedding` is. Memory stores one column per size, so a model
+   * whose native size has no column is served at one that does.
+   */
+  embeddingDimensions?: number;
+  /**
    * OpenRouter provider routing. When set, restricts which upstream providers
    * handle requests for this model (e.g. only Cerebras, only Groq).
    */

@@ -44,7 +44,17 @@ export const MemoryDocTypeSchema = z.enum([
 ]);
 export type MemoryDocType = z.infer<typeof MemoryDocTypeSchema>;
 
-export const MemoryEmbeddingStatusSchema = z.enum(['disabled', 'pending', 'indexed', 'failed']);
+/**
+ * `unconfigured`: the space has no embedding provider, so the document waits
+ * for a key or a model choice rather than for the next backfill cycle.
+ */
+export const MemoryEmbeddingStatusSchema = z.enum([
+  'disabled',
+  'pending',
+  'indexed',
+  'failed',
+  'unconfigured',
+]);
 export type MemoryEmbeddingStatus = z.infer<typeof MemoryEmbeddingStatusSchema>;
 
 export const MemoryActorTypeSchema = z.enum(['api', 'orchestrator', 'executor', 'user']);
@@ -122,6 +132,12 @@ export const MemoryDocStatSchema = z.object({
     ),
   version: z.number().int().positive(),
   embeddingStatus: MemoryEmbeddingStatusSchema,
+  embeddingError: z
+    .string()
+    .optional()
+    .describe(
+      'Why the last embedding attempt failed; present only while embeddingStatus is failed.',
+    ),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
   backlinkCount: z
@@ -381,6 +397,14 @@ export const MemoryQueryOutputSchema = z.object({
         'this reports the byte cap dropped rows. In list and links modes a nextCursor is returned to ' +
         'page the rest; grep and search are single-page top-K with no cursor, so recover there by ' +
         'narrowing the query or raising budget.maxTotalBytes.',
+    ),
+  lexicalOnly: z
+    .string()
+    .optional()
+    .describe(
+      'Search mode only: present when results matched words, not meaning, and says why. ' +
+        'A paraphrase or synonym of what a document says will not find it — search again ' +
+        'with the words the document would use.',
     ),
 });
 export type MemoryQueryOutput = z.infer<typeof MemoryQueryOutputSchema>;

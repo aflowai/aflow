@@ -61,12 +61,12 @@ These need a real Postgres connection (or a Drizzle mock). Mark as integration t
 
 **File**: `apps/aflow-executor-memory/src/handlers/__tests__/memoryHandler.test.ts`
 
-| #   | Test                                | What it verifies                                                                                               |
-| --- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| 1   | Returns job with correct fields     | Given a doc with indexing=auto, returns `MemoryDocEmbedJob` with correct tenantId, docId, embeddingModel, etc. |
-| 2   | Returns null when indexing disabled | Given a doc with `indexingMode='disabled'`, returns null.                                                      |
-| 3   | Returns null when no content        | Given a doc with no inline content and no payloadRef, returns null.                                            |
-| 4   | Redis publish NOT called            | The function returns data only — assert no Redis interaction.                                                  |
+| #   | Test                                | What it verifies                                                                                             |
+| --- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| 1   | Returns job with correct fields     | Given a doc with indexing=auto, returns `MemoryDocEmbedJob` with correct tenantId, docId, docVersionId, etc. |
+| 2   | Returns null when indexing disabled | Given a doc with `indexingMode='disabled'`, returns null.                                                    |
+| 3   | Returns null when no content        | Given a doc with no inline content and no payloadRef, returns null.                                          |
+| 4   | Redis publish NOT called            | The function returns data only — assert no Redis interaction.                                                |
 
 ---
 

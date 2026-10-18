@@ -52,10 +52,6 @@ function repoWith(content: string) {
           getLatestVersion: vi.fn(async () => 1),
           deleteChunksForDoc: vi.fn(async () => undefined),
           insertChunks: vi.fn(async () => undefined),
-          resolveEmbeddingModel: vi.fn(async () => ({
-            model: 'text-embedding-3-small',
-            dimensions: 1536,
-          })),
         },
         { replaceLinksForDoc: vi.fn(async () => ({ added: 0, removed: 0, unresolved: 0 })) },
       ),

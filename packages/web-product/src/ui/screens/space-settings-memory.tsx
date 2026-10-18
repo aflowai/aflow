@@ -12,7 +12,8 @@ import {
   Badge,
   HelperText,
 } from '@aflow/design-system';
-import { useSpaceFromRoute } from '../components/providers.js';
+import { isSoloSpace, useSpaceFromRoute } from '../components/providers.js';
+import { MemorySearchIndexCard } from '../components/memory/MemorySearchIndexCard.js';
 import { useApiQuery, useApiMutation } from '../hooks/useApiQuery.js';
 
 interface RegisterEntry {
@@ -126,6 +127,23 @@ function EntryRow({
 export function AgentMemoryPage() {
   const routeSpace = useSpaceFromRoute();
   const spaceId = routeSpace?.id ?? '';
+
+  return (
+    <PageContainer>
+      <Column gap="xl">
+        <MemorySearchIndexCard
+          spaceId={spaceId}
+          spaceSlug={routeSpace?.slug}
+          canEdit={routeSpace?.myRole === 'admin'}
+        />
+        {/* The register only functions while one person holds the space. */}
+        {routeSpace && isSoloSpace(routeSpace) && <AgentMemoryRegister spaceId={spaceId} />}
+      </Column>
+    </PageContainer>
+  );
+}
+
+function AgentMemoryRegister({ spaceId }: { spaceId: string }) {
   const registerKey = ['space', spaceId, 'activeMemory'] as const;
 
   const { data, isLoading, error } = useApiQuery<RegisterResponse>({
@@ -140,60 +158,58 @@ export function AgentMemoryPage() {
   const revoked = entries.filter((e) => e.status === 'revoked');
 
   return (
-    <PageContainer>
-      <Column gap="lg">
-        <Column gap="xs">
-          <Heading level={2}>Agent memory</Heading>
-          <Text variant="muted">
-            Standing reference notes the agent carries into every conversation in this space. The
-            agent proposes candidates; only notes you promote become part of its context. Notes are
-            reference, never rules — the agent applies them with judgment and your current message
-            always wins.
+    <Column gap="lg">
+      <Column gap="xs">
+        <Heading level={2}>Agent memory</Heading>
+        <Text variant="muted">
+          Standing reference notes the agent carries into every conversation in this space. The
+          agent proposes candidates; only notes you promote become part of its context. Notes are
+          reference, never rules — the agent applies them with judgment and your current message
+          always wins.
+        </Text>
+        {data && !data.eligible && (
+          <Text tone="warning">
+            Active memory is available only while you are the sole member — nothing is injected in
+            this space.
           </Text>
-          {data && !data.eligible && (
-            <Text tone="warning">
-              Active memory is available only while you are the sole member — nothing is injected in
-              this space.
-            </Text>
-          )}
-        </Column>
-
-        {isLoading && <Text variant="muted">Loading…</Text>}
-        {error && <Text tone="danger">{error.message}</Text>}
-
-        {!isLoading && entries.length === 0 && (
-          <Text variant="muted">
-            No standing notes yet. When the agent proposes one, it appears here for your review.
-          </Text>
-        )}
-
-        {candidates.length > 0 && (
-          <Column gap="sm">
-            <Heading level={4}>Awaiting review ({candidates.length})</Heading>
-            {candidates.map((e) => (
-              <EntryRow key={e.id} entry={e} spaceId={spaceId} registerKey={registerKey} />
-            ))}
-          </Column>
-        )}
-
-        {active.length > 0 && (
-          <Column gap="sm">
-            <Heading level={4}>Active ({active.length})</Heading>
-            {active.map((e) => (
-              <EntryRow key={e.id} entry={e} spaceId={spaceId} registerKey={registerKey} />
-            ))}
-          </Column>
-        )}
-
-        {revoked.length > 0 && (
-          <Column gap="sm">
-            <Heading level={4}>Revoked ({revoked.length})</Heading>
-            {revoked.map((e) => (
-              <EntryRow key={e.id} entry={e} spaceId={spaceId} registerKey={registerKey} />
-            ))}
-          </Column>
         )}
       </Column>
-    </PageContainer>
+
+      {isLoading && <Text variant="muted">Loading…</Text>}
+      {error && <Text tone="danger">{error.message}</Text>}
+
+      {!isLoading && entries.length === 0 && (
+        <Text variant="muted">
+          No standing notes yet. When the agent proposes one, it appears here for your review.
+        </Text>
+      )}
+
+      {candidates.length > 0 && (
+        <Column gap="sm">
+          <Heading level={4}>Awaiting review ({candidates.length})</Heading>
+          {candidates.map((e) => (
+            <EntryRow key={e.id} entry={e} spaceId={spaceId} registerKey={registerKey} />
+          ))}
+        </Column>
+      )}
+
+      {active.length > 0 && (
+        <Column gap="sm">
+          <Heading level={4}>Active ({active.length})</Heading>
+          {active.map((e) => (
+            <EntryRow key={e.id} entry={e} spaceId={spaceId} registerKey={registerKey} />
+          ))}
+        </Column>
+      )}
+
+      {revoked.length > 0 && (
+        <Column gap="sm">
+          <Heading level={4}>Revoked ({revoked.length})</Heading>
+          {revoked.map((e) => (
+            <EntryRow key={e.id} entry={e} spaceId={spaceId} registerKey={registerKey} />
+          ))}
+        </Column>
+      )}
+    </Column>
   );
 }

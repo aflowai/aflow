@@ -317,12 +317,6 @@ export async function commitDerivedIndexes(
     return { embedJob: null, report };
   }
 
-  const resolved = await txDocRepo.resolveEmbeddingModel({
-    spaceId: doc.spaceId,
-    agentId: doc.agentId ?? undefined,
-    pathPrefix: doc.path,
-  });
-
   return {
     embedJob: {
       messageVersion: 1,
@@ -333,7 +327,6 @@ export async function commitDerivedIndexes(
       version: doc.currentVersion,
       path: doc.path,
       contentHash: doc.contentHash ?? derivation.sourceHash,
-      embeddingModel: resolved.model,
       createdAt: new Date().toISOString(),
     },
     report,

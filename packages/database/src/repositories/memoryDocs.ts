@@ -4,17 +4,16 @@
  * Data access for the repo-like memory document store.
  * Supports path-based CRUD, versioning, and hybrid query modes.
  */
-import { eq, and, sql, inArray, type SQL } from 'drizzle-orm';
+import { eq, and, desc, sql, inArray, type SQL } from 'drizzle-orm';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { APPLET_MEMORY_PREFIX } from '@aflow/schemas';
+import {
+  APPLET_MEMORY_PREFIX,
+  MemoryEmbeddingStatusSchema,
+  type MemoryEmbeddingStatus,
+} from '@aflow/schemas';
 import type { TenantContext } from '../tenant.js';
 import { withTenantSchema } from '../tenant.js';
-import {
-  memoryDocs,
-  memoryDocVersions,
-  memoryChunks,
-  memoryEmbedConfig,
-} from '../schema/tenant.js';
+import { memoryDocs, memoryDocVersions, memoryChunks, spaces } from '../schema/tenant.js';
 import type { MemoryDocRow, NewMemoryDocRow, MemoryDerivation } from '../schema/tenant.js';
 import { createMemoryLinkRepository, type MemoryLinkRepository } from './memoryLinks.js';
 
@@ -46,7 +45,8 @@ export interface MemoryDoc {
   createdByStepId: string | null;
   createdByStepExecutionId: string | null;
   currentVersion: number;
-  embeddingStatus: 'disabled' | 'pending' | 'indexed' | 'failed';
+  embeddingStatus: MemoryEmbeddingStatus;
+  embeddingError: string | null;
   indexingMode: 'auto' | 'disabled' | 'force';
   expiresAt: Date | null;
   deletedAt: Date | null;
@@ -205,9 +205,6 @@ function requiredScalar(value: unknown): string {
   return typeof value === 'object' ? JSON.stringify(value) : String(value as string | number);
 }
 
-export const DEFAULT_EMBED_MODEL = 'text-embedding-3-small';
-export const DEFAULT_EMBED_DIMS = 1536;
-
 import { canonicalizePath, targetsAppletReservedSubtree } from './memoryPaths.js';
 import { TASK_DRAFT_PREFIX, isReservedScratchPath } from './reservedPaths.js';
 
@@ -217,18 +214,21 @@ export {
   targetsAppletReservedSubtree,
 } from './memoryPaths.js';
 
-export interface ResolvedEmbedModel {
+/** A query vector and the identity search must match it against. */
+export interface QueryEmbedding {
+  vector: number[];
+  /** The model that made it; only chunks embedded by the same model are compared. */
   model: string;
-  dims: number;
   column: string;
 }
 
-export interface MemoryEmbedConfigEntry {
-  id: string;
-  scopeType: string;
-  scopeValue: string | null;
-  embeddingModel: string;
-  dims: number;
+export type MemoryEmbeddingScope = { spaceId: string } | { ownedBy: string } | 'tenant';
+
+export interface MemoryEmbeddingSummary {
+  counts: Record<MemoryEmbeddingStatus, number>;
+  /** Characters of embeddable chunk text across the space's current versions. */
+  embeddableChars: number;
+  lastError: { path: string; message: string; at: Date } | null;
 }
 
 export interface MemoryChunkInsert {
@@ -305,7 +305,7 @@ export interface MemoryDocRepository {
   deleteChunksForDoc(docId: string): Promise<void>;
   searchFts(options: MemoryDocQueryOptions & { query: string }): Promise<MemorySearchHit[]>;
   searchVector(
-    options: MemoryDocQueryOptions & { queryEmbedding: number[]; embedColumn?: string },
+    options: MemoryDocQueryOptions & { queryEmbedding: QueryEmbedding },
   ): Promise<MemorySearchHit[]>;
   /**
    * Hybrid search: run vector + FTS in parallel, fuse results with RRF.
@@ -314,8 +314,7 @@ export interface MemoryDocRepository {
   searchHybrid(
     options: MemoryDocQueryOptions & {
       query: string;
-      queryEmbedding?: number[];
-      embedColumn?: string;
+      queryEmbedding?: QueryEmbedding;
     },
   ): Promise<MemorySearchHit[]>;
   getChunksForVersion(
@@ -328,9 +327,23 @@ export interface MemoryDocRepository {
     dims: number,
     column?: string,
   ): Promise<void>;
+  /**
+   * Settle a pending doc's embedding: write `status` only if the doc is still
+   * pending and, when `model` is given, the space still embeds with it. A doc
+   * re-marked or a space switched while the embed ran is left for the job that
+   * re-marking queued. Returns whether the write applied.
+   */
+  settleDocEmbedding(
+    docId: string,
+    status: Exclude<MemoryEmbeddingStatus, 'pending'>,
+    options?: { error?: string; model?: string },
+  ): Promise<boolean>;
+
+  /** Set a doc's embedding status; `error` is kept only with `failed`. */
   updateDocEmbeddingStatus(
     docId: string,
-    status: 'disabled' | 'pending' | 'indexed' | 'failed',
+    status: MemoryEmbeddingStatus,
+    error?: string,
   ): Promise<void>;
 
   /**
@@ -344,28 +357,17 @@ export interface MemoryDocRepository {
     fields: { properties: Record<string, unknown>; derivation: MemoryDerivation },
   ): Promise<void>;
 
-  resolveEmbeddingModel(scope?: {
-    spaceId?: string | undefined;
-    agentId?: string | undefined;
-    pathPrefix?: string | undefined;
-  }): Promise<ResolvedEmbedModel>;
-  getEmbedConfig(
-    scopeType: string,
-    scopeValue: string | null,
-  ): Promise<MemoryEmbedConfigEntry | null>;
-  setEmbedConfig(entry: {
-    scopeType: string;
-    scopeValue: string | null;
-    embeddingModel: string;
-    dims: number;
-  }): Promise<MemoryEmbedConfigEntry>;
-
   /**
-   * Mark docs matching a scope as needing re-embedding.
-   * Sets embeddingStatus='pending' for all non-disabled docs in scope.
-   * Returns the IDs of affected docs (caller can enqueue backfill jobs).
+   * Mark the embeddable docs in one of `from` as pending, arming the backfill:
+   * in one space, in every space one user owns, or across the tenant. Returns
+   * how many were marked.
    */
-  markDocsStaleForScope(scope: { scopeType: string; scopeValue: string | null }): Promise<string[]>;
+  markDocsPendingForEmbedding(
+    scope: MemoryEmbeddingScope,
+    from: readonly MemoryEmbeddingStatus[],
+  ): Promise<number>;
+
+  embeddingSummary(spaceId: string): Promise<MemoryEmbeddingSummary>;
 
   /**
    * Return docs with embeddingStatus='pending' that need (re-)embedding.
@@ -430,6 +432,7 @@ function toDoc(row: MemoryDocRow): MemoryDoc {
     createdByStepExecutionId: row.createdByStepExecutionId,
     currentVersion: row.currentVersion,
     embeddingStatus: row.embeddingStatus,
+    embeddingError: row.embeddingError,
     indexingMode: row.indexingMode,
     expiresAt: row.expiresAt,
     deletedAt: row.deletedAt,
@@ -1143,9 +1146,8 @@ export function createMemoryDocRepository(
 
     async searchVector(options) {
       const limit = options.limit ?? 20;
-      const embedding = options.queryEmbedding;
-      const vectorStr = `[${embedding.join(',')}]`;
-      const col = options.embedColumn ?? EMBEDDING_COLUMNS[DEFAULT_EMBED_DIMS] ?? 'embedding_1536';
+      const { vector, model, column: col } = options.queryEmbedding;
+      const vectorStr = `[${vector.join(',')}]`;
       assertAllowedEmbedColumn(col);
 
       return run(async (tx) => {
@@ -1175,6 +1177,7 @@ export function createMemoryDocRepository(
           FROM ${memoryDocs}
           JOIN ${memoryChunks} c ON c.doc_id = ${memoryDocs.id}
           WHERE c.${sql.raw(col)} IS NOT NULL
+            AND c.embedding_model = ${model}
             AND ${and(...conditions)}
           ORDER BY c.${sql.raw(col)} <=> ${vectorStr}::vector
           LIMIT ${limit}
@@ -1212,7 +1215,6 @@ export function createMemoryDocRepository(
           ? this.searchVector({
               ...options,
               queryEmbedding: options.queryEmbedding,
-              ...(options.embedColumn != null ? { embedColumn: options.embedColumn } : {}),
               limit: limit * 2,
             })
           : Promise.resolve([]),
@@ -1298,11 +1300,15 @@ export function createMemoryDocRepository(
       });
     },
 
-    async updateDocEmbeddingStatus(docId, status) {
+    async updateDocEmbeddingStatus(docId, status, error) {
       return run(async (tx) => {
         await tx
           .update(memoryDocs)
-          .set({ embeddingStatus: status, updatedAt: new Date() })
+          .set({
+            embeddingStatus: status,
+            embeddingError: status === 'failed' ? (error ?? null) : null,
+            updatedAt: new Date(),
+          })
           .where(eq(memoryDocs.id, docId));
       });
     },
@@ -1316,159 +1322,106 @@ export function createMemoryDocRepository(
       });
     },
 
-    async resolveEmbeddingModel(scope) {
+    async settleDocEmbedding(docId, status, options) {
       return run(async (tx) => {
-        // Priority: path_prefix → flow → space → global → hardcoded default
-        const candidates: Array<{ scopeType: string; scopeValue: string | null }> = [];
-
-        if (scope?.pathPrefix) {
-          candidates.push({
-            scopeType: 'path_prefix',
-            scopeValue: canonicalizePath(scope.pathPrefix),
-          });
-        }
-        if (scope?.agentId) {
-          candidates.push({ scopeType: 'flow', scopeValue: scope.agentId });
-        }
-        if (scope?.spaceId) {
-          candidates.push({ scopeType: 'space', scopeValue: scope.spaceId });
-        }
-        candidates.push({ scopeType: 'global', scopeValue: null });
-
-        for (const { scopeType, scopeValue } of candidates) {
-          const conditions: SQL[] = [eq(memoryEmbedConfig.scopeType, scopeType)];
-          if (scopeValue != null) {
-            conditions.push(eq(memoryEmbedConfig.scopeValue, scopeValue));
-          } else {
-            conditions.push(sql`${memoryEmbedConfig.scopeValue} IS NULL`);
-          }
-
-          const [row] = await tx
-            .select()
-            .from(memoryEmbedConfig)
-            .where(and(...conditions))
-            .limit(1);
-
-          if (row) {
-            const col = EMBEDDING_COLUMNS[row.dims];
-            if (!col) {
-              throw new Error(
-                `Unsupported embedding dimension ${row.dims} configured for ${scopeType}:${scopeValue ?? 'null'}`,
-              );
-            }
-            return { model: row.embeddingModel, dims: row.dims, column: col };
-          }
-        }
-
-        return {
-          model: DEFAULT_EMBED_MODEL,
-          dims: DEFAULT_EMBED_DIMS,
-          column: EMBEDDING_COLUMNS[DEFAULT_EMBED_DIMS]!,
-        };
-      });
-    },
-
-    async getEmbedConfig(scopeType, scopeValue) {
-      return run(async (tx) => {
-        const normalizedValue =
-          scopeType === 'path_prefix' && scopeValue != null
-            ? canonicalizePath(scopeValue)
-            : scopeValue;
-        const conditions: SQL[] = [eq(memoryEmbedConfig.scopeType, scopeType)];
-        if (normalizedValue != null) {
-          conditions.push(eq(memoryEmbedConfig.scopeValue, normalizedValue));
-        } else {
-          conditions.push(sql`${memoryEmbedConfig.scopeValue} IS NULL`);
-        }
-
-        const [row] = await tx
-          .select()
-          .from(memoryEmbedConfig)
-          .where(and(...conditions))
-          .limit(1);
-
-        if (!row) return null;
-        return {
-          id: row.id,
-          scopeType: row.scopeType,
-          scopeValue: row.scopeValue,
-          embeddingModel: row.embeddingModel,
-          dims: row.dims,
-        };
-      });
-    },
-
-    async setEmbedConfig(entry) {
-      return run(async (tx) => {
-        const col = EMBEDDING_COLUMNS[entry.dims];
-        if (!col) {
-          throw new Error(
-            `Unsupported embedding dimension ${entry.dims}. Supported: ${Object.keys(EMBEDDING_COLUMNS).join(', ')}`,
+        const conditions: SQL[] = [
+          eq(memoryDocs.id, docId),
+          eq(memoryDocs.embeddingStatus, 'pending'),
+        ];
+        if (options?.model !== undefined) {
+          conditions.push(
+            sql`EXISTS (SELECT 1 FROM ${spaces} WHERE ${spaces.id} = ${memoryDocs.spaceId} AND ${spaces.memoryEmbeddingModel} = ${options.model})`,
           );
         }
-
-        const scopeValue =
-          entry.scopeType === 'path_prefix' && entry.scopeValue
-            ? canonicalizePath(entry.scopeValue)
-            : entry.scopeValue;
-
-        const rows = await tx.execute(sql`
-          INSERT INTO ${memoryEmbedConfig} (scope_type, scope_value, embedding_model, dims)
-          VALUES (${entry.scopeType}, ${scopeValue}, ${entry.embeddingModel}, ${entry.dims})
-          ON CONFLICT (scope_type, scope_value) DO UPDATE
-          SET embedding_model = EXCLUDED.embedding_model,
-              dims = EXCLUDED.dims,
-              updated_at = NOW()
-          RETURNING id, scope_type, scope_value, embedding_model, dims
-        `);
-
-        const row = (rows as unknown as Array<Record<string, unknown>>)[0]!;
-        return {
-          id: String(row['id']),
-          scopeType: String(row['scope_type']),
-          scopeValue: scalarOrNull(row['scope_value']),
-          embeddingModel: String(row['embedding_model']),
-          dims: Number(row['dims']),
-        };
+        const rows = await tx
+          .update(memoryDocs)
+          .set({
+            embeddingStatus: status,
+            embeddingError: status === 'failed' ? (options?.error ?? null) : null,
+            updatedAt: new Date(),
+          })
+          .where(and(...conditions))
+          .returning({ id: memoryDocs.id });
+        return rows.length > 0;
       });
     },
 
-    async markDocsStaleForScope(scope) {
+    async markDocsPendingForEmbedding(scope, from) {
+      if (from.length === 0) return 0;
       return run(async (tx) => {
         const conditions: SQL[] = [
           sql`${memoryDocs.deletedAt} IS NULL`,
           sql`${memoryDocs.indexingMode} != 'disabled'`,
-          sql`${memoryDocs.embeddingStatus} != 'disabled'`,
+          inArray(memoryDocs.embeddingStatus, [...from]),
         ];
-
-        switch (scope.scopeType) {
-          case 'global':
-            break;
-          case 'space':
-            if (scope.scopeValue) {
-              conditions.push(eq(memoryDocs.spaceId, scope.scopeValue));
-            }
-            break;
-          case 'flow':
-            if (scope.scopeValue) {
-              conditions.push(eq(memoryDocs.agentId, scope.scopeValue));
-            }
-            break;
-          case 'path_prefix':
-            if (scope.scopeValue) {
-              const prefix = canonicalizePath(scope.scopeValue);
-              conditions.push(sql`${memoryDocs.path} LIKE ${prefix + '%'}`);
-            }
-            break;
+        if (scope !== 'tenant' && 'spaceId' in scope) {
+          conditions.push(eq(memoryDocs.spaceId, scope.spaceId));
+        } else if (scope !== 'tenant') {
+          conditions.push(
+            sql`${memoryDocs.spaceId} IN (SELECT ${spaces.id} FROM ${spaces} WHERE ${spaces.ownerId} = ${scope.ownedBy})`,
+          );
         }
-
         const rows = await tx
           .update(memoryDocs)
-          .set({ embeddingStatus: 'pending', updatedAt: new Date() })
+          .set({ embeddingStatus: 'pending', embeddingError: null, updatedAt: new Date() })
           .where(and(...conditions))
           .returning({ id: memoryDocs.id });
+        return rows.length;
+      });
+    },
 
-        return rows.map((r) => r.id);
+    async embeddingSummary(spaceId) {
+      return run(async (tx) => {
+        const countRows = await tx
+          .select({ status: memoryDocs.embeddingStatus, n: sql<number>`count(*)::int` })
+          .from(memoryDocs)
+          .where(and(eq(memoryDocs.spaceId, spaceId), sql`${memoryDocs.deletedAt} IS NULL`))
+          .groupBy(memoryDocs.embeddingStatus);
+        const counts = Object.fromEntries(
+          MemoryEmbeddingStatusSchema.options.map((status) => [status, 0]),
+        ) as Record<MemoryEmbeddingStatus, number>;
+        for (const row of countRows) counts[row.status] = row.n;
+
+        const sizeRows = await tx.execute(sql`
+          SELECT COALESCE(SUM(length(c.text)), 0)::bigint AS chars
+          FROM ${memoryDocs} d
+          JOIN ${memoryDocVersions} v ON v.doc_id = d.id AND v.version = d.current_version
+          JOIN ${memoryChunks} c ON c.doc_version_id = v.id
+          WHERE d.space_id = ${spaceId}
+            AND d.deleted_at IS NULL
+            AND d.embedding_status != 'disabled'
+            AND d.indexing_mode != 'disabled'
+            AND NOT c.skip_embedding
+        `);
+        const embeddableChars = Number(
+          (sizeRows as unknown as Array<Record<string, unknown>>)[0]?.['chars'] ?? 0,
+        );
+
+        const [failed] = await tx
+          .select({
+            path: memoryDocs.path,
+            message: memoryDocs.embeddingError,
+            at: memoryDocs.updatedAt,
+          })
+          .from(memoryDocs)
+          .where(
+            and(
+              eq(memoryDocs.spaceId, spaceId),
+              sql`${memoryDocs.deletedAt} IS NULL`,
+              eq(memoryDocs.embeddingStatus, 'failed'),
+              sql`${memoryDocs.embeddingError} IS NOT NULL`,
+            ),
+          )
+          .orderBy(desc(memoryDocs.updatedAt))
+          .limit(1);
+
+        return {
+          counts,
+          embeddableChars,
+          lastError: failed?.message
+            ? { path: failed.path, message: failed.message, at: failed.at }
+            : null,
+        };
       });
     },
 

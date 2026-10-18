@@ -24,3 +24,11 @@ export {
   localRuntimeSettings,
   localMachineFor,
 } from './providerConfig.js';
+export {
+  createMemoryEmbeddingResolver,
+  type EmbeddingModel,
+  type MemoryEmbeddingResolver,
+  type MemoryEmbeddingResolverOptions,
+  type SpaceEmbedding,
+  type SpaceEmbeddingContext,
+} from './memoryEmbedding.js';

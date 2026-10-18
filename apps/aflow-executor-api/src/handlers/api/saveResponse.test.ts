@@ -23,9 +23,6 @@ vi.mock('@aflow/database', async () => {
     insertChunks: vi.fn().mockResolvedValue(undefined),
     updateDocEmbeddingStatus: vi.fn().mockResolvedValue(undefined),
     updateDerivedFields: vi.fn().mockResolvedValue(undefined),
-    resolveEmbeddingModel: vi
-      .fn()
-      .mockResolvedValue({ model: 'text-embedding-3-small', column: 'embedding_1536', dims: 1536 }),
     withTransaction: async (fn: (r: unknown, l: unknown) => Promise<unknown>) => fn(repo, linkRepo),
   };
   return {
@@ -79,6 +76,7 @@ function makeDocRow(params: Record<string, unknown>): Record<string, unknown> {
     sessionId: null,
     currentVersion: 1,
     embeddingStatus: 'pending',
+    embeddingError: null,
     indexingMode: params['indexing'],
     deletedAt: null,
     createdAt: new Date(),

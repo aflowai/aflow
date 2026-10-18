@@ -1,4 +1,5 @@
 import { pgTable, uuid, text, timestamp, jsonb, integer, boolean } from 'drizzle-orm/pg-core';
+import type { MemoryEmbeddingStatus } from '@aflow/schemas';
 
 /**
  * Result metadata from the link/property scan run at write time. Advisory —
@@ -135,7 +136,10 @@ export const memoryDocs = pgTable('memory_docs', {
   embeddingStatus: text('embedding_status')
     .notNull()
     .default('disabled')
-    .$type<'disabled' | 'pending' | 'indexed' | 'failed'>(),
+    .$type<MemoryEmbeddingStatus>(),
+
+  /** Why the last embedding attempt failed; cleared when one succeeds. */
+  embeddingError: text('embedding_error'),
 
   /** Indexing mode inherited from directory policy or explicit */
   indexingMode: text('indexing_mode')
@@ -243,36 +247,6 @@ export const memoryChunks = pgTable('memory_chunks', {
 
 export type MemoryChunkRow = typeof memoryChunks.$inferSelect;
 export type NewMemoryChunkRow = typeof memoryChunks.$inferInsert;
-
-// ============================================================================
-// Memory Embedding Config (per-scope model selection)
-// ============================================================================
-
-/**
- * Per-scope embedding model configuration.
- * Resolution order: path_prefix (longest match) → space → flow → global default.
- */
-export const memoryEmbedConfig = pgTable('memory_embed_config', {
-  id: uuid('id').primaryKey().defaultRandom(),
-
-  /** Scope type: 'global' | 'space' | 'flow' | 'path_prefix' */
-  scopeType: text('scope_type').notNull(),
-
-  /** Scope value: NULL for global, spaceId/flowId/pathPrefix for others */
-  scopeValue: text('scope_value'),
-
-  /** Embedding model identifier (e.g. 'openai:text-embedding-3-small') */
-  embeddingModel: text('embedding_model').notNull(),
-
-  /** Vector dimensions for this model */
-  dims: integer('dims').notNull(),
-
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-});
-
-export type MemoryEmbedConfigRow = typeof memoryEmbedConfig.$inferSelect;
-export type NewMemoryEmbedConfigRow = typeof memoryEmbedConfig.$inferInsert;
 
 // ============================================================================
 // Memory Directories (explicit filesystem-like directory entities)

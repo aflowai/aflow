@@ -49,6 +49,7 @@ function makeDoc(overrides: Partial<MemoryDoc> = {}): MemoryDoc {
     createdByStepExecutionId: null,
     currentVersion: 1,
     embeddingStatus: 'pending',
+    embeddingError: null,
     indexingMode: 'auto',
     expiresAt: null,
     deletedAt: null,
@@ -92,9 +93,6 @@ function makeRepo(docOverrides: Partial<MemoryDoc> = {}): RepoMocks {
     insertChunks: vi.fn().mockResolvedValue(undefined),
     updateDocEmbeddingStatus: vi.fn().mockResolvedValue(undefined),
     updateDerivedFields,
-    resolveEmbeddingModel: vi
-      .fn()
-      .mockResolvedValue({ model: 'text-embedding-3-small', column: 'embedding_1536', dims: 1536 }),
     withTransaction: vi.fn(
       async (fn: (r: MemoryDocRepository, l: MemoryLinkRepository) => Promise<unknown>) =>
         fn(repo as MemoryDocRepository, linkRepo),

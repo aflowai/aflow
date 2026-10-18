@@ -375,18 +375,17 @@ export function chunkCsv(content: string): { chunks: ContentChunk[]; meta: CsvCh
 
 // ============================================================================
 
-/**
- * Conservative token estimate: ~3 chars per token.
- * OpenAI text-embedding-3-* has an 8192 token limit.
- * We split at ~7000 estimated tokens (21000 chars) to leave margin.
- */
-const MAX_EMBED_CHARS = 21_000;
+/** Conservative token estimate: ~3 chars per token, with margin under the model's window. */
+const CHARS_PER_TOKEN = 3;
+const WINDOW_MARGIN = 0.85;
 
 /**
- * Split a text into sub-chunks if it exceeds the token-safe limit.
- * Returns the original text in an array if within limits.
+ * Split a text into sub-chunks if it exceeds what an embedding model with an
+ * input window of `maxInputTokens` accepts. Returns the original text in an
+ * array if within limits.
  */
-export function splitForTokenSafety(text: string): string[] {
+export function splitForTokenSafety(text: string, maxInputTokens: number): string[] {
+  const MAX_EMBED_CHARS = Math.floor(maxInputTokens * CHARS_PER_TOKEN * WINDOW_MARGIN);
   if (text.length <= MAX_EMBED_CHARS) {
     return [text];
   }
