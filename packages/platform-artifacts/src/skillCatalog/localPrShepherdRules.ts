@@ -21,17 +21,26 @@ export const SHEPHERD_RULES: readonly WorkflowRunDecideRule[] = [
     reason:
       "The folder's `origin` is not a repository on GitHub, so there is no pull request to read.",
   },
+  // A pass aimed at a number reads its pull request directly and lists none.
   {
-    when: { expression: 'state.candidates.statusCode != 200' },
+    when: {
+      allOf: ["state.aim.decision == 'discover'", 'state.candidates.statusCode != 200'],
+    },
     decision: 'wait',
     reason:
       "GitHub did not list the repository's open pull requests, so nothing was read to act on. The GitHub connection's access to the repository is the thing to check.",
   },
   {
-    when: { expression: 'state.candidates.data.count == 0' },
+    when: {
+      allOf: ["state.aim.decision == 'discover'", 'state.candidates.data.count == 0'],
+    },
     decision: 'leave',
-    reason:
-      "No open pull request Local Publish opened under the folder's prefix — or none of the number this pass was aimed at.",
+    reason: "No open pull request Local Publish opened under the folder's prefix.",
+  },
+  {
+    when: { allOf: ["state.aim.decision == 'aimed'", 'state.pr.statusCode == 404'] },
+    decision: 'leave',
+    reason: 'The repository has no pull request of the number this pass was aimed at.',
   },
   {
     when: { expression: 'state.pr.statusCode != 200' },
@@ -58,6 +67,21 @@ export const SHEPHERD_RULES: readonly WorkflowRunDecideRule[] = [
     decision: 'wait',
     reason:
       "The pin naming this pull request's handoff could not be read from the space's memory, so its record may exist unread: what was acted on before, and how many attempts are spent, is unknown. Nothing is written until it reads.",
+  },
+  // Only a 404 says the pinned comment is gone. Any other failure leaves it
+  // standing unread, and the newest page — past one page of conversation —
+  // does not hold a handoff rewritten in place, so it is not read instead.
+  {
+    when: {
+      allOf: [
+        'state.pin.dataJson.commentId != null',
+        'state.pinned.statusCode != 200',
+        'state.pinned.statusCode != 404',
+      ],
+    },
+    decision: 'wait',
+    reason:
+      'GitHub did not return the handoff comment pinned for this pull request, and it is not gone, so its record may exist unread: what was acted on before, and how many attempts are spent, is unknown. Nothing is written until it reads.',
   },
   {
     when: {
@@ -117,6 +141,21 @@ export const SHEPHERD_RULES: readonly WorkflowRunDecideRule[] = [
       'The shepherd has acted on as many failures of this pull request as its budget allows, and CI fails again. It leaves the pull request to a person.',
   },
 ];
+
+/** Whether a pass was aimed at one pull request: `aimed`, read by its number, or `discover`, listed. */
+export const AIM_RULES: readonly WorkflowRunDecideRule[] = [
+  {
+    when: { expression: 'state.pullNumber != null' },
+    decision: 'aimed',
+    reason: 'The pass was aimed at one pull request: it is read by its number.',
+  },
+];
+
+export const AIM_OTHERWISE = {
+  decision: 'discover',
+  reason:
+    "The pass was aimed at none: the loop's open pull requests are listed, and the most recently updated is tended.",
+};
 
 export const SHEPHERD_OTHERWISE = {
   decision: 'fix',

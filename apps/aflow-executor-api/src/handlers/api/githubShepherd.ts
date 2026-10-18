@@ -119,17 +119,10 @@ function pullRequestFields(value: unknown): PullRequestFields {
 /**
  * `listPullRequests` → the loop's open pull requests under the prefix: those
  * whose body carries Local Publish's marker, those not labelled hands-off
- * first, then the most recently updated. With a number after the prefix, only
- * that pull request, and only where it is one of them.
+ * first, then the most recently updated.
  */
 export function loopPullRequests(body: unknown, arg: string | undefined): LoopPullRequests {
-  const separator = arg?.lastIndexOf(':') ?? -1;
-  const tail = separator === -1 ? undefined : arg?.slice(separator + 1);
-  const named = tail !== undefined && /^\d+$/.test(tail) ? Number(tail) : undefined;
-  const prefix = requirePrefix(
-    named === undefined ? arg : arg?.slice(0, separator),
-    SHEPHERD_RESPONSE_PRESETS.pullRequests,
-  );
+  const prefix = requirePrefix(arg, SHEPHERD_RESPONSE_PRESETS.pullRequests);
   const pullRequests: LoopPullRequestSummary[] = list(body, 'the pull requests')
     .filter((value) => carriesMarker(record(value, 'a pull request')['body']))
     .map((value) => pullRequestFields(value))
@@ -146,7 +139,6 @@ export function loopPullRequests(body: unknown, arg: string | undefined): LoopPu
       };
     })
     .filter((pr) => pr.headRef.startsWith(prefix))
-    .filter((pr) => named === undefined || pr.number === named)
     .sort(
       (a, b) =>
         Number(a.handsOff) - Number(b.handsOff) ||

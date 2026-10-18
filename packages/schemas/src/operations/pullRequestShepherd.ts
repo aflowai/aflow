@@ -116,9 +116,8 @@ export function parseShepherdHandoff(body: string): ShepherdHandoffRecord | null
  * answers into the records below, before anything is cut to fit inline: a
  * shepherd's rules read these fields, never GitHub's own, and a list too long
  * to inline would otherwise reach them as a summary. `pullRequests` and
- * `pullRequest` take the folder's prefix after a colon, and `pullRequests` the
- * number of one pull request after another where a pass is aimed at it —
- * `loop_pulls:aflow/:94`. A branch prefix holds no colon, so neither is ambiguous.
+ * `pullRequest` take the folder's prefix after a colon — `loop_pulls:aflow/`.
+ * A pass aimed at one pull request reads it by its number and lists none.
  * `handoff` takes the login the loop posted the pinned handoff as and the pull
  * request's number, `loop_handoff:aflow-bot:94`: a record from any other author,
  * or on another pull request, is no record. With no login, `loop_handoff::94`,

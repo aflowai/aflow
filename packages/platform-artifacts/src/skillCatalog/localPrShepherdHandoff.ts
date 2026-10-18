@@ -198,8 +198,10 @@ export const HANDOFF_READ_TASKS = [
       expression: 'tasks.read-handoff-pin.output.dataJson.commentId != null',
       onMissingRef: SKIP,
     },
-    // A comment since deleted answers 404, which shapes no record: the
-    // task fails, and the newest page is read instead.
+    // GitHub's answer stands with its status: a 404 — the comment deleted,
+    // the pin stale — is the one answer the newest page is read after. Any
+    // other, or a call that fails outright, leaves the record unread, and
+    // the rules wait on it.
     optional: true,
     retryability: 'safe' as const,
     maxAttempts: 1,
@@ -218,24 +220,24 @@ export const HANDOFF_READ_TASKS = [
     outputProjection: {
       statusCode: { path: 'statusCode', onMissing: 'error' as const },
       data: { path: 'data', onMissing: 'error' as const },
-      found: { path: 'data.found', onMissing: 'error' as const },
     },
   },
 
   {
     taskId: 'read-pr-handoff',
     name: 'Read the handoff',
-    goal: 'Where no pinned handoff was read, read the newest page of the pull request’s conversation for the handoff the pinned author left on it. With no pin there is no author to trust, and no record is taken: the pass decides as on a pull request with none. Where the pin could not be read it is not read either, so no handoff is written over a record that may exist.',
+    goal: 'Where no handoff is pinned, or the pinned comment is gone (404), read the newest page of the pull request’s conversation for the handoff the pinned author left on it. With no pin there is no author to trust, and no record is taken: the pass decides as on a pull request with none. Where the pin, or the pinned comment, could not be read it is not read either: past one page of conversation the newest holds no handoff rewritten in place, so no handoff is written over a record that may exist.',
     type: 'operation' as const,
     operation: 'api.http.call',
+    // Either clause implies the loop's own pull request, not labelled
+    // hands-off: the pin is read only there, and the pinned comment only
+    // after it. An unread pin or pinned comment matches neither, leaving
+    // both handoff reads empty — which keeps the handoff writes, and the
+    // pin's rewrite, from running.
     when: {
-      allOf: [
-        ...OURS.allOf,
-        'tasks.read-pr.output.data.handsOff == false',
-        // An unread pin leaves both handoff reads empty, which is what
-        // keeps the handoff writes, and the pin's rewrite, from running.
-        "tasks.read-handoff-pin.status == 'succeeded'",
-        "tasks.read-pr-handoff-pinned.status != 'succeeded'",
+      anyOf: [
+        'tasks.read-handoff-pin.output.found == false',
+        'tasks.read-pr-handoff-pinned.output.statusCode == 404',
       ],
       onMissingRef: SKIP,
     },

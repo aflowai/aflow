@@ -74,11 +74,6 @@ describe('loop_pulls — the loop’s open pull requests under the prefix', () =
     expect(shaped.count).toBe(3);
   });
 
-  it('keeps only the one a pass is aimed at, and only where it is one of them', () => {
-    expect(loopPullRequests(listed, 'aflow/:1').pullRequests.map((p) => p.number)).toEqual([1]);
-    expect(loopPullRequests(listed, 'aflow/:3').count).toBe(0);
-  });
-
   it('refuses to read without a prefix', () => {
     expect(() => loopPullRequests(listed, undefined)).toThrow(/prefix/);
   });
@@ -97,7 +92,7 @@ describe('loop_pulls — the loop’s open pull requests under the prefix', () =
         (p) => p.number,
       ),
     ).toEqual([5, 1, 2]);
-    expect(loopPullRequests([fromFork], 'aflow/:6').count).toBe(0);
+    expect(loopPullRequests([fromFork], 'aflow/').count).toBe(0);
   });
 });
 

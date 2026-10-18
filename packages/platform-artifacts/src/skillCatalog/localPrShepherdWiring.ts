@@ -57,9 +57,11 @@ export const DECIDED_FIX = {
 /**
  * The handoff, from whichever read found it: the comment a pass pinned, read
  * by its id, or — where none is pinned, or it is gone — the newest page of
- * the conversation. At most one of the two holds a record.
+ * the conversation. At most one of the two holds a record. The newest page
+ * comes first: it is read only after the pinned comment answered 404, and
+ * that answer must not stand in for the page's.
  */
-export const HANDOFF_READS = ['read-pr-handoff-pinned', 'read-pr-handoff'] as const;
+export const HANDOFF_READS = ['read-pr-handoff', 'read-pr-handoff-pinned'] as const;
 
 export function handoffBindings(name: string, path?: string) {
   return Object.fromEntries(

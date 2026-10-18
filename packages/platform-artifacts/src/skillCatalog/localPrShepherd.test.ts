@@ -98,6 +98,12 @@ function presetOf(input: Record<string, unknown>): string {
 interface Scenario {
   inputs?: Record<string, unknown>;
   listStatus?: number;
+  /**
+   * The repository has more than 100 open pull requests, and the loop's is
+   * among the least recently updated: the first page of the list holds only
+   * others', none of them the loop's.
+   */
+  buried?: boolean;
   pullRequest?: Partial<LoopPullRequest>;
   checks?: CheckRunsSummary;
   handoff?: ShepherdHandoffRead;
@@ -109,6 +115,8 @@ interface Scenario {
   pinned?: 'found' | 'gone';
   /** The pin's read itself failed — the store threw or answered an error — whether or not a pin is there. */
   pinRead?: 'fails';
+  /** The pinned comment, there and the loop's, could not be read: GitHub answered this status, or the call failed outright. */
+  pinnedRead?: number | 'fails';
   /** The pull request the pin was kept for, and the one its comment sits on. */
   pinFor?: number;
   pinnedCommentOn?: number;
@@ -179,6 +187,7 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
       // A refused call shapes nothing: its body is GitHub's error, as it wrote it.
       if (s.listStatus !== undefined) return github({ message: 'Bad credentials' }, s.listStatus);
       const pr = { ...PULL_REQUEST, ...s.pullRequest };
+      if (s.buried) return github(LoopPullRequestsSchema.parse({ pullRequests: [], count: 0 }));
       return github(
         LoopPullRequestsSchema.parse({
           pullRequests: [
@@ -196,8 +205,14 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
         }),
       );
     }
-    case 'read-pr':
-      return github(LoopPullRequestSchema.parse({ ...PULL_REQUEST, ...s.pullRequest }));
+    case 'read-pr': {
+      // GitHub answers the number asked for, wherever it sits among the open ones.
+      const pr = LoopPullRequestSchema.parse({ ...PULL_REQUEST, ...s.pullRequest });
+      const asked = (input['params'] as { pull_number?: unknown }).pull_number;
+      return String(asked) === String(pr.number)
+        ? github(pr)
+        : github({ message: 'Not Found' }, 404);
+    }
     case 'read-pr-checks':
       return github(CheckRunsSummarySchema.parse(s.checks ?? FAILING));
     case 'read-handoff-pin': {
@@ -216,6 +231,8 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
     case 'read-pr-handoff-pinned': {
       // Deleted, the comment answers 404 with GitHub's error, which shapes no record.
       if (s.pinned === 'gone') return github({ message: 'Not Found' }, 404);
+      if (s.pinnedRead === 'fails') return { ok: false };
+      if (s.pinnedRead !== undefined) return github({ message: 'Server Error' }, s.pinnedRead);
       const [, author, number] = presetOf(input).split(':');
       // The preset takes a record only from the pinned author, on this pull request.
       const on = s.pinnedCommentOn ?? s.pinFor ?? 94;
@@ -264,6 +281,7 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
         hasMore: false,
       });
     }
+    case 'aim':
     case 'decide':
     case 'record-remedy':
       return ok({ ...decideByRules(WorkflowRunDecideInputSchema.parse(input)) });
@@ -790,6 +808,53 @@ describe('Local PR Shepherd — a pin that could not be read is not no pin', () 
   });
 });
 
+describe('Local PR Shepherd — only a deleted pinned comment sends the pass to the newest page', () => {
+  const unreadReason = SHEPHERD_RULES.find(
+    (rule) => 'allOf' in rule.when && rule.when.allOf.includes('state.pinned.statusCode != 404'),
+  )!.reason;
+  const WRITES = ['handoff', 'handoff-edit', 'remember-handoff'];
+  // The record this very check run was acted on under: decided as a first
+  // pass, it would be acted on again with a fresh budget.
+  const handled = () => readBack(pass());
+
+  it('reads the newest page where the pinned comment answers 404, and decides from the record it finds there', () => {
+    const gone = pass({ pinned: 'gone', handoff: handled() });
+    expect(gone.outputs.get('read-pr-handoff-pinned')).toMatchObject({ statusCode: 404 });
+    expect(gone.statuses.get('read-pr-handoff')).toBe('succeeded');
+    expect(gone.decision).toBe('wait');
+    expect(gone.outputs.get('decide')?.['reason']).toMatch(/acted on already/);
+    expect(gone.ran).toContain('handoff-edit');
+    expect(gone.ran).not.toContain('handoff');
+  });
+
+  it.each([
+    ['GitHub answers 500', 500],
+    ['GitHub answers 502', 502],
+    ['the rate limit is spent (403)', 403],
+    ['GitHub answers 429', 429],
+    ['the call fails outright', 'fails' as const],
+  ])(
+    'waits, saying the record may exist unread, where the pinned read fails other than 404 — %s — and never falls back to the newest page',
+    (_case, pinnedRead) => {
+      const unread = pass({ pinned: 'found', pinnedRead, handoff: handled() });
+      expect(unread.statuses.get('read-pr-handoff')).toBe('skipped');
+      expect(unread.ran).not.toContain('read-pr-handoff');
+      expect(unread.decision).toBe('wait');
+      expect(unread.outputs.get('decide')?.['reason']).toBe(unreadReason);
+      for (const action of ACTIONS) expect(unread.ran).not.toContain(action);
+      // A handoff posted or pinned here would replace the record it could not read.
+      for (const write of WRITES) expect(unread.ran).not.toContain(write);
+    },
+  );
+
+  it('does not restart a spent budget where the pinned read fails other than 404', () => {
+    const spent = { ...handled(), attemptCount: 3, checkRunId: '554' };
+    const unread = pass({ pinned: 'found', pinnedRead: 503, handoff: spent });
+    expect(unread.decision).toBe('wait');
+    expect(unread.outputs.get('decide')?.['reason']).toBe(unreadReason);
+  });
+});
+
 describe('Local PR Shepherd — it yields to people', () => {
   it.each([
     ['a publication of the branch paused at its approval', { publicationInFlight: true }],
@@ -949,13 +1014,39 @@ describe('Local PR Shepherd — the remedy a failure wants', () => {
 });
 
 describe('Local PR Shepherd — what it tends', () => {
-  it('reads the loop’s pull requests under the folder’s prefix, aimed at one where a number is given', () => {
-    const response = (input: Record<string, unknown> | undefined) =>
-      (input?.['response'] as { transformPresetId?: string } | undefined)?.transformPresetId;
-    expect(response(pass().inputs.get('list-prs'))).toBe('loop_pulls:aflow/');
-    expect(response(pass({ inputs: { pullNumber: '94' } }).inputs.get('list-prs'))).toBe(
-      'loop_pulls:aflow/:94',
-    );
+  it('aimed at none, lists the loop’s pull requests under the folder’s prefix and reads the first', () => {
+    const discovered = pass();
+    expect(discovered.outputs.get('aim')?.['decision']).toBe('discover');
+    expect(presetOf(discovered.inputs.get('list-prs')!)).toBe('loop_pulls:aflow/');
+    expect(discovered.inputs.get('read-pr')).toMatchObject({ params: { pull_number: 94 } });
+  });
+
+  // A list is one page of the repository's open pull requests, most recently
+  // updated first: an aimed pull request is read by its number, so however
+  // many others are open, the pass tends the one it was aimed at.
+  it('aimed at a number, reads that pull request directly and tends it, though the first page of open pull requests does not hold it', () => {
+    const aimed = pass({ inputs: { pullNumber: '94' }, buried: true });
+    expect(aimed.statuses.get('list-prs')).toBe('skipped');
+    expect(aimed.inputs.get('read-pr')).toMatchObject({
+      endpointId: 'getPullRequest',
+      params: { pull_number: '94' },
+    });
+    expect(aimed.statuses.get('read-pr')).toBe('succeeded');
+    expect(aimed.decision).toBe('fix');
+    expect(aimed.ran).toEqual(expect.arrayContaining(['lease', 'fix', 'publish', 'handoff']));
+    expect(aimed.inputs.get('handoff')).toMatchObject({ params: { issue_number: 94 } });
+
+    // Unaimed, the same repository offers the pass nothing to tend.
+    expect(pass({ buried: true }).decision).toBe('leave');
+  });
+
+  it('aimed at a number the repository has no pull request of, leaves, saying so, and writes nothing', () => {
+    const missing = pass({ inputs: { pullNumber: '7' } });
+    expect(missing.outputs.get('read-pr')).toMatchObject({ statusCode: 404 });
+    expect(missing.decision).toBe('leave');
+    expect(missing.outputs.get('decide')?.['reason']).toMatch(/aimed at/);
+    for (const action of ACTIONS) expect(missing.ran).not.toContain(action);
+    expect(missing.ran).not.toContain('handoff');
   });
 
   it('leaves a pull request that is not the loop’s, and a green one, writing only the record on its own', () => {

@@ -21,6 +21,8 @@ import {
   REMEDY,
 } from './localPrShepherdRemedies.js';
 import {
+  AIM_OTHERWISE,
+  AIM_RULES,
   REMEDY_TAKEN_OTHERWISE,
   REMEDY_TAKEN_RULES,
   SHEPHERD_OTHERWISE,
@@ -240,12 +242,14 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
           inputTemplate: { bindingId: bind('bindingId') },
         },
 
+        // A guard reads task outputs, never run inputs: whether the pass is
+        // aimed reaches the list and the read through this task.
         {
-          taskId: 'list-prs',
-          name: "List the loop's open pull requests",
-          goal: "List the repository's open pull requests and keep those Local Publish opened under the folder's prefix — its marker closes their body — the ones labelled hands-off last, then the most recently updated.",
+          taskId: 'aim',
+          name: 'Read whether the pass is aimed',
+          goal: 'Decide whether this pass was aimed at one pull request by its number, which is then read directly, or tends the most recently updated of the loop’s open pull requests, which are then listed.',
           type: 'operation' as const,
-          operation: 'api.http.call',
+          operation: 'workflow.run.decide',
           when: {
             allOf: [
               'tasks.read-folder.output.origin.owner != null',
@@ -254,10 +258,26 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
             onMissingRef: SKIP,
           },
           retryability: 'safe' as const,
+          inputBindings: { pullNumber: runInput('pullNumber') },
+          context: ctx('workflow.run.decide'),
+          inputTemplate: {
+            state: { pullNumber: bind('pullNumber') },
+            rules: AIM_RULES,
+            otherwise: AIM_OTHERWISE,
+          },
+        },
+
+        {
+          taskId: 'list-prs',
+          name: "List the loop's open pull requests",
+          goal: "With the pass aimed at none, list the repository's open pull requests and keep those Local Publish opened under the folder's prefix — its marker closes their body — the ones labelled hands-off last, then the most recently updated.",
+          type: 'operation' as const,
+          operation: 'api.http.call',
+          when: { expression: "tasks.aim.output.decision == 'discover'", onMissingRef: SKIP },
+          retryability: 'safe' as const,
           inputBindings: {
             ...REPOSITORY,
             prefix: out('read-folder', 'branchPolicy.branchPrefix'),
-            pullNumber: runInput('pullNumber'),
           },
           context: ctx('api.http.call'),
           inputTemplate: github(
@@ -270,39 +290,37 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
               direction: 'desc',
               per_page: 100,
             },
-            {
-              $firstOf: [
-                {
-                  $concat: [
-                    `${SHEPHERD_RESPONSE_PRESETS.pullRequests}:`,
-                    bind('prefix'),
-                    ':',
-                    bind('pullNumber'),
-                  ],
-                },
-                { $concat: [`${SHEPHERD_RESPONSE_PRESETS.pullRequests}:`, bind('prefix')] },
-              ],
-            },
+            { $concat: [`${SHEPHERD_RESPONSE_PRESETS.pullRequests}:`, bind('prefix')] },
           ),
         },
 
         {
           taskId: 'read-pr',
           name: 'Read the pull request',
-          goal: "Read the first of them as it stands now: its head, its base, its labels, whether it still carries the loop's marker on a branch under the prefix, and whether it merges into its base.",
+          goal: "Read the pull request the pass was aimed at, or else the first of those listed, as it stands now: its head, its base, its labels, whether it still carries the loop's marker on a branch under the prefix, and whether it merges into its base.",
           type: 'operation' as const,
           operation: 'api.http.call',
-          when: { expression: 'tasks.list-prs.output.data.count > 0', onMissingRef: SKIP },
+          // An aimed pull request is read by its number, wherever it would
+          // sit in a list of the repository's open ones.
+          when: {
+            anyOf: ["tasks.aim.output.decision == 'aimed'", 'tasks.list-prs.output.data.count > 0'],
+            onMissingRef: SKIP,
+          },
           retryability: 'safe' as const,
           inputBindings: {
             ...REPOSITORY,
             prefix: out('read-folder', 'branchPolicy.branchPrefix'),
-            number: out('list-prs', 'data.pullRequests[0].number'),
+            aimed: runInput('pullNumber'),
+            listed: out('list-prs', 'data.pullRequests[0].number'),
           },
           context: ctx('api.http.call'),
           inputTemplate: github(
             'getPullRequest',
-            { owner: bind('owner'), repo: bind('repo'), pull_number: bind('number') },
+            {
+              owner: bind('owner'),
+              repo: bind('repo'),
+              pull_number: { $firstOf: [bind('aimed'), bind('listed')] },
+            },
             { $concat: [`${SHEPHERD_RESPONSE_PRESETS.pullRequest}:`, bind('prefix')] },
           ),
         },
@@ -369,10 +387,12 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
           retryability: 'safe' as const,
           inputBindings: {
             folder: out('read-folder'),
+            aim: out('aim'),
             candidates: out('list-prs'),
             pr: out('read-pr'),
             checks: out('read-pr-checks'),
             pin: out('read-handoff-pin'),
+            pinned: out('read-pr-handoff-pinned'),
             ...handoffBindings('handoff'),
             lease: out('read-in-flight-lease'),
             leaseOwner: out('read-lease-owner'),
@@ -385,10 +405,12 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
           inputTemplate: {
             state: {
               folder: bind('folder'),
+              aim: bind('aim'),
               candidates: bind('candidates'),
               pr: bind('pr'),
               checks: bind('checks'),
               pin: bind('pin'),
+              pinned: bind('pinned'),
               handoff: handoffValue('handoff'),
               lease: bind('lease'),
               leaseOwner: bind('leaseOwner'),
