@@ -312,7 +312,11 @@ export function AgentCapabilitiesEditor({
       <div
         style={
           compact
-            ? { maxHeight: 'min(36vh, 320px)', overflowY: 'auto', paddingRight: 'var(--space-1)' }
+            ? {
+                maxHeight: 'clamp(120px, calc(70vh - 260px), 300px)',
+                overflowY: 'auto',
+                paddingRight: 'var(--space-1)',
+              }
             : undefined
         }
       >
