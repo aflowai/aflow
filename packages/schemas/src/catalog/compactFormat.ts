@@ -1,5 +1,6 @@
+import { estimateStringTokens } from '../runtime/tokenEstimate.js';
+import { CAPABILITY_AWARENESS_TOKEN_BUDGET } from '../cybernetic/skillDiscovery.js';
 import type { JsonSchemaObject, OperationCatalogEntry } from './operationCatalog.js';
-import { getStepTypeDescription } from './stepTypeDescriptions.js';
 
 // ============================================================================
 // Schema Pruning (Phase 0 — remove agent-irrelevant boilerplate)
@@ -571,45 +572,35 @@ export function buildSummaryCatalog(
 export function buildCompactAwareness(
   operations: OperationCatalogEntry[],
   coreToolCount: number,
+  describeOperation?: (id: string) => { id: string; label: string; hint: string } | undefined,
 ): string {
   if (operations.length === 0) return '';
 
-  // Group by step type and count
-  const byStepType = new Map<string, number>();
+  const bundles = new Map<string, { label: string; hint: string; count: number }>();
   for (const op of operations) {
-    byStepType.set(op.stepType, (byStepType.get(op.stepType) ?? 0) + 1);
+    const bundle = describeOperation?.(op.operationId);
+    const key = bundle?.id ?? op.stepType;
+    const previous = bundles.get(key);
+    bundles.set(key, {
+      label: bundle?.label ?? op.stepType,
+      hint: bundle?.hint ?? '',
+      count: (previous?.count ?? 0) + 1,
+    });
   }
-
-  const sections: string[] = [];
-
-  sections.push('## Available for Discovery');
-  sections.push('');
-  sections.push(
-    `You have ${String(coreToolCount)} core tool${coreToolCount !== 1 ? 's' : ''} loaded. ` +
-      'Additional tools can be discovered:',
-  );
-
-  // Sort by step type name for stable output
-  const stepTypes = [...byStepType.entries()].sort(([a], [b]) => a.localeCompare(b));
-
-  for (const [stepType, count] of stepTypes) {
-    const desc = getStepTypeDescription(stepType);
-    sections.push(`- **${stepType}** (${String(count)} ops): ${desc}`);
-  }
-
-  sections.push('');
-  sections.push(
-    'Search by intent: `catalog.tool.search({ query: "your intent" })`. ' +
-      'Browse by type: `catalog.tool.list({ stepTypes: ["<type>"] })`. ' +
-      "Both are read-only. Pass the result's `suggestedPromoteCall` to " +
-      '`catalog.tool.promote` to add the discovered toolIds to your active toolbox; ' +
-      'they then become callable by their `callName` on your next turn.',
-  );
-  sections.push(
-    'Bound integration tools (API endpoints + MCP tools) live alongside platform ' +
-      'operations in the unified search — see `SpaceContext.integrations` for the ' +
-      'inventory.',
-  );
-
-  return sections.join('\n');
+  const entries = [...bundles.values()].sort((a, b) => a.label.localeCompare(b.label));
+  const header = `## Available for Discovery\n${String(coreToolCount)} core tools loaded; ${String(operations.length)} additional operations available.`;
+  const guidance =
+    'Search by intent with catalog.tool.search({query: "your intent"}); browse full schemas with catalog.tool.list. Pass selected toolIds from suggestedPromoteCall to catalog.tool.promote; they become callable next turn. Bound API/MCP tools are searched the same way. Use catalog.skill.search for installed skills; skills run through workflow.run.start without tool promotion.';
+  const render = (hints: boolean) =>
+    [
+      header,
+      ...entries.map((b) => `- ${b.label} (${String(b.count)} ops)${hints ? `: ${b.hint}` : ''}`),
+      guidance,
+    ].join('\n');
+  const detailed = render(true);
+  if (estimateStringTokens(detailed) <= CAPABILITY_AWARENESS_TOKEN_BUDGET) return detailed;
+  const compact = render(false);
+  return estimateStringTokens(compact) <= CAPABILITY_AWARENESS_TOKEN_BUDGET
+    ? compact
+    : `${header}\n${String(entries.length)} capability groups are available through intent search.\n${guidance}`;
 }

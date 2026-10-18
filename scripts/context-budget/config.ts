@@ -33,7 +33,13 @@ export const SCAN_SPACE_NAME = 'baseline-space';
 export interface BudgetComponent {
   /** Stable key — the baseline is keyed on this, so renaming resets history. */
   key: string;
-  group: 'tools' | 'helmsmanPrompt' | 'runnerPrompt' | 'spaceContextGuidance' | 'worstCase';
+  group:
+    | 'tools'
+    | 'helmsmanPrompt'
+    | 'runnerPrompt'
+    | 'spaceContextGuidance'
+    | 'worstCase'
+    | 'skillAwareness';
   tokens: number;
   chars: number;
 }

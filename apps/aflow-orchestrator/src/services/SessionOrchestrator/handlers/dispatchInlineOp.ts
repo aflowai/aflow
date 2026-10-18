@@ -1,3 +1,4 @@
+import { handleSkillSearch } from './inlineOps/skillDiscovery.js';
 /**
  * Dispatch inline operations — route to the appropriate inline handler
  * based on operation ID.
@@ -84,7 +85,20 @@ export async function dispatchInlineOp(
   workflowExecution?: WorkflowExecutionRef,
 ): Promise<void> {
   const workflowExecutionFields = workflowExecution ? { workflowExecution } : {};
-  if (stepDef.operation === 'catalog.tool.search') {
+  if (stepDef.operation === 'catalog.skill.search') {
+    await handleSkillSearch({
+      redis,
+      payloadStore,
+      context,
+      stepDef,
+      stepExecutionId,
+      idempotencyKey,
+      resolvedInputRef,
+      attempt,
+      scheduledAtMs: now,
+      ...(parentStepExecutionId ? { parentStepExecutionId } : {}),
+    });
+  } else if (stepDef.operation === 'catalog.tool.search') {
     await handleCatalogSearchInline(
       redis,
       payloadStore,

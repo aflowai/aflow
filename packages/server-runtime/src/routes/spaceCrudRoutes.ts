@@ -1,3 +1,4 @@
+import { validateAgentCapabilitySettings } from './agentCapabilityValidation.js';
 /**
  * Space create, list, slug resolution, read, and update endpoints.
  */
@@ -11,6 +12,7 @@ import {
   createTenantContext,
   withTenantSchema,
   spaces,
+  spaceDirectivesUpdateGuard,
   spaceCapabilityAssignments,
   findDefaultCapabilityProfileId,
   getTenantProvisioningPolicy,
@@ -39,7 +41,6 @@ import {
   offListAgentModelRefs,
   offListAgentModelError,
   introducedOffListModels,
-  alwaysOnBindingTools,
   chosenModelRoles,
 } from './spacesShared.js';
 import { canCreateSpace } from '@aflow/authz';
@@ -141,6 +142,12 @@ export const spaceCrudRoutes: FastifyPluginAsync = async (fastify) => {
       if (offListModels.length > 0) {
         return reply.status(400).send(offListAgentModelError(offListModels, allowedModels.ids));
       }
+
+      const placementError = await validateAgentCapabilitySettings(
+        { db, tenantId: tenant.tenantId },
+        resolvedDirectives.capabilityDiscovery,
+      );
+      if (placementError) return reply.status(400).send(placementError);
 
       let result: unknown;
       try {
@@ -777,6 +784,7 @@ export const spaceCrudRoutes: FastifyPluginAsync = async (fastify) => {
           writePolicy: SpaceWriteApprovalPolicySchema.nullable().optional(),
           // Every space is cybernetic — directives cannot be cleared to null.
           directives: EntityDirectivesSchema.optional(),
+          expectedDirectives: z.unknown().optional(),
         }),
         response: {
           200: SpaceResponseSchema.extend({
@@ -932,72 +940,12 @@ export const spaceCrudRoutes: FastifyPluginAsync = async (fastify) => {
       if (request.body.writePolicy !== undefined) updates['writePolicy'] = request.body.writePolicy;
       if (request.body.directives !== undefined) updates['directives'] = request.body.directives;
 
-      // Placement is the one directive that can GROW the agent's pinned tool
-      // list — bundles move operations into it, connections add bindings to it
-      // — and `buildAvailableTools` throws past the cap for anything it cannot
-      // degrade. The orchestrator does degrade an over-long connection list
-      // back to on-demand rather than losing the turn, but that costs the
-      // operator tools they asked for with only a log to say so, so an over-cap
-      // write is refused here, where they can still act on the answer.
-      const capabilityDiscovery = (
-        request.body.directives as
-          | {
-              capabilityDiscovery?: {
-                bundlePlacements?: Record<string, string>;
-                connections?: unknown;
-              };
-            }
-          | undefined
-      )?.capabilityDiscovery;
-      const placements = capabilityDiscovery?.bundlePlacements;
-      const pinnedBindingTools = alwaysOnBindingTools(capabilityDiscovery?.connections);
-      if ((placements && Object.keys(placements).length > 0) || pinnedBindingTools.size > 0) {
-        const { CYBERNETIC_AGENTS } = await import('@aflow/platform-artifacts');
-        const { validateBundlePlacements } = await import('@aflow/schemas');
-        const helmsmanCatalog = (
-          CYBERNETIC_AGENTS.find((a) => a.flowId === 'cybernetic-helmsman')?.steps.find(
-            (s) => s['operation'] === 'ai.agent.turn',
-          )?.['config'] as
-            | {
-                catalog?: {
-                  coreOperations?: string[];
-                  discovery?: { allowedOperationIds?: string[] };
-                };
-              }
-            | undefined
-        )?.catalog;
-        const verdict = validateBundlePlacements(
-          helmsmanCatalog?.coreOperations ?? [],
-          helmsmanCatalog?.discovery?.allowedOperationIds ?? [],
-          placements,
+      if (request.body.directives !== undefined) {
+        const placementError = await validateAgentCapabilitySettings(
+          { db, tenantId: tenant.tenantId, spaceId },
+          request.body.directives.capabilityDiscovery,
         );
-        // Priced from the bindings themselves, never from the number of them:
-        // one connection is a whole API's endpoints or a whole server's tools,
-        // so counting entries is off by an order of magnitude in exactly the
-        // direction that lets an over-cap list through.
-        let pinnedConnectionTools = 0;
-        if (pinnedBindingTools.size > 0) {
-          const { loadSpaceConnections } = await import('./spaceConnections.js');
-          const spaceConnections = await loadSpaceConnections(db, tenant.tenantId, spaceId);
-          for (const connection of spaceConnections) {
-            if (!pinnedBindingTools.has(connection.bindingId)) continue;
-            const subset = pinnedBindingTools.get(connection.bindingId) ?? null;
-            pinnedConnectionTools +=
-              subset === null
-                ? connection.toolCount
-                : connection.tools.filter((t) => subset.includes(t.name)).length;
-          }
-        }
-        const pinnedTotal = verdict.pinnedCount + pinnedConnectionTools;
-        if (!verdict.ok || pinnedTotal > verdict.max) {
-          return reply.status(400).send({
-            error: 'PLACEMENT_OVER_TOOL_CAP',
-            message: verdict.ok
-              ? `Always-on capabilities and connections would pin ${String(pinnedTotal)} ` +
-                `tools, over the limit of ${String(verdict.max)}. Move something to on-demand.`
-              : (verdict.message ?? 'Too many always-on capabilities.'),
-          });
-        }
+        if (placementError) return reply.status(400).send(placementError);
       }
 
       if (Object.keys(updates).length === 0) {
@@ -1051,9 +999,9 @@ export const spaceCrudRoutes: FastifyPluginAsync = async (fastify) => {
               const rows = await typedTx
                 .update(spaces)
                 .set(updates)
-                .where(eq(spaces.id, spaceId))
+                .where(spaceDirectivesUpdateGuard(spaceId, request.body.expectedDirectives))
                 .returning();
-              if (priorSlugForRename && request.body.slug !== undefined) {
+              if (rows.length > 0 && priorSlugForRename && request.body.slug !== undefined) {
                 await typedTx.insert(spaceSlugHistory).values({
                   spaceId,
                   oldSlug: priorSlugForRename,
@@ -1093,6 +1041,13 @@ export const spaceCrudRoutes: FastifyPluginAsync = async (fastify) => {
       }
 
       const row = updateResult.rows[0];
+      if (!row && request.body.expectedDirectives !== undefined) {
+        return reply.status(409).send({
+          error: 'DIRECTIVES_CHANGED',
+          message:
+            'Agent settings changed elsewhere. Reload before saving to preserve those changes.',
+        });
+      }
       if (!row) {
         return reply.status(404).send({ error: 'NotFound', message: 'Space not found' });
       }

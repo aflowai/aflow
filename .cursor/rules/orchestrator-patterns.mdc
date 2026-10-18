@@ -85,3 +85,7 @@ Evaluation runs through one substrate: the post-run hook calls `runEvaluation` (
 The orchestrator runs under `scripts/watch-service.mjs`, which restarts it on file changes and when it crashes.
 However, changes to compiled packages (`packages/*`) require `yarn build` first.
 Check for duplicate orchestrator processes (`ps aux | grep orchestrator`).
+
+## Helmsman capability placement
+
+Resolve the edition and custom ceiling through `resolveHelmsmanBaseSurface`, then apply the shared operation placement decision. Off returns exact operation IDs for discovery exclusions and persistent promotion revocation. Do not match an access-qualified UI group against an unqualified capability group. Skills are discovered with `catalog.skill.search`; only explicitly pinned summaries enter `SpaceContext.skills.pinned`. Inspect the selected invocation contract and check current placement/readiness at use time. Never infer that an absent input contract in the summary means a skill has no inputs.

@@ -48,3 +48,4 @@ export * from './composeDecisionTask.js';
 export * from './artifactTags.js';
 export * from './strategy.js';
 export * from './execution.js';
+export * from './skillDiscovery.js';

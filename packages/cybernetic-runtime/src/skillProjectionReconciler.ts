@@ -14,6 +14,8 @@ import type {
 } from '@aflow/schemas';
 import {
   SkillProjectionSchema,
+  WorkflowSchema,
+  computeSkillReadiness,
   getPlatformOperationPrefixes,
   getOperationsByStepType,
   grantDecisionForOperation,
@@ -1147,4 +1149,35 @@ export async function onSkillRunCompleted(
   // The skillId equals the workflowSlug by convention (104b backfill mapping)
   const result = await rebuildSkillProjection(ctx, workflowSlug);
   return result?.maturityTransition ? { maturityTransition: result.maturityTransition } : {};
+}
+
+export async function resolveCurrentSkillReadiness(
+  ctx: ReconcilerContext,
+  workflow: Workflow,
+  requiredCapabilities: readonly string[] = [],
+  status = 'active',
+) {
+  const parsed = WorkflowSchema.safeParse(workflow);
+  const tasks = parsed.success ? parsed.data.tasks : [];
+  const required = [
+    ...new Set([
+      ...requiredCapabilities,
+      ...deriveWorkflowLaneTokens(tasks),
+      ...deriveWorkflowPolicyPrefixes(tasks),
+    ]),
+  ];
+  const missingCapabilities = await checkMissingCapabilities(ctx, required);
+  const dependencies = parsed.success ? deriveCapabilityDependencies(parsed.data) : [];
+  const endpoints = await loadEndpointIdsByApiId(ctx, dependencies);
+  applyCapabilityStatuses(dependencies, missingCapabilities, endpoints);
+  const activationStatus = computeActivationStatus(status, missingCapabilities, dependencies);
+  const contractValidity = ensureWorkflowDocValidity(workflow);
+  const readiness = computeSkillReadiness({ contractValidity, activationStatus });
+  return {
+    ...readiness,
+    canRun: readiness.canRun && workflow.status === 'approved',
+    activationStatus,
+    missingCapabilities,
+    contractValidity,
+  };
 }

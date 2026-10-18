@@ -21,6 +21,20 @@ const ajv = new Ajv({ allErrors: true, strict: false });
  * the real schema. Each must survive validation against the COLLAPSED emission.
  */
 const FULL_NESTED_ARGS: Record<string, Record<string, unknown>> = {
+  'host.harness.run': {
+    bindingId: 'hb_project',
+    task: 'Review the UI',
+    browser: { profile: 'ephemeral' },
+  },
+  'host.file.patch': {
+    bindingId: 'hb_project',
+    patch: 'diff --git a/a b/a\n',
+    commit: { branch: 'codex/test', message: 'Update a' },
+  },
+  'workflow.run.start': {
+    slug: 'my-skill',
+    simulationRunInput: { seed: 'test', baselineVersions: { world: 1 } },
+  },
   'memory.store.query': {
     mode: 'search',
     query: 'anything',

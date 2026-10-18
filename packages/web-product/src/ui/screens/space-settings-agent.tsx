@@ -1,4 +1,5 @@
 'use client';
+import { AgentCapabilitiesEditor } from '../components/cybernetic/AgentCapabilitiesEditor.js';
 
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import {
@@ -100,8 +101,8 @@ const SECTION_META: Record<SectionId, { label: string; help: string }> = {
     help: 'Hard cap on concurrent worker sessions.',
   },
   capabilityDiscovery: {
-    label: 'Helmsman tools',
-    help: 'The ceiling on which platform operations the Helmsman may add to its own toolbox while a session runs. Leave it on the platform default unless this space needs a narrower or wider set.',
+    label: 'Helmsman capabilities',
+    help: 'Choose which tools, skills and connections Helmsman carries, discovers on demand or leaves off. The advanced ceiling limits which platform operations it can reach.',
   },
   coachTuning: {
     label: 'Coach Tuning (advanced)',
@@ -286,7 +287,10 @@ export function CyberneticSettingsPage() {
             'Content-Type': 'application/json',
             'X-Space-ID': activeSpaceId,
           },
-          body: JSON.stringify({ directives: nextDirectives }),
+          body: JSON.stringify({
+            directives: nextDirectives,
+            expectedDirectives: space?.directives ?? null,
+          }),
         });
         if (!res.ok) {
           const err = (await res.json().catch(() => ({}))) as { message?: string };
@@ -306,7 +310,7 @@ export function CyberneticSettingsPage() {
         setSaving(false);
       }
     },
-    [activeSpaceId, apiUrl, headers, refresh, queryClient],
+    [activeSpaceId, apiUrl, headers, refresh, queryClient, space?.directives],
   );
 
   const handleSave = useCallback(async () => {
@@ -847,13 +851,19 @@ function renderSection(
       );
     case 'capabilityDiscovery':
       return (
-        <HelmsmanDiscoveryEditor
-          spaceId={ctx.spaceId}
-          value={draft.capabilityDiscovery?.helmsmanOperations}
-          onChange={(next) => {
-            onChange((d) => withHelmsmanOperations(d, next));
-          }}
-        />
+        <>
+          <AgentCapabilitiesEditor spaceId={ctx.spaceId} directives={draft} onChange={onChange} />
+          <details>
+            <summary>Advanced discovery ceiling</summary>
+            <HelmsmanDiscoveryEditor
+              spaceId={ctx.spaceId}
+              value={draft.capabilityDiscovery?.helmsmanOperations}
+              onChange={(next) => {
+                onChange((d) => withHelmsmanOperations(d, next));
+              }}
+            />
+          </details>
+        </>
       );
     case 'coachTuning':
       return (

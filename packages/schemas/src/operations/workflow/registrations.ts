@@ -355,6 +355,10 @@ export function createWorkflowOperationRegistrations(
       verb: 'start',
       name: 'Start Workflow Run',
       actionLabel: 'Starting workflow run\u2026',
+      agentCollapsedFields: {
+        simulationRunInput:
+          'Optional simulation pinning keyed by simulationId. Read catalog.tool.list for workflow.run.start before supplying the complete object.',
+      },
       semanticDescription:
         'Start a new run of a workflow. The harness owns task dispatch — agent and ' +
         'operation tasks are scheduled, executed, and finalized by the workflow run ' +
@@ -391,8 +395,7 @@ export function createWorkflowOperationRegistrations(
             'run pauses or ends.',
           'Read the terminal `result` block first (output values, score vs target, summary, guidance) — ' +
             'only call workflow.run.detail when you need per-task forensics beyond it.',
-          'When the skill declares run inputs (its SpaceContext entry carries `firstTaskInputContract`, ' +
-            'or workflow.manage.get returns one), pass their values as structured `inputs` keyed by the ' +
+          'When the skill declares run inputs (workflow.manage.get with view=invocation returns `firstTaskInputContract`), pass their values as structured `inputs` keyed by the ' +
             'same field names — NOT as free-form `instructions`. A missing required input is rejected at ' +
             'start (PARENT_INPUTS_INVALID) naming the field; putting it in `instructions` still fails.',
         ],

@@ -3,6 +3,7 @@
 import { useId, useState } from 'react';
 import { Button, Column, Icon, Row, Text } from '@aflow/design-system';
 import { type DirectiveConnectionRef, type SpaceConnection } from '@aflow/schemas';
+import { PlacementSection, placementLabels } from './PlacementSection.js';
 import { formatToolTokens, PlacementSelect, SurfaceRow } from './surfaceRow.js';
 
 export type { SpaceConnection };
@@ -52,17 +53,40 @@ export function ConnectionPlacementEditor({
 
   return (
     <Column gap="none">
-      {connections.map((c) => (
-        <ConnectionRow
-          key={c.bindingId}
-          connection={c}
-          placement={placementOf(c)}
-          pinnedTools={pinnedTools[c.bindingId] ?? null}
-          showHints={showHints}
-          onPlace={onPlace}
-          onPinnedToolsChange={onPinnedToolsChange}
-        />
-      ))}
+      {(['always_on', 'on_demand', 'unavailable'] as const).map((state) => {
+        const entries = connections.filter(
+          (c) =>
+            (c.blockedReason || placementOf(c) === null ? 'unavailable' : placementOf(c)) === state,
+        );
+        if (state === 'unavailable' && !entries.length) return null;
+        return (
+          <PlacementSection
+            key={state}
+            title={state === 'unavailable' ? 'Unavailable' : placementLabels[state]}
+            count={entries.length}
+            countLabel="connections"
+            description={
+              state === 'always_on'
+                ? 'Selected connection tools load on every turn.'
+                : state === 'on_demand'
+                  ? 'Connection tools are discovered and loaded when needed.'
+                  : 'These connections are blocked or outside this agent’s reach.'
+            }
+          >
+            {entries.map((c) => (
+              <ConnectionRow
+                key={c.bindingId}
+                connection={c}
+                placement={placementOf(c)}
+                pinnedTools={pinnedTools[c.bindingId] ?? null}
+                showHints={showHints}
+                onPlace={onPlace}
+                onPinnedToolsChange={onPinnedToolsChange}
+              />
+            ))}
+          </PlacementSection>
+        );
+      })}
     </Column>
   );
 }

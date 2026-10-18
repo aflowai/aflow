@@ -26,6 +26,8 @@ export const ToolSurfaceScopeSchema = z.object({
   pinnedMax: z.number().int().nonnegative(),
   virtualUsed: z.number().int().nonnegative(),
   virtualMax: z.number().int().nonnegative(),
+  schemaTokensUsed: z.number().int().nonnegative().optional(),
+  schemaTokensMax: z.number().int().nonnegative().optional(),
 });
 export type ToolSurfaceScope = z.infer<typeof ToolSurfaceScopeSchema>;
 

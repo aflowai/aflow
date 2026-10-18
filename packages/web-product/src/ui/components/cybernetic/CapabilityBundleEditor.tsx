@@ -1,173 +1,274 @@
 'use client';
 
 import { useId, useState } from 'react';
-import { Column } from '@aflow/design-system';
-import { PlacementSelect, SurfaceRow, SurfaceSection } from './surfaceRow.js';
+import { resolveToolPlacement } from '@aflow/schemas';
+import { Column, Input, Text } from '@aflow/design-system';
+import { PlacementSelect, SurfaceRow } from './surfaceRow.js';
+import { PlacementSection, placementLabels } from './PlacementSection.js';
 
 export type BundlePlacement = 'always_on' | 'on_demand' | 'off';
-
 export interface OfferedBundle {
   id: string;
   label: string;
   hint: string;
   tier: 'loaded' | 'on_demand';
+  parentId?: string;
   lockedReason?: string;
-  defaultPlacement: BundlePlacement;
-  /** Per-turn cost if every operation this bundle owns is pinned. */
+  defaultPlacement: 'always_on' | 'on_demand' | 'mixed';
   alwaysOnTokens: number;
   operationCount: number;
-  /** What it costs while sitting at its authored default. */
   authoredPinnedTokens: number;
   authoredPinnedCount: number;
+  operations: Array<{ operationId: string; tokens: number; defaultPinned: boolean }>;
 }
 
-/**
- * What a bundle contributes to THIS turn.
- *
- * An explicit always_on pins everything it owns; left at its default it carries
- * only what the agent definition authored as pinned, which for a bundle spread
- * across both tiers is much less. Quoting the always-on figure in both cases
- * would have the panel's total disagree with what the turn actually carries.
- */
 export function bundleCurrentCost(
   bundle: OfferedBundle,
   placements: Record<string, BundlePlacement>,
+  operationPlacements: Record<string, BundlePlacement> = {},
 ): { tools: number; tokens: number } {
-  const explicit = bundle.lockedReason === undefined ? placements[bundle.id] : undefined;
-  if (explicit === 'on_demand' || explicit === 'off') return { tools: 0, tokens: 0 };
-  if (explicit === 'always_on')
-    return { tools: bundle.operationCount, tokens: bundle.alwaysOnTokens };
-  return bundlePlacementOf(bundle, placements) === 'always_on'
-    ? { tools: bundle.authoredPinnedCount, tokens: bundle.authoredPinnedTokens }
-    : { tools: 0, tokens: 0 };
+  return bundle.operations.reduce(
+    (total, operation) => {
+      const placement = resolveToolPlacement(
+        {
+          operationId: operation.operationId,
+          bundleId: bundle.id,
+          defaultPinned: operation.defaultPinned,
+          locked: bundle.lockedReason !== undefined,
+        },
+        placements,
+        operationPlacements,
+      );
+      return placement === 'always_on'
+        ? { tools: total.tools + 1, tokens: total.tokens + operation.tokens }
+        : total;
+    },
+    { tools: 0, tokens: 0 },
+  );
 }
 
-const PLACEMENTS: ReadonlyArray<{ value: BundlePlacement; label: string }> = [
-  { value: 'always_on', label: 'Always on' },
-  { value: 'on_demand', label: 'On demand' },
-  { value: 'off', label: 'Off' },
-];
-
-/**
- * Where a bundle actually sits: a locked bundle ignores anything stored for it,
- * and an unplaced one follows the platform default rather than a stored value.
- * Shared because the panel's pinned totals have to agree with the rows they are
- * counting.
- */
 export function bundlePlacementOf(
   bundle: OfferedBundle,
   placements: Record<string, BundlePlacement>,
-): BundlePlacement {
-  if (bundle.lockedReason !== undefined) return 'always_on';
-  return placements[bundle.id] ?? bundle.defaultPlacement;
+  operationPlacements: Record<string, BundlePlacement> = {},
+): BundlePlacement | 'mixed' {
+  const states = new Set(
+    bundle.operations.map((operation) =>
+      resolveToolPlacement(
+        {
+          operationId: operation.operationId,
+          bundleId: bundle.id,
+          defaultPinned: operation.defaultPinned,
+          locked: bundle.lockedReason !== undefined,
+        },
+        placements,
+        operationPlacements,
+      ),
+    ),
+  );
+  return states.size > 1 ? 'mixed' : (states.values().next().value ?? bundle.defaultPlacement);
 }
+const choices = [
+  { value: 'always_on', label: 'Always on' },
+  { value: 'on_demand', label: 'On demand' },
+  { value: 'off', label: 'Off' },
+] as const;
+const sections = [
+  {
+    state: 'always_on',
+    description: 'Loaded on every turn. These tools use the schema budget above.',
+  },
+  { state: 'on_demand', description: 'Discoverable by Helmsman and loaded only when needed.' },
+  { state: 'off', description: 'Hidden from Helmsman, including capability discovery.' },
+  {
+    state: 'mixed',
+    description:
+      'Tools within these groups have different placements. Expand a group to review them.',
+  },
+] as const;
 
-/**
- * The capability rows of the tool panel.
- *
- * The three sections ARE the three placements, so changing a bundle moves its
- * row and the operator sees where a capability now lives. Every row quotes its
- * tool count and its always-on cost regardless of tier, because that is the
- * figure the decision to move it turns on.
- */
 export function CapabilityBundleEditor({
   bundles,
   placements,
+  operationPlacements = {},
   showHints,
   onPlace,
+  onOperationPlace,
 }: {
   bundles: OfferedBundle[];
   placements: Record<string, BundlePlacement>;
+  operationPlacements?: Record<string, BundlePlacement>;
   showHints: boolean;
-  onPlace: (bundleId: string, placement: BundlePlacement) => void;
+  onPlace: (id: string, placement: BundlePlacement | undefined) => void;
+  onOperationPlace?: (id: string, placement: BundlePlacement | undefined) => void;
 }) {
-  // Scoped per mount, so a second editor on the page cannot hand two selects
-  // the same id and steal the other's label clicks.
-  const idPrefix = useId();
-  // Off starts collapsed: it is the tier an operator scans least, and a long
-  // list of things the agent cannot do should not be the first thing read.
-  const [openSections, setOpenSections] = useState<Record<BundlePlacement, boolean>>({
-    always_on: true,
-    on_demand: true,
-    off: false,
-  });
-  const toggle = (tier: BundlePlacement): void => {
-    setOpenSections((prev) => ({ ...prev, [tier]: !prev[tier] }));
-  };
-
-  const placementOf = (b: OfferedBundle): BundlePlacement => bundlePlacementOf(b, placements);
-  const inTier = (tier: BundlePlacement): OfferedBundle[] =>
-    bundles.filter((b) => placementOf(b) === tier);
-
-  const section = (tier: BundlePlacement, title: string, footnote?: string): React.ReactNode => {
-    const rows = inTier(tier);
-    const toolCount = rows.reduce(
-      (s, b) =>
-        s + (tier === 'always_on' ? bundleCurrentCost(b, placements).tools : b.operationCount),
-      0,
-    );
-    return (
-      <SurfaceSection
-        title={title}
-        count={rows.length}
-        toolCount={toolCount}
-        // Only always-on spends tokens per turn, so only it carries a price in
-        // the header. Quoting one on the other tiers would imply a running cost
-        // they do not have.
-        {...(tier === 'always_on'
-          ? { tokens: rows.reduce((s, b) => s + bundleCurrentCost(b, placements).tokens, 0) }
-          : {})}
-        open={openSections[tier]}
-        onToggle={() => {
-          toggle(tier);
-        }}
-        {...(footnote !== undefined ? { footnote } : {})}
-      >
-        {rows.map((b) => (
-          <SurfaceRow
-            key={b.id}
-            label={b.label}
-            sublabel={b.hint}
-            showHint={showHints}
-            // In Always on the row states what it costs now, so the rows sum to
-            // the header and the header to the panel total. Elsewhere it states
-            // what turning it on would cost, which is the number the operator
-            // is weighing.
-            toolCount={
-              tier === 'always_on' ? bundleCurrentCost(b, placements).tools : b.operationCount
-            }
-            tokens={
-              tier === 'always_on' ? bundleCurrentCost(b, placements).tokens : b.alwaysOnTokens
-            }
-            tokenPrefix={tier === 'always_on' ? undefined : '+'}
-            {...(b.lockedReason === undefined ? { controlId: `${idPrefix}${b.id}` } : {})}
-            control={
-              // A locked bundle shows no control and no explanation. It sits in
-              // Always on, which says what it is; a badge repeating that was
-              // noise on the rows the operator can do least about.
-              b.lockedReason !== undefined ? null : (
-                <PlacementSelect
-                  id={`${idPrefix}${b.id}`}
-                  value={placementOf(b)}
-                  options={PLACEMENTS}
-                  ariaLabel={`Placement for ${b.label}`}
-                  onChange={(p) => {
-                    onPlace(b.id, p);
-                  }}
-                />
-              )
-            }
-          />
-        ))}
-      </SurfaceSection>
-    );
-  };
-
+  const [query, setQuery] = useState('');
+  const search = query.trim().toLowerCase();
+  const filtered = bundles.filter((bundle) =>
+    [bundle.label, bundle.id, bundle.hint, ...bundle.operations.map((op) => op.operationId)].some(
+      (text) => text.toLowerCase().includes(search),
+    ),
+  );
   return (
     <Column gap="xs">
-      {section('always_on', 'Always on')}
-      {section('on_demand', 'On demand', 'Found and added when needed. Costs nothing until used.')}
-      {section('off', 'Off', 'Not reachable at all.')}
+      <Input
+        type="search"
+        aria-label="Search tool groups"
+        placeholder="Search groups or tools…"
+        value={query}
+        onChange={(event) => {
+          setQuery(event.target.value);
+        }}
+      />
+      {sections.map(({ state, description }) => {
+        const entries = filtered
+          .filter((bundle) => bundlePlacementOf(bundle, placements, operationPlacements) === state)
+          .sort((a, b) => a.label.localeCompare(b.label));
+        if ((state === 'mixed' || search) && !entries.length) return null;
+        return (
+          <PlacementSection
+            key={`${state}-${search}`}
+            title={placementLabels[state]}
+            count={entries.length}
+            description={description}
+            forceOpen={search.length > 0}
+          >
+            {entries.map((bundle) => (
+              <BundleRow
+                key={`${bundle.id}-${search}`}
+                bundle={bundle}
+                placements={placements}
+                operationPlacements={operationPlacements}
+                showHints={showHints}
+                search={search}
+                onPlace={onPlace}
+                {...(onOperationPlace ? { onOperationPlace } : {})}
+              />
+            ))}
+          </PlacementSection>
+        );
+      })}
+      {search && !filtered.length && (
+        <Text size="sm" variant="muted">
+          No matching groups or tools.
+        </Text>
+      )}
     </Column>
+  );
+}
+
+function BundleRow({
+  bundle,
+  placements,
+  operationPlacements,
+  showHints,
+  search,
+  onPlace,
+  onOperationPlace,
+}: {
+  bundle: OfferedBundle;
+  placements: Record<string, BundlePlacement>;
+  operationPlacements: Record<string, BundlePlacement>;
+  showHints: boolean;
+  search: string;
+  onPlace: (id: string, placement: BundlePlacement | undefined) => void;
+  onOperationPlace?: (id: string, placement: BundlePlacement | undefined) => void;
+}) {
+  const id = useId();
+  const [expanded, setExpanded] = useState<boolean | undefined>();
+  const open = expanded ?? search.length > 0;
+  const locked = bundle.lockedReason !== undefined;
+  const custom =
+    !locked && bundle.operations.some((op) => operationPlacements[op.operationId] !== undefined);
+  const selected = locked ? 'always_on' : custom ? 'custom' : (placements[bundle.id] ?? 'default');
+  const cost = bundleCurrentCost(bundle, placements, operationPlacements);
+  return (
+    <SurfaceRow
+      label={bundle.label}
+      sublabel={bundle.hint}
+      showHint={showHints}
+      toolCount={bundle.operationCount}
+      tokens={bundle.alwaysOnTokens}
+      annotation={locked ? 'Required' : cost.tools ? `${cost.tools} loaded` : 'unloaded'}
+      onToggle={() => {
+        setExpanded(!open);
+      }}
+      expanded={open}
+      control={
+        <PlacementSelect<BundlePlacement | 'default' | 'custom'>
+          id={id}
+          ariaLabel={`${bundle.label} placement`}
+          value={selected}
+          disabled={locked}
+          {...(locked ? { title: bundle.lockedReason } : {})}
+          options={[
+            { value: 'default', label: `${placementLabels[bundle.defaultPlacement]} · default` },
+            ...(custom
+              ? [{ value: 'custom' as const, label: 'Custom tools', disabled: true }]
+              : []),
+            ...choices,
+          ]}
+          onChange={(value) => {
+            if (value !== 'custom') onPlace(bundle.id, value === 'default' ? undefined : value);
+          }}
+        />
+      }
+    >
+      {open && (
+        <div
+          style={{
+            marginLeft: 'var(--space-4)',
+            paddingLeft: 'var(--space-3)',
+            marginTop: 'var(--space-2)',
+            borderLeft: '2px solid var(--color-border-subtle)',
+          }}
+        >
+          {locked && (
+            <Text as="div" size="xs" variant="muted">
+              {bundle.lockedReason}
+            </Text>
+          )}
+          {bundle.operations.map((operation) => {
+            const inherited = resolveToolPlacement(
+              {
+                operationId: operation.operationId,
+                bundleId: bundle.id,
+                defaultPinned: operation.defaultPinned,
+                locked,
+              },
+              placements,
+              {},
+            );
+            return (
+              <SurfaceRow
+                key={operation.operationId}
+                label={operation.operationId}
+                toolCount={1}
+                tokens={operation.tokens}
+                control={
+                  <PlacementSelect
+                    ariaLabel={`${operation.operationId} placement`}
+                    disabled={locked || !onOperationPlace}
+                    value={
+                      locked ? 'default' : (operationPlacements[operation.operationId] ?? 'default')
+                    }
+                    options={[
+                      { value: 'default', label: `${placementLabels[inherited]} · group` },
+                      ...choices,
+                    ]}
+                    onChange={(value) =>
+                      onOperationPlace?.(
+                        operation.operationId,
+                        value === 'default' ? undefined : value,
+                      )
+                    }
+                  />
+                }
+              />
+            );
+          })}
+        </div>
+      )}
+    </SurfaceRow>
   );
 }

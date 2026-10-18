@@ -8,7 +8,6 @@ import {
   DirectiveConnectionRefSchema,
   MAX_PINNED_TOOLS,
   applyBundlePlacements,
-  getOperation,
   withGuaranteedReadOps,
 } from '@aflow/schemas';
 import { getOrchestratorLogger } from '../../../lib/orchestratorLogger.js';
@@ -185,7 +184,7 @@ export function admitConnectionsWithinCap(
 export interface CapabilitySettings {
   catalogConfig: CatalogConfig | undefined;
   /** Groups the operator shed, for revoking already-promoted tools. */
-  shedCapabilityGroups: ReadonlySet<string> | undefined;
+  shedOperationIds: ReadonlySet<string> | undefined;
   connectionAllowlist: DirectiveConnectionRef[] | undefined;
   /** The subset of the allowlist to pin, or `undefined` when there is no list. */
   pinnedConnections: PinnedConnection[] | undefined;
@@ -211,21 +210,25 @@ export function applyCapabilitySettings(
   if (!catalogConfig || directives === undefined) {
     return {
       catalogConfig,
-      shedCapabilityGroups: undefined,
+      shedOperationIds: undefined,
       connectionAllowlist: undefined,
       pinnedConnections: undefined,
     };
   }
 
   let next = catalogConfig;
-  let shedCapabilityGroups: ReadonlySet<string> | undefined;
+  let shedOperationIds: ReadonlySet<string> | undefined;
 
   const placements = resolveBundlePlacements(directives);
-  if (Object.keys(placements).length > 0) {
+  const operationPlacements = (
+    directives as { capabilityDiscovery?: { operationPlacements?: Record<string, string> } }
+  )?.capabilityDiscovery?.operationPlacements;
+  if (Object.keys(placements).length > 0 || operationPlacements) {
     const placed = applyBundlePlacements(
       next.coreOperations ?? [],
       next.discovery?.allowedOperationIds ?? [],
       placements,
+      operationPlacements,
     );
     next = { ...next, coreOperations: placed.coreOperations };
     // The read floor is re-asserted AFTER placement: upstream it short-circuits
@@ -233,9 +236,8 @@ export function applyCapabilitySettings(
     // Memory off would otherwise leave the agent unable to re-read a truncated
     // run output (Plan 196 §4.9). It is a platform invariant, not a placement.
     next = withGuaranteedReadOps(next);
-    shedCapabilityGroups = placed.offCapabilityGroups;
+    shedOperationIds = placed.offOperationIds;
     if (next.discovery) {
-      const existingExcludes = next.discovery.excludeGroupIds ?? [];
       next = {
         ...next,
         discovery: {
@@ -244,7 +246,9 @@ export function applyCapabilitySettings(
           // reachable even when it was pinned-only before, and one moved to
           // always_on must leave the ceiling it no longer needs.
           allowedOperationIds: placed.discoverableOperationIds,
-          excludeGroupIds: [...new Set([...existingExcludes, ...placed.offCapabilityGroups])],
+          excludeOperationIds: [
+            ...new Set([...(next.discovery.excludeOperationIds ?? []), ...placed.offOperationIds]),
+          ],
         },
       };
     }
@@ -272,7 +276,7 @@ export function applyCapabilitySettings(
 
   return {
     catalogConfig: next,
-    shedCapabilityGroups,
+    shedOperationIds,
     connectionAllowlist,
     // Resolved outside the discovery guard on purpose: pinning is where the
     // tokens are, and it has nothing to do with whether this agent was
@@ -333,17 +337,18 @@ function connectionReach(allowlist: IntegrationDiscoveryAllowEntry[]): Connectio
  */
 export function withPromotedToolsRevoked(
   virtualToolsState: Record<string, VirtualToolEntry> | undefined,
-  shedCapabilityGroups: ReadonlySet<string> | undefined,
+  shedOperationIds: ReadonlySet<string> | undefined,
   connectionAllowlist: IntegrationDiscoveryAllowEntry[] | undefined,
 ): Record<string, VirtualToolEntry> | undefined {
   if (!virtualToolsState) return undefined;
-  const shedsOps = shedCapabilityGroups !== undefined && shedCapabilityGroups.size > 0;
+  const shedsOps = shedOperationIds !== undefined && shedOperationIds.size > 0;
   if (!shedsOps && connectionAllowlist === undefined) return virtualToolsState;
 
   const reach = connectionAllowlist ? connectionReach(connectionAllowlist) : undefined;
 
   const kept: Record<string, VirtualToolEntry> = {};
   for (const [toolId, entry] of Object.entries(virtualToolsState)) {
+    if (shedOperationIds?.has(toolId)) continue;
     const match = INTEGRATION_TOOL_ID.exec(toolId);
     if (match) {
       if (reach) {
@@ -354,10 +359,6 @@ export function withPromotedToolsRevoked(
       }
       kept[toolId] = entry;
       continue;
-    }
-    if (shedsOps) {
-      const op = getOperation(toolId);
-      if (op && shedCapabilityGroups.has(op.capabilityGroupId)) continue;
     }
     kept[toolId] = entry;
   }

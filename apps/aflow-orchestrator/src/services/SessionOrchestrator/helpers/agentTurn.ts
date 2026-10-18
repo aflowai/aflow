@@ -1,3 +1,6 @@
+import { wouldGrantAllowOperation } from '@aflow/schemas';
+import { bundleForOperation } from '@aflow/schemas';
+import { estimateToolSchemaTokens, MAX_CAPABILITY_SCHEMA_TOKENS } from '@aflow/schemas';
 import type {
   AgentDefinition,
   StepDefinition,
@@ -60,7 +63,7 @@ import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
 import type { SessionHotState } from '@aflow/redis';
 import type { PayloadStore } from '@aflow/payload-store';
-import type { SpaceContext, EntityDirectives } from '@aflow/schemas';
+import type { SpaceContext, EntityDirectives, DirectiveCapabilityDiscovery } from '@aflow/schemas';
 import type { ToolResultSummary } from '../types.js';
 import { resolveConfigRecursive } from './configResolution.js';
 import { readInlineVar } from './runtimeState.js';
@@ -78,13 +81,12 @@ import {
   type CyberneticTurnOverrides,
 } from '@aflow/cybernetic-runtime';
 import {
-  isOperationComposed,
   isRunnerExcludedOperation,
   processEditionDescriptor,
   resolveRoleModel,
   resolveRoleReasoning,
 } from '@aflow/schemas';
-import { composeHelmsmanSurface } from '@aflow/platform-artifacts';
+import { resolveHelmsmanBaseSurface } from '@aflow/platform-artifacts';
 
 function formatDelegationFieldForPrompt(value: unknown): string {
   if (typeof value === 'string') return value;
@@ -480,32 +482,9 @@ export function buildAvailableTools(
       if (!op) continue;
       if (op.internal || !op.agentTool) continue;
 
-      let inputSchema: Record<string, unknown> = { type: 'object', properties: {} };
-      const fullSchemaDiscovered = toJsonSchemaSync(op.inputZod);
-      if (op.internalFields?.input) {
-        const props = (fullSchemaDiscovered as Record<string, unknown>)['properties'] as
-          Record<string, unknown> | undefined;
-        if (props) {
-          for (const field of op.internalFields.input) {
-            delete props[field];
-          }
-        }
-      }
-      inputSchema = pruneSchemaForAgent(fullSchemaDiscovered as Record<string, unknown>);
-
-      tools.push(
-        stampToolProvenance(
-          buildVirtualToolSpec({
-            operationId: vtId,
-            stepType: op.stepType,
-            name: op.name,
-            description: op.semanticDescription,
-            inputSchema,
-            source: 'discovered',
-          }),
-          entry,
-        ),
-      );
+      const spec = buildCoreToolSpec(vtId);
+      if (!spec) continue;
+      tools.push(stampToolProvenance({ ...spec, source: 'discovered' }, entry));
       admittedDiscovered++;
     }
 
@@ -521,7 +500,24 @@ export function buildAvailableTools(
     }
   }
 
-  return applyToolAccess(tools, access);
+  const authorizedTools = applyToolAccess(tools, access);
+  if (!isHelmsmanDefinition(agentDef.metadata)) return authorizedTools;
+  let schemaTokens = 0;
+  return authorizedTools.filter((tool) => {
+    const tokens = estimateToolSchemaTokens(tool);
+    if (schemaTokens + tokens > MAX_CAPABILITY_SCHEMA_TOKENS) {
+      if (tools.indexOf(tool) < pinnedCount)
+        throw new Error(
+          'Pinned tool schemas exceed the token budget. Move capabilities to on demand.',
+        );
+      getOrchestratorLogger().warn(
+        `Promoted tool ${tool.toolId} left unloaded at ${String(schemaTokens)} of ${String(MAX_CAPABILITY_SCHEMA_TOKENS)} schema tokens`,
+      );
+      return false;
+    }
+    schemaTokens += tokens;
+    return true;
+  });
 }
 
 /**
@@ -914,17 +910,19 @@ export async function buildAgentTurnInput(
   )?.space?.directives;
   const isHelmsman = isCyberneticHelmsman(agentDef.metadata, spaceDirectivesForDiscovery);
 
-  // The Helmsman's two tiers, composed for the edition this process runs as
-  // (Plan 313 §D5). Ahead of the operator override on purpose: the override is
-  // the operator's opinion about the surface the platform composed, so it
-  // layers over this result rather than over the hosted default.
   if (catalogConfig && isHelmsmanDefinition(agentDef.metadata)) {
-    const composed = composeHelmsmanSurface(
+    const composed = resolveHelmsmanBaseSurface(
+      processEditionDescriptor(),
+      isHelmsman
+        ? (
+            spaceDirectivesForDiscovery as
+              { capabilityDiscovery?: DirectiveCapabilityDiscovery } | undefined
+          )?.capabilityDiscovery
+        : undefined,
       {
         coreOperations: catalogConfig.coreOperations ?? [],
         promotableOperations: catalogConfig.discovery?.allowedOperationIds ?? [],
       },
-      processEditionDescriptor(),
     );
     catalogConfig = {
       ...catalogConfig,
@@ -940,22 +938,6 @@ export async function buildAgentTurnInput(
     };
   }
 
-  if (catalogConfig?.discovery && isHelmsman) {
-    const override = resolveHelmsmanDiscoveryOverride(spaceDirectivesForDiscovery);
-    if (override) {
-      // The operator's ceiling is a choice among capabilities the deployment
-      // has; a lane the edition does not compose is not one of them.
-      const lanes = processEditionDescriptor();
-      catalogConfig = {
-        ...catalogConfig,
-        discovery: {
-          ...catalogConfig.discovery,
-          allowedOperationIds: override.filter((op) => isOperationComposed(op, lanes)),
-        },
-      };
-    }
-  }
-
   // Bundles the operator has shed, and the connections this agent may reach.
   // Deliberately NOT nested under the `discovery` guard above: shedding the
   // pinned tier is what moves tokens and has nothing to do with whether this
@@ -965,7 +947,7 @@ export async function buildAgentTurnInput(
     isHelmsman ? spaceDirectivesForDiscovery : undefined,
   );
   catalogConfig = capabilitySettings.catalogConfig;
-  const { shedCapabilityGroups, connectionAllowlist, pinnedConnections } = capabilitySettings;
+  const { shedOperationIds, connectionAllowlist, pinnedConnections } = capabilitySettings;
 
   let resolvedDiscoveryScope: DiscoveryScope | undefined;
   if (catalogConfig) {
@@ -989,9 +971,23 @@ export async function buildAgentTurnInput(
       virtualToolsVar.ref.value !== null
       ? (virtualToolsVar.ref.value as Record<string, VirtualToolEntry>)
       : undefined,
-    shedCapabilityGroups,
+    shedOperationIds,
     connectionAllowlist,
   );
+
+  if (virtualToolsState) {
+    const reachable = new Set([
+      ...(catalogConfig?.coreOperations ?? []),
+      ...(resolvedDiscoveryScope?.allowedOperationIds ?? []),
+    ]);
+    if (isHelmsman)
+      for (const id of Object.keys(virtualToolsState)) {
+        if (!id.includes(':') && !reachable.has(id)) delete virtualToolsState[id];
+      }
+    runtimeState.variables['ai.agent._virtualTools'] = {
+      ref: { kind: 'inline', value: virtualToolsState },
+    };
+  }
 
   const {
     coreAgentMetas,
@@ -1100,6 +1096,7 @@ export async function buildAgentTurnInput(
     runtimeState,
     runId,
     resolvedDiscoveryScope,
+    grant ?? null,
   );
 
   // Resolve context blocks from config
@@ -1108,6 +1105,27 @@ export async function buildAgentTurnInput(
     content: unknown;
     cacheHint?: 'stable' | 'run_stable' | 'volatile';
   }> = [];
+  const activeIds = new Set(availableTools.map((tool) => tool.toolId));
+  const unloaded = Object.keys(virtualToolsState ?? {}).filter((id) => !activeIds.has(id));
+  if (unloaded.length)
+    contextBlocks.push({
+      key: 'ToolAvailability',
+      cacheHint: 'volatile',
+      content: {
+        unloadedPromotedCount: unloaded.length,
+        unloadedExamples: unloaded.slice(0, 5),
+        promotedToolLimit: MAX_VIRTUAL_TOOLS,
+        ...(isHelmsmanDefinition(agentDef.metadata)
+          ? { schemaTokenLimit: MAX_CAPABILITY_SCHEMA_TOKENS }
+          : {}),
+        activeSchemaTokens: availableTools.reduce(
+          (n, tool) => n + estimateToolSchemaTokens(tool),
+          0,
+        ),
+        guidance:
+          'These promoted tools are not callable on this turn because they exceed the active count or schema budget, or are no longer authorized. Only the active tool surface is callable. Promote a smaller working set; if pinned schemas leave too little room, the operator must move capabilities to on demand.',
+      },
+    });
   const resolvedContext = rc['context'] as Record<string, unknown> | undefined;
   if (resolvedContext) {
     for (const [k, v] of Object.entries(resolvedContext)) {
@@ -1510,6 +1528,10 @@ export async function buildAgentTurnInput(
   const virtualUsed = availableTools.filter((t) => t.discoveredAtTurn !== undefined).length;
   const toolScope: ToolSurfaceScope = {
     pinnedUsed: availableTools.length - virtualUsed,
+    schemaTokensUsed: availableTools.reduce((n, tool) => n + estimateToolSchemaTokens(tool), 0),
+    ...(isHelmsmanDefinition(agentDef.metadata)
+      ? { schemaTokensMax: MAX_CAPABILITY_SCHEMA_TOKENS }
+      : {}),
     pinnedMax: MAX_TOTAL_TOOLS,
     virtualUsed,
     virtualMax: MAX_VIRTUAL_TOOLS,
@@ -1884,6 +1906,7 @@ function buildCatalogForAgent(
   runtimeState: NonNullable<SessionHotState['runtimeState']>,
   runId: string,
   resolvedScope?: DiscoveryScope,
+  grant: RunAccessGrant | null = null,
 ): CatalogForAgent {
   if (!catalogConfigRaw || typeof catalogConfigRaw !== 'object')
     return { markdown: undefined, summary: undefined };
@@ -1939,6 +1962,7 @@ function buildCatalogForAgent(
 
   // Step 4: Filter to discoverable-minus-core remainder
   const filteredOps = rawCatalog.operations.filter((op) => {
+    if (!wouldGrantAllowOperation(grant, op.operationId)) return false;
     if (opLevel && !opLevel.has(op.operationId)) return false;
     if (excludeOpSet.has(op.operationId)) return false;
     if (excludeGrpSet?.has(op.groupId)) return false;
@@ -1992,6 +2016,7 @@ function buildCatalogForAgent(
     excludeGroupIds: discoveryScope.excludeGroupIds,
     coreOperations: catalogConfig.coreOperations,
     format,
+    visibleOperationIds: filteredOps.map((op) => op.operationId),
   });
 
   // Check cache in runtime state
@@ -2015,7 +2040,7 @@ function buildCatalogForAgent(
   } else if (format === 'compact') {
     // Ultra-compact step-type-level summary (~200 tokens)
     const coreToolCount = coreToolIds.size;
-    markdown = buildCompactAwareness(filteredOps, coreToolCount);
+    markdown = buildCompactAwareness(filteredOps, coreToolCount, bundleForOperation);
   } else {
     // 'summary': Full operation one-liner listing
     markdown = buildSummaryCatalog(filteredOps);

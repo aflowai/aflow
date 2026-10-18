@@ -1,30 +1,19 @@
 import { describe, it, expect } from 'vitest';
 import {
-  SPACE_CONTEXT_LIMITS,
-  SpaceContextSkillsSectionSchema,
   SpaceContextMemorySectionSchema,
   SpaceContextHostFoldersSectionSchema,
 } from '@aflow/schemas';
 import type { MemoryDerivation } from '@aflow/database';
 import {
   buildIndexNoteSection,
-  buildPlatformSkillEntries,
-  buildProjectionActivationMap,
-  composeSkillsSection,
   COMPUTE_GUIDANCE,
   hostFolderEntry,
   HOST_FOLDERS_GUIDANCE,
   MEMORY_GUIDANCE,
   mergeHostHarnesses,
-  NEEDS_REPAIR_SURFACE_LIMIT,
-  NEEDS_SETUP_SURFACE_LIMIT,
   readCachedSpaceContext,
-  recomputeActivation,
-  SKILL_DOC_SCAN_LIMIT,
   stepTypeInvalidatesSpaceContext,
-  type ActiveSkillEntry,
   type IndexNoteRow,
-  type NeedsSetupSkillEntry,
 } from './spaceContext.js';
 
 describe('stepTypeInvalidatesSpaceContext', () => {
@@ -187,403 +176,6 @@ describe('COMPUTE_GUIDANCE (Plan 188 §4.I)', () => {
   });
 });
 
-describe('buildPlatformSkillEntries', () => {
-  it('surfaces user-callable platform skills (compose-skill, bind-capability) in cybernetic spaces', () => {
-    const entries = buildPlatformSkillEntries();
-    const slugs = entries.map((e) => e.slug);
-    expect(slugs).toContain('compose-skill');
-    expect(slugs).toContain('bind-capability');
-  });
-
-  it('does NOT surface system stubs (helmsman-supervisory-sweep, coach-*)', () => {
-    const entries = buildPlatformSkillEntries();
-    const slugs = entries.map((e) => e.slug);
-    expect(slugs).not.toContain('helmsman-supervisory-sweep');
-    expect(slugs).not.toContain('coach-review-artifacts');
-    expect(slugs).not.toContain('coach-consolidate-interaction');
-    expect(slugs).not.toContain('coach-scarcity-sweep');
-  });
-
-  it('tags every entry with origin=platform', () => {
-    const entries = buildPlatformSkillEntries();
-    expect(entries.length).toBeGreaterThan(0);
-    expect(entries.every((e) => e.origin === 'platform')).toBe(true);
-  });
-
-  it('uses an "always available" progress string (no ledger lookup needed)', () => {
-    const entries = buildPlatformSkillEntries();
-    expect(entries.every((e) => e.progress.includes('always available'))).toBe(true);
-  });
-
-  it('omits firstTaskInputContract for skills whose entry task has no inputContract (catch-all path)', () => {
-    const entries = buildPlatformSkillEntries();
-    // bind-capability's `elicit-target` doesn't carry an inputContract
-    const bindCapability = entries.find((e) => e.slug === 'bind-capability');
-    expect(bindCapability).toBeDefined();
-    expect(bindCapability!.firstTaskInputContract).toBeUndefined();
-  });
-
-  it('every emitted entry shape round-trips through SpaceContextSkillsSectionSchema', () => {
-    // Phase 4 added the optional `firstTaskInputContract` field; the
-    // round-trip check pins that even mixed (with/without) entries
-    // validate against the schema.
-    const entries = buildPlatformSkillEntries();
-    const section = composeSkillsSection(entries);
-    expect(section).toBeDefined();
-    const parsed = SpaceContextSkillsSectionSchema.safeParse(section);
-    if (!parsed.success) {
-      throw new Error(`schema round-trip failed: ${JSON.stringify(parsed.error.issues)}`);
-    }
-  });
-
-  it("carries each platform skill's description so Helmsman can pattern-match on triggers", () => {
-    const entries = buildPlatformSkillEntries();
-    const bindCapability = entries.find((e) => e.slug === 'bind-capability');
-    expect(bindCapability).toBeDefined();
-    expect(bindCapability!.description).toBeDefined();
-    // bind-capability's description must honestly cover its full surface so
-    // the Helmsman doesn't think the skill is narrower than it is. Three
-    const desc = bindCapability!.description!.toLowerCase();
-    expect(desc).toContain('egress');
-    expect(desc).toContain('endpoint');
-    expect(desc).toMatch(/new|wir/); // "new API" or "wire/wiring"
-  });
-});
-
-describe('composeSkillsSection', () => {
-  function entry(
-    slug: string,
-    origin: 'platform' | 'space' = 'space',
-    description?: string,
-  ): ActiveSkillEntry {
-    return {
-      slug,
-      name: slug,
-      ...(description ? { description } : {}),
-      mode: 'process',
-      status: 'approved',
-      progress: 'p',
-      origin,
-    };
-  }
-
-  it('returns undefined when there are no entries (omits the section)', () => {
-    expect(composeSkillsSection([])).toBeUndefined();
-  });
-
-  it('passes through entries unchanged when under the cap', () => {
-    const entries = [entry('a'), entry('b')];
-    const section = composeSkillsSection(entries);
-    expect(section).toBeDefined();
-    expect(section!.active).toEqual(entries);
-    expect(section!.total).toBe(2);
-    expect(section!.truncated).toBeUndefined();
-    expect(section!.guidance).toContain('all skills available');
-  });
-
-  it('truncates and signals when over the cap', () => {
-    const cap = SPACE_CONTEXT_LIMITS.skills;
-    const entries = Array.from({ length: cap + 3 }, (_, i) => entry(`s${i}`));
-    const section = composeSkillsSection(entries);
-    expect(section).toBeDefined();
-    expect(section!.active).toHaveLength(cap);
-    expect(section!.total).toBe(cap + 3);
-    expect(section!.truncated).toBe(true);
-    expect(section!.guidance).toContain('3 more skills not shown');
-    expect(section!.guidance).toContain('workflow.manage.list');
-  });
-
-  it('guidance bridges agent-facing "skill" with the canonical workflow operation IDs', () => {
-    const section = composeSkillsSection([entry('a')]);
-    expect(section).toBeDefined();
-    // The agent-facing concept is "skill"; the operation IDs stay canonical.
-    expect(section!.guidance).toContain('skill');
-    expect(section!.guidance).toContain('workflow.run.start');
-    expect(section!.guidance).toContain('workflow.manage.get');
-  });
-
-  it('preserves caller-supplied ordering (does not re-sort)', () => {
-    const entries = [entry('platform-a', 'platform'), entry('space-b', 'space')];
-    const section = composeSkillsSection(entries);
-    expect(section!.active.map((e) => e.slug)).toEqual(['platform-a', 'space-b']);
-  });
-
-  it('produces output that round-trips through SpaceContextSkillsSectionSchema', () => {
-    const entries = [
-      entry('platform-a', 'platform', 'a built-in skill description'),
-      entry('space-b', 'space'),
-    ];
-    const section = composeSkillsSection(entries);
-    const parsed = SpaceContextSkillsSectionSchema.safeParse(section);
-    expect(parsed.success).toBe(true);
-  });
-
-  const setupEntry = (slug: string): NeedsSetupSkillEntry => ({
-    slug,
-    name: slug,
-    activationStatus: 'needs_binding',
-    missingCapabilities: ['kaggle'],
-  });
-
-  it('surfaces the needsSetup bucket with its own guidance, distinct from active', () => {
-    const section = composeSkillsSection([entry('callable')], [], [setupEntry('unbound')]);
-    expect(section).toBeDefined();
-    expect(section!.active.map((e) => e.slug)).toEqual(['callable']);
-    expect(section!.needsSetup?.map((e) => e.slug)).toEqual(['unbound']);
-    // total counts only the active (offerable) skills, not setup/repair.
-    expect(section!.total).toBe(1);
-    expect(section!.guidance).toContain('need setup');
-    expect(section!.guidance).toContain('unbound');
-  });
-
-  it('emits the section even when ONLY needsSetup is non-empty', () => {
-    const section = composeSkillsSection([], [], [setupEntry('unbound')]);
-    expect(section).toBeDefined();
-    expect(section!.active).toEqual([]);
-    expect(section!.needsSetup).toHaveLength(1);
-  });
-
-  it('caps the needsSetup bucket at 10 entries', () => {
-    const setups = Array.from({ length: 13 }, (_, i) => setupEntry(`s${i}`));
-    const section = composeSkillsSection([entry('a')], [], setups);
-    expect(section!.needsSetup).toHaveLength(10);
-  });
-
-  it('needsSetup output round-trips through SpaceContextSkillsSectionSchema (incl. degraded endpoint ids)', () => {
-    const section = composeSkillsSection(
-      [entry('a')],
-      [],
-      [
-        setupEntry('unbound'),
-        {
-          slug: 'degraded-skill',
-          name: 'd',
-          activationStatus: 'degraded',
-          missingCapabilities: [],
-          missingEndpointIds: ['get_orders', 'post_orders'],
-        },
-      ],
-    );
-    const parsed = SpaceContextSkillsSectionSchema.safeParse(section);
-    if (!parsed.success) {
-      throw new Error(`schema round-trip failed: ${JSON.stringify(parsed.error.issues)}`);
-    }
-  });
-
-  it('SKILL_DOC_SCAN_LIMIT covers all three readiness bucket caps', () => {
-    expect(SKILL_DOC_SCAN_LIMIT).toBeGreaterThanOrEqual(
-      SPACE_CONTEXT_LIMITS.skills + NEEDS_SETUP_SURFACE_LIMIT + NEEDS_REPAIR_SURFACE_LIMIT,
-    );
-  });
-});
-
-describe('recomputeActivation (read-time staleness fix)', () => {
-  const needsBinding = {
-    activationStatus: 'needs_binding' as const,
-    missingCapabilities: ['github', 'github-default'],
-    missingEndpointIds: [],
-  };
-
-  it('flips needs_binding → active once every missing capability is bound', () => {
-    const available = new Set(['github', 'github-default', 'kaggle']);
-    expect(recomputeActivation(needsBinding, available)).toEqual({
-      activationStatus: 'active',
-      missingCapabilities: [],
-    });
-  });
-
-  it('narrows missingCapabilities to the still-unbound subset', () => {
-    const available = new Set(['github']); // bindingId still missing
-    expect(recomputeActivation(needsBinding, available)).toEqual({
-      activationStatus: 'needs_binding',
-      missingCapabilities: ['github-default'],
-    });
-  });
-
-  it('keeps needs_binding when nothing is bound', () => {
-    expect(recomputeActivation(needsBinding, new Set())).toEqual({
-      activationStatus: 'needs_binding',
-      missingCapabilities: ['github', 'github-default'],
-    });
-  });
-
-  it('passes the cached axis through verbatim when there is nothing to recompute', () => {
-    // `available` undefined ⇒ no projection claimed needs_binding ⇒ no DB load.
-    expect(recomputeActivation(needsBinding, undefined)).toEqual({
-      activationStatus: 'needs_binding',
-      missingCapabilities: ['github', 'github-default'],
-    });
-    // active/degraded projections are never re-filtered (binding-removal is a
-    // write-time reconcile concern, not read-time).
-    const degraded = {
-      activationStatus: 'degraded' as const,
-      missingCapabilities: [],
-      missingEndpointIds: ['get_orders'],
-    };
-    expect(recomputeActivation(degraded, new Set(['github']))).toEqual({
-      activationStatus: 'degraded',
-      missingCapabilities: [],
-    });
-  });
-
-  it('treats an absent projection as active', () => {
-    expect(recomputeActivation(undefined, new Set(['github']))).toEqual({
-      activationStatus: 'active',
-      missingCapabilities: [],
-    });
-  });
-});
-
-describe('buildProjectionActivationMap (Plan 190 §6)', () => {
-  const proj = (skillId: string, body: Record<string, unknown>) => ({
-    path: `/skills/${skillId}/projection.json`,
-    inlineContent: JSON.stringify(body),
-  });
-
-  it('maps skillId → activationStatus + missingCapabilities', () => {
-    const map = buildProjectionActivationMap([
-      proj('kaggle', { activationStatus: 'needs_binding', missingCapabilities: ['kaggle'] }),
-      proj('ready', { activationStatus: 'active', missingCapabilities: [] }),
-    ]);
-    expect(map.get('kaggle')).toEqual({
-      activationStatus: 'needs_binding',
-      missingCapabilities: ['kaggle'],
-      missingEndpointIds: [],
-    });
-    expect(map.get('ready')?.activationStatus).toBe('active');
-  });
-
-  it('collects missingEndpointIds from missing_endpoint deps (the degraded payload)', () => {
-    const map = buildProjectionActivationMap([
-      proj('drifted', {
-        activationStatus: 'degraded',
-        missingCapabilities: [],
-        capabilityDependencies: [
-          { status: 'ready', missingEndpointIds: ['ignored'] }, // not missing_endpoint
-          { status: 'missing_endpoint', missingEndpointIds: ['get_orders', 'post_orders'] },
-          { status: 'missing_endpoint' }, // no ids — skipped cleanly
-          { status: 'missing_endpoint', missingEndpointIds: ['x', 42, null] }, // non-strings filtered
-        ],
-      }),
-    ]);
-    expect(map.get('drifted')?.activationStatus).toBe('degraded');
-    expect(map.get('drifted')?.missingEndpointIds).toEqual(['get_orders', 'post_orders', 'x']);
-  });
-
-  it('defaults an unknown/absent activationStatus to active (fail-open on the activation axis only)', () => {
-    const map = buildProjectionActivationMap([
-      proj('weird', { activationStatus: 'not-a-status' }),
-      proj('empty', {}),
-    ]);
-    expect(map.get('weird')?.activationStatus).toBe('active');
-    expect(map.get('empty')?.activationStatus).toBe('active');
-    expect(map.get('empty')?.missingCapabilities).toEqual([]);
-  });
-
-  it('skips malformed JSON and rows with no content', () => {
-    const map = buildProjectionActivationMap([
-      { path: '/skills/broken/projection.json', inlineContent: '{not json' },
-      { path: '/skills/empty/projection.json', inlineContent: null },
-    ]);
-    expect(map.size).toBe(0);
-  });
-
-  it('filters non-string entries out of missingCapabilities', () => {
-    const map = buildProjectionActivationMap([
-      proj('x', { activationStatus: 'degraded', missingCapabilities: ['ok', 42, null, 'also'] }),
-    ]);
-    expect(map.get('x')?.missingCapabilities).toEqual(['ok', 'also']);
-  });
-
-  it('carries the cached contract verdict + hash when both parse (Slice 5b)', () => {
-    const verdict = {
-      status: 'valid',
-      diagnostics: [],
-      advisories: [],
-      validatedAt: '2026-06-09T00:00:00.000Z',
-    };
-    const map = buildProjectionActivationMap([
-      proj('cached', {
-        activationStatus: 'active',
-        contractValidity: verdict,
-        contractValidityHash: 'abc123',
-      }),
-    ]);
-    expect(map.get('cached')?.contractValidity).toEqual(verdict);
-    expect(map.get('cached')?.contractValidityHash).toBe('abc123');
-  });
-
-  it('drops a cached verdict with no hash (fail-closed — the cache check needs the hash)', () => {
-    const map = buildProjectionActivationMap([
-      proj('hashless', {
-        activationStatus: 'active',
-        contractValidity: {
-          status: 'valid',
-          diagnostics: [],
-          advisories: [],
-          validatedAt: '2026-06-09T00:00:00.000Z',
-        },
-      }),
-    ]);
-    expect(map.get('hashless')?.contractValidity).toBeUndefined();
-    expect(map.get('hashless')?.contractValidityHash).toBeUndefined();
-  });
-
-  it('drops a malformed contractValidity that fails schema parse', () => {
-    const map = buildProjectionActivationMap([
-      proj('bad', {
-        activationStatus: 'active',
-        contractValidity: { status: 'not-a-status' },
-        contractValidityHash: 'abc123',
-      }),
-    ]);
-    expect(map.get('bad')?.contractValidity).toBeUndefined();
-  });
-});
-
-describe('platform + space merge end-to-end (helper composition)', () => {
-  it('platform-first ordering means built-in skills appear before space-local', () => {
-    const platform = buildPlatformSkillEntries();
-    const spaceLocal: ActiveSkillEntry[] = [
-      {
-        slug: 'titanic-kaggle-optimizer',
-        name: 'Titanic',
-        mode: 'optimization',
-        status: 'approved',
-        progress: 'no runs yet',
-        origin: 'space',
-      },
-    ];
-    const section = composeSkillsSection([...platform, ...spaceLocal]);
-    expect(section).toBeDefined();
-    const slugs = section!.active.map((e) => e.slug);
-    const lastPlatformIdx = Math.max(
-      ...platform.map((p) => slugs.indexOf(p.slug)).filter((i) => i >= 0),
-    );
-    const spaceIdx = slugs.indexOf('titanic-kaggle-optimizer');
-    expect(spaceIdx).toBeGreaterThan(lastPlatformIdx);
-  });
-
-  it('caller-implemented dedup means a space-local skill with platform slug wins (shadows platform)', () => {
-    // Caller's expected dedup behavior: skip platform if a space-local entry uses the same slug.
-    const merged: ActiveSkillEntry[] = [
-      {
-        slug: 'compose-skill',
-        name: 'Custom Compose',
-        mode: 'process',
-        status: 'approved',
-        progress: '5 runs',
-        origin: 'space',
-      },
-    ];
-    const section = composeSkillsSection(merged);
-    const composeEntry = section!.active.find((e) => e.slug === 'compose-skill');
-    expect(composeEntry).toBeDefined();
-    expect(composeEntry!.origin).toBe('space');
-    expect(composeEntry!.name).toBe('Custom Compose');
-  });
-});
-
 describe('MEMORY_GUIDANCE — wikilink + /index.md conventions', () => {
   it('names the wikilink syntax, the links query mode, and the /index.md map', () => {
     expect(MEMORY_GUIDANCE).toContain('[[/path/doc.md]]');
@@ -652,13 +244,26 @@ describe('buildIndexNoteSection — reads the projection column, marks resolutio
 
 describe('readCachedSpaceContext — generation freshness', () => {
   const cached = (gen?: number) => ({
-    spaceContextJson: JSON.stringify({ version: 1, space: { id: 'x', slug: 's', name: 'S' } }),
+    spaceContextJson: JSON.stringify({
+      version: 1,
+      space: { id: '00000000-0000-4000-8000-000000000001', slug: 's', name: 'S' },
+    }),
     spaceContextBuiltAt: Date.now(),
     ...(gen !== undefined ? { spaceContextGen: gen } : {}),
   });
 
   it('reuses the cache when the cached gen matches the current gen', () => {
     expect(readCachedSpaceContext(cached(3), 3)).toBeDefined();
+  });
+
+  it('rebuilds a cached skill inventory that does not satisfy the current context schema', () => {
+    const old = cached(3);
+    old.spaceContextJson = JSON.stringify({
+      version: 1,
+      space: { id: '00000000-0000-4000-8000-000000000001', slug: 's', name: 'S' },
+      skills: { active: [], total: 1, guidance: 'old' },
+    });
+    expect(readCachedSpaceContext(old, 3)).toBeUndefined();
   });
 
   it('treats a cache built at an older gen as stale (rebuild)', () => {

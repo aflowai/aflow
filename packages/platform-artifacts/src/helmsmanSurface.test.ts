@@ -88,13 +88,9 @@ describe('composeHelmsmanSurface', () => {
       'browser.page.open',
       'model.runtime.status',
     ]);
-    expect(removed).toEqual([
-      'workflow.campaign.list',
-      'workflow.campaign.get',
-      'ui.surface.visualize',
-    ]);
+    expect(removed).toEqual([]);
     // The three reads and the harness are paid for; opening a page and the runtime's status are not.
-    expect(composed.coreOperations.length).toBe(authored.coreOperations.length + 2);
+    expect(composed.coreOperations.length).toBe(authored.coreOperations.length + 5);
   });
 
   it('keeps every other browser operation promotable on the local edition, as one bundle', () => {
@@ -150,11 +146,7 @@ describe('composeHelmsmanSurface', () => {
         'model.runtime.status',
       ].sort(),
     );
-    expect(added).toEqual([
-      'workflow.campaign.list',
-      'workflow.campaign.get',
-      'ui.surface.visualize',
-    ]);
+    expect(added).toEqual([]);
   });
 
   it('keeps the local edition hosted-shaped while no machine is paired', () => {

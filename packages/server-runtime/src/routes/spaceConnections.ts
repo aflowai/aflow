@@ -1,3 +1,4 @@
+import { spaceAgentCapabilitiesRoutes } from './spaceAgentCapabilities.js';
 /**
  * The bound connections a space's agent can carry, each with the per-turn token
  * cost of pinning it.
@@ -243,6 +244,7 @@ export async function loadSpaceConnections(
 
 export const spaceConnectionsRoutes: FastifyPluginAsync = async (fastify) => {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
+  await app.register(spaceAgentCapabilitiesRoutes);
 
   app.get(
     '/:spaceId/connections',

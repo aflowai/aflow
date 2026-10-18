@@ -109,3 +109,8 @@ export {
   getArchetypePreset,
 } from './strategyArchetypes.js';
 export type { StrategyArchetype, StrategyArchetypePreset } from './strategyArchetypes.js';
+export {
+  resolveHelmsmanBaseSurface,
+  resolveHelmsmanCapabilities,
+  estimateOperationTokens,
+} from './helmsmanCapabilities.js';

@@ -249,3 +249,9 @@ export * from './sessionRehydration.js';
 export * from './resumeDispatch.js';
 export * from './taskDraftStore.js';
 export * from './localModels/index.js';
+export {
+  searchInstalledSkills,
+  loadHelmsmanDiscovery,
+  buildInstalledSkillAwareness,
+  validatePinnedSkillBudget,
+} from './skillDiscovery.js';

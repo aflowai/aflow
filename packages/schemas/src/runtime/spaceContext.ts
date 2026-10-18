@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { SkillDiagnosticSchema } from '../cybernetic/skillValidity.js';
+import { SkillAwarenessEntrySchema } from '../cybernetic/skillDiscovery.js';
 import { InstalledAppletSummarySchema } from '../applet/installed.js';
 import { HostPublishedChecksSchema, HostPushApprovalSchema } from '../operations/host.js';
 
@@ -374,45 +374,11 @@ export const SpaceContextComputeSectionSchema = z.object({
 });
 
 export const SpaceContextSkillsSectionSchema = z.object({
-  active: z.array(
-    z.object({
-      slug: z.string(),
-      name: z.string(),
-      description: z.string().optional(),
-      mode: z.enum(['optimization', 'process', 'project']),
-      status: z.enum(['draft', 'approved']),
-      progress: z.string(),
-      bestResult: z.string().optional(),
-      origin: z.enum(['platform', 'space']),
-      firstTaskInputContract: z.record(z.unknown()).optional(),
-    }),
-  ),
-  needsSetup: z
-    .array(
-      z.object({
-        slug: z.string(),
-        name: z.string(),
-        activationStatus: z.enum(['needs_binding', 'degraded']),
-        /** `needs_binding` payload — capability prefixes with no bound integration. */
-        missingCapabilities: z.array(z.string()).max(20),
-        /** One line per missing capability: what it means and what closes it. */
-        setup: z.array(z.string()).max(20).optional(),
-        missingEndpointIds: z.array(z.string()).max(20).optional(),
-      }),
-    )
-    .max(10)
-    .optional(),
-  needsRepair: z
-    .array(
-      z.object({
-        slug: z.string(),
-        name: z.string(),
-        diagnostics: z.array(SkillDiagnosticSchema).max(10),
-      }),
-    )
-    .max(10)
-    .optional(),
+  pinned: z.array(SkillAwarenessEntrySchema),
   total: z.number().int().nonnegative(),
+  onDemandCount: z.number().int().nonnegative(),
+  pinnedTokens: z.number().int().nonnegative(),
+  omittedPinnedCount: z.number().int().nonnegative().optional(),
   truncated: z.boolean().optional(),
   guidance: z.string(),
 });

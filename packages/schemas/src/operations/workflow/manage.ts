@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { SkillValiditySchema } from '../../cybernetic/skillValidity.js';
+import { SkillDiscoveryReadinessSchema } from '../../cybernetic/skillDiscovery.js';
 import { ProcedureActivationSchema } from '../../cybernetic/context.js';
 import { WorkflowModeSchema, WorkflowRunStatusSchema, WorkflowStatusSchema } from './enums.js';
 import { OutcomeSchema } from './outcome.js';
@@ -136,6 +138,12 @@ export type WorkflowPatchOutput = z.infer<typeof WorkflowPatchOutputSchema>;
 // --- workflow.manage.get ---
 
 export const WorkflowGetInputSchema = z.object({
+  view: z
+    .enum(['full', 'invocation'])
+    .default('full')
+    .describe(
+      'Use invocation for compact activation details and input contracts; full includes the workflow graph.',
+    ),
   slug: z.string().min(1).max(64),
   includeLedgerSummary: z.boolean().default(true),
   ledgerMaxEntries: z.number().int().min(0).max(20).default(5),
@@ -182,7 +190,7 @@ export const PausedRunContextSchema = z.object({
 });
 export type PausedRunContext = z.infer<typeof PausedRunContextSchema>;
 
-export const WorkflowGetOutputSchema = z.object({
+const WorkflowGetFullOutputSchema = z.object({
   workflow: WorkflowSchema,
   ledgerSummary: z
     .object({
@@ -211,6 +219,25 @@ export const WorkflowGetOutputSchema = z.object({
    */
   campaignContract: z.record(z.unknown()).optional(),
 });
+export const WorkflowGetOutputSchema = z.union([
+  WorkflowGetFullOutputSchema,
+  z.object({
+    view: z.literal('invocation'),
+    readiness: SkillDiscoveryReadinessSchema,
+    workflow: WorkflowSchema.pick({
+      slug: true,
+      name: true,
+      description: true,
+      mode: true,
+      status: true,
+      revision: true,
+    }),
+    contractValidity: SkillValiditySchema,
+    firstTaskInputContract: z.record(z.unknown()).optional(),
+    campaignContract: z.record(z.unknown()).optional(),
+    guidance: z.string(),
+  }),
+]);
 export type WorkflowGetOutput = z.infer<typeof WorkflowGetOutputSchema>;
 
 // --- workflow.manage.list ---

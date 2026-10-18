@@ -506,6 +506,8 @@ export const DirectiveCapabilityDiscoverySchema = z.object({
   bundlePlacements: z
     .record(z.string().min(1).max(64), z.enum(['always_on', 'on_demand', 'off']))
     .optional(),
+  operationPlacements: z.record(z.string(), z.enum(['always_on', 'on_demand', 'off'])).optional(),
+  skillPlacements: z.record(z.string(), z.enum(['always_on', 'on_demand', 'off'])).optional(),
   connections: z.array(DirectiveConnectionRefSchema).max(50).optional(),
 });
 

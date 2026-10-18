@@ -12,8 +12,8 @@ import { MEMORY_READ_OPERATION_ID, RUN_OUTPUT_READ_OPERATION_ID } from './operat
  *
  * `tier` records what a bundle actually costs, which is what makes the control
  * legible: `loaded` bundles contribute pinned tool schemas to every single turn,
- * `on_demand` bundles cost nothing until the agent promotes something out of
- * them.
+ * `on_demand` defers tool schemas until promotion; compact discovery awareness
+ * still has a context cost.
  */
 export type CapabilityBundleTier = 'loaded' | 'on_demand';
 
@@ -36,6 +36,8 @@ export interface CapabilityBundle {
    * this pair.
    */
   capabilityGroupIds: readonly string[];
+  operationIds?: readonly string[];
+  parentId?: string;
 }
 
 export const CAPABILITY_BUNDLES: readonly CapabilityBundle[] = [
@@ -57,7 +59,7 @@ export const CAPABILITY_BUNDLES: readonly CapabilityBundle[] = [
     // that enumerates every promotable operation id, so shedding it costs far
     // more prompt than it saves.
     locked: { reason: 'holds the surface compact' },
-    capabilityGroupIds: ['catalog.tool'],
+    capabilityGroupIds: ['catalog.tool', 'catalog.skill'],
   },
   {
     id: 'memory_read',
@@ -70,7 +72,7 @@ export const CAPABILITY_BUNDLES: readonly CapabilityBundle[] = [
     id: 'memory_write',
     label: 'Memory · write',
     hint: 'Record, edit, and remove notes and standing context.',
-    tier: 'loaded',
+    tier: 'on_demand',
     capabilityGroupIds: ['memory.store:write', 'memory.context:write'],
   },
   {
@@ -83,23 +85,27 @@ export const CAPABILITY_BUNDLES: readonly CapabilityBundle[] = [
   {
     id: 'run_skills',
     label: 'Run skills',
-    hint: 'Activate skills and campaigns.',
+    hint: 'Start, resume, cancel and inspect skill runs.',
     tier: 'loaded',
-    capabilityGroupIds: ['workflow.run', 'workflow.campaign'],
+    capabilityGroupIds: ['workflow.run'],
+    parentId: 'skills',
   },
   {
     id: 'author_skills',
-    label: 'Author skills',
-    hint: 'Inspect and edit skill definitions.',
-    tier: 'loaded',
+    label: 'Edit skills',
+    hint: 'Edit skill definitions and inspect detailed run ledgers.',
+    tier: 'on_demand',
     capabilityGroupIds: ['workflow.manage', 'workflow.ledger', 'workflow', 'skill.manage'],
+    parentId: 'skills',
   },
   {
     id: 'visuals',
     label: 'Visuals',
-    hint: 'Render artifacts and charts.',
-    tier: 'loaded',
+    hint: 'Render existing artifacts and inline visualizations.',
+    tier: 'on_demand',
     capabilityGroupIds: ['ui.surface', 'ui.artifact', 'ui.catalog'],
+    operationIds: ['ui.artifact.render', 'ui.surface.visualize'],
+    parentId: 'visuals',
   },
   {
     id: 'web',
@@ -110,11 +116,10 @@ export const CAPABILITY_BUNDLES: readonly CapabilityBundle[] = [
   },
   {
     id: 'learning',
-    label: 'Learning',
-    hint: 'Proposals and what runs carry forward.',
-    tier: 'loaded',
+    label: 'Learning changes',
+    hint: 'Review and update what skill runs carry forward.',
+    tier: 'on_demand',
     capabilityGroupIds: [
-      'proposal',
       'learner.learning',
       'learner.flag',
       'learner.observation',
@@ -124,18 +129,11 @@ export const CAPABILITY_BUNDLES: readonly CapabilityBundle[] = [
   },
   {
     id: 'integrations',
-    label: 'Integrations',
-    hint: 'Set up and edit the HTTP services this space calls. Which of them this agent carries is Connections, below.',
+    label: 'HTTP definitions',
+    hint: 'Define and edit the HTTP services this space calls. Bound tools are managed under Connections.',
     tier: 'on_demand',
-    capabilityGroupIds: [
-      'api.definition',
-      'api.binding',
-      'api.webhook',
-      // The cross-substrate inventory read stays here rather than with either
-      // one: it answers "what is bound in this space" for HTTP and MCP alike,
-      // so a space holding only one of them still needs it.
-      'integration.registry',
-    ],
+    parentId: 'http_setup',
+    capabilityGroupIds: ['api.definition'],
   },
   {
     id: 'mcp_servers',
@@ -147,7 +145,8 @@ export const CAPABILITY_BUNDLES: readonly CapabilityBundle[] = [
     // paying all of it for a protocol it never speaks, and the reverse holds
     // too. The boundary is real rather than a size heuristic — these ops share
     // no schema, no binding shape and no call path with the HTTP ones.
-    capabilityGroupIds: ['mcp.server', 'mcp.binding', 'mcp.tool'],
+    capabilityGroupIds: ['mcp.server'],
+    parentId: 'mcp_setup',
   },
   {
     id: 'simulations',
@@ -170,17 +169,19 @@ export const CAPABILITY_BUNDLES: readonly CapabilityBundle[] = [
   },
   {
     id: 'media',
-    label: 'Media',
+    label: 'Video & animation',
     hint: 'Generate and edit images and video. Billed per call.',
     tier: 'on_demand',
     capabilityGroupIds: ['ai.media'],
+    parentId: 'media',
   },
   {
     id: 'code',
-    label: 'Code',
+    label: 'Sandbox',
     hint: 'Run code in a sandbox, read repositories, drive the coding lane.',
     tier: 'on_demand',
-    capabilityGroupIds: ['compute.sandbox', 'code.repo', 'code.agent'],
+    capabilityGroupIds: ['compute.sandbox'],
+    parentId: 'code',
   },
   {
     id: 'host_files',
@@ -299,6 +300,114 @@ export const CAPABILITY_BUNDLES: readonly CapabilityBundle[] = [
     tier: 'on_demand',
     capabilityGroupIds: ['space.manage'],
   },
+  {
+    id: 'inspect_skills',
+    label: 'Inspect skills',
+    hint: 'Read a skill and its invocation contract.',
+    tier: 'loaded',
+    capabilityGroupIds: [],
+    operationIds: ['workflow.manage.get'],
+    parentId: 'skills',
+  },
+  {
+    id: 'campaigns',
+    label: 'Campaigns',
+    hint: 'Browse and manage long-running skill campaigns.',
+    tier: 'on_demand',
+    capabilityGroupIds: ['workflow.campaign'],
+    parentId: 'skills',
+  },
+  {
+    id: 'proposals',
+    label: 'Proposals',
+    hint: 'Inspect proposals requiring operator attention.',
+    tier: 'loaded',
+    capabilityGroupIds: ['proposal'],
+    parentId: 'learning',
+  },
+  {
+    id: 'workflow_learning',
+    label: 'Run learnings',
+    hint: 'Record a skill run’s learnings.',
+    tier: 'on_demand',
+    capabilityGroupIds: [],
+    operationIds: ['workflow.learn'],
+    parentId: 'learning',
+  },
+  {
+    id: 'connection_inventory',
+    label: 'Connection inventory',
+    hint: 'Find the API and MCP services bound in this space.',
+    tier: 'on_demand',
+    capabilityGroupIds: ['integration.registry'],
+    parentId: 'http_setup',
+  },
+  {
+    id: 'http_bindings',
+    label: 'HTTP bindings',
+    hint: 'Connect HTTP services and check their credentials.',
+    tier: 'on_demand',
+    capabilityGroupIds: ['api.binding'],
+    parentId: 'http_setup',
+  },
+  {
+    id: 'webhooks',
+    label: 'Webhooks',
+    hint: 'Configure incoming service events.',
+    tier: 'on_demand',
+    capabilityGroupIds: ['api.webhook'],
+    parentId: 'http_setup',
+  },
+  {
+    id: 'mcp_bindings',
+    label: 'MCP bindings',
+    hint: 'Connect remote MCP servers.',
+    tier: 'on_demand',
+    capabilityGroupIds: ['mcp.binding'],
+    parentId: 'mcp_setup',
+  },
+  {
+    id: 'mcp_inventory',
+    label: 'MCP tool inventory',
+    hint: 'Inspect tools offered by remote servers.',
+    tier: 'on_demand',
+    capabilityGroupIds: ['mcp.tool'],
+    parentId: 'mcp_setup',
+  },
+  {
+    id: 'artifacts',
+    label: 'Build artifacts',
+    hint: 'Generate and inspect visual artifacts.',
+    tier: 'on_demand',
+    capabilityGroupIds: [],
+    operationIds: ['ui.artifact.generate', 'ui.artifact.get', 'ui.artifact.list', 'ui.catalog.get'],
+    parentId: 'visuals',
+  },
+  {
+    id: 'images',
+    label: 'Images',
+    hint: 'Generate and edit images.',
+    tier: 'on_demand',
+    capabilityGroupIds: [],
+    operationIds: ['ai.media.image', 'ai.media.edit_image'],
+    parentId: 'media',
+  },
+  {
+    id: 'repositories',
+    label: 'Repository inspection',
+    hint: 'Inspect connected repositories.',
+    tier: 'on_demand',
+    capabilityGroupIds: ['code.repo'],
+    parentId: 'code',
+  },
+  {
+    id: 'managed_code',
+    label: 'Managed coding lane',
+    hint: 'Commission code changes on a managed checkout.',
+    tier: 'on_demand',
+    capabilityGroupIds: ['code.agent'],
+    parentId: 'code',
+  },
 ];
 
 const BUNDLE_BY_GROUP: ReadonlyMap<string, CapabilityBundle> = new Map(
@@ -335,6 +444,8 @@ export function bundleForCapabilityGroup(
 
 /** The bundle owning an operation, resolved through its capability group. */
 export function bundleForOperation(operationId: string): CapabilityBundle | undefined {
+  const exact = CAPABILITY_BUNDLES.find((b) => b.operationIds?.includes(operationId));
+  if (exact) return exact;
   const op = getOperation(operationId);
   if (!op) return undefined;
   return bundleForGroupAccess(op.capabilityGroupId, op.accessMode);
@@ -417,10 +528,9 @@ export interface ShedableCatalogConfig {
 export interface PlacedSurface {
   /** Pinned every turn — these carry the per-turn schema cost. */
   coreOperations: string[];
-  /** Reachable through discovery, costing nothing until promoted. */
+  /** Reachable through discovery, with schemas loaded only when promoted. */
   discoverableOperationIds: string[];
-  /** Capability groups the operator switched off entirely. */
-  offCapabilityGroups: Set<string>;
+  offOperationIds: Set<string>;
 }
 
 /**
@@ -447,23 +557,41 @@ export interface PlacedSurface {
  * catch one), and silently unpinning a tool because of it would be the worst
  * reading.
  */
+export function resolveToolPlacement(
+  tool: { operationId: string; bundleId: string; defaultPinned: boolean; locked: boolean },
+  placements?: Readonly<Record<string, string>>,
+  operationPlacements?: Readonly<Record<string, string>>,
+): CapabilityBundlePlacement {
+  const fallback = tool.defaultPinned ? 'always_on' : 'on_demand';
+  if (tool.locked) return fallback;
+  const group = placements?.[tool.bundleId];
+  const value = group === 'off' ? 'off' : (operationPlacements?.[tool.operationId] ?? group);
+  return value === 'always_on' || value === 'on_demand' || value === 'off' ? value : fallback;
+}
+
 export function applyBundlePlacements(
   coreOperations: readonly string[],
   discoverableOperationIds: readonly string[],
   placements: Readonly<Record<string, string>> | undefined,
+  operationPlacements?: Readonly<Record<string, string>>,
 ): PlacedSurface {
   const pinned: string[] = [];
   const discoverable: string[] = [];
-  const offCapabilityGroups = new Set<string>();
+  const offOperationIds = new Set<string>();
 
   const place = (opId: string, authoredPinned: boolean): void => {
     const bundle = bundleForOperation(opId);
-    const explicit = bundle && !bundle.locked ? placements?.[bundle.id] : undefined;
-    if (!bundle || (explicit !== 'always_on' && explicit !== 'on_demand' && explicit !== 'off')) {
-      (authoredPinned ? pinned : discoverable).push(opId);
-      return;
-    }
-    switch (effectivePlacement(bundle, placements)) {
+    const placement = resolveToolPlacement(
+      {
+        operationId: opId,
+        bundleId: bundle?.id ?? '',
+        defaultPinned: authoredPinned,
+        locked: bundle?.locked !== undefined,
+      },
+      placements,
+      operationPlacements,
+    );
+    switch (placement) {
       case 'always_on':
         pinned.push(opId);
         return;
@@ -471,7 +599,7 @@ export function applyBundlePlacements(
         discoverable.push(opId);
         return;
       case 'off':
-        for (const g of bundle.capabilityGroupIds) offCapabilityGroups.add(g);
+        offOperationIds.add(opId);
         return;
     }
   };
@@ -484,7 +612,7 @@ export function applyBundlePlacements(
   return {
     coreOperations: [...new Set(pinned)],
     discoverableOperationIds: [...new Set(discoverable)],
-    offCapabilityGroups,
+    offOperationIds,
   };
 }
 

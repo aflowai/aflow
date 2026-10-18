@@ -175,3 +175,5 @@ export {
   type PooledHost,
   type PooledService,
 } from './connectionBudget.js';
+export { querySkillDiscovery } from './repositories/skillDiscovery.js';
+export { spaceDirectivesUpdateGuard } from './repositories/spaceDirectives.js';

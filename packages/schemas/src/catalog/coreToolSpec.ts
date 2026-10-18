@@ -1,3 +1,4 @@
+import { estimateStringTokens } from '../runtime/tokenEstimate.js';
 import { getOperation } from './registry.js';
 import { pruneSchemaForAgent } from './compactFormat.js';
 import { toJsonSchemaSync } from '../utils/jsonSchema.js';
@@ -72,4 +73,14 @@ export function buildCoreToolSpec(operationId: string): AgentToolSpec | undefine
     inputSchema: pruneSchemaForAgent(fullSchema),
     source: 'core',
   });
+}
+
+export function estimateToolSchemaTokens(spec: AgentToolSpec): number {
+  return estimateStringTokens(
+    JSON.stringify({
+      name: spec.toolId,
+      description: spec.description,
+      input_schema: spec.inputSchema,
+    }),
+  );
 }
