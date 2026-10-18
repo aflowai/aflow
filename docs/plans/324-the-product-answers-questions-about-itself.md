@@ -50,7 +50,7 @@ HelpArticleSchema = z.object({
 });
 ```
 
-Themes: `getting-started`, `models`, `privacy`, `concepts`, `skills`, `approvals`, `integrations`, `this-computer`, `automation`, `teams`, `troubleshooting`. Article ids are unique; `related` ids resolve; a theme is a closed enum so the page's shelves are fixed.
+Themes: `getting-started`, `models`, `privacy`, `concepts`, `skills`, `approvals`, `integrations`, `this-computer`, `automation`, `teams`, `troubleshooting`. Article ids are unique; `related` ids resolve; a theme is a closed enum so the page's index is fixed.
 
 A route anchor is a manifest route (`s/[space]/settings/write-policy`). A body names where things are as the screens label them (**Settings → Write Policy**) rather than linking to a route, so it reads the same in any space; the links on an article page are its related articles.
 
@@ -64,7 +64,7 @@ A route anchor is a manifest route (`s/[space]/settings/write-policy`). A body n
 | `catalog.help.*`    | P2    | the same two reads, for the Helmsman answering an operator           |
 | contextual links    | P3    | an article id from an empty state, banner or refusal                 |
 
-The page is tenant-level (`/help`, `/help/[articleId]`), reached from **Help** in the sidebar footer in both editions, and reads under the query key `['help', …]` — help is the same in every space, so it does not nest under `['space', spaceId]`. From P2 it offers "Ask the Helmsman", passing the article being read; until the Helmsman can read articles, that button would hand it a question it can only guess at.
+The page is tenant-level and reads as an index, the way the Memory Explorer does: themes down the side with their questions under the open one, and the open theme's every question with its short answer beside it, each opening its full answer in place. Search replaces the index with matching questions. The selection lives in the URL (`/help?theme=…&article=…`); `/help/[articleId]` opens the index on that article, so a screen can link one answer. It is reached from **Help** in the sidebar footer in both editions, and reads under the query key `['help', …]` — help is the same in every space, so it does not nest under `['space', spaceId]`. From P2 it offers "Ask the Helmsman", passing the article being read; until the Helmsman can read articles, that button would hand it a question it can only guess at.
 
 ## 4. What it affects
 
@@ -93,7 +93,7 @@ The catalog is only as good as its discovery. Each pass produces questions; each
 
 **P0 — The catalog and its contract.** The article schema, the catalog, the anchor and vocabulary tests, and a first batch of articles drawn from pass 1 across every theme. _Exit:_ removing a route or an operation that an article anchors fails the tests, naming the article; the first batch passes them.
 
-**P1 — The browsable page.** The `help` surface, `/help` and `/help/[articleId]` in both editions, search and theme shelves, related articles, and a **Help** entry in the sidebar. _Exit:_ on a fresh local stack with no provider configured, an operator finds and reads the answer to "how do I add a model provider"; the hosted-only articles are absent from the local list and the response.
+**P1 — The browsable page.** The `help` surface, `/help` and `/help/[articleId]` in both editions, a theme index with search, every question in a theme on one page, related articles, and a **Help** entry in the sidebar. _Exit:_ on a fresh local stack with no provider configured, an operator finds and reads the answer to "how do I add a model provider"; the hosted-only articles are absent from the local list and the response.
 
 **P2 — The Helmsman reads it, measured.** `catalog.help.search` / `catalog.help.get`, the capability migration, the ops in the Helmsman's promotable set, and "Ask the Helmsman" on an article — offered only when the current space's readiness reports a configured provider, and passing the article being read so that path does not depend on discovery. _Exit:_ on a fixed set of operator questions about the product (where a setting is, why a write waits, what the local edition lacks), the Helmsman finds and cites the article, and on questions about acting it does not call the op; if it fails to find the op while promotable, the ops are pinned and the set is run again.
 
