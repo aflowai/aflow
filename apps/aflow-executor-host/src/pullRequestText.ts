@@ -80,6 +80,13 @@ const CHANGES_CUT_NOTE =
   "\n\nThe account stops here, at the length GitHub takes for a pull request's body; " +
   "every commit's whole message is on the branch.";
 
+/** The least of the account of the commits a body keeps: its heading, and the note saying it stops. */
+const CHANGES_LEAST = `## What changes${CHANGES_CUT_NOTE}`;
+
+/** What closes a person's summary where the rest of the body leaves it too little room. */
+const SUMMARY_CUT_NOTE =
+  "\n\nThe summary stops here, at the room GitHub's limit leaves it beside the rest of the description.";
+
 /** What closes a body cut whole, where even the rest of it is past the limit. */
 const BODY_CUT_NOTE =
   "\n\nThe description stops here, at the length GitHub takes for a pull request's body.";
@@ -120,7 +127,7 @@ const AFTER_REVIEW_LINES: Record<AfterReview, string> = {
   fix_before_merge:
     "Decided after the review: `fix_before_merge` — this review's findings are to be fixed on this branch before it merges, so this publication pushed nothing.",
   publish_as_is:
-    "Decided after the review: `publish_as_is` — this review's findings can merge as they stand, so the push went without asking, and leaves these open:",
+    "Decided after the review: `publish_as_is` — this review's findings can merge as they stand.",
   undecided:
     "Decided after the review: `undecided` — no answer cleared the decision's bar, so the push waited for the operator, and this review's findings are the reader's to weigh.",
 };
@@ -136,12 +143,27 @@ function overrideLine(override: AfterReviewOverrideRecord): string {
 }
 
 /**
+ * How a `publish_as_is` cleared its push, as the gate decides it from the
+ * same record: over a blocker or a major, or on the operator's word, it went
+ * out only on the operator's approval — this text is pushed only after it.
+ */
+function publishedAsIsClearance(record: PullRequestReviewRecord): string {
+  if (record.severest === 'blocker' || record.severest === 'major') {
+    return `With a ${record.severest} among them, the push went out only on the operator's approval, and leaves these open:`;
+  }
+  if (record.afterReviewOverride?.by === 'operator') {
+    return "The push went out on the operator's approval, the word that set the decision aside, and leaves these open:";
+  }
+  return 'The push went without asking, and leaves these open:';
+}
+
+/**
  * The earlier rounds' findings are listed, closed and left open, since no
  * text of this round names them. This round's review is told by its summary,
  * which names every finding it read with its severity and `file:line` beside
  * the checks it ran. Only a `publish_as_is` lists them again, whole: those
  * are the findings the merge leaves open, and the pull request is where a
- * reader finds what was let through without a person asked.
+ * reader finds what the decision let through, and how its push was cleared.
  */
 function reviewSection(input: HostCommitDescribeInput, record: PullRequestReviewRecord): string {
   const findings = input.findings ?? [];
@@ -166,6 +188,7 @@ function reviewSection(input: HostCommitDescribeInput, record: PullRequestReview
   }
   if (record.afterReview !== undefined) parts.push(AFTER_REVIEW_LINES[record.afterReview]);
   if (record.afterReview === 'publish_as_is') {
+    parts.push(publishedAsIsClearance(record));
     const leftOpen = (review?.findings ?? []).map((finding) =>
       findingLine({ ...finding, state: 'open' }),
     );
@@ -215,11 +238,14 @@ function gapsSection(gaps: readonly string[] | undefined): string {
 
 /**
  * The pull request for `commits`, the range's every commit oldest first. A
- * title or summary a person gave stands as it is; otherwise the title is the
- * slice's — the subject of the first commit, the round that started the
- * branch — and the body is composed. Where it would pass GitHub's limit, the
- * account of the commits gives way first: the rest is what a reader acts on,
- * and the commits are on the branch whole.
+ * title a person gave stands as it is; otherwise the title is the slice's —
+ * the subject of the first commit, the round that started the branch. The
+ * body is always composed, and a summary a person gave heads it, never
+ * replaces it: what the publication records — the decision on the findings,
+ * those it leaves open, an override — is under it whatever they wrote. Where
+ * the body would pass GitHub's limit, the account of the commits gives way
+ * first, then the summary: the rest is what a reader acts on, and the
+ * commits are on the branch whole.
  */
 export function composePullRequest(
   input: HostCommitDescribeInput,
@@ -227,22 +253,24 @@ export function composePullRequest(
 ): { title: string; body: string } & PullRequestReviewRecord {
   const title = input.title ?? commits[0]?.subject ?? '';
   const record = pullRequestReviewRecord(input);
-  if (input.summary !== undefined) {
-    return { title, body: marked(fit(input.summary, BODY_ROOM, BODY_CUT_NOTE)), ...record };
-  }
   const rest = [
     reviewSection(input, record),
     verificationSection(input),
     gapsSection(input.gaps),
   ].join(SECTION_BREAK);
+  const summaryRoom = BODY_ROOM - rest.length - 2 * SECTION_BREAK.length - CHANGES_LEAST.length;
+  const head =
+    input.summary === undefined
+      ? ''
+      : `${fit(input.summary, summaryRoom, SUMMARY_CUT_NOTE)}${SECTION_BREAK}`;
   const changes = fit(
     changesSection(commits),
-    BODY_ROOM - rest.length - SECTION_BREAK.length,
+    BODY_ROOM - head.length - rest.length - SECTION_BREAK.length,
     CHANGES_CUT_NOTE,
   );
   return {
     title,
-    body: marked(fit(`${changes}${SECTION_BREAK}${rest}`, BODY_ROOM, BODY_CUT_NOTE)),
+    body: marked(fit(`${head}${changes}${SECTION_BREAK}${rest}`, BODY_ROOM, BODY_CUT_NOTE)),
     ...record,
   };
 }

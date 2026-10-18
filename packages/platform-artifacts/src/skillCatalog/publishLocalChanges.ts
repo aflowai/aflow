@@ -13,7 +13,8 @@ import {
   AFTER_REVIEW_QUESTION,
   AFTER_REVIEW_QUESTION_NAME,
 } from './publishLocalChangesDecisions.js';
-import { PUSH_GATE_OTHERWISE, PUSH_GATE_RULES } from './publishLocalChangesGate.js';
+import { decidePushTask } from './publishLocalChangesGate.js';
+import { overrideTasks } from './publishLocalChangesOverride.js';
 import {
   CHECK_FAILED,
   CHECKS_COULD_NOT_RUN,
@@ -197,7 +198,7 @@ const CHECK_INPUT_TEMPLATE = {
 
 const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'publish-local-changes',
-  version: 34,
+  version: 35,
   name: 'Publish Local Changes',
   tagline:
     'Commit a patch onto a branch of a connected repository, then push it and open the pull request — asking the operator first unless the folder says otherwise.',
@@ -207,10 +208,11 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
     {
       apiId: 'github',
       description:
-        'GitHub REST API — read the repository before the push, then find the open pull request for the pushed branch and rewrite its description, or open one where there is none.',
+        "GitHub REST API — read the repository before the push, then find the open pull request for the pushed branch and rewrite its description, or open one where there is none; where an override names the hands-off label or a shepherd rule, read that pull request's labels and the shepherd's pinned handoff comment to verify it.",
       requiredEndpoints: [
         'getRepository',
         'listPullRequests',
+        'getIssueComment',
         'createPullRequest',
         'updatePullRequest',
       ],
@@ -299,7 +301,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           id: 'summary',
           required: false,
           description:
-            "A body for the pull request, only where a person wants to say it themselves: it stands as the whole body, and nothing is composed beside it but the loop's marker, which closes every body Local Publish writes and is what the Local PR Shepherd tends by. Omitted, the body is composed from the branch — every commit's message, the review's findings, the checks and the known gaps.",
+            "Words for the pull request's body, only where a person wants to say something themselves: they head the body, and the body composed from the branch follows under them whole — every commit's message, the review's findings, the decision on them and any override, the checks and the known gaps — closed by the loop's marker, which the Local PR Shepherd tends by. A summary never replaces what the publication records.",
           schema: SUMMARY_SCHEMA,
         },
         {
@@ -320,7 +322,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           id: 'override',
           required: false,
           description:
-            "Publish as is over this run's decision on its review's findings, only on an explicit act: `by` — `operator`, their own word; `hands_off_label`, the `hands-off` label; `shepherd_rule`, a shepherd rule that held, such as the attempt budget reached — and `reason`, which the pull request records. Omit it to follow the decision. It never stands in for an `always` folder or a range the scan did not clear.",
+            "Publish as is over this run's decision on its review's findings, on an explicit act the run verifies: `by` — `operator`, their word, taken at this run's approval; `hands_off_label`, the label, read on the branch's open pull request; `shepherd_rule`, the budget spent, read in the shepherd's pinned record there — and `reason`, which the pull request records. One it cannot verify fails the run. Omit it to follow the decision. Never stands in for an `always` folder or an uncleared scan.",
           schema: OVERRIDE_SCHEMA,
         },
         {
@@ -882,10 +884,12 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           },
         },
 
+        ...overrideTasks(CHECKS_CLEARED),
+
         {
           taskId: 'describe-pr',
           name: 'Compose the pull request from the branch',
-          goal: "Compose the pull request's title and body from everything the push sends — the subject of the branch's first commit as the title, and as the body every commit's message oldest first, the review findings closed and left open, the folder's checks as verification, and the gaps the commissions recorded — and read that text for secrets, before anything is pushed. A title or summary a person passed stands as it is.",
+          goal: "Compose the pull request's title and body from everything the push sends — the subject of the branch's first commit as the title, and as the body every commit's message oldest first, the review findings closed and left open, the folder's checks as verification, and the gaps the commissions recorded — and read that text for secrets, before anything is pushed. A title a person passed stands as it is; a summary heads the body, never replaces it. Not composed where an override was refused.",
           failureInstruction:
             "The pull request composed from the branch holds what looks like a secret, named above by where it is in the title or the body, line and rule — never by its value — and nothing was pushed: the commit is still on its branch in the folder. Where the line came from `findings` or `gaps`, or from a title or summary passed in, publish this branch as it stands without it. Where it came from the review's summary or the end of what the checks printed, that text is the review's or the checks' own: take the secret out of the code or the environment they read, rotate it if it was real, and publish again. Where it came from a commit's message — a line marked allowed, which the scan let the operator read — that commit has to be rewritten before the branch is published.",
           type: 'operation' as const,
@@ -897,8 +901,15 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             'scan-commit',
             'review-commit',
             'decide-after-review',
+            'verify-override',
           ],
-          when: CHECKS_CLEARED,
+          // Skipped as well where the checks did not clear, since the check
+          // of the override runs only where they did: the override it is
+          // handed is one whose authority held, or one that sets nothing aside.
+          when: {
+            expression: "tasks.verify-override.output.decision != 'refused'",
+            onMissingRef: 'skip' as const,
+          },
           retryability: 'safe' as const,
           maxAttempts: 1,
           // Whole outputs, each absent where its task did not run: a review
@@ -954,6 +965,8 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             afterReview: { path: 'afterReview', onMissing: 'null' as const },
             // Absent where no override set a decision aside.
             afterReviewOverride: { path: 'afterReviewOverride', onMissing: 'null' as const },
+            // Absent, as the decision is, where the review returned no findings.
+            severest: { path: 'severest', onMissing: 'null' as const },
           },
           promoteOutputs: [
             { kind: 'output_path' as const, path: 'afterReview', toState: 'afterReview' },
@@ -967,71 +980,12 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           ],
         },
 
-        {
-          taskId: 'decide-push',
-          name: 'Decide whether the push asks',
-          goal: "Decide, by rules over what the run read, whether the push goes without asking, waits for the operator, or stays on the machine: an uncleared scan or an `always` folder asks; a `never` folder pushes; under `unless-unreviewed` the decision on the review's findings — `fix_before_merge` keeps the branch local, `publish_as_is` pushes, `undecided` asks — and, where the review found nothing, its verdict alone.",
-          type: 'operation' as const,
-          operation: 'workflow.run.decide',
-          // After the composition, which records the decision on the
-          // findings and any override of it: that record is what is followed.
-          dependsOn: [
-            'read-repository',
-            'scan-commit',
-            'read-push-approval',
-            'review-commit',
-            'describe-pr',
-          ],
-          when: CHECKS_CLEARED,
-          retryability: 'safe' as const,
-          maxAttempts: 1,
-          inputBindings: {
-            scanClean: { kind: 'task_output' as const, taskId: 'scan-commit', path: 'clean' },
-            posture: {
-              kind: 'task_output' as const,
-              taskId: 'read-push-approval',
-              path: 'branchPolicy.pushApproval',
-            },
-            verdict: { kind: 'task_output' as const, taskId: 'review-commit', path: 'verdict' },
-            afterReview: {
-              kind: 'task_output' as const,
-              taskId: 'describe-pr',
-              path: 'afterReview',
-            },
-          },
-          context: {
-            strategy: 'scoped' as const,
-            contextPolicy: 'auto-optimize' as const,
-            learnings: 'none' as const,
-            capabilities: {
-              operations: ['workflow.run.decide'],
-              integrations: [],
-            },
-          },
-          inputTemplate: {
-            state: {
-              scanClean: { $bind: 'scanClean' },
-              posture: { $bind: 'posture' },
-              verdict: { $bind: 'verdict' },
-              afterReview: { $bind: 'afterReview' },
-            },
-            rules: PUSH_GATE_RULES,
-            otherwise: PUSH_GATE_OTHERWISE,
-          },
-          outputProjection: {
-            decision: { path: 'decision', onMissing: 'error' as const },
-            reason: { path: 'reason', onMissing: 'error' as const },
-          },
-          promoteOutputs: [
-            { kind: 'output_path' as const, path: 'decision', toState: 'pushDecision' },
-            { kind: 'output_path' as const, path: 'reason', toState: 'pushReason' },
-          ],
-        },
+        decidePushTask(CHECKS_CLEARED),
 
         {
           taskId: 'approve-push',
           name: 'Approve the push',
-          goal: "Operator approval before anything leaves the machine, asked exactly where the gate decided to ask: the folder asks before every push; the scan marked a line allowed or could not read a file, whatever the posture; or, unless reviewed, the decision on this run's review findings is undecided, or the review found nothing and did not approve. Approving pushes the commit to its branch on origin and opens the pull request; declining leaves the branch on the machine, whatever the posture.",
+          goal: "Operator approval before anything leaves the machine, asked exactly where the gate decided to ask: the folder asks before every push; the scan marked a line allowed or could not read a file, whatever the posture; or, unless reviewed, the decision on this run's review findings is undecided, a blocker or a major is among them, the operator's word set the decision aside, or the review found nothing and did not approve. Approving pushes the commit to its branch on origin and opens the pull request; declining leaves the branch on the machine, whatever the posture.",
           type: 'human' as const,
           intent: 'approve' as const,
           failureMode: 'isolate' as const,
@@ -1045,7 +999,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           // carry, so each case is one line and the verdict and the decision
           // are named where the run shows them; the gate's reason is on its task.
           pauseInstruction:
-            'The change is committed on its branch in the connected folder, and nothing has left the machine. The push would add every commit of `pushRange` — this commit, and any of the folder\'s own under it that `origin` does not have yet. The scan read them for secrets and found none outside the lines and files listed below, where there are any. Asked for one of these, shown with the commit:\n- `always`: the folder\'s push approval asks before every push, and no review ran.\n- `unless-unreviewed`, the findings undecided: this run\'s Local Code Review of `pushRange` returned findings and no answer on them cleared the decision\'s bar — the findings are on the "Review the commit" task and the answer on the "Decide whether the findings are fixed before merging" task. Approving publishes them as they stand.\n- `unless-unreviewed`, no findings: this run\'s Local Code Review of `pushRange` did not return `approve` — its verdict is on the "Review the commit" task, null where the review did not finish, and that task failed where the review could not start.\n- Lines marked allowed, whatever the posture: `allowed` names each by file, line and rule — a line that looks like a secret and ends in an `aflow-scan: allow` comment, which whoever wrote the change could have written as easily as the line — and no review ran. Read each of those lines before approving: approving pushes them.\n- Files, messages or texts the scan could not read whole, whatever the posture: `unscanned` names each and why — binary, a NUL byte in a line it adds, more than the scan reads of one file in one commit, a line too long to read, or a Git LFS pointer, whose content the push uploads without the scan having read it — and no review ran. Nothing unread there was checked for secrets; read it before approving.\nApproving pushes that commit to its branch on `origin`, with every commit of `pushRange` under it, and then opens a pull request against the base branch. Declining leaves the branch local whatever the folder\'s push approval says: nothing is pushed and no pull request is opened.',
+            "The change is committed on its branch in the connected folder, and nothing has left the machine. The push would add every commit of `pushRange` — this commit, and any of the folder's own under it that `origin` does not have yet. The scan read them for secrets and found none outside the lines and files listed below, where there are any. Asked for one of these, shown with the commit:\n- `always`: the folder's push approval asks before every push, and no review ran.\n- `unless-unreviewed`, the findings undecided: this run's Local Code Review of `pushRange` returned findings and no answer on them cleared the decision's bar — the findings are on the \"Review the commit\" task and the answer on the \"Decide whether the findings are fixed before merging\" task. Approving publishes them as they stand.\n- `unless-unreviewed`, a blocker or a major among the findings: a decision stands in for an approving verdict only over minor findings and nits, so whatever was decided — the answer on that task, or an override — the operator decides whether the push goes.\n- `unless-unreviewed`, the decision set aside on the operator's word: the override and its reason are on the run as `afterReviewOverride`. Approving is that word on record; declining pushes nothing and the decision stands.\n- `unless-unreviewed`, no findings: this run's Local Code Review of `pushRange` did not return `approve` — its verdict is on the \"Review the commit\" task, null where the review did not finish, and that task failed where the review could not start.\n- Lines marked allowed, whatever the posture: `allowed` names each by file, line and rule — a line that looks like a secret and ends in an `aflow-scan: allow` comment, which whoever wrote the change could have written as easily as the line — and no review ran. Read each of those lines before approving: approving pushes them.\n- Files, messages or texts the scan could not read whole, whatever the posture: `unscanned` names each and why — binary, a NUL byte in a line it adds, more than the scan reads of one file in one commit, a line too long to read, or a Git LFS pointer, whose content the push uploads without the scan having read it — and no review ran. Nothing unread there was checked for secrets; read it before approving.\nApproving pushes that commit to its branch on `origin`, with every commit of `pushRange` under it, and then opens a pull request against the base branch. Declining leaves the branch local whatever the folder's push approval says: nothing is pushed and no pull request is opened.",
           // Every binding reads a task that succeeded whenever this asks: an
           // unresolved one refuses the approval itself, so nothing binds the
           // posture, which is not read over a range the scan did not clear.
@@ -1375,7 +1329,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           variableId: 'afterReview',
           name: 'After the review',
           description:
-            "What the run decided about its review's findings, as the pull request records it, and what its push gate followed: fix_before_merge — nothing pushed, the branch kept local; publish_as_is — pushed without asking; undecided, where no answer cleared the bar or none could be made — the operator asked. Null where the review returned no findings, so none was decided. On fix_before_merge the fix round is the conversation's, or the shepherd's.",
+            "What the run decided about its review's findings, as the pull request records it, and what its push gate followed: fix_before_merge — nothing pushed, the branch kept local; publish_as_is — pushed, asking only over a blocker or a major; undecided, where no answer cleared the bar or none could be made — the operator asked. Null where the review returned no findings, so none was decided. On fix_before_merge the fix round is the conversation's, or the shepherd's.",
           required: false,
           sensitive: false,
           immutable: false,
@@ -1384,7 +1338,24 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           variableId: 'afterReviewOverride',
           name: 'Decision set aside',
           description:
-            'The override that turned the decision into publish_as_is: by — operator, hands_off_label or shepherd_rule — its reason, and the decision it set aside. Null where the decision stood.',
+            'The override that turned the decision into publish_as_is, once its authority was verified: by — operator, hands_off_label or shepherd_rule — its reason, and the decision it set aside. Null where the decision stood.',
+          required: false,
+          sensitive: false,
+          immutable: false,
+        },
+        {
+          variableId: 'overrideCheck',
+          name: 'Override check',
+          description:
+            "What the check of an override's authority decided: none, where no override was passed or it set nothing aside; operator, taken at the push's approval; hands_off_label or shepherd_rule, verified from what the run read; refused, where it could not be verified — the run failed with nothing pushed.",
+          required: false,
+          sensitive: false,
+          immutable: false,
+        },
+        {
+          variableId: 'overrideCheckReason',
+          name: 'Why the override check decided so',
+          description: 'The reason of the rule that decided, naming what the run read.',
           required: false,
           sensitive: false,
           immutable: false,
@@ -1393,7 +1364,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           variableId: 'pushDecision',
           name: 'Push gate',
           description:
-            'What the push gate decided: push, without asking; ask, the operator; or keep_local, nothing pushed — the decision fix_before_merge, or a folder that allows no push.',
+            'What the push gate decided: push, without asking; ask, the operator; or keep_local, nothing pushed — the decision fix_before_merge, a refused override, or a folder that allows no push.',
           required: false,
           sensitive: false,
           immutable: false,
@@ -1437,7 +1408,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
       output: {
         primary: 'prUrl',
         guidance:
-          'prUrl and prNumber are the branch’s pull request, opened or already open: report the link. pushDecision and pushReason say whether the push went, asked or kept the branch local. Follow afterReview: on fix_before_merge nothing was pushed — brief the fix from the reviewRunId run, publish again with findings; publish over it only on an explicit act, passing override. Absent prUrl otherwise, the branch stayed local, or the run failed at the checks or the scan, whose account says why.',
+          'prUrl and prNumber are the branch’s pull request, opened or already open: report the link. pushDecision and pushReason say whether the push went, asked or kept the branch local. Follow afterReview: on fix_before_merge nothing was pushed — brief the fix from the reviewRunId run, publish again with findings; set it aside only by a verified override. Absent prUrl otherwise, the branch stayed local, or the run failed at the checks, the scan or the override, whose account says why.',
       },
       iteration: { auto: false, maxConsecutiveRuns: 1, stopOnOutcomesMet: true, cooldownMs: 0 },
     },
@@ -1478,7 +1449,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
       priority: 50,
     },
     rationale:
-      "Sixteen tasks, the approval between local and published halves. The commit lands in a detached worktree; host.commit.check runs the folder's checks: test timeouts alone rerun, any other failure is workflow.run.fail — no decision is asked there until its measurement has labelled cases. host.commit.scan reads all a push adds: a finding fails the run. Under unless-unreviewed a Local Code Review runs; ai.decision.decide answers fix_before_merge or publish_as_is over its findings, undecided below the bar, and describe-pr records it with any override. decide-push, workflow.run.decide, gates the push: an uncleared scan or always asks, never pushes; fix_before_merge keeps the branch local, the run completed; publish_as_is pushes; undecided asks. No task starts a publication. The push argv is pinned bar the refspec; the executor re-measures origin/<base>, needs a passed check receipt, and sends an uncleared range only on this run's grant. An open PR is PATCHed.",
+      "Twenty-two tasks, the approval between local and published. The commit lands in a detached worktree; host.commit.check runs the folder's checks; test timeouts alone rerun, any other failure is workflow.run.fail. host.commit.scan reads all a push adds: a finding fails the run. Under unless-unreviewed a Local Code Review runs; ai.decision.decide answers fix_before_merge or publish_as_is over its findings, undecided below the bar. An override is verified — label and shepherd record read on GitHub, the operator's word at the approval — or fails the run. decide-push, workflow.run.decide, gates the push: uncleared scan or always asks, never pushes; fix_before_merge keeps the branch local; publish_as_is pushes, asking over a blocker, a major or the operator's word; undecided asks. No task starts a publication. Push argv pinned bar the refspec; the executor re-measures origin/<base>, needs a passed check receipt, and sends an uncleared range only on this run's grant; an open PR is PATCHed.",
   },
 };
 

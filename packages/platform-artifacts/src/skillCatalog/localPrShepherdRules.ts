@@ -3,6 +3,14 @@ import { SHEPHERD_HANDS_OFF_LABEL, type WorkflowRunDecideRule } from '@aflow/sch
 // --- The rules ---------------------------------------------------------------
 
 /**
+ * The decision of the one rule that holds when the attempt budget is spent.
+ * A pass records it in its handoff, and that record on the pull request is
+ * what lets a publication verify an override by `shepherd_rule`, so no other
+ * rule may decide it.
+ */
+export const SHEPHERD_BUDGET_SPENT = 'abandon';
+
+/**
  * Read in order; the first that holds decides. A rule a missing read must not
  * pass is written `!= <expected>`, since a path through a read that did not
  * happen reads as null. Every way to `fix` runs through the last two: CI
@@ -136,7 +144,7 @@ export const SHEPHERD_RULES: readonly WorkflowRunDecideRule[] = [
   },
   {
     when: { expression: 'state.handoff.data.attemptCount >= state.budget' },
-    decision: 'abandon',
+    decision: SHEPHERD_BUDGET_SPENT,
     reason:
       'The shepherd has acted on as many failures of this pull request as its budget allows, and CI fails again. It leaves the pull request to a person.',
   },

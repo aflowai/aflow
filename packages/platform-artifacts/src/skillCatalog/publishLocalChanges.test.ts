@@ -31,6 +31,8 @@ import {
   HostFilePatchInputSchema,
   HostFilePatchOutputSchema,
   isEvalPlaneOperation,
+  LoopPullRequestsSchema,
+  ShepherdHandoffReadSchema,
   MAX_PARENT_INPUTS_SERIALIZED_BYTES,
   MAX_WORKFLOW_RUN_DEPTH,
   PAUSE_INSTRUCTION_MAX_CHARS,
@@ -147,7 +149,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(validity.status).toBe('valid');
   });
 
-  it('is sixteen tasks — commit, check, the stop on a failed check, scan, what decides the approval, the review and the decision on its findings, the pull request composed, the push gate, approve, push, and the pull request found, rewritten or opened', () => {
+  it('is twenty-two tasks — commit, check, the stop on a failed check, scan, what decides the approval, the review and the decision on its findings, the check of an override and the stop on its refusal, the pull request composed, the push gate, approve, push, and the pull request found, rewritten or opened', () => {
     expect(wf.tasks.map((t) => t.taskId)).toEqual([
       'commit',
       'check-commit',
@@ -158,6 +160,12 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       'read-push-approval',
       'review-commit',
       'decide-after-review',
+      'claim-override',
+      'read-override-pr',
+      'read-override-pin',
+      'read-override-handoff',
+      'verify-override',
+      'override-refused',
       'describe-pr',
       'decide-push',
       'approve-push',
@@ -179,6 +187,17 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       'read-push-approval': ['commit', 'scan-commit'],
       'review-commit': ['read-push-approval', 'scan-commit'],
       'decide-after-review': ['review-commit'],
+      'claim-override': ['review-commit', 'decide-after-review'],
+      'read-override-pr': ['claim-override', 'read-push-approval'],
+      'read-override-pin': ['read-override-pr'],
+      'read-override-handoff': ['read-override-pr', 'read-override-pin'],
+      'verify-override': [
+        'claim-override',
+        'read-override-pr',
+        'read-override-pin',
+        'read-override-handoff',
+      ],
+      'override-refused': ['verify-override'],
       'describe-pr': [
         'commit',
         'check-commit',
@@ -186,12 +205,14 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
         'scan-commit',
         'review-commit',
         'decide-after-review',
+        'verify-override',
       ],
       'decide-push': [
         'read-repository',
         'scan-commit',
         'read-push-approval',
         'review-commit',
+        'verify-override',
         'describe-pr',
       ],
       'approve-push': ['read-repository', 'scan-commit', 'decide-push'],
@@ -217,6 +238,12 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       'read-push-approval': 'host.binding.inspect',
       'review-commit': 'workflow.run.start',
       'decide-after-review': 'ai.decision.decide',
+      'claim-override': 'workflow.run.decide',
+      'read-override-pr': 'api.http.call',
+      'read-override-pin': 'memory.store.get',
+      'read-override-handoff': 'api.http.call',
+      'verify-override': 'workflow.run.decide',
+      'override-refused': 'workflow.run.fail',
       'describe-pr': 'host.commit.describe',
       'decide-push': 'workflow.run.decide',
       'approve-push': undefined,
@@ -660,6 +687,8 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(PUBLISH_LOCAL_CHANGES.capabilityHints?.[0]?.requiredEndpoints).toEqual([
       'getRepository',
       'listPullRequests',
+      // The shepherd's pinned record, read only to verify an override by its rule.
+      'getIssueComment',
       'createPullRequest',
       'updatePullRequest',
     ]);
@@ -1027,6 +1056,83 @@ interface Scenario {
   findings?: readonly Finding[];
   /** What the decision on a fix round answers; absent is `unavailable`. */
   afterReview?: Choice<AfterReviewRoute>;
+  /** What an override's checks read of the branch's pull request; absent is an unlabelled one with no shepherd record. */
+  onGitHub?: OnGitHub;
+}
+
+/**
+ * The branch's pull request as an override's checks read it: GitHub's answer
+ * for the loop's open pull request of the branch, its `hands-off` label, the
+ * handoff the shepherd pinned for it, the decision that record holds and the
+ * login it was written as.
+ */
+interface OnGitHub {
+  /** GitHub refusing the read of the pull request. */
+  refused?: boolean;
+  /** The branch has no open pull request of the loop's into the base. */
+  noPullRequest?: boolean;
+  handsOff?: boolean;
+  /** Whether the shepherd pinned a handoff for it; absent is pinned. */
+  pinned?: boolean;
+  /** The decision the shepherd's record holds; absent is no record. */
+  shepherdDecision?: string;
+  /** The login the record was written as; absent is the one it was pinned as. */
+  recordAuthor?: string;
+}
+
+/** The login the shepherd's handoff was pinned as, and so the only author whose record is trusted. */
+const PINNED_AUTHOR = 'aflow-pr-agent[bot]';
+
+/** `listPullRequests` for the branch, shaped by the `loop_pulls` preset. */
+function overridePullRequest(onGitHub: OnGitHub | undefined): Record<string, unknown> {
+  if (onGitHub?.refused === true) return { statusCode: 502, data: { message: 'Bad gateway' } };
+  const pullRequests =
+    onGitHub?.noPullRequest === true
+      ? []
+      : [
+          {
+            number: 5,
+            title: SLICE_TITLE,
+            headRef: 'aflow/x',
+            headSha: HEAD,
+            baseRef: 'main',
+            updatedAt: '2026-10-18T12:00:00Z',
+            handsOff: onGitHub?.handsOff === true,
+          },
+        ];
+  return {
+    statusCode: 200,
+    data: LoopPullRequestsSchema.parse({ pullRequests, count: pullRequests.length }),
+  };
+}
+
+/**
+ * `getIssueComment` on the pinned comment, shaped by the `loop_handoff` preset
+ * the task names: a record is taken only from the login it names.
+ */
+function overrideHandoff(
+  onGitHub: OnGitHub | undefined,
+  input: Record<string, unknown>,
+): Record<string, unknown> {
+  const preset = String((input['response'] as { transformPresetId?: unknown }).transformPresetId);
+  const trusted = preset.split(':')[1];
+  const decision = onGitHub?.shepherdDecision;
+  const found = decision !== undefined && (onGitHub?.recordAuthor ?? PINNED_AUTHOR) === trusted;
+  return {
+    statusCode: 200,
+    data: ShepherdHandoffReadSchema.parse(
+      found
+        ? {
+            found,
+            commentId: 41,
+            attemptCount: 3,
+            nextAttemptCount: 4,
+            decision,
+            trust: 'verified',
+          }
+        : { found, attemptCount: 0, nextAttemptCount: 1, trust: 'verified' },
+    ),
+  };
 }
 
 interface Outcome {
@@ -1149,9 +1255,19 @@ function rawOutput(
     }
     case 'describe-pr':
       return scenario.describeRefused === true ? {} : describedPullRequest(input);
-    // The rules the gate is handed, decided as the orchestrator decides them.
+    // The rules each decision is handed, decided as the orchestrator decides them.
+    case 'claim-override':
+    case 'verify-override':
     case 'decide-push':
       return { ...decideByRules(WorkflowRunDecideInputSchema.parse(input)) };
+    case 'read-override-pr':
+      return overridePullRequest(scenario.onGitHub);
+    case 'read-override-pin':
+      return scenario.onGitHub?.pinned === false
+        ? { found: false }
+        : { found: true, dataJson: { commentId: 41, author: PINNED_AUTHOR } };
+    case 'read-override-handoff':
+      return overrideHandoff(scenario.onGitHub, input);
     case 'update-pr': {
       const { pull_number: number } = input['params'] as { pull_number?: unknown };
       return {
@@ -1169,14 +1285,14 @@ function rawOutput(
   }
 }
 
-/** A dot path into a task's output, as a binding reads it. */
+/** A dot path into a task's output, as a binding reads it — `[n]` an index into an array. */
 function readOutput(
   outputs: ReadonlyMap<string, Record<string, unknown>>,
   taskId: string,
   path: string | undefined,
 ): unknown {
   let value: unknown = outputs.get(taskId);
-  for (const key of path?.split('.') ?? []) {
+  for (const key of path?.replace(/\[(\d+)\]/g, '.$1').split('.') ?? []) {
     value =
       value !== null && typeof value === 'object'
         ? (value as Record<string, unknown>)[key]
@@ -1907,7 +2023,7 @@ describe('Publish Local Changes — the commit is scanned for secrets before any
 
   it('reports a finding by file, line and rule, and never asks for the value', () => {
     expect(PUBLISH_LOCAL_CHANGES.description).toContain(
-      'report the files, commit headers and messages, title or summary, lines and rules it names — never ask for or repeat the value',
+      'report each place and rule it names — never ask for or repeat the value',
     );
   });
 });
@@ -2071,6 +2187,8 @@ describe('Publish Local Changes — a branch is published as it stands', () => {
       'read-repository',
       'read-push-approval',
       'review-commit',
+      'claim-override',
+      'verify-override',
       'describe-pr',
       'decide-push',
       'push',
@@ -2529,6 +2647,8 @@ describe('Publish Local Changes — the pull request describes the branch as a w
       findingsLeftOut: null,
       afterReview: null,
       afterReviewOverride: null,
+      overrideCheck: 'none',
+      overrideCheckReason: "No override was passed: the decision on the review's findings stands.",
       pushDecision: 'push',
       pushReason: "The folder's push approval is `never`, over a range the scan cleared.",
     });
@@ -2754,6 +2874,15 @@ describe("Publish Local Changes — the push gate follows the decision on a revi
     evidence: 'The check and the set are two calls.',
   };
   const FINDINGS = [LEAK, NAME, RACE];
+  const SLIP: Finding = {
+    severity: 'minor',
+    file: 'src/cache.ts',
+    line: 52,
+    claim: 'The miss counter counts a hit after a reload.',
+    evidence: 'reload() increments misses before it reads the entry.',
+  };
+  /** Findings no more severe than minor: the only ones a decision clears a push over. */
+  const MINORS = [SLIP, NAME];
   /** An earlier round's finding the brief passed on, closed by a commit of the branch. */
   const EARLIER = {
     severity: 'minor',
@@ -2857,8 +2986,8 @@ describe("Publish Local Changes — the push gate follows the decision on a revi
       expect(outcome.state['prUrl']).toBeUndefined();
     });
 
-    it(`${review} with findings, publish_as_is: pushes without asking, and the pull request is composed with the findings it leaves open`, () => {
-      const outcome = reviewedWith({ review, afterReview: AS_IS });
+    it(`${review} with minor findings and nits, publish_as_is: pushes without asking, and the pull request is composed with the findings it leaves open`, () => {
+      const outcome = reviewedWith({ review, afterReview: AS_IS, findings: MINORS });
       expect(outcome.asked).toBe(false);
       expect(outcome.pushed).toBe(true);
       expect(outcome.state).toMatchObject({
@@ -2869,10 +2998,32 @@ describe("Publish Local Changes — the push gate follows the decision on a revi
       // The composition is handed every finding of the review and the decision to list them as open.
       const described = HostCommitDescribeInputSchema.parse(outcome.inputs.get('describe-pr'));
       expect(described.afterReview).toBe('publish_as_is');
-      expect(described.review?.findings?.map((f) => f.claim)).toEqual(FINDINGS.map((f) => f.claim));
+      expect(described.review?.findings?.map((f) => f.claim)).toEqual(MINORS.map((f) => f.claim));
       const opened = outcome.inputs.get('open-pr') as { params: { body: { body: unknown } } };
       expect(opened.params.body.body).toBe(outcome.outputs.get('describe-pr')?.['body']);
     });
+
+    // A decision stands in for an approving verdict only up to the severities
+    // it weighed: a blocker or a major reaches a person whatever was decided.
+    for (const [severity, findings] of [
+      ['a blocker', [SLIP, RACE]],
+      ['a major', [NAME, LEAK]],
+    ] as const) {
+      it(`${review} with ${severity} among the findings, publish_as_is: pauses for the operator, whose answer decides`, () => {
+        const approved = reviewedWith({ review, afterReview: AS_IS, findings });
+        expect(approved).toMatchObject({ asked: true, pushed: true });
+        expect(approved.state).toMatchObject({ afterReview: 'publish_as_is', pushDecision: 'ask' });
+        expect(approved.state['pushReason']).toContain('a blocker or a major');
+        const declined = reviewedWith({
+          review,
+          afterReview: AS_IS,
+          findings,
+          decision: 'declined',
+        });
+        expect(declined).toMatchObject({ asked: true, pushed: false });
+        for (const taskId of PR_TASKS) expect(declined.ran).not.toContain(taskId);
+      });
+    }
 
     for (const [label, answer] of [
       ['an answer below the bar', BELOW_BAR],
@@ -2889,9 +3040,19 @@ describe("Publish Local Changes — the push gate follows the decision on a revi
     }
   }
 
-  it('pauses only on undecided: of every answer under `unless-unreviewed` over a cleared range, no other asks', () => {
+  it('over minor findings and nits, pauses only on undecided: of every answer under `unless-unreviewed` over a cleared range, no other asks', () => {
     for (const [label, answer, recorded] of ANSWERS) {
-      expect(reviewedWith({ afterReview: answer }).asked, label).toBe(recorded === 'undecided');
+      expect(reviewedWith({ afterReview: answer, findings: MINORS }).asked, label).toBe(
+        recorded === 'undecided',
+      );
+    }
+  });
+
+  it('over a blocker or a major, asks on every answer but fix_before_merge, which keeps the branch local', () => {
+    for (const [label, answer, recorded] of ANSWERS) {
+      const outcome = reviewedWith({ afterReview: answer });
+      expect(outcome.asked, label).toBe(recorded !== 'fix_before_merge');
+      expect(outcome.outputs.get('describe-pr')?.['severest'], label).toBe('blocker');
     }
   });
 
@@ -2915,44 +3076,163 @@ describe("Publish Local Changes — the push gate follows the decision on a revi
     }
   }
 
-  describe('an override of the decision', () => {
-    const OVERRIDE = {
+  describe('an override of the decision, taken only on an authority the run verifies', () => {
+    const OPERATOR = {
+      by: 'operator',
+      reason: 'The operator said to publish it as it stands.',
+    } as const;
+    const LABEL = {
+      by: 'hands_off_label',
+      reason: 'A person labelled the pull request hands-off: they take the findings on.',
+    } as const;
+    const SHEPHERD = {
       by: 'shepherd_rule',
       reason: 'The shepherd reached this pull request’s attempt budget.',
     } as const;
+    type Override = typeof OPERATOR | typeof LABEL | typeof SHEPHERD;
+    const GITHUB_READS = ['read-override-pr', 'read-override-pin', 'read-override-handoff'];
+    const BUDGET_SPENT: OnGitHub = { shepherdDecision: 'abandon' };
+
+    function overridden(override: Override, extra: Partial<Scenario> = {}): Outcome {
+      return reviewedWith({
+        afterReview: FIX,
+        findings: MINORS,
+        ...extra,
+        inputs: { owner: 'aflowai', repo: 'aflow', override },
+      });
+    }
+
+    /** Refused at the override: the run fails there with the reason it read, and nothing is composed, asked or pushed. */
+    function expectRefused(outcome: Outcome, label: string): void {
+      expect(outcome.statuses.get('override-refused'), label).toBe('failed');
+      expect(outcome.inputs.get('override-refused'), label).toEqual({
+        reason: outcome.state['overrideCheckReason'],
+      });
+      expect(outcome.state['overrideCheck'], label).toBe('refused');
+      expect(outcome, label).toMatchObject({ asked: false, pushed: false });
+      expect(outcome.ran, label).not.toContain('describe-pr');
+      for (const taskId of PR_TASKS) expect(outcome.ran, label).not.toContain(taskId);
+      expect(outcome.state['pushDecision'], label).toBe('keep_local');
+    }
 
     for (const [label, answer, overrode] of [
       ['fix_before_merge', FIX, 'fix_before_merge'],
       ['undecided', BELOW_BAR, 'undecided'],
     ] as const) {
-      it(`over ${label}: is recorded as publish_as_is with whose act it was, its named reason and what it set aside — and pushes without asking`, () => {
-        const outcome = reviewedWith({
-          afterReview: answer,
-          inputs: { owner: 'aflowai', repo: 'aflow', override: OVERRIDE },
-        });
-        expect(outcome.asked).toBe(false);
-        expect(outcome.pushed).toBe(true);
-        expect(outcome.state).toMatchObject({
+      it(`claiming the operator over ${label}: never taken on the claim — the push asks, and only the operator's approval in the run, their word on record, pushes it`, () => {
+        const approved = overridden(OPERATOR, { afterReview: answer });
+        expect(approved).toMatchObject({ asked: true, pushed: true });
+        expect(approved.state).toMatchObject({
+          overrideCheck: 'operator',
           afterReview: 'publish_as_is',
-          afterReviewOverride: { ...OVERRIDE, overrode },
+          afterReviewOverride: { ...OPERATOR, overrode },
+          pushDecision: 'ask',
+        });
+        expect(approved.state['pushReason']).toContain("the operator's word");
+        for (const taskId of GITHUB_READS) expect(approved.ran).not.toContain(taskId);
+
+        // No word of the operator's: the claim alone pushes nothing and opens nothing.
+        const declined = overridden(OPERATOR, { afterReview: answer, decision: 'declined' });
+        expect(declined).toMatchObject({ asked: true, pushed: false });
+        for (const taskId of PR_TASKS) expect(declined.ran).not.toContain(taskId);
+      });
+
+      it(`the hands-off label over ${label}: pushes only where the branch's open pull request carries it`, () => {
+        const labelled = overridden(LABEL, { afterReview: answer, onGitHub: { handsOff: true } });
+        expect(labelled).toMatchObject({ asked: false, pushed: true });
+        expect(labelled.state).toMatchObject({
+          overrideCheck: 'hands_off_label',
+          afterReview: 'publish_as_is',
+          afterReviewOverride: { ...LABEL, overrode },
           pushDecision: 'push',
         });
+        expect(labelled.ran).not.toContain('read-override-pin');
+
+        for (const [unverified, onGitHub] of [
+          ['no label on it', { handsOff: false }],
+          ['no open pull request of the branch', { noPullRequest: true }],
+          ['GitHub refusing the read', { refused: true, handsOff: true }],
+        ] as const) {
+          expectRefused(overridden(LABEL, { afterReview: answer, onGitHub }), unverified);
+        }
+      });
+
+      it(`a shepherd rule over ${label}: pushes only where the shepherd's own pinned record holds its budget spent`, () => {
+        const spent = overridden(SHEPHERD, { afterReview: answer, onGitHub: BUDGET_SPENT });
+        expect(spent).toMatchObject({ asked: false, pushed: true });
+        expect(spent.state).toMatchObject({
+          overrideCheck: 'shepherd_rule',
+          afterReview: 'publish_as_is',
+          afterReviewOverride: { ...SHEPHERD, overrode },
+          pushDecision: 'push',
+        });
+        // Read by the pinned id, and trusted only from the login it was pinned as.
+        expect(spent.inputs.get('read-override-handoff')).toMatchObject({
+          endpointId: 'getIssueComment',
+          params: { comment_id: 41 },
+          response: { transformPresetId: `loop_handoff:${PINNED_AUTHOR}:5` },
+        });
+
+        for (const [unverified, onGitHub] of [
+          ['a record holding another decision', { shepherdDecision: 'wait' }],
+          ['no record at all', {}],
+          ['a record another login wrote', { ...BUDGET_SPENT, recordAuthor: 'someone-else' }],
+          ['no handoff pinned', { ...BUDGET_SPENT, pinned: false }],
+          ['no open pull request of the branch', { ...BUDGET_SPENT, noPullRequest: true }],
+        ] as const) {
+          expectRefused(overridden(SHEPHERD, { afterReview: answer, onGitHub }), unverified);
+        }
       });
     }
 
-    it('records nothing where the decision already was publish_as_is, and leaves a decision without one standing', () => {
-      const asIs = reviewedWith({
-        afterReview: AS_IS,
-        inputs: { owner: 'aflowai', repo: 'aflow', override: OVERRIDE },
+    it('verified, still asks over a blocker or a major: it sets the decision aside, not the severities', () => {
+      const outcome = overridden(LABEL, { findings: FINDINGS, onGitHub: { handsOff: true } });
+      expect(outcome.state).toMatchObject({
+        overrideCheck: 'hands_off_label',
+        afterReview: 'publish_as_is',
+        pushDecision: 'ask',
       });
-      expect(asIs.state['afterReviewOverride']).toBeNull();
+      expect(outcome.asked).toBe(true);
+    });
+
+    it('is neither checked nor recorded where it sets nothing aside — the decision already publish_as_is, or no findings', () => {
+      for (const [label, extra] of [
+        ['publish_as_is', { afterReview: AS_IS }],
+        ['no findings', { review: 'approve', findings: [] }],
+      ] as const) {
+        const outcome = overridden(LABEL, { ...extra, onGitHub: { handsOff: false } });
+        expect(outcome.state['overrideCheck'], label).toBe('none');
+        for (const taskId of GITHUB_READS) expect(outcome.ran, label).not.toContain(taskId);
+        expect(outcome.state['afterReviewOverride'], label).toBeNull();
+        expect(outcome.pushed, label).toBe(true);
+      }
       expect(reviewedWith({ afterReview: FIX }).state['afterReviewOverride']).toBeNull();
     });
 
     it('never stands in for an `always` folder or an unclean scan', () => {
-      const inputs = { owner: 'aflowai', repo: 'aflow', override: OVERRIDE };
-      expect(reviewedWith({ pushApproval: 'always', afterReview: FIX, inputs }).asked).toBe(true);
-      expect(reviewedWith({ scan: 'allowed', afterReview: FIX, inputs }).asked).toBe(true);
+      const onGitHub = { handsOff: true };
+      expect(overridden(LABEL, { pushApproval: 'always', onGitHub }).asked).toBe(true);
+      expect(overridden(LABEL, { scan: 'allowed', onGitHub }).asked).toBe(true);
+    });
+
+    it('pushes nothing where the record names an authority the check did not verify, whatever else holds', () => {
+      const cleared = {
+        scanClean: true,
+        posture: 'unless-unreviewed',
+        afterReview: 'publish_as_is',
+        severest: 'minor',
+      };
+      const decide = (state: Record<string, unknown>) =>
+        decideByRules({ state, rules: [...PUSH_GATE_RULES], otherwise: PUSH_GATE_OTHERWISE })
+          .decision;
+      expect(decide({ ...cleared, overrideBy: 'hands_off_label', overrideCheck: 'none' })).toBe(
+        'keep_local',
+      );
+      expect(decide({ ...cleared, overrideBy: 'hands_off_label' })).toBe('keep_local');
+      expect(decide({ ...cleared, posture: 'never', overrideCheck: 'refused' })).toBe('keep_local');
+      expect(
+        decide({ ...cleared, overrideBy: 'hands_off_label', overrideCheck: 'hands_off_label' }),
+      ).toBe('push');
     });
 
     it('is taken only as the schema the composition reads it with — whose act, and a reason', () => {
@@ -2987,6 +3267,9 @@ describe("Publish Local Changes — the push gate follows the decision on a revi
     for (const before of ['state.scanClean', "state.posture == 'always'"]) {
       expect(first(before), before).toBeLessThan(first('state.afterReview'));
     }
+    // An override the run did not verify keeps the branch local before anything else is read.
+    expect(first('state.overrideCheck')).toBe(0);
+    expect(first('state.overrideBy != state.overrideCheck')).toBe(1);
     expect(PUSH_GATE_OTHERWISE.decision).toBe('ask');
   });
 

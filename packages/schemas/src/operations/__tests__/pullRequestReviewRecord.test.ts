@@ -204,3 +204,43 @@ describe('an override of the decision on the findings', () => {
     ).toBeUndefined();
   });
 });
+
+/**
+ * Contract: beside the decision goes the most severe finding of the review it
+ * was made on, which the push gate holds a `publish_as_is` to — however many
+ * findings the hand-on leaves out, and only where a decision is recorded.
+ */
+describe('the most severe finding beside the decision', () => {
+  const finding = (severity: (typeof SEVERITIES)[number], claim = severity) => ({
+    severity,
+    file: 'src/a.ts',
+    claim,
+    evidence: 'x',
+  });
+  const review = (findings: unknown[]) => ({
+    verdict: 'request_changes',
+    outcome: 'completed',
+    findings,
+  });
+
+  it('is the worst severity among the findings, in any order', () => {
+    for (const worst of SEVERITIES) {
+      const below = SEVERITIES.slice(0, SEVERITIES.indexOf(worst));
+      const findings = [...below, worst, ...below].map((severity) => finding(severity));
+      expect(recordOf({ review: review(findings) }).severest, worst).toBe(worst);
+    }
+  });
+
+  it('counts a finding the hand-on left out', () => {
+    const many = Array.from({ length: HANDED_ON_FINDINGS_MAX_COUNT + 1 }, (_, i) =>
+      finding('nit', `nit ${String(i)}`),
+    );
+    expect(recordOf({ review: review(many) }).severest).toBe('nit');
+  });
+
+  it('is recorded with the decision and only with it: none where the review found nothing or did not finish', () => {
+    expect(recordOf({ review: review([]) }).severest).toBeUndefined();
+    const passedOn = { severity: 'blocker', file: 'src/a.ts', claim: 'Leaks.', state: 'open' };
+    expect(recordOf({ findings: [passedOn] }).severest).toBeUndefined();
+  });
+});

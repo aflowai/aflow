@@ -104,8 +104,8 @@
     "contentHash": "35998b7e73fb024809520f7738c4f169e18858a800d924baf195f43e6648a90a"
   },
   "local-publish": {
-    "version": 34,
-    "contentHash": "23bc43931d66bd2e7eb6d8ec5e0dc86b2493d183f4f669a6adc26b1702c5afb4"
+    "version": 35,
+    "contentHash": "be6cfb48fd9c65ffd1db0b5ddef862eadf32846992bc9622b2b5d3c722ac2256"
   },
   "local-shepherd": {
     "version": 2,

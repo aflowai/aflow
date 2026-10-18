@@ -316,17 +316,24 @@ describe('composePullRequest', () => {
   const bodyOf = (input: Partial<HostCommitDescribeInput>) =>
     composePullRequest({ bindingId: 'hb_app', range, ...input }, commits).body;
 
-  it("keeps a person's own title and summary as they are, closed by the loop's marker", () => {
-    expect(
-      composePullRequest(
-        { bindingId: 'hb_app', range, title: 'Their title', summary: 'Their words.' },
-        commits,
-      ),
-    ).toEqual({
-      title: 'Their title',
-      body: `Their words.\n\n${LOCAL_PUBLISH_PULL_REQUEST_MARKER}`,
-      findings: [],
-    });
+  it("keeps a person's own title as it is, and heads the composed body with their summary rather than replacing it", () => {
+    const composed = composePullRequest(
+      { bindingId: 'hb_app', range, title: 'Their title', summary: 'Their words.' },
+      commits,
+    );
+    expect(composed.title).toBe('Their title');
+    expect(composed.body).toBe(`Their words.\n\n${bodyOf({})}`);
+    expect(composed.findings).toEqual([]);
+  });
+
+  it("holds a summary too long for the rest of the body to its room, and keeps everything under it, within GitHub's limit", () => {
+    const body = bodyOf({ summary: 'y'.repeat(PULL_REQUEST_BODY_MAX_CHARS) });
+    expect(body.length).toBeLessThanOrEqual(PULL_REQUEST_BODY_MAX_CHARS);
+    expect(body).toContain('The summary stops here');
+    for (const heading of ['## Review', '## Verification', '## Known gaps']) {
+      expect(body).toContain(heading);
+    }
+    expect(body.endsWith(LOCAL_PUBLISH_PULL_REQUEST_MARKER)).toBe(true);
   });
 
   it('closes every body it composes with the marker the shepherd tends by, within GitHub’s limit', () => {
@@ -349,7 +356,12 @@ describe('composePullRequest', () => {
     evidence: 'put() writes the store and leaves the map entry.',
     suggestion: 'Delete the entry in put().',
   } as const;
-  const reviewed = (afterReview?: 'fix_before_merge' | 'publish_as_is' | null) =>
+  /** The same finding as a minor: the most a decision clears a push over without asking. */
+  const MINOR_FINDING = { ...REVIEW_FINDING, severity: 'minor' } as const;
+  const reviewed = (
+    afterReview?: 'fix_before_merge' | 'publish_as_is' | null,
+    finding: typeof REVIEW_FINDING | typeof MINOR_FINDING = REVIEW_FINDING,
+  ) =>
     HostCommitDescribeInputSchema.parse({
       bindingId: 'hb_app',
       range,
@@ -358,7 +370,7 @@ describe('composePullRequest', () => {
         verdict: 'request_changes',
         outcome: 'completed',
         reviewSummary: REVIEW_SUMMARY,
-        findings: [REVIEW_FINDING],
+        findings: [finding],
       },
       ...(afterReview !== undefined ? { afterReview } : {}),
     });
@@ -448,9 +460,16 @@ describe('composePullRequest', () => {
   it('lists, whole, the findings a publish_as_is leaves open — and lists them for no other answer', () => {
     const listed = '- **major** `src/cache.ts:40` — The cache is never invalidated after a write.';
     const asIs = composePullRequest(reviewed('publish_as_is'), commits).body;
-    expect(asIs).toContain('the push went without asking, and leaves these open:');
+    // A major among them: the push it is pushed with was the operator's to clear.
+    expect(asIs).toContain(
+      "With a major among them, the push went out only on the operator's approval, and leaves these open:",
+    );
     expect(asIs).toContain(listed);
     expect(asIs).not.toContain(REVIEW_FINDING.evidence);
+    const minor = composePullRequest(reviewed('publish_as_is', MINOR_FINDING), commits);
+    expect(minor.severest).toBe('minor');
+    expect(minor.body).toContain('The push went without asking, and leaves these open:');
+    expect(minor.body).toContain('- **minor** `src/cache.ts:40`');
     for (const answer of ['fix_before_merge', null] as const) {
       expect(composePullRequest(reviewed(answer), commits).body, String(answer)).not.toContain(
         listed,
@@ -477,6 +496,31 @@ describe('composePullRequest', () => {
       `The decision was \`fix_before_merge\`, set aside by the operator's word: ${reason}`,
     );
     expect(composed.body).toContain('- **major** `src/cache.ts:40`');
+  });
+
+  it("keeps a publish_as_is's open findings and its override record under a person's summary", () => {
+    const reason = 'A person labelled the pull request hands-off: they take the finding on.';
+    const composed = composePullRequest(
+      HostCommitDescribeInputSchema.parse({
+        ...reviewed('fix_before_merge', MINOR_FINDING),
+        summary: 'Their own account of the change.',
+        override: { by: 'hands_off_label', reason },
+      }),
+      commits,
+    );
+    expect(composed.body.startsWith('Their own account of the change.\n\n')).toBe(true);
+    expect(composed.body).toContain('Decided after the review: `publish_as_is`');
+    expect(composed.body).toContain(
+      '- **minor** `src/cache.ts:40` — The cache is never invalidated after a write.',
+    );
+    expect(composed.body).toContain(
+      `The decision was \`fix_before_merge\`, set aside by the \`hands-off\` label: ${reason}`,
+    );
+    expect(composed.afterReviewOverride).toEqual({
+      by: 'hands_off_label',
+      reason,
+      overrode: 'fix_before_merge',
+    });
   });
 
   it('records no decision where the review returned no findings, since none was asked', () => {
