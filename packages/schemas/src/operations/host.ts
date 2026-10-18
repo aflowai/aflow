@@ -874,8 +874,9 @@ const HostHarnessRunInputObjectSchema = z.object({
     .describe(
       'Which coding harness to run, by the id the operator configured on that machine. ' +
         'The machine decides what that id runs; nothing here can name an executable. ' +
-        'Omit it and the machine uses the harness it offers when it offers exactly one; ' +
-        'where it offers several the run is refused and the refusal lists the ids.',
+        'Omit it and the machine runs its default harness, or, when that one is not ' +
+        'installed, the first configured harness that is. A named harness is never swapped ' +
+        'for another: an unknown id is refused, and the refusal lists the ids.',
     ),
   task: z
     .string()
@@ -955,8 +956,8 @@ const HostHarnessRunInputObjectSchema = z.object({
       'The number of assistant turns the harness may take before it must answer. Absent, a ' +
         `harness that takes a turn budget gets ${String(HOST_HARNESS_MAX_TURNS_DEFAULT)} — ` +
         'several hundred, because every tool call is a turn — and one that takes none runs ' +
-        'without. Named, a harness the machine configured without a turn budget refuses the ' +
-        'run rather than ignoring it, and the refusal names it.',
+        'without. Named, a harness that takes no turn budget runs without it, bounded by ' +
+        '`timeoutMs`, and the result reports `budget.applied: false`.',
     ),
   model: z
     .string()
@@ -1001,11 +1002,29 @@ export const HostHarnessRunOutputSchema = z.object({
     .object({
       id: z.string(),
       label: z.string().optional().describe('What the operator calls it, when the machine says.'),
+      selectedBy: z
+        .enum(['named', 'default', 'fallback'])
+        .describe(
+          "How it was chosen: the call named it, it is the machine's default, or the default " +
+            'was not available and this is the first configured harness that was.',
+        ),
+      passedOver: z.string().optional().describe('For a fallback, why the default did not run.'),
     })
     .describe(
       'The harness that ran, as the machine configured it. Present whether or not the call ' +
         'named one, so a result stands on its own rather than needing the input read back.',
     ),
+  budget: z
+    .object({
+      maxTurns: z.number().int(),
+      applied: z
+        .boolean()
+        .describe(
+          'False when the harness takes no turn budget; the run was then bounded by its timeout.',
+        ),
+    })
+    .optional()
+    .describe('The turn budget the call named, and whether the harness could take it.'),
   sessionRef: z
     .string()
     .optional()

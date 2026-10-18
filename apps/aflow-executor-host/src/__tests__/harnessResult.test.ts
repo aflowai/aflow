@@ -144,6 +144,15 @@ describe("the task carries the repository's own rules", () => {
     expect(await repositoryRulesFiles({ path: checkout, workDir: checkout })).toEqual([]);
   });
 
+  it('names AGENTS.md beside CLAUDE.md, since a harness reads only the one it discovers', async () => {
+    await writeFile(join(checkout, 'CLAUDE.md'), '# Rules\n', 'utf8');
+    await writeFile(join(checkout, 'AGENTS.md'), '# Rules\n', 'utf8');
+    expect(await repositoryRulesFiles({ path: checkout, workDir: checkout })).toEqual([
+      { path: 'CLAUDE.md', where: 'at the root of this checkout' },
+      { path: 'AGENTS.md', where: 'at the root of this checkout' },
+    ]);
+  });
+
   it("names the folder's own and its repository's, each where it is, for a folder inside one", async () => {
     const workDir = join(checkout, 'packages', 'app');
     await mkdir(workDir, { recursive: true });
@@ -215,7 +224,7 @@ describe('the wire contract', () => {
   it('carries the validated result beside the diff, and says which harness ran', () => {
     const output = HostHarnessRunOutputSchema.parse({
       runId: 'hr_1',
-      harness: { id: 'claude', label: 'Claude Code' },
+      harness: { id: 'claude', label: 'Claude Code', selectedBy: 'default' },
       continued: false,
       baseSha: 'abc',
       result: { verdict: 'sound' },
@@ -232,7 +241,7 @@ describe('the wire contract', () => {
     expect(output.result).toEqual({ verdict: 'sound' });
     // The name a card shows comes from the result, not from reading the step's
     // input back — a call that named no harness has no id there at all.
-    expect(output.harness).toEqual({ id: 'claude', label: 'Claude Code' });
+    expect(output.harness).toEqual({ id: 'claude', label: 'Claude Code', selectedBy: 'default' });
   });
 
   it('refuses a result that does not say which harness ran', () => {
@@ -380,7 +389,11 @@ describe.runIf(sandboxReadiness().ready)('a check that rejects an answer keeps t
       expect(error.details).not.toHaveProperty('result');
       // Which harness ran travels on a failure too: the card that reports it has
       // the same name to show whether the run answered or not.
-      expect(error.details['harness']).toEqual({ id: 'fake', label: 'Fake harness' });
+      expect(error.details['harness']).toEqual({
+        id: 'fake',
+        label: 'Fake harness',
+        selectedBy: 'named',
+      });
     },
   );
 });

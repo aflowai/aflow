@@ -96,6 +96,11 @@ export const HostPolicySchema = z.object({
   /** Coding harnesses this machine will run. Absent means none may run here. */
   harnesses: z.array(HarnessProfileSchema).default([]),
   /**
+   * The harness a run gets when it names none (Plan 325 D6). When it is not
+   * installed, a run falls back to the first configured harness that is.
+   */
+  defaultHarness: z.string().min(1).optional(),
+  /**
    * How many coding agents run here at once, written only when the operator
    * chose a number: absent, the platform's default is read each time, so a
    * change of default reaches a machine that never chose.
@@ -160,6 +165,8 @@ export class HostBindingError extends Error {
 export interface LoadedHostPolicy {
   bindings: Map<string, HostBinding>;
   harnesses: Map<string, HarnessProfile>;
+  /** The operator's default harness, when they chose one. */
+  defaultHarness?: string;
   /** The operator's number, or the default when they chose none. */
   maxConcurrentHarnessRuns: number;
   /** The operator's choice, or the default when they made none. */
@@ -210,6 +217,9 @@ export async function loadHostPolicy(
   return {
     bindings: new Map(parsed.data.bindings.map((b) => [b.id, b])),
     harnesses: new Map(parsed.data.harnesses.map((h) => [h.id, h])),
+    ...(parsed.data.defaultHarness !== undefined
+      ? { defaultHarness: parsed.data.defaultHarness }
+      : {}),
     maxConcurrentHarnessRuns:
       parsed.data.maxConcurrentHarnessRuns ?? HOST_HARNESS_CONCURRENCY_DEFAULT,
     keepAwake: parsed.data.keepAwake ?? HOST_KEEP_AWAKE_DEFAULT,

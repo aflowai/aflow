@@ -17,6 +17,8 @@
  */
 import { z } from 'zod';
 
+import { assertSafeEnv, EnvPolicyError } from './envPolicy.js';
+
 /**
  * What this harness will print, so the executor knows how to read it.
  *
@@ -26,7 +28,7 @@ import { z } from 'zod';
  * no error anywhere. `text` is the default because it is what a CLI prints
  * when nobody asked for anything else.
  */
-export const HarnessOutputFormatSchema = z.enum(['claude-stream-json', 'text']);
+export const HarnessOutputFormatSchema = z.enum(['claude-stream-json', 'codex-jsonl', 'text']);
 export type HarnessOutputFormat = z.infer<typeof HarnessOutputFormatSchema>;
 
 export const HarnessProfileSchema = z.object({
@@ -74,9 +76,9 @@ export const HarnessProfileSchema = z.object({
   resumeArgs: z.array(z.string()).default([]),
   /**
    * How this harness is told how many turns it may take, carrying `{turns}`
-   * where the number goes. Empty means the CLI has no such flag, and a run
-   * asking for a budget is refused rather than run without one — a budget
-   * silently dropped is the failure the caller asked for it to prevent.
+   * where the number goes. Empty means the CLI has no such flag: a run asking
+   * for a budget runs without one, bounded by its timeout, and its result says
+   * the budget was not applied (Plan 325 D5).
    */
   turnsArgs: z.array(z.string()).default([]),
   /**
@@ -109,6 +111,38 @@ export const HarnessProfileSchema = z.object({
    * intact — nothing has to be carved out of it for the harness to work.
    */
   configDirEnv: z.string().min(1).optional(),
+  /**
+   * Files of the operator's own sign-in, by absolute path, copied into the
+   * run's configuration directory before each turn and written back after it
+   * when the harness refreshed them (Plan 325 D4). The copy is made outside
+   * the boundary, as the operator, so home stays denied to the harness. Only
+   * meaningful with `configDirEnv`; each lands under its own base name.
+   */
+  configSeed: z.array(z.string().min(1)).default([]),
+  /**
+   * How long a seeded file goes unwritten before its harness rewrites it on
+   * the next start. Runs seeded from a file at least this old take turns, so
+   * two of them never refresh the same single-use token at once. Absent means
+   * runs never wait on each other.
+   */
+  configSeedRefreshAgeMs: z.number().int().min(1).optional(),
+  /**
+   * Variables the harness is started with, on the machine's word. Held to the
+   * same rule as a job's own: nothing that steers the sandbox launcher, its
+   * proxy or the process's loader, so a profile cannot widen the boundary it
+   * runs inside.
+   */
+  env: z
+    .record(z.string())
+    .default({})
+    .superRefine((env, ctx) => {
+      try {
+        assertSafeEnv(env);
+      } catch (error) {
+        if (!(error instanceof EnvPolicyError)) throw error;
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: error.message });
+      }
+    }),
   /** Hosts this harness may reach. Empty means the run has no egress at all. */
   allowedDomains: z.array(z.string()).default([]),
   /**
@@ -198,22 +232,19 @@ function fillTemplate(
   return template.map((arg) => (arg === placeholder ? value : arg));
 }
 
+/** True when this harness can be told how many turns it may take. */
+export function takesTurnBudget(profile: HarnessProfile): boolean {
+  return profile.turnsArgs.length > 0;
+}
+
 /**
  * The turn-budget arguments for a run, or none when the run asked for no
- * budget. A harness whose profile declares no `turnsArgs` cannot take one, so
- * the request is refused with the harness named: resending without the budget
- * is the remedy, which is why it is an unsupported request rather than a
- * malformed profile.
+ * budget or the harness cannot take one. Not taking one is not a refusal: the
+ * run's timeout still bounds it, and the caller reports the budget as
+ * unapplied.
  */
 function buildTurnsArgs(profile: HarnessProfile, maxTurns: number | undefined): string[] {
-  if (maxTurns === undefined) return [];
-  if (profile.turnsArgs.length === 0) {
-    throw new HarnessProfileError(
-      `Harness '${profile.id}' takes no turn budget on this machine, so \`maxTurns\` cannot be ` +
-        'applied. Send the task without it, or bound the run with `timeoutMs`.',
-      'unsupported_request',
-    );
-  }
+  if (maxTurns === undefined || !takesTurnBudget(profile)) return [];
   return fillTemplate(profile, profile.turnsArgs, 'turnsArgs', TURNS_PLACEHOLDER, String(maxTurns));
 }
 
@@ -355,17 +386,32 @@ export function supportsContinuation(profile: HarnessProfile): boolean {
 }
 
 /**
+ * True when the conversation id is minted here and handed to the harness.
+ * Otherwise the harness names its own conversation and reports the id in its
+ * event stream (Plan 325 D2).
+ */
+export function mintsConversationId(profile: HarnessProfile): boolean {
+  return profile.sessionArgs.length > 0;
+}
+
+/**
  * The conversation arguments for a run: naming a new one, or resuming it.
  * Substituted the same way the prompt is — the id occupies its own element, so
  * nothing has to be quoted.
  */
 export function buildSessionArgs(
   profile: HarnessProfile,
-  conversationId: string,
+  conversationId: string | undefined,
   resuming: boolean,
 ): string[] {
   const template = resuming ? profile.resumeArgs : profile.sessionArgs;
   if (template.length === 0) return [];
+  if (conversationId === undefined) {
+    throw new HarnessProfileError(
+      `Harness '${profile.id}' has no conversation id to ${resuming ? 'resume' : 'name'}.`,
+      'malformed_profile',
+    );
+  }
   return fillTemplate(
     profile,
     template,

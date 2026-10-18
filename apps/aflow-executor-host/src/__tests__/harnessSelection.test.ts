@@ -1,8 +1,9 @@
 /**
- * Contract: a run does not have to know the harness id. The machine holds the
- * one fact that decides it, so a caller that names nothing gets the harness the
- * machine offers — and a machine offering several says which, rather than
- * choosing for the operator.
+ * Contract: a run does not have to know the harness id. A run that names none
+ * gets the machine's default, and the first configured harness that is
+ * installed when the default is not — so installing a second harness never
+ * turns a skill that names none into a refusal. A named harness is that harness
+ * or a refusal, never another one.
  */
 import { describe, expect, it } from 'vitest';
 
@@ -12,52 +13,99 @@ import { harnessTurnArgv, selectHarness } from '../handlers/harnessHandlers.js';
 import { buildHarnessArgv, HarnessProfileError, HarnessProfileSchema } from '../harnessProfiles.js';
 import type { HarnessProfile } from '../harnessProfiles.js';
 
-function profile(id: string, label?: string): HarnessProfile {
-  return HarnessProfileSchema.parse({
-    id,
-    executable: `/usr/local/bin/${id}`,
-    ...(label !== undefined ? { label } : {}),
-  });
+function profile(id: string): HarnessProfile {
+  return HarnessProfileSchema.parse({ id, executable: `/usr/local/bin/${id}` });
 }
 
 function profiles(...ids: string[]): ReadonlyMap<string, HarnessProfile> {
   return new Map(ids.map((id) => [id, profile(id)]));
 }
 
+/** A machine where exactly these harnesses are installed. */
+function installed(...ids: string[]): (executable: string) => Promise<boolean> {
+  return async (executable) => ids.some((id) => executable === `/usr/local/bin/${id}`);
+}
+
+const WITH_MODEL = HarnessProfileSchema.parse({
+  id: 'claude',
+  executable: '/usr/local/bin/claude',
+  modelArgs: ['--model', '{model}'],
+  model: 'fable',
+});
+
 describe('choosing a harness', () => {
-  it('uses the only one offered when the call named none', () => {
-    const selection = selectHarness(profiles('claude'), undefined);
-    expect(selection.kind).toBe('profile');
-    expect(selection.kind === 'profile' && selection.profile.id).toBe('claude');
+  it('uses the only one offered when the call named none and no default is set', async () => {
+    const selection = await selectHarness(
+      profiles('claude'),
+      undefined,
+      undefined,
+      installed('claude'),
+    );
+    expect(selection.profile.id).toBe('claude');
+    expect(selection.selectedBy).toBe('default');
   });
 
-  it('names every id when several are offered, instead of picking one', () => {
-    const selection = selectHarness(profiles('opencode', 'claude'), undefined);
-    expect(selection.kind).toBe('ambiguous');
-    const problem = selection.kind === 'ambiguous' ? selection.problem : '';
-    expect(problem).toContain('claude');
-    expect(problem).toContain('opencode');
-    expect(problem).toContain('harness');
+  it("runs the machine's default when several are offered", async () => {
+    const selection = await selectHarness(
+      profiles('claude', 'codex'),
+      undefined,
+      'codex',
+      installed('claude', 'codex'),
+    );
+    expect(selection.profile.id).toBe('codex');
+    expect(selection.selectedBy).toBe('default');
+    expect(selection.passedOver).toBeUndefined();
   });
 
-  it('gives the operator name beside each id, since the choice is theirs to read', () => {
-    // `harness` takes the id and nothing else, so the id leads; the name follows
-    // it because a choice between two ids is one nobody can make from the ids.
-    const available = new Map([
-      ['claude', profile('claude', 'Claude Code')],
-      ['homegrown', profile('homegrown')],
-    ]);
-    const selection = selectHarness(available, undefined);
-    const problem = selection.kind === 'ambiguous' ? selection.problem : '';
-    expect(problem).toContain('claude (Claude Code)');
-    expect(problem).toContain('homegrown');
-    expect(problem).not.toContain('homegrown (');
+  it('falls back to the first installed harness, saying why, when the default is not installed', async () => {
+    const selection = await selectHarness(
+      profiles('claude', 'codex'),
+      undefined,
+      'claude',
+      installed('codex'),
+    );
+    expect(selection.profile.id).toBe('codex');
+    expect(selection.selectedBy).toBe('fallback');
+    expect(selection.passedOver).toContain('`claude` is not installed');
   });
 
-  it('says none are configured rather than reporting an empty choice', () => {
-    expect(() => selectHarness(profiles(), undefined)).toThrow(HarnessProfileError);
+  it('falls back in policy order when several are offered and no default is set', async () => {
+    const selection = await selectHarness(
+      profiles('opencode', 'claude'),
+      undefined,
+      undefined,
+      installed('opencode', 'claude'),
+    );
+    expect(selection.profile.id).toBe('opencode');
+    expect(selection.selectedBy).toBe('fallback');
+    expect(selection.passedOver).toContain('no default harness is set');
+  });
+
+  it('falls back when the default names a harness that is not configured', async () => {
+    const selection = await selectHarness(
+      profiles('claude'),
+      undefined,
+      'codex',
+      installed('claude'),
+    );
+    expect(selection.profile.id).toBe('claude');
+    expect(selection.selectedBy).toBe('fallback');
+    expect(selection.passedOver).toContain('`codex` is not configured');
+  });
+
+  it('runs a named harness that is not the default, and never swaps an unknown one', async () => {
+    const available = profiles('claude', 'codex');
+    const named = await selectHarness(available, 'claude', 'codex', installed('codex'));
+    expect(named.profile.id).toBe('claude');
+    expect(named.selectedBy).toBe('named');
+    await expect(selectHarness(available, 'amp', 'codex', installed('codex'))).rejects.toThrow(
+      HarnessProfileError,
+    );
+  });
+
+  it('says none are configured rather than reporting an empty choice', async () => {
     try {
-      selectHarness(profiles(), undefined);
+      await selectHarness(profiles(), undefined, undefined, installed());
       expect.unreachable();
     } catch (error) {
       expect((error as Error).message).toContain('No coding harness is configured');
@@ -65,54 +113,22 @@ describe('choosing a harness', () => {
     }
   });
 
-  it('brings the chosen profile model with it, which a run model still overrides', () => {
-    const configured = HarnessProfileSchema.parse({
-      id: 'claude',
-      executable: '/usr/local/bin/claude',
-      modelArgs: ['--model', '{model}'],
-      model: 'fable',
-    });
-    const selection = selectHarness(new Map([['claude', configured]]), undefined);
-    if (selection.kind !== 'profile') throw new Error('expected a profile');
+  it('brings the chosen profile model with it, which a run model still overrides', async () => {
+    const selection = await selectHarness(
+      new Map([['claude', WITH_MODEL]]),
+      undefined,
+      undefined,
+      installed('claude'),
+    );
     expect(buildHarnessArgv(selection.profile, 't')).toContain('fable');
     const overridden = buildHarnessArgv(selection.profile, 't', [], undefined, 'parable');
     expect(overridden).toContain('parable');
     expect(overridden).not.toContain('fable');
-  });
-
-  it('gives a run the handler starts with no model the profile model, and a run model wins', () => {
-    const configured = HarnessProfileSchema.parse({
-      id: 'claude',
-      executable: '/usr/local/bin/claude',
-      modelArgs: ['--model', '{model}'],
-      model: 'fable',
-    });
-    const selection = selectHarness(new Map([['claude', configured]]), undefined);
-    if (selection.kind !== 'profile') throw new Error('expected a profile');
 
     const unnamed = HostHarnessRunInputSchema.parse({ bindingId: 'hb_project', task: 't' });
     const fromProfile = harnessTurnArgv(selection.profile, unnamed, 't', 'conversation-1', false);
     expect(
       fromProfile.slice(fromProfile.indexOf('--model'), fromProfile.indexOf('--model') + 2),
     ).toEqual(['--model', 'fable']);
-
-    const named = HostHarnessRunInputSchema.parse({
-      bindingId: 'hb_project',
-      task: 't',
-      model: 'parable',
-    });
-    const fromRun = harnessTurnArgv(selection.profile, named, 't', 'conversation-1', false);
-    expect(fromRun.slice(fromRun.indexOf('--model'), fromRun.indexOf('--model') + 2)).toEqual([
-      '--model',
-      'parable',
-    ]);
-    expect(fromRun).not.toContain('fable');
-  });
-
-  it('still resolves a named id against the machine, and refuses an unknown one', () => {
-    const available = profiles('claude', 'opencode');
-    const selection = selectHarness(available, 'opencode');
-    expect(selection.kind === 'profile' && selection.profile.id).toBe('opencode');
-    expect(() => selectHarness(available, 'amp')).toThrow(HarnessProfileError);
   });
 });

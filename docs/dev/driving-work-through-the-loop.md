@@ -64,8 +64,8 @@ meanwhile is refused with its current state rather than overwritten, and a node 
    name for a fix appended to an open pull request, with `mergeFrom: origin/main` where
    `main` has moved past it), and `task`: the findings or the slice to build, each with
    the file, the line where it is known, what is wrong and what right looks like, and the
-   tests to add. `harness` is needed only where the machine offers more than one coding
-   agent. Its two hours, and the operation's several hundred turns on an agent that
+   tests to add. `harness` is named only to choose a coding agent other than the
+   machine's default (`aflow harness default <id>`). Its two hours, and the operation's several hundred turns on an agent that
    takes a turn budget, are sized for a slice; name `timeoutMs` or `maxTurns` only to
    change them. Several commissions may run at once, within the machine's limit (below).
    The checks the agent must run are named in the brief, because the folder's checks

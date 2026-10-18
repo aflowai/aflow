@@ -63,7 +63,15 @@ interface HarnessProbe {
   readonly writePaths: string[];
   /** A variable that takes a per-run configuration directory, if it has one. */
   readonly configDirEnv?: string;
+  /** Its sign-in files, relative to home, lent into that directory per turn. */
+  readonly configSeed: string[];
+  /** How long a sign-in file goes unwritten before the harness refreshes it on start. */
+  readonly configSeedRefreshAgeMs?: number;
+  /** Variables it needs to run inside the boundary at all. */
+  readonly env: Record<string, string>;
 }
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * The harnesses this lane was built against.
@@ -149,6 +157,61 @@ const KNOWN: readonly HarnessProbe[] = [
     // own temporary directory (`baseEnv.ts`); left to itself it writes the temp
     // root, is refused, and every command reads as failed.
     writePaths: [join(SYSTEM_TEMP_ROOT, `claude-${String(process.getuid?.() ?? 0)}`)],
+    configSeed: [],
+    env: {},
+  },
+  {
+    id: 'codex',
+    label: 'Codex',
+    command: 'codex',
+    promptArgs: ['{prompt}'],
+    // Measured against Codex CLI 0.163 (Plan 325 §6). The bypass flag is what
+    // `bypassPermissions` is for Claude Code: Codex's own Seatbelt profile
+    // cannot nest inside the lane's, and the lane's sandbox is the boundary.
+    // The disables are its `--bare`: a fresh CODEX_HOME already drops the
+    // operator's plugins, hooks and notify program, and these stop the run
+    // fetching ChatGPT app connectors, remote plugins and dependency installs,
+    // or reaching for a browser or the desktop the run did not ask for.
+    // `secret_auth_storage` is held off because the sign-in is lent as a file.
+    args: [
+      'exec',
+      '--json',
+      '--dangerously-bypass-approvals-and-sandbox',
+      ...[
+        'apps',
+        'plugins',
+        'remote_plugin',
+        'hooks',
+        'computer_use',
+        'browser_use',
+        'browser_use_external',
+        'skill_mcp_dependency_install',
+        'secret_auth_storage',
+      ].flatMap((feature) => ['--disable', feature]),
+    ],
+    output: 'codex-jsonl',
+    // It takes no conversation id. It reports its own as the first event of
+    // the run, and `exec`'s flags carry over when `resume` follows them.
+    sessionArgs: [],
+    resumeArgs: ['resume', '{session}'],
+    // No turn flag exists; a run is bounded by its timeout.
+    turnsArgs: [],
+    modelArgs: ['-m', '{model}'],
+    mcpArgs: [],
+    authPaths: [],
+    writePaths: [],
+    configDirEnv: 'CODEX_HOME',
+    configSeed: ['.codex/auth.json'],
+    // Codex refreshes a sign-in older than eight days when it starts. A day
+    // of margin costs only that runs seeded in it take turns.
+    configSeedRefreshAgeMs: 7 * DAY_MS,
+    // On macOS it verifies TLS through the trust daemon unless handed a
+    // bundle, and the boundary never grants that daemon: it is an egress path
+    // of its own (`sandboxPolicy.ts`). Measured: without this every request
+    // fails just after the proxy accepts its CONNECT; with it the run
+    // completes (Plan 325 §6 M6). Elsewhere it reads the system's bundle files,
+    // which the boundary leaves readable.
+    env: process.platform === 'darwin' ? { CODEX_CA_CERTIFICATE: '/etc/ssl/cert.pem' } : {},
   },
   {
     id: 'opencode',
@@ -167,6 +230,8 @@ const KNOWN: readonly HarnessProbe[] = [
     mcpArgs: [],
     authPaths: ['.config/opencode', '.local/share/opencode'],
     writePaths: [],
+    configSeed: [],
+    env: {},
   },
 ];
 
@@ -198,6 +263,9 @@ export interface DiscoveredHarness {
     readonly authPaths: string[];
     readonly writePaths: string[];
     readonly configDirEnv?: string;
+    readonly configSeed: string[];
+    readonly configSeedRefreshAgeMs?: number;
+    readonly env: Record<string, string>;
   };
 }
 
@@ -250,6 +318,11 @@ export async function discoverHarnesses(home = homedir()): Promise<DiscoveredHar
           authPaths: probe.authPaths.map((p) => join(home, p)),
           writePaths: [...probe.writePaths],
           ...(probe.configDirEnv !== undefined ? { configDirEnv: probe.configDirEnv } : {}),
+          configSeed: probe.configSeed.map((p) => join(home, p)),
+          ...(probe.configSeedRefreshAgeMs !== undefined
+            ? { configSeedRefreshAgeMs: probe.configSeedRefreshAgeMs }
+            : {}),
+          env: { ...probe.env },
         },
       };
     }),

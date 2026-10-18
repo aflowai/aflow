@@ -11,7 +11,8 @@
  * reaches a telemetry sink and a package registry alongside its model API
  * should be a thing the operator sees and decides about, not a default.
  */
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir, readFile, realpath } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 
 import { resolveBranchPolicy } from '@aflow/schemas';
@@ -42,6 +43,8 @@ function usage(): never {
       '  harness list                       What is installed here, and what is configured.\n' +
       '  harness add <id> [options]         Allow a discovered harness to run.\n' +
       '  harness allow <id> <host>...       Let a harness reach these hosts.\n' +
+      '  harness default <id>               Run this harness when a task names none.\n' +
+      '  harness default --clear            Run the first installed one instead.\n' +
       '  harness model <id> <model>         Run this model when a task names none.\n' +
       "  harness model <id> --clear         Run the harness's own default instead.\n" +
       '  harness browser <id> [<arg>...]    How it is handed a browser: the arguments that pass\n' +
@@ -216,6 +219,9 @@ async function list(): Promise<void> {
   console.log('Configured on this machine:');
   if (policy.harnesses.length === 0) console.log('  (none)');
   else for (const profile of policy.harnesses) console.log(describe(profile));
+  if (policy.defaultHarness !== undefined) {
+    console.log(`A task that names no harness runs \`${policy.defaultHarness}\`.`);
+  }
   console.log(`This machine ${describeHarnessConcurrency(policy)}.`);
   console.log(`This machine ${describePolicyKeepAwake(policy)}.`);
 
@@ -299,6 +305,11 @@ async function add(id: string): Promise<void> {
           ...(discovered.suggested.configDirEnv !== undefined
             ? { configDirEnv: discovered.suggested.configDirEnv }
             : {}),
+          configSeed: discovered.suggested.configSeed,
+          env: discovered.suggested.env,
+          ...(discovered.suggested.configSeedRefreshAgeMs !== undefined
+            ? { configSeedRefreshAgeMs: discovered.suggested.configSeedRefreshAgeMs }
+            : {}),
         }
       : {}),
     ...(credentialCommand !== undefined && credentialEnv !== undefined
@@ -337,11 +348,26 @@ async function add(id: string): Promise<void> {
       }
     }
     policy.harnesses = [...policy.harnesses.filter((h) => h.id !== id), profile];
+    // Recorded once there is a choice to make, as the harness runs already got:
+    // a machine that ran one harness keeps running it when a second arrives.
+    policy.defaultHarness ??= policy.harnesses[0]?.id;
     return policy;
   });
 
   console.log(`Configured \`${id}\`.`);
   console.log(describe(profile));
+  const home = homedir();
+  const installedUnder = dirname(dirname(await realpath(executable).catch(() => executable)));
+  const latest = await loadPolicy();
+  if (
+    installedUnder.startsWith(`${home}/`) &&
+    !latest.toolPaths.some((p) => installedUnder === p || installedUnder.startsWith(`${p}/`))
+  ) {
+    console.log(
+      `\nIt is installed under your home directory, which runs cannot read. Let them:\n` +
+        `  aflow harness tools ${installedUnder}`,
+    );
+  }
   if (profile.allowedDomains.length === 0) {
     console.log(
       '\nIt reaches nothing yet. Run it once — the run reports every host it was refused,\n' +
@@ -498,9 +524,30 @@ async function remove(id: string): Promise<void> {
       process.exit(1);
     }
     policy.harnesses = policy.harnesses.filter((h) => h.id !== id);
+    if (policy.defaultHarness === id) delete policy.defaultHarness;
     return policy;
   });
   console.log(`\`${id}\` will no longer run here.`);
+}
+
+async function setDefault(id: string): Promise<void> {
+  if (id === '--clear') {
+    await changePolicy((policy) => {
+      delete policy.defaultHarness;
+      return policy;
+    });
+    console.log('A task that names no harness now runs the first configured one installed.');
+    return;
+  }
+  await changePolicy((policy) => {
+    configuredHarness(policy, id);
+    policy.defaultHarness = id;
+    return policy;
+  });
+  console.log(
+    `A task that names no harness now runs \`${id}\`, or the first configured one ` +
+      'installed when it is not.',
+  );
 }
 
 async function main(): Promise<void> {
@@ -587,6 +634,10 @@ async function main(): Promise<void> {
   }
   if (command === 'sandbox') {
     await setSandbox(id, rest);
+    return;
+  }
+  if (command === 'default') {
+    await setDefault(id);
     return;
   }
   if (command === 'allow') {

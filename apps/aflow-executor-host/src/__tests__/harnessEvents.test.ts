@@ -332,3 +332,169 @@ describe('what a watcher reads first', () => {
     expect(results[1]).not.toHaveProperty('command');
   });
 });
+
+/**
+ * The lines a real `codex exec --json` run printed (Plan 325 §6 M1, M3), with
+ * the file-change, to-do and failure shapes Codex documents for the same
+ * stream.
+ */
+const CODEX_EVENTS: readonly Record<string, unknown>[] = [
+  { type: 'thread.started', thread_id: '01a14f39-d98a-7431-b7e3-35566c85ea84' },
+  { type: 'turn.started' },
+  {
+    type: 'item.completed',
+    item: { id: 'item_0', type: 'agent_message', text: 'I’ll read a.txt, then create b.txt.' },
+  },
+  {
+    type: 'item.started',
+    item: {
+      id: 'item_1',
+      type: 'command_execution',
+      command: "/bin/zsh -lc 'cat a.txt'",
+      aggregated_output: '',
+      exit_code: null,
+      status: 'in_progress',
+    },
+  },
+  {
+    type: 'item.completed',
+    item: {
+      id: 'item_1',
+      type: 'command_execution',
+      command: "/bin/zsh -lc 'cat a.txt'",
+      aggregated_output: 'hi\n',
+      exit_code: 0,
+      status: 'completed',
+    },
+  },
+  {
+    type: 'item.updated',
+    item: {
+      id: 'item_2',
+      type: 'todo_list',
+      items: [
+        { text: 'Read a.txt', completed: true },
+        { text: 'Write b.txt', completed: false },
+      ],
+    },
+  },
+  {
+    type: 'item.completed',
+    item: {
+      id: 'item_3',
+      type: 'file_change',
+      changes: [{ path: 'b.txt', kind: 'add' }],
+      status: 'completed',
+    },
+  },
+  {
+    type: 'item.started',
+    item: {
+      id: 'item_4',
+      type: 'mcp_tool_call',
+      server: 'probe',
+      tool: 'probe_echo',
+      arguments: {},
+      result: null,
+      error: null,
+      status: 'in_progress',
+    },
+  },
+  {
+    type: 'item.completed',
+    item: {
+      id: 'item_4',
+      type: 'mcp_tool_call',
+      server: 'probe',
+      tool: 'probe_echo',
+      arguments: {},
+      result: { content: [{ type: 'text', text: 'pineapple' }], structured_content: null },
+      error: null,
+      status: 'completed',
+    },
+  },
+  { type: 'item.completed', item: { id: 'item_5', type: 'agent_message', text: 'done' } },
+  {
+    type: 'turn.completed',
+    usage: { input_tokens: 43790, cached_input_tokens: 41088, output_tokens: 89 },
+  },
+];
+
+function readCodex(events: readonly Record<string, unknown>[]): {
+  lines: HarnessActivityLine[];
+  reader: ReturnType<typeof createHarnessEventReader>;
+} {
+  const lines: HarnessActivityLine[] = [];
+  const reader = createHarnessEventReader('codex-jsonl', (line) => lines.push(line), Date.now());
+  reader.push(events.map((event) => JSON.stringify(event)).join('\n'));
+  reader.flush();
+  return { lines, reader };
+}
+
+describe('reading a Codex event stream', () => {
+  it('turns the stream into activity, narrating each call once', () => {
+    const { lines } = readCodex(CODEX_EVENTS);
+    expect(lines.map(({ at: _at, ...rest }) => rest)).toEqual([
+      { kind: 'status', text: 'Harness started' },
+      { kind: 'thought', text: 'I’ll read a.txt, then create b.txt.' },
+      { kind: 'tool', tool: 'shell', text: 'shell cat a.txt' },
+      { kind: 'tool_result', tool: 'shell', ok: true, text: 'hi', command: true },
+      { kind: 'intent', text: 'Write b.txt' },
+      { kind: 'tool', tool: 'edit', text: 'add b.txt', changes: 'b.txt' },
+      { kind: 'tool', tool: 'probe.probe_echo', text: 'probe.probe_echo' },
+      { kind: 'tool_result', tool: 'probe.probe_echo', ok: true, text: 'pineapple' },
+      { kind: 'thought', text: 'done' },
+      { kind: 'status', text: 'Finished · 43790 tokens in · 89 out' },
+    ]);
+  });
+
+  it('answers with the last agent message and reports the conversation id Codex named', () => {
+    const { reader } = readCodex(CODEX_EVENTS);
+    expect(reader.answer()).toBe('done');
+    expect(reader.conversationId()).toBe('01a14f39-d98a-7431-b7e3-35566c85ea84');
+  });
+
+  it('reports no conversation id for a run that ended before naming one', () => {
+    const { reader } = readCodex([{ type: 'turn.started' }]);
+    expect(reader.conversationId()).toBeUndefined();
+  });
+
+  it('marks a failed command and a failed tool call as not ok', () => {
+    const { lines } = readCodex([
+      {
+        type: 'item.completed',
+        item: {
+          id: 'c',
+          type: 'command_execution',
+          command: 'false',
+          aggregated_output: '',
+          exit_code: 1,
+          status: 'failed',
+        },
+      },
+      {
+        type: 'item.completed',
+        item: {
+          id: 'm',
+          type: 'mcp_tool_call',
+          server: 's',
+          tool: 't',
+          arguments: {},
+          result: null,
+          error: { message: 'tool exploded' },
+          status: 'failed',
+        },
+      },
+    ]);
+    const results = lines.filter((line) => line.kind === 'tool_result');
+    expect(results[0]).toMatchObject({ tool: 'shell', ok: false, command: true });
+    expect(results[1]).toMatchObject({ tool: 's.t', ok: false, text: 'tool exploded' });
+  });
+
+  it('says why a turn failed', () => {
+    const { lines } = readCodex([
+      { type: 'turn.failed', error: { message: 'usage limit reached' } },
+    ]);
+    expect(lines.at(-1)).toMatchObject({ kind: 'status', text: 'Failed: usage limit reached' });
+  });
+});

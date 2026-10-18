@@ -189,7 +189,7 @@ describe('a fix to a branch its base moved past names the merge at both layers',
   it('reports the merge a commission made, and the one a publication folded the patch into', () => {
     const run = {
       runId: 'hr_1',
-      harness: { id: 'claude' },
+      harness: { id: 'claude', selectedBy: 'default' },
       continued: false,
       baseSha: 'a'.repeat(40),
       filesChanged: 1,
@@ -278,7 +278,7 @@ describe("a commission's diff travels by reference", () => {
   it('reports the whole diff by reference beside the inline copy, and says which to pass on', () => {
     const run = {
       runId: 'hr_1',
-      harness: { id: 'claude' },
+      harness: { id: 'claude', selectedBy: 'default' },
       continued: false,
       baseSha: 'abc',
       patchRef: ref,
