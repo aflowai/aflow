@@ -1,7 +1,7 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import { Row, Text } from '@aflow/design-system';
+import { Icon, Text } from '@aflow/design-system';
 
 /**
  * The row shape and the placement control shared by the capability and
@@ -40,6 +40,7 @@ export function formatToolTokens(tokens: number): string {
 export interface PlacementOption<T extends string> {
   value: T;
   label: string;
+  disabled?: boolean;
 }
 
 /**
@@ -57,6 +58,9 @@ export function SurfaceRow({
   showHint,
   control,
   controlId,
+  onToggle,
+  expanded,
+  annotation,
   children,
 }: {
   label: string;
@@ -76,50 +80,65 @@ export function SurfaceRow({
    * the control is a narrow chip at the far end.
    */
   controlId?: string;
+  onToggle?: () => void;
+  expanded?: boolean;
+  annotation?: string;
   children?: ReactNode;
 }) {
   return (
     <div
       style={{
-        padding: 'var(--space-1) 0',
+        padding: 'var(--space-2) 0',
         borderTop: '1px solid var(--color-border-subtle)',
         opacity: dimmed === true ? 0.6 : 1,
       }}
     >
-      <Row align="center" gap="2">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
-          {controlId !== undefined ? (
+          {onToggle ? (
+            <button
+              type="button"
+              aria-label={`Tools in ${label}`}
+              aria-expanded={expanded}
+              onClick={onToggle}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 'var(--space-1)',
+                padding: 0,
+                border: 0,
+                background: 'none',
+                color: 'inherit',
+                font: 'inherit',
+                textAlign: 'left',
+                cursor: 'pointer',
+                width: '100%',
+              }}
+            >
+              <Icon name={expanded ? 'caret-down' : 'caret-right'} size="xs" />
+              <Text as="span" size="sm" style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
+                {label}
+              </Text>
+            </button>
+          ) : controlId !== undefined ? (
             <label htmlFor={controlId} style={{ cursor: 'pointer' }}>
-              <Text size="sm">{label}</Text>
+              <Text as="span" size="sm" style={{ overflowWrap: 'anywhere' }}>
+                {label}
+              </Text>
             </label>
           ) : (
-            <Text size="sm">{label}</Text>
+            <Text as="span" size="sm" style={{ overflowWrap: 'anywhere' }}>
+              {label}
+            </Text>
           )}
+          <Text as="div" size="xs" variant="muted" style={{ fontVariantNumeric: 'tabular-nums' }}>
+            {toolCount} {toolCount === 1 ? 'tool' : 'tools'} · {tokenPrefix ?? ''}
+            {tokens < 1000 ? formatToolTokens(tokens) : formatTokens(tokens)} tok
+            {annotation ? ` · ${annotation}` : ''}
+          </Text>
         </div>
-        <Text
-          size="xs"
-          variant="muted"
-          style={{ fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}
-        >
-          {toolCount} {toolCount === 1 ? 'tool' : 'tools'}
-        </Text>
-        <Text
-          size="xs"
-          variant="muted"
-          style={{
-            fontVariantNumeric: 'tabular-nums',
-            whiteSpace: 'nowrap',
-            minWidth: '2.75rem',
-            textAlign: 'right',
-          }}
-        >
-          {tokenPrefix ?? ''}
-          {formatTokens(tokens)} tok
-        </Text>
-        <div style={{ minWidth: '7rem', display: 'flex', justifyContent: 'flex-end' }}>
-          {control}
-        </div>
-      </Row>
+        <div style={{ flexShrink: 0, display: 'flex', justifyContent: 'flex-end' }}>{control}</div>
+      </div>
       {/* Full width, under the row rather than inside the label column, so a
           long description wraps against the panel instead of a starved flex
           child. Hidden unless asked for. */}
@@ -144,6 +163,8 @@ export function PlacementSelect<T extends string>({
   options,
   ariaLabel,
   onChange,
+  disabled = false,
+  title,
 }: {
   /** Pair with the row's `controlId` so the row's name labels this control. */
   id?: string;
@@ -156,11 +177,15 @@ export function PlacementSelect<T extends string>({
    */
   ariaLabel: string;
   onChange: (value: T) => void;
+  disabled?: boolean;
+  title?: string;
 }) {
   return (
     <select
       {...(id !== undefined ? { id } : {})}
       aria-label={ariaLabel}
+      disabled={disabled}
+      title={title}
       value={value}
       onChange={(e) => {
         onChange(e.target.value as T);
@@ -172,94 +197,18 @@ export function PlacementSelect<T extends string>({
         background: 'var(--color-surface-raised)',
         border: '1px solid var(--color-border-default)',
         borderRadius: 'var(--radius-sm)',
-        padding: '2px 4px',
-        cursor: 'pointer',
-        width: 'auto',
-        minWidth: '7rem',
+        padding: '5px 6px',
+        cursor: disabled ? 'default' : 'pointer',
+        width: '9.5rem',
         maxWidth: '100%',
         flexShrink: 0,
       }}
     >
       {options.map((o) => (
-        <option key={o.value} value={o.value}>
+        <option key={o.value} value={o.value} disabled={o.disabled}>
           {o.label}
         </option>
       ))}
     </select>
-  );
-}
-
-/**
- * A collapsible tier. The count sits in the header so a collapsed section still
- * answers "how much is in here and what does it cost" without being opened.
- */
-export function SurfaceSection({
-  title,
-  count,
-  toolCount,
-  tokens,
-  open,
-  onToggle,
-  footnote,
-  children,
-}: {
-  title: string;
-  count: number;
-  toolCount: number;
-  tokens?: number;
-  open: boolean;
-  onToggle: () => void;
-  footnote?: string;
-  children: ReactNode;
-}) {
-  if (count === 0) return null;
-  return (
-    <div>
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={open}
-        style={{
-          background: 'none',
-          border: 0,
-          padding: 'var(--space-1) 0',
-          font: 'inherit',
-          color: 'inherit',
-          textAlign: 'left',
-          cursor: 'pointer',
-          display: 'block',
-          width: '100%',
-        }}
-      >
-        <Row align="center" gap="2">
-          <Text size="xs" variant="muted" style={{ width: '0.75rem' }}>
-            {open ? '▾' : '▸'}
-          </Text>
-          <Text
-            size="xs"
-            weight="semibold"
-            style={{ textTransform: 'uppercase', letterSpacing: '.06em', flex: 1 }}
-          >
-            {title}
-          </Text>
-          <Text
-            size="xs"
-            variant="muted"
-            style={{ fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}
-          >
-            {count} · {toolCount} {toolCount === 1 ? 'tool' : 'tools'}
-            {tokens !== undefined ? ` · ${formatTokens(tokens)} tok` : ''}
-          </Text>
-        </Row>
-      </button>
-      {/* Above the rows, not below: it says what this tier MEANS, which is
-          what the operator needs before reading the list rather than after. */}
-      {open && footnote !== undefined && (
-        <Text size="xs" variant="muted" style={{ display: 'block', padding: '0 0 var(--space-1)' }}>
-          {footnote}
-        </Text>
-      )}
-      {open && <div>{children}</div>}
-    </div>
   );
 }

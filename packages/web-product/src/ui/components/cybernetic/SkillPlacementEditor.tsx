@@ -5,6 +5,7 @@ import type { CapabilityPlacement, SkillDiscoveryEntry } from '@aflow/schemas';
 import { skillPlacement, skillAwarenessTokens, SKILL_AWARENESS_TOKEN_BUDGET } from '@aflow/schemas';
 import { useApiQuery } from '../../hooks/useApiQuery.js';
 import { PlacementSelect } from './surfaceRow.js';
+import { PlacementSection, placementLabels } from './PlacementSection.js';
 
 export function SkillPlacementEditor({
   spaceId,
@@ -30,17 +31,17 @@ export function SkillPlacementEditor({
     entries.filter((s) => skillPlacement(s.slug, placements) === 'always_on'),
   );
   return (
-    <Column gap="sm" style={{ marginTop: 'var(--space-3)' }}>
+    <Column gap="sm">
       <Text size="sm" weight="semibold">
-        Skills · {result.data?.total ?? '…'} installed
+        Skills · {result.data?.total ?? '…'} {query.trim() ? 'matching' : 'installed'}
       </Text>
       <Text size="xs" variant="muted">
-        New skills are on demand. Always on pins a compact activation summary. Off allows direct
-        operator invocation, schedules and declared dependencies, while excluding autonomous
-        Helmsman selection.
+        Always on loads an activation summary. On demand keeps skills searchable. Off hides skills
+        from Helmsman; direct invocation, schedules and dependencies still work.
       </Text>
       <Input
         type="search"
+        aria-label="Search installed skills"
         placeholder="Search installed skills…"
         value={query}
         onChange={(event) => {
@@ -50,41 +51,72 @@ export function SkillPlacementEditor({
       />
       {result.isError && <Text size="xs">Couldn’t load skills: {result.error.message}</Text>}
       {result.isLoading && <Text size="xs">Loading skills…</Text>}
-      {entries.map((entry) => (
-        <div key={entry.slug}>
-          <Row align="center" gap="2">
-            <Text size="sm" style={{ flex: 1 }}>
-              {entry.name}
-            </Text>
-            <PlacementSelect
-              ariaLabel={`${entry.name} skill placement`}
-              value={placements[entry.slug] ?? 'default'}
-              options={[
-                { value: 'default', label: 'Default · on demand' },
-                { value: 'always_on', label: 'Always on' },
-                { value: 'on_demand', label: 'On demand' },
-                { value: 'off', label: 'Off' },
-              ]}
-              onChange={(value) => {
-                onPlace(entry.slug, value === 'default' ? undefined : value);
-              }}
-            />
-          </Row>
-          <Text size="xs" variant="muted">
-            {entry.status} · ~{skillAwarenessTokens([entry])} summary tokens
-          </Text>
-          <details>
-            <summary>
-              <Text size="xs" variant="muted">
-                When to use
-              </Text>
-            </summary>
-            <Text size="xs" variant="muted">
-              {entry.description}
-            </Text>
-          </details>
-        </div>
-      ))}
+      {(['always_on', 'on_demand', 'off'] as const).map((state) => {
+        const grouped = entries.filter((entry) => skillPlacement(entry.slug, placements) === state);
+        return (
+          <PlacementSection
+            key={`${state}-${query}-${cursor ?? ''}`}
+            title={placementLabels[state]}
+            count={grouped.length}
+            countLabel="skills"
+            forceOpen={query.trim().length > 0}
+            description={
+              nextCursor || cursor
+                ? 'Skills on this results page.'
+                : 'Installed skills with this placement.'
+            }
+          >
+            {grouped.map((entry) => (
+              <div
+                key={entry.slug}
+                style={{
+                  padding: 'var(--space-2) 0',
+                  borderTop: '1px solid var(--color-border-subtle)',
+                }}
+              >
+                <Row align="center" gap="2">
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <Text as="div" size="sm" style={{ overflowWrap: 'anywhere' }}>
+                      {entry.name}
+                    </Text>
+                    <Text as="div" size="xs" variant="muted">
+                      {entry.status} · ~{skillAwarenessTokens([entry])} summary tok
+                    </Text>
+                  </div>
+                  <PlacementSelect
+                    ariaLabel={`${entry.name} skill placement`}
+                    value={placements[entry.slug] ?? 'default'}
+                    options={[
+                      { value: 'default', label: 'On demand · default' },
+                      { value: 'always_on', label: 'Always on' },
+                      { value: 'on_demand', label: 'On demand' },
+                      { value: 'off', label: 'Off' },
+                    ]}
+                    onChange={(value) => {
+                      onPlace(entry.slug, value === 'default' ? undefined : value);
+                    }}
+                  />
+                </Row>
+                <details>
+                  <summary>
+                    <Text as="span" size="xs" variant="muted">
+                      When to use
+                    </Text>
+                  </summary>
+                  <Text size="xs" variant="muted">
+                    {entry.description}
+                  </Text>
+                </details>
+              </div>
+            ))}
+          </PlacementSection>
+        );
+      })}
+      {!result.isLoading && !result.isError && !entries.length && (
+        <Text size="sm" variant="muted">
+          No matching skills.
+        </Text>
+      )}
       <Text size="xs" variant="muted">
         Pinned summaries on this page: ~{visiblePinnedTokens} tokens. Total budget:{' '}
         {SKILL_AWARENESS_TOKEN_BUDGET}; the server checks all pinned skills when saving.

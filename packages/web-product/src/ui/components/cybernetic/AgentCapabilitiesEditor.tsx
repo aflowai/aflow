@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useMemo, useRef, useState } from 'react';
-import { Column, Icon, Row, Text } from '@aflow/design-system';
+import { Column, Row, Text } from '@aflow/design-system';
 import {
   MAX_PINNED_TOOLS,
   MAX_CAPABILITY_SCHEMA_TOKENS,
@@ -51,6 +51,7 @@ export function AgentCapabilitiesEditor({
   // is a wall of prose in front of the controls, and the labels carry the
   // common case on their own.
   const [showHints, setShowHints] = useState(false);
+  const [view, setView] = useState<'tools' | 'skills' | 'connections'>('tools');
   const {
     bundles: offeredBundles,
     outputReadFloorTokens,
@@ -205,7 +206,7 @@ export function AgentCapabilitiesEditor({
   return (
     <>
       <Text size="xs" variant="muted">
-        Helmsman in this space · applies from the next turn across chats.
+        Helmsman · changes apply from the next turn.
       </Text>
       <Row
         align="center"
@@ -231,29 +232,71 @@ export function AgentCapabilitiesEditor({
           ~{formatTokens(totals.tokens)} / {formatTokens(MAX_CAPABILITY_SCHEMA_TOKENS)} schema tok
         </Text>
       </Row>
-      <Text size="xs" variant="muted">
-        A required output reader remains available when memory reads are off.
-      </Text>
-      <Row justify="end" style={{ marginBottom: 'var(--space-1)' }}>
-        <button
-          type="button"
-          onClick={() => {
-            setShowHints((v) => !v);
-          }}
-          aria-pressed={showHints}
-          style={{
-            background: 'none',
-            border: 0,
-            padding: 0,
-            font: 'inherit',
-            fontSize: 'var(--font-size-xs)',
-            color: 'var(--color-interactive-default)',
-            cursor: 'pointer',
-          }}
-        >
-          {showHints ? 'Hide descriptions' : 'Show descriptions'}
-        </button>
-      </Row>
+      <div
+        role="group"
+        aria-label="Capability type"
+        style={{
+          display: 'flex',
+          gap: 'var(--space-1)',
+          padding: 'var(--space-1)',
+          marginBottom: 'var(--space-3)',
+          borderRadius: 'var(--radius-md)',
+          background: 'var(--color-surface-sunken)',
+        }}
+      >
+        {(
+          [
+            ['tools', 'Tool groups'],
+            ['skills', 'Skills'],
+            ...(showConnections ? [['connections', 'Connections']] : []),
+          ] as Array<['tools' | 'skills' | 'connections', string]>
+        ).map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            aria-pressed={view === key}
+            onClick={() => {
+              setView(key);
+            }}
+            style={{
+              flex: 1,
+              padding: 'var(--space-2)',
+              border: 0,
+              borderRadius: 'var(--radius-sm)',
+              font: 'inherit',
+              fontSize: 'var(--font-size-sm)',
+              fontWeight: view === key ? 600 : 400,
+              color: 'inherit',
+              background: view === key ? 'var(--color-surface-raised)' : 'transparent',
+              cursor: 'pointer',
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      {view !== 'skills' && (
+        <Row justify="end" style={{ marginBottom: 'var(--space-1)' }}>
+          <button
+            type="button"
+            onClick={() => {
+              setShowHints((v) => !v);
+            }}
+            aria-pressed={showHints}
+            style={{
+              background: 'none',
+              border: 0,
+              padding: 0,
+              font: 'inherit',
+              fontSize: 'var(--font-size-xs)',
+              color: 'var(--color-interactive-default)',
+              cursor: 'pointer',
+            }}
+          >
+            {showHints ? 'Hide descriptions' : 'Show descriptions'}
+          </button>
+        </Row>
+      )}
       {totals.overCap && (
         <Text
           size="xs"
@@ -267,71 +310,74 @@ export function AgentCapabilitiesEditor({
           than {MAX_PINNED_TOOLS} pinned tools or {MAX_CAPABILITY_SCHEMA_TOKENS} schema tokens.
         </Text>
       )}
-      <Column gap="xs">
-        <Row align="center" gap="2">
-          <Icon name="squares-four" size="sm" />
-          <Text size="sm" weight="semibold">
-            Capabilities
-          </Text>
-        </Row>
-        {/* An unreadable catalog is "unknown", never "no capability" —
+      {view === 'tools' && (
+        <Column gap="xs">
+          {/* An unreadable catalog is "unknown", never "no capability" —
                 hiding the section on error is indistinguishable from an agent
                 that genuinely offers nothing, and gives the operator no sign
                 the control exists at all. */}
-        {bundlesUnavailable ? (
+          {bundlesUnavailable ? (
+            <Text size="xs" variant="muted">
+              Couldn’t load capabilities. Reopen this panel to retry.
+            </Text>
+          ) : bundlesLoading ? (
+            <Text size="xs" variant="muted">
+              Loading capabilities…
+            </Text>
+          ) : offeredBundles.length === 0 ? (
+            <Text size="xs" variant="muted">
+              This agent offers no adjustable capabilities.
+            </Text>
+          ) : (
+            <CapabilityBundleEditor
+              bundles={offeredBundles}
+              placements={
+                (loaded.capabilityDiscovery.bundlePlacements ?? {}) as Record<
+                  string,
+                  BundlePlacement
+                >
+              }
+              showHints={showHints}
+              operationPlacements={directives.capabilityDiscovery.operationPlacements ?? {}}
+              onOperationPlace={(id, placement) => {
+                edit((d) => {
+                  const next = { ...d.capabilityDiscovery.operationPlacements };
+                  const bundle = offeredBundles.find((entry) =>
+                    entry.operations.some((op) => op.operationId === id),
+                  );
+                  const groups = { ...d.capabilityDiscovery.bundlePlacements };
+                  if (
+                    bundle &&
+                    groups[bundle.id] === 'off' &&
+                    placement !== undefined &&
+                    placement !== 'off'
+                  ) {
+                    for (const op of bundle.operations) next[op.operationId] = 'off';
+                    groups[bundle.id] = 'on_demand';
+                  }
+                  if (placement === undefined) delete next[id];
+                  else next[id] = placement;
+                  return {
+                    ...d,
+                    capabilityDiscovery: {
+                      ...d.capabilityDiscovery,
+                      bundlePlacements: groups,
+                      operationPlacements: next,
+                    },
+                  };
+                });
+              }}
+              onPlace={onBundlePlace}
+            />
+          )}
           <Text size="xs" variant="muted">
-            Couldn’t load capabilities. Reopen this panel to retry.
+            Required groups stay on. A minimal output reader also stays available. Row costs show
+            the full group; only loaded tools use the budget.
           </Text>
-        ) : bundlesLoading ? (
-          <Text size="xs" variant="muted">
-            Loading capabilities…
-          </Text>
-        ) : offeredBundles.length === 0 ? (
-          <Text size="xs" variant="muted">
-            This agent offers no adjustable capabilities.
-          </Text>
-        ) : (
-          <CapabilityBundleEditor
-            bundles={offeredBundles}
-            placements={
-              (loaded.capabilityDiscovery.bundlePlacements ?? {}) as Record<string, BundlePlacement>
-            }
-            showHints={showHints}
-            operationPlacements={directives.capabilityDiscovery.operationPlacements ?? {}}
-            onOperationPlace={(id, placement) => {
-              edit((d) => {
-                const next = { ...d.capabilityDiscovery.operationPlacements };
-                const bundle = offeredBundles.find((entry) =>
-                  entry.operations.some((op) => op.operationId === id),
-                );
-                const groups = { ...d.capabilityDiscovery.bundlePlacements };
-                if (
-                  bundle &&
-                  groups[bundle.id] === 'off' &&
-                  placement !== undefined &&
-                  placement !== 'off'
-                ) {
-                  for (const op of bundle.operations) next[op.operationId] = 'off';
-                  groups[bundle.id] = 'on_demand';
-                }
-                if (placement === undefined) delete next[id];
-                else next[id] = placement;
-                return {
-                  ...d,
-                  capabilityDiscovery: {
-                    ...d.capabilityDiscovery,
-                    bundlePlacements: groups,
-                    operationPlacements: next,
-                  },
-                };
-              });
-            }}
-            onPlace={onBundlePlace}
-          />
-        )}
-      </Column>
+        </Column>
+      )}
 
-      {showConnections && (
+      {view === 'connections' && showConnections && (
         <Column
           gap="xs"
           style={{
@@ -340,12 +386,6 @@ export function AgentCapabilitiesEditor({
             borderTop: '1px solid var(--color-border-subtle)',
           }}
         >
-          <Row align="center" gap="2">
-            <Icon name="plugs-connected" size="sm" />
-            <Text size="sm" weight="semibold">
-              Connections
-            </Text>
-          </Row>
           {connectionsUnavailable ? (
             <Text size="xs" variant="muted">
               Couldn’t load connections. Reopen this panel to retry.
@@ -371,21 +411,23 @@ export function AgentCapabilitiesEditor({
           )}
         </Column>
       )}
-      <SkillPlacementEditor
-        spaceId={spaceId}
-        placements={directives.capabilityDiscovery.skillPlacements ?? {}}
-        onPlace={(slug, placement) => {
-          edit((d) => {
-            const next = { ...d.capabilityDiscovery.skillPlacements };
-            if (placement === undefined) delete next[slug];
-            else next[slug] = placement;
-            return {
-              ...d,
-              capabilityDiscovery: { ...d.capabilityDiscovery, skillPlacements: next },
-            };
-          });
-        }}
-      />
+      {view === 'skills' && (
+        <SkillPlacementEditor
+          spaceId={spaceId}
+          placements={directives.capabilityDiscovery.skillPlacements ?? {}}
+          onPlace={(slug, placement) => {
+            edit((d) => {
+              const next = { ...d.capabilityDiscovery.skillPlacements };
+              if (placement === undefined) delete next[slug];
+              else next[slug] = placement;
+              return {
+                ...d,
+                capabilityDiscovery: { ...d.capabilityDiscovery, skillPlacements: next },
+              };
+            });
+          }}
+        />
+      )}
     </>
   );
 }

@@ -23,6 +23,7 @@ export function AgentToolSettings({
       icon="plugs-connected"
       title="Tools, skills & integrations"
       controller={controller}
+      width={460}
     >
       {(directives) => (
         <AgentCapabilitiesEditor

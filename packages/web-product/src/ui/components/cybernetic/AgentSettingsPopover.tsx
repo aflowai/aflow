@@ -40,6 +40,7 @@ export function AgentSettingsPopover({
   icon,
   title,
   controller,
+  width = PANEL_WIDTH,
   children,
 }: {
   open: boolean;
@@ -48,6 +49,7 @@ export function AgentSettingsPopover({
   icon: IconName;
   title: string;
   controller: AgentDirectivesController;
+  width?: number;
   children: (directives: EntityDirectives) => ReactNode;
 }) {
   const { activeSpace } = useSpace();
@@ -62,7 +64,8 @@ export function AgentSettingsPopover({
       open={open}
       onOpenChange={onOpenChange}
       placement="top-start"
-      width={PANEL_WIDTH}
+      width={width}
+      panelStyle={{ maxWidth: 'calc(100vw - 24px)' }}
       aria-label={title}
       trigger={({ ref, open: isOpen, toggle }) =>
         variant === 'menu-item' ? (
