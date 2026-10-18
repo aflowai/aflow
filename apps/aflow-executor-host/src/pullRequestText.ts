@@ -10,6 +10,7 @@
  */
 import {
   type AfterReview,
+  type AfterReviewOverrideRecord,
   HOST_COMMIT_RANGE_PATTERN,
   type HostCommitDescribeCommit,
   type HostCommitDescribeInput,
@@ -117,18 +118,30 @@ function findingLine(finding: PullRequestFinding): string {
 
 const AFTER_REVIEW_LINES: Record<AfterReview, string> = {
   fix_before_merge:
-    "Decided after the review: `fix_before_merge` — this review's findings are to be fixed on this branch before it merges.",
+    "Decided after the review: `fix_before_merge` — this review's findings are to be fixed on this branch before it merges, so this publication pushed nothing.",
   publish_as_is:
-    "Decided after the review: `publish_as_is` — this review's findings can merge as they stand.",
+    "Decided after the review: `publish_as_is` — this review's findings can merge as they stand, so the push went without asking, and leaves these open:",
   undecided:
-    "Decided after the review: `undecided` — no answer cleared the decision's bar, so this review's findings are the reader's to weigh.",
+    "Decided after the review: `undecided` — no answer cleared the decision's bar, so the push waited for the operator, and this review's findings are the reader's to weigh.",
 };
+
+const OVERRIDE_BY: Record<AfterReviewOverrideRecord['by'], string> = {
+  operator: "the operator's word",
+  hands_off_label: 'the `hands-off` label',
+  shepherd_rule: "a rule of the shepherd's",
+};
+
+function overrideLine(override: AfterReviewOverrideRecord): string {
+  return `The decision was \`${override.overrode}\`, set aside by ${OVERRIDE_BY[override.by]}: ${override.reason}`;
+}
 
 /**
  * The earlier rounds' findings are listed, closed and left open, since no
- * text of this round names them. This round's review is told by its summary
- * alone, which names every finding it read with its severity and `file:line`
- * beside the checks it ran — listing those findings again would say each twice.
+ * text of this round names them. This round's review is told by its summary,
+ * which names every finding it read with its severity and `file:line` beside
+ * the checks it ran. Only a `publish_as_is` lists them again, whole: those
+ * are the findings the merge leaves open, and the pull request is where a
+ * reader finds what was let through without a person asked.
  */
 function reviewSection(input: HostCommitDescribeInput, record: PullRequestReviewRecord): string {
   const findings = input.findings ?? [];
@@ -152,6 +165,15 @@ function reviewSection(input: HostCommitDescribeInput, record: PullRequestReview
     if (review.reviewSummary) parts.push(review.reviewSummary);
   }
   if (record.afterReview !== undefined) parts.push(AFTER_REVIEW_LINES[record.afterReview]);
+  if (record.afterReview === 'publish_as_is') {
+    const leftOpen = (review?.findings ?? []).map((finding) =>
+      findingLine({ ...finding, state: 'open' }),
+    );
+    parts.push(leftOpen.join('\n'));
+  }
+  if (record.afterReviewOverride !== undefined) {
+    parts.push(overrideLine(record.afterReviewOverride));
+  }
   return parts.join(SECTION_BREAK);
 }
 

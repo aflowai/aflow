@@ -244,6 +244,19 @@ describe('host.commit.describe', () => {
     ]);
     expect(output.afterReview).toBe('publish_as_is');
     expect(output.findingsLeftOut).toBeUndefined();
+    expect(output.afterReviewOverride).toBeUndefined();
+
+    const override = { by: 'hands_off_label', reason: 'A person labelled it hands-off.' } as const;
+    const overridden = await describeRange({
+      range: `${start}..${head}`,
+      review: { verdict: 'comment', outcome: 'completed', findings: [finding] },
+      afterReview: 'fix_before_merge',
+      override,
+    });
+    expect(HostCommitDescribeOutputSchema.parse(overridden.captured.output)).toMatchObject({
+      afterReview: 'publish_as_is',
+      afterReviewOverride: { ...override, overrode: 'fix_before_merge' },
+    });
   });
 
   it('says how many findings the bounded hand-on left out, where it left any', async () => {
@@ -379,7 +392,7 @@ describe('composePullRequest', () => {
     expect(next.findings).toHaveLength(1);
   });
 
-  it("says each finding once: the earlier rounds' listed, this review's in its own summary", () => {
+  it("says each finding once where nothing merges past it: the earlier rounds' listed, this review's in its own summary", () => {
     const summary = 'One major: src/cache.ts:40 — the cache is never invalidated after a write.';
     const { body } = composePullRequest(
       HostCommitDescribeInputSchema.parse({
@@ -430,6 +443,40 @@ describe('composePullRequest', () => {
       expect(composed.afterReview, String(answer)).toBe(recorded);
       expect(composed.body, String(answer)).toContain(`Decided after the review: \`${recorded}\``);
     }
+  });
+
+  it('lists, whole, the findings a publish_as_is leaves open — and lists them for no other answer', () => {
+    const listed = '- **major** `src/cache.ts:40` — The cache is never invalidated after a write.';
+    const asIs = composePullRequest(reviewed('publish_as_is'), commits).body;
+    expect(asIs).toContain('the push went without asking, and leaves these open:');
+    expect(asIs).toContain(listed);
+    expect(asIs).not.toContain(REVIEW_FINDING.evidence);
+    for (const answer of ['fix_before_merge', null] as const) {
+      expect(composePullRequest(reviewed(answer), commits).body, String(answer)).not.toContain(
+        listed,
+      );
+    }
+  });
+
+  it('records an override as publish_as_is, with whose act it was, its reason and the decision it set aside', () => {
+    const reason = 'The operator said to merge it and fix the cache in the next slice.';
+    const composed = composePullRequest(
+      HostCommitDescribeInputSchema.parse({
+        ...reviewed('fix_before_merge'),
+        override: { by: 'operator', reason },
+      }),
+      commits,
+    );
+    expect(composed.afterReview).toBe('publish_as_is');
+    expect(composed.afterReviewOverride).toEqual({
+      by: 'operator',
+      reason,
+      overrode: 'fix_before_merge',
+    });
+    expect(composed.body).toContain(
+      `The decision was \`fix_before_merge\`, set aside by the operator's word: ${reason}`,
+    );
+    expect(composed.body).toContain('- **major** `src/cache.ts:40`');
   });
 
   it('records no decision where the review returned no findings, since none was asked', () => {

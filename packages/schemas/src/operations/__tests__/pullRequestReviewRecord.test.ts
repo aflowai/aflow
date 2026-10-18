@@ -144,3 +144,63 @@ describe('the findings a publication hands on', () => {
     expect(bytes(cut)).toBeLessThanOrEqual(HANDED_ON_FINDING_MAX_BYTES);
   });
 });
+
+/**
+ * Contract: a decision on the review's findings is set aside only by an
+ * explicit override naming whose act it is and why, and the record keeps the
+ * decision it set aside — never a silent change of answer.
+ */
+describe('an override of the decision on the findings', () => {
+  const REVIEW = {
+    verdict: 'request_changes',
+    outcome: 'completed',
+    findings: [{ severity: 'major', file: 'src/a.ts', claim: 'Leaks.', evidence: 'x' }],
+  };
+  const OVERRIDE = {
+    by: 'shepherd_rule',
+    reason: 'The attempt budget of this pull request is reached.',
+  } as const;
+
+  for (const [decided, afterReview] of [
+    ['fix_before_merge', 'fix_before_merge'],
+    ['undecided', null],
+  ] as const) {
+    it(`turns ${decided} into publish_as_is, recording who, why and what it set aside`, () => {
+      expect(recordOf({ review: REVIEW, afterReview, override: OVERRIDE })).toMatchObject({
+        afterReview: 'publish_as_is',
+        afterReviewOverride: { ...OVERRIDE, overrode: decided },
+      });
+    });
+  }
+
+  it('sets nothing aside over publish_as_is, or where no decision was made', () => {
+    const asIs = recordOf({ review: REVIEW, afterReview: 'publish_as_is', override: OVERRIDE });
+    expect(asIs.afterReview).toBe('publish_as_is');
+    expect(asIs.afterReviewOverride).toBeUndefined();
+    const nothingFound = recordOf({ review: { ...REVIEW, findings: [] }, override: OVERRIDE });
+    expect(nothingFound.afterReview).toBeUndefined();
+    expect(nothingFound.afterReviewOverride).toBeUndefined();
+  });
+
+  it('is refused without a named authority and a reason', () => {
+    for (const override of [
+      { reason: 'Because.' },
+      { by: 'operator' },
+      { by: 'anyone', reason: 'x' },
+    ]) {
+      expect(
+        HostCommitDescribeInputSchema.safeParse({ bindingId: 'hb_app', range: RANGE, override })
+          .success,
+      ).toBe(false);
+    }
+  });
+
+  it('stands with the decision where none is given', () => {
+    expect(recordOf({ review: REVIEW, afterReview: 'fix_before_merge' })).toMatchObject({
+      afterReview: 'fix_before_merge',
+    });
+    expect(
+      recordOf({ review: REVIEW, afterReview: 'fix_before_merge' }).afterReviewOverride,
+    ).toBeUndefined();
+  });
+});

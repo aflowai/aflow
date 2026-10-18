@@ -87,12 +87,16 @@ meanwhile is refused with its current state rather than overwritten, and a node 
    `title` or `summary` is passed only to say it in the operator's own words.
    For a branch that already has a pull request, name its number for the 422.
 2. **Read the review**: `workflow.run.detail` on the child review run gives the verdict and
-   every finding with file and line. `approve` means the publication pushed on its own;
-   anything else leaves it paused at `approve-push`, as before. Whether the findings want a
-   fix round the publication decides and records, and never acts on (Plan 315 D22):
-   `decide-after-review` chooses between `fix_before_merge` and `publish_as_is` over every
-   finding, and the run's `afterReview` and its pull request record the answer — `undecided`
-   where none cleared the bar. The fix round is the conversation's: on `fix_before_merge`,
+   every finding with file and line. Whether the findings want a fix round the publication
+   decides, records, and gates its push on (Plan 315 D22): `decide-after-review` chooses
+   between `fix_before_merge` and `publish_as_is` over every finding, the run's
+   `afterReview` and its pull request record the answer, and `decide-push` follows it —
+   `fix_before_merge` pushes nothing and completes the run, `publish_as_is` pushes on its
+   own, and `undecided`, where none cleared the bar, is the one answer that pauses at
+   `approve-push`. A review with no findings pushes on its own on `approve` and pauses
+   otherwise. Follow the decision; set it aside only on the operator's word or the
+   `hands-off` label, passing `override` with that reason to the next publication. The fix
+   round is the conversation's: on `fix_before_merge`,
    once the publication has ended, commission the fix on the branch (`base: <branch>`),
    briefed from every finding of the review run the publication names as `reviewRunId`,
    whole, with its evidence. Then publish the branch again, passing the run's `findings`,

@@ -1,12 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import {
   computeReadyTasksWithWhen,
+  decideByRules,
   computeRejectedApprovalSkipSet,
   materializeAndValidateSkillConfig,
   projectTaskOutput,
   resolvePromotedRunMetrics,
 } from '@aflow/cybernetic-runtime';
 import {
+  AfterReviewOverrideSchema,
   HOST_CHECKS_TIMEOUT_DEFAULT_MS,
   HOST_HARNESS_CONCURRENCY_DEFAULT,
   HOST_KEEP_AWAKE_DEFAULT,
@@ -21,6 +23,7 @@ import {
   HostCommitScanOutputSchema,
   type HostPushApproval,
   type WorkflowTask,
+  WorkflowRunDecideInputSchema,
   WorkflowRunStartInputSchema,
   WorkflowRunWakeupEnvelopeSchema,
   HostCommitDescribeInputSchema,
@@ -40,6 +43,7 @@ import {
   toJsonSchemaSync,
 } from '@aflow/schemas';
 import { PUBLISH_LOCAL_CHANGES } from './publishLocalChanges.js';
+import { PUSH_GATE_OTHERWISE, PUSH_GATE_RULES } from './publishLocalChangesGate.js';
 import {
   AFTER_REVIEW_QUESTION,
   AFTER_REVIEW_ROUTES,
@@ -143,7 +147,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(validity.status).toBe('valid');
   });
 
-  it('is fifteen tasks — commit, check, the stop on a failed check, scan, what decides the approval, the review and the decision recorded on its findings, the pull request composed, approve, push, and the pull request found, rewritten or opened', () => {
+  it('is sixteen tasks — commit, check, the stop on a failed check, scan, what decides the approval, the review and the decision on its findings, the pull request composed, the push gate, approve, push, and the pull request found, rewritten or opened', () => {
     expect(wf.tasks.map((t) => t.taskId)).toEqual([
       'commit',
       'check-commit',
@@ -155,6 +159,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       'review-commit',
       'decide-after-review',
       'describe-pr',
+      'decide-push',
       'approve-push',
       'push',
       'find-pr',
@@ -182,9 +187,23 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
         'review-commit',
         'decide-after-review',
       ],
-      'approve-push': ['read-repository', 'scan-commit', 'review-commit'],
-      push: ['approve-push', 'scan-commit', 'check-commit', 'recheck-commit', 'describe-pr'],
-      'find-pr': ['push'],
+      'decide-push': [
+        'read-repository',
+        'scan-commit',
+        'read-push-approval',
+        'review-commit',
+        'describe-pr',
+      ],
+      'approve-push': ['read-repository', 'scan-commit', 'decide-push'],
+      push: [
+        'approve-push',
+        'decide-push',
+        'scan-commit',
+        'check-commit',
+        'recheck-commit',
+        'describe-pr',
+      ],
+      'find-pr': ['push', 'decide-push'],
       'update-pr': ['find-pr', 'describe-pr'],
       'open-pr': ['find-pr', 'describe-pr'],
     });
@@ -199,6 +218,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       'review-commit': 'workflow.run.start',
       'decide-after-review': 'ai.decision.decide',
       'describe-pr': 'host.commit.describe',
+      'decide-push': 'workflow.run.decide',
       'approve-push': undefined,
       push: 'host.process.exec',
       'find-pr': 'api.http.call',
@@ -593,11 +613,17 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     const findPr = taskOrThrow('find-pr');
     const openPr = taskOrThrow('open-pr');
     expect(findPr.when).toEqual({
-      expression: 'tasks.push.output.exitCode == 0',
+      allOf: [
+        'tasks.push.output.exitCode == 0',
+        "tasks.decide-push.output.decision != 'keep_local'",
+      ],
       onMissingRef: 'skip',
     });
     expect(openPr.when).toEqual({
-      expression: 'tasks.find-pr.output.prNumber == null',
+      allOf: [
+        'tasks.find-pr.output.prNumber == null',
+        "tasks.decide-push.output.decision != 'keep_local'",
+      ],
       onMissingRef: 'skip',
     });
     expect(openPr.inputTemplate).toEqual({
@@ -1123,6 +1149,9 @@ function rawOutput(
     }
     case 'describe-pr':
       return scenario.describeRefused === true ? {} : describedPullRequest(input);
+    // The rules the gate is handed, decided as the orchestrator decides them.
+    case 'decide-push':
+      return { ...decideByRules(WorkflowRunDecideInputSchema.parse(input)) };
     case 'update-pr': {
       const { pull_number: number } = input['params'] as { pull_number?: unknown };
       return {
@@ -1408,13 +1437,9 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
     expect(approved).toMatchObject({ asked: false, pushed: true });
     expect(approved.ran).not.toContain('approve-push');
 
+    // The approval asks exactly where the gate decided to ask.
     expect(taskOrThrow('approve-push').when).toEqual({
-      anyOf: [
-        "tasks.read-push-approval.output.branchPolicy.pushApproval == 'always'",
-        "tasks.review-commit.output.verdict != 'approve'",
-        "tasks.review-commit.status == 'failed'",
-        'tasks.scan-commit.output.clean == false',
-      ],
+      expression: "tasks.decide-push.output.decision == 'ask'",
       onMissingRef: 'skip',
     });
     // Every verdict the review can return either clears the push or asks.
@@ -1637,12 +1662,18 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
     expect(lines).toContain(
       "- `always`: the folder's push approval asks before every push, and no review ran.",
     );
-    const reviewed = lines.find((line) => line.startsWith('- `unless-unreviewed`:'));
+    const reviewed = lines.find((line) => line.startsWith('- `unless-unreviewed`, no findings:'));
     expect(reviewed).toContain(
       "this run's Local Code Review of `pushRange` did not return `approve`",
     );
     expect(reviewed).toContain('its verdict is on the "Review the commit" task');
     expect(taskOrThrow('review-commit').name).toBe('Review the commit');
+    // The one decision that asks names where its answer is.
+    const undecided = lines.find((line) =>
+      line.startsWith('- `unless-unreviewed`, the findings undecided:'),
+    );
+    expect(undecided).toContain(`"${taskOrThrow('decide-after-review').name}" task`);
+    expect(undecided).toContain('Approving publishes them as they stand.');
   });
 
   it('names the three postures and the default in its description, and why it is the default', () => {
@@ -1827,12 +1858,11 @@ describe('Publish Local Changes — the commit is scanned for secrets before any
       expression: 'tasks.scan-commit.output.clean == true',
       onMissingRef: 'skip',
     });
-    // Each line but the first can hold only where the approval did not ask.
+    // The second line holds only where the approval did not ask: it asks on `ask` alone.
     expect(taskOrThrow('push').when).toEqual({
       anyOf: [
         "tasks.approve-push.output.decision == 'approved'",
-        "tasks.read-push-approval.output.branchPolicy.pushApproval == 'never'",
-        "tasks.review-commit.output.verdict == 'approve'",
+        "tasks.decide-push.output.decision == 'push'",
       ],
       onMissingRef: 'skip',
     });
@@ -2042,6 +2072,7 @@ describe('Publish Local Changes — a branch is published as it stands', () => {
       'read-push-approval',
       'review-commit',
       'describe-pr',
+      'decide-push',
       'push',
       'find-pr',
       'open-pr',
@@ -2311,7 +2342,6 @@ describe("Publish Local Changes — the folder's checks run before anything leav
     expect(PUBLISH_LOCAL_CHANGES.description).toContain(
       'any other failure stops the run with the end of what they printed.',
     );
-    expect(PUBLISH_LOCAL_CHANGES.description).toContain('No decision clears or holds a push.');
     expect(PUBLISH_LOCAL_CHANGES.description).toContain('the push needs their passing receipt.');
     expect(PUBLISH_LOCAL_CHANGES.description).toContain('A folder that declares none runs none.');
     expect(PUBLISH_LOCAL_CHANGES.description).toContain(
@@ -2498,6 +2528,9 @@ describe('Publish Local Changes — the pull request describes the branch as a w
       findings: [],
       findingsLeftOut: null,
       afterReview: null,
+      afterReviewOverride: null,
+      pushDecision: 'push',
+      pushReason: "The folder's push approval is `never`, over a range the scan cleared.",
     });
 
     const titled = publish({
@@ -2698,7 +2731,7 @@ describe('Publish Local Changes — no publication starts a publication', () => 
 
 // ── What the run decides about a review's findings, recorded and never acted on
 
-describe("Publish Local Changes — the decision on a review's findings is recorded, never acted on", () => {
+describe("Publish Local Changes — the push gate follows the decision on a review's findings", () => {
   const LEAK: Finding = {
     severity: 'major',
     file: 'src/cache.ts',
@@ -2787,32 +2820,174 @@ describe("Publish Local Changes — the decision on a review's findings is recor
     });
   }
 
-  it('acts on no answer: every answer runs the same tasks, pushes the same way and opens the same pull request', () => {
-    const runs = ANSWERS.map(([, answer]) => reviewedWith({ afterReview: answer }));
-    const [first, ...rest] = runs;
-    for (const outcome of rest) {
-      expect(outcome.ran).toEqual(first?.ran);
-      expect(outcome.asked).toBe(first?.asked);
-      expect(outcome.pushed).toBe(first?.pushed);
-      expect(outcome.state['prUrl']).toBe(first?.state['prUrl']);
+  const AS_IS = { value: 'publish_as_is', confidence: 0.95 } as const;
+  const BELOW_BAR = {
+    value: 'publish_as_is',
+    confidence: AFTER_REVIEW_QUESTION.minConfidence - 0.01,
+  } as const;
+  const PR_TASKS = ['find-pr', 'update-pr', 'open-pr'];
+
+  /** A run that ended completed: nothing failed, and every task ran or was skipped. */
+  function endedCompleted(outcome: Outcome): void {
+    const failed = [...outcome.statuses].filter(([, status]) => status === 'failed');
+    expect(failed.filter(([taskId]) => taskId !== 'decide-after-review')).toEqual([]);
+    expect(
+      outcome.ran.length + [...outcome.statuses.values()].filter((s) => s === 'skipped').length,
+    ).toBe(wf.tasks.length);
+  }
+
+  // Whatever the verdict: an approving review with findings is followed by the
+  // decision on them as a request for changes is.
+  for (const review of ['request_changes', 'comment', 'approve'] as const) {
+    it(`${review} with findings, fix_before_merge: asks nothing, pushes nothing, opens no pull request, and ends completed with the decision and findings recorded`, () => {
+      const outcome = reviewedWith({ review, afterReview: FIX });
+      expect(outcome.asked).toBe(false);
+      expect(outcome.pushed).toBe(false);
+      expect(outcome.ran).not.toContain('approve-push');
+      expect(outcome.ran).not.toContain('push');
+      for (const taskId of PR_TASKS) expect(outcome.ran).not.toContain(taskId);
+      endedCompleted(outcome);
+      expect(outcome.state).toMatchObject({
+        afterReview: 'fix_before_merge',
+        pushDecision: 'keep_local',
+        reviewRunId: 'review-run',
+      });
+      expect(outcome.state['pushReason']).toContain('`fix_before_merge`');
+      expect(outcome.state['findings']).toHaveLength(FINDINGS.length);
+      expect(outcome.state['prUrl']).toBeUndefined();
+    });
+
+    it(`${review} with findings, publish_as_is: pushes without asking, and the pull request is composed with the findings it leaves open`, () => {
+      const outcome = reviewedWith({ review, afterReview: AS_IS });
+      expect(outcome.asked).toBe(false);
+      expect(outcome.pushed).toBe(true);
+      expect(outcome.state).toMatchObject({
+        afterReview: 'publish_as_is',
+        pushDecision: 'push',
+        prUrl: 'https://github.com/aflowai/aflow/pull/7',
+      });
+      // The composition is handed every finding of the review and the decision to list them as open.
+      const described = HostCommitDescribeInputSchema.parse(outcome.inputs.get('describe-pr'));
+      expect(described.afterReview).toBe('publish_as_is');
+      expect(described.review?.findings?.map((f) => f.claim)).toEqual(FINDINGS.map((f) => f.claim));
+      const opened = outcome.inputs.get('open-pr') as { params: { body: { body: unknown } } };
+      expect(opened.params.body.body).toBe(outcome.outputs.get('describe-pr')?.['body']);
+    });
+
+    for (const [label, answer] of [
+      ['an answer below the bar', BELOW_BAR],
+      ['no decision at all', 'unavailable'],
+      ['a refusal of the question', 'refused'],
+    ] as const) {
+      it(`${review} with findings, undecided by ${label}: pauses for the operator, whose answer decides`, () => {
+        const approved = reviewedWith({ review, afterReview: answer });
+        expect(approved).toMatchObject({ asked: true, pushed: true });
+        expect(approved.state).toMatchObject({ afterReview: 'undecided', pushDecision: 'ask' });
+        const declined = reviewedWith({ review, afterReview: answer, decision: 'declined' });
+        expect(declined).toMatchObject({ asked: true, pushed: false });
+      });
     }
-    // And the same as a review with no findings at all, where nothing is decided.
-    const undecided = reviewedWith({ findings: [] });
-    expect(undecided.ran).toEqual(first?.ran.filter((id) => id !== 'decide-after-review'));
-    expect(undecided.pushed).toBe(first?.pushed);
+  }
+
+  it('pauses only on undecided: of every answer under `unless-unreviewed` over a cleared range, no other asks', () => {
+    for (const [label, answer, recorded] of ANSWERS) {
+      expect(reviewedWith({ afterReview: answer }).asked, label).toBe(recorded === 'undecided');
+    }
   });
 
-  it('is read by the pull request’s composition alone, and by no predicate', () => {
-    const readers = wf.tasks.filter((task) =>
-      JSON.stringify([task.when, task.inputBindings, task.actionPreview]).includes(
-        'decide-after-review',
-      ),
-    );
-    expect(readers.map((task) => task.taskId)).toEqual(['describe-pr']);
-    expect(JSON.stringify(taskOrThrow('describe-pr').when)).not.toContain('decide-after-review');
-    expect(wf.tasks.some((task) => JSON.stringify(task.when ?? null).includes('afterReview'))).toBe(
-      false,
-    );
+  for (const answer of [FIX, AS_IS, BELOW_BAR] as const) {
+    it(`posture always asks whatever the decision would be (${answer.value} at ${String(answer.confidence)}), and runs no review to decide on`, () => {
+      const outcome = reviewedWith({ pushApproval: 'always', afterReview: answer });
+      expect(outcome.asked).toBe(true);
+      expect(outcome.ran).not.toContain('review-commit');
+      expect(outcome.state['pushDecision']).toBe('ask');
+    });
+
+    for (const scan of ['unscanned', 'allowed'] as const) {
+      it(`an unclean scan (${scan}) asks whatever the decision would be (${answer.value} at ${String(answer.confidence)})`, () => {
+        for (const pushApproval of ['never', 'unless-unreviewed'] as const) {
+          const outcome = reviewedWith({ pushApproval, scan, afterReview: answer });
+          expect(outcome.asked, pushApproval).toBe(true);
+          expect(outcome.ran, pushApproval).not.toContain('review-commit');
+          expect(outcome.state['pushDecision'], pushApproval).toBe('ask');
+        }
+      });
+    }
+  }
+
+  describe('an override of the decision', () => {
+    const OVERRIDE = {
+      by: 'shepherd_rule',
+      reason: 'The shepherd reached this pull request’s attempt budget.',
+    } as const;
+
+    for (const [label, answer, overrode] of [
+      ['fix_before_merge', FIX, 'fix_before_merge'],
+      ['undecided', BELOW_BAR, 'undecided'],
+    ] as const) {
+      it(`over ${label}: is recorded as publish_as_is with whose act it was, its named reason and what it set aside — and pushes without asking`, () => {
+        const outcome = reviewedWith({
+          afterReview: answer,
+          inputs: { owner: 'aflowai', repo: 'aflow', override: OVERRIDE },
+        });
+        expect(outcome.asked).toBe(false);
+        expect(outcome.pushed).toBe(true);
+        expect(outcome.state).toMatchObject({
+          afterReview: 'publish_as_is',
+          afterReviewOverride: { ...OVERRIDE, overrode },
+          pushDecision: 'push',
+        });
+      });
+    }
+
+    it('records nothing where the decision already was publish_as_is, and leaves a decision without one standing', () => {
+      const asIs = reviewedWith({
+        afterReview: AS_IS,
+        inputs: { owner: 'aflowai', repo: 'aflow', override: OVERRIDE },
+      });
+      expect(asIs.state['afterReviewOverride']).toBeNull();
+      expect(reviewedWith({ afterReview: FIX }).state['afterReviewOverride']).toBeNull();
+    });
+
+    it('never stands in for an `always` folder or an unclean scan', () => {
+      const inputs = { owner: 'aflowai', repo: 'aflow', override: OVERRIDE };
+      expect(reviewedWith({ pushApproval: 'always', afterReview: FIX, inputs }).asked).toBe(true);
+      expect(reviewedWith({ scan: 'allowed', afterReview: FIX, inputs }).asked).toBe(true);
+    });
+
+    it('is taken only as the schema the composition reads it with — whose act, and a reason', () => {
+      expect(runInputOrThrow('override').schema).toEqual({
+        ...toJsonSchemaSync(AfterReviewOverrideSchema),
+      });
+      expect(runInputOrThrow('override').required).toBe(false);
+    });
+  });
+
+  it('reads the decision as the composition records it — an override included — and every task that leaves the machine reads the gate', () => {
+    expect(taskOrThrow('decide-push').inputBindings?.['afterReview']).toEqual({
+      kind: 'task_output',
+      taskId: 'describe-pr',
+      path: 'afterReview',
+    });
+    expect(taskOrThrow('push').when).toEqual({
+      anyOf: [
+        "tasks.approve-push.output.decision == 'approved'",
+        "tasks.decide-push.output.decision == 'push'",
+      ],
+      onMissingRef: 'skip',
+    });
+    for (const taskId of PR_TASKS) {
+      expect(JSON.stringify(taskOrThrow(taskId).when), taskId).toContain(
+        "tasks.decide-push.output.decision != 'keep_local'",
+      );
+    }
+    // The scan and the posture are read before the decision, so no decision passes them.
+    const order = PUSH_GATE_RULES.map((rule) => JSON.stringify(rule.when));
+    const first = (needle: string) => order.findIndex((when) => when.includes(needle));
+    for (const before of ['state.scanClean', "state.posture == 'always'"]) {
+      expect(first(before), before).toBeLessThan(first('state.afterReview'));
+    }
+    expect(PUSH_GATE_OTHERWISE.decision).toBe('ask');
   });
 
   it("hands on this review's findings as the open ones, replacing the earlier rounds' — a round's list never grows", () => {
@@ -2881,29 +3056,21 @@ describe("Publish Local Changes — the decision on a review's findings is recor
   // skipped, as the harness does, or as the answer itself, which leaves the
   // push to refuse on its own predicate.
   for (const declineAs of ['skip', 'answer'] as const) {
-    it(`a decline recorded as ${declineAs === 'skip' ? 'a skip' : 'an answer'} pushes nothing, whatever the decision`, () => {
-      const outcome = reviewedWith({ decision: 'declined', declineAs, afterReview: FIX });
+    it(`a decline recorded as ${declineAs === 'skip' ? 'a skip' : 'an answer'} pushes nothing, the decision undecided`, () => {
+      const outcome = reviewedWith({ decision: 'declined', declineAs, afterReview: BELOW_BAR });
       expect(outcome.asked).toBe(true);
       expect(outcome.pushed).toBe(false);
       expect(outcome.state['prUrl']).toBeUndefined();
     });
   }
 
-  it('leaves the push gate, the scan and the posture exactly as they were', () => {
-    // 316 D9: a decision reads text it can be steered by, so it is never a gate.
-    const push = taskOrThrow('push');
-    expect(push.when).toEqual({
-      anyOf: [
-        "tasks.approve-push.output.decision == 'approved'",
-        "tasks.read-push-approval.output.branchPolicy.pushApproval == 'never'",
-        "tasks.review-commit.output.verdict == 'approve'",
-      ],
-      onMissingRef: 'skip',
-    });
+  it('reads nothing a decision could steer into the scan or the posture', () => {
+    // 316 D9: a decider can be steered by what it reads, so it is never the
+    // only gate: the scan and the posture it never reaches stay ahead of it.
     const reads = (task: WorkflowTask) =>
       JSON.stringify([task.when, task.inputBindings, task.dependsOn]);
-    for (const gate of ['push', 'approve-push', 'read-push-approval', 'scan-commit']) {
-      expect(reads(taskOrThrow(gate) as WorkflowTask), gate).not.toMatch(/decide-/);
+    for (const gate of ['read-push-approval', 'scan-commit']) {
+      expect(reads(taskOrThrow(gate) as WorkflowTask), gate).not.toMatch(/decide-|describe-pr/);
     }
   });
 });

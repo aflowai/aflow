@@ -64,12 +64,63 @@ export const AFTER_REVIEW_UNDECIDED = 'undecided';
 export const AfterReviewSchema = z
   .enum([...AFTER_REVIEW_DECIDED, AFTER_REVIEW_UNDECIDED])
   .describe(
-    "What the publication decided about its review's findings: `fix_before_merge`, a fix " +
-      'round on the branch before it merges; `publish_as_is`, they can merge as they stand; ' +
-      "`undecided`, no answer cleared the decision's bar, or none could be made. Recorded, never " +
-      'acted on by the publication: a fix round is the conversation’s, or the shepherd’s.',
+    "What the publication decided about its review's findings, and what its push gate " +
+      'follows: `fix_before_merge`, a fix round on the branch before it merges — nothing is ' +
+      'pushed and the branch stays local; `publish_as_is`, they can merge as they stand — the ' +
+      "push goes without asking; `undecided`, no answer cleared the decision's bar, or none " +
+      'could be made — the push waits for the operator. The fix round is the conversation’s, ' +
+      'or the shepherd’s.',
   );
 export type AfterReview = z.infer<typeof AfterReviewSchema>;
+
+/**
+ * Who may set a decision aside: the operator's own word, the `hands-off` label
+ * a person put on the pull request, or a rule of the shepherd's that holds —
+ * its attempt budget reached. Nothing else overrides, and every override is
+ * recorded with the reason it names.
+ */
+export const AFTER_REVIEW_OVERRIDE_AUTHORITIES = [
+  'operator',
+  'hands_off_label',
+  'shepherd_rule',
+] as const;
+
+export const AfterReviewOverrideSchema = z
+  .object({
+    by: z
+      .enum(AFTER_REVIEW_OVERRIDE_AUTHORITIES)
+      .describe(
+        "Whose act sets the decision aside: `operator`, the operator's own word; " +
+          '`hands_off_label`, the `hands-off` label on the pull request; `shepherd_rule`, a ' +
+          "shepherd rule that held, such as the pull request's attempt budget reached.",
+      ),
+    reason: z
+      .string()
+      .min(1)
+      .max(4000)
+      .describe(
+        'Why, in words a reader of the pull request understands — the operator’s instruction, ' +
+          'the label, or the rule and what it read.',
+      ),
+  })
+  .strict()
+  .describe(
+    "Publish as is over this publication's decision on its review findings. The decision " +
+      'stands unless this is given; given, the publication records `publish_as_is`, the ' +
+      'decision it set aside and this reason, on the run and on the pull request, and pushes ' +
+      'without asking where the decision alone would have kept the branch local or asked. It ' +
+      'never stands in for a folder whose push approval is `always`, or for a range the scan ' +
+      'did not clear.',
+  );
+export type AfterReviewOverride = z.infer<typeof AfterReviewOverrideSchema>;
+
+/** An override as a publication records it: who, why, and the decision it set aside. */
+export const AfterReviewOverrideRecordSchema = AfterReviewOverrideSchema.extend({
+  overrode: z
+    .enum(['fix_before_merge', AFTER_REVIEW_UNDECIDED])
+    .describe('The decision the override set aside.'),
+}).strict();
+export type AfterReviewOverrideRecord = z.infer<typeof AfterReviewOverrideRecordSchema>;
 
 export const PullRequestGapsSchema = z
   .array(z.string().min(1).max(8000))
@@ -133,6 +184,7 @@ export const HostCommitDescribeInputSchema = z.object({
       "The decision on the review's findings as it answered: null where the answer fell below " +
         'its bar, absent where none was made.',
     ),
+  override: AfterReviewOverrideSchema.optional(),
   check: CheckRunSchema.optional().describe("The folder's checks on the commit, as they ran."),
   recheck: CheckRunSchema.optional().describe(
     'Their second run, where the first lost only to tests running out of time.',
@@ -232,6 +284,8 @@ export interface PullRequestReviewRecord {
   /** How many open findings the hand-on left out to stay within its share; absent where none. */
   findingsLeftOut?: number;
   afterReview?: AfterReview;
+  /** Present only where an override set a decision other than `publish_as_is` aside. */
+  afterReviewOverride?: AfterReviewOverrideRecord;
 }
 
 /**
@@ -246,7 +300,10 @@ export interface PullRequestReviewRecord {
  *
  * The decision on them is recorded exactly where this review returned
  * findings — the decision is asked only then — and an answer that is missing
- * there, below the bar or never made, is recorded as `undecided`.
+ * there, below the bar or never made, is recorded as `undecided`. An override
+ * turns a `fix_before_merge` or an `undecided` into `publish_as_is`, recorded
+ * beside what it set aside; over a `publish_as_is`, or where nothing was
+ * decided, it sets nothing aside and is not recorded.
  */
 export function pullRequestReviewRecord(input: HostCommitDescribeInput): PullRequestReviewRecord {
   const reviewFindings = input.review?.findings;
@@ -257,7 +314,15 @@ export function pullRequestReviewRecord(input: HostCommitDescribeInput): PullReq
     reviewFindings.map((finding) => ({ ...finding, state: 'open' as const })),
   );
   if (handed.findings.length === 0) return handed;
-  return { ...handed, afterReview: input.afterReview ?? AFTER_REVIEW_UNDECIDED };
+  const decided = input.afterReview ?? AFTER_REVIEW_UNDECIDED;
+  if (input.override === undefined || decided === 'publish_as_is') {
+    return { ...handed, afterReview: decided };
+  }
+  return {
+    ...handed,
+    afterReview: 'publish_as_is',
+    afterReviewOverride: { ...input.override, overrode: decided },
+  };
 }
 
 export const HostCommitDescribeCommitSchema = z.object({
@@ -310,6 +375,10 @@ export const HostCommitDescribeOutputSchema = z.object({
   afterReview: AfterReviewSchema.optional().describe(
     "The decision on this publication's review findings, as the body records it; absent " +
       'where the review returned none.',
+  ),
+  afterReviewOverride: AfterReviewOverrideRecordSchema.optional().describe(
+    'The override that turned the decision into `publish_as_is`, with the decision it set ' +
+      'aside; absent where none did.',
   ),
 });
 export type HostCommitDescribeOutput = z.infer<typeof HostCommitDescribeOutputSchema>;
