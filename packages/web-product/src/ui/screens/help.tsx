@@ -149,7 +149,7 @@ function HelpCenter({ routeArticleId }: { routeArticleId?: string }): ReactEleme
     <Column grow style={{ height: '100%', minHeight: 0 }}>
       <AppPageHeader title="Help" subtitle="Answers about how Aflow works and where things are." />
       {isMobile ? (
-        <Column grow style={{ minHeight: 0, overflow: 'auto' }}>
+        <Column grow style={{ minHeight: 0, overflow: 'auto', marginTop: '-24px' }}>
           {hasSelection ? (
             <Column gap="none">
               <button
@@ -171,7 +171,7 @@ function HelpCenter({ routeArticleId }: { routeArticleId?: string }): ReactEleme
           )}
         </Column>
       ) : (
-        <Row grow align="stretch" style={{ minHeight: 0, overflow: 'hidden' }}>
+        <Row grow align="stretch" style={{ minHeight: 0, overflow: 'hidden', marginTop: '-32px' }}>
           <SplitPane aside={index} asidePlacement="start" asideWidth={INDEX_WIDTH}>
             {content}
           </SplitPane>
@@ -363,7 +363,7 @@ function HelpThemeView({
 
   return (
     <Column gap="lg" style={{ padding: 'var(--space-5)', maxWidth: 880 }}>
-      <Text size="lg" weight="semibold">
+      <Text size="xl" weight="semibold">
         {HELP_THEME_LABELS[theme]}
       </Text>
       {articles.map((article) => {
@@ -392,7 +392,7 @@ function HelpThemeView({
               >
                 <Row gap="xs" align="center">
                   <Icon name={open ? 'caret-down' : 'caret-right'} size={14} />
-                  <Text size="base" weight="semibold">
+                  <Text size="lg" weight="semibold">
                     {article.question}
                   </Text>
                 </Row>
@@ -433,7 +433,7 @@ function HelpArticleBody({
 
   return (
     <Column gap="md">
-      <MarkdownRenderer content={data.article.body} />
+      <MarkdownRenderer content={data.article.body} className="md-nested" />
       {data.related.length > 0 && (
         <Column gap="xs">
           <Text size="sm" weight="semibold">
