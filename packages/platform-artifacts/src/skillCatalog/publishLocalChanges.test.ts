@@ -2881,6 +2881,13 @@ describe("Publish Local Changes — the push gate follows the decision on a revi
     claim: 'The miss counter counts a hit after a reload.',
     evidence: 'reload() increments misses before it reads the entry.',
   };
+  const STALE: Finding = {
+    severity: 'minor',
+    file: 'src/cache.ts',
+    line: 61,
+    claim: 'The eviction log names the key after it is gone.',
+    evidence: 'evict() deletes the entry, then formats the message from it.',
+  };
   /** Findings no more severe than minor: the only ones a decision clears a push over. */
   const MINORS = [SLIP, NAME];
   /** An earlier round's finding the brief passed on, closed by a commit of the branch. */
@@ -3022,6 +3029,26 @@ describe("Publish Local Changes — the push gate follows the decision on a revi
         });
         expect(declined).toMatchObject({ asked: true, pushed: false });
         for (const taskId of PR_TASKS) expect(declined.ran).not.toContain(taskId);
+      });
+    }
+
+    // The operator's policy (Plan 315 D22), not an oversight: the decision
+    // model weighed the findings, and minor findings do not hold a push — so
+    // a verdict short of approve over only minor findings pushes on the decision.
+    if (review !== 'approve') {
+      it(`${review} with only minor findings, publish_as_is: pushes on the decision without asking — a verdict short of approve does not hold a push the decision cleared`, () => {
+        const outcome = reviewedWith({ review, afterReview: AS_IS, findings: [SLIP, STALE] });
+        // The gate read the verdict short of approve and only minor severities, and pushed.
+        const gated = outcome.inputs.get('decide-push') as { state: Record<string, unknown> };
+        expect(gated.state).toMatchObject({
+          verdict: review,
+          severest: 'minor',
+          afterReview: 'publish_as_is',
+        });
+        expect(outcome).toMatchObject({ asked: false, pushed: true });
+        expect(outcome.ran).not.toContain('approve-push');
+        expect(outcome.state).toMatchObject({ afterReview: 'publish_as_is', pushDecision: 'push' });
+        expect(outcome.state['pushReason']).toContain('`publish_as_is`');
       });
     }
 

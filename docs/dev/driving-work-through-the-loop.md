@@ -95,10 +95,17 @@ meanwhile is refused with its current state rather than overwritten, and a node 
    own over minor findings and nits but pauses at `approve-push` over a blocker or a major,
    and `undecided`, where none cleared the bar, pauses there too. A review with no findings
    pushes on its own on `approve` and pauses otherwise. Follow the decision; set it aside
-   only on the operator's word or the `hands-off` label, passing `override` with that
-   reason to the next publication, which verifies it: the label must be on the branch's
-   pull request, and the operator's word is their approval at that publication's
-   `approve-push` — an override it cannot verify fails the run with nothing pushed. The fix
+   only on one of three authorities, passing `override` with its `by` and a reason to the
+   next publication, which verifies it from what it reads itself:
+   - `operator`, the operator's recorded word — taken only from the operator, as their
+     approval at that publication's `approve-push`; a decline pushes nothing.
+   - `hands_off_label`, the `hands-off` label a person put on the pull request — it must
+     be present on the branch's open pull request into the base as GitHub returns it.
+   - `shepherd_rule`, the shepherd's `when` rule for a spent attempt budget — the
+     shepherd's own pinned handoff on that pull request, from the author it was pinned
+     as, must hold that rule's decision, `abandon`.
+
+   An override it cannot verify fails the run with nothing pushed. The fix
    round is the conversation's: on `fix_before_merge`,
    once the publication has ended, commission the fix on the branch (`base: <branch>`),
    briefed from every finding of the review run the publication names as `reviewRunId`,
@@ -107,6 +114,7 @@ meanwhile is refused with its current state rather than overwritten, and a node 
    only: the latest review's open findings, bounded to fit the next publication's inputs,
    with `findingsLeftOut` counting what the bound left out. A publication never starts a
    commission or another publication.
+
 3. **The publication runs the folder's checks.** `hb_aflow` declares
    `node scripts/verify-commit.mjs` (`aflow harness checks hb_aflow -- node
 scripts/verify-commit.mjs`), and Local Publish runs it after the commit and before the
