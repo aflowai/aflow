@@ -6,6 +6,7 @@ import { KAGGLE_COMPETITION_OPTIMIZER } from './kaggleCompetitionOptimizer.js';
 import { OPEN_PR_FROM_REQUEST } from './openPrFromRequest.js';
 import { PR_SHEPHERD } from './prShepherd.js';
 import { PUBLISH_LOCAL_CHANGES } from './publishLocalChanges.js';
+import { LOCAL_PR_SHEPHERD } from './localPrShepherd.js';
 import { REVIEW_LOCAL_CHANGES } from './reviewLocalChanges.js';
 import { REVIEW_PULL_REQUEST } from './reviewPullRequest.js';
 import { TICKER_MARKET_DIGEST } from './tickerMarketDigest.js';
@@ -26,6 +27,7 @@ const RAW_SKILLS: readonly SkillCatalogEntry[] = [
   COMMISSION_CHANGE,
   REVIEW_LOCAL_CHANGES,
   PUBLISH_LOCAL_CHANGES,
+  LOCAL_PR_SHEPHERD,
   TICKER_MARKET_DIGEST,
   WEB_RESEARCH_BRIEF,
   LITERATURE_SCAN,

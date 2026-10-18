@@ -29,6 +29,7 @@ import {
   HostFilePatchOutputSchema,
   isEvalPlaneOperation,
   MAX_PARENT_INPUTS_SERIALIZED_BYTES,
+  MAX_WORKFLOW_RUN_DEPTH,
   PAUSE_INSTRUCTION_MAX_CHARS,
   HANDED_ON_FINDINGS_MAX_COUNT,
   PullRequestFindingsSchema,
@@ -45,6 +46,7 @@ import {
   type AfterReviewRoute,
 } from './publishLocalChangesDecisions.js';
 import { SKILL_CATALOG } from './index.js';
+import { LOCAL_PR_SHEPHERD } from './localPrShepherd.js';
 import { REVIEW_LOCAL_CHANGES } from './reviewLocalChanges.js';
 
 const wf = PUBLISH_LOCAL_CHANGES.bundle.workflow;
@@ -2659,17 +2661,25 @@ describe('Publish Local Changes — no publication starts a publication', () => 
     expect(started).toEqual([['review-commit', REVIEW_LOCAL_CHANGES.catalogId]]);
   });
 
-  it('is started by no skill in the catalog, so no publication runs under another run', () => {
-    for (const skill of SKILL_CATALOG) {
-      for (const task of skill.bundle.workflow.tasks) {
-        const template = task.inputTemplate as { catalogId?: unknown; slug?: unknown } | undefined;
-        if (task.operation !== 'workflow.run.start') continue;
-        expect(
-          [template?.catalogId, template?.slug],
-          `${skill.catalogId} › ${task.taskId}`,
-        ).not.toContain(PUBLISH_LOCAL_CHANGES.catalogId);
-      }
-    }
+  // Plan 321: the shepherd publishes its fixes through Local Publish, and the
+  // review that publication starts must still be within the chain's depth, or
+  // the shepherd's push would ask where the operator's own would not.
+  it('is started only by the shepherd, which no skill starts, so its review stays within the run depth', () => {
+    const starting = (catalogId: string) =>
+      SKILL_CATALOG.filter((skill) =>
+        skill.bundle.workflow.tasks.some((task) => {
+          const template = task.inputTemplate as
+            { catalogId?: unknown; slug?: unknown } | undefined;
+          return (
+            task.operation === 'workflow.run.start' &&
+            [template?.catalogId, template?.slug].includes(catalogId)
+          );
+        }),
+      ).map((skill) => skill.catalogId);
+    expect(starting(PUBLISH_LOCAL_CHANGES.catalogId)).toEqual([LOCAL_PR_SHEPHERD.catalogId]);
+    expect(starting(LOCAL_PR_SHEPHERD.catalogId)).toEqual([]);
+    // The shepherd at 1, its publication at 2, that publication's review at 3.
+    expect(MAX_WORKFLOW_RUN_DEPTH).toBeGreaterThanOrEqual(3);
   });
 
   it('commits once and pushes once: the fix round is the conversation’s, not a second commit or push of its own', () => {

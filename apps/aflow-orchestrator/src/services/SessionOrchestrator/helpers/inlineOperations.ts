@@ -67,6 +67,10 @@ export const WORKFLOW_TASK_SAFE_INLINE_OPERATIONS: ReadonlySet<string> = new Set
   'workflow.run.start',
   // Always fails its own task, with the reason it was handed
   'workflow.run.fail',
+  // Read the space's runs, one bounded page; write nothing
+  'workflow.run.list',
+  // Pure: picks a decision from the rules and the state it is handed
+  'workflow.run.decide',
   'agent.schedule.snooze',
 ]);
 

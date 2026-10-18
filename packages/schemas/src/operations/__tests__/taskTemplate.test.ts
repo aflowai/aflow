@@ -276,6 +276,59 @@ describe('$concat and $firstOf', () => {
   });
 });
 
+describe('$text', () => {
+  const declared = new Set(['count', 'id', 'label', 'flag', 'record']);
+
+  it('writes a number, a boolean or a string as text, so it can stand in a $concat', () => {
+    const template = {
+      v: {
+        $concat: [
+          'attempts: ',
+          { $text: [{ $bind: 'count' }] },
+          ', ',
+          { $text: [{ $bind: 'flag' }] },
+        ],
+      },
+    };
+    expect(substituteTemplateBinds(template, { count: 2, flag: false }, declared)).toEqual({
+      v: 'attempts: 2, false',
+    });
+    expect(
+      substituteTemplateBinds({ v: { $text: [{ $bind: 'label' }] } }, { label: 'x' }, declared),
+    ).toEqual({ v: 'x' });
+  });
+
+  it('is absent where the value is null or absent, so a $firstOf falls through to its default', () => {
+    const template = { v: { $firstOf: [{ $text: [{ $bind: 'id' }] }, 'none'] } };
+    expect(substituteTemplateBinds(template, { id: null }, declared)).toEqual({ v: 'none' });
+    expect(substituteTemplateBinds(template, {}, declared)).toEqual({ v: 'none' });
+    expect(substituteTemplateBinds(template, { id: 556 }, declared)).toEqual({ v: '556' });
+  });
+
+  it('refuses an object, naming the operand', () => {
+    try {
+      substituteTemplateBinds(
+        { v: { $text: [{ $bind: 'record' }] } },
+        { record: { a: 1 } },
+        declared,
+      );
+      expect.unreachable();
+    } catch (err) {
+      expect(err).toBeInstanceOf(TemplateSubstitutionError);
+      expect((err as TemplateSubstitutionError).path).toBe('v.$text[0]');
+    }
+  });
+
+  it.each([[{ $text: [] }], [{ $text: ['a', 'b'] }], [{ $text: 'a' }]])(
+    'flags %j as malformed: it takes exactly one operand',
+    (node) => {
+      expect(analyzeInputTemplate({ v: node }).malformed[0]?.reason).toContain(
+        'exactly one operand',
+      );
+    },
+  );
+});
+
 // ---------------------------------------------------------------------------
 // WorkflowTaskSchema parse-time teachers
 // ---------------------------------------------------------------------------

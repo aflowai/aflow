@@ -13,6 +13,7 @@ import {
   HOST_COMMIT_RANGE_PATTERN,
   type HostCommitDescribeCommit,
   type HostCommitDescribeInput,
+  LOCAL_PUBLISH_PULL_REQUEST_MARKER,
   PULL_REQUEST_BODY_MAX_CHARS,
   type PullRequestCheckRun,
   type PullRequestFinding,
@@ -204,7 +205,9 @@ export function composePullRequest(
 ): { title: string; body: string } & PullRequestReviewRecord {
   const title = input.title ?? commits[0]?.subject ?? '';
   const record = pullRequestReviewRecord(input);
-  if (input.summary !== undefined) return { title, body: input.summary, ...record };
+  if (input.summary !== undefined) {
+    return { title, body: marked(fit(input.summary, BODY_ROOM, BODY_CUT_NOTE)), ...record };
+  }
   const rest = [
     reviewSection(input, record),
     verificationSection(input),
@@ -212,12 +215,25 @@ export function composePullRequest(
   ].join(SECTION_BREAK);
   const changes = fit(
     changesSection(commits),
-    PULL_REQUEST_BODY_MAX_CHARS - rest.length - SECTION_BREAK.length,
+    BODY_ROOM - rest.length - SECTION_BREAK.length,
     CHANGES_CUT_NOTE,
   );
   return {
     title,
-    body: fit(`${changes}${SECTION_BREAK}${rest}`, PULL_REQUEST_BODY_MAX_CHARS, BODY_CUT_NOTE),
+    body: marked(fit(`${changes}${SECTION_BREAK}${rest}`, BODY_ROOM, BODY_CUT_NOTE)),
     ...record,
   };
+}
+
+/** What a body may hold beside the marker, which closes every one. */
+const BODY_ROOM =
+  PULL_REQUEST_BODY_MAX_CHARS - SECTION_BREAK.length - LOCAL_PUBLISH_PULL_REQUEST_MARKER.length;
+
+/**
+ * Every body the loop writes ends with its marker, a person's own summary
+ * included: the marker says who opened the pull request, which is what the
+ * shepherd tends by, and a summary changes only what the body says.
+ */
+function marked(body: string): string {
+  return `${body}${SECTION_BREAK}${LOCAL_PUBLISH_PULL_REQUEST_MARKER}`;
 }

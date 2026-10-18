@@ -1,7 +1,9 @@
 /**
  * Contract: a workflow task that started a run is answered when that run
  * ends or pauses, through the same result path an executor's answer takes;
- * a run that paused is cancelled, since nothing inside a task resumes it.
+ * a run that paused is cancelled, since nothing inside a task resumes it —
+ * save at an approval, which the operator answers, and through which the
+ * task goes on waiting for the run to end.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -197,6 +199,46 @@ describe('a workflow task waiting on the run it started', () => {
     expect(mockMarkWaiterNotified.mock.invocationCallOrder[0]).toBeLessThan(
       mockCancelRun.mock.invocationCallOrder[0]!,
     );
+  });
+
+  // A publication the shepherd starts asks the operator where one started by
+  // hand would (Plan 321 D6): its approval is not cancelled from under it.
+  it('stays waiting through an approval the operator answers, and cancels nothing', async () => {
+    (
+      deps.payloadStore as unknown as { retrieve: ReturnType<typeof vi.fn> }
+    ).retrieve.mockResolvedValueOnce({
+      pauseCause: 'needs_decision',
+      failedTaskId: 'approve-push',
+    });
+
+    await notifyWaiters(deps, {
+      tenantId: TENANT,
+      runId: CHILD_RUN,
+      outcome: 'paused',
+      pauseVersion: 1,
+      payloadRef: 'gs://bucket/contract-1',
+    });
+
+    expect(mockAddStepResult).not.toHaveBeenCalled();
+    expect(mockMarkWaiterNotified).not.toHaveBeenCalled();
+    expect(mockCancelRun).not.toHaveBeenCalled();
+  });
+
+  it('is answered, and the run cancelled, on a pause no operator answers', async () => {
+    (
+      deps.payloadStore as unknown as { retrieve: ReturnType<typeof vi.fn> }
+    ).retrieve.mockResolvedValueOnce({ pauseCause: 'task_contract_violation' });
+
+    await notifyWaiters(deps, {
+      tenantId: TENANT,
+      runId: CHILD_RUN,
+      outcome: 'paused',
+      pauseVersion: 1,
+      payloadRef: 'gs://bucket/contract-2',
+    });
+
+    expect(mockAddStepResult).toHaveBeenCalledOnce();
+    expect(mockCancelRun).toHaveBeenCalledOnce();
   });
 
   it('stays waiting through a takeover', async () => {

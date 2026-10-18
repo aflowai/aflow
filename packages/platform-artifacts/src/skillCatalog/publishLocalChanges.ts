@@ -205,7 +205,7 @@ const CHECK_INPUT_TEMPLATE = {
 
 const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'publish-local-changes',
-  version: 32,
+  version: 33,
   name: 'Publish Local Changes',
   tagline:
     'Commit a patch onto a branch of a connected repository, then push it and open the pull request — asking the operator first unless the folder says otherwise.',
@@ -325,7 +325,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           id: 'summary',
           required: false,
           description:
-            "A body for the pull request, only where a person wants to say it themselves: it stands as the whole body, and nothing is composed beside it. Omitted, the body is composed from the branch — every commit's message, the review's findings, the checks and the known gaps.",
+            "A body for the pull request, only where a person wants to say it themselves: it stands as the whole body, and nothing is composed beside it but the loop's marker, which closes every body Local Publish writes and is what the Local PR Shepherd tends by. Omitted, the body is composed from the branch — every commit's message, the review's findings, the checks and the known gaps.",
           schema: SUMMARY_SCHEMA,
         },
         {

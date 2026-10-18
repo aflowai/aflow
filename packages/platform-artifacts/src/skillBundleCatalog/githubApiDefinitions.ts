@@ -45,6 +45,11 @@ export const GITHUB_API_DEFINITION: BundledApiDefinition = {
         ...(bodyParam?.schema
           ? { body: { contentType: 'application/json' as const, schema: bodyParam.schema } }
           : {}),
+        // `getJobLogs` is its excerpt only through its transform: without it
+        // a bundle-installed definition would hand on the whole log.
+        ...(ep.responseTransformPresetId !== undefined
+          ? { responseTransformPresetId: ep.responseTransformPresetId }
+          : {}),
       };
     }),
   },

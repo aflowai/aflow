@@ -1,10 +1,11 @@
 /**
  * A connected folder's push posture, checks and sandbox posture, how many
  * coding agents its machine runs at once and whether it holds itself awake
- * while they run, read from the policy file on this machine.
+ * while they run, read from the policy file on this machine — and the GitHub
+ * repository its `origin` fetches from, read from its git config.
  *
  * Read here rather than from the workspace's copy because both are only ever
- * declared here. Nothing in the folder is touched, so a file-only binding
+ * declared here. Nothing in the folder is written, so a file-only binding
  * answers it as readily as one that runs commands.
  */
 import type { ExecutorContext, StepResult } from '@aflow/executor-runtime';
@@ -18,14 +19,38 @@ import {
 import {
   HostBindingInspectInputSchema,
   type HostBindingInspectOutputSchema,
+  type HostGitHubOrigin,
+  parseGitHubRemote,
   resolveBranchPolicy,
 } from '@aflow/schemas';
 import type { z } from 'zod';
 
-import { HostBindingError, loadHostPolicy, requireBinding, requireSpace } from '../bindings.js';
+import {
+  type HostBinding,
+  HostBindingError,
+  loadHostPolicy,
+  requireBinding,
+  requireSpace,
+} from '../bindings.js';
 import { sandboxPostureOf } from '../sandboxPosture.js';
+import { isGitRepository, remoteFetchUrl, remoteNames } from '../worktree.js';
 
 type HostBindingInspectOutput = z.infer<typeof HostBindingInspectOutputSchema>;
+
+/**
+ * The GitHub repository `origin` fetches from, where it is one. A folder that
+ * is no repository, has no `origin`, or fetches from elsewhere has none, and
+ * says nothing more: the read is for a skill that has GitHub to call.
+ */
+async function githubOrigin(binding: HostBinding): Promise<HostGitHubOrigin | undefined> {
+  if (binding.singleFile || !(await isGitRepository(binding.root))) return undefined;
+  if (!(await remoteNames(binding.root)).includes('origin')) return undefined;
+  try {
+    return parseGitHubRemote(await remoteFetchUrl(binding.root, 'origin'));
+  } catch {
+    return undefined;
+  }
+}
 
 async function inspect(ctx: ExecutorContext, policyPath: string): Promise<StepResult> {
   try {
@@ -36,9 +61,11 @@ async function inspect(ctx: ExecutorContext, policyPath: string): Promise<StepRe
     const policy = await loadHostPolicy(policyPath);
     const binding = requireBinding(policy.bindings, parsed.data.bindingId);
     requireSpace(binding, ctx.spaceId);
+    const origin = await githubOrigin(binding);
 
     const output: HostBindingInspectOutput = {
       id: binding.id,
+      ...(origin !== undefined ? { origin } : {}),
       ...(binding.branchPolicy !== undefined
         ? { branchPolicy: resolveBranchPolicy(binding.branchPolicy) }
         : {}),

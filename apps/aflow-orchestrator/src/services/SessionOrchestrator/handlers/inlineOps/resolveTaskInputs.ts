@@ -142,7 +142,14 @@ async function resolveOneBinding(
           `binds to task_output of "${binding.taskId}", which does not exist in run ${ctx.run.runId}`,
         );
       }
-      if (upstream.status === 'skipped' || upstream.status === 'blocked') {
+      // A failed producer reaches a consumer only where it was optional —
+      // readiness counts it as satisfied and blocks every other failure's
+      // descendants — and like a skipped one it produced nothing to bind.
+      if (
+        upstream.status === 'skipped' ||
+        upstream.status === 'blocked' ||
+        upstream.status === 'failed'
+      ) {
         return ABSENT;
       }
       const decoded = await decodeOutputRef(

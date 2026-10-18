@@ -7,7 +7,7 @@ import { apiError } from '../../lib/api-errors.js';
 import { DEFAULT_EGRESS_POLICY, INTEGRATIONS_URL } from './config.js';
 import { buildEndpointUrl, buildEndpointPathAndQuery, buildDirectUrl } from './urlBuilders.js';
 import { extractBody } from './body.js';
-import { buildHeaders, applyAuth } from './headers.js';
+import { buildHeaders, applyAuth, credentialHeaderNames } from './headers.js';
 import { ensureSpaceLoaded, ensureTenantPolicyLoaded, getSpaceCredentials } from './spaceLoader.js';
 import { assertNoAuthMaterialInInput } from './authAssert.js';
 import type { ApiHandlerStores, ResolvedCall, TenantHostGuard } from './types.js';
@@ -376,6 +376,7 @@ async function tryResolveByHostMatching(
     egressPolicy: binding.egressPolicy,
     apiId: binding.apiId,
     bindingId: binding.bindingId,
+    credentialHeaders: credentialHeaderNames(binding.auth),
     ...(tenantHostGuard !== undefined ? { tenantHostGuard } : {}),
   };
 }
@@ -516,6 +517,7 @@ async function resolveBindingAllowlistedDirectCall(
     egressPolicy: binding.egressPolicy,
     apiId,
     bindingId: binding.bindingId,
+    credentialHeaders: credentialHeaderNames(binding.auth),
     ...(tenantHostGuard !== undefined ? { tenantHostGuard } : {}),
   };
 }
@@ -713,6 +715,7 @@ async function resolveDefinitionCall(
     bindingId: binding.bindingId,
     endpointId,
     endpoint,
+    credentialHeaders: credentialHeaderNames(binding.auth),
     ...(tenantHostGuard !== undefined ? { tenantHostGuard } : {}),
   };
 }

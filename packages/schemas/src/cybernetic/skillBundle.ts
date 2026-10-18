@@ -412,6 +412,85 @@ export const BundleArtifactSeedSchema = z.object({
 });
 export type BundleArtifactSeed = z.infer<typeof BundleArtifactSeedSchema>;
 
+// ============================================================================
+// Bundled agents — an agent that starts one of the bundle's skills
+// ============================================================================
+
+/**
+ * An agent a bundle installs beside a skill: one operation step,
+ * `workflow.run.start` of that skill with its inputs fixed when the agent is
+ * written, and no model turn (Plan 321 D1). A schedule starts an agent, never
+ * a skill, and its template carries no live value — so the agent decides
+ * nothing, reads nothing at fire time, and starts the skill the same way
+ * every time.
+ *
+ * The connected folder is the one input it cannot carry as catalog text: it
+ * is the space's. The install writes the space's one folder that allows
+ * pushes as a literal into the step, and writes no agent where there is not
+ * exactly one, saying why.
+ */
+export const BundledSkillStarterAgentSchema = z
+  .object({
+    kind: z.literal('skill_starter'),
+    /** The skill it starts. The agent takes that skill's slug, so a schedule names one by the other. */
+    skillCatalogId: SkillCatalogIdRefSchema,
+    name: z.string().min(1).max(200),
+    description: z.string().min(1).max(2000),
+    /** The run input of the skill the connected folder's binding id is given as. */
+    folderInput: z.string().min(1).max(64),
+  })
+  .strict();
+export type BundledSkillStarterAgent = z.infer<typeof BundledSkillStarterAgentSchema>;
+
+/** The one step of a skill-starter agent. */
+export const SKILL_STARTER_STEP_ID = 'start-skill';
+
+/**
+ * The definition a skill-starter agent is written with: `workflow.run.start`
+ * of the skill, its inputs literal, and `wait: 'none'` — the agent's run ends
+ * once the skill's has started, and the skill's run is no conversation's.
+ */
+export function skillStarterAgentDefinition(params: {
+  slug: string;
+  catalogId: string;
+  name: string;
+  description: string;
+  inputs: Record<string, string>;
+}): Record<string, unknown> {
+  return {
+    schemaVersion: 1,
+    flowId: params.slug,
+    version: '1',
+    metadata: {
+      name: params.name,
+      description: params.description,
+      tags: ['skill-starter'],
+    },
+    systemRole: null,
+    stateVariables: [],
+    steps: [
+      {
+        stepId: SKILL_STARTER_STEP_ID,
+        stepType: 'workflow',
+        operation: 'workflow.run.start',
+        name: `Start ${params.name}`,
+        config: {
+          slug: params.slug,
+          catalogId: params.catalogId,
+          inputs: params.inputs,
+          wait: 'none',
+        },
+        onSuccess: { next: [] },
+        onFailure: { next: [] },
+      },
+    ],
+    startStepId: SKILL_STARTER_STEP_ID,
+    allowedOperations: ['workflow.run.start'],
+    supportedModes: ['api'],
+    status: 'published',
+  };
+}
+
 /**
  * Discriminated union of post-install completion tasks. Kinds:
  *
@@ -547,6 +626,8 @@ export const SkillBundleSchema = z
     /** Memory docs the install op writes verbatim to the target space. */
     memorySeed: z.array(MemorySeedSchema).max(50).default([]),
     artifactSeed: z.array(BundleArtifactSeedSchema).max(50).default([]),
+    /** Agents the install writes beside the skills — each starts one of them. */
+    agents: z.array(BundledSkillStarterAgentSchema).max(10).optional(),
     /**
      * Free-text next-steps guidance the install response surfaces to the
      * operator (and, via the install response, to Helmsman). Use when the
@@ -559,6 +640,14 @@ export const SkillBundleSchema = z
     message: 'setupSkillCatalogId must appear in skillCatalogIds',
     path: ['setupSkillCatalogId'],
   })
+  .refine(
+    (b) => (b.agents ?? []).every((agent) => b.skillCatalogIds.includes(agent.skillCatalogId)),
+    {
+      message:
+        'An agent starts one of the bundle’s own skills: agents[].skillCatalogId must appear in skillCatalogIds',
+      path: ['agents'],
+    },
+  )
   .refine(
     (b) => {
       const bindingIds = b.artifactSeed.map((a) => a.bindingId);

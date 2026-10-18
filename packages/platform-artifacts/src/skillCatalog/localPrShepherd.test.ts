@@ -1,0 +1,666 @@
+/**
+ * Contract (Plan 321 §6, as far as it holds without a node): one pass of the
+ * Local PR Shepherd decides from what it read and acts only on `fix`. The
+ * graph is driven the way the harness drives it — ready tasks run, false
+ * guards skip, a failed optional task satisfies its dependents and binds as
+ * absent, a failed required one stops what depends on it — and the rules are
+ * decided by the rule step itself. Only GitHub's, the machine's and the
+ * decision model's answers are scripted.
+ */
+import { describe, expect, it } from 'vitest';
+import {
+  computeReadyTasksWithWhen,
+  decideByRules,
+  materializeSkillTasks,
+  projectTaskOutput,
+  readOutputPath,
+} from '@aflow/cybernetic-runtime';
+import {
+  AgentDefinitionSchema,
+  type CheckRunsSummary,
+  CheckRunsSummarySchema,
+  HostHarnessRunInputSchema,
+  JobLogExcerptSchema,
+  LOCAL_PUBLISH_PULL_REQUEST_MARKER,
+  type LoopPullRequest,
+  LoopPullRequestSchema,
+  LoopPullRequestsSchema,
+  MemoryPutInputSchema,
+  parseShepherdHandoff,
+  type ShepherdHandoffRead,
+  ShepherdHandoffReadSchema,
+  skillStarterAgentDefinition,
+  substituteTemplateBinds,
+  type WorkflowTask,
+  WorkflowRunDecideInputSchema,
+  WorkflowRunListInputSchema,
+  WorkflowRunStartInputSchema,
+} from '@aflow/schemas';
+import { getSkillBundleEntry } from '../skillBundleCatalog.js';
+import { COMMISSION_CHANGE } from './commissionChange.js';
+import { LOCAL_PR_SHEPHERD } from './localPrShepherd.js';
+import { REMEDY_QUESTION, REMEDY_ROUTES, type Remedy } from './localPrShepherdDecisions.js';
+import { PUBLISH_LOCAL_CHANGES } from './publishLocalChanges.js';
+
+const wf = LOCAL_PR_SHEPHERD.bundle.workflow;
+const tasks = materializeSkillTasks(wf.tasks as unknown as WorkflowTask[]);
+const taskById = new Map(tasks.map((task) => [task.taskId, task]));
+
+const HEAD = 'c'.repeat(40);
+const MERGED_FROM = 'e'.repeat(40);
+const FAILING_CHECK = '555';
+const BRANCH = 'aflow/fix-flaky-test';
+
+const PULL_REQUEST: LoopPullRequest = {
+  number: 94,
+  state: 'open',
+  title: 'Planted failing test',
+  body: 'A test that fails.',
+  headRef: BRANCH,
+  headSha: HEAD,
+  baseRef: 'main',
+  ours: true,
+  handsOff: false,
+  draft: false,
+  mergeableState: 'clean',
+};
+
+const FAILING: CheckRunsSummary = {
+  state: 'failing',
+  total: 3,
+  failing: [{ id: FAILING_CHECK, name: 'Test', conclusion: 'failure', runId: 37460214524 }],
+  firstFailing: { id: FAILING_CHECK, name: 'Test', conclusion: 'failure', runId: 37460214524 },
+};
+
+const NO_HANDOFF: ShepherdHandoffRead = { found: false, attemptCount: 0, nextAttemptCount: 1 };
+
+interface Scenario {
+  inputs?: Record<string, unknown>;
+  listStatus?: number;
+  pullRequest?: Partial<LoopPullRequest>;
+  checks?: CheckRunsSummary;
+  handoff?: ShepherdHandoffRead;
+  leaseHeld?: boolean;
+  /** Another pass created the lease between this one's read and its write. */
+  leaseTaken?: boolean;
+  publicationInFlight?: boolean;
+  commissionInFlight?: boolean;
+  remedy?: { value: Remedy | null; decided: boolean } | 'unavailable';
+  failingJobs?: number;
+  /** What the commission returned: a patch, only the merge, or nothing. */
+  commission?: 'patch' | 'merge-only' | 'failed';
+}
+
+interface Pass {
+  ran: string[];
+  inputs: Map<string, Record<string, unknown>>;
+  outputs: Map<string, Record<string, unknown>>;
+  statuses: Map<string, string>;
+  decision: string | undefined;
+  handoff: ReturnType<typeof parseShepherdHandoff> | undefined;
+}
+
+function bound(
+  task: WorkflowTask,
+  outputs: ReadonlyMap<string, Record<string, unknown>>,
+  runInputs: Record<string, unknown>,
+): Record<string, unknown> {
+  const values: Record<string, unknown> = {};
+  for (const [name, binding] of Object.entries(task.inputBindings ?? {})) {
+    let value: unknown;
+    if (binding.kind === 'run_input') value = runInputs[binding.path];
+    if (binding.kind === 'task_output') {
+      const output = outputs.get(binding.taskId);
+      value =
+        output === undefined
+          ? undefined
+          : binding.path
+            ? readOutputPath(output, binding.path)
+            : output;
+    }
+    if (value !== undefined) values[name] = value;
+  }
+  return values;
+}
+
+type Answer = { ok: true; output: Record<string, unknown> } | { ok: false };
+
+function answer(taskId: string, input: Record<string, unknown>, s: Scenario): Answer {
+  const ok = (output: Record<string, unknown>): Answer => ({ ok: true, output });
+  const github = (data: unknown, statusCode = 200) => ok({ statusCode, headers: {}, data });
+  switch (taskId) {
+    case 'read-folder':
+      return ok({
+        id: 'hb_aflow',
+        origin: { owner: 'aflowai', repo: 'aflow' },
+        branchPolicy: {
+          branchPrefix: 'aflow/',
+          pushApproval: 'unless-unreviewed',
+          checksTimeoutMs: 1_800_000,
+        },
+        sandbox: 'open',
+        maxConcurrentHarnessRuns: 2,
+        keepAwake: 'on-ac',
+      });
+    case 'list-prs': {
+      // A refused call shapes nothing: its body is GitHub's error, as it wrote it.
+      if (s.listStatus !== undefined) return github({ message: 'Bad credentials' }, s.listStatus);
+      const pr = { ...PULL_REQUEST, ...s.pullRequest };
+      return github(
+        LoopPullRequestsSchema.parse({
+          pullRequests: [
+            {
+              number: pr.number,
+              title: pr.title,
+              headRef: pr.headRef,
+              headSha: pr.headSha,
+              baseRef: pr.baseRef,
+              updatedAt: '2026-10-18T08:00:00Z',
+              handsOff: pr.handsOff,
+            },
+          ],
+          count: 1,
+        }),
+      );
+    }
+    case 'read-pr':
+      return github(LoopPullRequestSchema.parse({ ...PULL_REQUEST, ...s.pullRequest }));
+    case 'read-pr-checks':
+      return github(CheckRunsSummarySchema.parse(s.checks ?? FAILING));
+    case 'read-pr-handoff':
+      return github(ShepherdHandoffReadSchema.parse(s.handoff ?? NO_HANDOFF));
+    case 'read-in-flight-lease':
+      return ok({
+        items: s.leaseHeld
+          ? [{ path: `${String(input['pathPrefix'])}lease.json`, docType: 'json' }]
+          : [],
+      });
+    case 'read-in-flight-publications':
+    case 'read-in-flight-commissions': {
+      WorkflowRunListInputSchema.parse(input);
+      const inFlight =
+        taskId === 'read-in-flight-publications' ? s.publicationInFlight : s.commissionInFlight;
+      return ok({
+        runs: inFlight
+          ? [{ id: 'other-run', status: 'paused', startedAt: '2026-10-18T07:00:00Z', own: false }]
+          : [],
+        hasMore: false,
+      });
+    }
+    case 'decide':
+      return ok({ ...decideByRules(WorkflowRunDecideInputSchema.parse(input)) });
+    case 'lease':
+      MemoryPutInputSchema.parse(input);
+      return s.leaseTaken ? { ok: false } : ok({ id: 'doc-1', path: input['path'], version: 1 });
+    case 'read-failure':
+      return github({
+        jobs: Array.from({ length: s.failingJobs ?? 1 }, (_, i) => ({
+          id: 112257622723 + i,
+          name: i === 0 ? 'Test' : 'Dependency audit',
+          conclusion: 'failure',
+          failedSteps: ['Run tests'],
+        })),
+        count: s.failingJobs ?? 1,
+      });
+    case 'read-failure-log-1':
+    case 'read-failure-log-2':
+    case 'read-failure-log-3':
+      return github(
+        JobLogExcerptSchema.parse({
+          excerpt: 'FAIL src/clock.test.ts > ticks\nAssertionError: expected 2 to be 1',
+          lines: 2,
+          totalLines: 5955,
+          bytes: 70,
+          truncated: true,
+        }),
+      );
+    case 'classify-failure': {
+      const remedy = s.remedy ?? { value: 'code_defect', decided: true };
+      if (remedy === 'unavailable') return { ok: false };
+      return ok({
+        answers: {
+          remedy: {
+            type: 'choice',
+            value: remedy.value,
+            decidedValue: remedy.decided ? remedy.value : null,
+            decided: remedy.decided,
+            confidence: remedy.decided ? 0.93 : 0.41,
+            probabilities: {},
+          },
+        },
+      });
+    }
+    case 'rerun-jobs':
+      return github({}, 201);
+    case 'fix':
+    case 'bump-dependency':
+    case 'merge-round': {
+      HostHarnessRunInputSchema.parse(input);
+      const commission = s.commission ?? 'patch';
+      if (commission === 'failed') return { ok: false };
+      return ok({
+        runId: 'hp_1',
+        harness: { id: 'claude' },
+        continued: false,
+        baseSha: HEAD,
+        merge: { from: MERGED_FROM, conflicts: [] },
+        ...(commission === 'patch' ? { patchRef: 'gs://bucket/patch-1', filesChanged: 1 } : {}),
+        filesChanged: commission === 'patch' ? 1 : 0,
+        result: { commitMessage: 'Fix the clock test\n\nIt read the wall clock.', gaps: [] },
+        patchTruncated: false,
+        exitCode: 0,
+        timedOut: false,
+        durationMs: 1,
+        truncated: false,
+        applies: 'clean',
+        headMoved: false,
+        blockedDomains: [],
+      });
+    }
+    case 'publish':
+      WorkflowRunStartInputSchema.parse(input);
+      return ok({ runId: 'pub-run-1', outcome: 'completed', waiterId: 'w-1' });
+    case 'release':
+      return ok({ id: 'doc-1', path: (input['target'] as { path: string }).path, deleted: true });
+    case 'handoff':
+    case 'handoff-edit':
+      return github({ id: 9 }, taskId === 'handoff' ? 201 : 200);
+    default:
+      throw new Error(`no answer scripted for ${taskId}`);
+  }
+}
+
+function pass(s: Scenario = {}): Pass {
+  const runInputs = { bindingId: 'hb_aflow', ...s.inputs };
+  const completed = new Set<string>();
+  const skipped = new Set<string>();
+  const failedOptional = new Set<string>();
+  const statuses = new Map<string, string>();
+  const outputs = new Map<string, Record<string, unknown>>();
+  const inputs = new Map<string, Record<string, unknown>>();
+  const ran: string[] = [];
+
+  for (let round = 0; round <= tasks.length; round += 1) {
+    const ready = computeReadyTasksWithWhen(
+      tasks,
+      completed,
+      skipped,
+      { statuses, outputs },
+      failedOptional,
+    );
+    expect(ready.errors).toEqual([]);
+    for (const { task } of ready.skipped) {
+      skipped.add(task.taskId);
+      statuses.set(task.taskId, 'skipped');
+    }
+    const fresh = ready.ready.filter((task) => !ran.includes(task.taskId));
+    if (fresh.length === 0 && ready.skipped.length === 0) break;
+    for (const task of fresh) {
+      ran.push(task.taskId);
+      const input = substituteTemplateBinds(
+        task.inputTemplate ?? {},
+        bound(task, outputs, runInputs),
+        new Set(Object.keys(task.inputBindings ?? {})),
+      );
+      inputs.set(task.taskId, input);
+      const result = answer(task.taskId, input, s);
+      if (!result.ok) {
+        statuses.set(task.taskId, 'failed');
+        if (task.optional === true) failedOptional.add(task.taskId);
+        continue;
+      }
+      let output = result.output;
+      if (task.outputProjection !== undefined) {
+        const projected = projectTaskOutput(task.outputProjection, output, input);
+        if (!projected.ok) throw new Error(`${task.taskId}: ${JSON.stringify(projected.failures)}`);
+        output = projected.value;
+      }
+      outputs.set(task.taskId, output);
+      completed.add(task.taskId);
+      statuses.set(task.taskId, 'succeeded');
+    }
+  }
+
+  const written = inputs.get('handoff') ?? inputs.get('handoff-edit');
+  const body = (written?.['params'] as { body?: { body?: string } } | undefined)?.body?.body;
+  return {
+    ran,
+    inputs,
+    outputs,
+    statuses,
+    decision: outputs.get('decide')?.['decision'] as string | undefined,
+    handoff: body === undefined ? undefined : parseShepherdHandoff(body),
+  };
+}
+
+/** The record a pass left, read back the way the next pass's read gives it. */
+function readBack(previous: Pass): ShepherdHandoffRead {
+  const record = previous.handoff;
+  if (record === undefined || record === null) throw new Error('the pass left no handoff');
+  return { found: true, commentId: 9, ...record, nextAttemptCount: record.attemptCount + 1 };
+}
+
+const COMMISSIONS = ['fix', 'bump-dependency', 'merge-round'];
+const ACTIONS = ['lease', 'rerun-jobs', ...COMMISSIONS, 'publish'];
+
+describe('Local PR Shepherd — it fixes what CI failed', () => {
+  const first = pass();
+
+  it('decides fix on a red check it has not acted on, and commissions it on the branch with its base merged in', () => {
+    expect(first.decision).toBe('fix');
+    expect(first.ran).toEqual(
+      expect.arrayContaining(['lease', 'read-failure', 'classify-failure', 'fix']),
+    );
+    const fix = first.inputs.get('fix')!;
+    expect(fix['base']).toBe(BRANCH);
+    expect(fix['mergeFrom']).toBe('origin/main');
+    // The brief is data: the pull request, the failing checks and jobs, the log's end.
+    const briefed = fix['inputs'] as Record<string, unknown>;
+    expect(briefed['pullRequest']).toMatchObject({ number: 94, title: 'Planted failing test' });
+    expect(briefed['failingChecks']).toEqual(FAILING.failing);
+    expect((briefed['logs'] as unknown[])[0]).toMatchObject({ truncated: true });
+  });
+
+  it('publishes the commission through Local Publish, appended onto the branch, and waits for it', () => {
+    const start = WorkflowRunStartInputSchema.parse(first.inputs.get('publish'));
+    expect(start.slug).toBe(PUBLISH_LOCAL_CHANGES.bundle.workflow.slug);
+    expect(start.catalogId).toBe(PUBLISH_LOCAL_CHANGES.catalogId);
+    expect(start.wait).toBe('until_complete');
+    expect(start.inputs).toEqual({
+      bindingId: 'hb_aflow',
+      patchRef: 'gs://bucket/patch-1',
+      branch: BRANCH,
+      baseSha: HEAD,
+      mergeFrom: MERGED_FROM,
+      commitMessage: 'Fix the clock test\n\nIt read the wall clock.',
+      gaps: [],
+      owner: 'aflowai',
+      repo: 'aflow',
+      base: 'main',
+    });
+  });
+
+  it('releases the lease it took and records the attempt in the handoff', () => {
+    expect(first.ran.indexOf('release')).toBeGreaterThan(first.ran.indexOf('publish'));
+    expect((first.inputs.get('release')!['target'] as { path: string }).path).toBe(
+      first.outputs.get('lease')!['path'],
+    );
+    expect(first.ran).toContain('handoff');
+    expect(first.handoff).toEqual({
+      attemptCount: 1,
+      checkRunId: FAILING_CHECK,
+      headSha: HEAD,
+      decision: 'fix',
+      classification: 'code_defect',
+      publicationRunId: 'pub-run-1',
+    });
+  });
+
+  it('publishes a merge round with no patch as the merge alone', () => {
+    const merged = pass({
+      remedy: { value: 'base_conflict', decided: true },
+      commission: 'merge-only',
+    });
+    expect(merged.ran).toContain('merge-round');
+    const start = merged.inputs.get('publish')!['inputs'] as Record<string, unknown>;
+    expect(start['patchRef']).toBeUndefined();
+    expect(start['mergeFrom']).toBe(MERGED_FROM);
+  });
+});
+
+describe('Local PR Shepherd — once per failure', () => {
+  it('waits on a second pass over the same check run, and its handoff still shows one attempt', () => {
+    const second = pass({ handoff: readBack(pass()) });
+    expect(second.decision).toBe('wait');
+    for (const action of ACTIONS) expect(second.ran).not.toContain(action);
+    expect(second.ran).toContain('handoff-edit');
+    expect(second.handoff).toMatchObject({
+      attemptCount: 1,
+      checkRunId: FAILING_CHECK,
+      decision: 'wait',
+      publicationRunId: 'pub-run-1',
+    });
+  });
+
+  it('acts on a new check run of the same pull request, counting it', () => {
+    const rerun: CheckRunsSummary = {
+      ...FAILING,
+      failing: [{ ...FAILING.firstFailing!, id: '556' }],
+      firstFailing: { ...FAILING.firstFailing!, id: '556' },
+    };
+    const next = pass({ handoff: readBack(pass()), checks: rerun });
+    expect(next.decision).toBe('fix');
+    expect(next.handoff).toMatchObject({ attemptCount: 2, checkRunId: '556' });
+  });
+});
+
+describe('Local PR Shepherd — never two at once', () => {
+  it('waits where another pass holds the lease on the branch', () => {
+    const held = pass({ leaseHeld: true });
+    expect(held.decision).toBe('wait');
+    for (const action of ACTIONS) expect(held.ran).not.toContain(action);
+  });
+
+  it('takes the lease by creating it, so a pass that lost the race commissions, publishes and releases nothing', () => {
+    expect(MemoryPutInputSchema.parse(pass().inputs.get('lease')).writeMode).toBe('create');
+    const lost = pass({ leaseTaken: true });
+    expect(lost.statuses.get('lease')).toBe('failed');
+    for (const task of [
+      ...COMMISSIONS,
+      'rerun-jobs',
+      'publish',
+      'release',
+      'handoff',
+      'handoff-edit',
+    ]) {
+      expect(lost.ran).not.toContain(task);
+    }
+  });
+
+  it('releases the lease whichever way the leased work ended', () => {
+    for (const s of [{ commission: 'failed' as const }, { remedy: 'unavailable' as const }]) {
+      const ended = pass(s);
+      expect(ended.ran).not.toContain('publish');
+      expect(ended.ran).toContain('release');
+      expect(ended.ran).toContain('handoff');
+    }
+  });
+});
+
+describe('Local PR Shepherd — it yields to people', () => {
+  it.each([
+    ['a publication of the branch paused at its approval', { publicationInFlight: true }],
+    ['a commission based on the branch running', { commissionInFlight: true }],
+    ['the hands-off label', { pullRequest: { handsOff: true } }],
+  ] as const)('waits on %s, and acts on nothing', (_case, scenario) => {
+    const yielded = pass(scenario);
+    expect(yielded.decision).toBe('wait');
+    for (const action of ACTIONS) expect(yielded.ran).not.toContain(action);
+  });
+
+  it('writes nothing on a pull request labelled hands-off', () => {
+    const labelled = pass({ pullRequest: { handsOff: true } });
+    expect(labelled.ran).not.toContain('handoff');
+    expect(labelled.ran).not.toContain('handoff-edit');
+  });
+
+  it('reads the in-flight runs of the branch, whoever started them', () => {
+    const read = pass();
+    expect(
+      WorkflowRunListInputSchema.parse(read.inputs.get('read-in-flight-publications')),
+    ).toEqual({
+      slug: PUBLISH_LOCAL_CHANGES.bundle.workflow.slug,
+      input: { field: 'branch', equals: BRANCH },
+      status: ['running', 'paused'],
+      limit: 25,
+    });
+    expect(read.inputs.get('read-in-flight-commissions')).toMatchObject({
+      slug: COMMISSION_CHANGE.bundle.workflow.slug,
+      input: { field: 'base', equals: BRANCH },
+    });
+  });
+});
+
+describe('Local PR Shepherd — it approves nothing', () => {
+  it('has no approval of its own, and calls nothing that merges, closes or reviews', () => {
+    expect(tasks.filter((task) => task.type === 'human')).toEqual([]);
+    const endpoints = tasks.map(
+      (task) => (task.inputTemplate as { endpointId?: unknown } | undefined)?.endpointId,
+    );
+    for (const forbidden of ['mergePullRequest', 'closePullRequest', 'createReview']) {
+      expect(endpoints).not.toContain(forbidden);
+    }
+    expect(tasks.map((task) => task.operation)).not.toContain('host.process.exec');
+  });
+
+  it('pushes only by starting Local Publish, as the Store installed it', () => {
+    const starts = tasks.filter((task) => task.operation === 'workflow.run.start');
+    expect(starts.map((task) => task.taskId)).toEqual(['publish']);
+    expect(starts[0]!.inputTemplate).toMatchObject({ catalogId: PUBLISH_LOCAL_CHANGES.catalogId });
+  });
+
+  it('lets no decision model gate the publication: the remedy question only routes the remedies', () => {
+    const classify = taskById.get('classify-failure')!;
+    expect(classify.inputTemplate).not.toHaveProperty('model');
+    expect(classify.routes?.flatMap((route) => route.enable).sort()).toEqual(
+      ['bump-dependency', 'fix', 'merge-round', 'rerun-jobs'].sort(),
+    );
+    const publishGuard = JSON.stringify(taskById.get('publish')!.when);
+    expect(publishGuard).not.toContain('classify-failure');
+    // The rules are a model-free step.
+    expect(taskById.get('decide')!.operation).toBe('workflow.run.decide');
+  });
+});
+
+describe('Local PR Shepherd — it stops', () => {
+  it('abandons at the budget instead of commissioning a fourth fix', () => {
+    const spent = pass({
+      handoff: {
+        found: true,
+        commentId: 9,
+        attemptCount: 3,
+        nextAttemptCount: 4,
+        checkRunId: '554',
+      },
+    });
+    expect(spent.decision).toBe('abandon');
+    for (const action of ACTIONS) expect(spent.ran).not.toContain(action);
+    expect(spent.handoff).toMatchObject({ decision: 'abandon', attemptCount: 3 });
+  });
+
+  it('takes the budget as a run input', () => {
+    const tight = pass({
+      inputs: { attemptBudget: 1 },
+      handoff: {
+        found: true,
+        commentId: 9,
+        attemptCount: 1,
+        nextAttemptCount: 2,
+        checkRunId: '554',
+      },
+    });
+    expect(tight.decision).toBe('abandon');
+  });
+});
+
+describe('Local PR Shepherd — the remedy a failure wants', () => {
+  it('asks one choice over the five remedies, with a bar set', () => {
+    expect(Object.keys(REMEDY_QUESTION.options).sort()).toEqual([...REMEDY_ROUTES].sort());
+    expect(REMEDY_QUESTION.minConfidence).toBeGreaterThan(0);
+  });
+
+  it.each([
+    ['flaky_or_timeout', ['rerun-jobs']],
+    ['code_defect', ['fix', 'publish']],
+    ['dependency_advisory', ['bump-dependency', 'publish']],
+    ['base_conflict', ['merge-round', 'publish']],
+    ['ci_outage', []],
+  ] as const)('routes a confident %s to %j', (remedy, acted) => {
+    const routed = pass({ remedy: { value: remedy, decided: true } });
+    expect(routed.ran.filter((task) => [...ACTIONS].includes(task) && task !== 'lease')).toEqual([
+      ...acted,
+    ]);
+  });
+
+  it('takes the fix commission on an answer below its bar, whatever it leaned to', () => {
+    const unsure = pass({ remedy: { value: 'flaky_or_timeout', decided: false } });
+    expect(unsure.ran).toContain('fix');
+    expect(unsure.ran).not.toContain('rerun-jobs');
+  });
+
+  it('reads the log of each failing job, up to three', () => {
+    const two = pass({ failingJobs: 2 });
+    expect(two.ran).toEqual(expect.arrayContaining(['read-failure-log-1', 'read-failure-log-2']));
+    expect(two.statuses.get('read-failure-log-3')).toBe('skipped');
+    expect((two.inputs.get('fix')!['inputs'] as { logs: unknown[] }).logs).toHaveLength(2);
+  });
+});
+
+describe('Local PR Shepherd — what it tends', () => {
+  it('reads the loop’s pull requests under the folder’s prefix, aimed at one where a number is given', () => {
+    const response = (input: Record<string, unknown> | undefined) =>
+      (input?.['response'] as { transformPresetId?: string } | undefined)?.transformPresetId;
+    expect(response(pass().inputs.get('list-prs'))).toBe('loop_pulls:aflow/');
+    expect(response(pass({ inputs: { pullNumber: '94' } }).inputs.get('list-prs'))).toBe(
+      'loop_pulls:aflow/:94',
+    );
+  });
+
+  it('leaves a pull request that is not the loop’s, and a green one, writing only the record on its own', () => {
+    expect(pass({ pullRequest: { ours: false } }).decision).toBe('leave');
+    const green = pass({ checks: { state: 'passing', total: 3, failing: [] } });
+    expect(green.decision).toBe('leave');
+    expect(green.ran).toContain('handoff');
+  });
+
+  it('waits, acting on nothing, on a read GitHub refused', () => {
+    const refused = pass({ listStatus: 401 });
+    expect(refused.decision).toBe('wait');
+    expect(refused.ran).not.toContain('read-pr');
+    expect(refused.ran).not.toContain('handoff');
+  });
+
+  it('closes every body Local Publish writes with the marker it tends by', () => {
+    expect(LOCAL_PUBLISH_PULL_REQUEST_MARKER).toMatch(/^<!-- aflow:local-publish -->$/);
+  });
+});
+
+describe('Local PR Shepherd bundle', () => {
+  const bundle = getSkillBundleEntry('local-shepherd');
+
+  it('installs the skill and the agent that starts it, under the skill’s slug', () => {
+    expect(bundle?.skillCatalogIds).toEqual([LOCAL_PR_SHEPHERD.catalogId]);
+    expect(bundle?.prerequisiteBundleIds).toContain('local-publish');
+    expect(bundle?.agents).toEqual([
+      expect.objectContaining({
+        kind: 'skill_starter',
+        skillCatalogId: 'local-pr-shepherd',
+        folderInput: 'bindingId',
+      }),
+    ]);
+    expect(wf.runInputs.find((input) => input.id === 'bindingId')?.required).toBe(true);
+  });
+
+  it('writes an agent of one operation step, the skill’s start with literal inputs, and no model turn', () => {
+    const definition = AgentDefinitionSchema.parse(
+      skillStarterAgentDefinition({
+        slug: wf.slug,
+        catalogId: LOCAL_PR_SHEPHERD.catalogId,
+        name: 'Local PR Shepherd',
+        description: 'Starts a pass.',
+        inputs: { bindingId: 'hb_aflow' },
+      }),
+    );
+    expect(definition.flowId).toBe('local-pr-shepherd');
+    expect(definition.steps).toHaveLength(1);
+    const [step] = definition.steps;
+    expect(step!.operation).toBe('workflow.run.start');
+    expect(step!.config).toEqual({
+      slug: 'local-pr-shepherd',
+      catalogId: 'local-pr-shepherd',
+      inputs: { bindingId: 'hb_aflow' },
+      wait: 'none',
+    });
+    expect(JSON.stringify(definition)).not.toMatch(/ai\.|\$\{|\$memoryRef/);
+  });
+});

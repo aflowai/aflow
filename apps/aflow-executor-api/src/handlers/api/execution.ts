@@ -51,6 +51,22 @@ export function assertTenantPolicyPermits(resolved: ResolvedCall, hostname: stri
   assertTenantPolicyPermitsHost(resolved.tenantHostGuard, hostname, resolved);
 }
 
+const ALWAYS_CREDENTIAL_HEADERS = ['authorization', 'proxy-authorization', 'cookie'];
+
+/** `headers` without the ones that carry a credential, compared without regard to case. */
+export function withoutCredentials(
+  headers: Record<string, string>,
+  credentialHeaders: readonly string[],
+): Record<string, string> {
+  const dropped = new Set([
+    ...ALWAYS_CREDENTIAL_HEADERS,
+    ...credentialHeaders.map((name) => name.toLowerCase()),
+  ]);
+  return Object.fromEntries(
+    Object.entries(headers).filter(([name]) => !dropped.has(name.toLowerCase())),
+  );
+}
+
 /** The enriched result of a completed HTTP call, before it becomes a StepResult. */
 export type ApiCallResultData = Awaited<ReturnType<typeof executeSingle>> & {
   wasRetried?: boolean;
@@ -268,6 +284,10 @@ export async function executeSingle(
     }
 
     response = await fetch(fetchUrl, fetchOptions);
+    // Once a redirect leaves the API's host the credential stays behind, for
+    // every hop after it too: the next host was named by a response, not by
+    // the binding the credential was given for.
+    let hopHeaders = pinnedHeaders;
 
     while (
       [301, 302, 303, 307, 308].includes(response.status) &&
@@ -344,11 +364,15 @@ export async function executeSingle(
       redirectCount++;
       finalUrl = redirectTarget;
       const redirectMethod = [303].includes(response.status) ? 'GET' : resolved.method;
+      if (redirectValidated.url.hostname !== validated.url.hostname) {
+        hopHeaders = withoutCredentials(hopHeaders, resolved.credentialHeaders ?? []);
+      }
+      const { Host: _host, ...forwarded } = hopHeaders;
       response = await fetch(pinnedRedirectUrl, {
         ...fetchOptions,
         method: redirectMethod,
         headers: {
-          ...pinnedHeaders,
+          ...forwarded,
           ...(isRedirectHttps ? {} : { Host: redirectValidated.url.host }),
         },
       });

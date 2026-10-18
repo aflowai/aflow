@@ -107,8 +107,9 @@ const KAGGLE_COMPETITION_BUNDLE: AuthoredSkillBundle = {
       ],
       egressPolicy: {
         // The data-download endpoint 302s to a signed Google Cloud Storage URL.
-        // The executor follows the redirect (forwarding the Bearer, which GCS
-        // ignores for a signed URL) and downloads the file in one call.
+        // The executor follows the redirect without the Bearer, which stays
+        // with kaggle.com and a signed URL does not need, and downloads the
+        // file in one call.
         allowedHosts: [
           'www.kaggle.com',
           'storage.googleapis.com',
@@ -170,7 +171,7 @@ const KAGGLE_COMPETITION_BUNDLE: AuthoredSkillBundle = {
 
 const CODING_PR_LOOP_BUNDLE: AuthoredSkillBundle = {
   bundleId: 'coding-pr-loop' as SkillBundleId,
-  revision: -1,
+  revision: 0,
   name: 'Coding PR Loop',
   tagline: 'Open, review, and iterate pull requests on your repo with a coding agent.',
   description: `Wires up the **GitHub REST API** and the three coding skills that drive the **implement ↔ review loop**: open a PR from a request, adversarially review it, and revise it on the same branch toward passing.
@@ -295,6 +296,47 @@ const LOCAL_PUBLISH_BUNDLE: AuthoredSkillBundle = {
 };
 
 // ============================================================================
+// local-shepherd — tend the loop's pull requests through CI
+// ============================================================================
+
+const LOCAL_PR_SHEPHERD_BUNDLE: AuthoredSkillBundle = {
+  bundleId: 'local-shepherd' as SkillBundleId,
+  revision: 0,
+  name: 'Local PR Shepherd',
+  tagline:
+    'Fix what CI fails on the pull requests the loop opened, through Local Publish — never approving, merging or closing.',
+  description: `Installs the **Local PR Shepherd** skill and the agent that starts it.
+
+**What it installs**:
+- The **Local PR Shepherd** skill — one pass over the pull requests Local Publish opened from a connected folder: it reads their CI, its own handoff comment and the work in flight on each branch, decides by rules — fix, wait, abandon or leave — and for a red check commissions the fix on the branch and publishes it through Local Publish, which asks the operator exactly where it would when started by hand. A check run is acted on once, and a pull request labelled \`hands-off\` is left untouched.
+- The **Local PR Shepherd** agent, under the skill's own slug — one step that starts the skill on the space's connected folder, and no model turn. It is what a schedule starts. It is written only where the space has exactly one folder that allows pushes; otherwise the install says so, and updating the bundle once the folder is connected writes it.
+
+**After install**: connect the repository as a folder with a publish prefix, bind the GitHub connector with a token that reads checks and Actions and writes comments, and allow the binding's redirects to \`*.blob.core.windows.net\` and \`*.actions.githubusercontent.com\` — where GitHub serves a job's log; the token is not sent there. Then run the agent, or start the skill with the folder's \`bindingId\`, and \`pullNumber\` to aim the pass at one pull request.`,
+  tags: ['coding', 'github', 'ci', 'local', 'developer-tools'],
+  skillCatalogIds: ['local-pr-shepherd'],
+  // Every fix is published by Local Publish, which has to be in the space.
+  prerequisiteBundleIds: ['local-publish' as SkillBundleId],
+  apiDefinitions: [GITHUB_API_DEFINITION],
+  apiBindingTemplates: [],
+  memorySeed: [],
+  agents: [
+    {
+      kind: 'skill_starter',
+      skillCatalogId: 'local-pr-shepherd',
+      name: 'Local PR Shepherd',
+      description:
+        "Starts one pass of the Local PR Shepherd on the space's connected folder. It decides nothing: the skill reads, decides and acts.",
+      folderInput: 'bindingId',
+    },
+  ],
+  helmsmanHints: [
+    'A pass is one run of the skill over the folder: start the Local PR Shepherd agent, or workflow.run.start local-pr-shepherd with the folder’s bindingId — and pullNumber to aim it at one pull request. Its decision and reason are in its result and in the handoff comment on the pull request.',
+    'The shepherd never approves, merges or closes. A fix it publishes waits at Local Publish’s approval where the folder’s posture asks; that approval is the operator’s, in the Action Center.',
+    'A space with the GitHub definition from an earlier Local Publish needs Local Publish updated from the Store for the endpoints the shepherd reads — the jobs of a run and the end of a job’s log.',
+  ],
+};
+
+// ============================================================================
 // Registry
 // ============================================================================
 
@@ -316,6 +358,7 @@ const RAW_BUNDLES: readonly AuthoredSkillBundle[] = [
   LOCAL_COMMISSION_BUNDLE,
   LOCAL_CODE_REVIEW_BUNDLE,
   LOCAL_PUBLISH_BUNDLE,
+  LOCAL_PR_SHEPHERD_BUNDLE,
   TICKER_DIGEST,
   WEB_RESEARCH_BRIEF,
   LITERATURE_SCAN,

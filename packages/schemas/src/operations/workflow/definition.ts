@@ -11,6 +11,15 @@ import { WorkflowTaskSchema } from './task.js';
 // Workflow Schema
 // ============================================================================
 
+/**
+ * The most tasks a stored workflow holds. A ceiling, not a design target: a
+ * task is one operation, so a skill that reads five things, decides, and acts
+ * one of four ways is twenty tasks before it records anything — the Local PR
+ * Shepherd is twenty-three. What compose-skill drafts is bounded separately,
+ * by what a drafting turn can hold.
+ */
+export const WORKFLOW_TASKS_MAX = 32;
+
 export const IterationPolicySchema = z.object({
   auto: z.boolean().default(false),
   maxConsecutiveRuns: z.number().int().min(1).max(100).default(5),
@@ -41,7 +50,7 @@ export const WorkflowSchema = z.object({
 
   mode: WorkflowModeSchema,
 
-  tasks: z.array(WorkflowTaskSchema).min(1).max(20),
+  tasks: z.array(WorkflowTaskSchema).min(1).max(WORKFLOW_TASKS_MAX),
 
   /**
    * 104j §6.1: Workflow-level declared state variables.

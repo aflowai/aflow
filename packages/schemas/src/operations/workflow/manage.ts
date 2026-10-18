@@ -6,7 +6,12 @@ import { WorkflowRunInputSchema } from './runInput.js';
 import { WorkflowStateVariableSchema } from './stateVariable.js';
 import { assertAuthoredTask } from './taskContract.js';
 import { WorkflowTaskSchema } from './task.js';
-import { IterationPolicySchema, WorkflowBudgetSchema, WorkflowSchema } from './definition.js';
+import {
+  IterationPolicySchema,
+  WORKFLOW_TASKS_MAX,
+  WorkflowBudgetSchema,
+  WorkflowSchema,
+} from './definition.js';
 import { WorkflowOutputDeclarationSchema } from './runResult.js';
 import { ActiveLearningSchema } from '../../cybernetic/activeLearning.js';
 import { WorkflowLedgerEntrySchema, WorkflowTrajectoryRowSchema } from './ledger.js';
@@ -46,7 +51,7 @@ export const WorkflowPutInputSchema = z
       description: z.string().max(2000).optional(),
       outcomes: z.array(OutcomeSchema).min(1).max(10),
       mode: WorkflowModeSchema,
-      tasks: z.array(WorkflowTaskSchema).min(1).max(20),
+      tasks: z.array(WorkflowTaskSchema).min(1).max(WORKFLOW_TASKS_MAX),
       /** 104j §6.1: Workflow-level state variable declarations. */
       stateVariables: z.array(WorkflowStateVariableSchema).max(20).default([]),
       /** Declared run-input contract — declaration only; enforcement lands later. */

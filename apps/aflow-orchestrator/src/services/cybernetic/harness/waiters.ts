@@ -112,8 +112,13 @@ export async function notifyWaiters(deps: HarnessDeps, args: NotifyWaitersArgs):
       if (parentTask !== null) {
         // A takeover leaves the task waiting for the run to end. A pause ends
         // its wait instead: nobody hears a pause inside a task, so the run
-        // would sit paused and the task claimed for good.
+        // would sit paused and the task claimed for good — except an
+        // approval, which the operator answers on the run surface wherever
+        // the run came from. A publication the shepherd starts asks there
+        // exactly as one started by hand does (Plan 321 D6), and the task
+        // waits on through it for the run to end.
         if (args.outcome !== 'paused' && !isRunEnding(args.outcome)) continue;
+        if (args.outcome === 'paused' && (await pausedForOperator(deps, args))) continue;
         await answerWorkflowTask(
           deps,
           args,
@@ -160,6 +165,22 @@ export async function notifyWaiters(deps: HarnessDeps, args: NotifyWaitersArgs):
         },
       );
     }
+  }
+}
+
+/** Whether the pause is a human task's, which the operator resolves; unreadable reads as not. */
+async function pausedForOperator(deps: HarnessDeps, args: NotifyWaitersArgs): Promise<boolean> {
+  if (args.payloadRef === undefined) return false;
+  try {
+    const contract = await deps.payloadStore.retrieve(args.payloadRef);
+    return (
+      contract !== null &&
+      typeof contract === 'object' &&
+      !Array.isArray(contract) &&
+      (contract as Record<string, unknown>)['pauseCause'] === 'needs_decision'
+    );
+  } catch {
+    return false;
   }
 }
 

@@ -122,9 +122,25 @@ describe('resolveTaskInputs — task_output bindings', () => {
       ...baseOpTask,
       inputBindings: { v: { kind: 'task_output', taskId: 'upstream' } },
     } as WorkflowTask;
-    const run = makeRun([makeTaskRow({ taskId: 'upstream', status: 'failed', outputRef: null })]);
+    const run = makeRun([
+      makeTaskRow({ taskId: 'upstream', status: 'succeeded', outputRef: null }),
+    ]);
 
     await expect(resolveTaskInputs(task, { run })).rejects.toThrow(/output is unavailable/);
+  });
+
+  // Readiness dispatches a consumer past a failed producer only where the
+  // producer was optional, so the consumer runs on what it does have — the
+  // way a release step follows a commission that failed.
+  it('omits a binding to a failed producer, as it does a skipped one', async () => {
+    const task = {
+      ...baseOpTask,
+      inputs: { kept: 1 },
+      inputBindings: { v: { kind: 'task_output', taskId: 'upstream', path: 'patchRef' } },
+    } as WorkflowTask;
+    const run = makeRun([makeTaskRow({ taskId: 'upstream', status: 'failed', outputRef: null })]);
+
+    await expect(resolveTaskInputs(task, { run })).resolves.toEqual({ kept: 1 });
   });
 
   it('rejects a non-inline outputRef when no payloadStore is in scope (round-6 P1 fail-loud)', async () => {
