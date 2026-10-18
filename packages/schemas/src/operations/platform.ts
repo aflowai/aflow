@@ -5,6 +5,7 @@
  * These are typically admin-only and require elevated permissions.
  */
 import { z } from 'zod';
+import { HelpCenterOperationRegistrations } from './helpCenter.js';
 import { SkillDiscoveryOperationRegistration } from './skillDiscovery.js';
 import { StepTypeSchema } from '../artifact/operationDefinition.js';
 import type { OperationRegistration } from '../catalog/operationCatalog.js';
@@ -1193,6 +1194,7 @@ export const PlatformOperationRegistrations: OperationRegistration[] = [
     outputZod: PlatformGetSchemaOutputSchema,
   },
   SkillDiscoveryOperationRegistration,
+  ...HelpCenterOperationRegistrations,
   {
     stepType: 'catalog',
     group: 'tool',

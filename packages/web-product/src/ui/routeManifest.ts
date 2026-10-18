@@ -88,6 +88,8 @@ export const ROUTE_MANIFEST: readonly RouteEntry[] = [
   { route: 'settings/store', screen: 'TenantStorePolicyPage', editions: ['hosted'] },
   { route: 'settings/spaces', screen: 'TenantSpacesPage', editions: ['hosted'] },
   { route: 'spaces', screen: 'SpacesIndexPage', editions: BOTH },
+  { route: 'help', screen: 'HelpIndexPage', editions: BOTH },
+  { route: 'help/[articleId]', screen: 'HelpArticlePage', editions: BOTH },
   { route: 'spaces/archived', screen: 'ArchivedSpacesPage', editions: BOTH },
   { route: 's/[space]/settings/credentials', screen: 'SpaceCredentialsPage', editions: BOTH },
   { route: 's/[space]/settings/general', screen: 'SpaceGeneralPage', editions: BOTH },

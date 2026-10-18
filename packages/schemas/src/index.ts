@@ -63,4 +63,5 @@ export * from './background/index.js';
 
 export * from './simulation/index.js';
 export * from './edition/index.js';
+export * from './help/index.js';
 export * from './modelOutput/cappedText.js';

@@ -50,6 +50,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "devDependencies": {
+    "@aflow/platform-artifacts": "workspace:*",
     "@tanstack/react-query": "^5.104.1",
     "@tanstack/react-query-devtools": "^5.104.1",
     "@types/react": "^19.3.0",

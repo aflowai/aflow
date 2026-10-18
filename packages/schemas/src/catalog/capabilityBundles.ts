@@ -161,6 +161,13 @@ export const CAPABILITY_BUNDLES: readonly CapabilityBundle[] = [
     capabilityGroupIds: ['integration.simulation'],
   },
   {
+    id: 'help',
+    label: 'Product help',
+    hint: 'Aflow’s own help articles, the ones on the Help page: how the product works, where things are, how to set them up.',
+    tier: 'on_demand',
+    capabilityGroupIds: ['catalog.help'],
+  },
+  {
     id: 'store',
     label: 'Store',
     hint: 'Find skills and services this space does not have yet. Installing one raises a proposal for you to approve.',

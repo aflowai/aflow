@@ -114,3 +114,12 @@ export {
   resolveHelmsmanCapabilities,
   estimateOperationTokens,
 } from './helmsmanCapabilities.js';
+
+export {
+  allHelpArticles,
+  getHelpArticle,
+  listHelpArticles,
+  searchHelpArticles,
+  toHelpArticleSummary,
+} from './helpCenter/index.js';
+export type { HelpArticleFilter, HelpSearchOptions, HelpSearchResult } from './helpCenter/index.js';
