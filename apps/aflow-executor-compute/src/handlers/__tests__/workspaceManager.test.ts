@@ -103,6 +103,7 @@ class FakeRepo implements MemoryDocRepository {
       createdByStepExecutionId: null,
       currentVersion: 1,
       embeddingStatus: 'pending',
+      embeddingError: null,
       indexingMode: 'auto',
       expiresAt: null,
       deletedAt: null,
@@ -185,6 +186,7 @@ class FakeRepo implements MemoryDocRepository {
       createdByStepExecutionId: null,
       currentVersion: (existing?.currentVersion ?? 0) + 1,
       embeddingStatus: 'pending',
+      embeddingError: null,
       indexingMode: params.indexing,
       expiresAt: null,
       deletedAt: null,
@@ -212,20 +214,13 @@ class FakeRepo implements MemoryDocRepository {
   updateChunkEmbedding = async () => {};
   updateDocEmbeddingStatus = async () => {};
   updateDerivedFields = async () => {};
-  resolveEmbeddingModel = async () => ({
-    model: 'test',
-    dims: 1536,
-    column: 'embedding_1536',
+  settleDocEmbedding = async () => true;
+  markDocsPendingForEmbedding = async () => 0;
+  embeddingSummary = async () => ({
+    counts: { disabled: 0, pending: 0, indexed: 0, failed: 0, unconfigured: 0 },
+    embeddableChars: 0,
+    lastError: null,
   });
-  getEmbedConfig = async () => null;
-  setEmbedConfig = async () => ({
-    id: 'cfg-1',
-    scopeType: 'global',
-    scopeValue: null,
-    embeddingModel: 'test',
-    dims: 1536,
-  });
-  markDocsStaleForScope = async () => [];
   getStaleDocsForReembed = async () => [];
   withTransaction = async <T>(
     fn: (r: MemoryDocRepository, l: MemoryLinkRepository) => Promise<T>,

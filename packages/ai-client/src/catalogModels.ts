@@ -259,6 +259,7 @@ export const builtInModels: ModelDefinition[] = [
     capabilities: embeddingCapabilities,
     pricing: { promptPer1M: 0.02, completionPer1M: 0, embeddingPer1M: 0.02, currency: 'USD' },
     traits: { speed: 5, cost: 1, outputType: 'embedding' },
+    embeddingDimensions: 1536,
   },
   {
     id: 'text-embedding-3-large',
@@ -270,6 +271,19 @@ export const builtInModels: ModelDefinition[] = [
     capabilities: embeddingCapabilities,
     pricing: { promptPer1M: 0.13, completionPer1M: 0, embeddingPer1M: 0.13, currency: 'USD' },
     traits: { speed: 5, cost: 2, outputType: 'embedding' },
+    embeddingDimensions: 3072,
+  },
+  {
+    id: 'gemini-embedding-001',
+    provider: 'google',
+    displayName: 'Gemini Embedding',
+    description: 'Google embedding model for semantic search, served at 1536 dimensions',
+    contextWindow: 2048,
+    maxOutputTokens: 0,
+    capabilities: embeddingCapabilities,
+    pricing: { promptPer1M: 0.15, completionPer1M: 0, embeddingPer1M: 0.15, currency: 'USD' },
+    traits: { speed: 4, cost: 2, outputType: 'embedding' },
+    embeddingDimensions: 1536,
   },
 
   // ============================================================================

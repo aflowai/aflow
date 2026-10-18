@@ -26,6 +26,7 @@ import { spaceCrudRoutes } from '../routes/spaceCrudRoutes.js';
 import { spacePolicyRoutes } from '../routes/spacePolicyRoutes.js';
 import { spaceLifecycleRoutes } from '../routes/spaceLifecycleRoutes.js';
 import { activeMemoryRoutes } from '../routes/activeMemory.js';
+import { spaceMemoryEmbeddingRoutes } from '../routes/spaceMemoryEmbedding.js';
 import { spaceLlmReadinessRoutes } from '../routes/spaceLlmReadiness.js';
 import { localModelRoutes } from '../routes/localModels.js';
 import { spaceConnectionsRoutes } from '../routes/spaceConnections.js';
@@ -148,6 +149,10 @@ function v1Surfaces({ actionCenterAggregator }: V1SurfaceDeps): ServerSurface[] 
     {
       name: 'active-memory',
       register: (s) => s.register(activeMemoryRoutes, { prefix: '/spaces' }),
+    },
+    {
+      name: 'space-memory-embedding',
+      register: (s) => s.register(spaceMemoryEmbeddingRoutes, { prefix: '/spaces' }),
     },
     {
       name: 'space-llm-readiness',

@@ -15,6 +15,7 @@ export * from './artifact/index.js';
 
 // Runtime schemas (execution-time structures)
 export * from './memory/reservedPaths.js';
+export * from './memory/embedding.js';
 export * from './runtime/index.js';
 
 // Operation schemas (canonical input/output for each operation)

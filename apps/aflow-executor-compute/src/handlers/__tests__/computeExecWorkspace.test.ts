@@ -76,6 +76,7 @@ class TinyRepo {
       createdByStepExecutionId: null,
       currentVersion: 1,
       embeddingStatus: 'pending',
+      embeddingError: null,
       indexingMode: 'auto',
       expiresAt: null,
       deletedAt: null,

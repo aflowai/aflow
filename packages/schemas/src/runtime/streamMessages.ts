@@ -318,12 +318,6 @@ export const StreamKeys = {
    */
   mcpElicitationLeaseCandidatesKey: 'aflow:mcp:elicitation:lease:candidates' as const,
 
-  /** Memory embedding job stream */
-  memoryEmbedStream: 'aflow:memory:embed' as const,
-
-  /** Memory embedding DLQ stream */
-  memoryEmbedDlqStream: 'aflow:memory:embed:dlq' as const,
-
   /** Memory v2 doc embedding job stream */
   memoryDocEmbedStream: 'aflow:memory:doc-embed' as const,
 
@@ -980,54 +974,6 @@ export const ControlMessageSchema = z.discriminatedUnion('type', [
 export type ControlMessage = z.infer<typeof ControlMessageSchema>;
 
 // ============================================================================
-// Memory Embedding Job Message
-// ============================================================================
-
-/**
- * Message sent to the memory embedding queue for asynchronous embedding generation.
- * Published when memory entries are written/updated.
- */
-export const MemoryEmbedJobSchema = z.object({
-  /** Message schema version */
-  messageVersion: MessageVersionSchema.default(1),
-
-  /** Tenant context */
-  tenantId: TenantIdSchema,
-
-  /** Memory entry ID (UUID) */
-  entryId: z.string().uuid(),
-
-  /** Embedding model identifier (e.g., "openai:text-embedding-3-small") */
-  embeddingModel: z.string().min(1).max(256),
-
-  /** SHA256 hash of normalized content (for idempotency) */
-  contentHash: z.string().regex(/^[a-f0-9]{64}$/, 'Must be a valid SHA-256 hex string'),
-
-  /** Payload reference for large content (preferred) */
-  contentRef: PayloadRefSchema.optional(),
-
-  /** Inline content text (ONLY for small payloads, max 16KB) */
-  contentText: z.string().max(16384).optional(),
-
-  /** Namespace (for debugging) */
-  namespace: z.string().max(128).optional(),
-
-  /** Scope information (one of spaceId, flowId, or runId) */
-  scope: z
-    .union([
-      z.object({ spaceId: z.string().uuid() }),
-      z.object({ flowId: z.string().max(128) }),
-      z.object({ runId: z.string().uuid() }),
-    ])
-    .optional(),
-
-  /** ISO timestamp when job was created */
-  createdAt: z.string().datetime(),
-});
-
-export type MemoryEmbedJob = z.infer<typeof MemoryEmbedJobSchema>;
-
-// ============================================================================
 // Memory v2 Doc Embedding Job Message
 // ============================================================================
 
@@ -1058,9 +1004,6 @@ export const MemoryDocEmbedJobSchema = z.object({
 
   /** SHA256 of the content at write time (idempotency check) */
   contentHash: z.string().regex(/^[a-f0-9]{64}$/, 'Must be a valid SHA-256 hex string'),
-
-  /** Embedding model to use */
-  embeddingModel: z.string().min(1).max(256),
 
   /** ISO timestamp when job was created */
   createdAt: z.string().datetime(),

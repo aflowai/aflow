@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 import { spaceSettingsTabPaths } from './spaceSettingsTabs.js';
 
 function labels(id: 'enterprise' | 'community-local' | null, surfaces: string[] = []): string[] {
-  return spaceSettingsTabPaths({ id, surfaces: new Set(surfaces) }, false).map((t) => t.label);
+  return spaceSettingsTabPaths({ id, surfaces: new Set(surfaces) }).map((t) => t.label);
 }
 
 describe('the hosted edition', () => {
@@ -39,6 +39,7 @@ describe('the local edition', () => {
       'General',
       'Agent',
       'Rules',
+      'Memory',
       'Compute',
       'Write Policy',
       'Credentials',
@@ -51,14 +52,5 @@ describe('before the server has answered', () => {
   it('withholds every edition-owned tab rather than showing one that then goes', () => {
     expect(labels(null)).not.toContain('OAuth Apps');
     expect(labels(null)).not.toContain('Coding Lane');
-  });
-});
-
-describe('a solo space', () => {
-  it('gains Memory directly after Rules', () => {
-    const paths = spaceSettingsTabPaths({ id: 'community-local', surfaces: new Set() }, true).map(
-      (t) => t.label,
-    );
-    expect(paths[paths.indexOf('Rules') + 1]).toBe('Memory');
   });
 });

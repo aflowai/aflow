@@ -29,6 +29,7 @@ import { createShutdownController, attachSignalHandlers } from '@aflow/lib';
 import { resolvePayloadStore } from '@aflow/payload-store';
 import { StreamKeys, ConsumerGroups } from '@aflow/schemas';
 import { createDatabase, getDatabaseConfig } from '@aflow/database';
+import { createMemoryEmbeddingResolver } from '@aflow/credential-resolver';
 import { MemoryHandler } from './handlers/memory/index.js';
 import { MemoryDocEmbedder } from './embedder.js';
 
@@ -110,13 +111,15 @@ async function main() {
   const runtime = new ExecutorRuntime(config, deps);
 
   // Register the memory handler
-  const memoryHandler = new MemoryHandler(database.db, redis, payloadStore);
+  const memoryEmbedding = createMemoryEmbeddingResolver(database.db);
+  const memoryHandler = new MemoryHandler(database.db, redis, payloadStore, memoryEmbedding);
   runtime.registerHandler(memoryHandler);
 
   // Start the embedding worker as a background loop
   const embedder = new MemoryDocEmbedder({
     redis: embedderRedis,
     db: database.db,
+    embedding: memoryEmbedding,
     sqlClient: database.sql,
     budgetRedis: redis,
   });

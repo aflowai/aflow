@@ -1,10 +1,14 @@
 'use client';
 
+import Link from 'next/link';
+
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { AppPageHeader } from '../components/app-page-header.js';
 import { Row, Column, Text, Divider, Icon, useBreakpoint } from '@aflow/design-system';
 import { useMemoryOps } from '../hooks/use-memory-ops.js';
 import { useSpaceFromRoute } from '../components/providers.js';
+import { useSpaceMemoryEmbedding } from '../hooks/use-memory-embedding.js';
+import { spaceRoute } from '../lib/space-routes.js';
 import type { MemoryQueryItem, MemoryGetOutput } from '../hooks/use-memory-ops.js';
 import type { MemoryLinkedDoc } from '../hooks/use-memory-links.js';
 import {
@@ -32,6 +36,7 @@ export function MemoryExplorer({
   initialDocPath?: string | undefined;
 }) {
   const routeSpace = useSpaceFromRoute();
+  const embedding = useSpaceMemoryEmbedding(routeSpace?.id ?? '');
   // Navigation
   const [currentPath, setCurrentPath] = useState(initialPath);
   const [selectedEntry, setSelectedEntry] = useState<MemoryQueryItem | null>(null);
@@ -253,6 +258,14 @@ export function MemoryExplorer({
             <Text size="xs" tone="danger" style={{ maxWidth: 300 }}>
               {opsError}
             </Text>
+          ) : embedding.data?.state === 'unconfigured' ? (
+            <Link
+              href={spaceRoute(routeSpace?.slug, '/settings/memory')}
+              title={embedding.data.reason ?? undefined}
+              style={{ color: 'var(--color-warning-fg)', fontSize: 'var(--font-size-xs)' }}
+            >
+              Search matches keywords only — set up in Settings → Memory
+            </Link>
           ) : undefined
         }
       />

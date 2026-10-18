@@ -22,11 +22,8 @@ const KEY_PATTERN =
   /OPENAI_API_KEY|GEMINI_API_KEY|ANTHROPIC_API_KEY|GOOGLE_AI_API_KEY|FIREWORKS_API_KEY|OPENROUTER_API_KEY/;
 
 const ALLOWED_CONSUMERS = [
-  // Memory-embedding infrastructure (the D3 exception)
-  'apps/aflow-executor-ai/src/workers/memoryEmbedder.ts',
-  'apps/aflow-executor-memory/src/embedder.ts',
-  'apps/aflow-executor-memory/src/handlers/memory/handlers/query.ts',
-  'apps/aflow-executor-memory/src/handlers/memory/providers.ts',
+  // Memory embeddings off the local edition (the D3 exception), in their one resolver
+  'packages/credential-resolver/src/memoryEmbedding.ts',
   // Coding-lane secret ISOLATION — scrubs these keys OUT of the lane env
   'apps/aflow-executor-code/src/secrets/isolation.ts',
 ].sort();

@@ -1095,27 +1095,6 @@ const DEFINITIONS: readonly BackgroundTaskDefinitionInput[] = [
     sites: [{ path: 'packages/redis/src/streams/jobs.ts', discovery: ['blocking-consumer'] }],
   },
   {
-    id: 'executor.memory.embed_consumer',
-    service: 'executor-memory',
-    ownerDomain: 'memory',
-    purpose: 'Consume memory embedding jobs and write their vectors.',
-    invariant: 'A queued embedding job is embedded once or stays pending for the next consumer.',
-    criticality: 'feature',
-    trigger: 'blocking',
-    scope: 'per_instance',
-    substrate: 'redis-stream',
-    maxBatch: 10,
-    maxCycleMs: 120_000,
-    idleOperationBudgetPerMinute: 60,
-    hotPathProducerBudget: {
-      maxAdditionalNetworkRoundTrips: 0,
-      description: 'Producers XADD the job they already produce.',
-    },
-    disablePolicy: 'safe',
-    recovery: 'Unacked entries stay in the PEL; the backfill pass catches anything never enqueued.',
-    sites: [{ path: 'packages/redis/src/memoryEmbed.ts', discovery: ['blocking-consumer'] }],
-  },
-  {
     id: 'executor.memory.doc_embed_consumer',
     service: 'executor-memory',
     ownerDomain: 'memory',
@@ -1351,7 +1330,7 @@ const DEFINITIONS: readonly BackgroundTaskDefinitionInput[] = [
       'apps/aflow-executor-memory/src/embedder.ts',
       'packages/database/src/tenant/duePointers.ts',
     ],
-    note: "Two indexed empty reads per minute per replica at idle. The contended resource is the tenant pointer row: every write to a pending document takes it, so all of a tenant's memory writes serialise on that one row for the duration of the trigger. A pending document stays pending until its embedding lands, so a tenant with a backlog is re-claimed each cadence and its jobs re-published — the stream consumer, not the pointer, is what makes that idempotent.",
+    note: "Two indexed empty reads per minute per replica at idle. The contended resource is the tenant pointer row: every write to a pending document takes it, so all of a tenant's memory writes serialise on that one row for the duration of the trigger. A pending document stays pending until its embedding lands, so a tenant with a backlog is re-claimed each cadence and its jobs re-published — the stream consumer, not the pointer, is what makes that idempotent. A document whose space has no embedding provider leaves pending as `unconfigured` rather than waiting in it, so a space without a key is not re-claimed every cadence; a saved key or a chosen model marks it pending again.",
   },
 
   // ==========================================================================

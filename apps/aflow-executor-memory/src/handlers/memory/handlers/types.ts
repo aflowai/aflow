@@ -4,6 +4,7 @@
 import type { PayloadStore } from '@aflow/payload-store';
 import type { Redis } from 'ioredis';
 import type { EmbeddingBudgetLimitsView, MemoryLinkRepository } from '@aflow/database';
+import type { MemoryEmbeddingResolver } from '@aflow/credential-resolver';
 
 export interface MemoryHandlerDeps {
   payloadStore: PayloadStore;
@@ -14,4 +15,6 @@ export interface MemoryHandlerDeps {
   loadEmbeddingBudgetLimits?: (tenantId: string) => Promise<EmbeddingBudgetLimitsView>;
   /** Link graph reads (backlinks, outgoing counts, hub/edge listings). */
   linkRepo: MemoryLinkRepository;
+  /** The space's embedding model and client; absent, search is lexical only. */
+  embedding?: MemoryEmbeddingResolver;
 }

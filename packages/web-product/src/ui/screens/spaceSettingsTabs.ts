@@ -12,7 +12,7 @@ const TAB_PATHS: Array<{
   { path: '/settings/general', label: 'General' },
   { path: '/settings/agent', label: 'Agent' },
   { path: '/settings/rules', label: 'Rules' },
-  // Memory is inserted here only for solo (owner-only) spaces — see below.
+  { path: '/settings/memory', label: 'Memory' },
   { path: '/settings/compute', label: 'Compute' },
   // The lane is cloud-owned and absent from the local artifact, so a local
   // instance has nothing to run a code step on. Offering the tab there lets an
@@ -47,15 +47,8 @@ export interface SpaceSettingsTab {
  */
 export function spaceSettingsTabPaths(
   edition: Pick<Edition, 'id' | 'surfaces'>,
-  showMemory: boolean,
 ): SpaceSettingsTab[] {
-  const paths = [...TAB_PATHS];
-  if (showMemory) {
-    const rulesIdx = paths.findIndex((t) => t.path === '/settings/rules');
-    paths.splice(rulesIdx + 1, 0, { path: '/settings/memory', label: 'Memory' });
-  }
-  return paths
-    .filter((tab) => tab.surface === undefined || edition.surfaces.has(tab.surface))
+  return TAB_PATHS.filter((tab) => tab.surface === undefined || edition.surfaces.has(tab.surface))
     .filter((tab) => tab.enterpriseOnly !== true || edition.id === 'enterprise')
     .map((tab) => ({ path: tab.path, label: tab.label }));
 }
