@@ -60,7 +60,7 @@ export interface HarnessSession {
   /**
    * What the harness calls this conversation: minted here for a harness that
    * takes an id, and recorded from its event stream for one that names its own
-   * (Plan 325 D2). Undefined until such a harness has said, and a session
+   * (Plan 326 D2). Undefined until such a harness has said, and a session
    * without one cannot be resumed — only started again in the same checkout.
    */
   conversationId: string | undefined;

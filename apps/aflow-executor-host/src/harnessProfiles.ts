@@ -81,7 +81,7 @@ export const HarnessProfileSchema = z.object({
    * How this harness is told how many turns it may take, carrying `{turns}`
    * where the number goes. Empty means the CLI has no such flag: a run asking
    * for a budget runs without one, bounded by its timeout, and its result says
-   * the budget was not applied (Plan 325 D5).
+   * the budget was not applied (Plan 326 D5).
    */
   turnsArgs: z.array(z.string()).default([]),
   /**
@@ -107,7 +107,7 @@ export const HarnessProfileSchema = z.object({
    */
   mcpArgs: z.array(z.string()).default([]),
   /**
-   * What `mcpArgs` hand over (Plan 325 D3). `claude-json`: the path of a JSON
+   * What `mcpArgs` hand over (Plan 326 D3). `claude-json`: the path of a JSON
    * configuration file, at `{mcpConfig}`. `codex-toml`: one configuration
    * override declaring the server inline, at `{mcpServers}` — for a harness
    * that takes no configuration file.
@@ -123,7 +123,7 @@ export const HarnessProfileSchema = z.object({
   /**
    * Files of the operator's own sign-in, by absolute path, copied into the
    * run's configuration directory before each turn and written back after it
-   * when the harness refreshed them (Plan 325 D4). The copy is made outside
+   * when the harness refreshed them (Plan 326 D4). The copy is made outside
    * the boundary, as the operator, so home stays denied to the harness. Only
    * meaningful with `configDirEnv`; each lands under its own base name.
    */
@@ -429,7 +429,7 @@ export function supportsContinuation(profile: HarnessProfile): boolean {
 /**
  * True when the conversation id is minted here and handed to the harness.
  * Otherwise the harness names its own conversation and reports the id in its
- * event stream (Plan 325 D2).
+ * event stream (Plan 326 D2).
  */
 export function mintsConversationId(profile: HarnessProfile): boolean {
   return profile.sessionArgs.length > 0;

@@ -180,7 +180,7 @@ export function compileResultValidator(schema: Record<string, unknown>): ResultV
 /**
  * The files a repository states its own rules in. Every one present is named,
  * whatever the harness: one that discovers a file itself reads it twice, and
- * one that discovers neither would otherwise miss the rules (Plan 325 D8).
+ * one that discovers neither would otherwise miss the rules (Plan 326 D8).
  */
 const REPOSITORY_RULES_FILES = ['CLAUDE.md', 'AGENTS.md'] as const;
 
@@ -394,7 +394,7 @@ export async function readHarnessResult(
 }
 
 /**
- * Which harness a run gets (Plan 325 D6, D12).
+ * Which harness a run gets (Plan 326 D6, D12).
  *
  * A named harness is that harness or a refusal; it never silently becomes
  * another, because a caller that named one is comparing or relying on it. A
@@ -432,7 +432,7 @@ export async function selectHarness(
     );
   }
   const defaultId = machineDefault ?? (offered.length === 1 ? offered[0]?.id : undefined);
-  const candidates: { id: string; by: HarnessSelectedBy; what: string }[] = [
+  const candidates: Array<{ id: string; by: HarnessSelectedBy; what: string }> = [
     ...(preferred !== undefined
       ? [{ id: preferred, by: 'preferred' as const, what: "this space's coding agent" }]
       : []),
@@ -729,7 +729,7 @@ async function runHarness(
     }
 
     // A harness that names its own conversation reports the id during the
-    // first turn, and it is recorded then (Plan 325 D2).
+    // first turn, and it is recorded then (Plan 326 D2).
     let conversationId =
       session?.conversationId ?? (mintsConversationId(profile) ? newConversationId() : undefined);
     // A session whose harness never reported an id is started again in its

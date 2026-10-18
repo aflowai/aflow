@@ -1,5 +1,5 @@
 /**
- * The operator's sign-in, lent to a run and taken back (Plan 325 D4).
+ * The operator's sign-in, lent to a run and taken back (Plan 326 D4).
  *
  * A harness signed in with a subscription keeps its sign-in as a file, and the
  * file holds a refresh token the harness rotates. Home is denied to the run,

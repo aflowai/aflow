@@ -68,6 +68,13 @@ export const spaces = pgTable('spaces', {
 
   writePolicy: jsonb('write_policy').$type<SpaceWriteApprovalPolicy | null>(),
 
+  /**
+   * The coding agent this space prefers on a connected machine, by the id the
+   * machine configured (Plan 326 D12). A preference: a machine without it
+   * installed runs its own default and says so. Null means the machine decides.
+   */
+  preferredHarness: text('preferred_harness'),
+
   directives: jsonb('directives').$type<EntityDirectives | null>(),
 
   activeMemory: jsonb('active_memory').$type<ActiveMemoryRegister | null>(),

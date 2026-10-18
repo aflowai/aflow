@@ -38,6 +38,7 @@ import { getOrchestratorLogger } from '../../../lib/orchestratorLogger.js';
 import { readIntegrations } from './integrationReader.js';
 import { buildSpaceContextAppletsSection } from './spaceContextApplets.js';
 import { resolveWebBaseUrlOrNull } from '@aflow/lib';
+import { readPreferredHarness } from '../../hostHarnessPreference.js';
 
 /** Canonical path of a space's memory-map note. */
 const INDEX_NOTE_PATH = '/index.md';
@@ -516,15 +517,14 @@ export async function buildSpaceContext(
         // an id nothing it reads names.
         const inventories = await readLiveHostInventories(getRedisConnection());
         const harnesses = mergeHostHarnesses(inventories);
+        const preferredHarness = await readPreferredHarness(db, tenantId, spaceId);
         const publishing = publishingFoldersForSpace(inventories, spaceId);
         context.hostFolders = {
           items: folderRows
             .slice(0, limit)
             .map((row) => hostFolderEntry(row, publishing.get(row.hostBindingId))),
           harnesses,
-          ...(spaceRow.directives?.codingHarness !== undefined
-            ? { preferredHarness: spaceRow.directives.codingHarness }
-            : {}),
+          ...(preferredHarness !== undefined ? { preferredHarness } : {}),
           total: folderRows.length,
           ...(truncated ? { truncated: true } : {}),
           guidance: HOST_FOLDERS_GUIDANCE,

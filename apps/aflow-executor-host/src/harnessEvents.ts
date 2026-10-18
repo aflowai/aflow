@@ -39,7 +39,7 @@ export interface HarnessEventReader {
   answer(): string;
   /**
    * The id the harness gave its conversation, for a harness that names its own
-   * rather than taking one (Plan 325 D2). Undefined until it says.
+   * rather than taking one (Plan 326 D2). Undefined until it says.
    */
   conversationId(): string | undefined;
 }

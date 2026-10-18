@@ -96,7 +96,7 @@ export const HostPolicySchema = z.object({
   /** Coding harnesses this machine will run. Absent means none may run here. */
   harnesses: z.array(HarnessProfileSchema).default([]),
   /**
-   * The harness a run gets when it names none (Plan 325 D6). When it is not
+   * The harness a run gets when it names none (Plan 326 D6). When it is not
    * installed, a run falls back to the first configured harness that is.
    */
   defaultHarness: z.string().min(1).optional(),

@@ -1,6 +1,6 @@
-# Plan 325 — Codex runs on this computer
+# Plan 326 — Codex runs on this computer
 
-**Status:** 🔨 P0 measured (§6). P1 built; its exit met under both postures through the real handler and sandbox (§6 M8, M9). P2–P3 not started.
+**Status:** 🔨 P0 measured (§6). P1 built; its exit met under both postures through the real handler and sandbox (§6 M8, M9). P2 built, its live exit not yet run. P4 built. P3 not started.
 
 ## 1. Problem
 
@@ -68,6 +68,10 @@ Steps 2–3 report `harness.selectedBy: 'named' | 'default' | 'fallback'` on the
 
 **D11 — A lent sign-in is scrubbed like a credential.** The harness can read its copy, so it can print it or copy it into the checkout. Every string of twenty characters or more in a seeded JSON file (the whole of any other) joins the run's secrets, which are removed from every live delta, the captured output, the patch and every failure message, as a fetched `credential` already is. A token refreshed mid-run is not in that list; the refresh is rare (D4) and the patch, the one artifact that leaves the machine, is still scrubbed of what was lent.
 
+**D12 — A space prefers a coding agent; the machine still decides.** `spaces.preferred_harness` (migration 224), a nullable harness id, read and replaced through the space policy routes (`/spaces/:id/preferred-harness`) like the write, code and compute policies, and refused in a deployment without a host lane. It is not written into the run's input: a harness named there is one the caller requires, and the machine refuses rather than swaps it (D6). The orchestrator reads the column when it dispatches a `host.harness.run` — on both the session path (`scheduleStep`) and the workflow-task path (`dispatchClaimedOperationTask`) — and stamps it on the job as `preferredHarness`, as it stamps `callerModel`; the read tolerates a schema not yet migrated and leaves the machine deciding. The machine's order becomes: named, else the space's preference, else its own default, each only where installed, else the first configured harness installed; `selectedBy: 'preferred'` and `passedOver` say what happened. Rejected: a field in `directives` — directives govern the agents, and a runtime policy belongs beside the other space policies as a column. Rejected: letting the space set the machine's default — the policy file is the half the appliance cannot write.
+
+The machine publishes, every inventory refresh, whether each configured harness's executable resolves (`installed`) and its own default. `GET /spaces/:id/host-bindings` returns, for each running machine holding one of the space's folders, its harnesses with `installed` and its default. This Computer shows them and the preference as one card: a select of every harness those machines offer, each marked installed, installed on some machines, or not installed, with "Each machine's default" as the empty choice. The space's context gives Helmsman the same facts as data — each harness with `installed`, and `preferredHarness` — so it can leave `harness` out, or name one to require it, without prose telling it to. Review Local Changes takes `harness` as an optional run input, as Commission does.
+
 ## 3. Codex events as activity
 
 `codex-jsonl` maps onto `HarnessActivityLine` (`harnessEvents.ts`):
@@ -91,8 +95,11 @@ An unknown event or item type is ignored, as in the Claude reader.
 
 - `apps/aflow-executor-host`: `harnessProfiles.ts` (schema fields `mcpFormat`, `configSeed`, `env`; turn budget), `configSeed.ts` (lend, write back, serialize, scrub list), `credentialFetch.ts` (several secrets), `harnessDiscovery.ts` (`codex`), `harnessEvents.ts` (reader), `harnessSessions.ts` (reported id), `handlers/harnessHandlers.ts` (selection, seeding, write-back, budget report, rules files), `browser/harnessBrowser.ts` (TOML form), `harness-cli.ts` (`default`), `bindings.ts` (`defaultHarness`).
 - `packages/schemas/src/operations/host.ts`: `HostHarnessRunOutput` gains `harness.selectedBy` and `budget`; `harness` and `maxTurns` descriptions.
-- `packages/platform-artifacts`: Commission and Review descriptions of `harness` and `maxTurns`.
-- Stored data: the host policy file gains two optional fields. Nothing in Postgres or Redis.
+- `packages/platform-artifacts`: Commission and Review descriptions of `harness` and `maxTurns`; Review gains a `harness` run input.
+- `apps/aflow-orchestrator`: `hostHarnessPreference.ts`, read at both dispatch paths and into the space context.
+- `packages/schemas`: `StepJobMessage.preferredHarness`; `SpaceContextHostFoldersSection` harnesses gain `installed`, and the section `preferredHarness`. `packages/executor-runtime`: `ExecutorContext.preferredHarness`. `packages/redis`: the host inventory's harnesses gain `installed`, and the inventory `defaultHarness`.
+- `packages/server-runtime`: `/spaces/:id/preferred-harness`; `host-bindings` returns `machines`. `packages/web-product`: `HostCodingAgent` on This Computer.
+- Stored data: the host policy file gains three optional fields; `spaces.preferred_harness` (migration 224).
 
 ## 5. Phases
 
@@ -101,6 +108,8 @@ An unknown event or item type is ignored, as in the Claude reader.
 **P1 — Codex runs a commission.** D1, D2, D4, D5, D6, D7, D8, and the reader of §3. Exit: on a machine with both harnesses and Claude Code the default, a commission naming `codex` returns a patch, a `sessionRef` that continues the same Codex thread with a second turn, and an activity feed of commands and file changes; a Review Local Changes with no harness runs on the default; with the default's executable removed, it runs on Codex and says `fallback`; `brief` depth runs on Codex with `budget.applied: false`. The operator's `~/.codex/auth.json` is unchanged by a run seeded from a fresh token.
 
 **P2 — Codex uses the browser.** D3. Exit: a commission on Codex with `browser` calls the lane's browser tools.
+
+**P4 — A space prefers a coding agent.** D12. Exit: on the dev stack with both harnesses configured on the machine and Claude Code its default, choosing Codex on This Computer makes a commission and a review that name no harness run on Codex, reporting `selectedBy: 'preferred'`; with Codex's executable removed they run on Claude Code reporting `default` and why; Helmsman's space context lists both with `installed` and the preference.
 
 **P3 — Write-back proven.** A run seeded from a token past the refresh threshold refreshes, and the original then holds the refreshed token; the operator's own `codex` still works afterwards; two such runs started together serialize.
 

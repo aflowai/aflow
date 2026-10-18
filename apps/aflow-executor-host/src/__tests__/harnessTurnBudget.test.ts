@@ -3,7 +3,7 @@
  * harness that can take one, and none on a harness that cannot. A budget a run
  * names on a harness that cannot take one is not applied rather than refused,
  * so a brief runs on every harness a machine offers; the result reports it
- * (Plan 325 D5).
+ * (Plan 326 D5).
  */
 import { describe, expect, it } from 'vitest';
 

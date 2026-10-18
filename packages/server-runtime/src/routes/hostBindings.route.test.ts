@@ -22,6 +22,7 @@ const written = vi.hoisted(() => ({
 
 const published = vi.hoisted(() => ({
   folders: [] as Array<{ id: string; spaceId: string; pushApproval: string }>,
+  elsewhere: [] as Array<{ id: string; spaceId: string; pushApproval: string }>,
 }));
 
 function storedRow(values: Record<string, unknown>): Record<string, unknown> {
@@ -76,8 +77,19 @@ vi.mock('@aflow/redis', async (importOriginal) => {
           hostname: 'laptop',
           observedAt: new Date().toISOString(),
           runtimes: [],
-          harnesses: [],
+          harnesses: [
+            { id: 'claude', label: 'Claude Code', installed: true },
+            { id: 'codex', label: 'Codex', installed: false },
+          ],
+          defaultHarness: 'claude',
           folders: published.folders,
+        },
+        {
+          hostname: 'desktop',
+          observedAt: new Date().toISOString(),
+          runtimes: [],
+          harnesses: [{ id: 'codex', installed: true }],
+          folders: published.elsewhere,
         },
       ]),
     publishingFoldersForSpace: actual.publishingFoldersForSpace,
@@ -126,6 +138,7 @@ beforeEach(() => {
   written.updated = [];
   written.existing = [];
   published.folders = [];
+  published.elsewhere = [];
 });
 
 describe('the folders a workspace lists', () => {
@@ -222,5 +235,25 @@ describe('which branches a connected folder may be pushed to', () => {
     }
     expect(written.inserted).toEqual([]);
     await app.close();
+  });
+});
+
+describe('the machines a workspace lists', () => {
+  it('names the coding agents of each machine holding its folders, and whether each can start', async () => {
+    published.folders = [{ id: 'hb_thing', spaceId: SPACE, pushApproval: 'never' }];
+    published.elsewhere = [{ id: 'hb_other', spaceId: 'another-space', pushApproval: 'never' }];
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: `/spaces/${SPACE}/host-bindings` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json<{ machines: unknown }>().machines).toEqual([
+      {
+        hostname: 'laptop',
+        harnesses: [
+          { id: 'claude', label: 'Claude Code', installed: true },
+          { id: 'codex', label: 'Codex', installed: false },
+        ],
+        defaultHarness: 'claude',
+      },
+    ]);
   });
 });

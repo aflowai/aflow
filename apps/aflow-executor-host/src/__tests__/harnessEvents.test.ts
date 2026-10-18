@@ -334,7 +334,7 @@ describe('what a watcher reads first', () => {
 });
 
 /**
- * The lines a real `codex exec --json` run printed (Plan 325 §6 M1, M3), with
+ * The lines a real `codex exec --json` run printed (Plan 326 §6 M1, M3), with
  * the file-change, to-do and failure shapes Codex documents for the same
  * stream.
  */

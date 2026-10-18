@@ -1,5 +1,5 @@
 /**
- * Contract: a harness's sign-in is lent into the run and taken back (Plan 325
+ * Contract: a harness's sign-in is lent into the run and taken back (Plan 326
  * D4). A copy the harness refreshed replaces the operator's file only when that
  * file is still what was copied, and two runs seeded from a sign-in about to be
  * refreshed never hold it at once.

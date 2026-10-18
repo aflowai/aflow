@@ -168,7 +168,7 @@ const KNOWN: readonly HarnessProbe[] = [
     label: 'Codex',
     command: 'codex',
     promptArgs: ['{prompt}'],
-    // Measured against Codex CLI 0.163 (Plan 325 §6). The bypass flag is what
+    // Measured against Codex CLI 0.163 (Plan 326 §6). The bypass flag is what
     // `bypassPermissions` is for Claude Code: Codex's own Seatbelt profile
     // cannot nest inside the lane's, and the lane's sandbox is the boundary.
     // The disables are its `--bare`: a fresh CODEX_HOME already drops the
@@ -216,7 +216,7 @@ const KNOWN: readonly HarnessProbe[] = [
     // bundle, and the boundary never grants that daemon: it is an egress path
     // of its own (`sandboxPolicy.ts`). Measured: without this every request
     // fails just after the proxy accepts its CONNECT; with it the run
-    // completes (Plan 325 §6 M6). Elsewhere it reads the system's bundle files,
+    // completes (Plan 326 §6 M6). Elsewhere it reads the system's bundle files,
     // which the boundary leaves readable.
     env: process.platform === 'darwin' ? { CODEX_CA_CERTIFICATE: '/etc/ssl/cert.pem' } : {},
   },
