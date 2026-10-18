@@ -1036,6 +1036,64 @@ describe('handleAgentTurn (integration seams)', () => {
     expect(call).toBe(2);
   });
 
+  it('answers a tool name the model invented with the tools that exist, on native FC', async () => {
+    const ctx = makeCtx();
+    const deps: HandlerDeps = {
+      payloadStore: createMemoryPayloadStore(),
+      handleError: vi.fn().mockImplementation(async (_c, _l, e) => {
+        throw e;
+      }),
+      validateToolArgs: () => null,
+    };
+
+    async function* stream() {
+      yield { type: 'text_delta' as const, delta: '' };
+    }
+
+    const sentMessages: unknown[][] = [];
+    const generateTextStream = vi.fn().mockImplementation((request: { messages: unknown[] }) => {
+      sentMessages.push(request.messages);
+      const name = sentMessages.length === 1 ? 'integration_list' : 'step_a';
+      return {
+        stream: stream(),
+        response: Promise.resolve({
+          content: null,
+          toolCalls: [
+            {
+              id: `c${String(sentMessages.length)}`,
+              type: 'function' as const,
+              function: { name, arguments: '{"q":"x"}' },
+            },
+          ],
+          finishReason: 'tool_calls' as const,
+          usage: { promptTokens: 5, completionTokens: 2, totalTokens: 7 },
+          model: 'qwen-local',
+          provider: 'ollama',
+        }),
+      };
+    });
+    const generateJson = vi.fn();
+
+    vi.mocked(getAIClientForContext).mockResolvedValue({
+      contextWindowFor: () => undefined,
+      getModel: () => ({
+        id: 'ollama-qwen3.5-9b',
+        provider: 'ollama',
+        capabilities: { functionCalling: true },
+      }),
+      generateTextStream,
+      generateJson,
+    } as never);
+
+    const result = await handleAgentTurn(ctx, baseAgentInput({ model: 'qwen-local' }), deps);
+
+    expect(result.status).toBe('SUCCEEDED');
+    expect(generateJson).not.toHaveBeenCalled();
+    expect(JSON.stringify(sentMessages[1]?.at(-1))).toContain(
+      'unknown tool \\"integration_list\\"',
+    );
+  });
+
   it('routes AI client bootstrap failures through handleError', async () => {
     const ctx = makeCtx();
     const failureResult = {

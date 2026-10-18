@@ -375,6 +375,30 @@ describe('structured output', () => {
     expect(sent[2]?.body['format']).toBeUndefined();
   });
 
+  it('names the tool the model called instead of the response, as a retryable failure', async () => {
+    runtime(
+      () => json({ error: 'structured output is unavailable' }, 501),
+      done(
+        { content: '', tool_calls: [{ function: { name: 'integration_list', arguments: {} } }] },
+        { prompt: 160, eval: 8 },
+      ),
+    );
+
+    const error = await rejection(
+      createOllamaAdapter({}).generateJson({
+        ...context,
+        model: 'gemma4:26b',
+        schema,
+        schemaName: 'agent_turn_decision',
+        messages: [{ role: 'user', content: 'what integrations are here?' }],
+      }),
+    );
+
+    expect(error).toMatchObject({ code: 'provider_error', retryable: true });
+    expect(error.message).toContain('"agent_turn_decision"');
+    expect(error.message).toContain('"integration_list"');
+  });
+
   it('uses `format` where the runner supports it', async () => {
     const sent = runtime(done({ content: '{"answer": 391}' }, { prompt: 30, eval: 8 }));
     const adapter = createOllamaAdapter({});
