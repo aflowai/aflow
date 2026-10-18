@@ -192,6 +192,14 @@ tests a change can reach, and lints and formats the touched files. The repositor
 lint and complete test run are CI's, on the pull request; `yarn preflight` is for proof, not a
 routine step.
 
+**Open the pull request with `yarn pr:create`**, never bare `gh pr create`:
+`yarn pr:create --title "type(scope): subject" --body-file <file>` pushes the branch, opens the PR as `aflow-pr-agent[bot]` and requests the maintainer's review, so the
+human approval satisfies the required review on `main` instead of the author approving their own.
+Run on a branch with a PR open, it updates that PR's title and body. Credentials resolve from the
+environment, the checkout's `.env`, then `~/.config/aflow/pr-bot.env` — the one that reaches every
+worktree; `yarn pr:create --dry-run` proves them without touching GitHub's pull requests. A
+contributor without the App credentials opens a pull request with `gh pr create`.
+
 ### Which stack for which change
 
 | The change is…                                                 | Run it in                             | Build? |
