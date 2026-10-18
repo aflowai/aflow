@@ -161,19 +161,32 @@ describe('loop_checks — what CI says of the head', () => {
 });
 
 describe('loop_handoff — the shepherd’s own record', () => {
-  const loop = { login: 'aflow-bot' };
+  const loop = { login: 'aflow-app[bot]' };
   const stranger = { login: 'someone' };
-  const handoff = (id: number, attemptCount: number, checkRunId: string, user = loop) => ({
+  const ON_94 = 'https://api.github.com/repos/aflowai/aflow/issues/94';
+  const handoff = (
+    id: number,
+    attemptCount: number,
+    checkRunId: string,
+    user = loop,
+    issueUrl = ON_94,
+  ) => ({
     id,
     user,
+    issue_url: issueUrl,
     body: `<!-- aflow:shepherd\nattemptCount: ${String(attemptCount)}\ncheckRunId: ${checkRunId}\n-->\nWords.`,
   });
+  const AS_PINNED = 'aflow-app[bot]:94';
 
-  it('reads back the loop’s newest handoff, with the count a pass that acts writes', () => {
+  it('trusts a record whose author is the login the loop’s handoff was pinned with', () => {
     const shaped = ShepherdHandoffReadSchema.parse(
       loopHandoff(
-        [handoff(1, 1, '4'), { id: 2, user: stranger, body: 'Looks good.' }, handoff(3, 2, '9')],
-        'aflow-bot',
+        [
+          handoff(1, 1, '4'),
+          { id: 2, user: stranger, issue_url: ON_94, body: 'Looks good.' },
+          handoff(3, 2, '9'),
+        ],
+        AS_PINNED,
       ),
     );
     expect(shaped).toEqual({
@@ -182,45 +195,58 @@ describe('loop_handoff — the shepherd’s own record', () => {
       attemptCount: 2,
       nextAttemptCount: 3,
       checkRunId: '9',
+      trust: 'verified',
     });
   });
 
   // The record is an HTML comment nobody sees on GitHub: from anyone but the
   // loop it would lift the budget (`attemptCount: 0`) or pin a pull request
   // at `wait` (a `checkRunId`), so it is no record at all.
-  it('ignores a record forged by another author, newest or not, and reads the loop’s own', () => {
-    const read = loopHandoff([handoff(1, 3, '9'), handoff(2, 0, '10', stranger)], 'aflow-bot');
+  it('ignores a record from a mismatched author, newest or not', () => {
+    const read = loopHandoff([handoff(1, 3, '9'), handoff(2, 0, '10', stranger)], AS_PINNED);
     expect(read).toMatchObject({ found: true, commentId: 1, attemptCount: 3, checkRunId: '9' });
-    expect(loopHandoff([handoff(2, 0, '10', stranger)], 'aflow-bot')).toMatchObject({
+    expect(loopHandoff([handoff(2, 0, '10', stranger)], AS_PINNED)).toMatchObject({
       found: false,
       attemptCount: 0,
+      trust: 'verified',
     });
   });
 
-  it('matches the loop’s login as GitHub does, without regard to case', () => {
-    expect(loopHandoff([handoff(3, 1, '11', { login: 'AFLOW-BOT' })], 'aflow-bot').found).toBe(
+  // With no author pinned — the first pass, or a pin lost — no comment can be
+  // told from a forgery, so none is the record, and the read says so: the pass
+  // decides as on a pull request with no handoff, never waiting on it.
+  it('trusts nothing, and is undecided, where no author is known', () => {
+    expect(loopHandoff([handoff(1, 3, '9')], ':94')).toEqual({
+      found: false,
+      attemptCount: 0,
+      nextAttemptCount: 1,
+      trust: 'undecided',
+    });
+  });
+
+  it('takes no record from another pull request’s comment, its author notwithstanding', () => {
+    const elsewhere = handoff(
+      5,
+      2,
+      '12',
+      loop,
+      'https://api.github.com/repos/aflowai/aflow/issues/93',
+    );
+    expect(loopHandoff(elsewhere, AS_PINNED).found).toBe(false);
+    expect(loopHandoff(handoff(5, 2, '12'), AS_PINNED)).toMatchObject({
+      found: true,
+      commentId: 5,
+    });
+  });
+
+  it('matches the author as GitHub does, without regard to case', () => {
+    expect(loopHandoff([handoff(3, 1, '11', { login: 'AFLOW-APP[BOT]' })], AS_PINNED).found).toBe(
       true,
     );
   });
 
-  it('reads one comment fetched by its id the same way', () => {
-    expect(loopHandoff(handoff(7, 2, '12'), 'aflow-bot')).toMatchObject({
-      found: true,
-      commentId: 7,
-    });
-    expect(loopHandoff(handoff(7, 2, '12', stranger), 'aflow-bot').found).toBe(false);
-  });
-
-  it('refuses to read without the login the loop posts as', () => {
-    expect(() => loopHandoff([handoff(1, 1, '4')], undefined)).toThrow(/login/);
-  });
-
-  it('reads none as a first pass', () => {
-    expect(loopHandoff([{ id: 2, user: loop, body: 'Hi.' }], 'aflow-bot')).toEqual({
-      found: false,
-      attemptCount: 0,
-      nextAttemptCount: 1,
-    });
+  it('refuses to read without the pull request it reads for', () => {
+    expect(() => loopHandoff([handoff(1, 1, '4')], 'aflow-app[bot]')).toThrow(/<login>:<number>/);
   });
 });
 

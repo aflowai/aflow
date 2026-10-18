@@ -847,6 +847,12 @@ export const MemoryDeleteInputSchema = z.object({
         'Cannot delete virtual /run/ paths — they are read-only and expire when the run ends.',
     }),
   recursive: z.boolean().default(false),
+  expectedHash: z
+    .string()
+    .optional()
+    .describe(
+      "The document's content hash as the caller last read or wrote it: the delete happens only while the document still holds exactly that, and fails MEMORY_HASH_MISMATCH where another writer has changed it since. Documents only.",
+    ),
 });
 export type MemoryDeleteInput = z.infer<typeof MemoryDeleteInputSchema>;
 

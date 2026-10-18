@@ -170,16 +170,6 @@ export const GITHUB_CONNECTOR: ConnectorCatalogEntry = {
         tags: ['pull-requests'],
       },
       {
-        endpointId: 'getAuthenticatedUser',
-        name: 'Get the authenticated user',
-        description:
-          'The account the token acts as — its login is the author of every comment and pull request the connection posts, so a record the connection wrote is told from one anyone could write.',
-        method: 'GET',
-        pathTemplate: '/user',
-        params: [],
-        tags: ['users'],
-      },
-      {
         endpointId: 'getIssueComment',
         name: 'Get issue comment',
         description:

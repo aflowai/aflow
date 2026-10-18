@@ -290,7 +290,7 @@ export interface MemoryDocRepository {
   put(params: MemoryDocPutParams): Promise<MemoryDocPutResult>;
   getVersion(docId: string, version: number): Promise<MemoryDocVersion | null>;
   getLatestVersion(docId: string): Promise<MemoryDocVersion | null>;
-  softDelete(id: string, spaceId: string): Promise<boolean>;
+  softDelete(id: string, spaceId: string, options?: { expectedHash?: string }): Promise<boolean>;
 
   /** List soft-deleted documents in a space. */
   listDeleted(options: { spaceId: string; limit?: number; cursor?: string }): Promise<MemoryDoc[]>;
@@ -969,7 +969,7 @@ export function createMemoryDocRepository(
       });
     },
 
-    async softDelete(id, spaceId) {
+    async softDelete(id, spaceId, { expectedHash } = {}) {
       return run(async (tx) => {
         // Trashing reserved scratch would strand it: neither gone nor reachable.
         const [existing] = await tx
@@ -986,10 +986,10 @@ export function createMemoryDocRepository(
               eq(memoryDocs.id, id),
               eq(memoryDocs.spaceId, spaceId),
               sql`${memoryDocs.deletedAt} IS NULL`,
+              expectedHash === undefined ? undefined : eq(memoryDocs.contentHash, expectedHash),
             ),
           )
           .returning({ id: memoryDocs.id });
-
         return result.length > 0;
       });
     },

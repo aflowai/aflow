@@ -4,7 +4,7 @@ import {
   SHEPHERD_ATTEMPT_BUDGET_DEFAULT,
   SHEPHERD_HANDOFF_CLOSE,
   SHEPHERD_HANDOFF_OPEN,
-  SHEPHERD_HANDOFF_POINTER_DOCUMENT,
+  SHEPHERD_HANDOFF_PINS,
   SHEPHERD_HANDS_OFF_LABEL,
   SHEPHERD_LEASE_DOCUMENT,
   SHEPHERD_LEASE_ROOT,
@@ -97,10 +97,36 @@ function branchDocument(document: string) {
   };
 }
 const LEASE_PATH = branchDocument(SHEPHERD_LEASE_DOCUMENT);
-const HANDOFF_POINTER_PATH = branchDocument(SHEPHERD_HANDOFF_POINTER_DOCUMENT);
 
-/** Who the GitHub connection posts as: the one author whose handoff is the record. */
-const LOGIN = { login: out('read-identity', 'data.login') };
+/** `shepherd/<owner>/<repo>/pulls/<number>.json`: a pull request's pinned handoff, never a branch's. */
+const HANDOFF_PIN_PATH = {
+  $concat: [
+    `${SHEPHERD_LEASE_ROOT}/`,
+    bind('owner'),
+    '/',
+    bind('repo'),
+    `/${SHEPHERD_HANDOFF_PINS}/`,
+    { $text: [bind('number')] },
+    '.json',
+  ],
+};
+
+/** The login the pinned handoff was posted as: the one author whose record is trusted. */
+const PINNED_AUTHOR = { author: out('read-handoff-pin', 'dataJson.author') };
+
+/**
+ * `loop_handoff:<author>:<number>` — the record trusted only from the pinned
+ * author, and only on this pull request; with no pin, no author, and nothing
+ * trusted.
+ */
+const HANDOFF_PRESET = {
+  $concat: [
+    `${SHEPHERD_RESPONSE_PRESETS.handoff}:`,
+    { $firstOf: [{ $text: [bind('author')] }, ''] },
+    ':',
+    { $text: [bind('number')] },
+  ],
+};
 
 /**
  * The handoff, from whichever read found it: the comment a pass pinned, read
@@ -145,6 +171,23 @@ function leaseText(name: string) {
       $text: [bind(`${name}_${taskId.replace(/-/g, '_')}`)],
     })),
   };
+}
+
+function leaseValue(name: string) {
+  return { $firstOf: LEASE_TAKERS.map((taskId) => bind(`${name}_${taskId.replace(/-/g, '_')}`)) };
+}
+
+/** The handoff this pass wrote, from whichever write it was: posted, or rewritten. */
+const HANDOFF_WRITES = ['handoff', 'handoff-edit'] as const;
+
+function writtenBindings(name: string, path: string) {
+  return Object.fromEntries(
+    HANDOFF_WRITES.map((taskId) => [`${name}_${taskId.replace(/-/g, '_')}`, out(taskId, path)]),
+  );
+}
+
+function writtenValue(name: string) {
+  return { $firstOf: HANDOFF_WRITES.map((taskId) => bind(`${name}_${taskId.replace(/-/g, '_')}`)) };
 }
 
 const LEASE_HELD = {
@@ -216,15 +259,11 @@ export const SHEPHERD_RULES: readonly WorkflowRunDecideRule[] = [
   },
   {
     when: {
-      anyOf: [
-        'state.identity.statusCode != 200',
-        'state.checks.statusCode != 200',
-        'state.handoff.statusCode != 200',
-      ],
+      anyOf: ['state.checks.statusCode != 200', 'state.handoff.statusCode != 200'],
     },
     decision: 'wait',
     reason:
-      "GitHub did not say who the connection posts as, or return the head's check runs or the pull request's handoff, so what CI says, or what was done before, is unknown.",
+      "GitHub did not return the head's check runs or the pull request's comments, so what CI says, or what was done before, is unknown.",
   },
   // A lease is live while its run is: running or paused, and taken within the
   // stated bound. One whose run ended, or that is older, is stale, and this
@@ -341,7 +380,7 @@ const COMMISSION_BINDINGS = {
   log1: out('read-failure-log-1', 'data'),
   log2: out('read-failure-log-2', 'data'),
   log3: out('read-failure-log-3', 'data'),
-  earlierRounds: out('read-pr-handoff', 'data'),
+  ...handoffBindings('earlierRounds', 'data'),
 };
 
 function commission(taskId: string, name: string, goal: string, brief: string) {
@@ -368,7 +407,7 @@ function commission(taskId: string, name: string, goal: string, brief: string) {
         failingChecks: bind('failingChecks'),
         failingJobs: bind('failingJobs'),
         logs: [bind('log1'), bind('log2'), bind('log3')],
-        earlierRounds: bind('earlierRounds'),
+        earlierRounds: handoffValue('earlierRounds'),
       },
       base: bind('headRef'),
       mergeFrom: { $concat: ['origin/', bind('baseRef')] },
@@ -403,6 +442,38 @@ function confident(option: string) {
   };
 }
 
+/**
+ * Which remedy the routes took, as a label the record keeps — the routes of
+ * `classify-failure`, read as rules over its answer: a confident answer takes
+ * its remedy, and anything else the fix commission. Recorded so the next
+ * round is briefed with what this one did; a test holds the two to the same
+ * answers.
+ */
+export const REMEDY_TAKEN_RULES: readonly WorkflowRunDecideRule[] = [
+  {
+    when: { expression: 'state.answer == null' },
+    decision: 'none',
+    reason: 'The remedy question could not be asked, so no remedy ran.',
+  },
+  ...(
+    [
+      ['flaky_or_timeout', 'rerun_failed_jobs', 'The failed jobs were run again.'],
+      ['dependency_advisory', 'dependency_bump', 'The flagged dependency was bumped.'],
+      ['base_conflict', 'merge_round', 'The base was merged into the branch.'],
+      ['ci_outage', 'wait_on_ci', 'CI itself was down; nothing in the repository was changed.'],
+    ] as const
+  ).map(([option, decision, reason]) => ({
+    when: { allOf: ['state.answer.decided == true', `state.answer.value == '${option}'`] },
+    decision,
+    reason,
+  })),
+];
+
+export const REMEDY_TAKEN_OTHERWISE = {
+  decision: 'fix_commission',
+  reason: 'The failure was commissioned as a fix.',
+};
+
 // --- The handoff -------------------------------------------------------------
 
 /**
@@ -427,6 +498,7 @@ const PUBLICATION = firstText(
   [{ $firstOf: [text('publicationRunId')] }, handoffText('priorPublication')],
   '',
 );
+const REMEDY_TAKEN = firstText([{ $firstOf: [text('remedy')] }, handoffText('priorRemedy')], '');
 
 const HANDOFF_BODY = {
   $concat: [
@@ -441,6 +513,8 @@ const HANDOFF_BODY = {
     bind('decision'),
     '\nclassification: ',
     CLASSIFICATION,
+    '\nremedy: ',
+    REMEDY_TAKEN,
     '\npublicationRunId: ',
     PUBLICATION,
     `\n${SHEPHERD_HANDOFF_CLOSE}\n`,
@@ -476,6 +550,8 @@ const HANDOFF_BINDINGS = {
   ...handoffBindings('priorClassification', 'data.classification'),
   ...handoffBindings('priorPublication', 'data.publicationRunId'),
   classification: out('classify-failure', `${REMEDY}.value`),
+  remedy: out('record-remedy', 'decision'),
+  ...handoffBindings('priorRemedy', 'data.remedy'),
   publicationRunId: out('publish', 'runId'),
 };
 
@@ -570,6 +646,8 @@ function leaseTask(taskId: (typeof LEASE_TAKERS)[number]) {
     outputProjection: {
       path: { path: 'path', onMissing: 'error' as const },
       lease: { fromInput: 'content' },
+      // What the lease holds as this pass wrote it: `release` deletes only that.
+      contentHash: { path: 'contentHash', onMissing: 'error' as const },
     },
   };
 }
@@ -664,7 +742,6 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
         'listCheckRuns',
         'listIssueComments',
         'getIssueComment',
-        'getAuthenticatedUser',
         'listWorkflowRunJobs',
         'getJobLogs',
         'reRunFailedJobs',
@@ -839,48 +916,33 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
         },
 
         {
-          taskId: 'read-identity',
-          name: 'Read who the connection posts as',
-          goal: "Read the GitHub account the space's connection acts as: its login is the author of every handoff the loop writes, and the only author whose handoff is the record.",
-          type: 'operation' as const,
-          operation: 'api.http.call',
-          when: OURS,
-          retryability: 'safe' as const,
-          context: ctx('api.http.call'),
-          inputTemplate: github('getAuthenticatedUser', {}),
-        },
-
-        {
-          taskId: 'read-handoff-pointer',
+          taskId: 'read-handoff-pin',
           name: 'Read which comment is the handoff',
-          goal: "Read the id of the handoff comment an earlier pass posted, kept beside the branch's lease, so the handoff is read by its id wherever it sits in a long conversation.",
+          goal: 'Read the handoff pinned for this pull request — the comment’s id and the login it was posted as — so the handoff is read by its id wherever it sits in a long conversation, and trusted only from that author.',
           type: 'operation' as const,
           operation: 'memory.store.get',
           when: {
             allOf: [...OURS.allOf, 'tasks.read-pr.output.data.handsOff == false'],
             onMissingRef: SKIP,
           },
-          // No pointer is the first pass's case, not a failure: the newest
-          // page of the conversation is read instead.
+          // No pin is the first pass's case, not a failure: the newest page of
+          // the conversation is read instead.
           optional: true,
           retryability: 'safe' as const,
           maxAttempts: 1,
-          inputBindings: { ...REPOSITORY, ...HEAD_REF },
+          inputBindings: { ...REPOSITORY, ...NUMBER },
           context: ctx('memory.store.get'),
-          inputTemplate: { target: { path: HANDOFF_POINTER_PATH }, view: 'content' },
+          inputTemplate: { target: { path: HANDOFF_PIN_PATH }, view: 'content' },
         },
 
         {
           taskId: 'read-pr-handoff-pinned',
           name: 'Read the pinned handoff',
-          goal: 'Read the handoff comment by the id an earlier pass kept, and take its record only where the loop itself wrote it.',
+          goal: 'Read the pinned handoff comment by its id, and take its record only where the pinned author wrote it, on this pull request.',
           type: 'operation' as const,
           operation: 'api.http.call',
           when: {
-            allOf: [
-              'tasks.read-identity.output.statusCode == 200',
-              'tasks.read-handoff-pointer.output.dataJson.commentId != null',
-            ],
+            expression: 'tasks.read-handoff-pin.output.dataJson.commentId != null',
             onMissingRef: SKIP,
           },
           // A comment since deleted answers 404, which shapes no record: the
@@ -890,14 +952,15 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
           maxAttempts: 1,
           inputBindings: {
             ...REPOSITORY,
-            ...LOGIN,
-            commentId: out('read-handoff-pointer', 'dataJson.commentId'),
+            ...NUMBER,
+            ...PINNED_AUTHOR,
+            commentId: out('read-handoff-pin', 'dataJson.commentId'),
           },
           context: ctx('api.http.call'),
           inputTemplate: github(
             'getIssueComment',
             { owner: bind('owner'), repo: bind('repo'), comment_id: bind('commentId') },
-            { $concat: [`${SHEPHERD_RESPONSE_PRESETS.handoff}:`, bind('login')] },
+            HANDOFF_PRESET,
           ),
           outputProjection: {
             statusCode: { path: 'statusCode', onMissing: 'error' as const },
@@ -909,14 +972,13 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
         {
           taskId: 'read-pr-handoff',
           name: 'Read the handoff',
-          goal: 'Where no pinned handoff was read, read the newest page of the pull request’s conversation for the handoff the loop itself left: how many failures were acted on, the check run and head last acted on, and what was done.',
+          goal: 'Where no pinned handoff was read, read the newest page of the pull request’s conversation for the handoff the pinned author left on it. With no pin there is no author to trust, and no record is taken: the pass decides as on a pull request with none.',
           type: 'operation' as const,
           operation: 'api.http.call',
           when: {
             allOf: [
               ...OURS.allOf,
               'tasks.read-pr.output.data.handsOff == false',
-              'tasks.read-identity.output.statusCode == 200',
               "tasks.read-pr-handoff-pinned.status != 'succeeded'",
             ],
             onMissingRef: SKIP,
@@ -925,7 +987,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
           inputBindings: {
             ...REPOSITORY,
             ...NUMBER,
-            ...LOGIN,
+            ...PINNED_AUTHOR,
             page: out('read-pr', 'data.commentPages'),
           },
           context: ctx('api.http.call'),
@@ -938,7 +1000,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
               per_page: 100,
               page: bind('page'),
             },
-            { $concat: [`${SHEPHERD_RESPONSE_PRESETS.handoff}:`, bind('login')] },
+            HANDOFF_PRESET,
           ),
         },
 
@@ -1020,7 +1082,6 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
             folder: out('read-folder'),
             candidates: out('list-prs'),
             pr: out('read-pr'),
-            identity: out('read-identity'),
             checks: out('read-pr-checks'),
             ...handoffBindings('handoff'),
             lease: out('read-in-flight-lease'),
@@ -1036,7 +1097,6 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
               folder: bind('folder'),
               candidates: bind('candidates'),
               pr: bind('pr'),
-              identity: bind('identity'),
               checks: bind('checks'),
               handoff: handoffValue('handoff'),
               lease: bind('lease'),
@@ -1111,7 +1171,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
             log1: out('read-failure-log-1', 'data'),
             log2: out('read-failure-log-2', 'data'),
             log3: out('read-failure-log-3', 'data'),
-            earlierRounds: out('read-pr-handoff', 'data'),
+            ...handoffBindings('earlierRounds', 'data'),
           },
           context: ctx('ai.decision.decide'),
           // No model is named: the space's decision model answers.
@@ -1125,7 +1185,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
               failingChecks: bind('failingChecks'),
               failingJobs: bind('failingJobs'),
               logs: [bind('log1'), bind('log2'), bind('log3')],
-              earlierRounds: bind('earlierRounds'),
+              earlierRounds: handoffValue('earlierRounds'),
             },
             questions: { [REMEDY_QUESTION_NAME]: REMEDY_QUESTION },
           },
@@ -1145,6 +1205,24 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
             { when: confident('dependency_advisory'), enable: ['bump-dependency'] },
             { when: confident('base_conflict'), enable: ['merge-round'] },
           ],
+        },
+
+        {
+          taskId: 'record-remedy',
+          name: 'Record which remedy was taken',
+          goal: 'Name the remedy the routes took from the remedy question’s answer — re-run, fix, bump, merge round, or a wait on CI — for the handoff to record, so the next round is briefed with it.',
+          type: 'operation' as const,
+          operation: 'workflow.run.decide',
+          when: DECIDED_FIX,
+          dependsOn: ['classify-failure'],
+          retryability: 'safe' as const,
+          inputBindings: { answer: out('classify-failure', REMEDY) },
+          context: ctx('workflow.run.decide'),
+          inputTemplate: {
+            state: { answer: bind('answer') },
+            rules: REMEDY_TAKEN_RULES,
+            otherwise: REMEDY_TAKEN_OTHERWISE,
+          },
         },
 
         {
@@ -1239,22 +1317,24 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
         {
           taskId: 'release',
           name: 'Release the lease',
-          goal: "Delete the branch's lease once everything this pass started has ended, whichever way it ended.",
+          goal: "Delete the branch's lease once everything this pass started has ended, whichever way it ended — only while it is still this pass's own, as it wrote it. A lease another run has since taken over is that run's, and is left.",
           type: 'operation' as const,
           operation: 'memory.store.delete',
           dependsOn: LEASED_WORK,
           when: LEASE_HELD,
+          // A lease taken over refuses the delete; the pass still records.
+          optional: true,
           retryability: 'safe' as const,
-          inputBindings: leaseBindings('leasePath', 'path'),
+          maxAttempts: 1,
+          inputBindings: {
+            ...leaseBindings('leasePath', 'path'),
+            ...leaseBindings('leaseHash', 'contentHash'),
+          },
           context: ctx('memory.store.delete'),
           inputTemplate: {
-            target: {
-              path: {
-                $firstOf: LEASE_TAKERS.map((taskId) =>
-                  bind(`leasePath_${taskId.replace(/-/g, '_')}`),
-                ),
-              },
-            },
+            target: { path: leaseValue('leasePath') },
+            // The content this pass wrote — its run and the time it took it.
+            expectedHash: leaseValue('leaseHash'),
           },
         },
 
@@ -1304,25 +1384,34 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
         {
           taskId: 'remember-handoff',
           name: 'Pin the handoff',
-          goal: "Keep the id of the handoff comment just posted beside the branch's lease, so the next pass reads it by its id however long the conversation grows.",
+          goal: 'Pin the handoff comment this pass wrote — posted, or found on the newest page and rewritten — for this pull request: its id, and the login GitHub says it was written as. The next pass reads it by its id however long the conversation grows, and trusts its record from that author only.',
           type: 'operation' as const,
           operation: 'memory.store.put',
-          when: { expression: 'tasks.handoff.output.statusCode == 201', onMissingRef: SKIP },
+          when: {
+            anyOf: [
+              'tasks.handoff.output.statusCode == 201',
+              'tasks.handoff-edit.output.statusCode == 200',
+            ],
+            onMissingRef: SKIP,
+          },
           retryability: 'safe' as const,
           inputBindings: {
             ...REPOSITORY,
-            ...HEAD_REF,
-            commentId: out('handoff', 'data.id'),
+            ...NUMBER,
+            ...writtenBindings('commentId', 'data.id'),
+            ...writtenBindings('author', 'data.user.login'),
           },
           context: ctx('memory.store.put'),
           inputTemplate: {
-            path: HANDOFF_POINTER_PATH,
+            path: HANDOFF_PIN_PATH,
             writeMode: 'upsert',
             docType: 'json',
             mimeType: 'application/json',
             indexing: 'disabled',
-            summary: 'The Local PR Shepherd’s handoff comment on this branch’s pull request.',
-            content: { inlineJson: { commentId: bind('commentId') } },
+            summary: 'The Local PR Shepherd’s handoff comment on this pull request.',
+            content: {
+              inlineJson: { commentId: writtenValue('commentId'), author: writtenValue('author') },
+            },
           },
         },
       ]),

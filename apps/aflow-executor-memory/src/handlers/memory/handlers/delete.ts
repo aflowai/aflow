@@ -41,7 +41,24 @@ export async function handleDelete(
       return await failureWithError(ctx, validationError(resolvedRefusal));
     }
 
-    await repo.softDelete(doc.id, doc.spaceId);
+    // A conditional delete leaves a document another writer has since changed:
+    // a lease taken over by another run is that run's to release.
+    const expectedHash = input.expectedHash;
+    if (expectedHash !== undefined) {
+      const deleted =
+        doc.contentHash === expectedHash &&
+        (await repo.softDelete(doc.id, doc.spaceId, { expectedHash }));
+      if (!deleted) {
+        return await failureWithError(
+          ctx,
+          validationError(
+            `MEMORY_HASH_MISMATCH: ${doc.path} no longer holds the content expected (${expectedHash}); it was left as it is.`,
+          ),
+        );
+      }
+    } else {
+      await repo.softDelete(doc.id, doc.spaceId);
+    }
     await repo.deleteChunksForDoc(doc.id);
     return await successWithData(ctx, {
       id: doc.id,

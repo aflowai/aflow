@@ -25,6 +25,7 @@ import {
   type LoopPullRequest,
   LoopPullRequestSchema,
   LoopPullRequestsSchema,
+  MemoryDeleteInputSchema,
   MemoryPutInputSchema,
   parseShepherdHandoff,
   SHEPHERD_LEASE_STALE_AFTER_MS,
@@ -70,7 +71,7 @@ const PULL_REQUEST: LoopPullRequest = {
 /** The pass's own run, and the time it is dispatched at. */
 const RUN_ID = 'shepherd-run-2';
 const NOW = Date.UTC(2026, 9, 18, 9, 0, 0);
-const LOOP_LOGIN = 'aflow-bot';
+const LOOP_LOGIN = 'aflow-app[bot]';
 
 const FAILING: CheckRunsSummary = {
   state: 'failing',
@@ -79,7 +80,18 @@ const FAILING: CheckRunsSummary = {
   firstFailing: { id: FAILING_CHECK, name: 'Test', conclusion: 'failure', runId: 37460214524 },
 };
 
-const NO_HANDOFF: ShepherdHandoffRead = { found: false, attemptCount: 0, nextAttemptCount: 1 };
+const NO_HANDOFF: ShepherdHandoffRead = {
+  found: false,
+  attemptCount: 0,
+  nextAttemptCount: 1,
+  trust: 'verified',
+};
+const UNDECIDED: ShepherdHandoffRead = { ...NO_HANDOFF, trust: 'undecided' };
+const OWN_LEASE_HASH = 'own-lease-hash';
+
+function presetOf(input: Record<string, unknown>): string {
+  return String((input['response'] as { transformPresetId?: string }).transformPresetId);
+}
 
 interface Scenario {
   inputs?: Record<string, unknown>;
@@ -93,6 +105,11 @@ interface Scenario {
   leaseTaken?: boolean;
   /** The handoff comment an earlier pass pinned: read by its id. `gone` where it was deleted. */
   pinned?: 'found' | 'gone';
+  /** The pull request the pin was kept for, and the one its comment sits on. */
+  pinFor?: number;
+  pinnedCommentOn?: number;
+  /** Another run took this pass's lease over while its work ran. */
+  leaseTakenOver?: boolean;
   publicationInFlight?: boolean;
   commissionInFlight?: boolean;
   remedy?: { value: Remedy | null; decided: boolean } | 'unavailable';
@@ -179,20 +196,33 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
       return github(LoopPullRequestSchema.parse({ ...PULL_REQUEST, ...s.pullRequest }));
     case 'read-pr-checks':
       return github(CheckRunsSummarySchema.parse(s.checks ?? FAILING));
-    case 'read-identity':
-      return github({ login: LOOP_LOGIN, id: 1 });
-    case 'read-handoff-pointer':
-      // A memory read of a document that is not there fails its step.
-      return s.pinned === undefined
+    case 'read-handoff-pin':
+      // A memory read of a document that is not there fails its step; a pin
+      // is kept per pull request, so another pull request's is not there.
+      return s.pinned === undefined ||
+        !String(input['target'] && (input['target'] as { path: string }).path).endsWith(
+          `/pulls/${String(s.pinFor ?? 94)}.json`,
+        )
         ? { ok: false }
-        : ok({ stat: { path: 'handoff.json' }, dataJson: { commentId: 9 } });
-    case 'read-pr-handoff-pinned':
+        : ok({ stat: { path: 'pin' }, dataJson: { commentId: 9, author: LOOP_LOGIN } });
+    case 'read-pr-handoff-pinned': {
       // Deleted, the comment answers 404 with GitHub's error, which shapes no record.
-      return s.pinned === 'gone'
-        ? github({ message: 'Not Found' }, 404)
-        : github(ShepherdHandoffReadSchema.parse(s.handoff ?? NO_HANDOFF));
-    case 'read-pr-handoff':
-      return github(ShepherdHandoffReadSchema.parse(s.handoff ?? NO_HANDOFF));
+      if (s.pinned === 'gone') return github({ message: 'Not Found' }, 404);
+      const [, author, number] = presetOf(input).split(':');
+      // The preset takes a record only from the pinned author, on this pull request.
+      const on = s.pinnedCommentOn ?? s.pinFor ?? 94;
+      return github(
+        ShepherdHandoffReadSchema.parse(
+          author === LOOP_LOGIN && number === String(on) ? (s.handoff ?? NO_HANDOFF) : NO_HANDOFF,
+        ),
+      );
+    }
+    case 'read-pr-handoff': {
+      const [, author] = presetOf(input).split(':');
+      return github(
+        ShepherdHandoffReadSchema.parse(author === '' ? UNDECIDED : (s.handoff ?? NO_HANDOFF)),
+      );
+    }
     case 'read-in-flight-lease':
       return s.lease === undefined
         ? { ok: false }
@@ -227,11 +257,14 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
       });
     }
     case 'decide':
+    case 'record-remedy':
       return ok({ ...decideByRules(WorkflowRunDecideInputSchema.parse(input)) });
     case 'lease':
     case 'lease-takeover':
       MemoryPutInputSchema.parse(input);
-      return s.leaseTaken ? { ok: false } : ok({ id: 'doc-1', path: input['path'], version: 1 });
+      return s.leaseTaken
+        ? { ok: false }
+        : ok({ id: 'doc-1', path: input['path'], version: 1, contentHash: OWN_LEASE_HASH });
     case 'read-failure':
       return github({
         jobs: Array.from({ length: s.failingJobs ?? 1 }, (_, i) => ({
@@ -301,10 +334,15 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
       WorkflowRunStartInputSchema.parse(input);
       return ok({ runId: 'pub-run-1', outcome: 'completed', waiterId: 'w-1' });
     case 'release':
-      return ok({ id: 'doc-1', path: (input['target'] as { path: string }).path, deleted: true });
+      MemoryDeleteInputSchema.parse(input);
+      // The delete holds only while the lease is as this pass wrote it.
+      return input['expectedHash'] !== (s.leaseTakenOver ? 'new-holder-hash' : OWN_LEASE_HASH)
+        ? { ok: false }
+        : ok({ id: 'doc-1', path: (input['target'] as { path: string }).path, deleted: true });
     case 'handoff':
     case 'handoff-edit':
-      return github({ id: 9 }, taskId === 'handoff' ? 201 : 200);
+      // GitHub answers a post or an edit with the comment, its author with it.
+      return github({ id: 9, user: { login: LOOP_LOGIN } }, taskId === 'handoff' ? 201 : 200);
     default:
       throw new Error(`no answer scripted for ${taskId}`);
   }
@@ -382,7 +420,13 @@ function pass(s: Scenario = {}): Pass {
 function readBack(previous: Pass): ShepherdHandoffRead {
   const record = previous.handoff;
   if (record === undefined || record === null) throw new Error('the pass left no handoff');
-  return { found: true, commentId: 9, ...record, nextAttemptCount: record.attemptCount + 1 };
+  return {
+    found: true,
+    commentId: 9,
+    ...record,
+    nextAttemptCount: record.attemptCount + 1,
+    trust: 'verified',
+  };
 }
 
 const COMMISSIONS = ['fix', 'bump-dependency', 'merge-round'];
@@ -437,6 +481,7 @@ describe('Local PR Shepherd — it fixes what CI failed', () => {
       headSha: HEAD,
       decision: 'fix',
       classification: 'code_defect',
+      remedy: 'fix_commission',
       publicationRunId: 'pub-run-1',
     });
   });
@@ -455,7 +500,7 @@ describe('Local PR Shepherd — it fixes what CI failed', () => {
 
 describe('Local PR Shepherd — once per failure', () => {
   it('waits on a second pass over the same check run, and its handoff still shows one attempt', () => {
-    const second = pass({ handoff: readBack(pass()) });
+    const second = pass({ pinned: 'found', handoff: readBack(pass()) });
     expect(second.decision).toBe('wait');
     for (const action of ACTIONS) expect(second.ran).not.toContain(action);
     expect(second.ran).toContain('handoff-edit');
@@ -473,9 +518,41 @@ describe('Local PR Shepherd — once per failure', () => {
       failing: [{ ...FAILING.firstFailing!, id: '556' }],
       firstFailing: { ...FAILING.firstFailing!, id: '556' },
     };
-    const next = pass({ handoff: readBack(pass()), checks: rerun });
+    const next = pass({ pinned: 'found', handoff: readBack(pass()), checks: rerun });
     expect(next.decision).toBe('fix');
     expect(next.handoff).toMatchObject({ attemptCount: 2, checkRunId: '556' });
+  });
+});
+
+describe('Local PR Shepherd — earlier rounds brief the next', () => {
+  it('briefs the fix and the classifier with the first round’s remedy and classification, from a record the pinned read found', () => {
+    const firstRound = pass({ remedy: { value: 'flaky_or_timeout', decided: true } });
+    expect(firstRound.handoff).toMatchObject({ remedy: 'rerun_failed_jobs' });
+    const rerun: CheckRunsSummary = {
+      ...FAILING,
+      failing: [{ ...FAILING.firstFailing!, id: '556' }],
+      firstFailing: { ...FAILING.firstFailing!, id: '556' },
+    };
+    const second = pass({ pinned: 'found', handoff: readBack(firstRound), checks: rerun });
+    expect(second.statuses.get('read-pr-handoff-pinned')).toBe('succeeded');
+    expect(second.statuses.get('read-pr-handoff')).toBe('skipped');
+    const earlier = {
+      attemptCount: 1,
+      remedy: 'rerun_failed_jobs',
+      classification: 'flaky_or_timeout',
+    };
+    expect(
+      (second.inputs.get('fix')!['inputs'] as Record<string, unknown>)['earlierRounds'],
+    ).toMatchObject(earlier);
+    expect(
+      (second.inputs.get('classify-failure')!['state'] as Record<string, unknown>)['earlierRounds'],
+    ).toMatchObject(earlier);
+    // The record keeps what this round did, for the round after.
+    expect(second.handoff).toMatchObject({
+      attemptCount: 2,
+      remedy: 'fix_commission',
+      classification: 'code_defect',
+    });
   });
 });
 
@@ -503,7 +580,11 @@ describe('Local PR Shepherd — never two at once', () => {
     expect(takeover).toMatchObject({ writeMode: 'overwrite', expectedHash: 'stale-lease-hash' });
     expect(takeover.content.inlineJson).toMatchObject({ runId: RUN_ID, takenAtMs: NOW });
     expect(resumed.ran).toEqual(expect.arrayContaining(['fix', 'publish', 'release']));
-    expect(resumed.inputs.get('release')).toEqual({ target: { path: takeover.path } });
+    // Deletes the lease only as this pass wrote it: the hash its own write answered.
+    expect(resumed.inputs.get('release')).toEqual({
+      target: { path: takeover.path },
+      expectedHash: OWN_LEASE_HASH,
+    });
   });
 
   it('records the run that holds a lease and when it was taken', () => {
@@ -533,6 +614,16 @@ describe('Local PR Shepherd — never two at once', () => {
     },
   );
 
+  it('does not delete a lease another run took over: the release holds only the hash its own write answered', () => {
+    const overtaken = pass({ leaseTakenOver: true });
+    expect(MemoryDeleteInputSchema.parse(overtaken.inputs.get('release'))).toMatchObject({
+      expectedHash: OWN_LEASE_HASH,
+    });
+    // The new holder's lease stands: the delete fails its hash check, and only it.
+    expect(overtaken.statuses.get('release')).toBe('failed');
+    expect(overtaken.ran).toContain('handoff');
+  });
+
   it('releases the lease whichever way the leased work ended', () => {
     for (const s of [{ commission: 'failed' as const }, { remedy: 'unavailable' as const }]) {
       const ended = pass(s);
@@ -547,21 +638,81 @@ describe('Local PR Shepherd — the handoff is the loop’s own, wherever it sit
   const preset = (input: Record<string, unknown> | undefined) =>
     (input?.['response'] as { transformPresetId?: string } | undefined)?.transformPresetId;
 
-  it('reads the handoff only as the login the connection posts as wrote it', () => {
-    const first = pass();
-    expect(first.ran).toContain('read-identity');
-    expect(preset(first.inputs.get('read-pr-handoff'))).toBe(`loop_handoff:${LOOP_LOGIN}`);
-    const pinned = pass({ pinned: 'found' });
-    expect(preset(pinned.inputs.get('read-pr-handoff-pinned'))).toBe(`loop_handoff:${LOOP_LOGIN}`);
+  it('trusts a record only from the author pinned with it, on the pull request it tends — and asks no one who it is', () => {
+    const pinned = pass({ pinned: 'found', handoff: readBack(pass()) });
+    // GitHub App installation tokens are refused `GET /user`; nothing reads it.
+    expect([...pinned.inputs.values()].map((input) => input['endpointId'])).not.toContain(
+      'getAuthenticatedUser',
+    );
+    expect(preset(pinned.inputs.get('read-pr-handoff-pinned'))).toBe(
+      `loop_handoff:${LOOP_LOGIN}:94`,
+    );
+    expect(pinned.outputs.get('read-pr-handoff-pinned')).toMatchObject({
+      data: { found: true, trust: 'verified' },
+    });
+    expect(pinned.decision).toBe('wait');
   });
 
-  it('pins the handoff it posts, so the next pass reads it by its id', () => {
+  it('with no pinned author, trusts no record and decides as on a pull request with none — never a wait', () => {
+    // A record on the page, but no login it could be told apart by.
+    const unpinned = pass({ handoff: readBack(pass()) });
+    expect(preset(unpinned.inputs.get('read-pr-handoff'))).toBe('loop_handoff::94');
+    expect(unpinned.outputs.get('read-pr-handoff')).toMatchObject({
+      data: { found: false, trust: 'undecided' },
+    });
+    expect(unpinned.decision).toBe('fix');
+    expect(unpinned.handoff).toMatchObject({ attemptCount: 1 });
+  });
+
+  it('does not take a record the pinned comment holds for another pull request', () => {
+    const elsewhere = pass({ pinned: 'found', pinnedCommentOn: 95, handoff: readBack(pass()) });
+    expect(elsewhere.outputs.get('read-pr-handoff-pinned')).toMatchObject({
+      data: { found: false },
+    });
+    expect(elsewhere.decision).toBe('fix');
+  });
+
+  it('pins the handoff it posts for its pull request, with the author GitHub answered it was written as', () => {
     const first = pass();
     expect(first.ran).toContain('handoff');
     expect(MemoryPutInputSchema.parse(first.inputs.get('remember-handoff'))).toMatchObject({
-      path: `/shepherd/aflowai/aflow/${BRANCH}/handoff.json`,
-      content: { inlineJson: { commentId: 9 } },
+      path: '/shepherd/aflowai/aflow/pulls/94.json',
+      content: { inlineJson: { commentId: 9, author: LOOP_LOGIN } },
     });
+  });
+
+  it('keeps a pin per pull request: a second pull request on the branch neither reads nor rewrites the first’s handoff', () => {
+    // The first pull request's handoff is pinned; the second has none of its own.
+    const second = pass({
+      pinned: 'found',
+      pinFor: 94,
+      handoff: readBack(pass()),
+      pullRequest: { number: 95 },
+    });
+    expect(second.inputs.get('read-handoff-pin')).toMatchObject({
+      target: { path: '/shepherd/aflowai/aflow/pulls/95.json' },
+    });
+    expect(second.statuses.get('read-pr-handoff-pinned')).toBe('skipped');
+    expect(second.ran).not.toContain('handoff-edit');
+    expect(second.ran).toContain('handoff');
+    expect(second.inputs.get('handoff')).toMatchObject({ params: { issue_number: 95 } });
+    expect(second.inputs.get('remember-handoff')).toMatchObject({
+      path: '/shepherd/aflowai/aflow/pulls/95.json',
+    });
+  });
+
+  it('pins a handoff found by the newest-page read and rewritten, so the next pass reads it by its id', () => {
+    // The pinned comment is gone; the newest page holds the pinned author's handoff.
+    const found = pass({ pinned: 'gone', handoff: readBack(pass()) });
+    expect(found.statuses.get('read-pr-handoff')).toBe('succeeded');
+    expect(found.ran).toContain('handoff-edit');
+    expect(MemoryPutInputSchema.parse(found.inputs.get('remember-handoff'))).toMatchObject({
+      path: '/shepherd/aflowai/aflow/pulls/94.json',
+      content: { inlineJson: { commentId: 9, author: LOOP_LOGIN } },
+    });
+    const next = pass({ pinned: 'found', handoff: readBack(found) });
+    expect(next.statuses.get('read-pr-handoff')).toBe('skipped');
+    expect(next.decision).toBe('wait');
   });
 
   // A handoff posted early in a conversation that ran past 100 comments sits
@@ -658,8 +809,10 @@ describe('Local PR Shepherd — it approves nothing', () => {
 describe('Local PR Shepherd — it stops', () => {
   it('abandons at the budget instead of commissioning a fourth fix', () => {
     const spent = pass({
+      pinned: 'found',
       handoff: {
         found: true,
+        trust: 'verified',
         commentId: 9,
         attemptCount: 3,
         nextAttemptCount: 4,
@@ -674,8 +827,10 @@ describe('Local PR Shepherd — it stops', () => {
   it('takes the budget as a run input', () => {
     const tight = pass({
       inputs: { attemptBudget: 1 },
+      pinned: 'found',
       handoff: {
         found: true,
+        trust: 'verified',
         commentId: 9,
         attemptCount: 1,
         nextAttemptCount: 2,
@@ -703,6 +858,31 @@ describe('Local PR Shepherd — the remedy a failure wants', () => {
     expect(
       routed.ran.filter((task) => [...ACTIONS].includes(task) && !task.startsWith('lease')),
     ).toEqual([...acted]);
+  });
+
+  // The remedy recorded is the one the routes took: each answer, confident or
+  // not, names the task that ran.
+  const TAKEN: Record<string, string> = {
+    'rerun-jobs': 'rerun_failed_jobs',
+    fix: 'fix_commission',
+    'bump-dependency': 'dependency_bump',
+    'merge-round': 'merge_round',
+  };
+  it.each(
+    REMEDY_ROUTES.flatMap((value) => [true, false].map((decided) => [value, decided] as const)),
+  )('records the remedy the routes took for %s (confident: %s)', (value, decided) => {
+    const routed = pass({ remedy: { value, decided } });
+    const remedies = Object.keys(TAKEN).filter((task) => routed.ran.includes(task));
+    expect(remedies.length).toBeLessThanOrEqual(1);
+    const taken = remedies.length === 1 ? TAKEN[remedies[0]!] : 'wait_on_ci';
+    expect(routed.outputs.get('record-remedy')?.['decision']).toBe(taken);
+    expect(routed.handoff).toMatchObject({ remedy: taken });
+  });
+
+  it('records no remedy where the remedy question could not be asked', () => {
+    const unasked = pass({ remedy: 'unavailable' });
+    expect(unasked.outputs.get('record-remedy')?.['decision']).toBe('none');
+    expect(unasked.handoff).toMatchObject({ remedy: 'none' });
   });
 
   it('takes the fix commission on an answer below its bar, whatever it leaned to', () => {

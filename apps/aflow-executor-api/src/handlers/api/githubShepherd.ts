@@ -250,22 +250,33 @@ function authoredBy(comment: Json, login: string): boolean {
 
 /**
  * `listIssueComments` (or `getIssueComment`, for the one a pass pinned) → the
- * newest handoff the loop itself left, read back as its record. The record
- * sits in an HTML comment no one sees on GitHub, so it is trusted only from
- * the login the connection posts as, given after the colon: a comment by any
- * other author is never the record, marker or no marker — a forged count
- * would lift the budget, a forged check run hold the pull request at `wait`.
+ * newest handoff the loop itself left on this pull request, read back as its
+ * record. The record sits in an HTML comment no one sees on GitHub, so it is
+ * trusted only from the login the loop's own handoff was posted as — read off
+ * GitHub's answer to that post and pinned with it, never asked of `/user`,
+ * which an App installation token cannot answer — and only on the pull
+ * request it is read for: a comment by any other author, or on another pull
+ * request, is never the record, marker or no marker. A forged count would
+ * lift the budget, a forged check run hold the pull request at `wait`. The
+ * argument is `<login>:<number>`; with no login nothing is trusted, and the
+ * read says `undecided` rather than guessing.
  */
-export function loopHandoff(body: unknown, login: string | undefined): ShepherdHandoffRead {
-  if (login === undefined || login === '') {
+export function loopHandoff(body: unknown, arg: string | undefined): ShepherdHandoffRead {
+  const separator = arg?.lastIndexOf(':') ?? -1;
+  const number = separator === -1 ? undefined : arg?.slice(separator + 1);
+  if (number === undefined || !/^\d+$/.test(number)) {
     throw new Error(
-      `${SHEPHERD_RESPONSE_PRESETS.handoff} reads only the loop's own comments: give the login it posts as after a colon`,
+      `${SHEPHERD_RESPONSE_PRESETS.handoff} reads one pull request's handoff: give <login>:<number> after a colon`,
     );
+  }
+  const login = arg?.slice(0, separator) ?? '';
+  if (login === '') {
+    return { found: false, attemptCount: 0, nextAttemptCount: 1, trust: 'undecided' };
   }
   const comments = (Array.isArray(body) ? body : [body]).map((value) => record(value, 'a comment'));
   for (let i = comments.length - 1; i >= 0; i -= 1) {
     const comment = comments[i]!;
-    if (!authoredBy(comment, login)) continue;
+    if (!authoredBy(comment, login) || !onPullRequest(comment, number)) continue;
     const parsed =
       typeof comment['body'] === 'string' ? parseShepherdHandoff(comment['body']) : null;
     if (parsed === null) continue;
@@ -274,9 +285,16 @@ export function loopHandoff(body: unknown, login: string | undefined): ShepherdH
       commentId: count(comment['id'], 'a comment id'),
       ...parsed,
       nextAttemptCount: parsed.attemptCount + 1,
+      trust: 'verified',
     };
   }
-  return { found: false, attemptCount: 0, nextAttemptCount: 1 };
+  return { found: false, attemptCount: 0, nextAttemptCount: 1, trust: 'verified' };
+}
+
+/** Whether a comment is on pull request `number`: its `issue_url` ends `/issues/<number>`. */
+function onPullRequest(comment: Json, number: string): boolean {
+  const url = comment['issue_url'];
+  return typeof url === 'string' && url.endsWith(`/issues/${number}`);
 }
 
 /** `listWorkflowRunJobs` → the jobs that failed, each with the steps that did. */

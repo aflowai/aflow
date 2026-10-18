@@ -27,11 +27,14 @@ export const SHEPHERD_LEASE_ROOT = '/shepherd';
 export const SHEPHERD_LEASE_DOCUMENT = 'lease.json';
 
 /**
- * Where the handoff comment's id is kept beside the lease, once a pass has
- * posted it: the comment is read by its id wherever it sits in a long
- * conversation, and the list of comments is read only where none is kept.
+ * Where a pull request's handoff is pinned — `<root>/<owner>/<repo>/pulls/<number>.json`,
+ * per pull request, never per branch, since a branch can carry a second pull
+ * request after the first closes. It holds the comment's id and the login the
+ * comment was posted as, both read off GitHub's answer to the pass that wrote
+ * it: the comment is read by its id wherever it sits in a long conversation,
+ * and its record is trusted only from that author.
  */
-export const SHEPHERD_HANDOFF_POINTER_DOCUMENT = 'handoff.json';
+export const SHEPHERD_HANDOFF_PINS = 'pulls';
 
 /**
  * A lease older than this is stale whatever its run says: a pass that holds
@@ -54,6 +57,7 @@ export const SHEPHERD_HANDOFF_FIELDS = [
   'headSha',
   'decision',
   'classification',
+  'remedy',
   'publicationRunId',
 ] as const;
 export type ShepherdHandoffField = (typeof SHEPHERD_HANDOFF_FIELDS)[number];
@@ -67,6 +71,8 @@ export interface ShepherdHandoffRecord {
   decision?: string;
   /** What the remedy question answered, which the routes turn into the remedy taken. */
   classification?: string;
+  /** The remedy the pass took: what its brief and the next classification read as the round before. */
+  remedy?: string;
   publicationRunId?: string;
 }
 
@@ -113,8 +119,10 @@ export function parseShepherdHandoff(body: string): ShepherdHandoffRecord | null
  * `pullRequest` take the folder's prefix after a colon, and `pullRequests` the
  * number of one pull request after another where a pass is aimed at it —
  * `loop_pulls:aflow/:94`. A branch prefix holds no colon, so neither is ambiguous.
- * `handoff` takes the login the loop posts as, `loop_handoff:aflow-bot`: a
- * record from any other author is no record. A login holds no colon either.
+ * `handoff` takes the login the loop posted the pinned handoff as and the pull
+ * request's number, `loop_handoff:aflow-bot:94`: a record from any other author,
+ * or on another pull request, is no record. With no login, `loop_handoff::94`,
+ * no record is trusted. A login holds no colon.
  */
 export const SHEPHERD_RESPONSE_PRESETS = {
   pullRequests: 'loop_pulls',
@@ -230,7 +238,13 @@ export const ShepherdHandoffReadSchema = z.object({
   headSha: z.string().optional(),
   decision: z.string().optional(),
   classification: z.string().optional(),
+  remedy: z.string().optional(),
   publicationRunId: z.string().optional(),
+  trust: z
+    .enum(['verified', 'undecided'])
+    .describe(
+      '`verified` where the read knew the login the loop posts as, and so could tell its record from a forgery. `undecided` where it did not: no record is trusted, and the pass decides as on a pull request with none — the default, never a wait.',
+    ),
 });
 export type ShepherdHandoffRead = z.infer<typeof ShepherdHandoffReadSchema>;
 
