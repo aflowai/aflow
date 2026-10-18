@@ -147,6 +147,7 @@ describe('loop_checks — what CI says of the head', () => {
   it('names the failing run with the lowest id, as text, with the Actions run it is a job of', () => {
     const shaped = CheckRunsSummarySchema.parse(
       loopCheckRuns({
+        total_count: 2,
         check_runs: [run(9, 'completed', 'timed_out'), run(4, 'completed', 'failure')],
       }),
     );
@@ -156,6 +157,38 @@ describe('loop_checks — what CI says of the head', () => {
       conclusion: 'failure',
       runId: 37460214524,
     });
+  });
+
+  describe('a head with more check runs than the one page read', () => {
+    const greenPage = Array.from({ length: 100 }, (_, i) => run(i + 1, 'completed', 'success'));
+
+    it('is never passing from the first page while a failure may sit on the second', () => {
+      const shaped = CheckRunsSummarySchema.parse(
+        loopCheckRuns({ total_count: 101, check_runs: greenPage }),
+      );
+      expect(shaped.state).toBe('pending');
+      expect(shaped.total).toBe(101);
+      expect(shaped.failing).toEqual([]);
+    });
+
+    it.each([
+      ['stopped', [run(1, 'completed', 'cancelled'), ...greenPage.slice(1)]],
+      ['none', []],
+    ])('nor %s from a page that would read so alone', (alone, page) => {
+      expect(loopCheckRuns({ total_count: page.length, check_runs: page }).state).toBe(alone);
+      expect(loopCheckRuns({ total_count: 150, check_runs: page }).state).toBe('pending');
+    });
+
+    it('is failing where the page itself carries a failure, which no later page undoes', () => {
+      const page = [...greenPage.slice(1), run(101, 'completed', 'failure')];
+      expect(loopCheckRuns({ total_count: 150, check_runs: page }).state).toBe('failing');
+    });
+  });
+
+  it('fails the read where GitHub gives no count of the runs, rather than trust the page', () => {
+    expect(() => loopCheckRuns({ check_runs: [run(2, 'completed', 'success')] })).toThrow(
+      'total_count is not a number',
+    );
   });
 });
 

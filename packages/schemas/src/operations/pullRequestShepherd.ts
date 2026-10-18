@@ -213,12 +213,14 @@ export type FailingCheckRun = z.infer<typeof FailingCheckRunSchema>;
 
 /**
  * `listCheckRuns` on the head, as the shepherd reads it: `failing` where any
- * run failed, else `pending` while any has not finished, else `passing` where
- * every one succeeded or was skipped, `stopped` where one was cancelled or
- * needs an action, `none` where there are none.
+ * run failed, else `pending` while any has not finished or GitHub holds more
+ * than the one page read, else `passing` where every one succeeded or was
+ * skipped, `stopped` where one was cancelled or needs an action, `none` where
+ * there are none.
  */
 export const CheckRunsSummarySchema = z.object({
   state: CheckRunsStateSchema,
+  /** GitHub's count of the head's check runs, read or not. */
   total: z.number().int().nonnegative(),
   failing: z.array(FailingCheckRunSchema),
   /** The failing run with the lowest id: the one the shepherd acts on, and records. */

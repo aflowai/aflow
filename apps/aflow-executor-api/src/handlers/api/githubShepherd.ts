@@ -183,11 +183,19 @@ function actionsRunId(detailsUrl: unknown): number | undefined {
   return id === undefined ? undefined : Number(id);
 }
 
-/** `listCheckRuns` on the head → what CI says of it, and the failure a pass acts on. */
+/**
+ * `listCheckRuns` on the head → what CI says of it, and the failure a pass acts on.
+ *
+ * One page is read, never more, so a pass's latency does not grow with the
+ * head's check runs. Where GitHub holds more than the page carries, the runs
+ * left unread may fail, so nothing but a failure seen on the page is a
+ * verdict: the head reads `pending`, never `passing`, `stopped` or `none`.
+ */
 export function loopCheckRuns(body: unknown): CheckRunsSummary {
-  const runs = list(record(body, 'the check runs')['check_runs'], 'check_runs').map((value) =>
-    record(value, 'a check run'),
-  );
+  const page = record(body, 'the check runs');
+  const totalCount = count(page['total_count'], 'total_count');
+  const runs = list(page['check_runs'], 'check_runs').map((value) => record(value, 'a check run'));
+  const unread = totalCount > runs.length;
   const failing: FailingCheckRun[] = runs
     .filter(
       (run) => run['status'] === 'completed' && FAILED_CONCLUSIONS.has(String(run['conclusion'])),
@@ -202,7 +210,7 @@ export function loopCheckRuns(body: unknown): CheckRunsSummary {
       };
     })
     .sort((a, b) => Number(a.id) - Number(b.id));
-  const pending = runs.some((run) => run['status'] !== 'completed');
+  const pending = unread || runs.some((run) => run['status'] !== 'completed');
   const stopped = runs.some((run) => STOPPED_CONCLUSIONS.has(String(run['conclusion'])));
   const state: CheckRunsState =
     failing.length > 0
@@ -217,7 +225,7 @@ export function loopCheckRuns(body: unknown): CheckRunsSummary {
   const [firstFailing] = failing;
   return {
     state,
-    total: runs.length,
+    total: totalCount,
     failing,
     ...(firstFailing !== undefined ? { firstFailing } : {}),
   };
