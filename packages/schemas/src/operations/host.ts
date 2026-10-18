@@ -1221,8 +1221,53 @@ export const HostBindingInspectInputSchema = z.object({
   bindingId: HostBindingRef,
 });
 
+/** GitHub's rule for an owner: letters, digits and single hyphens between them, at most 39. */
+const GITHUB_OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
+/** GitHub's rule for a repository name, without `.` or `..`, which climb out of `/repos/{owner}`. */
+const GITHUB_REPO = /^(?!\.{1,2}$)[A-Za-z0-9._-]{1,100}$/;
+
+export const HostGitHubOriginSchema = z.object({
+  owner: z.string().regex(GITHUB_OWNER),
+  repo: z.string().regex(GITHUB_REPO),
+});
+export type HostGitHubOrigin = z.infer<typeof HostGitHubOriginSchema>;
+
+/**
+ * The GitHub repository a remote URL names — `https://github.com/o/r(.git)`,
+ * `git@github.com:o/r(.git)` or `ssh://git@github.com/o/r(.git)` — or
+ * undefined where it names another host or no repository GitHub would accept.
+ */
+export function parseGitHubRemote(url: string): HostGitHubOrigin | undefined {
+  const trimmed = url.trim();
+  const scp = /^[^@/\s]+@github\.com:(.+)$/i.exec(trimmed);
+  let path: string | undefined = scp?.[1];
+  if (path === undefined) {
+    let parsed: URL;
+    try {
+      parsed = new URL(trimmed);
+    } catch {
+      return undefined;
+    }
+    if (!['https:', 'http:', 'ssh:', 'git:'].includes(parsed.protocol)) return undefined;
+    if (parsed.hostname.toLowerCase() !== 'github.com') return undefined;
+    path = parsed.pathname;
+  }
+  const parts = path
+    .replace(/^\/+/, '')
+    .replace(/\/+$/, '')
+    .replace(/\.git$/, '')
+    .split('/');
+  if (parts.length !== 2) return undefined;
+  const parsed = HostGitHubOriginSchema.safeParse({ owner: parts[0], repo: parts[1] });
+  return parsed.success ? parsed.data : undefined;
+}
+
 export const HostBindingInspectOutputSchema = z.object({
   id: z.string(),
+  origin: HostGitHubOriginSchema.optional().describe(
+    "The GitHub repository the folder's `origin` remote fetches from, as the operator's own git " +
+      'resolves its URL. Absent where the folder has no `origin`, or it is not on github.com.',
+  ),
   branchPolicy: HostResolvedBranchPolicySchema.optional().describe(
     'Which branches a push from this folder may move, when a publication asks the operator ' +
       'before pushing, and the checks it runs first and for how long. Absent, the folder ' +

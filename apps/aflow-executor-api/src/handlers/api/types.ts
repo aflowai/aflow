@@ -34,6 +34,12 @@ export interface ResolvedCall {
   endpoint?: ApiEndpoint;
   tenantHostGuard?: TenantHostGuard;
   /**
+   * The headers the binding's credential rides in. A redirect to another host
+   * drops them, with `Authorization` and `Cookie` whatever the auth: a signed
+   * download URL needs none of them, and the host it names is not the API's.
+   */
+  credentialHeaders?: readonly string[];
+  /**
    * Set only when the resolved binding declares simulated fulfillment. Its
    * presence is what proves a call cannot reach a real party — the executor
    * treats an absent value as live, so a path that forgets to thread it fails

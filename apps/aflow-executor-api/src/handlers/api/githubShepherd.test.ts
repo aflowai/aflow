@@ -1,0 +1,423 @@
+/**
+ * Contract: GitHub's answers reach the Local PR Shepherd's rules as typed
+ * records, shaped before anything is cut to fit inline; a body that does not
+ * shape fails the read rather than passing GitHub's object on; the end of a
+ * job's log is bounded at Plan 321 P0.3's measurement as it is carried; and a
+ * redirect off the API's host carries none of the binding's credential.
+ */
+import { describe, expect, it } from 'vitest';
+import {
+  CheckRunsSummarySchema,
+  FailingJobsSchema,
+  JOB_LOG_EXCERPT_MAX_BYTES,
+  JOB_LOG_EXCERPT_MAX_LINES,
+  JobLogExcerptSchema,
+  LOCAL_PUBLISH_PULL_REQUEST_MARKER,
+  LoopPullRequestSchema,
+  LoopPullRequestsSchema,
+  ShepherdHandoffReadSchema,
+} from '@aflow/schemas';
+import { NOTHING_SKIPPED } from './bodyTail.js';
+import {
+  JOB_LOG_READ_WINDOW_BYTES,
+  jobLogTail,
+  loopCheckRuns,
+  loopFailingJobs,
+  loopHandoff,
+  loopPullRequest,
+  loopPullRequests,
+} from './githubShepherd.js';
+import {
+  applyRecordTransformPreset,
+  applyTextTransformPreset,
+  isRecordTransformPreset,
+  isTextTransformPreset,
+  textPresetTailWindow,
+} from './transforms.js';
+import { withoutCredentials } from './execution.js';
+import { credentialHeaderNames } from './headers.js';
+import { ApiExecutionError } from './types.js';
+
+/** The repository the loop pushes to and opens its pull requests on. */
+const REPO = { id: 101, full_name: 'aflowai/aflow' };
+const FORK = { id: 202, full_name: 'someone/aflow' };
+
+function pr(number: number, over: Record<string, unknown> = {}) {
+  return {
+    number,
+    state: 'open',
+    title: `PR ${String(number)}`,
+    body: `Body.\n\n${LOCAL_PUBLISH_PULL_REQUEST_MARKER}`,
+    draft: false,
+    labels: [],
+    updated_at: `2026-10-1${String(number % 10)}T00:00:00Z`,
+    comments: 3,
+    head: { ref: `aflow/branch-${String(number)}`, sha: 'c'.repeat(40), repo: REPO },
+    base: { ref: 'main', repo: REPO },
+    ...over,
+  };
+}
+
+describe('loop_pulls — the loop’s open pull requests under the prefix', () => {
+  const listed = [
+    pr(1),
+    pr(2, { labels: [{ name: 'hands-off' }] }),
+    pr(3, { body: 'A person’s pull request.' }),
+    pr(4, { head: { ref: 'feature/x', sha: 'c'.repeat(40), repo: REPO } }),
+    pr(5),
+  ];
+
+  it('keeps those Local Publish opened under the prefix, hands-off last, then the newest', () => {
+    const shaped = LoopPullRequestsSchema.parse(loopPullRequests(listed, 'aflow/'));
+    expect(shaped.pullRequests.map((p) => p.number)).toEqual([5, 1, 2]);
+    expect(shaped.pullRequests.at(-1)?.handsOff).toBe(true);
+    expect(shaped.count).toBe(3);
+  });
+
+  it('refuses to read without a prefix', () => {
+    expect(() => loopPullRequests(listed, undefined)).toThrow(/prefix/);
+  });
+
+  // The loop pushes to its own repository: a fork can copy the marker and a
+  // branch name under the prefix, and is still someone else's branch.
+  it('lists no pull request from a fork, marker and prefix notwithstanding', () => {
+    const fromFork = pr(6, {
+      head: { ref: 'aflow/branch-6', sha: 'c'.repeat(40), repo: FORK },
+    });
+    const fromDeletedFork = pr(8, {
+      head: { ref: 'aflow/branch-8', sha: 'c'.repeat(40), repo: null },
+    });
+    expect(
+      loopPullRequests([...listed, fromFork, fromDeletedFork], 'aflow/').pullRequests.map(
+        (p) => p.number,
+      ),
+    ).toEqual([5, 1, 2]);
+    expect(loopPullRequests([fromFork], 'aflow/').count).toBe(0);
+  });
+});
+
+describe('loop_pull — one pull request', () => {
+  it('says whether it is the loop’s under the prefix, and drops the marker from the body', () => {
+    const shaped = LoopPullRequestSchema.parse(
+      loopPullRequest(pr(7, { mergeable_state: 'dirty' }), 'aflow/'),
+    );
+    expect(shaped).toMatchObject({
+      number: 7,
+      ours: true,
+      handsOff: false,
+      mergeableState: 'dirty',
+    });
+    expect(shaped.body).toBe('Body.');
+    expect(loopPullRequest(pr(7, { body: 'Mine.' }), 'aflow/').ours).toBe(false);
+    expect(loopPullRequest(pr(7), 'other/').ours).toBe(false);
+  });
+
+  it('is never the loop’s from a fork', () => {
+    const fromFork = pr(7, { head: { ref: 'aflow/branch-7', sha: 'c'.repeat(40), repo: FORK } });
+    expect(loopPullRequest(fromFork, 'aflow/').ours).toBe(false);
+  });
+
+  it('counts the pages of its conversation, the last the newest', () => {
+    expect(loopPullRequest(pr(7, { comments: 0 }), 'aflow/').commentPages).toBe(1);
+    expect(loopPullRequest(pr(7, { comments: 100 }), 'aflow/').commentPages).toBe(1);
+    expect(loopPullRequest(pr(7, { comments: 101 }), 'aflow/').commentPages).toBe(2);
+    expect(loopPullRequest(pr(7, { comments: 250 }), 'aflow/').commentPages).toBe(3);
+  });
+});
+
+describe('loop_checks — what CI says of the head', () => {
+  const run = (id: number, status: string, conclusion: string | null) => ({
+    id,
+    name: `check-${String(id)}`,
+    status,
+    conclusion,
+    details_url: `https://github.com/aflowai/aflow/actions/runs/37460214524/job/${String(id)}`,
+  });
+
+  it.each([
+    [[run(2, 'completed', 'success'), run(3, 'completed', 'failure')], 'failing'],
+    [[run(2, 'completed', 'success'), run(3, 'in_progress', null)], 'pending'],
+    [[run(2, 'completed', 'success'), run(3, 'completed', 'skipped')], 'passing'],
+    [[run(2, 'completed', 'cancelled')], 'stopped'],
+    [[], 'none'],
+  ])('reads %j as %s', (runs, state) => {
+    expect(loopCheckRuns({ total_count: runs.length, check_runs: runs }).state).toBe(state);
+  });
+
+  it('names the failing run with the lowest id, as text, with the Actions run it is a job of', () => {
+    const shaped = CheckRunsSummarySchema.parse(
+      loopCheckRuns({
+        total_count: 2,
+        check_runs: [run(9, 'completed', 'timed_out'), run(4, 'completed', 'failure')],
+      }),
+    );
+    expect(shaped.firstFailing).toEqual({
+      id: '4',
+      name: 'check-4',
+      conclusion: 'failure',
+      runId: 37460214524,
+    });
+  });
+
+  describe('a head with more check runs than the one page read', () => {
+    const greenPage = Array.from({ length: 100 }, (_, i) => run(i + 1, 'completed', 'success'));
+
+    it('is never passing from the first page while a failure may sit on the second', () => {
+      const shaped = CheckRunsSummarySchema.parse(
+        loopCheckRuns({ total_count: 101, check_runs: greenPage }),
+      );
+      expect(shaped.state).toBe('pending');
+      expect(shaped.total).toBe(101);
+      expect(shaped.failing).toEqual([]);
+    });
+
+    it.each([
+      ['stopped', [run(1, 'completed', 'cancelled'), ...greenPage.slice(1)]],
+      ['none', []],
+    ])('nor %s from a page that would read so alone', (alone, page) => {
+      expect(loopCheckRuns({ total_count: page.length, check_runs: page }).state).toBe(alone);
+      expect(loopCheckRuns({ total_count: 150, check_runs: page }).state).toBe('pending');
+    });
+
+    it('is failing where the page itself carries a failure, which no later page undoes', () => {
+      const page = [...greenPage.slice(1), run(101, 'completed', 'failure')];
+      expect(loopCheckRuns({ total_count: 150, check_runs: page }).state).toBe('failing');
+    });
+  });
+
+  it('fails the read where GitHub gives no count of the runs, rather than trust the page', () => {
+    expect(() => loopCheckRuns({ check_runs: [run(2, 'completed', 'success')] })).toThrow(
+      'total_count is not a number',
+    );
+  });
+});
+
+describe('loop_handoff — the shepherd’s own record', () => {
+  const loop = { login: 'aflow-app[bot]' };
+  const stranger = { login: 'someone' };
+  const ON_94 = 'https://api.github.com/repos/aflowai/aflow/issues/94';
+  const handoff = (
+    id: number,
+    attemptCount: number,
+    checkRunId: string,
+    user = loop,
+    issueUrl = ON_94,
+  ) => ({
+    id,
+    user,
+    issue_url: issueUrl,
+    body: `<!-- aflow:shepherd\nattemptCount: ${String(attemptCount)}\ncheckRunId: ${checkRunId}\n-->\nWords.`,
+  });
+  const AS_PINNED = 'aflow-app[bot]:94';
+
+  it('trusts a record whose author is the login the loop’s handoff was pinned with', () => {
+    const shaped = ShepherdHandoffReadSchema.parse(
+      loopHandoff(
+        [
+          handoff(1, 1, '4'),
+          { id: 2, user: stranger, issue_url: ON_94, body: 'Looks good.' },
+          handoff(3, 2, '9'),
+        ],
+        AS_PINNED,
+      ),
+    );
+    expect(shaped).toEqual({
+      found: true,
+      commentId: 3,
+      attemptCount: 2,
+      nextAttemptCount: 3,
+      checkRunId: '9',
+      trust: 'verified',
+    });
+  });
+
+  // The record is an HTML comment nobody sees on GitHub: from anyone but the
+  // loop it would lift the budget (`attemptCount: 0`) or pin a pull request
+  // at `wait` (a `checkRunId`), so it is no record at all.
+  it('ignores a record from a mismatched author, newest or not', () => {
+    const read = loopHandoff([handoff(1, 3, '9'), handoff(2, 0, '10', stranger)], AS_PINNED);
+    expect(read).toMatchObject({ found: true, commentId: 1, attemptCount: 3, checkRunId: '9' });
+    expect(loopHandoff([handoff(2, 0, '10', stranger)], AS_PINNED)).toMatchObject({
+      found: false,
+      attemptCount: 0,
+      trust: 'verified',
+    });
+  });
+
+  // With no author pinned — the first pass, or a pin lost — no comment can be
+  // told from a forgery, so none is the record, and the read says so: the pass
+  // decides as on a pull request with no handoff, never waiting on it.
+  it('trusts nothing, and is undecided, where no author is known', () => {
+    expect(loopHandoff([handoff(1, 3, '9')], ':94')).toEqual({
+      found: false,
+      attemptCount: 0,
+      nextAttemptCount: 1,
+      trust: 'undecided',
+    });
+  });
+
+  it('takes no record from another pull request’s comment, its author notwithstanding', () => {
+    const elsewhere = handoff(
+      5,
+      2,
+      '12',
+      loop,
+      'https://api.github.com/repos/aflowai/aflow/issues/93',
+    );
+    expect(loopHandoff(elsewhere, AS_PINNED).found).toBe(false);
+    expect(loopHandoff(handoff(5, 2, '12'), AS_PINNED)).toMatchObject({
+      found: true,
+      commentId: 5,
+    });
+  });
+
+  it('matches the author as GitHub does, without regard to case', () => {
+    expect(loopHandoff([handoff(3, 1, '11', { login: 'AFLOW-APP[BOT]' })], AS_PINNED).found).toBe(
+      true,
+    );
+  });
+
+  it('refuses to read without the pull request it reads for', () => {
+    expect(() => loopHandoff([handoff(1, 1, '4')], 'aflow-app[bot]')).toThrow(/<login>:<number>/);
+  });
+});
+
+describe('loop_failing_jobs — the jobs that failed', () => {
+  it('keeps the failed jobs, each with its failed steps', () => {
+    const shaped = FailingJobsSchema.parse(
+      loopFailingJobs({
+        jobs: [
+          { id: 2, name: 'Lint', conclusion: 'success', steps: [] },
+          {
+            id: 1,
+            name: 'Test',
+            conclusion: 'failure',
+            steps: [
+              { name: 'Install', conclusion: 'success' },
+              { name: 'Run tests', conclusion: 'failure' },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(shaped).toEqual({
+      jobs: [{ id: 1, name: 'Test', conclusion: 'failure', failedSteps: ['Run tests'] }],
+      count: 1,
+    });
+  });
+});
+
+describe('job_log_tail — the end of a job’s log', () => {
+  it('keeps the last 300 lines, colour codes taken out', () => {
+    const log = Array.from({ length: 5955 }, (_, i) => `\u001b[36mline ${String(i)}\u001b[0m`).join(
+      '\n',
+    );
+    const tail = JobLogExcerptSchema.parse(jobLogTail(`${log}\n`));
+    expect(tail.lines).toBe(JOB_LOG_EXCERPT_MAX_LINES);
+    expect(tail.totalLines).toBe(5955);
+    expect(tail.truncated).toBe(true);
+    expect(tail.excerpt.split('\n').at(-1)).toBe('line 5954');
+    expect(tail.excerpt).not.toContain('\u001b');
+  });
+
+  it('holds under 60 KB as it is carried, fewer lines where 300 would pass it', () => {
+    const wide = Array.from({ length: 400 }, (_, i) => `${String(i)} ${'"x"'.repeat(200)}`).join(
+      '\n',
+    );
+    const tail = jobLogTail(wide);
+    expect(tail.lines).toBeLessThan(JOB_LOG_EXCERPT_MAX_LINES);
+    expect(Buffer.byteLength(JSON.stringify(tail.excerpt))).toBeLessThanOrEqual(
+      JOB_LOG_EXCERPT_MAX_BYTES,
+    );
+    expect(Buffer.byteLength(JSON.stringify(tail))).toBeLessThan(64 * 1024);
+  });
+
+  it('keeps the end of one line too long alone', () => {
+    const tail = jobLogTail(`start\n${'y'.repeat(200_000)}end`);
+    expect(tail.excerpt.endsWith('end')).toBe(true);
+    expect(tail.bytes).toBeLessThanOrEqual(JOB_LOG_EXCERPT_MAX_BYTES);
+  });
+
+  it('keeps a short log whole', () => {
+    expect(jobLogTail('a\nb\n')).toMatchObject({ excerpt: 'a\nb', lines: 2, truncated: false });
+  });
+
+  it('is getJobLogs’ own transform, applied to the text before it is shaped', () => {
+    const log = { text: 'a\nb\n', skipped: NOTHING_SKIPPED };
+    expect(applyTextTransformPreset('job_log_tail', log)).toEqual(jobLogTail(log.text));
+    expect(textPresetTailWindow('job_log_tail')).toBe(JOB_LOG_READ_WINDOW_BYTES);
+  });
+
+  it('read past a skipped prefix, leaves out the fragment it starts with and counts the lines skipped', () => {
+    const tail = jobLogTail('ment\nline 41\nline 42\n', {
+      bytes: 9000,
+      lineBreaks: 40,
+      endsLine: false,
+    });
+    expect(tail).toMatchObject({
+      excerpt: 'line 41\nline 42',
+      lines: 2,
+      totalLines: 43,
+      truncated: true,
+    });
+  });
+
+  it('read from a line’s start, keeps that line', () => {
+    const tail = jobLogTail('line 40\nline 41', { bytes: 9000, lineBreaks: 40, endsLine: true });
+    expect(tail).toMatchObject({ excerpt: 'line 40\nline 41', lines: 2, totalLines: 42 });
+  });
+});
+
+describe('record presets', () => {
+  it('take an argument after the first colon', () => {
+    expect(isRecordTransformPreset('loop_pulls:aflow/')).toBe(true);
+    expect(isRecordTransformPreset('loop_checks')).toBe(true);
+    expect(isRecordTransformPreset('extract:data')).toBe(false);
+  });
+
+  it('are never an Object.prototype key, whatever the id', () => {
+    for (const id of ['toString', 'constructor', 'hasOwnProperty', '__proto__', 'toString:x']) {
+      expect(isRecordTransformPreset(id)).toBe(false);
+      expect(isTextTransformPreset(id)).toBe(false);
+      expect(() => applyRecordTransformPreset(id, {})).toThrowError(/Unknown record transform/);
+      expect(() =>
+        applyTextTransformPreset(id, { text: '', skipped: NOTHING_SKIPPED }),
+      ).toThrowError(/Unknown text transform/);
+    }
+  });
+
+  it('fail the read on a body they cannot shape, never passing it on', () => {
+    expect(() => applyRecordTransformPreset('loop_checks', { message: 'Not Found' })).toThrowError(
+      ApiExecutionError,
+    );
+  });
+});
+
+describe('a redirect off the API’s host', () => {
+  const sent = {
+    Accept: 'application/vnd.github+json',
+    authorization: 'Bearer ghp_secret',
+    'X-Api-Key': 'k',
+    Cookie: 'c=1',
+  };
+
+  it('carries none of the binding’s credential, whatever its case', () => {
+    expect(
+      withoutCredentials(
+        sent,
+        credentialHeaderNames({ type: 'bearer', credentialKey: 'gh' } as never),
+      ),
+    ).toEqual({ Accept: 'application/vnd.github+json', 'X-Api-Key': 'k' });
+    expect(
+      withoutCredentials(
+        sent,
+        credentialHeaderNames({
+          type: 'api_key',
+          placement: 'header',
+          headerName: 'x-api-key',
+          credentialKey: 'k',
+        } as never),
+      ),
+    ).toEqual({ Accept: 'application/vnd.github+json' });
+  });
+});

@@ -1,7 +1,7 @@
 /**
  * Declared-host collection per integration artifact — the full outbound
  * surface the tenant allowlist judges: base/template hosts, egress additions,
- * OAuth token + authorization endpoints, MCP server URLs, and repo git hosts.
+ * endpoint redirect hosts, OAuth token + authorization endpoints, MCP server URLs, and repo git hosts.
  */
 import { issuerHosts, templateHostPattern } from '@aflow/platform-artifacts';
 
@@ -25,6 +25,7 @@ export interface ApiDefinitionHostSource {
   baseUrl?: string | undefined;
   baseUrlTemplate?: string | undefined;
   suggestedEgressPolicy?: { additionalHosts?: readonly string[] | undefined } | undefined;
+  endpoints?: ReadonlyArray<{ redirectHosts?: readonly string[] | undefined }> | undefined;
 }
 
 export function collectApiDefinitionHosts(def: ApiDefinitionHostSource): string[] {
@@ -34,6 +35,7 @@ export function collectApiDefinitionHosts(def: ApiDefinitionHostSource): string[
     pushUnique(hosts, [templateHostPattern(def.baseUrlTemplate)]);
   }
   pushUnique(hosts, def.suggestedEgressPolicy?.additionalHosts ?? []);
+  for (const endpoint of def.endpoints ?? []) pushUnique(hosts, endpoint.redirectHosts ?? []);
   return hosts;
 }
 

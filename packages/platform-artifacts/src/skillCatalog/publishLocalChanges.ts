@@ -205,7 +205,7 @@ const CHECK_INPUT_TEMPLATE = {
 
 const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'publish-local-changes',
-  version: 32,
+  version: 33,
   name: 'Publish Local Changes',
   tagline:
     'Commit a patch onto a branch of a connected repository, then push it and open the pull request — asking the operator first unless the folder says otherwise.',
@@ -325,7 +325,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           id: 'summary',
           required: false,
           description:
-            "A body for the pull request, only where a person wants to say it themselves: it stands as the whole body, and nothing is composed beside it. Omitted, the body is composed from the branch — every commit's message, the review's findings, the checks and the known gaps.",
+            "A body for the pull request, only where a person wants to say it themselves: it stands as the whole body, and nothing is composed beside it but the loop's marker, which closes every body Local Publish writes and is what the Local PR Shepherd tends by. Omitted, the body is composed from the branch — every commit's message, the review's findings, the checks and the known gaps.",
           schema: SUMMARY_SCHEMA,
         },
         {
@@ -755,10 +755,11 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           maxAttempts: 1,
           inputBindings: {
             bindingId: { kind: 'run_input' as const, path: 'bindingId' },
-            range: { kind: 'task_output' as const, taskId: 'commit', path: 'commit.pushRange' },
-            // The range's tip, where the review's checkout stands. The folder's
-            // own HEAD is where the commission started — the range's base — since
-            // the commit lands on a branch nothing has checked out.
+            // `pushRange`'s two ends: the review builds the range from them, so
+            // it reads exactly what the scan read. The tip is where its checkout
+            // stands — not the folder's own HEAD, which is where the commission
+            // started, since the commit lands on a branch nothing has checked out.
+            from: { kind: 'task_output' as const, taskId: 'commit', path: 'commit.pushBaseSha' },
             at: { kind: 'task_output' as const, taskId: 'commit', path: 'commit.sha' },
           },
           context: {
@@ -775,7 +776,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             catalogId: REVIEW_SKILL.catalogId,
             inputs: {
               bindingId: { $bind: 'bindingId' },
-              range: { $bind: 'range' },
+              from: { $bind: 'from' },
               at: { $bind: 'at' },
               depth: 'standard',
             },

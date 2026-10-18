@@ -8,6 +8,7 @@ export const ARTIFACT_TYPE_LABELS: Record<StoreArtifactType, string> = {
   mcp_binding: 'Connection',
   memory_doc: 'Document',
   ui_artifact: 'Card',
+  agent: 'Agent',
 };
 
 function titleCase(value: string): string {

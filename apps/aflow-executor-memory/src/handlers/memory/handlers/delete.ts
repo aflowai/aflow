@@ -41,7 +41,24 @@ export async function handleDelete(
       return await failureWithError(ctx, validationError(resolvedRefusal));
     }
 
-    await repo.softDelete(doc.id, doc.spaceId);
+    // A conditional delete leaves a document another writer has since changed:
+    // a lease taken over by another run is that run's to release.
+    const expectedHash = input.expectedHash;
+    if (expectedHash !== undefined) {
+      const deleted =
+        doc.contentHash === expectedHash &&
+        (await repo.softDelete(doc.id, doc.spaceId, { expectedHash }));
+      if (!deleted) {
+        return await failureWithError(
+          ctx,
+          validationError(
+            `MEMORY_HASH_MISMATCH: ${doc.path} no longer holds the content expected (${expectedHash}); it was left as it is.`,
+          ),
+        );
+      }
+    } else {
+      await repo.softDelete(doc.id, doc.spaceId);
+    }
     await repo.deleteChunksForDoc(doc.id);
     return await successWithData(ctx, {
       id: doc.id,
@@ -58,6 +75,16 @@ export async function handleDelete(
       const subtreeRefusal = governedSubtreeRefusal(dir.path);
       if (subtreeRefusal !== null) {
         return await failureWithError(ctx, validationError(subtreeRefusal));
+      }
+      // A directory holds no content hash, so no condition on one can hold:
+      // deleting anyway would drop the precondition the caller asked for.
+      if (input.expectedHash !== undefined) {
+        return await failureWithError(
+          ctx,
+          validationError(
+            `MEMORY_HASH_MISMATCH: ${dir.path} is a directory, which holds no content hash to match ${input.expectedHash}; it was left as it is. expectedHash conditions document deletes only.`,
+          ),
+        );
       }
       const deleted = await dirRepo.deleteDir(dir.path, runSpaceId, input.recursive);
       return await successWithData(ctx, {

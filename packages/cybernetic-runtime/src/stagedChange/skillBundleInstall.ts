@@ -16,6 +16,7 @@ import {
   publishMemorySeedEmbedJobs,
 } from './bundleInstallContent.js';
 import { applyArtifactSeeds } from './applyArtifactSeeds.js';
+import { applyBundledAgents } from './applyBundledAgents.js';
 import { generatePostInstallManifest } from './bundleInstallManifest.js';
 import { validateBundleInstallPreconditions } from './bundleInstallValidator.js';
 import { tryAcquireStoreMutationLock } from './storeMutationLock.js';
@@ -99,6 +100,10 @@ export interface InstallSkillBundleResult {
   skippedMemoryDocPaths: string[];
   installedArtifactBindings: string[];
   skippedArtifactBindings: string[];
+  /** Slugs of the agents this call wrote. */
+  installedAgentSlugs: string[];
+  /** Slugs of bundled agents already taken in the space. */
+  skippedAgentSlugs: string[];
   /**
    * Typed completion checklist derived from CURRENT state:
    * `fill_credentials` per binding with unfilled slots. Manifest is
@@ -256,6 +261,13 @@ export async function installSkillBundle(
       payloadStore: ctx.payloadStore,
     });
 
+    const agentResult = await applyBundledAgents({
+      agents: bundle.agents ?? [],
+      tenantId: ctx.tenantId,
+      spaceId: ctx.spaceId,
+      tx,
+    });
+
     const postInstallManifest = await generatePostInstallManifest({
       bundle,
       tenantId: ctx.tenantId,
@@ -272,6 +284,7 @@ export async function installSkillBundle(
       mcpBindingResult,
       memorySeedResult,
       artifactSeedResult,
+      agentResult,
       postInstallManifest,
     };
   });
@@ -302,7 +315,8 @@ export async function installSkillBundle(
     txOutcome.mcpDefResult.installedMcpDefinitionIds.length > 0 ||
     txOutcome.mcpBindingResult.installedMcpBindingIds.length > 0 ||
     txOutcome.memorySeedResult.installedMemoryDocPaths.length > 0 ||
-    txOutcome.artifactSeedResult.installedArtifactBindings.length > 0;
+    txOutcome.artifactSeedResult.installedArtifactBindings.length > 0 ||
+    txOutcome.agentResult.installedAgentSlugs.length > 0;
 
   // A skill counts as "present" if it was just installed, was already
   // installed (skipped), or was self-healed (repaired). These three
@@ -348,9 +362,15 @@ export async function installSkillBundle(
     skippedMemoryDocPaths: txOutcome.memorySeedResult.skippedMemoryDocPaths,
     installedArtifactBindings: txOutcome.artifactSeedResult.installedArtifactBindings,
     skippedArtifactBindings: txOutcome.artifactSeedResult.skippedArtifactBindings,
+    installedAgentSlugs: txOutcome.agentResult.installedAgentSlugs,
+    skippedAgentSlugs: txOutcome.agentResult.skippedAgentSlugs,
     postInstallManifest: txOutcome.postInstallManifest,
     helmsmanHints: [...(bundle.helmsmanHints ?? [])],
-    warnings: [...txOutcome.loopResult.warnings, ...txOutcome.memorySeedResult.warnings],
+    warnings: [
+      ...txOutcome.loopResult.warnings,
+      ...txOutcome.memorySeedResult.warnings,
+      ...txOutcome.agentResult.warnings,
+    ],
     stateChanged,
     ...(setupSkillIntent ? { setupSkillIntent } : {}),
   };

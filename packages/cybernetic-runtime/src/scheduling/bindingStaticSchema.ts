@@ -127,6 +127,10 @@ export function bindingStaticSchema(
       return { schema: { type: 'string' }, status: 'known' };
     case 'artifact_binding':
       return { schema: { type: 'string', format: 'uuid' }, status: 'known' };
+    case 'run_id':
+      return { schema: { type: 'string', minLength: 1 }, status: 'known' };
+    case 'clock':
+      return { schema: { type: 'integer' }, status: 'known' };
     case 'task_output':
       return resolveTaskOutputSchema(binding, producer);
   }

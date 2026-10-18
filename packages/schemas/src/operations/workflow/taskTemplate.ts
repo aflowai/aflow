@@ -13,7 +13,18 @@ export const TEMPLATE_CONCAT_KEY = '$concat';
 /** `{ "$firstOf": [alternative, …] }` — the first alternative that is present; absent when none is. */
 export const TEMPLATE_FIRST_OF_KEY = '$firstOf';
 
-const TEMPLATE_OPERATOR_KEYS = [TEMPLATE_CONCAT_KEY, TEMPLATE_FIRST_OF_KEY] as const;
+/**
+ * `{ "$text": [value] }` — one string, number or boolean written as text; absent
+ * where the value is absent or null. What lets a count or an id stand in a
+ * `$concat`, and a nullable output fall through a `$firstOf` to its default.
+ */
+export const TEMPLATE_TEXT_KEY = '$text';
+
+const TEMPLATE_OPERATOR_KEYS = [
+  TEMPLATE_CONCAT_KEY,
+  TEMPLATE_FIRST_OF_KEY,
+  TEMPLATE_TEXT_KEY,
+] as const;
 export type TemplateOperatorKey = (typeof TEMPLATE_OPERATOR_KEYS)[number];
 
 /** A template node that carries an operator key: its operands where well formed, why not where not. */
@@ -48,6 +59,11 @@ function malformedOperator(
     return `an operator node must have exactly the single key "${key}" (found keys: ${keys.sort().join(', ')})`;
   }
   const operands = rec[key];
+  if (key === TEMPLATE_TEXT_KEY) {
+    return Array.isArray(operands) && operands.length === 1
+      ? undefined
+      : `"${key}" takes an array of exactly one operand`;
+  }
   if (!Array.isArray(operands) || operands.length < 2) {
     return `"${key}" takes an array of at least two operands`;
   }
@@ -203,8 +219,8 @@ interface SubstituteCtx {
  *   - A malformed bind node (extra keys / non-string value) throws.
  *   - The substituted root must remain a JSON object (op inputs are
  *     objects); a root bind node that resolves absent or non-object throws.
- *   - `$concat` and `$firstOf` nodes compute one value from their operands,
- *     each operand substituted by these same rules.
+ *   - `$concat`, `$firstOf` and `$text` nodes compute one value from their
+ *     operands, each operand substituted by these same rules.
  */
 export function substituteTemplateBinds(
   template: WorkflowTaskInputTemplate,
@@ -300,6 +316,18 @@ function substituteOperator(
   if (operator === TEMPLATE_FIRST_OF_KEY) {
     const present = operands.findIndex((operand) => operand !== OMIT);
     return present === -1 ? OMIT : operands[present];
+  }
+
+  if (operator === TEMPLATE_TEXT_KEY) {
+    const [operand] = operands;
+    if (operand === OMIT || operand === null || operand === undefined) return OMIT;
+    if (typeof operand === 'string') return operand;
+    if (typeof operand === 'number' || typeof operand === 'boolean') return String(operand);
+    throw new TemplateSubstitutionError(
+      `${operandsPath}[0]`,
+      undefined,
+      `"${TEMPLATE_TEXT_KEY}" at "${path || '(root)'}" writes a string, number or boolean as text, and its operand resolved to ${Array.isArray(operand) ? 'an array' : 'an object'}`,
+    );
   }
 
   if (operands.includes(OMIT)) return OMIT;

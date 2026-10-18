@@ -26,6 +26,7 @@ export * from './host.js';
 export * from './hostCommitCheck.js';
 export * from './hostCommitDescribe.js';
 export * from './hostRegistrations.js';
+export * from './pullRequestShepherd.js';
 export * from './browser.js';
 export * from './browserObservation.js';
 export * from './browserProfile.js';

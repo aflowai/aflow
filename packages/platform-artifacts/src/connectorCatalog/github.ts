@@ -1,4 +1,4 @@
-import type { ConnectorCatalogEntry } from '@aflow/schemas';
+import { type ConnectorCatalogEntry, JOB_LOG_TAIL_PRESET } from '@aflow/schemas';
 
 const ownerParam = {
   name: 'owner',
@@ -24,14 +24,31 @@ const pullNumberParam = {
   schema: { type: 'integer' },
 };
 
+const perPageParam = {
+  name: 'per_page',
+  location: 'query' as const,
+  required: false,
+  description: 'Results per page (max 100).',
+  schema: { type: 'integer' },
+};
+
+const runIdParam = {
+  name: 'run_id',
+  location: 'path' as const,
+  required: true,
+  description: 'The id of the GitHub Actions workflow run.',
+  schema: { type: 'integer' },
+};
+
 export const GITHUB_CONNECTOR: ConnectorCatalogEntry = {
   catalogId: 'github',
-  version: 4,
+  version: 5,
   name: 'GitHub',
-  tagline: 'Open pull requests, poll CI checks, read reviews, merge, and close PRs.',
+  tagline: 'Open pull requests, poll CI checks, read failing jobs, merge, and close PRs.',
   description:
     'GitHub REST API. Create, read and rewrite pull requests, poll commit check-runs for CI status, ' +
-    'read pull-request reviews and review comments, post status/handoff comments, merge a ' +
+    "read a failing Actions run's jobs and the end of a job's log, re-run the jobs that failed, " +
+    'read pull-request reviews and review comments, post and edit status/handoff comments, merge a ' +
     'pull request, and close one. Authenticated with a GitHub token sent as a bearer token.',
   tags: ['developer-tools', 'version-control', 'pull-requests', 'ci', 'github'],
   vendor: 'GitHub',
@@ -40,8 +57,9 @@ export const GITHUB_CONNECTOR: ConnectorCatalogEntry = {
   authKind: 'bearer',
   setupNote:
     'Provide a GitHub token (a fine-grained personal access token or a GitHub App installation ' +
-    'token) with repository, pull-request, and checks access. It is sent as ' +
-    'Authorization: Bearer <token>.',
+    'token) with repository, pull-request, checks and actions access. It is sent as ' +
+    "Authorization: Bearer <token>, to api.github.com only: a job's log is served from a signed " +
+    'URL on Azure blob storage, which is followed without the token.',
   credentialPrompts: [
     {
       authField: 'credentialKey',
@@ -58,6 +76,10 @@ export const GITHUB_CONNECTOR: ConnectorCatalogEntry = {
     version: '1',
     callMode: 'endpoint',
     defaultHeaders: { Accept: 'application/vnd.github+json' },
+    // No host beyond api.github.com: a binding sends its token to every host
+    // in its allowedHosts on a direct-URL call. The signed log URL
+    // `getJobLogs` redirects to is that endpoint's `redirectHosts`, which no
+    // binding ever carries.
     suggestedEgressPolicy: { allowedMethods: ['GET', 'POST', 'PUT', 'PATCH'] },
     tags: ['developer-tools', 'github'],
     endpoints: [
@@ -145,6 +167,26 @@ export const GITHUB_CONNECTOR: ConnectorCatalogEntry = {
         tags: ['pull-requests'],
       },
       {
+        endpointId: 'getIssueComment',
+        name: 'Get issue comment',
+        description:
+          'One comment on an issue or pull request, by its id, wherever it sits in the conversation.',
+        method: 'GET',
+        pathTemplate: '/repos/{owner}/{repo}/issues/comments/{comment_id}',
+        params: [
+          ownerParam,
+          repoParam,
+          {
+            name: 'comment_id',
+            location: 'path',
+            required: true,
+            description: 'The id of the comment.',
+            schema: { type: 'integer' },
+          },
+        ],
+        tags: ['comments'],
+      },
+      {
         endpointId: 'getRepository',
         name: 'Get repository',
         description:
@@ -198,12 +240,21 @@ export const GITHUB_CONNECTOR: ConnectorCatalogEntry = {
             schema: { type: 'string' },
           },
           {
-            name: 'per_page',
+            name: 'sort',
             location: 'query',
             required: false,
-            description: 'Results per page (max 100).',
-            schema: { type: 'integer' },
+            description:
+              'Order by: created | updated | popularity | long-running (default created).',
+            schema: { type: 'string', enum: ['created', 'updated', 'popularity', 'long-running'] },
           },
+          {
+            name: 'direction',
+            location: 'query',
+            required: false,
+            description: 'asc | desc (default desc).',
+            schema: { type: 'string', enum: ['asc', 'desc'] },
+          },
+          perPageParam,
         ],
         tags: ['pull-requests'],
       },
@@ -245,8 +296,72 @@ export const GITHUB_CONNECTOR: ConnectorCatalogEntry = {
             description: 'The commit reference — a SHA, branch name, or tag.',
             schema: { type: 'string' },
           },
+          {
+            name: 'filter',
+            location: 'query',
+            required: false,
+            description: 'latest (default): the newest run of each check; all: every attempt.',
+            schema: { type: 'string', enum: ['latest', 'all'] },
+          },
+          perPageParam,
         ],
         tags: ['ci', 'checks'],
+      },
+      {
+        endpointId: 'listWorkflowRunJobs',
+        name: 'List jobs for a workflow run',
+        description:
+          "List the jobs of a GitHub Actions workflow run, each with its conclusion and steps — the failing jobs of a red check, by name. A check run's details URL names its run as /actions/runs/<run_id>.",
+        method: 'GET',
+        pathTemplate: '/repos/{owner}/{repo}/actions/runs/{run_id}/jobs',
+        params: [
+          ownerParam,
+          repoParam,
+          runIdParam,
+          {
+            name: 'filter',
+            location: 'query',
+            required: false,
+            description: 'latest (default): the jobs of the latest attempt; all: of every attempt.',
+            schema: { type: 'string', enum: ['latest', 'all'] },
+          },
+          perPageParam,
+        ],
+        tags: ['ci', 'actions'],
+      },
+      {
+        endpointId: 'getJobLogs',
+        name: "Get a job's log",
+        description:
+          "The end of a GitHub Actions job's log: its last 300 lines, fewer where those pass 60 KB — where a failing test's assertion and a dependency audit's advisories are. Returned as { excerpt, lines, totalLines, bytes, truncated }. GitHub redirects to a signed URL on Azure blob storage, followed without the token.",
+        method: 'GET',
+        pathTemplate: '/repos/{owner}/{repo}/actions/jobs/{job_id}/logs',
+        params: [
+          ownerParam,
+          repoParam,
+          {
+            name: 'job_id',
+            location: 'path',
+            required: true,
+            description: 'The id of the job.',
+            schema: { type: 'integer' },
+          },
+        ],
+        responseTransformPresetId: JOB_LOG_TAIL_PRESET,
+        // Older runs' logs are served from actions.githubusercontent.com.
+        redirectHosts: ['*.blob.core.windows.net', '*.actions.githubusercontent.com'],
+        tags: ['ci', 'actions'],
+      },
+      {
+        endpointId: 'reRunFailedJobs',
+        name: 'Re-run the failed jobs of a workflow run',
+        description:
+          'Re-run every failed job of a GitHub Actions workflow run, and the jobs that depend on them, as a new attempt of the same run — for a failure that was the machine, not the change.',
+        method: 'POST',
+        writeRiskTier: 'low',
+        pathTemplate: '/repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs',
+        params: [ownerParam, repoParam, runIdParam],
+        tags: ['ci', 'actions'],
       },
       {
         endpointId: 'listPullRequestReviews',
@@ -350,8 +465,55 @@ export const GITHUB_CONNECTOR: ConnectorCatalogEntry = {
             description: 'The number of the issue or pull request whose comments to list.',
             schema: { type: 'integer' },
           },
+          perPageParam,
+          {
+            name: 'page',
+            location: 'query',
+            required: false,
+            description:
+              'Which page, from 1, oldest first: the last page — the comment count divided by per_page, rounded up — holds the newest.',
+            schema: { type: 'integer' },
+          },
         ],
         tags: ['pull-requests', 'comments'],
+      },
+      {
+        endpointId: 'updateIssueComment',
+        name: 'Update issue comment',
+        description:
+          'Rewrite a comment on an issue or pull request, by its id — the one handoff comment a pass keeps current.',
+        method: 'PATCH',
+        writeRiskTier: 'low',
+        pathTemplate: '/repos/{owner}/{repo}/issues/comments/{comment_id}',
+        params: [
+          ownerParam,
+          repoParam,
+          {
+            name: 'comment_id',
+            location: 'path',
+            required: true,
+            description: 'The id of the comment.',
+            schema: { type: 'integer' },
+          },
+          {
+            name: 'body',
+            location: 'body',
+            required: true,
+            description: 'The new text of the comment.',
+            schema: {
+              type: 'object',
+              required: ['body'],
+              properties: {
+                body: {
+                  type: 'string',
+                  description: 'The contents of the comment (Markdown).',
+                },
+              },
+              additionalProperties: false,
+            },
+          },
+        ],
+        tags: ['comments'],
       },
       {
         endpointId: 'createIssueComment',

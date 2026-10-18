@@ -60,6 +60,7 @@ import {
   publishMemorySeedEmbedJobs,
 } from '../stagedChange/bundleInstallContent.js';
 import { applyArtifactSeeds } from '../stagedChange/applyArtifactSeeds.js';
+import { applyBundledAgents } from '../stagedChange/applyBundledAgents.js';
 import { sql } from 'drizzle-orm';
 import { publishApiCatalogInvalidation, publishMcpCatalogInvalidation } from '@aflow/redis';
 import { mergeBindingAuth } from './bindingMerge.js';
@@ -591,6 +592,23 @@ async function dispatchBundleUpdate(
         provenanceArtifactKey({ artifactType: 'ui_artifact', artifactKey: seed.bundleArtifactKey }),
       );
     }
+  }
+
+  // An agent is written where the space has none of its slug — most often
+  // one the install could not write before the folder was connected — and
+  // one already there is the space's, its folder included.
+  const agentResult = await applyBundledAgents({
+    agents: bundle.agents ?? [],
+    tenantId: ids.tenantId as string,
+    spaceId: ids.spaceId,
+    tx,
+  });
+  for (const slug of agentResult.skippedAgentSlugs) {
+    keptUserDataArtifacts.push({ artifactType: 'agent', artifactKey: slug });
+  }
+  for (const slug of agentResult.installedAgentSlugs) {
+    updatedArtifacts.push({ artifactType: 'agent', artifactKey: slug, action: 'installed' });
+    installedUserDataKeys.add(provenanceArtifactKey({ artifactType: 'agent', artifactKey: slug }));
   }
 
   const setupChecklist = await generatePostInstallManifest({

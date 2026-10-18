@@ -29,6 +29,7 @@ import {
   HostFilePatchOutputSchema,
   isEvalPlaneOperation,
   MAX_PARENT_INPUTS_SERIALIZED_BYTES,
+  MAX_WORKFLOW_RUN_DEPTH,
   PAUSE_INSTRUCTION_MAX_CHARS,
   HANDED_ON_FINDINGS_MAX_COUNT,
   PullRequestFindingsSchema,
@@ -45,6 +46,7 @@ import {
   type AfterReviewRoute,
 } from './publishLocalChangesDecisions.js';
 import { SKILL_CATALOG } from './index.js';
+import { LOCAL_PR_SHEPHERD } from './localPrShepherd.js';
 import { REVIEW_LOCAL_CHANGES } from './reviewLocalChanges.js';
 
 const wf = PUBLISH_LOCAL_CHANGES.bundle.workflow;
@@ -1579,16 +1581,20 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
     if (template === undefined) throw new Error('the review must carry a template');
     expect(review.inputBindings).toEqual({
       bindingId: { kind: 'run_input', path: 'bindingId' },
-      range: { kind: 'task_output', taskId: 'commit', path: 'commit.pushRange' },
+      from: { kind: 'task_output', taskId: 'commit', path: 'commit.pushBaseSha' },
       at: { kind: 'task_output', taskId: 'commit', path: 'commit.sha' },
     });
-    expect(review.inputBindings?.['range']).toEqual(
-      taskOrThrow('scan-commit').inputBindings?.['range'],
-    );
+    // The scan reads `pushRange`; the review is handed its two ends.
+    expect(taskOrThrow('scan-commit').inputBindings?.['range']).toEqual({
+      kind: 'task_output',
+      taskId: 'commit',
+      path: 'commit.pushRange',
+    });
+    expect(COMMIT.pushRange).toBe(`${COMMIT.pushBaseSha}..${COMMIT.sha}`);
     const declared = new Set(Object.keys(review.inputBindings ?? {}));
     const start = substituteTemplateBinds(
       template,
-      { bindingId: 'folder-1', range: COMMIT.pushRange, at: COMMIT.sha },
+      { bindingId: 'folder-1', from: COMMIT.pushBaseSha, at: COMMIT.sha },
       declared,
     );
     // Named by its catalog entry, so a space workflow merely holding the slug
@@ -1598,7 +1604,7 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
       catalogId: REVIEW_LOCAL_CHANGES.catalogId,
       inputs: {
         bindingId: 'folder-1',
-        range: `${ORIGIN_BASE}..${HEAD}`,
+        from: ORIGIN_BASE,
         at: HEAD,
         depth: 'standard',
       },
@@ -1608,8 +1614,8 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
     // never on the folder's HEAD, which is where the commission started: the
     // commit lands on a branch nothing has checked out, so a checkout at the
     // folder's HEAD reads every changed file as it was before the change.
-    const inputs = (start as { inputs: { range: string; at: string } }).inputs;
-    expect(inputs.range.split('..')[1]).toBe(inputs.at);
+    const inputs = (start as { inputs: { from: string; at: string } }).inputs;
+    expect(inputs.at).toBe(COMMIT.sha);
     expect(inputs.at).not.toBe(COMMIT.baseSha);
     // Two shas and no branch name: the range still names this commit after
     // the branch moves.
@@ -2056,7 +2062,7 @@ describe('Publish Local Changes — a branch is published as it stands', () => {
       range: `${ORIGIN_BASE}..${STRANDED}`,
     });
     expect(outcome.inputs.get('review-commit')).toMatchObject({
-      inputs: { range: `${ORIGIN_BASE}..${STRANDED}` },
+      inputs: { from: ORIGIN_BASE, at: STRANDED },
     });
     expect((outcome.inputs.get('push')?.['command'] as string[] | undefined)?.at(-1)).toBe(
       `${STRANDED}:refs/heads/aflow/x`,
@@ -2659,17 +2665,25 @@ describe('Publish Local Changes — no publication starts a publication', () => 
     expect(started).toEqual([['review-commit', REVIEW_LOCAL_CHANGES.catalogId]]);
   });
 
-  it('is started by no skill in the catalog, so no publication runs under another run', () => {
-    for (const skill of SKILL_CATALOG) {
-      for (const task of skill.bundle.workflow.tasks) {
-        const template = task.inputTemplate as { catalogId?: unknown; slug?: unknown } | undefined;
-        if (task.operation !== 'workflow.run.start') continue;
-        expect(
-          [template?.catalogId, template?.slug],
-          `${skill.catalogId} › ${task.taskId}`,
-        ).not.toContain(PUBLISH_LOCAL_CHANGES.catalogId);
-      }
-    }
+  // Plan 321: the shepherd publishes its fixes through Local Publish, and the
+  // review that publication starts must still be within the chain's depth, or
+  // the shepherd's push would ask where the operator's own would not.
+  it('is started only by the shepherd, which no skill starts, so its review stays within the run depth', () => {
+    const starting = (catalogId: string) =>
+      SKILL_CATALOG.filter((skill) =>
+        skill.bundle.workflow.tasks.some((task) => {
+          const template = task.inputTemplate as
+            { catalogId?: unknown; slug?: unknown } | undefined;
+          return (
+            task.operation === 'workflow.run.start' &&
+            [template?.catalogId, template?.slug].includes(catalogId)
+          );
+        }),
+      ).map((skill) => skill.catalogId);
+    expect(starting(PUBLISH_LOCAL_CHANGES.catalogId)).toEqual([LOCAL_PR_SHEPHERD.catalogId]);
+    expect(starting(LOCAL_PR_SHEPHERD.catalogId)).toEqual([]);
+    // The shepherd at 1, its publication at 2, that publication's review at 3.
+    expect(MAX_WORKFLOW_RUN_DEPTH).toBeGreaterThanOrEqual(3);
   });
 
   it('commits once and pushes once: the fix round is the conversation’s, not a second commit or push of its own', () => {

@@ -205,6 +205,12 @@ folder's posture as it pushes, so a commit checked before the posture changed is
 - **CI minutes are billed.** Nothing is pushed to an open pull request outside the
   loop without the operator's word, and a fix to a pull request is one round appended
   onto its branch rather than a new pull request.
+- **The shepherd tends the loop's pull requests** (Plan 321): a pass of Local PR Shepherd
+  fixes a red check on a pull request Local Publish opened and publishes the fix through
+  Local Publish. A stream that wants its branch left alone — a person working on it, a
+  fix in hand — labels its pull request `hands-off`; the shepherd then writes nothing on
+  it. A publication or commission in flight on the branch, whoever started it, holds it
+  back too.
 
 ## Watching
 

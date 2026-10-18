@@ -116,6 +116,7 @@ export function synthesizeEndpoints(
       ...(ep.responseTransformPresetId !== undefined
         ? { responseTransformPresetId: ep.responseTransformPresetId }
         : {}),
+      ...(ep.redirectHosts !== undefined ? { redirectHosts: ep.redirectHosts } : {}),
       tags: [],
     });
   }

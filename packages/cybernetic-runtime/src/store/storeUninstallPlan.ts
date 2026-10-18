@@ -78,6 +78,8 @@ export interface StoreUninstallExecutionPlan {
   uiArtifactsToDelete: Array<{ artifactRowId: string; bindingId: string }>;
   /** Applet-listing artifacts — removal archives their live instances first. */
   appletArtifactsToRemove: AppletTeardownTarget[];
+  /** Bundled agents to archive: they start a skill the uninstall archives. */
+  agentsToArchive: Array<{ agentId: string; slug: string }>;
 }
 
 interface InstalledSkillDoc {
@@ -143,6 +145,20 @@ async function listActiveRunIds(
       AND status IN ('running', 'paused')
   `)) as unknown as Array<{ run_id: string }>;
   return rows.map((row) => row.run_id);
+}
+
+/** The id of the space's agent by this slug, where one is there and not archived. */
+async function readLiveAgentId(
+  tx: PostgresJsDatabase,
+  spaceId: string,
+  slug: string,
+): Promise<string | null> {
+  const rows = (await tx.execute(sql`
+    SELECT id FROM agents
+    WHERE space_id = ${spaceId}::uuid AND slug = ${slug} AND archived_at IS NULL
+    LIMIT 1
+  `)) as unknown as Array<{ id: string }>;
+  return rows[0]?.id ?? null;
 }
 
 async function apiDefinitionExists(
@@ -332,6 +348,7 @@ export async function buildStoreUninstallPlan(
   const memoryDocsToDelete: StoreUninstallExecutionPlan['memoryDocsToDelete'] = [];
   const uiArtifactsToDelete: StoreUninstallExecutionPlan['uiArtifactsToDelete'] = [];
   const appletArtifactsToRemove: StoreUninstallExecutionPlan['appletArtifactsToRemove'] = [];
+  const agentsToArchive: StoreUninstallExecutionPlan['agentsToArchive'] = [];
 
   for (const artifact of skillArtifacts) {
     if (!slugsToArchive.has(artifact.artifactKey)) {
@@ -354,6 +371,21 @@ export async function buildStoreUninstallPlan(
       slug: artifact.artifactKey,
       activeRunIds,
     });
+  }
+
+  for (const artifact of inventory) {
+    if (artifact.artifactType !== 'agent') continue;
+    const agentId = await readLiveAgentId(tx, ctx.spaceId, artifact.artifactKey);
+    if (agentId === null) {
+      artifacts.push({
+        artifactType: 'agent',
+        artifactKey: artifact.artifactKey,
+        action: 'missing',
+      });
+      continue;
+    }
+    agentsToArchive.push({ agentId, slug: artifact.artifactKey });
+    artifacts.push({ artifactType: 'agent', artifactKey: artifact.artifactKey, action: 'archive' });
   }
 
   for (const artifact of inventory) {
@@ -517,5 +549,6 @@ export async function buildStoreUninstallPlan(
     memoryDocsToDelete,
     uiArtifactsToDelete,
     appletArtifactsToRemove,
+    agentsToArchive,
   };
 }

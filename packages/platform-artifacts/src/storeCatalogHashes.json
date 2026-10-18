@@ -28,8 +28,8 @@
     "contentHash": "814ea9d7d423194beaa22fd9e22a10053bd5426d3d352de9df4cfbbc044296df"
   },
   "coding-pr-loop": {
-    "version": 4,
-    "contentHash": "95a12f8011fefdfc7b4b990b7cfe17dc381f55aeacad31e6597f82e2b26ea4ed"
+    "version": 5,
+    "contentHash": "f9686df69bd177f48306847751ec8f30c7efa8e3af507479929e150efa4b89a6"
   },
   "etoro-account": {
     "version": 1,
@@ -64,8 +64,8 @@
     "contentHash": "b610570fe219f32c317bdd686215aaeb2ee5aa4eb30acf9f0cecca40ac62bc06"
   },
   "github": {
-    "version": 4,
-    "contentHash": "4a5ad6c5a199ca0f2a28f55c3b52d1f1a9adbc90f3ac4495eb0f6be2e146b8c8"
+    "version": 5,
+    "contentHash": "e76bf5ebf83c59ce847a75463698c5cc7dfa61427b3770302e80555cfde6395d"
   },
   "gmail": {
     "version": 1,
@@ -96,7 +96,7 @@
     "contentHash": "5f9151872e93be3bb7ad3b154b9a539677892df0361ad01c2579f227a27b6856"
   },
   "local-code-review": {
-    "version": 9,
+    "version": 10,
     "contentHash": "40c522523b46d0b00c9be79d07a41203374f742402df6be7c818ae74e0dfa1f2"
   },
   "local-commission": {
@@ -104,8 +104,12 @@
     "contentHash": "35998b7e73fb024809520f7738c4f169e18858a800d924baf195f43e6648a90a"
   },
   "local-publish": {
-    "version": 32,
-    "contentHash": "ba3f45cc0bfbaafa2c77caa4c6c09256feaa4eb3dde207cd5ceba98b70f4f4ab"
+    "version": 33,
+    "contentHash": "66ead1c80196f905abc6be25e7e1e2abd7b220103e32dfc9e66ac0baeec41d84"
+  },
+  "local-shepherd": {
+    "version": 1,
+    "contentHash": "f1f4fdc1d12ba39353a9f824f42bc5bc39fab2d82836b8c11752bc5651477af2"
   },
   "newsapi": {
     "version": 1,

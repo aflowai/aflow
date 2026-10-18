@@ -60,6 +60,9 @@ export interface ResolveTaskInputsContext {
    * to `''` when the set is empty.
    */
   resolveLearningSet?: (args: { taskId: string }) => Promise<string>;
+
+  /** The clock `clock` bindings read, in epoch milliseconds; `Date.now` when absent. */
+  now?: () => number;
 }
 
 /** Sentinel returned by `resolveOneBinding` to signal "omit this property". */
@@ -142,7 +145,14 @@ async function resolveOneBinding(
           `binds to task_output of "${binding.taskId}", which does not exist in run ${ctx.run.runId}`,
         );
       }
-      if (upstream.status === 'skipped' || upstream.status === 'blocked') {
+      // A failed producer reaches a consumer only where it was optional —
+      // readiness counts it as satisfied and blocks every other failure's
+      // descendants — and like a skipped one it produced nothing to bind.
+      if (
+        upstream.status === 'skipped' ||
+        upstream.status === 'blocked' ||
+        upstream.status === 'failed'
+      ) {
         return ABSENT;
       }
       const decoded = await decodeOutputRef(
@@ -239,6 +249,12 @@ async function resolveOneBinding(
       }
       return ctx.connectionBindingId;
     }
+
+    case 'run_id':
+      return ctx.run.runId;
+
+    case 'clock':
+      return (ctx.now ?? Date.now)() + (binding.offsetMs ?? 0);
 
     case 'learning_set': {
       if (!ctx.resolveLearningSet) {

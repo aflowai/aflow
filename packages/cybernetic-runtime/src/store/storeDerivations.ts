@@ -518,6 +518,22 @@ function bundleFragmentArtifacts(
       preservation: 'user_data_keep',
     });
   }
+  // The space's own: its step holds the space's folder, written at install,
+  // so an update writes one only where there is none.
+  for (const agent of bundle.agents ?? []) {
+    const skill = getSkillCatalogEntry(agent.skillCatalogId);
+    if (!skill) continue;
+    const slug = skill.bundle.workflow.slug;
+    artifacts.push({
+      spaceId,
+      catalogId,
+      artifactType: 'agent',
+      artifactKey: slug,
+      artifactId: slug,
+      installedContentHash: jsonContentHash(agent),
+      preservation: 'user_data_keep',
+    });
+  }
   return artifacts;
 }
 
@@ -690,6 +706,7 @@ export function deriveBundleProvenanceSkips(
   for (const serverId of result.skippedMcpDefinitionIds) add('mcp_definition', serverId);
   for (const bindingId of result.skippedMcpBindingIds) add('mcp_binding', bindingId);
   for (const path of result.skippedMemoryDocPaths) add('memory_doc', path);
+  for (const slug of result.skippedAgentSlugs) add('agent', slug);
   const skippedSeedBindingIds = new Set(result.skippedArtifactBindings);
   for (const seed of bundle.artifactSeed) {
     if (skippedSeedBindingIds.has(seed.bindingId)) add('ui_artifact', seed.bundleArtifactKey);

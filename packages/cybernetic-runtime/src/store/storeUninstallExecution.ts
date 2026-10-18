@@ -166,6 +166,15 @@ async function performUninstall(
     }
   }
 
+  // Archived, as the skill it starts is: reversible, and a schedule naming
+  // it stops starting anything.
+  for (const agent of plan.agentsToArchive) {
+    await tx.execute(sql`
+      UPDATE agents SET archived_at = NOW(), updated_at = NOW()
+      WHERE id = ${agent.agentId}::uuid AND space_id = ${ids.spaceId}::uuid AND archived_at IS NULL
+    `);
+  }
+
   for (const integration of plan.integrations) {
     if (integration.deletable) {
       if (integration.sourceKind === 'api') {

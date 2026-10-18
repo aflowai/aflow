@@ -437,6 +437,8 @@ describe('executeStoreInstall', () => {
       skippedMemoryDocPaths: [],
       installedArtifactBindings: [],
       skippedArtifactBindings: [],
+      installedAgentSlugs: [],
+      skippedAgentSlugs: [],
       postInstallManifest: [],
       helmsmanHints: [],
       warnings: ['a warning'],
@@ -637,6 +639,8 @@ describe('executeStoreInstall', () => {
       skippedMemoryDocPaths: [],
       installedArtifactBindings: [],
       skippedArtifactBindings: [],
+      installedAgentSlugs: [],
+      skippedAgentSlugs: [],
       postInstallManifest: [],
       helmsmanHints: [],
       warnings: [],
@@ -689,7 +693,7 @@ describe('executeStoreInstall — tenant shelf policy', () => {
   it('an installed hidden listing with a wrong expectedVersion still reports CATALOG_CHANGED', async () => {
     store.shelf.overrides.set('github', 'hidden');
     store.installs.push(installedRow('github', GITHUB_VERSION));
-    const result = await install({ expectedVersion: 5 });
+    const result = await install({ expectedVersion: GITHUB_VERSION + 1 });
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error('expected failure');
     expect(result.statusCode).toBe(409);
@@ -762,6 +766,8 @@ describe('executeStoreInstall — the edition’s composed lanes', () => {
       skippedMemoryDocPaths: [],
       installedArtifactBindings: [],
       skippedArtifactBindings: [],
+      installedAgentSlugs: [],
+      skippedAgentSlugs: [],
       postInstallManifest: [],
       helmsmanHints: [],
       warnings: [],

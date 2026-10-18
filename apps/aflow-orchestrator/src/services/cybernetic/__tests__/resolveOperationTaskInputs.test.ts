@@ -163,7 +163,7 @@ describe('resolveOperationTaskInputs', () => {
   it('throws when the upstream task has no usable output', async () => {
     mockLoadRunById.mockResolvedValueOnce({
       runId: RUN,
-      tasks: [{ taskId: 'upstream', status: 'failed', outputRef: null }],
+      tasks: [{ taskId: 'upstream', status: 'succeeded', outputRef: null }],
     });
     const { resolveOperationTaskInputs } = await import('../taskHelpers.js');
     await expect(

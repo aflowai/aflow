@@ -53,6 +53,7 @@ export const StoreArtifactTypeSchema = z.enum([
   'mcp_binding',
   'memory_doc',
   'ui_artifact',
+  'agent',
 ]);
 export type StoreArtifactType = z.infer<typeof StoreArtifactTypeSchema>;
 

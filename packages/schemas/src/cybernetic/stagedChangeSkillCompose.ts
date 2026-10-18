@@ -11,6 +11,7 @@ import {
   WorkflowOutputDeclarationSchema,
   WorkflowStateVariableSchema,
   WorkflowRunInputSchema,
+  WORKFLOW_TASKS_MAX,
 } from '../operations/workflow.js';
 import {
   SkillUiOutputSchema,
@@ -39,7 +40,7 @@ export const ComposedWorkflowSchema = z.object({
   goal: z.string().min(1).max(2000).optional(),
   outcomes: z.array(OutcomeSchema).min(1).max(10),
   mode: WorkflowModeSchema,
-  tasks: z.array(WorkflowTaskSchema).min(1).max(20),
+  tasks: z.array(WorkflowTaskSchema).min(1).max(WORKFLOW_TASKS_MAX),
   /** 104j §6.1: Workflow-level state variable declarations. */
   stateVariables: z.array(WorkflowStateVariableSchema).max(20).default([]),
   /** Declared run-input contract — `run_input.<id>` bindings resolve against these. */
