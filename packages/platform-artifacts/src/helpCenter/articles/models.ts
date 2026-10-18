@@ -181,7 +181,7 @@ Each model says what it needs at the window the agents use, against this compute
 
 ## When the Helmsman changes it
 
-The Helmsman can read this page's diagnosis. To download, delete, load or unload a model, it asks first: a card in the Action Center says what the change costs and which running requests it ends, and nothing changes until you approve it.`,
+The Helmsman can read this page's diagnosis. To download, delete, load or unload a model, it asks first: a card in the Workbench says what the change costs and which running requests it ends, and nothing changes until you approve it.`,
     editions: ['community-local'],
     anchors: {
       routes: ['s/[space]/computer', 'settings/credentials', 's/[space]/settings/credentials'],

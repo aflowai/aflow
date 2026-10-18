@@ -2,14 +2,16 @@ import type { HelpArticleInput } from '@aflow/schemas';
 
 export const APPROVALS_ARTICLES: readonly HelpArticleInput[] = [
   {
-    id: 'action-center',
+    id: 'what-is-waiting-for-me',
     theme: 'approvals',
-    question: 'What is the Action Center, and where do I find what is waiting for me?',
+    question: 'Where do I find approvals and other things waiting for me?',
     summary:
-      'The Action Center collects everything in a space that needs a person: approvals for writes and other actions, questions a run is waiting on, account sign-ins an integration needs, and proposals from the Coach. The bell at the top of each page shows how many items are pending; choosing it opens the chat with the Workbench, where Needs attention lists what is blocking work and the Coach section lists proposals. Work that waits on an item stays paused until it is answered.',
+      "Everything in a space that needs a person collects in the Workbench beside the chat: approvals for writes and other actions, questions a run is waiting on, account sign-ins an integration needs, and proposals from the Coach. While anything is pending, a yellow indicator appears in the header of the space's other pages; choosing it opens Chat with the Workbench. The Helmsman can also bring an approval into the chat so you answer it where you are talking. Work that waits on an item stays paused until it is answered.",
     body: `## Where
 
-The bell at the top of each page in a space. Its label reads **Action Center — N pending**. Choosing it opens **Chat** with the **Workbench**.
+- **Chat** — the **Workbench** sits beside the conversation. On a phone, switch between **Chat** and **Workbench** at the top; the Workbench shows how many items need you.
+- **Every other page in the space** — a yellow indicator in the page header while one or more items are pending. Choosing it opens **Chat** with the **Workbench**.
+- **In the conversation** — the Helmsman can show an approval or a question in the chat itself, and you can answer it there.
 
 ## What appears
 
@@ -21,15 +23,13 @@ The bell at the top of each page in a space. Its label reads **Action Center —
 
 The **Coach** section holds proposals: changes the Coach, or the Helmsman, wants to make to skills, evaluations or integrations. These do not block a run; they wait for you to **Ratify**, **Reject** or **Dismiss** them.
 
-The Helmsman can also bring an item into the chat itself, so you can answer it where you are talking.
-
 ## When an item names someone else
 
 A request addressed to another person stays visible, says who it is waiting on, and is not counted in your total. It can be handed to someone else from the card.
 
 ## What happens after you answer
 
-The work that was waiting on the item continues from where it stopped; nothing needs to be restarted. Needs attention is hidden when nothing is pending.`,
+The work that was waiting on the item continues from where it stopped; nothing needs to be restarted. **Needs attention** is hidden when nothing is pending, and the indicator goes back to its resting colour.`,
     editions: ['enterprise', 'community-local'],
     anchors: {
       routes: ['s/[space]/chat'],
@@ -42,7 +42,9 @@ The work that was waiting on the item continues from where it stopped; nothing n
       'connect-mcp-server',
     ],
     keywords: [
+      'action center',
       'bell',
+      'yellow indicator',
       'inbox',
       'pending',
       'notifications',
@@ -58,10 +60,10 @@ The work that was waiting on the item continues from where it stopped; nothing n
     theme: 'approvals',
     question: 'Why is a write waiting for my approval, and how do I change which writes ask first?',
     summary:
-      'Every endpoint of an API integration carries a risk tier. Before the agent makes a write call, the space checks that tier against its Write Policy: by default, low-risk writes run unattended, while medium-risk writes (external sends, hard-to-undo changes) and high-risk writes (money movement, destructive changes at scale) wait for a person to approve them in the Action Center. Nothing is sent until you approve. Denying stops that call and tells the agent why. Space admins change the defaults per tier under Settings → Write Policy.',
+      'Every endpoint of an API integration carries a risk tier. Before the agent makes a write call, the space checks that tier against its Write Policy: by default, low-risk writes run unattended, while medium-risk writes (external sends, hard-to-undo changes) and high-risk writes (money movement, destructive changes at scale) wait for a person to approve them in the Workbench. Nothing is sent until you approve. Denying stops that call and tells the agent why. Space admins change the defaults per tier under Settings → Write Policy.',
     body: `## Where
 
-Approve or deny under **Needs attention** in the Action Center. Change the rules under **Settings → Write Policy**.
+Approve or deny under **Needs attention** in the Workbench. Change the rules under **Settings → Write Policy**.
 
 ## Why it is waiting
 
@@ -94,7 +96,12 @@ On the local edition, the same card asks before the agent acts in a browser prof
       routes: ['s/[space]/settings/write-policy', 's/[space]/chat'],
       operations: ['api.http.call'],
     },
-    related: ['action-center', 'connect-an-integration', 'agent-browser', 'run-models-locally'],
+    related: [
+      'what-is-waiting-for-me',
+      'connect-an-integration',
+      'agent-browser',
+      'run-models-locally',
+    ],
     keywords: [
       'write policy',
       'risk tier',
@@ -116,7 +123,7 @@ On the local edition, the same card asks before the agent acts in a browser prof
       'Agents propose changes to what a space runs; a person decides. The Coach reviews completed skill runs and proposes improvements, and the Helmsman proposes new skills and integrations it drafts in chat. Each proposal waits in the Coach section of the Workbench until you Ratify, Reject or Dismiss it. Ratifying applies the whole change or none of it. Rejecting, with a reason, tells the Coach not to keep proposing the same change. The Helmsman asks you before it ratifies anything for you.',
     body: `## Where
 
-The **Coach** section of the **Workbench** in **Chat**, opened from the Action Center bell. The Helmsman can also show a proposal in the chat itself.
+The **Coach** section of the **Workbench** in **Chat**, opened from the yellow indicator in the page header. The Helmsman can also show a proposal in the chat itself.
 
 ## What gets proposed
 
@@ -147,7 +154,7 @@ A proposal changes what every later run does. Keeping that decision with a perso
       operations: ['proposal.ratify', 'proposal.reject', 'proposal.dismiss'],
     },
     related: [
-      'action-center',
+      'what-is-waiting-for-me',
       'skill-evals-and-coach-proposals',
       'create-or-change-a-skill',
       'helmsman-runner-coach',

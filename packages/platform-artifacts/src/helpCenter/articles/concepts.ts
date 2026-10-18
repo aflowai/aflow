@@ -73,7 +73,7 @@ A Runner is a worker for one task. When a skill runs, each of its tasks goes to 
 
 ## The Coach
 
-The Coach reviews completed runs. From what it sees it proposes changes to a skill, writes or adjusts its evals, and records learnings. Its proposals appear in the Action Center and on the skill's **Proposals & Feedback** tab, where you ratify or reject them.
+The Coach reviews completed runs. From what it sees it proposes changes to a skill, writes or adjusts its evals, and records learnings. Its proposals appear in the Workbench and on the skill's **Proposals & Feedback** tab, where you ratify or reject them.
 
 **Coach Tuning (advanced)** on the same page sets how often the Coach reviews: on procedural runs only, on a sample of runs, on every run, or only on anomalies and failures. **Autonomy** sets which kinds of change always need your approval, whatever the Coach's confidence.
 
@@ -129,7 +129,12 @@ Every model decision and every tool call is a step. Steps keep their inputs, out
       ],
       operations: [],
     },
-    related: ['run-failed-or-paused', 'helmsman-runner-coach', 'what-is-a-skill', 'action-center'],
+    related: [
+      'run-failed-or-paused',
+      'helmsman-runner-coach',
+      'what-is-a-skill',
+      'what-is-waiting-for-me',
+    ],
     keywords: ['status', 'idle', 'timeline', 'run details', 'history', 'cost', 'tool call'],
   },
   {

@@ -85,7 +85,7 @@ The machine is kept awake on power while a run is in flight. Work dispatched whi
     theme: 'this-computer',
     question: 'How does the agent use a browser, and how do I control what it can do?',
     summary:
-      'An agent can open and use web pages in a Chrome profile of its own on your paired machine, signed in to the sites you choose. Under This Computer → Browser, Sign in to sites opens the profile’s window so you can sign in. Each profile has a posture — autonomous, ask-to-act or read-only — origin rules that allow, ask or deny per site, a choice whether runs nobody is present for may use it, and the local ports its pages may load. Ask-to-act sends every action to the Action Center for approval.',
+      'An agent can open and use web pages in a Chrome profile of its own on your paired machine, signed in to the sites you choose. Under This Computer → Browser, Sign in to sites opens the profile’s window so you can sign in. Each profile has a posture — autonomous, ask-to-act or read-only — origin rules that allow, ask or deny per site, a choice whether runs nobody is present for may use it, and the local ports its pages may load. Ask-to-act sends every action to the Workbench for approval.',
     body: `**Where:** **This Computer** in the sidebar → **Browser**
 
 The agent's own browser on this machine. It reaches the sites you sign in to there, and nothing of your everyday browser. It needs a supported Chrome on the machine.
@@ -97,7 +97,7 @@ The agent's own browser on this machine. It reaches the sites you sign in to the
 ## Posture
 
 - **autonomous** — navigates, reads and acts without asking.
-- **ask-to-act** — navigates and reads; every action waits for your approval in the Action Center.
+- **ask-to-act** — navigates and reads; every action waits for your approval in the Workbench.
 - **read-only** — navigates and reads; every action is refused.
 
 ## Origin rules
@@ -122,7 +122,7 @@ Only a person: no agent operation changes a profile, and API keys and MCP sessio
     },
     related: [
       'pair-this-computer',
-      'action-center',
+      'what-is-waiting-for-me',
       'write-approval',
       'schedule-or-trigger-a-skill',
     ],

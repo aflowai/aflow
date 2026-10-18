@@ -240,7 +240,7 @@ A skill whose page says it **failed validation and needs repair by the agent** h
     theme: 'skills',
     question: 'How are skills measured and improved — evals, golden cases and Coach proposals?',
     summary:
-      'A skill can carry evals: criteria that grade every run, shown in the Eval column of its Runs tab and on its Performance tab. On the Evals tab, a golden dataset of cases lets you replay the skill as a batch and compare the result against a pinned baseline. The Coach reviews completed runs and proposes improvements, new or changed evals among them, which you ratify or reject on the Proposals & Feedback tab or in the Action Center. Nothing the Coach proposes changes a skill until it is ratified.',
+      'A skill can carry evals: criteria that grade every run, shown in the Eval column of its Runs tab and on its Performance tab. On the Evals tab, a golden dataset of cases lets you replay the skill as a batch and compare the result against a pinned baseline. The Coach reviews completed runs and proposes improvements, new or changed evals among them, which you ratify or reject on the Proposals & Feedback tab or in the Workbench. Nothing the Coach proposes changes a skill until it is ratified.',
     body: `## Where
 
 On the **Skills** page, for the selected skill: **Performance**, **Evals**, and **More ▾ → Proposals & Feedback**. The **Coach** pane in the designer lists the same proposals beside the graph.
@@ -270,7 +270,7 @@ The Coach also records **Learnings · the skill's memory**. Ratify or reject a p
     related: [
       'helmsman-runner-coach',
       'proposals-need-approval',
-      'action-center',
+      'what-is-waiting-for-me',
       'create-or-change-a-skill',
     ],
     keywords: [

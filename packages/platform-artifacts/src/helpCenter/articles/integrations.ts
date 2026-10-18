@@ -65,7 +65,7 @@ A write the agent makes through an API integration can wait for your approval fi
     theme: 'integrations',
     question: 'How do I connect an MCP server?',
     summary:
-      'In the space, open Integrations and choose Add integration → MCP server. Give it a name and the server URL, pick how it authenticates, and choose Save & connect. Tools from an MCP server are opt-in: after connecting, the agent sees none of them until you list the ones it may use under Tool permissions. MCP connectors from the Store install the same way as other integrations. When a server needs you to sign in, a Connect card appears in the Action Center.',
+      'In the space, open Integrations and choose Add integration → MCP server. Give it a name and the server URL, pick how it authenticates, and choose Save & connect. Tools from an MCP server are opt-in: after connecting, the agent sees none of them until you list the ones it may use under Tool permissions. MCP connectors from the Store install the same way as other integrations. When a server needs you to sign in, a Connect card appears in the Workbench.',
     body: `## Where
 
 **Integrations → Add integration → MCP server**.
@@ -96,7 +96,7 @@ After connecting, the card reads **No tools enabled yet — the agent sees zero 
 When a sign-in is missing or has expired, a **Connect** or **Reconnect** card appears under **Needs attention**. Signing in resumes the work that was waiting on it.`,
     editions: ['enterprise', 'community-local'],
     anchors: { routes: ['s/[space]/integrations'], operations: [] },
-    related: ['connect-an-integration', 'where-credentials-live', 'action-center'],
+    related: ['connect-an-integration', 'where-credentials-live', 'what-is-waiting-for-me'],
     keywords: [
       'mcp',
       'model context protocol',
@@ -134,7 +134,7 @@ An integration that signs in with an account is set up one of two ways:
 - **Each user connects their own account**: every member signs in once and acts as themselves.
 - **One shared connection for this space**: a single account everyone in the space shares.
 
-A missing or expired sign-in appears as a **Connect** card in the Action Center.
+A missing or expired sign-in appears as a **Connect** card in the Workbench.
 
 ## Your own OAuth app
 

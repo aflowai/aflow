@@ -6,7 +6,7 @@ export const TROUBLESHOOTING_ARTICLES: readonly HelpArticleInput[] = [
     theme: 'troubleshooting',
     question: 'A run failed or seems stuck. How do I find out why and get it going again?',
     summary:
-      "When a conversation fails, the chat shows the error and the step it happened in, with Retry, New run and Inspect; Inspect opens the session timeline, where every step and its result is listed. A run that is paused is usually waiting for you: an approval, an answer, or a missing connection, each shown as an item in the Action Center or as an Approve or Submit row on the run's page. A conversation marked Idle has finished its turn and waits for your next message. For a skill, the Runs tab lists every run with its status; Open shows which task failed or is waiting.",
+      "When a conversation fails, the chat shows the error and the step it happened in, with Retry, New run and Inspect; Inspect opens the session timeline, where every step and its result is listed. A run that is paused is usually waiting for you: an approval, an answer, or a missing connection, each shown as an item in the Workbench or as an Approve or Submit row on the run's page. A conversation marked Idle has finished its turn and waits for your next message. For a skill, the Runs tab lists every run with its status; Open shows which task failed or is waiting.",
     body: `## A conversation failed
 
 The chat ends with a card showing the error and, when known, **Step:** with the step that failed.
@@ -21,7 +21,7 @@ If the error is about a model key, a banner above the composer names the provide
 
 A paused run is usually waiting for a person. Look for:
 
-- An item in the **Action Center**: an approval for a write, a question, or a proposal.
+- An item in the **Workbench** under **Needs attention**: an approval for a write, a question, or a proposal.
 - On the skill run's page, a task marked **Paused — action expected**, with **Approve** or **Submit** in place.
 - A skill that starts with a connection missing pauses at the beginning; complete the setup it names.
 
@@ -58,7 +58,7 @@ That bar is about your sign-in to the app, not a run. When it offers **Sign in a
     },
     related: [
       'sessions-and-runs',
-      'action-center',
+      'what-is-waiting-for-me',
       'write-approval',
       'skill-needs-setup',
       'no-key-resolves-model',
