@@ -11,6 +11,7 @@ import {
 } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import {
+  AnimatedHeight,
   Column,
   EmptyState,
   Icon,
@@ -192,6 +193,19 @@ const plainButtonStyle = {
   font: 'inherit',
 } as const;
 
+function DisclosureCaret({ open }: { open: boolean }): ReactElement {
+  return (
+    <Icon
+      name="caret-right"
+      size={14}
+      style={{
+        transform: open ? 'rotate(90deg)' : 'none',
+        transition: 'transform var(--transition-duration-normal) var(--transition-timing-default)',
+      }}
+    />
+  );
+}
+
 function IndexButton({
   selected,
   indent,
@@ -299,7 +313,7 @@ function HelpIndex({
                 >
                   <Row gap="xs" align="center" justify="between">
                     <Row gap="xs" align="center">
-                      <Icon name={open ? 'caret-down' : 'caret-right'} size={14} />
+                      <DisclosureCaret open={open} />
                       <Text size="sm" weight="semibold">
                         {HELP_THEME_LABELS[theme]}
                       </Text>
@@ -309,19 +323,21 @@ function HelpIndex({
                     </Text>
                   </Row>
                 </IndexButton>
-                {open &&
-                  questions.map((article) => (
-                    <IndexButton
-                      key={article.id}
-                      selected={article.id === selectedArticleId}
-                      indent
-                      onClick={() => {
-                        onSelect({ theme, articleId: article.id });
-                      }}
-                    >
-                      <Text size="sm">{article.question}</Text>
-                    </IndexButton>
-                  ))}
+                <AnimatedHeight>
+                  {open &&
+                    questions.map((article) => (
+                      <IndexButton
+                        key={article.id}
+                        selected={article.id === selectedArticleId}
+                        indent
+                        onClick={() => {
+                          onSelect({ theme, articleId: article.id });
+                        }}
+                      >
+                        <Text size="sm">{article.question}</Text>
+                      </IndexButton>
+                    ))}
+                </AnimatedHeight>
               </Column>
             );
           })}
@@ -345,11 +361,20 @@ function HelpThemeView({
 }): ReactElement {
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
   const sectionRefs = useRef(new Map<string, HTMLElement>());
+  const topRef = useRef<HTMLDivElement>(null);
+  const hasScrolledRef = useRef(false);
 
+  // The first scroll lands where a link points; later ones travel there, so a
+  // selection made on the page is seen moving rather than cut to.
   useEffect(() => {
-    if (selectedArticleId === undefined) return;
+    const behavior: ScrollBehavior = hasScrolledRef.current ? 'smooth' : 'auto';
+    hasScrolledRef.current = true;
+    if (selectedArticleId === undefined) {
+      topRef.current?.scrollIntoView({ block: 'start', behavior });
+      return;
+    }
     setExpanded((current) => new Set(current).add(selectedArticleId));
-    sectionRefs.current.get(selectedArticleId)?.scrollIntoView({ block: 'start' });
+    sectionRefs.current.get(selectedArticleId)?.scrollIntoView({ block: 'start', behavior });
   }, [selectedArticleId]);
 
   const toggle = (id: string): void => {
@@ -362,7 +387,7 @@ function HelpThemeView({
   };
 
   return (
-    <Column gap="lg" style={{ padding: 'var(--space-5)', maxWidth: 880 }}>
+    <Column ref={topRef} gap="lg" style={{ padding: 'var(--space-5)', maxWidth: 880 }}>
       <Text size="xl" weight="semibold">
         {HELP_THEME_LABELS[theme]}
       </Text>
@@ -391,7 +416,7 @@ function HelpThemeView({
                 style={plainButtonStyle}
               >
                 <Row gap="xs" align="center">
-                  <Icon name={open ? 'caret-down' : 'caret-right'} size={14} />
+                  <DisclosureCaret open={open} />
                   <Text size="lg" weight="semibold">
                     {article.question}
                   </Text>
@@ -406,7 +431,9 @@ function HelpThemeView({
               >
                 {article.summary}
               </Text>
-              {open && <HelpArticleBody articleId={article.id} onSelect={onSelect} />}
+              <AnimatedHeight>
+                {open && <HelpArticleBody articleId={article.id} onSelect={onSelect} />}
+              </AnimatedHeight>
             </Column>
           </section>
         );
