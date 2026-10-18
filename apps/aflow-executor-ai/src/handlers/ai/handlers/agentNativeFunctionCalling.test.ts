@@ -667,17 +667,14 @@ describe('mapToolCallsToDecision', () => {
     expect(warnings[0]).toContain('tool calls but max is');
   });
 
-  it('throws for unknown function name', () => {
-    expect(() =>
-      mapToolCallsToDecision(
-        {
-          content: null,
-          toolCalls: [makeToolCall('nonexistent', {})],
-        },
-        fnNameToToolId,
-        5,
-      ),
-    ).toThrow('Unknown function name');
+  it('keeps a function name the model invented, for validation to refuse with the tools that exist', () => {
+    const { decision } = mapToolCallsToDecision(
+      { content: null, toolCalls: [makeToolCall('nonexistent', {})] },
+      fnNameToToolId,
+      5,
+    );
+
+    expect(decision).toMatchObject({ action: 'invoke_step', toolId: 'nonexistent' });
   });
 
   it('maps dot-style function names from Gemini to sanitized declaration keys', () => {

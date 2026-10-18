@@ -96,6 +96,17 @@ export function resolveToolIdFromFnName(
   return fnNameToToolId.get(toolIdToFnName(fnName));
 }
 
+/**
+ * A name the model invented is kept as it wrote it, so the decision reaches
+ * persistence validation, whose `unknown_step` repair names the tools that
+ * exist and re-issues the turn with them in front of the model. Refusing the
+ * response here sent the turn down the JSON-schema path instead, without the
+ * tools, where a small model answers with nothing at all.
+ */
+function resolveToolIdOrName(fnName: string, fnNameToToolId: Map<string, string>): string {
+  return resolveToolIdFromFnName(fnName, fnNameToToolId) ?? fnName;
+}
+
 // ============================================================================
 // Function Declaration Building
 // ============================================================================
@@ -442,10 +453,7 @@ export function mapToolCallsToDecision(
   // Single tool step call
   if (toolStepCalls.length === 1) {
     const call = toolStepCalls[0]!;
-    const toolId = resolveToolIdFromFnName(call.fnName, fnNameToToolId);
-    if (!toolId) {
-      throw new Error(`Unknown function name in model response: "${call.fnName}"`);
-    }
+    const toolId = resolveToolIdOrName(call.fnName, fnNameToToolId);
     const msg = content ? stripModelMetaTags(content) : undefined;
     return {
       decision: {
@@ -469,11 +477,7 @@ export function mapToolCallsToDecision(
   }
 
   const calls = effectiveCalls.map((call) => {
-    const toolId = resolveToolIdFromFnName(call.fnName, fnNameToToolId);
-    if (!toolId) {
-      throw new Error(`Unknown function name in model response: "${call.fnName}"`);
-    }
-    return { toolId, args: call.args };
+    return { toolId: resolveToolIdOrName(call.fnName, fnNameToToolId), args: call.args };
   });
 
   const msg = content ? stripModelMetaTags(content) : undefined;

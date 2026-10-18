@@ -578,6 +578,8 @@ The prefix cache keeps checkpoints at 8,192-token steps and at the end of each p
 
 Helmsman on `gemma-local` at the 32K default, on the 24 GB machine with the dev stack and a browser running: the first turn, model load included, took 6 m 42 s; the turns after it 15–56 s each at 17.7–19.9K prompt tokens. Helmsman answered from `catalog.tool.search` and `catalog.tool.list` correctly, and recovered on its own from one rejected call (`stepTypes: ['platform']`, not a step type). The model held 22.7 GB, past the working set, which accounts for the pace.
 
+On `qwen-local` the first answer took 3–4 minutes. On the second turn the model called `integration_list`, a shortened `integration.registry.list`, which no tool is named. A name the model invents now reaches persistence validation like any other unknown tool, whose repair re-issues the turn with the tools in front of it; it used to fall back to the JSON-schema path without the tools, where this model answered with nothing and the turn failed as invalid JSON. On that path, a response with no call to the schema's tool is now a retryable `provider_error` naming what the model called instead.
+
 ### Call sites outside role resolution
 
 Every production model call was inventoried. The ones a `local_only` space (D12) would miss today:

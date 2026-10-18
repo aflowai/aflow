@@ -682,6 +682,19 @@ export function createOllamaAdapter(config: ProviderConfig): AIProviderAdapter {
               ? call.function.arguments
               : JSON.stringify(call.function?.arguments ?? {})
             : (chunk.message?.content ?? '');
+        if (call === undefined && rawContent.trim() === '') {
+          const called = (chunk.message?.tool_calls ?? [])
+            .map((c) => c.function?.name)
+            .filter((name): name is string => name !== undefined);
+          throw new AIClientError(
+            `Ollama's model answered without calling the "${toolName}" tool that carries the response` +
+              (called.length > 0 ? `; it called ${called.map((n) => `"${n}"`).join(', ')}` : '') +
+              ` (model=${request.model}).`,
+            'provider_error',
+            'ollama',
+            true,
+          );
+        }
       }
 
       if (chunk?.done_reason === 'length') {
