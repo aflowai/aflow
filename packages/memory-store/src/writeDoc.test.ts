@@ -442,18 +442,6 @@ describe('writeMemoryDoc — governance guards', () => {
     expect(put).not.toHaveBeenCalled();
   });
 
-  it('refuses platform evidence paths (forgery guard applies to every writer)', async () => {
-    const { repo, put } = makeRepo();
-    await expect(
-      writeMemoryDoc({
-        ...baseParams(repo, makePayloadStore()),
-        path: '/coach/evidence/api-calls/fake.json',
-        content: { kind: 'text', text: '{"issuedBy":"platform:api.http.call"}' },
-      }),
-    ).rejects.toBeInstanceOf(MemoryWriteDeniedError);
-    expect(put).not.toHaveBeenCalled();
-  });
-
   it('refuses generated-media paths to every writer but the media operations', async () => {
     const { repo, put } = makeRepo();
     await expect(

@@ -206,39 +206,6 @@ export const PrepareDesignSurfaceOutputSchema = z.discriminatedUnion('status', [
 export type PrepareDesignSurfaceOutput = z.infer<typeof PrepareDesignSurfaceOutputSchema>;
 
 // ============================================================================
-// Provenance contract — anti-fabrication primitive (§6.5 / §11)
-// ============================================================================
-
-export const SourceEvidenceSchema = z.object({
-  /** Unguessable identifier the runner references via `sourceEvidenceRef`. */
-  callId: z.string().uuid(),
-  /** API id or MCP server id of the call. Must match provenance.sourceId. */
-  sourceId: z.string().min(1).max(128),
-  /** Binding the platform actually authenticated as. */
-  bindingId: z.string().min(1).max(128),
-  /** Platform endpoint or MCP tool that was invoked. */
-  endpointOrTool: z.string().min(1).max(128),
-  /** Wall-clock when the platform completed the call. */
-  executedAtMs: z.number().int().nonnegative(),
-  /** Hash of the request payload — guards replay claims. Optional during 2.5a. */
-  requestHash: z.string().min(1).max(128).optional(),
-  /** Hash of the response payload — lets memory.store.put preserve attribution. */
-  responseHash: z.string().min(1).max(128).optional(),
-  /**
-   * Trusted platform issuer. The runtime validator only accepts these
-   * literals — a runner cannot author an evidence doc claiming to come
-   * from the platform.
-   */
-  issuedBy: z.enum(['platform:api.http.call', 'platform:mcp.tools.call']),
-  /** Run that issued the evidence — used to scope validity to the same run. */
-  runId: z.string().min(1).max(128),
-});
-export type SourceEvidence = z.infer<typeof SourceEvidenceSchema>;
-
-export const ProvenanceSchema = z.object({}).passthrough();
-export type Provenance = z.infer<typeof ProvenanceSchema>;
-
-// ============================================================================
 // TaskGraphDraft — output of draft-task-graph (§5.3 / §6.3)
 //
 // Phase 4 surface — included here so the schemas package owns the full

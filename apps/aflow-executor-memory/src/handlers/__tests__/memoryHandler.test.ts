@@ -516,46 +516,6 @@ describe('MemoryHandler', () => {
     });
   });
 
-  describe('platform evidence directory', () => {
-    it('blocks direct put to /coach/evidence/api-calls/<callId>.json', async () => {
-      const ctx = createMockContext('memory.store.put', {
-        path: '/coach/evidence/api-calls/11111111-1111-1111-1111-111111111111.json',
-        docType: 'json',
-        content: {
-          inlineJson: {
-            callId: '11111111-1111-1111-1111-111111111111',
-            sourceId: 'kaggle-rest-api',
-            bindingId: 'kaggle-prod',
-            endpointOrTool: 'datasets.fetch',
-            executedAtMs: 0,
-            issuedBy: 'platform:api.http.call',
-            runId: 'attacker-fabricated-run',
-          },
-        },
-      });
-
-      const result = await handler.execute(ctx);
-
-      expect(result.status).toBe('FAILED');
-      expect(result.error.message).toContain('platform-only');
-      expect(result.error.message).toContain('sourceEvidenceRef');
-      expect(mockRepo.put).not.toHaveBeenCalled();
-    });
-
-    it('blocks puts to any sub-path under /coach/evidence/ regardless of file shape', async () => {
-      const ctx = createMockContext('memory.store.put', {
-        path: '/coach/evidence/anything/somefile.txt',
-        docType: 'text',
-        content: { inlineText: 'hi' },
-      });
-
-      const result = await handler.execute(ctx);
-
-      expect(result.status).toBe('FAILED');
-      expect(result.error.message).toContain('platform-only');
-    });
-  });
-
   describe('not-found classification', () => {
     it('memory.store.get (view:stat) on a missing doc is a clean not_found, not an opaque system error', async () => {
       const ctx = createMockContext('memory.store.get', {

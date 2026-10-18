@@ -29,7 +29,6 @@ import {
 import type { ResolvedCall } from './types.js';
 import { ApiExecutionError } from './types.js';
 import { encodeRequestBody } from './encoding.js';
-import { writeSourceEvidence, hashResponseBody } from './sourceEvidence.js';
 
 export interface ExecuteOpts {
   db?: PostgresJsDatabase;
@@ -123,40 +122,7 @@ export async function fetchWithRetry(
         continue;
       }
 
-      let sourceEvidenceRef: string | undefined;
-      const isSuccess = result.statusCode >= 200 && result.statusCode < 400;
-      const spaceId = ctx.job.spaceId;
-      // Direct-URL calls (apiId + bindingId + url) carry no endpointId — record
-      // provenance under a 'direct_url' sentinel so signed cross-host fetches
-      // (e.g. a GCS download) still produce SourceEvidence.
-      const evidenceEndpointId = result.endpointId ?? 'direct_url';
-      if (isSuccess && opts.db && spaceId && result.apiId && resolved.bindingId) {
-        const evidenceWrite = await writeSourceEvidence({
-          db: opts.db,
-          tenantId: ctx.tenantId,
-          spaceId,
-          runId: ctx.runId,
-          apiId: result.apiId,
-          bindingId: resolved.bindingId,
-          endpointId: evidenceEndpointId,
-          responseStatus: result.statusCode,
-          provenance: 'live',
-          ...(result.data !== undefined
-            ? { responseHash: hashResponseBody(result.data) ?? '' }
-            : {}),
-        });
-        if (evidenceWrite.ok) {
-          sourceEvidenceRef = evidenceWrite.callId;
-        } else {
-          ctx.log.warn(
-            'Plan 118: failed to write SourceEvidence — runner will not receive sourceEvidenceRef',
-            { apiId: result.apiId, endpointId: evidenceEndpointId },
-          );
-        }
-      }
-
-      const enrichedResult = sourceEvidenceRef ? { ...result, sourceEvidenceRef } : result;
-      return wasRetried ? { ...enrichedResult, wasRetried } : enrichedResult;
+      return wasRetried ? { ...result, wasRetried } : result;
     } catch (error) {
       lastError = error;
 
@@ -200,7 +166,6 @@ export async function executeSingle(
   apiId?: string;
   endpointId?: string;
   parsedMeta?: { contentType?: string };
-  sourceEvidenceRef?: string;
 }> {
   const { egressPolicy } = resolved;
   const allowedHosts = egressPolicy.allowedHosts;

@@ -178,15 +178,15 @@ describe('saveResponseBodyToMemory — binary lane', () => {
 });
 
 describe('saveResponseBodyToMemory — governance', () => {
-  it('refuses /coach/evidence/** (evidence forgery via saveTo)', async () => {
+  it('refuses a governed path as the saveTo target', async () => {
     const ctx = makeCtx();
     await expect(
       saveResponseBodyToMemory(ctx, {
         db,
         payloadStore: createMemoryPayloadStore(),
         spaceId: 'space-1',
-        saveTo: { path: '/coach/evidence/api-calls/forged.json' },
-        bytes: Buffer.from('{"issuedBy":"platform:api.http.call"}'),
+        saveTo: { path: '/evals/skill-1/suite.json' },
+        bytes: Buffer.from('{"criteria":[]}'),
         contentType: 'application/json',
       }),
     ).rejects.toMatchObject({ aflowError: { code: 'VALIDATION_ERROR' } });

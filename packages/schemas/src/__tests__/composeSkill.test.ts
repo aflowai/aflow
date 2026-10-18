@@ -4,7 +4,6 @@ import {
   DesignSurfaceSchema,
   PrepareDesignSurfaceInputSchema,
   PrepareDesignSurfaceOutputSchema,
-  ProvenanceSchema,
   TaskGraphDraftSchema,
   WorkflowAssemblyInputSchema,
   isUsableJsonSchema,
@@ -174,21 +173,6 @@ describe('PrepareDesignSurfaceOutputSchema', () => {
       missing: [],
     });
     expect(result.success).toBe(false);
-  });
-});
-
-describe('ProvenanceSchema (deprecated stub)', () => {
-  // Provenance gates removed 2026-05-06 — see assembleWorkflow.ts top-of-
-  // file note. The schema is retained as an empty `.passthrough()` stub
-  // for callers in the middle of migration; it no longer enforces
-  // `synthetic: false`. Future fabrication detection moves to Coach
-  it('accepts arbitrary objects (the schema is now an empty passthrough)', () => {
-    const parsed = ProvenanceSchema.parse({
-      sourceKind: 'api',
-      sourceId: 'kaggle-rest-api',
-      synthetic: false,
-    });
-    expect((parsed as { sourceKind: string }).sourceKind).toBe('api');
   });
 });
 

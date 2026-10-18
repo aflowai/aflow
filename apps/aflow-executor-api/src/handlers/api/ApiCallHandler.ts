@@ -23,11 +23,7 @@ import {
   successWithData,
 } from '@aflow/executor-runtime';
 import type { AflowError } from '@aflow/schemas';
-import {
-  ApiCallInputSchema,
-  ApiHttpDownloadInputSchema,
-  SIMULATED_PROVENANCE,
-} from '@aflow/schemas';
+import { ApiCallInputSchema, ApiHttpDownloadInputSchema } from '@aflow/schemas';
 import type { ApiCallInput } from '@aflow/schemas';
 import type { Redis } from '@aflow/redis';
 import { ALLOW_UNSAFE_DIRECT_URL } from './config.js';
@@ -48,7 +44,6 @@ import { ApiWriteApprovalRequired, enforceWriteApprovalGate } from './writeAppro
 import { validateEndpointBody } from './validateBody.js';
 import { processResponse } from './response.js';
 import { executeSimulatedCall, toSimulatedFetchResponse } from './simulation/execute.js';
-import { hashResponseBody, writeSourceEvidence } from './sourceEvidence.js';
 
 export class ApiCallHandler implements StepHandler {
   readonly stepType = 'api';
@@ -271,31 +266,7 @@ export class ApiCallHandler implements StepHandler {
           resolved,
           executeOpts,
         );
-        // Evidence on the same terms the live path files it, marked for what it
-        // is. Skipping it here would make the simulated run behave unlike the
-        // one that ships — the agent would receive no `sourceEvidenceRef` to
-        // cite, and the provenance record a later reader needs would not exist.
-        const evidence =
-          ctx.job.spaceId !== undefined && simulatedResult.statusCode < 400
-            ? await writeSourceEvidence({
-                db,
-                tenantId: ctx.tenantId,
-                spaceId: ctx.job.spaceId,
-                runId: ctx.runId,
-                apiId: resolved.simulation.apiId,
-                bindingId: resolved.simulation.bindingId,
-                endpointId: resolved.endpoint?.endpointId ?? 'unknown',
-                responseStatus: simulatedResult.statusCode,
-                provenance: SIMULATED_PROVENANCE,
-                ...(simulatedResult.data !== undefined
-                  ? { responseHash: hashResponseBody(simulatedResult.data) ?? '' }
-                  : {}),
-              })
-            : null;
-        const simulatedOutput = evidence?.ok
-          ? { ...simulatedResult, sourceEvidenceRef: evidence.callId }
-          : simulatedResult;
-        const simulatedData = isDownload ? mapDownloadOutput(simulatedOutput) : simulatedOutput;
+        const simulatedData = isDownload ? mapDownloadOutput(simulatedResult) : simulatedResult;
         // Generation spends real tokens, so a simulated call reports them the
         // way every other model-spending step does — durable `costJson` on the
         // step result, not an in-memory usage recorder.

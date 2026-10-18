@@ -71,7 +71,6 @@ describeDb('governed paths refuse every mutation, not only the write (real DB)',
   const mediaDirectory = `/media/${RUN_ID}`;
   const assetPath = `${mediaDirectory}/take-9f2c1a4b5c6d7e8f9a0b1c2d-0`;
   const receiptPath = `${mediaDirectory}/take-9f2c1a4b5c6d7e8f9a0b1c2d.receipt.json`;
-  const evidencePath = '/coach/evidence/source-1.json';
   const suitePath = '/evals/skill-1/suite.json';
   const ownPath = '/notes/shot-list.md';
   let receiptId = '';
@@ -224,7 +223,6 @@ describeDb('governed paths refuse every mutation, not only the write (real DB)',
       'json',
       'application/json',
     );
-    await seedRow(evidencePath, JSON.stringify({ source: 'https://example.test' }), 'json');
     await seedRow(suitePath, JSON.stringify({ criteria: [] }), 'json');
 
     const own = await writeMemoryDoc({
@@ -314,19 +312,16 @@ describeDb('governed paths refuse every mutation, not only the write (real DB)',
     expect(await docRepo.getByPath(assetPath, SPACE)).not.toBeNull();
   });
 
-  it('refuses platform evidence and a governed eval suite the same way', async (ctx: TestContext) => {
+  it('refuses a patch and a delete of a governed eval suite', async (ctx: TestContext) => {
     if (!guard(ctx)) return;
-    const evidence = await runOp('memory.store.delete', { target: { path: evidencePath } });
-    const evidencePatch = await runOp('memory.store.patch', {
-      target: { path: evidencePath },
+    const patch = await runOp('memory.store.patch', {
+      target: { path: suitePath },
       patch: { type: 'json_patch', operations: [{ op: 'add', path: '/source', value: 'mine' }] },
     });
-    const suite = await runOp('memory.store.delete', { target: { path: suitePath } });
+    const remove = await runOp('memory.store.delete', { target: { path: suitePath } });
 
-    expect(evidence.status).toBe('FAILED');
-    expect(evidencePatch.status).toBe('FAILED');
-    expect(suite.status).toBe('FAILED');
-    expect(await docRepo.getByPath(evidencePath, SPACE)).not.toBeNull();
+    expect(patch.status).toBe('FAILED');
+    expect(remove.status).toBe('FAILED');
     expect(await docRepo.getByPath(suitePath, SPACE)).not.toBeNull();
   });
 
