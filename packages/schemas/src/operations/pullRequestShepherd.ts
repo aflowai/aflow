@@ -27,6 +27,20 @@ export const SHEPHERD_LEASE_ROOT = '/shepherd';
 export const SHEPHERD_LEASE_DOCUMENT = 'lease.json';
 
 /**
+ * Where the handoff comment's id is kept beside the lease, once a pass has
+ * posted it: the comment is read by its id wherever it sits in a long
+ * conversation, and the list of comments is read only where none is kept.
+ */
+export const SHEPHERD_HANDOFF_POINTER_DOCUMENT = 'handoff.json';
+
+/**
+ * A lease older than this is stale whatever its run says: a pass that holds
+ * one longer — a commission's two hours and a publication waiting at its
+ * approval besides — has stopped, and the next pass takes the lease over.
+ */
+export const SHEPHERD_LEASE_STALE_AFTER_MS = 12 * 60 * 60 * 1000;
+
+/**
  * The handoff comment opens with this and carries its record as `key: value`
  * lines up to {@link SHEPHERD_HANDOFF_CLOSE}, so the record is invisible on
  * the pull request and the text after it is what a person reads.
@@ -99,6 +113,8 @@ export function parseShepherdHandoff(body: string): ShepherdHandoffRecord | null
  * `pullRequest` take the folder's prefix after a colon, and `pullRequests` the
  * number of one pull request after another where a pass is aimed at it —
  * `loop_pulls:aflow/:94`. A branch prefix holds no colon, so neither is ambiguous.
+ * `handoff` takes the login the loop posts as, `loop_handoff:aflow-bot`: a
+ * record from any other author is no record. A login holds no colon either.
  */
 export const SHEPHERD_RESPONSE_PRESETS = {
   pullRequests: 'loop_pulls',
@@ -157,7 +173,7 @@ export const LoopPullRequestSchema = z.object({
   ours: z
     .boolean()
     .describe(
-      "Opened by Local Publish — its marker closes the body — on a branch under the folder's prefix.",
+      "Opened by Local Publish — its marker closes the body — from a branch of the repository itself, under the folder's prefix. A fork's pull request is never the loop's: the loop pushes to its own repository.",
     ),
   handsOff: z.boolean(),
   draft: z.boolean(),
@@ -165,6 +181,13 @@ export const LoopPullRequestSchema = z.object({
     .string()
     .optional()
     .describe('GitHub’s `mergeable_state`; `dirty` is a conflict with the base.'),
+  commentPages: z
+    .number()
+    .int()
+    .positive()
+    .describe(
+      'How many pages of 100 its conversation runs to. The last is the newest, where a handoff no pass has pinned yet is looked for.',
+    ),
 });
 export type LoopPullRequest = z.infer<typeof LoopPullRequestSchema>;
 

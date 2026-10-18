@@ -27,6 +27,7 @@ import {
   LoopPullRequestsSchema,
   MemoryPutInputSchema,
   parseShepherdHandoff,
+  SHEPHERD_LEASE_STALE_AFTER_MS,
   type ShepherdHandoffRead,
   ShepherdHandoffReadSchema,
   skillStarterAgentDefinition,
@@ -63,7 +64,13 @@ const PULL_REQUEST: LoopPullRequest = {
   handsOff: false,
   draft: false,
   mergeableState: 'clean',
+  commentPages: 3,
 };
+
+/** The pass's own run, and the time it is dispatched at. */
+const RUN_ID = 'shepherd-run-2';
+const NOW = Date.UTC(2026, 9, 18, 9, 0, 0);
+const LOOP_LOGIN = 'aflow-bot';
 
 const FAILING: CheckRunsSummary = {
   state: 'failing',
@@ -80,9 +87,12 @@ interface Scenario {
   pullRequest?: Partial<LoopPullRequest>;
   checks?: CheckRunsSummary;
   handoff?: ShepherdHandoffRead;
-  leaseHeld?: boolean;
-  /** Another pass created the lease between this one's read and its write. */
+  /** A lease on the branch: its run's status (`gone` where it cannot be read) and its age. */
+  lease?: { owner: 'running' | 'paused' | 'completed' | 'failed' | 'gone'; ageMs: number };
+  /** Another pass took the lease between this one's read and its write. */
   leaseTaken?: boolean;
+  /** The handoff comment an earlier pass pinned: read by its id. `gone` where it was deleted. */
+  pinned?: 'found' | 'gone';
   publicationInFlight?: boolean;
   commissionInFlight?: boolean;
   remedy?: { value: Remedy | null; decided: boolean } | 'unavailable';
@@ -109,6 +119,8 @@ function bound(
   for (const [name, binding] of Object.entries(task.inputBindings ?? {})) {
     let value: unknown;
     if (binding.kind === 'run_input') value = runInputs[binding.path];
+    if (binding.kind === 'run_id') value = RUN_ID;
+    if (binding.kind === 'clock') value = NOW + (binding.offsetMs ?? 0);
     if (binding.kind === 'task_output') {
       const output = outputs.get(binding.taskId);
       value =
@@ -167,14 +179,41 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
       return github(LoopPullRequestSchema.parse({ ...PULL_REQUEST, ...s.pullRequest }));
     case 'read-pr-checks':
       return github(CheckRunsSummarySchema.parse(s.checks ?? FAILING));
+    case 'read-identity':
+      return github({ login: LOOP_LOGIN, id: 1 });
+    case 'read-handoff-pointer':
+      // A memory read of a document that is not there fails its step.
+      return s.pinned === undefined
+        ? { ok: false }
+        : ok({ stat: { path: 'handoff.json' }, dataJson: { commentId: 9 } });
+    case 'read-pr-handoff-pinned':
+      // Deleted, the comment answers 404 with GitHub's error, which shapes no record.
+      return s.pinned === 'gone'
+        ? github({ message: 'Not Found' }, 404)
+        : github(ShepherdHandoffReadSchema.parse(s.handoff ?? NO_HANDOFF));
     case 'read-pr-handoff':
       return github(ShepherdHandoffReadSchema.parse(s.handoff ?? NO_HANDOFF));
     case 'read-in-flight-lease':
-      return ok({
-        items: s.leaseHeld
-          ? [{ path: `${String(input['pathPrefix'])}lease.json`, docType: 'json' }]
-          : [],
-      });
+      return s.lease === undefined
+        ? { ok: false }
+        : ok({
+            stat: { path: input['target'], contentHash: 'stale-lease-hash' },
+            dataJson: {
+              runId: 'shepherd-run-1',
+              takenAtMs: NOW - s.lease.ageMs,
+              pullNumber: 94,
+              headSha: HEAD,
+              checkRunId: '554',
+              attempt: 1,
+            },
+          });
+    case 'read-lease-owner':
+      return s.lease?.owner === 'gone' || s.lease === undefined
+        ? { ok: false }
+        : ok({ run: { runId: 'shepherd-run-1', status: s.lease.owner } });
+    case 'remember-handoff':
+      MemoryPutInputSchema.parse(input);
+      return ok({ id: 'doc-2', path: input['path'], version: 1 });
     case 'read-in-flight-publications':
     case 'read-in-flight-commissions': {
       WorkflowRunListInputSchema.parse(input);
@@ -190,6 +229,7 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
     case 'decide':
       return ok({ ...decideByRules(WorkflowRunDecideInputSchema.parse(input)) });
     case 'lease':
+    case 'lease-takeover':
       MemoryPutInputSchema.parse(input);
       return s.leaseTaken ? { ok: false } : ok({ id: 'doc-1', path: input['path'], version: 1 });
     case 'read-failure':
@@ -312,7 +352,12 @@ function pass(s: Scenario = {}): Pass {
       let output = result.output;
       if (task.outputProjection !== undefined) {
         const projected = projectTaskOutput(task.outputProjection, output, input);
-        if (!projected.ok) throw new Error(`${task.taskId}: ${JSON.stringify(projected.failures)}`);
+        // A projection that does not resolve fails its task, as the harness does.
+        if (!projected.ok) {
+          statuses.set(task.taskId, 'failed');
+          if (task.optional === true) failedOptional.add(task.taskId);
+          continue;
+        }
         output = projected.value;
       }
       outputs.set(task.taskId, output);
@@ -341,7 +386,7 @@ function readBack(previous: Pass): ShepherdHandoffRead {
 }
 
 const COMMISSIONS = ['fix', 'bump-dependency', 'merge-round'];
-const ACTIONS = ['lease', 'rerun-jobs', ...COMMISSIONS, 'publish'];
+const ACTIONS = ['lease', 'lease-takeover', 'rerun-jobs', ...COMMISSIONS, 'publish'];
 
 describe('Local PR Shepherd — it fixes what CI failed', () => {
   const first = pass();
@@ -435,27 +480,58 @@ describe('Local PR Shepherd — once per failure', () => {
 });
 
 describe('Local PR Shepherd — never two at once', () => {
-  it('waits where another pass holds the lease on the branch', () => {
-    const held = pass({ leaseHeld: true });
-    expect(held.decision).toBe('wait');
-    for (const action of ACTIONS) expect(held.ran).not.toContain(action);
+  it.each(['running', 'paused'] as const)(
+    'waits where a live lease holds the branch — its run %s, taken within the bound',
+    (owner) => {
+      const held = pass({ lease: { owner, ageMs: 60_000 } });
+      expect(held.decision).toBe('wait');
+      for (const action of ACTIONS) expect(held.ran).not.toContain(action);
+    },
+  );
+
+  it.each([
+    ['its run ended', { owner: 'completed', ageMs: 60_000 }],
+    ['its run failed', { owner: 'failed', ageMs: 60_000 }],
+    ['its run cannot be read', { owner: 'gone', ageMs: 60_000 }],
+    ['it is older than the bound', { owner: 'running', ageMs: SHEPHERD_LEASE_STALE_AFTER_MS + 1 }],
+  ] as const)('takes over a stale lease — %s — and acts', (_why, lease) => {
+    const resumed = pass({ lease });
+    expect(resumed.decision).toBe('fix');
+    expect(resumed.ran).not.toContain('lease');
+    const takeover = MemoryPutInputSchema.parse(resumed.inputs.get('lease-takeover'));
+    // Overwrites exactly the lease it read, so a second pass taking it over fails.
+    expect(takeover).toMatchObject({ writeMode: 'overwrite', expectedHash: 'stale-lease-hash' });
+    expect(takeover.content.inlineJson).toMatchObject({ runId: RUN_ID, takenAtMs: NOW });
+    expect(resumed.ran).toEqual(expect.arrayContaining(['fix', 'publish', 'release']));
+    expect(resumed.inputs.get('release')).toEqual({ target: { path: takeover.path } });
   });
 
-  it('takes the lease by creating it, so a pass that lost the race commissions, publishes and releases nothing', () => {
-    expect(MemoryPutInputSchema.parse(pass().inputs.get('lease')).writeMode).toBe('create');
-    const lost = pass({ leaseTaken: true });
-    expect(lost.statuses.get('lease')).toBe('failed');
-    for (const task of [
-      ...COMMISSIONS,
-      'rerun-jobs',
-      'publish',
-      'release',
-      'handoff',
-      'handoff-edit',
-    ]) {
-      expect(lost.ran).not.toContain(task);
-    }
+  it('records the run that holds a lease and when it was taken', () => {
+    const lease = MemoryPutInputSchema.parse(pass().inputs.get('lease'));
+    expect(lease.writeMode).toBe('create');
+    expect(lease.content.inlineJson).toMatchObject({ runId: RUN_ID, takenAtMs: NOW });
   });
+
+  it.each([
+    ['created', {}],
+    ['taken over', { lease: { owner: 'completed', ageMs: 60_000 } as const }],
+  ])(
+    'takes the lease only once: a pass whose lease was %s first commissions, publishes and releases nothing',
+    (_how, scenario) => {
+      const lost = pass({ ...scenario, leaseTaken: true });
+      expect(lost.decision).toBe('fix');
+      for (const task of [
+        ...COMMISSIONS,
+        'rerun-jobs',
+        'publish',
+        'release',
+        'handoff',
+        'handoff-edit',
+      ]) {
+        expect(lost.ran).not.toContain(task);
+      }
+    },
+  );
 
   it('releases the lease whichever way the leased work ended', () => {
     for (const s of [{ commission: 'failed' as const }, { remedy: 'unavailable' as const }]) {
@@ -463,6 +539,53 @@ describe('Local PR Shepherd — never two at once', () => {
       expect(ended.ran).not.toContain('publish');
       expect(ended.ran).toContain('release');
       expect(ended.ran).toContain('handoff');
+    }
+  });
+});
+
+describe('Local PR Shepherd — the handoff is the loop’s own, wherever it sits', () => {
+  const preset = (input: Record<string, unknown> | undefined) =>
+    (input?.['response'] as { transformPresetId?: string } | undefined)?.transformPresetId;
+
+  it('reads the handoff only as the login the connection posts as wrote it', () => {
+    const first = pass();
+    expect(first.ran).toContain('read-identity');
+    expect(preset(first.inputs.get('read-pr-handoff'))).toBe(`loop_handoff:${LOOP_LOGIN}`);
+    const pinned = pass({ pinned: 'found' });
+    expect(preset(pinned.inputs.get('read-pr-handoff-pinned'))).toBe(`loop_handoff:${LOOP_LOGIN}`);
+  });
+
+  it('pins the handoff it posts, so the next pass reads it by its id', () => {
+    const first = pass();
+    expect(first.ran).toContain('handoff');
+    expect(MemoryPutInputSchema.parse(first.inputs.get('remember-handoff'))).toMatchObject({
+      path: `/shepherd/aflowai/aflow/${BRANCH}/handoff.json`,
+      content: { inlineJson: { commentId: 9 } },
+    });
+  });
+
+  // A handoff posted early in a conversation that ran past 100 comments sits
+  // on no page but the first; read by its id, it is found where it is.
+  it('finds a pinned handoff however many comments came after it, and pages through nothing', () => {
+    const later = pass({ pinned: 'found', handoff: readBack(pass()) });
+    expect(later.inputs.get('read-pr-handoff-pinned')).toMatchObject({
+      endpointId: 'getIssueComment',
+      params: { comment_id: 9 },
+    });
+    expect(later.statuses.get('read-pr-handoff')).toBe('skipped');
+    expect(later.decision).toBe('wait');
+    expect(later.ran).toContain('handoff-edit');
+    expect(later.ran).not.toContain('handoff');
+    expect(later.handoff).toMatchObject({ attemptCount: 1, checkRunId: FAILING_CHECK });
+  });
+
+  it('reads the newest page of the conversation where none is pinned, or the pinned one is gone', () => {
+    for (const s of [{}, { pinned: 'gone' as const }]) {
+      const read = pass(s);
+      expect(read.inputs.get('read-pr-handoff')).toMatchObject({
+        endpointId: 'listIssueComments',
+        params: { per_page: 100, page: PULL_REQUEST.commentPages },
+      });
     }
   });
 });
@@ -577,9 +700,9 @@ describe('Local PR Shepherd — the remedy a failure wants', () => {
     ['ci_outage', []],
   ] as const)('routes a confident %s to %j', (remedy, acted) => {
     const routed = pass({ remedy: { value: remedy, decided: true } });
-    expect(routed.ran.filter((task) => [...ACTIONS].includes(task) && task !== 'lease')).toEqual([
-      ...acted,
-    ]);
+    expect(
+      routed.ran.filter((task) => [...ACTIONS].includes(task) && !task.startsWith('lease')),
+    ).toEqual([...acted]);
   });
 
   it('takes the fix commission on an answer below its bar, whatever it leaned to', () => {

@@ -4,9 +4,11 @@ import {
   SHEPHERD_ATTEMPT_BUDGET_DEFAULT,
   SHEPHERD_HANDOFF_CLOSE,
   SHEPHERD_HANDOFF_OPEN,
+  SHEPHERD_HANDOFF_POINTER_DOCUMENT,
   SHEPHERD_HANDS_OFF_LABEL,
   SHEPHERD_LEASE_DOCUMENT,
   SHEPHERD_LEASE_ROOT,
+  SHEPHERD_LEASE_STALE_AFTER_MS,
   SHEPHERD_RESPONSE_PRESETS,
   type SkillCatalogEntry,
   toJsonSchemaSync,
@@ -80,20 +82,74 @@ const OURS = {
 
 const DECIDED_FIX = { expression: "tasks.decide.output.decision == 'fix'", onMissingRef: SKIP };
 
-/** `shepherd/<owner>/<repo>/<branch>/` in the space's memory: the directory a branch's lease sits in. */
-const LEASE_DIRECTORY = {
-  $concat: [`${SHEPHERD_LEASE_ROOT}/`, bind('owner'), '/', bind('repo'), '/', bind('headRef'), '/'],
-};
-const LEASE_PATH = {
-  $concat: [
-    `${SHEPHERD_LEASE_ROOT}/`,
-    bind('owner'),
-    '/',
-    bind('repo'),
-    '/',
-    bind('headRef'),
-    `/${SHEPHERD_LEASE_DOCUMENT}`,
-  ],
+/** `shepherd/<owner>/<repo>/<branch>/<document>` in the space's memory, beside the branch's lease. */
+function branchDocument(document: string) {
+  return {
+    $concat: [
+      `${SHEPHERD_LEASE_ROOT}/`,
+      bind('owner'),
+      '/',
+      bind('repo'),
+      '/',
+      bind('headRef'),
+      `/${document}`,
+    ],
+  };
+}
+const LEASE_PATH = branchDocument(SHEPHERD_LEASE_DOCUMENT);
+const HANDOFF_POINTER_PATH = branchDocument(SHEPHERD_HANDOFF_POINTER_DOCUMENT);
+
+/** Who the GitHub connection posts as: the one author whose handoff is the record. */
+const LOGIN = { login: out('read-identity', 'data.login') };
+
+/**
+ * The handoff, from whichever read found it: the comment a pass pinned, read
+ * by its id, or — where none is pinned, or it is gone — the newest page of
+ * the conversation. At most one of the two holds a record.
+ */
+const HANDOFF_READS = ['read-pr-handoff-pinned', 'read-pr-handoff'] as const;
+
+function handoffBindings(name: string, path?: string) {
+  return Object.fromEntries(
+    HANDOFF_READS.map((taskId) => [`${name}_${taskId.replace(/-/g, '_')}`, out(taskId, path)]),
+  );
+}
+
+function handoffValue(name: string) {
+  return {
+    $firstOf: HANDOFF_READS.map((taskId) => bind(`${name}_${taskId.replace(/-/g, '_')}`)),
+  };
+}
+
+/** The same, for a part of the handoff body: text, or absent. */
+function handoffText(name: string) {
+  return {
+    $firstOf: HANDOFF_READS.map((taskId) => ({
+      $text: [bind(`${name}_${taskId.replace(/-/g, '_')}`)],
+    })),
+  };
+}
+
+/** The lease, from whichever task took it: created where none was, or taken over from a stale one. */
+const LEASE_TAKERS = ['lease', 'lease-takeover'] as const;
+
+function leaseBindings(name: string, path: string) {
+  return Object.fromEntries(
+    LEASE_TAKERS.map((taskId) => [`${name}_${taskId.replace(/-/g, '_')}`, out(taskId, path)]),
+  );
+}
+
+function leaseText(name: string) {
+  return {
+    $firstOf: LEASE_TAKERS.map((taskId) => ({
+      $text: [bind(`${name}_${taskId.replace(/-/g, '_')}`)],
+    })),
+  };
+}
+
+const LEASE_HELD = {
+  anyOf: LEASE_TAKERS.map((taskId) => `tasks.${taskId}.status == 'succeeded'`),
+  onMissingRef: SKIP,
 };
 
 function github(endpointId: string, params: Record<string, unknown>, transformPresetId?: unknown) {
@@ -160,18 +216,31 @@ export const SHEPHERD_RULES: readonly WorkflowRunDecideRule[] = [
   },
   {
     when: {
-      anyOf: ['state.checks.statusCode != 200', 'state.handoff.statusCode != 200'],
+      anyOf: [
+        'state.identity.statusCode != 200',
+        'state.checks.statusCode != 200',
+        'state.handoff.statusCode != 200',
+      ],
     },
     decision: 'wait',
     reason:
-      "GitHub did not return the head's check runs or the pull request's comments, so what CI says, or what was done before, is unknown.",
+      "GitHub did not say who the connection posts as, or return the head's check runs or the pull request's handoff, so what CI says, or what was done before, is unknown.",
   },
-  {
-    when: { expression: 'state.lease.items[0] != null' },
+  // A lease is live while its run is: running or paused, and taken within the
+  // stated bound. One whose run ended, or that is older, is stale, and this
+  // pass takes it over (`lease-takeover`).
+  ...(['running', 'paused'] as const).map((status) => ({
+    when: {
+      allOf: [
+        'state.lease.dataJson.runId != null',
+        `state.leaseOwner.run.status == '${status}'`,
+        'state.lease.dataJson.takenAtMs >= state.staleBefore',
+      ],
+    },
     decision: 'wait',
     reason:
-      'Another pass holds the lease on this branch: its fix is still being made or published.',
-  },
+      'Another pass holds the lease on this branch, and its run is still going: its fix is still being made or published.',
+  })),
   {
     when: { expression: 'state.publications.runs[0] != null' },
     decision: 'wait',
@@ -282,7 +351,7 @@ function commission(taskId: string, name: string, goal: string, brief: string) {
     goal,
     type: 'operation' as const,
     operation: 'host.harness.run',
-    dependsOn: ['lease'],
+    dependsOn: [...LEASE_TAKERS],
     // A failed commission ends nothing but itself: the lease is still
     // released and the handoff still written.
     optional: true,
@@ -342,11 +411,22 @@ function confident(option: string) {
  * the same in words. What was acted on comes from the lease — which a pass
  * takes only to act — and otherwise stands as the earlier record had it.
  */
-const ATTEMPTS = { $firstOf: [text('leaseAttempt'), text('priorAttempt'), '0'] };
-const CHECK_RUN = { $firstOf: [text('leaseCheckRun'), text('priorCheckRun'), ''] };
-const HEAD_SHA = { $firstOf: [text('leaseHeadSha'), text('priorHeadSha'), ''] };
-const CLASSIFICATION = { $firstOf: [text('classification'), text('priorClassification'), ''] };
-const PUBLICATION = { $firstOf: [text('publicationRunId'), text('priorPublication'), ''] };
+/** The first of the alternatives each node offers, then `fallback`. */
+function firstText(nodes: Array<{ $firstOf: unknown[] }>, fallback: string) {
+  return { $firstOf: [...nodes.flatMap((node) => node.$firstOf), fallback] };
+}
+
+const ATTEMPTS = firstText([leaseText('leaseAttempt'), handoffText('priorAttempt')], '0');
+const CHECK_RUN = firstText([leaseText('leaseCheckRun'), handoffText('priorCheckRun')], '');
+const HEAD_SHA = firstText([leaseText('leaseHeadSha'), handoffText('priorHeadSha')], '');
+const CLASSIFICATION = firstText(
+  [{ $firstOf: [text('classification')] }, handoffText('priorClassification')],
+  '',
+);
+const PUBLICATION = firstText(
+  [{ $firstOf: [text('publicationRunId')] }, handoffText('priorPublication')],
+  '',
+);
 
 const HANDOFF_BODY = {
   $concat: [
@@ -371,11 +451,14 @@ const HANDOFF_BODY = {
     '\n\nFailures acted on: ',
     ATTEMPTS,
     '. Last acted on check run `',
-    { $firstOf: [text('leaseCheckRun'), text('priorCheckRun'), 'none'] },
+    firstText([leaseText('leaseCheckRun'), handoffText('priorCheckRun')], 'none'),
     '`; the remedy question answered `',
-    { $firstOf: [text('classification'), text('priorClassification'), 'nothing'] },
+    firstText(
+      [{ $firstOf: [text('classification')] }, handoffText('priorClassification')],
+      'nothing',
+    ),
     '`; publication run `',
-    { $firstOf: [text('publicationRunId'), text('priorPublication'), 'none'] },
+    firstText([{ $firstOf: [text('publicationRunId')] }, handoffText('priorPublication')], 'none'),
     `\`.\n\n_The shepherd never approves, merges or closes a pull request. Label it \`${SHEPHERD_HANDS_OFF_LABEL}\` to have it left alone._`,
   ],
 };
@@ -384,34 +467,33 @@ const HANDOFF_BINDINGS = {
   ...REPOSITORY,
   decision: out('decide', 'decision'),
   reason: out('decide', 'reason'),
-  leaseAttempt: out('lease', 'lease.inlineJson.attempt'),
-  leaseCheckRun: out('lease', 'lease.inlineJson.checkRunId'),
-  leaseHeadSha: out('lease', 'lease.inlineJson.headSha'),
-  priorAttempt: out('read-pr-handoff', 'data.attemptCount'),
-  priorCheckRun: out('read-pr-handoff', 'data.checkRunId'),
-  priorHeadSha: out('read-pr-handoff', 'data.headSha'),
-  priorClassification: out('read-pr-handoff', 'data.classification'),
-  priorPublication: out('read-pr-handoff', 'data.publicationRunId'),
+  ...leaseBindings('leaseAttempt', 'lease.inlineJson.attempt'),
+  ...leaseBindings('leaseCheckRun', 'lease.inlineJson.checkRunId'),
+  ...leaseBindings('leaseHeadSha', 'lease.inlineJson.headSha'),
+  ...handoffBindings('priorAttempt', 'data.attemptCount'),
+  ...handoffBindings('priorCheckRun', 'data.checkRunId'),
+  ...handoffBindings('priorHeadSha', 'data.headSha'),
+  ...handoffBindings('priorClassification', 'data.classification'),
+  ...handoffBindings('priorPublication', 'data.publicationRunId'),
   classification: out('classify-failure', `${REMEDY}.value`),
   publicationRunId: out('publish', 'runId'),
 };
 
-/** Written on the loop's own pull request, read and not labelled hands-off: a labelled one is untouched. */
+/**
+ * Written where a handoff read answered: only on the loop's own pull request,
+ * not labelled hands-off, since the reads run only there. A handoff found is
+ * rewritten; none found, one is posted.
+ */
 function handoffWhen(found: boolean) {
   return {
-    allOf: [
-      ...OURS.allOf,
-      'tasks.read-pr.output.data.handsOff == false',
-      'tasks.read-pr-handoff.output.statusCode == 200',
-      `tasks.read-pr-handoff.output.data.found == ${String(found)}`,
-    ],
+    anyOf: HANDOFF_READS.map((taskId) => `tasks.${taskId}.output.data.found == ${String(found)}`),
     onMissingRef: SKIP,
   };
 }
 
 /** Every task that can still be running while the lease is held: the release waits for all of them. */
 const LEASED_WORK = [
-  'lease',
+  ...LEASE_TAKERS,
   'read-failure',
   'read-failure-log-1',
   'read-failure-log-2',
@@ -421,6 +503,76 @@ const LEASED_WORK = [
   ...COMMISSIONS,
   'publish',
 ];
+
+/**
+ * The lease, taken before anything is commissioned: the run that holds it,
+ * when it was taken, and the check run and head it acts on. Where there is
+ * none it is created, never overwritten, so the second of two passes fails
+ * here with nothing done. Where there is one, the rules found it stale — its
+ * run ended, or it is past `SHEPHERD_LEASE_STALE_AFTER_MS` — and it is taken
+ * over by overwriting exactly the lease that was read: a pass that took it
+ * over first changed it, so a second takeover fails the same way.
+ */
+function leaseTask(taskId: (typeof LEASE_TAKERS)[number]) {
+  const takeover = taskId === 'lease-takeover';
+  return {
+    taskId,
+    name: takeover ? 'Take over the stale lease' : 'Take the lease on the branch',
+    goal: takeover
+      ? "Overwrite the branch's stale lease — its run has ended, or it is older than the bound — with this pass's own, before anything is commissioned, and only as it was read."
+      : "Write the branch's lease in the space's memory before anything is commissioned, holding the run, the time, and the check run and head this pass acts on.",
+    type: 'operation' as const,
+    operation: 'memory.store.put',
+    when: {
+      allOf: [
+        DECIDED_FIX.expression,
+        `tasks.read-in-flight-lease.status ${takeover ? '==' : '!='} 'succeeded'`,
+      ],
+      onMissingRef: SKIP,
+    },
+    // Not optional: a lease another pass took first ends this one, and only
+    // the pass that holds a lease releases it.
+    retryability: 'safe' as const,
+    maxAttempts: 1,
+    failureInstruction:
+      'The lease on this branch could not be taken — most often because another pass took it first, which is the lease doing its job. Nothing was commissioned or published by this pass.',
+    inputBindings: {
+      ...REPOSITORY,
+      ...NUMBER,
+      ...HEAD_REF,
+      headSha: out('read-pr', 'data.headSha'),
+      checkRunId: out('read-pr-checks', 'data.firstFailing.id'),
+      ...handoffBindings('attempt', 'data.nextAttemptCount'),
+      runId: { kind: 'run_id' as const },
+      takenAtMs: { kind: 'clock' as const },
+      ...(takeover ? { staleHash: out('read-in-flight-lease', 'stat.contentHash') } : {}),
+    },
+    context: ctx('memory.store.put'),
+    inputTemplate: {
+      path: LEASE_PATH,
+      writeMode: takeover ? 'overwrite' : 'create',
+      ...(takeover ? { expectedHash: bind('staleHash') } : {}),
+      docType: 'json',
+      mimeType: 'application/json',
+      indexing: 'disabled',
+      summary: 'The Local PR Shepherd is acting on this branch.',
+      content: {
+        inlineJson: {
+          runId: bind('runId'),
+          takenAtMs: bind('takenAtMs'),
+          pullNumber: bind('number'),
+          headSha: bind('headSha'),
+          checkRunId: bind('checkRunId'),
+          attempt: handoffValue('attempt'),
+        },
+      },
+    },
+    outputProjection: {
+      path: { path: 'path', onMissing: 'error' as const },
+      lease: { fromInput: 'content' },
+    },
+  };
+}
 
 function failureLog(slot: 1 | 2 | 3) {
   return {
@@ -511,6 +663,8 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
         'getPullRequest',
         'listCheckRuns',
         'listIssueComments',
+        'getIssueComment',
+        'getAuthenticatedUser',
         'listWorkflowRunJobs',
         'getJobLogs',
         'reRunFailedJobs',
@@ -685,14 +839,95 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
         },
 
         {
-          taskId: 'read-pr-handoff',
-          name: 'Read the handoff',
-          goal: 'Read the handoff comment the last pass left on the pull request: how many failures were acted on, the check run and head last acted on, and what was done.',
+          taskId: 'read-identity',
+          name: 'Read who the connection posts as',
+          goal: "Read the GitHub account the space's connection acts as: its login is the author of every handoff the loop writes, and the only author whose handoff is the record.",
           type: 'operation' as const,
           operation: 'api.http.call',
           when: OURS,
           retryability: 'safe' as const,
-          inputBindings: { ...REPOSITORY, ...NUMBER },
+          context: ctx('api.http.call'),
+          inputTemplate: github('getAuthenticatedUser', {}),
+        },
+
+        {
+          taskId: 'read-handoff-pointer',
+          name: 'Read which comment is the handoff',
+          goal: "Read the id of the handoff comment an earlier pass posted, kept beside the branch's lease, so the handoff is read by its id wherever it sits in a long conversation.",
+          type: 'operation' as const,
+          operation: 'memory.store.get',
+          when: {
+            allOf: [...OURS.allOf, 'tasks.read-pr.output.data.handsOff == false'],
+            onMissingRef: SKIP,
+          },
+          // No pointer is the first pass's case, not a failure: the newest
+          // page of the conversation is read instead.
+          optional: true,
+          retryability: 'safe' as const,
+          maxAttempts: 1,
+          inputBindings: { ...REPOSITORY, ...HEAD_REF },
+          context: ctx('memory.store.get'),
+          inputTemplate: { target: { path: HANDOFF_POINTER_PATH }, view: 'content' },
+        },
+
+        {
+          taskId: 'read-pr-handoff-pinned',
+          name: 'Read the pinned handoff',
+          goal: 'Read the handoff comment by the id an earlier pass kept, and take its record only where the loop itself wrote it.',
+          type: 'operation' as const,
+          operation: 'api.http.call',
+          when: {
+            allOf: [
+              'tasks.read-identity.output.statusCode == 200',
+              'tasks.read-handoff-pointer.output.dataJson.commentId != null',
+            ],
+            onMissingRef: SKIP,
+          },
+          // A comment since deleted answers 404, which shapes no record: the
+          // task fails, and the newest page is read instead.
+          optional: true,
+          retryability: 'safe' as const,
+          maxAttempts: 1,
+          inputBindings: {
+            ...REPOSITORY,
+            ...LOGIN,
+            commentId: out('read-handoff-pointer', 'dataJson.commentId'),
+          },
+          context: ctx('api.http.call'),
+          inputTemplate: github(
+            'getIssueComment',
+            { owner: bind('owner'), repo: bind('repo'), comment_id: bind('commentId') },
+            { $concat: [`${SHEPHERD_RESPONSE_PRESETS.handoff}:`, bind('login')] },
+          ),
+          outputProjection: {
+            statusCode: { path: 'statusCode', onMissing: 'error' as const },
+            data: { path: 'data', onMissing: 'error' as const },
+            found: { path: 'data.found', onMissing: 'error' as const },
+          },
+        },
+
+        {
+          taskId: 'read-pr-handoff',
+          name: 'Read the handoff',
+          goal: 'Where no pinned handoff was read, read the newest page of the pull request’s conversation for the handoff the loop itself left: how many failures were acted on, the check run and head last acted on, and what was done.',
+          type: 'operation' as const,
+          operation: 'api.http.call',
+          when: {
+            allOf: [
+              ...OURS.allOf,
+              'tasks.read-pr.output.data.handsOff == false',
+              'tasks.read-identity.output.statusCode == 200',
+              "tasks.read-pr-handoff-pinned.status != 'succeeded'",
+            ],
+            onMissingRef: SKIP,
+          },
+          retryability: 'safe' as const,
+          inputBindings: {
+            ...REPOSITORY,
+            ...NUMBER,
+            ...LOGIN,
+            page: out('read-pr', 'data.commentPages'),
+          },
           context: ctx('api.http.call'),
           inputTemplate: github(
             'listIssueComments',
@@ -701,22 +936,45 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
               repo: bind('repo'),
               issue_number: bind('number'),
               per_page: 100,
+              page: bind('page'),
             },
-            SHEPHERD_RESPONSE_PRESETS.handoff,
+            { $concat: [`${SHEPHERD_RESPONSE_PRESETS.handoff}:`, bind('login')] },
           ),
         },
 
         {
           taskId: 'read-in-flight-lease',
           name: "Read the branch's lease",
-          goal: "Read whether a pass holds the lease on the pull request's branch in the space's memory — taken for the length of a fix and released at its end.",
+          goal: "Read the lease on the pull request's branch in the space's memory, where there is one — the run that took it and when — taken for the length of a fix and released at its end.",
           type: 'operation' as const,
-          operation: 'memory.store.query',
+          operation: 'memory.store.get',
           when: OURS,
+          // No lease is the usual case. The read only advises: the lease is
+          // taken by a write that fails where another holds it.
+          optional: true,
           retryability: 'safe' as const,
+          maxAttempts: 1,
           inputBindings: { ...REPOSITORY, ...HEAD_REF },
-          context: ctx('memory.store.query'),
-          inputTemplate: { mode: 'list', pathPrefix: LEASE_DIRECTORY, recursive: true },
+          context: ctx('memory.store.get'),
+          inputTemplate: { target: { path: LEASE_PATH }, view: 'content' },
+        },
+
+        {
+          taskId: 'read-lease-owner',
+          name: "Read the lease's run",
+          goal: 'Read the run that holds the lease: a lease whose run has ended, or that cannot be read, is stale.',
+          type: 'operation' as const,
+          operation: 'workflow.run.detail',
+          when: {
+            expression: 'tasks.read-in-flight-lease.output.dataJson.runId != null',
+            onMissingRef: SKIP,
+          },
+          optional: true,
+          retryability: 'safe' as const,
+          maxAttempts: 1,
+          inputBindings: { runId: out('read-in-flight-lease', 'dataJson.runId') },
+          context: ctx('workflow.run.detail'),
+          inputTemplate: { runId: bind('runId'), compact: true },
         },
 
         {
@@ -762,9 +1020,12 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
             folder: out('read-folder'),
             candidates: out('list-prs'),
             pr: out('read-pr'),
+            identity: out('read-identity'),
             checks: out('read-pr-checks'),
-            handoff: out('read-pr-handoff'),
+            ...handoffBindings('handoff'),
             lease: out('read-in-flight-lease'),
+            leaseOwner: out('read-lease-owner'),
+            staleBefore: { kind: 'clock' as const, offsetMs: -SHEPHERD_LEASE_STALE_AFTER_MS },
             publications: out('read-in-flight-publications'),
             commissions: out('read-in-flight-commissions'),
             budget: runInput('attemptBudget'),
@@ -775,9 +1036,12 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
               folder: bind('folder'),
               candidates: bind('candidates'),
               pr: bind('pr'),
+              identity: bind('identity'),
               checks: bind('checks'),
-              handoff: bind('handoff'),
+              handoff: handoffValue('handoff'),
               lease: bind('lease'),
+              leaseOwner: bind('leaseOwner'),
+              staleBefore: bind('staleBefore'),
               publications: bind('publications'),
               commissions: bind('commissions'),
               budget: { $firstOf: [bind('budget'), SHEPHERD_ATTEMPT_BUDGET_DEFAULT] },
@@ -791,49 +1055,8 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
           ],
         },
 
-        {
-          taskId: 'lease',
-          name: 'Take the lease on the branch',
-          goal: "Write the branch's lease in the space's memory before anything is commissioned, holding the check run and head this pass acts on. It is created, never overwritten, so a second pass on the same branch fails here with nothing done.",
-          type: 'operation' as const,
-          operation: 'memory.store.put',
-          when: DECIDED_FIX,
-          // Not optional: a lease another pass took first ends this one, and
-          // only the pass that holds a lease releases it.
-          retryability: 'safe' as const,
-          maxAttempts: 1,
-          failureInstruction:
-            'The lease on this branch could not be created — most often because another pass took it first, which is the lease doing its job. Nothing was commissioned or published by this pass.',
-          inputBindings: {
-            ...REPOSITORY,
-            ...NUMBER,
-            ...HEAD_REF,
-            headSha: out('read-pr', 'data.headSha'),
-            checkRunId: out('read-pr-checks', 'data.firstFailing.id'),
-            attempt: out('read-pr-handoff', 'data.nextAttemptCount'),
-          },
-          context: ctx('memory.store.put'),
-          inputTemplate: {
-            path: LEASE_PATH,
-            writeMode: 'create',
-            docType: 'json',
-            mimeType: 'application/json',
-            indexing: 'disabled',
-            summary: 'The Local PR Shepherd is acting on this branch.',
-            content: {
-              inlineJson: {
-                pullNumber: bind('number'),
-                headSha: bind('headSha'),
-                checkRunId: bind('checkRunId'),
-                attempt: bind('attempt'),
-              },
-            },
-          },
-          outputProjection: {
-            path: { path: 'path', onMissing: 'error' as const },
-            lease: { fromInput: 'content' },
-          },
-        },
+        leaseTask('lease'),
+        leaseTask('lease-takeover'),
 
         {
           taskId: 'read-failure',
@@ -841,7 +1064,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
           goal: 'List the jobs of the Actions run the failing check belongs to, and keep those that failed, each with the steps that failed.',
           type: 'operation' as const,
           operation: 'api.http.call',
-          dependsOn: ['lease'],
+          dependsOn: [...LEASE_TAKERS],
           when: {
             allOf: [
               DECIDED_FIX.expression,
@@ -872,7 +1095,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
           goal: "Ask the space's decision model which remedy the red check wants, from the failing jobs' names and the end of their logs, the pull request's title and description, and the record of earlier attempts. A confident answer takes its remedy; any other takes the fix commission.",
           type: 'operation' as const,
           operation: 'ai.decision.decide',
-          dependsOn: ['lease'],
+          dependsOn: [...LEASE_TAKERS],
           when: DECIDED_FIX,
           // A decision that could not be made leaves the remedies skipped and
           // the pass recorded; the lease is still released.
@@ -930,7 +1153,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
           goal: 'Re-run the failed jobs of the Actions run the failing check belongs to, as a new attempt on the same commit, for a failure that was the machine and not the change.',
           type: 'operation' as const,
           operation: 'api.http.call',
-          dependsOn: ['lease'],
+          dependsOn: [...LEASE_TAKERS],
           optional: true,
           retryability: 'unsafe' as const,
           maxAttempts: 1,
@@ -1020,11 +1243,19 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
           type: 'operation' as const,
           operation: 'memory.store.delete',
           dependsOn: LEASED_WORK,
-          when: { expression: "tasks.lease.status == 'succeeded'", onMissingRef: SKIP },
+          when: LEASE_HELD,
           retryability: 'safe' as const,
-          inputBindings: { leasePath: out('lease', 'path') },
+          inputBindings: leaseBindings('leasePath', 'path'),
           context: ctx('memory.store.delete'),
-          inputTemplate: { target: { path: bind('leasePath') } },
+          inputTemplate: {
+            target: {
+              path: {
+                $firstOf: LEASE_TAKERS.map((taskId) =>
+                  bind(`leasePath_${taskId.replace(/-/g, '_')}`),
+                ),
+              },
+            },
+          },
         },
 
         {
@@ -1059,15 +1290,40 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
           retryability: 'safe' as const,
           inputBindings: {
             ...HANDOFF_BINDINGS,
-            commentId: out('read-pr-handoff', 'data.commentId'),
+            ...handoffBindings('commentId', 'data.commentId'),
           },
           context: ctx('api.http.call'),
           inputTemplate: github('updateIssueComment', {
             owner: bind('owner'),
             repo: bind('repo'),
-            comment_id: bind('commentId'),
+            comment_id: handoffValue('commentId'),
             body: { body: HANDOFF_BODY },
           }),
+        },
+
+        {
+          taskId: 'remember-handoff',
+          name: 'Pin the handoff',
+          goal: "Keep the id of the handoff comment just posted beside the branch's lease, so the next pass reads it by its id however long the conversation grows.",
+          type: 'operation' as const,
+          operation: 'memory.store.put',
+          when: { expression: 'tasks.handoff.output.statusCode == 201', onMissingRef: SKIP },
+          retryability: 'safe' as const,
+          inputBindings: {
+            ...REPOSITORY,
+            ...HEAD_REF,
+            commentId: out('handoff', 'data.id'),
+          },
+          context: ctx('memory.store.put'),
+          inputTemplate: {
+            path: HANDOFF_POINTER_PATH,
+            writeMode: 'upsert',
+            docType: 'json',
+            mimeType: 'application/json',
+            indexing: 'disabled',
+            summary: 'The Local PR Shepherd’s handoff comment on this branch’s pull request.',
+            content: { inlineJson: { commentId: bind('commentId') } },
+          },
         },
       ]),
       stateVariables: [

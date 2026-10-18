@@ -226,10 +226,12 @@ function deriveInputContract(
         // so a future binding kind can never be silently dropped here.
         break;
       }
-      case 'learning_set': {
+      case 'learning_set':
+      case 'run_id':
+      case 'clock': {
         // Resolved at DISPATCH by the platform (active-learning-set selector over
-        // the run's skill/campaign) — like connection_binding, no entry in the
-        // flat input contract.
+        // the run's skill/campaign; the run's own id; the dispatch time) — like
+        // connection_binding, no entry in the flat input contract.
         break;
       }
       default: {

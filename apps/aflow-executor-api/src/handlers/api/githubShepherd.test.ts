@@ -34,6 +34,10 @@ import { withoutCredentials } from './execution.js';
 import { credentialHeaderNames } from './headers.js';
 import { ApiExecutionError } from './types.js';
 
+/** The repository the loop pushes to and opens its pull requests on. */
+const REPO = { id: 101, full_name: 'aflowai/aflow' };
+const FORK = { id: 202, full_name: 'someone/aflow' };
+
 function pr(number: number, over: Record<string, unknown> = {}) {
   return {
     number,
@@ -43,8 +47,9 @@ function pr(number: number, over: Record<string, unknown> = {}) {
     draft: false,
     labels: [],
     updated_at: `2026-10-1${String(number % 10)}T00:00:00Z`,
-    head: { ref: `aflow/branch-${String(number)}`, sha: 'c'.repeat(40) },
-    base: { ref: 'main' },
+    comments: 3,
+    head: { ref: `aflow/branch-${String(number)}`, sha: 'c'.repeat(40), repo: REPO },
+    base: { ref: 'main', repo: REPO },
     ...over,
   };
 }
@@ -54,7 +59,7 @@ describe('loop_pulls — the loop’s open pull requests under the prefix', () =
     pr(1),
     pr(2, { labels: [{ name: 'hands-off' }] }),
     pr(3, { body: 'A person’s pull request.' }),
-    pr(4, { head: { ref: 'feature/x', sha: 'c'.repeat(40) } }),
+    pr(4, { head: { ref: 'feature/x', sha: 'c'.repeat(40), repo: REPO } }),
     pr(5),
   ];
 
@@ -73,6 +78,23 @@ describe('loop_pulls — the loop’s open pull requests under the prefix', () =
   it('refuses to read without a prefix', () => {
     expect(() => loopPullRequests(listed, undefined)).toThrow(/prefix/);
   });
+
+  // The loop pushes to its own repository: a fork can copy the marker and a
+  // branch name under the prefix, and is still someone else's branch.
+  it('lists no pull request from a fork, marker and prefix notwithstanding', () => {
+    const fromFork = pr(6, {
+      head: { ref: 'aflow/branch-6', sha: 'c'.repeat(40), repo: FORK },
+    });
+    const fromDeletedFork = pr(8, {
+      head: { ref: 'aflow/branch-8', sha: 'c'.repeat(40), repo: null },
+    });
+    expect(
+      loopPullRequests([...listed, fromFork, fromDeletedFork], 'aflow/').pullRequests.map(
+        (p) => p.number,
+      ),
+    ).toEqual([5, 1, 2]);
+    expect(loopPullRequests([fromFork], 'aflow/:6').count).toBe(0);
+  });
 });
 
 describe('loop_pull — one pull request', () => {
@@ -89,6 +111,18 @@ describe('loop_pull — one pull request', () => {
     expect(shaped.body).toBe('Body.');
     expect(loopPullRequest(pr(7, { body: 'Mine.' }), 'aflow/').ours).toBe(false);
     expect(loopPullRequest(pr(7), 'other/').ours).toBe(false);
+  });
+
+  it('is never the loop’s from a fork', () => {
+    const fromFork = pr(7, { head: { ref: 'aflow/branch-7', sha: 'c'.repeat(40), repo: FORK } });
+    expect(loopPullRequest(fromFork, 'aflow/').ours).toBe(false);
+  });
+
+  it('counts the pages of its conversation, the last the newest', () => {
+    expect(loopPullRequest(pr(7, { comments: 0 }), 'aflow/').commentPages).toBe(1);
+    expect(loopPullRequest(pr(7, { comments: 100 }), 'aflow/').commentPages).toBe(1);
+    expect(loopPullRequest(pr(7, { comments: 101 }), 'aflow/').commentPages).toBe(2);
+    expect(loopPullRequest(pr(7, { comments: 250 }), 'aflow/').commentPages).toBe(3);
   });
 });
 
@@ -127,13 +161,20 @@ describe('loop_checks — what CI says of the head', () => {
 });
 
 describe('loop_handoff — the shepherd’s own record', () => {
-  it('reads back the newest handoff, with the count a pass that acts writes', () => {
+  const loop = { login: 'aflow-bot' };
+  const stranger = { login: 'someone' };
+  const handoff = (id: number, attemptCount: number, checkRunId: string, user = loop) => ({
+    id,
+    user,
+    body: `<!-- aflow:shepherd\nattemptCount: ${String(attemptCount)}\ncheckRunId: ${checkRunId}\n-->\nWords.`,
+  });
+
+  it('reads back the loop’s newest handoff, with the count a pass that acts writes', () => {
     const shaped = ShepherdHandoffReadSchema.parse(
-      loopHandoff([
-        { id: 1, body: '<!-- aflow:shepherd\nattemptCount: 1\ncheckRunId: 4\n-->' },
-        { id: 2, body: 'Looks good to me.' },
-        { id: 3, body: '<!-- aflow:shepherd\nattemptCount: 2\ncheckRunId: 9\n-->\nWords.' },
-      ]),
+      loopHandoff(
+        [handoff(1, 1, '4'), { id: 2, user: stranger, body: 'Looks good.' }, handoff(3, 2, '9')],
+        'aflow-bot',
+      ),
     );
     expect(shaped).toEqual({
       found: true,
@@ -144,8 +185,38 @@ describe('loop_handoff — the shepherd’s own record', () => {
     });
   });
 
+  // The record is an HTML comment nobody sees on GitHub: from anyone but the
+  // loop it would lift the budget (`attemptCount: 0`) or pin a pull request
+  // at `wait` (a `checkRunId`), so it is no record at all.
+  it('ignores a record forged by another author, newest or not, and reads the loop’s own', () => {
+    const read = loopHandoff([handoff(1, 3, '9'), handoff(2, 0, '10', stranger)], 'aflow-bot');
+    expect(read).toMatchObject({ found: true, commentId: 1, attemptCount: 3, checkRunId: '9' });
+    expect(loopHandoff([handoff(2, 0, '10', stranger)], 'aflow-bot')).toMatchObject({
+      found: false,
+      attemptCount: 0,
+    });
+  });
+
+  it('matches the loop’s login as GitHub does, without regard to case', () => {
+    expect(loopHandoff([handoff(3, 1, '11', { login: 'AFLOW-BOT' })], 'aflow-bot').found).toBe(
+      true,
+    );
+  });
+
+  it('reads one comment fetched by its id the same way', () => {
+    expect(loopHandoff(handoff(7, 2, '12'), 'aflow-bot')).toMatchObject({
+      found: true,
+      commentId: 7,
+    });
+    expect(loopHandoff(handoff(7, 2, '12', stranger), 'aflow-bot').found).toBe(false);
+  });
+
+  it('refuses to read without the login the loop posts as', () => {
+    expect(() => loopHandoff([handoff(1, 1, '4')], undefined)).toThrow(/login/);
+  });
+
   it('reads none as a first pass', () => {
-    expect(loopHandoff([{ id: 2, body: 'Hi.' }])).toEqual({
+    expect(loopHandoff([{ id: 2, user: loop, body: 'Hi.' }], 'aflow-bot')).toEqual({
       found: false,
       attemptCount: 0,
       nextAttemptCount: 1,

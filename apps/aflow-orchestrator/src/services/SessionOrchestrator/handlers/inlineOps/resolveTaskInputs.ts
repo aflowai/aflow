@@ -60,6 +60,9 @@ export interface ResolveTaskInputsContext {
    * to `''` when the set is empty.
    */
   resolveLearningSet?: (args: { taskId: string }) => Promise<string>;
+
+  /** The clock `clock` bindings read, in epoch milliseconds; `Date.now` when absent. */
+  now?: () => number;
 }
 
 /** Sentinel returned by `resolveOneBinding` to signal "omit this property". */
@@ -246,6 +249,12 @@ async function resolveOneBinding(
       }
       return ctx.connectionBindingId;
     }
+
+    case 'run_id':
+      return ctx.run.runId;
+
+    case 'clock':
+      return (ctx.now ?? Date.now)() + (binding.offsetMs ?? 0);
 
     case 'learning_set': {
       if (!ctx.resolveLearningSet) {

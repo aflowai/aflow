@@ -170,6 +170,36 @@ export const GITHUB_CONNECTOR: ConnectorCatalogEntry = {
         tags: ['pull-requests'],
       },
       {
+        endpointId: 'getAuthenticatedUser',
+        name: 'Get the authenticated user',
+        description:
+          'The account the token acts as — its login is the author of every comment and pull request the connection posts, so a record the connection wrote is told from one anyone could write.',
+        method: 'GET',
+        pathTemplate: '/user',
+        params: [],
+        tags: ['users'],
+      },
+      {
+        endpointId: 'getIssueComment',
+        name: 'Get issue comment',
+        description:
+          'One comment on an issue or pull request, by its id, wherever it sits in the conversation.',
+        method: 'GET',
+        pathTemplate: '/repos/{owner}/{repo}/issues/comments/{comment_id}',
+        params: [
+          ownerParam,
+          repoParam,
+          {
+            name: 'comment_id',
+            location: 'path',
+            required: true,
+            description: 'The id of the comment.',
+            schema: { type: 'integer' },
+          },
+        ],
+        tags: ['comments'],
+      },
+      {
         endpointId: 'getRepository',
         name: 'Get repository',
         description:
@@ -447,6 +477,14 @@ export const GITHUB_CONNECTOR: ConnectorCatalogEntry = {
             schema: { type: 'integer' },
           },
           perPageParam,
+          {
+            name: 'page',
+            location: 'query',
+            required: false,
+            description:
+              'Which page, from 1, oldest first: the last page — the comment count divided by per_page, rounded up — holds the newest.',
+            schema: { type: 'integer' },
+          },
         ],
         tags: ['pull-requests', 'comments'],
       },

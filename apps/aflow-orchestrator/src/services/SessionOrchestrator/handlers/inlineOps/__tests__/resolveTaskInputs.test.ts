@@ -425,6 +425,25 @@ describe('resolveTaskInputs — learning_set bindings', () => {
   });
 });
 
+describe('resolveTaskInputs — run_id and clock bindings', () => {
+  it('names the run the task belongs to, so a record it leaves says whose it is', async () => {
+    const task = { ...baseOpTask, inputBindings: { owner: { kind: 'run_id' } } } as WorkflowTask;
+    await expect(resolveTaskInputs(task, { run: makeRun([]) })).resolves.toEqual({
+      owner: RUN_ID,
+    });
+  });
+
+  it('reads the dispatch time, shifted by its offset, so a cut-off is a value to compare', async () => {
+    const task = {
+      ...baseOpTask,
+      inputBindings: { at: { kind: 'clock' }, before: { kind: 'clock', offsetMs: -1000 } },
+    } as WorkflowTask;
+    await expect(resolveTaskInputs(task, { run: makeRun([]), now: () => 50_000 })).resolves.toEqual(
+      { at: 50_000, before: 49_000 },
+    );
+  });
+});
+
 describe('resolveTaskInputs — no bindings short-circuit', () => {
   it('returns task.inputs untouched when no bindings are declared', async () => {
     const task = {

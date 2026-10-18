@@ -70,6 +70,21 @@ function carriesMarker(body: unknown): boolean {
   return typeof body === 'string' && body.includes(LOCAL_PUBLISH_PULL_REQUEST_MARKER);
 }
 
+/**
+ * Whether a head and a base are one repository. The loop pushes its branches
+ * to the repository it opens pull requests on, so a head in a fork — or in a
+ * fork since deleted, which GitHub answers as no repository — is someone
+ * else's branch, whatever its name and whatever its body says.
+ */
+function sameRepository(head: unknown, base: unknown): boolean {
+  if (head === null || typeof head !== 'object' || base === null || typeof base !== 'object') {
+    return false;
+  }
+  const headId = (head as Json)['id'];
+  const baseId = (base as Json)['id'];
+  return typeof headId === 'number' && headId === baseId;
+}
+
 interface PullRequestFields {
   number: number;
   title: string;
@@ -78,6 +93,9 @@ interface PullRequestFields {
   headSha: string;
   baseRef: string;
   handsOff: boolean;
+  updatedAt: string;
+  /** Its head branch is in the repository it targets, not a fork. */
+  fromBaseRepository: boolean;
 }
 
 function pullRequestFields(value: unknown): PullRequestFields {
@@ -92,6 +110,8 @@ function pullRequestFields(value: unknown): PullRequestFields {
     headSha: text(head['sha'], 'its head sha'),
     baseRef: text(base['ref'], 'its base branch'),
     handsOff: labelled(pr, SHEPHERD_HANDS_OFF_LABEL),
+    updatedAt: typeof pr['updated_at'] === 'string' ? pr['updated_at'] : '',
+    fromBaseRepository: sameRepository(head['repo'], base['repo']),
   };
 }
 
@@ -111,16 +131,16 @@ export function loopPullRequests(body: unknown, arg: string | undefined): LoopPu
   );
   const pullRequests: LoopPullRequestSummary[] = list(body, 'the pull requests')
     .filter((value) => carriesMarker(record(value, 'a pull request')['body']))
-    .map((value) => {
-      const fields = pullRequestFields(value);
-      const updatedAt = record(value, 'a pull request')['updated_at'];
+    .map((value) => pullRequestFields(value))
+    .filter((fields) => fields.fromBaseRepository)
+    .map((fields) => {
       return {
         number: fields.number,
         title: fields.title,
         headRef: fields.headRef,
         headSha: fields.headSha,
         baseRef: fields.baseRef,
-        updatedAt: typeof updatedAt === 'string' ? updatedAt : '',
+        updatedAt: fields.updatedAt,
         handsOff: fields.handsOff,
       };
     })
@@ -152,9 +172,10 @@ export function loopPullRequest(body: unknown, arg: string | undefined): LoopPul
     headRef: fields.headRef,
     headSha: fields.headSha,
     baseRef: fields.baseRef,
-    ours: carriesMarker(raw) && fields.headRef.startsWith(prefix),
+    ours: carriesMarker(raw) && fields.fromBaseRepository && fields.headRef.startsWith(prefix),
     handsOff: fields.handsOff,
     draft: pr['draft'] === true,
+    commentPages: Math.max(1, Math.ceil(nonNegative(pr['comments']) / COMMENTS_PER_PAGE)),
     ...(typeof mergeableState === 'string' ? { mergeableState } : {}),
   };
 }
@@ -209,11 +230,42 @@ export function loopCheckRuns(body: unknown): CheckRunsSummary {
   };
 }
 
-/** `listIssueComments` → the newest handoff the shepherd left, read back as its record. */
-export function loopHandoff(body: unknown): ShepherdHandoffRead {
-  const comments = list(body, 'the comments').map((value) => record(value, 'a comment'));
+/** The page size the shepherd reads a conversation in: GitHub's largest. */
+export const COMMENTS_PER_PAGE = 100;
+
+function nonNegative(value: unknown): number {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : 0;
+}
+
+/**
+ * Who wrote a comment, by login. GitHub logins are matched without regard to
+ * case, as GitHub matches them.
+ */
+function authoredBy(comment: Json, login: string): boolean {
+  const user = comment['user'];
+  if (user === null || typeof user !== 'object') return false;
+  const author = (user as Json)['login'];
+  return typeof author === 'string' && author.toLowerCase() === login.toLowerCase();
+}
+
+/**
+ * `listIssueComments` (or `getIssueComment`, for the one a pass pinned) → the
+ * newest handoff the loop itself left, read back as its record. The record
+ * sits in an HTML comment no one sees on GitHub, so it is trusted only from
+ * the login the connection posts as, given after the colon: a comment by any
+ * other author is never the record, marker or no marker — a forged count
+ * would lift the budget, a forged check run hold the pull request at `wait`.
+ */
+export function loopHandoff(body: unknown, login: string | undefined): ShepherdHandoffRead {
+  if (login === undefined || login === '') {
+    throw new Error(
+      `${SHEPHERD_RESPONSE_PRESETS.handoff} reads only the loop's own comments: give the login it posts as after a colon`,
+    );
+  }
+  const comments = (Array.isArray(body) ? body : [body]).map((value) => record(value, 'a comment'));
   for (let i = comments.length - 1; i >= 0; i -= 1) {
     const comment = comments[i]!;
+    if (!authoredBy(comment, login)) continue;
     const parsed =
       typeof comment['body'] === 'string' ? parseShepherdHandoff(comment['body']) : null;
     if (parsed === null) continue;
@@ -293,6 +345,6 @@ export const SHEPHERD_RECORD_PRESETS: Record<
   [SHEPHERD_RESPONSE_PRESETS.pullRequests]: loopPullRequests,
   [SHEPHERD_RESPONSE_PRESETS.pullRequest]: loopPullRequest,
   [SHEPHERD_RESPONSE_PRESETS.checkRuns]: (body) => loopCheckRuns(body),
-  [SHEPHERD_RESPONSE_PRESETS.handoff]: (body) => loopHandoff(body),
+  [SHEPHERD_RESPONSE_PRESETS.handoff]: loopHandoff,
   [SHEPHERD_RESPONSE_PRESETS.failingJobs]: (body) => loopFailingJobs(body),
 };
