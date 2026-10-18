@@ -12,6 +12,7 @@ import {
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import {
   AnimatedHeight,
+  Button,
   Column,
   EmptyState,
   Icon,
@@ -30,8 +31,11 @@ import type {
 } from '@aflow/schemas';
 import { AppPageHeader } from '../components/app-page-header.js';
 import { MarkdownRenderer } from '../components/markdown-renderer.js';
+import { useSpace } from '../components/providers.js';
 import { useApiQuery } from '../hooks/useApiQuery.js';
+import { useSpaceLlmReadiness } from '../hooks/useSpaceLlmReadiness.js';
 import { HELP_THEME_LABELS, HELP_THEME_ORDER } from '../lib/helpThemes.js';
+import { spaceRoute } from '../lib/space-routes.js';
 
 // Articles change only with a deploy, so a page visit never needs a refetch.
 const HELP_STALE_TIME_MS = 60 * 60 * 1000;
@@ -274,9 +278,12 @@ function HelpIndex({
             </Row>
           )}
           {!search.isLoading && results.length === 0 && (
-            <Text size="sm" variant="muted" style={{ padding: 'var(--space-2) var(--space-3)' }}>
-              No answers match. Try other words.
-            </Text>
+            <Column gap="sm" style={{ padding: 'var(--space-2) var(--space-3)' }}>
+              <Text size="sm" variant="muted">
+                No answers match. Try other words.
+              </Text>
+              <AskHelmsman draft={searchQuery} />
+            </Column>
           )}
           {results.map((article) => (
             <IndexButton
@@ -488,6 +495,35 @@ function HelpArticleBody({
           ))}
         </Column>
       )}
+      <AskHelmsman
+        draft={`About the help answer "${data.article.question}" (/help/${data.article.id}): `}
+      />
     </Column>
+  );
+}
+
+/**
+ * Hands a question to the Helmsman of the space the operator is in, as a draft
+ * they finish and send. Absent until that space's models are ready: help is
+ * read here before a provider exists, and a chat that cannot answer is not help.
+ */
+function AskHelmsman({ draft }: { draft: string }): ReactElement | null {
+  const router = useRouter();
+  const { activeSpace } = useSpace();
+  const { readiness } = useSpaceLlmReadiness(activeSpace?.id ?? null);
+  if (activeSpace === null || readiness?.ready !== true) return null;
+  return (
+    <Row>
+      <Button
+        variant="secondary"
+        size="sm"
+        leftIcon={<Icon name="chat" size={14} />}
+        onClick={() => {
+          router.push(spaceRoute(activeSpace.slug, `/chat?draft=${encodeURIComponent(draft)}`));
+        }}
+      >
+        Ask the Helmsman
+      </Button>
+    </Row>
   );
 }

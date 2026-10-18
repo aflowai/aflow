@@ -164,6 +164,10 @@ export const HELMSMAN_DISCOVERY_PRESET: readonly string[] = [
   'mcp.binding.delete',
   'mcp.tool.list',
   'mcp.tool.discover',
+  // help — the platform's own answers about itself (Plan 325 D5): promoted
+  // when the operator asks about the product, never pinned.
+  'catalog.help.search',
+  'catalog.help.get',
   // store — acquire NEW capability from the curated catalog; search/get are
   // reads, install stages an operator-ratified proposal.
   'store.listing.search',
