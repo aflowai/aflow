@@ -109,3 +109,20 @@ export function createStreamScrubber(secret: string | undefined): {
     },
   };
 }
+
+/** Every secret a run holds, removed from text. */
+export function scrubSecrets(text: string, secrets: readonly string[]): string {
+  return secrets.reduce((scrubbed, secret) => scrubSecret(scrubbed, secret), text);
+}
+
+/** One stream scrubber per secret, each feeding the next. */
+export function createSecretsScrubber(secrets: readonly string[]): {
+  push: (chunk: string) => string;
+  flush: () => string;
+} {
+  const chain = secrets.map((secret) => createStreamScrubber(secret));
+  return {
+    push: (chunk) => chain.reduce((text, scrubber) => scrubber.push(text), chunk),
+    flush: () => chain.reduce((text, scrubber) => scrubber.push(text) + scrubber.flush(), ''),
+  };
+}

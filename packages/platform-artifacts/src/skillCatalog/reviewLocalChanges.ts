@@ -224,6 +224,13 @@ const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
           description: `The harness turn budget that makes a brief review brief: ${String(BRIEF_MAX_TURNS)}, with depth "brief". Omit it at "standard" and "deep", which read the range through.`,
           schema: { type: 'integer', minimum: 1, maximum: BRIEF_MAX_TURNS },
         },
+        {
+          id: 'harness',
+          required: false,
+          description:
+            "Which coding agent reviews, by the id the operator configured on the machine. Absent, the space's preferred coding agent, else the machine's default, each where installed; name one only to have a different agent review, such as a second opinion from another.",
+          schema: { type: 'string', minLength: 1 },
+        },
       ],
       tasks: [
         {
@@ -240,6 +247,7 @@ const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
             focus: { kind: 'run_input' as const, path: 'focus' },
             depth: { kind: 'run_input' as const, path: 'depth' },
             maxTurns: { kind: 'run_input' as const, path: 'maxTurns' },
+            harness: { kind: 'run_input' as const, path: 'harness' },
           },
           context: {
             strategy: 'scoped' as const,
@@ -252,6 +260,7 @@ const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
           },
           inputTemplate: {
             bindingId: { $bind: 'bindingId' },
+            harness: { $bind: 'harness' },
             base: { $bind: 'at' },
             task: REVIEW_TASK,
             inputs: {

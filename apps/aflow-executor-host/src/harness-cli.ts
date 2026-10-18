@@ -11,7 +11,8 @@
  * reaches a telemetry sink and a package registry alongside its model API
  * should be a thing the operator sees and decides about, not a default.
  */
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir, readFile, realpath } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 
 import { resolveBranchPolicy } from '@aflow/schemas';
@@ -21,12 +22,8 @@ import { stackPortWarning, parseLocalPorts } from './browserLocalPorts.js';
 import { LocalMcpServerSchema } from './localMcpServers.js';
 import { describeHarnessConcurrency, withHarnessConcurrency } from './harnessConcurrency.js';
 import { describePolicyKeepAwake, withKeepAwake } from './keepAwake.js';
-import { discoverHarnesses, knownMcpArgs } from './harnessDiscovery.js';
-import {
-  HarnessProfileSchema,
-  MCP_CONFIG_PLACEHOLDER,
-  type HarnessProfile,
-} from './harnessProfiles.js';
+import { discoverHarnesses, knownMcp } from './harnessDiscovery.js';
+import { HarnessProfileSchema, mcpPlaceholder, type HarnessProfile } from './harnessProfiles.js';
 import { resolveHostPolicyPath } from './hostDir.js';
 import { editPolicy } from './policyFile.js';
 import { checksChangeFromArgs, describeChecks, withChecks } from './folderChecks.js';
@@ -42,6 +39,8 @@ function usage(): never {
       '  harness list                       What is installed here, and what is configured.\n' +
       '  harness add <id> [options]         Allow a discovered harness to run.\n' +
       '  harness allow <id> <host>...       Let a harness reach these hosts.\n' +
+      '  harness default <id>               Run this harness when a task names none.\n' +
+      '  harness default --clear            Run the first installed one instead.\n' +
       '  harness model <id> <model>         Run this model when a task names none.\n' +
       "  harness model <id> --clear         Run the harness's own default instead.\n" +
       '  harness browser <id> [<arg>...]    How it is handed a browser: the arguments that pass\n' +
@@ -216,6 +215,9 @@ async function list(): Promise<void> {
   console.log('Configured on this machine:');
   if (policy.harnesses.length === 0) console.log('  (none)');
   else for (const profile of policy.harnesses) console.log(describe(profile));
+  if (policy.defaultHarness !== undefined) {
+    console.log(`A task that names no harness runs \`${policy.defaultHarness}\`.`);
+  }
   console.log(`This machine ${describeHarnessConcurrency(policy)}.`);
   console.log(`This machine ${describePolicyKeepAwake(policy)}.`);
 
@@ -292,12 +294,18 @@ async function add(id: string): Promise<void> {
           turnsArgs: discovered.suggested.turnsArgs,
           modelArgs: discovered.suggested.modelArgs,
           mcpArgs: discovered.suggested.mcpArgs,
+          mcpFormat: discovered.suggested.mcpFormat,
           sessionArgs: discovered.suggested.sessionArgs,
           resumeArgs: discovered.suggested.resumeArgs,
           authPaths: discovered.suggested.authPaths,
           writePaths: discovered.suggested.writePaths,
           ...(discovered.suggested.configDirEnv !== undefined
             ? { configDirEnv: discovered.suggested.configDirEnv }
+            : {}),
+          configSeed: discovered.suggested.configSeed,
+          env: discovered.suggested.env,
+          ...(discovered.suggested.configSeedRefreshAgeMs !== undefined
+            ? { configSeedRefreshAgeMs: discovered.suggested.configSeedRefreshAgeMs }
             : {}),
         }
       : {}),
@@ -326,7 +334,10 @@ async function add(id: string): Promise<void> {
       if (profile.credential === undefined && existing.credential !== undefined) {
         profile.credential = existing.credential;
       }
-      if (profile.mcpArgs.length === 0) profile.mcpArgs = existing.mcpArgs;
+      if (profile.mcpArgs.length === 0) {
+        profile.mcpArgs = existing.mcpArgs;
+        profile.mcpFormat = existing.mcpFormat;
+      }
       if (model === undefined && existing.model !== undefined) {
         if (profile.modelArgs.length > 0) profile.model = existing.model;
         else {
@@ -337,11 +348,26 @@ async function add(id: string): Promise<void> {
       }
     }
     policy.harnesses = [...policy.harnesses.filter((h) => h.id !== id), profile];
+    // Recorded once there is a choice to make, as the harness runs already got:
+    // a machine that ran one harness keeps running it when a second arrives.
+    policy.defaultHarness ??= policy.harnesses[0]?.id;
     return policy;
   });
 
   console.log(`Configured \`${id}\`.`);
   console.log(describe(profile));
+  const home = homedir();
+  const installedUnder = dirname(dirname(await realpath(executable).catch(() => executable)));
+  const latest = await loadPolicy();
+  if (
+    installedUnder.startsWith(`${home}/`) &&
+    !latest.toolPaths.some((p) => installedUnder === p || installedUnder.startsWith(`${p}/`))
+  ) {
+    console.log(
+      `\nIt is installed under your home directory, which runs cannot read. Let them:\n` +
+        `  aflow harness tools ${installedUnder}`,
+    );
+  }
   if (profile.allowedDomains.length === 0) {
     console.log(
       '\nIt reaches nothing yet. Run it once — the run reports every host it was refused,\n' +
@@ -403,24 +429,32 @@ async function setMcpArgs(id: string, given: readonly string[]): Promise<void> {
     console.log(`\`${id}\` is handed no browser; a run asking for one is refused.`);
     return;
   }
-  const mcpArgs = given.length > 0 ? [...given] : knownMcpArgs(id);
-  if (mcpArgs === undefined) {
+  const known = knownMcp(id);
+  const current = configuredHarness(await loadPolicy(), id);
+  // Given arguments keep the profile's format; measured ones bring their own.
+  const format = given.length > 0 ? current.mcpFormat : known?.format;
+  const mcpArgs = given.length > 0 ? [...given] : known?.args;
+  if (mcpArgs === undefined || format === undefined) {
     console.error(
-      `No MCP arguments were measured for '${id}'. Give them, with ${MCP_CONFIG_PLACEHOLDER} ` +
-        `where the configuration file's path goes:\n  aflow harness browser ${id} <arg>...`,
+      `No MCP arguments were measured for '${id}'. Give them, with ` +
+        `${mcpPlaceholder(current)} where the configuration file's path goes:\n` +
+        `  aflow harness browser ${id} <arg>...`,
     );
     process.exit(1);
   }
-  const slots = mcpArgs.filter((arg) => arg === MCP_CONFIG_PLACEHOLDER).length;
+  const placeholder = mcpPlaceholder({ mcpFormat: format });
+  const slots = mcpArgs.filter((arg) => arg === placeholder).length;
   if (slots !== 1) {
     console.error(
-      `The arguments must carry ${MCP_CONFIG_PLACEHOLDER} exactly once, where the ` +
-        `configuration file's path goes; these carry it ${String(slots)} times.`,
+      `The arguments must carry ${placeholder} exactly once; these carry it ` +
+        `${String(slots)} times.`,
     );
     process.exit(1);
   }
   await changePolicy((policy) => {
-    configuredHarness(policy, id).mcpArgs = mcpArgs;
+    const profile = configuredHarness(policy, id);
+    profile.mcpArgs = mcpArgs;
+    profile.mcpFormat = format;
     return policy;
   });
   console.log(`\`${id}\` is handed a browser as: ${mcpArgs.join(' ')}`);
@@ -498,9 +532,30 @@ async function remove(id: string): Promise<void> {
       process.exit(1);
     }
     policy.harnesses = policy.harnesses.filter((h) => h.id !== id);
+    if (policy.defaultHarness === id) delete policy.defaultHarness;
     return policy;
   });
   console.log(`\`${id}\` will no longer run here.`);
+}
+
+async function setDefault(id: string): Promise<void> {
+  if (id === '--clear') {
+    await changePolicy((policy) => {
+      delete policy.defaultHarness;
+      return policy;
+    });
+    console.log('A task that names no harness now runs the first configured one installed.');
+    return;
+  }
+  await changePolicy((policy) => {
+    configuredHarness(policy, id);
+    policy.defaultHarness = id;
+    return policy;
+  });
+  console.log(
+    `A task that names no harness now runs \`${id}\`, or the first configured one ` +
+      'installed when it is not.',
+  );
 }
 
 async function main(): Promise<void> {
@@ -587,6 +642,10 @@ async function main(): Promise<void> {
   }
   if (command === 'sandbox') {
     await setSandbox(id, rest);
+    return;
+  }
+  if (command === 'default') {
+    await setDefault(id);
     return;
   }
   if (command === 'allow') {

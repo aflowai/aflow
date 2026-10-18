@@ -57,8 +57,13 @@ export interface HarnessSession {
   /** Scratch holding the clone and the harness's state directory. */
   readonly scratchDir: string;
   readonly configDir: string;
-  /** What the harness calls this conversation. Minted here, so it need not be parsed back out. */
-  readonly conversationId: string;
+  /**
+   * What the harness calls this conversation: minted here for a harness that
+   * takes an id, and recorded from its event stream for one that names its own
+   * (Plan 326 D2). Undefined until such a harness has said, and a session
+   * without one cannot be resumed — only started again in the same checkout.
+   */
+  conversationId: string | undefined;
   readonly baseSha: string;
   /**
    * The ref the checkout was started from, when a turn named one. A later turn

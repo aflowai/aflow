@@ -37,6 +37,11 @@ export interface HarnessEventReader {
    * short still reports an answer rather than nothing.
    */
   answer(): string;
+  /**
+   * The id the harness gave its conversation, for a harness that names its own
+   * rather than taking one (Plan 326 D2). Undefined until it says.
+   */
+  conversationId(): string | undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -158,6 +163,31 @@ function describeResult(event: Record<string, unknown>): string {
   return parts.length === 0 ? 'Finished' : `Finished in ${parts.join(' · ')}`;
 }
 
+/**
+ * The command a shell call ran, without the shell that ran it. Codex reports
+ * every command wrapped as `/bin/zsh -lc '<command>'`, and the wrapper is the
+ * same on every line of a feed.
+ */
+export function unwrapShellCommand(command: string): string {
+  const match = /^\S*sh -l?c (['"])([\s\S]*)\1$/.exec(command.trim());
+  return match?.[2] ?? command;
+}
+
+function describeUsage(event: Record<string, unknown>): string {
+  const usage = event['usage'];
+  if (!isRecord(usage)) return 'Finished';
+  const input = usage['input_tokens'];
+  const output = usage['output_tokens'];
+  if (typeof input !== 'number' || typeof output !== 'number') return 'Finished';
+  return `Finished · ${String(input)} tokens in · ${String(output)} out`;
+}
+
+function errorMessageOf(value: unknown): string | undefined {
+  if (typeof value === 'string' && value.trim() !== '') return value;
+  if (isRecord(value) && typeof value['message'] === 'string') return value['message'];
+  return undefined;
+}
+
 export function createHarnessEventReader(
   output: HarnessOutputFormat,
   onLine: (line: HarnessActivityLine) => void,
@@ -173,8 +203,21 @@ export function createHarnessEventReader(
   // call ran a command travels with it for the same reason.
   const toolCalls = new Map<string, { name: string; command: boolean }>();
   let lastIntent = '';
+  let conversation: string | undefined;
+  // A Codex item is reported when it starts and again when it completes. The
+  // call is narrated once, at whichever of the two arrives first.
+  const narratedItems = new Set<string>();
 
   const at = (): number => Math.max(0, Date.now() - startedAt);
+
+  const announceIntent = (intent: string | undefined): void => {
+    // A plan rewritten without moving on says nothing new, and repeating
+    // the same intent would date it as fresh news.
+    if (intent !== undefined && intent !== lastIntent) {
+      lastIntent = intent;
+      onLine({ kind: 'intent', at: at(), text: intent });
+    }
+  };
 
   const plain = (line: string): void => {
     const text = line.trim();
@@ -209,13 +252,7 @@ export function createHarnessEventReader(
           text: summarizeToolUse(name, input),
           ...(changes !== undefined ? { changes } : {}),
         });
-        // A plan rewritten without moving on says nothing new, and repeating
-        // the same intent would date it as fresh news.
-        const intent = intentOf(input);
-        if (intent !== undefined && intent !== lastIntent) {
-          lastIntent = intent;
-          onLine({ kind: 'intent', at: at(), text: intent });
-        }
+        announceIntent(intentOf(input));
       }
     }
   };
@@ -273,8 +310,141 @@ export function createHarnessEventReader(
     }
   };
 
+  const narrateCodexCall = (id: string, line: HarnessActivityLine): void => {
+    if (narratedItems.has(id)) return;
+    narratedItems.add(id);
+    onLine(line);
+  };
+
+  const readCodexItem = (item: Record<string, unknown>, completed: boolean): void => {
+    const id = typeof item['id'] === 'string' ? item['id'] : '';
+    switch (item['type']) {
+      case 'agent_message': {
+        const text = item['text'];
+        if (!completed || typeof text !== 'string' || text.trim() === '') return;
+        lastSaid = text.trim();
+        onLine({ kind: 'thought', at: at(), text: lastSaid.slice(0, NARRATION_MAX) });
+        return;
+      }
+      case 'command_execution': {
+        const raw = item['command'];
+        const command = typeof raw === 'string' ? unwrapShellCommand(raw) : '';
+        narrateCodexCall(id, {
+          kind: 'tool',
+          at: at(),
+          tool: 'shell',
+          text: summarizeToolUse('shell', { command }),
+        });
+        if (!completed) return;
+        onLine({
+          kind: 'tool_result',
+          at: at(),
+          tool: 'shell',
+          ok: item['exit_code'] === 0,
+          text: summarizeToolResult(item['aggregated_output']),
+          command: true,
+        });
+        return;
+      }
+      case 'file_change': {
+        if (!completed || !Array.isArray(item['changes'])) return;
+        for (const change of item['changes']) {
+          if (!isRecord(change) || typeof change['path'] !== 'string') continue;
+          const path = clip(change['path'], SUMMARY_MAX);
+          const kind = typeof change['kind'] === 'string' ? change['kind'] : 'update';
+          onLine({ kind: 'tool', at: at(), tool: 'edit', text: `${kind} ${path}`, changes: path });
+        }
+        return;
+      }
+      case 'mcp_tool_call': {
+        const server = typeof item['server'] === 'string' ? item['server'] : 'mcp';
+        const tool = `${server}.${typeof item['tool'] === 'string' ? item['tool'] : 'tool'}`;
+        narrateCodexCall(id, {
+          kind: 'tool',
+          at: at(),
+          tool,
+          text: summarizeToolUse(tool, item['arguments']),
+        });
+        if (!completed) return;
+        const failed = errorMessageOf(item['error']);
+        const result = item['result'];
+        onLine({
+          kind: 'tool_result',
+          at: at(),
+          tool,
+          ok: failed === undefined && item['status'] !== 'failed',
+          text:
+            failed !== undefined
+              ? clip(failed, SUMMARY_MAX)
+              : summarizeToolResult(isRecord(result) ? result['content'] : undefined),
+        });
+        return;
+      }
+      case 'web_search': {
+        narrateCodexCall(id, {
+          kind: 'tool',
+          at: at(),
+          tool: 'web_search',
+          text: summarizeToolUse('web_search', { query: item['query'] }),
+        });
+        return;
+      }
+      case 'todo_list': {
+        if (!Array.isArray(item['items'])) return;
+        const next = item['items'].find(
+          (entry): entry is Record<string, unknown> =>
+            isRecord(entry) && entry['completed'] !== true && typeof entry['text'] === 'string',
+        );
+        if (next !== undefined) announceIntent(clip(String(next['text']), SUMMARY_MAX));
+        return;
+      }
+      case 'error': {
+        const message = errorMessageOf(item['message']);
+        if (completed && message !== undefined) {
+          onLine({ kind: 'status', at: at(), text: clip(message, SUMMARY_MAX) });
+        }
+        return;
+      }
+      default:
+        return;
+    }
+  };
+
+  const readCodexEvent = (event: Record<string, unknown>): void => {
+    switch (event['type']) {
+      case 'thread.started': {
+        const id = event['thread_id'];
+        if (typeof id === 'string' && id !== '') conversation = id;
+        onLine({ kind: 'status', at: at(), text: 'Harness started' });
+        return;
+      }
+      case 'item.started':
+      case 'item.updated':
+      case 'item.completed': {
+        const item = event['item'];
+        if (isRecord(item)) readCodexItem(item, event['type'] === 'item.completed');
+        return;
+      }
+      case 'turn.completed':
+        onLine({ kind: 'status', at: at(), text: describeUsage(event) });
+        return;
+      case 'turn.failed':
+      case 'error': {
+        const message = errorMessageOf(event['error']) ?? errorMessageOf(event['message']);
+        onLine({
+          kind: 'status',
+          at: at(),
+          text: clip(`Failed: ${message ?? 'the harness reported an error'}`, SUMMARY_MAX),
+        });
+        return;
+      }
+      default:
+        return;
+    }
+  };
+
   const readLine = (line: string): void => {
-    if (output !== 'claude-stream-json') {
+    if (output === 'text') {
       plain(line);
       return;
     }
@@ -290,7 +460,8 @@ export function createHarnessEventReader(
       plain(line);
       return;
     }
-    readEvent(parsed);
+    if (output === 'codex-jsonl') readCodexEvent(parsed);
+    else readEvent(parsed);
   };
 
   return {
@@ -307,7 +478,10 @@ export function createHarnessEventReader(
     },
     answer(): string {
       if (resultText !== undefined) return resultText;
-      return output === 'claude-stream-json' ? lastSaid : passedThrough.join('\n');
+      return output === 'text' ? passedThrough.join('\n') : lastSaid;
+    },
+    conversationId(): string | undefined {
+      return conversation;
     },
   };
 }

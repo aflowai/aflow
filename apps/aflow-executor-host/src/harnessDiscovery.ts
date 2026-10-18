@@ -19,7 +19,7 @@ import { promisify } from 'node:util';
 
 import { probeEnv } from './probeEnv.js';
 
-import type { HarnessOutputFormat } from './harnessProfiles.js';
+import type { HarnessMcpFormat, HarnessOutputFormat } from './harnessProfiles.js';
 
 const run = promisify(execFile);
 
@@ -55,15 +55,25 @@ interface HarnessProbe {
   readonly turnsArgs: string[];
   /** How it is told which model to run. Empty when the CLI takes no such argument. */
   readonly modelArgs: string[];
-  /** How it is handed an MCP configuration file. Empty when it cannot be. */
+  /** How it is handed an MCP server. Empty when it cannot be. */
   readonly mcpArgs: string[];
+  /** What those arguments hand over: a configuration file, or the server inline. */
+  readonly mcpFormat: HarnessMcpFormat;
   /** Where it keeps the credential the operator already signed in with. */
   readonly authPaths: string[];
   /** Scratch outside the worktree it needs to write, relative to `/tmp`. */
   readonly writePaths: string[];
   /** A variable that takes a per-run configuration directory, if it has one. */
   readonly configDirEnv?: string;
+  /** Its sign-in files, relative to home, lent into that directory per turn. */
+  readonly configSeed: string[];
+  /** How long a sign-in file goes unwritten before the harness refreshes it on start. */
+  readonly configSeedRefreshAgeMs?: number;
+  /** Variables it needs to run inside the boundary at all. */
+  readonly env: Record<string, string>;
 }
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * The harnesses this lane was built against.
@@ -130,6 +140,7 @@ const KNOWN: readonly HarnessProbe[] = [
     // tools. `--strict-mcp-config` keeps out every server the operator
     // configured for their own sessions, so the run reaches only the browser.
     mcpArgs: ['--mcp-config', '{mcpConfig}', '--strict-mcp-config'],
+    mcpFormat: 'claude-json',
     // Given a configuration directory of its own it reads nothing under home,
     // so nothing is carved out of the standing denial.
     authPaths: [],
@@ -149,6 +160,65 @@ const KNOWN: readonly HarnessProbe[] = [
     // own temporary directory (`baseEnv.ts`); left to itself it writes the temp
     // root, is refused, and every command reads as failed.
     writePaths: [join(SYSTEM_TEMP_ROOT, `claude-${String(process.getuid?.() ?? 0)}`)],
+    configSeed: [],
+    env: {},
+  },
+  {
+    id: 'codex',
+    label: 'Codex',
+    command: 'codex',
+    promptArgs: ['{prompt}'],
+    // Measured against Codex CLI 0.163 (Plan 326 §6). The bypass flag is what
+    // `bypassPermissions` is for Claude Code: Codex's own Seatbelt profile
+    // cannot nest inside the lane's, and the lane's sandbox is the boundary.
+    // The disables are its `--bare`: a fresh CODEX_HOME already drops the
+    // operator's plugins, hooks and notify program, and these stop the run
+    // fetching ChatGPT app connectors, remote plugins and dependency installs,
+    // or reaching for a browser or the desktop the run did not ask for.
+    // `secret_auth_storage` is held off because the sign-in is lent as a file.
+    args: [
+      'exec',
+      '--json',
+      '--dangerously-bypass-approvals-and-sandbox',
+      ...[
+        'apps',
+        'plugins',
+        'remote_plugin',
+        'hooks',
+        'computer_use',
+        'browser_use',
+        'browser_use_external',
+        'skill_mcp_dependency_install',
+        'secret_auth_storage',
+      ].flatMap((feature) => ['--disable', feature]),
+    ],
+    output: 'codex-jsonl',
+    // It takes no conversation id. It reports its own as the first event of
+    // the run, and `exec`'s flags carry over when `resume` follows them.
+    sessionArgs: [],
+    resumeArgs: ['resume', '{session}'],
+    // No turn flag exists; a run is bounded by its timeout.
+    turnsArgs: [],
+    modelArgs: ['-m', '{model}'],
+    // It takes no configuration file. Measured: one `-c` declaring a stdio
+    // server inline connects it, and the model calls its tools (§6 M3). A
+    // fresh CODEX_HOME holds no other server, so nothing else is reached.
+    mcpArgs: ['-c', '{mcpServers}'],
+    mcpFormat: 'codex-toml',
+    authPaths: [],
+    writePaths: [],
+    configDirEnv: 'CODEX_HOME',
+    configSeed: ['.codex/auth.json'],
+    // Codex refreshes a sign-in older than eight days when it starts. A day
+    // of margin costs only that runs seeded in it take turns.
+    configSeedRefreshAgeMs: 7 * DAY_MS,
+    // On macOS it verifies TLS through the trust daemon unless handed a
+    // bundle, and the boundary never grants that daemon: it is an egress path
+    // of its own (`sandboxPolicy.ts`). Measured: without this every request
+    // fails just after the proxy accepts its CONNECT; with it the run
+    // completes (Plan 326 §6 M6). Elsewhere it reads the system's bundle files,
+    // which the boundary leaves readable.
+    env: process.platform === 'darwin' ? { CODEX_CA_CERTIFICATE: '/etc/ssl/cert.pem' } : {},
   },
   {
     id: 'opencode',
@@ -165,18 +235,25 @@ const KNOWN: readonly HarnessProbe[] = [
     // refused by name, where a guessed flag would fail inside the harness.
     modelArgs: [],
     mcpArgs: [],
+    mcpFormat: 'claude-json',
     authPaths: ['.config/opencode', '.local/share/opencode'],
     writePaths: [],
+    configSeed: [],
+    env: {},
   },
 ];
 
 /**
- * The MCP arguments measured for a harness this lane knows, for a profile
- * written before they were; nothing when none were measured for it.
+ * The MCP arguments measured for a harness this lane knows, with the format
+ * they carry, for a profile written before they were; nothing when none were
+ * measured for it.
  */
-export function knownMcpArgs(harnessId: string): string[] | undefined {
-  const args = KNOWN.find((probe) => probe.id === harnessId)?.mcpArgs;
-  return args === undefined || args.length === 0 ? undefined : [...args];
+export function knownMcp(
+  harnessId: string,
+): { readonly args: string[]; readonly format: HarnessMcpFormat } | undefined {
+  const probe = KNOWN.find((known) => known.id === harnessId);
+  if (probe === undefined || probe.mcpArgs.length === 0) return undefined;
+  return { args: [...probe.mcpArgs], format: probe.mcpFormat };
 }
 
 export interface DiscoveredHarness {
@@ -195,9 +272,13 @@ export interface DiscoveredHarness {
     readonly turnsArgs: string[];
     readonly modelArgs: string[];
     readonly mcpArgs: string[];
+    readonly mcpFormat: HarnessMcpFormat;
     readonly authPaths: string[];
     readonly writePaths: string[];
     readonly configDirEnv?: string;
+    readonly configSeed: string[];
+    readonly configSeedRefreshAgeMs?: number;
+    readonly env: Record<string, string>;
   };
 }
 
@@ -247,9 +328,15 @@ export async function discoverHarnesses(home = homedir()): Promise<DiscoveredHar
           turnsArgs: [...probe.turnsArgs],
           modelArgs: [...probe.modelArgs],
           mcpArgs: [...probe.mcpArgs],
+          mcpFormat: probe.mcpFormat,
           authPaths: probe.authPaths.map((p) => join(home, p)),
           writePaths: [...probe.writePaths],
           ...(probe.configDirEnv !== undefined ? { configDirEnv: probe.configDirEnv } : {}),
+          configSeed: probe.configSeed.map((p) => join(home, p)),
+          ...(probe.configSeedRefreshAgeMs !== undefined
+            ? { configSeedRefreshAgeMs: probe.configSeedRefreshAgeMs }
+            : {}),
+          env: { ...probe.env },
         },
       };
     }),

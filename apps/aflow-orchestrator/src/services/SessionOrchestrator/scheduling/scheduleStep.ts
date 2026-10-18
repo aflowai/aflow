@@ -56,6 +56,7 @@ import { createBuildAgentFlowContextDetails } from '../helpers/agentFlowContext.
 import type { AgentTurnStepRecord } from '../helpers/agentTurn.js';
 import { createRelayWorkflowTaskActivity } from './relayWorkflowTaskActivity.js';
 import { extractStepDetail } from './stepDetail.js';
+import { preferredHarnessFor } from '../../hostHarnessPreference.js';
 
 const STATE_REF = /^\$\{state\.([A-Za-z_][A-Za-z0-9_]*)\}$/;
 
@@ -702,6 +703,12 @@ export function createScheduleStep(bindings: SessionOrchestratorBindings) {
       let failure: AflowError | undefined;
       let thrown: unknown;
       try {
+        const preferredHarness = await preferredHarnessFor(
+          db,
+          context.tenantId,
+          context.spaceId ?? runState?.spaceId,
+          stepDef.operation,
+        );
         const dispatched = await dispatchOrWaitOnExecutor(redis, {
           messageVersion: 1,
           tenantId: context.tenantId,
@@ -719,6 +726,7 @@ export function createScheduleStep(bindings: SessionOrchestratorBindings) {
           credentialOwnerId: runState?.createdBy,
           spaceId: context.spaceId ?? runState?.spaceId,
           ...(callerModel !== undefined ? { callerModel } : {}),
+          ...(preferredHarness !== undefined ? { preferredHarness } : {}),
           ...(runState?.activatedByPerson !== undefined
             ? { activatedByPerson: runState.activatedByPerson }
             : {}),

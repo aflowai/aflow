@@ -65,7 +65,9 @@ import {
   openHarnessBrowser,
   type HarnessBrowser,
 } from '../browser/harnessBrowser.js';
-import { fetchCredential, scrubSecret } from '../credentialFetch.js';
+import { seededSecrets, withSeededConfig } from '../configSeed.js';
+import { fetchCredential, scrubSecrets } from '../credentialFetch.js';
+import { executableResolves } from '../probeEnv.js';
 import { runUnderFolderPosture } from '../folderRun.js';
 import {
   noSandboxMessage,
@@ -79,8 +81,11 @@ import {
   buildHarnessArgv,
   buildSessionArgs,
   HarnessProfileError,
+  mintsConversationId,
   requireProfile,
   supportsContinuation,
+  takesTurnBudget,
+  type HarnessMcpServer,
   type HarnessProfile,
 } from '../harnessProfiles.js';
 import {
@@ -172,8 +177,12 @@ export function compileResultValidator(schema: Record<string, unknown>): ResultV
   return new Ajv({ allErrors: true, strict: false }).compile(schema);
 }
 
-/** The file a repository states its own rules in. */
-const REPOSITORY_RULES_FILE = 'CLAUDE.md';
+/**
+ * The files a repository states its own rules in. Every one present is named,
+ * whatever the harness: one that discovers a file itself reads it twice, and
+ * one that discovers neither would otherwise miss the rules (Plan 326 D8).
+ */
+const REPOSITORY_RULES_FILES = ['CLAUDE.md', 'AGENTS.md'] as const;
 
 /** A repository rules file in a checkout, as the harness is told of it. */
 export interface RepositoryRulesFile {
@@ -186,7 +195,7 @@ export interface RepositoryRulesFile {
 /**
  * The rules files in the checkout: at the folder's place in the clone and, for a
  * folder inside a repository, at the clone's top as well — a package is bound
- * by its repository's rules, and a bare Claude Code discovers neither.
+ * by its repository's rules, and a harness started bare discovers neither.
  *
  * Asked of the isolated checkout, never of the operator's folder: what the
  * harness can read is what the checkout holds.
@@ -203,18 +212,20 @@ export async function repositoryRulesFiles(
         ];
   const found: RepositoryRulesFile[] = [];
   for (const { dir, where } of places) {
-    const file = join(dir, REPOSITORY_RULES_FILE);
-    if ((await stat(file).catch(() => undefined))?.isFile() === true) {
-      found.push({ path: relative(checkout.workDir, file), where });
+    for (const name of REPOSITORY_RULES_FILES) {
+      const file = join(dir, name);
+      if ((await stat(file).catch(() => undefined))?.isFile() === true) {
+        found.push({ path: relative(checkout.workDir, file), where });
+      }
     }
   }
   return found;
 }
 
 /**
- * A harness starts the way its profile starts it, and a bare Claude Code skips
- * `CLAUDE.md` auto-discovery, so a repository's own rules reach the harness only
- * if the task names them. Derived from the checkout rather than written into a
+ * A harness starts the way its profile starts it, and a bare one skips rules
+ * discovery, so a repository's own rules reach the harness only if the task
+ * names them. Derived from the checkout rather than written into a
  * skill: the file is a fact about the folder, and every task over that folder is
  * bound by it, whatever the task is.
  */
@@ -383,29 +394,36 @@ export async function readHarnessResult(
 }
 
 /**
- * Which harness a run gets when it did not name one.
+ * Which harness a run gets (Plan 326 D6, D12).
  *
- * A machine offering exactly one has nothing to choose between, and asking for
- * the id costs a round trip to the operator for a fact the machine already
- * holds — the id is not in anything the caller reads until the space context
- * carries it. Several is a real choice, so the refusal names them instead of
- * picking; it is a validation refusal rather than a permission one because
- * resending with an id is exactly the remedy.
+ * A named harness is that harness or a refusal; it never silently becomes
+ * another, because a caller that named one is comparing or relying on it. A
+ * run that names none gets its space's preferred harness, then the machine's
+ * default — the operator's choice, or the only harness configured — each only
+ * where it is installed, and otherwise the first configured harness that is.
+ * Installing a second harness therefore never turns a skill that names none
+ * into a refusal, and a space preferring one a machine lacks still runs there.
  */
-export type HarnessSelection =
-  | { readonly kind: 'profile'; readonly profile: HarnessProfile }
-  | { readonly kind: 'ambiguous'; readonly problem: string };
+export type HarnessSelectedBy = 'named' | 'preferred' | 'default' | 'fallback';
 
-export function selectHarness(
+export interface HarnessSelection {
+  readonly profile: HarnessProfile;
+  readonly selectedBy: HarnessSelectedBy;
+  /** Why a preferred or default harness did not run, when one did not. */
+  readonly passedOver?: string;
+}
+
+export async function selectHarness(
   profiles: ReadonlyMap<string, HarnessProfile>,
   requested: string | undefined,
-): HarnessSelection {
+  preferred: string | undefined,
+  machineDefault: string | undefined,
+  resolves: (executable: string) => Promise<boolean> = executableResolves,
+): Promise<HarnessSelection> {
   if (requested !== undefined) {
-    return { kind: 'profile', profile: requireProfile(profiles, requested) };
+    return { profile: requireProfile(profiles, requested), selectedBy: 'named' };
   }
   const offered = [...profiles.values()];
-  const only = offered.length === 1 ? offered[0] : undefined;
-  if (only !== undefined) return { kind: 'profile', profile: only };
   if (offered.length === 0) {
     throw new HarnessProfileError(
       'No coding harness is configured on this machine. Add one to the host policy before ' +
@@ -413,17 +431,43 @@ export function selectHarness(
       'unknown_profile',
     );
   }
-  // The id first, because it is the only spelling `harness` accepts; the label
-  // after it, because a choice between two ids is one an operator has to be able
-  // to read.
-  const ids = offered
-    .map((p) => (p.label === undefined ? p.id : `${p.id} (${p.label})`))
-    .sort()
-    .join(', ');
-  return {
-    kind: 'ambiguous',
-    problem: `This machine offers more than one coding harness: ${ids}. Name one in \`harness\`.`,
-  };
+  const defaultId = machineDefault ?? (offered.length === 1 ? offered[0]?.id : undefined);
+  const candidates: Array<{ id: string; by: HarnessSelectedBy; what: string }> = [
+    ...(preferred !== undefined
+      ? [{ id: preferred, by: 'preferred' as const, what: "this space's coding agent" }]
+      : []),
+    ...(defaultId !== undefined && defaultId !== preferred
+      ? [{ id: defaultId, by: 'default' as const, what: 'the default harness' }]
+      : []),
+  ];
+  const reasons: string[] = [];
+  const tried = new Set<HarnessProfile>();
+  for (const { id, by, what } of candidates) {
+    const profile = profiles.get(id);
+    if (profile === undefined) {
+      reasons.push(`${what} \`${id}\` is not configured on this machine`);
+      continue;
+    }
+    tried.add(profile);
+    if (await resolves(profile.executable)) {
+      return {
+        profile,
+        selectedBy: by,
+        ...(reasons.length > 0 ? { passedOver: reasons.join('; ') } : {}),
+      };
+    }
+    reasons.push(`${what} \`${id}\` is not installed at ${profile.executable}`);
+  }
+  if (defaultId === undefined) reasons.push('no default harness is set on this machine');
+  for (const profile of offered) {
+    if (tried.has(profile)) continue;
+    if (await resolves(profile.executable)) {
+      return { profile, selectedBy: 'fallback', passedOver: reasons.join('; ') };
+    }
+  }
+  // Nothing resolves: run the first candidate anyway, so the failure to start
+  // names the program and where it was looked for.
+  return { profile: [...tried][0] ?? offered[0]!, selectedBy: 'default' };
 }
 
 /**
@@ -433,9 +477,9 @@ export function selectHarness(
 async function failure(
   ctx: ExecutorContext,
   error: unknown,
-  secret: string | undefined,
+  secrets: readonly string[],
 ): Promise<StepResult> {
-  const message = scrubSecret(error instanceof Error ? error.message : String(error), secret);
+  const message = scrubSecrets(error instanceof Error ? error.message : String(error), secrets);
   if (error instanceof HarnessProfileError) {
     // A request the machine's harness cannot take is answered as a validation
     // refusal: sending the task again without it is the remedy, where a missing
@@ -475,9 +519,9 @@ export function harnessTurnArgv(
   profile: HarnessProfile,
   input: Pick<z.output<typeof HostHarnessRunInputSchema>, 'maxTurns' | 'model'>,
   task: string,
-  conversation: string,
+  conversation: string | undefined,
   continued: boolean,
-  mcpConfig?: string,
+  mcp?: HarnessMcpServer,
 ): string[] {
   return buildHarnessArgv(
     profile,
@@ -485,7 +529,7 @@ export function harnessTurnArgv(
     buildSessionArgs(profile, conversation, continued),
     effectiveMaxTurns(profile, input.maxTurns),
     input.model,
-    mcpConfig,
+    mcp,
   );
 }
 
@@ -530,6 +574,9 @@ async function runHarness(
   let scratch: string | undefined;
   let worktreePath: string | undefined;
   let credential: string | undefined;
+  // Everything the run holds that must not leave it: the credential, and the
+  // tokens of a lent sign-in.
+  let secrets: string[] = [];
   let claimed: HarnessSession | undefined;
   let browser: HarnessBrowser | undefined;
   // A session's checkout outlives the run, so the teardown below must not take
@@ -567,10 +614,12 @@ async function runHarness(
     // repository's own `.git`, so the binding has to permit writes even though
     // the harness never uses that permission — its policy withholds it below.
     requireWritable(binding);
-    const selection = selectHarness(policy.harnesses, input.harness);
-    if (selection.kind === 'ambiguous') {
-      return await failureWithError(ctx, validationError(selection.problem));
-    }
+    const selection = await selectHarness(
+      policy.harnesses,
+      input.harness,
+      ctx.preferredHarness,
+      policy.defaultHarness,
+    );
     const profile = selection.profile;
     if (input.browser !== undefined) {
       assertTakesMcpConfig(profile);
@@ -679,7 +728,13 @@ async function runHarness(
       }
     }
 
-    const conversationId = session?.conversationId ?? newConversationId();
+    // A harness that names its own conversation reports the id during the
+    // first turn, and it is recorded then (Plan 326 D2).
+    let conversationId =
+      session?.conversationId ?? (mintsConversationId(profile) ? newConversationId() : undefined);
+    // A session whose harness never reported an id is started again in its
+    // checkout, which is not a resumed conversation.
+    const resumedConversation = resuming && conversationId !== undefined;
 
     const namedRef = continuesAttempt ? undefined : input.base;
     const mergeFrom = continuesAttempt ? undefined : input.mergeFrom;
@@ -753,6 +808,10 @@ async function runHarness(
 
     // Fetched before the run and held only for its duration.
     credential = await fetchCredential(profile);
+    secrets = [
+      ...(credential !== undefined ? [credential] : []),
+      ...(await seededSecrets(profile)),
+    ];
 
     // Everything the harness writes outside its checkout goes here, and the
     // sandbox is granted this rather than the scratch holding the checkout.
@@ -798,10 +857,19 @@ async function runHarness(
         startedAt,
       });
     }
+    if (input.maxTurns !== undefined && !takesTurnBudget(profile)) {
+      onActivity({
+        kind: 'status',
+        at: 0,
+        text:
+          `${profile.label ?? profile.id} takes no turn budget, so maxTurns ` +
+          `${String(input.maxTurns)} is not applied; the run is bounded by its timeout.`,
+      });
+    }
     const runTurn = async (
       task: string,
       continued: boolean,
-      conversation: string,
+      conversation: string | undefined,
     ): Promise<SandboxedRunResult> => {
       // One per turn, because it holds the line a chunk ended part-way
       // through. Shared across turns it would join the end of one run's output
@@ -819,75 +887,91 @@ async function runHarness(
       // from 1 again.
       const browserTurn = await browser?.openTurn();
       try {
-        return await runUnderFolderPosture({
-          binding,
-          argv: harnessTurnArgv(
-            profile,
-            input,
-            task,
-            conversation,
-            continued,
-            browserTurn?.mcpConfigPath,
-          ),
-          cwd: worktree.workDir,
-          // The sandbox's proxy names the host it refused only when asked to, and
-          // that name is the whole diagnosis for a harness that reached nothing.
-          env: {},
-          trustedEnv: {
-            SRT_DEBUG: '1',
-            // Commissions see the stored objects too, as the checkout they run
-            // in does: a review reads the range with its own git, and the
-            // verdict that can stand in for the operator's approval has to be
-            // about the commits a push sends — never what a `refs/replace/` ref
-            // the folder holds shows in their place. A coding agent likewise
-            // reads the history its commit will be pushed on top of.
-            ...NO_REPLACE_OBJECTS_ENV,
-            ...(configDir !== undefined && profile.configDirEnv !== undefined
-              ? { [profile.configDirEnv]: configDir }
-              : {}),
-            ...(credential !== undefined && profile.credential
-              ? { [profile.credential.env]: credential }
-              : {}),
-          },
-          timeoutMs: input.timeoutMs,
-          scratchDir: agentScratch,
-          journalScratchDir: scratchDir,
-          widening: {
-            authPaths: profile.authPaths,
-            writePaths: profile.writePaths,
-            allowedDomains: profile.allowedDomains,
-            ...checkoutWidening(worktree, borrowed),
-          },
-          idPrefix: 'hr',
-          ownerRunId: ctx.runId,
-          signal: ctx.signal,
-          // A harness reads its task from argv and its prompt from nowhere: left
-          // open, it spends the first seconds of every run waiting on a pipe this
-          // executor never writes to.
-          closeStdin: true,
-          // Handed to the spawn path so captured output and live deltas are both
-          // scrubbed there, per stream, before either leaves it.
-          ...(credential !== undefined ? { secret: credential } : {}),
-          // What streams is the harness talking. The spawn path already holds
-          // standard error back as diagnostics; this takes out anything the
-          // adapter managed to write on the other descriptor, because a viewer
-          // reading the executor's own noise as the harness's words cannot tell
-          // a working run from a stuck one.
-          onDelta: (text) => {
-            emit(visible.push(text));
-          },
-          // Anything the harness wrote, on either descriptor and whether or not
-          // it is narrated. A turn that thinks in silence on standard output
-          // while the sandbox logs its work is still a turn in progress, and
-          // the idle deadline is minutes, not hours.
-          onOutput: () => ctx.reportProgress?.(),
-        });
+        return await withSeededConfig(
+          profile,
+          configDir,
+          async () =>
+            await runUnderFolderPosture({
+              binding,
+              argv: harnessTurnArgv(
+                profile,
+                input,
+                task,
+                conversation,
+                continued && conversation !== undefined,
+                browserTurn?.mcp,
+              ),
+              cwd: worktree.workDir,
+              // The sandbox's proxy names the host it refused only when asked to, and
+              // that name is the whole diagnosis for a harness that reached nothing.
+              env: profile.env,
+              trustedEnv: {
+                SRT_DEBUG: '1',
+                // Commissions see the stored objects too, as the checkout they run
+                // in does: a review reads the range with its own git, and the
+                // verdict that can stand in for the operator's approval has to be
+                // about the commits a push sends — never what a `refs/replace/` ref
+                // the folder holds shows in their place. A coding agent likewise
+                // reads the history its commit will be pushed on top of.
+                ...NO_REPLACE_OBJECTS_ENV,
+                ...(configDir !== undefined && profile.configDirEnv !== undefined
+                  ? { [profile.configDirEnv]: configDir }
+                  : {}),
+                ...(credential !== undefined && profile.credential
+                  ? { [profile.credential.env]: credential }
+                  : {}),
+              },
+              timeoutMs: input.timeoutMs,
+              // Where the operator keeps their tools, as every command gets: a
+              // harness installed under home, and the tools its agent runs, are
+              // otherwise behind the standing denial of home.
+              toolPaths: policy.toolPaths,
+              scratchDir: agentScratch,
+              journalScratchDir: scratchDir,
+              widening: {
+                authPaths: profile.authPaths,
+                writePaths: profile.writePaths,
+                allowedDomains: profile.allowedDomains,
+                ...checkoutWidening(worktree, borrowed),
+              },
+              idPrefix: 'hr',
+              ownerRunId: ctx.runId,
+              signal: ctx.signal,
+              // A harness reads its task from argv and its prompt from nowhere: left
+              // open, it spends the first seconds of every run waiting on a pipe this
+              // executor never writes to.
+              closeStdin: true,
+              // Handed to the spawn path so captured output and live deltas are both
+              // scrubbed there, per stream, before either leaves it.
+              ...(secrets.length > 0 ? { secrets } : {}),
+              // What streams is the harness talking. The spawn path already holds
+              // standard error back as diagnostics; this takes out anything the
+              // adapter managed to write on the other descriptor, because a viewer
+              // reading the executor's own noise as the harness's words cannot tell
+              // a working run from a stuck one.
+              onDelta: (text) => {
+                emit(visible.push(text));
+              },
+              // Anything the harness wrote, on either descriptor and whether or not
+              // it is narrated. A turn that thinks in silence on standard output
+              // while the sandbox logs its work is still a turn in progress, and
+              // the idle deadline is minutes, not hours.
+              onOutput: () => ctx.reportProgress?.(),
+            }),
+        );
       } finally {
         // Whatever the last chunk left unterminated. A harness whose final line
         // carries no newline would otherwise have it held back for good.
         emit(visible.flush());
         events.flush();
         spoken = events.answer();
+        const reported = events.conversationId();
+        if (reported !== undefined) {
+          conversationId = reported;
+          if (session !== undefined && session.conversationId === undefined) {
+            session.conversationId = reported;
+          }
+        }
         await browserTurn?.close();
       }
     };
@@ -944,10 +1028,15 @@ async function runHarness(
         await rm(resultPath, { force: true });
         // A harness that cannot be resumed gets a conversation of its own: the
         // id that named the first one is taken.
-        const conversation = canContinue ? conversationId : newConversationId();
+        const continued = canContinue && conversationId !== undefined;
+        const conversation = continued
+          ? conversationId
+          : mintsConversationId(profile)
+            ? newConversationId()
+            : undefined;
         result = await runTurn(
-          retryInstruction(task, schema, check.problem, canContinue),
-          canContinue,
+          retryInstruction(task, schema, check.problem, continued),
+          continued,
           conversation,
         );
         check = await readHarnessResult(resultPath, validate);
@@ -1006,11 +1095,11 @@ async function runHarness(
       reached ? 'reached_result' : 'produced_nothing',
       profile.id,
     );
-    const note = scrubSecret(
+    const note = scrubSecrets(
       collectFailure === undefined
         ? (refusalNote ?? '')
         : [collectFailure, refusalNote].filter(Boolean).join(' '),
-      credential,
+      secrets,
     );
     // Asked of the binding, not the clone: the question is whether what the
     // harness produced can still be taken into the repository the operator has.
@@ -1051,7 +1140,7 @@ async function runHarness(
 
     // Stored whole whatever its size, because the inline copy is capped and a
     // publication has to take all of it.
-    const patch = changes.patch === '' ? '' : scrubSecret(changes.patch, credential);
+    const patch = changes.patch === '' ? '' : scrubSecrets(changes.patch, secrets);
     const patchRef = patch === '' ? undefined : await ctx.writePayload('patch', patch);
     const patchTruncated = Buffer.byteLength(patch, 'utf8') > INLINE_DIFF_CAP_BYTES;
     const inlinePatch = patchTruncated ? utf8Prefix(patch, INLINE_DIFF_CAP_BYTES) : patch;
@@ -1061,9 +1150,14 @@ async function runHarness(
       harness: {
         id: profile.id,
         ...(profile.label !== undefined ? { label: profile.label } : {}),
+        selectedBy: selection.selectedBy,
+        ...(selection.passedOver !== undefined ? { passedOver: selection.passedOver } : {}),
       },
+      ...(input.maxTurns !== undefined
+        ? { budget: { maxTurns: input.maxTurns, applied: takesTurnBudget(profile) } }
+        : {}),
       ...(sessionRef !== undefined ? { sessionRef } : {}),
-      continued: resuming,
+      continued: resumedConversation,
       baseSha: worktree.baseSha,
       ...(merge !== undefined
         ? {
@@ -1114,12 +1208,12 @@ async function runHarness(
       return await failureWithError(
         ctx,
         validationError(
-          scrubSecret(
+          scrubSecrets(
             `The harness ended without a usable result: ${check.problem}. It exited ` +
               (result.exitCode === null ? 'without a code' : String(result.exitCode)) +
               `${result.timedOut ? ' after its time ran out' : ''}. Console output is ` +
               'diagnostics, not the result; what it changed is on this error.',
-            credential,
+            secrets,
           ),
           details,
         ),
@@ -1131,7 +1225,7 @@ async function runHarness(
       ...(check?.ok === true ? { result: check.value } : {}),
     });
   } catch (error) {
-    return await failure(ctx, error, credential);
+    return await failure(ctx, error, secrets);
   } finally {
     await browser?.close();
     if (claimed !== undefined) releaseSession(claimed);

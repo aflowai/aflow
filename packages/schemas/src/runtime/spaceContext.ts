@@ -340,12 +340,20 @@ export const SpaceContextHostFoldersSectionSchema = z.object({
   ),
   /**
    * Harnesses `host.harness.run` accepts, as the paired machines offer them
-   * right now: the id a run addresses, and the name an operator would recognise
-   * where the machine gave one. A property of the machine rather than of any one
-   * folder, so it sits beside the items. Empty means no paired machine is
-   * running at the moment — not that the operator has none.
+   * right now: the id a run addresses, the name an operator would recognise
+   * where the machine gave one, and whether any machine has it installed. A
+   * property of the machine rather than of any one folder, so it sits beside
+   * the items. Empty means no paired machine is running at the moment — not
+   * that the operator has none.
    */
-  harnesses: z.array(z.object({ id: z.string(), label: z.string().optional() })),
+  harnesses: z.array(
+    z.object({ id: z.string(), label: z.string().optional(), installed: z.boolean() }),
+  ),
+  /**
+   * The coding agent this space prefers. A run naming no harness gets it where
+   * it is installed; name one only to require a different one.
+   */
+  preferredHarness: z.string().optional(),
   total: z.number().int().nonnegative(),
   truncated: z.boolean().optional(),
   guidance: z.string(),

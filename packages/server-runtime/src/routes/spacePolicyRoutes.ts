@@ -11,6 +11,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq } from 'drizzle-orm';
 import { createTenantContext, withTenantSchema, spaces } from '@aflow/database';
+import { bumpSpaceContextGen } from '@aflow/redis';
 import {
   ComputeAvailabilitySchema,
   SpaceRulesSchema,
@@ -51,6 +52,12 @@ interface SpacePolicyRoute<TBody extends z.ZodTypeAny> {
     shape: z.ZodRawShape;
     read: () => Promise<Record<string, unknown>>;
   };
+  /**
+   * The policy appears in the space's context, which every session caches, so
+   * a write invalidates that cache rather than leaving agents reading the old
+   * value for its lifetime.
+   */
+  inSpaceContext?: boolean;
 }
 
 // eslint-disable-next-line @typescript-eslint/require-await -- Fastify plugin; route handlers use await
@@ -141,6 +148,10 @@ export const spacePolicyRoutes: FastifyPluginAsync = async (fastify) => {
           return reply.status(404).send({ error: 'NotFound', message: 'Space not found' });
         }
 
+        if (def.inSpaceContext === true && fastify.appContext.redis) {
+          await bumpSpaceContextGen(fastify.appContext.redis, tenant.tenantId, spaceId);
+        }
+
         reply.send({ [def.field]: row[def.field], ...(await def.extra?.read()) });
       },
     );
@@ -222,6 +233,36 @@ export const spacePolicyRoutes: FastifyPluginAsync = async (fastify) => {
         .set({ codePolicy: value, updatedAt: new Date() })
         .where(eq(spaces.id, spaceId))
         .returning({ codePolicy: spaces.codePolicy }),
+  });
+
+  registerPolicy({
+    path: '/:spaceId/preferred-harness',
+    field: 'preferredHarness',
+    readSummary: 'Get the coding agent this space prefers on a connected machine',
+    writeSummary: 'Set the coding agent this space prefers on a connected machine',
+    value: z.string().nullable(),
+    body: z.string().min(1).max(64).nullable(),
+    // A preference for a machine the deployment cannot reach would never be
+    // read: coding agents run only in the local edition, on the operator's
+    // own machine.
+    guard: (value, edition) =>
+      value !== null && edition.hostLane !== 'present'
+        ? 'This deployment has no host lane, so no coding agent runs here. A preferred ' +
+          'coding agent belongs to the local edition, where the machine runs it.'
+        : null,
+    inSpaceContext: true,
+    select: (tx, spaceId) =>
+      tx
+        .select({ preferredHarness: spaces.preferredHarness })
+        .from(spaces)
+        .where(eq(spaces.id, spaceId))
+        .limit(1),
+    update: (tx, spaceId, value) =>
+      tx
+        .update(spaces)
+        .set({ preferredHarness: value, updatedAt: new Date() })
+        .where(eq(spaces.id, spaceId))
+        .returning({ preferredHarness: spaces.preferredHarness }),
   });
 
   registerPolicy({

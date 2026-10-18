@@ -1,12 +1,22 @@
+import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
-import { discoverHarnesses, knownMcpArgs, type DiscoveredHarness } from '../harnessDiscovery.js';
+import { discoverHarnesses, knownMcp, type DiscoveredHarness } from '../harnessDiscovery.js';
 import {
   buildHarnessArgv,
   buildSessionArgs,
   HarnessProfileError,
   HarnessProfileSchema,
+  type HarnessMcpServer,
 } from '../harnessProfiles.js';
+
+/** A server as a browser turn hands it over, at a configuration path. */
+function mcpAt(configPath: string): HarnessMcpServer {
+  return { name: 'browser', command: '/usr/bin/node', args: ['relay.mjs'], configPath };
+}
 
 // Discovery finds only what is installed, so a machine with no harness would
 // run these loops zero times and pass. This one is always there.
@@ -24,8 +34,11 @@ const FIXED_HARNESS: DiscoveredHarness = {
     turnsArgs: [],
     modelArgs: ['--model', '{model}'],
     mcpArgs: ['--mcp-config', '{mcpConfig}', '--strict-mcp-config'],
+    mcpFormat: 'claude-json',
     authPaths: [],
     writePaths: [],
+    configSeed: [],
+    env: {},
   },
 };
 
@@ -159,12 +172,17 @@ describe('harness discovery', () => {
     // Measured under the lane's flags: given `--mcp-config <file>`, the init
     // event reports the stdio server connected and the model calls its tools;
     // `--strict-mcp-config` leaves out every server the operator configured.
-    expect(knownMcpArgs('claude')).toEqual(['--mcp-config', '{mcpConfig}', '--strict-mcp-config']);
-    expect(knownMcpArgs('opencode')).toBeUndefined();
+    expect(knownMcp('claude')).toEqual({
+      args: ['--mcp-config', '{mcpConfig}', '--strict-mcp-config'],
+      format: 'claude-json',
+    });
+    expect(knownMcp('opencode')).toBeUndefined();
     for (const found of await withFixedHarness()) {
       if (found.suggested.output === 'claude-stream-json' || found === FIXED_HARNESS) {
-        expect(found.suggested.mcpArgs).toEqual(knownMcpArgs('claude'));
+        expect(found.suggested.mcpArgs).toEqual(knownMcp('claude')?.args);
       }
+      // An inline server is a different shape, asked of the Codex profile below.
+      if (found.suggested.mcpFormat !== 'claude-json') continue;
       const confirmed = HarnessProfileSchema.parse({
         id: found.id,
         executable: found.executable,
@@ -173,11 +191,18 @@ describe('harness discovery', () => {
       });
       if (confirmed.mcpArgs.length === 0) {
         expect(() =>
-          buildHarnessArgv(confirmed, 'the task', [], undefined, undefined, '/s/mcp.json'),
+          buildHarnessArgv(confirmed, 'the task', [], undefined, undefined, mcpAt('/s/mcp.json')),
         ).toThrow(HarnessProfileError);
         continue;
       }
-      const argv = buildHarnessArgv(confirmed, 'the task', [], undefined, undefined, '/s/mcp.json');
+      const argv = buildHarnessArgv(
+        confirmed,
+        'the task',
+        [],
+        undefined,
+        undefined,
+        mcpAt('/s/mcp.json'),
+      );
       expect(argv.slice(argv.indexOf('--mcp-config'), argv.indexOf('--mcp-config') + 3)).toEqual([
         '--mcp-config',
         '/s/mcp.json',
@@ -246,5 +271,93 @@ describe('harness discovery', () => {
       expect(confirmed.allowedDomains).toEqual([]);
       expect(confirmed.promptArgs.filter((a) => a === '{prompt}')).toHaveLength(1);
     }
+  });
+});
+
+describe('the Codex profile', () => {
+  /** Discovery as it runs on a machine where `codex` is the only thing on PATH. */
+  async function discoverCodex(): Promise<DiscoveredHarness> {
+    const bin = await mkdtemp(join(tmpdir(), 'aflow-codex-bin-'));
+    const savedPath = process.env['PATH'];
+    try {
+      await writeFile(join(bin, 'codex'), '#!/bin/sh\necho codex-cli 0.0.0\n');
+      await chmod(join(bin, 'codex'), 0o755);
+      process.env['PATH'] = `${bin}:/usr/bin:/bin`;
+      const found = (await discoverHarnesses('/Users/someone')).find((d) => d.id === 'codex');
+      if (found === undefined) throw new Error('codex was not discovered');
+      return found;
+    } finally {
+      process.env['PATH'] = savedPath;
+      await rm(bin, { recursive: true, force: true });
+    }
+  }
+
+  function codexProfile(found: DiscoveredHarness): ReturnType<typeof HarnessProfileSchema.parse> {
+    return HarnessProfileSchema.parse({
+      id: found.id,
+      executable: found.executable,
+      ...found.suggested,
+    });
+  }
+
+  it('starts a new conversation without naming it, since Codex names its own', async () => {
+    const profile = codexProfile(await discoverCodex());
+    const argv = buildHarnessArgv(profile, 'the task', buildSessionArgs(profile, undefined, false));
+    expect(argv.slice(1, 4)).toEqual([
+      'exec',
+      '--json',
+      '--dangerously-bypass-approvals-and-sandbox',
+    ]);
+    expect(argv).not.toContain('resume');
+    expect(argv.at(-1)).toBe('the task');
+  });
+
+  it("resumes by the id Codex reported, after exec's flags so they carry over", async () => {
+    const profile = codexProfile(await discoverCodex());
+    const argv = buildHarnessArgv(
+      profile,
+      'next',
+      buildSessionArgs(profile, 'thread-1', true),
+      undefined,
+      'gpt-x',
+    );
+    const resume = argv.indexOf('resume');
+    expect(argv[resume + 1]).toBe('thread-1');
+    expect(argv.indexOf('--json')).toBeLessThan(resume);
+    expect(argv.lastIndexOf('--disable')).toBeLessThan(resume);
+    expect(argv.slice(resume + 2)).toEqual(['-m', 'gpt-x', 'next']);
+  });
+
+  it.runIf(process.platform === 'darwin')(
+    'hands it the system bundle on macOS, where it would otherwise ask the trust daemon',
+    async () => {
+      const found = await discoverCodex();
+      expect(found.suggested.env).toEqual({ CODEX_CA_CERTIFICATE: '/etc/ssl/cert.pem' });
+      expect(() => codexProfile(found)).not.toThrow();
+    },
+  );
+
+  it('hands it the browser as one inline server, since it takes no configuration file', async () => {
+    const profile = codexProfile(await discoverCodex());
+    const argv = buildHarnessArgv(profile, 'the task', [], undefined, undefined, {
+      name: 'browser',
+      command: '/opt/node "22"/bin/node',
+      args: ['/s/relay.mjs', 'C:\\pipes'],
+      configPath: '/s/mcp.json',
+    });
+    const at = argv.indexOf('-c');
+    expect(argv[at + 1]).toBe(
+      'mcp_servers.browser={command="/opt/node \\"22\\"/bin/node",args=["/s/relay.mjs","C:\\\\pipes"]}',
+    );
+    expect(argv).not.toContain('/s/mcp.json');
+    expect(at).toBeLessThan(argv.indexOf('the task'));
+    expect(knownMcp('codex')).toEqual({ args: ['-c', '{mcpServers}'], format: 'codex-toml' });
+  });
+
+  it('lends the sign-in under the given home into a CODEX_HOME of the run', async () => {
+    const found = await discoverCodex();
+    expect(found.suggested.configDirEnv).toBe('CODEX_HOME');
+    expect(found.suggested.configSeed).toEqual(['/Users/someone/.codex/auth.json']);
+    expect(found.suggested.authPaths).toEqual([]);
   });
 });

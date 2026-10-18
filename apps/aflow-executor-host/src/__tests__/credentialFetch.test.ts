@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { fetchCredential, scrubSecret } from '../credentialFetch.js';
+import {
+  createSecretsScrubber,
+  fetchCredential,
+  scrubSecret,
+  scrubSecrets,
+} from '../credentialFetch.js';
 import { HarnessProfileSchema, readCredentialFromOutput } from '../harnessProfiles.js';
 
 const bare = HarnessProfileSchema.parse({ id: 'bare', executable: 'claude' });
@@ -71,5 +76,26 @@ describe('scrubbing', () => {
 
   it('will not redact a short value, which would blank out ordinary text', () => {
     expect(scrubSecret('the cat sat', 'cat')).toBe('the cat sat');
+  });
+});
+
+describe('scrubbing several secrets from a stream', () => {
+  it('removes each of them, even split across chunks', () => {
+    const first = 'access-token-0123456789';
+    const second = 'refresh-token-9876543210';
+    const scrubber = createSecretsScrubber([first, second]);
+    const text = `a ${first} b ${second} c`;
+    const out =
+      scrubber.push(text.slice(0, 9)) +
+      scrubber.push(text.slice(9, 40)) +
+      scrubber.push(text.slice(40)) +
+      scrubber.flush();
+    expect(out).toBe('a [redacted] b [redacted] c');
+    expect(scrubSecrets(text, [first, second])).toBe('a [redacted] b [redacted] c');
+  });
+
+  it('passes text through untouched when the run holds no secret', () => {
+    const scrubber = createSecretsScrubber([]);
+    expect(scrubber.push('plain') + scrubber.flush()).toBe('plain');
   });
 });

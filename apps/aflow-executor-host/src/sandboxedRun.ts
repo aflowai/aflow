@@ -26,7 +26,7 @@ import type { HostSandboxPosture } from '@aflow/schemas';
 
 import { buildBaseEnv, createWorkloadDirs } from './baseEnv.js';
 import type { ExecutionPermitted, HostBinding } from './bindings.js';
-import { createStreamScrubber } from './credentialFetch.js';
+import { createSecretsScrubber } from './credentialFetch.js';
 import { assertSafeEnv } from './envPolicy.js';
 import { forgetSpawn, recordSpawn } from './orphans.js';
 import { compileSandboxPolicy, type SandboxWidening } from './sandboxPolicy.js';
@@ -367,11 +367,11 @@ export interface SupervisedRun {
    */
   readonly closeStdin?: boolean;
   /**
-   * A credential this run was given. Removed from captured output and from
+   * Credentials this run was given. Removed from captured output and from
    * every live delta before either leaves this function — the deltas go to a
    * durable stream, so scrubbing only the final result publishes it anyway.
    */
-  readonly secret?: string;
+  readonly secrets?: readonly string[];
   readonly signal: AbortSignal;
   /**
    * Live output, chunk by chunk: standard output always, standard error only
@@ -733,8 +733,8 @@ async function superviseSpawn(input: SupervisedSpawn): Promise<SandboxedRunResul
   // One scrubber per stream. Sharing one lets a chunk of stderr flush the tail
   // stdout was holding back, which reassembles a credential split across reads.
   const scrubbers = {
-    out: createStreamScrubber(input.secret),
-    err: createStreamScrubber(input.secret),
+    out: createSecretsScrubber(input.secrets ?? []),
+    err: createSecretsScrubber(input.secrets ?? []),
   };
   const detached = input.detach === true;
   const capture = (chunk: string, isErr: boolean): void => {

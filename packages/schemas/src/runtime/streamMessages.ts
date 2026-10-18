@@ -567,6 +567,13 @@ export const StepJobMessageSchema = z
     callerModel: z.string().max(128).optional(),
 
     /**
+     * The coding agent the step's space prefers, read from its directives when
+     * a `host.harness.run` step is dispatched — never from the step's input,
+     * where a named harness is a requirement rather than a preference.
+     */
+    preferredHarness: z.string().max(64).optional(),
+
+    /**
      * Whether this step's run is attended — its session's `activatedByPerson`,
      * read when the step is scheduled, never from the step's input, which the
      * agent writes. Absent reads as nobody.

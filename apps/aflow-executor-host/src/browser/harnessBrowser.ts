@@ -59,6 +59,7 @@ import {
 } from '../handlers/browserHandler.js';
 import type { BrowserDriver } from './driver.js';
 import type { RunScope } from './driverTypes.js';
+import type { HarnessMcpServer } from '../harnessProfiles.js';
 import { BrowserDriverError } from './errors.js';
 import type { HarnessReach } from './harnessReach.js';
 
@@ -218,6 +219,8 @@ export interface HarnessBrowserTurn {
   readonly mcpConfigPath: string;
   /** Where the turn's relay finds its pipes and tool list; what the configuration names. */
   readonly relayArgs: readonly string[];
+  /** The server that configuration declares, for a harness handed it inline. */
+  readonly mcp: HarnessMcpServer;
   /**
    * Closes and removes the turn's pipes. A call still in flight is performed and
    * logged, but its answer goes nowhere. Safe to call twice.
@@ -500,6 +503,12 @@ export async function openHarnessBrowser(options: HarnessBrowserOptions): Promis
     const turn: HarnessBrowserTurn = {
       mcpConfigPath,
       relayArgs,
+      mcp: {
+        name: HARNESS_BROWSER_SERVER,
+        command: process.execPath,
+        args: relayArgs,
+        configPath: mcpConfigPath,
+      },
       close: async () => {
         if (ended) return;
         ended = true;

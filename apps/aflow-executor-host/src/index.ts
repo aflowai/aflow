@@ -49,6 +49,7 @@ import {
 } from '@aflow/redis';
 import { HOST_HARNESS_CONCURRENCY_DEFAULT, HOST_KEEP_AWAKE_DEFAULT } from '@aflow/schemas';
 
+import { executableResolves } from './probeEnv.js';
 import { executionPermitted, loadHostPolicy } from './bindings.js';
 import { discoverChrome } from './browser/chromeDiscovery.js';
 import { createChromeLauncher } from './browser/chromeProcess.js';
@@ -285,6 +286,7 @@ async function main(): Promise<void> {
   // empty list — "this machine offers no harness" and "the file was being
   // written" are different facts, and only the first should reach a workspace.
   let lastHarnesses: HostInventory['harnesses'] = [];
+  let lastDefaultHarness: string | undefined;
   let lastFolders: HostInventoryFolders = [];
   let lastMaxConcurrentHarnessRuns = HOST_HARNESS_CONCURRENCY_DEFAULT;
   let lastBrowsers: HostInventoryBrowsers = [];
@@ -303,23 +305,31 @@ async function main(): Promise<void> {
     // From the policy rather than from discovery: an installed harness the
     // operator never added to the file cannot be addressed by a run, so naming
     // it here would offer work that is refused.
-    const { harnesses, folders, maxConcurrentHarnessRuns } = await loadHostPolicy(policyPath)
-      .then((policy) => ({
-        harnesses: [...policy.harnesses.values()]
-          .map((profile) => ({
-            id: profile.id,
-            ...(profile.label !== undefined ? { label: profile.label } : {}),
-          }))
-          .sort((a, b) => a.id.localeCompare(b.id)),
+    const { harnesses, defaultHarness, folders, maxConcurrentHarnessRuns } = await loadHostPolicy(
+      policyPath,
+    )
+      .then(async (policy) => ({
+        harnesses: (
+          await Promise.all(
+            [...policy.harnesses.values()].map(async (profile) => ({
+              id: profile.id,
+              ...(profile.label !== undefined ? { label: profile.label } : {}),
+              installed: await executableResolves(profile.executable),
+            })),
+          )
+        ).sort((a, b) => a.id.localeCompare(b.id)),
+        defaultHarness: policy.defaultHarness,
         folders: publishingFolders(policy.bindings),
         maxConcurrentHarnessRuns: policy.maxConcurrentHarnessRuns,
       }))
       .catch(() => ({
         harnesses: lastHarnesses,
+        defaultHarness: lastDefaultHarness,
         folders: lastFolders,
         maxConcurrentHarnessRuns: lastMaxConcurrentHarnessRuns,
       }));
     lastHarnesses = harnesses;
+    lastDefaultHarness = defaultHarness;
     lastFolders = folders;
     lastMaxConcurrentHarnessRuns = maxConcurrentHarnessRuns;
     const browsers = await browserDriver
@@ -347,6 +357,7 @@ async function main(): Promise<void> {
       machine: await machine.current(),
       runtimes,
       harnesses,
+      ...(defaultHarness !== undefined ? { defaultHarness } : {}),
       maxConcurrentHarnessRuns,
       folders,
       browsers,

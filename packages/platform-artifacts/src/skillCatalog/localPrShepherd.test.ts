@@ -339,7 +339,7 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
       if (commission === 'failed') return { ok: false };
       return ok({
         runId: 'hp_1',
-        harness: { id: 'claude' },
+        harness: { id: 'claude', selectedBy: 'default' },
         continued: false,
         baseSha: HEAD,
         merge: { from: MERGED_FROM, conflicts: [] },

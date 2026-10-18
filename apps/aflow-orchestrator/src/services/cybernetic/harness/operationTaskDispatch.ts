@@ -19,6 +19,7 @@ import {
   isWorkflowTaskSafeInlineOperation,
 } from '../../SessionOrchestrator/helpers/inlineOperations.js';
 import type { HarnessDeps } from './types.js';
+import { preferredHarnessFor } from '../../hostHarnessPreference.js';
 
 /**
  * Default `completion_pending` supervision window — how long the sweeper
@@ -113,7 +114,7 @@ export function startingConversationOf(
  * for longer than the wait's looks span.
  */
 export async function dispatchClaimedOperationTask(
-  deps: Pick<HarnessDeps, 'redis' | 'payloadStore'>,
+  deps: Pick<HarnessDeps, 'db' | 'redis' | 'payloadStore'>,
   args: DispatchClaimedOperationTaskArgs,
 ): Promise<OperationTaskDispatchMode> {
   const {
@@ -211,6 +212,7 @@ export async function dispatchClaimedOperationTask(
 
   // Enqueue the workflow-task job. Schema invariant guarantees this path
   // uses workflowExecution + no sessionId.
+  const preferredHarness = await preferredHarnessFor(deps.db, tenantId, spaceId, operationId);
   const dispatched = await dispatchOrWaitOnExecutor(deps.redis, {
     messageVersion: 1,
     tenantId,
@@ -228,6 +230,7 @@ export async function dispatchClaimedOperationTask(
     spaceId,
     activatedByPerson,
     ...(startingConversationId !== undefined ? { startingConversationId } : {}),
+    ...(preferredHarness !== undefined ? { preferredHarness } : {}),
   });
   return dispatched.kind === 'waiting' ? 'executor_wait' : 'enqueued';
 }

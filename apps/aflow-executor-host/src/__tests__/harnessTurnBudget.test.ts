@@ -1,15 +1,16 @@
 /**
  * Contract: a run that names no turn budget gets the operation's default on a
- * harness that can take one, and none on a harness that cannot — so a brief
- * that leaves the budget out runs on every harness a machine offers, and a
- * budget a run does name is never silently dropped.
+ * harness that can take one, and none on a harness that cannot. A budget a run
+ * names on a harness that cannot take one is not applied rather than refused,
+ * so a brief runs on every harness a machine offers; the result reports it
+ * (Plan 326 D5).
  */
 import { describe, expect, it } from 'vitest';
 
 import { HOST_HARNESS_MAX_TURNS_DEFAULT, HostHarnessRunInputSchema } from '@aflow/schemas';
 
 import { effectiveMaxTurns, harnessTurnArgv } from '../handlers/harnessHandlers.js';
-import { HarnessProfileError, HarnessProfileSchema } from '../harnessProfiles.js';
+import { HarnessProfileSchema } from '../harnessProfiles.js';
 
 const TAKES_A_BUDGET = HarnessProfileSchema.parse({
   id: 'claude',
@@ -58,14 +59,11 @@ describe('the turn budget a harness run gets', () => {
     ]);
   });
 
-  it('is still refused by name on a harness without turnsArgs when the run names one', () => {
-    try {
-      harnessTurnArgv(TAKES_NONE, NAMED, 't', 'c-1', false);
-      expect.unreachable();
-    } catch (error) {
-      expect(error).toBeInstanceOf(HarnessProfileError);
-      expect((error as HarnessProfileError).kind).toBe('unsupported_request');
-      expect((error as Error).message).toContain("Harness 'opencode'");
-    }
+  it('is none on a harness without turnsArgs even when the run names one', () => {
+    expect(harnessTurnArgv(TAKES_NONE, NAMED, 't', 'c-1', false)).toEqual([
+      '/usr/local/bin/opencode',
+      'run',
+      't',
+    ]);
   });
 });

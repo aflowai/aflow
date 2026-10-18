@@ -26,8 +26,8 @@ import {
   HOST_WITHDRAWAL_CHANNEL,
   publishingFoldersForSpace,
   readLiveHostInventories,
+  type HostInventory,
   type HostWithdrawalNotice,
-  type PublishingFolder,
 } from '@aflow/redis';
 
 /**
@@ -75,6 +75,34 @@ const HostBindingSchema = z.object({
   branchPrefix: z.string().nullable().default(null),
   mcpServers: z.array(LocalMcpServerRefSchema).default([]),
 });
+
+/**
+ * A running machine holding one of this space's folders, and the coding agents
+ * it can run there. Only those machines: a machine serving other workspaces
+ * offers this one nothing.
+ */
+const SpaceHostMachineSchema = z.object({
+  hostname: z.string(),
+  harnesses: z.array(
+    z.object({ id: z.string(), label: z.string().optional(), installed: z.boolean() }),
+  ),
+  defaultHarness: z.string().optional(),
+});
+
+function machinesForSpace(
+  inventories: readonly HostInventory[],
+  spaceId: string,
+): Array<z.infer<typeof SpaceHostMachineSchema>> {
+  return inventories
+    .filter((inventory) => inventory.folders.some((folder) => folder.spaceId === spaceId))
+    .map((inventory) => ({
+      hostname: inventory.hostname,
+      harnesses: inventory.harnesses,
+      ...(inventory.defaultHarness !== undefined
+        ? { defaultHarness: inventory.defaultHarness }
+        : {}),
+    }));
+}
 
 const ListedHostBindingSchema = HostBindingSchema.extend({
   pushApproval: HostPushApprovalSchema.nullable().describe(
@@ -166,7 +194,12 @@ export const hostBindingRoutes: FastifyPluginAsync = async (fastify) => {
         tags: ['Host'],
         summary: 'List the folders this space may reach on the operator machine',
         params: spaceParams,
-        response: { 200: z.object({ bindings: z.array(ListedHostBindingSchema) }) },
+        response: {
+          200: z.object({
+            bindings: z.array(ListedHostBindingSchema),
+            machines: z.array(SpaceHostMachineSchema),
+          }),
+        },
       },
     },
     async (request, reply) => {
@@ -178,10 +211,12 @@ export const hostBindingRoutes: FastifyPluginAsync = async (fastify) => {
       // The posture is the machine's, changed there, so it is read from what the
       // running machines publish. A Redis that cannot answer costs the line, not
       // the list.
-      const postures = await readLiveHostInventories(getRedisConnection())
-        .then((inventories) => publishingFoldersForSpace(inventories, request.params.spaceId))
-        .catch(() => new Map<string, PublishingFolder>());
+      const inventories = await readLiveHostInventories(getRedisConnection()).catch(
+        () => [] as HostInventory[],
+      );
+      const postures = publishingFoldersForSpace(inventories, request.params.spaceId);
       return reply.send({
+        machines: machinesForSpace(inventories, request.params.spaceId),
         bindings: rows.map((r) => {
           const binding = HostBindingSchema.parse(r);
           return {

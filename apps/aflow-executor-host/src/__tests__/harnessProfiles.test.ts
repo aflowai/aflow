@@ -8,7 +8,13 @@ import {
   HarnessProfileSchema,
   requireProfile,
   type HarnessProfile,
+  type HarnessMcpServer,
 } from '../harnessProfiles.js';
+
+/** A server as a browser turn hands it over, at a configuration path. */
+function mcpAt(configPath: string): HarnessMcpServer {
+  return { name: 'browser', command: '/usr/bin/node', args: ['relay.mjs'], configPath };
+}
 
 function profile(overrides: Partial<HarnessProfile> = {}): HarnessProfile {
   return HarnessProfileSchema.parse({
@@ -89,17 +95,30 @@ describe('harness profiles', () => {
     expect(argv).not.toContain('--max-turns');
   });
 
-  it('refuses a budget the harness has no flag for, naming it', () => {
-    try {
-      buildHarnessArgv(profile({ id: 'opencode', turnsArgs: [] }), 'the task', [], 8);
-      expect.unreachable();
-    } catch (error) {
-      expect((error as Error).message).toContain('opencode');
-      expect((error as Error).message).toContain('maxTurns');
-      // Resending without the budget is the remedy, so it is a validation
-      // refusal rather than a grant the operator has to make.
-      expect((error as HarnessProfileError).kind).toBe('unsupported_request');
+  it('takes variables the harness reads, and refuses any that steer the sandbox around it', () => {
+    expect(profile({ env: { CODEX_CA_CERTIFICATE: '/etc/ssl/cert.pem' } }).env).toEqual({
+      CODEX_CA_CERTIFICATE: '/etc/ssl/cert.pem',
+    });
+    for (const name of [
+      'SSL_CERT_FILE',
+      'HTTPS_PROXY',
+      'NODE_OPTIONS',
+      'DYLD_INSERT_LIBRARIES',
+      'PATH',
+    ]) {
+      const parsed = HarnessProfileSchema.safeParse({
+        id: 'codex',
+        executable: '/usr/local/bin/codex',
+        env: { [name]: 'x' },
+      });
+      expect(parsed.success, name).toBe(false);
     }
+  });
+
+  it('runs without a budget the harness has no flag for, rather than refusing it', () => {
+    const argv = buildHarnessArgv(profile({ id: 'opencode', turnsArgs: [] }), 'the task', [], 8);
+    expect(argv).not.toContain('8');
+    expect(argv.at(-1)).toBe('the task');
   });
 
   it('refuses a turns template with nowhere to put the number, or two places', () => {
@@ -178,14 +197,21 @@ describe('harness profiles', () => {
       expect((error as Error).message).toContain('`mcpArgs`');
       expect((error as Error).message).toContain('aflow harness browser claude');
     }
-    expect(() => buildHarnessArgv(written, 'x', [], undefined, undefined, '/s/mcp.json')).toThrow(
-      /mcpArgs/,
-    );
+    expect(() =>
+      buildHarnessArgv(written, 'x', [], undefined, undefined, mcpAt('/s/mcp.json')),
+    ).toThrow(/mcpArgs/);
   });
 
   it('refuses an mcpArgs template with nowhere to put the path, or two places', () => {
     expect(() =>
-      buildHarnessArgv(profile({ mcpArgs: ['--mcp-config'] }), 'x', [], undefined, undefined, '/m'),
+      buildHarnessArgv(
+        profile({ mcpArgs: ['--mcp-config'] }),
+        'x',
+        [],
+        undefined,
+        undefined,
+        mcpAt('/m'),
+      ),
     ).toThrow(/exactly one \{mcpConfig\}/);
     expect(() =>
       buildHarnessArgv(
@@ -194,7 +220,7 @@ describe('harness profiles', () => {
         [],
         undefined,
         undefined,
-        '/m',
+        mcpAt('/m'),
       ),
     ).toThrow(/exactly one/);
   });
