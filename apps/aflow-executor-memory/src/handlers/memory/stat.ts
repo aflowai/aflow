@@ -73,6 +73,7 @@ function buildStatBase(doc: MemoryDoc): Record<string, unknown> {
     tags: doc.tags,
     version: doc.currentVersion,
     embeddingStatus: doc.embeddingStatus,
+    ...(doc.embeddingError ? { embeddingError: doc.embeddingError } : {}),
     createdAt: doc.createdAt.toISOString(),
     updatedAt: doc.updatedAt.toISOString(),
   };

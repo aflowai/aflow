@@ -13,17 +13,36 @@ import { stripSensitiveHeaders } from '../../lib/header-redaction.js';
 import {
   INLINE_BODY_THRESHOLD,
   DEFAULT_INLINE_RESPONSE_BYTES,
-  SAVE_TO_DEFAULT_RESPONSE_BYTES,
+  STREAMED_RESPONSE_DEFAULT_BYTES,
 } from './config.js';
+import { type BodyTail, NOTHING_SKIPPED, readBodyTail } from './bodyTail.js';
 import {
+  applyRecordTransformPreset,
   applyTextTransformPreset,
   applyTransformPreset,
-  getTextTransform,
+  isRecordTransformPreset,
+  isTextTransformPreset,
+  textPresetTailWindow,
   validateAgainstJsonSchema,
 } from './transforms.js';
 import { saveResponseBodyToMemory } from './saveResponse.js';
 import type { ResolvedCall } from './types.js';
 import { ApiExecutionError } from './types.js';
+
+/** A record preset reads JSON: a body that is not is a failed read, never passed on raw. */
+function parseRecordBody(text: string, presetId: string, rawBodyRef: string): unknown {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    throw new ApiExecutionError(
+      apiError(
+        'API_RESPONSE_TRANSFORM_FAILED',
+        `Response transform '${presetId}' reads JSON, and the response was not JSON.`,
+        { retryable: false, details: { presetId, rawBodyRef } },
+      ),
+    );
+  }
+}
 
 export interface ResponseSaveDeps {
   db?: PostgresJsDatabase;
@@ -258,10 +277,10 @@ export async function processResponse(
   const responseConfig = input.response;
   // An explicit maxBytes always wins; when omitted, a saveTo download persists
   // to a Memory path rather than inlining, so it is not bound by the small
-  // inline default.
+  // inline default (nor is a tail read, below).
   const maxBytes =
     responseConfig.maxBytes ??
-    (responseConfig.saveTo ? SAVE_TO_DEFAULT_RESPONSE_BYTES : DEFAULT_INLINE_RESPONSE_BYTES);
+    (responseConfig.saveTo ? STREAMED_RESPONSE_DEFAULT_BYTES : DEFAULT_INLINE_RESPONSE_BYTES);
   const contentType = response.headers.get('content-type') ?? '';
   let data: unknown;
   let dataRef: string | undefined;
@@ -277,26 +296,39 @@ export async function processResponse(
   // deploy skew must never silently hand the agent the raw source format).
   const declaredPresetId = resolved.endpoint?.responseTransformPresetId;
   const explicitPresetId = responseConfig.transformPresetId;
+  const declaredIsRecord = isRecordTransformPreset(declaredPresetId);
   const activeTextPresetId = !response.ok
     ? undefined
     : explicitPresetId !== undefined
-      ? getTextTransform(explicitPresetId) !== undefined
+      ? isTextTransformPreset(explicitPresetId)
         ? explicitPresetId
         : undefined
-      : declaredPresetId;
+      : declaredIsRecord
+        ? undefined
+        : declaredPresetId;
+  const activeRecordPresetId = !response.ok
+    ? undefined
+    : explicitPresetId !== undefined
+      ? isRecordTransformPreset(explicitPresetId)
+        ? explicitPresetId
+        : undefined
+      : declaredIsRecord
+        ? declaredPresetId
+        : undefined;
+  const activeStrictPresetId = activeTextPresetId ?? activeRecordPresetId;
 
   if (responseConfig.saveTo && response.ok) {
-    if (activeTextPresetId !== undefined) {
+    if (activeStrictPresetId !== undefined) {
       // Saving would persist the RAW wire body while the endpoint contract
       // promises normalized records — contradictory by construction.
       throw new ApiExecutionError(
         apiError(
           'API_RESPONSE_TRANSFORM_FAILED',
-          `response.saveTo would bypass the '${activeTextPresetId}' response normalization and ` +
+          `response.saveTo would bypass the '${activeStrictPresetId}' response normalization and ` +
             'persist the raw body. Omit saveTo (the normalized body is returned inline or by ' +
             'reference) and persist it with memory.store.put(content: {fromPath: ' +
             '"/run/outputs/<toolCallId>/data"}), or drop the transform.',
-          { retryable: false, details: { presetId: activeTextPresetId } },
+          { retryable: false, details: { presetId: activeStrictPresetId } },
         ),
       );
     }
@@ -347,12 +379,29 @@ export async function processResponse(
     const buffer = await readWithBudget(response, maxBytes, INLINE_OVER_BUDGET_HINT);
     dataRef = await storeToPayloadStore(ctx, buffer);
     data = undefined;
-  } else if (responseConfig.format === 'text' || !contentType.includes('application/json')) {
-    const text = await readTextWithBudget(response, maxBytes, INLINE_OVER_BUDGET_HINT);
+  } else if (
+    activeStrictPresetId !== undefined ||
+    responseConfig.format === 'text' ||
+    !contentType.includes('application/json')
+  ) {
+    const tailWindow =
+      activeTextPresetId !== undefined ? textPresetTailWindow(activeTextPresetId) : undefined;
+    const body: BodyTail =
+      tailWindow !== undefined
+        ? await readBodyTail(
+            response,
+            tailWindow,
+            responseConfig.maxBytes ?? STREAMED_RESPONSE_DEFAULT_BYTES,
+          )
+        : {
+            text: await readTextWithBudget(response, maxBytes, INLINE_OVER_BUDGET_HINT),
+            skipped: NOTHING_SKIPPED,
+          };
+    const { text } = body;
     if (
       response.ok &&
       explicitPresetId !== undefined &&
-      activeTextPresetId === undefined &&
+      activeStrictPresetId === undefined &&
       declaredPresetId !== undefined
     ) {
       ctx.log.warn('Explicit transformPresetId disables the declared response normalization', {
@@ -360,13 +409,21 @@ export async function processResponse(
         declaredPresetId,
       });
     }
-    if (activeTextPresetId !== undefined) {
-      // Normalize the FULL text before the inline/reference decision so the
+    if (activeStrictPresetId !== undefined) {
+      // Normalize the body before the inline/reference decision so the
       // by-reference body (and every /run/outputs/<id>/data read) is the
-      // normalized value, never the raw source format. The raw text is kept
-      // under an internal ref for debugging only.
+      // normalized value, never the raw source format. The raw text — for a
+      // tail read, the end it kept — is held under an internal ref for
+      // debugging only.
       rawBodyRef = await ctx.writePayload('raw_body', text);
-      const normalized = applyTextTransformPreset(activeTextPresetId, text, { rawBodyRef });
+      const normalized =
+        activeTextPresetId !== undefined
+          ? applyTextTransformPreset(activeTextPresetId, body, { rawBodyRef })
+          : applyRecordTransformPreset(
+              activeStrictPresetId,
+              parseRecordBody(text, activeStrictPresetId, rawBodyRef),
+              { rawBodyRef },
+            );
       normalizedToJson = true;
       const normalizedJson: string | undefined = JSON.stringify(normalized);
       const normalizedLength = normalizedJson?.length ?? 0;
@@ -436,9 +493,12 @@ export async function processResponse(
     }
   }
 
+  // A record preset shapes a successful body only; an error body goes on as
+  // GitHub, or whoever, wrote it, with its status beside it.
   if (
     !normalizedToJson &&
     responseConfig.transformPresetId &&
+    !isRecordTransformPreset(responseConfig.transformPresetId) &&
     data !== undefined &&
     typeof data === 'object' &&
     data !== null

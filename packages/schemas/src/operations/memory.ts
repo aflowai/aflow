@@ -44,7 +44,17 @@ export const MemoryDocTypeSchema = z.enum([
 ]);
 export type MemoryDocType = z.infer<typeof MemoryDocTypeSchema>;
 
-export const MemoryEmbeddingStatusSchema = z.enum(['disabled', 'pending', 'indexed', 'failed']);
+/**
+ * `unconfigured`: the space has no embedding provider, so the document waits
+ * for a key or a model choice rather than for the next backfill cycle.
+ */
+export const MemoryEmbeddingStatusSchema = z.enum([
+  'disabled',
+  'pending',
+  'indexed',
+  'failed',
+  'unconfigured',
+]);
 export type MemoryEmbeddingStatus = z.infer<typeof MemoryEmbeddingStatusSchema>;
 
 export const MemoryActorTypeSchema = z.enum(['api', 'orchestrator', 'executor', 'user']);
@@ -122,6 +132,12 @@ export const MemoryDocStatSchema = z.object({
     ),
   version: z.number().int().positive(),
   embeddingStatus: MemoryEmbeddingStatusSchema,
+  embeddingError: z
+    .string()
+    .optional()
+    .describe(
+      'Why the last embedding attempt failed; present only while embeddingStatus is failed.',
+    ),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
   backlinkCount: z
@@ -382,6 +398,14 @@ export const MemoryQueryOutputSchema = z.object({
         'page the rest; grep and search are single-page top-K with no cursor, so recover there by ' +
         'narrowing the query or raising budget.maxTotalBytes.',
     ),
+  lexicalOnly: z
+    .string()
+    .optional()
+    .describe(
+      'Search mode only: present when results matched words, not meaning, and says why. ' +
+        'A paraphrase or synonym of what a document says will not find it — search again ' +
+        'with the words the document would use.',
+    ),
 });
 export type MemoryQueryOutput = z.infer<typeof MemoryQueryOutputSchema>;
 
@@ -496,6 +520,13 @@ export const MemoryGetInputSchema = z.preprocess(
         message: 'Either id or path must be provided',
       }),
     ...memoryReadOptionsShape,
+    ifMissing: z
+      .enum(['fail', 'absent'])
+      .default('fail')
+      .describe(
+        'absent: no document at the target succeeds as { found: false } instead of failing MEMORY_NOT_FOUND. ' +
+          'Any other failed read — a missing target.version, a hash mismatch — still fails.',
+      ),
   }),
 );
 export type MemoryGetInput = z.infer<typeof MemoryGetInputSchema>;
@@ -635,6 +666,25 @@ export const MemoryGetOutputSchema = z.object({
   backlinkTotal: z.number().int().nonnegative().optional(),
 });
 export type MemoryGetOutput = z.infer<typeof MemoryGetOutputSchema>;
+
+/**
+ * memory.store.get's output: the same read, and — only under
+ * `ifMissing: 'absent'` — `{ found: false }` with no `stat` where no document
+ * is there. Kept one object rather than a union so a binding's dotted path
+ * into it still resolves statically.
+ */
+export const MemoryStoreGetOutputSchema = MemoryGetOutputSchema.extend({
+  stat: MemoryDocStatSchema.optional().describe(
+    'The document read. Absent only where ifMissing: "absent" found no document (found: false).',
+  ),
+  found: z
+    .literal(false)
+    .optional()
+    .describe(
+      'false only where ifMissing: "absent" found no document at the target; absent on every read that found one.',
+    ),
+});
+export type MemoryStoreGetOutput = z.infer<typeof MemoryStoreGetOutputSchema>;
 
 // ============================================================================
 // memory.store.put — create / upsert
@@ -847,6 +897,12 @@ export const MemoryDeleteInputSchema = z.object({
         'Cannot delete virtual /run/ paths — they are read-only and expire when the run ends.',
     }),
   recursive: z.boolean().default(false),
+  expectedHash: z
+    .string()
+    .optional()
+    .describe(
+      "The document's content hash as the caller last read or wrote it: the delete happens only while the document still holds exactly that, and fails MEMORY_HASH_MISMATCH where another writer has changed it since. Documents only: a directory holds no content hash, so a directory delete carrying one fails MEMORY_HASH_MISMATCH and leaves the directory.",
+    ),
 });
 export type MemoryDeleteInput = z.infer<typeof MemoryDeleteInputSchema>;
 
@@ -1068,7 +1124,7 @@ export const MemoryOperationRegistrations: OperationRegistration[] = [
     },
     accessMode: 'read',
     inputZod: MemoryGetInputSchema,
-    outputZod: MemoryGetOutputSchema,
+    outputZod: MemoryStoreGetOutputSchema,
   },
   {
     stepType: 'memory',

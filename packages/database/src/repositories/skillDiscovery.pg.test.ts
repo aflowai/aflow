@@ -8,6 +8,7 @@ import type { TenantId } from '@aflow/schemas';
 import { createDatabase } from '../connection.js';
 import { tenantIdToSchemaName } from '../tenant/context.js';
 import { applyMigration221 } from '../tenant/migrations/migration221.js';
+import { applyMigration222 } from '../tenant/migrations/migration222.js';
 import { querySkillDiscovery } from './skillDiscovery.js';
 
 const connectionString = process.env['DATABASE_URL'];
@@ -22,7 +23,13 @@ describe.skipIf(!connectionString)('skill discovery metadata (isolated Postgres 
   beforeAll(async () => {
     await client.unsafe(`CREATE SCHEMA "${schema}";
       CREATE TABLE "${schema}".spaces (id UUID PRIMARY KEY, directives JSONB);
-      CREATE TABLE "${schema}".memory_docs (space_id UUID, path TEXT, inline_content TEXT, deleted_at TIMESTAMPTZ);
+      CREATE TABLE "${schema}".memory_docs (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(), space_id UUID, path TEXT,
+        inline_content TEXT, deleted_at TIMESTAMPTZ,
+        embedding_status TEXT NOT NULL DEFAULT 'disabled', updated_at TIMESTAMPTZ DEFAULT now()
+      );
+      CREATE TABLE "${schema}".memory_chunks (doc_id UUID, embedding_model TEXT);
+      CREATE TABLE "${schema}".memory_embed_config (scope_type TEXT, scope_value TEXT, embedding_model TEXT);
       CREATE TABLE "${schema}".schema_migrations (version INTEGER PRIMARY KEY, description TEXT);
       CREATE TABLE "${schema}".capability_profiles (is_system_profile BOOLEAN, allowed_capabilities JSONB);`);
     await client.unsafe(
@@ -42,15 +49,16 @@ describe.skipIf(!connectionString)('skill discovery metadata (isolated Postgres 
       ],
     );
     await applyMigration221(client, schema);
+    await applyMigration222(client, schema);
     await client.unsafe(
-      `INSERT INTO "${schema}".memory_docs
+      `INSERT INTO "${schema}".memory_docs (space_id, path, inline_content, deleted_at)
       SELECT $1::uuid, '/workflows/skill-' || lpad(i::text, 4, '0') || '/workflow.json',
         jsonb_build_object('slug', 'skill-' || lpad(i::text,4,'0'), 'name', 'Skill ' || i, 'description', 'Review pull requests', 'mode', 'process', 'status', 'approved', 'revision', 1)::text, NULL
       FROM generate_series(1,1005) AS i`,
       [spaceId],
     );
     await client.unsafe(
-      `INSERT INTO "${schema}".memory_docs VALUES ($1, '/workflows/private-skill/workflow.json', '{"name":"Private skill","status":"approved","mode":"process"}', NULL)`,
+      `INSERT INTO "${schema}".memory_docs (space_id, path, inline_content, deleted_at) VALUES ($1, '/workflows/private-skill/workflow.json', '{"name":"Private skill","status":"approved","mode":"process"}', NULL)`,
       [otherSpace],
     );
   }, 20000);
@@ -60,6 +68,17 @@ describe.skipIf(!connectionString)('skill discovery metadata (isolated Postgres 
     } finally {
       await client.end();
     }
+  });
+  it('applies both the embedding and skill-discovery migrations in order', async () => {
+    const versions = await client.unsafe(
+      `SELECT version FROM "${schema}".schema_migrations ORDER BY version`,
+    );
+    expect(versions.map((row) => row['version'])).toEqual([221, 222]);
+    const columns = await client.unsafe(
+      `SELECT memory_embedding_model FROM "${schema}".spaces WHERE id = $1`,
+      [spaceId],
+    );
+    expect(columns[0]?.['memory_embedding_model']).toBeNull();
   });
   it('searches beyond both old scan bounds and returns the actual matched count', async () => {
     const found = await querySkillDiscovery(handle.db, tenantId, spaceId, {

@@ -1057,8 +1057,6 @@ function buildCyberneticCoach(): CapabilityFlowDefinition {
               'learner.learning.record',
               'learner.learning.resolve_candidate',
               'learner.learning.consolidate',
-              'artifact.inspect.list',
-              'artifact.inspect.read',
               'ui.artifact.get',
               'ui.artifact.generate',
               'learner.propose.artifact_update',

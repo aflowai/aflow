@@ -21,6 +21,7 @@ import {
   HostCommitDescribeInputSchema,
   HostCommitDescribeOutputSchema,
   HANDED_ON_FINDINGS_MAX_COUNT,
+  LOCAL_PUBLISH_PULL_REQUEST_MARKER,
   PULL_REQUEST_BODY_MAX_CHARS,
 } from '@aflow/schemas';
 
@@ -302,13 +303,28 @@ describe('composePullRequest', () => {
   const bodyOf = (input: Partial<HostCommitDescribeInput>) =>
     composePullRequest({ bindingId: 'hb_app', range, ...input }, commits).body;
 
-  it("keeps a person's own title and summary as they are", () => {
+  it("keeps a person's own title and summary as they are, closed by the loop's marker", () => {
     expect(
       composePullRequest(
         { bindingId: 'hb_app', range, title: 'Their title', summary: 'Their words.' },
         commits,
       ),
-    ).toEqual({ title: 'Their title', body: 'Their words.', findings: [] });
+    ).toEqual({
+      title: 'Their title',
+      body: `Their words.\n\n${LOCAL_PUBLISH_PULL_REQUEST_MARKER}`,
+      findings: [],
+    });
+  });
+
+  it('closes every body it composes with the marker the shepherd tends by, within GitHub’s limit', () => {
+    const body = bodyOf({});
+    expect(body.endsWith(`\n\n${LOCAL_PUBLISH_PULL_REQUEST_MARKER}`)).toBe(true);
+    const huge = composePullRequest(
+      { bindingId: 'hb_app', range },
+      commits.map((commit) => ({ ...commit, body: 'x'.repeat(PULL_REQUEST_BODY_MAX_CHARS) })),
+    ).body;
+    expect(huge.length).toBeLessThanOrEqual(PULL_REQUEST_BODY_MAX_CHARS);
+    expect(huge.endsWith(LOCAL_PUBLISH_PULL_REQUEST_MARKER)).toBe(true);
   });
 
   /** A finding as Local Code Review returns it, its evidence and suggestion beside what the record reads. */

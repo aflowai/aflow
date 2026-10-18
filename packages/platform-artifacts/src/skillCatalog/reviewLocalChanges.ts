@@ -146,13 +146,13 @@ const BRIEF_MAX_TURNS = 8;
 
 const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'review-local-changes',
-  version: 9,
+  version: 10,
   name: 'Review Local Changes',
   tagline:
     "Review committed changes in a connected repository with the machine's own coding agent.",
   description: `Fits a request to review changes that already exist in a repository on the operator's machine — "review what I just did on this branch", "look over these commits before they go anywhere". It reads a range of commits and returns a verdict with findings, and it changes nothing. Reviewing an open pull request is a different skill (review-pull-request); making a change is not this skill at all.
 
-**What it needs**: the connected folder holding the repository, the range to review, and \`at\`, the commit the range ends at. Ask for whichever is missing — a range reads as \`main..HEAD\`, \`HEAD~3..HEAD\`, or a single commit, and \`at\` is then \`HEAD\`, \`HEAD\`, or that commit. The review lists a range's commits as given and reads its diff from where the two ends meet, \`main...HEAD\`, so a branch \`main\` has moved past reads as what it adds and not as undoing what \`main\` took since. A focus is optional and worth asking for when the request names a worry: security, an API surface, the blast radius of a refactor.
+**What it needs**: the connected folder holding the repository, and the range to review as its two ends — \`at\`, the commit it ends at, and \`from\`, where it starts. Ask for whichever is missing — \`main..HEAD\` is \`from\` \`main\` and \`at\` \`HEAD\`, \`HEAD~3..HEAD\` is \`from\` \`HEAD~3\` and \`at\` \`HEAD\`, and a single commit is \`at\` alone. The range is made from the two, so the commit it ends at and the commit the review stands on are one value and cannot disagree. The review lists a range's commits as given and reads its diff from where the two ends meet, \`main...HEAD\`, so a branch \`main\` has moved past reads as what it adds and not as undoing what \`main\` took since. A focus is optional and worth asking for when the request names a worry: security, an API surface, the blast radius of a refactor.
 
 **Depth is a first-class choice, not something to ask the coding agent for in \`focus\`.** \`brief\` is the smoke test — a first look, a check that the mechanics work: a handful of tool calls, one paragraph, and a verdict of \`comment\` unless something is plainly a blocker. An operator asking for something quick, a glance or a sanity check means \`brief\`, and it is budgeted in coding-agent turns (\`maxTurns\`: ${String(BRIEF_MAX_TURNS)}) so that it stays brief. \`standard\` reads the range with the repository around it. \`deep\` also runs the project's own checks over the touched files, and costs the most.
 
@@ -187,17 +187,17 @@ const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
           schema: { type: 'string', minLength: 1, maxLength: 128 },
         },
         {
-          id: 'range',
-          required: true,
-          description:
-            'The revision range or ref to review — "main..HEAD", "HEAD~3..HEAD", a commit sha. It must be committed. A range `<base>..<sha>` is read as its commits, `<base>..<sha>`, and its diff from where the two ends meet, `<base>...<sha>`, so a branch its base has moved past reads as what it adds.',
-          schema: { type: 'string', minLength: 1, maxLength: 200 },
-        },
-        {
           id: 'at',
           required: true,
           description:
-            'The commit the range ends at — the one the review judges, and where its checkout stands: "HEAD" for "main..HEAD", "feature" for "main..feature", the sha for a single commit or for `<base>..<sha>`. The range\'s base names only where the diff starts: checked out, it would have the review read every file, and run every check, as it was before the change.',
+            'The commit the range ends at — the one the review judges, and where its checkout stands: "HEAD" for "main..HEAD", "feature" for "main..feature", the sha for a single commit or for `<base>..<sha>`. It must be committed. The range is `<from>..<at>`, or `at` alone, so its tip is this value and nothing else.',
+          schema: { type: 'string', minLength: 1, maxLength: 200 },
+        },
+        {
+          id: 'from',
+          required: false,
+          description:
+            'Where the range starts: "main" for "main..HEAD", "HEAD~3" for "HEAD~3..HEAD", a sha for `<base>..<sha>`. Omit it to review the single commit `at`. The range `<from>..<at>` is read as its commits, `<from>..<at>`, and its diff from where the two ends meet, `<from>...<at>`, so a branch its base has moved past reads as what it adds. It names only where the diff starts: checked out, it would have the review read every file, and run every check, as it was before the change.',
           schema: { type: 'string', minLength: 1, maxLength: 200 },
         },
         {
@@ -235,7 +235,7 @@ const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
           retryability: 'safe' as const,
           inputBindings: {
             bindingId: { kind: 'run_input' as const, path: 'bindingId' },
-            range: { kind: 'run_input' as const, path: 'range' },
+            from: { kind: 'run_input' as const, path: 'from' },
             at: { kind: 'run_input' as const, path: 'at' },
             focus: { kind: 'run_input' as const, path: 'focus' },
             depth: { kind: 'run_input' as const, path: 'depth' },
@@ -255,7 +255,14 @@ const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
             base: { $bind: 'at' },
             task: REVIEW_TASK,
             inputs: {
-              range: { $bind: 'range' },
+              // Built from `at`, so the range the review reads ends at the
+              // commit its checkout stands on, whatever the caller passed.
+              range: {
+                $firstOf: [
+                  { $concat: [{ $bind: 'from' }, '..', { $bind: 'at' }] },
+                  { $bind: 'at' },
+                ],
+              },
               focus: { $bind: 'focus' },
               depth: { $bind: 'depth' },
             },
@@ -346,7 +353,7 @@ const REVIEW_LOCAL_CHANGES: SkillCatalogEntry = {
       priority: 50,
     },
     rationale:
-      "One operation task on host.harness.run with an outputSchema of findings and a verdict: the skill description steers the Helmsman (when it fits, what to ask for, what to do with the result) and the task prose instructs the harness (how to review). Read-only by construction — a single task with no write, no push and no second step — so a fix is a separate commission rather than something this skill can slip in. The repository arrives as a run input until folder roles land, and the review checkout holds the folder's commits alone, detached at the range's tip (`at`, passed as the harness `base`) so it reads and checks the change itself, which is why the description says uncommitted work is invisible.",
+      "One operation task on host.harness.run with an outputSchema of findings and a verdict: the skill description steers the Helmsman (when it fits, what to ask for, what to do with the result) and the task prose instructs the harness (how to review). Read-only by construction — a single task with no write, no push and no second step — so a fix is a separate commission rather than something this skill can slip in. The repository arrives as a run input until folder roles land, and the review checkout holds the folder's commits alone, detached at the range's tip (`at`, passed as the harness `base`) so it reads and checks the change itself; the range is built as `<from>..<at>` rather than taken whole, so its tip and the checkout are one input and cannot disagree, which is why the description says uncommitted work is invisible.",
   },
 };
 

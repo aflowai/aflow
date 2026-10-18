@@ -67,5 +67,8 @@ export function patchedDefinitionHostSource(
           },
         }
       : {}),
+    ...(Array.isArray(updatedDef['endpoints'])
+      ? { endpoints: updatedDef['endpoints'] as Array<{ redirectHosts?: string[] }> }
+      : {}),
   };
 }

@@ -34,6 +34,14 @@ import type {
   WorkflowRunListAttentionOutputSchema as WorkflowRunListAttentionOutputSchemaT,
 } from './runAttention.js';
 import type {
+  WorkflowRunListInputSchema as WorkflowRunListInputSchemaT,
+  WorkflowRunListOutputSchema as WorkflowRunListOutputSchemaT,
+} from './runList.js';
+import type {
+  WorkflowRunDecideInputSchema as WorkflowRunDecideInputSchemaT,
+  WorkflowRunDecideOutputSchema as WorkflowRunDecideOutputSchemaT,
+} from './runDecide.js';
+import type {
   WorkflowEvaluateInputSchema as WorkflowEvaluateInputSchemaT,
   WorkflowEvaluateOutputSchema as WorkflowEvaluateOutputSchemaT,
 } from './evaluate.js';
@@ -81,6 +89,10 @@ interface WorkflowRegistrationSchemas {
   WorkflowRunDetailOutputSchema: typeof WorkflowRunDetailOutputSchemaT;
   WorkflowRunListAttentionInputSchema: typeof WorkflowRunListAttentionInputSchemaT;
   WorkflowRunListAttentionOutputSchema: typeof WorkflowRunListAttentionOutputSchemaT;
+  WorkflowRunListInputSchema: typeof WorkflowRunListInputSchemaT;
+  WorkflowRunListOutputSchema: typeof WorkflowRunListOutputSchemaT;
+  WorkflowRunDecideInputSchema: typeof WorkflowRunDecideInputSchemaT;
+  WorkflowRunDecideOutputSchema: typeof WorkflowRunDecideOutputSchemaT;
   WorkflowEvaluateInputSchema: typeof WorkflowEvaluateInputSchemaT;
   WorkflowEvaluateOutputSchema: typeof WorkflowEvaluateOutputSchemaT;
   WorkflowLearnInputSchema: typeof WorkflowLearnInputSchemaT;
@@ -125,6 +137,10 @@ export function createWorkflowOperationRegistrations(
     WorkflowRunDetailOutputSchema,
     WorkflowRunListAttentionInputSchema,
     WorkflowRunListAttentionOutputSchema,
+    WorkflowRunListInputSchema,
+    WorkflowRunListOutputSchema,
+    WorkflowRunDecideInputSchema,
+    WorkflowRunDecideOutputSchema,
     WorkflowEvaluateInputSchema,
     WorkflowEvaluateOutputSchema,
     WorkflowLearnInputSchema,
@@ -626,6 +642,94 @@ export function createWorkflowOperationRegistrations(
       accessMode: 'read',
       inputZod: WorkflowRunListAttentionInputSchema,
       outputZod: WorkflowRunListAttentionOutputSchema,
+    },
+    {
+      stepType: 'workflow',
+      group: 'run',
+      verb: 'list',
+      name: 'List Workflow Runs',
+      actionLabel: 'Listing workflow runs…',
+      semanticDescription:
+        "List one workflow's runs across the whole space whose start named one run input with a " +
+        'given value — the publications of a branch, the commissions based on it — by status, ' +
+        "in flight by default with `paused` among them, newest first. Each run says whether it is the reading conversation's (`own`). " +
+        'One bounded page: the question it answers is whether any such run is in flight, not every run there was.',
+      tags: ['workflow', 'run', 'observe'],
+      idempotency: 'idempotent',
+      mutates: false,
+      opTaskOnly: true,
+      usage: {
+        oneLine: 'List the runs of a workflow started with one input equal to a value.',
+        whenToUse: [
+          'Asking whether work on a branch is in flight before starting more on it — a publication whose `branch` is the branch, a commission whose `base` is',
+          'Finding runs another conversation started on the same thing, whoever started them',
+        ],
+        whenNotToUse: [
+          'Reading what one run did — workflow.run.detail',
+          'Following what this conversation is waiting on — workflow.run.list_attention',
+          'Ad-hoc selection from an agent’s tool surface — this op is opTaskOnly and must be an explicit workflow operation task.',
+        ],
+        pitfalls: [
+          'The value is compared as the run was started with it: a branch given as `refs/heads/x` is not `x`.',
+          "A run marked `own: false` is another conversation's. It is in flight all the same; leave it to that conversation.",
+          'One page at most: `hasMore` says more match, and there is no cursor — narrow the status instead.',
+        ],
+        minimalExampleInput: {
+          slug: 'publish-local-changes',
+          input: { field: 'branch', equals: 'aflow/fix-flaky-test' },
+        },
+      },
+      accessMode: 'read',
+      inputZod: WorkflowRunListInputSchema,
+      outputZod: WorkflowRunListOutputSchema,
+    },
+    {
+      stepType: 'workflow',
+      group: 'run',
+      verb: 'decide',
+      name: 'Decide by Rules',
+      agentTool: false,
+      actionLabel: 'Deciding by rules…',
+      semanticDescription:
+        "Decide a run's branch from ordered rules over a state bound from earlier tasks: the first " +
+        'rule whose comparisons hold gives the decision and its reason, and `otherwise` gives them ' +
+        'where none holds. The comparisons are the ones a `when` makes, and one may compare two ' +
+        'values of the state. No model reads anything: the same state always decides the same way.',
+      tags: ['workflow', 'run', 'decide', 'rules'],
+      idempotency: 'idempotent',
+      mutates: false,
+      opTaskOnly: true,
+      usage: {
+        oneLine:
+          'Pick a decision and its reason from ordered rules over bound data, without a model.',
+        whenToUse: [
+          'A skill whose branch is a rule over several reads — a check run already acted on, a budget spent, a label — and whose decision and reason are recorded as well as acted on',
+        ],
+        whenNotToUse: [
+          'A judgement no rule over the data can make — reading a log, a ticket — which is ai.decision.decide',
+          'Gating one task on one output — a `when` on that task',
+          'Ad-hoc selection from an agent’s tool surface — this op is opTaskOnly and must be an explicit workflow operation task.',
+        ],
+        pitfalls: [
+          'Rules are read in order and the first that holds wins: put the narrower rule first.',
+          'A path through a value the state does not hold reads as null, and null `!=` any value holds — so a rule that must not fire on a missing read names the value it fires on with `==`, or, where only `!=` will do, checks the read is present first: `allOf: [<path> != null, <path> != <expected>]`.',
+          'Ordering comparisons (`>`, `>=`, `<`, `<=`) hold only between numbers.',
+        ],
+        minimalExampleInput: {
+          state: { checks: { state: 'passing' } },
+          rules: [
+            {
+              when: { expression: "state.checks.state == 'passing'" },
+              decision: 'leave',
+              reason: 'CI passes.',
+            },
+          ],
+          otherwise: { decision: 'fix', reason: 'CI fails.' },
+        },
+      },
+      accessMode: 'read',
+      inputZod: WorkflowRunDecideInputSchema,
+      outputZod: WorkflowRunDecideOutputSchema,
     },
 
     {

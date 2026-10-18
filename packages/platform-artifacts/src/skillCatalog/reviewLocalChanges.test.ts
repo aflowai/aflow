@@ -63,17 +63,59 @@ describe('Review Local Changes — the first harness inside a skill', () => {
     expect(template?.task).toContain('Edit no file, stage nothing and commit nothing.');
   });
 
-  it('takes the folder and the range as run inputs, and carries them to the harness', () => {
+  it('takes the folder and the range’s two ends as run inputs, and carries them to the harness', () => {
     const required = (wf.runInputs ?? []).filter((i) => i.required).map((i) => i.id);
-    expect(required).toEqual(['bindingId', 'range', 'at']);
+    expect(required).toEqual(['bindingId', 'at']);
     expect(task?.inputBindings?.['bindingId']).toMatchObject({ kind: 'run_input' });
-    expect(template?.inputs).toEqual({
-      range: { $bind: 'range' },
-      focus: { $bind: 'focus' },
-      depth: { $bind: 'depth' },
-    });
+    expect(Object.keys(template?.inputs ?? {})).toEqual(['range', 'focus', 'depth']);
     expect(template?.outputSchema).not.toHaveProperty('x-reviewRequest');
     expect(template?.task).toContain('inputs of this task');
+  });
+
+  /** The harness call a run makes from these run inputs. */
+  function harnessCall(runInputs: Record<string, unknown>) {
+    return HostHarnessRunInputSchema.parse(
+      substituteTemplateBinds(
+        task?.inputTemplate ?? {},
+        runInputs,
+        new Set(Object.keys(task?.inputBindings ?? {})),
+      ),
+    );
+  }
+
+  // `at` once named the range's tip beside a `range` that named it again, and
+  // nothing checked the two agreed: a checkout at one commit reviewing a range
+  // ending at another. The range is now made from `at`, so they cannot differ.
+  it('reads a range that ends at the commit its checkout stands on, whatever the caller passes', () => {
+    const tip = 'c'.repeat(40);
+    for (const [from, at] of [
+      ['e'.repeat(40), tip],
+      ['main', 'HEAD'],
+      ['HEAD~3', 'HEAD'],
+      ['main', 'feature'],
+    ] as const) {
+      const call = harnessCall({ bindingId: 'hb_repo', from, at });
+      expect(call.base).toBe(at);
+      expect(call.inputs).toMatchObject({ range: `${from}..${at}` });
+    }
+    // A single commit is `at` alone: the range is that commit.
+    const single = harnessCall({ bindingId: 'hb_repo', at: tip });
+    expect(single.base).toBe(tip);
+    expect(single.inputs).toMatchObject({ range: tip });
+  });
+
+  it('takes no range whole, so no range can name a tip `at` does not', () => {
+    expect((wf.runInputs ?? []).map((i) => i.id)).not.toContain('range');
+    expect(Object.keys(task?.inputBindings ?? {})).not.toContain('range');
+    // A caller still sending one is not heard: the range comes from `from` and `at`.
+    const call = harnessCall({
+      bindingId: 'hb_repo',
+      range: 'main..elsewhere',
+      from: 'main',
+      at: 'HEAD',
+    });
+    expect(call.inputs).toMatchObject({ range: 'main..HEAD' });
+    expect(call.base).toBe('HEAD');
   });
 
   it('checks out the commit the range ends at, and names the base only for the diff', () => {
@@ -81,15 +123,11 @@ describe('Review Local Changes — the first harness inside a skill', () => {
     // before the change, so "read every changed file whole" reads the old file
     // and a deep review's checks run on code the range did not write.
     const tip = 'c'.repeat(40);
-    const op = substituteTemplateBinds(
-      task?.inputTemplate ?? {},
-      { bindingId: 'hb_repo', range: `${'e'.repeat(40)}..${tip}`, at: tip },
-      new Set(Object.keys(task?.inputBindings ?? {})),
-    );
-    const parsed = HostHarnessRunInputSchema.parse(op);
+    const parsed = harnessCall({ bindingId: 'hb_repo', from: 'e'.repeat(40), at: tip });
     expect(parsed.base).toBe(tip);
-    expect(parsed.inputs).toMatchObject({ range: `${'e'.repeat(40)}..${tip}` });
+    expect(parsed.base).not.toBe('e'.repeat(40));
     expect(task?.inputBindings?.['at']).toEqual({ kind: 'run_input', path: 'at' });
+    expect(task?.inputBindings?.['from']).toEqual({ kind: 'run_input', path: 'from' });
     // The skill says so, to the harness and to the Helmsman that fills `at`.
     expect(template?.task).toContain('detached at the commit the range ends at');
     expect(template?.task).toContain('names only where the diff starts');
@@ -104,8 +142,8 @@ describe('Review Local Changes — the first harness inside a skill', () => {
     expect(template?.task).toContain('`git log <base>..<sha>`');
     expect(template?.task).toContain('`git diff <base>...<sha>`');
     expect(template?.task).not.toMatch(/git diff <base>\.\.<sha>/);
-    const range = (wf.runInputs ?? []).find((i) => i.id === 'range');
-    expect(range?.description).toContain('`<base>...<sha>`');
+    const from = (wf.runInputs ?? []).find((i) => i.id === 'from');
+    expect(from?.description).toContain('`<from>...<at>`');
     expect(REVIEW_LOCAL_CHANGES.description).toContain('`main...HEAD`');
   });
 

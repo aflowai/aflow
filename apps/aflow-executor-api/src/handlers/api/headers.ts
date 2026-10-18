@@ -121,6 +121,26 @@ export async function buildHeaders(
   return { headers, authQueryParams };
 }
 
+/**
+ * The headers a binding's auth writes its credential into — what a redirect
+ * to another host must not carry, since the credential is for this API alone.
+ */
+export function credentialHeaderNames(auth: ApiBinding['auth']): string[] {
+  switch (auth.type) {
+    case 'none':
+      return [];
+    case 'api_key':
+      return auth.placement === 'header' ? [auth.headerName] : [];
+    case 'api_key_pair':
+      return [auth.primaryHeaderName, auth.secondaryHeaderName];
+    case 'bearer':
+    case 'basic':
+    case 'oauth2_client_credentials':
+    case 'oauth2_authorization_code':
+      return ['Authorization'];
+  }
+}
+
 export async function applyAuth(
   credentialStore: ReadonlyMap<string, string>,
   redis:

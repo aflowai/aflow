@@ -14,6 +14,7 @@ import {
   TEMPLATE_BIND_KEY,
   TEMPLATE_CONCAT_KEY,
   TEMPLATE_FIRST_OF_KEY,
+  TEMPLATE_TEXT_KEY,
   templateContainsSubstitution,
   type TemplateOperatorKey,
   toJsonSchemaSync,
@@ -1205,6 +1206,14 @@ function validateTemplateOpInput(
       node.operands.forEach((operand, i) => {
         checkNode(operand, schemaNode, `${operandsPath}[${String(i)}]`);
       });
+      return;
+    }
+
+    // `$text` yields a string whatever scalar its operand resolves to.
+    if (node.operator === TEMPLATE_TEXT_KEY) {
+      if (schemaAdmitsString(schemaNode)) return;
+      const detail = `Operation task "${task.taskId}" inputTemplate position "${path || '(root)'}" holds a "${TEMPLATE_TEXT_KEY}" node, which yields a string, and "${task.operation ?? ''}" takes no string there.`;
+      errors.push({ kind: 'op_input_incompatible', taskIds: [task.taskId], field: path, detail });
       return;
     }
 

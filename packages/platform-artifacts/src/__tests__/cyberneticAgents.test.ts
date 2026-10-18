@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { AgentDefinitionSchema } from '@aflow/schemas';
+import { AgentDefinitionSchema, buildCoreToolSpec } from '@aflow/schemas';
 import { CYBERNETIC_AGENTS } from '../cyberneticAgents.js';
 
 describe('platform-artifacts cybernetic ensemble — runtime source of truth', () => {
@@ -254,6 +254,22 @@ describe('platform-artifacts cybernetic ensemble — runtime source of truth', (
     // ui.artifact.publish stays OUT — only operator ratification (via
     // applyArtifactUpdateOps) publishes Coach-proposed drafts.
     expect(ops).not.toContain('ui.artifact.publish');
+  });
+
+  it('every pinned core operation is a registered agent tool — the assembler drops any other unseen', () => {
+    for (const agent of CYBERNETIC_AGENTS) {
+      for (const step of agent.steps as Array<Record<string, unknown>>) {
+        const catalog = (step['config'] as Record<string, unknown> | undefined)?.['catalog'] as
+          { coreOperations?: string[] } | undefined;
+        const unresolved = (catalog?.coreOperations ?? []).filter(
+          (id) => buildCoreToolSpec(id) === undefined,
+        );
+        expect({ agent: agent.flowId, unresolved }).toEqual({
+          agent: agent.flowId,
+          unresolved: [],
+        });
+      }
+    }
   });
 
   it('Coach prompt teaches the (generate → propose) artifact-refresh path (Plan 158 §6.1)', () => {

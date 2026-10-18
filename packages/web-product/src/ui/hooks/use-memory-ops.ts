@@ -44,6 +44,7 @@ export interface MemoryDocStat {
   semanticType?: string | null;
   version: number;
   embeddingStatus: string;
+  embeddingError?: string | null;
   createdAt: string;
   updatedAt: string;
   deletedAt?: string | null;

@@ -117,11 +117,14 @@ export type WorkflowRunMetadata = z.infer<typeof WorkflowRunMetadataSchema>;
 
 /**
  * The deepest a chain of task-started runs may reach, counting the run at its
- * head as 1. A publication and the review it starts of its own commit are two;
- * nothing a task starts needs a third, and without a bound a workflow that
- * starts itself would never stop.
+ * head as 1. The shepherd, the publication it starts of its fix and the review
+ * that publication starts of its own commit are three (Plan 321): a publication
+ * the shepherd starts has to review where one started by hand would, or the
+ * shepherd's push would ask where the operator's would not. Nothing a task
+ * starts needs a fourth, and without a bound a workflow that starts itself
+ * would never stop.
  */
-export const MAX_WORKFLOW_RUN_DEPTH = 2;
+export const MAX_WORKFLOW_RUN_DEPTH = 3;
 
 export function workflowRunDepth(metadata: unknown): number {
   const parsed = WorkflowRunMetadataSchema.safeParse(metadata ?? {});

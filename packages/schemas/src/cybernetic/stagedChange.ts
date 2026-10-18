@@ -805,6 +805,13 @@ export const ApiDefinitionDraftSchema = z
            * the call loud (API_RESPONSE_TRANSFORM_FAILED).
            */
           responseTransformPresetId: z.string().max(128).optional(),
+          /**
+           * Hosts this endpoint may redirect to, followed without the
+           * binding's credential (`ApiEndpoint.redirectHosts`) — so a
+           * bundle-carried connector endpoint keeps its redirect through
+           * install without widening any binding's allowedHosts.
+           */
+          redirectHosts: z.array(z.string().max(256)).max(20).optional(),
         }),
       )
       .max(200)

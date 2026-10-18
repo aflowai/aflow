@@ -33,6 +33,7 @@ import {
 } from '@aflow/database';
 import type { Redis } from 'ioredis';
 import type { PayloadStore } from '@aflow/payload-store';
+import type { MemoryEmbeddingResolver } from '@aflow/credential-resolver';
 import { isVirtualPath } from '@aflow/memory-paths';
 import {
   handleQuery,
@@ -106,6 +107,7 @@ export class MemoryHandler implements StepHandler {
     private db: PostgresJsDatabase,
     private redis: Redis,
     private payloadStore: PayloadStore,
+    private embedding?: MemoryEmbeddingResolver,
   ) {
     this.loadEmbeddingBudgetLimits = createEmbeddingBudgetLimitsLoader(db);
   }
@@ -148,6 +150,7 @@ export class MemoryHandler implements StepHandler {
       spaceId: ctx.job.spaceId,
       loadEmbeddingBudgetLimits: this.loadEmbeddingBudgetLimits,
       linkRepo,
+      ...(this.embedding ? { embedding: this.embedding } : {}),
     };
 
     try {

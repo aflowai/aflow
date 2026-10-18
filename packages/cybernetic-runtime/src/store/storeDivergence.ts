@@ -104,6 +104,7 @@ async function currentArtifactState(
     case 'api_binding':
     case 'mcp_binding':
     case 'memory_doc':
+    case 'agent':
       return { hash: '<unknown-artifact-type>' };
   }
 }

@@ -35,6 +35,7 @@ function apiDraftHosts(definition: BundledApiDraft): string[] {
     hosts.push(templateHostPattern(definition.baseUrlTemplate));
   }
   hosts.push(...(definition.suggestedEgressPolicy?.additionalHosts ?? []));
+  for (const endpoint of definition.endpoints) hosts.push(...(endpoint.redirectHosts ?? []));
   return hosts;
 }
 
@@ -65,6 +66,9 @@ export function deriveApiConnectorHostManifest(entry: ConnectorCatalogEntry): De
     apiHosts.push(templateHostPattern(entry.definition.baseUrlTemplate));
   }
   apiHosts.push(...(entry.definition.suggestedEgressPolicy?.additionalHosts ?? []));
+  for (const endpoint of entry.definition.endpoints) {
+    apiHosts.push(...(endpoint.redirectHosts ?? []));
+  }
   return {
     apiHosts: sortedUnique(apiHosts),
     oauthHosts: sortedUnique(entry.oauthIssuerKey ? issuerHosts(entry.oauthIssuerKey) : []),

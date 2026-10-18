@@ -692,12 +692,14 @@ export function createAIClient(config: AIClientConfig): AIClient {
       const adapter = await getAdapter(resolved.provider);
       const startTime = Date.now();
 
-      // Use providerModelId when calling the adapter
-      const adapterRequest = await buildAdapterRequest(request, resolved);
+      const model = catalog.getModel(request.model);
+      const dimensions = request.dimensions ?? model?.embeddingDimensions;
+      const adapterRequest = await buildAdapterRequest(
+        dimensions === undefined ? request : { ...request, dimensions },
+        resolved,
+      );
       const response = await adapter.generateEmbedding(adapterRequest);
 
-      // Record usage
-      const model = catalog.getModel(request.model);
       const cost = model ? catalog.calculateCost(request.model, response.usage) : undefined;
 
       usageRecorder.record({

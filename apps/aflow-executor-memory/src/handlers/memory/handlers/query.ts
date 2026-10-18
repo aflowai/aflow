@@ -5,13 +5,13 @@ import type {
   MemoryDocRepository,
   MemoryDocQueryOptions,
   MemoryDirRepository,
+  QueryEmbedding,
 } from '@aflow/database';
 import type { MemoryQueryInput } from '@aflow/schemas';
 import { isVirtualPath, listVirtualOutputs } from '@aflow/memory-paths';
 import { canonicalizeTarget, INDEX_NOTE_PATH } from '@aflow/memory-store';
 import type { MemoryLinkRepository } from '@aflow/database';
 import { stripUndefined } from '../utils.js';
-import { buildProviders } from '../providers.js';
 import type { MemoryHandlerDeps } from './types.js';
 import { buildResolveContext } from './resolveContext.js';
 import { applyByteBudget, DEFAULT_MAX_TOTAL_BYTES } from './byteBudget.js';
@@ -141,6 +141,7 @@ async function finalizeSearch(
   seeds: ReadonlyArray<{ id: string; path: string }>,
   maxTotalBytes: number,
   maxSnippetBytes: number,
+  lexicalOnly: string | undefined,
 ): Promise<StepResult> {
   let expanded: ExpandedItem[] = [];
 
@@ -192,6 +193,7 @@ async function finalizeSearch(
   return await successWithData(ctx, {
     items: budgeted.items,
     ...(budgeted.truncated ? { truncatedByBudget: true } : {}),
+    ...(lexicalOnly !== undefined ? { lexicalOnly } : {}),
   });
 }
 
@@ -418,50 +420,58 @@ export async function handleQuery(
       return await failureWithError(ctx, validationError('query is required for search mode'));
     }
 
-    // Try hybrid search (vector + FTS fused via RRF)
-    let queryEmbedding: number[] | undefined;
-    let embedColumn: string | undefined;
+    // Hybrid search (vector + FTS fused via RRF) where the space can embed the query.
+    let queryEmbedding: QueryEmbedding | undefined;
+    let lexicalOnly: string | undefined;
 
-    try {
-      const resolved = await repo.resolveEmbeddingModel({
-        spaceId,
-        pathPrefix: input.pathPrefix,
-      });
-
-      // Budget exhaustion degrades to FTS via the same catch as a missing key.
-      if (deps.loadEmbeddingBudgetLimits) {
-        const { consumeEmbeddingBudget, estimateEmbeddingTokens } = await import('@aflow/redis');
-        const budget = await consumeEmbeddingBudget(deps.redis, {
-          tenantId: ctx.tenantId,
-          spaceId,
-          tokens: estimateEmbeddingTokens([input.query]),
-          limits: await deps.loadEmbeddingBudgetLimits(ctx.tenantId),
-        });
-        if (!budget.allowed) {
-          throw new Error(`embedding budget exhausted (${budget.exceededScope ?? 'unknown'})`);
+    if (!deps.embedding) {
+      lexicalOnly = 'Vector search is not available to this executor.';
+    } else {
+      try {
+        const embedding = await deps.embedding.resolve({ tenantId: ctx.tenantId, spaceId });
+        if (embedding.state === 'unconfigured') {
+          lexicalOnly = embedding.reason;
+        } else {
+          let budgetExceeded: string | undefined;
+          if (deps.loadEmbeddingBudgetLimits) {
+            const { consumeEmbeddingBudget, estimateEmbeddingTokens } =
+              await import('@aflow/redis');
+            const budget = await consumeEmbeddingBudget(deps.redis, {
+              tenantId: ctx.tenantId,
+              spaceId,
+              tokens: estimateEmbeddingTokens([input.query]),
+              limits: await deps.loadEmbeddingBudgetLimits(ctx.tenantId),
+            });
+            if (!budget.allowed) budgetExceeded = budget.exceededScope ?? 'daily';
+          }
+          if (budgetExceeded !== undefined) {
+            lexicalOnly = `The ${budgetExceeded} embedding budget is spent for today.`;
+          } else {
+            const embResp = await embedding.client.generateEmbedding({
+              model: embedding.model.id,
+              input: input.query,
+              tenantId: ctx.tenantId,
+              runId: ctx.runId,
+              stepExecutionId: ctx.stepExecutionId,
+            });
+            const vector = embResp.embeddings[0];
+            if (vector) {
+              queryEmbedding = {
+                vector,
+                model: embedding.model.id,
+                column: embedding.model.column,
+              };
+            } else {
+              lexicalOnly = `${embedding.model.id} returned no vector for the query.`;
+            }
+          }
         }
+      } catch (error) {
+        lexicalOnly = `Embedding the query failed: ${error instanceof Error ? error.message : String(error)}`;
       }
-
-      const { createAIClient } = await import('@aflow/ai-client');
-      const client = createAIClient({
-        providers: buildProviders(),
-        defaultProvider: process.env['OPENAI_API_KEY'] ? 'openai' : 'google',
-      });
-
-      const embResp = await client.generateEmbedding({
-        model: resolved.model,
-        input: input.query,
-        tenantId: ctx.tenantId,
-        runId: ctx.runId,
-        stepExecutionId: ctx.stepExecutionId,
-      });
-
-      if (embResp.embeddings.length > 0 && embResp.embeddings[0]) {
-        queryEmbedding = embResp.embeddings[0];
-        embedColumn = resolved.column;
-      }
-    } catch {
-      ctx.log.debug('Vector embedding unavailable, search will use FTS only');
+    }
+    if (lexicalOnly !== undefined) {
+      ctx.log.debug('Memory search is lexical only', { reason: lexicalOnly });
     }
 
     let hybridResults: Array<{
@@ -486,8 +496,7 @@ export async function handleQuery(
       hybridResults = await repo.searchHybrid({
         ...queryOptions,
         query: input.query,
-        ...(queryEmbedding != null ? { queryEmbedding } : {}),
-        ...(embedColumn != null ? { embedColumn } : {}),
+        ...(queryEmbedding !== undefined ? { queryEmbedding } : {}),
       });
     } catch {
       ctx.log.debug('Hybrid search failed, falling back to ILIKE grep');
@@ -519,6 +528,7 @@ export async function handleQuery(
         pagedItems,
         maxTotalBytes,
         maxSnippetBytes,
+        lexicalOnly,
       );
     }
 
@@ -548,6 +558,7 @@ export async function handleQuery(
       pagedItems,
       maxTotalBytes,
       maxSnippetBytes,
+      lexicalOnly,
     );
   }
 

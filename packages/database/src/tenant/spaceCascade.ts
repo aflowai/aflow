@@ -416,19 +416,6 @@ export async function cascadeDeleteSpace(
     sqlTx`DELETE FROM ${sqlTx(schemaName)}.oauth_state WHERE space_id = ${spaceId}`,
   );
 
-  // memory_embed_config is deliberately NOT swept. It's a scoped config table
-  // (scope_type 'global'|'space'|'flow'|'path_prefix', scope_value text) with
-  // no space_id and no FK — so a space-scoped row (scope_type='space',
-  // scope_value=<spaceId>) or a per-agent override (scope_type='flow',
-  // scope_value=<agentId>) WOULD orphan on purge. But its only writer,
-  // memoryDocs.setEmbedConfig, has zero production callers — no operation,
-  // route, or handler wires it — so no such rows exist to orphan. Adding a
-  // speculative delete (esp. the flow case, a text-cast subquery over agents)
-  // would be untested SQL guarding impossible rows. If setEmbedConfig is ever
-  // wired to a real surface, add deletes/counts here AND in
-  // previewCascadeForSpace for scope_type='space' AND scope_value=<spaceId>,
-  // and scope_type='flow' AND scope_value IN (space's agent ids, ::text-cast).
-
   // --------------------------------------------------------------------------
   // 3. Cross-schema (public).
   // --------------------------------------------------------------------------

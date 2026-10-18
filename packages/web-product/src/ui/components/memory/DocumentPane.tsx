@@ -41,7 +41,9 @@ import {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function embeddingBadgeVariant(status: string): 'succeeded' | 'failed' | 'info' | 'neutral' {
+function embeddingBadgeVariant(
+  status: string,
+): 'succeeded' | 'failed' | 'info' | 'warning' | 'neutral' {
   switch (status) {
     case 'indexed':
       return 'succeeded';
@@ -49,6 +51,8 @@ function embeddingBadgeVariant(status: string): 'succeeded' | 'failed' | 'info' 
       return 'failed';
     case 'pending':
       return 'info';
+    case 'unconfigured':
+      return 'warning';
     default:
       return 'neutral';
   }
@@ -824,7 +828,18 @@ function StatViewer({ entry, detail }: { entry: MemoryQueryItem; detail: MemoryG
         ),
       },
       { key: 'Version', value: String(stat.version) },
-      { key: 'Embedding', value: stat.embeddingStatus },
+      {
+        key: 'Embedding',
+        value: stat.embeddingError ? (
+          <Text size="xs" tone="danger">
+            {stat.embeddingStatus}: {stat.embeddingError}
+          </Text>
+        ) : stat.embeddingStatus === 'unconfigured' ? (
+          'waiting for an embedding provider'
+        ) : (
+          stat.embeddingStatus
+        ),
+      },
       { key: 'Created', value: formatDate(stat.createdAt) },
     );
 

@@ -39,7 +39,11 @@ function tenantKey(tenantId: string, day: string): string {
 export function estimateEmbeddingTokens(texts: readonly string[]): number {
   let chars = 0;
   for (const t of texts) chars += t.length;
-  return Math.max(1, Math.ceil(chars / 4));
+  return Math.max(1, estimateEmbeddingTokensFromChars(chars));
+}
+
+export function estimateEmbeddingTokensFromChars(chars: number): number {
+  return Math.ceil(chars / 4);
 }
 
 /**

@@ -1,76 +1,72 @@
 import type postgres from 'postgres';
 
-export async function applyMigration221(client: postgres.Sql, schema: string): Promise<void> {
-  await client.unsafe(`
-    CREATE TABLE IF NOT EXISTS "${schema}".skill_discovery (
-      space_id UUID NOT NULL REFERENCES "${schema}".spaces(id) ON DELETE CASCADE,
-      slug TEXT NOT NULL, name TEXT NOT NULL, description TEXT NOT NULL,
-      mode TEXT NOT NULL, status TEXT NOT NULL, revision INTEGER NOT NULL,
-      PRIMARY KEY (space_id, slug)
-    );
-    CREATE OR REPLACE FUNCTION "${schema}".sync_skill_discovery(
-      p_space UUID, p_path TEXT, p_content TEXT, p_deleted TIMESTAMPTZ
-    ) RETURNS VOID LANGUAGE plpgsql AS $$
-    DECLARE doc JSONB; skill_slug TEXT;
-    BEGIN
-      IF p_path !~ '^/workflows/[^/]+/workflow[.]json$' THEN RETURN; END IF;
-      skill_slug := split_part(p_path, '/', 3);
-      IF p_deleted IS NOT NULL OR p_content IS NULL THEN
-        DELETE FROM "${schema}".skill_discovery WHERE space_id = p_space AND slug = skill_slug;
-        RETURN;
-      END IF;
-      BEGIN doc := p_content::jsonb; EXCEPTION WHEN invalid_text_representation THEN doc := '{}'::jsonb; END;
-      INSERT INTO "${schema}".skill_discovery (space_id, slug, name, description, mode, status, revision)
-      VALUES (p_space, skill_slug, COALESCE(doc->>'name', skill_slug), COALESCE(doc->>'description', ''),
-        CASE WHEN doc->>'mode' IN ('process','project','optimization') THEN doc->>'mode' ELSE 'process' END,
-        COALESCE(doc->>'status', 'invalid'),
-        CASE WHEN doc->>'revision' ~ '^[0-9]{1,9}$' THEN (doc->>'revision')::integer ELSE 0 END)
-      ON CONFLICT (space_id, slug) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description,
-        mode = EXCLUDED.mode, status = EXCLUDED.status, revision = EXCLUDED.revision;
-    END $$;
-    CREATE OR REPLACE FUNCTION "${schema}".skill_discovery_on_doc() RETURNS TRIGGER LANGUAGE plpgsql AS $$
-    BEGIN
-      IF TG_OP IN ('UPDATE', 'DELETE') THEN
-        IF TG_OP = 'DELETE' OR OLD.path IS DISTINCT FROM NEW.path OR OLD.space_id IS DISTINCT FROM NEW.space_id THEN
-          PERFORM "${schema}".sync_skill_discovery(OLD.space_id, OLD.path, NULL, now());
-        END IF;
-      END IF;
-      IF TG_OP <> 'DELETE' THEN
-        PERFORM "${schema}".sync_skill_discovery(NEW.space_id, NEW.path, NEW.inline_content, NEW.deleted_at);
-      END IF;
-      RETURN NULL;
-    END $$;
-    DROP TRIGGER IF EXISTS skill_discovery_on_doc ON "${schema}".memory_docs;
-    CREATE TRIGGER skill_discovery_on_doc AFTER INSERT OR UPDATE OR DELETE ON "${schema}".memory_docs
-      FOR EACH ROW EXECUTE FUNCTION "${schema}".skill_discovery_on_doc();
-    SELECT "${schema}".sync_skill_discovery(space_id, path, inline_content, deleted_at)
-      FROM "${schema}".memory_docs WHERE path ~ '^/workflows/[^/]+/workflow[.]json$';
+/**
+ * Memory embeddings per space (Plan 315 D12).
+ *
+ * A space has exactly one embedding model, stored on the space, because
+ * vectors from two models share no geometry and search must read one of them.
+ * A space with embedded chunks is pinned to the model that made the most of
+ * them, so its existing index stays searchable, and a document embedded by
+ * another model is queued to embed again. `memory_embed_config`, whose
+ * path, agent and global scopes nothing wrote, goes.
+ *
+ * `unconfigured` is a document the embedder could not serve for want of a
+ * provider; it is not `pending`, so the backfill does not re-claim it every
+ * cadence.
+ */
+export async function applyMigration221(
+  sqlClient: postgres.Sql,
+  schemaName: string,
+): Promise<void> {
+  await sqlClient.unsafe(`
+      ALTER TABLE "${schemaName}".spaces
+        ADD COLUMN IF NOT EXISTS memory_embedding_model TEXT;
 
-    UPDATE "${schema}".capability_profiles SET allowed_capabilities = allowed_capabilities ||
-      '[{"capabilityGroupId":"catalog.skill","accessMode":"read"}]'::jsonb
-      WHERE is_system_profile = true AND NOT (allowed_capabilities @> '[{"capabilityGroupId":"catalog.skill","accessMode":"read"}]'::jsonb);
+      ALTER TABLE "${schemaName}".memory_docs
+        ADD COLUMN IF NOT EXISTS embedding_error TEXT;
+
+      ALTER TABLE "${schemaName}".memory_docs
+        DROP CONSTRAINT IF EXISTS memory_docs_embedding_status_check;
+      ALTER TABLE "${schemaName}".memory_docs
+        ADD CONSTRAINT memory_docs_embedding_status_check
+        CHECK (embedding_status IN ('disabled', 'pending', 'indexed', 'failed', 'unconfigured'));
+
+      UPDATE "${schemaName}".spaces s
+      SET memory_embedding_model = c.embedding_model
+      FROM "${schemaName}".memory_embed_config c
+      WHERE c.scope_type = 'space'
+        AND c.scope_value = s.id::text
+        AND s.memory_embedding_model IS NULL;
+
+      UPDATE "${schemaName}".spaces s
+      SET memory_embedding_model = used.embedding_model
+      FROM (
+        SELECT DISTINCT ON (d.space_id) d.space_id, c.embedding_model
+        FROM "${schemaName}".memory_chunks c
+        JOIN "${schemaName}".memory_docs d ON d.id = c.doc_id
+        WHERE c.embedding_model IS NOT NULL
+        GROUP BY d.space_id, c.embedding_model
+        ORDER BY d.space_id, count(*) DESC
+      ) used
+      WHERE used.space_id = s.id
+        AND s.memory_embedding_model IS NULL;
+
+      UPDATE "${schemaName}".memory_docs d
+      SET embedding_status = 'pending', updated_at = NOW()
+      FROM "${schemaName}".spaces s
+      WHERE s.id = d.space_id
+        AND d.embedding_status = 'indexed'
+        AND EXISTS (
+          SELECT 1 FROM "${schemaName}".memory_chunks c
+          WHERE c.doc_id = d.id
+            AND c.embedding_model IS NOT NULL
+            AND c.embedding_model IS DISTINCT FROM s.memory_embedding_model
+        );
+
+      DROP TABLE IF EXISTS "${schemaName}".memory_embed_config;
+
+      INSERT INTO "${schemaName}".schema_migrations (version, description)
+      VALUES (221, 'Plan 315 D12 — one embedding model per space; unconfigured documents')
+      ON CONFLICT (version) DO NOTHING;
   `);
-  const splits: Record<string, string[]> = {
-    run_skills: ['campaigns'],
-    author_skills: ['inspect_skills', 'workflow_learning'],
-    visuals: ['artifacts'],
-    learning: ['proposals'],
-    integrations: ['connection_inventory', 'http_bindings', 'webhooks'],
-    mcp_servers: ['mcp_bindings', 'mcp_inventory'],
-    media: ['images'],
-    code: ['repositories', 'managed_code'],
-  };
-  for (const [original, children] of Object.entries(splits)) {
-    for (const child of children) {
-      await client.unsafe(
-        `UPDATE "${schema}".spaces SET directives = jsonb_set(directives,
-        ARRAY['capabilityDiscovery','bundlePlacements',$1::text], directives #> ARRAY['capabilityDiscovery','bundlePlacements',$2::text], true)
-        WHERE directives #> ARRAY['capabilityDiscovery','bundlePlacements',$2::text] IS NOT NULL
-          AND directives #> ARRAY['capabilityDiscovery','bundlePlacements',$1::text] IS NULL`,
-        [child, original],
-      );
-    }
-  }
-  await client.unsafe(`INSERT INTO "${schema}".schema_migrations (version, description)
-    VALUES (221, 'Plan 324 — skill discovery metadata, capability grants and split placement choices') ON CONFLICT (version) DO NOTHING`);
 }

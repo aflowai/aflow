@@ -54,6 +54,18 @@ export const WorkflowTaskInputBindingSchema = z.discriminatedUnion('kind', [
     kind: z.literal('learning_set'),
   }),
   z.object({
+    /** Resolves to the id of the run the task belongs to — what a record the
+     *  run leaves behind names its owner by. Platform-resolved at dispatch. */
+    kind: z.literal('run_id'),
+  }),
+  z.object({
+    /** Resolves to the time the task is dispatched, as epoch milliseconds,
+     *  shifted by `offsetMs` — a cut-off to compare a stored time against
+     *  is `offsetMs` below zero. Platform-resolved at dispatch. */
+    kind: z.literal('clock'),
+    offsetMs: z.number().int().optional(),
+  }),
+  z.object({
     kind: z.literal('artifact_binding'),
     /** Bundle that ships the artifact seed. Authored explicitly on
      *  the workflow task (the install-time `artifact_bindings` PK is

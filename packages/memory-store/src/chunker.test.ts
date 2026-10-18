@@ -156,41 +156,38 @@ describe('chunkContent', () => {
 // ============================================================================
 
 describe('splitForTokenSafety', () => {
-  it('returns text as-is when within limits', () => {
-    const text = 'Short text';
-    const parts = splitForTokenSafety(text);
-    expect(parts).toEqual(['Short text']);
+  const WINDOW = 8191;
+  const LIMIT = Math.floor(WINDOW * 3 * 0.85);
+
+  it('returns text as-is when within the window', () => {
+    expect(splitForTokenSafety('Short text', WINDOW)).toEqual(['Short text']);
   });
 
-  it('splits oversized text into multiple parts', () => {
-    // MAX_EMBED_CHARS = 21000
+  it('splits oversized text into parts each within the window, losing nothing', () => {
     const text = 'x'.repeat(50_000);
-    const parts = splitForTokenSafety(text);
+    const parts = splitForTokenSafety(text, WINDOW);
     expect(parts.length).toBeGreaterThan(1);
-
-    // All parts should be within the limit
-    for (const part of parts) {
-      expect(part.length).toBeLessThanOrEqual(21_000);
-    }
-
-    // Concatenation should equal the original
+    for (const part of parts) expect(part.length).toBeLessThanOrEqual(LIMIT);
     expect(parts.join('')).toBe(text);
   });
 
+  it('a smaller window splits the same text into more parts', () => {
+    const text = 'x'.repeat(50_000);
+    expect(splitForTokenSafety(text, 2048).length).toBeGreaterThan(
+      splitForTokenSafety(text, WINDOW).length,
+    );
+  });
+
   it('prefers splitting at newlines', () => {
-    // Build text with newlines near the split boundary
     const line = 'a'.repeat(100) + '\n';
-    const text = line.repeat(250); // 250 * 101 = 25250 chars
-    const parts = splitForTokenSafety(text);
+    const parts = splitForTokenSafety(line.repeat(250), WINDOW);
     expect(parts.length).toBe(2);
-    // First part should end with a newline (split at newline boundary)
     expect(parts[0]!.endsWith('\n')).toBe(true);
   });
 
-  it('handles text exactly at the limit', () => {
-    const text = 'y'.repeat(21_000);
-    const parts = splitForTokenSafety(text);
-    expect(parts).toEqual([text]);
+  it('keeps text exactly at the limit whole', () => {
+    const text = 'y'.repeat(LIMIT);
+    expect(splitForTokenSafety(text, WINDOW)).toEqual([text]);
   });
 });
 

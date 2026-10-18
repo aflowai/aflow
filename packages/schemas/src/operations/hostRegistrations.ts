@@ -475,8 +475,9 @@ export const HostOperationRegistrations: OperationRegistration[] = [
     semanticDescription:
       'Read, from the policy file on the machine that holds a connected folder, which branches ' +
       'it may push, when a publication from it asks before pushing, the checks a ' +
-      'publication runs first and for how long, and how many coding agents that machine ' +
-      'runs at once. Touches nothing in the folder itself.',
+      'publication runs first and for how long, how many coding agents that machine ' +
+      "runs at once, and the GitHub repository the folder's `origin` fetches from. Writes " +
+      'nothing in the folder itself.',
     tags: ['host', 'binding', 'local'],
     idempotency: 'idempotent',
     accessMode: 'read',
@@ -486,7 +487,10 @@ export const HostOperationRegistrations: OperationRegistration[] = [
     usage: {
       oneLine: "Read a connected folder's push posture from its machine.",
       minimalExampleInput: { bindingId: 'hb_project' },
-      whenToUse: ["A skill deciding whether its push asks, on the folder's posture"],
+      whenToUse: [
+        "A skill deciding whether its push asks, on the folder's posture",
+        'A skill that calls GitHub for the repository the folder pushes to, and needs its owner and name',
+      ],
       whenNotToUse: [
         'Listing or reading files in the folder — that is host.file.list and host.file.get',
       ],

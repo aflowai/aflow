@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { classifyDbError } from '../lib/databaseErrors.js';
+import { wakeDocsWaitingForEmbedding } from '../lib/memoryEmbeddingWake.js';
 import {
   previewCredentialResolution,
   emptyResolutionPreview,
@@ -430,6 +431,13 @@ export const credentialRoutes: FastifyPluginAsync = async (fastify) => {
 
         const row = rows[0];
         invalidateCredentialCache(fastify, tenant.tenantId as string);
+        await wakeDocsWaitingForEmbedding(db, tenant.tenantId, {
+          providerId,
+          scope,
+          scopeId,
+        }).catch((error: unknown) => {
+          reply.log.warn({ err: error }, 'Waking documents waiting for an embedding key failed');
+        });
         reply.send(mapRow(row!));
       } catch (error) {
         reply.log.error({ err: error }, 'Credential save failed');

@@ -41,6 +41,9 @@ import { zodToJsonSchema } from 'zod-to-json-schema';
 
 export { normalizeGoogleError } from './googleShared.js';
 
+/** Texts per `embedContent` call; the API refuses a larger batch. */
+const EMBED_BATCH_LIMIT = 100;
+
 /**
  * Normalize a Gemini `functionCall` content part to our ToolCall shape.
  * Shared by non-streaming and streaming generation.
@@ -893,25 +896,23 @@ export function createGoogleAdapter(config: ProviderConfig): AIProviderAdapter {
     async generateEmbedding(request): Promise<GenerateEmbeddingResponse> {
       try {
         const inputs = Array.isArray(request.input) ? request.input : [request.input];
-
-        // Gemini uses embedContent for embeddings
         const embeddings: number[][] = [];
 
-        for (const text of inputs) {
+        for (let start = 0; start < inputs.length; start += EMBED_BATCH_LIMIT) {
+          const batch = inputs.slice(start, start + EMBED_BATCH_LIMIT);
           const response = await withTimeout(
             client.models.embedContent({
               model: request.model,
-              contents: text,
+              contents: batch,
+              ...(request.dimensions
+                ? { config: { outputDimensionality: request.dimensions } }
+                : {}),
             }),
             requestOrConfigTimeout(request.timeoutMs, config.timeoutMs, EMBED_TIMEOUT_MS),
             'embedContent',
           );
-
-          if (response.embeddings && response.embeddings.length > 0) {
-            const embedding = response.embeddings[0];
-            if (embedding?.values) {
-              embeddings.push(embedding.values);
-            }
+          for (const embedding of response.embeddings ?? []) {
+            if (embedding.values) embeddings.push(embedding.values);
           }
         }
 

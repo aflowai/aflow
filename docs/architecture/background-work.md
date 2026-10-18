@@ -9,7 +9,7 @@ Production background discovery must be event- or candidate-driven. A task may n
 work by scanning the Redis keyspace, reading a whole dirty set, or enumerating tenant schemas;
 idle cost may not grow with logical shards, tenants, stored keys, or connected subscribers.
 
-**47 registered tasks** across 8 services.
+**46 registered tasks** across 8 services.
 2 task(s) still carry a residual poll — a periodic datastore read that
 exists only because an event or candidate path is incomplete.
 
@@ -19,7 +19,7 @@ Datastore operations per minute with zero due work, grouped by what each scope m
 
 | Execution scope | Multiplies by | Operations/minute |
 | --------------- | ------------- | ----------------: |
-| per_instance | per live process | 415 |
+| per_instance | per live process | 355 |
 | singleton | once per fleet | 20 |
 | shard_owner | per shard-owning orchestrator | 626 |
 | active_subscription | per active subscription | 120 |
@@ -36,7 +36,6 @@ Datastore operations per minute with zero due work, grouped by what each scope m
 | `executor.mcp.elicitation_lease_heartbeat` | executor-mcp | feature | active-resource | per_instance | 10s | 0 | safe |
 | `executor.memory.doc_embed_consumer` | executor-memory | feature | blocking | per_instance | event-driven | 60 | safe |
 | `executor.memory.embed_backfill` | executor-memory | feature | candidate | per_instance | 30s | 2 | safe |
-| `executor.memory.embed_consumer` | executor-memory | feature | blocking | per_instance | event-driven | 60 | safe |
 | `executor.oauth.consent_state_reaper` | executor-mcp | feature | candidate | per_instance | 5m | 0.2 | safe |
 | `executor.step_inflight_refresh` | shared-runtime | correctness | active-resource | per_instance | 10s | 0 | never |
 | `host.browser_idle` | executor-host | feature | active-resource | per_instance | 1m | 0 | safe |
@@ -292,33 +291,7 @@ Datastore operations per minute with zero due work, grouped by what each scope m
 | Residual poll | — |
 | Source | `apps/aflow-executor-memory/src/embedder.ts`<br>`packages/database/src/tenant/duePointers.ts` |
 
-> Two indexed empty reads per minute per replica at idle. The contended resource is the tenant pointer row: every write to a pending document takes it, so all of a tenant's memory writes serialise on that one row for the duration of the trigger. A pending document stays pending until its embedding lands, so a tenant with a backlog is re-claimed each cadence and its jobs re-published — the stream consumer, not the pointer, is what makes that idempotent.
-
-### `executor.memory.embed_consumer`
-
-**Purpose.** Consume memory embedding jobs and write their vectors.
-
-**Invariant.** A queued embedding job is embedded once or stays pending for the next consumer.
-
-**Recovery.** Unacked entries stay in the PEL; the backfill pass catches anything never enqueued.
-
-| Field | Value |
-| ----- | ----- |
-| Service | executor-memory |
-| Owner domain | memory |
-| Criticality | feature |
-| Trigger | blocking |
-| Execution scope | per_instance |
-| Substrate | redis-stream |
-| Base cadence | event-driven |
-| Max batch | 10 |
-| Max cycle | 120000 ms |
-| Idle datastore ops/min | 60 |
-| Hot-path producer budget | 0 added RTT — Producers XADD the job they already produce. |
-| Feature gate | — |
-| Disable policy | safe |
-| Residual poll | — |
-| Source | `packages/redis/src/memoryEmbed.ts` |
+> Two indexed empty reads per minute per replica at idle. The contended resource is the tenant pointer row: every write to a pending document takes it, so all of a tenant's memory writes serialise on that one row for the duration of the trigger. A pending document stays pending until its embedding lands, so a tenant with a backlog is re-claimed each cadence and its jobs re-published — the stream consumer, not the pointer, is what makes that idempotent. A document whose space has no embedding provider leaves pending as `unconfigured` rather than waiting in it, so a space without a key is not re-claimed every cadence; a saved key or a chosen model marks it pending again.
 
 ### `executor.oauth.consent_state_reaper`
 

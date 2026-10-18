@@ -4,6 +4,8 @@ import type { ExecutorContext, StepResult } from '@aflow/executor-runtime';
 import type { MemoryDocRepository, MemoryDoc, MemoryDocVersion } from '@aflow/database';
 import type { PayloadStore } from '@aflow/payload-store';
 import type { Redis } from 'ioredis';
+import type { AIClient } from '@aflow/ai-client';
+import type { MemoryEmbeddingResolver, SpaceEmbedding } from '@aflow/credential-resolver';
 import {
   toAgentToolError,
   type PayloadRef,
@@ -48,6 +50,7 @@ function makeDoc(overrides: Partial<MemoryDoc> = {}): MemoryDoc {
     createdByStepExecutionId: null,
     currentVersion: 1,
     embeddingStatus: 'pending',
+    embeddingError: null,
     indexingMode: 'auto',
     expiresAt: null,
     deletedAt: null,
@@ -93,14 +96,9 @@ function createMockRepo(overrides: Partial<MemoryDocRepository> = {}): MemoryDoc
     updateChunkEmbedding: vi.fn().mockResolvedValue(undefined),
     updateDocEmbeddingStatus: vi.fn().mockResolvedValue(undefined),
     updateDerivedFields: vi.fn().mockResolvedValue(undefined),
-    resolveEmbeddingModel: vi.fn().mockResolvedValue({
-      model: 'text-embedding-3-small',
-      column: 'embed_1536',
-      dims: 1536,
-    }),
-    getEmbedConfig: vi.fn().mockResolvedValue(null),
-    setEmbedConfig: vi.fn().mockResolvedValue({}),
-    markDocsStaleForScope: vi.fn().mockResolvedValue([]),
+    settleDocEmbedding: vi.fn().mockResolvedValue(true),
+    markDocsPendingForEmbedding: vi.fn().mockResolvedValue(0),
+    embeddingSummary: vi.fn(),
     withTransaction: vi.fn(
       async (fn: (repo: MemoryDocRepository, linkRepo: unknown) => Promise<unknown>) => {
         return fn(mockRepo, mockLinkRepo);
@@ -256,11 +254,6 @@ describe('MemoryHandler', () => {
       mockRepo = createMockRepo({
         put: vi.fn().mockResolvedValue(doc),
         getLatestVersion: vi.fn().mockResolvedValue(version),
-        resolveEmbeddingModel: vi.fn().mockResolvedValue({
-          model: 'text-embedding-3-small',
-          column: 'embed_1536',
-          dims: 1536,
-        }),
       });
       // withTransaction must use the updated mockRepo
       (mockRepo.withTransaction as ReturnType<typeof vi.fn>).mockImplementation(
@@ -284,7 +277,6 @@ describe('MemoryHandler', () => {
         tenantId: TENANT_ID,
         docId: doc.id,
         docVersionId: version.id,
-        embeddingModel: 'text-embedding-3-small',
         path: doc.path,
       });
     });
@@ -354,9 +346,6 @@ describe('MemoryHandler', () => {
       mockRepo = createMockRepo({
         put: vi.fn().mockResolvedValue(doc),
         getLatestVersion: vi.fn().mockResolvedValue(version),
-        resolveEmbeddingModel: vi
-          .fn()
-          .mockResolvedValue({ model: 'text-embedding-3-small', column: 'embed_1536', dims: 1536 }),
       });
       (mockRepo.withTransaction as ReturnType<typeof vi.fn>).mockImplementation(
         async (fn: (repo: MemoryDocRepository, linkRepo: unknown) => Promise<unknown>) =>
@@ -396,9 +385,6 @@ describe('MemoryHandler', () => {
       mockRepo = createMockRepo({
         put: vi.fn().mockResolvedValue(doc),
         getLatestVersion: vi.fn().mockResolvedValue(makeVersion({ docId: doc.id })),
-        resolveEmbeddingModel: vi
-          .fn()
-          .mockResolvedValue({ model: 'text-embedding-3-small', column: 'embed_1536', dims: 1536 }),
       });
       (mockRepo.withTransaction as ReturnType<typeof vi.fn>).mockImplementation(
         async (fn: (repo: MemoryDocRepository, linkRepo: unknown) => Promise<unknown>) =>
@@ -811,5 +797,113 @@ describe('memory.run_output.get', () => {
     expect(mockRepo.getByPath).not.toHaveBeenCalled();
     expect(mockRepo.getById).not.toHaveBeenCalled();
     expect(redis.hget).toHaveBeenCalledWith(stateKey, 'runtimeState');
+  });
+});
+
+describe('memory search by meaning', () => {
+  const hit = {
+    docId: 'doc-1',
+    path: '/notes/a.md',
+    docType: 'markdown',
+    mimeType: 'text/markdown',
+    sizeBytes: 10,
+    updatedAt: new Date('2025-01-01'),
+    tags: [],
+    score: 1,
+    snippet: 'hello',
+    chunkId: 'c-1',
+    chunkIndex: 0,
+    startOffset: 0,
+    endOffset: 5,
+    searchBackend: 'fts',
+    spaceId: SPACE_ID,
+    userId: null,
+    agentId: null,
+    sessionId: null,
+  };
+
+  function resolverFor(resolved: SpaceEmbedding): MemoryEmbeddingResolver {
+    return {
+      resolve: vi.fn().mockResolvedValue(resolved),
+      choices: vi.fn(),
+      pin: vi.fn(),
+      embeddingModel: vi.fn(),
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockRepo = createMockRepo({ searchHybrid: vi.fn().mockResolvedValue([hit]) });
+  });
+
+  async function search(embedding: MemoryEmbeddingResolver) {
+    const handler = new MemoryHandler(
+      {} as never,
+      createMockRedis(),
+      createMockPayloadStore(),
+      embedding,
+    );
+    const ctx = createMockContext('memory.store.query', { mode: 'search', query: 'greeting' });
+    const result = await handler.execute(ctx);
+    expect(result.status).toBe('SUCCEEDED');
+    return writtenOutput(ctx);
+  }
+
+  it('says why when the space has no embedding provider', async () => {
+    const output = await search(
+      resolverFor({ state: 'unconfigured', model: null, pinned: false, reason: 'no key here' }),
+    );
+    expect(output['lexicalOnly']).toBe('no key here');
+    expect(mockRepo.searchHybrid).toHaveBeenCalledWith(
+      expect.not.objectContaining({ queryEmbedding: expect.anything() }),
+    );
+  });
+
+  it("matches the query against the space's own model only", async () => {
+    const client = {
+      generateEmbedding: vi.fn().mockResolvedValue({ embeddings: [[0.1, 0.2]], dimensions: 2 }),
+    } as unknown as AIClient;
+    const output = await search(
+      resolverFor({
+        state: 'ready',
+        pinned: true,
+        funding: 'space',
+        client,
+        model: {
+          id: 'gemini-embedding-001',
+          dimensions: 1536,
+          column: 'embedding_1536',
+        } as Extract<SpaceEmbedding, { state: 'ready' }>['model'],
+      }),
+    );
+    expect(output['lexicalOnly']).toBeUndefined();
+    expect(mockRepo.searchHybrid).toHaveBeenCalledWith(
+      expect.objectContaining({
+        queryEmbedding: {
+          vector: [0.1, 0.2],
+          model: 'gemini-embedding-001',
+          column: 'embedding_1536',
+        },
+      }),
+    );
+  });
+
+  it('reports a failed query embedding instead of hiding it', async () => {
+    const client = {
+      generateEmbedding: vi.fn().mockRejectedValue(new Error('401 from provider')),
+    } as unknown as AIClient;
+    const output = await search(
+      resolverFor({
+        state: 'ready',
+        pinned: true,
+        funding: 'space',
+        client,
+        model: { id: 'x', dimensions: 1536, column: 'embedding_1536' } as Extract<
+          SpaceEmbedding,
+          { state: 'ready' }
+        >['model'],
+      }),
+    );
+    expect(output['lexicalOnly']).toMatch(/401 from provider/);
   });
 });

@@ -1,7 +1,6 @@
 /**
  * AI Executor Service
  * Processes ai.* step jobs (LLM generation, embeddings, etc.).
- * Also runs memory embedding worker when ROLE=memory-embedder or ROLE=all.
  */
 // Must precede all other imports so Sentry can patch redis/pg before they load.
 import './instrument.js';
@@ -45,7 +44,6 @@ import {
   invalidateAllCredentialCaches,
 } from './handlers/ai/aiClient.js';
 // SearchHandler is lazy-loaded below — its submodules may not be compiled in Docker builds.
-import { MemoryEmbedder } from './workers/memoryEmbedder.js';
 
 const log = createServiceLogger('ai-executor');
 
@@ -91,7 +89,6 @@ async function main(): Promise<void> {
   // Determine role from environment
   const role = process.env['ROLE'] ?? 'step-executor';
   const shouldRunStepExecutor = role === 'step-executor' || role === 'all';
-  const shouldRunMemoryEmbedder = role === 'memory-embedder' || role === 'all';
 
   log.info('Starting AI Executor...', { role });
 
@@ -118,10 +115,9 @@ async function main(): Promise<void> {
   const payloadStore = resolved.store;
   log.debug(resolved.reason);
 
-  // Every role of this executor needs the database: the embedder reads its
-  // queue from it, and a media render is filed as a Memory document by the
-  // operation that paid the provider — so a step lane without one turns every
-  // render into a paid failure discovered one call at a time.
+  // A media render is filed as a Memory document by the operation that paid
+  // the provider — so a step lane without the database turns every render into
+  // a paid failure discovered one call at a time.
   const DATABASE_URL = process.env['DATABASE_URL'];
   if (!DATABASE_URL) {
     log.error('DATABASE_URL is required for the AI executor', { role });
@@ -234,23 +230,6 @@ async function main(): Promise<void> {
     }
   }
 
-  // Create memory embedder (for embedding worker)
-  //
-  let memoryEmbedder: MemoryEmbedder | null = null;
-  let memoryEmbedderBlockingRedis: BlockingRedisConnection | null = null;
-  if (shouldRunMemoryEmbedder) {
-    memoryEmbedderBlockingRedis = createBlockingRedisConnection(
-      `ai-memory-embedder-${String(process.pid)}`,
-      getExecutorRedisConfig(),
-    );
-    memoryEmbedder = new MemoryEmbedder({
-      redis,
-      blockingRedis: memoryEmbedderBlockingRedis,
-      payloadStore,
-      db: database.db,
-    });
-  }
-
   const controller = createShutdownController({
     name: 'AI Executor',
     logger: log,
@@ -262,8 +241,6 @@ async function main(): Promise<void> {
       }
       if (unsubscribeCredentials) await unsubscribeCredentials();
       if (redisSub) await quitRedisWithTimeout(redisSub);
-      if (memoryEmbedder) await memoryEmbedder.stop();
-      if (memoryEmbedderBlockingRedis) await quitRedisWithTimeout(memoryEmbedderBlockingRedis);
       await database.close();
       await quitRedisWithTimeout(redisBlocking);
       await closeRedisConnection();
@@ -298,12 +275,6 @@ async function main(): Promise<void> {
       stream: config.streamKey,
       concurrency: config.concurrency,
     });
-  }
-
-  // Start memory embedder
-  if (memoryEmbedder) {
-    await memoryEmbedder.start();
-    log.info('Memory Embedder started', { pid: process.pid });
   }
 }
 

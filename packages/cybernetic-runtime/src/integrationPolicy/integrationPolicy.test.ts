@@ -53,6 +53,15 @@ describe('collectApiDefinitionHosts', () => {
       }),
     ).toEqual(['a.example.com']);
   });
+
+  it("collects an endpoint's redirect hosts, which the allowlist judges as any other", () => {
+    expect(
+      collectApiDefinitionHosts({
+        baseUrl: 'https://api.github.com',
+        endpoints: [{}, { redirectHosts: ['*.blob.core.windows.net'] }],
+      }),
+    ).toEqual(['api.github.com', '*.blob.core.windows.net']);
+  });
 });
 
 describe('collectAuthHosts', () => {
