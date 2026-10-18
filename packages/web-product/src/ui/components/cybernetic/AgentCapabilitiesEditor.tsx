@@ -39,10 +39,12 @@ export function AgentCapabilitiesEditor({
   spaceId,
   directives,
   onChange,
+  compact = false,
 }: {
   spaceId: string;
   directives: EntityDirectives;
   onChange: (update: (current: EntityDirectives) => EntityDirectives) => void;
+  compact?: boolean;
 }) {
   const open = true;
   const loaded = directives;
@@ -205,9 +207,6 @@ export function AgentCapabilitiesEditor({
 
   return (
     <>
-      <Text size="xs" variant="muted">
-        Helmsman · changes apply from the next turn.
-      </Text>
       <Row
         align="center"
         justify="between"
@@ -310,124 +309,131 @@ export function AgentCapabilitiesEditor({
           than {MAX_PINNED_TOOLS} pinned tools or {MAX_CAPABILITY_SCHEMA_TOKENS} schema tokens.
         </Text>
       )}
-      {view === 'tools' && (
-        <Column gap="xs">
-          {/* An unreadable catalog is "unknown", never "no capability" —
+      <div
+        style={
+          compact
+            ? { maxHeight: 'min(36vh, 320px)', overflowY: 'auto', paddingRight: 'var(--space-1)' }
+            : undefined
+        }
+      >
+        {view === 'tools' && (
+          <Column gap="xs">
+            {/* An unreadable catalog is "unknown", never "no capability" —
                 hiding the section on error is indistinguishable from an agent
                 that genuinely offers nothing, and gives the operator no sign
                 the control exists at all. */}
-          {bundlesUnavailable ? (
+            {bundlesUnavailable ? (
+              <Text size="xs" variant="muted">
+                Couldn’t load capabilities. Reopen this panel to retry.
+              </Text>
+            ) : bundlesLoading ? (
+              <Text size="xs" variant="muted">
+                Loading capabilities…
+              </Text>
+            ) : offeredBundles.length === 0 ? (
+              <Text size="xs" variant="muted">
+                This agent offers no adjustable capabilities.
+              </Text>
+            ) : (
+              <CapabilityBundleEditor
+                bundles={offeredBundles}
+                placements={
+                  (loaded.capabilityDiscovery.bundlePlacements ?? {}) as Record<
+                    string,
+                    BundlePlacement
+                  >
+                }
+                showHints={showHints}
+                operationPlacements={directives.capabilityDiscovery.operationPlacements ?? {}}
+                onOperationPlace={(id, placement) => {
+                  edit((d) => {
+                    const next = { ...d.capabilityDiscovery.operationPlacements };
+                    const bundle = offeredBundles.find((entry) =>
+                      entry.operations.some((op) => op.operationId === id),
+                    );
+                    const groups = { ...d.capabilityDiscovery.bundlePlacements };
+                    if (
+                      bundle &&
+                      groups[bundle.id] === 'off' &&
+                      placement !== undefined &&
+                      placement !== 'off'
+                    ) {
+                      for (const op of bundle.operations) next[op.operationId] = 'off';
+                      groups[bundle.id] = 'on_demand';
+                    }
+                    if (placement === undefined) delete next[id];
+                    else next[id] = placement;
+                    return {
+                      ...d,
+                      capabilityDiscovery: {
+                        ...d.capabilityDiscovery,
+                        bundlePlacements: groups,
+                        operationPlacements: next,
+                      },
+                    };
+                  });
+                }}
+                onPlace={onBundlePlace}
+              />
+            )}
             <Text size="xs" variant="muted">
-              Couldn’t load capabilities. Reopen this panel to retry.
+              Required groups stay on. Costs show full groups; only loaded tools use the budget.
             </Text>
-          ) : bundlesLoading ? (
-            <Text size="xs" variant="muted">
-              Loading capabilities…
-            </Text>
-          ) : offeredBundles.length === 0 ? (
-            <Text size="xs" variant="muted">
-              This agent offers no adjustable capabilities.
-            </Text>
-          ) : (
-            <CapabilityBundleEditor
-              bundles={offeredBundles}
-              placements={
-                (loaded.capabilityDiscovery.bundlePlacements ?? {}) as Record<
-                  string,
-                  BundlePlacement
-                >
-              }
-              showHints={showHints}
-              operationPlacements={directives.capabilityDiscovery.operationPlacements ?? {}}
-              onOperationPlace={(id, placement) => {
-                edit((d) => {
-                  const next = { ...d.capabilityDiscovery.operationPlacements };
-                  const bundle = offeredBundles.find((entry) =>
-                    entry.operations.some((op) => op.operationId === id),
-                  );
-                  const groups = { ...d.capabilityDiscovery.bundlePlacements };
-                  if (
-                    bundle &&
-                    groups[bundle.id] === 'off' &&
-                    placement !== undefined &&
-                    placement !== 'off'
-                  ) {
-                    for (const op of bundle.operations) next[op.operationId] = 'off';
-                    groups[bundle.id] = 'on_demand';
-                  }
-                  if (placement === undefined) delete next[id];
-                  else next[id] = placement;
-                  return {
-                    ...d,
-                    capabilityDiscovery: {
-                      ...d.capabilityDiscovery,
-                      bundlePlacements: groups,
-                      operationPlacements: next,
-                    },
-                  };
-                });
-              }}
-              onPlace={onBundlePlace}
-            />
-          )}
-          <Text size="xs" variant="muted">
-            Required groups stay on. A minimal output reader also stays available. Row costs show
-            the full group; only loaded tools use the budget.
-          </Text>
-        </Column>
-      )}
+          </Column>
+        )}
 
-      {view === 'connections' && showConnections && (
-        <Column
-          gap="xs"
-          style={{
-            marginTop: 'var(--space-3)',
-            paddingTop: 'var(--space-2)',
-            borderTop: '1px solid var(--color-border-subtle)',
-          }}
-        >
-          {connectionsUnavailable ? (
-            <Text size="xs" variant="muted">
-              Couldn’t load connections. Reopen this panel to retry.
-            </Text>
-          ) : connectionsLoading ? (
-            <Text size="xs" variant="muted">
-              Loading connections…
-            </Text>
-          ) : (
-            <ConnectionPlacementEditor
-              connections={connections}
-              placements={placements}
-              pinnedTools={Object.fromEntries(
-                connections.map((c) => [
-                  c.bindingId,
-                  pinnedToolsFor(loaded.capabilityDiscovery.connections, c),
-                ]),
-              )}
-              showHints={showHints}
-              onPlace={onConnectionPlace}
-              onPinnedToolsChange={onPinnedToolsChange}
-            />
-          )}
-        </Column>
-      )}
-      {view === 'skills' && (
-        <SkillPlacementEditor
-          spaceId={spaceId}
-          placements={directives.capabilityDiscovery.skillPlacements ?? {}}
-          onPlace={(slug, placement) => {
-            edit((d) => {
-              const next = { ...d.capabilityDiscovery.skillPlacements };
-              if (placement === undefined) delete next[slug];
-              else next[slug] = placement;
-              return {
-                ...d,
-                capabilityDiscovery: { ...d.capabilityDiscovery, skillPlacements: next },
-              };
-            });
-          }}
-        />
-      )}
+        {view === 'connections' && showConnections && (
+          <Column
+            gap="xs"
+            style={{
+              marginTop: 'var(--space-3)',
+              paddingTop: 'var(--space-2)',
+              borderTop: '1px solid var(--color-border-subtle)',
+            }}
+          >
+            {connectionsUnavailable ? (
+              <Text size="xs" variant="muted">
+                Couldn’t load connections. Reopen this panel to retry.
+              </Text>
+            ) : connectionsLoading ? (
+              <Text size="xs" variant="muted">
+                Loading connections…
+              </Text>
+            ) : (
+              <ConnectionPlacementEditor
+                connections={connections}
+                placements={placements}
+                pinnedTools={Object.fromEntries(
+                  connections.map((c) => [
+                    c.bindingId,
+                    pinnedToolsFor(loaded.capabilityDiscovery.connections, c),
+                  ]),
+                )}
+                showHints={showHints}
+                onPlace={onConnectionPlace}
+                onPinnedToolsChange={onPinnedToolsChange}
+              />
+            )}
+          </Column>
+        )}
+        {view === 'skills' && (
+          <SkillPlacementEditor
+            spaceId={spaceId}
+            placements={directives.capabilityDiscovery.skillPlacements ?? {}}
+            onPlace={(slug, placement) => {
+              edit((d) => {
+                const next = { ...d.capabilityDiscovery.skillPlacements };
+                if (placement === undefined) delete next[slug];
+                else next[slug] = placement;
+                return {
+                  ...d,
+                  capabilityDiscovery: { ...d.capabilityDiscovery, skillPlacements: next },
+                };
+              });
+            }}
+          />
+        )}
+      </div>
     </>
   );
 }

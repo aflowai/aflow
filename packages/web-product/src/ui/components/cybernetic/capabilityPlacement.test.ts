@@ -166,5 +166,7 @@ describe('capability placement controls', () => {
         ?.getAttribute('aria-expanded'),
     ).toBe('true');
     expect(changes).toEqual([]);
+    expect(target.querySelector('section[aria-label="Always on"]')).toBeNull();
+    expect(target.querySelector('section[aria-label="Off"]')).toBeNull();
   });
 });

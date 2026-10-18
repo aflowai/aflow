@@ -42,7 +42,7 @@ export function PlacementSection({
           alignItems: 'center',
           gap: 'var(--space-2)',
           width: '100%',
-          padding: 'var(--space-3) 0',
+          padding: 'var(--space-2) 0',
           border: 0,
           background: 'none',
           color: 'inherit',
@@ -56,7 +56,7 @@ export function PlacementSection({
           {title}
         </Text>
         <Text as="span" size="xs" variant="muted" style={{ fontVariantNumeric: 'tabular-nums' }}>
-          {count} {countLabel}
+          {count} {count === 1 ? countLabel.slice(0, -1) : countLabel}
         </Text>
       </button>
       {open && (

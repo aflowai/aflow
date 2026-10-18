@@ -131,7 +131,15 @@ export function SurfaceRow({
               {label}
             </Text>
           )}
-          <Text as="div" size="xs" variant="muted" style={{ fontVariantNumeric: 'tabular-nums' }}>
+          <Text
+            as="div"
+            size="xs"
+            variant="muted"
+            style={{
+              fontVariantNumeric: 'tabular-nums',
+              ...(onToggle ? { paddingLeft: 'var(--space-4)' } : {}),
+            }}
+          >
             {toolCount} {toolCount === 1 ? 'tool' : 'tools'} · {tokenPrefix ?? ''}
             {tokens < 1000 ? formatToolTokens(tokens) : formatTokens(tokens)} tok
             {annotation ? ` · ${annotation}` : ''}
@@ -199,7 +207,7 @@ export function PlacementSelect<T extends string>({
         borderRadius: 'var(--radius-sm)',
         padding: '5px 6px',
         cursor: disabled ? 'default' : 'pointer',
-        width: '9.5rem',
+        width: '10.5rem',
         maxWidth: '100%',
         flexShrink: 0,
       }}

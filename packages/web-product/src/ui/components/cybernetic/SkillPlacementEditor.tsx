@@ -51,8 +51,14 @@ export function SkillPlacementEditor({
       />
       {result.isError && <Text size="xs">Couldn’t load skills: {result.error.message}</Text>}
       {result.isLoading && <Text size="xs">Loading skills…</Text>}
+      {(nextCursor || cursor) && (
+        <Text size="xs" variant="muted">
+          Placement counts below cover this results page.
+        </Text>
+      )}
       {(['always_on', 'on_demand', 'off'] as const).map((state) => {
         const grouped = entries.filter((entry) => skillPlacement(entry.slug, placements) === state);
+        if (query.trim() && !grouped.length) return null;
         return (
           <PlacementSection
             key={`${state}-${query}-${cursor ?? ''}`}

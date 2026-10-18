@@ -124,7 +124,7 @@ export function CapabilityBundleEditor({
         const entries = filtered
           .filter((bundle) => bundlePlacementOf(bundle, placements, operationPlacements) === state)
           .sort((a, b) => a.label.localeCompare(b.label));
-        if (state === 'mixed' && !entries.length) return null;
+        if ((state === 'mixed' || search) && !entries.length) return null;
         return (
           <PlacementSection
             key={`${state}-${search}`}
@@ -217,7 +217,8 @@ function BundleRow({
       {open && (
         <div
           style={{
-            paddingLeft: 'var(--space-4)',
+            marginLeft: 'var(--space-4)',
+            paddingLeft: 'var(--space-3)',
             marginTop: 'var(--space-2)',
             borderLeft: '2px solid var(--color-border-subtle)',
           }}

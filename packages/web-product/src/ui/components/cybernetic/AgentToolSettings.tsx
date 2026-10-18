@@ -27,6 +27,7 @@ export function AgentToolSettings({
     >
       {(directives) => (
         <AgentCapabilitiesEditor
+          compact
           spaceId={spaceId}
           directives={directives}
           onChange={controller.edit}
