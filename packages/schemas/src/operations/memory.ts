@@ -500,9 +500,8 @@ export const MemoryGetInputSchema = z.preprocess(
       .enum(['fail', 'absent'])
       .default('fail')
       .describe(
-        'fail: no document at the target fails MEMORY_NOT_FOUND. absent: it succeeds as { found: false }, so a ' +
-          'read that found nothing is told apart from one that could not be read — which still fails. ' +
-          'Only the document being absent; a missing target.version or a hash mismatch fails either way.',
+        'absent: no document at the target succeeds as { found: false } instead of failing MEMORY_NOT_FOUND. ' +
+          'Any other failed read — a missing target.version, a hash mismatch — still fails.',
       ),
   }),
 );

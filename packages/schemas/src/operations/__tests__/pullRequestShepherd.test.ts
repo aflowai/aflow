@@ -2,12 +2,16 @@
  * Contract: what the Local PR Shepherd reads and writes is defined once —
  * the handoff record it reads back is the one it wrote, the folder's origin
  * names a GitHub repository or nothing, the run list it reads in-flight work
- * with is one bounded page that counts a paused run as in flight, and a
+ * with is one bounded page that counts a paused run as in flight, the
+ * operations the shepherd adds run only as its workflow's tasks, and a
  * bundle's agent starts only one of the bundle's own skills.
  */
 import { describe, expect, it } from 'vitest';
 import {
+  getOperation,
+  grantDecisionForOperation,
   parseGitHubRemote,
+  type RunAccessGrant,
   parseShepherdHandoff,
   SHEPHERD_HANDOFF_CLOSE,
   SHEPHERD_HANDOFF_OPEN,
@@ -117,6 +121,40 @@ describe('workflow.run.decide', () => {
       }).success,
     ).toBe(false);
   });
+});
+
+describe('the shepherd’s own operations', () => {
+  const workflowRunReader: RunAccessGrant = {
+    spaceId: '00000000-0000-0000-0000-000000000001',
+    accessLevel: 'write',
+    grantedToUserId: '00000000-0000-0000-0000-000000000002',
+    tenantRole: 'member',
+    spaceRole: 'editor',
+    grantedAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    capabilities: {
+      allowedCapabilities: [{ capabilityGroupId: 'workflow.run', accessMode: 'read' }],
+      deniedCapabilities: [],
+      allowedRiskModifiers: [],
+      deniedRiskModifiers: [],
+      allowPrivileged: false,
+    },
+    grantReason: 'start',
+    resourceScopes: [],
+  };
+
+  it.each(['workflow.run.list', 'workflow.run.decide'])(
+    '%s runs only as a workflow task: an agent calling it is refused under the grant that lets the task run',
+    (operationId) => {
+      expect(getOperation(operationId)?.opTaskOnly).toBe(true);
+      expect(
+        grantDecisionForOperation(workflowRunReader, operationId, { kind: 'op_task' }).allowed,
+      ).toBe(true);
+      expect(
+        grantDecisionForOperation(workflowRunReader, operationId, { kind: 'agent' }).allowed,
+      ).toBe(false);
+    },
+  );
 });
 
 describe('a bundled agent', () => {

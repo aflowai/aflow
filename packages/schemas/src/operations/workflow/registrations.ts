@@ -654,6 +654,7 @@ export function createWorkflowOperationRegistrations(
       tags: ['workflow', 'run', 'observe'],
       idempotency: 'idempotent',
       mutates: false,
+      opTaskOnly: true,
       usage: {
         oneLine: 'List the runs of a workflow started with one input equal to a value.',
         whenToUse: [
@@ -663,6 +664,7 @@ export function createWorkflowOperationRegistrations(
         whenNotToUse: [
           'Reading what one run did — workflow.run.detail',
           'Following what this conversation is waiting on — workflow.run.list_attention',
+          'Ad-hoc selection from an agent’s tool surface — this op is opTaskOnly and must be an explicit workflow operation task.',
         ],
         pitfalls: [
           'The value is compared as the run was started with it: a branch given as `refs/heads/x` is not `x`.',
@@ -693,6 +695,7 @@ export function createWorkflowOperationRegistrations(
       tags: ['workflow', 'run', 'decide', 'rules'],
       idempotency: 'idempotent',
       mutates: false,
+      opTaskOnly: true,
       usage: {
         oneLine:
           'Pick a decision and its reason from ordered rules over bound data, without a model.',
@@ -702,6 +705,7 @@ export function createWorkflowOperationRegistrations(
         whenNotToUse: [
           'A judgement no rule over the data can make — reading a log, a ticket — which is ai.decision.decide',
           'Gating one task on one output — a `when` on that task',
+          'Ad-hoc selection from an agent’s tool surface — this op is opTaskOnly and must be an explicit workflow operation task.',
         ],
         pitfalls: [
           'Rules are read in order and the first that holds wins: put the narrower rule first.',
