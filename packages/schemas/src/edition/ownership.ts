@@ -216,11 +216,6 @@ export const OWNERSHIP_MANIFEST: readonly OwnershipRule[] = [
   { path: 'scripts/cloud-consumer-proof.mjs', owner: 'cloud' },
   { path: 'scripts/seam-paths.mjs', owner: 'cloud' },
   { path: 'packages/lib/src/__tests__/seamPathsCoverage.test.ts', owner: 'cloud' },
-  {
-    path: 'scripts/create-pr.sh',
-    owner: 'cloud',
-    why: "Opens pull requests as the maintainers' GitHub App so its approvals satisfy the private ruleset.",
-  },
 
   // Web pages whose whole subject is a plane the local edition has no server
   // for. Their tabs are already filtered by the surface the edition composed,
@@ -656,10 +651,12 @@ export const ENV_OWNERSHIP: Readonly<Record<string, OwnershipClass>> = {
   PERF_SLOW_QUERY_MS: 'development',
   PERF_SLOW_READ_MS: 'development',
   SENTRY_DEBUG: 'development',
-  // The maintainers' pull-request App, read only by `scripts/create-pr.sh`.
-  APP_ID: 'cloud',
-  APP_PRIVATE_KEY: 'cloud',
-  APP_PRIVATE_KEY_FILE: 'cloud',
+  // The maintainers' pull-request App, read only by `scripts/create-pr.sh`,
+  // which opens a pull request in either repository as the App so the
+  // maintainer's approval satisfies the required review on main.
+  APP_ID: 'development',
+  APP_PRIVATE_KEY: 'development',
+  APP_PRIVATE_KEY_FILE: 'development',
 
   // Documented and read by nothing. Found by classifying rather than by
   // anybody noticing: an example file is where a removed option goes to be
