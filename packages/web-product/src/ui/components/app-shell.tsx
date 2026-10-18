@@ -412,6 +412,15 @@ function Sidebar() {
             </div>
           </Tooltip>
         )}
+        <Tooltip content="Help" side="right">
+          <SidebarAction
+            icon={<Icon name="question" size={18} />}
+            label="Help"
+            onClick={() => {
+              router.push('/help');
+            }}
+          />
+        </Tooltip>
         {user?.isAdmin && (
           <Tooltip content="Tenant Admin" side="right">
             <SidebarAction

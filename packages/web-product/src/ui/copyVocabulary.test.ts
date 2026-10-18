@@ -1,11 +1,5 @@
 /**
- * Three words the product does not say to an operator.
- *
- * `harness` is the coding lane's name in the code; on screen the thing is a
- * coding agent, and where the machine reported which one it installed, that is
- * its name. `Shop` was one rail entry against `Store` everywhere else. `the
- * cybernetic agent` is the platform's own word for its ensemble; the operator
- * talks to Helmsman.
+ * The product's vocabulary, held over every operator-facing string in the UI.
  *
  * Standing rather than one-off, because copy is written continuously and this is
  * the only surface where the vocabulary can be enforced at all — a reviewer sees
@@ -24,6 +18,8 @@ import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
+import { BANNED_OPERATOR_WORDS } from './copyVocabulary.js';
+
 const UI_ROOT = resolve(dirname(fileURLToPath(import.meta.url)));
 
 /** Props whose value is read by a person rather than by the machine. */
@@ -35,12 +31,6 @@ const COPY_PROPS = new Set([
   'tagline',
   'aria-label',
 ]);
-
-const BANNED: ReadonlyArray<{ pattern: RegExp; instead: string }> = [
-  { pattern: /\bharness(es)?\b/i, instead: 'coding agent, or the agent’s own label' },
-  { pattern: /\bshop\b/i, instead: 'Store' },
-  { pattern: /\bcybernetic agent\b/i, instead: 'Helmsman' },
-];
 
 /**
  * Strings that read as operator copy and are not.
@@ -130,7 +120,7 @@ describe('operator-facing copy in the product package', () => {
     expect(COPY.length).toBeGreaterThan(1_000);
   });
 
-  for (const { pattern, instead } of BANNED) {
+  for (const { pattern, instead } of BANNED_OPERATOR_WORDS) {
     it(`never says ${String(pattern)} — it says ${instead}`, () => {
       const hits = COPY.filter(
         (occurrence) => pattern.test(occurrence.text) && !ALLOWED.has(occurrence.text),

@@ -60,6 +60,7 @@ import { causalInspectorRoutes } from '../routes/cybernetic/causalInspector.js';
 import { coachActivityRoutes } from '../routes/cybernetic/coachActivity.js';
 import { skillLifecycleRoutes } from '../routes/cybernetic/skillLifecycle.js';
 import { storeListingRoutes, storeInstallRoutes } from '../routes/store.js';
+import { helpRoutes } from '../routes/help.js';
 import type {
   ServerComposition,
   ServerSurface,
@@ -288,6 +289,7 @@ function v1Surfaces({ actionCenterAggregator }: V1SurfaceDeps): ServerSurface[] 
       name: 'store-installs',
       register: (s) => s.register(storeInstallRoutes, { prefix: '/spaces' }),
     },
+    { name: 'help', register: (s) => s.register(helpRoutes, { prefix: '/help' }) },
 
     // Public (no auth), HMAC-verified.
     {

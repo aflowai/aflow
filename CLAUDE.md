@@ -63,7 +63,7 @@ packages/
   observability/           # OpenTelemetry tracing, structured logging
   design-system/           # Design tokens, primitives, semantic UI components
   lib/                     # Shared utilities
-  platform-artifacts/      # Code-backed platform agent/skill/workflow registry (Plan 106)
+  platform-artifacts/      # Code-backed platform agent/skill/workflow registry (Plan 106) and help articles (Plan 325)
   applet-runtime/          # Stateful-applet gateway: applyAppletCommand, patch bounding/templates, conformance gate (Plan 264)
   run-view/                # Pure run-view reducer + types (folded on both client and server for the chat snapshot+tail mount path — Plan 146)
 docs/plans/                # Plans for larger changes — see docs/plans/README.md
@@ -273,6 +273,7 @@ After every change that affects behavior, schemas, or architecture:
 1. Update the plan in `docs/plans/` that covers it, if one does
 2. Update this CLAUDE.md if you added new packages, apps, or changed architecture
 3. Update `.claude/skills/` and `.cursor/rules/` if your change affects a pattern they cover
+4. Update the help articles (`packages/platform-artifacts/src/helpCenter/articles/`, Plan 325) if your change affects what an operator sees or does — a screen, a label, a navigation path, a setting, a default, a step or what an edition offers. The articles are the product's own answers, read on `/help` and by the Helmsman, so an answer that describes the product as it was is wrong in both places. Search them for the label or path you changed (`grep -ri "<label>" packages/platform-artifacts/src/helpCenter/articles`); a renamed route or operation fails the anchor contract tests, but a renamed button or a moved setting fails nothing.
 
 ## Environment setup
 

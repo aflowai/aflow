@@ -686,6 +686,7 @@ __metadata:
   dependencies:
     "@aflow/applet-runtime": "workspace:*"
     "@aflow/design-system": "workspace:*"
+    "@aflow/platform-artifacts": "workspace:*"
     "@aflow/run-view": "workspace:*"
     "@aflow/schemas": "workspace:*"
     "@aflow/surface-engine": "workspace:*"

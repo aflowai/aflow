@@ -391,3 +391,16 @@
 .chat-empty-flow-md .md-content strong {
   color: var(--color-text-secondary);
 }
+
+/* Markdown set beneath a heading of its own (a help answer under its
+   question): its headings rank below that heading rather than above it. */
+.md-content.md-nested h1,
+.md-content.md-nested h2 {
+  font-size: var(--font-size-base);
+  margin-top: var(--space-4);
+}
+.md-content.md-nested h3,
+.md-content.md-nested h4 {
+  font-size: var(--font-size-sm);
+  margin-top: var(--space-3);
+}
