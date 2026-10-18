@@ -77,6 +77,7 @@ export const ICON_MAP = {
   'user-circle': 'UserCircle',
   users: 'Users',
   book: 'Book',
+  question: 'Question',
   file: 'File',
   'file-text': 'FileText',
   'file-code': 'FileCode',

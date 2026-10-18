@@ -128,6 +128,7 @@ export { TenantIntegrationsPolicyPage } from './screens/tenant-integrations-poli
 export { TenantStorePolicyPage } from './screens/tenant-store-policy.js';
 export { TenantSpacesPage } from './screens/tenant-spaces.js';
 export { ArchivedSpacesPage } from './screens/spaces-archived.js';
+export { HelpArticlePage, HelpIndexPage } from './screens/help.js';
 export { SpacesIndexPage } from './screens/spaces-index.js';
 export { ActionIndicator } from './components/actionCenter/ActionIndicator.js';
 export type { ActionIndicatorProps } from './components/actionCenter/ActionIndicator.js';

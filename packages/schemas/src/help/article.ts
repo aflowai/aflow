@@ -70,3 +70,20 @@ export const HelpArticleSummarySchema = HelpArticleSchema.pick({
   summary: true,
 });
 export type HelpArticleSummary = z.infer<typeof HelpArticleSummarySchema>;
+
+export const HelpArticleListQuerySchema = z.object({
+  q: z.string().min(1).max(500).optional().describe('Search terms; omit to list'),
+  theme: HelpThemeSchema.optional(),
+});
+export type HelpArticleListQuery = z.infer<typeof HelpArticleListQuerySchema>;
+
+export const HelpArticleListResponseSchema = z.object({
+  articles: z.array(HelpArticleSummarySchema),
+});
+export type HelpArticleListResponse = z.infer<typeof HelpArticleListResponseSchema>;
+
+export const HelpArticleResponseSchema = z.object({
+  article: HelpArticleSchema,
+  related: z.array(HelpArticleSummarySchema).describe('The related articles true in this edition'),
+});
+export type HelpArticleResponse = z.infer<typeof HelpArticleResponseSchema>;
