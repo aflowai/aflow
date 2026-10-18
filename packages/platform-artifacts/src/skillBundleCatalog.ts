@@ -250,7 +250,7 @@ const LOCAL_CODE_REVIEW_BUNDLE: AuthoredSkillBundle = {
   apiBindingTemplates: [],
   memorySeed: [],
   helmsmanHints: [
-    'The review reads the connected folder at its last commit, so uncommitted work is invisible to it — ask for the work in progress to be committed, on a branch, before reviewing it.',
+    "The review reads the connected folder's commits, checked out at the commit the range ends at, so uncommitted work is invisible to it — ask for the work in progress to be committed, on a branch, before reviewing it.",
   ],
 };
 

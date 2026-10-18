@@ -1580,6 +1580,7 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
     expect(review.inputBindings).toEqual({
       bindingId: { kind: 'run_input', path: 'bindingId' },
       range: { kind: 'task_output', taskId: 'commit', path: 'commit.pushRange' },
+      at: { kind: 'task_output', taskId: 'commit', path: 'commit.sha' },
     });
     expect(review.inputBindings?.['range']).toEqual(
       taskOrThrow('scan-commit').inputBindings?.['range'],
@@ -1587,7 +1588,7 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
     const declared = new Set(Object.keys(review.inputBindings ?? {}));
     const start = substituteTemplateBinds(
       template,
-      { bindingId: 'folder-1', range: COMMIT.pushRange },
+      { bindingId: 'folder-1', range: COMMIT.pushRange, at: COMMIT.sha },
       declared,
     );
     // Named by its catalog entry, so a space workflow merely holding the slug
@@ -1595,9 +1596,21 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
     expect(WorkflowRunStartInputSchema.parse(start)).toMatchObject({
       slug: REVIEW_LOCAL_CHANGES.bundle.workflow.slug,
       catalogId: REVIEW_LOCAL_CHANGES.catalogId,
-      inputs: { bindingId: 'folder-1', range: `${ORIGIN_BASE}..${HEAD}`, depth: 'standard' },
+      inputs: {
+        bindingId: 'folder-1',
+        range: `${ORIGIN_BASE}..${HEAD}`,
+        at: HEAD,
+        depth: 'standard',
+      },
       wait: 'until_complete',
     });
+    // The review's checkout stands on the commit it judges — the range's tip —
+    // never on the folder's HEAD, which is where the commission started: the
+    // commit lands on a branch nothing has checked out, so a checkout at the
+    // folder's HEAD reads every changed file as it was before the change.
+    const inputs = (start as { inputs: { range: string; at: string } }).inputs;
+    expect(inputs.range.split('..')[1]).toBe(inputs.at);
+    expect(inputs.at).not.toBe(COMMIT.baseSha);
     // Two shas and no branch name: the range still names this commit after
     // the branch moves.
     expect(JSON.stringify(start)).not.toContain('aflow/x');

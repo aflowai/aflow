@@ -1,7 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import AjvModule from 'ajv';
 import { materializeAndValidateSkillConfig } from '@aflow/cybernetic-runtime';
-import { isEvalPlaneOperation } from '@aflow/schemas';
+import {
+  HostHarnessRunInputSchema,
+  isEvalPlaneOperation,
+  substituteTemplateBinds,
+} from '@aflow/schemas';
 import { REVIEW_LOCAL_CHANGES } from './reviewLocalChanges.js';
 
 const AjvCtor = (AjvModule as unknown as { default: typeof AjvModule }).default ?? AjvModule;
@@ -61,7 +65,7 @@ describe('Review Local Changes — the first harness inside a skill', () => {
 
   it('takes the folder and the range as run inputs, and carries them to the harness', () => {
     const required = (wf.runInputs ?? []).filter((i) => i.required).map((i) => i.id);
-    expect(required).toEqual(['bindingId', 'range']);
+    expect(required).toEqual(['bindingId', 'range', 'at']);
     expect(task?.inputBindings?.['bindingId']).toMatchObject({ kind: 'run_input' });
     expect(template?.inputs).toEqual({
       range: { $bind: 'range' },
@@ -70,6 +74,28 @@ describe('Review Local Changes — the first harness inside a skill', () => {
     });
     expect(template?.outputSchema).not.toHaveProperty('x-reviewRequest');
     expect(template?.task).toContain('inputs of this task');
+  });
+
+  it('checks out the commit the range ends at, and names the base only for the diff', () => {
+    // A checkout at the range's base holds every changed file as it was
+    // before the change, so "read every changed file whole" reads the old file
+    // and a deep review's checks run on code the range did not write.
+    const tip = 'c'.repeat(40);
+    const op = substituteTemplateBinds(
+      task?.inputTemplate ?? {},
+      { bindingId: 'hb_repo', range: `${'e'.repeat(40)}..${tip}`, at: tip },
+      new Set(Object.keys(task?.inputBindings ?? {})),
+    );
+    const parsed = HostHarnessRunInputSchema.parse(op);
+    expect(parsed.base).toBe(tip);
+    expect(parsed.inputs).toMatchObject({ range: `${'e'.repeat(40)}..${tip}` });
+    expect(task?.inputBindings?.['at']).toEqual({ kind: 'run_input', path: 'at' });
+    // The skill says so, to the harness and to the Helmsman that fills `at`.
+    expect(template?.task).toContain('detached at the commit the range ends at');
+    expect(template?.task).toContain('names only where the diff starts');
+    expect(REVIEW_LOCAL_CHANGES.description).toContain('detached at `at`');
+    const at = (wf.runInputs ?? []).find((i) => i.id === 'at');
+    expect(at?.description).toContain('"HEAD" for "main..HEAD"');
   });
 
   it('reads a range’s diff from where its two ends meet, and its commits as given', () => {
