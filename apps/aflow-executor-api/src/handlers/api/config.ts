@@ -14,14 +14,16 @@ export const INLINE_BODY_THRESHOLD = 64 * 1024; // 64 KB
 
 /**
  * Effective `response.maxBytes` when the caller omits it. An inline response is
- * bounded small to protect the hot path; a `saveTo` response persists straight
- * to a Memory path instead of inlining, so that guard does not apply and it
- * defaults to the schema ceiling (a data-file download is not throttled by the
- * inline default). An explicit `maxBytes` always wins over both. Values match
- * `packages/schemas/src/operations/api.ts` `response.maxBytes` (.default / .max).
+ * bounded small to protect the hot path. A response that is never held whole —
+ * a `saveTo` response persists straight to a Memory path, a tail-reading text
+ * preset keeps only the body's end — is not what that guard protects against,
+ * so it defaults to the schema ceiling (a data-file download or a long job log
+ * is not throttled by the inline default). An explicit `maxBytes` always wins
+ * over both. Values match `packages/schemas/src/operations/api.ts`
+ * `response.maxBytes` (.default / .max).
  */
 export const DEFAULT_INLINE_RESPONSE_BYTES = 10_485_760; // 10 MB
-export const SAVE_TO_DEFAULT_RESPONSE_BYTES = 104_857_600; // 100 MB
+export const STREAMED_RESPONSE_DEFAULT_BYTES = 104_857_600; // 100 MB
 
 export const DEFAULT_EGRESS_POLICY: EgressPolicy = {
   allowedHosts: [],

@@ -13,14 +13,16 @@ import { stripSensitiveHeaders } from '../../lib/header-redaction.js';
 import {
   INLINE_BODY_THRESHOLD,
   DEFAULT_INLINE_RESPONSE_BYTES,
-  SAVE_TO_DEFAULT_RESPONSE_BYTES,
+  STREAMED_RESPONSE_DEFAULT_BYTES,
 } from './config.js';
+import { type BodyTail, NOTHING_SKIPPED, readBodyTail } from './bodyTail.js';
 import {
   applyRecordTransformPreset,
   applyTextTransformPreset,
   applyTransformPreset,
-  getTextTransform,
   isRecordTransformPreset,
+  isTextTransformPreset,
+  textPresetTailWindow,
   validateAgainstJsonSchema,
 } from './transforms.js';
 import { saveResponseBodyToMemory } from './saveResponse.js';
@@ -275,10 +277,10 @@ export async function processResponse(
   const responseConfig = input.response;
   // An explicit maxBytes always wins; when omitted, a saveTo download persists
   // to a Memory path rather than inlining, so it is not bound by the small
-  // inline default.
+  // inline default (nor is a tail read, below).
   const maxBytes =
     responseConfig.maxBytes ??
-    (responseConfig.saveTo ? SAVE_TO_DEFAULT_RESPONSE_BYTES : DEFAULT_INLINE_RESPONSE_BYTES);
+    (responseConfig.saveTo ? STREAMED_RESPONSE_DEFAULT_BYTES : DEFAULT_INLINE_RESPONSE_BYTES);
   const contentType = response.headers.get('content-type') ?? '';
   let data: unknown;
   let dataRef: string | undefined;
@@ -298,7 +300,7 @@ export async function processResponse(
   const activeTextPresetId = !response.ok
     ? undefined
     : explicitPresetId !== undefined
-      ? getTextTransform(explicitPresetId) !== undefined
+      ? isTextTransformPreset(explicitPresetId)
         ? explicitPresetId
         : undefined
       : declaredIsRecord
@@ -382,7 +384,20 @@ export async function processResponse(
     responseConfig.format === 'text' ||
     !contentType.includes('application/json')
   ) {
-    const text = await readTextWithBudget(response, maxBytes, INLINE_OVER_BUDGET_HINT);
+    const tailWindow =
+      activeTextPresetId !== undefined ? textPresetTailWindow(activeTextPresetId) : undefined;
+    const body: BodyTail =
+      tailWindow !== undefined
+        ? await readBodyTail(
+            response,
+            tailWindow,
+            responseConfig.maxBytes ?? STREAMED_RESPONSE_DEFAULT_BYTES,
+          )
+        : {
+            text: await readTextWithBudget(response, maxBytes, INLINE_OVER_BUDGET_HINT),
+            skipped: NOTHING_SKIPPED,
+          };
+    const { text } = body;
     if (
       response.ok &&
       explicitPresetId !== undefined &&
@@ -395,14 +410,15 @@ export async function processResponse(
       });
     }
     if (activeStrictPresetId !== undefined) {
-      // Normalize the FULL body before the inline/reference decision so the
+      // Normalize the body before the inline/reference decision so the
       // by-reference body (and every /run/outputs/<id>/data read) is the
-      // normalized value, never the raw source format. The raw text is kept
-      // under an internal ref for debugging only.
+      // normalized value, never the raw source format. The raw text — for a
+      // tail read, the end it kept — is held under an internal ref for
+      // debugging only.
       rawBodyRef = await ctx.writePayload('raw_body', text);
       const normalized =
         activeTextPresetId !== undefined
-          ? applyTextTransformPreset(activeTextPresetId, text, { rawBodyRef })
+          ? applyTextTransformPreset(activeTextPresetId, body, { rawBodyRef })
           : applyRecordTransformPreset(
               activeStrictPresetId,
               parseRecordBody(text, activeStrictPresetId, rawBodyRef),

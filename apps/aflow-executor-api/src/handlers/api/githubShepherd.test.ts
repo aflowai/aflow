@@ -17,7 +17,9 @@ import {
   LoopPullRequestsSchema,
   ShepherdHandoffReadSchema,
 } from '@aflow/schemas';
+import { NOTHING_SKIPPED } from './bodyTail.js';
 import {
+  JOB_LOG_READ_WINDOW_BYTES,
   jobLogTail,
   loopCheckRuns,
   loopFailingJobs,
@@ -27,8 +29,10 @@ import {
 } from './githubShepherd.js';
 import {
   applyRecordTransformPreset,
-  getTextTransform,
+  applyTextTransformPreset,
   isRecordTransformPreset,
+  isTextTransformPreset,
+  textPresetTailWindow,
 } from './transforms.js';
 import { withoutCredentials } from './execution.js';
 import { credentialHeaderNames } from './headers.js';
@@ -311,7 +315,28 @@ describe('job_log_tail — the end of a job’s log', () => {
   });
 
   it('is getJobLogs’ own transform, applied to the text before it is shaped', () => {
-    expect(getTextTransform('job_log_tail')).toBe(jobLogTail);
+    const log = { text: 'a\nb\n', skipped: NOTHING_SKIPPED };
+    expect(applyTextTransformPreset('job_log_tail', log)).toEqual(jobLogTail(log.text));
+    expect(textPresetTailWindow('job_log_tail')).toBe(JOB_LOG_READ_WINDOW_BYTES);
+  });
+
+  it('read past a skipped prefix, leaves out the fragment it starts with and counts the lines skipped', () => {
+    const tail = jobLogTail('ment\nline 41\nline 42\n', {
+      bytes: 9000,
+      lineBreaks: 40,
+      endsLine: false,
+    });
+    expect(tail).toMatchObject({
+      excerpt: 'line 41\nline 42',
+      lines: 2,
+      totalLines: 43,
+      truncated: true,
+    });
+  });
+
+  it('read from a line’s start, keeps that line', () => {
+    const tail = jobLogTail('line 40\nline 41', { bytes: 9000, lineBreaks: 40, endsLine: true });
+    expect(tail).toMatchObject({ excerpt: 'line 40\nline 41', lines: 2, totalLines: 42 });
   });
 });
 
@@ -320,6 +345,17 @@ describe('record presets', () => {
     expect(isRecordTransformPreset('loop_pulls:aflow/')).toBe(true);
     expect(isRecordTransformPreset('loop_checks')).toBe(true);
     expect(isRecordTransformPreset('extract:data')).toBe(false);
+  });
+
+  it('are never an Object.prototype key, whatever the id', () => {
+    for (const id of ['toString', 'constructor', 'hasOwnProperty', '__proto__', 'toString:x']) {
+      expect(isRecordTransformPreset(id)).toBe(false);
+      expect(isTextTransformPreset(id)).toBe(false);
+      expect(() => applyRecordTransformPreset(id, {})).toThrowError(/Unknown record transform/);
+      expect(() =>
+        applyTextTransformPreset(id, { text: '', skipped: NOTHING_SKIPPED }),
+      ).toThrowError(/Unknown text transform/);
+    }
   });
 
   it('fail the read on a body they cannot shape, never passing it on', () => {

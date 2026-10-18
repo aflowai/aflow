@@ -18,18 +18,41 @@ import type { ExecutorContext } from '@aflow/executor-runtime';
 import { JOB_LOG_TAIL_PRESET } from '@aflow/schemas';
 import { apiError } from '../../lib/api-errors.js';
 import { parseArxivAtomFeed } from './arxivAtom.js';
-import { jobLogTail, SHEPHERD_RECORD_PRESETS } from './githubShepherd.js';
+import type { BodyTail } from './bodyTail.js';
+import {
+  JOB_LOG_READ_WINDOW_BYTES,
+  jobLogTail,
+  SHEPHERD_RECORD_PRESETS,
+} from './githubShepherd.js';
 import { ApiExecutionError } from './types.js';
 
-const TEXT_TRANSFORM_PRESETS: Record<string, (text: string) => unknown> = {
-  arxiv_atom_papers: parseArxivAtomFeed,
-  [JOB_LOG_TAIL_PRESET]: jobLogTail,
-};
+/**
+ * A text preset reads the whole body, or — with `tailWindowBytes` — only its
+ * last bytes, streamed past the rest, so a body over the inline budget still
+ * yields its end.
+ */
+interface TextTransformPreset {
+  tailWindowBytes?: number;
+  transform: (body: BodyTail) => unknown;
+}
 
-const RECORD_TRANSFORM_PRESETS: Record<
+// Maps, not object literals: an id is caller-supplied, and `toString` or
+// `constructor` must name no preset.
+const TEXT_TRANSFORM_PRESETS = new Map<string, TextTransformPreset>([
+  ['arxiv_atom_papers', { transform: ({ text }) => parseArxivAtomFeed(text) }],
+  [
+    JOB_LOG_TAIL_PRESET,
+    {
+      tailWindowBytes: JOB_LOG_READ_WINDOW_BYTES,
+      transform: ({ text, skipped }) => jobLogTail(text, skipped),
+    },
+  ],
+]);
+
+const RECORD_TRANSFORM_PRESETS = new Map<
   string,
   (body: unknown, arg: string | undefined) => unknown
-> = { ...SHEPHERD_RECORD_PRESETS };
+>(Object.entries(SHEPHERD_RECORD_PRESETS));
 
 function splitPresetId(presetId: string): { name: string; arg: string | undefined } {
   const colon = presetId.indexOf(':');
@@ -40,7 +63,7 @@ function splitPresetId(presetId: string): { name: string; arg: string | undefine
 
 /** Whether an id names a record preset, with or without its argument. */
 export function isRecordTransformPreset(presetId: string | undefined): boolean {
-  return presetId !== undefined && splitPresetId(presetId).name in RECORD_TRANSFORM_PRESETS;
+  return presetId !== undefined && RECORD_TRANSFORM_PRESETS.has(splitPresetId(presetId).name);
 }
 
 export function applyRecordTransformPreset(
@@ -49,7 +72,7 @@ export function applyRecordTransformPreset(
   extraDetails: Record<string, unknown> = {},
 ): unknown {
   const { name, arg } = splitPresetId(presetId);
-  const transform = RECORD_TRANSFORM_PRESETS[name];
+  const transform = RECORD_TRANSFORM_PRESETS.get(name);
   if (transform === undefined) {
     throw new ApiExecutionError(
       apiError('API_RESPONSE_TRANSFORM_FAILED', `Unknown record transform preset '${name}'.`, {
@@ -71,20 +94,22 @@ export function applyRecordTransformPreset(
   }
 }
 
-/** The text-preset transform for an id, or undefined when the id names no text preset. */
-export function getTextTransform(
-  presetId: string | undefined,
-): ((text: string) => unknown) | undefined {
-  if (presetId === undefined) return undefined;
-  return TEXT_TRANSFORM_PRESETS[presetId];
+/** Whether an id names a text preset. */
+export function isTextTransformPreset(presetId: string | undefined): boolean {
+  return presetId !== undefined && TEXT_TRANSFORM_PRESETS.has(presetId);
+}
+
+/** How many of the body's last bytes a text preset reads, or undefined where it reads them all. */
+export function textPresetTailWindow(presetId: string): number | undefined {
+  return TEXT_TRANSFORM_PRESETS.get(presetId)?.tailWindowBytes;
 }
 
 export function applyTextTransformPreset(
   presetId: string,
-  text: string,
+  body: BodyTail,
   extraDetails: Record<string, unknown> = {},
 ): unknown {
-  const transform = TEXT_TRANSFORM_PRESETS[presetId];
+  const transform = TEXT_TRANSFORM_PRESETS.get(presetId)?.transform;
   if (transform === undefined) {
     throw new ApiExecutionError(
       apiError('API_RESPONSE_TRANSFORM_FAILED', `Unknown text transform preset '${presetId}'.`, {
@@ -94,7 +119,7 @@ export function applyTextTransformPreset(
     );
   }
   try {
-    return transform(text);
+    return transform(body);
   } catch (err) {
     throw new ApiExecutionError(
       apiError(

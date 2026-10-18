@@ -25,6 +25,7 @@ import {
   SHEPHERD_RESPONSE_PRESETS,
   type ShepherdHandoffRead,
 } from '@aflow/schemas';
+import { NOTHING_SKIPPED, type SkippedPrefix } from './bodyTail.js';
 
 type Json = Record<string, unknown>;
 
@@ -319,11 +320,16 @@ export function loopFailingJobs(body: unknown): FailingJobs {
  * A job's log → its end: the last {@link JOB_LOG_EXCERPT_MAX_LINES} lines, fewer
  * where those pass {@link JOB_LOG_EXCERPT_MAX_BYTES}. A failure's assertion
  * and a dependency audit's advisories both sat in that span (Plan 321 P0.3).
+ *
+ * `log` may be only the log's end, read past `skipped`: its first line is then
+ * a fragment unless the skipped bytes ended one, and is left out of the
+ * excerpt while still counted once in `totalLines`.
  */
-export function jobLogTail(log: string): JobLogExcerpt {
+export function jobLogTail(log: string, skipped: SkippedPrefix = NOTHING_SKIPPED): JobLogExcerpt {
   const all = log.replace(/\r\n/g, '\n').replace(ANSI_ESCAPE, '').replace(/\n+$/, '').split('\n');
-  const total = log.length === 0 ? 0 : all.length;
-  let kept = all.slice(-JOB_LOG_EXCERPT_MAX_LINES);
+  const total = skipped.lineBreaks + (log.length === 0 ? 0 : all.length);
+  const fragment = !skipped.endsLine && all.length > 1;
+  let kept = (fragment ? all.slice(1) : all).slice(-JOB_LOG_EXCERPT_MAX_LINES);
   while (kept.length > 1 && carriedBytes(kept.join('\n')) > JOB_LOG_EXCERPT_MAX_BYTES) {
     kept = kept.slice(1);
   }
@@ -339,9 +345,16 @@ export function jobLogTail(log: string): JobLogExcerpt {
     lines,
     totalLines: total,
     bytes: carriedBytes(excerpt),
-    truncated: cut || lines < total,
+    truncated: cut || lines < total || skipped.bytes > 0,
   };
 }
+
+/**
+ * How much of a job's end {@link jobLogTail} reads: sixteen times the excerpt's
+ * bound, so 300 lines fit with room for the colour codes taken out of them,
+ * whatever the whole log's size.
+ */
+export const JOB_LOG_READ_WINDOW_BYTES = 16 * JOB_LOG_EXCERPT_MAX_BYTES;
 
 /** Colour and cursor codes, which GitHub's runners write into every log and no reader needs. */
 // eslint-disable-next-line no-control-regex -- the escape character is what is matched
