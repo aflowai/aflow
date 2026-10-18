@@ -16,10 +16,9 @@
  * agent runs moves only those (Plan 315 F56). Nothing is committed, and the
  * clone is removed once its changes have been collected.
  */
-import { constants } from 'node:fs';
-import { access, lstat, mkdir, readdir, readFile, rm, stat } from 'node:fs/promises';
+import { lstat, mkdir, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, delimiter, isAbsolute, join, relative } from 'node:path';
+import { basename, join, relative } from 'node:path';
 
 import AjvModule from 'ajv';
 import type { z } from 'zod';
@@ -68,7 +67,7 @@ import {
 } from '../browser/harnessBrowser.js';
 import { seededSecrets, withSeededConfig } from '../configSeed.js';
 import { fetchCredential, scrubSecrets } from '../credentialFetch.js';
-import { probeEnv } from '../probeEnv.js';
+import { executableResolves } from '../probeEnv.js';
 import { runUnderFolderPosture } from '../folderRun.js';
 import {
   noSandboxMessage,
@@ -395,48 +394,30 @@ export async function readHarnessResult(
 }
 
 /**
- * Which harness a run gets (Plan 325 D6).
+ * Which harness a run gets (Plan 325 D6, D12).
  *
  * A named harness is that harness or a refusal; it never silently becomes
  * another, because a caller that named one is comparing or relying on it. A
- * run that names none gets the machine's default — the operator's choice, or
- * the only harness configured — and, when the default is not installed, the
- * first configured harness that is. Installing a second harness therefore
- * never turns a skill that names none into a refusal.
+ * run that names none gets its space's preferred harness, then the machine's
+ * default — the operator's choice, or the only harness configured — each only
+ * where it is installed, and otherwise the first configured harness that is.
+ * Installing a second harness therefore never turns a skill that names none
+ * into a refusal, and a space preferring one a machine lacks still runs there.
  */
-export type HarnessSelectedBy = 'named' | 'default' | 'fallback';
+export type HarnessSelectedBy = 'named' | 'preferred' | 'default' | 'fallback';
 
 export interface HarnessSelection {
   readonly profile: HarnessProfile;
   readonly selectedBy: HarnessSelectedBy;
-  /** Why the default did not run, for a fallback. */
+  /** Why a preferred or default harness did not run, when one did not. */
   readonly passedOver?: string;
-}
-
-/** True when the executable can be started: an absolute path, or a name found on PATH. */
-export async function executableResolves(executable: string): Promise<boolean> {
-  const candidates = isAbsolute(executable)
-    ? [executable]
-    : (probeEnv()['PATH'] ?? '')
-        .split(delimiter)
-        .filter((dir) => dir !== '')
-        .map((dir) => join(dir, executable));
-  for (const candidate of candidates) {
-    if (
-      await access(candidate, constants.X_OK).then(
-        () => true,
-        () => false,
-      )
-    )
-      return true;
-  }
-  return false;
 }
 
 export async function selectHarness(
   profiles: ReadonlyMap<string, HarnessProfile>,
   requested: string | undefined,
-  defaultHarness: string | undefined,
+  preferred: string | undefined,
+  machineDefault: string | undefined,
   resolves: (executable: string) => Promise<boolean> = executableResolves,
 ): Promise<HarnessSelection> {
   if (requested !== undefined) {
@@ -450,26 +431,43 @@ export async function selectHarness(
       'unknown_profile',
     );
   }
-  const preferredId = defaultHarness ?? (offered.length === 1 ? offered[0]?.id : undefined);
-  const preferred = preferredId === undefined ? undefined : profiles.get(preferredId);
-  if (preferred !== undefined && (await resolves(preferred.executable))) {
-    return { profile: preferred, selectedBy: 'default' };
-  }
-  const passedOver =
-    preferredId === undefined
-      ? 'no default harness is set on this machine'
-      : preferred === undefined
-        ? `the default harness \`${preferredId}\` is not configured on this machine`
-        : `the default harness \`${preferredId}\` is not installed at ${preferred.executable}`;
-  for (const profile of offered) {
-    if (profile === preferred) continue;
+  const defaultId = machineDefault ?? (offered.length === 1 ? offered[0]?.id : undefined);
+  const candidates: { id: string; by: HarnessSelectedBy; what: string }[] = [
+    ...(preferred !== undefined
+      ? [{ id: preferred, by: 'preferred' as const, what: "this space's coding agent" }]
+      : []),
+    ...(defaultId !== undefined && defaultId !== preferred
+      ? [{ id: defaultId, by: 'default' as const, what: 'the default harness' }]
+      : []),
+  ];
+  const reasons: string[] = [];
+  const tried = new Set<HarnessProfile>();
+  for (const { id, by, what } of candidates) {
+    const profile = profiles.get(id);
+    if (profile === undefined) {
+      reasons.push(`${what} \`${id}\` is not configured on this machine`);
+      continue;
+    }
+    tried.add(profile);
     if (await resolves(profile.executable)) {
-      return { profile, selectedBy: 'fallback', passedOver };
+      return {
+        profile,
+        selectedBy: by,
+        ...(reasons.length > 0 ? { passedOver: reasons.join('; ') } : {}),
+      };
+    }
+    reasons.push(`${what} \`${id}\` is not installed at ${profile.executable}`);
+  }
+  if (defaultId === undefined) reasons.push('no default harness is set on this machine');
+  for (const profile of offered) {
+    if (tried.has(profile)) continue;
+    if (await resolves(profile.executable)) {
+      return { profile, selectedBy: 'fallback', passedOver: reasons.join('; ') };
     }
   }
-  // Nothing resolves: run the preferred one anyway, so the failure to start
+  // Nothing resolves: run the first candidate anyway, so the failure to start
   // names the program and where it was looked for.
-  return { profile: preferred ?? offered[0]!, selectedBy: 'default' };
+  return { profile: [...tried][0] ?? offered[0]!, selectedBy: 'default' };
 }
 
 /**
@@ -616,7 +614,12 @@ async function runHarness(
     // repository's own `.git`, so the binding has to permit writes even though
     // the harness never uses that permission — its policy withholds it below.
     requireWritable(binding);
-    const selection = await selectHarness(policy.harnesses, input.harness, policy.defaultHarness);
+    const selection = await selectHarness(
+      policy.harnesses,
+      input.harness,
+      ctx.preferredHarness,
+      policy.defaultHarness,
+    );
     const profile = selection.profile;
     if (input.browser !== undefined) {
       assertTakesMcpConfig(profile);

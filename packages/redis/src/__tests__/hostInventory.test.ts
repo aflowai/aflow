@@ -60,7 +60,7 @@ describe('host inventories', () => {
       { [now - 1_000]: 'laptop' },
       {
         [hostInventoryKey('laptop')]: JSON.stringify(
-          inventory('laptop', [{ id: 'claude', label: 'Claude Code' }]),
+          inventory('laptop', [{ id: 'claude', label: 'Claude Code', installed: true }]),
         ),
       },
     );
@@ -68,7 +68,7 @@ describe('host inventories', () => {
     const live = await readLiveHostInventories(redis, now);
 
     expect(live).toHaveLength(1);
-    expect(live[0]?.harnesses).toEqual([{ id: 'claude', label: 'Claude Code' }]);
+    expect(live[0]?.harnesses).toEqual([{ id: 'claude', label: 'Claude Code', installed: true }]);
     expect(redis.reads).toEqual([hostInventoryKey('laptop')]);
   });
 
@@ -80,13 +80,15 @@ describe('host inventories', () => {
     const redis = fakeRedis(
       { [now - 1_000]: 'laptop' },
       {
-        [hostInventoryKey('laptop')]: JSON.stringify(inventory('laptop', [{ id: 'homegrown' }])),
+        [hostInventoryKey('laptop')]: JSON.stringify(
+          inventory('laptop', [{ id: 'homegrown', installed: false }]),
+        ),
       },
     );
 
     const live = await readLiveHostInventories(redis, now);
 
-    expect(live[0]?.harnesses).toEqual([{ id: 'homegrown' }]);
+    expect(live[0]?.harnesses).toEqual([{ id: 'homegrown', installed: false }]);
   });
 
   it('refuses an inventory whose harnesses are bare ids rather than reading them as names', async () => {
@@ -291,7 +293,7 @@ describe('host inventories', () => {
       { [now - 1_000]: 'laptop' },
       {
         [hostInventoryKey('laptop')]: JSON.stringify({
-          ...inventory('laptop', [{ id: 'claude' }]),
+          ...inventory('laptop', [{ id: 'claude', installed: true }]),
           maxConcurrentHarnessRuns: 3,
         }),
       },
@@ -304,7 +306,9 @@ describe('host inventories', () => {
 
   it('refuses an inventory that does not say how many coding agents run at once', async () => {
     const now = Date.now();
-    const { maxConcurrentHarnessRuns: _limit, ...stale } = inventory('laptop', [{ id: 'claude' }]);
+    const { maxConcurrentHarnessRuns: _limit, ...stale } = inventory('laptop', [
+      { id: 'claude', installed: true },
+    ]);
     const redis = fakeRedis(
       { [now - 1_000]: 'laptop' },
       { [hostInventoryKey('laptop')]: JSON.stringify(stale) },
@@ -315,7 +319,9 @@ describe('host inventories', () => {
 
   it('refuses an inventory missing the folder list', async () => {
     const now = Date.now();
-    const { folders: _folders, ...stale } = inventory('laptop', [{ id: 'claude' }]);
+    const { folders: _folders, ...stale } = inventory('laptop', [
+      { id: 'claude', installed: true },
+    ]);
     const redis = fakeRedis(
       { [now - 1_000]: 'laptop' },
       { [hostInventoryKey('laptop')]: JSON.stringify(stale) },

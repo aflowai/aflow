@@ -1,7 +1,7 @@
 /**
  * Contract: a run does not have to know the harness id. A run that names none
- * gets the machine's default, and the first configured harness that is
- * installed when the default is not — so installing a second harness never
+ * gets its space's preferred harness, then the machine's default, each where
+ * installed, and the first configured harness that is installed otherwise — so installing a second harness never
  * turns a skill that names none into a refusal. A named harness is that harness
  * or a refusal, never another one.
  */
@@ -39,6 +39,7 @@ describe('choosing a harness', () => {
       profiles('claude'),
       undefined,
       undefined,
+      undefined,
       installed('claude'),
     );
     expect(selection.profile.id).toBe('claude');
@@ -48,6 +49,7 @@ describe('choosing a harness', () => {
   it("runs the machine's default when several are offered", async () => {
     const selection = await selectHarness(
       profiles('claude', 'codex'),
+      undefined,
       undefined,
       'codex',
       installed('claude', 'codex'),
@@ -60,6 +62,7 @@ describe('choosing a harness', () => {
   it('falls back to the first installed harness, saying why, when the default is not installed', async () => {
     const selection = await selectHarness(
       profiles('claude', 'codex'),
+      undefined,
       undefined,
       'claude',
       installed('codex'),
@@ -74,6 +77,7 @@ describe('choosing a harness', () => {
       profiles('opencode', 'claude'),
       undefined,
       undefined,
+      undefined,
       installed('opencode', 'claude'),
     );
     expect(selection.profile.id).toBe('opencode');
@@ -85,6 +89,7 @@ describe('choosing a harness', () => {
     const selection = await selectHarness(
       profiles('claude'),
       undefined,
+      undefined,
       'codex',
       installed('claude'),
     );
@@ -95,17 +100,17 @@ describe('choosing a harness', () => {
 
   it('runs a named harness that is not the default, and never swaps an unknown one', async () => {
     const available = profiles('claude', 'codex');
-    const named = await selectHarness(available, 'claude', 'codex', installed('codex'));
+    const named = await selectHarness(available, 'claude', undefined, 'codex', installed('codex'));
     expect(named.profile.id).toBe('claude');
     expect(named.selectedBy).toBe('named');
-    await expect(selectHarness(available, 'amp', 'codex', installed('codex'))).rejects.toThrow(
-      HarnessProfileError,
-    );
+    await expect(
+      selectHarness(available, 'amp', undefined, 'codex', installed('codex')),
+    ).rejects.toThrow(HarnessProfileError);
   });
 
   it('says none are configured rather than reporting an empty choice', async () => {
     try {
-      await selectHarness(profiles(), undefined, undefined, installed());
+      await selectHarness(profiles(), undefined, undefined, undefined, installed());
       expect.unreachable();
     } catch (error) {
       expect((error as Error).message).toContain('No coding harness is configured');
@@ -116,6 +121,7 @@ describe('choosing a harness', () => {
   it('brings the chosen profile model with it, which a run model still overrides', async () => {
     const selection = await selectHarness(
       new Map([['claude', WITH_MODEL]]),
+      undefined,
       undefined,
       undefined,
       installed('claude'),
@@ -130,5 +136,42 @@ describe('choosing a harness', () => {
     expect(
       fromProfile.slice(fromProfile.indexOf('--model'), fromProfile.indexOf('--model') + 2),
     ).toEqual(['--model', 'fable']);
+  });
+
+  it("runs the space's preferred harness over the machine's default", async () => {
+    const selection = await selectHarness(
+      profiles('claude', 'codex'),
+      undefined,
+      'codex',
+      'claude',
+      installed('claude', 'codex'),
+    );
+    expect(selection.profile.id).toBe('codex');
+    expect(selection.selectedBy).toBe('preferred');
+  });
+
+  it("runs the machine's default, saying why, when the space's preference is not installed", async () => {
+    const selection = await selectHarness(
+      profiles('claude', 'codex'),
+      undefined,
+      'codex',
+      'claude',
+      installed('claude'),
+    );
+    expect(selection.profile.id).toBe('claude');
+    expect(selection.selectedBy).toBe('default');
+    expect(selection.passedOver).toContain("this space's coding agent `codex` is not installed");
+  });
+
+  it("lets a named harness override the space's preference", async () => {
+    const selection = await selectHarness(
+      profiles('claude', 'codex'),
+      'claude',
+      'codex',
+      undefined,
+      installed('claude', 'codex'),
+    );
+    expect(selection.profile.id).toBe('claude');
+    expect(selection.selectedBy).toBe('named');
   });
 });

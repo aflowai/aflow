@@ -139,6 +139,9 @@ export interface ExecutorContext {
    */
   readonly callerModel?: string;
 
+  /** The coding agent the step's space prefers, for a harness run. */
+  readonly preferredHarness?: string;
+
   /** Step definition (if available) */
   readonly stepDefinition?: StepDefinition;
 

@@ -99,35 +99,38 @@ describe('hostFolderEntry', () => {
 });
 
 describe('mergeHostHarnesses', () => {
-  it('lists the id a run addresses and the name an operator would recognise', () => {
-    expect(mergeHostHarnesses([{ harnesses: [{ id: 'claude', label: 'Claude Code' }] }])).toEqual([
-      { id: 'claude', label: 'Claude Code' },
-    ]);
+  it('lists the id a run addresses, the name an operator would recognise, and whether it is there', () => {
+    expect(
+      mergeHostHarnesses([
+        { harnesses: [{ id: 'claude', label: 'Claude Code', installed: true }] },
+      ]),
+    ).toEqual([{ id: 'claude', label: 'Claude Code', installed: true }]);
   });
 
   it('keeps a harness the machine gave no name for', () => {
-    expect(mergeHostHarnesses([{ harnesses: [{ id: 'homegrown' }] }])).toEqual([
-      { id: 'homegrown' },
+    expect(mergeHostHarnesses([{ harnesses: [{ id: 'homegrown', installed: false }] }])).toEqual([
+      { id: 'homegrown', installed: false },
     ]);
   });
 
-  it('collapses the same id from two machines, and takes the name either one gave', () => {
+  it('collapses the same id from two machines, taking the name either gave and installed where either has it', () => {
     // Two paired machines can offer the same harness. The id is what the run
     // addresses, so it is the identity; a machine whose profile carries no label
-    // must not erase the name another machine supplied for the same id.
+    // must not erase the name another machine supplied for the same id, and a
+    // run naming none lands on whichever machine has it installed.
     expect(
       mergeHostHarnesses([
-        { harnesses: [{ id: 'claude' }] },
+        { harnesses: [{ id: 'claude', installed: false }] },
         {
           harnesses: [
-            { id: 'claude', label: 'Claude Code' },
-            { id: 'amp', label: 'Amp' },
+            { id: 'claude', label: 'Claude Code', installed: true },
+            { id: 'amp', label: 'Amp', installed: false },
           ],
         },
       ]),
     ).toEqual([
-      { id: 'amp', label: 'Amp' },
-      { id: 'claude', label: 'Claude Code' },
+      { id: 'amp', label: 'Amp', installed: false },
+      { id: 'claude', label: 'Claude Code', installed: true },
     ]);
   });
 
@@ -147,13 +150,23 @@ describe('mergeHostHarnesses', () => {
         },
       ],
       harnesses: mergeHostHarnesses([
-        { harnesses: [{ id: 'claude', label: 'Claude Code' }, { id: 'homegrown' }] },
+        {
+          harnesses: [
+            { id: 'claude', label: 'Claude Code', installed: true },
+            { id: 'homegrown', installed: true },
+          ],
+        },
       ]),
+      preferredHarness: 'claude',
       total: 1,
       guidance: HOST_FOLDERS_GUIDANCE,
     };
     const parsed = SpaceContextHostFoldersSectionSchema.parse(section);
-    expect(parsed.harnesses).toEqual([{ id: 'claude', label: 'Claude Code' }, { id: 'homegrown' }]);
+    expect(parsed.harnesses).toEqual([
+      { id: 'claude', label: 'Claude Code', installed: true },
+      { id: 'homegrown', installed: true },
+    ]);
+    expect(parsed.preferredHarness).toBe('claude');
   });
 });
 

@@ -154,8 +154,10 @@ export function hostFolderEntry(
  *
  * A machine is what offers a harness, and two machines can offer the same id;
  * the id is what a run addresses, so it is the identity here and the first label
- * seen for it is the name. Sorted by id, because the list is read by an agent
- * and a stable order is one fewer difference between two otherwise equal turns.
+ * seen for it is the name. Installed where any machine has it installed, since
+ * a run that names none lands on a machine that does. Sorted by id, because the
+ * list is read by an agent and a stable order is one fewer difference between
+ * two otherwise equal turns.
  */
 export function mergeHostHarnesses(
   inventories: ReadonlyArray<Pick<HostInventory, 'harnesses'>>,
@@ -168,9 +170,11 @@ export function mergeHostHarnesses(
         byId.set(harness.id, {
           id: harness.id,
           ...(harness.label !== undefined ? { label: harness.label } : {}),
+          installed: harness.installed,
         });
-      } else if (known.label === undefined && harness.label !== undefined) {
-        known.label = harness.label;
+      } else {
+        if (known.label === undefined && harness.label !== undefined) known.label = harness.label;
+        known.installed ||= harness.installed;
       }
     }
   }
@@ -518,6 +522,9 @@ export async function buildSpaceContext(
             .slice(0, limit)
             .map((row) => hostFolderEntry(row, publishing.get(row.hostBindingId))),
           harnesses,
+          ...(spaceRow.directives?.codingHarness !== undefined
+            ? { preferredHarness: spaceRow.directives.codingHarness }
+            : {}),
           total: folderRows.length,
           ...(truncated ? { truncated: true } : {}),
           guidance: HOST_FOLDERS_GUIDANCE,

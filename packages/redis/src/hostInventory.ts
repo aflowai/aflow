@@ -229,7 +229,16 @@ export const HostInventorySchema = z.object({
   observedAt: z.string(),
   machine: HostMachineSchema.optional(),
   runtimes: z.array(z.object({ name: z.string(), version: z.string() })),
-  harnesses: z.array(z.object({ id: z.string(), label: z.string().optional() })),
+  /**
+   * The harnesses the machine's policy configures, and whether each one's
+   * executable is there to start. A configured harness that is not installed
+   * is offered as such, so a workspace choosing one can see it will fall back.
+   */
+  harnesses: z.array(
+    z.object({ id: z.string(), label: z.string().optional(), installed: z.boolean() }),
+  ),
+  /** The harness a run gets when neither it nor its workspace names one. */
+  defaultHarness: z.string().optional(),
   /**
    * How many of those run at once on this machine; a run past it waits for one
    * to end.
