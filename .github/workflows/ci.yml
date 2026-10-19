@@ -38,6 +38,16 @@ jobs:
         with:
           node-version: '22'
 
+      # Before the install: it reads the GitHub API and needs nothing built,
+      # so a colliding migration fails in seconds rather than after the build.
+      - name: Migration numbers are free
+        if: github.event_name == 'pull_request'
+        run: node scripts/check-migration-numbers.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+
       - name: Enable Corepack (Yarn)
         run: corepack enable
 

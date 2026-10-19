@@ -103,6 +103,7 @@ const CHECK_SCRIPTS = [
   'check-steps.mjs',
   'check-tests.mjs',
   'check-test-reporter.mjs',
+  'check-migration-numbers.mjs',
 ];
 const CHECKS = [process.execPath, 'scripts/verify-commit.mjs'];
 const COMPILER_OPTIONS = { strict: true, module: 'nodenext', types: [] };
