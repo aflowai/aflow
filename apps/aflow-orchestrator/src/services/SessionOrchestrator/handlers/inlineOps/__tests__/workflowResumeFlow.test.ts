@@ -638,7 +638,7 @@ describe('workflow.run.resume — Plan 130 Phase 1 cross-boundary loop', () => {
   });
 
   it.each([true, false])(
-    'refuses task-backed acknowledge with surfaced contract=%s',
+    'refuses task-backed acknowledge after checking contract availability (surfaced=%s)',
     async (hasContract) => {
       mockLoadRunById.mockResolvedValueOnce(makePausedRun({ pausedReason: 'task_paused' }));
       mockSurfaceWorkflowResumeContract.mockResolvedValue(
@@ -655,7 +655,9 @@ describe('workflow.run.resume — Plan 130 Phase 1 cross-boundary loop', () => {
       expect(mockClaimResumeLease).not.toHaveBeenCalled();
       expect(mockResumeRunWithClaim).not.toHaveBeenCalled();
       const result = mockAddStepResult.mock.calls[0]![1] as { error: { code: string } };
-      expect(result.error.code).toBe('ACKNOWLEDGE_TASK_BACKED_NOT_SUPPORTED');
+      expect(result.error.code).toBe(
+        hasContract ? 'ACKNOWLEDGE_TASK_BACKED_NOT_SUPPORTED' : 'RESUME_CONTRACT_UNAVAILABLE',
+      );
     },
   );
 
@@ -682,6 +684,30 @@ describe('workflow.run.resume — Plan 130 Phase 1 cross-boundary loop', () => {
     expect(mockResumeRunWithClaim).not.toHaveBeenCalled();
     const result = mockAddStepResult.mock.calls[0]![1] as { error: { code: string } };
     expect(result.error.code).toBe('RESUME_CONTRACT_UNAVAILABLE');
+  });
+
+  it('refuses retry_failed_task on a paused run after surfacing its contract', async () => {
+    mockLoadRunById.mockResolvedValueOnce(makePausedRun());
+    mockSurfaceWorkflowResumeContract.mockResolvedValue({
+      contract: makeContract(),
+      pauseVersion: 1,
+    });
+    await handleWorkflowCrudInline(
+      makeArgs({
+        runId: RUN_ID,
+        resolution: {
+          mode: 'retry_failed_task',
+          taskId: 'score-task',
+          failedAt: '2026-01-01T00:00:00Z',
+          attempt: 1,
+        },
+      }),
+    );
+    expect(mockSurfaceWorkflowResumeContract).toHaveBeenCalled();
+    expect(mockClaimResumeLease).not.toHaveBeenCalled();
+    expect(mockResumeRunWithClaim).not.toHaveBeenCalled();
+    const result = mockAddStepResult.mock.calls[0]![1] as { error: { code: string } };
+    expect(result.error.code).toBe('RETRY_WRONG_RUN_STATE');
   });
 
   it('atomic commit reports task_row_not_paused → handler surfaces typed error (round-2 P0/2)', async () => {

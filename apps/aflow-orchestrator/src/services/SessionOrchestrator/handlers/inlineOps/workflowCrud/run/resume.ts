@@ -129,6 +129,24 @@ export async function handleWorkflowRunResume(
     return;
   }
 
+  const surfaced =
+    run.status === 'paused'
+      ? await surfaceWorkflowResumeContract(db, args.payloadStore, tenantIdStr, run.runId)
+      : null;
+  if (run.status === 'paused' && !surfaced) {
+    const causeLabel = run.pausedReason ?? 'unknown';
+    await emitStepError(
+      args,
+      'RESUME_CONTRACT_UNAVAILABLE',
+      `Run ${run.runId} paused on \`${causeLabel}\` but has no surfaced resume contract ` +
+        '(payload retrieval or schema validation failed). Resuming without a contract would ' +
+        'leave the pause unresolved. Manual intervention required to inspect the ' +
+        '`workflow_runs` row and recover.',
+      startTime,
+      'validation',
+    );
+    return;
+  }
   if (input.resolution.mode === 'retry_failed_task') {
     await handleRetryFailedTask({
       args,
@@ -187,7 +205,7 @@ export async function handleWorkflowRunResume(
     return;
   }
 
-  if (run.status !== 'paused') {
+  if (run.status !== 'paused' || !surfaced) {
     const pausedHint = await formatPausedRunsHint(db, tenantIdStr, spaceId, 5);
     await emitStepError(
       args,
@@ -201,35 +219,15 @@ export async function handleWorkflowRunResume(
     return;
   }
 
-  const surfaced = await surfaceWorkflowResumeContract(
-    db,
-    args.payloadStore,
-    tenantIdStr,
-    run.runId,
-  );
-  const pauseCause = surfaced?.contract.pauseCause ?? run.pausedReason;
+  const pauseCause = surfaced.contract.pauseCause;
   if (
     input.resolution.mode === 'acknowledge' &&
-    (run.tasks.some((task) => task.status === 'paused') || surfaced?.contract.failedTaskId)
+    (run.tasks.some((task) => task.status === 'paused') || surfaced.contract.failedTaskId)
   ) {
     await emitStepError(
       args,
       'ACKNOWLEDGE_TASK_BACKED_NOT_SUPPORTED',
       'This pause is task-backed; acknowledge would strand the paused task. Use a task resolution through workflow.run.resume.',
-      startTime,
-      'validation',
-    );
-    return;
-  }
-  if (!surfaced) {
-    const causeLabel = run.pausedReason ?? 'unknown';
-    await emitStepError(
-      args,
-      'RESUME_CONTRACT_UNAVAILABLE',
-      `Run ${run.runId} paused on \`${causeLabel}\` but has no surfaced resume contract ` +
-        '(payload retrieval or schema validation failed). Resuming without a contract would ' +
-        'leave the pause unresolved. Manual intervention required to inspect the ' +
-        '`workflow_runs` row and recover.',
       startTime,
       'validation',
     );

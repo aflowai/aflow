@@ -5,7 +5,7 @@ import {
   type TenantId,
   type WorkflowTask,
 } from '@aflow/schemas';
-import { createMemoryPayloadStore } from '@aflow/payload-store';
+import { contentAddressForJson, createMemoryPayloadStore } from '@aflow/payload-store';
 import { surfaceWorkflowResumeContract } from '@aflow/cybernetic-runtime';
 import type { WorkflowRunDetail } from '@aflow/cybernetic-runtime';
 
@@ -113,10 +113,15 @@ describe('dispatchHumanWorkflowTask — large action preview (Plan 186 §5.D)', 
       args.task.pauseInstruction = 'p'.repeat(length);
       args.deps.payloadStore = createMemoryPayloadStore();
       await dispatchHumanWorkflowTask(args);
-      const ref = mockPauseRunOnly.mock.calls[0]![5] as string;
-      const stored = await args.deps.payloadStore.retrieve(
-        ref as Parameters<typeof args.deps.payloadStore.retrieve>[0],
-      );
+      const builtRef = mockPauseRunOnly.mock.calls[0]![5] as string;
+      const built = decodeInline(builtRef);
+      const ref = await args.deps.payloadStore.storeContentAddressed({
+        tenantId: TENANT,
+        kind: 'state',
+        contentHash: contentAddressForJson(built),
+        data: built,
+      });
+      const stored = await args.deps.payloadStore.retrieve(ref);
       expect(WorkflowResumeContractSchema.safeParse(stored).success).toBe(true);
       const parsed = WorkflowResumeContractSchema.parse(stored);
       expect(parsed.pausedTaskInputContract?.prompt?.length).toBe(Math.min(length, 20000));
