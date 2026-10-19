@@ -83,40 +83,34 @@ export function admitUnlessThisMachine({ resolve, localAddresses }) {
   };
 }
 
-async function main() {
-  const args = process.argv.slice(2);
-  const separator = args.indexOf('--');
-  if (args[0] !== '-s' || args[1] === undefined || separator !== 2 || args.length <= 3) {
-    process.stderr.write(USAGE);
-    process.exit(2);
-  }
-  const policyPath = args[1];
-  const argv = args.slice(3);
-
-  let child;
-  try {
-    const config = SandboxRuntimeConfigSchema.parse(JSON.parse(readFileSync(policyPath, 'utf8')));
-    await SandboxManager.initialize(
-      config,
-      admitUnlessThisMachine({
-        resolve: (host) => lookup(host, { all: true, verbatim: true }),
-        localAddresses: interfaceAddresses(),
-      }),
-    );
-    const wrapped = await SandboxManager.wrapWithSandbox(argv.map(shellWord).join(' '));
-    child = spawn(wrapped, { shell: true, stdio: 'inherit' });
-  } catch (error) {
-    process.stderr.write(
-      `The open sandbox could not start: ${error instanceof Error ? error.message : String(error)}\n`,
-    );
-    process.exit(1);
-  }
-
-  // The workload's own status reaches the executor through the file its wrapper
-  // writes, so this exit only has to say whether the launcher got that far.
-  child.on('exit', (code) => {
-    SandboxManager.cleanupAfterCommand();
-    process.exit(code ?? 1);
+/**
+ * Runs the wrapped command, and exits with it.
+ *
+ * The workload's standard output and error are pipes this launcher pumps into
+ * its own, never its own descriptors handed down. Node puts a pipe it writes to
+ * into non-blocking mode on the open file description, which every process
+ * holding that description shares: a workload that inherited the launcher's
+ * standard output would have its writes fail with EAGAIN once this process
+ * touched `process.stdout`, and a harness that treats a failed print as fatal —
+ * Codex's runtime panics — dies before doing anything. Standard input stays
+ * inherited, since the launcher never reads it.
+ *
+ * The exit waits for 'close', when both pipes have drained, and then for the
+ * launcher's own streams to flush, so nothing the workload wrote is lost. The
+ * workload's own status reaches the executor through the file its wrapper
+ * writes, so this exit only has to say whether the launcher got that far.
+ */
+export function runWorkload(command, { cleanup }) {
+  const child = spawn(command, { shell: true, stdio: ['inherit', 'pipe', 'pipe'] });
+  child.stdout.pipe(process.stdout);
+  child.stderr.pipe(process.stderr);
+  child.on('close', (code) => {
+    cleanup();
+    process.stdout.write('', () => {
+      process.stderr.write('', () => {
+        process.exit(code ?? 1);
+      });
+    });
   });
   child.on('error', (error) => {
     process.stderr.write(`The open sandbox could not run the command: ${error.message}\n`);
@@ -127,9 +121,44 @@ async function main() {
       child.kill(signal);
     });
   }
+  return child;
 }
 
-// Imported by its tests for the answers above; run by the executor as a program.
+async function main() {
+  const args = process.argv.slice(2);
+  const separator = args.indexOf('--');
+  if (args[0] !== '-s' || args[1] === undefined || separator !== 2 || args.length <= 3) {
+    process.stderr.write(USAGE);
+    process.exit(2);
+  }
+  const policyPath = args[1];
+  const argv = args.slice(3);
+
+  let wrapped;
+  try {
+    const config = SandboxRuntimeConfigSchema.parse(JSON.parse(readFileSync(policyPath, 'utf8')));
+    await SandboxManager.initialize(
+      config,
+      admitUnlessThisMachine({
+        resolve: (host) => lookup(host, { all: true, verbatim: true }),
+        localAddresses: interfaceAddresses(),
+      }),
+    );
+    wrapped = await SandboxManager.wrapWithSandbox(argv.map(shellWord).join(' '));
+  } catch (error) {
+    process.stderr.write(
+      `The open sandbox could not start: ${error instanceof Error ? error.message : String(error)}\n`,
+    );
+    process.exit(1);
+  }
+  runWorkload(wrapped, {
+    cleanup: () => {
+      SandboxManager.cleanupAfterCommand();
+    },
+  });
+}
+
+// Imported by its tests for the answer and the workload run above; run by the executor as a program.
 if (
   process.argv[1] !== undefined &&
   realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))
