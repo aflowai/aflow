@@ -1735,6 +1735,7 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
       bindingId: { kind: 'run_input', path: 'bindingId' },
       from: { kind: 'task_output', taskId: 'commit', path: 'commit.pushBaseSha' },
       at: { kind: 'task_output', taskId: 'commit', path: 'commit.sha' },
+      reviewHarness: { kind: 'run_input', path: 'reviewHarness' },
     });
     // The scan reads `pushRange`; the review is handed its two ends.
     expect(taskOrThrow('scan-commit').inputBindings?.['range']).toEqual({
@@ -1782,6 +1783,63 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
     // A second attempt would start a second review.
     expect(review.retryability).toBe('unsafe');
     expect(review.maxAttempts).toBe(1);
+  });
+
+  it('runs the review on the harness `reviewHarness` names, and on the review’s default without it', () => {
+    const review = taskOrThrow('review-commit');
+    const template = review.inputTemplate;
+    if (template === undefined) throw new Error('the review must carry a template');
+    const declared = new Set(Object.keys(review.inputBindings ?? {}));
+    const ends = { bindingId: 'folder-1', from: COMMIT.pushBaseSha, at: COMMIT.sha };
+
+    const named = WorkflowRunStartInputSchema.parse(
+      substituteTemplateBinds(template, { ...ends, reviewHarness: 'codex' }, declared),
+    ) as { inputs: Record<string, unknown> };
+    expect(named.inputs['harness']).toBe('codex');
+
+    // Unset, nothing is passed, so the review picks its harness exactly as a
+    // standalone review does.
+    const unset = WorkflowRunStartInputSchema.parse(
+      substituteTemplateBinds(template, ends, declared),
+    ) as { inputs: Record<string, unknown> };
+    expect(unset.inputs).not.toHaveProperty('harness');
+    expect(unset.inputs).toEqual({
+      bindingId: 'folder-1',
+      from: COMMIT.pushBaseSha,
+      at: COMMIT.sha,
+      depth: 'standard',
+    });
+
+    // Optional, accepted at the start, and held to what the review itself accepts.
+    const runInput = (wf.runInputs ?? []).find((i) => i.id === 'reviewHarness');
+    expect(runInput?.required).toBe(false);
+    const reviewHarness = (REVIEW_LOCAL_CHANGES.bundle.workflow.runInputs ?? []).find(
+      (i) => i.id === 'harness',
+    );
+    expect(runInput?.schema).toEqual(reviewHarness?.schema);
+    expect(taskOrThrow('commit').inputContract?.bindings['reviewHarness']?.schema).toEqual(
+      runInput?.schema,
+    );
+    expect(runInput?.description).toContain('passed to the review as its `harness`');
+  });
+
+  it('forwards `reviewHarness` through a whole publication to the review it starts', () => {
+    const outcome = publish({
+      pushApproval: 'unless-unreviewed',
+      review: 'approve',
+      decision: 'approved',
+      inputs: { reviewHarness: 'codex' },
+    });
+    expect(outcome.inputs.get('review-commit')).toMatchObject({ inputs: { harness: 'codex' } });
+
+    const without = publish({
+      pushApproval: 'unless-unreviewed',
+      review: 'approve',
+      decision: 'approved',
+    });
+    expect(
+      (without.inputs.get('review-commit') as { inputs: Record<string, unknown> }).inputs,
+    ).not.toHaveProperty('harness');
   });
 
   it('says which case it is asking in, a line each, and where the verdict is', () => {
