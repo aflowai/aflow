@@ -3407,6 +3407,34 @@ describe("Publish Local Changes — the push gate follows the decision on a revi
       }
     });
 
+    it('comment + zero findings, fix_before_merge: the decision stands — no pause, nothing pushed, the branch kept local and the run completed', () => {
+      const outcome = reviewedWith({ review: 'comment', findings: [], afterReview: FIX });
+      expectAsked(outcome, 'comment', []);
+      expect(outcome).toMatchObject({ asked: false, pushed: false });
+      expect(outcome.ran).not.toContain('approve-push');
+      for (const taskId of PR_TASKS) expect(outcome.ran).not.toContain(taskId);
+      endedCompleted(outcome);
+      expect(outcome.state).toMatchObject({
+        afterReview: 'fix_before_merge',
+        pushDecision: 'keep_local',
+      });
+      expect(outcome.state['pushReason']).toContain('`fix_before_merge`');
+    });
+
+    it('comment + zero findings, undecided: the operator is asked, and their answer decides', () => {
+      const approved = reviewedWith({ review: 'comment', findings: [], afterReview: BELOW_BAR });
+      expectAsked(approved, 'comment', []);
+      expect(approved.state).toMatchObject({ afterReview: 'undecided', pushDecision: 'ask' });
+      expect(approved).toMatchObject({ asked: true, pushed: true });
+      const declined = reviewedWith({
+        review: 'comment',
+        findings: [],
+        afterReview: BELOW_BAR,
+        decision: 'declined',
+      });
+      expect(declined).toMatchObject({ asked: true, pushed: false });
+    });
+
     it('approve + all-nit findings: publish_as_is without a decision call, pushing without asking', () => {
       const outcome = reviewedWith({ review: 'approve', findings: [NAME, NIT_TOO] });
       expectSettled(outcome, 'approve');

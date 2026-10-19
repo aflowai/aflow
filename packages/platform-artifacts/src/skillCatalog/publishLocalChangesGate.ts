@@ -19,9 +19,11 @@ import type { SKIP } from './localPrShepherdWiring.js';
  * the decision model whatever it found. The decision stands in for an
  * approving verdict only up to the severities it covers: over a blocker or a
  * major the operator is asked whatever was decided, an override's
- * `publish_as_is` included. Over no findings at all it stands in for nothing:
- * a review that found nothing and did not approve could not judge the range,
- * so the operator is asked. An override pushes only on
+ * `publish_as_is` included. `fix_before_merge` never asks: it keeps the branch
+ * local and the run completes with the decision and findings recorded, over
+ * no findings as over any. `undecided` asks. A `publish_as_is` over no
+ * findings from a review that did not approve asks too: that review could not
+ * judge the range, so nothing cleared the push. An override pushes only on
  * an authority the run verified (`publishLocalChangesOverride.ts`), and the
  * operator's word only through the operator's own approval. A path through a
  * read that did not happen reads as null, which is why every rule that clears
