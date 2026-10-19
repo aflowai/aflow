@@ -481,14 +481,36 @@ describe('composePullRequest', () => {
     }
   });
 
-  it('says a publish_as_is settled over nits alone, or over nothing, was asked of no decision — and how the push was cleared', () => {
+  it('says a publish_as_is settled over an approval of nits alone, or of nothing, was asked of no decision — and how the push was cleared', () => {
     const NIT_FINDING = { ...REVIEW_FINDING, severity: 'nit' } as const;
-    const nits = composePullRequest(reviewed('publish_as_is', NIT_FINDING), commits);
+    const nitsUnder = (verdict: 'approve' | 'comment' | 'request_changes') =>
+      composePullRequest(
+        HostCommitDescribeInputSchema.parse({
+          bindingId: 'hb_app',
+          range,
+          review: {
+            verdict,
+            outcome: 'completed',
+            reviewSummary: REVIEW_SUMMARY,
+            findings: [NIT_FINDING],
+          },
+          afterReview: 'publish_as_is',
+        }),
+        commits,
+      );
+    const NITS_SETTLED = 'Its findings are nits alone, which end the rounds: no decision was asked';
+    const nits = nitsUnder('approve');
     expect(nits.severest).toBe('nit');
     expect(nits.body).toContain(
-      "Its findings are nits alone, which end the rounds: no decision was asked, and the push went without asking, and leaves this review's findings open, listed under **Left open by `publish_as_is`**.",
+      `${NITS_SETTLED}, and the push went without asking, and leaves this review's findings open, listed under **Left open by \`publish_as_is\`**.`,
     );
     expect(nits.body).toContain('- **nit** `src/cache.ts:40`');
+    // Nits under any other verdict were the decision model's to weigh, so the text claims no settlement.
+    for (const verdict of ['comment', 'request_changes'] as const) {
+      const decided = nitsUnder(verdict).body;
+      expect(decided, verdict).not.toContain(NITS_SETTLED);
+      expect(decided, verdict).toContain("The push went without asking, and leaves this review's");
+    }
 
     const nothingFound = (verdict: 'approve' | 'comment') =>
       composePullRequest(
@@ -629,9 +651,8 @@ describe('composePullRequest', () => {
     }
   });
 
-  it('records no decision where the review returned no findings, since none was asked', () => {
+  it('records no decision where the review did not finish, since there was nothing to decide on', () => {
     for (const review of [
-      { verdict: 'approve', outcome: 'completed', reviewSummary: 'Read.', findings: [] },
       { verdict: null, outcome: 'failed', reviewSummary: null, findings: null },
       undefined,
     ]) {
@@ -646,6 +667,18 @@ describe('composePullRequest', () => {
       expect(composed.afterReview).toBeUndefined();
       expect(composed.body).not.toContain('Decided after the review');
     }
+  });
+
+  it('records undecided where a finished review that found nothing was handed no decision, as one with findings is', () => {
+    const composed = composePullRequest(
+      HostCommitDescribeInputSchema.parse({
+        bindingId: 'hb_app',
+        range,
+        review: { verdict: 'comment', outcome: 'completed', reviewSummary: 'Read.', findings: [] },
+      }),
+      commits,
+    );
+    expect(composed.afterReview).toBe('undecided');
   });
 
   it('says where nothing was reviewed, no checks ran, or no gaps were recorded', () => {

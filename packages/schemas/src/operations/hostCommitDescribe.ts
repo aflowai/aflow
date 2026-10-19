@@ -67,7 +67,7 @@ export const AfterReviewSchema = z
     "What the publication decided about its review's findings, and what its push gate " +
       'follows: `fix_before_merge`, a fix round on the branch before it merges — nothing is ' +
       'pushed and the branch stays local; `publish_as_is`, they can merge as they stand, which ' +
-      'a review of nits alone, or none, is without asking a model — the ' +
+      'an approving review of nits alone, or none, is without asking a model — the ' +
       'push goes without asking over findings no more severe than minor, and waits for the ' +
       "operator over a blocker or a major; `undecided`, no answer cleared the decision's bar, " +
       'or none could be made — the push waits for the operator. The fix round is the ' +
@@ -192,8 +192,8 @@ export const HostCommitDescribeInputSchema = z.object({
     .optional()
     .describe(
       "The decision on the review's findings: the decision model's answer, null where it fell " +
-        'below its bar; `publish_as_is` where the review found nothing or nits alone, which ' +
-        'no model is asked about; `undecided` where a model was to be asked and no answer ' +
+        'below its bar; `publish_as_is` where the review approved and found nothing or nits ' +
+        'alone, which no model is asked about; `undecided` where a model was to be asked and no answer ' +
         'came. Absent where the review did not finish.',
     ),
   override: AfterReviewOverrideSchema.optional(),
@@ -324,9 +324,9 @@ function severestOf(
  * publication taking it back as `findings` is never refused for its size.
  *
  * The decision on them is recorded exactly where this review finished —
- * `publish_as_is` without asking where it found nothing or nits alone — and
- * an answer that is missing there, below the bar or never made, is recorded
- * as `undecided`. An override
+ * `publish_as_is` without asking where it approved and found nothing or nits
+ * alone — and an answer that is missing there, below the bar or never made,
+ * is recorded as `undecided`, a review that found nothing included. An override
  * turns a `fix_before_merge` or an `undecided` into `publish_as_is`, recorded
  * beside what it set aside; over a `publish_as_is`, or where nothing was
  * decided, it sets nothing aside and is not recorded. Whether the override's
@@ -342,18 +342,15 @@ export function pullRequestReviewRecord(input: HostCommitDescribeInput): PullReq
   const handed = handedOn(
     reviewFindings.map((finding) => ({ ...finding, state: 'open' as const })),
   );
-  if (handed.findings.length === 0) {
-    return input.afterReview == null ? handed : { ...handed, afterReview: input.afterReview };
-  }
-  const severest = severestOf(reviewFindings);
+  const severest = handed.findings.length === 0 ? {} : { severest: severestOf(reviewFindings) };
   const decided = input.afterReview ?? AFTER_REVIEW_UNDECIDED;
   if (input.override === undefined || decided === 'publish_as_is') {
-    return { ...handed, afterReview: decided, severest };
+    return { ...handed, afterReview: decided, ...severest };
   }
   return {
     ...handed,
     afterReview: 'publish_as_is',
-    severest,
+    ...severest,
     afterReviewOverride: { ...input.override, overrode: decided },
   };
 }

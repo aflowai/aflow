@@ -148,7 +148,8 @@ const AS_IS_LIST = 'Left open by `publish_as_is`';
  * How a `publish_as_is` cleared its push, as the gate decides it from the
  * same record and the verdict: over a blocker or a major, on the operator's
  * word, or over no findings from a review that did not approve, it went out
- * only on the operator's approval — this text is pushed only after it.
+ * only on the operator's approval — this text is pushed only after it. Only an
+ * approval of nits alone was settled without asking a decision.
  */
 function publishedAsIsClearance(
   record: PullRequestReviewRecord,
@@ -160,7 +161,7 @@ function publishedAsIsClearance(
       : "The review found nothing and did not approve, so the push went out only on the operator's approval.";
   }
   const leaves = `and leaves this review's findings open, listed under **${AS_IS_LIST}**.`;
-  if (record.severest === 'nit') {
+  if (record.severest === 'nit' && verdict === 'approve') {
     return `Its findings are nits alone, which end the rounds: no decision was asked, and the push went without asking, ${leaves}`;
   }
   if (record.severest === 'blocker' || record.severest === 'major') {

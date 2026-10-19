@@ -131,17 +131,37 @@ describe('a review’s findings: each labelled by whether a later publication cl
     expect(cases[0]?.label).toBeNull();
   });
 
-  it('makes no round case of a review of nits alone, which the publication settles without asking', () => {
+  it('makes no round case of an approving review of nits alone or of nothing, which the publication settles without asking', () => {
     const nits = {
       ...review,
+      verdict: 'approve',
       findings: [
         { ...LEAK, severity: 'nit' },
         { ...NAME, severity: 'nit' },
       ],
     };
     expect(reviewCases([nits], []).map((c) => c.kind)).toEqual(['finding', 'finding']);
+    expect(reviewCases([{ ...nits, findings: [] }], [])).toEqual([]);
     const withMinor = { ...nits, findings: [...nits.findings, { ...LEAK, severity: 'minor' }] };
     expect(reviewCases([withMinor], []).filter((c) => c.kind === 'after_review')).toHaveLength(1);
+  });
+
+  it('makes a round case, verdict in its state, of a review that did not approve whatever it found, which the publication asks', () => {
+    const nits = [
+      { ...LEAK, severity: 'nit' },
+      { ...NAME, severity: 'nit' },
+    ];
+    for (const verdict of ['comment', 'request_changes']) {
+      for (const findings of [nits, []]) {
+        const rounds = reviewCases([{ ...review, verdict, findings }], []).filter(
+          (c) => c.kind === 'after_review',
+        );
+        expect(
+          rounds.map((c) => c.state),
+          verdict,
+        ).toEqual([{ verdict, findings }]);
+      }
+    }
   });
 
   it('takes the operator’s accepted as a defect left open, and dismissed as none', () => {

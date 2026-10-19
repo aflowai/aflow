@@ -117,7 +117,8 @@ const TITLES: Record<Case['kind'], string> = {
     'After a failed check (recheck_on_timeout / fix_commission / operator_install_mismatch)',
   finding:
     "Each review finding: names a defect in the change's behaviour, established by evidence shown",
-  after_review: 'After a review with findings (fix_before_merge / publish_as_is)',
+  after_review:
+    'After a review that did not approve, or found a minor or worse (fix_before_merge / publish_as_is)',
   ci_remedy: 'A failing CI job of PRs (rerun / code_fix / resolutions_bump / merge_round)',
 };
 
@@ -271,8 +272,9 @@ async function reviews(space: string, branchOfSha: Map<string, string>) {
     const head = typeof range === 'string' ? range.split('..').pop() : undefined;
     const branch = head === undefined ? undefined : branchOfSha.get(head);
     const findings = path(output, 'result', 'findings');
+    const verdict = path(output, 'result', 'verdict');
     if (branch === undefined || !Array.isArray(findings)) continue;
-    out.push({ runId: run.runId, startedAt: run.startedAt, branch, findings });
+    out.push({ runId: run.runId, startedAt: run.startedAt, branch, verdict, findings });
   }
   return out;
 }

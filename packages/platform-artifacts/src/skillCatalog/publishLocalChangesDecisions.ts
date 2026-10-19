@@ -58,12 +58,13 @@ export const AFTER_CHECK_QUESTION = {
 } as const satisfies z.input<typeof DecisionChoiceQuestionSchema>;
 
 /**
- * Asked only of a review with a minor or worse among its findings: one of nits
+ * Asked of a review that did not approve, whatever it found, and of an
+ * approving one with a minor or worse among its findings: an approval of nits
  * alone is settled without asking (`publishLocalChangesAfterReview.ts`).
  */
 export const AFTER_REVIEW_QUESTION = {
   type: 'choice',
-  instructions: `These are the findings of the review of a branch about to be published. Whether they are fixed on this branch before it merges, or it merges as it stands with them recorded. Each finding carries a severity, which means — ${REVIEW_SEVERITY_ONTOLOGY} At least one of these findings is a minor or worse: a review whose findings are all nits ends the rounds and is never asked.`,
+  instructions: `These are the verdict and the findings of the review of a branch about to be published. Whether they are fixed on this branch before it merges, or it merges as it stands with them recorded. Each finding carries a severity, which means — ${REVIEW_SEVERITY_ONTOLOGY} Either the review did not approve, or at least one of these findings is a minor or worse: an approving review whose findings are all nits, or none, ends the rounds and is never asked.`,
   options: {
     fix_before_merge:
       'At least one of them should not merge as it is: a fix round on this branch is worth its cost before the branch merges.',

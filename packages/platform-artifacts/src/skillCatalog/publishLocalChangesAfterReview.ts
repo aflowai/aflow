@@ -7,12 +7,15 @@ import {
 } from './reviewLocalChanges.js';
 
 /**
- * A review whose findings are all nits — or that found nothing — needs no
- * decision: under the rounds rule nits alone end the rounds, so its
- * `publish_as_is` is a constant, settled by rules over the severities with no
- * decision model asked and no confidence to fall below a bar. Only a minor or
- * worse among the findings reaches the decision model (`decide-after-review`),
- * and until its answer clears the bar that review is `undecided`.
+ * An approving review whose findings are all nits — or that found nothing —
+ * needs no decision: under the rounds rule nits alone end the rounds, so its
+ * `publish_as_is` is a constant, settled by rules over the verdict and the
+ * severities with no decision model asked and no confidence to fall below a
+ * bar. The constant holds only on `approve`, the one verdict a publication
+ * pushes on without asking: a review that commented or requested changes
+ * reaches the decision model (`decide-after-review`) whatever its findings, as
+ * does a minor or worse among an approving review's findings, and until an
+ * answer clears the bar that review is `undecided`.
  */
 export const NITS_ONLY_REASON = 'nits-only review: the rounds rule ends the rounds';
 
@@ -33,7 +36,7 @@ function aboveNitAt(index: number): string[] {
 }
 
 /** Every index a review can return a finding at, read a rule's worth at a time. */
-export const AFTER_REVIEW_SETTLE_RULES: readonly WorkflowRunDecideRule[] = Array.from(
+const ABOVE_NIT_RULES: readonly WorkflowRunDecideRule[] = Array.from(
   { length: Math.ceil(REVIEW_FINDINGS_MAX / FINDINGS_PER_RULE) },
   (_, rule) => {
     const first = rule * FINDINGS_PER_RULE;
@@ -48,6 +51,16 @@ export const AFTER_REVIEW_SETTLE_RULES: readonly WorkflowRunDecideRule[] = Array
   },
 );
 
+export const AFTER_REVIEW_SETTLE_RULES: readonly WorkflowRunDecideRule[] = [
+  {
+    when: { expression: "state.verdict != 'approve'" },
+    decision: AFTER_REVIEW_UNDECIDED,
+    reason:
+      'The review did not approve: nits alone end the rounds only under an approving verdict, so the decision model weighs its findings, and until an answer clears its bar the decision is undecided.',
+  },
+  ...ABOVE_NIT_RULES,
+];
+
 export const AFTER_REVIEW_SETTLE_OTHERWISE = {
   decision: 'publish_as_is',
   reason: NITS_ONLY_REASON,
@@ -55,8 +68,8 @@ export const AFTER_REVIEW_SETTLE_OTHERWISE = {
 
 export const SETTLE_AFTER_REVIEW_TASK = {
   taskId: 'settle-after-review',
-  name: 'Settle a nits-only review without a decision',
-  goal: "Read the severities of the review's findings: where none is more severe than a nit, none at all included, the rounds rule ends the rounds and the decision is publish_as_is, asked of no model; where a minor or worse is among them, the decision model weighs them.",
+  name: 'Settle an approving nits-only review without a decision',
+  goal: "Read the review's verdict and the severities of its findings: where it approved and none is more severe than a nit, none at all included, the rounds rule ends the rounds and the decision is publish_as_is, asked of no model; where it did not approve, whatever it found, or a minor or worse is among its findings, the decision model weighs them.",
   type: 'operation' as const,
   operation: 'workflow.run.decide',
   dependsOn: ['review-commit'],
@@ -64,10 +77,13 @@ export const SETTLE_AFTER_REVIEW_TASK = {
   when: { expression: 'tasks.review-commit.output.findings != null', onMissingRef: SKIP },
   retryability: 'safe' as const,
   maxAttempts: 1,
-  inputBindings: { findings: out('review-commit', 'findings') },
+  inputBindings: {
+    verdict: out('review-commit', 'verdict'),
+    findings: out('review-commit', 'findings'),
+  },
   context: ctx('workflow.run.decide'),
   inputTemplate: {
-    state: { findings: bind('findings') },
+    state: { verdict: bind('verdict'), findings: bind('findings') },
     rules: AFTER_REVIEW_SETTLE_RULES,
     otherwise: AFTER_REVIEW_SETTLE_OTHERWISE,
   },
@@ -77,13 +93,13 @@ export const SETTLE_AFTER_REVIEW_TASK = {
   },
 };
 
-/** The decision model is asked exactly where the severities left the review undecided. */
+/** The decision model is asked exactly where the verdict and the severities left the review undecided. */
 export const ASK_AFTER_REVIEW = `tasks.${SETTLE_AFTER_REVIEW_TASK.taskId}.output.decision == '${AFTER_REVIEW_UNDECIDED}'`;
 
 /**
  * The decision on the findings, as every task after it reads it: the model's
  * answer where it was asked — null below its bar — and otherwise what the
- * severities settled: `publish_as_is` over nits alone, `undecided` where the
+ * rules settled: `publish_as_is` over an approval of nits alone, `undecided` where the
  * model was to be asked and no answer came. Absent where the review did not
  * finish.
  */

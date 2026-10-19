@@ -204,7 +204,7 @@ const CHECK_INPUT_TEMPLATE = {
 
 const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'publish-local-changes',
-  version: 36,
+  version: 37,
   name: 'Publish Local Changes',
   tagline:
     'Commit a patch onto a branch of a connected repository, then push it and open the pull request — asking the operator first unless the folder says otherwise.',
@@ -829,7 +829,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
         {
           taskId: 'decide-after-review',
           name: 'Decide whether the findings are fixed before merging',
-          goal: "Read the review's findings, a minor or worse among them, and choose whether this branch takes a fix round before it merges or merges as it is — the push gate follows the answer, and the pull request records it. An answer too unsure to stand is recorded as undecided, and the push waits for the operator.",
+          goal: "Read the review's verdict and findings — a review that did not approve, or a minor or worse among the findings — and choose whether this branch takes a fix round before it merges or merges as it is — the push gate follows the answer, and the pull request records it. An answer too unsure to stand is recorded as undecided, and the push waits for the operator.",
           type: 'operation' as const,
           operation: 'ai.decision.decide',
           dependsOn: ['review-commit', SETTLE_AFTER_REVIEW_TASK.taskId],
@@ -1330,7 +1330,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           variableId: 'afterReview',
           name: 'After the review',
           description:
-            "What the run decided about its review's findings, as the pull request records it, and what its push gate followed: fix_before_merge — nothing pushed, the branch kept local; publish_as_is — pushed, asking only over a blocker or a major; nits alone or none settle it unasked; undecided, where no answer cleared the bar or none could be made — the operator asked. Null where the review did not finish, so nothing was decided. On fix_before_merge the fix round is the conversation's, or the shepherd's.",
+            "What the run decided about its review's findings, as the pull request records it, and what its push gate followed: fix_before_merge — nothing pushed, the branch kept local; publish_as_is — pushed, asking only over a blocker or a major; approve over nits or none settles it unasked; undecided, where no answer cleared the bar or none could be made — the operator asked. Null where the review did not finish. On fix_before_merge the fix round is the conversation's, or the shepherd's.",
           required: false,
           sensitive: false,
           immutable: false,
@@ -1450,7 +1450,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
       priority: 50,
     },
     rationale:
-      "Twenty-three tasks, the approval between local and published. The commit lands in a detached worktree; host.commit.check runs its checks; test timeouts alone rerun, other failures workflow.run.fail. host.commit.scan reads all a push adds; a finding fails the run. Under unless-unreviewed a Local Code Review runs; none or nits alone settle publish_as_is by rule; else ai.decision.decide answers fix_before_merge or publish_as_is, undecided below the bar. An override is verified — label and shepherd record on GitHub, the operator's word at the approval — or fails the run. decide-push, by rules, gates the push: uncleared scan or always asks, never pushes; fix_before_merge keeps the branch local; publish_as_is pushes, asking over a blocker, major or the operator's word; undecided asks. No task starts a publication. Push argv pinned bar the refspec; the executor re-measures origin/<base>, needs a passed check receipt and sends an uncleared range only on this run's grant; an open PR is PATCHed.",
+      "Twenty-three tasks, the approval between local and published. The commit lands in a detached worktree; host.commit.check runs checks; test timeouts alone rerun, other failures workflow.run.fail. host.commit.scan reads all a push adds; a finding fails the run. Under unless-unreviewed a Local Code Review runs; approve over nits or none is publish_as_is by rule; else ai.decision.decide answers fix_before_merge or publish_as_is, undecided below the bar. An override is verified — label and shepherd record on GitHub, the operator's word at the approval — or fails the run. decide-push, by rules, gates the push: uncleared scan or always asks, never pushes; fix_before_merge keeps the branch local; publish_as_is pushes, asking over a blocker, major or the operator's word; undecided asks. No task starts a publication. Push argv pinned bar the refspec; the executor re-measures origin/<base>, needs a passed check receipt and sends an uncleared range only on this run's grant; an open PR is PATCHed.",
   },
 };
 
