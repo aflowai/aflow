@@ -27,6 +27,8 @@ A paused run is usually waiting for a person. Look for:
 
 Once you answer, the run continues.
 
+An approval or question must be resolved on its task; acknowledging the run cannot answer it. If the run reports that its resume contract is unavailable, it stays paused. Ask the Helmsman to inspect the pause before trying to resume it again.
+
 ## A conversation says Idle
 
 **Idle** means the Helmsman has answered and is waiting for your next message. Nothing is stuck.

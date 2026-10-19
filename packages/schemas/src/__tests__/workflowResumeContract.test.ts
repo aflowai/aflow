@@ -70,12 +70,20 @@ describe('PausedTaskInputContractSchema — Plan 149 §3.1', () => {
     ).toThrow();
   });
 
-  it('rejects a prompt longer than 2000 characters', () => {
+  it('accepts decision prompts up to 20000 characters', () => {
+    const prompt = 'x'.repeat(20000);
+    expect(
+      PausedTaskInputContractSchema.parse({ schema: {}, resolutionMode: 'replace_output', prompt })
+        .prompt,
+    ).toBe(prompt);
+  });
+
+  it('rejects a prompt longer than 20000 characters', () => {
     expect(() =>
       PausedTaskInputContractSchema.parse({
         schema: {},
         resolutionMode: 'acknowledge',
-        prompt: 'x'.repeat(2001),
+        prompt: 'x'.repeat(20001),
       }),
     ).toThrow();
   });

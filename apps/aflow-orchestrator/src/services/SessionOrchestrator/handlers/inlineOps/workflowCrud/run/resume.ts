@@ -129,6 +129,24 @@ export async function handleWorkflowRunResume(
     return;
   }
 
+  const surfaced =
+    run.status === 'paused'
+      ? await surfaceWorkflowResumeContract(db, args.payloadStore, tenantIdStr, run.runId)
+      : null;
+  if (run.status === 'paused' && !surfaced) {
+    const causeLabel = run.pausedReason ?? 'unknown';
+    await emitStepError(
+      args,
+      'RESUME_CONTRACT_UNAVAILABLE',
+      `Run ${run.runId} paused on \`${causeLabel}\` but has no surfaced resume contract ` +
+        '(payload retrieval or schema validation failed). Resuming without a contract would ' +
+        'leave the pause unresolved. Manual intervention required to inspect the ' +
+        '`workflow_runs` row and recover.',
+      startTime,
+      'validation',
+    );
+    return;
+  }
   if (input.resolution.mode === 'retry_failed_task') {
     await handleRetryFailedTask({
       args,
@@ -187,7 +205,7 @@ export async function handleWorkflowRunResume(
     return;
   }
 
-  if (run.status !== 'paused') {
+  if (run.status !== 'paused' || !surfaced) {
     const pausedHint = await formatPausedRunsHint(db, tenantIdStr, spaceId, 5);
     await emitStepError(
       args,
@@ -201,30 +219,23 @@ export async function handleWorkflowRunResume(
     return;
   }
 
-  const surfaced = await surfaceWorkflowResumeContract(
-    db,
-    args.payloadStore,
-    tenantIdStr,
-    run.runId,
-  );
-  const pauseCause = surfaced?.contract.pauseCause ?? run.pausedReason;
-  const requiresContract =
-    pauseCause === 'task_contract_violation' || pauseCause === 'retry_budget_exceeded';
-  if (requiresContract && !surfaced) {
-    const causeLabel = run.pausedReason ?? 'unknown';
+  const pauseCause = surfaced.contract.pauseCause;
+  if (
+    input.resolution.mode === 'acknowledge' &&
+    pauseCause !== 'needs_credentials' &&
+    pauseCause !== 'needs_capability' &&
+    (run.tasks.some((task) => task.status === 'paused') || surfaced.contract.failedTaskId)
+  ) {
     await emitStepError(
       args,
-      'RESUME_CONTRACT_UNAVAILABLE',
-      `Run ${run.runId} paused on \`${causeLabel}\` but has no surfaced resume contract ` +
-        '(payload retrieval or schema validation failed). Resuming without a contract would ' +
-        'strand the failed task in `paused`. Manual intervention required to inspect the ' +
-        '`workflow_runs` row and recover.',
+      'ACKNOWLEDGE_TASK_BACKED_NOT_SUPPORTED',
+      'This pause is task-backed; acknowledge would strand the paused task. Use a task resolution through workflow.run.resume.',
       startTime,
       'validation',
     );
     return;
   }
-  const advertisedModes = surfaced?.contract.allowedResumeModes ?? null;
+  const advertisedModes = surfaced.contract.allowedResumeModes ?? null;
   if (advertisedModes && !advertisedModes.includes(input.resolution.mode)) {
     await emitStepError(
       args,
@@ -239,7 +250,7 @@ export async function handleWorkflowRunResume(
   }
 
   if (input.resolution.mode === 'acknowledge') {
-    const suggested = surfaced?.contract.suggestedResumeCall;
+    const suggested = surfaced.contract.suggestedResumeCall;
     if (suggested?.op === 'human.action_center.focus') {
       await emitStepError(
         args,
@@ -364,7 +375,7 @@ export async function handleWorkflowRunResume(
     input.resolution.mode === 'replace_output' &&
     run.resumeAttemptCount >= RESUME_REPLACE_OUTPUT_ATTEMPT_CAP
   ) {
-    if (surfaced?.contract.failedTaskId) {
+    if (surfaced.contract.failedTaskId) {
       const failedTaskId = surfaced.contract.failedTaskId;
       const taskDef = workflow.tasks.find((t) => t.taskId === failedTaskId);
       const failedRow = run.tasks.find((t) => t.taskId === failedTaskId);
@@ -450,7 +461,7 @@ export async function handleWorkflowRunResume(
       // but never fills those fields — so every operator approval fails
       // with "Merged output failed validation: must have required property
       // 'decidedAt'".
-      const isHumanPause = surfaced?.contract.pauseCause === 'needs_decision';
+      const isHumanPause = surfaced.contract.pauseCause === 'needs_decision';
       const result = isHumanPause
         ? await applyHumanReplaceOutputResolution({
             args,
@@ -649,7 +660,7 @@ export async function handleWorkflowRunResume(
     } else {
       // acknowledge.
       //
-      const ackFailedTaskId = surfaced?.contract.failedTaskId;
+      const ackFailedTaskId = surfaced.contract.failedTaskId;
       const ackTaskRow = ackFailedTaskId
         ? run.tasks.find((t) => t.taskId === ackFailedTaskId)
         : undefined;

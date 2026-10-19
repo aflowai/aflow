@@ -2,6 +2,7 @@ import { Buffer } from 'node:buffer';
 import { randomUUID } from 'node:crypto';
 import {
   claimHumanTask as ledgerClaimHumanTask,
+  boundPausedTaskInputContractPrompt,
   buildHumanTaskHydrationFields,
   resolveActionPreview,
   buildDisplayActionPreview,
@@ -152,7 +153,7 @@ export async function dispatchHumanWorkflowTask(
     pausedTaskInputContract: {
       schema: replaceOutputSchema,
       resolutionMode: 'replace_output' as const,
-      prompt: resumePrompt,
+      prompt: boundPausedTaskInputContractPrompt(resumePrompt),
     },
   };
 

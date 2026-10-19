@@ -9,6 +9,7 @@ import {
 } from '@aflow/database';
 import {
   WorkflowResumeContractSchema,
+  PausedTaskInputContractSchema,
   describeMissingCapability,
   type TenantId,
   type WorkflowResumeContract,
@@ -369,14 +370,15 @@ function annotatePromptForUnsafeRetry(
   );
 }
 
-const PAUSED_TASK_INPUT_CONTRACT_PROMPT_MAX = 2000;
+const PAUSED_TASK_INPUT_CONTRACT_PROMPT_MAX =
+  PausedTaskInputContractSchema.shape.prompt.unwrap().maxLength!;
 
 /**
  * Clip text assigned to `pausedTaskInputContract.prompt` so stored contracts
  * always pass `WorkflowResumeContractSchema` (handoff prompts are unbounded).
  * Full prose remains on uncapped `resumePrompt`.
  */
-function boundPausedTaskInputContractPrompt(prompt: string): string {
+export function boundPausedTaskInputContractPrompt(prompt: string): string {
   if (prompt.length <= PAUSED_TASK_INPUT_CONTRACT_PROMPT_MAX) return prompt;
   return prompt.slice(0, PAUSED_TASK_INPUT_CONTRACT_PROMPT_MAX - 1) + '…';
 }

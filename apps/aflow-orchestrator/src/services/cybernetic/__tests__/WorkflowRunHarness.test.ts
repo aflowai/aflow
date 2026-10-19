@@ -55,6 +55,9 @@ const mockLedgerRecordTaskResult = vi.fn();
 const mockSurfaceWorkflowResumeContractWaiter = vi.fn().mockResolvedValue(null);
 
 vi.mock('@aflow/cybernetic-runtime', async () => ({
+  boundPausedTaskInputContractPrompt: (
+    await vi.importActual<typeof import('@aflow/cybernetic-runtime')>('@aflow/cybernetic-runtime')
+  ).boundPausedTaskInputContractPrompt,
   // Cleanup is no longer swallowed, so an absent export here fails the run
   // rather than hiding — which is how this mock went unnoticed.
   discardTaskDraft: vi.fn(async () => true),
