@@ -468,9 +468,10 @@ interface SupervisedSpawn extends SupervisedRun {
  * here as a bare `1` with no signal, indistinguishable from a command that
  * failed on its own.
  *
- * That standard error cannot be the channel this is recovered from. The launcher
- * spawns the command with `stdio: 'inherit'`, so the workload's standard error
- * and the launcher's own line are the same pipe: any command whose closing
+ * That standard error cannot be the channel this is recovered from. A launcher
+ * hands the workload's standard error on as its own — inherited, or pumped
+ * through a pipe — so the workload's standard error and the launcher's own line
+ * arrive on the same pipe: any command whose closing
  * bytes happened to read like that line would have had its genuine failure
  * rewritten as success.
  *
