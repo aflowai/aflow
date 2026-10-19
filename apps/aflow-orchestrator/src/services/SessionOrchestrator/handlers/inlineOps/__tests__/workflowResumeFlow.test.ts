@@ -637,29 +637,51 @@ describe('workflow.run.resume — Plan 130 Phase 1 cross-boundary loop', () => {
     expect(errorPayload['code']).toBe('RESUME_ATTEMPT_CAP_REACHED');
   });
 
-  it('refuses all modes when task_contract_violation has no surfaced contract (round-2 P0/1)', async () => {
-    // Contract construction failed (or row was repaused with no payload ref).
-    // surfaceWorkflowResumeContract returns null. acknowledge would otherwise
-    // sail through resumeRunWithClaim, leaving the failed task row paused
-    // while the run flips to running. This test pins the hard-require guard.
+  it.each([true, false])(
+    'refuses task-backed acknowledge with surfaced contract=%s',
+    async (hasContract) => {
+      mockLoadRunById.mockResolvedValueOnce(makePausedRun({ pausedReason: 'task_paused' }));
+      mockSurfaceWorkflowResumeContract.mockResolvedValue(
+        hasContract
+          ? {
+              contract: makeContract({ allowedResumeModes: ['acknowledge'] }),
+              pauseVersion: 1,
+            }
+          : null,
+      );
+      await handleWorkflowCrudInline(
+        makeArgs({ runId: RUN_ID, pauseVersion: 1, resolution: { mode: 'acknowledge' } }),
+      );
+      expect(mockClaimResumeLease).not.toHaveBeenCalled();
+      expect(mockResumeRunWithClaim).not.toHaveBeenCalled();
+      const result = mockAddStepResult.mock.calls[0]![1] as { error: { code: string } };
+      expect(result.error.code).toBe('ACKNOWLEDGE_TASK_BACKED_NOT_SUPPORTED');
+    },
+  );
+
+  it.each([
+    { mode: 'acknowledge' },
+    { mode: 'replace_output', output: {} },
+    { mode: 're_execute' },
+    { mode: 'provide_input', taskId: 'score-task', inputs: {} },
+    { mode: 'fail', reason: 'Rejected' },
+    { mode: 'reject' },
+    {
+      mode: 'retry_failed_task',
+      taskId: 'score-task',
+      failedAt: '2026-01-01T00:00:00Z',
+      attempt: 1,
+    },
+  ])('refuses $mode without a surfaced contract for a non-task pause', async (resolution) => {
     mockLoadRunById.mockResolvedValueOnce(
-      makePausedRun({ pausedReason: 'task_contract_violation' }),
+      makePausedRun({ pausedReason: 'needs_credentials', tasks: [] }),
     );
     mockSurfaceWorkflowResumeContract.mockResolvedValue(null);
-
-    await handleWorkflowCrudInline(
-      makeArgs({
-        runId: RUN_ID,
-        pauseVersion: 1,
-        resolution: { mode: 'acknowledge' },
-      }),
-    );
-
+    await handleWorkflowCrudInline(makeArgs({ runId: RUN_ID, pauseVersion: 1, resolution }));
     expect(mockClaimResumeLease).not.toHaveBeenCalled();
     expect(mockResumeRunWithClaim).not.toHaveBeenCalled();
-    const result = mockAddStepResult.mock.calls[0]![1] as Record<string, unknown>;
-    const errorPayload = result['error'] as Record<string, unknown>;
-    expect(errorPayload['code']).toBe('RESUME_CONTRACT_UNAVAILABLE');
+    const result = mockAddStepResult.mock.calls[0]![1] as { error: { code: string } };
+    expect(result.error.code).toBe('RESUME_CONTRACT_UNAVAILABLE');
   });
 
   it('atomic commit reports task_row_not_paused → handler surfaces typed error (round-2 P0/2)', async () => {
@@ -713,7 +735,7 @@ describe('workflow.run.resume — Plan 130 Phase 1 cross-boundary loop', () => {
     expect(mockClaimResumeLease).not.toHaveBeenCalled();
     const result = mockAddStepResult.mock.calls[0]![1] as Record<string, unknown>;
     const errorPayload = result['error'] as Record<string, unknown>;
-    expect(errorPayload['code']).toBe('RESOLUTION_MODE_NOT_ALLOWED');
+    expect(errorPayload['code']).toBe('ACKNOWLEDGE_TASK_BACKED_NOT_SUPPORTED');
   });
 
   it('Plan 167 — rejects acknowledge on HITL pause (human.action_center.focus)', async () => {
@@ -742,7 +764,7 @@ describe('workflow.run.resume — Plan 130 Phase 1 cross-boundary loop', () => {
     expect(mockClaimResumeLease).not.toHaveBeenCalled();
     const result = mockAddStepResult.mock.calls[0]![1] as Record<string, unknown>;
     const errorPayload = result['error'] as Record<string, unknown>;
-    expect(errorPayload['code']).toBe('ACKNOWLEDGE_NOT_ALLOWED_ON_HITL');
+    expect(errorPayload['code']).toBe('ACKNOWLEDGE_TASK_BACKED_NOT_SUPPORTED');
   });
 
   it('Plan 171 — acknowledge on needs_credentials re-checks preflight before claim', async () => {
@@ -752,6 +774,7 @@ describe('workflow.run.resume — Plan 130 Phase 1 cross-boundary loop', () => {
     mockLoadRunById.mockResolvedValueOnce(
       makePausedRun({
         pausedReason: 'needs_credentials',
+        tasks: [],
         metadata: { connectionBindingId: 'conn-resume-1' },
       }),
     );
@@ -794,7 +817,9 @@ describe('workflow.run.resume — Plan 130 Phase 1 cross-boundary loop', () => {
   });
 
   it('Plan 171 — acknowledge on needs_capability re-checks preflight before claim', async () => {
-    mockLoadRunById.mockResolvedValueOnce(makePausedRun({ pausedReason: 'needs_capability' }));
+    mockLoadRunById.mockResolvedValueOnce(
+      makePausedRun({ pausedReason: 'needs_capability', tasks: [] }),
+    );
     mockSurfaceWorkflowResumeContract.mockResolvedValue({
       contract: makeContract({
         pauseCause: 'needs_capability',
@@ -829,7 +854,9 @@ describe('workflow.run.resume — Plan 130 Phase 1 cross-boundary loop', () => {
   it('refuses to resume when an operation the run dispatches is still ungranted', async () => {
     // Operation tasks never pass step gating, so acknowledging the pause that
     // named the gap would run the operation on the authority that refused it.
-    mockLoadRunById.mockResolvedValueOnce(makePausedRun({ pausedReason: 'needs_capability' }));
+    mockLoadRunById.mockResolvedValueOnce(
+      makePausedRun({ pausedReason: 'needs_capability', tasks: [] }),
+    );
     mockSurfaceWorkflowResumeContract.mockResolvedValue({
       contract: makeContract({
         pauseCause: 'needs_capability',
@@ -870,7 +897,9 @@ describe('workflow.run.resume — Plan 130 Phase 1 cross-boundary loop', () => {
   it('refuses to resume when current authority cannot be established', async () => {
     // Unknown authority is not unchanged authority: op tasks dispatch without
     // a second gate, so resuming on an unverified snapshot is fail-open.
-    mockLoadRunById.mockResolvedValueOnce(makePausedRun({ pausedReason: 'needs_capability' }));
+    mockLoadRunById.mockResolvedValueOnce(
+      makePausedRun({ pausedReason: 'needs_capability', tasks: [] }),
+    );
     mockSurfaceWorkflowResumeContract.mockResolvedValue({
       contract: makeContract({
         pauseCause: 'needs_capability',
@@ -903,7 +932,9 @@ describe('workflow.run.resume — Plan 130 Phase 1 cross-boundary loop', () => {
   });
 
   it('does not gate a resume that ends the run — closing it must not need a grant', async () => {
-    mockLoadRunById.mockResolvedValueOnce(makePausedRun({ pausedReason: 'needs_capability' }));
+    mockLoadRunById.mockResolvedValueOnce(
+      makePausedRun({ pausedReason: 'needs_capability', tasks: [] }),
+    );
     mockSurfaceWorkflowResumeContract.mockResolvedValue({
       contract: makeContract({
         pauseCause: 'needs_capability',

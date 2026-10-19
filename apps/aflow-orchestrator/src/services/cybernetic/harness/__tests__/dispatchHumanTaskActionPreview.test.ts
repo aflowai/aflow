@@ -5,6 +5,7 @@ import {
   type TenantId,
   type WorkflowTask,
 } from '@aflow/schemas';
+import { createMemoryPayloadStore } from '@aflow/payload-store';
 import { surfaceWorkflowResumeContract } from '@aflow/cybernetic-runtime';
 import type { WorkflowRunDetail } from '@aflow/cybernetic-runtime';
 
@@ -110,9 +111,12 @@ describe('dispatchHumanWorkflowTask — large action preview (Plan 186 §5.D)', 
     async (length) => {
       const args = makeArgs();
       args.task.pauseInstruction = 'p'.repeat(length);
+      args.deps.payloadStore = createMemoryPayloadStore();
       await dispatchHumanWorkflowTask(args);
       const ref = mockPauseRunOnly.mock.calls[0]![5] as string;
-      const stored = decodeInline(ref);
+      const stored = await args.deps.payloadStore.retrieve(
+        ref as Parameters<typeof args.deps.payloadStore.retrieve>[0],
+      );
       expect(WorkflowResumeContractSchema.safeParse(stored).success).toBe(true);
       const parsed = WorkflowResumeContractSchema.parse(stored);
       expect(parsed.pausedTaskInputContract?.prompt?.length).toBe(Math.min(length, 20000));
@@ -122,7 +126,7 @@ describe('dispatchHumanWorkflowTask — large action preview (Plan 186 §5.D)', 
         .mockResolvedValueOnce(null);
       const surfaced = await surfaceWorkflowResumeContract(
         args.deps.db,
-        { retrieve: async () => stored } as never,
+        args.deps.payloadStore,
         TENANT,
         args.runId,
       );
