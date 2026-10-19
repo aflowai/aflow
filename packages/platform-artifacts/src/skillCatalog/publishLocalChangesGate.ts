@@ -13,11 +13,13 @@ import type { SKIP } from './localPrShepherdWiring.js';
  * and the posture, so no decision ever stands in for a range the scan did not
  * clear or for a folder that asks before every push.
  * Past them, under `unless-unreviewed`, the decision on the findings stands
- * in for the verdict: a review with findings is followed by what was decided
- * on them, and only a review with none is followed by its verdict alone. The
- * decision stands in for an approving verdict only up to the severities it
- * weighed: over a blocker or a major the operator is asked whatever was
- * decided, an override's `publish_as_is` included. An override pushes only on
+ * in for the verdict: a review that finished is followed by what was decided
+ * on its findings — `publish_as_is`, asking no model, where it found nothing
+ * or nits alone. The decision stands in for an approving verdict only up to
+ * the severities it covers: over a blocker or a major the operator is asked
+ * whatever was decided, an override's `publish_as_is` included. Over no
+ * findings at all it stands in for nothing: a review that found nothing and
+ * did not approve could not judge the range, so the operator is asked. An override pushes only on
  * an authority the run verified (`publishLocalChangesOverride.ts`), and the
  * operator's word only through the operator's own approval. A path through a
  * read that did not happen reads as null, which is why every rule that clears
@@ -77,6 +79,18 @@ export const PUSH_GATE_RULES: readonly WorkflowRunDecideRule[] = [
       'The review found a blocker or a major: a decision on its findings stands in for an approving verdict only over minor findings and nits, so the operator decides whether the push goes.',
   },
   {
+    when: {
+      allOf: [
+        "state.afterReview == 'publish_as_is'",
+        'state.severest == null',
+        "state.verdict != 'approve'",
+      ],
+    },
+    decision: 'ask',
+    reason:
+      'The review found nothing and did not approve: it could not judge the range, so the operator decides whether the push goes.',
+  },
+  {
     when: { expression: "state.afterReview == 'publish_as_is'" },
     decision: 'push',
     reason:
@@ -88,17 +102,12 @@ export const PUSH_GATE_RULES: readonly WorkflowRunDecideRule[] = [
     reason:
       "No answer on the review's findings cleared the decision's bar: the operator decides whether the push goes.",
   },
-  {
-    when: { expression: "state.verdict == 'approve'" },
-    decision: 'push',
-    reason: 'The review approved everything the push would add and found nothing.',
-  },
 ];
 
 export const PUSH_GATE_OTHERWISE = {
   decision: 'ask',
   reason:
-    'The review returned no findings to decide on and did not approve — or did not finish, or could not start — so nothing stands in for the operator.',
+    'The review did not finish, or could not start, so nothing was decided on its findings and nothing stands in for the operator.',
 };
 
 /**
@@ -111,7 +120,7 @@ export function decidePushTask(checksCleared: { anyOf: string[]; onMissingRef: t
   return {
     taskId: 'decide-push',
     name: 'Decide whether the push asks',
-    goal: "Decide, by rules over what the run read, whether the push goes without asking, waits for the operator, or stays on the machine: an uncleared scan or an `always` folder asks; a `never` folder pushes; under `unless-unreviewed` an override the run could not verify keeps the branch local, and otherwise the decision on the review's findings — `fix_before_merge` keeps the branch local, `publish_as_is` pushes over findings no more severe than minor and asks over a blocker or a major, or where the operator's word set the decision aside, `undecided` asks — and, where the review found nothing, its verdict alone.",
+    goal: "Decide, by rules over what the run read, whether the push goes without asking, waits for the operator, or stays on the machine: an uncleared scan or an `always` folder asks; a `never` folder pushes; under `unless-unreviewed` an override the run could not verify keeps the branch local, and otherwise the decision on the review's findings — `fix_before_merge` keeps the branch local, `publish_as_is` pushes over findings no more severe than minor and asks over a blocker or a major, or where the operator's word set the decision aside, `undecided` asks; where the review found nothing, `publish_as_is` pushes only on an approving verdict; and a review that did not finish asks.",
     type: 'operation' as const,
     operation: 'workflow.run.decide',
     dependsOn: [

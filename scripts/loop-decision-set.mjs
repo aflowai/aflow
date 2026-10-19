@@ -128,6 +128,8 @@ export function findingKey(finding) {
  * closed any of them is `fix_before_merge`; one that carried them all open is
  * `publish_as_is`; none carrying them leaves the round unlabelled, for the
  * operator's labels file to settle, as `operator_install_mismatch` is above.
+ * A review of nits alone makes no round case: the publication settles it
+ * `publish_as_is` without asking, so the measurement asks it nothing either.
  *
  * A review: `{ runId, startedAt, branch, findings: [{ file, line?, claim,
  * evidence, severity }] }`; a publication as above with `findings: [{ file,
@@ -164,6 +166,7 @@ export function reviewCases(reviews, publications) {
         labelSource: label === null ? 'none' : 'inferred',
       });
     });
+    if (review.findings.every((finding) => finding.severity === 'nit')) continue;
     const round = !carried ? null : fixedInARound ? 'fix_before_merge' : 'publish_as_is';
     cases.push({
       id: `round:${review.runId}`,

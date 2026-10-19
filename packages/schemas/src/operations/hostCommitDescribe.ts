@@ -66,7 +66,8 @@ export const AfterReviewSchema = z
   .describe(
     "What the publication decided about its review's findings, and what its push gate " +
       'follows: `fix_before_merge`, a fix round on the branch before it merges — nothing is ' +
-      'pushed and the branch stays local; `publish_as_is`, they can merge as they stand — the ' +
+      'pushed and the branch stays local; `publish_as_is`, they can merge as they stand, which ' +
+      'a review of nits alone, or none, is without asking a model — the ' +
       'push goes without asking over findings no more severe than minor, and waits for the ' +
       "operator over a blocker or a major; `undecided`, no answer cleared the decision's bar, " +
       'or none could be made — the push waits for the operator. The fix round is the ' +
@@ -187,13 +188,13 @@ export const HostCommitDescribeInputSchema = z.object({
         'did not finish — how it ended, its summary, which names every finding it read, and ' +
         'the findings themselves, which the publication hands on as the open ones.',
     ),
-  afterReview: z
-    .enum(AFTER_REVIEW_DECIDED)
-    .nullable()
+  afterReview: AfterReviewSchema.nullable()
     .optional()
     .describe(
-      "The decision on the review's findings as it answered: null where the answer fell below " +
-        'its bar, absent where none was made.',
+      "The decision on the review's findings: the decision model's answer, null where it fell " +
+        'below its bar; `publish_as_is` where the review found nothing or nits alone, which ' +
+        'no model is asked about; `undecided` where a model was to be asked and no answer ' +
+        'came. Absent where the review did not finish.',
     ),
   override: AfterReviewOverrideSchema.optional(),
   check: CheckRunSchema.optional().describe("The folder's checks on the commit, as they ran."),
@@ -322,9 +323,10 @@ function severestOf(
  * within its share of a later publication's inputs (`handedOn`), so the
  * publication taking it back as `findings` is never refused for its size.
  *
- * The decision on them is recorded exactly where this review returned
- * findings — the decision is asked only then — and an answer that is missing
- * there, below the bar or never made, is recorded as `undecided`. An override
+ * The decision on them is recorded exactly where this review finished —
+ * `publish_as_is` without asking where it found nothing or nits alone — and
+ * an answer that is missing there, below the bar or never made, is recorded
+ * as `undecided`. An override
  * turns a `fix_before_merge` or an `undecided` into `publish_as_is`, recorded
  * beside what it set aside; over a `publish_as_is`, or where nothing was
  * decided, it sets nothing aside and is not recorded. Whether the override's
@@ -340,7 +342,9 @@ export function pullRequestReviewRecord(input: HostCommitDescribeInput): PullReq
   const handed = handedOn(
     reviewFindings.map((finding) => ({ ...finding, state: 'open' as const })),
   );
-  if (handed.findings.length === 0) return handed;
+  if (handed.findings.length === 0) {
+    return input.afterReview == null ? handed : { ...handed, afterReview: input.afterReview };
+  }
   const severest = severestOf(reviewFindings);
   const decided = input.afterReview ?? AFTER_REVIEW_UNDECIDED;
   if (input.override === undefined || decided === 'publish_as_is') {
@@ -404,7 +408,7 @@ export const HostCommitDescribeOutputSchema = z.object({
     ),
   afterReview: AfterReviewSchema.optional().describe(
     "The decision on this publication's review findings, as the body records it; absent " +
-      'where the review returned none.',
+      'where the review did not finish.',
   ),
   afterReviewOverride: AfterReviewOverrideRecordSchema.optional().describe(
     'The override that turned the decision into `publish_as_is`, with the decision it set ' +

@@ -131,6 +131,19 @@ describe('a review’s findings: each labelled by whether a later publication cl
     expect(cases[0]?.label).toBeNull();
   });
 
+  it('makes no round case of a review of nits alone, which the publication settles without asking', () => {
+    const nits = {
+      ...review,
+      findings: [
+        { ...LEAK, severity: 'nit' },
+        { ...NAME, severity: 'nit' },
+      ],
+    };
+    expect(reviewCases([nits], []).map((c) => c.kind)).toEqual(['finding', 'finding']);
+    const withMinor = { ...nits, findings: [...nits.findings, { ...LEAK, severity: 'minor' }] };
+    expect(reviewCases([withMinor], []).filter((c) => c.kind === 'after_review')).toHaveLength(1);
+  });
+
   it('takes the operator’s accepted as a defect left open, and dismissed as none', () => {
     const cases = applyOperatorLabels(reviewCases([review], []), {
       'finding:rv:0': 'accepted',

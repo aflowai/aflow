@@ -19,6 +19,26 @@ Write the summary as the deliverable: it names every finding inline — severity
 
 Edit no file, stage nothing and commit nothing. The result is the whole deliverable.`;
 
+/**
+ * What each severity means, most severe first: the review grades its findings
+ * by it, and a publication deciding on them is asked with it.
+ */
+export const REVIEW_SEVERITIES = {
+  blocker: 'must not ship.',
+  major: 'wrong or unsafe in a case that will occur.',
+  minor: 'a real defect with narrow effect.',
+  nit: 'a preference.',
+} as const;
+export type ReviewSeverity = keyof typeof REVIEW_SEVERITIES;
+
+/** Every severity with what it means, as one line. */
+export const REVIEW_SEVERITY_ONTOLOGY = Object.entries(REVIEW_SEVERITIES)
+  .map(([severity, meaning]) => `${severity}: ${meaning}`)
+  .join(' ');
+
+/** The most findings one review returns. */
+export const REVIEW_FINDINGS_MAX = 50;
+
 /** A finding as the review returns it: what a publication waiting on it records, and argues from. */
 export const REVIEW_FINDING_SCHEMA = {
   type: 'object',
@@ -27,9 +47,8 @@ export const REVIEW_FINDING_SCHEMA = {
   properties: {
     severity: {
       type: 'string',
-      enum: ['blocker', 'major', 'minor', 'nit'],
-      description:
-        'blocker: must not ship. major: wrong or unsafe in a case that will occur. minor: a real defect with narrow effect. nit: a preference.',
+      enum: Object.keys(REVIEW_SEVERITIES),
+      description: REVIEW_SEVERITY_ONTOLOGY,
     },
     file: {
       type: 'string',
@@ -84,7 +103,7 @@ const RESULT_SCHEMA = {
     },
     findings: {
       type: 'array',
-      maxItems: 50,
+      maxItems: REVIEW_FINDINGS_MAX,
       description: 'Everything worth acting on, ordered by severity. Empty when nothing was found.',
       items: REVIEW_FINDING_SCHEMA,
     },

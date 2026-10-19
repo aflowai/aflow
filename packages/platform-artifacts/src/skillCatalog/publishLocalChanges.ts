@@ -13,6 +13,12 @@ import {
   AFTER_REVIEW_QUESTION,
   AFTER_REVIEW_QUESTION_NAME,
 } from './publishLocalChangesDecisions.js';
+import {
+  AFTER_REVIEW_BINDINGS,
+  AFTER_REVIEW_VALUE,
+  ASK_AFTER_REVIEW,
+  SETTLE_AFTER_REVIEW_TASK,
+} from './publishLocalChangesAfterReview.js';
 import { decidePushTask } from './publishLocalChangesGate.js';
 import { overrideTasks } from './publishLocalChangesOverride.js';
 import {
@@ -198,7 +204,7 @@ const CHECK_INPUT_TEMPLATE = {
 
 const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'publish-local-changes',
-  version: 35,
+  version: 36,
   name: 'Publish Local Changes',
   tagline:
     'Commit a patch onto a branch of a connected repository, then push it and open the pull request — asking the operator first unless the folder says otherwise.',
@@ -818,18 +824,16 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           },
         },
 
+        SETTLE_AFTER_REVIEW_TASK,
+
         {
           taskId: 'decide-after-review',
           name: 'Decide whether the findings are fixed before merging',
-          goal: "Read the review's findings and choose whether this branch takes a fix round before it merges or merges as it is — the push gate follows the answer, and the pull request records it. An answer too unsure to stand is recorded as undecided, and the push waits for the operator.",
+          goal: "Read the review's findings, a minor or worse among them, and choose whether this branch takes a fix round before it merges or merges as it is — the push gate follows the answer, and the pull request records it. An answer too unsure to stand is recorded as undecided, and the push waits for the operator.",
           type: 'operation' as const,
           operation: 'ai.decision.decide',
-          dependsOn: ['review-commit'],
-          // A review with no findings, or one that did not finish, has none to weigh.
-          when: {
-            expression: 'tasks.review-commit.output.findings[0] != null',
-            onMissingRef: 'skip' as const,
-          },
+          dependsOn: ['review-commit', SETTLE_AFTER_REVIEW_TASK.taskId],
+          when: { expression: ASK_AFTER_REVIEW, onMissingRef: 'skip' as const },
           // Read through `describe-pr`, which records it — and an override of
           // it — and which the gate reads; a decision that could not be made
           // is recorded as undecided, and the run goes on to ask.
@@ -900,6 +904,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             'recheck-commit',
             'scan-commit',
             'review-commit',
+            SETTLE_AFTER_REVIEW_TASK.taskId,
             'decide-after-review',
             'verify-override',
           ],
@@ -917,11 +922,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           // and its findings, and the decision on them, are what the pull
           // request records of it.
           inputBindings: {
-            afterReview: {
-              kind: 'task_output' as const,
-              taskId: 'decide-after-review',
-              path: 'afterReview',
-            },
+            ...AFTER_REVIEW_BINDINGS,
             bindingId: { kind: 'run_input' as const, path: 'bindingId' },
             range: { kind: 'task_output' as const, taskId: 'commit', path: 'commit.pushRange' },
             title: { kind: 'run_input' as const, path: 'title' },
@@ -952,7 +953,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             check: { $bind: 'check' },
             recheck: { $bind: 'recheck' },
             gaps: { $bind: 'gaps' },
-            afterReview: { $bind: 'afterReview' },
+            afterReview: AFTER_REVIEW_VALUE,
             override: { $bind: 'override' },
           },
           outputProjection: {
@@ -961,11 +962,11 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             findings: { path: 'findings', onMissing: 'error' as const },
             // Absent where the hand-on left none out.
             findingsLeftOut: { path: 'findingsLeftOut', onMissing: 'null' as const },
-            // Absent where the review returned no findings, so none was decided.
+            // Absent where the review did not finish, so nothing was decided.
             afterReview: { path: 'afterReview', onMissing: 'null' as const },
             // Absent where no override set a decision aside.
             afterReviewOverride: { path: 'afterReviewOverride', onMissing: 'null' as const },
-            // Absent, as the decision is, where the review returned no findings.
+            // Absent where the review returned no findings.
             severest: { path: 'severest', onMissing: 'null' as const },
           },
           promoteOutputs: [
@@ -1329,7 +1330,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           variableId: 'afterReview',
           name: 'After the review',
           description:
-            "What the run decided about its review's findings, as the pull request records it, and what its push gate followed: fix_before_merge — nothing pushed, the branch kept local; publish_as_is — pushed, asking only over a blocker or a major; undecided, where no answer cleared the bar or none could be made — the operator asked. Null where the review returned no findings, so none was decided. On fix_before_merge the fix round is the conversation's, or the shepherd's.",
+            "What the run decided about its review's findings, as the pull request records it, and what its push gate followed: fix_before_merge — nothing pushed, the branch kept local; publish_as_is — pushed, asking only over a blocker or a major; nits alone or none settle it unasked; undecided, where no answer cleared the bar or none could be made — the operator asked. Null where the review did not finish, so nothing was decided. On fix_before_merge the fix round is the conversation's, or the shepherd's.",
           required: false,
           sensitive: false,
           immutable: false,
@@ -1449,7 +1450,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
       priority: 50,
     },
     rationale:
-      "Twenty-two tasks, the approval between local and published. The commit lands in a detached worktree; host.commit.check runs the folder's checks; test timeouts alone rerun, any other failure is workflow.run.fail. host.commit.scan reads all a push adds: a finding fails the run. Under unless-unreviewed a Local Code Review runs; ai.decision.decide answers fix_before_merge or publish_as_is over its findings, undecided below the bar. An override is verified — label and shepherd record read on GitHub, the operator's word at the approval — or fails the run. decide-push, workflow.run.decide, gates the push: uncleared scan or always asks, never pushes; fix_before_merge keeps the branch local; publish_as_is pushes, asking over a blocker, a major or the operator's word; undecided asks. No task starts a publication. Push argv pinned bar the refspec; the executor re-measures origin/<base>, needs a passed check receipt, and sends an uncleared range only on this run's grant; an open PR is PATCHed.",
+      "Twenty-three tasks, the approval between local and published. The commit lands in a detached worktree; host.commit.check runs its checks; test timeouts alone rerun, other failures workflow.run.fail. host.commit.scan reads all a push adds; a finding fails the run. Under unless-unreviewed a Local Code Review runs; none or nits alone settle publish_as_is by rule; else ai.decision.decide answers fix_before_merge or publish_as_is, undecided below the bar. An override is verified — label and shepherd record on GitHub, the operator's word at the approval — or fails the run. decide-push, by rules, gates the push: uncleared scan or always asks, never pushes; fix_before_merge keeps the branch local; publish_as_is pushes, asking over a blocker, major or the operator's word; undecided asks. No task starts a publication. Push argv pinned bar the refspec; the executor re-measures origin/<base>, needs a passed check receipt and sends an uncleared range only on this run's grant; an open PR is PATCHed.",
   },
 };
 

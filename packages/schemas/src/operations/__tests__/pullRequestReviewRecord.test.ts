@@ -206,6 +206,40 @@ describe('an override of the decision on the findings', () => {
 });
 
 /**
+ * Contract: a review that finished is recorded with a decision on its
+ * findings — one it found nothing in included, which the publication settles
+ * `publish_as_is` without asking — and one that did not finish with none.
+ */
+describe('the decision on a review that finished', () => {
+  const finished = (findings: unknown[]) => ({
+    verdict: 'approve',
+    outcome: 'completed',
+    findings,
+  });
+
+  it('is recorded where the review found nothing, as it was settled, with no severest beside it', () => {
+    const record = recordOf({ review: finished([]), afterReview: 'publish_as_is' });
+    expect(record.afterReview).toBe('publish_as_is');
+    expect(record.severest).toBeUndefined();
+    expect(record.findings).toEqual([]);
+  });
+
+  it('is undecided where a decision was to be asked and none came, as where its answer fell below the bar', () => {
+    const findings = [{ severity: 'minor', file: 'src/a.ts', claim: 'Off by one.', evidence: 'x' }];
+    for (const afterReview of ['undecided', null] as const) {
+      expect(recordOf({ review: finished(findings), afterReview }).afterReview).toBe('undecided');
+    }
+  });
+
+  it('is absent where the review did not finish, whatever was handed', () => {
+    const unfinished = { verdict: null, outcome: 'failed', findings: null };
+    expect(recordOf({ review: unfinished, afterReview: 'publish_as_is' }).afterReview).toBe(
+      undefined,
+    );
+  });
+});
+
+/**
  * Contract: beside the decision goes the most severe finding of the review it
  * was made on, which the push gate holds a `publish_as_is` to — however many
  * findings the hand-on leaves out, and only where a decision is recorded.

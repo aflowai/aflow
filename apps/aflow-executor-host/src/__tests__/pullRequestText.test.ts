@@ -481,6 +481,37 @@ describe('composePullRequest', () => {
     }
   });
 
+  it('says a publish_as_is settled over nits alone, or over nothing, was asked of no decision — and how the push was cleared', () => {
+    const NIT_FINDING = { ...REVIEW_FINDING, severity: 'nit' } as const;
+    const nits = composePullRequest(reviewed('publish_as_is', NIT_FINDING), commits);
+    expect(nits.severest).toBe('nit');
+    expect(nits.body).toContain(
+      "Its findings are nits alone, which end the rounds: no decision was asked, and the push went without asking, and leaves this review's findings open, listed under **Left open by `publish_as_is`**.",
+    );
+    expect(nits.body).toContain('- **nit** `src/cache.ts:40`');
+
+    const nothingFound = (verdict: 'approve' | 'comment') =>
+      composePullRequest(
+        HostCommitDescribeInputSchema.parse({
+          bindingId: 'hb_app',
+          range,
+          review: { verdict, outcome: 'completed', reviewSummary: REVIEW_SUMMARY, findings: [] },
+          afterReview: 'publish_as_is',
+        }),
+        commits,
+      );
+    const approved = nothingFound('approve');
+    expect(approved.afterReview).toBe('publish_as_is');
+    expect(approved.body).toContain(
+      'The review found nothing, so no decision was asked, and the push went without asking.',
+    );
+    expect(approved.body).not.toContain('### Left open by `publish_as_is`');
+    // The gate asks over a review that found nothing and did not approve, so the text says so.
+    expect(nothingFound('comment').body).toContain(
+      "The review found nothing and did not approve, so the push went out only on the operator's approval.",
+    );
+  });
+
   it('records an override as publish_as_is, with whose act it was, its reason and the decision it set aside', () => {
     const reason = 'The operator said to merge it and fix the cache in the next slice.';
     const composed = composePullRequest(
