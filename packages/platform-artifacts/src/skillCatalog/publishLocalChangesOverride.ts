@@ -4,6 +4,11 @@ import {
   type WorkflowRunDecideRule,
 } from '@aflow/schemas';
 import { HANDOFF_PIN_PATH } from './localPrShepherdHandoff.js';
+import {
+  AFTER_REVIEW_BINDINGS,
+  AFTER_REVIEW_VALUE,
+  SETTLE_AFTER_REVIEW_TASK,
+} from './publishLocalChangesAfterReview.js';
 import { SHEPHERD_BUDGET_SPENT } from './localPrShepherdRules.js';
 import { bind, ctx, github, out, runInput, SKIP } from './localPrShepherdWiring.js';
 
@@ -11,10 +16,11 @@ import { bind, ctx, github, out, runInput, SKIP } from './localPrShepherdWiring.
  * An override sets the decision on the review's findings aside only on an
  * authority the run verifies from what it reads itself (Plan 315 D22), never
  * on the caller's say. `claim-override` reads which authority it names, and
- * only where it would set a decision aside — the review returned findings and
- * the decision is not already `publish_as_is` — which is exactly where the
- * composition records one. Only that authority's reads run; `verify-override`
- * decides from them, and a refusal fails the run with nothing pushed.
+ * only where it would set a decision aside — the review finished, and the
+ * decision on its findings is not already `publish_as_is` — which is exactly
+ * where the composition records one. Only that authority's reads run;
+ * `verify-override` decides from them, and a refusal fails the run with
+ * nothing pushed.
  *
  * The operator's word is the one authority no read can stand in for: it is
  * taken from the operator, as their approval of the push in this run, so a
@@ -29,10 +35,10 @@ export const OVERRIDE_CLAIM_RULES: readonly WorkflowRunDecideRule[] = [
     reason: "No override was passed: the decision on the review's findings stands.",
   },
   {
-    when: { expression: 'state.findings[0] == null' },
+    when: { expression: 'state.findings == null' },
     decision: 'none',
     reason:
-      'The review returned no findings, so nothing was decided: an override sets nothing aside, and is neither checked nor recorded.',
+      'The review did not finish, so nothing was decided: an override sets nothing aside, and is neither checked nor recorded.',
   },
   {
     when: { expression: "state.decided == 'publish_as_is'" },
@@ -138,21 +144,25 @@ export function overrideTasks(checksCleared: { anyOf: string[]; onMissingRef: ty
     {
       taskId: 'claim-override',
       name: 'Read whose act the override names',
-      goal: "Read whether an override was passed that would set the decision on the review's findings aside — the review returned findings, and the decision is not already publish_as_is — and which authority it names, so that authority's check alone runs.",
+      goal: "Read whether an override was passed that would set the decision on the review's findings aside — the review finished and the decision is not already publish_as_is — and which authority it names, so that authority's check alone runs.",
       type: 'operation' as const,
       operation: 'workflow.run.decide',
-      dependsOn: ['review-commit', 'decide-after-review'],
+      dependsOn: ['review-commit', SETTLE_AFTER_REVIEW_TASK.taskId, 'decide-after-review'],
       when: checksCleared,
       retryability: 'safe' as const,
       maxAttempts: 1,
       inputBindings: {
         override: runInput('override'),
         findings: out('review-commit', 'findings'),
-        decided: out('decide-after-review', 'afterReview'),
+        ...AFTER_REVIEW_BINDINGS,
       },
       context: ctx('workflow.run.decide'),
       inputTemplate: {
-        state: { override: bind('override'), findings: bind('findings'), decided: bind('decided') },
+        state: {
+          override: bind('override'),
+          findings: bind('findings'),
+          decided: AFTER_REVIEW_VALUE,
+        },
         rules: OVERRIDE_CLAIM_RULES,
         otherwise: OVERRIDE_CLAIM_OTHERWISE,
       },

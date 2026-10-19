@@ -173,13 +173,29 @@ describe('an override of the decision on the findings', () => {
     });
   }
 
-  it('sets nothing aside over publish_as_is, or where no decision was made', () => {
+  it('sets nothing aside over publish_as_is, or where the review did not finish and nothing was decided', () => {
     const asIs = recordOf({ review: REVIEW, afterReview: 'publish_as_is', override: OVERRIDE });
     expect(asIs.afterReview).toBe('publish_as_is');
     expect(asIs.afterReviewOverride).toBeUndefined();
-    const nothingFound = recordOf({ review: { ...REVIEW, findings: [] }, override: OVERRIDE });
-    expect(nothingFound.afterReview).toBeUndefined();
-    expect(nothingFound.afterReviewOverride).toBeUndefined();
+    const unfinished = recordOf({
+      review: { verdict: null, outcome: 'failed', findings: null },
+      override: OVERRIDE,
+    });
+    expect(unfinished.afterReview).toBeUndefined();
+    expect(unfinished.afterReviewOverride).toBeUndefined();
+  });
+
+  it('sets aside an undecided review that found nothing, as any finished review — one that did not approve is asked of the decision model', () => {
+    const nothingFound = recordOf({
+      review: { ...REVIEW, verdict: 'comment', findings: [] },
+      afterReview: 'undecided',
+      override: OVERRIDE,
+    });
+    expect(nothingFound).toMatchObject({
+      afterReview: 'publish_as_is',
+      afterReviewOverride: { ...OVERRIDE, overrode: 'undecided' },
+    });
+    expect(nothingFound.severest).toBeUndefined();
   });
 
   it('is refused without a named authority and a reason', () => {
@@ -202,6 +218,49 @@ describe('an override of the decision on the findings', () => {
     expect(
       recordOf({ review: REVIEW, afterReview: 'fix_before_merge' }).afterReviewOverride,
     ).toBeUndefined();
+  });
+});
+
+/**
+ * Contract: a review that finished is recorded with a decision on its
+ * findings — one it found nothing in included, which the publication settles
+ * `publish_as_is` without asking — and one that did not finish with none.
+ */
+describe('the decision on a review that finished', () => {
+  const finished = (findings: unknown[]) => ({
+    verdict: 'approve',
+    outcome: 'completed',
+    findings,
+  });
+
+  it('is recorded where the review found nothing, as it was settled, with no severest beside it', () => {
+    const record = recordOf({ review: finished([]), afterReview: 'publish_as_is' });
+    expect(record.afterReview).toBe('publish_as_is');
+    expect(record.severest).toBeUndefined();
+    expect(record.findings).toEqual([]);
+  });
+
+  it('is undecided where a decision was to be asked and none came, as where its answer fell below the bar', () => {
+    const findings = [{ severity: 'minor', file: 'src/a.ts', claim: 'Off by one.', evidence: 'x' }];
+    for (const afterReview of ['undecided', null] as const) {
+      expect(recordOf({ review: finished(findings), afterReview }).afterReview).toBe('undecided');
+    }
+  });
+
+  it('is undecided over a review that found nothing and did not approve, whose decision was asked and fell below the bar', () => {
+    const commented = { verdict: 'comment', outcome: 'completed', findings: [] };
+    for (const afterReview of ['undecided', null] as const) {
+      const record = recordOf({ review: commented, afterReview });
+      expect(record.afterReview).toBe('undecided');
+      expect(record.severest).toBeUndefined();
+    }
+  });
+
+  it('is absent where the review did not finish, whatever was handed', () => {
+    const unfinished = { verdict: null, outcome: 'failed', findings: null };
+    expect(recordOf({ review: unfinished, afterReview: 'publish_as_is' }).afterReview).toBe(
+      undefined,
+    );
   });
 });
 

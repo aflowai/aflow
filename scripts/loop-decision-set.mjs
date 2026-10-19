@@ -119,7 +119,7 @@ export function findingKey(finding) {
 }
 
 /**
- * Reviews with findings, each against the publications of its branch that
+ * Reviews, each against the publications of its branch that
  * started after it. A later publication carrying a finding `closed` fixed it;
  * one carrying it `open` left it — accepted or dismissed, which the records do
  * not tell apart, so the yes/no label reads fixed as a defect and left as not
@@ -128,15 +128,18 @@ export function findingKey(finding) {
  * closed any of them is `fix_before_merge`; one that carried them all open is
  * `publish_as_is`; none carrying them leaves the round unlabelled, for the
  * operator's labels file to settle, as `operator_install_mismatch` is above.
+ * An approving review of nits alone, or of nothing, makes no round case: the
+ * publication settles it `publish_as_is` without asking, so the measurement
+ * asks it nothing either. A review under any other verdict is asked whatever
+ * it found, and makes one.
  *
- * A review: `{ runId, startedAt, branch, findings: [{ file, line?, claim,
- * evidence, severity }] }`; a publication as above with `findings: [{ file,
- * claim, state }]`, the findings it was handed.
+ * A review: `{ runId, startedAt, branch, verdict, findings: [{ file, line?,
+ * claim, evidence, severity }] }`; a publication as above with `findings: [{
+ * file, claim, state }]`, the findings it was handed.
  */
 export function reviewCases(reviews, publications) {
   const cases = [];
   for (const review of reviews) {
-    if (review.findings.length === 0) continue;
     const later = publications
       .filter((p) => p.branch === review.branch && p.startedAt > review.startedAt)
       .sort((a, b) => a.startedAt.localeCompare(b.startedAt));
@@ -164,11 +167,15 @@ export function reviewCases(reviews, publications) {
         labelSource: label === null ? 'none' : 'inferred',
       });
     });
+    const settled =
+      review.verdict === 'approve' &&
+      review.findings.every((finding) => finding.severity === 'nit');
+    if (settled) continue;
     const round = !carried ? null : fixedInARound ? 'fix_before_merge' : 'publish_as_is';
     cases.push({
       id: `round:${review.runId}`,
       kind: 'after_review',
-      state: { findings: review.findings },
+      state: { verdict: review.verdict, findings: review.findings },
       label: round,
       labelSource: round === null ? 'none' : 'inferred',
     });

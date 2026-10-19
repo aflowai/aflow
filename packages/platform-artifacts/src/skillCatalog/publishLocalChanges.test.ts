@@ -54,7 +54,12 @@ import {
 import { SKILL_CATALOG } from './index.js';
 import { LOCAL_PR_SHEPHERD } from './localPrShepherd.js';
 import { HANDOFF_PIN_PATH } from './localPrShepherdHandoff.js';
-import { REVIEW_LOCAL_CHANGES } from './reviewLocalChanges.js';
+import { NITS_ONLY_REASON } from './publishLocalChangesAfterReview.js';
+import {
+  REVIEW_FINDINGS_MAX,
+  REVIEW_LOCAL_CHANGES,
+  REVIEW_SEVERITIES,
+} from './reviewLocalChanges.js';
 
 const wf = PUBLISH_LOCAL_CHANGES.bundle.workflow;
 const taskById = new Map(wf.tasks.map((task) => [task.taskId, task]));
@@ -150,7 +155,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
     expect(validity.status).toBe('valid');
   });
 
-  it('is twenty-two tasks — commit, check, the stop on a failed check, scan, what decides the approval, the review and the decision on its findings, the check of an override and the stop on its refusal, the pull request composed, the push gate, approve, push, and the pull request found, rewritten or opened', () => {
+  it('is twenty-three tasks — commit, check, the stop on a failed check, scan, what decides the approval, the review, its findings settled where an approval of nits alone and otherwise decided, the check of an override and the stop on its refusal, the pull request composed, the push gate, approve, push, and the pull request found, rewritten or opened', () => {
     expect(wf.tasks.map((t) => t.taskId)).toEqual([
       'commit',
       'check-commit',
@@ -160,6 +165,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       'read-repository',
       'read-push-approval',
       'review-commit',
+      'settle-after-review',
       'decide-after-review',
       'claim-override',
       'read-override-pr',
@@ -187,8 +193,9 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       'read-repository': ['commit', 'check-commit', 'recheck-commit'],
       'read-push-approval': ['commit', 'scan-commit'],
       'review-commit': ['read-push-approval', 'scan-commit'],
-      'decide-after-review': ['review-commit'],
-      'claim-override': ['review-commit', 'decide-after-review'],
+      'settle-after-review': ['review-commit'],
+      'decide-after-review': ['review-commit', 'settle-after-review'],
+      'claim-override': ['review-commit', 'settle-after-review', 'decide-after-review'],
       'read-override-pr': ['claim-override', 'read-push-approval'],
       'read-override-pin': ['read-override-pr'],
       'read-override-handoff': ['read-override-pr', 'read-override-pin'],
@@ -205,6 +212,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
         'recheck-commit',
         'scan-commit',
         'review-commit',
+        'settle-after-review',
         'decide-after-review',
         'verify-override',
       ],
@@ -238,6 +246,7 @@ describe('Publish Local Changes — the patch becomes a branch, then a pull requ
       'read-repository': 'api.http.call',
       'read-push-approval': 'host.binding.inspect',
       'review-commit': 'workflow.run.start',
+      'settle-after-review': 'workflow.run.decide',
       'decide-after-review': 'ai.decision.decide',
       'claim-override': 'workflow.run.decide',
       'read-override-pr': 'api.http.call',
@@ -1257,6 +1266,7 @@ function rawOutput(
     case 'describe-pr':
       return scenario.describeRefused === true ? {} : describedPullRequest(input);
     // The rules each decision is handed, decided as the orchestrator decides them.
+    case 'settle-after-review':
     case 'claim-override':
     case 'verify-override':
     case 'decide-push':
@@ -2188,6 +2198,7 @@ describe('Publish Local Changes — a branch is published as it stands', () => {
       'read-repository',
       'read-push-approval',
       'review-commit',
+      'settle-after-review',
       'claim-override',
       'verify-override',
       'describe-pr',
@@ -3339,12 +3350,168 @@ describe("Publish Local Changes — the push gate follows the decision on a revi
     expect(outcome.state['findings']).toEqual(record);
   });
 
-  it('records no decision where the review returned no findings or did not finish, since none was asked', () => {
-    for (const review of ['approve', 'failed', 'not-started'] as const) {
-      const outcome = reviewedWith({ review, findings: review === 'approve' ? [] : FINDINGS });
+  it('records no decision where the review did not finish, since there were no findings to settle or ask about', () => {
+    for (const review of ['failed', 'not-started'] as const) {
+      const outcome = reviewedWith({ review, findings: FINDINGS });
+      expect(outcome.ran, review).not.toContain('settle-after-review');
       expect(outcome.ran, review).not.toContain('decide-after-review');
       expect(outcome.state['afterReview'], review).toBeNull();
     }
+  });
+
+  describe('only an approving review of nits alone, or of nothing, is settled publish_as_is with no decision model asked', () => {
+    const NIT_TOO: Finding = { ...NAME, file: 'src/lock.ts', claim: 'The comment says what.' };
+    const nits = (count: number): Finding[] =>
+      Array.from({ length: count }, (_, i) => ({ ...NAME, claim: `Nit ${String(i)}.` }));
+
+    /** Settled by the rules alone: the rounds rule's reason, no model run, no confidence anywhere. */
+    function expectSettled(outcome: Outcome, label: string): void {
+      expect(outcome.outputs.get('settle-after-review'), label).toEqual({
+        decision: 'publish_as_is',
+        reason: NITS_ONLY_REASON,
+      });
+      expect(outcome.ran, label).not.toContain('decide-after-review');
+      expect(outcome.statuses.get('decide-after-review'), label).toBe('skipped');
+      expect(outcome.state['afterReview'], label).toBe('publish_as_is');
+      expect(outcome.outputs.get('describe-pr')?.['afterReview'], label).toBe('publish_as_is');
+    }
+
+    it('records the reason as the rounds rule states it', () => {
+      expect(NITS_ONLY_REASON).toBe('nits-only review: the rounds rule ends the rounds');
+    });
+
+    it('zero findings: publish_as_is without a decision call, and an approving review pushes without asking', () => {
+      // No answer is scripted for the decision: were it asked, it would fail its step.
+      const outcome = reviewedWith({ review: 'approve', findings: [] });
+      expectSettled(outcome, 'zero findings');
+      expect(outcome).toMatchObject({ asked: false, pushed: true });
+    });
+
+    /** Not settled: the verdict sent the review to the decision model, handed the verdict and every finding. */
+    function expectAsked(outcome: Outcome, review: Review, findings: Finding[]): void {
+      expect(outcome.outputs.get('settle-after-review')?.['decision'], review).toBe('undecided');
+      expect(outcome.ran, review).toContain('decide-after-review');
+      const asked = outcome.inputs.get('decide-after-review') as {
+        state: { verdict: unknown; findings: unknown };
+      };
+      expect(asked.state, review).toEqual({ verdict: review, findings });
+    }
+
+    it('zero findings from a review that did not approve: the decision model is called, and even its publish_as_is asks — a review that found nothing and did not approve could not judge the range', () => {
+      for (const review of ['comment', 'request_changes'] as const) {
+        const outcome = reviewedWith({ review, findings: [], afterReview: AS_IS });
+        expectAsked(outcome, review, []);
+        expect(outcome.state['afterReview'], review).toBe('publish_as_is');
+        expect(outcome, review).toMatchObject({ asked: true, pushed: true });
+        expect(outcome.state['pushReason'], review).toContain('could not judge the range');
+      }
+    });
+
+    it('comment + zero findings, fix_before_merge: the decision stands — no pause, nothing pushed, the branch kept local and the run completed', () => {
+      const outcome = reviewedWith({ review: 'comment', findings: [], afterReview: FIX });
+      expectAsked(outcome, 'comment', []);
+      expect(outcome).toMatchObject({ asked: false, pushed: false });
+      expect(outcome.ran).not.toContain('approve-push');
+      for (const taskId of PR_TASKS) expect(outcome.ran).not.toContain(taskId);
+      endedCompleted(outcome);
+      expect(outcome.state).toMatchObject({
+        afterReview: 'fix_before_merge',
+        pushDecision: 'keep_local',
+      });
+      expect(outcome.state['pushReason']).toContain('`fix_before_merge`');
+    });
+
+    it('comment + zero findings, undecided: the operator is asked, and their answer decides', () => {
+      const approved = reviewedWith({ review: 'comment', findings: [], afterReview: BELOW_BAR });
+      expectAsked(approved, 'comment', []);
+      expect(approved.state).toMatchObject({ afterReview: 'undecided', pushDecision: 'ask' });
+      expect(approved).toMatchObject({ asked: true, pushed: true });
+      const declined = reviewedWith({
+        review: 'comment',
+        findings: [],
+        afterReview: BELOW_BAR,
+        decision: 'declined',
+      });
+      expect(declined).toMatchObject({ asked: true, pushed: false });
+    });
+
+    it('approve + all-nit findings: publish_as_is without a decision call, pushing without asking', () => {
+      const outcome = reviewedWith({ review: 'approve', findings: [NAME, NIT_TOO] });
+      expectSettled(outcome, 'approve');
+      expect(outcome).toMatchObject({ asked: false, pushed: true });
+      expect(outcome.outputs.get('describe-pr')?.['severest']).toBe('nit');
+    });
+
+    it('comment or request_changes + all-nit findings: the decision model is called, and the gate follows its answer, never a settlement', () => {
+      for (const review of ['comment', 'request_changes'] as const) {
+        const kept = reviewedWith({ review, findings: [NAME, NIT_TOO], afterReview: FIX });
+        expectAsked(kept, review, [NAME, NIT_TOO]);
+        expect(kept.state, review).toMatchObject({
+          afterReview: 'fix_before_merge',
+          pushDecision: 'keep_local',
+        });
+        expect(kept, review).toMatchObject({ asked: false, pushed: false });
+
+        // No answer cleared the bar: undecided, and the operator is asked.
+        const unsure = reviewedWith({ review, findings: [NAME, NIT_TOO], afterReview: BELOW_BAR });
+        expectAsked(unsure, review, [NAME, NIT_TOO]);
+        expect(unsure.state['afterReview'], review).toBe('undecided');
+        expect(unsure.asked, review).toBe(true);
+      }
+    });
+
+    it('settles as many nits as an approving review can return, and asks the model of a minor at the last place a review can put one', () => {
+      expectSettled(
+        reviewedWith({ review: 'approve', findings: nits(REVIEW_FINDINGS_MAX) }),
+        'all nits',
+      );
+      const last = reviewedWith({
+        review: 'approve',
+        findings: [...nits(REVIEW_FINDINGS_MAX - 1), SLIP],
+        afterReview: FIX,
+      });
+      expect(last.ran).toContain('decide-after-review');
+      expect(last.state['afterReview']).toBe('fix_before_merge');
+    });
+
+    it('one minor among an approving review’s nits: the decision model is called as before, over every finding, and its answer is recorded', () => {
+      const outcome = reviewedWith({ review: 'approve', findings: [NAME, SLIP], afterReview: FIX });
+      expect(outcome.outputs.get('settle-after-review')?.['decision']).toBe('undecided');
+      expect(outcome.ran).toContain('decide-after-review');
+      const asked = outcome.inputs.get('decide-after-review') as { state: { findings: unknown } };
+      expect(asked.state.findings).toEqual([NAME, SLIP]);
+      expect(outcome.state['afterReview']).toBe('fix_before_merge');
+    });
+
+    it('a minor whose decision could not be made is undecided, never settled', () => {
+      const outcome = reviewedWith({ findings: [NAME, SLIP], afterReview: 'unavailable' });
+      expect(outcome.statuses.get('decide-after-review')).toBe('failed');
+      expect(outcome.state['afterReview']).toBe('undecided');
+      expect(outcome.asked).toBe(true);
+    });
+
+    it('names every severity above a nit, so a minor, a major or a blocker always reaches the model, an approving review’s included', () => {
+      for (const severity of ['minor', 'major', 'blocker'] as const) {
+        const outcome = reviewedWith({
+          review: 'approve',
+          findings: [NAME, { ...SLIP, severity }],
+          afterReview: FIX,
+        });
+        expect(outcome.ran, severity).toContain('decide-after-review');
+      }
+      expect(Object.keys(REVIEW_SEVERITIES)).toEqual(['blocker', 'major', 'minor', 'nit']);
+    });
+  });
+
+  it('asks its question with the severity ontology, so the model weighs minors and worse knowing what each means', () => {
+    for (const [severity, meaning] of Object.entries(REVIEW_SEVERITIES)) {
+      expect(AFTER_REVIEW_QUESTION.instructions).toContain(`${severity}: ${meaning}`);
+    }
+    const outcome = reviewedWith({ findings: [SLIP], afterReview: FIX });
+    const asked = outcome.inputs.get('decide-after-review') as {
+      questions: Record<string, { instructions: string }>;
+    };
+    expect(asked.questions['after_review']?.instructions).toBe(AFTER_REVIEW_QUESTION.instructions);
   });
 
   it('names its review run, whose findings a fix round is briefed from, every one whole', () => {

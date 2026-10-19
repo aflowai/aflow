@@ -146,11 +146,24 @@ const AS_IS_LIST = 'Left open by `publish_as_is`';
 
 /**
  * How a `publish_as_is` cleared its push, as the gate decides it from the
- * same record: over a blocker or a major, or on the operator's word, it went
- * out only on the operator's approval — this text is pushed only after it.
+ * same record and the verdict: over a blocker or a major, on the operator's
+ * word, or over no findings from a review that did not approve, it went out
+ * only on the operator's approval — this text is pushed only after it. Only an
+ * approval of nits alone was settled without asking a decision.
  */
-function publishedAsIsClearance(record: PullRequestReviewRecord): string {
+function publishedAsIsClearance(
+  record: PullRequestReviewRecord,
+  verdict: string | null | undefined,
+): string {
+  if (record.severest === undefined) {
+    return verdict === 'approve'
+      ? 'The review found nothing, so no decision was asked, and the push went without asking.'
+      : "The review found nothing and did not approve, so the push went out only on the operator's approval.";
+  }
   const leaves = `and leaves this review's findings open, listed under **${AS_IS_LIST}**.`;
+  if (record.severest === 'nit' && verdict === 'approve') {
+    return `Its findings are nits alone, which end the rounds: no decision was asked, and the push went without asking, ${leaves}`;
+  }
   if (record.severest === 'blocker' || record.severest === 'major') {
     return `With a ${record.severest} among them, the push went out only on the operator's approval, ${leaves}`;
   }
@@ -181,7 +194,9 @@ function reviewSection(input: HostCommitDescribeInput, record: PullRequestReview
     if (review.reviewSummary) parts.push(review.reviewSummary);
   }
   if (record.afterReview !== undefined) parts.push(AFTER_REVIEW_LINES[record.afterReview]);
-  if (record.afterReview === 'publish_as_is') parts.push(publishedAsIsClearance(record));
+  if (record.afterReview === 'publish_as_is') {
+    parts.push(publishedAsIsClearance(record, review?.verdict));
+  }
   if (record.afterReviewOverride !== undefined) {
     parts.push(overrideLine(record.afterReviewOverride));
   }
