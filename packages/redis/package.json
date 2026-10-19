@@ -30,6 +30,6 @@
   "devDependencies": {
     "@types/ioredis-mock": "^8",
     "ioredis-mock": "^8.13.1",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   }
 }

@@ -23,8 +23,8 @@
     "@aflow/schemas": "workspace:*",
     "html-to-text": "^9.0.5",
     "marked": "^17.0.6",
-    "nodemailer": "^10.0.16",
-    "sanitize-html": "^2.18.0"
+    "nodemailer": "^10.1.1",
+    "sanitize-html": "^2.18.1"
   },
   "devDependencies": {
     "@types/html-to-text": "^9.0.4",
@@ -33,6 +33,6 @@
     "@types/sanitize-html": "^2.16.2",
     "tsx": "^4.23.15",
     "typescript": "^5.8.3",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   }
 }

@@ -58,6 +58,6 @@
     "ioredis-mock": "^8.13.1",
     "tsup": "^8.5.0",
     "typescript": "^5.9.2",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   }
 }
