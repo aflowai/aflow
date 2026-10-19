@@ -222,6 +222,8 @@ export async function handleWorkflowRunResume(
   const pauseCause = surfaced.contract.pauseCause;
   if (
     input.resolution.mode === 'acknowledge' &&
+    pauseCause !== 'needs_credentials' &&
+    pauseCause !== 'needs_capability' &&
     (run.tasks.some((task) => task.status === 'paused') || surfaced.contract.failedTaskId)
   ) {
     await emitStepError(

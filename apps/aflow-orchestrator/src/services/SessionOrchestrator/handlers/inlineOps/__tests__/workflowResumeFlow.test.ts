@@ -1754,6 +1754,72 @@ describe('workflow.run.resume — Plan 141 §4.2 provide_input mode', () => {
     expect(error['code']).toBe('RESOLUTION_MODE_NOT_ALLOWED');
   });
 
+  it.each(['needs_credentials', 'needs_capability'] as const)(
+    'acknowledge on %s re-executes the blocked task at its next attempt',
+    async (pauseCause) => {
+      mockResolveWorkflowForRunRevision.mockResolvedValue({
+        workflow: {
+          slug: 'lead-scoring',
+          revision: 1,
+          mode: 'optimization' as const,
+          description: 'Score leads',
+          tasks: [
+            {
+              taskId: 'score-task',
+              name: 'Score Lead',
+              goal: 'g',
+              type: 'agent' as const,
+              retryability: 'safe' as const,
+              maxAttempts: 3,
+            },
+          ],
+          outcomes: [],
+        },
+        source: 'revision' as const,
+      });
+      mockLoadRunById.mockResolvedValueOnce(makePausedRun({ pausedReason: pauseCause }));
+      mockSurfaceWorkflowResumeContract.mockResolvedValue({
+        contract: makeContract({
+          pauseCause,
+          allowedResumeModes: ['acknowledge', 'fail'],
+          failedTaskId: 'score-task',
+        }),
+        pauseVersion: 1,
+        pausedReason: pauseCause,
+        resumeAttemptCount: 0,
+      });
+      mockCommitReExecutePausedTaskAndResume.mockResolvedValue('committed');
+
+      await handleWorkflowCrudInline(
+        makeArgs({
+          runId: RUN_ID,
+          pauseVersion: 1,
+          resolution: {
+            mode: 'acknowledge',
+          },
+        }),
+      );
+
+      expect(mockClaimResumeLease).toHaveBeenCalledTimes(1);
+      expect(mockCommitReExecutePausedTaskAndResume).toHaveBeenCalledTimes(1);
+      const commitArgs = mockCommitReExecutePausedTaskAndResume.mock.calls[0]![2] as Record<
+        string,
+        unknown
+      >;
+      expect(commitArgs['runId']).toBe(RUN_ID);
+      expect(commitArgs['taskId']).toBe('score-task');
+      expect(commitArgs['expectedAttempt']).toBe(1);
+      expect(mockResumeRunWithClaim).not.toHaveBeenCalled();
+
+      expect(mockDispatchRetriedTask).toHaveBeenCalledTimes(1);
+      const dispatchArgs = mockDispatchRetriedTask.mock.calls[0]![1] as Record<string, unknown>;
+      expect(dispatchArgs['runId']).toBe(RUN_ID);
+      expect(dispatchArgs['taskId']).toBe('score-task');
+      expect(dispatchArgs['attempt']).toBe(2);
+      expect(mockDispatchNextOrTerminate).not.toHaveBeenCalled();
+    },
+  );
+
   it('Plan 171 P1 — re_execute happy path commits and routes to dispatchRetriedTask (not dispatchNextOrTerminate)', async () => {
     // Workflow exposes the failed task as `retryability: 'safe'` and a
     // budget of 3 attempts (the Kaggle config moves submit-call to
