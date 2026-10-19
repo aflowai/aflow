@@ -8,6 +8,8 @@ From one walkthrough of the local edition as a new user, in a fresh workspace, o
 
 ## 1. Problem
 
+The publication push approval must remain resolvable for long decision prompts. Human-task pause builders bound `pausedTaskInputContract.prompt` to the schema's 20,000-character ceiling and retain the full decision text in `resumePrompt`. Operator resume refuses every resolution when no contract surfaces, naming the paused reason; task-backed pauses also refuse `acknowledge` regardless of contract availability, before claiming a resume lease. Tests cover oversized human prompts through contract surfacing, all modes with a missing contract, and task-backed acknowledge with and without a contract.
+
 A person installs the appliance, opens a workspace and is met by a hosted product: a rail that names nothing until it is expanded, an empty chat that suggests skills and integrations, a "workspace ready" step that names agents, a Store led by trading and Kaggle, an Integrations page offering repository designations for a lane that is absent here, a connect flow that assumes a source checkout, and credentials buried in a settings tab although most of the product is blocked without them. Nothing says what this computer is, whether it is paired, which coding agent it has, or which folders it reaches. Helmsman is in the same position: it answers the first question well but cannot point at the surface to use, and its own Workbench shows it nothing about the machine.
 
 Memory has the same shape of problem underneath: embeddings need a provider, and today they either ride a platform credential or fail quietly, which leaves memory unsearchable without a word to the operator.

@@ -144,6 +144,69 @@ beforeEach(() => {
   });
 });
 
+describe('executeOperatorWorkflowRunResume — invalid pause resolutions never mutate the run', () => {
+  it.each([
+    { mode: 'acknowledge' },
+    { mode: 'replace_output', output: {} },
+    { mode: 'provide_input', taskId: 'approve-push', inputs: {} },
+    { mode: 're_execute' },
+    { mode: 'retry_failed_task' },
+    { mode: 'reject' },
+    { mode: 'fail', reason: 'declined' },
+  ] as WorkflowRunResumeInput['resolution'][])(
+    'refuses $mode when no contract surfaces',
+    async (resolution) => {
+      mockLoadRunById.mockResolvedValue({
+        status: 'paused',
+        pausedReason: 'task_paused',
+        tasks: [],
+      });
+      mockSurfaceContract.mockResolvedValue(null);
+      const result = await executeOperatorWorkflowRunResume(
+        deps,
+        {
+          tenantId: TENANT,
+          spaceId: SPACE_ID,
+          userId: 'user-1',
+          input: { runId: RUN_ID, pauseVersion: 1, resolution },
+        },
+        hooks,
+      );
+      expect(result).toMatchObject({
+        ok: false,
+        code: 'RESUME_CONTRACT_UNAVAILABLE',
+      });
+      if (!result.ok) expect(result.message).toContain('task_paused');
+      expect(mockClaimResumeLease).not.toHaveBeenCalled();
+      expect(mockResumeRunWithClaim).not.toHaveBeenCalled();
+      expect(mockEmitWorkflowProgress).not.toHaveBeenCalled();
+      expect(hooks.dispatchNextOrTerminate).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([true, false])(
+    'refuses task-backed acknowledge before claiming with contract=%s',
+    async (hasContract) => {
+      mockLoadRunById.mockResolvedValue({
+        status: 'paused',
+        tasks: [{ taskId: 'approve-push', status: 'paused' }],
+      });
+      mockSurfaceContract.mockResolvedValue(
+        hasContract ? { contract: { allowedResumeModes: ['acknowledge'] } } : null,
+      );
+      const result = await executeOperatorWorkflowRunResume(
+        deps,
+        { tenantId: TENANT, spaceId: SPACE_ID, userId: 'user-1', input: ackInput() },
+        hooks,
+      );
+      expect(result).toMatchObject({ ok: false, code: 'ACKNOWLEDGE_TASK_BACKED_NOT_SUPPORTED' });
+      expect(mockClaimResumeLease).not.toHaveBeenCalled();
+      expect(mockResumeRunWithClaim).not.toHaveBeenCalled();
+      expect(hooks.dispatchNextOrTerminate).not.toHaveBeenCalled();
+    },
+  );
+});
+
 describe('executeOperatorWorkflowRunResume — acknowledge emits WorkflowRunUpdate(running)', () => {
   it('emits a live running run-update after a successful acknowledge resume', async () => {
     mockLoadRunById.mockResolvedValue({
@@ -155,6 +218,7 @@ describe('executeOperatorWorkflowRunResume — acknowledge emits WorkflowRunUpda
       resumeAttemptCount: 0,
       pauseVersion: 1,
       startedAt: new Date('2026-06-06T00:00:00Z'),
+      tasks: [],
     });
     mockResumeRunWithClaim.mockResolvedValue(true);
 
@@ -191,6 +255,7 @@ describe('executeOperatorWorkflowRunResume — acknowledge emits WorkflowRunUpda
       resumeAttemptCount: 0,
       pauseVersion: 1,
       startedAt: new Date('2026-06-06T00:00:00Z'),
+      tasks: [],
     });
     mockResumeRunWithClaim.mockResolvedValue(true);
 
@@ -215,6 +280,7 @@ describe('executeOperatorWorkflowRunResume — acknowledge emits WorkflowRunUpda
       resumeAttemptCount: 0,
       pauseVersion: 1,
       startedAt: new Date('2026-06-06T00:00:00Z'),
+      tasks: [],
     });
 
     const result = await executeOperatorWorkflowRunResume(
@@ -244,6 +310,7 @@ describe('executeOperatorWorkflowRunResume — startup preflight pauses are not 
       resumeAttemptCount: 0,
       pauseVersion: 1,
       startedAt: new Date('2026-06-06T00:00:00Z'),
+      tasks: [],
     };
   }
 

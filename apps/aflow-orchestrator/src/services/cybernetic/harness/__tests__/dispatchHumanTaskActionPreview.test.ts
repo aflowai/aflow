@@ -1,8 +1,19 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { MAX_INLINE_PAYLOAD_BYTES, type TenantId, type WorkflowTask } from '@aflow/schemas';
+import {
+  MAX_INLINE_PAYLOAD_BYTES,
+  WorkflowResumeContractSchema,
+  type TenantId,
+  type WorkflowTask,
+} from '@aflow/schemas';
+import { surfaceWorkflowResumeContract } from '@aflow/cybernetic-runtime';
 import type { WorkflowRunDetail } from '@aflow/cybernetic-runtime';
 
 const STORED_REF = 'gs://bucket/tenants/t/runs/r/steps/task-1:actionPreview/attempt/1/output.json';
+const mockTenantQuery = vi.fn();
+vi.mock('@aflow/database', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@aflow/database')>()),
+  withTenantSchema: (...args: unknown[]) => mockTenantQuery(...args),
+}));
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
@@ -94,6 +105,32 @@ beforeEach(() => {
 });
 
 describe('dispatchHumanWorkflowTask — large action preview (Plan 186 §5.D)', () => {
+  it.each([2538, 25000])(
+    'surfaces a valid human pause contract for a %i-character prompt',
+    async (length) => {
+      const args = makeArgs();
+      args.task.pauseInstruction = 'p'.repeat(length);
+      await dispatchHumanWorkflowTask(args);
+      const ref = mockPauseRunOnly.mock.calls[0]![5] as string;
+      const stored = decodeInline(ref);
+      expect(WorkflowResumeContractSchema.safeParse(stored).success).toBe(true);
+      const parsed = WorkflowResumeContractSchema.parse(stored);
+      expect(parsed.pausedTaskInputContract?.prompt?.length).toBe(Math.min(length, 20000));
+      expect(parsed.resumePrompt).toBe(args.task.pauseInstruction);
+      mockTenantQuery
+        .mockResolvedValueOnce({ status: 'paused', pausedPayloadRef: ref, pauseVersion: 1 })
+        .mockResolvedValueOnce(null);
+      const surfaced = await surfaceWorkflowResumeContract(
+        args.deps.db,
+        { retrieve: async () => stored } as never,
+        TENANT,
+        args.runId,
+      );
+      expect(surfaced?.contract.pausedTaskInputContract).toEqual(parsed.pausedTaskInputContract);
+      expect(surfaced?.pauseVersion).toBe(1);
+    },
+  );
+
   it('stores the full preview by reference and surfaces only a head/stat inline', async () => {
     await dispatchHumanWorkflowTask(makeArgs());
 

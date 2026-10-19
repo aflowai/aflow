@@ -513,7 +513,7 @@ describe('buildResumeContract — Plan 171 §2.2.2 decision table', () => {
     const LONG_HANDOFF: SubagentHandoffPayload = {
       payloadKind: 'subagent_handoff',
       handoffSource: 'runner-signal-blocked',
-      prompt: 'a'.repeat(1200), // long handoff; stays within 2000 after unsafe annotation
+      prompt: 'a'.repeat(1200), // long handoff; stays within 20000 after unsafe annotation
       blockingCategory: 'external_dependency',
     };
 
@@ -535,12 +535,12 @@ describe('buildResumeContract — Plan 171 §2.2.2 decision table', () => {
       });
       const parsed = WorkflowResumeContractSchema.safeParse(contract);
       expect(parsed.success).toBe(true);
-      expect((contract.pausedTaskInputContract?.prompt ?? '').length).toBeLessThanOrEqual(2000);
+      expect((contract.pausedTaskInputContract?.prompt ?? '').length).toBeLessThanOrEqual(20000);
       expect(contract.pausedTaskInputContract?.prompt).toContain('remediationConfirmed');
       expect(contract.resumePrompt).toContain('remediationConfirmed');
     });
 
-    it('bounds pausedTaskInputContract.prompt when handoff + unsafe annotation exceed 2000 chars', () => {
+    it('bounds pausedTaskInputContract.prompt when handoff + unsafe annotation exceed 20000 chars', () => {
       const contract = buildResumeContract({
         pauseCause: 'subagent_handoff',
         runId: RUN_ID,
@@ -555,16 +555,16 @@ describe('buildResumeContract — Plan 171 §2.2.2 decision table', () => {
         } as never,
         handoff: {
           ...LONG_HANDOFF,
-          prompt: 'a'.repeat(2500),
+          prompt: 'a'.repeat(25000),
         },
         pausedTaskAttempt: PAUSED_ATTEMPT,
       });
       const parsed = WorkflowResumeContractSchema.safeParse(contract);
       expect(parsed.success).toBe(true);
-      expect(contract.pausedTaskInputContract?.prompt?.length).toBe(2000);
+      expect(contract.pausedTaskInputContract?.prompt?.length).toBe(20000);
       expect(contract.pausedTaskInputContract?.prompt?.endsWith('…')).toBe(true);
       // Uncapped resumePrompt keeps the full handoff + annotation.
-      expect((contract.resumePrompt ?? '').length).toBeGreaterThan(2000);
+      expect((contract.resumePrompt ?? '').length).toBeGreaterThan(20000);
     });
 
     it('missing_input subagent_handoff round-trips when handoff.prompt is huge', () => {
@@ -587,7 +587,7 @@ describe('buildResumeContract — Plan 171 §2.2.2 decision table', () => {
       });
       const parsed = WorkflowResumeContractSchema.safeParse(contract);
       expect(parsed.success).toBe(true);
-      expect((contract.pausedTaskInputContract?.prompt ?? '').length).toBeLessThanOrEqual(2000);
+      expect((contract.pausedTaskInputContract?.prompt ?? '').length).toBeLessThanOrEqual(20000);
     });
 
     it('task_contract_violation round-trips when resumePrompt is huge', () => {
@@ -601,7 +601,7 @@ describe('buildResumeContract — Plan 171 §2.2.2 decision table', () => {
       });
       const parsed = WorkflowResumeContractSchema.safeParse(contract);
       expect(parsed.success).toBe(true);
-      expect((contract.pausedTaskInputContract?.prompt ?? '').length).toBeLessThanOrEqual(2000);
+      expect((contract.pausedTaskInputContract?.prompt ?? '').length).toBeLessThanOrEqual(20000);
       expect(contract.resumePrompt.length).toBe(1500);
     });
 
@@ -624,7 +624,7 @@ describe('buildResumeContract — Plan 171 §2.2.2 decision table', () => {
         });
         const parsed = WorkflowResumeContractSchema.safeParse(contract);
         expect(parsed.success).toBe(true);
-        expect((contract.pausedTaskInputContract?.prompt ?? '').length).toBeLessThanOrEqual(2000);
+        expect((contract.pausedTaskInputContract?.prompt ?? '').length).toBeLessThanOrEqual(20000);
       }
     });
   });

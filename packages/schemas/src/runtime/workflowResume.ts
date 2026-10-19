@@ -188,7 +188,7 @@ export const PausedTaskInputContractSchema = z.object({
    * event-side `retry_failed_task` slot, this is the empty object `{}`.
    */
   schema: z.record(z.unknown()),
-  prompt: z.string().max(2000).optional(),
+  prompt: z.string().max(20000).optional(),
   /** Which resolution mode this contract is shaped for. */
   resolutionMode: z.enum([
     'provide_input',

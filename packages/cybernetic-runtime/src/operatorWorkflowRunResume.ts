@@ -106,14 +106,6 @@ export async function executeOperatorWorkflowRunResume(
   const tenantIdStr = args.tenantId as string;
   const { runId } = args.input;
 
-  if (args.input.resolution.mode === 'retry_failed_task') {
-    return {
-      ok: false,
-      code: 'RETRY_VIA_AGENT',
-      message: 'retry_failed_task must be invoked by Helmsman, not the operator UI.',
-    };
-  }
-
   const pauseVersion = args.input.pauseVersion;
   if (pauseVersion === undefined) {
     return { ok: false, code: 'STALE_PAUSE_VERSION', message: 'pauseVersion is required.' };
@@ -139,8 +131,36 @@ export async function executeOperatorWorkflowRunResume(
     runId,
   );
 
-  const advertisedModes = surfaced?.contract.allowedResumeModes ?? null;
-  if (advertisedModes && !advertisedModes.includes(args.input.resolution.mode)) {
+  if (
+    args.input.resolution.mode === 'acknowledge' &&
+    (run.tasks.some((task) => task.status === 'paused') || surfaced?.contract.failedTaskId)
+  ) {
+    return {
+      ok: false,
+      code: 'ACKNOWLEDGE_TASK_BACKED_NOT_SUPPORTED',
+      message:
+        'This pause is task-backed; acknowledge would strand the paused task. Use a task resolution through workflow.run.resume.',
+    };
+  }
+
+  if (!surfaced) {
+    return {
+      ok: false,
+      code: 'RESUME_CONTRACT_UNAVAILABLE',
+      message: `Run ${runId} paused on "${run.pausedReason ?? 'unknown'}" but no resume contract surfaced (payload retrieval or schema validation failed). Cannot resolve mode "${args.input.resolution.mode}" without a valid contract.`,
+    };
+  }
+
+  if (args.input.resolution.mode === 'retry_failed_task') {
+    return {
+      ok: false,
+      code: 'RETRY_VIA_AGENT',
+      message: 'retry_failed_task must be invoked by Helmsman, not the operator UI.',
+    };
+  }
+
+  const advertisedModes = surfaced.contract.allowedResumeModes ?? [];
+  if (!advertisedModes.includes(args.input.resolution.mode)) {
     return {
       ok: false,
       code: 'RESOLUTION_MODE_NOT_ALLOWED',
@@ -150,7 +170,7 @@ export async function executeOperatorWorkflowRunResume(
 
   if (
     args.input.resolution.mode === 'acknowledge' &&
-    surfaced?.contract.suggestedResumeCall?.op === 'human.action_center.focus'
+    surfaced.contract.suggestedResumeCall?.op === 'human.action_center.focus'
   ) {
     return {
       ok: false,
@@ -190,7 +210,7 @@ export async function executeOperatorWorkflowRunResume(
       // contract the same way; this is the operator-UI mirror of that
       // path. Gating on the run row instead makes every Approve click
       // on the run-surface card 400 with OPERATOR_REPLACE_NOT_SUPPORTED.
-      if (surfaced?.contract.pauseCause !== 'needs_decision') {
+      if (surfaced.contract.pauseCause !== 'needs_decision') {
         await releaseResumeClaim(deps.db, tenantIdStr, runId, claimToken);
         return {
           ok: false,
@@ -234,8 +254,8 @@ export async function executeOperatorWorkflowRunResume(
       // paused approval row until a manual refresh re-fetches the run
       // detail. dispatchNextOrTerminate (called below) emits updates
       // for the NEXT tasks but never for the one we just resumed.
-      const taskId = surfaced?.contract.failedTaskId;
-      const taskLabel = resolved?.workflow?.tasks.find((t) => t.taskId === taskId)?.name ?? taskId;
+      const taskId = surfaced.contract.failedTaskId;
+      const taskLabel = resolved.workflow.tasks.find((t) => t.taskId === taskId)?.name ?? taskId;
       if (taskId) {
         // Stamp the resolved-decision trace so the operator who just approved
         // sees the surface's decision pill immediately — without waiting for a
@@ -307,7 +327,7 @@ export async function executeOperatorWorkflowRunResume(
       // paused approval row until a manual refresh re-fetches detail.
       const taskId = result.failedTaskId;
       const taskRow = run.tasks.find((t) => t.taskId === taskId);
-      const taskLabel = resolved?.workflow?.tasks.find((t) => t.taskId === taskId)?.name ?? taskId;
+      const taskLabel = resolved.workflow.tasks.find((t) => t.taskId === taskId)?.name ?? taskId;
       if (taskId) {
         const decidedByLabel = args.userId
           ? await resolveUserLabel(deps.db, args.userId).catch(() => args.userId)
@@ -327,7 +347,7 @@ export async function executeOperatorWorkflowRunResume(
               payload: {
                 runId,
                 taskId,
-                label: taskLabel ?? taskId,
+                label: taskLabel,
                 status: 'failed',
                 attempt: taskRow?.attempt ?? 1,
                 taskType: 'human',
@@ -374,7 +394,7 @@ export async function executeOperatorWorkflowRunResume(
       // from `paused` to `skipped` immediately (mirror of the approve emit).
       const taskId = result.skippedTaskId;
       const taskRow = run.tasks.find((t) => t.taskId === taskId);
-      const taskLabel = resolved?.workflow?.tasks.find((t) => t.taskId === taskId)?.name ?? taskId;
+      const taskLabel = resolved.workflow.tasks.find((t) => t.taskId === taskId)?.name ?? taskId;
       const decidedByLabel = args.userId
         ? await resolveUserLabel(deps.db, args.userId).catch(() => args.userId)
         : undefined;
@@ -394,7 +414,7 @@ export async function executeOperatorWorkflowRunResume(
             payload: {
               runId,
               taskId,
-              label: taskLabel ?? taskId,
+              label: taskLabel,
               status: 'skipped',
               attempt: taskRow?.attempt ?? 1,
               taskType: 'human',
@@ -419,23 +439,13 @@ export async function executeOperatorWorkflowRunResume(
           runId,
           skipped: result.skippedDescendantTaskIds.map((id) => ({
             taskId: id,
-            label: resolved?.workflow?.tasks.find((t) => t.taskId === id)?.name ?? id,
+            label: resolved.workflow.tasks.find((t) => t.taskId === id)?.name ?? id,
           })),
         },
       );
     } else if (resolution.mode === 'acknowledge') {
-      if (surfaced?.contract.failedTaskId) {
-        await releaseResumeClaim(deps.db, tenantIdStr, runId, claimToken);
-        return {
-          ok: false,
-          code: 'ACKNOWLEDGE_TASK_BACKED_NOT_SUPPORTED',
-          message:
-            'This pause is task-backed; acknowledge via the operator route would strand the paused task. ' +
-            'Resume through Helmsman (workflow.run.resume), which re-executes the blocked task after credentials are fixed.',
-        };
-      }
       // A startup preflight pause is raised before any task exists, so it
-      // carries no `failedTaskId` and the guard above does not catch it.
+      // carries no paused task and the task-backed guard does not catch it.
       // Acknowledging a capability pause here would release the run without
       // re-asking the question that paused it, and operation tasks dispatch
       // directly without passing step gating — nothing downstream would catch
@@ -443,7 +453,7 @@ export async function executeOperatorWorkflowRunResume(
       // re-runs that check. Scoped to `needs_capability`: a credentials pause
       // resolves at the call itself, which refuses on its own, so refusing it
       // here would withdraw a route operators already use.
-      if (surfaced?.contract.pauseCause === 'needs_capability') {
+      if (surfaced.contract.pauseCause === 'needs_capability') {
         await releaseResumeClaim(deps.db, tenantIdStr, runId, claimToken);
         return {
           ok: false,
@@ -467,7 +477,7 @@ export async function executeOperatorWorkflowRunResume(
 
       await emitRunResumedRunning(deps, tenantIdStr, runId, run);
     } else if (resolution.mode === 're_execute') {
-      const failedTaskId = surfaced?.contract.failedTaskId;
+      const failedTaskId = surfaced.contract.failedTaskId;
       const failedRow = failedTaskId ? run.tasks.find((t) => t.taskId === failedTaskId) : undefined;
       if (!failedTaskId || !failedRow) {
         await releaseResumeClaim(deps.db, tenantIdStr, runId, claimToken);
