@@ -10,15 +10,18 @@
  *
  * And the workload shares no output description with the launcher: its
  * standard output stays blocking however the launcher uses its own, so a
- * harness that dies on a failed print writes everything it means to.
+ * harness that dies on a failed print writes everything it means to. The
+ * probe that shows it is python3's; a machine without python3 on PATH skips
+ * it by name instead of failing it for a reason it does not state.
  */
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { accessSync, constants } from 'node:fs';
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 
 import { wrapCommandWithSandboxMacOS } from '@anthropic-ai/sandbox-runtime/dist/sandbox/macos-sandbox-utils.js';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, type TestContext } from 'vitest';
 
 import type { HostBinding } from '../bindings.js';
 import { compileSandboxPolicy } from '../sandboxPolicy.js';
@@ -127,6 +130,70 @@ describe('the macOS profile an `open` job runs under', () => {
   });
 });
 
+const PYTHON3_ABSENT = 'python3 not on PATH';
+
+/** Why the stdout probe cannot run on this PATH, or null when python3 is on it. */
+function python3Absence(pathEnv: string | undefined): string | null {
+  const names = process.platform === 'win32' ? ['python3.exe', 'python3'] : ['python3'];
+  for (const dir of (pathEnv ?? '').split(delimiter)) {
+    if (dir === '') continue;
+    for (const name of names) {
+      try {
+        accessSync(join(dir, name), constants.X_OK);
+        return null;
+      } catch {
+        // Not in this entry; a later one may hold it.
+      }
+    }
+  }
+  return PYTHON3_ABSENT;
+}
+
+function skipWithoutPython3(skip: TestContext['skip'], pathEnv: string | undefined): void {
+  const reason = python3Absence(pathEnv);
+  if (reason !== null) skip(reason);
+}
+
+describe('the stdout probe’s python3 gate', () => {
+  let dir: string;
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'open-launcher-python3-'));
+  });
+  afterAll(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  /** Records each call and throws, as the runner's own skip ends the test there. */
+  function recordingSkip(): { skip: TestContext['skip']; reasons: Array<string | undefined> } {
+    const reasons: Array<string | undefined> = [];
+    const skip = ((reason?: string) => {
+      reasons.push(reason);
+      throw new Error('skipped');
+    }) as TestContext['skip'];
+    return { skip, reasons };
+  }
+
+  it('skips, naming the reason, on a PATH that holds no python3', () => {
+    const { skip, reasons } = recordingSkip();
+    expect(() => skipWithoutPython3(skip, dir)).toThrow('skipped');
+    expect(() => skipWithoutPython3(skip, undefined)).toThrow('skipped');
+    expect(reasons).toEqual([PYTHON3_ABSENT, PYTHON3_ABSENT]);
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'does not skip on a PATH that holds an executable python3',
+    async () => {
+      const binDir = join(dir, 'bin');
+      await mkdir(binDir, { recursive: true });
+      await writeFile(join(binDir, 'python3'), '#!/bin/sh\n');
+      await chmod(join(binDir, 'python3'), 0o755);
+      const { skip, reasons } = recordingSkip();
+      skipWithoutPython3(skip, [dir, binDir].join(delimiter));
+      expect(reasons).toEqual([]);
+    },
+  );
+});
+
 describe('the workload’s standard output under the `open` launcher', () => {
   const PAYLOAD_BYTES = 4 * 1024 * 1024;
 
@@ -169,7 +236,8 @@ describe('the workload’s standard output under the `open` launcher', () => {
 
   it.skipIf(process.platform === 'win32')(
     'stays blocking after the launcher touches its own, and carries 4 MB whole',
-    async () => {
+    async ({ skip }) => {
+      skipWithoutPython3(skip, process.env['PATH']);
       const probePath = join(dir, 'probe.py');
       const driverPath = join(dir, 'driver.mjs');
       await writeFile(probePath, PROBE);
