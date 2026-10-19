@@ -25,8 +25,13 @@ import {
   text,
 } from './localPrShepherdWiring.js';
 
-/** `shepherd/<owner>/<repo>/pulls/<number>.json`: a pull request's pinned handoff, never a branch's. */
-const HANDOFF_PIN_PATH = {
+/**
+ * `shepherd/<owner>/<repo>/pulls/<number>.json`: a pull request's pinned
+ * handoff, never a branch's, bound from `owner`, `repo` and `number`. Its one
+ * spelling: Local Publish verifies a shepherd-rule override by reading the pin
+ * here, and a read spelled apart from this write would refuse every one.
+ */
+export const HANDOFF_PIN_PATH = {
   $concat: [
     `${SHEPHERD_LEASE_ROOT}/`,
     bind('owner'),

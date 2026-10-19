@@ -130,7 +130,7 @@ function withBindingDependencies<T extends ShepherdTask>(tasks: T[]): T[] {
 
 const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
   catalogId: 'local-pr-shepherd',
-  version: 1,
+  version: 2,
   name: 'Local PR Shepherd',
   tagline:
     'Tend the pull requests the loop opened: read their CI, and fix and publish a red check through Local Publish — never approving, merging or closing.',
@@ -579,7 +579,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
         {
           taskId: 'publish',
           name: 'Publish the fix through Local Publish',
-          goal: "Publish the commission's change onto the pull request's branch through Local Publish and wait for it to end: its checks, its scan, its review and its approval as the folder's posture has them — it asks the operator exactly where it would when started by hand.",
+          goal: "Publish the commission's change onto the pull request's branch through Local Publish and wait for it to end: its checks, its scan, its review, the decision on the review's findings and its approval as the folder's posture has them — it asks the operator exactly where it would when started by hand, and follows the decision.",
           type: 'operation' as const,
           operation: 'workflow.run.start',
           when: {
@@ -660,7 +660,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
       output: {
         primary: 'decision',
         guidance:
-          'Report the decision and its reason. Where publicationRunId is set, the fix went through Local Publish: report its pull request and whether it pushed or waits at its approval, which is the operator’s.',
+          'Report the decision and its reason. Where publicationRunId is set, the fix went through Local Publish: report its pull request and whether it pushed, waits at its approval, which is the operator’s, or kept the branch local on the decision fix_before_merge — its afterReview and reviewRunId, from which the fix round on the review’s findings is commissioned.',
       },
       iteration: { auto: false, maxConsecutiveRuns: 1, stopOnOutcomesMet: true, cooldownMs: 0 },
     },

@@ -64,12 +64,72 @@ export const AFTER_REVIEW_UNDECIDED = 'undecided';
 export const AfterReviewSchema = z
   .enum([...AFTER_REVIEW_DECIDED, AFTER_REVIEW_UNDECIDED])
   .describe(
-    "What the publication decided about its review's findings: `fix_before_merge`, a fix " +
-      'round on the branch before it merges; `publish_as_is`, they can merge as they stand; ' +
-      "`undecided`, no answer cleared the decision's bar, or none could be made. Recorded, never " +
-      'acted on by the publication: a fix round is the conversation’s, or the shepherd’s.',
+    "What the publication decided about its review's findings, and what its push gate " +
+      'follows: `fix_before_merge`, a fix round on the branch before it merges — nothing is ' +
+      'pushed and the branch stays local; `publish_as_is`, they can merge as they stand — the ' +
+      'push goes without asking over findings no more severe than minor, and waits for the ' +
+      "operator over a blocker or a major; `undecided`, no answer cleared the decision's bar, " +
+      'or none could be made — the push waits for the operator. The fix round is the ' +
+      'conversation’s, or the shepherd’s.',
   );
 export type AfterReview = z.infer<typeof AfterReviewSchema>;
+
+/**
+ * Who may set a decision aside: the operator's own word, the `hands-off` label
+ * a person put on the pull request, or a rule of the shepherd's that holds —
+ * its attempt budget reached. Nothing else overrides, every override is
+ * recorded with the reason it names, and none is taken on the caller's say:
+ * the publication checks each against what it reads itself, and refuses one
+ * it cannot.
+ */
+export const AFTER_REVIEW_OVERRIDE_AUTHORITIES = [
+  'operator',
+  'hands_off_label',
+  'shepherd_rule',
+] as const;
+
+export const AfterReviewOverrideSchema = z
+  .object({
+    by: z
+      .enum(AFTER_REVIEW_OVERRIDE_AUTHORITIES)
+      .describe(
+        'Whose act sets the decision aside, and what the publication checks it by: ' +
+          "`operator`, the operator's own word, which it takes only from the operator — the " +
+          'push waits for their approval in the run; `hands_off_label`, the `hands-off` ' +
+          "label, which must be on the branch's open pull request into the base as GitHub " +
+          "returns it; `shepherd_rule`, the shepherd's attempt budget spent, which the " +
+          "shepherd's own record on that pull request — its pinned handoff, from the author " +
+          'it was pinned as — must hold as the decision `abandon`.',
+      ),
+    reason: z
+      .string()
+      .min(1)
+      .max(4000)
+      .describe(
+        'Why, in words a reader of the pull request understands — the operator’s instruction, ' +
+          'the label, or the rule and what it read.',
+      ),
+  })
+  .strict()
+  .describe(
+    "Publish as is over this publication's decision on its review findings. The decision " +
+      'stands unless this is given. Given where it would set a decision aside, the ' +
+      'publication checks its authority first: one it cannot verify fails the run with the ' +
+      'refusal, and nothing is pushed. A verified one is recorded as `publish_as_is`, with ' +
+      'the decision it set aside and this reason, on the run and on the pull request, and the ' +
+      'push follows `publish_as_is` — asking over a blocker or a major, and always asking ' +
+      "where the authority is the operator's word. It never stands in for a folder whose " +
+      'push approval is `always`, or for a range the scan did not clear.',
+  );
+export type AfterReviewOverride = z.infer<typeof AfterReviewOverrideSchema>;
+
+/** An override as a publication records it: who, why, and the decision it set aside. */
+export const AfterReviewOverrideRecordSchema = AfterReviewOverrideSchema.extend({
+  overrode: z
+    .enum(['fix_before_merge', AFTER_REVIEW_UNDECIDED])
+    .describe('The decision the override set aside.'),
+}).strict();
+export type AfterReviewOverrideRecord = z.infer<typeof AfterReviewOverrideRecordSchema>;
 
 export const PullRequestGapsSchema = z
   .array(z.string().min(1).max(8000))
@@ -109,7 +169,9 @@ export const HostCommitDescribeInputSchema = z.object({
     .max(PULL_REQUEST_BODY_MAX_CHARS)
     .optional()
     .describe(
-      'A body a person wrote. Given, it is the body as it stands, and nothing is composed.',
+      'Words a person wrote for the body. Given, they head it, and the composed body follows ' +
+        'under them whole — the decision on the findings, those left open and any override ' +
+        'among it — so a summary never hides what the publication records.',
     ),
   findings: PullRequestFindingsSchema.optional(),
   review: z
@@ -133,6 +195,7 @@ export const HostCommitDescribeInputSchema = z.object({
       "The decision on the review's findings as it answered: null where the answer fell below " +
         'its bar, absent where none was made.',
     ),
+  override: AfterReviewOverrideSchema.optional(),
   check: CheckRunSchema.optional().describe("The folder's checks on the commit, as they ran."),
   recheck: CheckRunSchema.optional().describe(
     'Their second run, where the first lost only to tests running out of time.',
@@ -212,7 +275,7 @@ function fitted(finding: PullRequestFinding): PullRequestFinding {
  * The findings a publication hands on, held within their share of a later
  * publication's inputs: the most severe first, as many as the count allows,
  * each cut to its bytes, and how many the count left out, where it left any.
- * The pull request's own text keeps every finding whole, and the review run
+ * The pull request's own text lists them whole as far as its limit leaves room, and the review run
  * keeps every finding as it returned them, which is what a fix round reads.
  */
 function handedOn(
@@ -232,6 +295,21 @@ export interface PullRequestReviewRecord {
   /** How many open findings the hand-on left out to stay within its share; absent where none. */
   findingsLeftOut?: number;
   afterReview?: AfterReview;
+  /** Present only where an override set a decision other than `publish_as_is` aside. */
+  afterReviewOverride?: AfterReviewOverrideRecord;
+  /** The most severe of this review's findings, beside the decision on them: what the push gate holds `publish_as_is` to. */
+  severest?: PullRequestFinding['severity'];
+}
+
+/** The most severe of `findings`. */
+function severestOf(
+  findings: ReadonlyArray<Pick<PullRequestFinding, 'severity'>>,
+): PullRequestFinding['severity'] {
+  let worst: PullRequestFinding['severity'] = 'nit';
+  for (const { severity } of findings) {
+    if (SEVERITY_RANK[severity] < SEVERITY_RANK[worst]) worst = severity;
+  }
+  return worst;
 }
 
 /**
@@ -246,7 +324,13 @@ export interface PullRequestReviewRecord {
  *
  * The decision on them is recorded exactly where this review returned
  * findings — the decision is asked only then — and an answer that is missing
- * there, below the bar or never made, is recorded as `undecided`.
+ * there, below the bar or never made, is recorded as `undecided`. An override
+ * turns a `fix_before_merge` or an `undecided` into `publish_as_is`, recorded
+ * beside what it set aside; over a `publish_as_is`, or where nothing was
+ * decided, it sets nothing aside and is not recorded. Whether the override's
+ * authority holds is the publication's to check before it composes; this
+ * only records it. Beside the decision goes the most severe finding, which
+ * the push gate holds a `publish_as_is` to.
  */
 export function pullRequestReviewRecord(input: HostCommitDescribeInput): PullRequestReviewRecord {
   const reviewFindings = input.review?.findings;
@@ -257,7 +341,17 @@ export function pullRequestReviewRecord(input: HostCommitDescribeInput): PullReq
     reviewFindings.map((finding) => ({ ...finding, state: 'open' as const })),
   );
   if (handed.findings.length === 0) return handed;
-  return { ...handed, afterReview: input.afterReview ?? AFTER_REVIEW_UNDECIDED };
+  const severest = severestOf(reviewFindings);
+  const decided = input.afterReview ?? AFTER_REVIEW_UNDECIDED;
+  if (input.override === undefined || decided === 'publish_as_is') {
+    return { ...handed, afterReview: decided, severest };
+  }
+  return {
+    ...handed,
+    afterReview: 'publish_as_is',
+    severest,
+    afterReviewOverride: { ...input.override, overrode: decided },
+  };
 }
 
 export const HostCommitDescribeCommitSchema = z.object({
@@ -280,9 +374,10 @@ export const HostCommitDescribeOutputSchema = z.object({
     .min(1)
     .max(PULL_REQUEST_BODY_MAX_CHARS)
     .describe(
-      "The pull request's body: the summary given, or what the branch changes — every " +
-        "commit's message, oldest first — the review's findings closed and left open, the " +
-        "checks' results as verification, and the gaps the commissions recorded. Read for " +
+      "The pull request's body: the summary given, where one was, then what the branch " +
+        "changes — every commit's message, oldest first — the review and the decision on its " +
+        "findings, the checks' results as verification, the gaps the commissions recorded, and " +
+        'last the findings — closed and left open — as far as the limit leaves room. Read for ' +
         'secrets under the same rules as the commits before it is returned.',
     ),
   commits: z
@@ -311,5 +406,16 @@ export const HostCommitDescribeOutputSchema = z.object({
     "The decision on this publication's review findings, as the body records it; absent " +
       'where the review returned none.',
   ),
+  afterReviewOverride: AfterReviewOverrideRecordSchema.optional().describe(
+    'The override that turned the decision into `publish_as_is`, with the decision it set ' +
+      'aside; absent where none did.',
+  ),
+  severest: PullRequestFindingSchema.shape.severity
+    .optional()
+    .describe(
+      "The most severe of this publication's review findings, which a `publish_as_is` is " +
+        'held to: over a blocker or a major the push waits for the operator. Absent where the ' +
+        'review returned none.',
+    ),
 });
 export type HostCommitDescribeOutput = z.infer<typeof HostCommitDescribeOutputSchema>;

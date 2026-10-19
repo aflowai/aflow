@@ -8,11 +8,11 @@ import type { z } from 'zod';
  * of decision quality on the loop's own history (`yarn decisions:measure-loop`,
  * Plan 316 §7) asks exactly what the skill asks.
  *
- * Only the question after a review is the skill's, and its answer is only
- * recorded — on the pull request and as the run's `afterReview`, `undecided`
- * below its bar, Jev's, measured over 17 cases — never acted on by the run:
- * a fix round is the conversation's or the shepherd's. The question after a
- * failed check is asked by the
+ * Only the question after a review is the skill's. Its answer is recorded — on
+ * the pull request and as the run's `afterReview`, `undecided` below its bar,
+ * Jev's, measured over 17 cases — and the push gate follows it
+ * (`publishLocalChangesGate.ts`); the fix round is the conversation's or the
+ * shepherd's. The question after a failed check is asked by the
  * measurement alone until it has labelled `operator_install_mismatch` cases
  * (Plan 316 §7); a failed check fails the run.
  */
