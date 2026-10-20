@@ -98,8 +98,12 @@ function changed(
   change: ChecksChange,
   bindingId: string,
 ): HostBindingBranchPolicy {
-  const { branchPrefix, pushApproval } = branchPolicy;
-  const rest = { branchPrefix, ...(pushApproval !== undefined ? { pushApproval } : {}) };
+  const { branchPrefix, pushApproval, mergePosture } = branchPolicy;
+  const rest = {
+    branchPrefix,
+    ...(pushApproval !== undefined ? { pushApproval } : {}),
+    ...(mergePosture !== undefined ? { mergePosture } : {}),
+  };
   switch (change.kind) {
     case 'clear':
       return rest;

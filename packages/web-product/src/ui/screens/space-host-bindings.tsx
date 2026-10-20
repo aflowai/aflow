@@ -13,7 +13,7 @@ import {
   HelperText,
   Badge,
 } from '@aflow/design-system';
-import type { HostPushApproval } from '@aflow/schemas';
+import type { HostMergePosture, HostPushApproval } from '@aflow/schemas';
 import { useSpace, useSpaceFromRoute } from '../components/providers.js';
 import { useEdition } from '../hooks/useEdition.js';
 import { useApiQuery, useApiMutation } from '../hooks/useApiQuery.js';
@@ -31,6 +31,10 @@ interface HostBinding {
   branchPrefix: string | null;
   /** Null where the folder pushes nothing, or its machine is not running. */
   pushApproval: HostPushApproval | null;
+  /** Null where pushApproval is. */
+  mergePosture: HostMergePosture | null;
+  /** Why the merge posture merges nothing as it stands; null where it can merge. */
+  mergePostureIdleReason: string | null;
 }
 
 const PUSH_APPROVAL_LINE: Record<HostPushApproval, string> = {
@@ -38,6 +42,12 @@ const PUSH_APPROVAL_LINE: Record<HostPushApproval, string> = {
   never: 'A publication from here pushes without asking.',
   'unless-unreviewed':
     'A publication from here reviews its commit and asks you before pushing unless the review approves it.',
+};
+
+const MERGE_POSTURE_LINE: Record<HostMergePosture, string> = {
+  never: 'Its pull requests are yours to merge.',
+  'when-green':
+    "The PR Shepherd merges its pull requests by squash once the required checks pass, the publication's review approved the head and no one requests changes — each merge on your approval.",
 };
 
 interface BindingsResponse {
@@ -232,6 +242,13 @@ export function SpaceHostBindingsPage() {
                       {binding.pushApproval !== null && (
                         <Text variant="muted" size="sm">
                           {PUSH_APPROVAL_LINE[binding.pushApproval]}
+                        </Text>
+                      )}
+                      {binding.mergePosture !== null && (
+                        <Text variant="muted" size="sm">
+                          {binding.mergePostureIdleReason !== null
+                            ? `Set to merge when green, it merges nothing: ${binding.mergePostureIdleReason}.`
+                            : MERGE_POSTURE_LINE[binding.mergePosture]}
                         </Text>
                       )}
                     </Column>

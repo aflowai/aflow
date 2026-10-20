@@ -59,8 +59,30 @@ export const SHEPHERD_HANDOFF_FIELDS = [
   'classification',
   'remedy',
   'publicationRunId',
+  'mergeDeclinedSha',
+  'mergeRefusedSha',
+  'mergeCommitSha',
 ] as const;
 export type ShepherdHandoffField = (typeof SHEPHERD_HANDOFF_FIELDS)[number];
+
+/**
+ * The three ways a merge the shepherd asked for ends — the operator declined
+ * the card, GitHub refused the request pinned to the head, or GitHub merged
+ * it — each the decision of the rule step that reads it, and the handoff field
+ * that records it. A template has no condition, so the handoff writes this
+ * pass's outcome as one line, `mergeOutcome: <outcome> <sha>`, and
+ * {@link parseShepherdHandoff} files the sha under the outcome's field.
+ */
+export const SHEPHERD_MERGE_OUTCOMES = {
+  merge_declined: 'mergeDeclinedSha',
+  merge_refused: 'mergeRefusedSha',
+  merged: 'mergeCommitSha',
+} as const satisfies Record<string, ShepherdHandoffField>;
+export type ShepherdMergeOutcome = keyof typeof SHEPHERD_MERGE_OUTCOMES;
+export const SHEPHERD_MERGE_OUTCOME_FIELDS = Object.values(SHEPHERD_MERGE_OUTCOMES);
+
+/** The handoff line that carries this pass's merge outcome; not itself a field of the record. */
+export const SHEPHERD_MERGE_OUTCOME_LINE = 'mergeOutcome';
 
 export interface ShepherdHandoffRecord {
   /** Failures acted on so far. */
@@ -74,13 +96,21 @@ export interface ShepherdHandoffRecord {
   /** The remedy the pass took: what its brief and the next classification read as the round before. */
   remedy?: string;
   publicationRunId?: string;
+  /** A head whose merge the operator declined: no later pass asks again on it. */
+  mergeDeclinedSha?: string;
+  /** A head GitHub refused to merge on the shepherd's request: no later pass asks again on it. */
+  mergeRefusedSha?: string;
+  /** The commit GitHub's squash merge made, where the shepherd's merge went through. */
+  mergeCommitSha?: string;
 }
 
 /**
  * The record a handoff comment's body carries, or null where the body is not
  * a handoff. A field written empty, or a count that is not a whole number, is
  * read as absent: the next pass then acts as on a first failure rather than
- * refusing to read the pull request at all.
+ * refusing to read the pull request at all. A merge outcome on the
+ * {@link SHEPHERD_MERGE_OUTCOME_LINE} line stands over the same field carried
+ * forward from an earlier pass.
  */
 export function parseShepherdHandoff(body: string): ShepherdHandoffRecord | null {
   const text = body.trimStart();
@@ -104,6 +134,10 @@ export function parseShepherdHandoff(body: string): ShepherdHandoffRecord | null
     const value = values.get(field);
     if (value !== undefined) record[field] = value;
   }
+  const outcome = /^([a-z_]+) (\S+)$/.exec(values.get(SHEPHERD_MERGE_OUTCOME_LINE) ?? '');
+  if (outcome !== null && Object.hasOwn(SHEPHERD_MERGE_OUTCOMES, outcome[1]!)) {
+    record[SHEPHERD_MERGE_OUTCOMES[outcome[1] as ShepherdMergeOutcome]] = outcome[2]!;
+  }
   return record;
 }
 
@@ -122,6 +156,15 @@ export function parseShepherdHandoff(body: string): ShepherdHandoffRecord | null
  * request's number, `loop_handoff:aflow-bot:94`: a record from any other author,
  * or on another pull request, is no record. With no login, `loop_handoff::94`,
  * no record is trusted. A login holds no colon.
+ *
+ * The merge reads (D6): `requiredRules` shapes the base branch's ruleset rules
+ * into the check names they require; `requiredProtection` shapes the branch
+ * and its classic protection, taking the rules' names after a colon, into the
+ * union of the two; `checkRuns` takes that union after a colon and says of
+ * each required name whether a check run on the head passed it. Names travel
+ * as {@link encodeRequiredChecks} writes them, since a template joins text
+ * and nothing else. `reviews` shapes one page of reviews into each person's
+ * standing verdict.
  */
 export const SHEPHERD_RESPONSE_PRESETS = {
   pullRequests: 'loop_pulls',
@@ -129,7 +172,34 @@ export const SHEPHERD_RESPONSE_PRESETS = {
   checkRuns: 'loop_checks',
   handoff: 'loop_handoff',
   failingJobs: 'loop_failing_jobs',
+  requiredRules: 'loop_required_rules',
+  requiredProtection: 'loop_required_protection',
+  reviews: 'loop_reviews',
 } as const;
+
+/**
+ * A set of check names as one line of text: each URI-encoded, so no name can
+ * hold the separator, joined by commas in sorted order. The empty set is the
+ * empty string, which is a set read and found empty — never a set unread.
+ */
+export function encodeRequiredChecks(names: Iterable<string>): string {
+  return [...new Set(names)]
+    .sort()
+    .map((name) => encodeURIComponent(name))
+    .join(',');
+}
+
+/** The names {@link encodeRequiredChecks} wrote. Throws on text it could not have written. */
+export function decodeRequiredChecks(text: string): string[] {
+  if (text === '') return [];
+  return text.split(',').map((part) => {
+    if (part === '') throw new Error('a required check name is empty');
+    return decodeURIComponent(part);
+  });
+}
+
+/** The page size the shepherd reads a pull request's reviews in: GitHub's largest, and one page only. */
+export const PULL_REQUEST_REVIEWS_PER_PAGE = 100;
 
 /** `getJobLogs`' own transform: the log cut to its excerpt (below). */
 export const JOB_LOG_TAIL_PRESET = 'job_log_tail';
@@ -212,6 +282,65 @@ export const FailingCheckRunSchema = z.object({
 export type FailingCheckRun = z.infer<typeof FailingCheckRunSchema>;
 
 /**
+ * The base branch's required checks, judged on the head (D6 condition 1):
+ * `passed` where every one has a check run concluded `success`, `none` where
+ * the base requires none — which is no pass, since such a base has not said
+ * what green is — and `unmet` otherwise. A required name pending, skipped,
+ * neutral, failed or with no check run at all has not passed; one reported
+ * only through the commit Statuses API has no check run, and is named so.
+ */
+export const RequiredChecksVerdictSchema = z.object({
+  state: z.enum(['passed', 'unmet', 'none']),
+  required: z.array(z.string()),
+  unmet: z.array(
+    z.object({
+      name: z.string(),
+      conclusion: z
+        .string()
+        .describe(
+          "The check run's conclusion, `pending` while it runs, or `no check run` where the head has none of that name — a context reported only as a commit status among them.",
+        ),
+    }),
+  ),
+  summary: z
+    .string()
+    .optional()
+    .describe('The unmet ones in words, for the handoff: absent where none is unmet.'),
+});
+export type RequiredChecksVerdict = z.infer<typeof RequiredChecksVerdictSchema>;
+
+/**
+ * The required check names one read found: `getBranchRules`' ruleset rules,
+ * or `getBranch`'s classic protection united with them. `encoded` is the set
+ * as {@link encodeRequiredChecks} writes it, for the next read's argument.
+ */
+export const RequiredCheckNamesSchema = z.object({
+  names: z.array(z.string()),
+  encoded: z.string(),
+});
+export type RequiredCheckNames = z.infer<typeof RequiredCheckNamesSchema>;
+
+/**
+ * `listPullRequestReviews`, one page, as the shepherd reads it (D6 condition
+ * 3): of each reviewer who is a person, the latest review that carries a
+ * verdict — `APPROVED`, `CHANGES_REQUESTED` or `DISMISSED` — is what that
+ * person says; a `COMMENTED` review carries none and clears nothing.
+ */
+export const PullRequestReviewsSchema = z.object({
+  changesRequestedBy: z
+    .array(z.string())
+    .describe('The people whose standing verdict is `CHANGES_REQUESTED`, by login.'),
+  approvedBy: z.array(z.string()),
+  count: z.number().int().nonnegative().describe('The reviews on the page read.'),
+  complete: z
+    .boolean()
+    .describe(
+      `Whether the page held every review: fewer than ${String(PULL_REQUEST_REVIEWS_PER_PAGE)}. A full page may hide a change request past it.`,
+    ),
+});
+export type PullRequestReviews = z.infer<typeof PullRequestReviewsSchema>;
+
+/**
  * `listCheckRuns` on the head, as the shepherd reads it: `failing` where any
  * run failed, else `pending` while any has not finished or GitHub holds more
  * than the one page read, else `passing` where every one succeeded or was
@@ -225,6 +354,8 @@ export const CheckRunsSummarySchema = z.object({
   failing: z.array(FailingCheckRunSchema),
   /** The failing run with the lowest id: the one the shepherd acts on, and records. */
   firstFailing: FailingCheckRunSchema.optional(),
+  /** Present only where the read was given the base branch's required checks. */
+  required: RequiredChecksVerdictSchema.optional(),
 });
 export type CheckRunsSummary = z.infer<typeof CheckRunsSummarySchema>;
 
@@ -241,6 +372,9 @@ export const ShepherdHandoffReadSchema = z.object({
   classification: z.string().optional(),
   remedy: z.string().optional(),
   publicationRunId: z.string().optional(),
+  mergeDeclinedSha: z.string().optional(),
+  mergeRefusedSha: z.string().optional(),
+  mergeCommitSha: z.string().optional(),
   trust: z
     .enum(['verified', 'undecided'])
     .describe(

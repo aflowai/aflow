@@ -19,6 +19,7 @@ import {
   HOST_CHECKS_TIMEOUT_DEFAULT_MS,
   HOST_HARNESS_CONCURRENCY_DEFAULT,
   HOST_KEEP_AWAKE_DEFAULT,
+  HOST_MERGE_POSTURE_DEFAULT,
   HOST_PUSH_APPROVAL_DEFAULT,
   HOST_SANDBOX_POSTURE_DEFAULT,
   HostBindingInspectOutputSchema,
@@ -82,6 +83,7 @@ describe('the posture a folder holds', () => {
         id: 'hb_app',
         spaceId: 'space-a',
         pushApproval: HOST_PUSH_APPROVAL_DEFAULT,
+        mergePosture: HOST_MERGE_POSTURE_DEFAULT,
         sandbox: HOST_SANDBOX_POSTURE_DEFAULT,
       },
     ]);
@@ -248,6 +250,7 @@ describe('what the machine publishes', () => {
         id: 'hb_app',
         spaceId: 'space-a',
         pushApproval: 'unless-unreviewed',
+        mergePosture: HOST_MERGE_POSTURE_DEFAULT,
         sandbox: 'confined',
       },
     ]);
@@ -314,6 +317,7 @@ describe('host.binding.inspect', () => {
       branchPolicy: {
         branchPrefix: 'aflow/',
         pushApproval: 'never',
+        mergePosture: HOST_MERGE_POSTURE_DEFAULT,
         checksTimeoutMs: HOST_CHECKS_TIMEOUT_DEFAULT_MS,
       },
       sandbox: HOST_SANDBOX_POSTURE_DEFAULT,
@@ -333,6 +337,7 @@ describe('host.binding.inspect', () => {
       branchPolicy: {
         branchPrefix: 'aflow/',
         pushApproval: HOST_PUSH_APPROVAL_DEFAULT,
+        mergePosture: HOST_MERGE_POSTURE_DEFAULT,
         checksTimeoutMs: HOST_CHECKS_TIMEOUT_DEFAULT_MS,
       },
       sandbox: HOST_SANDBOX_POSTURE_DEFAULT,

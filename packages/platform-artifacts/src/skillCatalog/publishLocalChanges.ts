@@ -207,7 +207,7 @@ const CHECK_INPUT_TEMPLATE = {
 
 const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'publish-local-changes',
-  version: 38,
+  version: 39,
   name: 'Publish Local Changes',
   tagline:
     'Commit a patch onto a branch of a connected repository, then push it and open the pull request — asking the operator first unless the folder says otherwise.',
@@ -804,6 +804,9 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             findings: { path: 'result.output.findings', onMissing: 'null' as const },
             outcome: { path: 'outcome', onMissing: 'error' as const },
             reviewRunId: { path: 'runId', onMissing: 'error' as const },
+            // The Local PR Shepherd trusts a verdict only for the head it reads
+            // (Plan 321 D6): `reviewed.at` is the commit this push carries.
+            reviewed: { fromInput: 'inputs' },
           },
           // The review run holds every finding whole, which is what a fix
           // round is briefed from; the run names it so whoever starts one can read it.
@@ -813,9 +816,26 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           outputContract: {
             schema: {
               type: 'object',
-              required: ['verdict', 'reviewSummary', 'findings', 'outcome', 'reviewRunId'],
+              required: [
+                'verdict',
+                'reviewSummary',
+                'findings',
+                'outcome',
+                'reviewRunId',
+                'reviewed',
+              ],
               additionalProperties: false,
               properties: {
+                reviewed: {
+                  type: 'object',
+                  required: ['from', 'at'],
+                  properties: {
+                    from: { type: 'string', minLength: 1 },
+                    at: { type: 'string', minLength: 1 },
+                  },
+                  description:
+                    'What the review was started on: `from..at`, where `at` is the commit this run pushes — the sha `verdict` is for.',
+                },
                 verdict: {
                   type: ['string', 'null'],
                   description:

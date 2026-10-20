@@ -78,6 +78,41 @@ export const HostPushApprovalSchema = z
   );
 export type HostPushApproval = z.infer<typeof HostPushApprovalSchema>;
 
+export const HOST_MERGE_POSTURE_DEFAULT = 'never';
+
+export const HostMergePostureSchema = z
+  .enum(['never', 'when-green'])
+  .describe(
+    'Whether the Local PR Shepherd merges a pull request the loop opened from this folder. ' +
+      '`never`, the default: the merge is the operator’s. ' +
+      '`when-green`: the shepherd merges it by squash, pinned to its head, once every required ' +
+      "check of the base branch passed on that head, the publication's own Local Code Review " +
+      'approved that head, and no person’s review on the pull request requests changes — each ' +
+      "merge still on the operator's write approval. It needs the push approval " +
+      '`unless-unreviewed`, the only posture under which a publication reviews what it pushes.',
+  );
+export type HostMergePosture = z.infer<typeof HostMergePostureSchema>;
+
+/** The one push approval under which a publication reviews its push, and so leaves a verdict to merge on. */
+export const HOST_MERGE_POSTURE_REVIEWED_PUSH: HostPushApproval = 'unless-unreviewed';
+
+/**
+ * Why a folder's merge posture merges nothing as it stands, or undefined where
+ * it can merge: `when-green` beside a push approval under which no publication
+ * reviews, and so no verdict exists for the shepherd to read.
+ */
+export function idleMergePostureReason(policy: {
+  readonly pushApproval: HostPushApproval;
+  readonly mergePosture: HostMergePosture;
+}): string | undefined {
+  if (policy.mergePosture !== 'when-green') return undefined;
+  if (policy.pushApproval === HOST_MERGE_POSTURE_REVIEWED_PUSH) return undefined;
+  return (
+    `the push approval is \`${policy.pushApproval}\`, which runs no review, so there is no ` +
+    `verdict to merge on: set it to \`${HOST_MERGE_POSTURE_REVIEWED_PUSH}\``
+  );
+}
+
 export const HostSandboxPostureSchema = z
   .enum(['open', 'confined'])
   .describe(
@@ -210,6 +245,10 @@ export const HostBindingBranchPolicySchema = z.object({
       '`HOST_PUSH_APPROVAL_DEFAULT` each time it is read, so a change of default reaches every ' +
       'folder that never chose; nothing writes the default in.',
   ),
+  mergePosture: HostMergePostureSchema.optional().describe(
+    'The merge posture the operator chose for this folder. Absent, the folder takes ' +
+      '`HOST_MERGE_POSTURE_DEFAULT` each time it is read; nothing writes the default in.',
+  ),
   checks: HostChecksSchema.optional().describe(
     'The checks the operator declared for this folder. Absent, a publication runs none and ' +
       'says so.',
@@ -224,6 +263,7 @@ export type HostBindingBranchPolicy = z.infer<typeof HostBindingBranchPolicySche
  */
 export const HostResolvedBranchPolicySchema = HostBindingBranchPolicySchema.extend({
   pushApproval: HostPushApprovalSchema,
+  mergePosture: HostMergePostureSchema,
   checksTimeoutMs: HostChecksTimeoutMsSchema,
 });
 export type HostResolvedBranchPolicy = z.infer<typeof HostResolvedBranchPolicySchema>;
@@ -232,6 +272,7 @@ export function resolveBranchPolicy(policy: HostBindingBranchPolicy): HostResolv
   return {
     ...policy,
     pushApproval: policy.pushApproval ?? HOST_PUSH_APPROVAL_DEFAULT,
+    mergePosture: policy.mergePosture ?? HOST_MERGE_POSTURE_DEFAULT,
     checksTimeoutMs: policy.checksTimeoutMs ?? HOST_CHECKS_TIMEOUT_DEFAULT_MS,
   };
 }
@@ -1294,8 +1335,8 @@ export const HostBindingInspectOutputSchema = z.object({
   ),
   branchPolicy: HostResolvedBranchPolicySchema.optional().describe(
     'Which branches a push from this folder may move, when a publication asks the operator ' +
-      'before pushing, and the checks it runs first and for how long. Absent, the folder ' +
-      'pushes nothing.',
+      'before pushing, whether the Local PR Shepherd merges what the loop opened from it, and ' +
+      'the checks it runs first and for how long. Absent, the folder pushes nothing.',
   ),
   sandbox: HostSandboxPostureSchema.describe(
     'What a coding agent and the checks run under in this folder: the posture the operator ' +

@@ -64,7 +64,7 @@ describe('hostFolderEntry', () => {
   it('says when a publication from it asks before pushing, as its machine declares', () => {
     const entry = hostFolderEntry(
       { ...row, branchPrefix: 'aflow/' },
-      { pushApproval: 'unless-unreviewed' },
+      { pushApproval: 'unless-unreviewed', mergePosture: 'never' },
     );
     expect(SpaceContextHostFoldersSectionSchema.shape.items.element.parse(entry)).toMatchObject({
       branchPrefix: 'aflow/',
@@ -72,15 +72,37 @@ describe('hostFolderEntry', () => {
     });
   });
 
+  it('says whether the shepherd merges what the folder opens, and why a when-green that runs no review merges nothing', () => {
+    const merging = hostFolderEntry(
+      { ...row, branchPrefix: 'aflow/' },
+      { pushApproval: 'unless-unreviewed', mergePosture: 'when-green' },
+    );
+    expect(SpaceContextHostFoldersSectionSchema.shape.items.element.parse(merging)).toMatchObject({
+      mergePosture: 'when-green',
+    });
+    expect(merging).not.toHaveProperty('mergePostureIdleReason');
+    // A policy file edited by hand into the combination the commands refuse.
+    const idle = hostFolderEntry(
+      { ...row, branchPrefix: 'aflow/' },
+      { pushApproval: 'always', mergePosture: 'when-green' },
+    );
+    expect(idle).toMatchObject({
+      mergePosture: 'when-green',
+      mergePostureIdleReason: expect.stringMatching(/runs no review/),
+    });
+  });
+
   it('names no posture for a folder that pushes nothing, or whose machine is not running', () => {
-    expect(hostFolderEntry(row, { pushApproval: 'never' })).not.toHaveProperty('pushApproval');
+    expect(
+      hostFolderEntry(row, { pushApproval: 'never', mergePosture: 'never' }),
+    ).not.toHaveProperty('pushApproval');
     expect(hostFolderEntry({ ...row, branchPrefix: 'aflow/' })).not.toHaveProperty('pushApproval');
   });
 
   it('shows that a publication from it runs checks, and their program, as its machine declares', () => {
     const entry = hostFolderEntry(
       { ...row, branchPrefix: 'aflow/' },
-      { pushApproval: 'unless-unreviewed', checks: { program: 'node' } },
+      { pushApproval: 'unless-unreviewed', mergePosture: 'never', checks: { program: 'node' } },
     );
     expect(SpaceContextHostFoldersSectionSchema.shape.items.element.parse(entry)).toMatchObject({
       checks: { program: 'node' },
@@ -89,10 +111,17 @@ describe('hostFolderEntry', () => {
 
   it('names no checks for a folder that declares none, pushes nothing, or whose machine is not running', () => {
     expect(
-      hostFolderEntry({ ...row, branchPrefix: 'aflow/' }, { pushApproval: 'never' }),
+      hostFolderEntry(
+        { ...row, branchPrefix: 'aflow/' },
+        { pushApproval: 'never', mergePosture: 'never' },
+      ),
     ).not.toHaveProperty('checks');
     expect(
-      hostFolderEntry(row, { pushApproval: 'never', checks: { program: 'node' } }),
+      hostFolderEntry(row, {
+        pushApproval: 'never',
+        mergePosture: 'never',
+        checks: { program: 'node' },
+      }),
     ).not.toHaveProperty('checks');
     expect(hostFolderEntry({ ...row, branchPrefix: 'aflow/' })).not.toHaveProperty('checks');
   });

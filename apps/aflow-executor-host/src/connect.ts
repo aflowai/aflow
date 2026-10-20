@@ -16,7 +16,11 @@ import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 
 import { createRedisConnection, HOST_INVENTORY_TTL_MS, HOST_MACHINES_KEY } from '@aflow/redis';
-import { HOST_PUSH_APPROVAL_DEFAULT, resolveBranchPolicy } from '@aflow/schemas';
+import {
+  HOST_MERGE_POSTURE_DEFAULT,
+  HOST_PUSH_APPROVAL_DEFAULT,
+  resolveBranchPolicy,
+} from '@aflow/schemas';
 
 import { chooseFolder } from './folderPicker.js';
 import { resolveHostPolicyPath } from './hostDir.js';
@@ -31,6 +35,7 @@ import {
 } from './interview.js';
 import { editPolicy } from './policyFile.js';
 import { describeChecks, keptChecks } from './folderChecks.js';
+import { chosenMergePosture, describeMergePosture } from './mergePosture.js';
 import { chosenPushApproval, describePushApproval, PUSH_SCAN_NOTE } from './pushApproval.js';
 import { describeFolderSandbox, keptSandboxPosture } from './sandboxPosture.js';
 import {
@@ -80,6 +85,11 @@ function usage(): never {
       '                   first and stops when it finds one, which is what makes that\n' +
       '                   default safe; under any posture it asks when the scan could not\n' +
       '                   read a file or found a line marked aflow-scan: allow.\n' +
+      '  --merge-posture <never|when-green>\n' +
+      `                   Whether the PR Shepherd merges what it opens (default ${HOST_MERGE_POSTURE_DEFAULT}).\n` +
+      '                   when-green merges by squash, on your approval, once the required\n' +
+      "                   checks pass, the publication's review approved the head and no one\n" +
+      '                   requests changes; it needs --push-approval unless-unreviewed.\n' +
       '  --mcp a,b        Offer these MCP servers, without being asked\n' +
       '  --yes            Take every default and ask nothing',
   );
@@ -265,7 +275,7 @@ async function main(): Promise<void> {
     const raw = await readFile(POLICY_PATH, 'utf8').catch(() => '{"version":1,"bindings":[]}');
     const policy = HostPolicySchema.parse(JSON.parse(raw));
     // A reconnect keeps the postures and the checks the operator set since,
-    // unless it names a push posture.
+    // unless it names a posture of its own.
     const current = policy.bindings.find((b) => b.id === id && b.root === root);
     const currentBranchPolicy = current?.branchPolicy;
     const sandbox = keptSandboxPosture(current, allowsExecution);
@@ -273,6 +283,12 @@ async function main(): Promise<void> {
       requested: arg('push-approval'),
       branchPrefix,
       current: currentBranchPolicy?.pushApproval,
+    });
+    const mergePosture = chosenMergePosture({
+      requested: arg('merge-posture'),
+      branchPrefix,
+      current: currentBranchPolicy?.mergePosture,
+      pushApproval: pushApproval ?? HOST_PUSH_APPROVAL_DEFAULT,
     });
     const checks = keptChecks(currentBranchPolicy, branchPrefix);
 
@@ -431,6 +447,7 @@ async function main(): Promise<void> {
             branchPolicy: {
               branchPrefix,
               ...(pushApproval !== undefined ? { pushApproval } : {}),
+              ...(mergePosture !== undefined ? { mergePosture } : {}),
               ...checks,
             },
           }
@@ -471,12 +488,16 @@ async function main(): Promise<void> {
         `${branchPrefix !== undefined ? `, pushes to branches under \`${branchPrefix}\`` : ', no pushes'}.`,
     );
     if (binding.branchPolicy !== undefined) {
-      const posture = resolveBranchPolicy(binding.branchPolicy).pushApproval;
+      const resolved = resolveBranchPolicy(binding.branchPolicy);
       prompter.say(
-        `  A publication from it ${describePushApproval(posture)}` +
+        `  A publication from it ${describePushApproval(resolved.pushApproval)}` +
           `${pushApproval === undefined ? ', the default' : ''}.`,
       );
       prompter.say(`  ${PUSH_SCAN_NOTE}`);
+      prompter.say(
+        `  A pull request it opens ${describeMergePosture(resolved)}` +
+          `${mergePosture === undefined ? ', the default' : ''}.`,
+      );
       prompter.say(`  A publication from it ${describeChecks(binding.branchPolicy)}.`);
     }
     if (allowsExecution) {

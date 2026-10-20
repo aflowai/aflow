@@ -19,6 +19,8 @@ import {
   AgentDefinitionSchema,
   type CheckRunsSummary,
   CheckRunsSummarySchema,
+  decodeRequiredChecks,
+  encodeRequiredChecks,
   HostHarnessRunInputSchema,
   JobLogExcerptSchema,
   LOCAL_PUBLISH_PULL_REQUEST_MARKER,
@@ -29,6 +31,9 @@ import {
   MemoryGetInputSchema,
   MemoryPutInputSchema,
   parseShepherdHandoff,
+  type PullRequestReviews,
+  PullRequestReviewsSchema,
+  RequiredCheckNamesSchema,
   SHEPHERD_LEASE_STALE_AFTER_MS,
   type ShepherdHandoffRead,
   ShepherdHandoffReadSchema,
@@ -89,6 +94,16 @@ const NO_HANDOFF: ShepherdHandoffRead = {
   trust: 'verified',
 };
 const UNDECIDED: ShepherdHandoffRead = { ...NO_HANDOFF, trust: 'undecided' };
+
+const PUBLICATION_RUN = '00000000-0000-4000-8000-000000000321';
+const MERGE_COMMIT = 'f'.repeat(40);
+const NO_REVIEWS: PullRequestReviews = {
+  changesRequestedBy: [],
+  approvedBy: [],
+  count: 0,
+  complete: true,
+};
+const GREEN: CheckRunsSummary = { state: 'passing', total: 2, failing: [] };
 const OWN_LEASE_HASH = 'own-lease-hash';
 
 function presetOf(input: Record<string, unknown>): string {
@@ -108,7 +123,11 @@ interface Scenario {
   checks?: CheckRunsSummary;
   handoff?: ShepherdHandoffRead;
   /** A lease on the branch: its run's status (`gone` where it cannot be read) and its age. */
-  lease?: { owner: 'running' | 'paused' | 'completed' | 'failed' | 'gone'; ageMs: number };
+  lease?: {
+    owner: 'running' | 'paused' | 'completed' | 'failed' | 'gone';
+    ageMs: number;
+    decision?: 'fix' | 'merge';
+  };
   /** Another pass took the lease between this one's read and its write. */
   leaseTaken?: boolean;
   /** The handoff comment an earlier pass pinned: read by its id. `gone` where it was deleted. */
@@ -128,6 +147,18 @@ interface Scenario {
   failingJobs?: number;
   /** What the commission returned: a patch, only the merge, or nothing. */
   commission?: 'patch' | 'merge-only' | 'failed';
+  /** The folder's merge posture, and its push approval: `when-green` merges only beside `unless-unreviewed`. */
+  mergePosture?: 'never' | 'when-green';
+  pushApproval?: 'always' | 'never' | 'unless-unreviewed';
+  /** The base branch's required checks: from its rulesets, and from its classic protection. */
+  required?: { rules?: string[]; protection?: string[]; rulesStatus?: number };
+  /** How each check run on the head concluded, by name, where a required check is judged on it. */
+  checkConclusions?: Record<string, string>;
+  reviews?: PullRequestReviews;
+  /** The newest finished publication of the branch: the verdict its review returned, for the commit it reviewed. */
+  publication?: { verdict: string | null; at: string } | 'none';
+  /** How GitHub, or the operator, answers the merge. */
+  merge?: 'merged' | 'refused' | 'declined';
 }
 
 interface Pass {
@@ -176,7 +207,8 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
         origin: { owner: 'aflowai', repo: 'aflow' },
         branchPolicy: {
           branchPrefix: 'aflow/',
-          pushApproval: 'unless-unreviewed',
+          pushApproval: s.pushApproval ?? 'unless-unreviewed',
+          mergePosture: s.mergePosture ?? 'never',
           checksTimeoutMs: 1_800_000,
         },
         sandbox: 'open',
@@ -213,8 +245,99 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
         ? github(pr)
         : github({ message: 'Not Found' }, 404);
     }
-    case 'read-pr-checks':
-      return github(CheckRunsSummarySchema.parse(s.checks ?? FAILING));
+    case 'read-pr-checks': {
+      // Given the base branch's required checks, the read judges each on the
+      // head, as the executor's `loop_checks` does.
+      const preset = presetOf(input);
+      const colon = preset.indexOf(':');
+      const summary = s.checks ?? FAILING;
+      if (colon === -1) return github(CheckRunsSummarySchema.parse(summary));
+      const required = decodeRequiredChecks(preset.slice(colon + 1));
+      const conclusions = s.checkConclusions ?? {};
+      const unmet = required.flatMap((name) => {
+        const conclusion = conclusions[name] ?? 'no check run';
+        return conclusion === 'success' ? [] : [{ name, conclusion }];
+      });
+      return github(
+        CheckRunsSummarySchema.parse({
+          ...summary,
+          required: {
+            state: required.length === 0 ? 'none' : unmet.length === 0 ? 'passed' : 'unmet',
+            required,
+            unmet,
+            ...(unmet.length > 0
+              ? { summary: unmet.map((u) => `\`${u.name}\` (${u.conclusion})`).join(', ') }
+              : {}),
+          },
+        }),
+      );
+    }
+    case 'read-required-rules': {
+      if (s.required?.rulesStatus !== undefined) {
+        return github({ message: 'Server Error' }, s.required.rulesStatus);
+      }
+      const names = s.required?.rules ?? ['Test'];
+      return github(
+        RequiredCheckNamesSchema.parse({ names, encoded: encodeRequiredChecks(names) }),
+      );
+    }
+    case 'read-required-protection': {
+      const preset = presetOf(input);
+      const fromRules = decodeRequiredChecks(preset.slice(preset.indexOf(':') + 1));
+      const names = [...new Set([...fromRules, ...(s.required?.protection ?? [])])].sort();
+      return github(
+        RequiredCheckNamesSchema.parse({ names, encoded: encodeRequiredChecks(names) }),
+      );
+    }
+    case 'read-pr-reviews':
+      return github(PullRequestReviewsSchema.parse(s.reviews ?? NO_REVIEWS));
+    case 'read-publication': {
+      WorkflowRunListInputSchema.parse(input);
+      return ok({
+        runs:
+          s.publication === 'none'
+            ? []
+            : [
+                {
+                  id: PUBLICATION_RUN,
+                  status: 'completed',
+                  startedAt: '2026-10-18T07:00:00Z',
+                  own: false,
+                },
+              ],
+        hasMore: false,
+      });
+    }
+    case 'read-publication-review': {
+      const publication = s.publication ?? { verdict: 'approve', at: HEAD };
+      if (publication === 'none') return { ok: false };
+      return ok({
+        run: { runId: PUBLICATION_RUN, status: 'completed' },
+        tasks: [],
+        activeWaiters: [],
+        taskOutput: {
+          taskId: 'review-commit',
+          output: {
+            verdict: publication.verdict,
+            reviewSummary: 'Read.',
+            findings: [],
+            outcome: 'completed',
+            reviewRunId: 'review-run',
+            reviewed: { bindingId: 'hb_aflow', from: 'b'.repeat(40), at: publication.at },
+          },
+        },
+      });
+    }
+    case 'merge': {
+      const merge = s.merge ?? 'merged';
+      // A declined approval fails the task as a permission error, so it binds as absent.
+      if (merge === 'declined') return { ok: false };
+      return merge === 'refused'
+        ? github({ message: 'Head branch was modified. Review and try the merge again.' }, 409)
+        : github({ sha: MERGE_COMMIT, merged: true, message: 'Pull Request successfully merged' });
+    }
+    case 'record-merge':
+      return ok({ ...decideByRules(WorkflowRunDecideInputSchema.parse(input)) });
     case 'read-handoff-pin': {
       // The read asks to be told a missing pin apart from a failed read: one
       // that is not there answers found: false. A pin is kept per pull
@@ -259,7 +382,7 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
               pullNumber: 94,
               headSha: HEAD,
               checkRunId: '554',
-              attempt: 1,
+              decision: s.lease.decision ?? 'fix',
             },
           });
     case 'read-lease-owner':
@@ -890,15 +1013,51 @@ describe('Local PR Shepherd — it yields to people', () => {
 });
 
 describe('Local PR Shepherd — it approves nothing', () => {
-  it('has no approval of its own, and calls nothing that merges, closes or reviews', () => {
+  it('has no approval of its own, and calls nothing that closes or reviews', () => {
     expect(tasks.filter((task) => task.type === 'human')).toEqual([]);
     const endpoints = tasks.map(
       (task) => (task.inputTemplate as { endpointId?: unknown } | undefined)?.endpointId,
     );
-    for (const forbidden of ['mergePullRequest', 'closePullRequest', 'createReview']) {
+    for (const forbidden of ['closePullRequest', 'createReview']) {
       expect(endpoints).not.toContain(forbidden);
     }
     expect(tasks.map((task) => task.operation)).not.toContain('host.process.exec');
+  });
+
+  it('merges only in its `merge` task, only on a `merge` decision, and decides `merge` only under `when-green`', () => {
+    const merging = tasks.filter(
+      (task) =>
+        (task.inputTemplate as { endpointId?: unknown } | undefined)?.endpointId ===
+        'mergePullRequest',
+    );
+    expect(merging.map((task) => task.taskId)).toEqual(['merge']);
+    expect(merging[0]!.when).toMatchObject({
+      expression: "tasks.decide.output.decision == 'merge'",
+    });
+    // Squash, pinned to the head read; never retried into a second approval.
+    expect(merging[0]!.inputTemplate).toMatchObject({
+      params: { body: { merge_method: 'squash', sha: { $bind: 'headSha' } } },
+    });
+    expect(merging[0]!.maxAttempts).toBe(1);
+
+    // The one rule that decides `merge` is the last of the merge rules, and
+    // the first of them leaves every pull request of a folder not `when-green`.
+    const merges = SHEPHERD_RULES.filter((rule) => rule.decision === 'merge');
+    expect(merges).toHaveLength(1);
+    const first = SHEPHERD_RULES.findIndex((rule) =>
+      JSON.stringify(rule.when).includes('mergePosture'),
+    );
+    expect(SHEPHERD_RULES[first]).toMatchObject({ decision: 'leave' });
+    expect(SHEPHERD_RULES.indexOf(merges[0]!)).toBeGreaterThan(first);
+    // Every wait that can hold on a green head — hands-off, a live lease, a
+    // publication or commission in flight, a read that failed — is read first.
+    // The waits after them hold only where CI is not passing.
+    for (const [index, rule] of SHEPHERD_RULES.entries()) {
+      if (rule.decision !== 'wait' || index < first) continue;
+      expect(JSON.stringify(rule.when)).toMatch(
+        /state\.checks\.data\.(state != 'failing'|firstFailing)/,
+      );
+    }
   });
 
   it('pushes only by starting Local Publish, as the Store installed it', () => {
@@ -917,6 +1076,271 @@ describe('Local PR Shepherd — it approves nothing', () => {
     expect(publishGuard).not.toContain('classify-failure');
     // The rules are a model-free step.
     expect(taskById.get('decide')!.operation).toBe('workflow.run.decide');
+  });
+});
+
+/** The record a pass left after fixing a red check on an earlier head: pinned, so trusted. */
+const EARLIER_ROUND: ShepherdHandoffRead = {
+  found: true,
+  trust: 'verified',
+  commentId: 9,
+  attemptCount: 1,
+  nextAttemptCount: 2,
+  checkRunId: '554',
+  headSha: 'd'.repeat(40),
+  decision: 'fix',
+  publicationRunId: 'pub-run-1',
+};
+
+/** A green pull request of a `when-green` folder that every condition says to merge. */
+function green(s: Scenario = {}): Pass {
+  return pass({
+    mergePosture: 'when-green',
+    checks: GREEN,
+    checkConclusions: { Test: 'success', Lint: 'success' },
+    pinned: 'found',
+    handoff: EARLIER_ROUND,
+    ...s,
+  });
+}
+
+const MERGE_READS = [
+  'read-required-rules',
+  'read-required-protection',
+  'read-pr-reviews',
+  'read-publication',
+  'read-publication-review',
+];
+
+describe('Local PR Shepherd — it merges what the posture allows', () => {
+  it('under when-green, merges a green, approved pull request by squash, pinned to the head it read, under the lease', () => {
+    const merged = green();
+    expect(merged.decision).toBe('merge');
+    expect(merged.ran).toEqual(expect.arrayContaining([...MERGE_READS, 'lease', 'merge']));
+    expect(merged.inputs.get('merge')).toMatchObject({
+      apiId: 'github',
+      endpointId: 'mergePullRequest',
+      params: { pull_number: 94, body: { merge_method: 'squash', sha: HEAD } },
+    });
+    expect(merged.ran.indexOf('merge')).toBeGreaterThan(merged.ran.indexOf('lease'));
+    // A merge is no fix: nothing is commissioned or published, and no failure is counted.
+    for (const task of [
+      'read-failure',
+      'classify-failure',
+      'rerun-jobs',
+      ...COMMISSIONS,
+      'publish',
+    ]) {
+      expect(merged.ran).not.toContain(task);
+    }
+    expect(merged.ran.indexOf('release')).toBeGreaterThan(merged.ran.indexOf('record-merge'));
+    expect(merged.handoff).toMatchObject({
+      decision: 'merge',
+      attemptCount: 1,
+      headSha: HEAD,
+      mergeCommitSha: MERGE_COMMIT,
+    });
+    expect(merged.handoff?.mergeDeclinedSha).toBeUndefined();
+  });
+
+  it('reads the required checks from the rulesets and the classic protection together, and judges each on the head', () => {
+    const merged = green({ required: { rules: ['Test'], protection: ['Lint'] } });
+    expect(presetOf(merged.inputs.get('read-required-protection')!)).toBe(
+      'loop_required_protection:Test',
+    );
+    expect(presetOf(merged.inputs.get('read-pr-checks')!)).toBe('loop_checks:Lint,Test');
+    expect(merged.decision).toBe('merge');
+    // A check only the protection requires holds the merge back as well.
+    const held = green({
+      required: { rules: ['Test'], protection: ['Lint'] },
+      checkConclusions: { Test: 'success' },
+    });
+    expect(held.decision).toBe('leave');
+  });
+
+  it('records the lease as a merge, which a pass paused at its merge card holds past the bound', () => {
+    const merged = green();
+    expect(MemoryPutInputSchema.parse(merged.inputs.get('lease')).content.inlineJson).toMatchObject(
+      {
+        decision: 'merge',
+        headSha: HEAD,
+      },
+    );
+    const card = green({
+      lease: { owner: 'paused', ageMs: SHEPHERD_LEASE_STALE_AFTER_MS * 2, decision: 'merge' },
+    });
+    expect(card.decision).toBe('wait');
+    expect(card.ran).not.toContain('merge');
+    expect(card.ran).not.toContain('lease-takeover');
+    // A fix pass's lease past the bound is stale, as before.
+    const stale = green({
+      lease: { owner: 'paused', ageMs: SHEPHERD_LEASE_STALE_AFTER_MS + 1, decision: 'fix' },
+    });
+    expect(stale.decision).toBe('merge');
+    expect(stale.ran).toContain('lease-takeover');
+  });
+
+  it('under never, leaves the same green, approved pull request to the operator, reading nothing it would merge on', () => {
+    const left = green({ mergePosture: 'never' });
+    expect(left.decision).toBe('leave');
+    expect(left.outputs.get('decide')?.['reason']).toMatch(/merge posture is `never`/);
+    for (const task of [...MERGE_READS, 'lease', 'merge']) {
+      expect(left.statuses.get(task)).not.toBe('succeeded');
+    }
+    // The checks are read with no required set, as before the posture existed.
+    expect(presetOf(left.inputs.get('read-pr-checks')!)).toBe('loop_checks');
+  });
+
+  it('leaves it where the push posture runs no review, so no verdict exists', () => {
+    const left = green({ pushApproval: 'never' });
+    expect(left.decision).toBe('leave');
+    expect(left.outputs.get('decide')?.['reason']).toMatch(/runs no review/);
+    expect(left.ran).not.toContain('merge');
+  });
+
+  // The first planted refusal: a red check on the head is never merged — the
+  // shepherd fixes it, or waits on the fix it already made.
+  it('refuses to merge a head with a red check, and raises no merge approval', () => {
+    const red = green({ checks: FAILING, checkConclusions: { Test: 'failure', Lint: 'success' } });
+    expect(red.decision).toBe('fix');
+    expect(red.ran).not.toContain('merge');
+    const acted = green({
+      checks: FAILING,
+      checkConclusions: { Test: 'failure' },
+      handoff: { ...EARLIER_ROUND, checkRunId: FAILING_CHECK },
+    });
+    expect(acted.decision).toBe('wait');
+    expect(acted.ran).not.toContain('merge');
+  });
+
+  it.each([
+    ['skipped', { Test: 'skipped', Lint: 'success' }],
+    ['reported only as a commit status, with no check run', { Lint: 'success' }],
+  ])('leaves a head whose required check was %s, naming it in the handoff', (_how, conclusions) => {
+    const left = green({ checkConclusions: conclusions });
+    expect(left.decision).toBe('leave');
+    expect(left.ran).not.toContain('merge');
+    expect(left.ran).not.toContain('lease');
+    const body = String(
+      (left.inputs.get('handoff-edit')!['params'] as { body: { body: string } }).body.body,
+    );
+    expect(body).toMatch(/Required checks not passed on the head: `Test` \(/);
+  });
+
+  it('leaves a base branch that requires no check: it has not said what green is', () => {
+    const left = green({ required: { rules: [], protection: [] } });
+    expect(left.decision).toBe('leave');
+    expect(left.outputs.get('decide')?.['reason']).toMatch(/requires no check/);
+  });
+
+  it('leaves where the rulesets could not be read, reading no protection', () => {
+    const left = green({ required: { rulesStatus: 403 } });
+    expect(left.decision).toBe('leave');
+    expect(left.statuses.get('read-required-protection')).toBe('skipped');
+    expect(presetOf(left.inputs.get('read-pr-checks')!)).toBe('loop_checks');
+  });
+
+  // The second planted refusal: a person requesting changes holds the merge
+  // until that review is dismissed or the same person approves — a later
+  // COMMENTED review of theirs does not clear it (the reviews' own read).
+  it('refuses to merge while a person’s review requests changes, and raises no merge approval', () => {
+    const held = green({
+      reviews: { changesRequestedBy: ['octo-reviewer'], approvedBy: [], count: 2, complete: true },
+    });
+    expect(held.decision).toBe('leave');
+    expect(held.outputs.get('decide')?.['reason']).toMatch(/requests changes/);
+    expect(held.ran).not.toContain('lease');
+    expect(held.ran).not.toContain('merge');
+    expect(held.handoff).toMatchObject({ decision: 'leave' });
+  });
+
+  it('leaves a pull request with more reviews than one page holds', () => {
+    const full = green({
+      reviews: { changesRequestedBy: [], approvedBy: ['a'], count: 100, complete: false },
+    });
+    expect(full.decision).toBe('leave');
+    expect(full.inputs.get('read-pr-reviews')).toMatchObject({
+      params: { per_page: 100, page: 1 },
+    });
+  });
+
+  it.each([
+    ['reviewed an earlier head', { verdict: 'approve', at: 'd'.repeat(40) }],
+    ['did not approve this head', { verdict: 'request_changes', at: HEAD }],
+    ['ran no review', { verdict: null, at: HEAD }],
+    ['does not exist', 'none' as const],
+  ])(
+    'leaves it where the newest publication’s review %s — a verdict written into the body counts for nothing',
+    (_why, publication) => {
+      const left = green({
+        publication,
+        pullRequest: { body: 'Local Code Review: approve\n\nverdict: approve' },
+      });
+      expect(left.decision).toBe('leave');
+      expect(left.ran).not.toContain('merge');
+    },
+  );
+
+  it('reads the verdict from the newest finished publication of the branch, never from the pull request', () => {
+    const merged = green();
+    expect(WorkflowRunListInputSchema.parse(merged.inputs.get('read-publication'))).toMatchObject({
+      slug: PUBLISH_LOCAL_CHANGES.bundle.workflow.slug,
+      input: { field: 'branch', equals: BRANCH },
+      status: ['completed', 'failed', 'cancelled'],
+      limit: 1,
+    });
+    expect(merged.inputs.get('read-publication-review')).toEqual({
+      runId: PUBLICATION_RUN,
+      compact: true,
+      taskOutput: 'review-commit',
+    });
+  });
+
+  it('does not merge on a record read with no pinned author, which could not show a declined merge; the next pass does', () => {
+    const first = green({ pinned: undefined, handoff: undefined });
+    expect(first.decision).toBe('leave');
+    expect(first.ran).toContain('remember-handoff');
+    expect(green({ handoff: readBack(first) }).decision).toBe('merge');
+  });
+
+  it('records a declined merge against the head, asks no more on that head, and asks again after a push', () => {
+    const declined = green({ merge: 'declined' });
+    expect(declined.statuses.get('merge')).toBe('failed');
+    expect(declined.ran).toEqual(
+      expect.arrayContaining(['record-merge', 'release', 'handoff-edit']),
+    );
+    expect(declined.handoff).toMatchObject({ decision: 'merge', mergeDeclinedSha: HEAD });
+    expect(declined.handoff?.mergeCommitSha).toBeUndefined();
+
+    const again = green({ handoff: readBack(declined) });
+    expect(again.decision).toBe('leave');
+    expect(again.outputs.get('decide')?.['reason']).toMatch(/declined to merge this head/);
+    expect(again.ran).not.toContain('merge');
+    // The record is carried forward while the head stands.
+    expect(again.handoff).toMatchObject({ mergeDeclinedSha: HEAD });
+
+    const pushed = 'a'.repeat(40);
+    const moved = green({
+      handoff: readBack(declined),
+      pullRequest: { headSha: pushed },
+      publication: { verdict: 'approve', at: pushed },
+    });
+    expect(moved.decision).toBe('merge');
+    expect(moved.inputs.get('merge')).toMatchObject({ params: { body: { sha: pushed } } });
+  });
+
+  it('records a merge GitHub refused against the head, with its answer, and asks no more on that head', () => {
+    const refused = green({ merge: 'refused' });
+    expect(refused.handoff).toMatchObject({ mergeRefusedSha: HEAD });
+    expect(refused.handoff?.mergeCommitSha).toBeUndefined();
+    const body = String(
+      (refused.inputs.get('handoff-edit')!['params'] as { body: { body: string } }).body.body,
+    );
+    expect(body).toMatch(/GitHub answered 409: Head branch was modified/);
+    const again = green({ handoff: readBack(refused) });
+    expect(again.decision).toBe('leave');
+    expect(again.outputs.get('decide')?.['reason']).toMatch(/GitHub refused to merge this head/);
+    expect(again.ran).not.toContain('merge');
   });
 });
 

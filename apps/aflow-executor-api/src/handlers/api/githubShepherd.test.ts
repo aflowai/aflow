@@ -8,6 +8,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   CheckRunsSummarySchema,
+  decodeRequiredChecks,
+  encodeRequiredChecks,
   FailingJobsSchema,
   JOB_LOG_EXCERPT_MAX_BYTES,
   JOB_LOG_EXCERPT_MAX_LINES,
@@ -15,6 +17,9 @@ import {
   LOCAL_PUBLISH_PULL_REQUEST_MARKER,
   LoopPullRequestSchema,
   LoopPullRequestsSchema,
+  PULL_REQUEST_REVIEWS_PER_PAGE,
+  PullRequestReviewsSchema,
+  RequiredCheckNamesSchema,
   ShepherdHandoffReadSchema,
 } from '@aflow/schemas';
 import { NOTHING_SKIPPED } from './bodyTail.js';
@@ -26,6 +31,9 @@ import {
   loopHandoff,
   loopPullRequest,
   loopPullRequests,
+  loopRequiredProtection,
+  loopRequiredRules,
+  loopReviews,
 } from './githubShepherd.js';
 import {
   applyRecordTransformPreset,
@@ -365,6 +373,174 @@ describe('job_log_tail — the end of a job’s log', () => {
   it('read from a line’s start, keeps that line', () => {
     const tail = jobLogTail('line 40\nline 41', { bytes: 9000, lineBreaks: 40, endsLine: true });
     expect(tail).toMatchObject({ excerpt: 'line 40\nline 41', lines: 2, totalLines: 42 });
+  });
+});
+
+describe('the merge reads — what the base branch requires, judged on the head (Plan 321 D6)', () => {
+  const check = (name: string, status: string, conclusion: string | null, id = 1) => ({
+    id,
+    name,
+    status,
+    conclusion,
+    details_url: 'https://github.com/aflowai/aflow/actions/runs/1/job/1',
+  });
+  const page = (...runs: ReturnType<typeof check>[]) => ({
+    total_count: runs.length,
+    check_runs: runs,
+  });
+
+  it('unites the rulesets’ required checks with the classic protection’s, both spellings', () => {
+    const rules = RequiredCheckNamesSchema.parse(
+      applyRecordTransformPreset('loop_required_rules', [
+        { type: 'pull_request', parameters: { required_approving_review_count: 1 } },
+        {
+          type: 'required_status_checks',
+          parameters: { required_status_checks: [{ context: 'Test' }, { context: 'a,b:c' }] },
+        },
+      ]),
+    );
+    expect(rules.names).toEqual(['Test', 'a,b:c']);
+    expect(decodeRequiredChecks(rules.encoded)).toEqual(['Test', 'a,b:c']);
+
+    const united = RequiredCheckNamesSchema.parse(
+      applyRecordTransformPreset(`loop_required_protection:${rules.encoded}`, {
+        name: 'main',
+        protected: true,
+        protection: {
+          required_status_checks: {
+            contexts: ['Lint', 'Test'],
+            checks: [{ context: 'Lint', app_id: 15368 }, { context: 'legacy-ci' }],
+          },
+        },
+      }),
+    );
+    expect(united.names).toEqual(['Lint', 'Test', 'a,b:c', 'legacy-ci']);
+  });
+
+  it('reads an unprotected branch with no rules as requiring nothing — a set read and found empty', () => {
+    const rules = loopRequiredRules([]);
+    expect(rules).toEqual({ names: [], encoded: '' });
+    const united = loopRequiredProtection({ name: 'main', protected: false }, rules.encoded);
+    expect(united).toEqual({ names: [], encoded: '' });
+    expect(loopCheckRuns(page(check('Test', 'completed', 'success')), '').required).toMatchObject({
+      state: 'none',
+    });
+  });
+
+  it('judges no required check on a read given none — the posture is never, or the set was not read', () => {
+    expect(loopCheckRuns(page(check('Test', 'completed', 'success'))).required).toBeUndefined();
+  });
+
+  it('passes the required checks only where each has a check run on the head concluded success', () => {
+    const required = encodeRequiredChecks(['Test', 'Lint']);
+    const passed = CheckRunsSummarySchema.parse(
+      loopCheckRuns(
+        page(
+          check('Test', 'completed', 'success', 1),
+          check('Lint', 'completed', 'success', 2),
+          check('Docs', 'completed', 'failure', 3),
+        ),
+        required,
+      ),
+    );
+    // A red check the base does not require fails CI, which the shepherd fixes first.
+    expect(passed.state).toBe('failing');
+    expect(passed.required).toMatchObject({ state: 'passed', unmet: [] });
+    expect(passed.required?.summary).toBeUndefined();
+  });
+
+  it.each([
+    ['red', check('Test', 'completed', 'failure'), 'failure'],
+    ['still running', check('Test', 'in_progress', null), 'pending'],
+    ['skipped', check('Test', 'completed', 'skipped'), 'skipped'],
+    ['neutral', check('Test', 'completed', 'neutral'), 'neutral'],
+  ])('holds back a required check that is %s', (_how, run, conclusion) => {
+    const shaped = loopCheckRuns(
+      page(run, check('Lint', 'completed', 'success', 2)),
+      encodeRequiredChecks(['Test', 'Lint']),
+    );
+    expect(shaped.required).toEqual({
+      state: 'unmet',
+      required: ['Lint', 'Test'],
+      unmet: [{ name: 'Test', conclusion }],
+      summary: `\`Test\` (${conclusion})`,
+    });
+  });
+
+  it('names a required context reported only as a commit status: it has no check run, and never passes', () => {
+    const shaped = loopCheckRuns(
+      page(check('Test', 'completed', 'success')),
+      encodeRequiredChecks(['Test', 'ci/jenkins']),
+    );
+    expect(shaped.state).toBe('passing');
+    expect(shaped.required).toMatchObject({
+      state: 'unmet',
+      unmet: [{ name: 'ci/jenkins', conclusion: 'no check run' }],
+    });
+  });
+
+  it('fails a protection read given no rulesets’ set to unite with', () => {
+    expect(() => applyRecordTransformPreset('loop_required_protection', { name: 'main' })).toThrow(
+      ApiExecutionError,
+    );
+  });
+});
+
+describe('loop_reviews — each person’s standing verdict', () => {
+  const review = (login: string, state: string, type = 'User') => ({
+    id: Math.floor(Math.random() * 1e9),
+    user: { login, type },
+    state,
+    submitted_at: '2026-10-18T08:00:00Z',
+  });
+
+  it('holds a change request that the same person’s later COMMENTED review does not clear', () => {
+    const shaped = PullRequestReviewsSchema.parse(
+      applyRecordTransformPreset('loop_reviews', [
+        review('octo', 'CHANGES_REQUESTED'),
+        review('octo', 'COMMENTED'),
+      ]),
+    );
+    expect(shaped).toEqual({
+      changesRequestedBy: ['octo'],
+      approvedBy: [],
+      count: 2,
+      complete: true,
+    });
+  });
+
+  it('clears a change request the same person dismissed or then approved, and no one else’s approval clears it', () => {
+    expect(
+      loopReviews([review('octo', 'CHANGES_REQUESTED'), review('octo', 'APPROVED')])
+        .changesRequestedBy,
+    ).toEqual([]);
+    expect(
+      loopReviews([review('octo', 'CHANGES_REQUESTED'), review('octo', 'DISMISSED')])
+        .changesRequestedBy,
+    ).toEqual([]);
+    expect(
+      loopReviews([review('octo', 'CHANGES_REQUESTED'), review('cat', 'APPROVED')]),
+    ).toMatchObject({ changesRequestedBy: ['octo'], approvedBy: ['cat'] });
+  });
+
+  it('counts a person’s review, not a bot’s', () => {
+    expect(
+      loopReviews([review('ci-bot[bot]', 'CHANGES_REQUESTED', 'Bot')]).changesRequestedBy,
+    ).toEqual([]);
+  });
+
+  it('says a full page may hide a change request past it', () => {
+    const full = Array.from({ length: PULL_REQUEST_REVIEWS_PER_PAGE }, (_, i) =>
+      review(`r${String(i)}`, 'APPROVED'),
+    );
+    expect(loopReviews(full)).toMatchObject({ complete: false, count: 100 });
+    expect(loopReviews(full.slice(1)).complete).toBe(true);
+  });
+
+  it('fails the read on a body that is not a list of reviews', () => {
+    expect(() => applyRecordTransformPreset('loop_reviews', { message: 'Not Found' })).toThrow(
+      ApiExecutionError,
+    );
   });
 });
 

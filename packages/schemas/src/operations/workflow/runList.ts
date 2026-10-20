@@ -63,7 +63,7 @@ export const WorkflowRunListInputSchema = z.object({
 export type WorkflowRunListInput = z.infer<typeof WorkflowRunListInputSchema>;
 
 export const WorkflowRunListItemSchema = z.object({
-  id: z.string().min(1).describe('The run id, as workflow.run.detail takes it.'),
+  id: z.string().uuid().describe('The run id, as workflow.run.detail takes it.'),
   status: WorkflowRunListStatusSchema,
   startedAt: z.string().datetime(),
   own: z

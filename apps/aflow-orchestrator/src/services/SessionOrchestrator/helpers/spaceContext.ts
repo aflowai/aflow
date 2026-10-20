@@ -8,6 +8,7 @@ import {
   SPACE_CONTEXT_TTL_MS,
   SpaceComputePolicySchema,
   buildSpaceContextNavigation,
+  idleMergePostureReason,
   type SpaceContext,
 } from '@aflow/schemas';
 import {
@@ -118,10 +119,15 @@ export interface HostFolderRow {
  * `branchPrefix` is here so a publication can be offered or declined before it
  * is attempted. A folder that pushes nothing is the default, and reading the
  * prefix is how the agent knows which folders can publish and under what name.
- * `pushApproval` and `checks` come from the machine rather than the row,
+ * `pushApproval`, `mergePosture` and `checks` come from the machine rather than the row,
  * because the operator changes them there; they are absent while no machine
  * holding the folder is running.
  */
+function idleMergePosture(publishing: PublishingFolder): { mergePostureIdleReason?: string } {
+  const reason = idleMergePostureReason(publishing);
+  return reason !== undefined ? { mergePostureIdleReason: reason } : {};
+}
+
 export function hostFolderEntry(
   row: HostFolderRow,
   publishing?: PublishingFolder,
@@ -136,6 +142,8 @@ export function hostFolderEntry(
     ...(row.branchPrefix !== null && publishing !== undefined
       ? {
           pushApproval: publishing.pushApproval,
+          mergePosture: publishing.mergePosture,
+          ...idleMergePosture(publishing),
           ...(publishing.checks !== undefined ? { checks: { ...publishing.checks } } : {}),
         }
       : {}),

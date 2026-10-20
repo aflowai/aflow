@@ -259,7 +259,8 @@ describe('host inventories', () => {
     const folder = {
       id: 'hb_app',
       spaceId: 'space-a',
-      pushApproval: 'never',
+      pushApproval: 'unless-unreviewed',
+      mergePosture: 'when-green',
       sandbox: 'confined',
     } as const;
     const redis = fakeRedis(
@@ -270,6 +271,27 @@ describe('host inventories', () => {
     const live = await readLiveHostInventories(redis, now);
 
     expect(live[0]?.folders).toEqual([folder]);
+    expect(publishingFoldersForSpace(live, 'space-a').get('hb_app')).toEqual({
+      pushApproval: 'unless-unreviewed',
+      mergePosture: 'when-green',
+    });
+  });
+
+  it('reads a folder that names no merge posture as the default, never', async () => {
+    const now = Date.now();
+    const redis = fakeRedis(
+      { [now - 1_000]: 'laptop' },
+      {
+        [hostInventoryKey('laptop')]: JSON.stringify({
+          ...inventory('laptop', []),
+          folders: [{ id: 'hb_app', spaceId: 'space-a', pushApproval: 'never', sandbox: 'open' }],
+        }),
+      },
+    );
+
+    const live = await readLiveHostInventories(redis, now);
+
+    expect(live[0]?.folders[0]?.mergePosture).toBe('never');
   });
 
   it('refuses a folder that does not say what its coding agents run under', async () => {
@@ -398,24 +420,39 @@ describe('publishing folders for one workspace', () => {
               id: 'hb_app',
               spaceId: 'space-a',
               pushApproval: 'always',
+              mergePosture: 'never',
               checks: { program: 'node' },
               sandbox: 'open',
             },
-            { id: 'hb_lib', spaceId: 'space-b', pushApproval: 'never', sandbox: 'open' },
+            {
+              id: 'hb_lib',
+              spaceId: 'space-b',
+              pushApproval: 'never',
+              mergePosture: 'never',
+              sandbox: 'open',
+            },
           ],
         ),
         inventory(
           'desktop',
           [],
-          [{ id: 'hb_lib', spaceId: 'space-a', pushApproval: 'never', sandbox: 'open' }],
+          [
+            {
+              id: 'hb_lib',
+              spaceId: 'space-a',
+              pushApproval: 'unless-unreviewed',
+              mergePosture: 'when-green',
+              sandbox: 'open',
+            },
+          ],
         ),
       ],
       'space-a',
     );
 
     expect(Object.fromEntries(postures)).toEqual({
-      hb_app: { pushApproval: 'always', checks: { program: 'node' } },
-      hb_lib: { pushApproval: 'never' },
+      hb_app: { pushApproval: 'always', mergePosture: 'never', checks: { program: 'node' } },
+      hb_lib: { pushApproval: 'unless-unreviewed', mergePosture: 'when-green' },
     });
   });
 

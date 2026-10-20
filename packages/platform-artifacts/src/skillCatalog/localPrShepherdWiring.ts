@@ -54,6 +54,25 @@ export const DECIDED_FIX = {
   onMissingRef: SKIP,
 };
 
+export const DECIDED_MERGE = {
+  expression: "tasks.decide.output.decision == 'merge'",
+  onMissingRef: SKIP,
+};
+
+/**
+ * The pass acts — `fix` or `merge` — as comparisons a guard's `allOf` can
+ * hold beside others: no decision but those two and these three exists.
+ */
+export const DECIDED_TO_ACT = ['wait', 'abandon', 'leave'].map(
+  (decision) => `tasks.decide.output.decision != '${decision}'`,
+);
+
+/** The loop's own pull request, from a folder whose merge posture is `when-green`: the merge reads run only there. */
+export const OURS_WHEN_GREEN = {
+  allOf: [...OURS.allOf, "tasks.read-folder.output.branchPolicy.mergePosture == 'when-green'"],
+  onMissingRef: SKIP,
+};
+
 /**
  * The handoff, from whichever read found it: the comment a pass pinned, read
  * by its id, or — where none is pinned, or it is gone — the newest page of
