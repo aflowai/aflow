@@ -70,8 +70,12 @@ export const SkillCatalogEntrySchema = z.object({
   name: z.string().min(1).max(200),
   /** One-line summary shown on the card. */
   tagline: z.string().min(1).max(300),
-  /** Multi-paragraph description shown in the detail view. */
-  description: z.string().min(1).max(5000),
+  /**
+   * Multi-paragraph description shown in the detail view, and the account the
+   * Helmsman reads of when and how to run the skill — so its room is a
+   * ceiling, not a style limit.
+   */
+  description: z.string().min(1).max(20_000),
   /** Domain tags for filtering/search (e.g., 'ml', 'sales', 'operations'). */
   tags: z.array(z.string().min(1).max(50)).max(10).default([]),
   /** Which directive template this pairs well with (optional). */

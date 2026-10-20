@@ -1,4 +1,4 @@
-import { AFTER_REVIEW_DECIDED, type DecisionChoiceQuestionSchema } from '@aflow/schemas';
+import { AFTER_REVIEW_DECISIONS, type DecisionChoiceQuestionSchema } from '@aflow/schemas';
 import type { z } from 'zod';
 import { REVIEW_SEVERITY_ONTOLOGY } from './reviewLocalChanges.js';
 
@@ -7,25 +7,16 @@ import { REVIEW_SEVERITY_ONTOLOGY } from './reviewLocalChanges.js';
  * check, and whether a review's findings are worth a fix round — as the
  * questions a decision model is asked. Defined once, here, so the measurement
  * of decision quality on the loop's own history (`yarn decisions:measure-loop`,
- * Plan 316 §7) asks exactly what the skill asks.
+ * Plan 316 §7) asks them the same way each time.
  *
- * Only the question after a review is the skill's. Its answer is recorded — on
- * the pull request and as the run's `afterReview`, `undecided` below its bar,
- * Jev's, measured over 17 cases — and the push gate follows it
- * (`publishLocalChangesGate.ts`); the fix round is the conversation's or the
- * shepherd's. The question after a failed check is asked by the
- * measurement alone until it has labelled `operator_install_mismatch` cases
- * (Plan 316 §7); a failed check fails the run.
+ * Neither is the skill's. A failed check fails the run, and its question is
+ * asked by the measurement alone until it has labelled
+ * `operator_install_mismatch` cases (Plan 316 §7). The decision after a review
+ * is the rounds rule's (`publishLocalChangesAfterReview.ts`): no model
+ * measured on it cleared the bar on an approving review with minors, so the
+ * skill asks none, and its question stays here only for the measurement.
  */
 export const AFTER_CHECK_MIN_CONFIDENCE = 0.8;
-/**
- * Measured on Jev alone. The step asks whichever decision model the space
- * resolves, so another decider meets this bar unmeasured until the
- * measurement asks it the same cases — the same agreement took the
- * critique-then-verdict baselines to 0.90 and 0.70 — and the bar moves only
- * on that.
- */
-export const AFTER_REVIEW_MIN_CONFIDENCE = 0.8;
 
 export const AFTER_CHECK_ROUTES = [
   'recheck_on_timeout',
@@ -34,8 +25,8 @@ export const AFTER_CHECK_ROUTES = [
 ] as const;
 export type AfterCheckRoute = (typeof AFTER_CHECK_ROUTES)[number];
 
-/** The answers the after-review question offers: the ones the pull request records as decided. */
-export const AFTER_REVIEW_ROUTES = AFTER_REVIEW_DECIDED;
+/** The answers the after-review question offers: the decisions the pull request records. */
+export const AFTER_REVIEW_ROUTES = AFTER_REVIEW_DECISIONS;
 export type AfterReviewRoute = (typeof AFTER_REVIEW_ROUTES)[number];
 
 /** The question name each decision's answer is read under: `answers.<name>`. */
@@ -58,9 +49,10 @@ export const AFTER_CHECK_QUESTION = {
 } as const satisfies z.input<typeof DecisionChoiceQuestionSchema>;
 
 /**
- * Asked of a review that did not approve, whatever it found, and of an
- * approving one with a minor or worse among its findings: an approval of nits
- * alone is settled without asking (`publishLocalChangesAfterReview.ts`).
+ * The cases the measurement asks it of: a review that did not approve,
+ * whatever it found, and an approving one with a minor or worse among its
+ * findings. Its wording is unchanged from when the skill asked it, so a new
+ * measurement compares with the old.
  */
 export const AFTER_REVIEW_QUESTION = {
   type: 'choice',
@@ -71,5 +63,4 @@ export const AFTER_REVIEW_QUESTION = {
     publish_as_is:
       'They are narrow enough to merge as they stand and be fixed later, if at all; the pull request records them.',
   },
-  minConfidence: AFTER_REVIEW_MIN_CONFIDENCE,
 } as const satisfies z.input<typeof DecisionChoiceQuestionSchema>;

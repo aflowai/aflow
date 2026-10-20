@@ -147,7 +147,7 @@ export function overrideTasks(checksCleared: { anyOf: string[]; onMissingRef: ty
       goal: "Read whether an override was passed that would set the decision on the review's findings aside — the review finished and the decision is not already publish_as_is — and which authority it names, so that authority's check alone runs.",
       type: 'operation' as const,
       operation: 'workflow.run.decide',
-      dependsOn: ['review-commit', SETTLE_AFTER_REVIEW_TASK.taskId, 'decide-after-review'],
+      dependsOn: ['review-commit', SETTLE_AFTER_REVIEW_TASK.taskId],
       when: checksCleared,
       retryability: 'safe' as const,
       maxAttempts: 1,

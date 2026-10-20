@@ -89,15 +89,16 @@ meanwhile is refused with its current state rather than overwritten, and a node 
    For a branch that already has a pull request, name its number for the 422.
 2. **Read the review**: `workflow.run.detail` on the child review run gives the verdict and
    every finding with file and line. Whether the findings want a fix round the publication
-   decides, records, and gates its push on (Plan 315 D22): an `approve` over nits alone, or
-   none, is settled `publish_as_is` by `settle-after-review` with no model asked; under
-   any other verdict, or over a minor or worse, `decide-after-review` chooses between `fix_before_merge` and `publish_as_is`
-   over every finding, the run's
-   `afterReview` and its pull request record the answer, and `decide-push` follows it —
-   `fix_before_merge` pushes nothing and completes the run, `publish_as_is` pushes on its
-   own over minor findings and nits but pauses at `approve-push` over a blocker or a major,
-   and `undecided`, where none cleared the bar, pauses there too. A review with no findings
-   pushes on its own on `approve` and pauses otherwise, whatever the decision answered. Follow the decision; set it aside
+   decides by the rounds rule, records, and gates its push on (Plan 315 D22).
+   `settle-after-review` decides it by rules, with no model asked: a verdict short of
+   `approve` is `fix_before_merge`; an `approve` over nits alone, or none, is
+   `publish_as_is`; an `approve` over a minor or worse is `fix_before_merge` on the slice's
+   first publication and `publish_as_is` once its fix round has run — the publication's
+   `round` input, 1 by default, which you pass one higher on each publication of a fix
+   round. The run's `afterReview` and its pull request record the decision, and
+   `decide-push` follows it — `fix_before_merge` pushes nothing and completes the run,
+   `publish_as_is` pushes on its own over minor findings and nits but pauses at
+   `approve-push` over a blocker or a major. Follow the decision; set it aside
    only on one of three authorities, passing `override` with its `by` and a reason to the
    next publication, which verifies it from what it reads itself:
    - `operator`, the operator's recorded word — taken only from the operator, as their

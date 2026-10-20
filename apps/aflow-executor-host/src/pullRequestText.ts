@@ -128,8 +128,6 @@ const AFTER_REVIEW_LINES: Record<AfterReview, string> = {
     "Decided after the review: `fix_before_merge` — this review's findings are to be fixed on this branch before it merges, so this publication pushed nothing.",
   publish_as_is:
     "Decided after the review: `publish_as_is` — this review's findings can merge as they stand.",
-  undecided:
-    "Decided after the review: `undecided` — no answer cleared the decision's bar, so the push waited for the operator, and this review's findings are the reader's to weigh.",
 };
 
 const OVERRIDE_BY: Record<AfterReviewOverrideRecord['by'], string> = {

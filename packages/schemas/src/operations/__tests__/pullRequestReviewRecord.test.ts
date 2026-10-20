@@ -161,19 +161,16 @@ describe('an override of the decision on the findings', () => {
     reason: 'The attempt budget of this pull request is reached.',
   } as const;
 
-  for (const [decided, afterReview] of [
-    ['fix_before_merge', 'fix_before_merge'],
-    ['undecided', null],
-  ] as const) {
-    it(`turns ${decided} into publish_as_is, recording who, why and what it set aside`, () => {
-      expect(recordOf({ review: REVIEW, afterReview, override: OVERRIDE })).toMatchObject({
-        afterReview: 'publish_as_is',
-        afterReviewOverride: { ...OVERRIDE, overrode: decided },
-      });
+  it('turns fix_before_merge into publish_as_is, recording who, why and what it set aside', () => {
+    expect(
+      recordOf({ review: REVIEW, afterReview: 'fix_before_merge', override: OVERRIDE }),
+    ).toMatchObject({
+      afterReview: 'publish_as_is',
+      afterReviewOverride: { ...OVERRIDE, overrode: 'fix_before_merge' },
     });
-  }
+  });
 
-  it('sets nothing aside over publish_as_is, or where the review did not finish and nothing was decided', () => {
+  it('sets nothing aside over publish_as_is, or where nothing was decided', () => {
     const asIs = recordOf({ review: REVIEW, afterReview: 'publish_as_is', override: OVERRIDE });
     expect(asIs.afterReview).toBe('publish_as_is');
     expect(asIs.afterReviewOverride).toBeUndefined();
@@ -183,17 +180,20 @@ describe('an override of the decision on the findings', () => {
     });
     expect(unfinished.afterReview).toBeUndefined();
     expect(unfinished.afterReviewOverride).toBeUndefined();
+    const handedNone = recordOf({ review: REVIEW, override: OVERRIDE });
+    expect(handedNone.afterReview).toBeUndefined();
+    expect(handedNone.afterReviewOverride).toBeUndefined();
   });
 
-  it('sets aside an undecided review that found nothing, as any finished review — one that did not approve is asked of the decision model', () => {
+  it("sets aside the fix_before_merge of a review that found nothing and did not approve, as any finished review's", () => {
     const nothingFound = recordOf({
       review: { ...REVIEW, verdict: 'comment', findings: [] },
-      afterReview: 'undecided',
+      afterReview: 'fix_before_merge',
       override: OVERRIDE,
     });
     expect(nothingFound).toMatchObject({
       afterReview: 'publish_as_is',
-      afterReviewOverride: { ...OVERRIDE, overrode: 'undecided' },
+      afterReviewOverride: { ...OVERRIDE, overrode: 'fix_before_merge' },
     });
     expect(nothingFound.severest).toBeUndefined();
   });
@@ -240,20 +240,29 @@ describe('the decision on a review that finished', () => {
     expect(record.findings).toEqual([]);
   });
 
-  it('is undecided where a decision was to be asked and none came, as where its answer fell below the bar', () => {
+  it('is one of the two the rounds rule makes, and never undecided', () => {
     const findings = [{ severity: 'minor', file: 'src/a.ts', claim: 'Off by one.', evidence: 'x' }];
-    for (const afterReview of ['undecided', null] as const) {
-      expect(recordOf({ review: finished(findings), afterReview }).afterReview).toBe('undecided');
+    for (const afterReview of ['fix_before_merge', 'publish_as_is'] as const) {
+      expect(recordOf({ review: finished(findings), afterReview }).afterReview).toBe(afterReview);
+    }
+    for (const afterReview of ['undecided', null]) {
+      expect(
+        HostCommitDescribeInputSchema.safeParse({
+          bindingId: 'hb_app',
+          range: RANGE,
+          review: finished(findings),
+          afterReview,
+        }).success,
+        String(afterReview),
+      ).toBe(false);
     }
   });
 
-  it('is undecided over a review that found nothing and did not approve, whose decision was asked and fell below the bar', () => {
+  it('is recorded as fix_before_merge over a review that found nothing and did not approve, with no severest beside it', () => {
     const commented = { verdict: 'comment', outcome: 'completed', findings: [] };
-    for (const afterReview of ['undecided', null] as const) {
-      const record = recordOf({ review: commented, afterReview });
-      expect(record.afterReview).toBe('undecided');
-      expect(record.severest).toBeUndefined();
-    }
+    const record = recordOf({ review: commented, afterReview: 'fix_before_merge' });
+    expect(record.afterReview).toBe('fix_before_merge');
+    expect(record.severest).toBeUndefined();
   });
 
   it('is absent where the review did not finish, whatever was handed', () => {
