@@ -8,6 +8,8 @@ import type { SessionEvent } from '../../lib/types.js';
 import { useApi } from '../providers.js';
 
 import {
+  COMMAND_OUTPUT_OPERATIONS,
+  CommandOutputStepCard,
   HARNESS_RUN_OPERATION,
   HarnessStepCard,
   useHarnessName,
@@ -247,6 +249,14 @@ export function StepGroupCard({ group }: { group: StepGroup }) {
           and never inside the agent's message. It stays after the step ends —
           folded to its count, with the result beneath it. */}
       {group.operationId === HARNESS_RUN_OPERATION && <HarnessStepActivity group={group} />}
+      {COMMAND_OUTPUT_OPERATIONS.has(group.operationId) && (
+        <CommandOutputStepCard
+          stepExecutionId={group.stepExecutionId}
+          running={HARNESS_RUNNING_STATUSES.has(group.status)}
+          startedAt={group.startedAt}
+          style={{ padding: '0 var(--space-3) var(--space-3)' }}
+        />
+      )}
 
       {/* Expanded details */}
       {expanded && <StepGroupDetails group={group} />}

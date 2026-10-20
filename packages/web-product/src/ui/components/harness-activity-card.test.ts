@@ -14,6 +14,7 @@ import {
   changedFiles,
   emptyFeedLine,
   foldHeaderText,
+  isCommandOutput,
   isPinnedToBottom,
   lastToolLine,
   leadLine,
@@ -412,5 +413,26 @@ describe('an open card with nothing in it', () => {
   it('says a finished run recorded nothing, whatever the channel is doing', () => {
     expect(emptyFeedLine(false, true)).toBe('No activity was recorded for this run.');
     expect(emptyFeedLine(false, false)).toBe('No activity was recorded for this run.');
+  });
+});
+
+describe('a command’s printed output', () => {
+  const PRINTED: HarnessActivityLine[] = [
+    { kind: 'output', at: 0, text: 'building @acme/a' },
+    { kind: 'output', at: 900, text: 'ok   build @acme/a' },
+  ];
+
+  it('leads with the last line it printed', () => {
+    expect(leadLine(PRINTED)).toEqual({ kind: 'output', at: 900, text: 'ok   build @acme/a' });
+  });
+
+  it('is a feed of output lines alone, never a coding agent’s', () => {
+    expect(isCommandOutput(PRINTED)).toBe(true);
+    expect(isCommandOutput(FEED)).toBe(false);
+    expect(isCommandOutput([])).toBe(false);
+  });
+
+  it('is never a row that opens', () => {
+    for (const line of PRINTED) expect(lineNeedsExpansion(line)).toBe(false);
   });
 });

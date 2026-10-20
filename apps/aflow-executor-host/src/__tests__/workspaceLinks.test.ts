@@ -42,7 +42,7 @@ import { promisify } from 'node:util';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { HostCommitCheckOutputSchema } from '@aflow/schemas';
+import { HarnessActivityLineSchema, HostCommitCheckOutputSchema } from '@aflow/schemas';
 
 import type { SandboxedRunInput, SandboxedRunResult } from '../sandboxedRun.js';
 
@@ -307,10 +307,14 @@ describe('a workspace package in the isolated checkout', () => {
 /** Long enough to build and type-check the fixture on a loaded machine. */
 const CHECK_TEST_TIMEOUT_MS = 60_000;
 
-/** The folder's check of `checked` against `against`: its answer and its live output. */
+/**
+ * The folder's check of `checked` against `against`: its answer and its live
+ * output, read back from the `output` lines it streamed — each line
+ * newline-terminated, as it was printed.
+ */
 async function runCheck(checked: string, against: string) {
   let output: unknown;
-  const live: string[] = [];
+  const live: Array<{ channel: string; delta: string }> = [];
   const result = await createHostHandler(policyPath, noPushApprovals).execute({
     operationId: 'host.commit.check',
     spaceId: 'space-a',
@@ -321,8 +325,8 @@ async function runCheck(checked: string, against: string) {
     signal: new AbortController().signal,
     log: { error: () => undefined, warn: () => undefined, info: () => undefined },
     readPayload: () => Promise.resolve({ bindingId: 'hb_app', sha: checked, base: against }),
-    emitLiveDelta: (_channel: string, text: string) => {
-      live.push(text);
+    emitLiveDelta: (channel: string, delta: string) => {
+      live.push({ channel, delta });
       return Promise.resolve();
     },
     writePayload: (kind: string, data: unknown) => {
@@ -331,7 +335,18 @@ async function runCheck(checked: string, against: string) {
     },
   } as never);
   expect(result.status).toBe('SUCCEEDED');
-  return { answer: HostCommitCheckOutputSchema.parse(output), live: live.join('') };
+  // Under the step, never as its message: on `text` the chat rendered the
+  // check's log as the conversation's agent speaking.
+  expect(new Set(live.map((frame) => frame.channel))).toEqual(new Set(['activity']));
+  const printed = live
+    .flatMap((frame) => frame.delta.split('\n'))
+    .filter((segment) => segment !== '')
+    .map((segment) => HarnessActivityLineSchema.parse(JSON.parse(segment)))
+    .map((line) => {
+      expect(line.kind).toBe('output');
+      return `${line.text}\n`;
+    });
+  return { answer: HostCommitCheckOutputSchema.parse(output), live: printed.join('') };
 }
 
 describe('this repository’s check, at a commit reading a workspace package it leaves alone', () => {

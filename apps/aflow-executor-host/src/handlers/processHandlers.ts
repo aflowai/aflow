@@ -42,6 +42,7 @@ import { createChatterStripper } from '../egressRefusals.js';
 import { EnvPolicyError } from '../envPolicy.js';
 import { explainFailedStart } from '../executableHint.js';
 import { checksOf } from '../folderChecks.js';
+import { createLiveOutputFeed } from '../liveOutput.js';
 import { pushApprovalOf } from '../pushApproval.js';
 import { measurePushBase } from '../pushBase.js';
 import { sandboxPostureOf } from '../sandboxPosture.js';
@@ -206,9 +207,7 @@ async function execProcess(
     // tell a working command from a stuck one. Held per line, because a read
     // boundary falls wherever the pipe flushes.
     const visible = createChatterStripper();
-    const stream = (text: string): void => {
-      if (text !== '') void ctx.emitLiveDelta('text', text);
-    };
+    const live = createLiveOutputFeed((channel, delta) => ctx.emitLiveDelta(channel, delta));
     const supervision = {
       // The one job-supplied path in this lane that used to skip the check
       // every other one makes: `../..` put the process outside the root.
@@ -218,7 +217,7 @@ async function execProcess(
       ownerRunId: ctx.runId,
       signal: ctx.signal,
       onDelta: (text: string) => {
-        stream(visible.push(text));
+        live.push(visible.push(text));
       },
       // A command's progress usually speaks on standard error — compilers,
       // installers, anything with a counter — and a step watching only standard
@@ -248,7 +247,8 @@ async function execProcess(
       result = await runUnconfined({ ...supervision, binding, argv: input.command });
     }
     // Whatever the last chunk left unterminated.
-    stream(visible.flush());
+    live.push(visible.flush());
+    live.flush();
 
     // A push is the remote's answer. Reported as a success with a non-zero
     // exit, a refused one reads as published to everything that only checks

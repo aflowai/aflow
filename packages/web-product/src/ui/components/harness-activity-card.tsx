@@ -29,6 +29,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type ReactNode,
 } from 'react';
 import { HarnessActivityLineSchema, type HarnessActivityLine } from '@aflow/schemas';
@@ -49,6 +50,19 @@ import {
 import './harness-activity-card.css';
 
 export const HARNESS_RUN_OPERATION = 'host.harness.run';
+
+/** Host steps whose live output folds under them as `output` lines. */
+export const COMMAND_OUTPUT_OPERATIONS: ReadonlySet<string> = new Set([
+  'host.commit.check',
+  'host.process.exec',
+]);
+
+const COMMAND_OUTPUT_TITLE = { title: 'Command output', lane: undefined } as const;
+
+/** A feed of what a command printed, rather than a coding agent's account of its work. */
+export function isCommandOutput(lines: readonly HarnessActivityLine[]): boolean {
+  return lines.length > 0 && lines.every((line) => line.kind === 'output');
+}
 
 // ---------------------------------------------------------------------------
 // The live feed, as the run-view fold holds it
@@ -147,6 +161,34 @@ export function HarnessStepCard({
         : {})}
       {...(Number.isNaN(startedAtMs) ? {} : { startedAtMs })}
     />
+  );
+}
+
+/**
+ * What a command step printed while it ran, under its row.
+ *
+ * Only from the live feed: what it printed is stored as the step's own output
+ * — a check's logs, a command's stdout — so with no live lines held, a card
+ * would only say there is nothing here.
+ */
+export function CommandOutputStepCard({
+  stepExecutionId,
+  running,
+  startedAt,
+  style,
+}: {
+  stepExecutionId: string | undefined;
+  running: boolean;
+  startedAt?: string | number | undefined;
+  /** The row's spacing, which an absent card must not leave behind. */
+  style?: CSSProperties | undefined;
+}): ReactNode {
+  const feed = useHarnessActivityFeed(stepExecutionId);
+  if (feed === undefined || feed.lines.length === 0) return null;
+  return (
+    <div style={style}>
+      <HarnessStepCard stepExecutionId={stepExecutionId} running={running} startedAt={startedAt} />
+    </div>
   );
 }
 
@@ -252,8 +294,8 @@ export function lineNeedsExpansion(line: HarnessActivityLine): boolean {
 
 /**
  * The line the card leads with: the last thing the agent said — what it says it
- * is doing, or what it wrote in plain text — or, before it has said anything,
- * the last fact the run reported about itself.
+ * is doing, or what it wrote in plain text — or the last line a command
+ * printed, or, before any of those, the last fact the run reported about itself.
  *
  * A tool call never leads. A scroll of invocations is the record of the work,
  * not an account of it, and is what a person watching cannot read in real time.
@@ -263,7 +305,7 @@ export function leadLine(lines: readonly HarnessActivityLine[]): HarnessActivity
   for (let i = lines.length - 1; i >= 0; i -= 1) {
     const line = lines[i];
     if (line === undefined) continue;
-    if (line.kind === 'intent' || line.kind === 'thought') return line;
+    if (line.kind === 'intent' || line.kind === 'thought' || line.kind === 'output') return line;
     if (line.kind === 'status' && status === undefined) status = line;
   }
   return status;
@@ -503,6 +545,9 @@ function ActivityLineRow({
   if (line.kind === 'status') {
     return <div className="harness-feed__line harness-feed__line--status">{line.text}</div>;
   }
+  if (line.kind === 'output') {
+    return <div className="harness-feed__line">{line.text}</div>;
+  }
 
   const { tool, detail } = splitToolLine(line);
   const rowClass = `harness-feed__row${line.kind === 'tool_result' ? ' harness-feed__row--result' : ''}`;
@@ -691,12 +736,14 @@ export function HarnessActivityCard({
     });
   }, []);
 
-  const { title, lane } = harnessCardTitle({
-    reported: readResultHarness(result),
-    harness,
-    folder,
-    continued: result?.continued,
-  });
+  const { title, lane } = isCommandOutput(shown)
+    ? COMMAND_OUTPUT_TITLE
+    : harnessCardTitle({
+        reported: readResultHarness(result),
+        harness,
+        folder,
+        continued: result?.continued,
+      });
 
   const fold = (
     <>

@@ -13,7 +13,11 @@ import { promisify } from 'node:util';
 import { describe, expect, it, beforeAll } from 'vitest';
 
 import { hostPushRequestHash } from '@aflow/redis';
-import type { HostPushApproval, WriteApprovalGrant } from '@aflow/schemas';
+import {
+  HarnessActivityLineSchema,
+  type HostPushApproval,
+  type WriteApprovalGrant,
+} from '@aflow/schemas';
 
 import { PUSH_REQUIRED_OPTIONS } from '../bindings.js';
 import { createHostProcessHandler } from '../handlers/processHandlers.js';
@@ -41,8 +45,8 @@ let outside: string;
 interface Captured {
   output?: Record<string, unknown>;
   error?: { code: string; message: string };
-  /** Live deltas, for the tests that care what the step narrated. */
-  deltas?: string[];
+  /** Live deltas and their channels, for the tests that care what the step narrated. */
+  deltas?: Array<{ channel: string; delta: string }>;
 }
 
 const TENANT = 'tenant-test';
@@ -59,8 +63,8 @@ function contextFor(operationId: string, input: unknown, captured: Captured): ne
     signal: new AbortController().signal,
     log: { error: () => undefined, warn: () => undefined, info: () => undefined },
     readPayload: () => Promise.resolve(input),
-    emitLiveDelta: (_channel: string, delta: string) => {
-      captured.deltas?.push(delta);
+    emitLiveDelta: (channel: string, delta: string) => {
+      captured.deltas?.push({ channel, delta });
       return Promise.resolve();
     },
     writePayload: (_kind: string, data: unknown) => {
@@ -585,7 +589,17 @@ describe.runIf(CAN_CONFINE)('host process execution', () => {
           captured,
         ),
       );
-      expect((captured.deltas ?? []).join('')).toContain('compiling-something');
+      const deltas = captured.deltas ?? [];
+      // Under the step, never as its message: on `text` a reader renders what
+      // the command printed as the step speaking.
+      expect(new Set(deltas.map((d) => d.channel))).toEqual(new Set(['activity']));
+      const lines = deltas
+        .flatMap((d) => d.delta.split('\n'))
+        .filter((segment) => segment !== '')
+        .map((segment) => HarnessActivityLineSchema.parse(JSON.parse(segment)));
+      expect(lines).toContainEqual(
+        expect.objectContaining({ kind: 'output', text: 'compiling-something' }),
+      );
     },
   );
 

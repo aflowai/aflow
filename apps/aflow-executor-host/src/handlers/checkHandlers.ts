@@ -32,6 +32,7 @@ import {
 import { issueCheckReceipt } from '../checkReceipt.js';
 import { checkOutcome, runFolderChecks, skippedCheck } from '../commitCheck.js';
 import { checksOf } from '../folderChecks.js';
+import { createLiveOutputFeed } from '../liveOutput.js';
 import { noSandboxMessage, reapWithdrawn, sandboxReadiness } from '../sandboxedRun.js';
 import { isGitRepository, resolveCommit, WorktreeError } from '../worktree.js';
 
@@ -67,6 +68,7 @@ async function check(ctx: ExecutorContext, policyPath: string): Promise<StepResu
     return await failureWithError(ctx, permissionError(noSandboxMessage(readiness.missing)));
   }
 
+  const live = createLiveOutputFeed((channel, delta) => ctx.emitLiveDelta(channel, delta));
   const run = await runFolderChecks({
     binding,
     argv,
@@ -76,11 +78,10 @@ async function check(ctx: ExecutorContext, policyPath: string): Promise<StepResu
     toolPaths: policy.toolPaths,
     ownerRunId: ctx.runId,
     signal: ctx.signal,
-    onDelta: (text) => {
-      void ctx.emitLiveDelta('text', text);
-    },
+    onDelta: live.push,
     onOutput: () => ctx.reportProgress?.(),
   });
+  live.flush();
   const outputRef = await ctx.writePayload('logs', run.output);
   const outcome = checkOutcome({ bindingId: binding.id, argv, timeoutMs, sha, run, outputRef });
   const receipt = issueCheckReceipt({
