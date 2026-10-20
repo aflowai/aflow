@@ -47,7 +47,8 @@ const LEASED_WORK = [
   'rerun-jobs',
   ...COMMISSIONS,
   'publish',
-  'read-merge-outcome',
+  // The claim on a head is written before any merge is asked for.
+  'claim-merge',
   'merge',
   'record-merge',
   // A merge's outcome is recorded before the lease goes, so the next holder reads it.

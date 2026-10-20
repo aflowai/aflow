@@ -47,6 +47,7 @@ import {
 import { getSkillBundleEntry } from '../skillBundleCatalog.js';
 import { COMMISSION_CHANGE } from './commissionChange.js';
 import { LOCAL_PR_SHEPHERD } from './localPrShepherd.js';
+import { MERGE_ASKED } from './localPrShepherdMerge.js';
 import { SHEPHERD_RULES } from './localPrShepherdRules.js';
 import { REMEDY_QUESTION, REMEDY_ROUTES, type Remedy } from './localPrShepherdDecisions.js';
 import { PUBLISH_LOCAL_CHANGES } from './publishLocalChanges.js';
@@ -164,8 +165,10 @@ interface Scenario {
    * overlap: what one pass records under the lease, the next one reads.
    */
   mergeOutcomes?: Map<string, Record<string, unknown>>;
-  /** The outcome read under the lease fails — the store refused it. */
-  mergeOutcomeRead?: 'fails';
+  /** The claim on the head fails though nothing is recorded — the store refused it. */
+  claimFails?: true;
+  /** The outcome's write after the merge fails, leaving the claim as the record. */
+  outcomeWriteFails?: true;
 }
 
 interface Pass {
@@ -345,18 +348,19 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
     }
     case 'record-merge':
       return ok({ ...decideByRules(WorkflowRunDecideInputSchema.parse(input)) });
-    case 'read-merge-outcome': {
-      const read = MemoryGetInputSchema.parse(input);
-      if (s.mergeOutcomeRead === 'fails') return { ok: false };
-      const recorded = s.mergeOutcomes?.get(String(read.target.path));
-      return recorded === undefined
-        ? ok({ found: false })
-        : ok({ stat: { path: read.target.path }, dataJson: recorded });
+    case 'claim-merge': {
+      // A create: it fails where anything is recorded at the path.
+      const put = MemoryPutInputSchema.parse(input);
+      expect(put.writeMode).toBe('create');
+      if (s.claimFails === true || s.mergeOutcomes?.has(put.path) === true) return { ok: false };
+      s.mergeOutcomes?.set(put.path, put.content.inlineJson as Record<string, unknown>);
+      return ok({ id: 'doc-3', path: put.path, version: 1 });
     }
     case 'remember-merge-outcome': {
       const put = MemoryPutInputSchema.parse(input);
+      if (s.outcomeWriteFails === true) return { ok: false };
       s.mergeOutcomes?.set(put.path, put.content.inlineJson as Record<string, unknown>);
-      return ok({ id: 'doc-3', path: put.path, version: 1 });
+      return ok({ id: 'doc-3', path: put.path, version: 2 });
     }
     case 'read-handoff-pin': {
       // The read asks to be told a missing pin apart from a failed read: one
@@ -1051,13 +1055,10 @@ describe('Local PR Shepherd — it approves nothing', () => {
         'mergePullRequest',
     );
     expect(merging.map((task) => task.taskId)).toEqual(['merge']);
-    // On a merge decision, and only where the read under the lease found no
-    // outcome recorded for this head.
+    // On a merge decision, and only where this pass claimed the head under
+    // the lease — nothing being recorded for it.
     expect(merging[0]!.when).toMatchObject({
-      allOf: [
-        "tasks.decide.output.decision == 'merge'",
-        'tasks.read-merge-outcome.output.found == false',
-      ],
+      allOf: ["tasks.decide.output.decision == 'merge'", "tasks.claim-merge.status == 'succeeded'"],
     });
     // Squash, pinned to the head read; never retried into a second approval.
     expect(merging[0]!.inputTemplate).toMatchObject({
@@ -1369,56 +1370,79 @@ describe('Local PR Shepherd — it merges what the posture allows', () => {
   });
 });
 
-describe('Local PR Shepherd — a merge outcome is recorded under the lease, so overlapping passes ask once', () => {
-  it('records the outcome for the head before the lease is released', () => {
+describe('Local PR Shepherd — the merge claims its head under the lease before it asks, so a head is asked about once', () => {
+  const path = `/shepherd/aflowai/aflow/pulls/94/merges/${HEAD}.json`;
+
+  it('claims the head under the lease before asking, and records the outcome over the claim before the release', () => {
     const store = new Map<string, Record<string, unknown>>();
     const declined = green({ merge: 'declined', mergeOutcomes: store });
-    const path = `/shepherd/aflowai/aflow/pulls/94/merges/${HEAD}.json`;
-    expect(store.get(path)).toMatchObject({ headSha: HEAD, outcome: 'merge_declined' });
+    expect(declined.ran.indexOf('claim-merge')).toBeGreaterThan(declined.ran.indexOf('lease'));
+    expect(declined.ran.indexOf('merge')).toBeGreaterThan(declined.ran.indexOf('claim-merge'));
+    expect(declined.inputs.get('claim-merge')).toMatchObject({
+      path,
+      writeMode: 'create',
+      content: { inlineJson: { headSha: HEAD, outcome: MERGE_ASKED } },
+    });
     expect(declined.ran.indexOf('remember-merge-outcome')).toBeGreaterThan(
       declined.ran.indexOf('record-merge'),
     );
     expect(declined.ran.indexOf('release')).toBeGreaterThan(
       declined.ran.indexOf('remember-merge-outcome'),
     );
-    // The read that gates the merge comes after the lease is taken.
-    expect(declined.ran.indexOf('read-merge-outcome')).toBeGreaterThan(
-      declined.ran.indexOf('lease'),
-    );
-    expect(declined.ran.indexOf('merge')).toBeGreaterThan(
-      declined.ran.indexOf('read-merge-outcome'),
-    );
+    expect(store.get(path)).toMatchObject({ headSha: HEAD, outcome: 'merge_declined' });
   });
+
+  // The review's case: the person declined, or GitHub refused, and the
+  // outcome's own record could not be written. The claim written before the
+  // ask stands in its place, so the next pass — reaching `merge` by its rules
+  // on a handoff that may not show the outcome — still asks nothing.
+  it.each([
+    ['declined by the person', 'declined'],
+    ['refused', 'refused'],
+  ] as const)(
+    'does not ask again for a head whose merge was %s though the outcome could not be recorded',
+    (_how, merge) => {
+      const store = new Map<string, Record<string, unknown>>();
+      const first = green({ merge, mergeOutcomes: store, outcomeWriteFails: true });
+      expect(first.ran).toContain('merge');
+      expect(first.statuses.get('remember-merge-outcome')).toBe('failed');
+      expect(first.ran).toContain('release');
+      expect(store.get(path)).toMatchObject({ headSha: HEAD, outcome: MERGE_ASKED });
+
+      const second = green({ mergeOutcomes: store });
+      expect(second.decision).toBe('merge');
+      expect(second.statuses.get('claim-merge')).toBe('failed');
+      expect(second.ran).not.toContain('merge');
+      expect(second.statuses.get('merge')).toBe('skipped');
+    },
+  );
 
   // The overlap: the second pass read the handoff before the first rewrote
   // it, so its own record shows no outcome and its rules decide `merge`.
   // Only what the first recorded under the lease stands between it and a
   // second approval for the same head.
   it.each([
-    ['declined', 'merge_declined', 'mergeDeclinedSha', HEAD],
-    ['refused', 'merge_refused', 'mergeRefusedSha', HEAD],
-    ['merged', 'merged', 'mergeCommitSha', MERGE_COMMIT],
+    ['declined by the person', 'declined', 'merge_declined'],
+    ['refused', 'refused', 'merge_refused'],
+    ['merged', 'merged', 'merged'],
   ] as const)(
     'does not ask again for a head an overlapping pass already %s, though its own handoff is stale',
-    (merge, outcome, field, sha) => {
+    (_how, merge, outcome) => {
       const store = new Map<string, Record<string, unknown>>();
       const first = green({ merge, mergeOutcomes: store });
       expect(first.ran).toContain('merge');
 
       const second = green({ mergeOutcomes: store });
       expect(second.decision).toBe('merge');
-      expect(second.ran).toContain('read-merge-outcome');
+      expect(second.statuses.get('claim-merge')).toBe('failed');
       expect(second.ran).not.toContain('merge');
       expect(second.statuses.get('merge')).toBe('skipped');
       expect(second.statuses.get('record-merge')).toBe('skipped');
       expect(second.statuses.get('remember-merge-outcome')).toBe('skipped');
-      // Its handoff takes the recorded outcome, so later passes leave by rule.
-      expect(second.handoff).toMatchObject({ [field]: sha });
-      const body = String(
-        (second.inputs.get('handoff-edit')!['params'] as { body: { body: string } }).body.body,
-      );
-      expect(body).toContain(`No merge was asked for: a pass already recorded \`${outcome}\``);
+      // The first pass's outcome stands as it was recorded; nothing overwrote it.
+      expect(store.get(path)).toMatchObject({ outcome });
       expect(second.ran).toContain('release');
+      expect(second.handoff?.mergeCommitSha).toBeUndefined();
     },
   );
 
@@ -1435,12 +1459,12 @@ describe('Local PR Shepherd — a merge outcome is recorded under the lease, so 
     expect(moved.inputs.get('merge')).toMatchObject({ params: { body: { sha: pushed } } });
   });
 
-  it('asks nothing where the outcome could not be read: a failed read is no absence', () => {
-    const unread = green({ mergeOutcomeRead: 'fails' });
-    expect(unread.decision).toBe('merge');
-    expect(unread.statuses.get('read-merge-outcome')).toBe('failed');
-    expect(unread.ran).not.toContain('merge');
-    expect(unread.ran).toContain('release');
+  it('asks nothing where the claim could not be written: a store that cannot answer is no absence', () => {
+    const unclaimed = green({ claimFails: true });
+    expect(unclaimed.decision).toBe('merge');
+    expect(unclaimed.statuses.get('claim-merge')).toBe('failed');
+    expect(unclaimed.ran).not.toContain('merge');
+    expect(unclaimed.ran).toContain('release');
   });
 });
 

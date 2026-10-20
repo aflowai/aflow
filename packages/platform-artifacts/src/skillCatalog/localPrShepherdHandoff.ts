@@ -121,32 +121,14 @@ const PRIOR_MERGE_OUTCOMES = SHEPHERD_MERGE_OUTCOME_FIELDS.flatMap((field) => [
 /**
  * This pass's merge outcome, as the rule step that read it named it, with the
  * merge commit GitHub answered with, or else the head the request was pinned
- * to. Where this pass asked nothing because an overlapping one had already
- * recorded an outcome for the head — read under the lease, so it is current
- * where this handoff's own earlier record may not be — that outcome. The
- * reader files it under the outcome's field, over one carried forward.
+ * to. The reader files it under the outcome's field, over one carried forward.
  */
-const MERGE_OUTCOME = {
-  $firstOf: [
-    {
-      $concat: [
-        `\n${SHEPHERD_MERGE_OUTCOME_LINE}: `,
-        bind('mergeOutcome'),
-        ' ',
-        { $firstOf: [text('mergeCommit'), leaseText('leaseHeadSha')] },
-      ],
-    },
-    {
-      $concat: [
-        `\n${SHEPHERD_MERGE_OUTCOME_LINE}: `,
-        bind('recordedOutcome'),
-        ' ',
-        { $firstOf: [text('recordedCommit'), text('recordedHead')] },
-      ],
-    },
-    '',
-  ],
-};
+const MERGE_OUTCOME = optionalPart(
+  `\n${SHEPHERD_MERGE_OUTCOME_LINE}: `,
+  bind('mergeOutcome'),
+  ' ',
+  { $firstOf: [text('mergeCommit'), leaseText('leaseHeadSha')] },
+);
 
 const HANDOFF_BODY = {
   $concat: [
@@ -174,11 +156,6 @@ const HANDOFF_BODY = {
     bind('reason'),
     optionalPart('\n\nRequired checks not passed on the head: ', text('requiredUnmet'), '.'),
     optionalPart('\n\nThe merge: ', bind('mergeReason')),
-    optionalPart(
-      '\n\nNo merge was asked for: a pass already recorded `',
-      bind('recordedOutcome'),
-      '` for this head.',
-    ),
     optionalPart(' GitHub answered ', text('mergeStatus'), ': ', text('mergeMessage')),
     '\n\nFailures acted on: ',
     ATTEMPTS,
@@ -211,9 +188,6 @@ const HANDOFF_BINDINGS = {
   mergeCommit: out('merge', 'data.sha'),
   mergeStatus: out('merge', 'statusCode'),
   mergeMessage: out('merge', 'data.message'),
-  recordedOutcome: out('read-merge-outcome', 'dataJson.outcome'),
-  recordedCommit: out('read-merge-outcome', 'dataJson.mergeCommit'),
-  recordedHead: out('read-merge-outcome', 'dataJson.headSha'),
   ...leaseBindings('leaseCheckRun', 'lease.inlineJson.checkRunId'),
   ...leaseBindings('leaseHeadSha', 'lease.inlineJson.headSha'),
   ...handoffBindings('priorAttempt', 'data.attemptCount'),

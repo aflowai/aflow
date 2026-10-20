@@ -164,43 +164,61 @@ const MERGE_OUTCOME_BINDINGS = {
   headSha: out('read-pr', 'data.headSha'),
 };
 
+/** What the claim records until the merge's outcome replaces it: this head was asked about. */
+export const MERGE_ASKED = 'merge_asked';
+
 /**
- * The merge is asked for only where the outcome read under the lease
- * succeeded and found none for this head. The handoff's record is read before
- * the lease and written after its release, so between two overlapping passes
- * it can be stale; this read cannot: an outcome is recorded before the lease
- * that covered it is released, and this read follows taking the lease.
+ * The merge is asked for only where this pass's claim on the head succeeded:
+ * a create that fails where anything is recorded for the head — a claim, a
+ * decline, a refusal or a merge — and fails as well where the store cannot
+ * answer. The claim is written before any ask, under the lease, so no outcome
+ * that goes unwritten afterwards — a failed write, a pass that ends at its
+ * card — can let a later pass ask for the same head again. The handoff's
+ * record is read before the lease and written after its release, so between
+ * overlapping passes it can be stale; the claim cannot.
  */
-const NO_OUTCOME_FOR_HEAD = {
-  allOf: [DECIDED_MERGE.expression, 'tasks.read-merge-outcome.output.found == false'],
+const CLAIMED_HEAD = {
+  allOf: [DECIDED_MERGE.expression, "tasks.claim-merge.status == 'succeeded'"],
   onMissingRef: SKIP,
 };
 
 export const MERGE_TASKS = [
   {
-    taskId: 'read-merge-outcome',
-    name: "Read this head's merge outcome",
-    goal: 'Under the lease, read whether a merge of this head was already asked for and how it ended — declined, refused or merged — by this pass’s predecessors, however they overlapped. Only a read that found none lets the merge be asked for.',
+    taskId: 'claim-merge',
+    name: 'Claim the merge of this head',
+    goal: 'Under the lease and before any merge is asked for, record that a merge of this head is being asked for — created only where nothing is recorded for the head, so a head a pass already asked about, declined, refused or merged is never asked about again, however passes overlap and whatever becomes of the outcome’s own record.',
     type: 'operation' as const,
-    operation: 'memory.store.get',
+    operation: 'memory.store.put',
     dependsOn: [...LEASE_TAKERS],
     when: DECIDED_MERGE,
-    // A read that fails is not an absence: the merge stays unasked.
+    // A claim refused — something is recorded, or the store could not
+    // answer — leaves the merge unasked; the pass still records and releases.
     optional: true,
     retryability: 'safe' as const,
-    inputBindings: MERGE_OUTCOME_BINDINGS,
-    context: ctx('memory.store.get'),
-    inputTemplate: { target: { path: MERGE_OUTCOME_PATH }, view: 'content', ifMissing: 'absent' },
+    maxAttempts: 1,
+    inputBindings: { ...MERGE_OUTCOME_BINDINGS, runId: { kind: 'run_id' as const } },
+    context: ctx('memory.store.put'),
+    inputTemplate: {
+      path: MERGE_OUTCOME_PATH,
+      writeMode: 'create',
+      docType: 'json',
+      mimeType: 'application/json',
+      indexing: 'disabled',
+      summary: 'The Local PR Shepherd asked to merge this head.',
+      content: {
+        inlineJson: { headSha: bind('headSha'), outcome: MERGE_ASKED, runId: bind('runId') },
+      },
+    },
   },
 
   {
     taskId: 'merge',
     name: 'Merge the pull request',
-    goal: "Merge the pull request by squash, pinned to the head this pass read, so GitHub refuses it if the head moved since — only where no outcome is recorded for this head. The merge waits on the operator's approval of exactly this request, as the space's write policy has it.",
+    goal: "Merge the pull request by squash, pinned to the head this pass read, so GitHub refuses it if the head moved since — only where this pass claimed the head, nothing being recorded for it. The merge waits on the operator's approval of exactly this request, as the space's write policy has it.",
     type: 'operation' as const,
     operation: 'api.http.call',
     dependsOn: [...LEASE_TAKERS],
-    when: NO_OUTCOME_FOR_HEAD,
+    when: CLAIMED_HEAD,
     // A denied approval fails it; the pass still records and releases.
     optional: true,
     // A second attempt asks a second approval.
@@ -225,7 +243,7 @@ export const MERGE_TASKS = [
     dependsOn: ['merge'],
     // Only a merge that was asked for — answered, refused or denied — has an outcome to name.
     when: {
-      allOf: [...NO_OUTCOME_FOR_HEAD.allOf, "tasks.merge.status != 'skipped'"],
+      allOf: [...CLAIMED_HEAD.allOf, "tasks.merge.status != 'skipped'"],
       onMissingRef: SKIP,
     },
     retryability: 'safe' as const,
@@ -241,12 +259,13 @@ export const MERGE_TASKS = [
   {
     taskId: 'remember-merge-outcome',
     name: "Record this head's merge outcome",
-    goal: 'Record, before the lease is released, how the merge of this head ended and the commit it names, so no pass that holds the lease after this one asks to merge this head again.',
+    goal: 'Replace the claim on this head, before the lease is released, with how its merge ended and the commit it names.',
     type: 'operation' as const,
     operation: 'memory.store.put',
     when: { expression: "tasks.record-merge.status == 'succeeded'", onMissingRef: SKIP },
-    // The release waits for it; one that could not be written still lets the
-    // lease go and the handoff record the outcome.
+    // The release waits for it. One that could not be written leaves the
+    // claim, which stops a second ask for this head as well; the handoff
+    // records the outcome.
     optional: true,
     retryability: 'safe' as const,
     maxAttempts: 3,

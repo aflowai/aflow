@@ -94,7 +94,7 @@ export const MERGE_RULES: readonly WorkflowRunDecideRule[] = [
     when: { expression: GREEN },
     decision: 'merge',
     reason:
-      "Every check the base branch requires passed on the head, the publication's Local Code Review approved this head, and no person's review requests changes: the shepherd asks to merge it by squash, pinned to this head, on the operator's approval.",
+      "Every check the base branch requires passed on the head, the publication's Local Code Review approved this head, and no person's review requests changes: the shepherd asks to merge it by squash, pinned to this head, on the operator's approval — unless a merge of this head was already asked for, which is never asked for twice.",
   },
 ];
 
