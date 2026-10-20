@@ -196,6 +196,9 @@ const CHECK_CONTEXT = {
   },
 };
 
+/** Equal to Local Code Review's `harness` schema (a test pins it), so a value this run accepts the review accepts too. */
+const REVIEW_HARNESS_SCHEMA = { type: 'string', minLength: 1 };
+
 const CHECK_INPUT_TEMPLATE = {
   bindingId: { $bind: 'bindingId' },
   sha: { $bind: 'sha' },
@@ -204,7 +207,7 @@ const CHECK_INPUT_TEMPLATE = {
 
 const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'publish-local-changes',
-  version: 37,
+  version: 38,
   name: 'Publish Local Changes',
   tagline:
     'Commit a patch onto a branch of a connected repository, then push it and open the pull request — asking the operator first unless the folder says otherwise.',
@@ -332,6 +335,13 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           schema: OVERRIDE_SCHEMA,
         },
         {
+          id: 'reviewHarness',
+          required: false,
+          description:
+            "Which coding agent runs this publication's Local Code Review, by the id the operator configured on the machine — passed to the review as its `harness`. Omit it and the review runs on its own default: the space's preferred coding agent, else the machine's default. Only a folder whose push approval is reviewed starts a review; elsewhere it is unused.",
+          schema: REVIEW_HARNESS_SCHEMA,
+        },
+        {
           id: 'owner',
           required: true,
           description:
@@ -447,6 +457,12 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
                 bindAs: 'override',
                 path: 'override',
                 schema: OVERRIDE_SCHEMA,
+              },
+              reviewHarness: {
+                kind: 'run_input' as const,
+                bindAs: 'reviewHarness',
+                path: 'reviewHarness',
+                schema: REVIEW_HARNESS_SCHEMA,
               },
               owner: {
                 kind: 'run_input' as const,
@@ -756,6 +772,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             // started, since the commit lands on a branch nothing has checked out.
             from: { kind: 'task_output' as const, taskId: 'commit', path: 'commit.pushBaseSha' },
             at: { kind: 'task_output' as const, taskId: 'commit', path: 'commit.sha' },
+            reviewHarness: { kind: 'run_input' as const, path: 'reviewHarness' },
           },
           context: {
             strategy: 'scoped' as const,
@@ -774,6 +791,8 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
               from: { $bind: 'from' },
               at: { $bind: 'at' },
               depth: 'standard',
+              // Unset, the key is dropped and the review runs on its own default harness.
+              harness: { $bind: 'reviewHarness' },
             },
             wait: 'until_complete',
           },
