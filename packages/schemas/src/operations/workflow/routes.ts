@@ -3,8 +3,10 @@
  *
  * A task's `routes` say which tasks its outcome enables. The enabled tasks'
  * guards are derived from them — at materialization, the form every run and
- * every validity check uses, and in the designer — so the stored workflow
- * holds the fork once, on its source, and the guards cannot drift from it.
+ * every validity check uses, and in the designer — so the fork is authored
+ * once, on its source, and the guards cannot drift from it. A derived guard is
+ * marked `derivedFromRoutesOf`, which is what lets a workflow stored in its
+ * materialized form be read again as authored.
  */
 import {
   predicateCombinator,
@@ -85,16 +87,33 @@ export function routeClaims(
   return byTarget;
 }
 
+/** Whether materialization derived this guard from routes, rather than an author writing it. */
+export function isRouteDerivedGuard(when: WorkflowWhen | undefined): boolean {
+  return when?.derivedFromRoutesOf !== undefined;
+}
+
+/** The task as authored: without a guard an earlier materialization derived from routes. */
+function withoutDerivedRouteGuard(task: WorkflowTask): WorkflowTask {
+  if (!isRouteDerivedGuard(task.when)) return task;
+  const { when: _derived, ...authored } = task;
+  return authored;
+}
+
 /**
  * Give each routed task the guard its routes imply and its source as a
  * dependency. A target the routes cannot guard — claimed by two sources,
  * carrying its own `when`, or enabled by an inexpressible combination — is
- * left as stored; validation refuses that workflow before it can run.
+ * left as authored; validation refuses that workflow before it can run.
+ *
+ * Idempotent: a guard an earlier pass derived is marked, dropped and derived
+ * again from the routes as they are now, so a stored materialized workflow
+ * whose routes were since edited carries no stale guard.
  */
 export function deriveRouteGuards(tasks: WorkflowTask[]): WorkflowTask[] {
   const byTarget = routeClaims(tasks);
-  if (byTarget.size === 0) return tasks;
-  return tasks.map((task) => {
+  if (byTarget.size === 0 && !tasks.some((t) => isRouteDerivedGuard(t.when))) return tasks;
+  return tasks.map((stored) => {
+    const task = withoutDerivedRouteGuard(stored);
     const claimed = byTarget.get(task.taskId);
     if (!claimed || task.when !== undefined) return task;
     const sources = new Set(claimed.map((c) => c.source));
@@ -107,7 +126,7 @@ export function deriveRouteGuards(tasks: WorkflowTask[]): WorkflowTask[] {
     if (!guard) return task;
     return {
       ...task,
-      when: guard,
+      when: { ...guard, derivedFromRoutesOf: source! },
       dependsOn: [...new Set([...(task.dependsOn ?? []), source!])],
     };
   });

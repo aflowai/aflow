@@ -126,10 +126,12 @@ describe('assembling a draft with a decision task', () => {
         'tasks.triage.output.answers.team.decided == true',
       ],
       onMissingRef: 'skip',
+      derivedFromRoutesOf: 'triage',
     });
     expect(byId.get('escalate')?.when).toEqual({
       expression: 'tasks.triage.output.answers.team.decided == false',
       onMissingRef: 'skip',
+      derivedFromRoutesOf: 'triage',
     });
   });
 

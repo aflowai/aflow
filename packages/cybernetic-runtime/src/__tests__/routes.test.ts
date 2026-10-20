@@ -75,6 +75,7 @@ describe('routes are stored on the source and guard their targets when materiali
         'tasks.triage.output.answers.team.decided == false',
       ],
       onMissingRef: 'skip',
+      derivedFromRoutesOf: 'triage',
     });
   });
 
@@ -98,6 +99,57 @@ describe('routes are stored on the source and guard their targets when materiali
 
     const unsure = decided('billing', false);
     expect(unsure.ready.map((t) => t.taskId)).toEqual(['escalate']);
+  });
+});
+
+describe('a materialized workflow reads back as authored', () => {
+  it('materializing twice is materializing once', () => {
+    const once = materializeSkillTasks(workflow());
+    expect(materializeSkillTasks(once)).toEqual(once);
+  });
+
+  it('is valid when the materialized tasks are validated again', () => {
+    expect(errors(materializeSkillTasks(workflow()))).toEqual([]);
+  });
+
+  it('derives a stored guard again from the routes as they are now', () => {
+    const stored = materializeSkillTasks(workflow());
+    const edited = stored.map((t) =>
+      t.taskId === 'triage'
+        ? {
+            ...t,
+            routes: [
+              {
+                when: { expression: "output.answers.team.value == 'technical'" },
+                enable: ['billing'],
+              },
+            ],
+          }
+        : t,
+    );
+    const byId = new Map(materializeSkillTasks(edited).map((t) => [t.taskId, t]));
+    expect(byId.get('billing')?.when).toEqual({
+      expression: "tasks.triage.output.answers.team.value == 'technical'",
+      onMissingRef: 'skip',
+      derivedFromRoutesOf: 'triage',
+    });
+    expect(byId.get('escalate')?.when).toBeUndefined();
+    expect(errors(edited)).toEqual([]);
+  });
+
+  it('still refuses a `when` the author wrote on a routed task', () => {
+    const tasks = materializeSkillTasks(workflow()).map((t) =>
+      t.taskId === 'billing'
+        ? {
+            ...t,
+            when: {
+              expression: "tasks.triage.status == 'succeeded'",
+              onMissingRef: 'skip' as const,
+            },
+          }
+        : t,
+    );
+    expect(errors(tasks)).toContain('route_target_has_when');
   });
 });
 
