@@ -73,7 +73,7 @@ meanwhile is refused with its current state rather than overwritten, and a node 
    only run once the commission is published: `yarn test:file` on touched and added tests, `npx tsc -p` per touched
    workspace, the two guards `scripts/verify-commit.mjs` runs
    (`node --import tsx scripts/large-files/cli.ts check`,
-   `node --import tsx scripts/context-budget/cli.ts check`), `npx eslint` on touched sources, `npx prettier
+   `node --conditions=ts-source --import tsx scripts/context-budget/cli.ts check`), `npx eslint` on touched sources, `npx prettier
 --write` with the `--check` output in the result — all run before the commission returns,
    and what fails is fixed in the same session rather than found by a publication, which
    costs that publication and a round. The standing rules go in too: comments

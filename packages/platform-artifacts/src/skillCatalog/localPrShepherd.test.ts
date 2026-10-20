@@ -628,7 +628,9 @@ describe('Local PR Shepherd — it fixes what CI failed', () => {
     expect(first.inputs.get('fix')!['task']).toBe(FIX_BRIEF);
     for (const brief of [FIX_BRIEF, BUMP_BRIEF, MERGE_BRIEF]) {
       expect(brief).toContain('`node --import tsx scripts/large-files/cli.ts check`');
-      expect(brief).toContain('`node --import tsx scripts/context-budget/cli.ts check`');
+      expect(brief).toContain(
+        '`node --conditions=ts-source --import tsx scripts/context-budget/cli.ts check`',
+      );
       expect(brief).toContain('Fix what fails before you return');
     }
   });
