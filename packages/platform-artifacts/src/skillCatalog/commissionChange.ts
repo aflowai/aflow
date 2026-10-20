@@ -24,7 +24,7 @@ const MINUTES = 60_000;
 
 const COMMISSION_CHANGE: SkillCatalogEntry = {
   catalogId: 'commission-change',
-  version: 5,
+  version: 6,
   name: 'Commission Change',
   tagline:
     "Have the machine's own coding agent make a change in a connected repository, and get the change back as a patch.",
@@ -36,7 +36,7 @@ const COMMISSION_CHANGE: SkillCatalogEntry = {
 
 **For a plan node**: a commission for work in the space's plan is started with \`planNodeId\`, beside its inputs rather than among them, naming the node the round serves — the node opened with \`plan.node.get\` before the brief was written. It then shows under that node in the attention block of the conversation that started it, and when it ends the node holds a link to it. Its publication takes the same \`planNodeId\`.
 
-**The checks a brief asks for are the folder's own** — its test runner on the touched tests, its type check, its linter, its formatter — run by the coding agent in the commission's checkout, with their output in the result the brief asks for. Nothing else runs them before publication, where the folder's declared checks run again on the commit.
+**The checks a brief asks for are the folder's own** — its test runner on the touched tests, its type check, its linter, its formatter, and the guards its own pre-publication check runs over the whole tree; in Aflow's repository those are \`node --import tsx scripts/large-files/cli.ts check\` and \`node --import tsx scripts/context-budget/cli.ts check\`, the two \`scripts/verify-commit.mjs\` runs. The brief has the coding agent run every one of them in the commission's checkout before it returns, fix what fails in the same session, and put their output in the result the brief asks for. Nothing else runs them before publication, where the folder's declared checks run again on the commit, and a failure found there costs that publication and a further round.
 
 **With the result**: report what changed — \`filesChanged\` and whether the patch \`applies\` where it would be published. To publish, start Publish Local Changes with the commission's \`patchRef\`, \`baseSha\` and, where it merged, \`merge.from\`, as they stand — never the \`patch\` text, a copy for reading that is cut short on a large change. To ask for more on the same work, start another commission with \`continueFrom\` set to its \`sessionRef\`.`,
   tags: ['coding', 'commission', 'local', 'developer-tools'],
@@ -69,7 +69,7 @@ const COMMISSION_CHANGE: SkillCatalogEntry = {
         {
           id: 'task',
           required: true,
-          description: `The brief, in prose, handed to the coding agent as it stands: what to build or fix, the files and lines where they are known, the tests to add, the folder's own checks to run, and the result to report. It travels in the run's inputs, which are capped at ${String(RUN_INPUTS_KB)} KB together.`,
+          description: `The brief, in prose, handed to the coding agent as it stands: what to build or fix, the files and lines where they are known, the tests to add, the folder's own checks and guards to run before it returns, and the result to report. It travels in the run's inputs, which are capped at ${String(RUN_INPUTS_KB)} KB together.`,
           schema: { type: 'string', minLength: 1, maxLength: HOST_HARNESS_TASK_MAX_LENGTH },
         },
         {

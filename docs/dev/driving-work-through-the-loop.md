@@ -71,9 +71,12 @@ meanwhile is refused with its current state rather than overwritten, and a node 
    change them. Several commissions may run at once, within the machine's limit (below).
    The checks the agent must run are named in the brief, because the folder's checks
    only run once the commission is published: `yarn test:file` on touched and added tests, `npx tsc -p` per touched
-   workspace, the two CI guards (`scripts/large-files/cli.ts check`,
-   `scripts/context-budget/cli.ts check`), `npx eslint` on touched sources, `npx prettier
---write` with the `--check` output in the result. The standing rules go in too: comments
+   workspace, the two guards `scripts/verify-commit.mjs` runs
+   (`node --import tsx scripts/large-files/cli.ts check`,
+   `node --import tsx scripts/context-budget/cli.ts check`), `npx eslint` on touched sources, `npx prettier
+--write` with the `--check` output in the result — all run before the commission returns,
+   and what fails is fixed in the same session rather than found by a publication, which
+   costs that publication and a round. The standing rules go in too: comments
    only for non-obvious whys, copy in the system's voice, no shims, nothing written under
    `.aflow/` but the result file, and the agent starts or stops no process. Part 2 is the
    publication, started once the commission's end has woken the conversation: by

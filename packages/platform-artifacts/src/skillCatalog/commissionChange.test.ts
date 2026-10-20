@@ -157,6 +157,18 @@ describe('Commission Change — a brief to the machine’s coding agent', () => 
     expect(description).toContain("The checks a brief asks for are the folder's own");
   });
 
+  it("has the brief run the repository's guards before the commission returns, and fix what fails there", () => {
+    const description = COMMISSION_CHANGE.description;
+    expect(description).toContain('`node --import tsx scripts/large-files/cli.ts check`');
+    expect(description).toContain('`node --import tsx scripts/context-budget/cli.ts check`');
+    expect(description).toContain('before it returns, fix what fails in the same session');
+    const taskInput = wf.runInputs?.find((i) => i.id === 'task');
+    expect(taskInput?.description).toContain('checks and guards to run before it returns');
+    expect(getSkillBundleEntry('local-commission')?.helmsmanHints?.join('\n')).toContain(
+      'large-files and context-budget guards',
+    );
+  });
+
   it('runs beside any number of other commissions, one task each', () => {
     const concurrency = COMMISSION_CHANGE.bundle.manifest.concurrency;
     expect(concurrency?.maxConcurrentRuns).toBe('unlimited');
