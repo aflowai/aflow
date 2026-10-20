@@ -233,6 +233,7 @@ describe('the checks, as the machine publishes and shows them', () => {
         id: 'hb_app',
         spaceId: 'space-a',
         pushApproval: 'unless-unreviewed',
+        mergePosture: 'never',
         checks: { program: 'node' },
         sandbox: 'open',
       },
@@ -240,6 +241,7 @@ describe('the checks, as the machine publishes and shows them', () => {
         id: 'hb_private',
         spaceId: 'space-a',
         pushApproval: 'unless-unreviewed',
+        mergePosture: 'never',
         checks: { program: 'verify' },
         sandbox: 'open',
       },
@@ -247,6 +249,7 @@ describe('the checks, as the machine publishes and shows them', () => {
         id: 'hb_unchecked',
         spaceId: 'space-a',
         pushApproval: 'unless-unreviewed',
+        mergePosture: 'never',
         sandbox: 'open',
       },
     ]);
@@ -282,6 +285,7 @@ describe('the checks, as the machine publishes and shows them', () => {
     expect(HostBindingInspectOutputSchema.parse(captured.output).branchPolicy).toEqual({
       branchPrefix: 'aflow/',
       pushApproval: 'unless-unreviewed',
+      mergePosture: 'never',
       checks: ARGV,
       checksTimeoutMs: 600_000,
     });

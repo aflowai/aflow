@@ -32,6 +32,14 @@ const perPageParam = {
   schema: { type: 'integer' },
 };
 
+const branchParam = {
+  name: 'branch',
+  location: 'path' as const,
+  required: true,
+  description: 'The name of the branch.',
+  schema: { type: 'string' },
+};
+
 const runIdParam = {
   name: 'run_id',
   location: 'path' as const,
@@ -42,7 +50,7 @@ const runIdParam = {
 
 export const GITHUB_CONNECTOR: ConnectorCatalogEntry = {
   catalogId: 'github',
-  version: 5,
+  version: 6,
   name: 'GitHub',
   tagline: 'Open pull requests, poll CI checks, read failing jobs, merge, and close PRs.',
   description:
@@ -366,11 +374,44 @@ export const GITHUB_CONNECTOR: ConnectorCatalogEntry = {
       {
         endpointId: 'listPullRequestReviews',
         name: 'List pull request reviews',
-        description: 'List the reviews submitted on a pull request.',
+        description:
+          'List the reviews submitted on a pull request, oldest first — thirty to a page unless per_page says otherwise.',
         method: 'GET',
         pathTemplate: '/repos/{owner}/{repo}/pulls/{pull_number}/reviews',
-        params: [ownerParam, repoParam, pullNumberParam],
+        params: [
+          ownerParam,
+          repoParam,
+          pullNumberParam,
+          perPageParam,
+          {
+            name: 'page',
+            location: 'query',
+            required: false,
+            description: 'Which page, from 1, oldest first.',
+            schema: { type: 'integer' },
+          },
+        ],
         tags: ['pull-requests', 'reviews'],
+      },
+      {
+        endpointId: 'getBranch',
+        name: 'Get branch',
+        description:
+          "Fetch a branch, its head commit and whether it is protected. A token that reads the repository sees the classic protection's required checks under protection.required_status_checks; the protection endpoint itself wants an administrator.",
+        method: 'GET',
+        pathTemplate: '/repos/{owner}/{repo}/branches/{branch}',
+        params: [ownerParam, repoParam, branchParam],
+        tags: ['repositories', 'branches'],
+      },
+      {
+        endpointId: 'getBranchRules',
+        name: 'Get rules for a branch',
+        description:
+          "Every active rule of the repository rulesets that apply to a branch, one entry per rule — the required_status_checks rules name the checks a merge into it requires. Ruleset rules only: the classic branch protection's are on getBranch.",
+        method: 'GET',
+        pathTemplate: '/repos/{owner}/{repo}/rules/branches/{branch}',
+        params: [ownerParam, repoParam, branchParam, perPageParam],
+        tags: ['repositories', 'branches'],
       },
       {
         endpointId: 'listReviewComments',
@@ -586,6 +627,11 @@ export const GITHUB_CONNECTOR: ConnectorCatalogEntry = {
                   type: 'string',
                   enum: ['squash', 'merge', 'rebase'],
                   description: 'The merge method to use.',
+                },
+                sha: {
+                  type: 'string',
+                  description:
+                    "The head commit the merge is for. GitHub refuses the merge where the pull request's head is no longer this commit.",
                 },
               },
               additionalProperties: false,

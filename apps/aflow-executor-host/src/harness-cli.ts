@@ -27,6 +27,7 @@ import { HarnessProfileSchema, mcpPlaceholder, type HarnessProfile } from './har
 import { resolveHostPolicyPath } from './hostDir.js';
 import { editPolicy } from './policyFile.js';
 import { checksChangeFromArgs, describeChecks, withChecks } from './folderChecks.js';
+import { describeMergePosture, withMergePosture } from './mergePosture.js';
 import { describePushApproval, withPushApproval } from './pushApproval.js';
 import { describeFolderSandbox, sandboxVerb } from './sandboxPosture.js';
 
@@ -59,6 +60,9 @@ function usage(): never {
       '  harness keep-awake --clear         Follow the default instead.\n' +
       '  harness push-approval <folder> <always|never|unless-unreviewed>\n' +
       '                                     When a publication from a folder asks before pushing.\n' +
+      '  harness merge-posture <folder> <never|when-green>\n' +
+      '                                     Whether the PR Shepherd merges what a folder opens:\n' +
+      '                                     when-green needs push-approval unless-unreviewed.\n' +
       '  harness checks <folder> [--timeout-minutes <n>] -- <program> [args...]\n' +
       '                                     What a publication from a folder runs before it\n' +
       '                                     scans and pushes, from the repository root.\n' +
@@ -234,11 +238,14 @@ async function list(): Promise<void> {
   if (pushing.length > 0) {
     console.log('\nFolders that push:');
     for (const { id, branchPolicy } of pushing) {
+      const resolved = resolveBranchPolicy(branchPolicy);
       console.log(
         `  ${id} — under ${branchPolicy.branchPrefix}, ` +
-          describePushApproval(resolveBranchPolicy(branchPolicy).pushApproval) +
+          describePushApproval(resolved.pushApproval) +
           (branchPolicy.pushApproval === undefined ? ', the default' : '') +
-          `; ${describeChecks(branchPolicy)}`,
+          `; ${describeChecks(branchPolicy)}` +
+          `; a pull request it opens ${describeMergePosture(resolved)}` +
+          (branchPolicy.mergePosture === undefined ? ', the default' : ''),
       );
     }
   }
@@ -506,6 +513,16 @@ async function setPushApproval(bindingId: string, requested: string): Promise<vo
   }
 }
 
+async function setMergePosture(bindingId: string, requested: string): Promise<void> {
+  const updated = await changePolicy((policy) => withMergePosture(policy, bindingId, requested));
+  const branchPolicy = updated.bindings.find((b) => b.id === bindingId)?.branchPolicy;
+  if (branchPolicy !== undefined) {
+    console.log(
+      `A pull request \`${bindingId}\` opens now ${describeMergePosture(resolveBranchPolicy(branchPolicy))}.`,
+    );
+  }
+}
+
 async function setChecks(bindingId: string, args: readonly string[]): Promise<void> {
   const change = checksChangeFromArgs(args);
   const updated = await changePolicy((policy) => withChecks(policy, bindingId, change));
@@ -633,6 +650,12 @@ async function main(): Promise<void> {
     const [posture] = rest;
     if (posture === undefined || posture === '') usage();
     await setPushApproval(id, posture);
+    return;
+  }
+  if (command === 'merge-posture') {
+    const [posture] = rest;
+    if (posture === undefined || posture === '') usage();
+    await setMergePosture(id, posture);
     return;
   }
   if (command === 'checks') {

@@ -20,6 +20,7 @@ import { type HostPushApproval, HostPushApprovalSchema, resolveBranchPolicy } fr
 import type { HostInventoryFolders } from '@aflow/redis';
 
 import type { HostBinding, HostPolicySchema } from './bindings.js';
+import { refuseUnreviewedPushUnderWhenGreen } from './mergePosture.js';
 import { sandboxPostureOf } from './sandboxPosture.js';
 
 type HostPolicy = z.infer<typeof HostPolicySchema>;
@@ -105,11 +106,13 @@ export function publishingFolders(
     .flatMap((binding) => {
       if (binding.branchPolicy === undefined || binding.spaceId === undefined) return [];
       const argv0 = binding.branchPolicy.checks?.[0];
+      const { pushApproval, mergePosture } = resolveBranchPolicy(binding.branchPolicy);
       return [
         {
           id: binding.id,
           spaceId: binding.spaceId,
-          pushApproval: resolveBranchPolicy(binding.branchPolicy).pushApproval,
+          pushApproval,
+          mergePosture,
           ...(argv0 !== undefined ? { checks: { program: basename(argv0) || argv0 } } : {}),
           sandbox: sandboxPostureOf(binding),
         },
@@ -138,6 +141,7 @@ export function withPushApproval(
         '`--branch-prefix <prefix>` to let it push.',
     );
   }
+  refuseUnreviewedPushUnderWhenGreen(bindingId, binding.branchPolicy.mergePosture, pushApproval);
   return {
     ...policy,
     bindings: policy.bindings.map((b) =>

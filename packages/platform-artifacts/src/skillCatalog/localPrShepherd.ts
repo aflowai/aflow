@@ -9,6 +9,7 @@ import { COMMISSION_CHANGE } from './commissionChange.js';
 import { REMEDY_QUESTION, REMEDY_QUESTION_NAME } from './localPrShepherdDecisions.js';
 import { HANDOFF_READ_TASKS, HANDOFF_WRITE_TASKS } from './localPrShepherdHandoff.js';
 import { LEASE_READ_TASKS, leaseTask, RELEASE_TASK } from './localPrShepherdLease.js';
+import { MERGE_READ_TASKS, MERGE_TASKS, REQUIRED_CHECKS_TASK } from './localPrShepherdMerge.js';
 import {
   BUMP_BRIEF,
   COMMISSIONS,
@@ -130,23 +131,25 @@ function withBindingDependencies<T extends ShepherdTask>(tasks: T[]): T[] {
 
 const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
   catalogId: 'local-pr-shepherd',
-  version: 2,
+  version: 5,
   name: 'Local PR Shepherd',
   tagline:
-    'Tend the pull requests the loop opened: read their CI, and fix and publish a red check through Local Publish — never approving, merging or closing.',
-  description: `One pass over the pull requests Local Publish opened from a connected folder. It reads the folder, the loop's open pull requests under its publish prefix, the head's check runs, its own handoff comment and the space's work in flight on the branch, and decides by rules — \`fix\`, \`wait\`, \`abandon\` or \`leave\`, with the reason. A red check no rule holds back is fixed: the remedy question reads the failing jobs' logs and picks re-running the jobs, a fix commission, a dependency bump or a merge round, and anything it is not sure of is the fix commission. The fix is commissioned on the branch with its base merged in and published through Local Publish, which asks the operator exactly where it would when started by hand. Every pass leaves its record in the handoff comment.
+    "Tend the pull requests the loop opened: read their CI, fix and publish a red check through Local Publish, and merge a green one where the folder's merge posture allows — never approving or closing.",
+  description: `One pass over the pull requests Local Publish opened from a connected folder. It reads the folder, the loop's open pull requests under its publish prefix, the head's check runs, its own handoff comment and the space's work in flight on the branch, and decides by rules — \`fix\`, \`merge\`, \`wait\`, \`abandon\` or \`leave\`, with the reason. A red check no rule holds back is fixed: the remedy question reads the failing jobs' logs and picks re-running the jobs, a fix commission, a dependency bump or a merge round, and anything it is not sure of is the fix commission. The fix is commissioned on the branch with its base merged in and published through Local Publish, which asks the operator exactly where it would when started by hand. Every pass leaves its record in the handoff comment.
+
+**When it merges**: only where the folder's merge posture, \`mergePosture\` beside the push approval, is \`when-green\` — \`never\` is the default, and leaves every merge to the operator. Then a green pull request is merged by squash, pinned to the head it read, when every check the base branch requires — by its rulesets or its classic protection — passed on that head, the publication's own Local Code Review returned \`approve\` for that head, and no person's standing review requests changes. Each condition that does not hold leaves it, saying which. The merge asks the operator's approval of exactly that request, as every merge does; a declined or refused merge of a head is not asked for again until a push moves it.
 
 **What it needs**: the connected folder, \`bindingId\`, connected with a publish prefix and an \`origin\` on GitHub, and the GitHub connection for the space. \`pullNumber\` aims a pass at one pull request, which must still be one the loop opened; without it a pass tends the most recently updated. \`attemptBudget\` is how many failures of one pull request it acts on before it stops — ${String(SHEPHERD_ATTEMPT_BUDGET_DEFAULT)} unless named.
 
-**What it never does**: approve, merge or close a pull request, or push other than through Local Publish under the folder's push approval. A pull request a person opened, or one labelled \`${SHEPHERD_HANDS_OFF_LABEL}\`, is left untouched; a branch with a publication or a commission in flight, whoever started it, is \`wait\`; the same check run is acted on once.
+**What it never does**: approve or close a pull request, merge one where the posture is \`never\` or without the operator's approval, or push other than through Local Publish under the folder's push approval. A pull request a person opened, or one labelled \`${SHEPHERD_HANDS_OFF_LABEL}\`, is left untouched; a branch with a publication or a commission in flight, whoever started it, is \`wait\`; the same check run is acted on once.
 
-**With the result**: report the decision and its reason, and for a fix the publication's run — its pull request, and whether it pushed or is waiting at its approval.`,
+**With the result**: report the decision and its reason; for a fix, the publication's run — its pull request, and whether it pushed or is waiting at its approval; for a merge, whether it merged, waits at its approval, or was declined or refused.`,
   tags: ['coding', 'github', 'pull-requests', 'ci', 'local', 'developer-tools'],
   capabilityHints: [
     {
       apiId: 'github',
       description:
-        "GitHub REST API — list and read the loop's pull requests, their check runs and comments, a failing run's jobs and the end of a job's log, re-run failed jobs, and write the handoff comment.",
+        "GitHub REST API — list and read the loop's pull requests, their check runs, reviews and comments, the base branch's required checks, a failing run's jobs and the end of a job's log, re-run failed jobs, write the handoff comment, and merge where the folder's posture allows.",
       requiredEndpoints: [
         'listPullRequests',
         'getPullRequest',
@@ -158,10 +161,14 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
         'reRunFailedJobs',
         'createIssueComment',
         'updateIssueComment',
+        'getBranchRules',
+        'getBranch',
+        'listPullRequestReviews',
+        'mergePullRequest',
       ],
       authKind: 'bearer',
       setupNote:
-        "Bind the GitHub connector for the space with a token that reads pull requests, checks and Actions and writes comments. A job's log is served from a signed URL on Azure blob storage, which `getJobLogs` follows without the token; the binding allows no host but api.github.com.",
+        "Bind the GitHub connector for the space with a token that reads pull requests, checks, branches and Actions and writes comments — and merges pull requests, where a folder's merge posture is `when-green`. A job's log is served from a signed URL on Azure blob storage, which `getJobLogs` follows without the token; the binding allows no host but api.github.com.",
     },
   ],
   bundle: {
@@ -169,8 +176,8 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
       slug: 'local-pr-shepherd',
       name: 'Local PR Shepherd',
       description:
-        "One pass over the loop's open pull requests from a connected folder: read the folder, the pull request, its checks, its handoff and the work in flight on its branch; decide by rules; for a red check, take the lease, read the failing jobs' logs, ask which remedy they want, re-run the jobs or commission the fix on the branch and publish it through Local Publish; release the lease and write the handoff.",
-      goal: "Keep the loop's pull requests moving through CI without a hand: a red check is fixed and pushed through Local Publish under the folder's posture, acted on once, within a budget, and never where a person or other work holds the branch — with every pass recorded on the pull request.",
+        "One pass over the loop's open pull requests from a connected folder: read the folder, the pull request, its checks, its handoff and the work in flight on its branch — and, where the folder merges, the base branch's required checks, the people's reviews and the publication's verdict; decide by rules; for a red check, take the lease, read the failing jobs' logs, ask which remedy they want, re-run the jobs or commission the fix on the branch and publish it through Local Publish; for a green one the posture allows, take the lease and merge it by squash on the operator's approval; release the lease and write the handoff.",
+      goal: "Keep the loop's pull requests moving through CI without a hand: a red check is fixed and pushed through Local Publish under the folder's posture, acted on once, within a budget, and never where a person or other work holds the branch; a green one is merged only where the folder's merge posture allows and the operator approves — with every pass recorded on the pull request.",
       mode: 'process' as const,
       outcomes: [
         {
@@ -179,7 +186,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
           evaluator: {
             type: 'manual' as const,
             instruction:
-              'The pass decided from what it read — fix, wait, abandon or leave, with the reason — and acted only on fix: the remedy went through Local Publish without approving, merging or closing anything, the lease was released, and the handoff comment holds the record.',
+              "The pass decided from what it read — fix, merge, wait, abandon or leave, with the reason — and acted only on fix or merge: a remedy went through Local Publish, a merge was by squash on the head read and on the operator's approval, nothing was approved or closed, the lease was released, and the handoff comment holds the record.",
           },
         },
       ],
@@ -209,7 +216,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
         {
           taskId: 'read-folder',
           name: "Read the folder's prefix, posture and origin",
-          goal: 'Read, from the machine holding the folder, the branch prefix its pushes are held to, its push approval, and the GitHub repository its `origin` fetches from.',
+          goal: 'Read, from the machine holding the folder, the branch prefix its pushes are held to, its push approval and merge posture, and the GitHub repository its `origin` fetches from.',
           type: 'operation' as const,
           operation: 'host.binding.inspect',
           retryability: 'safe' as const,
@@ -325,20 +332,33 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
           ),
         },
 
+        ...MERGE_READ_TASKS,
+
         {
           taskId: 'read-pr-checks',
           name: "Read the head's check runs",
-          goal: "Read the check runs on the pull request's head: whether CI fails, runs, passes or stopped, and the failing check run a pass acts on.",
+          goal: "Read the check runs on the pull request's head: whether CI fails, runs, passes or stopped, the failing check run a pass acts on, and — where the folder merges — whether each check the base branch requires passed on it.",
           type: 'operation' as const,
           operation: 'api.http.call',
           when: OURS,
           retryability: 'safe' as const,
-          inputBindings: { ...REPOSITORY, sha: out('read-pr', 'data.headSha') },
+          inputBindings: {
+            ...REPOSITORY,
+            sha: out('read-pr', 'data.headSha'),
+            // Only a read that returned the branch carries the set; otherwise
+            // the checks are read with none, and judge none.
+            required: out(REQUIRED_CHECKS_TASK, 'data.encoded'),
+          },
           context: ctx('api.http.call'),
           inputTemplate: github(
             'listCheckRuns',
             { owner: bind('owner'), repo: bind('repo'), ref: bind('sha'), per_page: 100 },
-            SHEPHERD_RESPONSE_PRESETS.checkRuns,
+            {
+              $firstOf: [
+                { $concat: [`${SHEPHERD_RESPONSE_PRESETS.checkRuns}:`, bind('required')] },
+                SHEPHERD_RESPONSE_PRESETS.checkRuns,
+              ],
+            },
           ),
         },
 
@@ -381,7 +401,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
         {
           taskId: 'decide',
           name: 'Decide by rules',
-          goal: 'Decide this pass — fix, wait, abandon or leave, with the reason — by rules over what the reads returned, with no model: the first rule that holds decides, and fix where none does.',
+          goal: 'Decide this pass — fix, merge, wait, abandon or leave, with the reason — by rules over what the reads returned, with no model: the first rule that holds decides, and fix where none does.',
           type: 'operation' as const,
           operation: 'workflow.run.decide',
           retryability: 'safe' as const,
@@ -400,10 +420,18 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
             publications: out('read-in-flight-publications'),
             commissions: out('read-in-flight-commissions'),
             budget: runInput('attemptBudget'),
+            requiredRules: out('read-required-rules'),
+            requiredProtection: out(REQUIRED_CHECKS_TASK),
+            reviews: out('read-pr-reviews'),
+            publicationReview: out('read-publication-review'),
           },
           context: ctx('workflow.run.decide'),
           inputTemplate: {
             state: {
+              requiredRules: bind('requiredRules'),
+              requiredProtection: bind('requiredProtection'),
+              reviews: bind('reviews'),
+              publicationReview: bind('publicationReview'),
               folder: bind('folder'),
               aim: bind('aim'),
               candidates: bind('candidates'),
@@ -529,12 +557,22 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
           when: DECIDED_FIX,
           dependsOn: ['classify-failure'],
           retryability: 'safe' as const,
-          inputBindings: { answer: out('classify-failure', REMEDY) },
+          inputBindings: {
+            answer: out('classify-failure', REMEDY),
+            ...handoffBindings('attempt', 'data.nextAttemptCount'),
+          },
           context: ctx('workflow.run.decide'),
           inputTemplate: {
-            state: { answer: bind('answer') },
+            state: { answer: bind('answer'), attempt: handoffValue('attempt') },
             rules: REMEDY_TAKEN_RULES,
             otherwise: REMEDY_TAKEN_OTHERWISE,
+          },
+          // The round this fix is, read back by the handoff: only a fix makes
+          // this record, so only a fix counts as a failure acted on.
+          outputProjection: {
+            decision: { path: 'decision', onMissing: 'error' as const },
+            reason: { path: 'reason', onMissing: 'error' as const },
+            round: { fromInput: 'state' },
           },
         },
 
@@ -627,6 +665,8 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
           ],
         },
 
+        ...MERGE_TASKS,
+
         RELEASE_TASK,
 
         ...HANDOFF_WRITE_TASKS,
@@ -635,7 +675,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
         {
           variableId: 'decision',
           name: 'Decision',
-          description: 'What this pass decided: fix, wait, abandon or leave.',
+          description: 'What this pass decided: fix, merge, wait, abandon or leave.',
           required: false,
           sensitive: false,
           immutable: false,
@@ -660,7 +700,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
       output: {
         primary: 'decision',
         guidance:
-          'Report the decision and its reason. Where publicationRunId is set, the fix went through Local Publish: report its pull request and whether it pushed, waits at its approval, which is the operator’s, or kept the branch local on the decision fix_before_merge — its afterReview and reviewRunId, from which the fix round on the review’s findings is commissioned.',
+          'Report the decision and its reason. Where publicationRunId is set, the fix went through Local Publish: report its pull request and whether it pushed, waits at its approval, or kept the branch local on fix_before_merge — its afterReview and reviewRunId, from which the fix round is commissioned. On merge, report whether it merged, waits at the merge approval, which is the operator’s, or was declined or refused.',
       },
       iteration: { auto: false, maxConsecutiveRuns: 1, stopOnOutcomesMet: true, cooldownMs: 0 },
     },
@@ -673,7 +713,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
           {
             id: 'pass-recorded',
             description:
-              "A pass over the loop's pull requests decides from what it read, acts only on fix — through Local Publish, under the folder's posture, never approving, merging or closing — and leaves its record in the handoff comment.",
+              "A pass decides from what it read and acts only on fix, through Local Publish, or on merge, by squash on the head under the folder's merge posture and the operator's approval — never approving or closing — and leaves its record in the handoff comment.",
           },
         ],
       },
@@ -700,7 +740,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
       priority: 50,
     },
     rationale:
-      'Plan 321 P1. Typed reads — folder, pull requests, checks, handoff, lease, the branch’s publications and commissions — then workflow.run.decide: the first rule that holds is the decision and its reason, fix where none does; a read GitHub refused is wait. For fix: the lease is created, never overwritten, so a second pass stops there; the failing jobs and up to three log excerpts are read; the remedy question routes a confident answer to re-run, fix, bump or merge round and anything else to the fix commission. Commissions run on the branch with origin/<base> merged in, briefed from data; the publication is Local Publish, waited on through its approval. The lease is released once all leased work ends; the handoff is written from the lease and the earlier record. No step approves, merges or closes.',
+      'Plan 321 P1 and P2b. Typed reads — folder, pull requests, checks, handoff, lease, the branch’s in-flight runs, and under the merge posture when-green the required checks, the reviews and the publication’s verdict — then workflow.run.decide: the first rule that holds decides, fix where none does; a read GitHub refused is wait, and merge follows every wait. Fix and merge take the lease, created, never overwritten. For fix the failing jobs and logs are read and the remedy question routes to re-run, fix, bump or merge round, anything unsure to the fix commission, published through Local Publish. Merge is mergePullRequest by squash pinned to the head, behind its write approval; record-merge names the outcome as the handoff field. The lease is released once leased work ends. No step approves or closes; only merge merges.',
   },
 };
 

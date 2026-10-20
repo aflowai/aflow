@@ -13,8 +13,12 @@ import {
   parseGitHubRemote,
   type RunAccessGrant,
   parseShepherdHandoff,
+  decodeRequiredChecks,
+  encodeRequiredChecks,
   SHEPHERD_HANDOFF_CLOSE,
+  SHEPHERD_HANDOFF_FIELDS,
   SHEPHERD_HANDOFF_OPEN,
+  SHEPHERD_MERGE_OUTCOMES,
   SkillBundleSchema,
   WORKFLOW_RUN_LIST_LIMIT_MAX,
   WorkflowRunDecideInputSchema,
@@ -52,6 +56,57 @@ describe('the shepherd handoff record', () => {
     expect(parseShepherdHandoff(`${SHEPHERD_HANDOFF_OPEN}\nattemptCount: many\n-->`)).toEqual({
       attemptCount: 0,
     });
+  });
+
+  it('files this pass’s merge outcome under its field, over one carried forward', () => {
+    const record = parseShepherdHandoff(
+      [
+        SHEPHERD_HANDOFF_OPEN,
+        'attemptCount: 1',
+        `headSha: ${'c'.repeat(40)}`,
+        `mergeDeclinedSha: ${'d'.repeat(40)}`,
+        `mergeRefusedSha: ${'e'.repeat(40)}`,
+        'mergeCommitSha: ',
+        `mergeOutcome: merge_refused ${'c'.repeat(40)}`,
+        SHEPHERD_HANDOFF_CLOSE,
+        'Prose.',
+      ].join('\n'),
+    );
+    expect(record).toEqual({
+      attemptCount: 1,
+      headSha: 'c'.repeat(40),
+      mergeDeclinedSha: 'd'.repeat(40),
+      mergeRefusedSha: 'c'.repeat(40),
+    });
+  });
+
+  it('reads no merge outcome it does not know', () => {
+    for (const line of ['mergeOutcome: approved abc', 'mergeOutcome: merged', 'mergeOutcome: ']) {
+      expect(
+        parseShepherdHandoff(`${SHEPHERD_HANDOFF_OPEN}\n${line}\n${SHEPHERD_HANDOFF_CLOSE}`),
+      ).toEqual({ attemptCount: 0 });
+    }
+  });
+
+  it('names one field for each merge outcome, each a field of the record', () => {
+    expect(Object.keys(SHEPHERD_MERGE_OUTCOMES).sort()).toEqual([
+      'merge_declined',
+      'merge_refused',
+      'merged',
+    ]);
+    for (const field of Object.values(SHEPHERD_MERGE_OUTCOMES)) {
+      expect(SHEPHERD_HANDOFF_FIELDS).toContain(field);
+    }
+  });
+});
+
+describe('the required checks as text', () => {
+  it('round-trips any name, the separator among them, and the empty set as the empty string', () => {
+    const names = ['Test', 'a,b', 'c:d', 'e%2Cf', 'ünïcode'];
+    expect(decodeRequiredChecks(encodeRequiredChecks(names))).toEqual([...names].sort());
+    expect(encodeRequiredChecks([])).toBe('');
+    expect(decodeRequiredChecks('')).toEqual([]);
+    expect(() => decodeRequiredChecks('a,,b')).toThrow();
   });
 });
 

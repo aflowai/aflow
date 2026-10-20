@@ -1,7 +1,11 @@
 import { z } from 'zod';
 import { SkillAwarenessEntrySchema } from '../cybernetic/skillDiscovery.js';
 import { InstalledAppletSummarySchema } from '../applet/installed.js';
-import { HostPublishedChecksSchema, HostPushApprovalSchema } from '../operations/host.js';
+import {
+  HostMergePostureSchema,
+  HostPublishedChecksSchema,
+  HostPushApprovalSchema,
+} from '../operations/host.js';
 
 // ============================================================================
 
@@ -322,6 +326,14 @@ export const SpaceContextHostFoldersSectionSchema = z.object({
        * nothing, or no machine holding it is running right now.
        */
       pushApproval: HostPushApprovalSchema.optional(),
+      /**
+       * Whether the Local PR Shepherd merges what the loop opened from this
+       * folder, as the machine holding it declares — `when-green` merges
+       * nothing beside a push approval other than `unless-unreviewed`, and
+       * `mergePostureIdleReason` then says so. Absent where `pushApproval` is.
+       */
+      mergePosture: HostMergePostureSchema.optional(),
+      mergePostureIdleReason: z.string().optional(),
       /**
        * That a publication from this folder runs checks in a checkout of its
        * commit before it scans or pushes, and the program they run, as the

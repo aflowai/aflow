@@ -3,10 +3,8 @@ import { COMMISSIONS } from './localPrShepherdRemedies.js';
 import {
   bind,
   ctx,
-  DECIDED_FIX,
+  DECIDED_TO_ACT,
   HEAD_REF,
-  handoffBindings,
-  handoffValue,
   LEASE_TAKERS,
   leaseBindings,
   leaseValue,
@@ -49,11 +47,18 @@ const LEASED_WORK = [
   'rerun-jobs',
   ...COMMISSIONS,
   'publish',
+  // The claim on a head is written before any merge is asked for.
+  'claim-merge',
+  'merge',
+  'record-merge',
+  // A merge's outcome is recorded before the lease goes, so the next holder reads it.
+  'remember-merge-outcome',
 ];
 
 /**
- * The lease, taken before anything is commissioned: the run that holds it,
- * when it was taken, and the check run and head it acts on. Where there is
+ * The lease, taken before anything is commissioned or merged: the run that
+ * holds it, when it was taken, what it decided, and the check run and head it
+ * acts on. Where there is
  * none it is created, never overwritten, so the second of two passes fails
  * here with nothing done. Where there is one, the rules found it stale — its
  * run ended, or it is past `SHEPHERD_LEASE_STALE_AFTER_MS` — and it is taken
@@ -66,13 +71,14 @@ export function leaseTask(taskId: (typeof LEASE_TAKERS)[number]) {
     taskId,
     name: takeover ? 'Take over the stale lease' : 'Take the lease on the branch',
     goal: takeover
-      ? "Overwrite the branch's stale lease — its run has ended, or it is older than the bound — with this pass's own, before anything is commissioned, and only as it was read."
-      : "Write the branch's lease in the space's memory before anything is commissioned, holding the run, the time, and the check run and head this pass acts on.",
+      ? "Overwrite the branch's stale lease — its run has ended, or it is older than the bound, and it is not held by a pass paused at its merge approval — with this pass's own, before anything is commissioned or merged, and only as it was read."
+      : "Write the branch's lease in the space's memory before anything is commissioned or merged, holding the run, the time, the decision, and the check run and head this pass acts on.",
     type: 'operation' as const,
     operation: 'memory.store.put',
+    // A merge takes the lease as a fix does.
     when: {
       allOf: [
-        DECIDED_FIX.expression,
+        ...DECIDED_TO_ACT,
         `tasks.read-in-flight-lease.status ${takeover ? '==' : '!='} 'succeeded'`,
       ],
       onMissingRef: SKIP,
@@ -89,7 +95,7 @@ export function leaseTask(taskId: (typeof LEASE_TAKERS)[number]) {
       ...HEAD_REF,
       headSha: out('read-pr', 'data.headSha'),
       checkRunId: out('read-pr-checks', 'data.firstFailing.id'),
-      ...handoffBindings('attempt', 'data.nextAttemptCount'),
+      decision: out('decide', 'decision'),
       runId: { kind: 'run_id' as const },
       takenAtMs: { kind: 'clock' as const },
       ...(takeover ? { staleHash: out('read-in-flight-lease', 'stat.contentHash') } : {}),
@@ -110,7 +116,8 @@ export function leaseTask(taskId: (typeof LEASE_TAKERS)[number]) {
           pullNumber: bind('number'),
           headSha: bind('headSha'),
           checkRunId: bind('checkRunId'),
-          attempt: handoffValue('attempt'),
+          // Read back by the rules: a merge pass paused holds its lease past the bound.
+          decision: bind('decision'),
         },
       },
     },

@@ -12,6 +12,7 @@ import {
   HOST_CHECKS_TIMEOUT_DEFAULT_MS,
   HOST_HARNESS_CONCURRENCY_DEFAULT,
   HOST_KEEP_AWAKE_DEFAULT,
+  HOST_MERGE_POSTURE_DEFAULT,
   HOST_PUSH_APPROVAL_DEFAULT,
   HOST_SANDBOX_POSTURE_DEFAULT,
   HostApprovedPushSchema,
@@ -1226,6 +1227,7 @@ function rawOutput(
               branchPolicy: {
                 branchPrefix: 'aflow/',
                 pushApproval: scenario.pushApproval,
+                mergePosture: HOST_MERGE_POSTURE_DEFAULT,
                 checksTimeoutMs: HOST_CHECKS_TIMEOUT_DEFAULT_MS,
               },
             }),
@@ -1484,7 +1486,7 @@ function publish(scenario: Scenario): Outcome {
         }
         const raw = rawOutput(task.taskId, scenario, input);
         if (task.outputProjection !== undefined) {
-          const projected = projectTaskOutput(task.outputProjection, raw, null);
+          const projected = projectTaskOutput(task.outputProjection, raw, input);
           // A projection that fails with no resolution fails the task.
           if (!projected.ok) {
             statuses.set(task.taskId, 'failed');
@@ -1642,8 +1644,10 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
     // null is not `approve`.
     const review = taskOrThrow('review-commit');
     if (review.outputProjection === undefined) throw new Error('the review must project');
+    const started = { inputs: { bindingId: 'hb_app', from: 'a'.repeat(40), at: 'b'.repeat(40) } };
+    const reviewed = started.inputs;
     for (const outcome of ['failed', 'cancelled', 'paused'] as const) {
-      const projected = projectTaskOutput(review.outputProjection, reviewEnding(outcome), null);
+      const projected = projectTaskOutput(review.outputProjection, reviewEnding(outcome), started);
       expect(projected).toEqual({
         ok: true,
         value: {
@@ -1652,10 +1656,11 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
           findings: null,
           outcome,
           reviewRunId: 'review-run',
+          reviewed,
         },
       });
     }
-    const approved = projectTaskOutput(review.outputProjection, reviewEnding('approve'), null);
+    const approved = projectTaskOutput(review.outputProjection, reviewEnding('approve'), started);
     expect(approved).toEqual({
       ok: true,
       value: {
@@ -1664,8 +1669,23 @@ describe('Publish Local Changes — the folder decides whether the push asks', (
         findings: [],
         outcome: 'completed',
         reviewRunId: 'review-run',
+        reviewed,
       },
     });
+  });
+
+  // The Local PR Shepherd merges on a verdict only for the head it reads
+  // (Plan 321 D6), so the verdict names the commit it is for: the one pushed.
+  it('names, beside its verdict, the commit it reviewed — the one the push carries', () => {
+    const outcome = publish({ pushApproval: 'unless-unreviewed', review: 'approve' });
+    const review = outcome.outputs.get('review-commit') as { reviewed: { at: string } };
+    expect(review.reviewed.at).toBe(
+      (outcome.outputs.get('commit') as { commit: { sha: string } }).commit.sha,
+    );
+    const refspec = (outcome.outputs.get('commit') as { commit: { pushRefspec: string } }).commit
+      .pushRefspec;
+    expect(outcome.pushed).toBe(true);
+    expect(refspec.startsWith(`${review.reviewed.at}:`)).toBe(true);
   });
 
   it('asks when the review task itself fails, and not otherwise from that failure', () => {

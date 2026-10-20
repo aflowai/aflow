@@ -2,26 +2,27 @@
 
 A change to this repository can be built by the platform itself: Helmsman commissions the
 installed coding agent on the connected checkout, Local Code Review reads the range, and
-Local Publish commits, scans, pushes and opens the pull request. The operator merges. This
+Local Publish commits, scans, pushes and opens the pull request. The operator merges — or, where the folder's merge posture is `when-green`, the PR Shepherd does on the operator's approval. This
 page is the protocol every session that drives work this way follows, so two of them can
 run side by side without taking each other's work down. Plan 315 is where the loop was
 built and where its gaps are logged; the gaps that still bind are listed at the end.
 
 ## The pieces
 
-| Piece            | Where                                                                                       |
-| ---------------- | ------------------------------------------------------------------------------------------- |
-| Space            | Full Circle, `a28f0887-c84a-43ac-87e1-c984eae9d3b9`                                         |
-| Connected folder | binding `hb_aflow` = `~/localhd/aflow`, branch prefix `aflow/`                              |
-| Push posture     | `unless-unreviewed`: a clean scan plus a child review `approve` pushes without asking       |
-| Folder checks    | `node scripts/verify-commit.mjs`, declared on `hb_aflow`; run by every publication first    |
-| Sandbox posture  | `open`, the default: commissions and checks run sandboxed, network open (below)             |
-| Commission       | the catalog's Commission Change, on `host.harness.run`, model `claude-opus-5-5`             |
-| Review           | the catalog's Local Code Review, over `origin/<base>..<sha>`, checked out at `<sha>`        |
-| Publication      | the catalog's Local Publish, by `patchRef`, onto `aflow/<branch>`                           |
-| Pull requests    | opened through the space's GitHub binding; merged by the operator                           |
-| Dev stack        | one, from `~/localhd/aflow-worktrees/live`, branch `live` = `main` plus branches under test |
-| Driving client   | the `aflow-local` MCP server from `.mcp.json`, set up by `yarn mcp:setup`                   |
+| Piece            | Where                                                                                                                               |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Space            | Full Circle, `a28f0887-c84a-43ac-87e1-c984eae9d3b9`                                                                                 |
+| Connected folder | binding `hb_aflow` = `~/localhd/aflow`, branch prefix `aflow/`                                                                      |
+| Push posture     | `unless-unreviewed`: a clean scan plus a child review `approve` pushes without asking                                               |
+| Merge posture    | `never`, the default: the operator merges; `when-green` has the PR Shepherd merge, on approval                                      |
+| Folder checks    | `node scripts/verify-commit.mjs`, declared on `hb_aflow`; run by every publication first                                            |
+| Sandbox posture  | `open`, the default: commissions and checks run sandboxed, network open (below)                                                     |
+| Commission       | the catalog's Commission Change, on `host.harness.run`, model `claude-opus-5-5`                                                     |
+| Review           | the catalog's Local Code Review, over `origin/<base>..<sha>`, checked out at `<sha>`                                                |
+| Publication      | the catalog's Local Publish, by `patchRef`, onto `aflow/<branch>`                                                                   |
+| Pull requests    | opened through the space's GitHub binding; merged by the operator, or by the shepherd under `when-green` on the operator's approval |
+| Dev stack        | one, from `~/localhd/aflow-worktrees/live`, branch `live` = `main` plus branches under test                                         |
+| Driving client   | the `aflow-local` MCP server from `.mcp.json`, set up by `yarn mcp:setup`                                                           |
 
 One Helmsman conversation per stream of work. A second stream starts its own conversation
 in the same space; it never posts into another stream's conversation and never cancels
@@ -153,7 +154,7 @@ scripts/verify-commit.mjs`), and Local Publish runs it after the commit and befo
    No decision is made on a failed check until its measurement has labelled cases (Plan 316
    §7). The pull request's CI remains the proof. By
    hand, from a checkout, it measures `HEAD` against `origin/main`.
-4. **The operator merges.** A merge lands on the dev stack only when the stream that runs it
+4. **The operator merges** — or, under the merge posture `when-green` (`aflow harness merge-posture hb_aflow when-green`), the PR Shepherd merges by squash once the required checks pass on the head, the publication's review approved that head and no person requests changes, each merge on the operator's approval (Plan 321 D6). A merge lands on the dev stack only when the stream that runs it
    merges `origin/main` into `live` (below).
 
 Approvals are held until the verdict is in; an approval given early pushes a commit the

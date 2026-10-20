@@ -21,7 +21,12 @@ const written = vi.hoisted(() => ({
 }));
 
 const published = vi.hoisted(() => ({
-  folders: [] as Array<{ id: string; spaceId: string; pushApproval: string }>,
+  folders: [] as Array<{
+    id: string;
+    spaceId: string;
+    pushApproval: string;
+    mergePosture?: string;
+  }>,
   elsewhere: [] as Array<{ id: string; spaceId: string; pushApproval: string }>,
 }));
 
@@ -164,6 +169,37 @@ describe('the folders a workspace lists', () => {
       // A folder that pushes nothing has no push to approve.
       ['hb_files', null],
     ]);
+    await app.close();
+  });
+
+  it('says whether the shepherd merges what a folder opens, and why a posture merges nothing', async () => {
+    written.existing = [
+      storedRow({ branchPrefix: 'aflow/' }),
+      storedRow({ hostBindingId: 'hb_idle', branchPrefix: 'aflow/' }),
+      storedRow({ hostBindingId: 'hb_files', branchPrefix: null, allowsExecution: false }),
+    ];
+    published.folders = [
+      {
+        id: 'hb_thing',
+        spaceId: SPACE,
+        pushApproval: 'unless-unreviewed',
+        mergePosture: 'when-green',
+      },
+      // Edited by hand into the combination the commands refuse.
+      { id: 'hb_idle', spaceId: SPACE, pushApproval: 'never', mergePosture: 'when-green' },
+      { id: 'hb_files', spaceId: SPACE, pushApproval: 'always', mergePosture: 'when-green' },
+    ];
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: `/spaces/${SPACE}/host-bindings` });
+    expect(res.statusCode).toBe(200);
+    const listed = (res.json() as { bindings: Array<Record<string, unknown>> }).bindings;
+    expect(listed.map((b) => [b['hostBindingId'], b['mergePosture']])).toEqual([
+      ['hb_thing', 'when-green'],
+      ['hb_idle', 'when-green'],
+      ['hb_files', null],
+    ]);
+    expect(listed[0]!['mergePostureIdleReason']).toBeNull();
+    expect(listed[1]!['mergePostureIdleReason']).toMatch(/runs no review/);
     await app.close();
   });
 });

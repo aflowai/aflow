@@ -119,6 +119,7 @@ describe('the checks a folder declares', () => {
     expect(resolveBranchPolicy(declared)).toEqual({
       branchPrefix: 'aflow/',
       pushApproval: 'unless-unreviewed',
+      mergePosture: 'never',
       checksTimeoutMs: HOST_CHECKS_TIMEOUT_DEFAULT_MS,
     });
   });

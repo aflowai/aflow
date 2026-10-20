@@ -18,7 +18,9 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import {
   HostBranchPrefixSchema,
+  HostMergePostureSchema,
   HostPushApprovalSchema,
+  idleMergePostureReason,
   type EditionDescriptor,
 } from '@aflow/schemas';
 import {
@@ -109,6 +111,17 @@ const ListedHostBindingSchema = HostBindingSchema.extend({
     'When a publication from this folder asks before pushing, as the machine holding it ' +
       'declares. Null where the folder pushes nothing, or no machine holding it is running.',
   ),
+  mergePosture: HostMergePostureSchema.nullable().describe(
+    'Whether the Local PR Shepherd merges what the loop opened from this folder, as the ' +
+      'machine holding it declares. Null where pushApproval is.',
+  ),
+  mergePostureIdleReason: z
+    .string()
+    .nullable()
+    .describe(
+      'Why the merge posture merges nothing as it stands — `when-green` beside a push approval ' +
+        'that runs no review. Null where it can merge, or where mergePosture is null.',
+    ),
 });
 
 const CreateBody = z.object({
@@ -219,12 +232,14 @@ export const hostBindingRoutes: FastifyPluginAsync = async (fastify) => {
         machines: machinesForSpace(inventories, request.params.spaceId),
         bindings: rows.map((r) => {
           const binding = HostBindingSchema.parse(r);
+          const posture =
+            binding.branchPrefix === null ? undefined : postures.get(binding.hostBindingId);
           return {
             ...binding,
-            pushApproval:
-              binding.branchPrefix === null
-                ? null
-                : (postures.get(binding.hostBindingId)?.pushApproval ?? null),
+            pushApproval: posture?.pushApproval ?? null,
+            mergePosture: posture?.mergePosture ?? null,
+            mergePostureIdleReason:
+              posture === undefined ? null : (idleMergePostureReason(posture) ?? null),
           };
         }),
       });

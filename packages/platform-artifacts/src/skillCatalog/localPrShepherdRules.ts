@@ -1,4 +1,9 @@
-import { SHEPHERD_HANDS_OFF_LABEL, type WorkflowRunDecideRule } from '@aflow/schemas';
+import {
+  HOST_MERGE_POSTURE_REVIEWED_PUSH,
+  SHEPHERD_HANDS_OFF_LABEL,
+  type ShepherdMergeOutcome,
+  type WorkflowRunDecideRule,
+} from '@aflow/schemas';
 
 // --- The rules ---------------------------------------------------------------
 
@@ -9,6 +14,89 @@ import { SHEPHERD_HANDS_OFF_LABEL, type WorkflowRunDecideRule } from '@aflow/sch
  * rule may decide it.
  */
 export const SHEPHERD_BUDGET_SPENT = 'abandon';
+
+const GREEN = "state.checks.data.state == 'passing'";
+
+function greenAnd(expression: string, reason: string): WorkflowRunDecideRule {
+  return { when: { allOf: [GREEN, expression] }, decision: 'leave', reason };
+}
+
+/**
+ * Where the head is green, what the merge posture allows (D6): each condition
+ * that does not hold leaves the pull request, saying which, and only where
+ * every one holds is the decision `merge`. They follow every rule that decides
+ * `wait`, so a pull request with a push on its way is never merged. Each
+ * condition is written `!= <expected>`, so a read that did not happen — the
+ * posture is `never`, or it failed — holds it back.
+ */
+export const MERGE_RULES: readonly WorkflowRunDecideRule[] = [
+  greenAnd(
+    "state.folder.branchPolicy.mergePosture != 'when-green'",
+    "CI passes on the head. The folder's merge posture is `never`: the merge is the operator's.",
+  ),
+  greenAnd(
+    `state.folder.branchPolicy.pushApproval != '${HOST_MERGE_POSTURE_REVIEWED_PUSH}'`,
+    `CI passes on the head, and the merge posture is \`when-green\`, but the push posture runs no review, so no publication left a verdict to merge on: the merge is the operator's. A folder that merges needs the push approval \`${HOST_MERGE_POSTURE_REVIEWED_PUSH}\`.`,
+  ),
+  greenAnd(
+    'state.handoff.data.mergeDeclinedSha == state.pr.data.headSha',
+    'The operator declined to merge this head. No merge is asked for again until a push moves it.',
+  ),
+  greenAnd(
+    'state.handoff.data.mergeRefusedSha == state.pr.data.headSha',
+    'GitHub refused to merge this head. No merge is asked for again until a push moves it; a refusal resolved without a push leaves this head to the operator.',
+  ),
+  // A record read with no pinned author cannot show a declined or refused
+  // merge, so the pass that writes the first pin does not merge; the next does.
+  greenAnd(
+    "state.handoff.data.trust != 'verified'",
+    "The shepherd's own record on this pull request is not pinned yet, so an earlier declined or refused merge could not be seen. This pass pins it; the next one may merge.",
+  ),
+  greenAnd(
+    'state.requiredRules.statusCode != 200',
+    "GitHub did not return the rulesets of the base branch, so which checks it requires is unknown: the merge is the operator's.",
+  ),
+  greenAnd(
+    'state.requiredProtection.statusCode != 200',
+    "GitHub did not return the base branch's protection, so which checks it requires is unknown: the merge is the operator's.",
+  ),
+  greenAnd(
+    "state.checks.data.required.state == 'none'",
+    "The base branch requires no check, so it has not said what green is: the merge is the operator's. Name a required check on it for the shepherd to merge.",
+  ),
+  greenAnd(
+    "state.checks.data.required.state != 'passed'",
+    "A check the base branch requires has not passed on the head — it failed, is still running, was skipped, or has no check run on it, as a context reported only as a commit status has none. The handoff names each: the merge is the operator's.",
+  ),
+  greenAnd(
+    'state.reviews.statusCode != 200',
+    "GitHub did not return the pull request's reviews, so whether a person requests changes is unknown.",
+  ),
+  greenAnd(
+    'state.reviews.data.complete != true',
+    'The pull request has more reviews than one page holds, so a change request past it would not be seen: the merge is the operator’s.',
+  ),
+  greenAnd(
+    'state.reviews.data.changesRequestedBy[0] != null',
+    'A person’s review on the pull request requests changes, and has been neither dismissed nor followed by their approval: the merge waits on them.',
+  ),
+  // Read from the publication's run, never the pull request's body, which any
+  // collaborator can edit.
+  greenAnd(
+    'state.publicationReview.taskOutput.output.reviewed.at != state.pr.data.headSha',
+    "No publication's Local Code Review is on record for this head — the newest publication of the branch reviewed another commit, ran no review, or another hand pushed the head: the merge is the operator's.",
+  ),
+  greenAnd(
+    "state.publicationReview.taskOutput.output.verdict != 'approve'",
+    "The publication's Local Code Review of this head did not return `approve`: the merge is the operator's.",
+  ),
+  {
+    when: { expression: GREEN },
+    decision: 'merge',
+    reason:
+      "Every check the base branch requires passed on the head, the publication's Local Code Review approved this head, and no person's review requests changes: the shepherd asks to merge it by squash, pinned to this head, on the operator's approval — unless a merge of this head was already asked for, which is never asked for twice.",
+  },
+];
 
 /**
  * Read in order; the first that holds decides. A rule a missing read must not
@@ -114,6 +202,20 @@ export const SHEPHERD_RULES: readonly WorkflowRunDecideRule[] = [
     reason:
       'Another pass holds the lease on this branch, and its run is still going: its fix is still being made or published.',
   })),
+  // A merge pass pauses nowhere but at its merge card, which waits on the
+  // operator rather than being stuck: its lease is live past the bound, so a
+  // card left open is still the only card (D6).
+  {
+    when: {
+      allOf: [
+        "state.lease.dataJson.decision == 'merge'",
+        "state.leaseOwner.run.status == 'paused'",
+      ],
+    },
+    decision: 'wait',
+    reason:
+      'Another pass holds the lease on this branch and is paused at its merge approval, waiting on the operator: no second approval is asked for.',
+  },
   {
     when: { expression: 'state.publications.runs[0] != null' },
     decision: 'wait',
@@ -125,11 +227,7 @@ export const SHEPHERD_RULES: readonly WorkflowRunDecideRule[] = [
     decision: 'wait',
     reason: 'A commission based on this branch is in flight, whoever started it.',
   },
-  {
-    when: { expression: "state.checks.data.state == 'passing'" },
-    decision: 'leave',
-    reason: 'CI passes on the head. The merge is the operator’s.',
-  },
+  ...MERGE_RULES,
   {
     when: { expression: "state.checks.data.state != 'failing'" },
     decision: 'wait',
@@ -196,6 +294,32 @@ export const REMEDY_TAKEN_RULES: readonly WorkflowRunDecideRule[] = [
     reason,
   })),
 ];
+
+/**
+ * How the merge this pass asked for ended, as one of `SHEPHERD_MERGE_OUTCOMES`.
+ * A merge task that failed binds as absent: under the write approval that is
+ * the operator's denial, which fails the task as a permission error. One
+ * GitHub answered other than 200 refused the request pinned to the head.
+ */
+export const MERGE_OUTCOME_RULES: readonly WorkflowRunDecideRule[] = [
+  {
+    when: { expression: 'state.merge == null' },
+    decision: 'merge_declined' satisfies ShepherdMergeOutcome,
+    reason:
+      'The merge was not made: the operator declined it, or the request could not be sent. No merge of this head is asked for again.',
+  },
+  {
+    when: { expression: 'state.merge.statusCode != 200' },
+    decision: 'merge_refused' satisfies ShepherdMergeOutcome,
+    reason:
+      'GitHub refused the merge pinned to this head. No merge of this head is asked for again.',
+  },
+];
+
+export const MERGE_OUTCOME_OTHERWISE = {
+  decision: 'merged' satisfies ShepherdMergeOutcome,
+  reason: 'GitHub merged the pull request by squash, on the head the pass read.',
+};
 
 export const REMEDY_TAKEN_OTHERWISE = {
   decision: 'fix_commission',

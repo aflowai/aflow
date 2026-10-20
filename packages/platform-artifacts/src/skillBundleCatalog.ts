@@ -171,7 +171,7 @@ const KAGGLE_COMPETITION_BUNDLE: AuthoredSkillBundle = {
 
 const CODING_PR_LOOP_BUNDLE: AuthoredSkillBundle = {
   bundleId: 'coding-pr-loop' as SkillBundleId,
-  revision: 0,
+  revision: 1,
   name: 'Coding PR Loop',
   tagline: 'Open, review, and iterate pull requests on your repo with a coding agent.',
   description: `Wires up the **GitHub REST API** and the three coding skills that drive the **implement ↔ review loop**: open a PR from a request, adversarially review it, and revise it on the same branch toward passing.
@@ -304,14 +304,14 @@ const LOCAL_PR_SHEPHERD_BUNDLE: AuthoredSkillBundle = {
   revision: 0,
   name: 'Local PR Shepherd',
   tagline:
-    'Fix what CI fails on the pull requests the loop opened, through Local Publish — never approving, merging or closing.',
+    "Fix what CI fails on the pull requests the loop opened, through Local Publish, and merge a green one where the folder's merge posture allows — never approving or closing.",
   description: `Installs the **Local PR Shepherd** skill and the agent that starts it.
 
 **What it installs**:
-- The **Local PR Shepherd** skill — one pass over the pull requests Local Publish opened from a connected folder: it reads their CI, its own handoff comment and the work in flight on each branch, decides by rules — fix, wait, abandon or leave — and for a red check commissions the fix on the branch and publishes it through Local Publish, which asks the operator exactly where it would when started by hand. A check run is acted on once, and a pull request labelled \`hands-off\` is left untouched.
+- The **Local PR Shepherd** skill — one pass over the pull requests Local Publish opened from a connected folder: it reads their CI, its own handoff comment and the work in flight on each branch, decides by rules — fix, merge, wait, abandon or leave — and for a red check commissions the fix on the branch and publishes it through Local Publish, which asks the operator exactly where it would when started by hand. A check run is acted on once, and a pull request labelled \`hands-off\` is left untouched. Where the folder's merge posture is \`when-green\` — \`aflow harness merge-posture <folder> when-green\`, beside the push approval \`unless-unreviewed\` — a green pull request whose required checks passed on its head, whose head the publication's review approved and on which no person requests changes is merged by squash, on the operator's approval of that merge.
 - The **Local PR Shepherd** agent, under the skill's own slug — one step that starts the skill on the space's connected folder, and no model turn. It is what a schedule starts. It is written only where the space has exactly one folder that allows pushes; otherwise the install says so, and updating the bundle once the folder is connected writes it.
 
-**After install**: connect the repository as a folder with a publish prefix, bind the GitHub connector with a token that reads checks and Actions and writes comments; the binding needs no host but api.github.com — a job's log, served from a signed URL on Azure blob storage, is followed without the token. Then run the agent, or start the skill with the folder's \`bindingId\`, and \`pullNumber\` to aim the pass at one pull request.`,
+**After install**: connect the repository as a folder with a publish prefix, bind the GitHub connector with a token that reads checks, branches and Actions and writes comments — and merges pull requests, where the folder merges; the binding needs no host but api.github.com — a job's log, served from a signed URL on Azure blob storage, is followed without the token. Then run the agent, or start the skill with the folder's \`bindingId\`, and \`pullNumber\` to aim the pass at one pull request.`,
   tags: ['coding', 'github', 'ci', 'local', 'developer-tools'],
   skillCatalogIds: ['local-pr-shepherd'],
   // Every fix is published by Local Publish, which has to be in the space.
@@ -331,8 +331,8 @@ const LOCAL_PR_SHEPHERD_BUNDLE: AuthoredSkillBundle = {
   ],
   helmsmanHints: [
     'A pass is one run of the skill over the folder: start the Local PR Shepherd agent, or workflow.run.start local-pr-shepherd with the folder’s bindingId — and pullNumber to aim it at one pull request. Its decision and reason are in its result and in the handoff comment on the pull request.',
-    'The shepherd never approves, merges or closes. A fix it publishes waits at Local Publish’s approval where the folder’s posture asks; that approval is the operator’s, in the Action Center.',
-    'A space with the GitHub definition from an earlier Local Publish needs Local Publish updated from the Store for the endpoints the shepherd reads — the jobs of a run and the end of a job’s log.',
+    'The shepherd never approves or closes. A fix it publishes waits at Local Publish’s approval where the folder’s posture asks; a merge, only under the folder’s merge posture when-green (mergePosture in the machine block), waits at the merge’s own write approval. Both approvals are the operator’s, in the Action Center.',
+    'A space with the GitHub definition from an earlier Local Publish needs Local Publish updated from the Store for the endpoints the shepherd reads — the jobs of a run, the end of a job’s log, a branch and its rules, and the merge pinned to a head.',
   ],
 };
 

@@ -72,13 +72,26 @@ The work happens in a private clone of the repository, so your uncommitted work 
 
 A change reaches a branch under the folder's prefix, \`aflow/\` by default, and the folder's setting under **Connected folders** says whether a push asks you first.
 
+## Merging
+
+The pull requests the loop opens are yours to merge, unless the folder's merge posture says otherwise. Set to \`when-green\` on the machine that holds the folder — the command is in the Aflow Local operator guide, beside the push setting's — the Local PR Shepherd merges a pull request by squash once every check its base branch requires has passed on its head, the publication's own review approved that head, and no person's review requests changes. Each merge still asks your approval of exactly that request, in the Action Center; decline it and that head is not asked about again until a push moves it. \`when-green\` needs the push setting \`unless-unreviewed\`, the one under which a publication reviews what it pushes. **Connected folders** shows each folder's merge posture under its push setting.
+
 ## While it runs
 
 The machine is kept awake on power while a run is in flight. Work dispatched while it sleeps waits up to ten minutes for it to wake.`,
     editions: ['community-local'],
     anchors: { routes: ['s/[space]/computer'], operations: ['host.harness.run'] },
     related: ['pair-this-computer', 'agent-browser', 'what-is-a-skill', 'local-edition-limits'],
-    keywords: ['claude code', 'opencode', 'diff', 'branch', 'pull request', 'code change'],
+    keywords: [
+      'claude code',
+      'opencode',
+      'diff',
+      'branch',
+      'pull request',
+      'code change',
+      'merge',
+      'pr shepherd',
+    ],
   },
   {
     id: 'agent-browser',

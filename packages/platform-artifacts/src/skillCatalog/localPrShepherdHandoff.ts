@@ -4,6 +4,8 @@ import {
   SHEPHERD_HANDOFF_PINS,
   SHEPHERD_HANDS_OFF_LABEL,
   SHEPHERD_LEASE_ROOT,
+  SHEPHERD_MERGE_OUTCOME_FIELDS,
+  SHEPHERD_MERGE_OUTCOME_LINE,
   SHEPHERD_RESPONSE_PRESETS,
 } from '@aflow/schemas';
 import { REMEDY } from './localPrShepherdRemedies.js';
@@ -86,7 +88,9 @@ function firstText(nodes: Array<{ $firstOf: unknown[] }>, fallback: string) {
   return { $firstOf: [...nodes.flatMap((node) => node.$firstOf), fallback] };
 }
 
-const ATTEMPTS = firstText([leaseText('leaseAttempt'), handoffText('priorAttempt')], '0');
+// The count a fix writes rides on its remedy record, which only a fix makes:
+// a merge takes the lease too, and is no failure acted on.
+const ATTEMPTS = firstText([{ $firstOf: [text('fixAttempt')] }, handoffText('priorAttempt')], '0');
 const CHECK_RUN = firstText([leaseText('leaseCheckRun'), handoffText('priorCheckRun')], '');
 const HEAD_SHA = firstText([leaseText('leaseHeadSha'), handoffText('priorHeadSha')], '');
 const CLASSIFICATION = firstText(
@@ -98,6 +102,33 @@ const PUBLICATION = firstText(
   '',
 );
 const REMEDY_TAKEN = firstText([{ $firstOf: [text('remedy')] }, handoffText('priorRemedy')], '');
+
+/** A text part, or nothing where any of its parts is absent. */
+function optionalPart(...parts: unknown[]) {
+  return { $firstOf: [{ $concat: parts }, ''] };
+}
+
+/**
+ * Each merge outcome an earlier pass recorded, carried forward: the rules
+ * compare it to the head, so one recorded for a head a push has since moved
+ * holds nothing back.
+ */
+const PRIOR_MERGE_OUTCOMES = SHEPHERD_MERGE_OUTCOME_FIELDS.flatMap((field) => [
+  `\n${field}: `,
+  firstText([handoffText(`prior_${field}`)], ''),
+]);
+
+/**
+ * This pass's merge outcome, as the rule step that read it named it, with the
+ * merge commit GitHub answered with, or else the head the request was pinned
+ * to. The reader files it under the outcome's field, over one carried forward.
+ */
+const MERGE_OUTCOME = optionalPart(
+  `\n${SHEPHERD_MERGE_OUTCOME_LINE}: `,
+  bind('mergeOutcome'),
+  ' ',
+  { $firstOf: [text('mergeCommit'), leaseText('leaseHeadSha')] },
+);
 
 const HANDOFF_BODY = {
   $concat: [
@@ -116,11 +147,16 @@ const HANDOFF_BODY = {
     REMEDY_TAKEN,
     '\npublicationRunId: ',
     PUBLICATION,
+    ...PRIOR_MERGE_OUTCOMES,
+    MERGE_OUTCOME,
     `\n${SHEPHERD_HANDOFF_CLOSE}\n`,
     '**Local PR Shepherd** — this pass: `',
     bind('decision'),
     '`. ',
     bind('reason'),
+    optionalPart('\n\nRequired checks not passed on the head: ', text('requiredUnmet'), '.'),
+    optionalPart('\n\nThe merge: ', bind('mergeReason')),
+    optionalPart(' GitHub answered ', text('mergeStatus'), ': ', text('mergeMessage')),
     '\n\nFailures acted on: ',
     ATTEMPTS,
     '. Last acted on check run `',
@@ -132,7 +168,7 @@ const HANDOFF_BODY = {
     ),
     '`; publication run `',
     firstText([{ $firstOf: [text('publicationRunId')] }, handoffText('priorPublication')], 'none'),
-    `\`.\n\n_The shepherd never approves, merges or closes a pull request. Label it \`${SHEPHERD_HANDS_OFF_LABEL}\` to have it left alone._`,
+    `\`.\n\n_The shepherd never approves or closes a pull request, and merges one only where its folder's merge posture is \`when-green\`, on the operator's approval. Label it \`${SHEPHERD_HANDS_OFF_LABEL}\` to have it left alone._`,
   ],
 };
 
@@ -140,7 +176,18 @@ const HANDOFF_BINDINGS = {
   ...REPOSITORY,
   decision: out('decide', 'decision'),
   reason: out('decide', 'reason'),
-  ...leaseBindings('leaseAttempt', 'lease.inlineJson.attempt'),
+  fixAttempt: out('record-remedy', 'round.attempt'),
+  ...Object.fromEntries(
+    SHEPHERD_MERGE_OUTCOME_FIELDS.flatMap((field) =>
+      Object.entries(handoffBindings(`prior_${field}`, `data.${field}`)),
+    ),
+  ),
+  requiredUnmet: out('read-pr-checks', 'data.required.summary'),
+  mergeOutcome: out('record-merge', 'decision'),
+  mergeReason: out('record-merge', 'reason'),
+  mergeCommit: out('merge', 'data.sha'),
+  mergeStatus: out('merge', 'statusCode'),
+  mergeMessage: out('merge', 'data.message'),
   ...leaseBindings('leaseCheckRun', 'lease.inlineJson.checkRunId'),
   ...leaseBindings('leaseHeadSha', 'lease.inlineJson.headSha'),
   ...handoffBindings('priorAttempt', 'data.attemptCount'),

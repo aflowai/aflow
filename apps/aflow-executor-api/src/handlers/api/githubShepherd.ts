@@ -10,6 +10,8 @@
 import {
   type CheckRunsState,
   type CheckRunsSummary,
+  decodeRequiredChecks,
+  encodeRequiredChecks,
   type FailingCheckRun,
   type FailingJobs,
   JOB_LOG_EXCERPT_MAX_BYTES,
@@ -21,6 +23,10 @@ import {
   type LoopPullRequests,
   type LoopPullRequestSummary,
   parseShepherdHandoff,
+  PULL_REQUEST_REVIEWS_PER_PAGE,
+  type PullRequestReviews,
+  type RequiredCheckNames,
+  type RequiredChecksVerdict,
   SHEPHERD_HANDS_OFF_LABEL,
   SHEPHERD_RESPONSE_PRESETS,
   type ShepherdHandoffRead,
@@ -191,7 +197,7 @@ function actionsRunId(detailsUrl: unknown): number | undefined {
  * left unread may fail, so nothing but a failure seen on the page is a
  * verdict: the head reads `pending`, never `passing`, `stopped` or `none`.
  */
-export function loopCheckRuns(body: unknown): CheckRunsSummary {
+export function loopCheckRuns(body: unknown, arg?: string): CheckRunsSummary {
   const page = record(body, 'the check runs');
   const totalCount = count(page['total_count'], 'total_count');
   const runs = list(page['check_runs'], 'check_runs').map((value) => record(value, 'a check run'));
@@ -228,6 +234,131 @@ export function loopCheckRuns(body: unknown): CheckRunsSummary {
     total: totalCount,
     failing,
     ...(firstFailing !== undefined ? { firstFailing } : {}),
+    ...(arg !== undefined
+      ? { required: requiredChecksVerdict(runs, decodeRequiredChecks(arg)) }
+      : {}),
+  };
+}
+
+const NO_CHECK_RUN = 'no check run';
+
+/**
+ * Each required name judged on the head's check runs: passed only where it has
+ * a run and every run of that name completed `success`. A name with no run on
+ * the page — including a context only the commit Statuses API reports, which
+ * is never a check run — has not passed.
+ */
+function requiredChecksVerdict(runs: Json[], required: string[]): RequiredChecksVerdict {
+  const unmet = required.flatMap((name) => {
+    const named = runs.filter((run) => run['name'] === name);
+    if (named.length === 0) return [{ name, conclusion: NO_CHECK_RUN }];
+    const short = named.find(
+      (run) => run['status'] !== 'completed' || run['conclusion'] !== 'success',
+    );
+    if (short === undefined) return [];
+    const conclusion = short['conclusion'];
+    return [
+      {
+        name,
+        conclusion:
+          short['status'] !== 'completed'
+            ? 'pending'
+            : typeof conclusion === 'string'
+              ? conclusion
+              : 'none',
+      },
+    ];
+  });
+  return {
+    state: required.length === 0 ? 'none' : unmet.length === 0 ? 'passed' : 'unmet',
+    required,
+    unmet,
+    ...(unmet.length > 0
+      ? { summary: unmet.map((check) => `\`${check.name}\` (${check.conclusion})`).join(', ') }
+      : {}),
+  };
+}
+
+/**
+ * `getBranchRules` → the check names the rulesets that apply to the branch
+ * require. GitHub answers every active rule of every ruleset on the branch,
+ * one entry per rule; only `required_status_checks` names checks.
+ */
+export function loopRequiredRules(body: unknown): RequiredCheckNames {
+  const names = list(body, 'the branch rules')
+    .map((value) => record(value, 'a branch rule'))
+    .filter((rule) => rule['type'] === 'required_status_checks')
+    .flatMap((rule) =>
+      list(
+        record(rule['parameters'], 'its parameters')['required_status_checks'],
+        'its required checks',
+      ).map((check) => text(record(check, 'a required check')['context'], 'a check context')),
+    );
+  return { names: [...new Set(names)].sort(), encoded: encodeRequiredChecks(names) };
+}
+
+/**
+ * `getBranch` → the classic protection's required checks, united with the
+ * rulesets' names given after the colon. A token that reads the repository
+ * sees `protection.required_status_checks` here; an unprotected branch has
+ * none. Both spellings GitHub keeps are read: `contexts` and `checks`.
+ */
+export function loopRequiredProtection(body: unknown, arg: string | undefined): RequiredCheckNames {
+  if (arg === undefined) {
+    throw new Error(
+      `${SHEPHERD_RESPONSE_PRESETS.requiredProtection} unites the branch's protection with the rulesets' checks, given after a colon`,
+    );
+  }
+  const branch = record(body, 'the branch');
+  const protection = branch['protection'];
+  const checks =
+    protection !== null && typeof protection === 'object'
+      ? (protection as Json)['required_status_checks']
+      : undefined;
+  const classic: string[] = [];
+  if (checks !== null && typeof checks === 'object') {
+    const declared = checks as Json;
+    for (const context of list(declared['contexts'] ?? [], 'its contexts')) {
+      classic.push(text(context, 'a context'));
+    }
+    for (const check of list(declared['checks'] ?? [], 'its checks')) {
+      classic.push(text(record(check, 'a check')['context'], 'a check context'));
+    }
+  }
+  const names = [...new Set([...decodeRequiredChecks(arg), ...classic])].sort();
+  return { names, encoded: encodeRequiredChecks(names) };
+}
+
+const VERDICT_STATES = new Set(['APPROVED', 'CHANGES_REQUESTED', 'DISMISSED']);
+
+/**
+ * `listPullRequestReviews`, one page → each person's standing verdict. GitHub
+ * answers oldest first, so a later verdict of the same reviewer replaces an
+ * earlier one; a `COMMENTED` or `PENDING` review is not a verdict and replaces
+ * nothing. A bot's review is not a person's.
+ */
+export function loopReviews(body: unknown): PullRequestReviews {
+  const reviews = list(body, 'the reviews').map((value) => record(value, 'a review'));
+  const standing = new Map<string, string>();
+  for (const review of reviews) {
+    const state = review['state'];
+    if (typeof state !== 'string' || !VERDICT_STATES.has(state)) continue;
+    const user = review['user'];
+    if (user === null || typeof user !== 'object') continue;
+    if ((user as Json)['type'] !== 'User') continue;
+    const login = text((user as Json)['login'], 'a reviewer login').toLowerCase();
+    standing.set(login, state);
+  }
+  const by = (wanted: string) =>
+    [...standing.entries()]
+      .filter(([, state]) => state === wanted)
+      .map(([login]) => login)
+      .sort();
+  return {
+    changesRequestedBy: by('CHANGES_REQUESTED'),
+    approvedBy: by('APPROVED'),
+    count: reviews.length,
+    complete: reviews.length < PULL_REQUEST_REVIEWS_PER_PAGE,
   };
 }
 
@@ -375,7 +506,10 @@ export const SHEPHERD_RECORD_PRESETS: Record<
 > = {
   [SHEPHERD_RESPONSE_PRESETS.pullRequests]: loopPullRequests,
   [SHEPHERD_RESPONSE_PRESETS.pullRequest]: loopPullRequest,
-  [SHEPHERD_RESPONSE_PRESETS.checkRuns]: (body) => loopCheckRuns(body),
+  [SHEPHERD_RESPONSE_PRESETS.checkRuns]: loopCheckRuns,
   [SHEPHERD_RESPONSE_PRESETS.handoff]: loopHandoff,
   [SHEPHERD_RESPONSE_PRESETS.failingJobs]: (body) => loopFailingJobs(body),
+  [SHEPHERD_RESPONSE_PRESETS.requiredRules]: (body) => loopRequiredRules(body),
+  [SHEPHERD_RESPONSE_PRESETS.requiredProtection]: loopRequiredProtection,
+  [SHEPHERD_RESPONSE_PRESETS.reviews]: (body) => loopReviews(body),
 };

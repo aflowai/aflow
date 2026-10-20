@@ -13,6 +13,9 @@ import {
   BrowserProfileIdSchema,
   BrowserProfileSchema,
   type HostPublishedChecks,
+  HOST_MERGE_POSTURE_DEFAULT,
+  type HostMergePosture,
+  HostMergePostureSchema,
   HostPublishedChecksSchema,
   type HostPushApproval,
   HostPushApprovalSchema,
@@ -260,6 +263,7 @@ export const HostInventorySchema = z.object({
       id: z.string(),
       spaceId: z.string(),
       pushApproval: HostPushApprovalSchema,
+      mergePosture: HostMergePostureSchema.default(HOST_MERGE_POSTURE_DEFAULT),
       checks: HostPublishedChecksSchema.optional(),
       sandbox: HostSandboxPostureSchema,
     }),
@@ -296,6 +300,7 @@ export type HostInventoryBrowsers = HostInventory['browsers'];
 /** What the machine holding a pushing folder declares about publishing from it. */
 export interface PublishingFolder {
   readonly pushApproval: HostPushApproval;
+  readonly mergePosture: HostMergePosture;
   readonly checks?: HostPublishedChecks;
 }
 
@@ -315,6 +320,7 @@ export function publishingFoldersForSpace(
       if (folder.spaceId === spaceId && !folders.has(folder.id)) {
         folders.set(folder.id, {
           pushApproval: folder.pushApproval,
+          mergePosture: folder.mergePosture,
           ...(folder.checks !== undefined ? { checks: folder.checks } : {}),
         });
       }
