@@ -37,6 +37,15 @@ export const SHEPHERD_LEASE_DOCUMENT = 'lease.json';
 export const SHEPHERD_HANDOFF_PINS = 'pulls';
 
 /**
+ * Where a merge's outcome is recorded — `<root>/<owner>/<repo>/pulls/<number>/merges/<headSha>.json`,
+ * one document per head. It is written under the branch's lease, before the
+ * lease is released, and read under the lease before a merge is asked for:
+ * any pass that holds the lease after one recorded an outcome for a head
+ * finds it, so no two passes ask to merge the same head, however they overlap.
+ */
+export const SHEPHERD_MERGE_OUTCOME_DOCS = 'merges';
+
+/**
  * A lease older than this is stale whatever its run says: a pass that holds
  * one longer — a commission's two hours and a publication waiting at its
  * approval besides — has stopped, and the next pass takes the lease over.

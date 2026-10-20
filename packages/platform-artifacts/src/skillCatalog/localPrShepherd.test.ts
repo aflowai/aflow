@@ -159,6 +159,13 @@ interface Scenario {
   publication?: { verdict: string | null; at: string } | 'none';
   /** How GitHub, or the operator, answers the merge. */
   merge?: 'merged' | 'refused' | 'declined';
+  /**
+   * The space's memory of merge outcomes, by path, shared by passes that
+   * overlap: what one pass records under the lease, the next one reads.
+   */
+  mergeOutcomes?: Map<string, Record<string, unknown>>;
+  /** The outcome read under the lease fails — the store refused it. */
+  mergeOutcomeRead?: 'fails';
 }
 
 interface Pass {
@@ -338,6 +345,19 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
     }
     case 'record-merge':
       return ok({ ...decideByRules(WorkflowRunDecideInputSchema.parse(input)) });
+    case 'read-merge-outcome': {
+      const read = MemoryGetInputSchema.parse(input);
+      if (s.mergeOutcomeRead === 'fails') return { ok: false };
+      const recorded = s.mergeOutcomes?.get(String(read.target.path));
+      return recorded === undefined
+        ? ok({ found: false })
+        : ok({ stat: { path: read.target.path }, dataJson: recorded });
+    }
+    case 'remember-merge-outcome': {
+      const put = MemoryPutInputSchema.parse(input);
+      s.mergeOutcomes?.set(put.path, put.content.inlineJson as Record<string, unknown>);
+      return ok({ id: 'doc-3', path: put.path, version: 1 });
+    }
     case 'read-handoff-pin': {
       // The read asks to be told a missing pin apart from a failed read: one
       // that is not there answers found: false. A pin is kept per pull
@@ -1031,8 +1051,13 @@ describe('Local PR Shepherd — it approves nothing', () => {
         'mergePullRequest',
     );
     expect(merging.map((task) => task.taskId)).toEqual(['merge']);
+    // On a merge decision, and only where the read under the lease found no
+    // outcome recorded for this head.
     expect(merging[0]!.when).toMatchObject({
-      expression: "tasks.decide.output.decision == 'merge'",
+      allOf: [
+        "tasks.decide.output.decision == 'merge'",
+        'tasks.read-merge-outcome.output.found == false',
+      ],
     });
     // Squash, pinned to the head read; never retried into a second approval.
     expect(merging[0]!.inputTemplate).toMatchObject({
@@ -1341,6 +1366,81 @@ describe('Local PR Shepherd — it merges what the posture allows', () => {
     expect(again.decision).toBe('leave');
     expect(again.outputs.get('decide')?.['reason']).toMatch(/GitHub refused to merge this head/);
     expect(again.ran).not.toContain('merge');
+  });
+});
+
+describe('Local PR Shepherd — a merge outcome is recorded under the lease, so overlapping passes ask once', () => {
+  it('records the outcome for the head before the lease is released', () => {
+    const store = new Map<string, Record<string, unknown>>();
+    const declined = green({ merge: 'declined', mergeOutcomes: store });
+    const path = `/shepherd/aflowai/aflow/pulls/94/merges/${HEAD}.json`;
+    expect(store.get(path)).toMatchObject({ headSha: HEAD, outcome: 'merge_declined' });
+    expect(declined.ran.indexOf('remember-merge-outcome')).toBeGreaterThan(
+      declined.ran.indexOf('record-merge'),
+    );
+    expect(declined.ran.indexOf('release')).toBeGreaterThan(
+      declined.ran.indexOf('remember-merge-outcome'),
+    );
+    // The read that gates the merge comes after the lease is taken.
+    expect(declined.ran.indexOf('read-merge-outcome')).toBeGreaterThan(
+      declined.ran.indexOf('lease'),
+    );
+    expect(declined.ran.indexOf('merge')).toBeGreaterThan(
+      declined.ran.indexOf('read-merge-outcome'),
+    );
+  });
+
+  // The overlap: the second pass read the handoff before the first rewrote
+  // it, so its own record shows no outcome and its rules decide `merge`.
+  // Only what the first recorded under the lease stands between it and a
+  // second approval for the same head.
+  it.each([
+    ['declined', 'merge_declined', 'mergeDeclinedSha', HEAD],
+    ['refused', 'merge_refused', 'mergeRefusedSha', HEAD],
+    ['merged', 'merged', 'mergeCommitSha', MERGE_COMMIT],
+  ] as const)(
+    'does not ask again for a head an overlapping pass already %s, though its own handoff is stale',
+    (merge, outcome, field, sha) => {
+      const store = new Map<string, Record<string, unknown>>();
+      const first = green({ merge, mergeOutcomes: store });
+      expect(first.ran).toContain('merge');
+
+      const second = green({ mergeOutcomes: store });
+      expect(second.decision).toBe('merge');
+      expect(second.ran).toContain('read-merge-outcome');
+      expect(second.ran).not.toContain('merge');
+      expect(second.statuses.get('merge')).toBe('skipped');
+      expect(second.statuses.get('record-merge')).toBe('skipped');
+      expect(second.statuses.get('remember-merge-outcome')).toBe('skipped');
+      // Its handoff takes the recorded outcome, so later passes leave by rule.
+      expect(second.handoff).toMatchObject({ [field]: sha });
+      const body = String(
+        (second.inputs.get('handoff-edit')!['params'] as { body: { body: string } }).body.body,
+      );
+      expect(body).toContain(`No merge was asked for: a pass already recorded \`${outcome}\``);
+      expect(second.ran).toContain('release');
+    },
+  );
+
+  it('asks for a new head, whose outcome nothing has recorded', () => {
+    const store = new Map<string, Record<string, unknown>>();
+    green({ merge: 'declined', mergeOutcomes: store });
+    const pushed = 'a'.repeat(40);
+    const moved = green({
+      mergeOutcomes: store,
+      pullRequest: { headSha: pushed },
+      publication: { verdict: 'approve', at: pushed },
+    });
+    expect(moved.ran).toContain('merge');
+    expect(moved.inputs.get('merge')).toMatchObject({ params: { body: { sha: pushed } } });
+  });
+
+  it('asks nothing where the outcome could not be read: a failed read is no absence', () => {
+    const unread = green({ mergeOutcomeRead: 'fails' });
+    expect(unread.decision).toBe('merge');
+    expect(unread.statuses.get('read-merge-outcome')).toBe('failed');
+    expect(unread.ran).not.toContain('merge');
+    expect(unread.ran).toContain('release');
   });
 });
 

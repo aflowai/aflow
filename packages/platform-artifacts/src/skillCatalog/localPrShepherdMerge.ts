@@ -1,4 +1,10 @@
-import { PULL_REQUEST_REVIEWS_PER_PAGE, SHEPHERD_RESPONSE_PRESETS } from '@aflow/schemas';
+import {
+  PULL_REQUEST_REVIEWS_PER_PAGE,
+  SHEPHERD_HANDOFF_PINS,
+  SHEPHERD_LEASE_ROOT,
+  SHEPHERD_MERGE_OUTCOME_DOCS,
+  SHEPHERD_RESPONSE_PRESETS,
+} from '@aflow/schemas';
 import { MERGE_OUTCOME_OTHERWISE, MERGE_OUTCOME_RULES } from './localPrShepherdRules.js';
 import {
   BASE_REF,
@@ -133,15 +139,68 @@ export const MERGE_READ_TASKS = [
   },
 ];
 
+/**
+ * `shepherd/<owner>/<repo>/pulls/<number>/merges/<headSha>.json`: the outcome
+ * of the merge asked for on one head of one pull request, bound from `owner`,
+ * `repo`, `number` and `headSha`.
+ */
+const MERGE_OUTCOME_PATH = {
+  $concat: [
+    `${SHEPHERD_LEASE_ROOT}/`,
+    bind('owner'),
+    '/',
+    bind('repo'),
+    `/${SHEPHERD_HANDOFF_PINS}/`,
+    { $text: [bind('number')] },
+    `/${SHEPHERD_MERGE_OUTCOME_DOCS}/`,
+    bind('headSha'),
+    '.json',
+  ],
+};
+
+const MERGE_OUTCOME_BINDINGS = {
+  ...REPOSITORY,
+  ...NUMBER,
+  headSha: out('read-pr', 'data.headSha'),
+};
+
+/**
+ * The merge is asked for only where the outcome read under the lease
+ * succeeded and found none for this head. The handoff's record is read before
+ * the lease and written after its release, so between two overlapping passes
+ * it can be stale; this read cannot: an outcome is recorded before the lease
+ * that covered it is released, and this read follows taking the lease.
+ */
+const NO_OUTCOME_FOR_HEAD = {
+  allOf: [DECIDED_MERGE.expression, 'tasks.read-merge-outcome.output.found == false'],
+  onMissingRef: SKIP,
+};
+
 export const MERGE_TASKS = [
+  {
+    taskId: 'read-merge-outcome',
+    name: "Read this head's merge outcome",
+    goal: 'Under the lease, read whether a merge of this head was already asked for and how it ended — declined, refused or merged — by this pass’s predecessors, however they overlapped. Only a read that found none lets the merge be asked for.',
+    type: 'operation' as const,
+    operation: 'memory.store.get',
+    dependsOn: [...LEASE_TAKERS],
+    when: DECIDED_MERGE,
+    // A read that fails is not an absence: the merge stays unasked.
+    optional: true,
+    retryability: 'safe' as const,
+    inputBindings: MERGE_OUTCOME_BINDINGS,
+    context: ctx('memory.store.get'),
+    inputTemplate: { target: { path: MERGE_OUTCOME_PATH }, view: 'content', ifMissing: 'absent' },
+  },
+
   {
     taskId: 'merge',
     name: 'Merge the pull request',
-    goal: "Merge the pull request by squash, pinned to the head this pass read, so GitHub refuses it if the head moved since. The merge waits on the operator's approval of exactly this request, as the space's write policy has it.",
+    goal: "Merge the pull request by squash, pinned to the head this pass read, so GitHub refuses it if the head moved since — only where no outcome is recorded for this head. The merge waits on the operator's approval of exactly this request, as the space's write policy has it.",
     type: 'operation' as const,
     operation: 'api.http.call',
     dependsOn: [...LEASE_TAKERS],
-    when: DECIDED_MERGE,
+    when: NO_OUTCOME_FOR_HEAD,
     // A denied approval fails it; the pass still records and releases.
     optional: true,
     // A second attempt asks a second approval.
@@ -164,7 +223,11 @@ export const MERGE_TASKS = [
     type: 'operation' as const,
     operation: 'workflow.run.decide',
     dependsOn: ['merge'],
-    when: DECIDED_MERGE,
+    // Only a merge that was asked for — answered, refused or denied — has an outcome to name.
+    when: {
+      allOf: [...NO_OUTCOME_FOR_HEAD.allOf, "tasks.merge.status != 'skipped'"],
+      onMissingRef: SKIP,
+    },
     retryability: 'safe' as const,
     inputBindings: { merge: out('merge') },
     context: ctx('workflow.run.decide'),
@@ -172,6 +235,43 @@ export const MERGE_TASKS = [
       state: { merge: bind('merge') },
       rules: MERGE_OUTCOME_RULES,
       otherwise: MERGE_OUTCOME_OTHERWISE,
+    },
+  },
+
+  {
+    taskId: 'remember-merge-outcome',
+    name: "Record this head's merge outcome",
+    goal: 'Record, before the lease is released, how the merge of this head ended and the commit it names, so no pass that holds the lease after this one asks to merge this head again.',
+    type: 'operation' as const,
+    operation: 'memory.store.put',
+    when: { expression: "tasks.record-merge.status == 'succeeded'", onMissingRef: SKIP },
+    // The release waits for it; one that could not be written still lets the
+    // lease go and the handoff record the outcome.
+    optional: true,
+    retryability: 'safe' as const,
+    maxAttempts: 3,
+    inputBindings: {
+      ...MERGE_OUTCOME_BINDINGS,
+      outcome: out('record-merge', 'decision'),
+      mergeCommit: out('merge', 'data.sha'),
+      runId: { kind: 'run_id' as const },
+    },
+    context: ctx('memory.store.put'),
+    inputTemplate: {
+      path: MERGE_OUTCOME_PATH,
+      writeMode: 'upsert',
+      docType: 'json',
+      mimeType: 'application/json',
+      indexing: 'disabled',
+      summary: 'How a merge the Local PR Shepherd asked for on this head ended.',
+      content: {
+        inlineJson: {
+          headSha: bind('headSha'),
+          outcome: bind('outcome'),
+          mergeCommit: bind('mergeCommit'),
+          runId: bind('runId'),
+        },
+      },
     },
   },
 ];

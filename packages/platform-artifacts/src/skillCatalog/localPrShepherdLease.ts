@@ -47,8 +47,11 @@ const LEASED_WORK = [
   'rerun-jobs',
   ...COMMISSIONS,
   'publish',
+  'read-merge-outcome',
   'merge',
   'record-merge',
+  // A merge's outcome is recorded before the lease goes, so the next holder reads it.
+  'remember-merge-outcome',
 ];
 
 /**

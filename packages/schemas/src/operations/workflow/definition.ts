@@ -15,7 +15,7 @@ import { WorkflowTaskSchema } from './task.js';
  * The most tasks a stored workflow holds. A ceiling, not a design target: a
  * task is one operation, so a skill that reads five things, decides, and acts
  * one of four ways is twenty tasks before it records anything — the Local PR
- * Shepherd, which also merges, is thirty-eight. It bounds every shape a
+ * Shepherd, which also merges, is forty. It bounds every shape a
  * workflow's tasks take: the stored workflow, workflow.manage.put's input, and
  * the compose-skill draft (ComposedWorkflowSchema), so a draft holds as many
  * as a stored workflow.
