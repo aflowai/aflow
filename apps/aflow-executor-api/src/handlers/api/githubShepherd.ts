@@ -256,11 +256,16 @@ function requiredChecksVerdict(runs: Json[], required: string[]): RequiredChecks
       (run) => run['status'] !== 'completed' || run['conclusion'] !== 'success',
     );
     if (short === undefined) return [];
+    const conclusion = short['conclusion'];
     return [
       {
         name,
         conclusion:
-          short['status'] !== 'completed' ? 'pending' : String(short['conclusion'] ?? 'none'),
+          short['status'] !== 'completed'
+            ? 'pending'
+            : typeof conclusion === 'string'
+              ? conclusion
+              : 'none',
       },
     ];
   });
