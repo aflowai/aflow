@@ -74,7 +74,7 @@ A change reaches a branch under the folder's prefix, \`aflow/\` by default, and 
 
 ## Merging
 
-The pull requests the loop opens are yours to merge, unless the folder's merge posture says otherwise. Set on the machine with \`aflow harness merge-posture <folder> when-green\`, the Local PR Shepherd merges a pull request by squash once every check its base branch requires has passed on its head, the publication's own review approved that head, and no person's review requests changes. Each merge still asks your approval of exactly that request, in the Action Center; decline it and that head is not asked about again until a push moves it. \`when-green\` needs the push setting \`unless-unreviewed\`, the one under which a publication reviews what it pushes. **Connected folders** shows each folder's merge posture under its push setting.
+The pull requests the loop opens are yours to merge, unless the folder's merge posture says otherwise. Set to \`when-green\` on the machine that holds the folder — the command is in the Aflow Local operator guide, beside the push setting's — the Local PR Shepherd merges a pull request by squash once every check its base branch requires has passed on its head, the publication's own review approved that head, and no person's review requests changes. Each merge still asks your approval of exactly that request, in the Action Center; decline it and that head is not asked about again until a push moves it. \`when-green\` needs the push setting \`unless-unreviewed\`, the one under which a publication reviews what it pushes. **Connected folders** shows each folder's merge posture under its push setting.
 
 ## While it runs
 
