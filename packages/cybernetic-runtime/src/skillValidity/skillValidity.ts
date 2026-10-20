@@ -172,7 +172,7 @@ export function materializeAndValidateSkillConfig(
   // Routes are read before this pass derives their guards. Every writer stores
   // the materialized tasks, so `input.tasks` may already carry guards an earlier
   // pass derived — `validateRoutes` tells them from a target's own `when` by
-  // their `derivedFromRoutesOf` mark.
+  // their `derivedFromRoutes` mark.
   const opByStoredTaskId = new Map(input.tasks.map((t) => [t.taskId, t.operation] as const));
   try {
     for (const err of validateRoutes(input.tasks)) {

@@ -5,7 +5,7 @@
  * guards are derived from them — at materialization, the form every run and
  * every validity check uses, and in the designer — so the fork is authored
  * once, on its source, and the guards cannot drift from it. A derived guard is
- * marked `derivedFromRoutesOf`, which is what lets a workflow stored in its
+ * marked `derivedFromRoutes`, which is what lets a workflow stored in its
  * materialized form be read again as authored.
  */
 import {
@@ -89,14 +89,23 @@ export function routeClaims(
 
 /** Whether materialization derived this guard from routes, rather than an author writing it. */
 export function isRouteDerivedGuard(when: WorkflowWhen | undefined): boolean {
-  return when?.derivedFromRoutesOf !== undefined;
+  return when?.derivedFromRoutes !== undefined;
 }
 
-/** The task as authored: without a guard an earlier materialization derived from routes. */
+/**
+ * The task as authored: without the guard an earlier materialization derived
+ * from routes, and without the dependency on the source that it added.
+ */
 function withoutDerivedRouteGuard(task: WorkflowTask): WorkflowTask {
-  if (!isRouteDerivedGuard(task.when)) return task;
-  const { when: _derived, ...authored } = task;
-  return authored;
+  const mark = task.when?.derivedFromRoutes;
+  if (mark === undefined) return task;
+  const { when: _derived, dependsOn, ...rest } = task;
+  const authoredDependsOn = mark.addedDependency
+    ? (dependsOn ?? []).filter((id) => id !== mark.source)
+    : dependsOn;
+  return authoredDependsOn !== undefined && authoredDependsOn.length > 0
+    ? { ...rest, dependsOn: authoredDependsOn }
+    : rest;
 }
 
 /**
@@ -105,9 +114,11 @@ function withoutDerivedRouteGuard(task: WorkflowTask): WorkflowTask {
  * carrying its own `when`, or enabled by an inexpressible combination — is
  * left as authored; validation refuses that workflow before it can run.
  *
- * Idempotent: a guard an earlier pass derived is marked, dropped and derived
- * again from the routes as they are now, so a stored materialized workflow
- * whose routes were since edited carries no stale guard.
+ * Idempotent: what an earlier pass derived — the guard, and the dependency on
+ * the source when the author had not declared it — is marked, dropped and
+ * derived again from the routes as they are now, so a stored materialized
+ * workflow whose routes were since edited carries no stale guard and no stale
+ * dependency.
  */
 export function deriveRouteGuards(tasks: WorkflowTask[]): WorkflowTask[] {
   const byTarget = routeClaims(tasks);
@@ -118,16 +129,18 @@ export function deriveRouteGuards(tasks: WorkflowTask[]): WorkflowTask[] {
     if (!claimed || task.when !== undefined) return task;
     const sources = new Set(claimed.map((c) => c.source));
     if (sources.size !== 1) return task;
-    const [source] = sources;
+    const source = [...sources][0]!;
     const guard = routeGuardFor(
-      source!,
+      source,
       claimed.map((c) => c.route),
     );
     if (!guard) return task;
+    const authoredDependsOn = task.dependsOn ?? [];
+    const addedDependency = !authoredDependsOn.includes(source);
     return {
       ...task,
-      when: { ...guard, derivedFromRoutesOf: source! },
-      dependsOn: [...new Set([...(task.dependsOn ?? []), source!])],
+      when: { ...guard, derivedFromRoutes: { source, addedDependency } },
+      dependsOn: addedDependency ? [...authoredDependsOn, source] : authoredDependsOn,
     };
   });
 }

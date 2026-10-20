@@ -75,7 +75,7 @@ describe('routes are stored on the source and guard their targets when materiali
         'tasks.triage.output.answers.team.decided == false',
       ],
       onMissingRef: 'skip',
-      derivedFromRoutesOf: 'triage',
+      derivedFromRoutes: { source: 'triage', addedDependency: true },
     });
   });
 
@@ -131,10 +131,57 @@ describe('a materialized workflow reads back as authored', () => {
     expect(byId.get('billing')?.when).toEqual({
       expression: "tasks.triage.output.answers.team.value == 'technical'",
       onMissingRef: 'skip',
-      derivedFromRoutesOf: 'triage',
+      derivedFromRoutes: { source: 'triage', addedDependency: true },
     });
+    // The route to `escalate` is gone, and with it the guard and the dependency
+    // it derived: `escalate` is the unconditional root it was authored as.
     expect(byId.get('escalate')?.when).toBeUndefined();
-    expect(errors(edited)).toEqual([]);
+    expect(byId.get('escalate')?.dependsOn).toBeUndefined();
+    expect(errors(edited)).toEqual(['multiple_root_tasks']);
+  });
+
+  it('moves the derived dependency when a target is routed from another source', () => {
+    const intake = agent('intake', {
+      routes: [{ when: { expression: "output.kind == 'ticket'" }, enable: ['billing'] }],
+    });
+    const stored = materializeSkillTasks(
+      workflow(ROUTES, [intake]).filter((t) => t.taskId !== 'intake'),
+    );
+    expect(stored.find((t) => t.taskId === 'billing')?.dependsOn).toEqual(['triage']);
+
+    const rerouted = [
+      ...stored.map((t) =>
+        t.taskId === 'triage'
+          ? { ...t, routes: ROUTES!.filter((r) => !r.enable.includes('billing')) }
+          : t,
+      ),
+      intake,
+    ];
+    const billing = materializeSkillTasks(rerouted).find((t) => t.taskId === 'billing');
+    expect(billing?.dependsOn).toEqual(['intake']);
+    expect(billing?.when).toMatchObject({
+      expression: "tasks.intake.output.kind == 'ticket'",
+      derivedFromRoutes: { source: 'intake', addedDependency: true },
+    });
+  });
+
+  it('keeps a dependency on the source the author declared when the route goes', () => {
+    const authored = workflow().map((t) =>
+      t.taskId === 'escalate' ? { ...t, dependsOn: ['triage'] } : t,
+    );
+    const stored = materializeSkillTasks(authored);
+    const escalate = stored.find((t) => t.taskId === 'escalate');
+    expect(escalate?.dependsOn).toEqual(['triage']);
+    expect(escalate?.when?.derivedFromRoutes).toEqual({ source: 'triage', addedDependency: false });
+
+    const unrouted = stored.map((t) =>
+      t.taskId === 'triage'
+        ? { ...t, routes: ROUTES!.filter((r) => !r.enable.includes('escalate')) }
+        : t,
+    );
+    const after = materializeSkillTasks(unrouted).find((t) => t.taskId === 'escalate');
+    expect(after?.when).toBeUndefined();
+    expect(after?.dependsOn).toEqual(['triage']);
   });
 
   it('still refuses a `when` the author wrote on a routed task', () => {

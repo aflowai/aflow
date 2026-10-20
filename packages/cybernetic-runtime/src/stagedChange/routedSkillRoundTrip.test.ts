@@ -161,7 +161,7 @@ function expectStoredValid(): Workflow {
   expect(targets.length).toBeGreaterThan(0);
   for (const target of targets) {
     const when = stored.tasks.find((t) => t.taskId === target)?.when;
-    expect(when?.derivedFromRoutesOf).toBe(SOURCE);
+    expect(when?.derivedFromRoutes?.source).toBe(SOURCE);
   }
   return stored;
 }
@@ -221,8 +221,8 @@ describe('a routed skill stays valid after every writer', () => {
     persist({
       ...installed,
       tasks: installed.tasks.map((t) => {
-        if (t.when?.derivedFromRoutesOf === undefined) return t;
-        const { derivedFromRoutesOf: _mark, ...unmarked } = t.when;
+        if (t.when?.derivedFromRoutes === undefined) return t;
+        const { derivedFromRoutes: _mark, ...unmarked } = t.when;
         return { ...t, when: unmarked };
       }),
     });
@@ -282,10 +282,24 @@ describe('a routed skill stays valid after every writer', () => {
     persist(routesEdit.candidateWorkflow!);
     const edited = expectStoredValid();
     const target = second.enable[0]!;
-    expect(edited.tasks.find((t) => t.taskId === target)?.when).toEqual({
+    expect(edited.tasks.find((t) => t.taskId === target)?.when).toMatchObject({
       ...routeGuardFor(SOURCE, [first]),
-      derivedFromRoutesOf: SOURCE,
+      derivedFromRoutes: { source: SOURCE },
     });
+
+    // Removing a route takes its guard and the dependency the derivation added
+    // with it; what the target is left with is what its author declared.
+    const dropped = routes[0]!.enable[0]!;
+    const unrouted = applyOpsToSnapshot({
+      workflow: readStored(),
+      evalSuites: new Map(),
+      ops: [{ op: 'update_task_routes', taskId: SOURCE, routes: swapped.slice(1) }],
+    });
+    if (!unrouted.ok) throw new Error(`${unrouted.failureCode}: ${unrouted.failureDetail}`);
+    const after = unrouted.candidateWorkflow!.tasks.find((t) => t.taskId === dropped);
+    const authored = shepherdBundle().workflow.tasks.find((t) => t.taskId === dropped);
+    expect(after?.when).toBeUndefined();
+    expect(after?.dependsOn ?? []).toEqual(authored?.dependsOn ?? []);
   });
 
   it('surface patch of the stored copy', async () => {
