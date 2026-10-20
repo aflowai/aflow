@@ -361,7 +361,7 @@ describe('composePullRequest', () => {
   /** The same finding as a minor: the most a decision clears a push over without asking. */
   const MINOR_FINDING = { ...REVIEW_FINDING, severity: 'minor' } as const;
   const reviewed = (
-    afterReview?: 'fix_before_merge' | 'publish_as_is' | null,
+    afterReview?: 'fix_before_merge' | 'publish_as_is',
     finding: typeof REVIEW_FINDING | typeof MINOR_FINDING = REVIEW_FINDING,
   ) =>
     HostCommitDescribeInputSchema.parse({
@@ -446,16 +446,24 @@ describe('composePullRequest', () => {
     }
   });
 
-  it('records the decision on those findings for each answer, and undecided where none cleared the bar or none was made', () => {
-    for (const [answer, recorded] of [
-      ['fix_before_merge', 'fix_before_merge'],
-      ['publish_as_is', 'publish_as_is'],
-      [null, 'undecided'],
-      [undefined, 'undecided'],
-    ] as const) {
-      const composed = composePullRequest(reviewed(answer), commits);
-      expect(composed.afterReview, String(answer)).toBe(recorded);
-      expect(composed.body, String(answer)).toContain(`Decided after the review: \`${recorded}\``);
+  it('records the decision on those findings as the rounds rule settled it, and none where none was handed', () => {
+    for (const decided of ['fix_before_merge', 'publish_as_is'] as const) {
+      const composed = composePullRequest(reviewed(decided), commits);
+      expect(composed.afterReview, decided).toBe(decided);
+      expect(composed.body, decided).toContain(`Decided after the review: \`${decided}\``);
+    }
+    const handedNone = composePullRequest(reviewed(), commits);
+    expect(handedNone.afterReview).toBeUndefined();
+    expect(handedNone.body).not.toContain('Decided after the review');
+  });
+
+  it('takes no decision but the two the rounds rule makes', () => {
+    for (const afterReview of ['undecided', null]) {
+      expect(
+        HostCommitDescribeInputSchema.safeParse({ bindingId: 'hb_app', range, afterReview })
+          .success,
+        String(afterReview),
+      ).toBe(false);
     }
   });
 
@@ -474,7 +482,7 @@ describe('composePullRequest', () => {
       "The push went without asking, and leaves this review's findings open, listed under **Left open by `publish_as_is`**.",
     );
     expect(minor.body).toContain('- **minor** `src/cache.ts:40`');
-    for (const answer of ['fix_before_merge', null] as const) {
+    for (const answer of ['fix_before_merge', undefined] as const) {
       expect(composePullRequest(reviewed(answer), commits).body, String(answer)).not.toContain(
         listed,
       );
@@ -669,16 +677,17 @@ describe('composePullRequest', () => {
     }
   });
 
-  it('records undecided where a finished review that found nothing was handed no decision, as one with findings is', () => {
+  it('records the fix_before_merge the rounds rule makes of a finished review that found nothing and did not approve', () => {
     const composed = composePullRequest(
       HostCommitDescribeInputSchema.parse({
         bindingId: 'hb_app',
         range,
         review: { verdict: 'comment', outcome: 'completed', reviewSummary: 'Read.', findings: [] },
+        afterReview: 'fix_before_merge',
       }),
       commits,
     );
-    expect(composed.afterReview).toBe('undecided');
+    expect(composed.afterReview).toBe('fix_before_merge');
   });
 
   it('says where nothing was reviewed, no checks ran, or no gaps were recorded', () => {

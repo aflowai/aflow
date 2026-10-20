@@ -10,13 +10,8 @@ import {
   toJsonSchemaSync,
 } from '@aflow/schemas';
 import {
-  AFTER_REVIEW_QUESTION,
-  AFTER_REVIEW_QUESTION_NAME,
-} from './publishLocalChangesDecisions.js';
-import {
   AFTER_REVIEW_BINDINGS,
   AFTER_REVIEW_VALUE,
-  ASK_AFTER_REVIEW,
   SETTLE_AFTER_REVIEW_TASK,
 } from './publishLocalChangesAfterReview.js';
 import { decidePushTask } from './publishLocalChangesGate.js';
@@ -199,6 +194,13 @@ const CHECK_CONTEXT = {
 /** Equal to Local Code Review's `harness` schema (a test pins it), so a value this run accepts the review accepts too. */
 const REVIEW_HARNESS_SCHEMA = { type: 'string', minLength: 1 };
 
+/**
+ * Which publication of the slice this is, as the caller counts them — the
+ * one fact the rounds rule reads that no task of the run can: 1 for the
+ * first, more once a fix round has run. Absent reads as the first.
+ */
+const ROUND_SCHEMA = { type: 'integer', minimum: 1, maximum: 1000, default: 1 };
+
 const CHECK_INPUT_TEMPLATE = {
   bindingId: { $bind: 'bindingId' },
   sha: { $bind: 'sha' },
@@ -207,7 +209,7 @@ const CHECK_INPUT_TEMPLATE = {
 
 const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
   catalogId: 'publish-local-changes',
-  version: 39,
+  version: 40,
   name: 'Publish Local Changes',
   tagline:
     'Commit a patch onto a branch of a connected repository, then push it and open the pull request — asking the operator first unless the folder says otherwise.',
@@ -319,6 +321,13 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           description:
             "The findings of the review rounds before this publication — each Local Code Review whose findings a commission on this branch was briefed to fix — as the review named them, each marked `closed` where a commit fixed it or `open` where it was left: what this run's pull request records of the rounds before it. Where this run's own review finishes, its findings replace these in what the run hands on. Omit it where no review ran before.",
           schema: FINDINGS_SCHEMA,
+        },
+        {
+          id: 'round',
+          required: false,
+          description:
+            "Which publication of this slice this is: 1, the default, for its first; one more than the publication before it for each publication of a fix round on the same branch. The rounds rule decides the review's findings on it — on the first, an approving review with a minor or worse takes a fix round (`fix_before_merge`); after that round, the same review publishes as is, its findings carried open. Count it from the publications of this branch that ran; never guess it.",
+          schema: ROUND_SCHEMA,
         },
         {
           id: 'gaps',
@@ -445,6 +454,12 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
                 bindAs: 'findings',
                 path: 'findings',
                 schema: FINDINGS_SCHEMA,
+              },
+              round: {
+                kind: 'run_input' as const,
+                bindAs: 'round',
+                path: 'round',
+                schema: ROUND_SCHEMA,
               },
               gaps: {
                 kind: 'run_input' as const,
@@ -865,68 +880,6 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
 
         SETTLE_AFTER_REVIEW_TASK,
 
-        {
-          taskId: 'decide-after-review',
-          name: 'Decide whether the findings are fixed before merging',
-          goal: "Read the review's verdict and findings — a review that did not approve, or a minor or worse among the findings — and choose whether this branch takes a fix round before it merges or merges as it is — the push gate follows the answer, and the pull request records it. An answer too unsure to stand is recorded as undecided, and the push waits for the operator.",
-          type: 'operation' as const,
-          operation: 'ai.decision.decide',
-          dependsOn: ['review-commit', SETTLE_AFTER_REVIEW_TASK.taskId],
-          when: { expression: ASK_AFTER_REVIEW, onMissingRef: 'skip' as const },
-          // Read through `describe-pr`, which records it — and an override of
-          // it — and which the gate reads; a decision that could not be made
-          // is recorded as undecided, and the run goes on to ask.
-          optional: true,
-          retryability: 'safe' as const,
-          maxAttempts: 2,
-          inputBindings: {
-            verdict: { kind: 'task_output' as const, taskId: 'review-commit', path: 'verdict' },
-            findings: { kind: 'task_output' as const, taskId: 'review-commit', path: 'findings' },
-          },
-          context: {
-            strategy: 'scoped' as const,
-            contextPolicy: 'auto-optimize' as const,
-            learnings: 'none' as const,
-            capabilities: {
-              operations: ['ai.decision.decide'],
-              integrations: [],
-            },
-          },
-          inputTemplate: {
-            state: {
-              verdict: { $bind: 'verdict' },
-              findings: { $bind: 'findings' },
-            },
-            questions: { [AFTER_REVIEW_QUESTION_NAME]: AFTER_REVIEW_QUESTION },
-          },
-          // No model is named: the space's decision model answers. The 0.80 bar
-          // was measured on Jev alone (Plan 316 §7), and holds for another
-          // decider only once that decider is measured on the same cases
-          // (`yarn decisions:measure-loop`); the bar moves only on such a measurement.
-          // `afterReview` is the answer that cleared the bar, null where none
-          // did; `chosen` is what it would have chosen, and with `confidence`
-          // null where the model declined the question — a refusal is an
-          // answer, never decided, not a failed step.
-          outputProjection: {
-            afterReview: {
-              path: `answers.${AFTER_REVIEW_QUESTION_NAME}.decidedValue`,
-              onMissing: 'error' as const,
-            },
-            chosen: {
-              path: `answers.${AFTER_REVIEW_QUESTION_NAME}.value`,
-              onMissing: 'null' as const,
-            },
-            decided: {
-              path: `answers.${AFTER_REVIEW_QUESTION_NAME}.decided`,
-              onMissing: 'error' as const,
-            },
-            confidence: {
-              path: `answers.${AFTER_REVIEW_QUESTION_NAME}.confidence`,
-              onMissing: 'null' as const,
-            },
-          },
-        },
-
         ...overrideTasks(CHECKS_CLEARED),
 
         {
@@ -944,7 +897,6 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
             'scan-commit',
             'review-commit',
             SETTLE_AFTER_REVIEW_TASK.taskId,
-            'decide-after-review',
             'verify-override',
           ],
           // Skipped as well where the checks did not clear, since the check
@@ -1025,7 +977,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
         {
           taskId: 'approve-push',
           name: 'Approve the push',
-          goal: "Operator approval before anything leaves the machine, asked exactly where the gate decided to ask: the folder asks before every push; the scan marked a line allowed or could not read a file, whatever the posture; or, unless reviewed, the decision on this run's review findings is undecided, a blocker or a major is among them, the operator's word set the decision aside, or the review found nothing and did not approve. Approving pushes the commit to its branch on origin and opens the pull request; declining leaves the branch on the machine, whatever the posture.",
+          goal: "Operator approval before anything leaves the machine, asked exactly where the gate decided to ask: the folder asks before every push; the scan marked a line allowed or could not read a file, whatever the posture; or, unless reviewed, a blocker or a major is among this run's review findings, the operator's word set the decision aside, or the review found nothing and did not approve. Approving pushes the commit to its branch on origin and opens the pull request; declining leaves the branch on the machine, whatever the posture.",
           type: 'human' as const,
           intent: 'approve' as const,
           failureMode: 'isolate' as const,
@@ -1039,7 +991,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           // carry, so each case is one line and the verdict and the decision
           // are named where the run shows them; the gate's reason is on its task.
           pauseInstruction:
-            "The change is committed on its branch in the connected folder, and nothing has left the machine. The push would add every commit of `pushRange` — this commit, and any of the folder's own under it that `origin` does not have yet. The scan read them for secrets and found none outside the lines and files listed below, where there are any. Asked for one of these, shown with the commit:\n- `always`: the folder's push approval asks before every push, and no review ran.\n- `unless-unreviewed`, the findings undecided: this run's Local Code Review of `pushRange` returned findings and no answer on them cleared the decision's bar — the findings are on the \"Review the commit\" task and the answer on the \"Decide whether the findings are fixed before merging\" task. Approving publishes them as they stand.\n- `unless-unreviewed`, a blocker or a major among the findings: a decision stands in for an approving verdict only over minor findings and nits, so whatever was decided — the answer on that task, or an override — the operator decides whether the push goes.\n- `unless-unreviewed`, the decision set aside on the operator's word: the override and its reason are on the run as `afterReviewOverride`. Approving is that word on record; declining pushes nothing and the decision stands.\n- `unless-unreviewed`, no findings: this run's Local Code Review of `pushRange` did not return `approve` — its verdict is on the \"Review the commit\" task, null where the review did not finish, and that task failed where the review could not start.\n- Lines marked allowed, whatever the posture: `allowed` names each by file, line and rule — a line that looks like a secret and ends in an `aflow-scan: allow` comment, which whoever wrote the change could have written as easily as the line — and no review ran. Read each of those lines before approving: approving pushes them.\n- Files, messages or texts the scan could not read whole, whatever the posture: `unscanned` names each and why — binary, a NUL byte in a line it adds, more than the scan reads of one file in one commit, a line too long to read, or a Git LFS pointer, whose content the push uploads without the scan having read it — and no review ran. Nothing unread there was checked for secrets; read it before approving.\nApproving pushes that commit to its branch on `origin`, with every commit of `pushRange` under it, and then opens a pull request against the base branch. Declining leaves the branch local whatever the folder's push approval says: nothing is pushed and no pull request is opened.",
+            'The change is committed on its branch in the connected folder, and nothing has left the machine. The push would add every commit of `pushRange` — this commit, and any of the folder\'s own under it that `origin` does not have yet. The scan read them for secrets and found none outside the lines and files listed below, where there are any. Asked for one of these, shown with the commit:\n- `always`: the folder\'s push approval asks before every push, and no review ran.\n- `unless-unreviewed`, a blocker or a major among the findings: a decision stands in for an approving verdict only over minor findings and nits, so whatever was decided — by the rounds rule on the "Decide by the rounds rule whether the findings are fixed before merging" task, or by an override — the operator decides whether the push goes; the findings are on the "Review the commit" task.\n- `unless-unreviewed`, the decision set aside on the operator\'s word: the override and its reason are on the run as `afterReviewOverride`. Approving is that word on record; declining pushes nothing and the decision stands.\n- `unless-unreviewed`, no findings: this run\'s Local Code Review of `pushRange` did not return `approve` — its verdict is on the "Review the commit" task, null where the review did not finish, and that task failed where the review could not start.\n- Lines marked allowed, whatever the posture: `allowed` names each by file, line and rule — a line that looks like a secret and ends in an `aflow-scan: allow` comment, which whoever wrote the change could have written as easily as the line — and no review ran. Read each of those lines before approving: approving pushes them.\n- Files, messages or texts the scan could not read whole, whatever the posture: `unscanned` names each and why — binary, a NUL byte in a line it adds, more than the scan reads of one file in one commit, a line too long to read, or a Git LFS pointer, whose content the push uploads without the scan having read it — and no review ran. Nothing unread there was checked for secrets; read it before approving.\nApproving pushes that commit to its branch on `origin`, with every commit of `pushRange` under it, and then opens a pull request against the base branch. Declining leaves the branch local whatever the folder\'s push approval says: nothing is pushed and no pull request is opened.',
           // Every binding reads a task that succeeded whenever this asks: an
           // unresolved one refuses the approval itself, so nothing binds the
           // posture, which is not read over a range the scan did not clear.
@@ -1369,7 +1321,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           variableId: 'afterReview',
           name: 'After the review',
           description:
-            "What the run decided about its review's findings, as the pull request records it, and what its push gate followed: fix_before_merge — nothing pushed, the branch kept local; publish_as_is — pushed, asking only over a blocker or a major; approve over nits or none settles it unasked; undecided, where no answer cleared the bar or none could be made — the operator asked. Null where the review did not finish. On fix_before_merge the fix round is the conversation's, or the shepherd's.",
+            "What the rounds rule decided about the review's findings, as the pull request records it, and what the push gate followed: fix_before_merge — nothing pushed, the branch kept local — for a verdict short of approve, or a minor or worse in round 1; publish_as_is — pushed, asking only over a blocker or a major — for nits alone, or after round 1. Null where the review did not finish. On fix_before_merge the fix round is the conversation's, or the shepherd's.",
           required: false,
           sensitive: false,
           immutable: false,
@@ -1448,7 +1400,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
       output: {
         primary: 'prUrl',
         guidance:
-          'prUrl and prNumber are the branch’s pull request, opened or already open: report the link. pushDecision and pushReason say whether the push went, asked or kept the branch local. Follow afterReview: on fix_before_merge nothing was pushed — brief the fix from the reviewRunId run, publish again with findings; set it aside only by a verified override. Absent prUrl otherwise, the branch stayed local, or the run failed at the checks, the scan or the override, whose account says why.',
+          'prUrl and prNumber are the branch’s pull request, opened or already open: report the link. pushDecision and pushReason say whether the push went, asked or kept the branch local. Follow afterReview: on fix_before_merge nothing was pushed — brief the fix from the reviewRunId run, publish again with findings and the next round; set it aside only by a verified override. Absent prUrl otherwise, the branch stayed local, or the run failed at the checks, the scan or the override, whose account says why.',
       },
       iteration: { auto: false, maxConsecutiveRuns: 1, stopOnOutcomesMet: true, cooldownMs: 0 },
     },
@@ -1489,7 +1441,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
       priority: 50,
     },
     rationale:
-      "Twenty-three tasks, the approval between local and published. The commit lands in a detached worktree; host.commit.check runs checks; test timeouts alone rerun, other failures workflow.run.fail. host.commit.scan reads all a push adds; a finding fails the run. Under unless-unreviewed a Local Code Review runs; approve over nits or none is publish_as_is by rule; else ai.decision.decide answers fix_before_merge or publish_as_is, undecided below the bar. An override is verified — label and shepherd record on GitHub, the operator's word at the approval — or fails the run. decide-push, by rules, gates the push: uncleared scan or always asks, never pushes; fix_before_merge keeps the branch local; publish_as_is pushes, asking over a blocker, major or the operator's word; undecided asks. No task starts a publication. Push argv pinned bar the refspec; the executor re-measures origin/<base>, needs a passed check receipt and sends an uncleared range only on this run's grant; an open PR is PATCHed.",
+      "Twenty-two tasks, the approval between local and published. The commit lands in a detached worktree; host.commit.check runs checks; test timeouts alone rerun, other failures workflow.run.fail. host.commit.scan reads all a push adds; a finding fails the run. Under unless-unreviewed a Local Code Review runs; the rounds rule decides: not approve is fix_before_merge; approve is publish_as_is over nits or past round 1, else fix_before_merge. An override is verified — label and shepherd record on GitHub, the operator's word at the approval — or fails the run. decide-push, by rules, gates the push: uncleared scan or always asks, never pushes; fix_before_merge keeps the branch local; publish_as_is pushes, asking over a blocker, major or the operator's word. No task starts a publication. Push argv pinned bar the refspec; the executor re-measures origin/<base>, needs a passed check receipt and sends an uncleared range only on this run's grant; an open PR is PATCHed.",
   },
 };
 

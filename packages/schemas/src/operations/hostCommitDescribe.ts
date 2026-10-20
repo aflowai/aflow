@@ -55,23 +55,20 @@ export const PullRequestFindingsSchema = z
  */
 const ReviewFindingSchema = PullRequestFindingSchema.omit({ state: true }).strip();
 
-/** The answers the decision after a review can clear its bar with. */
-export const AFTER_REVIEW_DECIDED = ['fix_before_merge', 'publish_as_is'] as const;
-
-/** What a publication records of that decision where it weighed findings and none cleared the bar. */
-export const AFTER_REVIEW_UNDECIDED = 'undecided';
+/** What a publication decides about its review's findings, by the rounds rule. */
+export const AFTER_REVIEW_DECISIONS = ['fix_before_merge', 'publish_as_is'] as const;
 
 export const AfterReviewSchema = z
-  .enum([...AFTER_REVIEW_DECIDED, AFTER_REVIEW_UNDECIDED])
+  .enum(AFTER_REVIEW_DECISIONS)
   .describe(
-    "What the publication decided about its review's findings, and what its push gate " +
-      'follows: `fix_before_merge`, a fix round on the branch before it merges — nothing is ' +
-      'pushed and the branch stays local; `publish_as_is`, they can merge as they stand, which ' +
-      'an approving review of nits alone, or none, is without asking a model — the ' +
-      'push goes without asking over findings no more severe than minor, and waits for the ' +
-      "operator over a blocker or a major; `undecided`, no answer cleared the decision's bar, " +
-      'or none could be made — the push waits for the operator. The fix round is the ' +
-      'conversation’s, or the shepherd’s.',
+    "What the publication decided about its review's findings, by the rounds rule, and what " +
+      'its push gate follows: `fix_before_merge`, a fix round on the branch before it merges — ' +
+      'nothing is pushed and the branch stays local — for a review that did not approve, and ' +
+      "for an approving one with a minor or worse on the slice's first publication; " +
+      '`publish_as_is`, they merge as they stand, for an approving review of nits alone or ' +
+      'none, and for an approving one once a fix round of the slice has run — the push goes ' +
+      'without asking over findings no more severe than minor, and waits for the operator ' +
+      'over a blocker or a major. The fix round is the conversation’s, or the shepherd’s.',
   );
 export type AfterReview = z.infer<typeof AfterReviewSchema>;
 
@@ -126,9 +123,7 @@ export type AfterReviewOverride = z.infer<typeof AfterReviewOverrideSchema>;
 
 /** An override as a publication records it: who, why, and the decision it set aside. */
 export const AfterReviewOverrideRecordSchema = AfterReviewOverrideSchema.extend({
-  overrode: z
-    .enum(['fix_before_merge', AFTER_REVIEW_UNDECIDED])
-    .describe('The decision the override set aside.'),
+  overrode: z.enum(['fix_before_merge']).describe('The decision the override set aside.'),
 }).strict();
 export type AfterReviewOverrideRecord = z.infer<typeof AfterReviewOverrideRecordSchema>;
 
@@ -188,14 +183,10 @@ export const HostCommitDescribeInputSchema = z.object({
         'did not finish — how it ended, its summary, which names every finding it read, and ' +
         'the findings themselves, which the publication hands on as the open ones.',
     ),
-  afterReview: AfterReviewSchema.nullable()
-    .optional()
-    .describe(
-      "The decision on the review's findings: the decision model's answer, null where it fell " +
-        'below its bar; `publish_as_is` where the review approved and found nothing or nits ' +
-        'alone, which no model is asked about; `undecided` where a model was to be asked and no answer ' +
-        'came. Absent where the review did not finish.',
-    ),
+  afterReview: AfterReviewSchema.optional().describe(
+    "The decision on the review's findings, settled by the rounds rule over the verdict, the " +
+      "severities and the publication's `round`. Absent where the review did not finish.",
+  ),
   override: AfterReviewOverrideSchema.optional(),
   check: CheckRunSchema.optional().describe("The folder's checks on the commit, as they ran."),
   recheck: CheckRunSchema.optional().describe(
@@ -323,12 +314,9 @@ function severestOf(
  * within its share of a later publication's inputs (`handedOn`), so the
  * publication taking it back as `findings` is never refused for its size.
  *
- * The decision on them is recorded exactly where this review finished —
- * `publish_as_is` without asking where it approved and found nothing or nits
- * alone — and an answer that is missing there, below the bar or never made,
- * is recorded as `undecided`, a review that found nothing included. An override
- * turns a `fix_before_merge` or an `undecided` into `publish_as_is`, recorded
- * beside what it set aside; over a `publish_as_is`, or where nothing was
+ * The decision on them is recorded exactly where this review finished, as
+ * the rounds rule settled it. An override turns a `fix_before_merge` into
+ * `publish_as_is`, recorded beside what it set aside; over a `publish_as_is`, or where nothing was
  * decided, it sets nothing aside and is not recorded. Whether the override's
  * authority holds is the publication's to check before it composes; this
  * only records it. Beside the decision goes the most severe finding, which
@@ -343,7 +331,8 @@ export function pullRequestReviewRecord(input: HostCommitDescribeInput): PullReq
     reviewFindings.map((finding) => ({ ...finding, state: 'open' as const })),
   );
   const severest = handed.findings.length === 0 ? {} : { severest: severestOf(reviewFindings) };
-  const decided = input.afterReview ?? AFTER_REVIEW_UNDECIDED;
+  const decided = input.afterReview;
+  if (decided === undefined) return { ...handed, ...severest };
   if (input.override === undefined || decided === 'publish_as_is') {
     return { ...handed, afterReview: decided, ...severest };
   }

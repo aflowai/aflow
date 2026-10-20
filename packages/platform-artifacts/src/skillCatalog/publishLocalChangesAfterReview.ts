@@ -1,5 +1,5 @@
-import { AFTER_REVIEW_UNDECIDED, type WorkflowRunDecideRule } from '@aflow/schemas';
-import { bind, ctx, out, SKIP } from './localPrShepherdWiring.js';
+import type { WorkflowRunDecideRule } from '@aflow/schemas';
+import { bind, ctx, out, runInput, SKIP } from './localPrShepherdWiring.js';
 import {
   REVIEW_FINDINGS_MAX,
   REVIEW_SEVERITIES,
@@ -7,16 +7,25 @@ import {
 } from './reviewLocalChanges.js';
 
 /**
- * An approving review whose findings are all nits — or that found nothing —
- * needs no decision: under the rounds rule nits alone end the rounds, so its
- * `publish_as_is` is a constant, settled by rules over the verdict and the
- * severities with no decision model asked and no confidence to fall below a
- * bar. The constant holds only on `approve`, the one verdict a publication
- * pushes on without asking: a review that commented or requested changes
- * reaches the decision model (`decide-after-review`) whatever its findings, as
- * does a minor or worse among an approving review's findings, and until an
- * answer clears the bar that review is `undecided`.
+ * The rounds rule, as ordered rules over the review's verdict, the severities
+ * of its findings and the publication's `round` (Plan 315 D22). A slice gets
+ * one fix round: a review that did not approve is fixed before it merges; an
+ * approving review of nits alone, or of nothing, ends the rounds; an approving
+ * review with a minor or worse takes the one fix round on the slice's first
+ * publication, and once that round has run it publishes as it is, its
+ * findings carried open on the pull request. Whether a round ran is the
+ * `round` the caller declares — never inferred — and a missing one reads as
+ * null, which no `>` holds, so it is the first.
+ *
+ * Every review that finished is decided here and nowhere else: no model is
+ * asked, and no answer can fall below a bar.
  */
+export const NOT_APPROVED_REASON =
+  'The review did not approve: under the rounds rule a review short of approve is fixed before the branch merges.';
+export const AFTER_FIX_ROUND_REASON =
+  'The review approved, and a fix round of this slice already ran: the rounds rule allows one, so the branch merges as it stands and the pull request carries the findings open.';
+export const FIRST_ROUND_REASON =
+  "The review approved with a minor or worse among its findings on the slice's first publication: the rounds rule gives it one fix round before the branch merges.";
 export const NITS_ONLY_REASON = 'nits-only review: the rounds rule ends the rounds';
 
 const ABOVE_NIT = (Object.keys(REVIEW_SEVERITIES) as ReviewSeverity[]).filter(
@@ -36,7 +45,7 @@ function aboveNitAt(index: number): string[] {
 }
 
 /** Every index a review can return a finding at, read a rule's worth at a time. */
-const ABOVE_NIT_RULES: readonly WorkflowRunDecideRule[] = Array.from(
+const FIRST_ROUND_RULES: readonly WorkflowRunDecideRule[] = Array.from(
   { length: Math.ceil(REVIEW_FINDINGS_MAX / FINDINGS_PER_RULE) },
   (_, rule) => {
     const first = rule * FINDINGS_PER_RULE;
@@ -44,9 +53,8 @@ const ABOVE_NIT_RULES: readonly WorkflowRunDecideRule[] = Array.from(
     const indices = Array.from({ length: last - first }, (_, i) => first + i);
     return {
       when: { anyOf: indices.flatMap(aboveNitAt) },
-      decision: AFTER_REVIEW_UNDECIDED,
-      reason:
-        "A minor or worse is among the review's findings: the decision model weighs whether they take a fix round, and until an answer clears its bar the decision is undecided.",
+      decision: 'fix_before_merge',
+      reason: FIRST_ROUND_REASON,
     };
   },
 );
@@ -54,11 +62,15 @@ const ABOVE_NIT_RULES: readonly WorkflowRunDecideRule[] = Array.from(
 export const AFTER_REVIEW_SETTLE_RULES: readonly WorkflowRunDecideRule[] = [
   {
     when: { expression: "state.verdict != 'approve'" },
-    decision: AFTER_REVIEW_UNDECIDED,
-    reason:
-      'The review did not approve: nits alone end the rounds only under an approving verdict, so the decision model weighs its findings, and until an answer clears its bar the decision is undecided.',
+    decision: 'fix_before_merge',
+    reason: NOT_APPROVED_REASON,
   },
-  ...ABOVE_NIT_RULES,
+  {
+    when: { expression: 'state.round > 1' },
+    decision: 'publish_as_is',
+    reason: AFTER_FIX_ROUND_REASON,
+  },
+  ...FIRST_ROUND_RULES,
 ];
 
 export const AFTER_REVIEW_SETTLE_OTHERWISE = {
@@ -68,8 +80,8 @@ export const AFTER_REVIEW_SETTLE_OTHERWISE = {
 
 export const SETTLE_AFTER_REVIEW_TASK = {
   taskId: 'settle-after-review',
-  name: 'Settle an approving nits-only review without a decision',
-  goal: "Read the review's verdict and the severities of its findings: where it approved and none is more severe than a nit, none at all included, the rounds rule ends the rounds and the decision is publish_as_is, asked of no model; where it did not approve, whatever it found, or a minor or worse is among its findings, the decision model weighs them.",
+  name: 'Decide by the rounds rule whether the findings are fixed before merging',
+  goal: "Read the review's verdict, the severities of its findings and this publication's round, and decide by the rounds rule: a review that did not approve is fix_before_merge; an approving review of nits alone, or none, is publish_as_is; an approving review with a minor or worse is fix_before_merge on the slice's first publication and publish_as_is once a fix round has run, its findings carried open. No model is asked.",
   type: 'operation' as const,
   operation: 'workflow.run.decide',
   dependsOn: ['review-commit'],
@@ -80,10 +92,11 @@ export const SETTLE_AFTER_REVIEW_TASK = {
   inputBindings: {
     verdict: out('review-commit', 'verdict'),
     findings: out('review-commit', 'findings'),
+    round: runInput('round'),
   },
   context: ctx('workflow.run.decide'),
   inputTemplate: {
-    state: { verdict: bind('verdict'), findings: bind('findings') },
+    state: { verdict: bind('verdict'), findings: bind('findings'), round: bind('round') },
     rules: AFTER_REVIEW_SETTLE_RULES,
     otherwise: AFTER_REVIEW_SETTLE_OTHERWISE,
   },
@@ -93,20 +106,8 @@ export const SETTLE_AFTER_REVIEW_TASK = {
   },
 };
 
-/** The decision model is asked exactly where the verdict and the severities left the review undecided. */
-export const ASK_AFTER_REVIEW = `tasks.${SETTLE_AFTER_REVIEW_TASK.taskId}.output.decision == '${AFTER_REVIEW_UNDECIDED}'`;
-
-/**
- * The decision on the findings, as every task after it reads it: the model's
- * answer where it was asked — null below its bar — and otherwise what the
- * rules settled: `publish_as_is` over an approval of nits alone, `undecided` where the
- * model was to be asked and no answer came. Absent where the review did not
- * finish.
- */
+/** The decision on the findings, as every task after it reads it; absent where the review did not finish. */
 export const AFTER_REVIEW_BINDINGS = {
-  answeredAfterReview: out('decide-after-review', 'afterReview'),
-  settledAfterReview: out(SETTLE_AFTER_REVIEW_TASK.taskId, 'decision'),
+  afterReview: out(SETTLE_AFTER_REVIEW_TASK.taskId, 'decision'),
 };
-export const AFTER_REVIEW_VALUE = {
-  $firstOf: [bind('answeredAfterReview'), bind('settledAfterReview')],
-};
+export const AFTER_REVIEW_VALUE = bind('afterReview');
