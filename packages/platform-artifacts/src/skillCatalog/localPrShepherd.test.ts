@@ -50,6 +50,7 @@ import { LOCAL_PR_SHEPHERD } from './localPrShepherd.js';
 import { MERGE_ASKED } from './localPrShepherdMerge.js';
 import { SHEPHERD_RULES } from './localPrShepherdRules.js';
 import { REMEDY_QUESTION, REMEDY_ROUTES, type Remedy } from './localPrShepherdDecisions.js';
+import { BUMP_BRIEF, FIX_BRIEF, MERGE_BRIEF } from './localPrShepherdRemedies.js';
 import { PUBLISH_LOCAL_CHANGES } from './publishLocalChanges.js';
 
 const wf = LOCAL_PR_SHEPHERD.bundle.workflow;
@@ -621,6 +622,17 @@ describe('Local PR Shepherd — it fixes what CI failed', () => {
     expect(briefed['pullRequest']).toMatchObject({ number: 94, title: 'Planted failing test' });
     expect(briefed['failingChecks']).toEqual(FAILING.failing);
     expect((briefed['logs'] as unknown[])[0]).toMatchObject({ truncated: true });
+  });
+
+  it("has every commission run the repository's guards before it returns, and fix what fails there", () => {
+    expect(first.inputs.get('fix')!['task']).toBe(FIX_BRIEF);
+    for (const brief of [FIX_BRIEF, BUMP_BRIEF, MERGE_BRIEF]) {
+      expect(brief).toContain('`node --import tsx scripts/large-files/cli.ts check`');
+      expect(brief).toContain(
+        '`node --conditions=ts-source --import tsx scripts/context-budget/cli.ts check`',
+      );
+      expect(brief).toContain('Fix what fails before you return');
+    }
   });
 
   it('publishes the commission through Local Publish, appended onto the branch, and waits for it', () => {

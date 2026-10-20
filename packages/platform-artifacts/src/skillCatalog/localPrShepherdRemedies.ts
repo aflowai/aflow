@@ -39,7 +39,7 @@ const COMMISSION_RESULT_SCHEMA = {
 
 const STANDING_RULES = `Rules every commission keeps:
 - Work on the branch as it stands in this checkout; never push, commit outside the checkout, or touch another branch.
-- Run the repository's own checks over what you touched — its tests on the touched files, its type check, its linter and formatter — and report what they said.
+- Before you return, run the repository's own checks over what you touched — its tests on the touched files, its type check, its linter and formatter — and the guards its own check runs over the whole tree (in Aflow's repository, \`node --import tsx scripts/large-files/cli.ts check\` and \`node --conditions=ts-source --import tsx scripts/context-budget/cli.ts check\`). Fix what fails before you return, and report what they said.
 - Start no process that outlives the work: no dev server, watcher or daemon.
 - Write nothing under \`.aflow/\`.
 - Report, as your result, the commit message for this round and any gaps.`;

@@ -225,7 +225,7 @@ const LOCAL_COMMISSION_BUNDLE: AuthoredSkillBundle = {
   apiBindingTemplates: [],
   memorySeed: [],
   helmsmanHints: [
-    "A brief names the checks the coding agent runs, and they are the folder's own — its tests, type check, linter and formatter. The folder's declared checks run only once the patch is published.",
+    "A brief names the checks the coding agent runs before it returns, and they are the folder's own — its tests, type check, linter and formatter, and the guards its own check runs (in Aflow's repository, the large-files and context-budget guards). What fails is fixed in the same session: the folder's declared checks run only once the patch is published.",
   ],
 };
 
