@@ -135,7 +135,7 @@ function withBindingDependencies<T extends ShepherdTask>(tasks: T[]): T[] {
 
 const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
   catalogId: 'local-pr-shepherd',
-  version: 8,
+  version: 9,
   name: 'Local PR Shepherd',
   tagline:
     "Tend the pull requests the loop opened: read their CI, fix and publish a red check through Local Publish, and merge a green one where the folder's merge posture allows — never approving or closing.",
@@ -762,7 +762,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
       priority: 50,
     },
     rationale:
-      'Plan 321 P1, P2, P2b. Typed reads — folder, turn, pull requests, checks, handoff, lease, in-flight runs, and under when-green the required checks, reviews and publication verdict — then workflow.run.decide: first rule that holds decides, fix where none does; a refused read is wait, more check runs than a page is leave, merge follows every wait. Fix and merge take the lease, created, never overwritten. Fix reads the failing jobs and logs; the remedy question routes to re-run, fix, bump or merge round, unsure to the fix commission, published through Local Publish. Merge is squash pinned to the head behind its write approval. The lease is released once leased work ends. Abandon claims its head after the handoff and raises one collect item only on that claim. The pin keeps the attempt state, so a deleted handoff restarts nothing. No step approves or closes; only merge merges.',
+      'Plan 321 P1, P2, P2b. Typed reads — folder, turn, pull requests, checks, handoff, lease, in-flight runs, and under when-green the required checks, reviews and publication verdict — then workflow.run.decide: first rule that holds decides, fix where none does; a refused read is wait, more check runs than a page is leave, merge follows every wait. Fix and merge take the lease, created, never overwritten. Fix reads the failing jobs and logs; the remedy question routes to re-run, fix, bump or merge round, unsure to the fix commission, published through Local Publish. Merge is squash pinned to the head behind its write approval. The lease is released once leased work ends. Abandon claims its head after the handoff, or takes over a claim whose pass ended unanswered, and raises one collect item only on that claim. The pin keeps the attempt state, so a deleted handoff restarts nothing. No step approves or closes; only merge merges.',
   },
 };
 

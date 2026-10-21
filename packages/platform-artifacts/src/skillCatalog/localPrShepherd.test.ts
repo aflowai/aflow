@@ -183,6 +183,19 @@ interface Scenario {
    * that overlap or follow one another.
    */
   abandonClaims?: Map<string, Record<string, unknown>>;
+  /** What this pass's claim read saw, where another pass wrote between its read and its write. */
+  claimsAsRead?: Map<string, Record<string, unknown>>;
+  /** The claim's write lands, but its task does not report success. */
+  claimUnreported?: true;
+  /** The pass a head's claim names, as `workflow.run.detail` reads it; `gone` where it cannot be read. */
+  abandonOwner?:
+    | { status: 'running' | 'paused' | 'completed' | 'failed' | 'cancelled'; answered?: boolean }
+    | 'gone';
+}
+
+/** A stored claim's content hash, as the store answers it: one per content. */
+function hashOf(content: Record<string, unknown>): string {
+  return `hash:${JSON.stringify(content)}`;
 }
 
 interface Pass {
@@ -438,11 +451,45 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
     case 'remember-turn':
       MemoryPutInputSchema.parse(input);
       return ok({ id: 'doc-4', path: input['path'], version: 1 });
-    case 'claim-abandon': {
+    case 'read-abandon-claim': {
+      const read = MemoryGetInputSchema.parse(input);
+      const claim = (s.claimsAsRead ?? s.abandonClaims)?.get(String(read.target.path));
+      return ok(
+        claim === undefined
+          ? { found: false }
+          : { stat: { path: read.target.path, contentHash: hashOf(claim) }, dataJson: claim },
+      );
+    }
+    case 'read-abandon-owner': {
+      const owner = s.abandonOwner ?? { status: 'paused' };
+      if (owner === 'gone') return { ok: false };
+      return ok({
+        run: { runId: input['runId'], status: owner.status },
+        tasks: [],
+        activeWaiters: [],
+        ...(owner.answered === true
+          ? { taskOutput: { taskId: 'hand-over', output: { note: 'Mine now.' } } }
+          : {}),
+      });
+    }
+    case 'judge-abandon-claim':
+      return ok({ ...decideByRules(WorkflowRunDecideInputSchema.parse(input)) });
+    case 'claim-abandon':
+    case 'claim-abandon-takeover': {
+      // A create fails where anything is there; an overwrite, where the claim
+      // is no longer exactly as it was read.
       const put = MemoryPutInputSchema.parse(input);
-      expect(put.writeMode).toBe('create');
-      if (s.abandonClaims?.has(put.path) === true) return { ok: false };
+      const there = s.abandonClaims?.get(put.path);
+      if (put.writeMode === 'create') {
+        expect(put.expectedHash).toBeUndefined();
+        if (there !== undefined) return { ok: false };
+      } else {
+        expect(put.writeMode).toBe('overwrite');
+        if (there === undefined || put.expectedHash !== hashOf(there)) return { ok: false };
+      }
       s.abandonClaims?.set(put.path, put.content.inlineJson as Record<string, unknown>);
+      // The write landed, and the task never reported it: it crashed, timed out or was cancelled.
+      if (s.claimUnreported === true) return { ok: false };
       return ok({ id: 'doc-5', path: put.path, version: 1 });
     }
     case 'hand-over':
@@ -1665,18 +1712,110 @@ describe('Local PR Shepherd — it stops', () => {
       for (const action of ACTIONS) expect(stopped.ran).not.toContain(action);
     });
 
-    it('raises no second item on the same head, however many passes follow or overlap', () => {
+    it.each([
+      ['paused at its item', { status: 'paused' }],
+      ['ended with its item answered', { status: 'completed', answered: true }],
+      ['still running within the bound', { status: 'running' }],
+    ] as const)(
+      'raises no second item on the same head while the pass that claimed it is %s',
+      (_case, abandonOwner) => {
+        const claims = new Map<string, Record<string, unknown>>();
+        expect(spent(claims).statuses.get('hand-over')).toBe('succeeded');
+        for (let firing = 0; firing < 3; firing += 1) {
+          const again = spent(claims, { abandonOwner });
+          expect(again.decision).toBe('abandon');
+          expect(again.outputs.get('judge-abandon-claim')?.['decision']).toBe('live');
+          for (const claim of ['claim-abandon', 'claim-abandon-takeover']) {
+            expect(again.statuses.get(claim)).toBe('skipped');
+          }
+          expect(again.statuses.get('hand-over')).toBe('skipped');
+          // The comment still holds the decision Local Publish verifies an override by.
+          expect(again.handoff).toMatchObject({ decision: 'abandon' });
+        }
+        expect(claims.size).toBe(1);
+      },
+    );
+
+    it('raises one item of two overlapping passes that both read no claim: the second create is refused', () => {
       const claims = new Map<string, Record<string, unknown>>();
-      expect(spent(claims).statuses.get('hand-over')).toBe('succeeded');
-      for (let firing = 0; firing < 3; firing += 1) {
-        const again = spent(claims);
-        expect(again.decision).toBe('abandon');
-        expect(again.statuses.get('claim-abandon')).toBe('failed');
-        expect(again.statuses.get('hand-over')).toBe('skipped');
-        // The comment still holds the decision Local Publish verifies an override by.
-        expect(again.handoff).toMatchObject({ decision: 'abandon' });
-      }
+      const unread = new Map(claims);
+      const first = spent(claims);
+      const second = spent(claims, { claimsAsRead: unread });
+      expect(first.statuses.get('hand-over')).toBe('succeeded');
+      expect(second.outputs.get('judge-abandon-claim')?.['decision']).toBe('create');
+      expect(second.statuses.get('claim-abandon')).toBe('failed');
+      expect(second.statuses.get('hand-over')).toBe('skipped');
       expect(claims.size).toBe(1);
+    });
+
+    // A claim whose write landed while its task never reported success — it
+    // crashed, timed out or was cancelled — raised no item. It must not hold
+    // the head forever: once the pass that wrote it has ended without an
+    // answered item, a later pass takes it over and raises the item.
+    describe('a claim persisted by a task that did not report success', () => {
+      it('leaves that pass without an item, and does not keep a later pass from raising it', () => {
+        const claims = new Map<string, Record<string, unknown>>();
+        const crashed = spent(claims, { claimUnreported: true });
+        expect(crashed.statuses.get('claim-abandon')).toBe('failed');
+        expect(crashed.statuses.get('hand-over')).toBe('skipped');
+        expect(claims.size).toBe(1);
+        const [path, stale] = [...claims.entries()][0]!;
+
+        const later = spent(claims, { abandonOwner: { status: 'completed' } });
+        expect(later.decision).toBe('abandon');
+        expect(later.inputs.get('read-abandon-owner')).toMatchObject({
+          runId: RUN_ID,
+          taskOutput: 'hand-over',
+        });
+        expect(later.outputs.get('judge-abandon-claim')?.['decision']).toBe('overwrite');
+        // Taken over exactly as read, so two later passes cannot both take it.
+        expect(
+          MemoryPutInputSchema.parse(later.inputs.get('claim-abandon-takeover')),
+        ).toMatchObject({
+          path,
+          writeMode: 'overwrite',
+          expectedHash: hashOf(stale),
+        });
+        expect(later.statuses.get('hand-over')).toBe('succeeded');
+      });
+
+      it.each([
+        ['its pass failed', { status: 'failed' }],
+        ['its pass was cancelled', { status: 'cancelled' }],
+        ['its pass cannot be read', 'gone'],
+      ] as const)('takes it over where %s', (_case, abandonOwner) => {
+        const claims = new Map<string, Record<string, unknown>>();
+        spent(claims, { claimUnreported: true });
+        const later = spent(claims, { abandonOwner });
+        expect(later.outputs.get('judge-abandon-claim')?.['decision']).toBe('overwrite');
+        expect(later.statuses.get('hand-over')).toBe('succeeded');
+      });
+
+      it('takes it over from a pass still running past the bound', () => {
+        const claims = new Map<string, Record<string, unknown>>();
+        spent(claims, { claimUnreported: true });
+        const [path, claim] = [...claims.entries()][0]!;
+        claims.set(path, { ...claim, handedOverAtMs: NOW - SHEPHERD_LEASE_STALE_AFTER_MS - 1 });
+        const later = spent(claims, { abandonOwner: { status: 'running' } });
+        expect(later.outputs.get('judge-abandon-claim')?.['decision']).toBe('overwrite');
+        expect(later.statuses.get('hand-over')).toBe('succeeded');
+      });
+
+      it('lets only one of two overlapping later passes take it over: the second overwrite no longer matches', () => {
+        const claims = new Map<string, Record<string, unknown>>();
+        spent(claims, { claimUnreported: true });
+        // Written by an earlier run than the two that follow.
+        const [path, claim] = [...claims.entries()][0]!;
+        claims.set(path, { ...claim, runId: 'shepherd-run-1' });
+        const dead = new Map(claims);
+        const first = spent(claims, { abandonOwner: { status: 'failed' } });
+        // The second read the dead claim, and its dead pass, before the first took it over.
+        const second = spent(claims, { claimsAsRead: dead, abandonOwner: { status: 'failed' } });
+        expect(first.statuses.get('hand-over')).toBe('succeeded');
+        expect(second.outputs.get('judge-abandon-claim')?.['decision']).toBe('overwrite');
+        expect(second.statuses.get('claim-abandon-takeover')).toBe('failed');
+        expect(second.statuses.get('hand-over')).toBe('skipped');
+      });
     });
 
     it('raises one for a new head a push moved it to, if CI fails there too', () => {
@@ -1692,6 +1831,7 @@ describe('Local PR Shepherd — it stops', () => {
         const other = pass({ ...s, abandonClaims: new Map() });
         expect(other.decision).not.toBe('abandon');
         expect(other.ran).not.toContain('claim-abandon');
+        expect(other.ran).not.toContain('claim-abandon-takeover');
         expect(other.ran).not.toContain('hand-over');
       }
     });
