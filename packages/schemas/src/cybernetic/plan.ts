@@ -37,7 +37,7 @@ export const PLAN_NODE_POSITION_MAX = 2_147_483_647;
 
 /** Storage ceilings: these fields hold model-authored prose a person reads. */
 export const PLAN_NODE_TITLE_MAX_CHARS = 500;
-export const PLAN_NODE_PROSE_MAX_CHARS = 8000;
+export const PLAN_NODE_PROSE_MAX_CHARS = 64_000;
 
 export const PLAN_NODE_TITLE_ONE_LINE_MESSAGE =
   'A title is one line: the attention block shows each node on a line of its own. Put the rest in the goal or the note.';
