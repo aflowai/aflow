@@ -28,7 +28,7 @@
     "contentHash": "814ea9d7d423194beaa22fd9e22a10053bd5426d3d352de9df4cfbbc044296df"
   },
   "coding-pr-loop": {
-    "version": 6,
+    "version": 7,
     "contentHash": "38d06d06b9224aaab6966af28418d500d4af117a5200fec87bedda3aaccb9a21"
   },
   "etoro-account": {
@@ -104,11 +104,11 @@
     "contentHash": "1b64efafa8f1b271a641b5f2aef759a870cc2aabbd95e2a68cdb1b7082ed53fd"
   },
   "local-publish": {
-    "version": 40,
+    "version": 41,
     "contentHash": "b722c72d5292251ce78248a718ccbc146b3dd37ece437602268f2fdd5fed982b"
   },
   "local-shepherd": {
-    "version": 9,
+    "version": 10,
     "contentHash": "a6af551d48e61052eaa7fbac5ed6af63316bcf708f407685ccd1bae9bbcdd59d"
   },
   "newsapi": {

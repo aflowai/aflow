@@ -1,9 +1,11 @@
 import { and, eq, sql } from 'drizzle-orm';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { oauthClients } from '@aflow/database';
+import { getConnectorDefinitionByApiId } from '@aflow/platform-artifacts';
 import type {
   ApiDefinition,
   ApiDefinitionDraft,
+  ApiEndpoint,
   AuthShape,
   CredentialSlot,
   EgressPolicy,
@@ -151,10 +153,39 @@ export function buildDefinitionJsonForDraft(
     // 'endpoint' (the default) and ApiDefinitionSchema then rejects its empty
     // endpoints[] in consumers.
     callMode: draft.callMode,
-    endpoints: synthesizeEndpoints(draft.endpoints),
+    endpoints: overlayConnectorWriteRiskTiers(apiId, synthesizeEndpoints(draft.endpoints)),
     ...(draft.specUrl ? { specUrl: draft.specUrl } : {}),
     ...(draft.suggestedEgressPolicy ? { suggestedEgressPolicy: draft.suggestedEgressPolicy } : {}),
   };
+}
+
+/**
+ * The draft shape cannot carry `writeRiskTier` (Plan 253), so a draft of a
+ * connector's `apiId` takes the connector catalog's tiers here rather than
+ * from a second list. The catalog is the single source; a stored row's tiers
+ * only ever survive an overwrite, so a row first written from a draft would
+ * otherwise never be gated. A tier applies only to the same operation — same
+ * endpointId, method and path — so a redefined endpoint never inherits a tier
+ * curated for a different call.
+ */
+export function overlayConnectorWriteRiskTiers(
+  apiId: string,
+  endpoints: readonly ApiEndpoint[],
+): ApiEndpoint[] {
+  const connector = getConnectorDefinitionByApiId(apiId);
+  if (!connector) return [...endpoints];
+  const curatedById = new Map(connector.endpoints.map((ep) => [ep.endpointId, ep]));
+  return endpoints.map((ep) => {
+    const curated = curatedById.get(ep.endpointId);
+    if (
+      curated?.writeRiskTier === undefined ||
+      curated.method !== ep.method ||
+      curated.pathTemplate !== ep.pathTemplate
+    ) {
+      return ep;
+    }
+    return { ...ep, writeRiskTier: curated.writeRiskTier };
+  });
 }
 
 // ============================================================================

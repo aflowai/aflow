@@ -7,6 +7,10 @@
  * params split into `queryParams` / `body`). Keeping it derived means the bundle
  * and the connector store never drift.
  *
+ * The draft cannot carry `writeRiskTier`; the draft writer gives every
+ * endpoint the connector's tier by `apiId` (`overlayConnectorWriteRiskTiers`),
+ * so a merge stays gated however the definition reached the space.
+ *
  * @packageDocumentation
  */
 import type { BundledApiDefinition } from '@aflow/schemas';
