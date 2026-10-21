@@ -83,7 +83,7 @@ export function checkAgainstBaseline(
           kind: 'new_over_budget',
           path: file.path,
           lines: file.lines,
-          message: `allowlisted file exceeds maxLines (${allowed.maxLines}): ${file.lines} lines`,
+          message: `allowlisted file exceeds maxLines (${allowed.maxLines}): ${file.lines} lines (${file.path})`,
         });
       }
       continue;
@@ -94,7 +94,7 @@ export function checkAgainstBaseline(
       lines: file.lines,
       message:
         `new production file exceeds ${THRESHOLDS.hardLines} LOC without baseline or allowlist: ` +
-        `${file.lines} lines`,
+        `${file.lines} lines (${file.path})`,
     });
   }
 

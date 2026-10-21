@@ -50,7 +50,7 @@ export default [
             'apps/aflow-executor-host/src/openSandboxLauncher.mjs',
           ],
           // Cap must exceed total allowDefaultProject matches or ESLint fails (see tail-run-events.ts).
-          maximumDefaultProjectFileMatchCount_THIS_WILL_SLOW_DOWN_LINTING: 96,
+          maximumDefaultProjectFileMatchCount_THIS_WILL_SLOW_DOWN_LINTING: 104,
         },
         tsconfigRootDir: import.meta.dirname,
       },
