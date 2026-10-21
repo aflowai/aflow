@@ -132,6 +132,20 @@ export async function resolvePausedRunWriteApproval(
   const claimToken = claim.claim.claimToken;
   const release = () =>
     releaseResumeClaim(deps.db, tenantIdStr, runId, claimToken).catch(() => false);
+  // Either answer flips the run paused→running, and the chat's run surface
+  // leaves `paused` only on the WorkflowRunUpdate; the run-list event alone
+  // does not reach it. Sent before the harness is handed the run, which may
+  // take it terminal and emit that itself.
+  const announceResumed = async (): Promise<void> => {
+    await emitRunResumedRunning(deps, tenantIdStr, runId, run);
+    await emitRunUpdated(deps.redis, {
+      tenantId: tenantIdStr,
+      spaceId: args.spaceId,
+      runId,
+      workflowSlug: run.workflowSlug,
+      status: 'running',
+    });
+  };
 
   try {
     await setWriteApprovalGrant(deps.redis, tenantIdStr, runId, {
@@ -176,14 +190,7 @@ export async function resolvePausedRunWriteApproval(
             message: `Run ${runId}'s resume lease lapsed before the approval landed. Approve again.`,
           };
     }
-    await emitRunResumedRunning(deps, tenantIdStr, runId, run);
-    await emitRunUpdated(deps.redis, {
-      tenantId: tenantIdStr,
-      spaceId: args.spaceId,
-      runId,
-      workflowSlug: run.workflowSlug,
-      status: 'running',
-    });
+    await announceResumed();
     await hooks.dispatchRetriedTask(deps, args.tenantId, runId, taskId);
     return { ok: true, request };
   }
@@ -238,13 +245,7 @@ export async function resolvePausedRunWriteApproval(
       `[resolvePausedRunWriteApproval] emit WorkflowTaskUpdate(failed) failed for task=${taskId}: ${err instanceof Error ? err.message : String(err)}`,
     );
   });
-  await emitRunUpdated(deps.redis, {
-    tenantId: tenantIdStr,
-    spaceId: args.spaceId,
-    runId,
-    workflowSlug: run.workflowSlug,
-    status: 'running',
-  });
+  await announceResumed();
   await hooks.applyFailureMode(deps, args.tenantId, runId, taskId);
   return { ok: true, request };
 }

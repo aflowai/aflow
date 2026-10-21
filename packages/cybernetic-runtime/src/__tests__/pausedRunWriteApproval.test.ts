@@ -256,6 +256,81 @@ describe('resolvePausedRunWriteApproval — deny', () => {
     expect(hooks.dispatchRetriedTask).not.toHaveBeenCalled();
     expect(mockCommitReExecute).not.toHaveBeenCalled();
   });
+
+  it("shows the denied task failed on the run's surface", async () => {
+    const { run } = decide('denied', { reason: 'not this head' });
+    await run;
+    const taskUpdates = progressEvents('WorkflowTaskUpdate');
+    expect(taskUpdates).toHaveLength(1);
+    expect(taskUpdates[0]).toMatchObject({
+      runId: RUN_ID,
+      taskId: TASK_ID,
+      status: 'failed',
+      attempt: 1,
+    });
+    expect((taskUpdates[0] as { failureReason: string }).failureReason).toContain('not this head');
+  });
+});
+
+/** The payloads of every progress event of one kind the resolve emitted, in order. */
+function progressEvents(kind: string): unknown[] {
+  return mockEmitWorkflowProgress.mock.calls
+    .map((call) => (call[1] as { event: { kind: string; payload: unknown } }).event)
+    .filter((event) => event.kind === kind)
+    .map((event) => event.payload);
+}
+
+describe('resolvePausedRunWriteApproval — the run surface', () => {
+  it.each([
+    ['approved', () => hooks.dispatchRetriedTask],
+    ['denied', () => hooks.applyFailureMode],
+  ] as const)(
+    'moves the run surface from paused to running when the write is %s',
+    async (decision, handOff) => {
+      const { run } = decide(decision);
+      await expect(run).resolves.toMatchObject({ ok: true });
+
+      const runUpdates = progressEvents('WorkflowRunUpdate');
+      expect(runUpdates).toEqual([
+        expect.objectContaining({
+          runId: RUN_ID,
+          slug: 'local-pr-shepherd',
+          status: 'running',
+          pauseVersion: 3,
+        }),
+      ]);
+      expect(mockEmitRunUpdated).toHaveBeenCalledWith(expect.anything(), {
+        tenantId: TENANT,
+        spaceId: SPACE_ID,
+        runId: RUN_ID,
+        workflowSlug: 'local-pr-shepherd',
+        status: 'running',
+      });
+      // Before the harness gets the run, which may take it terminal and say so itself.
+      const handedOff = handOff().mock.invocationCallOrder[0]!;
+      const surfaceUpdate = mockEmitWorkflowProgress.mock.calls.findIndex(
+        (call) => (call[1] as { event: { kind: string } }).event.kind === 'WorkflowRunUpdate',
+      );
+      expect(mockEmitWorkflowProgress.mock.invocationCallOrder[surfaceUpdate]).toBeLessThan(
+        handedOff,
+      );
+      expect(mockEmitRunUpdated.mock.invocationCallOrder[0]).toBeLessThan(handedOff);
+    },
+  );
+
+  it.each([
+    ['approved', () => mockCommitReExecute.mockResolvedValueOnce('claim_lost')],
+    ['denied', () => mockCommitFail.mockResolvedValueOnce('claim_lost')],
+  ] as const)(
+    'says nothing on the surface when a %s answer does not land',
+    async (decision, lose) => {
+      lose();
+      const { run } = decide(decision);
+      await expect(run).resolves.toMatchObject({ ok: false, code: 'RESUME_COMMIT_LOST' });
+      expect(mockEmitWorkflowProgress).not.toHaveBeenCalled();
+      expect(mockEmitRunUpdated).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe('resolvePausedRunWriteApproval — refusals', () => {
