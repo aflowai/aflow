@@ -41,12 +41,32 @@ const OnMissingRefSchema = z
  */
 export const PAUSE_INSTRUCTION_MAX_CHARS = 4000;
 
+/**
+ * Marks a guard that materialization derived from a source task's routes. A
+ * workflow is stored materialized, so without the mark a re-read could not
+ * tell the derived guard from an authored `when`: validation skips a marked
+ * guard and every materialization recomputes it from the routes as they are.
+ * `addedDependency` records whether the derivation also added `source` to the
+ * task's `dependsOn`, so the recompute drops exactly the dependency it added
+ * and keeps one the author wrote.
+ */
+const DerivedFromRoutesSchema = z
+  .object({
+    source: z.string().min(1).max(64),
+    addedDependency: z.boolean(),
+  })
+  .strict()
+  .describe(
+    'Set by the platform on a guard derived from the routes of the source task; never author it.',
+  );
+
 export const WorkflowWhenSchema = z.union([
   z
     .object({
       /** Expression evaluated against the run-scoped task-output namespace. */
       expression: PredicateExpressionSchema,
       onMissingRef: OnMissingRefSchema,
+      derivedFromRoutes: DerivedFromRoutesSchema.optional(),
     })
     .strict(),
   z
@@ -54,6 +74,7 @@ export const WorkflowWhenSchema = z.union([
       /** Passes when ANY listed comparison evaluates true. */
       anyOf: PredicateExpressionListSchema,
       onMissingRef: OnMissingRefSchema,
+      derivedFromRoutes: DerivedFromRoutesSchema.optional(),
     })
     .strict(),
   z
@@ -61,6 +82,7 @@ export const WorkflowWhenSchema = z.union([
       /** Passes when ALL listed comparisons evaluate true. */
       allOf: PredicateExpressionListSchema,
       onMissingRef: OnMissingRefSchema,
+      derivedFromRoutes: DerivedFromRoutesSchema.optional(),
     })
     .strict(),
 ]);

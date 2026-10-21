@@ -4,6 +4,7 @@
  */
 import {
   DECISION_OPERATION_ID,
+  isRouteDerivedGuard,
   predicateExpressions,
   routeClaims,
   routeGuardFor,
@@ -22,7 +23,11 @@ const ROUTE_CHECKS: Readonly<Record<string, (task: WorkflowTask) => GraphValidat
   [DECISION_OPERATION_ID]: checkDecisionRoutes,
 };
 
-/** The route rules, read on the workflow as stored — before any guard is derived. */
+/**
+ * The route rules, read on the workflow as authored. A stored workflow is
+ * materialized, so a guard marked as derived from routes is not a target's own
+ * `when`.
+ */
 export function validateRoutes(tasks: readonly WorkflowTask[]): GraphValidationError[] {
   const errors: GraphValidationError[] = [];
   const byId = new Map(tasks.map((t) => [t.taskId, t]));
@@ -74,7 +79,7 @@ export function validateRoutes(tasks: readonly WorkflowTask[]): GraphValidationE
       });
       continue;
     }
-    if (targetTask.when !== undefined) {
+    if (targetTask.when !== undefined && !isRouteDerivedGuard(targetTask.when)) {
       errors.push({
         kind: 'route_target_has_when',
         taskIds: [target, sources[0]!],

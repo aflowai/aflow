@@ -18,6 +18,7 @@ import {
   workflowWhenView,
   deriveRouteGuards,
   describeRoute,
+  isRouteDerivedGuard,
   routeSourceOf,
   type Workflow,
   type WorkflowTask,
@@ -1371,6 +1372,7 @@ function TaskInspector({
       })()}
 
       {task.when &&
+        !isRouteDerivedGuard(task.when) &&
         (() => {
           const view = workflowWhenView(task.when);
           return (
