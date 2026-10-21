@@ -36,10 +36,14 @@ vi.mock('@aflow/cybernetic-runtime', async () => {
       '@aflow/cybernetic-runtime/learning/render',
     ),
   ]);
+  const { entryRunInputSlots } = await vi.importActual<typeof import('@aflow/cybernetic-runtime')>(
+    '@aflow/cybernetic-runtime',
+  );
   return {
     readOutputPath,
     parseOutputPath,
     renderLearningSetBlock,
+    entryRunInputSlots,
     selectActiveLearningSetForRun: (...args: unknown[]) =>
       mockSelectActiveLearningSetForRun(...args),
     getRunCampaignId: (...args: unknown[]) => mockGetRunCampaignId(...args),
@@ -73,6 +77,12 @@ function inlineRef(value: unknown): string {
 const TENANT = 'a0000000-0000-0000-0000-000000000001';
 const SPACE = '41be431d-6011-495b-a4f2-6de539a6a0df';
 const RUN = 'run-1';
+const WORKFLOW = { tasks: [] } as never;
+
+/** A workflow whose entry task validated the run's inputs under these bindings. */
+function workflowWithEntry(taskId: string, inputBindings: Record<string, unknown>): never {
+  return { tasks: [{ taskId, inputBindings }] } as never;
+}
 
 describe('resolveOperationTaskInputs', () => {
   beforeEach(() => {
@@ -106,6 +116,7 @@ describe('resolveOperationTaskInputs', () => {
           intent: { kind: 'task_output', taskId: 'analyze-intent' },
         },
       } as never,
+      WORKFLOW,
       TENANT,
       SPACE,
       RUN,
@@ -135,6 +146,7 @@ describe('resolveOperationTaskInputs', () => {
           v: { kind: 'task_output', taskId: 'upstream', path: 'nested.value' },
         },
       } as never,
+      WORKFLOW,
       TENANT,
       SPACE,
       RUN,
@@ -207,6 +219,10 @@ describe('resolveOperationTaskInputs', () => {
           branch: { kind: 'run_input', path: 'branch' },
         },
       } as never,
+      workflowWithEntry('discover', {
+        repo: { kind: 'run_input', path: 'repo' },
+        branch: { kind: 'run_input', path: 'branch' },
+      }),
       TENANT,
       SPACE,
       RUN,
@@ -231,11 +247,45 @@ describe('resolveOperationTaskInputs', () => {
         operation: 'api.http.call',
         inputBindings: { aimed: { kind: 'run_input', path: 'pullNumber' } },
       } as never,
+      workflowWithEntry('claim', { pullNumber: { kind: 'run_input', path: 'pullNumber' } }),
       TENANT,
       SPACE,
       RUN,
     );
     expect(result['aimed']).toBe('158');
+  });
+
+  it('resolves a run_input binding by the entry slot that holds its path, not by a stored key of the same name', async () => {
+    // `claim` stores pullNumber under `target`, and a `pullNumber` slot of its
+    // own that fills issueNumber — the stored key `pullNumber` holds "7".
+    mockLoadRunById.mockResolvedValueOnce({
+      runId: RUN,
+      tasks: [],
+      metadata: {
+        parentTaskInputs: { taskId: 'claim', inputs: { target: '158', pullNumber: '7' } },
+      },
+    });
+    const { resolveOperationTaskInputs } = await import('../taskHelpers.js');
+    const result = await resolveOperationTaskInputs(
+      {
+        taskId: 'read-pr',
+        type: 'operation',
+        operation: 'api.http.call',
+        inputBindings: {
+          aimed: { kind: 'run_input', path: 'pullNumber' },
+          issue: { kind: 'run_input', path: 'issueNumber' },
+        },
+      } as never,
+      workflowWithEntry('claim', {
+        target: { kind: 'run_input', path: 'pullNumber' },
+        pullNumber: { kind: 'run_input', path: 'issueNumber' },
+      }),
+      TENANT,
+      SPACE,
+      RUN,
+    );
+    expect(result['aimed']).toBe('158');
+    expect(result['issue']).toBe('7');
   });
 
   it('threads run.metadata.connectionBindingId into a connection_binding template (Plan 222 P3)', async () => {
@@ -257,6 +307,7 @@ describe('resolveOperationTaskInputs', () => {
           bindingId: { $bind: 'githubConnection' },
         },
       } as never,
+      WORKFLOW,
       TENANT,
       SPACE,
       RUN,
@@ -318,6 +369,7 @@ describe('resolveOperationTaskInputs', () => {
         operation: 'code.agent.run',
         inputBindings: { learnings: { kind: 'learning_set' } },
       } as never,
+      WORKFLOW,
       TENANT,
       SPACE,
       RUN,
@@ -352,6 +404,7 @@ describe('resolveOperationTaskInputs', () => {
         operation: 'whatever.do.it',
         inputBindings: { threshold: { kind: 'campaign_input', path: 'threshold' } },
       } as never,
+      WORKFLOW,
       TENANT,
       SPACE,
       RUN,
@@ -402,6 +455,7 @@ describe('resolveOperationTaskInputs', () => {
         operation: 'whatever.do.it',
         inputBindings: { threshold: { kind: 'campaign_input', path: 'threshold' } },
       } as never,
+      WORKFLOW,
       TENANT,
       SPACE,
       RUN,
@@ -419,6 +473,7 @@ describe('resolveOperationTaskInputs', () => {
         operation: 'whatever.do.it',
         inputs: { foo: 'bar' },
       } as never,
+      WORKFLOW,
       TENANT,
       SPACE,
       RUN,
