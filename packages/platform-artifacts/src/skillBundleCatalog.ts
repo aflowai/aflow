@@ -263,7 +263,7 @@ const LOCAL_CODE_REVIEW_BUNDLE: AuthoredSkillBundle = {
 
 const LOCAL_PUBLISH_BUNDLE: AuthoredSkillBundle = {
   bundleId: 'local-publish' as SkillBundleId,
-  revision: 0,
+  revision: 1,
   name: 'Local Publish',
   tagline:
     'Commit a patch onto a branch of a connected repository, clear the push, and open the pull request.',
@@ -303,7 +303,7 @@ const LOCAL_PUBLISH_BUNDLE: AuthoredSkillBundle = {
 
 const LOCAL_PR_SHEPHERD_BUNDLE: AuthoredSkillBundle = {
   bundleId: 'local-shepherd' as SkillBundleId,
-  revision: 0,
+  revision: 1,
   name: 'Local PR Shepherd',
   tagline:
     "Fix what CI fails on the pull requests the loop opened, through Local Publish, and merge a green one where the folder's merge posture allows — never approving or closing.",
