@@ -15,7 +15,16 @@ export async function handlePlanNodeNext(
     { db: getDatabase(), payloadStore: args.payloadStore },
     args.context.tenantId as string,
   );
-  const result = await nextInPlanStream({ ...planReadContext(args), reads }, input);
+  const result = await nextInPlanStream(
+    {
+      ...planReadContext(args),
+      reads,
+      redis: args.redis,
+      tenantId: args.context.tenantId as string,
+      holder: args.context.runId as string,
+    },
+    input,
+  );
   if (!result.ok) {
     await emitPlanError(args, result, startTime);
     return;

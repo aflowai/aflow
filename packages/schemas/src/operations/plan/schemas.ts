@@ -266,6 +266,7 @@ export const PlanStreamWaitCauseSchema = z.enum([
   'stream_closed',
   'blocked',
   'in_flight',
+  'claimed',
   'pull_request_open',
   'read_failed',
   'awaiting_publication',
@@ -340,6 +341,9 @@ export const PlanNodeNextOutputSchema = z.discriminatedUnion('decision', [
         .describe(
           'Where the criteria are not met, the note’s first line begins with this, and goes on to name the next step.',
         ),
+      link: PlanNodeLinkCreateSchema.describe(
+        'The record that this merge was judged: pass it to plan.node.link once the node’s update is written. Until it is linked, the next firing judges the merge again.',
+      ),
     })
     .strict(),
   z

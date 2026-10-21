@@ -4,9 +4,12 @@
  * asks first, and this is the one authority over the answer. The decision is
  * read from records — the active node, its runs, its links, the space's
  * attention items and its pull request as GitHub answers — by rules, so no
- * firing decides by how its prompt reads. It writes nothing and starts
- * nothing: the firing acts on the decision.
+ * firing decides by how its prompt reads. It writes nothing to the plan and
+ * starts nothing — the firing acts on the decision — except that a `continue`
+ * claims the state it was decided on, so two firings that read alike cannot
+ * both commission.
  */
+import type { Redis } from 'ioredis';
 import {
   isClosedPlanNodeStatus,
   OPEN_PLAN_NODE_STATUSES,
@@ -68,6 +71,55 @@ export interface PlanStreamReads {
 
 export interface PlanStreamContext extends PlanReadContext {
   reads: PlanStreamReads;
+  redis: Redis;
+  tenantId: string;
+  /** The firing asking: its session. A claim it holds is its own to decide on again. */
+  holder: string;
+}
+
+// ============================================================================
+// The claim on a `continue`
+// ============================================================================
+
+/**
+ * How long a firing's claim on the state it read holds. It needs to outlast
+ * the start of the commission it decided, after which that commission is in
+ * flight and holds the next firing back itself; a firing that never starts it
+ * gives the state back when the claim lapses.
+ */
+export const PLAN_STREAM_CLAIM_TTL_MS = 30 * 60_000;
+
+/**
+ * The state a `continue` was decided on: the node's revision, its newest
+ * round and its newest pull request. Two firings that read the same records
+ * name the same key; any write, round or pull request since names another.
+ */
+export function streamClaimKey(
+  ctx: Pick<PlanStreamContext, 'tenantId' | 'spaceId'>,
+  node: PlanNode,
+  rounds: readonly PlanStreamRun[],
+  pullRequestLink: PlanNodeLink | undefined,
+): string {
+  return [
+    'plan:stream:claim',
+    ctx.tenantId,
+    ctx.spaceId,
+    node.nodeId,
+    String(node.revision),
+    rounds[0]?.runId ?? '-',
+    pullRequestLink?.ref ?? '-',
+  ].join(':');
+}
+
+/**
+ * Take the state for this firing, by a write that lands only where none
+ * holds it — the one serialization point between firings that read alike, so
+ * at most one of them commissions. The holder that took it may take it again.
+ */
+export async function claimStreamState(ctx: PlanStreamContext, key: string): Promise<boolean> {
+  const taken = await ctx.redis.set(key, ctx.holder, 'PX', PLAN_STREAM_CLAIM_TTL_MS, 'NX');
+  if (taken === 'OK') return true;
+  return (await ctx.redis.get(key)) === ctx.holder;
 }
 
 // ============================================================================
@@ -117,6 +169,8 @@ export interface PlanStreamFacts {
   pausedItems: number;
   /** The node's newest `pull_request` link. */
   pullRequestLink?: PlanNodeLink;
+  /** The merges of the node's pull requests a firing has judged it against (`merge` links). */
+  mergesJudged: readonly string[];
   /** GitHub's answer for that pull request, where the caller read it. */
   pullRequest?: PlanStreamPullRequestAnswer;
   /** The node's own commissions and publications, newest first. */
@@ -149,10 +203,6 @@ function briefNode(node: PlanNode): PlanStreamBriefNode {
     criteria: node.criteria,
     ...(node.note !== undefined ? { note: node.note } : {}),
   };
-}
-
-function firstLine(text: string | undefined): string {
-  return (text ?? '').split('\n', 1)[0] ?? '';
 }
 
 /** `https://github.com/<owner>/<repo>/pull/<number>`, as a publication links it. */
@@ -364,9 +414,7 @@ export function decideStreamFiring(facts: PlanStreamFacts): PlanNodeNextOutput {
       const actedOn = facts.rounds.some(
         (run) => run.slug === PLAN_STREAM_COMMISSION_SLUG && at(run.startedAt) > at(mergedAt),
       );
-      const recorded =
-        at(node.updatedAt) >= at(mergedAt) && firstLine(node.note).includes(link.ref);
-      if (!actedOn && !recorded) {
+      if (!actedOn && !facts.mergesJudged.includes(link.ref)) {
         return {
           decision: 'record_merge',
           reason: `${link.ref} merged at ${mergedAt} and no commission of the node has started since; judge the node against its criteria with the merged change in hand.`,
@@ -377,6 +425,12 @@ export function decideStreamFiring(facts: PlanStreamFacts): PlanNodeNextOutput {
             ...(answer.mergeCommitSha ? { mergeCommitSha: answer.mergeCommitSha } : {}),
           },
           noteHead: mergeNoteHead(link.ref, answer.mergeCommitSha),
+          link: {
+            nodeId: node.nodeId,
+            kind: 'merge',
+            ref: link.ref,
+            label: `merged ${answer.mergeCommitSha ? `as ${answer.mergeCommitSha} ` : ''}at ${mergedAt}`,
+          },
         };
       }
     }
@@ -502,17 +556,27 @@ export async function nextInPlanStream(
       ? await ctx.reads.publicationOutcome(ctx.spaceId, latest.runId)
       : undefined;
   const pullRequestLink = opened.links.find((l) => l.kind === 'pull_request');
+  const mergesJudged = opened.links.filter((l) => l.kind === 'merge').map((l) => l.ref);
 
+  const decision = decideStreamFiring({
+    node: opened.node,
+    mergesJudged,
+    inFlight: opened.runs,
+    pausedItems,
+    ...(pullRequestLink ? { pullRequestLink } : {}),
+    ...(input.pullRequest ? { pullRequest: input.pullRequest } : {}),
+    rounds,
+    ...(publication !== undefined ? { publication } : {}),
+    attempts: input.attempts,
+  });
+  if (decision.decision !== 'continue') return decided(decision);
+  const claim = streamClaimKey(ctx, opened.node, rounds, pullRequestLink);
+  if (await claimStreamState(ctx, claim)) return decided(decision);
   return decided(
-    decideStreamFiring({
-      node: opened.node,
-      inFlight: opened.runs,
-      pausedItems,
-      ...(pullRequestLink ? { pullRequestLink } : {}),
-      ...(input.pullRequest ? { pullRequest: input.pullRequest } : {}),
-      rounds,
-      ...(publication !== undefined ? { publication } : {}),
-      attempts: input.attempts,
-    }),
+    wait(
+      'claimed',
+      `Another firing decided to continue "${opened.node.title}" on the state this one read, and is commissioning it.`,
+      opened.node,
+    ),
   );
 }

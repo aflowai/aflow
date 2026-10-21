@@ -192,8 +192,8 @@ export const PlanOperationRegistrations: OperationRegistration[] = [
       ],
       pitfalls: [
         'read_pull_request: read it through the space’s GitHub binding, then call again with the same rootNodeId and attempts and `pullRequest` copied from the answer — `read: "failed"` where the read failed. Never fill it in from memory',
-        'record_merge: judge the node against its criteria with the merged change in hand. Met: plan.node.update status "done", outcome naming the pull request and its merge commit. Not met: leave it active, the note’s first line beginning with noteHead and naming the next step. Then call plan.node.next again. A PLAN_NODE_STALE refusal means someone wrote first: end the firing as wait, writing nothing more',
-        'wait: start nothing, cancel nothing, write nothing, and end',
+        'record_merge: judge the node against its criteria with the merged change in hand. Met: plan.node.update status "done", outcome naming the pull request and its merge commit. Not met: leave it active, the note’s first line beginning with noteHead and naming the next step. Then pass `link` to plan.node.link — the merge counts as judged only once it is linked — and call plan.node.next again. A PLAN_NODE_STALE refusal means someone wrote first: end the firing as wait, writing nothing more; PLAN_NODE_UNCHANGED means the note was written by an earlier firing: link it',
+        'wait: start nothing, cancel nothing, write nothing, and end — `claimed` means another firing decided continue on the same state and is commissioning it',
         'stop: pass `update` to plan.node.update as it stands; start nothing and cancel nothing',
         'continue: brief the commission from the node’s goal and criteria — and, on `retry`, from that run’s failure or the review run’s findings — and start it with the node’s id as planNodeId; its publication takes the same planNodeId',
       ],

@@ -181,12 +181,15 @@ records — its runs (`workflow_runs.plan_node_id`, whoever drove them), its lin
 pending pauses in `attention_items`, and its newest pull request as GitHub answers it, which
 the decision asks the firing to read (`read_pull_request`) and pass back:
 
-- `record_merge` — the pull request merged and no commission of the node started since. The
+- `record_merge` — the pull request merged, no commission of the node started since, and the
+  node holds no `merge` link to it. The
   firing judges the node against its criteria: met, `done` with the pull request and merge
-  commit in its outcome; not met, it stays `active` with `noteHead` opening its note. Then it
+  commit in its outcome; not met, it stays `active` with `noteHead` opening its note. It then
+  writes the decision's `link` with `plan.node.link`, the record that the merge was judged, and
   asks again, and the stream moves on. A write refused on the revision ends the firing as
   `wait`.
-- `wait` — the node is `blocked`; a run of it is in flight, or paused in the attention items;
+- `wait` — the node is `blocked`; another firing claimed the same state for a `continue`
+  (`claimed`); a run of it is in flight, or paused in the attention items;
   its pull request is open; a read failed; or its state is one no rule names.
 - `stop` — its pull request was closed unmerged after its last write, its push was declined,
   or more of its commissions ended without a pull request since its last write than

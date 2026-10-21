@@ -15,6 +15,7 @@ import {
 import {
   createPlanNode,
   linkEndedRun,
+  linkPlanNode,
   updatePlanNode,
   type PlanWriteContext,
 } from '../plan/operations.js';
@@ -146,12 +147,17 @@ function ends(runId: string, status: string): void {
   held.status = status;
 }
 
+function streamContext(holder = 'firing-a') {
+  return { store, spaceId: SPACE, reads: reads(), redis, tenantId: TENANT, holder };
+}
+
 async function next(
   rootNodeId: string,
   extra: { attempts?: number; pullRequest?: PlanStreamPullRequestAnswer } = {},
+  holder?: string,
 ): Promise<PlanNodeNextOutput> {
   const input = PlanNodeNextInputSchema.parse({ rootNodeId, ...extra });
-  const result = await nextInPlanStream({ store, spaceId: SPACE, reads: reads() }, input);
+  const result = await nextInPlanStream(streamContext(holder), input);
   if (!result.ok) throw new Error(result.message);
   expect(PlanNodeNextOutputSchema.safeParse(result.output).success).toBe(true);
   return result.output;
@@ -336,7 +342,7 @@ describe('plan.node.next — wait', () => {
 
   it('refuses a root that is not in the space', async () => {
     const result = await nextInPlanStream(
-      { store, spaceId: SPACE, reads: reads() },
+      streamContext(),
       PlanNodeNextInputSchema.parse({ rootNodeId: '5e1d0000-0000-4000-8000-00000000dead' }),
     );
     expect(result).toMatchObject({ ok: false, code: 'PLAN_NODE_NOT_FOUND' });
@@ -350,6 +356,46 @@ describe('plan.node.next — continue', () => {
       decision: 'continue',
       node: { nodeId: first.nodeId, goal: first.goal, criteria: first.criteria },
       attemptsUsed: 0,
+    });
+  });
+
+  it('two overlapping firings with no work in flight: at most one continues to commission', async () => {
+    const { root, first } = await stream();
+    const decisions = await Promise.all([
+      next(root.nodeId, {}, 'firing-a'),
+      next(root.nodeId, {}, 'firing-b'),
+    ]);
+    expect(decisions.filter((d) => d.decision === 'continue')).toHaveLength(1);
+    expect(decisions.find((d) => d.decision !== 'continue')).toMatchObject({
+      decision: 'wait',
+      cause: 'claimed',
+      node: { nodeId: first.nodeId },
+    });
+
+    // The firing that took the state may ask again; the other still waits.
+    const winner = decisions[0]!.decision === 'continue' ? 'firing-a' : 'firing-b';
+    const loser = winner === 'firing-a' ? 'firing-b' : 'firing-a';
+    expect(await next(root.nodeId, {}, winner)).toMatchObject({ decision: 'continue' });
+    expect(await next(root.nodeId, {}, loser)).toMatchObject({
+      decision: 'wait',
+      cause: 'claimed',
+    });
+
+    // Once its commission runs, the round holds every firing back by itself.
+    await run(first, PLAN_STREAM_COMMISSION_SLUG, 'running');
+    expect(await next(root.nodeId, {}, loser)).toMatchObject({
+      decision: 'wait',
+      cause: 'in_flight',
+    });
+  });
+
+  it('a claim is on the state read: a round ended since is another firing’s to continue', async () => {
+    const { root, first } = await stream();
+    expect(await next(root.nodeId, {}, 'firing-a')).toMatchObject({ decision: 'continue' });
+    await run(first, PLAN_STREAM_COMMISSION_SLUG, 'failed');
+    expect(await next(root.nodeId, {}, 'firing-b')).toMatchObject({
+      decision: 'continue',
+      retry: { cause: 'commission_failed' },
     });
   });
 
@@ -501,6 +547,7 @@ describe('plan.node.next — a merge', () => {
     if (record.decision !== 'record_merge') throw new Error('expected record_merge');
     expect(record.noteHead).toBe(mergeNoteHead(PR, MERGE_SHA));
     await write(first.nodeId, { note: `${record.noteHead}; next: the live exit` });
+    expect(await linkPlanNode(session(), record.link)).toMatchObject({ ok: true });
 
     const again = await fire(root.nodeId, github);
     expect(again).toMatchObject({
@@ -512,6 +559,19 @@ describe('plan.node.next — a merge', () => {
 
     await run(first, PLAN_STREAM_COMMISSION_SLUG, 'running');
     expect(await fire(root.nodeId, github)).toMatchObject({ decision: 'wait', cause: 'in_flight' });
+  });
+
+  it('a note that mentions the pull request is not a judged merge: only its merge record is', async () => {
+    const { root, first } = await stream();
+    const mergedAt = await publishedRound(first);
+    const github = (url: string) => merged(url, mergedAt);
+    await write(first.nodeId, { note: `Waiting on ${PR} to merge; then the live exit.` });
+    const record = await fire(root.nodeId, github);
+    expect(record).toMatchObject({
+      decision: 'record_merge',
+      link: { nodeId: first.nodeId, kind: 'merge', ref: PR },
+    });
+    expect(store.links.filter((l) => l.kind === 'merge')).toHaveLength(0);
   });
 
   it('a person’s write after the merge does not hide it, and the node is not commissioned as though nothing merged', async () => {

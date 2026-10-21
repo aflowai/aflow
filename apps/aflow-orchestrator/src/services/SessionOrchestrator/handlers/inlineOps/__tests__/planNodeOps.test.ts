@@ -324,7 +324,14 @@ describe('plan.node.next', () => {
     mockNextInPlanStream.mockResolvedValue({ ok: true, output: decision });
     await handlePlanNodeInline(makeArgs('plan.node.next', { rootNodeId: NODE_ID }));
     expect(mockNextInPlanStream).toHaveBeenCalledWith(
-      { store: STORE, spaceId: SPACE, reads: READS },
+      {
+        store: STORE,
+        spaceId: SPACE,
+        reads: READS,
+        redis: { kind: 'redis' },
+        tenantId: TENANT,
+        holder: SESSION,
+      },
       { rootNodeId: NODE_ID, attempts: PLAN_STREAM_ATTEMPTS_DEFAULT },
     );
     expect(emitted()['status']).toBe('SUCCEEDED');
