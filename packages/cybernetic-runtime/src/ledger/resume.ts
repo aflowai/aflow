@@ -388,6 +388,8 @@ export interface CommitFailTaskArgs {
   reason: string;
   summary?: string;
   completedAt?: Date;
+  /** The typed error the task fails with, as an executor's failure would record it. */
+  error?: { code: string; classification: string; retryable: boolean };
 }
 
 export type CommitFailTaskResult = 'committed' | 'claim_lost' | 'task_row_state_mismatch';
@@ -431,14 +433,23 @@ export async function commitFailTaskAndResume(
       throw new ResumeClaimLostError();
     }
 
+    const completedAt = args.completedAt ?? new Date();
     const taskUpdate = await tx
       .update(workflowRunTasks)
       .set({
         status: 'failed',
         outputRef: null,
-        completedAt: args.completedAt ?? new Date(),
+        completedAt,
         summary: args.summary ?? `Rejected via workflow.run.resume fail (reason=${args.reason}).`,
         failureReason: args.reason,
+        ...(args.error
+          ? {
+              failedAt: completedAt,
+              errorCode: args.error.code,
+              errorClassification: args.error.classification,
+              errorRetryable: args.error.retryable,
+            }
+          : {}),
       })
       .where(
         and(

@@ -13,6 +13,7 @@ import {
   type ApiWriteApprovalRequestPayload,
   type BrowserWriteApprovalRequestPayload,
   type WriteApprovalExtension,
+  type WriteApprovalRequestPayload,
   BROWSER_PAGE_ACT_OPERATION_ID,
   MODEL_RUNTIME_CHANGE_OPERATION_ID,
   localModelChangePhrase,
@@ -99,11 +100,13 @@ export function createPausedStepSource(deps: PausedStepSourceDeps): ActionCenter
         );
       }
 
-      // Plan 253: a write-approval decision is authenticated HERE — this is the
-      // only place with the real actor identity. Record it as the grant the
-      // orchestrator and executor read, keyed by (tenant, run, requestHash);
-      // the resume message that follows carries no trusted decision, so a
-      // scheduled or agent-driven resume can never approve a gated write.
+      // Plan 253: a write-approval decision is authenticated HERE — the Action
+      // Center resolve is the only place with the real actor identity (a
+      // workflow run's approval is answered by workflowWriteApprovalSource,
+      // the same boundary). Record it as the grant the orchestrator and
+      // executor read, keyed by (tenant, run, requestHash); the resume message
+      // that follows carries no trusted decision, so a scheduled or
+      // agent-driven resume can never approve a gated write.
       if (item.kind === 'write_approval' && resolution.kind !== 'dismiss') {
         const reqPayload = await loadRequestedInputPayload(deps, row.requestedInputRef);
         const parsedReq = WriteApprovalRequestPayloadSchema.safeParse(reqPayload);
@@ -580,45 +583,79 @@ function buildWriteApprovalItem(
   row: PausedSessionSlim,
   payload: Record<string, unknown>,
 ): ActionCenterSourceItem | null {
-  if (!row.currentStepExecutionId) return null;
+  const stepExecutionId = row.currentStepExecutionId;
+  if (!stepExecutionId) return null;
   const parsed = WriteApprovalRequestPayloadSchema.safeParse(payload);
   if (!parsed.success) return null;
-  const req = parsed.data;
-  const shown =
-    req.target === 'browser'
-      ? browserApprovalShown(req)
-      : req.target === 'local_model'
-        ? localModelApprovalShown(req)
-        : apiWriteApprovalShown(req);
-
-  const origin: ActionCenterItemOrigin = {
-    type: 'step',
-    runId: row.sessionId,
-    stepExecutionId: row.currentStepExecutionId,
-    sessionId: row.sessionId,
-    pauseVersion: row.status === 'PAUSED' ? 0 : 1,
-    operationId: shown.operationId,
-  };
-
   const requestedAtRaw = typeof payload['requestedAt'] === 'string' ? payload['requestedAt'] : null;
-  const requestedAt = requestedAtRaw ?? row.startedAt.toISOString();
-
-  return {
-    id: `${STEP_ITEM_ID_PREFIX}${row.currentStepExecutionId}`,
+  return buildWriteApprovalCard({
+    id: `${STEP_ITEM_ID_PREFIX}${stepExecutionId}`,
     spaceId: scope.spaceId,
+    request: parsed.data,
+    origin: (operationId) => ({
+      type: 'step',
+      runId: row.sessionId,
+      stepExecutionId,
+      sessionId: row.sessionId,
+      pauseVersion: row.status === 'PAUSED' ? 0 : 1,
+      operationId,
+    }),
+    requestedAt: requestedAtRaw ?? row.startedAt.toISOString(),
+    requestedBy: { kind: 'agent' as const, label: 'Agent', sessionId: row.sessionId },
+    open: row.status === 'PAUSED',
+  });
+}
+
+export interface WriteApprovalCardArgs {
+  readonly id: string;
+  readonly spaceId: string;
+  readonly request: WriteApprovalRequestPayload;
+  /** The pause the card answers, given the operation the request would let through. */
+  readonly origin: (operationId: string) => ActionCenterItemOrigin;
+  readonly requestedAt: string;
+  readonly requestedBy: ActionCenterSourceItem['requestedBy'];
+  readonly open: boolean;
+  /** Links beyond what the request itself names. */
+  readonly relatesTo?: readonly RelatesToEntry[];
+}
+
+/**
+ * The approve/deny card for a write approval, wherever the pause that asked it
+ * lives — a session's paused step or a workflow run's paused operation task.
+ * Every field the operator decides on comes from the request, so both planes
+ * show the same call the same way.
+ */
+export function buildWriteApprovalCard(args: WriteApprovalCardArgs): ActionCenterSourceItem {
+  const shown = writeApprovalShown(args.request);
+  return {
+    id: args.id,
+    spaceId: args.spaceId,
     kind: 'write_approval',
-    origin,
+    origin: args.origin(shown.operationId),
     title: shown.title.slice(0, 256),
     summary: shown.summary.slice(0, 2_000),
     extension: shown.extension,
-    requestedAt,
-    requestedBy: { kind: 'agent' as const, label: 'Agent', sessionId: row.sessionId },
+    requestedAt: args.requestedAt,
+    requestedBy: args.requestedBy,
     priority: shown.priority,
-    relatesTo: shown.relatesTo,
+    relatesTo: [...shown.relatesTo, ...(args.relatesTo ?? [])],
     ...(shown.resolverPolicy ? { resolverPolicy: shown.resolverPolicy } : {}),
     resolverAuthority: { kind: 'space' },
-    status: row.status === 'PAUSED' ? 'open' : 'resolved',
+    status: args.open ? 'open' : 'resolved',
   };
+}
+
+/** The operation a write approval lets through — what an answer to it reports. */
+export function writeApprovalOperationId(req: WriteApprovalRequestPayload): string {
+  return writeApprovalShown(req).operationId;
+}
+
+function writeApprovalShown(req: WriteApprovalRequestPayload): WriteApprovalShown {
+  return req.target === 'browser'
+    ? browserApprovalShown(req)
+    : req.target === 'local_model'
+      ? localModelApprovalShown(req)
+      : apiWriteApprovalShown(req);
 }
 
 interface WriteApprovalShown {

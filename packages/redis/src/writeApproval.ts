@@ -10,7 +10,8 @@ import {
 /**
  * Write-approval grant (Plan 253). Written ONLY at the authenticated boundary —
  * the Action Center resolve handler, which holds the real actor identity — when
- * an operator approves or denies a gated write, and the operator's resolve of a
+ * an operator approves or denies a gated write, whether a session's step or a
+ * workflow run's operation task asked it, and the operator's resolve of a
  * workflow human task whose previewed call is a host push. The orchestrator
  * reads it to decide re-dispatch vs fail; the API executor reads it on
  * re-dispatch to let the call through, and the host executor before a push its

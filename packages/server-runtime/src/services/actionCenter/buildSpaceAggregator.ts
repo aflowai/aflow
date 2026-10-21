@@ -13,6 +13,7 @@ import { createCoachActivitySource } from './sources/coachActivitySource.js';
 import { createTriggerArmedSource } from './sources/triggerArmedSource.js';
 import { createWorkflowHumanTaskSource } from './sources/workflowHumanTaskSource.js';
 import { createWorkflowOAuthConsentSource } from './sources/workflowOAuthConsentSource.js';
+import { createWorkflowWriteApprovalSource } from './sources/workflowWriteApprovalSource.js';
 import { createSessionInvitationSource } from './sources/sessionInvitationSource.js';
 import { createBrowserHandoffSource } from './sources/browserHandoffSource.js';
 
@@ -45,6 +46,7 @@ export function buildSpaceActionCenterAggregator(
       createTriggerArmedSource(sourceDeps),
       createWorkflowHumanTaskSource(sourceDeps),
       createWorkflowOAuthConsentSource(sourceDeps),
+      createWorkflowWriteApprovalSource(sourceDeps),
       createSessionInvitationSource(sourceDeps),
       createBrowserHandoffSource(sourceDeps),
     ],
