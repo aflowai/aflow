@@ -616,7 +616,7 @@ export async function executeOperatorWorkflowRunResume(
  * dispatch emits only `WorkflowTaskUpdate`. Best-effort — the resume already
  * committed, so an emit failure must not fail it.
  */
-async function emitRunResumedRunning(
+export async function emitRunResumedRunning(
   deps: OperatorWorkflowRunResumeDeps,
   tenantIdStr: string,
   runId: string,

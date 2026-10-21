@@ -8,6 +8,7 @@
 import { z } from 'zod';
 import { LocalRuntimeChangeSchema } from '../credentials/localRuntimeDiagnostics.js';
 import { BROWSER_ACTIONS } from '../operations/browser.js';
+import type { AflowError } from './errors.js';
 import {
   OAuthConsentIntegrationKindSchema,
   OAuthConsentOwnerScopeSchema,
@@ -312,4 +313,44 @@ export function grantAnswersAsk(
   if (grant === null) return false;
   if (decidedBefore === undefined) return true;
   return grant.decidedAt !== undefined && Date.parse(grant.decidedAt) > Date.parse(decidedBefore);
+}
+
+/**
+ * The error a denied approval fails its step or workflow task with — one
+ * wording for both, since an agent and a workflow's own rules read the same
+ * refusal. `permission` is load-bearing: toAgentToolError maps it to
+ * retry:false, so the agent sees a firm denial rather than a retryable system
+ * error. The message is self-contained because the agent envelope is lossy,
+ * and carries the operator's reason — the part that tells the agent what to
+ * change — when one was given.
+ */
+export function writeApprovalDenial(
+  request: WriteApprovalRequestPayload,
+  reason: string | undefined,
+): AflowError {
+  const because = reason ? `. Operator's reason: "${reason}"` : '';
+  const message =
+    request.target === 'local_model'
+      ? `The operator declined to ${localModelChangePhrase(request)} in the Action Center${because}. ` +
+        'It is not a system error, and asking for the same change again is refused with this ' +
+        'reason. Tell the user it was declined, and what the issue it would have fixed still costs.'
+      : request.target === 'browser'
+        ? `The operator denied this ${request.action} on ${request.pageOrigin} in the Action ` +
+          `Center${because}. It is not a system error, and the same action on the same element ` +
+          'with the same value is refused with this reason rather than asked again. Use the ' +
+          'reason to decide what to do: propose a different action, or tell the user it was ' +
+          'declined and ask how to proceed.'
+        : 'This write was denied by a human operator in the Action Center' +
+          because +
+          '. It is not a system error and will NOT succeed on retry — do not call this ' +
+          'endpoint again with the same request. Use the operator’s reason to decide what to ' +
+          'do: adjust and propose a different action, or tell the user it was declined and ask ' +
+          'how to proceed.';
+  return {
+    code: 'write_approval_denied',
+    classification: 'permission',
+    retryable: false,
+    message,
+    timestamp: new Date().toISOString(),
+  };
 }

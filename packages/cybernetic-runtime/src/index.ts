@@ -187,6 +187,7 @@ export * from './humanTaskHydration.js';
 export * from './workflowHumanTaskHydration.js';
 export * from './workflowRunResumeModes.js';
 export * from './operatorWorkflowRunResume.js';
+export * from './pausedRunWriteApproval.js';
 export * from './operatorWorkflowRunPause.js';
 export * from './workflowHarnessAdvance.js';
 

@@ -3,7 +3,7 @@ import { getWriteApprovalGrant } from '@aflow/redis';
 import {
   type AflowError,
   grantAnswersAsk,
-  localModelChangePhrase,
+  writeApprovalDenial,
   WriteApprovalRequestPayloadSchema,
   type WriteApprovalRequestPayload,
   type SessionBlockedOn,
@@ -121,42 +121,4 @@ export async function decideWriteApprovalResume(
   if (!grant || !grantAnswersAsk(grant, decidedBefore)) return { decision: 'undecided' };
   if (grant.decision === 'approved') return { decision: 'approved' };
   return { decision: 'denied', error: writeApprovalDenial(request, grant.reason) };
-}
-
-/**
- * The step's error when the operator denied it. `permission` is load-bearing:
- * toAgentToolError maps it to retry:false, so the agent sees a firm denial
- * rather than a retryable system error. The message is self-contained because
- * the agent envelope is lossy, and carries the operator's reason — the part
- * that tells the agent what to change — when one was given.
- */
-export function writeApprovalDenial(
-  request: WriteApprovalRequestPayload,
-  reason: string | undefined,
-): AflowError {
-  const because = reason ? `. Operator's reason: "${reason}"` : '';
-  const message =
-    request.target === 'local_model'
-      ? `The operator declined to ${localModelChangePhrase(request)} in the Action Center${because}. ` +
-        'It is not a system error, and asking for the same change again is refused with this ' +
-        'reason. Tell the user it was declined, and what the issue it would have fixed still costs.'
-      : request.target === 'browser'
-        ? `The operator denied this ${request.action} on ${request.pageOrigin} in the Action ` +
-          `Center${because}. It is not a system error, and the same action on the same element ` +
-          'with the same value is refused with this reason rather than asked again. Use the ' +
-          'reason to decide what to do: propose a different action, or tell the user it was ' +
-          'declined and ask how to proceed.'
-        : 'This write was denied by a human operator in the Action Center' +
-          because +
-          '. It is not a system error and will NOT succeed on retry — do not call this ' +
-          'endpoint again with the same request. Use the operator’s reason to decide what to ' +
-          'do: adjust and propose a different action, or tell the user it was declined and ask ' +
-          'how to proceed.';
-  return {
-    code: 'write_approval_denied',
-    classification: 'permission',
-    retryable: false,
-    message,
-    timestamp: new Date().toISOString(),
-  };
 }

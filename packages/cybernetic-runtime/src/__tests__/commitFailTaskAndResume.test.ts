@@ -99,4 +99,39 @@ describe('commitFailTaskAndResume — Plan 167', () => {
     const result = await commitFailTaskAndResume({} as never, 'tenant', COMMON_ARGS);
     expect(result).toBe('task_row_state_mismatch');
   });
+
+  it('records a typed error on the task row as an executor failure would', async () => {
+    let tx: FakeTx | undefined;
+    mockWithTenantSchema.mockImplementationOnce(async (_db, _ctx, fn) => {
+      tx = makeFakeTx([{ id: 'run' }], [{ id: 'task' }], workflowRunsToken);
+      return fn(tx);
+    });
+    const completedAt = new Date('2026-10-21T10:00:00.000Z');
+    await commitFailTaskAndResume({} as never, 'tenant', {
+      ...COMMON_ARGS,
+      completedAt,
+      error: { code: 'write_approval_denied', classification: 'permission', retryable: false },
+    });
+    const taskSet = tx?.updates.find((u) => u.table === 'workflowRunTasks')?.setValues;
+    expect(taskSet).toMatchObject({
+      status: 'failed',
+      failureReason: 'rejected_by_operator',
+      failedAt: completedAt,
+      errorCode: 'write_approval_denied',
+      errorClassification: 'permission',
+      errorRetryable: false,
+    });
+  });
+
+  it('leaves the error columns alone when no typed error is given', async () => {
+    let tx: FakeTx | undefined;
+    mockWithTenantSchema.mockImplementationOnce(async (_db, _ctx, fn) => {
+      tx = makeFakeTx([{ id: 'run' }], [{ id: 'task' }], workflowRunsToken);
+      return fn(tx);
+    });
+    await commitFailTaskAndResume({} as never, 'tenant', COMMON_ARGS);
+    const taskSet = tx?.updates.find((u) => u.table === 'workflowRunTasks')?.setValues ?? {};
+    expect(Object.keys(taskSet)).not.toContain('errorCode');
+    expect(Object.keys(taskSet)).not.toContain('errorRetryable');
+  });
 });

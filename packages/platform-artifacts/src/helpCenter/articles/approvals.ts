@@ -60,7 +60,7 @@ The work that was waiting on the item continues from where it stopped; nothing n
     theme: 'approvals',
     question: 'Why is a write waiting for my approval, and how do I change which writes ask first?',
     summary:
-      'Every endpoint of an API integration carries a risk tier. Before the agent makes a write call, the space checks that tier against its Write Policy: by default, low-risk writes run unattended, while medium-risk writes (external sends, hard-to-undo changes) and high-risk writes (money movement, destructive changes at scale) wait for a person to approve them in the Workbench. Nothing is sent until you approve. Denying stops that call and tells the agent why. Space admins change the defaults per tier under Settings → Write Policy.',
+      'Every endpoint of an API integration carries a risk tier. Before the agent, or a step of a running skill, makes a write call, the space checks that tier against its Write Policy: by default, low-risk writes run unattended, while medium-risk writes (external sends, hard-to-undo changes) and high-risk writes (money movement, destructive changes at scale) wait for a person to approve them in the Workbench. Nothing is sent until you approve. Denying stops that call and tells the agent why. Space admins change the defaults per tier under Settings → Write Policy.',
     body: `## Where
 
 Approve or deny under **Needs attention** in the Workbench. Change the rules under **Settings → Write Policy**.
@@ -81,6 +81,8 @@ The card shows the risk badge, the method, the host, the endpoint and the reques
 
 - **Approve**: that exact request goes out. If the agent changes the request, it asks again.
 - **Deny**: the call does not run. The agent is told it was refused, with your reason if you wrote one, and does not retry it. The rest of the run carries on.
+
+A skill's step that makes a gated write waits the same way: its run shows as paused, and the card names the skill. Approving sends the step's request; denying fails that step with your reason, and the skill goes on as it does when that step fails.
 
 Only a person approves; the Helmsman cannot approve a write on your behalf.
 
