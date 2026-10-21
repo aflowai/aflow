@@ -152,6 +152,15 @@ export interface PlanNodeStore {
     nodeId: string,
     limit: number,
   ): Promise<{ links: PlanNodeLink[]; total: number }>;
+  /** The node's newest link of `kind`, read by kind rather than from a page of every link. */
+  newestLink(spaceId: string, nodeId: string, kind: PlanNodeLinkKind): Promise<PlanNodeLink | null>;
+  /** The node's link of `kind` to `ref`, by its key; null where there is none. */
+  findLink(
+    spaceId: string,
+    nodeId: string,
+    kind: PlanNodeLinkKind,
+    ref: string,
+  ): Promise<PlanNodeLink | null>;
   /** The running and paused runs serving any of `nodeIds`, newest first; eval trials never. */
   listRunsServing(
     spaceId: string,
@@ -516,6 +525,40 @@ export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): P
           .from(planNodeLinks)
           .where(where);
         return { links: rows.map(rowToPlanNodeLink), total: count?.total ?? 0 };
+      }),
+
+    newestLink: (spaceId, nodeId, kind) =>
+      inTenant(async (tx) => {
+        const [row] = await tx
+          .select()
+          .from(planNodeLinks)
+          .where(
+            and(
+              eq(planNodeLinks.spaceId, spaceId),
+              eq(planNodeLinks.nodeId, nodeId),
+              eq(planNodeLinks.kind, kind),
+            ),
+          )
+          .orderBy(desc(planNodeLinks.createdAt))
+          .limit(1);
+        return row ? rowToPlanNodeLink(row) : null;
+      }),
+
+    findLink: (spaceId, nodeId, kind, ref) =>
+      inTenant(async (tx) => {
+        const [row] = await tx
+          .select()
+          .from(planNodeLinks)
+          .where(
+            and(
+              eq(planNodeLinks.spaceId, spaceId),
+              eq(planNodeLinks.nodeId, nodeId),
+              eq(planNodeLinks.kind, kind),
+              eq(planNodeLinks.ref, ref),
+            ),
+          )
+          .limit(1);
+        return row ? rowToPlanNodeLink(row) : null;
       }),
 
     listRunsServing: (spaceId, nodeIds, limit) =>

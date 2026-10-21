@@ -8,8 +8,11 @@ import {
   PlanNodeLinkOutputSchema,
   PlanNodeListInputSchema,
   PlanNodeListOutputSchema,
+  PlanNodeNextInputSchema,
+  PlanNodeNextOutputSchema,
   PlanNodeUpdateInputSchema,
   PlanNodeUpdateOutputSchema,
+  PLAN_STREAM_ATTEMPTS_DEFAULT,
 } from './schemas.js';
 
 const EXAMPLE_NODE_ID = '00000000-0000-0000-0000-000000000000';
@@ -166,5 +169,38 @@ export const PlanOperationRegistrations: OperationRegistration[] = [
     accessMode: 'write',
     inputZod: PlanNodeLinkInputSchema,
     outputZod: PlanNodeLinkOutputSchema,
+  },
+  {
+    stepType: 'plan',
+    group: 'node',
+    verb: 'next',
+    name: 'Next in Plan Stream',
+    actionLabel: 'Reading where the stream stands…',
+    semanticDescription:
+      'Decide what a stream does now, by rule, from its records: walk from its root to the active node, read that node’s runs, links, attention items and pull request, and answer record_merge, wait, stop or continue — read_pull_request first where the answer turns on GitHub. Writes nothing and starts nothing.',
+    tags: ['plan', 'node', 'stream', 'schedule'],
+    idempotency: 'idempotent',
+    mutates: false,
+    usage: {
+      oneLine: 'A stream’s next move — wait, stop or continue — decided from its records.',
+      whenToUse: [
+        'A message tells you to continue a plan stream by calling plan.node.next — a scheduled firing: call it before anything else and do only what its decision says',
+        `Making a stream continue itself on a schedule: agent.schedule.create with action "start_run", target {"kind":"platform-role","systemRole":"cybernetic-helmsman"}, the operator’s cron, and input.input the message "Continue the plan stream <rootNodeId>: call plan.node.next with {"rootNodeId":"<rootNodeId>","attempts":${String(PLAN_STREAM_ATTEMPTS_DEFAULT)}} and act on its decision." — the interval and the stream are the operator’s to name`,
+      ],
+      whenNotToUse: [
+        'A conversation the operator is driving — plan.node.get on the node, and the operator decides',
+      ],
+      pitfalls: [
+        'read_pull_request: read it through the space’s GitHub binding, then call again with the same rootNodeId and attempts and `pullRequest` copied from the answer — `read: "failed"` where the read failed. Never fill it in from memory',
+        'record_merge: judge the node against its criteria with the merged change in hand. Met: plan.node.update status "done", outcome naming the pull request and its merge commit. Not met: leave it active, the note’s first line beginning with noteHead and naming the next step. Then pass `link` to plan.node.link — the merge counts as judged only once it is linked — and call plan.node.next again. A PLAN_NODE_STALE refusal means someone wrote first: end the firing as wait, writing nothing more; PLAN_NODE_UNCHANGED means the note was written by an earlier firing: link it',
+        'wait: start nothing, cancel nothing, write nothing, and end — `claimed` means another firing decided continue on the same state and is commissioning it',
+        'stop: pass `update` to plan.node.update as it stands; start nothing and cancel nothing',
+        'continue: brief the commission from the node’s goal and criteria — and, on `retry`, from that run’s failure or the review run’s findings — and start it with the node’s id as planNodeId; its publication takes the same planNodeId',
+      ],
+      minimalExampleInput: { rootNodeId: EXAMPLE_NODE_ID, attempts: PLAN_STREAM_ATTEMPTS_DEFAULT },
+    },
+    accessMode: 'read',
+    inputZod: PlanNodeNextInputSchema,
+    outputZod: PlanNodeNextOutputSchema,
   },
 ];

@@ -290,6 +290,27 @@ export class InMemoryPlanNodeStore implements PlanNodeStore {
     return Promise.resolve({ links: links.slice(0, limit), total: links.length });
   };
 
+  newestLink: PlanNodeStore['newestLink'] = (spaceId, nodeId, kind) => {
+    const links = this.links
+      .filter(
+        (l) =>
+          l.nodeId === nodeId && l.kind === kind && this.nodes.get(l.nodeId)?.spaceId === spaceId,
+      )
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return Promise.resolve(links[0] ? structuredClone(links[0]) : null);
+  };
+
+  findLink: PlanNodeStore['findLink'] = (spaceId, nodeId, kind, ref) => {
+    const link = this.links.find(
+      (l) =>
+        l.nodeId === nodeId &&
+        l.kind === kind &&
+        l.ref === ref &&
+        this.nodes.get(l.nodeId)?.spaceId === spaceId,
+    );
+    return Promise.resolve(link ? structuredClone(link) : null);
+  };
+
   listRunsServing: PlanNodeStore['listRunsServing'] = (spaceId, nodeIds, limit) => {
     const runs = this.runs
       .filter(

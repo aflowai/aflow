@@ -197,6 +197,8 @@ export const PlanNodeLinkKindSchema = z.enum([
   'document',
   'finding',
   'campaign',
+  /** A merge of the node's pull request a stream's firing has judged the node against (Plan 322 P2b). */
+  'merge',
 ]);
 export type PlanNodeLinkKind = z.infer<typeof PlanNodeLinkKindSchema>;
 
@@ -206,6 +208,8 @@ export const PLAN_NODE_LINK_LABEL_MAX_CHARS = 500;
 
 /** The kinds whose ref is a platform id. */
 const UUID_REF_KINDS: readonly PlanNodeLinkKind[] = ['run', 'session', 'campaign'];
+/** The kinds whose ref is a pull request's URL. */
+const URL_REF_KINDS: readonly PlanNodeLinkKind[] = ['pull_request', 'merge'];
 
 /**
  * The promoted run output a run names its pull request by. A run serving a
@@ -224,7 +228,7 @@ export const PlanNodeLinkCreateSchema = z
       .max(PLAN_NODE_LINK_REF_MAX_CHARS)
       .describe(
         'What the link points at: the id of a run, session or campaign; the URL of a pull request; ' +
-          'a memory path or URL for a document; the finding’s own name for a finding.',
+          'a memory path or URL for a document; the finding’s own name for a finding; the merged pull request’s URL for a merge.',
       ),
     label: z.string().trim().min(1).max(PLAN_NODE_LINK_LABEL_MAX_CHARS).optional(),
   })
@@ -237,11 +241,11 @@ export const PlanNodeLinkCreateSchema = z
         message: `A ${link.kind} link's ref is the ${link.kind}'s id, a UUID.`,
       });
     }
-    if (link.kind === 'pull_request' && !/^https?:\/\/\S+$/.test(link.ref)) {
+    if (URL_REF_KINDS.includes(link.kind) && !/^https?:\/\/\S+$/.test(link.ref)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['ref'],
-        message: 'A pull_request link’s ref is the pull request’s URL, as a person opens it.',
+        message: `A ${link.kind} link’s ref is the pull request’s URL, as a person opens it.`,
       });
     }
   });

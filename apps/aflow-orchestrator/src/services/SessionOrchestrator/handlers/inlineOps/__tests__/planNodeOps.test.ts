@@ -6,6 +6,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   PLAN_NODE_DONE_NEEDS_OUTCOME_MESSAGE,
+  PLAN_STREAM_ATTEMPTS_DEFAULT,
   PlanNodeRefusalDetailsSchema,
   type IdempotencyKey,
   type StepDefinition,
@@ -27,7 +28,9 @@ const mockUpdatePlanNode = vi.fn();
 const mockGetPlanNode = vi.fn();
 const mockListPlanNodes = vi.fn();
 const mockLinkPlanNode = vi.fn();
+const mockNextInPlanStream = vi.fn();
 const STORE = { kind: 'store' };
+const READS = { kind: 'reads' };
 vi.mock('@aflow/cybernetic-runtime', () => ({
   createPlanNodeStore: () => STORE,
   createPlanNode: (...a: unknown[]) => mockCreatePlanNode(...a),
@@ -35,6 +38,8 @@ vi.mock('@aflow/cybernetic-runtime', () => ({
   getPlanNode: (...a: unknown[]) => mockGetPlanNode(...a),
   listPlanNodes: (...a: unknown[]) => mockListPlanNodes(...a),
   linkPlanNode: (...a: unknown[]) => mockLinkPlanNode(...a),
+  createPlanStreamReads: () => READS,
+  nextInPlanStream: (...a: unknown[]) => mockNextInPlanStream(...a),
 }));
 vi.mock('@aflow/database', () => ({ getDatabase: () => ({}) }));
 const mockReadDurableSessionCreatedBy = vi.fn();
@@ -306,5 +311,56 @@ describe('plan.node.link', () => {
     );
     expect(mockLinkPlanNode).not.toHaveBeenCalled();
     expect(emitted()['error']).toMatchObject({ code: 'PLAN_NODE_INVALID_INPUT' });
+  });
+});
+
+describe('plan.node.next', () => {
+  it('decides through the engine in this space, with the stream reads, the budget defaulted', async () => {
+    const decision = {
+      decision: 'wait',
+      cause: 'in_flight',
+      reason: 'Work for the node is in flight.',
+    };
+    mockNextInPlanStream.mockResolvedValue({ ok: true, output: decision });
+    await handlePlanNodeInline(makeArgs('plan.node.next', { rootNodeId: NODE_ID }));
+    expect(mockNextInPlanStream).toHaveBeenCalledWith(
+      {
+        store: STORE,
+        spaceId: SPACE,
+        reads: READS,
+        redis: { kind: 'redis' },
+        tenantId: TENANT,
+        holder: SESSION,
+      },
+      { rootNodeId: NODE_ID, attempts: PLAN_STREAM_ATTEMPTS_DEFAULT },
+    );
+    expect(emitted()['status']).toBe('SUCCEEDED');
+    expect(emittedOutput()).toEqual(decision);
+  });
+
+  it('refuses a pull request answer that omits what a merge needs before the engine is reached', async () => {
+    await handlePlanNodeInline(
+      makeArgs('plan.node.next', {
+        rootNodeId: NODE_ID,
+        pullRequest: { url: LINK.ref, read: 'ok', state: 'closed', merged: true },
+      }),
+    );
+    expect(mockNextInPlanStream).not.toHaveBeenCalled();
+    expect(emitted()['error']).toMatchObject({ code: 'PLAN_NODE_INVALID_INPUT' });
+  });
+
+  it('surfaces a root that is not in the space as a validation error naming it', async () => {
+    mockNextInPlanStream.mockResolvedValue({
+      ok: false,
+      code: 'PLAN_NODE_NOT_FOUND',
+      message: 'No plan node in this space.',
+      details: { nodeId: NODE_ID },
+    });
+    await handlePlanNodeInline(makeArgs('plan.node.next', { rootNodeId: NODE_ID }));
+    expect(emitted()['error']).toMatchObject({
+      code: 'PLAN_NODE_NOT_FOUND',
+      classification: 'validation',
+      details: { nodeId: NODE_ID },
+    });
   });
 });

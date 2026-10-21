@@ -26,10 +26,11 @@ const PLAN_OPERATIONS = {
   get: 'read',
   list: 'read',
   link: 'write',
+  next: 'read',
 } as const;
 
 describe('plan.node operations (Plan 322)', () => {
-  it('registers exactly the four P0 operations and P1’s link, read or write as the verb says', () => {
+  it('registers exactly the four P0 operations, P1’s link and P2b’s next, read or write as the verb says', () => {
     const registered = [...getOperationsByStepType('plan').keys()].sort();
     expect(registered).toEqual(
       Object.keys(PLAN_OPERATIONS)

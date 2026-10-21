@@ -51,6 +51,8 @@ import {
  * large ceiling never floods the prompt.
  */
 export const HELMSMAN_DISCOVERY_PRESET: readonly string[] = [
+  // A stream's scheduled firing asks it first (Plan 322 P2b); no other turn does.
+  'plan.node.next',
   'memory.store.put',
   'memory.store.patch',
   'memory.context.remember',

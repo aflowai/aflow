@@ -164,6 +164,43 @@ scripts/verify-commit.mjs`), and Local Publish runs it after the commit and befo
 Approvals are held until the verdict is in; an approval given early pushes a commit the
 review may still send back.
 
+## A stream that continues itself
+
+A stream can wake itself (Plan 322 P2b). Its schedule is a recurring `agent.schedule.create`
+with `action: 'start_run'`, target `{ kind: 'platform-role', systemRole:
+'cybernetic-helmsman' }` and the operator's `cron`, whose `input` is
+`planStreamScheduleInput(rootNodeId, attempts)` from `@aflow/schemas`: one message naming the
+stream's root node and its attempt budget, and nothing else. The interval and the stream are
+the operator's knobs, set when the schedule is created and changed on it; the plan picks no
+default for either. `maxFirings` is at most 50, and the operator renews the schedule.
+
+Each firing is a Helmsman run whose first call is `plan.node.next` (discoverable, not pinned).
+It walks from the root, by position, into the first open child and on, stopping at a node with
+no open child or at the first node that is not `active`, and decides by rule from that node's
+records — its runs (`workflow_runs.plan_node_id`, whoever drove them), its links, the space's
+pending pauses in `attention_items`, and its newest pull request as GitHub answers it, which
+the decision asks the firing to read (`read_pull_request`) and pass back:
+
+- `record_merge` — the pull request merged, no commission of the node started since, none
+  of its runs is in flight, and the node holds no `merge` link to it. The
+  firing judges the node against its criteria: met, `done` with the pull request and merge
+  commit in its outcome; not met, it stays `active` with `noteHead` opening its note. It then
+  writes the decision's `link` with `plan.node.link`, the record that the merge was judged, and
+  asks again, and the stream moves on. A write refused on the revision ends the firing as
+  `wait`.
+- `wait` — the node is `blocked`; another firing claimed the same state for a `continue`
+  (`claimed`); a run of it is in flight, or paused in the attention items;
+  its pull request is open; a read failed; or its state is one no rule names.
+- `stop` — its pull request was closed unmerged after its last write, its push was declined,
+  or more of its commissions ended without a pull request since its last write than
+  `attempts` allows. The decision carries the `plan.node.update` that marks it `blocked` with
+  why; the walk then holds the stream there until a person moves the node on.
+- `continue` — no commission since its last write, or its last round failed, was cancelled,
+  or ended at `fix_before_merge`, within the budget: commission it with its `planNodeId`,
+  briefed from its goal and criteria and, on a retry, from the run the decision names.
+
+A person's write to a node starts its attempt count afresh.
+
 ## What a commission runs under
 
 A commission, a review and the folder's checks run inside the machine's sandbox under the

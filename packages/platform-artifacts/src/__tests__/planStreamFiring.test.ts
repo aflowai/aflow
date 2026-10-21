@@ -1,0 +1,66 @@
+/**
+ * Plan 322 P2b — a stream continues on a schedule. The firing reads the rounds
+ * of the catalog's commission and publication by their slugs, so those must
+ * be the skills' own; the schedule's message names the stream and its budget
+ * and nothing else; and the operation it asks first is the Helmsman's to
+ * find, not a tool on every turn.
+ */
+import { describe, expect, it } from 'vitest';
+import {
+  FlowScheduleCreateInputSchema,
+  getOperation,
+  PLAN_NODE_NEXT_OPERATION_ID,
+  PLAN_STREAM_ATTEMPTS_DEFAULT,
+  PLAN_STREAM_COMMISSION_SLUG,
+  PLAN_STREAM_PUBLICATION_SLUG,
+  PLAN_STREAM_SCHEDULE_TARGET,
+  planStreamScheduleInput,
+} from '@aflow/schemas';
+import { CYBERNETIC_AGENTS, HELMSMAN_DISCOVERY_PRESET } from '../cyberneticAgents.js';
+import { COMMISSION_CHANGE } from '../skillCatalog/commissionChange.js';
+import { PUBLISH_LOCAL_CHANGES } from '../skillCatalog/publishLocalChanges.js';
+
+const ROOT = '5e1d0000-0000-4000-8000-000000000322';
+
+function helmsmanCoreOperations(): string[] {
+  const agent = CYBERNETIC_AGENTS.find((a) => a.flowId === PLAN_STREAM_SCHEDULE_TARGET.systemRole);
+  const step = (agent?.steps as Array<Record<string, unknown>> | undefined)?.find(
+    (s) => s['stepId'] === 'agent',
+  );
+  const catalog = (step?.['config'] as Record<string, unknown> | undefined)?.['catalog'] as
+    { coreOperations?: string[] } | undefined;
+  return catalog?.coreOperations ?? [];
+}
+
+describe('a stream’s schedule (Plan 322 P2b)', () => {
+  it('reads the rounds of the catalog’s own commission and publication', () => {
+    expect(COMMISSION_CHANGE.bundle.workflow.slug).toBe(PLAN_STREAM_COMMISSION_SLUG);
+    expect(PUBLISH_LOCAL_CHANGES.bundle.workflow.slug).toBe(PLAN_STREAM_PUBLICATION_SLUG);
+  });
+
+  it('starts the Helmsman with a message naming only the root and the budget', () => {
+    const input = planStreamScheduleInput(ROOT);
+    const schedule = FlowScheduleCreateInputSchema.safeParse({
+      name: 'Continue Plan 322',
+      action: 'start_run',
+      target: PLAN_STREAM_SCHEDULE_TARGET,
+      cron: '*/15 * * * *',
+      input,
+    });
+    expect(schedule.success).toBe(true);
+    expect(input.input).toContain(PLAN_NODE_NEXT_OPERATION_ID);
+    expect(input.input).toContain(
+      JSON.stringify({ rootNodeId: ROOT, attempts: PLAN_STREAM_ATTEMPTS_DEFAULT }),
+    );
+    expect(CYBERNETIC_AGENTS.some((a) => a.flowId === PLAN_STREAM_SCHEDULE_TARGET.systemRole)).toBe(
+      true,
+    );
+  });
+
+  it('leaves plan.node.next discoverable on the Helmsman, never pinned on every turn', () => {
+    expect(HELMSMAN_DISCOVERY_PRESET).toContain(PLAN_NODE_NEXT_OPERATION_ID);
+    expect(helmsmanCoreOperations()).not.toContain(PLAN_NODE_NEXT_OPERATION_ID);
+    const op = getOperation(PLAN_NODE_NEXT_OPERATION_ID);
+    expect(op).toMatchObject({ agentTool: true, mutates: false, accessMode: 'read' });
+  });
+});
