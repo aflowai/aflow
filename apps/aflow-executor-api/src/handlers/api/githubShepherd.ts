@@ -123,13 +123,46 @@ function pullRequestFields(value: unknown): PullRequestFields {
 }
 
 /**
+ * `<prefix>` or `<prefix>:<last>`: a branch name holds no colon, so a colon
+ * after the prefix starts the number of the pull request last tended.
+ */
+function prefixAndTurn(arg: string | undefined): { prefix: string; last?: number } {
+  const prefix = requirePrefix(arg, SHEPHERD_RESPONSE_PRESETS.pullRequests);
+  const colon = prefix.lastIndexOf(':');
+  if (colon === -1) return { prefix };
+  const last = prefix.slice(colon + 1);
+  if (!/^[1-9]\d{0,9}$/.test(last)) {
+    throw new Error(
+      `${SHEPHERD_RESPONSE_PRESETS.pullRequests} takes the number of the pull request last tended after the prefix: ${SHEPHERD_RESPONSE_PRESETS.pullRequests}:<prefix>:<number>`,
+    );
+  }
+  return {
+    prefix: requirePrefix(prefix.slice(0, colon), SHEPHERD_RESPONSE_PRESETS.pullRequests),
+    last: Number(last),
+  };
+}
+
+/**
+ * Newest first by number, and turned past `last`: the one below it first,
+ * wrapping to the newest after the oldest. Each pass tends the first, so
+ * passes take the pull requests in turn — a red one tended on every pass
+ * would otherwise keep every other waiting.
+ */
+function inTurn(pullRequests: LoopPullRequestSummary[], last: number | undefined) {
+  const newestFirst = [...pullRequests].sort((a, b) => b.number - a.number);
+  if (last === undefined) return newestFirst;
+  const after = newestFirst.filter((pr) => pr.number < last);
+  return [...after, ...newestFirst.filter((pr) => pr.number >= last)];
+}
+
+/**
  * `listPullRequests` → the loop's open pull requests under the prefix: those
  * whose body carries Local Publish's marker, those not labelled hands-off
- * first, then the most recently updated.
+ * first, each group in turn after the pull request last tended.
  */
 export function loopPullRequests(body: unknown, arg: string | undefined): LoopPullRequests {
-  const prefix = requirePrefix(arg, SHEPHERD_RESPONSE_PRESETS.pullRequests);
-  const pullRequests: LoopPullRequestSummary[] = list(body, 'the pull requests')
+  const { prefix, last } = prefixAndTurn(arg);
+  const loops: LoopPullRequestSummary[] = list(body, 'the pull requests')
     .filter((value) => carriesMarker(record(value, 'a pull request')['body']))
     .map((value) => pullRequestFields(value))
     .filter((fields) => fields.fromBaseRepository)
@@ -144,12 +177,17 @@ export function loopPullRequests(body: unknown, arg: string | undefined): LoopPu
         handsOff: fields.handsOff,
       };
     })
-    .filter((pr) => pr.headRef.startsWith(prefix))
-    .sort(
-      (a, b) =>
-        Number(a.handsOff) - Number(b.handsOff) ||
-        (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0),
-    );
+    .filter((pr) => pr.headRef.startsWith(prefix));
+  const pullRequests = [
+    ...inTurn(
+      loops.filter((pr) => !pr.handsOff),
+      last,
+    ),
+    ...inTurn(
+      loops.filter((pr) => pr.handsOff),
+      last,
+    ),
+  ];
   return { pullRequests, count: pullRequests.length };
 }
 
@@ -195,7 +233,10 @@ function actionsRunId(detailsUrl: unknown): number | undefined {
  * One page is read, never more, so a pass's latency does not grow with the
  * head's check runs. Where GitHub holds more than the page carries, the runs
  * left unread may fail, so nothing but a failure seen on the page is a
- * verdict: the head reads `pending`, never `passing`, `stopped` or `none`.
+ * verdict: the head reads `pending` while a run on the page is still going,
+ * and `unknown` once none is — never `passing`, `stopped` or `none`. It is
+ * not `pending` then: nothing on the page is running, and every later pass
+ * reads the same page, so a wait on it would never end.
  */
 export function loopCheckRuns(body: unknown, arg?: string): CheckRunsSummary {
   const page = record(body, 'the check runs');
@@ -216,18 +257,20 @@ export function loopCheckRuns(body: unknown, arg?: string): CheckRunsSummary {
       };
     })
     .sort((a, b) => Number(a.id) - Number(b.id));
-  const pending = unread || runs.some((run) => run['status'] !== 'completed');
+  const pending = runs.some((run) => run['status'] !== 'completed');
   const stopped = runs.some((run) => STOPPED_CONCLUSIONS.has(String(run['conclusion'])));
   const state: CheckRunsState =
     failing.length > 0
       ? 'failing'
       : pending
         ? 'pending'
-        : runs.length === 0
-          ? 'none'
-          : stopped
-            ? 'stopped'
-            : 'passing';
+        : unread
+          ? 'unknown'
+          : runs.length === 0
+            ? 'none'
+            : stopped
+              ? 'stopped'
+              : 'passing';
   const [firstFailing] = failing;
   return {
     state,
@@ -392,16 +435,16 @@ function authoredBy(comment: Json, login: string): boolean {
  * lift the budget, a forged check run hold the pull request at `wait`. The
  * argument is `<login>:<number>`; with no login nothing is trusted, and the
  * read says `undecided` rather than guessing.
+ *
+ * `<login>:<number>:<attempts>:<checkRunId>` is the read made after the
+ * pinned comment answered 404: the pin kept the attempt state that comment
+ * recorded, and a record deleted from GitHub is not a pull request with no
+ * record. With no handoff on the page, the read answers that state, so the
+ * budget and the guard on a check run already acted on stand; a handoff
+ * found there keeps the higher count of the two.
  */
 export function loopHandoff(body: unknown, arg: string | undefined): ShepherdHandoffRead {
-  const separator = arg?.lastIndexOf(':') ?? -1;
-  const number = separator === -1 ? undefined : arg?.slice(separator + 1);
-  if (number === undefined || !/^\d+$/.test(number)) {
-    throw new Error(
-      `${SHEPHERD_RESPONSE_PRESETS.handoff} reads one pull request's handoff: give <login>:<number> after a colon`,
-    );
-  }
-  const login = arg?.slice(0, separator) ?? '';
+  const { login, number, carried } = handoffArgument(arg);
   if (login === '') {
     return { found: false, attemptCount: 0, nextAttemptCount: 1, trust: 'undecided' };
   }
@@ -412,15 +455,58 @@ export function loopHandoff(body: unknown, arg: string | undefined): ShepherdHan
     const parsed =
       typeof comment['body'] === 'string' ? parseShepherdHandoff(comment['body']) : null;
     if (parsed === null) continue;
+    const record =
+      carried !== undefined && carried.attemptCount > parsed.attemptCount
+        ? { ...parsed, ...carried }
+        : parsed;
     return {
       found: true,
       commentId: count(comment['id'], 'a comment id'),
-      ...parsed,
-      nextAttemptCount: parsed.attemptCount + 1,
+      ...record,
+      nextAttemptCount: record.attemptCount + 1,
       trust: 'verified',
     };
   }
-  return { found: false, attemptCount: 0, nextAttemptCount: 1, trust: 'verified' };
+  const kept = carried ?? { attemptCount: 0 };
+  return {
+    found: false,
+    ...kept,
+    nextAttemptCount: kept.attemptCount + 1,
+    trust: 'verified',
+  };
+}
+
+interface CarriedAttempts {
+  attemptCount: number;
+  checkRunId?: string;
+}
+
+function handoffArgument(arg: string | undefined): {
+  login: string;
+  number: string;
+  carried?: CarriedAttempts;
+} {
+  const parts = arg?.split(':') ?? [];
+  const [login = '', number, attempts, checkRunId] = parts;
+  const shaped =
+    number !== undefined &&
+    /^\d+$/.test(number) &&
+    (parts.length === 2 ||
+      (parts.length === 4 && /^\d{1,6}$/.test(attempts ?? '') && /^\d*$/.test(checkRunId ?? '')));
+  if (!shaped) {
+    throw new Error(
+      `${SHEPHERD_RESPONSE_PRESETS.handoff} reads one pull request's handoff: give <login>:<number>, or <login>:<number>:<attempts>:<checkRunId> with the state a pin kept, after a colon`,
+    );
+  }
+  if (parts.length === 2) return { login, number };
+  return {
+    login,
+    number,
+    carried: {
+      attemptCount: Number(attempts),
+      ...(checkRunId !== undefined && checkRunId !== '' ? { checkRunId } : {}),
+    },
+  };
 }
 
 /** Whether a comment is on pull request `number`: its `issue_url` ends `/issues/<number>`. */

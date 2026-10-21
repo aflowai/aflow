@@ -17,6 +17,10 @@ import {
 } from '@aflow/cybernetic-runtime';
 import {
   AgentDefinitionSchema,
+  FlowScheduleCreateInputSchema,
+  SHEPHERD_SCHEDULE_CRON_DEFAULT,
+  validateCronExpression,
+  WORKFLOW_TASKS_MAX,
   type CheckRunsSummary,
   CheckRunsSummarySchema,
   decodeRequiredChecks,
@@ -170,6 +174,28 @@ interface Scenario {
   claimFails?: true;
   /** The outcome's write after the merge fails, leaving the claim as the record. */
   outcomeWriteFails?: true;
+  /** The attempt state the pin kept beside the comment's id, as the pin write stored it: text. */
+  pinState?: { attemptCount: string; checkRunId: string };
+  /** The pull request the last pass aimed at none tended; `fails` where its read failed. */
+  turn?: number | 'fails';
+  /**
+   * The space's memory of heads handed to a person, by path, shared by passes
+   * that overlap or follow one another.
+   */
+  abandonClaims?: Map<string, Record<string, unknown>>;
+  /** What this pass's claim read saw, where another pass wrote between its read and its write. */
+  claimsAsRead?: Map<string, Record<string, unknown>>;
+  /** The claim's write lands, but its task does not report success. */
+  claimUnreported?: true;
+  /** The pass a head's claim names, as `workflow.run.detail` reads it; `gone` where it cannot be read. */
+  abandonOwner?:
+    | { status: 'running' | 'paused' | 'completed' | 'failed' | 'cancelled'; answered?: boolean }
+    | 'gone';
+}
+
+/** A stored claim's content hash, as the store answers it: one per content. */
+function hashOf(content: Record<string, unknown>): string {
+  return `hash:${JSON.stringify(content)}`;
 }
 
 interface Pass {
@@ -374,7 +400,10 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
         ? read.ifMissing === 'absent'
           ? ok({ found: false })
           : { ok: false }
-        : ok({ stat: { path: 'pin' }, dataJson: { commentId: 9, author: LOOP_LOGIN } });
+        : ok({
+            stat: { path: 'pin' },
+            dataJson: { commentId: 9, author: LOOP_LOGIN, ...s.pinState },
+          });
     }
     case 'read-pr-handoff-pinned': {
       // Deleted, the comment answers 404 with GitHub's error, which shapes no record.
@@ -391,11 +420,81 @@ function answer(taskId: string, input: Record<string, unknown>, s: Scenario): An
       );
     }
     case 'read-pr-handoff': {
-      const [, author] = presetOf(input).split(':');
+      // As the executor's `loop_handoff` does: with no handoff on the page,
+      // the state a pin kept stands.
+      const [, author, , attempts, checkRunId] = presetOf(input).split(':');
+      const kept: ShepherdHandoffRead | undefined =
+        attempts === undefined
+          ? undefined
+          : {
+              found: false,
+              attemptCount: Number(attempts),
+              nextAttemptCount: Number(attempts) + 1,
+              ...(checkRunId ? { checkRunId } : {}),
+              trust: 'verified',
+            };
       return github(
-        ShepherdHandoffReadSchema.parse(author === '' ? UNDECIDED : (s.handoff ?? NO_HANDOFF)),
+        ShepherdHandoffReadSchema.parse(
+          author === '' ? UNDECIDED : (s.handoff ?? kept ?? NO_HANDOFF),
+        ),
       );
     }
+    case 'read-turn': {
+      MemoryGetInputSchema.parse(input);
+      if (s.turn === 'fails') return { ok: false };
+      return ok(
+        s.turn === undefined
+          ? { found: false }
+          : { stat: { path: 'turn' }, dataJson: { pullNumber: s.turn } },
+      );
+    }
+    case 'remember-turn':
+      MemoryPutInputSchema.parse(input);
+      return ok({ id: 'doc-4', path: input['path'], version: 1 });
+    case 'read-abandon-claim': {
+      const read = MemoryGetInputSchema.parse(input);
+      const claim = (s.claimsAsRead ?? s.abandonClaims)?.get(String(read.target.path));
+      return ok(
+        claim === undefined
+          ? { found: false }
+          : { stat: { path: read.target.path, contentHash: hashOf(claim) }, dataJson: claim },
+      );
+    }
+    case 'read-abandon-owner': {
+      const owner = s.abandonOwner ?? { status: 'paused' };
+      if (owner === 'gone') return { ok: false };
+      return ok({
+        run: { runId: input['runId'], status: owner.status },
+        tasks: [],
+        activeWaiters: [],
+        ...(owner.answered === true
+          ? { taskOutput: { taskId: 'hand-over', output: { note: 'Mine now.' } } }
+          : {}),
+      });
+    }
+    case 'judge-abandon-claim':
+      return ok({ ...decideByRules(WorkflowRunDecideInputSchema.parse(input)) });
+    case 'claim-abandon':
+    case 'claim-abandon-takeover': {
+      // A create fails where anything is there; an overwrite, where the claim
+      // is no longer exactly as it was read.
+      const put = MemoryPutInputSchema.parse(input);
+      const there = s.abandonClaims?.get(put.path);
+      if (put.writeMode === 'create') {
+        expect(put.expectedHash).toBeUndefined();
+        if (there !== undefined) return { ok: false };
+      } else {
+        expect(put.writeMode).toBe('overwrite');
+        if (there === undefined || put.expectedHash !== hashOf(there)) return { ok: false };
+      }
+      s.abandonClaims?.set(put.path, put.content.inlineJson as Record<string, unknown>);
+      // The write landed, and the task never reported it: it crashed, timed out or was cancelled.
+      if (s.claimUnreported === true) return { ok: false };
+      return ok({ id: 'doc-5', path: put.path, version: 1 });
+    }
+    case 'hand-over':
+      // The run pauses here until a person answers; the item is the pause.
+      return ok({ note: '' });
     case 'read-in-flight-lease':
       return s.lease === undefined
         ? { ok: false }
@@ -772,6 +871,27 @@ describe('Local PR Shepherd — never two at once', () => {
     });
   });
 
+  // Plan 321 P2's exit: two firings overlapping on one pull request produce
+  // one fix. Both read the same turn and the same red check; the first to
+  // write the branch's lease commissions, and the other, whichever way it
+  // meets the lease, commissions nothing.
+  it('makes one fix of two firings overlapping on one pull request', () => {
+    const first = pass({ turn: 93 });
+    const raced = pass({ turn: 93, leaseTaken: true });
+    const later = pass({ turn: 93, lease: { owner: 'running', ageMs: 30_000 } });
+    for (const firing of [first, raced, later]) {
+      expect(firing.inputs.get('read-pr')).toMatchObject({ params: { pull_number: 94 } });
+    }
+    const fixes = [first, raced, later].filter((firing) =>
+      COMMISSIONS.some((task) => firing.ran.includes(task)),
+    );
+    expect(fixes).toEqual([first]);
+    expect(first.ran).toEqual(expect.arrayContaining(['lease', 'fix', 'publish', 'release']));
+    expect(raced.statuses.get('lease')).toBe('failed');
+    expect(later.decision).toBe('wait');
+    for (const firing of [raced, later]) expect(firing.ran).not.toContain('publish');
+  });
+
   it('records the run that holds a lease and when it was taken', () => {
     const lease = MemoryPutInputSchema.parse(pass().inputs.get('lease'));
     expect(lease.writeMode).toBe('create');
@@ -1006,6 +1126,52 @@ describe('Local PR Shepherd — only a deleted pinned comment sends the pass to 
     },
   );
 
+  // A deleted handoff comment with none left on the newest page is not a
+  // first pass: the pin kept the state the comment recorded, so the budget
+  // and the guard on the check run already acted on survive the deletion.
+  it('does not decide as a first pass where the pinned handoff was deleted and the newest page holds none', () => {
+    const acted = pass({
+      pinned: 'gone',
+      pinState: { attemptCount: '1', checkRunId: FAILING_CHECK },
+    });
+    expect(presetOf(acted.inputs.get('read-pr-handoff')!)).toBe(
+      `loop_handoff:${LOOP_LOGIN}:94:1:${FAILING_CHECK}`,
+    );
+    expect(acted.decision).toBe('wait');
+    expect(acted.outputs.get('decide')?.['reason']).toMatch(/acted on already/);
+    for (const action of ACTIONS) expect(acted.ran).not.toContain(action);
+    // The record is posted again as it stood, and pinned with the same state.
+    expect(acted.handoff).toMatchObject({ attemptCount: 1, checkRunId: FAILING_CHECK });
+    expect(
+      MemoryPutInputSchema.parse(acted.inputs.get('remember-handoff')).content.inlineJson,
+    ).toMatchObject({ attemptCount: '1', checkRunId: FAILING_CHECK });
+
+    const spent = pass({ pinned: 'gone', pinState: { attemptCount: '3', checkRunId: '554' } });
+    expect(spent.decision).toBe('abandon');
+    expect(spent.handoff).toMatchObject({ attemptCount: 3, decision: 'abandon' });
+
+    // A new check run under a kept count is the next round, not the first.
+    const next = pass({ pinned: 'gone', pinState: { attemptCount: '1', checkRunId: '554' } });
+    expect(next.decision).toBe('fix');
+    expect(next.handoff).toMatchObject({ attemptCount: 2 });
+  });
+
+  it('pins the attempt state each handoff records beside the comment it names', () => {
+    const first = pass();
+    expect(
+      MemoryPutInputSchema.parse(first.inputs.get('remember-handoff')).content.inlineJson,
+    ).toEqual({ commentId: 9, author: LOOP_LOGIN, attemptCount: '1', checkRunId: FAILING_CHECK });
+    // Where the pinned comment is there, the newest page is not read, and so
+    // the kept state is not what the record is read from.
+    const pinned = pass({
+      pinned: 'found',
+      pinState: { attemptCount: '0', checkRunId: '' },
+      handoff: readBack(first),
+    });
+    expect(pinned.statuses.get('read-pr-handoff')).toBe('skipped');
+    expect(pinned.decision).toBe('wait');
+  });
+
   it('does not restart a spent budget where the pinned read fails other than 404', () => {
     const spent = { ...handled(), attemptCount: 3, checkRunId: '554' };
     const unread = pass({ pinned: 'found', pinnedRead: 503, handoff: spent });
@@ -1050,7 +1216,13 @@ describe('Local PR Shepherd — it yields to people', () => {
 
 describe('Local PR Shepherd — it approves nothing', () => {
   it('has no approval of its own, and calls nothing that closes or reviews', () => {
-    expect(tasks.filter((task) => task.type === 'human')).toEqual([]);
+    // Its one human task hands a spent pull request to a person: it collects
+    // a note, approves no task's output, and previews no action to let through.
+    const human = tasks.filter((task) => task.type === 'human');
+    expect(human.map((task) => task.taskId)).toEqual(['hand-over']);
+    expect(human[0]).toMatchObject({ intent: 'collect' });
+    expect(human[0]?.approves).toBeUndefined();
+    expect(human[0]?.actionPreview).toBeUndefined();
     const endpoints = tasks.map(
       (task) => (task.inputTemplate as { endpointId?: unknown } | undefined)?.endpointId,
     );
@@ -1498,6 +1670,173 @@ describe('Local PR Shepherd — it stops', () => {
     expect(spent.handoff).toMatchObject({ decision: 'abandon', attemptCount: 3 });
   });
 
+  // Plan 321 P2's exit: the fourth failure on one pull request ends in a
+  // comment and an Action Center item.
+  describe('the fourth failure ends in a comment and one Action Center item', () => {
+    const spentRecord: ShepherdHandoffRead = {
+      found: true,
+      trust: 'verified',
+      commentId: 9,
+      attemptCount: 3,
+      nextAttemptCount: 4,
+      checkRunId: '554',
+    };
+    const spent = (claims: Map<string, Record<string, unknown>>, over: Scenario = {}) =>
+      pass({ pinned: 'found', handoff: spentRecord, abandonClaims: claims, ...over });
+
+    it('says why in the handoff comment, then claims the head and raises the item', () => {
+      const claims = new Map<string, Record<string, unknown>>();
+      const stopped = spent(claims);
+      expect(stopped.decision).toBe('abandon');
+      expect(stopped.handoff).toMatchObject({ decision: 'abandon', attemptCount: 3 });
+      const body = (stopped.inputs.get('handoff-edit')?.['params'] as { body: { body: string } })
+        .body.body;
+      expect(body).toMatch(/budget allows, and CI fails again/);
+      expect(body).toMatch(/Action Center item/);
+      const claim = MemoryPutInputSchema.parse(stopped.inputs.get('claim-abandon'));
+      expect(claim).toMatchObject({
+        path: `/shepherd/aflowai/aflow/pulls/94/abandons/${HEAD}.json`,
+        writeMode: 'create',
+      });
+      expect(claim.content.inlineJson).toMatchObject({
+        headSha: HEAD,
+        checkRunId: FAILING_CHECK,
+        runId: RUN_ID,
+      });
+      expect(stopped.statuses.get('hand-over')).toBe('succeeded');
+      // The comment first, then the claim, then the item.
+      const at = (taskId: string) => stopped.ran.indexOf(taskId);
+      expect(at('handoff-edit')).toBeLessThan(at('claim-abandon'));
+      expect(at('remember-handoff')).toBeLessThan(at('claim-abandon'));
+      expect(at('claim-abandon')).toBeLessThan(at('hand-over'));
+      for (const action of ACTIONS) expect(stopped.ran).not.toContain(action);
+    });
+
+    it.each([
+      ['paused at its item', { status: 'paused' }],
+      ['ended with its item answered', { status: 'completed', answered: true }],
+      ['still running within the bound', { status: 'running' }],
+    ] as const)(
+      'raises no second item on the same head while the pass that claimed it is %s',
+      (_case, abandonOwner) => {
+        const claims = new Map<string, Record<string, unknown>>();
+        expect(spent(claims).statuses.get('hand-over')).toBe('succeeded');
+        for (let firing = 0; firing < 3; firing += 1) {
+          const again = spent(claims, { abandonOwner });
+          expect(again.decision).toBe('abandon');
+          expect(again.outputs.get('judge-abandon-claim')?.['decision']).toBe('live');
+          for (const claim of ['claim-abandon', 'claim-abandon-takeover']) {
+            expect(again.statuses.get(claim)).toBe('skipped');
+          }
+          expect(again.statuses.get('hand-over')).toBe('skipped');
+          // The comment still holds the decision Local Publish verifies an override by.
+          expect(again.handoff).toMatchObject({ decision: 'abandon' });
+        }
+        expect(claims.size).toBe(1);
+      },
+    );
+
+    it('raises one item of two overlapping passes that both read no claim: the second create is refused', () => {
+      const claims = new Map<string, Record<string, unknown>>();
+      const unread = new Map(claims);
+      const first = spent(claims);
+      const second = spent(claims, { claimsAsRead: unread });
+      expect(first.statuses.get('hand-over')).toBe('succeeded');
+      expect(second.outputs.get('judge-abandon-claim')?.['decision']).toBe('create');
+      expect(second.statuses.get('claim-abandon')).toBe('failed');
+      expect(second.statuses.get('hand-over')).toBe('skipped');
+      expect(claims.size).toBe(1);
+    });
+
+    // A claim whose write landed while its task never reported success — it
+    // crashed, timed out or was cancelled — raised no item. It must not hold
+    // the head forever: once the pass that wrote it has ended without an
+    // answered item, a later pass takes it over and raises the item.
+    describe('a claim persisted by a task that did not report success', () => {
+      it('leaves that pass without an item, and does not keep a later pass from raising it', () => {
+        const claims = new Map<string, Record<string, unknown>>();
+        const crashed = spent(claims, { claimUnreported: true });
+        expect(crashed.statuses.get('claim-abandon')).toBe('failed');
+        expect(crashed.statuses.get('hand-over')).toBe('skipped');
+        expect(claims.size).toBe(1);
+        const [path, stale] = [...claims.entries()][0]!;
+
+        const later = spent(claims, { abandonOwner: { status: 'completed' } });
+        expect(later.decision).toBe('abandon');
+        expect(later.inputs.get('read-abandon-owner')).toMatchObject({
+          runId: RUN_ID,
+          taskOutput: 'hand-over',
+        });
+        expect(later.outputs.get('judge-abandon-claim')?.['decision']).toBe('overwrite');
+        // Taken over exactly as read, so two later passes cannot both take it.
+        expect(
+          MemoryPutInputSchema.parse(later.inputs.get('claim-abandon-takeover')),
+        ).toMatchObject({
+          path,
+          writeMode: 'overwrite',
+          expectedHash: hashOf(stale),
+        });
+        expect(later.statuses.get('hand-over')).toBe('succeeded');
+      });
+
+      it.each([
+        ['its pass failed', { status: 'failed' }],
+        ['its pass was cancelled', { status: 'cancelled' }],
+        ['its pass cannot be read', 'gone'],
+      ] as const)('takes it over where %s', (_case, abandonOwner) => {
+        const claims = new Map<string, Record<string, unknown>>();
+        spent(claims, { claimUnreported: true });
+        const later = spent(claims, { abandonOwner });
+        expect(later.outputs.get('judge-abandon-claim')?.['decision']).toBe('overwrite');
+        expect(later.statuses.get('hand-over')).toBe('succeeded');
+      });
+
+      it('takes it over from a pass still running past the bound', () => {
+        const claims = new Map<string, Record<string, unknown>>();
+        spent(claims, { claimUnreported: true });
+        const [path, claim] = [...claims.entries()][0]!;
+        claims.set(path, { ...claim, handedOverAtMs: NOW - SHEPHERD_LEASE_STALE_AFTER_MS - 1 });
+        const later = spent(claims, { abandonOwner: { status: 'running' } });
+        expect(later.outputs.get('judge-abandon-claim')?.['decision']).toBe('overwrite');
+        expect(later.statuses.get('hand-over')).toBe('succeeded');
+      });
+
+      it('lets only one of two overlapping later passes take it over: the second overwrite no longer matches', () => {
+        const claims = new Map<string, Record<string, unknown>>();
+        spent(claims, { claimUnreported: true });
+        // Written by an earlier run than the two that follow.
+        const [path, claim] = [...claims.entries()][0]!;
+        claims.set(path, { ...claim, runId: 'shepherd-run-1' });
+        const dead = new Map(claims);
+        const first = spent(claims, { abandonOwner: { status: 'failed' } });
+        // The second read the dead claim, and its dead pass, before the first took it over.
+        const second = spent(claims, { claimsAsRead: dead, abandonOwner: { status: 'failed' } });
+        expect(first.statuses.get('hand-over')).toBe('succeeded');
+        expect(second.outputs.get('judge-abandon-claim')?.['decision']).toBe('overwrite');
+        expect(second.statuses.get('claim-abandon-takeover')).toBe('failed');
+        expect(second.statuses.get('hand-over')).toBe('skipped');
+      });
+    });
+
+    it('raises one for a new head a push moved it to, if CI fails there too', () => {
+      const claims = new Map<string, Record<string, unknown>>();
+      spent(claims);
+      const pushed = spent(claims, { pullRequest: { headSha: 'd'.repeat(40) } });
+      expect(pushed.statuses.get('hand-over')).toBe('succeeded');
+      expect(claims.size).toBe(2);
+    });
+
+    it('raises nothing on any other decision', () => {
+      for (const s of [{}, { checks: GREEN }, { pullRequest: { handsOff: true } }]) {
+        const other = pass({ ...s, abandonClaims: new Map() });
+        expect(other.decision).not.toBe('abandon');
+        expect(other.ran).not.toContain('claim-abandon');
+        expect(other.ran).not.toContain('claim-abandon-takeover');
+        expect(other.ran).not.toContain('hand-over');
+      }
+    });
+  });
+
   it('takes the budget as a run input', () => {
     const tight = pass({
       inputs: { attemptBudget: 1 },
@@ -1616,6 +1955,53 @@ describe('Local PR Shepherd — what it tends', () => {
     expect(green.ran).toContain('handoff');
   });
 
+  // Cold, on a schedule: each pass aimed at none tends the one after the
+  // last one tended, so a red pull request tended every pass cannot keep
+  // every other waiting.
+  it('takes its turn after the pull request the last unaimed pass tended, and records its own', () => {
+    const first = pass();
+    expect(MemoryGetInputSchema.parse(first.inputs.get('read-turn'))).toMatchObject({
+      target: { path: '/shepherd/aflowai/aflow/turn.json' },
+      ifMissing: 'absent',
+    });
+    expect(presetOf(first.inputs.get('list-prs')!)).toBe('loop_pulls:aflow/');
+    const turned = pass({ turn: 97 });
+    expect(presetOf(turned.inputs.get('list-prs')!)).toBe('loop_pulls:aflow/:97');
+    expect(MemoryPutInputSchema.parse(turned.inputs.get('remember-turn'))).toMatchObject({
+      path: '/shepherd/aflowai/aflow/turn.json',
+      writeMode: 'upsert',
+      content: { inlineJson: { pullNumber: 94 } },
+    });
+  });
+
+  it('tends the newest where the turn cannot be read, and takes no turn when aimed', () => {
+    const unread = pass({ turn: 'fails' });
+    expect(presetOf(unread.inputs.get('list-prs')!)).toBe('loop_pulls:aflow/');
+    expect(unread.decision).toBe('fix');
+    const aimed = pass({ inputs: { pullNumber: '94' }, turn: 97 });
+    expect(aimed.statuses.get('read-turn')).toBe('skipped');
+    expect(aimed.statuses.get('remember-turn')).toBe('skipped');
+  });
+
+  it('leaves a head whose check runs outrun the one page read, saying whether CI failed is unknown — never a wait on checks still running', () => {
+    const unknown = pass({ checks: { state: 'unknown', total: 140, failing: [] } });
+    expect(unknown.decision).toBe('leave');
+    expect(unknown.outputs.get('decide')?.['reason']).toMatch(/more check runs.*unknown/);
+    expect(unknown.outputs.get('decide')?.['reason']).not.toMatch(/checks are still running/);
+    for (const action of ACTIONS) expect(unknown.ran).not.toContain(action);
+    expect(unknown.ran).not.toContain('merge');
+    expect(unknown.handoff).toMatchObject({ decision: 'leave' });
+    // Under when-green too: an unknown head is never green.
+    const merging = pass({
+      mergePosture: 'when-green',
+      checks: { state: 'unknown', total: 140, failing: [] },
+      pinned: 'found',
+      handoff: readBack(pass({ checks: GREEN })),
+    });
+    expect(merging.decision).toBe('leave');
+    expect(merging.ran).not.toContain('merge');
+  });
+
   it('waits, acting on nothing, on a read GitHub refused', () => {
     const refused = pass({ listStatus: 401 });
     expect(refused.decision).toBe('wait');
@@ -1665,5 +2051,26 @@ describe('Local PR Shepherd bundle', () => {
       wait: 'none',
     });
     expect(JSON.stringify(definition)).not.toMatch(/ai\.|\$\{|\$memoryRef/);
+  });
+
+  // D2: a schedule starts the agent, never the skill, with a static template
+  // the agent reads none of.
+  it('is started on a schedule: the default cron, the agent as its target, a static input', () => {
+    expect(validateCronExpression(SHEPHERD_SCHEDULE_CRON_DEFAULT)).toBeNull();
+    const schedule = FlowScheduleCreateInputSchema.parse({
+      name: 'Local PR Shepherd',
+      action: 'start_run',
+      target: { kind: 'custom-agent', agentId: '00000000-0000-4000-8000-000000000001' },
+      cron: SHEPHERD_SCHEDULE_CRON_DEFAULT,
+      input: { input: 'pass' },
+    });
+    expect(schedule.cron).toBe('*/5 * * * *');
+    expect(
+      bundle?.helmsmanHints.some((hint) => hint.includes(SHEPHERD_SCHEDULE_CRON_DEFAULT)),
+    ).toBe(true);
+  });
+
+  it('fits the workflow task ceiling', () => {
+    expect(wf.tasks.length).toBeLessThanOrEqual(WORKFLOW_TASKS_MAX);
   });
 });

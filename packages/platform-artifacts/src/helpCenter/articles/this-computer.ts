@@ -76,6 +76,8 @@ A change reaches a branch under the folder's prefix, \`aflow/\` by default, and 
 
 The pull requests the loop opens are yours to merge, unless the folder's merge posture says otherwise. Set to \`when-green\` on the machine that holds the folder — the command is in the Aflow Local operator guide, beside the push setting's — the Local PR Shepherd merges a pull request by squash once every check its base branch requires has passed on its head, the publication's own review approved that head, and no person's review requests changes. Each merge still asks your approval of exactly that request, in the Action Center; decline it and that head is not asked about again until a push moves it. \`when-green\` needs the push setting \`unless-unreviewed\`, the one under which a publication reviews what it pushes. **Connected folders** shows each folder's merge posture under its push setting.
 
+The Local PR Shepherd fixes a red check only so many times on one pull request — three unless you set its attempt budget. When CI fails again after that, it stops: its comment on the pull request says why, and one item in the Action Center asks you to take the pull request over. Answering the item changes nothing; push to the branch to have the shepherd read the new head, or label the pull request \`hands-off\` to have it left alone.
+
 ## While it runs
 
 The machine is kept awake on power while a run is in flight. Work dispatched while it sleeps waits up to ten minutes for it to wake.`,

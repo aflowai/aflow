@@ -21,6 +21,7 @@ import {
   leaseText,
   NUMBER,
   OURS,
+  optionalPart,
   out,
   REPOSITORY,
   SKIP,
@@ -59,6 +60,20 @@ const HANDOFF_PRESET = {
     { $firstOf: [{ $text: [bind('author')] }, ''] },
     ':',
     { $text: [bind('number')] },
+  ],
+};
+
+/**
+ * The same, with the attempt state the pin kept — `:<attempts>:<checkRunId>`
+ * — wherever a pin holds one: the newest page is read with a pin only after
+ * its comment answered 404, and a deleted record is not a first pass.
+ */
+const HANDOFF_PRESET_CARRIED = {
+  $concat: [
+    ...HANDOFF_PRESET.$concat,
+    optionalPart(':', text('carriedAttempts'), ':', {
+      $firstOf: [text('carriedCheckRun'), ''],
+    }),
   ],
 };
 
@@ -102,11 +117,6 @@ const PUBLICATION = firstText(
   '',
 );
 const REMEDY_TAKEN = firstText([{ $firstOf: [text('remedy')] }, handoffText('priorRemedy')], '');
-
-/** A text part, or nothing where any of its parts is absent. */
-function optionalPart(...parts: unknown[]) {
-  return { $firstOf: [{ $concat: parts }, ''] };
-}
 
 /**
  * Each merge outcome an earlier pass recorded, carried forward: the rules
@@ -201,6 +211,15 @@ const HANDOFF_BINDINGS = {
   publicationRunId: out('publish', 'runId'),
 };
 
+/** What {@link ATTEMPTS} and {@link CHECK_RUN} read, for the pin that keeps them. */
+const ATTEMPT_STATE_BINDINGS = {
+  ...REPOSITORY,
+  fixAttempt: HANDOFF_BINDINGS.fixAttempt,
+  ...leaseBindings('leaseCheckRun', 'lease.inlineJson.checkRunId'),
+  ...handoffBindings('priorAttempt', 'data.attemptCount'),
+  ...handoffBindings('priorCheckRun', 'data.checkRunId'),
+};
+
 /**
  * Written where a handoff read answered: only on the loop's own pull request,
  * not labelled hands-off, since the reads run only there. A handoff found is
@@ -278,7 +297,7 @@ export const HANDOFF_READ_TASKS = [
   {
     taskId: 'read-pr-handoff',
     name: 'Read the handoff',
-    goal: 'Where no handoff is pinned, or the pinned comment is gone (404), read the newest page of the pull request’s conversation for the handoff the pinned author left on it. With no pin there is no author to trust, and no record is taken: the pass decides as on a pull request with none. Where the pin, or the pinned comment, could not be read it is not read either: past one page of conversation the newest holds no handoff rewritten in place, so no handoff is written over a record that may exist.',
+    goal: 'Where no handoff is pinned, or the pinned comment is gone (404), read the newest page of the pull request’s conversation for the handoff the pinned author left on it. With no pin there is no author to trust, and no record is taken: the pass decides as on a pull request with none. A pinned comment that is gone is no first pass: the pin kept the failures acted on and the check run last acted on, and with no handoff on the page the read answers those, so deleting the comment restarts neither the budget nor the guard. Where the pin, or the pinned comment, could not be read it is not read either: past one page of conversation the newest holds no handoff rewritten in place, so no handoff is written over a record that may exist.',
     type: 'operation' as const,
     operation: 'api.http.call',
     // Either clause implies the loop's own pull request, not labelled
@@ -298,6 +317,8 @@ export const HANDOFF_READ_TASKS = [
       ...REPOSITORY,
       ...NUMBER,
       ...PINNED_AUTHOR,
+      carriedAttempts: out('read-handoff-pin', 'dataJson.attemptCount'),
+      carriedCheckRun: out('read-handoff-pin', 'dataJson.checkRunId'),
       page: out('read-pr', 'data.commentPages'),
     },
     context: ctx('api.http.call'),
@@ -310,7 +331,7 @@ export const HANDOFF_READ_TASKS = [
         per_page: 100,
         page: bind('page'),
       },
-      HANDOFF_PRESET,
+      HANDOFF_PRESET_CARRIED,
     ),
   },
 ];
@@ -363,7 +384,7 @@ export const HANDOFF_WRITE_TASKS = [
   {
     taskId: 'remember-handoff',
     name: 'Pin the handoff',
-    goal: 'Pin the handoff comment this pass wrote — posted, or found on the newest page and rewritten — for this pull request: its id, and the login GitHub says it was written as. The next pass reads it by its id however long the conversation grows, and trusts its record from that author only.',
+    goal: 'Pin the handoff comment this pass wrote — posted, or found on the newest page and rewritten — for this pull request: its id, the login GitHub says it was written as, and the failures acted on and check run last acted on that it records. The next pass reads it by its id however long the conversation grows, and trusts its record from that author only; where the comment has been deleted, that attempt state still stands.',
     type: 'operation' as const,
     operation: 'memory.store.put',
     when: {
@@ -375,7 +396,7 @@ export const HANDOFF_WRITE_TASKS = [
     },
     retryability: 'safe' as const,
     inputBindings: {
-      ...REPOSITORY,
+      ...ATTEMPT_STATE_BINDINGS,
       ...NUMBER,
       ...writtenBindings('commentId', 'data.id'),
       ...writtenBindings('author', 'data.user.login'),
@@ -389,7 +410,13 @@ export const HANDOFF_WRITE_TASKS = [
       indexing: 'disabled',
       summary: 'The Local PR Shepherd’s handoff comment on this pull request.',
       content: {
-        inlineJson: { commentId: writtenValue('commentId'), author: writtenValue('author') },
+        inlineJson: {
+          commentId: writtenValue('commentId'),
+          author: writtenValue('author'),
+          // As the comment records them, as text: read back into the handoff preset.
+          attemptCount: ATTEMPTS,
+          checkRunId: CHECK_RUN,
+        },
       },
     },
   },

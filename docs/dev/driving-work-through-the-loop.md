@@ -232,7 +232,12 @@ folder's posture as it pushes, so a commit checked before the posture changed is
   Local Publish. A stream that wants its branch left alone — a person working on it, a
   fix in hand — labels its pull request `hands-off`; the shepherd then writes nothing on
   it. A publication or commission in flight on the branch, whoever started it, holds it
-  back too.
+  back too. On a schedule (the Local PR Shepherd agent, `*/5 * * * *` by default), each
+  pass tends the next of the loop's pull requests in turn, and two passes on one meet at
+  its branch's lease. Once a pull request's attempt budget is spent and CI fails again,
+  the shepherd stops on its head: the handoff comment says why, and one Action Center
+  item asks for a person — answering it changes nothing; a push to the branch is what the
+  shepherd reads again.
 
 ## Watching
 
