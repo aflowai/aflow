@@ -215,6 +215,29 @@ describe('resolveOperationTaskInputs', () => {
     expect(result['branch']).toBe('agent/x');
   });
 
+  it('resolves a run_input binding whose key differs from its path', async () => {
+    mockLoadRunById.mockResolvedValueOnce({
+      runId: RUN,
+      tasks: [],
+      metadata: {
+        parentTaskInputs: { taskId: 'claim', inputs: { pullNumber: '158' } },
+      },
+    });
+    const { resolveOperationTaskInputs } = await import('../taskHelpers.js');
+    const result = await resolveOperationTaskInputs(
+      {
+        taskId: 'read-pr',
+        type: 'operation',
+        operation: 'api.http.call',
+        inputBindings: { aimed: { kind: 'run_input', path: 'pullNumber' } },
+      } as never,
+      TENANT,
+      SPACE,
+      RUN,
+    );
+    expect(result['aimed']).toBe('158');
+  });
+
   it('threads run.metadata.connectionBindingId into a connection_binding template (Plan 222 P3)', async () => {
     mockLoadRunById.mockResolvedValueOnce({
       runId: RUN,

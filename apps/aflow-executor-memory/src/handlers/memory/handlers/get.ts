@@ -400,6 +400,28 @@ function payloadExpiredError(doc: MemoryDoc): AflowError {
   );
 }
 
+function isJsonDocument(doc: MemoryDoc): boolean {
+  if (doc.docType === 'json') return true;
+  const mime = doc.mimeType.split(';')[0]?.trim().toLowerCase() ?? '';
+  return mime === 'application/json' || mime.endsWith('+json');
+}
+
+/**
+ * A JSON document's text body is parsed so the read carries `dataJson` however
+ * the body is stored: a small document sits in the inline column as text, and
+ * a large one written through memory.store.put comes back from the payload
+ * store as the same text. A JSON document whose text does not parse stays
+ * text, as every other document does.
+ */
+function textBody(content: string, doc: MemoryDoc): Extract<BodyLoad, { kind: 'text' }> {
+  if (!isJsonDocument(doc)) return { ok: true, kind: 'text', content, contentJson: undefined };
+  try {
+    return { ok: true, kind: 'text', content, contentJson: JSON.parse(content) as unknown };
+  } catch {
+    return { ok: true, kind: 'text', content, contentJson: undefined };
+  }
+}
+
 /**
  * Fetch a body from wherever it lives (inline column or payload store). The
  * source is the pinned version row or the live doc row — the caller decides
@@ -414,9 +436,7 @@ async function loadBody(
   doc: MemoryDoc,
   deps: MemoryHandlerDeps,
 ): Promise<BodyLoad> {
-  if (source.inlineContent !== null) {
-    return { ok: true, kind: 'text', content: source.inlineContent, contentJson: undefined };
-  }
+  if (source.inlineContent !== null) return textBody(source.inlineContent, doc);
   const payloadRef = source.payloadRef;
   if (!payloadRef) return { ok: true, kind: 'text', content: null, contentJson: undefined };
 
@@ -429,8 +449,7 @@ async function loadBody(
     }
 
     const payload = await deps.payloadStore.retrieve(payloadRef);
-    if (typeof payload === 'string')
-      return { ok: true, kind: 'text', content: payload, contentJson: undefined };
+    if (typeof payload === 'string') return textBody(payload, doc);
     return { ok: true, kind: 'text', content: JSON.stringify(payload), contentJson: payload };
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);

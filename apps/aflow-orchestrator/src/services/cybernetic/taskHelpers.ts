@@ -581,17 +581,36 @@ export function extractParentInstructions(runMetadata: unknown): StoredParentIns
   return parsed.data;
 }
 
+/**
+ * The pool is the run's inputs as validated at start, keyed by the ENTRY
+ * task's bindAs — usually the run input's own name. Any task may bind them
+ * under a key of its own (`aimed: { path: 'pullNumber' }`), so a binding is
+ * found by its path's root segment first. Only where the pool holds no such
+ * root does the binding's own key stand for it: that is the entry task
+ * binding a slot whose key differs from its path (`notes` → `rationale.notes`).
+ */
 export function buildRunInputSnapshotFromParent(
   inputBindings: NonNullable<WorkflowTask['inputBindings']>,
   parentInputs: Record<string, unknown>,
 ): Record<string, unknown> {
+  const has = (key: string): boolean => Object.prototype.hasOwnProperty.call(parentInputs, key);
   const snapshot: Record<string, unknown> = {};
   for (const [bindAs, binding] of Object.entries(inputBindings)) {
     if (binding.kind !== 'run_input') continue;
-    if (!Object.prototype.hasOwnProperty.call(parentInputs, bindAs)) continue;
-    setAtPath(snapshot, binding.path, parentInputs[bindAs]);
+    const root = runInputPathRoot(binding.path);
+    if (root !== undefined && has(root)) {
+      // Cloned: a later binding's setAtPath would otherwise write into the run's own pool.
+      snapshot[root] = structuredClone(parentInputs[root]);
+    } else if (has(bindAs)) {
+      setAtPath(snapshot, binding.path, parentInputs[bindAs]);
+    }
   }
   return snapshot;
+}
+
+function runInputPathRoot(path: string): string | undefined {
+  const first = (parseOutputPath(path) ?? [{ kind: 'key' as const, key: path }])[0];
+  return first?.kind === 'key' ? first.key : undefined;
 }
 
 function setAtPath(obj: Record<string, unknown>, path: string, value: unknown): void {

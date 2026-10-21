@@ -524,6 +524,42 @@ describe('buildDelegateTaskInput — Plan 141 parent instructions surfacing', ()
     expect(readOutputPath(snapshot, 'rationale.notes')).toBe('paper account');
   });
 
+  it('buildRunInputSnapshotFromParent: finds a binding whose key differs from its path by the path', async () => {
+    const [{ buildRunInputSnapshotFromParent }, { readOutputPath }] = await Promise.all([
+      import('../taskHelpers.js'),
+      import('@aflow/cybernetic-runtime/scheduling/output-path'),
+    ]);
+    const snapshot = buildRunInputSnapshotFromParent(
+      { aimed: { kind: 'run_input', path: 'pullNumber' } } as never,
+      { pullNumber: '158' },
+    );
+    expect(snapshot).toEqual({ pullNumber: '158' });
+    expect(readOutputPath(snapshot, 'pullNumber')).toBe('158');
+  });
+
+  it('buildRunInputSnapshotFromParent: reads a nested path under a differing key from the root run input', async () => {
+    const { buildRunInputSnapshotFromParent } = await import('../taskHelpers.js');
+    const pool = { repo: { owner: 'aflowai', name: 'aflow' } };
+    const snapshot = buildRunInputSnapshotFromParent(
+      {
+        owner: { kind: 'run_input', path: 'repo.owner' },
+        extra: { kind: 'run_input', path: 'repo.extra' },
+      } as never,
+      pool,
+    );
+    expect(snapshot).toEqual({ repo: { owner: 'aflowai', name: 'aflow' } });
+    expect(pool).toEqual({ repo: { owner: 'aflowai', name: 'aflow' } });
+  });
+
+  it('buildRunInputSnapshotFromParent: the path wins over a pool key that matches the binding key', async () => {
+    const { buildRunInputSnapshotFromParent } = await import('../taskHelpers.js');
+    const snapshot = buildRunInputSnapshotFromParent(
+      { vendor: { kind: 'run_input', path: 'baseUrl' } } as never,
+      { vendor: 'Alpaca', baseUrl: 'https://paper-api.alpaca.markets' },
+    );
+    expect(snapshot).toEqual({ baseUrl: 'https://paper-api.alpaca.markets' });
+  });
+
   it('buildRunInputSnapshotFromParent: skips bindings whose bindAs is not in parentInputs', async () => {
     const { buildRunInputSnapshotFromParent } = await import('../taskHelpers.js');
     const snapshot = buildRunInputSnapshotFromParent(
