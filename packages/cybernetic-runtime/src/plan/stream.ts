@@ -169,8 +169,8 @@ export interface PlanStreamFacts {
   pausedItems: number;
   /** The node's newest `pull_request` link. */
   pullRequestLink?: PlanNodeLink;
-  /** The merges of the node's pull requests a firing has judged it against (`merge` links). */
-  mergesJudged: readonly string[];
+  /** The node holds a `merge` link to its newest pull request: that merge was judged. */
+  mergeJudged: boolean;
   /** GitHub's answer for that pull request, where the caller read it. */
   pullRequest?: PlanStreamPullRequestAnswer;
   /** The node's own commissions and publications, newest first. */
@@ -368,10 +368,10 @@ function latestRoundSinceWrite(
 
 /**
  * The firing's decision on the active node, the first rule that holds
- * deciding: a blocked node is the person's, whatever its pull request says; a
- * merge nobody has acted on is recorded before anything else is decided; then
- * `wait` while its work is in flight, its pull request is open or a read
- * failed; `stop` where its pull request was closed unmerged, its push was
+ * deciding: a blocked node is the person's, whatever its pull request says;
+ * `wait` while its own work is in flight; a merge of its newest pull request
+ * nobody has acted on is recorded next; then `wait` while that pull request
+ * is open or a read failed; `stop` where its pull request was closed unmerged, its push was
  * declined or its attempts are spent; `continue` where its next step is the
  * work or its last round failed within the budget. Anything else is `wait`.
  */
@@ -379,6 +379,19 @@ export function decideStreamFiring(facts: PlanStreamFacts): PlanNodeNextOutput {
   const { node } = facts;
   if (node.status === 'blocked') {
     return wait('blocked', `"${node.title}" is blocked, waiting on a person.`, node);
+  }
+
+  // The node's own work settles before any merge is judged: a merge read while a
+  // commission or publication of the node runs would advance past work in flight.
+  if (facts.inFlight.length > 0 || facts.pausedItems > 0) {
+    const runs = facts.inFlight
+      .slice(0, 5)
+      .map((run) => `${run.slug} run ${run.runId} (${run.status})`);
+    const named =
+      runs.length > 0
+        ? runs.join(', ')
+        : `${String(facts.pausedItems)} paused run(s) in the space's attention items`;
+    return wait('in_flight', `Work for "${node.title}" is in flight: ${named}.`, node);
   }
 
   const link = facts.pullRequestLink;
@@ -414,7 +427,7 @@ export function decideStreamFiring(facts: PlanStreamFacts): PlanNodeNextOutput {
       const actedOn = facts.rounds.some(
         (run) => run.slug === PLAN_STREAM_COMMISSION_SLUG && at(run.startedAt) > at(mergedAt),
       );
-      if (!actedOn && !facts.mergesJudged.includes(link.ref)) {
+      if (!actedOn && !facts.mergeJudged) {
         return {
           decision: 'record_merge',
           reason: `${link.ref} merged at ${mergedAt} and no commission of the node has started since; judge the node against its criteria with the merged change in hand.`,
@@ -434,17 +447,6 @@ export function decideStreamFiring(facts: PlanStreamFacts): PlanNodeNextOutput {
         };
       }
     }
-  }
-
-  if (facts.inFlight.length > 0 || facts.pausedItems > 0) {
-    const runs = facts.inFlight
-      .slice(0, 5)
-      .map((run) => `${run.slug} run ${run.runId} (${run.status})`);
-    const named =
-      runs.length > 0
-        ? runs.join(', ')
-        : `${String(facts.pausedItems)} paused run(s) in the space's attention items`;
-    return wait('in_flight', `Work for "${node.title}" is in flight: ${named}.`, node);
   }
 
   if (link && pullRequest && !pullRequest.merged) {
@@ -555,12 +557,17 @@ export async function nextInPlanStream(
     latest?.slug === PLAN_STREAM_PUBLICATION_SLUG && latest.status === 'completed'
       ? await ctx.reads.publicationOutcome(ctx.spaceId, latest.runId)
       : undefined;
-  const pullRequestLink = opened.links.find((l) => l.kind === 'pull_request');
-  const mergesJudged = opened.links.filter((l) => l.kind === 'merge').map((l) => l.ref);
+  // Read by kind and by key, never from `opened.links`, a page that a node with
+  // many links would carry these records past.
+  const pullRequestLink =
+    (await ctx.store.newestLink(ctx.spaceId, active.nodeId, 'pull_request')) ?? undefined;
+  const mergeJudged =
+    pullRequestLink !== undefined &&
+    (await ctx.store.findLink(ctx.spaceId, active.nodeId, 'merge', pullRequestLink.ref)) !== null;
 
   const decision = decideStreamFiring({
     node: opened.node,
-    mergesJudged,
+    mergeJudged,
     inFlight: opened.runs,
     pausedItems,
     ...(pullRequestLink ? { pullRequestLink } : {}),

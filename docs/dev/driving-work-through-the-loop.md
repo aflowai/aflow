@@ -181,8 +181,8 @@ records — its runs (`workflow_runs.plan_node_id`, whoever drove them), its lin
 pending pauses in `attention_items`, and its newest pull request as GitHub answers it, which
 the decision asks the firing to read (`read_pull_request`) and pass back:
 
-- `record_merge` — the pull request merged, no commission of the node started since, and the
-  node holds no `merge` link to it. The
+- `record_merge` — the pull request merged, no commission of the node started since, none
+  of its runs is in flight, and the node holds no `merge` link to it. The
   firing judges the node against its criteria: met, `done` with the pull request and merge
   commit in its outcome; not met, it stays `active` with `noteHead` opening its note. It then
   writes the decision's `link` with `plan.node.link`, the record that the merge was judged, and

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import Redis from 'ioredis-mock';
 import type { Redis as RedisType } from 'ioredis';
 import {
+  PLAN_NODE_LINKS_LIMIT,
   PLAN_STREAM_ATTEMPTS_DEFAULT,
   PLAN_STREAM_COMMISSION_SLUG,
   PLAN_STREAM_PUBLICATION_SLUG,
@@ -14,6 +15,7 @@ import {
 } from '@aflow/schemas';
 import {
   createPlanNode,
+  getPlanNode,
   linkEndedRun,
   linkPlanNode,
   updatePlanNode,
@@ -512,6 +514,55 @@ describe('plan.node.next — stop', () => {
 });
 
 describe('plan.node.next — a merge', () => {
+  it('waits on a merged pull request while the node’s own commission or publication is in flight', async () => {
+    for (const slug of [PLAN_STREAM_COMMISSION_SLUG, PLAN_STREAM_PUBLICATION_SLUG]) {
+      store = new InMemoryPlanNodeStore();
+      const { root, first } = await stream();
+      const mergedAt = await publishedRound(first);
+      await run(first, slug, slug === PLAN_STREAM_COMMISSION_SLUG ? 'running' : 'paused');
+      const decided = await fire(root.nodeId, (url) => merged(url, mergedAt));
+      expect(decided, slug).toMatchObject({
+        decision: 'wait',
+        cause: 'in_flight',
+        node: { nodeId: first.nodeId },
+      });
+      expect(
+        store.links.filter((l) => l.kind === 'merge'),
+        slug,
+      ).toHaveLength(0);
+    }
+  });
+
+  it('reads the node’s pull request and merge records past a page of its other links', async () => {
+    const { root, first } = await stream();
+    const mergedAt = await publishedRound(first);
+    const github = (url: string) => merged(url, mergedAt);
+    const record = await fire(root.nodeId, github);
+    if (record.decision !== 'record_merge') throw new Error('expected record_merge');
+    await write(first.nodeId, { note: `${record.noteHead}; next: the live exit` });
+    await linkPlanNode(session(), record.link);
+    for (let i = 0; i <= PLAN_NODE_LINKS_LIMIT; i++) {
+      await linkPlanNode(session(), {
+        nodeId: first.nodeId,
+        kind: 'finding',
+        ref: `F${String(i)}`,
+      });
+    }
+    const page = await getPlanNode({ store, spaceId: SPACE }, first.nodeId);
+    expect(page.ok && page.links.some((l) => l.kind === 'pull_request' || l.kind === 'merge')).toBe(
+      false,
+    );
+
+    expect(await next(root.nodeId)).toMatchObject({
+      decision: 'read_pull_request',
+      pullRequest: { url: PR },
+    });
+    expect(await fire(root.nodeId, github)).toMatchObject({
+      decision: 'continue',
+      node: { nodeId: first.nodeId },
+    });
+  });
+
   it('records a merge that met the criteria, commissions the next node, and records nothing again', async () => {
     const { root, first, second } = await stream();
     const mergedAt = await publishedRound(first);
