@@ -218,9 +218,9 @@ describe('workflow.run.start planNodeId', () => {
 describe('plan node prose caps', () => {
   const base = { kind: 'investigate', title: 'Why does the first start stall?' };
 
-  it('holds prose in the thousands', () => {
+  it('holds prose in the tens of thousands', () => {
     const long = 'x'.repeat(PLAN_NODE_PROSE_MAX_CHARS);
-    expect(PLAN_NODE_PROSE_MAX_CHARS).toBeGreaterThanOrEqual(1000);
+    expect(PLAN_NODE_PROSE_MAX_CHARS).toBeGreaterThanOrEqual(64_000);
     expect(
       PlanNodeCreateInputSchema.safeParse({ ...base, goal: long, criteria: long, note: long })
         .success,
