@@ -6,6 +6,7 @@ import {
   type SkillCatalogEntry,
 } from '@aflow/schemas';
 import { COMMISSION_CHANGE } from './commissionChange.js';
+import { ABANDON_TASKS } from './localPrShepherdAbandon.js';
 import { REMEDY_QUESTION, REMEDY_QUESTION_NAME } from './localPrShepherdDecisions.js';
 import { HANDOFF_READ_TASKS, HANDOFF_WRITE_TASKS } from './localPrShepherdHandoff.js';
 import { LEASE_READ_TASKS, leaseTask, RELEASE_TASK } from './localPrShepherdLease.js';
@@ -40,11 +41,14 @@ import {
   handoffValue,
   LEASE_TAKERS,
   OURS,
+  optionalPart,
   out,
   REPOSITORY,
   runInput,
   SKIP,
+  text,
 } from './localPrShepherdWiring.js';
+import { LAST_TENDED, READ_TURN_TASK, REMEMBER_TURN_TASK } from './localPrShepherdTurn.js';
 import { PUBLISH_LOCAL_CHANGES } from './publishLocalChanges.js';
 
 /**
@@ -131,7 +135,7 @@ function withBindingDependencies<T extends ShepherdTask>(tasks: T[]): T[] {
 
 const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
   catalogId: 'local-pr-shepherd',
-  version: 7,
+  version: 8,
   name: 'Local PR Shepherd',
   tagline:
     "Tend the pull requests the loop opened: read their CI, fix and publish a red check through Local Publish, and merge a green one where the folder's merge posture allows — never approving or closing.",
@@ -139,7 +143,11 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
 
 **When it merges**: only where the folder's merge posture, \`mergePosture\` beside the push approval, is \`when-green\` — \`never\` is the default, and leaves every merge to the operator. Then a green pull request is merged by squash, pinned to the head it read, when every check the base branch requires — by its rulesets or its classic protection — passed on that head, the publication's own Local Code Review returned \`approve\` for that head, and no person's standing review requests changes. Each condition that does not hold leaves it, saying which. The merge asks the operator's approval of exactly that request, as every merge does; a declined or refused merge of a head is not asked for again until a push moves it.
 
-**What it needs**: the connected folder, \`bindingId\`, connected with a publish prefix and an \`origin\` on GitHub, and the GitHub connection for the space. \`pullNumber\` aims a pass at one pull request, which must still be one the loop opened; without it a pass tends the most recently updated. \`attemptBudget\` is how many failures of one pull request it acts on before it stops — ${String(SHEPHERD_ATTEMPT_BUDGET_DEFAULT)} unless named.
+**What it needs**: the connected folder, \`bindingId\`, connected with a publish prefix and an \`origin\` on GitHub, and the GitHub connection for the space. \`pullNumber\` aims a pass at one pull request, which must still be one the loop opened; without it a pass tends the one after the pull request the last such pass tended, so passes on a schedule take them in turn. \`attemptBudget\` is how many failures of one pull request it acts on before it stops — ${String(SHEPHERD_ATTEMPT_BUDGET_DEFAULT)} unless named.
+
+**When it stops**: a pull request whose budget is spent and whose CI fails again is \`abandon\`: the handoff comment says why, and one Action Center item asks a person to take it — one per head, however many passes find it so. A push that moves the head is read again.
+
+**On a schedule**: passes overlap safely. Two on one pull request meet at its branch's lease, and the second acts on nothing.
 
 **What it never does**: approve or close a pull request, merge one where the posture is \`never\` or without the operator's approval, or push other than through Local Publish under the folder's push approval. A pull request a person opened, or one labelled \`${SHEPHERD_HANDS_OFF_LABEL}\`, is left untouched; a branch with a publication or a commission in flight, whoever started it, is \`wait\`; the same check run is acted on once.
 
@@ -202,7 +210,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
           id: 'pullNumber',
           required: false,
           description:
-            "Aims the pass at one pull request, by its number as digits. It is tended only where Local Publish opened it under the folder's prefix; absent, the pass tends the most recently updated such pull request.",
+            "Aims the pass at one pull request, by its number as digits. It is tended only where Local Publish opened it under the folder's prefix; absent, the pass tends such pull requests in turn — the one after the pull request the last unaimed pass tended.",
           schema: PULL_NUMBER_SCHEMA,
         },
         {
@@ -254,7 +262,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
         {
           taskId: 'aim',
           name: 'Read whether the pass is aimed',
-          goal: 'Decide whether this pass was aimed at one pull request by its number, which is then read directly, or tends the most recently updated of the loop’s open pull requests, which are then listed.',
+          goal: 'Decide whether this pass was aimed at one pull request by its number, which is then read directly, or tends the loop’s open pull requests in turn, which are then listed.',
           type: 'operation' as const,
           operation: 'workflow.run.decide',
           when: {
@@ -274,17 +282,21 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
           },
         },
 
+        READ_TURN_TASK,
+
         {
           taskId: 'list-prs',
           name: "List the loop's open pull requests",
-          goal: "With the pass aimed at none, list the repository's open pull requests and keep those Local Publish opened under the folder's prefix — its marker closes their body — the ones labelled hands-off last, then the most recently updated.",
+          goal: "With the pass aimed at none, list the repository's open pull requests and keep those Local Publish opened under the folder's prefix — its marker closes their body — the ones labelled hands-off last, each in turn: the one after the pull request the last such pass tended first.",
           type: 'operation' as const,
           operation: 'api.http.call',
+          dependsOn: [READ_TURN_TASK.taskId],
           when: { expression: "tasks.aim.output.decision == 'discover'", onMissingRef: SKIP },
           retryability: 'safe' as const,
           inputBindings: {
             ...REPOSITORY,
             prefix: out('read-folder', 'branchPolicy.branchPrefix'),
+            lastTended: LAST_TENDED,
           },
           context: ctx('api.http.call'),
           inputTemplate: github(
@@ -297,7 +309,13 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
               direction: 'desc',
               per_page: 100,
             },
-            { $concat: [`${SHEPHERD_RESPONSE_PRESETS.pullRequests}:`, bind('prefix')] },
+            {
+              $concat: [
+                `${SHEPHERD_RESPONSE_PRESETS.pullRequests}:`,
+                bind('prefix'),
+                optionalPart(':', text('lastTended')),
+              ],
+            },
           ),
         },
 
@@ -331,6 +349,8 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
             { $concat: [`${SHEPHERD_RESPONSE_PRESETS.pullRequest}:`, bind('prefix')] },
           ),
         },
+
+        REMEMBER_TURN_TASK,
 
         ...MERGE_READ_TASKS,
 
@@ -670,6 +690,8 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
         RELEASE_TASK,
 
         ...HANDOFF_WRITE_TASKS,
+
+        ...ABANDON_TASKS,
       ]),
       stateVariables: [
         {
@@ -740,7 +762,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
       priority: 50,
     },
     rationale:
-      'Plan 321 P1 and P2b. Typed reads — folder, pull requests, checks, handoff, lease, the branch’s in-flight runs, and under the merge posture when-green the required checks, the reviews and the publication’s verdict — then workflow.run.decide: the first rule that holds decides, fix where none does; a read GitHub refused is wait, and merge follows every wait. Fix and merge take the lease, created, never overwritten. For fix the failing jobs and logs are read and the remedy question routes to re-run, fix, bump or merge round, anything unsure to the fix commission, published through Local Publish. Merge is mergePullRequest by squash pinned to the head, behind its write approval; record-merge names the outcome as the handoff field. The lease is released once leased work ends. No step approves or closes; only merge merges.',
+      'Plan 321 P1, P2, P2b. Typed reads — folder, turn, pull requests, checks, handoff, lease, in-flight runs, and under when-green the required checks, reviews and publication verdict — then workflow.run.decide: first rule that holds decides, fix where none does; a refused read is wait, more check runs than a page is leave, merge follows every wait. Fix and merge take the lease, created, never overwritten. Fix reads the failing jobs and logs; the remedy question routes to re-run, fix, bump or merge round, unsure to the fix commission, published through Local Publish. Merge is squash pinned to the head behind its write approval. The lease is released once leased work ends. Abandon claims its head after the handoff and raises one collect item only on that claim. The pin keeps the attempt state, so a deleted handoff restarts nothing. No step approves or closes; only merge merges.',
   },
 };
 

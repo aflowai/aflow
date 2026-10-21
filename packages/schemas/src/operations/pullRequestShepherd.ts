@@ -32,7 +32,9 @@ export const SHEPHERD_LEASE_DOCUMENT = 'lease.json';
  * request after the first closes. It holds the comment's id and the login the
  * comment was posted as, both read off GitHub's answer to the pass that wrote
  * it: the comment is read by its id wherever it sits in a long conversation,
- * and its record is trusted only from that author.
+ * and its record is trusted only from that author. Beside them it keeps the
+ * attempt state that comment recorded — `attemptCount` and `checkRunId` — so
+ * where the comment is deleted the record's budget and its guard survive it.
  */
 export const SHEPHERD_HANDOFF_PINS = 'pulls';
 
@@ -44,6 +46,31 @@ export const SHEPHERD_HANDOFF_PINS = 'pulls';
  * finds it, so no two passes ask to merge the same head, however they overlap.
  */
 export const SHEPHERD_MERGE_OUTCOME_DOCS = 'merges';
+
+/**
+ * Where a pull request handed to a person is claimed — `<root>/<owner>/<repo>/pulls/<number>/abandons/<headSha>.json`,
+ * one document per head, created and never overwritten. A pass that decides
+ * `abandon` raises its Action Center item only where its own create of the
+ * head's claim succeeded, so however many passes find the budget spent on one
+ * head, and however they overlap, one item is raised for it; a push that
+ * moves the head is a new head.
+ */
+export const SHEPHERD_ABANDON_DOCS = 'abandons';
+
+/**
+ * `<root>/<owner>/<repo>/turn.json`: the pull request the last pass aimed at
+ * none tended. The next such pass tends the one after it, so passes on a
+ * schedule take the loop's pull requests in turn, whatever GitHub's
+ * `updated_at` does when a handoff is written.
+ */
+export const SHEPHERD_TURN_DOCUMENT = 'turn.json';
+
+/**
+ * How often a schedule starts the shepherd's agent unless the operator names
+ * another interval: every five minutes, which the rate budget of §5 P0.2 of
+ * Plan 321 allows for twenty-five pull requests at the generic retry's ceiling.
+ */
+export const SHEPHERD_SCHEDULE_CRON_DEFAULT = '*/5 * * * *';
 
 /**
  * A lease older than this is stale whatever its run says: a pass that holds
@@ -161,10 +188,17 @@ export function parseShepherdHandoff(body: string): ShepherdHandoffRecord | null
  * to inline would otherwise reach them as a summary. `pullRequests` and
  * `pullRequest` take the folder's prefix after a colon — `loop_pulls:aflow/`.
  * A pass aimed at one pull request reads it by its number and lists none.
+ * `pullRequests` may take, after the prefix and a colon, the number of the pull
+ * request the last such pass tended — `loop_pulls:aflow/:94` — and then lists
+ * the one after it first.
  * `handoff` takes the login the loop posted the pinned handoff as and the pull
  * request's number, `loop_handoff:aflow-bot:94`: a record from any other author,
  * or on another pull request, is no record. With no login, `loop_handoff::94`,
- * no record is trusted. A login holds no colon.
+ * no record is trusted. A login holds no colon. Where the pinned comment is
+ * gone, the read of the newest page also takes the attempt state the pin
+ * kept — `loop_handoff:aflow-bot:94:2:555`, the failures acted on and the
+ * check run last acted on, which may be empty — so a deleted comment restarts
+ * neither the budget nor the guard on a check run already acted on.
  *
  * The merge reads (D6): `requiredRules` shapes the base branch's ruleset rules
  * into the check names they require; `requiredProtection` shapes the branch
@@ -238,8 +272,9 @@ export type LoopPullRequestSummary = z.infer<typeof LoopPullRequestSummarySchema
 
 /**
  * `listPullRequests` as the shepherd reads it: only the loop's pull requests
- * under the prefix, those a person has not labelled hands-off first, then the
- * most recently updated. One pass tends the first.
+ * under the prefix, those a person has not labelled hands-off first, each
+ * group by number, newest first, and — where the read was given the last one
+ * tended — turned so the one after it comes first. One pass tends the first.
  */
 export const LoopPullRequestsSchema = z.object({
   pullRequests: z.array(LoopPullRequestSummarySchema),
@@ -277,7 +312,14 @@ export const LoopPullRequestSchema = z.object({
 });
 export type LoopPullRequest = z.infer<typeof LoopPullRequestSchema>;
 
-export const CheckRunsStateSchema = z.enum(['failing', 'pending', 'passing', 'stopped', 'none']);
+export const CheckRunsStateSchema = z.enum([
+  'failing',
+  'pending',
+  'passing',
+  'stopped',
+  'none',
+  'unknown',
+]);
 export type CheckRunsState = z.infer<typeof CheckRunsStateSchema>;
 
 export const FailingCheckRunSchema = z.object({
@@ -351,10 +393,12 @@ export type PullRequestReviews = z.infer<typeof PullRequestReviewsSchema>;
 
 /**
  * `listCheckRuns` on the head, as the shepherd reads it: `failing` where any
- * run failed, else `pending` while any has not finished or GitHub holds more
- * than the one page read, else `passing` where every one succeeded or was
- * skipped, `stopped` where one was cancelled or needs an action, `none` where
- * there are none.
+ * run on the page read failed, else `pending` while any on it has not
+ * finished, else `unknown` where GitHub holds more check runs than the one
+ * page read — the runs past it may have failed, and no later pass reads them
+ * either, so this is no wait — else `passing` where every one succeeded or
+ * was skipped, `stopped` where one was cancelled or needs an action, `none`
+ * where there are none.
  */
 export const CheckRunsSummarySchema = z.object({
   state: CheckRunsStateSchema,

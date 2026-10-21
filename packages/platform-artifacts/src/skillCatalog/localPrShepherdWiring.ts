@@ -30,6 +30,11 @@ export function text(name: string) {
   return { $text: [bind(name)] };
 }
 
+/** A text part, or nothing where any of its parts is absent. */
+export function optionalPart(...parts: unknown[]) {
+  return { $firstOf: [{ $concat: parts }, ''] };
+}
+
 export const SKIP = 'skip' as const;
 
 // --- Reads every task after the folder shares -------------------------------

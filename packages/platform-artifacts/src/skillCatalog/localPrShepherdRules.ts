@@ -228,6 +228,13 @@ export const SHEPHERD_RULES: readonly WorkflowRunDecideRule[] = [
     reason: 'A commission based on this branch is in flight, whoever started it.',
   },
   ...MERGE_RULES,
+  // Every later pass reads the same one page, so a wait here would never end.
+  {
+    when: { expression: "state.checks.data.state == 'unknown'" },
+    decision: 'leave',
+    reason:
+      "GitHub holds more check runs on the head than the one page of a hundred a pass reads, and none on that page failed or is still running: whether CI failed on the head is unknown, so the shepherd neither fixes nor merges it. The pull request is the operator's.",
+  },
   {
     when: { expression: "state.checks.data.state != 'failing'" },
     decision: 'wait',
@@ -244,7 +251,7 @@ export const SHEPHERD_RULES: readonly WorkflowRunDecideRule[] = [
     when: { expression: 'state.handoff.data.attemptCount >= state.budget' },
     decision: SHEPHERD_BUDGET_SPENT,
     reason:
-      'The shepherd has acted on as many failures of this pull request as its budget allows, and CI fails again. It leaves the pull request to a person.',
+      'The shepherd has acted on as many failures of this pull request as its budget allows, and CI fails again. It acts on nothing here and leaves the pull request to a person, with one Action Center item for this head; a push that moves the head is read again, and handed over the same way if CI fails on it.',
   },
 ];
 
@@ -260,7 +267,7 @@ export const AIM_RULES: readonly WorkflowRunDecideRule[] = [
 export const AIM_OTHERWISE = {
   decision: 'discover',
   reason:
-    "The pass was aimed at none: the loop's open pull requests are listed, and the most recently updated is tended.",
+    "The pass was aimed at none: the loop's open pull requests are listed, and the one after the pull request the last such pass tended is tended.",
 };
 
 export const SHEPHERD_OTHERWISE = {

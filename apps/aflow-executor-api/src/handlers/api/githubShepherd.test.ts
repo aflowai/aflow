@@ -84,6 +84,28 @@ describe('loop_pulls — the loop’s open pull requests under the prefix', () =
 
   it('refuses to read without a prefix', () => {
     expect(() => loopPullRequests(listed, undefined)).toThrow(/prefix/);
+    expect(() => loopPullRequests(listed, ':5')).toThrow(/prefix/);
+  });
+
+  // A pass tends the first, so each takes the one after the last one tended:
+  // ordered by `updated_at`, the one just written on could stay first forever.
+  it('turns past the pull request last tended, wrapping to the newest, hands-off still last', () => {
+    const turn = (last: number) =>
+      loopPullRequests(listed, `aflow/:${String(last)}`).pullRequests.map((p) => p.number);
+    expect(turn(5)).toEqual([1, 5, 2]);
+    expect(turn(1)).toEqual([5, 1, 2]);
+    // A number no longer listed — merged since — still turns to the one below it.
+    expect(turn(3)).toEqual([1, 5, 2]);
+    const newestUpdatedFirst = [pr(9, { updated_at: '2026-10-01T00:00:00Z' }), pr(4), pr(7)].map(
+      (p) => ({ ...p, head: { ...p.head, ref: `aflow/branch-${String(p.number)}` } }),
+    );
+    expect(
+      loopPullRequests(newestUpdatedFirst, 'aflow/:9').pullRequests.map((p) => p.number),
+    ).toEqual([7, 4, 9]);
+  });
+
+  it('refuses a turn that is not a pull request number', () => {
+    expect(() => loopPullRequests(listed, 'aflow/:x')).toThrow(/number/);
   });
 
   // The loop pushes to its own repository: a fork can copy the marker and a
@@ -167,14 +189,17 @@ describe('loop_checks — what CI says of the head', () => {
     });
   });
 
+  // Every pass reads the same first page, so a verdict of `pending` on a
+  // finished page would be a wait that never ends, with a reason — checks
+  // still running — that is false. Such a head is `unknown`, and says so.
   describe('a head with more check runs than the one page read', () => {
     const greenPage = Array.from({ length: 100 }, (_, i) => run(i + 1, 'completed', 'success'));
 
-    it('is never passing from the first page while a failure may sit on the second', () => {
+    it('is unknown, never passing, from a finished first page while a failure may sit on the second', () => {
       const shaped = CheckRunsSummarySchema.parse(
         loopCheckRuns({ total_count: 101, check_runs: greenPage }),
       );
-      expect(shaped.state).toBe('pending');
+      expect(shaped.state).toBe('unknown');
       expect(shaped.total).toBe(101);
       expect(shaped.failing).toEqual([]);
     });
@@ -184,7 +209,14 @@ describe('loop_checks — what CI says of the head', () => {
       ['none', []],
     ])('nor %s from a page that would read so alone', (alone, page) => {
       expect(loopCheckRuns({ total_count: page.length, check_runs: page }).state).toBe(alone);
-      expect(loopCheckRuns({ total_count: 150, check_runs: page }).state).toBe('pending');
+      expect(loopCheckRuns({ total_count: 150, check_runs: page }).state).toBe('unknown');
+    });
+
+    it('is pending only while a run on the page itself is still going, and unknown once none is', () => {
+      const running = [...greenPage.slice(1), run(101, 'in_progress', null)];
+      expect(loopCheckRuns({ total_count: 150, check_runs: running }).state).toBe('pending');
+      const finished = [...greenPage.slice(1), run(101, 'completed', 'success')];
+      expect(loopCheckRuns({ total_count: 150, check_runs: finished }).state).toBe('unknown');
     });
 
     it('is failing where the page itself carries a failure, which no later page undoes', () => {
@@ -287,6 +319,64 @@ describe('loop_handoff — the shepherd’s own record', () => {
 
   it('refuses to read without the pull request it reads for', () => {
     expect(() => loopHandoff([handoff(1, 1, '4')], 'aflow-app[bot]')).toThrow(/<login>:<number>/);
+  });
+
+  // Read after the pinned comment answered 404: the pin kept the state that
+  // comment recorded, and a deleted record is no first pass.
+  describe('with the attempt state a pin kept', () => {
+    it('answers that state where the newest page holds no handoff — the budget and the guard stand', () => {
+      const read = ShepherdHandoffReadSchema.parse(
+        loopHandoff(
+          [{ id: 2, user: stranger, issue_url: ON_94, body: 'Hm.' }],
+          `${AS_PINNED}:3:555`,
+        ),
+      );
+      expect(read).toEqual({
+        found: false,
+        attemptCount: 3,
+        nextAttemptCount: 4,
+        checkRunId: '555',
+        trust: 'verified',
+      });
+    });
+
+    it('carries a count with no check run acted on', () => {
+      expect(loopHandoff([], `${AS_PINNED}:0:`)).toEqual({
+        found: false,
+        attemptCount: 0,
+        nextAttemptCount: 1,
+        trust: 'verified',
+      });
+    });
+
+    it('keeps the higher count of a handoff found on the page and the state the pin kept', () => {
+      expect(loopHandoff([handoff(4, 1, '7')], `${AS_PINNED}:2:9`)).toMatchObject({
+        found: true,
+        commentId: 4,
+        attemptCount: 2,
+        nextAttemptCount: 3,
+        checkRunId: '9',
+      });
+      expect(loopHandoff([handoff(4, 3, '12')], `${AS_PINNED}:2:9`)).toMatchObject({
+        attemptCount: 3,
+        checkRunId: '12',
+      });
+    });
+
+    it('trusts nothing with no author, whatever state is given', () => {
+      expect(loopHandoff([handoff(1, 3, '9')], ':94:3:9')).toMatchObject({
+        found: false,
+        attemptCount: 0,
+        trust: 'undecided',
+      });
+    });
+
+    it.each([`${AS_PINNED}:x:9`, `${AS_PINNED}:3`, `${AS_PINNED}:3:9a`, `${AS_PINNED}:3:9:1`])(
+      'refuses a state it could not have been given: %s',
+      (arg) => {
+        expect(() => loopHandoff([], arg)).toThrow(/<attempts>:<checkRunId>/);
+      },
+    );
   });
 });
 
