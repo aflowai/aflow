@@ -67,7 +67,7 @@ Approve or deny under **Needs attention** in the Workbench. Change the rules und
 
 ## Why it is waiting
 
-Each endpoint carries one of three risk tiers, and the Store's connectors come with every write endpoint tiered:
+Each endpoint carries one of three risk tiers, and the Store's connectors come with every write endpoint tiered, whether you install the connector on its own or a Store listing installs it for you:
 
 - **Low**: internal, reversible writes: post a message, create an issue, add a record. Runs unattended by default.
 - **Medium**: external sends or hard-to-undo changes: email or SMS, merging a pull request, deleting one thing. Requires approval by default.

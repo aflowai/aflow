@@ -159,6 +159,17 @@ deliberate tier. The tier lives in the orchestrator/executor plane and is
 **never exposed to agents** — an agent must not read the tier and route around
 the gate.
 
+**Where a stored tier comes from** — the gate reads the tier from the space's
+stored `api_definitions` row, so the connector catalog is the one source for
+every install path. A Store connector install writes the catalog definition as
+it is; a skill bundle carries the draft shape, which cannot hold a tier, and the
+draft writer (`buildDefinitionJsonForDraft`) gives each endpoint whose id,
+method and path match the connector of the same `apiId` that connector's tier
+(`overlayConnectorWriteRiskTiers`). A Store update of an owned bundle overwrites
+its row, so it also repairs a row written before the overlay existed.
+`connectorWriteRiskTiers.contract.test.ts` fails if a bundled connector
+definition loses a tier on its way into the stored row.
+
 **How the gate works** — the API executor computes the effective decision
 (`requiresWriteApproval(tier, spaceWritePolicy)`) after the body is fully
 resolved, and for a gated call with no matching approval it pauses the step as a

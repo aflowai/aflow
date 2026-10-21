@@ -9,7 +9,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { SQL } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
-import { getCatalogEntry } from '@aflow/platform-artifacts';
+import { getCatalogEntry, getConnectorDefinitionByApiId } from '@aflow/platform-artifacts';
 import type { CatalogEntry, StoreInstallDivergence, TenantId } from '@aflow/schemas';
 
 interface InstallRow {
@@ -34,6 +34,7 @@ const store = vi.hoisted(() => ({
   lockAcquired: true,
   memoryDocPaths: new Set<string>(),
   memoryDocPuts: [] as string[],
+  apiDefinitions: new Map<string, Record<string, unknown>>(),
   shelf: {
     defaultAvailability: 'available' as 'available' | 'hidden',
     overrides: new Map<string, 'available' | 'hidden'>(),
@@ -46,6 +47,17 @@ function applyExecute(query: SQL): unknown[] {
   const { sql: text, params } = dialect.sqlToQuery(query);
   if (text.includes('pg_try_advisory_xact_lock')) {
     return [{ acquired: store.lockAcquired }];
+  }
+  if (text.includes('SELECT definition_json FROM api_definitions')) {
+    const [apiId] = params as [string];
+    const row = store.apiDefinitions.get(apiId);
+    return row ? [{ definition_json: row }] : [];
+  }
+  if (text.includes('INSERT INTO api_definitions')) {
+    const [apiId, , , definitionJson] = params as [string, string, string | null, string];
+    if (store.apiDefinitions.has(apiId) && !text.includes('DO UPDATE')) return [];
+    store.apiDefinitions.set(apiId, JSON.parse(definitionJson) as Record<string, unknown>);
+    return [{ api_id: apiId }];
   }
   if (text.includes('UPDATE store_installs SET') && text.includes('skipped_version')) {
     const [skippedVersion, updatedAt, updatedBy, catalogId, spaceId] = params as [
@@ -398,6 +410,7 @@ beforeEach(() => {
   store.lockAcquired = true;
   store.memoryDocPaths = new Set();
   store.memoryDocPuts = [];
+  store.apiDefinitions = new Map();
   store.shelf = { defaultAvailability: 'available', overrides: new Map() };
   vi.clearAllMocks();
   computeInstallDivergence.mockResolvedValue({ customized: false, artifacts: [] });
@@ -769,6 +782,63 @@ describe('executeStoreUpdate — bundle member-wise dispatch', () => {
       (row) => row['artifact_type'] === 'memory_doc' && row['artifact_key'] === '/notes/new.md',
     );
     expect(newSeedRow?.['installed_content_hash']).toBe(jsonContentHash('# new'));
+  });
+
+  it('overwrites an owned tier-less connector definition with the catalog tiers', async () => {
+    const base = getCatalogEntry('test-two-skill-bundle');
+    const loop = getCatalogEntry('local-shepherd');
+    if (base?.kind !== 'bundle' || loop?.kind !== 'bundle') throw new Error('fixture missing');
+    const github = loop.payload.apiDefinitions.find((def) => def.apiId === 'github');
+    if (!github) throw new Error('local-shepherd ships no github definition');
+    const entry = {
+      ...base,
+      version: 2,
+      payload: { ...base.payload, apiDefinitions: [github] },
+    } as CatalogEntry;
+    store.installs.push(installedRow('test-two-skill-bundle', 1, 'bundle'));
+    store.installs.push(installedRow('_test-skill-a', 1));
+    store.installs.push(installedRow('_test-skill-b', 1));
+    store.artifacts.push({
+      catalog_id: 'test-two-skill-bundle',
+      space_id: SPACE_ID,
+      artifact_type: 'api_definition',
+      artifact_key: 'github',
+      artifact_id: 'github',
+      installed_content_hash: 'old-hash',
+      preservation: 'replace_on_update',
+    });
+    const connector = getConnectorDefinitionByApiId('github');
+    if (!connector) throw new Error('github connector missing');
+    store.apiDefinitions.set('github', {
+      ...connector,
+      endpoints: connector.endpoints.map(({ writeRiskTier: _dropped, ...ep }) => ep),
+    });
+
+    const result = await update({
+      catalogId: 'test-two-skill-bundle',
+      entryResolver: (catalogId) =>
+        catalogId === 'test-two-skill-bundle' ? entry : getCatalogEntry(catalogId),
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected success');
+    expect(result.response.updatedArtifacts).toContainEqual({
+      artifactType: 'api_definition',
+      artifactKey: 'github',
+      action: 'replaced',
+    });
+    const endpoints = store.apiDefinitions.get('github')?.['endpoints'] as Array<{
+      endpointId: string;
+      writeRiskTier?: string;
+    }>;
+    expect(endpoints.find((ep) => ep.endpointId === 'mergePullRequest')?.writeRiskTier).toBe(
+      'medium',
+    );
+    const tiered = connector.endpoints.filter((ep) => ep.writeRiskTier !== undefined);
+    for (const curated of tiered) {
+      expect(endpoints.find((ep) => ep.endpointId === curated.endpointId)?.writeRiskTier).toBe(
+        curated.writeRiskTier,
+      );
+    }
   });
 
   it('a member dropped by the new version releases its claim and provenance, artifact untouched', async () => {

@@ -1,4 +1,8 @@
-import { ConnectorCatalogEntrySchema, type ConnectorCatalogEntry } from '@aflow/schemas';
+import {
+  ConnectorCatalogEntrySchema,
+  type ApiDefinition,
+  type ConnectorCatalogEntry,
+} from '@aflow/schemas';
 
 import { JIRA_CONNECTOR } from './jira.js';
 import { GITHUB_CONNECTOR } from './github.js';
@@ -96,6 +100,26 @@ const CATALOG_BY_ID: Readonly<Record<string, ConnectorCatalogEntry>> = Object.fr
 /** Fetch a connector catalog entry by id. Returns `null` for unknown ids. */
 export function getConnectorCatalogEntry(catalogId: string): ConnectorCatalogEntry | null {
   return CATALOG_BY_ID[catalogId] ?? null;
+}
+
+const DEFINITION_BY_API_ID: ReadonlyMap<string, ApiDefinition> = (() => {
+  const byApiId = new Map<string, ApiDefinition>();
+  for (const entry of CONNECTOR_CATALOG) {
+    const { apiId } = entry.definition;
+    if (byApiId.has(apiId)) {
+      throw new Error(`Connector catalog declares apiId "${apiId}" more than once.`);
+    }
+    byApiId.set(apiId, entry.definition);
+  }
+  return byApiId;
+})();
+
+/**
+ * The curated definition a space's row of this `apiId` installs — whichever
+ * path wrote the row. `null` when no connector owns the id.
+ */
+export function getConnectorDefinitionByApiId(apiId: string): ApiDefinition | null {
+  return DEFINITION_BY_API_ID.get(apiId) ?? null;
 }
 
 /** List connector catalog entries. Excludes hidden entries by default. */

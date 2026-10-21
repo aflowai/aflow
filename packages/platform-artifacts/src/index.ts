@@ -61,6 +61,7 @@ export {
 export {
   CONNECTOR_CATALOG,
   getConnectorCatalogEntry,
+  getConnectorDefinitionByApiId,
   listConnectorCatalog,
 } from './connectorCatalog/index.js';
 
