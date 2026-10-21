@@ -29,12 +29,16 @@ vi.mock('@aflow/redis', () => ({
 }));
 
 vi.mock('@aflow/cybernetic-runtime', async () => {
-  const { readOutputPath, parseOutputPath } = await vi.importActual<
-    typeof import('@aflow/cybernetic-runtime/scheduling/output-path')
-  >('@aflow/cybernetic-runtime/scheduling/output-path');
+  const [{ readOutputPath, parseOutputPath }, { entryRunInputSlots }] = await Promise.all([
+    vi.importActual<typeof import('@aflow/cybernetic-runtime/scheduling/output-path')>(
+      '@aflow/cybernetic-runtime/scheduling/output-path',
+    ),
+    vi.importActual<typeof import('@aflow/cybernetic-runtime')>('@aflow/cybernetic-runtime'),
+  ]);
   return {
     readOutputPath,
     parseOutputPath,
+    entryRunInputSlots,
     buildRunnerDelegationContext: (...args: unknown[]) => mockBuildRunnerDelegationContext(...args),
     recordRunStart: vi.fn(),
     recordTaskSkipped: vi.fn(),
@@ -383,7 +387,7 @@ describe('buildDelegateTaskInput — Plan 141 parent instructions surfacing', ()
     const { buildDelegateTaskInput } = await import('../taskHelpers.js');
     const delegate = await buildDelegateTaskInput(
       taskWithRunInput,
-      baseWorkflow,
+      { ...(baseWorkflow as object), tasks: [taskWithRunInput] } as never,
       TENANT,
       SPACE,
       RUN,
@@ -423,7 +427,7 @@ describe('buildDelegateTaskInput — Plan 141 parent instructions surfacing', ()
     const { buildDelegateTaskInput } = await import('../taskHelpers.js');
     const delegate = await buildDelegateTaskInput(
       taskWithNestedPath,
-      baseWorkflow,
+      { ...(baseWorkflow as object), tasks: [taskWithNestedPath] } as never,
       TENANT,
       SPACE,
       RUN,
@@ -471,81 +475,185 @@ describe('buildDelegateTaskInput — Plan 141 parent instructions surfacing', ()
 
   // ============================================================================
 
-  it('buildRunInputSnapshotFromParent: maps flat bindAs → flat runInput key', async () => {
-    const { buildRunInputSnapshotFromParent } = await import('../taskHelpers.js');
-    const snapshot = buildRunInputSnapshotFromParent(
-      {
+  describe('buildRunInputSnapshotFromParent', () => {
+    type Bindings = Record<string, unknown>;
+
+    /**
+     * The stored inputs are keyed by the entry task's bindAs, so every case
+     * names the entry task they were validated against.
+     */
+    async function snapshotFor(args: {
+      entry: Bindings;
+      task?: Bindings;
+      inputs: Record<string, unknown>;
+    }): Promise<Record<string, unknown>> {
+      const { buildRunInputSnapshotFromParent } = await import('../taskHelpers.js');
+      return buildRunInputSnapshotFromParent(
+        (args.task ?? args.entry) as never,
+        { taskId: 'entry', inputs: args.inputs },
+        { tasks: [{ taskId: 'entry', inputBindings: args.entry }] } as never,
+      );
+    }
+
+    it('maps flat bindAs → flat runInput key', async () => {
+      const bindings = {
         vendor: { kind: 'run_input', path: 'vendor' },
         baseUrl: { kind: 'run_input', path: 'baseUrl' },
-      } as never,
-      { vendor: 'Alpaca', baseUrl: 'https://paper-api.alpaca.markets' },
-    );
-    expect(snapshot).toEqual({
-      vendor: 'Alpaca',
-      baseUrl: 'https://paper-api.alpaca.markets',
+      };
+      const inputs = { vendor: 'Alpaca', baseUrl: 'https://paper-api.alpaca.markets' };
+      expect(await snapshotFor({ entry: bindings, inputs })).toEqual(inputs);
     });
-  });
 
-  it('buildRunInputSnapshotFromParent: constructs nested objects for dotted paths', async () => {
-    const { buildRunInputSnapshotFromParent } = await import('../taskHelpers.js');
-    const snapshot = buildRunInputSnapshotFromParent(
-      {
-        name: { kind: 'run_input', path: 'user.name' },
-        email: { kind: 'run_input', path: 'user.email' },
-        notes: { kind: 'run_input', path: 'rationale.notes' },
-      } as never,
-      { name: 'John', email: 'john@example.com', notes: 'paper account' },
-    );
-    expect(snapshot).toEqual({
-      user: { name: 'John', email: 'john@example.com' },
-      rationale: { notes: 'paper account' },
+    it('constructs nested objects for dotted paths', async () => {
+      const snapshot = await snapshotFor({
+        entry: {
+          name: { kind: 'run_input', path: 'user.name' },
+          email: { kind: 'run_input', path: 'user.email' },
+          notes: { kind: 'run_input', path: 'rationale.notes' },
+        },
+        inputs: { name: 'John', email: 'john@example.com', notes: 'paper account' },
+      });
+      expect(snapshot).toEqual({
+        user: { name: 'John', email: 'john@example.com' },
+        rationale: { notes: 'paper account' },
+      });
     });
-  });
 
-  it('buildRunInputSnapshotFromParent: writes [n]-indexed paths so the shared reader round-trips', async () => {
-    const [{ buildRunInputSnapshotFromParent }, { readOutputPath }] = await Promise.all([
-      import('../taskHelpers.js'),
-      import('@aflow/cybernetic-runtime/scheduling/output-path'),
-    ]);
-    const snapshot = buildRunInputSnapshotFromParent(
-      {
-        firstSymbol: { kind: 'run_input', path: 'positions[0].symbol' },
-        secondSymbol: { kind: 'run_input', path: 'positions[1].symbol' },
-        note: { kind: 'run_input', path: 'rationale.notes' },
-      } as never,
-      { firstSymbol: 'AAPL', secondSymbol: 'MSFT', note: 'paper account' },
-    );
-    expect(snapshot).toEqual({
-      positions: [{ symbol: 'AAPL' }, { symbol: 'MSFT' }],
-      rationale: { notes: 'paper account' },
+    it('writes [n]-indexed paths so the shared reader round-trips', async () => {
+      const { readOutputPath } = await import('@aflow/cybernetic-runtime/scheduling/output-path');
+      const snapshot = await snapshotFor({
+        entry: {
+          firstSymbol: { kind: 'run_input', path: 'positions[0].symbol' },
+          secondSymbol: { kind: 'run_input', path: 'positions[1].symbol' },
+          note: { kind: 'run_input', path: 'rationale.notes' },
+        },
+        inputs: { firstSymbol: 'AAPL', secondSymbol: 'MSFT', note: 'paper account' },
+      });
+      expect(snapshot).toEqual({
+        positions: [{ symbol: 'AAPL' }, { symbol: 'MSFT' }],
+        rationale: { notes: 'paper account' },
+      });
+      expect(readOutputPath(snapshot, 'positions[0].symbol')).toBe('AAPL');
+      expect(readOutputPath(snapshot, 'positions[1].symbol')).toBe('MSFT');
+      expect(readOutputPath(snapshot, 'rationale.notes')).toBe('paper account');
     });
-    expect(readOutputPath(snapshot, 'positions[0].symbol')).toBe('AAPL');
-    expect(readOutputPath(snapshot, 'positions[1].symbol')).toBe('MSFT');
-    expect(readOutputPath(snapshot, 'rationale.notes')).toBe('paper account');
-  });
 
-  it('buildRunInputSnapshotFromParent: skips bindings whose bindAs is not in parentInputs', async () => {
-    const { buildRunInputSnapshotFromParent } = await import('../taskHelpers.js');
-    const snapshot = buildRunInputSnapshotFromParent(
-      {
-        vendor: { kind: 'run_input', path: 'vendor' },
-        baseUrl: { kind: 'run_input', path: 'baseUrl' },
-      } as never,
-      { vendor: 'Alpaca' }, // baseUrl absent
-    );
-    expect(snapshot).toEqual({ vendor: 'Alpaca' });
-  });
+    it('finds a later binding whose key differs from its path by the path', async () => {
+      const { readOutputPath } = await import('@aflow/cybernetic-runtime/scheduling/output-path');
+      const snapshot = await snapshotFor({
+        entry: { pullNumber: { kind: 'run_input', path: 'pullNumber' } },
+        task: { aimed: { kind: 'run_input', path: 'pullNumber' } },
+        inputs: { pullNumber: '158' },
+      });
+      expect(snapshot).toEqual({ pullNumber: '158' });
+      expect(readOutputPath(snapshot, 'pullNumber')).toBe('158');
+    });
 
-  it('buildRunInputSnapshotFromParent: ignores non-run_input bindings', async () => {
-    const { buildRunInputSnapshotFromParent } = await import('../taskHelpers.js');
-    const snapshot = buildRunInputSnapshotFromParent(
-      {
-        vendor: { kind: 'run_input', path: 'vendor' },
-        upstream: { kind: 'task_output', taskId: 'prev' },
-      } as never,
-      { vendor: 'Alpaca', upstream: { some: 'data' } },
-    );
-    expect(snapshot).toEqual({ vendor: 'Alpaca' });
+    it('reads a nested path under a differing key from the root run input, leaving the stored inputs untouched', async () => {
+      const inputs = { repo: { owner: 'aflowai', name: 'aflow' } };
+      const snapshot = await snapshotFor({
+        entry: { repo: { kind: 'run_input', path: 'repo' } },
+        task: {
+          owner: { kind: 'run_input', path: 'repo.owner' },
+          extra: { kind: 'run_input', path: 'repo.extra' },
+        },
+        inputs,
+      });
+      expect(snapshot).toEqual({ repo: { owner: 'aflowai', name: 'aflow' } });
+      (snapshot['repo'] as Record<string, unknown>)['owner'] = 'changed';
+      expect(inputs).toEqual({ repo: { owner: 'aflowai', name: 'aflow' } });
+    });
+
+    it('the path wins over a stored key that matches the binding key', async () => {
+      const snapshot = await snapshotFor({
+        entry: {
+          vendor: { kind: 'run_input', path: 'vendor' },
+          baseUrl: { kind: 'run_input', path: 'baseUrl' },
+        },
+        task: { vendor: { kind: 'run_input', path: 'baseUrl' } },
+        inputs: { vendor: 'Alpaca', baseUrl: 'https://paper-api.alpaca.markets' },
+      });
+      expect(snapshot).toEqual({ baseUrl: 'https://paper-api.alpaca.markets' });
+    });
+
+    it('overlapping aliases: a stored key named like a path root is read as the entry slot it fills', async () => {
+      // The entry task stores pullNumber's value under `target`, and keeps a
+      // `pullNumber` slot of its own for issueNumber. A later binding on
+      // path `pullNumber` must read `target`, not the stored key `pullNumber`.
+      const entry = {
+        target: { kind: 'run_input', path: 'pullNumber' },
+        pullNumber: { kind: 'run_input', path: 'issueNumber' },
+      };
+      const inputs = { target: '158', pullNumber: '7' };
+      expect(
+        await snapshotFor({
+          entry,
+          task: { aimed: { kind: 'run_input', path: 'pullNumber' } },
+          inputs,
+        }),
+      ).toEqual({ pullNumber: '158' });
+      expect(await snapshotFor({ entry, inputs })).toEqual({
+        pullNumber: '158',
+        issueNumber: '7',
+      });
+    });
+
+    it('overlapping aliases: swapped entry slots resolve to their own run inputs', async () => {
+      const snapshot = await snapshotFor({
+        entry: {
+          a: { kind: 'run_input', path: 'b' },
+          b: { kind: 'run_input', path: 'a' },
+        },
+        task: {
+          x: { kind: 'run_input', path: 'a' },
+          y: { kind: 'run_input', path: 'b' },
+        },
+        inputs: { a: 'value-of-b', b: 'value-of-a' },
+      });
+      expect(snapshot).toEqual({ a: 'value-of-a', b: 'value-of-b' });
+    });
+
+    it('an entry task with no run_input slots stored its inputs verbatim, keyed by name', async () => {
+      const snapshot = await snapshotFor({
+        entry: {},
+        task: { aimed: { kind: 'run_input', path: 'pullNumber' } },
+        inputs: { pullNumber: '158' },
+      });
+      expect(snapshot).toEqual({ pullNumber: '158' });
+    });
+
+    it('fails where the entry task the inputs were validated against is not in the workflow', async () => {
+      const { buildRunInputSnapshotFromParent } = await import('../taskHelpers.js');
+      expect(() =>
+        buildRunInputSnapshotFromParent(
+          { aimed: { kind: 'run_input', path: 'pullNumber' } } as never,
+          { taskId: 'gone', inputs: { pullNumber: '158' } },
+          { tasks: [] } as never,
+        ),
+      ).toThrow(/entry task 'gone'/);
+    });
+
+    it('skips slots whose bindAs is absent from the stored inputs', async () => {
+      const snapshot = await snapshotFor({
+        entry: {
+          vendor: { kind: 'run_input', path: 'vendor' },
+          baseUrl: { kind: 'run_input', path: 'baseUrl' },
+        },
+        inputs: { vendor: 'Alpaca' },
+      });
+      expect(snapshot).toEqual({ vendor: 'Alpaca' });
+    });
+
+    it('ignores non-run_input bindings', async () => {
+      const snapshot = await snapshotFor({
+        entry: {
+          vendor: { kind: 'run_input', path: 'vendor' },
+          upstream: { kind: 'task_output', taskId: 'prev' },
+        },
+        inputs: { vendor: 'Alpaca', upstream: { some: 'data' } },
+      });
+      expect(snapshot).toEqual({ vendor: 'Alpaca' });
+    });
   });
 
   it('parent instructions section appears AFTER the typed TASK INPUTS block', async () => {

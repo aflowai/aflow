@@ -16,6 +16,7 @@ import {
 import type { PayloadStore } from '@aflow/payload-store';
 import {
   buildRunnerDelegationContext,
+  entryRunInputSlots,
   getCampaignById,
   getRunCampaignId,
   loadRunById,
@@ -36,6 +37,7 @@ import { getOrchestratorLogger } from '../../lib/orchestratorLogger.js';
 
 export async function resolveOperationTaskInputs(
   task: WorkflowTask,
+  workflow: Pick<Workflow, 'tasks' | 'runInputs'>,
   tenantId: string,
   spaceId: string,
   runId: string,
@@ -60,9 +62,11 @@ export async function resolveOperationTaskInputs(
   // too — resolve them against the run-level input pool, the same way the
   // runner path does. Without this, any operation task past the first one
   // fails input resolution with "no run_input is available".
-  const runInputPool = extractParentTaskInputs(run.metadata)?.inputs ?? null;
+  const parentTaskInputs = extractParentTaskInputs(run.metadata);
   const runInputSnapshot =
-    bindings && runInputPool ? buildRunInputSnapshotFromParent(bindings, runInputPool) : undefined;
+    bindings && parentTaskInputs
+      ? buildRunInputSnapshotFromParent(bindings, parentTaskInputs, workflow)
+      : undefined;
   // The run's pinned GitHub connection (set at run start for coding runs).
   // Threaded symmetrically with campaignConfig; `connection_binding` bindings
   // resolve against it and fail closed when it is absent.
@@ -168,6 +172,7 @@ export async function buildTaskInputRef(
   if (taskType === 'operation') {
     const opInput = await resolveOperationTaskInputs(
       task,
+      workflow,
       tenantId,
       spaceId,
       runId,
@@ -251,8 +256,6 @@ export async function buildDelegateTaskInput(
   // (e.g. push/open-pr) legitimately bind run inputs too. The raw spread below
   // stays first-task-only — that is the distinct parent→child-first-task
   // typed-input contract.
-  const runInputPool = parentTaskInputs?.inputs ?? null;
-
   const bindings = task.inputBindings;
   let typedTaskInputs: Record<string, unknown> = {};
   if (bindings && Object.keys(bindings).length > 0) {
@@ -262,8 +265,8 @@ export async function buildDelegateTaskInput(
         `[taskHelpers] typed-inputs pre-resolution: run ${runId} not found for task=${task.taskId}`,
       );
     }
-    const runInputSnapshot = runInputPool
-      ? buildRunInputSnapshotFromParent(bindings, runInputPool)
+    const runInputSnapshot = parentTaskInputs
+      ? buildRunInputSnapshotFromParent(bindings, parentTaskInputs, workflow)
       : undefined;
     const campaignConfig = await loadCampaignConfigForTask(db, tenantId, fullRun, task);
     typedTaskInputs = await resolveTaskInputs(task, {
@@ -581,17 +584,57 @@ export function extractParentInstructions(runMetadata: unknown): StoredParentIns
   return parsed.data;
 }
 
+/**
+ * The run inputs a task's `run_input` bindings read, each found by its path's
+ * root segment — so a task may bind one under a key of its own
+ * (`aimed: { path: 'pullNumber' }`).
+ */
 export function buildRunInputSnapshotFromParent(
   inputBindings: NonNullable<WorkflowTask['inputBindings']>,
-  parentInputs: Record<string, unknown>,
+  parentTaskInputs: StoredParentTaskInputs,
+  workflow: Pick<Workflow, 'tasks' | 'runInputs'>,
 ): Record<string, unknown> {
+  const runInput = runInputFromParentTaskInputs(parentTaskInputs, workflow);
   const snapshot: Record<string, unknown> = {};
-  for (const [bindAs, binding] of Object.entries(inputBindings)) {
+  for (const binding of Object.values(inputBindings)) {
     if (binding.kind !== 'run_input') continue;
-    if (!Object.prototype.hasOwnProperty.call(parentInputs, bindAs)) continue;
-    setAtPath(snapshot, binding.path, parentInputs[bindAs]);
+    const root = runInputPathRoot(binding.path);
+    if (root === undefined || !Object.prototype.hasOwnProperty.call(runInput, root)) continue;
+    snapshot[root] = runInput[root];
   }
   return snapshot;
+}
+
+/**
+ * The stored inputs are keyed by the ENTRY task's bindAs, not by run-input
+ * name: an entry slot `a: { path: 'b' }` stores the value of `b` under `a`.
+ * A key in the pool is therefore never read as a run-input name; it is mapped
+ * through the same slots start validated it against. Only an entry task with
+ * no declared slots accepted its inputs verbatim, keyed by name.
+ */
+function runInputFromParentTaskInputs(
+  { taskId, inputs }: StoredParentTaskInputs,
+  workflow: Pick<Workflow, 'tasks' | 'runInputs'>,
+): Record<string, unknown> {
+  const entryTask = workflow.tasks.find((t) => t.taskId === taskId);
+  if (!entryTask) {
+    throw new Error(
+      `[taskHelpers] run inputs were validated against entry task '${taskId}', which the run's workflow does not contain — cannot tell which run input each stored key holds`,
+    );
+  }
+  const slots = entryRunInputSlots(entryTask, workflow.runInputs);
+  if (slots.length === 0) return structuredClone(inputs);
+  const runInput: Record<string, unknown> = {};
+  for (const slot of slots) {
+    if (!Object.prototype.hasOwnProperty.call(inputs, slot.bindAs)) continue;
+    setAtPath(runInput, slot.path, structuredClone(inputs[slot.bindAs]));
+  }
+  return runInput;
+}
+
+function runInputPathRoot(path: string): string | undefined {
+  const first = (parseOutputPath(path) ?? [{ kind: 'key' as const, key: path }])[0];
+  return first?.kind === 'key' ? first.key : undefined;
 }
 
 function setAtPath(obj: Record<string, unknown>, path: string, value: unknown): void {
