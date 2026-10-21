@@ -173,7 +173,7 @@ const KAGGLE_COMPETITION_BUNDLE: AuthoredSkillBundle = {
 
 const CODING_PR_LOOP_BUNDLE: AuthoredSkillBundle = {
   bundleId: 'coding-pr-loop' as SkillBundleId,
-  revision: 1,
+  revision: 2,
   name: 'Coding PR Loop',
   tagline: 'Open, review, and iterate pull requests on your repo with a coding agent.',
   description: `Wires up the **GitHub REST API** and the three coding skills that drive the **implement ↔ review loop**: open a PR from a request, adversarially review it, and revise it on the same branch toward passing.
