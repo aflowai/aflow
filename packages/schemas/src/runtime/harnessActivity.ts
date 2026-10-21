@@ -1,5 +1,6 @@
 /**
- * What a coding harness is doing while a step runs, one line at a time.
+ * What a host step is doing while it runs, one line at a time — a coding
+ * harness's account of its work, or what a command it ran printed.
  *
  * A harness works for minutes at a stretch and says nothing until it is done.
  * The activity feed is that wait made legible: what it says it is doing, the
@@ -20,7 +21,7 @@ import { z } from 'zod';
  * before it gets here, so nothing legitimate approaches this; it is a ceiling
  * on what the live buffer will carry, not a shape for the text.
  */
-const ACTIVITY_TEXT_MAX = 8_000;
+export const ACTIVITY_TEXT_MAX = 8_000;
 
 const at = z
   .number()
@@ -110,6 +111,17 @@ export const HarnessActivityLineSchema = z.discriminatedUnion('kind', [
       .describe(
         'A short summary of what came back: the first line, and how many more there were. ' +
           'The whole output is for the harness to read, not for the feed to carry.',
+      ),
+  }),
+  z.object({
+    kind: z.literal('output'),
+    at,
+    text: z
+      .string()
+      .max(ACTIVITY_TEXT_MAX)
+      .describe(
+        'One line a command or a folder check printed, as it printed it — what the step ' +
+          'ran said, which is neither a harness narrating its work nor the run speaking.',
       ),
   }),
 ]);

@@ -35,7 +35,9 @@ import { SimulatedFulfillmentReportSchema } from '../simulation/fulfillmentRepor
  * `activity` carries what a step is doing rather than what it is saying: one
  * JSON-encoded `HarnessActivityLine` per newline-terminated delta. It is a
  * channel of its own because a reader that folded it into `text` would render
- * a harness's tool calls as the agent's own message.
+ * a harness's tool calls as the agent's own message. A command's and a folder
+ * check's live output travel here too, as `output` lines: printed by the step,
+ * never said by it.
  *
  * `status` carries what a step is waiting on before it produces anything — a
  * model on this computer loading, or reading a long prompt, both silent for

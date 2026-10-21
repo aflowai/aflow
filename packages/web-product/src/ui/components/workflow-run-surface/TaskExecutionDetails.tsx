@@ -9,6 +9,8 @@ import { formatDurationFromTimestamps, harnessFeedStepId } from './workflowRunSu
 import { Pill } from './WorkflowRunSurfaceParts.js';
 import { CodingTranscriptView } from './CodingTranscriptView.js';
 import {
+  COMMAND_OUTPUT_OPERATIONS,
+  CommandOutputStepCard,
   HARNESS_RUN_OPERATION,
   HarnessStepCard,
   useHarnessName,
@@ -295,6 +297,14 @@ export function TaskExecutionDetails({ task }: { task: WorkflowSurfaceTaskState 
   return (
     <div style={{ marginTop: 'var(--space-1)' }}>
       {task.operationId === HARNESS_RUN_OPERATION && <HarnessTaskActivity task={task} />}
+      {task.operationId !== undefined && COMMAND_OUTPUT_OPERATIONS.has(task.operationId) && (
+        <CommandOutputStepCard
+          stepExecutionId={harnessFeedStepId(task)}
+          running={HARNESS_RUNNING_STATUSES.has(task.status)}
+          startedAt={task.startedAt}
+          style={{ marginTop: 'var(--space-1)' }}
+        />
+      )}
       <button
         type="button"
         onClick={toggle}
